@@ -3024,6 +3024,21 @@ class OpCodeCompiler(NativeCodeCompiler):
             ld_flags += tf.sysconfig.get_link_flags()
         elif have_min_tf_version((1, 4)):
             ld_flags += ["-L%s" % tf.sysconfig.get_lib(), "-ltensorflow_framework"]
+        if have_min_tf_version((2, 20)):
+            # TF 2.20 removed TF_MAJOR_VERSION and co from version.h,
+            # and one is supposed to define these macros externally.
+            # Also, release_version.h was added to define TF_VERSION_STRING based on this (if needed).
+            # https://github.com/tensorflow/tensorflow/commit/c8f0e0620e5678d0f165a07e64114024a966ab7f
+            major, minor, patch = tf.__version__.split(".", 2)
+            patch, suffix = patch.split("-", 1) if "-" in patch else (patch, "")
+            c_macro_defines.update(
+                {
+                    "TF_MAJOR_VERSION": major,
+                    "TF_MINOR_VERSION": minor,
+                    "TF_PATCH_VERSION": patch,
+                    "TF_VERSION_SUFFIX": suffix,
+                }
+            )
         use_cxx11_abi = getattr(getattr(tf, "sysconfig", tf), "CXX11_ABI_FLAG", getattr(tf, "CXX11_ABI_FLAG", False))
         super(OpCodeCompiler, self).__init__(
             include_paths=include_paths,

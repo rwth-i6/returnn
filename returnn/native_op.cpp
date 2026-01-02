@@ -206,6 +206,14 @@ Ndarray* Ndarray_Copy(const Ndarray* self) {
 
 #include "tensorflow/core/public/version.h"
 
+#ifndef TF_MAJOR_VERSION
+#error "TF_MAJOR_VERSION is not defined!"
+#endif
+
+#ifndef TF_MINOR_VERSION
+#error "TF_MINOR_VERSION is not defined!"
+#endif
+
 #if (TF_MAJOR_VERSION == 1 && TF_MINOR_VERSION >= 6) || (TF_MAJOR_VERSION > 1)
 #define TF_issue_6602_workaround 0
 #define TWOD_LSTM_SUPPORT 1
