@@ -450,7 +450,7 @@ class FileArchive:
             a = array.array("b")
             a.fromfile(self.f, comp)
             # unpack
-            b = zlib.decompress(a.tostring(), 15 + 32)
+            b = zlib.decompress(a.tobytes(), 15 + 32)
             # substitute self.f by an anonymous memmap file object
             # restore original file handle after we're done
             backup_f = self.f
@@ -837,7 +837,7 @@ class MixtureSet:
         """
         a = array.array("b")
         a.fromfile(self.f, length)
-        return a.tostring().decode(encoding)
+        return a.tobytes().decode(encoding)
 
     def read_f32(self):
         """
@@ -1003,7 +1003,7 @@ class WordBoundaries:
         """
         a = array.array("b")
         a.fromfile(self.f, length)
-        return a.tostring().decode(encoding)
+        return a.tobytes().decode(encoding)
 
     def __init__(self, filename):
         """

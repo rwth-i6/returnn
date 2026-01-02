@@ -671,7 +671,7 @@ class Pickler(_BasePickler):
                 return
         # For some reason, Numpy fromstring/tostring is faster than Numpy loads/dumps.
         self.save(make_numpy_ndarray_fromstring)
-        self.save((obj.tostring(), str(obj.dtype), obj.shape))
+        self.save((obj.tobytes(), str(obj.dtype), obj.shape))
         self.write(pickle.REDUCE)
 
     dispatch[numpy.ndarray] = save_ndarray

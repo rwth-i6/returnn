@@ -222,7 +222,7 @@ def test_torch_forward_raw_strings():
             raw_ = raw.item()
             assert isinstance(raw_, str) and raw_ == _demo_txt
             assert isinstance(orth, numpy.ndarray) and orth.dtype == numpy.uint8 and orth.ndim == 1
-            orth_ = orth.tostring()
+            orth_ = orth.tobytes()
             assert orth_.decode("utf8") == _demo_txt
             assert isinstance(classes, numpy.ndarray) and classes.dtype == numpy.int32 and classes.ndim == 1
             classes_ = "".join([dataset.targets.id_to_label(c) for c in classes])
