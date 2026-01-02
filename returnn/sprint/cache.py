@@ -7,10 +7,9 @@ This module is about reading (maybe later also writing) the Sprint archive forma
 """
 
 from __future__ import annotations
-from typing import List, Optional, Tuple
+from typing import Optional, List, Tuple, Dict
 import sys
 import os
-import typing
 import array
 from struct import pack, unpack
 import numpy
@@ -212,7 +211,7 @@ class FileArchive:
     def __init__(self, filename, must_exists=True, encoding="ascii"):
         self.encoding = encoding
 
-        self.ft = {}  # type: typing.Dict[str,FileInfo]
+        self.ft: Dict[str, FileInfo] = {}
         if os.path.exists(filename):
             self.allophones = []
             self.f = open(filename, "rb")
@@ -334,8 +333,8 @@ class FileArchive:
             # print(typ)
             assert type_ == "vector-f32"
             count = self.read_U32()
-            data = [None] * count  # type: typing.List[typing.Optional[numpy.ndarray]]
-            time_ = [None] * count  # type: typing.List[typing.Optional[numpy.ndarray]]
+            data: List[Optional[numpy.ndarray]] = [None] * count
+            time_: List[Optional[numpy.ndarray]] = [None] * count
             for i in range(count):
                 size = self.read_U32()
                 data[i] = self.read_v("f", size)  # size x f32
@@ -575,17 +574,17 @@ class FileArchiveBundle:
         :param str encoding: encoding used in the files
         """
         # filename -> FileArchive
-        self.archives = {}  # type: typing.Dict[str,FileArchive]
+        self.archives: Dict[str, FileArchive] = {}
         # archive content file -> FileArchive
-        self.files = {}  # type: typing.Dict[str,FileArchive]
+        self.files: Dict[str, FileArchive] = {}
         self._short_seg_names = {}
         if filename is not None:
             self.add_bundle(filename=filename, encoding=encoding)
 
-    def add_bundle(self, filename, encoding="ascii"):
+    def add_bundle(self, filename: str, encoding: str = "ascii"):
         """
-        :param str filename: bundle
-        :param str encoding:
+        :param filename: bundle
+        :param encoding:
         """
         file_dir = os.path.dirname(filename) or "."
         for line in open(filename).read().splitlines():
