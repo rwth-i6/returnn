@@ -1920,7 +1920,7 @@ class TorchBackend(Backend[torch.Tensor]):
         if not out_spatial_dims:
             out_spatial_dims = rf.make_conv_out_spatial_dims(
                 in_spatial_dims=in_spatial_dims,
-                filter_size=[d.dimension for d in filter_size],
+                filter_size=filter_size,
                 strides=strides or 1,
                 dilation_rate=dilation_rate or 1,
                 padding=padding,
@@ -2052,15 +2052,14 @@ class TorchBackend(Backend[torch.Tensor]):
     ) -> Tuple[Tensor, Sequence[Dim]]:
         """transposed convolution"""
         if not out_spatial_dims:
-            assert padding == "valid"  # not implemented yet otherwise...
-            assert output_padding is None  # not implemented yet otherwise...
+            out_spatial_dims = rf.make_transposed_conv_out_spatial_dims(
+                in_spatial_dims=in_spatial_dims,
+                filter_size=filter_size,
+                strides=strides,
+                padding=padding,
+                output_padding=output_padding,
+            )
             assert remove_padding == 0  # not implemented yet otherwise...
-            out_spatial_dims = [
-                in_spatial_dim * stride + (size - stride)
-                for in_spatial_dim, size, stride in zip(
-                    in_spatial_dims, filter_size, strides or ((1,) * len(in_spatial_dims))
-                )
-            ]
         filter_dims = (in_dim, out_dim) + tuple(filter_size)
         filter = filter.copy_transpose(filter_dims)
         batch_dims = [d for d in source.dims if d not in (in_dim,) + tuple(in_spatial_dims)]
