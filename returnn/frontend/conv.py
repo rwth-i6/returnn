@@ -3,7 +3,7 @@ Convolution, transposed convolution, pooling
 """
 
 from __future__ import annotations
-from typing import Optional, Sequence, Tuple, Union
+from typing import Optional, Union, TypeVar, Sequence, Tuple, List
 from returnn.util.basic import next_type_attrib_in_mro_chain
 from returnn.tensor import Tensor, Dim
 import returnn.frontend as rf
@@ -25,6 +25,9 @@ __all__ = [
     "pool2d",
     "pool3d",
     "make_conv_out_spatial_dims",
+    "calc_conv_out_length",
+    "make_transposed_conv_out_spatial_dims",
+    "calc_transposed_conv_out_length",
 ]
 
 
@@ -396,7 +399,11 @@ def transposed_conv(
             )
         if use_mask:
             source = source.copy_masked(0, dims=in_spatial_dims)
-    if padding == "same" and _any_is_non_default(strides, default=1) and _should_use_consistent_same_padding():
+    if (
+        padding == "same"
+        and _any_is_non_default(strides or filter_size, default=1)
+        and _should_use_consistent_same_padding()
+    ):
         # I don't really know what this should mean here... Investigate this further...
         raise NotImplementedError("consistent same padding not implemented for transposed conv")
     # noinspection PyProtectedMember
@@ -737,7 +744,7 @@ def make_conv_out_spatial_dims(
     strides: Union[Sequence[int], int] = 1,
     dilation_rate: Union[Sequence[int], int] = 1,
     description_prefix: Optional[str] = None,
-) -> Sequence[Dim]:
+) -> List[Dim]:
     """create out spatial dims from in spatial dims"""
     nd = len(in_spatial_dims)
     if isinstance(filter_size, (int, Dim)):
@@ -748,83 +755,257 @@ def make_conv_out_spatial_dims(
         strides = [strides] * nd
     if isinstance(dilation_rate, int):
         dilation_rate = [dilation_rate] * nd
-    assert nd == len(in_spatial_dims) == len(filter_size) == len(strides) == len(dilation_rate)
     if isinstance(padding, (int, str)):
         padding = [padding] * nd
+    assert nd == len(in_spatial_dims) == len(filter_size) == len(strides) == len(dilation_rate) == len(padding)
     padding = [p.lower() if isinstance(p, str) else p for p in padding]
     out_spatial_dims = []
     for i in range(nd):
-        in_spatial_dim = in_spatial_dims[i]
-        if (filter_size[i] == strides[i] == 1 and padding[i] in ("valid", "same", 0)) or (
-            strides[i] == 1 and padding[i] == "same"
-        ):
-            out_spatial_dims.append(in_spatial_dim)
-        else:
-            out_spatial_dim = _calc_out_dim(
-                in_dim=in_spatial_dim,
+        out_spatial_dims.append(
+            calc_conv_out_length(
+                in_spatial_dims[i],
                 filter_size=filter_size[i],
+                padding=padding[i],
                 stride=strides[i],
                 dilation_rate=dilation_rate[i],
-                padding=padding[i],
+                name=f"{description_prefix}:spatial{i}" if description_prefix else None,
             )
-            assert isinstance(out_spatial_dim, Dim)
-            if description_prefix and out_spatial_dim != in_spatial_dim:
-                out_spatial_dim.name = f"{description_prefix}:spatial{i}"
-            if in_spatial_dim.dyn_size_ext is not None and out_spatial_dim.dyn_size_ext is None:
-                out_spatial_dim.dyn_size_ext = _calc_out_dim(
-                    in_dim=in_spatial_dim.dyn_size_ext,
-                    filter_size=filter_size[i],
-                    stride=strides[i],
-                    dilation_rate=dilation_rate[i],
-                    padding=padding[i],
-                )
-            out_spatial_dims.append(out_spatial_dim)
+        )
     return out_spatial_dims
 
 
-def _calc_out_dim(in_dim, filter_size, stride, padding, dilation_rate=1):
+T = TypeVar("T", int, Dim, Tensor)
+
+
+def calc_conv_out_length(
+    in_length: Union[T, int, Dim, Tensor],
+    *,
+    filter_size: Union[T, int, Dim, Tensor],
+    stride: int,
+    padding: Union[str, int],
+    dilation_rate: int = 1,
+    name: Optional[str] = None,
+) -> T:
     """
     Copied and adapted from TF ConvLayer.calc_out_dim.
 
-    :param T|int|Tensor|torch.Tensor|tensorflow.Tensor|Dim in_dim: dimension in some axis
-    :param int filter_size: e.g. 2, for the corresponding axis
-    :param int stride: e.g. 1, for the corresponding axis
-    :param int dilation_rate: e.g. 1
-    :param str|int padding: "valid" or "same" or int
+    :param T in_length: dimension in some axis
+    :param filter_size: e.g. 2, for the corresponding axis
+    :param stride: e.g. 1, for the corresponding axis
+    :param dilation_rate: e.g. 1
+    :param padding: "valid" or "same" or int
+    :param name:
     :return: the output dimension
-    :rtype: T
     """
-
-    def ceildiv(a, b):
-        """
-        :param T|int|Tensor|torch.Tensor|tensorflow.Tensor a:
-        :param T|int|Tensor|torch.Tensor|tensorflow.Tensor b:
-        :rtype: T
-        """
-        if isinstance(b, int) and b == 1:
-            return a
-        if isinstance(a, Tensor):
-            return rf.ceil_divide(a, b)
-        return -(-a // b)
-
     padding = padding.lower() if isinstance(padding, str) else padding
+    if isinstance(filter_size, int):
+        filter_size_int = filter_size
+    elif isinstance(filter_size, Dim):
+        filter_size_int = filter_size.dimension
+    else:
+        filter_size_int = None
+    filter_size_ = filter_size_int if isinstance(filter_size_int, int) else filter_size
+
+    if (filter_size_int == stride == 1 and padding in ("valid", "same", 0)) or (stride == 1 and padding == "same"):
+        return in_length
+
     # See tf.compat.v1.nn.convolution() documentation for more.
     if padding == "same":
-        if isinstance(in_dim, Dim):
-            return in_dim.ceildiv_right(stride)
-        return ceildiv(in_dim, stride)
+        if isinstance(in_length, Dim):
+            out_length = in_length.ceildiv_right(stride)
+        else:
+            out_length = _ceildiv(in_length, stride)
     elif padding == "valid" or isinstance(padding, int):
         if isinstance(padding, int) and padding != 0:
             assert padding > 0
-            in_dim = padding + in_dim + padding
-        if isinstance(in_dim, Dim):
-            filter_left_dilated = (filter_size - 1) * dilation_rate // 2
-            filter_right_dilated = (filter_size - 1) * dilation_rate - filter_left_dilated
-            valid_part = in_dim.sub_left(filter_left_dilated).sub_right(filter_right_dilated)
-            return valid_part.ceildiv_right(stride)
-        return ceildiv(in_dim - (filter_size - 1) * dilation_rate, stride)
+            in_length = padding + in_length + padding
+
+        if filter_size_int == 1:
+            valid_part = in_length
+        elif isinstance(in_length, Dim):
+            filter_left_dilated = (filter_size_ - 1) * dilation_rate // 2
+            filter_right_dilated = (filter_size_ - 1) * dilation_rate - filter_left_dilated
+            valid_part = in_length.sub_left(filter_left_dilated).sub_right(filter_right_dilated)
+        else:
+            valid_part = in_length - (filter_size_ - 1) * dilation_rate
+
+        if isinstance(valid_part, Dim):
+            out_length = valid_part.ceildiv_right(stride)
+        else:
+            out_length = _ceildiv(valid_part, stride)
+
     else:
         raise ValueError(f"invalid padding {padding!r} (type {type(padding).__name__})")
+
+    if isinstance(in_length, Dim):
+        assert isinstance(out_length, Dim)
+        if name and out_length != in_length:
+            out_length.name = name
+        if in_length.dyn_size_ext is not None and out_length.dyn_size_ext is None:
+            out_dyn_size_ext = calc_conv_out_length(
+                in_length=in_length.dyn_size_ext,
+                filter_size=filter_size,
+                stride=stride,
+                dilation_rate=dilation_rate,
+                padding=padding,
+            )
+            assert isinstance(out_dyn_size_ext, Tensor)
+            out_length.dyn_size_ext = out_dyn_size_ext
+
+    return out_length
+
+
+def make_transposed_conv_out_spatial_dims(
+    in_spatial_dims: Sequence[Dim],
+    *,
+    filter_size: Union[Sequence[Union[int, Dim]], int, Dim],
+    padding: Union[str, int, Sequence[int]],
+    output_padding: Optional[Union[Sequence[Optional[int]], int]] = None,
+    strides: Union[Sequence[int], int] = 1,
+    dilation_rate: Union[Sequence[int], int] = 1,
+    description_prefix: Optional[str] = None,
+) -> List[Dim]:
+    """create out spatial dims from in spatial dims"""
+    nd = len(in_spatial_dims)
+    if isinstance(filter_size, (int, Dim)):
+        filter_size = [filter_size] * nd
+    filter_size = [d.dimension if isinstance(d, Dim) else d for d in filter_size]
+    assert all(isinstance(s, int) for s in filter_size)
+    if isinstance(strides, int):
+        strides = [strides] * nd
+    if isinstance(dilation_rate, int):
+        dilation_rate = [dilation_rate] * nd
+    if isinstance(padding, (int, str)):
+        padding = [padding] * nd
+    if isinstance(output_padding, int) or output_padding is None:
+        output_padding = [output_padding] * nd
+    assert (
+        nd
+        == len(in_spatial_dims)
+        == len(filter_size)
+        == len(strides)
+        == len(dilation_rate)
+        == len(padding)
+        == len(output_padding)
+    )
+    padding = [p.lower() if isinstance(p, str) else p for p in padding]
+    out_spatial_dims = []
+    for i in range(nd):
+        out_spatial_dims.append(
+            calc_transposed_conv_out_length(
+                in_spatial_dims[i],
+                filter_size=filter_size[i],
+                padding=padding[i],
+                stride=strides[i],
+                dilation_rate=dilation_rate[i],
+                name=f"{description_prefix}:spatial{i}" if description_prefix else None,
+            )
+        )
+    return out_spatial_dims
+
+
+def calc_transposed_conv_out_length(
+    in_length: Union[T, int, Dim, Tensor],
+    *,
+    filter_size: Union[int, Dim],
+    padding: Union[int, str],
+    output_padding: Optional[int] = None,
+    stride: int = 0,
+    dilation_rate: int = 1,
+    name: Optional[str] = None,
+) -> T:
+    """
+    Determines output length of a transposed convolution given input length.
+
+    Copied from TF/Keras conv_utils.deconv_output_length
+    (https://github.com/tensorflow/tensorflow/blob/5912f51d580551e5cee2cfde4cb882594b4d3e60/tensorflow/python/keras/utils/conv_utils.py#L140),
+    adapted with simplification.
+
+    Also see :func:`calc_conv_out_length`.
+
+    :param in_length:
+    :param filter_size:
+    :param padding: one of `"same"`, `"valid"`, `"full"`.
+    :param output_padding: amount of padding along the output dimension.
+        Can be set to `None` in which case the output length is inferred.
+    :param stride:
+    :param dilation_rate:
+    :param name:
+    :returns: The output length (integer)
+    """
+    assert padding in {"same", "valid", "full"} or isinstance(padding, int)
+
+    if isinstance(filter_size, int):
+        filter_size_int = filter_size
+    elif isinstance(filter_size, Dim):
+        filter_size_int = filter_size.dimension
+    else:
+        filter_size_int = None
+    filter_size_ = filter_size_int if isinstance(filter_size_int, int) else filter_size
+
+    # Get the dilated kernel size
+    if dilation_rate != 1 and filter_size_int != 1:
+        filter_size = filter_size + (filter_size_ - 1) * (dilation_rate - 1)
+
+    if stride != 1:
+        in_length = in_length * stride
+
+    # Infer length if output padding is None, else compute the exact length
+    if output_padding is None:
+        if padding == "valid" or padding == 0:
+            if filter_size_int is not None:
+                out_length = in_length + max(filter_size_int - stride, 0)
+            elif isinstance(filter_size, Tensor):
+                out_length = in_length + rf.relu(filter_size - stride)
+            elif isinstance(filter_size, Dim):
+                out_length = in_length + (filter_size - stride)
+            else:
+                raise ValueError(f"invalid filter_size {filter_size!r} type {type(filter_size)}")
+        elif padding == "full":
+            out_length = in_length - (stride + filter_size_ - 2)
+        elif padding == "same":
+            out_length = in_length
+        else:
+            raise ValueError(f"invalid padding {padding!r}")
+
+    else:  # output_padding
+        if padding == "same":
+            pad = filter_size // 2
+        elif padding == "valid":
+            pad = 0
+        elif padding == "full":
+            pad = filter_size - 1
+        elif isinstance(padding, int):
+            pad = padding
+        else:
+            raise ValueError(f"invalid padding {padding!r}")
+        out_length = in_length + (filter_size - stride - 2 * pad + output_padding)
+
+    if isinstance(in_length, Dim):
+        assert isinstance(out_length, Dim)
+        if name and out_length != in_length:
+            out_length.name = name
+        if in_length.dyn_size_ext is not None and out_length.dyn_size_ext is None:
+            out_dyn_size_ext = calc_transposed_conv_out_length(
+                in_length=in_length.dyn_size_ext,
+                filter_size=filter_size,
+                padding=padding,
+                output_padding=output_padding,
+                stride=stride,
+                dilation_rate=dilation_rate,
+            )
+            assert isinstance(out_dyn_size_ext, Tensor)
+            out_length.dyn_size_ext = out_dyn_size_ext
+
+    return out_length
+
+
+def _ceildiv(a: T, b: Union[T, int, Tensor]) -> T:
+    if isinstance(b, int) and b == 1:
+        return a
+    if isinstance(a, Tensor):
+        return rf.ceil_divide(a, b)
+    return -(-a // b)
 
 
 def _should_use_consistent_same_padding() -> bool:

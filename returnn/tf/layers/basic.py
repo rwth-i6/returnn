@@ -7516,7 +7516,10 @@ class TransposedConvLayer(_ConcatInputLayer):
     ):
         """
         Determines output length of a transposed convolution given input length.
-        Copied from conv_utils.deconv_output_length, adapted with simplification.
+
+        Copied from TF/Keras conv_utils.deconv_output_length
+        (https://github.com/tensorflow/tensorflow/blob/5912f51d580551e5cee2cfde4cb882594b4d3e60/tensorflow/python/keras/utils/conv_utils.py#L140),
+        adapted with simplification.
 
         Also see :func:`ConvLayer.calc_out_dim`.
 
@@ -7533,44 +7536,17 @@ class TransposedConvLayer(_ConcatInputLayer):
         """
         if out_dim and out_dim.is_dim_known():
             return out_dim.get_dim_value()
-        assert padding in {"same", "valid", "full"}
 
-        # Get the dilated kernel size
-        filter_size = filter_size + (filter_size - 1) * (dilation - 1)
+        import returnn.frontend as rf
 
-        if stride != 1:
-            input_length = input_length * stride
-
-        # Infer length if output padding is None, else compute the exact length
-        if output_padding is None:
-            if padding == "valid":
-                if isinstance(input_length, Dim):
-                    length = input_length + max(filter_size - stride, 0)
-                else:
-                    length = tf_util.simplify_add(input_length, max(filter_size - stride, 0))
-            elif padding == "full":
-                if isinstance(input_length, Dim):
-                    length = input_length - (stride + filter_size - 2)
-                else:
-                    length = tf_util.simplify_add(input_length, -(stride + filter_size - 2))
-            elif padding == "same":
-                length = input_length
-            else:
-                raise Exception("invalid padding %r" % (padding,))
-        else:  # output_padding
-            if padding == "same":
-                pad = filter_size // 2
-            elif padding == "valid":
-                pad = 0
-            elif padding == "full":
-                pad = filter_size - 1
-            else:
-                raise Exception("invalid padding %r" % (padding,))
-            if isinstance(input_length, Dim):
-                length = input_length + (-stride + filter_size - 2 * pad + output_padding)
-            else:
-                length = tf_util.simplify_add(input_length, -stride + filter_size - 2 * pad + output_padding)
-        return length
+        return rf.calc_transposed_conv_out_length(
+            input_length,
+            filter_size=filter_size,
+            padding=padding,
+            output_padding=output_padding,
+            stride=stride,
+            dilation_rate=dilation,
+        )
 
     @classmethod
     def get_out_data_from_opts(

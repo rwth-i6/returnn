@@ -2057,9 +2057,7 @@ class TorchBackend(Backend[torch.Tensor]):
             assert remove_padding == 0  # not implemented yet otherwise...
             out_spatial_dims = [
                 in_spatial_dim * stride + (size - stride)
-                for in_spatial_dim, size, stride in zip(
-                    in_spatial_dims, filter_size, strides or ((1,) * len(in_spatial_dims))
-                )
+                for in_spatial_dim, size, stride in zip(in_spatial_dims, filter_size, strides or filter_size)
             ]
         filter_dims = (in_dim, out_dim) + tuple(filter_size)
         filter = filter.copy_transpose(filter_dims)
