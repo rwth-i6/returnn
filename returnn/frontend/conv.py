@@ -861,7 +861,7 @@ def make_transposed_conv_out_spatial_dims(
     filter_size: Union[Sequence[Union[int, Dim]], int, Dim],
     padding: Union[str, int, Sequence[int]],
     output_padding: Optional[Union[Sequence[Optional[int]], int]] = None,
-    strides: Union[Sequence[int], int] = 1,
+    strides: Union[Sequence[Optional[int]], None, int] = None,
     dilation_rate: Union[Sequence[int], int] = 1,
     description_prefix: Optional[str] = None,
 ) -> List[Dim]:
@@ -871,7 +871,7 @@ def make_transposed_conv_out_spatial_dims(
         filter_size = [filter_size] * nd
     filter_size = [d.dimension if isinstance(d, Dim) else d for d in filter_size]
     assert all(isinstance(s, int) for s in filter_size)
-    if isinstance(strides, int):
+    if isinstance(strides, int) or strides is None:
         strides = [strides] * nd
     if isinstance(dilation_rate, int):
         dilation_rate = [dilation_rate] * nd
@@ -910,7 +910,7 @@ def calc_transposed_conv_out_length(
     filter_size: Union[int, Dim],
     padding: Union[int, str],
     output_padding: Optional[int] = None,
-    stride: int = 0,
+    stride: Optional[int] = None,
     dilation_rate: int = 1,
     name: Optional[str] = None,
 ) -> T:
@@ -947,13 +947,18 @@ def calc_transposed_conv_out_length(
     if dilation_rate != 1 and filter_size_int != 1:
         filter_size = filter_size + (filter_size_ - 1) * (dilation_rate - 1)
 
+    if stride is None:
+        assert filter_size_int is not None
+        stride = filter_size_int
     if stride != 1:
         in_length = in_length * stride
 
     # Infer length if output padding is None, else compute the exact length
     if output_padding is None:
         if padding == "valid" or padding == 0:
-            if filter_size_int is not None:
+            if filter_size_int == stride:
+                out_length = in_length
+            elif filter_size_int is not None:
                 out_length = in_length + max(filter_size_int - stride, 0)
             elif isinstance(filter_size, Tensor):
                 out_length = in_length + rf.relu(filter_size - stride)
