@@ -401,7 +401,7 @@ def transposed_conv(
             source = source.copy_masked(0, dims=in_spatial_dims)
     if (
         padding == "same"
-        and _any_is_non_default(strides or filter_size, default=1)
+        and any(s != 1 for s in (strides or [fs.dimension for fs in filter_size]))
         and _should_use_consistent_same_padding()
     ):
         # I don't really know what this should mean here... Investigate this further...
