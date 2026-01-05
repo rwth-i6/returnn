@@ -98,7 +98,7 @@ def tensor_fill_random_numpy_(
             if max_val is None:
                 max_val = rnd.randint(5, 20)
             if x.sparse_dim and x.sparse_dim.dimension is not None:
-                max_val = x.sparse_dim.dimension
+                max_val = x.sparse_dim.dimension - 1
             x.raw_tensor = rnd.randint(min_val, max_val + 1, size=shape, dtype=x.dtype)
         elif x.dtype == "bool":
             x.raw_tensor = rnd.randint(0, 2, size=shape, dtype=x.dtype)
