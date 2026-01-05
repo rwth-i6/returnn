@@ -1172,6 +1172,8 @@ class TorchBackend(Backend[torch.Tensor]):
             assert end is None
             assert size.dims == ()  # scalar
             size = size.raw_tensor
+        elif isinstance(size, int):
+            pass
         elif size is None:
             if isinstance(end, Tensor):
                 assert end.dims == ()
