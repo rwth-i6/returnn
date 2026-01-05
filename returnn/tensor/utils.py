@@ -42,6 +42,7 @@ def tensor_fill_random_numpy_(
 ) -> bool:
     """fill. return whether sth was filled"""
     if rnd is None:
+        # noinspection PyUnresolvedReferences,PyProtectedMember
         rnd = numpy.random.mtrand._rand
     if dyn_dim_max_sizes is None:
         dyn_dim_max_sizes = {}
