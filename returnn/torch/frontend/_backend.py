@@ -2069,6 +2069,8 @@ class TorchBackend(Backend[torch.Tensor]):
                 output_padding=output_padding,
             )
             assert remove_padding == 0  # not implemented yet otherwise...
+        if strides is None:
+            strides = [fs.dimension for fs in filter_size]
         filter_dims = (in_dim, out_dim) + tuple(filter_size)
         filter = filter.copy_transpose(filter_dims)
         batch_dims = [d for d in source.dims if d not in (in_dim,) + tuple(in_spatial_dims)]
@@ -2093,7 +2095,7 @@ class TorchBackend(Backend[torch.Tensor]):
                 src_raw,
                 weight=filter.raw_tensor,
                 bias=bias.raw_tensor if bias is not None else None,
-                stride=strides or 1,
+                stride=strides,
                 padding=padding_val,
                 output_padding=output_padding or 0,
             )
@@ -2102,7 +2104,7 @@ class TorchBackend(Backend[torch.Tensor]):
                 src_raw,
                 weight=filter.raw_tensor,
                 bias=bias.raw_tensor if bias is not None else None,
-                stride=strides or 1,
+                stride=strides,
                 padding=padding_val,
                 output_padding=output_padding or 0,
             )
@@ -2111,7 +2113,7 @@ class TorchBackend(Backend[torch.Tensor]):
                 src_raw,
                 weight=filter.raw_tensor,
                 bias=bias.raw_tensor if bias is not None else None,
-                stride=strides or 1,
+                stride=strides,
                 padding=padding_val,
                 output_padding=output_padding or 0,
             )

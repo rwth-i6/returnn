@@ -3,7 +3,7 @@ RETURNN frontend (returnn.frontend) tests
 """
 
 from __future__ import annotations
-from typing import Tuple
+from typing import Optional, Tuple
 import numpy
 import _setup_test_env  # noqa
 import returnn.frontend as rf
@@ -458,7 +458,7 @@ def test_transposed_conv1d():
     )
 
     class _Net(rf.Module):
-        def __init__(self, filter_size: int, strides: int, padding: str):
+        def __init__(self, filter_size: int, strides: Optional[int], padding: str):
             super().__init__()
             self.conv = rf.TransposedConv1d(in_dim, out_dim, filter_size, strides=strides, padding=padding)
 
@@ -470,7 +470,7 @@ def test_transposed_conv1d():
         out, dim = model(extern_data["data"])
         out.mark_as_default_output(shape=(batch_dim, dim, out_dim))
 
-    for fs, s, p, ts in ((4, 3, "valid", [7, 8, 9]), (3, 3, "valid", [7, 8, 9])):
+    for fs, s, p, ts in ((4, 3, "valid", [7, 8, 9]), (3, 3, "valid", [7, 8, 9]), (2, None, "valid", [7])):
         for t in ts:
             run_model(
                 extern_data, lambda *, epoch, step: _Net(fs, s, p), _forward_step, dyn_dim_max_sizes={time_dim: t}
