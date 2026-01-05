@@ -149,10 +149,13 @@ def run_model(
         # because the model code often creates new dims, which are different in each call.
         # However, via mark_as_output, the order of dims is well-defined.
         # So we can check the values.
-        assert len(v_pt.dims) == len(v_tf.dims)
+        assert len(v_pt.dims) == len(v_tf.dims) == v_pt.raw_tensor.ndim == v_tf.raw_tensor.ndim
         assert v_pt.feature_dim_axis == v_tf.feature_dim_axis
-        for d_pt, d_tf in zip(v_pt.dims, v_tf.dims):
+        for d_pt, d_tf, s_pt, s_tf in zip(v_pt.dims, v_tf.dims, v_pt.raw_tensor.shape, v_tf.raw_tensor.shape):
             _check_dim(d_pt, d_tf)
+            assert d_pt.get_dim_value() == s_pt == s_tf, (
+                f"dim size mismatch for dim {d_pt} vs {d_tf}: {s_pt} vs {s_tf} in output {k!r}"
+            )
         if v_pt.dtype.startswith("int"):
             assert v_tf.dtype.startswith("int")  # allow maybe different bit depth
         else:
