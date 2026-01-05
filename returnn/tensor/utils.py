@@ -36,11 +36,13 @@ def tensor_fill_random_numpy_(
     *,
     min_val: int = 0,
     max_val: Optional[int] = None,
-    rnd: numpy.random.RandomState,
+    rnd: Optional[numpy.random.RandomState] = None,
     dyn_dim_max_sizes: Optional[Dict[Dim, int]] = None,
     dyn_dim_min_sizes: Optional[Dict[Dim, int]] = None,
 ) -> bool:
     """fill. return whether sth was filled"""
+    if rnd is None:
+        rnd = numpy.random.mtrand._rand
     if dyn_dim_max_sizes is None:
         dyn_dim_max_sizes = {}
     if dyn_dim_min_sizes is None:
