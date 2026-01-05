@@ -59,7 +59,7 @@ def tensor_fill_random_numpy_(
                 continue
             if tensor_fill_random_numpy_(
                 dim.dyn_size_ext,
-                min_val=dyn_dim_min_sizes.get(dim, 2),
+                min_val=dyn_dim_min_sizes.get(dim, min(2, dyn_dim_max_sizes.get(dim, 2))),
                 max_val=dyn_dim_max_sizes.get(dim, None),
                 rnd=rnd,
                 dyn_dim_max_sizes=dyn_dim_max_sizes,
@@ -99,7 +99,7 @@ def tensor_fill_random_numpy_(
                 max_val = rnd.randint(5, 20)
             if x.sparse_dim and x.sparse_dim.dimension is not None:
                 max_val = x.sparse_dim.dimension
-            x.raw_tensor = rnd.randint(min_val, max_val, size=shape, dtype=x.dtype)
+            x.raw_tensor = rnd.randint(min_val, max_val + 1, size=shape, dtype=x.dtype)
         elif x.dtype == "bool":
             x.raw_tensor = rnd.randint(0, 2, size=shape, dtype=x.dtype)
         elif x.dtype.startswith("float"):
