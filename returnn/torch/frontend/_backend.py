@@ -1166,20 +1166,27 @@ class TorchBackend(Backend[torch.Tensor]):
         if start is None:
             start = 0
         if isinstance(size, Dim):
+            assert end is None
             size = size.get_dim_value()
         elif isinstance(size, Tensor):
+            assert end is None
             assert size.dims == ()  # scalar
             size = size.raw_tensor
-        if size is not None:
-            assert end is None
-            out.raw_tensor = torch.narrow(source.raw_tensor, dim=axis_int, start=start, length=size)
-        else:
+        elif size is None:
             if isinstance(end, Tensor):
                 assert end.dims == ()
                 end = end.raw_tensor
-            if end is None:
+            elif isinstance(end, int):
+                if end < 0:
+                    end += axis.get_dim_value()
+            elif end is None:
                 end = axis.get_dim_value()
-            out.raw_tensor = torch.narrow(source.raw_tensor, dim=axis_int, start=start, length=end - start)
+            else:
+                raise TypeError(f"slice: unsupported type for end: {type(end)}")
+            size = end - start
+        else:
+            raise TypeError(f"slice: unsupported type for size: {type(size)}")
+        out.raw_tensor = torch.narrow(source.raw_tensor, dim=axis_int, start=start, length=size)
         return out
 
     @staticmethod

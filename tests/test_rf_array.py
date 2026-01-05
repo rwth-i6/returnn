@@ -776,6 +776,24 @@ def test_slice_dyn_size():
     run_model(extern_data, lambda **_kwargs: rf.Module(), _forward_step)
 
 
+def test_slice_neg_end():
+    time_dim = Dim(Tensor("time", [batch_dim], dtype="int32"))
+    extern_data = TensorDict(
+        {
+            "data": Tensor("data", [batch_dim, time_dim], dtype="float32"),
+        }
+    )
+
+    # noinspection PyShadowingNames
+    def _forward_step(*, extern_data: TensorDict, **_kwargs):
+        x = extern_data["data"]
+        pack, new_time = rf.slice(x, axis=time_dim, end=-1)
+        pack.mark_as_default_output(shape=(batch_dim, new_time))
+
+    run_model(extern_data, lambda **_kwargs: rf.Module(), _forward_step)
+    run_model(extern_data, lambda **_kwargs: rf.Module(), _forward_step, dyn_dim_max_sizes={time_dim: 1})
+
+
 def test_shift_right():
     time_dim = Dim(Tensor("time", [batch_dim], dtype="int32"))
     in_dim = Dim(7, name="in")
