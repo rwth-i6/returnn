@@ -2741,7 +2741,7 @@ class BooleanMaskLayer(LayerBase):
         tensor = self.sources[0].output
         remaining_dims = [d for d in tensor.dims if d not in dims]
         tensor_templ = tensor.copy_template_new_dim_tags(tuple(dims) + tuple(remaining_dims))
-        tensor = tensor.copy_compatible_to(tensor_templ, add_dims=False)
+        tensor = tensor.copy_compatible_to(tensor_templ, unbroadcast=True)
         mask_templ = mask.output.copy_template_new_dim_tags(new_dim_tags=tuple(dims))
         mask_ = mask.output.copy_compatible_to(mask_templ, add_dims=False)
         self.output.raw_tensor = tf.boolean_mask(tensor.raw_tensor, mask=mask_.raw_tensor)

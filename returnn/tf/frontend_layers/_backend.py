@@ -944,7 +944,6 @@ class ReturnnLayersBackend(Backend[Layer]):
         """
         assert mask.dtype == "bool"
         assert set(mask.dims) == set(dims)
-        assert set(mask.dims).issubset(set(tensor.dims))
         if not out_dim:
             out_dim = Dim(None, name="mask")
         return (

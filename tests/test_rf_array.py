@@ -95,6 +95,25 @@ def test_masked_select():
     run_model(extern_data, lambda *, epoch, step: rf.Module(), _forward_step)
 
 
+def test_masked_select_broadcast():
+    time_dim = Dim(Tensor("time", [batch_dim], dtype="int32"))
+    extern_data = TensorDict(
+        {
+            "data": Tensor("data", [time_dim], dtype="float32"),
+            "mask": Tensor("mask", [batch_dim, time_dim], dtype="bool"),
+        }
+    )
+
+    def _forward_step(*, extern_data: TensorDict, **_kwargs):
+        x = extern_data["data"]  # [T]
+        mask = rf.sequence_mask([batch_dim, time_dim], device=x.device)
+        indices = rf.range_over_dim(time_dim, device=x.device)  # [T]->T
+        out, num_states_dim = rf.masked_select(indices, mask=mask, dims=mask.dims)  # [T_]->T
+        out.mark_as_default_output(shape=(num_states_dim,))
+
+    run_model(extern_data, lambda *, epoch, step: rf.Module(), _forward_step)
+
+
 def test_masked_select_single_dim():
     # https://github.com/rwth-i6/returnn/issues/1605
     time_dim = Dim(Tensor("time", [batch_dim], dtype="int32"))

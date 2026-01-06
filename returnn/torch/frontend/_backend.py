@@ -1776,6 +1776,9 @@ class TorchBackend(Backend[torch.Tensor]):
         remaining_dims = [d for d in tensor.dims if d not in mask.dims]
         tensor_templ_dims = tuple(dims) + tuple(remaining_dims)
         in_raw = tensor.copy_compatible_to_dims_raw(tensor_templ_dims)
+        if any(in_raw.shape[i] == 1 < d.get_dim_value() for i, d in enumerate(dims)):
+            # unbroadcast
+            in_raw = in_raw.expand([d.get_dim_value() for d in tensor_templ_dims])
         if mask.raw_tensor.device.type == "meta":
             # This is not supported, but also, we would anyway not know the out shape.
             # However, instead of erroring, just assume some dummy mask.
