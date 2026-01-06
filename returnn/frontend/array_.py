@@ -1367,12 +1367,13 @@ def repeat(
     repeats = repeats.copy_masked(0, dims=[in_spatial_dim])
     idxs = rf.cumsum(repeats, spatial_dim=in_spatial_dim)  # [batch...,in_spatial_dim] -> idx in out_spatial_dim + 1
     new_size = rf.gather(idxs, indices=in_spatial_dim.get_dim_value_tensor() - 1, axis=in_spatial_dim)  # [batch...]
+    dim_dev = rf.get_default_dim_size_device()
     if out_spatial_dim is None:
-        out_spatial_dim = Dim(new_size, name="repeat")
+        out_spatial_dim = Dim(rf.copy_to_device(new_size, dim_dev), name="repeat")
     elif out_spatial_dim.dyn_size_ext is None:
-        out_spatial_dim.dyn_size_ext = new_size
+        out_spatial_dim.dyn_size_ext = rf.copy_to_device(new_size, dim_dev)
     elif out_spatial_dim.dyn_size_ext is not None and out_spatial_dim.dyn_size_ext.raw_tensor is None:
-        out_spatial_dim.dyn_size_ext.raw_tensor = new_size.raw_tensor
+        out_spatial_dim.dyn_size_ext.raw_tensor = rf.copy_to_device(new_size, dim_dev).raw_tensor
     out_spatial_dim_ext = out_spatial_dim + 1
     rel_idx_counts = rf.scatter(
         rf.expand_dims(rf.ones((), device=values.device, dtype="int32"), dims=idxs.dims),

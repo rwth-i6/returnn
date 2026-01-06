@@ -8,7 +8,13 @@ from contextlib import contextmanager
 from returnn.tensor import Tensor
 
 
-__all__ = ["copy_to_device", "get_default_device", "set_default_device", "set_default_device_ctx"]
+__all__ = [
+    "copy_to_device",
+    "get_default_device",
+    "set_default_device",
+    "set_default_device_ctx",
+    "get_default_dim_size_device",
+]
 
 
 _default_device: Optional[str] = None
@@ -61,3 +67,10 @@ def set_default_device_ctx(device: Optional[str]):
         yield
     finally:
         _default_device = old_device
+
+
+def get_default_dim_size_device() -> Optional[str]:
+    """
+    :return: default device, where to put new tensors for dim sizes (Dim.dyn_size_ext)
+    """
+    return "cpu"
