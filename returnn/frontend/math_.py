@@ -541,7 +541,7 @@ def floor(a: Tensor) -> Tensor:
 
 # noinspection PyShadowingBuiltins
 def round(a: Tensor) -> Tensor:
-    """round"""
+    """round. the result dtype is same as input dtype, still float"""
     # noinspection PyProtectedMember
     return a._raw_backend.activation(a, "round")
 
