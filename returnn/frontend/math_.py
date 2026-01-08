@@ -84,7 +84,8 @@ def compare(
     *,
     allow_broadcast_all_sources: Optional[bool] = None,
     dim_order: Optional[Sequence[Dim]] = None,
-) -> Tensor: ...
+) -> Tensor:
+    """compare"""
 
 
 @overload
@@ -95,7 +96,8 @@ def compare(
     *,
     allow_broadcast_all_sources: Optional[bool] = None,
     dim_order: Optional[Sequence[Dim]] = None,
-) -> Tensor: ...
+) -> Tensor:
+    """compare"""
 
 
 _CompareMap = {
@@ -155,7 +157,8 @@ def combine(
     *,
     allow_broadcast_all_sources: Optional[bool] = None,
     dim_order: Optional[Sequence[Dim]] = None,
-) -> Tensor: ...
+) -> Tensor:
+    """combine"""
 
 
 @overload
@@ -166,7 +169,8 @@ def combine(
     *,
     allow_broadcast_all_sources: Optional[bool] = None,
     dim_order: Optional[Sequence[Dim]] = None,
-) -> Union[Tensor, _RawTensorTypes]: ...
+) -> Union[Tensor, _RawTensorTypes]:
+    """combine"""
 
 
 _CombineMap = {
@@ -350,11 +354,13 @@ def logical_not(a: Tensor) -> Tensor:
 
 
 @overload
-def opt_logical_or(a: bool, b: bool) -> bool: ...
+def opt_logical_or(a: bool, b: bool) -> bool:
+    """opt logical or"""
 
 
 @overload
-def opt_logical_or(a: Union[Tensor, bool], b: Union[Tensor, bool]) -> Union[Tensor, bool]: ...
+def opt_logical_or(a: Union[Tensor, bool], b: Union[Tensor, bool]) -> Union[Tensor, bool]:
+    """opt logical or"""
 
 
 def opt_logical_or(a: Union[Tensor, bool], b: Union[Tensor, bool]) -> Union[Tensor, bool]:
@@ -371,11 +377,13 @@ def opt_logical_or(a: Union[Tensor, bool], b: Union[Tensor, bool]) -> Union[Tens
 
 
 @overload
-def opt_logical_and(a: bool, b: bool) -> bool: ...
+def opt_logical_and(a: bool, b: bool) -> bool:
+    """opt logical and"""
 
 
 @overload
-def opt_logical_and(a: Union[Tensor, bool], b: Union[Tensor, bool]) -> Union[Tensor, bool]: ...
+def opt_logical_and(a: Union[Tensor, bool], b: Union[Tensor, bool]) -> Union[Tensor, bool]:
+    """opt logical and"""
 
 
 def opt_logical_and(a: Union[Tensor, bool], b: Union[Tensor, bool]) -> Union[Tensor, bool]:
