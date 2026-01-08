@@ -3,7 +3,6 @@ Math ops
 """
 
 from __future__ import annotations
-import typing
 from typing import Optional, Sequence, Union, Tuple, overload
 import numpy
 from returnn.tensor import Tensor, Dim
@@ -77,7 +76,7 @@ __all__ = [
 ]
 
 
-@typing.overload
+@overload
 def compare(
     a: Tensor,
     kind: str,
@@ -85,8 +84,18 @@ def compare(
     *,
     allow_broadcast_all_sources: Optional[bool] = None,
     dim_order: Optional[Sequence[Dim]] = None,
-) -> Tensor:
-    """compare with two tensors"""
+) -> Tensor: ...
+
+
+@overload
+def compare(
+    a: Union[Tensor, _RawTensorTypes],
+    kind: str,
+    b: Union[Tensor, _RawTensorTypes],
+    *,
+    allow_broadcast_all_sources: Optional[bool] = None,
+    dim_order: Optional[Sequence[Dim]] = None,
+) -> Tensor: ...
 
 
 _CompareMap = {
@@ -138,7 +147,7 @@ def compare_bc(
     return compare(a, kind, b, allow_broadcast_all_sources=True, dim_order=dim_order)
 
 
-@typing.overload
+@overload
 def combine(
     a: Tensor,
     kind: str,
@@ -146,8 +155,18 @@ def combine(
     *,
     allow_broadcast_all_sources: Optional[bool] = None,
     dim_order: Optional[Sequence[Dim]] = None,
-) -> Tensor:
-    """combine with two tensors"""
+) -> Tensor: ...
+
+
+@overload
+def combine(
+    a: Union[Tensor, _RawTensorTypes],
+    kind: str,
+    b: Union[Tensor, _RawTensorTypes],
+    *,
+    allow_broadcast_all_sources: Optional[bool] = None,
+    dim_order: Optional[Sequence[Dim]] = None,
+) -> Union[Tensor, _RawTensorTypes]: ...
 
 
 _CombineMap = {
@@ -331,8 +350,11 @@ def logical_not(a: Tensor) -> Tensor:
 
 
 @overload
-def opt_logical_or(a: bool, b: bool) -> bool:
-    """logical or"""
+def opt_logical_or(a: bool, b: bool) -> bool: ...
+
+
+@overload
+def opt_logical_or(a: Union[Tensor, bool], b: Union[Tensor, bool]) -> Union[Tensor, bool]: ...
 
 
 def opt_logical_or(a: Union[Tensor, bool], b: Union[Tensor, bool]) -> Union[Tensor, bool]:
@@ -349,8 +371,11 @@ def opt_logical_or(a: Union[Tensor, bool], b: Union[Tensor, bool]) -> Union[Tens
 
 
 @overload
-def opt_logical_and(a: bool, b: bool) -> bool:
-    """logical and"""
+def opt_logical_and(a: bool, b: bool) -> bool: ...
+
+
+@overload
+def opt_logical_and(a: Union[Tensor, bool], b: Union[Tensor, bool]) -> Union[Tensor, bool]: ...
 
 
 def opt_logical_and(a: Union[Tensor, bool], b: Union[Tensor, bool]) -> Union[Tensor, bool]:
