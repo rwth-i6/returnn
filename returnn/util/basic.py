@@ -3816,6 +3816,8 @@ def should_write_to_disk(config):
             return False
     if config.is_true("dry_run"):
         return False
+    if config.is_true("torch_profile"):
+        return False
     return True
 
 
