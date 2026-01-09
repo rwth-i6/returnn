@@ -2519,6 +2519,7 @@ class TorchBackend(Backend[torch.Tensor]):
             # we totally ignore kv_spatial_dim dyn_sizes here... TODO
             assert not kv_spatial_dim.is_dynamic()
         elif kv_spatial_dim.is_dynamic() and kv_spatial_dim.dyn_size_ext is not None:
+            assert not is_causal, "cannot combine dynamic kv_spatial_dim and is_causal"
             # no attention mask, but we know that some keys/values are padding
             # create mask based on that
             kv_spat_dyn_dims = kv_spatial_dim.dyn_size_ext.dims_set

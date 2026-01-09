@@ -76,6 +76,36 @@ def scaled_dot_product_attention(
     )
 
 
+def _infer_att_dims(
+    query: Tensor, keys: Tensor, values: Tensor, *, qk_embed_dim: Dim, kv_spatial_dim: Dim
+) -> Tuple[Tensor, Dim, Dim, bool]:
+    assert kv_spatial_dim in keys.dims_set
+    # assert kv_spatial_dim not in query.dims_set
+
+    # infer query spatial dim, necessary for pytorch backend
+    query_non_batch_dims = query.remaining_dims(keys.dims_set - {kv_spatial_dim})
+    if len(query_non_batch_dims) == 0:
+        query_spatial = Dim(1, name="dot_att_query_spatial_dummy")
+        query = rf.expand_dim(query, dim=query_spatial)
+    else:
+        assert len(query_non_batch_dims) == 1, f"qspat={query_non_batch_dims}, q={query.dims}, k={keys.dims}"
+        query_spatial = query_non_batch_dims[0]
+
+    # infer dot product dim
+    v_embed_dim = values.feature_dim
+    if v_embed_dim is None:
+        if qk_embed_dim in values.dims_set:
+            v_embed_dim = qk_embed_dim
+        else:
+            possible_embed_dims = values.dims_set - keys.dims_set
+            if len(possible_embed_dims) == 1:
+                v_embed_dim = list(possible_embed_dims)[0]
+            else:
+                raise ValueError(f"Cannot infer v_embed_dim from values.dims={values.dims}, keys.dims={keys.dims}")
+
+    return query, v_embed_dim, query_spatial, len(query_non_batch_dims) == 0
+
+
 def dot_attention(
     query: Tensor,
     keys: Tensor,
@@ -103,30 +133,11 @@ def dot_attention(
         normally not wanted. disabled by default since behavior version 19.
     :return: like values but with axis removed, and maybe any additional axes from query
     """
-    assert axis in keys.dims_set
-    assert axis not in query.dims_set
-    assert att_dropout_broadcast is None or not att_dropout_broadcast
+    assert att_dropout_broadcast is None or not att_dropout_broadcast  # deprecated
 
-    # infer query spatial dim, necessary for pytorch backend
-    query_non_batch_dims = query.remaining_dims(keys.dims_set - {axis})
-    if len(query_non_batch_dims) == 0:
-        query_spatial = Dim(1, name="dot_att_query_spatial_dummy")
-        query = rf.expand_dim(query, dim=query_spatial)
-    else:
-        assert len(query_non_batch_dims) == 1, f"qspat={query_non_batch_dims}, q={query.dims}, k={keys.dims}"
-        query_spatial = query_non_batch_dims[0]
-
-    # infer dot product dim
-    v_embed_dim = values.feature_dim
-    if v_embed_dim is None:
-        if key_dim in values.dims_set:
-            v_embed_dim = key_dim
-        else:
-            possible_embed_dims = values.dims_set - keys.dims_set
-            if len(possible_embed_dims) == 1:
-                v_embed_dim = list(possible_embed_dims)[0]
-            else:
-                raise ValueError(f"Cannot infer v_embed_dim from values.dims={values.dims}, keys.dims={keys.dims}")
+    query, v_embed_dim, query_spatial, added_dummy_spat_dim_to_query = _infer_att_dims(
+        query, keys, values, qk_embed_dim=key_dim, kv_spatial_dim=axis
+    )
 
     att = scaled_dot_product_attention(
         query,
@@ -139,7 +150,7 @@ def dot_attention(
         query_spatial_dim=query_spatial,
         is_causal=False,
     )
-    if len(query_non_batch_dims) == 0:
+    if added_dummy_spat_dim_to_query:
         att = rf.squeeze(att, axis=query_spatial)
 
     return att
@@ -231,18 +242,16 @@ class SelfAttentionBase(rf.Module):
         return q, k, v
 
     def attention(self, q: Tensor, k: Tensor, v: Tensor, *, kv_axis: Dim) -> Tensor:
-        """apply causal attention"""
+        """apply attention"""
         assert not self.att_dropout_broadcast
-        att = scaled_dot_product_attention(
+        att = dot_attention(
             q,
             k,
             v,
-            dropout=self.att_dropout,
-            v_embed_dim=self.value_dim_per_head,
-            qk_embed_dim=self.key_dim_per_head,
-            kv_spatial_dim=kv_axis,
-            query_spatial_dim=kv_axis,
-            is_causal=False,
+            att_dropout=self.att_dropout,
+            att_dropout_broadcast=self.att_dropout_broadcast,
+            key_dim=self.key_dim_per_head,
+            axis=kv_axis,
         )
         output, _ = rf.merge_dims(att, dims=(self.num_heads, self.value_dim_per_head), out_dim=self.value_dim_total)
         if self.proj:
@@ -329,6 +338,7 @@ def _causal_self_att_step(
         hist_dim = Dim(rf.range_over_dim(axis, device="cpu") + 1, name=f"{axis.description}:kv")
         k, _ = rf.replace_dim(k, in_dim=axis, out_dim=hist_dim)
         v, _ = rf.replace_dim(v, in_dim=axis, out_dim=hist_dim)
+
     return k, v, hist_dim, new_state
 
 
