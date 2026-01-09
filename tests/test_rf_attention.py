@@ -435,11 +435,11 @@ def test_rope_causal_self_att():
             #     (LlamaAttention.forward, 0, "attn_weights", -1),
             #     (batch_dim, model_rf.num_heads, seq_dim, "axis"),
             # ),
-            (
-                (rf.dot_attention, 0, "att", 0),
-                (LlamaAttention.forward, 0, "attn_output", 0),
-                (batch_dim, seq_dim, model_rf.num_heads, model_rf.value_dim_per_head),
-            ),
+            # (
+            #     (rf.dot_attention, 0, "att", 0),
+            #     (LlamaAttention.forward, 0, "attn_output", 0),
+            #     (batch_dim, seq_dim, model_rf.num_heads, model_rf.value_dim_per_head),
+            # ),
         ],
     )
 

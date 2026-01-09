@@ -244,15 +244,25 @@ class SelfAttentionBase(rf.Module):
     def attention(self, q: Tensor, k: Tensor, v: Tensor, *, kv_axis: Dim) -> Tensor:
         """apply attention"""
         assert not self.att_dropout_broadcast
-        att = dot_attention(
-            q,
+
+        query, v_embed_dim, query_spatial, added_dummy_spat_dim_to_query = _infer_att_dims(
+            q, k, v, qk_embed_dim=self.key_dim_per_head, kv_spatial_dim=kv_axis
+        )
+
+        att = scaled_dot_product_attention(
+            query,
             k,
             v,
-            att_dropout=self.att_dropout,
-            att_dropout_broadcast=self.att_dropout_broadcast,
-            key_dim=self.key_dim_per_head,
-            axis=kv_axis,
+            dropout=self.att_dropout,
+            v_embed_dim=v_embed_dim,
+            qk_embed_dim=self.key_dim_per_head,
+            kv_spatial_dim=kv_axis,
+            query_spatial_dim=query_spatial,
+            is_causal=False,
         )
+        if added_dummy_spat_dim_to_query:
+            att = rf.squeeze(att, axis=query_spatial)
+
         output, _ = rf.merge_dims(att, dims=(self.num_heads, self.value_dim_per_head), out_dim=self.value_dim_total)
         if self.proj:
             output = self.proj(output)
@@ -307,6 +317,42 @@ class CausalSelfAttention(SelfAttentionBase):
             accum_axis=expand_dim,
         )
 
+    def attention(self, q: Tensor, k: Tensor, v: Tensor, *, kv_axis: Dim) -> Tensor:
+        """apply attention"""
+        assert not self.att_dropout_broadcast
+
+        query, v_embed_dim, query_spatial, added_dummy_spat_dim_to_query = _infer_att_dims(
+            q, k, v, qk_embed_dim=self.key_dim_per_head, kv_spatial_dim=kv_axis
+        )
+
+        is_causal = query_spatial is kv_axis
+        print("query_spatial", query_spatial)
+        print("query", query.raw_tensor.shape, query)
+        print("key", k.raw_tensor.shape, k)
+        print("value", v.raw_tensor.shape, v)
+        print("is_causal", is_causal)
+        print("q", query.raw_tensor)
+
+        att = scaled_dot_product_attention(
+            query,
+            k,
+            v,
+            dropout=self.att_dropout,
+            v_embed_dim=v_embed_dim,
+            qk_embed_dim=self.key_dim_per_head,
+            kv_spatial_dim=kv_axis,
+            query_spatial_dim=query_spatial,
+            is_causal=is_causal,
+        )
+        if added_dummy_spat_dim_to_query:
+            att = rf.squeeze(att, axis=query_spatial)
+        print("att", att.raw_tensor)
+
+        output, _ = rf.merge_dims(att, dims=(self.num_heads, self.value_dim_per_head), out_dim=self.value_dim_total)
+        if self.proj:
+            output = self.proj(output)
+        return output
+
 
 def _causal_self_att_step(
     k: Tensor,
@@ -315,6 +361,7 @@ def _causal_self_att_step(
     axis: Dim,
     state: Optional[CausalSelfAttentionState],
     self: rf.Module,
+    with_causal_masking: bool = False,
 ) -> Tuple[Tensor, Tensor, Dim, CausalSelfAttentionState]:
     new_state = CausalSelfAttentionState()
     if axis == single_step_dim:
@@ -335,9 +382,13 @@ def _causal_self_att_step(
         new_state.v_accum = v
         new_state.accum_axis = axis
         # See CumConcatLayer and https://github.com/rwth-i6/returnn/issues/391 for the idea.
-        hist_dim = Dim(rf.range_over_dim(axis, device="cpu") + 1, name=f"{axis.description}:kv")
-        k, _ = rf.replace_dim(k, in_dim=axis, out_dim=hist_dim)
-        v, _ = rf.replace_dim(v, in_dim=axis, out_dim=hist_dim)
+        if with_causal_masking:
+            # no longer needed if is_causal=True in scaled_dot_product_attention
+            hist_dim = Dim(rf.range_over_dim(axis, device="cpu") + 1, name=f"{axis.description}:kv")
+            k, _ = rf.replace_dim(k, in_dim=axis, out_dim=hist_dim)
+            v, _ = rf.replace_dim(v, in_dim=axis, out_dim=hist_dim)
+        else:
+            hist_dim = axis
 
     return k, v, hist_dim, new_state
 
@@ -694,7 +745,9 @@ class RelPosCausalSelfAttention(CausalSelfAttention):
     ) -> Tuple[Tensor, CausalSelfAttentionState]:
         """forward"""
         q, k, v = self.forward_qkv(source)
-        k, v, hist_dim, new_state = _causal_self_att_step(k, v, axis=axis, state=state, self=self)
+        k, v, hist_dim, new_state = _causal_self_att_step(
+            k, v, axis=axis, state=state, self=self, with_causal_masking=True
+        )
 
         if self.learned_pos_emb is not None:
             pos_emb, pos_emb_spatial_dim = self.learned_pos_emb(query_spatial_dim=axis, key_value_spatial_dim=hist_dim)

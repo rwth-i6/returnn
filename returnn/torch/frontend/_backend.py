@@ -2458,6 +2458,7 @@ class TorchBackend(Backend[torch.Tensor]):
             kv_spatial_dim.dyn_size_ext is not None
             and any([d not in key.dims_set for d in kv_spatial_dim.dyn_size_ext.dims])
         ):
+            print("Falling back to legacy scaled_dot_product_attention implementation.")
             # the legacy CausalSelfAttention implementation has a Dimension in the key which depends
             # on another Dimension that only exists in the query matrix.
             # Therefore the key/value matrices are only well-defined once they are multiplied with the query matrix...
@@ -2475,6 +2476,7 @@ class TorchBackend(Backend[torch.Tensor]):
                 is_causal=is_causal,
                 scale=scale,
             )
+        print("Using new scaled_dot_product_attention implementation.")
 
         query_raw = query.raw_tensor
         key_raw = key.raw_tensor
@@ -2519,20 +2521,24 @@ class TorchBackend(Backend[torch.Tensor]):
             # we totally ignore kv_spatial_dim dyn_sizes here... TODO
             assert not kv_spatial_dim.is_dynamic()
         elif kv_spatial_dim.is_dynamic() and kv_spatial_dim.dyn_size_ext is not None:
-            assert not is_causal, "cannot combine dynamic kv_spatial_dim and is_causal"
-            # no attention mask, but we know that some keys/values are padding
-            # create mask based on that
-            kv_spat_dyn_dims = kv_spatial_dim.dyn_size_ext.dims_set
-            assert kv_spat_dyn_dims.issubset(set(batch_dims))
-            attention_mask_raw: torch.Tensor = kv_spatial_dim.get_mask(
-                dim_order=[*[d for d in batch_dims if d in kv_spat_dyn_dims], kv_spatial_dim]
-            ).raw_tensor
-            # insert 1 dim at -2 (for query_spatial_dim)
-            attention_mask_raw = attention_mask_raw.unsqueeze(-2)
-            # now add all other batch dims
-            for i, b_dim in enumerate(batch_dims):
-                if b_dim not in kv_spat_dyn_dims:
-                    attention_mask_raw = attention_mask_raw.unsqueeze(i)
+            if is_causal:
+                assert kv_spatial_dim == query_spatial_dim, (
+                    "causal attention only supported for kv_spatial_dim == query_spatial_dim"
+                )
+            else:
+                # no attention mask, but we know that some keys/values are padding
+                # create mask based on that
+                kv_spat_dyn_dims = kv_spatial_dim.dyn_size_ext.dims_set
+                assert kv_spat_dyn_dims.issubset(set(batch_dims))
+                attention_mask_raw: torch.Tensor = kv_spatial_dim.get_mask(
+                    dim_order=[*[d for d in batch_dims if d in kv_spat_dyn_dims], kv_spatial_dim]
+                ).raw_tensor
+                # insert 1 dim at -2 (for query_spatial_dim)
+                attention_mask_raw = attention_mask_raw.unsqueeze(-2)
+                # now add all other batch dims
+                for i, b_dim in enumerate(batch_dims):
+                    if b_dim not in kv_spat_dyn_dims:
+                        attention_mask_raw = attention_mask_raw.unsqueeze(i)
         # dont need to check query spatial dim for is_dynamic, as we assign that dim to the result tensor so
         # downstream code automatically handles it
 
