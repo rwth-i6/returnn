@@ -2433,6 +2433,8 @@ class TorchBackend(Backend[torch.Tensor]):
 
         return out, (new_state_h, new_state_c)
 
+    ForceFallbackSDPA = False
+
     @classmethod
     def scaled_dot_product_attention(
         cls,
@@ -2454,11 +2456,13 @@ class TorchBackend(Backend[torch.Tensor]):
         :return: attention output
         """
 
-        if (  # kv_spatial_dim and query dims are co-dependent, legacy causalselfattention code relies on this...
-            kv_spatial_dim.dyn_size_ext is not None
-            and any([d not in key.dims_set for d in kv_spatial_dim.dyn_size_ext.dims])
+        if (
+            TorchBackend.ForceFallbackSDPA
+            or (  # kv_spatial_dim and query dims are co-dependent, legacy causalselfattention code relies on this...
+                kv_spatial_dim.dyn_size_ext is not None
+                and any([d not in key.dims_set for d in kv_spatial_dim.dyn_size_ext.dims])
+            )
         ):
-            print("Falling back to legacy scaled_dot_product_attention implementation.")
             # the legacy CausalSelfAttention implementation has a Dimension in the key which depends
             # on another Dimension that only exists in the query matrix.
             # Therefore the key/value matrices are only well-defined once they are multiplied with the query matrix...
@@ -2476,7 +2480,6 @@ class TorchBackend(Backend[torch.Tensor]):
                 is_causal=is_causal,
                 scale=scale,
             )
-        print("Using new scaled_dot_product_attention implementation.")
 
         query_raw = query.raw_tensor
         key_raw = key.raw_tensor

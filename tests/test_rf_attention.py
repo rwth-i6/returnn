@@ -88,6 +88,7 @@ def test_self_attention_to_pure_torch():
     # test whether the torch and returnn implementation of the mhsa layer are equivalent
     import torch
     import returnn.frontend as rf
+    from returnn.torch.frontend import TorchBackend
     from returnn.tensor import Dim
 
     # torch.backends.mha.set_fastpath_enabled(False)
@@ -146,6 +147,9 @@ def test_self_attention_to_pure_torch():
     )
     torch_mhsa.eval()
 
+    TorchBackend.ForceFallbackSDPA = True
+    rf_output_fallback = rf_mhsa(rf_input, axis=spatial_dim)
+    TorchBackend.ForceFallbackSDPA = False
     rf_output = rf_mhsa(rf_input, axis=spatial_dim)
     torch_output, torch_attn_weights = torch_mhsa(torch_input, torch_input, torch_input, key_padding_mask=None)
 
@@ -153,15 +157,22 @@ def test_self_attention_to_pure_torch():
     print(rf_output.raw_tensor)
     print(rf_output.raw_tensor.shape)
     print("---------------------------")
+    print("RF output (fallback SDPA)")
+    print(rf_output_fallback.raw_tensor)
+    print(rf_output_fallback.raw_tensor.shape)
+    print("---------------------------")
     print("Torch output")
     print(torch_output)
     print(torch_output.shape)
 
-    torch.testing.assert_allclose(rf_output.raw_tensor, torch_output, atol=1e-3, rtol=1e-4)
+    torch.testing.assert_close(rf_output.raw_tensor, torch_output, atol=1e-3, rtol=1e-4)
+    torch.testing.assert_close(rf_output_fallback.raw_tensor, torch_output, atol=1e-3, rtol=1e-4)
 
 
 def test_causal_self_attention():
+    import torch
     from returnn.tensor import single_step_dim
+    from returnn.torch.frontend import TorchBackend
 
     time_dim = Dim(Tensor("time", [batch_dim], dtype="int32"))
     in_dim = Dim(7, name="in")
@@ -204,13 +215,18 @@ def test_causal_self_attention():
         out = model(extern_data["data"], axis=time_dim)
         out.mark_as_default_output(shape=(batch_dim, time_dim, model.out_dim))
 
-    run_model(
-        extern_data,
-        lambda *, epoch, step: _Net(),
-        _forward_step,
-        # TF needs TensorArray unstack, not implemented yet
-        test_tensorflow=False,
-    )
+    res = {}
+    for force_fallback_sdpa in [True, False]:
+        TorchBackend.ForceFallbackSDPA = force_fallback_sdpa
+        res[force_fallback_sdpa] = run_model(
+            extern_data,
+            lambda *, epoch, step: _Net(),
+            _forward_step,
+            # TF needs TensorArray unstack, not implemented yet
+            test_tensorflow=False,
+        )
+
+    torch.testing.assert_close(res[False].data["output"].raw_tensor, res[True].data["output"].raw_tensor)
 
 
 def test_rotary_embedding():
@@ -262,14 +278,15 @@ def test_rotary_embedding():
 
     assert out_rf_sin.raw_tensor.shape == out_hf_sin.shape
     assert out_rf_cos.raw_tensor.shape == out_hf_cos.shape
-    torch.testing.assert_allclose(out_rf_sin.raw_tensor, out_hf_sin)
-    torch.testing.assert_allclose(out_rf_cos.raw_tensor, out_hf_cos)
+    torch.testing.assert_close(out_rf_sin.raw_tensor, out_hf_sin)
+    torch.testing.assert_close(out_rf_cos.raw_tensor, out_hf_cos)
 
 
 def test_rope_causal_self_att():
     import torch
     from returnn.util.pprint import pprint
     from returnn.util.debug import PyTracer, check_py_traces_rf_to_pt_equal
+    from returnn.torch.frontend import TorchBackend
 
     # noinspection PyProtectedMember
     from returnn.frontend.attention import _apply_rope as rf_apply_rope
@@ -313,6 +330,21 @@ def test_rope_causal_self_att():
     in_ = rf.random_uniform([batch_dim, seq_dim, model_dim])
     in_.name = "input"
 
+    TorchBackend.ForceFallbackSDPA = True
+    with PyTracer(
+        [
+            rf.RotaryPosCausalSelfAttention.__call__,
+            rf.sinusoidal_encoding,
+            rf.scaled_dot_product_attention,
+            rf_apply_rope,
+        ],
+        (Tensor, Dim),
+    ) as trace_rf_fallback:
+        out_rf_fallback, _ = model_rf(in_, axis=seq_dim, state=model_rf.default_initial_state(batch_dims=[batch_dim]))
+        out_rf_fallback = out_rf_fallback.copy_transpose((batch_dim, seq_dim, model_dim))
+    pprint(trace_rf_fallback.captured_locals)
+    TorchBackend.ForceFallbackSDPA = False
+
     with PyTracer(
         [
             rf.RotaryPosCausalSelfAttention.__call__,
@@ -353,9 +385,7 @@ def test_rope_causal_self_att():
     print("First HF att weight tensor:")
     print(trace_hf.captured_locals[LlamaAttention.forward][0]["attn_weights"][-1][0, 0, 0].detach().numpy())
 
-    check_py_traces_rf_to_pt_equal(
-        trace_rf.captured_locals,
-        trace_hf.captured_locals,
+    trace_all = (
         [
             (
                 (rf.RotaryPosCausalSelfAttention.__call__, 0, "q", 0),
@@ -429,17 +459,6 @@ def test_rope_causal_self_att():
                     name=name,
                 ),
             ),
-            # TODO These traces don't work for now, as the variables are now created inside torch...
-            # (
-            #     (rf.dot_attention, 0, "energy", 0),
-            #     (eager_attention_forward, 0, "attn_weights", 0),
-            #     (batch_dim, model_rf.num_heads, seq_dim, "axis"),
-            # ),
-            # (
-            #     (rf.dot_attention, 0, "att_weights", 0),
-            #     (LlamaAttention.forward, 0, "attn_weights", -1),
-            #     (batch_dim, model_rf.num_heads, seq_dim, "axis"),
-            # ),
             (
                 (rf.scaled_dot_product_attention, 0, "att", 0),
                 (LlamaAttention.forward, 0, "attn_output", 0),
@@ -448,9 +467,29 @@ def test_rope_causal_self_att():
         ],
     )
 
+    trace_only_fallback = [
+        *trace_all,
+        # TODO These traces don't work for now, as the variables are now created inside torch...
+        # (
+        #     (rf.dot_attention, 0, "energy", 0),
+        #     (eager_attention_forward, 0, "attn_weights", 0),
+        #     (batch_dim, model_rf.num_heads, seq_dim, "axis"),
+        # ),
+        # (
+        #     (rf.dot_attention, 0, "att_weights", 0),
+        #     (LlamaAttention.forward, 0, "attn_weights", -1),
+        #     (batch_dim, model_rf.num_heads, seq_dim, "axis"),
+        # ),
+    ]
+
+    check_py_traces_rf_to_pt_equal(trace_rf.captured_locals, trace_hf.captured_locals, trace_all)
+    check_py_traces_rf_to_pt_equal(trace_rf_fallback.captured_locals, trace_hf.captured_locals, trace_only_fallback)
+
     print("Final check...")
     assert out_rf.raw_tensor.shape == out_hf.shape
     torch.testing.assert_close(out_rf.raw_tensor, out_hf)
+    assert out_rf_fallback.raw_tensor.shape == out_hf.shape
+    torch.testing.assert_close(out_rf_fallback.raw_tensor, out_hf)
     print("  all matched!")
 
 
