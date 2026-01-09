@@ -1361,12 +1361,24 @@ class TorchBackend(Backend[torch.Tensor]):
         a_dims = a.dims
         b_dims = b.dims
 
-        assert all(dim in a_dims for dim in reduce), (
-            f"'a' does not have the specified reduce dim(s) {reduce} (a dims: {a_dims})"
-        )
-        assert all(dim in b_dims for dim in reduce), (
-            f"'b' does not have the specified reduce dim(s) {reduce} (b dims: {b_dims})"
-        )
+        if not all(dim in a_dims for dim in reduce) or not all(dim in b_dims for dim in reduce):
+            # revert to the generic einsum implementation
+            assert all(dim in a_dims + b_dims for dim in reduce), "Some reduce Dims not in a or b."
+            result_dims = [dim for dim in a_dims if dim not in reduce] + [
+                dim for dim in b_dims if dim not in reduce and dim not in a_dims
+            ]
+            map_to_letter = {}
+            for dim in a_dims + b_dims:
+                if dim not in map_to_letter:
+                    map_to_letter[dim] = chr(97 + len(map_to_letter))  # 'a', 'b', 'c', ...
+            a_subscript = "".join(map_to_letter[dim] for dim in a_dims)
+            b_subscript = "".join(map_to_letter[dim] for dim in b_dims)
+            out_subscript = "".join(map_to_letter[dim] for dim in result_dims)
+            raw_result = torch.einsum(f"{a_subscript},{b_subscript}->{out_subscript}", a.raw_tensor, b.raw_tensor)
+            result_tensor = Tensor(
+                "einsum", dims=result_dims, raw_tensor=raw_result, dtype=TorchBackend.get_dtype_name_raw(raw_result)
+            )
+            return result_tensor
 
         if len(reduce) > 1:
             reduce = list(reduce)
