@@ -36,11 +36,14 @@ def tensor_fill_random_numpy_(
     *,
     min_val: int = 0,
     max_val: Optional[int] = None,
-    rnd: numpy.random.RandomState,
+    rnd: Optional[numpy.random.RandomState] = None,
     dyn_dim_max_sizes: Optional[Dict[Dim, int]] = None,
     dyn_dim_min_sizes: Optional[Dict[Dim, int]] = None,
 ) -> bool:
     """fill. return whether sth was filled"""
+    if rnd is None:
+        # noinspection PyUnresolvedReferences,PyProtectedMember
+        rnd = numpy.random.mtrand._rand
     if dyn_dim_max_sizes is None:
         dyn_dim_max_sizes = {}
     if dyn_dim_min_sizes is None:
@@ -59,7 +62,7 @@ def tensor_fill_random_numpy_(
                 continue
             if tensor_fill_random_numpy_(
                 dim.dyn_size_ext,
-                min_val=dyn_dim_min_sizes.get(dim, 2),
+                min_val=dyn_dim_min_sizes.get(dim, min(2, dyn_dim_max_sizes.get(dim, 2))),
                 max_val=dyn_dim_max_sizes.get(dim, None),
                 rnd=rnd,
                 dyn_dim_max_sizes=dyn_dim_max_sizes,
@@ -98,8 +101,8 @@ def tensor_fill_random_numpy_(
             if max_val is None:
                 max_val = rnd.randint(5, 20)
             if x.sparse_dim and x.sparse_dim.dimension is not None:
-                max_val = x.sparse_dim.dimension
-            x.raw_tensor = rnd.randint(min_val, max_val, size=shape, dtype=x.dtype)
+                max_val = x.sparse_dim.dimension - 1
+            x.raw_tensor = rnd.randint(min_val, max_val + 1, size=shape, dtype=x.dtype)
         elif x.dtype == "bool":
             x.raw_tensor = rnd.randint(0, 2, size=shape, dtype=x.dtype)
         elif x.dtype.startswith("float"):

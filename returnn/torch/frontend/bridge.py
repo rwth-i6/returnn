@@ -136,6 +136,15 @@ class RFModuleAsPTModule(torch.nn.Module):
     def _get_name(self):
         return self._rf_module.__class__.__name__ + "[RF→PT]"
 
+    def __repr__(self) -> str:
+        """
+        Return a custom repr for Sequential/ModuleList that compresses repeated module representations if possible,
+        otherwise fallback to default behavior.
+        """
+        if _can_use_compact_repr(self):
+            return _repr_compact(self)
+        return super().__repr__()
+
     @property
     def rf_module(self) -> rf.Module:
         """RF module"""
@@ -193,3 +202,55 @@ class RFModuleAsPTModule(torch.nn.Module):
             # See similar logic in torch.nn.Module._apply.
             pt_param = torch.nn.Parameter(tensor, tensor.requires_grad)
             rf_param.raw_tensor = pt_param
+
+
+def _can_use_compact_repr(self: RFModuleAsPTModule) -> bool:
+    return list(self._modules.keys()) == [str(i) for i in range(len(self._modules))]
+
+
+def _repr_compact(self: RFModuleAsPTModule) -> str:
+    """
+    Return a custom repr for Sequential/ModuleList that compresses repeated module representations.
+    Code copied and adapted from torch.nn.ModuleList.__repr__.
+    """
+    list_of_reprs = [repr(item) for item in self._modules.values()]
+    if len(list_of_reprs) == 0:
+        return self._get_name() + "()"
+
+    start_end_indices = [[0, 0]]
+    repeated_blocks = [list_of_reprs[0]]
+    for i, r in enumerate(list_of_reprs[1:], 1):
+        if r == repeated_blocks[-1]:
+            start_end_indices[-1][1] += 1
+            continue
+
+        start_end_indices.append([i, i])
+        repeated_blocks.append(r)
+
+    lines = []
+    main_str = self._get_name() + "("
+    for (start_id, end_id), b in zip(start_end_indices, repeated_blocks):
+        local_repr = f"({start_id}): {b}"  # default repr
+
+        if start_id != end_id:
+            n = end_id - start_id + 1
+            local_repr = f"({start_id}-{end_id}): {n} x {b}"
+
+        local_repr = _add_indent(local_repr, 2)
+        lines.append(local_repr)
+
+    main_str += "\n  " + "\n  ".join(lines) + "\n"
+    main_str += ")"
+    return main_str
+
+
+def _add_indent(s_: str, num_spaces: int) -> str:
+    s = s_.split("\n")
+    # don't do anything for single-line stuff
+    if len(s) == 1:
+        return s_
+    first = s.pop(0)
+    s = [(num_spaces * " ") + line for line in s]
+    s = "\n".join(s)
+    s = first + "\n" + s
+    return s

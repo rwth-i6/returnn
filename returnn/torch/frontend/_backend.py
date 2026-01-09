@@ -1166,20 +1166,29 @@ class TorchBackend(Backend[torch.Tensor]):
         if start is None:
             start = 0
         if isinstance(size, Dim):
+            assert end is None
             size = size.get_dim_value()
         elif isinstance(size, Tensor):
+            assert end is None
             assert size.dims == ()  # scalar
             size = size.raw_tensor
-        if size is not None:
-            assert end is None
-            out.raw_tensor = torch.narrow(source.raw_tensor, dim=axis_int, start=start, length=size)
-        else:
+        elif isinstance(size, int):
+            pass
+        elif size is None:
             if isinstance(end, Tensor):
                 assert end.dims == ()
                 end = end.raw_tensor
-            if end is None:
+            elif isinstance(end, int):
+                if end < 0:
+                    end += axis.get_dim_value()
+            elif end is None:
                 end = axis.get_dim_value()
-            out.raw_tensor = torch.narrow(source.raw_tensor, dim=axis_int, start=start, length=end - start)
+            else:
+                raise TypeError(f"slice: unsupported type for end: {type(end)}")
+            size = end - start
+        else:
+            raise TypeError(f"slice: unsupported type for size: {type(size)}")
+        out.raw_tensor = torch.narrow(source.raw_tensor, dim=axis_int, start=start, length=size)
         return out
 
     @staticmethod
@@ -1352,12 +1361,24 @@ class TorchBackend(Backend[torch.Tensor]):
         a_dims = a.dims
         b_dims = b.dims
 
-        assert all(dim in a_dims for dim in reduce), (
-            f"'a' does not have the specified reduce dim(s) {reduce} (a dims: {a_dims})"
-        )
-        assert all(dim in b_dims for dim in reduce), (
-            f"'b' does not have the specified reduce dim(s) {reduce} (b dims: {b_dims})"
-        )
+        if not all(dim in a_dims for dim in reduce) or not all(dim in b_dims for dim in reduce):
+            # revert to the generic einsum implementation
+            assert all(dim in a_dims + b_dims for dim in reduce), "Some reduce Dims not in a or b."
+            result_dims = [dim for dim in a_dims if dim not in reduce] + [
+                dim for dim in b_dims if dim not in reduce and dim not in a_dims
+            ]
+            map_to_letter = {}
+            for dim in a_dims + b_dims:
+                if dim not in map_to_letter:
+                    map_to_letter[dim] = chr(97 + len(map_to_letter))  # 'a', 'b', 'c', ...
+            a_subscript = "".join(map_to_letter[dim] for dim in a_dims)
+            b_subscript = "".join(map_to_letter[dim] for dim in b_dims)
+            out_subscript = "".join(map_to_letter[dim] for dim in result_dims)
+            raw_result = torch.einsum(f"{a_subscript},{b_subscript}->{out_subscript}", a.raw_tensor, b.raw_tensor)
+            result_tensor = Tensor(
+                "einsum", dims=result_dims, raw_tensor=raw_result, dtype=TorchBackend.get_dtype_name_raw(raw_result)
+            )
+            return result_tensor
 
         if len(reduce) > 1:
             reduce = list(reduce)
@@ -1767,6 +1788,9 @@ class TorchBackend(Backend[torch.Tensor]):
         remaining_dims = [d for d in tensor.dims if d not in mask.dims]
         tensor_templ_dims = tuple(dims) + tuple(remaining_dims)
         in_raw = tensor.copy_compatible_to_dims_raw(tensor_templ_dims)
+        if any(in_raw.shape[i] == 1 < d.get_dim_value() for i, d in enumerate(dims)):
+            # unbroadcast
+            in_raw = in_raw.expand([d.get_dim_value() for d in tensor_templ_dims])
         if mask.raw_tensor.device.type == "meta":
             # This is not supported, but also, we would anyway not know the out shape.
             # However, instead of erroring, just assume some dummy mask.
@@ -1920,7 +1944,7 @@ class TorchBackend(Backend[torch.Tensor]):
         if not out_spatial_dims:
             out_spatial_dims = rf.make_conv_out_spatial_dims(
                 in_spatial_dims=in_spatial_dims,
-                filter_size=[d.dimension for d in filter_size],
+                filter_size=filter_size,
                 strides=strides or 1,
                 dilation_rate=dilation_rate or 1,
                 padding=padding,
@@ -2025,6 +2049,104 @@ class TorchBackend(Backend[torch.Tensor]):
             raise ValueError(f"invalid number of filter dims {filter_size}, expected 1, 2, or 3")
         out = Tensor(
             "conv", dims=batch_dims + [out_dim] + list(out_spatial_dims), dtype=TorchBackend.get_dtype_name_raw(out_raw)
+        )
+        if len(batch_dims) == 1:
+            out.raw_tensor = out_raw
+        else:
+            out.raw_tensor = torch.reshape(out_raw, [d.get_dim_value() for d in out.dims])
+        out.feature_dim = out_dim
+        return out, out_spatial_dims
+
+    # noinspection PyShadowingBuiltins
+    @staticmethod
+    def transposed_conv(
+        source: Tensor,
+        *,
+        in_dim: Dim,
+        out_dim: Dim,
+        in_spatial_dims: Sequence[Dim],
+        out_spatial_dims: Optional[Sequence[Dim]] = None,
+        filter: Tensor,
+        filter_size: Sequence[Dim],
+        padding: str,
+        remove_padding: Union[Sequence[int], int] = 0,
+        output_padding: Optional[Union[Sequence[Optional[int]], int]] = None,
+        strides: Optional[Sequence[int]] = None,
+        bias: Optional[Tensor] = None,
+    ) -> Tuple[Tensor, Sequence[Dim]]:
+        """transposed convolution"""
+        if not out_spatial_dims:
+            out_spatial_dims = rf.make_transposed_conv_out_spatial_dims(
+                in_spatial_dims=in_spatial_dims,
+                filter_size=filter_size,
+                strides=strides,
+                padding=padding,
+                output_padding=output_padding,
+            )
+            assert remove_padding == 0  # not implemented yet otherwise...
+        if strides is None:
+            strides = [fs.dimension for fs in filter_size]
+        filter_dims = (in_dim, out_dim) + tuple(filter_size)
+        filter = filter.copy_transpose(filter_dims)
+        batch_dims = [d for d in source.dims if d not in (in_dim,) + tuple(in_spatial_dims)]
+        # Torch conv expects (N,C,<spatial dims>) as shape.
+        source = source.copy_transpose(batch_dims + [in_dim] + list(in_spatial_dims))
+        if len(batch_dims) == 1:
+            src_raw = source.raw_tensor
+        else:
+            src_raw = torch.reshape(
+                source.raw_tensor,
+                # potentially merge batch dims all together
+                [-1, in_dim.get_dim_value()] + [d.get_dim_value() for d in in_spatial_dims],
+            )
+        if padding == "same":
+            raise NotImplementedError("transposed_conv with padding='same' not implemented")
+        if padding == "valid":
+            padding_val = 0
+        else:
+            raise ValueError(f"invalid padding {padding!r}, expected 'same' or 'valid'")
+        if len(filter_size) == 1:
+            out_raw = torch.nn.functional.conv_transpose1d(
+                src_raw,
+                weight=filter.raw_tensor,
+                bias=bias.raw_tensor if bias is not None else None,
+                stride=strides,
+                padding=padding_val,
+                output_padding=output_padding or 0,
+            )
+        elif len(filter_size) == 2:
+            out_raw = torch.nn.functional.conv_transpose2d(
+                src_raw,
+                weight=filter.raw_tensor,
+                bias=bias.raw_tensor if bias is not None else None,
+                stride=strides,
+                padding=padding_val,
+                output_padding=output_padding or 0,
+            )
+        elif len(filter_size) == 3:
+            out_raw = torch.nn.functional.conv_transpose3d(
+                src_raw,
+                weight=filter.raw_tensor,
+                bias=bias.raw_tensor if bias is not None else None,
+                stride=strides,
+                padding=padding_val,
+                output_padding=output_padding or 0,
+            )
+        else:
+            raise ValueError(f"invalid number of filter dims {filter_size}, expected 1, 2, or 3")
+        if remove_padding:
+            if isinstance(remove_padding, int):
+                remove_padding = [remove_padding] * len(out_spatial_dims)
+            assert len(remove_padding) == len(out_spatial_dims)
+            slices = [slice(None)] * out_raw.ndim
+            for i, pad in enumerate(remove_padding):
+                if pad > 0:
+                    slices[2 + i] = slice(0, -pad)
+            out_raw = out_raw[tuple(slices)]
+        out = Tensor(
+            "transposed_conv",
+            dims=batch_dims + [out_dim] + list(out_spatial_dims),
+            dtype=TorchBackend.get_dtype_name_raw(out_raw),
         )
         if len(batch_dims) == 1:
             out.raw_tensor = out_raw

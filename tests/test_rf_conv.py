@@ -3,7 +3,7 @@ RETURNN frontend (returnn.frontend) tests
 """
 
 from __future__ import annotations
-from typing import Tuple
+from typing import Optional, Tuple
 import numpy
 import _setup_test_env  # noqa
 import returnn.frontend as rf
@@ -445,3 +445,33 @@ def test_make_conv_out_spatial_dims_after_pad():
     expected_sizes = (time1_dim.dyn_size + time2_dim.dyn_size + time3_dim.dyn_size - (filter_size - 1)).numpy().tolist()
     print("expected_sizes:", expected_sizes)
     assert sizes == expected_sizes
+
+
+def test_transposed_conv1d():
+    time_dim = Dim(Tensor("time", [batch_dim], dtype="int32"))
+    in_dim = Dim(7, name="in")
+    out_dim = Dim(13, name="out")
+    extern_data = TensorDict(
+        {
+            "data": Tensor("data", [batch_dim, time_dim, in_dim], dtype="float32"),
+        }
+    )
+
+    class _Net(rf.Module):
+        def __init__(self, filter_size: int, strides: Optional[int], padding: str):
+            super().__init__()
+            self.conv = rf.TransposedConv1d(in_dim, out_dim, filter_size, strides=strides, padding=padding)
+
+        def __call__(self, x: rf.Tensor) -> Tuple[Tensor, Dim]:
+            return self.conv(x, in_spatial_dim=time_dim)
+
+    # noinspection PyShadowingNames
+    def _forward_step(*, model: _Net, extern_data: TensorDict):
+        out, dim = model(extern_data["data"])
+        out.mark_as_default_output(shape=(batch_dim, dim, out_dim))
+
+    for fs, s, p, ts in ((4, 3, "valid", [7, 8, 9]), (3, 3, "valid", [7, 8, 9]), (2, None, "valid", [7])):
+        for t in ts:
+            run_model(
+                extern_data, lambda *, epoch, step: _Net(fs, s, p), _forward_step, dyn_dim_max_sizes={time_dim: t}
+            )

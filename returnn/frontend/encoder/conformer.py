@@ -167,6 +167,25 @@ class ConformerConvSubsample(ISeqDownsamplingEncoder):
         out, _ = rf.merge_dims(x, dims=[self._final_second_spatial_dim, in_dim])
         return out, in_spatial_dims[0]
 
+    def get_out_spatial_dim(self, in_spatial_dim: Dim) -> Dim:
+        """Get output spatial dimension given input spatial dimension."""
+        out_spatial_dim = in_spatial_dim
+        for i, conv_layer in enumerate(self.conv_layers):
+            (out_spatial_dim,) = rf.make_conv_out_spatial_dims(
+                [out_spatial_dim],
+                filter_size=conv_layer.filter_size[0],
+                strides=conv_layer.strides[0],
+                padding=conv_layer.padding,
+            )
+            if self.pool_sizes and i < len(self.pool_sizes):
+                (out_spatial_dim,) = rf.make_conv_out_spatial_dims(
+                    [out_spatial_dim],
+                    filter_size=self.pool_sizes[i][0],
+                    strides=self.pool_sizes[i][0],
+                    padding="same",
+                )
+        return out_spatial_dim
+
 
 class ConformerEncoderLayer(rf.Module):
     """
