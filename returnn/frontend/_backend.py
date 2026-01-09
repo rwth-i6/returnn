@@ -1385,7 +1385,7 @@ class Backend(Generic[T]):
         if attn_bias is not None:
             energy = energy + attn_bias
         att_weights = rf.softmax(energy, axis=kv_spatial_dim)  # [.., Q_spatial, K_spatial]
-        att_weights = rf.dropout(att_weights, dropout)  # No broadcasting
+        att_weights = rf.dropout(att_weights, dropout)  # No broadcasting, torch impl doesnt support this
         # no need for mask because softmax already sets those weights to zero
         att = rf.matmul(att_weights, value, reduce=kv_spatial_dim, use_mask=False)
         if value.feature_dim in att.dims:

@@ -2453,15 +2453,11 @@ class TorchBackend(Backend[torch.Tensor]):
         Scaled dot-product attention.
         :return: attention output
         """
-        # import sys
 
         if (  # kv_spatial_dim and query dims are co-dependent, legacy causalselfattention code relies on this...
             kv_spatial_dim.dyn_size_ext is not None
             and any([d not in key.dims_set for d in kv_spatial_dim.dyn_size_ext.dims])
-            # if we are tracing, we likely want to access energy and att weights variables...
-            # or sys.gettrace() is not None
         ):
-            # print("falling back to legacy impl", file=sys.stderr)
             # the legacy CausalSelfAttention implementation has a Dimension in the key which depends
             # on another Dimension that only exists in the query matrix.
             # Therefore the key/value matrices are only well-defined once they are multiplied with the query matrix...
@@ -2479,8 +2475,6 @@ class TorchBackend(Backend[torch.Tensor]):
                 is_causal=is_causal,
                 scale=scale,
             )
-        # print("using new torch sdpa with query dims", query, " and key", key, "value", value, file=sys.stderr)
-        # print("kv spatial dim", kv_spatial_dim, " ", kv_spatial_dim.dyn_size_ext, file=sys.stderr)
 
         query_raw = query.raw_tensor
         key_raw = key.raw_tensor
@@ -2541,17 +2535,6 @@ class TorchBackend(Backend[torch.Tensor]):
         # dont need to check query spatial dim for is_dynamic, as we assign that dim to the result tensor so
         # downstream code automatically handles it
 
-        # print(
-        #     "sdpa att mask",
-        #     attention_mask_raw,
-        #     "dropout",
-        #     rf.get_run_ctx().is_train_flag_enabled(func=rf.dropout),
-        #     file=sys.stderr,
-        # )
-
-        # print("query_raw shape:", query_raw, file=sys.stderr)
-        # print("key_raw shape:", key_raw, file=sys.stderr)
-        # print("value_raw shape:", value_raw, file=sys.stderr)
         att_raw = torch.nn.functional.scaled_dot_product_attention(
             query_raw,
             key_raw,
@@ -2563,7 +2546,6 @@ class TorchBackend(Backend[torch.Tensor]):
             **({"scale": scale} if scale is not None else {}),
         )
 
-        # print("att_raw", att_raw, file=sys.stderr)
         att = rf.convert_to_tensor(
             att_raw,
             dims=batch_dims + [query_spatial_dim, v_embed_dim],

@@ -106,7 +106,8 @@ def dot_attention(
     assert axis in keys.dims_set
     assert axis not in query.dims_set
     assert att_dropout_broadcast is None or not att_dropout_broadcast
-    # print(f"keys dims: {keys.dims}, query dims: {query.dims}, values dims: {values.dims}")
+
+    # infer query spatial dim, necessary for pytorch backend
     query_non_batch_dims = query.remaining_dims(keys.dims_set - {axis})
     if len(query_non_batch_dims) == 0:
         query_spatial = Dim(1, name="dot_att_query_spatial_dummy")
@@ -115,14 +116,15 @@ def dot_attention(
         assert len(query_non_batch_dims) == 1, f"qspat={query_non_batch_dims}, q={query.dims}, k={keys.dims}"
         query_spatial = query_non_batch_dims[0]
 
+    # infer dot product dim
     v_embed_dim = values.feature_dim
     if v_embed_dim is None:
         if key_dim in values.dims_set:
             v_embed_dim = key_dim
         else:
-            relevant_dims = values.dims_set - keys.dims_set
-            if len(relevant_dims) == 1:
-                v_embed_dim = list(relevant_dims)[0]
+            possible_embed_dims = values.dims_set - keys.dims_set
+            if len(possible_embed_dims) == 1:
+                v_embed_dim = list(possible_embed_dims)[0]
             else:
                 raise ValueError(f"Cannot infer v_embed_dim from values.dims={values.dims}, keys.dims={keys.dims}")
 
@@ -139,17 +141,7 @@ def dot_attention(
     )
     if len(query_non_batch_dims) == 0:
         att = rf.squeeze(att, axis=query_spatial)
-    # query *= key_dim.dimension**-0.5
-    # energy = rf.matmul(query, keys, reduce=key_dim)
-    # att_weights = rf.softmax(energy, axis=axis)
-    # if att_dropout_broadcast is None:
-    #     att_dropout_broadcast = _att_dropout_broadcast_default()
-    # att_weights = rf.dropout(att_weights, att_dropout, axis=att_dropout_broadcast and axis)
-    # # Masking not needed because softmax should already have masked,
-    # # so we have 0.0 att weights for padded frames.
-    # att = rf.matmul(att_weights, values, reduce=axis, use_mask=False)
-    # if values.feature_dim in att.dims:
-    #     att.feature_dim = values.feature_dim
+
     return att
 
 
@@ -239,15 +231,18 @@ class SelfAttentionBase(rf.Module):
         return q, k, v
 
     def attention(self, q: Tensor, k: Tensor, v: Tensor, *, kv_axis: Dim) -> Tensor:
-        """apply attention"""
-        att = dot_attention(
+        """apply causal attention"""
+        assert not self.att_dropout_broadcast
+        att = scaled_dot_product_attention(
             q,
             k,
             v,
-            key_dim=self.key_dim_per_head,
-            axis=kv_axis,
-            att_dropout=self.att_dropout,
-            att_dropout_broadcast=self.att_dropout_broadcast,
+            dropout=self.att_dropout,
+            v_embed_dim=self.value_dim_per_head,
+            qk_embed_dim=self.key_dim_per_head,
+            kv_spatial_dim=kv_axis,
+            query_spatial_dim=kv_axis,
+            is_causal=False,
         )
         output, _ = rf.merge_dims(att, dims=(self.num_heads, self.value_dim_per_head), out_dim=self.value_dim_total)
         if self.proj:
