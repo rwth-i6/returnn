@@ -314,7 +314,12 @@ def test_rope_causal_self_att():
     in_.name = "input"
 
     with PyTracer(
-        [rf.RotaryPosCausalSelfAttention.__call__, rf.sinusoidal_encoding, rf.dot_attention, rf_apply_rope],
+        [
+            rf.RotaryPosCausalSelfAttention.__call__,
+            rf.sinusoidal_encoding,
+            rf.scaled_dot_product_attention,
+            rf_apply_rope,
+        ],
         (Tensor, Dim),
     ) as trace_rf:
         out_rf, _ = model_rf(in_, axis=seq_dim, state=model_rf.default_initial_state(batch_dims=[batch_dim]))
@@ -435,11 +440,11 @@ def test_rope_causal_self_att():
             #     (LlamaAttention.forward, 0, "attn_weights", -1),
             #     (batch_dim, model_rf.num_heads, seq_dim, "axis"),
             # ),
-            # (
-            #     (rf.dot_attention, 0, "att", 0),
-            #     (LlamaAttention.forward, 0, "attn_output", 0),
-            #     (batch_dim, seq_dim, model_rf.num_heads, model_rf.value_dim_per_head),
-            # ),
+            (
+                (rf.scaled_dot_product_attention, 0, "att", 0),
+                (LlamaAttention.forward, 0, "attn_output", 0),
+                (batch_dim, seq_dim, model_rf.num_heads, model_rf.value_dim_per_head),
+            ),
         ],
     )
 

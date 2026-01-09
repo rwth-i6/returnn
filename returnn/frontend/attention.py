@@ -61,7 +61,7 @@ def scaled_dot_product_attention(
     :return: attention output
     """
     # noinspection PyProtectedMember
-    return query._raw_backend.scaled_dot_product_attention(
+    att = query._raw_backend.scaled_dot_product_attention(
         query,
         key,
         value,
@@ -74,6 +74,7 @@ def scaled_dot_product_attention(
         is_causal=is_causal,
         scale=scale,
     )
+    return att
 
 
 def _infer_att_dims(
@@ -325,13 +326,7 @@ class CausalSelfAttention(SelfAttentionBase):
             q, k, v, qk_embed_dim=self.key_dim_per_head, kv_spatial_dim=kv_axis
         )
 
-        is_causal = query_spatial is kv_axis
-        print("query_spatial", query_spatial)
-        print("query", query.raw_tensor.shape, query)
-        print("key", k.raw_tensor.shape, k)
-        print("value", v.raw_tensor.shape, v)
-        print("is_causal", is_causal)
-        print("q", query.raw_tensor)
+        is_causal = query_spatial is kv_axis  # i.e. we are not in single-step mode
 
         att = scaled_dot_product_attention(
             query,
@@ -346,7 +341,6 @@ class CausalSelfAttention(SelfAttentionBase):
         )
         if added_dummy_spat_dim_to_query:
             att = rf.squeeze(att, axis=query_spatial)
-        print("att", att.raw_tensor)
 
         output, _ = rf.merge_dims(att, dims=(self.num_heads, self.value_dim_per_head), out_dim=self.value_dim_total)
         if self.proj:
