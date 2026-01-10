@@ -1784,6 +1784,7 @@ class _TorchProfiler:
             sys.exit(0)
 
     def step(self):
+        """step"""
         self.profiler.step()
         if self.max_step is not None and self.profiler.step_num > self.max_step:
             print(f"Reached max profiling step {self.max_step}, stopping Torch profiler.", file=log.v2)
@@ -1832,7 +1833,7 @@ def _opt_torch_profiler_from_opts(
     opts.setdefault("schedule", dict(skip_first=10, wait=5, warmup=3, active=3, repeat=1))
 
     if isinstance(opts["schedule"], dict):
-        schedule_opts = opts["schedule"]
+        schedule_opts: Dict[str, Any] = opts["schedule"]
         schedule_opts = schedule_opts.copy()
         schedule_opts.setdefault("repeat", 0)
         schedule_opts.setdefault("skip_first", 0)
