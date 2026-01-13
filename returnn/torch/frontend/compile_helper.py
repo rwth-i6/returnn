@@ -5,6 +5,7 @@ Helpers to improve torch.compile on RF code.
 from __future__ import annotations
 from typing import Any, Iterable, List, Tuple
 
+import os
 from returnn.tensor import Tensor, Dim
 
 # noinspection PyProtectedMember
@@ -26,11 +27,16 @@ def setup():
     assert not _native.is_set_up(), "Call this setup() as early as possible."
     _native.set_enabled(False)
 
+    # We have lots of dynamic shapes.
+    os.environ["TORCHDYNAMO_CAPTURE_SCALAR_OUTPUTS"] = "1"
+
     # noinspection PyProtectedMember
     from torch.utils._pytree import register_pytree_node
 
     register_pytree_node(Tensor, _tensor_flatten, _tensor_unflatten)
     register_pytree_node(Dim, _dim_flatten, _dim_unflatten)
+
+    Dim.get_dim_value = _dim_get_dim_value
 
 
 def _tensor_flatten(t: Tensor) -> Tuple[List[Any], Any]:
@@ -79,3 +85,22 @@ def _dim_unflatten(values: Iterable[Any], metadata: Any) -> Dim:
     name, dimension, size = metadata
     # TODO this creates a new instance... this is maybe wrong?
     return Dim(name=name, dimension=dimension, size=size, dyn_size_ext=dyn_size_ext)
+
+
+def _dim_get_dim_value(self: Dim) -> int:
+    """
+    Infers the dim this axis should have if unbroadcasted.
+    If `self.src_data` has a placeholder, will use the shape from there.
+    Otherwise, uses `self.dimension` (if static) or `self.dyn_size` (if dynamic).
+
+    :return: max(size or dyn_size)
+    """
+    res = self.get_dim_value_tensor()
+    if isinstance(res, Tensor):
+        assert res.dims == ()
+        assert res.raw_tensor is not None
+        # Specifically PyTorch would then treat it as a SymInt in torch.compile,
+        # which is important to have for some torch functions (e.g. torch.tile and others).
+        return int(res.raw_tensor)
+    assert isinstance(res, int)
+    return res
