@@ -309,6 +309,7 @@ def _get_native_signal_handler_lib_filename() -> str:
               old_signal_handler[SIGILL] = signal(SIGILL, signal_handler);
               old_signal_handler[SIGABRT] = signal(SIGABRT, signal_handler);
               old_signal_handler[SIGFPE] = signal(SIGFPE, signal_handler);
+              old_signal_handler[SIGUSR1] = signal(SIGUSR1, signal_handler);
             }
             """
         ),
