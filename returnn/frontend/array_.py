@@ -195,7 +195,7 @@ def merge_dims(
     if out_dim is None:
         from returnn.util.basic import prod
 
-        if any(d.need_masking() for d in dims[1:]):
+        if any([d.need_masking() for d in dims[1:]]):
             # The dynamic sizes as calculated via dim math would not correctly describe how the tensor looks like.
             # This would then potentially discard some of the data in the tensor in subsequent operations,
             # when masking is applied.
@@ -910,7 +910,7 @@ def scatter(
         else:
             raise ValueError(f"scatter: invalid mode {mode!r}")
     indices_dim = indices_dim if isinstance(indices_dim, (list, tuple)) else [indices_dim]
-    if any(dim.need_masking() for dim in indices_dim):
+    if any([dim.need_masking() for dim in indices_dim]):
         if use_mask is None:
             use_mask = rf.use_mask_default(
                 default=True, default_false_for_behavior_version_up_to=22, func_name="scatter"
