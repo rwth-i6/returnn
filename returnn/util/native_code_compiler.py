@@ -263,12 +263,14 @@ class NativeCodeCompiler:
         """
         return opts
 
+    cpp_version = 11
+
     def _extra_common_opts(self):
         """
         :rtype: list[str]
         """
         if self.is_cpp:
-            return ["-std=c++11"]
+            return [f"-std=c++{self.cpp_version}"]
         return []
 
     @classmethod
