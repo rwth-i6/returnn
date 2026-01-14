@@ -3,7 +3,7 @@ Native code compiler
 """
 
 from __future__ import annotations
-from typing import Optional, List
+from typing import Optional, Union, Sequence, List, Tuple, Dict
 import typing
 import os
 import sys
@@ -17,44 +17,45 @@ class NativeCodeCompiler:
     """
 
     CacheDirName = "returnn_native"
-    CollectedCompilers = None  # type: Optional[List[NativeCodeCompiler]]
+    CollectedCompilers: Optional[List[NativeCodeCompiler]] = None
 
     def __init__(
         self,
-        base_name,
-        code_version,
-        code,
-        is_cpp=True,
-        c_macro_defines=None,
-        ld_flags=None,
-        include_paths=(),
-        include_deps=None,
-        static_version_name=None,
-        should_cleanup_old_all=True,
-        should_cleanup_old_mydir=False,
-        use_cxx11_abi=False,
-        log_stream=None,
-        verbose=False,
+        base_name: str,
+        *,
+        code_version: Union[int, Tuple[int, ...]] = 1,
+        code: str,
+        is_cpp: bool = True,
+        c_macro_defines: Optional[Dict[str, Union[str, int, None]]] = None,
+        ld_flags: Optional[Sequence[str]] = None,
+        include_paths: Optional[Sequence[str]] = (),
+        include_deps: Optional[Sequence[str]] = None,
+        static_version_name: Optional[str] = None,
+        should_cleanup_old_all: bool = True,
+        should_cleanup_old_mydir: bool = False,
+        use_cxx11_abi: bool = False,
+        log_stream: Optional[typing.TextIO] = None,
+        verbose: bool = False,
     ):
         """
-        :param str base_name: base name for the module, e.g. "zero_out"
-        :param int|tuple[int] code_version: check for the cache whether to reuse
-        :param str code: the source code itself
-        :param bool is_cpp: if False, C is assumed
-        :param dict[str,str|int|None]|None c_macro_defines: e.g. {"TENSORFLOW": 1}
-        :param list[str]|None ld_flags: e.g. ["-lblas"]
-        :param list[str]|tuple[str] include_paths:
-        :param list[str]|None include_deps: if provided and an existing lib file,
+        :param base_name: base name for the module, e.g. "zero_out"
+        :param code_version: check for the cache whether to reuse
+        :param code: the source code itself
+        :param is_cpp: if False, C is assumed
+        :param c_macro_defines: e.g. {"TENSORFLOW": 1}
+        :param ld_flags: e.g. ["-lblas"]
+        :param include_paths:
+        :param include_deps: if provided and an existing lib file,
             we will check if any dependency is newer
             and we need to recompile. we could also do it automatically via -MD but that seems overkill and too slow.
-        :param str|None static_version_name: normally, we use .../base_name/hash as the dir
+        :param static_version_name: normally, we use .../base_name/hash as the dir
             but this would use .../base_name/static_version_name.
-        :param bool should_cleanup_old_all: whether we should look in the cache dir
+        :param should_cleanup_old_all: whether we should look in the cache dir
             and check all ops if we can delete some old ones which are older than some limit
             (self._cleanup_time_limit_days)
-        :param bool should_cleanup_old_mydir: whether we should delete our op dir before we compile there.
-        :param typing.TextIO|None log_stream: file stream for print statements
-        :param bool verbose: be slightly more verbose
+        :param should_cleanup_old_mydir: whether we should delete our op dir before we compile there.
+        :param log_stream: file stream for print statements
+        :param verbose: be slightly more verbose
         """
         if self.CollectedCompilers is not None:
             self.CollectedCompilers.append(self)
