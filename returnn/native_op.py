@@ -11,9 +11,11 @@ for usage in TensorFlow and Theano.
 See :ref:`native_ops` for more background.
 """
 
+from __future__ import annotations
+from typing import Optional, Union, Any, Callable, Dict, Sequence, Tuple
 import copy
 import numpy
-import typing
+
 from returnn.util.basic import make_hashable, unicode
 
 
@@ -25,18 +27,18 @@ class NativeOpBaseMixin:
 
     def __init__(
         self,
-        in_info,
-        out_info,
-        c_fw_code,
-        c_bw_code=None,
-        c_extra_support_code=None,
-        code_version=None,
-        cpu_support=True,
-        grad_input_map=None,
-        name=None,
+        in_info: Sequence[Dict[str, Any]],
+        out_info: Sequence[Dict[str, Any]],
+        c_fw_code: str,
+        c_bw_code: Optional[str] = None,
+        c_extra_support_code: Union[None, str, Dict[str, str]] = None,
+        code_version: Optional[Tuple[int, ...]] = None,
+        cpu_support: bool = True,
+        grad_input_map: Union[None, Tuple[int, ...], Callable] = None,
+        name: Optional[str] = None,
     ):
         """
-        :param list[dict(str)] in_info: each dict describes one input var.
+        :param in_info: each dict describes one input var.
           attribs in the dict:
             int ndim: the ndim.
             tuple shape: tuple and can contain None for specific dimensions.
@@ -49,18 +51,18 @@ class NativeOpBaseMixin:
             str gradient: can be "disconnected". see grad().
             bool bw_input: True by default. add this param to the bw input.
           other attribs are just ignored.
-        :param list[dict(str)] out_info: like in_info.
+        :param out_info: like in_info.
           slightly different behavior for:
             shape: we also allow refs to the in_info in the form (in-idx,dim). see infer_shape().
             need_contiguous/want_inplace: used for bw, in case for bw_input == True.
-        :param str c_fw_code: C code for forward pass
-        :param str|dict[str] c_extra_support_code: C support code (for c_support_code)
-        :param str|None c_bw_code: C code for backward pass (for gradient)
-        :param tuple[int] code_version: will be returned by c_code_cache_version.
-        :param bool cpu_support:
-        :param tuple[int]|callable grad_input_map: selection of grad inputs.
+        :param c_fw_code: C code for forward pass
+        :param c_extra_support_code: C support code (for c_support_code)
+        :param c_bw_code: C code for backward pass (for gradient)
+        :param code_version: will be returned by c_code_cache_version.
+        :param cpu_support:
+        :param grad_input_map: selection of grad inputs.
           by default, we get all inputs + all outputs + all grad outputs.
-        :param str name: name
+        :param name: name
         """
         assert isinstance(in_info, (list, tuple))
         assert isinstance(out_info, (list, tuple))
@@ -251,12 +253,12 @@ class NativeOpGenBase:
     See NativeOp.__init__() for attribs.
     """
 
-    in_info = None  # type: typing.Tuple[typing.Dict[str]]
-    out_info = None  # type: typing.Tuple[typing.Dict[str]]
-    c_fw_code = None  # type: str
-    c_bw_code = None  # type: str
-    c_extra_support_code = None  # type: typing.Dict[str,str]
-    code_version = None  # type: typing.Union[typing.Tuple[int], int]
+    in_info: Optional[Tuple[Dict[str, Any], ...]] = None
+    out_info: Optional[Tuple[Dict[str, Any], ...]] = None
+    c_fw_code: Optional[str] = None
+    c_bw_code: Optional[str] = None
+    c_extra_support_code: Optional[Dict[str, str]] = None
+    code_version: Union[None, Tuple[int, ...], int] = None
     grad_input_map = None
     theano_custom_grad = None
     cpu_support = True
