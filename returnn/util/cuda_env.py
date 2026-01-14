@@ -3,8 +3,9 @@ CUDA environment detection and information.
 """
 
 from __future__ import annotations
-from typing import Dict
+from typing import Dict, Tuple
 import os
+import re
 
 
 class CudaEnv:
@@ -31,7 +32,9 @@ class CudaEnv:
             self.cuda_path = self._find_cuda_path()
             if self.verbose_find_cuda:
                 print("CUDA path:", self.cuda_path)
+
         self._max_compute_capability = None
+        self._cuda_version = None
 
     @classmethod
     def _find_nvcc_in_path(cls):
@@ -153,6 +156,27 @@ class CudaEnv:
         :rtype: bool
         """
         return bool(self.cuda_path)
+
+    def get_cuda_version(self) -> Tuple[int, int]:
+        """
+        Get CUDA version as (major, minor).
+        """
+        if self._cuda_version:
+            return self._cuda_version
+        assert self.cuda_path
+        # Parse CUDA_VERSION from cuda.h.
+        # Like: #define CUDA_VERSION 12080
+        cuda_h_path = f"{self.cuda_path}/include/cuda.h"
+        assert os.path.exists(cuda_h_path)
+        for line in open(cuda_h_path).read().splitlines():
+            m = re.match(r"^#define\s+CUDA_VERSION\s+([0-9]+)$", line)
+            if m:
+                version_num = int(m.group(1))
+                major = version_num // 1000
+                minor = (version_num % 1000) // 10
+                self._cuda_version = (major, minor)
+                return self._cuda_version
+        raise RuntimeError(f"Could not determine CUDA version from {cuda_h_path}.")
 
     def get_max_compute_capability(self):
         """
