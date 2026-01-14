@@ -165,18 +165,9 @@ class CudaEnv:
             return self._cuda_version
         assert self.cuda_path
         # Parse CUDA_VERSION from cuda.h.
-        # Like: #define CUDA_VERSION 12080
         cuda_h_path = f"{self.cuda_path}/include/cuda.h"
-        assert os.path.exists(cuda_h_path)
-        for line in open(cuda_h_path).read().splitlines():
-            m = re.match(r"^#define\s+CUDA_VERSION\s+([0-9]+)$", line)
-            if m:
-                version_num = int(m.group(1))
-                major = version_num // 1000
-                minor = (version_num % 1000) // 10
-                self._cuda_version = (major, minor)
-                return self._cuda_version
-        raise RuntimeError(f"Could not determine CUDA version from {cuda_h_path}.")
+        self._cuda_version = _parse_cuda_version_from_cuda_h(cuda_h_path)
+        return self._cuda_version
 
     def get_max_compute_capability(self):
         """
@@ -186,8 +177,6 @@ class CudaEnv:
         if self._max_compute_capability is None:
             cuda_occupancy_path = "%s/include/cuda_occupancy.h" % self.cuda_path
             if os.path.exists(cuda_occupancy_path):
-                import re
-
                 major, minor = None, 0
                 for line in open(cuda_occupancy_path).read().splitlines():
                     m = re.match("^#define\\s+__CUDA_OCC_(MAJOR|MINOR)__\\s+([0-9]+)$", line)
@@ -248,3 +237,65 @@ class CudaEnv:
             return cls._instance_per_cls[cls]
         cls._instance_per_cls[cls] = cls()
         return cls._instance_per_cls[cls]
+
+
+def get_best_nvcc_path_for_cuda_version(cuda_version: Tuple[int, int]) -> str:
+    """
+    :return: path to nvcc
+    :rtype: str
+    """
+    cuda_paths = []
+
+    # noinspection PyProtectedMember
+    for p in CudaEnv._cuda_path_candidates():
+        if _check_valid_cuda_path_with_nvcc(p):
+            version = _parse_cuda_version_from_cuda_h(f"{p}/include/cuda.h")
+            if version == cuda_version:
+                # if we found a matching one, directly return it
+                return f"{p}/bin/nvcc"
+            cuda_paths.append((version, p))
+
+    if not cuda_paths:
+        raise RuntimeError(f"No valid CUDA installation found for version {cuda_version}.")
+
+    only_higher_versions = [(version, p) for (version, p) in cuda_paths if version >= cuda_version]
+    if only_higher_versions:
+        only_higher_versions.sort(key=lambda x: x[0])
+        # return the lowest higher version
+        if only_higher_versions[0][0] != cuda_version[0]:  # major version differs
+            print(
+                f"Warning: No exact match for CUDA version {cuda_version}, "
+                f"using version {only_higher_versions[0]} instead."
+            )
+        return f"{only_higher_versions[0][1]}/bin/nvcc"
+
+    cuda_paths.sort(key=lambda x: x[0])
+    # return the highest lower version
+    print(f"Warning: No exact match for CUDA version {cuda_version}, using lower version {cuda_paths[-1][0]} instead.")
+    return f"{cuda_paths[-1][1]}/bin/nvcc"
+
+
+def _check_valid_cuda_path_with_nvcc(p: str) -> bool:
+    """
+    :param str p: path to CUDA, e.g. "/usr/local/cuda-8.0"
+    :return: whether this is a valid CUDA path, i.e. we find all what we need
+    :rtype: bool
+    """
+    if not os.path.exists("%s/bin/nvcc" % p):
+        return False
+    if not os.path.exists("%s/include/cuda.h" % p):
+        return False
+    return True
+
+
+def _parse_cuda_version_from_cuda_h(cuda_h_path: str) -> Tuple[int, int]:
+    assert os.path.exists(cuda_h_path)
+    for line in open(cuda_h_path).read().splitlines():
+        # Like: #define CUDA_VERSION 12080
+        m = re.match(r"^#define\s+CUDA_VERSION\s+([0-9]+)$", line)
+        if m:
+            version_num = int(m.group(1))
+            major = version_num // 1000
+            minor = (version_num % 1000) // 10
+            return (major, minor)
+    raise RuntimeError(f"Could not determine CUDA version from {cuda_h_path}.")
