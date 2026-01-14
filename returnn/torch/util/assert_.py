@@ -7,8 +7,25 @@ from __future__ import annotations
 import threading
 from textwrap import dedent
 from queue import Queue
-import os
 import torch
+
+
+def assert_(cond: torch.Tensor, message: str):
+    """
+    Does a device-side assertion.
+    For CPU, this will directly check the condition and raise an error if false.
+    For CUDA devices, this runs asynchronously on a separate thread (to avoid pin_memory in the current thread),
+    and non-blocking (does not trigger a CUDA sync).
+    """
+    if cond.device.type == "cpu":
+        if not cond.item():
+            raise AssertionError(message)
+        return
+    elif cond.device.type == "cuda":
+        # This triggers the Lazy initialization on first call
+        _CudaAsyncWorker().push(cond, message)
+    else:
+        raise NotImplementedError(f"assert_ not implemented for device type: {cond.device.type}")
 
 
 def _get_ext():
@@ -16,31 +33,31 @@ def _get_ext():
     if _ext:
         return _ext
 
-    if not os.environ.get("CUDA_HOME") or os.environ.get("CUDA_PATH"):
-        from returnn.util.cuda_env import CudaEnv
+    from .native_op_code_compiler import OpCodeCompiler
 
-        env = CudaEnv.get_instance()
-        assert env.cuda_path, "CUDA_PATH, CUDA_HOME not set, and CUDA could not be found automatically."
-        os.environ["CUDA_PATH"] = env.cuda_path
-
-    from torch.utils.cpp_extension import load_inline
-
-    _ext = load_inline(
-        name="async_assert_ext",
-        cpp_sources=_cpp_source,
-        cuda_sources=_cuda_source,
-        functions=["async_assert_cuda"],
-        with_cuda=True,
-        verbose=True,
+    compiler = OpCodeCompiler(
+        "async_assert_ext", use_cuda_if_available=True, code=_cpp_source + _cuda_source, is_python_module=True
     )
+    _ext = compiler.load_module()
     return _ext
 
 
 _ext = None
 
-_cpp_source = "void async_assert_cuda(const at::Tensor& cond, const at::Tensor& msg_tensor);"
+_cpp_source = dedent("""\
+    #include <torch/extension.h>
+
+    void async_assert_cuda(const at::Tensor& cond, const at::Tensor& msg_tensor);
+
+    PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
+        m.def("async_assert_cuda", torch::wrap_pybind_function(async_assert_cuda), "Asynchronous CUDA assert");
+    }
+    """)
 
 _cuda_source = dedent("""\
+    #include <torch/types.h>
+    #include <cuda.h>
+    #include <cuda_runtime.h>
     #include <torch/extension.h>
     #include <ATen/cuda/CUDAContext.h>
     #include <c10/cuda/CUDACachingAllocator.h>
@@ -103,21 +120,3 @@ class _CudaAsyncWorker:
     def push(self, cond: torch.Tensor, message: str):
         """push to queue"""
         self.queue.put((cond, message, torch.cuda.current_stream()))
-
-
-def assert_(cond: torch.Tensor, message: str):
-    """
-    Does a device-side assertion.
-    For CPU, this will directly check the condition and raise an error if false.
-    For CUDA devices, this runs asynchronously on a separate thread (to avoid pin_memory in the current thread),
-    and non-blocking (does not trigger a CUDA sync).
-    """
-    if cond.device.type == "cpu":
-        if not cond.item():
-            raise AssertionError(message)
-        return
-    elif cond.device.type == "cuda":
-        # This triggers the Lazy initialization on first call
-        _CudaAsyncWorker().push(cond, message)
-    else:
-        raise NotImplementedError(f"assert_ not implemented for device type: {cond.device.type}")
