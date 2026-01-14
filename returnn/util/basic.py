@@ -4504,7 +4504,7 @@ _find_libcudart_from_runtime_cached = None
 def find_libcudart_from_runtime():
     """
     Looks through all libs via :func:`collect_proc_maps_exec_files`,
-    and searches for all which have the ``sgemm`` symbol.
+    and searches for libcudart.
     Currently only works on Linux (because collect_proc_maps_exec_files).
 
     :return: list of libs (their path)
