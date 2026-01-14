@@ -3,7 +3,7 @@ CUDA environment detection and information.
 """
 
 from __future__ import annotations
-from typing import Dict, Tuple
+from typing import Dict, Tuple, List
 import os
 import re
 
@@ -122,6 +122,9 @@ class CudaEnv:
             if cls.verbose_find_cuda:
                 print("found cuda lib: %s (path %s)" % (p, d))
             yield d
+        # Check common installation location.
+        for path in get_cuda_path_candidates_from_common_install_locations():
+            yield path
 
     @classmethod
     def _check_valid_cuda_path(cls, p):
@@ -237,6 +240,25 @@ class CudaEnv:
             return cls._instance_per_cls[cls]
         cls._instance_per_cls[cls] = cls()
         return cls._instance_per_cls[cls]
+
+
+def get_cuda_path_candidates_from_common_install_locations() -> List[str]:
+    """
+    :return: list of possible CUDA installation paths from common locations
+    """
+    cuda_paths = []
+
+    if os.path.exists("/usr/local"):
+        for name in sorted(os.listdir("/usr/local")):
+            if name.startswith("cuda-") or name == "cuda":
+                p = f"/usr/local/{name}"
+                if _check_valid_cuda_path_with_nvcc(p):
+                    version = _parse_cuda_version_from_cuda_h(f"{p}/include/cuda.h")
+                    cuda_paths.append((version, p))
+
+    # (stable) sort by version, highest version first
+    cuda_paths.sort(key=lambda x: x[0], reverse=True)
+    return [p for (_, p) in cuda_paths]
 
 
 def get_best_nvcc_path_for_cuda_version(cuda_version: Tuple[int, int]) -> str:
