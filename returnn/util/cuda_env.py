@@ -78,6 +78,8 @@ class CudaEnv:
             return "lib64"
         return "lib"
 
+    _runtime_libcudart_path_must_be_valid: bool = False
+
     @classmethod
     def _cuda_path_candidate_via_proc_map_libcudart(cls):
         from returnn.util.basic import find_libcudart_from_runtime
@@ -89,12 +91,15 @@ class CudaEnv:
             return None
         # fn is e.g. '/usr/local/cuda-8.0/targets/x86_64-linux/lib/libcudart.so.8.0.61',
         # or maybe '/usr/local/cuda-8.0/lib64/libcudart.so'
+        # or maybe ".../site-packages/nvidia/cuda_runtime/lib/libcudart.so.12"
+        # or ".../site-packages/nvidia/cu13/lib/libcudart.so.13"
         p = os.path.dirname(os.path.dirname(fn))
         while not cls._check_valid_cuda_path(p):
             p = os.path.dirname(p)
             if p in ["", "/"]:
                 if cls.verbose_find_cuda:
                     print(f"Loaded lib {fn} does not seem to be in valid CUDA path.")
+                assert not cls._runtime_libcudart_path_must_be_valid
                 return None
         assert cls._check_valid_cuda_path(p)
         return p
@@ -217,11 +222,15 @@ class CudaEnv:
             "-I",
             "%s/include" % self.cuda_path,
             "-L",
-            "%s/%s" % (self.cuda_path, self._get_lib_dir_name(self.cuda_path)),
+            self.get_lib_dir_path(),
             "-x",
             "cu",
             "-v",
         ]
+
+    def get_lib_dir_path(self) -> str:
+        """library path"""
+        return "%s/%s" % (self.cuda_path, self._get_lib_dir_name(self.cuda_path))
 
     def get_compiler_bin(self):
         """
