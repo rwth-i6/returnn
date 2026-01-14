@@ -989,6 +989,126 @@ def test_file_cache():
             break
 
 
+def test_py_baum_welch():
+    from .fsa_utils import py_baum_welch
+    from returnn.util.fsa import FastBwFsaShared
+    from numpy.testing import assert_almost_equal, assert_allclose
+
+    n_batch = 3
+    seq_len = 7
+    n_classes = 5
+
+    fsa = FastBwFsaShared()
+    for i in range(n_classes):
+        fsa.add_edge(i, i + 1, emission_idx=i)  # fwd
+        fsa.add_edge(i + 1, i + 1, emission_idx=i)  # loop
+    assert n_classes <= seq_len
+    fast_bw_fsa = fsa.get_fast_bw_fsa(n_batch=n_batch)
+    edges = fast_bw_fsa.edges
+    weights = fast_bw_fsa.weights
+    start_end_states = fast_bw_fsa.start_end_states
+    am_scores = numpy.ones((seq_len, n_batch, n_classes), dtype="float32") * numpy.float32(1.0 / n_classes)
+    am_scores = -numpy.log(am_scores)  # in -log space
+    float_idx = numpy.ones((seq_len, n_batch), dtype="float32")
+    print("Construct call...")
+    fwdbwd, obs_scores = py_baum_welch(
+        am_scores=am_scores, float_idx=float_idx, edges=edges, weights=weights, start_end_states=start_end_states
+    )
+    print("Done.")
+    print("score:")
+    print(repr(obs_scores))
+    assert obs_scores.shape == (seq_len, n_batch)
+    bw = numpy.exp(-fwdbwd)
+    print("Baum-Welch soft alignment:")
+    print(repr(bw))
+    assert bw.shape == (seq_len, n_batch, n_classes)
+    from numpy import array, float32
+
+    if seq_len == n_classes:
+        print("Extra check identity...")
+        for i in range(n_batch):
+            assert_almost_equal(numpy.identity(n_classes), bw[:, i])
+    if seq_len == 7 and n_classes == 5:
+        print("Extra check ref_align (7,5)...")
+        assert_allclose(obs_scores, 8.55801582, rtol=1e-5)  # should be the same everywhere
+        ref_align = array(
+            [
+                [[1.0, 0.0, 0.0, 0.0, 0.0]],
+                [[0.33333316, 0.66666663, 0.0, 0.0, 0.0]],
+                [[0.06666669, 0.53333354, 0.40000018, 0.0, 0.0]],
+                [[0.0, 0.20000014, 0.60000014, 0.19999999, 0.0]],
+                [[0.0, 0.0, 0.39999962, 0.53333312, 0.06666663]],
+                [[0.0, 0.0, 0.0, 0.66666633, 0.33333316]],
+                [[0.0, 0.0, 0.0, 0.0, 0.99999982]],
+            ],
+            dtype=float32,
+        )
+        assert ref_align.shape == (seq_len, 1, n_classes)
+        ref_align = numpy.tile(ref_align, (1, n_batch, 1))
+        assert ref_align.shape == bw.shape
+        # print("Reference alignment:")
+        # print(repr(ref_align))
+        print("mean square diff:", numpy.mean(numpy.square(ref_align - bw)))
+        print("max square diff:", numpy.max(numpy.square(ref_align - bw)))
+        assert_allclose(ref_align, bw, rtol=1e-5)
+    print("Done.")
+
+
+def test_py_viterbi():
+    from .fsa_utils import py_viterbi
+    from returnn.util.fsa import FastBwFsaShared
+
+    n_batch = 3
+    seq_len = 7
+    n_classes = 5
+
+    fsa = FastBwFsaShared()
+    for i in range(n_classes):
+        fsa.add_edge(i, i + 1, emission_idx=i)  # fwd
+        fsa.add_edge(i + 1, i + 1, emission_idx=i)  # loop
+    assert n_classes <= seq_len
+    fast_bw_fsa = fsa.get_fast_bw_fsa(n_batch=n_batch)
+    edges = fast_bw_fsa.edges
+    weights = fast_bw_fsa.weights
+    start_end_states = fast_bw_fsa.start_end_states
+    am_scores = numpy.eye(n_classes, n_classes, dtype="float32")  # (dim,dim)
+    import scipy.ndimage
+
+    am_scores = scipy.ndimage.zoom(am_scores, zoom=(float(seq_len) / n_classes, 1), order=1, prefilter=False)
+    assert am_scores.shape == (seq_len, n_classes)
+    am_scores = am_scores[:, None]
+    am_scores = am_scores + numpy.zeros((seq_len, n_batch, n_classes), dtype="float32")
+    print(am_scores[:, 0])
+    # am_scores = numpy.ones((seq_len, n_batch, n_classes), dtype="float32") * numpy.float32(1.0 / n_classes)
+    am_scores = numpy.log(am_scores)  # in +log space
+    print("Construct call...")
+    alignment, obs_scores = py_viterbi(
+        am_scores=am_scores,
+        am_seq_len=numpy.array([seq_len] * n_batch),
+        edges=edges,
+        weights=weights,
+        start_end_states=start_end_states,
+    )
+    print("Done.")
+    print("score:")
+    print(repr(obs_scores))
+    assert obs_scores.shape == (n_batch,)
+    print("Hard alignment:")
+    print(repr(alignment))
+    assert alignment.shape == (seq_len, n_batch)
+    if seq_len == n_classes:
+        print("Extra check identity...")
+        for i in range(n_batch):
+            for t in range(seq_len):
+                assert alignment[t, i] == t
+    if seq_len == 7 and n_classes == 5:
+        print("Extra check ref_align (7,5)...")
+        assert_allclose(obs_scores, -1.6218603, rtol=1e-5)  # should be the same everywhere
+        for i in range(n_batch):
+            assert alignment[:, i].tolist() == [0, 1, 1, 2, 3, 3, 4]
+    print("Done.")
+
+
 if __name__ == "__main__":
     better_exchook.install()
     if len(sys.argv) <= 1:
