@@ -7,6 +7,7 @@ from typing import Optional, Union, Sequence, List, Tuple, Dict
 import typing
 import os
 import sys
+import shutil
 
 from . import basic as util
 
@@ -252,8 +253,8 @@ class NativeCodeCompiler:
         :rtype: str
         """
         if self.is_cpp:
-            return "g++"
-        return "gcc"
+            return get_cpp_bin()
+        return get_cc_bin()
 
     def _transform_compiler_opts(self, opts):
         """
@@ -349,3 +350,37 @@ class NativeCodeCompiler:
         """
         self._maybe_compile()
         return self._so_filename
+
+
+def get_cc_bin() -> str:
+    """
+    :return: path
+    """
+    cc_bin = os.environ.get("CC", "")
+    if cc_bin:
+        if cc_bin.startswith("/"):
+            return cc_bin
+        cc_bin = shutil.which(cc_bin)
+        if cc_bin:
+            return cc_bin
+    cc_bin = shutil.which("cc") or shutil.which("clang") or shutil.which("gcc")
+    if not cc_bin:
+        raise RuntimeError("Cannot find C compiler (cc, clang, gcc) in PATH")
+    return cc_bin
+
+
+def get_cpp_bin() -> str:
+    """
+    :return: path
+    """
+    cpp_bin = os.environ.get("CXX", "")
+    if cpp_bin:
+        if cpp_bin.startswith("/"):
+            return cpp_bin
+        cpp_bin = shutil.which(cpp_bin)
+        if cpp_bin:
+            return cpp_bin
+    cpp_bin = shutil.which("c++") or shutil.which("cpp") or shutil.which("clang++") or shutil.which("g++")
+    if not cpp_bin:
+        raise RuntimeError("Cannot find C++ compiler (c++, cpp, clang++, g++) in PATH")
+    return cpp_bin
