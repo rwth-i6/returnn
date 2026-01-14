@@ -5,7 +5,6 @@ CUDA environment detection and information.
 from __future__ import annotations
 from typing import Dict
 import os
-import shutil
 
 
 class CudaEnv:
@@ -178,22 +177,13 @@ class CudaEnv:
         return self._max_compute_capability
 
     @staticmethod
-    def get_cc_bin():
+    def get_cc_bin() -> str:
         """
         :return: path
-        :rtype: str
         """
-        cc_bin = os.environ.get("CC", "")
-        if cc_bin:
-            if cc_bin.startswith("/"):
-                return cc_bin
-            cc_bin = shutil.which(cc_bin)
-            if cc_bin:
-                return cc_bin
-        cc_bin = shutil.which("cc") or shutil.which("clang") or shutil.which("gcc")
-        if not cc_bin:
-            raise RuntimeError("Cannot find C compiler (cc, clang, gcc) in PATH")
-        return cc_bin
+        from .native_code_compiler import get_cc_bin
+
+        return get_cc_bin()
 
     def get_compiler_opts(self):
         """
