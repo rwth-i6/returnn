@@ -1057,6 +1057,7 @@ def test_py_baum_welch():
 def test_py_viterbi():
     from fsa_utils import py_viterbi
     from returnn.util.fsa import FastBwFsaShared
+    from numpy.testing import assert_allclose
 
     n_batch = 3
     seq_len = 7
