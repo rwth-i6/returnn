@@ -77,19 +77,25 @@ class OpMaker:
     def __init__(
         self,
         description: OpDescription,
+        *,
         compiler_opts: Optional[Dict[str, str]] = None,
+        with_cuda: Optional[bool] = None,
     ):
         """
         :param description:
         :param compiler_opts: passed on to OpCodeCompiler as kwargs
+        :param with_cuda: override auto-detection of CUDA availability
         """
-        self._cls_init()
+        if with_cuda is not None:
+            self.with_cuda = with_cuda
+        else:
+            self._cls_init_with_cuda()
         self.description = description
         self.name = description.name
         self.compiler_opts = compiler_opts or {}
 
     @classmethod
-    def _cls_init(cls):
+    def _cls_init_with_cuda(cls):
         if cls.with_cuda is None:
             cls.with_cuda = torch.cuda.is_available()
 

@@ -13,6 +13,23 @@ from returnn.util.fsa import FastBwFsaShared, get_ctc_fsa_fast_bw as get_ctc_fsa
 from fsa_utils import py_baum_welch, py_viterbi
 
 
+def test_compile():
+    # In case CUDA is available, it will use nvcc to compile, and compiles the op with both CPU and CUDA support.
+    make_fast_baum_welch_op(compiler_opts=dict(verbose=True))
+
+
+def test_compile_cpu_only():
+    # This forces CPU-only compilation, using c++, even if CUDA is available.
+    make_fast_baum_welch_op(compiler_opts=dict(verbose=True), with_cuda=False)
+
+
+def test_compile_with_cuda():
+    if not torch.cuda.is_available():
+        raise SkipTest("CUDA not available")
+    # Explicitly compile with CUDA support.
+    make_fast_baum_welch_op(compiler_opts=dict(verbose=True), with_cuda=True)
+
+
 def test_FastBaumWelch():
     print("Make op...")
     op = make_fast_baum_welch_op(
