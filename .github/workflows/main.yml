@@ -139,6 +139,7 @@ jobs:
           pip install --user pytest
 
           pip install --user --progress-bar=off -r requirements.txt
+          pip install --user --progress-bar=off scipy  # for some tests
 
       - name: Test Python/Numpy.
         run: |
