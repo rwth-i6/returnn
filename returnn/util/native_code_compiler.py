@@ -314,8 +314,9 @@ class NativeCodeCompiler:
         common_opts += ["-D_GLIBCXX_USE_CXX11_ABI=%i" % (1 if self.use_cxx11_abi else 0)]
         common_opts += ["-D%s=%s" % item for item in sorted(self.c_macro_defines.items())]
         common_opts += ["-g"]
-        opts = common_opts + [self._c_filename, "-o", self._so_filename]
+        opts = list(common_opts)
         opts += list(map(self._transform_ld_flag, self.ld_flags))
+        opts += [self._c_filename, "-o", self._so_filename]
         cmd_bin = self._get_compiler_bin()
         cmd_args = [cmd_bin] + opts
         from subprocess import Popen, PIPE, STDOUT, CalledProcessError
