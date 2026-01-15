@@ -4701,7 +4701,7 @@ class FastViterbiOp(NativeOpGenBase):
         int n_states,
         int n_edges,
         int t,
-        int32* cur_state, // (n_batch,)
+        int32_t* cur_state, // (n_batch,)
         const IdxAndVal* frame,
         const int32_t* d_am_seq_len,
         const int32_t* d_edge_from,
