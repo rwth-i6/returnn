@@ -71,6 +71,7 @@ class NativeCodeCompiler:
         self.ld_flags = ld_flags or []
         self.include_deps = include_deps
         self.static_version_name = static_version_name
+        self.use_cxx11_abi = use_cxx11_abi
         self._code_hash = self._make_code_hash()
         self._info_dict = self._make_info_dict()
         self._hash = self._make_hash()
@@ -78,7 +79,6 @@ class NativeCodeCompiler:
         if should_cleanup_old_all:
             self._cleanup_old()
         self._should_cleanup_old_mydir = should_cleanup_old_mydir
-        self.use_cxx11_abi = use_cxx11_abi
         self._log_stream = log_stream
         if self.verbose:
             print("%s: %r" % (self.__class__.__name__, self), file=log_stream)
@@ -159,7 +159,16 @@ class NativeCodeCompiler:
         assert isinstance(res, dict)
         return res
 
-    _relevant_info_keys = ("code_version", "code_hash", "c_macro_defines", "ld_flags", "compiler_bin", "platform")
+    _relevant_info_keys = (
+        "code_version",
+        "code_hash",
+        "c_macro_defines",
+        "ld_flags",
+        "compiler_bin",
+        "platform",
+        "use_cxx11_abi",
+        "cpp_version",
+    )
 
     def _make_info_dict(self):
         """
@@ -176,6 +185,8 @@ class NativeCodeCompiler:
             "ld_flags": self.ld_flags,
             "compiler_bin": self._get_compiler_bin(),
             "platform": platform.platform(),
+            "use_cxx11_abi": self.use_cxx11_abi,
+            "cpp_version": self.cpp_version,
         }
 
     def _make_code_hash(self):
