@@ -5,8 +5,8 @@ Generic interface which automatically creates:
 * inplace and not inplace
 * grad variants
 
-See :mod:`returnn.tf.native_op` and :mod:`returnn.theano.native_op`
-for usage in TensorFlow and Theano.
+See :mod:`returnn.tf.native_op` and :mod:`returnn.torch.utils.native_op`
+for usage in TensorFlow and PyTorch.
 
 See :ref:`native_ops` for more background.
 """
@@ -21,8 +21,8 @@ from returnn.util.basic import make_hashable, unicode
 
 class NativeOpBaseMixin:
     """
-    The purpose of having this as a separate base class is to make this independent of any Theano specific
-    functionality so that we can also use this base for example for TensorFlow.
+    The purpose of having this as a separate base class
+    is to make this independent of any TensorFlow or PyTorch-specific functionality.
     """
 
     def __init__(
