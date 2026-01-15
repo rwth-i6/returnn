@@ -1613,42 +1613,6 @@ def test_fast_bw_uniform():
     print("Done.")
 
 
-def get_ctc_fsa_fast_bw_via_python(targets, seq_lens, blank_idx):
-    """
-    :param tf.Tensor targets: shape (batch,time)
-    :param tf.Tensor seq_lens: shape (batch,)
-    :param int blank_idx:
-    :return: edges, weights, start_end_states
-    :rtype: (tf.Tensor, tf.Tensor, tf.Tensor)
-    """
-    from returnn.util.fsa import get_ctc_fsa_fast_bw
-
-    def py_fast_bw_fsa_ctc_wrapper(targets_, seq_lens_):
-        """
-        :param numpy.ndarray targets_:
-        :param numpy.ndarray seq_lens_:
-        :rtype: (numpy.ndarray,numpy.ndarray,numpy.ndarray)
-        """
-        fsa = get_ctc_fsa_fast_bw(targets=targets_, seq_lens=seq_lens_, blank_idx=blank_idx)
-        assert fsa.start_end_states.shape == (2, len(seq_lens_)), "shape mismatch %r, n_batch %r, seq lens %r" % (
-            fsa.start_end_states.shape,
-            len(seq_lens_),
-            seq_lens_,
-        )
-        return fsa.edges.astype("int32"), fsa.weights.astype("float32"), fsa.start_end_states.astype("int32")
-
-    edges, weights, start_end_states = tf_compat.v1.py_func(
-        py_fast_bw_fsa_ctc_wrapper, [targets, seq_lens], [tf.int32, tf.float32, tf.int32], stateful=False
-    )
-    # edges: (4, num_edges), edges of the graph (from,to,emission_idx,sequence_idx)
-    # weights: (num_edges,), weights of the edges
-    # start_end_states: (2, batch), (start,end) state idx in automaton.
-    edges.set_shape((4, None))
-    weights.set_shape((None,))
-    start_end_states.set_shape((2, None))
-    return edges, weights, start_end_states
-
-
 def _log_softmax(x, axis=-1):
     assert isinstance(x, numpy.ndarray)
     xdev = x - x.max(axis=axis, keepdims=True)
