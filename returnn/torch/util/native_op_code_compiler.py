@@ -119,6 +119,7 @@ class OpCodeCompiler(NativeCodeCompiler):
             include_paths=include_paths,
             c_macro_defines=c_macro_defines,
             ld_flags=ld_flags,
+            use_cxx11_abi=torch._C._GLIBCXX_USE_CXX11_ABI,
             **kwargs,
         )
         self.is_python_module = is_python_module

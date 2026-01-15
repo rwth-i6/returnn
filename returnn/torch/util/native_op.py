@@ -411,7 +411,6 @@ class OpMaker:
             include_deps=[self.support_native_op_cpp_filename],
             use_cuda_if_available=self.with_cuda,
             log_stream=self.log_stream,
-            use_cxx11_abi=True,
             **dict(self.compiler_opts),
         )
         mod = comp.load_module()
