@@ -1649,44 +1649,6 @@ def get_ctc_fsa_fast_bw_via_python(targets, seq_lens, blank_idx):
     return edges, weights, start_end_states
 
 
-def ctc_loss_via_python_fsa(logits, logits_seq_lens, time_major, targets, targets_seq_lens):
-    """
-    Similar to :func:`tf.nn.ctc_loss`.
-    We use our :func:`fast_baum_welch`.
-    Also see :class:`FastBaumWelchLoss`.
-
-    :param tf.Tensor logits: (time,batch,dim) or (batch,time,dim). unnormalized (before softmax)
-    :param tf.Tensor logits_seq_lens: shape (batch,) of int32|int64
-    :param bool time_major:
-    :param tf.Tensor targets: batch-major, [batch,time]
-    :param tf.Tensor targets_seq_lens: (batch,)
-    :return: loss, shape (batch,)
-    :rtype: tf.Tensor
-    """
-    assert logits.get_shape().ndims == 3 and logits.get_shape().dims[-1].value
-    dim = logits.get_shape().dims[-1].value
-    if not time_major:
-        logits = tf.transpose(logits, [1, 0, 2])  # (time,batch,dim)
-    log_sm = tf.nn.log_softmax(logits)  # (time,batch,dim)
-    from returnn.tf.util.basic import sequence_mask_time_major
-
-    seq_mask = sequence_mask_time_major(logits_seq_lens)  # (time,batch)
-
-    edges, weights, start_end_states = get_ctc_fsa_fast_bw_via_python(
-        targets=targets, seq_lens=targets_seq_lens, blank_idx=dim - 1
-    )
-    fwdbwd, obs_scores = fast_baum_welch(
-        am_scores=-log_sm, float_idx=seq_mask, edges=edges, weights=weights, start_end_states=start_end_states
-    )
-    loss = obs_scores[0]  # (batch,)
-    bw = tf.exp(-fwdbwd)  # (time,batch,dim)
-    grad_x = (tf.exp(log_sm) - bw) * tf.expand_dims(seq_mask, 2)  # (time,batch,dim)
-    from returnn.tf.util.basic import custom_gradient
-
-    loss = custom_gradient.generic_loss_and_error_signal(loss=loss, x=logits, grad_x=grad_x)
-    return loss
-
-
 def _log_softmax(x, axis=-1):
     assert isinstance(x, numpy.ndarray)
     xdev = x - x.max(axis=axis, keepdims=True)
