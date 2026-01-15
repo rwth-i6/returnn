@@ -674,54 +674,13 @@ def test_ctc_loss_broadcast():
 def test_edit_distance():
     import numpy
     import torch
-    from typing import Sequence
     from collections import namedtuple
     import itertools
-
-    def _edit_distance_ref_b1(a: Sequence[int], b: Sequence[int]) -> int:
-        """
-        Reference implementation for edit distance.
-        """
-        n = len(a) + 1
-        m = len(b) + 1
-        d = torch.zeros((n, m), dtype=torch.int32)
-        for i in range(n):
-            d[i, 0] = i
-        for j in range(m):
-            d[0, j] = j
-        for j in range(1, m):
-            for i in range(1, n):
-                if a[i - 1] == b[j - 1]:
-                    d[i, j] = d[i - 1, j - 1]
-                else:
-                    d[i, j] = min(
-                        d[i - 1, j] + 1,  # deletion
-                        d[i, j - 1] + 1,  # insertion
-                        d[i - 1, j - 1] + 1,  # substitution
-                    )
-        return int(d[n - 1, m - 1])
-
-    # noinspection PyShadowingNames
-    def _edit_distance_ref(a: Tensor, a_spatial_dim: Dim, b: Tensor, b_spatial_dim: Dim) -> torch.Tensor:
-        """
-        Reference implementation for edit distance.
-        """
-        batch_dim = a.dims[0]
-        assert a.dims == (batch_dim, a_spatial_dim) and b.dims == (batch_dim, b_spatial_dim)
-        res = []
-        for i in range(batch_dim.dimension):
-            assert a_spatial_dim.dyn_size[i] <= a.raw_tensor.size(1)
-            assert b_spatial_dim.dyn_size[i] <= b.raw_tensor.size(1)
-            res.append(
-                _edit_distance_ref_b1(
-                    a.raw_tensor[i, : a_spatial_dim.dyn_size[i]], b.raw_tensor[i, : b_spatial_dim.dyn_size[i]]
-                )
-            )
-        return torch.tensor(res, dtype=torch.int32)
+    from numpy_ref_edit_distance import edit_distance_ref
 
     # noinspection PyShadowingNames
     def _check_edit_distance(a: Tensor, a_spatial_dim: Dim, b: Tensor, b_spatial_dim: Dim):
-        ref = _edit_distance_ref(a, a_spatial_dim, b, b_spatial_dim)
+        ref = edit_distance_ref(a, a_spatial_dim, b, b_spatial_dim).raw_tensor
         res = rf.edit_distance(a, a_spatial_dim, b, b_spatial_dim)
         assert res.raw_tensor.shape == ref.shape == a_spatial_dim.dyn_size.shape == b_spatial_dim.dyn_size.shape
         assert len(ref.shape) == 1
@@ -735,7 +694,7 @@ def test_edit_distance():
                 f" a={a.raw_tensor} lens {a_spatial_dim.dyn_size},"
                 f" b={b.raw_tensor} lens {b_spatial_dim.dyn_size}"
             )
-        assert (res.raw_tensor == ref).all()
+        assert (res.raw_tensor.numpy() == ref).all()
 
     SizedTensor = namedtuple("SizedTensor", ["tensor", "seq_lens"])
 
