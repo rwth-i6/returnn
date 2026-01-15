@@ -284,19 +284,18 @@ class NativeCodeCompiler:
             return [f"-std=c++{self.cpp_version}"]
         return []
 
-    @classmethod
-    def _transform_ld_flag(cls, opt):
-        """
-        :param str opt:
-        :rtype: str
-        """
+    def _transform_ld_flags(self, opts: Sequence[str]) -> Sequence[str]:
         if sys.platform == "darwin":
-            # It seems some versions of MacOS ld cannot handle the `-l:filename` argument correctly.
-            # E.g. TensorFlow 1.14 incorrectly uses this.
-            # https://github.com/tensorflow/tensorflow/issues/30564
-            if opt.startswith("-l:lib") and opt.endswith(".dylib"):
-                return "-l%s" % opt[len("-l:lib") : -len(".dylib")]
-        return opt
+            res = []
+            for opt in opts:
+                # It seems some versions of MacOS ld cannot handle the `-l:filename` argument correctly.
+                # E.g. TensorFlow 1.14 incorrectly uses this.
+                # https://github.com/tensorflow/tensorflow/issues/30564
+                if opt.startswith("-l:lib") and opt.endswith(".dylib"):
+                    opt = "-l%s" % opt[len("-l:lib") : -len(".dylib")]
+                res.append(opt)
+            return res
+        return opts
 
     def _maybe_compile_inner(self):
         # Directory should be created by the locking mechanism.
@@ -315,7 +314,7 @@ class NativeCodeCompiler:
         common_opts += ["-D%s=%s" % item for item in sorted(self.c_macro_defines.items())]
         common_opts += ["-g"]
         opts = common_opts + [self._c_filename, "-o", self._so_filename]
-        opts += list(map(self._transform_ld_flag, self.ld_flags))
+        opts += self._transform_ld_flags(self.ld_flags)
         cmd_bin = self._get_compiler_bin()
         cmd_args = [cmd_bin] + opts
         from subprocess import Popen, PIPE, STDOUT, CalledProcessError

@@ -6,7 +6,7 @@ See :class:`OpCodeCompiler`.
 """
 
 from __future__ import annotations
-from typing import Union, Optional, Sequence, Dict
+from typing import Union, Optional, Sequence, Dict, List
 import os
 import sysconfig
 
@@ -98,6 +98,7 @@ class OpCodeCompiler(NativeCodeCompiler):
         c_macro_defines.setdefault("TORCH_API_INCLUDE_EXTENSION_H", "")
 
         ld_flags = list(ld_flags)
+        ld_flags.append("--no-as-needed")
         ld_flags.append(f"-L{cpp_extension.TORCH_LIB_PATH}")
         ld_flags.append("-lc10")
         if self._with_cuda():
@@ -171,7 +172,7 @@ class OpCodeCompiler(NativeCodeCompiler):
             return self._cuda_env.get_compiler_bin()
         return super()._get_compiler_bin()
 
-    def _transform_compiler_opts(self, opts):
+    def _transform_compiler_opts(self, opts: List[str]) -> List[str]:
         if self._with_cuda():
             nvcc_opts = self._cuda_env.get_compiler_opts()
             for opt in opts:
@@ -179,6 +180,17 @@ class OpCodeCompiler(NativeCodeCompiler):
             nvcc_opts += self._nvcc_opts
             return nvcc_opts
         return super()._transform_compiler_opts(opts)
+
+    def _transform_ld_flags(self, opts: Sequence[str]) -> Sequence[str]:
+        if self._with_cuda():
+            res = []
+            for opt in opts:
+                if opt.startswith("-L") or opt.startswith("-l"):
+                    res.append(opt)
+                else:
+                    res += ["-Xlinker", opt]
+            return res
+        return super()._transform_ld_flags(opts)
 
     def load_module(self):
         """
