@@ -285,6 +285,13 @@ class NativeCodeCompiler:
         return []
 
     def _transform_ld_flags(self, opts: Sequence[str]) -> Sequence[str]:
+        res = []
+        for opt in opts:
+            if opt.startswith("-l") or opt.startswith("-L"):
+                res.append(opt)
+            else:
+                res.append("-Wl," + opt)
+        opts = res
         if sys.platform == "darwin":
             res = []
             for opt in opts:
