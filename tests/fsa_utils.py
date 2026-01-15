@@ -2,9 +2,24 @@
 Generic framework independent reference implementations
 """
 
+from typing import Any, Optional, Union, Dict, List, Tuple
 from collections import defaultdict
 import numpy
-from scipy.special import logsumexp
+
+
+NEG_INF = -float("inf")
+
+
+def logsumexp(x: Union[numpy.ndarray, Any]) -> float:
+    """
+    Stable log sum exp.
+    """
+    x = numpy.array(x)
+    if (x == NEG_INF).all():
+        return NEG_INF
+    a_max = x.max()
+    lsp = numpy.log(numpy.sum(numpy.exp(x - a_max)))
+    return a_max + lsp
 
 
 def py_baum_welch(am_scores, float_idx, edges, weights, start_end_states):
@@ -34,19 +49,18 @@ def py_baum_welch(am_scores, float_idx, edges, weights, start_end_states):
     fwdbwd = numpy.zeros((n_time, n_batch, dim), dtype=am_scores.dtype) + zero_score
     obs_scores = numpy.zeros((n_time, n_batch), dtype=am_scores.dtype) + zero_score
 
-    def collect_scores(forward):
+    def collect_scores(forward: bool) -> List[Dict[int, float]]:
         """
-        :param bool forward:
-        :rtype: list[dict[int,float]]
+        :param forward:
         """
         start_idx, end_idx = start_end_states[:, sequence_idx]
-        states = defaultdict(lambda: zero_score)  # type: typing.Dict[int,float]  # state-idx -> score.
+        states: Dict[int, float] = defaultdict(lambda: zero_score)  # state-idx -> score.
         states[start_idx if forward else end_idx] = 0.0
-        scores_over_t = [None] * (n_time + 1)  # type: typing.List[typing.Optional[typing.Dict[int,float]]]
+        scores_over_t: List[Optional[Dict[int, float]]] = [None] * (n_time + 1)
         scores_over_t[0 if forward else -1] = dict(states)
         for t in range(n_time) if forward else reversed(range(n_time)):
             if float_idx[t, sequence_idx] == 1:
-                scores = defaultdict(list)  # type: typing.Dict[int,typing.List[float]]  # state-idx -> list[score]
+                scores: Dict[int, List[float]] = defaultdict(list)  # state-idx -> list[score]
                 for edge_idx in range(n_edges):
                     from_idx, to_idx, emission_idx, sequence_idx_ = edges[:, edge_idx]
                     if not forward:
@@ -70,8 +84,8 @@ def py_baum_welch(am_scores, float_idx, edges, weights, start_end_states):
         """
         for t in range(n_time):
             if float_idx[t, sequence_idx] == 1:
-                scores = defaultdict(list)  # type: typing.Dict[int,typing.List[float]]  # emission-idx -> list[score]
-                all_scores = []  # type: typing.List[float]
+                scores: Dict[int, List[float]] = defaultdict(list)  # emission-idx -> list[score]
+                all_scores: List[float] = []
                 for edge_idx in range(n_edges):
                     from_idx, to_idx, emission_idx, sequence_idx_ = edges[:, edge_idx]
                     if sequence_idx_ != sequence_idx:
@@ -134,13 +148,13 @@ def py_viterbi(am_scores, am_seq_len, edges, weights, start_end_states):
         :rtype: list[dict[int,(float,int)]]
         """
         start_idx, _ = start_end_states[:, sequence_idx]
-        states = defaultdict(lambda: (zero_score, -1))  # type: typing.Dict[int,typing.Tuple[float,int]]  # state-idx -> score/edge  # nopep8
+        states: Dict[int, Tuple[float, int]] = defaultdict(lambda: (zero_score, -1))  # state-idx -> score/edge
         states[start_idx] = (0.0, -1)
-        res = []  # type: typing.List[typing.Dict[int,typing.Tuple[float,int]]]
+        res: List[Dict[int, Tuple[float, int]]] = []
         for t in range(n_time):
             if t >= am_seq_len[sequence_idx]:
                 break
-            scores = defaultdict(list)  # type: typing.Dict[int,typing.List[typing.Tuple[float,int]]]  # state-idx -> list[score/edge]  # nopep8
+            scores: Dict[int, List[Tuple[float, int]]] = defaultdict(list)  # state-idx -> list[score/edge]
             for edge_idx in range(n_edges):
                 from_idx, to_idx, emission_idx, sequence_idx_ = edges[:, edge_idx]
                 if sequence_idx_ != sequence_idx:
