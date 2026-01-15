@@ -990,7 +990,7 @@ def test_file_cache():
 
 
 def test_py_baum_welch():
-    from .fsa_utils import py_baum_welch
+    from fsa_utils import py_baum_welch
     from returnn.util.fsa import FastBwFsaShared
     from numpy.testing import assert_almost_equal, assert_allclose
 
@@ -1055,7 +1055,7 @@ def test_py_baum_welch():
 
 
 def test_py_viterbi():
-    from .fsa_utils import py_viterbi
+    from fsa_utils import py_viterbi
     from returnn.util.fsa import FastBwFsaShared
 
     n_batch = 3
