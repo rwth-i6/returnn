@@ -328,5 +328,5 @@ def _parse_cuda_version_from_cuda_h(cuda_h_path: str) -> Tuple[int, int]:
             version_num = int(m.group(1))
             major = version_num // 1000
             minor = (version_num % 1000) // 10
-            return (major, minor)
+            return major, minor
     raise RuntimeError(f"Could not determine CUDA version from {cuda_h_path}.")

@@ -113,13 +113,16 @@ class OpCodeCompiler(NativeCodeCompiler):
             ld_flags.append(self._cuda_env.get_ld_flag_for_linking_cudart())
             # maybe add CUDNN?
 
+        # noinspection PyUnresolvedReferences,PyProtectedMember
+        use_cxx11_abi = torch._C._GLIBCXX_USE_CXX11_ABI
+
         super().__init__(
             base_name=base_name,
             code=code,
             include_paths=include_paths,
             c_macro_defines=c_macro_defines,
             ld_flags=ld_flags,
-            use_cxx11_abi=torch._C._GLIBCXX_USE_CXX11_ABI,
+            use_cxx11_abi=use_cxx11_abi,
             **kwargs,
         )
         self.is_python_module = is_python_module
