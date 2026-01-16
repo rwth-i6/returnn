@@ -36,7 +36,7 @@ class NativeCodeCompiler:
         should_cleanup_old_mydir: bool = False,
         use_cxx11_abi: bool = False,
         log_stream: Optional[typing.TextIO] = None,
-        verbose: bool = False,
+        verbose: Optional[bool] = None,
     ):
         """
         :param base_name: base name for the module, e.g. "zero_out"
@@ -60,6 +60,8 @@ class NativeCodeCompiler:
         """
         if self.CollectedCompilers is not None:
             self.CollectedCompilers.append(self)
+        if verbose is None:
+            verbose = os.environ.get("RETURNN_TEST") == "1"
         self.verbose = verbose
         self.cache_dir = "%s/%s" % (util.get_cache_dir(), self.CacheDirName)
         self._include_paths = list(include_paths)
