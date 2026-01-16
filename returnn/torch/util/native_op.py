@@ -651,3 +651,170 @@ def fast_viterbi(
     op = maker.make_op()
     alignment, scores = op(am_scores, am_seq_len, edges, weights, start_end_states, n_states)
     return alignment, scores
+
+
+def edit_distance(a, a_len, b, b_len):
+    """
+    Wraps :class:`NativeOp.EditDistanceOp`.
+
+    :param torch.Tensor a: (batch,time1), int32
+    :param torch.Tensor a_len: (batch,), int32
+    :param torch.Tensor b: (batch,time2), int32
+    :param torch.Tensor b_len: (batch,), int32
+    :return: (batch,) tensor, int32, un-normalized edit distance
+    :rtype: torch.Tensor
+    """
+    maker = OpMaker(OpDescription.from_gen_base(native_op.EditDistanceOp))
+    op = maker.make_op()
+    return op(a, a_len, b, b_len)
+
+
+def optimal_completion_edit_distance(a, a_len, b, b_len):
+    """
+    Wraps :class:`NativeOp.OptimalCompletionEditDistanceOp`.
+
+    :param torch.Tensor a: (batch,time1), int32. prefix
+    :param torch.Tensor a_len: (batch,), int32
+    :param torch.Tensor b: (batch,time2), int32
+    :param torch.Tensor b_len: (batch,), int32
+    :return: (batch,) tensor, int32, un-normalized edit distance
+    :rtype: torch.Tensor
+    """
+    maker = OpMaker(OpDescription.from_gen_base(native_op.OptimalCompletionEditDistanceOp))
+    op = maker.make_op()
+    return op(a, a_len, b, b_len)
+
+
+def optimal_completion_edit_distance_per_successor(a, a_len, b, b_len, successors):
+    """
+    Wraps :class:`NativeOp.OptimalCompletionEditDistancePerSuccessorOp`.
+
+    :param torch.Tensor a: (batch,time1), int32. prefix
+    :param torch.Tensor a_len: (batch,), int32
+    :param torch.Tensor b: (batch,time2), int32
+    :param torch.Tensor b_len: (batch,), int32
+    :param torch.Tensor|int successors: (n_labels,), int32. scalar means tf.range(successors)
+    :return: (batch,n_labels) tensor, int32, un-normalized edit distance
+    :rtype: torch.Tensor
+    """
+    if isinstance(successors, int):
+        n_labels = successors
+        successors = torch.arange(0, n_labels, 1)
+    assert isinstance(successors, torch.Tensor)
+    maker = OpMaker(OpDescription.from_gen_base(native_op.OptimalCompletionEditDistancePerSuccessorOp))
+    op = maker.make_op()
+    return op(a, a_len, b, b_len, successors)
+
+
+def next_edit_distance_row(last_row, a, a_n, a_ended, b, b_len):
+    """
+    Wraps :class:`NativeOp.NextEditDistanceRowOp`.
+
+    :param torch.Tensor last_row: 2d (batch,b_time + 1), int32. last edit distances
+    :param torch.Tensor a: symbols. 1d (batch,), int32. current.
+    :param torch.Tensor|int a_n: scalar or 1d (batch,), int32. current position
+    :param torch.Tensor a_ended: 1d (batch,), int32 (casted from bool, because int32 easier to handle)
+    :param torch.Tensor b: symbols. 2d (batch,b_time), int32
+    :param torch.Tensor b_len: 1d (batch,), int32
+    :return: 2d (batch,b_time + 1), int32, next (unnormalized) edit distance row
+    :rtype: torch.Tensor
+    """
+    a_ended = a_ended.int()
+    if isinstance(a_n, int):
+        a_n = torch.tensor(a_n, device=a.device)
+    if a_n.ndim == 0:
+        a_n = a_n[None].tile(a_ended.shape)
+    maker = OpMaker(OpDescription.from_gen_base(native_op.NextEditDistanceRowOp))
+    op = maker.make_op()
+    return op(last_row, a, a_n, a_ended, b, b_len)
+
+
+def edit_distance_via_next_edit_distance_row(a, a_len, b, b_len, optimal_completion=False, full_row_output=False):
+    """
+    This is mostly for demonstration and debugging.
+    Should be equivalent to :func:`edit_distance` or :func:`optimal_completion_edit_distance`
+    (which should be much faster).
+
+    :param torch.Tensor a: (batch,time1), int32
+    :param torch.Tensor a_len: (batch,), int32
+    :param torch.Tensor b: (batch,time2), int32
+    :param torch.Tensor b_len: (batch,), int32
+    :param bool optimal_completion: calc optimal completion edit distance instead
+    :param bool full_row_output: outputs the full final row
+    :return: (batch,) or (batch,time2+1) tensor, int32, un-normalized edit distance
+    :rtype: torch.Tensor
+    """
+    batch_size = a.size(0)
+    time1 = a.size(1)
+    time2 = b.size(1)
+
+    row = torch.arange(time2 + 1, device=a.device)[None, :].tile((batch_size, 1))  # (B,time2+1)
+    for i in range(time1):
+        a_ended = i >= a_len  # (B,)
+        a_cur = a[:, i]  # (B,)
+        row = next_edit_distance_row(a=a_cur, a_n=i, a_ended=a_ended, b=b, b_len=b_len, last_row=row)
+
+    if full_row_output:
+        assert not optimal_completion  # assert the default, this would not have an effect
+        return row
+    elif not optimal_completion:
+        return row[:, -1]
+    else:
+        return torch.min(row, dim=1).values
+
+
+def next_edit_distance_reduce(last_row, a, a_n, a_ended, b, b_len, optimal_completion=False, a_blank_idx=None):
+    """
+    Wraps :class:`NativeOp.NextEditDistanceReduceOp`.
+
+    :param torch.Tensor last_row: 2d (batch,b_time + 1), int32. last edit distances
+    :param torch.Tensor a: symbols. 2d (batch|1,n_labels), int32. current.
+    :param torch.Tensor a_n: scalar or 1d (batch,), int32. current position
+    :param torch.Tensor a_ended: 1d (batch,), int32 (casted from bool, because int32 easier to handle)
+    :param torch.Tensor b: symbols. 2d (batch,b_time), int32
+    :param torch.Tensor b_len: 1d (batch,), int32
+    :param torch.Tensor|int|None a_blank_idx: scalar, int32
+    :param bool|torch.Tensor optimal_completion:
+    :return: 2d (batch,n_labels), int32, next (unnormalized) (optimal completion) edit distance
+    :rtype: torch.Tensor
+    """
+    a_ended = a_ended.int()
+    if a_n.ndim == 0:
+        a_n = a_n[None].tile(a_ended.shape)
+    if a_blank_idx is None:
+        a_blank_idx = -1
+    maker = OpMaker(OpDescription.from_gen_base(native_op.NextEditDistanceReduceOp))
+    op = maker.make_op()
+    return op(last_row, a, a_n, a_ended, b, b_len, optimal_completion, a_blank_idx)
+
+
+def optimal_completion_edit_distance_per_successor_via_next_edit_distance(a, a_len, b, b_len, successors):
+    """
+    Uses :func:`next_edit_distance_reduce` and :func:`edit_distance_via_next_edit_distance_row`.
+    Mostly for demonstration/testing.
+    In practice, you would do something similar, but in your own loop.
+    Similar to :func:`optimal_completion_edit_distance_per_successor`,
+    but the handling of ended sequences (from ``a``) is different.
+
+    :param torch.Tensor a: (batch,time1), int32. prefix
+    :param torch.Tensor a_len: (batch,), int32
+    :param torch.Tensor b: (batch,time2), int32
+    :param torch.Tensor b_len: (batch,), int32
+    :param torch.Tensor|int successors: (n_labels,), int32. scalar means tf.range(successors)
+    :return: (batch,n_labels) tensor, int32, un-normalized edit distance
+    :rtype: torch.Tensor
+    """
+    if isinstance(successors, int):
+        n_labels = successors
+        successors = torch.arange(0, n_labels, 1)[None]  # (1,n_labels)
+    assert isinstance(successors, torch.Tensor)
+    last_row = edit_distance_via_next_edit_distance_row(a, a_len, b, b_len, full_row_output=True)
+    return next_edit_distance_reduce(
+        last_row,
+        a=successors,
+        a_n=torch.tensor(a.size(1)),
+        a_ended=a_len != a.size(1),
+        b=b,
+        b_len=b_len,
+        optimal_completion=True,
+    )
