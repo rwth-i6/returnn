@@ -112,9 +112,7 @@ def test_self_attention_to_pure_torch():
     rf_input = rf.random(dims=[batch_dim, spatial_dim, out_dim], **random_opts)
     qkv_weight = rf.random(dims=[out_dim, 3 * out_dim], **random_opts)
     qkv_bias = rf.random(dims=[3 * out_dim], **random_opts)
-    proj_weight = rf.random(
-        dims=[out_dim.copy(match_priority=1), out_dim], **random_opts
-    )
+    proj_weight = rf.random(dims=[out_dim.copy(match_priority=1), out_dim], **random_opts)
     proj_bias = rf.random(dims=[out_dim], **random_opts)
 
     rf_mhsa = rf.SelfAttention(
@@ -142,9 +140,7 @@ def test_self_attention_to_pure_torch():
             )
             .permute(2, 1, 3, 0)
             .reshape(-1, out_dim.dimension),
-            "in_proj_bias": qkv_bias.raw_tensor.reshape(
-                num_heads, 3, out_dim.dimension // num_heads
-            )
+            "in_proj_bias": qkv_bias.raw_tensor.reshape(num_heads, 3, out_dim.dimension // num_heads)
             .permute(1, 0, 2)
             .reshape(-1),
             "out_proj.weight": proj_weight.raw_tensor.reshape(
@@ -161,9 +157,7 @@ def test_self_attention_to_pure_torch():
     rf_output_fallback = rf_mhsa(rf_input, axis=spatial_dim)
     TorchBackend.ForceFallbackSDPA = False
     rf_output = rf_mhsa(rf_input, axis=spatial_dim)
-    torch_output, torch_attn_weights = torch_mhsa(
-        torch_input, torch_input, torch_input, key_padding_mask=None
-    )
+    torch_output, torch_attn_weights = torch_mhsa(torch_input, torch_input, torch_input, key_padding_mask=None)
 
     print("RF output")
     print(rf_output.raw_tensor)
@@ -178,9 +172,7 @@ def test_self_attention_to_pure_torch():
     print(torch_output.shape)
 
     torch.testing.assert_close(rf_output.raw_tensor, torch_output, atol=1e-3, rtol=1e-4)
-    torch.testing.assert_close(
-        rf_output_fallback.raw_tensor, torch_output, atol=1e-3, rtol=1e-4
-    )
+    torch.testing.assert_close(rf_output_fallback.raw_tensor, torch_output, atol=1e-3, rtol=1e-4)
 
 
 def test_causal_self_attention():
@@ -212,9 +204,7 @@ def test_causal_self_attention():
             """forward"""
 
             def _body(_x: Tensor, _state: rf.State) -> Tuple[Tensor, rf.State]:
-                _y, _state.self_att = self.self_att(
-                    _x, axis=single_step_dim, state=_state.self_att
-                )
+                _y, _state.self_att = self.self_att(_x, axis=single_step_dim, state=_state.self_att)
                 return _y, _state
 
             y, _, _ = rf.scan(
@@ -222,9 +212,7 @@ def test_causal_self_attention():
                 xs=x,
                 body=_body,
                 ys=Tensor("y", dims=[batch_dim, self.out_dim], dtype="float32"),
-                initial=rf.State(
-                    self_att=self.self_att.default_initial_state(batch_dims=[batch_dim])
-                ),
+                initial=rf.State(self_att=self.self_att.default_initial_state(batch_dims=[batch_dim])),
             )
             return y
 
@@ -244,9 +232,7 @@ def test_causal_self_attention():
             test_tensorflow=False,
         )
 
-    torch.testing.assert_close(
-        res[False].data["output"].raw_tensor, res[True].data["output"].raw_tensor
-    )
+    torch.testing.assert_close(res[False].data["output"].raw_tensor, res[True].data["output"].raw_tensor)
 
 
 def test_rotary_embedding():
@@ -270,12 +256,8 @@ def test_rotary_embedding():
     rf.set_random_seed(42)
 
     batch_dim = Dim(3, name="batch")
-    seq_dim = Dim(
-        rf.random_uniform([batch_dim], minval=7, maxval=13, dtype="int32"), name="seq"
-    )
-    model_head_dim = Dim(
-        config.hidden_size // config.num_attention_heads, name="model_head"
-    )
+    seq_dim = Dim(rf.random_uniform([batch_dim], minval=7, maxval=13, dtype="int32"), name="seq")
+    model_head_dim = Dim(config.hidden_size // config.num_attention_heads, name="model_head")
 
     # base is a bit different in rf.sinusoidal_positional_encoding (like the original)
     # vs how it's used for RoPE.
@@ -292,14 +274,10 @@ def test_rotary_embedding():
     out_rf = rf.expand_dim(out_rf, batch_dim)
     out_rf = out_rf.copy_transpose((batch_dim, seq_dim, model_head_dim))
     # Split the sin/cos for the comparison below.
-    out_rf_sin, out_rf_cos = rf.split(
-        out_rf, axis=model_head_dim, out_dims=[model_head_dim.div_left(2)] * 2
-    )
+    out_rf_sin, out_rf_cos = rf.split(out_rf, axis=model_head_dim, out_dims=[model_head_dim.div_left(2)] * 2)
     print("out_rf':", out_rf_sin, out_rf_cos)
 
-    position_ids = rf.expand_dim(
-        rf.range_over_dim(seq_dim), batch_dim
-    )  # LlamaRotaryEmbedding wants this
+    position_ids = rf.expand_dim(rf.range_over_dim(seq_dim), batch_dim)  # LlamaRotaryEmbedding wants this
     out_hf_cos, out_hf_sin = model_hf(
         torch.zeros(()),
         position_ids=position_ids.copy_compatible_to_dims_raw((batch_dim, seq_dim)),
@@ -363,9 +341,7 @@ def test_rope_causal_self_att():
     import_params_hf_llama_att_to_rf_rotary_att(model_hf, model_rf)
 
     batch_dim = Dim(3, name="batch")
-    seq_dim = Dim(
-        rf.random_uniform([batch_dim], minval=7, maxval=13, dtype="int32"), name="seq"
-    )
+    seq_dim = Dim(rf.random_uniform([batch_dim], minval=7, maxval=13, dtype="int32"), name="seq")
     in_ = rf.random_uniform([batch_dim, seq_dim, model_dim])
     in_.name = "input"
 
@@ -385,9 +361,7 @@ def test_rope_causal_self_att():
             axis=seq_dim,
             state=model_rf.default_initial_state(batch_dims=[batch_dim]),
         )
-        out_rf_fallback = out_rf_fallback.copy_transpose(
-            (batch_dim, seq_dim, model_dim)
-        )
+        out_rf_fallback = out_rf_fallback.copy_transpose((batch_dim, seq_dim, model_dim))
     pprint(trace_rf_fallback.captured_locals)
     TorchBackend.ForceFallbackSDPA = False
 
@@ -409,9 +383,7 @@ def test_rope_causal_self_att():
         out_rf = out_rf.copy_transpose((batch_dim, seq_dim, model_dim))
     pprint(trace_rf.captured_locals)
 
-    position_ids = rf.expand_dim(
-        rf.range_over_dim(seq_dim), batch_dim
-    )  # LlamaRotaryEmbedding wants this
+    position_ids = rf.expand_dim(rf.range_over_dim(seq_dim), batch_dim)  # LlamaRotaryEmbedding wants this
     with PyTracer(
         [
             LlamaAttention.forward,
@@ -430,15 +402,9 @@ def test_rope_causal_self_att():
             device=in_.raw_tensor.device,
         )
         causal_mask = torch.triu(causal_mask, diagonal=1)
-        cache_position = torch.arange(
-            0, in_.raw_tensor.shape[1], device=in_.raw_tensor.device
-        )
-        causal_mask *= torch.arange(
-            target_length, device=cache_position.device
-        ) > cache_position.reshape(-1, 1)
-        causal_mask = causal_mask[None, None, :, :].expand(
-            in_.raw_tensor.shape[0], 1, -1, -1
-        )
+        cache_position = torch.arange(0, in_.raw_tensor.shape[1], device=in_.raw_tensor.device)
+        causal_mask *= torch.arange(target_length, device=cache_position.device) > cache_position.reshape(-1, 1)
+        causal_mask = causal_mask[None, None, :, :].expand(in_.raw_tensor.shape[0], 1, -1, -1)
         rotary_emb = LlamaRotaryEmbedding(config=config)
         position_embeddings = rotary_emb(
             torch.zeros(()),
@@ -452,11 +418,7 @@ def test_rope_causal_self_att():
     pprint(trace_hf.captured_locals)
 
     print("First HF att weight tensor:")
-    print(
-        trace_hf.captured_locals[LlamaAttention.forward][0]["attn_weights"][-1][0, 0, 0]
-        .detach()
-        .numpy()
-    )
+    print(trace_hf.captured_locals[LlamaAttention.forward][0]["attn_weights"][-1][0, 0, 0].detach().numpy())
 
     trace_all = [
         (
@@ -578,12 +540,8 @@ def test_rope_causal_self_att():
     assert Backend.scaled_dot_product_attention not in trace_rf.captured_locals
     assert Backend.scaled_dot_product_attention in trace_rf_fallback.captured_locals
 
-    check_py_traces_rf_to_pt_equal(
-        trace_rf.captured_locals, trace_hf.captured_locals, trace_all
-    )
-    check_py_traces_rf_to_pt_equal(
-        trace_rf_fallback.captured_locals, trace_hf.captured_locals, trace_only_fallback
-    )
+    check_py_traces_rf_to_pt_equal(trace_rf.captured_locals, trace_hf.captured_locals, trace_all)
+    check_py_traces_rf_to_pt_equal(trace_rf_fallback.captured_locals, trace_hf.captured_locals, trace_only_fallback)
 
     print("Final check...")
     assert out_rf.raw_tensor.shape == out_hf.shape
@@ -609,9 +567,7 @@ def test_causal_self_att_variants_single_step_vs_full_seq():
         x = extern_data["data"]
 
         out_seq_level, _ = model(x, axis=time_dim)
-        out_seq_level.mark_as_output(
-            "out_seq_level", shape=[batch_dim, time_dim, model.out_dim]
-        )
+        out_seq_level.mark_as_output("out_seq_level", shape=[batch_dim, time_dim, model.out_dim])
 
         out_seq_level_explicit_initial_state, _ = model(
             x, axis=time_dim, state=model.default_initial_state(batch_dims=[batch_dim])
@@ -633,9 +589,7 @@ def test_causal_self_att_variants_single_step_vs_full_seq():
             ys=Tensor("y", dims=[batch_dim, model.out_dim], dtype="float32"),
             initial=model.default_initial_state(batch_dims=[batch_dim]),
         )
-        out_single_steps.mark_as_output(
-            "out_single_steps", shape=[batch_dim, time_dim, model.out_dim]
-        )
+        out_single_steps.mark_as_output("out_single_steps", shape=[batch_dim, time_dim, model.out_dim])
 
     common_opts = dict(
         in_dim=in_dim,
@@ -786,15 +740,11 @@ def test_rel_pos_self_attention():
                     # on the current internal behavior of gather and replace_dim,
                     # which might change at some point...
                     x_b, _ = rf.replace_dim(x_b, in_dim=axis, out_dim=axis_b)
-                    x_b, _ = rf.slice(
-                        x_b, axis=axis_b, start=0, end=seq_len, out_dim=axis_b
-                    )
+                    x_b, _ = rf.slice(x_b, axis=axis_b, start=0, end=seq_len, out_dim=axis_b)
                     y_b = self.self_att(x_b, axis=axis_b)
                     y_b_ = rf.gather(y, axis=batch_dim, indices=b)
                     y_b_, _ = rf.replace_dim(y_b_, in_dim=axis, out_dim=axis_b)
-                    y_b_, _ = rf.slice(
-                        y_b_, axis=axis_b, start=0, end=seq_len, out_dim=axis_b
-                    )
+                    y_b_, _ = rf.slice(y_b_, axis=axis_b, start=0, end=seq_len, out_dim=axis_b)
                     y_b_ = y_b_.copy_transpose(y_b.dims)
                     # Assuming PyTorch...
                     np.testing.assert_almost_equal(
@@ -813,9 +763,7 @@ def test_rel_pos_self_attention():
 
     run_model(extern_data, lambda *, epoch, step: _Net(), _forward_step)
     check_batching = True
-    run_model(
-        extern_data, lambda *, epoch, step: _Net(), _forward_step, test_tensorflow=False
-    )
+    run_model(extern_data, lambda *, epoch, step: _Net(), _forward_step, test_tensorflow=False)
 
 
 def test_sinusoidal_positional_encoding():
@@ -862,9 +810,7 @@ def test_CausalSelfAttention():
         time_dim.dyn_size_ext.mark_as_output("seq_len", shape=[batch_dim])
         out, _ = model(data, axis=time_dim)
         out.mark_as_default_output(shape=(batch_dim, time_dim, value_dim))
-        model.qkv.weight.mark_as_output(
-            "qkv_weight", shape=[feat_dim, 2 * key_dim + value_dim]
-        )
+        model.qkv.weight.mark_as_output("qkv_weight", shape=[feat_dim, 2 * key_dim + value_dim])
 
     res = run_model(
         extern_data,
@@ -914,19 +860,13 @@ def test_CausalSelfAttention():
         net.construct_from_dict(net_dict)
         layer = net.get_default_output_layer()
         layer.params["QKV"].load(res.data["qkv_weight"].raw_tensor, session=session)
-        out = layer.output.copy_transpose([batch_dim, time_dim, value_dim]).copy_masked(
-            0.0
-        )
+        out = layer.output.copy_transpose([batch_dim, time_dim, value_dim]).copy_masked(0.0)
 
         out_tf_v = session.run(
             out.raw_tensor,
             feed_dict={
                 net.extern_data.data["data"].placeholder: res.data["data"].raw_tensor,
-                net.extern_data.data["data"].dims[1].dyn_size_ext.raw_tensor: res.data[
-                    "seq_len"
-                ].raw_tensor,
+                net.extern_data.data["data"].dims[1].dyn_size_ext.raw_tensor: res.data["seq_len"].raw_tensor,
             },
         )
-        numpy.testing.assert_almost_equal(
-            res.data["output"].raw_tensor, out_tf_v, decimal=5
-        )
+        numpy.testing.assert_almost_equal(res.data["output"].raw_tensor, out_tf_v, decimal=5)
