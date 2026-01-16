@@ -183,10 +183,15 @@ class OpMaker:
             for in_idx, v in enumerate(in_info):
                 if _schema_type_str(v) != "Tensor":
                     code_set_io += dedent(f"""\
-                        torch::Tensor {map_name(v)}_tensor = torch::tensor({map_name(v)});
+                        torch::Tensor {map_name(v)}_tensor = torch::tensor({map_name(v)}, torch::dtype({map_type(v)}));
                         """)
                     continue  # scalar input
                 ndim = len(v["shape"])
+                code_set_io += dedent(f"""\
+                    if({map_name(v)}.scalar_type() != {map_type(v)}) {{
+                        {map_name(v)} = {map_name(v)}.to(torch::dtype({map_type(v)}));
+                    }}
+                    """)
                 code_set_io += dedent(f"""\
                     TORCH_CHECK(
                         {map_name(v)}.dim() == {ndim},
