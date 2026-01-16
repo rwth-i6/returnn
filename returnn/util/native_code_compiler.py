@@ -61,7 +61,7 @@ class NativeCodeCompiler:
         if self.CollectedCompilers is not None:
             self.CollectedCompilers.append(self)
         if verbose is None:
-            verbose = os.environ.get("RETURNN_TEST") == "1"
+            verbose = os.environ.get("RETURNN_NATIVE_CODE_COMPILER_VERBOSE") == "1"
         self.verbose = verbose
         self.cache_dir = "%s/%s" % (util.get_cache_dir(), self.CacheDirName)
         self._include_paths = list(include_paths)

@@ -33,6 +33,8 @@ print("base path:", base_path)
 print("TF version:", tf.__version__)
 
 CudaEnv.verbose_find_cuda = True
+os.environ["RETURNN_NATIVE_CODE_COMPILER_VERBOSE"] = "1"
+
 session = tf_compat.v1.InteractiveSession()
 tf_compat.v1.set_random_seed(42)
 

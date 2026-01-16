@@ -3,6 +3,7 @@ Test torch native ops.
 """
 
 import _setup_test_env  # noqa
+import os
 from unittest import SkipTest
 import numpy
 from numpy.testing import assert_almost_equal, assert_allclose
@@ -11,6 +12,9 @@ import torch
 from returnn.torch.util.native_op import make_fast_baum_welch_op, fast_baum_welch, fast_viterbi, get_ctc_fsa_fast_bw
 from returnn.util.fsa import FastBwFsaShared, get_ctc_fsa_fast_bw as get_ctc_fsa_fast_bw_np
 from fsa_utils import py_baum_welch, py_viterbi
+
+
+os.environ["RETURNN_NATIVE_CODE_COMPILER_VERBOSE"] = "1"
 
 
 def test_compile():
