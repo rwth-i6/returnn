@@ -9,7 +9,9 @@ import numpy.testing
 import _setup_test_env  # noqa
 import returnn.frontend as rf
 from returnn.tensor import Tensor, Dim, TensorDict, batch_dim
+from returnn.torch.frontend import TorchBackend
 from rf_utils import run_model, tf_scope
+import pytest
 
 
 def _setup():
@@ -22,6 +24,11 @@ def _setup():
 
 
 _setup()
+
+
+@pytest.fixture(autouse=True)
+def reset_sdpa():
+    TorchBackend.ForceFallbackSDPA = False
 
 
 def test_dot_attention():
@@ -88,7 +95,6 @@ def test_self_attention_to_pure_torch():
     # test whether the torch and returnn implementation of the mhsa layer are equivalent
     import torch
     import returnn.frontend as rf
-    from returnn.torch.frontend import TorchBackend
     from returnn.tensor import Dim
 
     # torch.backends.mha.set_fastpath_enabled(False)
@@ -172,7 +178,6 @@ def test_self_attention_to_pure_torch():
 def test_causal_self_attention():
     import torch
     from returnn.tensor import single_step_dim
-    from returnn.torch.frontend import TorchBackend
 
     time_dim = Dim(Tensor("time", [batch_dim], dtype="int32"))
     in_dim = Dim(7, name="in")
@@ -286,7 +291,6 @@ def test_rope_causal_self_att():
     import torch
     from returnn.util.pprint import pprint
     from returnn.util.debug import PyTracer, check_py_traces_rf_to_pt_equal
-    from returnn.torch.frontend import TorchBackend
 
     # noinspection PyProtectedMember
     from returnn.frontend.attention import _apply_rope as rf_apply_rope
@@ -525,7 +529,6 @@ def test_rope_causal_self_att():
 
 def test_causal_self_att_variants_single_step_vs_full_seq():
     from returnn.tensor import single_step_dim
-    from returnn.torch.frontend import TorchBackend
 
     time_dim = Dim(Tensor("time", [batch_dim], dtype="int32"))
     in_dim = Dim(7 * 2, name="in")
@@ -667,7 +670,6 @@ def test_relative_positional_encoding_cross():
 
 def test_rel_pos_self_attention():
     import torch
-    from returnn.torch.frontend import TorchBackend
 
     time_dim = Dim(Tensor("time", [batch_dim], dtype="int32"))
     in_dim = Dim(8, name="in")
@@ -765,7 +767,6 @@ def test_sinusoidal_positional_encoding():
 
 
 def test_CausalSelfAttention():
-    from returnn.torch.frontend import TorchBackend
     import torch
 
     time_dim = Dim(Tensor("time", [batch_dim], dtype="int32"))
@@ -849,3 +850,70 @@ def test_CausalSelfAttention():
             },
         )
         numpy.testing.assert_almost_equal(res[False].data["output"].raw_tensor, out_tf_v, decimal=5)
+
+
+# Check if pytest-benchmark is installed
+try:
+    import pytest_benchmark
+except ImportError:
+    pytest_benchmark = None
+
+
+def benchmark_att_layer(benchmark, att_type, sdpa, seq_len):
+    import torch
+
+    TorchBackend.ForceFallbackSDPA = sdpa == "returnn_fallback"
+    rf.select_backend_torch()
+    rf.init_forward_step_run_ctx()
+
+    batch_dim = Dim(128 if seq_len <= 32 else 8, name="batch")
+    seq_dim = Dim(seq_len, name="time")
+
+    num_heads = 8
+    head_dim = 64
+    model_dim_val = num_heads * head_dim
+    model_dim = Dim(model_dim_val, name="model")
+
+    input_tensor = rf.random_normal(dims=[batch_dim, seq_dim, model_dim])
+
+    _cls = rf.SelfAttention if att_type == "self_attention" else rf.CausalSelfAttention
+    att_layer = _cls(
+        in_dim=model_dim, proj_dim=model_dim, key_dim_total=model_dim, value_dim_total=model_dim, num_heads=num_heads
+    )
+
+    def _run_forward():
+        res = att_layer(input_tensor, axis=seq_dim)
+        torch.cuda.synchronize() if torch.cuda.is_available() else None
+        return res
+
+    benchmark(_run_forward)
+
+
+@pytest.mark.skipif(pytest_benchmark is None, reason="pytest-benchmark not installed")
+@pytest.mark.parametrize("sdpa", ["torch_sdpa", "returnn_fallback"], ids=lambda sdpa: f"{sdpa=}")
+@pytest.mark.parametrize("seq_len", [32, 1024], ids=lambda seq_len: f"{seq_len=}")
+@pytest.mark.benchmark(warmup=True, disable_gc=True)
+def test_benchmark_flashatt_self_attention(benchmark, sdpa, seq_len):
+    import torch
+
+    device = "cpu"
+    if torch.cuda.is_available():
+        device = "cuda"
+    benchmark.group = f"flashatt_self_attention({device}, {seq_len=})"
+    with rf.set_default_device_ctx(device):
+        benchmark_att_layer(benchmark, "self_attention", sdpa, seq_len)
+
+
+@pytest.mark.skipif(pytest_benchmark is None, reason="pytest-benchmark not installed")
+@pytest.mark.parametrize("sdpa", ["torch_sdpa", "returnn_fallback"], ids=lambda sdpa: f"{sdpa=}")
+@pytest.mark.parametrize("seq_len", [32, 1024], ids=lambda seq_len: f"{seq_len=}")
+@pytest.mark.benchmark(warmup=True, disable_gc=True)
+def test_benchmark_flashatt_causal_self_attention(benchmark, sdpa, seq_len):
+    import torch
+
+    device = "cpu"
+    if torch.cuda.is_available():
+        device = "cuda"
+    benchmark.group = f"flashatt_causal_self_attention({device}, {seq_len=})"
+    with rf.set_default_device_ctx(device):
+        benchmark_att_layer(benchmark, "causal_self_attention", sdpa, seq_len)
