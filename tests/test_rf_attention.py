@@ -32,12 +32,7 @@ def test_dot_attention():
         {
             "q": Tensor("q", [batch_dim, time_dim, key_dim], dtype="float32"),
             "k": Tensor("k", [batch_dim, time_dim, key_dim], dtype="float32"),
-            "v": Tensor(
-                "v",
-                [batch_dim, time_dim, value_dim],
-                dtype="float32",
-                feature_dim_axis=2,
-            ),
+            "v": Tensor("v", [batch_dim, time_dim, value_dim], dtype="float32", feature_dim_axis=2),
         }
     )
 
@@ -236,10 +231,7 @@ def test_causal_self_attention():
 
 def test_rotary_embedding():
     import torch
-    from transformers.models.llama.modeling_llama import (
-        LlamaConfig,
-        LlamaRotaryEmbedding,
-    )
+    from transformers.models.llama.modeling_llama import LlamaConfig, LlamaRotaryEmbedding
 
     config = LlamaConfig(
         vocab_size=11,
@@ -264,9 +256,7 @@ def test_rotary_embedding():
     # <=> log(base) = log(10_000) * (dim / 2 - 1) * 2 / dim = log(10_000) * (1 - 2 / dim)
     # <=> base = 10_000 ** (1 - 2 / dim)
     out_rf = rf.sinusoidal_positional_encoding(
-        spatial_dim=seq_dim,
-        feat_dim=model_head_dim,
-        base=10_000 ** (1 - 2 / model_head_dim.dimension),
+        spatial_dim=seq_dim, feat_dim=model_head_dim, base=10_000 ** (1 - 2 / model_head_dim.dimension)
     )
     print("out_rf:", out_rf)
     # For the comparison below.
@@ -278,8 +268,7 @@ def test_rotary_embedding():
 
     position_ids = rf.expand_dim(rf.range_over_dim(seq_dim), batch_dim)  # LlamaRotaryEmbedding wants this
     out_hf_cos, out_hf_sin = model_hf(
-        torch.zeros(()),
-        position_ids=position_ids.copy_compatible_to_dims_raw((batch_dim, seq_dim)),
+        torch.zeros(()), position_ids=position_ids.copy_compatible_to_dims_raw((batch_dim, seq_dim))
     )
     print("out_hf:", out_hf_sin, out_hf_cos)
     # The values are just repeated. Cut off the second half for comparison.
@@ -301,9 +290,7 @@ def test_rope_causal_self_att():
 
     # noinspection PyProtectedMember
     from returnn.frontend.attention import _apply_rope as rf_apply_rope
-    from returnn.frontend.conversions.hf_llama import (
-        import_params_hf_llama_att_to_rf_rotary_att,
-    )
+    from returnn.frontend.conversions.hf_llama import import_params_hf_llama_att_to_rf_rotary_att
     from returnn.frontend._backend import Backend
 
     from transformers.models.llama.modeling_llama import (
@@ -374,22 +361,13 @@ def test_rope_causal_self_att():
         ],
         (Tensor, Dim),
     ) as trace_rf:
-        out_rf, _ = model_rf(
-            in_,
-            axis=seq_dim,
-            state=model_rf.default_initial_state(batch_dims=[batch_dim]),
-        )
+        out_rf, _ = model_rf(in_, axis=seq_dim, state=model_rf.default_initial_state(batch_dims=[batch_dim]))
         out_rf = out_rf.copy_transpose((batch_dim, seq_dim, model_dim))
     pprint(trace_rf.captured_locals)
 
     position_ids = rf.expand_dim(rf.range_over_dim(seq_dim), batch_dim)  # LlamaRotaryEmbedding wants this
     with PyTracer(
-        [
-            LlamaAttention.forward,
-            LlamaRotaryEmbedding.forward,
-            apply_rotary_pos_emb,
-            eager_attention_forward,
-        ],
+        [LlamaAttention.forward, LlamaRotaryEmbedding.forward, apply_rotary_pos_emb, eager_attention_forward],
         torch.Tensor,
     ) as trace_hf:
         # causal_mask code copied from LlamaAttention
@@ -406,14 +384,9 @@ def test_rope_causal_self_att():
         causal_mask = causal_mask[None, None, :, :].expand(in_.raw_tensor.shape[0], 1, -1, -1)
         rotary_emb = LlamaRotaryEmbedding(config=config)
         position_embeddings = rotary_emb(
-            torch.zeros(()),
-            position_ids=position_ids.copy_compatible_to_dims_raw((batch_dim, seq_dim)),
+            torch.zeros(()), position_ids=position_ids.copy_compatible_to_dims_raw((batch_dim, seq_dim))
         )
-        out_hf, *_ = model_hf(
-            in_.raw_tensor,
-            attention_mask=causal_mask,
-            position_embeddings=position_embeddings,
-        )
+        out_hf, *_ = model_hf(in_.raw_tensor, attention_mask=causal_mask, position_embeddings=position_embeddings)
     pprint(trace_hf.captured_locals)
 
     print("First HF att weight tensor:")
@@ -573,8 +546,7 @@ def test_causal_self_att_variants_single_step_vs_full_seq():
             x, axis=time_dim, state=model.default_initial_state(batch_dims=[batch_dim])
         )
         out_seq_level_explicit_initial_state.mark_as_output(
-            "out_seq_level_explicit_initial_state",
-            shape=[batch_dim, time_dim, model.out_dim],
+            "out_seq_level_explicit_initial_state", shape=[batch_dim, time_dim, model.out_dim]
         )
 
         def _body(
@@ -608,11 +580,7 @@ def test_causal_self_att_variants_single_step_vs_full_seq():
     def _make_rel_pos_causal_self_att(**_kwargs):
         return rf.RelPosCausalSelfAttention(**common_opts)
 
-    models = [
-        _make_causal_self_att,
-        _make_rope_causal_self_att,
-        _make_rel_pos_causal_self_att,
-    ]
+    models = [_make_causal_self_att, _make_rope_causal_self_att, _make_rel_pos_causal_self_att]
 
     resdict = {}
     for use_fallback in [True, False]:
@@ -664,10 +632,7 @@ def test_relative_positional_encoding():
     class _Net(rf.Module):
         def __call__(self, x: Tensor, *, axis: Dim) -> Tuple[Tensor, Dim]:
             x, dim = rf.relative_positional_encoding(
-                key_value_spatial_dim=axis,
-                query_spatial_dim=axis,
-                feat_dim=in_dim,
-                device=x.device,
+                key_value_spatial_dim=axis, query_spatial_dim=axis, feat_dim=in_dim, device=x.device
             )
             return x, dim
 
@@ -693,9 +658,7 @@ def test_relative_positional_encoding_cross():
     # noinspection PyShadowingNames
     def _forward_step(**_kwargs):
         out, dim = rf.relative_positional_encoding(
-            key_value_spatial_dim=enc_spatial_dim,
-            query_spatial_dim=dec_spatial_dim,
-            feat_dim=in_dim,
+            key_value_spatial_dim=enc_spatial_dim, query_spatial_dim=dec_spatial_dim, feat_dim=in_dim
         )
         out.mark_as_default_output(shape=(dim, in_dim))
 
@@ -748,9 +711,7 @@ def test_rel_pos_self_attention():
                     y_b_ = y_b_.copy_transpose(y_b.dims)
                     # Assuming PyTorch...
                     np.testing.assert_almost_equal(
-                        y_b.raw_tensor.cpu().detach().numpy(),
-                        y_b_.raw_tensor.cpu().detach().numpy(),
-                        decimal=5,
+                        y_b.raw_tensor.cpu().detach().numpy(), y_b_.raw_tensor.cpu().detach().numpy(), decimal=5
                     )
                 return y
 
@@ -785,8 +746,7 @@ def test_sinusoidal_positional_encoding():
 
     with tf_scope() as session:
         tf_ref = tf_util.get_positional_encoding(
-            num_channels=feat_dim.dimension,
-            length=res.data["output"].raw_tensor.shape[0],
+            num_channels=feat_dim.dimension, length=res.data["output"].raw_tensor.shape[0]
         )
         tf_ref_v = session.run(tf_ref)
 
