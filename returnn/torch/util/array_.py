@@ -60,3 +60,33 @@ def nonzero(mask: torch.Tensor, *, out_len: Union[int, torch.Tensor]) -> torch.T
     idx = torch.argsort(mask.to(torch.int8), stable=True, descending=True)  # [in_len]
     idx = idx[:out_len]  # [out_len]
     return idx
+
+
+def sequence_mask(lengths: torch.Tensor, *, maxlen: Optional[int] = None) -> torch.Tensor:
+    """
+    Creates a boolean mask from sequence lengths.
+
+    :param lengths: Tensor of shape [batch_size...] containing sequence lengths
+    :param maxlen: Maximum length of the sequences. If None, uses the maximum value in lengths.
+    :return: A boolean mask tensor of shape [batch_size..., maxlen]
+    """
+    if maxlen is None:
+        maxlen = lengths.max()
+    indices = torch.arange(0, maxlen, dtype=lengths.dtype, device=lengths.device)
+    mask = indices < lengths[..., None]
+    return mask
+
+
+def sequence_mask_time_major(lengths: torch.Tensor, *, maxlen: Optional[int] = None) -> torch.Tensor:
+    """
+    Creates a boolean mask from sequence lengths.
+
+    :param lengths: Tensor of shape [batch_size...] containing sequence lengths
+    :param maxlen: Maximum length of the sequences. If None, uses the maximum value in lengths.
+    :return: A boolean mask tensor of shape [maxlen, batch_size...]
+    """
+    if maxlen is None:
+        maxlen = lengths.max()
+    indices = torch.arange(0, maxlen, dtype=lengths.dtype, device=lengths.device)
+    mask = indices[(slice(None),) + (None,) * lengths.ndim] < lengths[None]
+    return mask

@@ -858,7 +858,7 @@ class _DimMixin:
         self._make_extra()
         dim_order_default = self.dyn_size_ext.dims + (self,)
         if dim_order is not None:
-            dim_order = tuple(d for d in dim_order if d in dim_order_default)  # filter
+            dim_order = tuple([d for d in dim_order if d in dim_order_default])  # filter
         else:
             dim_order = dim_order_default
         cache_key = (device, dim_order)
@@ -2484,16 +2484,16 @@ _BinOpStrs = {
 
 def _math_get_dim_via_bin_op(dims: Sequence[Union[Dim, int]], op_kind: str) -> Dim:
     dims = [d if isinstance(d, _d.Dim) else _make_constant_static_dim(d) for d in dims]
-    if all(d.dimension is not None for d in dims):
+    if all([d.dimension is not None for d in dims]):
         op = _BinOps[op_kind]
         dim_value = dims[0].dimension
         for d in dims[1:]:
             dim_value = op(dim_value, d.dimension)
     else:
         dim_value = None
-    if all(d.is_constant_static_dim() for d in dims):
+    if all([d.is_constant_static_dim() for d in dims]):
         return _make_constant_static_dim(dim_value, kind=_get_merged_dim_kind(dims))
-    desc = _BinOpStrs[op_kind].join(_get_description(d) for d in dims)
+    desc = _BinOpStrs[op_kind].join([_get_description(d) for d in dims])
     if op_kind.startswith("ceildiv"):
         desc = f"⌈{desc}⌉"
     return _d.Dim(
@@ -2676,16 +2676,16 @@ def _get_description(dim, brackets=True):
 
 
 def _get_merged_dim_kind(dim_tags: Sequence[Dim]) -> Entity:
-    if any(tag.is_batch_dim() for tag in dim_tags):
+    if any([tag.is_batch_dim() for tag in dim_tags]):
         return DimTypes.Batch
-    elif any(tag.is_feature_dim() for tag in dim_tags):
+    elif any([tag.is_feature_dim() for tag in dim_tags]):
         return DimTypes.Feature
     else:
         return DimTypes.Spatial
 
 
 def _representative_tag(terms: Sequence[Dim]) -> Optional[Dim]:
-    if any(not term_.auto_generated for term_ in terms):
+    if any([not term_.auto_generated for term_ in terms]):
         # Always prefer non-auto-generated.
         terms = [term_ for term_ in terms if not term_.auto_generated]
     # First find any dynamic.

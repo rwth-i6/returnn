@@ -67,6 +67,24 @@ def _code_hash_md5(filename: str) -> str:
 
 
 _is_set_up = False
+_enabled = True
+
+
+def set_enabled(enabled: bool):
+    """
+    Enable or disable the native code setup.
+
+    :param enabled:
+    """
+    global _enabled
+    _enabled = enabled
+
+
+def is_set_up() -> bool:
+    """
+    :return: whether the native code is set up
+    """
+    return _is_set_up
 
 
 def setup():
@@ -75,6 +93,8 @@ def setup():
     """
     global _is_set_up
     if _is_set_up:
+        return
+    if not _enabled:
         return
     _is_set_up = True  # only try once
 
@@ -176,6 +196,8 @@ def setup_torch():
     """
     global _is_set_up_torch
     if _is_set_up_torch:
+        return
+    if not _enabled:
         return
     _is_set_up_torch = True  # only try once
 

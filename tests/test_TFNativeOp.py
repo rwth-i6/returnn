@@ -24,6 +24,7 @@ import os
 from pprint import pprint
 from returnn.util import better_exchook
 import returnn.util.debug as debug
+from fsa_utils import py_baum_welch, py_viterbi
 
 
 print("__file__:", __file__)
@@ -1494,168 +1495,6 @@ def test_unchunk():
     check_unchunk(x=x, index=index, chunk_size=20, chunk_step=4)
 
 
-def _py_baum_welch(am_scores, float_idx, edges, weights, start_end_states):
-    """
-    Pure Python Forward-backward (Baum Welch) algorithm.
-    The parameters are in the same format as our native fast_baum_welch op.
-
-    :param numpy.ndarray am_scores: (time, batch, dim), in -log space
-    :param numpy.ndarray float_idx: (time, batch) -> 0 or 1 (index mask, via seq lens)
-    :param numpy.ndarray edges: (4,num_edges), edges of the graph (from,to,emission_idx,sequence_idx)
-    :param numpy.ndarray weights: (num_edges,), weights of the edges
-    :param numpy.ndarray start_end_states: (2, batch), (start,end) state idx in FSA. there is only one single FSA.
-    :return: (fwdbwd, obs_scores), fwdbwd is (time, batch, dim), obs_scores is (time, batch), in -log space
-    :rtype: (numpy.ndarray, numpy.ndarray)
-    """
-    # We get it in -log space, but we calculate in +log space.
-    am_scores = -am_scores
-    weights = -weights
-    n_time, n_batch, dim = am_scores.shape
-    assert float_idx.shape == (n_time, n_batch)
-    assert edges.ndim == 2 and weights.ndim == 1
-    (n_edges,) = weights.shape
-    assert edges.shape == (4, n_edges)
-    assert start_end_states.shape == (2, n_batch)
-    from collections import defaultdict
-    from scipy.special import logsumexp
-
-    zero_score = float("-inf")
-    fwdbwd = numpy.zeros((n_time, n_batch, dim), dtype=am_scores.dtype) + zero_score
-    obs_scores = numpy.zeros((n_time, n_batch), dtype=am_scores.dtype) + zero_score
-
-    def collect_scores(forward):
-        """
-        :param bool forward:
-        :rtype: list[dict[int,float]]
-        """
-        start_idx, end_idx = start_end_states[:, sequence_idx]
-        states = defaultdict(lambda: zero_score)  # type: typing.Dict[int,float]  # state-idx -> score.
-        states[start_idx if forward else end_idx] = 0.0
-        scores_over_t = [None] * (n_time + 1)  # type: typing.List[typing.Optional[typing.Dict[int,float]]]
-        scores_over_t[0 if forward else -1] = dict(states)
-        for t in range(n_time) if forward else reversed(range(n_time)):
-            if float_idx[t, sequence_idx] == 1:
-                scores = defaultdict(list)  # type: typing.Dict[int,typing.List[float]]  # state-idx -> list[score]
-                for edge_idx in range(n_edges):
-                    from_idx, to_idx, emission_idx, sequence_idx_ = edges[:, edge_idx]
-                    if not forward:
-                        from_idx, to_idx = to_idx, from_idx
-                    if sequence_idx_ != sequence_idx:
-                        continue
-                    if from_idx not in states or states[from_idx] == zero_score:
-                        continue
-                    assert 0 <= emission_idx < dim
-                    score = states[from_idx] + weights[edge_idx] + am_scores[t, sequence_idx, emission_idx]
-                    scores[to_idx].append(score)
-                states.clear()
-                for state_idx in scores.keys():
-                    states[state_idx] = float(logsumexp(scores[state_idx]))
-            scores_over_t[(t + 1) if forward else t] = dict(states)
-        return scores_over_t
-
-    def gamma():
-        """
-        :return: nothing, fill fwdbwd and obs_scores
-        """
-        for t in range(n_time):
-            if float_idx[t, sequence_idx] == 1:
-                scores = defaultdict(list)  # type: typing.Dict[int,typing.List[float]]  # emission-idx -> list[score]
-                all_scores = []  # type: typing.List[float]
-                for edge_idx in range(n_edges):
-                    from_idx, to_idx, emission_idx, sequence_idx_ = edges[:, edge_idx]
-                    if sequence_idx_ != sequence_idx:
-                        continue
-                    assert 0 <= emission_idx < dim
-                    if from_idx not in fwd_scores[t]:
-                        continue
-                    if to_idx not in bwd_scores[t + 1]:
-                        continue
-                    score = (
-                        fwd_scores[t][from_idx]
-                        + weights[edge_idx]
-                        + am_scores[t, sequence_idx, emission_idx]
-                        + bwd_scores[t + 1][to_idx]
-                    )
-                    scores[emission_idx].append(score)
-                    all_scores.append(score)
-                obs_scores[t, sequence_idx] = logsumexp(all_scores) if all_scores else zero_score
-                for emission_idx, values in scores.items():
-                    if not values:
-                        fwdbwd[t, sequence_idx, emission_idx] = zero_score
-                    else:
-                        fwdbwd[t, sequence_idx, emission_idx] = float(logsumexp(values)) - obs_scores[t, sequence_idx]
-
-    for sequence_idx in range(n_batch):
-        fwd_scores = collect_scores(forward=True)
-        bwd_scores = collect_scores(forward=False)
-        gamma()
-
-    # -log space
-    return -fwdbwd, -obs_scores
-
-
-def test_py_baum_welch():
-    n_batch = 3
-    seq_len = 7
-    n_classes = 5
-    from returnn.util.fsa import FastBwFsaShared
-
-    fsa = FastBwFsaShared()
-    for i in range(n_classes):
-        fsa.add_edge(i, i + 1, emission_idx=i)  # fwd
-        fsa.add_edge(i + 1, i + 1, emission_idx=i)  # loop
-    assert n_classes <= seq_len
-    fast_bw_fsa = fsa.get_fast_bw_fsa(n_batch=n_batch)
-    edges = fast_bw_fsa.edges
-    weights = fast_bw_fsa.weights
-    start_end_states = fast_bw_fsa.start_end_states
-    am_scores = numpy.ones((seq_len, n_batch, n_classes), dtype="float32") * numpy.float32(1.0 / n_classes)
-    am_scores = -numpy.log(am_scores)  # in -log space
-    float_idx = numpy.ones((seq_len, n_batch), dtype="float32")
-    print("Construct call...")
-    fwdbwd, obs_scores = _py_baum_welch(
-        am_scores=am_scores, float_idx=float_idx, edges=edges, weights=weights, start_end_states=start_end_states
-    )
-    print("Done.")
-    print("score:")
-    print(repr(obs_scores))
-    assert obs_scores.shape == (seq_len, n_batch)
-    bw = numpy.exp(-fwdbwd)
-    print("Baum-Welch soft alignment:")
-    print(repr(bw))
-    assert bw.shape == (seq_len, n_batch, n_classes)
-    from numpy import array, float32
-
-    if seq_len == n_classes:
-        print("Extra check identity...")
-        for i in range(n_batch):
-            assert_almost_equal(numpy.identity(n_classes), bw[:, i])
-    if seq_len == 7 and n_classes == 5:
-        print("Extra check ref_align (7,5)...")
-        assert_allclose(obs_scores, 8.55801582, rtol=1e-5)  # should be the same everywhere
-        ref_align = array(
-            [
-                [[1.0, 0.0, 0.0, 0.0, 0.0]],
-                [[0.33333316, 0.66666663, 0.0, 0.0, 0.0]],
-                [[0.06666669, 0.53333354, 0.40000018, 0.0, 0.0]],
-                [[0.0, 0.20000014, 0.60000014, 0.19999999, 0.0]],
-                [[0.0, 0.0, 0.39999962, 0.53333312, 0.06666663]],
-                [[0.0, 0.0, 0.0, 0.66666633, 0.33333316]],
-                [[0.0, 0.0, 0.0, 0.0, 0.99999982]],
-            ],
-            dtype=float32,
-        )
-        assert ref_align.shape == (seq_len, 1, n_classes)
-        ref_align = numpy.tile(ref_align, (1, n_batch, 1))
-        assert ref_align.shape == bw.shape
-        # print("Reference alignment:")
-        # print(repr(ref_align))
-        print("mean square diff:", numpy.mean(numpy.square(ref_align - bw)))
-        print("max square diff:", numpy.max(numpy.square(ref_align - bw)))
-        assert_allclose(ref_align, bw, rtol=1e-5)
-    print("Done.")
-
-
 def test_FastBaumWelch():
     print("Make op...")
     op = make_fast_baum_welch_op(
@@ -1687,7 +1526,7 @@ def test_FastBaumWelch():
     print("score:", score)
     print("Baum-Welch soft alignment:")
     print(repr(fwdbwd_np))
-    fwdbwd_np2, score2 = _py_baum_welch(
+    fwdbwd_np2, score2 = py_baum_welch(
         am_scores=am_scores_np,
         float_idx=float_idx_np,
         edges=fast_bw_fsa.edges,
@@ -1774,80 +1613,6 @@ def test_fast_bw_uniform():
     print("Done.")
 
 
-def get_ctc_fsa_fast_bw_via_python(targets, seq_lens, blank_idx):
-    """
-    :param tf.Tensor targets: shape (batch,time)
-    :param tf.Tensor seq_lens: shape (batch,)
-    :param int blank_idx:
-    :return: edges, weights, start_end_states
-    :rtype: (tf.Tensor, tf.Tensor, tf.Tensor)
-    """
-    from returnn.util.fsa import get_ctc_fsa_fast_bw
-
-    def py_fast_bw_fsa_ctc_wrapper(targets_, seq_lens_):
-        """
-        :param numpy.ndarray targets_:
-        :param numpy.ndarray seq_lens_:
-        :rtype: (numpy.ndarray,numpy.ndarray,numpy.ndarray)
-        """
-        fsa = get_ctc_fsa_fast_bw(targets=targets_, seq_lens=seq_lens_, blank_idx=blank_idx)
-        assert fsa.start_end_states.shape == (2, len(seq_lens_)), "shape mismatch %r, n_batch %r, seq lens %r" % (
-            fsa.start_end_states.shape,
-            len(seq_lens_),
-            seq_lens_,
-        )
-        return fsa.edges.astype("int32"), fsa.weights.astype("float32"), fsa.start_end_states.astype("int32")
-
-    edges, weights, start_end_states = tf_compat.v1.py_func(
-        py_fast_bw_fsa_ctc_wrapper, [targets, seq_lens], [tf.int32, tf.float32, tf.int32], stateful=False
-    )
-    # edges: (4, num_edges), edges of the graph (from,to,emission_idx,sequence_idx)
-    # weights: (num_edges,), weights of the edges
-    # start_end_states: (2, batch), (start,end) state idx in automaton.
-    edges.set_shape((4, None))
-    weights.set_shape((None,))
-    start_end_states.set_shape((2, None))
-    return edges, weights, start_end_states
-
-
-def ctc_loss_via_python_fsa(logits, logits_seq_lens, time_major, targets, targets_seq_lens):
-    """
-    Similar to :func:`tf.nn.ctc_loss`.
-    We use our :func:`fast_baum_welch`.
-    Also see :class:`FastBaumWelchLoss`.
-
-    :param tf.Tensor logits: (time,batch,dim) or (batch,time,dim). unnormalized (before softmax)
-    :param tf.Tensor logits_seq_lens: shape (batch,) of int32|int64
-    :param bool time_major:
-    :param tf.Tensor targets: batch-major, [batch,time]
-    :param tf.Tensor targets_seq_lens: (batch,)
-    :return: loss, shape (batch,)
-    :rtype: tf.Tensor
-    """
-    assert logits.get_shape().ndims == 3 and logits.get_shape().dims[-1].value
-    dim = logits.get_shape().dims[-1].value
-    if not time_major:
-        logits = tf.transpose(logits, [1, 0, 2])  # (time,batch,dim)
-    log_sm = tf.nn.log_softmax(logits)  # (time,batch,dim)
-    from returnn.tf.util.basic import sequence_mask_time_major
-
-    seq_mask = sequence_mask_time_major(logits_seq_lens)  # (time,batch)
-
-    edges, weights, start_end_states = get_ctc_fsa_fast_bw_via_python(
-        targets=targets, seq_lens=targets_seq_lens, blank_idx=dim - 1
-    )
-    fwdbwd, obs_scores = fast_baum_welch(
-        am_scores=-log_sm, float_idx=seq_mask, edges=edges, weights=weights, start_end_states=start_end_states
-    )
-    loss = obs_scores[0]  # (batch,)
-    bw = tf.exp(-fwdbwd)  # (time,batch,dim)
-    grad_x = (tf.exp(log_sm) - bw) * tf.expand_dims(seq_mask, 2)  # (time,batch,dim)
-    from returnn.tf.util.basic import custom_gradient
-
-    loss = custom_gradient.generic_loss_and_error_signal(loss=loss, x=logits, grad_x=grad_x)
-    return loss
-
-
 def _log_softmax(x, axis=-1):
     assert isinstance(x, numpy.ndarray)
     xdev = x - x.max(axis=axis, keepdims=True)
@@ -1909,7 +1674,7 @@ def check_ctc_fsa(targets, target_seq_lens, n_classes, with_native_fsa=False, la
         )
         edges, weights, start_end_states = session.run((native_edges_tf, native_weights_tf, native_start_end_states_tf))
 
-    fwdbwd, obs_scores = _py_baum_welch(
+    fwdbwd, obs_scores = py_baum_welch(
         am_scores=-_log_softmax(am_scores),
         float_idx=float_idx,
         edges=edges,
@@ -1937,7 +1702,7 @@ def check_ctc_fsa(targets, target_seq_lens, n_classes, with_native_fsa=False, la
         print("native_start_end_states:")
         print(native_start_end_states)
 
-        native_fwdbwd, native_obs_scores = _py_baum_welch(
+        native_fwdbwd, native_obs_scores = py_baum_welch(
             am_scores=-_log_softmax(am_scores),
             float_idx=float_idx,
             edges=native_edges,
@@ -2114,137 +1879,6 @@ def test_ctc_fsa_batch1_len1_native():
     check_ctc_fsa(targets=targets, target_seq_lens=target_seq_lens, n_classes=n_classes, with_native_fsa=True)
 
 
-def _py_viterbi(am_scores, am_seq_len, edges, weights, start_end_states):
-    """
-    Pure Python Viterbi algorithm, to find the best path/alignment.
-    The parameters are in the same format as our native fast_baum_welch op.
-
-    :param numpy.ndarray am_scores: (time, batch, dim), in +log space
-    :param numpy.ndarray am_seq_len: (batch,) -> int32
-    :param numpy.ndarray edges: (4,num_edges), edges of the graph (from,to,emission_idx,sequence_idx)
-    :param numpy.ndarray weights: (num_edges,), weights of the edges
-    :param numpy.ndarray start_end_states: (2, batch), (start,end) state idx in FSA. there is only one single FSA.
-    :return: (alignment, obs_scores), alignment is (time, batch), obs_scores is (batch,), in +log space
-    :rtype: (numpy.ndarray, numpy.ndarray)
-    """
-    n_time, n_batch, dim = am_scores.shape
-    assert am_seq_len.shape == (n_batch,)
-    assert edges.ndim == 2 and weights.ndim == 1
-    (n_edges,) = weights.shape
-    assert edges.shape == (4, n_edges)
-    assert start_end_states.shape == (2, n_batch)
-    from collections import defaultdict
-
-    zero_score = float("-inf")
-    alignment = numpy.zeros((n_time, n_batch), dtype="int32")
-    obs_scores = numpy.zeros((n_batch,), dtype=am_scores.dtype) + zero_score
-
-    def search():
-        """
-        :rtype: list[dict[int,(float,int)]]
-        """
-        start_idx, _ = start_end_states[:, sequence_idx]
-        states = defaultdict(lambda: (zero_score, -1))  # type: typing.Dict[int,typing.Tuple[float,int]]  # state-idx -> score/edge  # nopep8
-        states[start_idx] = (0.0, -1)
-        res = []  # type: typing.List[typing.Dict[int,typing.Tuple[float,int]]]
-        for t in range(n_time):
-            if t >= am_seq_len[sequence_idx]:
-                break
-            scores = defaultdict(list)  # type: typing.Dict[int,typing.List[typing.Tuple[float,int]]]  # state-idx -> list[score/edge]  # nopep8
-            for edge_idx in range(n_edges):
-                from_idx, to_idx, emission_idx, sequence_idx_ = edges[:, edge_idx]
-                if sequence_idx_ != sequence_idx:
-                    continue
-                if from_idx not in states or states[from_idx] == zero_score:
-                    continue
-                assert 0 <= emission_idx < dim
-                score = states[from_idx][0] + weights[edge_idx] + am_scores[t, sequence_idx, emission_idx]
-                scores[to_idx].append((score, edge_idx))
-            states.clear()
-            for state_idx in scores.keys():
-                states[state_idx] = max(scores[state_idx], key=lambda _item: (_item[0], -_item[1]))
-            res.append(dict(states))
-        assert len(res) == am_seq_len[sequence_idx]
-        return res
-
-    def select_best():
-        """
-        :return: nothing, fill alignment and obs_scores
-        """
-        _, end_idx = start_end_states[:, sequence_idx]
-        state_idx = end_idx
-        for t in reversed(range(am_seq_len[sequence_idx])):
-            if state_idx not in fwd_search_res[t]:  # no path?
-                alignment[t, sequence_idx] = 0
-                continue
-            score, edge_idx = fwd_search_res[t][state_idx]
-            if t == am_seq_len[sequence_idx] - 1:
-                obs_scores[sequence_idx] = score
-            from_idx, to_idx, emission_idx, sequence_idx_ = edges[:, edge_idx]
-            assert sequence_idx_ == sequence_idx
-            alignment[t, sequence_idx] = emission_idx
-            state_idx = from_idx
-
-    for sequence_idx in range(n_batch):
-        fwd_search_res = search()
-        select_best()
-
-    return alignment, obs_scores
-
-
-def test_py_viterbi():
-    n_batch = 3
-    seq_len = 7
-    n_classes = 5
-    from returnn.util.fsa import FastBwFsaShared
-
-    fsa = FastBwFsaShared()
-    for i in range(n_classes):
-        fsa.add_edge(i, i + 1, emission_idx=i)  # fwd
-        fsa.add_edge(i + 1, i + 1, emission_idx=i)  # loop
-    assert n_classes <= seq_len
-    fast_bw_fsa = fsa.get_fast_bw_fsa(n_batch=n_batch)
-    edges = fast_bw_fsa.edges
-    weights = fast_bw_fsa.weights
-    start_end_states = fast_bw_fsa.start_end_states
-    am_scores = numpy.eye(n_classes, n_classes, dtype="float32")  # (dim,dim)
-    import scipy.ndimage
-
-    am_scores = scipy.ndimage.zoom(am_scores, zoom=(float(seq_len) / n_classes, 1), order=1, prefilter=False)
-    assert am_scores.shape == (seq_len, n_classes)
-    am_scores = am_scores[:, None]
-    am_scores = am_scores + numpy.zeros((seq_len, n_batch, n_classes), dtype="float32")
-    print(am_scores[:, 0])
-    # am_scores = numpy.ones((seq_len, n_batch, n_classes), dtype="float32") * numpy.float32(1.0 / n_classes)
-    am_scores = numpy.log(am_scores)  # in +log space
-    print("Construct call...")
-    alignment, obs_scores = _py_viterbi(
-        am_scores=am_scores,
-        am_seq_len=numpy.array([seq_len] * n_batch),
-        edges=edges,
-        weights=weights,
-        start_end_states=start_end_states,
-    )
-    print("Done.")
-    print("score:")
-    print(repr(obs_scores))
-    assert obs_scores.shape == (n_batch,)
-    print("Hard alignment:")
-    print(repr(alignment))
-    assert alignment.shape == (seq_len, n_batch)
-    if seq_len == n_classes:
-        print("Extra check identity...")
-        for i in range(n_batch):
-            for t in range(seq_len):
-                assert alignment[t, i] == t
-    if seq_len == 7 and n_classes == 5:
-        print("Extra check ref_align (7,5)...")
-        assert_allclose(obs_scores, -1.6218603, rtol=1e-5)  # should be the same everywhere
-        for i in range(n_batch):
-            assert alignment[:, i].tolist() == [0, 1, 1, 2, 3, 3, 4]
-    print("Done.")
-
-
 def test_fast_viterbi():
     n_batch = 3
     seq_len = 7
@@ -2319,7 +1953,7 @@ def test_fast_viterbi_rnd():
     am_seq_len[1] -= 1
     am_seq_len[-1] -= 2
     am_seq_len[-2] = max(n_classes - 1, 1)  # no path possible
-    ref_alignment, ref_scores = _py_viterbi(
+    ref_alignment, ref_scores = py_viterbi(
         am_scores=am_scores, am_seq_len=am_seq_len, edges=edges, weights=weights, start_end_states=start_end_states
     )
     print("ref score:")

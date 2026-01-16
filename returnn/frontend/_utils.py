@@ -110,7 +110,7 @@ def bin_op_out_template(
             all_dims.extend([dim_ for dim_ in a.dims if dim_ == dim])
         else:
             all_dims.extend([dim_ for dim_ in b.dims if dim_ == dim])
-    if all(set(x.dims) != set(all_dims) for x in (a, b)):
+    if all([set(x.dims) != set(all_dims) for x in (a, b)]):
         if allow_broadcast_all_sources is False:
             raise ValueError(f"compare: sources {a!r} {b!r} not allowed with allow_broadcast_all_sources=False")
         elif allow_broadcast_all_sources is None:

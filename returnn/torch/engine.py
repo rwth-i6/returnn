@@ -3,9 +3,11 @@ Main engine for PyTorch
 """
 
 from __future__ import annotations
+
 from typing import Optional, Any, Union, Callable, Dict, Set
 from contextlib import nullcontext, ExitStack, contextmanager
 
+import sys
 import gc
 import os
 import time
@@ -20,6 +22,7 @@ from torch.nn.parallel import DistributedDataParallel
 from torch.utils.data import DataLoader
 from torch import autocast
 from torch.cuda import amp
+from torch.profiler import record_function
 import numpy as np
 
 import returnn
@@ -404,10 +407,14 @@ class Engine(EngineBase):
         total_data_size_packed = NumbersDict()
         total_data_size_padded = NumbersDict()
 
+        prof = _opt_torch_profiler_from_opts(self.config.opt_typed_value("torch_profile"))
+        if prof:
+            prof.__enter__()
+
         report_prefix = f"ep {self.epoch} train"
         try:
             while True:
-                with torch.no_grad():
+                with torch.no_grad(), record_function("data_loading"):
                     extern_data_raw = next(data_iter, None)
 
                 step_begin_time = time.monotonic()
@@ -485,7 +492,8 @@ class Engine(EngineBase):
                 with (
                     self._ddp_pt_model.no_sync()
                     if (self._ddp_pt_model is not None and not perform_update_step)
-                    else nullcontext()
+                    else nullcontext(),
+                    record_function("backward"),
                 ):
                     if self._grad_scaler is not None:
                         self._grad_scaler.scale(total_loss.raw_tensor).backward()
@@ -500,7 +508,8 @@ class Engine(EngineBase):
 
                 # only update the weights when every gradient accumulation loop ends
                 if perform_update_step:
-                    self._updater.step(grad_scaler=self._grad_scaler)
+                    with record_function("optimizer_step"):
+                        self._updater.step(grad_scaler=self._grad_scaler)
                 zero_grad_next_step = perform_update_step
 
                 if self._torch_distributed_ctx:
@@ -582,9 +591,18 @@ class Engine(EngineBase):
                 self._updater.set_current_train_step(
                     global_train_step=self.global_train_step, epoch=self.epoch, epoch_continuous=epoch_continuous
                 )
+
+                if prof:
+                    prof.step()
+
         except Exception as exc:
+            if prof:
+                prof.__exit__(type(exc), exc, exc.__traceback__)
             help_on_torch_exception(exc, step_idx=step_idx, model=self._orig_model, extern_data=extern_data)
             raise
+
+        if prof:
+            prof.__exit__(None, None, None)
 
         elapsed = time.monotonic() - epoch_start_time
         elapsed_computation_percentage = elapsed_computation_time / elapsed
@@ -885,6 +903,7 @@ class Engine(EngineBase):
             if self._default_float_dtype:
                 stack.enter_context(rf.set_default_float_dtype_ctx(str(self._default_float_dtype).split(".")[-1]))
                 stack.enter_context(_set_torch_default_dtype_ctx_mgr(self._default_float_dtype))
+            stack.enter_context(record_function("model_step"))
             yield
 
     def _run_step(
@@ -1734,3 +1753,101 @@ def _torch_load(filename: Union[str, os.PathLike], *, device: str) -> Dict[str, 
         return safetensors_load(filename, device=device)
 
     return torch.load(filename, map_location=device)
+
+
+class _TorchProfiler:
+    def __init__(self, profiler: torch.profiler.profile, max_step: Optional[int]):
+        self.profiler = profiler
+        self.max_step = max_step
+        self.entered = False
+
+    def __enter__(self):
+        self.profiler.__enter__()
+        self.entered = True
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        if not self.entered:
+            return
+        self.entered = False
+        self.profiler.__exit__(exc_type, exc_val, exc_tb)
+
+        if exc_type is None:
+            print(
+                "Torch profiling finished, exporting Chrome trace to torch_profile.json,"
+                " memory timeline to torch_memory_profile.html...",
+                file=log.v2,
+            )
+            self.profiler.export_chrome_trace("torch_profile.json")
+            self.profiler.export_memory_timeline("torch_memory_profile.html")
+
+            print("Exiting program after Torch profiling.", file=log.v2)
+            sys.exit(0)
+
+    def step(self):
+        """step"""
+        self.profiler.step()
+        if self.max_step is not None and self.profiler.step_num > self.max_step:
+            print(f"Reached max profiling step {self.max_step}, stopping Torch profiler.", file=log.v2)
+            self.profiler.stop()
+            self.__exit__(None, None, None)
+
+
+def _opt_torch_profiler_from_opts(
+    opts: Union[None, int, bool, str, Dict[str, Any]],
+) -> Optional[_TorchProfiler]:
+    if isinstance(opts, str):
+        from returnn.util.basic import to_bool
+
+        opts = to_bool(opts)
+
+    if opts is None:
+        return None
+    elif isinstance(opts, (bool, int)):
+        if not opts:
+            return None
+        opts = {}
+    elif isinstance(opts, dict):
+        opts = opts.copy()
+    else:
+        raise TypeError(f"Invalid type for torch_profile {opts!r}: {type(opts)}")
+
+    from torch.profiler import profile, ProfilerActivity, schedule
+
+    print("Using Torch profiler...", file=log.v2)
+
+    prof_max_step = None
+
+    if "activities" not in opts:
+        activities = [ProfilerActivity.CPU]
+        if torch.cuda.is_available():
+            activities += [ProfilerActivity.CUDA]
+        elif torch.xpu.is_available():
+            activities += [ProfilerActivity.XPU]
+        opts["activities"] = activities
+
+    opts.setdefault("profile_memory", True)
+    opts.setdefault("record_shapes", True)
+    opts.setdefault("with_stack", True)
+    opts.setdefault("with_flops", True)
+    # Note: active*repeat are the steps we actually profile.
+    opts.setdefault("schedule", dict(skip_first=10, wait=5, warmup=3, active=3, repeat=1))
+
+    if isinstance(opts["schedule"], dict):
+        schedule_opts: Dict[str, Any] = opts["schedule"]
+        schedule_opts = schedule_opts.copy()
+        schedule_opts.setdefault("repeat", 0)
+        schedule_opts.setdefault("skip_first", 0)
+        schedule_opts.setdefault("skip_first_wait", 0)
+        opts["schedule"] = schedule(**schedule_opts)
+
+        if schedule_opts["repeat"] > 0:
+            prof_max_step = (schedule_opts["wait"] + schedule_opts["warmup"] + schedule_opts["active"]) * schedule_opts[
+                "repeat"
+            ]
+            prof_max_step += schedule_opts["skip_first"]
+            if schedule_opts["skip_first_wait"] != 0:
+                prof_max_step -= schedule_opts["wait"]
+            print(f"Profiling will stop automatically after {prof_max_step} steps.", file=log.v3)
+
+    prof = profile(**opts)
+    return _TorchProfiler(prof, prof_max_step)

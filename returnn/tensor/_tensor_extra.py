@@ -32,8 +32,8 @@ class _TensorExtra:
         tensor: Tensor,
         time_dim_axis=NotSpecified,
         available_for_inference=True,
-        batch=None,
-        beam=None,
+        batch: Optional[BatchInfo] = None,
+        beam: Optional[SearchBeam] = None,
         control_flow_ctx=None,
     ):
         """
@@ -41,8 +41,8 @@ class _TensorExtra:
         :param int|None|NotSpecified time_dim_axis: where we have the time dim axis, after we added the batch-dim.
             this is often 1. however, can be None if there is no time-dim.
         :param bool available_for_inference: e.g. the extern data "classes" is usually not available for inference
-        :param BatchInfo|None batch:
-        :param SearchBeam|None beam: the batch-dim could be extended by a beam-size,
+        :param batch:
+        :param beam: the batch-dim could be extended by a beam-size,
             such that it represents the merged dims [batch, beam_size].
         :param ControlFlowContext|None control_flow_ctx:
         """
@@ -668,11 +668,11 @@ class _TensorMixin(_TensorMixinBase):
         if not perm:
             return self.copy()
         if allow_int and isinstance(perm[0], int):
-            assert all(isinstance(a, int) for a in perm), f"{self}: invalid perm {perm!r} types"
+            assert all([isinstance(a, int) for a in perm]), f"{self}: invalid perm {perm!r} types"
             assert set(perm) == set(range(len(perm))), f"{self}: invalid perm {perm!r}"
             return self._copy_compatible_to_dims_with_perm([self._dims[i] for i in perm], perm)
         else:
-            assert all(isinstance(a, Dim) for a in perm), f"{self}: invalid perm {perm!r} types"
+            assert all([isinstance(a, Dim) for a in perm]), f"{self}: invalid perm {perm!r} types"
             return self.copy_compatible_to_dims(perm)
 
     def copy_move_axis(self, old_axis, new_axis) -> _t.Tensor:
@@ -1155,7 +1155,7 @@ class _TensorMixin(_TensorMixinBase):
                     )
 
         assert v.batch_ndim == data.batch_ndim
-        assert all(mapped_axes[ax] == ax for ax in range(v.batch_ndim))
+        assert all([mapped_axes[ax] == ax for ax in range(v.batch_ndim)])
 
         if self.version == 1:
             # Ensure time_dim_axis and feature_dim_axis is same as in data
@@ -1702,7 +1702,7 @@ class _TensorMixin(_TensorMixinBase):
         """
         :return: shape with added batch-dim. e.g. (batch,time,feat) = (None,None,128)
         """
-        return tuple(tag.dimension for tag in self.dim_tags)
+        return tuple([tag.dimension for tag in self.dim_tags])
 
     # noinspection PyShadowingNames
     def get_batch_shape(self, batch_dim):
@@ -3214,7 +3214,7 @@ class _TensorMixin(_TensorMixinBase):
         if len(sources) == 1:
             return sources[0].copy_template()
         max_ndim = max([s.batch_ndim for s in sources])
-        if any(src.batch for src in sources):
+        if any([src.batch for src in sources]):
             from returnn.tf.util.data import BatchInfo
 
             common_batch = BatchInfo.get_common_batch_info([src.batch for src in sources if src.batch])
@@ -3254,7 +3254,7 @@ class _TensorMixin(_TensorMixinBase):
             else:
                 axis = common.get_default_new_axis_for_dim_tag(dim_tag)
                 common = common.copy_add_dim_by_tag(dim_tag, unbroadcast=True, axis=axis)
-        if all(s.batch_ndim < common.batch_ndim for s in sources):
+        if all([s.batch_ndim < common.batch_ndim for s in sources]):
             from returnn.util.basic import validate_broadcast_all_sources
 
             validate_broadcast_all_sources(

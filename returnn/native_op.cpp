@@ -1,3 +1,14 @@
+/*
+This file is imported in various ways.
+The mode is determined via the preprocessor defines:
+
+TENSORFLOW: If defined and set to 1, TensorFlow is used as backend.
+TORCH: If defined and set to 1, PyTorch is used as backend.
+
+CUDA: If defined and set to 1, CUDA is used for GPU support.
+    Otherwise, it uses CPU only.
+    The kernels are all expected to also compile in CPU-only mode.
+*/
 
 #include <assert.h>
 #include <iostream>
@@ -14,6 +25,10 @@
 
 #ifndef TENSORFLOW
 #define TENSORFLOW 0
+#endif
+
+#ifndef TORCH
+#define TORCH 0
 #endif
 
 #ifndef _ns
@@ -118,7 +133,7 @@ static inline int _host_float_as_int(float x) {
 #define INF_F int_as_float(0x7f800000)
 #define NAN_F int_as_float(0x7fffffff)
 
-#endif
+#endif // CUDA
 
 
 
@@ -157,7 +172,7 @@ The BLAS functions expect the inputs in column-major and return in column-major.
 #define Ndarray tensorflow::Tensor
 #define Ndarray_DEV_DATA(x) ((float*) (x)->tensor_data().data())
 #define Ndarray_DEV_DATA_int32(x) ((int32_t*) (x)->tensor_data().data())
-#define Ndarray_DEV_DATA_int32_scalar(x) (x)->scalar<int32>()()
+#define Ndarray_DEV_DATA_int32_scalar(x) (x)->scalar<int32_t>()()
 #define Ndarray_HOST_DIMS(x) DimsAccessor(x)
 #define Ndarray_DIMS Ndarray_HOST_DIMS
 #define Ndarray_NDIM(x) (x)->dims()
@@ -399,13 +414,13 @@ static void tf_cuda_sgemm_batched(
 
 
 #define Ndarray_sgemm( \
-	transpose_A, transpose_B, \
-	m, n, k, alpha, A, lda, B, ldb, beta, C, ldc) \
+    transpose_A, transpose_B, \
+    m, n, k, alpha, A, lda, B, ldb, beta, C, ldc) \
     tf_cuda_sgemm<float>(context, transpose_A, transpose_B, m, n, k, alpha, A, lda, B, ldb, beta, C, ldc);
 
 #define Ndarray_sgemm_batched( \
-	transpose_A, transpose_B, \
-	m, n, k, alpha, A, lda, B, ldb, beta, C, ldc, batchSize, finalize_stream) \
+    transpose_A, transpose_B, \
+    m, n, k, alpha, A, lda, B, ldb, beta, C, ldc, batchSize, finalize_stream) \
     tf_cuda_sgemm_batched<float>(context, transpose_A, transpose_B, m, n, k, alpha, A, lda, B, ldb, beta, C, ldc, batchSize, finalize_stream);
 
 
@@ -415,21 +430,21 @@ static void tf_cuda_sgemm_batched(
 
 /*
     // matrices are in column-major form
-	int sgemm_(char *transa, char *transb,
-		integer *m, integer *n, integer *k,
-		real *alpha, real *a, integer *lda,
-		real *b, integer *ldb, real *beta,
-		real *c, integer *ldc);
+    int sgemm_(char *transa, char *transb,
+        integer *m, integer *n, integer *k,
+        real *alpha, real *a, integer *lda,
+        real *b, integer *ldb, real *beta,
+        real *c, integer *ldc);
 */
 #define Ndarray_sgemm(\
-	transpose_A, transpose_B, \
-	m, n, k, alpha, A, lda, B, ldb, beta, C, ldc) \
-	{ \
-		char transa = transpose_A, transb = transpose_B; \
-		int m_ = m, n_ = n, k_ = k, lda_ = lda, ldb_ = ldb, ldc_ = ldc; \
-		sgemm_(&transa, &transb, \
-			&m_, &n_, &k_, alpha, A, &lda_, B, &ldb_, beta, C, &ldc_); \
-	}
+    transpose_A, transpose_B, \
+    m, n, k, alpha, A, lda, B, ldb, beta, C, ldc) \
+    { \
+        char transa = transpose_A, transb = transpose_B; \
+        int m_ = m, n_ = n, k_ = k, lda_ = lda, ldb_ = ldb, ldc_ = ldc; \
+        sgemm_(&transa, &transb, \
+            &m_, &n_, &k_, alpha, A, &lda_, B, &ldb_, beta, C, &ldc_); \
+    }
 
 #else  // HAVE_CUSTOM_BLAS
 
@@ -494,77 +509,77 @@ static void tf_cpu_sgemm(
 }
 
 #define Ndarray_sgemm(\
-	transpose_A, transpose_B, \
-	m, n, k, alpha, A, lda, B, ldb, beta, C, ldc) \
+    transpose_A, transpose_B, \
+    m, n, k, alpha, A, lda, B, ldb, beta, C, ldc) \
     tf_cpu_sgemm<float>(context, transpose_A, transpose_B, m, n, k, alpha, A, lda, B, ldb, beta, C, ldc);
 
 #endif  // HAVE_CUSTOM_BLAS
 #endif  // CUDA
 
+#define CHECK_WITH_MSG(condition, message) \
+    if(!(condition)) { \
+        std::cerr << "NativeOp check failed: " << message << std::endl; \
+        assert(condition); \
+    }
+
 // See Context struct below.
 #define CONTEXT_ARGS    context
 
-#else  // TENSORFLOW
+
+#elif TORCH
+// https://github.com/rwth-i6/i6_native_ops/blob/main/i6_native_ops/common/returnn_definitions.h
+// https://docs.pytorch.org/cppdocs/stable.html#tensor-class
+
+#define Ndarray torch::Tensor
+#define Ndarray_DEV_DATA(x) ((float*)(x)->data_ptr())
+#define Ndarray_DEV_DATA_int32(x) ((int32_t*)(x)->data_ptr())
+#define Ndarray_DEV_DATA_uint32(x) ((uint32_t*)(x)->data_ptr())
+#define Ndarray_DEV_DATA_int32_scalar(x) ((x)->item().to<int32_t>())
+#define Ndarray_HOST_DIMS(x) ((x)->sizes())
+#define Ndarray_DIMS(x) ((x)->sizes())
+typedef at::IntArrayRef Ndarray_DIMS_Type;
+#define Ndarray_NDIM(x) (x)->dim()
+#define Ndarray_dtype_size(x) torch::elementSize((x)->scalar_type())
+typedef int64_t Ndarray_DIM_Type;
+#define Ndarray_SIZE(x) ((x)->numel())
+#define Ndarray_STRIDE(x, dim) ((x)->stride(dim))
+
+#define CHECK_WITH_MSG TORCH_CHECK
 
 // See Context struct below.
 #define CONTEXT_ARGS
 
-#endif  // TENSORFLOW
+template<typename T>
+static void Ndarray_sgemm(
+    char transa_, char transb_,
+    int m, int n, int k,
+    const T* alpha_ptr, const T* a_ptr, int lda,
+    const T* b_ptr, int ldb, const T* beta_ptr,
+    T* c_ptr, int ldc)
+{
+    // TODO...
+    assert("Torch Ndarray_sgemm not implemented" && 0);
+}
 
+#else  // TENSORFLOW or TORCH
+
+#error "No framework defined: TENSORFLOW or TORCH"
+
+#endif // TENSORFLOW or TORCH
 
 
 #if CUDA
-
 
 #if TENSORFLOW
 // Ndarray and friends already declared above, they are same for CUDA and non-CUDA
 #define CUDA_CUR_STREAM  (context->eigen_gpu_device().stream())
 
-#else  // TENSORFLOW, thus Theano here
-#define CUDA_CUR_STREAM  (0)  // default stream
+#elif TORCH
 
-// Defined here: https://github.com/Theano/Theano/blob/master/theano/sandbox/cuda/cuda_ndarray.cuh
-// See also: https://github.com/Theano/Theano/blob/master/theano/sandbox/cuda/cuda_ndarray.cu
-#define Ndarray CudaNdarray
-#define Ndarray_DEV_DATA CudaNdarray_DEV_DATA
-#define Ndarray_DEV_DATA_int32(x) ((int32_t*) (Ndarray_DEV_DATA(x)))
-#define Ndarray_DEV_DATA_int32_scalar(x) Ndarray_DEV_DATA_int32(x)[0]
-#define Ndarray_HOST_DIMS CudaNdarray_HOST_DIMS
-#define Ndarray_DIMS Ndarray_HOST_DIMS
-#define Ndarray_STRIDE(x, i) (CudaNdarray_HOST_STRIDES(x)[i])  // return in elements. CudaNdarray stores like that
-#define Ndarray_NDIM(x) (x->nd)
-#define Ndarray_DIM_Type int
-typedef Ndarray_DIM_Type const* Ndarray_DIMS_Type;
-#define Ndarray_dtype_size(x) sizeof(float)
-#define Ndarray_SIZE CudaNdarray_SIZE
-// PyObject *CudaNdarray_NewDims(int nd, const inttype * dims), uninitialized
-#define Ndarray_NewDims CudaNdarray_NewDims
-// PyObject * CudaNdarray_Copy(const CudaNdarray * self);
-#define Ndarray_Copy CudaNdarray_Copy
+#define CUDA_CUR_STREAM (at::cuda::getCurrentCUDAStream().stream())
 
-/*
-    // via: https://docs.nvidia.com/cuda/cublas/
-    // matrices are in column-major form
-    cublasStatus_t cublasSgemm(cublasHandle_t handle,
-        cublasOperation_t transa, cublasOperation_t transb,
-        int m, int n, int k,
-        const float *alpha, const float *A, int lda,
-        const float *B, int ldb, const float *beta,
-        float *C, int ldc);
-*/
-#define _cublasTranspose(t) \
-	((t == 'T') ? CUBLAS_OP_T : \
-	(t == 'C') ? CUBLAS_OP_C : \
-	(t == 'N') ? CUBLAS_OP_N : cublasOperation_t('E'))
-#define Ndarray_sgemm( \
-	transpose_A, transpose_B, \
-	m, n, k, alpha, A, lda, B, ldb, beta, C, ldc) \
-	(_cudaHandleError(cublasSgemm(handle, \
-	_cublasTranspose(transpose_A), \
-	_cublasTranspose(transpose_B), \
-	m, n, k, alpha, A, lda, B, ldb, beta, C, ldc), \
-	__FILE__, __LINE__ ))
-
+#else
+#error Unknown backend
 #endif
 
 #define Ndarray_memcpy(y, x, size) (cudaMemcpyAsync(y, x, size, cudaMemcpyDeviceToDevice, CUDA_CUR_STREAM))
@@ -581,48 +596,10 @@ typedef Ndarray_DIM_Type const* Ndarray_DIMS_Type;
 
 #define DEF_SHARED(type, name) extern __shared__ type name[];
 
-static const char *_cudaGetErrorEnum(cublasStatus_t error) {
-	switch (error) {
-	case CUBLAS_STATUS_SUCCESS:
-		return "CUBLAS_STATUS_SUCCESS";
-
-	case CUBLAS_STATUS_NOT_INITIALIZED:
-		return "CUBLAS_STATUS_NOT_INITIALIZED";
-
-	case CUBLAS_STATUS_ALLOC_FAILED:
-		return "CUBLAS_STATUS_ALLOC_FAILED";
-
-	case CUBLAS_STATUS_INVALID_VALUE:
-		return "CUBLAS_STATUS_INVALID_VALUE";
-
-	case CUBLAS_STATUS_ARCH_MISMATCH:
-		return "CUBLAS_STATUS_ARCH_MISMATCH";
-
-	case CUBLAS_STATUS_MAPPING_ERROR:
-		return "CUBLAS_STATUS_MAPPING_ERROR";
-
-	case CUBLAS_STATUS_EXECUTION_FAILED:
-		return "CUBLAS_STATUS_EXECUTION_FAILED";
-
-	case CUBLAS_STATUS_INTERNAL_ERROR:
-		return "CUBLAS_STATUS_INTERNAL_ERROR";
-	}
-
-	return "<unknown>";
-}
-
-static void _cudaHandleError(cudaError_t err, const char *file, int line) {
-	if (err != cudaSuccess) {
-		printf("NativeOp: CUDA runtime error: '%s' in %s at line %d\n", cudaGetErrorString(err), file, line);
-		exit(EXIT_FAILURE);
-	}
-}
-
-static void _cudaHandleError(cublasStatus_t status, const char *file, int line) {
-	if (status != CUBLAS_STATUS_SUCCESS) {
-		printf("NativeOp: cuBLAS runtime error: '%s' in %s at line %d\n", _cudaGetErrorEnum(status), file, line);
-		exit(EXIT_FAILURE);
-	}
+static void _cudaHandleError(cudaError_t err, const char* file, int line) {
+    CHECK_WITH_MSG(
+        err == cudaSuccess,
+        "NativeOp: CUDA runtime error: ", cudaGetErrorString(err), " in ", file, " at line ", line);
 }
 
 #define HANDLE_ERROR(status) (_cudaHandleError( status, __FILE__, __LINE__ ))
@@ -630,49 +607,7 @@ static void _cudaHandleError(cublasStatus_t status, const char *file, int line) 
 
 #else   // not CUDA
 
-
-#if !TENSORFLOW
-// Numpy, see: https://docs.scipy.org/doc/numpy/reference/c-api.array.html
-// And: https://deeplearning.net/software/theano/extending/extending_theano_c.html
-#define Ndarray PyArrayObject
-#define Ndarray_DEV_DATA(x) ((float*) PyArray_DATA(x))
-#define Ndarray_DEV_DATA_int32(x) ((int32_t*) (Ndarray_DEV_DATA(x)))
-#define Ndarray_DEV_DATA_int32_scalar(x) Ndarray_DEV_DATA_int32(x)[0]
-#define Ndarray_HOST_DIMS PyArray_DIMS
-#define Ndarray_STRIDE(x, i) (PyArray_STRIDE(x, i) / sizeof(float))  // return in elements. Numpy stores in bytes
-#define Ndarray_DIMS Ndarray_HOST_DIMS
-#define Ndarray_NDIM PyArray_NDIM
-#define Ndarray_DIM_Type npy_intp
-typedef Ndarray_DIM_Type const* Ndarray_DIMS_Type;
-#define Ndarray_dtype_size(x) sizeof(float)
-#define Ndarray_SIZE PyArray_SIZE
-#define Ndarray_NewDims(nd, dims) (PyArray_SimpleNew(nd, dims, NPY_FLOAT32))
-#define Ndarray_Copy(x) (PyArray_FromArray(x, NULL, NPY_ARRAY_OUT_ARRAY | NPY_ARRAY_ENSURECOPY))
-/*
-    // matrices are in column-major form
-	int sgemm_(char *transa, char *transb,
-		integer *m, integer *n, integer *k,
-		real *alpha, real *a, integer *lda,
-		real *b, integer *ldb, real *beta,
-		real *c, integer *ldc);
-
-	Cast to (float*) because we might have the C-style declaration incorrectly in the C++ scope.
-*/
-#define Ndarray_sgemm(\
-	transpose_A, transpose_B, \
-	m, n, k, alpha, A, lda, B, ldb, beta, C, ldc) \
-	{ \
-		char transa = transpose_A, transb = transpose_B; \
-		int m_ = m, n_ = n, k_ = k, lda_ = lda, ldb_ = ldb, ldc_ = ldc; \
-		sgemm_(&transa, &transb, \
-			&m_, &n_, &k_, alpha, (float*) A, &lda_, (float*) B, &ldb_, beta, C, &ldc_); \
-	}
-
-static inline void* device_malloc(size_t size) { return malloc(size); }
-static inline void device_free(void* ptr) { free(ptr); }
-#endif
-
-#define HANDLE_LAST_ERROR() (0)
+#define HANDLE_LAST_ERROR() {}
 
 #define Ndarray_memcpy(y, x, size) (memcpy(y, x, size))
 #define Ndarray_memset(s, c, size) (memset(s, c, size))
@@ -751,19 +686,9 @@ struct _KernelLoop {
 #endif
 
 
-Ndarray* Ndarray_uninitialized_like(Ndarray* a) {
-	Ndarray_DIMS_Type dim = Ndarray_HOST_DIMS(a);
-#if TENSORFLOW
-	Ndarray* res = (Ndarray*) Ndarray_NewDims(Ndarray_NDIM(a), dim);
-#else
-	Ndarray* res = (Ndarray*) Ndarray_NewDims(Ndarray_NDIM(a), const_cast<Ndarray_DIM_Type*>(dim));
-#endif
-	return res;
-}
-
-long Ndarray_get_n_total_elements(Ndarray* a) {
-	long c = 1;
-	for(long i = 0; i < Ndarray_NDIM(a); ++i)
+int64_t Ndarray_get_n_total_elements(Ndarray* a) {
+	int64_t c = 1;
+	for(int i = 0; i < Ndarray_NDIM(a); ++i)
 		c *= Ndarray_DIMS(a)[i];
 	return c;
 }
@@ -849,17 +774,22 @@ void _free(void* ptr) {
         context->device()->GetAllocator(AllocatorAttributes());
     allocator->DeallocateRaw(ptr);
 }
-#define device_malloc Context(CONTEXT_ARGS)._malloc
-#define device_free Context(CONTEXT_ARGS)._free
+
+#elif TORCH
 
 #if CUDA
-cublasHandle_t _handle() {
-    assert("not available" && 0);
-    return NULL;
-}
-#define handle Context(CONTEXT_ARGS)._handle()
-#endif
-#endif
+void* _malloc(size_t num_bytes) { return c10::cuda::CUDACachingAllocator::raw_alloc(num_bytes); }
+void _free(void* ptr) { c10::cuda::CUDACachingAllocator::raw_delete(ptr); }
+#else  // not CUDA
+void* _malloc(size_t num_bytes) { return c10::GetCPUAllocator()->raw_allocate(num_bytes); }
+void _free(void* ptr) { c10::GetCPUAllocator()->raw_deallocate(ptr); }
+#endif  // CUDA
+
+#endif  // TENSORFLOW or TORCH
+
+
+#define device_malloc Context(CONTEXT_ARGS)._malloc
+#define device_free Context(CONTEXT_ARGS)._free
 
 
 //C[x] += A[x]*B[x]

@@ -3,10 +3,11 @@ Native code compiler
 """
 
 from __future__ import annotations
-from typing import Optional, List
+from typing import Optional, Union, Sequence, List, Tuple, Dict
 import typing
 import os
 import sys
+import shutil
 
 from . import basic as util
 
@@ -17,44 +18,45 @@ class NativeCodeCompiler:
     """
 
     CacheDirName = "returnn_native"
-    CollectedCompilers = None  # type: Optional[List[NativeCodeCompiler]]
+    CollectedCompilers: Optional[List[NativeCodeCompiler]] = None
 
     def __init__(
         self,
-        base_name,
-        code_version,
-        code,
-        is_cpp=True,
-        c_macro_defines=None,
-        ld_flags=None,
-        include_paths=(),
-        include_deps=None,
-        static_version_name=None,
-        should_cleanup_old_all=True,
-        should_cleanup_old_mydir=False,
-        use_cxx11_abi=False,
-        log_stream=None,
-        verbose=False,
+        base_name: str,
+        *,
+        code_version: Union[int, Tuple[int, ...]] = 1,
+        code: str,
+        is_cpp: bool = True,
+        c_macro_defines: Optional[Dict[str, Union[str, int, None]]] = None,
+        ld_flags: Optional[Sequence[str]] = None,
+        include_paths: Optional[Sequence[str]] = (),
+        include_deps: Optional[Sequence[str]] = None,
+        static_version_name: Optional[str] = None,
+        should_cleanup_old_all: bool = True,
+        should_cleanup_old_mydir: bool = False,
+        use_cxx11_abi: bool = False,
+        log_stream: Optional[typing.TextIO] = None,
+        verbose: bool = False,
     ):
         """
-        :param str base_name: base name for the module, e.g. "zero_out"
-        :param int|tuple[int] code_version: check for the cache whether to reuse
-        :param str code: the source code itself
-        :param bool is_cpp: if False, C is assumed
-        :param dict[str,str|int|None]|None c_macro_defines: e.g. {"TENSORFLOW": 1}
-        :param list[str]|None ld_flags: e.g. ["-lblas"]
-        :param list[str]|tuple[str] include_paths:
-        :param list[str]|None include_deps: if provided and an existing lib file,
+        :param base_name: base name for the module, e.g. "zero_out"
+        :param code_version: check for the cache whether to reuse
+        :param code: the source code itself
+        :param is_cpp: if False, C is assumed
+        :param c_macro_defines: e.g. {"TENSORFLOW": 1}
+        :param ld_flags: e.g. ["-lblas"]
+        :param include_paths:
+        :param include_deps: if provided and an existing lib file,
             we will check if any dependency is newer
             and we need to recompile. we could also do it automatically via -MD but that seems overkill and too slow.
-        :param str|None static_version_name: normally, we use .../base_name/hash as the dir
+        :param static_version_name: normally, we use .../base_name/hash as the dir
             but this would use .../base_name/static_version_name.
-        :param bool should_cleanup_old_all: whether we should look in the cache dir
+        :param should_cleanup_old_all: whether we should look in the cache dir
             and check all ops if we can delete some old ones which are older than some limit
             (self._cleanup_time_limit_days)
-        :param bool should_cleanup_old_mydir: whether we should delete our op dir before we compile there.
-        :param typing.TextIO|None log_stream: file stream for print statements
-        :param bool verbose: be slightly more verbose
+        :param should_cleanup_old_mydir: whether we should delete our op dir before we compile there.
+        :param log_stream: file stream for print statements
+        :param verbose: be slightly more verbose
         """
         if self.CollectedCompilers is not None:
             self.CollectedCompilers.append(self)
@@ -69,6 +71,7 @@ class NativeCodeCompiler:
         self.ld_flags = ld_flags or []
         self.include_deps = include_deps
         self.static_version_name = static_version_name
+        self.use_cxx11_abi = use_cxx11_abi
         self._code_hash = self._make_code_hash()
         self._info_dict = self._make_info_dict()
         self._hash = self._make_hash()
@@ -76,7 +79,6 @@ class NativeCodeCompiler:
         if should_cleanup_old_all:
             self._cleanup_old()
         self._should_cleanup_old_mydir = should_cleanup_old_mydir
-        self.use_cxx11_abi = use_cxx11_abi
         self._log_stream = log_stream
         if self.verbose:
             print("%s: %r" % (self.__class__.__name__, self), file=log_stream)
@@ -157,7 +159,16 @@ class NativeCodeCompiler:
         assert isinstance(res, dict)
         return res
 
-    _relevant_info_keys = ("code_version", "code_hash", "c_macro_defines", "ld_flags", "compiler_bin", "platform")
+    _relevant_info_keys = (
+        "code_version",
+        "code_hash",
+        "c_macro_defines",
+        "ld_flags",
+        "compiler_bin",
+        "platform",
+        "use_cxx11_abi",
+        "cpp_version",
+    )
 
     def _make_info_dict(self):
         """
@@ -174,6 +185,8 @@ class NativeCodeCompiler:
             "ld_flags": self.ld_flags,
             "compiler_bin": self._get_compiler_bin(),
             "platform": platform.platform(),
+            "use_cxx11_abi": self.use_cxx11_abi,
+            "cpp_version": self.cpp_version,
         }
 
     def _make_code_hash(self):
@@ -251,8 +264,8 @@ class NativeCodeCompiler:
         :rtype: str
         """
         if self.is_cpp:
-            return "g++"
-        return "gcc"
+            return get_cpp_bin()
+        return get_cc_bin()
 
     def _transform_compiler_opts(self, opts):
         """
@@ -261,27 +274,35 @@ class NativeCodeCompiler:
         """
         return opts
 
+    cpp_version = 11
+
     def _extra_common_opts(self):
         """
         :rtype: list[str]
         """
         if self.is_cpp:
-            return ["-std=c++11"]
+            return [f"-std=c++{self.cpp_version}"]
         return []
 
-    @classmethod
-    def _transform_ld_flag(cls, opt):
-        """
-        :param str opt:
-        :rtype: str
-        """
+    def _transform_ld_flags(self, opts: Sequence[str]) -> Sequence[str]:
+        res = []
+        for opt in opts:
+            if opt.startswith("-l") or opt.startswith("-L"):
+                res.append(opt)
+            else:
+                res.append("-Wl," + opt)
+        opts = res
         if sys.platform == "darwin":
-            # It seems some versions of MacOS ld cannot handle the `-l:filename` argument correctly.
-            # E.g. TensorFlow 1.14 incorrectly uses this.
-            # https://github.com/tensorflow/tensorflow/issues/30564
-            if opt.startswith("-l:lib") and opt.endswith(".dylib"):
-                return "-l%s" % opt[len("-l:lib") : -len(".dylib")]
-        return opt
+            res = []
+            for opt in opts:
+                # It seems some versions of MacOS ld cannot handle the `-l:filename` argument correctly.
+                # E.g. TensorFlow 1.14 incorrectly uses this.
+                # https://github.com/tensorflow/tensorflow/issues/30564
+                if opt.startswith("-l:lib") and opt.endswith(".dylib"):
+                    opt = "-l%s" % opt[len("-l:lib") : -len(".dylib")]
+                res.append(opt)
+            return res
+        return opts
 
     def _maybe_compile_inner(self):
         # Directory should be created by the locking mechanism.
@@ -300,7 +321,7 @@ class NativeCodeCompiler:
         common_opts += ["-D%s=%s" % item for item in sorted(self.c_macro_defines.items())]
         common_opts += ["-g"]
         opts = common_opts + [self._c_filename, "-o", self._so_filename]
-        opts += list(map(self._transform_ld_flag, self.ld_flags))
+        opts += self._transform_ld_flags(self.ld_flags)
         cmd_bin = self._get_compiler_bin()
         cmd_args = [cmd_bin] + opts
         from subprocess import Popen, PIPE, STDOUT, CalledProcessError
@@ -348,3 +369,37 @@ class NativeCodeCompiler:
         """
         self._maybe_compile()
         return self._so_filename
+
+
+def get_cc_bin() -> str:
+    """
+    :return: path
+    """
+    cc_bin = os.environ.get("CC", "")
+    if cc_bin:
+        if cc_bin.startswith("/"):
+            return cc_bin
+        cc_bin = shutil.which(cc_bin)
+        if cc_bin:
+            return cc_bin
+    cc_bin = shutil.which("cc") or shutil.which("clang") or shutil.which("gcc")
+    if not cc_bin:
+        raise RuntimeError("Cannot find C compiler (cc, clang, gcc) in PATH")
+    return cc_bin
+
+
+def get_cpp_bin() -> str:
+    """
+    :return: path
+    """
+    cpp_bin = os.environ.get("CXX", "")
+    if cpp_bin:
+        if cpp_bin.startswith("/"):
+            return cpp_bin
+        cpp_bin = shutil.which(cpp_bin)
+        if cpp_bin:
+            return cpp_bin
+    cpp_bin = shutil.which("c++") or shutil.which("cpp") or shutil.which("clang++") or shutil.which("g++")
+    if not cpp_bin:
+        raise RuntimeError("Cannot find C++ compiler (c++, cpp, clang++, g++) in PATH")
+    return cpp_bin

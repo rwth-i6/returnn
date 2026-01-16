@@ -275,7 +275,7 @@ class TorchBackend(Backend[torch.Tensor]):
         :return: tensor
         """
         assert len(dims) >= 2
-        first_axis = min(source.dims.index(d) for d in dims)
+        first_axis = min([source.dims.index(d) for d in dims])
         pre_dims = source.dims[:first_axis]
         post_dims = [d for d in source.dims if d not in dims and d not in pre_dims]
         source = source.copy_transpose(tuple(pre_dims) + tuple(dims) + tuple(post_dims), allow_int=False)
@@ -884,7 +884,7 @@ class TorchBackend(Backend[torch.Tensor]):
         :param perm: e.g. [0, 2, 1]
         :return: permuted (transposed) raw tensor; wraps torch.permute
         """
-        if all(p == i for i, p in enumerate(perm)):
+        if all([p == i for i, p in enumerate(perm)]):
             return raw_tensor
         return torch.permute(raw_tensor, tuple(perm))
 
@@ -1788,7 +1788,7 @@ class TorchBackend(Backend[torch.Tensor]):
         remaining_dims = [d for d in tensor.dims if d not in mask.dims]
         tensor_templ_dims = tuple(dims) + tuple(remaining_dims)
         in_raw = tensor.copy_compatible_to_dims_raw(tensor_templ_dims)
-        if any(in_raw.shape[i] == 1 < d.get_dim_value() for i, d in enumerate(dims)):
+        if any([in_raw.shape[i] == 1 < d.get_dim_value() for i, d in enumerate(dims)]):
             # unbroadcast
             in_raw = in_raw.expand([d.get_dim_value() for d in tensor_templ_dims])
         if mask.raw_tensor.device.type == "meta":

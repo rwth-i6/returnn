@@ -86,6 +86,7 @@ class LmDataset(CachedDataset2):
         delayed_seq_data_start_symbol="[START]",
         dtype: Optional[str] = None,
         tag_prefix: Optional[str] = None,
+        _debug_limit_line_count: Optional[int] = None,
         **kwargs,
     ):
         """
@@ -138,6 +139,8 @@ class LmDataset(CachedDataset2):
           delayed_seq_data_start_symbol + original_sequence[:-1].
         :param str delayed_seq_data_start_symbol: used for add_delayed_seq_data.
         :param dtype: explicit dtype. if not given, automatically determined based on the number of labels.
+        :param tag_prefix: prefix for sequence tags. by default "line-".
+        :param _debug_limit_line_count:
         """
         super(LmDataset, self).__init__(**kwargs)
 
@@ -316,6 +319,10 @@ class LmDataset(CachedDataset2):
         self.num_skipped = 0
         self.num_unknown = 0
 
+        if _debug_limit_line_count is None:
+            _debug_limit_line_count = _get_debug_limit_line_count()
+        self._debug_limit_line_count = _debug_limit_line_count
+
     def _lazy_init(self):
         if self._orths_offsets_and_lens is not None:
             return
@@ -340,6 +347,9 @@ class LmDataset(CachedDataset2):
         lens_per_corpus_file = []
         start_time = time.time()
         last_print_time = start_time
+        debug_limit_line_count = self._debug_limit_line_count
+        debug_limit_est_total = 0
+        debug_limit_hit = False
 
         def _init_tmp_file():
             nonlocal tmp_file, tmp_file_orth_files_index
@@ -368,12 +378,15 @@ class LmDataset(CachedDataset2):
 
             if time.time() - last_print_time > 10:
                 print(
-                    f"  ... loaded {len(self._orths_offsets_and_lens)} sequences,"
+                    f"  ... loaded {len(orths)} sequences,"
                     f" {human_bytes_size(total_bytes_read)},"
                     f" after {hms(time.time() - start_time)}",
                     file=log.v4,
                 )
                 last_print_time = time.time()
+
+            if debug_limit_line_count is not None and len(orths) - prev_orth_len >= debug_limit_line_count:
+                raise _ReachedDebugLimitLineCount()
 
         # If a list of files is provided, concatenate all.
         if isinstance(corpus_file, str):
@@ -383,37 +396,46 @@ class LmDataset(CachedDataset2):
         for file_name in corpus_file:
             if self._use_cache_manager:
                 file_name = cf(file_name)
-            if _is_bliss(file_name):
-                _init_tmp_file()
-                _iter_bliss(filename=file_name, callback=_tmp_file_add_line, decode=False)
-            elif file_name.endswith(".gz"):
-                _init_tmp_file()
-                _iter_txt(
-                    filename=file_name,
-                    callback=_tmp_file_add_line,
-                    skip_empty_lines=self._skip_empty_lines,
-                    decode=False,
-                )
-            else:  # Raw txt file
-                # Directly mmap the file.
-                # We just need to scan once through it to find line offsets.
-                file = open(file_name, "rb")
-                file_mmap = mmap.mmap(file.fileno(), 0, flags=mmap.MAP_PRIVATE)
-                file_index = len(self._orth_files)
-                self._orth_files.append(file)
-                self._orth_mmaps.append(file_mmap)
 
-                pos = 0
-                while True:
-                    next_new_line = file_mmap.find(b"\n", pos)
-                    if next_new_line == -1:
-                        break
-                    line_len = next_new_line - pos
-                    if line_len or not self._skip_empty_lines:
-                        orths.append((file_index, pos, line_len))
-                    total_bytes_read += line_len + 1
-                    pos = next_new_line + 1
-                    _maybe_report_status()
+            try:
+                if _is_bliss(file_name):
+                    _init_tmp_file()
+                    _iter_bliss(filename=file_name, callback=_tmp_file_add_line, decode=False)
+                elif file_name.endswith(".gz"):
+                    _init_tmp_file()
+                    _iter_txt(
+                        filename=file_name,
+                        callback=_tmp_file_add_line,
+                        skip_empty_lines=self._skip_empty_lines,
+                        decode=False,
+                    )
+                else:  # Raw txt file
+                    # Directly mmap the file.
+                    # We just need to scan once through it to find line offsets.
+                    file = open(file_name, "rb")
+                    file_mmap = mmap.mmap(file.fileno(), 0, flags=mmap.MAP_PRIVATE)
+                    file_index = len(self._orth_files)
+                    self._orth_files.append(file)
+                    self._orth_mmaps.append(file_mmap)
+
+                    pos = 0
+                    while True:
+                        next_new_line = file_mmap.find(b"\n", pos)
+                        if next_new_line == -1:
+                            break
+                        line_len = next_new_line - pos
+                        if line_len or not self._skip_empty_lines:
+                            orths.append((file_index, pos, line_len))
+                        total_bytes_read += line_len + 1
+                        pos = next_new_line + 1
+                        _maybe_report_status()
+
+            except _ReachedDebugLimitLineCount as exc:
+                assert exc.estimated_total_num_seqs is not None  # currently only for _iter_txt implemented
+                debug_limit_est_total += exc.estimated_total_num_seqs
+                debug_limit_hit = True
+            else:  # iteration completed without hitting debug limit
+                debug_limit_est_total += len(orths) - prev_orth_len
 
             lens_per_corpus_file.append(len(orths) - prev_orth_len)
             prev_orth_len = len(orths)
@@ -446,6 +468,18 @@ class LmDataset(CachedDataset2):
             f" in {hms(time.time() - start_time)}",
             file=log.v4,
         )
+
+        if debug_limit_hit:
+            est_frac_loaded = len(self._orths_offsets_and_lens) / debug_limit_est_total
+            new_partition_epoch = max(int(self.partition_epoch * est_frac_loaded), 1)
+            print(
+                f"LmDataset: debug limit of {debug_limit_line_count} lines (per file) hit,"
+                f" estimated total num seqs {debug_limit_est_total},"
+                f" loaded {len(self._orths_offsets_and_lens)}, {est_frac_loaded:.2%},"
+                f" adjusting partition_epoch from {self.partition_epoch} to {new_partition_epoch}",
+                file=log.v4,
+            )
+            self.partition_epoch = new_partition_epoch
 
         # It's only estimated because we might filter some out or so.
         self._estimated_num_seqs = len(self._orths_offsets_and_lens) // self.partition_epoch
@@ -784,19 +818,34 @@ def _iter_txt(
     :param decode:
     """
     f = open(filename, "rb")
+    f_ = f
     if filename.endswith(".gz"):
         f = gzip.GzipFile(fileobj=f)
 
-    for line in f:
-        if decode:
-            try:
-                line = line.decode("utf8")
-            except UnicodeDecodeError:
-                line = line.decode("latin_1")  # or iso8859_15?
-        line = line.strip()
-        if skip_empty_lines and not line:
-            continue
-        callback(line)
+    count = 0
+    try:
+        for line in f:
+            if decode:
+                try:
+                    line = line.decode("utf8")
+                except UnicodeDecodeError:
+                    line = line.decode("latin_1")  # or iso8859_15?
+            line = line.strip()
+            if skip_empty_lines and not line:
+                continue
+            count += 1
+            callback(line)
+
+    except _ReachedDebugLimitLineCount as exc:
+        print(f"Reached debug limit line count for {filename}, stopping early", file=log.v4)
+        pos = f_.tell()
+        f_.seek(0, os.SEEK_END)
+        size = f_.tell()
+        print(f"  stopped at byte {human_bytes_size(pos)} / {human_bytes_size(size)}", file=log.v4)
+        estimated_num_seqs = int(count * (size / pos))
+        print(f"  estimated total num seqs: {estimated_num_seqs}", file=log.v4)
+        exc.estimated_total_num_seqs = estimated_num_seqs
+        raise
 
 
 def iter_corpus(
@@ -2515,6 +2564,25 @@ def get_post_processor_function(opts):
         return text
 
     return chained_post_processors
+
+
+def _get_debug_limit_line_count() -> Optional[int]:
+    """
+    :return: if set, limit to this many lines for debugging
+    """
+    from returnn.config import get_global_config
+
+    config = get_global_config(raise_exception=False)
+    if not config:
+        return None
+
+    return config.int("lm_dataset_debug_limit_line_count", None)
+
+
+class _ReachedDebugLimitLineCount(Exception):
+    """internal exception to signal reached debug limit line count"""
+
+    estimated_total_num_seqs: Optional[int] = None
 
 
 def _main():
