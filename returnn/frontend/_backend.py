@@ -631,6 +631,25 @@ class Backend(Generic[T]):
         raise NotImplementedError
 
     @staticmethod
+    def have_edit_distance() -> bool:
+        """
+        :return: whether we have an edit_distance implementation
+        """
+        return False
+
+    @staticmethod
+    def edit_distance(a: Tensor, a_spatial_dim: Dim, b: Tensor, b_spatial_dim: Dim) -> Tensor:
+        """
+        :param a: [B,Ta]
+        :param a_spatial_dim: Ta
+        :param b: [B,Tb]
+        :param b_spatial_dim: Tb
+        :param dtype:
+        :return: [B]
+        """
+        raise NotImplementedError
+
+    @staticmethod
     def have_sequence_mask_raw() -> bool:
         """
         :return: whether we have a sequence_mask_raw implementation

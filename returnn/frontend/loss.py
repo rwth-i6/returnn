@@ -141,13 +141,18 @@ def edit_distance(a: Tensor, a_spatial_dim: Dim, b: Tensor, b_spatial_dim: Dim, 
     :param dtype:
     :return: [B]
     """
-    import numpy  # just for iinfo on dtype to get max value
+    # noinspection PyProtectedMember
+    backend = a._raw_backend
+    if backend.have_edit_distance():
+        return backend.edit_distance(a, a_spatial_dim, b, b_spatial_dim)
+
+    from numpy import iinfo
 
     # The axis permutation is just an efficiency optimization.
     a = a.copy_transpose([a_spatial_dim] + a.remaining_dims(a_spatial_dim))
     b = b.copy_transpose([b_spatial_dim] + b.remaining_dims(b_spatial_dim))
     dev = a.device
-    max_dist_err = numpy.iinfo(dtype).max
+    max_dist_err = iinfo(dtype).max
     n_a_max_len = a_spatial_dim.get_dim_value()
     n_b_max_len = b_spatial_dim.get_dim_value()
     if int(n_a_max_len) < int(n_b_max_len):
