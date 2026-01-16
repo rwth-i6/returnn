@@ -223,7 +223,7 @@ class OpMaker:
 
             code_set_contiguous = ""
             for v in in_info:
-                if v.get("want_contiguous", False):
+                if v.get("need_contiguous", False) and _schema_type_str(v) == "Tensor":
                     code_set_contiguous += dedent(f"""\
                         if(!{map_name(v)}.is_contiguous()) {{
                             {map_name(v)} = {map_name(v)}.contiguous();
