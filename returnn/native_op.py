@@ -5341,7 +5341,10 @@ class EditDistanceOp(NativeOpGenBase):
             sub_cost = last1_dist[last1_idx];
             if(a[batch_idx * n_a_max_len + t_a - 1] != b[batch_idx * n_b_max_len + t_b - 1])
               ++sub_cost;
-            //printf("t_a %i, t_b %i, del %i, ins %i, sub %i\\n", t_a, t_b, del_cost, ins_cost, sub_cost);
+            /*printf("t_a %i, t_b %i, a %d, b %d, del %i, ins %i, sub %i\\n",
+                t_a, t_b,
+                a[batch_idx * n_a_max_len + t_a - 1], b[batch_idx * n_b_max_len + t_b - 1],
+                del_cost, ins_cost, sub_cost);*/
             int min_cost = del_cost;
             if(min_cost > ins_cost) min_cost = ins_cost;
             if(min_cost > sub_cost) min_cost = sub_cost;
