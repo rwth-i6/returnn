@@ -4,7 +4,6 @@ RETURNN frontend (returnn.frontend) tests
 
 from __future__ import annotations
 from typing import Union, Tuple
-from build.lib.returnn.torch.frontend._backend import TorchBackend
 import numpy as np
 import numpy.testing
 import _setup_test_env  # noqa
@@ -505,7 +504,7 @@ def test_rope_causal_self_att():
 
     trace_only_fallback = [
         *trace_all,
-        # fallback is executed first, and sinusoidal is cached. Therefore we only test for fallback
+        # fallback is executed first, and sinusoidal is cached. Therefore we only test in fallback
         (
             (rf.sinusoidal_encoding, 0, "div_term", 0),
             (LlamaRotaryEmbedding.forward, 0, "inv_freq_expanded", 0),
@@ -553,6 +552,7 @@ def test_rope_causal_self_att():
 
 def test_causal_self_att_variants_single_step_vs_full_seq():
     from returnn.tensor import single_step_dim
+    from returnn.torch.frontend import TorchBackend
 
     time_dim = Dim(Tensor("time", [batch_dim], dtype="int32"))
     in_dim = Dim(7 * 2, name="in")
