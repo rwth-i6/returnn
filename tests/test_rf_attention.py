@@ -666,6 +666,9 @@ def test_relative_positional_encoding_cross():
 
 
 def test_rel_pos_self_attention():
+    import torch
+    from returnn.torch.frontend import TorchBackend
+
     time_dim = Dim(Tensor("time", [batch_dim], dtype="int32"))
     in_dim = Dim(8, name="in")
     extern_data = TensorDict(
@@ -724,7 +727,15 @@ def test_rel_pos_self_attention():
 
     run_model(extern_data, lambda *, epoch, step: _Net(), _forward_step)
     check_batching = True
-    run_model(extern_data, lambda *, epoch, step: _Net(), _forward_step, test_tensorflow=False)
+
+    res = {}
+    for force_fallback_sdpa in [True, False]:
+        TorchBackend.ForceFallbackSDPA = force_fallback_sdpa
+        res[force_fallback_sdpa] = run_model(
+            extern_data, lambda *, epoch, step: _Net(), _forward_step, test_tensorflow=False
+        )
+
+    torch.testing.assert_close(res[False].data["output"].raw_tensor, res[True].data["output"].raw_tensor)
 
 
 def test_sinusoidal_positional_encoding():
@@ -754,6 +765,9 @@ def test_sinusoidal_positional_encoding():
 
 
 def test_CausalSelfAttention():
+    from returnn.torch.frontend import TorchBackend
+    import torch
+
     time_dim = Dim(Tensor("time", [batch_dim], dtype="int32"))
     feat_dim = Dim(8, name="feat")
     key_dim = Dim(6, name="key")
@@ -772,21 +786,26 @@ def test_CausalSelfAttention():
         out.mark_as_default_output(shape=(batch_dim, time_dim, value_dim))
         model.qkv.weight.mark_as_output("qkv_weight", shape=[feat_dim, 2 * key_dim + value_dim])
 
-    res = run_model(
-        extern_data,
-        lambda *, epoch, step: rf.CausalSelfAttention(
-            in_dim=feat_dim,
-            proj_dim=None,
-            key_dim_total=key_dim,
-            value_dim_total=value_dim,
-            num_heads=2,
-            with_bias=False,
-        ),
-        _forward_step,
-        # Some problem with dimension tags currently in the TF-layers-dict backend...
-        # Anyway, we compare to the TF SelfAttentionLayer with attention_left_only=True below.
-        test_tensorflow=False,
-    )
+    res = {}
+    for force_fallback_sdpa in [True, False]:
+        TorchBackend.ForceFallbackSDPA = force_fallback_sdpa
+        res[force_fallback_sdpa] = run_model(
+            extern_data,
+            lambda *, epoch, step: rf.CausalSelfAttention(
+                in_dim=feat_dim,
+                proj_dim=None,
+                key_dim_total=key_dim,
+                value_dim_total=value_dim,
+                num_heads=2,
+                with_bias=False,
+            ),
+            _forward_step,
+            # Some problem with dimension tags currently in the TF-layers-dict backend...
+            # Anyway, we compare to the TF SelfAttentionLayer with attention_left_only=True below.
+            test_tensorflow=False,
+        )
+
+    torch.testing.assert_close(res[False].data["output"].raw_tensor, res[True].data["output"].raw_tensor)
 
     extern_data.reset_content()
 
@@ -819,14 +838,14 @@ def test_CausalSelfAttention():
         )
         net.construct_from_dict(net_dict)
         layer = net.get_default_output_layer()
-        layer.params["QKV"].load(res.data["qkv_weight"].raw_tensor, session=session)
+        layer.params["QKV"].load(res[False].data["qkv_weight"].raw_tensor, session=session)
         out = layer.output.copy_transpose([batch_dim, time_dim, value_dim]).copy_masked(0.0)
 
         out_tf_v = session.run(
             out.raw_tensor,
             feed_dict={
-                net.extern_data.data["data"].placeholder: res.data["data"].raw_tensor,
-                net.extern_data.data["data"].dims[1].dyn_size_ext.raw_tensor: res.data["seq_len"].raw_tensor,
+                net.extern_data.data["data"].placeholder: res[False].data["data"].raw_tensor,
+                net.extern_data.data["data"].dims[1].dyn_size_ext.raw_tensor: res[False].data["seq_len"].raw_tensor,
             },
         )
-        numpy.testing.assert_almost_equal(res.data["output"].raw_tensor, out_tf_v, decimal=5)
+        numpy.testing.assert_almost_equal(res[False].data["output"].raw_tensor, out_tf_v, decimal=5)
