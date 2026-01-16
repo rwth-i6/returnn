@@ -4,6 +4,7 @@ RETURNN frontend (returnn.frontend) tests
 
 from __future__ import annotations
 from typing import Union, Tuple
+from build.lib.returnn.torch.frontend._backend import TorchBackend
 import numpy as np
 import numpy.testing
 import _setup_test_env  # noqa
@@ -326,6 +327,7 @@ def test_rope_causal_self_att():
     from returnn.frontend.conversions.hf_llama import (
         import_params_hf_llama_att_to_rf_rotary_att,
     )
+    from returnn.frontend._backend import Backend
 
     from transformers.models.llama.modeling_llama import (
         LlamaAttention,
@@ -373,6 +375,7 @@ def test_rope_causal_self_att():
             rf.RotaryPosCausalSelfAttention.__call__,
             rf.sinusoidal_encoding,
             rf.scaled_dot_product_attention,
+            Backend.scaled_dot_product_attention,
             rf_apply_rope,
         ],
         (Tensor, Dim),
@@ -393,6 +396,7 @@ def test_rope_causal_self_att():
             rf.RotaryPosCausalSelfAttention.__call__,
             rf.sinusoidal_encoding,
             rf.scaled_dot_product_attention,
+            Backend.scaled_dot_product_attention,
             rf_apply_rope,
         ],
         (Tensor, Dim),
@@ -559,18 +563,20 @@ def test_rope_causal_self_att():
                 name=name,
             ),
         ),
-        # TODO These traces don't work for now, as the variables are now created inside torch...
-        # (
-        #     (rf.dot_attention, 0, "energy", 0),
-        #     (eager_attention_forward, 0, "attn_weights", 0),
-        #     (batch_dim, model_rf.num_heads, seq_dim, "axis"),
-        # ),
-        # (
-        #     (rf.dot_attention, 0, "att_weights", 0),
-        #     (LlamaAttention.forward, 0, "attn_weights", -1),
-        #     (batch_dim, model_rf.num_heads, seq_dim, "axis"),
-        # ),
+        (
+            (Backend.scaled_dot_product_attention, 0, "energy", 0),
+            (eager_attention_forward, 0, "attn_weights", 0),
+            (batch_dim, model_rf.num_heads, seq_dim, "kv_spatial_dim"),
+        ),
+        (
+            (Backend.scaled_dot_product_attention, 0, "att_weights", 0),
+            (LlamaAttention.forward, 0, "attn_weights", -1),
+            (batch_dim, model_rf.num_heads, seq_dim, "kv_spatial_dim"),
+        ),
     ]
+
+    assert Backend.scaled_dot_product_attention not in trace_rf.captured_locals
+    assert Backend.scaled_dot_product_attention in trace_rf_fallback.captured_locals
 
     check_py_traces_rf_to_pt_equal(
         trace_rf.captured_locals, trace_hf.captured_locals, trace_all
@@ -654,28 +660,42 @@ def test_causal_self_att_variants_single_step_vs_full_seq():
         _make_rel_pos_causal_self_att,
     ]
 
-    for get_model in models:
-        print("> Testing model:", get_model.__name__)
-        res = run_model(
-            extern_data,
-            get_model,
-            _forward_step,
-            # TF needs TensorArray unstack, not implemented yet
-            test_tensorflow=False,
-        )
-
-        # Check that the single-step and the seq-level output are the same.
-        res_seq_level = res.data["out_seq_level"].raw_tensor
-        for key in ["out_seq_level_explicit_initial_state", "out_single_steps"]:
-            res_other = res.data[key].raw_tensor
-            assert res_seq_level.shape == res_other.shape
-            numpy.testing.assert_allclose(
-                res_other,
-                res_seq_level,
-                atol=1e-5,
-                rtol=1e-5,
-                err_msg=f"output {key} differs",
+    resdict = {}
+    for use_fallback in [True, False]:
+        TorchBackend.ForceFallbackSDPA = use_fallback
+        print("=== ForceFallbackSDPA =", use_fallback, "===")
+        for get_model in models:
+            print("> Testing model:", get_model.__name__)
+            res = run_model(
+                extern_data,
+                get_model,
+                _forward_step,
+                # TF needs TensorArray unstack, not implemented yet
+                test_tensorflow=False,
             )
+            resdict.setdefault(get_model.__name__, {})[use_fallback] = res
+
+            # Check that the single-step and the seq-level output are the same.
+            res_seq_level = res.data["out_seq_level"].raw_tensor
+            for key in ["out_seq_level_explicit_initial_state", "out_single_steps"]:
+                res_other = res.data[key].raw_tensor
+                assert res_seq_level.shape == res_other.shape
+                numpy.testing.assert_allclose(
+                    res_other,
+                    res_seq_level,
+                    atol=1e-5,
+                    rtol=1e-5,
+                    err_msg=f"output {key} differs",
+                )
+    # test fallback & no-fallback
+    for name, v in resdict.items():
+        numpy.testing.assert_allclose(
+            v[True].data["out_seq_level"].raw_tensor,
+            v[False].data["out_seq_level"].raw_tensor,
+            atol=1e-5,
+            rtol=1e-5,
+            err_msg=f"output {name} differs",
+        )
 
 
 def test_relative_positional_encoding():
