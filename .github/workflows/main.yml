@@ -205,6 +205,7 @@ jobs:
           pip install --user --progress-bar=off "numpy<2"
           if [[ $(pip show torch | grep "^Version:" | cut -d' ' -f2) != "${{ matrix.torch-version }}"* ]]; then
             # Free disk space first. Can run out of disk space otherwise.
+            pip freeze | grep nvidia | xargs -r pip uninstall -y
             pip uninstall -y torch
           fi
           pip install --user --progress-bar=off --upgrade torch==${{ matrix.torch-version }}
