@@ -721,6 +721,65 @@ def test_ctc_loss_broadcast():
     )
 
 
+def test_ctc_best_path():
+    time_dim = Dim(Tensor("time", [batch_dim], dtype="int32"))
+    target_time_dim = Dim(Tensor("target_time", [batch_dim], dtype="int32"))
+    out_dim = Dim(11, name="classes")
+    out_wb_dim = out_dim + 1
+    extern_data = TensorDict(
+        {
+            "data": Tensor("data", [batch_dim, time_dim, out_wb_dim], dtype="float32", feature_dim=out_wb_dim),
+            "classes": Tensor("classes", [batch_dim, target_time_dim], dtype="int32", sparse_dim=out_dim),
+        }
+    )
+
+    def _forward_step(*, extern_data: TensorDict, **_kwargs):
+        logits = extern_data["data"]
+        targets = extern_data["classes"]
+        log_probs = rf.log_softmax(logits, axis=out_wb_dim)
+        log_probs.mark_as_output("log_probs", shape=[time_dim, batch_dim, out_wb_dim])
+        targets.mark_as_output("targets", shape=[batch_dim, target_time_dim])
+        alignment = rf.ctc_best_path(
+            logits=log_probs,
+            logits_normalized=True,
+            targets=targets,
+            input_spatial_dim=time_dim,
+            targets_spatial_dim=target_time_dim,
+            blank_index=out_wb_dim.dimension - 1,
+        )
+        alignment.mark_as_default_output(shape=[time_dim, batch_dim])
+
+    res = run_model(
+        extern_data,
+        lambda **_kwargs: rf.Module(),
+        _forward_step,
+        dyn_dim_min_sizes={time_dim: 4, target_time_dim: 2},
+        dyn_dim_max_sizes={time_dim: 11, target_time_dim: 5},
+        test_tensorflow=False,
+    )
+
+    from fsa_utils import py_viterbi
+    from returnn.util.fsa import get_ctc_fsa_fast_bw as get_ctc_fsa_fast_bw_np
+
+    # test equality
+    targets = res["targets"].raw_tensor.astype("int32")
+    target_seq_lens = res["targets"].dims[1].dyn_size.astype("int32")
+    blank_idx = out_wb_dim.dimension - 1
+    fsa = get_ctc_fsa_fast_bw_np(targets=targets, seq_lens=target_seq_lens, blank_idx=blank_idx)
+    assert fsa.start_end_states.shape == (2, len(target_seq_lens))
+    edges = fsa.edges.astype("int32")
+    weights = fsa.weights.astype("float32")
+    start_end_states = fsa.start_end_states.astype("int32")
+    log_probs = res["log_probs"].raw_tensor.astype("float32")
+    time_seq_lens = res["log_probs"].dims[0].dyn_size.astype("int32")
+    ref_alignment, _ = py_viterbi(
+        am_scores=log_probs, am_seq_len=time_seq_lens, edges=edges, weights=weights, start_end_states=start_end_states
+    )
+    res_alignment = res["output"].raw_tensor
+    assert ref_alignment.shape == res_alignment.shape
+    numpy.testing.assert_equal(ref_alignment, res_alignment)
+
+
 def test_edit_distance():
     import numpy
     import torch

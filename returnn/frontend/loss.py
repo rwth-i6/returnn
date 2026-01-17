@@ -8,7 +8,7 @@ from returnn.tensor import Tensor, Dim
 import returnn.frontend as rf
 
 
-__all__ = ["cross_entropy", "ctc_loss", "ctc_greedy_decode", "edit_distance"]
+__all__ = ["cross_entropy", "ctc_loss", "ctc_best_path", "ctc_greedy_decode", "edit_distance"]
 
 
 def cross_entropy(
@@ -94,6 +94,37 @@ def ctc_loss(
         blank_index=blank_index,
         max_approx=max_approx,
         use_native_op=use_native_op,
+    )
+
+
+def ctc_best_path(
+    *,
+    logits: Tensor,
+    logits_normalized: bool = False,
+    targets: Tensor,
+    input_spatial_dim: Dim,
+    targets_spatial_dim: Dim,
+    blank_index: int,
+) -> Tensor:
+    """
+    Calculates the CTC best path.
+
+    :param logits: (before softmax). shape [B...,input_spatial,C]
+    :param logits_normalized: whether the logits are already normalized (e.g. via log-softmax)
+    :param targets: sparse. shape [B...,targets_spatial] -> C
+    :param input_spatial_dim: spatial dim of input logits
+    :param targets_spatial_dim: spatial dim of targets
+    :param blank_index: vocab index of the blank symbol
+    :return: best path, shape [B...,targets_spatial] -> C
+    """
+    # noinspection PyProtectedMember
+    return logits._raw_backend.ctc_best_path(
+        logits=logits,
+        logits_normalized=logits_normalized,
+        targets=targets,
+        input_spatial_dim=input_spatial_dim,
+        targets_spatial_dim=targets_spatial_dim,
+        blank_index=blank_index,
     )
 
 

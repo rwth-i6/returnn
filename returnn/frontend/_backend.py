@@ -632,6 +632,21 @@ class Backend(Generic[T]):
         raise NotImplementedError
 
     @staticmethod
+    def ctc_best_path(
+        *,
+        logits: Tensor,
+        logits_normalized: bool = False,
+        targets: Tensor,
+        input_spatial_dim: Dim,
+        targets_spatial_dim: Dim,
+        blank_index: int,
+    ) -> Tensor:
+        """
+        Calculates the CTC best path.
+        """
+        raise NotImplementedError
+
+    @staticmethod
     def have_edit_distance() -> bool:
         """
         :return: whether we have an edit_distance implementation
