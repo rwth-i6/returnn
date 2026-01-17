@@ -644,7 +644,6 @@ class Backend(Generic[T]):
         :param a_spatial_dim: Ta
         :param b: [B,Tb]
         :param b_spatial_dim: Tb
-        :param dtype:
         :return: [B]
         """
         raise NotImplementedError
