@@ -67,10 +67,11 @@ jobs:
           # Install ESPnet. Fix Torch version (https://github.com/rwth-i6/returnn/issues/1770#issuecomment-3536630432).
           pip install --user --progress-bar=off "espnet==202506" "torch==${{ matrix.torch-version }}"  # last version w/ numpy<2
 
-      - name: Test Python/Numpy/TF versions.
+      - name: Test Python/Numpy/PyTorch/TF versions.
         run: |
           echo "Python env: $(type python) $(python --version)"
           python -c "import numpy; print('NumPy:', numpy.version.full_version)"
+          if ! python -c "import torch"; then python .github/workflows/_pytorch_collect_env.py; fi
           python -c "import torch; print('PyTorch:', torch.__version__, torch.__file__)"
           # torch.__version__ is for example "1.13.1+cu117"
           python -c "import torch; assert (torch.__version__ + '+').startswith('${{ matrix.torch-version }}+')"
@@ -212,10 +213,14 @@ jobs:
 
           pip install --user --progress-bar=off datasets
 
-      - name: Test Python/Numpy.
+      - name: Test Python/Numpy/PyTorch.
         run: |
           echo "Python env: $(type python) $(python --version)"
           python -c "import numpy; print('NumPy:', numpy.version.full_version)"
+          if ! python -c "import torch"; then python .github/workflows/_pytorch_collect_env.py; fi
+          python -c "import torch; print('PyTorch:', torch.__version__, torch.__file__)"
+          # torch.__version__ is for example "1.13.1+cu117"
+          python -c "import torch; assert (torch.__version__ + '+').startswith('${{ matrix.torch-version }}+')"
 
           echo "Pytest env:"
           python -m pytest --version
@@ -376,6 +381,7 @@ jobs:
         run: |
           echo "Python env: $(type python) $(python --version)"
           python -c "import numpy; print('NumPy:', numpy.version.full_version)"
+          if ! python -c "import torch"; then python .github/workflows/_pytorch_collect_env.py; fi
           python -c "import torch; print('PyTorch:', torch.__version__, torch.__file__)"
           # torch.__version__ is for example "1.13.1+cu117"
           python -c "import torch; assert (torch.__version__ + '+').startswith('${{ matrix.torch-version }}+')"
@@ -512,10 +518,11 @@ jobs:
           echo "Clean up cache pip dir..."
           rm -rf ~/.cache/pip || true
 
-      - name: Test Python/Numpy/PyTorch versions.
+      - name: Test Python/Numpy/PyTorch/TF versions.
         run: |
           echo "Python env: $(type python) $(python --version)"
           python -c "import numpy; print('NumPy:', numpy.version.full_version)"
+          if ! python -c "import torch"; then python .github/workflows/_pytorch_collect_env.py; fi
           python -c "import torch; print('PyTorch:', torch.__version__, torch.__file__)"
           # torch.__version__ is for example "1.13.1+cu117"
           python -c "import torch; assert (torch.__version__ + '+').startswith('${{ matrix.torch-version }}+')"
