@@ -64,6 +64,7 @@ def ctc_loss(
     targets_spatial_dim: Dim,
     blank_index: int,
     max_approx: bool = False,
+    use_native_op: Optional[bool] = None,
 ) -> Tensor:
     """
     Calculates the CTC loss.
@@ -80,6 +81,7 @@ def ctc_loss(
     :param targets_spatial_dim: spatial dim of targets
     :param blank_index: vocab index of the blank symbol
     :param max_approx: if True, use max instead of sum over alignments (max approx, Viterbi)
+    :param use_native_op: whether to use our native op
     :return: loss shape [B...]
     """
     # noinspection PyProtectedMember
@@ -91,6 +93,7 @@ def ctc_loss(
         targets_spatial_dim=targets_spatial_dim,
         blank_index=blank_index,
         max_approx=max_approx,
+        use_native_op=use_native_op,
     )
 
 

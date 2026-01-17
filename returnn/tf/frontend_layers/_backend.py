@@ -465,6 +465,7 @@ class ReturnnLayersBackend(Backend[Layer]):
         targets_spatial_dim: Dim,
         blank_index: int,
         max_approx: bool = False,
+        use_native_op: Optional[bool] = None,
     ) -> Tensor:
         """CTC"""
         assert targets.sparse_dim and targets.sparse_dim.dimension <= logits.feature_dim.dimension

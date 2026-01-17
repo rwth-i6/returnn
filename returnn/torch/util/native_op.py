@@ -463,6 +463,7 @@ def ctc_loss(
     logits_time_major: bool = False,
     logits_normalize: bool = True,
     blank_index: int = -1,
+    max_approx: bool = False,
 ) -> torch.Tensor:
     """
     Similar to :func:`tf.nn.ctc_loss`.
@@ -478,6 +479,7 @@ def ctc_loss(
     :param logits_normalize: apply log_softmax on logits (default).
       if False, you might also set grad_wrt_softmax_in=False
     :param blank_index: vocab index of the blank symbol
+    :param max_approx: use max approximation (Viterbi) instead of full sum
     :return: loss, shape (batch,)
     """
     from .array_ import sequence_mask_time_major
@@ -494,7 +496,23 @@ def ctc_loss(
         targets=targets, seq_lens=targets_seq_lens, blank_idx=blank_index, label_loop=ctc_merge_repeated
     )
 
-    seq_mask = sequence_mask_time_major(logits_seq_lens)
+    seq_mask = sequence_mask_time_major(logits_seq_lens)  # (time,batch), bool
+
+    if max_approx:
+        log_probs = torch.log_softmax(logits, dim=-1) if logits_normalize else logits  # (time,batch,dim)
+        alignment, _ = fast_viterbi(
+            am_scores=log_probs,
+            am_seq_len=logits_seq_lens,
+            edges=edges,
+            weights=weights,
+            start_end_states=start_end_states,
+        )
+        # alignment is (time,batch)
+        log_probs_ = torch.gather(log_probs, 2, alignment.unsqueeze(-1))  # (time,batch,1)
+        log_probs_ = log_probs_.squeeze(-1)  # (time,batch)
+        log_probs_ = torch.where(seq_mask, log_probs_, 0.0)
+        loss = -torch.sum(log_probs_, dim=0)  # (batch,)
+        return loss
 
     loss = _FastBaumWelchScoresAutogradFunc.apply(logits, logits_normalize, seq_mask, edges, weights, start_end_states)
     return loss
@@ -643,7 +661,9 @@ def fast_viterbi(
     :param weights: (num_edges,), weights of the edges
     :param start_end_states: (2, batch), (start,end) state idx in automaton.
         there is only one single automaton.
-    :return: (alignment, scores), alignment is (time, batch), scores is (batch,), in +log space
+    :return: (alignment, scores), alignment is (time, batch), scores is (batch,), in +log space.
+        note: scores are not differentiable here.
+        do gather+sum on the am_scores by the alignment to get it differentiable.
     """
     last_state_idx = start_end_states[1].max()
     n_states = last_state_idx + 1
@@ -651,6 +671,51 @@ def fast_viterbi(
     op = maker.make_op()
     alignment, scores = op(am_scores, am_seq_len, edges, weights, start_end_states, n_states)
     return alignment, scores
+
+
+def ctc_best_path(
+    *,
+    logits: torch.Tensor,
+    logits_seq_lens: torch.Tensor,
+    targets: torch.Tensor,
+    targets_seq_lens: torch.Tensor,
+    ctc_merge_repeated: bool = True,
+    logits_time_major: bool = False,
+    logits_normalize: bool = True,
+    blank_index: int = -1,
+) -> torch.Tensor:
+    """
+    :param logits: (time,batch,dim) or (batch,time,dim). unnormalized (before softmax)
+    :param logits_seq_lens: shape (batch,) of int32|int64
+    :param logits_time_major:
+    :param targets: batch-major, [batch,time]
+    :param targets_seq_lens: (batch,)
+    :param ctc_merge_repeated:
+    :param logits_normalize: apply log_softmax on logits (default).
+      if False, you might also set grad_wrt_softmax_in=False
+    :param blank_index: vocab index of the blank symbol
+    :return: alignment, (time, batch). note, to get the scores, do gather+sum on the am_scores by the alignment.
+    """
+    assert logits.ndim == 3
+    dim = logits.shape[-1]
+    if not logits_time_major:
+        logits = torch.transpose(logits, 0, 1)  # (time,batch,dim)
+    if logits_normalize:
+        log_sm = torch.log_softmax(logits, dim=-1)  # (time,batch,dim)
+    else:
+        log_sm = logits
+
+    if blank_index < 0:
+        blank_index += dim
+    assert 0 <= blank_index < dim
+    edges, weights, start_end_states = get_ctc_fsa_fast_bw(
+        targets=targets, seq_lens=targets_seq_lens, blank_idx=blank_index, label_loop=ctc_merge_repeated
+    )
+
+    alignment, _ = fast_viterbi(
+        am_scores=log_sm, am_seq_len=logits_seq_lens, edges=edges, weights=weights, start_end_states=start_end_states
+    )
+    return alignment
 
 
 def edit_distance(a, a_len, b, b_len):

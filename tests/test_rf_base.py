@@ -5,6 +5,7 @@ RETURNN frontend (returnn.frontend) tests
 from __future__ import annotations
 from typing import Tuple
 from unittest import SkipTest
+import numpy.testing
 import _setup_test_env  # noqa
 import returnn.frontend as rf
 from returnn.tensor import Tensor, Dim, TensorDict, batch_dim
@@ -632,6 +633,55 @@ def test_ctc_loss():
         dyn_dim_min_sizes={time_dim: 4, target_time_dim: 2},
         dyn_dim_max_sizes={time_dim: 11, target_time_dim: 5},
     )
+
+
+def test_ctc_loss_native_vs_std():
+    time_dim = Dim(Tensor("time", [batch_dim], dtype="int32"))
+    target_time_dim = Dim(Tensor("target_time", [batch_dim], dtype="int32"))
+    out_dim = Dim(11, name="classes")
+    out_wb_dim = out_dim + 1
+    extern_data = TensorDict(
+        {
+            "data": Tensor("data", [batch_dim, time_dim, out_wb_dim], dtype="float32", feature_dim=out_wb_dim),
+            "classes": Tensor("classes", [batch_dim, target_time_dim], dtype="int32", sparse_dim=out_dim),
+        }
+    )
+
+    def _forward_step(*, extern_data: TensorDict, **_kwargs):
+        logits = extern_data["data"]
+        targets = extern_data["classes"]
+        loss_native = rf.ctc_loss(
+            logits=logits,
+            targets=targets,
+            input_spatial_dim=time_dim,
+            targets_spatial_dim=target_time_dim,
+            blank_index=out_wb_dim.dimension - 1,
+            use_native_op=True,
+        )
+        loss_native.mark_as_output("native", shape=[batch_dim])
+        loss_std = rf.ctc_loss(
+            logits=logits,
+            targets=targets,
+            input_spatial_dim=time_dim,
+            targets_spatial_dim=target_time_dim,
+            blank_index=out_wb_dim.dimension - 1,
+            use_native_op=False,
+        )
+        loss_std.mark_as_output("std", shape=[batch_dim])
+
+    res = run_model(
+        extern_data,
+        lambda **_kwargs: rf.Module(),
+        _forward_step,
+        dyn_dim_min_sizes={time_dim: 4, target_time_dim: 2},
+        dyn_dim_max_sizes={time_dim: 11, target_time_dim: 5},
+        test_tensorflow=False,
+    )
+    # test equality
+    res_native = res["native"].raw_tensor
+    res_std = res["std"].raw_tensor
+    assert res_native.shape == res_std.shape
+    numpy.testing.assert_allclose(res_native, res_std, rtol=1e-5, atol=1e-6)
 
 
 def test_ctc_loss_broadcast():

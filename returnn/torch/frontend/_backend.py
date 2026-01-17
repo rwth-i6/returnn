@@ -667,10 +667,9 @@ class TorchBackend(Backend[torch.Tensor]):
         targets_spatial_dim: Dim,
         blank_index: int,
         max_approx: bool = False,
+        use_native_op: Optional[bool] = None,
     ) -> Tensor:
         """CTC"""
-        if max_approx:
-            raise NotImplementedError("ctc_loss: max_approx not implemented for PyTorch")
         assert targets.sparse_dim and targets.sparse_dim.dimension <= logits.feature_dim.dimension
         # PyTorch expects the logits to be of shape (T, B, C) where T is the input spatial dim.
         batch_dims = logits.remaining_dims((input_spatial_dim, logits.feature_dim))
@@ -708,18 +707,39 @@ class TorchBackend(Backend[torch.Tensor]):
         if len(batch_dims) != 1:
             targets_raw = torch.reshape(targets_raw, (batch_n_elems, targets_raw.shape[-1]))  # [B', S]
             targets_lengths = torch.reshape(targets_lengths, (batch_n_elems,))  # [B']
-        if log_probs.dtype == torch.bfloat16:
-            # Currently (PyTorch 2.5), ctc_loss does not support bfloat16.
-            log_probs = log_probs.to(torch.float32)
-        loss_raw = torch.nn.functional.ctc_loss(
-            log_probs=log_probs,
-            targets=targets_raw,
-            input_lengths=input_lengths,
-            target_lengths=targets_lengths,
-            blank=blank_index,
-            zero_infinity=True,
-            reduction="none",
-        )
+        if use_native_op is None:
+            if max_approx:
+                use_native_op = True
+            else:
+                # This was the current default.
+                # We might change the default in the future, maybe via new behavior version.
+                use_native_op = False
+        if use_native_op:
+            loss_raw = native_op.ctc_loss(
+                logits=log_probs,
+                logits_normalize=True,
+                logits_seq_lens=input_lengths,
+                logits_time_major=True,
+                targets=targets_raw,
+                targets_seq_lens=targets_lengths,
+                blank_index=blank_index,
+                max_approx=max_approx,
+            )
+        else:  # not native_op
+            if max_approx:
+                raise NotImplementedError("ctc_loss: max_approx not implemented for PyTorch")
+            if log_probs.dtype == torch.bfloat16:
+                # Currently (PyTorch 2.5), ctc_loss does not support bfloat16.
+                log_probs = log_probs.to(torch.float32)
+            loss_raw = torch.nn.functional.ctc_loss(
+                log_probs=log_probs,
+                targets=targets_raw,
+                input_lengths=input_lengths,
+                target_lengths=targets_lengths,
+                blank=blank_index,
+                zero_infinity=True,
+                reduction="none",
+            )
         if len(batch_dims) != 1:
             loss_raw = torch.reshape(loss_raw, logits_raw_shape[1:-1])
         loss = Tensor(

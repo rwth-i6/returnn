@@ -624,6 +624,7 @@ class Backend(Generic[T]):
         targets_spatial_dim: Dim,
         blank_index: int,
         max_approx: bool = False,
+        use_native_op: Optional[bool] = None,
     ) -> Tensor:
         """
         Calculates the CTC loss.
