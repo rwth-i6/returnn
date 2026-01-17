@@ -5,6 +5,7 @@ Extends the PyTorch collect_env.py script.
 """
 
 from typing import Optional
+import sys
 import os
 import subprocess
 import importlib.util
@@ -36,6 +37,7 @@ def main():
 
 def _run(*args):
     print("$", " ".join(args))
+    sys.stdout.flush()
     subprocess.run(args, check=True)
 
 
