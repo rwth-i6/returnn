@@ -302,4 +302,8 @@ def hms(s):
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except subprocess.CalledProcessError as exc:
+        print(f"Error: Command failed: {exc.cmd}")
+        sys.exit(1)
