@@ -459,7 +459,7 @@ def ctc_loss(
     logits_seq_lens: torch.Tensor,
     targets: torch.Tensor,
     targets_seq_lens: torch.Tensor,
-    ctc_merge_repeated: bool = True,
+    label_loop: bool = True,
     logits_time_major: bool = False,
     logits_normalize: bool = True,
     blank_index: int = -1,
@@ -475,7 +475,7 @@ def ctc_loss(
     :param logits_time_major:
     :param targets: batch-major, [batch,time]
     :param targets_seq_lens: (batch,)
-    :param ctc_merge_repeated:
+    :param label_loop: (ctc_merge_repeated in tf.nn.ctc_loss)
     :param logits_normalize: apply log_softmax on logits (default).
       if False, you might also set grad_wrt_softmax_in=False
     :param blank_index: vocab index of the blank symbol
@@ -493,7 +493,7 @@ def ctc_loss(
         blank_index += dim
     assert 0 <= blank_index < dim
     edges, weights, start_end_states = get_ctc_fsa_fast_bw(
-        targets=targets, seq_lens=targets_seq_lens, blank_idx=blank_index, label_loop=ctc_merge_repeated
+        targets=targets, seq_lens=targets_seq_lens, blank_idx=blank_index, label_loop=label_loop
     )
 
     seq_mask = sequence_mask_time_major(logits_seq_lens)  # (time,batch), bool
@@ -679,7 +679,7 @@ def ctc_best_path(
     logits_seq_lens: torch.Tensor,
     targets: torch.Tensor,
     targets_seq_lens: torch.Tensor,
-    ctc_merge_repeated: bool = True,
+    label_loop: bool = True,
     logits_time_major: bool = False,
     logits_normalize: bool = True,
     blank_index: int = -1,
@@ -690,7 +690,7 @@ def ctc_best_path(
     :param logits_time_major:
     :param targets: batch-major, [batch,time]
     :param targets_seq_lens: (batch,)
-    :param ctc_merge_repeated:
+    :param label_loop: (ctc_merge_repeated in tf.nn.ctc_loss)
     :param logits_normalize: apply log_softmax on logits (default).
       if False, you might also set grad_wrt_softmax_in=False
     :param blank_index: vocab index of the blank symbol
@@ -709,7 +709,7 @@ def ctc_best_path(
         blank_index += dim
     assert 0 <= blank_index < dim
     edges, weights, start_end_states = get_ctc_fsa_fast_bw(
-        targets=targets, seq_lens=targets_seq_lens, blank_idx=blank_index, label_loop=ctc_merge_repeated
+        targets=targets, seq_lens=targets_seq_lens, blank_idx=blank_index, label_loop=label_loop
     )
 
     alignment, _ = fast_viterbi(
