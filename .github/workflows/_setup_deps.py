@@ -51,25 +51,14 @@ def main():
         _run(*pip_install, "numpy<2")
     _run(*pip_install, "scipy")  # for some tests
 
-    if args.torch:
-        _run(*pip_install, f"torch=={args.torch}")
-        _run(*pip_install, "onnx", "onnxruntime")
-        _run(*pip_install, "lovely_tensors")
-
-    if args.hf_datasets:
-        assert args.torch, "Need to specify --torch when specifying --hf-datasets"
-        assert args.hf_datasets.lower() in ["yes", "1", "true"], f"Invalid value for --hf-datasets: {args.hf_datasets}"
-        _run("sudo", "apt-get", "update")
-        _run("sudo", "apt-get", "install", "-y", "ffmpeg")  # for torchcodec
-        _run(*pip_install, "torchcodec==0.7")  # for HF datasets
-        _run(*pip_install, "datasets")
-
     if sys.version_info[:2] == (3, 10):
         # https://github.com/rwth-i6/returnn/issues/1803, https://github.com/AnswerDotAI/fastcore/issues/751
         _run(*pip_install, "fastcore==1.12.1")
 
     if args.tf:
-        if re.match(args.tf, r"^2\.(0|1|2|3)\..*$"):
+        print("Installing TensorFlow version:", args.tf)
+
+        if re.match(r"^2\.[0123]\..*$", args.tf):
             # Older TF needs older NumPy version.
             # https://github.com/rwth-i6/returnn/pull/1160#issuecomment-1284537803
             _run(*pip_install, "numpy==1.19.5")
@@ -93,6 +82,8 @@ def main():
                     raise
 
     if args.torch:
+        print("Installing PyTorch version:", args.torch)
+
         if _get_torch_version() != args.torch:
             # Free disk space first. Can run out of disk space otherwise.
             # Also, remove any nvidia packages to avoid conflicts (https://github.com/rwth-i6/returnn/issues/1802).
@@ -101,6 +92,11 @@ def main():
                     pkg_s = pkg.decode("utf-8").strip()
                     _run(*pip, "uninstall", "-y", pkg_s)
             _run(*pip, "uninstall", "-y", "torch")
+
+        _run(*pip_install, f"torch=={args.torch}")
+        _run(*pip_install, "onnx", "onnxruntime")
+        _run(*pip_install, "lovely_tensors")
+
         # Needed for some tests.
         # transformers 4.50 requires PyTorch >2.0, so stick to transformers 4.49 for now.
         # (https://github.com/rwth-i6/returnn/issues/1706)
@@ -111,6 +107,14 @@ def main():
             _run(*pip_install, "transformers")
         else:
             _run(*pip_install, "safetensors==0.5.3", "transformers==4.49.0")
+
+    if args.hf_datasets:
+        assert args.torch, "Need to specify --torch when specifying --hf-datasets"
+        assert args.hf_datasets.lower() in ["yes", "1", "true"], f"Invalid value for --hf-datasets: {args.hf_datasets}"
+        _run("sudo", "apt-get", "update")
+        _run("sudo", "apt-get", "install", "-y", "ffmpeg")  # for torchcodec
+        _run(*pip_install, "torchcodec==0.7")  # for HF datasets
+        _run(*pip_install, "datasets")
 
     if args.espnet and sys.version_info[:2] <= (3, 8):
         # https://github.com/rwth-i6/returnn/issues/1729
