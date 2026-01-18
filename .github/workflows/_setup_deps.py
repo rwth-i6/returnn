@@ -134,10 +134,13 @@ def main():
             _run(*pip_install, f"torchaudio=={args.torch}")
 
     if args.tf and re.match(r"^2\.[0123]\..*$", args.tf):
-        # Do this after installing other packages, as those other packages might install newer numpy/protobuf.
+        # Do this after installing other packages, as those other packages might install newer numpy.
         # Older TF needs older NumPy version.
         # https://github.com/rwth-i6/returnn/pull/1160#issuecomment-1284537803
         _run(*pip_install, "numpy==1.19.5")
+
+    if args.tf and re.match(r"^2\.[012345678]\..*$", args.tf):
+        # Do this after installing other packages, as those other packages might install newer protobuf.
         # Older TF needs also older protobuf version.
         # https://github.com/rwth-i6/returnn/issues/1209
         _run(*pip_install, "protobuf<=3.20.1")
