@@ -24,6 +24,7 @@ from returnn.frontend import _utils
 
 from . import raw_ops
 from ..util import native_op
+from ..util.assert_ import assert_
 
 _TT = Tensor[torch.Tensor]
 
@@ -44,6 +45,12 @@ class TorchBackend(Backend[torch.Tensor]):
         :return: whether we are executing eagerly
         """
         return True
+
+    @staticmethod
+    def assert_(condition: Tensor, message: str):
+        """assert"""
+        assert condition.dims == (), "condition for assert must be a scalar"
+        assert_(condition.raw_tensor, message)
 
     @staticmethod
     def set_random_seed(seed: int):

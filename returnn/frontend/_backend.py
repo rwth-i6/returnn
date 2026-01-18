@@ -43,6 +43,11 @@ class Backend(Generic[T]):
         raise NotImplementedError
 
     @staticmethod
+    def assert_(condition: Tensor, message: str):
+        """assert"""
+        raise NotImplementedError
+
+    @staticmethod
     def get_tensor_dependencies(x: Tensor) -> Sequence[Tensor]:
         """
         :param x: tensor
