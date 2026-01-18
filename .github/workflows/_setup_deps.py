@@ -5,6 +5,8 @@ Install necessary dependencies for CI.
 Some are potentially already installed (e.g. via cache).
 """
 
+from __future__ import annotations
+from typing import Optional
 import os
 import sys
 import re
@@ -84,7 +86,8 @@ def main():
     if args.torch:
         print("Installing PyTorch version:", args.torch)
 
-        if _get_torch_version() != args.torch:
+        ex_torch_version = _get_torch_version()
+        if ex_torch_version and ex_torch_version != args.torch:
             # Free disk space first. Can run out of disk space otherwise.
             # Also, remove any nvidia packages to avoid conflicts (https://github.com/rwth-i6/returnn/issues/1802).
             for pkg in subprocess.check_output([*pip, "freeze"]).splitlines():
@@ -184,13 +187,16 @@ def _run(*args):
     subprocess.run(args, check=True)
 
 
-def _get_torch_version() -> str:
+def _get_torch_version() -> Optional[str]:
     """
     pip show torch | grep "^Version:" | cut -d' ' -f2
     """
     py = sys.executable
     pip = [py, "-m", "pip"]
-    out = subprocess.check_output(pip + ["show", "torch"])
+    try:
+        out = subprocess.check_output(pip + ["show", "torch"])
+    except subprocess.CalledProcessError:
+        return None
     for line in out.splitlines():
         if line.startswith(b"Version:"):
             line_s = line.decode("utf-8")
