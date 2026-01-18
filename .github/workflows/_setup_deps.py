@@ -9,7 +9,6 @@ from __future__ import annotations
 from typing import Optional
 import os
 import sys
-import re
 import time
 import argparse
 import subprocess
@@ -62,8 +61,9 @@ def main():
 
         if args.tf:
             print("Installing TensorFlow version:", args.tf)
+            tf_version = tuple(int(n) for n in args.tf.split(".")) if args.tf else ()
 
-            if args.tf.startswith("2.10."):
+            if tf_version[:2] == (2, 10):
                 # TF 2.10 requires gast<=0.4.0,>=0.2.1. But for example, with gast 0.2.2, we get some AutoGraph error:
                 # Cause: module 'gast' has no attribute 'Constant'
                 # Similar like: https://github.com/tensorflow/tensorflow/issues/47802
@@ -77,6 +77,8 @@ def main():
                 except subprocess.CalledProcessError:
                     if try_nr >= 2:
                         raise
+        else:
+            tf_version = ()
 
         if args.torch:
             print("Installing PyTorch version:", args.torch)
@@ -138,13 +140,13 @@ def main():
             else:
                 _run(*pip_install, f"torchaudio=={args.torch}")
 
-        if args.tf and re.match(r"^2\.[0123]\..*$", args.tf):
+        if args.tf and tf_version[:2] <= (2, 3):
             # Do this after installing other packages, as those other packages might install newer numpy.
             # Older TF needs older NumPy version.
             # https://github.com/rwth-i6/returnn/pull/1160#issuecomment-1284537803
             _run(*pip_install, "numpy==1.19.5")
 
-        if args.tf and re.match(r"^2\.[012345678]\..*$", args.tf):
+        if args.tf and tf_version[:2] <= (2, 10):
             # Do this after installing other packages, as those other packages might install newer protobuf.
             # Older TF needs also older protobuf version.
             # https://github.com/rwth-i6/returnn/issues/1209
