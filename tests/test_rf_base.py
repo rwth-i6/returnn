@@ -5,10 +5,12 @@ RETURNN frontend (returnn.frontend) tests
 from __future__ import annotations
 from typing import Tuple
 from unittest import SkipTest
+import numpy
 import numpy.testing
 import _setup_test_env  # noqa
 import returnn.frontend as rf
 from returnn.tensor import Tensor, Dim, TensorDict, batch_dim
+from returnn.tensor.utils import tensor_dict_fill_random_numpy_
 from rf_utils import run_model, run_model_torch_train
 
 
@@ -783,6 +785,119 @@ def test_ctc_best_path(*, label_loop: bool = True):
 
 def test_ctc_best_path_rna():
     test_ctc_best_path(label_loop=False)
+
+
+def test_ctc_durations_from_path():
+    time_dim = Dim(Tensor("time", [batch_dim], dtype="int32"))
+    out_dim = Dim(11, name="classes")
+    out_wb_dim = out_dim + 1
+    b = out_wb_dim.dimension - 1
+    extern_data = TensorDict(
+        {
+            "data": Tensor("data", [batch_dim, time_dim], dtype="int32", sparse_dim=out_wb_dim),
+            "blanks": Tensor("blanks", [batch_dim, time_dim], dtype="bool"),  # more blanks
+        }
+    )
+
+    def _forward_step(*, extern_data: TensorDict, **_kwargs):
+        path = extern_data["data"]
+        path = rf.where(extern_data["blanks"], b, path)
+        durations, dur_spatial_dim = rf.ctc_durations_from_path(path=path, path_spatial_dim=time_dim, blank_index=b)
+        durations.mark_as_default_output(shape=[batch_dim, dur_spatial_dim])
+
+    # Now reset the extern_data manually
+    extern_data.reset_content()
+    tensor_dict_fill_random_numpy_(
+        extern_data,
+        dyn_dim_min_sizes={batch_dim: 10, time_dim: 15},
+        dyn_dim_max_sizes={batch_dim: 10, time_dim: 20},
+        rnd=42,
+    )
+    examples = [
+        ([b, b, 1, 1, 2, b, b, 3, 3, 3, b], [2, 2, 0, 1, 2, 3, 1]),  # [_ _ a a b _ _ c c c _]
+        ([b, b, 1, 1, b, 2, b, b, b, b], [2, 2, 1, 1, 4]),
+        ([1, 1, 1, b, b, b, b], [0, 3, 4]),
+        ([b, b, b, b, b, 1, 2, 3], [5, 1, 0, 1, 0, 1, 0]),
+        ([5], [0, 1, 0]),
+    ]
+    for i, (example, _) in enumerate(examples):
+        extern_data["data"].raw_tensor[i, : len(example)] = numpy.array(example, dtype="int32")
+        time_dim.dyn_size_ext.raw_tensor[i] = len(example)
+        extern_data["blanks"].raw_tensor[i] = False  # keep our example as is
+    # Make sure at least one of the dyn sizes matches the max size.
+    time_dim.dyn_size_ext.raw_tensor[len(examples)] = time_dim.get_dim_value()
+
+    res = run_model(
+        extern_data,
+        lambda **_kwargs: rf.Module(),
+        _forward_step,
+        data_fill_random=False,
+        test_tensorflow=False,  # no scatter
+    )
+
+    output = res["output"]
+    out_spatial_dim = output.dims[1]
+    for i, (_, exp) in enumerate(examples):
+        assert out_spatial_dim.dyn_size_ext.raw_tensor[i] == len(exp)
+        dur = res["output"].raw_tensor[i, : len(exp)]
+        numpy.testing.assert_array_equal(dur, numpy.array(exp, dtype="int32"))
+
+
+def test_ctc_no_label_loop_blank_durations_from_path():
+    time_dim = Dim(Tensor("time", [batch_dim], dtype="int32"))
+    out_dim = Dim(11, name="classes")
+    out_wb_dim = out_dim + 1
+    b = out_wb_dim.dimension - 1
+    extern_data = TensorDict(
+        {
+            "data": Tensor("data", [batch_dim, time_dim], dtype="int32", sparse_dim=out_wb_dim),
+            "blanks": Tensor("blanks", [batch_dim, time_dim], dtype="bool"),  # more blanks
+        }
+    )
+
+    def _forward_step(*, extern_data: TensorDict, **_kwargs):
+        path = extern_data["data"]
+        path = rf.where(extern_data["blanks"], b, path)
+        durations, dur_spatial_dim = rf.ctc_no_label_loop_blank_durations_from_path(
+            path=path, path_spatial_dim=time_dim, blank_index=b
+        )
+        durations.mark_as_default_output(shape=[batch_dim, dur_spatial_dim])
+
+    # Now reset the extern_data manually
+    extern_data.reset_content()
+    tensor_dict_fill_random_numpy_(
+        extern_data,
+        dyn_dim_min_sizes={batch_dim: 10, time_dim: 15},
+        dyn_dim_max_sizes={batch_dim: 10, time_dim: 20},
+        rnd=42,
+    )
+    examples = [
+        ([b, b, b, 1, 2, b, b, 3, b], [3, 0, 2, 1]),  # [_ _ _ a b _ _ c _]
+        ([b, b, 1, 1, 2, b, b, 3, b], [2, 0, 0, 2, 1]),
+        ([1], [0, 0]),
+        ([b, b, 1], [2, 0]),
+    ]
+    for i, (example, _) in enumerate(examples):
+        extern_data["data"].raw_tensor[i, : len(example)] = numpy.array(example, dtype="int32")
+        time_dim.dyn_size_ext.raw_tensor[i] = len(example)
+        extern_data["blanks"].raw_tensor[i] = False  # keep our example as is
+    # Make sure at least one of the dyn sizes matches the max size.
+    time_dim.dyn_size_ext.raw_tensor[len(examples)] = time_dim.get_dim_value()
+
+    res = run_model(
+        extern_data,
+        lambda **_kwargs: rf.Module(),
+        _forward_step,
+        data_fill_random=False,
+        test_tensorflow=False,  # no scatter
+    )
+
+    output = res["output"]
+    out_spatial_dim = output.dims[1]
+    for i, (_, exp) in enumerate(examples):
+        assert out_spatial_dim.dyn_size_ext.raw_tensor[i] == len(exp)
+        dur = res["output"].raw_tensor[i, : len(exp)]
+        numpy.testing.assert_array_equal(dur, numpy.array(exp, dtype="int32"))
 
 
 def test_edit_distance():

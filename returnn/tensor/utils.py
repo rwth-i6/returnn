@@ -71,7 +71,7 @@ def tensor_fill_random_numpy_(
                     # Make sure at least one of the dyn sizes matches the max size.
                     i = rnd.randint(0, dim.dyn_size_ext.raw_tensor.size)
                     dim.dyn_size_ext.raw_tensor.flat[i] = dyn_dim_max_sizes[dim]
-                    if dim in dyn_dim_min_sizes:
+                    if dim in dyn_dim_min_sizes and dim.dyn_size_ext.raw_tensor.size > 1:
                         j = rnd.randint(0, dim.dyn_size_ext.raw_tensor.size - 1)
                         if j >= i:
                             j += 1
