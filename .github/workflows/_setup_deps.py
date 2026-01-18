@@ -40,7 +40,7 @@ def main():
 
     py = sys.executable
     pip = [py, "-m", "pip"]
-    pip_install = [*pip, "install", "--user", "--progress-bar=off", "--upgrade"]
+    pip_install = [*pip, "install", "--user", "--progress-bar=off"]
 
     with StdoutTextFold("install dependencies"):
         # Any previous cache should not really be needed, in case we install something new below.
