@@ -469,8 +469,10 @@ jobs:
 
           pip install --user --progress-bar=off --upgrade torch==${{ matrix.torch-version }}
           pip install --user --progress-bar=off lovely_tensors
-          # https://github.com/rwth-i6/returnn/issues/1803, https://github.com/AnswerDotAI/fastcore/issues/751
-          pip install --user --progress-bar=off fastcore==1.12.1
+          if [[ "${{matrix.python-version}}" == "3.10" ]]; then
+            # https://github.com/rwth-i6/returnn/issues/1803, https://github.com/AnswerDotAI/fastcore/issues/751
+            pip install --user --progress-bar=off fastcore==1.12.1
+          fi
 
           if [[ "${{matrix.tf-version}}" == 2.10.* ]]; then
             # TF 2.10 requires gast<=0.4.0,>=0.2.1. But for example, with gast 0.2.2, we get some AutoGraph error:
