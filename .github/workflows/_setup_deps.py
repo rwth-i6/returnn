@@ -60,14 +60,6 @@ def main():
     if args.tf:
         print("Installing TensorFlow version:", args.tf)
 
-        if re.match(r"^2\.[0123]\..*$", args.tf):
-            # Older TF needs older NumPy version.
-            # https://github.com/rwth-i6/returnn/pull/1160#issuecomment-1284537803
-            _run(*pip_install, "numpy==1.19.5")
-            # Older TF needs also older protobuf version.
-            # https://github.com/rwth-i6/returnn/issues/1209
-            _run(*pip_install, "protobuf<=3.20.1")
-
         if args.tf.startswith("2.10."):
             # TF 2.10 requires gast<=0.4.0,>=0.2.1. But for example, with gast 0.2.2, we get some AutoGraph error:
             # Cause: module 'gast' has no attribute 'Constant'
@@ -140,6 +132,15 @@ def main():
             _run(*pip_install, "torchaudio==0.13.1")
         else:
             _run(*pip_install, f"torchaudio=={args.torch}")
+
+    if args.tf and re.match(r"^2\.[0123]\..*$", args.tf):
+        # Do this after installing other packages, as those other packages might install newer numpy/protobuf.
+        # Older TF needs older NumPy version.
+        # https://github.com/rwth-i6/returnn/pull/1160#issuecomment-1284537803
+        _run(*pip_install, "numpy==1.19.5")
+        # Older TF needs also older protobuf version.
+        # https://github.com/rwth-i6/returnn/issues/1209
+        _run(*pip_install, "protobuf<=3.20.1")
 
     # Any cached files should not be needed anymore.
     _run(*pip, "cache", "purge")
