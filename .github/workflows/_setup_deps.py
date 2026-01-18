@@ -45,10 +45,10 @@ def main():
         # Any previous cache should not really be needed, in case we install something new below.
         _run(*pip, "cache", "purge")
 
-        _run(*pip_install, "pip", "setuptools", "wheel")
-        _run(*pip_install, "pytest")
+        _run(*pip_install, "--upgrade", "pip", "setuptools", "wheel")
+        _run(*pip_install, "--upgrade", "pytest")
         _run("sudo", "apt-get", "install", "-y", "libsndfile1")  # soundfile, librosa, ESPnet
-        _run(*pip_install, "dm-tree", "h5py")
+        _run(*pip_install, "--upgrade", "dm-tree", "h5py")
         if args.espnet:
             _run(*pip_install, "numpy==1.23.5")  # for ESPnet, ctc-segmentation, etc
         else:
