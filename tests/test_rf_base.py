@@ -721,7 +721,7 @@ def test_ctc_loss_broadcast():
     )
 
 
-def test_ctc_best_path():
+def test_ctc_best_path(*, label_loop: bool = True):
     time_dim = Dim(Tensor("time", [batch_dim], dtype="int32"))
     target_time_dim = Dim(Tensor("target_time", [batch_dim], dtype="int32"))
     out_dim = Dim(11, name="classes")
@@ -746,6 +746,7 @@ def test_ctc_best_path():
             input_spatial_dim=time_dim,
             targets_spatial_dim=target_time_dim,
             blank_index=out_wb_dim.dimension - 1,
+            label_loop=label_loop,
         )
         alignment.mark_as_default_output(shape=[time_dim, batch_dim])
 
@@ -765,7 +766,7 @@ def test_ctc_best_path():
     targets = res["targets"].raw_tensor.astype("int32")
     target_seq_lens = res["targets"].dims[1].dyn_size.astype("int32")
     blank_idx = out_wb_dim.dimension - 1
-    fsa = get_ctc_fsa_fast_bw_np(targets=targets, seq_lens=target_seq_lens, blank_idx=blank_idx)
+    fsa = get_ctc_fsa_fast_bw_np(targets=targets, seq_lens=target_seq_lens, blank_idx=blank_idx, label_loop=label_loop)
     assert fsa.start_end_states.shape == (2, len(target_seq_lens))
     edges = fsa.edges.astype("int32")
     weights = fsa.weights.astype("float32")
@@ -778,6 +779,10 @@ def test_ctc_best_path():
     res_alignment = res["output"].raw_tensor
     assert ref_alignment.shape == res_alignment.shape
     numpy.testing.assert_equal(ref_alignment, res_alignment)
+
+
+def test_ctc_best_path_rna():
+    test_ctc_best_path(label_loop=False)
 
 
 def test_edit_distance():

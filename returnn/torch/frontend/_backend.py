@@ -668,6 +668,7 @@ class TorchBackend(Backend[torch.Tensor]):
         blank_index: int,
         max_approx: bool = False,
         use_native_op: Optional[bool] = None,
+        label_loop: bool = True,
     ) -> Tensor:
         """CTC"""
         assert targets.sparse_dim and targets.sparse_dim.dimension <= logits.feature_dim.dimension
@@ -708,7 +709,7 @@ class TorchBackend(Backend[torch.Tensor]):
             targets_raw = torch.reshape(targets_raw, (batch_n_elems, targets_raw.shape[-1]))  # [B', S]
             targets_lengths = torch.reshape(targets_lengths, (batch_n_elems,))  # [B']
         if use_native_op is None:
-            if max_approx:
+            if max_approx or not label_loop:
                 use_native_op = True
             else:
                 # This was the current default.
@@ -724,10 +725,13 @@ class TorchBackend(Backend[torch.Tensor]):
                 targets_seq_lens=targets_lengths,
                 blank_index=blank_index,
                 max_approx=max_approx,
+                label_loop=label_loop,
             )
         else:  # not native_op
             if max_approx:
                 raise NotImplementedError("ctc_loss: max_approx not implemented for PyTorch")
+            if not label_loop:
+                raise NotImplementedError("ctc_loss: label_loop=False not implemented for PyTorch")
             if log_probs.dtype == torch.bfloat16:
                 # Currently (PyTorch 2.5), ctc_loss does not support bfloat16.
                 log_probs = log_probs.to(torch.float32)
@@ -759,6 +763,7 @@ class TorchBackend(Backend[torch.Tensor]):
         input_spatial_dim: Dim,
         targets_spatial_dim: Dim,
         blank_index: int,
+        label_loop: bool = True,
     ) -> Tensor:
         """CTC best path"""
         assert targets.sparse_dim and targets.sparse_dim.dimension <= logits.feature_dim.dimension
@@ -805,6 +810,7 @@ class TorchBackend(Backend[torch.Tensor]):
             targets=targets_raw,
             targets_seq_lens=targets_lengths,
             blank_index=blank_index,
+            label_loop=label_loop,
         )  # (time,batch)
         if len(batch_dims) != 1:
             alignment_raw = torch.reshape(alignment_raw, log_probs.shape[:-1])

@@ -65,6 +65,7 @@ def ctc_loss(
     blank_index: int,
     max_approx: bool = False,
     use_native_op: Optional[bool] = None,
+    label_loop: bool = True,
 ) -> Tensor:
     """
     Calculates the CTC loss.
@@ -82,6 +83,7 @@ def ctc_loss(
     :param blank_index: vocab index of the blank symbol
     :param max_approx: if True, use max instead of sum over alignments (max approx, Viterbi)
     :param use_native_op: whether to use our native op
+    :param label_loop:
     :return: loss shape [B...]
     """
     # noinspection PyProtectedMember
@@ -94,6 +96,7 @@ def ctc_loss(
         blank_index=blank_index,
         max_approx=max_approx,
         use_native_op=use_native_op,
+        label_loop=label_loop,
     )
 
 
@@ -105,6 +108,7 @@ def ctc_best_path(
     input_spatial_dim: Dim,
     targets_spatial_dim: Dim,
     blank_index: int,
+    label_loop: bool = True,
 ) -> Tensor:
     """
     Calculates the CTC best path.
@@ -115,6 +119,7 @@ def ctc_best_path(
     :param input_spatial_dim: spatial dim of input logits
     :param targets_spatial_dim: spatial dim of targets
     :param blank_index: vocab index of the blank symbol
+    :param label_loop: whether label loops are allowed (standard for CTC). False is like RNA topology.
     :return: best path, shape [B...,targets_spatial] -> C
     """
     # noinspection PyProtectedMember
@@ -125,6 +130,7 @@ def ctc_best_path(
         input_spatial_dim=input_spatial_dim,
         targets_spatial_dim=targets_spatial_dim,
         blank_index=blank_index,
+        label_loop=label_loop,
     )
 
 

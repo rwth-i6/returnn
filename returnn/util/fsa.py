@@ -10,7 +10,7 @@ from __future__ import annotations
 import numpy
 import pickle
 import itertools
-import typing
+from typing import Optional, List, Tuple
 from copy import deepcopy
 from os.path import isfile
 from returnn.log import log
@@ -397,7 +397,7 @@ class Ctc:
             e_end_3 = Edge(self.fsa.num_states, self.fsa.num_states + 1, self.fsa.lem_list[-1][-1], 1.0)
             self.fsa.edges.append(e_end_3)
             self.fsa.num_states += 3
-            # add node nuber of final state
+            # add node number of final state
             self.final_states.append(self.fsa.num_states - 1)
 
         elif self.fsa.lem_edges is not None:
@@ -806,7 +806,7 @@ class Ngram:
         :param int n: size of the gram (1, 2, 3)
         """
         self.n = n
-        self.lexicon = None  # type: typing.Optional[Lexicon]
+        self.lexicon: Optional[Lexicon] = None
         # lexicon consists of 3 entries: phoneme_list, phonemes and lemmas
         # phoneme_list: list of string phonemes in the lexicon
         # phonemes: dict of dict of str {phone: {index: , symbol: , variation:}}
@@ -1059,7 +1059,7 @@ class FastBwFsaShared:
 
     def __init__(self):
         self.num_states = 1
-        self.edges = []  # type: typing.List[Edge]
+        self.edges: List[Edge] = []
 
     def add_edge(self, source_state_idx, target_state_idx, emission_idx, weight=0.0):
         """
@@ -1148,17 +1148,20 @@ class FastBwFsaShared:
         )
 
 
-def get_ctc_fsa_fast_bw(targets, seq_lens, blank_idx):
+def get_ctc_fsa_fast_bw(
+    *, targets: numpy.ndarray, seq_lens: numpy.ndarray, blank_idx: int, label_loop: bool = True
+) -> FastBaumWelchBatchFsa:
     """
-    :param numpy.ndarray targets: shape (batch,time)
-    :param numpy.ndarray seq_lens: shape (batch)
-    :param int blank_idx:
-    :rtype: FastBaumWelchBatchFsa
+    :param targets: shape (batch,time)
+    :param seq_lens: shape (batch)
+    :param blank_idx:
+    :param label_loop:
+    :return: FSA
     """
     n_batch, n_time = targets.shape
     assert seq_lens.shape == (n_batch,)
-    edges = []  # type: typing.List[typing.Tuple[int,int,int,int]]  # list of (from,to,emission_idx,sequence_idx)
-    start_end_states = []  # type: typing.List[typing.Tuple[int,int]]  # list of (start,end), same len as batch
+    edges: List[Tuple[int, int, int, int]] = []  # list of (from,to,emission_idx,sequence_idx)
+    start_end_states: List[Tuple[int, int]] = []  # list of (start,end), same len as batch
     state_idx = 0
     # Note: We don't use weights on the edges, i.e. they are all set to zero.
     # I.e. we want that all strings for some given length T have the same probability.
@@ -1188,9 +1191,10 @@ def get_ctc_fsa_fast_bw(targets, seq_lens, blank_idx):
                 # Skip directly to final state (state_idx + 3).
                 edges.append((state_idx, state_idx + 3, label_idx, batch_idx))  # label
             state_idx += 1
-            edges.append((state_idx, state_idx, label_idx, batch_idx))  # label loop
+            if label_loop:
+                edges.append((state_idx, state_idx, label_idx, batch_idx))  # label loop
             edges.append((state_idx, state_idx + 1, blank_idx, batch_idx))  # blank
-            if not is_final_label and label_idx != next_label_idx:
+            if not is_final_label and (not label_loop or label_idx != next_label_idx):
                 # Skip over blank is allowed in this case.
                 edges.append((state_idx, state_idx + 2, next_label_idx, batch_idx))  # next label
                 if next_is_final_label:

@@ -466,6 +466,7 @@ class ReturnnLayersBackend(Backend[Layer]):
         blank_index: int,
         max_approx: bool = False,
         use_native_op: Optional[bool] = None,
+        label_loop: bool = True,
     ) -> Tensor:
         """CTC"""
         assert targets.sparse_dim and targets.sparse_dim.dimension <= logits.feature_dim.dimension
@@ -483,6 +484,7 @@ class ReturnnLayersBackend(Backend[Layer]):
                 "targets": targets,
                 "blank_index": blank_index,
                 "max_approx": max_approx,
+                "label_loop": label_loop,
             },
             name="ctc_loss",
         )

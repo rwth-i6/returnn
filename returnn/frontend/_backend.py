@@ -625,6 +625,7 @@ class Backend(Generic[T]):
         blank_index: int,
         max_approx: bool = False,
         use_native_op: Optional[bool] = None,
+        label_loop: bool = True,
     ) -> Tensor:
         """
         Calculates the CTC loss.
@@ -640,6 +641,7 @@ class Backend(Generic[T]):
         input_spatial_dim: Dim,
         targets_spatial_dim: Dim,
         blank_index: int,
+        label_loop: bool = True,
     ) -> Tensor:
         """
         Calculates the CTC best path.
