@@ -43,46 +43,12 @@ jobs:
         run: |
           echo "PATH=$PATH:~/.local/bin" >> $GITHUB_ENV
           echo "Python ${{matrix.python-version}}"
-          echo "pip: $(type pip)"
-
-          .github/workflows/_free_disk_space.sh
-
-          pip install --user --progress-bar=off --upgrade pip setuptools wheel
-
-          pip install --user --progress-bar=off pytest
-
-          pip install --user --progress-bar=off dm-tree h5py
-          pip install --user --progress-bar=off "numpy<2"
-          pip install --user --progress-bar=off scipy  # for some tests
-
-          if [[ $(pip show torch | grep "^Version:" | cut -d' ' -f2) != "${{ matrix.torch-version }}"* ]]; then
-            # Free disk space first. Can run out of disk space otherwise.
-            # Also, remove any nvidia packages to avoid conflicts (https://github.com/rwth-i6/returnn/issues/1802).
-            pip freeze | grep nvidia | xargs -r pip uninstall -y
-            pip uninstall -y torch
-          fi
-          pip install --user --progress-bar=off --upgrade torch==${{ matrix.torch-version }}
-
-          # Retry several times in case download breaks. https://github.com/pypa/pip/issues/4796
-          for ((i=0; i<3; i++)); do
-            if pip install --user --upgrade --progress-bar=off tensorflow==${{ matrix.tf-version }}; then break; fi
-          done
-
-          # Used in some tests.
-          pip install --user --progress-bar=off transformers
-          # Install ESPnet. Fix Torch version (https://github.com/rwth-i6/returnn/issues/1770#issuecomment-3536630432).
-          pip install --user --progress-bar=off "espnet==202506" "torch==${{ matrix.torch-version }}"  # last version w/ numpy<2
-
-      - name: Test Python/Numpy/PyTorch/TF versions.
-        run: |
-          echo "Python env: $(type python) $(python --version)"
-          python -c "import numpy; print('NumPy:', numpy.version.full_version)"
-          if ! python -c "import torch"; then python .github/workflows/_pytorch_collect_env_ext.py; fi
-          python -c "import torch; print('PyTorch:', torch.__version__, torch.__file__)"
-          # torch.__version__ is for example "1.13.1+cu117"
-          python -c "import torch; assert (torch.__version__ + '+').startswith('${{ matrix.torch-version }}+')"
-          python -c "import tensorflow as tf; print('TensorFlow:', tf.__git_version__, tf.__version__, tf.__file__)"
-          python -c "import tensorflow as tf; assert tf.__version__ == '${{ matrix.tf-version }}'"
+          python .github/workflows/_setup_deps.py \
+            --python ${{matrix.python-version}} \
+            --torch ${{ matrix.torch-version }} \
+            --tf ${{ matrix.tf-version }} \
+            --espnet 1 \
+            --hf-datasets 1
 
       - name: Cache PyCharm
         uses: actions/cache@v4
@@ -139,22 +105,9 @@ jobs:
         run: |
           echo "PATH=$PATH:~/.local/bin" >> $GITHUB_ENV
           echo "Python ${{matrix.python-version}}"
-          echo "pip: $(type pip)"
 
-          pip install --user --upgrade pip setuptools wheel
-
-          pip install --user pytest
-
-          pip install --user --progress-bar=off -r requirements.txt
-          pip install --user --progress-bar=off scipy  # for some tests
-
-      - name: Test Python/Numpy.
-        run: |
-          echo "Python env: $(type python) $(python --version)"
-          python -c "import numpy; print('NumPy:', numpy.version.full_version)"
-
-          echo "Pytest env:"
-          python -m pytest --version
+          python .github/workflows/_setup_deps.py \
+            --python ${{matrix.python-version}}
 
       - name: Run test
         run: |
@@ -195,43 +148,10 @@ jobs:
         run: |
           echo "PATH=$PATH:~/.local/bin" >> $GITHUB_ENV
           echo "Python ${{matrix.python-version}}"
-          echo "pip: $(type pip)"
-
-          .github/workflows/_free_disk_space.sh
-
-          pip install --user --upgrade pip setuptools wheel
-
-          pip install --user pytest
-
-          sudo apt-get update
-          sudo apt-get install -y ffmpeg  # for torchcodec
-
-          # datasets >=4 needs torch to decode audio files
-          pip install --user --progress-bar=off dm-tree h5py
-          pip install --user --progress-bar=off "numpy<2"
-          if [[ $(pip show torch | grep "^Version:" | cut -d' ' -f2) != "${{ matrix.torch-version }}"* ]]; then
-            # Free disk space first. Can run out of disk space otherwise.
-            # Also, remove any nvidia packages to avoid conflicts (https://github.com/rwth-i6/returnn/issues/1802).
-            pip freeze | grep nvidia | xargs -r pip uninstall -y
-            pip uninstall -y torch
-          fi
-          pip install --user --progress-bar=off --upgrade torch==${{ matrix.torch-version }}
-          pip install --user --progress-bar=off torchcodec==0.7  # for HF datasets
-          pip install --user --progress-bar=off lovely_tensors
-
-          pip install --user --progress-bar=off datasets
-
-      - name: Test Python/Numpy/PyTorch.
-        run: |
-          echo "Python env: $(type python) $(python --version)"
-          python -c "import numpy; print('NumPy:', numpy.version.full_version)"
-          if ! python -c "import torch"; then python .github/workflows/_pytorch_collect_env_ext.py; fi
-          python -c "import torch; print('PyTorch:', torch.__version__, torch.__file__)"
-          # torch.__version__ is for example "1.13.1+cu117"
-          python -c "import torch; assert (torch.__version__ + '+').startswith('${{ matrix.torch-version }}+')"
-
-          echo "Pytest env:"
-          python -m pytest --version
+          python .github/workflows/_setup_deps.py \
+            --python ${{matrix.python-version}} \
+            --torch ${{ matrix.torch-version }} \
+            --hf-datasets 1
 
       - name: Run test
         run: |
@@ -288,43 +208,10 @@ jobs:
         run: |
           echo "PATH=$PATH:~/.local/bin" >> $GITHUB_ENV
           echo "Python ${{matrix.python-version}}"
-          echo "pip: $(type pip)"
 
-          pip install --user --progress-bar=off --upgrade pip setuptools wheel
-
-          pip install --user --progress-bar=off pytest
-
-          pip install --user --progress-bar=off --upgrade dm-tree h5py
-
-          if [[ "${{matrix.tf-version}}" == 2.[0123].* ]]; then
-            # Older TF needs older NumPy version.
-            # https://github.com/rwth-i6/returnn/pull/1160#issuecomment-1284537803
-            pip install --user numpy==1.19.5
-            # Older TF needs also older protobuf version.
-            # https://github.com/rwth-i6/returnn/issues/1209
-            pip install --user "protobuf<=3.20.1"
-          fi
-
-          if [[ "${{matrix.tf-version}}" == 2.10.* ]]; then
-            # TF 2.10 requires gast<=0.4.0,>=0.2.1. But for example, with gast 0.2.2, we get some AutoGraph error:
-            # Cause: module 'gast' has no attribute 'Constant'
-            # Similar like: https://github.com/tensorflow/tensorflow/issues/47802
-            pip install --user --upgrade "gast<=0.4.0"
-          fi
-
-          pip install --user --progress-bar=off -r requirements.txt
-          pip install --user --progress-bar=off --upgrade scipy  # for some tests
-          pip install --user --progress-bar=off --upgrade tensorflow==${{ matrix.tf-version }}
-
-      - name: Test Python/Numpy/TF versions.
-        run: |
-          echo "Python env: $(type python) $(python --version)"
-          python -c "import numpy; print('NumPy:', numpy.version.full_version)"
-          python -c "import tensorflow as tf; print('TensorFlow:', tf.__git_version__, tf.__version__, tf.__file__)"
-          python -c "import tensorflow as tf; assert tf.__version__ == '${{ matrix.tf-version }}'"
-
-          echo "Pytest env:"
-          python -m pytest --version
+          python .github/workflows/_setup_deps.py \
+            --python ${{matrix.python-version}} \
+            --tf ${{ matrix.tf-version }}
 
       - name: Run test
         run: |
@@ -372,30 +259,10 @@ jobs:
         run: |
           echo "PATH=$PATH:~/.local/bin" >> $GITHUB_ENV
           echo "Python ${{matrix.python-version}}"
-          echo "pip: $(type pip)"
 
-          pip install --user --progress-bar=off --upgrade pip setuptools wheel
-
-          pip install --user --progress-bar=off pytest
-
-          pip install --user --progress-bar=off dm-tree h5py
-          pip install --user --progress-bar=off "numpy<2"
-          pip install --user --progress-bar=off scipy  # for some tests
-          pip install --user --progress-bar=off --upgrade torch==${{ matrix.torch-version }}
-          pip install --user --progress-bar=off onnx onnxruntime
-          pip install --user --progress-bar=off lovely_tensors
-
-      - name: Test Python/Numpy/PyTorch versions.
-        run: |
-          echo "Python env: $(type python) $(python --version)"
-          python -c "import numpy; print('NumPy:', numpy.version.full_version)"
-          if ! python -c "import torch"; then python .github/workflows/_pytorch_collect_env_ext.py; fi
-          python -c "import torch; print('PyTorch:', torch.__version__, torch.__file__)"
-          # torch.__version__ is for example "1.13.1+cu117"
-          python -c "import torch; assert (torch.__version__ + '+').startswith('${{ matrix.torch-version }}+')"
-
-          echo "Pytest env:"
-          python -m pytest --version
+          python .github/workflows/_setup_deps.py \
+            --python ${{matrix.python-version}} \
+            --torch ${{ matrix.torch-version }}
 
       - name: Run test
         run: |
@@ -460,89 +327,12 @@ jobs:
         run: |
           echo "PATH=$PATH:~/.local/bin" >> $GITHUB_ENV
           echo "Python ${{matrix.python-version}}"
-          echo "pip: $(type pip)"
 
-          .github/workflows/_free_disk_space.sh
-
-          pip install --user --progress-bar=off --upgrade pip setuptools wheel
-
-          pip install --user --progress-bar=off pytest
-
-          sudo apt-get install -y libsndfile1  # soundfile, librosa, ESPnet
-
-          pip install --user --progress-bar=off dm-tree h5py
-          pip install --user --progress-bar=off numpy==1.23.5  # for ESPnet, ctc-segmentation, etc
-          pip install --user --progress-bar=off scipy  # for some tests
-
-          pip install --user --progress-bar=off --upgrade torch==${{ matrix.torch-version }}
-          pip install --user --progress-bar=off lovely_tensors
-          if [[ "${{matrix.python-version}}" == "3.10" ]]; then
-            # https://github.com/rwth-i6/returnn/issues/1803, https://github.com/AnswerDotAI/fastcore/issues/751
-            pip install --user --progress-bar=off fastcore==1.12.1
-          fi
-
-          if [[ "${{matrix.tf-version}}" == 2.10.* ]]; then
-            # TF 2.10 requires gast<=0.4.0,>=0.2.1. But for example, with gast 0.2.2, we get some AutoGraph error:
-            # Cause: module 'gast' has no attribute 'Constant'
-            # Similar like: https://github.com/tensorflow/tensorflow/issues/47802
-            pip install --user --upgrade "gast<=0.4.0"
-          fi
-
-          # Retry several times in case download breaks. https://github.com/pypa/pip/issues/4796
-          for ((i=0; i<3; i++)); do
-            if pip install --user --upgrade --progress-bar=off tensorflow==${{ matrix.tf-version }}; then break; fi
-          done
-
-          # Needed for some tests.
-          # transformers 4.50 requires PyTorch >2.0, so stick to transformers 4.49 for now.
-          # (https://github.com/rwth-i6/returnn/issues/1706)
-          # safetensors >=0.6 requires PyTorch >2.0, so stick to safetensors 0.5.3 for now.
-          # (https://github.com/rwth-i6/returnn/issues/1747)
-          if [[ "${{matrix.python-version}}" == 3.8 ]]; then
-            # Need older version for Python 3.8. Install whatever is available.
-            pip install --user --progress-bar=off transformers
-          else
-            pip install --user --progress-bar=off safetensors==0.5.3 transformers==4.49.0
-          fi
-          if [[ "${{matrix.python-version}}" == 3.8 ]]; then
-            # https://github.com/rwth-i6/returnn/issues/1729
-            pip install --user --progress-bar=off ctc-segmentation==1.6.6 pyworld==0.3.4
-          fi
-          # Install ESPnet. Fix Torch version (https://github.com/rwth-i6/returnn/issues/1770#issuecomment-3536630432).
-          pip install --user --progress-bar=off "espnet==202506" "torch==${{ matrix.torch-version }}"  # last version w/ numpy<2
-          # TorchAudio needed by ESPnet.
-          # https://pytorch.org/audio/stable/installation.html#compatibility-matrix
-          if [[ "${{matrix.torch-version}}" == 2.0.0 ]]; then
-            pip install --user --progress-bar=off torchaudio==2.0.1
-          elif [[ "${{matrix.torch-version}}" == 1.13.1 ]]; then
-            pip install --user --progress-bar=off torchaudio==0.13.1
-          else
-            pip install --user --progress-bar=off torchaudio==${{matrix.torch-version}}
-          fi
-
-          echo "Space usage after installing dependencies:"
-          df -h
-          echo "Local home dir usage:"
-          du -h -d1 ~
-          du -h -d1 ~/.local
-          echo "Cache dir sizes:"
-          du -h -d1 ~/.cache
-          echo "Clean up cache pip dir..."
-          rm -rf ~/.cache/pip || true
-
-      - name: Test Python/Numpy/PyTorch/TF versions.
-        run: |
-          echo "Python env: $(type python) $(python --version)"
-          python -c "import numpy; print('NumPy:', numpy.version.full_version)"
-          if ! python -c "import torch"; then python .github/workflows/_pytorch_collect_env_ext.py; fi
-          python -c "import torch; print('PyTorch:', torch.__version__, torch.__file__)"
-          # torch.__version__ is for example "1.13.1+cu117"
-          python -c "import torch; assert (torch.__version__ + '+').startswith('${{ matrix.torch-version }}+')"
-          python -c "import tensorflow as tf; print('TensorFlow:', tf.__git_version__, tf.__version__, tf.__file__)"
-          python -c "import tensorflow as tf; assert tf.__version__ == '${{ matrix.tf-version }}'"
-
-          echo "Pytest env:"
-          python -m pytest --version
+          python .github/workflows/_setup_deps.py \
+            --python ${{matrix.python-version}} \
+            --torch ${{ matrix.torch-version }} \
+            --tf ${{ matrix.tf-version }} \
+            --espnet 1
 
       - name: Run test
         run: |
