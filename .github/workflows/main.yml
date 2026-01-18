@@ -55,6 +55,12 @@ jobs:
           pip install --user --progress-bar=off "numpy<2"
           pip install --user --progress-bar=off scipy  # for some tests
 
+          if [[ $(pip show torch | grep "^Version:" | cut -d' ' -f2) != "${{ matrix.torch-version }}"* ]]; then
+            # Free disk space first. Can run out of disk space otherwise.
+            # Also, remove any nvidia packages to avoid conflicts (https://github.com/rwth-i6/returnn/issues/1802).
+            pip freeze | grep nvidia | xargs -r pip uninstall -y
+            pip uninstall -y torch
+          fi
           pip install --user --progress-bar=off --upgrade torch==${{ matrix.torch-version }}
 
           # Retry several times in case download breaks. https://github.com/pypa/pip/issues/4796
@@ -205,6 +211,7 @@ jobs:
           pip install --user --progress-bar=off "numpy<2"
           if [[ $(pip show torch | grep "^Version:" | cut -d' ' -f2) != "${{ matrix.torch-version }}"* ]]; then
             # Free disk space first. Can run out of disk space otherwise.
+            # Also, remove any nvidia packages to avoid conflicts (https://github.com/rwth-i6/returnn/issues/1802).
             pip freeze | grep nvidia | xargs -r pip uninstall -y
             pip uninstall -y torch
           fi
