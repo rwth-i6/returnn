@@ -6,7 +6,7 @@ Some are potentially already installed (e.g. via cache).
 """
 
 from __future__ import annotations
-from typing import Optional
+from typing import Optional, List
 import os
 import sys
 import time
@@ -84,14 +84,26 @@ def main():
             print("Installing PyTorch version:", args.torch)
 
             ex_torch_version = _get_torch_version()
-            if ex_torch_version and ex_torch_version != args.torch:
-                # Free disk space first. Can run out of disk space otherwise.
-                # Also, remove any nvidia packages to avoid conflicts (https://github.com/rwth-i6/returnn/issues/1802).
-                for pkg in subprocess.check_output([*pip, "freeze"]).splitlines():
-                    if pkg.startswith(b"nvidia-"):
-                        pkg_s = pkg.decode("utf-8").strip()
-                        _run(*pip, "uninstall", "-y", pkg_s)
-                _run(*pip, "uninstall", "-y", "torch")
+            if ex_torch_version:
+                if ex_torch_version != args.torch:
+                    # Free disk space first. Can run out of disk space otherwise.
+                    # Also, remove any nvidia packages to avoid conflicts (https://github.com/rwth-i6/returnn/issues/1802).
+                    for pkg in subprocess.check_output([*pip, "freeze"]).splitlines():
+                        if pkg.startswith(b"nvidia-"):
+                            pkg_s = pkg.decode("utf-8").strip()
+                            _run(*pip, "uninstall", "-y", pkg_s)
+                    _run(*pip, "uninstall", "-y", "torch")
+                else:
+                    # Already installed, matching Torch version
+                    print(f"PyTorch {ex_torch_version} already installed.")
+                    # Check bad nvidia packages
+                    ex_torch_deps = set(_get_torch_deps())
+                    for pkg in subprocess.check_output([*pip, "freeze"]).splitlines():
+                        if pkg.startswith(b"nvidia-"):
+                            pkg_s = pkg.decode("utf-8").strip()
+                            pkg_name, _ = pkg_s.split("==", 1)
+                            if pkg_name not in ex_torch_deps:
+                                _run(*pip, "uninstall", "-y", pkg_s)
 
             _run(*pip_install, f"torch=={args.torch}")
             _run(*pip_install, "onnx", "onnxruntime")
@@ -215,6 +227,22 @@ def _get_torch_version() -> Optional[str]:
             line_s = line.decode("utf-8")
             return line_s.split(" ")[1].strip()
     raise RuntimeError("Cannot determine torch version: output:\n%s" % out.decode("utf-8"))
+
+
+def _get_torch_deps() -> List[str]:
+    """
+    pip show torch | grep "^Requires:" ...
+    """
+    py = sys.executable
+    pip = [py, "-m", "pip"]
+    out = subprocess.check_output(pip + ["show", "torch"])
+    for line in out.splitlines():
+        if line.startswith(b"Requires:"):
+            line_s = line.decode("utf-8")[len("Requires:") :]
+            deps = line_s.split(",")
+            deps = [d.strip() for d in deps]
+            return deps
+    raise RuntimeError("Cannot determine torch deps: output:\n%s" % out.decode("utf-8"))
 
 
 IsTravisEnv = os.environ.get("TRAVIS") == "true"
