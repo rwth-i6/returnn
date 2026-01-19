@@ -1549,7 +1549,7 @@ def ctc_loss(
     return loss
 
 
-def fast_viterbi(am_scores, am_seq_len, edges, weights, start_end_states):
+def fast_viterbi(*, am_scores, am_seq_len, edges, weights, start_end_states, mask_idx: int = 0):
     """
     :param tf.Tensor am_scores: (time, batch, dim), in +log space (unlike fast_baum_welch)
     :param tf.Tensor am_seq_len: (batch,), int32
@@ -1557,6 +1557,7 @@ def fast_viterbi(am_scores, am_seq_len, edges, weights, start_end_states):
     :param tf.Tensor weights: (num_edges,), weights of the edges
     :param tf.Tensor start_end_states: (2, batch), (start,end) state idx in automaton.
         there is only one single automaton.
+    :param mask_idx: vocab index used for masking (e.g. padding, or if not path was found)
     :return: (alignment, scores), alignment is (time, batch), scores is (batch,), in +log space
     :rtype: (tf.Tensor, tf.Tensor)
     """
@@ -1564,7 +1565,7 @@ def fast_viterbi(am_scores, am_seq_len, edges, weights, start_end_states):
     n_states = last_state_idx + 1
     maker = OpMaker(OpDescription.from_gen_base(native_op.FastViterbiOp))
     op = maker.make_op()
-    alignment, scores = op(am_scores, am_seq_len, edges, weights, start_end_states, n_states)
+    alignment, scores = op(am_scores, am_seq_len, edges, weights, start_end_states, n_states, mask_idx)
     return alignment, scores
 
 

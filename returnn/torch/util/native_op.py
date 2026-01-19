@@ -506,6 +506,7 @@ def ctc_loss(
             edges=edges,
             weights=weights,
             start_end_states=start_end_states,
+            mask_idx=blank_index,
         )
         # alignment is (time,batch)
         log_probs_ = torch.gather(log_probs, 2, alignment.unsqueeze(-1))  # (time,batch,1)
@@ -653,6 +654,7 @@ def fast_viterbi(
     edges: torch.Tensor,
     weights: torch.Tensor,
     start_end_states: torch.Tensor,
+    mask_idx: int = 0,
 ) -> Tuple[torch.Tensor, torch.Tensor]:
     """
     :param am_scores: (time, batch, dim), in +log space, already normalized / just used as-is
@@ -661,6 +663,7 @@ def fast_viterbi(
     :param weights: (num_edges,), weights of the edges
     :param start_end_states: (2, batch), (start,end) state idx in automaton.
         there is only one single automaton.
+    :param mask_idx: vocab index used for masking (e.g. padding, or if not path was found)
     :return: (alignment, scores), alignment is (time, batch), scores is (batch,), in +log space.
         note: scores are not differentiable here.
         do gather+sum on the am_scores by the alignment to get it differentiable.
@@ -669,7 +672,7 @@ def fast_viterbi(
     n_states = last_state_idx + 1
     maker = OpMaker(OpDescription.from_gen_base(native_op.FastViterbiOp))
     op = maker.make_op()
-    alignment, scores = op(am_scores, am_seq_len, edges, weights, start_end_states, n_states)
+    alignment, scores = op(am_scores, am_seq_len, edges, weights, start_end_states, n_states, mask_idx)
     return alignment, scores
 
 
@@ -713,7 +716,12 @@ def ctc_best_path(
     )
 
     alignment, _ = fast_viterbi(
-        am_scores=log_sm, am_seq_len=logits_seq_lens, edges=edges, weights=weights, start_end_states=start_end_states
+        am_scores=log_sm,
+        am_seq_len=logits_seq_lens,
+        edges=edges,
+        weights=weights,
+        start_end_states=start_end_states,
+        mask_idx=blank_index,
     )
     return alignment
 
