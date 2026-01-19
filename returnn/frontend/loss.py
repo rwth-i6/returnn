@@ -235,7 +235,8 @@ def ctc_durations_from_path(
             out_spatial_dim.get_size_tensor(device=num_labels.device) == num_labels * 2 + 1,
             "out_spatial_dim size does not match 2 * target_spatial_dim + 1",
         )
-    out_spatial_dim = targets_spatial_dim * 2 + 1
+    else:
+        out_spatial_dim = targets_spatial_dim * 2 + 1
     out = rf.scatter(rf.ones_like(state_idx), indices=state_idx, indices_dim=path_spatial_dim, out_dim=out_spatial_dim)
     # out state seq: [ _ a _ b _ c _ ]
     # out:           [ 2 2 0 1 2 3 1 ]
@@ -294,7 +295,8 @@ def ctc_no_label_loop_blank_durations_from_path(
             out_spatial_dim.get_size_tensor(device=num_labels.device) == num_labels + 1,
             "out_spatial_dim size does not match 2 * target_spatial_dim + 1",
         )
-    out_spatial_dim = targets_spatial_dim + 1
+    else:
+        out_spatial_dim = targets_spatial_dim + 1
     out_spatial_dim_ext = out_spatial_dim + 1  # for the extra label index used above
     out = rf.scatter(
         rf.ones_like(blank_idx), indices=blank_idx, indices_dim=path_spatial_dim, out_dim=out_spatial_dim_ext
