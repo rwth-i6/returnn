@@ -187,6 +187,8 @@ def ctc_durations_from_path(
     blank_index: int,
     targets_spatial_dim: Optional[Dim] = None,
     out_spatial_dim: Optional[Dim] = None,
+    check_dims: bool = True,
+    stop_on_failed_check: bool = True,
 ) -> Tuple[Tensor, Dim]:
     """
     Given a CTC path (alignment), compute the durations of each label + blanks.
@@ -202,6 +204,8 @@ def ctc_durations_from_path(
     :param blank_index: index of the blank label
     :param targets_spatial_dim: if given, asserts that the computed number of labels matches this size
     :param out_spatial_dim: if given, asserts that the output spatial dim size matches 2 * target_spatial_dim + 1
+    :param check_dims: whether to check the dimensions sizes
+    :param stop_on_failed_check: whether to raise an error on failed check
     :return: (durations, out_spatial_dim).
         durations shape [B...,out_spatial_dim] where out_spatial_dim = 2 * N + 1,
         where N is the number of labels in the target sequence.
@@ -213,10 +217,12 @@ def ctc_durations_from_path(
     new_label_mask = new_label_mask.copy_masked(False, dims=[path_spatial_dim])
     num_labels = rf.reduce_sum(rf.cast(new_label_mask, "int32"), axis=path_spatial_dim)
     if targets_spatial_dim is not None:
-        rf.assert_(
-            targets_spatial_dim.get_size_tensor(device=num_labels.device) == num_labels,
-            "target_spatial_dim size does not match number of labels in path",
-        )
+        if check_dims:
+            rf.assert_(
+                targets_spatial_dim.get_size_tensor(device=num_labels.device) == num_labels,
+                "target_spatial_dim size does not match number of labels in path",
+                stop=stop_on_failed_check,
+            )
     else:
         targets_spatial_dim = Dim(
             rf.copy_to_device(num_labels, rf.get_default_dim_size_device()), name="target_spatial"
@@ -231,10 +237,12 @@ def ctc_durations_from_path(
     state_idx = blank_idx_x2 + rf.where(path == blank_index, 0, -1)
     # state_idx:      [0 0 1 1 3 4 4 5 5 5 6]
     if out_spatial_dim is not None:
-        rf.assert_(
-            out_spatial_dim.get_size_tensor(device=num_labels.device) == num_labels * 2 + 1,
-            "out_spatial_dim size does not match 2 * target_spatial_dim + 1",
-        )
+        if check_dims:
+            rf.assert_(
+                out_spatial_dim.get_size_tensor(device=num_labels.device) == num_labels * 2 + 1,
+                "out_spatial_dim size does not match 2 * target_spatial_dim + 1",
+                stop=stop_on_failed_check,
+            )
     else:
         out_spatial_dim = targets_spatial_dim * 2 + 1
     out = rf.scatter(rf.ones_like(state_idx), indices=state_idx, indices_dim=path_spatial_dim, out_dim=out_spatial_dim)
@@ -250,6 +258,8 @@ def ctc_no_label_loop_blank_durations_from_path(
     blank_index: int,
     targets_spatial_dim: Optional[Dim] = None,
     out_spatial_dim: Optional[Dim] = None,
+    check_dims: bool = True,
+    stop_on_failed_check: bool = True,
 ) -> Tuple[Tensor, Dim]:
     """
     Given a CTC-without-label-loop (``label_loop=False`` in :func:`ctc_best_path`) (RNA) path (alignment),
@@ -263,6 +273,8 @@ def ctc_no_label_loop_blank_durations_from_path(
     :param blank_index: index of the blank label
     :param targets_spatial_dim: if given, asserts that the computed number of labels matches this size
     :param out_spatial_dim: if given, asserts that the output spatial dim size matches target_spatial_dim + 1
+    :param check_dims: whether to check the dimensions sizes
+    :param stop_on_failed_check: whether to raise an error on failed check
     :return: (durations, out_spatial_dim),
         durations is for the blank labels,
         durations shape [B...,out_spatial_dim] where out_spatial_dim = N + 1,
@@ -273,10 +285,12 @@ def ctc_no_label_loop_blank_durations_from_path(
     new_label_mask = new_label_mask.copy_masked(False, dims=[path_spatial_dim])
     num_labels = rf.reduce_sum(rf.cast(new_label_mask, "int32"), axis=path_spatial_dim)
     if targets_spatial_dim is not None:
-        rf.assert_(
-            targets_spatial_dim.get_size_tensor(device=num_labels.device) == num_labels,
-            "target_spatial_dim size does not match number of labels in path",
-        )
+        if check_dims:
+            rf.assert_(
+                targets_spatial_dim.get_size_tensor(device=num_labels.device) == num_labels,
+                "target_spatial_dim size does not match number of labels in path",
+                stop=stop_on_failed_check,
+            )
     else:
         targets_spatial_dim = Dim(
             rf.copy_to_device(num_labels, rf.get_default_dim_size_device()), name="target_spatial"
@@ -291,10 +305,12 @@ def ctc_no_label_loop_blank_durations_from_path(
     )
     # blank_idx:      [0 0 0 4 4 2 2 4 3]
     if out_spatial_dim is not None:
-        rf.assert_(
-            out_spatial_dim.get_size_tensor(device=num_labels.device) == num_labels + 1,
-            "out_spatial_dim size does not match 2 * target_spatial_dim + 1",
-        )
+        if check_dims:
+            rf.assert_(
+                out_spatial_dim.get_size_tensor(device=num_labels.device) == num_labels + 1,
+                "out_spatial_dim size does not match 2 * target_spatial_dim + 1",
+                stop=stop_on_failed_check,
+            )
     else:
         out_spatial_dim = targets_spatial_dim + 1
     out_spatial_dim_ext = out_spatial_dim + 1  # for the extra label index used above
