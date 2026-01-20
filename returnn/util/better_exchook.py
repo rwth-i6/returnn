@@ -1064,7 +1064,16 @@ class _OutputLinesCollector:
         elif isinstance(obj, type) and hasattr(obj, "__module__") and hasattr(obj, "__qualname__"):
             s = "<class %s.%s>" % (obj.__module__, obj.__qualname__)
         else:
-            s = repr(obj)
+            try:
+                s = repr(obj)
+            except Exception as exc:
+                t = type(obj)
+                s = "<%s.%s: repr-error %s: %s>" % (
+                    getattr(t, "__module__", "?"),
+                    getattr(t, "__qualname__", "?"),
+                    exc.__class__.__name__,
+                    str(exc),
+                )
         limit = output_limit()
         if len(s) > limit:
             if self.dom_term:
