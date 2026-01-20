@@ -42,7 +42,7 @@ def main_proc_manager(*, config: Config):
     """
     os.environ["__RETURNN_PROC_MANAGED"] = "1"
 
-    print("RETURNN train proc manager starting up, version %s" % util.describe_returnn_version())
+    print("RETURNN train proc manager starting up, version %s, pid %i" % (util.describe_returnn_version(), os.getpid()))
 
     # Setup BackendEngine. This is that other utility functions know the right model file extension.
     # _select_rf_backend to avoid importing Torch/TF/anything here.
