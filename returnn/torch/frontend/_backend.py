@@ -47,10 +47,10 @@ class TorchBackend(Backend[torch.Tensor]):
         return True
 
     @staticmethod
-    def assert_(condition: Tensor, message: str):
+    def assert_(condition: Tensor, message: str, *, stop: bool = True):
         """assert"""
         assert condition.dims == (), "condition for assert must be a scalar"
-        assert_(condition.raw_tensor, message)
+        assert_(condition.raw_tensor, message, stop=stop)
 
     @staticmethod
     def set_random_seed(seed: int):

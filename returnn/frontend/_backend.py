@@ -43,7 +43,7 @@ class Backend(Generic[T]):
         raise NotImplementedError
 
     @staticmethod
-    def assert_(condition: Tensor, message: str):
+    def assert_(condition: Tensor, message: str, *, stop: bool = True):
         """assert"""
         raise NotImplementedError
 

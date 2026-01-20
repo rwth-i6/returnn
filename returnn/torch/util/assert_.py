@@ -10,20 +10,27 @@ from queue import Queue
 import torch
 
 
-def assert_(cond: torch.Tensor, message: str):
+def assert_(cond: torch.Tensor, message: str, *, stop: bool = True):
     """
     Does a device-side assertion.
     For CPU, this will directly check the condition and raise an error if false.
     For CUDA devices, this runs asynchronously on a separate thread (to avoid pin_memory in the current thread),
     and non-blocking (does not trigger a CUDA sync).
+
+    :param cond: A boolean tensor indicating the condition to assert.
+    :param message: The message to display if the assertion fails.
+    :param stop: Whether to stop execution on assertion failure
     """
     if cond.device.type == "cpu":
         if not cond.item():
-            raise AssertionError(message)
+            if stop:
+                raise AssertionError(message)
+            else:
+                print(f"[ASSERT FAILED WARNING]: {message}")
         return
     elif cond.device.type == "cuda":
         # This triggers the Lazy initialization on first call
-        _CudaAsyncWorker().push(cond, message)
+        _CudaAsyncWorker().push(cond, message, stop=stop)
     else:
         raise NotImplementedError(f"assert_ not implemented for device type: {cond.device.type}")
 
@@ -47,7 +54,7 @@ _ext = None
 _cpp_source = dedent("""\
     #include <torch/extension.h>
 
-    void async_assert_cuda(const at::Tensor& cond, const at::Tensor& msg_tensor);
+    void async_assert_cuda(const at::Tensor& cond, const at::Tensor& msg_tensor, bool stop);
 
     PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
         m.def("async_assert_cuda", torch::wrap_pybind_function(async_assert_cuda), "Asynchronous CUDA assert");
@@ -63,16 +70,16 @@ _cuda_source = dedent("""\
     #include <c10/cuda/CUDACachingAllocator.h>
     #include <assert.h>
 
-    __global__ void assert_kernel(const bool* cond, const char* msg) {
+    __global__ void assert_kernel(const bool* cond, const char* msg, bool stop) {
         if (blockIdx.x == 0 && threadIdx.x == 0) {
             if (!(*cond)) {
-                printf("[GPU ASSERT FAILED]: %s\\n", msg);
-                __trap();
+                printf("[GPU %s]: %s\\n", stop ? "ASSERT FAILED" : "ASSERT FAILED WARNING", msg);
+                if(stop) __trap();
             }
         }
     }
 
-    void async_assert_cuda(const at::Tensor& cond, const at::Tensor& msg_tensor) {
+    void async_assert_cuda(const at::Tensor& cond, const at::Tensor& msg_tensor, bool stop) {
         auto stream = at::cuda::getCurrentCUDAStream();
 
         // Safety: Protect memory from GC while the kernel is in flight
@@ -81,7 +88,8 @@ _cuda_source = dedent("""\
 
         assert_kernel<<<1, 1, 0, stream>>>(
             cond.data_ptr<bool>(),
-            (const char*)msg_tensor.data_ptr<uint8_t>()
+            (const char*)msg_tensor.data_ptr<uint8_t>(),
+            stop
         );
     }
     """)
@@ -105,7 +113,7 @@ class _CudaAsyncWorker:
 
     def _loop(self):
         while True:
-            cond, message_str, stream = self.queue.get()
+            cond, message_str, stop, stream = self.queue.get()
 
             # Use the actual Stream object context
             with torch.cuda.stream(stream):
@@ -115,8 +123,8 @@ class _CudaAsyncWorker:
                 msg_gpu = msg_cpu.to("cuda", non_blocking=True)
 
                 # Call JIT-compiled function
-                _get_ext().async_assert_cuda(cond, msg_gpu)
+                _get_ext().async_assert_cuda(cond, msg_gpu, stop)
 
-    def push(self, cond: torch.Tensor, message: str):
+    def push(self, cond: torch.Tensor, message: str, stop: bool = True):
         """push to queue"""
-        self.queue.put((cond, message, torch.cuda.current_stream()))
+        self.queue.put((cond, message, stop, torch.cuda.current_stream()))

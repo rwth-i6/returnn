@@ -27,11 +27,14 @@ class NumpyBackend(Backend[numpy.ndarray]):
         return True
 
     @staticmethod
-    def assert_(condition: Tensor, message: str):
+    def assert_(condition: Tensor, message: str, *, stop: bool = True):
         """assert"""
         assert condition.dims == (), "condition for assert must be a scalar"
         if not condition.raw_tensor.item():
-            raise AssertionError(message)
+            if stop:
+                raise AssertionError(message)
+            else:
+                print(f"[ASSERT FAILED WARNING]: {message}")
 
     @staticmethod
     def get_dtype_name_raw(raw_tensor: numpy.ndarray) -> str:
