@@ -66,7 +66,7 @@ _cuda_source = dedent("""\
     __global__ void assert_kernel(const bool* cond, const char* msg) {
         if (blockIdx.x == 0 && threadIdx.x == 0) {
             if (!(*cond)) {
-                printf("\\n[GPU ASSERT FAILED]: %s\\n", msg);
+                printf("[GPU ASSERT FAILED]: %s\\n", msg);
                 __trap();
             }
         }
