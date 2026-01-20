@@ -67,7 +67,7 @@ _cuda_source = dedent("""\
         if (blockIdx.x == 0 && threadIdx.x == 0) {
             if (!(*cond)) {
                 printf("\\n[GPU ASSERT FAILED]: %s\\n", msg);
-                assert(false);
+                __trap();
             }
         }
     }
@@ -110,7 +110,7 @@ class _CudaAsyncWorker:
             # Use the actual Stream object context
             with torch.cuda.stream(stream):
                 # Convert string to pinned tensor (Avoiding read-only NP view)
-                msg_bytes = list(message_str.encode("utf-8"))
+                msg_bytes = list(message_str.encode("utf-8")) + [0]
                 msg_cpu = torch.tensor(msg_bytes, dtype=torch.uint8, pin_memory=True)
                 msg_gpu = msg_cpu.to("cuda", non_blocking=True)
 
