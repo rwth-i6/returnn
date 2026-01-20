@@ -80,12 +80,12 @@ def main_proc_manager(*, config: Config):
         else:
             print("Run RETURNN...")
 
-        sys.stdout.flush()
         last_model_epoch = cur_model_epoch
         num_starts += 1
         start_time = time.time()
         args = [sys.executable] + sys.argv
         print(f"Run {args}")
+        sys.stdout.flush()
         proc = subprocess.Popen(args)
         proc.wait()
         print("RETURNN runtime:", util.hms(time.time() - start_time))
