@@ -1289,6 +1289,7 @@ class TorchBackend(Backend[torch.Tensor]):
         out_dim: Dim,
     ) -> Tensor:
         """slice"""
+        assert step is None or (isinstance(step, int) and step == 1), "slice: step != 1 not yet implemented"
         axis_int = source.get_axis_from_description(axis, allow_int=False)
         out = source.copy_template_replace_dim_tag(axis=axis_int, new_dim_tag=out_dim)
         if isinstance(start, Tensor):
@@ -1301,14 +1302,12 @@ class TorchBackend(Backend[torch.Tensor]):
             size = size.get_dim_value()
         elif isinstance(size, Tensor):
             assert end is None
-            assert size.dims == ()  # scalar
-            size = size.raw_tensor
+            size = size.raw_tensor if size.dims == () else size.raw_tensor.max()
         elif isinstance(size, int):
             pass
         elif size is None:
             if isinstance(end, Tensor):
-                assert end.dims == ()
-                end = end.raw_tensor
+                end = end.raw_tensor if end.dims == () else end.raw_tensor.max()
             elif isinstance(end, int):
                 if end < 0:
                     end += axis.get_dim_value()

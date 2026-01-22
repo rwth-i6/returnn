@@ -667,10 +667,9 @@ class ReturnnLayersBackend(Backend[Layer]):
         out_dim: Dim,
     ) -> Tensor:
         """slice"""
-        if size is not None:
+        if size is not None or isinstance(start, Tensor):
             assert end is None  # not implemented
             assert step is None  # not implemented
-            assert size is not None  # not implemented
             return rfl.make_layer(
                 {
                     "class": "slice_nd",
