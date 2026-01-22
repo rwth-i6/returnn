@@ -851,10 +851,10 @@ class TorchBackend(Backend[torch.Tensor]):
         if len(batch_dims) != 1:
             batch_shape = [d.get_dim_value() for d in batch_dims]
             batch_n_elems = prod(batch_shape)
-            a_raw = torch.reshape(a_raw.raw_tensor, (batch_n_elems, a_spatial_dim.get_dim_value()))
-            b_raw = torch.reshape(b_raw.raw_tensor, (batch_n_elems, b_spatial_dim.get_dim_value()))
-            a_seq_len = torch.reshape(a_seq_len.raw_tensor, (batch_n_elems,))
-            b_seq_len = torch.reshape(b_seq_len.raw_tensor, (batch_n_elems,))
+            a_raw = torch.reshape(a_raw, (batch_n_elems, a_spatial_dim.get_dim_value()))
+            b_raw = torch.reshape(b_raw, (batch_n_elems, b_spatial_dim.get_dim_value()))
+            a_seq_len = torch.reshape(a_seq_len, (batch_n_elems,))
+            b_seq_len = torch.reshape(b_seq_len, (batch_n_elems,))
         dist_raw = native_op.edit_distance(a_raw, a_seq_len, b_raw, b_seq_len)
         if len(batch_dims) != 1:
             dist_raw = torch.reshape(dist_raw, batch_shape)
