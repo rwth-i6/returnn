@@ -725,7 +725,7 @@ class TorchBackend(Backend[torch.Tensor]):
         if use_native_op:
             loss_raw = native_op.ctc_loss(
                 logits=log_probs,
-                logits_normalize=True,
+                logits_normalize=False,
                 logits_seq_lens=input_lengths,
                 logits_time_major=True,
                 targets=targets_raw,
