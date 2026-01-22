@@ -842,23 +842,23 @@ class TorchBackend(Backend[torch.Tensor]):
         """edit distance"""
         a_batch_dims = a.remaining_dims(a_spatial_dim)
         b_batch_dims = b.remaining_dims(b_spatial_dim)
-        assert set(a_batch_dims) == set(b_batch_dims), "edit_distance: batch dims must match"
-        a_raw = a.copy_compatible_to_dims_raw(a_batch_dims + [a_spatial_dim])
-        b_raw = b.copy_compatible_to_dims_raw(a_batch_dims + [b_spatial_dim])
-        a_seq_len = a_spatial_dim.dyn_size_ext.copy_compatible_to_dims_raw(a_batch_dims)
-        b_seq_len = b_spatial_dim.dyn_size_ext.copy_compatible_to_dims_raw(a_batch_dims)
+        batch_dims = a_batch_dims + [d for d in b_batch_dims if d not in a_batch_dims]
+        a_raw = a.copy_compatible_to_dims_raw(batch_dims + [a_spatial_dim], unbroadcast=True)
+        b_raw = b.copy_compatible_to_dims_raw(batch_dims + [b_spatial_dim], unbroadcast=True)
+        a_seq_len = a_spatial_dim.dyn_size_ext.copy_compatible_to_dims_raw(batch_dims, unbroadcast=True)
+        b_seq_len = b_spatial_dim.dyn_size_ext.copy_compatible_to_dims_raw(batch_dims, unbroadcast=True)
         batch_shape = None
-        if len(a_batch_dims) != 1:
-            batch_shape = [d.get_dim_value() for d in a_batch_dims]
+        if len(batch_dims) != 1:
+            batch_shape = [d.get_dim_value() for d in batch_dims]
             batch_n_elems = prod(batch_shape)
             a_raw = torch.reshape(a_raw.raw_tensor, (batch_n_elems, a_spatial_dim.get_dim_value()))
             b_raw = torch.reshape(b_raw.raw_tensor, (batch_n_elems, b_spatial_dim.get_dim_value()))
             a_seq_len = torch.reshape(a_seq_len.raw_tensor, (batch_n_elems,))
             b_seq_len = torch.reshape(b_seq_len.raw_tensor, (batch_n_elems,))
         dist_raw = native_op.edit_distance(a_raw, a_seq_len, b_raw, b_seq_len)
-        if len(a_batch_dims) != 1:
+        if len(batch_dims) != 1:
             dist_raw = torch.reshape(dist_raw, batch_shape)
-        return rf.convert_to_tensor(dist_raw, name="edit_distance", dims=a_batch_dims)
+        return rf.convert_to_tensor(dist_raw, name="edit_distance", dims=batch_dims)
 
     @staticmethod
     def create_parameter_raw(tensor: rf.Parameter, *, device: Optional[str] = None) -> torch.nn.Parameter:
