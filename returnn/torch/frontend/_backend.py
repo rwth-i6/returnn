@@ -92,6 +92,7 @@ class TorchBackend(Backend[torch.Tensor]):
                 i = int(k[4:])
                 torch.cuda.set_rng_state(torch.from_numpy(numpy.frombuffer(v, dtype="uint8")), i)
 
+    # keep in sync with native implementation
     @staticmethod
     def get_dtype_name_raw(raw_tensor: torch.Tensor) -> str:
         """
@@ -177,6 +178,7 @@ class TorchBackend(Backend[torch.Tensor]):
         """
         return raw_tensor.unsqueeze(axis)
 
+    # keep in sync with native implementation
     @staticmethod
     def expand_raw(raw_tensor: torch.Tensor, axis: int, dim: Union[int, torch.Tensor]) -> torch.Tensor:
         """

@@ -10,6 +10,7 @@ class PyModuleState;
 PyObject* pyGetBackendForTensor(PyObject *self, PyObject *const *args, Py_ssize_t nargs);
 PyObject* pyIsRawTorchTensorType(PyObject *self, PyObject *const *args, Py_ssize_t nargs);
 PyObject* pyRawTorchTensorGetDType(PyObject *self, PyObject *const *args, Py_ssize_t nargs);
+PyObject* pyRawTorchTensorExpand(PyObject *self, PyObject *const *args, Py_ssize_t nargs);
 
 // }
 

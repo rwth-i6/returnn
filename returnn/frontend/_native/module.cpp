@@ -16,13 +16,14 @@ static PyMethodDef _pyModuleMethods[] = {
     {"tensor_raw_tensor_setter", (PyCFunction) pyTensorRawTensorSetter, METH_FASTCALL, "Tensor.raw_tensor.setter"},
     {"convert_to_raw_torch_tensor_like", (PyCFunction) pyConvertToRawTorchTensorLike, METH_FASTCALL,
         "torch.tensor(value, dtype=..., device=...)"},
+    {"raw_torch_tensor_expand", (PyCFunction) pyRawTorchTensorExpand, METH_FASTCALL, "TorchBackend.expand_raw"},
 
     {"tensor_copy", (PyCFunction) pyTensorCopy, METH_VARARGS | METH_KEYWORDS, "Tensor.copy"},
     {"tensor_copy_template", (PyCFunction) pyTensorCopyTemplate, METH_VARARGS | METH_KEYWORDS, "Tensor.copy_template"},
     {"tensor_get_out_permutation_to_dims", (PyCFunction) pyTensorGetOutPermutationsToDims, METH_FASTCALL,
         "Tensor.get_out_permutation_to_dims"},
-    {"tensor_copy_compatible_to_dims", (PyCFunction) pyTensorCopyCompatibleToDims, METH_FASTCALL, "Tensor.copy_compatible_to_dims"},
-    {"tensor_copy_compatible_to_dims_raw", (PyCFunction) pyTensorCopyCompatibleToDimsRaw, METH_FASTCALL, "Tensor.copy_compatible_to_dims_raw"},
+    {"tensor_copy_compatible_to_dims", (PyCFunction) pyTensorCopyCompatibleToDims, METH_VARARGS | METH_KEYWORDS, "Tensor.copy_compatible_to_dims"},
+    {"tensor_copy_compatible_to_dims_raw", (PyCFunction) pyTensorCopyCompatibleToDimsRaw, METH_VARARGS | METH_KEYWORDS, "Tensor.copy_compatible_to_dims_raw"},
 
     {"tensor_compare", (PyCFunction) pyTensorCompare, METH_VARARGS | METH_KEYWORDS, "rf.compare"},
     {"tensor_combine", (PyCFunction) pyTensorCombine, METH_VARARGS | METH_KEYWORDS, "rf.combine"},
@@ -290,6 +291,7 @@ bool PyModuleState::_cachedOpInitTorch() {
     AddOpNative(TOp_ConvertToTensorLike, "convert_to_raw_torch_tensor_like");
     AddOp(TOp_Permute, "permute");
     AddOp(TOp_Reshape, "reshape");
+    AddOpNative(TOp_Expand, "raw_torch_tensor_expand");
 
     {
         PyObjectScopedRef shapeAttr = PyObject_GetAttrString(_torchTensorType, "shape");
@@ -339,6 +341,7 @@ const char* rawOpName(RawOp op) {
         names[TOp_ConvertToTensorLike] = "convert_to_tensor_like";
         names[TOp_Permute] = "permute";
         names[TOp_Reshape] = "reshape";
+        names[TOp_Expand] = "expand";
         names[TOp_GetShape] = "get_shape";
         names[TOp_GetDType] = "get_dtype";
         names[TOp_Eq] = "equal";

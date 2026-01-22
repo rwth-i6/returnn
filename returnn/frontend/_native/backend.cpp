@@ -86,6 +86,44 @@ PyObject* pyRawTorchTensorGetDType(PyObject *self, PyObject *const *args, Py_ssi
     }
 }
 
+// like TorchBackend.expand_raw()
+PyObject* pyRawTorchTensorExpand(PyObject *self, PyObject *const *args, Py_ssize_t nargs) {
+    if(nargs != 3) {
+        PyErr_SetString(PyExc_TypeError, "raw_torch_tensor_expand() takes exactly 3 arguments: raw_tensor, axis, dim");
+        return NULL;
+    }
+
+    PyModuleState* modState = (PyModuleState*) PyModule_GetState(self);
+    if(!modState) return NULL;
+
+    PyObject* raw_tensor = args[0];
+    long axis = (long) PyLong_AsLong(args[1]);
+    if(axis == -1 && PyErr_Occurred()) return NULL;
+    PyObject* dim = args[2];
+
+    // implement this Python code:
+    // raw_tensor.expand(*[-1 if i != axis else dim for i in range(raw_tensor.dim())])
+
+    PyObjectScopedRef ndimObj = PyObject_CallMethod(raw_tensor, "dim", NULL);
+    if(!ndimObj) return NULL;
+    long ndim = PyLong_AsLong(ndimObj);
+    if(ndim == -1 && PyErr_Occurred()) return NULL;
+    if(axis < 0 || axis >= ndim) {
+        PyErr_Format(PyExc_ValueError, "raw_torch_tensor_expand: axis %ld out of bounds for ndim %ld", axis, ndim);
+        return NULL;
+    }
+
+    PyObjectScopedRef sizeList = PyList_New(ndim);
+    Py_INCREF(dim); // we will steal one ref below
+    if(!sizeList) return NULL;
+    for(long i = 0; i < ndim; i++) {
+        PyObject* sizeElem = (i != axis) ? PyLong_FromLong(-1) : dim;
+        if(!sizeElem) return NULL;
+        PyList_SET_ITEM(sizeList.get(), i, sizeElem); // steals ref to sizeElem
+    }
+    return PyObject_CallMethod(raw_tensor, "expand", "O", sizeList.get());
+}
+
 PyObject* getBackendForTensor(PyModuleState* modState, PyObject* obj) {
     PyObjectScopedRef raw_tensor = PyObject_GetAttrString(obj, "_raw_tensor");
     if(!raw_tensor) return NULL;
