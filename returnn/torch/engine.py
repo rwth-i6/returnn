@@ -1772,13 +1772,11 @@ class _TorchProfiler:
         self.profiler.__exit__(exc_type, exc_val, exc_tb)
 
         if exc_type is None:
-            print(
-                "Torch profiling finished, exporting Chrome trace to torch_profile.json,"
-                " memory timeline to torch_memory_profile.html...",
-                file=log.v2,
-            )
+            print("Torch profiling finished, exporting Chrome trace to torch_profile.json...", file=log.v2)
             self.profiler.export_chrome_trace("torch_profile.json")
-            self.profiler.export_memory_timeline("torch_memory_profile.html")
+            if self.profiler.profile_memory:
+                print("Exporting Torch memory profile to torch_memory_profile.html...", file=log.v2)
+                self.profiler.export_memory_timeline("torch_memory_profile.html")
 
             print("Exiting program after Torch profiling.", file=log.v2)
             sys.exit(0)
