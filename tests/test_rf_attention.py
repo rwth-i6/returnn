@@ -873,20 +873,25 @@ def benchmark_att_layer(benchmark, att_type, sdpa, seq_len):
     head_dim = 64
     model_dim_val = num_heads * head_dim
     model_dim = Dim(model_dim_val, name="model")
+    with torch.amp.autocast("cuda", dtype=torch.bfloat16), rf.set_default_float_dtype_ctx("bfloat16"):
+        input_tensor = rf.random_normal(dims=[batch_dim, seq_dim, model_dim])
 
-    input_tensor = rf.random_normal(dims=[batch_dim, seq_dim, model_dim])
+        _cls = rf.SelfAttention if att_type == "self_attention" else rf.CausalSelfAttention
+        att_layer = _cls(
+            in_dim=model_dim,
+            proj_dim=model_dim,
+            key_dim_total=model_dim,
+            value_dim_total=model_dim,
+            num_heads=num_heads,
+        )
 
-    _cls = rf.SelfAttention if att_type == "self_attention" else rf.CausalSelfAttention
-    att_layer = _cls(
-        in_dim=model_dim, proj_dim=model_dim, key_dim_total=model_dim, value_dim_total=model_dim, num_heads=num_heads
-    )
+        def _run_forward():
+            with torch.nn.attention.sdpa_kernel(backends=[torch.nn.attention.SDPBackend.FLASH_ATTENTION]):
+                res = att_layer(input_tensor, axis=seq_dim)
+            torch.cuda.synchronize() if torch.cuda.is_available() else None
+            return res
 
-    def _run_forward():
-        res = att_layer(input_tensor, axis=seq_dim)
-        torch.cuda.synchronize() if torch.cuda.is_available() else None
-        return res
-
-    benchmark(_run_forward)
+        benchmark(_run_forward)
 
 
 @pytest.mark.skipif(pytest_benchmark is None, reason="pytest-benchmark not installed")
