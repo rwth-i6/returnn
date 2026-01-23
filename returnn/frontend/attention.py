@@ -163,7 +163,7 @@ class SelfAttentionBase(rf.Module):
     Shared base class for (non-causal) self attention (:class:`SelfAttention`)
     and causal self attention (:class:`CausalSelfAttention`).
 
-    It uses :func:`dot_attention` for multi-headed dot-attention.
+    It uses :func:`scaled_dot_product_attention` for multi-headed dot-attention.
     """
 
     def __init__(
@@ -320,7 +320,7 @@ class CausalSelfAttention(SelfAttentionBase):
 
     def attention(self, q: Tensor, k: Tensor, v: Tensor, *, kv_axis: Dim) -> Tensor:
         """apply attention"""
-        assert not self.att_dropout_broadcast
+        assert not self.att_dropout_broadcast, "att_dropout_broadcast is deprecated"
 
         query, v_embed_dim, query_spatial, added_dummy_spat_dim_to_query = _infer_att_dims(
             q, k, v, qk_embed_dim=self.key_dim_per_head, kv_spatial_dim=kv_axis
@@ -792,7 +792,7 @@ class CrossAttention(rf.Module):
     """
     Cross attention
 
-    It uses :func:`dot_attention` for multi-headed dot-attention.
+    It uses :func:`scaled_dot_product_attention` for multi-headed dot-attention.
     """
 
     def __init__(
@@ -901,15 +901,26 @@ class CrossAttention(rf.Module):
 
     def attention(self, q: Tensor, k: Tensor, v: Tensor, *, kv_axis: Dim) -> Tensor:
         """apply attention"""
-        att = dot_attention(
-            q,
+        assert not self.att_dropout_broadcast, "att_dropout_broadcast is deprecated"
+
+        query, v_embed_dim, query_spatial, added_dummy_spat_dim_to_query = _infer_att_dims(
+            q, k, v, qk_embed_dim=self.key_dim_per_head, kv_spatial_dim=kv_axis
+        )
+
+        att = scaled_dot_product_attention(
+            query,
             k,
             v,
-            key_dim=self.key_dim_per_head,
-            axis=kv_axis,
-            att_dropout=self.att_dropout,
-            att_dropout_broadcast=self.att_dropout_broadcast,
+            dropout=self.att_dropout,
+            v_embed_dim=v_embed_dim,
+            qk_embed_dim=self.key_dim_per_head,
+            kv_spatial_dim=kv_axis,
+            query_spatial_dim=query_spatial,
+            is_causal=False,
         )
+        if added_dummy_spat_dim_to_query:
+            att = rf.squeeze(att, axis=query_spatial)
+
         output, _ = rf.merge_dims(att, dims=(self.num_heads, self.value_dim_per_head), out_dim=self.value_dim_total)
         if self.proj:
             output = self.proj(output)
