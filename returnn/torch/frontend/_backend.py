@@ -436,15 +436,16 @@ class TorchBackend(Backend[torch.Tensor]):
                 )
                 source_ = source.copy_transpose(templ_dims)
                 sources_raw.append(source_.raw_tensor)
+        out_raw = torch.cat([s for s in sources_raw], dim=axis)
         out = Tensor(
             "concat",
             dims=other_dims[:axis] + [out_dim] + other_dims[axis:],
-            dtype=sources[0][0].dtype,
+            dtype=TorchBackend.get_dtype_name_raw(out_raw),
             sparse_dim=sources[0][0].sparse_dim,
+            raw_tensor=out_raw,
         )
         if sources[0][0].feature_dim and sources[0][0].feature_dim != sources[0][1]:
             out.feature_dim = sources[0][0].feature_dim
-        out.raw_tensor = torch.cat([s for s in sources_raw], dim=axis)
         return out
 
     @staticmethod
