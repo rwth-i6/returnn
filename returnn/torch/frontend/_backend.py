@@ -2574,7 +2574,8 @@ class TorchBackend(Backend[torch.Tensor]):
         value: _TT,
         *,
         attention_mask: Optional[_TT] = None,
-        dropout: float = 0.0,
+        att_dropout: float = 0.0,
+        att_dropout_broadcast: Optional[bool] = None,
         v_embed_dim: Dim,
         qk_embed_dim: Dim,
         kv_spatial_dim: Dim,
@@ -2586,6 +2587,10 @@ class TorchBackend(Backend[torch.Tensor]):
         Scaled dot-product attention.
         :return: attention output
         """
+        from returnn.frontend.attention import _att_dropout_broadcast_default
+
+        if att_dropout_broadcast is None:
+            att_dropout_broadcast = _att_dropout_broadcast_default()
 
         if (
             TorchBackend.ForceFallbackSDPA
@@ -2593,6 +2598,7 @@ class TorchBackend(Backend[torch.Tensor]):
                 kv_spatial_dim.dyn_size_ext is not None
                 and any([d not in key.dims_set for d in kv_spatial_dim.dyn_size_ext.dims])
             )
+            or att_dropout_broadcast
         ):
             # the legacy CausalSelfAttention implementation has a Dimension in the key which depends
             # on another Dimension that only exists in the query matrix.
@@ -2603,7 +2609,8 @@ class TorchBackend(Backend[torch.Tensor]):
                 key=key,
                 value=value,
                 attention_mask=attention_mask,
-                dropout=dropout,
+                att_dropout=att_dropout,
+                att_dropout_broadcast=att_dropout_broadcast,
                 v_embed_dim=v_embed_dim,
                 qk_embed_dim=qk_embed_dim,
                 kv_spatial_dim=kv_spatial_dim,
@@ -2681,7 +2688,7 @@ class TorchBackend(Backend[torch.Tensor]):
             key_raw,
             value_raw,
             attn_mask=attention_mask_raw,
-            dropout_p=dropout if rf.get_run_ctx().is_train_flag_enabled(func=rf.dropout) else 0.0,
+            dropout_p=att_dropout if rf.get_run_ctx().is_train_flag_enabled(func=rf.dropout) else 0.0,
             is_causal=is_causal,
             # scale is only available in PyTorch 2.1+, some tests still run 2.0
             **({"scale": scale} if scale is not None else {}),

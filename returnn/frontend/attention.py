@@ -35,7 +35,8 @@ def scaled_dot_product_attention(
     value: Tensor,
     *,
     attention_mask: Optional[Tensor] = None,
-    dropout: float = 0.0,
+    att_dropout: float = 0.0,
+    att_dropout_broadcast: Optional[bool] = None,
     v_embed_dim: Dim,
     qk_embed_dim: Dim,
     kv_spatial_dim: Dim,
@@ -50,7 +51,9 @@ def scaled_dot_product_attention(
     :param key:
     :param value:
     :param attention_mask:
-    :param dropout:
+    :param att_dropout: dropout for attention weights
+    :param att_dropout_broadcast: whether to broadcast over all but ``axis``.
+        normally not wanted. disabled by default since behavior version 19.
     :param v_embed_dim: Embedding dimension of value
     :param qk_embed_dim: Embedding dimension of key (and query)
     :param kv_spatial_dim: Spatial axis of key/value to attend over
@@ -66,7 +69,8 @@ def scaled_dot_product_attention(
         key,
         value,
         attention_mask=attention_mask,
-        dropout=dropout,
+        att_dropout=att_dropout,
+        att_dropout_broadcast=att_dropout_broadcast,
         v_embed_dim=v_embed_dim,
         qk_embed_dim=qk_embed_dim,
         kv_spatial_dim=kv_spatial_dim,
@@ -81,7 +85,6 @@ def _infer_att_dims(
     query: Tensor, keys: Tensor, values: Tensor, *, qk_embed_dim: Dim, kv_spatial_dim: Dim
 ) -> Tuple[Tensor, Dim, Dim, bool]:
     assert kv_spatial_dim in keys.dims_set
-    # assert kv_spatial_dim not in query.dims_set
 
     # infer query spatial dim, necessary for pytorch backend
     query_non_batch_dims = query.remaining_dims(keys.dims_set - {kv_spatial_dim})
@@ -134,8 +137,6 @@ def dot_attention(
         normally not wanted. disabled by default since behavior version 19.
     :return: like values but with axis removed, and maybe any additional axes from query
     """
-    assert att_dropout_broadcast is None or not att_dropout_broadcast  # deprecated
-
     query, v_embed_dim, query_spatial, added_dummy_spat_dim_to_query = _infer_att_dims(
         query, keys, values, qk_embed_dim=key_dim, kv_spatial_dim=axis
     )
@@ -144,7 +145,8 @@ def dot_attention(
         query,
         keys,
         values,
-        dropout=att_dropout,
+        att_dropout=att_dropout,
+        att_dropout_broadcast=att_dropout_broadcast,
         v_embed_dim=v_embed_dim,
         qk_embed_dim=key_dim,
         kv_spatial_dim=axis,
@@ -244,8 +246,6 @@ class SelfAttentionBase(rf.Module):
 
     def attention(self, q: Tensor, k: Tensor, v: Tensor, *, kv_axis: Dim) -> Tensor:
         """apply attention"""
-        assert not self.att_dropout_broadcast
-
         query, v_embed_dim, query_spatial, added_dummy_spat_dim_to_query = _infer_att_dims(
             q, k, v, qk_embed_dim=self.key_dim_per_head, kv_spatial_dim=kv_axis
         )
@@ -254,7 +254,8 @@ class SelfAttentionBase(rf.Module):
             query,
             k,
             v,
-            dropout=self.att_dropout,
+            att_dropout=self.att_dropout,
+            att_dropout_broadcast=self.att_dropout_broadcast,
             v_embed_dim=v_embed_dim,
             qk_embed_dim=self.key_dim_per_head,
             kv_spatial_dim=kv_axis,
@@ -320,8 +321,6 @@ class CausalSelfAttention(SelfAttentionBase):
 
     def attention(self, q: Tensor, k: Tensor, v: Tensor, *, kv_axis: Dim) -> Tensor:
         """apply attention"""
-        assert not self.att_dropout_broadcast, "att_dropout_broadcast is deprecated"
-
         query, v_embed_dim, query_spatial, added_dummy_spat_dim_to_query = _infer_att_dims(
             q, k, v, qk_embed_dim=self.key_dim_per_head, kv_spatial_dim=kv_axis
         )
@@ -332,7 +331,8 @@ class CausalSelfAttention(SelfAttentionBase):
             query,
             k,
             v,
-            dropout=self.att_dropout,
+            att_dropout=self.att_dropout,
+            att_dropout_broadcast=self.att_dropout_broadcast,
             v_embed_dim=v_embed_dim,
             qk_embed_dim=self.key_dim_per_head,
             kv_spatial_dim=kv_axis,
@@ -901,8 +901,6 @@ class CrossAttention(rf.Module):
 
     def attention(self, q: Tensor, k: Tensor, v: Tensor, *, kv_axis: Dim) -> Tensor:
         """apply attention"""
-        assert not self.att_dropout_broadcast, "att_dropout_broadcast is deprecated"
-
         query, v_embed_dim, query_spatial, added_dummy_spat_dim_to_query = _infer_att_dims(
             q, k, v, qk_embed_dim=self.key_dim_per_head, kv_spatial_dim=kv_axis
         )
@@ -911,7 +909,8 @@ class CrossAttention(rf.Module):
             query,
             k,
             v,
-            dropout=self.att_dropout,
+            att_dropout=self.att_dropout,
+            att_dropout_broadcast=self.att_dropout_broadcast,
             v_embed_dim=v_embed_dim,
             qk_embed_dim=self.key_dim_per_head,
             kv_spatial_dim=kv_axis,
