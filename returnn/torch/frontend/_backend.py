@@ -2575,7 +2575,7 @@ class TorchBackend(Backend[torch.Tensor]):
         *,
         attention_mask: Optional[_TT] = None,
         att_dropout: float = 0.0,
-        att_dropout_broadcast: Optional[bool] = None,
+        att_dropout_broadcast: bool,
         v_embed_dim: Dim,
         qk_embed_dim: Dim,
         kv_spatial_dim: Dim,
@@ -2587,11 +2587,6 @@ class TorchBackend(Backend[torch.Tensor]):
         Scaled dot-product attention.
         :return: attention output
         """
-        from returnn.frontend.attention import _att_dropout_broadcast_default
-
-        if att_dropout_broadcast is None:
-            att_dropout_broadcast = _att_dropout_broadcast_default()
-
         if (
             TorchBackend.ForceFallbackSDPA
             or (  # kv_spatial_dim and query dims are co-dependent, legacy causalselfattention code relies on this...

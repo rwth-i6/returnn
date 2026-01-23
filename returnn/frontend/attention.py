@@ -63,6 +63,8 @@ def scaled_dot_product_attention(
     :param scale: Scaling factor applied prior to softmax
     :return: attention output
     """
+    if att_dropout_broadcast is None:
+        att_dropout_broadcast = _att_dropout_broadcast_default()
     # noinspection PyProtectedMember
     att = query._raw_backend.scaled_dot_product_attention(
         query,

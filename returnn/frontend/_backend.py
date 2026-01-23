@@ -1378,7 +1378,7 @@ class Backend(Generic[T]):
         *,
         attention_mask: Optional[Tensor] = None,
         att_dropout: float = 0.0,
-        att_dropout_broadcast: Optional[bool] = None,
+        att_dropout_broadcast: bool,
         v_embed_dim: Dim,
         qk_embed_dim: Dim,
         kv_spatial_dim: Dim,
@@ -1405,8 +1405,6 @@ class Backend(Generic[T]):
         :param scale: Scaling factor applied prior to softmax
         :return: attention output
         """
-        from returnn.frontend.attention import _att_dropout_broadcast_default
-
         query *= qk_embed_dim.dimension**-0.5 if scale is None else scale
 
         if is_causal:
@@ -1430,8 +1428,6 @@ class Backend(Generic[T]):
         if attn_bias is not None:
             energy = energy + attn_bias
         att_weights = rf.softmax(energy, axis=kv_spatial_dim)  # [.., Q_spatial, K_spatial]
-        if att_dropout_broadcast is None:
-            att_dropout_broadcast = _att_dropout_broadcast_default()
         att_weights = rf.dropout(att_weights, att_dropout, axis=att_dropout_broadcast and kv_spatial_dim)
         # no need for mask because softmax already sets those weights to zero
         att = rf.matmul(att_weights, value, reduce=kv_spatial_dim, use_mask=False)
