@@ -97,7 +97,8 @@ def _infer_att_dims(
     else:
         if len(query_non_batch_dims) != 1:
             raise ValueError(
-                f"Query vector must have exactly one non-batch dim (the spatial dimension), got {query.dims}, keys.dims={keys.dims}"
+                "Query vector must have exactly one non-batch dim (the spatial dimension), "
+                f" got {query.dims}, keys.dims={keys.dims}"
             )
         query_spatial = query_non_batch_dims[0]
 
