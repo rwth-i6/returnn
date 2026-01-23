@@ -84,7 +84,8 @@ def scaled_dot_product_attention(
 def _infer_att_dims(
     query: Tensor, keys: Tensor, values: Tensor, *, qk_embed_dim: Dim, kv_spatial_dim: Dim
 ) -> Tuple[Tensor, Dim, Dim, bool]:
-    assert kv_spatial_dim in keys.dims_set
+    if kv_spatial_dim not in keys.dims_set:
+        raise ValueError(f"kv_spat_dim {kv_spatial_dim} not in keys.dims {keys.dims}")
 
     # infer query spatial dim, necessary for pytorch backend
     query_non_batch_dims = query.remaining_dims(keys.dims_set - {kv_spatial_dim})
@@ -92,10 +93,13 @@ def _infer_att_dims(
         query_spatial = Dim(1, name="dot_att_query_spatial_dummy")
         query = rf.expand_dim(query, dim=query_spatial)
     else:
-        assert len(query_non_batch_dims) == 1, f"qspat={query_non_batch_dims}, q={query.dims}, k={keys.dims}"
+        if len(query_non_batch_dims) != 1:
+            raise ValueError(
+                f"Query vector must have exactly one non-batch dim (the spatial dimension), got {query.dims}, keys.dims={keys.dims}"
+            )
         query_spatial = query_non_batch_dims[0]
 
-    # infer dot product dim
+    # infer dot product dim (v_embed_dim)
     v_embed_dim = values.feature_dim
     if v_embed_dim is None:
         if qk_embed_dim in values.dims_set:

@@ -1410,10 +1410,10 @@ class Backend(Generic[T]):
         query *= qk_embed_dim.dimension**-0.5 if scale is None else scale
 
         if is_causal:
-            assert attention_mask is None
-            assert kv_spatial_dim in query.dims_set, (
-                "query and key/value must share the same spatial axis for causal attention"
-            )
+            if attention_mask is not None:
+                raise NotImplementedError("causal attention with attention_mask is not supported")
+            if kv_spatial_dim not in query.dims_set:
+                raise ValueError("query and key/value must share the same spatial axis for causal attention")
             hist_dim = Dim(rf.range_over_dim(kv_spatial_dim, device="cpu") + 1, name=f"{kv_spatial_dim.description}:kv")
             key, _ = rf.replace_dim(key, in_dim=kv_spatial_dim, out_dim=hist_dim)
             value, _ = rf.replace_dim(value, in_dim=kv_spatial_dim, out_dim=hist_dim)

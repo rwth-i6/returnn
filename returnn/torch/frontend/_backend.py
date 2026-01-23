@@ -2643,12 +2643,16 @@ class TorchBackend(Backend[torch.Tensor]):
 
         attention_mask_raw = None
         if attention_mask is not None:
-            assert not is_causal, "cannot combine attention_mask and is_causal"
+            if attention_mask is not None:
+                raise NotImplementedError("causal attention with attention_mask is not supported")
             attention_mask_raw = attention_mask.raw_tensor
             # assumes that query and kv spatial dim are present in the attention mask,
             # this requirement could be relaxed...
             att_mask_batch_dims = attention_mask.remaining_dims([query_spatial_dim, kv_spatial_dim])
-            assert set(att_mask_batch_dims).issubset(set(batch_dims))
+            if not set(att_mask_batch_dims).issubset(set(batch_dims)):
+                raise ValueError(
+                    f"attention_mask has unexpected batch dims {att_mask_batch_dims}, expected subset of {batch_dims}"
+                )
             # order
             att_mask_batch_dims = [d for d in batch_dims if d in att_mask_batch_dims]
 
@@ -2660,12 +2664,12 @@ class TorchBackend(Backend[torch.Tensor]):
                 ],
             )
             # we totally ignore kv_spatial_dim dyn_sizes here... TODO
-            assert not kv_spatial_dim.is_dynamic()
+            if kv_spatial_dim.is_dynamic():
+                raise NotImplementedError("attention_mask with dynamic kv_spatial_dim is not implemented")
         elif kv_spatial_dim.is_dynamic() and kv_spatial_dim.dyn_size_ext is not None:
             if is_causal:
-                assert kv_spatial_dim == query_spatial_dim, (
-                    "causal attention only supported for kv_spatial_dim == query_spatial_dim"
-                )
+                if not kv_spatial_dim == query_spatial_dim:
+                    raise ValueError("causal attention only supported for kv_spatial_dim == query_spatial_dim")
             else:
                 # no attention mask, but we know that some keys/values are padding
                 # create mask based on that
