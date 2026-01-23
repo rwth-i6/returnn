@@ -2638,7 +2638,7 @@ class TorchBackend(Backend[torch.Tensor]):
 
         attention_mask_raw = None
         if attention_mask is not None:
-            if attention_mask is not None:
+            if is_causal:
                 raise NotImplementedError("causal attention with attention_mask is not supported")
             attention_mask_raw = attention_mask.raw_tensor
             # assumes that query and kv spatial dim are present in the attention mask,
