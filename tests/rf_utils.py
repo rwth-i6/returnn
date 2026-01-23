@@ -79,14 +79,16 @@ def run_model(
     allow_inf_nan_in_output: bool = False,
     test_single_batch_entry: bool = True,
     data_rnd_seed: int = 42,
+    data_fill_random: bool = True,
 ) -> TensorDict:
     """run"""
     print(f"* run_model with dyn_dim_max_sizes={dyn_dim_max_sizes!r}")
     extern_data_dims = extern_data.all_dims()
-    extern_data.reset_content()
-    tensor_dict_fill_random_numpy_(
-        extern_data, dyn_dim_max_sizes=dyn_dim_max_sizes, dyn_dim_min_sizes=dyn_dim_min_sizes, rnd=data_rnd_seed
-    )
+    if data_fill_random:
+        extern_data.reset_content()
+        tensor_dict_fill_random_numpy_(
+            extern_data, dyn_dim_max_sizes=dyn_dim_max_sizes, dyn_dim_min_sizes=dyn_dim_min_sizes, rnd=data_rnd_seed
+        )
 
     print("** run with PyTorch backend")
     with rft.TorchBackend.random_journal_record() as random_journal:

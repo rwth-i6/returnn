@@ -228,12 +228,6 @@ def combine(
             return b
         if a and kind in {"logical_and", "logical_or"}:
             return b
-    # Truediv checks for int/int division
-    if kind in {"truediv", "/"}:
-        if _utils.is_int(a) and _utils.is_int(b):
-            raise ValueError(
-                "Dividing a Tensor of type int by an integer is disallowed. Please convert the Tensor to float."
-            )
     backend = _utils.get_backend_from_tensors(a, b)
     return backend.combine(a, kind, b, allow_broadcast_all_sources=allow_broadcast_all_sources, dim_order=dim_order)
 

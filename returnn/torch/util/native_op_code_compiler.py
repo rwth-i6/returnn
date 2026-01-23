@@ -96,6 +96,8 @@ class OpCodeCompiler(NativeCodeCompiler):
         c_macro_defines = {} if c_macro_defines is None else c_macro_defines.copy()
         c_macro_defines.setdefault("TORCH_EXTENSION_NAME", base_name)
         c_macro_defines.setdefault("TORCH_API_INCLUDE_EXTENSION_H", "")
+        # We have some assert in our kernels that we want to disable.
+        c_macro_defines.setdefault("NDEBUG", 1)
 
         ld_flags = list(ld_flags)
         ld_flags.append("--no-as-needed")

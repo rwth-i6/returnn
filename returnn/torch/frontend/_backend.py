@@ -23,6 +23,8 @@ from returnn.frontend import _random_journal
 from returnn.frontend import _utils
 
 from . import raw_ops
+from ..util import native_op
+from ..util.assert_ import assert_
 
 _TT = Tensor[torch.Tensor]
 
@@ -43,6 +45,12 @@ class TorchBackend(Backend[torch.Tensor]):
         :return: whether we are executing eagerly
         """
         return True
+
+    @staticmethod
+    def assert_(condition: Tensor, message: str, *, stop: bool = True):
+        """assert"""
+        assert condition.dims == (), "condition for assert must be a scalar"
+        assert_(condition.raw_tensor, message, stop=stop)
 
     @staticmethod
     def set_random_seed(seed: int):
@@ -84,6 +92,7 @@ class TorchBackend(Backend[torch.Tensor]):
                 i = int(k[4:])
                 torch.cuda.set_rng_state(torch.from_numpy(numpy.frombuffer(v, dtype="uint8")), i)
 
+    # keep in sync with native implementation
     @staticmethod
     def get_dtype_name_raw(raw_tensor: torch.Tensor) -> str:
         """
@@ -169,6 +178,7 @@ class TorchBackend(Backend[torch.Tensor]):
         """
         return raw_tensor.unsqueeze(axis)
 
+    # keep in sync with native implementation
     @staticmethod
     def expand_raw(raw_tensor: torch.Tensor, axis: int, dim: Union[int, torch.Tensor]) -> torch.Tensor:
         """
@@ -426,15 +436,16 @@ class TorchBackend(Backend[torch.Tensor]):
                 )
                 source_ = source.copy_transpose(templ_dims)
                 sources_raw.append(source_.raw_tensor)
+        out_raw = torch.cat([s for s in sources_raw], dim=axis)
         out = Tensor(
             "concat",
             dims=other_dims[:axis] + [out_dim] + other_dims[axis:],
-            dtype=sources[0][0].dtype,
+            dtype=TorchBackend.get_dtype_name_raw(out_raw),
             sparse_dim=sources[0][0].sparse_dim,
+            raw_tensor=out_raw,
         )
         if sources[0][0].feature_dim and sources[0][0].feature_dim != sources[0][1]:
             out.feature_dim = sources[0][0].feature_dim
-        out.raw_tensor = torch.cat([s for s in sources_raw], dim=axis)
         return out
 
     @staticmethod
@@ -666,10 +677,10 @@ class TorchBackend(Backend[torch.Tensor]):
         targets_spatial_dim: Dim,
         blank_index: int,
         max_approx: bool = False,
+        use_native_op: Optional[bool] = None,
+        label_loop: bool = True,
     ) -> Tensor:
         """CTC"""
-        if max_approx:
-            raise NotImplementedError("ctc_loss: max_approx not implemented for PyTorch")
         assert targets.sparse_dim and targets.sparse_dim.dimension <= logits.feature_dim.dimension
         # PyTorch expects the logits to be of shape (T, B, C) where T is the input spatial dim.
         batch_dims = logits.remaining_dims((input_spatial_dim, logits.feature_dim))
@@ -707,18 +718,42 @@ class TorchBackend(Backend[torch.Tensor]):
         if len(batch_dims) != 1:
             targets_raw = torch.reshape(targets_raw, (batch_n_elems, targets_raw.shape[-1]))  # [B', S]
             targets_lengths = torch.reshape(targets_lengths, (batch_n_elems,))  # [B']
-        if log_probs.dtype == torch.bfloat16:
-            # Currently (PyTorch 2.5), ctc_loss does not support bfloat16.
-            log_probs = log_probs.to(torch.float32)
-        loss_raw = torch.nn.functional.ctc_loss(
-            log_probs=log_probs,
-            targets=targets_raw,
-            input_lengths=input_lengths,
-            target_lengths=targets_lengths,
-            blank=blank_index,
-            zero_infinity=True,
-            reduction="none",
-        )
+        if use_native_op is None:
+            if max_approx or not label_loop:
+                use_native_op = True
+            else:
+                # This was the current default.
+                # We might change the default in the future, maybe via new behavior version.
+                use_native_op = False
+        if use_native_op:
+            loss_raw = native_op.ctc_loss(
+                logits=log_probs,
+                logits_normalize=False,
+                logits_seq_lens=input_lengths,
+                logits_time_major=True,
+                targets=targets_raw,
+                targets_seq_lens=targets_lengths,
+                blank_index=blank_index,
+                max_approx=max_approx,
+                label_loop=label_loop,
+            )
+        else:  # not native_op
+            if max_approx:
+                raise NotImplementedError("ctc_loss: max_approx not implemented for PyTorch")
+            if not label_loop:
+                raise NotImplementedError("ctc_loss: label_loop=False not implemented for PyTorch")
+            if log_probs.dtype == torch.bfloat16:
+                # Currently (PyTorch 2.5), ctc_loss does not support bfloat16.
+                log_probs = log_probs.to(torch.float32)
+            loss_raw = torch.nn.functional.ctc_loss(
+                log_probs=log_probs,
+                targets=targets_raw,
+                input_lengths=input_lengths,
+                target_lengths=targets_lengths,
+                blank=blank_index,
+                zero_infinity=True,
+                reduction="none",
+            )
         if len(batch_dims) != 1:
             loss_raw = torch.reshape(loss_raw, logits_raw_shape[1:-1])
         loss = Tensor(
@@ -728,6 +763,103 @@ class TorchBackend(Backend[torch.Tensor]):
             dtype=TorchBackend.get_dtype_name_raw(loss_raw),
         )
         return loss
+
+    @staticmethod
+    def ctc_best_path(
+        *,
+        logits: Tensor,
+        logits_normalized: bool = False,
+        targets: Tensor,
+        input_spatial_dim: Dim,
+        targets_spatial_dim: Dim,
+        blank_index: int,
+        label_loop: bool = True,
+    ) -> Tensor:
+        """CTC best path"""
+        assert targets.sparse_dim and targets.sparse_dim.dimension <= logits.feature_dim.dimension
+        # PyTorch expects the logits to be of shape (T, B, C) where T is the input spatial dim.
+        batch_dims = logits.remaining_dims((input_spatial_dim, logits.feature_dim))
+        batch_dims_targets = targets.remaining_dims(targets_spatial_dim)
+        if set(batch_dims) != set(batch_dims_targets):
+            # Need to broadcast.
+            logits = rf.expand_dims(logits, [d for d in batch_dims_targets if d not in batch_dims])
+            targets = rf.expand_dims(targets, [d for d in batch_dims if d not in batch_dims_targets])
+            batch_dims = logits.remaining_dims((input_spatial_dim, logits.feature_dim))
+        batch_shape = [d.get_dim_value() for d in batch_dims]
+        batch_n_elems = prod(batch_shape)
+        logits = logits.copy_transpose([input_spatial_dim] + batch_dims + [logits.feature_dim])
+        logits_raw: torch.Tensor = logits.raw_tensor
+        input_lengths: torch.Tensor = input_spatial_dim.dyn_size_ext.copy_compatible_to_dims_raw(batch_dims)
+        if input_lengths.numel() != batch_n_elems:
+            input_lengths = input_lengths.expand(batch_shape)
+        if len(batch_dims) != 1:
+            logits_raw = torch.reshape(
+                logits_raw, logits_raw.shape[:1] + (batch_n_elems,) + logits_raw.shape[-1:]
+            )  # [T, B', C]
+            input_lengths = torch.reshape(input_lengths, (batch_n_elems,))  # [B']
+        if logits_normalized:
+            log_probs = logits_raw
+        else:
+            log_probs = torch.nn.functional.log_softmax(logits_raw, dim=-1)
+        # PyTorch expects the targets to be of shape (B, S) where S is the targets spatial dim.
+        targets_raw = targets.copy_compatible_to_dims_raw(batch_dims + [targets_spatial_dim])  # [B..., S]
+        targets_raw_shape = batch_shape + [targets_spatial_dim.get_dim_value()]
+        if targets_raw.numel() != prod(targets_raw_shape):
+            targets_raw = targets_raw.expand(targets_raw_shape)
+        targets_lengths = targets_spatial_dim.dyn_size_ext.copy_compatible_to_dims_raw(batch_dims)
+        if targets_lengths.numel() != batch_n_elems:
+            targets_lengths = targets_lengths.expand(batch_shape)
+        if len(batch_dims) != 1:
+            targets_raw = torch.reshape(targets_raw, (batch_n_elems, targets_raw.shape[-1]))  # [B', S]
+            targets_lengths = torch.reshape(targets_lengths, (batch_n_elems,))  # [B']
+        alignment_raw = native_op.ctc_best_path(
+            logits=log_probs,
+            logits_normalize=True,
+            logits_seq_lens=input_lengths,
+            logits_time_major=True,
+            targets=targets_raw,
+            targets_seq_lens=targets_lengths,
+            blank_index=blank_index,
+            label_loop=label_loop,
+        )  # (time,batch)
+        if len(batch_dims) != 1:
+            alignment_raw = torch.reshape(alignment_raw, log_probs.shape[:-1])
+        alignment = Tensor(
+            name="ctc_best_path",
+            dims=[input_spatial_dim] + batch_dims,
+            sparse_dim=logits.feature_dim,
+            raw_tensor=alignment_raw,
+            dtype=TorchBackend.get_dtype_name_raw(alignment_raw),
+        )
+        return alignment
+
+    @staticmethod
+    def have_edit_distance() -> bool:
+        """whether edit distance is available"""
+        return True
+
+    @staticmethod
+    def edit_distance(a: Tensor, a_spatial_dim: Dim, b: Tensor, b_spatial_dim: Dim) -> Tensor:
+        """edit distance"""
+        a_batch_dims = a.remaining_dims(a_spatial_dim)
+        b_batch_dims = b.remaining_dims(b_spatial_dim)
+        batch_dims = a_batch_dims + [d for d in b_batch_dims if d not in a_batch_dims]
+        a_raw = a.copy_compatible_to_dims_raw(batch_dims + [a_spatial_dim], unbroadcast=True)
+        b_raw = b.copy_compatible_to_dims_raw(batch_dims + [b_spatial_dim], unbroadcast=True)
+        a_seq_len = a_spatial_dim.dyn_size_ext.copy_compatible_to_dims_raw(batch_dims, unbroadcast=True)
+        b_seq_len = b_spatial_dim.dyn_size_ext.copy_compatible_to_dims_raw(batch_dims, unbroadcast=True)
+        batch_shape = None
+        if len(batch_dims) != 1:
+            batch_shape = [d.get_dim_value() for d in batch_dims]
+            batch_n_elems = prod(batch_shape)
+            a_raw = torch.reshape(a_raw, (batch_n_elems, a_spatial_dim.get_dim_value()))
+            b_raw = torch.reshape(b_raw, (batch_n_elems, b_spatial_dim.get_dim_value()))
+            a_seq_len = torch.reshape(a_seq_len, (batch_n_elems,))
+            b_seq_len = torch.reshape(b_seq_len, (batch_n_elems,))
+        dist_raw = native_op.edit_distance(a_raw, a_seq_len, b_raw, b_seq_len)
+        if len(batch_dims) != 1:
+            dist_raw = torch.reshape(dist_raw, batch_shape)
+        return rf.convert_to_tensor(dist_raw, name="edit_distance", dims=batch_dims)
 
     @staticmethod
     def create_parameter_raw(tensor: rf.Parameter, *, device: Optional[str] = None) -> torch.nn.Parameter:
@@ -1158,6 +1290,7 @@ class TorchBackend(Backend[torch.Tensor]):
         out_dim: Dim,
     ) -> Tensor:
         """slice"""
+        assert step is None or (isinstance(step, int) and step == 1), "slice: step != 1 not yet implemented"
         axis_int = source.get_axis_from_description(axis, allow_int=False)
         out = source.copy_template_replace_dim_tag(axis=axis_int, new_dim_tag=out_dim)
         if isinstance(start, Tensor):
@@ -1170,14 +1303,12 @@ class TorchBackend(Backend[torch.Tensor]):
             size = size.get_dim_value()
         elif isinstance(size, Tensor):
             assert end is None
-            assert size.dims == ()  # scalar
-            size = size.raw_tensor
+            size = size.raw_tensor if size.dims == () else size.raw_tensor.max()
         elif isinstance(size, int):
             pass
         elif size is None:
             if isinstance(end, Tensor):
-                assert end.dims == ()
-                end = end.raw_tensor
+                end = end.raw_tensor if end.dims == () else end.raw_tensor.max()
             elif isinstance(end, int):
                 if end < 0:
                     end += axis.get_dim_value()

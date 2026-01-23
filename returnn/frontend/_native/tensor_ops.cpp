@@ -203,7 +203,7 @@ static bool _isSameSeqFast(ASeqT a, BSeqT b) {
 // no error check here; false does not mean they are different, it just checks for `is`.
 // when it returns with false, outPermutation is undefined.
 template<typename ASeqT, typename BSeqT>
-static bool _isSeqSubsetFast(ASeqT subset, BSeqT superset, std::vector<int>& outPermutation) {
+static bool _isSeqSubsetFast(ASeqT subset, BSeqT superset, std::vector<int>& outPermutation, bool addDims = true) {
     if(subset.size() > superset.size())
         return false;
     int j = 0;
@@ -218,6 +218,8 @@ static bool _isSeqSubsetFast(ASeqT subset, BSeqT superset, std::vector<int>& out
         }
         ++j; outPermutation.push_back(i);
     }
+    if(!addDims && j < superset.size())
+        return false;
     for(; j < superset.size(); ++j)
         outPermutation.push_back(-1);
     return true;
@@ -226,7 +228,7 @@ static bool _isSeqSubsetFast(ASeqT subset, BSeqT superset, std::vector<int>& out
 // no error check here; false does not mean they are different, it just checks for `is`.
 // when it returns with false, outPermutation is undefined.
 template<typename ASeqT, typename BSeqT>
-static bool _isSeqSubsetReorderFast(ASeqT subset, BSeqT superset, std::vector<int>& outPermutation) {
+static bool _isSeqSubsetReorderFast(ASeqT subset, BSeqT superset, std::vector<int>& outPermutation, bool addDims = true) {
     if(subset.size() > superset.size())
         return false;
     outPermutation.resize(superset.size());
@@ -243,8 +245,10 @@ static bool _isSeqSubsetReorderFast(ASeqT subset, BSeqT superset, std::vector<in
             subsetTaken[i] = true;
             outPermutation[j] = i;
         }
-        else
+        else {
+            if(!addDims) return false;
             outPermutation[j] = -1;
+        }
     }
     for(int i = 0; i < subset.size(); ++i) {
         if(!subsetTaken[i])
@@ -499,12 +503,12 @@ PyObject* pyConvertToRawTorchTensorLike(PyObject *self, PyObject *const *args, P
 
 // when it returns with false, some exception should be raised
 template<typename ASeqT, typename BSeqT>
-static bool _getPermutationSupersetToSubset(const char* funcName, ASeqT subset, BSeqT superset, std::vector<int>& outPermutation) {
-    if(_isSeqSubsetFast(subset, superset, outPermutation))
+static bool _getPermutationSupersetToSubset(const char* funcName, ASeqT subset, BSeqT superset, std::vector<int>& outPermutation, bool addDims = true) {
+    if(_isSeqSubsetFast(subset, superset, outPermutation, addDims))
         return true;
     outPermutation.clear();
 
-    if(_isSeqSubsetReorderFast(subset, superset, outPermutation))
+    if(_isSeqSubsetReorderFast(subset, superset, outPermutation, addDims))
         return true;
     outPermutation.clear();
 
@@ -527,9 +531,16 @@ static bool _getPermutationSupersetToSubset(const char* funcName, ASeqT subset, 
             if(eq < 0) return false;
             if(eq) candidates.push_back(j);
         }
-        if(candidates.size() == 0)
+        if(candidates.size() == 0) {
+            if(!addDims) {
+                PyErr_Format(
+                    PyExc_ValueError,
+                    "%s with add_dims=false: dim %R not found, from tensor dims %R and all dims %R",
+                    funcName, dim, subset.get(), superset.get());
+                return false;
+            }
             outPermutation.push_back(-1);
-        else if(candidates.size() == 1) {
+        } else if(candidates.size() == 1) {
             outPermutation.push_back(candidates[0]);
             taken[candidates[0]] = true;
             ++count;
@@ -587,13 +598,15 @@ static bool _getPermutationSupersetToSubset(const char* funcName, ASeqT subset, 
 template<typename OutDimSeqT>
 static PyObject* _permuteAndExtend(
     const char* rawOpName,
-    PyObject* permuteOp, PyObject* reshapeOp, PyObject* getShapeOp,
-    PyObject* tensor, PyTupleOrListStaticRef<true> dims, PyObject* rawTensor,
+    PyObject* permuteOp, PyObject* reshapeOp, PyObject* getShapeOp, /*optional*/ PyObject* expandOp,
+    PyObject* tensor, PyTupleOrListStaticRef<true> dims /* dims of tensor */, PyObject* rawTensor,
     OutDimSeqT outDims,
-    std::vector<int>& outPermutation /* if empty, will get it from outDims */
+    std::vector<int>& outPermutation /* if empty, will get it from outDims */,
+    bool addDims = true,
+    bool unbroadcast = false
 ) {
     // First find the mapping.
-    if(outPermutation.empty() && !_getPermutationSupersetToSubset(rawOpName, dims, outDims, outPermutation))
+    if(outPermutation.empty() && !_getPermutationSupersetToSubset(rawOpName, dims, outDims, outPermutation, addDims))
         return NULL;
     assert((int) outPermutation.size() == outDims.size());
 
@@ -665,12 +678,22 @@ static PyObject* _permuteAndExtend(
         rawTensorExt = rawTensor_;
     }
 
+    if(unbroadcast) {
+        for(int i = 0; i < (int) outPermutation.size(); ++i) {
+            if(outPermutation[i] < 0) {
+                PyObjectScopedRef dimValue = PyObject_CallMethod(outDims.getItem(i), "get_dim_value", NULL);
+                if(!dimValue) return NULL;
+                rawTensor_ = PyObject_CallFunction(expandOp, "OiO", rawTensor_, i, dimValue.get());
+            }
+        }
+    }
+
     if(rawTensorExt) rawTensorExt.release();
     else Py_INCREF(rawTensor_); // we still have it borrowed
     return rawTensor_;
 }
 
-template<bool bIsSubset>
+template<bool bIsSubset /* b.dims are subset of a.dims - or a.dims are subset of b.dims */>
 static PyObject* _compareOrCombine_subsetDims(
     PyModuleState* modState,
     const char* rawOpName, bool resultIsBool,
@@ -683,9 +706,9 @@ static PyObject* _compareOrCombine_subsetDims(
     // The tensor with the subset dims will be adapted to the other tensor.
     PyObjectScopedRef rawTensorExt;
     if(bIsSubset)
-        rawTensorExt = _permuteAndExtend(rawOpName, permuteOp, reshapeOp, getShapeOp, b, bDims, bRawTensor, aDims, outPermutation);
+        rawTensorExt = _permuteAndExtend(rawOpName, permuteOp, reshapeOp, getShapeOp, NULL, b, bDims, bRawTensor, aDims, outPermutation);
     else
-        rawTensorExt = _permuteAndExtend(rawOpName, permuteOp, reshapeOp, getShapeOp, a, aDims, aRawTensor, bDims, outPermutation);
+        rawTensorExt = _permuteAndExtend(rawOpName, permuteOp, reshapeOp, getShapeOp, NULL, a, aDims, aRawTensor, bDims, outPermutation);
 
     // Now create the result.
     PyObjectScopedRef resRawTensor = PyObject_CallFunctionObjArgs(
@@ -827,7 +850,10 @@ static bool _setNewAxisConsistentFromPerm(
 }
 
 template<bool rawMode>
-static PyObject* tensorCopyCompatibleToDims(const char* funcName, PyModuleState* modState, PyObject* tensor, PyObject* outDims) {
+static PyObject* tensorCopyCompatibleToDims(
+    const char* funcName, PyModuleState* modState, PyObject* tensor, PyObject* outDims,
+    bool addDims = true, bool unbroadcast = false
+) {
     PyTupleOrListRef outDimsSeq(outDims);
     if(!outDimsSeq.isValid()) {
         PyErr_Format(PyExc_TypeError, "%s: expected dims to be tuple or list, got %R", funcName, outDims);
@@ -854,7 +880,7 @@ static PyObject* tensorCopyCompatibleToDims(const char* funcName, PyModuleState*
             PyErr_Format(PyExc_ValueError, "%s: tensor does not have a raw_tensor", funcName);
             return NULL;
         }
-        if(!_getPermutationSupersetToSubset(funcName, dimsSeq, outDimsSeq, outPermutation))
+        if(!_getPermutationSupersetToSubset(funcName, dimsSeq, outDimsSeq, outPermutation, addDims))
             return NULL;
     }
     else if(modState->isTorchTensorType((PyObject*) Py_TYPE(rawTensor))) {
@@ -864,7 +890,9 @@ static PyObject* tensorCopyCompatibleToDims(const char* funcName, PyModuleState*
         if(!reshapeOp) return NULL;
         PyObject* getShapeOp = modState->cachedOp(TOp_GetShape, BWCO_Torch);
         if(!getShapeOp) return NULL;
-        outRawTensor = _permuteAndExtend(funcName, permuteOp, reshapeOp, getShapeOp, tensor, dimsSeq, rawTensor, outDimsSeq, outPermutation);
+        PyObject* expandOp = modState->cachedOp(TOp_Expand, BWCO_Torch);
+        if(!expandOp) return NULL;
+        outRawTensor = _permuteAndExtend(funcName, permuteOp, reshapeOp, getShapeOp, expandOp, tensor, dimsSeq, rawTensor, outDimsSeq, outPermutation, addDims, unbroadcast);
         if(!outRawTensor) return NULL;
     }
     else {  // generic backend fallback
@@ -875,7 +903,9 @@ static PyObject* tensorCopyCompatibleToDims(const char* funcName, PyModuleState*
         if(!reshapeOp) return NULL;
         PyObjectScopedRef getShapeOp = PyObject_GetAttrString(backend, "get_shape_tuple_raw");
         if(!getShapeOp) return NULL;
-        outRawTensor = _permuteAndExtend(funcName, permuteOp, reshapeOp, getShapeOp, tensor, dimsSeq, rawTensor, outDimsSeq, outPermutation);
+        PyObjectScopedRef expandOp = PyObject_GetAttrString(backend, "expand_raw");
+        if(!expandOp) return NULL;
+        outRawTensor = _permuteAndExtend(funcName, permuteOp, reshapeOp, getShapeOp, expandOp, tensor, dimsSeq, rawTensor, outDimsSeq, outPermutation, addDims, unbroadcast);
         if(!outRawTensor) return NULL;
     }
 
@@ -889,7 +919,7 @@ static PyObject* tensorCopyCompatibleToDims(const char* funcName, PyModuleState*
     if(!outDims_) return NULL;
     for(int i = 0; (size_t) i < outPermutation.size(); ++i) {
         PyObject* d;
-        if(outPermutation[i] >= 0) {
+        if(outPermutation[i] >= 0 || unbroadcast) {
             d = outDimsSeq.getItem(i);
             if(!d) return NULL;
             Py_INCREF(d);
@@ -990,28 +1020,38 @@ static PyObject* tensorCopyCompatibleToDims(const char* funcName, PyModuleState*
     return outTensor.release();
 }
 
-PyObject* pyTensorCopyCompatibleToDims(PyObject *self, PyObject *const *args, Py_ssize_t nargs) {
-    if(nargs != 2) {
-        PyErr_SetString(PyExc_TypeError, "tensor_copy_compatible_to_dims() takes exactly 2 args: tensor, dims");
+PyObject* pyTensorCopyCompatibleToDims(PyObject *self, PyObject *args, PyObject *kwargs) {
+    static const char *kwlist[] = { "tensor", "dims", "add_dims", "unbroadcast", NULL };
+    PyObject* tensor;
+    PyObject* dims;
+    bool addDims = true;
+    bool unbroadcast = false;
+    if(!PyArg_ParseTupleAndKeywords(args, kwargs, "OO|$bb:tensor_copy_compatible_to_dims",
+            (char**) kwlist, &tensor, &dims, &addDims, &unbroadcast))
         return NULL;
-    }
 
     PyModuleState* modState = (PyModuleState*) PyModule_GetState(self);
     if(!modState) return NULL;
 
-    return tensorCopyCompatibleToDims<false>("tensor_copy_compatible_to_dims", modState, args[0], args[1]);
+    return tensorCopyCompatibleToDims</*rawMode*/false>(
+        "tensor_copy_compatible_to_dims", modState, tensor, dims, addDims, unbroadcast);
 }
 
-PyObject* pyTensorCopyCompatibleToDimsRaw(PyObject *self, PyObject *const *args, Py_ssize_t nargs) {
-    if(nargs != 2) {
-        PyErr_SetString(PyExc_TypeError, "tensor_copy_compatible_to_dims_raw() takes exactly 2 args: tensor, dims");
+PyObject* pyTensorCopyCompatibleToDimsRaw(PyObject *self, PyObject *args, PyObject *kwargs) {
+    static const char *kwlist[] = { "tensor", "dims", "add_dims", "unbroadcast", NULL };
+    PyObject* tensor;
+    PyObject* dims;
+    bool addDims = true;
+    bool unbroadcast = false;
+    if(!PyArg_ParseTupleAndKeywords(args, kwargs, "OO|$bb:tensor_copy_compatible_to_dims_raw",
+            (char**) kwlist, &tensor, &dims, &addDims, &unbroadcast))
         return NULL;
-    }
 
     PyModuleState* modState = (PyModuleState*) PyModule_GetState(self);
     if(!modState) return NULL;
 
-    return tensorCopyCompatibleToDims<true>("tensor_copy_compatible_to_dims_raw", modState, args[0], args[1]);
+    return tensorCopyCompatibleToDims</*rawMode*/true>(
+        "tensor_copy_compatible_to_dims_raw", modState, tensor, dims, addDims, unbroadcast);
 }
 
 static PyObject* compareOrCombine(
@@ -1302,13 +1342,13 @@ static PyObject* compareOrCombine(
         {
             std::vector<int> outPermutation;
             PyObjectScopedRef aRawTensorExt = _permuteAndExtend(
-                rawOpName, permuteOp, reshapeOp, getShapeOp,
+                rawOpName, permuteOp, reshapeOp, getShapeOp, NULL,
                 a, aDimsSeq, aRawTensor,
                 allDimsSeq, outPermutation);
             if(!aRawTensorExt) return NULL;
             outPermutation.clear();
             PyObjectScopedRef bRawTensorExt = _permuteAndExtend(
-                rawOpName, permuteOp, reshapeOp, getShapeOp,
+                rawOpName, permuteOp, reshapeOp, getShapeOp, NULL,
                 b, bDimsSeq, bRawTensor,
                 allDimsSeq, outPermutation);
             if(!bRawTensorExt) return NULL;

@@ -1079,23 +1079,23 @@ class _TensorMixin(_TensorMixinBase):
     def copy_compatible_to(
         self: Tensor,
         data: Tensor,
-        add_dims=True,
-        unbroadcast=False,
-        except_feature=False,
-        except_axis=None,
-        check_sparse=True,
-        check_dtype=True,
+        add_dims: bool = True,
+        unbroadcast: bool = False,
+        except_feature: bool = False,
+        except_axis: Union[Dim, int, None] = None,
+        check_sparse: bool = True,
+        check_dtype: bool = True,
     ) -> Tensor:
         """
         :param data: other data which the returned tensor should be compatible to
           It would add any missing axes with a dim 1 axis for automatic broadcasting (with add_dims=True).
           It currently does not check whether existing dims match.
-        :param bool add_dims: whether to add (broadcast, or unbroadcasted) dims. throws error if missing dim
-        :param bool unbroadcast: if True, all added broadcast axes (axes with dim 1) will be tiled such that they match
-        :param bool except_feature: if unbroadcast, do not unbroadcast the feature dim
-        :param Dim|int|None except_axis: if unbroadcast, do not unbroadcast this axis
-        :param bool check_sparse:
-        :param bool check_dtype:
+        :param add_dims: whether to add (broadcast, or unbroadcasted) dims. throws error if missing dim
+        :param unbroadcast: if True, all added broadcast axes (axes with dim 1) will be tiled such that they match
+        :param except_feature: if unbroadcast, do not unbroadcast the feature dim
+        :param except_axis: if unbroadcast, do not unbroadcast this axis
+        :param check_sparse:
+        :param check_dtype:
         :returns: Tensor, might add broadcast dimensions
         """
         assert not check_sparse or self.sparse == data.sparse
@@ -1185,7 +1185,8 @@ class _TensorMixin(_TensorMixinBase):
     def get_out_permutation_to_dims(self, dims: Sequence[Dim]) -> List[int]:
         """
         :param dims: superset of our dims
-        :return: out_permutation list of len dims, where -1 means no match, and otherwise the axis in self.
+        :return: out_permutation list of len ``len(dims)``, where -1 means no match, and otherwise the axis in self.
+            I.e. a mapping: index in ``dims`` -> axis in self or -1.
             Thus, sorted(p for p in out_permutation if p >= 0) == range(len(self._dims)).
         """
         out_permutation: List[int] = []
@@ -1235,39 +1236,64 @@ class _TensorMixin(_TensorMixinBase):
         return out_permutation
 
     # This function has a native implementation (_native tensor_copy_compatible_to_dims).
-    def copy_compatible_to_dims(self: _t.Tensor, dims: Sequence[Dim]) -> _t.Tensor:
+    def copy_compatible_to_dims(
+        self: _t.Tensor, dims: Sequence[Dim], *, add_dims: bool = True, unbroadcast: bool = False
+    ) -> _t.Tensor:
         """
         Simpler variant of :func:`copy_compatible_to` which just takes a list of dims,
         and uses simple Dim equality.
 
         :param dims:
+        :param add_dims: whether to add missing dims
+        :param unbroadcast: if True, any added dims will be unbroadcasted, otherwise they will be broadcast dims (dim 1)
         :return: self with dims permuted and broadcast dims added
         """
         out_permutation = self.get_out_permutation_to_dims(dims)
         if out_permutation == list(range(len(self._dims))):
             return self.copy()
-        return self._copy_compatible_to_dims_with_perm(dims, out_permutation)
+        if not add_dims:
+            for i, p in enumerate(out_permutation):
+                if p == -1:
+                    raise ValueError(f"{self}._copy_compatible_to_dims_with_perm: missing dim {dims[i]} from {dims}")
+        return self._copy_compatible_to_dims_with_perm(dims, out_permutation, unbroadcast=unbroadcast)
 
-    def _copy_compatible_to_dims_with_perm(self, dims: Sequence[Dim], out_permutation: Sequence[int]):
+    def _copy_compatible_to_dims_with_perm(
+        self, dims: Sequence[Dim], out_permutation: Sequence[int], *, unbroadcast: bool = False
+    ):
+        """
+        Given permutation from :func:`get_out_permutation_to_dims`, do the actual copy.
+        If raw_tensor is available, it will be permuted and reshaped accordingly.
+        This will automatically add dims.
+        """
         raw_tensor = self._raw_tensor
         if raw_tensor is not None:
             backend = self._raw_backend
             raw_shape = backend.get_shape_tuple_raw(raw_tensor)
             raw_tensor = backend.transpose_raw(raw_tensor, [p for p in out_permutation if p >= 0])
             raw_tensor = backend.reshape_raw(raw_tensor, [raw_shape[p] if p >= 0 else 1 for p in out_permutation])
-        out_dims = [
-            (
-                dims[i]
-                if p >= 0
-                else Dim(
-                    kind=dims[i].kind,
-                    description="%s_bc_dim1" % (dims[i].description or "unnamed"),
-                    dimension=1,
-                    auto_generated=True,
+            if unbroadcast:
+                # Unbroadcast the newly added axes.
+                for i, p in enumerate(out_permutation):
+                    if p == -1:
+                        dim = dims[i]
+                        dim_value = dim.get_dim_value()
+                        raw_tensor = backend.expand_raw(raw_tensor, i, dim_value)
+        if unbroadcast:
+            out_dims = dims
+        else:
+            out_dims = [
+                (
+                    dims[i]
+                    if p >= 0
+                    else Dim(
+                        kind=dims[i].kind,
+                        description="%s_bc_dim1" % (dims[i].description or "unnamed"),
+                        dimension=1,
+                        auto_generated=True,
+                    )
                 )
-            )
-            for i, p in enumerate(out_permutation)
-        ]
+                for i, p in enumerate(out_permutation)
+            ]
         kwargs = self.get_kwargs(include_special_axes=False)
         kwargs["dims"] = out_dims
         kwargs["raw_tensor"] = raw_tensor
@@ -1292,13 +1318,17 @@ class _TensorMixin(_TensorMixinBase):
         return res
 
     # This function has a native implementation (_native tensor_copy_compatible_to_dims_raw).
-    def copy_compatible_to_dims_raw(self: _t.Tensor, dims: Sequence[Dim]) -> _t.RawTensorType:
+    def copy_compatible_to_dims_raw(
+        self: _t.Tensor, dims: Sequence[Dim], *, add_dims: bool = True, unbroadcast: bool = False
+    ) -> _t.RawTensorType:
         """
         Simpler variant of :func:`copy_compatible_to` which just takes a list of dims,
         and uses simple Dim equality.
         This adds broadcast dims for any missing dims.
 
         :param dims:
+        :param add_dims: whether to add missing dims
+        :param unbroadcast: if True, any added dims will be unbroadcasted, otherwise they will be broadcast dims (dim 1)
         :return: raw tensor from self with dims permuted and broadcast dims added
         """
         raw_tensor = self._raw_tensor
@@ -1306,10 +1336,21 @@ class _TensorMixin(_TensorMixinBase):
         out_permutation = self.get_out_permutation_to_dims(dims)
         if out_permutation == list(range(len(self._dims))):
             return raw_tensor
+        if not add_dims:
+            for i, p in enumerate(out_permutation):
+                if p == -1:
+                    raise ValueError(f"{self}._copy_compatible_to_dims_with_perm: missing dim {dims[i]} from {dims}")
         backend = self._raw_backend
         raw_shape = backend.get_shape_tuple_raw(raw_tensor)
         raw_tensor = backend.transpose_raw(raw_tensor, [p for p in out_permutation if p >= 0])
         raw_tensor = backend.reshape_raw(raw_tensor, [raw_shape[p] if p >= 0 else 1 for p in out_permutation])
+        if unbroadcast:
+            # Unbroadcast the newly added axes.
+            for i, p in enumerate(out_permutation):
+                if p == -1:
+                    dim = dims[i]
+                    dim_value = dim.get_dim_value()
+                    raw_tensor = backend.expand_raw(raw_tensor, i, dim_value)
         return raw_tensor
 
     def copy_time_flattened(self) -> _t.Tensor:

@@ -9,6 +9,7 @@ enum RawOp {
     TOp_ConvertToTensorLike,
     TOp_Permute,
     TOp_Reshape,
+    TOp_Expand,
     TOp_GetShape,
     TOp_GetDType,
 

@@ -16,6 +16,9 @@ extend-exclude = '''
 [tool.ruff]
 line-length = 120
 target-version = "py38"  # https://github.com/rwth-i6/returnn/issues/1326
+extend-exclude = [
+    ".github/workflows/_pytorch_collect_env.py",
+]
 
 [build-system]
 requires = ["setuptools", "numpy"]

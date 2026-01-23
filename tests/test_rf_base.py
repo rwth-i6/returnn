@@ -5,9 +5,12 @@ RETURNN frontend (returnn.frontend) tests
 from __future__ import annotations
 from typing import Tuple
 from unittest import SkipTest
+import numpy
+import numpy.testing
 import _setup_test_env  # noqa
 import returnn.frontend as rf
 from returnn.tensor import Tensor, Dim, TensorDict, batch_dim
+from returnn.tensor.utils import tensor_dict_fill_random_numpy_
 from rf_utils import run_model, run_model_torch_train
 
 
@@ -634,6 +637,55 @@ def test_ctc_loss():
     )
 
 
+def test_ctc_loss_native_vs_std():
+    time_dim = Dim(Tensor("time", [batch_dim], dtype="int32"))
+    target_time_dim = Dim(Tensor("target_time", [batch_dim], dtype="int32"))
+    out_dim = Dim(11, name="classes")
+    out_wb_dim = out_dim + 1
+    extern_data = TensorDict(
+        {
+            "data": Tensor("data", [batch_dim, time_dim, out_wb_dim], dtype="float32", feature_dim=out_wb_dim),
+            "classes": Tensor("classes", [batch_dim, target_time_dim], dtype="int32", sparse_dim=out_dim),
+        }
+    )
+
+    def _forward_step(*, extern_data: TensorDict, **_kwargs):
+        logits = extern_data["data"]
+        targets = extern_data["classes"]
+        loss_native = rf.ctc_loss(
+            logits=logits,
+            targets=targets,
+            input_spatial_dim=time_dim,
+            targets_spatial_dim=target_time_dim,
+            blank_index=out_wb_dim.dimension - 1,
+            use_native_op=True,
+        )
+        loss_native.mark_as_output("native", shape=[batch_dim])
+        loss_std = rf.ctc_loss(
+            logits=logits,
+            targets=targets,
+            input_spatial_dim=time_dim,
+            targets_spatial_dim=target_time_dim,
+            blank_index=out_wb_dim.dimension - 1,
+            use_native_op=False,
+        )
+        loss_std.mark_as_output("std", shape=[batch_dim])
+
+    res = run_model(
+        extern_data,
+        lambda **_kwargs: rf.Module(),
+        _forward_step,
+        dyn_dim_min_sizes={time_dim: 4, target_time_dim: 2},
+        dyn_dim_max_sizes={time_dim: 11, target_time_dim: 5},
+        test_tensorflow=False,
+    )
+    # test equality
+    res_native = res["native"].raw_tensor
+    res_std = res["std"].raw_tensor
+    assert res_native.shape == res_std.shape
+    numpy.testing.assert_allclose(res_native, res_std, rtol=1e-5, atol=1e-6)
+
+
 def test_ctc_loss_broadcast():
     branch_dim = Dim(3, name="branch")
     time_dim = Dim(Tensor("time", [batch_dim], dtype="int32"))
@@ -671,57 +723,193 @@ def test_ctc_loss_broadcast():
     )
 
 
+def test_ctc_best_path(*, label_loop: bool = True):
+    time_dim = Dim(Tensor("time", [batch_dim], dtype="int32"))
+    target_time_dim = Dim(Tensor("target_time", [batch_dim], dtype="int32"))
+    out_dim = Dim(11, name="classes")
+    out_wb_dim = out_dim + 1
+    extern_data = TensorDict(
+        {
+            "data": Tensor("data", [batch_dim, time_dim, out_wb_dim], dtype="float32", feature_dim=out_wb_dim),
+            "classes": Tensor("classes", [batch_dim, target_time_dim], dtype="int32", sparse_dim=out_dim),
+        }
+    )
+
+    def _forward_step(*, extern_data: TensorDict, **_kwargs):
+        logits = extern_data["data"]
+        targets = extern_data["classes"]
+        log_probs = rf.log_softmax(logits, axis=out_wb_dim)
+        log_probs.mark_as_output("log_probs", shape=[time_dim, batch_dim, out_wb_dim])
+        targets.mark_as_output("targets", shape=[batch_dim, target_time_dim])
+        alignment = rf.ctc_best_path(
+            logits=log_probs,
+            logits_normalized=True,
+            targets=targets,
+            input_spatial_dim=time_dim,
+            targets_spatial_dim=target_time_dim,
+            blank_index=out_wb_dim.dimension - 1,
+            label_loop=label_loop,
+        )
+        alignment.mark_as_default_output(shape=[time_dim, batch_dim])
+
+    res = run_model(
+        extern_data,
+        lambda **_kwargs: rf.Module(),
+        _forward_step,
+        dyn_dim_min_sizes={time_dim: 4, target_time_dim: 2},
+        dyn_dim_max_sizes={time_dim: 11, target_time_dim: 5},
+        test_tensorflow=False,
+    )
+
+    from fsa_utils import py_viterbi
+    from returnn.util.fsa import get_ctc_fsa_fast_bw as get_ctc_fsa_fast_bw_np
+
+    # test equality
+    targets = res["targets"].raw_tensor.astype("int32")
+    target_seq_lens = res["targets"].dims[1].dyn_size.astype("int32")
+    blank_idx = out_wb_dim.dimension - 1
+    fsa = get_ctc_fsa_fast_bw_np(targets=targets, seq_lens=target_seq_lens, blank_idx=blank_idx, label_loop=label_loop)
+    assert fsa.start_end_states.shape == (2, len(target_seq_lens))
+    edges = fsa.edges.astype("int32")
+    weights = fsa.weights.astype("float32")
+    start_end_states = fsa.start_end_states.astype("int32")
+    log_probs = res["log_probs"].raw_tensor.astype("float32")
+    time_seq_lens = res["log_probs"].dims[0].dyn_size.astype("int32")
+    ref_alignment, _ = py_viterbi(
+        am_scores=log_probs, am_seq_len=time_seq_lens, edges=edges, weights=weights, start_end_states=start_end_states
+    )
+    res_alignment = res["output"].raw_tensor
+    assert ref_alignment.shape == res_alignment.shape
+    numpy.testing.assert_equal(ref_alignment, res_alignment)
+
+
+def test_ctc_best_path_rna():
+    test_ctc_best_path(label_loop=False)
+
+
+def test_ctc_durations_from_path():
+    time_dim = Dim(Tensor("time", [batch_dim], dtype="int32"))
+    out_dim = Dim(11, name="classes")
+    out_wb_dim = out_dim + 1
+    b = out_wb_dim.dimension - 1
+    extern_data = TensorDict(
+        {
+            "data": Tensor("data", [batch_dim, time_dim], dtype="int32", sparse_dim=out_wb_dim),
+            "blanks": Tensor("blanks", [batch_dim, time_dim], dtype="bool"),  # more blanks
+        }
+    )
+
+    def _forward_step(*, extern_data: TensorDict, **_kwargs):
+        path = extern_data["data"]
+        path = rf.where(extern_data["blanks"], b, path)
+        durations, dur_spatial_dim = rf.ctc_durations_from_path(path=path, path_spatial_dim=time_dim, blank_index=b)
+        durations.mark_as_default_output(shape=[batch_dim, dur_spatial_dim])
+
+    # Now reset the extern_data manually
+    extern_data.reset_content()
+    tensor_dict_fill_random_numpy_(
+        extern_data,
+        dyn_dim_min_sizes={batch_dim: 10, time_dim: 15},
+        dyn_dim_max_sizes={batch_dim: 10, time_dim: 20},
+        rnd=42,
+    )
+    examples = [
+        ([b, b, 1, 1, 2, b, b, 3, 3, 3, b], [2, 2, 0, 1, 2, 3, 1]),  # [_ _ a a b _ _ c c c _]
+        ([b, b, 1, 1, b, 2, b, b, b, b], [2, 2, 1, 1, 4]),
+        ([1, 1, 1, b, b, b, b], [0, 3, 4]),
+        ([b, b, b, b, b, 1, 2, 3], [5, 1, 0, 1, 0, 1, 0]),
+        ([5], [0, 1, 0]),
+    ]
+    for i, (example, _) in enumerate(examples):
+        extern_data["data"].raw_tensor[i, : len(example)] = numpy.array(example, dtype="int32")
+        time_dim.dyn_size_ext.raw_tensor[i] = len(example)
+        extern_data["blanks"].raw_tensor[i] = False  # keep our example as is
+    # Make sure at least one of the dyn sizes matches the max size.
+    time_dim.dyn_size_ext.raw_tensor[len(examples)] = time_dim.get_dim_value()
+
+    res = run_model(
+        extern_data,
+        lambda **_kwargs: rf.Module(),
+        _forward_step,
+        data_fill_random=False,
+        test_tensorflow=False,  # no scatter
+    )
+
+    output = res["output"]
+    out_spatial_dim = output.dims[1]
+    for i, (_, exp) in enumerate(examples):
+        assert out_spatial_dim.dyn_size_ext.raw_tensor[i] == len(exp)
+        dur = res["output"].raw_tensor[i, : len(exp)]
+        numpy.testing.assert_array_equal(dur, numpy.array(exp, dtype="int32"))
+
+
+def test_ctc_no_label_loop_blank_durations_from_path():
+    time_dim = Dim(Tensor("time", [batch_dim], dtype="int32"))
+    out_dim = Dim(11, name="classes")
+    out_wb_dim = out_dim + 1
+    b = out_wb_dim.dimension - 1
+    extern_data = TensorDict(
+        {
+            "data": Tensor("data", [batch_dim, time_dim], dtype="int32", sparse_dim=out_wb_dim),
+            "blanks": Tensor("blanks", [batch_dim, time_dim], dtype="bool"),  # more blanks
+        }
+    )
+
+    def _forward_step(*, extern_data: TensorDict, **_kwargs):
+        path = extern_data["data"]
+        path = rf.where(extern_data["blanks"], b, path)
+        durations, dur_spatial_dim = rf.ctc_no_label_loop_blank_durations_from_path(
+            path=path, path_spatial_dim=time_dim, blank_index=b
+        )
+        durations.mark_as_default_output(shape=[batch_dim, dur_spatial_dim])
+
+    # Now reset the extern_data manually
+    extern_data.reset_content()
+    tensor_dict_fill_random_numpy_(
+        extern_data,
+        dyn_dim_min_sizes={batch_dim: 10, time_dim: 15},
+        dyn_dim_max_sizes={batch_dim: 10, time_dim: 20},
+        rnd=42,
+    )
+    examples = [
+        ([b, b, b, 1, 2, b, b, 3, b], [3, 0, 2, 1]),  # [_ _ _ a b _ _ c _]
+        ([b, b, 1, 1, 2, b, b, 3, b], [2, 0, 0, 2, 1]),
+        ([1], [0, 0]),
+        ([b, b, 1], [2, 0]),
+    ]
+    for i, (example, _) in enumerate(examples):
+        extern_data["data"].raw_tensor[i, : len(example)] = numpy.array(example, dtype="int32")
+        time_dim.dyn_size_ext.raw_tensor[i] = len(example)
+        extern_data["blanks"].raw_tensor[i] = False  # keep our example as is
+    # Make sure at least one of the dyn sizes matches the max size.
+    time_dim.dyn_size_ext.raw_tensor[len(examples)] = time_dim.get_dim_value()
+
+    res = run_model(
+        extern_data,
+        lambda **_kwargs: rf.Module(),
+        _forward_step,
+        data_fill_random=False,
+        test_tensorflow=False,  # no scatter
+    )
+
+    output = res["output"]
+    out_spatial_dim = output.dims[1]
+    for i, (_, exp) in enumerate(examples):
+        assert out_spatial_dim.dyn_size_ext.raw_tensor[i] == len(exp)
+        dur = res["output"].raw_tensor[i, : len(exp)]
+        numpy.testing.assert_array_equal(dur, numpy.array(exp, dtype="int32"))
+
+
 def test_edit_distance():
     import numpy
     import torch
-    from typing import Sequence
     from collections import namedtuple
     import itertools
-
-    def _edit_distance_ref_b1(a: Sequence[int], b: Sequence[int]) -> int:
-        """
-        Reference implementation for edit distance.
-        """
-        n = len(a) + 1
-        m = len(b) + 1
-        d = torch.zeros((n, m), dtype=torch.int32)
-        for i in range(n):
-            d[i, 0] = i
-        for j in range(m):
-            d[0, j] = j
-        for j in range(1, m):
-            for i in range(1, n):
-                if a[i - 1] == b[j - 1]:
-                    d[i, j] = d[i - 1, j - 1]
-                else:
-                    d[i, j] = min(
-                        d[i - 1, j] + 1,  # deletion
-                        d[i, j - 1] + 1,  # insertion
-                        d[i - 1, j - 1] + 1,  # substitution
-                    )
-        return int(d[n - 1, m - 1])
-
-    # noinspection PyShadowingNames
-    def _edit_distance_ref(a: Tensor, a_spatial_dim: Dim, b: Tensor, b_spatial_dim: Dim) -> torch.Tensor:
-        """
-        Reference implementation for edit distance.
-        """
-        batch_dim = a.dims[0]
-        assert a.dims == (batch_dim, a_spatial_dim) and b.dims == (batch_dim, b_spatial_dim)
-        res = []
-        for i in range(batch_dim.dimension):
-            assert a_spatial_dim.dyn_size[i] <= a.raw_tensor.size(1)
-            assert b_spatial_dim.dyn_size[i] <= b.raw_tensor.size(1)
-            res.append(
-                _edit_distance_ref_b1(
-                    a.raw_tensor[i, : a_spatial_dim.dyn_size[i]], b.raw_tensor[i, : b_spatial_dim.dyn_size[i]]
-                )
-            )
-        return torch.tensor(res, dtype=torch.int32)
+    from numpy_ref_edit_distance import edit_distance_ref
 
     # noinspection PyShadowingNames
     def _check_edit_distance(a: Tensor, a_spatial_dim: Dim, b: Tensor, b_spatial_dim: Dim):
-        ref = _edit_distance_ref(a, a_spatial_dim, b, b_spatial_dim)
+        ref = edit_distance_ref(a, a_spatial_dim, b, b_spatial_dim).raw_tensor
         res = rf.edit_distance(a, a_spatial_dim, b, b_spatial_dim)
         assert res.raw_tensor.shape == ref.shape == a_spatial_dim.dyn_size.shape == b_spatial_dim.dyn_size.shape
         assert len(ref.shape) == 1
@@ -735,7 +923,7 @@ def test_edit_distance():
                 f" a={a.raw_tensor} lens {a_spatial_dim.dyn_size},"
                 f" b={b.raw_tensor} lens {b_spatial_dim.dyn_size}"
             )
-        assert (res.raw_tensor == ref).all()
+        assert (res.raw_tensor.numpy() == ref).all()
 
     SizedTensor = namedtuple("SizedTensor", ["tensor", "seq_lens"])
 

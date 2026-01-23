@@ -1162,6 +1162,12 @@ def slice(
                 out_dim = out_dim.ceildiv_right(step_dim)
             else:
                 raise TypeError(f"invalid type {type(step)} for step {step}")
+    if isinstance(start, Tensor) and start.batch_ndim > 0:
+        # Use advanced indexing via gather.
+        indices = rf.combine_bc(
+            start, "+", rf.range_over_dim(out_dim, device=start.device) * (step if step is not None else 1)
+        )
+        return rf.gather(source, axis=axis, indices=indices, clip_to_valid=True), out_dim
     # noinspection PyProtectedMember
     return (
         source._raw_backend.slice(source, axis=axis, start=start, end=end, step=step, size=size, out_dim=out_dim),

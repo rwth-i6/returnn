@@ -1473,12 +1473,14 @@ def fast_baum_welch_staircase(am_scores, seq_lens, **opts):
 
 
 def ctc_loss(
+    *,
     logits,
     logits_seq_lens,
     logits_time_major,
     targets,
     targets_seq_lens,
-    ctc_merge_repeated=True,
+    label_loop: Optional[bool] = None,
+    ctc_merge_repeated: Optional[bool] = None,
     logits_normalize=True,
     grad_wrt_softmax_in=True,
     blank_index=-1,
@@ -1493,7 +1495,8 @@ def ctc_loss(
     :param bool logits_time_major:
     :param tf.Tensor targets: batch-major, [batch,time]
     :param tf.Tensor targets_seq_lens: (batch,)
-    :param bool ctc_merge_repeated:
+    :param label_loop:
+    :param ctc_merge_repeated: alias for label_loop
     :param bool logits_normalize: apply log_softmax on logits (default).
       if False, you might also set grad_wrt_softmax_in=False
     :param bool grad_wrt_softmax_in: assume ``p(s|x) = softmax(logits)``, and define the gradient w.r.t. logits.
@@ -1504,6 +1507,11 @@ def ctc_loss(
     :return: loss, shape (batch,)
     :rtype: tf.Tensor
     """
+    if ctc_merge_repeated is not None:
+        assert label_loop is None
+        label_loop = ctc_merge_repeated
+    if label_loop is None:
+        label_loop = True
     assert logits.get_shape().ndims == 3 and logits.get_shape().dims[-1].value
     dim = logits.get_shape().dims[-1].value
     if not logits_time_major:
@@ -1520,7 +1528,7 @@ def ctc_loss(
         blank_index += dim
     assert 0 <= blank_index < dim
     edges, weights, start_end_states = get_ctc_fsa_fast_bw(
-        targets=targets, seq_lens=targets_seq_lens, blank_idx=blank_index, label_loop=ctc_merge_repeated
+        targets=targets, seq_lens=targets_seq_lens, blank_idx=blank_index, label_loop=label_loop
     )
     fwdbwd, obs_scores = fast_baum_welch(
         am_scores=-log_sm, float_idx=seq_mask, edges=edges, weights=weights, start_end_states=start_end_states
@@ -1541,7 +1549,7 @@ def ctc_loss(
     return loss
 
 
-def fast_viterbi(am_scores, am_seq_len, edges, weights, start_end_states):
+def fast_viterbi(*, am_scores, am_seq_len, edges, weights, start_end_states, mask_idx: int = 0):
     """
     :param tf.Tensor am_scores: (time, batch, dim), in +log space (unlike fast_baum_welch)
     :param tf.Tensor am_seq_len: (batch,), int32
@@ -1549,6 +1557,7 @@ def fast_viterbi(am_scores, am_seq_len, edges, weights, start_end_states):
     :param tf.Tensor weights: (num_edges,), weights of the edges
     :param tf.Tensor start_end_states: (2, batch), (start,end) state idx in automaton.
         there is only one single automaton.
+    :param mask_idx: vocab index used for masking (e.g. padding, or if not path was found)
     :return: (alignment, scores), alignment is (time, batch), scores is (batch,), in +log space
     :rtype: (tf.Tensor, tf.Tensor)
     """
@@ -1556,11 +1565,13 @@ def fast_viterbi(am_scores, am_seq_len, edges, weights, start_end_states):
     n_states = last_state_idx + 1
     maker = OpMaker(OpDescription.from_gen_base(native_op.FastViterbiOp))
     op = maker.make_op()
-    alignment, scores = op(am_scores, am_seq_len, edges, weights, start_end_states, n_states)
+    alignment, scores = op(am_scores, am_seq_len, edges, weights, start_end_states, n_states, mask_idx)
     return alignment, scores
 
 
-def ctc_loss_viterbi(logits, logits_seq_lens, logits_time_major, targets, targets_seq_lens, blank_index=-1):
+def ctc_loss_viterbi(
+    *, logits, logits_seq_lens, logits_time_major, targets, targets_seq_lens, blank_index=-1, label_loop: bool = True
+):
     """
     Similar to :func:`ctc_loss`.
     However, instead of using the full sum, we use the best path (i.e. Viterbi instead of Baum-Welch).
@@ -1572,6 +1583,7 @@ def ctc_loss_viterbi(logits, logits_seq_lens, logits_time_major, targets, target
     :param tf.Tensor targets: batch-major, [batch,time]
     :param tf.Tensor targets_seq_lens: (batch,)
     :param int blank_index: vocab index of the blank symbol
+    :param label_loop:
     :return: loss, shape (batch,)
     :rtype: tf.Tensor
     """
@@ -1585,7 +1597,7 @@ def ctc_loss_viterbi(logits, logits_seq_lens, logits_time_major, targets, target
         blank_index += dim
     assert 0 <= blank_index < dim
     edges, weights, start_end_states = get_ctc_fsa_fast_bw(
-        targets=targets, seq_lens=targets_seq_lens, blank_idx=blank_index
+        targets=targets, seq_lens=targets_seq_lens, blank_idx=blank_index, label_loop=label_loop
     )
     alignment, scores = fast_viterbi(
         am_scores=log_sm, am_seq_len=logits_seq_lens, edges=edges, weights=weights, start_end_states=start_end_states

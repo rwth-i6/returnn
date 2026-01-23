@@ -43,6 +43,11 @@ class Backend(Generic[T]):
         raise NotImplementedError
 
     @staticmethod
+    def assert_(condition: Tensor, message: str, *, stop: bool = True):
+        """assert"""
+        raise NotImplementedError
+
+    @staticmethod
     def get_tensor_dependencies(x: Tensor) -> Sequence[Tensor]:
         """
         :param x: tensor
@@ -624,9 +629,45 @@ class Backend(Generic[T]):
         targets_spatial_dim: Dim,
         blank_index: int,
         max_approx: bool = False,
+        use_native_op: Optional[bool] = None,
+        label_loop: bool = True,
     ) -> Tensor:
         """
         Calculates the CTC loss.
+        """
+        raise NotImplementedError
+
+    @staticmethod
+    def ctc_best_path(
+        *,
+        logits: Tensor,
+        logits_normalized: bool = False,
+        targets: Tensor,
+        input_spatial_dim: Dim,
+        targets_spatial_dim: Dim,
+        blank_index: int,
+        label_loop: bool = True,
+    ) -> Tensor:
+        """
+        Calculates the CTC best path.
+        """
+        raise NotImplementedError
+
+    @staticmethod
+    def have_edit_distance() -> bool:
+        """
+        :return: whether we have an edit_distance implementation
+        """
+        return False
+
+    @staticmethod
+    def edit_distance(a: Tensor, a_spatial_dim: Dim, b: Tensor, b_spatial_dim: Dim) -> Tensor:
+        """
+        :param a: [B,Ta]
+        :param a_spatial_dim: Ta
+        :param b: [B,Tb]
+        :param b_spatial_dim: Tb
+        :return: [B]
         """
         raise NotImplementedError
 

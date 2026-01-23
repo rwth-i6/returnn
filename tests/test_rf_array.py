@@ -795,6 +795,52 @@ def test_slice_dyn_size():
     run_model(extern_data, lambda **_kwargs: rf.Module(), _forward_step)
 
 
+def test_slice_batched_start_size():
+    time_dim = Dim(Tensor("time", [batch_dim], dtype="int32"))
+    in_dim = Dim(7, name="in")
+    extern_data = TensorDict(
+        {
+            "data": Tensor("data", [batch_dim, time_dim, in_dim], dtype="float32"),
+            "start_factor": Tensor("start_factor", [batch_dim], dtype="float32"),
+            "size_factor": Tensor("size_factor", [batch_dim], dtype="float32"),
+        }
+    )
+
+    # noinspection PyShadowingNames
+    def _forward_step(*, extern_data: TensorDict, **_kwargs):
+        x = extern_data["data"]
+        x.mark_as_output("data", shape=(batch_dim, time_dim, in_dim))
+        start_factor = rf.sigmoid(extern_data["start_factor"])
+        size_factor = rf.sigmoid(extern_data["size_factor"])
+        start = start_factor * rf.cast(rf.clip_by_value(time_dim.get_size_tensor() - 2, 0), "float32")
+        start = rf.cast(start, dtype="int32")
+        start.mark_as_output("start", shape=(batch_dim,))
+        size = size_factor * rf.cast(time_dim.get_size_tensor() - start, "float32")
+        size = rf.cast(size, dtype="int32")
+        size.mark_as_output("size", shape=(batch_dim,))
+        pack, new_time = rf.slice(x, axis=time_dim, start=start, size=size)
+        pack.mark_as_default_output(shape=(batch_dim, new_time, in_dim))
+
+    res = run_model(extern_data, lambda **_kwargs: rf.Module(), _forward_step)
+    data_: Tensor = res["data"]
+    start_: Tensor = res["start"]
+    size_: Tensor = res["size"]
+    out_: Tensor = res["output"]
+    assert data_.dims == (batch_dim, time_dim, in_dim)
+    new_time_dim = out_.dims[1]
+    assert out_.dims == (batch_dim, new_time_dim, in_dim) and new_time_dim != time_dim
+    assert time_dim.dyn_size_ext.dims == new_time_dim.dyn_size_ext.dims == (batch_dim,)
+    batch_size = batch_dim.get_dim_value()
+    for b in range(batch_size):
+        seq_len = time_dim.dyn_size_ext.raw_tensor[b]
+        start = start_.raw_tensor[b]
+        size = size_.raw_tensor[b]
+        new_seq_len = new_time_dim.dyn_size_ext.raw_tensor[b]
+        print(f"batch {b}, seq_len {seq_len}, start {start}, size {size}, new_seq_len {new_seq_len}")
+        assert new_seq_len == size
+        np.testing.assert_array_equal(data_.raw_tensor[b, start : start + size], out_.raw_tensor[b, :new_seq_len])
+
+
 def test_slice_neg_end():
     time_dim = Dim(Tensor("time", [batch_dim], dtype="int32"))
     extern_data = TensorDict(

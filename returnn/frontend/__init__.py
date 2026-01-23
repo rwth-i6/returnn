@@ -19,6 +19,7 @@ from .state import *
 
 # Now the rest, in alphabetical order.
 from .array_ import *
+from .assert_ import *
 from .attention import *
 from .backend import *
 from .build_from_dict import *

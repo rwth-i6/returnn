@@ -219,3 +219,4 @@ def setup_torch():
     TorchBackend.get_ndim_raw = staticmethod(torch.Tensor.dim)
     TorchBackend.expand_dims_raw = staticmethod(torch.unsqueeze)
     TorchBackend.reshape_raw = staticmethod(torch.reshape)
+    TorchBackend.expand_raw = mod.raw_torch_tensor_expand

@@ -4548,6 +4548,15 @@ class FastViterbiOp(NativeOpGenBase):
             "gradient": "disconnected",
             "host_memory": True,
         },
+        {
+            "name": "mask_idx",
+            "ndim": 0,
+            "shape": (),
+            "dtype": "int32",
+            "need_contiguous": True,
+            "gradient": "disconnected",
+            "host_memory": True,
+        },
     )
     out_info = (
         {"name": "output", "ndim": 2, "shape": ((0, 0), (0, 1)), "dtype": "int32", "need_contiguous": True},
@@ -4707,7 +4716,8 @@ class FastViterbiOp(NativeOpGenBase):
         const int32_t* d_edge_from,
         const int32_t* d_edge_to,
         const int32_t* d_edge_emission_idx,
-        int32_t* output
+        int32_t* output,
+        int32_t mask_idx
       )
       {
         int idx = threadIdx.x + blockDim.x * blockIdx.x;
@@ -4723,10 +4733,10 @@ class FastViterbiOp(NativeOpGenBase):
               output[idx] = d_edge_emission_idx[edge_idx];
             }
             else  // no path found
-              output[idx] = 0;
+              output[idx] = mask_idx;
           }
           else {
-            output[idx] = 0;
+            output[idx] = mask_idx;
           }
           idx += gridDim.x * blockDim.x;
         }
@@ -4736,16 +4746,17 @@ class FastViterbiOp(NativeOpGenBase):
 
     c_fw_code = """
     using namespace std;
-    // am_scores, am_seq_len, edges, weights, start_end_states, n_states = input_names
+    // am_scores, am_seq_len, edges, weights, start_end_states, n_states, mask_idx = input_names
     // output, scores = output_names
-    assert(n_inputs == 6);
+    assert(n_inputs == 7);
     assert(n_outputs == 2);
     Ndarray* am_scores = inputs[0];
     Ndarray* am_seq_len = inputs[1];
     Ndarray* edges = inputs[2];
     Ndarray* weights = inputs[3];
     Ndarray* start_end_states = inputs[4];
-    Ndarray* n_states_ref = inputs[5];
+    int32_t n_states = Ndarray_DEV_DATA_int32_scalar(inputs[5]);
+    int32_t mask_idx = Ndarray_DEV_DATA_int32_scalar(inputs[6]);
     Ndarray* output = *outputs[0];
     Ndarray* score = *outputs[1];
 
@@ -4754,7 +4765,6 @@ class FastViterbiOp(NativeOpGenBase):
     assert_cmp(Ndarray_NDIM(edges), ==, 2);
     assert_cmp(Ndarray_NDIM(weights), ==, 1);
     assert_cmp(Ndarray_NDIM(start_end_states), ==, 2);
-    assert_cmp(Ndarray_NDIM(n_states_ref), ==, 0);
     assert_cmp(Ndarray_NDIM(output), ==, 2);
     assert_cmp(Ndarray_NDIM(score), ==, 1);
     int n_time = Ndarray_DIMS(am_scores)[0];
@@ -4770,7 +4780,6 @@ class FastViterbiOp(NativeOpGenBase):
     assert_cmp(Ndarray_DIMS(weights)[0], ==, n_edges);
     assert_cmp(Ndarray_DIMS(start_end_states)[0], ==, 2);
     assert_cmp(Ndarray_DIMS(start_end_states)[1], ==, n_batch);
-    int n_states = Ndarray_DEV_DATA_int32_scalar(n_states_ref);
     assert_cmp(Ndarray_DIMS(output)[0], ==, n_time);
     assert_cmp(Ndarray_DIMS(output)[1], ==, n_batch);
     assert_cmp(Ndarray_DIMS(score)[0], ==, n_batch);
@@ -4841,7 +4850,8 @@ class FastViterbiOp(NativeOpGenBase):
         d_edge_from,
         d_edge_to,
         d_edge_emission_idx,
-        d_output + t * output_stride // out
+        d_output + t * output_stride, // out
+        mask_idx
       ));
     }
     HANDLE_LAST_ERROR();
@@ -5341,7 +5351,10 @@ class EditDistanceOp(NativeOpGenBase):
             sub_cost = last1_dist[last1_idx];
             if(a[batch_idx * n_a_max_len + t_a - 1] != b[batch_idx * n_b_max_len + t_b - 1])
               ++sub_cost;
-            //printf("t_a %i, t_b %i, del %i, ins %i, sub %i\\n", t_a, t_b, del_cost, ins_cost, sub_cost);
+            /*printf("t_a %i, t_b %i, a %d, b %d, del %i, ins %i, sub %i\\n",
+                t_a, t_b,
+                a[batch_idx * n_a_max_len + t_a - 1], b[batch_idx * n_b_max_len + t_b - 1],
+                del_cost, ins_cost, sub_cost);*/
             int min_cost = del_cost;
             if(min_cost > ins_cost) min_cost = ins_cost;
             if(min_cost > sub_cost) min_cost = sub_cost;

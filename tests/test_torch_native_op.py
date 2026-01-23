@@ -3,14 +3,30 @@ Test torch native ops.
 """
 
 import _setup_test_env  # noqa
+import os
 from unittest import SkipTest
+from typing import Optional, Union, Sequence, List
 import numpy
 from numpy.testing import assert_almost_equal, assert_allclose
 import scipy.ndimage
 import torch
-from returnn.torch.util.native_op import make_fast_baum_welch_op, fast_baum_welch, fast_viterbi, get_ctc_fsa_fast_bw
+from returnn.torch.util.native_op import (
+    make_fast_baum_welch_op,
+    fast_baum_welch,
+    fast_viterbi,
+    get_ctc_fsa_fast_bw,
+    edit_distance,
+    optimal_completion_edit_distance,
+    optimal_completion_edit_distance_per_successor,
+    optimal_completion_edit_distance_per_successor_via_next_edit_distance,
+    edit_distance_via_next_edit_distance_row,
+)
 from returnn.util.fsa import FastBwFsaShared, get_ctc_fsa_fast_bw as get_ctc_fsa_fast_bw_np
 from fsa_utils import py_baum_welch, py_viterbi
+from numpy_ref_edit_distance import edit_distance_ref_np, edit_distance_ref_np_b1
+
+
+os.environ["RETURNN_NATIVE_CODE_COMPILER_VERBOSE"] = "1"
 
 
 def test_compile():
@@ -251,7 +267,7 @@ def check_ctc_fsa(targets, target_seq_lens, n_classes, with_native_fsa=False, la
         obs_scores = native_obs_scores
 
     if not label_loop:
-        raise SkipTest("skip ref tf ctc_loss for label_loop=False")
+        raise SkipTest("skip ref ctc_loss for label_loop=False")
 
     am_scores_th = torch.tensor(am_scores)
     seq_lens_th = torch.tensor(seq_lens)
@@ -516,3 +532,716 @@ def test_fast_viterbi_rnd():
     assert_allclose(scores, ref_scores, rtol=1e-5)
     assert_allclose(alignment, ref_alignment, rtol=1e-5)
     print("Done.")
+
+
+def test_edit_distance():
+    rnd = numpy.random.RandomState(42)
+    n_batch = 15
+    n_a_max_len = 13
+    n_b_max_len = 11
+    num_classes = 10
+    a_np = rnd.randint(0, num_classes, size=(n_batch, n_a_max_len), dtype="int32")
+    b_np = rnd.randint(0, num_classes, size=(n_batch, n_b_max_len), dtype="int32")
+    a_len_np = rnd.randint(1, n_a_max_len + 1, size=(n_batch,), dtype="int32")
+    b_len_np = rnd.randint(1, n_b_max_len + 1, size=(n_batch,), dtype="int32")
+    # Likely some high error. So make some explicit examples.
+    expected_results: List[Optional[int]] = [None] * n_batch
+    i = 0
+    # One insertion/deletion.
+    a_np[i, :1] = [1]
+    a_len_np[i] = 1
+    b_len_np[i] = 0
+    expected_results[i] = 1
+    i += 1
+    # One deletion.
+    a_np[i, :2] = [1, 2]
+    b_np[i, :1] = [1]
+    a_len_np[i] = 2
+    b_len_np[i] = 1
+    expected_results[i] = 1
+    i += 1
+    # One substitution + deletion.
+    a_np[i, :2] = [1, 2]
+    b_np[i, :1] = [3]
+    a_len_np[i] = 2
+    b_len_np[i] = 1
+    expected_results[i] = 2
+    i += 1
+    # One substitution error.
+    a_np[i, :4] = [1, 2, 3, 4]
+    b_np[i, :4] = [1, 2, 4, 4]
+    a_len_np[i] = 4
+    b_len_np[i] = 4
+    expected_results[i] = 1
+    i += 1
+    # One deletion error.
+    a_np[i, :6] = [1, 2, 3, 3, 4, 5]
+    b_np[i, :5] = [1, 2, 3, 4, 5]
+    a_len_np[i] = 6
+    b_len_np[i] = 5
+    expected_results[i] = 1
+    i += 1
+    # One insertion error.
+    a_np[i, :6] = [1, 2, 3, 4, 5, 6]
+    b_np[i, :7] = [1, 2, 3, 4, 4, 5, 6]
+    a_len_np[i] = 6
+    b_len_np[i] = 7
+    expected_results[i] = 1
+    i += 1
+    # Same.
+    a_np[i, :11] = [2, 2, 4, 4, 6, 6, 8, 8, 9, 10, 11]
+    b_np[i, :11] = [2, 2, 4, 4, 6, 6, 8, 8, 9, 10, 11]
+    a_len_np[i] = 11
+    b_len_np[i] = 11
+    expected_results[i] = 0
+    i += 1
+    # Both full length. Error should be 2.
+    a_np[i] = [2, 2, 4, 4, 6, 6, 8, 8, 9, 10, 0, 0, 0]
+    b_np[i] = [2, 2, 4, 4, 6, 6, 8, 8, 9, 10, 0]
+    a_len_np[i] = n_a_max_len
+    b_len_np[i] = n_b_max_len
+    expected_results[i] = 2
+    i += 1
+    assert n_batch - i >= 5  # still some random left
+    a = torch.tensor(a_np)
+    b = torch.tensor(b_np)
+    a_len = torch.tensor(a_len_np)
+    b_len = torch.tensor(b_len_np)
+
+    for i in range(n_batch):
+        print("testing batch", i, "/", n_batch)
+        _a = a[i : i + 1, : a_len_np[i]]
+        _a_len = a_len[i : i + 1]
+        _b = b[i : i + 1, : b_len_np[i]]
+        _b_len = b_len[i : i + 1]
+        print("seq a:", a_np[i, : a_len_np[i]])
+        print("seq b:", b_np[i, : b_len_np[i]])
+        ref_edit_dist_np = edit_distance_ref_np(_a.numpy(), _a_len.numpy(), _b.numpy(), _b_len.numpy())
+        native_edit_dist_np = edit_distance(_a, _a_len, _b, _b_len).numpy()
+        assert isinstance(ref_edit_dist_np, numpy.ndarray)
+        assert isinstance(native_edit_dist_np, numpy.ndarray)
+        print("Ref edit dist:", ref_edit_dist_np)
+        print("Native edit dist:", native_edit_dist_np)
+        print("Expected edit dist:", expected_results[i])
+        assert ref_edit_dist_np.shape == native_edit_dist_np.shape == (1,)
+        if expected_results[i] is not None:
+            assert expected_results[i] == ref_edit_dist_np[0] == native_edit_dist_np[0]
+        else:
+            assert ref_edit_dist_np[0] == native_edit_dist_np[0]
+        print("swapped:")
+        ref_edit_dist_np = edit_distance_ref_np(_b.numpy(), _b_len.numpy(), _a.numpy(), _a_len.numpy())
+        native_edit_dist_np = edit_distance(_b, _b_len, _a, _a_len).numpy()
+        assert isinstance(ref_edit_dist_np, numpy.ndarray)
+        assert isinstance(native_edit_dist_np, numpy.ndarray)
+        print("Ref edit dist:", ref_edit_dist_np)
+        print("Native edit dist:", native_edit_dist_np)
+        print("Expected edit dist:", expected_results[i])
+        assert ref_edit_dist_np.shape == native_edit_dist_np.shape == (1,)
+        if expected_results[i] is not None:
+            assert expected_results[i] == ref_edit_dist_np[0] == native_edit_dist_np[0]
+        else:
+            assert ref_edit_dist_np[0] == native_edit_dist_np[0]
+        print()
+
+    print("Now the whole batch.")
+    ref_edit_dist_np = edit_distance_ref_np(a.numpy(), a_len.numpy(), b.numpy(), b_len.numpy())
+    native_edit_dist_np = edit_distance(a, a_len, b, b_len).numpy()
+    assert isinstance(ref_edit_dist_np, numpy.ndarray)
+    assert isinstance(native_edit_dist_np, numpy.ndarray)
+    print("Ref edit dist:", ref_edit_dist_np)
+    print("Native edit dist:", native_edit_dist_np)
+    print("Expected edit dist:", expected_results)
+    assert ref_edit_dist_np.shape == native_edit_dist_np.shape == (n_batch,)
+    for i in range(n_batch):
+        if expected_results[i] is not None:
+            assert expected_results[i] == ref_edit_dist_np[i] == native_edit_dist_np[i]
+        else:
+            assert ref_edit_dist_np[i] == native_edit_dist_np[i]
+    print()
+
+    print("Now the whole batch, flipped.")
+    ref_edit_dist_np = edit_distance_ref_np(b.numpy(), b_len.numpy(), a.numpy(), a_len.numpy())
+    native_edit_dist_np = edit_distance(b, b_len, a, a_len).numpy()
+    assert isinstance(ref_edit_dist_np, numpy.ndarray)
+    assert isinstance(native_edit_dist_np, numpy.ndarray)
+    print("Ref edit dist:", ref_edit_dist_np)
+    print("Native edit dist:", native_edit_dist_np)
+    print("Expected edit dist:", expected_results)
+    assert ref_edit_dist_np.shape == native_edit_dist_np.shape == (n_batch,)
+    for i in range(n_batch):
+        if expected_results[i] is not None:
+            assert expected_results[i] == ref_edit_dist_np[i] == native_edit_dist_np[i]
+        else:
+            assert ref_edit_dist_np[i] == native_edit_dist_np[i]
+
+
+def test_edit_distance_2():
+    from returnn.tensor import Tensor, Dim
+    import numpy
+    import torch
+    from collections import namedtuple
+    import itertools
+    from numpy_ref_edit_distance import edit_distance_ref
+
+    # noinspection PyShadowingNames
+    def _check_edit_distance(a: Tensor, a_spatial_dim: Dim, b: Tensor, b_spatial_dim: Dim):
+        ref = edit_distance_ref(a, a_spatial_dim, b, b_spatial_dim).raw_tensor
+        res = edit_distance(a.raw_tensor, a_spatial_dim.dyn_size, b.raw_tensor, b_spatial_dim.dyn_size)
+        assert res.shape == ref.shape == a_spatial_dim.dyn_size.shape == b_spatial_dim.dyn_size.shape
+        assert len(ref.shape) == 1
+        print("ref:", ref, "res:", res)
+        batch_size = ref.shape[0]
+        for i in range(batch_size):
+            assert res[i] == ref[i], (
+                f"batch idx i={i}, a[i]={a.raw_tensor[i]} len {a_spatial_dim.dyn_size[i]},"
+                f" b[i]={b.raw_tensor[i]} len {b_spatial_dim.dyn_size[i]},"
+                f" ref[i]={ref[i]}, res[i]={res[i]};\n"
+                f" a={a.raw_tensor} lens {a_spatial_dim.dyn_size},"
+                f" b={b.raw_tensor} lens {b_spatial_dim.dyn_size}"
+            )
+        assert (res.numpy() == ref).all()
+
+    SizedTensor = namedtuple("SizedTensor", ["tensor", "seq_lens"])
+
+    _SeqsB1 = [
+        SizedTensor(torch.tensor([[1, 2, 3, 4]]), torch.tensor([4])),
+        SizedTensor(torch.tensor([[1, 2, 3]]), torch.tensor([3])),
+        SizedTensor(torch.tensor([[1, 2, 4]]), torch.tensor([3])),
+        SizedTensor(torch.tensor([[1, 4]]), torch.tensor([2])),
+        SizedTensor(torch.tensor([[5, 2, 4]]), torch.tensor([3])),
+        SizedTensor(torch.tensor([[]], dtype=torch.int64), torch.tensor([0])),
+    ]
+
+    for a, b in itertools.product(_SeqsB1, _SeqsB1):
+        a: SizedTensor
+        b: SizedTensor
+        # noinspection PyShadowingNames
+        batch_dim = Dim(1, name="batch")
+        a_spatial_dim = Dim(Tensor("a_sizes", [batch_dim], dtype="int64", raw_tensor=a.seq_lens))
+        b_spatial_dim = Dim(Tensor("b_sizes", [batch_dim], dtype="int64", raw_tensor=b.seq_lens))
+        a_ = Tensor("a", [batch_dim, a_spatial_dim], dtype="int64", raw_tensor=a.tensor)
+        b_ = Tensor("b", [batch_dim, b_spatial_dim], dtype="int64", raw_tensor=b.tensor)
+        _check_edit_distance(a_, a_spatial_dim, b_, b_spatial_dim)
+
+    rnd = numpy.random.RandomState(42)
+    for a, b in itertools.product(_SeqsB1, _SeqsB1):
+        batch_size = rnd.randint(2, 11)
+        a_max_len = rnd.randint(a.seq_lens[0], a.seq_lens[0] + 5)
+        b_max_len = rnd.randint(b.seq_lens[0], b.seq_lens[0] + 5)
+        a_sizes = rnd.randint(0, a_max_len + 1, size=(batch_size,))
+        b_sizes = rnd.randint(0, b_max_len + 1, size=(batch_size,))
+        a_sizes[0] = a.seq_lens[0]
+        b_sizes[0] = b.seq_lens[0]
+        a_max_len = max(a_sizes)
+        b_max_len = max(b_sizes)
+        a_values = rnd.randint(0, 10, (batch_size, a_max_len))
+        b_values = rnd.randint(0, 10, (batch_size, b_max_len))
+        a_values[0, : a.seq_lens[0]] = a.tensor[0, : a.seq_lens[0]]
+        b_values[0, : b.seq_lens[0]] = b.tensor[0, : b.seq_lens[0]]
+        a_sizes = torch.tensor(a_sizes, dtype=torch.int32)
+        b_sizes = torch.tensor(b_sizes, dtype=torch.int32)
+
+        # noinspection PyShadowingNames
+        batch_dim = Dim(batch_size, name="batch")
+        a_spatial_dim = Dim(Tensor("a_sizes", [batch_dim], dtype="int32", raw_tensor=a_sizes))
+        b_spatial_dim = Dim(Tensor("b_sizes", [batch_dim], dtype="int32", raw_tensor=b_sizes))
+        a_ = Tensor("a", [batch_dim, a_spatial_dim], dtype="int64", raw_tensor=torch.tensor(a_values))
+        b_ = Tensor("b", [batch_dim, b_spatial_dim], dtype="int64", raw_tensor=torch.tensor(b_values))
+        _check_edit_distance(a_, a_spatial_dim, b_, b_spatial_dim)
+
+
+def test_edit_distance_ref_np_b1():
+    assert edit_distance_ref_np_b1([1], []) == 1
+    assert edit_distance_ref_np_b1([1, 2], [1]) == 1
+    assert edit_distance_ref_np_b1([2, 2], [1]) == 2
+    assert edit_distance_ref_np_b1([2, 1], [1]) == 1
+    assert edit_distance_ref_np_b1([2, 1], [1, 1]) == 1
+    assert edit_distance_ref_np_b1([2, 1], [1, 1, 1]) == 2
+    assert edit_distance_ref_np_b1([2, 1], [2, 1, 1]) == 1
+
+
+def _naive_optimal_completion_edit_distance(
+    a: Union[Sequence[int], numpy.ndarray], b: Union[Sequence[int], numpy.ndarray]
+) -> int:
+    distances = [edit_distance_ref_np_b1(a, b[:n]) for n in range(len(b) + 1)]
+    return min(distances)
+
+
+def test_optimal_completion_edit_distance():
+    rnd = numpy.random.RandomState(42)
+    n_batch = 15
+    n_a_max_len = 11
+    n_b_max_len = 13
+    num_classes = 10
+    a_np = rnd.randint(0, num_classes, size=(n_batch, n_a_max_len), dtype="int32")
+    b_np = rnd.randint(0, num_classes, size=(n_batch, n_b_max_len), dtype="int32")
+    a_len_np = rnd.randint(1, n_a_max_len + 1, size=(n_batch,), dtype="int32")
+    b_len_np = rnd.randint(1, n_b_max_len + 1, size=(n_batch,), dtype="int32")
+    # Likely some high error. So make some explicit examples.
+    expected_results = [None] * n_batch
+    i = 0
+    # One deletion.
+    a_np[i, :1] = [1]
+    a_len_np[i] = 1
+    b_len_np[i] = 0
+    expected_results[i] = 1
+    i += 1
+    # One optional insertion.
+    a_np[i, :1] = [1]
+    b_np[i, :2] = [1, 2]
+    a_len_np[i] = 1
+    b_len_np[i] = 2
+    expected_results[i] = 0
+    i += 1
+    # One substitution or deletion.
+    a_np[i, :1] = [1]
+    b_np[i, :2] = [3, 1]
+    a_len_np[i] = 1
+    b_len_np[i] = 2
+    expected_results[i] = 1
+    i += 1
+    # One substitution error.
+    a_np[i, :4] = [1, 2, 3, 4]
+    b_np[i, :4] = [1, 2, 4, 4]
+    a_len_np[i] = 4
+    b_len_np[i] = 4
+    expected_results[i] = 1
+    i += 1
+    # One insertion error.
+    a_np[i, :5] = [1, 2, 3, 4, 5]
+    b_np[i, :6] = [1, 2, 3, 3, 4, 5]
+    a_len_np[i] = 5
+    b_len_np[i] = 6
+    expected_results[i] = 1
+    i += 1
+    # Same.
+    a_np[i, :11] = [2, 2, 4, 4, 6, 6, 8, 8, 9, 10, 11]
+    b_np[i, :11] = [2, 2, 4, 4, 6, 6, 8, 8, 9, 10, 11]
+    a_len_np[i] = 11
+    b_len_np[i] = 11
+    expected_results[i] = 0
+    i += 1
+    # Both full length.
+    a_np[i] = [2, 2, 4, 4, 6, 6, 8, 8, 9, 10, 0]
+    b_np[i] = [2, 2, 4, 4, 6, 6, 8, 8, 9, 10, 0, 0, 0]
+    a_len_np[i] = n_a_max_len
+    b_len_np[i] = n_b_max_len
+    expected_results[i] = 0
+    i += 1
+    assert n_batch - i >= 5  # still some random left
+    a = torch.tensor(a_np)
+    b = torch.tensor(b_np)
+    a_len = torch.tensor(a_len_np)
+    b_len = torch.tensor(b_len_np)
+    for i in range(n_batch):
+        print("testing batch", i, "/", n_batch)
+        _a = a[i : i + 1, : a_len_np[i]]
+        _a_len = a_len[i : i + 1]
+        _b = b[i : i + 1, : b_len_np[i]]
+        _b_len = b_len[i : i + 1]
+        print("seq a:", a_np[i, : a_len_np[i]])
+        print("seq b:", b_np[i, : b_len_np[i]])
+        _native_edit_dist = optimal_completion_edit_distance(_a, _a_len, _b, _b_len)
+        native_edit_dist_np = _native_edit_dist.numpy()
+        ref_edit_dist_np = numpy.array(
+            [_naive_optimal_completion_edit_distance(a_np[i, : a_len_np[i]], b_np[i, : b_len_np[i]])]
+        )
+        assert isinstance(ref_edit_dist_np, numpy.ndarray)
+        assert isinstance(native_edit_dist_np, numpy.ndarray)
+        print("Ref edit dist:", ref_edit_dist_np)
+        print("Native edit dist:", native_edit_dist_np)
+        print("Expected edit dist:", expected_results[i])
+        assert ref_edit_dist_np.shape == native_edit_dist_np.shape == (1,)
+        if expected_results[i] is not None:
+            assert expected_results[i] == ref_edit_dist_np[0] == native_edit_dist_np[0]
+        else:
+            assert ref_edit_dist_np[0] == native_edit_dist_np[0]
+        print()
+
+    print("Now the whole batch.")
+    native_edit_dist = optimal_completion_edit_distance(a, a_len, b, b_len)
+    native_edit_dist_np = native_edit_dist.numpy()
+    ref_edit_dist_np = numpy.array(
+        [
+            _naive_optimal_completion_edit_distance(a_np[i, : a_len_np[i]], b_np[i, : b_len_np[i]])
+            for i in range(n_batch)
+        ]
+    )
+    assert isinstance(ref_edit_dist_np, numpy.ndarray)
+    assert isinstance(native_edit_dist_np, numpy.ndarray)
+    print("Ref edit dist:", ref_edit_dist_np)
+    print("Native edit dist:", native_edit_dist_np)
+    print("Expected edit dist:", expected_results)
+    assert ref_edit_dist_np.shape == native_edit_dist_np.shape == (n_batch,)
+    for i in range(n_batch):
+        if expected_results[i] is not None:
+            assert expected_results[i] == ref_edit_dist_np[i] == native_edit_dist_np[i]
+        else:
+            assert ref_edit_dist_np[i] == native_edit_dist_np[i]
+    print()
+
+
+def test_optimal_completion_edit_distance_per_successor():
+    rnd = numpy.random.RandomState(42)
+    n_batch = 15
+    n_a_max_len = 11
+    n_b_max_len = 13
+    num_classes = 10
+    a_np = rnd.randint(0, num_classes, size=(n_batch, n_a_max_len), dtype="int32")
+    b_np = rnd.randint(0, num_classes, size=(n_batch, n_b_max_len), dtype="int32")
+    a_len_np = rnd.randint(1, n_a_max_len + 1, size=(n_batch,), dtype="int32")
+    b_len_np = rnd.randint(1, n_b_max_len + 1, size=(n_batch,), dtype="int32")
+    # Likely some high error. So make some explicit examples.
+    expected_results = [None] * n_batch
+    i = 0
+    # One deletion.
+    a_np[i, :1] = [1]
+    a_len_np[i] = 1
+    b_len_np[i] = 0
+    expected_results[i] = 1
+    i += 1
+    # One optional insertion.
+    a_np[i, :1] = [1]
+    b_np[i, :2] = [1, 2]
+    a_len_np[i] = 1
+    b_len_np[i] = 2
+    expected_results[i] = 0
+    i += 1
+    # One substitution or deletion.
+    a_np[i, :1] = [1]
+    b_np[i, :2] = [3, 1]
+    a_len_np[i] = 1
+    b_len_np[i] = 2
+    expected_results[i] = 1
+    i += 1
+    # One substitution error.
+    a_np[i, :4] = [1, 2, 3, 4]
+    b_np[i, :4] = [1, 2, 4, 4]
+    a_len_np[i] = 4
+    b_len_np[i] = 4
+    expected_results[i] = 1
+    i += 1
+    # One insertion error.
+    a_np[i, :5] = [1, 2, 3, 4, 5]
+    b_np[i, :6] = [1, 2, 3, 3, 4, 5]
+    a_len_np[i] = 5
+    b_len_np[i] = 6
+    expected_results[i] = 1
+    i += 1
+    # Same.
+    a_np[i, :11] = [2, 2, 4, 4, 6, 6, 8, 8, 9, 1, 3]
+    b_np[i, :11] = [2, 2, 4, 4, 6, 6, 8, 8, 9, 1, 3]
+    a_len_np[i] = 11
+    b_len_np[i] = 11
+    expected_results[i] = 0
+    i += 1
+    # Both full length.
+    a_np[i] = [2, 2, 4, 4, 6, 6, 8, 8, 9, 10, 0]
+    b_np[i] = [2, 2, 4, 4, 6, 6, 8, 8, 9, 10, 0, 0, 0]
+    a_len_np[i] = n_a_max_len
+    b_len_np[i] = n_b_max_len
+    expected_results[i] = 0
+    i += 1
+    assert n_batch - i >= 5  # still some random left
+    a = torch.tensor(a_np)
+    b = torch.tensor(b_np)
+    assert all(a_len_np > 0)
+    a_len = torch.tensor(a_len_np)
+    b_len = torch.tensor(b_len_np)
+    print("Now the whole batch.")
+    # a_len - 1 such that we can do the check below.
+    native_edit_dist = optimal_completion_edit_distance_per_successor(a, a_len - 1, b, b_len, num_classes)
+    native_edit_dist_np = native_edit_dist.numpy()
+    ref_edit_dist_np = numpy.array(
+        [
+            _naive_optimal_completion_edit_distance(a_np[i, : a_len_np[i]], b_np[i, : b_len_np[i]])
+            for i in range(n_batch)
+        ]
+    )
+    assert isinstance(ref_edit_dist_np, numpy.ndarray)
+    assert isinstance(native_edit_dist_np, numpy.ndarray)
+    print("Ref edit dist:", ref_edit_dist_np)
+    print("Native edit dist:", native_edit_dist_np)
+    print("Expected edit dist:", expected_results)
+    assert ref_edit_dist_np.shape == (n_batch,)
+    assert native_edit_dist_np.shape == (n_batch, num_classes)
+    for i in range(n_batch):
+        a_last = a_np[i, a_len_np[i] - 1]
+        assert 0 <= a_last < num_classes
+        native_res = native_edit_dist_np[i, a_last]
+        if expected_results[i] is not None:
+            assert expected_results[i] == ref_edit_dist_np[i] == native_res
+        else:
+            assert ref_edit_dist_np[i] == native_res
+        for j in range(num_classes):
+            ref_res = _naive_optimal_completion_edit_distance(
+                list(a_np[i, : a_len_np[i] - 1]) + [j], list(b_np[i, : b_len_np[i]])
+            )
+            native_res = native_edit_dist_np[i, j]
+            assert ref_res == native_res
+    print()
+
+
+def test_next_edit_distance_row():
+    rnd = numpy.random.RandomState(42)
+    n_batch = 15
+    n_a_max_len = 13
+    n_b_max_len = 11
+    num_classes = 10
+    a_np = rnd.randint(0, num_classes, size=(n_batch, n_a_max_len), dtype="int32")
+    b_np = rnd.randint(0, num_classes, size=(n_batch, n_b_max_len), dtype="int32")
+    a_len_np = rnd.randint(1, n_a_max_len + 1, size=(n_batch,), dtype="int32")
+    b_len_np = rnd.randint(1, n_b_max_len + 1, size=(n_batch,), dtype="int32")
+    # Likely some high error. So make some explicit examples.
+    expected_results = [None] * n_batch
+    i = 0
+    # One insertion/deletion.
+    a_np[i, :1] = [1]
+    a_len_np[i] = 1
+    b_len_np[i] = 0
+    expected_results[i] = 1
+    i += 1
+    # One deletion.
+    a_np[i, :2] = [1, 2]
+    b_np[i, :1] = [1]
+    a_len_np[i] = 2
+    b_len_np[i] = 1
+    expected_results[i] = 1
+    i += 1
+    # One substitution + deletion.
+    a_np[i, :2] = [1, 2]
+    b_np[i, :1] = [3]
+    a_len_np[i] = 2
+    b_len_np[i] = 1
+    expected_results[i] = 2
+    i += 1
+    # One substitution error.
+    a_np[i, :4] = [1, 2, 3, 4]
+    b_np[i, :4] = [1, 2, 4, 4]
+    a_len_np[i] = 4
+    b_len_np[i] = 4
+    expected_results[i] = 1
+    i += 1
+    # One deletion error.
+    a_np[i, :6] = [1, 2, 3, 3, 4, 5]
+    b_np[i, :5] = [1, 2, 3, 4, 5]
+    a_len_np[i] = 6
+    b_len_np[i] = 5
+    expected_results[i] = 1
+    i += 1
+    # One insertion error.
+    a_np[i, :6] = [1, 2, 3, 4, 5, 6]
+    b_np[i, :7] = [1, 2, 3, 4, 4, 5, 6]
+    a_len_np[i] = 6
+    b_len_np[i] = 7
+    expected_results[i] = 1
+    i += 1
+    # Same.
+    a_np[i, :11] = [2, 2, 4, 4, 6, 6, 8, 8, 9, 10, 11]
+    b_np[i, :11] = [2, 2, 4, 4, 6, 6, 8, 8, 9, 10, 11]
+    a_len_np[i] = 11
+    b_len_np[i] = 11
+    expected_results[i] = 0
+    i += 1
+    # Both full length. Error should be 2.
+    a_np[i] = [2, 2, 4, 4, 6, 6, 8, 8, 9, 10, 0, 0, 0]
+    b_np[i] = [2, 2, 4, 4, 6, 6, 8, 8, 9, 10, 0]
+    a_len_np[i] = n_a_max_len
+    b_len_np[i] = n_b_max_len
+    expected_results[i] = 2
+    i += 1
+    assert n_batch - i >= 5  # still some random left
+    a = torch.tensor(a_np)
+    b = torch.tensor(b_np)
+    a_len = torch.tensor(a_len_np)
+    b_len = torch.tensor(b_len_np)
+
+    for i in range(n_batch):
+        print("testing batch", i, "/", n_batch)
+        _a = a[i : i + 1, : a_len_np[i]]
+        _a_len = a_len[i : i + 1]
+        _b = b[i : i + 1, : b_len_np[i]]
+        _b_len = b_len[i : i + 1]
+        print("seq a:", a_np[i, : a_len_np[i]])
+        print("seq b:", b_np[i, : b_len_np[i]])
+        ref_edit_dist_np = edit_distance_ref_np(_a.numpy(), _a_len.numpy(), _b.numpy(), _b_len.numpy())
+        native_edit_dist_np = edit_distance_via_next_edit_distance_row(_a, _a_len, _b, _b_len).numpy()
+        assert isinstance(ref_edit_dist_np, numpy.ndarray)
+        assert isinstance(native_edit_dist_np, numpy.ndarray)
+        print("Ref edit dist:", ref_edit_dist_np)
+        print("Native edit dist:", native_edit_dist_np)
+        print("Expected edit dist:", expected_results[i])
+        assert ref_edit_dist_np.shape == native_edit_dist_np.shape == (1,)
+        if expected_results[i] is not None:
+            assert expected_results[i] == ref_edit_dist_np[0] == native_edit_dist_np[0]
+        else:
+            assert ref_edit_dist_np[0] == native_edit_dist_np[0]
+        print("swapped:")
+        ref_edit_dist_np = edit_distance_ref_np(_b.numpy(), _b_len.numpy(), _a.numpy(), _a_len.numpy())
+        native_edit_dist_np = edit_distance_via_next_edit_distance_row(_b, _b_len, _a, _a_len).numpy()
+        assert isinstance(ref_edit_dist_np, numpy.ndarray)
+        assert isinstance(native_edit_dist_np, numpy.ndarray)
+        print("Ref edit dist:", ref_edit_dist_np)
+        print("Native edit dist:", native_edit_dist_np)
+        print("Expected edit dist:", expected_results[i])
+        assert ref_edit_dist_np.shape == native_edit_dist_np.shape == (1,)
+        if expected_results[i] is not None:
+            assert expected_results[i] == ref_edit_dist_np[0] == native_edit_dist_np[0]
+        else:
+            assert ref_edit_dist_np[0] == native_edit_dist_np[0]
+        print()
+
+    print("Now the whole batch.")
+    ref_edit_dist_np = edit_distance_ref_np(a.numpy(), a_len.numpy(), b.numpy(), b_len.numpy())
+    native_edit_dist_np = edit_distance_via_next_edit_distance_row(a, a_len, b, b_len).numpy()
+    assert isinstance(ref_edit_dist_np, numpy.ndarray)
+    assert isinstance(native_edit_dist_np, numpy.ndarray)
+    print("Ref edit dist:", ref_edit_dist_np)
+    print("Native edit dist:", native_edit_dist_np)
+    print("Expected edit dist:", expected_results)
+    assert ref_edit_dist_np.shape == native_edit_dist_np.shape == (n_batch,)
+    for i in range(n_batch):
+        if expected_results[i] is not None:
+            assert expected_results[i] == ref_edit_dist_np[i] == native_edit_dist_np[i]
+        else:
+            assert ref_edit_dist_np[i] == native_edit_dist_np[i]
+    print()
+
+    print("Now the whole batch, flipped.")
+    ref_edit_dist_np = edit_distance_ref_np(b.numpy(), b_len.numpy(), a.numpy(), a_len.numpy())
+    native_edit_dist_np = edit_distance_via_next_edit_distance_row(b, b_len, a, a_len).numpy()
+    assert isinstance(ref_edit_dist_np, numpy.ndarray)
+    assert isinstance(native_edit_dist_np, numpy.ndarray)
+    print("Ref edit dist:", ref_edit_dist_np)
+    print("Native edit dist:", native_edit_dist_np)
+    print("Expected edit dist:", expected_results)
+    assert ref_edit_dist_np.shape == native_edit_dist_np.shape == (n_batch,)
+    for i in range(n_batch):
+        if expected_results[i] is not None:
+            assert expected_results[i] == ref_edit_dist_np[i] == native_edit_dist_np[i]
+        else:
+            assert ref_edit_dist_np[i] == native_edit_dist_np[i]
+
+
+def test_next_edit_distance_row_optimal_completion():
+    rnd = numpy.random.RandomState(42)
+    n_batch = 15
+    n_a_max_len = 11
+    n_b_max_len = 13
+    num_classes = 10
+    a_np = rnd.randint(0, num_classes, size=(n_batch, n_a_max_len), dtype="int32")
+    b_np = rnd.randint(0, num_classes, size=(n_batch, n_b_max_len), dtype="int32")
+    a_len_np = rnd.randint(1, n_a_max_len + 1, size=(n_batch,), dtype="int32")
+    b_len_np = rnd.randint(1, n_b_max_len + 1, size=(n_batch,), dtype="int32")
+    # Likely some high error. So make some explicit examples.
+    expected_results = [None] * n_batch
+    i = 0
+    # One deletion.
+    a_np[i, :1] = [1]
+    a_len_np[i] = 1
+    b_len_np[i] = 0
+    expected_results[i] = 1
+    i += 1
+    # One optional insertion.
+    a_np[i, :1] = [1]
+    b_np[i, :2] = [1, 2]
+    a_len_np[i] = 1
+    b_len_np[i] = 2
+    expected_results[i] = 0
+    i += 1
+    # One substitution or deletion.
+    a_np[i, :1] = [1]
+    b_np[i, :2] = [3, 1]
+    a_len_np[i] = 1
+    b_len_np[i] = 2
+    expected_results[i] = 1
+    i += 1
+    # One substitution error.
+    a_np[i, :4] = [1, 2, 3, 4]
+    b_np[i, :4] = [1, 2, 4, 4]
+    a_len_np[i] = 4
+    b_len_np[i] = 4
+    expected_results[i] = 1
+    i += 1
+    # One insertion error.
+    a_np[i, :5] = [1, 2, 3, 4, 5]
+    b_np[i, :6] = [1, 2, 3, 3, 4, 5]
+    a_len_np[i] = 5
+    b_len_np[i] = 6
+    expected_results[i] = 1
+    i += 1
+    # Same.
+    a_np[i, :11] = [2, 2, 4, 4, 6, 6, 8, 8, 9, 10, 11]
+    b_np[i, :11] = [2, 2, 4, 4, 6, 6, 8, 8, 9, 10, 11]
+    a_len_np[i] = 11
+    b_len_np[i] = 11
+    expected_results[i] = 0
+    i += 1
+    # Both full length.
+    a_np[i] = [2, 2, 4, 4, 6, 6, 8, 8, 9, 10, 0]
+    b_np[i] = [2, 2, 4, 4, 6, 6, 8, 8, 9, 10, 0, 0, 0]
+    a_len_np[i] = n_a_max_len
+    b_len_np[i] = n_b_max_len
+    expected_results[i] = 0
+    i += 1
+    assert n_batch - i >= 5  # still some random left
+    a = torch.tensor(a_np)
+    b = torch.tensor(b_np)
+    a_len = torch.tensor(a_len_np)
+    b_len = torch.tensor(b_len_np)
+    print("Now the whole batch.")
+    native_edit_dist = edit_distance_via_next_edit_distance_row(a, a_len, b, b_len, optimal_completion=True)
+    native_edit_dist_np = native_edit_dist.numpy()
+    ref_edit_dist_np = numpy.array(
+        [
+            _naive_optimal_completion_edit_distance(a_np[i, : a_len_np[i]], b_np[i, : b_len_np[i]])
+            for i in range(n_batch)
+        ]
+    )
+    assert isinstance(ref_edit_dist_np, numpy.ndarray)
+    assert isinstance(native_edit_dist_np, numpy.ndarray)
+    print("Ref edit dist:", ref_edit_dist_np)
+    print("Native edit dist:", native_edit_dist_np)
+    print("Expected edit dist:", expected_results)
+    assert ref_edit_dist_np.shape == native_edit_dist_np.shape == (n_batch,)
+    for i in range(n_batch):
+        if expected_results[i] is not None:
+            assert expected_results[i] == ref_edit_dist_np[i] == native_edit_dist_np[i]
+        else:
+            assert ref_edit_dist_np[i] == native_edit_dist_np[i]
+    print()
+
+
+def test_next_edit_distance_reduce_optimal_completion():
+    rnd = numpy.random.RandomState(42)
+    n_batch = 15
+    n_a_max_len = 7
+    n_b_max_len = 13
+    num_classes = 10
+    a_np = rnd.randint(0, num_classes, size=(n_batch, n_a_max_len), dtype="int32")
+    b_np = rnd.randint(0, num_classes, size=(n_batch, n_b_max_len), dtype="int32")
+    # Test only for full length seqs in a.
+    a_len_np = numpy.array([n_a_max_len] * n_batch, dtype="int32")
+    b_len_np = rnd.randint(1, n_b_max_len + 1, size=(n_batch,), dtype="int32")
+    a = torch.tensor(a_np)
+    b = torch.tensor(b_np)
+    assert all(a_len_np > 0)
+    a_len = torch.tensor(a_len_np)
+    b_len = torch.tensor(b_len_np)
+    print("Now the whole batch.")
+    # a_len - 1 such that we can do the check below.
+    native_edit_dist = optimal_completion_edit_distance_per_successor_via_next_edit_distance(
+        a, a_len, b, b_len, num_classes
+    )
+    native_edit_dist_np = native_edit_dist.numpy()
+    assert isinstance(native_edit_dist_np, numpy.ndarray)
+    print("Native edit dist:", native_edit_dist_np)
+    assert native_edit_dist_np.shape == (n_batch, num_classes)
+    for i in range(n_batch):
+        for j in range(num_classes):
+            ref_res = _naive_optimal_completion_edit_distance(
+                list(a_np[i, : a_len_np[i]]) + [j], b_np[i, : b_len_np[i]]
+            )
+            native_res = native_edit_dist_np[i, j]
+            assert ref_res == native_res
+    print()

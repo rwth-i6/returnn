@@ -183,10 +183,15 @@ class OpMaker:
             for in_idx, v in enumerate(in_info):
                 if _schema_type_str(v) != "Tensor":
                     code_set_io += dedent(f"""\
-                        torch::Tensor {map_name(v)}_tensor = torch::tensor({map_name(v)});
+                        torch::Tensor {map_name(v)}_tensor = torch::tensor({map_name(v)}, torch::dtype({map_type(v)}));
                         """)
                     continue  # scalar input
                 ndim = len(v["shape"])
+                code_set_io += dedent(f"""\
+                    if({map_name(v)}.scalar_type() != {map_type(v)}) {{
+                        {map_name(v)} = {map_name(v)}.to(torch::dtype({map_type(v)}));
+                    }}
+                    """)
                 code_set_io += dedent(f"""\
                     TORCH_CHECK(
                         {map_name(v)}.dim() == {ndim},
@@ -218,7 +223,7 @@ class OpMaker:
 
             code_set_contiguous = ""
             for v in in_info:
-                if v.get("want_contiguous", False):
+                if v.get("need_contiguous", False) and _schema_type_str(v) == "Tensor":
                     code_set_contiguous += dedent(f"""\
                         if(!{map_name(v)}.is_contiguous()) {{
                             {map_name(v)} = {map_name(v)}.contiguous();
@@ -454,10 +459,11 @@ def ctc_loss(
     logits_seq_lens: torch.Tensor,
     targets: torch.Tensor,
     targets_seq_lens: torch.Tensor,
-    ctc_merge_repeated: bool = True,
+    label_loop: bool = True,
     logits_time_major: bool = False,
     logits_normalize: bool = True,
     blank_index: int = -1,
+    max_approx: bool = False,
 ) -> torch.Tensor:
     """
     Similar to :func:`tf.nn.ctc_loss`.
@@ -469,10 +475,11 @@ def ctc_loss(
     :param logits_time_major:
     :param targets: batch-major, [batch,time]
     :param targets_seq_lens: (batch,)
-    :param ctc_merge_repeated:
+    :param label_loop: (ctc_merge_repeated in tf.nn.ctc_loss)
     :param logits_normalize: apply log_softmax on logits (default).
       if False, you might also set grad_wrt_softmax_in=False
     :param blank_index: vocab index of the blank symbol
+    :param max_approx: use max approximation (Viterbi) instead of full sum
     :return: loss, shape (batch,)
     """
     from .array_ import sequence_mask_time_major
@@ -486,10 +493,27 @@ def ctc_loss(
         blank_index += dim
     assert 0 <= blank_index < dim
     edges, weights, start_end_states = get_ctc_fsa_fast_bw(
-        targets=targets, seq_lens=targets_seq_lens, blank_idx=blank_index, label_loop=ctc_merge_repeated
+        targets=targets, seq_lens=targets_seq_lens, blank_idx=blank_index, label_loop=label_loop
     )
 
-    seq_mask = sequence_mask_time_major(logits_seq_lens)
+    seq_mask = sequence_mask_time_major(logits_seq_lens)  # (time,batch), bool
+
+    if max_approx:
+        log_probs = torch.log_softmax(logits, dim=-1) if logits_normalize else logits  # (time,batch,dim)
+        alignment, _ = fast_viterbi(
+            am_scores=log_probs,
+            am_seq_len=logits_seq_lens,
+            edges=edges,
+            weights=weights,
+            start_end_states=start_end_states,
+            mask_idx=blank_index,
+        )
+        # alignment is (time,batch)
+        log_probs_ = torch.gather(log_probs, 2, alignment.unsqueeze(-1))  # (time,batch,1)
+        log_probs_ = log_probs_.squeeze(-1)  # (time,batch)
+        log_probs_ = torch.where(seq_mask, log_probs_, 0.0)
+        loss = -torch.sum(log_probs_, dim=0)  # (batch,)
+        return loss
 
     loss = _FastBaumWelchScoresAutogradFunc.apply(logits, logits_normalize, seq_mask, edges, weights, start_end_states)
     return loss
@@ -630,6 +654,7 @@ def fast_viterbi(
     edges: torch.Tensor,
     weights: torch.Tensor,
     start_end_states: torch.Tensor,
+    mask_idx: int = 0,
 ) -> Tuple[torch.Tensor, torch.Tensor]:
     """
     :param am_scores: (time, batch, dim), in +log space, already normalized / just used as-is
@@ -638,11 +663,231 @@ def fast_viterbi(
     :param weights: (num_edges,), weights of the edges
     :param start_end_states: (2, batch), (start,end) state idx in automaton.
         there is only one single automaton.
-    :return: (alignment, scores), alignment is (time, batch), scores is (batch,), in +log space
+    :param mask_idx: vocab index used for masking (e.g. padding, or if not path was found)
+    :return: (alignment, scores), alignment is (time, batch), scores is (batch,), in +log space.
+        note: scores are not differentiable here.
+        do gather+sum on the am_scores by the alignment to get it differentiable.
     """
     last_state_idx = start_end_states[1].max()
     n_states = last_state_idx + 1
     maker = OpMaker(OpDescription.from_gen_base(native_op.FastViterbiOp))
     op = maker.make_op()
-    alignment, scores = op(am_scores, am_seq_len, edges, weights, start_end_states, n_states)
+    alignment, scores = op(am_scores, am_seq_len, edges, weights, start_end_states, n_states, mask_idx)
     return alignment, scores
+
+
+def ctc_best_path(
+    *,
+    logits: torch.Tensor,
+    logits_seq_lens: torch.Tensor,
+    targets: torch.Tensor,
+    targets_seq_lens: torch.Tensor,
+    label_loop: bool = True,
+    logits_time_major: bool = False,
+    logits_normalize: bool = True,
+    blank_index: int = -1,
+) -> torch.Tensor:
+    """
+    :param logits: (time,batch,dim) or (batch,time,dim). unnormalized (before softmax)
+    :param logits_seq_lens: shape (batch,) of int32|int64
+    :param logits_time_major:
+    :param targets: batch-major, [batch,time]
+    :param targets_seq_lens: (batch,)
+    :param label_loop: (ctc_merge_repeated in tf.nn.ctc_loss)
+    :param logits_normalize: apply log_softmax on logits (default).
+      if False, you might also set grad_wrt_softmax_in=False
+    :param blank_index: vocab index of the blank symbol
+    :return: alignment, (time, batch). note, to get the scores, do gather+sum on the am_scores by the alignment.
+    """
+    assert logits.ndim == 3
+    dim = logits.shape[-1]
+    if not logits_time_major:
+        logits = torch.transpose(logits, 0, 1)  # (time,batch,dim)
+    if logits_normalize:
+        log_sm = torch.log_softmax(logits, dim=-1)  # (time,batch,dim)
+    else:
+        log_sm = logits
+
+    if blank_index < 0:
+        blank_index += dim
+    assert 0 <= blank_index < dim
+    edges, weights, start_end_states = get_ctc_fsa_fast_bw(
+        targets=targets, seq_lens=targets_seq_lens, blank_idx=blank_index, label_loop=label_loop
+    )
+
+    alignment, _ = fast_viterbi(
+        am_scores=log_sm,
+        am_seq_len=logits_seq_lens,
+        edges=edges,
+        weights=weights,
+        start_end_states=start_end_states,
+        mask_idx=blank_index,
+    )
+    return alignment
+
+
+def edit_distance(a, a_len, b, b_len):
+    """
+    Wraps :class:`NativeOp.EditDistanceOp`.
+
+    :param torch.Tensor a: (batch,time1), int32
+    :param torch.Tensor a_len: (batch,), int32
+    :param torch.Tensor b: (batch,time2), int32
+    :param torch.Tensor b_len: (batch,), int32
+    :return: (batch,) tensor, int32, un-normalized edit distance
+    :rtype: torch.Tensor
+    """
+    maker = OpMaker(OpDescription.from_gen_base(native_op.EditDistanceOp))
+    op = maker.make_op()
+    return op(a, a_len, b, b_len)
+
+
+def optimal_completion_edit_distance(a, a_len, b, b_len):
+    """
+    Wraps :class:`NativeOp.OptimalCompletionEditDistanceOp`.
+
+    :param torch.Tensor a: (batch,time1), int32. prefix
+    :param torch.Tensor a_len: (batch,), int32
+    :param torch.Tensor b: (batch,time2), int32
+    :param torch.Tensor b_len: (batch,), int32
+    :return: (batch,) tensor, int32, un-normalized edit distance
+    :rtype: torch.Tensor
+    """
+    maker = OpMaker(OpDescription.from_gen_base(native_op.OptimalCompletionEditDistanceOp))
+    op = maker.make_op()
+    return op(a, a_len, b, b_len)
+
+
+def optimal_completion_edit_distance_per_successor(a, a_len, b, b_len, successors):
+    """
+    Wraps :class:`NativeOp.OptimalCompletionEditDistancePerSuccessorOp`.
+
+    :param torch.Tensor a: (batch,time1), int32. prefix
+    :param torch.Tensor a_len: (batch,), int32
+    :param torch.Tensor b: (batch,time2), int32
+    :param torch.Tensor b_len: (batch,), int32
+    :param torch.Tensor|int successors: (n_labels,), int32. scalar means tf.range(successors)
+    :return: (batch,n_labels) tensor, int32, un-normalized edit distance
+    :rtype: torch.Tensor
+    """
+    if isinstance(successors, int):
+        n_labels = successors
+        successors = torch.arange(0, n_labels, 1)
+    assert isinstance(successors, torch.Tensor)
+    maker = OpMaker(OpDescription.from_gen_base(native_op.OptimalCompletionEditDistancePerSuccessorOp))
+    op = maker.make_op()
+    return op(a, a_len, b, b_len, successors)
+
+
+def next_edit_distance_row(last_row, a, a_n, a_ended, b, b_len):
+    """
+    Wraps :class:`NativeOp.NextEditDistanceRowOp`.
+
+    :param torch.Tensor last_row: 2d (batch,b_time + 1), int32. last edit distances
+    :param torch.Tensor a: symbols. 1d (batch,), int32. current.
+    :param torch.Tensor|int a_n: scalar or 1d (batch,), int32. current position
+    :param torch.Tensor a_ended: 1d (batch,), int32 (casted from bool, because int32 easier to handle)
+    :param torch.Tensor b: symbols. 2d (batch,b_time), int32
+    :param torch.Tensor b_len: 1d (batch,), int32
+    :return: 2d (batch,b_time + 1), int32, next (unnormalized) edit distance row
+    :rtype: torch.Tensor
+    """
+    a_ended = a_ended.int()
+    if isinstance(a_n, int):
+        a_n = torch.tensor(a_n, device=a.device)
+    if a_n.ndim == 0:
+        a_n = a_n[None].tile(a_ended.shape)
+    maker = OpMaker(OpDescription.from_gen_base(native_op.NextEditDistanceRowOp))
+    op = maker.make_op()
+    return op(last_row, a, a_n, a_ended, b, b_len)
+
+
+def edit_distance_via_next_edit_distance_row(a, a_len, b, b_len, optimal_completion=False, full_row_output=False):
+    """
+    This is mostly for demonstration and debugging.
+    Should be equivalent to :func:`edit_distance` or :func:`optimal_completion_edit_distance`
+    (which should be much faster).
+
+    :param torch.Tensor a: (batch,time1), int32
+    :param torch.Tensor a_len: (batch,), int32
+    :param torch.Tensor b: (batch,time2), int32
+    :param torch.Tensor b_len: (batch,), int32
+    :param bool optimal_completion: calc optimal completion edit distance instead
+    :param bool full_row_output: outputs the full final row
+    :return: (batch,) or (batch,time2+1) tensor, int32, un-normalized edit distance
+    :rtype: torch.Tensor
+    """
+    batch_size = a.size(0)
+    time1 = a.size(1)
+    time2 = b.size(1)
+
+    row = torch.arange(time2 + 1, device=a.device)[None, :].tile((batch_size, 1))  # (B,time2+1)
+    for i in range(time1):
+        a_ended = i >= a_len  # (B,)
+        a_cur = a[:, i]  # (B,)
+        row = next_edit_distance_row(a=a_cur, a_n=i, a_ended=a_ended, b=b, b_len=b_len, last_row=row)
+
+    if full_row_output:
+        assert not optimal_completion  # assert the default, this would not have an effect
+        return row
+    elif not optimal_completion:
+        return row[:, -1]
+    else:
+        return torch.min(row, dim=1).values
+
+
+def next_edit_distance_reduce(last_row, a, a_n, a_ended, b, b_len, optimal_completion=False, a_blank_idx=None):
+    """
+    Wraps :class:`NativeOp.NextEditDistanceReduceOp`.
+
+    :param torch.Tensor last_row: 2d (batch,b_time + 1), int32. last edit distances
+    :param torch.Tensor a: symbols. 2d (batch|1,n_labels), int32. current.
+    :param torch.Tensor a_n: scalar or 1d (batch,), int32. current position
+    :param torch.Tensor a_ended: 1d (batch,), int32 (casted from bool, because int32 easier to handle)
+    :param torch.Tensor b: symbols. 2d (batch,b_time), int32
+    :param torch.Tensor b_len: 1d (batch,), int32
+    :param torch.Tensor|int|None a_blank_idx: scalar, int32
+    :param bool|torch.Tensor optimal_completion:
+    :return: 2d (batch,n_labels), int32, next (unnormalized) (optimal completion) edit distance
+    :rtype: torch.Tensor
+    """
+    a_ended = a_ended.int()
+    if a_n.ndim == 0:
+        a_n = a_n[None].tile(a_ended.shape)
+    if a_blank_idx is None:
+        a_blank_idx = -1
+    maker = OpMaker(OpDescription.from_gen_base(native_op.NextEditDistanceReduceOp))
+    op = maker.make_op()
+    return op(last_row, a, a_n, a_ended, b, b_len, optimal_completion, a_blank_idx)
+
+
+def optimal_completion_edit_distance_per_successor_via_next_edit_distance(a, a_len, b, b_len, successors):
+    """
+    Uses :func:`next_edit_distance_reduce` and :func:`edit_distance_via_next_edit_distance_row`.
+    Mostly for demonstration/testing.
+    In practice, you would do something similar, but in your own loop.
+    Similar to :func:`optimal_completion_edit_distance_per_successor`,
+    but the handling of ended sequences (from ``a``) is different.
+
+    :param torch.Tensor a: (batch,time1), int32. prefix
+    :param torch.Tensor a_len: (batch,), int32
+    :param torch.Tensor b: (batch,time2), int32
+    :param torch.Tensor b_len: (batch,), int32
+    :param torch.Tensor|int successors: (n_labels,), int32. scalar means tf.range(successors)
+    :return: (batch,n_labels) tensor, int32, un-normalized edit distance
+    :rtype: torch.Tensor
+    """
+    if isinstance(successors, int):
+        n_labels = successors
+        successors = torch.arange(0, n_labels, 1)[None]  # (1,n_labels)
+    assert isinstance(successors, torch.Tensor)
+    last_row = edit_distance_via_next_edit_distance_row(a, a_len, b, b_len, full_row_output=True)
+    return next_edit_distance_reduce(
+        last_row,
+        a=successors,
+        a_n=torch.tensor(a.size(1)),
+        a_ended=a_len != a.size(1),
+        b=b,
+        b_len=b_len,
+        optimal_completion=True,
+    )
