@@ -9,7 +9,9 @@ import numpy.testing
 import _setup_test_env  # noqa
 import returnn.frontend as rf
 from returnn.tensor import Tensor, Dim, TensorDict, batch_dim
+from returnn.torch.frontend import TorchBackend
 from rf_utils import run_model, tf_scope
+import pytest
 
 
 def _setup():
@@ -22,6 +24,11 @@ def _setup():
 
 
 _setup()
+
+
+@pytest.fixture(autouse=True)
+def reset_sdpa():
+    TorchBackend.ForceFallbackSDPA = False
 
 
 def test_dot_attention():
@@ -146,6 +153,9 @@ def test_self_attention_to_pure_torch():
     )
     torch_mhsa.eval()
 
+    TorchBackend.ForceFallbackSDPA = True
+    rf_output_fallback = rf_mhsa(rf_input, axis=spatial_dim)
+    TorchBackend.ForceFallbackSDPA = False
     rf_output = rf_mhsa(rf_input, axis=spatial_dim)
     torch_output, torch_attn_weights = torch_mhsa(torch_input, torch_input, torch_input, key_padding_mask=None)
 
@@ -153,14 +163,20 @@ def test_self_attention_to_pure_torch():
     print(rf_output.raw_tensor)
     print(rf_output.raw_tensor.shape)
     print("---------------------------")
+    print("RF output (fallback SDPA)")
+    print(rf_output_fallback.raw_tensor)
+    print(rf_output_fallback.raw_tensor.shape)
+    print("---------------------------")
     print("Torch output")
     print(torch_output)
     print(torch_output.shape)
 
-    torch.testing.assert_allclose(rf_output.raw_tensor, torch_output, atol=1e-3, rtol=1e-4)
+    torch.testing.assert_close(rf_output.raw_tensor, torch_output, atol=1e-3, rtol=1e-4)
+    torch.testing.assert_close(rf_output_fallback.raw_tensor, torch_output, atol=1e-3, rtol=1e-4)
 
 
 def test_causal_self_attention():
+    import torch
     from returnn.tensor import single_step_dim
 
     time_dim = Dim(Tensor("time", [batch_dim], dtype="int32"))
@@ -204,13 +220,18 @@ def test_causal_self_attention():
         out = model(extern_data["data"], axis=time_dim)
         out.mark_as_default_output(shape=(batch_dim, time_dim, model.out_dim))
 
-    run_model(
-        extern_data,
-        lambda *, epoch, step: _Net(),
-        _forward_step,
-        # TF needs TensorArray unstack, not implemented yet
-        test_tensorflow=False,
-    )
+    res = {}
+    for force_fallback_sdpa in [True, False]:
+        TorchBackend.ForceFallbackSDPA = force_fallback_sdpa
+        res[force_fallback_sdpa] = run_model(
+            extern_data,
+            lambda *, epoch, step: _Net(),
+            _forward_step,
+            # TF needs TensorArray unstack, not implemented yet
+            test_tensorflow=False,
+        )
+
+    torch.testing.assert_close(res[False].data["output"].raw_tensor, res[True].data["output"].raw_tensor)
 
 
 def test_rotary_embedding():
@@ -262,8 +283,8 @@ def test_rotary_embedding():
 
     assert out_rf_sin.raw_tensor.shape == out_hf_sin.shape
     assert out_rf_cos.raw_tensor.shape == out_hf_cos.shape
-    torch.testing.assert_allclose(out_rf_sin.raw_tensor, out_hf_sin)
-    torch.testing.assert_allclose(out_rf_cos.raw_tensor, out_hf_cos)
+    torch.testing.assert_close(out_rf_sin.raw_tensor, out_hf_sin)
+    torch.testing.assert_close(out_rf_cos.raw_tensor, out_hf_cos)
 
 
 def test_rope_causal_self_att():
@@ -274,6 +295,7 @@ def test_rope_causal_self_att():
     # noinspection PyProtectedMember
     from returnn.frontend.attention import _apply_rope as rf_apply_rope
     from returnn.frontend.conversions.hf_llama import import_params_hf_llama_att_to_rf_rotary_att
+    from returnn.frontend._backend import Backend
 
     from transformers.models.llama.modeling_llama import (
         LlamaAttention,
@@ -313,8 +335,34 @@ def test_rope_causal_self_att():
     in_ = rf.random_uniform([batch_dim, seq_dim, model_dim])
     in_.name = "input"
 
+    TorchBackend.ForceFallbackSDPA = True
     with PyTracer(
-        [rf.RotaryPosCausalSelfAttention.__call__, rf.sinusoidal_encoding, rf.dot_attention, rf_apply_rope],
+        [
+            rf.RotaryPosCausalSelfAttention.__call__,
+            rf.sinusoidal_encoding,
+            rf.scaled_dot_product_attention,
+            Backend.scaled_dot_product_attention,
+            rf_apply_rope,
+        ],
+        (Tensor, Dim),
+    ) as trace_rf_fallback:
+        out_rf_fallback, _ = model_rf(
+            in_,
+            axis=seq_dim,
+            state=model_rf.default_initial_state(batch_dims=[batch_dim]),
+        )
+        out_rf_fallback = out_rf_fallback.copy_transpose((batch_dim, seq_dim, model_dim))
+    pprint(trace_rf_fallback.captured_locals)
+    TorchBackend.ForceFallbackSDPA = False
+
+    with PyTracer(
+        [
+            rf.RotaryPosCausalSelfAttention.__call__,
+            rf.sinusoidal_encoding,
+            rf.scaled_dot_product_attention,
+            Backend.scaled_dot_product_attention,
+            rf_apply_rope,
+        ],
         (Tensor, Dim),
     ) as trace_rf:
         out_rf, _ = model_rf(in_, axis=seq_dim, state=model_rf.default_initial_state(batch_dims=[batch_dim]))
@@ -348,103 +396,134 @@ def test_rope_causal_self_att():
     print("First HF att weight tensor:")
     print(trace_hf.captured_locals[LlamaAttention.forward][0]["attn_weights"][-1][0, 0, 0].detach().numpy())
 
-    check_py_traces_rf_to_pt_equal(
-        trace_rf.captured_locals,
-        trace_hf.captured_locals,
-        [
-            (
-                (rf.RotaryPosCausalSelfAttention.__call__, 0, "q", 0),
-                # input: batch_dim, seq_dim, model_dim
-                # input_shape: batch_dim, seq_dim
-                # HF query_states': (batch_dim, seq_dim, num_heads, self.head_dim),
-                #   then transposed to (batch_dim, num_heads, seq_dim, self.head_dim)
-                (LlamaAttention.forward, 0, "query_states", 0),
-                lambda x, *, name, **_: rf.convert_to_tensor(
-                    # reorder complex numbers
-                    x.reshape(*x.shape[:-1], 2, -1).transpose(-1, -2).flatten(-2),
-                    dims=(batch_dim, model_rf.num_heads, seq_dim, model_rf.key_dim_per_head),
-                    name=name,
+    trace_all = [
+        (
+            (rf.RotaryPosCausalSelfAttention.__call__, 0, "q", 0),
+            # input: batch_dim, seq_dim, model_dim
+            # input_shape: batch_dim, seq_dim
+            # HF query_states': (batch_dim, seq_dim, num_heads, self.head_dim),
+            #   then transposed to (batch_dim, num_heads, seq_dim, self.head_dim)
+            (LlamaAttention.forward, 0, "query_states", 0),
+            lambda x, *, name, **_: rf.convert_to_tensor(
+                # reorder complex numbers
+                x.reshape(*x.shape[:-1], 2, -1).transpose(-1, -2).flatten(-2),
+                dims=(
+                    batch_dim,
+                    model_rf.num_heads,
+                    seq_dim,
+                    model_rf.key_dim_per_head,
                 ),
+                name=name,
             ),
-            (
-                (rf.RotaryPosCausalSelfAttention.__call__, 0, "k", 0),
-                (LlamaAttention.forward, 0, "key_states", 0),
-                lambda x, *, name, **_: rf.convert_to_tensor(
-                    # reorder complex numbers
-                    x.reshape(*x.shape[:-1], 2, -1).transpose(-1, -2).flatten(-2),
-                    dims=(batch_dim, model_rf.num_heads, seq_dim, model_rf.key_dim_per_head),
-                    name=name,
+        ),
+        (
+            (rf.RotaryPosCausalSelfAttention.__call__, 0, "k", 0),
+            (LlamaAttention.forward, 0, "key_states", 0),
+            lambda x, *, name, **_: rf.convert_to_tensor(
+                # reorder complex numbers
+                x.reshape(*x.shape[:-1], 2, -1).transpose(-1, -2).flatten(-2),
+                dims=(
+                    batch_dim,
+                    model_rf.num_heads,
+                    seq_dim,
+                    model_rf.key_dim_per_head,
                 ),
+                name=name,
             ),
-            (
-                (rf.sinusoidal_encoding, 0, "div_term", 0),
-                (LlamaRotaryEmbedding.forward, 0, "inv_freq_expanded", 0),
-                lambda x, *, name, **_: rf.convert_to_tensor(
-                    x[0, :, 0], dims=[model_rf.key_dim_per_head.div_left(2)], name=name
+        ),
+        (
+            (rf_apply_rope, 0, "pe_imag", 0),
+            (apply_rotary_pos_emb, 0, "sin", 0),
+            lambda x, *, name, **_: rf.convert_to_tensor(
+                x[0, :, : x.shape[2] // 2],
+                dims=(seq_dim, model_rf.key_dim_per_head.div_left(2)),
+                name=name,
+            ),
+        ),
+        (
+            (rf_apply_rope, 0, "pe_imag", 0),
+            (apply_rotary_pos_emb, 0, "sin", 0),
+            lambda x, *, name, **_: rf.convert_to_tensor(
+                x[-1, :, x.shape[2] // 2 :],
+                dims=(seq_dim, model_rf.key_dim_per_head.div_left(2)),
+                name=name,
+            ),
+        ),
+        (
+            (rf_apply_rope, 0, "pe_real", 0),
+            (apply_rotary_pos_emb, 0, "cos", 0),
+            lambda x, *, name, **_: rf.convert_to_tensor(
+                x[0, :, : x.shape[2] // 2],
+                dims=(seq_dim, model_rf.key_dim_per_head.div_left(2)),
+                name=name,
+            ),
+        ),
+        (
+            (rf.RotaryPosCausalSelfAttention.__call__, 0, "q", -1),
+            (LlamaAttention.forward, 0, "query_states", -1),
+            lambda x, *, name, **_: rf.convert_to_tensor(
+                x.reshape(*x.shape[:-1], 2, -1).transpose(-1, -2).flatten(-2),
+                dims=(
+                    batch_dim,
+                    model_rf.num_heads,
+                    seq_dim,
+                    model_rf.key_dim_per_head,
                 ),
+                name=name,
             ),
-            (
-                (rf.sinusoidal_encoding, 0, "arg_sin", 0),
-                (LlamaRotaryEmbedding.forward, 0, "freqs", 0),
-                lambda x, *, name, resolve_dim, **_: rf.convert_to_tensor(
-                    x[0],
-                    dims=(resolve_dim("arg_sin.dims[0]"), model_rf.key_dim_per_head.div_left(2)),
-                    name=name,
+        ),
+        (
+            (rf.scaled_dot_product_attention, 0, "att", 0),
+            (LlamaAttention.forward, 0, "attn_output", 0),
+            (batch_dim, seq_dim, model_rf.num_heads, model_rf.value_dim_per_head),
+        ),
+    ]
+
+    trace_only_fallback = [
+        *trace_all,
+        # fallback is executed first, and sinusoidal is cached. Therefore we only test in fallback
+        (
+            (rf.sinusoidal_encoding, 0, "div_term", 0),
+            (LlamaRotaryEmbedding.forward, 0, "inv_freq_expanded", 0),
+            lambda x, *, name, **_: rf.convert_to_tensor(
+                x[0, :, 0], dims=[model_rf.key_dim_per_head.div_left(2)], name=name
+            ),
+        ),
+        (
+            (rf.sinusoidal_encoding, 0, "arg_sin", 0),
+            (LlamaRotaryEmbedding.forward, 0, "freqs", 0),
+            lambda x, *, name, resolve_dim, **_: rf.convert_to_tensor(
+                x[0],
+                dims=(
+                    resolve_dim("arg_sin.dims[0]"),
+                    model_rf.key_dim_per_head.div_left(2),
                 ),
+                name=name,
             ),
-            (
-                (rf_apply_rope, 0, "pe_imag", 0),
-                (apply_rotary_pos_emb, 0, "sin", 0),
-                lambda x, *, name, **_: rf.convert_to_tensor(
-                    x[0, :, : x.shape[2] // 2], dims=(seq_dim, model_rf.key_dim_per_head.div_left(2)), name=name
-                ),
-            ),
-            (
-                (rf_apply_rope, 0, "pe_imag", 0),
-                (apply_rotary_pos_emb, 0, "sin", 0),
-                lambda x, *, name, **_: rf.convert_to_tensor(
-                    x[-1, :, x.shape[2] // 2 :], dims=(seq_dim, model_rf.key_dim_per_head.div_left(2)), name=name
-                ),
-            ),
-            (
-                (rf_apply_rope, 0, "pe_real", 0),
-                (apply_rotary_pos_emb, 0, "cos", 0),
-                lambda x, *, name, **_: rf.convert_to_tensor(
-                    x[0, :, : x.shape[2] // 2],
-                    dims=(seq_dim, model_rf.key_dim_per_head.div_left(2)),
-                    name=name,
-                ),
-            ),
-            (
-                (rf.RotaryPosCausalSelfAttention.__call__, 0, "q", -1),
-                (LlamaAttention.forward, 0, "query_states", -1),
-                lambda x, *, name, **_: rf.convert_to_tensor(
-                    x.reshape(*x.shape[:-1], 2, -1).transpose(-1, -2).flatten(-2),
-                    dims=(batch_dim, model_rf.num_heads, seq_dim, model_rf.key_dim_per_head),
-                    name=name,
-                ),
-            ),
-            (
-                (rf.dot_attention, 0, "energy", 0),
-                (eager_attention_forward, 0, "attn_weights", 0),
-                (batch_dim, model_rf.num_heads, seq_dim, "axis"),
-            ),
-            (
-                (rf.dot_attention, 0, "att_weights", 0),
-                (LlamaAttention.forward, 0, "attn_weights", -1),
-                (batch_dim, model_rf.num_heads, seq_dim, "axis"),
-            ),
-            (
-                (rf.dot_attention, 0, "att", 0),
-                (LlamaAttention.forward, 0, "attn_output", 0),
-                (batch_dim, seq_dim, model_rf.num_heads, model_rf.value_dim_per_head),
-            ),
-        ],
-    )
+        ),
+        (
+            (Backend.scaled_dot_product_attention, 0, "energy", 0),
+            (eager_attention_forward, 0, "attn_weights", 0),
+            (batch_dim, model_rf.num_heads, seq_dim, "kv_spatial_dim"),
+        ),
+        (
+            (Backend.scaled_dot_product_attention, 0, "att_weights", 0),
+            (LlamaAttention.forward, 0, "attn_weights", -1),
+            (batch_dim, model_rf.num_heads, seq_dim, "kv_spatial_dim"),
+        ),
+    ]
+
+    assert Backend.scaled_dot_product_attention not in trace_rf.captured_locals
+    assert Backend.scaled_dot_product_attention in trace_rf_fallback.captured_locals
+
+    check_py_traces_rf_to_pt_equal(trace_rf.captured_locals, trace_hf.captured_locals, trace_all)
+    check_py_traces_rf_to_pt_equal(trace_rf_fallback.captured_locals, trace_hf.captured_locals, trace_only_fallback)
 
     print("Final check...")
     assert out_rf.raw_tensor.shape == out_hf.shape
     torch.testing.assert_close(out_rf.raw_tensor, out_hf)
+    assert out_rf_fallback.raw_tensor.shape == out_hf.shape
+    torch.testing.assert_close(out_rf_fallback.raw_tensor, out_hf)
     print("  all matched!")
 
 
@@ -506,24 +585,42 @@ def test_causal_self_att_variants_single_step_vs_full_seq():
 
     models = [_make_causal_self_att, _make_rope_causal_self_att, _make_rel_pos_causal_self_att]
 
-    for get_model in models:
-        print("> Testing model:", get_model.__name__)
-        res = run_model(
-            extern_data,
-            get_model,
-            _forward_step,
-            # TF needs TensorArray unstack, not implemented yet
-            test_tensorflow=False,
-        )
-
-        # Check that the single-step and the seq-level output are the same.
-        res_seq_level = res.data["out_seq_level"].raw_tensor
-        for key in ["out_seq_level_explicit_initial_state", "out_single_steps"]:
-            res_other = res.data[key].raw_tensor
-            assert res_seq_level.shape == res_other.shape
-            numpy.testing.assert_allclose(
-                res_other, res_seq_level, atol=1e-5, rtol=1e-5, err_msg=f"output {key} differs"
+    resdict = {}
+    for use_fallback in [True, False]:
+        TorchBackend.ForceFallbackSDPA = use_fallback
+        print("=== ForceFallbackSDPA =", use_fallback, "===")
+        for get_model in models:
+            print("> Testing model:", get_model.__name__)
+            res = run_model(
+                extern_data,
+                get_model,
+                _forward_step,
+                # TF needs TensorArray unstack, not implemented yet
+                test_tensorflow=False,
             )
+            resdict.setdefault(get_model.__name__, {})[use_fallback] = res
+
+            # Check that the single-step and the seq-level output are the same.
+            res_seq_level = res.data["out_seq_level"].raw_tensor
+            for key in ["out_seq_level_explicit_initial_state", "out_single_steps"]:
+                res_other = res.data[key].raw_tensor
+                assert res_seq_level.shape == res_other.shape
+                numpy.testing.assert_allclose(
+                    res_other,
+                    res_seq_level,
+                    atol=1e-5,
+                    rtol=1e-5,
+                    err_msg=f"output {key} differs",
+                )
+    # test fallback & no-fallback
+    for name, v in resdict.items():
+        numpy.testing.assert_allclose(
+            v[True].data["out_seq_level"].raw_tensor,
+            v[False].data["out_seq_level"].raw_tensor,
+            atol=1e-5,
+            rtol=1e-5,
+            err_msg=f"output {name} differs",
+        )
 
 
 def test_relative_positional_encoding():
@@ -572,6 +669,8 @@ def test_relative_positional_encoding_cross():
 
 
 def test_rel_pos_self_attention():
+    import torch
+
     time_dim = Dim(Tensor("time", [batch_dim], dtype="int32"))
     in_dim = Dim(8, name="in")
     extern_data = TensorDict(
@@ -630,7 +729,15 @@ def test_rel_pos_self_attention():
 
     run_model(extern_data, lambda *, epoch, step: _Net(), _forward_step)
     check_batching = True
-    run_model(extern_data, lambda *, epoch, step: _Net(), _forward_step, test_tensorflow=False)
+
+    res = {}
+    for force_fallback_sdpa in [True, False]:
+        TorchBackend.ForceFallbackSDPA = force_fallback_sdpa
+        res[force_fallback_sdpa] = run_model(
+            extern_data, lambda *, epoch, step: _Net(), _forward_step, test_tensorflow=False
+        )
+
+    torch.testing.assert_close(res[False].data["output"].raw_tensor, res[True].data["output"].raw_tensor)
 
 
 def test_sinusoidal_positional_encoding():
@@ -660,6 +767,8 @@ def test_sinusoidal_positional_encoding():
 
 
 def test_CausalSelfAttention():
+    import torch
+
     time_dim = Dim(Tensor("time", [batch_dim], dtype="int32"))
     feat_dim = Dim(8, name="feat")
     key_dim = Dim(6, name="key")
@@ -678,21 +787,26 @@ def test_CausalSelfAttention():
         out.mark_as_default_output(shape=(batch_dim, time_dim, value_dim))
         model.qkv.weight.mark_as_output("qkv_weight", shape=[feat_dim, 2 * key_dim + value_dim])
 
-    res = run_model(
-        extern_data,
-        lambda *, epoch, step: rf.CausalSelfAttention(
-            in_dim=feat_dim,
-            proj_dim=None,
-            key_dim_total=key_dim,
-            value_dim_total=value_dim,
-            num_heads=2,
-            with_bias=False,
-        ),
-        _forward_step,
-        # Some problem with dimension tags currently in the TF-layers-dict backend...
-        # Anyway, we compare to the TF SelfAttentionLayer with attention_left_only=True below.
-        test_tensorflow=False,
-    )
+    res = {}
+    for force_fallback_sdpa in [True, False]:
+        TorchBackend.ForceFallbackSDPA = force_fallback_sdpa
+        res[force_fallback_sdpa] = run_model(
+            extern_data,
+            lambda *, epoch, step: rf.CausalSelfAttention(
+                in_dim=feat_dim,
+                proj_dim=None,
+                key_dim_total=key_dim,
+                value_dim_total=value_dim,
+                num_heads=2,
+                with_bias=False,
+            ),
+            _forward_step,
+            # Some problem with dimension tags currently in the TF-layers-dict backend...
+            # Anyway, we compare to the TF SelfAttentionLayer with attention_left_only=True below.
+            test_tensorflow=False,
+        )
+
+    torch.testing.assert_close(res[False].data["output"].raw_tensor, res[True].data["output"].raw_tensor)
 
     extern_data.reset_content()
 
@@ -725,14 +839,86 @@ def test_CausalSelfAttention():
         )
         net.construct_from_dict(net_dict)
         layer = net.get_default_output_layer()
-        layer.params["QKV"].load(res.data["qkv_weight"].raw_tensor, session=session)
+        layer.params["QKV"].load(res[False].data["qkv_weight"].raw_tensor, session=session)
         out = layer.output.copy_transpose([batch_dim, time_dim, value_dim]).copy_masked(0.0)
 
         out_tf_v = session.run(
             out.raw_tensor,
             feed_dict={
-                net.extern_data.data["data"].placeholder: res.data["data"].raw_tensor,
-                net.extern_data.data["data"].dims[1].dyn_size_ext.raw_tensor: res.data["seq_len"].raw_tensor,
+                net.extern_data.data["data"].placeholder: res[False].data["data"].raw_tensor,
+                net.extern_data.data["data"].dims[1].dyn_size_ext.raw_tensor: res[False].data["seq_len"].raw_tensor,
             },
         )
-        numpy.testing.assert_almost_equal(res.data["output"].raw_tensor, out_tf_v, decimal=5)
+        numpy.testing.assert_almost_equal(res[False].data["output"].raw_tensor, out_tf_v, decimal=5)
+
+
+# Check if pytest-benchmark is installed
+try:
+    import pytest_benchmark
+except ImportError:
+    pytest_benchmark = None
+
+
+def benchmark_att_layer(benchmark, att_type, sdpa, seq_len):
+    import torch
+
+    TorchBackend.ForceFallbackSDPA = sdpa == "returnn_fallback"
+    rf.select_backend_torch()
+    rf.init_forward_step_run_ctx()
+
+    batch_dim = Dim(128 if seq_len <= 32 else 8, name="batch")
+    seq_dim = Dim(seq_len, name="time")
+
+    num_heads = 8
+    head_dim = 64
+    model_dim_val = num_heads * head_dim
+    model_dim = Dim(model_dim_val, name="model")
+    with torch.amp.autocast("cuda", dtype=torch.bfloat16), rf.set_default_float_dtype_ctx("bfloat16"):
+        input_tensor = rf.random_normal(dims=[batch_dim, seq_dim, model_dim])
+
+        _cls = rf.SelfAttention if att_type == "self_attention" else rf.CausalSelfAttention
+        att_layer = _cls(
+            in_dim=model_dim,
+            proj_dim=model_dim,
+            key_dim_total=model_dim,
+            value_dim_total=model_dim,
+            num_heads=num_heads,
+        )
+
+        def _run_forward():
+            with torch.nn.attention.sdpa_kernel(backends=[torch.nn.attention.SDPBackend.FLASH_ATTENTION]):
+                res = att_layer(input_tensor, axis=seq_dim)
+            torch.cuda.synchronize() if torch.cuda.is_available() else None
+            return res
+
+        benchmark(_run_forward)
+
+
+@pytest.mark.skipif(pytest_benchmark is None, reason="pytest-benchmark not installed")
+@pytest.mark.parametrize("sdpa", ["torch_sdpa", "returnn_fallback"], ids=lambda sdpa: f"{sdpa=}")
+@pytest.mark.parametrize("seq_len", [32, 1024], ids=lambda seq_len: f"{seq_len=}")
+@pytest.mark.benchmark(warmup=True, disable_gc=True)
+def test_benchmark_flashatt_self_attention(benchmark, sdpa, seq_len):
+    import torch
+
+    device = "cpu"
+    if torch.cuda.is_available():
+        device = "cuda"
+    benchmark.group = f"flashatt_self_attention({device}, {seq_len=})"
+    with rf.set_default_device_ctx(device):
+        benchmark_att_layer(benchmark, "self_attention", sdpa, seq_len)
+
+
+@pytest.mark.skipif(pytest_benchmark is None, reason="pytest-benchmark not installed")
+@pytest.mark.parametrize("sdpa", ["torch_sdpa", "returnn_fallback"], ids=lambda sdpa: f"{sdpa=}")
+@pytest.mark.parametrize("seq_len", [32, 1024], ids=lambda seq_len: f"{seq_len=}")
+@pytest.mark.benchmark(warmup=True, disable_gc=True)
+def test_benchmark_flashatt_causal_self_attention(benchmark, sdpa, seq_len):
+    import torch
+
+    device = "cpu"
+    if torch.cuda.is_available():
+        device = "cuda"
+    benchmark.group = f"flashatt_causal_self_attention({device}, {seq_len=})"
+    with rf.set_default_device_ctx(device):
+        benchmark_att_layer(benchmark, "causal_self_attention", sdpa, seq_len)
