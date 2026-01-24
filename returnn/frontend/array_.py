@@ -443,7 +443,7 @@ def concat(
             # There are dynamic dims, but we don't want to handle them.
             # So, summing the dims would be incorrect.
             # Just add the dim values.
-            out_dim = Dim(sum(d.get_dim_value_tensor() for _, d in sources if d.dimension is not None), name="concat")
+            out_dim = Dim(sum(d.get_dim_value_tensor() for _, d in sources), name="concat")
     if handle_dynamic_dims:
         out_non_masked_dim = Dim(sum(d.get_dim_value_tensor() for _, d in sources))
         # noinspection PyProtectedMember
