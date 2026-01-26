@@ -692,11 +692,11 @@ def masked_select(
     idxs = rf.cumsum(rf.cast(mask, "int32"), spatial_dim=in_dim)  # [T,B] -> idx in T' + 1
     new_size = rf.gather(idxs, indices=in_dim.get_dim_value_tensor() - 1, axis=in_dim)  # [B]
     if out_dim is None:
-        out_dim = Dim(new_size, name="masked_select")
+        out_dim = Dim(rf.copy_to_device(new_size, rf.get_default_dim_size_device()), name="masked_select")
     elif out_dim.dyn_size_ext is None:
-        out_dim.dyn_size_ext = new_size
+        out_dim.dyn_size_ext = rf.copy_to_device(new_size, rf.get_default_dim_size_device())
     elif out_dim.dyn_size_ext is not None and out_dim.dyn_size_ext.raw_tensor is None:
-        out_dim.dyn_size_ext.raw_tensor = new_size.raw_tensor
+        out_dim.dyn_size_ext.raw_tensor = rf.copy_to_device(new_size, rf.get_default_dim_size_device()).raw_tensor
     new_time = rf.reduce_max(new_size, axis=new_size.dims)  # T'
     idxs = rf.where(mask, idxs - 1, new_time)  # new_time is the padding idx
     ext_out_dim = out_dim + 1  # one more for the padded data
