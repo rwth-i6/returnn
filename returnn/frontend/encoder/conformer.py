@@ -446,11 +446,13 @@ class ConformerEncoder(ISeqDownsamplingEncoder):
         collected_outputs: Optional[Dict[str, Tensor]] = None,
     ) -> Tuple[Tensor, Dim]:
         """forward"""
-        if self.input_layer:
-            x_subsample, out_spatial_dim = self.input_layer(source, in_spatial_dim=in_spatial_dim)
+        if self.input_layer and self.input_layer.in_dim in source.dims:
+            x, out_spatial_dim = self.input_layer(source, in_spatial_dim=in_spatial_dim)
         else:
-            x_subsample, out_spatial_dim = source, in_spatial_dim
-        x = self.input_projection(x_subsample) if self.input_projection else x_subsample
+            x, out_spatial_dim = source, in_spatial_dim
+        if self.input_projection and self.input_projection.in_dim in x.dims:
+            x = self.input_projection(x)
+        assert self.out_dim in x.dims
         if self.input_embedding_scale != 1.0:
             x = x * self.input_embedding_scale
         if self.pos_enc is not None:
