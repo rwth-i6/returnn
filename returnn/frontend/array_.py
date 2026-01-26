@@ -1382,7 +1382,7 @@ def repeat(
         out_spatial_dim.dyn_size_ext.raw_tensor = rf.copy_to_device(new_size, dim_dev).raw_tensor
     out_spatial_dim_ext = out_spatial_dim + 1
     rel_idx_counts = rf.scatter(
-        rf.expand_dims(rf.ones((), device=values.device, dtype="int32"), dims=idxs.dims),
+        rf.expand_dims(rf.ones((), device=idxs.device, dtype="int32"), dims=idxs.dims),
         indices=idxs,
         indices_dim=in_spatial_dim,
         out_dim=out_spatial_dim_ext,
