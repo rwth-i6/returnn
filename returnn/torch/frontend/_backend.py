@@ -2626,17 +2626,17 @@ class TorchBackend(Backend[torch.Tensor]):
         query_raw = torch.permute(
             query_raw,
             [query.get_axis_from_description(d) for d in batch_dims + [query_spatial_dim, qk_embed_dim]],
-        )
+        ).contiguous()  # contiguous is a requirement for fused kernels
         key_raw = torch.permute(
             key_raw,
             [key.get_axis_from_description(d) for d in batch_dims + [kv_spatial_dim, qk_embed_dim]],
-        )
+        ).contiguous()
         value_raw = torch.permute(
             value_raw,
             [value.get_axis_from_description(d) for d in batch_dims + [kv_spatial_dim, v_embed_dim]],
-        )
+        ).contiguous()
 
-        attention_mask_raw = None
+        attention_mask_raw: torch.Tensor | None = None
         if attention_mask is not None:
             if is_causal:
                 raise NotImplementedError("causal attention with attention_mask is not supported")
@@ -2670,7 +2670,7 @@ class TorchBackend(Backend[torch.Tensor]):
                 # create mask based on that
                 kv_spat_dyn_dims = kv_spatial_dim.dyn_size_ext.dims_set
                 assert kv_spat_dyn_dims.issubset(set(batch_dims))
-                attention_mask_raw: torch.Tensor = kv_spatial_dim.get_mask(
+                attention_mask_raw = kv_spatial_dim.get_mask(
                     dim_order=[*[d for d in batch_dims if d in kv_spat_dyn_dims], kv_spatial_dim]
                 ).raw_tensor
                 # insert 1 dim at -2 (for query_spatial_dim)
@@ -2679,9 +2679,11 @@ class TorchBackend(Backend[torch.Tensor]):
                 for i, b_dim in enumerate(batch_dims):
                     if b_dim not in kv_spat_dyn_dims:
                         attention_mask_raw = attention_mask_raw.unsqueeze(i)
+
+        if attention_mask_raw is not None:
+            attention_mask_raw = attention_mask_raw.contiguous()  # necessary for fused kernels
         # dont need to check query spatial dim for is_dynamic, as we assign that dim to the result tensor so
         # downstream code automatically handles it
-
         att_raw = torch.nn.functional.scaled_dot_product_attention(
             query_raw,
             key_raw,
