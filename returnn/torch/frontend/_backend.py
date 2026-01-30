@@ -2636,7 +2636,7 @@ class TorchBackend(Backend[torch.Tensor]):
             [value.get_axis_from_description(d) for d in batch_dims + [kv_spatial_dim, v_feat_dim]],
         ).contiguous()
 
-        attention_mask_raw: torch.Tensor | None = None
+        attention_mask_raw: Optional[torch.Tensor] = None
         if attention_mask is not None:
             if is_causal:
                 raise NotImplementedError("causal attention with attention_mask is not supported")
