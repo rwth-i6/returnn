@@ -443,7 +443,7 @@ def concat(
             # There are dynamic dims, but we don't want to handle them.
             # So, summing the dims would be incorrect.
             # Just add the dim values.
-            out_dim = Dim(sum(d.get_dim_value_tensor() for _, d in sources if d.dimension is not None), name="concat")
+            out_dim = Dim(sum(d.get_dim_value_tensor() for _, d in sources), name="concat")
     if handle_dynamic_dims:
         out_non_masked_dim = Dim(sum(d.get_dim_value_tensor() for _, d in sources))
         # noinspection PyProtectedMember
@@ -692,11 +692,11 @@ def masked_select(
     idxs = rf.cumsum(rf.cast(mask, "int32"), spatial_dim=in_dim)  # [T,B] -> idx in T' + 1
     new_size = rf.gather(idxs, indices=in_dim.get_dim_value_tensor() - 1, axis=in_dim)  # [B]
     if out_dim is None:
-        out_dim = Dim(new_size, name="masked_select")
+        out_dim = Dim(rf.copy_to_device(new_size, rf.get_default_dim_size_device()), name="masked_select")
     elif out_dim.dyn_size_ext is None:
-        out_dim.dyn_size_ext = new_size
+        out_dim.dyn_size_ext = rf.copy_to_device(new_size, rf.get_default_dim_size_device())
     elif out_dim.dyn_size_ext is not None and out_dim.dyn_size_ext.raw_tensor is None:
-        out_dim.dyn_size_ext.raw_tensor = new_size.raw_tensor
+        out_dim.dyn_size_ext.raw_tensor = rf.copy_to_device(new_size, rf.get_default_dim_size_device()).raw_tensor
     new_time = rf.reduce_max(new_size, axis=new_size.dims)  # T'
     idxs = rf.where(mask, idxs - 1, new_time)  # new_time is the padding idx
     ext_out_dim = out_dim + 1  # one more for the padded data
@@ -1382,7 +1382,7 @@ def repeat(
         out_spatial_dim.dyn_size_ext.raw_tensor = rf.copy_to_device(new_size, dim_dev).raw_tensor
     out_spatial_dim_ext = out_spatial_dim + 1
     rel_idx_counts = rf.scatter(
-        rf.expand_dims(rf.ones((), device=values.device, dtype="int32"), dims=idxs.dims),
+        rf.expand_dims(rf.ones((), device=idxs.device, dtype="int32"), dims=idxs.dims),
         indices=idxs,
         indices_dim=in_spatial_dim,
         out_dim=out_spatial_dim_ext,
