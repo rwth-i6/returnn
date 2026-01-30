@@ -37,8 +37,8 @@ def scaled_dot_product_attention(
     attention_mask: Optional[Tensor] = None,
     att_dropout: float = 0.0,
     att_dropout_broadcast: Optional[bool] = None,
-    v_embed_dim: Dim,
-    qk_embed_dim: Dim,
+    v_feat_dim: Dim,
+    qk_feat_dim: Dim,
     kv_spatial_dim: Dim,
     query_spatial_dim: Dim,
     is_causal: bool = False,
@@ -54,8 +54,8 @@ def scaled_dot_product_attention(
     :param att_dropout: dropout for attention weights
     :param att_dropout_broadcast: whether to broadcast over all but ``axis``.
         normally not wanted. disabled by default since behavior version 19.
-    :param v_embed_dim: Embedding dimension of value
-    :param qk_embed_dim: Embedding dimension of key (and query)
+    :param v_feat_dim: Embedding dimension of value
+    :param qk_feat_dim: Embedding dimension of key (and query)
     :param kv_spatial_dim: Spatial axis of key/value to attend over
     :param query_spatial_dim: Spatial axis of query
     :param is_causal: Special case when the attention mask should be causal (e.g. for auto-regressive decoding).
@@ -73,8 +73,8 @@ def scaled_dot_product_attention(
         attention_mask=attention_mask,
         att_dropout=att_dropout,
         att_dropout_broadcast=att_dropout_broadcast,
-        v_embed_dim=v_embed_dim,
-        qk_embed_dim=qk_embed_dim,
+        v_feat_dim=v_feat_dim,
+        qk_feat_dim=qk_feat_dim,
         kv_spatial_dim=kv_spatial_dim,
         query_spatial_dim=query_spatial_dim,
         is_causal=is_causal,
@@ -84,7 +84,7 @@ def scaled_dot_product_attention(
 
 
 def _infer_att_dims(
-    query: Tensor, keys: Tensor, values: Tensor, *, qk_embed_dim: Dim, kv_spatial_dim: Dim
+    query: Tensor, keys: Tensor, values: Tensor, *, qk_feat_dim: Dim, kv_spatial_dim: Dim
 ) -> Tuple[Tensor, Dim, Dim, bool]:
     if kv_spatial_dim not in keys.dims_set:
         raise ValueError(f"kv_spat_dim {kv_spatial_dim} not in keys.dims {keys.dims}")
@@ -102,19 +102,19 @@ def _infer_att_dims(
             )
         query_spatial = query_non_batch_dims[0]
 
-    # infer dot product dim (v_embed_dim)
-    v_embed_dim = values.feature_dim
-    if v_embed_dim is None:
-        if qk_embed_dim in values.dims_set:
-            v_embed_dim = qk_embed_dim
+    # infer dot product dim (v_feat_dim)
+    v_feat_dim = values.feature_dim
+    if v_feat_dim is None:
+        if qk_feat_dim in values.dims_set:
+            v_feat_dim = qk_feat_dim
         else:
-            possible_embed_dims = values.dims_set - keys.dims_set
-            if len(possible_embed_dims) == 1:
-                v_embed_dim = list(possible_embed_dims)[0]
+            possible_feat_dims = values.dims_set - keys.dims_set
+            if len(possible_feat_dims) == 1:
+                v_feat_dim = list(possible_feat_dims)[0]
             else:
-                raise ValueError(f"Cannot infer v_embed_dim from values.dims={values.dims}, keys.dims={keys.dims}")
+                raise ValueError(f"Cannot infer v_feat_dim from values.dims={values.dims}, keys.dims={keys.dims}")
 
-    return query, v_embed_dim, query_spatial, len(query_non_batch_dims) == 0
+    return query, v_feat_dim, query_spatial, len(query_non_batch_dims) == 0
 
 
 def dot_attention(
@@ -144,8 +144,8 @@ def dot_attention(
         normally not wanted. disabled by default since behavior version 19.
     :return: like values but with axis removed, and maybe any additional axes from query
     """
-    query, v_embed_dim, query_spatial, added_dummy_spat_dim_to_query = _infer_att_dims(
-        query, keys, values, qk_embed_dim=key_dim, kv_spatial_dim=axis
+    query, v_feat_dim, query_spatial, added_dummy_spat_dim_to_query = _infer_att_dims(
+        query, keys, values, qk_feat_dim=key_dim, kv_spatial_dim=axis
     )
 
     att = scaled_dot_product_attention(
@@ -154,8 +154,8 @@ def dot_attention(
         values,
         att_dropout=att_dropout,
         att_dropout_broadcast=att_dropout_broadcast,
-        v_embed_dim=v_embed_dim,
-        qk_embed_dim=key_dim,
+        v_feat_dim=v_feat_dim,
+        qk_feat_dim=key_dim,
         kv_spatial_dim=axis,
         query_spatial_dim=query_spatial,
         is_causal=False,
@@ -253,8 +253,8 @@ class SelfAttentionBase(rf.Module):
 
     def attention(self, q: Tensor, k: Tensor, v: Tensor, *, kv_axis: Dim) -> Tensor:
         """apply attention"""
-        query, v_embed_dim, query_spatial, added_dummy_spat_dim_to_query = _infer_att_dims(
-            q, k, v, qk_embed_dim=self.key_dim_per_head, kv_spatial_dim=kv_axis
+        query, v_feat_dim, query_spatial, added_dummy_spat_dim_to_query = _infer_att_dims(
+            q, k, v, qk_feat_dim=self.key_dim_per_head, kv_spatial_dim=kv_axis
         )
 
         att = scaled_dot_product_attention(
@@ -263,8 +263,8 @@ class SelfAttentionBase(rf.Module):
             v,
             att_dropout=self.att_dropout,
             att_dropout_broadcast=self.att_dropout_broadcast,
-            v_embed_dim=v_embed_dim,
-            qk_embed_dim=self.key_dim_per_head,
+            v_feat_dim=v_feat_dim,
+            qk_feat_dim=self.key_dim_per_head,
             kv_spatial_dim=kv_axis,
             query_spatial_dim=query_spatial,
             is_causal=False,
@@ -328,8 +328,8 @@ class CausalSelfAttention(SelfAttentionBase):
 
     def attention(self, q: Tensor, k: Tensor, v: Tensor, *, kv_axis: Dim) -> Tensor:
         """apply attention"""
-        query, v_embed_dim, query_spatial, added_dummy_spat_dim_to_query = _infer_att_dims(
-            q, k, v, qk_embed_dim=self.key_dim_per_head, kv_spatial_dim=kv_axis
+        query, v_feat_dim, query_spatial, added_dummy_spat_dim_to_query = _infer_att_dims(
+            q, k, v, qk_feat_dim=self.key_dim_per_head, kv_spatial_dim=kv_axis
         )
 
         is_causal = query_spatial is kv_axis  # i.e. we are not in single-step mode
@@ -340,8 +340,8 @@ class CausalSelfAttention(SelfAttentionBase):
             v,
             att_dropout=self.att_dropout,
             att_dropout_broadcast=self.att_dropout_broadcast,
-            v_embed_dim=v_embed_dim,
-            qk_embed_dim=self.key_dim_per_head,
+            v_feat_dim=v_feat_dim,
+            qk_feat_dim=self.key_dim_per_head,
             kv_spatial_dim=kv_axis,
             query_spatial_dim=query_spatial,
             is_causal=is_causal,
@@ -908,8 +908,8 @@ class CrossAttention(rf.Module):
 
     def attention(self, q: Tensor, k: Tensor, v: Tensor, *, kv_axis: Dim) -> Tensor:
         """apply attention"""
-        query, v_embed_dim, query_spatial, added_dummy_spat_dim_to_query = _infer_att_dims(
-            q, k, v, qk_embed_dim=self.key_dim_per_head, kv_spatial_dim=kv_axis
+        query, v_feat_dim, query_spatial, added_dummy_spat_dim_to_query = _infer_att_dims(
+            q, k, v, qk_feat_dim=self.key_dim_per_head, kv_spatial_dim=kv_axis
         )
 
         att = scaled_dot_product_attention(
@@ -918,8 +918,8 @@ class CrossAttention(rf.Module):
             v,
             att_dropout=self.att_dropout,
             att_dropout_broadcast=self.att_dropout_broadcast,
-            v_embed_dim=v_embed_dim,
-            qk_embed_dim=self.key_dim_per_head,
+            v_feat_dim=v_feat_dim,
+            qk_feat_dim=self.key_dim_per_head,
             kv_spatial_dim=kv_axis,
             query_spatial_dim=query_spatial,
             is_causal=False,

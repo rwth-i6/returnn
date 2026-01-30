@@ -2576,8 +2576,8 @@ class TorchBackend(Backend[torch.Tensor]):
         attention_mask: Optional[_TT] = None,
         att_dropout: float = 0.0,
         att_dropout_broadcast: bool,
-        v_embed_dim: Dim,
-        qk_embed_dim: Dim,
+        v_feat_dim: Dim,
+        qk_feat_dim: Dim,
         kv_spatial_dim: Dim,
         query_spatial_dim: Dim,
         is_causal: bool = False,
@@ -2606,8 +2606,8 @@ class TorchBackend(Backend[torch.Tensor]):
                 attention_mask=attention_mask,
                 att_dropout=att_dropout,
                 att_dropout_broadcast=att_dropout_broadcast,
-                v_embed_dim=v_embed_dim,
-                qk_embed_dim=qk_embed_dim,
+                v_feat_dim=v_feat_dim,
+                qk_feat_dim=qk_feat_dim,
                 kv_spatial_dim=kv_spatial_dim,
                 query_spatial_dim=query_spatial_dim,
                 is_causal=is_causal,
@@ -2619,21 +2619,21 @@ class TorchBackend(Backend[torch.Tensor]):
         value_raw = value.raw_tensor
 
         if value.feature_dim is not None:
-            assert value.feature_dim == v_embed_dim  # maybe unnecessary check?
-        batch_dims = query.remaining_dims([qk_embed_dim, query_spatial_dim])
-        assert set(batch_dims) == set(key.remaining_dims([qk_embed_dim, kv_spatial_dim]))
-        assert set(batch_dims) == set(value.remaining_dims([v_embed_dim, kv_spatial_dim]))
+            assert value.feature_dim == v_feat_dim  # maybe unnecessary check?
+        batch_dims = query.remaining_dims([qk_feat_dim, query_spatial_dim])
+        assert set(batch_dims) == set(key.remaining_dims([qk_feat_dim, kv_spatial_dim]))
+        assert set(batch_dims) == set(value.remaining_dims([v_feat_dim, kv_spatial_dim]))
         query_raw = torch.permute(
             query_raw,
-            [query.get_axis_from_description(d) for d in batch_dims + [query_spatial_dim, qk_embed_dim]],
+            [query.get_axis_from_description(d) for d in batch_dims + [query_spatial_dim, qk_feat_dim]],
         ).contiguous()  # contiguous is a requirement for fused kernels
         key_raw = torch.permute(
             key_raw,
-            [key.get_axis_from_description(d) for d in batch_dims + [kv_spatial_dim, qk_embed_dim]],
+            [key.get_axis_from_description(d) for d in batch_dims + [kv_spatial_dim, qk_feat_dim]],
         ).contiguous()
         value_raw = torch.permute(
             value_raw,
-            [value.get_axis_from_description(d) for d in batch_dims + [kv_spatial_dim, v_embed_dim]],
+            [value.get_axis_from_description(d) for d in batch_dims + [kv_spatial_dim, v_feat_dim]],
         ).contiguous()
 
         attention_mask_raw: torch.Tensor | None = None
@@ -2697,7 +2697,7 @@ class TorchBackend(Backend[torch.Tensor]):
 
         att = rf.convert_to_tensor(
             att_raw,
-            dims=batch_dims + [query_spatial_dim, v_embed_dim],
+            dims=batch_dims + [query_spatial_dim, v_feat_dim],
             name="scaled_dot_product_attention",
         )
 
