@@ -1369,6 +1369,72 @@ class Backend(Generic[T]):
         """
         raise NotImplementedError
 
+    @classmethod
+    def scaled_dot_product_attention(
+        cls,
+        query: Tensor,
+        key: Tensor,
+        value: Tensor,
+        *,
+        attention_mask: Optional[Tensor] = None,
+        att_dropout: float = 0.0,
+        att_dropout_broadcast: bool,
+        v_feat_dim: Dim,
+        qk_feat_dim: Dim,
+        kv_spatial_dim: Dim,
+        query_spatial_dim: Dim,
+        is_causal: bool = False,
+        scale: Optional[float] = None,
+    ):
+        """
+        Scaled dot-product attention.
+
+        :param query:
+        :param key:
+        :param value:
+        :param attention_mask:
+        :param att_dropout: dropout for attention weights
+        :param att_dropout_broadcast: whether to broadcast over all but ``axis``.
+            normally not wanted. disabled by default since behavior version 19.
+        :param v_feat_dim: Embedding dimension of value
+        :param qk_feat_dim: Embedding dimension of key and query
+        :param kv_spatial_dim: Spatial axis of key/value to attend over
+        :param query_spatial_dim: Spatial axis of query
+        :param is_causal: Special case when the attention mask should be causal (e.g. for auto-regressive decoding).
+            Allows for more efficient implementation in some backends.
+        :param scale: Scaling factor applied prior to softmax
+        :return: attention output
+        """
+        query *= qk_feat_dim.dimension**-0.5 if scale is None else scale
+
+        if is_causal:
+            if attention_mask is not None:
+                raise NotImplementedError("causal attention with attention_mask is not supported")
+            if kv_spatial_dim not in query.dims_set:
+                raise ValueError("query and key/value must share the same spatial axis for causal attention")
+            hist_dim = Dim(rf.range_over_dim(kv_spatial_dim, device="cpu") + 1, name=f"{kv_spatial_dim.description}:kv")
+            key, _ = rf.replace_dim(key, in_dim=kv_spatial_dim, out_dim=hist_dim)
+            value, _ = rf.replace_dim(value, in_dim=kv_spatial_dim, out_dim=hist_dim)
+            kv_spatial_dim = hist_dim
+
+        attn_bias = None
+        if attention_mask is not None:
+            if attention_mask.dtype == "bool":
+                attn_bias = rf.where(attention_mask, 0.0, float("-inf"))
+            else:
+                attn_bias = attention_mask  # assume float-like
+
+        energy = rf.matmul(query, key, reduce=qk_feat_dim)  # [.., Q_spatial, K_spatial]
+        if attn_bias is not None:
+            energy = energy + attn_bias
+        att_weights = rf.softmax(energy, axis=kv_spatial_dim)  # [.., Q_spatial, K_spatial]
+        att_weights = rf.dropout(att_weights, att_dropout, axis=att_dropout_broadcast and kv_spatial_dim)
+        # no need for mask because softmax already sets those weights to zero
+        att = rf.matmul(att_weights, value, reduce=kv_spatial_dim, use_mask=False)
+        if value.feature_dim in att.dims:
+            att.feature_dim = value.feature_dim
+        return att
+
     # For eager-based backends, this is a reasonable default implementation and type.
     TensorArrayType = List[Tensor]
 
