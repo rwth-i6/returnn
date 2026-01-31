@@ -33,7 +33,7 @@ _watch_memory_proc = None
 def _watch_memory_main(pid: int):
     if sys.platform == "linux":
         with open("/proc/self/comm", "w") as f:
-            f.write(f"watch memory")
+            f.write("watch memory")
 
     def _print(*args):
         print("MEMORY:", *args)
@@ -41,7 +41,7 @@ def _watch_memory_main(pid: int):
 
     cur_proc = psutil.Process(pid)
     procs = []
-    mem_per_pid = {}
+    mem_per_pid: Dict[int, Dict[str, int]] = {}
 
     while True:
         change = False
