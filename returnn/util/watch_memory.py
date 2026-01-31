@@ -45,7 +45,13 @@ def _watch_memory_main(pid: int):
 
     while True:
         change = False
-        procs_ = [cur_proc] + cur_proc.children(recursive=True)
+        try:
+            procs_ = [cur_proc] + cur_proc.children(recursive=True)
+        except psutil.NoSuchProcess as exc:
+            if exc.pid == pid:
+                _print(f"main process {pid} exited, exiting watcher")
+                return
+            raise
         for p in procs:
             if p not in procs_:
                 _print(f"proc {_format_proc(p)} exited, old:", _format_mem_info(mem_per_pid[p.pid]))
