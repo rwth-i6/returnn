@@ -61,6 +61,7 @@ def print_available_devices(*, file: Optional[TextIO] = None):
         else:
             dev_idx_s = i
         print(f"       device_index: {dev_idx_s}", file=file)
+        print(f"       uuid: {getattr(props, 'uuid', None)}", file=file)
     if not count:
         print("  (None)", file=file)
 
