@@ -174,6 +174,9 @@ def _gather(s: T, *, indices: Tensor, dim_map: Optional[Dict[Dim, Dim]] = None) 
             s = rf.gather(s, indices=indices)
         return s
     if isinstance(s, Dim):
+        if indices.sparse_dim == s:
+            assert len(indices.dims) == 1
+            return indices.dims[0]
         if s.dimension is not None:  # static
             return s
         if dim_map and s in dim_map:
