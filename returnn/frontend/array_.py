@@ -1113,6 +1113,10 @@ def slice(
     """
     if isinstance(step, int) and step <= 0:
         raise ValueError(f"rf.slice with non-positive step {step} not supported")
+    if ((isinstance(start, int) and start == 0) or start is None) and end is None and step is None and size is None:
+        if out_dim:
+            return rf.replace_dim(source, in_dim=axis, out_dim=out_dim)
+        return source, axis
     if not out_dim:
         # Note: We cover not really all possible cases here but just those we really support.
         # (Actually, it might still be a superset of cases we really support,
