@@ -55,6 +55,7 @@ __all__ = [
     "top_k_mask",
     "top_p_mask",
     "repeat",
+    "expand_make_non_empty",
 ]
 
 
@@ -689,8 +690,10 @@ def masked_select(
     else:
         (in_dim,) = dims
     in_dim: Dim
-    idxs = rf.cumsum(rf.cast(mask, "int32"), spatial_dim=in_dim)  # [T,B] -> idx in T' + 1
-    new_size = rf.gather(idxs, indices=in_dim.get_dim_value_tensor() - 1, axis=in_dim)  # [B]
+    mask, in_dim_ext = rf.expand_make_non_empty(mask, axis=in_dim)
+    tensor, _ = rf.expand_make_non_empty(tensor, axis=in_dim, out_dim=in_dim_ext)
+    idxs = rf.cumsum(rf.cast(mask, "int32"), spatial_dim=in_dim_ext)  # [T,B] -> idx in T' + 1
+    new_size = rf.gather(idxs, indices=in_dim_ext.get_dim_value_tensor() - 1, axis=in_dim_ext)  # [B]
     if out_dim is None:
         out_dim = Dim(rf.copy_to_device(new_size, rf.get_default_dim_size_device()), name="masked_select")
     elif out_dim.dyn_size_ext is None:
@@ -700,7 +703,7 @@ def masked_select(
     new_time = rf.reduce_max(new_size, axis=new_size.dims)  # T'
     idxs = rf.where(mask, idxs - 1, new_time)  # new_time is the padding idx
     ext_out_dim = out_dim + 1  # one more for the padded data
-    ext_res = rf.scatter(tensor, indices=idxs, indices_dim=in_dim, out_dim=ext_out_dim)
+    ext_res = rf.scatter(tensor, indices=idxs, indices_dim=in_dim_ext, out_dim=ext_out_dim)
     res, _ = rf.slice(ext_res, axis=ext_out_dim, size=out_dim)
     return res, out_dim
 
@@ -1391,3 +1394,30 @@ def repeat(
     idxs_, _ = rf.slice(idxs_, axis=out_spatial_dim_ext, size=out_spatial_dim)  # remove last element
     # idxs_: [batch...,out_spatial_dim] -> idx in in_spatial_dim (potentially with invalid indices in padded area)
     return rf.gather(values, indices=idxs_, axis=in_spatial_dim, clip_to_valid=True), out_spatial_dim
+
+
+def expand_make_non_empty(source: Tensor, *, axis: Dim, out_dim: Optional[Dim] = None) -> Tuple[Tensor, Dim]:
+    """
+    Expands the given axis to be at least size 1.
+    If the axis is already non-empty, this is a no-op.
+    If the axis is empty (size 0), this will expand it to size 1,
+    and fill the data with zeros.
+
+    This can be useful to avoid issues with empty tensors in some backends.
+
+    :param source:
+    :param axis:
+    :param out_dim:
+    :return: tensor, new axis
+    """
+    # noinspection PyProtectedMember
+    backend = source._raw_backend
+    shape_raw = backend.get_known_shape_raw(source.raw_tensor)
+    axis_int = source.get_axis_from_description(axis, allow_int=False)
+    size = shape_raw[axis_int]
+    if size is not None and size > 0:
+        # no-op
+        return source, axis
+    source, (new_axis,) = rf.pad(source, axes=[axis], padding=[(0, 1)], mode="constant", value=0)
+    source, new_axis = rf.slice(source, axis=new_axis, size=rf.maximum(axis.get_size_tensor(), 1), out_dim=out_dim)
+    return source, new_axis

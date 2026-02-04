@@ -470,6 +470,20 @@ def test_concat_dyn_time():
     run_model(extern_data, lambda **_: rf.Module(), _forward_step, test_tensorflow=False)
 
 
+def test_concat_empty():
+    extern_data = TensorDict({"data": Tensor("data", [batch_dim], dtype="float32")})
+
+    # noinspection PyShadowingNames
+    def _forward_step(**_kwargs):
+        empty_dim = Dim(rf.zeros([batch_dim], dtype="int32"), name="empty")
+        x = rf.random_uniform((batch_dim, empty_dim))
+        out, out_time_dim = rf.concat((x, empty_dim), (x, empty_dim))
+        out.mark_as_default_output(shape=(batch_dim, out_time_dim))
+
+    # test_single_batch_entry should test the interesting case.
+    run_model(extern_data, lambda **_: rf.Module(), _forward_step, test_tensorflow=False)
+
+
 def test_pad():
     time_dim = Dim(Tensor("time", [batch_dim], dtype="int32"))
     in_dim = Dim(7, name="in")
