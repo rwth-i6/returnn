@@ -859,6 +859,29 @@ def test_slice_neg_end():
     run_model(extern_data, lambda **_kwargs: rf.Module(), _forward_step, dyn_dim_max_sizes={time_dim: 1})
 
 
+def test_slice_start_zero_tensor():
+    time_dim = Dim(Tensor("time", [batch_dim], dtype="int32"))
+    extern_data = TensorDict(
+        {
+            "data": Tensor("data", [batch_dim, time_dim], dtype="int32"),
+        }
+    )
+
+    # noinspection PyShadowingNames
+    def _forward_step(*, extern_data: TensorDict, **_kwargs):
+        x = extern_data["data"]
+        start = rf.zeros([batch_dim], dtype="int32")
+        y, time_dim_ = rf.slice(x, axis=time_dim, start=start)
+        assert time_dim_ != time_dim  # diff dim tag, even though the size is expected to be the same
+        x.mark_as_output("data", shape=[batch_dim, time_dim])
+        y.mark_as_default_output(shape=[batch_dim, time_dim_])
+
+    res = run_model(extern_data, lambda **_kwargs: rf.Module(), _forward_step)
+    data_: Tensor = res["data"]
+    out_: Tensor = res["output"]
+    np.testing.assert_array_equal(data_.raw_tensor, out_.raw_tensor)
+
+
 def test_shift_right():
     time_dim = Dim(Tensor("time", [batch_dim], dtype="int32"))
     in_dim = Dim(7, name="in")

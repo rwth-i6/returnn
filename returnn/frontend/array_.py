@@ -1147,9 +1147,7 @@ def slice(
                 else:
                     raise TypeError(f"invalid type {type(end)} for end {end}")
             elif isinstance(start, Tensor):
-                out_dim = Dim(
-                    ((axis.get_size_tensor() if end is None else end) - start) % axis.get_size_tensor(), name="slice"
-                )
+                out_dim = Dim((axis.get_size_tensor() if end is None else end) - start, name="slice")
             else:
                 raise TypeError(f"invalid type {type(start)} for start {start}")
 

@@ -1296,7 +1296,7 @@ class TorchBackend(Backend[torch.Tensor]):
         if isinstance(start, Tensor):
             assert start.dims == ()
             start = start.raw_tensor
-        if start is None:
+        elif start is None:
             start = 0
         if isinstance(size, Dim):
             assert end is None
