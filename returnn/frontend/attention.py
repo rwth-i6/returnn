@@ -236,11 +236,13 @@ def _causal_self_att_step(
         new_state.k_accum = k
         new_state.v_accum = v
         new_state.accum_axis = hist_dim
+    elif state and state.accum_axis.dimension != 0:
+        k, hist_dim = rf.concat((state.k_accum, state.accum_axis), (k, axis), handle_dynamic_dims=True)
+        v, _ = rf.concat((state.v_accum, state.accum_axis), (v, axis), out_dim=hist_dim, handle_dynamic_dims=True)
+        new_state.k_accum = k
+        new_state.v_accum = v
+        new_state.accum_axis = hist_dim
     else:
-        if state and state.accum_axis.dimension != 0:
-            raise NotImplementedError(  # need to concat ...
-                f"{self}: on sequence over {axis} with initial state {state} not implemented yet"
-            )
         # For further state usage with single_step_dim, keep using the original axis, not hist_dim,
         # because the masking via hist_dim is not necessary for future single steps.
         new_state.k_accum = k
@@ -333,7 +335,12 @@ class RotaryPosCausalSelfAttention(CausalSelfAttention):
             (
                 rf.gather(pos_enc, axis=hist_dim, indices=rf.last_frame_position_of_dim(hist_dim))
                 if axis == single_step_dim
-                else rf.replace_dim(pos_enc, in_dim=hist_dim, out_dim=axis)[0]
+                else rf.slice(
+                    pos_enc,
+                    axis=hist_dim,
+                    start=state.accum_axis.get_size_tensor_or_int(device=pos_enc.device) if state else 0,
+                    out_dim=axis,
+                )[0]
             ),
             self.key_dim_per_head,
         )

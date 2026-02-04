@@ -1947,6 +1947,16 @@ class _DimMixin:
         assert self.size is not None
         return rf.convert_to_tensor(self.size, name="%s:size" % self.description, device=device)
 
+    def get_size_tensor_or_int(self, *, device: Optional[str] = None) -> Union[int, _t.Tensor]:
+        """
+        :param device: if None, will use CPU
+        :return: size tensor, or int if static, or dyn_size_ext if defined
+        """
+        if self.dyn_size_ext is not None:
+            return self.get_dyn_size_ext_for_device(device)
+        assert self.size is not None
+        return self.size
+
     def get_dim_value(self) -> Union[int, _t.RawTensorType]:
         """
         Infers the dim this axis should have if unbroadcasted.
