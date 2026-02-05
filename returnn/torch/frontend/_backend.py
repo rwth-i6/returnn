@@ -1127,7 +1127,7 @@ class TorchBackend(Backend[torch.Tensor]):
                 indices = rf.clip_by_value(
                     indices,
                     0,
-                    rf.cast(axis.get_dyn_size_ext_for_device(indices.device), indices.dtype) - 1,
+                    rf.relu(rf.cast(axis.get_dyn_size_ext_for_device(indices.device), indices.dtype) - 1),
                     allow_broadcast_all_sources=True,
                 )
             else:
