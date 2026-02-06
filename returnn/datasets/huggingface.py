@@ -192,7 +192,7 @@ class HuggingFaceDataset(CachedDataset2):
 
     def get_data_shape(self, key: str) -> List[int]:
         """:return: data shape for the given key"""
-        return list(self.data_format[key].shape)
+        return list(self.data_format[key].shape[1:])  # ignore time axis
 
     def get_data_dim(self, key: str) -> int:
         """:return: data dimension for the given key"""
