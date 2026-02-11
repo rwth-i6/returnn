@@ -505,10 +505,17 @@ class TorchBackend(Backend[torch.Tensor]):
             assert isinstance(value, Tensor) and value.dims  # non-scalar
             assert all(dim in source.dims and dim not in axes for dim in value.dims)
             assert len(axes) == 1  # not implemented otherwise currently...
-            ext_dim = Dim(1, name="ext")
-            value_ext = rf.expand_dim(value, ext_dim)
+            pad_left, pad_right = padding[0]
+            pad_left = pad_left if isinstance(pad_left, Dim) else Dim(pad_left, name="pad_left")
+            pad_right = pad_right if isinstance(pad_right, Dim) else Dim(pad_right, name="pad_right")
             out = TorchBackend.concat(
-                (source, axes[0]), (value_ext, ext_dim), allow_broadcast=True, out_dim=out_dims[0]
+                *(
+                    ([(rf.expand_dim(value, pad_left), pad_left)] if pad_left.dimension else [])
+                    + ([(source, axes[0])])
+                    + ([(rf.expand_dim(value, pad_right), pad_right)] if pad_right.dimension else [])
+                ),
+                allow_broadcast=True,
+                out_dim=out_dims[0],
             )
         if any(dim.need_masking() for dim in out_dims) and handle_dynamic_dims:
             if all(right == 0 for right in raw_pad[1::2]) and mode != "circular":

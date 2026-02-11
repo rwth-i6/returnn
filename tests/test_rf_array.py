@@ -610,6 +610,47 @@ def test_pad_time_right_non_scalar():
         assert all(out_.raw_tensor[b, seq_len] == value_.raw_tensor[b])
 
 
+def test_pad_time_left_non_scalar():
+    time_dim = Dim(Tensor("time", [batch_dim], dtype="int32"))
+    in_dim = Dim(7, name="in")
+    extern_data = TensorDict(
+        {
+            "data": Tensor("data", [batch_dim, time_dim, in_dim], dtype="float32"),
+            "value": Tensor("value", [batch_dim, in_dim], dtype="float32"),
+        }
+    )
+
+    # noinspection PyShadowingNames
+    def _forward_step(*, extern_data: TensorDict, **_kwargs):
+        data, value = extern_data["data"], extern_data["value"]
+        data.mark_as_output("data", shape=(batch_dim, time_dim, in_dim))
+        value.mark_as_output("value", shape=(batch_dim, in_dim))
+        out, (new_time,) = rf.pad(data, axes=[time_dim], padding=[(2, 0)], value=value)
+        out.mark_as_default_output(shape=(batch_dim, new_time, in_dim))
+
+    # TF-layers currently does not support this.
+    res = run_model(extern_data, lambda **_kwargs: rf.Module(), _forward_step, test_tensorflow=False)
+    data_: Tensor = res["data"]
+    value_: Tensor = res["value"]
+    out_: Tensor = res["output"]
+    assert data_.dims == (batch_dim, time_dim, in_dim)
+    new_time_dim = out_.dims[1]
+    assert out_.dims == (batch_dim, new_time_dim, in_dim) and new_time_dim != time_dim
+    assert time_dim.dyn_size_ext.dims == new_time_dim.dyn_size_ext.dims == (batch_dim,)
+    batch_size = batch_dim.get_dim_value()
+    assert batch_size > 1
+    assert len(set(time_dim.dyn_size_ext.raw_tensor)) > 1  # not all the same
+    for b in range(batch_size):
+        seq_len = time_dim.dyn_size_ext.raw_tensor[b]
+        new_seq_len = new_time_dim.dyn_size_ext.raw_tensor[b]
+        print(f"batch {b}, seq_len {seq_len}, new_seq_len {new_seq_len}")
+        assert new_seq_len == seq_len + 2
+        np.testing.assert_equal(data_.raw_tensor[b, :seq_len], out_.raw_tensor[b, 2 : seq_len + 2])
+        print(out_.raw_tensor[b])
+        np.testing.assert_equal(out_.raw_tensor[b, 0], value_.raw_tensor[b])
+        np.testing.assert_equal(out_.raw_tensor[b, 1], value_.raw_tensor[b])
+
+
 def test_stack():
     batch_dim_ = Dim(3, name="batch")
     time_dim = Dim(5, name="time")
