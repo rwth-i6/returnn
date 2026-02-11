@@ -199,7 +199,14 @@ class PostprocessingDataset(CachedDataset2):
         self.labels = {}
         if self._map_outputs is not None:
             self._out_tensor_dict_template = TensorDict()
-            self._out_tensor_dict_template.update(self._map_outputs, auto_convert=True)
+            for k, v in self._map_outputs.items():
+                assert isinstance(k, str) and isinstance(v, dict)
+                v = v.copy()
+                if "shape" in v and "batch_dim_axis" not in v:
+                    v["batch_dim_axis"] = None
+                if "name" not in v:
+                    v["name"] = k
+                self._out_tensor_dict_template.data[k] = Tensor(**v)
         else:
             self._out_tensor_dict_template = self._in_tensor_dict_template.copy_template()
             self.labels = self._dataset.labels.copy()
