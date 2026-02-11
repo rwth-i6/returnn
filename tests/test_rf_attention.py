@@ -8,7 +8,7 @@ import numpy as np
 import numpy.testing
 import _setup_test_env  # noqa
 import returnn.frontend as rf
-from returnn.tensor import Tensor, Dim, TensorDict, batch_dim
+from returnn.tensor import Tensor, Dim, TensorDict, batch_dim, single_step_dim
 from rf_utils import run_model, tf_scope
 
 
@@ -736,3 +736,61 @@ def test_CausalSelfAttention():
             },
         )
         numpy.testing.assert_almost_equal(res.data["output"].raw_tensor, out_tf_v, decimal=5)
+
+
+def test_causal_self_att_after_concat_state():
+    """compare single step vs full seq vs half concat half"""
+    time1_dim = Dim(Tensor("time1", [batch_dim], dtype="int32"))
+    time2_dim = Dim(Tensor("time2", [batch_dim], dtype="int32"))
+    feat_dim = Dim(8, name="feat")
+    key_dim = Dim(6, name="key")
+    value_dim = Dim(10, name="value")
+    extern_data = TensorDict(
+        {
+            "data1": Tensor("data1", [batch_dim, time1_dim, feat_dim], dtype="float32"),
+            "data2": Tensor("data2", [batch_dim, time2_dim, feat_dim], dtype="float32"),
+        }
+    )
+
+    def _forward_step(*, model: rf.CausalSelfAttention, extern_data: TensorDict):
+        data1, data2 = extern_data["data1"], extern_data["data2"]
+        data, time_dim = rf.concat((data1, time1_dim), (data2, time2_dim))
+
+        # First on the whole sequence
+        out, _ = model(data, axis=time_dim)
+        out.mark_as_default_output(shape=(batch_dim, time_dim, value_dim))
+
+        # Now step-by-step
+        state = model.default_initial_state(batch_dims=[batch_dim])
+        res = []
+        for t in range(time_dim.get_dim_value()):
+            x_t = rf.gather(data, axis=time_dim, indices=t)
+            res_t, state = model(x_t, axis=single_step_dim, state=state)
+            res.append(res_t)
+        res_, _ = rf.stack(res, out_dim=time_dim)
+        res_.mark_as_output("out_single_steps", shape=(batch_dim, time_dim, value_dim))
+
+        # Now concat the two halves
+        res1, state = model(data1, axis=time1_dim)
+        res2, _ = model(data2, axis=time2_dim, state=state)
+        res_, _ = rf.concat((res1, time1_dim), (res2, time2_dim), out_dim=time_dim)
+        res_.mark_as_output("out_concat_two", shape=(batch_dim, time_dim, value_dim))
+
+    res = run_model(
+        extern_data,
+        lambda **_kwargs: rf.CausalSelfAttention(
+            in_dim=feat_dim,
+            proj_dim=None,
+            key_dim_total=key_dim,
+            value_dim_total=value_dim,
+            num_heads=2,
+            with_bias=False,
+        ),
+        _forward_step,
+        test_tensorflow=False,
+    )
+    out_whole = res["output"].raw_tensor
+    out_single_steps = res["out_single_steps"].raw_tensor
+    out_concat_two = res["out_concat_two"].raw_tensor
+    np.testing.assert_allclose(out_whole, out_single_steps, atol=1e-5, rtol=1e-5)
+    np.testing.assert_allclose(out_whole, out_concat_two, atol=1e-5, rtol=1e-5)

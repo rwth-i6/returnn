@@ -231,18 +231,23 @@ def _causal_self_att_step(
     new_state = CausalSelfAttentionState()
     if axis == single_step_dim:
         assert state, f"{self}: need state for single step"
-        k, hist_dim = rf.cum_concat_step(k, prev_accum=state.k_accum, axis=state.accum_axis)
-        v, _ = rf.cum_concat_step(v, prev_accum=state.v_accum, out_spatial_dim=hist_dim, axis=state.accum_axis)
+        k, concat_dim = rf.cum_concat_step(k, prev_accum=state.k_accum, axis=state.accum_axis)
+        v, _ = rf.cum_concat_step(v, prev_accum=state.v_accum, out_spatial_dim=concat_dim, axis=state.accum_axis)
         new_state.k_accum = k
         new_state.v_accum = v
-        new_state.accum_axis = hist_dim
+        new_state.accum_axis = concat_dim
+        hist_dim = concat_dim  # no need to replace dim
     elif state and state.accum_axis.dimension != 0:
-        k, hist_dim = rf.concat((state.k_accum, state.accum_axis), (k, axis), handle_dynamic_dims=True)
-        v, _ = rf.concat((state.v_accum, state.accum_axis), (v, axis), out_dim=hist_dim, handle_dynamic_dims=True)
+        k, concat_dim = rf.concat((state.k_accum, state.accum_axis), (k, axis), handle_dynamic_dims=True)
+        v, _ = rf.concat((state.v_accum, state.accum_axis), (v, axis), out_dim=concat_dim, handle_dynamic_dims=True)
         new_state.k_accum = k
         new_state.v_accum = v
-        new_state.accum_axis = hist_dim
-    else:
+        new_state.accum_axis = concat_dim
+        hist_lens = rf.combine_bc(state.accum_axis.get_size_tensor(), "+", rf.range_over_dim(axis, device="cpu")) + 1
+        hist_dim = Dim(hist_lens, name=f"{axis.description}:kv")
+        k = rf.replace_dim_v2(k, in_dim=concat_dim, out_dim=hist_dim)
+        v = rf.replace_dim_v2(v, in_dim=concat_dim, out_dim=hist_dim)
+    else:  # no state
         # For further state usage with single_step_dim, keep using the original axis, not hist_dim,
         # because the masking via hist_dim is not necessary for future single steps.
         new_state.k_accum = k
