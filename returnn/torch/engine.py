@@ -38,6 +38,7 @@ from returnn.util.basic import hms, NotSpecified
 from returnn.util.result_with_reason import ResultWithReason
 from returnn.util.debug import debug_shell
 from returnn.util.math import simplify_and_format_number, merge_random_seeds
+from returnn.util.hot_reload import should_use_hot_reloading, ConfigHotReloader
 from returnn.forward_iface import ForwardCallbackIface
 
 from .updater import Updater
@@ -62,7 +63,7 @@ class Engine(EngineBase):
         """
         :param config:
         """
-        super(Engine, self).__init__(config=config)
+        super().__init__(config=config)
         rf.select_backend_torch()
         if util.BackendEngine.selected_engine is None:
             util.BackendEngine.select_engine(default_fallback_engine=util.BackendEngine.Torch, config=self.config)
@@ -74,6 +75,7 @@ class Engine(EngineBase):
         self.extern_data: Optional[TensorDict] = None
         self._train_dataloader: Optional[DataLoader] = None
         self._eval_dataloaders: Dict[str, DataLoader] = {}
+        self._hot_reloader = ConfigHotReloader(config.typed_dict) if should_use_hot_reloading(config=config) else None
 
         self._start_epoch: Optional[int] = None
         self._final_epoch: Optional[int] = None
@@ -919,19 +921,32 @@ class Engine(EngineBase):
 
         if train_func:
             assert self._train_step_func is not None
+            f = self._train_step_func
             rf.init_train_step_run_ctx(train_flag=train_flag, step=self.global_train_step, epoch=self.epoch)
         else:
             assert self._forward_step_func is not None, "define forward_step in the config"
+            f = self._forward_step_func
             rf.init_forward_step_run_ctx(
                 expected_outputs=self._forward_step_expected_outputs, step=self.global_train_step, epoch=self.epoch
             )
 
+        sentinel_kw = util.get_fwd_compat_kwargs()
         with self._run_ctx_mgr():
-            sentinel_kw = util.get_fwd_compat_kwargs()
-            if train_func:
-                self._train_step_func(model=self._orig_model, extern_data=extern_data, **sentinel_kw)
-            else:
-                self._forward_step_func(model=self._orig_model, extern_data=extern_data, **sentinel_kw)
+            if not self._hot_reloader:  # common path
+                f(model=self._orig_model, extern_data=extern_data, **sentinel_kw)
+                return
+
+            while True:
+                try:
+                    f(model=self._orig_model, extern_data=extern_data, **sentinel_kw)
+                    break
+
+                except (Exception, KeyboardInterrupt) as exc:
+                    print("Exception in model step function with hot reloading enabled:", file=log.v1)
+                    help_on_torch_exception(exc, model=self._orig_model)
+                    sys.excepthook(type(exc), exc, exc.__traceback__)
+                    self._hot_reloader.wait_for_user()
+                    self._hot_reloader.reload_changed_modules()
 
     def _load_model(self):
         """
