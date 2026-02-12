@@ -159,11 +159,13 @@ class Config:
 
     def parse_cmd_args(self, args: Sequence[str]):
         """
-        :param args:
+        :param args: excluding standalone config filenames, those are already handled in __main__.init_config
         """
         from optparse import OptionParser
 
         parser = OptionParser()
+        # Note: config filenames are not handled here, but in __main__.init_config
+        parser.set_usage("%prog [config_filename]* [option]* [++key value]*")
         parser.add_option(
             "-a",
             "--activation",
