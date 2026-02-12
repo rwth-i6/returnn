@@ -211,7 +211,9 @@ def _is_custom_module(module_name: Optional[str]) -> bool:
     Check if the module is a custom module, i.e. not a built-in module or a standard library module.
     Assumes that the module is already imported and available in sys.modules.
     """
-    if module_name in sys.stdlib_module_names:
+    if module_name in sys.builtin_module_names:
+        return False
+    if module_name in getattr(sys, "stdlib_module_names", set()):
         return False
     mod = sys.modules[module_name]
     mod_filename: Optional[str] = getattr(mod, "__file__", None)
