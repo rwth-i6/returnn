@@ -8,6 +8,7 @@ __author__ = "Patrick Doetsch"
 __credits__ = ["Patrick Doetsch", "Paul Voigtlaender"]
 
 from typing import TypeVar, Type, Optional, Union, Any, Dict, List, Sequence, Tuple
+import time
 import contextlib
 import sys
 import os
@@ -239,6 +240,7 @@ class Config:
             help="[STRING/LIST] CPU and GPU devices that should be used (example: gpu0,cpu[1-6] or gpu,cpu*).",
         )
         parser.add_option("-v", "--verbose", dest="log_verbosity", help="[INTEGER] Verbosity level from 0 - 5.")
+        parser.add_option("-V", "--version", action="store_true", dest="version", help="[FLAG] Show version and exit.")
         parser.add_option("-w", "--window", dest="window", help="[INTEGER] Width of sliding window over sequence.")
         parser.add_option("-x", "--task", dest="task", help="[train/forward/analyze] Task of the current program call.")
         parser.add_option(
@@ -249,6 +251,20 @@ class Config:
         )
         parser.add_option("--config", dest="load_config", help="[STRING] load config")
         (options, args) = parser.parse_args(list(args))
+        if options.version:
+            from returnn.util.basic import describe_returnn_version
+
+            print(
+                "RETURNN version %s, date/time %s, pid %i, cwd %s, Python %s"
+                % (
+                    describe_returnn_version(),
+                    time.strftime("%Y-%m-%d-%H-%M-%S (UTC%z)"),
+                    os.getpid(),
+                    os.getcwd(),
+                    sys.executable,
+                ),
+            )
+            sys.exit(0)
         options = vars(options)
         for opt in options.keys():
             if options[opt] is not None:
