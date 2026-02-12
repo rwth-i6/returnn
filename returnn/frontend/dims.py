@@ -172,7 +172,7 @@ def replace_dim_v2(
             axes=[in_dim],
             padding=[(0, out_dim.get_dim_value_tensor() - in_dim.get_dim_value_tensor())],
             out_dims=[out_dim],
-            value=0,
+            value=rf.zeros((), dtype=source.dtype, device=source.device),
         )
     else:
         if not allow_shrink:
