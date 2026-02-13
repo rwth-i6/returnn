@@ -699,9 +699,10 @@ class HuggingFaceTokenizer(Vocabulary):
     Uses the `AutoTokenizer` class from the `transformers` package.
     """
 
-    def __init__(self, *, huggingface_repo_dir: str):
+    def __init__(self, *, huggingface_repo_dir: str, map_bos_to_eos: bool = False):
         """
-        :param str huggingface_repo_dir: the directory containing the `tokenizer_config.json` file.
+        :param huggingface_repo_dir: the directory containing the `tokenizer_config.json` file.
+        :param map_bos_to_eos:
         """
         import transformers  # noqa
 
@@ -715,7 +716,7 @@ class HuggingFaceTokenizer(Vocabulary):
             seq_postfix=None,
             unknown_label=self.tokenizer.unk_token_id,
             eos_label=self.tokenizer.eos_token_id,
-            bos_label=self.tokenizer.bos_token_id,
+            bos_label=self.tokenizer.eos_token_id if map_bos_to_eos else self.tokenizer.bos_token_id,
             pad_label=self.tokenizer.pad_token_id,
         )
 
