@@ -376,7 +376,6 @@ class ReturnnLayersBackend(Backend[Layer]):
         value: Union[rf.RawTensorTypes, Tensor] = None,
     ) -> Tensor:
         """pad"""
-        assert isinstance(value, (int, float, type(None)))  # not implemented otherwise
         return rfl.make_layer(
             {
                 "class": "pad",

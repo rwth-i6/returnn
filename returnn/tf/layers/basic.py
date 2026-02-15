@@ -4181,7 +4181,7 @@ class PadLayer(_ConcatInputLayer):
         ],
         out_dims: Optional[Union[Dim, Sequence[Dim]]] = None,
         handle_dynamic_dims: Optional[bool] = None,
-        value: Union[int, float] = 0,
+        value: Union[int, float, LayerBase] = 0,
         mode: str = "constant",
         **kwargs,
     ):
@@ -4198,7 +4198,10 @@ class PadLayer(_ConcatInputLayer):
         :param mode: "constant", "reflect", "symmetric" and "replication"
         """
         out_dims  # noqa  # handled in get_out_data_from_opts
-        super(PadLayer, self).__init__(**kwargs)
+        super().__init__(**kwargs)
+        if isinstance(value, LayerBase):
+            assert value.output.dims == ()  # not implemented otherwise
+            value = value.output.raw_tensor
         axes_ = self.input_data.get_axes_from_description(axes)
         assert axes_, "%s: invalid axes %r in input %s" % (self, axes, self.input_data)
         axes = axes_
@@ -4345,6 +4348,17 @@ class PadLayer(_ConcatInputLayer):
                 out_dim.declare_same_as(out_dims[i])
             dim_tags[a] = out_dim
         return data.copy_template_new_dim_tags(dim_tags, keep_special_axes=True)
+
+    @classmethod
+    def transform_config_dict(cls, d, network, get_layer):
+        """
+        :param dict[str] d:
+        :param returnn.tf.network.TFNetwork network:
+        :param get_layer:
+        """
+        super().transform_config_dict(d, network=network, get_layer=get_layer)
+        if isinstance(d.get("value"), str):
+            d["value"] = get_layer(d["value"])
 
 
 class MergeDimsLayer(_ConcatInputLayer):
