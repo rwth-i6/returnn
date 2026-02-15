@@ -165,22 +165,22 @@ def _gather_prepare_dims(s: T, *, indices: Tensor, dim_map: Dict[Dim, Dim]) -> T
 
 def _gather(s: T, *, indices: Tensor, dim_map: Optional[Dict[Dim, Dim]] = None) -> T:
     if isinstance(s, Tensor):
+        if indices.sparse_dim in s.dims:
+            # really the default case, otherwise e.g. scalar or so, independent of beam
+            s = rf.gather(s, indices=indices)
         if dim_map and any(d in dim_map for d in s.dims):
             for d in s.dims:
                 if d in dim_map:
                     s = rf.replace_dim_v2(s, in_dim=d, out_dim=dim_map[d])
-        if indices.sparse_dim in s.dims:
-            # really the default case, otherwise e.g. scalar or so, independent of beam
-            s = rf.gather(s, indices=indices)
         return s
     if isinstance(s, Dim):
-        if indices.sparse_dim == s:
-            assert len(indices.dims) == 1
-            return indices.dims[0]
         if s.dimension is not None:  # static
             return s
         if dim_map and s in dim_map:
             return dim_map[s]
+        if indices.sparse_dim == s:
+            assert len(indices.dims) == 1
+            return indices.dims[0]
         assert indices.sparse_dim not in s.dyn_size_ext.dims  # not expected, should be in dim_map
         return s
     raise TypeError(f"_gather: unexpected type ({type(s)})")
