@@ -52,6 +52,11 @@ def print_available_devices(*, file: Optional[TextIO] = None):
         props = torch.cuda.get_device_properties(i)
         print(f"       name: {props.name}", file=file)
         print(f"       total_memory: {human_bytes_size(props.total_memory)}", file=file)
+        try:
+            free, total = torch.cuda.mem_get_info(i)
+            print(f"       free_memory: {human_bytes_size(free)} ({free / total:.0%})", file=file)
+        except Exception as exc:
+            print(f"       free_memory: {type(exc).__name__}: {str(exc).splitlines()[0]}", file=file)
         print(f"       capability: {props.major}.{props.minor}", file=file)
         if cuda_visible_devs is not None:
             if len(cuda_visible_devs) == count:
