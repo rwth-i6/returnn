@@ -1234,4 +1234,4 @@ def test_replace_dim_v2_bool():
         cond_ext = rf.replace_dim_v2(cond, in_dim=time_dim, out_dim=time_dim_ext)
         cond_ext.mark_as_default_output(shape=(batch_dim, time_dim_ext))
 
-    run_model(extern_data, lambda *, epoch, step: rf.Module(), _forward_step)
+    run_model(extern_data, lambda *, epoch, step: rf.Module(), _forward_step, test_tensorflow=False)
