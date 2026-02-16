@@ -11,6 +11,17 @@ from returnn.tensor import Tensor, Dim, TensorDict, batch_dim
 from rf_utils import run_model
 
 
+def test_zeros_bool():
+    extern_data = TensorDict({"data": Tensor("data", [batch_dim], dtype="bool")})
+
+    # noinspection PyShadowingNames
+    def _forward_step(*, extern_data: TensorDict, **_kwargs):
+        out = rf.zeros(extern_data.data["data"].dims, dtype="bool")
+        out.mark_as_default_output(shape=[batch_dim])
+
+    run_model(extern_data, lambda **_kwargs: rf.Module(), _forward_step)
+
+
 def test_pack_padded():
     time_dim = Dim(Tensor("time", [batch_dim], dtype="int32"))
     in_dim = Dim(7, name="in")

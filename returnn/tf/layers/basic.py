@@ -3580,6 +3580,8 @@ class ConstantLayer(LayerBase):
         super(ConstantLayer, self).__init__(**kwargs)
         self.shape_deps = shape_deps
         shape_ = value.shape if isinstance(value, numpy.ndarray) else ()
+        if isinstance(value, int) and self.output.dtype == "bool":
+            value = bool(value)
         value = tf.constant(value, dtype=self.output.dtype)
         if len(shape_) == 0 and self.output.batch_ndim > 0:
             value = tf.fill([d.get_dim_value() for d in self.output.dim_tags], value)
