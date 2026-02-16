@@ -193,3 +193,8 @@ def _timeout_handler(*, seconds: Union[float, int], proc_id: int, info: str):
     time.sleep(seconds)
     print(f"ERROR: {info}: Timeout handler after {seconds} seconds, killing proc {proc_id}.", file=sys.stderr)
     os.kill(proc_id, signal.SIGABRT)
+
+
+if __name__ == "__main__":
+    print_relevant_env_vars()
+    print_available_devices()
