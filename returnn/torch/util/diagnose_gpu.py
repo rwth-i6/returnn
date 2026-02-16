@@ -39,6 +39,17 @@ def print_available_devices(*, file: Optional[TextIO] = None):
             print("(CUDA not available)", file=file)
             return
 
+    try:
+        # See also _get_nvml_device_index.
+        # ['GPU-8ff8d0c7-8d30-8e55-0980-ac69fc03a6b8', ..., 'GPU-89dc5e46-87b5-dd46-00a9-9eb9179c29ee']
+        # noinspection PyProtectedMember
+        raw_device_uuids_list = torch.cuda._raw_device_uuid_nvml()
+        print("Num NVML devices:", len(raw_device_uuids_list), file=file)
+        raw_device_uuids = {d.replace("GPU-", ""): i for i, d in enumerate(raw_device_uuids_list)}
+    except Exception as exc:
+        raw_device_uuids = {}
+        print(f"Num NVML unknown: {type(exc).__name__}: {str(exc).splitlines()[0]}", file=file)
+
     print("Available CUDA devices:", file=file)
     count = torch.cuda.device_count()
     if cuda_visible_devs is not None and len(cuda_visible_devs) != count:
@@ -66,7 +77,9 @@ def print_available_devices(*, file: Optional[TextIO] = None):
         else:
             dev_idx_s = i
         print(f"       device_index: {dev_idx_s}", file=file)
-        print(f"       uuid: {getattr(props, 'uuid', None)}", file=file)
+        uuid = getattr(props, "uuid", None)  # note: torch._C._CUuuid object, but str(uuid) gives the UUID string
+        print(f"       uuid: {uuid}", file=file)
+        print(f"       nvml_device_index: {raw_device_uuids.get(str(uuid), '?')}", file=file)
     if not count:
         print("  (None)", file=file)
 
