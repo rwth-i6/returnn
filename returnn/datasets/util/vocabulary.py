@@ -705,6 +705,7 @@ class HuggingFaceTokenizer(Vocabulary):
         huggingface_repo_dir: str,
         map_bos_to_eos: bool = False,
         text_preprocessing: Optional[Callable[[str], str]] = None,
+        bpe_dropout: float = 0.0,
     ):
         """
         :param huggingface_repo_dir: the directory containing the `tokenizer_config.json` file.
@@ -727,6 +728,17 @@ class HuggingFaceTokenizer(Vocabulary):
             pad_label=self.tokenizer.pad_token_id,
         )
         self.text_preprocessing = text_preprocessing
+        if bpe_dropout:
+            assert hasattr(self.tokenizer, "backend_tokenizer"), (
+                f"{self}: tokenizer {self.tokenizer} {type(self.tokenizer)} does not have backend_tokenizer. "
+                f"Maybe the tokenizers package is not installed? pip3 install --user tokenizers"
+            )
+            assert hasattr(self.tokenizer.backend_tokenizer.model, "dropout"), (
+                f"{self}: tokenizer model"
+                f" {self.tokenizer.backend_tokenizer.model} {type(self.tokenizer.backend_tokenizer.model)}"
+                f" does not support bpe_dropout"
+            )
+            self.tokenizer.backend_tokenizer.model.dropout = bpe_dropout
 
     def __repr__(self):
         return "%s(%r)" % (self.__class__.__name__, self._opts)
