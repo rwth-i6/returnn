@@ -699,10 +699,17 @@ class HuggingFaceTokenizer(Vocabulary):
     Uses the `AutoTokenizer` class from the `transformers` package.
     """
 
-    def __init__(self, *, huggingface_repo_dir: str, map_bos_to_eos: bool = False):
+    def __init__(
+        self,
+        *,
+        huggingface_repo_dir: str,
+        map_bos_to_eos: bool = False,
+        text_preprocessing: Optional[Callable[[str], str]] = None,
+    ):
         """
         :param huggingface_repo_dir: the directory containing the `tokenizer_config.json` file.
         :param map_bos_to_eos:
+        :param text_preprocessing: applied in :func:`get_seq` (sentence -> ids)
         """
         import transformers  # noqa
 
@@ -719,6 +726,7 @@ class HuggingFaceTokenizer(Vocabulary):
             bos_label=self.tokenizer.eos_token_id if map_bos_to_eos else self.tokenizer.bos_token_id,
             pad_label=self.tokenizer.pad_token_id,
         )
+        self.text_preprocessing = text_preprocessing
 
     def __repr__(self):
         return "%s(%r)" % (self.__class__.__name__, self._opts)
@@ -774,6 +782,8 @@ class HuggingFaceTokenizer(Vocabulary):
         """
         :param sentence: assumed to be seq of vocab entries separated by whitespace
         """
+        if self.text_preprocessing:
+            sentence = self.text_preprocessing(sentence)
         return self.tokenizer(sentence)["input_ids"]
 
     def get_seq_labels(self, seq):
