@@ -1450,9 +1450,7 @@ def select_backend(name: str):
     elif name == "torch":
         select_backend_torch()
     elif name == "numpy":
-        from ._numpy_backend import NumpyBackend
-
-        global_backend.__class__ = NumpyBackend
+        select_backend_numpy()
     else:
         raise ValueError(f"unknown backend {name!r}")
 
@@ -1471,9 +1469,18 @@ def is_executing_eagerly() -> bool:
     return global_backend.executing_eagerly()
 
 
+def select_backend_numpy():
+    """
+    Selects the Numpy backend.
+    """
+    from ._numpy_backend import NumpyBackend
+
+    global_backend.__class__ = NumpyBackend
+
+
 def select_backend_tf():
     """
-    Selects the RETURNN layers backend (based on TF).
+    Selects the pure TF (low-level) backend.
     """
     import tensorflow as tf
 
