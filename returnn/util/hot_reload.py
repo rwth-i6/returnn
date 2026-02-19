@@ -158,7 +158,11 @@ def _iter(
         state = _IterState()
     if obj is None:
         return False
-    if isinstance(obj, (int, float, str, bool)):
+    # Basic types that cannot reference modules.
+    # Modules itself can also be excluded.
+    # If this is one of the modules we want to hot reload,
+    # the reference stays the same, the module object is updated in place.
+    if isinstance(obj, (int, float, str, bool, ModuleType)):
         return False
     if isinstance(obj, list):
         have_update = False
@@ -191,21 +195,14 @@ def _iter(
         if have_update and update_func:
             update_func(partial(new_opts["func"], *new_opts["args"], **new_opts["keywords"]))
         return have_update
-    if isinstance(obj, ModuleType):
-        mod_name = obj.__name__
-        name = None
-        obj_ = sys.modules[mod_name]  # assuming it is already reloaded
-    else:
-        mod_name, name = _get_module_name_and_name_from_obj(obj)
-        obj_ = None
+    mod_name, name = _get_module_name_and_name_from_obj(obj)
     if mod_name is not None and _is_custom_module(mod_name):
         if mod_name not in state.visited_modules:
             state.visited_modules.add(mod_name)
             state.collected_modules.append(mod_name)
         if update_func:
-            if name is not None:
-                mod = sys.modules[mod_name]  # assuming it is already reloaded
-                obj_ = getattr(mod, name)
+            mod = sys.modules[mod_name]  # assuming it is already reloaded
+            obj_ = getattr(mod, name)
             update_func(obj_)
             return True
     return False
