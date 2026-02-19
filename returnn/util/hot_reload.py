@@ -6,8 +6,9 @@ from __future__ import annotations
 import os
 import sys
 from typing import Optional, Any, Dict, Tuple, Set, List, Callable
-from types import FunctionType
+from types import FunctionType, ModuleType
 from functools import partial
+from collections import defaultdict
 from importlib import reload
 from returnn.config import Config, get_global_config
 from returnn.util.better_exchook import debug_shell
@@ -34,8 +35,15 @@ class ConfigHotReloader:
     def __init__(self, config: Dict[str, Any]):
         print("Initializing hot reloader on config...")
         self.config = config
-        self._modules, self._relevant_keys = _find_modules_in_config(config)
+        self._modules, self._relevant_keys, self._keys_per_modules = _find_modules_in_config(config)
         self._mod_mtimes = {mod_name: os.path.getmtime(sys.modules[mod_name].__file__) for mod_name in self._modules}
+
+    @property
+    def modules(self) -> List[str]:
+        """
+        Get the list of modules that are relevant for hot reloading.
+        """
+        return self._modules
 
     def any_module_changed(self) -> bool:
         """
@@ -51,24 +59,28 @@ class ConfigHotReloader:
         """
         Reload any changed modules and update the config.
         """
+        relevant_keys_subset = set()
         for mod_name in self._modules:
             current_mtime = os.path.getmtime(sys.modules[mod_name].__file__)
             if current_mtime != self._mod_mtimes[mod_name]:
                 print(f"Module '{mod_name}' has changed, reloading...")
                 reload(sys.modules[mod_name])
                 self._mod_mtimes[mod_name] = current_mtime
+                relevant_keys_subset.update(self._keys_per_modules[mod_name])
 
         for k in self._relevant_keys:
-            _iter(self.config[k], update_func=partial(self.config.__setitem__, k))
+            if k in relevant_keys_subset:
+                print(f"Updating config key '{k}'...")
+                _iter(self.config[k], update_func=partial(self.config.__setitem__, k))
 
-    def wait_for_user(self):
+    def user_interaction(self):
         """
         If the user can interact, wait for the user to press Enter.
         """
         exc_type, exc, exc_traceback = sys.exc_info()
         assert sys.stdin.isatty()
         while True:
-            choices = {"r": "reload modules and try again"}
+            choices = {"r": "reload modules", "t": "try again"}
             if exc is not None:
                 choices["d"] = "debug"
                 choices["e"] = "reraise"
@@ -77,8 +89,11 @@ class ConfigHotReloader:
             answer = input("Hot reloading: " + ", ".join(f"'{k}' to {v}" for k, v in choices.items()) + ": ")
             if answer == "r":
                 if self.any_module_changed():
-                    return
-                print("No changes detected? Please change the source code:", self._modules)
+                    self.reload_changed_modules()
+                else:
+                    print("No changes detected? Please change the source code:", self._modules)
+            elif answer == "t":
+                break
             elif answer == "d" and exc is not None:
                 debug_shell({}, {}, traceback=exc_traceback)
             elif answer == "e" and exc is not None:
@@ -97,7 +112,7 @@ def hot_reload_config(config: Dict[str, Any]):
     i.e. if the value references a class or function, it will be reloaded from the source code.
     """
     # First collect all relevant modules.
-    collected_modules, relevant_keys = _find_modules_in_config(config)
+    collected_modules, relevant_keys, keys_per_modules = _find_modules_in_config(config)
 
     # Now reload all collected modules.
     for mod_name in collected_modules:
@@ -109,10 +124,11 @@ def hot_reload_config(config: Dict[str, Any]):
         _iter(config[k], update_func=partial(config.__setitem__, k))
 
 
-def _find_modules_in_config(config: Dict[str, Any]) -> Tuple[List[str], List[str]]:
+def _find_modules_in_config(config: Dict[str, Any]) -> Tuple[List[str], List[str], Dict[str, Set[str]]]:
     visited_modules = set()
     collected_modules = []
     relevant_keys = []
+    keys_per_modules = defaultdict(set)
     for k, v in config.items():
         # get module and name from the value
         state = _IterState()
@@ -121,10 +137,11 @@ def _find_modules_in_config(config: Dict[str, Any]) -> Tuple[List[str], List[str
             relevant_keys.append(k)
             print(f"Found modules for config key '{k}': {state.collected_modules}")
             for mod_name in state.collected_modules:
+                keys_per_modules[mod_name].add(k)
                 if mod_name not in visited_modules:
                     visited_modules.add(mod_name)
                     collected_modules.append(mod_name)
-    return collected_modules, relevant_keys
+    return collected_modules, relevant_keys, keys_per_modules
 
 
 def _iter(
@@ -146,27 +163,27 @@ def _iter(
     if isinstance(obj, list):
         have_update = False
         for i, item in enumerate(obj):
-            have_update &= _iter(item, update_func=partial(obj.__setitem__, i) if update_func else None, state=state)
+            have_update |= _iter(item, update_func=partial(obj.__setitem__, i) if update_func else None, state=state)
         return have_update
     if isinstance(obj, (tuple, set)):
         res = list(obj)
         have_update = False
         for i, item in enumerate(res):
-            have_update &= _iter(item, update_func=partial(res.__setitem__, i) if update_func else None, state=state)
+            have_update |= _iter(item, update_func=partial(res.__setitem__, i) if update_func else None, state=state)
         if have_update and update_func:
             update_func(type(obj)(res))
         return have_update
     if isinstance(obj, dict):
         have_update = False
         for k, v in obj.items():
-            have_update &= _iter(v, update_func=partial(obj.__setitem__, k) if update_func else None, state=state)
+            have_update |= _iter(v, update_func=partial(obj.__setitem__, k) if update_func else None, state=state)
         return have_update
     if isinstance(obj, partial):
         have_update = False
         new_opts = {}
         for attr in ["func", "args", "keywords"]:
             new_opts[attr] = getattr(obj, attr)
-            have_update &= _iter(
+            have_update |= _iter(
                 getattr(obj, attr),
                 update_func=partial(new_opts.__setitem__, attr) if update_func else None,
                 state=state,
@@ -174,15 +191,21 @@ def _iter(
         if have_update and update_func:
             update_func(partial(new_opts["func"], *new_opts["args"], **new_opts["keywords"]))
         return have_update
-    mod_name, name = _get_module_name_and_name_from_obj(obj)
+    if isinstance(obj, ModuleType):
+        mod_name = obj.__name__
+        name = None
+        obj_ = sys.modules[mod_name]  # assuming it is already reloaded
+    else:
+        mod_name, name = _get_module_name_and_name_from_obj(obj)
+        obj_ = None
     if mod_name is not None and _is_custom_module(mod_name):
         if mod_name not in state.visited_modules:
             state.visited_modules.add(mod_name)
             state.collected_modules.append(mod_name)
         if update_func:
-            # assuming it is already reloaded
-            mod = sys.modules[mod_name]
-            obj_ = getattr(mod, name)
+            if name is not None:
+                mod = sys.modules[mod_name]  # assuming it is already reloaded
+                obj_ = getattr(mod, name)
             update_func(obj_)
             return True
     return False

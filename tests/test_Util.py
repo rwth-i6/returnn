@@ -1110,6 +1110,76 @@ def test_py_viterbi():
     print("Done.")
 
 
+def test_hot_reload():
+    from multiprocessing import Process
+
+    # start in subproc so that we can modify the env
+    p = Process(target=_hot_reload_test_main)
+    p.start()
+    p.join()
+
+
+def _hot_reload_test_main():
+    import functools
+    import importlib
+    from returnn.util.hot_reload import ConfigHotReloader
+
+    new_py_dir = _get_tmp_dir()
+    print("New py dir:", new_py_dir)
+    sys.path.append(new_py_dir)
+
+    mod_name = "hot_reload_test_code_mod"
+    with open(f"{new_py_dir}/{mod_name}.py", "w") as f:
+        f.write(_HotReloadTestCodeMod)
+
+    mod = importlib.import_module(mod_name)
+    assert mod.__name__ == mod_name
+    assert mod.__file__ == f"{new_py_dir}/{mod_name}.py"
+
+    config = {"func": functools.partial(mod.main, 42, f=mod.other)}
+    hot_reloader = ConfigHotReloader(config)
+    assert hot_reloader.modules == [mod_name]
+    assert not hot_reloader.any_module_changed()
+
+    res = config["func"]()
+    assert res == 43
+
+    with open(f"{new_py_dir}/{mod_name}.py", "w") as f:
+        f.write(_HotReloadTestCodeModUpdated)
+
+    assert hot_reloader.any_module_changed()
+    hot_reloader.reload_changed_modules()
+
+    res = config["func"]()
+    assert res == 20
+
+
+# language=Python
+_HotReloadTestCodeMod = """
+
+def main(x, *, f):
+    return f(x)
+
+
+def other(x):
+    return x + 1
+
+"""
+
+
+# language=Python
+_HotReloadTestCodeModUpdated = """
+
+def main(x, *, f):
+    x = x // 2
+    return f(x)
+
+def other(x):
+    return x - 1
+
+"""
+
+
 if __name__ == "__main__":
     better_exchook.install()
     if len(sys.argv) <= 1:

@@ -945,8 +945,7 @@ class Engine(EngineBase):
                     print("Exception in model step function with hot reloading enabled:", file=log.v1)
                     help_on_torch_exception(exc, model=self._orig_model)
                     sys.excepthook(type(exc), exc, exc.__traceback__)
-                    self._hot_reloader.wait_for_user()
-                    self._hot_reloader.reload_changed_modules()
+                    self._hot_reloader.user_interaction()
 
     def _load_model(self):
         """
