@@ -664,6 +664,37 @@ def test_native_signal_handler():
     install_native_signal_handler(reraise_exceptions=True)
 
 
+def test_serialize_object_function_type():
+    import types
+
+    b = serialize_object(types.FunctionType)
+    c = deserialize_object(b)
+    assert c is types.FunctionType
+
+
+def test_serialize_object_class():
+    b = serialize_object(NumbersDict)
+    c = deserialize_object(b)
+    assert c is NumbersDict
+
+
+def test_serialize_object_classmethod_function():
+    # use some dummy class not from here but from some other module,
+    # otherwise we have additional problems with the pickling which can fail due to __main__ module.
+    b = serialize_object(NumbersDict.constant_like.__func__)
+    f = deserialize_object(b)
+    assert f is NumbersDict.constant_like.__func__, b
+
+
+def test_serialize_object_classmethod():
+    # use some dummy class not from here but from some other module,
+    # otherwise we have additional problems with the pickling which can fail due to __main__ module.
+    b = serialize_object(NumbersDict.constant_like)
+    m = deserialize_object(b)
+    assert m.__self__ is NumbersDict.constant_like.__self__
+    assert m.__func__ is NumbersDict.constant_like.__func__, b
+
+
 class _PreInitUnpicklingRaiseException:
     def __getstate__(self):
         return 42

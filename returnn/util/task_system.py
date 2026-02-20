@@ -601,6 +601,8 @@ class Pickler(_BasePickler):
             return
         except pickle.PicklingError:
             pass
+        # Note: it's not so critical to recreate them.
+        # That is actually standard behavior, that bounded methods are always recreated on-the-fly.
         assert type(obj) is types.MethodType
         self.save(types.MethodType)
         self.save((obj.__func__, obj.__self__))
@@ -689,9 +691,43 @@ class Pickler(_BasePickler):
         assert obj
         assert id(obj) not in self.memo
         if name is None:
-            name = obj.__name__
+            name = obj.__qualname__
 
         module = getattr(obj, "__module__", None)
+
+        if "." in name:
+            name_parts = name.split(".")
+            mod = sys.modules.get(module, None)
+            obj_ = mod
+            obj_chain = []
+            for attr in name_parts:
+                obj_ = getattr(obj_, attr, None)
+                obj_chain.append(obj_)
+            # e.g. we pickle Class.classmethod.__func__, so Class.classmethod.__func__.__name__ == "Class.classmethod"
+            if (
+                obj_ is not obj
+                and isinstance(obj, types.FunctionType)
+                and isinstance(obj_, types.MethodType)
+                and obj_.__func__ is obj
+            ):
+                self.save(getattr)
+                self.save((obj_, "__func__"))
+                self.write(pickle.REDUCE)
+                return
+            # Class.Subclass or so should already match.
+            # Class.classmethod will not match as that is rebound on-the-fly, so special check for that.
+            if obj_ is obj or (
+                isinstance(obj, types.MethodType)
+                and isinstance(obj_, types.MethodType)
+                and obj_.__self__ is obj.__self__
+                and obj_.__func__ is obj.__func__
+            ):
+                self.save(getattr)
+                self.save((obj_chain[-2], name_parts[-1]))
+                self.write(pickle.REDUCE)
+                return
+            raise pickle.PicklingError("Can't pickle %r: not found as %s.%s" % (obj, module, name))
+
         if module == "__main__" and globals().get(name, None) is obj:
             # Can happen if this is directly executed.
             module = __name__  # should be correct now
