@@ -11,7 +11,6 @@ import os
 import io
 import pickle
 import types
-import struct
 import marshal
 from importlib import import_module
 import numpy
@@ -572,7 +571,7 @@ class Pickler(_BasePickler):
     """
 
     def __init__(self, *args, **kwargs):
-        if not "protocol" in kwargs:
+        if "protocol" not in kwargs:
             kwargs["protocol"] = pickle.HIGHEST_PROTOCOL
         _BasePickler.__init__(self, *args, **kwargs)
 
