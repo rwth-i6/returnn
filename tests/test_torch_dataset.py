@@ -6,7 +6,7 @@ import _setup_test_env  # noqa
 from typing import Optional, Any, Dict
 import sys
 import unittest
-import torch
+from multiprocessing.managers import SyncManager
 from torch.utils.data import DataLoader
 
 from returnn.config import Config, get_global_config, global_config_ctx
@@ -15,10 +15,11 @@ from returnn.datasets.generating import Task12AXDataset
 from returnn.torch.data import pipeline as data_pipeline
 from returnn.torch.data import returnn_dataset_wrapper
 from returnn.util import better_exchook
+from returnn.util import multi_proc_manager_with_watchdog
 
 
 def get_loader_from_returnn_dataset(
-    dataset: Dataset, mp_manager: torch.multiprocessing.Manager, *, batch_size: int = 5, max_seqs: int = 2
+    dataset: Dataset, mp_manager: SyncManager, *, batch_size: int = 5, max_seqs: int = 2
 ) -> DataLoader:
     # Follow mostly similar logic as in the PT engine.
 
@@ -52,7 +53,7 @@ def get_loader_from_returnn_dataset(
 def test_pipeline_serialization():
     dataset = Task12AXDataset(num_seqs=1000)
 
-    mp_manager = torch.multiprocessing.Manager()
+    mp_manager = multi_proc_manager_with_watchdog.create_manager()
     loader = get_loader_from_returnn_dataset(dataset, mp_manager)
 
     c = 0
@@ -95,7 +96,7 @@ def test_correct_global_config():
     with global_config_ctx(config):
         dataset = _DummyDatasetWithChecks(parent_pid=os.getpid(), check_in_global_config={"test_value": 43})
 
-        mp_manager = torch.multiprocessing.Manager()
+        mp_manager = multi_proc_manager_with_watchdog.create_manager()
         loader = get_loader_from_returnn_dataset(dataset, mp_manager)
 
         c = 0
@@ -144,7 +145,7 @@ def test_func_in_global_config():
             {"class": "MapDatasetWrapper", "map_dataset": config.typed_dict["MyCustomMapDatasetInConfig"]}
         )
 
-        mp_manager = torch.multiprocessing.Manager()
+        mp_manager = multi_proc_manager_with_watchdog.create_manager()
         loader = get_loader_from_returnn_dataset(dataset, mp_manager, batch_size=100, max_seqs=4)
 
         c = 0
@@ -162,7 +163,7 @@ def test_HDFDataset():
     hdf_fn = generate_hdf_from_other({"class": "Task12AXDataset", "num_seqs": 23})
     hdf_dataset = HDFDataset(files=[hdf_fn], cache_byte_size=0)
 
-    mp_manager = torch.multiprocessing.Manager()
+    mp_manager = multi_proc_manager_with_watchdog.create_manager()
     loader = get_loader_from_returnn_dataset(hdf_dataset, mp_manager)
     c = 0
     n = 3
@@ -189,7 +190,7 @@ def test_MultiProcDataset_HDFDataset():
         )
         mp_dataset.initialize()
 
-        mp_manager = torch.multiprocessing.Manager()
+        mp_manager = multi_proc_manager_with_watchdog.create_manager()
         loader = get_loader_from_returnn_dataset(mp_dataset, mp_manager)
         c = 0
         n = 3
