@@ -47,6 +47,7 @@ def main():
 
         _run(*pip_install, "--upgrade", "pip", "setuptools", "wheel")
         _run(*pip_install, "--upgrade", "pytest")
+        _run(*pip_install, "--upgrade", "psutil")  # for some tests
         _run("sudo", "apt-get", "install", "-y", "libsndfile1")  # soundfile, librosa, ESPnet
         _run(*pip_install, "--upgrade", "dm-tree", "h5py")
         if args.espnet:
