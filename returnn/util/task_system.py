@@ -728,6 +728,7 @@ class Pickler(_BasePickler):
         # such as types.FunctionType. This is fixed here.
         for modname in ["types"]:
             moddict = sys.modules[modname].__dict__
+            # Must check all objects, because the name is different, e.g. "function" vs "FunctionType".
             for modobjname, modobj in moddict.items():
                 if modobj is obj:
                     self.write(pickle.GLOBAL + bytes(modname + "\n" + modobjname + "\n", "utf8"))
