@@ -1,7 +1,16 @@
 """
-A multiprocessing context where ``proc.daemon`` is always False,
+A multiprocessing context (:class:`NonDaemonicSpawnContext`)
+where ``proc.daemon`` is always False,
 and setting it to True is ignored.
-All processes will still be cleaned up though.
+
+(When Python exits, it attempts to terminate (not join) all of its daemonic child processes.)
+
+A daemonic process is not allowed to create child processes,
+however, some of or sub processes need to create child processes themselves.
+That is why we need this.
+
+All processes created within :class:`NonDaemonicSpawnContext`
+will still be cleaned up though.
 For cleaning up, we use SIGINT (instead of the standard SIGTERM)
 such that the processes can do proper cleanup themselves.
 
