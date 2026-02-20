@@ -695,6 +695,16 @@ class Pickler(_BasePickler):
 
         module = getattr(obj, "__module__", None)
 
+        if module == "__main__" and globals().get(name, None) is obj:
+            # Can happen if this is directly executed.
+            module = __name__  # should be correct now
+        if (module is None or module == "__main__") and self.use_whichmodule and "." not in name:
+            module = pickle.whichmodule(obj, name)
+        if module is None or module == "__main__":
+            raise pickle.PicklingError("Can't pickle %r: module not found: %s" % (obj, module))
+        if module in self.module_name_black_list:
+            raise pickle.PicklingError("Can't pickle %r: module blacklisted: %s" % (obj, module))
+
         if "." in name:
             name_parts = name.split(".")
             mod = sys.modules.get(module, None)
@@ -727,16 +737,6 @@ class Pickler(_BasePickler):
                 self.write(pickle.REDUCE)
                 return
             raise pickle.PicklingError("Can't pickle %r: not found as %s.%s" % (obj, module, name))
-
-        if module == "__main__" and globals().get(name, None) is obj:
-            # Can happen if this is directly executed.
-            module = __name__  # should be correct now
-        if (module is None or module == "__main__") and self.use_whichmodule:
-            module = pickle.whichmodule(obj, name)
-        if module is None or module == "__main__":
-            raise pickle.PicklingError("Can't pickle %r: module not found: %s" % (obj, module))
-        if module in self.module_name_black_list:
-            raise pickle.PicklingError("Can't pickle %r: module blacklisted: %s" % (obj, module))
 
         try:
             __import__(module)
