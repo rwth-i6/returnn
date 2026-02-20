@@ -35,6 +35,7 @@ from returnn.datasets.basic import init_dataset, Dataset
 from returnn.util import basic as util
 from returnn.util import NumbersDict
 from returnn.util.basic import hms, NotSpecified
+from returnn.util import multi_proc_manager_with_watchdog
 from returnn.util.result_with_reason import ResultWithReason
 from returnn.util.debug import debug_shell
 from returnn.util.math import simplify_and_format_number, merge_random_seeds
@@ -68,7 +69,7 @@ class Engine(EngineBase):
         if util.BackendEngine.selected_engine is None:
             util.BackendEngine.select_engine(default_fallback_engine=util.BackendEngine.Torch, config=self.config)
         self.model_filename = self.config.value("model", None)
-        self._mp_manager = torch.multiprocessing.Manager()
+        self._mp_manager = multi_proc_manager_with_watchdog.create_manager()
         self._epoch_mp_shared = self._mp_manager.Value("i", 0)
         self.train_dataset: Optional[Dataset] = None
         self.eval_datasets = {}

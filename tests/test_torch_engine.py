@@ -962,6 +962,99 @@ def test_torch_engine_train_shuffle_batches():
         engine.train()
 
 
+def test_torch_engine_sub_proc_cleanup():
+    from multiprocessing import Process, Pipe
+    import psutil
+    import time
+
+    parent_conn, child_conn = Pipe()
+
+    # start in subproc so that we can modify the env
+    p = Process(target=_torch_engine_sub_proc_cleanup_test_main, args=(child_conn,))
+    p.start()
+
+    # wait until the engine is initialized, so that we have the sub procs started
+    msg = parent_conn.recv()
+    assert msg == "initialized_engine"
+    msg = parent_conn.recv()
+    assert msg == "first_global_step"
+
+    # Collect sub procs
+    train_proc = psutil.Process(p.pid)
+    child_procs = train_proc.children(recursive=True)
+    print("train proc:", train_proc)
+    for child_proc in child_procs:
+        print("child proc:", child_proc, child_proc.cmdline())
+    assert child_procs  # e.g. the multiproccessing manager + resource tracker?
+
+    p.kill()
+    p.join()
+
+    counter = 0
+    while True:
+        # Check that all sub procs are also killed.
+        any_alive = False
+        for child_proc in child_procs:
+            if child_proc.is_running():
+                print(f"Child proc still running: {child_proc} {child_proc.cmdline()}")
+                any_alive = True
+        counter += 1
+        if any_alive:
+            if counter > 100:
+                raise Exception("Sub procs still alive")
+            time.sleep(0.5)
+            # repeat
+        else:
+            print("All sub procs are killed")
+            break
+
+
+def _torch_engine_sub_proc_cleanup_test_main(conn):
+    try:
+        import time
+
+        config = Config(
+            dict(
+                task="train",
+                device="cpu",
+                extern_data={"data": {"dim": 9}, "classes": {"dim": 2, "sparse": True}},
+                get_model=TrainTestModel,
+                train_step=TrainTestModel.train_step,
+                batch_size=100,
+                optimizer={"class": "adam"},
+                num_epochs=100,
+            )
+        )
+        dataset = init_dataset({"class": "Task12AXDataset", "num_seqs": 1000, "name": "train"})
+        dataset.init_seq_order(epoch=1)
+
+        with global_config_ctx(config):
+            engine = Engine(config=config)
+            engine.init_train_from_config(train_data=dataset)
+            conn.send("initialized_engine")
+            # to avoid pickling issues due to referencing __main__ here...
+            config.typed_dict.pop("get_model")
+            config.typed_dict.pop("train_step")
+            epoch = 1
+            while True:
+                data_iter = iter(engine._train_dataloader)
+                step = 0
+                for _ in data_iter:
+                    if step == 0 and epoch == 1:
+                        conn.send("first_global_step")
+                    step += 1
+                print(f"Finished epoch {epoch} after {step} steps")
+                assert step > 0
+                time.sleep(0.1)
+
+    except Exception as exc:
+        conn.send(("exception", str(exc)))
+        raise
+
+    finally:
+        conn.close()
+
+
 if __name__ == "__main__":
     better_exchook.install()
     if len(sys.argv) <= 1:
