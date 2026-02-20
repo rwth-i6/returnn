@@ -752,10 +752,10 @@ class CrossAttention(rf.Module):
 
         :return: k,v
         """
-        qkv = self.kv(source)
-        qkv = rf.split_dims(qkv, axis=self.kv_dim_total, dims=(self.num_heads, self.kv_dim_per_head))
+        kv = self.kv(source)
+        kv = rf.split_dims(kv, axis=self.kv_dim_total, dims=(self.num_heads, self.kv_dim_per_head))
         k, v = rf.split(
-            qkv,
+            kv,
             axis=self.kv_dim_per_head,
             out_dims=(self.key_dim_per_head, self.value_dim_per_head),
         )
