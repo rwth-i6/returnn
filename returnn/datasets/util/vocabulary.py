@@ -773,7 +773,7 @@ class HuggingFaceTokenizer(Vocabulary):
         """
         if default is not KeyError and not self.is_id_valid(idx):
             return default
-        return self.tokenizer.convert_ids_to_tokens(idx)
+        return self.tokenizer.convert_ids_to_tokens([idx])[0]
 
     def label_to_id(self, label: str, default: Union[int, Type[KeyError], None] = KeyError) -> Optional[int]:
         """
