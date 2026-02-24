@@ -599,6 +599,8 @@ class ReportImportedDevModules:
                     elif os.path.exists(mod_dir + "/../.git"):
                         # Use realpath because the mod dir might be a symlink.
                         git_dir = os.path.dirname(os.path.realpath(mod_dir))
+                    elif os.path.exists(mod_dir + "/../../.git"):
+                        git_dir = os.path.realpath(mod_dir + "/../..")
                     else:
                         git_dir = None
                     if git_dir:
