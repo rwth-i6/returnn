@@ -236,6 +236,8 @@ def _is_custom_module(module_name: Optional[str]) -> bool:
     if module_name in getattr(sys, "stdlib_module_names", set()):
         return False
     mod = sys.modules[module_name]
+    if getattr(mod, "__spec__", None) is None:
+        return False
     mod_filename: Optional[str] = getattr(mod, "__file__", None)
     if mod_filename is None:
         # built-in module
