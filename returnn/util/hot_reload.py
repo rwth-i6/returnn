@@ -204,10 +204,10 @@ def _iter(
         if isinstance(obj, FunctionType):
             # For functions, we also want to check co_names,
             # which may reference other functions or classes in the same module.
-            for name in obj.__code__.co_names:
-                v = obj.__globals__.get(name, None)
+            for k in obj.__code__.co_names:
+                v = obj.__globals__.get(k, None)
                 have_update |= _iter(
-                    v, update_func=partial(obj.__globals__.__setitem__, name) if update_func else None, state=state
+                    v, update_func=partial(obj.__globals__.__setitem__, k) if update_func else None, state=state
                 )
             # Pass to the normal handling below to also check the module of the function itself.
         if update_func:
