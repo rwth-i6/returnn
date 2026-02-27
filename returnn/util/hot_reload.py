@@ -195,17 +195,27 @@ def _iter(
         if have_update and update_func:
             update_func(partial(new_opts["func"], *new_opts["args"], **new_opts["keywords"]))
         return have_update
+    have_update = False
     mod_name, name = _get_module_name_and_name_from_obj(obj)
     if mod_name is not None and _is_custom_module(mod_name):
         if mod_name not in state.visited_modules:
             state.visited_modules.add(mod_name)
             state.collected_modules.append(mod_name)
+        if isinstance(obj, FunctionType):
+            # For functions, we also want to check co_names,
+            # which may reference other functions or classes in the same module.
+            for name in obj.__code__.co_names:
+                v = obj.__globals__.get(name, None)
+                have_update |= _iter(
+                    v, update_func=partial(obj.__globals__.__setitem__, name) if update_func else None, state=state
+                )
+            # Pass to the normal handling below to also check the module of the function itself.
         if update_func:
             mod = sys.modules[mod_name]  # assuming it is already reloaded
             obj_ = getattr(mod, name)
             update_func(obj_)
             return True
-    return False
+    return have_update
 
 
 class _IterState:
