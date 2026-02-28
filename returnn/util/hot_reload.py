@@ -73,14 +73,19 @@ class ConfigHotReloader:
                 print(f"Updating config key '{k}'...")
                 _iter(self.config[k], update_func=partial(self.config.__setitem__, k))
 
-    def user_interaction(self):
+    def user_interaction(self, *, return_actions: Optional[Dict[str, str]] = None) -> str:
         """
-        If the user can interact, wait for the user to press Enter.
+        Interact with the user, allowing to reload modules, try again, debug, or quit.
         """
         exc_type, exc, exc_traceback = sys.exc_info()
         assert sys.stdin.isatty()
+        if return_actions is None:
+            if exc is not None:
+                return_actions = {"t": "try again"}
+            else:
+                return_actions = {"c": "continue"}
         while True:
-            choices = {"r": "reload modules", "t": "try again"}
+            choices = {"r": "reload modules", **return_actions}
             if exc is not None:
                 choices["d"] = "debug"
                 choices["e"] = "reraise"
@@ -92,8 +97,8 @@ class ConfigHotReloader:
                     self.reload_changed_modules()
                 else:
                     print("No changes detected? Please change the source code:", self._modules)
-            elif answer == "t":
-                break
+            elif answer in return_actions:
+                return answer
             elif answer == "d" and exc is not None:
                 debug_shell({}, {}, traceback=exc_traceback)
             elif answer == "e" and exc is not None:

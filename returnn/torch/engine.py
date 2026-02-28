@@ -940,7 +940,13 @@ class Engine(EngineBase):
             while True:
                 try:
                     f(model=self._orig_model, extern_data=extern_data, **sentinel_kw)
-                    break
+                    r = self._hot_reloader.user_interaction(return_actions={"t": "try again", "c": "continue"})
+                    if r == "t":
+                        continue
+                    elif r == "c":
+                        break
+                    else:
+                        raise ValueError(f"Invalid hot reloader action {r!r}")
 
                 except (Exception, KeyboardInterrupt) as exc:
                     print("Exception in model step function with hot reloading enabled:", file=log.v1)
