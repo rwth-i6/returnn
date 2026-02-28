@@ -73,7 +73,13 @@ class ConfigHotReloader:
                 print(f"Updating config key '{k}'...")
                 _iter(self.config[k], update_func=partial(self.config.__setitem__, k))
 
-    def user_interaction(self, *, return_actions: Optional[Dict[str, str]] = None) -> str:
+    def user_interaction(
+        self,
+        *,
+        return_actions: Optional[Dict[str, str]] = None,
+        shell_locals: Optional[Dict[str, Any]] = None,
+        shell_globals: Optional[Dict[str, Any]] = None,
+    ) -> str:
         """
         Interact with the user, allowing to reload modules, try again, debug, or quit.
         """
@@ -84,6 +90,10 @@ class ConfigHotReloader:
                 return_actions = {"t": "try again"}
             else:
                 return_actions = {"c": "continue"}
+        if shell_locals is None:
+            shell_locals = sys._getframe(1).f_locals
+        if shell_globals is None:
+            shell_globals = sys._getframe(1).f_globals
         while True:
             choices = {"r": "reload modules", **return_actions}
             if exc is not None:
@@ -100,11 +110,11 @@ class ConfigHotReloader:
             elif answer in return_actions:
                 return answer
             elif answer == "d" and exc is not None:
-                debug_shell({}, {}, traceback=exc_traceback)
+                debug_shell(shell_locals, shell_globals, traceback=exc_traceback)
             elif answer == "e" and exc is not None:
                 raise exc.with_traceback(exc_traceback)
             elif answer == "s":
-                debug_shell({}, {})
+                debug_shell(shell_locals, shell_globals)
             elif answer == "q":
                 sys.exit(1)
             else:
