@@ -91,8 +91,10 @@ class ConfigHotReloader:
             else:
                 return_actions = {"c": "continue"}
         if shell_locals is None:
+            # noinspection PyProtectedMember,PyUnresolvedReferences
             shell_locals = sys._getframe(1).f_locals
         if shell_globals is None:
+            # noinspection PyProtectedMember,PyUnresolvedReferences
             shell_globals = sys._getframe(1).f_globals
         while True:
             choices = {"r": "reload modules", **return_actions}
