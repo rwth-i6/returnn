@@ -201,7 +201,7 @@ class OggZipDataset(CachedDataset2):
 
                 return gzip.open(self._separate_txt_files[name], "rb").read()
         if self._zip_files is not None:
-            return self._zip_files[zip_index].read(filename)
+            return self._zip_files[zip_index].read(filename.replace("//", "/"))
         return open("%s/%s" % (self.paths[0], filename), "rb").read()
 
     def _collect_data_part(self, zip_index) -> Tuple[List[Dict[str, Any]], Optional[Dict[str, Any]]]:
