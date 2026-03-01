@@ -855,6 +855,160 @@ def test_scatter_fill_inf():
             assert res["output"].raw_tensor[i] == float("-inf")
 
 
+def test_scatter():
+    time_dim = Dim(Tensor("time", [batch_dim], dtype="int32"))
+    extern_data = TensorDict(
+        {
+            "data": Tensor("data", [batch_dim, time_dim], dtype="int32"),
+            "mask": Tensor("mask", [batch_dim, time_dim], dtype="bool"),
+        }
+    )
+
+    def _forward_step(*, extern_data: TensorDict, **_kwargs):
+        data = extern_data["data"]
+        mask = extern_data["mask"]
+        data.mark_as_output("data", shape=(batch_dim, time_dim))
+        indices = rf.cumsum(rf.cast(mask, "int32"), spatial_dim=time_dim)
+        indices.mark_as_output("indices", shape=(batch_dim, time_dim))
+        out_seq_lens = rf.reduce_max(indices, axis=time_dim) + 1
+        out_spatial_dim = Dim(out_seq_lens)
+        out = rf.scatter(data, indices=indices, indices_dim=time_dim, out_dim=out_spatial_dim)
+        out.mark_as_default_output(shape=(batch_dim, out_spatial_dim))
+
+    res = run_model(extern_data, lambda **_: rf.Module(), _forward_step, test_tensorflow=False)
+    for b in range(batch_dim.get_dim_value()):
+        seq_len = time_dim.dyn_size_ext.raw_tensor[b]
+        out_seq_len = res["output"].dims[1].dyn_size_ext.raw_tensor[b]
+        print(f"batch {b}, seq_len {seq_len}, out_seq_len {out_seq_len}", end=" ")
+        out_ref = np.full((out_seq_len,), fill_value=0, dtype=np.int32)
+        for t in range(seq_len):
+            i = res["indices"].raw_tensor[b, t]
+            out_ref[i] += res["data"].raw_tensor[b, t]
+        print("out_ref:", out_ref, end=" ")
+        out_comp = res["output"].raw_tensor[b, :out_seq_len]
+        print("out_comp:", out_comp)
+        np.testing.assert_array_equal(out_ref, out_comp)
+
+
+def test_scatter_mean():
+    time_dim = Dim(Tensor("time", [batch_dim], dtype="int32"))
+    extern_data = TensorDict(
+        {
+            "data": Tensor("data", [batch_dim, time_dim], dtype="float32"),
+            "mask": Tensor("mask", [batch_dim, time_dim], dtype="bool"),
+        }
+    )
+
+    def _forward_step(*, extern_data: TensorDict, **_kwargs):
+        data = extern_data["data"]
+        mask = extern_data["mask"]
+        data.mark_as_output("data", shape=(batch_dim, time_dim))
+        indices = rf.cumsum(rf.cast(mask, "int32"), spatial_dim=time_dim)
+        indices.mark_as_output("indices", shape=(batch_dim, time_dim))
+        out_seq_lens = rf.reduce_max(indices, axis=time_dim) + 1
+        out_spatial_dim = Dim(out_seq_lens)
+        out = rf.scatter_mean(data, indices=indices, indices_dim=time_dim, out_dim=out_spatial_dim)
+        out.mark_as_default_output(shape=(batch_dim, out_spatial_dim))
+
+    res = run_model(extern_data, lambda **_: rf.Module(), _forward_step, test_tensorflow=False)
+    for b in range(batch_dim.get_dim_value()):
+        seq_len = time_dim.dyn_size_ext.raw_tensor[b]
+        out_seq_len = res["output"].dims[1].dyn_size_ext.raw_tensor[b]
+        print(f"batch {b}, seq_len {seq_len}, out_seq_len {out_seq_len}", end=" ")
+        out_ref = np.full((out_seq_len,), fill_value=0, dtype=np.float32)
+        counts = np.full((out_seq_len,), fill_value=0, dtype=np.int32)
+        for t in range(seq_len):
+            i = res["indices"].raw_tensor[b, t]
+            out_ref[i] += res["data"].raw_tensor[b, t]
+            counts[i] += 1
+        out_ref /= np.maximum(counts, 1)
+        print("out_ref:", out_ref, end=" ")
+        out_comp = res["output"].raw_tensor[b, :out_seq_len]
+        print("out_comp:", out_comp)
+        np.testing.assert_almost_equal(out_ref, out_comp)
+
+
+def test_scatter_logmeanexp():
+    time_dim = Dim(Tensor("time", [batch_dim], dtype="int32"))
+    extern_data = TensorDict(
+        {
+            "data": Tensor("data", [batch_dim, time_dim], dtype="float32"),
+            "mask": Tensor("mask", [batch_dim, time_dim], dtype="bool"),
+        }
+    )
+
+    def _forward_step(*, extern_data: TensorDict, **_kwargs):
+        data = extern_data["data"]
+        mask = extern_data["mask"]
+        data.mark_as_output("data", shape=(batch_dim, time_dim))
+        indices = rf.cumsum(rf.cast(mask, "int32"), spatial_dim=time_dim)
+        indices.mark_as_output("indices", shape=(batch_dim, time_dim))
+        out_seq_lens = rf.reduce_max(indices, axis=time_dim) + 1
+        out_spatial_dim = Dim(out_seq_lens)
+        out = rf.scatter_logmeanexp(data, indices=indices, indices_dim=time_dim, out_dim=out_spatial_dim)
+        out.mark_as_default_output(shape=(batch_dim, out_spatial_dim))
+
+    res = run_model(
+        extern_data, lambda **_: rf.Module(), _forward_step, test_tensorflow=False, allow_inf_nan_in_output=True
+    )
+    for b in range(batch_dim.get_dim_value()):
+        seq_len = time_dim.dyn_size_ext.raw_tensor[b]
+        out_seq_len = res["output"].dims[1].dyn_size_ext.raw_tensor[b]
+        print(f"batch {b}, seq_len {seq_len}, out_seq_len {out_seq_len}", end=" ")
+        out_ref = np.full((out_seq_len,), fill_value=0, dtype=np.float32)
+        counts = np.full((out_seq_len,), fill_value=0, dtype=np.int32)
+        for t in range(seq_len):
+            i = res["indices"].raw_tensor[b, t]
+            out_ref[i] += np.exp(res["data"].raw_tensor[b, t])
+            counts[i] += 1
+        out_ref /= np.maximum(counts, 1)
+        out_ref = np.log(out_ref)
+        print("out_ref:", out_ref, end=" ")
+        out_comp = res["output"].raw_tensor[b, :out_seq_len]
+        print("out_comp:", out_comp)
+        np.testing.assert_almost_equal(out_ref, out_comp)
+
+
+def test_scatter_argmax():
+    time_dim = Dim(Tensor("time", [batch_dim], dtype="int32"))
+    extern_data = TensorDict(
+        {
+            "data": Tensor("data", [batch_dim, time_dim], dtype="float32"),
+            "mask": Tensor("mask", [batch_dim, time_dim], dtype="bool"),
+        }
+    )
+
+    def _forward_step(*, extern_data: TensorDict, **_kwargs):
+        data = extern_data["data"]
+        mask = extern_data["mask"]
+        data.mark_as_output("data", shape=(batch_dim, time_dim))
+        indices = rf.cumsum(rf.cast(mask, "int32"), spatial_dim=time_dim)
+        indices.mark_as_output("indices", shape=(batch_dim, time_dim))
+        out_seq_lens = rf.reduce_max(indices, axis=time_dim) + 1
+        out_spatial_dim = Dim(out_seq_lens)
+        out = rf.scatter_argmax(data, indices=indices, indices_dim=time_dim, out_dim=out_spatial_dim)
+        assert out.sparse_dim == time_dim
+        out.mark_as_default_output(shape=(batch_dim, out_spatial_dim))
+
+    res = run_model(extern_data, lambda **_: rf.Module(), _forward_step, test_tensorflow=False)
+    for b in range(batch_dim.get_dim_value()):
+        seq_len = time_dim.dyn_size_ext.raw_tensor[b]
+        out_seq_len = res["output"].dims[1].dyn_size_ext.raw_tensor[b]
+        print(f"batch {b}, seq_len {seq_len}, out_seq_len {out_seq_len}", end=" ")
+        out_ref = np.full((out_seq_len,), fill_value=-1, dtype=np.int32)
+        prev_max = np.full((out_seq_len,), fill_value=float("-inf"), dtype=np.float32)
+        for t in range(seq_len):
+            i = res["indices"].raw_tensor[b, t]
+            v = res["data"].raw_tensor[b, t]
+            if v > prev_max[i]:
+                prev_max[i] = v
+                out_ref[i] = t
+        print("out_ref:", out_ref, end=" ")
+        out_comp = res["output"].raw_tensor[b, :out_seq_len]
+        print("out_comp:", out_comp)
+        np.testing.assert_array_equal(out_ref, out_comp)
+
+
 def test_slice():
     time_dim = Dim(Tensor("time", [batch_dim], dtype="int32"))
     in_dim = Dim(7, name="in")

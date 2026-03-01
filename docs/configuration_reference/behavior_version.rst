@@ -22,6 +22,19 @@ and not listing legacy/deprecated parameters.
 Version History
 ---------------
 
+Behavior version 25 (2026-03-01)
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+RF ``scatter`` with custom ``fill_value``,
+and related also ``scatter_mean`` and ``scatter_logsumexp``:
+Indices of padded area could incorrectly influence the result.
+This is fixed.
+
+There is also the global config option ``rf_scatter_use_fixed_masking: bool``
+to explicitly enable the new behavior.
+
+See issue `#1815 <https://github.com/rwth-i6/returnn/issues/1815>`__.
+
 Behavior version 24 (2025-03-02)
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 

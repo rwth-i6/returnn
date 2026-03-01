@@ -8,6 +8,8 @@ import logging
 import numpy
 from returnn.tensor import Tensor, Dim
 import returnn.frontend as rf
+from returnn.util.basic import BehaviorVersion
+from returnn.log import log
 from ._backend import Backend, global_backend, get_backend_by_raw_tensor_type
 from .types import RawTensorTypes
 from . import _utils
@@ -43,6 +45,7 @@ __all__ = [
     "scatter_argmax",
     "scatter_logsumexp",
     "scatter_logmeanexp",
+    "scatter_count",
     "slice",
     "shift_right",
     "shift_left",
@@ -542,8 +545,6 @@ def _pad_handle_dynamic_dims_default(
     :param mode: 'constant', 'reflect', 'replicate' or 'circular'
     :return: True if dynamic dims should be handled as specified in the default behavior
     """
-    from returnn.util.basic import BehaviorVersion
-
     if BehaviorVersion.get() >= 21:
         return True
 
@@ -897,39 +898,100 @@ def scatter(
     if not out_dim:
         assert isinstance(indices, Tensor) and indices.sparse_dim
         out_dim = indices.sparse_dim
-    if fill_value is None:
-        if mode == "sum":
-            fill_value = 0
-        elif mode == "max":
-            if "int" in source.dtype:
-                fill_value = numpy.iinfo(source.raw_tensor.dtype).min
-            else:
-                fill_value = float("-inf")
-        elif mode == "min":
-            if "int" in source.dtype:
-                fill_value = numpy.iinfo(source.raw_tensor.dtype).max
-            else:
-                fill_value = float("inf")
-        else:
-            raise ValueError(f"scatter: invalid mode {mode!r}")
     indices_dim = indices_dim if isinstance(indices_dim, (list, tuple)) else [indices_dim]
-    if any([dim.need_masking() for dim in indices_dim]):
+    post_fix_fill_value = False
+    if any([dim.need_masking() for dim in source.dims + indices.dims]):
         if use_mask is None:
             use_mask = rf.use_mask_default(
                 default=True, default_false_for_behavior_version_up_to=22, func_name="scatter"
             )
         if use_mask:
-            source = source.copy_masked(fill_value, dims=indices_dim)
+            mask_value = _scatter_mask_value(mode, source.dtype)
+            correct_masking_with_fill = _should_use_scatter_fixed_fill_value()
+            if fill_value is None or fill_value == mask_value or correct_masking_with_fill:
+                pass  # keep mask_value as is
+            else:
+                log.print_warning(
+                    f"scatter {mode=} with explicit {fill_value=} uses wrong masking"
+                    f" with behavior version {BehaviorVersion.get()} < 25",
+                    prefix_text="DEPRECATION WARNING:",
+                )
+                mask_value = fill_value
+            source = source.copy_masked(mask_value, dims=indices_dim)
+            if correct_masking_with_fill:
+                # Also mask invalid indices.
+                # Note that we did not print a separate warning for this,
+                # as if this failed, likely the user would have gotten an exception before.
+                indices = indices.copy_masked(0, dims=indices_dim)
+            if correct_masking_with_fill and fill_value is not None and fill_value != mask_value:
+                post_fix_fill_value = True
     else:
         use_mask = False
     # noinspection PyProtectedMember
     out = source._raw_backend.scatter(
-        source, indices=indices, indices_dim=indices_dim, mode=mode, fill_value=fill_value, out_dim=out_dim
+        source,
+        indices=indices,
+        indices_dim=indices_dim,
+        mode=mode,
+        # The fill_value only works correct if no masking is needed.
+        fill_value=fill_value
+        if fill_value is not None and not post_fix_fill_value
+        else _scatter_mask_value(mode, source.dtype),
+        out_dim=out_dim,
     )
+    if post_fix_fill_value:
+        ones = rf.ones(dims=indices.dims, dtype="int32", device=source.device)
+        counts = rf.scatter(ones, indices=indices, indices_dim=indices_dim, out_dim=out_dim)
+        out = rf.where(counts > 0, out, fill_value)
     if use_mask and mode != "sum":
         # Make sure we don't leave any infinities in the output.
         out = out.copy_masked(0, dims=[out_dim])
     return out
+
+
+def _scatter_mask_value(mode: str, dtype: str) -> Union[int, float]:
+    if mode == "sum":
+        return 0
+    elif mode == "max":
+        if "int" in dtype:
+            return numpy.iinfo(dtype).min
+        else:
+            return float("-inf")
+    elif mode == "min":
+        if "int" in dtype:
+            return numpy.iinfo(dtype).max
+        else:
+            return float("inf")
+    else:
+        raise ValueError(f"scatter: invalid mode {mode!r}")
+
+
+def scatter_count(
+    *,
+    indices: Tensor,
+    indices_dim: Union[Dim, Sequence[Dim]],
+    out_dim: Optional[Union[Dim, Sequence[Dim]]] = None,
+    fill_value: Optional[int] = None,
+) -> Tensor:
+    """
+    Count the number of occurrences of each index in indices.
+
+    :param indices:
+    :param indices_dim:
+    :param fill_value:
+    :param out_dim:
+    :return: counts
+    """
+    if fill_value is None:
+        fill_value = 0
+    ones = rf.ones(dims=indices.dims, dtype="int32", device=indices.device)
+    if fill_value == 0 or _should_use_scatter_fixed_fill_value():
+        counts = rf.scatter(ones, indices=indices, indices_dim=indices_dim, out_dim=out_dim)
+        if fill_value is not None:
+            counts = rf.where(counts > 0, counts, fill_value)
+    else:
+        counts = rf.scatter(ones, indices=indices, indices_dim=indices_dim, fill_value=fill_value, out_dim=out_dim)
+    return counts
 
 
 def scatter_mean(
@@ -955,8 +1017,7 @@ def scatter_mean(
         and then we use :func:`rf.split_dims` afterwards.
     :return: [batch_dims..., out_dim(s)..., feature_dims...]
     """
-    ones = rf.ones(dims=indices.dims, dtype=source.dtype, device=source.device)
-    counts = rf.scatter(ones, indices=indices, indices_dim=indices_dim, fill_value=1, out_dim=out_dim)
+    counts = scatter_count(indices=indices, indices_dim=indices_dim, fill_value=1, out_dim=out_dim)
     y = scatter(source, indices=indices, indices_dim=indices_dim, fill_value=fill_value, out_dim=out_dim)
     return y / counts
 
@@ -965,22 +1026,22 @@ def scatter_argmax(
     source: Tensor,
     *,
     indices: Tensor,
-    indices_dim: Union[Dim, Sequence[Dim]],
+    indices_dim: Dim,
     invalid_idx: int = -1,
-    out_dim: Optional[Union[Dim, Sequence[Dim]]] = None,
+    out_dim: Optional[Dim] = None,
 ) -> Tensor:
     """
     Get the index in src which has the max value for each index in index.
 
     This is like :func:`scatter` with ``mode="argmax"``.
 
-    :param source: [batch_dims..., indices_dim(s)..., feature_dims...]
-    :param indices: [batch_dims..., indices_dim(s)...] -> out_dim
+    :param source: [batch_dims..., indices_dim..., feature_dims...]
+    :param indices: [batch_dims..., indices_dim...] -> out_dim
     :param indices_dim:
     :param invalid_idx: in case some of the output entries are never set (via ``indices``),
         this will be used as the value.
     :param out_dim: The indices target dim.
-    :return: [batch_dims..., out_dim(s)..., feature_dims...]
+    :return: [batch_dims..., out_dim..., feature_dims...] -> indices_dim
     """
     import numpy
 
@@ -988,9 +1049,15 @@ def scatter_argmax(
         assert isinstance(indices, Tensor) and indices.sparse_dim
         out_dim = indices.sparse_dim
 
+    source = source.copy_masked(_scatter_mask_value("max", source.dtype))
+    if _should_use_scatter_fixed_fill_value():
+        indices = indices.copy_masked(0)
+
     # For the shape comments, use [B,I,F] for shorter source, [B,O,F] for shorter output.
     # use scatter to get the max value for each index
-    out_max = rf.scatter(source, indices=indices, indices_dim=indices_dim, mode="max", out_dim=out_dim)  # [B,O,F]
+    out_max = rf.scatter(
+        source, indices=indices, indices_dim=indices_dim, mode="max", out_dim=out_dim, use_mask=False
+    )  # [B,O,F]
     src_max = rf.gather(out_max, indices=indices, axis=out_dim)  # [B,I,F] -> max value or invalid_value
 
     max_invalid_idx = numpy.iinfo(indices.dtype).max
@@ -1002,10 +1069,17 @@ def scatter_argmax(
     src_indices = rf.where(
         src_max_mask, rf.range_over_dim(indices_dim, dtype=indices.dtype, device=source.device), max_invalid_idx
     )  # [B,I,F] -> I
+    src_indices = src_indices.copy_masked(_scatter_mask_value("min", indices.dtype))
 
     # now scatter the min of src_indices into tensor
     out = rf.scatter(
-        src_indices, indices=indices, indices_dim=indices_dim, mode="min", fill_value=invalid_idx, out_dim=out_dim
+        src_indices,
+        indices=indices,
+        indices_dim=indices_dim,
+        mode="min",
+        fill_value=invalid_idx,
+        out_dim=out_dim,
+        use_mask=False,
     )  # [B,O,F] -> I or invalid_idx or max_invalid_idx
 
     if max_invalid_idx != invalid_idx:
@@ -1036,18 +1110,23 @@ def scatter_logsumexp(
         and then we use :func:`rf.split_dims` afterwards.
     :return: [batch_dims..., out_dim(s)..., feature_dims...]
     """
+    if fill_value is not None:
+        raise NotImplementedError(f"scatter_logsumexp: {fill_value=} not implemented")
     if not out_dim:
         assert isinstance(indices, Tensor) and indices.sparse_dim
         out_dim = indices.sparse_dim
+    indices_dim = indices_dim if isinstance(indices_dim, (list, tuple)) else [indices_dim]
+    if any([dim.need_masking() for dim in source.dims + indices.dims]):
+        source = source.copy_masked(float("-inf"))
+        if _should_use_scatter_fixed_fill_value():
+            indices = indices.copy_masked(0)
     with rf.stop_gradient_scope():
-        max_x = rf.scatter(source, indices=indices, indices_dim=indices_dim, mode="max", out_dim=out_dim)  # [D_out,...]
+        max_x = rf.scatter(
+            source, indices=indices, indices_dim=indices_dim, mode="max", out_dim=out_dim, use_mask=False
+        )  # [D_out,...]
         max_x_ = rf.gather(max_x, indices=indices, axis=out_dim)  # [D_src,...]
     src_ = rf.exp(source - max_x_)
-    if fill_value is not None:
-        fill_value = rf.exp(fill_value - max_x_)
-    tensor = rf.scatter(
-        src_, indices=indices, indices_dim=indices_dim, mode="sum", fill_value=fill_value, out_dim=out_dim
-    )
+    tensor = rf.scatter(src_, indices=indices, indices_dim=indices_dim, mode="sum", out_dim=out_dim, use_mask=False)
     tensor = rf.log(tensor)
     tensor = rf.where(rf.is_neg_infinite(max_x), rf.zeros((), dtype=source.dtype, device=source.device), tensor)
     tensor += max_x
@@ -1077,10 +1156,38 @@ def scatter_logmeanexp(
         and then we use :func:`rf.split_dims` afterwards.
     :return: [batch_dims..., out_dim(s)..., feature_dims...]
     """
-    ones = rf.ones(dims=indices.dims, dtype=source.dtype, device=source.device)
-    counts = rf.scatter(ones, indices=indices, indices_dim=indices_dim, fill_value=1, out_dim=out_dim)
+    counts = scatter_count(indices=indices, indices_dim=indices_dim, fill_value=1, out_dim=out_dim)
     y = scatter_logsumexp(source, indices=indices, indices_dim=indices_dim, fill_value=fill_value, out_dim=out_dim)
     return y - rf.log(counts)
+
+
+def _should_use_scatter_fixed_fill_value() -> bool:
+    """
+    :return: whether to use the new fixed masking for :func:`scatter` with custom fill values.
+
+    Check the global RETURNN config for the ``rf_use_consistent_same_padding``
+    on how we should handle the ``padding="same"`` case for convolution/pooling when there is striding.
+    If that is not specified, with behavior version >=24, we will use the new consistent same padding,
+    with behavior version <=23, we will not use it.
+
+    See issue `#1815 <https://github.com/rwth-i6/returnn/issues/1815>`__.
+    """
+    from returnn.config import get_global_config
+
+    config = get_global_config(raise_exception=False)
+    config_value = None
+    if config:
+        if "rf_scatter_use_fixed_masking" in config.typed_dict:
+            config_value = config.typed_dict["rf_scatter_use_fixed_masking"]
+            assert config_value is None or isinstance(config_value, bool)
+        elif "rf_scatter_use_fixed_masking" in config.dict:
+            config_value = config.bool("rf_scatter_use_fixed_masking", None)
+    if config_value is not None:
+        return config_value
+
+    from returnn.util.basic import BehaviorVersion
+
+    return BehaviorVersion.get() >= 25
 
 
 # noinspection PyShadowingBuiltins
