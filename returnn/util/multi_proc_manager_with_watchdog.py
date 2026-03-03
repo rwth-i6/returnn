@@ -47,10 +47,11 @@ def _manager_die_if_parent_dies(parent_pid: int) -> None:
         new_parent_pid = os.getppid()
         if new_parent_pid != parent_pid:
             print(
-                f"multiprocessing.Manager process ({os.getpid()}:"
+                f"multi_proc_manager_with_watchdog"
+                f" process ({os.getpid()}:"
                 f" parent process {parent_pid} is dead,"
                 f" new parent pid is {new_parent_pid},"
-                f" killing myself"
+                f" killing myself)"
             )
             os.kill(os.getpid(), signal.SIGTERM)
         time.sleep(0.1)
