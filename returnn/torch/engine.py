@@ -1455,13 +1455,19 @@ class Engine(EngineBase):
                         and self._forward_auto_split_batch_on_oom
                         and extern_data_util.raw_dict_can_split_batch(extern_data_raw)
                     ):
-                        help_on_torch_exception(exc, model=self._orig_model, always_direct_print=True)
+                        help_on_torch_exception(
+                            exc,
+                            step_idx=step_idx,
+                            model=self._orig_model,
+                            extern_data=extern_data,
+                            always_direct_print=True,
+                        )
                         util.traceback_clear_frames(exc.__traceback__)
                         diagnose_gpu.garbage_collect()
                         print(f"{report_prefix}, split step {step_idx} batch and try again...", file=log.v3)
                         data_loader.extend(extern_data_util.raw_dict_split_batch(extern_data_raw, splits=2))
                         continue
-                    help_on_torch_exception(exc, model=self._orig_model)
+                    help_on_torch_exception(exc, step_idx=step_idx, model=self._orig_model, extern_data=extern_data)
                     raise
                 ctx = rf.get_run_ctx()
                 ctx.check_outputs_complete()
