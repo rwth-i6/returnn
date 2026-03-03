@@ -20,5 +20,9 @@ extend-exclude = [
     ".github/workflows/_pytorch_collect_env.py",
 ]
 
+[tool.ruff.lint]
+# Disable fix for unused imports (`F401`).
+unfixable = ["F401"]
+
 [build-system]
 requires = ["setuptools", "numpy"]
