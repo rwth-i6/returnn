@@ -336,77 +336,83 @@ def debug_shell(user_ns, user_global_ns, traceback=None, execWrapper=None):
     :param execWrapper:
     :return: nothing
     """
-    ipshell = None
+    orig_excepthook = sys.excepthook
     try:
-        # noinspection PyPackageRequirements
-        import IPython
-
-        have_ipython = True
-    except ImportError:
-        have_ipython = False
-
-    if not ipshell and traceback and have_ipython:
-        # noinspection PyBroadException
+        ipshell = None
         try:
-            # noinspection PyPackageRequirements,PyUnresolvedReferences
-            from IPython.terminal.debugger import TerminalPdb
-
-            # noinspection PyPackageRequirements,PyUnresolvedReferences
-            from IPython.terminal.ipapp import TerminalIPythonApp
-
-            ipapp = TerminalIPythonApp.instance()
-            ipapp.interact = False  # Avoid output (banner, prints)
-            ipapp.initialize(argv=[])
-            def_colors = ipapp.shell.colors
-            pdb_obj = TerminalPdb(def_colors)
-            pdb_obj.botframe = None  # not sure. exception otherwise at quit
-
-            def ipshell():
-                """
-                Run the IPython shell.
-                """
-                pdb_obj.interaction(None, traceback)
-
-        except Exception:
-            print("IPython Pdb exception:")
-            better_exchook(*sys.exc_info(), autodebugshell=False, file=sys.stdout)
-
-    if not ipshell and have_ipython:
-        # noinspection PyBroadException
-        try:
-            # noinspection PyPackageRequirements,PyUnresolvedReferences
+            # noinspection PyPackageRequirements
             import IPython
 
-            # noinspection PyPackageRequirements,PyUnresolvedReferences
-            import IPython.terminal.embed
+            have_ipython = True
+        except ImportError:
+            have_ipython = False
 
-            class DummyMod:
-                """Dummy module"""
+        if not ipshell and traceback and have_ipython:
+            # noinspection PyBroadException
+            try:
+                # noinspection PyPackageRequirements,PyUnresolvedReferences
+                from IPython.terminal.debugger import TerminalPdb
 
-            module = DummyMod()
-            module.__dict__ = user_global_ns
-            module.__name__ = "_DummyMod"
-            if "__name__" not in user_ns:
-                user_ns = user_ns.copy()
-                user_ns["__name__"] = "_DummyUserNsMod"
-            ipshell = IPython.terminal.embed.InteractiveShellEmbed.instance(user_ns=user_ns, user_module=module)
-        except Exception:
-            print("IPython not available:")
-            better_exchook(*sys.exc_info(), autodebugshell=False, file=sys.stdout)
+                # noinspection PyPackageRequirements,PyUnresolvedReferences
+                from IPython.terminal.ipapp import TerminalIPythonApp
+
+                ipapp = TerminalIPythonApp.instance()
+                ipapp.interact = False  # Avoid output (banner, prints)
+                ipapp.initialize(argv=[])
+                def_colors = ipapp.shell.colors
+                pdb_obj = TerminalPdb(def_colors)
+                pdb_obj.botframe = None  # not sure. exception otherwise at quit
+
+                def ipshell():
+                    """
+                    Run the IPython shell.
+                    """
+                    pdb_obj.interaction(None, traceback)
+
+            except Exception:
+                print("IPython Pdb exception:")
+                better_exchook(*sys.exc_info(), autodebugshell=False, file=sys.stdout)
+
+        if not ipshell and have_ipython:
+            # noinspection PyBroadException
+            try:
+                # noinspection PyPackageRequirements,PyUnresolvedReferences
+                import IPython
+
+                # noinspection PyPackageRequirements,PyUnresolvedReferences
+                import IPython.terminal.embed
+
+                class DummyMod:
+                    """Dummy module"""
+
+                module = DummyMod()
+                module.__dict__ = user_global_ns
+                module.__name__ = "_DummyMod"
+                if "__name__" not in user_ns:
+                    user_ns = user_ns.copy()
+                    user_ns["__name__"] = "_DummyUserNsMod"
+                ipshell = IPython.terminal.embed.InteractiveShellEmbed(user_ns=user_ns, user_module=module)
+            except Exception:
+                print("IPython not available:")
+                better_exchook(*sys.exc_info(), autodebugshell=False, file=sys.stdout)
+            else:
+                if execWrapper:
+                    old = ipshell.run_code
+                    ipshell.run_code = lambda code: execWrapper(lambda: old(code))
+        if ipshell:
+            ipshell()
         else:
-            if execWrapper:
-                old = ipshell.run_code
-                ipshell.run_code = lambda code: execWrapper(lambda: old(code))
-    if ipshell:
-        ipshell()
-    else:
-        print("Use simple pdb debug shell:")
-        if traceback:
-            import pdb
+            print("Use simple pdb debug shell:")
+            if traceback:
+                import pdb
 
-            pdb.post_mortem(traceback)
-        else:
-            simple_debug_shell(user_global_ns, user_ns)
+                pdb.post_mortem(traceback)
+            else:
+                simple_debug_shell(user_global_ns, user_ns)
+
+    finally:
+        # Restore original sys.excepthook. IPython might have replaced it, and we don't want that.
+        sys.excepthook = orig_excepthook
 
 
 def output_limit():
