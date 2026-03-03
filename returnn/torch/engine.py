@@ -938,6 +938,10 @@ class Engine(EngineBase):
                 return
 
             while True:
+                # We are maybe trying again. Clear outputs/losses.
+                rf.get_run_ctx().outputs.data.clear()
+                rf.get_run_ctx().losses.clear()
+
                 try:
                     f(model=self._orig_model, extern_data=extern_data, **sentinel_kw)
                     r = self._hot_reloader.user_interaction(return_actions={"t": "try again", "c": "continue"})
