@@ -14,12 +14,16 @@ __all__ = [
     "HuggingFaceTokenizer",
 ]
 
-from typing import Optional, Union, Type, Callable, List, Dict
+from typing import TYPE_CHECKING, Optional, Union, Any, Type, Callable, List, Dict
+import os
 import sys
 import re
 import numpy
 
 from returnn.util.basic import NotSpecified
+
+if TYPE_CHECKING:
+    import transformers
 
 
 class Vocabulary:
@@ -702,23 +706,40 @@ class HuggingFaceTokenizer(Vocabulary):
     def __init__(
         self,
         *,
-        huggingface_repo_dir: str,
+        huggingface_repo_dir: Optional[str] = None,
+        tokenizer: Optional[transformers.PreTrainedTokenizerBase] = None,
         map_bos_to_eos: bool = False,
         text_preprocessing: Optional[Callable[[str], str]] = None,
         bpe_dropout: float = 0.0,
     ):
         """
         :param huggingface_repo_dir: the directory containing the `tokenizer_config.json` file.
+        :param tokenizer: if given, will use this tokenizer directly.
+            Otherwise, will load it from `huggingface_repo_dir`.
         :param map_bos_to_eos:
         :param text_preprocessing: applied in :func:`get_seq` (sentence -> ids)
         """
         import transformers  # noqa
 
-        # Make sure it is a string. (Could be e.g. Sis Path.)
-        huggingface_repo_dir = str(huggingface_repo_dir)
-        self._opts = {"huggingface_repo_dir": huggingface_repo_dir}
-        self._cache_key = huggingface_repo_dir
-        self.tokenizer = transformers.AutoTokenizer.from_pretrained(huggingface_repo_dir, trust_remote_code=True)
+        self._opts: Dict[str, Any] = {}
+        if tokenizer:
+            assert not huggingface_repo_dir, f"{self}: cannot specify both tokenizer and huggingface_repo_dir"
+            self._opts["tokenizer"] = tokenizer
+            self.tokenizer = tokenizer
+        elif huggingface_repo_dir:
+            # Make sure it is a string. (Could be e.g. Sis Path.)
+            huggingface_repo_dir = os.fspath(huggingface_repo_dir)
+            self._opts["huggingface_repo_dir"] = huggingface_repo_dir
+            self.tokenizer = transformers.AutoTokenizer.from_pretrained(huggingface_repo_dir, trust_remote_code=True)
+        else:
+            raise ValueError(f"{self}: either tokenizer or huggingface_repo_dir must be specified")
+        self._cache_key = tokenizer or huggingface_repo_dir
+        if map_bos_to_eos:
+            self._opts["map_bos_to_eos"] = map_bos_to_eos
+        if text_preprocessing:
+            self._opts["text_preprocessing"] = text_preprocessing
+        if bpe_dropout:
+            self._opts["bpe_dropout"] = bpe_dropout
         super().__init__(
             vocab_file=None,
             seq_postfix=None,
