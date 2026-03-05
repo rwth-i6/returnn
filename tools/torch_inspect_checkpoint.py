@@ -49,10 +49,17 @@ def main():
     arg_parser.add_argument("--mmap", action="store_true")
     args = arg_parser.parse_args()
 
-    kwargs = {}
-    if args.mmap:
-        kwargs["mmap"] = True
-    state = torch.load(args.checkpoint, map_location=args.device, **kwargs)
+    if args.checkpoint.endswith(".safetensors"):
+        assert not args.mmap, "mmap is not supported for safetensors"
+
+        from safetensors.torch import load_file as safetensors_load
+
+        state = safetensors_load(args.checkpoint, device=args.device)
+    else:
+        kwargs = {}
+        if args.mmap:
+            kwargs["mmap"] = True
+        state = torch.load(args.checkpoint, map_location=args.device, **kwargs)
     if args.key:
         assert isinstance(state, dict)
         if args.key not in state and "model" in state:
