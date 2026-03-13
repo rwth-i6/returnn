@@ -801,14 +801,7 @@ class HuggingFaceTokenizer(Vocabulary):
         :param label:
         :param default:
         """
-        res = self.tokenizer.convert_token_to_id(label)
-        if res == self.unknown_label_id or res < 0 or res is None:
-            # It could be that the label really is the unknown-label, or it could be that the label is unknown.
-            if label == self.id_to_label(self.unknown_label_id):
-                return self.unknown_label_id
-            if default is KeyError:
-                raise KeyError("label %r not found" % label)
-            return default
+        res = self.tokenizer.convert_tokens_to_ids(label)
         return res
 
     def get_seq(self, sentence: str) -> List[int]:
