@@ -108,7 +108,10 @@ def main():
 
             _run(*pip_install, f"torch=={args.torch}")
             _run(*pip_install, "onnx", "onnxruntime")
-            _run(*pip_install, "lovely_tensors")
+            # lovely-numpy==0.2.20, lovely-tensors==0.1.22 cause some issues:
+            # https://github.com/rwth-i6/returnn/issues/1819
+            # Maybe specifically with numpy==1.23.5?
+            _run(*pip_install, "lovely-numpy==0.2.18", "lovely-tensors==0.1.21")
 
             # Needed for some tests.
             # transformers 4.50 requires PyTorch >2.0, so stick to transformers 4.49 for now.
