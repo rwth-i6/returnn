@@ -7,6 +7,11 @@ using ``torch.autograd.graph.saved_tensors_hooks``
 and ``TorchDispatchMode``
 but also handling the RNG fork and reset in a similar way.
 
+See :class:`gradient_checkpoint_scope` as the main entry point
+with more documentation.
+
+See also the comments below on implementation details.
+
 See also :mod:`returnn.tf.util.gradient_checkpoint`:
 same API and logic in TF, although it heavily makes use
 of the TF computation graph, i.e. graph mode,
