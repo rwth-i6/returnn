@@ -9,7 +9,7 @@ Since `get_model(...)` can return either a torch.nn.Module or a rf.Module, both 
 `extern_data` defines the inputs.
   - It strips away all entries with available_for_inference=False.
   - Dynamic dimensions with dyn_size_ext being a scalar are excluded.
-  - If dynamic dims occur multiple times, only the first occurence is kept.
+  - If dynamic dims occur multiple times, only the first occurrence is kept.
     Note that the order depends on the order of the dict, as it is defined (not sorted alphabetically).
 
 `model_outputs` defines the output dimensions.
@@ -39,7 +39,7 @@ import os
 import _setup_returnn_env  # noqa
 from returnn.config import Config
 from returnn.log import log
-from returnn.tensor import TensorDict
+from returnn.tensor import Tensor, TensorDict
 
 # noinspection PyProtectedMember
 from returnn.torch.frontend.bridge import RFModuleAsPTModule
@@ -48,7 +48,6 @@ import returnn.util.basic as util
 from returnn.tensor.utils import tensor_dict_fill_random_numpy_
 from returnn.torch.data.tensor_utils import tensor_dict_numpy_to_torch_
 import returnn.__main__ as rnn
-
 
 config = None  # type: Optional[Config]
 
@@ -107,6 +106,7 @@ class ForwardModulePT(torch.nn.Module):
         """
         extern_data = self.extern_data.copy_template()
         extern_data.assign_from_raw_tensor_dict_(data, with_scalar_dyn_sizes=False, duplicate_dims_are_excluded=True)
+        _assign_scalar_dyn_dims(extern_data)
         self.forward_step_func(model=self.model, extern_data=extern_data)
         _check_matching_outputs()
         return rf.get_run_ctx().outputs.as_raw_tensor_dict(include_scalar_dyn_sizes=False)
@@ -134,6 +134,7 @@ class ForwardModuleRF(RFModuleAsPTModule):
         """
         extern_data = self.extern_data.copy_template()
         extern_data.assign_from_raw_tensor_dict_(data, with_scalar_dyn_sizes=False, duplicate_dims_are_excluded=True)
+        _assign_scalar_dyn_dims(extern_data)
         self.forward_step_func(model=self.rf_module, extern_data=extern_data)
         _check_matching_outputs()
         return rf.get_run_ctx().outputs.as_raw_tensor_dict(include_scalar_dyn_sizes=False)
@@ -278,6 +279,26 @@ def main():
         output_names=output_names,
         dynamic_axes=dynamic_axes,
     )
+
+
+def _assign_scalar_dyn_dims(extern_data: TensorDict):
+    for key, value in extern_data.data.items():
+        if value.raw_tensor is None:
+            continue
+        # noinspection PyProtectedMember
+        backend = value._raw_backend
+        assert backend is not None
+        raw_shape = backend.get_shape_tuple_raw(value.raw_tensor)
+        for axis, dim in enumerate(value.dims):
+            if dim.dyn_size_ext is None:
+                continue
+            if dim.dyn_size_ext.dims != ():
+                continue
+            if dim.dyn_size_ext.raw_tensor is not None:
+                continue
+            dim.dyn_size_ext.raw_tensor = backend.convert_to_tensor(
+                raw_shape[axis], dims=(), dtype=Tensor.size_dtype, device=rf.get_default_dim_size_device()
+            ).raw_tensor
 
 
 if __name__ == "__main__":
