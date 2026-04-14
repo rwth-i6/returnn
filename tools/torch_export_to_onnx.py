@@ -39,7 +39,7 @@ import os
 import _setup_returnn_env  # noqa
 from returnn.config import Config
 from returnn.log import log
-from returnn.tensor import Tensor, TensorDict
+from returnn.tensor import TensorDict
 
 # noinspection PyProtectedMember
 from returnn.torch.frontend.bridge import RFModuleAsPTModule
