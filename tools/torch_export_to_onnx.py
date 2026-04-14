@@ -8,7 +8,8 @@ Since `get_model(...)` can return either a torch.nn.Module or a rf.Module, both 
 
 `extern_data` defines the inputs.
   - It strips away all entries with available_for_inference=False.
-  - Dynamic dimensions with dyn_size_ext being a scalar are excluded.
+  - Dynamic dimensions with dyn_size_ext being a scalar are excluded,
+    as those can be inferred directly from the input shape.
   - If dynamic dims occur multiple times, only the first occurrence is kept.
     Note that the order depends on the order of the dict, as it is defined (not sorted alphabetically).
 
@@ -244,12 +245,13 @@ def main():
     for k, v in list(extern_data.data.items()) + list(model_outputs.data.items()):
         dynamic_axes[k] = {i: dim.name for i, dim in enumerate(v.dims) if dim.is_dynamic()}
         for i, dim in enumerate(v.dims):
-            if dim.dyn_size_ext is not None and dim.dyn_size_ext.dims == ():
+            if dim.dyn_size_ext is None:
                 continue
-            if dim.dyn_size_ext is not None:
-                dynamic_axes[f"{k}:size{i}"] = {
-                    j: dim_.name for j, dim_ in enumerate(dim.dyn_size_ext.dims) if dim_.is_dynamic()
-                }
+            if dim.dyn_size_ext.dims == ():  # we infer that in _assign_scalar_dyn_dims
+                continue
+            dynamic_axes[f"{k}:size{i}"] = {
+                j: dim_.name for j, dim_ in enumerate(dim.dyn_size_ext.dims) if dim_.is_dynamic()
+            }
 
     if args.input_names:
         input_names = args.input_names.split(",")
