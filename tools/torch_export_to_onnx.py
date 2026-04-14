@@ -296,8 +296,11 @@ def _assign_scalar_dyn_dims(extern_data: TensorDict):
                 continue
             if dim.dyn_size_ext.raw_tensor is not None:
                 continue
-            dim.dyn_size_ext.raw_tensor = backend.convert_to_tensor(
-                raw_shape[axis], dims=(), dtype=Tensor.size_dtype, device=rf.get_default_dim_size_device()
+            dim.dyn_size_ext.raw_tensor = rf.cast(
+                rf.copy_to_device(
+                    rf.convert_to_tensor(raw_shape[axis], _backend=backend), rf.get_default_dim_size_device()
+                ),
+                dim.dyn_size_ext.dtype,
             ).raw_tensor
 
 
