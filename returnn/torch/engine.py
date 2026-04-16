@@ -411,7 +411,10 @@ class Engine(EngineBase):
         total_data_size_padded = NumbersDict()
 
         prof = _opt_torch_profiler_from_opts(self.config.opt_typed_value("torch_profile"))
-        if prof:
+        is_main_worker_or_zero_rank = self._torch_distributed_ctx is None or (
+            self._torch_distributed_ctx is not None and self._torch_distributed_ctx.local_rank() == 0
+        )
+        if prof and is_main_worker_or_zero_rank:
             prof.__enter__()
 
         report_prefix = f"ep {self.epoch} train"
@@ -595,16 +598,16 @@ class Engine(EngineBase):
                     global_train_step=self.global_train_step, epoch=self.epoch, epoch_continuous=epoch_continuous
                 )
 
-                if prof:
+                if prof and is_main_worker_or_zero_rank:
                     prof.step()
 
         except Exception as exc:
-            if prof:
+            if prof and is_main_worker_or_zero_rank:
                 prof.__exit__(type(exc), exc, exc.__traceback__)
             help_on_torch_exception(exc, step_idx=step_idx, model=self._orig_model, extern_data=extern_data)
             raise
 
-        if prof:
+        if prof and is_main_worker_or_zero_rank:
             prof.__exit__(None, None, None)
 
         elapsed = time.monotonic() - epoch_start_time
