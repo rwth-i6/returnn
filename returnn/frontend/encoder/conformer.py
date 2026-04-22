@@ -149,6 +149,14 @@ class ConformerConvSubsample(ISeqDownsamplingEncoder):
         self._final_second_spatial_dim = second_spatial_dim
         self.out_dim = second_spatial_dim * prev_out_dim
 
+        # Downsampling factor along the first (time) spatial dimension.
+        # Product of all temporal strides and temporal pool sizes.
+        self.downsample_factor = 1
+        for i, conv_layer in enumerate(self.conv_layers):
+            self.downsample_factor *= conv_layer.strides[0] if conv_layer.strides is not None else 1
+            if self.pool_sizes and i < len(self.pool_sizes):
+                self.downsample_factor *= self.pool_sizes[i][0]
+
     def __call__(self, source: Tensor, *, in_spatial_dim: Dim) -> Tuple[Tensor, Dim]:
         """forward"""
         assert self.in_dim in source.dims
