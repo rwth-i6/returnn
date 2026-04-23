@@ -4,11 +4,13 @@ Native code as Python extension module for the RETURNN frontend, including tenso
 
 from __future__ import annotations
 
+from typing import Optional
 import os
 import hashlib
 from glob import glob
 import textwrap
 from returnn.util.py_ext_mod_compiler import PyExtModCompiler
+from returnn.util.basic import to_bool
 
 _module = None
 _my_dir = os.path.dirname(os.path.abspath(__file__))
@@ -67,17 +69,39 @@ def _code_hash_md5(filename: str) -> str:
 
 
 _is_set_up = False
-_enabled = True
+_enabled: Optional[bool] = None
 
 
 def set_enabled(enabled: bool):
     """
     Enable or disable the native code setup.
+    Overwrites the global setting.
 
     :param enabled:
     """
     global _enabled
     _enabled = enabled
+
+
+def is_enabled() -> bool:
+    """
+    If :func:`set_enabled` was called, returns that.
+    Otherwise, check env var, global config.
+    Otherwise, default to True.
+    """
+    if _enabled is not None:
+        return _enabled
+    if os.environ.get("RETURNN_FRONTEND_NATIVE_OPT"):
+        return to_bool(os.environ["RETURNN_FRONTEND_NATIVE_OPT"])
+
+    from returnn.config import get_global_config
+
+    config = get_global_config(raise_exception=False)
+    if config and config.has("rf_native_opt"):
+        res = config.bool("rf_native_opt", None)
+        if res is not None:
+            return bool(res)
+    return True
 
 
 def is_set_up() -> bool:
@@ -94,7 +118,7 @@ def setup():
     global _is_set_up
     if _is_set_up:
         return
-    if not _enabled:
+    if not is_enabled():
         return
     _is_set_up = True  # only try once
 
