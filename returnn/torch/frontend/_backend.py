@@ -1036,9 +1036,15 @@ class TorchBackend(Backend[torch.Tensor]):
                 elif len(raw_tensor.shape) - len(shape) == 1:
                     # if we need to flatten exactly one pair of adjacent dimensions, we can do that with torch.flatten
                     dims_to_flatten = [i for i in range(len(raw_tensor.shape)) if raw_tensor.shape[i] not in shape]
-                    assert len(dims_to_flatten) == 2 and abs(dims_to_flatten[0] - dims_to_flatten[1]) == 1, "Only one pair of adjacent dimensions can be flattened"
-                    flattened_raw_tensor = torch.flatten(raw_tensor, start_dim=dims_to_flatten[0], end_dim=dims_to_flatten[1])
-                    assert list(flattened_raw_tensor.shape) == list(shape), f"After flattening dimensions {dims_to_flatten}, expected shape {shape}, but got {flattened_raw_tensor.shape}"
+                    assert len(dims_to_flatten) == 2 and abs(dims_to_flatten[0] - dims_to_flatten[1]) == 1, (
+                        "Only one pair of adjacent dimensions can be flattened"
+                    )
+                    flattened_raw_tensor = torch.flatten(
+                        raw_tensor, start_dim=dims_to_flatten[0], end_dim=dims_to_flatten[1]
+                    )
+                    assert list(flattened_raw_tensor.shape) == list(shape), (
+                        f"After flattening dimensions {dims_to_flatten}, expected shape {shape}, but got {flattened_raw_tensor.shape}"
+                    )
                     return flattened_raw_tensor
                 elif len(raw_tensor.shape) - len(shape) == -1:
                     # we need to split one dimension into two which are both passed as tensors
@@ -1093,12 +1099,7 @@ class TorchBackend(Backend[torch.Tensor]):
             if isinstance(value, (bool, int, float, bool, complex, numpy.number)):
                 if torch.onnx.is_in_onnx_export() and isinstance(value, bool):
                     # torch.onnx.export does not support passing bool values to torch.full
-                    value = torch.full(
-                        (),
-                        float(value),
-                        dtype=torch.float32,
-                        device=device or rf.get_default_device()
-                    )
+                    value = torch.full((), float(value), dtype=torch.float32, device=device or rf.get_default_device())
                     value = value.to(TorchBackend.as_dtype_raw(dtype))
                 else:
                     # torch.full avoids a device sync.
@@ -1641,7 +1642,9 @@ class TorchBackend(Backend[torch.Tensor]):
 
                 raw_result = torch.bmm(a_raw, b_raw)
 
-            raw_result = TorchBackend.reshape_raw(raw_result, common_axes_shape + a_unique_axes_shape + b_unique_axes_shape)
+            raw_result = TorchBackend.reshape_raw(
+                raw_result, common_axes_shape + a_unique_axes_shape + b_unique_axes_shape
+            )
 
         a_unique_dims = [a_dims[i] for i in a_unique_axes]
         b_unique_dims = [b_dims[i] for i in b_unique_axes]
@@ -2488,7 +2491,11 @@ class TorchBackend(Backend[torch.Tensor]):
                 center=False,
                 return_complex=False,
             )
-            y = Tensor("stft", dims=batch_dims + [out_dim, out_spatial_dim, Dim(2, name="real_imag")], dtype=TorchBackend.get_dtype_name_raw(y_raw))
+            y = Tensor(
+                "stft",
+                dims=batch_dims + [out_dim, out_spatial_dim, Dim(2, name="real_imag")],
+                dtype=TorchBackend.get_dtype_name_raw(y_raw),
+            )
             y.feature_dim = out_dim
             y.raw_tensor = TorchBackend.reshape_raw(y_raw, [d.get_dim_value() for d in y.dims])
         else:
@@ -2503,7 +2510,9 @@ class TorchBackend(Backend[torch.Tensor]):
                 center=False,
                 return_complex=True,
             )
-            y = Tensor("stft", dims=batch_dims + [out_dim, out_spatial_dim], dtype=TorchBackend.get_dtype_name_raw(y_raw))
+            y = Tensor(
+                "stft", dims=batch_dims + [out_dim, out_spatial_dim], dtype=TorchBackend.get_dtype_name_raw(y_raw)
+            )
             y.feature_dim = out_dim
             y.raw_tensor = TorchBackend.reshape_raw(y_raw, [d.get_dim_value() for d in y.dims])
         return y
