@@ -410,11 +410,10 @@ class Engine(EngineBase):
         total_data_size_packed = NumbersDict()
         total_data_size_padded = NumbersDict()
 
-        prof = _opt_torch_profiler_from_opts(self.config.opt_typed_value("torch_profile"))
-        is_main_worker_or_rank_zero = self._torch_distributed_ctx is None or (
-            self._torch_distributed_ctx is not None and self._torch_distributed_ctx.local_rank() == 0
+        prof = _opt_torch_profiler_from_opts(
+            opts=self.config.opt_typed_value("torch_profile"), torch_distributed_ctx=self._torch_distributed_ctx
         )
-        if prof and is_main_worker_or_rank_zero:
+        if prof:
             prof.__enter__()
 
         report_prefix = f"ep {self.epoch} train"
@@ -1825,8 +1824,12 @@ class _TorchProfiler:
 
 
 def _opt_torch_profiler_from_opts(
-    opts: Union[None, int, bool, str, Dict[str, Any]],
+    opts: Union[None, int, bool, str, Dict[str, Any]], torch_distributed_ctx: Optional[DistributedContext]
 ) -> Optional[_TorchProfiler]:
+    # Only profile worker #0: https://github.com/rwth-i6/returnn/issues/1821
+    if torch_distributed_ctx is None or (torch_distributed_ctx is not None and torch_distributed_ctx.local_rank() == 0):
+        return None
+
     if isinstance(opts, str):
         from returnn.util.basic import to_bool
 
