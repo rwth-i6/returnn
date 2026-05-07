@@ -597,16 +597,16 @@ class Engine(EngineBase):
                     global_train_step=self.global_train_step, epoch=self.epoch, epoch_continuous=epoch_continuous
                 )
 
-                if prof and is_main_worker_or_rank_zero:
+                if prof:
                     prof.step()
 
         except Exception as exc:
-            if prof and is_main_worker_or_rank_zero:
+            if prof:
                 prof.__exit__(type(exc), exc, exc.__traceback__)
             help_on_torch_exception(exc, step_idx=step_idx, model=self._orig_model, extern_data=extern_data)
             raise
 
-        if prof and is_main_worker_or_rank_zero:
+        if prof:
             prof.__exit__(None, None, None)
 
         elapsed = time.monotonic() - epoch_start_time
