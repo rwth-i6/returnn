@@ -383,7 +383,8 @@ class TorchBackend(Backend[torch.Tensor]):
             out.feature_dim = source.feature_dim
         out_raw = torch.unsqueeze(source.raw_tensor, axis)
         if dim.is_dynamic() or dim.dimension != 1:
-            out_raw = torch.tile(out_raw, [dim.get_dim_value() if d == dim else 1 for d in out.dims])
+            # expand creates a non-contiguous view (stride=0) instead of a full copy via tile.
+            out_raw = out_raw.expand([dim.get_dim_value() if d == dim else -1 for d in out.dims])
         out.raw_tensor = out_raw
         return out
 
