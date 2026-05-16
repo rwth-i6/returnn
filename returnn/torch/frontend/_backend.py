@@ -1103,7 +1103,7 @@ class TorchBackend(Backend[torch.Tensor]):
         if isinstance(indices, Tensor):
             indices: Tensor[torch.Tensor]
         elif isinstance(indices, int):
-            if indices == 0:  # small opt for this case, as we can simplify a bit, and clip_to_valid is not needed
+            if indices == 0 or not clip_to_valid:  # fast path (no clip needed)
                 out = Tensor(
                     "gather",
                     dims=source.dims[:axis_int] + source.dims[axis_int + 1 :],
