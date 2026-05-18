@@ -1447,6 +1447,7 @@ class Backend(Generic[T]):
         :param feat_dim: the feature dimension RoPE is applied along
         :return: tensor with the same dims and dtype as *x*
         """
+        # noinspection PyProtectedMember
         from returnn.frontend.attention import _apply_rope_real
 
         return _apply_rope_real(x, pos_enc, feat_dim)
