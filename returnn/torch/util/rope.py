@@ -25,11 +25,9 @@ def apply_rope(x: torch.Tensor, pos_enc: torch.Tensor) -> torch.Tensor:
     """
     feat_dim = x.shape[-1]
     half = feat_dim // 2
-    pe_sin = pos_enc[..., :half]
-    pe_cos = pos_enc[..., half:]
+    pe_sin, pe_cos = torch.split(pos_enc, half, dim=-1)
     x_pairs = x.reshape(*x.shape[:-1], half, 2)
-    x_r = x_pairs[..., 0]
-    x_i = x_pairs[..., 1]
+    x_r, x_i = torch.unbind(x_pairs, dim=-1)
     out_r = x_r * pe_cos - x_i * pe_sin
     out_i = x_r * pe_sin + x_i * pe_cos
     return torch.stack([out_r, out_i], dim=-1).reshape(x.shape)
