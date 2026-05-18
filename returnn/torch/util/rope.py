@@ -23,8 +23,8 @@ def apply_rope(x: torch.Tensor, pos_enc: torch.Tensor) -> torch.Tensor:
         first ``D/2`` entries along last axis are sin, second ``D/2`` are cos
     :return: rotated tensor with the same shape and dtype as *x*
     """
-    D = x.shape[-1]
-    half = D // 2
+    feat_dim = x.shape[-1]
+    half = feat_dim // 2
     pe_sin = pos_enc[..., :half]
     pe_cos = pos_enc[..., half:]
     x_pairs = x.reshape(*x.shape[:-1], half, 2)
