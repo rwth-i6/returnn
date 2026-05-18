@@ -35,10 +35,12 @@ def apply_rope(x: torch.Tensor, pos_enc: torch.Tensor) -> torch.Tensor:
 
 # Wrap with torch.compile to fuse all ops into a single kernel launch, eliminating intermediate allocations.
 # dynamic=True avoids recompilation for each new (batch_size, seq_len, …) combination;
-# different numbers of input dimensions still produce separate traces, but that is O(ndim) compilations at most.
-try:
-    apply_rope = torch.compile(apply_rope, dynamic=True)
-except Exception as e:
-    import warnings
+# but it is only reliable from PyTorch 2.1 onwards.
+_torch_version = tuple(int(x) for x in torch.__version__.split(".")[:2] if x.isdigit())
+if _torch_version >= (2, 1):
+    try:
+        apply_rope = torch.compile(apply_rope, dynamic=True)
+    except Exception as e:
+        import warnings
 
-    warnings.warn(f"RETURNN: torch.compile for apply_rope failed: {e}", stacklevel=1)
+        warnings.warn(f"RETURNN: torch.compile for apply_rope failed: {e}", stacklevel=1)
