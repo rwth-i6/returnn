@@ -1369,6 +1369,48 @@ class Backend(Generic[T]):
         """
         raise NotImplementedError
 
+    @staticmethod
+    def real_as_complex(x: Tensor, *, pair_dim: Dim) -> Tensor:
+        """
+        Interpret a real tensor with a size-2 pair_dim as a complex tensor.
+
+        pair_dim must have static size 2 (index 0 = real part, index 1 = imaginary part).
+        The dimension is removed from the output and the dtype changes:
+        ``float32`` -> ``complex64``, ``float64`` -> ``complex128``.
+
+        The inverse is :func:`complex_as_real`.
+
+        :param x: input real tensor with *pair_dim* as one of its axes
+        :param pair_dim: the size-2 dimension holding (real, imag) pairs
+        :return: complex tensor with the same dims as *x* minus *pair_dim*
+        """
+        raise NotImplementedError
+
+    @staticmethod
+    def complex_as_real(x: Tensor, *, out_dim: Optional[Dim] = None) -> Tuple[Tensor, Dim]:
+        """
+        Interpret a complex tensor as a real tensor with an appended size-2 dimension.
+
+        Inverse of :func:`real_as_complex`.
+
+        :param x: complex tensor (dtype ``complex64`` or ``complex128``)
+        :param out_dim: optional Dim to use for the new size-2 (real/imag) dimension.
+            If ``None``, a fresh ``Dim(2, name="real_imag")`` is created.
+        :return: (real_tensor, pair_dim). real tensor with *pair_dim* as the last axis
+        """
+        raise NotImplementedError
+
+    @staticmethod
+    def make_complex(real: Tensor, imag: Tensor) -> Tensor:
+        """
+        Construct a complex tensor from separate real and imaginary tensors.
+
+        :param real: real part; dtype must be ``float32`` or ``float64``
+        :param imag: imaginary part; same shape and dtype as *real*
+        :return: complex tensor; dtype ``complex64`` (float32 inputs) or ``complex128`` (float64)
+        """
+        raise NotImplementedError
+
     # For eager-based backends, this is a reasonable default implementation and type.
     TensorArrayType = List[Tensor]
 

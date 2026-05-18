@@ -1487,6 +1487,46 @@ class TorchBackend(Backend[torch.Tensor]):
         return out
 
     @staticmethod
+    def real_as_complex(x: Tensor, *, pair_dim: Dim) -> Tensor:
+        """real as complex"""
+        pair_axis = x.dims.index(pair_dim)
+        x_raw = x.raw_tensor
+        if pair_axis != len(x.dims) - 1:
+            x_raw = x_raw.movedim(pair_axis, -1)
+        strides = x_raw.stride()
+        if strides[-1] != 1 or any(s % 2 != 0 for s in strides[:-1]):
+            x_raw = x_raw.contiguous()
+        out_raw = torch.view_as_complex(x_raw)
+        out_dims = tuple(d for i, d in enumerate(x.dims) if i != pair_axis)
+        out_dtype = "complex64" if x.dtype == "float32" else "complex128"
+        out = Tensor("real_as_complex", dims=out_dims, dtype=out_dtype)
+        out.raw_tensor = out_raw
+        return out
+
+    @staticmethod
+    def complex_as_real(x: Tensor, *, out_dim: Optional[Dim] = None) -> Tuple[Tensor, Dim]:
+        """complex as real. call torch.view_as_real"""
+        if out_dim is None:
+            out_dim = Dim(2, name="real_imag")
+        out_raw = torch.view_as_real(x.raw_tensor)
+        out_dims = x.dims + (out_dim,)
+        out_dtype = "float32" if x.dtype == "complex64" else "float64"
+        out = Tensor("complex_as_real", dims=out_dims, dtype=out_dtype)
+        out.raw_tensor = out_raw
+        return out, out_dim
+
+    @staticmethod
+    def make_complex(real: Tensor, imag: Tensor) -> Tensor:
+        """make complex"""
+        out = real.copy_template("make_complex")
+        out.dtype = "complex64" if real.dtype == "float32" else "complex128"
+        out.raw_tensor = torch.complex(
+            real.copy_compatible_to_dims_raw(out.dims),
+            imag.copy_compatible_to_dims_raw(out.dims),
+        )
+        return out
+
+    @staticmethod
     def matmul(a: _TT, b: _TT, *, reduce: Union[Dim, Sequence[Dim]], use_mask: bool = True) -> _TT:
         """
         batched matmul of a and b, see base class doc string

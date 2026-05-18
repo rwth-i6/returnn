@@ -59,6 +59,9 @@ __all__ = [
     "top_p_mask",
     "repeat",
     "expand_make_non_empty",
+    "real_as_complex",
+    "complex_as_real",
+    "make_complex",
 ]
 
 
@@ -1532,3 +1535,66 @@ def expand_make_non_empty(source: Tensor, *, axis: Dim, out_dim: Optional[Dim] =
     source, (new_axis,) = rf.pad(source, axes=[axis], padding=[(0, 1)], mode="constant", value=0)
     source, new_axis = rf.slice(source, axis=new_axis, size=rf.maximum(axis.get_size_tensor(), 1), out_dim=out_dim)
     return source, new_axis
+
+
+def real_as_complex(x: Tensor, *, pair_dim: Dim) -> Tensor:
+    """
+    Interpret a real tensor with a size-2 *pair_dim* as a complex tensor.
+
+    *pair_dim* must have static size 2 (index 0 = real part, index 1 = imaginary part).
+    The dimension is removed from the output and the dtype changes:
+    ``float32`` -> ``complex64``, ``float64`` -> ``complex128``.
+
+    The result may or may not be a view of the input memory depending on the backend
+    and memory layout (e.g. the PyTorch backend calls ``torch.view_as_complex``
+    but may copy first to ensure the required memory layout).
+
+    The inverse is :func:`complex_as_real`.
+
+    Example::
+
+        d2 = Dim(2, name="complex")
+        x_pairs = rf.split_dims(x, axis=feat_dim, dims=(feat_half_dim, d2))  # [..., feat_half, 2]
+        x_c = rf.real_as_complex(x_pairs, pair_dim=d2)  # [..., feat_half], dtype complex64
+
+    :param x: real tensor (dtype float32 or float64) with *pair_dim* as one of its axes
+    :param pair_dim: size-2 dimension holding (real, imag) pairs
+    :return: complex tensor with the same dims as *x* minus *pair_dim*
+    """
+    # noinspection PyProtectedMember
+    return x._raw_backend.real_as_complex(x, pair_dim=pair_dim)
+
+
+def complex_as_real(x: Tensor, *, out_dim: Optional[Dim] = None) -> Tuple[Tensor, Dim]:
+    """
+    Interpret a complex tensor as a real tensor with a new size-2 pair dimension.
+
+    The pair dimension is appended as the last axis of the result.
+    Inverse of :func:`real_as_complex`.
+
+    Example::
+
+        result_pairs, d2 = rf.complex_as_real(x_c)  # x_c complex64 → result_pairs float32, d2 size 2
+
+    :param x: complex tensor (dtype complex64 or complex128)
+    :param out_dim: optional Dim for the new size-2 dimension; a fresh one is created if not given
+    :return: (real_tensor, pair_dim). real tensor with *pair_dim* appended as the last axis
+    """
+    # noinspection PyProtectedMember
+    return x._raw_backend.complex_as_real(x, out_dim=out_dim)
+
+
+def make_complex(real: Tensor, imag: Tensor) -> Tensor:
+    """
+    Construct a complex tensor from separate real and imaginary part tensors.
+
+    Example::
+
+        pe_c = rf.make_complex(pe_cos, pe_sin)  # → complex64, same dims as pe_cos/pe_sin
+
+    :param real: real part; dtype float32 or float64
+    :param imag: imaginary part; compatible dtype with *real*
+    :return: complex tensor with merged dims; dtype complex64 (float32) or complex128 (float64)
+    """
+    # noinspection PyProtectedMember
+    return real._raw_backend.make_complex(real, imag)
