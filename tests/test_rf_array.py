@@ -714,6 +714,26 @@ def test_stack():
     assert out.raw_tensor.tolist() == [[0, 1, 2, 3, 4], [0, 1, 2, 3, 4], [0, 1, 2, 3, 4]]
 
 
+def test_unstack():
+    batch_dim_ = Dim(3, name="batch")
+    time_dim = Dim(5, name="time")
+
+    # noinspection PyShadowingNames,PyUnusedLocal
+    def _forward_step(*, model: rf.Module, extern_data: TensorDict):
+        seq = rf.range_over_dim(time_dim)  # [T]
+        stacked, out_dim = rf.stack([seq, seq, seq], out_dim=batch_dim_)  # [B,T]
+        parts = rf.unstack(stacked, axis=out_dim)  # 3 x [T]
+        assert len(parts) == 3
+        for part in parts:
+            assert part.dims == (time_dim,)
+        parts[0].mark_as_default_output(shape=(time_dim,))
+
+    out = run_model(TensorDict(), lambda *, epoch, step: rf.Module(), _forward_step, test_tensorflow=False)
+    out = out["output"]
+    assert out.dims == (time_dim,)
+    assert out.raw_tensor.tolist() == [0, 1, 2, 3, 4]
+
+
 def test_gather():
     time_dim = Dim(Tensor("time", [batch_dim], dtype="int32"))
     in_dim = Dim(7, name="in")
