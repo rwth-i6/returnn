@@ -560,6 +560,18 @@ class TorchBackend(Backend[torch.Tensor]):
         out.raw_tensor = torch.stack([s.copy_compatible_to_dims_raw(out_dims[1:]) for s in sources], dim=0)
         return out
 
+    @staticmethod
+    def unstack(source: Tensor, *, axis: Dim) -> Tuple[Tensor, ...]:
+        """unstack via torch.unbind"""
+        axis_int = source.dims.index(axis)
+        template = source.copy_template_excluding_axis(axis_int)
+        result = []
+        for raw in torch.unbind(source.raw_tensor, dim=axis_int):
+            out = template.copy_template()
+            out.raw_tensor = raw
+            result.append(out)
+        return tuple(result)
+
     _ActivationFuncMapping = {"log_sigmoid": torch.nn.functional.logsigmoid}
 
     @staticmethod

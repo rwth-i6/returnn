@@ -385,8 +385,7 @@ def _apply_rope_real(x: Tensor, pos_enc: Tensor, feat_dim: Dim) -> Tensor:
     # pe_imag = sin, pe_real = cos
     d2 = Dim(2, name="complex")
     x = rf.split_dims(x, axis=feat_dim, dims=(feat_half_dim, d2))  # [...,T,D/2,2]
-    x_real = rf.gather(x, indices=0, axis=d2)
-    x_imag = rf.gather(x, indices=1, axis=d2)
+    x_real, x_imag = rf.unstack(x, axis=d2)
     x_real_ = x_real * pe_real - x_imag * pe_imag
     x_imag_ = x_real * pe_imag + x_imag * pe_real
     x_, _ = rf.stack((x_real_, x_imag_), out_dim=d2)  # [...,T,D/2,2]

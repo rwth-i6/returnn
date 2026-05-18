@@ -34,6 +34,7 @@ __all__ = [
     "pad",
     "cum_concat_step",
     "stack",
+    "unstack",
     "masked_select",
     "masked_scatter",
     "sequence_mask",
@@ -282,6 +283,7 @@ def split(source: Tensor, *, axis: Dim, out_dims: Sequence[Dim]) -> Tuple[Tensor
     """
     Split the input on the specified axis (by default feature).
     Basically a wrapper around tf.split.
+    Also see :func:`unstack`.
 
     :param source: {..., axis}
     :param axis: some static axis
@@ -653,6 +655,24 @@ def stack(sources: Sequence[Tensor], *, out_dim: Optional[Dim] = None) -> Tuple[
         out_dim = Dim(len(sources), name="stack")
     # noinspection PyProtectedMember
     return sources[0]._raw_backend.stack(sources, out_dim=out_dim), out_dim
+
+
+def unstack(source: Tensor, *, axis: Dim) -> Tuple[Tensor, ...]:
+    """
+    Unstack (unbind) the source along the given axis.
+    Inverse of :func:`stack`.
+
+    The *axis* is removed from every output tensor.
+    Similar to :func:`split` but the axis disappears instead of being replaced by smaller dims.
+
+    :param source: tensor containing *axis*
+    :param axis: static axis to unstack; ``axis.dimension`` must be known
+    :return: tuple of ``axis.dimension`` tensors, each with the same shape as *source* minus *axis*
+    """
+    if axis.dimension is None:
+        raise ValueError(f"unstack: axis {axis} must be static (known dimension)")
+    # noinspection PyProtectedMember
+    return source._raw_backend.unstack(source, axis=axis)
 
 
 def masked_select(

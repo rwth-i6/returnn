@@ -523,6 +523,23 @@ class Backend(Generic[T]):
         """
         raise NotImplementedError
 
+    @staticmethod
+    def unstack(source: Tensor, *, axis: Dim) -> Tuple[Tensor, ...]:
+        """
+        Unstack the source along the given axis.
+        Inverse of :func:`stack`.
+
+        Default: implemented via :func:`gather` with scalar int indices.
+        Backends should override with a more efficient implementation
+        (e.g. :func:`torch.unbind`) whose backward is a simple concatenation
+        rather than scatter_add.
+
+        :param source: tensor containing *axis*
+        :param axis: static axis to unstack
+        :return: tuple of ``axis.dimension`` tensors, each without *axis*
+        """
+        return tuple(rf.gather(source, indices=i, axis=axis) for i in range(axis.dimension))
+
     # Restrict the possible activation function names,
     # to not get unexpected behavior,
     # or unwanted incompatibilities.
