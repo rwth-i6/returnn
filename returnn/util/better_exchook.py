@@ -342,7 +342,7 @@ def simple_debug_shell(globals, locals):
 
 
 # keep non-PEP8 argument name for compatibility
-# noinspection PyPep8Naming
+# noinspection PyPep8Naming,PyShadowingNames
 def debug_shell(user_ns, user_global_ns, traceback=None, execWrapper=None):
     """
     Spawns some interactive shell. Tries to use IPython if available.
