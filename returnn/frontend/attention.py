@@ -357,10 +357,28 @@ class RotaryPosCausalSelfAttention(CausalSelfAttention):
 
 def _apply_rope(x: Tensor, pos_enc: Tensor, feat_dim: Dim) -> Tensor:
     """
+    Apply Rotary Position Embedding (RoPE) to *x* using *pos_enc*.
+
     :param x: [...,T,D] or [...,D]
-    :param pos_enc: [T,D] or [D]
-    :param feat_dim: D
+    :param pos_enc: [T,D] or [D]; sin in the first D/2 entries, cos in the second half
+    :param feat_dim: D, the feature dimension along which RoPE is applied
     :return: [...,T,D] or [...,D]
+    """
+    # noinspection PyProtectedMember
+    return x._raw_backend.apply_rope(x, pos_enc, feat_dim)
+
+
+def _apply_rope_real(x: Tensor, pos_enc: Tensor, feat_dim: Dim) -> Tensor:
+    """
+    Backend-agnostic (plain RF) RoPE implementation.
+
+    Used as the default in :class:`returnn.frontend._backend.Backend`
+    and as a reference implementation for testing backend overrides.
+
+    :param x: see :func:`_apply_rope`
+    :param pos_enc: see :func:`_apply_rope`
+    :param feat_dim: see :func:`_apply_rope`
+    :return: see :func:`_apply_rope`
     """
     feat_half_dim = feat_dim.div_left(2)
     pe_imag, pe_real = rf.split(pos_enc, axis=feat_dim, out_dims=[feat_half_dim] * 2)  # [T,D/2]

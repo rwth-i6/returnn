@@ -1411,6 +1411,29 @@ class Backend(Generic[T]):
         """
         raise NotImplementedError
 
+    @staticmethod
+    def apply_rope(x: Tensor, pos_enc: Tensor, feat_dim: Dim) -> Tensor:
+        """
+        Apply Rotary Position Embedding (RoPE) to *x* using *pos_enc*.
+
+        The default implementation uses the plain RF reference implementation
+        :func:`returnn.frontend.attention._apply_rope_real`, which works for any backend.
+
+        Backends can override this to provide a more efficient implementation.
+        For example the PyTorch backend wraps the same algorithm with
+        ``torch.compile`` to fuse kernel launches, and a custom CUDA kernel could
+        be dropped in as another override.
+
+        :param x: input tensor [..., feat_dim]; any dtype
+        :param pos_enc: positional encoding [..., feat_dim];
+            first half contains sin values, second half cos values
+        :param feat_dim: the feature dimension RoPE is applied along
+        :return: tensor with the same dims and dtype as *x*
+        """
+        from returnn.frontend.attention import _apply_rope_real
+
+        return _apply_rope_real(x, pos_enc, feat_dim)
+
     # For eager-based backends, this is a reasonable default implementation and type.
     TensorArrayType = List[Tensor]
 

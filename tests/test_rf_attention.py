@@ -266,6 +266,45 @@ def test_rotary_embedding():
     torch.testing.assert_allclose(out_rf_cos.raw_tensor, out_hf_cos)
 
 
+def test_apply_rope():
+    """Check that the torch backend's apply_rope matches the reference :func:`_apply_rope_real`."""
+    import torch
+
+    # noinspection PyProtectedMember
+    from returnn.frontend.attention import _apply_rope, _apply_rope_real
+
+    rf.select_backend_torch()
+    rf.set_random_seed(42)
+
+    batch_dim_ = Dim(3, name="batch")
+    time_dim = Dim(14, name="time")
+    heads_dim = Dim(4, name="heads")
+    feat_dim = Dim(64, name="feat")
+    canonical_dims = (batch_dim_, time_dim, heads_dim, feat_dim)
+
+    # Standard layout: feat_dim is last.
+    x = rf.random_uniform([batch_dim_, time_dim, heads_dim, feat_dim])
+    pos_enc = rf.sinusoidal_positional_encoding(spatial_dim=time_dim, feat_dim=feat_dim)
+
+    out_torch = _apply_rope(x, pos_enc, feat_dim)
+    out_ref = _apply_rope_real(x, pos_enc, feat_dim)
+
+    torch.testing.assert_close(
+        out_torch.copy_compatible_to_dims_raw(canonical_dims),
+        out_ref.copy_compatible_to_dims_raw(canonical_dims),
+    )
+
+    # Non-standard layout: feat_dim is not last.
+    x_t = x.copy_transpose([batch_dim_, feat_dim, time_dim, heads_dim])
+    out_torch_t = _apply_rope(x_t, pos_enc, feat_dim)
+    out_ref_t = _apply_rope_real(x_t, pos_enc, feat_dim)
+
+    torch.testing.assert_close(
+        out_torch_t.copy_compatible_to_dims_raw(canonical_dims),
+        out_ref_t.copy_compatible_to_dims_raw(canonical_dims),
+    )
+
+
 def test_rope_causal_self_att():
     import torch
     from returnn.util.pprint import pprint
@@ -389,29 +428,6 @@ def test_rope_causal_self_att():
                 lambda x, *, name, resolve_dim, **_: rf.convert_to_tensor(
                     x[0],
                     dims=(resolve_dim("arg_sin.dims[0]"), model_rf.key_dim_per_head.div_left(2)),
-                    name=name,
-                ),
-            ),
-            (
-                (rf_apply_rope, 0, "pe_imag", 0),
-                (apply_rotary_pos_emb, 0, "sin", 0),
-                lambda x, *, name, **_: rf.convert_to_tensor(
-                    x[0, :, : x.shape[2] // 2], dims=(seq_dim, model_rf.key_dim_per_head.div_left(2)), name=name
-                ),
-            ),
-            (
-                (rf_apply_rope, 0, "pe_imag", 0),
-                (apply_rotary_pos_emb, 0, "sin", 0),
-                lambda x, *, name, **_: rf.convert_to_tensor(
-                    x[-1, :, x.shape[2] // 2 :], dims=(seq_dim, model_rf.key_dim_per_head.div_left(2)), name=name
-                ),
-            ),
-            (
-                (rf_apply_rope, 0, "pe_real", 0),
-                (apply_rotary_pos_emb, 0, "cos", 0),
-                lambda x, *, name, **_: rf.convert_to_tensor(
-                    x[0, :, : x.shape[2] // 2],
-                    dims=(seq_dim, model_rf.key_dim_per_head.div_left(2)),
                     name=name,
                 ),
             ),

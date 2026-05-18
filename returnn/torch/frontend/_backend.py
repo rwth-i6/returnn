@@ -1527,6 +1527,22 @@ class TorchBackend(Backend[torch.Tensor]):
         return out
 
     @staticmethod
+    def apply_rope(x: Tensor, pos_enc: Tensor, feat_dim: Dim) -> Tensor:
+        """Apply RoPE using a ``torch.compile``-compiled kernel."""
+        from returnn.torch.util.rope import apply_rope
+
+        feat_axis = x.dims.index(feat_dim)
+        x_dims_feat_last = x.dims[:feat_axis] + x.dims[feat_axis + 1 :] + (feat_dim,)
+        x_raw = x.raw_tensor
+        if feat_axis != len(x.dims) - 1:
+            x_raw = x_raw.movedim(feat_axis, -1)
+        pe_raw = pos_enc.copy_compatible_to_dims_raw(x_dims_feat_last)
+        out_raw = apply_rope(x_raw, pe_raw)
+        out = Tensor("apply_rope", dims=x_dims_feat_last, dtype=x.dtype)
+        out.raw_tensor = out_raw
+        return out
+
+    @staticmethod
     def matmul(a: _TT, b: _TT, *, reduce: Union[Dim, Sequence[Dim]], use_mask: bool = True) -> _TT:
         """
         batched matmul of a and b, see base class doc string
