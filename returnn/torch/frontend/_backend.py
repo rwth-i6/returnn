@@ -1550,7 +1550,7 @@ class TorchBackend(Backend[torch.Tensor]):
             x_raw = x_raw.movedim(feat_axis, -1)
         pe_raw = pos_enc.copy_compatible_to_dims_raw(x_dims_feat_last)
         out_raw = apply_rope(x_raw, pe_raw)
-        out = Tensor("apply_rope", dims=x_dims_feat_last, dtype=x.dtype)
+        out = Tensor("apply_rope", dims=x_dims_feat_last, dtype=TorchBackend.get_dtype_name_raw(out_raw))
         out.raw_tensor = out_raw
         return out
 
