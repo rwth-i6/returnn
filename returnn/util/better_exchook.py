@@ -59,6 +59,9 @@ import keyword
 import inspect
 import contextlib
 import types
+import linecache
+import traceback
+import itertools
 from weakref import WeakKeyDictionary
 
 try:
@@ -80,6 +83,7 @@ py_keywords = set(keyword.kwlist) | set(["None", "True", "False"])
 
 _cur_pwd = os.getcwd()
 _threading_main_thread = threading.main_thread() if hasattr(threading, "main_thread") else None
+_format_tb_active = threading.local()
 
 try:
     # noinspection PyUnresolvedReferences,PyUnboundLocalVariable
@@ -150,7 +154,11 @@ def parse_py_statement(line):
                 state = 1
                 str_prefix = None
                 str_is_f_string = False
-                str_quote = c
+                if line[i - 1 : i + 2] == c * 3:
+                    str_quote = c * 3
+                    i += 2
+                else:
+                    str_quote = c
                 cur_token = ""
             else:
                 cur_token = c
@@ -159,7 +167,8 @@ def parse_py_statement(line):
             if c == "\\":
                 cur_token += _escape_char(line[i : i + 1])
                 i += 1
-            elif c == str_quote:
+            elif c == str_quote[0] and line[i - 1 : i - 1 + len(str_quote)] == str_quote:
+                i += len(str_quote) - 1
                 yield "str" if not str_prefix else "%s-str" % str_prefix, cur_token
                 cur_token = ""
                 state = 0
@@ -188,7 +197,11 @@ def parse_py_statement(line):
                 state = 1
                 str_prefix = cur_token
                 str_is_f_string = "f" in str_prefix or "F" in str_prefix
-                str_quote = c
+                if line[i - 1 : i + 2] == c * 3:
+                    str_quote = c * 3
+                    i += 2
+                else:
+                    str_quote = c
                 cur_token = ""
             else:
                 cur_token += c
@@ -219,11 +232,20 @@ def parse_py_statement(line):
             else:
                 cur_token += c
         elif state == 6:  # comment
-            cur_token += c
+            if c == "\n":
+                yield "comment", cur_token
+                cur_token = ""
+                state = 0
+            else:
+                cur_token += c
     if state == 3:
         yield "id", cur_token
+        state = 0
     elif state == 6:
         yield "comment", cur_token
+        state = 0
+    if state != 0:
+        yield "incomplete", state
 
 
 def parse_py_statements(source_code):
@@ -232,9 +254,7 @@ def parse_py_statements(source_code):
     :return: via :func:`parse_py_statement`
     :rtype: typing.Iterator[typing.Tuple[str,str]]
     """
-    for line in source_code.splitlines():
-        for t in parse_py_statement(line):
-            yield t
+    return parse_py_statement(source_code)
 
 
 def grep_full_py_identifiers(tokens):
@@ -272,8 +292,6 @@ def set_linecache(filename, source):
     :param str source:
     :return: nothing
     """
-    import linecache
-
     # noinspection PyTypeChecker
     linecache.cache[filename] = None, None, [line + "\n" for line in source.splitlines()], filename
 
@@ -466,6 +484,8 @@ def is_source_code_missing_brackets(source_code, prioritize_missing_open=False):
     counters = [0] * len(open_brackets)
     missing_open = False
     for t_type, t_content in list(parse_py_statements(source_code)):
+        if t_type == "incomplete":
+            return 0  # stop expanding
         if t_type != "op":
             continue  # we are from now on only interested in ops (including brackets)
         if t_content in open_brackets:
@@ -501,17 +521,19 @@ def is_source_code_missing_open_brackets(source_code):
     return is_source_code_missing_brackets(source_code, prioritize_missing_open=True) < 0
 
 
-def get_source_code(filename, lineno, module_globals=None):
+def get_source_code(filename, lineno, module_globals=None, end_lineno=None):
     """
     :param str filename:
-    :param int lineno:
+    :param int lineno: 1-indexed
     :param dict[str,typing.Any]|None module_globals:
+    :param int|None end_lineno: 1-indexed. inclusive
     :return: source code of that line (including newline)
     :rtype: str
     """
-    import linecache
-
     linecache.checkcache(filename)
+    if end_lineno is not None:
+        lines = linecache.getlines(filename, module_globals)
+        return "".join(lines[lineno - 1 : end_lineno])  # 1-indexed
     source_code = linecache.getline(filename, lineno, module_globals)
     # In case of a multi-line statement, lineno is usually the last line.
     # We are checking for missing open brackets and add earlier code lines.
@@ -1132,6 +1154,10 @@ def format_tb(
         etc., and a final newline.
     :rtype: list[str]
     """
+    if getattr(_format_tb_active, "active", False):
+        # Recursive call (e.g. repr() of a local variable triggered another traceback).
+        # Return a placeholder to avoid infinite recursion.
+        return ["  <traceback formatting suppressed: recursive format_tb call>\n"]
     if colorize is not None and with_color is None:
         with_color = colorize
     color = Color(enable=with_color)
@@ -1195,6 +1221,7 @@ def format_tb(
 
     # noinspection PyBroadException
     try:
+        _format_tb_active.active = True
         if limit is None:
             if hasattr(sys, "tracebacklimit"):
                 limit = sys.tracebacklimit
@@ -1204,24 +1231,31 @@ def format_tb(
         while _tb is not None and (limit is None or n < limit):
             if isframe(_tb):
                 f = _tb
+                lasti = f.f_lasti
+                lineno, end_lineno, colno, end_colno = _get_code_position(f.f_code, lasti)
             elif is_stack_summary(_tb):
                 _tb0 = _tb[0]
                 if isinstance(_tb0, ExtendedFrameSummary):
                     f = _tb0.tb_frame
                 else:
                     f = DummyFrame.from_frame_summary(_tb0)
+                lineno = _tb0.lineno
+                end_lineno = getattr(_tb0, "end_lineno", None)
             else:
                 f = _tb.tb_frame
+                lasti = _tb.tb_lasti
+                lineno, end_lineno, colno, end_colno = _get_code_position(f.f_code, lasti)
             if allLocals is not None:
                 allLocals.update(f.f_locals)
             if allGlobals is not None:
                 allGlobals.update(f.f_globals)
-            if hasattr(_tb, "tb_lineno"):
-                lineno = _tb.tb_lineno
-            elif is_stack_summary(_tb):
-                lineno = _tb[0].lineno
-            else:
-                lineno = f.f_lineno
+            if lineno is None:
+                if hasattr(_tb, "tb_lineno"):
+                    lineno = _tb.tb_lineno
+                elif is_stack_summary(_tb):
+                    lineno = _tb[0].lineno
+                else:
+                    lineno = f.f_lineno
             co = f.f_code
             filename = co.co_filename
             if not os.path.isfile(filename):
@@ -1243,7 +1277,7 @@ def format_tb(
                 ]
             )
             with output.fold_text_ctx(file_descr, merge_into_prev=False):
-                source_code = get_source_code(filename, lineno, f.f_globals)
+                source_code = get_source_code(filename, lineno, f.f_globals, end_lineno=end_lineno)
                 if source_code:
                     source_code = remove_indent_lines(replace_tab_indents(source_code)).rstrip()
                     output("    line: ", color.py_syntax_highlight(source_code), color=color.fg_colors[0])
@@ -1366,10 +1400,11 @@ def format_tb(
 
     except Exception:
         output(color("ERROR: cannot get more detailed exception info because:", color.fg_colors[1], bold=True))
-        import traceback
 
         for line in traceback.format_exc().split("\n"):
             output("   " + line)
+    finally:
+        _format_tb_active.active = False
 
     return output.lines
 
@@ -1827,9 +1862,28 @@ class DummyFrame:
         :param FrameSummary f:
         :rtype: DummyFrame
         """
-        return cls(filename=f.filename, lineno=f.lineno, name=f.name, f_locals=f.locals)
+        return cls(
+            filename=f.filename,
+            lineno=f.lineno,
+            name=f.name,
+            f_locals=f.locals,
+            end_lineno=getattr(f, "end_lineno", None),
+            colno=getattr(f, "colno", None),
+            end_colno=getattr(f, "end_colno", None),
+        )
 
-    def __init__(self, filename, lineno, name, f_locals=None, f_globals=None, f_builtins=None):
+    def __init__(
+        self,
+        filename,
+        lineno,
+        name,
+        f_locals=None,
+        f_globals=None,
+        f_builtins=None,
+        end_lineno=None,
+        colno=None,
+        end_colno=None,
+    ):
         self.lineno = lineno
         self.tb_lineno = lineno
         self.f_lineno = lineno
@@ -1838,6 +1892,9 @@ class DummyFrame:
         self.co_filename = filename
         self.name = name
         self.co_name = name
+        self.end_lineno = end_lineno
+        self.colno = colno
+        self.end_colno = end_colno
         self.f_locals = f_locals or {}
         self.f_globals = f_globals or {}
         self.f_builtins = f_builtins or {}
@@ -1921,6 +1978,24 @@ def _is_module_class(obj, attr_name, obj_is_dict=False):
     return isinstance(cls, type)
 
 
+def _get_code_position(code, instruction_byte_offset):
+    """
+    :param code:
+    :param instruction_byte_offset:
+    :return: (lineno, end_lineno, colno, end_colno)
+    """
+    # code from Python >=3.11
+    if instruction_byte_offset is None or instruction_byte_offset < 0:
+        return None, None, None, None
+    if not hasattr(code, "co_positions"):  # Python <3.11
+        return None, None, None, None
+    positions_gen = code.co_positions()
+    # instruction_byte_offset (tb_lasti) is the byte offset,
+    # and each instruction is exactly 2 bytes (wordcode),
+    # so need to divide by 2 to get the actual instruction index.
+    return next(itertools.islice(positions_gen, instruction_byte_offset // 2, None))
+
+
 def install():
     """
     Replaces sys.excepthook by our better_exchook.
@@ -1939,8 +2014,6 @@ def replace_traceback_format_tb():
     Note that this kind of monkey patching might not be safe under all circumstances
     and is not officially supported by Python.
     """
-    import traceback
-
     traceback.format_tb = format_tb
     if hasattr(traceback, "StackSummary"):
         traceback.StackSummary.format = format_tb
@@ -1958,8 +2031,6 @@ def replace_traceback_print_tb():
     Note that this kind of monkey patching might not be safe under all circumstances
     and is not officially supported by Python.
     """
-    import traceback
-
     traceback.print_tb = print_tb
     traceback.print_exception = print_exception
     traceback.print_exc = print_exc
