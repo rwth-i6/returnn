@@ -1,0 +1,62 @@
+name: Debug hanging RF tests
+
+# Manually triggered only — used to diagnose tests that hang in the normal CI.
+# Run this workflow to get verbose output + a faulthandler stacktrace after 5 min.
+on:
+  workflow_dispatch:
+    inputs:
+      tests:
+        description: "Space-separated list of test modules (without 'test_' prefix or '.py')"
+        required: false
+        default: "rf_attention rf_decoder_transformer"
+
+jobs:
+  debug:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version:
+          - "3.10"
+        torch-version:
+          - 2.0.0
+        tf-version:
+          - 2.10.0
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Cache dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache
+            ~/.local
+          key: cache-${{ runner.os }}-py${{ matrix.python-version }}-torch${{ matrix.torch-version }}-tf${{ matrix.tf-version }}
+          restore-keys: |
+            cache-${{ runner.os }}-py${{ matrix.python-version }}-
+
+      - name: Setup dependencies
+        run: |
+          echo "PATH=$PATH:~/.local/bin" >> $GITHUB_ENV
+          python .github/workflows/_setup_deps.py \
+            --python ${{ matrix.python-version }} \
+            --torch ${{ matrix.torch-version }} \
+            --tf ${{ matrix.tf-version }} \
+            --espnet 1
+
+      - name: Run tests with verbose output and faulthandler
+        # Converts the space-separated test list into individual test file paths.
+        # -v: show each test name as it runs
+        # -s: don't capture stdout/stderr (print everything immediately)
+        # faulthandler in run_debug.py: dumps all thread tracebacks after 5 min
+        run: |
+          TEST_FILES=$(echo "${{ github.event.inputs.tests }}" | tr ' ' '\n' | sed 's|^|tests/test_|; s|$|.py|' | tr '\n' ' ')
+          echo "Running: $TEST_FILES"
+          python tests/run_debug.py $TEST_FILES
