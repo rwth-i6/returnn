@@ -406,7 +406,7 @@ class MetaDataset(CachedDataset2):
             self.epoch is None
             or self.epoch != epoch
             or self.seq_list_ordered is None
-            or not self._current_seq_order
+            or (self._current_seq_order is None or len(self._current_seq_order) == 0)
             or seq_list is not None
             or seq_order is not None
             or self.expected_load_seq_start > 0
