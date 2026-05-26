@@ -189,7 +189,19 @@ def log_mel_filterbank_from_raw(
         frame_length=window_num_frames,
         fft_length=n_fft,
     )
-    power_spectrogram = rf.abs(spectrogram) ** 2.0
+    if spectrogram.dtype == "complex64":
+        # spectogram has shape (..., out_spatial_dim, in_dim_)
+        power_spectrogram = rf.abs(spectrogram) ** 2.0
+    else:
+        # spectrogram has shape (..., real_imag_dim, out_spatial_dim, in_dim_)
+        batch_dims = [d for d in raw_audio.dims if d != in_spatial_dim]
+        real_imag_dim = spectrogram.remaining_dims(batch_dims + [out_spatial_dim, in_dim_])
+        assert len(real_imag_dim) == 1
+        real_imag_dim = real_imag_dim[0]
+        real = rf.gather(spectrogram, indices=0, axis=real_imag_dim)
+        imag = rf.gather(spectrogram, indices=1, axis=real_imag_dim)
+        power_spectrogram = real**2 + imag**2
+
     # stft might have upcasted this to float32 because some PyTorch versions don't support stft on bfloat16.
     # https://github.com/pytorch/pytorch/issues/117844
     power_spectrogram = rf.cast(power_spectrogram, dtype=raw_audio.dtype)
