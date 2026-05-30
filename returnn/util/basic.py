@@ -4555,3 +4555,57 @@ def get_fwd_compat_kwargs() -> Dict[str, Any]:
     """
     i = fwd_compatibility_rng.integers(0, 100)
     return {f"__fwd_compat_random_arg_{i:03}": None}
+
+
+def slurm_time_left_sec() -> Optional[int]:
+    """
+    Query the remaining wallclock budget of the current SLURM job allocation.
+
+    :return: remaining seconds, or ``None`` if not running under SLURM
+        (``SLURM_JOB_ID`` env var missing) or if the ``squeue`` query fails for any reason.
+    """
+    import os
+    import subprocess
+
+    job_id = os.environ.get("SLURM_JOB_ID")
+    if not job_id:
+        return None
+    try:
+        out = subprocess.run(
+            ["squeue", "-h", "-j", job_id, "-O", "TimeLeft"],
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=10,
+        ).stdout.strip()
+    except (subprocess.SubprocessError, FileNotFoundError, OSError):
+        return None
+    if not out:
+        return None
+    return _parse_slurm_time_str(out)
+
+
+def _parse_slurm_time_str(s: str) -> Optional[int]:
+    """
+    Parse a SLURM duration string (``[D-]HH:MM:SS`` or ``MM:SS``) into seconds.
+
+    :return: seconds, or ``None`` if the input cannot be parsed.
+    """
+    days = 0
+    if "-" in s:
+        d_str, s = s.split("-", 1)
+        try:
+            days = int(d_str)
+        except ValueError:
+            return None
+    parts = s.split(":")
+    try:
+        if len(parts) == 3:
+            h, m, sec = int(parts[0]), int(parts[1]), int(parts[2])
+        elif len(parts) == 2:
+            h, m, sec = 0, int(parts[0]), int(parts[1])
+        else:
+            return None
+    except ValueError:
+        return None
+    return days * 86400 + h * 3600 + m * 60 + sec

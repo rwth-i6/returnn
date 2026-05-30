@@ -269,12 +269,52 @@ class Engine(EngineBase):
         while self.epoch + 1 <= self._final_epoch:
             self.set_epoch(self.epoch + 1)
             self.init_train_epoch()
+            epoch_start_time = time.monotonic()
             self.train_epoch()
+            self._maybe_stop_for_resubmission(time.monotonic() - epoch_start_time)
 
         if self._tensorboard_writer:
             self._tensorboard_writer.close()
 
         print(f"Finished training at epoch {self.epoch}, global train step {self.global_train_step}", file=log.v3)
+
+    def _maybe_stop_for_resubmission(self, last_epoch_wall_sec: float):
+        """
+        If the remaining SLURM wall-time is less than the (safety-scaled) last epoch's wall-time,
+        stop the training now by sending SIGINT to the whole process group.
+        Sisyphus then re-submits the job, and we avoid wasting time on a half-finished epoch.
+
+        Why SIGINT:
+            This is like pressing Ctrl+C in a shell, which does the same, i.e. sending SIGINT to the FG PG.
+            In Sisyphus, it propagates past ``sisyphus.task.Task.run()``
+            without setting ``self.error()``, ``self.finished()``, or the ``out_of_memory`` flag --
+            so Sisyphus sees the job as cleanly interrupted and resubmits.
+
+        See https://github.com/rwth-i6/returnn/issues/1818.
+        """
+        from returnn.util.basic import slurm_time_left_sec
+        import os
+        import signal
+
+        if not self.config.bool("stop_for_resubmission_when_low_time_left", False):
+            return
+        time_left = slurm_time_left_sec()
+        if time_left is None:
+            return  # not in SLURM, or squeue query failed -- no-op.
+        safety = self.config.float("stop_for_resubmission_safety_factor", 1.2)
+        needed = last_epoch_wall_sec * safety
+        if time_left >= needed:
+            return
+        print(
+            f"stop_for_resubmission_when_low_time_left:"
+            f" SLURM time_left={time_left}s, last epoch wall={last_epoch_wall_sec:.1f}s,"
+            f" needed (x{safety})={needed:.1f}s -- stopping early so sisyphus can resubmit.",
+            file=log.v1,
+        )
+        # SIGINT the whole process group: DDP workers stop together via KeyboardInterrupt,
+        # as well as the Sisyphus task worker, i.e. no error / finished / out_of_memory marker is written
+        # -- Sisyphus sees the job as cleanly interrupted and resubmits.
+        os.kill(-os.getpgrp(), signal.SIGINT)
 
     def init_train_epoch(self):
         """
