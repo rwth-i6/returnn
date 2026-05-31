@@ -364,7 +364,11 @@ def init_backend_engine(*, config_opts: Optional[Dict[str, Any]] = None):
             print(f"Set PYTORCH_CUDA_ALLOC_CONF={value!r}.", file=log.v3)
             os.environ["PYTORCH_CUDA_ALLOC_CONF"] = value
 
-    BackendEngine.select_engine(config=config)
+    # Light select first: set the engine integer, but defer the backend-frontend import.
+    # The deferred import transitively triggers `torch.cuda.is_available()` via
+    # `torch.utils.cpp_extension` at module-load time, which is *not* guarded
+    # by the timeout-wrapped cuda.is_available below.
+    BackendEngine.select_engine(config=config, _select_rf_backend=False)
     if BackendEngine.is_tensorflow_selected():
         print("TensorFlow:", util.describe_tensorflow_version(), file=log.v3)
         if util.get_tensorflow_version_tuple()[0] == 0:
@@ -417,6 +421,14 @@ def init_backend_engine(*, config_opts: Optional[Dict[str, Any]] = None):
     elif BackendEngine.is_torch_selected():
         print("PyTorch:", util.describe_torch_version(), file=log.v3)
 
+        from returnn.torch.util import diagnose_gpu
+
+        # Test-call to torch.cuda.is_available(). That can sometimes hang. Do this test early.
+        with diagnose_gpu.timeout("torch.cuda.is_available()"):
+            import torch
+
+            torch.cuda.is_available()
+
         if config.typed_value("torch_distributed") is not None:
             import socket
             import returnn.torch.distributed
@@ -427,8 +439,6 @@ def init_backend_engine(*, config_opts: Optional[Dict[str, Any]] = None):
                 % (socket.gethostname(), os.getpid(), str(torch_distributed.local_rank())),
                 file=log.v3,
             )
-
-        from returnn.torch.util import diagnose_gpu
 
         diagnose_gpu.print_relevant_env_vars(file=log.v2)
         diagnose_gpu.print_available_devices(file=log.v2)
@@ -444,6 +454,9 @@ def init_backend_engine(*, config_opts: Optional[Dict[str, Any]] = None):
 
     else:
         raise NotImplementedError(f"Backend engine {BackendEngine.get_selected_engine()} not implemented")
+
+    # Deferred backend-frontend import (see `_select_rf_backend=False` comment above).
+    BackendEngine.select_engine(config=config)
 
 
 def init(config_filename=None, command_line_options=(), config_updates=None, extra_greeting=None):
