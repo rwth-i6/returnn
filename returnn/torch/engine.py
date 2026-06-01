@@ -281,14 +281,16 @@ class Engine(EngineBase):
     def _maybe_stop_for_resubmission(self, last_epoch_wall_sec: float):
         """
         If the remaining SLURM wall-time is less than the (safety-scaled) last epoch's wall-time,
-        stop the training now by sending SIGINT to the whole process group.
+        stop the training now by sending SIGINT to the Sisyphus task worker's process group.
         Sisyphus then re-submits the job, and we avoid wasting time on a half-finished epoch.
 
         Why SIGINT:
-            This is like pressing Ctrl+C in a shell, which does the same, i.e. sending SIGINT to the FG PG.
-            In Sisyphus, it propagates past ``sisyphus.task.Task.run()``
-            without setting ``self.error()``, ``self.finished()``, or the ``out_of_memory`` flag --
-            so Sisyphus sees the job as cleanly interrupted and resubmits.
+            This is like pressing Ctrl+C in a shell, i.e. sending SIGINT to the foreground PG.
+            The Sisyphus task worker gets it as ``KeyboardInterrupt``.
+            That is a ``BaseException``, not caught by ``sisyphus.task.Task.run()``'s ``except`` clauses,
+            so it propagates without setting ``self.error()``, ``self.finished()``, or ``out_of_memory``.
+            Sisyphus thus sees the job as cleanly interrupted and resubmits.
+            See the SIGINT block below for the torchelastic (torchrun) subtlety.
 
         See https://github.com/rwth-i6/returnn/issues/1818.
         """
@@ -311,10 +313,19 @@ class Engine(EngineBase):
             f" needed (x{safety})={needed:.1f}s -- stopping early so sisyphus can resubmit.",
             file=log.v1,
         )
-        # SIGINT the whole process group: DDP workers stop together via KeyboardInterrupt,
-        # as well as the Sisyphus task worker, i.e. no error / finished / out_of_memory marker is written
-        # -- Sisyphus sees the job as cleanly interrupted and resubmits.
-        os.kill(-os.getpgrp(), signal.SIGINT)
+        # Send SIGINT to the process group that contains the Sisyphus task worker.
+        # Under torchelastic, each rank is its own session (Popen start_new_session=True),
+        # separate from torchrun and the Sisyphus worker, which share one PG.
+        # Signalling our own PG would hit only the ranks,
+        # which exit nonzero -> torchrun ChildFailedError -> Sisyphus error, not a clean resubmit.
+        # So in that case signal the parent PG (torchrun's, which is also the Sisyphus worker's).
+        import torch.distributed
+
+        if torch.distributed.is_torchelastic_launched():
+            pgid = os.getpgid(os.getppid())
+        else:
+            pgid = os.getpgrp()
+        os.kill(-pgid, signal.SIGINT)
 
     def init_train_epoch(self):
         """
