@@ -284,6 +284,10 @@ class HuggingFaceDataset(CachedDataset2):
             )
         return True
 
+    def supports_sharding(self) -> bool:
+        """:return: whether this dataset supports sharding"""
+        return True
+
     def _collect_single_seq(self, seq_idx: int) -> DatasetSeq:
         # noinspection PyUnresolvedReferences,PyPackageRequirements
         import datasets
