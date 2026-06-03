@@ -85,7 +85,7 @@ class _DimExtra:
         :param src_data:
         :param src_axis:
         """
-        self.dim = dim
+        self._dim_ref = weakref.ref(dim)
         assert kind is None or (isinstance(kind, Entity) and kind in DimTypes.Types)
         self.kind = kind
         if vocab:
@@ -131,6 +131,15 @@ class _DimExtra:
         self.cache_dyn_size_ext_dev: Dict[str, _t.Tensor] = {}  # device -> dyn_size_ext
         self.cache_seq_mask: Dict[Tuple[str, Optional[Tuple[Dim, ...]]], _t.Tensor] = {}  # (dev,dim_order) -> seq_mask
         self.cache_dim_math = _CacheDimMath()  # op (add,sub,...), operand -> Dim
+    
+    @property
+    def dim(self) -> Optional[Dim]:
+        ref = self._dim_ref
+        return ref() if ref is not None else None
+    
+    @dim.setter
+    def dim(self, dim: Optional[Dim]):
+        self._dim_ref = weakref.ref(dim) if dim is not None else None
 
     def __getstate__(self):
         d = vars(self).copy()
@@ -140,10 +149,13 @@ class _DimExtra:
         d["cache_seq_mask"] = {}
         d["cache_dim_math"] = {}
         d["kind"] = self.kind.name if self.kind else None
+        d.pop("_dim_ref", None)
         return d
 
     def __setstate__(self, state):
         self.__dict__.update(state)
+        if "_dim_ref" not in self.__dict__:
+            self._dim_ref = None
         if self.kind is not None:
             # noinspection PyTypeChecker
             self.kind = {v.name: v for v in DimTypes.Types}[self.kind]
