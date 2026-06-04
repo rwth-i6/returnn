@@ -179,6 +179,8 @@ class RFModuleAsPTModule(torch.nn.Module):
             rf_param.dtype = rf_param._raw_backend.get_dtype_name_raw(pt_param)  # dtype might have changed
             rf_param.raw_tensor = pt_param
 
+        return self
+
     def register_parameter(self, name: str, param: Optional[torch.nn.Parameter]) -> None:
         """(re)register parameter"""
         super().register_parameter(name, param)
