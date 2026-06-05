@@ -548,10 +548,15 @@ class TorchBackend(Backend[torch.Tensor]):
                                 "<",
                                 left + middle.get_size_tensor(device=out.device),
                             )
+                            if isinstance(value, Tensor):
+                                other = value.copy_compatible_to_dims_raw(out.dims)
+                            elif torch.result_type(out.raw_tensor, value) != out.raw_tensor.dtype:
+                                # E.g. a bool tensor with int scalar value would promote to int64.
+                                other = torch.tensor(value, dtype=out.raw_tensor.dtype, device=out.raw_tensor.device)
+                            else:
+                                other = value
                             out.raw_tensor = torch.where(
-                                mask.copy_compatible_to_dims_raw(out.dims),
-                                out.raw_tensor,
-                                value.copy_compatible_to_dims_raw(out.dims) if isinstance(value, Tensor) else value,
+                                mask.copy_compatible_to_dims_raw(out.dims), out.raw_tensor, other
                             )
         return out
 
