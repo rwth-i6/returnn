@@ -160,6 +160,9 @@ class _DimExtra:
             # noinspection PyTypeChecker
             self.kind = {v.name: v for v in DimTypes.Types}[self.kind]
 
+    def _relink_dim(self, dim: Dim):
+        self._dim_ref = weakref.ref(dim)
+
     def __sis_state__(self):
         raise ValueError(f"{self}: currently not expected to be part of the Sisyphus state/hash")
 
@@ -362,6 +365,19 @@ class _DimMixin:
         slots["_dyn_size_max_value"] = None
         # noinspection PyRedundantParentheses
         return (func, args, (vs, slots), *more_args)
+
+    def __setstate__(self: _d.Dim, state):
+        if isinstance(state, tuple) and len(state) == 2:
+            dict_state, slots_state = state
+        else:
+            dict_state, slots_state = None, state
+        for k, v in (dict_state or {}).items():
+            setattr(self, k, v)
+        for k, v in (slots_state or {}).items():
+            setattr(self, k, v)
+        extra = getattr(self, "_extra", None)
+        if extra is not None:
+            extra._relink_dim(self)
 
     def copy(self, same_as_self=True, description=None, kind=None, match_priority=None):
         """
