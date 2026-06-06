@@ -222,6 +222,24 @@ def signal_handler(signum, frame):
     dump_all_thread_tracebacks()
 
 
+# noinspection PyUnusedLocal
+def _fatal_signal_handler(signum, frame):
+    """
+    Like :func:`signal_handler` (prints message + dumps all thread tracebacks),
+    but then restores the default action and re-raises the signal
+    so the process actually exits with the conventional 128+signum status.
+
+    Use for signals where the expectation is termination (e.g. SIGTERM from job schedulers / torchelastic),
+    so we still get a trace of where the process was before going down.
+    """
+    print("Signal handler: got signal %s, dumping threads and exiting." % format_signum(signum))
+    dump_all_thread_tracebacks()
+    sys.stdout.flush()
+    sys.stderr.flush()
+    signal.signal(signum, signal.SIG_DFL)
+    os.kill(os.getpid(), signum)
+
+
 def install_signal_handler_if_default(signum, exceptions_are_fatal=False):
     """
     :param int signum: e.g. signal.SIGUSR1
@@ -379,6 +397,13 @@ def init_faulthandler(sigusr1_chain=False):
             sigusr1_chain = True
         # Why not also SIGUSR2... SGE can also send this signal.
         install_signal_handler_if_default(signal.SIGUSR2)
+        # SIGTERM: typically sent by job schedulers (SLURM scancel/walltime, k8s eviction),
+        # torchelastic terminating siblings after one rank fails,
+        # Docker stop, parent-process teardown, or `kill <pid>`.
+        # Install dump+exit handler if no app code has its own SIGTERM handler yet,
+        # so we get a stack trace of where the process was before going down.
+        if signal.getsignal(signal.SIGTERM) == signal.SIG_DFL:
+            signal.signal(signal.SIGTERM, _fatal_signal_handler)
     try:
         import faulthandler
     except ImportError as e:
@@ -389,6 +414,7 @@ def init_faulthandler(sigusr1_chain=False):
             faulthandler.enable()
             if sys.platform != "win32":
                 faulthandler.register(signal.SIGUSR1, all_threads=True, chain=sigusr1_chain)
+                faulthandler.register(signal.SIGTERM, all_threads=True, chain=True)
 
 
 @auto_exclude_all_new_threads
