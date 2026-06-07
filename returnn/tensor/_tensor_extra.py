@@ -91,7 +91,7 @@ class _TensorExtra:
         d.pop("_tensor_ref", None)
         return d
 
-def __setstate__(self, state):
+    def __setstate__(self, state):
         self.__dict__.update(state)
         # Backwards compat: older pickles had a strong "tensor" attribute.
         tensor = self.__dict__.pop("tensor", None)
@@ -99,6 +99,7 @@ def __setstate__(self, state):
             self._tensor_ref = weakref.ref(tensor)
         elif "_tensor_ref" not in self.__dict__:
             self._tensor_ref = None
+
     def _relink_tensor(self, tensor: Tensor):
         self._tensor_ref = weakref.ref(tensor)
 
