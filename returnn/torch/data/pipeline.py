@@ -685,5 +685,14 @@ class _DataLoaderWorkerInitFunc:
             with open("/proc/self/comm", "w") as f:
                 f.write(f"TDL worker {worker_id}")
 
+            # Ensure SIGUSR1 dumps all-thread tracebacks to stderr without killing the worker.
+            # Forked from the main rank we'd inherit init_faulthandler's SIGUSR1 register,
+            # but be explicit so this is robust against PyTorch DataLoader's worker startup
+            # touching the signal mask.
+            import faulthandler
+            import signal
+
+            faulthandler.register(signal.SIGUSR1, all_threads=True, chain=False)
+
         if self.other_worker_init_fn:
             self.other_worker_init_fn(worker_id)
