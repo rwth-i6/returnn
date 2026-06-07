@@ -203,6 +203,9 @@ def timeout(info: str, *, seconds: int = 30):
 
 
 def _timeout_handler(*, seconds: Union[float, int], proc_id: int, info: str):
+    # We're spawned via multiprocessing.Process and thus inherit the parent's SIGTERM handler.
+    # When the parent exits the timeout context normally, it calls proc.terminate() on us,
+    signal.signal(signal.SIGTERM, signal.SIG_DFL)
     time.sleep(seconds)
     print(f"ERROR: {info}: Timeout handler after {seconds} seconds, killing proc {proc_id}.", file=sys.stderr)
     os.kill(proc_id, signal.SIGABRT)
