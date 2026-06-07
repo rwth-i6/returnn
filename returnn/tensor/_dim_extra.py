@@ -134,6 +134,9 @@ class _DimExtra:
 
     @property
     def dim(self) -> Optional[Dim]:
+        """
+        :return: the parent Dim (weakref deref), or None if it was collected
+        """
         ref = self._dim_ref
         return ref() if ref is not None else None
 
@@ -377,6 +380,7 @@ class _DimMixin:
             setattr(self, k, v)
         extra = getattr(self, "_extra", None)
         if extra is not None:
+            # noinspection PyProtectedMember
             extra._relink_dim(self)
 
     def copy(self, same_as_self=True, description=None, kind=None, match_priority=None):

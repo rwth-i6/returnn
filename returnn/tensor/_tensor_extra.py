@@ -626,6 +626,7 @@ class _TensorMixin(_TensorMixinBase):
             setattr(self, k, v)
 
         if self._extra is not None:
+            # noinspection PyProtectedMember
             self._extra._relink_tensor(self)
 
     def reset(self: Tensor):
