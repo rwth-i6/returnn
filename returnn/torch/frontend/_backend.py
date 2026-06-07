@@ -1761,6 +1761,34 @@ class TorchBackend(Backend[torch.Tensor]):
         )
         return res
 
+    @staticmethod
+    def reduce_distributed(source: Tensor[torch.Tensor], *, mode: str) -> Tensor[torch.Tensor]:
+        """all-reduce across DDP workers; see :func:`returnn.frontend.reduce` with distributed=True"""
+        from returnn.torch.distributed import get_ctx
+
+        ctx = get_ctx()
+        if ctx is None or ctx.size() <= 1:
+            return source
+        import torch.distributed as dist
+
+        out = source.copy_template()
+        if mode == "sum":
+            from returnn.torch.util.distributed import all_reduce_sum
+
+            out.raw_tensor = all_reduce_sum(source.raw_tensor)
+        elif mode in ("max", "min"):
+            # No correct differentiable distributed max/min here, so refuse rather than give a wrong grad.
+            assert not source.raw_tensor.requires_grad, (
+                f"reduce_distributed mode {mode!r} does not support gradients:"
+                f" there is no correct differentiable distributed {mode}."
+            )
+            raw = source.raw_tensor.clone()
+            dist.all_reduce(raw, op=dist.ReduceOp.MAX if mode == "max" else dist.ReduceOp.MIN)
+            out.raw_tensor = raw
+        else:
+            raise NotImplementedError(f"reduce_distributed: mode {mode!r} not supported (sum/max/min only)")
+        return out
+
     # noinspection PyShadowingBuiltins
     @staticmethod
     def top_k(

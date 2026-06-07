@@ -33,6 +33,7 @@ def reduce(
     mode: str,
     axis: Union[Dim, Sequence[Dim]],
     use_mask: bool = True,
+    distributed: bool = False,
 ) -> Tensor[T]:
     """
     Reduce the tensor along the given axis
@@ -41,22 +42,34 @@ def reduce(
     :param mode: "sum", "max", "min", "mean", "logsumexp", "any", "all", "argmin", "argmax"
     :param axis:
     :param use_mask: if True (default), use the time mask (part of dim tag) to ignore padding frames
+    :param distributed:
+        If True, additionally reduce across the distributed worker dimension (Torch DDP),
+        e.g. ``reduce_sum(..., distributed=True)`` gives the sum over the global batch.
+        Only sum-like modes are supported; the all-reduce is differentiable for sum.
+        No effect without a process group.
     :return: tensor with axis removed
     """
     # noinspection PyProtectedMember
-    return source._raw_backend.reduce(source=source, mode=mode, axis=axis, use_mask=use_mask)
+    out = source._raw_backend.reduce(source=source, mode=mode, axis=axis, use_mask=use_mask)
+    if distributed:
+        # noinspection PyProtectedMember
+        out = out._raw_backend.reduce_distributed(out, mode=mode)
+    return out
 
 
-def reduce_sum(source: Tensor[T], *, axis: Union[Dim, Sequence[Dim]], use_mask: bool = True) -> Tensor[T]:
+def reduce_sum(
+    source: Tensor[T], *, axis: Union[Dim, Sequence[Dim]], use_mask: bool = True, distributed: bool = False
+) -> Tensor[T]:
     """
     Reduce the tensor along the given axis
 
     :param source:
     :param axis:
     :param use_mask: if True (default), use the time mask (part of dim tag) to ignore padding frames
+    :param distributed: if True, also reduce across the distributed worker dim (see :func:`reduce`)
     :return: tensor with axis removed
     """
-    return reduce(source=source, mode="sum", axis=axis, use_mask=use_mask)
+    return reduce(source=source, mode="sum", axis=axis, use_mask=use_mask, distributed=distributed)
 
 
 def reduce_max(source: Tensor[T], *, axis: Union[Dim, Sequence[Dim]], use_mask: bool = True) -> Tensor[T]:

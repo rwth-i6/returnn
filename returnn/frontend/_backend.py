@@ -1179,6 +1179,19 @@ class Backend(Generic[T]):
         """
         raise NotImplementedError
 
+    @staticmethod
+    def reduce_distributed(source: Tensor[T], *, mode: str) -> Tensor[T]:
+        """
+        All-reduce the (already locally reduced) tensor across the distributed worker dimension.
+        See :func:`returnn.frontend.reduce` with ``distributed=True``.
+        A backend must implement this to support distributed reduce.
+
+        :param source:
+        :param mode: reduce mode, as in :func:`reduce`. Only sum-like modes are supported.
+        :return: tensor all-reduced across workers (same shape as source)
+        """
+        raise NotImplementedError
+
     # noinspection PyShadowingBuiltins
     @staticmethod
     def top_k(
