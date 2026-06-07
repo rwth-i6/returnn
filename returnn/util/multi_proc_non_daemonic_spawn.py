@@ -167,7 +167,7 @@ class NonDaemonicSpawnProcess(SpawnProcess):
         if sys.platform != "win32":
             import faulthandler
 
-            faulthandler.register(signal.SIGUSR1, all_threads=True, chain=True)
+            faulthandler.register(signal.SIGUSR1, all_threads=True, chain=False)
         try:
             pre_init_func: Callable[[], None] = deserialize_object(pre_init_func_serialized)
             pre_init_func()
