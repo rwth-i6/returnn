@@ -167,6 +167,7 @@ class _DimExtra:
         if self.kind is not None:
             # noinspection PyTypeChecker
             self.kind = {v.name: v for v in DimTypes.Types}[self.kind]
+
     def _relink_dim(self, dim: Dim):
         self._dim_ref = weakref.ref(dim)
 
