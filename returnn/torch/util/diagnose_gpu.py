@@ -191,7 +191,8 @@ def timeout(info: str, *, seconds: int = 30):
     :param seconds:
     :param info:
     """
-    proc = multiprocessing.Process(
+    # "spawn" context so child does not inherit SIGTERM handler so that we don't call _fatal_signal_handler.
+    proc = multiprocessing.get_context("spawn").Process(
         target=_timeout_handler, kwargs={"seconds": seconds, "proc_id": os.getpid(), "info": info}
     )
     proc.start()
@@ -203,9 +204,6 @@ def timeout(info: str, *, seconds: int = 30):
 
 
 def _timeout_handler(*, seconds: Union[float, int], proc_id: int, info: str):
-    # We're spawned via multiprocessing.Process and thus inherit the parent's SIGTERM handler.
-    # When the parent exits the timeout context normally, it calls proc.terminate() on us,
-    signal.signal(signal.SIGTERM, signal.SIG_DFL)
     time.sleep(seconds)
     print(f"ERROR: {info}: Timeout handler after {seconds} seconds, killing proc {proc_id}.", file=sys.stderr)
     os.kill(proc_id, signal.SIGABRT)
