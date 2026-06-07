@@ -379,6 +379,7 @@ class _DimMixin:
         for k, v in (slots_state or {}).items():
             setattr(self, k, v)
         if self._extra is not None:
+            # noinspection PyProtectedMember
             self._extra._relink_dim(self)
 
     def copy(self, same_as_self=True, description=None, kind=None, match_priority=None):
