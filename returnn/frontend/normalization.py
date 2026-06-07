@@ -8,11 +8,25 @@ from returnn.tensor import Tensor, Dim
 import returnn.frontend as rf
 
 
-__all__ = ["moments", "LayerNorm", "RMSNorm", "GroupNorm", "BatchNorm", "normalize", "Normalize"]
+__all__ = [
+    "moments",
+    "LayerNorm",
+    "RMSNorm",
+    "GroupNorm",
+    "BatchNorm",
+    "batch_norm_distributed_default",
+    "normalize",
+    "Normalize",
+]
 
 
 def moments(
-    x: Tensor, axis: Union[Dim, Sequence[Dim]], *, use_mask: bool = True, correction: Union[int, float, Tensor] = 0
+    x: Tensor,
+    axis: Union[Dim, Sequence[Dim]],
+    *,
+    use_mask: bool = True,
+    correction: Union[int, float, Tensor] = 0,
+    distributed: bool = False,
 ) -> Tuple[Tensor, Tensor]:
     """
     :param x: input
@@ -31,8 +45,27 @@ def moments(
           <https://data-apis.org/array-api/latest/API_specification/generated/array_api.var.html>`__).
         In PyTorch, the default is ``correction=1``, which is the unbiased variance estimation,
         while in most other frameworks, the default is ``correction=0``, which is the biased variance estimation.
+    :param distributed:
+        If True and a Torch DDP process group exists (world size > 1),
+        compute the statistics over the global batch across all workers,
+        by all-reducing the per-worker sum / sum-of-squares (differentiable) and count.
+        This matches torch.nn.SyncBatchNorm.
+        Default False keeps the per-worker (local) statistics.
     :return: tuple (mean, variance). it has the same shape as the input with the axis removed
     """
+    if distributed:
+        x_sum = rf.reduce_sum(x, axis=axis, use_mask=use_mask, distributed=True)
+        x_sum_sq = rf.reduce_sum(x * x, axis=axis, use_mask=use_mask, distributed=True)
+        count = rf.num_elements_of_shape(axis, use_mask=use_mask)
+        assert isinstance(count, Tensor), f"distributed moments expects a dynamic count, got {count!r}"
+        # the count is local per worker; sum it across workers too.
+        # noinspection PyProtectedMember
+        count = count._raw_backend.reduce_distributed(count, mode="sum")
+        mean = x_sum / count
+        variance = x_sum_sq / count - mean * mean
+        if isinstance(correction, Tensor) or correction != 0:
+            variance *= count / (count - correction)
+        return mean, variance
     mean = rf.reduce_mean(x, axis=axis)
     # stop_gradient does not change the gradient here
     variance = rf.reduce_mean(rf.squared_difference(x, rf.stop_gradient(mean)), axis=axis, use_mask=use_mask)
@@ -130,6 +163,22 @@ class GroupNorm(rf.Module):
         return norm_x * self.scale + self.bias
 
 
+def batch_norm_distributed_default() -> bool:
+    """
+    Global-config default for :class:`BatchNorm` ``distributed`` (SyncBatchNorm-style global stats).
+    Controlled via the option ``rf_batch_norm_distributed``,
+    mirroring ``rf_dropout_broadcast``.
+    Default False (per-worker stats).
+    Only has an effect under Torch DDP; enable it explicitly there.
+    """
+    from returnn.config import get_global_config
+
+    config = get_global_config(raise_exception=False)
+    if not config:
+        return False
+    return config.bool("rf_batch_norm_distributed", False)
+
+
 class BatchNorm(rf.Module):
     """
     Batch normalization. https://arxiv.org/abs/1502.03167
@@ -173,6 +222,7 @@ class BatchNorm(rf.Module):
         eps: float = 1e-3,
         track_running_stats: bool = True,
         use_mask: Optional[bool] = None,
+        distributed: Optional[bool] = None,
     ):
         """
         :param in_dim: the feature dimension of the input
@@ -189,11 +239,16 @@ class BatchNorm(rf.Module):
             which ignore the masking, and also slower, and the fused op would not be used.
           False would be consistent to all other frameworks,
             and potentially allows for the use of an efficient fused op internally.
+        :param distributed: compute batch statistics over the global batch across all DDP workers
+          (SyncBatchNorm-style) instead of per-worker.
+          None (default) reads the global config option ``rf_batch_norm_distributed`` (default False).
+          Only meaningful under Torch DDP grad-sync.
         """
         super().__init__()
         assert isinstance(in_dim, Dim)
         self.in_dim = in_dim
         self.use_mask = use_mask
+        self.distributed = distributed if distributed is not None else batch_norm_distributed_default()
         self.momentum = momentum
         self.eps = eps
         if track_running_stats:
@@ -224,8 +279,8 @@ class BatchNorm(rf.Module):
         else:
             use_mask = False  # not needed. False because this potentially enables an efficient fused op.
 
-        if use_mask:
-            # Generic implementation which supports masking.
+        if use_mask or self.distributed:
+            # Generic implementation which supports masking (and required for distributed/global stats).
             train_flag = rf.get_run_ctx().is_train_flag_enabled(func=BatchNorm.__call__)
             use_current_batch_stats = self.running_mean is None or train_flag
             update_running_stats = self.running_mean is not None and train_flag
@@ -233,7 +288,9 @@ class BatchNorm(rf.Module):
 
             mean_cur_batch, variance_cur_batch = rf.cond(
                 need_current_batch_stats,
-                lambda: rf.moments(source, axis=[d for d in source.dims if d != self.in_dim]),
+                lambda: rf.moments(
+                    source, axis=[d for d in source.dims if d != self.in_dim], distributed=self.distributed
+                ),
                 lambda: (self.running_mean, self.running_variance),
             )
 
