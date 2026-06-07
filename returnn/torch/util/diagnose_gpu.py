@@ -191,7 +191,8 @@ def timeout(info: str, *, seconds: int = 30):
     :param seconds:
     :param info:
     """
-    proc = multiprocessing.Process(
+    # "spawn" context so child does not inherit SIGTERM handler so that we don't call _fatal_signal_handler.
+    proc = multiprocessing.get_context("spawn").Process(
         target=_timeout_handler, kwargs={"seconds": seconds, "proc_id": os.getpid(), "info": info}
     )
     proc.start()
