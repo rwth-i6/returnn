@@ -22,7 +22,10 @@ def create_manager(*, ctx: Optional[BaseContext] = None) -> SyncManager:
     """
     print(f"main (parent) pid is {os.getpid()}")
     if ctx is None:
-        ctx = multiprocessing.get_context()
+        # "spawn" context so the manager does not inherit our SIGTERM handler (_fatal_signal_handler):
+        # the watchdog below terminates it via SIGTERM as the normal shutdown path,
+        # and the inherited dump-and-exit handler would prevent a prompt clean exit.
+        ctx = multiprocessing.get_context("spawn")
     m = SyncManager(ctx=ctx)
     m.start(initializer=_manager_init_watch_dog, initargs=(os.getpid(),))
     return m
@@ -54,4 +57,5 @@ def _manager_die_if_parent_dies(parent_pid: int) -> None:
                 f" killing myself)"
             )
             os.kill(os.getpid(), signal.SIGTERM)
+            return
         time.sleep(0.1)
