@@ -7,6 +7,7 @@ import ast
 import logging
 import os
 import socket
+from datetime import timedelta
 from typing import Optional, Any, Dict
 
 import torch
@@ -42,7 +43,10 @@ class DistributedContext:
             # When no backend is specified, we set gloo for CPU tensors and nccl for CUDA tensors as backend.
             # torch 2.6.0 and onwards require explicitly setting the backends.
             # See https://github.com/rwth-i6/returnn/issues/1724 for discussion.
-            dist.init_process_group(backend=self._opts.get("backend", "cpu:gloo,cuda:nccl"))
+            dist.init_process_group(
+                backend=self._opts.get("backend", "cpu:gloo,cuda:nccl"),
+                timeout=timedelta(seconds=self._opts.get("timeout_sec", 1800)),
+            )
             self._rank = dist.get_rank()
             self._size = dist.get_world_size()
             os.environ[env_var_name] = repr({"rank": self._rank, "size": self._size})
@@ -79,6 +83,7 @@ class DistributedContext:
         # and not all opts are used yet, so read them now,
         # such that the check in the end works.
         self._opts.get("backend")
+        self._opts.get("timeout_sec")
         if self._reduce_type == "grad":
             self._opts.get("class")
             self._opts.get("options")
