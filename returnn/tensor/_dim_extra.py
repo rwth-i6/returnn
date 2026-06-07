@@ -375,9 +375,8 @@ class _DimMixin:
             setattr(self, k, v)
         for k, v in (slots_state or {}).items():
             setattr(self, k, v)
-        extra = getattr(self, "_extra", None)
-        if extra is not None:
-            extra._relink_dim(self)
+        if self._extra is not None:
+            self._extra._relink_dim(self)
 
     def copy(self, same_as_self=True, description=None, kind=None, match_priority=None):
         """
