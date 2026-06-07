@@ -8,6 +8,7 @@ from types import FunctionType, CodeType, FrameType
 import os
 import sys
 import signal
+import time
 
 try:
     import thread
@@ -225,19 +226,26 @@ def signal_handler(signum, frame):
 # noinspection PyUnusedLocal
 def _fatal_signal_handler(signum, frame):
     """
-    Like :func:`signal_handler` (prints message + dumps all thread tracebacks),
-    but then restores the default action and re-raises the signal
-    so the process actually exits with the conventional 128+signum status.
+    Like :func:`signal_handler`, but also broadcasts SIGUSR1 to descendant processes
+    (so they dump via their inherited SIGUSR1 handler before our stdout/stderr pipes close)
+    and then exits via :func:`sys.exit` so Python finalizers and atexit handlers run.
 
-    Use for signals where the expectation is termination (e.g. SIGTERM from job schedulers / torchelastic),
-    so we still get a trace of where the process was before going down.
+    Use for signals where the expectation is termination,
+    e.g. SIGTERM from job schedulers / torchelastic.
     """
-    print("Signal handler: got signal %s, dumping threads and exiting." % format_signum(signum))
+    import psutil
+
+    print("Signal handler: got signal %s, dumping threads and children." % format_signum(signum))
     dump_all_thread_tracebacks()
+    for child in psutil.Process().children(recursive=True):
+        try:
+            child.send_signal(signal.SIGUSR1)
+        except (psutil.NoSuchProcess, ProcessLookupError):
+            pass
+    time.sleep(3)  # give descendants time to write their dumps before we close stdout/stderr
     sys.stdout.flush()
     sys.stderr.flush()
-    signal.signal(signum, signal.SIG_DFL)
-    os.kill(os.getpid(), signum)
+    sys.exit(128 + signum)
 
 
 def install_signal_handler_if_default(signum, exceptions_are_fatal=False):
