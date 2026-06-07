@@ -155,14 +155,17 @@ class _DimExtra:
         d.pop("_dim_ref", None)
         return d
 
-    def __setstate__(self, state):
+def __setstate__(self, state):
         self.__dict__.update(state)
-        if "_dim_ref" not in self.__dict__:
+        # Backwards compat: older pickles had a strong "dim" attribute.
+        dim = self.__dict__.pop("dim", None)
+        if dim is not None:
+            self._dim_ref = weakref.ref(dim)
+        elif "_dim_ref" not in self.__dict__:
             self._dim_ref = None
         if self.kind is not None:
             # noinspection PyTypeChecker
             self.kind = {v.name: v for v in DimTypes.Types}[self.kind]
-
     def _relink_dim(self, dim: Dim):
         self._dim_ref = weakref.ref(dim)
 
