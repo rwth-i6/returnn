@@ -33,6 +33,7 @@ import time
 from typing import Optional, Callable
 import os
 import signal
+import sys
 import atexit
 from .basic import serialize_object, deserialize_object
 from . import better_exchook
@@ -158,6 +159,15 @@ class NonDaemonicSpawnProcess(SpawnProcess):
         reconstruct_func_and_args_and_state_serialized: bytes,
     ):
         better_exchook.install()
+        # Register SIGUSR1 -> dump all threads to stderr, so spawn-children are diagnosable
+        # the same way as the main proc. Forked descendants inherit; spawn-children don't,
+        # so we have to do it here. Keep this minimal: no dump_traceback_later (timer thread
+        # broke SyncManager bootstrap in an earlier iteration), no per-pid file, just the
+        # signal handler.
+        if sys.platform != "win32":
+            import faulthandler
+
+            faulthandler.register(signal.SIGUSR1, all_threads=True, chain=True)
         try:
             pre_init_func: Callable[[], None] = deserialize_object(pre_init_func_serialized)
             pre_init_func()
