@@ -54,6 +54,14 @@ def moments(
     :return: tuple (mean, variance). it has the same shape as the input with the axis removed
     """
     if distributed:
+        # Accumulate the global statistics in float32 for numerical stability.
+        # The one-pass variance E[x^2] - E[x]^2 below catastrophically cancels in low precision:
+        # for large-magnitude inputs E[x^2] ~ E[x]^2,
+        # so in bf16 their difference is garbage (can even go negative) -> NaNs.
+        # torch.nn.SyncBatchNorm likewise keeps these stats in float32.
+        # The local (non-distributed) branch below avoids this via the two-pass mean((x-mean)^2).
+        compute_dtype = x.dtype
+        x = rf.cast(x, "float32")
         x_sum = rf.reduce_sum(x, axis=axis, use_mask=use_mask, distributed=True)
         x_sum_sq = rf.reduce_sum(x * x, axis=axis, use_mask=use_mask, distributed=True)
         count = rf.num_elements_of_shape(axis, use_mask=use_mask)
@@ -65,7 +73,7 @@ def moments(
         variance = x_sum_sq / count - mean * mean
         if isinstance(correction, Tensor) or correction != 0:
             variance *= count / (count - correction)
-        return mean, variance
+        return rf.cast(mean, compute_dtype), rf.cast(variance, compute_dtype)
     mean = rf.reduce_mean(x, axis=axis)
     # stop_gradient does not change the gradient here
     variance = rf.reduce_mean(rf.squared_difference(x, rf.stop_gradient(mean)), axis=axis, use_mask=use_mask)
