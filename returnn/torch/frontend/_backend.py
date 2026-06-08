@@ -1927,23 +1927,39 @@ class TorchBackend(Backend[torch.Tensor]):
                 if isinstance(minval, Tensor):
                     assert minval.dims == (), f"only scalar minval supported, got {minval}"
                     minval = minval.raw_tensor
-                if isinstance(maxval, Tensor):
-                    assert maxval.dims == (), f"only scalar maxval supported, got {maxval}"
-                    maxval = maxval.raw_tensor
-                with torch.no_grad():
-                    out.raw_tensor.uniform_(minval, maxval, generator=generator)  # noqa
-            else:
+                if isinstance(maxval, Tensor) and maxval.dims:
+                    # per-element upper bound: affine transform of U[0,1) -> [minval, maxval).
+                    maxval_raw = maxval.copy_compatible_to_dims_raw(out.dims)
+                    with torch.no_grad():
+                        u = torch.rand(out.raw_tensor.shape, generator=generator, device=out.raw_tensor.device)
+                        out.raw_tensor.copy_(minval + u * (maxval_raw - minval))
+                else:  # scalar
+                    if isinstance(maxval, Tensor):
+                        assert maxval.dims == ()
+                        maxval = maxval.raw_tensor
+                    with torch.no_grad():
+                        out.raw_tensor.uniform_(minval, maxval, generator=generator)  # noqa
+            else:  # integer dtype
                 if minval is None:
                     minval = 0
                 assert maxval is not None, "maxval must be specified for integer random uniform"
                 if isinstance(minval, Tensor):
                     assert minval.dims == (), f"only scalar minval supported, got {minval}"
                     minval = minval.raw_tensor
-                if isinstance(maxval, Tensor):
-                    assert maxval.dims == (), f"only scalar maxval supported, got {maxval}"
-                    maxval = maxval.raw_tensor
-                with torch.no_grad():
-                    out.raw_tensor.random_(minval, maxval, generator=generator)
+                if isinstance(maxval, Tensor) and maxval.dims:
+                    # per-element upper bound: affine transform of U[0,1) -> [minval, maxval), floored to int.
+                    maxval_raw = maxval.copy_compatible_to_dims_raw(out.dims)
+                    with torch.no_grad():
+                        u = torch.rand(out.raw_tensor.shape, generator=generator, device=out.raw_tensor.device)
+                        out.raw_tensor.copy_(
+                            (minval + u * (maxval_raw.to(u.dtype) - minval)).floor().to(out.raw_tensor.dtype)
+                        )
+                else:  # scalar
+                    if isinstance(maxval, Tensor):
+                        assert maxval.dims == ()
+                        maxval = maxval.raw_tensor
+                    with torch.no_grad():
+                        out.raw_tensor.random_(minval, maxval, generator=generator)
         elif distribution == "normal":
             assert minval is None and maxval is None
             if mean is None:
