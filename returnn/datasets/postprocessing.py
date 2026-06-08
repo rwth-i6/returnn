@@ -726,11 +726,7 @@ class _MultiProcDataIter:
         return seq
 
     def __del__(self):
-        # noinspection PyBroadException
-        try:
-            self.stop(join=False)
-        except Exception:
-            pass
+        self.stop(join=False)
 
 
 class _WorkerProcParent:
