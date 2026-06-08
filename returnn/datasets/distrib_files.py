@@ -654,13 +654,11 @@ class _WorkerProcParent:
             self.worker_proc.join()
 
     def __del__(self):
-        # noinspection PyBroadException
         try:
             self.exit(join=False)
-        except Exception:
-            pass
-        else:
-            try_run(self.worker_proc.join)
+        except (BrokenPipeError, EOFError, ConnectionResetError):
+            pass  # worker already exited
+        try_run(self.worker_proc.join)
 
 
 def _worker_proc_loop(
