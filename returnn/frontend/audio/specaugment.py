@@ -18,7 +18,7 @@ def specaugment(
     feature_dim: Optional[Dim] = None,
     global_train_step_dependent: bool = True,
     only_on_train: bool = True,
-    max_consecutive_spatial_dims: int = 20,
+    max_consecutive_spatial_dims: Union[int, Tensor] = 20,
     max_consecutive_feature_dims: Optional[int] = None,
     num_spatial_mask_factor: int = 100,
     steps: Tuple[int, int, int] = (0, 1000, 2000),
@@ -44,7 +44,9 @@ def specaugment(
         x_masked = x
         spatial_len = spatial_dim.get_dim_value_tensor()
         # time mask
-        if max_consecutive_spatial_dims > 0 and num_spatial_mask_factor > 0:
+        if num_spatial_mask_factor > 0 and (
+            isinstance(max_consecutive_spatial_dims, Tensor) or max_consecutive_spatial_dims > 0
+        ):
             x_masked = random_mask(
                 x_masked,
                 mask_axis=spatial_dim,
