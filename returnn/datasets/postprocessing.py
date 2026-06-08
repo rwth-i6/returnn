@@ -448,6 +448,7 @@ class PostprocessingDataset(CachedDataset2):
                 "worker_conns": feeder_to_worker_conns,
             },
             name=f"{self.__class__.__name__} feeder ep {epoch}",
+            daemon=True,  # don't hang at non-clean exit
         )
         # parent_conns are not closed here, because they move to a different thread, not process,
         # and so they must remain open.
