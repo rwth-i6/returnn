@@ -780,3 +780,6 @@ def _worker_proc_loop(
         pass
     except EOFError:  # when parent dies
         pass
+
+    # Potentially release sub-procs / threads the wrapped dataset owns.
+    dataset.finish_epoch(free_resources=True)
