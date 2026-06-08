@@ -85,7 +85,7 @@ class _DimExtra:
         :param src_data:
         :param src_axis:
         """
-        self.dim = dim
+        self._dim_ref = weakref.ref(dim)
         assert kind is None or (isinstance(kind, Entity) and kind in DimTypes.Types)
         self.kind = kind
         if vocab:
@@ -132,6 +132,18 @@ class _DimExtra:
         self.cache_seq_mask: Dict[Tuple[str, Optional[Tuple[Dim, ...]]], _t.Tensor] = {}  # (dev,dim_order) -> seq_mask
         self.cache_dim_math = _CacheDimMath()  # op (add,sub,...), operand -> Dim
 
+    @property
+    def dim(self) -> Optional[Dim]:
+        """
+        :return: the parent Dim (weakref deref), or None if it was collected
+        """
+        ref = self._dim_ref
+        return ref() if ref is not None else None
+
+    @dim.setter
+    def dim(self, dim: Optional[Dim]):
+        self._dim_ref = weakref.ref(dim) if dim is not None else None
+
     def __getstate__(self):
         d = vars(self).copy()
         d["batch"] = None
@@ -140,13 +152,24 @@ class _DimExtra:
         d["cache_seq_mask"] = {}
         d["cache_dim_math"] = {}
         d["kind"] = self.kind.name if self.kind else None
+        d.pop("_dim_ref", None)
         return d
 
     def __setstate__(self, state):
         self.__dict__.update(state)
+        # Backwards compat: older pickles had a strong "dim" attribute.
+        dim = self.__dict__.pop("dim", None)
+        if dim is not None:
+            self._dim_ref = weakref.ref(dim)
+        elif "_dim_ref" not in self.__dict__:
+            self._dim_ref = None
+
         if self.kind is not None:
             # noinspection PyTypeChecker
             self.kind = {v.name: v for v in DimTypes.Types}[self.kind]
+
+    def _relink_dim(self, dim: Dim):
+        self._dim_ref = weakref.ref(dim)
 
     def __sis_state__(self):
         raise ValueError(f"{self}: currently not expected to be part of the Sisyphus state/hash")
@@ -350,6 +373,19 @@ class _DimMixin:
         slots["_dyn_size_max_value"] = None
         # noinspection PyRedundantParentheses
         return (func, args, (vs, slots), *more_args)
+
+    def __setstate__(self: _d.Dim, state):
+        if isinstance(state, tuple) and len(state) == 2:
+            dict_state, slots_state = state
+        else:
+            dict_state, slots_state = None, state
+        for k, v in (dict_state or {}).items():
+            setattr(self, k, v)
+        for k, v in (slots_state or {}).items():
+            setattr(self, k, v)
+        if self._extra is not None:
+            # noinspection PyProtectedMember
+            self._extra._relink_dim(self)
 
     def copy(self, same_as_self=True, description=None, kind=None, match_priority=None):
         """

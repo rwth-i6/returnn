@@ -6,6 +6,7 @@ or just rarely used attribs, such that we can save memory for the common case.
 from __future__ import annotations
 from typing import TYPE_CHECKING, Optional, Union, Type, Sequence, Tuple, List, Dict, Set
 import os
+import weakref
 
 if TYPE_CHECKING:
     # Those are only used for TensorFlow, or they are deprecated.
@@ -46,7 +47,7 @@ class _TensorExtra:
             such that it represents the merged dims [batch, beam_size].
         :param ControlFlowContext|None control_flow_ctx:
         """
-        self.tensor = tensor
+        self._tensor_ref = weakref.ref(tensor)
         if beam and batch:
             assert batch.beam == beam
         self.batch = batch
@@ -69,10 +70,38 @@ class _TensorExtra:
             raise TypeError(f"unexpected time_dim_axis type {type(time_dim_axis)}")
         self.time_dim_axis = time_dim_axis
 
+    @property
+    def tensor(self) -> Optional[Tensor]:
+        """
+        :return: the parent :class:`Tensor` this ``_extra`` belongs to, or None if it was already collected.
+            In normal operation the parent is always alive (the ``_extra`` is only reachable via
+            ``Tensor._extra``), so this returns a valid tensor. It can be None only on an ``_extra``
+            instance that was just unpickled/deepcopied and not yet re-linked to its parent.
+        """
+        ref = self._tensor_ref
+        return ref() if ref is not None else None
+
+    @tensor.setter
+    def tensor(self, tensor: Optional[Tensor]):
+        self._tensor_ref = weakref.ref(tensor) if tensor is not None else None
+
     def __getstate__(self):
-        d = vars(self)
-        d["batch"] = None  # BatchInfo pickling not supported
+        d = vars(self).copy()
+        d["batch"] = None
+        d.pop("_tensor_ref", None)
         return d
+
+    def __setstate__(self, state):
+        self.__dict__.update(state)
+        # Backwards compat: older pickles had a strong "tensor" attribute.
+        tensor = self.__dict__.pop("tensor", None)
+        if tensor is not None:
+            self._tensor_ref = weakref.ref(tensor)
+        elif "_tensor_ref" not in self.__dict__:
+            self._tensor_ref = None
+
+    def _relink_tensor(self, tensor: Tensor):
+        self._tensor_ref = weakref.ref(tensor)
 
 
 class _TensorMixin(_TensorMixinBase):
@@ -599,6 +628,10 @@ class _TensorMixin(_TensorMixinBase):
     def __setstate__(self, state):
         for k, v in state.items():
             setattr(self, k, v)
+
+        if self._extra is not None:
+            # noinspection PyProtectedMember
+            self._extra._relink_tensor(self)
 
     def reset(self: Tensor):
         """
