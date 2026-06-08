@@ -13,6 +13,8 @@ from collections import defaultdict
 import multiprocessing
 import psutil  # noqa
 
+from returnn.util.debug import install_subproc_faulthandler
+
 
 def watch_memory():
     """
@@ -34,6 +36,8 @@ def _watch_memory_main(pid: int):
     if sys.platform == "linux":
         with open("/proc/self/comm", "w") as f:
             f.write("watch memory")
+
+    install_subproc_faulthandler()
 
     def _print(*args):
         print("MEMORY:", *args)

@@ -14,6 +14,7 @@ import contextlib
 import multiprocessing
 import torch
 from returnn.util.better_exchook import better_exchook
+from returnn.util.debug import install_subproc_faulthandler
 from returnn.util.basic import human_bytes_size
 
 
@@ -204,6 +205,7 @@ def timeout(info: str, *, seconds: int = 30):
 
 
 def _timeout_handler(*, seconds: Union[float, int], proc_id: int, info: str):
+    install_subproc_faulthandler()
     time.sleep(seconds)
     print(f"ERROR: {info}: Timeout handler after {seconds} seconds, killing proc {proc_id}.", file=sys.stderr)
     os.kill(proc_id, signal.SIGABRT)

@@ -425,6 +425,37 @@ def init_faulthandler(sigusr1_chain=False):
                 faulthandler.register(signal.SIGTERM, all_threads=True, chain=True)
 
 
+def install_subproc_faulthandler():
+    """
+    Install faulthandler in a spawned subprocess, dumping to a per-pid file.
+
+    Spawned children start with a fresh interpreter
+    and do not inherit the main proc's faulthandler setup (forked children would),
+    so each spawn target must call this itself to be diagnosable.
+    Both handlers point at <cwd>/faulthandler_dump.<pid>.log --
+    a per-pid file, not stderr, so dumps from many procs don't interleave into unreadable output:
+
+    - faulthandler.enable(): dump on a fatal fault (SIGSEGV / SIGABRT / SIGFPE / SIGBUS).
+    - faulthandler.register(SIGUSR1): on-demand all-thread dump, e.g. to inspect a hang.
+      chain=False so we don't fall through to SIG_DFL (= terminate) when no prior handler is set up,
+      which would kill the very process we want to inspect.
+
+    No dump_traceback_later: an earlier iteration's timer thread broke SyncManager bootstrap.
+    """
+    if sys.platform == "win32":
+        return
+    import faulthandler
+
+    dump_fh = None  # None -> faulthandler defaults to stderr
+    try:
+        dump_fh = open(os.path.join(os.getcwd(), f"faulthandler_dump.{os.getpid()}.log"), "w")
+    except OSError:
+        pass
+    if not faulthandler.is_enabled():
+        faulthandler.enable(file=dump_fh)
+    faulthandler.register(signal.SIGUSR1, all_threads=True, chain=False, file=dump_fh)
+
+
 @auto_exclude_all_new_threads
 def init_ipython_kernel():
     """

@@ -14,6 +14,8 @@ import multiprocessing
 from multiprocessing.context import BaseContext
 from multiprocessing.managers import SyncManager
 
+from returnn.util.debug import install_subproc_faulthandler
+
 
 def create_manager(*, ctx: Optional[BaseContext] = None) -> SyncManager:
     """
@@ -35,6 +37,7 @@ def _manager_init_watch_dog(parent_pid: int) -> None:
     """
     This is the initializer for the manager. It is called when the manager process starts.
     """
+    install_subproc_faulthandler()
     thread = threading.Thread(target=_manager_die_if_parent_dies, args=(parent_pid,), name="manager_watch_dog_thread")
     thread.daemon = True
     thread.start()

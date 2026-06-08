@@ -33,6 +33,7 @@ import torch.utils.data
 from returnn.config import Config
 from returnn.log import log
 from returnn.util.basic import NumbersDict, get_fwd_compat_kwargs
+from returnn.util.debug import install_subproc_faulthandler
 
 
 def create_tensor(array: numpy.ndarray) -> Union[torch.Tensor, numpy.ndarray]:
@@ -685,14 +686,7 @@ class _DataLoaderWorkerInitFunc:
             with open("/proc/self/comm", "w") as f:
                 f.write(f"TDL worker {worker_id}")
 
-            # Ensure SIGUSR1 dumps all-thread tracebacks to stderr without killing the worker.
-            # Forked from the main rank we'd inherit init_faulthandler's SIGUSR1 register,
-            # but be explicit so this is robust against PyTorch DataLoader's worker startup
-            # touching the signal mask.
-            import faulthandler
-            import signal
-
-            faulthandler.register(signal.SIGUSR1, all_threads=True, chain=False)
+        install_subproc_faulthandler()
 
         if self.other_worker_init_fn:
             self.other_worker_init_fn(worker_id)
