@@ -305,11 +305,10 @@ class PostprocessingDataset(CachedDataset2):
             return
         got_exception = False
         for parent in self._worker_procs:
-            # noinspection PyBroadException
             try:
                 parent.exit(join=False)
-            except Exception:
-                got_exception = True
+            except (BrokenPipeError, EOFError, ConnectionResetError):
+                got_exception = True  # worker already exited
         if got_exception:
             return
         for parent in self._worker_procs:
