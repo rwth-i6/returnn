@@ -10,6 +10,7 @@ from __future__ import annotations
 from typing import Optional, Union, Any, Tuple, List, Dict, Callable
 from types import FunctionType
 import functools
+import inspect
 import copy as _copy
 from returnn.tensor import Tensor, Dim
 import returnn.frontend as rf
@@ -67,13 +68,17 @@ class ConformerConvBlock(rf.Module):
         if not callable(norm):
             raise TypeError(f"{self}: unexpected norm type {norm!r}")
         self.norm = norm
+        # Some norms (e.g. GroupNormSpatial) need the spatial dim to pool the statistics over time.
+        # Detect that once here and pass it through in __call__,
+        # instead of forcing a no-op spatial_dim arg onto BatchNorm/LayerNorm.
+        self._norm_wants_spatial_dim = "spatial_dim" in inspect.signature(norm).parameters
 
     def __call__(self, inp: Tensor, *, spatial_dim: Dim) -> Tensor:
         """forward"""
         x_conv1 = self.positionwise_conv1(inp)
         x_act, _ = rf.gating(x_conv1)
         x_depthwise_conv, _ = self.depthwise_conv(x_act, in_spatial_dim=spatial_dim)
-        x_normed = self.norm(x_depthwise_conv)
+        x_normed = self.norm(x_depthwise_conv, **({"spatial_dim": spatial_dim} if self._norm_wants_spatial_dim else {}))
         x_swish = rf.swish(x_normed)
         x_conv2 = self.positionwise_conv2(x_swish)
         return x_conv2
