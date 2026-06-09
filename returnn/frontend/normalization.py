@@ -13,6 +13,7 @@ __all__ = [
     "LayerNorm",
     "RMSNorm",
     "GroupNorm",
+    "GroupNormSpatial",
     "BatchNorm",
     "batch_norm_distributed_default",
     "normalize",
@@ -150,6 +151,12 @@ class RMSNorm(rf.Module):
 class GroupNorm(rf.Module):
     """
     `Group normalization <https://arxiv.org/abs/1803.08494>`__.
+
+    Note: this is non-standard.
+    It reduces the statistics only over the in-group channels, independently per spatial/time position,
+    i.e. it does *not* pool over the spatial dims.
+    This differs from :class:`torch.nn.GroupNorm` / the GroupNorm paper.
+    For the standard, spatially-pooled (batch-independent) variant, use :class:`GroupNormSpatial`.
     """
 
     def __init__(self, in_dim: Union[rf.Dim, Sequence[rf.Dim]], *, num_groups: Union[int, Dim], eps: float = 1e-6):
@@ -166,6 +173,41 @@ class GroupNorm(rf.Module):
     def __call__(self, x: Tensor) -> Tensor:
         x = rf.split_dims(x, axis=self.in_dim, dims=[self.num_groups, self.in_group_dim])
         mean, variance = rf.moments(x, axis=self.in_group_dim)
+        norm_x = (x - mean) * rf.rsqrt(variance + self.eps)
+        norm_x, _ = rf.merge_dims(norm_x, dims=[self.num_groups, self.in_group_dim], out_dim=self.in_dim)
+        return norm_x * self.scale + self.bias
+
+
+class GroupNormSpatial(rf.Module):
+    """
+    Standard (spatially-pooled) `group normalization <https://arxiv.org/abs/1803.08494>`__,
+    equivalent to :class:`torch.nn.GroupNorm`:
+    the mean/variance are computed over the in-group channels AND the given spatial dim(s),
+    per batch element and per group (so batch-independent).
+
+    Unlike :class:`GroupNorm` (which reduces only over the in-group channels, i.e. per spatial position),
+    the spatial dim(s) must be passed explicitly to ``__call__`` --
+    they cannot be reliably inferred from the input tensor.
+    ``spatial_dim`` may be a single :class:`Dim` or a sequence of dims.
+    With ``num_groups=1`` this normalizes over all channels and spatial positions per sequence
+    (what torchaudio's Conformer uses); it is not the same as :class:`LayerNorm`.
+    """
+
+    def __init__(self, in_dim: Union[rf.Dim, Sequence[rf.Dim]], *, num_groups: Union[int, Dim], eps: float = 1e-6):
+        super().__init__()
+        self.in_dim = in_dim
+        self.num_groups = num_groups if isinstance(num_groups, Dim) else Dim(num_groups, name="groups")
+        self.in_group_dim = in_dim.ceildiv_left(num_groups)
+        self.eps = eps
+        self.scale = rf.Parameter([self.in_dim] if isinstance(self.in_dim, rf.Dim) else self.in_dim)
+        self.scale.initial = 1.0
+        self.bias = rf.Parameter(self.scale.dims)
+        self.bias.initial = 0.0
+
+    def __call__(self, x: Tensor, *, spatial_dim: Union[Dim, Sequence[Dim]]) -> Tensor:
+        x = rf.split_dims(x, axis=self.in_dim, dims=[self.num_groups, self.in_group_dim])
+        spatial_dims = [spatial_dim] if isinstance(spatial_dim, Dim) else list(spatial_dim)
+        mean, variance = rf.moments(x, axis=[self.in_group_dim] + spatial_dims)
         norm_x = (x - mean) * rf.rsqrt(variance + self.eps)
         norm_x, _ = rf.merge_dims(norm_x, dims=[self.num_groups, self.in_group_dim], out_dim=self.in_dim)
         return norm_x * self.scale + self.bias
