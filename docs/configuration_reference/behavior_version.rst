@@ -36,7 +36,10 @@ so every rank consumed only ``1/num_shards`` of its own file shard
 (``1/num_shards^2`` of the data, union ``1/num_shards`` across ranks) --
 silent data loss.
 The fixed behavior is also available independent of the behavior version
-via ``distrib_shard_files="v2"``.
+via the new ``sharding_fix=True`` dataset option
+(a new option, so an older RETURNN rejects it loudly,
+rather than silently doing the wrong thing as a special flag value would);
+``sharding_fix=False`` keeps the legacy behavior.
 
 See issue `#1738 <https://github.com/rwth-i6/returnn/issues/1738>`__.
 
