@@ -455,6 +455,29 @@ def install_subproc_faulthandler():
         faulthandler.enable(file=dump_fh)
     faulthandler.register(signal.SIGUSR1, all_threads=True, chain=False, file=dump_fh)
 
+    if dump_fh is not None:
+        # The file must exist (open fd) from install time on -- faulthandler dumps from signal context,
+        # so it cannot be opened lazily. To avoid littering the cwd with empty per-pid files,
+        # remove it at normal process exit if nothing was ever dumped into it.
+        # (Procs killed hard (SIGKILL / unhandled SIGTERM) skip atexit and may leave an empty file --
+        # acceptable, since after such a death the leftovers are debugging hints anyway.)
+        import atexit
+
+        def _remove_dump_file_if_empty(fh=dump_fh):
+            try:
+                fh.flush()
+                if os.fstat(fh.fileno()).st_size > 0:
+                    return  # sth was dumped -- keep it
+                if faulthandler.is_enabled():
+                    faulthandler.disable()
+                faulthandler.unregister(signal.SIGUSR1)
+                fh.close()
+                os.remove(fh.name)
+            except OSError:
+                pass
+
+        atexit.register(_remove_dump_file_if_empty)
+
 
 @auto_exclude_all_new_threads
 def init_ipython_kernel():
