@@ -1281,7 +1281,7 @@ def test_DistributeFilesDataset_sharding():
 
     # Create a few HDF files such that we can easily verify the data later.
     hdf_files = []
-    # num_seqs = 23
+    num_seqs = 23
     for hdf_idx in range(20):
         hdf_files.append(generate_hdf_from_dummy())
 
@@ -1321,7 +1321,7 @@ def test_DistributeFilesDataset_sharding():
                 assert data.ndim == 1 and data.shape[0] > 1
                 local_seq_idx += 1
                 global_seq_idx += 1
-        # assert global_seq_idx == len(hdf_files) * num_seqs // distrib_size  # TODO not sure...?
+        assert global_seq_idx == len(hdf_files) * num_seqs // distrib_size
 
 
 def test_PostprocessingDataset():

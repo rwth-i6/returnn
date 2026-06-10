@@ -13,7 +13,7 @@ import sys
 import numpy
 from returnn.log import log
 from returnn.util import better_exchook
-from returnn.util.basic import override_env_var, try_run, OptionalNotImplementedError
+from returnn.util.basic import override_env_var, try_run, BehaviorVersion, OptionalNotImplementedError
 from returnn.util.literal_py_to_pickle import literal_eval
 from returnn.util.multi_proc_non_daemonic_spawn import NonDaemonicSpawnContext
 from returnn.config import SubProcCopyGlobalConfigPreInitFunc
@@ -30,6 +30,8 @@ __all__ = ["DistributeFilesDataset"]
 
 Filename = str
 FileTree = Union[Filename, Tuple["FileTree", ...], Dict[Any, "FileTree"], List["FileTree"]]
+
+_warned_sub_dataset_double_sharding = False
 
 
 class DistributeFilesDataset(CachedDataset2):
@@ -139,7 +141,7 @@ class DistributeFilesDataset(CachedDataset2):
         get_sub_epoch_dataset: Callable[[List[FileTree]], Dict[str, Any]],
         preload_next_n_sub_epochs: int = 1,
         buffer_size: int = 1,
-        distrib_shard_files: bool = False,
+        distrib_shard_files: Union[bool, str] = False,
         _meta_info_cache: Optional[Dict[str, Any]] = None,
         _distrib_info: Optional[Dict[str, int]] = None,
         **kwargs,
@@ -155,8 +157,13 @@ class DistributeFilesDataset(CachedDataset2):
         :param get_sub_epoch_dataset: callable which returns a dataset dict for a given subset of files
         :param preload_next_n_sub_epochs: how many sub epoch datasets to preload
         :param buffer_size: buffer size for each worker, number of seqs to prefetch
-        :param distrib_shard_files: set to true to shard the data across worker processes in
-            distributed training scenaria
+        :param distrib_shard_files: shard the data across worker processes in distributed training scenaria.
+            True (legacy v1): the sub-epoch dataset additionally inherits _num_shards/_shard_index
+            and shards its seq order again, on top of the file-level sharding,
+            so every rank consumes only 1/num_shards of its own file shard --
+            usually NOT what you want (silent data loss), see https://github.com/rwth-i6/returnn/issues/1738.
+            "v2" (or True with behavior_version >= 26): only the files are sharded;
+            the sub-epoch dataset sees all seqs of its files (the fixed behavior).
         :param _meta_info_cache: for internal use
         :param _distrib_info: for internal use
         """
@@ -174,6 +181,7 @@ class DistributeFilesDataset(CachedDataset2):
         self._workers: Dict[int, _WorkerProcParent] = {}  # epoch -> worker
         self._files_order_cache: Dict[int, List[List[FileTree]]] = {}  # full epoch (0-indexed) -> files order
 
+        assert distrib_shard_files in (False, True, "v2"), f"invalid distrib_shard_files {distrib_shard_files!r}"
         self.distrib_shard_files = distrib_shard_files
         if distrib_shard_files:
             if _distrib_info:
@@ -217,6 +225,18 @@ class DistributeFilesDataset(CachedDataset2):
     @property
     def _distrib_info(self):
         return {"_num_shards": self._num_shards, "_shard_index": self._shard_index}
+
+    @property
+    def _fixed_sub_dataset_sharding(self) -> bool:
+        """:return: whether the fixed behavior is enabled: the sub-epoch dataset does not shard again.
+
+        Relevant whenever this dataset is sharded (any ``_num_shards > 1``,
+        whether via ``distrib_shard_files`` or via the ``_num_shards``/``_shard_index`` properties):
+        this dataset shards the *files*, so the sub-epoch dataset must see all seqs of its files.
+        """
+        if self.distrib_shard_files == "v2":
+            return True
+        return BehaviorVersion.get() >= 26
 
     @property
     def _meta_info_cache(self):
@@ -380,7 +400,32 @@ class DistributeFilesDataset(CachedDataset2):
         import tree
 
         dataset_dict = self.get_sub_epoch_dataset(files)
+        explicit_shard_info = "_num_shards" in dataset_dict or "_shard_index" in dataset_dict
         dataset_dict = extend_dataset_dict_from_parent_dataset(dataset_dict, parent_dataset=self)
+        if self._num_shards > 1 and not explicit_shard_info:
+            if self._fixed_sub_dataset_sharding:
+                # The files are already sharded across the ranks (see init_seq_order),
+                # so the sub-epoch dataset must see all seqs of its files and must not shard again.
+                dataset_dict["_num_shards"] = 1
+                dataset_dict["_shard_index"] = 0
+            else:
+                global _warned_sub_dataset_double_sharding
+                if not _warned_sub_dataset_double_sharding:
+                    _warned_sub_dataset_double_sharding = True
+                    log.print_warning(
+                        f"{self}: sharding enabled (num_shards={self._num_shards},"
+                        f" via distrib_shard_files={self.distrib_shard_files!r} or the _num_shards property),"
+                        " legacy behavior:\n"
+                        "This dataset shards the FILES, but the sub-epoch dataset additionally inherits\n"
+                        "_num_shards/_shard_index and will shard its seq order AGAIN.\n"
+                        f"Every rank then consumes only 1/{self._num_shards} of its own file shard,\n"
+                        f"i.e. 1/{self._num_shards**2} of the data, union 1/{self._num_shards} across ranks.\n"
+                        "This is very likely NOT what you want (silent data loss).\n"
+                        "Use behavior_version >= 26 (or distrib_shard_files='v2') for the fixed behavior,\n"
+                        "or set explicit '_num_shards': 1, '_shard_index': 0 in the sub-epoch dataset dict\n"
+                        "to silence this warning and keep full per-file-shard consumption.\n"
+                        "See https://github.com/rwth-i6/returnn/issues/1738."
+                    )
 
         flat_sub_dset = tree.flatten_with_path(dataset_dict)
 

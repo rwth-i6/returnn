@@ -22,6 +22,24 @@ and not listing legacy/deprecated parameters.
 Version History
 ---------------
 
+Behavior version 26 (2026-06-11)
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+:class:`DistributeFilesDataset` with sharding
+(any ``_num_shards > 1``: via ``distrib_shard_files=True``
+or via the ``_num_shards``/``_shard_index`` properties):
+the sub-epoch dataset no longer inherits the sharding info
+(``_num_shards``/``_shard_index``) from the parent dataset.
+Before, the sub-epoch dataset sharded its seq order a second time,
+on top of the file-level sharding,
+so every rank consumed only ``1/num_shards`` of its own file shard
+(``1/num_shards^2`` of the data, union ``1/num_shards`` across ranks) --
+silent data loss.
+The fixed behavior is also available independent of the behavior version
+via ``distrib_shard_files="v2"``.
+
+See issue `#1738 <https://github.com/rwth-i6/returnn/issues/1738>`__.
+
 Behavior version 25 (2026-03-01)
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
