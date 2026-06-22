@@ -489,6 +489,7 @@ def init(config_filename=None, command_line_options=(), config_updates=None, ext
 
             watch_memory()
         init_backend_engine()
+        sys.setrecursionlimit(50000)
         if config.bool("ipython", False):
             debug_util.init_ipython_kernel()
         if config.typed_value("startup_callback"):
