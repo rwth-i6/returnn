@@ -33,6 +33,7 @@ We distinguish three cases on RASR side:
 
 from __future__ import annotations
 import torch
+import inspect
 from typing import Callable, Optional, Dict, List
 import argparse
 import os
@@ -272,15 +273,17 @@ def main():
     print("*** Output names:", output_names)
     print("*** Dynamic axes:", dynamic_axes)
 
-    export_func(
-        pt_model_fwd,
-        (extern_data_raw, {}),
+    export_kwargs = dict(
         f=args.out_onnx_filename,
         verbose=True,
         input_names=input_names,
         output_names=output_names,
         dynamic_axes=dynamic_axes,
     )
+    if "kwargs" in inspect.signature(export_func).parameters:
+        export_func(pt_model_fwd, (extern_data_raw,), kwargs={}, **export_kwargs)
+    else:
+        export_func(pt_model_fwd, (extern_data_raw, {}), **export_kwargs)
 
 
 def _assign_scalar_dyn_dims(extern_data: TensorDict):
