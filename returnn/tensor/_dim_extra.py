@@ -1266,6 +1266,10 @@ class _DimMixin:
             elif kind in ("floordiv", "truediv"):  # truediv assumes there is no remainder
                 return rf.combine_bc(a, "floordiv", b)
             elif kind == "ceildiv":
+                if util.is_onnx_export_global() or _is_torch_onnx_export():
+                    # Dynamic dim sizes are non-negative. Use the positive ceil-div formulation for ONNX because
+                    # ONNX integer division truncates negative values toward zero, making -(-a // b) wrong.
+                    return rf.combine_bc(rf.combine_bc(a, "add", b - 1), "floordiv", b)
                 return -rf.combine_bc(-a, "floordiv", b)
             else:
                 raise ValueError("unknown op kind %r" % op.kind)
@@ -1277,6 +1281,13 @@ class _DimMixin:
                 return max(a, 0)
             else:
                 raise TypeError(f"complete_dyn_size: _relu: unexpected type {type(a)}")
+
+        def _is_torch_onnx_export() -> bool:
+            try:
+                import torch
+            except ImportError:
+                return False
+            return torch.onnx.is_in_onnx_export()
 
         y: Optional[_t.Tensor] = None  # resulting dyn size
         inputs = list(op.inputs)
