@@ -423,6 +423,26 @@ def init_faulthandler(sigusr1_chain=False):
             if sys.platform != "win32":
                 faulthandler.register(signal.SIGUSR1, all_threads=True, chain=sigusr1_chain)
                 faulthandler.register(signal.SIGTERM, all_threads=True, chain=True)
+    # Subprocs' per-pid faulthandler_dump.<pid>.log self-clean if empty,
+    # but not on hard kill (SIGKILL / unhandled SIGTERM);
+    # sweep the leftover empties here at normal exit.
+    _register_empty_faulthandler_dump_cleanup()
+
+
+def _register_empty_faulthandler_dump_cleanup():
+    """Remove leftover empty ``faulthandler_dump.<pid>.log`` files from the cwd at normal exit."""
+    import atexit
+    import glob
+
+    def _cleanup():
+        for filename in glob.glob(os.path.join(os.getcwd(), "faulthandler_dump.*.log")):
+            try:
+                if os.path.getsize(filename) == 0:
+                    os.remove(filename)
+            except OSError:
+                pass
+
+    atexit.register(_cleanup)
 
 
 def install_subproc_faulthandler():
