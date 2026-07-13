@@ -36,6 +36,7 @@ import torch
 from typing import Callable, Optional, Dict, List
 import argparse
 import os
+import re
 
 import _setup_returnn_env  # noqa
 from returnn.config import Config
@@ -327,7 +328,12 @@ def _build_dynamic_shapes(
     def get_dim_symbol(dim_name: str) -> Dim:
         dim_symbol = dim_symbols.get(dim_name)
         if dim_symbol is None:
-            dim_symbol = Dim(dim_name)
+            sanitized_name = re.sub(r"[^0-9a-zA-Z_]", "_", dim_name).strip("_")
+            if not sanitized_name:
+                sanitized_name = "dim"
+            if sanitized_name[0].isdigit():
+                sanitized_name = f"d_{sanitized_name}"
+            dim_symbol = Dim(sanitized_name)
             dim_symbols[dim_name] = dim_symbol
         return dim_symbol
 
