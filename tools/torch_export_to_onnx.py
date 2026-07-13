@@ -33,7 +33,6 @@ We distinguish three cases on RASR side:
 
 from __future__ import annotations
 import torch
-import inspect
 from typing import Callable, Optional, Dict, List
 import argparse
 import os
@@ -272,18 +271,18 @@ def main():
     print("*** Input names:", input_names)
     print("*** Output names:", output_names)
     print("*** Dynamic axes:", dynamic_axes)
+    dynamic_shapes = _build_dynamic_shapes(extern_data, model_outputs, input_names)
+    print("*** Dynamic shapes:", dynamic_shapes)
 
-    export_kwargs = dict(
+    export_func(
+        pt_model_fwd,
+        (extern_data_raw, {}),
         f=args.out_onnx_filename,
         verbose=True,
         input_names=input_names,
         output_names=output_names,
-        dynamic_axes=dynamic_axes,
+        dynamic_shapes=dynamic_shapes,
     )
-    if "kwargs" in inspect.signature(export_func).parameters:
-        export_func(pt_model_fwd, (extern_data_raw,), kwargs={}, **export_kwargs)
-    else:
-        export_func(pt_model_fwd, (extern_data_raw, {}), **export_kwargs)
 
 
 def _assign_scalar_dyn_dims(extern_data: TensorDict):
@@ -307,6 +306,51 @@ def _assign_scalar_dyn_dims(extern_data: TensorDict):
                 ),
                 dim.dyn_size_ext.dtype,
             ).raw_tensor
+
+
+def _build_dynamic_shapes(
+    extern_data: TensorDict,
+    model_outputs: TensorDict,
+    input_names: List[str],
+) -> tuple:
+    """
+    Build torch.export-compatible dynamic_shapes from RETURNN tensor metadata.
+
+    The export API expects a pytree that mirrors the example inputs. Our example
+    inputs are currently passed as `(extern_data_raw, {})`, so we keep the outer
+    tuple structure and provide a dict for the actual tensor inputs.
+    """
+    from torch.export import Dim
+
+    dim_symbols: Dict[str, Dim] = {}
+
+    def get_dim_symbol(dim_name: str) -> Dim:
+        dim_symbol = dim_symbols.get(dim_name)
+        if dim_symbol is None:
+            dim_symbol = Dim(dim_name)
+            dim_symbols[dim_name] = dim_symbol
+        return dim_symbol
+
+    dynamic_shapes: Dict[str, dict] = {}
+    for k, v in list(extern_data.data.items()) + list(model_outputs.data.items()):
+        dims = {}
+        for i, dim in enumerate(v.dims):
+            if dim.is_dynamic():
+                dims[i] = get_dim_symbol(dim.name)
+        dynamic_shapes[k] = dims
+        for i, dim in enumerate(v.dims):
+            if dim.dyn_size_ext is None:
+                continue
+            if dim.dyn_size_ext.dims == ():  # inferable in _assign_scalar_dyn_dims
+                continue
+            size_dims = {}
+            for j, dim_ in enumerate(dim.dyn_size_ext.dims):
+                if dim_.is_dynamic():
+                    size_dims[j] = get_dim_symbol(dim_.name)
+            dynamic_shapes[f"{k}:size{i}"] = size_dims
+
+    input_dynamic_shapes = {k: dynamic_shapes[k] for k in input_names if k in dynamic_shapes}
+    return (input_dynamic_shapes, {})
 
 
 if __name__ == "__main__":
