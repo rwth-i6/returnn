@@ -338,24 +338,18 @@ def _build_dynamic_shapes(
         return dim_symbol
 
     dynamic_shapes: Dict[str, dict] = {}
-    for k, v in list(extern_data.data.items()) + list(model_outputs.data.items()):
+    for k, v in extern_data.data.items():
         dims = {}
         for i, dim in enumerate(v.dims):
             if dim.is_dynamic():
                 dims[i] = get_dim_symbol(dim.name)
         dynamic_shapes[k] = dims
-        for i, dim in enumerate(v.dims):
-            if dim.dyn_size_ext is None:
-                continue
-            if dim.dyn_size_ext.dims == ():  # inferable in _assign_scalar_dyn_dims
-                continue
-            size_dims = {}
-            for j, dim_ in enumerate(dim.dyn_size_ext.dims):
-                if dim_.is_dynamic():
-                    size_dims[j] = get_dim_symbol(dim_.name)
-            dynamic_shapes[f"{k}:size{i}"] = size_dims
 
-    input_dynamic_shapes = {k: dynamic_shapes[k] for k in input_names if k in dynamic_shapes}
+    input_dynamic_shapes = {
+        k: dynamic_shapes[k]
+        for k in input_names
+        if k in dynamic_shapes and ":size" not in k
+    }
     return ((input_dynamic_shapes, {}),)
 
 
