@@ -356,7 +356,7 @@ def _build_dynamic_shapes(
             dynamic_shapes[f"{k}:size{i}"] = size_dims
 
     input_dynamic_shapes = {k: dynamic_shapes[k] for k in input_names if k in dynamic_shapes}
-    return (input_dynamic_shapes, {})
+    return ((input_dynamic_shapes, {}),)
 
 
 if __name__ == "__main__":
