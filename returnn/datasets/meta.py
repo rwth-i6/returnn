@@ -1563,6 +1563,13 @@ class CombinedDataset(CachedDataset2):
         else:
             return self._expand_dataset_seq_idxs(n - len(self.dataset_sorted_seq_idx_list) + 1)
 
+    def get_total_num_seqs(self, *, fast: bool = False) -> int:
+        """
+        :param fast: if True, might raise an exception if not possible to get fast
+        :return: total number of seqs, without partition epoch
+        """
+        return sum(self.datasets[k].get_total_num_seqs(fast=fast) for k in sorted(self.datasets.keys()))
+
     def get_data_keys(self) -> List[str]:
         """data keys"""
         if "data" in self.data_keys:
