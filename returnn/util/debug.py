@@ -423,10 +423,10 @@ def init_faulthandler(sigusr1_chain=False):
             if sys.platform != "win32":
                 faulthandler.register(signal.SIGUSR1, all_threads=True, chain=sigusr1_chain)
                 faulthandler.register(signal.SIGTERM, all_threads=True, chain=True)
-    # Subprocs' per-pid faulthandler_dump.<pid>.log self-clean if empty,
-    # but not on hard kill (SIGKILL / unhandled SIGTERM);
-    # sweep the leftover empties here at normal exit.
-    _register_empty_faulthandler_dump_cleanup()
+        # Subprocs' per-pid faulthandler_dump.<pid>.log self-clean if empty,
+        # but not on hard kill (SIGKILL / unhandled SIGTERM);
+        # sweep the leftover empties here at normal exit.
+        _register_empty_faulthandler_dump_cleanup()
 
 
 def _register_empty_faulthandler_dump_cleanup():
