@@ -1027,6 +1027,7 @@ class CombinedDataset(CachedDataset2):
             )
         self.interleave_gumbel_scale = interleave_gumbel_scale
         self._seq_order_rng: Optional[numpy.random.RandomState] = None
+        self._interleave_last_complete_frac = 0.0
 
         # Build target lookup table that maps from dataset_key and data_key (data key used by CombinedDataset)
         # to dataset_data_key (data_key used by the sub-dataset). This is needed in get_data() to access data
@@ -1113,6 +1114,7 @@ class CombinedDataset(CachedDataset2):
         self._sub_dataset_cur_loaded_seq_range = [(0, 0)] * len(self.datasets)
         # controlled per-epoch RNG for the streaming dataset picks (random_dataset / interleave gumbel)
         self._seq_order_rng = numpy.random.RandomState(self._get_random_seed_for_epoch(epoch))
+        self._interleave_last_complete_frac = 0.0
 
         # noinspection PyBroadException
         try:
@@ -1394,12 +1396,18 @@ class CombinedDataset(CachedDataset2):
                     logits = []
                     for frac, j in complete_fracs_and_ds_idx:
                         used = self.used_num_seqs_per_subset[j]
-                        if used > 0 and frac > 0:
-                            # exact whenever complete_frac = used/total (all our datasets)
-                            total = used / frac
-                        else:
-                            total = self.estimated_num_seq_per_subset[j] or 1
-                        logits.append(numpy.log(max(total * (1.0 - frac), 1.0)))
+                        total = None
+                        try:
+                            total = self.datasets[self.dataset_idx2key_map[j]].num_seqs
+                        except NotImplementedError:
+                            pass
+                        if total is None:
+                            if used > 0 and frac > 0:
+                                # only exact if complete_frac = used/total, which not all datasets guarantee
+                                total = used / frac
+                            else:
+                                total = self.estimated_num_seq_per_subset[j] or 1
+                        logits.append(numpy.log(max(total - used, 1.0)))
                     noise = self._seq_order_rng.gumbel(size=len(complete_fracs_and_ds_idx))
                     complete_frac, dataset_idx = max(
                         zip(complete_fracs_and_ds_idx, logits, noise),
@@ -1516,9 +1524,32 @@ class CombinedDataset(CachedDataset2):
         features = {key: self._get_data(dataset_key, dataset_seq_idx, key) for key in self.data_keys}
         complete_frac = None
         if self.seq_ordering == "interleave":
-            # In the interleave case, by design, this should be monotonically increasing,
-            # as per how we select the next seq in _expand_dataset_seq_idxs.
-            complete_frac = dataset.get_complete_frac(dataset_seq_idx, allow_only_lr_suitable=True)
+            if self.interleave_gumbel_scale:
+                # The gumbel-sampled picks are not monotone in the sub-dataset fracs;
+                # report the (estimated) global progress instead.
+                # There should always be some complete frac (e.g. the LR schedule relies on it),
+                # so estimate the total where it is not known exactly.
+                total = 0.0
+                for j in range(len(self.datasets)):
+                    ds = self.datasets[self.dataset_idx2key_map[j]]
+                    try:
+                        total += ds.num_seqs
+                        continue
+                    except NotImplementedError:
+                        pass
+                    used = self.used_num_seqs_per_subset[j]
+                    frac = ds.get_complete_frac(used, allow_only_lr_suitable=True) if used > 0 else None
+                    if frac:
+                        total += used / frac
+                    else:
+                        total += self.estimated_num_seq_per_subset[j] or used or 1
+                # The estimate varies over time; enforce monotonicity via the running max.
+                complete_frac = min(1.0, max(self._interleave_last_complete_frac, (seq_idx + 1) / total))
+                self._interleave_last_complete_frac = complete_frac
+            else:
+                # In the deterministic interleave case, by design, this is monotonically increasing,
+                # as per how we select the next seq in _expand_dataset_seq_idxs.
+                complete_frac = dataset.get_complete_frac(dataset_seq_idx, allow_only_lr_suitable=True)
         # In other cases, complete_frac is not so straightforward.
         # In the case that the total num seqs is known, then it's anyway not necessary.
         return DatasetSeq(seq_idx=seq_idx, complete_frac=complete_frac, seq_tag=seq_tag, features=features)
