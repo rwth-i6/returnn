@@ -984,6 +984,7 @@ class CombinedDataset(CachedDataset2):
         data_dims: Optional[Dict[str, Tuple[int, int]]] = None,
         data_dtypes: Optional[Dict[str, str]] = None,
         window: int = 1,
+        interleave_gumbel_scale: Union[None, float, str] = None,
         **kwargs,
     ):
         """
@@ -1001,6 +1002,15 @@ class CombinedDataset(CachedDataset2):
         :param data_dims: self-data-key -> data-dimension, len(shape) (1 ==> sparse repr).
             Deprecated/Only to double check. Read from data if not specified.
         :param data_dtypes: self-data-key -> dtype. Read from data if not specified.
+        :param interleave_gumbel_scale: for seq_ordering "interleave":
+            softens the deterministic dataset choice via the Gumbel-max trick,
+            sampling the next dataset from softmax(log(expected_remaining_seqs) / scale).
+            Scale 1 picks proportionally to the remaining seqs,
+            i.e. equivalent to a random shuffle of the union of all datasets.
+            Scale -> 0 becomes deterministic (most-remaining first, keeps datasets balanced).
+            None or 0 is the plain deterministic pick-lowest-complete-frac interleave.
+            "remaining" anneals the scale as 1 - max(complete_frac)
+            (random mixing early in the epoch, deterministic towards the end).
         """
         assert window == 1  # not implemented
         super(CombinedDataset, self).__init__(**kwargs)
@@ -1011,6 +1021,12 @@ class CombinedDataset(CachedDataset2):
         self.dataset_idx2key_map = dict(enumerate(sorted(self.dataset_keys)))  # idx -> dataset-key
         self.data_keys = set(data_map.values())  # type: typing.Set[str]
         self.target_list = sorted(self.data_keys - {"data"})
+        if isinstance(interleave_gumbel_scale, str):
+            assert interleave_gumbel_scale == "remaining", (
+                f"invalid interleave_gumbel_scale {interleave_gumbel_scale!r}"
+            )
+        self.interleave_gumbel_scale = interleave_gumbel_scale
+        self._seq_order_rng: Optional[numpy.random.RandomState] = None
 
         # Build target lookup table that maps from dataset_key and data_key (data key used by CombinedDataset)
         # to dataset_data_key (data_key used by the sub-dataset). This is needed in get_data() to access data
@@ -1095,6 +1111,8 @@ class CombinedDataset(CachedDataset2):
             dataset.init_seq_order(epoch=epoch)
 
         self._sub_dataset_cur_loaded_seq_range = [(0, 0)] * len(self.datasets)
+        # controlled per-epoch RNG for the streaming dataset picks (random_dataset / interleave gumbel)
+        self._seq_order_rng = numpy.random.RandomState(self._get_random_seed_for_epoch(epoch))
 
         # noinspection PyBroadException
         try:
@@ -1341,30 +1359,55 @@ class CombinedDataset(CachedDataset2):
                     return False  # No dataset has remaining data
 
             elif self.seq_ordering == "interleave":
+                # Only datasets which still have remaining data.
                 complete_fracs_and_ds_idx = [
                     (
                         self.datasets[self.dataset_idx2key_map[j]].get_complete_frac(
                             self.used_num_seqs_per_subset[j], allow_only_lr_suitable=True
-                        )
-                        if self.datasets[self.dataset_idx2key_map[j]].is_less_than_num_seqs(
-                            self.used_num_seqs_per_subset[j]
-                        )
-                        else float("inf"),
+                        ),
                         j,
                     )
                     for j in range(len(self.datasets))
+                    if self.datasets[self.dataset_idx2key_map[j]].is_less_than_num_seqs(
+                        self.used_num_seqs_per_subset[j]
+                    )
                 ]
                 assert all(frac is not None for frac, _ in complete_fracs_and_ds_idx), (
                     f"{self}: Datasets must provide complete frac for interleave,"
                     f" got {complete_fracs_and_ds_idx}, dataset idx2key map {self.dataset_idx2key_map}"
                 )
-                # Sort by complete frac, i.e. datasets with the lowest complete frac first.
-                complete_fracs_and_ds_idx.sort()
-                for complete_frac, dataset_idx in complete_fracs_and_ds_idx:
-                    if complete_frac < float("inf"):
-                        break
-                else:
+                if not complete_fracs_and_ds_idx:
                     return False  # No dataset has remaining data
+                if self.interleave_gumbel_scale:
+                    # Gumbel-max softening: sample the next dataset from softmax(logits / scale)
+                    # with logits = log(expected remaining seqs),
+                    # via argmax(logits + scale * gumbel_noise).
+                    # Scale 1 = proportional to remaining seqs = random shuffle of the union;
+                    # scale -> 0 = deterministic most-remaining-first (keeps datasets balanced).
+                    scale = self.interleave_gumbel_scale
+                    if scale == "remaining":
+                        # lowest remaining fraction, i.e. 1 - max complete frac:
+                        # as the leading dataset nears its end the choice becomes deterministic,
+                        # so it cannot exhaust early and leave a pure tail of the lagging dataset.
+                        scale = 1.0 - max(frac for frac, _ in complete_fracs_and_ds_idx)
+                    assert isinstance(scale, float)
+                    logits = []
+                    for frac, j in complete_fracs_and_ds_idx:
+                        used = self.used_num_seqs_per_subset[j]
+                        if used > 0 and frac > 0:
+                            # exact whenever complete_frac = used/total (all our datasets)
+                            total = used / frac
+                        else:
+                            total = self.estimated_num_seq_per_subset[j] or 1
+                        logits.append(numpy.log(max(total * (1.0 - frac), 1.0)))
+                    noise = self._seq_order_rng.gumbel(size=len(complete_fracs_and_ds_idx))
+                    complete_frac, dataset_idx = max(
+                        zip(complete_fracs_and_ds_idx, logits, noise),
+                        key=lambda fln: fln[1] + float(scale) * fln[2],
+                    )[0]
+                else:
+                    # Pick the dataset with the lowest complete frac.
+                    complete_frac, dataset_idx = min(complete_fracs_and_ds_idx)
 
             elif self.seq_ordering == "random_dataset":
                 while True:
@@ -1382,13 +1425,13 @@ class CombinedDataset(CachedDataset2):
                                 nonempty_datasets.append(j)
                         if not nonempty_datasets:
                             return False  # No more data to add
-                        dataset_idx = numpy.random.choice(nonempty_datasets)
+                        dataset_idx = self._seq_order_rng.choice(nonempty_datasets)
                         self.estimated_num_seq_per_subset[dataset_idx] += 1
                         break
 
                     else:  # We sample from all sets which should contain more data
                         prob_table = [remaining / total_remaining for remaining in expected_remaining_seqs]
-                        dataset_idx = numpy.random.choice(len(self.datasets), p=prob_table)
+                        dataset_idx = self._seq_order_rng.choice(len(self.datasets), p=prob_table)
                         if self.datasets[self.dataset_idx2key_map[dataset_idx]].is_less_than_num_seqs(
                             self.used_num_seqs_per_subset[dataset_idx]
                         ):
