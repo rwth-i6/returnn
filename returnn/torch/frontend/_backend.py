@@ -29,6 +29,31 @@ from ..util.assert_ import assert_
 _TT = Tensor[torch.Tensor]
 
 
+def _shape_dim_values(dims: Sequence[Dim]) -> List[Union[int, torch.Tensor]]:
+    """Return dim values suitable as a PyTorch shape."""
+    return _shape_values([d.get_dim_value() for d in dims])
+
+
+def _shape_values(shape: List[Union[int, torch.Tensor]]) -> List[Union[int, torch.Tensor]]:
+    """Return shape values with ONNX-compatible tensor dtypes."""
+    if torch.onnx.is_in_onnx_export():
+        # ONNX shape tensors must be int64. Dynamic dim sizes in RETURNN are often int32.
+        shape = [dim.long() if isinstance(dim, torch.Tensor) else dim for dim in shape]
+    return shape
+
+
+def _scalar_value_like(
+    value: Union[bool, int, float], raw_tensor: torch.Tensor
+) -> Union[bool, int, float, torch.Tensor]:
+    """Return a scalar operand (e.g. for torch.where) which carries the dtype of raw_tensor."""
+    if torch.onnx.is_in_onnx_export():
+        # Eager PyTorch treats a Python scalar as weakly typed and keeps the dtype of the other operand,
+        # but the ONNX tracer materializes it as a float64/int64 constant,
+        # which then violates the "all operands have the same type" constraint of e.g. onnx::Where.
+        return torch.tensor(value, dtype=raw_tensor.dtype, device=raw_tensor.device)
+    return value
+
+
 # Ignore this warning until we really expect that we implemented everything.
 # noinspection PyAbstractClass
 class TorchBackend(Backend[torch.Tensor]):
@@ -295,7 +320,7 @@ class TorchBackend(Backend[torch.Tensor]):
             dtype=source.dtype,
             sparse_dim=source.sparse_dim,
         )
-        out_shape = [d.get_dim_value() for d in out.dims]
+        out_shape = _shape_dim_values(out.dims)
         out.raw_tensor = torch.reshape(source.raw_tensor, out_shape)
         if source.feature_dim is not None:
             if source.feature_dim in dims:
@@ -317,7 +342,15 @@ class TorchBackend(Backend[torch.Tensor]):
         assert pad_to_multiples in (None, False)  # not implemented
         axis_ = source.get_axis_from_description(axis)
         out_dims = source.dims[:axis_] + tuple(dims) + source.dims[axis_ + 1 :]
-        out_shape = [d.get_dim_value() for d in out_dims]
+        if torch.onnx.is_in_onnx_export():
+            out_shape = (
+                list(source.raw_tensor.shape[:axis_])
+                + [d.get_dim_value() for d in dims]
+                + list(source.raw_tensor.shape[axis_ + 1 :])
+            )
+            out_shape = _shape_values(out_shape)
+        else:
+            out_shape = _shape_dim_values(out_dims)
         out_raw = torch.reshape(source.raw_tensor, out_shape)
         return Tensor(
             "split_dims",
@@ -344,7 +377,20 @@ class TorchBackend(Backend[torch.Tensor]):
         out = Tensor("reshape", dims=dims, dtype=source.dtype, sparse_dim=source.sparse_dim)
         if source.feature_dim and source.feature_dim not in in_dims:
             out.feature_dim = source.feature_dim
-        out.raw_tensor = torch.reshape(source.placeholder, [d.get_dim_value() for d in dims])
+        if torch.onnx.is_in_onnx_export():
+            out_dim_values = [
+                source.raw_tensor.shape[source.dims.index(d)] if d in source.dims else d.get_dim_value()
+                for d in out_dims
+            ]
+            out_shape = (
+                list(source.raw_tensor.shape[:insert_axis])
+                + out_dim_values
+                + list(source.raw_tensor.shape[insert_axis + len(in_dims) :])
+            )
+            out_shape = _shape_values(out_shape)
+        else:
+            out_shape = _shape_dim_values(dims)
+        out.raw_tensor = torch.reshape(source.placeholder, out_shape)
         return out
 
     @staticmethod
@@ -612,7 +658,7 @@ class TorchBackend(Backend[torch.Tensor]):
             tensor = tensor.copy()
             mask = tensor.get_sequence_mask_broadcast(axis=axis)
             inf_value = get_global_inf_value()
-            tensor.raw_tensor = torch.where(mask, tensor.raw_tensor, -inf_value)
+            tensor.raw_tensor = torch.where(mask, tensor.raw_tensor, _scalar_value_like(-inf_value, tensor.raw_tensor))
         out_raw = torch.softmax(tensor.raw_tensor, dim=tensor.dims.index(axis))
         out.dtype = TorchBackend.get_dtype_name_raw(out_raw)
         out.raw_tensor = out_raw
@@ -631,7 +677,7 @@ class TorchBackend(Backend[torch.Tensor]):
             tensor = tensor.copy()
             mask = tensor.get_sequence_mask_broadcast(axis=axis)
             inf_value = get_global_inf_value()
-            tensor.raw_tensor = torch.where(mask, tensor.raw_tensor, -inf_value)
+            tensor.raw_tensor = torch.where(mask, tensor.raw_tensor, _scalar_value_like(-inf_value, tensor.raw_tensor))
         out_raw = torch.log_softmax(tensor.raw_tensor, dim=tensor.dims.index(axis))
         out.dtype = TorchBackend.get_dtype_name_raw(out_raw)
         out.raw_tensor = out_raw
@@ -895,7 +941,7 @@ class TorchBackend(Backend[torch.Tensor]):
         :return: parameter
         """
         data = torch.zeros(
-            [d.get_dim_value() for d in tensor.dims],
+            _shape_dim_values(tensor.dims),
             dtype=TorchBackend.as_dtype_raw(tensor.dtype),
             device=device or rf.get_default_device(),
         )
@@ -1069,6 +1115,8 @@ class TorchBackend(Backend[torch.Tensor]):
             if isinstance(value, (bool, int, float, bool, complex, numpy.number)):
                 # torch.full avoids a device sync.
                 # https://github.com/pytorch/pytorch/issues/120996#issuecomment-2319976284
+                if torch.onnx.is_in_onnx_export() and dtype == "bool" and isinstance(value, (bool, numpy.bool_)):
+                    value = int(value)
                 value = torch.full(
                     (), value, dtype=TorchBackend.as_dtype_raw(dtype), device=device or rf.get_default_device()
                 )
@@ -1099,6 +1147,8 @@ class TorchBackend(Backend[torch.Tensor]):
             # onnx::ConstantOfShape (via torch.full) must get shape as int64.
             # https://github.com/rwth-i6/returnn/issues/1333#issuecomment-1607236783
             shape = [dim.long() if isinstance(dim, torch.Tensor) else dim for dim in shape]
+            if dtype == "bool" and isinstance(fill_value, (bool, numpy.bool_)):
+                fill_value = int(fill_value)
         raw_tensor = torch.full(
             shape, fill_value, dtype=TorchBackend.as_dtype_raw(dtype), device=device or rf.get_default_device()
         )
@@ -1194,7 +1244,7 @@ class TorchBackend(Backend[torch.Tensor]):
             elif len(index_own_dims) == 0:
                 out_raw = out_raw.squeeze(axis_int)
             else:
-                out_raw = out_raw.reshape([d.get_dim_value() for d in out.dims])
+                out_raw = out_raw.reshape(_shape_dim_values(out.dims))
             out.raw_tensor = out_raw
         elif axis_int == 0 and indices.batch_ndim == 0:
             out.raw_tensor = source.raw_tensor[indices.raw_tensor]
@@ -1271,7 +1321,7 @@ class TorchBackend(Backend[torch.Tensor]):
             check_dtype=False,
         )
         out_dims = batch_dims + [out_flat_dim] + feature_dims
-        out_shape = [d.get_dim_value() for d in out_dims]
+        out_shape = _shape_dim_values(out_dims)
         if mode == "sum" and isinstance(fill_value, (int, float)) and fill_value == 0:
             out_raw = torch.zeros(out_shape, dtype=source.raw_tensor.dtype, device=source.raw_tensor.device)
             out_raw.scatter_add_(dim=len(batch_dims), index=indices.raw_tensor.to(torch.int64), src=source.raw_tensor)
@@ -1347,6 +1397,11 @@ class TorchBackend(Backend[torch.Tensor]):
             size = end - start
         else:
             raise TypeError(f"slice: unsupported type for size: {type(size)}")
+        if torch.onnx.is_in_onnx_export():
+            if isinstance(start, torch.Tensor):
+                start = start.long()
+            if isinstance(size, torch.Tensor):
+                size = size.long()
         out.raw_tensor = torch.narrow(source.raw_tensor, dim=axis_int, start=start, length=size)
         return out
 
@@ -1898,7 +1953,7 @@ class TorchBackend(Backend[torch.Tensor]):
         """
         random. See `rf.random` for details.
         """
-        shape = [d.get_dim_value() for d in dims]
+        shape = _shape_dim_values(dims)
         dtype_ = TorchBackend.as_dtype_raw(dtype)
         if out is None:
             out = Tensor(
@@ -2019,9 +2074,7 @@ class TorchBackend(Backend[torch.Tensor]):
         if len(common_dims) >= 2:
             probs, flat_common_dim = rf.merge_dims(probs, dims=common_dims)
         out_raw = torch.multinomial(probs.raw_tensor, num_samples=num_samples, replacement=True)
-        out_raw = out_raw.reshape(
-            [d.get_dim_value() for d in common_dims] + [d.get_dim_value() for d in non_common_dims]
-        )
+        out_raw = out_raw.reshape(_shape_dim_values(common_dims) + _shape_dim_values(non_common_dims))
         out = rf.convert_to_tensor(out_raw, dims=common_dims + non_common_dims, sparse_dim=axis)
         out = out.copy_transpose(dims)
         out.name = "random_choice_with_replacement"
@@ -2049,7 +2102,7 @@ class TorchBackend(Backend[torch.Tensor]):
         in_raw = tensor.copy_compatible_to_dims_raw(tensor_templ_dims)
         if any([in_raw.shape[i] == 1 < d.get_dim_value() for i, d in enumerate(dims)]):
             # unbroadcast
-            in_raw = in_raw.expand([d.get_dim_value() for d in tensor_templ_dims])
+            in_raw = in_raw.expand(_shape_dim_values(tensor_templ_dims))
         if mask.raw_tensor.device.type == "meta":
             # This is not supported, but also, we would anyway not know the out shape.
             # However, instead of erroring, just assume some dummy mask.
@@ -2097,7 +2150,7 @@ class TorchBackend(Backend[torch.Tensor]):
         source_raw = source.copy_compatible_to_dims_raw(source_templ_dims)
 
         out_dims = tuple(dims) + tuple(remaining_dims)
-        out_shape = [d.get_dim_value() for d in out_dims]
+        out_shape = _shape_dim_values(out_dims)
         if backup is None:
             out_raw = torch.zeros(out_shape, dtype=source_raw.dtype, device=source_raw.device)
         else:
@@ -2220,7 +2273,7 @@ class TorchBackend(Backend[torch.Tensor]):
             src_raw = torch.reshape(
                 source.raw_tensor,
                 # potentially merge batch dims all together
-                [-1, in_dim.get_dim_value()] + [d.get_dim_value() for d in in_spatial_dims],
+                _shape_values([-1, in_dim.get_dim_value()] + [d.get_dim_value() for d in in_spatial_dims]),
             )
         use_striding = strides and (strides > 1 if isinstance(strides, int) else any(s > 1 for s in strides))
         if padding == "same" and not use_striding and all(d.dimension % 2 == 1 for d in filter_size):
@@ -2312,7 +2365,7 @@ class TorchBackend(Backend[torch.Tensor]):
         if len(batch_dims) == 1:
             out.raw_tensor = out_raw
         else:
-            out.raw_tensor = torch.reshape(out_raw, [d.get_dim_value() for d in out.dims])
+            out.raw_tensor = torch.reshape(out_raw, _shape_dim_values(out.dims))
         out.feature_dim = out_dim
         return out, out_spatial_dims
 
@@ -2356,7 +2409,7 @@ class TorchBackend(Backend[torch.Tensor]):
             src_raw = torch.reshape(
                 source.raw_tensor,
                 # potentially merge batch dims all together
-                [-1, in_dim.get_dim_value()] + [d.get_dim_value() for d in in_spatial_dims],
+                _shape_values([-1, in_dim.get_dim_value()] + [d.get_dim_value() for d in in_spatial_dims]),
             )
         if padding == "same":
             raise NotImplementedError("transposed_conv with padding='same' not implemented")
@@ -2410,7 +2463,7 @@ class TorchBackend(Backend[torch.Tensor]):
         if len(batch_dims) == 1:
             out.raw_tensor = out_raw
         else:
-            out.raw_tensor = torch.reshape(out_raw, [d.get_dim_value() for d in out.dims])
+            out.raw_tensor = torch.reshape(out_raw, _shape_dim_values(out.dims))
         out.feature_dim = out_dim
         return out, out_spatial_dims
 
@@ -2440,21 +2493,28 @@ class TorchBackend(Backend[torch.Tensor]):
         # batch_dims would actually cover the channel-dim (C) as well,
         # as it does not really matter to differentiate it from other batch dims.
         source = source.copy_transpose(batch_dims + list(in_spatial_dims))
-        src_raw = torch.reshape(
-            source.raw_tensor,
+        if torch.onnx.is_in_onnx_export():
+            src_shape = source.raw_tensor.shape
+            pool_shape = [-1, src_shape[len(batch_dims) - 1] if batch_dims else 1] + list(src_shape[len(batch_dims) :])
+        else:
             # Potentially merge batch dims all together.
             # Keep the last as the channel-dim, but not sure if this is really relevant.
-            [-1, batch_dims[-1].get_dim_value() if batch_dims else 1] + [d.get_dim_value() for d in in_spatial_dims],
-        )
+            pool_shape = [-1, batch_dims[-1].get_dim_value() if batch_dims else 1] + [
+                d.get_dim_value() for d in in_spatial_dims
+            ]
+        src_raw = torch.reshape(source.raw_tensor, _shape_values(pool_shape))
         assert isinstance(strides, (list, tuple)) and len(strides) == len(in_spatial_dims) == len(pool_size)
         if isinstance(padding, str) and padding.lower() == "same":
             # padding='same' is not quite the same as ceil_mode=True, so we explicitly pad here.
-            padding = []
-            for i, s in enumerate(pool_size):
-                # See comment in conv.
-                # I'm a bit unsure here... https://github.com/pytorch/pytorch/issues/148123
-                pad = s - 1 - (src_raw.shape[2 + i] - 1) % strides[i]
-                padding.append(pad // 2)
+            if torch.onnx.is_in_onnx_export():
+                padding = [(s - 1) // 2 for s in pool_size]
+            else:
+                padding = []
+                for i, s in enumerate(pool_size):
+                    # See comment in conv.
+                    # I'm a bit unsure here... https://github.com/pytorch/pytorch/issues/148123
+                    pad = s - 1 - (src_raw.shape[2 + i] - 1) % strides[i]
+                    padding.append(pad // 2)
             ceil_mode = True
         elif isinstance(padding, str) and padding.lower() == "valid":
             padding = 0
@@ -2476,7 +2536,7 @@ class TorchBackend(Backend[torch.Tensor]):
             kwargs["count_include_pad"] = False
         out_raw = func(src_raw, kernel_size=pool_size, stride=strides, ceil_mode=ceil_mode, padding=padding, **kwargs)
         out = Tensor("pool", dims=batch_dims + list(out_spatial_dims), dtype=source.dtype)
-        out.raw_tensor = torch.reshape(out_raw, [d.get_dim_value() for d in out.dims])
+        out.raw_tensor = torch.reshape(out_raw, _shape_dim_values(out.dims))
         if source.feature_dim and source.feature_dim in out.dims:
             out.feature_dim = source.feature_dim
         return out, out_spatial_dims
@@ -2498,7 +2558,7 @@ class TorchBackend(Backend[torch.Tensor]):
         """stft"""
         batch_dims = [d for d in x.dims if d != in_spatial_dim]
         x = x.copy_transpose(batch_dims + [in_spatial_dim])
-        x_raw = torch.reshape(x.raw_tensor, [-1, in_spatial_dim.get_dim_value()])
+        x_raw = torch.reshape(x.raw_tensor, _shape_values([-1, in_spatial_dim.get_dim_value()]))
 
         # TF code: y = tf.signal.stft(x, frame_length=frame_size, frame_step=frame_shift, fft_length=fft_size)
         # This is similar to what SciPy will also return.
@@ -2519,8 +2579,12 @@ class TorchBackend(Backend[torch.Tensor]):
 
         if frame_length > x_raw.shape[1]:
             # Torch does not really support the empty case.
-            y = Tensor("stft", dims=batch_dims + [out_dim, out_spatial_dim], feature_dim=out_dim, dtype="complex64")
-            y.raw_tensor = torch.zeros([d.get_dim_value() for d in y.dims], dtype=torch.complex64)
+            if torch.onnx.is_in_onnx_export():
+                y = Tensor("stft", dims=batch_dims + [out_dim, out_spatial_dim], feature_dim=out_dim, dtype=x.dtype)
+                y.raw_tensor = torch.zeros(_shape_dim_values(y.dims), dtype=x_raw.dtype, device=x_raw.device)
+            else:
+                y = Tensor("stft", dims=batch_dims + [out_dim, out_spatial_dim], feature_dim=out_dim, dtype="complex64")
+                y.raw_tensor = torch.zeros(_shape_dim_values(y.dims), dtype=torch.complex64, device=x_raw.device)
             return y
 
         if window_enforce_even:
@@ -2541,6 +2605,7 @@ class TorchBackend(Backend[torch.Tensor]):
             # https://github.com/pytorch/pytorch/issues/117844
             # (Check back later here whether that's still the case...)
             x_raw = x_raw.to(torch.float32)
+        in_onnx_export = torch.onnx.is_in_onnx_export()
         y_raw = torch.stft(
             x_raw,
             n_fft=fft_length,
@@ -2550,11 +2615,13 @@ class TorchBackend(Backend[torch.Tensor]):
             win_length=fft_length,
             window=window_pt,
             center=False,
-            return_complex=True,
+            return_complex=not in_onnx_export,
         )
+        if in_onnx_export:
+            y_raw = torch.sqrt(torch.clamp_min(torch.sum(y_raw * y_raw, dim=-1), 0.0))
         y = Tensor("stft", dims=batch_dims + [out_dim, out_spatial_dim], dtype=TorchBackend.get_dtype_name_raw(y_raw))
         y.feature_dim = out_dim
-        y.raw_tensor = torch.reshape(y_raw, [d.get_dim_value() for d in y.dims])
+        y.raw_tensor = torch.reshape(y_raw, _shape_dim_values(y.dims))
         return y
 
     @staticmethod
@@ -2669,8 +2736,8 @@ class TorchBackend(Backend[torch.Tensor]):
                 out_raw,
                 [spatial_dim.get_dim_value()] + [d.get_dim_value() for d in batch_dims] + [out_dim.get_dim_value()],
             )
-        new_state_h_raw = torch.reshape(new_state_h_raw, [d.get_dim_value() for d in state_h.dims])
-        new_state_c_raw = torch.reshape(new_state_c_raw, [d.get_dim_value() for d in state_c.dims])
+        new_state_h_raw = torch.reshape(new_state_h_raw, _shape_dim_values(state_h.dims))
+        new_state_c_raw = torch.reshape(new_state_c_raw, _shape_dim_values(state_c.dims))
 
         out = source.copy_template_replace_dim_tag(axis=-1, new_dim_tag=out_dim, name="lstm")
         out.feature_dim = out_dim

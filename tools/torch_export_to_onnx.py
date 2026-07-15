@@ -33,6 +33,7 @@ We distinguish three cases on RASR side:
 
 from __future__ import annotations
 import torch
+import numpy
 from typing import Callable, Optional, Dict, List
 import argparse
 import os
@@ -184,6 +185,11 @@ def main():
     parser.add_argument("--device", type=str, default="cpu", help="'cpu' (default) or 'gpu'.")
     parser.add_argument("--input_names", type=str, help="Comma-separated list of input names.")
     parser.add_argument("--output_names", type=str, help="Comma-separated list of output names.")
+    parser.add_argument(
+        "--verify", action="store_true", default=True, help="Verify the exported ONNX model with ONNX Runtime."
+    )
+    parser.add_argument("--verify_atol", default=1e-5, type=float, help="Absolute tolerance for ONNX verification.")
+    parser.add_argument("--verify_rtol", default=1e-5, type=float, help="Relative tolerance for ONNX verification.")
     args = parser.parse_args()
 
     init(config_filename=args.config, checkpoint=args.checkpoint, log_verbosity=args.verbosity, device=args.device)
@@ -282,6 +288,19 @@ def main():
         dynamic_axes=dynamic_axes,
     )
 
+    if args.verify:
+        _verify_onnx_model(
+            onnx_filename=args.out_onnx_filename,
+            pt_model_fwd=pt_model_fwd,
+            extern_data_raw=extern_data_raw,
+            model_outputs=model_outputs,
+            output_names=output_names,
+            epoch=epoch,
+            step=step,
+            rtol=args.verify_rtol,
+            atol=args.verify_atol,
+        )
+
 
 def _assign_scalar_dyn_dims(extern_data: TensorDict):
     for key, value in extern_data.data.items():
@@ -304,6 +323,72 @@ def _assign_scalar_dyn_dims(extern_data: TensorDict):
                 ),
                 dim.dyn_size_ext.dtype,
             ).raw_tensor
+
+
+def _verify_onnx_model(
+    *,
+    onnx_filename: str,
+    pt_model_fwd: torch.nn.Module,
+    extern_data_raw: Dict[str, torch.Tensor],
+    model_outputs: TensorDict,
+    output_names: List[str],
+    epoch: int,
+    step: int,
+    rtol: float,
+    atol: float,
+) -> None:
+    """
+    Runs the exported ONNX model on the same inputs as the PyTorch model and compares outputs.
+    """
+    print("*** Verifying exported ONNX model...")
+    try:
+        import onnxruntime as ort
+    except ImportError as exc:
+        raise ImportError("ONNX verification requires onnxruntime to be installed.") from exc
+
+    rf.init_forward_step_run_ctx(expected_outputs=model_outputs, step=step, epoch=epoch)
+    # torch.onnx.export can leave the module in training mode, which would activate dropout etc.
+    # and make the reference outputs diverge from the (eval-mode) exported ONNX model.
+    pt_model_fwd.eval()
+    with torch.no_grad():
+        pt_outputs = pt_model_fwd(extern_data_raw)
+
+    session = ort.InferenceSession(onnx_filename)
+    onnx_input_names = [inp.name for inp in session.get_inputs()]
+    missing_inputs = sorted(set(onnx_input_names) - set(extern_data_raw.keys()))
+    assert not missing_inputs, (
+        f"ONNX model expects inputs which are not available from extern_data: {missing_inputs}."
+        f" Available inputs: {sorted(extern_data_raw.keys())}"
+    )
+    onnx_inputs = {name: _torch_tensor_to_numpy(extern_data_raw[name]) for name in onnx_input_names}
+    onnx_outputs = session.run(output_names, onnx_inputs)
+
+    assert len(onnx_outputs) == len(output_names)
+    for name, onnx_output in zip(output_names, onnx_outputs):
+        assert name in pt_outputs, (
+            f"ONNX output {name!r} is not available in PyTorch outputs. PyTorch outputs: {sorted(pt_outputs.keys())}"
+        )
+        pt_output = _torch_tensor_to_numpy(pt_outputs[name])
+        assert pt_output.shape == onnx_output.shape, (
+            f"Output {name!r} shape mismatch: PyTorch shape {pt_output.shape}, ONNX shape {onnx_output.shape}"
+        )
+        if numpy.issubdtype(pt_output.dtype, numpy.floating) or numpy.issubdtype(onnx_output.dtype, numpy.floating):
+            try:
+                numpy.testing.assert_allclose(onnx_output, pt_output, rtol=rtol, atol=atol)
+            except AssertionError as exc:
+                raise AssertionError(f"Output {name!r} differs between PyTorch and ONNX:\n{exc}") from exc
+        else:
+            try:
+                numpy.testing.assert_array_equal(onnx_output, pt_output)
+            except AssertionError as exc:
+                raise AssertionError(f"Output {name!r} differs between PyTorch and ONNX:\n{exc}") from exc
+    print("*** ONNX verification passed.")
+
+
+def _torch_tensor_to_numpy(tensor: torch.Tensor) -> numpy.ndarray:
+    if tensor.dtype == torch.bfloat16:
+        tensor = tensor.to(torch.float32)
+    return tensor.detach().cpu().numpy()
 
 
 if __name__ == "__main__":
