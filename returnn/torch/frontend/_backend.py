@@ -42,6 +42,18 @@ def _shape_values(shape: List[Union[int, torch.Tensor]]) -> List[Union[int, torc
     return shape
 
 
+def _scalar_value_like(
+    value: Union[bool, int, float], raw_tensor: torch.Tensor
+) -> Union[bool, int, float, torch.Tensor]:
+    """Return a scalar operand (e.g. for torch.where) which carries the dtype of raw_tensor."""
+    if torch.onnx.is_in_onnx_export():
+        # Eager PyTorch treats a Python scalar as weakly typed and keeps the dtype of the other operand,
+        # but the ONNX tracer materializes it as a float64/int64 constant,
+        # which then violates the "all operands have the same type" constraint of e.g. onnx::Where.
+        return torch.tensor(value, dtype=raw_tensor.dtype, device=raw_tensor.device)
+    return value
+
+
 # Ignore this warning until we really expect that we implemented everything.
 # noinspection PyAbstractClass
 class TorchBackend(Backend[torch.Tensor]):
@@ -625,7 +637,7 @@ class TorchBackend(Backend[torch.Tensor]):
             tensor = tensor.copy()
             mask = tensor.get_sequence_mask_broadcast(axis=axis)
             inf_value = get_global_inf_value()
-            tensor.raw_tensor = torch.where(mask, tensor.raw_tensor, -inf_value)
+            tensor.raw_tensor = torch.where(mask, tensor.raw_tensor, _scalar_value_like(-inf_value, tensor.raw_tensor))
         out_raw = torch.softmax(tensor.raw_tensor, dim=tensor.dims.index(axis))
         out.dtype = TorchBackend.get_dtype_name_raw(out_raw)
         out.raw_tensor = out_raw
@@ -644,7 +656,7 @@ class TorchBackend(Backend[torch.Tensor]):
             tensor = tensor.copy()
             mask = tensor.get_sequence_mask_broadcast(axis=axis)
             inf_value = get_global_inf_value()
-            tensor.raw_tensor = torch.where(mask, tensor.raw_tensor, -inf_value)
+            tensor.raw_tensor = torch.where(mask, tensor.raw_tensor, _scalar_value_like(-inf_value, tensor.raw_tensor))
         out_raw = torch.log_softmax(tensor.raw_tensor, dim=tensor.dims.index(axis))
         out.dtype = TorchBackend.get_dtype_name_raw(out_raw)
         out.raw_tensor = out_raw
