@@ -321,6 +321,17 @@ class PostprocessingDataset(CachedDataset2):
         assert self._dataset is not None
         return self._dataset.get_current_seq_order()
 
+    def have_corpus_seq_idx(self) -> bool:
+        """have corpus seq idx"""
+        if self._map_seq_stream is None:
+            return self._dataset.have_corpus_seq_idx()
+        return False
+
+    def get_corpus_seq_idx(self, seq_idx: int) -> int:
+        """corpus seq idx"""
+        assert self._map_seq_stream is None
+        return self._dataset.get_corpus_seq_idx(seq_idx)
+
     def get_data_keys(self):
         """:return: available data keys"""
         return list(self._out_tensor_dict_template.data.keys())
