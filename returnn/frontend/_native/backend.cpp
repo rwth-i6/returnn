@@ -166,3 +166,21 @@ bool isTorchBackendForTensor(PyModuleState* modState, PyObject* obj) {
 
     return modState->isTorchTensorType((PyObject*) Py_TYPE(raw_tensor));
 }
+
+bool isNonTorchBackendTensor(PyModuleState* modState, PyObject* obj) {
+    int isTensor = PyObject_IsInstance(obj, modState->tensorType());
+    if(isTensor < 0) {
+        PyErr_Clear();
+        return false;
+    }
+    if(!isTensor)
+        return false;
+    PyObjectScopedRef raw_tensor = PyObject_GetAttrString(obj, "_raw_tensor");
+    if(!raw_tensor) {
+        PyErr_Clear();
+        return false;
+    }
+    if(raw_tensor.get() == Py_None)
+        return false;
+    return !modState->isTorchTensorType((PyObject*) Py_TYPE(raw_tensor.get()));
+}

@@ -1454,7 +1454,8 @@ static PyObject* _pyTensorCompareOrCombine(PyObject *self, PyObject *args, PyObj
 
     bool haveBackendWithCachedOps = false;
     BackendWithCachedOps backendId;
-    if(isTorchBackendForTensor(modState, a) || isTorchBackendForTensor(modState, b)) {
+    if((isTorchBackendForTensor(modState, a) || isTorchBackendForTensor(modState, b))
+            && !isNonTorchBackendTensor(modState, a) && !isNonTorchBackendTensor(modState, b)) {
         haveBackendWithCachedOps = true;
         backendId = BWCO_Torch;
     }
@@ -1572,7 +1573,8 @@ PyObject* pyTensorCombine(PyObject *self, PyObject *args, PyObject *kwargs) {
 template<RawOp op, bool isCompare>
 static PyObject* _tensorCompareOrCombineSpecific(PyModuleState* modState, PyObject* a, PyObject* b) {
     // fast path -- check predefined backends where we have cached ops
-    if(isTorchBackendForTensor(modState, a) || isTorchBackendForTensor(modState, b)) {
+    if((isTorchBackendForTensor(modState, a) || isTorchBackendForTensor(modState, b))
+            && !isNonTorchBackendTensor(modState, a) && !isNonTorchBackendTensor(modState, b)) {
         return compareOrCombineViaCached(
             a, b,
             isCompare,

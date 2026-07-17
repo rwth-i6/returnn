@@ -21,4 +21,9 @@ PyObject* getBackendForRawTensorType(PyModuleState* modState, PyObject* obj);
 
 bool isTorchBackendForTensor(PyModuleState* modState, PyObject* obj);
 
+// True if obj is a Tensor whose raw tensor is set and is not a Torch tensor
+// (e.g. a custom raw-tensor wrapper type like PackedRawTensor).
+// Such a tensor must not go through the cached Torch ops path.
+bool isNonTorchBackendTensor(PyModuleState* modState, PyObject* obj);
+
 #endif
