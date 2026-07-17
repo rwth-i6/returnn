@@ -109,6 +109,7 @@ class PackedRawTensor:
     def rewrap(self, inner_out: Tensor, *, name: Optional[str] = None) -> Tensor:
         """
         :param inner_out: result of an op on :attr:`inner` which kept :attr:`packed_dim`
+        :param name:
         :return: outer (virtual-dims) Tensor wrapping inner_out with the same packing relation
         """
         assert self.packed_dim in inner_out.dims
@@ -358,6 +359,53 @@ def _pack_like(x: Tensor, template: PackedRawTensor) -> Optional[Tensor]:
 # repacking in between would zero-fill entries which still belong to valid frames).
 # The result stays padded until an op with frame semantics combines it with a packed tensor again.
 _NO_REPACK_OPS = {"merge_dims", "reshape", "split_dims"}
+
+
+def _segment_softmax(tensor: Tensor, *, axis: Dim, log: bool) -> Optional[Tensor]:
+    """
+    (log_)softmax over a packed dim, directly on the packed data -- no masking needed
+    (padded frames do not exist in packed storage).
+
+    A packed frame belongs to the segment given by its coordinates in the *other* packed dims
+    (e.g. softmax over time with packing (batch, time): segment = batch entry).
+    Implemented with generic RF ops: :func:`rf.scatter` mode "logsumexp" + :func:`rf.gather` --
+    inner-backend-agnostic, no contiguity requirement on the segments,
+    so this stays correct for future layout variants (e.g. gap padding for packed conv).
+
+    :param tensor: packed, axis in orig_dims
+    :param axis: packed dim to normalize over
+    :param log: log_softmax instead of softmax
+    """
+    raw = _raw(tensor)
+    inner = raw.inner
+    other_packed = [d for d in raw.orig_dims if d != axis]
+    if not other_packed:
+        lse = rf.reduce_logsumexp(inner, axis=raw.packed_dim, use_mask=False)
+        out_inner = inner - lse
+    else:
+        seg, seg_dim = _segment_index(raw, other_packed)
+        lse = rf.scatter(
+            inner, indices=seg, indices_dim=raw.packed_dim, mode="logsumexp", out_dim=seg_dim, use_mask=False
+        )
+        out_inner = inner - rf.gather(lse, indices=seg, axis=seg_dim)
+    if not log:
+        out_inner = rf.exp(out_inner)
+    return raw.rewrap(out_inner, name="log_softmax" if log else "softmax")
+
+
+def _segment_index(template: PackedRawTensor, seg_dims: Sequence[Dim]) -> Tuple[Optional[Tensor], Optional[Dim]]:
+    """
+    :param seg_dims: (some of) the template's packed dims defining the segments
+    :return: (seg, merged_dim): for every packed frame, its flat index over seg_dims
+        (row-major, matching the merged-dims layout), and the merged Dim (product of seg_dims).
+    """
+    seg = None
+    merged = None
+    for d in seg_dims:
+        coords = _frame_coords(template, d)
+        seg = coords if seg is None else seg * d.get_dim_value_tensor() + coords
+        merged = d if merged is None else merged * d
+    return seg, merged
 
 
 def _make_dim_aware_op(name: str):
@@ -644,25 +692,36 @@ class PackedBackend(Backend[PackedRawTensor]):
 
     @staticmethod
     def softmax(tensor: Tensor, *, axis: Dim, use_mask: bool = True) -> Tensor:
-        """softmax over a non-packed axis (e.g. vocab) -> on packed data. otherwise: fallback."""
+        """
+        softmax over a non-packed axis (e.g. vocab) -> on packed data.
+        softmax over a packed dim (e.g. attention energies over time) -> segment softmax on packed data,
+        which needs no masking at all.
+        Otherwise: fallback.
+        """
         raw = _raw(tensor)
         if not _dim_refs_packed(axis, raw):
             return raw.rewrap(rf.softmax(raw.inner, axis=axis, use_mask=use_mask), name="softmax")
-        # TODO axis in orig_dims = softmax over the packed spatial dim (e.g. attention energies over time):
-        #  implementable as segment softmax directly on packed data
-        #  (segment ids from the seq lens, seg-max / seg-sum via scatter-reduce, then elementwise),
-        #  which needs no masking at all.
-        #  For full attention, the flash-varlen specialization avoids materializing the energies altogether.
-        _warn_fallback_once("softmax", f"axis {axis} is a packed dim (segment softmax TODO)")
+        if axis in raw.orig_dims:
+            # use_mask does not matter here: packed storage has no padded frames,
+            # so the segment softmax is correct either way.
+            out = _segment_softmax(tensor, axis=axis, log=False)
+            if out is not None:
+                return out
+        _warn_fallback_once("softmax", f"axis {axis} (packed-related), no segment impl for this case")
         return _repack_result(rf.softmax(unpack(tensor), axis=axis, use_mask=use_mask), raw)
 
     @staticmethod
     def log_softmax(tensor: Tensor, *, axis: Dim, use_mask: bool = True) -> Tensor:
-        """log_softmax over a non-packed axis (e.g. vocab) -> on packed data. otherwise: fallback."""
+        """log_softmax, packed handling like :func:`softmax`."""
         raw = _raw(tensor)
         if not _dim_refs_packed(axis, raw):
             return raw.rewrap(rf.log_softmax(raw.inner, axis=axis, use_mask=use_mask), name="log_softmax")
-        _warn_fallback_once("log_softmax", f"axis {axis} is a packed dim (segment softmax TODO)")
+        if axis in raw.orig_dims:
+            # use_mask does not matter here, see softmax
+            out = _segment_softmax(tensor, axis=axis, log=True)
+            if out is not None:
+                return out
+        _warn_fallback_once("log_softmax", f"axis {axis} (packed-related), no segment impl for this case")
         return _repack_result(rf.log_softmax(unpack(tensor), axis=axis, use_mask=use_mask), raw)
 
     @staticmethod
@@ -709,6 +768,24 @@ class PackedBackend(Backend[PackedRawTensor]):
         ):
             # use_mask=False: packed storage has no padded frames.
             return rf.reduce(raw.inner, mode=mode, axis=[raw.packed_dim] + extra_axes, use_mask=False)
+        packed_axes = [d for d in axes if d in raw.orig_dims]
+        other = [d for d in raw.orig_dims if d not in packed_axes]
+        if (
+            packed_axes
+            and other
+            and mode in ("sum", "max", "min", "mean", "logsumexp")
+            and not any(_dim_refs_packed(d, raw) for d in extra_axes)
+        ):
+            # partial reduce over packed dims (e.g. over time, keeping batch):
+            # segment reduce via rf.scatter on packed data, maskless.
+            # The result has no packed dims left, so it is a normal (plain) tensor.
+            seg, _ = _segment_index(raw, other)
+            out = rf.scatter(
+                raw.inner, indices=seg, indices_dim=raw.packed_dim, mode=mode, out_dim=other, use_mask=False
+            )
+            if extra_axes:
+                out = rf.reduce(out, mode=mode, axis=extra_axes, use_mask=use_mask)
+            return out
         _warn_fallback_once("reduce", f"partial reduce over packed dims (axis {axes}, mode {mode})")
         return _repack_result(rf.reduce(unpack(source), mode=mode, axis=axes, use_mask=use_mask), raw)
 

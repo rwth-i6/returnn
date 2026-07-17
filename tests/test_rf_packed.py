@@ -110,12 +110,12 @@ def test_reduce_mean_over_packed_dims():
     )
 
 
-def test_reduce_over_time_fallback():
+def test_reduce_over_time_segment():
     rf.select_backend_torch()
     x, batch_dim, time_dim, feat_dim = _make_input()
     xp = packed.pack(x)
-    out_p = rf.reduce_max(xp, axis=time_dim)  # partial packed reduce: unpack fallback
-    # time is reduced away, so no packing can be inferred for the result: stays padded
+    out_p = rf.reduce_max(xp, axis=time_dim)  # partial packed reduce: segment reduce via rf.scatter
+    # time is reduced away: the result has no packed dims left, so it is a plain tensor
     assert not packed.is_packed(out_p)
     out_ref = rf.reduce_max(x, axis=time_dim)
     out_p = out_p.copy_compatible_to_dims(out_ref.dims)
@@ -160,6 +160,20 @@ def test_conformer():
     assert packed.is_packed(out_p)
     assert out_p.raw_tensor.orig_dims == (batch_dim, out_spatial_dim_p)
     _assert_equal_non_padded(packed.unpack(out_p), out_ref, batch_dim, out_spatial_dim, rtol=1e-4, atol=1e-5)
+
+
+def test_softmax_over_packed_time():
+    # segment softmax: normalizing over the packed spatial dim runs directly on packed data,
+    # no masking involved (padded frames do not exist in packed storage).
+    rf.select_backend_torch()
+    x, batch_dim, time_dim, feat_dim = _make_input()
+    xp = packed.pack(x)
+    out_p = rf.softmax(xp, axis=time_dim)
+    assert packed.is_packed(out_p)
+    _assert_equal_non_padded(out_p, rf.softmax(x, axis=time_dim), batch_dim, time_dim)
+    out_p = rf.log_softmax(xp, axis=time_dim)
+    assert packed.is_packed(out_p)
+    _assert_equal_non_padded(out_p, rf.log_softmax(x, axis=time_dim), batch_dim, time_dim)
 
 
 def test_transformer_aed():
