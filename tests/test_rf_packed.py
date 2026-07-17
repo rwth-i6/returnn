@@ -155,13 +155,16 @@ def test_conformer():
             num_layers=2,
         )
         out_ref, out_spatial_dim = model(x, in_spatial_dim=time_dim)
-        # gap for the packed convs, derived by hand for this model:
-        # depthwise conv kernel 32 -> ceil(31/2) = 16; subsample convs 3x3 -> 1;
-        # + 2 for the two pool pads (each consumes 1 frame of gap, in place).
-        xp = packed.pack(x, gap=18)
+        # layout derived by hand for this model:
+        # align 4 = total downsampling (two stride-2 pools);
+        # gap 64 -> after the two stages exactly 16 left, as needed by the depthwise conv kernel 32
+        # (each stage: pad consumes 1, pool divides by 2).
+        xp = packed.pack(x, gap=64, align=4)
         out_p, out_spatial_dim_p = model(xp, in_spatial_dim=time_dim)
-        # all convs must have used the packed fast path (no conv fallback warning)
+        # the whole subsample chain + depthwise convs must have run packed (no fallback warnings)
         assert "conv" not in packed._warned_fallback_ops
+        assert "pad" not in packed._warned_fallback_ops
+        assert "pool" not in packed._warned_fallback_ops
     assert out_spatial_dim == out_spatial_dim_p
     # fallbacks repack, so the encoder output must still be packed (over (batch, subsampled time))
     assert packed.is_packed(out_p)

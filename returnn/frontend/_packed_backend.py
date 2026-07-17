@@ -909,7 +909,9 @@ class PackedBackend(Backend[PackedRawTensor]):
         else:
             pad_l = pad_r = None  # unsupported spec
         required_gap = max(pad_l, pad_r) if pad_l is not None else None
-        stride_ok = st == 1 or (raw.align % st == 0 and raw.gap % raw.align == 0)
+        # note: gap % align == 0 is NOT required: starts stay stride-aligned via the footprints;
+        # whether the out layout is expressible is verified at runtime (_strided_out_wrapper).
+        stride_ok = st == 1 or raw.align % st == 0
         if (
             pad_l is not None
             and stride_ok
@@ -981,19 +983,135 @@ class PackedBackend(Backend[PackedRawTensor]):
                 _extract_strided(raw, out_inner, out_sp[0], out_time, st),
                 [out_time] + list(out_sp[1:]),
             )
-        return _dim_aware_call("conv", (source,), dict(
-            in_dim=in_dim,
-            out_dim=out_dim,
-            in_spatial_dims=in_spatial_dims,
-            out_spatial_dims=out_spatial_dims,
-            filter=filter,
-            filter_size=filter_size,
-            padding=padding,
-            strides=strides,
-            dilation_rate=dilation_rate,
-            groups=groups,
-            bias=bias,
-        ))
+        return _dim_aware_call(
+            "conv",
+            (source,),
+            dict(
+                in_dim=in_dim,
+                out_dim=out_dim,
+                in_spatial_dims=in_spatial_dims,
+                out_spatial_dims=out_spatial_dims,
+                filter=filter,
+                filter_size=filter_size,
+                padding=padding,
+                strides=strides,
+                dilation_rate=dilation_rate,
+                groups=groups,
+                bias=bias,
+            ),
+        )
+
+    @staticmethod
+    def pool(
+        source: Tensor,
+        *,
+        mode: str,
+        pool_size: Sequence[int],
+        padding: Union[str, int, Sequence[int]] = "valid",
+        dilation_rate: Union[Sequence[int], int] = 1,
+        strides: Sequence[int],
+        in_spatial_dims: Sequence[Dim],
+        out_spatial_dims: Optional[Sequence[Dim]] = None,
+    ) -> Tuple[Tensor, Sequence[Dim]]:
+        """
+        pool. Packed fast path, same machinery as :func:`PackedBackend.conv`:
+        runs directly over the packed buffer; gap frames are filled with the pool-neutral value
+        (-inf for max, 0 otherwise), so boundary windows behave like the per-sequence pool.
+        """
+        raw = source.raw_tensor
+        assert isinstance(raw, PackedRawTensor)
+        n = len(in_spatial_dims)
+        strides_ = list(strides) if isinstance(strides, (list, tuple)) else [strides] * n
+        dils_ = list(dilation_rate) if isinstance(dilation_rate, (list, tuple)) else [dilation_rate or 1] * n
+        span = (pool_size[0] - 1) * (dils_[0] or 1)
+        st = strides_[0] or 1
+        if padding == "same":
+            pad_l, pad_r = span // 2, (span + 1) // 2
+        elif padding == "valid":
+            pad_l = pad_r = 0
+        elif isinstance(padding, int):
+            pad_l = pad_r = padding
+        elif isinstance(padding, (list, tuple)) and padding and isinstance(padding[0], int):
+            pad_l = pad_r = padding[0]
+        else:
+            pad_l = pad_r = None
+        required_gap = max(pad_l, pad_r) if pad_l is not None else None
+        stride_ok = st == 1 or raw.align % st == 0
+        if (
+            pad_l is not None
+            and stride_ok
+            and (st > 1 or raw.gap + span - pad_l - pad_r >= 0)
+            and in_spatial_dims[0] == raw.orig_dims[-1]
+            and not any(_dim_refs_packed(d, raw) for d in in_spatial_dims[1:])
+            and not out_spatial_dims
+        ):
+            if raw.gap < required_gap:
+                target_gap = required_gap if st == 1 else -(-required_gap // raw.align) * raw.align
+                _warn_fallback_once(
+                    "pool",
+                    f"gap {raw.gap} < required {required_gap} for the packed pool"
+                    f" -- specify pack(..., gap=...) to avoid the extra re-layout",
+                    action="re-packing with the required gap (pool stays packed)",
+                )
+                source = regap(source, target_gap)
+                raw = source.raw_tensor
+            inner = raw.inner
+            if required_gap:
+                # boundary windows read the gap: fill with the pool-neutral value
+                mask = _frame_mask(raw)
+                if mask is not None:
+                    inner = rf.where(mask, inner, float("-inf") if mode == "max" else 0.0)
+            out_inner, out_sp = raw.inner_backend.pool(
+                inner,
+                mode=mode,
+                pool_size=pool_size,
+                padding=padding,
+                dilation_rate=dilation_rate,
+                strides=strides,
+                in_spatial_dims=[raw.packed_dim] + list(in_spatial_dims[1:]),
+            )
+            time_dim = in_spatial_dims[0]
+            if st == 1 and out_sp[0] == raw.packed_dim:  # "same" stride 1: layout unchanged
+                out = raw.rewrap(out_inner, name="pool")
+                return out, [time_dim] + list(out_sp[1:])
+            (out_time,) = rf.make_conv_out_spatial_dims(
+                [time_dim], filter_size=pool_size[0], strides=st, dilation_rate=dils_[0] or 1, padding=padding
+            )
+            if st == 1:
+                helper = PackedRawTensor(
+                    inner=out_inner,
+                    packed_dim=out_sp[0],
+                    orig_dims=tuple(raw.orig_dims[:-1]) + (out_time,),
+                    gap=raw.gap + span - pad_l - pad_r,
+                    align=raw.align,
+                )
+                out = helper.rewrap(out_inner, name="pool")
+                return out, [out_time] + list(out_sp[1:])
+            out = _strided_out_wrapper(raw, out_inner, out_sp[0], out_time, st)
+            if out is not None:
+                return out, [out_time] + list(out_sp[1:])
+            _warn_fallback_once(
+                "pool:strided-out",
+                "strided pool output layout not expressible in the (lens, gap, align) form",
+                action="extracting the (packed-computed) output to padded storage",
+            )
+            return (
+                _extract_strided(raw, out_inner, out_sp[0], out_time, st),
+                [out_time] + list(out_sp[1:]),
+            )
+        return _dim_aware_call(
+            "pool",
+            (source,),
+            dict(
+                mode=mode,
+                pool_size=pool_size,
+                padding=padding,
+                dilation_rate=dilation_rate,
+                strides=strides,
+                in_spatial_dims=in_spatial_dims,
+                out_spatial_dims=out_spatial_dims,
+            ),
+        )
 
     @staticmethod
     def pad(
@@ -1263,7 +1381,6 @@ for _name in [
     "masked_scatter",
     "masked_select",
     "merge_dims",
-    "pool",
     "reshape",
     "scatter",
     "search_sorted",
@@ -1373,9 +1490,7 @@ def regap(source: Tensor, gap: int, *, align: Optional[int] = None) -> Tensor:
         # route old gap frames to a dump slot, then slice it off
         ext_dim = new_dim + 1
         pos = rf.where(mask, pos, rf.cast(new_dim.get_dim_value_tensor(), pos.dtype))
-        inner_ext = rf.scatter(
-            raw.inner, indices=pos, indices_dim=raw.packed_dim, out_dim=ext_dim, use_mask=False
-        )
+        inner_ext = rf.scatter(raw.inner, indices=pos, indices_dim=raw.packed_dim, out_dim=ext_dim, use_mask=False)
         inner_new, _ = rf.slice(inner_ext, axis=ext_dim, size=new_dim)
     else:
         inner_new = rf.scatter(raw.inner, indices=pos, indices_dim=raw.packed_dim, out_dim=new_dim, use_mask=False)
