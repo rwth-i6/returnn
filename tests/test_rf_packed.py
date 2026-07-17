@@ -156,8 +156,9 @@ def test_conformer():
         )
         out_ref, out_spatial_dim = model(x, in_spatial_dim=time_dim)
         # gap for the packed convs, derived by hand for this model:
-        # depthwise conv kernel 32 -> ceil(31/2) = 16; subsample convs 3x3 -> 1; pool/pad fall back.
-        xp = packed.pack(x, gap=16)
+        # depthwise conv kernel 32 -> ceil(31/2) = 16; subsample convs 3x3 -> 1;
+        # + 2 for the two pool pads (each consumes 1 frame of gap, in place).
+        xp = packed.pack(x, gap=18)
         out_p, out_spatial_dim_p = model(xp, in_spatial_dim=time_dim)
         # all convs must have used the packed fast path (no conv fallback warning)
         assert "conv" not in packed._warned_fallback_ops
@@ -193,6 +194,17 @@ def test_pack_gap_roundtrip():
     starts, _ = raw.seq_starts()
     assert starts.raw_tensor.tolist() == [0, 7]  # 5 + gap 2
     _assert_equal_non_padded(xp, x, batch_dim, time_dim)
+    # aligned layout: footprints roundup(len + gap, align), all starts multiples of align
+    xa = packed.pack(x, gap=2, align=4)
+    raw = xa.raw_tensor
+    assert raw.packed_dim.get_dim_value() == 16  # roundup(5+2,4) + roundup(3+2,4) = 8 + 8
+    starts, _ = raw.seq_starts()
+    assert starts.raw_tensor.tolist() == [0, 8]
+    _assert_equal_non_padded(xa, x, batch_dim, time_dim)
+    # regap: cheap re-layout back to dense
+    xd = packed.regap(xa, 0, align=1)
+    assert xd.raw_tensor.packed_dim.get_dim_value() == 8
+    _assert_equal_non_padded(xd, x, batch_dim, time_dim)
 
 
 def test_conv_packed_gap():
@@ -247,6 +259,37 @@ def test_conv_packed_gap_junk_robust():
         assert packed.is_packed(out_p)
         assert out_p.raw_tensor.packed_dim == xp.raw_tensor.packed_dim  # fast path, layout unchanged
         _assert_equal_non_padded(out_p, out_ref, batch_dim, time_dim)
+
+
+def test_conv_packed_strided():
+    # strided packed conv: stride | align and align | gap; out layout = (lens', gap/st, align/st)
+    rf.select_backend_torch()
+    x, batch_dim, time_dim, feat_dim = _make_input()  # lens (5, 3)
+    with rf.set_default_device_ctx("cpu"):
+        rf.set_random_seed(13)
+        conv = rf.Conv1d(feat_dim, Dim(6, name="out"), filter_size=3, padding="same", strides=2)
+        out_ref, out_time_ref = conv(x, in_spatial_dim=time_dim)
+        xp = packed.pack(x, gap=2, align=2)
+        out_p, out_time = conv(xp, in_spatial_dim=time_dim)
+        assert out_time == out_time_ref
+        assert packed.is_packed(out_p)
+        raw = out_p.raw_tensor
+        assert raw.gap == 1 and raw.align == 1  # (gap 2, align 2) / stride 2
+        _assert_equal_non_padded(out_p, out_ref, batch_dim, out_time_ref)
+
+
+def test_pad_packed_inplace():
+    # right-pad of the packed time dim: in-place, the new frames come out of the gap
+    rf.select_backend_torch()
+    x, batch_dim, time_dim, feat_dim = _make_input()
+    xp = packed.pack(x, gap=2)
+    padded_p, (out_time,) = rf.pad(xp, axes=[time_dim], padding=[(0, 1)], value=0.0)
+    assert packed.is_packed(padded_p)
+    raw = padded_p.raw_tensor
+    assert raw.packed_dim == xp.raw_tensor.packed_dim  # same buffer, in place
+    assert raw.gap == 1
+    ref, _ = rf.pad(x, axes=[time_dim], padding=[(0, 1)], value=0.0)
+    _assert_equal_non_padded(padded_p, ref, batch_dim, out_time)
 
 
 def test_softmax_over_packed_time():
