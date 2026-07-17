@@ -115,6 +115,8 @@ def test_reduce_over_time_fallback():
     x, batch_dim, time_dim, feat_dim = _make_input()
     xp = packed.pack(x)
     out_p = rf.reduce_max(xp, axis=time_dim)  # partial packed reduce: unpack fallback
+    # time is reduced away, so no packing can be inferred for the result: stays padded
+    assert not packed.is_packed(out_p)
     out_ref = rf.reduce_max(x, axis=time_dim)
     out_p = out_p.copy_compatible_to_dims(out_ref.dims)
     numpy.testing.assert_allclose(
@@ -154,6 +156,9 @@ def test_conformer():
         xp = packed.pack(x)
         out_p, out_spatial_dim_p = model(xp, in_spatial_dim=time_dim)
     assert out_spatial_dim == out_spatial_dim_p
+    # fallbacks repack, so the encoder output must still be packed (over (batch, subsampled time))
+    assert packed.is_packed(out_p)
+    assert out_p.raw_tensor.orig_dims == (batch_dim, out_spatial_dim_p)
     _assert_equal_non_padded(packed.unpack(out_p), out_ref, batch_dim, out_spatial_dim, rtol=1e-4, atol=1e-5)
 
 
