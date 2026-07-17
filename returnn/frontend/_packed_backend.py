@@ -639,6 +639,96 @@ def _flatten(values):
             yield v
 
 
+def _sdpa_no(reason: str):
+    """warn once + None: the packed varlen SDPA is not applicable, the generic path runs"""
+    _warn_fallback_once(
+        "scaled_dot_product_attention",
+        reason,
+        action="using the generic implementation (with the packed matmul/softmax handling)",
+    )
+    return None
+
+
+def _sdpa_varlen_attention(
+    query: Tensor,
+    key: Tensor,
+    value: Tensor,
+    *,
+    qk_feat_dim: Dim,
+    v_feat_dim: Dim,
+    kv_spatial_dim: Dim,
+    is_causal: bool,
+    scale: Optional[float],
+) -> Optional[Tensor]:
+    """
+    torch SDPA over nested (jagged) tensors built directly from the packed layout
+    (values buffer + offsets): no padding compute, no materialized energies,
+    flash varlen kernels internally where applicable -- pure torch, no external package.
+    None if not applicable (then the generic path runs, with the packed matmul/softmax handling).
+    """
+    if not (is_packed(query) and is_packed(key) and is_packed(value)):
+        return _sdpa_no("not all of query/key/value are packed")
+    q_raw, k_raw, v_raw = query.raw_tensor, key.raw_tensor, value.raw_tensor
+    if q_raw.inner_backend.name != "torch":
+        return _sdpa_no("inner backend is not torch")
+    if not k_raw.same_packing(v_raw):
+        return _sdpa_no("key and value packings differ")
+    if is_causal:
+        # causal self-attention: query and key/value over the very same seqs
+        if kv_spatial_dim != q_raw.orig_dims[-1] or not q_raw.same_packing(k_raw):
+            return _sdpa_no("causal, but query and key/value packings differ")
+    else:
+        if kv_spatial_dim != k_raw.orig_dims[-1]:
+            return _sdpa_no(f"kv axis {kv_spatial_dim} is not the innermost packed dim of key")
+    if q_raw.orig_dims[:-1] != k_raw.orig_dims[:-1]:
+        return _sdpa_no("query vs key/value outer packed dims differ")
+    import torch
+
+    if not hasattr(torch.nested, "nested_tensor_from_jagged"):
+        return _sdpa_no("torch.nested.nested_tensor_from_jagged not available (torch too old)")
+    # nested jagged needs the dense layout for the offsets; regap is cheap
+    orig_layout = (q_raw.gap, q_raw.align)
+    if q_raw.gap or q_raw.align > 1:
+        query = regap(query, 0, align=1)
+        q_raw = query.raw_tensor
+    if k_raw.gap or k_raw.align > 1:
+        key = regap(key, 0, align=1)
+        value = regap(value, 0, align=1)
+        k_raw, v_raw = key.raw_tensor, value.raw_tensor
+    q_inner, k_inner, v_inner = q_raw.inner, k_raw.inner, v_raw.inner
+    head_dims = [d for d in q_inner.dims if d not in (q_raw.packed_dim, qk_feat_dim)]
+    if len(head_dims) != 1 or head_dims[0].dimension is None:
+        return _sdpa_no("expect exactly the [packed, heads, qk_feat] layout for query")
+    if set(v_inner.dims) != {v_raw.packed_dim, head_dims[0], v_feat_dim}:
+        return _sdpa_no("unexpected value dims layout")
+    if set(k_inner.dims) != {k_raw.packed_dim, head_dims[0], qk_feat_dim}:
+        return _sdpa_no("unexpected key dims layout")
+    try:
+        q_t = q_inner.copy_transpose([q_raw.packed_dim, head_dims[0], qk_feat_dim]).raw_tensor
+        k_t = k_inner.copy_transpose([k_raw.packed_dim, head_dims[0], qk_feat_dim]).raw_tensor
+        v_t = v_inner.copy_transpose([v_raw.packed_dim, head_dims[0], v_feat_dim]).raw_tensor
+        cu_q, _ = q_raw.cu_seqlens(device=query.device)
+        cu_k, _ = k_raw.cu_seqlens(device=query.device)
+        # [B, T(jagged), H, D] -> [B, H, T(jagged), D]
+        q_n = torch.nested.nested_tensor_from_jagged(q_t, offsets=cu_q.raw_tensor.long()).transpose(1, 2)
+        k_n = torch.nested.nested_tensor_from_jagged(k_t, offsets=cu_k.raw_tensor.long()).transpose(1, 2)
+        v_n = torch.nested.nested_tensor_from_jagged(v_t, offsets=cu_k.raw_tensor.long()).transpose(1, 2)
+        out_n = torch.nn.functional.scaled_dot_product_attention(
+            q_n, k_n, v_n, is_causal=is_causal, scale=scale if scale is not None else qk_feat_dim.dimension**-0.5
+        )
+        out_t = out_n.transpose(1, 2).values()
+    except (RuntimeError, NotImplementedError) as exc:
+        return _sdpa_no(f"torch nested-jagged SDPA failed here ({type(exc).__name__}: {exc})")
+    out_inner = Tensor(
+        "sdpa_varlen", dims=[q_raw.packed_dim, head_dims[0], v_feat_dim], dtype=q_inner.dtype, feature_dim=v_feat_dim
+    )
+    out_inner.raw_tensor = out_t
+    out = q_raw.rewrap(out_inner, name="sdpa_varlen")
+    if orig_layout != (0, 1):
+        out = regap(out, orig_layout[0], align=orig_layout[1])
+    return out
+
+
 def _strided_out_wrapper(
     raw: PackedRawTensor, out_inner: Tensor, out_packed_dim: Dim, out_time: Dim, st: int
 ) -> Optional[Tensor]:
@@ -1002,6 +1092,60 @@ class PackedBackend(Backend[PackedRawTensor]):
                 groups=groups,
                 bias=bias,
             ),
+        )
+
+    @classmethod
+    def scaled_dot_product_attention(
+        cls,
+        query: Tensor,
+        key: Tensor,
+        value: Tensor,
+        *,
+        attention_mask: Optional[Tensor] = None,
+        att_dropout: float = 0.0,
+        att_dropout_broadcast: bool,
+        v_feat_dim: Dim,
+        qk_feat_dim: Dim,
+        kv_spatial_dim: Dim,
+        query_spatial_dim: Dim,
+        is_causal: bool = False,
+        scale: Optional[float] = None,
+    ):
+        """
+        Scaled dot-product attention. Torch specialization:
+        torch SDPA over nested (jagged) tensors built directly from the packed layout
+        (no external package, flash varlen internally), incl. is_causal;
+        see :func:`_sdpa_varlen_attention`.
+        Generic fallback otherwise (which then uses the packed matmul/softmax handling).
+        """
+        if attention_mask is None and not att_dropout:
+            out = _sdpa_varlen_attention(
+                query,
+                key,
+                value,
+                qk_feat_dim=qk_feat_dim,
+                v_feat_dim=v_feat_dim,
+                kv_spatial_dim=kv_spatial_dim,
+                is_causal=is_causal,
+                scale=scale,
+            )
+            if out is not None:
+                return out
+        else:
+            _sdpa_no("attention_mask / att_dropout given")
+        return Backend.scaled_dot_product_attention(
+            query,
+            key,
+            value,
+            attention_mask=attention_mask,
+            att_dropout=att_dropout,
+            att_dropout_broadcast=att_dropout_broadcast,
+            v_feat_dim=v_feat_dim,
+            qk_feat_dim=qk_feat_dim,
+            kv_spatial_dim=kv_spatial_dim,
+            query_spatial_dim=query_spatial_dim,
+            is_causal=is_causal,
+            scale=scale,
         )
 
     @staticmethod
