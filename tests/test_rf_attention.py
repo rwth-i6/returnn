@@ -9,6 +9,7 @@ import numpy.testing
 import _setup_test_env  # noqa
 import returnn.frontend as rf
 from returnn.tensor import Tensor, Dim, TensorDict, batch_dim, single_step_dim
+from returnn.frontend._backend import Backend
 from rf_utils import run_model, tf_scope
 
 
@@ -353,7 +354,12 @@ def test_rope_causal_self_att():
     in_.name = "input"
 
     with PyTracer(
-        [rf.RotaryPosCausalSelfAttention.__call__, rf.sinusoidal_encoding, rf.dot_attention, rf_apply_rope],
+        [
+            rf.RotaryPosCausalSelfAttention.__call__,
+            rf.sinusoidal_encoding,
+            Backend.scaled_dot_product_attention,
+            rf_apply_rope,
+        ],
         (Tensor, Dim),
     ) as trace_rf:
         out_rf, _ = model_rf(in_, axis=seq_dim, state=model_rf.default_initial_state(batch_dims=[batch_dim]))
@@ -441,17 +447,17 @@ def test_rope_causal_self_att():
                 ),
             ),
             (
-                (rf.dot_attention, 0, "energy", 0),
+                (Backend.scaled_dot_product_attention, 0, "energy", 0),
                 (eager_attention_forward, 0, "attn_weights", 0),
-                (batch_dim, model_rf.num_heads, seq_dim, "axis"),
+                (batch_dim, model_rf.num_heads, seq_dim, "kv_spatial_dim"),
             ),
             (
-                (rf.dot_attention, 0, "att_weights", 0),
+                (Backend.scaled_dot_product_attention, 0, "att_weights", 0),
                 (LlamaAttention.forward, 0, "attn_weights", -1),
-                (batch_dim, model_rf.num_heads, seq_dim, "axis"),
+                (batch_dim, model_rf.num_heads, seq_dim, "kv_spatial_dim"),
             ),
             (
-                (rf.dot_attention, 0, "att", 0),
+                (Backend.scaled_dot_product_attention, 0, "att", 0),
                 (LlamaAttention.forward, 0, "attn_output", 0),
                 (batch_dim, seq_dim, model_rf.num_heads, model_rf.value_dim_per_head),
             ),
