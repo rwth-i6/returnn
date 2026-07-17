@@ -639,6 +639,12 @@ def _flatten(values):
             yield v
 
 
+# Set when NJT SDPA failed with an environment-level error (e.g. CUDA-built torch without a driver):
+# then we skip further attempts (the construction cost + exception would repeat on every call).
+# Shape-specific failures do not set this.
+_njt_sdpa_env_broken = False
+
+
 def _sdpa_no(reason: str):
     """warn once + None: the packed varlen SDPA is not applicable, the generic path runs"""
     _warn_fallback_once(
@@ -666,6 +672,10 @@ def _sdpa_varlen_attention(
     flash varlen kernels internally where applicable -- pure torch, no external package.
     None if not applicable (then the generic path runs, with the packed matmul/softmax handling).
     """
+    global _njt_sdpa_env_broken
+
+    if _njt_sdpa_env_broken:
+        return None  # already warned once when it broke
     if not (is_packed(query) and is_packed(key) and is_packed(value)):
         return _sdpa_no("not all of query/key/value are packed")
     q_raw, k_raw, v_raw = query.raw_tensor, key.raw_tensor, value.raw_tensor
@@ -718,6 +728,9 @@ def _sdpa_varlen_attention(
         )
         out_t = out_n.transpose(1, 2).values()
     except (RuntimeError, NotImplementedError) as exc:
+        if isinstance(exc, RuntimeError) and "CUDA" in str(exc):
+            # environment-level (e.g. CUDA-built torch without a driver): do not retry every call
+            _njt_sdpa_env_broken = True
         return _sdpa_no(f"torch nested-jagged SDPA failed here ({type(exc).__name__}: {exc})")
     out_inner = Tensor(
         "sdpa_varlen", dims=[q_raw.packed_dim, head_dims[0], v_feat_dim], dtype=q_inner.dtype, feature_dim=v_feat_dim
@@ -955,6 +968,7 @@ class PackedBackend(Backend[PackedRawTensor]):
         out = rf.combine(_unpack_if_packed(a), kind, _unpack_if_packed(b), **opts)
         return _repack_result(out, template)
 
+    # noinspection PyShadowingBuiltins
     @staticmethod
     def conv(
         source: Tensor,
