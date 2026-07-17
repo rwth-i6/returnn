@@ -868,8 +868,8 @@ def gather(
     if not axis:
         assert isinstance(indices, Tensor) and indices.sparse_dim
         axis = indices.sparse_dim
-    # noinspection PyProtectedMember
-    return source._raw_backend.gather(source, indices=indices, axis=axis, clip_to_valid=clip_to_valid)
+    backend = _utils.get_backend_from_tensors(source, indices)
+    return backend.gather(source, indices=indices, axis=axis, clip_to_valid=clip_to_valid)
 
 
 def scatter(

@@ -69,10 +69,22 @@ class PackedRawTensor:
     the seq lens live in the dyn dims' dyn_size_ext as usual, nothing is duplicated here.
     """
 
-    def __init__(self, *, inner: Tensor, packed_dim: Dim, orig_dims: Sequence[Dim]):
+    def __init__(
+        self,
+        *,
+        inner: Tensor,
+        packed_dim: Dim,
+        orig_dims: Sequence[Dim],
+        dims: Optional[Sequence[Dim]] = None,
+    ):
         self.inner = inner
         self.packed_dim = packed_dim
         self.orig_dims = tuple(orig_dims)
+        if dims is None:
+            # canonical virtual order: packed dims first, then the remaining dims in inner order
+            dims = self.orig_dims + tuple(d for d in inner.dims if d != packed_dim)
+        # outer (virtual) dims order; can deviate from canonical after transpose (pure metadata)
+        self.dims = tuple(dims)
 
     @property
     def inner_backend(self):
@@ -86,7 +98,7 @@ class PackedRawTensor:
 
     def virtual_ndim(self) -> int:
         """:return: ndim of the virtual (unpacked) view, i.e. of the outer Tensor"""
-        return self.inner.batch_ndim - 1 + len(self.orig_dims)
+        return len(self.dims)
 
     def virtual_dims(self, inner: Optional[Tensor] = None) -> Tuple[Dim, ...]:
         """:return: dims of the virtual (unpacked) view, for the given inner tensor (default: self.inner)"""
@@ -200,35 +212,69 @@ def _map_packed_to_inner(x):
     return x
 
 
-def _repack_result(out, template: PackedRawTensor, *, input_dims: frozenset = frozenset()):
+def _dim_derivation_bases(d: Dim) -> Set[Dim]:
+    """:return: all dims that d is derived from via dim math (e.g. ceildiv, add), recursively, incl. d"""
+    bases = set()
+    stack = [d]
+    while stack:
+        x = stack.pop()
+        if x in bases:
+            continue
+        bases.add(x)
+        op = getattr(x, "derived_from_op", None)
+        if op is not None:
+            stack.extend(op.inputs)
+        same_as = getattr(x, "same_as", None)
+        if same_as is not None:
+            stack.append(same_as)
+    return bases
+
+
+def _repack_result(out, template: PackedRawTensor, *, replacements: Optional[dict] = None):
     """
     Repack an unpack-fallback result in the same format/order as the template packing.
 
     If all packed dims are still present, the result shares the template's packed dim.
-    If some packed dim was replaced by a new dyn dim created by the op
-    (e.g. the subsampled time dim of a strided conv),
+    If some packed dim was replaced (e.g. the subsampled time dim of a strided conv),
     the result is packed over the replacement (in the same order), with a new packed dim.
-    If the new packing cannot be inferred (e.g. the packed dims were reduced away),
-    the result stays padded.
+    Replacements come from the op itself where available
+    (e.g. conv/pool in_spatial_dims -> returned out_spatial_dims, passed in as `replacements`),
+    otherwise from the exact dim-math derivation (a result dim derived from the missing dim,
+    e.g. time+1 from pad). Only an unambiguous derivation is trusted --
+    a merely related dim (common ancestor) is NOT enough,
+    since e.g. attention kv or rel-pos window dims also descend from time but mean something else.
+    If the new packing cannot be inferred, the result stays padded.
 
     :param out: result of the padded op (Tensor, or tuple containing Tensors)
     :param template: the packing of the packed inputs
-    :param input_dims: all dims referenced by the call inputs,
-        to distinguish op-created dyn dims (replacement candidates) from pre-existing ones
+    :param replacements: explicit dim replacements from the op (in dim -> out dim)
     """
     if isinstance(out, tuple):
-        return tuple(_repack_result(x, template, input_dims=input_dims) for x in out)
+        return tuple(_repack_result(x, template, replacements=replacements) for x in out)
     if not isinstance(out, Tensor):
         return out
     missing = [d for d in template.orig_dims if d not in out.dims]
     if not missing:
         return pack(out, dims=template.orig_dims, out_dim=template.packed_dim)
-    new_dyn_dims = [d for d in out.dims if d not in input_dims and d.dyn_size_ext is not None]
-    if len(new_dyn_dims) == len(missing):
-        new_it = iter(new_dyn_dims)
-        dims = tuple(d if d not in missing else next(new_it) for d in template.orig_dims)
-        return pack(out, dims=dims)
-    return out  # cannot infer the new packing; stays padded
+    resolved = {}
+    for m in missing:
+        if replacements and m in replacements and replacements[m] in out.dims:
+            resolved[m] = replacements[m]
+            continue
+        candidates = [
+            d
+            for d in out.dims
+            if d not in template.orig_dims and d.dyn_size_ext is not None and m in _dim_derivation_bases(d)
+        ]
+        if len(candidates) != 1:
+            # cannot infer the new packing (none or ambiguous); stays padded
+            _warn_fallback_once(
+                f"repack:{m.name}", f"result {out} has {len(candidates)} replacement candidates for packed dim {m}"
+            )
+            return out
+        resolved[m] = candidates[0]
+    dims = tuple(resolved.get(d, d) for d in template.orig_dims)
+    return pack(out, dims=dims)
 
 
 def _set_feature_dim_like_binop(out: Tensor, a, b):
@@ -254,16 +300,64 @@ def _set_feature_dim_like_binop(out: Tensor, a, b):
         out.feature_dim = fd
 
 
+def _same_seq_lens(a: Dim, b: Dim) -> bool:
+    """:return: whether a and b have identical seq lens (so packing over one is packing over the other)"""
+    if a.dyn_size_ext is None and b.dyn_size_ext is None:
+        return a.dimension == b.dimension
+    if a.dyn_size_ext is None or b.dyn_size_ext is None:
+        return False
+    if a.dyn_size_ext is b.dyn_size_ext:
+        return True
+    if a.dyn_size_ext.dims != b.dyn_size_ext.dims:
+        return False
+    a_sizes = a.get_dyn_size_ext_for_device("cpu")
+    b_sizes = b.get_dyn_size_ext_for_device("cpu")
+    return bool(rf.reduce_all(a_sizes == b_sizes, axis=list(a_sizes.dims)).raw_tensor)
+
+
+def _frame_coords(template: PackedRawTensor, d: Dim) -> Tensor:
+    """
+    :param d: one of the template's packed dims
+    :return: [packed_dim] (int, sparse over d): for every packed frame, its coordinate in d.
+        Cheap: only an int grid over the packed dims is packed, no feature-sized data.
+    """
+    grid = rf.range_over_dim(d)
+    for o in template.orig_dims:
+        if o not in grid.dims:
+            grid = rf.expand_dim(grid, dim=o)  # broadcast view, ints only
+    coords, _ = rf.pack_padded(grid, dims=template.orig_dims, out_dim=template.packed_dim)
+    return coords
+
+
 def _pack_like(x: Tensor, template: PackedRawTensor) -> Optional[Tensor]:
     """
-    :param x: plain (non-packed) tensor whose dims include all packed dims (e.g. a seq mask over (batch, time))
+    :param x: plain (non-packed) tensor over (some of) the packed dims
+        (e.g. a seq mask over (batch, time), or a positional encoding over (time,) only)
     :param template: packing to follow
-    :return: inner (packed-storage) tensor for x with the template's packing, or None if not possible directly
+    :return: inner (packed-storage) tensor for x with the template's packing, or None if not possible
     """
-    if not set(template.orig_dims) <= set(x.dims):
-        return None
-    inner, _ = rf.pack_padded(x, dims=template.orig_dims, out_dim=template.packed_dim)
-    return inner
+    in_dims = [d for d in template.orig_dims if d in x.dims]
+    assert in_dims
+    # Gather via per-frame coordinates instead of broadcast + pack:
+    # avoids materializing the full broadcast tensor
+    # (e.g. a pos enc [time, feat] would blow up to [batch, time, feat] first).
+    if len(in_dims) == 1:
+        return rf.gather(x, indices=_frame_coords(template, in_dims[0]), axis=in_dims[0])
+    x_flat, flat_dim = rf.merge_dims(x, dims=in_dims)
+    idx = None
+    for d in in_dims:
+        coords = _frame_coords(template, d)
+        idx = coords if idx is None else idx * d.get_dim_value_tensor() + coords
+    return rf.gather(x_flat, indices=idx, axis=flat_dim)
+
+
+# Ops that reinterpret the raw buffer across their axes (flatten-reshape tricks, dim merging):
+# after such an op involving a packed dim, that dim no longer indexes sequence frames,
+# so the result must NOT be repacked over it
+# (e.g. the rel-pos-encoding shift trick reshapes (T, 2T) -> (2T, T);
+# repacking in between would zero-fill entries which still belong to valid frames).
+# The result stays padded until an op with frame semantics combines it with a packed tensor again.
+_NO_REPACK_OPS = {"merge_dims", "reshape", "split_dims"}
 
 
 def _make_dim_aware_op(name: str):
@@ -294,11 +388,22 @@ def _make_dim_aware_op(name: str):
             _warn_fallback_once(name, f"references packed dims {sorted(overlap, key=lambda d: d.name or '')}")
         else:
             _warn_fallback_once(name, "mixed packings")
-        input_dims = frozenset(referenced | set().union(*(set(x.raw_tensor.virtual_dims()) for x in packed_args)))
+        in_spatial = kwargs.get("in_spatial_dims", kwargs.get("in_spatial_dim"))
         args = [_unpack_if_packed(x) for x in args]
         kwargs = {k: _unpack_if_packed(v) for k, v in kwargs.items()}
         out = getattr(raw0.inner_backend, name)(*args, **kwargs)
-        return _repack_result(out, raw0, input_dims=input_dims)
+        if name in _NO_REPACK_OPS:
+            return out  # stays padded, see _NO_REPACK_OPS
+        replacements = None
+        if in_spatial is not None and isinstance(out, tuple):
+            # ops like conv/pool return their out spatial dims: an explicit in -> out dim mapping
+            in_list = [in_spatial] if isinstance(in_spatial, Dim) else list(in_spatial)
+            for elem in out[1:]:
+                out_list = [elem] if isinstance(elem, Dim) else elem if isinstance(elem, (list, tuple)) else None
+                if out_list is not None and len(out_list) == len(in_list) and all(isinstance(d, Dim) for d in out_list):
+                    replacements = {i: o for i, o in zip(in_list, out_list) if i != o}
+                    break
+        return _repack_result(out, raw0, replacements=replacements)
 
     _op.__name__ = name
     _op.__qualname__ = f"PackedBackend.{name}"
@@ -352,12 +457,62 @@ class PackedBackend(Backend[PackedRawTensor]):
     @staticmethod
     def get_known_shape_raw(raw_tensor: PackedRawTensor) -> Tuple[Optional[int], ...]:
         """:return: shape of the virtual (unpacked) view; dynamic entries are None"""
-        return tuple(d.dimension for d in raw_tensor.virtual_dims())
+        return tuple(d.dimension for d in raw_tensor.dims)
+
+    @staticmethod
+    def transpose_raw(raw_tensor: PackedRawTensor, perm: Sequence[int]) -> PackedRawTensor:
+        """
+        transpose. Pure metadata for packed storage:
+        the outer dims are semantically unordered, the packed storage order stays canonical.
+        No data movement. This makes e.g. copy_compatible_to_dims / copy_transpose work on packed tensors.
+        """
+        dims = tuple(raw_tensor.dims[i] for i in perm)
+        return PackedRawTensor(
+            inner=raw_tensor.inner, packed_dim=raw_tensor.packed_dim, orig_dims=raw_tensor.orig_dims, dims=dims
+        )
 
     @staticmethod
     def get_device(x: Tensor) -> Optional[str]:
         """:return: device of the packed data"""
         return _raw(x).inner.device
+
+    @staticmethod
+    def replace_dim(source: Tensor, *, in_dim: Dim, out_dim: Dim) -> Tensor:
+        """
+        replace_dim. Pure metadata, but unlike the base implementation,
+        the packing relation in the wrapper must be updated as well:
+        e.g. attention replaces the kv time dim (a packed dim),
+        and with a stale packing relation, a later unpack would silently misalign the data.
+        """
+        raw = _raw(source)
+        if not out_dim.is_dim_known():
+            out_dim.copy_from(in_dim)
+        if (in_dim in raw.orig_dims or in_dim == raw.packed_dim) and not _same_seq_lens(in_dim, out_dim):
+            # e.g. the causal-attention kv dim, whose lens are per-step (2D dyn sizes):
+            # not the same packing anymore, the metadata replace would misdescribe the storage.
+            _warn_fallback_once("replace_dim", f"replacement dim {out_dim} has different seq lens than {in_dim}")
+            x = unpack(source)
+            # noinspection PyProtectedMember
+            return x._raw_backend.replace_dim(x, in_dim=in_dim, out_dim=out_dim)
+        out = source.copy_template_replace_dim_tag(
+            axis=source.get_axis_from_description(in_dim), new_dim_tag=out_dim, name="replace_dim"
+        )
+        if in_dim in raw.orig_dims or in_dim == raw.packed_dim:
+            out.raw_tensor = PackedRawTensor(
+                inner=raw.inner,
+                packed_dim=raw.packed_dim,
+                orig_dims=tuple(out_dim if d == in_dim else d for d in raw.orig_dims),
+                dims=tuple(out_dim if d == in_dim else d for d in raw.dims),
+            )
+        else:
+            inner_out, _ = rf.replace_dim(raw.inner, in_dim=in_dim, out_dim=out_dim)
+            out.raw_tensor = PackedRawTensor(
+                inner=inner_out,
+                packed_dim=raw.packed_dim,
+                orig_dims=raw.orig_dims,
+                dims=tuple(out_dim if d == in_dim else d for d in raw.dims),
+            )
+        return out
 
     @staticmethod
     def stop_gradient(tensor: Tensor) -> Tensor:

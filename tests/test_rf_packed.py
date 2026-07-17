@@ -162,6 +162,67 @@ def test_conformer():
     _assert_equal_non_padded(packed.unpack(out_p), out_ref, batch_dim, out_spatial_dim, rtol=1e-4, atol=1e-5)
 
 
+def test_transformer_aed():
+    """
+    Standard Transformer AED: encoder + decoder + cross-attention.
+
+    Two different packings are involved:
+    the encoder side is packed over (batch, enc_time),
+    the decoder side over (batch, dec_time),
+    and the cross-attention mixes them.
+    """
+    rf.select_backend_torch()
+    from returnn.frontend.encoder.transformer import TransformerEncoder
+    from returnn.frontend.decoder.transformer import TransformerDecoder
+
+    batch_dim = Dim(2, name="batch")
+    enc_time = Dim(
+        Tensor("enc_time", dims=[batch_dim], dtype="int32", raw_tensor=torch.tensor([7, 5], dtype=torch.int32))
+    )
+    dec_time = Dim(
+        Tensor("dec_time", dims=[batch_dim], dtype="int32", raw_tensor=torch.tensor([5, 3], dtype=torch.int32))
+    )
+    src_vocab = Dim(13, name="src_vocab")
+    tgt_vocab = Dim(11, name="tgt_vocab")
+    gen = torch.Generator().manual_seed(5)
+    src = Tensor("src", dims=[batch_dim, enc_time], dtype="int32", sparse_dim=src_vocab)
+    src.raw_tensor = torch.randint(0, 13, (2, 7), dtype=torch.int32, generator=gen)
+    tgt = Tensor("tgt", dims=[batch_dim, dec_time], dtype="int32", sparse_dim=tgt_vocab)
+    tgt.raw_tensor = torch.randint(0, 11, (2, 5), dtype=torch.int32, generator=gen)
+
+    with rf.set_default_device_ctx("cpu"):
+        rf.set_random_seed(23)
+        model_dim = Dim(12, name="model")
+        encoder = TransformerEncoder(src_vocab, model_dim, num_layers=2, num_heads=2, dropout=0.0, att_dropout=0.0)
+        decoder = TransformerDecoder(
+            model_dim,
+            tgt_vocab,
+            model_dim,
+            ff_dim=Dim(19, name="dec-ff"),
+            num_layers=2,
+            num_heads=2,
+            dropout=0.0,
+            att_dropout=0.0,
+        )
+
+        def _fwd(src_t, tgt_t):
+            enc_out = encoder(src_t, spatial_dim=enc_time)
+            enc_state = decoder.transform_encoder(enc_out, axis=enc_time)
+            logits, _ = decoder(
+                tgt_t,
+                spatial_dim=dec_time,
+                state=decoder.default_initial_state(batch_dims=[batch_dim]),
+                encoder=enc_state,
+            )
+            return logits
+
+        logits_ref = _fwd(src, tgt)
+        logits_p = _fwd(packed.pack(src), packed.pack(tgt))
+    assert packed.is_packed(logits_p)  # output side follows the decoder packing
+    assert logits_p.raw_tensor.orig_dims == (batch_dim, dec_time)
+    _assert_equal_non_padded(logits_p, logits_ref, batch_dim, dec_time, rtol=1e-4, atol=1e-5)
+
+
 if __name__ == "__main__":
     better_exchook.install()
     if len(sys.argv) <= 1:
