@@ -1360,11 +1360,10 @@ def where(
 
     :return: true_ if cond else false_, elemwise.
     """
+    backend = _utils.get_backend_from_tensors(cond, true_, false_)
     if not isinstance(cond, Tensor):
-        backend = _utils.get_backend_from_tensors(true_, false_)
         cond = rf.convert_to_tensor(cond, _backend=backend)
-    # noinspection PyProtectedMember
-    return cond._raw_backend.where(cond, true_, false_, allow_broadcast_all_sources=allow_broadcast_all_sources)
+    return backend.where(cond, true_, false_, allow_broadcast_all_sources=allow_broadcast_all_sources)
 
 
 def sort(source: Tensor, *, axis: Dim, descending: bool = False, stable: bool = True) -> Tuple[Tensor, Tensor, Dim]:

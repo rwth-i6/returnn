@@ -29,6 +29,10 @@ class Backend(Generic[T]):
     RawTensorType: Type[T]
     is_tensorflow: bool = False  # whether this framework uses TensorFlow
     is_backend_raw_tensor_dim_tag_independent: bool = True  # whether raw tensors of backend are independent of Dim
+    # For mixed-backend args (see get_backend_from_tensors): higher priority wins.
+    # Wrapper backends (e.g. packed tensors) set this higher,
+    # as they can handle plain tensors of their inner backend, but not vice versa.
+    dispatch_priority: int = 0
 
     def __init__(self):
         raise Exception("do not instantiate this class")

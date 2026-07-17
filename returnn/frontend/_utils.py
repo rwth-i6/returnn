@@ -17,13 +17,18 @@ T = TypeVar("T")
 def get_backend_from_tensors(*args):
     """
     :param args:
-    :return: frontend, fallback to global frontend
+    :return: frontend, fallback to global frontend.
+        With mixed backends, the one with highest dispatch_priority wins
+        (wrapper backends like packed tensors can handle plain tensors, but not vice versa).
     """
+    backend = None
     for x in args:
         if isinstance(x, Tensor):
             # noinspection PyProtectedMember
-            return x._raw_backend
-    return _global_rf
+            backend_ = x._raw_backend
+            if backend is None or backend_.dispatch_priority > backend.dispatch_priority:
+                backend = backend_
+    return backend if backend is not None else _global_rf
 
 
 def get_dtype_name(x: Union[T, Tensor[T], int, float]) -> str:

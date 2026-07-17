@@ -22,15 +22,23 @@ Three layers:
 - Generic, inner-backend-agnostic:
   ops that do not touch the packed dims (elementwise, matmul over feature, softmax over vocab, ...)
   apply the inner backend op directly on the packed raw data.
+  This is decided generically per call:
+  if no Dim referenced by the call (explicit Dim args, dims of other Tensor args)
+  is one of the packed dims, the op cannot see the packed structure,
+  so it runs on the packed data as-is.
   Also reductions over *all* packed dims jointly (e.g. mean over (batch, time))
   run directly on the packed data, without any masking.
 - Per-backend specializations (TODO, not yet here):
   ops with native varlen kernels,
   e.g. attention via FlashAttention varlen (cu_seqlens) / FlexAttention doc-masking on torch.
-- Fallback for ops needing the sequence structure: unpack, then run the op on padded storage.
-  Note: the fallback *decays* to padded storage --
-  the result is a normal padded tensor, and downstream computation stays padded
-  (correct first; keeping more ops packed comes incrementally).
+- Fallback for ops needing the sequence structure: unpack, run the op on padded storage, repack.
+  The result is repacked in the same format/order
+  (sharing the packed dim if the packed dims are unchanged;
+  following a replaced dim, e.g. the subsampled time dim of a strided conv, if the op created one),
+  so downstream computation stays packed.
+  Only if the new packing cannot be inferred does the result stay padded.
+  The first fallback per op prints a warning (see :func:`_warn_fallback_once`),
+  so slow paths are visible during development.
 
 Known limitations (TODO):
 
@@ -42,7 +50,7 @@ Status: early skeleton. Import this module explicitly to activate the dispatch r
 """
 
 from __future__ import annotations
-from typing import Any, Optional, Sequence, Tuple, Union
+from typing import Any, Optional, Sequence, Set, Tuple, Union
 
 from returnn.tensor import Tensor, Dim
 import returnn.frontend as rf
@@ -72,6 +80,10 @@ class PackedRawTensor:
         # noinspection PyProtectedMember
         return self.inner._raw_backend
 
+    def same_packing(self, other: PackedRawTensor) -> bool:
+        """:return: whether other uses the identical packing (shared packed dim)"""
+        return self.packed_dim == other.packed_dim and self.orig_dims == other.orig_dims
+
     def virtual_ndim(self) -> int:
         """:return: ndim of the virtual (unpacked) view, i.e. of the outer Tensor"""
         return self.inner.batch_ndim - 1 + len(self.orig_dims)
@@ -85,16 +97,21 @@ class PackedRawTensor:
     def rewrap(self, inner_out: Tensor, *, name: Optional[str] = None) -> Tensor:
         """
         :param inner_out: result of an op on :attr:`inner` which kept :attr:`packed_dim`
-        :param name:
         :return: outer (virtual-dims) Tensor wrapping inner_out with the same packing relation
         """
         assert self.packed_dim in inner_out.dims
+        opts = {}
+        if inner_out.feature_dim is not None and inner_out.feature_dim != self.packed_dim:
+            opts["feature_dim"] = inner_out.feature_dim
+        # else: no explicit feature_dim, so the outer Tensor applies the usual default heuristic --
+        # the inner tensor often loses the implicit feature dim (its heuristic fails without a batch dim),
+        # while the virtual (unpacked) dims match what the padded op would produce.
         out = Tensor(
             name=name or inner_out.name,
             dims=self.virtual_dims(inner_out),
             dtype=inner_out.dtype,
             sparse_dim=inner_out.sparse_dim,
-            feature_dim=inner_out.feature_dim if inner_out.feature_dim != self.packed_dim else None,
+            **opts,
         )
         out.raw_tensor = PackedRawTensor(inner=inner_out, packed_dim=self.packed_dim, orig_dims=self.orig_dims)
         return out
@@ -112,8 +129,196 @@ def _unpack_if_packed(x):
     return x
 
 
+_warned_fallback_ops: Set[str] = set()
+
+
+def _warn_fallback_once(op_name: str, reason: str):
+    """print a warning on the first unpack fallback per op, so slow paths are visible"""
+    if op_name in _warned_fallback_ops:
+        return
+    _warned_fallback_ops.add(op_name)
+    print(
+        f"PackedBackend warning: op {op_name!r} has no packed implementation ({reason}), "
+        f"using slow unpack -> op -> repack fallback. (Only warned once per op.)"
+    )
+
+
+def _add_dim_with_size_deps(dims: Set[Dim], d: Dim):
+    """add d and the dims its seq lens depend on (conservative: those matter for masking)"""
+    dims.add(d)
+    if d.dyn_size_ext is not None:
+        dims.update(d.dyn_size_ext.dims)
+
+
+def _collect_referenced_dims(*values) -> Set[Dim]:
+    """
+    :return: all Dims referenced by the given call args:
+        explicit Dim args, and the dims of all non-packed Tensor args
+        (packed Tensor args are excluded -- their packed dims are only storage, not a reference).
+        For each dim, the dims its seq lens depend on are included as well
+        (conservative: an op masking over such a dim needs the packed structure,
+        e.g. softmax over the attention hist dim whose lens depend on batch).
+    """
+    dims = set()
+    for v in values:
+        if isinstance(v, Dim):
+            _add_dim_with_size_deps(dims, v)
+        elif isinstance(v, Tensor):
+            if not isinstance(v.raw_tensor, PackedRawTensor):
+                for d in v.dims:
+                    _add_dim_with_size_deps(dims, d)
+        elif isinstance(v, (list, tuple)):
+            dims.update(_collect_referenced_dims(*v))
+        elif isinstance(v, dict):
+            dims.update(_collect_referenced_dims(*v.values()))
+    return dims
+
+
+def _dim_refs_packed(d: Dim, template: PackedRawTensor) -> bool:
+    """:return: whether d is a packed dim, or its seq lens depend on one (so masking over d needs the structure)"""
+    if d in template.orig_dims or d == template.packed_dim:
+        return True
+    if d.dyn_size_ext is not None and set(d.dyn_size_ext.dims) & set(template.orig_dims):
+        return True
+    return False
+
+
+def _rewrap_result(out, template: PackedRawTensor):
+    """rewrap Tensor results which kept the packed dim; pass through everything else (Dims, tuples, ...)"""
+    if isinstance(out, Tensor):
+        return template.rewrap(out) if template.packed_dim in out.dims else out
+    if isinstance(out, tuple):
+        return tuple(_rewrap_result(x, template) for x in out)
+    return out
+
+
+def _map_packed_to_inner(x):
+    if isinstance(x, Tensor) and isinstance(x.raw_tensor, PackedRawTensor):
+        return x.raw_tensor.inner
+    if isinstance(x, (list, tuple)):
+        return type(x)(_map_packed_to_inner(v) for v in x)
+    return x
+
+
+def _repack_result(out, template: PackedRawTensor, *, input_dims: frozenset = frozenset()):
+    """
+    Repack an unpack-fallback result in the same format/order as the template packing.
+
+    If all packed dims are still present, the result shares the template's packed dim.
+    If some packed dim was replaced by a new dyn dim created by the op
+    (e.g. the subsampled time dim of a strided conv),
+    the result is packed over the replacement (in the same order), with a new packed dim.
+    If the new packing cannot be inferred (e.g. the packed dims were reduced away),
+    the result stays padded.
+
+    :param out: result of the padded op (Tensor, or tuple containing Tensors)
+    :param template: the packing of the packed inputs
+    :param input_dims: all dims referenced by the call inputs,
+        to distinguish op-created dyn dims (replacement candidates) from pre-existing ones
+    """
+    if isinstance(out, tuple):
+        return tuple(_repack_result(x, template, input_dims=input_dims) for x in out)
+    if not isinstance(out, Tensor):
+        return out
+    missing = [d for d in template.orig_dims if d not in out.dims]
+    if not missing:
+        return pack(out, dims=template.orig_dims, out_dim=template.packed_dim)
+    new_dyn_dims = [d for d in out.dims if d not in input_dims and d.dyn_size_ext is not None]
+    if len(new_dyn_dims) == len(missing):
+        new_it = iter(new_dyn_dims)
+        dims = tuple(d if d not in missing else next(new_it) for d in template.orig_dims)
+        return pack(out, dims=dims)
+    return out  # cannot infer the new packing; stays padded
+
+
+def _set_feature_dim_like_binop(out: Tensor, a, b):
+    """
+    Propagate feature_dim from the outer binop operands, like the padded path does
+    (see _utils.res_feature_dim) --
+    the operands' feature marking often lives only on the outer tensor
+    (e.g. rf.Linear sets it on the matmul result before adding the bias),
+    so rebuilding the outer from the inner would lose it.
+    """
+    if out.feature_dim is not None:
+        return
+    a_fd = a.feature_dim if isinstance(a, Tensor) else None
+    b_fd = b.feature_dim if isinstance(b, Tensor) else None
+    fd = None
+    if a_fd and not b_fd:
+        fd = a_fd
+    elif b_fd and not a_fd:
+        fd = b_fd
+    elif a_fd and b_fd and a_fd == b_fd:
+        fd = a_fd
+    if fd is not None and fd in out.dims:
+        out.feature_dim = fd
+
+
+def _pack_like(x: Tensor, template: PackedRawTensor) -> Optional[Tensor]:
+    """
+    :param x: plain (non-packed) tensor whose dims include all packed dims (e.g. a seq mask over (batch, time))
+    :param template: packing to follow
+    :return: inner (packed-storage) tensor for x with the template's packing, or None if not possible directly
+    """
+    if not set(template.orig_dims) <= set(x.dims):
+        return None
+    inner, _ = rf.pack_padded(x, dims=template.orig_dims, out_dim=template.packed_dim)
+    return inner
+
+
+def _make_dim_aware_op(name: str):
+    """
+    Generic wrapper for backend ops without a dedicated packed implementation.
+
+    If the call does not reference any of the packed dims
+    (checked over explicit Dim args and the dims of all other Tensor args),
+    the op cannot see the packed structure,
+    so it runs directly on the packed data (packed args replaced by their inner tensors)
+    and the results are rewrapped.
+    Otherwise: unpack fallback (with a one-time warning).
+    """
+
+    def _op(*args, **kwargs):
+        all_values = list(args) + list(kwargs.values())
+        packed_args = [x for x in _flatten(all_values) if isinstance(x, Tensor) and is_packed(x)]
+        assert packed_args, f"PackedBackend.{name}: no packed tensor in args"
+        raw0 = packed_args[0].raw_tensor
+        referenced = _collect_referenced_dims(*all_values)
+        if all(raw0.same_packing(x.raw_tensor) for x in packed_args[1:]):
+            overlap = referenced & (set(raw0.orig_dims) | {raw0.packed_dim})
+            if not overlap:
+                inner_args = [_map_packed_to_inner(x) for x in args]
+                inner_kwargs = {k: _map_packed_to_inner(v) for k, v in kwargs.items()}
+                out = getattr(raw0.inner_backend, name)(*inner_args, **inner_kwargs)
+                return _rewrap_result(out, raw0)
+            _warn_fallback_once(name, f"references packed dims {sorted(overlap, key=lambda d: d.name or '')}")
+        else:
+            _warn_fallback_once(name, "mixed packings")
+        input_dims = frozenset(referenced | set().union(*(set(x.raw_tensor.virtual_dims()) for x in packed_args)))
+        args = [_unpack_if_packed(x) for x in args]
+        kwargs = {k: _unpack_if_packed(v) for k, v in kwargs.items()}
+        out = getattr(raw0.inner_backend, name)(*args, **kwargs)
+        return _repack_result(out, raw0, input_dims=input_dims)
+
+    _op.__name__ = name
+    _op.__qualname__ = f"PackedBackend.{name}"
+    _op.__doc__ = (
+        f"{name}: generic packed handling -- "
+        f"runs on packed data if the call does not reference the packed dims, otherwise unpack fallback"
+    )
+    return staticmethod(_op)
+
+
+def _flatten(values):
+    for v in values:
+        if isinstance(v, (list, tuple)):
+            yield from _flatten(v)
+        else:
+            yield v
+
+
 # We do not expect to ever implement all methods of the Backend interface here --
-# only what is profitable on packed data; the rest falls back (unpack, then padded op).
+# only what is profitable on packed data; the rest goes through the generic dim-aware wrapper below.
 # noinspection PyAbstractClass
 class PackedBackend(Backend[PackedRawTensor]):
     """
@@ -125,6 +330,9 @@ class PackedBackend(Backend[PackedRawTensor]):
 
     name = "packed"
     RawTensorType = PackedRawTensor
+    # Win mixed-backend dispatch (get_backend_from_tensors):
+    # we can handle plain tensors of the inner backend, but not vice versa.
+    dispatch_priority = 1
 
     @staticmethod
     def executing_eagerly() -> bool:
@@ -184,23 +392,78 @@ class PackedBackend(Backend[PackedRawTensor]):
         b_packed = isinstance(b, Tensor) and isinstance(b.raw_tensor, PackedRawTensor)
         if a_packed and b_packed:
             a_raw, b_raw = a.raw_tensor, b.raw_tensor
-            if a_raw.packed_dim == b_raw.packed_dim and a_raw.orig_dims == b_raw.orig_dims:
-                return a_raw.rewrap(
+            if a_raw.same_packing(b_raw):
+                out = a_raw.rewrap(
                     rf.combine(a_raw.inner, kind, b_raw.inner, allow_broadcast_all_sources=True), name=kind
                 )
+                _set_feature_dim_like_binop(out, a, b)
+                return out
+            _warn_fallback_once("combine", "mixed packings")
         elif a_packed or b_packed:
             packed_t, other = (a, b) if a_packed else (b, a)
             packed_raw = packed_t.raw_tensor
-            if not isinstance(other, Tensor) or not (set(other.dims) & set(packed_raw.orig_dims)):
+            if isinstance(other, Tensor) and set(other.dims) & set(packed_raw.orig_dims):
+                # operand over the packed dims (e.g. an additive mask over (batch, time)):
+                # pack it alike, then combine on packed data.
+                other = _pack_like(other, packed_raw)
+            if other is not None and not (isinstance(other, Tensor) and set(other.dims) & set(packed_raw.orig_dims)):
                 args = (packed_raw.inner, kind, other) if a_packed else (other, kind, packed_raw.inner)
-                return packed_raw.rewrap(rf.combine(*args, allow_broadcast_all_sources=True), name=kind)
-        return rf.combine(
+                out = packed_raw.rewrap(rf.combine(*args, allow_broadcast_all_sources=True), name=kind)
+                _set_feature_dim_like_binop(out, a, b)
+                return out
+            _warn_fallback_once("combine", "operand references packed dims and is not packable alike")
+        template = a.raw_tensor if a_packed else b.raw_tensor
+        out = rf.combine(
             _unpack_if_packed(a),
             kind,
             _unpack_if_packed(b),
             allow_broadcast_all_sources=allow_broadcast_all_sources,
             dim_order=dim_order,
         )
+        return _repack_result(out, template)
+
+    @staticmethod
+    def where(
+        cond: Union[Tensor, Any],
+        true_: Union[Tensor, Any],
+        false_: Union[Tensor, Any],
+        *,
+        allow_broadcast_all_sources: bool = False,
+    ) -> Tensor:
+        """
+        where -- on packed data if all Tensor operands can share the packing:
+        packed alike, plain operands not touching the packed dims,
+        or plain operands packable to the same packing
+        (e.g. a seq mask over (batch, time), as used for masking before conv).
+        """
+        operands = [cond, true_, false_]
+        packed_ops = [x for x in operands if isinstance(x, Tensor) and is_packed(x)]
+        assert packed_ops, "PackedBackend.where: no packed operand"
+        raw0 = packed_ops[0].raw_tensor
+        if all(raw0.same_packing(x.raw_tensor) for x in packed_ops[1:]):
+            inner_ops = []
+            for x in operands:
+                if isinstance(x, Tensor) and is_packed(x):
+                    inner_ops.append(x.raw_tensor.inner)
+                elif isinstance(x, Tensor) and set(x.dims) & set(raw0.orig_dims):
+                    x_ = _pack_like(x, raw0)
+                    if x_ is None:
+                        break
+                    inner_ops.append(x_)
+                else:
+                    inner_ops.append(x)
+            else:
+                out = raw0.rewrap(rf.where(*inner_ops, allow_broadcast_all_sources=True), name="where")
+                _set_feature_dim_like_binop(out, true_, false_)
+                return out
+        _warn_fallback_once("where", "operands not packable to a common packing")
+        out = rf.where(
+            _unpack_if_packed(cond),
+            _unpack_if_packed(true_),
+            _unpack_if_packed(false_),
+            allow_broadcast_all_sources=allow_broadcast_all_sources,
+        )
+        return _repack_result(out, raw0)
 
     @staticmethod
     def matmul(a: Tensor, b: Tensor, *, reduce: Union[Dim, Sequence[Dim]], use_mask: bool = True) -> Tensor:
@@ -215,33 +478,37 @@ class PackedBackend(Backend[PackedRawTensor]):
         b_raw = b.raw_tensor
         if (
             not isinstance(b_raw, PackedRawTensor)
-            and not any(d in a_raw.orig_dims for d in reduce_dims)
+            and not any(_dim_refs_packed(d, a_raw) for d in reduce_dims)
             and not any(d in b.dims for d in a_raw.orig_dims)
         ):
             inner_out = rf.matmul(a_raw.inner, b, reduce=reduce, use_mask=use_mask)
             return a_raw.rewrap(inner_out, name="matmul")
-        return rf.matmul(_unpack_if_packed(a), _unpack_if_packed(b), reduce=reduce, use_mask=use_mask)
+        _warn_fallback_once("matmul", "reduce dims or other operand reference the packed dims")
+        out = rf.matmul(_unpack_if_packed(a), _unpack_if_packed(b), reduce=reduce, use_mask=use_mask)
+        return _repack_result(out, a_raw)
 
     @staticmethod
     def softmax(tensor: Tensor, *, axis: Dim, use_mask: bool = True) -> Tensor:
         """softmax over a non-packed axis (e.g. vocab) -> on packed data. otherwise: fallback."""
         raw = _raw(tensor)
-        if axis not in raw.orig_dims:
+        if not _dim_refs_packed(axis, raw):
             return raw.rewrap(rf.softmax(raw.inner, axis=axis, use_mask=use_mask), name="softmax")
         # TODO axis in orig_dims = softmax over the packed spatial dim (e.g. attention energies over time):
         #  implementable as segment softmax directly on packed data
         #  (segment ids from the seq lens, seg-max / seg-sum via scatter-reduce, then elementwise),
         #  which needs no masking at all.
         #  For full attention, the flash-varlen specialization avoids materializing the energies altogether.
-        return rf.softmax(unpack(tensor), axis=axis, use_mask=use_mask)
+        _warn_fallback_once("softmax", f"axis {axis} is a packed dim (segment softmax TODO)")
+        return _repack_result(rf.softmax(unpack(tensor), axis=axis, use_mask=use_mask), raw)
 
     @staticmethod
     def log_softmax(tensor: Tensor, *, axis: Dim, use_mask: bool = True) -> Tensor:
         """log_softmax over a non-packed axis (e.g. vocab) -> on packed data. otherwise: fallback."""
         raw = _raw(tensor)
-        if axis not in raw.orig_dims:
+        if not _dim_refs_packed(axis, raw):
             return raw.rewrap(rf.log_softmax(raw.inner, axis=axis, use_mask=use_mask), name="log_softmax")
-        return rf.log_softmax(unpack(tensor), axis=axis, use_mask=use_mask)
+        _warn_fallback_once("log_softmax", f"axis {axis} is a packed dim (segment softmax TODO)")
+        return _repack_result(rf.log_softmax(unpack(tensor), axis=axis, use_mask=use_mask), raw)
 
     @staticmethod
     def softmax_cross_entropy_with_logits(*, logits: Tensor, targets: Tensor, axis: Dim):
@@ -252,17 +519,19 @@ class PackedBackend(Backend[PackedRawTensor]):
         logits_raw = _raw(logits)
         targets_raw = targets.raw_tensor
         if (
-            axis not in logits_raw.orig_dims
+            not _dim_refs_packed(axis, logits_raw)
             and isinstance(targets_raw, PackedRawTensor)
-            and targets_raw.packed_dim == logits_raw.packed_dim
+            and logits_raw.same_packing(targets_raw)
         ):
             inner_out = rf.cross_entropy(
                 estimated=logits_raw.inner, target=targets_raw.inner, axis=axis, estimated_type="logits"
             )
             return logits_raw.rewrap(inner_out, name="cross_entropy")
-        return rf.cross_entropy(
+        _warn_fallback_once("softmax_cross_entropy_with_logits", "axis packed or targets not packed alike")
+        out = rf.cross_entropy(
             estimated=unpack(logits), target=_unpack_if_packed(targets), axis=axis, estimated_type="logits"
         )
+        return _repack_result(out, logits_raw)
 
     @staticmethod
     def reduce(source: Tensor, *, mode: str, axis: Union[Dim, Sequence[Dim]], use_mask: bool = True) -> Tensor:
@@ -275,33 +544,24 @@ class PackedBackend(Backend[PackedRawTensor]):
         """
         raw = _raw(source)
         axes = [axis] if isinstance(axis, Dim) else list(axis)
-        if not set(axes) & set(raw.orig_dims):
+        if not any(_dim_refs_packed(d, raw) for d in axes):
             return raw.rewrap(rf.reduce(raw.inner, mode=mode, axis=axes, use_mask=use_mask), name=mode)
-        if set(raw.orig_dims) <= set(axes) and not mode.startswith("arg"):
-            inner_axes = [raw.packed_dim] + [d for d in axes if d not in raw.orig_dims]
+        extra_axes = [d for d in axes if d not in raw.orig_dims]
+        if (
+            set(raw.orig_dims) <= set(axes)
+            and not mode.startswith("arg")
+            and not any(_dim_refs_packed(d, raw) for d in extra_axes)
+        ):
             # use_mask=False: packed storage has no padded frames.
-            return rf.reduce(raw.inner, mode=mode, axis=inner_axes, use_mask=False)
-        return rf.reduce(unpack(source), mode=mode, axis=axes, use_mask=use_mask)
+            return rf.reduce(raw.inner, mode=mode, axis=[raw.packed_dim] + extra_axes, use_mask=False)
+        _warn_fallback_once("reduce", f"partial reduce over packed dims (axis {axes}, mode {mode})")
+        return _repack_result(rf.reduce(unpack(source), mode=mode, axis=axes, use_mask=use_mask), raw)
 
 
-def _make_unpack_fallback(name: str):
-    def _fallback(*args, **kwargs):
-        packed_args = [x for x in list(args) + list(kwargs.values()) if isinstance(x, Tensor) and is_packed(x)]
-        assert packed_args, f"PackedBackend.{name} fallback: no packed tensor in args"
-        inner_backend = packed_args[0].raw_tensor.inner_backend
-        args = [_unpack_if_packed(x) for x in args]
-        kwargs = {k: _unpack_if_packed(v) for k, v in kwargs.items()}
-        return getattr(inner_backend, name)(*args, **kwargs)
-
-    _fallback.__name__ = name
-    _fallback.__qualname__ = f"PackedBackend.{name}"
-    _fallback.__doc__ = f"{name}: unpack fallback (needs the sequence structure; result decays to padded storage)"
-    return staticmethod(_fallback)
-
-
-# Ops needing the sequence structure, without a packed implementation (yet):
-# unpack, then run on padded storage via the inner backend.
+# All other structural ops go through the generic dim-aware wrapper:
+# packed data directly if the call does not reference the packed dims, otherwise unpack fallback.
 for _name in [
+    "batch_norm",
     "concat",
     "conv",
     "cumsum",
@@ -326,7 +586,7 @@ for _name in [
     "top_k",
     "transposed_conv",
 ]:
-    setattr(PackedBackend, _name, _make_unpack_fallback(_name))
+    setattr(PackedBackend, _name, _make_dim_aware_op(_name))
 
 
 def is_packed(source: Tensor) -> bool:
@@ -370,9 +630,12 @@ def pack(source: Tensor, *, dims: Optional[Sequence[Dim]] = None, out_dim: Optio
         dims = _auto_pack_dims(source)
         assert dims, f"pack: no dims with dynamic length found in {source}"
     inner, packed_dim = rf.pack_padded(source, dims=dims, out_dim=out_dim)
-    out = source.copy_template(name=(source.name or "packed") + "_packed")
-    out.raw_tensor = PackedRawTensor(inner=inner, packed_dim=packed_dim, orig_dims=dims)
-    return out
+    if source.feature_dim is not None and inner.feature_dim is None and source.feature_dim in inner.dims:
+        inner.feature_dim = source.feature_dim  # masked_select drops it
+    # Note: the returned dims order is the canonical virtual order (packed dims first),
+    # which can differ from source.dims order (dims are unordered semantically in RF).
+    helper = PackedRawTensor(inner=inner, packed_dim=packed_dim, orig_dims=dims)
+    return helper.rewrap(inner, name=(source.name or "packed") + "_packed")
 
 
 def unpack(source: Tensor) -> Tensor:
@@ -383,7 +646,10 @@ def unpack(source: Tensor) -> Tensor:
     raw = source.raw_tensor
     if not isinstance(raw, PackedRawTensor):
         return source
-    return rf.pad_packed(raw.inner, dims=raw.orig_dims, in_dim=raw.packed_dim)
+    out = rf.pad_packed(raw.inner, dims=raw.orig_dims, in_dim=raw.packed_dim)
+    if source.feature_dim is not None and out.feature_dim is None and source.feature_dim in out.dims:
+        out.feature_dim = source.feature_dim  # masked_scatter drops it
+    return out
 
 
 register_backend_by_tensor_type(PackedRawTensor, PackedBackend)
