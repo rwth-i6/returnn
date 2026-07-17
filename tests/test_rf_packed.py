@@ -36,7 +36,9 @@ def _make_input(*, batch_size: int = 2, seq_lens=(5, 3), feat: int = 4, seed: in
 def _assert_equal_non_padded(actual: Tensor, expected: Tensor, batch_dim: Dim, time_dim: Dim, **kwargs):
     """compare on all non-padded frames. actual can have packed storage."""
     actual = packed.unpack(actual)
-    actual = actual.copy_compatible_to_dims(expected.dims)
+    order = [batch_dim, time_dim] + [d for d in expected.dims if d not in (batch_dim, time_dim)]
+    actual = actual.copy_transpose(order)
+    expected = expected.copy_transpose(order)
     mask = rf.sequence_mask([batch_dim, time_dim]).copy_compatible_to_dims([batch_dim, time_dim]).raw_tensor.numpy()
     a = actual.raw_tensor.detach().numpy()
     e = expected.raw_tensor.detach().numpy()
@@ -153,13 +155,98 @@ def test_conformer():
             num_layers=2,
         )
         out_ref, out_spatial_dim = model(x, in_spatial_dim=time_dim)
-        xp = packed.pack(x)
+        # gap for the packed convs, derived by hand for this model:
+        # depthwise conv kernel 32 -> ceil(31/2) = 16; subsample convs 3x3 -> 1; pool/pad fall back.
+        xp = packed.pack(x, gap=16)
         out_p, out_spatial_dim_p = model(xp, in_spatial_dim=time_dim)
+        # all convs must have used the packed fast path (no conv fallback warning)
+        assert "conv" not in packed._warned_fallback_ops
     assert out_spatial_dim == out_spatial_dim_p
     # fallbacks repack, so the encoder output must still be packed (over (batch, subsampled time))
     assert packed.is_packed(out_p)
     assert out_p.raw_tensor.orig_dims == (batch_dim, out_spatial_dim_p)
     _assert_equal_non_padded(packed.unpack(out_p), out_ref, batch_dim, out_spatial_dim, rtol=1e-4, atol=1e-5)
+
+
+def test_seq_starts_cu_seqlens():
+    # the layout descriptor: per-seq start offsets + flash-varlen-style cu_seqlens
+    rf.select_backend_torch()
+    x, batch_dim, time_dim, feat_dim = _make_input()  # lens (5, 3)
+    raw = packed.pack(x).raw_tensor
+    starts, seqs_dim = raw.seq_starts()
+    assert seqs_dim == batch_dim
+    assert starts.raw_tensor.tolist() == [0, 5]
+    cu, cu_dim = raw.cu_seqlens()
+    assert cu.dtype == "int32"
+    assert cu.raw_tensor.tolist() == [0, 5, 8]
+    assert cu_dim.get_dim_value() == 3
+
+
+def test_pack_gap_roundtrip():
+    # gapped layout: gap zero-frames between the sequences in the packed buffer
+    rf.select_backend_torch()
+    x, batch_dim, time_dim, feat_dim = _make_input()  # lens (5, 3)
+    xp = packed.pack(x, gap=2)
+    raw = xp.raw_tensor
+    assert raw.gap == 2
+    assert raw.packed_dim.get_dim_value() == 8 + 2 * 2
+    starts, _ = raw.seq_starts()
+    assert starts.raw_tensor.tolist() == [0, 7]  # 5 + gap 2
+    _assert_equal_non_padded(xp, x, batch_dim, time_dim)
+
+
+def test_conv_packed_gap():
+    # packed conv: runs directly over the gapped packed buffer; layout (and packed dim) unchanged
+    rf.select_backend_torch()
+    x, batch_dim, time_dim, feat_dim = _make_input()
+    with rf.set_default_device_ctx("cpu"):
+        rf.set_random_seed(7)
+        conv = rf.Conv1d(feat_dim, Dim(6, name="out"), filter_size=3, padding="same")
+        out_ref, _ = conv(x, in_spatial_dim=time_dim)
+        xp = packed.pack(x, gap=1)  # required for kernel 3: ((3-1)*1+1)//2 = 1
+        out_p, out_sp = conv(xp, in_spatial_dim=time_dim)
+        assert out_sp == time_dim
+        assert packed.is_packed(out_p)
+        assert out_p.raw_tensor.packed_dim == xp.raw_tensor.packed_dim
+        _assert_equal_non_padded(out_p, out_ref, batch_dim, time_dim)
+        # dense (gap 0): must warn and fall back, but still be correct
+        out_d, _ = conv(packed.pack(x), in_spatial_dim=time_dim)
+        _assert_equal_non_padded(out_d, out_ref, batch_dim, time_dim)
+
+
+def test_conv_packed_valid_dense():
+    # padding "valid": every kept output window lies fully inside its own sequence
+    # (windows never extend beyond the frames they are computed from),
+    # so the packed conv needs NO input gap; boundary-crossing junk windows
+    # land exactly in the output's gap slots (out gap = window span).
+    rf.select_backend_torch()
+    x, batch_dim, time_dim, feat_dim = _make_input()
+    with rf.set_default_device_ctx("cpu"):
+        rf.set_random_seed(9)
+        conv = rf.Conv1d(feat_dim, Dim(6, name="out"), filter_size=3, padding="valid")
+        out_ref, out_time_ref = conv(x, in_spatial_dim=time_dim)
+        out_p, out_time = conv(packed.pack(x), in_spatial_dim=time_dim)
+        assert packed.is_packed(out_p)
+        # out gap == span proves the packed fast path ran (a fallback repack would keep gap 0)
+        assert out_p.raw_tensor.gap == 2
+        assert out_time == out_time_ref
+        _assert_equal_non_padded(out_p, out_ref, batch_dim, out_time_ref)
+
+
+def test_conv_packed_gap_junk_robust():
+    # "same" windows DO read into the gap, so the conv must zero the gap frames beforehand
+    # (rf.where(frame_mask, x, 0)); junk in the gaps (e.g. from a previous bias add) must not leak.
+    rf.select_backend_torch()
+    x, batch_dim, time_dim, feat_dim = _make_input()
+    with rf.set_default_device_ctx("cpu"):
+        rf.set_random_seed(11)
+        conv = rf.Conv1d(feat_dim, Dim(6, name="out"), filter_size=3, padding="same")
+        out_ref, _ = conv(x + 123.0, in_spatial_dim=time_dim)
+        xp = packed.pack(x, gap=1) + 123.0  # elementwise also hits the gap frames: gaps now hold 123
+        out_p, _ = conv(xp, in_spatial_dim=time_dim)
+        assert packed.is_packed(out_p)
+        assert out_p.raw_tensor.packed_dim == xp.raw_tensor.packed_dim  # fast path, layout unchanged
+        _assert_equal_non_padded(out_p, out_ref, batch_dim, time_dim)
 
 
 def test_softmax_over_packed_time():
