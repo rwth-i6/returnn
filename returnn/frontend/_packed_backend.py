@@ -167,6 +167,7 @@ class PackedRawTensor:
     def rewrap(self, inner_out: Tensor, *, name: Optional[str] = None) -> Tensor:
         """
         :param inner_out: result of an op on :attr:`inner` which kept :attr:`packed_dim`
+        :param name: name for the resulting outer Tensor
         :return: outer (virtual-dims) Tensor wrapping inner_out with the same packing relation
         """
         assert self.packed_dim in inner_out.dims
@@ -437,6 +438,7 @@ def _packed_total(orig_dims: Sequence[Dim], gap: int, align: int) -> Tensor:
 
 def _frame_coords(template: PackedRawTensor, d: Dim) -> Tensor:
     """
+    :param template: the packing
     :param d: one of the template's packed dims
     :return: [packed_dim] (int): for every packed frame, its coordinate in d
         (gap frames get 0 -- only meaningful on sequence frames).
@@ -539,6 +541,7 @@ def _segment_softmax(tensor: Tensor, *, axis: Dim, log: bool) -> Optional[Tensor
 
 def _segment_index(template: PackedRawTensor, seg_dims: Sequence[Dim]) -> Tuple[Tensor, Dim, Dim]:
     """
+    :param template: the packing
     :param seg_dims: (some of) the template's packed dims defining the segments
     :return: (seg, scatter_dim, valid_dim): for every packed frame, its flat index over seg_dims
         (row-major, matching the merged-dims layout);
