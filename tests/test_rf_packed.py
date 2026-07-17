@@ -21,9 +21,7 @@ import returnn.frontend as rf
 from returnn.frontend import _packed_backend as packed
 
 
-def _make_input(
-    *, batch_size: int = 2, seq_lens=(5, 3), feat: int = 4, seed: int = 42
-) -> Tuple[Tensor, Dim, Dim, Dim]:
+def _make_input(*, batch_size: int = 2, seq_lens=(5, 3), feat: int = 4, seed: int = 42) -> Tuple[Tensor, Dim, Dim, Dim]:
     batch_dim = Dim(batch_size, name="batch")
     time_dim = Dim(
         Tensor("time", dims=[batch_dim], dtype="int32", raw_tensor=torch.tensor(list(seq_lens), dtype=torch.int32))
