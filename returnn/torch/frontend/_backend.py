@@ -319,13 +319,17 @@ class TorchBackend(Backend[torch.Tensor]):
         out_dims = source.dims[:axis_] + tuple(dims) + source.dims[axis_ + 1 :]
         out_shape = [d.get_dim_value() for d in out_dims]
         out_raw = torch.reshape(source.raw_tensor, out_shape)
-        return Tensor(
+        out = Tensor(
             "split_dims",
             dims=out_dims,
             dtype=source.dtype,
             sparse_dim=source.sparse_dim,
             raw_tensor=out_raw,
         )
+        if source.feature_dim and source.feature_dim != axis:
+            # preserve the feature dim if it was not the split axis (consistent to reshape and the TF layer)
+            out.feature_dim = source.feature_dim
+        return out
 
     @staticmethod
     def reshape(source: Tensor, in_dims: Sequence[Dim], out_dims: Sequence[Dim]) -> Tensor:
