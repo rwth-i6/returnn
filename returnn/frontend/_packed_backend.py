@@ -664,6 +664,7 @@ def _sdpa_varlen_attention(
     v_feat_dim: Dim,
     kv_spatial_dim: Dim,
     is_causal: bool,
+    dropout_p: float = 0.0,
     scale: Optional[float],
 ) -> Optional[Tensor]:
     """
@@ -724,7 +725,12 @@ def _sdpa_varlen_attention(
         k_n = torch.nested.nested_tensor_from_jagged(k_t, offsets=cu_k.raw_tensor.long()).transpose(1, 2)
         v_n = torch.nested.nested_tensor_from_jagged(v_t, offsets=cu_k.raw_tensor.long()).transpose(1, 2)
         out_n = torch.nn.functional.scaled_dot_product_attention(
-            q_n, k_n, v_n, is_causal=is_causal, scale=scale if scale is not None else qk_feat_dim.dimension**-0.5
+            q_n,
+            k_n,
+            v_n,
+            dropout_p=dropout_p,
+            is_causal=is_causal,
+            scale=scale if scale is not None else qk_feat_dim.dimension**-0.5,
         )
         out_t = out_n.transpose(1, 2).values()
     except (RuntimeError, NotImplementedError) as exc:
@@ -1132,7 +1138,21 @@ class PackedBackend(Backend[PackedRawTensor]):
         see :func:`_sdpa_varlen_attention`.
         Generic fallback otherwise (which then uses the packed matmul/softmax handling).
         """
-        if attention_mask is None and not att_dropout:
+        dropout_p = 0.0
+        if att_dropout:
+            if att_dropout_broadcast:
+                # Legacy broadcast dropout (behavior <=18) has a different mask shape
+                # than elementwise SDPA dropout_p.
+                dropout_p = None
+            else:
+                train_flag = rf.get_run_ctx().is_train_flag_enabled(func=rf.dropout)
+                if isinstance(train_flag, bool):
+                    # rf.dropout semantics here (elementwise on att weights, 1/(1-p) scaling)
+                    # match SDPA dropout_p, modulo the RNG realization.
+                    dropout_p = att_dropout if train_flag else 0.0
+                else:
+                    dropout_p = None  # dynamic train flag, cannot resolve to a static dropout_p
+        if attention_mask is None and dropout_p is not None:
             out = _sdpa_varlen_attention(
                 query,
                 key,
@@ -1141,12 +1161,17 @@ class PackedBackend(Backend[PackedRawTensor]):
                 v_feat_dim=v_feat_dim,
                 kv_spatial_dim=kv_spatial_dim,
                 is_causal=is_causal,
+                dropout_p=dropout_p,
                 scale=scale,
             )
             if out is not None:
                 return out
         else:
-            _sdpa_no("attention_mask / att_dropout given")
+            _sdpa_no(
+                "attention_mask given"
+                if attention_mask is not None
+                else "att_dropout with broadcast (legacy) or dynamic train flag"
+            )
         return Backend.scaled_dot_product_attention(
             query,
             key,

@@ -302,6 +302,30 @@ class CausalSelfAttention(SelfAttentionBase):
     ) -> Tuple[Tensor, CausalSelfAttentionState]:
         """forward"""
         q, k, v = self.forward_qkv(source)
+        if axis != single_step_dim and (not state or state.accum_axis.dimension == 0):
+            # Full sequence from scratch: use is_causal directly,
+            # so that backends can use efficient fused implementations (e.g. packed varlen SDPA).
+            # The state keeps the original axis, see _causal_self_att_step (no-state case).
+            new_state = CausalSelfAttentionState()
+            new_state.k_accum = k
+            new_state.v_accum = v
+            new_state.accum_axis = axis
+            att = scaled_dot_product_attention(
+                q,
+                k,
+                v,
+                att_dropout=self.att_dropout,
+                att_dropout_broadcast=self.att_dropout_broadcast,
+                v_feat_dim=self.value_dim_per_head,
+                qk_feat_dim=self.key_dim_per_head,
+                kv_spatial_dim=axis,
+                query_spatial_dim=axis,
+                is_causal=True,
+            )
+            output, _ = rf.merge_dims(att, dims=(self.num_heads, self.value_dim_per_head), out_dim=self.value_dim_total)
+            if self.proj:
+                output = self.proj(output)
+            return output, new_state
         k, v, hist_dim, new_state = _causal_self_att_step(k, v, axis=axis, state=state, self=self)
         output = self.attention(q, k, v, kv_axis=hist_dim)
         return output, new_state
