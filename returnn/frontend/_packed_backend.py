@@ -958,6 +958,7 @@ def _flex_rel_pos_attention(
         q_f = q_t.transpose(0, 1).unsqueeze(0)  # [1, H, total, D]
         k_f = k_t.transpose(0, 1).unsqueeze(0)
         v_f = v_t.transpose(0, 1).unsqueeze(0)
+        # noinspection PyBroadException
         try:
             out_f = flex_fn(q_f, k_f, v_f, score_mod=_score_mod, block_mask=block_mask)
         except Exception:
