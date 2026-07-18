@@ -28,9 +28,17 @@ Three layers:
   so it runs on the packed data as-is.
   Also reductions over *all* packed dims jointly (e.g. mean over (batch, time))
   run directly on the packed data, without any masking.
-- Per-backend specializations (TODO, not yet here):
-  ops with native varlen kernels,
-  e.g. attention via FlashAttention varlen (cu_seqlens) / FlexAttention doc-masking on torch.
+- Per-backend (torch) specializations, implemented here:
+  attention via fused varlen kernels --
+  compiled FlexAttention with a document block mask over the flat packed buffer
+  (self-/cross-/causal attention, and rel-pos attention via a score_mod bias,
+  see :func:`rf.rel_pos_self_attention`),
+  or NJT (nested-jagged) SDPA where dropout is needed;
+  conv/pool/pad directly on the (gapped) packed buffer;
+  masked-stats batch_norm;
+  segment softmax / reductions via :func:`rf.scatter`.
+  Layout metadata (cu_seqlens, block masks, frame coords/masks)
+  is cached per packing, see :data:`_layout_cache`.
 - Fallback for ops needing the sequence structure: unpack, run the op on padded storage, repack.
   The result is repacked in the same format/order
   (sharing the packed dim if the packed dims are unchanged;
@@ -42,11 +50,21 @@ Three layers:
 
 Known limitations (TODO):
 
-- Mixed binary ops only work packed-first (``packed + plain``);
-  ``plain + packed`` dispatches on the plain backend which cannot handle the wrapper.
 - ``dim_order`` in :func:`combine` is ignored on the packed fast path.
+- Strided conv/pool output layouts must have uniform per-seq residuals,
+  in practice: seq lens multiple of the total stride
+  (otherwise the output is extracted to padded storage and repacked, with a warning).
+  Would need per-seq output footprints (a layout generalization).
+- FlexAttention has no dropout support (torch 2.7 and 2.12):
+  attention with att_dropout in training runs the eager NJT SDPA path
+  (correct, flash kernels, but heavy per-call python --
+  compiled NJT backward is broken in torch 2.7/2.12).
 
-Status: early skeleton. Import this module explicitly to activate the dispatch registration.
+Status: complete for the Conformer (default rel-pos attention + BatchNorm)
+and the Transformer AED (incl. cross-attention and the CE output block),
+both verified against the padded reference (tests/test_rf_packed.py)
+and running without any fallback.
+Import this module explicitly to activate the dispatch registration.
 """
 
 from __future__ import annotations
@@ -79,7 +97,7 @@ def _packing_cache_key(kind: str, raw: PackedRawTensor, device) -> Tuple[Any, ..
     :return: cache key for layout metadata of the packing.
         The dims go in directly (the Cache handles the value semantics, see above).
     """
-    return (kind, raw.orig_dims, raw.gap, raw.align, str(device))
+    return kind, raw.orig_dims, raw.gap, raw.align, str(device)
 
 
 class PackedRawTensor:
@@ -89,7 +107,7 @@ class PackedRawTensor:
     The wrapped :attr:`inner` is a normal RF :class:`Tensor` (of the inner backend)
     holding the packed data, dims = [packed_dim] + remaining (non-packed) dims.
     :attr:`orig_dims` are the dims packed into :attr:`packed_dim`, e.g. (batch, time);
-    the seq lens live in the dyn dims' dyn_size_ext as usual, nothing is duplicated here.
+    the seq lens live in the dyn dims dyn_size_ext as usual, nothing is duplicated here.
     """
 
     def __init__(
@@ -475,7 +493,7 @@ def _frame_coords(template: PackedRawTensor, d: Dim) -> Tensor:
         (gap frames get 0 -- only meaningful on sequence frames).
         Cheap: only an int grid over the packed dims is scattered, no feature-sized data.
     """
-    # The result is an rf Tensor over template.packed_dim,
+    # The result is Tensor over template.packed_dim,
     # so the key must include that dim (the Cache remaps it on equal-valued hits).
     # The full layout must be in the key too:
     # e.g. the packed pad changes (orig_dims, gap) but keeps the packed dim.
@@ -976,7 +994,11 @@ def _sdpa_varlen_attention(
             _njt_sdpa_env_broken = True
         return _sdpa_no(f"torch nested-jagged SDPA failed here ({type(exc).__name__}: {exc})")
     out_inner = Tensor(
-        "sdpa_varlen", dims=[q_raw.packed_dim, head_dims[0], v_feat_dim], dtype=q_inner.dtype, feature_dim=v_feat_dim
+        "sdpa_varlen",
+        dims=[q_raw.packed_dim, head_dims[0], v_feat_dim],
+        # dtype from the raw result: under autocast, SDPA computes in bf16 even for f32 inputs
+        dtype=q_raw.inner_backend.get_dtype_name_raw(out_t),
+        feature_dim=v_feat_dim,
     )
     out_inner.raw_tensor = out_t
     out = q_raw.rewrap(out_inner, name="sdpa_varlen")
@@ -1158,7 +1180,6 @@ def _flex_doc_attention(
         return None
     if set(v_inner.dims) != {v_raw.packed_dim, heads_dim, v_feat_dim}:
         return None
-    import torch
 
     try:
         q_t = q_inner.copy_transpose([q_raw.packed_dim, heads_dim, qk_feat_dim]).raw_tensor
@@ -1191,7 +1212,8 @@ def _flex_doc_attention(
     out_inner = Tensor(
         "flex_doc_att",
         dims=[q_raw.packed_dim, heads_dim, v_feat_dim],
-        dtype=q_inner.dtype,
+        # dtype from the raw result, see _sdpa_varlen_attention
+        dtype=q_raw.inner_backend.get_dtype_name_raw(out_t),
         feature_dim=v_feat_dim,
     )
     out_inner.raw_tensor = out_t.contiguous()
@@ -1332,7 +1354,8 @@ def _flex_rel_pos_attention(
     out_inner = Tensor(
         "rel_pos_att_flex",
         dims=[qu_raw.packed_dim, heads_dim, v_feat_dim],
-        dtype=q_inner.dtype,
+        # dtype from the raw result, see _sdpa_varlen_attention
+        dtype=qu_raw.inner_backend.get_dtype_name_raw(out_t),
         feature_dim=v_feat_dim,
     )
     out_inner.raw_tensor = out_t.contiguous()
@@ -2250,6 +2273,7 @@ class PackedBackend(Backend[PackedRawTensor]):
 # packed data directly if the call does not reference the packed dims, otherwise unpack fallback.
 for _name in [
     "batch_norm",
+    "compare",
     "concat",
     "cumsum",
     "expand_dim",

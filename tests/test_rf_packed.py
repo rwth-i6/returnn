@@ -410,6 +410,24 @@ def test_batch_norm_packed_gapped_train():
         )
 
 
+def test_mixed_operand_order():
+    # plain-first mixed binary ops (plain * packed):
+    # the base Backend.combine/compare re-dispatch to the higher-priority backend
+    rf.select_backend_torch()
+    x, batch_dim, time_dim, feat_dim = _make_input()
+    plain = Tensor("y", dims=[feat_dim], dtype="float32")
+    plain.raw_tensor = torch.randn(feat_dim.dimension, generator=torch.Generator().manual_seed(7))
+    xp = packed.pack(x)
+    for out_p, out_ref in [
+        (plain * xp, plain * x),
+        (plain + xp, plain + x),
+        (1.0 - xp, 1.0 - x),
+        (plain < xp, plain < x),
+    ]:
+        assert packed.is_packed(out_p)
+        _assert_equal_non_padded(out_p, out_ref, batch_dim, time_dim)
+
+
 def test_rel_pos_self_attention_packed():
     # Conformer-style rel-pos self-attention: on packed input this runs via the FlexAttention fast path
     # (document block mask + rel-pos score_mod over the flat packed buffer).

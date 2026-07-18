@@ -910,6 +910,12 @@ class Backend(Generic[T]):
         """compare, default implementation using compare_raw"""
         from . import _utils
 
+        if isinstance(b, Tensor) and b._raw_backend.dispatch_priority > cls.dispatch_priority:
+            # e.g. plain-first mixed op with a packed b (see _packed_backend):
+            # dispatch on the higher-priority backend, which can handle both
+            return b._raw_backend.compare(
+                a, kind, b, allow_broadcast_all_sources=allow_broadcast_all_sources, dim_order=dim_order
+            )
         out, a_raw, b_raw = _utils.bin_op_out_template(
             cls,
             a,
@@ -937,6 +943,12 @@ class Backend(Generic[T]):
         """combine, default implementation using combine_raw"""
         from . import _utils
 
+        if isinstance(b, Tensor) and b._raw_backend.dispatch_priority > cls.dispatch_priority:
+            # e.g. plain-first mixed op with a packed b (see _packed_backend):
+            # dispatch on the higher-priority backend, which can handle both
+            return b._raw_backend.combine(
+                a, kind, b, allow_broadcast_all_sources=allow_broadcast_all_sources, dim_order=dim_order
+            )
         out, a_raw, b_raw = _utils.bin_op_out_template(
             cls,
             a,
