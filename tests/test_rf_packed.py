@@ -33,6 +33,17 @@ def _make_input(*, batch_size: int = 2, seq_lens=(5, 3), feat: int = 4, seed: in
     return x, batch_dim, time_dim, feat_dim
 
 
+def _flex_attention_usable() -> bool:
+    # FlexAttention exists since torch 2.5, usable CPU (eager) support only later; we validated 2.7.
+    if tuple(int(x) for x in torch.__version__.split("+")[0].split(".")[:2]) < (2, 7):
+        return False
+    try:
+        from torch.nn.attention.flex_attention import flex_attention  # noqa
+    except ImportError:
+        return False
+    return True
+
+
 def _assert_equal_non_padded(actual: Tensor, expected: Tensor, batch_dim: Dim, time_dim: Dim, **kwargs):
     """compare on all non-padded frames. actual can have packed storage."""
     actual = packed.unpack(actual)
@@ -165,8 +176,9 @@ def test_conformer():
         assert "conv" not in packed._warned_fallback_ops
         assert "pad" not in packed._warned_fallback_ops
         assert "pool" not in packed._warned_fallback_ops
-        # the rel-pos self-attention must have run via the FlexAttention fast path
-        assert "rel_pos_self_attention" not in packed._warned_fallback_ops
+        if _flex_attention_usable():
+            # the rel-pos self-attention must have run via the FlexAttention fast path
+            assert "rel_pos_self_attention" not in packed._warned_fallback_ops
     assert out_spatial_dim == out_spatial_dim_p
     # fallbacks repack, so the encoder output must still be packed (over (batch, subsampled time))
     assert packed.is_packed(out_p)
@@ -417,8 +429,9 @@ def test_rel_pos_self_attention_packed():
         xp = packed.pack(x, gap=4)  # some gap, to also cover the regap inside the fast path
         out_p = att(xp, axis=time_dim)
         assert packed.is_packed(out_p)
-        # must have taken the FlexAttention fast path (works eagerly on CPU too)
-        assert "rel_pos_self_attention" not in packed._warned_fallback_ops
+        if _flex_attention_usable():
+            # must have taken the FlexAttention fast path (works eagerly on CPU too)
+            assert "rel_pos_self_attention" not in packed._warned_fallback_ops
     _assert_equal_non_padded(out_p, out_ref, batch_dim, time_dim)
 
 
