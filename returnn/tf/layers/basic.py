@@ -4869,7 +4869,16 @@ class SplitDimsLayer(_ConcatInputLayer):
         if len(new_pos_dims) == len(dims) - 1:
             rem_const_size = util.prod(new_pos_dims)
         assert old_dim.is_static() or pad_to_multiples or rem_const_size == 1
-        if pad_to_multiples and (not isinstance(rem_const_size, int) or rem_const_size != 1):
+        # When the dynamic split dim already has a known dyn size,
+        # its max size (a tf.Tensor) is in dims and there is no -1 entry.
+        # Then the target shape is fully determined and no padding is needed
+        # (e.g. splitting a merged 'beam*time' back into (beam, time)).
+        have_known_dyn_size = any(not isinstance(d, int) for d in dims)
+        if (
+            pad_to_multiples
+            and not have_known_dyn_size
+            and (not isinstance(rem_const_size, int) or rem_const_size != 1)
+        ):
             indices = [i for i, d in enumerate(dims) if isinstance(d, int) and d == -1]
             assert len(indices) == 1, "%s: exactly one -1 dim in %r expected" % (self, dims)
             if rem_const_size is None:
