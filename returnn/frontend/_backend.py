@@ -144,6 +144,14 @@ class Backend(Generic[T]):
         raise NotImplementedError
 
     @staticmethod
+    def raw_to_numpy(raw_tensor: T) -> numpy.ndarray:
+        """
+        :param raw_tensor: raw tensor of this backend. must be eager
+        :return: numpy array with the same content
+        """
+        return numpy.asarray(raw_tensor)
+
+    @staticmethod
     def get_ndim_raw(raw_tensor: T) -> int:
         """
         :return: ndim of raw tensor. assumes it is known

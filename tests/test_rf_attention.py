@@ -385,6 +385,13 @@ def test_rope_causal_self_att():
     in_ = rf.random_uniform([batch_dim, seq_dim, model_dim])
     in_.name = "input"
 
+    # noinspection PyProtectedMember
+    from returnn.frontend.attention import _sinusoidal_positional_encoding_cache
+
+    # Make sure sinusoidal_encoding really runs inside the trace:
+    # the cache also hits across equal-valued dims (from earlier tests in this process).
+    _sinusoidal_positional_encoding_cache._lru_cache.cache_clear()
+
     with PyTracer(
         [
             rf.RotaryPosCausalSelfAttention.__call__,

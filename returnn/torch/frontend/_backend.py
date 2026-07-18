@@ -92,6 +92,14 @@ class TorchBackend(Backend[torch.Tensor]):
                 i = int(k[4:])
                 torch.cuda.set_rng_state(torch.from_numpy(numpy.frombuffer(v, dtype="uint8")), i)
 
+    @staticmethod
+    def raw_to_numpy(raw_tensor: torch.Tensor) -> numpy.ndarray:
+        """
+        :param raw_tensor:
+        :return: numpy array with the same content
+        """
+        return raw_tensor.detach().cpu().numpy()
+
     # keep in sync with native implementation
     @staticmethod
     def get_dtype_name_raw(raw_tensor: torch.Tensor) -> str:

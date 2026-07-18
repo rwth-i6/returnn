@@ -9,6 +9,7 @@ from __future__ import annotations
 from typing import Optional, Union, Any, Type, Callable, Tuple, Dict, List
 from weakref import ref
 import tree
+from returnn.util.basic import make_hashable
 from returnn.util.lru_cache import lru_cache
 from returnn.tensor import Tensor, Dim
 import returnn.frontend as rf
@@ -169,7 +170,9 @@ class DimWrapper:
     """
     Wraps :class:`Dim`.
     Using weakref for the dim.
-    If the size is scalar and known, equality is given when the size is equal (and dim tag is ignored)
+    If the size is known (static, or eager scalar, or eager seq lens),
+    equality is given when the size values are equal (and the dim tag is ignored);
+    :func:`Cache.get` then maps the cached output back to the queried dim.
     """
 
     def __init__(self, dim: Dim, *, finalize_callback):
@@ -197,15 +200,28 @@ class DimWrapper:
         return self._hash
 
 
-def _dim_value_for_key(dim: Dim) -> Optional[int]:
+def _dim_value_for_key(dim: Dim) -> Optional[Union[int, Tuple[Any, ...]]]:
     if dim.size is not None:
         return dim.size
-    if dim.dyn_size_ext is not None and not dim.dyn_size_ext.dims:
-        if dim.dyn_size_ext.raw_tensor is not None:
-            # noinspection PyProtectedMember
-            if dim.dyn_size_ext._raw_backend.executing_eagerly():
-                return int(dim.get_dim_value())
-    return None
+    if dim.dyn_size_ext is None or dim.dyn_size_ext.raw_tensor is None:
+        return None
+    # noinspection PyProtectedMember
+    if not dim.dyn_size_ext._raw_backend.executing_eagerly():
+        return None
+    if not dim.dyn_size_ext.dims:
+        return int(dim.get_dim_value())
+    # Non-scalar eager dyn sizes (e.g. seq lens [batch]): key by the size values,
+    # so dims with equal lens share the cache entry
+    # (e.g. the fresh kv dim which attention creates per layer via replace_dim).
+    # The cached output is mapped back to the queried dim in Cache.get (dim_map).
+    # get_dyn_size_ext_for_device caches the cpu copy on the dim,
+    # so a potential device transfer happens only once per dim.
+    size_ext = dim.get_dyn_size_ext_for_device("cpu")
+    if size_ext.raw_tensor is None:
+        return None
+    # noinspection PyProtectedMember
+    values = size_ext._raw_backend.raw_to_numpy(size_ext.raw_tensor)
+    return make_hashable(values.tolist())
 
 
 # For now... we might extend it by some more types.
