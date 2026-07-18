@@ -55,8 +55,31 @@ from typing import Any, Optional, Sequence, Set, Tuple, Union
 from returnn.tensor import Tensor, Dim
 import returnn.frontend as rf
 from ._backend import Backend, register_backend_by_tensor_type
+from ._cache import Cache
 
 __all__ = ["PackedRawTensor", "PackedBackend", "pack", "unpack", "regap", "is_packed"]
+
+
+# Layout metadata (cu_seqlens, flex document mask, frame coords/masks, ...)
+# is identical for every tensor sharing a packing
+# and constant over the lifetime of the dims,
+# so it is computed once and cached, see :data:`_layout_cache`.
+# rf._cache.Cache keys eager dyn dims by their size VALUES (see DimWrapper),
+# so equal-length dims share the entry
+# (e.g. the fresh kv dim which attention creates per layer via replace_dim),
+# and it maps dims in cached outputs back to the queried dims.
+_layout_cache = Cache(128)
+
+
+def _packing_cache_key(kind: str, raw: PackedRawTensor, device) -> Tuple[Any, ...]:
+    """
+    :param kind: metadata kind (part of the key)
+    :param raw: the packing
+    :param device: torch device (part of the key)
+    :return: cache key for layout metadata of the packing.
+        The dims go in directly (the Cache handles the value semantics, see above).
+    """
+    return (kind, raw.orig_dims, raw.gap, raw.align, str(device))
 
 
 class PackedRawTensor:
@@ -130,6 +153,10 @@ class PackedRawTensor:
             Dense layout only (gap == 0), since the boundaries imply that seq i ends where seq i+1 starts.
         """
         assert self.gap == 0 and self.align == 1, "cu_seqlens requires the dense layout"
+        key = _packing_cache_key("cu_seqlens", self, device)
+        hit = _layout_cache.get(key)
+        if hit is not None:
+            return hit
         starts, seqs_dim = self.seq_starts()
         total = rf.cast(self.packed_dim.get_dim_value_tensor(), starts.dtype)
         end_dim = Dim(1, name="cu_seqlens_end")
@@ -137,6 +164,7 @@ class PackedRawTensor:
         cu = rf.cast(cu, "int32")
         if device:
             cu = rf.copy_to_device(cu, device)
+        _layout_cache.set(key, (cu, cu_dim))
         return cu, cu_dim
 
     @property
@@ -447,14 +475,32 @@ def _frame_coords(template: PackedRawTensor, d: Dim) -> Tensor:
         (gap frames get 0 -- only meaningful on sequence frames).
         Cheap: only an int grid over the packed dims is scattered, no feature-sized data.
     """
+    # The result is an rf Tensor over template.packed_dim,
+    # so the key must include that dim (the Cache remaps it on equal-valued hits).
+    # The full layout must be in the key too:
+    # e.g. the packed pad changes (orig_dims, gap) but keeps the packed dim.
+    key = (
+        "frame_coords",
+        template.packed_dim,
+        template.orig_dims,
+        template.gap,
+        template.align,
+        template.orig_dims.index(d),
+        str(template.inner.device),
+    )
+    hit = _layout_cache.get(key)
+    if hit is not None:
+        return hit
     grid = rf.range_over_dim(d)
     for o in template.orig_dims:
         if o not in grid.dims:
             grid = rf.expand_dim(grid, dim=o)  # broadcast view, ints only
     pos = _padded_positions(template.orig_dims, template.gap, template.align)
-    return rf.scatter(
+    out = rf.scatter(
         grid, indices=pos, indices_dim=list(template.orig_dims), out_dim=template.packed_dim, use_mask=True
     )
+    _layout_cache.set(key, out)
+    return out
 
 
 def _frame_mask(template: PackedRawTensor) -> Optional[Tensor]:
@@ -464,12 +510,26 @@ def _frame_mask(template: PackedRawTensor) -> Optional[Tensor]:
     """
     if template.gap == 0 and template.align == 1:
         return None
+    # full layout in the key, see _frame_coords
+    key = (
+        "frame_mask",
+        template.packed_dim,
+        template.orig_dims,
+        template.gap,
+        template.align,
+        str(template.inner.device),
+    )
+    hit = _layout_cache.get(key)
+    if hit is not None:
+        return hit
     ones = rf.cast(rf.sequence_mask(list(template.orig_dims)), "int32")
     pos = _padded_positions(template.orig_dims, template.gap, template.align)
     counts = rf.scatter(
         ones, indices=pos, indices_dim=list(template.orig_dims), out_dim=template.packed_dim, use_mask=True
     )
-    return counts > 0
+    out = counts > 0
+    _layout_cache.set(key, out)
+    return out
 
 
 def _pack_like(x: Tensor, template: PackedRawTensor) -> Optional[Tensor]:
@@ -569,6 +629,19 @@ def _segment_index(template: PackedRawTensor, seg_dims: Sequence[Dim]) -> Tuple[
         (scatter_dim = valid_dim + 1), so any segment reduction stays correct;
         slice the dump segment off (or simply never gather it).
     """
+    # full layout in the key, see _frame_coords
+    key = (
+        "segment_index",
+        template.packed_dim,
+        template.orig_dims,
+        template.gap,
+        template.align,
+        tuple(template.orig_dims.index(d) for d in seg_dims),
+        str(template.inner.device),
+    )
+    hit = _layout_cache.get(key)
+    if hit is not None:
+        return hit
     seg = None
     merged = None
     for d in seg_dims:
@@ -581,8 +654,58 @@ def _segment_index(template: PackedRawTensor, seg_dims: Sequence[Dim]) -> Tuple[
         if isinstance(dump, Tensor):
             dump = rf.cast(dump, seg.dtype)
         seg = rf.where(mask, seg, dump)
-        return seg, merged + 1, merged
-    return seg, merged, merged
+        out = (seg, merged + 1, merged)
+    else:
+        out = (seg, merged, merged)
+    _layout_cache.set(key, out)
+    return out
+
+
+def _batch_norm_gapped(source: Tensor, kwargs) -> Optional[Tensor]:
+    """
+    batch_norm on a gapped packed layout in training,
+    with the statistics over the valid frames only:
+    masked mean/var directly on the packed buffer, no re-layout.
+    Mirrors the torch backend batch_norm training semantics
+    (biased var for the normalization;
+    unbiased var + in-place no-grad update for the running stats, torch F.batch_norm convention).
+    None if not applicable (then the dense re-layout path runs).
+
+    :param source: packed, gapped
+    :param kwargs: the batch_norm call kwargs, see :func:`Backend.batch_norm`
+    :return: packed result (input packing kept), or None
+    """
+    raw = _raw(source)
+    in_dim = kwargs.get("in_dim")
+    running_mean, running_variance = kwargs.get("running_mean"), kwargs.get("running_variance")
+    gamma, beta = kwargs.get("gamma"), kwargs.get("beta")
+    epsilon, momentum, affine = kwargs.get("epsilon"), kwargs.get("momentum"), kwargs.get("affine")
+    inner = raw.inner
+    if not isinstance(in_dim, Dim) or set(inner.dims) != {raw.packed_dim, in_dim}:
+        return None  # unusual layout, keep the generic path
+    if raw.inner_backend.name != "torch":
+        return None  # the in-place running-stat update below is raw torch
+    mask = _frame_mask(raw)
+    n_t = _packed_total(raw.orig_dims, 0, 1)  # number of valid frames (cpu, from the dyn sizes)
+    n = rf.cast(rf.copy_to_device(n_t, inner.device), inner.dtype)
+    x0 = rf.where(mask, inner, 0.0)
+    mean = rf.reduce_sum(x0, axis=raw.packed_dim, use_mask=False) / n
+    diff = rf.where(mask, inner - mean, 0.0)
+    var = rf.reduce_sum(diff * diff, axis=raw.packed_dim, use_mask=False) / n
+    if running_mean is not None:
+        import torch
+
+        with torch.no_grad():
+            n_f = float(n_t.raw_tensor)
+            unbiased = n_f / max(n_f - 1.0, 1.0)
+            rm, rv = running_mean.raw_tensor, running_variance.raw_tensor
+            rm.mul_(1.0 - momentum).add_(mean.raw_tensor.detach().to(rm.dtype), alpha=momentum)
+            rv.mul_(1.0 - momentum).add_(var.raw_tensor.detach().to(rv.dtype) * unbiased, alpha=momentum)
+    out_inner = (inner - mean) / rf.sqrt(var + epsilon)
+    if affine:
+        out_inner = out_inner * gamma + beta
+    out_inner.feature_dim = in_dim
+    return raw.rewrap(out_inner, name="batch_norm")
 
 
 def _make_dim_aware_op(name: str):
@@ -628,6 +751,10 @@ def _dim_aware_call(name: str, args, kwargs):
             # no padded intermediate,
             # and the result keeps the original packing.
             src = packed_args[0] if len(packed_args) == 1 else None
+            if name == "batch_norm" and src is not None:
+                out = _batch_norm_gapped(src, kwargs)
+                if out is not None:
+                    return out
             if src is not None and (any(x is src for x in args) or any(v is src for v in kwargs.values())):
                 _warn_fallback_once(
                     name,
@@ -697,6 +824,59 @@ def _sdpa_no(reason: str):
     return None
 
 
+def _njt_sdpa_raw(q_t, k_t, v_t, cu_q, cu_k, dropout_p: float, is_causal: bool, scale: float):
+    """
+    torch SDPA over nested (jagged) tensors built from the packed values + offsets.
+
+    :param q_t: [total_q, H, D]
+    :param k_t: [total_kv, H, D]
+    :param v_t: [total_kv, H, Dv]
+    :param cu_q: [n_seqs + 1] (int64), query seq boundaries
+    :param cu_k: [n_seqs + 1] (int64), key/value seq boundaries
+    :param dropout_p:
+    :param is_causal:
+    :param scale:
+    :return: [total_q, H, Dv]
+    """
+    import torch
+
+    # [B, T(jagged), H, D] -> [B, H, T(jagged), D]
+    q_n = torch.nested.nested_tensor_from_jagged(q_t, offsets=cu_q).transpose(1, 2)
+    k_n = torch.nested.nested_tensor_from_jagged(k_t, offsets=cu_k).transpose(1, 2)
+    v_n = torch.nested.nested_tensor_from_jagged(v_t, offsets=cu_k).transpose(1, 2)
+    out_n = torch.nn.functional.scaled_dot_product_attention(
+        q_n, k_n, v_n, dropout_p=dropout_p, is_causal=is_causal, scale=scale
+    )
+    return out_n.transpose(1, 2).values()
+
+
+_njt_sdpa_compiled = None
+_njt_sdpa_compile_failed = False
+
+
+def _get_njt_sdpa_fn(device_type: str, *, needs_grad: bool):
+    """
+    :param device_type: "cuda" / "cpu" / ...
+    :param needs_grad: whether the call needs autograd.
+        Compiled NJT backward is broken (torch 2.7: AOT autograd tangent meta assert),
+        so we compile only the inference path;
+        the training no-dropout case avoids NJT via :func:`_flex_doc_attention` instead.
+    :return: (fn to use, eager fn) for :func:`_njt_sdpa_raw`.
+        The eager NJT python-subclass dispatch has a large per-call overhead
+        (profiled ~5x the whole padded step time for a Transformer AED);
+        NJT is designed to run under torch.compile, which removes that entirely,
+        so on CUDA we lazily compile (dynamic shapes, shared across calls).
+    """
+    global _njt_sdpa_compiled
+    if needs_grad or device_type != "cuda" or _njt_sdpa_compile_failed:
+        return _njt_sdpa_raw, _njt_sdpa_raw
+    if _njt_sdpa_compiled is None:
+        import torch
+
+        _njt_sdpa_compiled = torch.compile(_njt_sdpa_raw, dynamic=True)
+    return _njt_sdpa_compiled, _njt_sdpa_raw
+
+
 def _sdpa_varlen_attention(
     query: Tensor,
     key: Tensor,
@@ -715,7 +895,7 @@ def _sdpa_varlen_attention(
     flash varlen kernels internally where applicable -- pure torch, no external package.
     None if not applicable (then the generic path runs, with the packed matmul/softmax handling).
     """
-    global _njt_sdpa_env_broken
+    global _njt_sdpa_env_broken, _njt_sdpa_compile_failed
 
     if _njt_sdpa_env_broken:
         return None  # already warned once when it broke
@@ -760,21 +940,36 @@ def _sdpa_varlen_attention(
         q_t = q_inner.copy_transpose([q_raw.packed_dim, head_dims[0], qk_feat_dim]).raw_tensor
         k_t = k_inner.copy_transpose([k_raw.packed_dim, head_dims[0], qk_feat_dim]).raw_tensor
         v_t = v_inner.copy_transpose([v_raw.packed_dim, head_dims[0], v_feat_dim]).raw_tensor
-        cu_q, _ = q_raw.cu_seqlens(device=query.device)
-        cu_k, _ = k_raw.cu_seqlens(device=query.device)
-        # [B, T(jagged), H, D] -> [B, H, T(jagged), D]
-        q_n = torch.nested.nested_tensor_from_jagged(q_t, offsets=cu_q.raw_tensor.long()).transpose(1, 2)
-        k_n = torch.nested.nested_tensor_from_jagged(k_t, offsets=cu_k.raw_tensor.long()).transpose(1, 2)
-        v_n = torch.nested.nested_tensor_from_jagged(v_t, offsets=cu_k.raw_tensor.long()).transpose(1, 2)
-        out_n = torch.nn.functional.scaled_dot_product_attention(
-            q_n,
-            k_n,
-            v_n,
-            dropout_p=dropout_p,
-            is_causal=is_causal,
-            scale=scale if scale is not None else qk_feat_dim.dimension**-0.5,
+        cu_q_key = _packing_cache_key("cu_long", q_raw, query.device)
+        cu_q = _layout_cache.get(cu_q_key)
+        if cu_q is None:
+            cu_q = q_raw.cu_seqlens(device=query.device)[0].raw_tensor.long()
+            _layout_cache.set(cu_q_key, cu_q)
+        cu_k_key = _packing_cache_key("cu_long", k_raw, query.device)
+        cu_k = _layout_cache.get(cu_k_key)
+        if cu_k is None:
+            cu_k = k_raw.cu_seqlens(device=query.device)[0].raw_tensor.long()
+            _layout_cache.set(cu_k_key, cu_k)
+        needs_grad = torch.is_grad_enabled() and (q_t.requires_grad or k_t.requires_grad or v_t.requires_grad)
+        sdpa_fn, sdpa_eager = _get_njt_sdpa_fn(q_t.device.type, needs_grad=needs_grad)
+        sdpa_args = (
+            q_t,
+            k_t,
+            v_t,
+            cu_q,
+            cu_k,
+            dropout_p,
+            is_causal,
+            scale if scale is not None else qk_feat_dim.dimension**-0.5,
         )
-        out_t = out_n.transpose(1, 2).values()
+        try:
+            out_t = sdpa_fn(*sdpa_args)
+        except (RuntimeError, NotImplementedError):
+            # incl. dynamo/inductor compile errors (TorchDynamoException subclasses RuntimeError)
+            if sdpa_fn is sdpa_eager:
+                raise
+            _njt_sdpa_compile_failed = True  # compiled NJT SDPA failed; stick to eager from now on
+            out_t = sdpa_eager(*sdpa_args)
     except (RuntimeError, NotImplementedError) as exc:
         if isinstance(exc, RuntimeError) and "CUDA" in str(exc):
             # environment-level (e.g. CUDA-built torch without a driver): do not retry every call
@@ -822,6 +1017,185 @@ def _get_flex_attention_fn(device_type: str):
 
         _flex_attention_compiled = torch.compile(flex_attention)
     return _flex_attention_compiled, flex_attention
+
+
+def _flex_seq_ids(raw: PackedRawTensor, spatial_dim: Dim, device) -> Optional[Tuple[Any, int]]:
+    """
+    :param raw: the packing
+    :param spatial_dim: the innermost packed dim (carries the seq lens)
+    :param device: torch device of the data
+    :return: (seq_id, max_len):
+        flat seq index per buffer frame ([total_buf] int64, on device),
+        -1 on gap/alignment frames;
+        and the max seq len.
+        Cached per packing (see :data:`_layout_cache`). None if not derivable.
+    """
+    import torch
+
+    key = _packing_cache_key("flex_seq_ids", raw, device)
+    hit = _layout_cache.get(key)
+    if hit is not None:
+        return hit
+    if spatial_dim.dyn_size_ext is None:
+        return None
+    lens_rf = spatial_dim.dyn_size_ext
+    for d in raw.orig_dims[:-1]:
+        if d not in lens_rf.dims:
+            lens_rf = rf.expand_dim(lens_rf, dim=d)
+    if len(raw.orig_dims) > 2:
+        lens_rf, _ = rf.merge_dims(lens_rf, dims=raw.orig_dims[:-1])
+    # max over the cpu-side dyn sizes (no gpu sync)
+    max_len = int(lens_rf.raw_tensor.max()) if lens_rf.raw_tensor.numel() > 0 else 0
+    lens = rf.copy_to_device(lens_rf, str(device)).raw_tensor.long().flatten()
+    starts_rf, _ = _seq_starts_math(raw.orig_dims, raw.gap, raw.align)
+    if starts_rf is None:  # single seq
+        starts = torch.zeros(1, dtype=torch.int64, device=device)
+    else:
+        starts = rf.copy_to_device(starts_rf, str(device)).raw_tensor.long().flatten()
+    total_buf = int(raw.packed_dim.get_dim_value())
+    pos = torch.arange(total_buf, device=device)
+    seq = torch.searchsorted(starts, pos, right=True) - 1
+    local = pos - starts[seq]
+    seq_id = torch.where(local < lens[seq], seq, torch.full_like(seq, -1))
+    _layout_cache.set(key, (seq_id, max_len))
+    return seq_id, max_len
+
+
+def _flex_doc_block_mask(q_raw: PackedRawTensor, kv_raw: PackedRawTensor, q_ids, kv_ids, *, is_causal: bool, device):
+    """
+    :param q_raw: query packing (cache key part)
+    :param kv_raw: key/value packing (cache key part)
+    :param q_ids: seq_id per query buffer frame, see :func:`_flex_seq_ids`
+    :param kv_ids: seq_id per key/value buffer frame
+    :param is_causal: also mask kj > qi. Requires the same packing for q and kv
+        (then the global buffer order equals the local order within a seq).
+    :param device: torch device
+    :return: flex BlockMask for the document mask
+        (same-seq pairs only; gap/alignment frames fully masked out),
+        cached per packing pair (see :data:`_layout_cache`).
+    """
+    q_key = _packing_cache_key("q", q_raw, device)
+    kv_key = _packing_cache_key("kv", kv_raw, device)
+    key = ("flex_doc_block_mask", q_key, kv_key, is_causal)
+    hit = _layout_cache.get(key)
+    if hit is not None:
+        return hit
+    from torch.nn.attention.flex_attention import create_block_mask
+
+    def _mask_mod(_b, _h, qi, kj):
+        ok = (kv_ids[kj] >= 0) & (q_ids[qi] == kv_ids[kj])
+        if is_causal:
+            ok = ok & (qi >= kj)
+        return ok
+
+    block_mask = create_block_mask(
+        _mask_mod, B=None, H=None, Q_LEN=q_ids.numel(), KV_LEN=kv_ids.numel(), device=str(device)
+    )
+    _layout_cache.set(key, block_mask)
+    return block_mask
+
+
+def _flex_doc_attention(
+    query: Tensor,
+    key: Tensor,
+    value: Tensor,
+    *,
+    qk_feat_dim: Dim,
+    v_feat_dim: Dim,
+    kv_spatial_dim: Dim,
+    query_spatial_dim: Dim,
+    is_causal: bool,
+    scale: Optional[float],
+) -> Optional[Tensor]:
+    """
+    Plain (dot) attention over packed tensors via torch FlexAttention:
+    one flat attention over the packed buffers with a document block mask
+    (self-, cross- and causal attention; the gapped layout is used as-is).
+    Preferred over the NJT SDPA path when there is no dropout:
+    compiled flex has none of the eager NJT per-call overhead,
+    and its autograd works under torch.compile
+    (compiled NJT backward is broken in torch 2.7, AOT autograd tangent meta assert).
+    None if not applicable (then the NJT / generic paths run).
+
+    :param query: {..., query_spatial_dim, qk_feat_dim}. not yet scaled.
+    :param key: {..., kv_spatial_dim, qk_feat_dim}
+    :param value: {..., kv_spatial_dim, v_feat_dim}
+    :param qk_feat_dim: embedding dimension of key and query
+    :param v_feat_dim: embedding dimension of value
+    :param kv_spatial_dim: spatial axis of key/value to attend over
+    :param query_spatial_dim: spatial axis of query
+    :param is_causal: causal masking (requires the same packing for q and kv)
+    :param scale: scaling factor applied prior to softmax (default: qk_feat_dim**-0.5)
+    :return: attention output (packed like query), or None
+    """
+    global _flex_env_broken, _flex_compile_failed
+
+    if _flex_env_broken:
+        return None
+    if not (is_packed(query) and is_packed(key) and is_packed(value)):
+        return None
+    q_raw, k_raw, v_raw = query.raw_tensor, key.raw_tensor, value.raw_tensor
+    if q_raw.inner_backend.name != "torch":
+        return None
+    if not k_raw.same_packing(v_raw):
+        return None
+    if kv_spatial_dim != k_raw.orig_dims[-1] or query_spatial_dim != q_raw.orig_dims[-1]:
+        return None
+    if q_raw.orig_dims[:-1] != k_raw.orig_dims[:-1]:
+        return None
+    if is_causal and not (q_raw.same_packing(k_raw) and _same_seq_lens(query_spatial_dim, kv_spatial_dim)):
+        return None
+    try:
+        from torch.nn.attention.flex_attention import flex_attention  # noqa
+    except ImportError:
+        return None
+    q_inner, k_inner, v_inner = q_raw.inner, k_raw.inner, v_raw.inner
+    head_dims = [d for d in q_inner.dims if d not in (q_raw.packed_dim, qk_feat_dim)]
+    if len(head_dims) != 1 or head_dims[0].dimension is None:
+        return None
+    heads_dim = head_dims[0]
+    if set(k_inner.dims) != {k_raw.packed_dim, heads_dim, qk_feat_dim}:
+        return None
+    if set(v_inner.dims) != {v_raw.packed_dim, heads_dim, v_feat_dim}:
+        return None
+    import torch
+
+    try:
+        q_t = q_inner.copy_transpose([q_raw.packed_dim, heads_dim, qk_feat_dim]).raw_tensor
+        k_t = k_inner.copy_transpose([k_raw.packed_dim, heads_dim, qk_feat_dim]).raw_tensor
+        v_t = v_inner.copy_transpose([v_raw.packed_dim, heads_dim, v_feat_dim]).raw_tensor
+        q_ids = _flex_seq_ids(q_raw, query_spatial_dim, q_t.device)
+        kv_ids = _flex_seq_ids(k_raw, kv_spatial_dim, q_t.device)
+        if q_ids is None or kv_ids is None:
+            return None
+        block_mask = _flex_doc_block_mask(q_raw, k_raw, q_ids[0], kv_ids[0], is_causal=is_causal, device=q_t.device)
+        flex_fn, flex_eager = _get_flex_attention_fn(q_t.device.type)
+        q_f = q_t.transpose(0, 1).unsqueeze(0)  # [1, H, total, D]
+        k_f = k_t.transpose(0, 1).unsqueeze(0)
+        v_f = v_t.transpose(0, 1).unsqueeze(0)
+        flex_kwargs = dict(block_mask=block_mask, scale=scale if scale is not None else qk_feat_dim.dimension**-0.5)
+        try:
+            out_f = flex_fn(q_f, k_f, v_f, **flex_kwargs)
+        except (RuntimeError, NotImplementedError):
+            # incl. dynamo/inductor compile errors (TorchDynamoException subclasses RuntimeError)
+            if flex_fn is flex_eager:
+                raise
+            _flex_compile_failed = True  # compiled FlexAttention failed; stick to eager from now on
+            out_f = flex_eager(q_f, k_f, v_f, **flex_kwargs)
+        out_t = out_f.squeeze(0).transpose(0, 1)  # [total, H, Dv]
+    except (RuntimeError, NotImplementedError) as exc:
+        if isinstance(exc, RuntimeError) and "CUDA" in str(exc):
+            # environment-level (e.g. CUDA-built torch without a driver): do not retry every call
+            _flex_env_broken = True
+        return None
+    out_inner = Tensor(
+        "flex_doc_att",
+        dims=[q_raw.packed_dim, heads_dim, v_feat_dim],
+        dtype=q_inner.dtype,
+        feature_dim=v_feat_dim,
+    )
+    out_inner.raw_tensor = out_t.contiguous()
+    return q_raw.rewrap(out_inner, name="flex_doc_att")
 
 
 def _flex_rel_pos_attention(
@@ -878,7 +1252,7 @@ def _flex_rel_pos_attention(
     if q_raw.orig_dims[:-1] != k_raw.orig_dims[:-1] or not _same_seq_lens(query_spatial_dim, kv_spatial_dim):
         return _flex_no("query vs key/value packings differ (not self-attention seqs)")
     try:
-        from torch.nn.attention.flex_attention import create_block_mask
+        from torch.nn.attention.flex_attention import flex_attention  # noqa  # only check availability
     except ImportError:
         return _flex_no("torch.nn.attention.flex_attention not available (torch too old)")
 
@@ -906,26 +1280,21 @@ def _flex_rel_pos_attention(
     import torch
 
     try:
-        # seq starts + lens in the (possibly gapped) buffer -- the layout is used as-is,
-        # gap/alignment frames are simply masked out (seq_id -1 below), no re-layout needed
-        starts_rf, _ = qu_raw.seq_starts()
-        starts = rf.copy_to_device(starts_rf, query.device).raw_tensor.long()
-        lens_rf = query_spatial_dim.dyn_size_ext
-        for d in qu_raw.orig_dims[:-1]:
-            if d not in lens_rf.dims:
-                lens_rf = rf.expand_dim(lens_rf, dim=d)
-        if len(qu_raw.orig_dims) > 2:
-            lens_rf, _ = rf.merge_dims(lens_rf, dims=qu_raw.orig_dims[:-1])
-        lens = rf.copy_to_device(lens_rf, query.device).raw_tensor.long().flatten()
-        max_len = int(lens.max()) if lens.numel() > 0 else 0
+        q_t = q_inner.copy_transpose([qu_raw.packed_dim, heads_dim, qk_feat_dim]).raw_tensor
+        k_t = k_inner.copy_transpose([k_raw.packed_dim, heads_dim, qk_feat_dim]).raw_tensor
+        v_t = v_inner.copy_transpose([v_raw.packed_dim, heads_dim, v_feat_dim]).raw_tensor
+        # the (possibly gapped) layout is used as-is:
+        # gap/alignment frames get seq_id -1 and are masked out, no re-layout needed
+        ids = _flex_seq_ids(qu_raw, query_spatial_dim, q_t.device)
+        if ids is None:
+            return _flex_no("cannot derive the seq ids for the packing")
+        seq_id, max_len = ids
+        block_mask = _flex_doc_block_mask(qu_raw, qu_raw, seq_id, seq_id, is_causal=False, device=q_t.device)
         r_size = int(pos_emb_spatial_dim.get_dim_value())
         if r_size != 2 * max_len - 1:
             # only the standard centered layout (positions -(max_len-1)..(max_len-1)) is supported
             return _flex_no(f"pos_emb size {r_size} != 2*max_len-1 ({2 * max_len - 1})")
         center = max_len - 1
-        q_t = q_inner.copy_transpose([qu_raw.packed_dim, heads_dim, qk_feat_dim]).raw_tensor
-        k_t = k_inner.copy_transpose([k_raw.packed_dim, heads_dim, qk_feat_dim]).raw_tensor
-        v_t = v_inner.copy_transpose([v_raw.packed_dim, heads_dim, v_feat_dim]).raw_tensor
         if heads_dim in bd_inner.dims:
             bd_t = bd_inner.copy_transpose([bd_raw.packed_dim, heads_dim, pos_emb_spatial_dim]).raw_tensor
         else:
@@ -933,15 +1302,6 @@ def _flex_rel_pos_attention(
             bd_t = bd_t.unsqueeze(1).expand(-1, heads_dim.dimension, -1)
         # pre-scale the bias like the content-based term (flex applies its scale to q*k before score_mod)
         bd_t = (bd_t * qk_feat_dim.dimension**-0.5).contiguous()
-        total_buf = q_t.shape[0]
-        pos = torch.arange(total_buf, device=q_t.device)
-        seq = torch.searchsorted(starts, pos, right=True) - 1
-        local = pos - starts[seq]
-        seq_id = torch.where(local < lens[seq], seq, torch.full_like(seq, -1))
-
-        def _mask_mod(_b, _h, qi, kj):
-            # gap/alignment frames have seq_id -1 and are fully masked out
-            return (seq_id[kj] >= 0) & (seq_id[qi] == seq_id[kj])
 
         def _score_mod(score, _b, h, qi, kj):
             # Relative position of key w.r.t. query (kj - qi),
@@ -951,17 +1311,14 @@ def _flex_rel_pos_attention(
             rel = torch.clamp(kj - qi + center, 0, r_size - 1)
             return score + bd_t[qi, h, rel]
 
-        block_mask = create_block_mask(
-            _mask_mod, B=None, H=None, Q_LEN=total_buf, KV_LEN=total_buf, device=str(q_t.device)
-        )
         flex_fn, flex_eager = _get_flex_attention_fn(q_t.device.type)
         q_f = q_t.transpose(0, 1).unsqueeze(0)  # [1, H, total, D]
         k_f = k_t.transpose(0, 1).unsqueeze(0)
         v_f = v_t.transpose(0, 1).unsqueeze(0)
-        # noinspection PyBroadException
         try:
             out_f = flex_fn(q_f, k_f, v_f, score_mod=_score_mod, block_mask=block_mask)
-        except Exception:
+        except (RuntimeError, NotImplementedError):
+            # incl. dynamo/inductor compile errors (TorchDynamoException subclasses RuntimeError)
             if flex_fn is flex_eager:
                 raise
             _flex_compile_failed = True  # compiled FlexAttention failed; stick to eager from now on
@@ -1390,6 +1747,22 @@ class PackedBackend(Backend[PackedRawTensor]):
                 else:
                     dropout_p = None  # dynamic train flag, cannot resolve to a static dropout_p
         if attention_mask is None and dropout_p is not None:
+            if not dropout_p:
+                # preferred: compiled FlexAttention with a document block mask
+                # (no eager-NJT per-call overhead, working autograd; no dropout support though)
+                out = _flex_doc_attention(
+                    query,
+                    key,
+                    value,
+                    qk_feat_dim=qk_feat_dim,
+                    v_feat_dim=v_feat_dim,
+                    kv_spatial_dim=kv_spatial_dim,
+                    query_spatial_dim=query_spatial_dim,
+                    is_causal=is_causal,
+                    scale=scale,
+                )
+                if out is not None:
+                    return out
             out = _sdpa_varlen_attention(
                 query,
                 key,
@@ -1824,11 +2197,28 @@ class PackedBackend(Backend[PackedRawTensor]):
             set(raw.orig_dims) <= set(axes)
             and not mode.startswith("arg")
             and not any(_dim_refs_packed(d, raw) for d in extra_axes)
-            and raw.gap == 0
-            and raw.align == 1  # gap / alignment pad frames would contaminate the maskless reduce
         ):
-            # use_mask=False: packed storage has no padded frames.
-            return rf.reduce(raw.inner, mode=mode, axis=[raw.packed_dim] + extra_axes, use_mask=False)
+            inner = raw.inner
+            if raw.gap or raw.align > 1:
+                # gap / alignment pad frames would contaminate the maskless reduce:
+                # fill them with the mode-neutral value first (mean: sum, then / valid count)
+                mask = _frame_mask(raw)
+                if mode == "mean":
+                    inner = rf.where(mask, inner, 0.0)
+                    total = rf.reduce(inner, mode="sum", axis=[raw.packed_dim] + extra_axes, use_mask=False)
+                    n = rf.cast(_packed_total(raw.orig_dims, 0, 1), total.dtype)
+                    n = rf.copy_to_device(n, total.device)
+                    for d in extra_axes:
+                        v = d.get_dim_value_tensor()  # int for static dims
+                        n = n * (rf.cast(v, total.dtype) if isinstance(v, Tensor) else float(v))
+                    return total / n
+                neutral = {"sum": 0.0, "logsumexp": float("-inf"), "max": float("-inf"), "min": float("inf")}.get(mode)
+                if neutral is None:
+                    _warn_fallback_once("reduce", f"full reduce over gapped layout, mode {mode}")
+                    return _repack_result(rf.reduce(unpack(source), mode=mode, axis=axes, use_mask=use_mask), raw)
+                inner = rf.where(mask, inner, neutral)
+            # use_mask=False: packed storage has no padded frames (gap frames neutralized above).
+            return rf.reduce(inner, mode=mode, axis=[raw.packed_dim] + extra_axes, use_mask=False)
         packed_axes = [d for d in axes if d in raw.orig_dims]
         other = [d for d in raw.orig_dims if d not in packed_axes]
         if (
@@ -1971,6 +2361,9 @@ def regap(source: Tensor, gap: int, *, align: Optional[int] = None) -> Tensor:
     new_starts, seqs_dim = _seq_starts_math(raw.orig_dims, gap, align)
     t_coords = _frame_coords(raw, last)
     seg, _, _ = _segment_index(raw, others)
+    if new_starts.device != seg.device:
+        # starts derive from the dyn sizes (often cpu), the coords live on the data device
+        new_starts = rf.copy_to_device(new_starts, seg.device)
     pos = rf.gather(new_starts, indices=seg, axis=seqs_dim, clip_to_valid=True) + t_coords
     mask = _frame_mask(raw)
     if mask is not None:
