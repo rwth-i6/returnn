@@ -97,18 +97,23 @@ def _infer_att_dims(
 
     # infer query spatial dim, necessary for pytorch backend
     query_non_batch_dims = query.remaining_dims(keys.dims_set - {kv_spatial_dim})
+    merged_query_dims = None
     if len(query_non_batch_dims) == 0:
         query_spatial = Dim(1, name="dot_att_query_spatial_dummy")
         query = rf.expand_dim(query, dim=query_spatial)
-    else:
-        if len(query_non_batch_dims) != 1:
-            raise ValueError(
-                "Query vector must have exactly one non-batch dim (the spatial dimension), "
-                f" got {query.dims}, keys.dims={keys.dims}"
-            )
+    elif len(query_non_batch_dims) == 1:
         query_spatial = query_non_batch_dims[0]
+    else:
+        # Multiple extra query dims (e.g. rescoring: [batch, beam, targets_spatial, ...]).
+        query, query_spatial = rf.merge_dims(query, dims=query_non_batch_dims)
+        merged_query_dims = query_non_batch_dims
+    return query, _infer_v_feat_dim(values, keys, qk_feat_dim), query_spatial, (
+        len(query_non_batch_dims) == 0,
+        merged_query_dims,
+    )
 
-    # infer dot product dim (v_feat_dim)
+
+def _infer_v_feat_dim(values: Tensor, keys: Tensor, qk_feat_dim: Dim) -> Dim:
     v_feat_dim = values.feature_dim
     if v_feat_dim is None:
         if qk_feat_dim in values.dims_set:
@@ -119,8 +124,7 @@ def _infer_att_dims(
                 v_feat_dim = list(possible_feat_dims)[0]
             else:
                 raise ValueError(f"Cannot infer v_feat_dim from values.dims={values.dims}, keys.dims={keys.dims}")
-
-    return query, v_feat_dim, query_spatial, len(query_non_batch_dims) == 0
+    return v_feat_dim
 
 
 def dot_attention(
@@ -150,7 +154,7 @@ def dot_attention(
         normally not wanted. disabled by default since behavior version 19.
     :return: like values but with axis removed, and maybe any additional axes from query
     """
-    query, v_feat_dim, query_spatial, added_dummy_spat_dim_to_query = _infer_att_dims(
+    query, v_feat_dim, query_spatial, (added_dummy_spat_dim_to_query, merged_query_dims) = _infer_att_dims(
         query, keys, values, qk_feat_dim=key_dim, kv_spatial_dim=axis
     )
 
@@ -168,6 +172,8 @@ def dot_attention(
     )
     if added_dummy_spat_dim_to_query:
         att = rf.squeeze(att, axis=query_spatial)
+    if merged_query_dims is not None:
+        att = rf.split_dims(att, axis=query_spatial, dims=merged_query_dims)
 
     return att
 
