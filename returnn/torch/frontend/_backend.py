@@ -695,7 +695,14 @@ class TorchBackend(Backend[torch.Tensor]):
         out_dims = list(logits.dims)
         out_dims.remove(axis)
 
-        cross_entropy = Tensor(name="cross_entropy", dims=out_dims, raw_tensor=raw_cross_entropy, dtype=logits.dtype)
+        cross_entropy = Tensor(
+            name="cross_entropy",
+            dims=out_dims,
+            raw_tensor=raw_cross_entropy,
+            # take the dtype from the raw result:
+            # under autocast, F.cross_entropy computes in float32 even for bf16 logits
+            dtype=TorchBackend.get_dtype_name_raw(raw_cross_entropy),
+        )
 
         return cross_entropy
 
