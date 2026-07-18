@@ -862,7 +862,14 @@ class _DimMixin:
         :return: dyn_size_ext on the device
         """
         assert self.dyn_size_ext is not None
-        if not device or device == "cpu":
+
+        if not device:
+            device = "cpu"
+        if (
+            self.dyn_size_ext.raw_tensor is None
+            or (device == "cpu" and self.dyn_size_ext.device is None)
+            or self.dyn_size_ext.device == device
+        ):
             return self.dyn_size_ext
 
         import returnn.frontend as rf
@@ -1972,8 +1979,6 @@ class _DimMixin:
         :rtype: _t.Tensor
         """
         if self.dyn_size_ext is not None:
-            if not device or device == "cpu":
-                return self.dyn_size_ext
             return self.get_dyn_size_ext_for_device(device)
 
         import returnn.frontend as rf
