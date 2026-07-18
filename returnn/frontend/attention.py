@@ -376,8 +376,16 @@ class CausalSelfAttention(SelfAttentionBase):
         """forward"""
         q, k, v = self.forward_qkv(source)
         if axis != single_step_dim and (not state or state.accum_axis.dimension == 0):
-            # Full sequence from scratch: use is_causal directly,
-            # so that backends can use efficient fused implementations (e.g. packed varlen SDPA).
+            # Full sequence from scratch.
+            # The generic path below expresses the causality via the masked hist_dim
+            # (dyn sizes arange+1), which is mathematically equivalent,
+            # but backends cannot cheaply recognize that as causal
+            # (it would require inspecting the dyn size values),
+            # so they cannot use fused implementations
+            # (torch SDPA is_causal / flash attention / packed varlen SDPA).
+            # Thus pass the explicit is_causal flag to scaled_dot_product_attention here,
+            # which lets backends select those fused implementations.
+            # On generic backends this computes exactly the same as the path below.
             # The state keeps the original axis, see _causal_self_att_step (no-state case).
             new_state = CausalSelfAttentionState()
             new_state.k_accum = k
@@ -522,6 +530,39 @@ class RotaryPosCausalSelfAttention(CausalSelfAttention):
     ) -> Tuple[Tensor, CausalSelfAttentionState]:
         """forward"""
         q, k, v = self.forward_qkv(source)
+        if axis != single_step_dim and (not state or state.accum_axis.dimension == 0):
+            # Full sequence from scratch: use the explicit is_causal flag,
+            # so that backends can use fused implementations --
+            # see the same branch in CausalSelfAttention.__call__ for the full reasoning.
+            # The state keeps the original axis and the pre-RoPE k/v,
+            # see _causal_self_att_step (no-state case).
+            new_state = CausalSelfAttentionState()
+            new_state.k_accum = k
+            new_state.v_accum = v
+            new_state.accum_axis = axis
+            pos_enc = rf.sinusoidal_positional_encoding(
+                spatial_dim=axis,
+                feat_dim=self.key_dim_per_head,
+                base=10_000 ** (1 - 2 / self.key_dim_per_head.dimension),
+            )  # [T,D]
+            q = _apply_rope(q, pos_enc, self.key_dim_per_head)
+            k = _apply_rope(k, pos_enc, self.key_dim_per_head)
+            att = scaled_dot_product_attention(
+                q,
+                k,
+                v,
+                att_dropout=self.att_dropout,
+                att_dropout_broadcast=self.att_dropout_broadcast,
+                v_feat_dim=self.value_dim_per_head,
+                qk_feat_dim=self.key_dim_per_head,
+                kv_spatial_dim=axis,
+                query_spatial_dim=axis,
+                is_causal=True,
+            )
+            output, _ = rf.merge_dims(att, dims=(self.num_heads, self.value_dim_per_head), out_dim=self.value_dim_total)
+            if self.proj:
+                output = self.proj(output)
+            return output, new_state
         k, v, hist_dim, new_state = _causal_self_att_step(k, v, axis=axis, state=state, self=self)
 
         # Apply RoPE using sinusoidal positional encoding.
