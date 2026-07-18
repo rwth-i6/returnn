@@ -165,6 +165,8 @@ def test_conformer():
         assert "conv" not in packed._warned_fallback_ops
         assert "pad" not in packed._warned_fallback_ops
         assert "pool" not in packed._warned_fallback_ops
+        # the rel-pos self-attention must have run via the FlexAttention fast path
+        assert "rel_pos_self_attention" not in packed._warned_fallback_ops
     assert out_spatial_dim == out_spatial_dim_p
     # fallbacks repack, so the encoder output must still be packed (over (batch, subsampled time))
     assert packed.is_packed(out_p)
@@ -368,6 +370,56 @@ def test_transformer_aed():
     assert packed.is_packed(logits_p)  # output side follows the decoder packing
     assert logits_p.raw_tensor.orig_dims == (batch_dim, dec_time)
     _assert_equal_non_padded(logits_p, logits_ref, batch_dim, dec_time, rtol=1e-4, atol=1e-5)
+
+
+def test_batch_norm_packed_gapped_train():
+    # batch_norm statistics must ignore gap frames: on a gapped layout in training,
+    # the packed impl re-layouts to dense internally (see _DENSE_ONLY_INNER_OPS).
+    # Compare against the dense packed run, which is the known-correct masked behavior
+    # (note: the padded path with use_mask=False would include padding frames in the statistics).
+    rf.select_backend_torch()
+    x, batch_dim, time_dim, feat_dim = _make_input(seq_lens=(5, 3), feat=4, seed=8)
+    with rf.set_default_device_ctx("cpu"):
+        rf.set_random_seed(3)
+        bn_dense = rf.BatchNorm(feat_dim, use_mask=False)
+        bn_gapped = rf.BatchNorm(feat_dim, use_mask=False)
+        with rf.get_run_ctx().train_flag_ctx(True):
+            out_dense = bn_dense(packed.pack(x))
+            out_gapped = bn_gapped(packed.pack(x, gap=3, align=2))
+        assert packed.is_packed(out_dense)
+        assert packed.is_packed(out_gapped)
+    _assert_equal_non_padded(out_gapped, packed.unpack(out_dense), batch_dim, time_dim)
+    for p_dense, p_gapped in [
+        (bn_dense.running_mean, bn_gapped.running_mean),
+        (bn_dense.running_variance, bn_gapped.running_variance),
+    ]:
+        numpy.testing.assert_allclose(
+            p_dense.raw_tensor.detach().numpy(), p_gapped.raw_tensor.detach().numpy(), rtol=1e-5, atol=1e-6
+        )
+
+
+def test_rel_pos_self_attention_packed():
+    # Conformer-style rel-pos self-attention: on packed input this runs via the FlexAttention fast path
+    # (document block mask + rel-pos score_mod over the flat packed buffer).
+    rf.select_backend_torch()
+    x, batch_dim, time_dim, feat_dim = _make_input(seq_lens=(9, 6), feat=8, seed=11)
+    with rf.set_default_device_ctx("cpu"):
+        rf.set_random_seed(23)
+        att = rf.RelPosSelfAttention(
+            feat_dim,
+            proj_dim=feat_dim,
+            key_dim_total=Dim(8, name="key_tot"),
+            value_dim_total=Dim(8, name="val_tot"),
+            num_heads=2,
+            att_dropout=0.0,
+        )
+        out_ref = att(x, axis=time_dim)
+        xp = packed.pack(x, gap=4)  # some gap, to also cover the regap inside the fast path
+        out_p = att(xp, axis=time_dim)
+        assert packed.is_packed(out_p)
+        # must have taken the FlexAttention fast path (works eagerly on CPU too)
+        assert "rel_pos_self_attention" not in packed._warned_fallback_ops
+    _assert_equal_non_padded(out_p, out_ref, batch_dim, time_dim)
 
 
 if __name__ == "__main__":

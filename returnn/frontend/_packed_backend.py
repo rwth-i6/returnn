@@ -422,6 +422,9 @@ def _padded_positions(orig_dims: Sequence[Dim], gap: int, align: int) -> Tensor:
         others = tuple(orig_dims[:-1])
         if len(others) > 1:
             starts = rf.split_dims(starts, axis=seqs_dim, dims=others)
+        if starts.device != pos.device:
+            # starts derive from the dyn sizes (often cpu), pos follows the default device
+            starts = rf.copy_to_device(starts, pos.device)
         pos = starts + pos
     return pos
 
@@ -502,6 +505,21 @@ _NO_REPACK_OPS = {"merge_dims", "reshape", "split_dims"}
 # Ops whose inner path implicitly reduces over the packed dim (statistics over "everything"):
 # valid on the dense layout (packed = exactly the real frames), but not with gap frames.
 _DENSE_ONLY_INNER_OPS = {"batch_norm"}
+
+
+def _stats_active(name: str, kwargs) -> bool:
+    """
+    :param name: op from :data:`_DENSE_ONLY_INNER_OPS`
+    :param kwargs: the call kwargs
+    :return: whether the op will actually compute statistics over the packed dim in this call.
+        E.g. batch_norm in eval mode with running stats is purely elementwise,
+        then gap frames are harmless and the inner path is fine even on a gapped layout.
+    """
+    if name == "batch_norm":
+        # mirrors the `training` condition in the torch backend batch_norm
+        train_flag = rf.get_run_ctx().is_train_flag_enabled(func=rf.BatchNorm.__call__)
+        return train_flag is not False or kwargs.get("running_mean") is None
+    return True
 
 
 def _segment_softmax(tensor: Tensor, *, axis: Dim, log: bool) -> Optional[Tensor]:
@@ -602,9 +620,33 @@ def _dim_aware_call(name: str, args, kwargs):
         overlap = referenced & (set(raw0.orig_dims) | {raw0.packed_dim})
         if overlap:
             _warn_fallback_once(name, f"references packed dims {sorted(overlap, key=lambda d: d.name or '')}")
-        elif name in _DENSE_ONLY_INNER_OPS and (raw0.gap or raw0.align > 1):
+        elif name in _DENSE_ONLY_INNER_OPS and (raw0.gap or raw0.align > 1) and _stats_active(name, kwargs):
             # e.g. batch_norm: its statistics implicitly reduce over the packed dim,
             # and gap frames would pollute them.
+            # Re-layout to dense, run there, restore the layout:
+            # correct statistics by construction (incl. in-place running-stat updates),
+            # no padded intermediate,
+            # and the result keeps the original packing.
+            src = packed_args[0] if len(packed_args) == 1 else None
+            if src is not None and (any(x is src for x in args) or any(v is src for v in kwargs.values())):
+                _warn_fallback_once(
+                    name,
+                    "implicitly reduces over the packed dim, gapped layout",
+                    action=f"re-layouting to dense and back ({name} stays packed)",
+                )
+                dense = regap(src, 0, align=1)
+                out = _dim_aware_call(
+                    name,
+                    [dense if x is src else x for x in args],
+                    {k: (dense if v is src else v) for k, v in kwargs.items()},
+                )
+                if isinstance(out, Tensor) and is_packed(out) and out.raw_tensor.same_packing(dense.raw_tensor):
+                    back = regap(out, raw0.gap, align=raw0.align)
+                    inner, _ = rf.replace_dim(
+                        back.raw_tensor.inner, in_dim=back.raw_tensor.packed_dim, out_dim=raw0.packed_dim
+                    )
+                    return raw0.rewrap(inner, name=name)
+                return out  # unusual result structure; correct, just re-layouted
             _warn_fallback_once(name, "implicitly reduces over the packed dim, gapped layout")
         else:
             inner_args = [_map_packed_to_inner(x) for x in args]
@@ -748,6 +790,197 @@ def _sdpa_varlen_attention(
     return out
 
 
+_flex_env_broken = False
+_flex_attention_compiled = None
+_flex_compile_failed = False
+
+
+def _flex_no(reason: str):
+    """warn once that the FlexAttention rel-pos fast path is not used, and return None"""
+    _warn_fallback_once(
+        "rel_pos_self_attention",
+        f"FlexAttention fast path not applicable ({reason})",
+        action="using the generic implementation (with the packed op handling)",
+    )
+    return None
+
+
+def _get_flex_attention_fn(device_type: str):
+    """
+    :param device_type: "cuda" / "cpu" / ...
+    :return: (flex_attention fn to use, eager flex_attention fn).
+        FlexAttention only gets fused kernels via torch.compile; eager is a slow reference impl,
+        so on CUDA we lazily compile it (shared across calls).
+    """
+    global _flex_attention_compiled
+    from torch.nn.attention.flex_attention import flex_attention
+
+    if device_type != "cuda" or _flex_compile_failed:
+        return flex_attention, flex_attention
+    if _flex_attention_compiled is None:
+        import torch
+
+        _flex_attention_compiled = torch.compile(flex_attention)
+    return _flex_attention_compiled, flex_attention
+
+
+def _flex_rel_pos_attention(
+    query: Tensor,
+    key: Tensor,
+    value: Tensor,
+    pos_emb: Tensor,
+    *,
+    pos_bias_u: Optional[Tensor],
+    pos_bias_v: Optional[Tensor],
+    v_feat_dim: Dim,
+    qk_feat_dim: Dim,
+    kv_spatial_dim: Dim,
+    query_spatial_dim: Dim,
+    pos_emb_spatial_dim: Dim,
+) -> Optional[Tensor]:
+    """
+    Packed self-attention with relative positional encoding via torch FlexAttention:
+    one flat attention over the packed buffer with a document block mask (seq membership)
+    and a score_mod adding the (precomputed, packed) position-based term (matrix b+d),
+    indexed by the relative position --
+    within a seq the global offset equals the local one (the seq starts cancel),
+    so no per-seq local positions are needed.
+    Pure torch, no external package. None if not applicable (then the generic path runs).
+
+    :param query: {..., query_spatial_dim, qk_feat_dim}. not yet scaled.
+    :param key: {..., kv_spatial_dim, qk_feat_dim}
+    :param value: {..., kv_spatial_dim, v_feat_dim}
+    :param pos_emb: {..., pos_emb_spatial_dim, qk_feat_dim}, relative positional encoding (dense)
+    :param pos_bias_u: {..., qk_feat_dim}, added to query for the content-based term (matrix a+c)
+    :param pos_bias_v: {..., qk_feat_dim}, added to query for the position-based term (matrix b+d)
+    :param v_feat_dim: embedding dimension of value
+    :param qk_feat_dim: embedding dimension of key and query
+    :param kv_spatial_dim: spatial axis of key/value to attend over
+    :param query_spatial_dim: spatial axis of query
+    :param pos_emb_spatial_dim: relative-position axis of pos_emb (must be 2*max_len-1, centered)
+    :return: attention output (packed like query), or None
+    """
+    global _flex_env_broken, _flex_compile_failed
+
+    if _flex_env_broken:
+        return None  # already warned once when it broke
+    if not (is_packed(query) and is_packed(key) and is_packed(value)):
+        return _flex_no("not all of query/key/value are packed")
+    if is_packed(pos_emb):
+        return _flex_no("pos_emb is packed (expected dense)")
+    q_raw, k_raw, v_raw = query.raw_tensor, key.raw_tensor, value.raw_tensor
+    if q_raw.inner_backend.name != "torch":
+        return _flex_no("inner backend is not torch")
+    if not k_raw.same_packing(v_raw):
+        return _flex_no("key and value packings differ")
+    if kv_spatial_dim != k_raw.orig_dims[-1] or query_spatial_dim != q_raw.orig_dims[-1]:
+        return _flex_no("spatial dims are not the innermost packed dims")
+    if q_raw.orig_dims[:-1] != k_raw.orig_dims[:-1] or not _same_seq_lens(query_spatial_dim, kv_spatial_dim):
+        return _flex_no("query vs key/value packings differ (not self-attention seqs)")
+    try:
+        from torch.nn.attention.flex_attention import create_block_mask
+    except ImportError:
+        return _flex_no("torch.nn.attention.flex_attention not available (torch too old)")
+
+    # The position-based term (matrix b+d, pre-shift), computed packed
+    # (no packed-dim reduction, so these stay inner ops): {packed.., heads?, pos_emb_spatial}
+    q_with_bias_u = (query + pos_bias_u) if pos_bias_u is not None else query
+    q_with_bias_v = (query + pos_bias_v) if pos_bias_v is not None else query
+    matrix_bd = rf.matmul(q_with_bias_v, pos_emb, reduce=qk_feat_dim)
+    if not is_packed(q_with_bias_u) or not is_packed(matrix_bd):
+        return _flex_no("query with bias / matrix b+d did not stay packed")
+    if (q_raw.gap, q_raw.align) != (k_raw.gap, k_raw.align):
+        return _flex_no("query vs key/value layout (gap/align) differs")
+    qu_raw, bd_raw = q_with_bias_u.raw_tensor, matrix_bd.raw_tensor
+    q_inner, k_inner, v_inner, bd_inner = qu_raw.inner, k_raw.inner, v_raw.inner, bd_raw.inner
+    head_dims = [d for d in q_inner.dims if d not in (qu_raw.packed_dim, qk_feat_dim)]
+    if len(head_dims) != 1 or head_dims[0].dimension is None:
+        return _flex_no("expect exactly the [packed, heads, qk_feat] layout for query")
+    heads_dim = head_dims[0]
+    if set(k_inner.dims) != {k_raw.packed_dim, heads_dim, qk_feat_dim}:
+        return _flex_no("unexpected key dims layout")
+    if set(v_inner.dims) != {v_raw.packed_dim, heads_dim, v_feat_dim}:
+        return _flex_no("unexpected value dims layout")
+    if set(bd_inner.dims) - {heads_dim} != {bd_raw.packed_dim, pos_emb_spatial_dim}:
+        return _flex_no("unexpected matrix b+d dims layout")
+    import torch
+
+    try:
+        # seq starts + lens in the (possibly gapped) buffer -- the layout is used as-is,
+        # gap/alignment frames are simply masked out (seq_id -1 below), no re-layout needed
+        starts_rf, _ = qu_raw.seq_starts()
+        starts = rf.copy_to_device(starts_rf, query.device).raw_tensor.long()
+        lens_rf = query_spatial_dim.dyn_size_ext
+        for d in qu_raw.orig_dims[:-1]:
+            if d not in lens_rf.dims:
+                lens_rf = rf.expand_dim(lens_rf, dim=d)
+        if len(qu_raw.orig_dims) > 2:
+            lens_rf, _ = rf.merge_dims(lens_rf, dims=qu_raw.orig_dims[:-1])
+        lens = rf.copy_to_device(lens_rf, query.device).raw_tensor.long().flatten()
+        max_len = int(lens.max()) if lens.numel() > 0 else 0
+        r_size = int(pos_emb_spatial_dim.get_dim_value())
+        if r_size != 2 * max_len - 1:
+            # only the standard centered layout (positions -(max_len-1)..(max_len-1)) is supported
+            return _flex_no(f"pos_emb size {r_size} != 2*max_len-1 ({2 * max_len - 1})")
+        center = max_len - 1
+        q_t = q_inner.copy_transpose([qu_raw.packed_dim, heads_dim, qk_feat_dim]).raw_tensor
+        k_t = k_inner.copy_transpose([k_raw.packed_dim, heads_dim, qk_feat_dim]).raw_tensor
+        v_t = v_inner.copy_transpose([v_raw.packed_dim, heads_dim, v_feat_dim]).raw_tensor
+        if heads_dim in bd_inner.dims:
+            bd_t = bd_inner.copy_transpose([bd_raw.packed_dim, heads_dim, pos_emb_spatial_dim]).raw_tensor
+        else:
+            bd_t = bd_inner.copy_transpose([bd_raw.packed_dim, pos_emb_spatial_dim]).raw_tensor
+            bd_t = bd_t.unsqueeze(1).expand(-1, heads_dim.dimension, -1)
+        # pre-scale the bias like the content-based term (flex applies its scale to q*k before score_mod)
+        bd_t = (bd_t * qk_feat_dim.dimension**-0.5).contiguous()
+        total_buf = q_t.shape[0]
+        pos = torch.arange(total_buf, device=q_t.device)
+        seq = torch.searchsorted(starts, pos, right=True) - 1
+        local = pos - starts[seq]
+        seq_id = torch.where(local < lens[seq], seq, torch.full_like(seq, -1))
+
+        def _mask_mod(_b, _h, qi, kj):
+            # gap/alignment frames have seq_id -1 and are fully masked out
+            return (seq_id[kj] >= 0) & (seq_id[qi] == seq_id[kj])
+
+        def _score_mod(score, _b, h, qi, kj):
+            # Relative position of key w.r.t. query (kj - qi),
+            # like the shift trick: bd[i, j] = bd_pre_shift[i, center + (j - i)].
+            # Within a seq the global kj - qi equals the local j - i.
+            # clamp: mask_mod-masked positions inside partial blocks may still evaluate this.
+            rel = torch.clamp(kj - qi + center, 0, r_size - 1)
+            return score + bd_t[qi, h, rel]
+
+        block_mask = create_block_mask(
+            _mask_mod, B=None, H=None, Q_LEN=total_buf, KV_LEN=total_buf, device=str(q_t.device)
+        )
+        flex_fn, flex_eager = _get_flex_attention_fn(q_t.device.type)
+        q_f = q_t.transpose(0, 1).unsqueeze(0)  # [1, H, total, D]
+        k_f = k_t.transpose(0, 1).unsqueeze(0)
+        v_f = v_t.transpose(0, 1).unsqueeze(0)
+        try:
+            out_f = flex_fn(q_f, k_f, v_f, score_mod=_score_mod, block_mask=block_mask)
+        except Exception:
+            if flex_fn is flex_eager:
+                raise
+            _flex_compile_failed = True  # compiled FlexAttention failed; stick to eager from now on
+            out_f = flex_eager(q_f, k_f, v_f, score_mod=_score_mod, block_mask=block_mask)
+        out_t = out_f.squeeze(0).transpose(0, 1)  # [total, H, Dv]
+    except (RuntimeError, NotImplementedError) as exc:
+        if isinstance(exc, RuntimeError) and "CUDA" in str(exc):
+            # environment-level (e.g. CUDA-built torch without a driver): do not retry every call
+            _flex_env_broken = True
+        return _flex_no(f"torch FlexAttention failed here ({type(exc).__name__}: {exc})")
+    out_inner = Tensor(
+        "rel_pos_att_flex",
+        dims=[qu_raw.packed_dim, heads_dim, v_feat_dim],
+        dtype=q_inner.dtype,
+        feature_dim=v_feat_dim,
+    )
+    out_inner.raw_tensor = out_t.contiguous()
+    return qu_raw.rewrap(out_inner, name="rel_pos_att_flex")
+
+
 def _strided_out_wrapper(
     raw: PackedRawTensor, out_inner: Tensor, out_packed_dim: Dim, out_time: Dim, st: int
 ) -> Optional[Tensor]:
@@ -799,6 +1032,9 @@ def _extract_strided(raw: PackedRawTensor, out_inner: Tensor, out_packed_dim: Di
         others = tuple(raw.orig_dims[:-1])
         if len(others) > 1:
             starts = rf.split_dims(starts, axis=seqs_dim, dims=others)
+        if starts.device != pos.device:
+            # starts derive from the dyn sizes (often cpu), pos follows the default device
+            starts = rf.copy_to_device(starts, pos.device)
         pos = starts + pos
     out = rf.gather(out_inner, indices=pos, axis=out_packed_dim, clip_to_valid=True)
     return rf.where(rf.sequence_mask(list(out_orig), device=out.device), out, 0)
@@ -1141,14 +1377,14 @@ class PackedBackend(Backend[PackedRawTensor]):
         dropout_p = 0.0
         if att_dropout:
             if att_dropout_broadcast:
-                # Legacy broadcast dropout (behavior <=18) has a different mask shape
-                # than elementwise SDPA dropout_p.
+                # Legacy broadcast dropout (behavior <=18):
+                # a different mask shape than elementwise SDPA dropout_p.
                 dropout_p = None
             else:
                 train_flag = rf.get_run_ctx().is_train_flag_enabled(func=rf.dropout)
                 if isinstance(train_flag, bool):
-                    # rf.dropout semantics here (elementwise on att weights, 1/(1-p) scaling)
-                    # match SDPA dropout_p, modulo the RNG realization.
+                    # rf.dropout here == SDPA dropout_p
+                    # (elementwise on att weights, 1/(1-p) scaling, modulo the RNG realization).
                     dropout_p = att_dropout if train_flag else 0.0
                 else:
                     dropout_p = None  # dynamic train flag, cannot resolve to a static dropout_p
@@ -1185,6 +1421,70 @@ class PackedBackend(Backend[PackedRawTensor]):
             query_spatial_dim=query_spatial_dim,
             is_causal=is_causal,
             scale=scale,
+        )
+
+    @classmethod
+    def rel_pos_self_attention(
+        cls,
+        query: Tensor,
+        key: Tensor,
+        value: Tensor,
+        pos_emb: Tensor,
+        *,
+        pos_bias_u: Optional[Tensor],
+        pos_bias_v: Optional[Tensor],
+        att_dropout: float = 0.0,
+        att_dropout_broadcast: bool,
+        v_feat_dim: Dim,
+        qk_feat_dim: Dim,
+        kv_spatial_dim: Dim,
+        query_spatial_dim: Dim,
+        pos_emb_spatial_dim: Dim,
+    ):
+        """
+        Self-attention with relative positional encoding. Packed specialization:
+        torch FlexAttention over the flat packed buffer with a document block mask
+        and the position-based term (matrix b+d) as score_mod, see :func:`_flex_rel_pos_attention`.
+        FlexAttention has no dropout support, so with att_dropout active in training
+        the generic fallback runs (which then uses the packed op handling).
+        """
+        dropout_active = False
+        if att_dropout:
+            train_flag = rf.get_run_ctx().is_train_flag_enabled(func=rf.dropout)
+            # for a dynamic (tensor) train flag, conservatively assume training
+            dropout_active = train_flag if isinstance(train_flag, bool) else True
+        if not dropout_active:
+            out = _flex_rel_pos_attention(
+                query,
+                key,
+                value,
+                pos_emb,
+                pos_bias_u=pos_bias_u,
+                pos_bias_v=pos_bias_v,
+                v_feat_dim=v_feat_dim,
+                qk_feat_dim=qk_feat_dim,
+                kv_spatial_dim=kv_spatial_dim,
+                query_spatial_dim=query_spatial_dim,
+                pos_emb_spatial_dim=pos_emb_spatial_dim,
+            )
+            if out is not None:
+                return out
+        else:
+            _flex_no("att_dropout active in training (FlexAttention has no dropout support)")
+        return Backend.rel_pos_self_attention(
+            query,
+            key,
+            value,
+            pos_emb,
+            pos_bias_u=pos_bias_u,
+            pos_bias_v=pos_bias_v,
+            att_dropout=att_dropout,
+            att_dropout_broadcast=att_dropout_broadcast,
+            v_feat_dim=v_feat_dim,
+            qk_feat_dim=qk_feat_dim,
+            kv_spatial_dim=kv_spatial_dim,
+            query_spatial_dim=query_spatial_dim,
+            pos_emb_spatial_dim=pos_emb_spatial_dim,
         )
 
     @staticmethod
