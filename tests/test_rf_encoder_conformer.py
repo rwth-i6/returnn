@@ -7,6 +7,7 @@ import _setup_test_env  # noqa
 from typing import Sequence
 from returnn.tensor import Tensor, Dim, TensorDict, batch_dim
 import returnn.frontend as rf
+from returnn.frontend._backend import Backend
 from rf_utils import run_model
 
 
@@ -301,6 +302,7 @@ def test_e_branchformer():
                 ConformerEncoder.__call__,
                 EBranchformerLayer.__call__,
                 rf.RelPosSelfAttention.__call__,
+                Backend.rel_pos_self_attention,
                 rf.relative_positional_encoding,
                 FeedForwardConvGated.__call__,
             ],
@@ -362,7 +364,8 @@ def test_e_branchformer():
                 ),
             ),
             (
-                (rf.RelPosSelfAttention.__call__, 0, "q_with_bias_u", 0),
+                # q_with_bias_u lives in the backend hook now, see Backend.rel_pos_self_attention
+                (Backend.rel_pos_self_attention, 0, "q_with_bias_u", 0),
                 (RelPositionMultiHeadedAttention.forward, 0, "q_with_bias_u", 0),
                 (batch_dim, num_heads_dim, enc_spatial_dim, key_dim_per_head),
             ),
