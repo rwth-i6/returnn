@@ -3,7 +3,7 @@ Attention
 """
 
 from __future__ import annotations
-from typing import Tuple, Union, Optional, Sequence
+from typing import Union, Optional, Sequence, Tuple, List
 import logging
 from returnn.tensor import Tensor, Dim, single_step_dim
 import returnn.frontend as rf
@@ -91,7 +91,7 @@ def scaled_dot_product_attention(
 
 def _infer_att_dims(
     query: Tensor, keys: Tensor, values: Tensor, *, qk_feat_dim: Dim, kv_spatial_dim: Dim
-) -> Tuple[Tensor, Dim, Dim, bool]:
+) -> Tuple[Tensor, Dim, Dim, Tuple[bool, Optional[List[Dim]]]]:
     if kv_spatial_dim not in keys.dims_set:
         raise ValueError(f"kv_spat_dim {kv_spatial_dim} not in keys.dims {keys.dims}")
 
@@ -107,9 +107,14 @@ def _infer_att_dims(
         # Multiple extra query dims (e.g. rescoring: [batch, beam, targets_spatial, ...]).
         query, query_spatial = rf.merge_dims(query, dims=query_non_batch_dims)
         merged_query_dims = query_non_batch_dims
-    return query, _infer_v_feat_dim(values, keys, qk_feat_dim), query_spatial, (
-        len(query_non_batch_dims) == 0,
-        merged_query_dims,
+    return (
+        query,
+        _infer_v_feat_dim(values, keys, qk_feat_dim),
+        query_spatial,
+        (
+            len(query_non_batch_dims) == 0,
+            merged_query_dims,
+        ),
     )
 
 
