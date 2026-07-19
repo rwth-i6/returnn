@@ -68,7 +68,7 @@ Import this module explicitly to activate the dispatch registration.
 """
 
 from __future__ import annotations
-from typing import Any, Optional, Sequence, Set, Tuple, Union
+from typing import Any, Optional, Union, Sequence, Set, Tuple, Dict
 
 from returnn.tensor import Tensor, Dim
 import returnn.frontend as rf
@@ -249,6 +249,18 @@ def _unpack_if_packed(x):
 
 
 _warned_fallback_ops: Set[str] = set()
+
+# Which attention implementation actually ran, by call count.
+# Diagnosis / benchmarking: e.g. a silent fall-through from the direct-flash path
+# to eager NJT is functionally correct but 10-20x slower per call,
+# and NOT visible via _warned_fallback_ops (both are "fast paths") --
+# it once went unnoticed exactly that way.
+# Keys: "flash", "njt_compiled", "njt_eager", "flex_doc", "rel_pos_flex".
+attention_path_counts: Dict[str, int] = {}
+
+
+def _count_attention_path(name: str):
+    attention_path_counts[name] = attention_path_counts.get(name, 0) + 1
 
 
 def _warn_fallback_once(op_name: str, reason: str, *, action: str = "using slow unpack -> op -> repack fallback"):
@@ -871,6 +883,69 @@ def _njt_sdpa_raw(q_t, k_t, v_t, cu_q, cu_k, dropout_p: float, is_causal: bool, 
 _njt_sdpa_compiled = None
 _njt_sdpa_compile_failed = False
 
+_flash_varlen_fn = None
+_flash_varlen_broken = False
+
+
+def _get_flash_varlen_fn():
+    """
+    :return: autograd function
+        (q, k, v, cu_q, cu_k, max_q, max_k, dropout_p, is_causal, scale) -> out,
+        calling the aten flash varlen kernels directly
+        (torch.ops.aten._flash_attention_forward/_backward):
+        the same kernels NJT SDPA dispatches to,
+        but without the per-op python subclass overhead,
+        with native dropout (the rng state is saved for the backward),
+        and with the flash backward
+        (measured ~1.65x faster fwd+bwd than compiled flex, ~23x than eager NJT).
+        Private aten API: the caller must handle signature drift across torch versions
+        (catch TypeError etc. and set :data:`_flash_varlen_broken`).
+    """
+    global _flash_varlen_fn
+    if _flash_varlen_fn is not None:
+        return _flash_varlen_fn
+    import torch
+
+    class _FlashVarlenAttention(torch.autograd.Function):
+        """flash varlen attention, see :func:`_get_flash_varlen_fn`"""
+
+        @staticmethod
+        def forward(ctx, q, k, v, cu_q, cu_k, max_q, max_k, dropout_p, is_causal, scale):
+            """forward"""
+            out, lse, rng0, rng1, _ = torch.ops.aten._flash_attention_forward(
+                q, k, v, cu_q, cu_k, max_q, max_k, dropout_p, is_causal, False, scale=scale
+            )
+            ctx.save_for_backward(q, k, v, out, lse, cu_q, cu_k, rng0, rng1)
+            ctx.max_q, ctx.max_k = max_q, max_k
+            ctx.dropout_p, ctx.is_causal, ctx.scale = dropout_p, is_causal, scale
+            return out
+
+        @staticmethod
+        def backward(ctx, grad_out):
+            """backward"""
+            q, k, v, out, lse, cu_q, cu_k, rng0, rng1 = ctx.saved_tensors
+            gq, gk, gv = torch.ops.aten._flash_attention_backward(
+                grad_out.contiguous(),
+                q,
+                k,
+                v,
+                out,
+                lse,
+                cu_q,
+                cu_k,
+                ctx.max_q,
+                ctx.max_k,
+                ctx.dropout_p,
+                ctx.is_causal,
+                rng0,
+                rng1,
+                scale=ctx.scale,
+            )
+            return gq, gk, gv, None, None, None, None, None, None, None
+
+    _flash_varlen_fn = _FlashVarlenAttention.apply
+    return _flash_varlen_fn
+
 
 def _get_njt_sdpa_fn(device_type: str, *, needs_grad: bool):
     """
@@ -906,14 +981,19 @@ def _sdpa_varlen_attention(
     is_causal: bool,
     dropout_p: float = 0.0,
     scale: Optional[float],
+    allow_njt: bool = True,
 ) -> Optional[Tensor]:
     """
-    torch SDPA over nested (jagged) tensors built directly from the packed layout
-    (values buffer + offsets): no padding compute, no materialized energies,
-    flash varlen kernels internally where applicable -- pure torch, no external package.
-    None if not applicable (then the generic path runs, with the packed matmul/softmax handling).
+    Varlen SDPA directly on the packed layout (values buffer + cu_seqlens offsets):
+    no padding compute, no materialized energies -- pure torch, no external package.
+    Preferred impl: the aten flash varlen kernels called directly
+    (cuda + fp16/bf16, incl. native dropout, see :func:`_get_flash_varlen_fn`);
+    otherwise torch SDPA over nested (jagged) tensors,
+    unless ``allow_njt`` is False (then the caller falls back to flex instead --
+    eager NJT has a large per-call python overhead).
+    None if not applicable (then the flex / generic paths run).
     """
-    global _njt_sdpa_env_broken, _njt_sdpa_compile_failed
+    global _njt_sdpa_env_broken, _njt_sdpa_compile_failed, _flash_varlen_broken
 
     if _njt_sdpa_env_broken:
         return None  # already warned once when it broke
@@ -958,36 +1038,70 @@ def _sdpa_varlen_attention(
         q_t = q_inner.copy_transpose([q_raw.packed_dim, head_dims[0], qk_feat_dim]).raw_tensor
         k_t = k_inner.copy_transpose([k_raw.packed_dim, head_dims[0], qk_feat_dim]).raw_tensor
         v_t = v_inner.copy_transpose([v_raw.packed_dim, head_dims[0], v_feat_dim]).raw_tensor
-        cu_q_key = _packing_cache_key("cu_long", q_raw, query.device)
+        cu_q_key = _packing_cache_key("cu", q_raw, query.device)
         cu_q = _layout_cache.get(cu_q_key)
         if cu_q is None:
-            cu_q = q_raw.cu_seqlens(device=query.device)[0].raw_tensor.long()
+            cu_raw = q_raw.cu_seqlens(device=query.device)[0].raw_tensor
+            cu_q = (cu_raw.long(), cu_raw.to(torch.int32))
             _layout_cache.set(cu_q_key, cu_q)
-        cu_k_key = _packing_cache_key("cu_long", k_raw, query.device)
+        cu_k_key = _packing_cache_key("cu", k_raw, query.device)
         cu_k = _layout_cache.get(cu_k_key)
         if cu_k is None:
-            cu_k = k_raw.cu_seqlens(device=query.device)[0].raw_tensor.long()
+            cu_raw = k_raw.cu_seqlens(device=query.device)[0].raw_tensor
+            cu_k = (cu_raw.long(), cu_raw.to(torch.int32))
             _layout_cache.set(cu_k_key, cu_k)
-        needs_grad = torch.is_grad_enabled() and (q_t.requires_grad or k_t.requires_grad or v_t.requires_grad)
-        sdpa_fn, sdpa_eager = _get_njt_sdpa_fn(q_t.device.type, needs_grad=needs_grad)
-        sdpa_args = (
-            q_t,
-            k_t,
-            v_t,
-            cu_q,
-            cu_k,
-            dropout_p,
-            is_causal,
-            scale if scale is not None else qk_feat_dim.dimension**-0.5,
-        )
-        try:
-            out_t = sdpa_fn(*sdpa_args)
-        except (RuntimeError, NotImplementedError):
-            # incl. dynamo/inductor compile errors (TorchDynamoException subclasses RuntimeError)
-            if sdpa_fn is sdpa_eager:
-                raise
-            _njt_sdpa_compile_failed = True  # compiled NJT SDPA failed; stick to eager from now on
-            out_t = sdpa_eager(*sdpa_args)
+        scale_ = scale if scale is not None else qk_feat_dim.dimension**-0.5
+        out_t = None
+        # Preferred: the flash varlen kernels directly (see _get_flash_varlen_fn):
+        # fast flash backward, native dropout, no NJT subclass overhead.
+        q_f, k_f, v_f = q_t, k_t, v_t
+        if (
+            q_f.device.type == "cuda"
+            and q_f.dtype not in (torch.float16, torch.bfloat16)
+            and hasattr(torch, "get_autocast_dtype")  # torch >= 2.4
+            and torch.is_autocast_enabled("cuda")
+        ):
+            # Could be float32.
+            # F.scaled_dot_product_attention casts internally under autocast;
+            # do the same here for the direct flash call.
+            amp_dtype = torch.get_autocast_dtype("cuda")
+            if amp_dtype in (torch.float16, torch.bfloat16):
+                q_f, k_f, v_f = q_t.to(amp_dtype), k_t.to(amp_dtype), v_t.to(amp_dtype)
+        if not _flash_varlen_broken and q_f.device.type == "cuda" and q_f.dtype in (torch.float16, torch.bfloat16):
+            if not hasattr(torch.ops.aten, "_flash_attention_forward"):
+                _flash_varlen_broken = True
+            else:
+                max_q = int(q_raw.orig_dims[-1].get_dim_value())
+                max_k = int(k_raw.orig_dims[-1].get_dim_value())
+                try:
+                    out_t = _get_flash_varlen_fn()(
+                        q_f, k_f, v_f, cu_q[1], cu_k[1], max_q, max_k, dropout_p, is_causal, scale_
+                    )
+                    _count_attention_path("flash")
+                except (RuntimeError, TypeError, NotImplementedError) as exc:
+                    # e.g. aten signature drift in another torch version, or head-dim limits
+                    _flash_varlen_broken = True
+                    _warn_fallback_once(
+                        "scaled_dot_product_attention",
+                        f"direct flash varlen failed ({type(exc).__name__}: {exc})",
+                        action="using the NJT SDPA path",
+                    )
+        if out_t is None:
+            if not allow_njt:
+                return None  # caller prefers flex over eager NJT (no dropout needed)
+            needs_grad = torch.is_grad_enabled() and (q_t.requires_grad or k_t.requires_grad or v_t.requires_grad)
+            sdpa_fn, sdpa_eager = _get_njt_sdpa_fn(q_t.device.type, needs_grad=needs_grad)
+            sdpa_args = (q_t, k_t, v_t, cu_q[0], cu_k[0], dropout_p, is_causal, scale_)
+            try:
+                out_t = sdpa_fn(*sdpa_args)
+                _count_attention_path("njt_compiled" if sdpa_fn is not sdpa_eager else "njt_eager")
+            except (RuntimeError, NotImplementedError):
+                # incl. dynamo/inductor compile errors (TorchDynamoException subclasses RuntimeError)
+                if sdpa_fn is sdpa_eager:
+                    raise
+                _njt_sdpa_compile_failed = True  # compiled NJT SDPA failed; stick to eager from now on
+                out_t = sdpa_eager(*sdpa_args)
+                _count_attention_path("njt_eager")
     except (RuntimeError, NotImplementedError) as exc:
         if isinstance(exc, RuntimeError) and "CUDA" in str(exc):
             # environment-level (e.g. CUDA-built torch without a driver): do not retry every call
@@ -1217,6 +1331,7 @@ def _flex_doc_attention(
         feature_dim=v_feat_dim,
     )
     out_inner.raw_tensor = out_t.contiguous()
+    _count_attention_path("flex_doc")
     return q_raw.rewrap(out_inner, name="flex_doc_att")
 
 
@@ -1359,6 +1474,7 @@ def _flex_rel_pos_attention(
         feature_dim=v_feat_dim,
     )
     out_inner.raw_tensor = out_t.contiguous()
+    _count_attention_path("rel_pos_flex")
     return qu_raw.rewrap(out_inner, name="rel_pos_att_flex")
 
 
@@ -1770,9 +1886,26 @@ class PackedBackend(Backend[PackedRawTensor]):
                 else:
                     dropout_p = None  # dynamic train flag, cannot resolve to a static dropout_p
         if attention_mask is None and dropout_p is not None:
+            # Preferred: the direct flash varlen kernels (inside _sdpa_varlen_attention;
+            # 2x faster than flex at model level, native dropout).
+            # Fallbacks: without dropout, flex over eager NJT
+            # (allow_njt=False -> None when flash is not available);
+            # with dropout, eager NJT (correct, flex has no dropout).
+            out = _sdpa_varlen_attention(
+                query,
+                key,
+                value,
+                qk_feat_dim=qk_feat_dim,
+                v_feat_dim=v_feat_dim,
+                kv_spatial_dim=kv_spatial_dim,
+                is_causal=is_causal,
+                dropout_p=dropout_p,
+                scale=scale,
+                allow_njt=bool(dropout_p),
+            )
+            if out is not None:
+                return out
             if not dropout_p:
-                # preferred: compiled FlexAttention with a document block mask
-                # (no eager-NJT per-call overhead, working autograd; no dropout support though)
                 out = _flex_doc_attention(
                     query,
                     key,
@@ -1786,19 +1919,6 @@ class PackedBackend(Backend[PackedRawTensor]):
                 )
                 if out is not None:
                     return out
-            out = _sdpa_varlen_attention(
-                query,
-                key,
-                value,
-                qk_feat_dim=qk_feat_dim,
-                v_feat_dim=v_feat_dim,
-                kv_spatial_dim=kv_spatial_dim,
-                is_causal=is_causal,
-                dropout_p=dropout_p,
-                scale=scale,
-            )
-            if out is not None:
-                return out
         else:
             _sdpa_no(
                 "attention_mask given"
