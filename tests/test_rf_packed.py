@@ -601,15 +601,12 @@ def test_aed_aux_ctc_stripped_real_model():
             ref_v, p_v = float(ref_t.raw_tensor), float(p_t.raw_tensor)
             assert abs(ref_v - p_v) / max(abs(ref_v), 1e-6) < 1e-4, f"{name} loss: padded {ref_v} vs packed {p_v}"
 
-        # Track the known-missing packed impls: those (and nothing else) may have fallen back.
+        # Track the known re-layout notices: those (and nothing else) may have been flagged.
         # - conv:strided-out: not a fallback (stays packed, per-seq re-layout notice), but tracked alike
-        # - ctc_loss: no packed impl yet (planned: adapt our native CTC to the packed layout)
-        # - the repack of its per-seq loss result (over batch only: no packed dim left to repack into)
-        repack_warns = {op for op in warned_here if op.startswith("repack:")}
-        assert len(repack_warns) <= 1, f"more than the CTC loss result repack: {repack_warns}"
-        expected = {"conv:strided-out", "ctc_loss"}
+        # (ctc_loss runs natively packed, via FastBaumWelchPackedOp: no fallback)
+        expected = {"conv:strided-out"}
         if _flex_attention_usable():
-            assert warned_here - repack_warns == expected, f"unexpected fallbacks: {warned_here - repack_warns}"
+            assert warned_here == expected, f"unexpected fallbacks: {warned_here - expected}"
             # 2 enc layers rel-pos flex; 2 dec layers x (self + cross) flex with document mask
             assert dict(packed.attention_path_counts) == {"rel_pos_flex": 2, "flex_doc": 4}
         else:
@@ -626,6 +623,62 @@ def test_aed_aux_ctc_stripped_real_model():
         with torch.autocast(device_type="cpu", dtype=torch.bfloat16):
             ctc_a, ce_a = _losses(packed.pack(x, gap=96, align=6), packed.pack(targets))
         assert numpy.isfinite(float(ctc_a.raw_tensor)) and numpy.isfinite(float(ce_a.raw_tensor))
+
+
+def test_ctc_loss_packed_native():
+    # Packed CTC via the native packed fast-baum-welch op (FastBaumWelchPackedOp):
+    # loss and logits grads must match the padded path (torch F.ctc_loss).
+    rf.select_backend_torch()
+    batch_dim = Dim(3, name="batch")
+    time_dim = Dim(
+        Tensor("time", dims=[batch_dim], dtype="int32", raw_tensor=torch.tensor([9, 7, 4], dtype=torch.int32))
+    )
+    vocab_dim = Dim(6, name="vocab")
+    blank_index = 5
+    tgt_time = Dim(
+        Tensor("tgt_time", dims=[batch_dim], dtype="int32", raw_tensor=torch.tensor([4, 3, 2], dtype=torch.int32))
+    )
+    targets = Tensor("targets", dims=[batch_dim, tgt_time], dtype="int32", sparse_dim=vocab_dim)
+    targets.raw_tensor = torch.randint(0, 5, (3, 4), dtype=torch.int32, generator=torch.Generator().manual_seed(3))
+    logits_raw = torch.randn(3, 9, 6, generator=torch.Generator().manual_seed(12))
+
+    def _loss(raw_leaf, pack_gap=None):
+        logits = Tensor("logits", dims=[batch_dim, time_dim, vocab_dim], dtype="float32", feature_dim_axis=2)
+        logits.raw_tensor = raw_leaf
+        if pack_gap is not None:
+            logits = packed.pack(logits, gap=pack_gap)
+        return rf.ctc_loss(
+            logits=logits,
+            targets=targets,
+            input_spatial_dim=time_dim,
+            targets_spatial_dim=tgt_time,
+            blank_index=blank_index,
+        )
+
+    leaf_ref = logits_raw.clone().requires_grad_(True)
+    loss_ref = _loss(leaf_ref)  # padded: torch F.ctc_loss
+    rf.reduce_sum(loss_ref, axis=batch_dim).raw_tensor.backward()
+
+    warned_before = set(packed._warned_fallback_ops)
+    packed._warned_fallback_ops.clear()
+    leaf_p = logits_raw.clone().requires_grad_(True)
+    loss_p = _loss(leaf_p, pack_gap=0)
+    assert "ctc_loss" not in packed._warned_fallback_ops  # must have taken the native packed path
+    packed._warned_fallback_ops.update(warned_before)
+    assert not packed.is_packed(loss_p) and loss_p.dims == (batch_dim,)
+    rf.reduce_sum(loss_p, axis=batch_dim).raw_tensor.backward()
+
+    numpy.testing.assert_allclose(
+        loss_p.raw_tensor.detach().numpy(), loss_ref.raw_tensor.detach().numpy(), rtol=1e-4, atol=1e-5
+    )
+    mask = rf.sequence_mask([batch_dim, time_dim]).copy_compatible_to_dims([batch_dim, time_dim]).raw_tensor.numpy()
+    numpy.testing.assert_allclose(leaf_p.grad.numpy()[mask], leaf_ref.grad.numpy()[mask], rtol=1e-4, atol=1e-5)
+
+    # gapped input: re-layouted to dense internally, the loss must be the same
+    loss_g = _loss(logits_raw.clone(), pack_gap=3)
+    numpy.testing.assert_allclose(
+        loss_g.raw_tensor.detach().numpy(), loss_ref.raw_tensor.detach().numpy(), rtol=1e-4, atol=1e-5
+    )
 
 
 if __name__ == "__main__":

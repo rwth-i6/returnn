@@ -15,6 +15,8 @@ from returnn.torch.util.native_op import (
     fast_baum_welch,
     fast_viterbi,
     get_ctc_fsa_fast_bw,
+    ctc_loss,
+    ctc_loss_packed,
     edit_distance,
     optimal_completion_edit_distance,
     optimal_completion_edit_distance_per_successor,
@@ -298,6 +300,52 @@ def check_ctc_fsa(targets, target_seq_lens, n_classes, with_native_fsa=False, la
             numpy.testing.assert_almost_equal(fwdbwd[t, b], ref_fwdbwd[t, b], decimal=5)
     for b in range(n_batch):
         numpy.testing.assert_almost_equal(obs_scores[0, b], ref_obs_score[b], decimal=5)
+
+
+def test_ctc_loss_grad_padded_vs_packed():
+    """
+    Backward through both the padded :func:`ctc_loss` and :func:`ctc_loss_packed` wrappers:
+    losses and logits grads must match between the two
+    (both go through the same fwd-bwd math, just different layouts).
+    Note that the forward of the padded wrapper is validated against the reference CTC
+    in :func:`test_fast_bw_uniform`; here we cover the autograd wrappers.
+    """
+    torch.manual_seed(7)
+    lens = [9, 7, 4]
+    tgt_lens = [4, 3, 2]
+    n_batch, n_time, dim = len(lens), max(lens), 6
+    blank = 5
+    logits_padded = torch.randn(n_batch, n_time, dim)
+    targets = torch.randint(0, 5, (n_batch, max(tgt_lens)), dtype=torch.int32)
+    lens_t = torch.tensor(lens, dtype=torch.int32)
+    tgt_lens_t = torch.tensor(tgt_lens, dtype=torch.int32)
+
+    leaf_pad = logits_padded.clone().requires_grad_(True)
+    loss_pad = ctc_loss(
+        logits=leaf_pad, logits_seq_lens=lens_t, targets=targets, targets_seq_lens=tgt_lens_t, blank_index=blank
+    )
+    loss_pad.sum().backward()
+
+    leaf_packed = logits_padded.clone().requires_grad_(True)
+    flat = torch.cat([leaf_packed[b, : lens[b]] for b in range(n_batch)], dim=0)  # (total, dim)
+    starts = torch.tensor([0, lens[0], lens[0] + lens[1]], dtype=torch.int32)
+    loss_packed = ctc_loss_packed(
+        logits=flat,
+        seq_starts=starts,
+        logits_seq_lens=lens_t,
+        max_seq_len=n_time,
+        targets=targets,
+        targets_seq_lens=tgt_lens_t,
+        blank_index=blank,
+    )
+    loss_packed.sum().backward()
+
+    assert_allclose(loss_packed.detach().numpy(), loss_pad.detach().numpy(), rtol=1e-5, atol=1e-6)
+    mask = torch.arange(n_time)[None, :] < lens_t[:, None]
+    assert_allclose(leaf_packed.grad[mask].numpy(), leaf_pad.grad[mask].numpy(), rtol=1e-5, atol=1e-6)
+    # the packed path never even sees the padded frames; the padded path must zero them
+    assert leaf_pad.grad[~mask].abs().max().item() == 0.0
+    assert leaf_packed.grad[~mask].abs().max().item() == 0.0
 
 
 def test_ctc_fsa_batch3_len6_c8():

@@ -866,6 +866,7 @@ def _harmonize_qkv_dtypes(q_t, k_t, v_t):
 
     if q_t.dtype == k_t.dtype == v_t.dtype:
         return q_t, k_t, v_t
+    # noinspection PyArgumentList
     if hasattr(torch, "get_autocast_dtype") and torch.is_autocast_enabled(q_t.device.type):  # torch >= 2.4
         dtype = torch.get_autocast_dtype(q_t.device.type)
     else:
@@ -1089,6 +1090,7 @@ def _sdpa_varlen_attention(
         # Preferred: the flash varlen kernels directly (see _get_flash_varlen_fn):
         # fast flash backward, native dropout, no NJT subclass overhead.
         q_f, k_f, v_f = q_t, k_t, v_t
+        # noinspection PyArgumentList
         if (
             q_f.device.type == "cuda"
             and q_f.dtype not in (torch.float16, torch.bfloat16)
@@ -1112,6 +1114,7 @@ def _sdpa_varlen_attention(
                 k_f = k_f if k_f.stride(-1) == 1 else k_f.contiguous()
                 v_f = v_f if v_f.stride(-1) == 1 else v_f.contiguous()
                 try:
+                    # noinspection PyArgumentList
                     out_t = _get_flash_varlen_fn()(
                         q_f, k_f, v_f, cu_q[1], cu_k[1], max_q, max_k, dropout_p, is_causal, scale_
                     )
@@ -2480,6 +2483,83 @@ class PackedBackend(Backend[PackedRawTensor]):
         _warn_fallback_once("reduce", f"partial reduce over packed dims (axis {axes}, mode {mode})")
         return _repack_result(rf.reduce(unpack(source), mode=mode, axis=axes, use_mask=use_mask), raw)
 
+    @staticmethod
+    def ctc_loss(
+        *,
+        logits: Tensor,
+        logits_normalized: bool = False,
+        targets: Tensor,
+        input_spatial_dim: Dim,
+        targets_spatial_dim: Dim,
+        blank_index: int,
+        max_approx: bool = False,
+        use_native_op: Optional[bool] = None,
+        label_loop: bool = True,
+    ) -> Tensor:
+        """
+        CTC loss on packed logits, via the packed native fast-baum-welch op
+        (see :class:`returnn.native_op.FastBaumWelchPackedOp`):
+        the (total, vocab) log-probs buffer is used as-is, no padded intermediate.
+        Falls back to the generic (unpack) handling if not applicable.
+        """
+        targets_ = unpack(targets) if is_packed(targets) else targets
+        raw = logits.raw_tensor if is_packed(logits) else None
+        if (
+            raw is not None
+            and raw.inner_backend.name == "torch"
+            and not max_approx
+            and use_native_op is not False
+            and len(raw.orig_dims) == 2
+            and raw.orig_dims[-1] == input_spatial_dim
+            and logits.feature_dim is not None
+            and set(raw.inner.dims) == {raw.packed_dim, logits.feature_dim}
+            and targets_.dims_set == {raw.orig_dims[0], targets_spatial_dim}
+        ):
+            import torch
+            from returnn.torch.util import native_op as torch_native_op
+
+            if raw.gap or raw.align > 1:
+                logits = regap(logits, 0, align=1)
+                raw = logits.raw_tensor
+            batch_dim = raw.orig_dims[0]
+            logits_t = raw.inner.copy_transpose([raw.packed_dim, logits.feature_dim]).raw_tensor
+            if logits_t.dtype != torch.float32:
+                logits_t = logits_t.to(torch.float32)  # the native op is float32-only
+            device = logits_t.device
+            seq_starts = raw.cu_seqlens(device=logits.device)[0].raw_tensor[:-1]
+            in_lens = input_spatial_dim.dyn_size_ext.copy_compatible_to_dims_raw([batch_dim]).to(device)
+            targets_raw = targets_.copy_compatible_to_dims_raw([batch_dim, targets_spatial_dim]).to(device)
+            tgt_lens = targets_spatial_dim.dyn_size_ext.copy_compatible_to_dims_raw([batch_dim]).to(device)
+            loss_raw = torch_native_op.ctc_loss_packed(
+                logits=logits_t,
+                seq_starts=seq_starts,
+                logits_seq_lens=in_lens,
+                max_seq_len=int(input_spatial_dim.get_dim_value()),
+                targets=targets_raw,
+                targets_seq_lens=tgt_lens,
+                label_loop=label_loop,
+                logits_normalize=not logits_normalized,
+                blank_index=blank_index,
+            )
+            loss = Tensor("ctc_loss", dims=[batch_dim], dtype="float32")
+            loss.raw_tensor = loss_raw
+            return loss
+        return _dim_aware_call(
+            "ctc_loss",
+            (),
+            dict(
+                logits=logits,
+                logits_normalized=logits_normalized,
+                targets=targets,
+                input_spatial_dim=input_spatial_dim,
+                targets_spatial_dim=targets_spatial_dim,
+                blank_index=blank_index,
+                max_approx=max_approx,
+                use_native_op=use_native_op,
+                label_loop=label_loop,
+            ),
+        )
+
 
 # All other structural ops go through the generic dim-aware wrapper:
 # packed data directly if the call does not reference the packed dims, otherwise unpack fallback.
@@ -2487,7 +2567,6 @@ for _name in [
     "batch_norm",
     "compare",
     "concat",
-    "ctc_loss",
     "cumsum",
     "expand_dim",
     "flip_no_mask",
@@ -2614,7 +2693,10 @@ def regap(source: Tensor, gap: int, *, align: Optional[int] = None) -> Tensor:
     if raw.inner.feature_dim is not None and inner_new.feature_dim is None:
         inner_new.feature_dim = raw.inner.feature_dim
     helper = PackedRawTensor(inner=inner_new, packed_dim=new_dim, orig_dims=raw.orig_dims, gap=gap, align=align)
-    return helper.rewrap(inner_new, name="regap")
+    out = helper.rewrap(inner_new, name="regap")
+    if source.feature_dim is not None and out.feature_dim is None:
+        out.feature_dim = source.feature_dim
+    return out
 
 
 def unpack(source: Tensor) -> Tensor:

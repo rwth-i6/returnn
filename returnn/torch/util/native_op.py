@@ -564,7 +564,7 @@ class _FastBaumWelchScoresAutogradFunc(torch.autograd.Function):
             grad_x = torch.exp(log_sm) - bw  # (time,batch,dim)
         else:
             grad_x = -bw  # (time,batch,dim)
-        grad_x = torch.where(seq_mask[:, None, :], grad_x, 0.0)
+        grad_x = torch.where(seq_mask[:, :, None], grad_x, 0.0)  # (time,batch,dim)
         grad_x *= grad_output[None, :, None]
         return grad_x, None, None, None, None, None, None, None
 
@@ -644,6 +644,157 @@ def make_fast_baum_welch_op(**kwargs):
     :rtype: (torch.Tensor) -> tuple[torch.Tensor]
     """
     maker = OpMaker(OpDescription.from_gen_base(native_op.FastBaumWelchOp), **kwargs)
+    return maker.make_op()
+
+
+def ctc_loss_packed(
+    *,
+    logits: torch.Tensor,
+    seq_starts: torch.Tensor,
+    logits_seq_lens: torch.Tensor,
+    max_seq_len: Optional[int] = None,
+    targets: torch.Tensor,
+    targets_seq_lens: torch.Tensor,
+    label_loop: bool = True,
+    logits_normalize: bool = True,
+    blank_index: int = -1,
+) -> torch.Tensor:
+    """
+    Packed variant of :func:`ctc_loss`:
+    the logits come as one flat buffer over all sequences, no padding
+    (like the flash-attention varlen layout).
+    The peak memory advantage over :func:`ctc_loss` follows the padding ratio
+    (the biggest buffers are the (frames,dim) logits / log-probs / fwdbwd).
+    Assumes the dense layout: total_time == sum of the seq lens,
+    seq b occupying [seq_starts[b], seq_starts[b] + logits_seq_lens[b]).
+
+    :param logits: (total_time, dim), the seqs concatenated along time. unnormalized (before softmax)
+    :param seq_starts: (batch,), int32. start offset of each seq in the total_time axis
+    :param logits_seq_lens: shape (batch,) of int32|int64
+    :param max_seq_len: max of logits_seq_lens. pass it if known, to avoid a device sync
+    :param targets: batch-major, [batch,time]
+    :param targets_seq_lens: (batch,)
+    :param label_loop: (ctc_merge_repeated in tf.nn.ctc_loss)
+    :param logits_normalize: apply log_softmax on logits (default)
+    :param blank_index: vocab index of the blank symbol
+    :return: loss, shape (batch,)
+    """
+    from .array_ import sequence_mask_time_major
+
+    assert logits.ndim == 2
+    dim = logits.shape[-1]
+    if blank_index < 0:
+        blank_index += dim
+    assert 0 <= blank_index < dim
+    edges, weights, start_end_states = get_ctc_fsa_fast_bw(
+        targets=targets, seq_lens=targets_seq_lens, blank_idx=blank_index, label_loop=label_loop
+    )
+    seq_mask = sequence_mask_time_major(logits_seq_lens, maxlen=max_seq_len)  # (time,batch), bool
+    loss = _FastBaumWelchScoresPackedAutogradFunc.apply(
+        logits, logits_normalize, seq_starts, seq_mask, edges, weights, start_end_states
+    )
+    return loss
+
+
+# noinspection PyMethodOverriding,PyAbstractClass,PyMissingOrEmptyDocstring
+class _FastBaumWelchScoresPackedAutogradFunc(torch.autograd.Function):
+    @staticmethod
+    def forward(
+        ctx,
+        logits: torch.Tensor,
+        logits_normalize: bool,
+        seq_starts: torch.Tensor,
+        seq_mask: torch.Tensor,
+        edges: torch.Tensor,
+        weights: torch.Tensor,
+        start_end_states: torch.Tensor,
+        state_buffer: Optional[torch.Tensor] = None,
+    ) -> torch.Tensor:
+        if logits_normalize:
+            log_sm = torch.log_softmax(logits, dim=-1)  # (total_time,dim)
+        else:
+            log_sm = logits
+        fwdbwd, obs_scores = fast_baum_welch_packed(
+            am_scores=-log_sm,
+            seq_starts=seq_starts,
+            seq_mask=seq_mask,
+            edges=edges,
+            weights=weights,
+            start_end_states=start_end_states,
+            state_buffer=state_buffer,
+        )
+        loss = obs_scores[0]  # (batch,)
+        # seq membership of every frame in the packed buffer, to scale by the incoming per-seq grad
+        # (this relies on the dense layout, see :func:`ctc_loss_packed`)
+        seq_lens = seq_mask.to(torch.int64).sum(dim=0).to(logits.device)  # (batch,)
+        seq_idxs = torch.repeat_interleave(
+            torch.arange(seq_lens.shape[0], device=logits.device), seq_lens
+        )  # (total_time,)
+        ctx.grad_wrt_softmax_in = logits_normalize
+        if logits_normalize:
+            ctx.save_for_backward(log_sm, seq_idxs, fwdbwd)
+        else:
+            ctx.save_for_backward(seq_idxs, fwdbwd)
+        return loss
+
+    @staticmethod
+    def backward(ctx, grad_output: torch.Tensor) -> Tuple[Optional[torch.Tensor], ...]:
+        if ctx.grad_wrt_softmax_in:
+            log_sm, seq_idxs, fwdbwd = ctx.saved_tensors
+        else:
+            log_sm = None
+            seq_idxs, fwdbwd = ctx.saved_tensors
+        bw = torch.exp(-fwdbwd)  # (total_time,dim)
+        if ctx.grad_wrt_softmax_in:
+            grad_x = torch.exp(log_sm) - bw  # (total_time,dim)
+        else:
+            grad_x = -bw  # (total_time,dim)
+        grad_x *= grad_output[seq_idxs][:, None]
+        return grad_x, None, None, None, None, None, None, None
+
+
+def fast_baum_welch_packed(
+    *,
+    am_scores: torch.Tensor,
+    seq_starts: torch.Tensor,
+    seq_mask: torch.Tensor,
+    edges: torch.Tensor,
+    weights: torch.Tensor,
+    start_end_states: torch.Tensor,
+    state_buffer: Optional[torch.Tensor] = None,
+) -> Tuple[torch.Tensor, torch.Tensor]:
+    """
+    Packed variant of :func:`fast_baum_welch`, see :class:`NativeOp.FastBaumWelchPackedOp`.
+
+    :param am_scores: (total_time, dim), in -log space. the seqs concatenated along time
+    :param seq_starts: (batch,), int32. start offset of each seq in the total_time axis
+    :param seq_mask: (max_time, batch) -> 0 or 1 (index mask, via seq lens)
+    :param edges: (4,num_edges), edges of the graph (from,to,emission_idx,sequence_idx)
+    :param weights: (num_edges,), weights of the edges
+    :param start_end_states: (2, batch), (start,end) state idx in automaton.
+        there is only one single automaton.
+    :param state_buffer: (2, num_states)
+    :return: (fwdbwd, obs_scores), fwdbwd is (total_time, dim), obs_scores is (max_time, batch), in -log space
+    """
+    from .assert_ import assert_
+
+    op = make_fast_baum_welch_packed_op()
+    float_idx = seq_mask.float()
+    if state_buffer is None:
+        last_state_idx = start_end_states[1].max()  # see get_automata_for_batch
+        assert_(last_state_idx >= 0, "fast_baum_welch_packed last_state_idx must be >= 0")
+        state_buffer = torch.zeros((2, last_state_idx + 1), device=am_scores.device)
+    seq_starts = seq_starts.to(torch.int32)
+    fwdbwd, obs_scores = op(am_scores, edges, weights, start_end_states, float_idx, seq_starts, state_buffer)  # noqa
+    return fwdbwd, obs_scores
+
+
+def make_fast_baum_welch_packed_op(**kwargs):
+    """
+    :return: op
+    :rtype: (torch.Tensor) -> tuple[torch.Tensor]
+    """
+    maker = OpMaker(OpDescription.from_gen_base(native_op.FastBaumWelchPackedOp), **kwargs)
     return maker.make_op()
 
 

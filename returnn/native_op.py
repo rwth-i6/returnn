@@ -3617,6 +3617,284 @@ class FastBaumWelchOp(NativeOpGenBase):
     c_bw_code = None
 
 
+class FastBaumWelchPackedOp(NativeOpGenBase):
+    # noinspection PyUnresolvedReferences
+    """
+    Packed variant of :class:`FastBaumWelchOp`:
+    the am scores come as one flat buffer over all sequences (no padding),
+    with per-sequence start offsets, like the flash-attention varlen layout.
+
+    inputs:
+      :param am_scores: scores in -log space. 2d (total_time,dim), the seqs concatenated along time
+      :param edges: edges of the graph (from,to,emission_idx,sequence_idx)
+      :param weights: weights of the edges
+      :param start_end_states: (2, batch), (start,end) state idx in the automaton
+      :param index: (max_time, batch) -> 0 or 1 (index mask, via seq lens).
+        also provides max_time (the fwd/bwd recursion length),
+        which cannot be derived from the packed am_scores shape
+      :param seq_starts: (batch,), int32. start offset of each seq in the total_time axis
+      :param state_buffer: (2, num_states)
+    outputs:
+      :param output: Baum-Welch alignment, scores in -log space. 2d (total_time,dim), like am_scores
+      :param sums: (max_time, batch), the frame-wise normalization sums (obs scores)
+    """
+
+    in_info = (
+        {
+            "name": "am_scores",
+            "ndim": 2,
+            "shape": (None, None),
+            "need_contiguous": True,
+            "gradient": "disconnected",
+        },
+        {
+            "name": "edges",
+            "ndim": 2,
+            "shape": (None, None),
+            "dtype": "int32",
+            "need_contiguous": True,
+            "gradient": "disconnected",
+        },
+        {"name": "weights", "ndim": 1, "shape": (None,), "need_contiguous": True, "gradient": "disconnected"},
+        {
+            "name": "start_end_states",
+            "ndim": 2,
+            "shape": (2, None),
+            "dtype": "int32",
+            "need_contiguous": True,
+            "gradient": "disconnected",
+        },
+        {"name": "index", "ndim": 2, "shape": (None, None), "need_contiguous": True, "gradient": "disconnected"},
+        {
+            "name": "seq_starts",
+            "ndim": 1,
+            "shape": (None,),
+            "dtype": "int32",
+            "need_contiguous": True,
+            "gradient": "disconnected",
+        },
+        {"name": "state_buffer", "ndim": 2, "shape": (2, None), "need_contiguous": True, "gradient": "disconnected"},
+    )
+    out_info = (
+        {"name": "output", "ndim": 2, "shape": ((0, 0), (0, 1)), "need_contiguous": True},
+        {"name": "sums", "ndim": 2, "shape": ((4, 0), (4, 1)), "need_contiguous": True},
+    )
+
+    c_extra_support_code = copy.copy(common_fast_bw_kernels)
+    c_extra_support_code.update(
+        {
+            "100_init_bwd_state_buffer": FastBaumWelchOp.c_extra_support_code["100_init_bwd_state_buffer"],
+            "102_normalize": FastBaumWelchOp.c_extra_support_code["102_normalize"],
+            "101_next_frame_packed": """
+      DEF_KERNEL
+      void next_frame_packed(bool fwd, unsigned t, unsigned num_edges, unsigned num_emissions,
+                      unsigned* seq_starts, float* index, unsigned index_stride,
+                      unsigned* sequence_idxs, unsigned* from_buffer, unsigned* to_buffer, float* weight_buffer,
+                      unsigned* emission_idxs,
+                      float* prev_frame, float* next_frame, float* am_scores, float* edge_buffer) {
+        unsigned idx = blockIdx.x * blockDim.x + threadIdx.x;
+        if (idx >= num_edges) {
+          return;
+        }
+
+        unsigned sequence_idx = sequence_idxs[idx];
+        if (index[t * index_stride + sequence_idx] == 0.0) {
+          // the sequence has ended: unlike the padded layout, the packed buffer has no frames here
+          edge_buffer[idx] = INF_F;
+          return;
+        }
+
+        unsigned from     = from_buffer  [idx];
+        float    prev_val = prev_frame[from];
+        if (isinf(prev_val)) {
+          edge_buffer[idx] = INF_F;
+          return;
+        }
+
+        unsigned to           = to_buffer    [idx];
+        unsigned emission_idx = emission_idxs[idx];
+        float    edge_weight  = weight_buffer[idx];
+
+        float val = prev_val + edge_weight
+                    + am_scores[(seq_starts[sequence_idx] + t) * num_emissions + emission_idx];
+
+        if (fwd) {
+          edge_buffer[idx] += val;
+        }
+        else {
+          edge_buffer[idx] += prev_val;
+        }
+        atomic_prob_add(next_frame + to, val);
+      }
+    """,
+            "103_compute_result_packed": """
+      DEF_KERNEL
+      void compute_result_packed(float* edge_buffer, float* out, unsigned* emission_idxs, unsigned* sequence_idxs,
+                          unsigned* seq_starts, unsigned num_emissions,
+                          unsigned num_frames, unsigned num_edges) {
+        unsigned idx = blockIdx.x * blockDim.x + threadIdx.x;
+        if (idx >= num_frames * num_edges) {
+          return;
+        }
+
+        unsigned e_idx = idx % num_edges;
+        unsigned frame = idx / num_edges;
+        float    score = edge_buffer[idx];
+        if (isinf(score) || isnan(score)) {
+          // Masked frame or unreachable edge: nothing to add,
+          // and the packed out buffer has no slot for masked frames.
+          // (Masked edges are inf, or nan after normalize subtracted the empty-frame inf sum.)
+          return;
+        }
+        unsigned emission_idx = emission_idxs[e_idx];
+        unsigned seq_idx      = sequence_idxs[e_idx];
+
+        atomic_prob_add(out + (seq_starts[seq_idx] + frame) * num_emissions + emission_idx, score);
+      }
+    """,
+        }
+    )
+
+    # language=C++
+    c_fw_code = """
+    // am_scores, edges, weights, start_end_states, index, seq_starts, state_buffer* = input_names (*: inplace)
+    // output, sums = output_names
+    assert(n_inputs  == 7);
+    assert(n_outputs == 2);
+    Ndarray* am_scores        = inputs[0];
+    Ndarray* edges            = inputs[1];
+    Ndarray* weights          = inputs[2];
+    Ndarray* start_end_states = inputs[3];
+    Ndarray* index            = inputs[4];
+    Ndarray* seq_starts       = inputs[5];
+    Ndarray* state_buffer     = inputs[6];
+    Ndarray* out              = *outputs[0];
+    Ndarray* sum_output       = *outputs[1];
+
+    assert_cmp(Ndarray_DIMS(am_scores)[0], ==, Ndarray_DIMS(out)[0]);
+    assert_cmp(Ndarray_DIMS(am_scores)[1], ==, Ndarray_DIMS(out)[1]);
+    assert_cmp(Ndarray_DIMS(index)[1], ==, Ndarray_DIMS(start_end_states)[1]);
+    assert_cmp(Ndarray_DIMS(index)[1], ==, Ndarray_DIMS(seq_starts)[0]);
+    assert_cmp(Ndarray_DIMS(sum_output)[0], ==, Ndarray_DIMS(index)[0]);
+    assert_cmp(Ndarray_DIMS(sum_output)[1], ==, Ndarray_DIMS(index)[1]);
+
+    unsigned* d_from = reinterpret_cast<unsigned*>(Ndarray_DEV_DATA_int32(edges)
+      + 0 * Ndarray_STRIDE(edges, 0));
+    unsigned* d_to = reinterpret_cast<unsigned*>(Ndarray_DEV_DATA_int32(edges)
+      + 1 * Ndarray_STRIDE(edges, 0));
+    unsigned* d_emission_idxs = reinterpret_cast<unsigned*>(Ndarray_DEV_DATA_int32(edges)
+      + 2 * Ndarray_STRIDE(edges, 0));
+    unsigned* d_sequence_idxs = reinterpret_cast<unsigned*>(Ndarray_DEV_DATA_int32(edges)
+      + 3 * Ndarray_STRIDE(edges, 0));
+    float*    d_weights = Ndarray_DEV_DATA(weights);
+    float*    d_am_scores = Ndarray_DEV_DATA(am_scores);
+    unsigned* d_start_states = reinterpret_cast<unsigned*>(Ndarray_DEV_DATA_int32(start_end_states)
+      + 0 * Ndarray_STRIDE(start_end_states, 0));
+    unsigned* d_end_states = reinterpret_cast<unsigned*>(Ndarray_DEV_DATA_int32(start_end_states)
+      + 1 * Ndarray_STRIDE(start_end_states, 0));
+    float*    d_index             = Ndarray_DEV_DATA(index);
+    unsigned* d_seq_starts        = reinterpret_cast<unsigned*>(Ndarray_DEV_DATA_int32(seq_starts));
+    float*    d_state_buffer_prev = Ndarray_DEV_DATA(state_buffer) + 0 * Ndarray_STRIDE(state_buffer, 0);
+    float*    d_state_buffer_next = Ndarray_DEV_DATA(state_buffer) + 1 * Ndarray_STRIDE(state_buffer, 0);
+    float*    d_out               = Ndarray_DEV_DATA(out);
+    float*    d_sum_output        = Ndarray_DEV_DATA(sum_output);
+
+    unsigned n_frames    = Ndarray_DIMS(index)[0];
+    unsigned n_seqs      = Ndarray_DIMS(index)[1];
+    unsigned n_total     = Ndarray_DIMS(am_scores)[0];
+    unsigned n_emissions = Ndarray_DIMS(am_scores)[1];
+    unsigned n_states    = Ndarray_DIMS(state_buffer)[1];
+    unsigned n_edges     = Ndarray_DIMS(edges)[1];
+    unsigned n_threads   = 1024u;
+    unsigned n_blocks    = (n_edges + n_threads - 1) / n_threads;
+
+    unsigned index_stride = Ndarray_STRIDE(index, 0);
+
+    assert_cmp(n_frames, >, 0);
+    assert_cmp(n_states, >, 0);
+
+    // initialize edge buffer
+    float* d_edge_buffer = reinterpret_cast<float*>(device_malloc(n_edges * n_frames * sizeof(float)));
+    if(!d_edge_buffer) { HANDLE_LAST_ERROR(); abort(); }  // error should have been set in device_malloc
+    unsigned n_fill_blocks = (n_edges * n_frames + n_threads - 1u) / n_threads;
+    start_dev_kernel2(fill_array, n_fill_blocks, n_threads, 0, (d_edge_buffer, 0.0, n_edges * n_frames));
+    HANDLE_LAST_ERROR();
+
+    // initialize the state buffer
+    n_fill_blocks = (n_states + n_threads - 1u) / n_threads;
+    start_dev_kernel2(
+      fill_array, n_fill_blocks, n_threads, 0,
+      (d_state_buffer_prev, std::numeric_limits<float>::infinity(), n_states));
+    HANDLE_LAST_ERROR();
+    start_dev_kernel2(set_start_states, 1, n_seqs, 0, (d_state_buffer_prev, d_start_states));
+    HANDLE_LAST_ERROR();
+
+    // fwd pass
+    for (unsigned t = 0u; t < n_frames; t++) {
+      start_dev_kernel2(
+        fill_array, n_fill_blocks, n_threads, 0,
+        (d_state_buffer_next, std::numeric_limits<float>::infinity(), n_states));
+      HANDLE_LAST_ERROR();
+      start_dev_kernel2(next_frame_packed, n_blocks, n_threads, 0,
+        (true, t, n_edges, n_emissions, d_seq_starts, d_index, index_stride,
+         d_sequence_idxs, d_from, d_to, d_weights, d_emission_idxs,
+         d_state_buffer_prev, d_state_buffer_next, d_am_scores, d_edge_buffer + t * n_edges));
+      HANDLE_LAST_ERROR();
+      std::swap(d_state_buffer_prev, d_state_buffer_next);
+    }
+
+    // bwd pass
+    start_dev_kernel2(
+      fill_array, n_fill_blocks, n_threads, 0,
+      (d_state_buffer_prev, std::numeric_limits<float>::infinity(), n_states));
+    HANDLE_LAST_ERROR();
+    for (unsigned t = n_frames; t > 0; t--) {
+      start_dev_kernel2(init_bwd_state_buffer, 1, n_seqs, 0,
+        (d_state_buffer_prev, d_end_states, t - 1, n_frames - 1, d_index, index_stride));
+      HANDLE_LAST_ERROR();
+      start_dev_kernel2(
+        fill_array, n_fill_blocks, n_threads, 0,
+        (d_state_buffer_next, std::numeric_limits<float>::infinity(), n_states));
+      HANDLE_LAST_ERROR();
+      start_dev_kernel2(next_frame_packed, n_blocks, n_threads, 0,
+        (false, t - 1, n_edges, n_emissions, d_seq_starts, d_index, index_stride,
+         d_sequence_idxs, d_to, d_from, d_weights, d_emission_idxs,
+         d_state_buffer_prev, d_state_buffer_next, d_am_scores, d_edge_buffer + (t - 1) * n_edges));
+      HANDLE_LAST_ERROR();
+      std::swap(d_state_buffer_prev, d_state_buffer_next);
+    }
+
+    // normalize at each time frame
+    start_dev_kernel2(normalize, n_frames, 1, n_seqs * sizeof(float),
+      (d_edge_buffer, d_sequence_idxs, n_edges, n_seqs, d_sum_output));
+    HANDLE_LAST_ERROR();
+
+    n_fill_blocks = (n_total * n_emissions + n_threads - 1u) / n_threads;
+    start_dev_kernel2(
+      fill_array, n_fill_blocks, n_threads, 0,
+      (d_out, std::numeric_limits<float>::infinity(), n_total * n_emissions));
+    HANDLE_LAST_ERROR();
+
+    n_blocks = (n_frames * n_edges + n_threads - 1u) / n_threads;
+    start_dev_kernel2(compute_result_packed, n_blocks, n_threads, 0,
+      (d_edge_buffer, d_out, d_emission_idxs, d_sequence_idxs,
+       d_seq_starts, n_emissions, n_frames, n_edges));
+    HANDLE_LAST_ERROR();
+
+    #if TENSORFLOW
+    // Certain TensorFlow code doesn't like inf, even if it is just the CheckNumerics,
+    // which is helpful for debugging.
+    // We replace it by a very high number, so that tf.exp(-out) will still result in 0.0.
+    n_blocks = (n_total * n_emissions + n_threads - 1u) / n_threads;
+    start_dev_kernel2(remove_inf, n_blocks, n_threads, 0, (d_out, n_total * n_emissions));
+    #endif
+
+    device_free(d_edge_buffer);
+  """
+
+    c_bw_code = None
+
+
 class MultiEndFastBaumWelchOp(NativeOpGenBase):
     # noinspection PyUnresolvedReferences
     """
