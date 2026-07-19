@@ -874,9 +874,19 @@ def _njt_sdpa_raw(q_t, k_t, v_t, cu_q, cu_k, dropout_p: float, is_causal: bool, 
     q_n = torch.nested.nested_tensor_from_jagged(q_t, offsets=cu_q).transpose(1, 2)
     k_n = torch.nested.nested_tensor_from_jagged(k_t, offsets=cu_k).transpose(1, 2)
     v_n = torch.nested.nested_tensor_from_jagged(v_t, offsets=cu_k).transpose(1, 2)
-    out_n = torch.nn.functional.scaled_dot_product_attention(
-        q_n, k_n, v_n, dropout_p=dropout_p, is_causal=is_causal, scale=scale
-    )
+    # Restrict to the fused kernels (flash / mem-efficient / cudnn), exclude MATH:
+    # F.sdpa would otherwise silently fall back to the unfused math path
+    # (materialized energies) in unsupported cases; with the restriction it raises,
+    # our caller warns visibly and uses the generic packed path instead.
+    from torch.nn.attention import sdpa_kernel, SDPBackend
+
+    backends = [SDPBackend.FLASH_ATTENTION, SDPBackend.EFFICIENT_ATTENTION]
+    if hasattr(SDPBackend, "CUDNN_ATTENTION"):
+        backends.append(SDPBackend.CUDNN_ATTENTION)
+    with sdpa_kernel(backends):
+        out_n = torch.nn.functional.scaled_dot_product_attention(
+            q_n, k_n, v_n, dropout_p=dropout_p, is_causal=is_causal, scale=scale
+        )
     return out_n.transpose(1, 2).values()
 
 
