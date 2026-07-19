@@ -854,6 +854,25 @@ def _sdpa_no(reason: str):
     return None
 
 
+def _harmonize_qkv_dtypes(q_t, k_t, v_t):
+    """
+    Mixed q/k/v dtypes occur under autocast:
+    e.g. value in bf16 straight from an autocast matmul,
+    while query/key got promoted back to f32 (e.g. by the rotary sin/cos terms).
+    F.scaled_dot_product_attention would cast all inputs under autocast,
+    but the direct flex/flash/NJT calls validate equal dtypes, so do the same cast here.
+    """
+    import torch
+
+    if q_t.dtype == k_t.dtype == v_t.dtype:
+        return q_t, k_t, v_t
+    if hasattr(torch, "get_autocast_dtype") and torch.is_autocast_enabled(q_t.device.type):  # torch >= 2.4
+        dtype = torch.get_autocast_dtype(q_t.device.type)
+    else:
+        dtype = torch.promote_types(torch.promote_types(q_t.dtype, k_t.dtype), v_t.dtype)
+    return q_t.to(dtype), k_t.to(dtype), v_t.to(dtype)
+
+
 def _njt_sdpa_raw(q_t, k_t, v_t, cu_q, cu_k, dropout_p: float, is_causal: bool, scale: float):
     """
     torch SDPA over nested (jagged) tensors built from the packed values + offsets.
@@ -916,12 +935,14 @@ def _get_flash_varlen_fn():
         return _flash_varlen_fn
     import torch
 
+    # noinspection PyAbstractClass
     class _FlashVarlenAttention(torch.autograd.Function):
         """flash varlen attention, see :func:`_get_flash_varlen_fn`"""
 
         @staticmethod
         def forward(ctx, q, k, v, cu_q, cu_k, max_q, max_k, dropout_p, is_causal, scale):
             """forward"""
+            # noinspection PyProtectedMember
             out, lse, rng0, rng1, _ = torch.ops.aten._flash_attention_forward(
                 q, k, v, cu_q, cu_k, max_q, max_k, dropout_p, is_causal, False, scale=scale
             )
@@ -930,10 +951,12 @@ def _get_flash_varlen_fn():
             ctx.dropout_p, ctx.is_causal, ctx.scale = dropout_p, is_causal, scale
             return out
 
+        # noinspection PyMethodOverriding
         @staticmethod
         def backward(ctx, grad_out):
             """backward"""
             q, k, v, out, lse, cu_q, cu_k, rng0, rng1 = ctx.saved_tensors
+            # noinspection PyProtectedMember
             gq, gk, gv = torch.ops.aten._flash_attention_backward(
                 grad_out.contiguous(),
                 q,
@@ -1048,6 +1071,7 @@ def _sdpa_varlen_attention(
         q_t = q_inner.copy_transpose([q_raw.packed_dim, head_dims[0], qk_feat_dim]).raw_tensor
         k_t = k_inner.copy_transpose([k_raw.packed_dim, head_dims[0], qk_feat_dim]).raw_tensor
         v_t = v_inner.copy_transpose([v_raw.packed_dim, head_dims[0], v_feat_dim]).raw_tensor
+        q_t, k_t, v_t = _harmonize_qkv_dtypes(q_t, k_t, v_t)
         cu_q_key = _packing_cache_key("cu", q_raw, query.device)
         cu_q = _layout_cache.get(cu_q_key)
         if cu_q is None:
@@ -1083,6 +1107,10 @@ def _sdpa_varlen_attention(
             else:
                 max_q = int(q_raw.orig_dims[-1].get_dim_value())
                 max_k = int(k_raw.orig_dims[-1].get_dim_value())
+                # flash requires a contiguous last dim (transposed views are not)
+                q_f = q_f if q_f.stride(-1) == 1 else q_f.contiguous()
+                k_f = k_f if k_f.stride(-1) == 1 else k_f.contiguous()
+                v_f = v_f if v_f.stride(-1) == 1 else v_f.contiguous()
                 try:
                     out_t = _get_flash_varlen_fn()(
                         q_f, k_f, v_f, cu_q[1], cu_k[1], max_q, max_k, dropout_p, is_causal, scale_
@@ -1313,6 +1341,7 @@ def _flex_doc_attention(
         q_t = q_inner.copy_transpose([q_raw.packed_dim, heads_dim, qk_feat_dim]).raw_tensor
         k_t = k_inner.copy_transpose([k_raw.packed_dim, heads_dim, qk_feat_dim]).raw_tensor
         v_t = v_inner.copy_transpose([v_raw.packed_dim, heads_dim, v_feat_dim]).raw_tensor
+        q_t, k_t, v_t = _harmonize_qkv_dtypes(q_t, k_t, v_t)
         q_ids = _flex_seq_ids(q_raw, query_spatial_dim, q_t.device)
         kv_ids = _flex_seq_ids(k_raw, kv_spatial_dim, q_t.device)
         if q_ids is None or kv_ids is None:
@@ -1434,6 +1463,7 @@ def _flex_rel_pos_attention(
         q_t = q_inner.copy_transpose([qu_raw.packed_dim, heads_dim, qk_feat_dim]).raw_tensor
         k_t = k_inner.copy_transpose([k_raw.packed_dim, heads_dim, qk_feat_dim]).raw_tensor
         v_t = v_inner.copy_transpose([v_raw.packed_dim, heads_dim, v_feat_dim]).raw_tensor
+        q_t, k_t, v_t = _harmonize_qkv_dtypes(q_t, k_t, v_t)
         # the (possibly gapped) layout is used as-is:
         # gap/alignment frames get seq_id -1 and are masked out, no re-layout needed
         ids = _flex_seq_ids(qu_raw, query_spatial_dim, q_t.device)
@@ -1688,7 +1718,10 @@ class PackedBackend(Backend[PackedRawTensor]):
     def activation_raw(raw_tensor: PackedRawTensor, func: str) -> PackedRawTensor:
         """elementwise -- applied directly on the packed data"""
         inner_out = raw_tensor.inner.copy_template(name=func)
-        inner_out.raw_tensor = raw_tensor.inner_backend.activation_raw(raw_tensor.inner.raw_tensor, func)
+        out_raw = raw_tensor.inner_backend.activation_raw(raw_tensor.inner.raw_tensor, func)
+        # dtype from the raw result: e.g. square (aten::pow) is on the autocast fp32 list
+        inner_out.dtype = raw_tensor.inner_backend.get_dtype_name_raw(out_raw)
+        inner_out.raw_tensor = out_raw
         return PackedRawTensor(
             inner=inner_out,
             packed_dim=raw_tensor.packed_dim,
@@ -1784,14 +1817,14 @@ class PackedBackend(Backend[PackedRawTensor]):
         dils_ = list(dilation_rate) if isinstance(dilation_rate, (list, tuple)) else [dilation_rate or 1] * n
         span = (filter_size[0].dimension - 1) * (dils_[0] or 1)  # window span beyond its start, time axis
         st = strides_[0] or 1
-        if padding == "same":
+        # padding can be a per-spatial-dim list; the time axis entry is the relevant one here
+        padding_t = padding[0] if isinstance(padding, (list, tuple)) and padding else padding
+        if padding_t == "same":
             pad_l, pad_r = span // 2, (span + 1) // 2
-        elif padding == "valid":
+        elif padding_t == "valid":
             pad_l = pad_r = 0
-        elif isinstance(padding, int):
-            pad_l = pad_r = padding
-        elif isinstance(padding, (list, tuple)) and padding and isinstance(padding[0], int):
-            pad_l = pad_r = padding[0]  # per-spatial-dim symmetric ints (e.g. from consistent-same padding)
+        elif isinstance(padding_t, int):
+            pad_l = pad_r = padding_t
         else:
             pad_l = pad_r = None  # unsupported spec
         required_gap = max(pad_l, pad_r) if pad_l is not None else None
@@ -1843,7 +1876,12 @@ class PackedBackend(Backend[PackedRawTensor]):
                 out = raw.rewrap(out_inner, name="conv")
                 return out, [time_dim] + list(out_sp[1:])
             (out_time,) = rf.make_conv_out_spatial_dims(
-                [time_dim], filter_size=filter_size[0], strides=st, dilation_rate=dils_[0] or 1, padding=padding
+                [time_dim],
+                filter_size=filter_size[0],
+                strides=st,
+                dilation_rate=dils_[0] or 1,
+                # padding can be a per-spatial-dim list; this call is over the time dim only
+                padding=padding[0] if isinstance(padding, (list, tuple)) else padding,
             )
             if st == 1:
                 # "valid"/int: seq lens and gap change by a constant, starts stay in place
@@ -2068,14 +2106,14 @@ class PackedBackend(Backend[PackedRawTensor]):
         dils_ = list(dilation_rate) if isinstance(dilation_rate, (list, tuple)) else [dilation_rate or 1] * n
         span = (pool_size[0] - 1) * (dils_[0] or 1)
         st = strides_[0] or 1
-        if padding == "same":
+        # padding can be a per-spatial-dim list; the time axis entry is the relevant one here
+        padding_t = padding[0] if isinstance(padding, (list, tuple)) and padding else padding
+        if padding_t == "same":
             pad_l, pad_r = span // 2, (span + 1) // 2
-        elif padding == "valid":
+        elif padding_t == "valid":
             pad_l = pad_r = 0
-        elif isinstance(padding, int):
-            pad_l = pad_r = padding
-        elif isinstance(padding, (list, tuple)) and padding and isinstance(padding[0], int):
-            pad_l = pad_r = padding[0]
+        elif isinstance(padding_t, int):
+            pad_l = pad_r = padding_t
         else:
             pad_l = pad_r = None
         required_gap = max(pad_l, pad_r) if pad_l is not None else None
@@ -2118,7 +2156,12 @@ class PackedBackend(Backend[PackedRawTensor]):
                 out = raw.rewrap(out_inner, name="pool")
                 return out, [time_dim] + list(out_sp[1:])
             (out_time,) = rf.make_conv_out_spatial_dims(
-                [time_dim], filter_size=pool_size[0], strides=st, dilation_rate=dils_[0] or 1, padding=padding
+                [time_dim],
+                filter_size=pool_size[0],
+                strides=st,
+                dilation_rate=dils_[0] or 1,
+                # padding can be a per-spatial-dim list; this call is over the time dim only
+                padding=padding[0] if isinstance(padding, (list, tuple)) else padding,
             )
             if st == 1:
                 helper = PackedRawTensor(
@@ -2286,11 +2329,14 @@ class PackedBackend(Backend[PackedRawTensor]):
     @staticmethod
     def matmul(a: Tensor, b: Tensor, *, reduce: Union[Dim, Sequence[Dim]], use_mask: bool = True) -> Tensor:
         """
-        matmul where a is packed (dispatch is on a).
-        Profitable case: reduce and b do not touch the packed dims
+        matmul where a (or b) is packed.
+        Profitable case: reduce and the other operand do not touch the packed dims
         (e.g. the Linear layer / vocab projection on [packed, F]) --
         then it runs directly on the packed data, saving all padding FLOPs.
         """
+        if not is_packed(a) and is_packed(b):
+            # matmul is symmetric up to the dim order, and RF dims are semantically unordered
+            a, b = b, a
         a_raw = _raw(a)
         reduce_dims = [reduce] if isinstance(reduce, Dim) else list(reduce)
         b_raw = b.raw_tensor
@@ -2315,7 +2361,10 @@ class PackedBackend(Backend[PackedRawTensor]):
         """
         raw = _raw(tensor)
         if not _dim_refs_packed(axis, raw):
-            return raw.rewrap(rf.softmax(raw.inner, axis=axis, use_mask=use_mask), name="softmax")
+            out = raw.rewrap(rf.softmax(raw.inner, axis=axis, use_mask=use_mask), name="softmax")
+            if tensor.feature_dim is not None and out.feature_dim is None and tensor.feature_dim in out.dims:
+                out.feature_dim = tensor.feature_dim  # the inner op may not have it set
+            return out
         if axis in raw.orig_dims:
             # use_mask does not matter here: packed storage has no padded frames,
             # so the segment softmax is correct either way.
@@ -2330,7 +2379,10 @@ class PackedBackend(Backend[PackedRawTensor]):
         """log_softmax, packed handling like :func:`softmax`."""
         raw = _raw(tensor)
         if not _dim_refs_packed(axis, raw):
-            return raw.rewrap(rf.log_softmax(raw.inner, axis=axis, use_mask=use_mask), name="log_softmax")
+            out = raw.rewrap(rf.log_softmax(raw.inner, axis=axis, use_mask=use_mask), name="log_softmax")
+            if tensor.feature_dim is not None and out.feature_dim is None and tensor.feature_dim in out.dims:
+                out.feature_dim = tensor.feature_dim  # the inner op may not have it set
+            return out
         if axis in raw.orig_dims:
             # use_mask does not matter here, see softmax
             out = _segment_softmax(tensor, axis=axis, log=True)
@@ -2435,6 +2487,7 @@ for _name in [
     "batch_norm",
     "compare",
     "concat",
+    "ctc_loss",
     "cumsum",
     "expand_dim",
     "flip_no_mask",

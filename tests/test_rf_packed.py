@@ -484,6 +484,150 @@ def test_rel_pos_self_attention_packed():
     _assert_equal_non_padded(out_p, out_ref, batch_dim, time_dim)
 
 
+def test_aed_aux_ctc_stripped_real_model():
+    """
+    Stripped-down version of a real AED training setup:
+    Conformer with strided subsampling (1,1)/(3,1)/(2,1) -- total time downsampling 6 --
+    relu_square FF without bias,
+    Transformer decoder with RMSNorm + rotary causal self-attention + gated FF,
+    aux CTC on the encoder output,
+    and seq lens NOT multiples of the downsampling factor (per-seq strided re-layout).
+
+    Covers the integration issues found with the real model:
+    per-spatial-dim padding lists in the strided subsampling convs,
+    ctc_loss routing (unpack fallback),
+    log_softmax feature_dim preservation (the CTC loss checks it),
+    plain-first matmul operand order,
+    and dtype handling under autocast (smoke).
+    (The CUDA flash-varlen specifics, e.g. the contiguous-last-dim guard,
+    are covered by the benchmark job's attention-path assert instead.)
+
+    The known-missing packed impls are tracked as warnings, and the exact set is asserted:
+    nothing else may fall back.
+    """
+    rf.select_backend_torch()
+    from returnn.frontend.encoder.conformer import (
+        ConformerEncoder,
+        ConformerEncoderLayer,
+        ConformerConvSubsample,
+        ConformerPositionwiseFeedForward,
+    )
+    from returnn.frontend.decoder.transformer import TransformerDecoder, FeedForwardGated
+
+    # seq lens with distinct residues mod 6 (the total downsampling): per-seq strided re-layout
+    x, batch_dim, time_dim, in_dim = _make_input(batch_size=3, seq_lens=(29, 22, 15), feat=8, seed=6)
+    vocab_dim = Dim(11, name="vocab")
+    wb_vocab_dim = Dim(12, name="vocab_wb")  # + blank
+    tgt_time = Dim(
+        Tensor("tgt_time", dims=[batch_dim], dtype="int32", raw_tensor=torch.tensor([3, 2, 2], dtype=torch.int32))
+    )
+    targets = Tensor("targets", dims=[batch_dim, tgt_time], dtype="int32", sparse_dim=vocab_dim)
+    targets.raw_tensor = torch.randint(0, 11, (3, 3), dtype=torch.int32, generator=torch.Generator().manual_seed(8))
+
+    with rf.set_default_device_ctx("cpu"):
+        rf.set_random_seed(31)
+        enc_dim = Dim(16, name="enc")
+        encoder = ConformerEncoder(
+            in_dim,
+            enc_dim,
+            ff_dim=Dim(24, name="enc-ff"),
+            input_layer=ConformerConvSubsample(
+                in_dim,
+                out_dims=[Dim(4, name="conv1"), Dim(4, name="conv2"), Dim(4, name="conv3")],
+                filter_sizes=[(3, 3), (3, 3), (3, 3)],
+                pool_sizes=[(1, 2)],
+                strides=[(1, 1), (3, 1), (2, 1)],  # total time downsampling 6
+            ),
+            encoder_layer=rf.build_dict(
+                ConformerEncoderLayer,
+                ff=rf.build_dict(
+                    ConformerPositionwiseFeedForward, activation=rf.build_dict(rf.relu_square), with_bias=False
+                ),
+                num_heads=2,
+            ),
+            num_layers=2,
+        )
+        decoder = TransformerDecoder(
+            enc_dim,
+            vocab_dim,
+            Dim(16, name="dec"),
+            num_layers=2,
+            num_heads=2,
+            norm=rf.build_dict(rf.RMSNorm),
+            ff=rf.build_dict(FeedForwardGated),
+            layer_opts=dict(self_att=rf.build_dict(rf.RotaryPosCausalSelfAttention, with_bias=False)),
+            dropout=0.0,
+            att_dropout=0.0,
+        )
+        aux_logits = rf.Linear(enc_dim, wb_vocab_dim)
+
+        def _losses(feats_t, targets_t):
+            enc_out, enc_spatial = encoder(feats_t, in_spatial_dim=time_dim)
+            log_probs = rf.log_softmax(aux_logits(enc_out), axis=wb_vocab_dim)
+            # log_softmax must preserve the feature dim (the CTC loss checks it)
+            assert log_probs.feature_dim == wb_vocab_dim
+            ctc = rf.ctc_loss(
+                logits=log_probs,
+                logits_normalized=True,
+                targets=targets,  # stays plain, the loss unpacks anyway
+                input_spatial_dim=enc_spatial,
+                targets_spatial_dim=tgt_time,
+                blank_index=wb_vocab_dim.dimension - 1,
+            )
+            ctc_sum = rf.reduce_sum(ctc, axis=list(ctc.dims))
+            enc_state = decoder.transform_encoder(enc_out, axis=enc_spatial)
+            logits, _ = decoder(
+                targets_t,
+                spatial_dim=tgt_time,
+                state=decoder.default_initial_state(batch_dims=[batch_dim]),
+                encoder=enc_state,
+            )
+            ce = rf.cross_entropy(estimated=logits, target=targets_t, axis=vocab_dim, estimated_type="logits")
+            ce_sum = rf.reduce_sum(ce, axis=list(ce.dims))
+            return ctc_sum, ce_sum
+
+        ctc_ref, ce_ref = _losses(x, targets)
+
+        # isolate this test's fallback warnings (the warn-once bookkeeping is global)
+        warned_before = set(packed._warned_fallback_ops)
+        packed._warned_fallback_ops.clear()
+        packed.attention_path_counts.clear()
+        # align 6 = total downsampling; gap 96 -> 16 at the subsampled rate, as the depthwise conv kernel 32 needs
+        ctc_p, ce_p = _losses(packed.pack(x, gap=96, align=6), packed.pack(targets))
+        warned_here = set(packed._warned_fallback_ops)
+        packed._warned_fallback_ops.update(warned_before)
+
+        for name, ref_t, p_t in [("ctc", ctc_ref, ctc_p), ("ce", ce_ref, ce_p)]:
+            ref_v, p_v = float(ref_t.raw_tensor), float(p_t.raw_tensor)
+            assert abs(ref_v - p_v) / max(abs(ref_v), 1e-6) < 1e-4, f"{name} loss: padded {ref_v} vs packed {p_v}"
+
+        # Track the known-missing packed impls: those (and nothing else) may have fallen back.
+        # - conv:strided-out: not a fallback (stays packed, per-seq re-layout notice), but tracked alike
+        # - ctc_loss: no packed impl yet (planned: adapt our native CTC to the packed layout)
+        # - the repack of its per-seq loss result (over batch only: no packed dim left to repack into)
+        repack_warns = {op for op in warned_here if op.startswith("repack:")}
+        assert len(repack_warns) <= 1, f"more than the CTC loss result repack: {repack_warns}"
+        expected = {"conv:strided-out", "ctc_loss"}
+        if _flex_attention_usable():
+            assert warned_here - repack_warns == expected, f"unexpected fallbacks: {warned_here - repack_warns}"
+            # 2 enc layers rel-pos flex; 2 dec layers x (self + cross) flex with document mask
+            assert dict(packed.attention_path_counts) == {"rel_pos_flex": 2, "flex_doc": 4}
+        else:
+            assert expected <= warned_here, f"missing expected fallbacks: {expected - warned_here}"
+
+        # plain-first matmul (plain a x packed b): must dispatch to the packed backend and stay packed
+        w = Tensor("w", dims=[in_dim], dtype="float32")
+        w.raw_tensor = torch.randn(in_dim.dimension, generator=torch.Generator().manual_seed(9))
+        mm_p = rf.matmul(w, packed.pack(x), reduce=in_dim)
+        assert packed.is_packed(mm_p)
+        _assert_equal_non_padded(mm_p, rf.matmul(w, x, reduce=in_dim), batch_dim, time_dim)
+
+        # autocast smoke: dtype handling, e.g. activations on the fp32 autocast list (relu_square -> pow)
+        with torch.autocast(device_type="cpu", dtype=torch.bfloat16):
+            ctc_a, ce_a = _losses(packed.pack(x, gap=96, align=6), packed.pack(targets))
+        assert numpy.isfinite(float(ctc_a.raw_tensor)) and numpy.isfinite(float(ce_a.raw_tensor))
+
+
 if __name__ == "__main__":
     better_exchook.install()
     if len(sys.argv) <= 1:
