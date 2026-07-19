@@ -601,12 +601,12 @@ def test_aed_aux_ctc_stripped_real_model():
             ref_v, p_v = float(ref_t.raw_tensor), float(p_t.raw_tensor)
             assert abs(ref_v - p_v) / max(abs(ref_v), 1e-6) < 1e-4, f"{name} loss: padded {ref_v} vs packed {p_v}"
 
-        # Track the known re-layout notices: those (and nothing else) may have been flagged.
-        # - conv:strided-out: not a fallback (stays packed, per-seq re-layout notice), but tracked alike
-        # (ctc_loss runs natively packed, via FastBaumWelchPackedOp: no fallback)
-        expected = {"conv:strided-out"}
+        # NOTHING may fall back or even re-layout:
+        # strided-conv outputs use per-seq layout lens (no strided-out gather),
+        # and ctc_loss runs natively packed (FastBaumWelchPackedOp).
+        expected = set()
         if _flex_attention_usable():
-            assert warned_here == expected, f"unexpected fallbacks: {warned_here - expected}"
+            assert warned_here == expected, f"unexpected fallbacks: {warned_here}"
             # 2 enc layers rel-pos flex; 2 dec layers x (self + cross) flex with document mask
             assert dict(packed.attention_path_counts) == {"rel_pos_flex": 2, "flex_doc": 4}
         else:

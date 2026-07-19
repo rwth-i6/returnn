@@ -97,7 +97,14 @@ def _packing_cache_key(kind: str, raw: PackedRawTensor, device) -> Tuple[Any, ..
     :return: cache key for layout metadata of the packing.
         The dims go in directly (the Cache handles the value semantics, see above).
     """
-    return kind, raw.orig_dims, raw.gap, raw.align, str(device)
+    return kind, raw.orig_dims, raw.gap, raw.align, _layout_lens_key(raw.layout_lens), str(device)
+
+
+def _layout_lens_key(layout_lens):
+    """:return: value key for the per-seq layout lens (a small cpu int tensor, cheap to read)"""
+    if layout_lens is None:
+        return None
+    return tuple(int(v) for v in layout_lens.raw_tensor.flatten())
 
 
 class PackedRawTensor:
@@ -119,6 +126,7 @@ class PackedRawTensor:
         dims: Optional[Sequence[Dim]] = None,
         gap: int = 0,
         align: int = 1,
+        layout_lens: Optional[Tensor] = None,
     ):
         self.inner = inner
         self.packed_dim = packed_dim
@@ -140,6 +148,18 @@ class PackedRawTensor:
         # Ops that need more gap than available must warn and fall back.
         # 0 = dense layout (the only layout produced so far).
         self.gap = gap
+        # layout_lens = optional per-seq layout lens (dims like the seq lens, e.g. [batch]):
+        # the footprint becomes roundup(layout_len + gap, align), layout_len >= content len,
+        # decoupling the footprint from the content length per seq.
+        # Produced by strided ops on mixed seq-len residuals (see _strided_out_wrapper),
+        # where the out footprint old_footprint // stride is not a function of the out content length.
+        # None = the footprint follows the content lens (the default closed form).
+        self.layout_lens = layout_lens
+
+    @property
+    def has_gap_frames(self) -> bool:
+        """:return: whether the buffer has non-content frames (gap / alignment / footprint junk)"""
+        return bool(self.gap) or self.align > 1 or self.layout_lens is not None
 
     @property
     def seq_lens(self) -> Tensor:
@@ -159,7 +179,7 @@ class PackedRawTensor:
             and the flat seqs dim.
             Dense layout: exclusive cumsum of the seq lens; the gap layout adds gap frames per preceding seq.
         """
-        starts, seqs_dim = _seq_starts_math(self.orig_dims, self.gap, self.align)
+        starts, seqs_dim = _seq_starts_math(self.orig_dims, self.gap, self.align, layout_lens=self.layout_lens)
         assert starts is not None, f"seq_starts: no outer packed dims in {self.orig_dims}"
         return starts, seqs_dim
 
@@ -170,7 +190,7 @@ class PackedRawTensor:
             [seqs+1] int32, cu[i] = start of seq i, cu[-1] = total number of frames.
             Dense layout only (gap == 0), since the boundaries imply that seq i ends where seq i+1 starts.
         """
-        assert self.gap == 0 and self.align == 1, "cu_seqlens requires the dense layout"
+        assert self.gap == 0 and self.align == 1 and self.layout_lens is None, "cu_seqlens requires the dense layout"
         key = _packing_cache_key("cu_seqlens", self, device)
         hit = _layout_cache.get(key)
         if hit is not None:
@@ -198,6 +218,8 @@ class PackedRawTensor:
             and self.orig_dims == other.orig_dims
             and self.gap == other.gap
             and self.align == other.align
+            # identity: all tensors of one lineage share the object (rewrap/regap propagate it)
+            and self.layout_lens is other.layout_lens
         )
 
     def virtual_ndim(self) -> int:
@@ -231,7 +253,12 @@ class PackedRawTensor:
             **opts,
         )
         out.raw_tensor = PackedRawTensor(
-            inner=inner_out, packed_dim=self.packed_dim, orig_dims=self.orig_dims, gap=self.gap, align=self.align
+            inner=inner_out,
+            packed_dim=self.packed_dim,
+            orig_dims=self.orig_dims,
+            gap=self.gap,
+            align=self.align,
+            layout_lens=self.layout_lens,
         )
         return out
 
@@ -431,18 +458,24 @@ def _same_seq_lens(a: Dim, b: Dim) -> bool:
     return bool(rf.reduce_all(a_sizes == b_sizes, axis=list(a_sizes.dims)).raw_tensor)
 
 
-def _seq_footprints(orig_dims: Sequence[Dim], gap: int, align: int) -> Tuple[Optional[Tensor], Optional[Dim]]:
+def _seq_footprints(
+    orig_dims: Sequence[Dim], gap: int, align: int, *, layout_lens: Optional[Tensor] = None
+) -> Tuple[Optional[Tensor], Optional[Dim]]:
     """
     :return: (footprints, seqs_dim): frames occupied per sequence in the packed buffer,
-        roundup(len + gap, align), flat row-major over the outer packed dims.
+        roundup(len + gap, align) with len = layout_lens (if given) or the content lens,
+        flat row-major over the outer packed dims.
         (None, None) if there are no outer packed dims.
     """
     others = tuple(orig_dims[:-1])
     if not others:
         return None, None
-    last = orig_dims[-1]
-    assert last.dyn_size_ext is not None, f"packed dim {last} needs dyn sizes"
-    lens = last.dyn_size_ext
+    if layout_lens is not None:
+        lens = layout_lens
+    else:
+        last = orig_dims[-1]
+        assert last.dyn_size_ext is not None, f"packed dim {last} needs dyn sizes"
+        lens = last.dyn_size_ext
     for d in others:
         if d not in lens.dims:
             lens = rf.expand_dim(lens, dim=d)
@@ -456,26 +489,30 @@ def _seq_footprints(orig_dims: Sequence[Dim], gap: int, align: int) -> Tuple[Opt
     return footprints, seqs_dim
 
 
-def _seq_starts_math(orig_dims: Sequence[Dim], gap: int, align: int) -> Tuple[Optional[Tensor], Optional[Dim]]:
+def _seq_starts_math(
+    orig_dims: Sequence[Dim], gap: int, align: int, *, layout_lens: Optional[Tensor] = None
+) -> Tuple[Optional[Tensor], Optional[Dim]]:
     """
     :return: (starts, seqs_dim): see :func:`PackedRawTensor.seq_starts`:
         exclusive cumsum of the seq footprints.
         (None, None) if there are no outer packed dims (a single sequence; starts trivially at 0).
     """
-    footprints, seqs_dim = _seq_footprints(orig_dims, gap, align)
+    footprints, seqs_dim = _seq_footprints(orig_dims, gap, align, layout_lens=layout_lens)
     if footprints is None:
         return None, None
     cum = rf.cumsum(footprints, spatial_dim=seqs_dim)
     return cum - footprints, seqs_dim
 
 
-def _padded_positions(orig_dims: Sequence[Dim], gap: int, align: int) -> Tensor:
+def _padded_positions(
+    orig_dims: Sequence[Dim], gap: int, align: int, *, layout_lens: Optional[Tensor] = None
+) -> Tensor:
     """
     :return: [orig_dims...] (int): for every frame of the padded grid,
         its position in the packed buffer (only meaningful on the non-padded frames).
     """
     pos = rf.range_over_dim(orig_dims[-1])
-    starts, seqs_dim = _seq_starts_math(orig_dims, gap, align)
+    starts, seqs_dim = _seq_starts_math(orig_dims, gap, align, layout_lens=layout_lens)
     if starts is not None:
         others = tuple(orig_dims[:-1])
         if len(others) > 1:
@@ -487,9 +524,9 @@ def _padded_positions(orig_dims: Sequence[Dim], gap: int, align: int) -> Tensor:
     return pos
 
 
-def _packed_total(orig_dims: Sequence[Dim], gap: int, align: int) -> Tensor:
+def _packed_total(orig_dims: Sequence[Dim], gap: int, align: int, *, layout_lens: Optional[Tensor] = None) -> Tensor:
     """:return: scalar (int32): total number of frames in the packed buffer (sum of footprints)"""
-    footprints, _ = _seq_footprints(orig_dims, gap, align)
+    footprints, _ = _seq_footprints(orig_dims, gap, align, layout_lens=layout_lens)
     if footprints is None:
         last = orig_dims[-1]
         assert last.dyn_size_ext is not None
@@ -515,6 +552,7 @@ def _frame_coords(template: PackedRawTensor, d: Dim) -> Tensor:
         template.orig_dims,
         template.gap,
         template.align,
+        _layout_lens_key(template.layout_lens),
         template.orig_dims.index(d),
         str(template.inner.device),
     )
@@ -525,7 +563,7 @@ def _frame_coords(template: PackedRawTensor, d: Dim) -> Tensor:
     for o in template.orig_dims:
         if o not in grid.dims:
             grid = rf.expand_dim(grid, dim=o)  # broadcast view, ints only
-    pos = _padded_positions(template.orig_dims, template.gap, template.align)
+    pos = _padded_positions(template.orig_dims, template.gap, template.align, layout_lens=template.layout_lens)
     out = rf.scatter(
         grid, indices=pos, indices_dim=list(template.orig_dims), out_dim=template.packed_dim, use_mask=True
     )
@@ -538,7 +576,7 @@ def _frame_mask(template: PackedRawTensor) -> Optional[Tensor]:
     :return: [packed_dim] (bool): True on sequence frames, False on gap frames.
         None for the dense layout (all frames are sequence frames).
     """
-    if template.gap == 0 and template.align == 1:
+    if not template.has_gap_frames:
         return None
     # full layout in the key, see _frame_coords
     key = (
@@ -547,13 +585,14 @@ def _frame_mask(template: PackedRawTensor) -> Optional[Tensor]:
         template.orig_dims,
         template.gap,
         template.align,
+        _layout_lens_key(template.layout_lens),
         str(template.inner.device),
     )
     hit = _layout_cache.get(key)
     if hit is not None:
         return hit
     ones = rf.cast(rf.sequence_mask(list(template.orig_dims)), "int32")
-    pos = _padded_positions(template.orig_dims, template.gap, template.align)
+    pos = _padded_positions(template.orig_dims, template.gap, template.align, layout_lens=template.layout_lens)
     counts = rf.scatter(
         ones, indices=pos, indices_dim=list(template.orig_dims), out_dim=template.packed_dim, use_mask=True
     )
@@ -631,7 +670,7 @@ def _segment_softmax(tensor: Tensor, *, axis: Dim, log: bool) -> Optional[Tensor
     inner = raw.inner
     other_packed = [d for d in raw.orig_dims if d != axis]
     if not other_packed:
-        if raw.gap or raw.align > 1:
+        if raw.has_gap_frames:
             return None  # single segment incl. gap/pad frames; rare, fallback
         lse = rf.reduce_logsumexp(inner, axis=raw.packed_dim, use_mask=False)
         out_inner = inner - lse
@@ -666,6 +705,7 @@ def _segment_index(template: PackedRawTensor, seg_dims: Sequence[Dim]) -> Tuple[
         template.orig_dims,
         template.gap,
         template.align,
+        _layout_lens_key(template.layout_lens),
         tuple(template.orig_dims.index(d) for d in seg_dims),
         str(template.inner.device),
     )
@@ -678,7 +718,7 @@ def _segment_index(template: PackedRawTensor, seg_dims: Sequence[Dim]) -> Tuple[
         coords = _frame_coords(template, d)
         seg = coords if seg is None else seg * d.get_dim_value_tensor() + coords
         merged = d if merged is None else merged * d
-    if template.gap or template.align > 1:
+    if template.has_gap_frames:
         mask = _frame_mask(template)
         dump = merged.get_dim_value_tensor()
         if isinstance(dump, Tensor):
@@ -773,7 +813,7 @@ def _dim_aware_call(name: str, args, kwargs):
         overlap = referenced & (set(raw0.orig_dims) | {raw0.packed_dim})
         if overlap:
             _warn_fallback_once(name, f"references packed dims {sorted(overlap, key=lambda d: d.name or '')}")
-        elif name in _DENSE_ONLY_INNER_OPS and (raw0.gap or raw0.align > 1) and _stats_active(name, kwargs):
+        elif name in _DENSE_ONLY_INNER_OPS and raw0.has_gap_frames and _stats_active(name, kwargs):
             # e.g. batch_norm: its statistics implicitly reduce over the packed dim,
             # and gap frames would pollute them.
             # Re-layout to dense, run there, restore the layout:
@@ -1053,10 +1093,11 @@ def _sdpa_varlen_attention(
         return _sdpa_no("torch.nested.nested_tensor_from_jagged not available (torch too old)")
     # nested jagged needs the dense layout for the offsets; regap is cheap
     orig_layout = (q_raw.gap, q_raw.align)
-    if q_raw.gap or q_raw.align > 1:
+    orig_layout_lens = q_raw.layout_lens
+    if q_raw.has_gap_frames:
         query = regap(query, 0, align=1)
         q_raw = query.raw_tensor
-    if k_raw.gap or k_raw.align > 1:
+    if k_raw.has_gap_frames:
         key = regap(key, 0, align=1)
         value = regap(value, 0, align=1)
         k_raw, v_raw = key.raw_tensor, value.raw_tensor
@@ -1157,8 +1198,8 @@ def _sdpa_varlen_attention(
     )
     out_inner.raw_tensor = out_t
     out = q_raw.rewrap(out_inner, name="sdpa_varlen")
-    if orig_layout != (0, 1):
-        out = regap(out, orig_layout[0], align=orig_layout[1])
+    if orig_layout != (0, 1) or orig_layout_lens is not None:
+        out = regap(out, orig_layout[0], align=orig_layout[1], layout_lens=orig_layout_lens)
     return out
 
 
@@ -1228,7 +1269,7 @@ def _flex_seq_ids(raw: PackedRawTensor, spatial_dim: Dim, device) -> Optional[Tu
     # max over the cpu-side dyn sizes (no gpu sync)
     max_len = int(lens_rf.raw_tensor.max()) if lens_rf.raw_tensor.numel() > 0 else 0
     lens = rf.copy_to_device(lens_rf, str(device)).raw_tensor.long().flatten()
-    starts_rf, _ = _seq_starts_math(raw.orig_dims, raw.gap, raw.align)
+    starts_rf, _ = _seq_starts_math(raw.orig_dims, raw.gap, raw.align, layout_lens=raw.layout_lens)
     if starts_rf is None:  # single seq
         starts = torch.zeros(1, dtype=torch.int64, device=device)
     else:
@@ -1446,8 +1487,8 @@ def _flex_rel_pos_attention(
     matrix_bd = rf.matmul(q_with_bias_v, pos_emb, reduce=qk_feat_dim)
     if not is_packed(q_with_bias_u) or not is_packed(matrix_bd):
         return _flex_no("query with bias / matrix b+d did not stay packed")
-    if (q_raw.gap, q_raw.align) != (k_raw.gap, k_raw.align):
-        return _flex_no("query vs key/value layout (gap/align) differs")
+    if (q_raw.gap, q_raw.align) != (k_raw.gap, k_raw.align) or q_raw.layout_lens is not k_raw.layout_lens:
+        return _flex_no("query vs key/value layout (gap/align/layout_lens) differs")
     qu_raw, bd_raw = q_with_bias_u.raw_tensor, matrix_bd.raw_tensor
     q_inner, k_inner, v_inner, bd_inner = qu_raw.inner, k_raw.inner, v_raw.inner, bd_raw.inner
     head_dims = [d for d in q_inner.dims if d not in (qu_raw.packed_dim, qk_feat_dim)]
@@ -1539,7 +1580,7 @@ def _strided_out_wrapper(
     is uniform over the seqs -- verified here at runtime (one small host sync),
     which is robust against out-length semantic variants. None if not expressible.
     """
-    footprints, seqs_dim = _seq_footprints(raw.orig_dims, raw.gap, raw.align)
+    footprints, seqs_dim = _seq_footprints(raw.orig_dims, raw.gap, raw.align, layout_lens=raw.layout_lens)
     align_out = max(raw.align // st, 1)
     if footprints is None:
         helper = PackedRawTensor(
@@ -1554,14 +1595,28 @@ def _strided_out_wrapper(
         lens_out, _ = rf.merge_dims(lens_out, dims=raw.orig_dims[:-1])
     residual = footprints // st - lens_out
     residual0 = int(residual.raw_tensor.flatten()[0])
-    if residual0 < 0 or not bool(rf.reduce_all(residual == residual0, axis=list(residual.dims)).raw_tensor):
+    if residual0 >= 0 and bool(rf.reduce_all(residual == residual0, axis=list(residual.dims)).raw_tensor):
+        # uniform residual: expressible as the plain (lens, gap, align) form
+        helper = PackedRawTensor(
+            inner=out_inner,
+            packed_dim=out_packed_dim,
+            orig_dims=tuple(raw.orig_dims[:-1]) + (out_time,),
+            gap=residual0,
+            align=align_out,
+        )
+        return helper.rewrap(out_inner, name="conv")
+    gap_out = raw.gap // st
+    if len(raw.orig_dims) != 2 or not bool(rf.reduce_all(residual >= gap_out, axis=list(residual.dims)).raw_tensor):
         return None
+    # Non-uniform residuals (mixed seq-len residuals mod stride):
+    # exact via per-seq layout lens, layout_len + gap_out = footprint // st. No re-layout needed.
     helper = PackedRawTensor(
         inner=out_inner,
         packed_dim=out_packed_dim,
         orig_dims=tuple(raw.orig_dims[:-1]) + (out_time,),
-        gap=residual0,
+        gap=gap_out,
         align=align_out,
+        layout_lens=footprints // st - gap_out,
     )
     return helper.rewrap(out_inner, name="conv")
 
@@ -1591,7 +1646,7 @@ def _extract_strided(raw: PackedRawTensor, out_inner: Tensor, out_packed_dim: Di
             grid_t = rf.expand_dim(grid_t, dim=d)  # broadcast view, ints only
     t_coords = rf.scatter(grid_t, indices=new_pos, indices_dim=list(out_orig), out_dim=new_dim, use_mask=True)
     src = t_coords
-    old_starts, seqs_dim = _seq_starts_math(raw.orig_dims, raw.gap, raw.align)
+    old_starts, seqs_dim = _seq_starts_math(raw.orig_dims, raw.gap, raw.align, layout_lens=raw.layout_lens)
     if old_starts is not None:
         seg_grid = None
         for d in others:
@@ -1662,6 +1717,7 @@ class PackedBackend(Backend[PackedRawTensor]):
             dims=dims,
             gap=raw_tensor.gap,
             align=raw_tensor.align,
+            layout_lens=raw_tensor.layout_lens,
         )
 
     @staticmethod
@@ -1690,6 +1746,9 @@ class PackedBackend(Backend[PackedRawTensor]):
         out = source.copy_template_replace_dim_tag(
             axis=source.get_axis_from_description(in_dim), new_dim_tag=out_dim, name="replace_dim"
         )
+        layout_lens = raw.layout_lens
+        if layout_lens is not None and in_dim in layout_lens.dims:
+            layout_lens, _ = rf.replace_dim(layout_lens, in_dim=in_dim, out_dim=out_dim)
         if in_dim in raw.orig_dims or in_dim == raw.packed_dim:
             out.raw_tensor = PackedRawTensor(
                 inner=raw.inner,
@@ -1698,6 +1757,7 @@ class PackedBackend(Backend[PackedRawTensor]):
                 dims=tuple(out_dim if d == in_dim else d for d in raw.dims),
                 gap=raw.gap,
                 align=raw.align,
+                layout_lens=layout_lens,
             )
         else:
             inner_out, _ = rf.replace_dim(raw.inner, in_dim=in_dim, out_dim=out_dim)
@@ -1708,6 +1768,7 @@ class PackedBackend(Backend[PackedRawTensor]):
                 dims=tuple(out_dim if d == in_dim else d for d in raw.dims),
                 gap=raw.gap,
                 align=raw.align,
+                layout_lens=layout_lens,
             )
         return out
 
@@ -1731,6 +1792,7 @@ class PackedBackend(Backend[PackedRawTensor]):
             orig_dims=raw_tensor.orig_dims,
             gap=raw_tensor.gap,
             align=raw_tensor.align,
+            layout_lens=raw_tensor.layout_lens,
         )
 
     @classmethod
@@ -1894,6 +1956,8 @@ class PackedBackend(Backend[PackedRawTensor]):
                     orig_dims=tuple(raw.orig_dims[:-1]) + (out_time,),
                     gap=raw.gap + span - pad_l - pad_r,
                     align=raw.align,
+                    # constant footprints: the layout lens shift by the same content-len delta
+                    layout_lens=(raw.layout_lens + pad_l + pad_r - span) if raw.layout_lens is not None else None,
                 )
                 out = helper.rewrap(out_inner, name="conv")
                 return out, [out_time] + list(out_sp[1:])
@@ -2173,6 +2237,8 @@ class PackedBackend(Backend[PackedRawTensor]):
                     orig_dims=tuple(raw.orig_dims[:-1]) + (out_time,),
                     gap=raw.gap + span - pad_l - pad_r,
                     align=raw.align,
+                    # constant footprints: the layout lens shift by the same content-len delta
+                    layout_lens=(raw.layout_lens + pad_l + pad_r - span) if raw.layout_lens is not None else None,
                 )
                 out = helper.rewrap(out_inner, name="pool")
                 return out, [out_time] + list(out_sp[1:])
@@ -2262,6 +2328,8 @@ class PackedBackend(Backend[PackedRawTensor]):
                     orig_dims=tuple(raw.orig_dims[:-1]) + (out_time,),
                     gap=raw.gap - pad_r,
                     align=raw.align,
+                    # constant footprints: the pad frames come out of the gap
+                    layout_lens=(raw.layout_lens + pad_r) if raw.layout_lens is not None else None,
                 )
                 if pad_r:
                     # write the pad value into the newly claimed slots (they may contain junk)
@@ -2437,7 +2505,7 @@ class PackedBackend(Backend[PackedRawTensor]):
             and not any(_dim_refs_packed(d, raw) for d in extra_axes)
         ):
             inner = raw.inner
-            if raw.gap or raw.align > 1:
+            if raw.has_gap_frames:
                 # gap / alignment pad frames would contaminate the maskless reduce:
                 # fill them with the mode-neutral value first (mean: sum, then / valid count)
                 mask = _frame_mask(raw)
@@ -2518,7 +2586,7 @@ class PackedBackend(Backend[PackedRawTensor]):
             import torch
             from returnn.torch.util import native_op as torch_native_op
 
-            if raw.gap or raw.align > 1:
+            if raw.has_gap_frames:
                 logits = regap(logits, 0, align=1)
                 raw = logits.raw_tensor
             batch_dim = raw.orig_dims[0]
@@ -2660,9 +2728,10 @@ def pack(
     return helper.rewrap(inner, name=(source.name or "packed") + "_packed")
 
 
-def regap(source: Tensor, gap: int, *, align: Optional[int] = None) -> Tensor:
+def regap(source: Tensor, gap: int, *, align: Optional[int] = None, layout_lens: Optional[Tensor] = None) -> Tensor:
     """
-    :return: same content, packed with the given gap (and align, default: keep):
+    :return: same content, packed with the given gap (and align, default: keep;
+        plus optional target layout_lens, e.g. to restore an exact strided-out layout):
         a cheap packed -> packed re-layout (one scatter over the frames, no padded intermediate).
         Used e.g. by the packed conv when the tensor's gap is too small.
     """
@@ -2670,11 +2739,11 @@ def regap(source: Tensor, gap: int, *, align: Optional[int] = None) -> Tensor:
     if align is None:
         align = raw.align
     others = raw.orig_dims[:-1]
-    if (raw.gap == gap and raw.align == align) or not others:
+    if (raw.gap == gap and raw.align == align and raw.layout_lens is layout_lens) or not others:
         return source
     last = raw.orig_dims[-1]
-    new_dim = Dim(_packed_total(raw.orig_dims, gap, align), name="packed_regap")
-    new_starts, seqs_dim = _seq_starts_math(raw.orig_dims, gap, align)
+    new_dim = Dim(_packed_total(raw.orig_dims, gap, align, layout_lens=layout_lens), name="packed_regap")
+    new_starts, seqs_dim = _seq_starts_math(raw.orig_dims, gap, align, layout_lens=layout_lens)
     t_coords = _frame_coords(raw, last)
     seg, _, _ = _segment_index(raw, others)
     if new_starts.device != seg.device:
@@ -2692,7 +2761,9 @@ def regap(source: Tensor, gap: int, *, align: Optional[int] = None) -> Tensor:
         inner_new = rf.scatter(raw.inner, indices=pos, indices_dim=raw.packed_dim, out_dim=new_dim, use_mask=False)
     if raw.inner.feature_dim is not None and inner_new.feature_dim is None:
         inner_new.feature_dim = raw.inner.feature_dim
-    helper = PackedRawTensor(inner=inner_new, packed_dim=new_dim, orig_dims=raw.orig_dims, gap=gap, align=align)
+    helper = PackedRawTensor(
+        inner=inner_new, packed_dim=new_dim, orig_dims=raw.orig_dims, gap=gap, align=align, layout_lens=layout_lens
+    )
     out = helper.rewrap(inner_new, name="regap")
     if source.feature_dim is not None and out.feature_dim is None:
         out.feature_dim = source.feature_dim
@@ -2707,8 +2778,8 @@ def unpack(source: Tensor) -> Tensor:
     raw = source.raw_tensor
     if not isinstance(raw, PackedRawTensor):
         return source
-    if raw.gap or raw.align > 1:
-        pos = _padded_positions(raw.orig_dims, raw.gap, raw.align)
+    if raw.has_gap_frames:
+        pos = _padded_positions(raw.orig_dims, raw.gap, raw.align, layout_lens=raw.layout_lens)
         out = rf.gather(raw.inner, indices=pos, axis=raw.packed_dim, clip_to_valid=True)
         # zero the padded frames, like the dense masked_scatter does
         out = rf.where(rf.sequence_mask(list(raw.orig_dims), device=out.device), out, 0)
