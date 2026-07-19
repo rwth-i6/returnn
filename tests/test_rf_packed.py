@@ -410,6 +410,37 @@ def test_batch_norm_packed_gapped_train():
         )
 
 
+def test_conformer_mixed_parity_lens():
+    # Real-data case: seq lens NOT multiples of the total subsample factor.
+    # The strided pool output layout is then not expressible in the (lens, gap, align) form;
+    # it gets re-layouted into the closed form (one extra gather) and must STAY packed.
+    rf.select_backend_torch()
+    from returnn.frontend.encoder.conformer import ConformerEncoder, ConformerConvSubsample
+
+    x, batch_dim, time_dim, in_dim = _make_input(batch_size=3, seq_lens=(11, 10, 7), feat=7, seed=4)
+    with rf.set_default_device_ctx("cpu"):
+        rf.set_random_seed(17)
+        model = ConformerEncoder(
+            in_dim,
+            Dim(14, name="enc"),
+            ff_dim=Dim(17, name="ff"),
+            input_layer=ConformerConvSubsample(
+                in_dim,
+                out_dims=[Dim(8, name="conv1"), Dim(8, name="conv2")],
+                filter_sizes=[(3, 3), (3, 3)],
+                pool_sizes=[(2, 1), (2, 1)],
+            ),
+            num_heads=2,
+            num_layers=2,
+        )
+        out_ref, out_spatial_dim = model(x, in_spatial_dim=time_dim)
+        xp = packed.pack(x, gap=64, align=4)
+        out_p, out_spatial_dim_p = model(xp, in_spatial_dim=time_dim)
+    assert out_spatial_dim == out_spatial_dim_p
+    assert packed.is_packed(out_p)
+    _assert_equal_non_padded(out_p, out_ref, batch_dim, out_spatial_dim)
+
+
 def test_mixed_operand_order():
     # plain-first mixed binary ops (plain * packed):
     # the base Backend.combine/compare re-dispatch to the higher-priority backend

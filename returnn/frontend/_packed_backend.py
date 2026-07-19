@@ -1135,6 +1135,10 @@ _flex_env_broken = False
 _flex_attention_compiled = None
 _flex_compile_failed = False
 
+# Triton kernel options for the rel-pos flex attention,
+# tuned on H100 (scripts: tune_flex_relpos.py): ~13% faster fwd+bwd than the defaults.
+_FLEX_REL_POS_KERNEL_OPTIONS = {"num_warps": 4, "num_stages": 2}
+
 
 def _flex_no(reason: str):
     """warn once that the FlexAttention rel-pos fast path is not used, and return None"""
@@ -1462,14 +1466,17 @@ def _flex_rel_pos_attention(
         q_f = q_t.transpose(0, 1).unsqueeze(0)  # [1, H, total, D]
         k_f = k_t.transpose(0, 1).unsqueeze(0)
         v_f = v_t.transpose(0, 1).unsqueeze(0)
+        flex_kwargs = dict(score_mod=_score_mod, block_mask=block_mask)
+        if q_t.device.type == "cuda":
+            flex_kwargs["kernel_options"] = _FLEX_REL_POS_KERNEL_OPTIONS
         try:
-            out_f = flex_fn(q_f, k_f, v_f, score_mod=_score_mod, block_mask=block_mask)
+            out_f = flex_fn(q_f, k_f, v_f, **flex_kwargs)
         except (RuntimeError, NotImplementedError):
             # incl. dynamo/inductor compile errors (TorchDynamoException subclasses RuntimeError)
             if flex_fn is flex_eager:
                 raise
             _flex_compile_failed = True  # compiled FlexAttention failed; stick to eager from now on
-            out_f = flex_eager(q_f, k_f, v_f, score_mod=_score_mod, block_mask=block_mask)
+            out_f = flex_eager(q_f, k_f, v_f, **flex_kwargs)
         out_t = out_f.squeeze(0).transpose(0, 1)  # [total, H, Dv]
     except (RuntimeError, NotImplementedError) as exc:
         if isinstance(exc, RuntimeError) and "CUDA" in str(exc):
@@ -1528,23 +1535,46 @@ def _strided_out_wrapper(
 
 def _extract_strided(raw: PackedRawTensor, out_inner: Tensor, out_packed_dim: Dim, out_time: Dim, st: int) -> Tensor:
     """
-    Extract the output of a stride-st op over the packed dim to padded storage
-    (for the rare case that the closed-form layout cannot express it, see :func:`_strided_out_wrapper`).
+    Re-layout the output of a stride-st op over the packed dim
+    into the closed-form (out lens, gap // st, max(align // st, 1)) layout,
+    for the case that the raw strided output is not expressible in the closed form
+    (the per-seq residuals differ, e.g. mixed seq-len parities at stride 2;
+    see :func:`_strided_out_wrapper`).
+    The raw strided output has per-seq starts old_start_i // st;
+    one gather over the frames moves it into the closed form
+    (only int coordinate grids as intermediates, no padded feature-sized data),
+    so the result STAYS PACKED and downstream computation continues packed.
     """
     out_orig = tuple(raw.orig_dims[:-1]) + (out_time,)
-    pos = rf.range_over_dim(out_time)
-    starts, seqs_dim = _seq_starts_math(raw.orig_dims, raw.gap, raw.align)
-    if starts is not None:
-        starts = starts // st
-        others = tuple(raw.orig_dims[:-1])
-        if len(others) > 1:
-            starts = rf.split_dims(starts, axis=seqs_dim, dims=others)
-        if starts.device != pos.device:
-            # starts derive from the dyn sizes (often cpu), pos follows the default device
-            starts = rf.copy_to_device(starts, pos.device)
-        pos = starts + pos
-    out = rf.gather(out_inner, indices=pos, axis=out_packed_dim, clip_to_valid=True)
-    return rf.where(rf.sequence_mask(list(out_orig), device=out.device), out, 0)
+    others = tuple(out_orig[:-1])
+    gap_out = raw.gap // st
+    align_out = max(raw.align // st, 1)
+    new_dim = Dim(_packed_total(out_orig, gap_out, align_out), name="packed_strided")
+    new_pos = _padded_positions(out_orig, gap_out, align_out)
+    # per new-buffer frame: its local time coord, and its (flat) seq index
+    grid_t = rf.range_over_dim(out_time)
+    for d in others:
+        if d not in grid_t.dims:
+            grid_t = rf.expand_dim(grid_t, dim=d)  # broadcast view, ints only
+    t_coords = rf.scatter(grid_t, indices=new_pos, indices_dim=list(out_orig), out_dim=new_dim, use_mask=True)
+    src = t_coords
+    old_starts, seqs_dim = _seq_starts_math(raw.orig_dims, raw.gap, raw.align)
+    if old_starts is not None:
+        seg_grid = None
+        for d in others:
+            coords = rf.range_over_dim(d)
+            for o in out_orig:
+                if o not in coords.dims:
+                    coords = rf.expand_dim(coords, dim=o)
+            seg_grid = coords if seg_grid is None else seg_grid * d.get_dim_value_tensor() + coords
+        seg = rf.scatter(seg_grid, indices=new_pos, indices_dim=list(out_orig), out_dim=new_dim, use_mask=True)
+        old_starts = old_starts // st
+        if old_starts.device != seg.device:
+            old_starts = rf.copy_to_device(old_starts, seg.device)
+        src = rf.gather(old_starts, indices=seg, axis=seqs_dim, clip_to_valid=True) + t_coords
+    new_inner = rf.gather(out_inner, indices=src, axis=out_packed_dim, clip_to_valid=True)
+    helper = PackedRawTensor(inner=new_inner, packed_dim=new_dim, orig_dims=out_orig, gap=gap_out, align=align_out)
+    return helper.rewrap(new_inner, name="conv")
 
 
 # We do not expect to ever implement all methods of the Backend interface here --
@@ -1833,7 +1863,7 @@ class PackedBackend(Backend[PackedRawTensor]):
             _warn_fallback_once(
                 "conv:strided-out",
                 "strided conv output layout not expressible in the (lens, gap, align) form",
-                action="extracting the (packed-computed) output to padded storage",
+                action="re-layouting into the closed form, one extra gather (conv stays packed)",
             )
             return (
                 _extract_strided(raw, out_inner, out_sp[0], out_time, st),
@@ -2106,7 +2136,7 @@ class PackedBackend(Backend[PackedRawTensor]):
             _warn_fallback_once(
                 "pool:strided-out",
                 "strided pool output layout not expressible in the (lens, gap, align) form",
-                action="extracting the (packed-computed) output to padded storage",
+                action="re-layouting into the closed form, one extra gather (pool stays packed)",
             )
             return (
                 _extract_strided(raw, out_inner, out_sp[0], out_time, st),
