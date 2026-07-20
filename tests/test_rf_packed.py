@@ -852,7 +852,7 @@ def test_rel_pos_att_triton_kernel_grad():
             t.grad = None
         keep = None
         if dropout_p:
-            keep = m.dump_mask(starts, total, n_heads, max_len, r, dropout_p=dropout_p, seed=seed, device=dev)
+            keep = m.dump_mask(total, n_heads, max_len, r, dropout_p=dropout_p, seed=seed, device=dev)
         ref = _reference(*leaves, bd_leaf, keep, dropout_p)
         numpy.testing.assert_allclose(out.detach().cpu().numpy(), ref.detach().cpu().numpy(), rtol=1e-4, atol=1e-5)
         ref.backward(d_out)

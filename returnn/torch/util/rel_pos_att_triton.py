@@ -30,6 +30,7 @@ def is_available() -> bool:
     return torch.cuda.is_available()
 
 
+# noinspection PyPep8Naming,PyUnresolvedReferences
 @triton.jit
 def _rel_pos_fwd_kernel(
     Q,
@@ -53,7 +54,6 @@ def _rel_pos_fwd_kernel(
     D: tl.constexpr,
     R,
     center,
-    total,
     BLOCK_M: tl.constexpr,
     BLOCK_N: tl.constexpr,
     ENABLE_DROPOUT: tl.constexpr,
@@ -135,6 +135,7 @@ def _rel_pos_fwd_kernel(
 
 
 def rel_pos_att_fwd(q, k, v, bd, seq_starts, seq_lens, max_len, *, dropout_p=0.0, seed=0, scale=None):
+    """forward, see :func:`rel_pos_att_varlen`. Returns (out, lse)."""
     total, n_heads, d = q.shape
     r = bd.shape[-1]
     assert r == 2 * max_len - 1
@@ -167,7 +168,6 @@ def rel_pos_att_fwd(q, k, v, bd, seq_starts, seq_lens, max_len, *, dropout_p=0.0
         D=d,
         R=r,
         center=max_len - 1,
-        total=total,
         BLOCK_M=block_m,
         BLOCK_N=block_n,
         ENABLE_DROPOUT=dropout_p > 0.0,
@@ -176,26 +176,10 @@ def rel_pos_att_fwd(q, k, v, bd, seq_starts, seq_lens, max_len, *, dropout_p=0.0
     return out, lse
 
 
-def _reference(q, k, v, bd, cu_seqlens, max_len, *, scale):
-    # eager per-seq reference, dropout 0
-    outs = []
-    center = max_len - 1
-    for b in range(cu_seqlens.numel() - 1):
-        s0, s1 = int(cu_seqlens[b]), int(cu_seqlens[b + 1])
-        qb, kb, vb, bdb = q[s0:s1].float(), k[s0:s1].float(), v[s0:s1].float(), bd[s0:s1].float()
-        ln = s1 - s0
-        s = torch.einsum("ihd,jhd->hij", qb, kb) * scale
-        idx = center + torch.arange(ln)[None, :] - torch.arange(ln)[:, None]  # (i, j)
-        s = s + bdb.permute(1, 0, 2).gather(2, idx.unsqueeze(0).expand(s.shape[0], -1, -1).to(q.device))
-        w = torch.softmax(s, dim=-1)
-        outs.append(torch.einsum("hij,jhd->ihd", w, vb))
-    return torch.cat(outs, 0)
-
-
+# noinspection PyPep8Naming,PyUnresolvedReferences
 @triton.jit
 def _dropout_mask_kernel(
     Mask,
-    cu_seqlens,
     seed,
     dropout_p,
     H: tl.constexpr,
@@ -215,6 +199,7 @@ def _dropout_mask_kernel(
     tl.store(Mask + i * stride_mt + h * stride_mh + offs_n, keep.to(tl.int8), mask=offs_n < max_len)
 
 
+# noinspection PyPep8Naming
 @triton.jit
 def _rel_pos_bwd_kernel_dkv(
     Q,
@@ -305,6 +290,7 @@ def _rel_pos_bwd_kernel_dkv(
     tl.store(DV + k_rows[:, None] * stride_qt + h * stride_qh + offs_d[None, :], dv, mask=n_mask[:, None])
 
 
+# noinspection PyPep8Naming
 @triton.jit
 def _rel_pos_bwd_kernel_dq(
     Q,
@@ -386,7 +372,8 @@ def _rel_pos_bwd_kernel_dq(
 
 
 def rel_pos_att_bwd(q, k, v, bd, seq_starts, seq_lens, max_len, out, lse, d_out, *, dropout_p=0.0, seed=0, scale=None):
-    total, n_heads, d = q.shape
+    """backward, see :func:`rel_pos_att_varlen`. Returns (dq, dk, dv, dbd)."""
+    _, n_heads, d = q.shape
     r = bd.shape[-1]
     if scale is None:
         scale = 1.0 / math.sqrt(d)
@@ -453,12 +440,15 @@ def rel_pos_att_bwd(q, k, v, bd, seq_starts, seq_lens, max_len, out, lse, d_out,
     return dq, dk, dv, dbd
 
 
-def dump_mask(cu_seqlens, total, n_heads, max_len, r, *, dropout_p, seed, device):
+def dump_mask(total, n_heads, max_len, r, *, dropout_p, seed, device):
+    """
+    :return: the kept-weight boolean mask (total, H, max_len) the kernels use for the given seed,
+        for exact-parity tests against an eager reference.
+    """
     mask = torch.zeros(total, n_heads, max_len, dtype=torch.int8, device=device)
     block_n = triton.next_power_of_2(max_len)
     _dropout_mask_kernel[(total, n_heads)](
         mask,
-        cu_seqlens,
         seed,
         dropout_p,
         H=n_heads,
@@ -471,6 +461,7 @@ def dump_mask(cu_seqlens, total, n_heads, max_len, r, *, dropout_p, seed, device
     return mask.bool()
 
 
+# noinspection PyAbstractClass
 class _RelPosAttVarlen(torch.autograd.Function):
     """autograd wrapper, see :func:`rel_pos_att_varlen`"""
 
