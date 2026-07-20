@@ -1094,3 +1094,41 @@ def test_random_choice_with_replacement():
         out.mark_as_output("mult_common", shape=[batch_dim, time_dim])
 
     run_model(TensorDict(), lambda **_kwargs: rf.Module(), _forward_step, test_tensorflow=False)
+
+
+def test_module_output_keep_dtype():
+    # rf_module_output_keep_dtype (behavior_version >= 27): Linear (with bias), LayerNorm,
+    # RMSNorm, GroupNorm keep the input dtype under autocast instead of promoting the output
+    # to float32 by the final bias add / scale mul. The statistics stay float32 either way,
+    # so the values are bit-identical to the float32 output cast to the input dtype.
+    import torch
+    from returnn.config import Config, global_config_ctx
+
+    rf.select_backend_torch()
+    batch = Dim(3, name="batch")
+    time = Dim(Tensor("time", [batch], dtype="int32", raw_tensor=torch.tensor([5, 4, 2], dtype=torch.int32)))
+    in_dim = Dim(8, name="in")
+    with rf.set_default_device_ctx("cpu"):
+        rf.set_random_seed(3)
+        mods = {
+            "Linear": rf.Linear(in_dim, Dim(6, name="out"), with_bias=True),
+            "LayerNorm": rf.LayerNorm(in_dim),
+            "RMSNorm": rf.RMSNorm(in_dim),
+            "GroupNorm": rf.GroupNorm(in_dim, num_groups=Dim(4, name="grp")),
+        }
+
+        def _run(mod, keep):
+            x = Tensor("x", [batch, time, in_dim], dtype="bfloat16")
+            x.raw_tensor = torch.randn(3, 5, 8, generator=torch.Generator().manual_seed(1)).to(torch.bfloat16)
+            with global_config_ctx(Config({"rf_module_output_keep_dtype": keep})):
+                with torch.autocast(device_type="cpu", dtype=torch.bfloat16):
+                    return mod(x)
+
+        for name, mod in mods.items():
+            out_off = _run(mod, False)
+            out_on = _run(mod, True)
+            assert out_off.dtype == "float32", f"{name} flag-off: {out_off.dtype}"
+            assert out_on.dtype == "bfloat16", f"{name} flag-on: {out_on.dtype}"
+            a = out_off.copy_transpose(out_on.dims).raw_tensor.detach().to(torch.bfloat16).float().numpy()
+            b = out_on.raw_tensor.detach().float().numpy()
+            numpy.testing.assert_allclose(a, b, rtol=0, atol=0, err_msg=name)

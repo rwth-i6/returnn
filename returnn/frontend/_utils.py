@@ -299,3 +299,41 @@ def _slice_value_is_reduce(v: Union[None, slice, int, numpy.number, numpy.ndarra
         assert len(v.dims) <= 1, f"strided_slice: expect scalar or vector, got Tensor with dims {v.dims}"
         return len(v.dims) == 0
     raise TypeError(f"strided_slice: got unexpected value of type {type(v).__name__}")
+
+
+def should_module_output_keep_dtype() -> bool:
+    """
+    :return: whether a module output keeps the input dtype under autocast
+        instead of being promoted to float32 by the final parameter combine
+        (e.g. the bias add of :class:`rf.Linear`, the scale mul of :class:`rf.LayerNorm`,
+        :class:`rf.RMSNorm`, :class:`rf.GroupNorm`).
+        The internal statistics (norm mean/variance) stay float32 either way.
+        Config option ``rf_module_output_keep_dtype: bool``, else behavior_version >= 27.
+        See issue `#1828 <https://github.com/rwth-i6/returnn/issues/1828>`__.
+    """
+    from returnn.config import get_global_config
+
+    config = get_global_config(raise_exception=False)
+    config_value = None
+    if config:
+        if "rf_module_output_keep_dtype" in config.typed_dict:
+            config_value = config.typed_dict["rf_module_output_keep_dtype"]
+            assert config_value is None or isinstance(config_value, bool)
+        elif "rf_module_output_keep_dtype" in config.dict:
+            config_value = config.bool("rf_module_output_keep_dtype", None)
+    if config_value is not None:
+        return config_value
+
+    from returnn.util.basic import BehaviorVersion
+
+    return BehaviorVersion.get() >= 27
+
+
+def keep_dtype(out: Tensor, dtype: str) -> Tensor:
+    """
+    :return: out cast to dtype if it was promoted away from it and
+        :func:`should_module_output_keep_dtype`, else out unchanged.
+    """
+    if out.dtype != dtype and should_module_output_keep_dtype():
+        return rf.cast(out, dtype)
+    return out

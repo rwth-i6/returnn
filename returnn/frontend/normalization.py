@@ -6,6 +6,7 @@ from __future__ import annotations
 from typing import Optional, Sequence, Union, Tuple
 from returnn.tensor import Tensor, Dim
 import returnn.frontend as rf
+from . import _utils
 
 
 __all__ = [
@@ -114,7 +115,7 @@ class LayerNorm(rf.Module):
         out = norm_x * self.scale
         if self.bias is not None:
             out += self.bias
-        return out
+        return _utils.keep_dtype(out, x.dtype)
 
 
 class RMSNorm(rf.Module):
@@ -145,7 +146,7 @@ class RMSNorm(rf.Module):
         out = norm_x * self.scale
         if self.bias is not None:
             out += self.bias
-        return out
+        return _utils.keep_dtype(out, x.dtype)
 
 
 class GroupNorm(rf.Module):
@@ -175,7 +176,7 @@ class GroupNorm(rf.Module):
         mean, variance = rf.moments(x, axis=self.in_group_dim)
         norm_x = (x - mean) * rf.rsqrt(variance + self.eps)
         norm_x, _ = rf.merge_dims(norm_x, dims=[self.num_groups, self.in_group_dim], out_dim=self.in_dim)
-        return norm_x * self.scale + self.bias
+        return _utils.keep_dtype(norm_x * self.scale + self.bias, x.dtype)
 
 
 class GroupNormSpatial(rf.Module):
@@ -210,7 +211,7 @@ class GroupNormSpatial(rf.Module):
         mean, variance = rf.moments(x, axis=[self.in_group_dim] + spatial_dims)
         norm_x = (x - mean) * rf.rsqrt(variance + self.eps)
         norm_x, _ = rf.merge_dims(norm_x, dims=[self.num_groups, self.in_group_dim], out_dim=self.in_dim)
-        return norm_x * self.scale + self.bias
+        return _utils.keep_dtype(norm_x * self.scale + self.bias, x.dtype)
 
 
 def batch_norm_distributed_default() -> bool:

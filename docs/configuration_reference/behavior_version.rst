@@ -22,6 +22,19 @@ and not listing legacy/deprecated parameters.
 Version History
 ---------------
 
+Behavior version 27 (2026-07-20)
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+RF ``Linear`` (with bias), ``LayerNorm``, ``RMSNorm``, ``GroupNorm``:
+the module output now keeps the input dtype under autocast,
+instead of being promoted to float32 by the final bias add / scale mul.
+The internal statistics (norm mean/variance) stay float32.
+
+There is also the global config option ``rf_module_output_keep_dtype: bool``
+to explicitly enable the new behavior.
+
+See issue `#1828 <https://github.com/rwth-i6/returnn/issues/1828>`__.
+
 Behavior version 26 (2026-06-11)
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
