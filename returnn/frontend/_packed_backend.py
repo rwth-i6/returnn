@@ -1569,6 +1569,222 @@ def _flex_rel_pos_attention(
     return qu_raw.rewrap(out_inner, name="rel_pos_att_flex")
 
 
+def _triton_rel_pos_attention(
+    query: Tensor,
+    key: Tensor,
+    value: Tensor,
+    pos_emb: Tensor,
+    *,
+    pos_bias_u: Optional[Tensor],
+    pos_bias_v: Optional[Tensor],
+    att_dropout: float,
+    v_feat_dim: Dim,
+    qk_feat_dim: Dim,
+    kv_spatial_dim: Dim,
+    query_spatial_dim: Dim,
+    pos_emb_spatial_dim: Dim,
+) -> Optional[Tensor]:
+    """
+    Packed rel-pos self-attention with post-softmax weight dropout
+    via :mod:`returnn.torch.util.rel_pos_att_triton`
+    (flash: no bias; FlexAttention: no dropout).
+    CUDA only; any layout as-is (explicit per-seq starts + lens).
+    None if not applicable (then the per-seq / once-unpack fallbacks run).
+    """
+    if not (is_packed(query) and is_packed(key) and is_packed(value)) or is_packed(pos_emb):
+        return None
+    q_raw, k_raw, v_raw = query.raw_tensor, key.raw_tensor, value.raw_tensor
+    if q_raw.inner_backend.name != "torch" or query.device is None or not str(query.device).startswith("cuda"):
+        return None
+    try:
+        from returnn.torch.util import rel_pos_att_triton
+    except ImportError:
+        return None
+    if not rel_pos_att_triton.is_available():
+        return None
+    if not k_raw.same_packing(v_raw):
+        return None
+    if kv_spatial_dim != k_raw.orig_dims[-1] or query_spatial_dim != q_raw.orig_dims[-1]:
+        return None
+    if q_raw.orig_dims[:-1] != k_raw.orig_dims[:-1] or not _same_seq_lens(query_spatial_dim, kv_spatial_dim):
+        return None
+    if (q_raw.gap, q_raw.align) != (k_raw.gap, k_raw.align) or q_raw.layout_lens is not k_raw.layout_lens:
+        return None
+    if len(q_raw.orig_dims) != 2:
+        return None
+    # any layout as-is (per-seq starts + lens, junk frames never touched):
+    # no re-layout, the output shares the input packing.
+    # the position-based term (matrix b+d, pre-shift), computed packed:
+    q_with_bias_u = (query + pos_bias_u) if pos_bias_u is not None else query
+    q_with_bias_v = (query + pos_bias_v) if pos_bias_v is not None else query
+    matrix_bd = rf.matmul(q_with_bias_v, pos_emb, reduce=qk_feat_dim)
+    if not is_packed(q_with_bias_u) or not is_packed(matrix_bd):
+        return None
+    qu_raw, bd_raw = q_with_bias_u.raw_tensor, matrix_bd.raw_tensor
+    q_inner, k_inner, v_inner, bd_inner = qu_raw.inner, k_raw.inner, v_raw.inner, bd_raw.inner
+    head_dims = [d for d in q_inner.dims if d not in (qu_raw.packed_dim, qk_feat_dim)]
+    if len(head_dims) != 1 or head_dims[0].dimension is None:
+        return None
+    heads_dim = head_dims[0]
+    if set(k_inner.dims) != {k_raw.packed_dim, heads_dim, qk_feat_dim}:
+        return None
+    if set(v_inner.dims) != {v_raw.packed_dim, heads_dim, v_feat_dim}:
+        return None
+    if set(bd_inner.dims) - {heads_dim} != {bd_raw.packed_dim, pos_emb_spatial_dim}:
+        return None
+    max_len = int(query_spatial_dim.get_dim_value())
+    r_size = int(pos_emb_spatial_dim.get_dim_value())
+    if r_size != 2 * max_len - 1:
+        return None  # only the standard centered layout
+    q_t = q_inner.copy_transpose([qu_raw.packed_dim, heads_dim, qk_feat_dim]).raw_tensor
+    k_t = k_inner.copy_transpose([k_raw.packed_dim, heads_dim, qk_feat_dim]).raw_tensor
+    v_t = v_inner.copy_transpose([v_raw.packed_dim, heads_dim, v_feat_dim]).raw_tensor
+    q_t, k_t, v_t = _harmonize_qkv_dtypes(q_t, k_t, v_t)
+    import torch
+
+    # noinspection PyArgumentList
+    if (
+        q_t.dtype not in (torch.float16, torch.bfloat16)
+        and hasattr(torch, "get_autocast_dtype")  # torch >= 2.4
+        and torch.is_autocast_enabled("cuda")
+    ):
+        # like the flash prep: run in the autocast dtype (the RF raws are often still f32)
+        amp_dtype = torch.get_autocast_dtype("cuda")
+        if amp_dtype in (torch.float16, torch.bfloat16):
+            q_t, k_t, v_t = q_t.to(amp_dtype), k_t.to(amp_dtype), v_t.to(amp_dtype)
+    if heads_dim in bd_inner.dims:
+        bd_t = bd_inner.copy_transpose([bd_raw.packed_dim, heads_dim, pos_emb_spatial_dim]).raw_tensor
+    else:
+        bd_t = bd_inner.copy_transpose([bd_raw.packed_dim, pos_emb_spatial_dim]).raw_tensor
+        bd_t = bd_t.unsqueeze(1).expand(-1, heads_dim.dimension, -1)
+    # pre-scale the bias like the content-based term (the kernel scales only q k^T)
+    bd_t = (bd_t * qk_feat_dim.dimension**-0.5).to(q_t.dtype)
+    starts_key = _packing_cache_key("triton_starts_lens", q_raw, query.device)
+    hit = _layout_cache.get(starts_key)
+    if hit is not None:
+        starts, lens = hit
+    else:
+        starts_rf, _ = _seq_starts_math(q_raw.orig_dims, q_raw.gap, q_raw.align, layout_lens=q_raw.layout_lens)
+        if starts_rf is None:
+            return None
+        starts = rf.copy_to_device(starts_rf, query.device).raw_tensor.int().flatten()
+        lens = rf.copy_to_device(query_spatial_dim.dyn_size_ext, query.device).raw_tensor.int().flatten()
+        _layout_cache.set(starts_key, (starts, lens))
+    try:
+        out_t = rel_pos_att_triton.rel_pos_att_varlen(
+            q_t, k_t, v_t, bd_t, starts, lens, max_len, dropout_p=att_dropout, scale=qk_feat_dim.dimension**-0.5
+        )
+    except (RuntimeError, NotImplementedError) as exc:
+        _warn_fallback_once(
+            "rel_pos_self_attention",
+            f"Triton varlen kernel failed here ({type(exc).__name__}: {exc})",
+            action="using the per-seq / once-unpack fallback",
+        )
+        return None
+    out_inner = Tensor(
+        "rel_pos_att_triton",
+        dims=[qu_raw.packed_dim, heads_dim, v_feat_dim],
+        dtype=qu_raw.inner_backend.get_dtype_name_raw(out_t),
+        feature_dim=v_feat_dim,
+    )
+    out_inner.raw_tensor = out_t
+    _count_attention_path("rel_pos_triton")
+    return qu_raw.rewrap(out_inner, name="rel_pos_att_triton")
+
+
+def _rel_pos_attention_per_seq(
+    query: Tensor,
+    key: Tensor,
+    value: Tensor,
+    pos_emb: Tensor,
+    *,
+    pos_bias_u: Optional[Tensor],
+    pos_bias_v: Optional[Tensor],
+    att_dropout: float,
+    att_dropout_broadcast: bool,
+    v_feat_dim: Dim,
+    qk_feat_dim: Dim,
+    kv_spatial_dim: Dim,
+    query_spatial_dim: Dim,
+    pos_emb_spatial_dim: Dim,
+) -> Optional[Tensor]:
+    """
+    Per-sequence rel-pos self-attention on the packed buffer, no unpack:
+    every sequence is a contiguous slice of the dense packed buffer,
+    so the standard attention runs per seq (static per-seq dims, incl. the centered
+    pos_emb window of size 2*len-1) and the outputs are concatenated back.
+    Exact semantics incl. real (weight) dropout; memory sum(len^2) instead of B*T_max^2.
+    The simple CPU path -- the Triton kernel is the CUDA fast path (planned).
+    None if not applicable (then the once-unpack fallback runs).
+    """
+    if not (is_packed(query) and is_packed(key) and is_packed(value)) or is_packed(pos_emb):
+        return None
+    q_raw, k_raw, v_raw = query.raw_tensor, key.raw_tensor, value.raw_tensor
+    # query/key/value may each carry their own packed dim; equivalent layouts suffice
+    # (one shared lineage in the attention module, but they can also be packed independently)
+    if k_raw.orig_dims != v_raw.orig_dims or (k_raw.gap, k_raw.align) != (v_raw.gap, v_raw.align):
+        return None
+    if k_raw.layout_lens is not v_raw.layout_lens:
+        return None
+    if len(q_raw.orig_dims) != 2 or q_raw.orig_dims[-1] != query_spatial_dim:
+        return None
+    # kv is packed alike but over its own (copied) spatial dim, cf. _flex_rel_pos_attention
+    if kv_spatial_dim != k_raw.orig_dims[-1] or q_raw.orig_dims[:-1] != k_raw.orig_dims[:-1]:
+        return None
+    if not _same_seq_lens(query_spatial_dim, kv_spatial_dim):
+        return None
+    if (q_raw.gap, q_raw.align) != (k_raw.gap, k_raw.align) or q_raw.layout_lens is not k_raw.layout_lens:
+        return None
+    lens_t = query_spatial_dim.dyn_size_ext
+    if lens_t is None or lens_t.dims != (q_raw.orig_dims[0],):
+        return None
+    orig_layout = (q_raw.gap, q_raw.align)
+    orig_layout_lens = q_raw.layout_lens
+    if q_raw.has_gap_frames:
+        query, key, value = regap(query, 0, align=1), regap(key, 0, align=1), regap(value, 0, align=1)
+        q_raw = query.raw_tensor
+    lens = [int(v) for v in lens_t.raw_tensor.flatten()]
+    max_len = max(lens) if lens else 0
+    if int(pos_emb_spatial_dim.get_dim_value()) != 2 * max_len - 1:
+        return None  # only the standard centered layout is supported
+    center = max_len - 1
+    outs = []
+    off = 0
+    for seq_len in lens:
+        q_b, q_time = rf.slice(q_raw.inner, axis=q_raw.packed_dim, start=off, end=off + seq_len)
+        kv_packed = key.raw_tensor.packed_dim  # kv has its own packed dim (copied spatial dim)
+        k_b, kv_time = rf.slice(key.raw_tensor.inner, axis=kv_packed, start=off, end=off + seq_len)
+        v_b = rf.slice(
+            value.raw_tensor.inner, axis=value.raw_tensor.packed_dim, start=off, end=off + seq_len, out_dim=kv_time
+        )[0]
+        pos_b, pos_dim = rf.slice(pos_emb, axis=pos_emb_spatial_dim, start=center - (seq_len - 1), end=center + seq_len)
+        out_b = Backend.rel_pos_self_attention(
+            q_b,
+            k_b,
+            v_b,
+            pos_b,
+            pos_bias_u=pos_bias_u,
+            pos_bias_v=pos_bias_v,
+            att_dropout=att_dropout,
+            att_dropout_broadcast=att_dropout_broadcast,
+            v_feat_dim=v_feat_dim,
+            qk_feat_dim=qk_feat_dim,
+            kv_spatial_dim=kv_time,
+            query_spatial_dim=q_time,
+            pos_emb_spatial_dim=pos_dim,
+        )
+        outs.append((out_b, q_time))
+        off += seq_len
+    inner_new, cat_dim = rf.concat(*outs)
+    inner_new, _ = rf.replace_dim(inner_new, in_dim=cat_dim, out_dim=q_raw.packed_dim)
+    helper = PackedRawTensor(inner=inner_new, packed_dim=q_raw.packed_dim, orig_dims=q_raw.orig_dims, gap=0, align=1)
+    out = helper.rewrap(inner_new, name="rel_pos_att_per_seq")
+    _count_attention_path("rel_pos_per_seq")
+    if orig_layout != (0, 1) or orig_layout_lens is not None:
+        out = regap(out, orig_layout[0], align=orig_layout[1], layout_lens=orig_layout_lens)
+    return out
+
+
 def _strided_out_wrapper(
     raw: PackedRawTensor, out_inner: Tensor, out_packed_dim: Dim, out_time: Dim, st: int
 ) -> Optional[Tensor]:
@@ -2132,14 +2348,56 @@ class PackedBackend(Backend[PackedRawTensor]):
             if out is not None:
                 return out
         else:
+            # the kernel drops per-element, so only the non-broadcast dropout matches
+            if not att_dropout_broadcast:
+                out = _triton_rel_pos_attention(
+                    query,
+                    key,
+                    value,
+                    pos_emb,
+                    pos_bias_u=pos_bias_u,
+                    pos_bias_v=pos_bias_v,
+                    att_dropout=att_dropout,
+                    v_feat_dim=v_feat_dim,
+                    qk_feat_dim=qk_feat_dim,
+                    kv_spatial_dim=kv_spatial_dim,
+                    query_spatial_dim=query_spatial_dim,
+                    pos_emb_spatial_dim=pos_emb_spatial_dim,
+                )
+                if out is not None:
+                    return out
             _flex_no("att_dropout active in training (FlexAttention has no dropout support)")
-        return Backend.rel_pos_self_attention(
-            query,
-            key,
-            value,
-            pos_emb,
-            pos_bias_u=pos_bias_u,
-            pos_bias_v=pos_bias_v,
+        if is_packed(query) and query.raw_tensor.inner.device == "cpu":
+            # CPU: per-seq slice loop over the packed buffer, no unpack
+            # (the planned Triton kernel is the CUDA fast path)
+            out = _rel_pos_attention_per_seq(
+                query,
+                key,
+                value,
+                pos_emb,
+                pos_bias_u=pos_bias_u,
+                pos_bias_v=pos_bias_v,
+                att_dropout=att_dropout,
+                att_dropout_broadcast=att_dropout_broadcast,
+                v_feat_dim=v_feat_dim,
+                qk_feat_dim=qk_feat_dim,
+                kv_spatial_dim=kv_spatial_dim,
+                query_spatial_dim=query_spatial_dim,
+                pos_emb_spatial_dim=pos_emb_spatial_dim,
+            )
+            if out is not None:
+                return out
+        # Single unpack around the whole attention (instead of per-op unpack round trips inside):
+        # the padded intermediates exist only within the attention block,
+        # where the O(B * T^2) score matrix is materialized anyway.
+        template = query.raw_tensor if is_packed(query) else None
+        out = Backend.rel_pos_self_attention(
+            unpack(query),
+            unpack(key),
+            unpack(value),
+            unpack(pos_emb),
+            pos_bias_u=unpack(pos_bias_u) if pos_bias_u is not None else None,
+            pos_bias_v=unpack(pos_bias_v) if pos_bias_v is not None else None,
             att_dropout=att_dropout,
             att_dropout_broadcast=att_dropout_broadcast,
             v_feat_dim=v_feat_dim,
@@ -2148,6 +2406,7 @@ class PackedBackend(Backend[PackedRawTensor]):
             query_spatial_dim=query_spatial_dim,
             pos_emb_spatial_dim=pos_emb_spatial_dim,
         )
+        return _repack_result(out, template) if template is not None else out
 
     @staticmethod
     def pool(

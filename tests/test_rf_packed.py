@@ -681,6 +681,191 @@ def test_ctc_loss_packed_native():
     )
 
 
+def test_rel_pos_self_attention_per_seq_grad():
+    # The per-seq CPU path (the train-mode dropout case, where flex bails):
+    # called directly with att_dropout=0 for determinism, it must match the padded
+    # reference exactly -- outputs AND grads (q/k/v inputs, pos_emb, biases).
+    rf.select_backend_torch()
+    batch_dim = Dim(3, name="batch")
+    time_dim = Dim(
+        Tensor("time", dims=[batch_dim], dtype="int32", raw_tensor=torch.tensor([9, 6, 4], dtype=torch.int32))
+    )
+    # kv over its own (copied) spatial dim with the same lens, like the attention module does
+    kv_time = Dim(
+        Tensor("time_kv", dims=[batch_dim], dtype="int32", raw_tensor=torch.tensor([9, 6, 4], dtype=torch.int32))
+    )
+    heads_dim = Dim(2, name="heads")
+    qk_feat = Dim(4, name="qk_feat")
+    v_feat = Dim(4, name="v_feat")
+    pos_dim = Dim(2 * 9 - 1, name="pos")
+    gen = torch.Generator().manual_seed(21)
+    raws = {name: torch.randn(3, 9, 2, 4, generator=gen) for name in ("q", "k", "v")}
+    pos_raw = torch.randn(2 * 9 - 1, 4, generator=gen)
+    bias_u_raw = torch.randn(2, 4, generator=gen)
+    bias_v_raw = torch.randn(2, 4, generator=gen)
+
+    def _run(pack_gap=None):
+        leaves = {name: raw.clone().requires_grad_(True) for name, raw in raws.items()}
+        pos_leaf = pos_raw.clone().requires_grad_(True)
+        bias_u_leaf, bias_v_leaf = bias_u_raw.clone().requires_grad_(True), bias_v_raw.clone().requires_grad_(True)
+        qkv = {}
+        for name, leaf in leaves.items():
+            t = Tensor(
+                name,
+                dims=[
+                    batch_dim,
+                    time_dim if name == "q" else kv_time,
+                    heads_dim,
+                    qk_feat if name != "v" else v_feat,
+                ],
+                dtype="float32",
+            )
+            t.raw_tensor = leaf
+            qkv[name] = t
+        pos_emb = Tensor("pos_emb", dims=[pos_dim, qk_feat], dtype="float32")
+        pos_emb.raw_tensor = pos_leaf
+        bias_u = Tensor("bias_u", dims=[heads_dim, qk_feat], dtype="float32")
+        bias_u.raw_tensor = bias_u_leaf
+        bias_v = Tensor("bias_v", dims=[heads_dim, qk_feat], dtype="float32")
+        bias_v.raw_tensor = bias_v_leaf
+        kwargs = dict(
+            pos_bias_u=bias_u,
+            pos_bias_v=bias_v,
+            att_dropout=0.0,
+            att_dropout_broadcast=False,
+            v_feat_dim=v_feat,
+            qk_feat_dim=qk_feat,
+            kv_spatial_dim=kv_time,
+            query_spatial_dim=time_dim,
+            pos_emb_spatial_dim=pos_dim,
+        )
+        if pack_gap is None:
+            out = packed.Backend.rel_pos_self_attention(qkv["q"], qkv["k"], qkv["v"], pos_emb, **kwargs)
+        else:
+            out = packed._rel_pos_attention_per_seq(
+                packed.pack(qkv["q"], gap=pack_gap),
+                packed.pack(qkv["k"], gap=pack_gap),
+                packed.pack(qkv["v"], gap=pack_gap),
+                pos_emb,
+                **kwargs,
+            )
+            assert out is not None and packed.is_packed(out)
+            assert out.raw_tensor.gap == pack_gap  # layout restored
+        loss = rf.reduce_sum(out, axis=list(out.dims))
+        loss.raw_tensor.backward()
+        return out, leaves, pos_leaf, bias_u_leaf, bias_v_leaf
+
+    out_ref, leaves_ref, pos_g_ref, bu_g_ref, bv_g_ref = _run()
+    packed.attention_path_counts.clear()
+    out_p, leaves_p, pos_g_p, bu_g_p, bv_g_p = _run(pack_gap=0)
+    assert packed.attention_path_counts.get("rel_pos_per_seq") == 1
+    _assert_equal_non_padded(out_p, out_ref, batch_dim, time_dim, rtol=1e-4, atol=1e-5)
+    mask = rf.sequence_mask([batch_dim, time_dim]).copy_compatible_to_dims([batch_dim, time_dim]).raw_tensor.numpy()
+    for name in ("q", "k", "v"):
+        numpy.testing.assert_allclose(
+            leaves_p[name].grad.numpy()[mask], leaves_ref[name].grad.numpy()[mask], rtol=1e-4, atol=1e-5
+        )
+    numpy.testing.assert_allclose(pos_g_p.grad.numpy(), pos_g_ref.grad.numpy(), rtol=1e-4, atol=1e-5)
+    numpy.testing.assert_allclose(bu_g_p.grad.numpy(), bu_g_ref.grad.numpy(), rtol=1e-4, atol=1e-5)
+    numpy.testing.assert_allclose(bv_g_p.grad.numpy(), bv_g_ref.grad.numpy(), rtol=1e-4, atol=1e-5)
+    # gapped layout roundtrip too
+    out_g = _run(pack_gap=3)[0]
+    _assert_equal_non_padded(out_g, out_ref, batch_dim, time_dim, rtol=1e-4, atol=1e-5)
+
+
+def test_rel_pos_self_attention_dropout_train_packed():
+    # att_dropout > 0 under the train flag: on CPU the per-seq path must be taken
+    # (real weight dropout, no unpack); output packed, finite, and (per dropout)
+    # equal to the no-dropout output in expectation -- here just sanity-bounded.
+    rf.select_backend_torch()
+    x, batch_dim, time_dim, feat_dim = _make_input(batch_size=3, seq_lens=(9, 6, 4), feat=8, seed=23)
+    with rf.set_default_device_ctx("cpu"):
+        rf.set_random_seed(31)
+        att = rf.RelPosSelfAttention(
+            feat_dim,
+            proj_dim=feat_dim,
+            key_dim_total=Dim(8, name="key_tot"),
+            value_dim_total=Dim(8, name="val_tot"),
+            num_heads=2,
+            att_dropout=0.5,
+        )
+        packed.attention_path_counts.clear()
+        warned_before = set(packed._warned_fallback_ops)  # isolate the warn-once bookkeeping
+        with rf.get_run_ctx().train_flag_ctx(True):
+            out = att(packed.pack(x), axis=time_dim)
+        packed._warned_fallback_ops.clear()
+        packed._warned_fallback_ops.update(warned_before)
+        assert packed.is_packed(out)
+        assert packed.attention_path_counts.get("rel_pos_per_seq") == 1
+        assert bool(numpy.isfinite(packed.unpack(out).raw_tensor.detach().numpy()).all())
+
+
+def test_rel_pos_att_triton_kernel_grad():
+    # The Triton varlen rel-pos kernel (CUDA; the train-mode dropout fast path):
+    # fwd + ALL grads (q, k, v, bd) vs autograd through an eager per-seq reference,
+    # at dropout 0 (exact) and dropout > 0 with the kernel's own extracted mask (exact).
+    rf.select_backend_torch()
+    import torch as _torch
+
+    if not _torch.cuda.is_available():
+        raise unittest.SkipTest("needs CUDA")
+    try:
+        from returnn.torch.util import rel_pos_att_triton as m
+    except ImportError as exc:
+        raise unittest.SkipTest(f"triton not available ({exc})")
+
+    dev = "cuda"
+    lens = [33, 21, 9]
+    max_len = max(lens)
+    total, n_heads, d = sum(lens), 2, 32
+    r = 2 * max_len - 1
+    starts = torch.tensor([0, 33, 54], dtype=torch.int32, device=dev)
+    lens_t = torch.tensor(lens, dtype=torch.int32, device=dev)
+    scale = 1.0 / (d**0.5)
+    gen = torch.Generator(device="cpu").manual_seed(13)
+
+    def _reference(q, k, v, bd, keep_mask, dropout_p):
+        outs = []
+        center = max_len - 1
+        for b, ln in enumerate(lens):
+            s0 = int(starts[b])
+            qb, kb, vb, bdb = q[s0 : s0 + ln], k[s0 : s0 + ln], v[s0 : s0 + ln], bd[s0 : s0 + ln]
+            s = torch.einsum("ihd,jhd->hij", qb, kb) * scale
+            idx = center + torch.arange(ln, device=dev)[None, :] - torch.arange(ln, device=dev)[:, None]
+            s = s + bdb.permute(1, 0, 2).gather(2, idx.unsqueeze(0).expand(s.shape[0], -1, -1))
+            w = torch.softmax(s, dim=-1)
+            if keep_mask is not None:
+                w = w * keep_mask[s0 : s0 + ln, :, :ln].permute(1, 0, 2).float() / (1.0 - dropout_p)
+            outs.append(torch.einsum("hij,jhd->ihd", w, vb))
+        return torch.cat(outs, 0)
+
+    for dropout_p, seed in [(0.0, 0), (0.3, 999)]:
+        leaves = [torch.randn(total, n_heads, d, generator=gen).to(dev).requires_grad_(True) for _ in range(3)]
+        bd_leaf = (torch.randn(total, n_heads, r, generator=gen) * 0.5).to(dev).requires_grad_(True)
+        out = m.rel_pos_att_varlen(
+            *leaves, bd_leaf, starts, lens_t, max_len, dropout_p=dropout_p, seed=seed, scale=scale
+        )
+        d_out = torch.randn(total, n_heads, d, generator=gen).to(dev)
+        out.backward(d_out)
+        grads_kernel = [t.grad.clone() for t in leaves] + [bd_leaf.grad.clone()]
+        for t in leaves + [bd_leaf]:
+            t.grad = None
+        keep = None
+        if dropout_p:
+            keep = m.dump_mask(
+                starts, total, n_heads, max_len, r, dropout_p=dropout_p, seed=seed, device=dev
+            )
+        ref = _reference(*leaves, bd_leaf, keep, dropout_p)
+        numpy.testing.assert_allclose(
+            out.detach().cpu().numpy(), ref.detach().cpu().numpy(), rtol=1e-4, atol=1e-5
+        )
+        ref.backward(d_out)
+        for g_kernel, t in zip(grads_kernel, leaves + [bd_leaf]):
+            numpy.testing.assert_allclose(
+                g_kernel.cpu().numpy(), t.grad.cpu().numpy(), rtol=1e-4, atol=1e-4
+            )
+
+
 if __name__ == "__main__":
     better_exchook.install()
     if len(sys.argv) <= 1:
