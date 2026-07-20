@@ -2011,6 +2011,21 @@ class PackedBackend(Backend[PackedRawTensor]):
             layout_lens=raw_tensor.layout_lens,
         )
 
+    @staticmethod
+    def cast_raw(raw_tensor: PackedRawTensor, dtype: str) -> PackedRawTensor:
+        """cast -- on the packed data (elementwise)"""
+        inner_out = raw_tensor.inner.copy_template(name="cast")
+        inner_out.dtype = dtype
+        inner_out.raw_tensor = raw_tensor.inner_backend.cast_raw(raw_tensor.inner.raw_tensor, dtype)
+        return PackedRawTensor(
+            inner=inner_out,
+            packed_dim=raw_tensor.packed_dim,
+            orig_dims=raw_tensor.orig_dims,
+            gap=raw_tensor.gap,
+            align=raw_tensor.align,
+            layout_lens=raw_tensor.layout_lens,
+        )
+
     @classmethod
     def combine(
         cls,

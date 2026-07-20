@@ -860,6 +860,17 @@ def test_rel_pos_att_triton_kernel_grad():
             numpy.testing.assert_allclose(g_kernel.cpu().numpy(), t.grad.cpu().numpy(), rtol=1e-4, atol=1e-4)
 
 
+def test_cast_packed():
+    # rf.cast on packed data runs elementwise on the packed buffer (PackedBackend.cast_raw),
+    # e.g. from the behavior_version>=27 keep-dtype path of LayerNorm/RMSNorm.
+    rf.select_backend_torch()
+    x, batch_dim, time_dim, feat_dim = _make_input()
+    xp = packed.pack(x)
+    out_p = rf.cast(xp, "float64")
+    assert packed.is_packed(out_p) and out_p.dtype == "float64"
+    _assert_equal_non_padded(out_p, rf.cast(x, "float64"), batch_dim, time_dim)
+
+
 if __name__ == "__main__":
     better_exchook.install()
     if len(sys.argv) <= 1:
