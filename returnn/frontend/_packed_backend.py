@@ -2012,6 +2012,61 @@ class PackedBackend(Backend[PackedRawTensor]):
         )
 
     @staticmethod
+    def stft(
+        x: Tensor,
+        *,
+        in_spatial_dim: Dim,
+        frame_step: int,
+        frame_length: int,
+        fft_length: int,
+        window_use_frame_length: bool = True,
+        align_window_left: bool = True,
+        window_enforce_even: bool = True,
+        out_spatial_dim: Dim,
+        out_dim: Dim,
+    ) -> Tensor:
+        """
+        stft on packed audio. Same idea as the packed conv (:func:`PackedBackend.conv`):
+        one inner stft runs over the whole packed buffer as a single long sequence,
+        then the strided output (stride = frame_step) is re-layouted into the packed form.
+        The framing is valid (no cross-seq padding); every real window lies fully inside its
+        own sequence, while the boundary-crossing windows are junk and land in the output gap
+        slots (sliced off by the re-layout).
+        Requires stride | align (frame_step divides the align, so the seq starts stay on the
+        output grid), as for the strided conv. Falls back to the generic (unpack) handling otherwise.
+        """
+        raw = x.raw_tensor
+        opts = dict(
+            frame_step=frame_step,
+            frame_length=frame_length,
+            fft_length=fft_length,
+            window_use_frame_length=window_use_frame_length,
+            align_window_left=align_window_left,
+            window_enforce_even=window_enforce_even,
+        )
+        st = frame_step
+        if (
+            isinstance(raw, PackedRawTensor)
+            and len(raw.orig_dims) == 2
+            and raw.orig_dims[-1] == in_spatial_dim
+            and raw.align % st == 0
+            and out_spatial_dim.dyn_size_ext is not None
+        ):
+            out_inner, out_sp, _ = rf.stft(raw.inner, in_spatial_dim=raw.packed_dim, out_dim=out_dim, **opts)
+            out = _strided_out_wrapper(raw, out_inner, out_sp, out_spatial_dim, st)
+            if out is not None:
+                return out
+            _warn_fallback_once(
+                "stft:strided-out",
+                "strided stft output layout not expressible in the (lens, gap, align) form",
+                action="re-layouting into the closed form, one extra gather (stft stays packed)",
+            )
+            return _extract_strided(raw, out_inner, out_sp, out_spatial_dim, st)
+        return _dim_aware_call(
+            "stft", (x,), dict(in_spatial_dim=in_spatial_dim, out_spatial_dim=out_spatial_dim, out_dim=out_dim, **opts)
+        )
+
+    @staticmethod
     def cast_raw(raw_tensor: PackedRawTensor, dtype: str) -> PackedRawTensor:
         """cast -- on the packed data (elementwise)"""
         inner_out = raw_tensor.inner.copy_template(name="cast")
@@ -2925,7 +2980,6 @@ for _name in [
     "split_dims",
     "squeeze",
     "stack",
-    "stft",
     "top_k",
     "transposed_conv",
 ]:

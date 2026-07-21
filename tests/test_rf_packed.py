@@ -871,6 +871,31 @@ def test_cast_packed():
     _assert_equal_non_padded(out_p, rf.cast(x, "float64"), batch_dim, time_dim)
 
 
+def test_stft_packed():
+    # stft on packed audio runs per-seq on the packed buffer (no unpack, no window crosses a seq),
+    # bit-identical to the padded stft on the valid output frames.
+    rf.select_backend_torch()
+    batch_dim = Dim(3, name="batch")
+    time_dim = Dim(
+        Tensor("time", dims=[batch_dim], dtype="int32", raw_tensor=torch.tensor([400, 320, 240], dtype=torch.int32))
+    )
+    audio = Tensor("audio", dims=[batch_dim, time_dim], dtype="float32")
+    audio.raw_tensor = torch.randn(3, 400, generator=torch.Generator().manual_seed(1))
+    opts = dict(in_spatial_dim=time_dim, frame_step=80, frame_length=160, fft_length=256)
+
+    out_ref, out_sp, out_feat = rf.stft(audio, **opts)
+    warned_before = set(packed._warned_fallback_ops)
+    packed._warned_fallback_ops.clear()
+    # frame_step | align, so the single-call packed stft applies (like the strided conv)
+    xp = packed.regap(packed.pack(audio), 80, align=80)
+    out_p, out_sp_p, _ = rf.stft(xp, out_dim=out_feat, **opts)
+    warned = set(packed._warned_fallback_ops)
+    packed._warned_fallback_ops.update(warned_before)
+    assert "stft" not in warned  # ran the single-call packed stft, no unpack fallback
+    assert packed.is_packed(out_p) and out_sp_p == out_sp
+    _assert_equal_non_padded(out_p, out_ref, batch_dim, out_sp, rtol=1e-4, atol=1e-4)
+
+
 if __name__ == "__main__":
     better_exchook.install()
     if len(sys.argv) <= 1:
