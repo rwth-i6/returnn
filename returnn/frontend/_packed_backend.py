@@ -72,7 +72,7 @@ from typing import Any, Optional, Union, Sequence, Set, Tuple, Dict
 
 from returnn.tensor import Tensor, Dim
 import returnn.frontend as rf
-from ._backend import Backend, register_backend_by_tensor_type
+from ._backend import Backend, register_backend_by_tensor_type, global_backend
 from ._cache import Cache
 
 __all__ = ["PackedRawTensor", "PackedBackend", "pack", "pack_import", "unpack", "regap", "is_packed"]
@@ -1938,6 +1938,17 @@ class PackedBackend(Backend[PackedRawTensor]):
     def executing_eagerly() -> bool:
         """executing eagerly. all inner backends we compose with are eager."""
         return True
+
+    @staticmethod
+    def convert_to_tensor(value, *, dims, dtype, sparse_dim=None, feature_dim=None, device=None, name=None) -> Tensor:
+        """
+        Delegate to the inner backend: a converted constant (numpy array, scalar, raw tensor) is plain,
+        not packed. Reached e.g. when a packed input resolves the backend to this one at a creation site,
+        such as the mel filterbank matrix in :func:`rf.audio.mel_filterbank`.
+        """
+        return global_backend.convert_to_tensor(
+            value, dims=dims, dtype=dtype, sparse_dim=sparse_dim, feature_dim=feature_dim, device=device, name=name
+        )
 
     @staticmethod
     def get_dtype_name_raw(raw_tensor: PackedRawTensor) -> str:
