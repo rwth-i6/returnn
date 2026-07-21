@@ -63,7 +63,7 @@ def raw_dict_to_extern_data(
             if raw_tensor.dtype.is_floating_point and float_dtype:
                 raw_tensor = raw_tensor.to(dtype=float_dtype)
             data.dtype = str(raw_tensor.dtype).split(".")[-1]  # just overwrite for now...
-            data.raw_tensor = raw_tensor.to(device)
+            data.raw_tensor = raw_tensor.to(device, non_blocking=True)
         elif isinstance(raw_tensor, numpy.ndarray):
             data.raw_tensor = raw_tensor  # leave it as it is
         else:
