@@ -75,7 +75,7 @@ import returnn.frontend as rf
 from ._backend import Backend, register_backend_by_tensor_type
 from ._cache import Cache
 
-__all__ = ["PackedRawTensor", "PackedBackend", "pack", "unpack", "regap", "is_packed"]
+__all__ = ["PackedRawTensor", "PackedBackend", "pack", "pack_import", "unpack", "regap", "is_packed"]
 
 
 # Layout metadata (cu_seqlens, flex document mask, frame coords/masks, ...)
@@ -3008,6 +3008,35 @@ def _auto_pack_dims(source: Tensor) -> Tuple[Dim, ...]:
     return tuple(dims)
 
 
+def pack_import(
+    inner_flat: Tensor,
+    *,
+    batch_dim: Dim,
+    spatial_dim: Dim,
+    packed_dim: Dim,
+    feature_dim: Optional[Dim] = None,
+) -> Tensor:
+    """
+    Import an already-flat inner tensor into packed storage,
+    i.e. the sequences are already concatenated along the packed dim, without padding.
+    This is the entry point for the packed data pipeline (collate_packed_batch),
+    where the flat buffer never went through a padded intermediate.
+
+    :param inner_flat: dims [packed_dim, feature...], the concatenated dense buffer
+    :param batch_dim: virtual batch dim
+    :param spatial_dim: virtual spatial (time) dim,
+        must carry the per-seq sizes (dyn_size_ext over [batch_dim])
+    :param packed_dim: the packed dim (total frames), must match inner_flat's first dim
+    :param feature_dim: optional feature dim for the result
+    :return: tensor with virtual dims [batch_dim, spatial_dim, feature...], packed (dense) storage
+    """
+    assert packed_dim in inner_flat.dims
+    if feature_dim is not None and inner_flat.feature_dim is None:
+        inner_flat.feature_dim = feature_dim
+    helper = PackedRawTensor(inner=inner_flat, packed_dim=packed_dim, orig_dims=(batch_dim, spatial_dim))
+    return helper.rewrap(inner_flat, name=inner_flat.name)
+
+
 def pack(
     source: Tensor,
     *,
@@ -3019,7 +3048,7 @@ def pack(
     """
     Pack the given dims of source into packed storage.
 
-    Unlike :func:`rf.pack_padded`, the returned Tensor keeps the *original* (virtual) dims,
+    Unlike :func:`pack_padded`, the returned Tensor keeps the *original* (virtual) dims,
     so downstream model code is unchanged;
     only the storage (raw tensor) is packed.
 

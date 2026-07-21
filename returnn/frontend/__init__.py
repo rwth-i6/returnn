@@ -41,6 +41,7 @@ from .loss import *
 from .math_ import *
 from .matmul import *
 from .normalization import *
+from .packed import *
 from .parameter import *
 from .parametrizations import *
 from .parametrize import *
