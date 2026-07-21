@@ -2738,6 +2738,10 @@ class PackedBackend(Backend[PackedRawTensor]):
         packed_ops = [x for x in operands if isinstance(x, Tensor) and is_packed(x)]
         assert packed_ops, "PackedBackend.where: no packed operand"
         raw0 = packed_ops[0].raw_tensor
+        # conform other packed operands (same seqs, possibly a different layout) to raw0's packing.
+        operands = [_conform_packing(x, raw0) for x in operands]
+        cond, true_, false_ = operands
+        packed_ops = [x for x in operands if isinstance(x, Tensor) and is_packed(x)]
         if all(raw0.same_packing(x.raw_tensor) for x in packed_ops[1:]):
             inner_ops = []
             for x in operands:
