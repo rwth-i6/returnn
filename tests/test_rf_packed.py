@@ -379,9 +379,15 @@ def test_transformer_aed():
 
         logits_ref = _fwd(src, tgt)
         logits_p = _fwd(packed.pack(src), packed.pack(tgt))
+        # gapped encoder: the cross-attention K/V then carries gap frames
+        # -- the realistic conv-subsampled Conformer encoder feeding a Transformer decoder.
+        # The varlen path must strip them and build separate query / kv offsets.
+        logits_pg = _fwd(packed.pack(src, gap=8, align=2), packed.pack(tgt))
     assert packed.is_packed(logits_p)  # output side follows the decoder packing
     assert logits_p.raw_tensor.orig_dims == (batch_dim, dec_time)
     _assert_equal_non_padded(logits_p, logits_ref, batch_dim, dec_time, rtol=1e-4, atol=1e-5)
+    assert packed.is_packed(logits_pg)
+    _assert_equal_non_padded(logits_pg, logits_ref, batch_dim, dec_time, rtol=1e-4, atol=1e-5)
 
 
 def test_batch_norm_packed_gapped_train():
