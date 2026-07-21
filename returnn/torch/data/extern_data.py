@@ -7,6 +7,7 @@ from typing import Optional, Any, Union, Dict, List, Sequence
 import numpy
 import torch
 from returnn.tensor import Tensor, TensorDict, Dim
+import returnn.frontend as rf
 
 
 def extern_data_template_from_config_opts(extern_data_dict: Dict[str, Any]) -> TensorDict:
@@ -52,6 +53,13 @@ def raw_dict_to_extern_data(
         if not with_eval_targets and not data.available_for_inference:
             continue
         data = data.copy_template()
+        # packing is inferred from the collate meta marker (see collate_batch), not the config
+        if extern_data_raw.get(k + ":packed"):
+            _set_packed_extern_data(
+                data, k, extern_data_raw, batch_dim=batch_dim, device=device, float_dtype=float_dtype
+            )
+            extern_data.data[k] = data
+            continue
         raw_tensor = extern_data_raw[k]
         assert len(raw_tensor.shape) == data.batch_ndim, f"ndim mismatch for {k}: {raw_tensor.shape} vs {data}"
         for i, dim in enumerate(data.dims):
@@ -97,6 +105,52 @@ def raw_dict_to_extern_data(
     return extern_data
 
 
+def _set_packed_extern_data(
+    data: Tensor,
+    key: str,
+    extern_data_raw: Dict[str, Union[torch.Tensor, numpy.ndarray]],
+    *,
+    batch_dim: Dim,
+    device: Union[str, torch.device],
+    float_dtype: Optional[torch.dtype],
+) -> None:
+    """
+    Fill data (a template copy) with a packed (concatenated, unpadded) raw tensor,
+    from :func:`returnn.torch.data.pipeline.collate_batch`.
+    ``extern_data_raw[key]`` is the flat [total, ...feature] buffer,
+    ``extern_data_raw[key + ":seq_len"]`` the per-seq sizes.
+    """
+    raw_tensor = extern_data_raw[key]
+    assert isinstance(raw_tensor, torch.Tensor), f"packed extern_data expects a torch tensor for {key}"
+    opts = extern_data_raw[key + ":packed"]
+    gap, align = opts["gap"], opts["align"]
+    size = extern_data_raw[key + ":seq_len"]
+    assert size.device.type == "cpu"
+    n_seqs = int(size.shape[0])
+    if batch_dim.dyn_size_ext is not None and batch_dim.dyn_size_ext.raw_tensor is None:
+        batch_dim.dyn_size_ext.raw_tensor = torch.tensor(n_seqs, dtype=torch.int32)
+    spatial = data.dims[1]
+    size_dtype = str(size.dtype).split(".")[-1]
+    if spatial.dyn_size_ext is None:
+        spatial.dyn_size_ext = Tensor(spatial.name or "time", dims=[batch_dim], dtype=size_dtype)
+    spatial.dyn_size_ext.dtype = size_dtype
+    spatial.dyn_size_ext.raw_tensor = size
+    if raw_tensor.dtype.is_floating_point and float_dtype:
+        raw_tensor = raw_tensor.to(dtype=float_dtype)
+    inner_dtype = str(raw_tensor.dtype).split(".")[-1]
+    raw_tensor = raw_tensor.to(device, non_blocking=True)
+    packed_dim = Dim(int(raw_tensor.shape[0]), name=(spatial.name or "time") + ":packed")
+    inner = Tensor(key, dims=[packed_dim] + list(data.dims[2:]), dtype=inner_dtype, sparse_dim=data.sparse_dim)
+    inner.raw_tensor = raw_tensor
+    data.dtype = inner_dtype  # match the (possibly float_dtype-cast) buffer, like the padded path
+    packed_t = rf.pack_import(
+        inner, batch_dim=batch_dim, spatial_dim=spatial, packed_dim=packed_dim, feature_dim=data.feature_dim
+    )
+    if gap or align > 1:
+        packed_t = rf.packed_regap(packed_t, gap, align=align)  # on device (raw_tensor already on device)
+    data.raw_tensor = packed_t.raw_tensor
+
+
 def raw_dict_can_split_batch(
     extern_data_raw: Dict[str, Union[torch.Tensor, numpy.ndarray]],
     *,
@@ -107,6 +161,11 @@ def raw_dict_can_split_batch(
     :param num_splits: into how many parts
     :return:
     """
+    packed_keys = _packed_keys(extern_data_raw)
+    if packed_keys:
+        # the batch is the number of sequences (seq_len length), not dim 0 (= total frames)
+        n_seqs = int(extern_data_raw[packed_keys[0] + ":seq_len"].shape[0])
+        return n_seqs >= num_splits
     some_value = next(iter(extern_data_raw.values()))
     assert isinstance(some_value, (torch.Tensor, numpy.ndarray))
     batch_size = int(some_value.shape[0])
@@ -123,6 +182,8 @@ def raw_dict_split_batch(
     :param splits: either the list of resulting batch dims, or the num of splits
     :return: splitted extern_data_raw
     """
+    if _packed_keys(extern_data_raw):
+        return _raw_dict_split_batch_packed(extern_data_raw, splits=splits)
     some_value = next(iter(extern_data_raw.values()))
     assert isinstance(some_value, (torch.Tensor, numpy.ndarray))
     batch_size = int(some_value.shape[0])
@@ -143,6 +204,55 @@ def raw_dict_split_batch(
             if "%s:seq_len" % k in res_:
                 max_len = torch.max(res_["%s:seq_len" % k])
                 res_[k] = v[:, :max_len]
+    return res
+
+
+def _packed_keys(extern_data_raw: Dict[str, Union[torch.Tensor, numpy.ndarray]]) -> List[str]:
+    """:return: the data keys stored packed (marked by ``<key>:packed`` from collate_batch)"""
+    suffix = ":packed"
+    return [k[: -len(suffix)] for k in extern_data_raw if k.endswith(suffix)]
+
+
+def _raw_dict_split_batch_packed(
+    extern_data_raw: Dict[str, Union[torch.Tensor, numpy.ndarray]],
+    *,
+    splits: Union[Sequence[int], int],
+) -> List[Dict[str, Union[torch.Tensor, numpy.ndarray]]]:
+    """
+    Split a packed raw dict along the sequences.
+    Each packed data key is sliced at its OWN frame boundaries (cumsum of its seq_len),
+    the seq_len and any per-seq key are sliced by the seq index,
+    scalars and meta markers are copied.
+    """
+    packed = set(_packed_keys(extern_data_raw))
+    n_seqs = int(extern_data_raw[next(iter(packed)) + ":seq_len"].shape[0])
+    if isinstance(splits, int):
+        splits = _make_split_seq_from_num_splits(splits, n_seqs)
+    assert isinstance(splits, (tuple, list)) and sum(splits) == n_seqs
+    # per packed key: exclusive frame offsets (a leading 0), so a seq range maps to a frame slice
+    frame_offsets = {}
+    for pk in packed:
+        seq_len = extern_data_raw[pk + ":seq_len"]
+        cumsum = torch.zeros(n_seqs + 1, dtype=torch.long)
+        cumsum[1:] = torch.cumsum(seq_len.to(torch.long), dim=0)
+        frame_offsets[pk] = cumsum
+    res: List[Dict[str, Union[torch.Tensor, numpy.ndarray]]] = [{} for _ in range(len(splits))]
+    seq_off = 0
+    for i, n in enumerate(splits):
+        seq_lo, seq_hi = seq_off, seq_off + n
+        for k, v in extern_data_raw.items():
+            if not isinstance(v, (torch.Tensor, numpy.ndarray)):
+                res[i][k] = v  # scalar / meta marker (e.g. the ":packed" bool)
+            elif k.endswith(":seq_len") and k[: -len(":seq_len")] in packed:
+                res[i][k] = v[seq_lo:seq_hi]
+            elif k in packed:
+                cumsum = frame_offsets[k]
+                res[i][k] = v[int(cumsum[seq_lo]) : int(cumsum[seq_hi])]  # frame slice
+            elif v.ndim > 0:
+                res[i][k] = v[seq_lo:seq_hi]  # static / non-packed per-seq key: by seq index
+            else:
+                res[i][k] = v
+        seq_off = seq_hi
     return res
 
 

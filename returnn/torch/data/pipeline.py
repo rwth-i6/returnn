@@ -21,6 +21,7 @@ other PyTorch datasets more directly, including also HuggingFace datasets.
 
 from __future__ import annotations
 import bisect
+import functools
 import itertools
 from typing import Optional, Any, Sequence, Tuple, Union, List, Dict, Callable
 import sys
@@ -53,9 +54,21 @@ def create_tensor(array: numpy.ndarray) -> Union[torch.Tensor, numpy.ndarray]:
     return torch.tensor(array)
 
 
-def collate_batch(batch: List[Dict[str, numpy.ndarray]]) -> Dict[str, Union[torch.Tensor, numpy.ndarray]]:
+def collate_batch(
+    batch: List[Dict[str, numpy.ndarray]], *, packing: Optional[Dict[str, Any]] = None
+) -> Dict[str, Union[torch.Tensor, numpy.ndarray]]:
     """
+    Merge the samples of a batch into one batched tensor per key.
+
     :param batch:
+    :param packing: if given (see :func:`packed_batch_config`),
+        the dynamic-length sequences are concatenated along their time axis (dim 0)
+        into one flat buffer per key, without padding (a packed batch),
+        and ``<key>:packed`` carries the target ``{"gap", "align"}`` so
+        :func:`raw_dict_to_extern_data` / :func:`returnn.frontend.pack_import`
+        rebuild the packed layout on device;
+        otherwise the sequences are padded.
+        The per-key ``<key>:seq_len`` is set either way.
     """
     assert isinstance(batch, list)
     assert batch, "batch is empty?"
@@ -75,16 +88,58 @@ def collate_batch(batch: List[Dict[str, numpy.ndarray]]) -> Dict[str, Union[torc
             raise ValueError("batch is empty?")
         if isinstance(ls[0], torch.Tensor):
             if ls[0].ndim > 0:
-                padded = torch.nn.utils.rnn.pad_sequence(ls, batch_first=True, padding_value=0)
-                res[key] = padded
+                if packing is not None:
+                    res[key] = torch.cat(ls, dim=0)  # flat [total, ...], no padding
+                    # the buffer stays dense here, the target gap is applied on device
+                    res["%s:packed" % key] = packed_batch_key_opts(packing, key)
+                else:
+                    res[key] = torch.nn.utils.rnn.pad_sequence(ls, batch_first=True, padding_value=0)
                 res["%s:seq_len" % key] = torch.tensor([v.shape[0] for v in ls], dtype=torch.int32)
             else:
                 res[key] = torch.stack(ls, dim=0)
         elif isinstance(ls[0], numpy.ndarray):
-            padded = numpy.stack(ls, axis=0)
-            res[key] = padded
+            res[key] = numpy.stack(ls, axis=0)
 
     return res
+
+
+def packed_batch_config() -> Optional[Dict[str, Any]]:
+    """
+    :return: the ``packed_tensors`` config dict, or None if packing is off.
+        ``packed_tensors`` is ``True`` (all defaults: dense, gap 0, align 1)
+        or a dict with the global ``gap``/``align`` and optional per-key overrides
+        under the reserved ``per_key`` sub-dict::
+
+            packed_tensors = {"gap": 120, "align": 6, "per_key": {"data": {"gap": 240}}}
+
+        The defaults are resolved per key by :func:`packed_batch_key_opts`,
+        so this only validates the keys and passes the dict through (``True`` -> ``{}``).
+    """
+    from returnn.config import get_global_config
+
+    config = get_global_config(raise_exception=False)
+    if config is None:
+        return None
+    opt = config.typed_value("packed_tensors", None)
+    if opt is None:
+        opt = config.bool("packed_tensors", False)
+    if not opt:
+        return None
+    if opt is True:
+        return {}
+    assert isinstance(opt, dict), f"packed_tensors: expected bool or dict, got {opt!r}"
+    allowed = {"gap", "align", "per_key"}
+    assert set(opt).issubset(allowed), f"packed_tensors: unexpected keys {set(opt) - allowed}, allowed {allowed}"
+    return opt
+
+
+def packed_batch_key_opts(packing: Dict[str, Any], key: str) -> Dict[str, int]:
+    """:return: the ``{"gap", "align"}`` for the given data key, per-key override else global default"""
+    per = packing.get("per_key", {}).get(key, {})
+    return {
+        "gap": int(per.get("gap", packing.get("gap", 0))),
+        "align": int(per.get("align", packing.get("align", 1))),
+    }
 
 
 class ChunkingIterDataPipe(torch.utils.data.IterDataPipe):
@@ -662,9 +717,11 @@ def create_data_loader_from_batches(
                 process_pre_init_func=SubProcCopyGlobalConfigPreInitFunc()
             )
 
+    packing = packed_batch_config()
+    collate_fn = functools.partial(collate_batch, packing=packing) if packing is not None else collate_batch
     return torch.utils.data.DataLoader(
         batches_dataset,
-        collate_fn=collate_batch,
+        collate_fn=collate_fn,
         # Batching is already done by BatchingIterDataPipe.
         batch_size=None,
         # Explicitly not use the following opts, which are not supported and/or do not make sense

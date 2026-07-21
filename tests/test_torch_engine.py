@@ -13,7 +13,7 @@ import torch
 
 from returnn.util import better_exchook
 from returnn.config import Config, global_config_ctx
-from returnn.tensor import TensorDict, Tensor
+from returnn.tensor import TensorDict, Tensor, Dim
 from returnn.torch.engine import Engine
 from returnn.torch.updater import Updater
 import returnn.frontend as rf
@@ -72,6 +72,120 @@ def test_torch_engine_train():
         engine = Engine(config=config)
         engine.init_train_from_config(train_data=dataset)
         engine.train()
+
+
+_packed_time_dim = Dim(None, name="time")
+_packed_in_dim = Dim(9, name="in")
+_packed_classes_dim = Dim(2, name="classes")
+_packed_train_losses = []
+_packed_train_is_packed = []  # per step: whether extern_data["data"] arrived packed
+
+
+# must be in the global scope due to pickling
+class RFPackedTrainModel(rf.Module):
+    def __init__(self, **_kwargs):
+        super().__init__()
+        self.lin = rf.Linear(_packed_in_dim, _packed_classes_dim)
+
+    @classmethod
+    def train_step(cls, *, model: RFPackedTrainModel, extern_data: TensorDict, **_kwargs):
+        """train step, same code for padded and packed extern_data"""
+        logits = model.lin(extern_data["data"])
+        loss = rf.cross_entropy(
+            estimated=logits, target=extern_data["classes"], axis=_packed_classes_dim, estimated_type="logits"
+        )
+        rf.get_run_ctx().mark_as_loss(name="ce", loss=loss)
+        _packed_train_losses.append(float(rf.reduce_sum(loss, axis=loss.dims, use_mask=True).raw_tensor))
+        from returnn.frontend import _packed_backend
+
+        _packed_train_is_packed.append(_packed_backend.is_packed(extern_data["data"]))
+
+
+def _run_packed_train(packed_tensors):
+    from returnn.tensor import batch_dim
+    from returnn.frontend import _packed_backend
+
+    _packed_train_losses.clear()
+    _packed_train_is_packed.clear()
+    warned_before = set(_packed_backend._warned_fallback_ops)
+    _packed_backend._warned_fallback_ops.clear()
+    config = Config(
+        dict(
+            task="train",
+            device="cpu",
+            random_seed=42,
+            extern_data={
+                "data": {"dims": [batch_dim, _packed_time_dim, _packed_in_dim], "dtype": "float32"},
+                "classes": {
+                    "dims": [batch_dim, _packed_time_dim],
+                    "sparse_dim": _packed_classes_dim,
+                    "dtype": "int32",
+                },
+            },
+            get_model=RFPackedTrainModel,
+            train_step=RFPackedTrainModel.train_step,
+            batch_size=500,
+            optimizer={"class": "adam"},
+            torch_dataloader_opts={"num_workers": 0},
+            packed_tensors=packed_tensors,
+        )
+    )
+    dataset = init_dataset({"class": "Task12AXDataset", "num_seqs": 20, "name": "train", "fixed_random_seed": 1})
+    dataset.init_seq_order(epoch=1)
+    with global_config_ctx(config):
+        engine = Engine(config=config)
+        engine.init_train_from_config(train_data=dataset)
+        engine.train()
+    warnings = set(_packed_backend._warned_fallback_ops)
+    _packed_backend._warned_fallback_ops.clear()
+    _packed_backend._warned_fallback_ops.update(warned_before)
+    return list(_packed_train_losses), list(_packed_train_is_packed), warnings
+
+
+def test_torch_engine_train_packed():
+    # full packed data pipeline: collate_batch(packing) -> raw_dict_to_extern_data (packed) ->
+    # model (RF, unchanged) -> loss -> backprop. Per-step losses must match the padded run,
+    # both dense (gap 0) and with a gap in the packing (the gap frames must not affect the loss).
+    losses_padded, is_packed_padded, _ = _run_packed_train(False)
+    assert not any(is_packed_padded)  # padded run: nothing is packed
+    for packed_tensors in [True, {"gap": 8, "align": 2}, {"per_key": {"data": {"gap": 8, "align": 2}}}]:
+        losses_packed, is_packed, warnings = _run_packed_train(packed_tensors)
+        assert is_packed and all(is_packed), (packed_tensors, is_packed)  # data actually packed each step
+        assert not warnings, (packed_tensors, warnings)  # packed ops took the fast path, no unpack fallback
+        assert losses_packed and all(numpy.isfinite(losses_packed)), (packed_tensors, losses_packed)
+        assert len(losses_padded) == len(losses_packed)
+        numpy.testing.assert_allclose(losses_packed, losses_padded, rtol=1e-4, atol=1e-4, err_msg=repr(packed_tensors))
+
+
+def test_raw_dict_split_batch_packed():
+    # packed OOM auto-split: split by sequences, each key sliced at its own frame boundaries.
+    from returnn.torch.data.extern_data import raw_dict_can_split_batch, raw_dict_split_batch
+
+    data_lens, cls_lens = [4, 2, 3], [2, 1, 2]
+    raw = {
+        "data": torch.arange(sum(data_lens) * 5, dtype=torch.float32).reshape(sum(data_lens), 5),
+        "data:seq_len": torch.tensor(data_lens, dtype=torch.int32),
+        "data:packed": {"gap": 0, "align": 1},
+        "classes": torch.arange(sum(cls_lens), dtype=torch.int32),
+        "classes:seq_len": torch.tensor(cls_lens, dtype=torch.int32),
+        "classes:packed": {"gap": 0, "align": 1},
+        "seq_tag": numpy.array(["s0", "s1", "s2"]),
+        "num_seqs": 3,
+    }
+    assert raw_dict_can_split_batch(raw, num_splits=2)
+    assert not raw_dict_can_split_batch(raw, num_splits=4)  # only 3 seqs
+    parts = raw_dict_split_batch(raw, splits=2)  # seqs [0,1] and [2]
+    assert len(parts) == 2
+    d_cs, c_cs = [0, 4, 6, 9], [0, 2, 3, 5]
+    for part, (lo, hi) in [(parts[0], (0, 2)), (parts[1], (2, 3))]:
+        torch.testing.assert_close(part["data"], raw["data"][d_cs[lo] : d_cs[hi]])
+        torch.testing.assert_close(part["data:seq_len"], raw["data:seq_len"][lo:hi])
+        assert part["data:packed"] == {"gap": 0, "align": 1}
+        torch.testing.assert_close(part["classes"], raw["classes"][c_cs[lo] : c_cs[hi]])
+        torch.testing.assert_close(part["classes:seq_len"], raw["classes:seq_len"][lo:hi])
+        assert list(part["seq_tag"]) == list(raw["seq_tag"][lo:hi])
+        assert part["num_seqs"] == 3
+    torch.testing.assert_close(torch.cat([parts[0]["data"], parts[1]["data"]], dim=0), raw["data"])
 
 
 def test_torch_engine_forward_simple():
