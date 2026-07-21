@@ -808,12 +808,41 @@ def _make_dim_aware_op(name: str):
     return staticmethod(_op)
 
 
+def _conform_packing(x, target_raw: PackedRawTensor):
+    """
+    Conform x to target_raw's packing (nesting-aware).
+    A packed tensor over the SAME sequences (same orig_dims) but a different layout
+    (gap/align/layout_lens, or just a different packed dim object) is regapped to
+    target_raw's layout and rewrapped onto its packed dim, so a multi-arg op can run
+    on the packed data. Anything else (not packed, already same packing, or different
+    sequences) is returned unchanged.
+    """
+    if isinstance(x, (list, tuple)):
+        return type(x)(_conform_packing(e, target_raw) for e in x)
+    if isinstance(x, Tensor) and is_packed(x):
+        xr = x.raw_tensor
+        if not target_raw.same_packing(xr) and xr.orig_dims == target_raw.orig_dims:
+            y = regap(x, target_raw.gap, align=target_raw.align, layout_lens=target_raw.layout_lens)
+            yr = y.raw_tensor
+            if yr.packed_dim != target_raw.packed_dim:
+                inner, _ = rf.replace_dim(yr.inner, in_dim=yr.packed_dim, out_dim=target_raw.packed_dim)
+                y = target_raw.rewrap(inner, name=x.name)
+            return y
+    return x
+
+
 def _dim_aware_call(name: str, args, kwargs):
     """see :func:`_make_dim_aware_op`"""
     all_values = list(args) + list(kwargs.values())
     packed_args = [x for x in _flatten(all_values) if isinstance(x, Tensor) and is_packed(x)]
     assert packed_args, f"PackedBackend.{name}: no packed tensor in args"
     raw0 = packed_args[0].raw_tensor
+    # conform other packed args (same seqs, possibly a different layout) to raw0's packing,
+    # so multi-arg ops (combine, compare, where, concat, ...) stay packed instead of unpacking.
+    args = [_conform_packing(x, raw0) for x in args]
+    kwargs = {k: _conform_packing(v, raw0) for k, v in kwargs.items()}
+    all_values = list(args) + list(kwargs.values())
+    packed_args = [x for x in _flatten(all_values) if isinstance(x, Tensor) and is_packed(x)]
     referenced = _collect_referenced_dims(*all_values)
     if all(raw0.same_packing(x.raw_tensor) for x in packed_args[1:]):
         overlap = referenced & (set(raw0.orig_dims) | {raw0.packed_dim})
@@ -857,7 +886,7 @@ def _dim_aware_call(name: str, args, kwargs):
             out = getattr(raw0.inner_backend, name)(*inner_args, **inner_kwargs)
             return _rewrap_result(out, raw0)
     else:
-        _warn_fallback_once(name, "mixed packings")
+        _warn_fallback_once(name, "packed args over different sequences")
     in_spatial = kwargs.get("in_spatial_dims", kwargs.get("in_spatial_dim"))
     args = [_unpack_if_packed(x) for x in args]
     kwargs = {k: _unpack_if_packed(v) for k, v in kwargs.items()}
@@ -2106,14 +2135,16 @@ class PackedBackend(Backend[PackedRawTensor]):
         a_packed = isinstance(a, Tensor) and isinstance(a.raw_tensor, PackedRawTensor)
         b_packed = isinstance(b, Tensor) and isinstance(b.raw_tensor, PackedRawTensor)
         if a_packed and b_packed:
-            a_raw, b_raw = a.raw_tensor, b.raw_tensor
+            a_raw = a.raw_tensor
+            b = _conform_packing(b, a_raw)  # same seqs, different layout -> conform to a's packing
+            b_raw = b.raw_tensor
             if a_raw.same_packing(b_raw):
                 out = a_raw.rewrap(
                     rf.combine(a_raw.inner, kind, b_raw.inner, allow_broadcast_all_sources=True), name=kind
                 )
                 _set_feature_dim_like_binop(out, a, b)
                 return out
-            _warn_fallback_once("combine", "mixed packings")
+            _warn_fallback_once("combine", "packed operands over different sequences")
         elif a_packed or b_packed:
             packed_t, other = (a, b) if a_packed else (b, a)
             packed_raw = packed_t.raw_tensor
