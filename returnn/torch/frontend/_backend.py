@@ -1216,15 +1216,18 @@ class TorchBackend(Backend[torch.Tensor]):
                 out_raw = out_raw.reshape([d.get_dim_value() for d in out.dims])
             out.raw_tensor = out_raw
         elif axis_int == 0 and indices.batch_ndim == 0:
-            out.raw_tensor = source.raw_tensor[indices.raw_tensor]
+            # torch advanced indexing / index_select need int64 indices (torch < 2.0 rejects int32)
+            out.raw_tensor = source.raw_tensor[indices.raw_tensor.type(torch.int64)]
         elif axis_int == 0 and source.batch_ndim == 2:
             # This is exactly what torch.embedding is intended for. Let's use that.
-            out.raw_tensor = torch.embedding(source.raw_tensor, indices.raw_tensor)
+            out.raw_tensor = torch.embedding(source.raw_tensor, indices.raw_tensor.type(torch.int64))
         elif indices.batch_ndim <= 1:
             # Note: This also works when indices is on CPU and source is on GPU.
-            out.raw_tensor = source.raw_tensor[(slice(None),) * axis_int + (indices.raw_tensor,)]
+            out.raw_tensor = source.raw_tensor[(slice(None),) * axis_int + (indices.raw_tensor.type(torch.int64),)]
         else:
-            out_raw = torch.index_select(source.raw_tensor, dim=axis_int, index=indices.raw_tensor.flatten())
+            out_raw = torch.index_select(
+                source.raw_tensor, dim=axis_int, index=indices.raw_tensor.flatten().type(torch.int64)
+            )
             out_shape = (
                 source.raw_tensor.shape[:axis_int] + indices.raw_tensor.shape + source.raw_tensor.shape[axis_int + 1 :]
             )
