@@ -2800,21 +2800,31 @@ class PackedBackend(Backend[PackedRawTensor]):
     @staticmethod
     def softmax_cross_entropy_with_logits(*, logits: Tensor, targets: Tensor, axis: Dim):
         """
-        CE over a non-packed axis (vocab), with targets packed the same way -> on packed data.
-        This is the packed output block: logits [packed, vocab], targets [packed] (sparse).
+        CE over a non-packed axis (vocab), targets over the same sequences -> on packed data.
+        logits [packed, vocab], targets [packed] (sparse).
+        The targets are matched to the logits packing (regap, a no-op if the layout already agrees,
+        e.g. a different per-key gap), then rewrapped onto the logits packed dim.
+        Falls back if the axis is packed or the targets are not packed over the same sequences.
         """
         logits_raw = _raw(logits)
         targets_raw = targets.raw_tensor
         if (
             not _dim_refs_packed(axis, logits_raw)
             and isinstance(targets_raw, PackedRawTensor)
-            and logits_raw.same_packing(targets_raw)
+            and targets_raw.orig_dims == logits_raw.orig_dims
         ):
+            targets = regap(targets, logits_raw.gap, align=logits_raw.align, layout_lens=logits_raw.layout_lens)
+            targets_raw = targets.raw_tensor
+            target_inner = targets_raw.inner
+            if targets_raw.packed_dim != logits_raw.packed_dim:
+                target_inner, _ = rf.replace_dim(
+                    target_inner, in_dim=targets_raw.packed_dim, out_dim=logits_raw.packed_dim
+                )
             inner_out = rf.cross_entropy(
-                estimated=logits_raw.inner, target=targets_raw.inner, axis=axis, estimated_type="logits"
+                estimated=logits_raw.inner, target=target_inner, axis=axis, estimated_type="logits"
             )
             return logits_raw.rewrap(inner_out, name="cross_entropy")
-        _warn_fallback_once("softmax_cross_entropy_with_logits", "axis packed or targets not packed alike")
+        _warn_fallback_once("softmax_cross_entropy_with_logits", "axis packed or targets not over the same seqs")
         out = rf.cross_entropy(
             estimated=unpack(logits), target=_unpack_if_packed(targets), axis=axis, estimated_type="logits"
         )
@@ -3025,7 +3035,7 @@ def pack_import(
     """
     Import an already-flat inner tensor into packed storage,
     i.e. the sequences are already concatenated along the packed dim, without padding.
-    This is the entry point for the packed data pipeline (collate_packed_batch),
+    This is the entry point for the packed data pipeline (collate_batch),
     where the flat buffer never went through a padded intermediate.
 
     :param inner_flat: dims [packed_dim, feature...], the concatenated dense buffer
