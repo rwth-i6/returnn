@@ -568,7 +568,8 @@ def _frame_coords(template: PackedRawTensor, d: Dim) -> Tensor:
     # they are masked out of the scatter, so clamping their index keeps it in-bounds without effect.
     total = template.packed_dim.get_dim_value_tensor()
     if isinstance(total, Tensor):
-        total = rf.cast(total, pos.dtype)
+        # dyn sizes live on cpu; move to the coords device so the clamp does not mix devices
+        total = rf.copy_to_device(rf.cast(total, pos.dtype), pos.device)
     pos = rf.minimum(pos, total - 1)
     out = rf.scatter(
         grid, indices=pos, indices_dim=list(template.orig_dims), out_dim=template.packed_dim, use_mask=True
