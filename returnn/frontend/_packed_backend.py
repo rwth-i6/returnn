@@ -1717,25 +1717,50 @@ def _triton_rel_pos_attention(
         bd_t = bd_t.unsqueeze(1).expand(-1, heads_dim.dimension, -1)
     # pre-scale the bias like the content-based term (the kernel scales only q k^T)
     bd_t = (bd_t * qk_feat_dim.dimension**-0.5).to(q_t.dtype)
-    # starts/lens/max_len are cached together.
-    # the host reads here (int(get_dim_value), .max via get_dim_value, copy_to_device)
-    # are per-call GPU syncs otherwise, which break CUDA-graph capture;
-    # computed once at warm-up, then capture and replay hit the cache -- no sync.
-    starts_key = _packing_cache_key("triton_starts_lens", q_raw, query.device)
-    hit = _layout_cache.get(starts_key)
-    if hit is not None:
-        starts, lens, max_len = hit
-    else:
-        max_len = int(query_spatial_dim.get_dim_value())
-        r_size = int(pos_emb_spatial_dim.get_dim_value())
-        if r_size != 2 * max_len - 1:
-            return None  # only the standard centered layout
-        starts_rf, _ = _seq_starts_math(q_raw.orig_dims, q_raw.gap, q_raw.align, layout_lens=q_raw.layout_lens)
+    lens_ext = query_spatial_dim.dyn_size_ext
+    if (
+        lens_ext is not None
+        and lens_ext.raw_tensor is not None
+        and lens_ext.raw_tensor.device == q_t.device
+        and q_raw.layout_lens is None
+    ):
+        # Device-resident seq lens: recompute starts/lens as pure device ops on every call
+        # (async, no host sync, no cache).
+        # CUDA-graph capture then records the recompute,
+        # so one captured graph replays correctly across varying lengths (<= the buffer bound):
+        # the kernel reads starts/lens from device buffers and early-exits per block beyond a seq len.
+        # max_len comes from the backed raw shape of the b+d term (host metadata, no sync);
+        # pos_emb must be the centered 2*max_len-1 layout (the rel_pos_self_attention contract).
+        # (layout_lens is a small host tensor -> that case stays on the cached branch below.)
+        r_size = bd_t.shape[-1]
+        if r_size % 2 != 1:
+            return None
+        max_len = (r_size + 1) // 2
+        starts_rf, _ = _seq_starts_math(q_raw.orig_dims, q_raw.gap, q_raw.align, layout_lens=None)
         if starts_rf is None:
             return None
-        starts = rf.copy_to_device(starts_rf, query.device).raw_tensor.int().flatten()
-        lens = rf.copy_to_device(query_spatial_dim.dyn_size_ext, query.device).raw_tensor.int().flatten()
-        _layout_cache.set(starts_key, (starts, lens, max_len))
+        starts = starts_rf.raw_tensor.int().flatten()
+        lens = lens_ext.raw_tensor.int().flatten()
+    else:
+        # Host-side seq lens: starts/lens/max_len are cached together.
+        # the host reads here (int(get_dim_value), copy_to_device) are per-call GPU syncs otherwise,
+        # which break CUDA-graph capture;
+        # computed once at warm-up, later calls hit the cache -- no sync.
+        starts_key = _packing_cache_key("triton_starts_lens", q_raw, query.device)
+        hit = _layout_cache.get(starts_key)
+        if hit is not None:
+            starts, lens, max_len = hit
+        else:
+            max_len = int(query_spatial_dim.get_dim_value())
+            r_size = int(pos_emb_spatial_dim.get_dim_value())
+            if r_size != 2 * max_len - 1:
+                return None  # only the standard centered layout
+            starts_rf, _ = _seq_starts_math(q_raw.orig_dims, q_raw.gap, q_raw.align, layout_lens=q_raw.layout_lens)
+            if starts_rf is None:
+                return None
+            starts = rf.copy_to_device(starts_rf, query.device).raw_tensor.int().flatten()
+            lens = rf.copy_to_device(query_spatial_dim.dyn_size_ext, query.device).raw_tensor.int().flatten()
+            _layout_cache.set(starts_key, (starts, lens, max_len))
     try:
         out_t = rel_pos_att_triton.rel_pos_att_varlen(
             q_t, k_t, v_t, bd_t, starts, lens, max_len, dropout_p=att_dropout, scale=qk_feat_dim.dimension**-0.5
