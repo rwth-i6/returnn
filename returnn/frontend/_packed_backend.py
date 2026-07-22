@@ -118,6 +118,43 @@ def _layout_lens_key(layout_lens):
     return tuple(int(v) for v in layout_lens.raw_tensor.flatten())
 
 
+def _device_lens(raw: PackedRawTensor):
+    """
+    :return: the device-resident content seq-lens raw tensor (flat, one per seq)
+        if this packing is in the capture-safe device-lens regime, else None.
+        The regime: torch inner backend,
+        static packed dim (an upper-bound buffer, see :func:`pack` total_bound),
+        the seq lens live on the same (non-cpu) device as the data,
+        layout_lens either None or also device-resident,
+        and the standard (seqs, frames) two-level packing.
+        In this regime, the layout helpers recompute per call as pure device ops
+        and skip the layout caches:
+        async (no host sync),
+        and CUDA-graph capture records the recompute,
+        so one captured graph replays correctly across varying lengths (<= the bound).
+    """
+    if raw.inner_backend.name != "torch":
+        return None
+    if raw.packed_dim.dimension is None:
+        return None
+    if len(raw.orig_dims) != 2:
+        return None
+    last = raw.orig_dims[-1]
+    if last.dyn_size_ext is None or last.dyn_size_ext.raw_tensor is None:
+        return None
+    if last.dyn_size_ext.dims != (raw.orig_dims[0],):
+        return None
+    lens_raw = last.dyn_size_ext.raw_tensor
+    inner_raw = raw.inner.raw_tensor
+    if inner_raw is None or lens_raw.device != inner_raw.device or inner_raw.device.type == "cpu":
+        return None
+    if raw.layout_lens is not None:
+        ll = raw.layout_lens.raw_tensor
+        if ll is None or ll.device != inner_raw.device:
+            return None
+    return lens_raw
+
+
 class PackedRawTensor:
     """
     Raw-tensor wrapper marking packed storage.
@@ -560,6 +597,33 @@ def _frame_coords(template: PackedRawTensor, d: Dim) -> Tensor:
         (gap frames get 0 -- only meaningful on sequence frames).
         Cheap: only an int grid over the packed dims is scattered, no feature-sized data.
     """
+    dev_lens = _device_lens(template)
+    if dev_lens is not None:
+        # device-lens regime (see _device_lens): pure device ops per call, uncached, capture-safe.
+        # Directly over the static bound buffer, no padded (seqs, max-frames) grid.
+        # Junk/gap frames get an arbitrary in-bounds coord (clamped into the seq),
+        # only meaningful on sequence frames -- like the cached variant (0 there).
+        import torch
+
+        starts_rf, _ = _seq_starts_math(
+            template.orig_dims, template.gap, template.align, layout_lens=template.layout_lens
+        )
+        rows = torch.arange(template.packed_dim.dimension, device=dev_lens.device)
+        lens_flat = dev_lens.flatten().long()
+        if starts_rf is None:
+            seq = torch.zeros_like(rows)
+            local = rows
+        else:
+            starts = starts_rf.raw_tensor.flatten().long()
+            seq = torch.searchsorted(starts, rows, right=True) - 1
+            local = rows - starts[seq]
+        if d == template.orig_dims[-1]:
+            coord = torch.minimum(local.clamp(min=0), (lens_flat[seq] - 1).clamp(min=0))
+        else:
+            coord = seq.clamp(min=0)
+        out = Tensor("frame_coords", dims=[template.packed_dim], dtype="int32", sparse_dim=d)
+        out.raw_tensor = coord.int()
+        return out
     # The result is Tensor over template.packed_dim,
     # so the key must include that dim (the Cache remaps it on equal-valued hits).
     # The full layout must be in the key too:
@@ -603,6 +667,26 @@ def _frame_mask(template: PackedRawTensor) -> Optional[Tensor]:
     """
     if not template.has_gap_frames:
         return None
+    dev_lens = _device_lens(template)
+    if dev_lens is not None:
+        # device-lens regime (see _device_lens): pure device ops per call, uncached, capture-safe.
+        # Directly over the static bound buffer (searchsorted on the in-graph starts),
+        # no padded (seqs, max-frames) grid -- that grid's size would need a host read.
+        import torch
+
+        starts_rf, _ = _seq_starts_math(
+            template.orig_dims, template.gap, template.align, layout_lens=template.layout_lens
+        )
+        rows = torch.arange(template.packed_dim.dimension, device=dev_lens.device)
+        if starts_rf is None:
+            valid = rows < dev_lens.flatten().long()
+        else:
+            starts = starts_rf.raw_tensor.flatten().long()
+            seq = torch.searchsorted(starts, rows, right=True) - 1
+            valid = (rows - starts[seq]) < dev_lens.flatten().long()[seq]
+        out = Tensor("frame_mask", dims=[template.packed_dim], dtype="bool")
+        out.raw_tensor = valid
+        return out
     # full layout in the key, see _frame_coords
     key = (
         "frame_mask",
@@ -644,7 +728,13 @@ def _pack_like(x: Tensor, template: PackedRawTensor) -> Optional[Tensor]:
     idx = None
     for d in in_dims:
         coords = _frame_coords(template, d)
-        idx = coords if idx is None else idx * d.get_dim_value_tensor() + coords
+        if idx is not None:
+            # stride from x's BACKED raw shape (a plain int, no get_dim_value host read):
+            # it must match the actual flat buffer layout,
+            # and under CUDA-graph capture a dyn-size read would sync / go stale on replay.
+            idx = idx * x.raw_tensor.shape[x.dims.index(d)] + coords
+        else:
+            idx = coords
     return rf.gather(x_flat, indices=idx, axis=flat_dim)
 
 
@@ -781,15 +871,18 @@ def _batch_norm_gapped(source: Tensor, kwargs) -> Optional[Tensor]:
     if raw.inner_backend.name != "torch":
         return None  # the in-place running-stat update below is raw torch
     mask = _frame_mask(raw)
-    n_t = _packed_total(
-        raw.orig_dims, 0, 1
-    )  # valid-frame count (cpu, from the dyn sizes; used for running stats below)
-    # cache the on-device count (deterministic per packing) -> no per-step H2D sync (capture-safe)
-    n_key = _packing_cache_key("bn_count", raw, inner.device)
-    n_dev = _layout_cache.get(n_key)
-    if n_dev is None:
-        n_dev = rf.copy_to_device(n_t, inner.device)
-        _layout_cache.set(n_key, n_dev)
+    n_t = _packed_total(raw.orig_dims, 0, 1)  # valid-frame count (from the dyn sizes; used for running stats below)
+    dev_lens = _device_lens(raw)
+    if dev_lens is not None:
+        # device-lens regime (see _device_lens): the count is already a device tensor, uncached
+        n_dev = n_t
+    else:
+        # cache the on-device count (deterministic per packing) -> no per-step H2D sync (capture-safe)
+        n_key = _packing_cache_key("bn_count", raw, inner.device)
+        n_dev = _layout_cache.get(n_key)
+        if n_dev is None:
+            n_dev = rf.copy_to_device(n_t, inner.device)
+            _layout_cache.set(n_key, n_dev)
     n = rf.cast(n_dev, inner.dtype)
     x0 = rf.where(mask, inner, 0.0)
     mean = rf.reduce_sum(x0, axis=raw.packed_dim, use_mask=False) / n
@@ -799,11 +892,18 @@ def _batch_norm_gapped(source: Tensor, kwargs) -> Optional[Tensor]:
         import torch
 
         with torch.no_grad():
-            n_f = float(n_t.raw_tensor)
-            unbiased = n_f / max(n_f - 1.0, 1.0)
             rm, rv = running_mean.raw_tensor, running_variance.raw_tensor
-            rm.mul_(1.0 - momentum).add_(mean.raw_tensor.detach().to(rm.dtype), alpha=momentum)
-            rv.mul_(1.0 - momentum).add_(var.raw_tensor.detach().to(rv.dtype) * unbiased, alpha=momentum)
+            if dev_lens is not None:
+                # fully on device (no float(n) host read -> no sync, capture-safe)
+                n_f_t = n_dev.raw_tensor.float()
+                unbiased_t = n_f_t / (n_f_t - 1.0).clamp(min=1.0)
+                rm.mul_(1.0 - momentum).add_(mean.raw_tensor.detach().to(rm.dtype) * momentum)
+                rv.mul_(1.0 - momentum).add_(var.raw_tensor.detach().to(rv.dtype) * unbiased_t.to(rv.dtype) * momentum)
+            else:
+                n_f = float(n_t.raw_tensor)
+                unbiased = n_f / max(n_f - 1.0, 1.0)
+                rm.mul_(1.0 - momentum).add_(mean.raw_tensor.detach().to(rm.dtype), alpha=momentum)
+                rv.mul_(1.0 - momentum).add_(var.raw_tensor.detach().to(rv.dtype) * unbiased, alpha=momentum)
     out_inner = (inner - mean) / rf.sqrt(var + epsilon)
     if affine:
         out_inner = out_inner * gamma + beta
@@ -1717,30 +1817,24 @@ def _triton_rel_pos_attention(
         bd_t = bd_t.unsqueeze(1).expand(-1, heads_dim.dimension, -1)
     # pre-scale the bias like the content-based term (the kernel scales only q k^T)
     bd_t = (bd_t * qk_feat_dim.dimension**-0.5).to(q_t.dtype)
-    lens_ext = query_spatial_dim.dyn_size_ext
-    if (
-        lens_ext is not None
-        and lens_ext.raw_tensor is not None
-        and lens_ext.raw_tensor.device == q_t.device
-        and q_raw.layout_lens is None
-    ):
-        # Device-resident seq lens: recompute starts/lens as pure device ops on every call
+    dev_lens = _device_lens(q_raw)
+    if dev_lens is not None:
+        # Device-lens regime (see _device_lens): recompute starts/lens as pure device ops on every call
         # (async, no host sync, no cache).
         # CUDA-graph capture then records the recompute,
         # so one captured graph replays correctly across varying lengths (<= the buffer bound):
         # the kernel reads starts/lens from device buffers and early-exits per block beyond a seq len.
         # max_len comes from the backed raw shape of the b+d term (host metadata, no sync);
         # pos_emb must be the centered 2*max_len-1 layout (the rel_pos_self_attention contract).
-        # (layout_lens is a small host tensor -> that case stays on the cached branch below.)
         r_size = bd_t.shape[-1]
         if r_size % 2 != 1:
             return None
         max_len = (r_size + 1) // 2
-        starts_rf, _ = _seq_starts_math(q_raw.orig_dims, q_raw.gap, q_raw.align, layout_lens=None)
+        starts_rf, _ = _seq_starts_math(q_raw.orig_dims, q_raw.gap, q_raw.align, layout_lens=q_raw.layout_lens)
         if starts_rf is None:
             return None
         starts = starts_rf.raw_tensor.int().flatten()
-        lens = lens_ext.raw_tensor.int().flatten()
+        lens = dev_lens.int().flatten()
     else:
         # Host-side seq lens: starts/lens/max_len are cached together.
         # the host reads here (int(get_dim_value), copy_to_device) are per-call GPU syncs otherwise,
@@ -1895,6 +1989,21 @@ def _strided_out_wrapper(
         )
         return helper.rewrap(out_inner, name="conv")
     gap_out = raw.gap // st
+    if raw.align % st == 0 and _device_lens(raw) is not None:
+        # device-lens regime (see _device_lens): skip the verdict entirely
+        # (it reads per-batch values on the host -- a sync, and baked-wrong under varying-length replay)
+        # and go straight to the always-exact per-seq layout lens, computed on device:
+        # layout_len + gap_out = footprint // st (exact: st | align | footprint).
+        out_orig_dims = tuple(raw.orig_dims[:-1]) + (out_time,)
+        helper = PackedRawTensor(
+            inner=out_inner,
+            packed_dim=out_packed_dim,
+            orig_dims=out_orig_dims,
+            gap=gap_out,
+            align=align_out,
+            layout_lens=footprints // st - gap_out,
+        )
+        return helper.rewrap(out_inner, name="conv")
     # the closed-form verdict (uniform residual?) is deterministic per packing+stride -> cache it.
     # the check needs host syncs (int/bool of a device tensor), which also break CUDA-graph capture;
     # computed once, cache hits then skip the syncs (faster eager too, capture-safe).
