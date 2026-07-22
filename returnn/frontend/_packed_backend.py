@@ -97,7 +97,18 @@ def _packing_cache_key(kind: str, raw: PackedRawTensor, device) -> Tuple[Any, ..
     :return: cache key for layout metadata of the packing.
         The dims go in directly (the Cache handles the value semantics, see above).
     """
-    return kind, raw.orig_dims, raw.gap, raw.align, _layout_lens_key(raw.layout_lens), str(device)
+    # packed_dim.dimension (the static buffer capacity)
+    # distinguishes a bounded (over-allocated) packing from the exact one with the same orig layout
+    # -- else their seq-id / block-mask caches collide.
+    return (
+        kind,
+        raw.orig_dims,
+        raw.packed_dim.dimension,
+        raw.gap,
+        raw.align,
+        _layout_lens_key(raw.layout_lens),
+        str(device),
+    )
 
 
 def _layout_lens_key(layout_lens):
@@ -2465,17 +2476,47 @@ class PackedBackend(Backend[PackedRawTensor]):
         pos_emb_spatial_dim: Dim,
     ):
         """
-        Self-attention with relative positional encoding. Packed specialization:
-        torch FlexAttention over the flat packed buffer with a document block mask
-        and the position-based term (matrix b+d) as score_mod, see :func:`_flex_rel_pos_attention`.
-        FlexAttention has no dropout support, so with att_dropout active in training
-        the generic fallback runs (which then uses the packed op handling).
+        Self-attention with relative positional encoding.
+        Packed specialization: prefer our Triton varlen kernel (:func:`_triton_rel_pos_attention`)
+        over the packed buffer.
+        It indexes per-seq valid frames,
+        so it also runs on a bounded (static) buffer for CUDA-graph capture.
+        FlexAttention (:func:`_flex_rel_pos_attention`, document block mask + matrix b+d as score_mod)
+        is the fallback when the Triton kernel is unavailable/unsupported and dropout is inactive
+        (Flex has no dropout support).
+        Otherwise the per-seq / once-unpack path runs.
         """
         dropout_active = False
         if att_dropout:
             train_flag = rf.get_run_ctx().is_train_flag_enabled(func=rf.dropout)
             # for a dynamic (tensor) train flag, conservatively assume training
             dropout_active = train_flag if isinstance(train_flag, bool) else True
+        # Prefer our own Triton varlen kernel:
+        # fastest CUDA path,
+        # and the only one that runs on a bounded (static, over-allocated) packed buffer
+        # -- it indexes per-seq valid frames, so junk/gap frames are never read.
+        # (FlexAttention instead sizes its block mask to the exact total,
+        # which a fixed CUDA-graph buffer breaks.)
+        # It expresses no-dropout and per-element (non-broadcast) dropout;
+        # broadcast dropout it cannot, so only that case skips it.
+        if not (dropout_active and att_dropout_broadcast):
+            out = _triton_rel_pos_attention(
+                query,
+                key,
+                value,
+                pos_emb,
+                pos_bias_u=pos_bias_u,
+                pos_bias_v=pos_bias_v,
+                att_dropout=att_dropout if dropout_active else 0.0,
+                v_feat_dim=v_feat_dim,
+                qk_feat_dim=qk_feat_dim,
+                kv_spatial_dim=kv_spatial_dim,
+                query_spatial_dim=query_spatial_dim,
+                pos_emb_spatial_dim=pos_emb_spatial_dim,
+            )
+            if out is not None:
+                return out
+        # FlexAttention fallback (no dropout support), so only when dropout is inactive.
         if not dropout_active:
             out = _flex_rel_pos_attention(
                 query,
@@ -2493,24 +2534,6 @@ class PackedBackend(Backend[PackedRawTensor]):
             if out is not None:
                 return out
         else:
-            # the kernel drops per-element, so only the non-broadcast dropout matches
-            if not att_dropout_broadcast:
-                out = _triton_rel_pos_attention(
-                    query,
-                    key,
-                    value,
-                    pos_emb,
-                    pos_bias_u=pos_bias_u,
-                    pos_bias_v=pos_bias_v,
-                    att_dropout=att_dropout,
-                    v_feat_dim=v_feat_dim,
-                    qk_feat_dim=qk_feat_dim,
-                    kv_spatial_dim=kv_spatial_dim,
-                    query_spatial_dim=query_spatial_dim,
-                    pos_emb_spatial_dim=pos_emb_spatial_dim,
-                )
-                if out is not None:
-                    return out
             _flex_no("att_dropout active in training (FlexAttention has no dropout support)")
         if is_packed(query) and query.raw_tensor.inner.device == "cpu":
             # CPU: per-seq slice loop over the packed buffer, no unpack
@@ -3133,6 +3156,7 @@ def pack(
     out_dim: Optional[Dim] = None,
     gap: int = 0,
     align: int = 1,
+    total_bound: Optional[int] = None,
 ) -> Tensor:
     """
     Pack the given dims of source into packed storage.
@@ -3150,6 +3174,11 @@ def pack(
         (see :class:`PackedRawTensor`; e.g. for packed conv, specify by hand what the model needs).
     :param align: per-seq footprint alignment (see :class:`PackedRawTensor`;
         for strided ops, use the total downsampling factor of the model, and gap a multiple of it).
+    :param total_bound: if given, allocate a fixed (upper-bound) packed buffer of this many frames
+        instead of the exact total,
+        so the packed dim is static (e.g. for CUDA-graph capture, where the buffer size must not vary per batch).
+        The real-length layout fills the first frames,
+        the rest are gap/padding (masked out like any gap frames).
     :return: tensor with same dims as source, packed storage
     """
     if dims is None:
@@ -3160,7 +3189,13 @@ def pack(
         last = dims[-1]
         assert last.dyn_size_ext is not None, f"pack: innermost packed dim {last} needs dyn sizes"
         if out_dim is None:
-            out_dim = Dim(_packed_total(dims, gap, align), name="packed_gap")
+            # total_bound: allocate a fixed (upper-bound) buffer instead of the exact total,
+            # so the packed dim is STATIC -> capturable in a CUDA graph.
+            # The real-length layout fills the first frames,
+            # the rest are gap/padding (masked out like any gap frames).
+            out_dim = Dim(
+                total_bound if total_bound is not None else _packed_total(dims, gap, align), name="packed_gap"
+            )
         pos = _padded_positions(dims, gap, align)
         inner = rf.scatter(source, indices=pos, indices_dim=list(dims), out_dim=out_dim, use_mask=True)
         packed_dim = out_dim
