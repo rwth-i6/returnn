@@ -1846,37 +1846,48 @@ def _strided_out_wrapper(
             inner=out_inner, packed_dim=out_packed_dim, orig_dims=(out_time,), gap=0, align=align_out
         )
         return helper.rewrap(out_inner, name="conv")
-    lens_out = out_time.dyn_size_ext
-    for d in raw.orig_dims[:-1]:
-        if d not in lens_out.dims:
-            lens_out = rf.expand_dim(lens_out, dim=d)
-    if len(raw.orig_dims) > 2:
-        lens_out, _ = rf.merge_dims(lens_out, dims=raw.orig_dims[:-1])
-    residual = footprints // st - lens_out
-    residual0 = int(residual.raw_tensor.flatten()[0])
-    if residual0 >= 0 and bool(rf.reduce_all(residual == residual0, axis=list(residual.dims)).raw_tensor):
+    gap_out = raw.gap // st
+    # the closed-form verdict (uniform residual?) is deterministic per packing+stride -> cache it.
+    # the check needs host syncs (int/bool of a device tensor), which also break CUDA-graph capture;
+    # computed once, cache hits then skip the syncs (faster eager too, capture-safe).
+    key = _packing_cache_key("strided_out", raw, out_inner.device) + (st,)
+    verdict = _layout_cache.get(key)
+    if verdict is None:
+        lens_out = out_time.dyn_size_ext
+        for d in raw.orig_dims[:-1]:
+            if d not in lens_out.dims:
+                lens_out = rf.expand_dim(lens_out, dim=d)
+        if len(raw.orig_dims) > 2:
+            lens_out, _ = rf.merge_dims(lens_out, dims=raw.orig_dims[:-1])
+        residual = footprints // st - lens_out
+        residual0 = int(residual.raw_tensor.flatten()[0])
+        if residual0 >= 0 and bool(rf.reduce_all(residual == residual0, axis=list(residual.dims)).raw_tensor):
+            verdict = ("uniform", residual0)
+        elif len(raw.orig_dims) == 2 and bool(rf.reduce_all(residual >= gap_out, axis=list(residual.dims)).raw_tensor):
+            verdict = ("perseq", 0)
+        else:
+            verdict = ("none", 0)
+        _layout_cache.set(key, verdict)
+    kind, residual0 = verdict
+    if kind == "none":
+        return None
+    out_orig_dims = tuple(raw.orig_dims[:-1]) + (out_time,)
+    if kind == "uniform":
         # uniform residual: expressible as the plain (lens, gap, align) form
+        helper = PackedRawTensor(
+            inner=out_inner, packed_dim=out_packed_dim, orig_dims=out_orig_dims, gap=residual0, align=align_out
+        )
+    else:
+        # non-uniform residuals (mixed seq-len residuals mod stride): exact via per-seq layout lens,
+        # layout_len + gap_out = footprint // st. No re-layout needed.
         helper = PackedRawTensor(
             inner=out_inner,
             packed_dim=out_packed_dim,
-            orig_dims=tuple(raw.orig_dims[:-1]) + (out_time,),
-            gap=residual0,
+            orig_dims=out_orig_dims,
+            gap=gap_out,
             align=align_out,
+            layout_lens=footprints // st - gap_out,
         )
-        return helper.rewrap(out_inner, name="conv")
-    gap_out = raw.gap // st
-    if len(raw.orig_dims) != 2 or not bool(rf.reduce_all(residual >= gap_out, axis=list(residual.dims)).raw_tensor):
-        return None
-    # Non-uniform residuals (mixed seq-len residuals mod stride):
-    # exact via per-seq layout lens, layout_len + gap_out = footprint // st. No re-layout needed.
-    helper = PackedRawTensor(
-        inner=out_inner,
-        packed_dim=out_packed_dim,
-        orig_dims=tuple(raw.orig_dims[:-1]) + (out_time,),
-        gap=gap_out,
-        align=align_out,
-        layout_lens=footprints // st - gap_out,
-    )
     return helper.rewrap(out_inner, name="conv")
 
 
