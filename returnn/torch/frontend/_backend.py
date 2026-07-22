@@ -303,7 +303,11 @@ class TorchBackend(Backend[torch.Tensor]):
             dtype=source.dtype,
             sparse_dim=source.sparse_dim,
         )
-        out_shape = [d.get_dim_value() for d in out.dims]
+        # Build the reshape target from the source's (backed) raw shape plus -1 for the merged block.
+        # This avoids a get_dim_value() host sync on any dynamic dim
+        # (such a sync breaks CUDA-graph capture and forces a torch.compile graph break).
+        src_shape = source.raw_tensor.shape
+        out_shape = list(src_shape[: len(pre_dims)]) + [-1] + list(src_shape[len(pre_dims) + len(dims) :])
         out.raw_tensor = torch.reshape(source.raw_tensor, out_shape)
         if source.feature_dim is not None:
             if source.feature_dim in dims:
