@@ -250,9 +250,10 @@ class PackedRawTensor:
         # else: no explicit feature_dim, so the outer Tensor applies the usual default heuristic --
         # the inner tensor often loses the implicit feature dim (its heuristic fails without a batch dim),
         # while the virtual (unpacked) dims match what the padded op would produce.
+        vdims = self.virtual_dims(inner_out)
         out = Tensor(
             name=name or inner_out.name,
-            dims=self.virtual_dims(inner_out),
+            dims=vdims,
             dtype=inner_out.dtype,
             sparse_dim=inner_out.sparse_dim,
             **opts,
@@ -261,6 +262,7 @@ class PackedRawTensor:
             inner=inner_out,
             packed_dim=self.packed_dim,
             orig_dims=self.orig_dims,
+            dims=vdims,
             gap=self.gap,
             align=self.align,
             layout_lens=self.layout_lens,
