@@ -770,7 +770,9 @@ def _batch_norm_gapped(source: Tensor, kwargs) -> Optional[Tensor]:
     if raw.inner_backend.name != "torch":
         return None  # the in-place running-stat update below is raw torch
     mask = _frame_mask(raw)
-    n_t = _packed_total(raw.orig_dims, 0, 1)  # valid-frame count (cpu, from the dyn sizes; used for running stats below)
+    n_t = _packed_total(
+        raw.orig_dims, 0, 1
+    )  # valid-frame count (cpu, from the dyn sizes; used for running stats below)
     # cache the on-device count (deterministic per packing) -> no per-step H2D sync (capture-safe)
     n_key = _packing_cache_key("bn_count", raw, inner.device)
     n_dev = _layout_cache.get(n_key)
