@@ -770,8 +770,14 @@ def _batch_norm_gapped(source: Tensor, kwargs) -> Optional[Tensor]:
     if raw.inner_backend.name != "torch":
         return None  # the in-place running-stat update below is raw torch
     mask = _frame_mask(raw)
-    n_t = _packed_total(raw.orig_dims, 0, 1)  # number of valid frames (cpu, from the dyn sizes)
-    n = rf.cast(rf.copy_to_device(n_t, inner.device), inner.dtype)
+    n_t = _packed_total(raw.orig_dims, 0, 1)  # valid-frame count (cpu, from the dyn sizes; used for running stats below)
+    # cache the on-device count (deterministic per packing) -> no per-step H2D sync (capture-safe)
+    n_key = _packing_cache_key("bn_count", raw, inner.device)
+    n_dev = _layout_cache.get(n_key)
+    if n_dev is None:
+        n_dev = rf.copy_to_device(n_t, inner.device)
+        _layout_cache.set(n_key, n_dev)
+    n = rf.cast(n_dev, inner.dtype)
     x0 = rf.where(mask, inner, 0.0)
     mean = rf.reduce_sum(x0, axis=raw.packed_dim, use_mask=False) / n
     diff = rf.where(mask, inner - mean, 0.0)
@@ -3184,15 +3190,25 @@ def regap(source: Tensor, gap: int, *, align: Optional[int] = None, layout_lens:
     new_starts, seqs_dim = _seq_starts_math(raw.orig_dims, gap, align, layout_lens=layout_lens)
     t_coords = _frame_coords(raw, last)
     seg, _, _ = _segment_index(raw, others)
-    if new_starts.device != seg.device:
-        # starts derive from the dyn sizes (often cpu), the coords live on the data device
-        new_starts = rf.copy_to_device(new_starts, seg.device)
+    # cache the on-device starts + total (deterministic per target layout) -> no per-step H2D sync (capture-safe)
+    dev_key = _packing_cache_key("regap_dev", raw, seg.device) + (gap, align, _layout_lens_key(layout_lens))
+    hit = _layout_cache.get(dev_key)
+    if hit is not None:
+        new_starts, total_dev = hit
+    else:
+        if new_starts.device != seg.device:
+            # starts derive from the dyn sizes (often cpu), the coords live on the data device
+            new_starts = rf.copy_to_device(new_starts, seg.device)
+        total_dev = new_dim.get_dim_value_tensor()
+        if isinstance(total_dev, Tensor) and total_dev.device != seg.device:
+            total_dev = rf.copy_to_device(total_dev, seg.device)
+        _layout_cache.set(dev_key, (new_starts, total_dev))
     pos = rf.gather(new_starts, indices=seg, axis=seqs_dim, clip_to_valid=True) + t_coords
     mask = _frame_mask(raw)
     if mask is not None:
         # route old gap frames to a dump slot, then slice it off
         ext_dim = new_dim + 1
-        pos = rf.where(mask, pos, rf.cast(new_dim.get_dim_value_tensor(), pos.dtype))
+        pos = rf.where(mask, pos, rf.cast(total_dev, pos.dtype))
         inner_ext = rf.scatter(raw.inner, indices=pos, indices_dim=raw.packed_dim, out_dim=ext_dim, use_mask=False)
         inner_new, _ = rf.slice(inner_ext, axis=ext_dim, size=new_dim)
     else:
