@@ -1694,10 +1694,6 @@ def _triton_rel_pos_attention(
         return None
     if set(bd_inner.dims) - {heads_dim} != {bd_raw.packed_dim, pos_emb_spatial_dim}:
         return None
-    max_len = int(query_spatial_dim.get_dim_value())
-    r_size = int(pos_emb_spatial_dim.get_dim_value())
-    if r_size != 2 * max_len - 1:
-        return None  # only the standard centered layout
     q_t = q_inner.copy_transpose([qu_raw.packed_dim, heads_dim, qk_feat_dim]).raw_tensor
     k_t = k_inner.copy_transpose([k_raw.packed_dim, heads_dim, qk_feat_dim]).raw_tensor
     v_t = v_inner.copy_transpose([v_raw.packed_dim, heads_dim, v_feat_dim]).raw_tensor
@@ -1721,17 +1717,25 @@ def _triton_rel_pos_attention(
         bd_t = bd_t.unsqueeze(1).expand(-1, heads_dim.dimension, -1)
     # pre-scale the bias like the content-based term (the kernel scales only q k^T)
     bd_t = (bd_t * qk_feat_dim.dimension**-0.5).to(q_t.dtype)
+    # starts/lens/max_len are cached together.
+    # the host reads here (int(get_dim_value), .max via get_dim_value, copy_to_device)
+    # are per-call GPU syncs otherwise, which break CUDA-graph capture;
+    # computed once at warm-up, then capture and replay hit the cache -- no sync.
     starts_key = _packing_cache_key("triton_starts_lens", q_raw, query.device)
     hit = _layout_cache.get(starts_key)
     if hit is not None:
-        starts, lens = hit
+        starts, lens, max_len = hit
     else:
+        max_len = int(query_spatial_dim.get_dim_value())
+        r_size = int(pos_emb_spatial_dim.get_dim_value())
+        if r_size != 2 * max_len - 1:
+            return None  # only the standard centered layout
         starts_rf, _ = _seq_starts_math(q_raw.orig_dims, q_raw.gap, q_raw.align, layout_lens=q_raw.layout_lens)
         if starts_rf is None:
             return None
         starts = rf.copy_to_device(starts_rf, query.device).raw_tensor.int().flatten()
         lens = rf.copy_to_device(query_spatial_dim.dyn_size_ext, query.device).raw_tensor.int().flatten()
-        _layout_cache.set(starts_key, (starts, lens))
+        _layout_cache.set(starts_key, (starts, lens, max_len))
     try:
         out_t = rel_pos_att_triton.rel_pos_att_varlen(
             q_t, k_t, v_t, bd_t, starts, lens, max_len, dropout_p=att_dropout, scale=qk_feat_dim.dimension**-0.5
