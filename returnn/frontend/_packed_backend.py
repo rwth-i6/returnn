@@ -2978,15 +2978,15 @@ class PackedBackend(Backend[PackedRawTensor]):
             import torch
             from returnn.torch.util import native_op as torch_native_op
 
-            if raw.has_gap_frames:
-                logits = regap(logits, 0, align=1)
-                raw = logits.raw_tensor
             batch_dim = raw.orig_dims[0]
             logits_t = raw.inner.copy_transpose([raw.packed_dim, logits.feature_dim]).raw_tensor
             if logits_t.dtype != torch.float32:
                 logits_t = logits_t.to(torch.float32)  # the native op is float32-only
             device = logits_t.device
-            seq_starts = raw.cu_seqlens(device=logits.device)[0].raw_tensor[:-1]
+            # per-seq start offsets into the packed buffer (gapped or dense): the native op reads each
+            # seq at [start, start+len), so the gap frames are never touched -- no regap needed.
+            starts_rf, _ = raw.seq_starts()
+            seq_starts = rf.copy_to_device(starts_rf, device).raw_tensor.to(torch.int32).flatten()
             in_lens = input_spatial_dim.dyn_size_ext.copy_compatible_to_dims_raw([batch_dim]).to(device)
             targets_raw = targets_.copy_compatible_to_dims_raw([batch_dim, targets_spatial_dim]).to(device)
             tgt_lens = targets_spatial_dim.dyn_size_ext.copy_compatible_to_dims_raw([batch_dim]).to(device)

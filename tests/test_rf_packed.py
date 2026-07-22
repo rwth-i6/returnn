@@ -680,6 +680,18 @@ def test_ctc_loss_packed_native():
     mask = rf.sequence_mask([batch_dim, time_dim]).copy_compatible_to_dims([batch_dim, time_dim]).raw_tensor.numpy()
     numpy.testing.assert_allclose(leaf_p.grad.numpy()[mask], leaf_ref.grad.numpy()[mask], rtol=1e-4, atol=1e-5)
 
+    # gapped packing: the native op reads each seq at its start offset (no regap) -> same loss + grads
+    packed._warned_fallback_ops.clear()
+    leaf_pg = logits_raw.clone().requires_grad_(True)
+    loss_pg = _loss(leaf_pg, pack_gap=3)
+    assert "ctc_loss" not in packed._warned_fallback_ops  # native packed path, no unpack fallback
+    packed._warned_fallback_ops.update(warned_before)
+    rf.reduce_sum(loss_pg, axis=batch_dim).raw_tensor.backward()
+    numpy.testing.assert_allclose(
+        loss_pg.raw_tensor.detach().numpy(), loss_ref.raw_tensor.detach().numpy(), rtol=1e-4, atol=1e-5
+    )
+    numpy.testing.assert_allclose(leaf_pg.grad.numpy()[mask], leaf_ref.grad.numpy()[mask], rtol=1e-4, atol=1e-5)
+
     # gapped input: re-layouted to dense internally, the loss must be the same
     loss_g = _loss(logits_raw.clone(), pack_gap=3)
     numpy.testing.assert_allclose(

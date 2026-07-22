@@ -665,8 +665,8 @@ def ctc_loss_packed(
     (like the flash-attention varlen layout).
     The peak memory advantage over :func:`ctc_loss` follows the padding ratio
     (the biggest buffers are the (frames,dim) logits / log-probs / fwdbwd).
-    Assumes the dense layout: total_time == sum of the seq lens,
-    seq b occupying [seq_starts[b], seq_starts[b] + logits_seq_lens[b]).
+    Any packed layout: seq b occupies [seq_starts[b], seq_starts[b] + logits_seq_lens[b]);
+    frames not covered by any seq (gap / alignment padding) are never read and get zero grad.
 
     :param logits: (total_time, dim), the seqs concatenated along time. unnormalized (before softmax)
     :param seq_starts: (batch,), int32. start offset of each seq in the total_time axis
@@ -724,32 +724,44 @@ class _FastBaumWelchScoresPackedAutogradFunc(torch.autograd.Function):
             state_buffer=state_buffer,
         )
         loss = obs_scores[0]  # (batch,)
-        # seq membership of every frame in the packed buffer, to scale by the incoming per-seq grad
-        # (this relies on the dense layout, see :func:`ctc_loss_packed`)
+        # map every frame of the (possibly gapped) packed buffer to its seq, to scale grads by the
+        # per-seq incoming grad. Built from seq_starts so gapped layouts work too; gap frames map
+        # nowhere and are masked out of the grad (the native op never writes their fwdbwd).
+        total_time = logits.shape[0]
         seq_lens = seq_mask.to(torch.int64).sum(dim=0).to(logits.device)  # (batch,)
-        seq_idxs = torch.repeat_interleave(
+        seq_of_valid = torch.repeat_interleave(
             torch.arange(seq_lens.shape[0], device=logits.device), seq_lens
-        )  # (total_time,)
+        )  # (sum_lens,) seq index per valid frame, in seq order
+        contig_starts = torch.cumsum(seq_lens, dim=0) - seq_lens  # (batch,) starts in a gap-free layout
+        buf_pos = seq_starts.to(torch.int64)[seq_of_valid] + (
+            torch.arange(seq_of_valid.shape[0], device=logits.device) - contig_starts[seq_of_valid]
+        )  # (sum_lens,) positions of the valid frames in the packed buffer
+        frame_seq_idx = torch.zeros(total_time, dtype=torch.int64, device=logits.device)
+        frame_seq_idx[buf_pos] = seq_of_valid
+        valid_mask = torch.zeros(total_time, dtype=torch.bool, device=logits.device)
+        valid_mask[buf_pos] = True
         ctx.grad_wrt_softmax_in = logits_normalize
         if logits_normalize:
-            ctx.save_for_backward(log_sm, seq_idxs, fwdbwd)
+            ctx.save_for_backward(log_sm, frame_seq_idx, valid_mask, fwdbwd)
         else:
-            ctx.save_for_backward(seq_idxs, fwdbwd)
+            ctx.save_for_backward(frame_seq_idx, valid_mask, fwdbwd)
         return loss
 
     @staticmethod
     def backward(ctx, grad_output: torch.Tensor) -> Tuple[Optional[torch.Tensor], ...]:
         if ctx.grad_wrt_softmax_in:
-            log_sm, seq_idxs, fwdbwd = ctx.saved_tensors
+            log_sm, frame_seq_idx, valid_mask, fwdbwd = ctx.saved_tensors
         else:
             log_sm = None
-            seq_idxs, fwdbwd = ctx.saved_tensors
+            frame_seq_idx, valid_mask, fwdbwd = ctx.saved_tensors
         bw = torch.exp(-fwdbwd)  # (total_time,dim)
         if ctx.grad_wrt_softmax_in:
             grad_x = torch.exp(log_sm) - bw  # (total_time,dim)
         else:
             grad_x = -bw  # (total_time,dim)
-        grad_x *= grad_output[seq_idxs][:, None]
+        # gap frames have no valid fwdbwd -> select 0 (not multiply, to avoid nan*0 on uninit frames)
+        grad_x = torch.where(valid_mask[:, None], grad_x, 0.0)
+        grad_x *= grad_output[frame_seq_idx][:, None]
         return grad_x, None, None, None, None, None, None, None
 
 
