@@ -196,7 +196,12 @@ class PackedRawTensor:
         if hit is not None:
             return hit
         starts, seqs_dim = self.seq_starts()
-        total = rf.cast(self.packed_dim.get_dim_value_tensor(), starts.dtype)
+        total = self.packed_dim.get_dim_value_tensor()
+        if isinstance(total, Tensor):
+            total = rf.cast(total, starts.dtype)
+        else:
+            # a static packed dim (e.g. built by the data pipeline) yields a python int, not a tensor
+            total = rf.copy_to_device(rf.constant(int(total), dims=(), dtype=starts.dtype), starts.device)
         end_dim = Dim(1, name="cu_seqlens_end")
         cu, cu_dim = rf.concat((starts, seqs_dim), (rf.expand_dim(total, dim=end_dim), end_dim))
         cu = rf.cast(cu, "int32")
