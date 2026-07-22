@@ -139,7 +139,11 @@ def _set_packed_extern_data(
         raw_tensor = raw_tensor.to(dtype=float_dtype)
     inner_dtype = str(raw_tensor.dtype).split(".")[-1]
     raw_tensor = raw_tensor.to(device, non_blocking=True)
-    packed_dim = Dim(int(raw_tensor.shape[0]), name=(spatial.name or "time") + ":packed")
+    # dynamic packed dim (changes per step, like the batch dim) -- consistent with rf.pack;
+    # its value is this batch's total frame count in the flat buffer.
+    packed_total = Tensor((spatial.name or "time") + ":packed", dims=(), dtype="int32")
+    packed_total.raw_tensor = torch.tensor(int(raw_tensor.shape[0]), dtype=torch.int32)
+    packed_dim = Dim(packed_total, name=(spatial.name or "time") + ":packed")
     inner = Tensor(key, dims=[packed_dim] + list(data.dims[2:]), dtype=inner_dtype, sparse_dim=data.sparse_dim)
     inner.raw_tensor = raw_tensor
     data.dtype = inner_dtype  # match the (possibly float_dtype-cast) buffer, like the padded path
