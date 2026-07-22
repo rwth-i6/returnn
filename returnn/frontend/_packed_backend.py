@@ -527,7 +527,7 @@ def _padded_positions(
         if starts.device != pos.device:
             # starts derive from the dyn sizes (often cpu), pos follows the default device
             starts = rf.copy_to_device(starts, pos.device)
-        pos = starts + pos
+        pos = rf.combine_bc(starts, "add", pos)  # cross-dim (seqs x frames) broadcast
     return pos
 
 
