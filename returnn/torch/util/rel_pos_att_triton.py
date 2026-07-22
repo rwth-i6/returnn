@@ -141,7 +141,10 @@ def rel_pos_att_fwd(q, k, v, bd, seq_starts, seq_lens, max_len, *, dropout_p=0.0
     assert r == 2 * max_len - 1
     if scale is None:
         scale = 1.0 / math.sqrt(d)
-    out = torch.empty_like(q)  # input dtype; the accumulation is f32 internally
+    # zeros, not empty: the kernel writes only the valid rows (per-block early-exit),
+    # so gap/junk rows would keep arbitrary garbage (possibly inf/nan),
+    # which downstream residual adds spread and linear-layer weight grads mix in (x^T dy -> nan).
+    out = torch.zeros_like(q)  # input dtype; the accumulation is f32 internally
     lse = torch.empty(total, n_heads, device=q.device, dtype=torch.float32)
     n_batch = seq_starts.numel()
     block_m, block_n = 64, 64
