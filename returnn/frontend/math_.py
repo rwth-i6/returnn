@@ -421,23 +421,37 @@ def is_neg_infinite(a: Tensor) -> Tensor:
     return a._raw_backend.is_neg_infinite(a)
 
 
-def maximum(a: Tensor, b: Union[Tensor, _RawTensorTypes], *other_tensors) -> Tensor:
-    """maximum"""
-    if not other_tensors:
-        return combine(a, "maximum", b)
-    res = combine(a, "maximum", b)
-    for t in other_tensors:
-        res = combine(res, "maximum", t)
+def maximum(
+    a: Union[Tensor, _RawTensorTypes], b: Union[Tensor, _RawTensorTypes], *other_tensors
+) -> Union[Tensor, _RawTensorTypes]:
+    """maximum. all-scalar (non-Tensor) args fall back to the builtin :func:`max`"""
+    values = [a, b, *other_tensors]
+    if not any(isinstance(v, Tensor) for v in values):
+        return max(values)
+    # a Tensor first (commutative): the backend combine expects the Tensor as the first arg
+    first_tensor_idx = next(i for i, v in enumerate(values) if isinstance(v, Tensor))
+    if first_tensor_idx != 0:
+        values[0], values[first_tensor_idx] = values[first_tensor_idx], values[0]
+    res = values[0]
+    for v in values[1:]:
+        res = combine(res, "maximum", v)
     return res
 
 
-def minimum(a: Tensor, b: Union[Tensor, _RawTensorTypes], *other_tensors) -> Tensor:
-    """minimum"""
-    if not other_tensors:
-        return combine(a, "minimum", b)
-    res = combine(a, "minimum", b)
-    for t in other_tensors:
-        res = combine(res, "minimum", t)
+def minimum(
+    a: Union[Tensor, _RawTensorTypes], b: Union[Tensor, _RawTensorTypes], *other_tensors
+) -> Union[Tensor, _RawTensorTypes]:
+    """minimum. all-scalar (non-Tensor) args fall back to the builtin :func:`min`"""
+    values = [a, b, *other_tensors]
+    if not any(isinstance(v, Tensor) for v in values):
+        return min(values)
+    # a Tensor first (commutative): the backend combine expects the Tensor as the first arg
+    first_tensor_idx = next(i for i, v in enumerate(values) if isinstance(v, Tensor))
+    if first_tensor_idx != 0:
+        values[0], values[first_tensor_idx] = values[first_tensor_idx], values[0]
+    res = values[0]
+    for v in values[1:]:
+        res = combine(res, "minimum", v)
     return res
 
 
