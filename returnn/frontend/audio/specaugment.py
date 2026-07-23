@@ -32,8 +32,15 @@ def specaugment(
     if max_consecutive_feature_dims is None:
         max_consecutive_feature_dims = feature_dim.dimension // 5
     if global_train_step_dependent:
-        with rf.set_default_device_ctx("cpu"):
-            step = rf.get_run_ctx().step
+        step = rf.get_run_ctx().step
+        if isinstance(step, Tensor) and step.raw_tensor is not None and step.device not in (None, "cpu"):
+            # device-resident step (e.g. under CUDA-graph capture, updated in place by the engine):
+            # keep the schedule computation on its device, so it stays in-graph
+            # and one captured graph is valid across the `steps` boundaries
+            step_device = step.device
+        else:
+            step_device = "cpu"
+        with rf.set_default_device_ctx(step_device):
             step0 = rf.where(step >= steps[0], 1, 0)
             step1 = rf.where(step >= steps[1], 1, 0)
             step2 = rf.where(step >= steps[2], 1, 0)
