@@ -2024,6 +2024,14 @@ class _DimMixin:
         """
         import returnn.frontend as rf
 
+        if self.capacity is not None:
+            # The static size for (padded) buffers, a plain int that never changes across steps:
+            # for static dims this defaults to the dimension,
+            # for dynamic dims it is the declared upper bound.
+            # Static shapes are also required for CUDA-graph capture / tracing
+            # (the actual max would be a per-step device read: a sync, and stale on graph replay).
+            # For the actual dynamic max, use reduce_max over dyn_size_ext.
+            return self.capacity
         if self.dimension is not None:
             return self.dimension
         if self._dyn_size_max_value is not None:  # fast path, precomputed
