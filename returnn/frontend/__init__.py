@@ -51,6 +51,7 @@ from .rec import *
 from .reduce import *
 from .run_ctx import *
 from .signal import *
+from .static_traceable import *
 from .stepwise_scheduler import *
 from .types import *
 
