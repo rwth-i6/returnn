@@ -161,9 +161,8 @@ def mask(
     :param max_amount: inclusive
     :param mask_value:
     """
-    dim = mask_axis.get_size_tensor()
-    dim = rf.copy_to_device(dim, pos.device)
-    pos = rf.cast(pos, dtype=dim.dtype)
+    dim = mask_axis.get_size_tensor_or_int(device=pos.device)
+    pos = rf.cast(pos, dtype=dim.dtype if isinstance(dim, Tensor) else rf.get_default_array_index_dtype())
     amount = rf.random_uniform(pos.dims, minval=1, maxval=max_amount + 1, dtype=pos.dtype, device=pos.device)
     pos2 = rf.minimum(pos + amount, dim)
     idxs = rf.range_over_dim(mask_axis, dtype=pos.dtype, device=pos.device)  # (dim,)
