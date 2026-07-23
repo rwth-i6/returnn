@@ -49,7 +49,22 @@ def specaugment(
 
     def _mask_branch():
         x_masked = x
+        # static int if the dim has a declared capacity (then the num range is static too),
+        # else the dynamic max (tensor)
         spatial_len = spatial_dim.get_dim_value_tensor()
+        spatial_num_bound = None
+        feature_num_bound = None
+        if rf.is_static_traceable():
+            # static traceable (see :func:`rf.is_static_traceable`) needs a static num-masks bound,
+            # and thus the declared capacity.
+            # The bounds span the WHOLE step schedule
+            # (max step factors: spatial 1+1+2*1 = 4, feature 2*1+1+2*1 = 5),
+            # so one trace / captured graph covers all schedule phases.
+            assert isinstance(spatial_len, int), (
+                "specaugment: static traceable (rf.is_static_traceable) requires spatial_dim capacity"
+            )
+            spatial_num_bound = min(max(spatial_len // num_spatial_mask_factor, 2) * 4, spatial_len)
+            feature_num_bound = 5
         # time mask
         if num_spatial_mask_factor > 0 and (
             isinstance(max_consecutive_spatial_dims, Tensor) or max_consecutive_spatial_dims > 0
@@ -63,6 +78,7 @@ def specaugment(
                     rf.maximum(spatial_len // num_spatial_mask_factor, 2) * (step0 + step1 + step2 * 2), spatial_len
                 ),
                 max_dims=max_consecutive_spatial_dims,
+                max_num_bound=spatial_num_bound,
             )
         # feature mask
         if max_consecutive_feature_dims > 0:
@@ -73,6 +89,7 @@ def specaugment(
                 min_num=step1 + step2,
                 max_num=step0 * 2 + step1 + step2 * 2,
                 max_dims=max_consecutive_feature_dims,
+                max_num_bound=feature_num_bound,
             )
         return x_masked
 
@@ -90,6 +107,7 @@ def random_mask(
     max_num: Union[int, Tensor],
     max_dims: Union[int, Tensor],
     mask_value: Union[int, float, Tensor] = 0.0,
+    max_num_bound: Optional[int] = None,
 ) -> Tensor:
     """
     :param x: (batch,time,feature)
@@ -102,6 +120,13 @@ def random_mask(
     :param max_num: inclusive
     :param max_dims: inclusive
     :param mask_value:
+    :param max_num_bound: static upper bound for max_num.
+        Required for the static-traceable path (see :func:`rf.is_static_traceable`) when max_num is a Tensor
+        (for int max_num, max_num itself is the bound).
+        With static traceable, the mask loop runs a fixed number of iterations (the bound),
+        gated per sequence (i < num), instead of a data-dependent while loop,
+        and num is drawn on the data's device instead of cpu
+        (same mask distribution, different RNG consumption).
     """
     batch_dims = list(x.dims)
     batch_dims.remove(mask_axis)
@@ -110,27 +135,49 @@ def random_mask(
     else:
         for a in broadcast_axis:
             batch_dims.remove(a)
+    num_bound: Optional[int] = None
     if isinstance(min_num, int) and isinstance(max_num, int) and min_num == max_num:
         num = min_num
         max_num = num
     else:
-        num = rf.random_uniform(batch_dims, minval=min_num, maxval=max_num + 1, dtype="int32", device="cpu")
-        max_num = rf.reduce_max(num, axis=num.dims)
+        if rf.is_static_traceable():
+            # Static traceable (see :func:`rf.is_static_traceable`):
+            # num drawn on the data's device (tensor bounds are handled device-side by the backend),
+            # and below a fixed trip count (loop to the bound, gate per seq)
+            # instead of the data-dependent while loop.
+            if isinstance(max_num, int):
+                num_bound = max_num
+            else:
+                assert max_num_bound is not None, (
+                    "random_mask: static traceable (rf.is_static_traceable) requires max_num_bound for tensor max_num"
+                )
+                num_bound = max_num_bound
+            # k for top_k must not exceed the axis (get_dim_value: the capacity / static size, a host int)
+            num_bound = min(num_bound, mask_axis.get_dim_value())
+            num_device = x.device
+        else:
+            num_device = "cpu"
+        num = rf.random_uniform(batch_dims, minval=min_num, maxval=max_num + 1, dtype="int32", device=num_device)
+        if num_bound is None:
+            max_num = rf.reduce_max(num, axis=num.dims)
     _, indices, k_dim = rf.top_k(
         rf.random_uniform(batch_dims + [mask_axis], minval=0.0, maxval=1.0, device=x.device),
         axis=mask_axis,
-        k=num if isinstance(num, int) else rf.reduce_max(num, axis=num.dims),
+        k=num if isinstance(num, int) else (num_bound if num_bound is not None else max_num),
     )
     # indices should be sorted, and of shape (batch,num), entries (int32) in [0,dim)
-    if isinstance(num, int):
-        for i in range(num):
-            x = mask(
+    if isinstance(num, int) or num_bound is not None:
+        # fixed trip count; with tensor num, iterations beyond a seq's num are gated off
+        # (same mask distribution)
+        for i in range(num if isinstance(num, int) else num_bound):
+            y = mask(
                 x,
                 mask_axis=mask_axis,
                 pos=rf.gather(indices, axis=k_dim, indices=i),
                 max_amount=max_dims,
                 mask_value=mask_value,
             )
+            x = y if isinstance(num, int) else rf.where(rf.greater(num, i), y, x)
     else:
 
         def _body(s):
