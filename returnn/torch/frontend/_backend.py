@@ -1979,18 +1979,28 @@ class TorchBackend(Backend[torch.Tensor]):
                 if minval is None:
                     minval = 0
                 assert maxval is not None, "maxval must be specified for integer random uniform"
-                if isinstance(minval, Tensor):
-                    assert minval.dims == (), f"only scalar minval supported, got {minval}"
-                    minval = minval.raw_tensor
-                if isinstance(maxval, Tensor) and maxval.dims:
-                    # per-element upper bound: affine transform of U[0,1) -> [minval, maxval), floored to int.
-                    maxval_raw = maxval.copy_compatible_to_dims_raw(out.dims)
+                # torch random_ takes host int bounds only.
+                # cpu scalar-tensor bounds are host-readable for free -> random_ (as always).
+                # Device or per-element tensor bounds: affine transform of U[0,1) -> [minval, maxval),
+                # floored to int, fully on device
+                # (reading a device scalar syncs, and is illegal under CUDA-graph capture).
+                if any(
+                    isinstance(v, Tensor) and (v.dims or (v.raw_tensor is not None and v.device != "cpu"))
+                    for v in (minval, maxval)
+                ):
+                    if isinstance(minval, Tensor):
+                        minval = minval.copy_compatible_to_dims_raw(out.dims) if minval.dims else minval.raw_tensor
+                    if isinstance(maxval, Tensor):
+                        maxval = maxval.copy_compatible_to_dims_raw(out.dims) if maxval.dims else maxval.raw_tensor
                     with torch.no_grad():
                         u = torch.rand(out.raw_tensor.shape, generator=generator, device=out.raw_tensor.device)
-                        out.raw_tensor.copy_(
-                            (minval + u * (maxval_raw.to(u.dtype) - minval)).floor().to(out.raw_tensor.dtype)
-                        )
-                else:  # scalar
+                        if isinstance(maxval, torch.Tensor):
+                            maxval = maxval.to(u.dtype)
+                        out.raw_tensor.copy_((minval + u * (maxval - minval)).floor().to(out.raw_tensor.dtype))
+                else:  # host-readable scalar bounds
+                    if isinstance(minval, Tensor):
+                        assert minval.dims == ()
+                        minval = minval.raw_tensor
                     if isinstance(maxval, Tensor):
                         assert maxval.dims == ()
                         maxval = maxval.raw_tensor
