@@ -203,7 +203,6 @@ def _dropout_mask_kernel(
     Mask,
     Seed,
     dropout_p,
-    H: tl.constexpr,
     R,
     max_len,
     stride_mt,
@@ -299,7 +298,8 @@ def _rel_pos_bwd_kernel_dkv(
             dv += tl.dot(tl.trans(p_use.to(do.dtype)), do)
             dp = tl.dot(do, tl.trans(v))
         if ENABLE_DROPOUT:
-            # same keep as above (computed once)
+            # same keep as above (computed once; both blocks share the ENABLE_DROPOUT constexpr)
+            # noinspection PyUnboundLocalVariable
             dp = tl.where(keep, dp / (1.0 - dropout_p), 0.0)
         ds = p * (dp - delta[:, None])  # (M, N)
         ds = tl.where(valid, ds, 0.0)
@@ -475,7 +475,6 @@ def dump_mask(total, n_heads, max_len, r, *, dropout_p, seed, device):
         mask,
         seed,
         dropout_p,
-        H=n_heads,
         R=r,
         max_len=max_len,
         stride_mt=mask.stride(0),
