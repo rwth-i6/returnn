@@ -595,7 +595,9 @@ def get_ctc_fsa_fast_bw(
     # because invalid seq lens might not directly lead to an error here
     # but it might just return an invalid FSA.
     # An invalid FSA can however later cause a crash in the FastBaumWelchOp.
-    assert_(seq_lens.max() == n_time, "get_ctc_fsa_fast_bw seq_lens invalid")
+    # <= (not ==): a static over-allocated targets buffer (CUDA-graph regime) is wider than the max len;
+    # the op handles shorter lens per seq anyway, only lens beyond the buffer are dangerous
+    assert_(seq_lens.max() <= n_time, "get_ctc_fsa_fast_bw seq_lens invalid")
 
     n_edges = n_batch * (5 * (n_time - 1) + 10)  # see op documentation
     weights = torch.zeros((n_edges,), device=targets.device)
