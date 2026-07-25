@@ -165,38 +165,22 @@ def random_mask(
         axis=mask_axis,
         k=num if isinstance(num, int) else (num_bound if num_bound is not None else max_num),
     )
-    # indices should be sorted, and of shape (batch,num), entries (int32) in [0,dim)
-    if isinstance(num, int) or num_bound is not None:
-        # fixed trip count; with tensor num, iterations beyond a seq's num are gated off
-        # (same mask distribution)
-        for i in range(num if isinstance(num, int) else num_bound):
-            y = mask(
-                x,
-                mask_axis=mask_axis,
-                pos=rf.gather(indices, axis=k_dim, indices=i),
-                max_amount=max_dims,
-                mask_value=mask_value,
-            )
-            x = y if isinstance(num, int) else rf.where(rf.greater(num, i), y, x)
-    else:
-
-        def _body(s):
-            i_, x_ = s
-            y = mask(
-                x_,
-                mask_axis=mask_axis,
-                pos=rf.gather(indices, axis=k_dim, indices=rf.copy_to_device(i_, indices.device)),
-                max_amount=max_dims,
-                mask_value=mask_value,
-            )
-            y = rf.where(rf.copy_to_device(rf.less(i_, num), y.device), y, x_)
-            return i_ + 1, y
-
-        _, x = rf.while_loop(
-            cond=lambda s: s[0] < max_num,
-            body=_body,
-            initial=(rf.constant(0, dims=(), device="cpu"), x),
-        )
+    # indices should be sorted, and of shape (batch,num), entries (int32) in [0,dim).
+    # Apply ALL masks in one fused pass
+    # (one amount draw, one broadcast compare over (batch,k,dim), one any-reduce, one where)
+    # instead of a per-mask loop -- k-proportional kernels fewer, same mask distribution.
+    # With tensor num, mask slots beyond a seq's num are gated off.
+    dim = mask_axis.get_size_tensor_or_int(device=indices.device)
+    pos = rf.cast(indices, dtype=dim.dtype if isinstance(dim, Tensor) else rf.get_default_array_index_dtype())
+    amount = rf.random_uniform(batch_dims + [k_dim], minval=1, maxval=max_dims + 1, dtype=pos.dtype, device=pos.device)
+    pos2 = rf.minimum(pos + amount, dim)
+    idxs = rf.range_over_dim(mask_axis, dtype=pos.dtype, device=pos.device)  # (dim,)
+    cond = rf.compare_bc(idxs, ">=", pos) & rf.compare_bc(idxs, "<", pos2)  # (batch,k,dim)
+    if isinstance(num, Tensor):
+        num = rf.copy_to_device(num, x.device)
+        cond = cond & rf.compare_bc(rf.range_over_dim(k_dim, device=num.device), "<", num)
+    cond = rf.reduce_any(cond, axis=k_dim)
+    x = rf.where(cond, mask_value, x)
     return x
 
 
