@@ -692,8 +692,13 @@ def ctc_loss_packed(
         targets=targets, seq_lens=targets_seq_lens, blank_idx=blank_index, label_loop=label_loop
     )
     seq_mask = sequence_mask_time_major(logits_seq_lens, maxlen=max_seq_len)  # (time,batch), bool
+    # static state-buffer size, see the construct_kernel state numbering: (2*n_time+3) states per seq.
+    # (the default alloc in fast_baum_welch_packed sizes by start_end_states.max(),
+    # a data-dependent device read -- a sync, and illegal under CUDA-graph capture)
+    n_batch, n_tgt_time = targets.shape
+    state_buffer = torch.zeros((2, n_batch * (2 * n_tgt_time + 3)), device=logits.device)
     loss = _FastBaumWelchScoresPackedAutogradFunc.apply(
-        logits, logits_normalize, seq_starts, seq_mask, edges, weights, start_end_states
+        logits, logits_normalize, seq_starts, seq_mask, edges, weights, start_end_states, state_buffer
     )
     return loss
 
