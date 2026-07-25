@@ -29,6 +29,10 @@ def assert_(cond: torch.Tensor, message: str, *, stop: bool = True):
                 print(f"[ASSERT FAILED WARNING]: {message}")
         return
     elif cond.device.type == "cuda":
+        if torch.cuda.is_current_stream_capturing():
+            # cross-thread launch onto a capturing stream is illegal;
+            # the eager warmup steps before a capture already ran the check
+            return
         # This triggers the Lazy initialization on first call
         _CudaAsyncWorker().push(cond, message, stop=stop)
     else:
