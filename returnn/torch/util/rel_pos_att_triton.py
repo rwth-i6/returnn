@@ -9,15 +9,18 @@ Layout (like flash_attn_varlen):
   seq_starts, seq_lens: (B,) int32 -- any packed layout, gaps between the seqs allowed
   bd: (total, H, R) -- precomputed position term (matrix b+d), pre-scaled,
       R = 2*max_len-1, centered: score(i,j) = scale*q_i k_j^T + bd[i, h, center+j-i]
-Dropout: philox hash on (global row, head, local col) + seed,
+Dropout: philox hash on (global row, local col) + a per-head-mixed seed,
 so the backward recomputes the identical mask, no rng state saved.
+The seed is a 1-elem int32 device tensor read in-kernel (tl.load),
+so a captured device draw gives fresh masks across CUDA-graph replays
+(a host int would be baked into the captured launch).
 The bd gradient is row-owned (each query row writes its own bd row), no atomics.
 Guard the import at the caller (needs Triton; the jit decorators run at import time).
 """
 
 from __future__ import annotations
 
-from typing import Optional
+from typing import Optional, Union
 import math
 
 import torch
@@ -28,6 +31,18 @@ import triton.language as tl
 def is_available() -> bool:
     """:return: whether the kernel can run (needs a CUDA device)"""
     return torch.cuda.is_available()
+
+
+def _seed_tensor(seed: Union[int, torch.Tensor], device) -> torch.Tensor:
+    """
+    :param seed: int or 1-elem int tensor
+    :param device:
+    :return: 1-elem int32 device tensor, read in-kernel via tl.load
+    """
+    if isinstance(seed, torch.Tensor):
+        assert seed.numel() == 1
+        return seed.to(device=device, dtype=torch.int32)
+    return torch.full((1,), int(seed), dtype=torch.int32, device=device)
 
 
 # noinspection PyPep8Naming,PyUnresolvedReferences
@@ -41,7 +56,7 @@ def _rel_pos_fwd_kernel(
     Lse,
     SeqStarts,
     SeqLens,
-    seed,
+    Seed,
     dropout_p,
     scale,
     stride_qt,
@@ -107,9 +122,11 @@ def _rel_pos_fwd_kernel(
         l_i = l_i * alpha + tl.sum(p, 1)
         acc = acc * alpha[:, None]
         if ENABLE_DROPOUT:
-            # philox offsets unique per (global q row, head, local col)
-            offs = (q_rows[:, None].to(tl.int64) * H + h) * R + offs_n[None, :].to(tl.int64)
-            rand = tl.rand(seed, offs)
+            # philox offsets in INT32 (64-bit per-element math here made dropout ~20x slower);
+            # unique per (global q row, local col), the head goes into the seed.
+            # (Overflow wraps for total * R > 2^31: distant rows may then share a stream -- harmless.)
+            offs = q_rows[:, None] * R + offs_n[None, :]
+            rand = tl.rand(tl.load(Seed) + h * 1000003, offs)
             keep = rand >= dropout_p
             p_use = tl.where(keep, p / (1.0 - dropout_p), 0.0)
         else:
@@ -141,6 +158,7 @@ def rel_pos_att_fwd(q, k, v, bd, seq_starts, seq_lens, max_len, *, dropout_p=0.0
     assert r == 2 * max_len - 1
     if scale is None:
         scale = 1.0 / math.sqrt(d)
+    seed = _seed_tensor(seed, q.device)
     # zeros, not empty: the kernel writes only the valid rows (per-block early-exit),
     # so gap/junk rows would keep arbitrary garbage (possibly inf/nan),
     # which downstream residual adds spread and linear-layer weight grads mix in (x^T dy -> nan).
@@ -183,7 +201,7 @@ def rel_pos_att_fwd(q, k, v, bd, seq_starts, seq_lens, max_len, *, dropout_p=0.0
 @triton.jit
 def _dropout_mask_kernel(
     Mask,
-    seed,
+    Seed,
     dropout_p,
     H: tl.constexpr,
     R,
@@ -196,8 +214,8 @@ def _dropout_mask_kernel(
     i = tl.program_id(0)  # global row
     h = tl.program_id(1)
     offs_n = tl.arange(0, BLOCK_N)
-    offs = (i.to(tl.int64) * H + h) * R + offs_n.to(tl.int64)
-    rand = tl.rand(seed, offs)
+    offs = i * R + offs_n
+    rand = tl.rand(tl.load(Seed) + h * 1000003, offs)
     keep = rand >= dropout_p
     tl.store(Mask + i * stride_mt + h * stride_mh + offs_n, keep.to(tl.int8), mask=offs_n < max_len)
 
@@ -216,7 +234,7 @@ def _rel_pos_bwd_kernel_dkv(
     DV,
     SeqStarts,
     SeqLens,
-    seed,
+    Seed,
     dropout_p,
     scale,
     stride_qt,
@@ -268,8 +286,9 @@ def _rel_pos_bwd_kernel_dkv(
         s = tl.where(valid, s + bd, float("-inf"))
         p = tl.exp(s - lse[:, None])  # (M, N), normalized probs
         if ENABLE_DROPOUT:
-            offs = (q_rows[:, None].to(tl.int64) * H + h) * R + offs_n[None, :].to(tl.int64)
-            keep = tl.rand(seed, offs) >= dropout_p
+            # int32 offsets, head in the seed -- see the fwd kernel
+            offs = q_rows[:, None] * R + offs_n[None, :]
+            keep = tl.rand(tl.load(Seed) + h * 1000003, offs) >= dropout_p
             p_use = tl.where(keep, p / (1.0 - dropout_p), 0.0)
         else:
             p_use = p
@@ -280,8 +299,7 @@ def _rel_pos_bwd_kernel_dkv(
             dv += tl.dot(tl.trans(p_use.to(do.dtype)), do)
             dp = tl.dot(do, tl.trans(v))
         if ENABLE_DROPOUT:
-            offs = (q_rows[:, None].to(tl.int64) * H + h) * R + offs_n[None, :].to(tl.int64)
-            keep = tl.rand(seed, offs) >= dropout_p
+            # same keep as above (computed once)
             dp = tl.where(keep, dp / (1.0 - dropout_p), 0.0)
         ds = p * (dp - delta[:, None])  # (M, N)
         ds = tl.where(valid, ds, 0.0)
@@ -307,7 +325,7 @@ def _rel_pos_bwd_kernel_dq(
     DBD,
     SeqStarts,
     SeqLens,
-    seed,
+    Seed,
     dropout_p,
     scale,
     stride_qt,
@@ -360,8 +378,9 @@ def _rel_pos_bwd_kernel_dq(
         else:
             dp = tl.dot(do, tl.trans(v))
         if ENABLE_DROPOUT:
-            offs = (q_rows[:, None].to(tl.int64) * H + h) * R + offs_n[None, :].to(tl.int64)
-            keep = tl.rand(seed, offs) >= dropout_p
+            # int32 offsets, head in the seed -- see the fwd kernel
+            offs = q_rows[:, None] * R + offs_n[None, :]
+            keep = tl.rand(tl.load(Seed) + h * 1000003, offs) >= dropout_p
             dp = tl.where(keep, dp / (1.0 - dropout_p), 0.0)
         ds = p * (dp - delta[:, None])
         ds = tl.where(valid, ds, 0.0)
@@ -380,6 +399,7 @@ def rel_pos_att_bwd(q, k, v, bd, seq_starts, seq_lens, max_len, out, lse, d_out,
     r = bd.shape[-1]
     if scale is None:
         scale = 1.0 / math.sqrt(d)
+    seed = _seed_tensor(seed, q.device)
     delta = (d_out.float() * out.float()).sum(-1)  # (total, H)
     dq = torch.zeros_like(q, dtype=torch.float32)
     dk = torch.zeros_like(k, dtype=torch.float32)
@@ -448,6 +468,7 @@ def dump_mask(total, n_heads, max_len, r, *, dropout_p, seed, device):
     :return: the kept-weight boolean mask (total, H, max_len) the kernels use for the given seed,
         for exact-parity tests against an eager reference.
     """
+    seed = _seed_tensor(seed, device)
     mask = torch.zeros(total, n_heads, max_len, dtype=torch.int8, device=device)
     block_n = triton.next_power_of_2(max_len)
     _dropout_mask_kernel[(total, n_heads)](
@@ -512,7 +533,7 @@ def rel_pos_att_varlen(
     max_seq_len: int,
     *,
     dropout_p: float = 0.0,
-    seed: Optional[int] = None,
+    seed: Optional[Union[int, torch.Tensor]] = None,
     scale: Optional[float] = None,
 ) -> torch.Tensor:
     """
@@ -526,13 +547,16 @@ def rel_pos_att_varlen(
     :param seq_lens: (B,), int32
     :param max_seq_len: max seq len (R = 2*max_seq_len-1)
     :param dropout_p: post-softmax weight dropout probability
-    :param seed: philox seed. default: drawn from the torch default generator
+    :param seed: philox seed, int or 1-elem int tensor.
+        default: drawn on the data's device when dropout is active
+        (the CUDA philox generator is graph-managed,
+        so a capture gets a fresh seed, thus fresh masks, on each replay)
     :param scale: applied to the q k^T term (default 1/sqrt(D))
     :return: attention output, (total, H, D), dtype of q
     """
     if scale is None:
         scale = 1.0 / math.sqrt(q.shape[-1])
     if seed is None:
-        seed = int(torch.randint(0, 2**31 - 1, (), device="cpu"))
+        seed = torch.randint(0, 2**31 - 1, (1,), dtype=torch.int32, device=q.device) if dropout_p > 0 else 0
     q, k, v, bd = q.contiguous(), k.contiguous(), v.contiguous(), bd.contiguous()
     return _RelPosAttVarlen.apply(q, k, v, bd, seq_starts, seq_lens, max_seq_len, dropout_p, seed, scale)
