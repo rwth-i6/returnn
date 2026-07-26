@@ -3293,16 +3293,35 @@ class FastBaumWelchOp(NativeOpGenBase):
 
         buffer += blockIdx.x * num_edges;
 
-        for (unsigned s = 0u; s < num_seqs; s++) {
+        // Block-parallel strided loops + shared-mem log-space atomic adds
+        // (the old single-thread-per-block serial loops were the dominant cost of the whole op).
+        // With blockDim 1 (the CPU kernel emulation runs threads sequentially),
+        // this degenerates to exactly the old sequential behavior;
+        // the syncs only exist on device.
+        for (unsigned s = threadIdx.x; s < num_seqs; s += blockDim.x) {
           sum[s] = INF_F;
         }
+      #ifdef __CUDA_ARCH__
+        __syncthreads();
+      #endif
 
-        for (unsigned e = 0u; e < num_edges; e++) {
+        for (unsigned e = threadIdx.x; e < num_edges; e += blockDim.x) {
+          float v = buffer[e];
+          if (isnan(v)) {
+            // junk edges (e.g. masked frames): no contribution.
+            // (prob_add(x, NaN) returns INF, i.e. RESETS the accumulator
+            // -- the old serial fold was thus order-dependent on NaNs;
+            // skipping is the order-independent semantics.)
+            continue;
+          }
           unsigned s = sequence_idxs[e];
-          sum[s] = prob_add(sum[s], buffer[e]);
+          atomic_prob_add(&sum[s], v);
         }
+      #ifdef __CUDA_ARCH__
+        __syncthreads();
+      #endif
 
-        for (unsigned s = 0ul; s < num_seqs; s++) {
+        for (unsigned s = threadIdx.x; s < num_seqs; s += blockDim.x) {
           if (isinf(sum[s])) {
             // if the frame is empty (happens due to batching of seqs with unequal length), set it to 0
             sum_output[blockIdx.x * num_seqs + s] = 0.0;
@@ -3311,8 +3330,11 @@ class FastBaumWelchOp(NativeOpGenBase):
             sum_output[blockIdx.x * num_seqs + s] = sum[s];
           }
         }
+      #ifdef __CUDA_ARCH__
+        __syncthreads();
+      #endif
 
-        for (unsigned e = 0u; e < num_edges; e++) {
+        for (unsigned e = threadIdx.x; e < num_edges; e += blockDim.x) {
           unsigned s = sequence_idxs[e];
           buffer[e] -= sum[s];
         }
@@ -3571,7 +3593,14 @@ class FastBaumWelchOp(NativeOpGenBase):
     }
 
     // normalize at each time frame
-    start_dev_kernel2(normalize, n_frames, 1, n_seqs * sizeof(float),
+    // (block-parallel on CUDA; the CPU kernel emulation runs threads sequentially,
+    // so block=1 there keeps the old exact sequential behavior)
+    #if CUDA
+    const unsigned norm_block_dim = 512;
+    #else
+    const unsigned norm_block_dim = 1;
+    #endif
+    start_dev_kernel2(normalize, n_frames, norm_block_dim, n_seqs * sizeof(float),
       (d_edge_buffer, d_sequence_idxs, n_edges, n_seqs, d_sum_output));
     HANDLE_LAST_ERROR();
 
@@ -3865,7 +3894,14 @@ class FastBaumWelchPackedOp(NativeOpGenBase):
     }
 
     // normalize at each time frame
-    start_dev_kernel2(normalize, n_frames, 1, n_seqs * sizeof(float),
+    // (block-parallel on CUDA; the CPU kernel emulation runs threads sequentially,
+    // so block=1 there keeps the old exact sequential behavior)
+    #if CUDA
+    const unsigned norm_block_dim = 512;
+    #else
+    const unsigned norm_block_dim = 1;
+    #endif
+    start_dev_kernel2(normalize, n_frames, norm_block_dim, n_seqs * sizeof(float),
       (d_edge_buffer, d_sequence_idxs, n_edges, n_seqs, d_sum_output));
     HANDLE_LAST_ERROR();
 
