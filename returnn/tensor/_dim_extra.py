@@ -2014,6 +2014,59 @@ class _DimMixin:
         assert isinstance(res, int)
         return res
 
+    def _derived_capacity(self: Dim) -> Optional[int]:
+        """
+        :return: capacity (the static upper bound of the dyn size, see :func:`get_dim_value_tensor`)
+            inferred through the derived-from-op chain when the roots have one declared, else None.
+            Ops are applied to the inputs' capacities (a valid upper bound: the ops are monotone;
+            subtracting or dividing by a dim of unknown bound keeps the bound -- dims are >= 0 / >= 1).
+            Cached into self.capacity.
+        """
+        if self.capacity is not None:
+            return self.capacity
+        # static dims always carry a capacity (Dim.__init__ defaults it to the dimension),
+        # so a static dim here means that invariant was violated
+        assert self.dimension is None, f"{self}: static dim without capacity"
+        if not self._extra or not self._extra.derived_from_op:
+            return None
+        op = self._extra.derived_from_op
+        kind = op.kind
+        res: Optional[int] = None
+        for i, x in enumerate(op.inputs):
+            # Op.inputs are always Dims (int operands become constant static dims at construction)
+            v = x._derived_capacity()
+            # sub/div need the operand EXACT (a static dim), not an upper bound:
+            # upper(a - b) = upper(a) - lower(b), and a dyn dim's lower bound is only 0 / 1
+            x_static = x.dimension
+            if i == 0:
+                if v is None:
+                    return None
+                res = v
+            elif kind == "add":
+                if v is None:
+                    return None
+                res = res + v
+            elif kind == "sub":
+                if x_static is not None:
+                    res = max(res - x_static, 0)
+                # else: keep res as the (loose) bound, the subtrahend dim is >= 0
+            elif kind == "mul":
+                if v is None:
+                    return None
+                res = res * v
+            elif kind in ("floordiv", "truediv"):
+                if x_static is not None:
+                    res = res // x_static
+                # else: keep res as the (loose) bound, the divisor dim is >= 1
+            elif kind == "ceildiv":
+                if x_static is not None:
+                    res = -(-res // x_static)
+                # else: keep res as the (loose) bound, the divisor dim is >= 1
+            else:
+                return None
+        self.capacity = res
+        return res
+
     def get_dim_value_tensor(self: Dim) -> Union[int, _t.Tensor]:
         """
         Infers the dim this axis should have if unbroadcasted.
@@ -2025,7 +2078,7 @@ class _DimMixin:
         import returnn.frontend as rf
 
         if self.capacity is not None:
-            # The static size for (padded) buffers, a plain int that never changes across steps:
+            # The static size of the (padded) raw buffers, a plain int that never changes across steps:
             # for static dims this defaults to the dimension,
             # for dynamic dims it is the declared upper bound.
             # Static shapes are also required for CUDA-graph capture / tracing
@@ -2034,6 +2087,14 @@ class _DimMixin:
             return self.capacity
         if self.dimension is not None:
             return self.dimension
+        if rf.is_static_traceable():
+            # Bound-shape regime (the only regime that declares capacities):
+            # propagate capacity through dim math (derived dims).
+            # Gated: walking the derived-from-op chain on every call would slow down the eager path,
+            # and a negative result cannot be cached (capacities are declared late).
+            cap = self._derived_capacity()
+            if cap is not None:
+                return cap
         if self._dyn_size_max_value is not None:  # fast path, precomputed
             assert self._dyn_size_max_value.raw_tensor is not None
             return self._dyn_size_max_value
