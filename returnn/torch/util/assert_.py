@@ -33,6 +33,10 @@ def assert_(cond: torch.Tensor, message: str, *, stop: bool = True):
             # cross-thread launch onto a capturing stream is illegal;
             # the eager warmup steps before a capture already ran the check
             return
+        if type(cond) is not torch.Tensor:
+            # tensor subclass (fake/functional/traced): no real storage,
+            # and the raw kernel launch would be invisible to the trace anyway
+            return
         # This triggers the Lazy initialization on first call
         _CudaAsyncWorker().push(cond, message, stop=stop)
     else:
