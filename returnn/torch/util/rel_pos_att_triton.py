@@ -20,7 +20,7 @@ Guard the import at the caller (needs Triton; the jit decorators run at import t
 
 from __future__ import annotations
 
-from typing import Optional, Union
+from typing import Optional, Union, Tuple
 import math
 
 import torch
@@ -486,23 +486,36 @@ def dump_mask(total, n_heads, max_len, r, *, dropout_p, seed, device):
 
 # noinspection PyAbstractClass
 class _RelPosAttVarlen(torch.autograd.Function):
-    """autograd wrapper, see :func:`rel_pos_att_varlen`"""
+    """
+    autograd wrapper, see :func:`rel_pos_att_varlen`.
+    Modern API (forward without ctx + setup_context):
+    required for functorch transforms (e.g. functionalize -> the make_fx/Inductor path);
+    the old combined-forward style makes those silently reject the Function.
+    """
 
     # noinspection PyMethodOverriding
     @staticmethod
-    def forward(ctx, q, k, v, bd, seq_starts, seq_lens, max_seq_len, dropout_p, seed, scale):
-        """forward"""
+    def forward(q, k, v, bd, seq_starts, seq_lens, max_seq_len, dropout_p, seed, scale):
+        """forward. lse is a formal (non-differentiable) output, needed by the backward."""
         out, lse = rel_pos_att_fwd(
             q, k, v, bd, seq_starts, seq_lens, max_seq_len, dropout_p=dropout_p, seed=seed, scale=scale
         )
+        return out, lse
+
+    @staticmethod
+    def setup_context(ctx, inputs, output):
+        """setup ctx for backward"""
+        q, k, v, bd, seq_starts, seq_lens, max_seq_len, dropout_p, seed, scale = inputs
+        out, lse = output
         ctx.save_for_backward(q, k, v, bd, seq_starts, seq_lens, out, lse)
         ctx.max_seq_len, ctx.dropout_p, ctx.seed, ctx.scale = max_seq_len, dropout_p, seed, scale
-        return out
+        ctx.mark_non_differentiable(lse)
 
     # noinspection PyMethodOverriding
     @staticmethod
-    def backward(ctx, d_out):
-        """backward"""
+    def backward(ctx, d_out, d_lse):
+        """backward. d_lse unused (lse non-differentiable)."""
+        d_lse  # noqa  # unused
         q, k, v, bd, seq_starts, seq_lens, out, lse = ctx.saved_tensors
         dq, dk, dv, dbd = rel_pos_att_bwd(
             q,
@@ -520,6 +533,87 @@ class _RelPosAttVarlen(torch.autograd.Function):
             scale=ctx.scale,
         )
         return dq.to(q.dtype), dk.to(k.dtype), dv.to(v.dtype), dbd.to(bd.dtype), None, None, None, None, None, None
+
+
+_HAVE_LIB_OPS = False
+if hasattr(torch.library, "custom_op"):  # torch >= 2.4
+
+    @torch.library.custom_op("returnn::rel_pos_att_fwd", mutates_args=())
+    def _lib_fwd(
+        q: torch.Tensor,
+        k: torch.Tensor,
+        v: torch.Tensor,
+        bd: torch.Tensor,
+        seq_starts: torch.Tensor,
+        seq_lens: torch.Tensor,
+        max_seq_len: int,
+        dropout_p: float,
+        seed: torch.Tensor,
+        scale: float,
+    ) -> Tuple[torch.Tensor, torch.Tensor]:
+        return rel_pos_att_fwd(
+            q, k, v, bd, seq_starts, seq_lens, max_seq_len, dropout_p=dropout_p, seed=seed, scale=scale
+        )
+
+    @_lib_fwd.register_fake
+    def _lib_fwd_fake(q, k, v, bd, seq_starts, seq_lens, max_seq_len, dropout_p, seed, scale):
+        total, n_heads, _ = q.shape
+        return torch.empty_like(q), q.new_empty((total, n_heads), dtype=torch.float32)
+
+    @torch.library.custom_op("returnn::rel_pos_att_bwd", mutates_args=())
+    def _lib_bwd(
+        q: torch.Tensor,
+        k: torch.Tensor,
+        v: torch.Tensor,
+        bd: torch.Tensor,
+        seq_starts: torch.Tensor,
+        seq_lens: torch.Tensor,
+        max_seq_len: int,
+        out: torch.Tensor,
+        lse: torch.Tensor,
+        d_out: torch.Tensor,
+        dropout_p: float,
+        seed: torch.Tensor,
+        scale: float,
+    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+        dq, dk, dv, dbd = rel_pos_att_bwd(
+            q,
+            k,
+            v,
+            bd,
+            seq_starts,
+            seq_lens,
+            max_seq_len,
+            out,
+            lse,
+            d_out.contiguous(),
+            dropout_p=dropout_p,
+            seed=seed,
+            scale=scale,
+        )
+        return dq.to(q.dtype), dk.to(k.dtype), dv.to(v.dtype), dbd.to(bd.dtype)
+
+    @_lib_bwd.register_fake
+    def _lib_bwd_fake(q, k, v, bd, seq_starts, seq_lens, max_seq_len, out, lse, d_out, dropout_p, seed, scale):
+        return torch.empty_like(q), torch.empty_like(k), torch.empty_like(v), torch.empty_like(bd)
+
+    def _lib_setup_context(ctx, inputs, output):
+        q, k, v, bd, seq_starts, seq_lens, max_seq_len, dropout_p, seed, scale = inputs
+        out, lse = output
+        ctx.save_for_backward(q, k, v, bd, seq_starts, seq_lens, out, lse, seed)
+        ctx.max_seq_len, ctx.dropout_p, ctx.scale = max_seq_len, dropout_p, scale
+
+    def _lib_backward(ctx, d_out, d_lse):
+        d_lse  # noqa  # unused (lse non-differentiable)
+        q, k, v, bd, seq_starts, seq_lens, out, lse, seed = ctx.saved_tensors
+        dq, dk, dv, dbd = torch.ops.returnn.rel_pos_att_bwd(
+            q, k, v, bd, seq_starts, seq_lens, ctx.max_seq_len, out, lse, d_out, ctx.dropout_p, seed, ctx.scale
+        )
+        return dq, dk, dv, dbd, None, None, None, None, None, None
+
+    torch.library.register_autograd("returnn::rel_pos_att_fwd", _lib_backward, setup_context=_lib_setup_context)
+
+    _HAVE_LIB_OPS = True
 
 
 def rel_pos_att_varlen(
@@ -558,4 +652,11 @@ def rel_pos_att_varlen(
     if seed is None:
         seed = torch.randint(0, 2**31 - 1, (1,), dtype=torch.int32, device=q.device) if dropout_p > 0 else 0
     q, k, v, bd = q.contiguous(), k.contiguous(), v.contiguous(), bd.contiguous()
-    return _RelPosAttVarlen.apply(q, k, v, bd, seq_starts, seq_lens, max_seq_len, dropout_p, seed, scale)
+    if _HAVE_LIB_OPS:
+        seed_t = _seed_tensor(seed, q.device)
+        out, _ = torch.ops.returnn.rel_pos_att_fwd(
+            q, k, v, bd, seq_starts, seq_lens, max_seq_len, dropout_p, seed_t, scale
+        )
+        return out
+    out, _ = _RelPosAttVarlen.apply(q, k, v, bd, seq_starts, seq_lens, max_seq_len, dropout_p, seed, scale)
+    return out
