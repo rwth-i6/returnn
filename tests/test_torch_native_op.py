@@ -1303,6 +1303,8 @@ def test_fast_baum_welch_fake_tensor_mode():
     (the make_fx/AOT -> Inductor whole-step compile, ``torch_cuda_graph`` ``"compile"``);
     plain eager or CUDA-graph capture never dispatch to it.
     """
+    if not hasattr(torch.library, "register_fake"):
+        raise SkipTest("torch.library.register_fake not available (torch < 2.4)")
     from torch._subclasses.fake_tensor import FakeTensor, FakeTensorMode
 
     op = make_fast_baum_welch_op(compiler_opts=dict(verbose=True))
