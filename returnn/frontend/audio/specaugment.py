@@ -172,7 +172,7 @@ def random_mask(
     # With tensor num, mask slots beyond a seq's num are gated off.
     dim = mask_axis.get_size_tensor_or_int(device=indices.device)
     pos = rf.cast(indices, dtype=dim.dtype if isinstance(dim, Tensor) else rf.get_default_array_index_dtype())
-    amount = rf.random_uniform(batch_dims + [k_dim], minval=1, maxval=max_dims + 1, dtype=pos.dtype, device=pos.device)
+    amount = rf.random_uniform(pos.dims, minval=1, maxval=max_dims + 1, dtype=pos.dtype, device=pos.device)
     pos2 = rf.minimum(pos + amount, dim)
     idxs = rf.range_over_dim(mask_axis, dtype=pos.dtype, device=pos.device)  # (dim,)
     cond = rf.compare_bc(idxs, ">=", pos) & rf.compare_bc(idxs, "<", pos2)  # (batch,k,dim)
