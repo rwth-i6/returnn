@@ -72,6 +72,7 @@ class OpMaker:
     global_lock = RLock()
     mod_cache = {}  # cache_key -> mod
     op_cache = {}  # cache_key -> op
+    fake_impl_registered = set()  # torch.library qualnames, see :func:`_register_fake_impl`
     log_stream = sys.stdout
 
     def __init__(
@@ -423,6 +424,38 @@ class OpMaker:
         self.mod_cache[self.cache_key] = mod
         return mod
 
+    def _register_fake_impl(self):
+        """
+        Fake (meta) impl for PT2 fake-tensor propagation (torch.compile / make_fx -> Inductor):
+        output shapes are closed-form from the op description
+        (out_info shape entries: literal int, or (in_idx, dim_idx) referencing an input dim).
+        """
+        import torch.library
+
+        qualname = f"{self.op_name}::{self.op_name}"
+        if qualname in self.fake_impl_registered:
+            # same op name from another cache key; the fake impl is shape-generic, one is enough
+            return
+        out_info = self.description.out_info
+        dtype_map = {"float32": torch.float32, "int32": torch.int32, "int8": torch.int8, "int64": torch.int64}
+
+        def _fake_impl(*args):
+            device = next(a.device for a in args if isinstance(a, torch.Tensor))
+            outs = []
+            for o in out_info:
+                shape = []
+                for d in o["shape"]:
+                    if isinstance(d, int):
+                        shape.append(d)
+                    else:
+                        in_idx, dim_idx = d
+                        shape.append(args[in_idx].shape[dim_idx])
+                outs.append(torch.empty(shape, dtype=dtype_map[o.get("dtype", "float32")], device=device))
+            return tuple(outs)
+
+        torch.library.register_fake(qualname, _fake_impl)
+        self.fake_impl_registered.add(qualname)
+
     def make_op(self):
         """
         :return: op
@@ -435,6 +468,7 @@ class OpMaker:
             op._op_maker = self
             op._op_module = mod
             self.op_cache[self.cache_key] = op
+            self._register_fake_impl()
 
             if self.description.is_grad_defined:
                 pass  # not implemented yet...
