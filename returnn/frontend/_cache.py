@@ -166,6 +166,31 @@ class TensorWrapper:
         return self._hash
 
 
+class _WeakIdRef:
+    """
+    Weakref with identity-based eq/hash.
+    Dead refs never compare equal -- also makes id() reuse after GC safe
+    (a new object at the same address hits the old hash but fails the eq check).
+    """
+
+    __slots__ = ("_ref", "_id")
+
+    def __init__(self, obj, callback=None):
+        self._ref = ref(obj, callback)
+        self._id = id(obj)
+
+    def __eq__(self, other):
+        if not isinstance(other, _WeakIdRef):
+            return False
+        if self._id != other._id:
+            return False
+        obj = self._ref()
+        return obj is not None and obj is other._ref()
+
+    def __hash__(self):
+        return self._id
+
+
 class DimWrapper:
     """
     Wraps :class:`Dim`.
@@ -176,7 +201,7 @@ class DimWrapper:
     """
 
     def __init__(self, dim: Dim, *, finalize_callback):
-        self.dim_value = _dim_value_for_key(dim)
+        self.dim_value = _dim_value_for_key(dim, finalize_callback=finalize_callback)
         # finalize_callback only needed when we don't use the dim value.
         self.dim_ref = ref(dim, finalize_callback if self.dim_value is None else None)
         self.dyn_size_ref = (
@@ -200,14 +225,21 @@ class DimWrapper:
         return self._hash
 
 
-def _dim_value_for_key(dim: Dim) -> Optional[Union[int, Tuple[Any, ...]]]:
+def _dim_value_for_key(dim: Dim, *, finalize_callback=None) -> Optional[Union[int, Tuple[Any, ...]]]:
     if dim.size is not None:
         return dim.size
     if dim.dyn_size_ext is None or dim.dyn_size_ext.raw_tensor is None:
         return None
     # noinspection PyProtectedMember
-    if not dim.dyn_size_ext._raw_backend.executing_eagerly():
-        return None
+    if not dim.dyn_size_ext._raw_backend.executing_eagerly() or dim.dyn_size_ext.device not in (None, "cpu"):
+        # No value-keying possible here:
+        # - non-eager (graph-based) backends: symbolic size tensors have no values at trace time;
+        # - device-resident dyn sizes: reading the values means a device-to-host copy
+        #   (a sync, illegal under CUDA-graph capture; also, the values change in place there).
+        # Key by the IDENTITY of the raw size tensor instead (value-free, so still correct):
+        # dims sharing the same size tensor (e.g. fresh kv dims from replace_dim)
+        # then share the cache entry, as with value-keying in the eager cpu case.
+        return "size_ref", _WeakIdRef(dim.dyn_size_ext.raw_tensor, finalize_callback)
     if not dim.dyn_size_ext.dims:
         return int(dim.get_dim_value())
     # Non-scalar eager dyn sizes (e.g. seq lens [batch]): key by the size values,
