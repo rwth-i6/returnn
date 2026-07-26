@@ -1293,3 +1293,41 @@ def test_next_edit_distance_reduce_optimal_completion():
             native_res = native_edit_dist_np[i, j]
             assert ref_res == native_res
     print()
+
+
+def test_fast_baum_welch_fake_tensor_mode():
+    """
+    OpMaker-made ops register a generic fake (meta) impl (:func:`OpMaker._register_fake_impl`):
+    output shapes closed-form from the op description.
+    Needed whenever the op is hit by FakeTensor tracing
+    (the make_fx/AOT -> Inductor whole-step compile, ``torch_cuda_graph`` ``"compile"``);
+    plain eager or CUDA-graph capture never dispatch to it.
+    """
+    from torch._subclasses.fake_tensor import FakeTensor, FakeTensorMode
+
+    op = make_fast_baum_welch_op(compiler_opts=dict(verbose=True))
+    # args: (am_scores, edges, weights, start_end_states, float_idx, state_buffer)
+    n_batch, seq_len, n_classes = 3, 7, 5
+    fsa = FastBwFsaShared()
+    for i in range(n_classes):
+        fsa.add_edge(i, i + 1, emission_idx=i)
+        fsa.add_edge(i + 1, i + 1, emission_idx=i)
+    fast_bw_fsa = fsa.get_fast_bw_fsa(n_batch=n_batch)
+    edges = torch.tensor(fast_bw_fsa.edges, dtype=torch.int32)
+    weights = torch.tensor(fast_bw_fsa.weights, dtype=torch.float32)
+    start_end_states = torch.tensor(fast_bw_fsa.start_end_states, dtype=torch.int32)
+    am_scores = torch.full((seq_len, n_batch, n_classes), float(numpy.log(n_classes)))  # -log space, uniform
+    float_idx = torch.ones((seq_len, n_batch), dtype=torch.float32)
+    n_states = int(start_end_states.max()) + 1
+    state_buffer = torch.zeros((2, n_states), dtype=torch.float32)
+
+    args = (am_scores, edges, weights, start_end_states, float_idx, state_buffer)
+    fwdbwd_real, obs_scores_real = op(*args)
+
+    mode = FakeTensorMode()
+    fake_args = [mode.from_tensor(t) for t in args]
+    with mode:
+        fwdbwd_fake, obs_scores_fake = op(*fake_args)
+    for fake, real in [(fwdbwd_fake, fwdbwd_real), (obs_scores_fake, obs_scores_real)]:
+        assert isinstance(fake, FakeTensor)
+        assert fake.shape == real.shape and fake.dtype == real.dtype
