@@ -432,6 +432,8 @@ class OpMaker:
         """
         import torch.library
 
+        if not hasattr(torch.library, "register_fake"):  # torch < 2.4
+            return
         qualname = f"{self.op_name}::{self.op_name}"
         if qualname in self.fake_impl_registered:
             # same op name from another cache key; the fake impl is shape-generic, one is enough
