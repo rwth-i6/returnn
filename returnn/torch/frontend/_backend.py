@@ -2013,10 +2013,16 @@ class TorchBackend(Backend[torch.Tensor]):
                 # Device or per-element tensor bounds: affine transform of U[0,1) -> [minval, maxval),
                 # floored to int, fully on device
                 # (reading a device scalar syncs, and is illegal under CUDA-graph capture).
+                # Under static traceable, int bounds also take the affine path (any device:
+                # cpu aten ops get traced all the same).
+                # Keeps aten.random_ out of traced programs:
+                # one uniform RNG mechanism (torch.rand/philox) for capture replay and Inductor,
+                # and its overload name "from" is a Python keyword,
+                # which breaks FX codegen (upstream PyTorch bug, SyntaxError in generated code).
                 if any(
                     isinstance(v, Tensor) and (v.dims or (v.raw_tensor is not None and v.device != "cpu"))
                     for v in (minval, maxval)
-                ):
+                ) or rf.is_static_traceable():
                     if isinstance(minval, Tensor):
                         minval = minval.copy_compatible_to_dims_raw(out.dims) if minval.dims else minval.raw_tensor
                     if isinstance(maxval, Tensor):
