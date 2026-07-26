@@ -634,12 +634,26 @@ class TorchBackend(Backend[torch.Tensor]):
         :return: softmax over axis
         """
         out = tensor.copy_template("softmax")
+        mask = None
         if use_mask and axis.need_masking():
             tensor = tensor.copy()
             mask = tensor.get_sequence_mask_broadcast(axis=axis)
             inf_value = get_global_inf_value()
             tensor.raw_tensor = torch.where(mask, tensor.raw_tensor, -inf_value)
-        out_raw = torch.softmax(tensor.raw_tensor, dim=tensor.dims.index(axis))
+        axis_int = tensor.dims.index(axis)
+        any_valid = None
+        if mask is not None and rf.is_static_traceable():
+            # Bound-shape regime (e.g. torch_cuda_graph): zero-length filler seqs have FULLY masked
+            # rows, where the stable softmax would give NaN ((-inf)-(-inf)),
+            # poisoning anything that touches those rows. Define those rows as 0 instead.
+            # The 0 energies are substituted BEFORE the softmax (finite uniform row),
+            # so not even the softmax backward sees NaN
+            # (its grads for those rows are select-masked to 0 by the wheres either way).
+            any_valid = mask.any(dim=axis_int, keepdim=True)
+            tensor.raw_tensor = torch.where(any_valid, tensor.raw_tensor, torch.zeros_like(tensor.raw_tensor))
+        out_raw = torch.softmax(tensor.raw_tensor, dim=axis_int)
+        if any_valid is not None:
+            out_raw = torch.where(any_valid, out_raw, torch.zeros_like(out_raw))
         out.dtype = TorchBackend.get_dtype_name_raw(out_raw)
         out.raw_tensor = out_raw
         return out
@@ -653,12 +667,21 @@ class TorchBackend(Backend[torch.Tensor]):
         :return: log_softmax over axis
         """
         out = tensor.copy_template("log_softmax")
+        mask = None
         if use_mask and axis.need_masking():
             tensor = tensor.copy()
             mask = tensor.get_sequence_mask_broadcast(axis=axis)
             inf_value = get_global_inf_value()
             tensor.raw_tensor = torch.where(mask, tensor.raw_tensor, -inf_value)
-        out_raw = torch.log_softmax(tensor.raw_tensor, dim=tensor.dims.index(axis))
+        axis_int = tensor.dims.index(axis)
+        any_valid = None
+        if mask is not None and rf.is_static_traceable():
+            # see softmax above: fully-masked rows (zero-length filler seqs) -> -inf, not NaN
+            any_valid = mask.any(dim=axis_int, keepdim=True)
+            tensor.raw_tensor = torch.where(any_valid, tensor.raw_tensor, torch.zeros_like(tensor.raw_tensor))
+        out_raw = torch.log_softmax(tensor.raw_tensor, dim=axis_int)
+        if any_valid is not None:
+            out_raw = torch.where(any_valid, out_raw, torch.full_like(out_raw, -get_global_inf_value()))
         out.dtype = TorchBackend.get_dtype_name_raw(out_raw)
         out.raw_tensor = out_raw
         return out
