@@ -643,8 +643,9 @@ class TorchBackend(Backend[torch.Tensor]):
         axis_int = tensor.dims.index(axis)
         any_valid = None
         if mask is not None and rf.is_static_traceable():
-            # Bound-shape regime (e.g. torch_cuda_graph): zero-length filler seqs have FULLY masked
-            # rows, where the stable softmax would give NaN ((-inf)-(-inf)),
+            # Bound-shape regime (e.g. torch_cuda_graph):
+            # zero-length filler seqs have FULLY masked rows,
+            # where the stable softmax would give NaN ((-inf)-(-inf)),
             # poisoning anything that touches those rows. Define those rows as 0 instead.
             # The 0 energies are substituted BEFORE the softmax (finite uniform row),
             # so not even the softmax backward sees NaN
