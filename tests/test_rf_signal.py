@@ -111,4 +111,16 @@ def test_audio_specaugment():
         out = rf.audio.specaugment(data, spatial_dim=time_dim, feature_dim=in_dim, only_on_train=False)
         out.mark_as_default_output(shape=(batch_dim, time_dim, in_dim))
 
-    run_model(extern_data, lambda *, epoch, step: rf.Module(), _forward_step)
+    # test_single_batch_entry=False: that phase re-runs with the same seed but different shapes,
+    # so the random mask draws differ between the batched and the single run
+    # (earlier code versions passed only by coincidence of the fixed seed).
+    # test_tensorflow=False: the mask widths are drawn over the top-k dim,
+    # which is dynamic (k = max over the per-seq num draws),
+    # and the TF random-journal replay cannot reconstruct draws over data-dependent dims.
+    run_model(
+        extern_data,
+        lambda *, epoch, step: rf.Module(),
+        _forward_step,
+        test_single_batch_entry=False,
+        test_tensorflow=False,
+    )
