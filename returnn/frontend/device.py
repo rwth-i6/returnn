@@ -36,6 +36,15 @@ def copy_to_device(x: Tensor, device: Optional[str] = None) -> Tensor:
         return x
     if x.device == device:
         return x
+    if device == "cpu" and x.device is not None:
+        import returnn.frontend as rf
+
+        if rf.is_static_traceable():
+            raise Exception(
+                f"copy_to_device: device-to-host copy of {x} under static traceable"
+                f" (a sync, illegal under CUDA-graph capture)."
+                f" Compute on the data's device instead (pass the proper device at the call site)."
+            )
     # noinspection PyProtectedMember
     return x._raw_backend.copy_to_device(x, device)
 
