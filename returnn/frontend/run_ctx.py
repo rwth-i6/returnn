@@ -491,7 +491,7 @@ class Loss:
             if self.custom_inv_norm_factor.dims:
                 return rf.reduce_sum(self.custom_inv_norm_factor, axis=self.custom_inv_norm_factor.dims)
             return self.custom_inv_norm_factor
-        return self.loss.num_elements()
+        return rf.num_elements_of_shape(self.loss.dims, device=self.loss.device)
 
     def get_scaled_reduced_loss(self) -> Tensor:
         """
