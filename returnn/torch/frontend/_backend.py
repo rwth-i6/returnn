@@ -991,7 +991,12 @@ class TorchBackend(Backend[torch.Tensor]):
     def parameter_assign(param: rf.Parameter, value: Tensor, *, op: str = "assign") -> None:
         """param assign"""
         raw_param = param.raw_tensor
-        assert isinstance(raw_param, torch.nn.Parameter)
+        if rf.is_static_traceable():
+            # under tracing, this can be a functionalized substitute (a plain Tensor, not nn.Parameter):
+            # make_fx/AOT with the params passed as function inputs
+            assert isinstance(raw_param, torch.Tensor)
+        else:
+            assert isinstance(raw_param, torch.nn.Parameter)
         value_raw = value.copy_compatible_to_dims_raw(param.dims)
         with torch.no_grad():
             if op == "assign":
