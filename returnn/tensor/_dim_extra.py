@@ -2031,21 +2031,20 @@ class _DimMixin:
             return None
         op = self._extra.derived_from_op
         kind = op.kind
-        res: Optional[int] = None
-        for i, x in enumerate(op.inputs):
-            # Op.inputs are always Dims (int operands become constant static dims at construction)
+        if not op.inputs:
+            return None
+        res = op.inputs[0]._derived_capacity()
+        if res is None:
+            return None
+        for x in op.inputs[1:]:
             v = x._derived_capacity()
             # sub/div need the operand EXACT (a static dim), not an upper bound:
             # upper(a - b) = upper(a) - lower(b), and a dyn dim's lower bound is only 0 / 1
             x_static = x.dimension
-            if i == 0:
+            if kind == "add":
                 if v is None:
                     return None
-                res = v
-            elif kind == "add":
-                if v is None:
-                    return None
-                res = res + v
+                res += v
             elif kind == "sub":
                 if x_static is not None:
                     res = max(res - x_static, 0)
@@ -2053,7 +2052,7 @@ class _DimMixin:
             elif kind == "mul":
                 if v is None:
                     return None
-                res = res * v
+                res *= v
             elif kind in ("floordiv", "truediv"):
                 if x_static is not None:
                     res = res // x_static
