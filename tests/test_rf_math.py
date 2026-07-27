@@ -184,6 +184,36 @@ def test_cumsum():
     run_model(extern_data, lambda *, epoch, step: rf.Module(), _forward_step)
 
 
+def test_softmax_fully_masked_zero_len_seq():
+    """
+    Bound-shape regime (:func:`rf.is_static_traceable`, e.g. ``torch_cuda_graph``):
+    batches are padded with zero-length filler seqs, whose softmax rows are fully masked.
+    The stable softmax gives NaN there ((-inf) - (-inf)) -- the backend defines those rows
+    as 0 (log_softmax: -inf) instead. Without that, downstream masked ops absorb the NaNs
+    via mask-multiply (NaN * 0 = NaN) and poison the whole batch (e.g. batch norm stats).
+    """
+
+    import torch
+    from returnn.tensor import Tensor, Dim
+
+    batch_dim = Dim(2, name="batch")
+    time_dim = Dim(Tensor("time", dims=[batch_dim], dtype="int32", raw_tensor=torch.tensor([5, 0], dtype=torch.int32)))
+    feat_dim = Dim(4, name="feat")
+    x = Tensor("x", dims=[batch_dim, time_dim, feat_dim], dtype="float32")
+    x.raw_tensor = torch.randn(2, 5, 4, generator=torch.Generator().manual_seed(42))
+    with rf.set_static_traceable_ctx():
+        out = rf.softmax(x, axis=time_dim)
+        out_log = rf.log_softmax(x, axis=time_dim)
+    raw = out.copy_transpose((batch_dim, time_dim, feat_dim)).raw_tensor
+    assert torch.isfinite(raw).all()
+    assert (raw[1] == 0).all()  # the zero-length seq: fully-masked rows -> all 0
+    sums = raw[0].sum(dim=0)  # valid seq: proper distribution over the (masked) time axis
+    assert torch.allclose(sums, torch.ones_like(sums), atol=1e-5)
+    raw_log = out_log.copy_transpose((batch_dim, time_dim, feat_dim)).raw_tensor
+    assert not torch.isnan(raw_log).any()
+    assert (raw_log[1] == -torch.inf).all()  # log space: fully-masked rows -> -inf (log 0)
+
+
 if __name__ == "__main__":
     better_exchook.install()
     if len(sys.argv) <= 1:
