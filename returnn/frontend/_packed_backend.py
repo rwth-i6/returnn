@@ -3424,12 +3424,16 @@ def regap(
     total_bound: Optional[int] = None,
 ) -> Tensor:
     """
-    :return: same content, packed with the given gap (and align, default: keep;
-        plus optional target layout_lens, e.g. to restore an exact strided-out layout):
-        a cheap packed -> packed re-layout (one scatter over the frames, no padded intermediate).
-        Used e.g. by the packed conv when the tensor's gap is too small.
+    :param source: packed tensor
+    :param gap: target gap (empty frames after each seq)
+    :param align: target alignment, default: keep the current one
+    :param layout_lens: optional target per-seq layout lens,
+        e.g. to restore an exact strided-out layout
     :param total_bound: if given, allocate a fixed (upper-bound) buffer of this many frames
         for the re-layout, so the packed dim is static (see :func:`pack`).
+    :return: same content, packed with the given gap:
+        a cheap packed -> packed re-layout (one scatter over the frames, no padded intermediate).
+        Used e.g. by the packed conv when the tensor's gap is too small.
     """
     raw = _raw(source)
     if align is None:
