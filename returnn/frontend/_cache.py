@@ -111,6 +111,13 @@ def _transform_key(
         # See comment above: If graph-mode, the cached value becomes invalid
         # when the current run ctx goes out of scope.
         keys_flat.append(ref(rf.get_run_ctx(), finalize_callback))
+    if rf.is_static_traceable():
+        # Results computed under static traceable are only valid within the current step
+        # (e.g. under CUDA-graph capture they live in the captured graph region,
+        # and the regime's static buffers change in place across steps).
+        # The generation identifies the step (the ctx is enabled once per step):
+        # entries from earlier steps never match again and age out of the LRU.
+        keys_flat.append(rf.static_traceable_generation())
     if collected_dim_map is None:
         collected_dim_map = {}
     keys_flat += [
