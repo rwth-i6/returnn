@@ -3253,6 +3253,7 @@ class PackedBackend(Backend[PackedRawTensor]):
                 logits_normalize=not logits_normalized,
                 blank_index=blank_index,
             )
+            # zero-length seqs (e.g. bound-regime padding seqs): the op returns loss 0 for them
             loss = Tensor("ctc_loss", dims=[batch_dim], dtype="float32")
             loss.raw_tensor = loss_raw
             return loss
