@@ -2796,7 +2796,10 @@ def _get_description(dim, brackets=True):
 
 def _get_merged_dim_kind(dim_tags: Sequence[Dim]) -> Entity:
     if any([tag.is_batch_dim() for tag in dim_tags]):
-        return DimTypes.Batch
+        # NOT Batch: a dim derived from the batch dim is not the batch dim.
+        # (Batch kind would make it EQUAL to the batch dim -- any two batch-kind dims
+        # compare equal -- e.g. batch_dim + 1 must never be equal to batch_dim.)
+        return DimTypes.Spatial
     elif any([tag.is_feature_dim() for tag in dim_tags]):
         return DimTypes.Feature
     else:
