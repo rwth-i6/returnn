@@ -269,17 +269,20 @@ def num_elements_of_shape(
     return n
 
 
-def masked_fraction_of_shape(dims: Union[Dim, Sequence[Dim]], *, inverse: bool = False) -> Union[int, float, Tensor]:
+def masked_fraction_of_shape(
+    dims: Union[Dim, Sequence[Dim]], *, inverse: bool = False, device: Optional[str] = None
+) -> Union[int, float, Tensor]:
     """
     :param dims:
     :param inverse: if True, return the inverse of the fraction
+    :param device: only for the case when we return a Tensor. by default, this is CPU (just as the size tensor).
     :return: :func:`num_elements_of_shape`(dims) / prod(dims) if not inverse else prod(dims) / num_elements
     """
     if isinstance(dims, Dim):
         dims = [dims]
     if not any(dim.need_masking() for dim in dims):
         return 1
-    num_elems_masked = num_elements_of_shape(dims)
+    num_elems_masked = num_elements_of_shape(dims, device=device)
     num_elems_total = 1
     for dim in dims:
         num_elems_total *= dim.get_dim_value_tensor()

@@ -1790,7 +1790,7 @@ class TorchBackend(Backend[torch.Tensor]):
                 mask_value = 0
             elif mode == "mean":
                 mask_value = 0
-                correction_factor = rf.masked_fraction_of_shape(axis, inverse=True)
+                correction_factor = rf.masked_fraction_of_shape(axis, inverse=True, device=source.device)
             elif mode == "all":
                 mask_value = True
             elif mode == "any":
