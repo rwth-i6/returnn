@@ -64,7 +64,10 @@ from returnn.util.basic import CollectionReadCheckCovered
 from returnn.tensor import Tensor, TensorDict, Dim
 import returnn.frontend as rf
 from returnn.frontend.run_ctx import RunCtx, Loss
-from returnn.torch.data.extern_data import get_batch_dim_from_extern_data, _get_dyn_dims_from_extern_data
+
+# noinspection PyProtectedMember
+from ..data.extern_data import get_batch_dim_from_extern_data, _get_dyn_dims_from_extern_data
+
 
 __all__ = ["GraphCapturedTrainStep"]
 
@@ -87,9 +90,9 @@ def _apply_inductor_workarounds():
     global _inductor_workarounds_applied
     if _inductor_workarounds_applied:
         return
-    import torch._inductor.lowering as lowering
-    import torch._inductor.decomposition as decomposition
-    import torch._inductor.config as inductor_config
+
+    # noinspection PyProtectedMember
+    from torch._inductor import lowering, decomposition, config as inductor_config
 
     for overload in (torch.ops.aten.searchsorted.Tensor, torch.ops.aten.searchsorted.Scalar):
         lowering.lowerings.pop(overload, None)
@@ -109,12 +112,15 @@ def _allow_non_fake_inputs():
     so relax the mode -- scoped around the trace+compile call, which runs on REAL inputs
     (fake inputs instead crash Inductor's runtime autotune on fake data ptrs).
     """
+    # noinspection PyProtectedMember
     import torch._subclasses.fake_tensor as fake_tensor_mod
 
     orig_init = fake_tensor_mod.FakeTensorMode.__init__
 
     def permissive_init(self, *args, **kwargs):
+        """FakeTensorMode.__init__ with allow_non_fake_inputs forced"""
         kwargs["allow_non_fake_inputs"] = True
+        # noinspection PyArgumentList
         orig_init(self, *args, **kwargs)
 
     fake_tensor_mod.FakeTensorMode.__init__ = permissive_init
@@ -374,6 +380,8 @@ class GraphCapturedTrainStep:
         all outputs detached: the compiled program is one inference-style graph.
         """
         from functorch.compile import aot_function
+
+        # noinspection PyProtectedMember
         from torch._inductor.compile_fx import compile_fx
 
         _apply_inductor_workarounds()
@@ -382,6 +390,7 @@ class GraphCapturedTrainStep:
         trainable = [r.requires_grad for r in orig_raws]
 
         def step_core(raws):
+            """the whole train step on the given param raws -> (loss raws..., grads...), see above"""
             for p_, t in zip(rf_params, raws):
                 p_.raw_tensor = t
             try:
