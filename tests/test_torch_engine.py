@@ -1169,6 +1169,100 @@ def _torch_engine_sub_proc_cleanup_test_main(conn):
         conn.close()
 
 
+def _build_cuda_graph_train_config_and_dataset(*, compile_: bool):
+    """small RF model + Task12AXDataset config with torch_cuda_graph, see the tests below"""
+    from returnn.datasets import init_dataset
+    from returnn.tensor import Dim, batch_dim
+
+    time_dim = Dim(None, name=f"time-cudagraph-{compile_}")  # fresh dims per test: capacities get set on them
+    feat_dim = Dim(9, name="feat")
+    classes_dim = Dim(2, name="classes")
+
+    class _Model(rf.Module):
+        def __init__(self):
+            super().__init__()
+            self.out_dim = classes_dim
+            hidden = Dim(64, name="hidden")
+            self.layer = rf.Linear(feat_dim, hidden)
+            self.out = rf.Linear(hidden, classes_dim)
+
+    def _get_model(*, epoch, step, **_kwargs):
+        return _Model()
+
+    def _train_step(*, model: _Model, extern_data: TensorDict, **_kwargs):
+        data = extern_data["data"]
+        classes = extern_data["classes"]
+        x = rf.relu(model.layer(data))
+        logits = model.out(x)
+        loss = rf.cross_entropy(target=classes, estimated=logits, estimated_type="logits", axis=model.out_dim)
+        loss.mark_as_loss("ce")
+
+    def _dyn_lr(*, global_train_step: int, learning_rate: float, **_kwargs) -> float:
+        # per-step LR schedule: under capture_optimizer this exercises the device-tensor LR input
+        return learning_rate * (1.0 + 0.1 * global_train_step)
+
+    config = Config(
+        dict(
+            task="train",
+            device="gpu",
+            extern_data={
+                "data": {"dims": [batch_dim, time_dim, feat_dim], "dtype": "float32"},
+                "classes": {"dims": [batch_dim, time_dim], "dtype": "int32", "sparse_dim": classes_dim},
+            },
+            get_model=_get_model,
+            train_step=_train_step,
+            batch_size=400,
+            max_seqs=10,
+            num_epochs=2,
+            learning_rate=1e-3,
+            dynamic_learning_rate=_dyn_lr,
+            optimizer={"class": "adamw", "capturable": True},
+            torch_cuda_graph=dict(
+                batch_size_bound=10,
+                dim_capacity={"data": 100, "classes": 100},
+                warmup_steps=2,
+                capture_optimizer=True,
+                **({"compile": True} if compile_ else {}),
+            ),
+            torch_dataloader_opts={"num_workers": 0},
+        )
+    )
+    dataset = init_dataset({"class": "Task12AXDataset", "num_seqs": 100, "name": "train", "fixed_random_seed": 1})
+    dataset.init_seq_order(epoch=1)
+    return config, dataset
+
+
+def _run_cuda_graph_train(*, compile_: bool):
+    if not torch.cuda.is_available():
+        raise unittest.SkipTest("CUDA not available")
+    config, dataset = _build_cuda_graph_train_config_and_dataset(compile_=compile_)
+    with global_config_ctx(config):
+        engine = Engine(config=config)
+        engine.init_train_from_config(train_data=dataset)
+        engine.train()
+        assert engine._graph_capture is not None
+        assert engine._graph_capture._graph is not None, "graph never captured"
+        assert engine._graph_capture.captures_optimizer
+        for param_group in engine._updater.optimizer.param_groups:
+            lr = param_group["lr"]  # device-tensor LR input of the captured optimizer
+            assert isinstance(lr, torch.Tensor) and lr.is_cuda
+            assert lr.item() > 1e-3  # the per-step schedule advanced it
+        for name, p in engine._pt_model.named_parameters():
+            assert torch.isfinite(p).all(), f"non-finite param {name}"
+
+
+def test_torch_engine_cuda_graph_train():
+    """whole-train-step CUDA-graph capture/replay (torch_cuda_graph), 2 epochs across an epoch boundary,
+    in-graph optimizer + per-step LR schedule via the device-tensor LR input"""
+    _run_cuda_graph_train(compile_=False)
+
+
+def test_torch_engine_cuda_graph_compile_train():
+    """torch_cuda_graph "compile": the whole step Inductor-compiled (aot_function + compile_fx,
+    no Dynamo), then captured; otherwise as :func:`test_torch_engine_cuda_graph_train`"""
+    _run_cuda_graph_train(compile_=True)
+
+
 if __name__ == "__main__":
     better_exchook.install()
     if len(sys.argv) <= 1:

@@ -49,6 +49,7 @@ from .data import extern_data as extern_data_util
 from .data.queued_data_iter import QueuedDataIter
 from .frontend.bridge import rf_module_to_pt_module
 from .util import diagnose_gpu
+from .util import graph_capture
 from .util import module as util_module
 from .util.exception_helper import help_on_torch_exception
 from .util.debug_inf_nan import debug_inf_nan
@@ -139,6 +140,10 @@ class Engine(EngineBase):
         self._reset_dev_memory_caches = config.bool("reset_dev_memory_caches", False)
         self._forward_auto_split_batch_on_oom = config.bool("forward_auto_split_batch_on_oom", False)
         self._stop_on_nonfinite_train_score = config.bool("stop_on_nonfinite_train_score", True)
+        # whole-train-step CUDA-graph capture, see returnn.torch.util.graph_capture.
+        # opts parsed here, the instance is created lazily at the first train step.
+        self._graph_capture_opts = config.typed_value("torch_cuda_graph", None)
+        self._graph_capture: Optional[graph_capture.GraphCapturedTrainStep] = None
 
         if config.bool("use_tensorboard", False):
             from torch.utils.tensorboard import SummaryWriter
@@ -243,6 +248,36 @@ class Engine(EngineBase):
 
         self._train_step_func = self.config.typed_value("train_step")
         assert self._train_step_func, "train_step not defined"
+
+        if self._graph_capture_opts is not None:
+            # whole-train-step CUDA-graph capture/replay, incl backward
+            # (see returnn.torch.util.graph_capture)
+            accum = self.config.typed_dict.get("accum_grad_multiple_step")
+            assert (accum is None or accum == 1) and self.config.int("accum_grad_multiple_step", 1) == 1, (
+                "torch_cuda_graph: grad accumulation not supported"
+            )
+            assert self._grad_scaler is None, "torch_cuda_graph: grad scaler not supported"
+            assert self._ddp_pt_model is None and not self._torch_distributed_ctx, (
+                "torch_cuda_graph: distributed training not supported"
+            )
+            self._graph_capture = graph_capture.GraphCapturedTrainStep(
+                opts=self._graph_capture_opts,
+                extern_data_template=self.extern_data,
+                device=self._device,
+                float_dtype=self._default_float_dtype,
+                params=list(self._pt_model.parameters()),
+                run_step=(
+                    lambda extern_data_, *, step: self._run_step(
+                        extern_data_, train_flag=True, train_func=True, step=step
+                    )
+                ),
+                post_step=lambda: self._updater.step(grad_scaler=None),
+                rf_params=(list(self._orig_model.parameters()) if isinstance(self._orig_model, rf.Module) else None),
+            )
+            if self._graph_capture.captures_optimizer:
+                # LR as a device tensor = a graph input: the per-step LR schedule
+                # stays functional under the captured optimizer
+                self._updater.use_device_lr_tensors(self._device)
 
     def set_epoch(self, epoch: int):
         """set epoch"""
@@ -508,20 +543,31 @@ class Engine(EngineBase):
 
                 # clear the gradients when every gradient accumulation loop starts
                 if zero_grad_next_step:
-                    self._updater.get_optimizer().zero_grad()
+                    if self._graph_capture_opts is None:
+                        # under graph capture, the grads are static buffers zeroed in-graph
+                        self._updater.get_optimizer().zero_grad()
                     cur_count_grad_accum = 0
 
-                extern_data = extern_data_util.raw_dict_to_extern_data(
-                    extern_data_raw,
-                    extern_data_template=self.extern_data,
-                    device=self._device,
-                    float_dtype=self._default_float_dtype,
-                    with_eval_targets=True,
-                )
-                self._run_step(extern_data, train_flag=True, train_func=True)
+                if self._graph_capture is not None:
+                    # whole-train-step CUDA-graph capture/replay, incl backward
+                    # (see returnn.torch.util.graph_capture; created in init_train_from_config)
+                    extern_data = None
+                    train_ctx = self._graph_capture.run_train_step(
+                        extern_data_raw, global_train_step=self.global_train_step
+                    )
+                    total_loss = None
+                else:
+                    extern_data = extern_data_util.raw_dict_to_extern_data(
+                        extern_data_raw,
+                        extern_data_template=self.extern_data,
+                        device=self._device,
+                        float_dtype=self._default_float_dtype,
+                        with_eval_targets=True,
+                    )
+                    self._run_step(extern_data, train_flag=True, train_func=True)
+                    train_ctx = rf.get_run_ctx()
+                    total_loss = train_ctx.total_loss()
 
-                train_ctx = rf.get_run_ctx()
-                total_loss = train_ctx.total_loss()
                 losses_dict = NumbersDict(
                     {
                         name: (
@@ -545,16 +591,17 @@ class Engine(EngineBase):
                     )
                 cur_count_grad_accum += 1
                 perform_update_step = cur_count_grad_accum >= accum_grad_multiple_step
-                with (
-                    self._ddp_pt_model.no_sync()
-                    if (self._ddp_pt_model is not None and not perform_update_step)
-                    else nullcontext(),
-                    record_function("backward"),
-                ):
-                    if self._grad_scaler is not None:
-                        self._grad_scaler.scale(total_loss.raw_tensor).backward()
-                    else:
-                        total_loss.raw_tensor.backward()
+                if self._graph_capture is None:  # under graph capture, backward is inside the graph
+                    with (
+                        self._ddp_pt_model.no_sync()
+                        if (self._ddp_pt_model is not None and not perform_update_step)
+                        else nullcontext(),
+                        record_function("backward"),
+                    ):
+                        if self._grad_scaler is not None:
+                            self._grad_scaler.scale(total_loss.raw_tensor).backward()
+                        else:
+                            total_loss.raw_tensor.backward()
 
                 if self._log_grad_norm and perform_update_step:
                     key = f"grad_norm:p{simplify_and_format_number(self._log_grad_norm)}"
@@ -563,7 +610,8 @@ class Engine(EngineBase):
                     losses_dict[key] = _get_total_grad_norm(self._pt_model, p=self._log_grad_norm)
 
                 # only update the weights when every gradient accumulation loop ends
-                if perform_update_step:
+                # (under graph capture with capture_optimizer, the update is inside the graph)
+                if perform_update_step and (self._graph_capture is None or not self._graph_capture.captures_optimizer):
                     with record_function("optimizer_step"):
                         self._updater.step(grad_scaler=self._grad_scaler)
                 zero_grad_next_step = perform_update_step
@@ -586,7 +634,9 @@ class Engine(EngineBase):
                     start_elapsed=step_end_time - epoch_start_time,
                     complete_frac=complete_frac,
                     num_seqs=num_seqs,
-                    batch_size_info=_get_batch_size_info(extern_data) if self._log_batch_size else None,
+                    batch_size_info=(
+                        _get_batch_size_info(extern_data) if self._log_batch_size and extern_data is not None else None
+                    ),
                     log_memory_usage_device=self._device if self._log_memory_usage else None,
                 )
                 if (
@@ -630,8 +680,11 @@ class Engine(EngineBase):
                             assert isinstance(loss, Tensor)
                             return loss.raw_tensor
 
-                        print("Running debug_inf_nan...", file=log.v1)
-                        debug_inf_nan(_debug_func, with_grad=True)
+                        if extern_data is not None:
+                            print("Running debug_inf_nan...", file=log.v1)
+                            debug_inf_nan(_debug_func, with_grad=True)
+                        else:
+                            print("(debug_inf_nan not supported under torch_cuda_graph.)", file=log.v1)
                         if count_nan_inf_params > 0 and self.global_train_step == 1:
                             print(
                                 "This was the second step, so likely the first step grad was broken."
@@ -963,25 +1016,38 @@ class Engine(EngineBase):
             yield
 
     def _run_step(
-        self, extern_data: TensorDict, *, train_flag: bool = False, train_func: bool, _inside_wrapped: bool = False
+        self,
+        extern_data: TensorDict,
+        *,
+        train_flag: bool = False,
+        train_func: bool,
+        step: Optional[Union[int, Tensor]] = None,
+        _inside_wrapped: bool = False,
     ):
         """
         :param extern_data: model inputs for the step
+        :param train_flag: whether the model is in train mode (e.g. dropout enabled)
+        :param train_func: whether to run the train step func (losses) or the forward step func (outputs)
+        :param step: override for the run-ctx global train step
+            (e.g. a device tensor under CUDA-graph capture, see :mod:`returnn.torch.util.graph_capture`)
+        :param _inside_wrapped: internal, for the DDP-wrapped module call
         :return: Nothing, all outputs are written to the run context (:func:`rf.get_run_ctx`).
         """
         if self._ddp_pt_model is not None and not _inside_wrapped:
             self._ddp_pt_model(extern_data=extern_data, train_flag=train_flag, train_func=train_func)
             return
 
+        if step is None:
+            step = self.global_train_step
         if train_func:
             assert self._train_step_func is not None
             f = self._train_step_func
-            rf.init_train_step_run_ctx(train_flag=train_flag, step=self.global_train_step, epoch=self.epoch)
+            rf.init_train_step_run_ctx(train_flag=train_flag, step=step, epoch=self.epoch)
         else:
             assert self._forward_step_func is not None, "define forward_step in the config"
             f = self._forward_step_func
             rf.init_forward_step_run_ctx(
-                expected_outputs=self._forward_step_expected_outputs, step=self.global_train_step, epoch=self.epoch
+                expected_outputs=self._forward_step_expected_outputs, step=step, epoch=self.epoch
             )
 
         sentinel_kw = util.get_fwd_compat_kwargs()

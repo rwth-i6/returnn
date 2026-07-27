@@ -200,7 +200,25 @@ class Updater:
             else:
                 lr_multiplies = [1.0] * len(self.optimizer.param_groups)
             for i, param_group in enumerate(self.optimizer.param_groups):
-                param_group["lr"] = self._effective_learning_rate * lr_multiplies[i]
+                lr = self._effective_learning_rate * lr_multiplies[i]
+                if isinstance(param_group["lr"], torch.Tensor):  # see :func:`use_device_lr_tensors`
+                    param_group["lr"].fill_(lr)
+                else:
+                    param_group["lr"] = lr
+
+    def use_device_lr_tensors(self, device: Union[str, torch.device]):
+        """
+        Convert each param group's lr to a scalar device tensor, from then on updated IN PLACE
+        by the LR schedule (:func:`set_learning_rate` / :func:`set_current_train_step`).
+        For the captured optimizer step (``torch_cuda_graph`` "capture_optimizer"):
+        the capture records the tensor's storage as a graph input,
+        so the per-step host-side updates are visible to every replay.
+        Requires the capturable optimizer (which accepts tensor lr).
+        """
+        for param_group in self.optimizer.param_groups:
+            lr = param_group["lr"]
+            if not isinstance(lr, torch.Tensor):
+                param_group["lr"] = torch.tensor(float(lr), dtype=torch.float32, device=device)
 
     def set_current_train_step(self, *, global_train_step: int, epoch: int, epoch_continuous: Optional[float] = None):
         """
