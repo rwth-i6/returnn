@@ -607,6 +607,23 @@ def _packed_total(orig_dims: Sequence[Dim], gap: int, align: int, *, layout_lens
     return rf.cast(rf.reduce_sum(footprints, axis=list(footprints.dims)), "int32")
 
 
+def _capacity_total_bound(dims: Sequence[Dim], gap: int, align: int, *, what: str) -> int:
+    """
+    :return: static packed-buffer bound derived from the packed dims' declared capacities
+        (static traceable needs static shapes), see :func:`pack` total_bound
+    """
+    caps = [d.capacity if d.dimension is None else d.dimension for d in dims]
+    assert all(c is not None for c in caps), (
+        f"{what}: static traceable (rf.is_static_traceable) requires total_bound"
+        f" or capacities on all packed dims, got {list(zip(dims, caps))}"
+    )
+    total_bound = 1
+    for c in caps[:-1]:
+        total_bound *= c
+    total_bound *= -(-(caps[-1] + gap) // align) * align
+    return total_bound
+
+
 def _frame_coords(template: PackedRawTensor, d: Dim) -> Tensor:
     """
     :param template: the packing
@@ -3346,6 +3363,8 @@ def pack(
             # so the packed dim is STATIC -> capturable in a CUDA graph.
             # The real-length layout fills the first frames,
             # the rest are gap/padding (masked out like any gap frames).
+            if total_bound is None and rf.is_static_traceable():
+                total_bound = _capacity_total_bound(dims, gap, align, what="pack")
             out_dim = Dim(
                 total_bound if total_bound is not None else _packed_total(dims, gap, align), name="packed_gap"
             )
@@ -3362,43 +3381,66 @@ def pack(
     return helper.rewrap(inner, name=(source.name or "packed") + "_packed")
 
 
-def regap(source: Tensor, gap: int, *, align: Optional[int] = None, layout_lens: Optional[Tensor] = None) -> Tensor:
+def regap(
+    source: Tensor,
+    gap: int,
+    *,
+    align: Optional[int] = None,
+    layout_lens: Optional[Tensor] = None,
+    total_bound: Optional[int] = None,
+) -> Tensor:
     """
     :return: same content, packed with the given gap (and align, default: keep;
         plus optional target layout_lens, e.g. to restore an exact strided-out layout):
         a cheap packed -> packed re-layout (one scatter over the frames, no padded intermediate).
         Used e.g. by the packed conv when the tensor's gap is too small.
+    :param total_bound: if given, allocate a fixed (upper-bound) buffer of this many frames
+        for the re-layout, so the packed dim is static (see :func:`pack`).
     """
     raw = _raw(source)
     if align is None:
         align = raw.align
     others = raw.orig_dims[:-1]
-    if (raw.gap == gap and raw.align == align and raw.layout_lens is layout_lens) or not others:
+    if raw.gap == gap and raw.align == align and raw.layout_lens is layout_lens:
+        if total_bound is None or raw.packed_dim.dimension == total_bound:
+            return source
+    elif not others:
         return source
     last = raw.orig_dims[-1]
-    new_dim = Dim(_packed_total(raw.orig_dims, gap, align, layout_lens=layout_lens), name="packed_regap")
+    if total_bound is None and layout_lens is None and rf.is_static_traceable():
+        # like pack(): a static target buffer, e.g. for the packed-conv regap under CUDA-graph capture
+        total_bound = _capacity_total_bound(raw.orig_dims, gap, align, what="regap")
+    new_dim = Dim(
+        total_bound if total_bound is not None else _packed_total(raw.orig_dims, gap, align, layout_lens=layout_lens),
+        name="packed_regap",
+    )
     new_starts, seqs_dim = _seq_starts_math(raw.orig_dims, gap, align, layout_lens=layout_lens)
     t_coords = _frame_coords(raw, last)
     seg, _, _ = _segment_index(raw, others)
-    # cache the on-device starts + total (deterministic per target layout) -> no per-step H2D sync (capture-safe)
-    dev_key = _packing_cache_key("regap_dev", raw, seg.device) + (gap, align, _layout_lens_key(layout_lens))
-    hit = _layout_cache.get(dev_key)
-    if hit is not None:
-        new_starts, total_dev = hit
+    if _device_lens(raw) is not None and new_starts.device == seg.device:
+        # device-lens regime (see _device_lens): recompute per call, uncached, capture-safe
+        total_dev = new_dim.get_dim_value_tensor()  # static int with total_bound / capacity
     else:
-        if new_starts.device != seg.device:
-            # starts derive from the dyn sizes (often cpu), the coords live on the data device
-            new_starts = rf.copy_to_device(new_starts, seg.device)
-        total_dev = new_dim.get_dim_value_tensor()
-        if isinstance(total_dev, Tensor) and total_dev.device != seg.device:
-            total_dev = rf.copy_to_device(total_dev, seg.device)
-        _layout_cache.set(dev_key, (new_starts, total_dev))
+        # cache the on-device starts + total (deterministic per target layout)
+        # -> no per-step H2D sync (capture-safe)
+        dev_key = _packing_cache_key("regap_dev", raw, seg.device) + (gap, align, _layout_lens_key(layout_lens))
+        hit = _layout_cache.get(dev_key)
+        if hit is not None:
+            new_starts, total_dev = hit
+        else:
+            if new_starts.device != seg.device:
+                # starts derive from the dyn sizes (often cpu), the coords live on the data device
+                new_starts = rf.copy_to_device(new_starts, seg.device)
+            total_dev = new_dim.get_dim_value_tensor()
+            if isinstance(total_dev, Tensor) and total_dev.device != seg.device:
+                total_dev = rf.copy_to_device(total_dev, seg.device)
+            _layout_cache.set(dev_key, (new_starts, total_dev))
     pos = rf.gather(new_starts, indices=seg, axis=seqs_dim, clip_to_valid=True) + t_coords
     mask = _frame_mask(raw)
     if mask is not None:
         # route old gap frames to a dump slot, then slice it off
         ext_dim = new_dim + 1
-        pos = rf.where(mask, pos, rf.cast(total_dev, pos.dtype))
+        pos = rf.where(mask, pos, total_dev if isinstance(total_dev, int) else rf.cast(total_dev, pos.dtype))
         inner_ext = rf.scatter(raw.inner, indices=pos, indices_dim=raw.packed_dim, out_dim=ext_dim, use_mask=False)
         inner_new, _ = rf.slice(inner_ext, axis=ext_dim, size=new_dim)
     else:
