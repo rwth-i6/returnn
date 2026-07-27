@@ -579,6 +579,24 @@ def _padded_positions(
     return pos
 
 
+def _clamped_padded_positions(
+    orig_dims: Sequence[Dim], gap: int, align: int, *, out_dim: Dim, layout_lens: Optional[Tensor] = None
+) -> Tensor:
+    """
+    :return: :func:`_padded_positions`, clamped into the out_dim buffer.
+        Padding frames (padded grid beyond a seq len) can overshoot the buffer
+        when the within-batch length spread exceeds the gap
+        (e.g. length-descending laplace batches), or for tight packings.
+        They are masked out of the scatter, so clamping keeps them in-bounds without effect.
+    """
+    pos = _padded_positions(orig_dims, gap, align, layout_lens=layout_lens)
+    total = out_dim.get_dim_value_tensor()
+    if isinstance(total, Tensor):
+        # dyn sizes live on cpu; move to the coords device so the clamp does not mix devices
+        total = rf.copy_to_device(rf.cast(total, pos.dtype), pos.device)
+    return rf.minimum(pos, total - 1)
+
+
 def _packed_total(orig_dims: Sequence[Dim], gap: int, align: int, *, layout_lens: Optional[Tensor] = None) -> Tensor:
     """:return: scalar (int32): total number of frames in the packed buffer (sum of footprints)"""
     footprints, _ = _seq_footprints(orig_dims, gap, align, layout_lens=layout_lens)
@@ -645,14 +663,9 @@ def _frame_coords(template: PackedRawTensor, d: Dim) -> Tensor:
     for o in template.orig_dims:
         if o not in grid.dims:
             grid = rf.expand_dim(grid, dim=o)  # broadcast view, ints only
-    pos = _padded_positions(template.orig_dims, template.gap, template.align, layout_lens=template.layout_lens)
-    # padding frames (padded grid beyond a seq len) can overshoot the buffer for tight packings;
-    # they are masked out of the scatter, so clamping their index keeps it in-bounds without effect.
-    total = template.packed_dim.get_dim_value_tensor()
-    if isinstance(total, Tensor):
-        # dyn sizes live on cpu; move to the coords device so the clamp does not mix devices
-        total = rf.copy_to_device(rf.cast(total, pos.dtype), pos.device)
-    pos = rf.minimum(pos, total - 1)
+    pos = _clamped_padded_positions(
+        template.orig_dims, template.gap, template.align, out_dim=template.packed_dim, layout_lens=template.layout_lens
+    )
     out = rf.scatter(
         grid, indices=pos, indices_dim=list(template.orig_dims), out_dim=template.packed_dim, use_mask=True
     )
@@ -701,7 +714,9 @@ def _frame_mask(template: PackedRawTensor) -> Optional[Tensor]:
     if hit is not None:
         return hit
     ones = rf.cast(rf.sequence_mask(list(template.orig_dims)), "int32")
-    pos = _padded_positions(template.orig_dims, template.gap, template.align, layout_lens=template.layout_lens)
+    pos = _clamped_padded_positions(
+        template.orig_dims, template.gap, template.align, out_dim=template.packed_dim, layout_lens=template.layout_lens
+    )
     counts = rf.scatter(
         ones, indices=pos, indices_dim=list(template.orig_dims), out_dim=template.packed_dim, use_mask=True
     )
@@ -2065,7 +2080,7 @@ def _extract_strided(raw: PackedRawTensor, out_inner: Tensor, out_packed_dim: Di
     gap_out = raw.gap // st
     align_out = max(raw.align // st, 1)
     new_dim = Dim(_packed_total(out_orig, gap_out, align_out), name="packed_strided")
-    new_pos = _padded_positions(out_orig, gap_out, align_out)
+    new_pos = _clamped_padded_positions(out_orig, gap_out, align_out, out_dim=new_dim)
     # per new-buffer frame: its local time coord, and its (flat) seq index
     grid_t = rf.range_over_dim(out_time)
     for d in others:
@@ -3334,7 +3349,7 @@ def pack(
             out_dim = Dim(
                 total_bound if total_bound is not None else _packed_total(dims, gap, align), name="packed_gap"
             )
-        pos = _padded_positions(dims, gap, align)
+        pos = _clamped_padded_positions(dims, gap, align, out_dim=out_dim)
         inner = rf.scatter(source, indices=pos, indices_dim=list(dims), out_dim=out_dim, use_mask=True)
         packed_dim = out_dim
     else:
