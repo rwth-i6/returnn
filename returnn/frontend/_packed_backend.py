@@ -634,11 +634,21 @@ def _frame_coords(template: PackedRawTensor, d: Dim) -> Tensor:
     """
     dev_lens = _device_lens(template)
     if dev_lens is not None:
-        # device-lens regime (see _device_lens): pure device ops per call, uncached, capture-safe.
+        # device-lens regime (see _device_lens): pure device ops, capture-safe.
+        # Cached in the layout cache (device dims key by identity, and under static traceable
+        # entries are scoped to the step, see returnn.frontend._cache).
         # Directly over the static bound buffer, no padded (seqs, max-frames) grid.
         # Junk/gap frames get an arbitrary in-bounds coord (clamped into the seq),
         # only meaningful on sequence frames -- like the cached variant (0 there).
         import torch
+
+        key = _packing_cache_key("frame_coords_dev", template, template.inner.device) + (
+            template.packed_dim,
+            template.orig_dims.index(d),
+        )
+        hit = _layout_cache.get(key)
+        if hit is not None:
+            return hit
 
         starts_rf, _ = _seq_starts_math(
             template.orig_dims, template.gap, template.align, layout_lens=template.layout_lens
@@ -658,6 +668,7 @@ def _frame_coords(template: PackedRawTensor, d: Dim) -> Tensor:
             coord = seq.clamp(min=0)
         out = Tensor("frame_coords", dims=[template.packed_dim], dtype="int32", sparse_dim=d)
         out.raw_tensor = coord.int()
+        _layout_cache.set(key, out)
         return out
     # The result is Tensor over template.packed_dim,
     # so the key must include that dim (the Cache remaps it on equal-valued hits).
@@ -699,10 +710,16 @@ def _frame_mask(template: PackedRawTensor) -> Optional[Tensor]:
         return None
     dev_lens = _device_lens(template)
     if dev_lens is not None:
-        # device-lens regime (see _device_lens): pure device ops per call, uncached, capture-safe.
+        # device-lens regime (see _device_lens): pure device ops, capture-safe.
+        # Cached in the layout cache, see :func:`_frame_coords`.
         # Directly over the static bound buffer (searchsorted on the in-graph starts),
         # no padded (seqs, max-frames) grid -- that grid's size would need a host read.
         import torch
+
+        key = _packing_cache_key("frame_mask_dev", template, template.inner.device) + (template.packed_dim,)
+        hit = _layout_cache.get(key)
+        if hit is not None:
+            return hit
 
         starts_rf, _ = _seq_starts_math(
             template.orig_dims, template.gap, template.align, layout_lens=template.layout_lens
@@ -716,6 +733,7 @@ def _frame_mask(template: PackedRawTensor) -> Optional[Tensor]:
             valid = (rows - starts[seq]) < dev_lens.flatten().long()[seq]
         out = Tensor("frame_mask", dims=[template.packed_dim], dtype="bool")
         out.raw_tensor = valid
+        _layout_cache.set(key, out)
         return out
     # full layout in the key, see _frame_coords
     key = (
@@ -845,17 +863,26 @@ def _segment_index(template: PackedRawTensor, seg_dims: Sequence[Dim]) -> Tuple[
         (scatter_dim = valid_dim + 1), so any segment reduction stays correct;
         slice the dump segment off (or simply never gather it).
     """
-    # full layout in the key, see _frame_coords
-    key = (
-        "segment_index",
-        template.packed_dim,
-        template.orig_dims,
-        template.gap,
-        template.align,
-        _layout_lens_key(template.layout_lens),
-        tuple(template.orig_dims.index(d) for d in seg_dims),
-        str(template.inner.device),
-    )
+    if _device_lens(template) is None:
+        # full layout in the key, see _frame_coords
+        key = (
+            "segment_index",
+            template.packed_dim,
+            template.orig_dims,
+            template.gap,
+            template.align,
+            _layout_lens_key(template.layout_lens),
+            tuple(template.orig_dims.index(d) for d in seg_dims),
+            str(template.inner.device),
+        )
+    else:
+        # device-lens regime (see _device_lens): pure device ops, capture-safe;
+        # cached in the layout cache, see :func:`_frame_coords`
+        # (the _frame_coords/_frame_mask calls below take their device branches)
+        key = _packing_cache_key("segment_index_dev", template, template.inner.device) + (
+            template.packed_dim,
+            tuple(template.orig_dims.index(d) for d in seg_dims),
+        )
     hit = _layout_cache.get(key)
     if hit is not None:
         return hit
@@ -1862,11 +1889,17 @@ def _triton_rel_pos_attention(
         if r_size % 2 != 1:
             return None
         max_len = (r_size + 1) // 2
-        starts_rf, _ = _seq_starts_math(q_raw.orig_dims, q_raw.gap, q_raw.align, layout_lens=q_raw.layout_lens)
-        if starts_rf is None:
-            return None
-        starts = starts_rf.raw_tensor.int().flatten()
-        lens = dev_lens.int().flatten()
+        key = _packing_cache_key("triton_starts_lens_dev", q_raw, q_raw.inner.device)
+        hit = _layout_cache.get(key)
+        if hit is not None:
+            starts, lens = hit
+        else:
+            starts_rf, _ = _seq_starts_math(q_raw.orig_dims, q_raw.gap, q_raw.align, layout_lens=q_raw.layout_lens)
+            if starts_rf is None:
+                return None
+            starts = starts_rf.raw_tensor.int().flatten()
+            lens = dev_lens.int().flatten()
+            _layout_cache.set(key, (starts, lens))
     else:
         # Host-side seq lens: starts/lens/max_len are cached together.
         # the host reads here (int(get_dim_value), copy_to_device) are per-call GPU syncs otherwise,
