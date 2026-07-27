@@ -555,6 +555,7 @@ if hasattr(torch.library, "custom_op"):  # torch >= 2.4
             q, k, v, bd, seq_starts, seq_lens, max_seq_len, dropout_p=dropout_p, seed=seed, scale=scale
         )
 
+    # noinspection PyUnusedLocal
     @_lib_fwd.register_fake
     def _lib_fwd_fake(q, k, v, bd, seq_starts, seq_lens, max_seq_len, dropout_p, seed, scale):
         total, n_heads, _ = q.shape
@@ -593,6 +594,7 @@ if hasattr(torch.library, "custom_op"):  # torch >= 2.4
         )
         return dq.to(q.dtype), dk.to(k.dtype), dv.to(v.dtype), dbd.to(bd.dtype)
 
+    # noinspection PyUnusedLocal
     @_lib_bwd.register_fake
     def _lib_bwd_fake(q, k, v, bd, seq_starts, seq_lens, max_seq_len, out, lse, d_out, dropout_p, seed, scale):
         return torch.empty_like(q), torch.empty_like(k), torch.empty_like(v), torch.empty_like(bd)
