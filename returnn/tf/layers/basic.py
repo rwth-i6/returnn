@@ -4519,21 +4519,37 @@ class MergeDimsLayer(_ConcatInputLayer):
             return  # should be handled already
         if target_tag.dimension is not None:  # static
             return  # should be handled already
+        merged_batch = any(self.input_data.dim_tags[a].is_batch_dim() for a in merge_axes)
         if target_tag.dyn_size_ext is not None:
-            return  # handled already
+            if target_tag.dyn_size_ext.placeholder is not None:
+                return  # handled already
+            if not merged_batch:
+                return  # completed on demand via Dim.complete_dyn_size, as before
+            # A dim merged from the batch dim is not batch-kind anymore,
+            # so its size template needs the actual value computed here.
 
         out_size = None
         for in_axis in merge_axes:
             in_tag = self.input_data.dim_tags[in_axis]
-            assert not in_tag.is_batch_dim()
-            if in_tag.dimension is not None:
+            if in_tag.is_batch_dim():
+                # contributes the scalar batch size (product convention, same as Dim.complete_dyn_size);
+                # from the placeholder shape, which works also without global batch info
+                from returnn.tf.util.basic import get_shape_dim
+
+                batch_dim_value = get_shape_dim(self.input_data.placeholder, self.input_data.batch_dim_axis)
+                if isinstance(batch_dim_value, int):
+                    batch_dim_value = tf.constant(batch_dim_value, dtype=tf.int32)
+                if batch_dim_value.dtype != tf.int32:
+                    batch_dim_value = tf.cast(batch_dim_value, tf.int32)
+                in_size = Data.from_tensor(batch_dim_value)
+            elif in_tag.dimension is not None:
                 if in_tag.dimension == 1:
                     continue
                 in_size = Data.from_tensor(tf.constant(in_tag.dimension, dtype=tf.int32))
             else:
                 assert in_tag.dyn_size_ext is not None
                 in_size = in_tag.dyn_size_ext
-            if not out_size:
+            if out_size is None:
                 out_size = in_size
             else:
                 new_data = Data.get_common_data([out_size, in_size], name="%s_output" % self.name)
@@ -4541,7 +4557,7 @@ class MergeDimsLayer(_ConcatInputLayer):
                     out_size.copy_compatible_to(new_data).placeholder * in_size.copy_compatible_to(new_data).placeholder
                 )
                 out_size = new_data
-        if not out_size:
+        if out_size is None:
             out_size = Data.from_tensor(tf.constant(1, dtype=tf.int32))
         target_tag.dyn_size_ext = out_size
 
@@ -4577,8 +4593,26 @@ class MergeDimsLayer(_ConcatInputLayer):
             res_dim = int(prod([data.batch_shape[i] for i in axes]))
         merge_dim_tags = [data.dim_tags[axis] for axis in axes]
         merge_target_axis = cls._get_target_axis(input_data=data, merge_axes=axes)
-        out_dim_ = prod(merge_dim_tags)
-        assert isinstance(out_dim_, Dim)
+        if input_data.batch_dim_axis in axes:
+            # Keep the old TF net-dict semantics: the dim merged from the batch dim is batch-kind
+            # (identifies the batch axis, excluded from shape, virtual-batch bookkeeping below).
+            # Generic dim math gives a spatial dim (see Dim._get_merged_dim_kind),
+            # so construct the same structure directly with kind=Batch.
+            # A plain Dim() construction does not register in the dim-math cache,
+            # so the generic (spatial) dim math stays unaffected.
+            # noinspection PyProtectedMember
+            from returnn.tensor._dim_extra import Op as _DimOp, _representative_tag, _get_description
+
+            out_dim_ = Dim(
+                kind=Dim.Types.Batch,
+                description="*".join(_get_description(d) for d in merge_dim_tags),
+                dimension=res_dim,
+                derived_from_op=_DimOp(kind="mul", inputs=list(merge_dim_tags)),
+                derived_from_tag=_representative_tag(merge_dim_tags),
+            )
+        else:
+            out_dim_ = prod(merge_dim_tags)
+            assert isinstance(out_dim_, Dim)
         assert out_dim_.dimension == res_dim
         out_dim_.complete_dyn_size(template_only=True)
         if out_dim:
