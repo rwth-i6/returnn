@@ -65,6 +65,14 @@ def specaugment(
             )
             spatial_num_bound = min(max(spatial_len // num_spatial_mask_factor, 2) * 4, spatial_len)
             feature_num_bound = 5
+            # The capacity is ONLY the bound (the static trip count).
+            # The num-masks RANGE must follow the true length:
+            # with the capacity also as the range,
+            # the number of masks scales with the declared capacity instead of the data
+            # (all mask positions land inside the seq -- top_k excludes padded positions),
+            # i.e. raising the capacity silently over-masks and degrades training.
+            sizes = spatial_dim.get_dyn_size_ext_for_device(x.device)
+            spatial_len = rf.reduce_max(sizes, axis=sizes.dims)
         # time mask
         if num_spatial_mask_factor > 0 and (
             isinstance(max_consecutive_spatial_dims, Tensor) or max_consecutive_spatial_dims > 0
