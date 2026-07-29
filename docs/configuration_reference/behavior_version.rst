@@ -22,6 +22,17 @@ and not listing legacy/deprecated parameters.
 Version History
 ---------------
 
+Behavior version 28 (2026-07-29)
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+:func:`rf.audio.specaugment`: the number of spatial (time) masks is now drawn
+per sequence from a range following that sequence's OWN length,
+instead of one range from the longest sequence in the batch.
+The augmentation of a sequence thus no longer depends on the batch composition.
+
+There is also the global config option ``rf_specaugment_num_masks_per_seq: bool``
+and the explicit ``num_masks_per_seq`` argument to override in both directions.
+
 Behavior version 27 (2026-07-20)
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 

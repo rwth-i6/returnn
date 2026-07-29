@@ -21,11 +21,29 @@ def specaugment(
     max_consecutive_spatial_dims: Union[int, Tensor] = 20,
     max_consecutive_feature_dims: Optional[int] = None,
     num_spatial_mask_factor: int = 100,
+    num_masks_per_seq: Optional[bool] = None,
     steps: Tuple[int, int, int] = (0, 1000, 2000),
 ) -> Tensor:
     """
     SpecAugment, https://arxiv.org/abs/1904.08779
+
+    :param x:
+    :param spatial_dim:
+    :param feature_dim:
+    :param global_train_step_dependent:
+    :param only_on_train:
+    :param max_consecutive_spatial_dims:
+    :param max_consecutive_feature_dims:
+    :param num_spatial_mask_factor:
+    :param num_masks_per_seq: the spatial num-masks range follows each seq's OWN length
+        instead of the batch max, i.e. the augmentation of a seq no longer depends on
+        what else is in the batch.
+        Default (None): global config option ``rf_specaugment_num_masks_per_seq`` if set,
+        else behavior version >= 28.
+    :param steps:
     """
+    if num_masks_per_seq is None:
+        num_masks_per_seq = _should_use_num_masks_per_seq()
     if feature_dim is None:
         assert x.feature_dim
         feature_dim = x.feature_dim
@@ -49,9 +67,6 @@ def specaugment(
 
     def _mask_branch():
         x_masked = x
-        # static int if the dim has a declared capacity (then the num range is static too),
-        # else the dynamic max (tensor)
-        spatial_len = spatial_dim.get_dim_value_tensor()
         spatial_num_bound = None
         feature_num_bound = None
         if rf.is_static_traceable():
@@ -60,10 +75,13 @@ def specaugment(
             # The bounds span the WHOLE step schedule
             # (max step factors: spatial 1+1+2*1 = 4, feature 2*1+1+2*1 = 5),
             # so one trace / captured graph covers all schedule phases.
-            assert isinstance(spatial_len, int), (
+            # static int if the dim has a declared capacity (then the num range is static too),
+            # else the dynamic max (tensor)
+            spatial_len_max = spatial_dim.get_dim_value_tensor()
+            assert isinstance(spatial_len_max, int), (
                 "specaugment: static traceable (rf.is_static_traceable) requires spatial_dim capacity"
             )
-            spatial_num_bound = min(max(spatial_len // num_spatial_mask_factor, 2) * 4, spatial_len)
+            spatial_num_bound = min(max(spatial_len_max // num_spatial_mask_factor, 2) * 4, spatial_len_max)
             feature_num_bound = 5
             # The capacity is ONLY the bound (the static trip count).
             # The num-masks RANGE must follow the true length:
@@ -72,7 +90,13 @@ def specaugment(
             # (all mask positions land inside the seq -- top_k excludes padded positions),
             # i.e. raising the capacity silently over-masks and degrades training.
             sizes = spatial_dim.get_dyn_size_ext_for_device(x.device)
-            spatial_len = rf.reduce_max(sizes, axis=sizes.dims)
+            spatial_len = sizes if num_masks_per_seq else rf.reduce_max(sizes, axis=sizes.dims)
+        else:  # not static tracing
+            if num_masks_per_seq:
+                # per-seq range in eager: the lens (on cpu, like the eager num draws in random_mask)
+                spatial_len = spatial_dim.get_dyn_size_ext_for_device(None)
+            else:
+                spatial_len = spatial_dim.get_dim_value_tensor()
         # time mask
         if num_spatial_mask_factor > 0 and (
             isinstance(max_consecutive_spatial_dims, Tensor) or max_consecutive_spatial_dims > 0
@@ -215,3 +239,28 @@ def mask(
     cond = rf.compare_bc(idxs, ">=", pos) & rf.compare_bc(idxs, "<", pos2)  # (batch,dim)
     x = rf.where(cond, mask_value, x)
     return x
+
+
+def _should_use_num_masks_per_seq() -> bool:
+    """
+    :return: default for the ``num_masks_per_seq`` option of :func:`specaugment`.
+
+    Check the global RETURNN config for the ``rf_specaugment_num_masks_per_seq`` option.
+    If that is not specified, with behavior version >= 28,
+    the num-masks range follows each seq's own length,
+    with behavior version <= 27 the batch max.
+    """
+    from returnn.config import get_global_config
+    from returnn.util.basic import BehaviorVersion
+
+    config = get_global_config(raise_exception=False)
+    config_value = None
+    if config:
+        if "rf_specaugment_num_masks_per_seq" in config.typed_dict:
+            config_value = config.typed_dict["rf_specaugment_num_masks_per_seq"]
+            assert config_value is None or isinstance(config_value, bool)
+        elif "rf_specaugment_num_masks_per_seq" in config.dict:
+            config_value = config.bool("rf_specaugment_num_masks_per_seq", None)
+    if config_value is not None:
+        return config_value
+    return BehaviorVersion.get() >= 28

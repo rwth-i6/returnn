@@ -124,3 +124,31 @@ def test_audio_specaugment():
         test_single_batch_entry=False,
         test_tensorflow=False,
     )
+
+
+def test_audio_specaugment_num_masks_per_seq():
+    time_dim = Dim(Tensor("time", [batch_dim], dtype="int32"))
+    in_dim = Dim(7, name="in")
+    extern_data = TensorDict(
+        {
+            "data": Tensor("data", [batch_dim, time_dim, in_dim], dtype="float32", feature_dim=in_dim),
+        }
+    )
+
+    # noinspection PyShadowingNames
+    def _forward_step(*, model: rf.Module, extern_data: TensorDict):
+        model  # noqa  # unused
+        data = extern_data["data"]
+        out = rf.audio.specaugment(
+            data, spatial_dim=time_dim, feature_dim=in_dim, only_on_train=False, num_masks_per_seq=True
+        )
+        out.mark_as_default_output(shape=(batch_dim, time_dim, in_dim))
+
+    # see test_audio_specaugment on the flags
+    run_model(
+        extern_data,
+        lambda *, epoch, step: rf.Module(),
+        _forward_step,
+        test_single_batch_entry=False,
+        test_tensorflow=False,
+    )
