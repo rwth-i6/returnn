@@ -11,5 +11,6 @@ from __future__ import annotations
 
 from ._packed_backend import pack, pack_import, unpack, is_packed
 from ._packed_backend import regap as packed_regap
+from ._packed_backend import flat_content as packed_flat_content
 
-__all__ = ["pack", "pack_import", "unpack", "packed_regap", "is_packed"]
+__all__ = ["pack", "pack_import", "unpack", "packed_regap", "packed_flat_content", "is_packed"]

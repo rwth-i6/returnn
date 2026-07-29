@@ -75,7 +75,7 @@ import returnn.frontend as rf
 from ._backend import Backend, register_backend_by_tensor_type, global_backend
 from ._cache import Cache
 
-__all__ = ["PackedRawTensor", "PackedBackend", "pack", "pack_import", "unpack", "regap", "is_packed"]
+__all__ = ["PackedRawTensor", "PackedBackend", "pack", "pack_import", "unpack", "regap", "is_packed", "flat_content"]
 
 
 # Layout metadata (cu_seqlens, flex document mask, frame coords/masks, ...)
@@ -3305,6 +3305,41 @@ for _name in [
 def is_packed(source: Tensor) -> bool:
     """:return: whether source has packed storage"""
     return isinstance(source.raw_tensor, PackedRawTensor)
+
+
+def flat_content(source: Tensor, *, out_dim: Optional[Dim] = None) -> Tuple[Tensor, Dim]:
+    """
+    The packed content as a PLAIN tensor over one flat dim (dense gap-0 layout),
+    i.e. exactly what :func:`returnn.frontend.pack_padded` over the packed (virtual) dims
+    returns for a padded tensor -- but here without any select (a re-layout at most).
+
+    :param source: packed tensor
+    :param out_dim: the flat dim; created if not given
+        (dyn size = total content, capacity bounded by the physical packed dim)
+    :return: (flat tensor, out_dim)
+    """
+    raw = source.raw_tensor
+    assert isinstance(raw, PackedRawTensor)
+    if raw.gap != 0 or raw.align != 1:
+        source = regap(source, 0, align=1)
+        raw = source.raw_tensor
+    inner = raw.inner
+    lens = raw.layout_lens
+    if lens is None:
+        # e.g. after pad/regap: take the per-seq lens from the virtual spatial dim
+        lens = raw.orig_dims[-1].get_dyn_size_ext_for_device(inner.device)
+    total = rf.reduce_sum(lens, axis=lens.dims)
+    if out_dim is None:
+        out_dim = Dim(total, name="packed", bounded_by=raw.packed_dim)
+    elif out_dim.dyn_size_ext is None or out_dim.dyn_size_ext.raw_tensor is None:
+        out_dim.dyn_size_ext = total
+    out, _ = rf.replace_dim(inner, in_dim=raw.packed_dim, out_dim=out_dim)
+    # the tail beyond the content is junk (stale buffer values) under bound shapes;
+    # zero it: e.g. sparse (index) tensors would otherwise index out of bounds downstream,
+    # independent of any masked reduction later
+    mask = rf.sequence_mask([out_dim], device=out.device)
+    out = rf.where(mask, out, 0)
+    return out, out_dim
 
 
 def _auto_pack_dims(source: Tensor) -> Tuple[Dim, ...]:

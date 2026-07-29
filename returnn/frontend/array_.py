@@ -813,6 +813,9 @@ def pack_padded(
     :return: packed tensor, new packed dim
     """
     assert not enforce_sorted  # not implemented yet...
+    if rf.is_packed(source) and list(dims) == list(source.raw_tensor.orig_dims):
+        # already packed over exactly these dims: the flat content IS the result (a re-layout at most, no select)
+        return rf.packed_flat_content(source, out_dim=out_dim)
     mask = rf.sequence_mask(dims, device=source.device)
     # Note: We could already calculate out_dim here, as follows:
     #   out_dim = Dim(rf.num_elements_of_shape(dims), name="packed")
