@@ -135,4 +135,7 @@ class _CudaAsyncWorker:
 
     def push(self, cond: torch.Tensor, message: str, stop: bool = True):
         """push to queue"""
+        # load (and maybe JIT-compile) the ext here on the calling thread, not in the worker loop:
+        # a background compile can deadlock with a concurrent native-op compile/first-call on the main thread
+        _get_ext()
         self.queue.put((cond, message, stop, torch.cuda.current_stream()))
