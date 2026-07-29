@@ -1614,8 +1614,13 @@ class TorchBackend(Backend[torch.Tensor]):
     @staticmethod
     def apply_rope(x: Tensor, pos_enc: Tensor, feat_dim: Dim) -> Tensor:
         """Apply RoPE using a ``torch.compile``-compiled kernel."""
-        from returnn.torch.util.rope import apply_rope
+        from returnn.torch.util.rope import apply_rope, apply_rope_plain
 
+        if rf.is_static_traceable():
+            # inside the outer aten trace, a nested torch.compile artifact cannot run
+            # (data-pointer reads, illegal on fake tensors);
+            # the plain ops trace into the outer graph and Inductor fuses them there
+            apply_rope = apply_rope_plain
         feat_axis = x.dims.index(feat_dim)
         x_dims_feat_last = x.dims[:feat_axis] + x.dims[feat_axis + 1 :] + (feat_dim,)
         x_raw = x.raw_tensor

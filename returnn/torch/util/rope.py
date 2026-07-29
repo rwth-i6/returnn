@@ -33,6 +33,12 @@ def apply_rope(x: torch.Tensor, pos_enc: torch.Tensor) -> torch.Tensor:
     return torch.stack([out_r, out_i], dim=-1).reshape(x.shape)
 
 
+# The plain (uncompiled) function stays accessible:
+# inside an outer aten-level trace (see :func:`returnn.frontend.is_static_traceable`),
+# a nested torch.compile artifact cannot run (it reads data pointers, illegal on fake tensors),
+# and is pointless there anyway (the outer Inductor compile fuses the ops itself).
+apply_rope_plain = apply_rope
+
 # Wrap with torch.compile to fuse all ops into a single kernel launch, eliminating intermediate allocations.
 # dynamic=True avoids recompilation for each new (batch_size, seq_len, …) combination;
 # but it is only reliable from PyTorch 2.1 onwards.
