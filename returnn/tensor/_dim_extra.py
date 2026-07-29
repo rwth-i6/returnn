@@ -25,6 +25,12 @@ from . import tensor as _t
 from . import marked_dim as _m
 
 
+# Dims whose capacity was memoized by Dim._derived_capacity.
+# The bound-shape regime clears them when it disables its declared capacities
+# (e.g. around eval), see returnn.torch.util.graph_capture.
+derived_capacity_memoized_dims = weakref.WeakSet()
+
+
 class DimTypes:
     """
     Defines possible values for ``kind``.
@@ -101,6 +107,12 @@ class _DimExtra:
         self.same_as: Optional[Dim] = None
         self.copy_same_as: Optional[Dim] = None
         self.derived_from_tag = derived_from_tag
+        # Set via Dim(..., bounded_by=...): unlike a plain derived_from_tag
+        # (arbitrary relation: down/up sampled, padded, ...),
+        # this declares that the sizes never exceed that dim's extent,
+        # so the source's capacity is a valid bound
+        # (see :func:`_DimMixin._derived_capacity`).
+        self.bounded_by: Optional[Dim] = None
         self.derived_from_op = derived_from_op
         if derived_from_op and not derived_from_op.output:
             derived_from_op.output = dim
@@ -2027,8 +2039,25 @@ class _DimMixin:
         # static dims always carry a capacity (Dim.__init__ defaults it to the dimension),
         # so a static dim here means that invariant was violated
         assert self.dimension is None, f"{self}: static dim without capacity"
-        if not self._extra or not self._extra.derived_from_op:
+        if not self._extra:
             return None
+        if not self._extra.derived_from_op:
+            # No op chain: fall back to the declared bound source (``Dim(..., bounded_by=...)``):
+            # the source's capacity is a valid bound (identity copy).
+            # Resolved lazily, so a capacity declared on the source after this dim was created still applies.
+            # Deliberately NOT the plain derived_from_tag:
+            # that marks an ARBITRARY dependency (down/up sampled, padded, ...),
+            # which implies no extent relation.
+            tag = self._extra.bounded_by
+            if tag is None or tag is self:
+                return None
+            # noinspection PyProtectedMember
+            res = tag._derived_capacity()
+            if res is None:
+                return None
+            derived_capacity_memoized_dims.add(self)
+            self.capacity = res
+            return res
         op = self._extra.derived_from_op
         kind = op.kind
         if not op.inputs:
@@ -2063,6 +2092,7 @@ class _DimMixin:
                 # else: keep res as the (loose) bound, the divisor dim is >= 1
             else:
                 return None
+        derived_capacity_memoized_dims.add(self)
         self.capacity = res
         return res
 

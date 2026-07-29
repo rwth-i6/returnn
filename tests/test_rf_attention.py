@@ -855,3 +855,39 @@ def test_causal_self_att_after_concat_state():
     out_concat_two = res["out_concat_two"].raw_tensor
     np.testing.assert_allclose(out_whole, out_single_steps, atol=1e-5, rtol=1e-5)
     np.testing.assert_allclose(out_whole, out_concat_two, atol=1e-5, rtol=1e-5)
+
+
+def test_causal_self_attention_static_traceable_bound():
+    """
+    Bound-shape regime (static traceable): the causal hist kv dim gets its capacity
+    from the axis capacity, so the seq mask stays static-shaped
+    (no data-dependent size read -- illegal under tracing / CUDA-graph capture).
+    Same numbers as the eager run on the valid frames.
+    """
+    import torch
+
+    rf.select_backend_torch()
+    batch = Dim(3, name="batch")
+    time_dim = Dim(Tensor("time", [batch], dtype="int32", raw_tensor=torch.tensor([5, 4, 2], dtype=torch.int32)))
+    time_dim.capacity = 5  # == the padded size below, so both runs see the same shapes
+    in_dim = Dim(8, name="in")
+    with rf.set_default_device_ctx("cpu"):
+        rf.set_random_seed(42)
+        att = rf.CausalSelfAttention(
+            in_dim,
+            proj_dim=Dim(8, name="proj"),
+            key_dim_total=Dim(8, name="key"),
+            value_dim_total=Dim(8, name="value"),
+            num_heads=2,
+            att_dropout=0.0,
+        )
+        x = Tensor("x", [batch, time_dim, in_dim], dtype="float32")
+        x.raw_tensor = torch.randn(3, 5, 8, generator=torch.Generator().manual_seed(1))
+        out_eager, _ = att(x, axis=time_dim)
+        with rf.set_static_traceable_ctx():
+            out_bound, _ = att(x, axis=time_dim)
+        mask = rf.sequence_mask([batch, time_dim], device="cpu")
+        zero = rf.zeros((), dtype="float32")
+        a = rf.where(mask, out_eager, zero).copy_transpose(out_bound.dims).raw_tensor
+        b = rf.where(mask, out_bound, zero).copy_transpose(out_bound.dims).raw_tensor
+        torch.testing.assert_close(a, b)

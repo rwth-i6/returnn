@@ -188,10 +188,12 @@ class GraphCapturedTrainStep:
             p.grad = torch.zeros_like(p)  # static, never freed (the captured graph writes into these)
 
         self._batch_dim = get_batch_dim_from_extern_data(extern_data_template)
-        if self._batch_dim.dimension is None:
+        self._batch_dim_staticized = self._batch_dim.dimension is None  # standard case: True
+        if self._batch_dim_staticized:
             # The copy-in always fills the batch up to the bound (zero-length padding seqs),
             # so in this regime the batch dim IS static -- make it so.
-            # (A process-wide template-dim mutation, like the declared capacities.)
+            # (A process-wide template-dim mutation, like the declared capacities;
+            # toggled off around the dynamic-shape paths, see set_bound_shapes_enabled.)
             self._batch_dim.size = self.batch_size_bound
             self._batch_dim.capacity = self.batch_size_bound
             self._batch_dim.dyn_size_ext = None
@@ -212,6 +214,7 @@ class GraphCapturedTrainStep:
 
         # declared capacities go on the template dims (persist across reset_eager;
         # capacity propagates through dim math, so derived dims are bounded too)
+        self._cap_dims: List[Tuple[Dim, int]] = []
         for k, data in extern_data_template.data.items():
             for i, dim in enumerate(data.dims):
                 if i >= 1 and dim.dimension is None and dim is not self._batch_dim:
@@ -219,6 +222,38 @@ class GraphCapturedTrainStep:
                         f"torch_cuda_graph: dim_capacity for data key {k!r} required (dyn dim {dim})"
                     )
                     dim.capacity = self.dim_capacity[k]
+                    self._cap_dims.append((dim, self.dim_capacity[k]))
+
+    def set_bound_shapes_enabled(self, enabled: bool):
+        """
+        Toggle the process-wide bound-shape dim state:
+        the static batch dim, the declared capacities, and the derived memoized capacities.
+        The plain dynamic-shape paths (e.g. :func:`Engine.eval_model`) need it OFF --
+        with it on, they would build capacity-sized grids and masks
+        against normally-padded batches.
+        The engine re-enables it at the start of each train epoch.
+        """
+        from returnn.tensor import _dim_extra
+
+        if enabled:
+            if self._batch_dim_staticized:
+                self._batch_dim.size = self.batch_size_bound
+                self._batch_dim.capacity = self.batch_size_bound
+                self._batch_dim.dyn_size_ext = None
+            for dim, cap in self._cap_dims:
+                dim.capacity = cap
+        else:
+            if self._batch_dim_staticized:
+                self._batch_dim.size = None
+                self._batch_dim.capacity = None
+                self._batch_dim.dyn_size_ext = None
+            for dim, _ in self._cap_dims:
+                dim.capacity = None
+            # derived dims memoized their capacity lazily; clear them too (they re-derive)
+            # noinspection PyProtectedMember
+            for dim in list(_dim_extra.derived_capacity_memoized_dims):
+                dim.capacity = None
+            _dim_extra.derived_capacity_memoized_dims.clear()
 
     def _get_data_buf(self, k: str, raw: torch.Tensor, packed: Optional[Dict[str, int]]) -> torch.Tensor:
         buf = self._data_bufs.get(k)

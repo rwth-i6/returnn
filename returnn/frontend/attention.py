@@ -462,7 +462,9 @@ def _causal_self_att_step(
         new_state.v_accum = v
         new_state.accum_axis = axis
         # See CumConcatLayer and https://github.com/rwth-i6/returnn/issues/391 for the idea.
-        hist_dim = Dim(rf.range_over_dim(axis, device="cpu") + 1, name=f"{axis.description}:kv")
+        # bounded_by: the hist lens are 1..axis-size, so the axis bounds them
+        # (under the bound-shape regime the axis capacity then bounds hist_dim too)
+        hist_dim = Dim(rf.range_over_dim(axis, device="cpu") + 1, name=f"{axis.description}:kv", bounded_by=axis)
         k, _ = rf.replace_dim(k, in_dim=axis, out_dim=hist_dim)
         v, _ = rf.replace_dim(v, in_dim=axis, out_dim=hist_dim)
     return k, v, hist_dim, new_state

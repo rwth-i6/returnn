@@ -448,6 +448,9 @@ class Engine(EngineBase):
         """
         train one (sub)epoch
         """
+        if self._graph_capture is not None:
+            # eval_model disables the bound-shape dim state; the train steps need it back on
+            self._graph_capture.set_bound_shapes_enabled(True)
         print(
             "start",
             self.get_epoch_str(),
@@ -770,6 +773,9 @@ class Engine(EngineBase):
         """
         Runs model on all eval datasets and calculates the loss.
         """
+        if self._graph_capture is not None:
+            # eval runs the plain dynamic-shape path; train_epoch re-enables
+            self._graph_capture.set_bound_shapes_enabled(False)
         self._pt_model.eval()
         self._maybe_reset_dev_memory_caches()
         self._reset_dev_memory_stats()
