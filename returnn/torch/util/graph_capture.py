@@ -233,6 +233,7 @@ class GraphCapturedTrainStep:
         against normally-padded batches.
         The engine re-enables it at the start of each train epoch.
         """
+        # noinspection PyProtectedMember
         from returnn.tensor import _dim_extra
 
         if enabled:
