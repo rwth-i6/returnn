@@ -1043,6 +1043,12 @@ class _DimMixin:
             if self.capacity is not None:
                 return self.size < self.capacity
             return False
+        import returnn.frontend as rf
+
+        if rf.is_static_traceable():
+            # bound regime: ALL raw buffers are bound-sized, so any dynamic dim needs masking
+            # (a silent maskless reduce would sum the junk tail)
+            return True
         if self.capacity is not None:
             return True
         if self.dyn_size_ext is None:  # unknown, so we can only guess
