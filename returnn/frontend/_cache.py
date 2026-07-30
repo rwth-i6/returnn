@@ -231,9 +231,12 @@ class DimWrapper:
         return self._hash
 
 
-def _dim_value_for_key(dim: Dim, *, finalize_callback=None) -> Optional[Union[int, Tuple[Any, ...]]]:
+def _dim_value_for_key(dim: Dim, *, finalize_callback=None) -> Optional[Tuple[Any, ...]]:
+    # Every key includes the capacity:
+    # cached artifacts can be capacity-shaped (e.g. bound-regime range/mask tensors),
+    # so dims with equal sizes but different capacities must not share an entry.
     if dim.size is not None:
-        return dim.size
+        return dim.size, dim.capacity
     if dim.dyn_size_ext is None or dim.dyn_size_ext.raw_tensor is None:
         return None
     # noinspection PyProtectedMember
@@ -252,9 +255,9 @@ def _dim_value_for_key(dim: Dim, *, finalize_callback=None) -> Optional[Union[in
         # Key by the IDENTITY of the raw size tensor instead (value-free, so still correct):
         # dims sharing the same size tensor (e.g. fresh kv dims from replace_dim)
         # then share the cache entry, as with value-keying in the eager cpu case.
-        return "size_ref", _WeakIdRef(dim.dyn_size_ext.raw_tensor, finalize_callback)
+        return "size_ref", _WeakIdRef(dim.dyn_size_ext.raw_tensor, finalize_callback), dim.capacity
     if not dim.dyn_size_ext.dims:
-        return int(dim.get_dim_value())
+        return int(dim.get_dim_value()), dim.capacity
     # Non-scalar eager dyn sizes (e.g. seq lens [batch]): key by the size values,
     # so dims with equal lens share the cache entry
     # (e.g. the fresh kv dim which attention creates per layer via replace_dim).
@@ -264,10 +267,10 @@ def _dim_value_for_key(dim: Dim, *, finalize_callback=None) -> Optional[Union[in
     size_ext = dim.get_dyn_size_ext_for_device("cpu")
     if size_ext.raw_tensor is None:
         # No cpu values available: identity of the raw size tensor, as above.
-        return "size_ref", _WeakIdRef(dim.dyn_size_ext.raw_tensor, finalize_callback)
+        return "size_ref", _WeakIdRef(dim.dyn_size_ext.raw_tensor, finalize_callback), dim.capacity
     # noinspection PyProtectedMember
     values = size_ext._raw_backend.raw_to_numpy(size_ext.raw_tensor)
-    return make_hashable(values.tolist())
+    return make_hashable(values.tolist()), dim.capacity
 
 
 # For now... we might extend it by some more types.
