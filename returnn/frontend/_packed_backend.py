@@ -106,16 +106,9 @@ def _packing_cache_key(kind: str, raw: PackedRawTensor, device) -> Tuple[Any, ..
         raw.packed_dim.dimension,
         raw.gap,
         raw.align,
-        _layout_lens_key(raw.layout_lens),
+        raw.layout_lens,  # keyed by identity (the Cache wraps tensors so, value-free)
         str(device),
     )
-
-
-def _layout_lens_key(layout_lens):
-    """:return: value key for the per-seq layout lens (a small cpu int tensor, cheap to read)"""
-    if layout_lens is None:
-        return None
-    return tuple(int(v) for v in layout_lens.raw_tensor.flatten())
 
 
 def _device_lens(raw: PackedRawTensor):
@@ -680,7 +673,7 @@ def _frame_coords(template: PackedRawTensor, d: Dim) -> Tensor:
         template.orig_dims,
         template.gap,
         template.align,
-        _layout_lens_key(template.layout_lens),
+        template.layout_lens,
         template.orig_dims.index(d),
         str(template.inner.device),
     )
@@ -742,7 +735,7 @@ def _frame_mask(template: PackedRawTensor) -> Optional[Tensor]:
         template.orig_dims,
         template.gap,
         template.align,
-        _layout_lens_key(template.layout_lens),
+        template.layout_lens,
         str(template.inner.device),
     )
     hit = _layout_cache.get(key)
@@ -871,7 +864,7 @@ def _segment_index(template: PackedRawTensor, seg_dims: Sequence[Dim]) -> Tuple[
             template.orig_dims,
             template.gap,
             template.align,
-            _layout_lens_key(template.layout_lens),
+            template.layout_lens,
             tuple(template.orig_dims.index(d) for d in seg_dims),
             str(template.inner.device),
         )
@@ -3496,7 +3489,7 @@ def regap(
     else:
         # cache the on-device starts + total (deterministic per target layout)
         # -> no per-step H2D sync (capture-safe)
-        dev_key = _packing_cache_key("regap_dev", raw, seg.device) + (gap, align, _layout_lens_key(layout_lens))
+        dev_key = _packing_cache_key("regap_dev", raw, seg.device) + (gap, align, layout_lens)
         hit = _layout_cache.get(dev_key)
         if hit is not None:
             new_starts, total_dev = hit
