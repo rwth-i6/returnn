@@ -29,7 +29,9 @@ def print_available_devices(*, file: Optional[TextIO] = None):
     cuda_visible_devs = None
     if "CUDA_VISIBLE_DEVICES" in os.environ:
         print("CUDA_VISIBLE_DEVICES is set to %r." % os.environ["CUDA_VISIBLE_DEVICES"], file=file)
-        cuda_visible_devs = dict(enumerate([int(d) for d in os.environ["CUDA_VISIBLE_DEVICES"].split(",") if d]))
+        # entries can also be GPU/MIG UUIDs, not just indices
+        devs = [int(d) if d.isdigit() else d for d in os.environ["CUDA_VISIBLE_DEVICES"].split(",") if d]
+        cuda_visible_devs = dict(enumerate(devs))
     else:
         with timeout("torch.cuda.is_available()"):
             if torch.cuda.is_available():
@@ -100,7 +102,9 @@ def print_using_cuda_device_report(dev: Union[str, torch.device], *, file: Optio
     else:
         idx = torch.cuda.current_device()
     if "CUDA_VISIBLE_DEVICES" in os.environ:
-        cuda_visible_devs = dict(enumerate([int(d) for d in os.environ["CUDA_VISIBLE_DEVICES"].split(",") if d]))
+        # entries can also be GPU/MIG UUIDs, not just indices
+        devs = [int(d) if d.isdigit() else d for d in os.environ["CUDA_VISIBLE_DEVICES"].split(",") if d]
+        cuda_visible_devs = dict(enumerate(devs))
         idx_s = cuda_visible_devs.get(idx, torch.cuda.device_count() + idx)
     else:
         idx_s = idx
