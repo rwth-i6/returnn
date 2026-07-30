@@ -2124,6 +2124,16 @@ class _DimMixin:
             cap = self._derived_capacity()
             if cap is not None:
                 return cap
+            # No capacity: contract violation.
+            # Static traceable == static shapes == every dim has a (derivable) static upper bound;
+            # a dyn size without capacity changes across steps.
+            # (A host-side size would even be baked as a stale constant;
+            # a device-side size used as a shape would make downstream shapes data-dependent.)
+            raise Exception(
+                f"{self}: get_dim_value under static traceable: no (derivable) capacity --"
+                f" the value is not static across steps."
+                f" Declare a capacity (Dim(..., capacity=...) / torch_cuda_graph dim_capacity)."
+            )
         if self._dyn_size_max_value is not None:  # fast path, precomputed
             assert self._dyn_size_max_value.raw_tensor is not None
             return self._dyn_size_max_value
