@@ -506,6 +506,12 @@ def _same_seq_lens(a: Dim, b: Dim) -> bool:
         return True
     if a.dyn_size_ext.dims != b.dyn_size_ext.dims:
         return False
+    if a.dyn_size_ext.raw_tensor is b.dyn_size_ext.raw_tensor:
+        return True
+    if rf.is_static_traceable():
+        # no value reads under static tracing (would bake the comparison / fail on fake tensors):
+        # only identity of the size tensors (above) proves equality here
+        return False
     a_sizes = a.get_dyn_size_ext_for_device("cpu")
     b_sizes = b.get_dyn_size_ext_for_device("cpu")
     return bool(rf.reduce_all(a_sizes == b_sizes, axis=list(a_sizes.dims)).raw_tensor)
