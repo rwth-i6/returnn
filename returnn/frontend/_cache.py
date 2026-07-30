@@ -209,24 +209,23 @@ class DimWrapper:
 
     def __init__(self, dim: Dim, *, finalize_callback):
         self.dim_value = _dim_value_for_key(dim, finalize_callback=finalize_callback)
-        # finalize_callback only needed when we don't use the dim value.
+        # dim_value covers every dim with a dyn size (value key or size_ref identity key),
+        # incl. finalization via the raw size tensor.
+        # The dim ref fallback remains only for dims without any size info
+        # (e.g. a batch dim without dyn_size_ext);
+        # finalize via the dim itself then.
         self.dim_ref = ref(dim, finalize_callback if self.dim_value is None else None)
-        self.dyn_size_ref = (
-            # E.g. consider the batch dim or data spatial dim which would be reset each step.
-            # We need some ref to the dyn size, and finalize this key when it goes out of scope.
-            # This is only needed when there is no info on the static size (or eager scalar dyn size).
-            ref(dim.dyn_size_ext.raw_tensor, finalize_callback)
-            if self.dim_value is None and dim.dyn_size_ext is not None and dim.dyn_size_ext.raw_tensor is not None
-            else None
-        )
         self._hash = hash(dim) if self.dim_value is None else hash(self.dim_value)
 
     def __eq__(self, other):
-        if isinstance(other, DimWrapper):
-            if self.dim_value is not None:
-                return self.dim_value == other.dim_value
-            return self.dim_ref() == other.dim_ref() and self.dyn_size_ref() is other.dyn_size_ref()
-        return False
+        if not isinstance(other, DimWrapper):
+            return False
+        if self.dim_value is not None or other.dim_value is not None:
+            # value key or size_ref identity key.
+            # None on one side compares unequal to any key, as it must.
+            return self.dim_value == other.dim_value
+        # No size info at all on both sides: dim identity is all there is.
+        return self.dim_ref() == other.dim_ref()
 
     def __hash__(self):
         return self._hash
@@ -238,11 +237,18 @@ def _dim_value_for_key(dim: Dim, *, finalize_callback=None) -> Optional[Union[in
     if dim.dyn_size_ext is None or dim.dyn_size_ext.raw_tensor is None:
         return None
     # noinspection PyProtectedMember
-    if not dim.dyn_size_ext._raw_backend.executing_eagerly() or dim.dyn_size_ext.device not in (None, "cpu"):
+    if (
+        not dim.dyn_size_ext._raw_backend.executing_eagerly()
+        or dim.dyn_size_ext.device not in (None, "cpu")
+        or rf.is_static_traceable()
+    ):
         # No value-keying possible here:
         # - non-eager (graph-based) backends: symbolic size tensors have no values at trace time;
         # - device-resident dyn sizes: reading the values means a device-to-host copy
         #   (a sync, illegal under CUDA-graph capture; also, the values change in place there).
+        # - static tracing: the size tensors are trace inputs even when on cpu --
+        #   values read at trace time would be baked into the key and the cached graph artifact.
+        #   Identity-keying within one trace is just common-subexpression reuse, value-free, correct.
         # Key by the IDENTITY of the raw size tensor instead (value-free, so still correct):
         # dims sharing the same size tensor (e.g. fresh kv dims from replace_dim)
         # then share the cache entry, as with value-keying in the eager cpu case.
@@ -257,7 +263,8 @@ def _dim_value_for_key(dim: Dim, *, finalize_callback=None) -> Optional[Union[in
     # so a potential device transfer happens only once per dim.
     size_ext = dim.get_dyn_size_ext_for_device("cpu")
     if size_ext.raw_tensor is None:
-        return None
+        # No cpu values available: identity of the raw size tensor, as above.
+        return "size_ref", _WeakIdRef(dim.dyn_size_ext.raw_tensor, finalize_callback)
     # noinspection PyProtectedMember
     values = size_ext._raw_backend.raw_to_numpy(size_ext.raw_tensor)
     return make_hashable(values.tolist())
