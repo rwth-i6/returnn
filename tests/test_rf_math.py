@@ -197,7 +197,11 @@ def test_softmax_fully_masked_zero_len_seq():
     from returnn.tensor import Tensor, Dim
 
     batch_dim = Dim(2, name="batch")
-    time_dim = Dim(Tensor("time", dims=[batch_dim], dtype="int32", raw_tensor=torch.tensor([5, 0], dtype=torch.int32)))
+    time_dim = Dim(
+        Tensor("time", dims=[batch_dim], dtype="int32", raw_tensor=torch.tensor([5, 0], dtype=torch.int32)),
+        # Static tracing requires a declared capacity (get_dim_value = the capacity there).
+        capacity=5,
+    )
     feat_dim = Dim(4, name="feat")
     x = Tensor("x", dims=[batch_dim, time_dim, feat_dim], dtype="float32")
     x.raw_tensor = torch.randn(2, 5, 4, generator=torch.Generator().manual_seed(42))
