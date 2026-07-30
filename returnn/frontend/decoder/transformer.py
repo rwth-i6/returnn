@@ -199,7 +199,7 @@ class TransformerDecoder(rf.Module):
     def default_initial_state(self, *, batch_dims: Sequence[Dim]) -> rf.State:
         """default initial state"""
         state = rf.State({k: v.default_initial_state(batch_dims=batch_dims) for k, v in self.layers.items()})
-        state.pos = rf.zeros((), dtype="int32", device="cpu")
+        state.pos = rf.zeros((), dtype="int32")  # on the default device, like the updates (see below)
         return state
 
     def transform_encoder(self, encoder: Tensor, *, axis: Dim) -> rf.State:
@@ -245,7 +245,11 @@ class TransformerDecoder(rf.Module):
         if self.input_embedding_proj is not None:
             decoded = self.input_embedding_proj(decoded)
 
-        new_state.pos = state.pos + (1 if spatial_dim == single_step_dim else spatial_dim.get_size_tensor())
+        new_state.pos = state.pos + (
+            # on the data device: device-resident dyn sizes must not be pulled to host
+            # (illegal under CUDA-graph capture / tracing)
+            1 if spatial_dim == single_step_dim else spatial_dim.get_size_tensor(device=source.device)
+        )
 
         for layer_name, layer in self.layers.items():
             layer: TransformerDecoderLayer  # or similar
