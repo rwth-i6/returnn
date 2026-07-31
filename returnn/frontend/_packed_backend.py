@@ -3163,11 +3163,14 @@ class PackedBackend(Backend[PackedRawTensor]):
         value: Optional[Union[Any, Tensor]] = None,
     ) -> Tensor:
         """
-        pad. Packed fast path for right-padding the innermost packed dim (constant mode):
-        an in-place layout change -- the new frames come out of the gap
-        (footprints and seq starts unchanged: per-seq (len, gap) -> (len + p, gap - p)),
-        and the pad value is written into the claimed slots.
-        This is what e.g. the consistent-"same" padding of strided pools produces.
+        pad. Packed fast path for left/right-padding the innermost packed dim (constant mode):
+        a layout change -- the new frames come out of the gap
+        (footprints and seq starts unchanged: per-seq (len, gap) -> (len + p, gap - p)).
+        Right pad: in-place, the pad value is written into the claimed slots
+        (e.g. the consistent-"same" padding of strided pools).
+        Left pad (e.g. the BOS shift of decoder inputs): the seq starts stay fixed,
+        so the content of EVERY seq shifts by the same global offset
+        -> one gather along the packed dim, stays packed.
         """
         raw = source.raw_tensor
         assert isinstance(raw, PackedRawTensor)
@@ -3177,16 +3180,17 @@ class PackedBackend(Backend[PackedRawTensor]):
             pad_l, pad_r = padding[i]
             if (
                 isinstance(pad_l, int)
-                and pad_l == 0
+                and pad_l >= 0
                 and isinstance(pad_r, int)
                 and pad_r >= 0
                 and not any(_dim_refs_packed(d, raw) for j, d in enumerate(axes) if j != i)
             ):
-                if raw.gap < pad_r:
-                    target_gap = pad_r if raw.align == 1 else -(-pad_r // raw.align) * raw.align
+                total_pad = pad_l + pad_r
+                if raw.gap < total_pad:
+                    target_gap = total_pad if raw.align == 1 else -(-total_pad // raw.align) * raw.align
                     _warn_fallback_once(
                         "pad",
-                        f"gap {raw.gap} < pad {pad_r} for the packed in-place pad"
+                        f"gap {raw.gap} < pad {total_pad} for the packed in-place pad"
                         f" -- specify pack(..., gap=...) to avoid the extra re-layout",
                         action="re-packing with the required gap (pad stays packed)",
                         hard=False,
@@ -3210,12 +3214,27 @@ class PackedBackend(Backend[PackedRawTensor]):
                     inner=inner,
                     packed_dim=raw.packed_dim,
                     orig_dims=tuple(raw.orig_dims[:-1]) + (out_time,),
-                    gap=raw.gap - pad_r,
+                    gap=raw.gap - total_pad,
                     align=raw.align,
                     # constant footprints: the pad frames come out of the gap
-                    layout_lens=(raw.layout_lens + pad_r) if raw.layout_lens is not None else None,
+                    layout_lens=(raw.layout_lens + total_pad) if raw.layout_lens is not None else None,
                 )
-                if pad_r:
+                if pad_l:
+                    # global shift by pad_l (seq starts stay fixed, see the docstring),
+                    # then everything that is not shifted content gets the pad value
+                    # (covers the left pads, the right claimed slots, and the junk gap frames)
+                    old_mask = _frame_mask(raw)
+                    assert old_mask is not None, "packed pad: left pad needs the layout lens"
+                    idx = rf.range_over_dim(
+                        raw.packed_dim, dtype=rf.get_default_array_index_dtype(), device=inner.device
+                    )
+                    src_idx = rf.relu(idx - pad_l)
+                    shifted = rf.gather(inner, indices=src_idx, axis=raw.packed_dim)
+                    content = rf.gather(old_mask, indices=src_idx, axis=raw.packed_dim)
+                    content = rf.logical_and(content, rf.compare_bc(idx, ">=", pad_l))
+                    inner = rf.where(content, shifted, value if value is not None else 0)
+                    helper.inner = inner
+                elif pad_r:
                     # write the pad value into the newly claimed slots (they may contain junk)
                     old_mask = _frame_mask(raw)
                     new_mask = _frame_mask(helper)
