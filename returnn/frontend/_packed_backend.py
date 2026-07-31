@@ -2054,9 +2054,8 @@ def _torch_triton_rel_pos_attention(
         # CUDA-graph capture then records the recompute,
         # so one captured graph replays correctly across varying lengths (<= the buffer bound):
         # the kernel reads starts/lens from device buffers and early-exits per block beyond a seq len.
-        # max_len comes from the backed raw shape of the b+d term (host metadata, no sync);
+        # max_len comes from the backed raw shape of the position term / pos_emb (host metadata, no sync);
         # pos_emb must be the centered 2*max_len-1 layout (the rel_pos_self_attention contract).
-        r_size = bd_t.shape[-1]
         if r_size % 2 != 1:
             return None
         max_len = (r_size + 1) // 2
