@@ -157,8 +157,11 @@ def _infer_att_dims(
     if kv_spatial_dim not in keys.dims_set:
         raise ValueError(f"kv_spat_dim {kv_spatial_dim} not in keys.dims {keys.dims}")
 
-    # infer query spatial dim, necessary for pytorch backend
-    query_non_batch_dims = query.remaining_dims(keys.dims_set - {kv_spatial_dim})
+    # infer query spatial dim, necessary for pytorch backend.
+    # Only remove keys dims actually present in the query:
+    # e.g. packed keys have their packed dim, which the (padded) query does not have
+    # (the batch dim is still removed: it is in the packed keys' implicit dims).
+    query_non_batch_dims = query.remaining_dims(keys.dims_set.intersection(query.dims_set) - {kv_spatial_dim})
     merged_query_dims = None
     if len(query_non_batch_dims) == 0:
         query_spatial = Dim(1, name="dot_att_query_spatial_dummy")
