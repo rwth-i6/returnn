@@ -1644,7 +1644,7 @@ def _flex_seq_ids(raw: PackedRawTensor, spatial_dim: Dim, device) -> Optional[Tu
     if starts_rf is None:  # single seq
         starts = torch.zeros(1, dtype=torch.int64, device=device)
     else:
-        starts = rf.copy_to_device(starts_rf, str(device)).raw_tensor.long().flatten()
+        starts = starts_rf.raw_tensor.long().flatten()
     total_buf = int(raw.packed_dim.get_dim_value())
     pos = torch.arange(total_buf, device=device)
     seq = torch.searchsorted(starts, pos, right=True) - 1
