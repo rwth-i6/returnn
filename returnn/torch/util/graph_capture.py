@@ -14,6 +14,7 @@ Config, e.g.::
         "batch_size_bound": 200,        # max seqs per batch; smaller batches get zero-length padding seqs.
                                         # the batch dim is made STATIC (= this bound): always filled up to it
         "dim_capacity": {"data": 3000, "classes": 300},  # bound of the dynamic (time) dim per data key
+        "packed_total_bound": {"data": 500_000},  # optional: tighter bound of the packed (gapped) total per key
         "warmup_steps": 2,              # eager steps before capture
         "capture_optimizer": True,      # grad clip + optimizer step in-graph (needs capturable optimizer)
         "compile": True,                # Inductor-codegen the whole step first, then capture that
@@ -263,6 +264,10 @@ class GraphCapturedTrainStep:
         opts = CollectionReadCheckCovered(opts)  # catch unknown (e.g. typo'd) option keys, see below
         self.batch_size_bound = int(opts["batch_size_bound"])
         self.dim_capacity: Dict[str, int] = dict(opts["dim_capacity"])
+        # optional tighter bound of the packed (gapped) total per packed-collate key
+        # (e.g. batch size + per-seq gap slack); the default -- every seq at full capacity --
+        # can be far larger and the activations scale with it
+        self.packed_total_bound: Dict[str, int] = dict(opts.get("packed_total_bound", {}))
         self.warmup_steps = int(opts.get("warmup_steps", 2))
         self._device = torch.device(device)
         self._float_dtype = float_dtype
@@ -362,9 +367,11 @@ class GraphCapturedTrainStep:
         if dtype.is_floating_point and self._float_dtype:
             dtype = self._float_dtype
         if packed is not None:
-            # packed collate: flat contiguous [total, ...feature]; bound = batch bound * capacity
+            # packed collate: flat contiguous [total, ...feature];
+            # bound = declared packed_total_bound, else batch bound * capacity
             self._packed_opts[k] = dict(packed)
-            shape = [self.batch_size_bound * self.dim_capacity[k]] + list(raw.shape[1:])
+            total = self.packed_total_bound.get(k, self.batch_size_bound * self.dim_capacity[k])
+            shape = [total] + list(raw.shape[1:])
         else:
             assert all(d.dimension is not None for d in data.dims[2:]), (
                 f"torch_cuda_graph: only dims[1] may be dynamic, got {data}"
@@ -476,7 +483,13 @@ class GraphCapturedTrainStep:
                     inner, batch_dim=batch_dim, spatial_dim=spatial, packed_dim=packed_dim, feature_dim=data.feature_dim
                 )
                 if gap or align > 1:
-                    regap_bound = self.batch_size_bound * (-(-(self.dim_capacity[k] + gap) // align) * align)
+                    # a declared packed_total_bound (caller guarantees it)
+                    # is usually much tighter than the worst case
+                    # -- every seq at full capacity (+gap), aligned --
+                    # and the model activations scale with this bound
+                    regap_bound = self.packed_total_bound.get(k)
+                    if regap_bound is None:
+                        regap_bound = self.batch_size_bound * (-(-(self.dim_capacity[k] + gap) // align) * align)
                     packed_t = rf.packed_regap(packed_t, gap, align=align, total_bound=regap_bound)
                 data.raw_tensor = packed_t.raw_tensor
             else:
