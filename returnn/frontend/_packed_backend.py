@@ -128,6 +128,7 @@ def _device_lens(raw: PackedRawTensor):
     """
     if raw.inner_backend.name != "torch":
         return None
+    # only a static packed dim is an upper-bound buffer (pack total_bound); dynamic = exact-sized
     if raw.packed_dim.dimension is None:
         return None
     if len(raw.orig_dims) != 2:
@@ -794,9 +795,17 @@ def _frame_coords(template: PackedRawTensor, d: Dim) -> Tensor:
 def _frame_mask(template: PackedRawTensor) -> Optional[Tensor]:
     """
     :return: [packed_dim] (bool): True on sequence frames, False on gap frames.
-        None for the dense layout (all frames are sequence frames).
+        None for the dense exact-sized layout (all frames are sequence frames).
+        NOT None for a STATIC packed dim: that is an upper-bound buffer
+        (see :func:`pack` total_bound; need_masking would say no masking for it),
+        so even a dense (gap-0) layout has a junk tail beyond the content.
+        For a dynamic packed dim, need_masking decides
+        (incl. the static-traceable rule, e.g. strided-path packed dims).
+        Note the gap frames are always part of the packed dim's extent,
+        so has_gap_frames cannot be folded into the dim either.
     """
-    if not template.has_gap_frames:
+    # static packed dim = upper-bound buffer with junk tail, which need_masking on the dim cannot see
+    if not template.has_gap_frames and template.packed_dim.dimension is None and not template.packed_dim.need_masking():
         return None
     dev_lens = _device_lens(template)
     if dev_lens is not None:
@@ -3320,10 +3329,12 @@ class PackedBackend(Backend[PackedRawTensor]):
             and not any(_dim_refs_packed(d, raw) for d in extra_axes)
         ):
             inner = raw.inner
-            if raw.has_gap_frames:
-                # gap / alignment pad frames would contaminate the maskless reduce:
+            mask = _frame_mask(raw)
+            if mask is not None:
+                # gap / alignment pad frames
+                # -- or, under static traceable, the junk tail of the bound-sized buffer --
+                # would contaminate the maskless reduce:
                 # fill them with the mode-neutral value first (mean: sum, then / valid count)
-                mask = _frame_mask(raw)
                 if mode == "mean":
                     inner = rf.where(mask, inner, 0.0)
                     total = rf.reduce(inner, mode="sum", axis=[raw.packed_dim] + extra_axes, use_mask=False)
