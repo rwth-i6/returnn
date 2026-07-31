@@ -1515,8 +1515,21 @@ def _torch_sdpa_varlen_attention(
                     out_t = _get_flash_varlen_fn()(
                         q_f, k_f, v_f, cu_q_flash, cu_k_flash, max_q, max_k, dropout_p, is_causal, scale_
                     )
+                    if rf.is_static_traceable():
+                        # Masked-lane NaNs in the flash output:
+                        # eager discards them via the downstream masking (where picks the other branch),
+                        # but Inductor fusions can rewrite where(mask, x, 0) into x * mask
+                        # (0 * NaN = NaN) and leak them into the losses.
+                        # Remove them at the source (pointwise, valid rows unaffected).
+                        out_t = torch.nan_to_num(out_t, nan=0.0, posinf=0.0, neginf=0.0)
+                    if keep_q is not None:
+                        # rows not covered by any (clamped) segment stay UNWRITTEN in the
+                        # flash-allocated out buffer -- arbitrary garbage, not just NaN: zero them
+                        out_t = torch.where(keep_q, out_t, torch.zeros_like(out_t))
                     _count_attention_path("flash")
                 except (RuntimeError, TypeError, NotImplementedError) as exc:
+                    if "_NanTraceMode" in str(exc):
+                        raise  # the debug tracer must not be swallowed by the fallback
                     # e.g. aten signature drift in another torch version, or head-dim limits
                     _flash_varlen_broken = True
                     _warn_fallback_once(
