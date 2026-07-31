@@ -3,8 +3,122 @@ Array (Tensor) functions
 """
 
 from __future__ import annotations
-from typing import Optional, Union
+from typing import Optional, Tuple, Union
 import torch
+
+
+# noinspection PyShadowingBuiltins
+def masked_select_bound(
+    input: torch.Tensor, mask: torch.Tensor, *, bound: Optional[int] = None
+) -> Tuple[torch.Tensor, torch.Tensor]:
+    """
+    Like :func:`masked_select`, but with a static output shape:
+    a declared upper bound on the number of selected elements sizes the output,
+    the selected elements packed at the front (in input order), zeros after.
+    No data-dependent shapes and no host synchronization
+    (:func:`torch.nonzero` has both),
+    so this is usable under tracing / CUDA-graph capture
+    (static traceable, see :mod:`returnn.frontend`).
+
+    :param input: [mask_dims..., remaining_dims...]
+    :param mask: [mask_dims...], binary mask to index with. if it has less dims than ``input``,
+        the remaining dims are broadcasted.
+    :param bound: upper bound on the number of selected elements.
+        By default the full mask size (always valid).
+        A tighter bound (e.g. the max total target len per batch, known from the batching constraints)
+        shrinks the output buffer.
+        The caller guarantees it -- selected elements beyond the bound are silently dropped.
+    :return: (out, out_len):
+        out [bound, remaining_dims...],
+        out_len scalar int64 on the device (number of selected elements)
+    """
+    assert input.ndim >= mask.ndim
+    assert all(input.shape[i] == mask.shape[i] for i in range(mask.ndim))
+    mask_flat = mask.flatten()
+    input_flat = input.flatten(end_dim=mask.ndim - 1)
+    if bound is None:
+        bound = mask_flat.shape[0]
+    pos = torch.cumsum(mask_flat.to(torch.int64), dim=0) - 1
+    # masked-out elements go to an extra dump slot, dropped below
+    # (clamp also selected elements beyond the bound there, see the bound doc)
+    pos = torch.where(mask_flat, pos.clamp(max=bound), torch.full_like(pos, bound))
+    # Gather-based select (out[slot] = input_flat[inv[slot]]) via the inverse permutation,
+    # with a custom backward that is ALSO a gather (grad_in[row] = grad_out[pos[row]]).
+    # NEVER a scatter/index_put of a [rows, remaining...] tensor, in NEITHER direction:
+    # under AOT/Inductor, index_put/scatter (also the index_add behind a plain index_select
+    # backward, via functionalization) decomposes into a scatter whose index is broadcast
+    # over the remaining dims and MATERIALIZED as a full int64 buffer [rows, remaining...]
+    # (e.g. ~4-6GB for a [50-77k, 10k-vocab] log-prob tensor, plus full-size scatter buffers).
+    # Here every index stays 1-D on both paths;
+    # the only scatter left is the small int one building the inverse.
+    n_rows = input_flat.shape[0]
+    inv = torch.zeros((bound + 1,), dtype=torch.int64, device=input_flat.device)
+    inv[pos] = torch.arange(n_rows, dtype=torch.int64, device=input_flat.device)
+    out_len = mask_flat.sum()
+    # slots beyond the selected count point at stale inv entries (0): zeroed inside the select,
+    # like the zeros-init of a scatter formulation
+    slot_valid = torch.arange(bound, dtype=torch.int64, device=input_flat.device) < out_len
+    out = _GatherSelectBound.apply(input_flat, inv[:bound], pos, slot_valid)
+    return out, out_len
+
+
+def gather_relayout(
+    values: torch.Tensor, *, inv: torch.Tensor, pos: torch.Tensor, slot_valid: torch.Tensor
+) -> torch.Tensor:
+    """
+    Re-layout over the first axis: ``out[slot] = values[inv[slot]]`` where ``slot_valid``, else 0.
+    Backward: ``grad_values[row] = grad_out[pos[row]]``
+    (rows with ``pos == out size`` get 0).
+    Gather in BOTH directions, see :class:`_GatherSelectBound`:
+    a value scatter/index_put (also the index_add behind a plain index_select backward)
+    would materialize its index broadcast over the remaining dims under AOT/Inductor.
+
+    :param values: [rows, remaining...]
+    :param inv: [out_size] int64, slot -> source row (arbitrary where not slot_valid)
+    :param pos: [rows] int64, row -> slot, in [0..out_size] (out_size = dropped)
+    :param slot_valid: [out_size] bool
+    :return: [out_size, remaining...]
+    """
+    return _GatherSelectBound.apply(values, inv, pos, slot_valid)
+
+
+class _GatherSelectBound(torch.autograd.Function):
+    """see :func:`masked_select_bound` and :func:`gather_relayout` (the gather-both-ways core)"""
+
+    @staticmethod
+    def forward(ctx, input_flat: torch.Tensor, inv: torch.Tensor, pos: torch.Tensor, slot_valid: torch.Tensor):
+        """
+        :param ctx:
+        :param input_flat: [rows, remaining...]
+        :param inv: [bound] int64, slot -> source row (stale entries where slot_valid is False)
+        :param pos: [rows] int64, row -> slot, in [0..bound] (bound = the dump slot)
+        :param slot_valid: [bound] bool
+        :return: [bound, remaining...]
+        """
+        ctx.save_for_backward(pos)
+        out = torch.index_select(input_flat, 0, inv)
+        out = torch.where(slot_valid.reshape((-1,) + (1,) * (input_flat.ndim - 1)), out, torch.zeros_like(out))
+        return out
+
+    @staticmethod
+    def backward(ctx, grad_out: torch.Tensor):
+        """
+        :param ctx:
+        :param grad_out: [bound, remaining...]
+        :return: grad for input_flat [rows, remaining...] (a gather: grad_out row at each input row's slot;
+            masked-out rows (pos == bound) get 0), None for the index args
+        """
+        (pos,) = ctx.saved_tensors
+        bound = grad_out.shape[0]
+        # NOT via a [bound+1, remaining] concat with a zero dump row:
+        # its constant zero-row write is schedulable anytime,
+        # so Inductor emits it far before the single use and PINS the allocation there
+        # (>1 GiB idle across half the step at the loq scale).
+        # Clamp + zero the dumped rows instead: same values, no extra buffer.
+        row_valid = (pos < bound).reshape((-1,) + (1,) * (grad_out.ndim - 1))
+        grad_in = torch.index_select(grad_out, 0, pos.clamp(max=bound - 1))
+        grad_in = torch.where(row_valid, grad_in, torch.zeros_like(grad_in))
+        return grad_in, None, None, None
 
 
 # noinspection PyShadowingBuiltins

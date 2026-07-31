@@ -2144,6 +2144,25 @@ class TorchBackend(Backend[torch.Tensor]):
             # However, instead of erroring, just assume some dummy mask.
             # https://github.com/pytorch/pytorch/issues/109871
             out_raw = in_raw.flatten()
+        elif rf.is_static_traceable():
+            # bound-shape regime: static out shape (the full mask size), device-side out len --
+            # no data-dependent shapes and no host sync (torch.nonzero in masked_select has both).
+            # The tail beyond the out len is zeros;
+            # reductions over the out dim mask it via the dyn size (a device scalar) with static shapes.
+            from returnn.torch.util.array_ import masked_select_bound
+
+            mask_raw = mask.copy_compatible_to_dims_raw(dims)
+            # a given out_dim can declare a tighter bound via its capacity (like pack total_bound)
+            bound = out_dim.capacity if out_dim is not None else None
+            out_raw, out_len_raw = masked_select_bound(in_raw, mask_raw, bound=bound)
+            if not out_dim:
+                out_dim = Dim(None, name="masked_select")
+            if out_dim.capacity is None:
+                out_dim.capacity = int(out_raw.shape[0])
+            if out_dim.dyn_size_ext is None:
+                out_dim.dyn_size_ext = Tensor("masked_select_size", dims=(), dtype="int64")
+            if out_dim.dyn_size_ext.raw_tensor is None:
+                out_dim.dyn_size_ext.raw_tensor = out_len_raw
         else:
             mask_raw = mask.copy_compatible_to_dims_raw(dims)
             known_mask_len = (

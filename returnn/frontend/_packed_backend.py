@@ -3785,13 +3785,9 @@ def regap(
     pos = rf.gather(new_starts, indices=seg, axis=seqs_dim, clip_to_valid=True) + t_coords
     mask = _frame_mask(raw)
     if mask is not None:
-        # route old gap frames to a dump slot, then slice it off
-        ext_dim = new_dim + 1
+        # route old gap frames to the dump slot (== the new total), dropped in the re-layout
         pos = rf.where(mask, pos, total_dev if isinstance(total_dev, int) else rf.cast(total_dev, pos.dtype))
-        inner_ext = rf.scatter(raw.inner, indices=pos, indices_dim=raw.packed_dim, out_dim=ext_dim, use_mask=False)
-        inner_new, _ = rf.slice(inner_ext, axis=ext_dim, size=new_dim)
-    else:
-        inner_new = rf.scatter(raw.inner, indices=pos, indices_dim=raw.packed_dim, out_dim=new_dim, use_mask=False)
+    inner_new = _torch_relayout_frames(raw.inner, pos, packed_dim=raw.packed_dim, out_dim=new_dim)
     if raw.inner.feature_dim is not None and inner_new.feature_dim is None:
         inner_new.feature_dim = raw.inner.feature_dim
     helper = PackedRawTensor(
@@ -3800,6 +3796,54 @@ def regap(
     out = helper.rewrap(inner_new, name="regap")
     if source.feature_dim is not None and out.feature_dim is None:
         out.feature_dim = source.feature_dim
+    return out
+
+
+def _torch_relayout_frames(inner: Tensor, pos: Tensor, *, packed_dim: Dim, out_dim: Dim) -> Tensor:
+    """
+    ``out[pos[i]] = inner[i]`` over the packed axis, unwritten slots zero,
+    ``pos == out size`` = dropped (dump).
+    Gather in BOTH directions
+    (forward via the inverse coords, custom backward via ``pos``;
+    see :func:`returnn.torch.util.array_.gather_relayout`):
+    a value scatter/index_put would materialize its index broadcast over the feature dims
+    under AOT/Inductor
+    (a full int64 [frames, feature...] buffer plus full-size scatter buffers;
+    several GB for vocab-sized features -- the Loquacious 500M OOM driver).
+
+    :param inner: [packed_dim, feature...]
+    :param pos: [packed_dim] int, target positions in [0..out_dim size]
+    :param packed_dim:
+    :param out_dim:
+    :return: [out_dim, feature...]
+    """
+    import torch
+    from returnn.torch.util.array_ import gather_relayout
+
+    axis = inner.get_axis_from_description(packed_dim)
+    if axis != 0:
+        inner = inner.copy_move_axis(axis, 0)
+    values = inner.raw_tensor
+    assert isinstance(values, torch.Tensor), f"_torch_relayout_frames: torch only, got {type(values)}"
+    pos_raw = pos.copy_compatible_to_dims_raw([packed_dim]).to(torch.int64)
+    n_out = out_dim.get_dim_value()
+    if isinstance(n_out, torch.Tensor):
+        # dynamic total (eager, e.g. the dynamic warmup / eval path): host-read the scalar
+        # (a sync, fine there; under static traceable the value is a static int, see below)
+        n_out = int(n_out)
+    assert isinstance(n_out, int)
+    n_in = values.shape[0]
+    # small int scatters only (1-D, no feature dims involved)
+    inv = torch.zeros((n_out + 1,), dtype=torch.int64, device=values.device)
+    slot_valid = torch.zeros((n_out + 1,), dtype=torch.bool, device=values.device)
+    inv[pos_raw] = torch.arange(n_in, dtype=torch.int64, device=values.device)
+    slot_valid[pos_raw] = True
+    out_raw = gather_relayout(values, inv=inv[:n_out], pos=pos_raw, slot_valid=slot_valid[:n_out])
+    out = Tensor("regap", dims=(out_dim,) + inner.dims[1:], dtype=inner.dtype, raw_tensor=out_raw)
+    if inner.sparse_dim is not None:
+        out.sparse_dim = inner.sparse_dim
+    if inner.feature_dim is not None and inner.feature_dim in out.dims:
+        out.feature_dim = inner.feature_dim
     return out
 
 
