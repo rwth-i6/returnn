@@ -927,6 +927,13 @@ class GraphCapturedTrainStep:
             # noinspection PyProtectedMember
             from torch._functorch.partitioners import min_cut_rematerialization_partition
 
+            # noinspection PyProtectedMember
+            import torch._inductor.config as inductor_config_
+
+            # saved activations cross the fw/bwd graph boundary with their TRACED strides:
+            # Inductor stride padding on the fw outputs breaks the AOT runtime stride asserts
+            # (raw aot_function has no fw/bwd stride negotiation like torch.compile)
+            inductor_config_.comprehensive_padding = False
             if self._activation_memory_budget is not None:
                 functorch_config.activation_memory_budget = float(self._activation_memory_budget)
             return aot_function(
