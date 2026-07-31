@@ -58,6 +58,7 @@ Mechanics (validated by standalone probes first, see the 2026 packed/CUDA-graph 
 from __future__ import annotations
 from typing import Optional, Union, Any, Callable, Dict, List, Tuple
 from contextlib import contextmanager
+import os
 import numpy
 import torch
 
@@ -74,6 +75,141 @@ __all__ = ["GraphCapturedTrainStep"]
 
 
 _inductor_workarounds_applied = False
+
+
+def _patch_inductor_nan_asserts_nan_only() -> None:
+    """
+    Inductor's nan_asserts check isnan AND isinf on every buffer,
+    but inf is legitimate here (mask fill values, -log 0 lattice scores from FastBaumWelch):
+    only NaN indicates a defect.
+    Replace the two emitters (torch 2.7 internals) with NaN-only versions
+    that also put the buffer name into the assert message.
+    """
+    global _inductor_nan_asserts_patched
+    if _inductor_nan_asserts_patched:
+        return
+    import sympy
+    from torch._inductor import ir
+    from torch._inductor.codegen.common import TensorArg
+    from torch._inductor.codegen.triton import TritonKernel
+    from torch._inductor.codegen.wrapper import PythonWrapperCodegen
+    from torch._inductor.virtualized import V
+
+    def codegen_input_nan_asserts(self) -> None:
+        self.prefix.writeline("# make sure graph inputs are not nan (inf is legitimate: mask values)")
+        for name, buf in self.get_graph_inputs().items():
+            if isinstance(buf, (sympy.Expr, ir.TorchBindObject)):
+                continue
+            self.prefix.writeline(f"assert not {name}.isnan().any().item(), {name!r}")
+
+    def codegen_nan_check(self) -> None:
+        wrapper = V.graph.wrapper_code
+        _, call_args, arg_signatures, _ = self.args.python_argdefs()
+        for arg, arg_signature in zip(call_args, arg_signatures):
+            if isinstance(arg_signature, TensorArg):
+                assert not V.graph.cpp_wrapper  # python wrapper only here
+                if _nan_check_report_mode:
+                    # report-only: NaN counts per buffer, no abort --
+                    # the culprit is the buffer whose NaN pattern CHANGES at the failing call
+                    # (expected masked-lane / pre-guard NaNs stay constant across calls)
+                    wrapper.writeline(f"_n_ = {arg}.isnan().sum().item() if {arg}.is_floating_point() else 0")
+                    wrapper.writeline(f"_n_ and print('NANREP', {arg!r}, _n_, flush=True)")
+                    if arg in _nan_dump_buffer_names:
+                        # overwritten every call: after a crash the file holds the failing call's value
+                        wrapper.writeline(f"torch.save({arg}.clone(), 'nan-dump-{arg}.pt')")
+                else:
+                    wrapper.writeline(f"assert not {arg}.isnan().any().item(), {arg!r}")
+
+    PythonWrapperCodegen.codegen_input_nan_asserts = codegen_input_nan_asserts
+    TritonKernel.codegen_nan_check = codegen_nan_check
+    _inductor_nan_asserts_patched = True
+
+
+_inductor_nan_asserts_patched = False
+_nan_check_report_mode = False
+_nan_dump_buffer_names = ()
+
+
+class _NanTraceMode:
+    """
+    TorchDispatchMode raising at the first aten op whose float output contains NaN
+    (kernel granularity, catches everything in eager; a host sync per op -- one-step debug only).
+    The flash varlen forward is allowlisted:
+    its filler/tail rows are NaN by construction and cleaned right after (see the guard).
+    Intentional -inf mask values are legal, so only NaN is checked.
+    """
+
+    def __new__(cls):
+        from torch.utils._python_dispatch import TorchDispatchMode
+
+        class _Mode(TorchDispatchMode):
+            def __torch_dispatch__(self, func, types, args=(), kwargs=None):
+                out = func(*args, **(kwargs or {}))
+                fname = str(func)
+                # allocations are uninitialized by design; flash filler/tail rows are
+                # NaN by construction (cleaned right after, see the guard);
+                # alias/copy ops cannot CREATE NaN (detection moves to the first compute op)
+                _skip = (
+                    "flash_attention",
+                    "empty",
+                    "resize",
+                    "detach",
+                    "view",
+                    "alias",
+                    "transpose",
+                    "permute",
+                    "expand",
+                    "clone",
+                    "_to_copy",
+                    "copy_",
+                    "slice",
+                    "select",
+                    "squeeze",
+                    "unsqueeze",
+                    "reshape",
+                    "contiguous",
+                    "t.default",
+                )
+                if any(s in fname for s in _skip):
+                    return out
+                outs = out if isinstance(out, (tuple, list)) else [out]
+                for t in outs:
+                    if isinstance(t, torch.Tensor) and t.is_floating_point() and t.isnan().any():
+                        shapes = [tuple(a.shape) for a in args if isinstance(a, torch.Tensor)]
+                        raise RuntimeError(f"_NanTraceMode: NaN from {func} (arg shapes {shapes})")
+                return out
+
+        return _Mode()
+
+
+def _patch_zero_init_generated_buffers() -> None:
+    """
+    Debug: zero-fill every buffer the generated code allocates.
+    Bound-regime buffers have unwritten tails (beyond the actual totals) with arbitrary garbage;
+    eager has them too, but Inductor fusion can move a reduction across the masking
+    (then garbage can reach the outputs).
+    Clean run with zero-fill vs broken without = uninitialized-read confirmed.
+    One memset per allocation, debug only.
+    The generated modules bind ``empty_strided_cuda`` from this symbol at load time,
+    so the patch must be in place before compile/cache-load (it is: applied at compile setup).
+    """
+    global _zero_init_buffers_patched
+    if _zero_init_buffers_patched:
+        return
+    import torch._C._dynamo.guards as _guards
+
+    orig = _guards._empty_strided_cuda
+
+    def _empty_strided_cuda_zeroed(*args, **kwargs) -> torch.Tensor:
+        t = orig(*args, **kwargs)
+        t.zero_()
+        return t
+
+    _guards._empty_strided_cuda = _empty_strided_cuda_zeroed
+    _zero_init_buffers_patched = True
+
+
+_zero_init_buffers_patched = False
 
 
 def _apply_inductor_workarounds():
@@ -277,8 +413,41 @@ class GraphCapturedTrainStep:
         self._params = params
         self._compile = bool(opts.get("compile", False))
         self._capture_graph = bool(opts.get("capture", True))
+        # debug: Inductor generates a nan-assert after every kernel,
+        # pinpointing the first kernel producing nan/inf inside the compiled program
+        self._inductor_nan_asserts = bool(opts.get("inductor_nan_asserts", False))
+        # debug: dump the AOT-traced FX graph (pre-Inductor) into this dir,
+        # to inspect for wrongly baked constants (e.g. a capacity used as a length)
+        self._dump_fx_dir: Optional[str] = opts.get("dump_fx_dir")
+        # debug: record the CUDA allocator history and dump a snapshot
+        # (cuda-memory-snapshot.pickle in cwd, for torch.cuda.memory viz)
+        # on OOM during compile/capture -- shows what actually fills the memory at the peak
+        self._dump_memory_snapshot = bool(opts.get("dump_memory_snapshot", False))
+        # debug (compiled-eager, i.e. "capture": False): check the loss outputs every step,
+        # on the first non-finite value dump that step's raw extern-data batch to cwd and raise
+        # -- hands over the exact failing batch for offline eager-vs-compiled diffing
+        self._debug_nan_dump_inputs = bool(opts.get("debug_nan_dump_inputs", False))
+        # debug: zero-fill every buffer the generated code allocates (see the patch func)
+        self._debug_zero_init_buffers = bool(opts.get("debug_zero_init_buffers", False))
+        # debug: with inductor_nan_asserts, PRINT per-buffer NaN counts instead of asserting
+        self._debug_nan_report = bool(opts.get("debug_nan_report", False))
+        # debug: conservative Inductor codegen (no epilogue fusion, no pattern matcher) --
+        # if the sporadic NaN vanishes, a miscompiled fusion is confirmed
+        self._inductor_conservative = bool(opts.get("inductor_conservative", False))
+        # debug: run the traced AOT graph with eager kernels (no Inductor at all)
+        self._debug_aot_eager = bool(opts.get("debug_aot_eager", False))
+        # debug: run step_core UNTRACED, plain eager, on the same bound buffers
+        # (isolates bound-regime semantics from the AOT trace)
+        self._debug_eager_bound = bool(opts.get("debug_eager_bound", False))
+        # debug: with debug_nan_report, torch.save these generated-code buffers each call
+        # (buffer names from a previous run's generated module; numbering is stable per graph)
+        self._debug_dump_buffer_names = tuple(opts.get("debug_dump_buffer_names", ()))
+        self._last_extern_data_raw: Optional[Dict[str, Union[torch.Tensor, numpy.ndarray]]] = None
+        if self._dump_memory_snapshot:
+            torch.cuda.memory._record_memory_history(max_entries=200_000)
         assert self._capture_graph or self._compile, 'torch_cuda_graph: "capture": False requires "compile": True'
         self._compiled_fn: Optional[Callable[[List[torch.Tensor]], tuple]] = None
+        self._compiled_n_calls = 0
         self._rf_params = rf_params
         if self._compile:
             assert rf_params is not None, "torch_cuda_graph compile: rf_params required (RF model)"
@@ -551,6 +720,48 @@ class GraphCapturedTrainStep:
             self._post_step()  # in-graph: grad clip + optimizer step
         return ctx
 
+    def _warmup_step_dynamic(
+        self, extern_data_raw: Dict[str, Union[torch.Tensor, numpy.ndarray]], *, global_train_step: int
+    ) -> RunCtx:
+        """
+        One eager warmup step at the batch's ACTUAL shapes, not the bound-sized buffers:
+        eager execution at the bounds peaks far above both the dynamic eager step
+        and the Inductor-planned captured graph
+        (bound-sized activations without any buffer-reuse planning;
+        the AOT trace itself runs on fake tensors and costs no GPU memory).
+        Kernels/cudnn warm up at approximately the right shapes;
+        dim/layout caches built here are cleared again
+        when the bound shapes get re-enabled.
+        """
+        from returnn.torch.data import extern_data as extern_data_util
+
+        self.set_bound_shapes_enabled(False)
+        try:
+            # release the previous step's cached blocks:
+            # each warmup batch has different shapes,
+            # and the caching allocator cannot merge smaller cached blocks to serve bigger tensors,
+            # so the cache from step N would stack on top of step N+1's allocations
+            torch.cuda.synchronize()
+            torch.cuda.empty_cache()
+            for dim in _get_dyn_dims_from_extern_data(self._extern_data_template):
+                dim.reset_eager()
+            extern_data = extern_data_util.raw_dict_to_extern_data(
+                extern_data_raw, extern_data_template=self._extern_data_template, device=self._device
+            )
+            for p in self._params:
+                p.grad.zero_()
+            # plain int step, like the normal eager engine path
+            # (the device step tensor would mix devices with the cpu-resident dyn sizes here)
+            self._run_step(extern_data, step=global_train_step)
+            ctx = rf.get_run_ctx()
+            total_loss = ctx.total_loss()
+            total_loss.raw_tensor.backward()
+            if self._post_step is not None:
+                self._post_step()
+            return ctx
+        finally:
+            self.set_bound_shapes_enabled(True)
+
     def _make_compiled_step(self) -> Callable[[List[torch.Tensor]], tuple]:
         """
         Build the Inductor-compiled whole step:
@@ -566,6 +777,22 @@ class GraphCapturedTrainStep:
         from torch._inductor.compile_fx import compile_fx
 
         _apply_inductor_workarounds()
+        if self._inductor_nan_asserts:
+            import torch._inductor.config as inductor_config
+
+            inductor_config.nan_asserts = True
+            if self._debug_nan_report:
+                global _nan_check_report_mode, _nan_dump_buffer_names
+                _nan_check_report_mode = True
+                _nan_dump_buffer_names = self._debug_dump_buffer_names
+            _patch_inductor_nan_asserts_nan_only()
+        if self._debug_zero_init_buffers:
+            _patch_zero_init_generated_buffers()
+        if self._inductor_conservative:
+            import torch._inductor.config as inductor_config
+
+            inductor_config.epilogue_fusion = False
+            inductor_config.pattern_matcher = False
         rf_params = self._rf_params
         orig_raws = [p.raw_tensor for p in rf_params]
         trainable = [r.requires_grad for r in orig_raws]
@@ -599,7 +826,62 @@ class GraphCapturedTrainStep:
                 for p_, r0 in zip(rf_params, orig_raws):
                     p_.raw_tensor = r0
 
-        return aot_function(step_core, fw_compiler=compile_fx)
+        if self._debug_eager_bound:
+            # plain eager execution of the untraced step on the bound buffers:
+            # everything else (copy-in, static shapes, fillers, post-step) identical
+            if not self._debug_nan_dump_inputs:
+                return step_core
+
+            def eager_bound_step(raws: List[torch.Tensor]) -> Tuple[torch.Tensor, ...]:
+                """on a non-finite loss: restore params+RNG, replay the step under the NaN tracer
+                (raises at the exact op producing the first NaN)"""
+                saved_params = [p.detach().clone() for p in self._params]
+                saved_rng = torch.cuda.get_rng_state()
+                outs = step_core(raws)
+                # check ALL outs (losses AND grads): NaN grads poison the params via the
+                # in-step optimizer, and the LOSS only turns non-finite one step later --
+                # detecting at the grad step lets the replay trace the producing backward op
+                bad = any(
+                    bool(torch.logical_not(torch.isfinite(t)).any().item())
+                    for t in outs
+                    if isinstance(t, torch.Tensor) and t.is_floating_point()
+                )
+                if not bad:
+                    return outs
+                print("debug eager-bound: non-finite loss; REPLAYING the step under the NaN tracer", flush=True)
+                with torch.no_grad():
+                    for p, s in zip(self._params, saved_params):
+                        p.copy_(s)
+                torch.cuda.set_rng_state(saved_rng)
+                with _NanTraceMode():
+                    step_core(raws)
+                raise Exception("debug eager-bound: replay did not reproduce the non-finite loss")
+
+            return eager_bound_step
+        backend = compile_fx
+        if self._debug_aot_eager:
+            # run the traced AOT graph with EAGER kernels (no Inductor codegen):
+            # NaN persisting = the aten decompositions in the trace differ from plain eager;
+            # clean = Inductor codegen at fault
+            from functorch.compile import nop
+
+            backend = nop
+        if self._dump_fx_dir:
+            dump_dir = self._dump_fx_dir
+            inner_backend = backend
+
+            def fw_compiler(gm: torch.fx.GraphModule, example_inputs: List[torch.Tensor]) -> Callable:
+                """dump the AOT fw graph (grads are traced inside it, so this is the whole step), then compile"""
+                os.makedirs(dump_dir, exist_ok=True)
+                with open(os.path.join(dump_dir, "aot_fw_graph.py"), "wt", encoding="utf-8") as f:
+                    f.write(gm.print_readable(print_output=False))
+                return inner_backend(gm, example_inputs)
+
+            return aot_function(step_core, fw_compiler=fw_compiler)
+        # NOTE: partition_fn / activation_memory_budget are IRRELEVANT here:
+        # step_core computes the grads itself, so this is ONE inference-style graph,
+        # never fw/bwd-partitioned; buffer lifetimes are Inductor memory planning.
+        return aot_function(step_core, fw_compiler=backend)
 
     def _ensure_compiled(self) -> Callable[[List[torch.Tensor]], tuple]:
         """build the compiled step once; the first call traces + Inductor-compiles + autotunes"""
@@ -627,6 +909,7 @@ class GraphCapturedTrainStep:
         """
         compiled = self._ensure_compiled()
         raws = [p.raw_tensor for p in self._rf_params]
+        self._log_misaligned_inputs(raws)
         compiled(raws)  # plain warm run
         torch.cuda.synchronize()
         with torch.cuda.graph(graph):
@@ -667,13 +950,31 @@ class GraphCapturedTrainStep:
         assert i == self._compiled_n_loss_outs
         return ctx
 
+    def _log_misaligned_inputs(self, raws: List[torch.Tensor]) -> None:
+        """
+        One-time diagnostic: Inductor CLONES every graph input whose data pointer
+        is not 16-byte aligned (``copy_misaligned_inputs``), per call --
+        both a memory and a per-step-time cost. Log the offenders loudly.
+        """
+        bad = [(i, tuple(r.shape), r.data_ptr() % 16) for i, r in enumerate(raws) if r.data_ptr() % 16 != 0]
+        if bad:
+            print(
+                f"torch_cuda_graph WARNING: {len(bad)} misaligned compiled-graph inputs"
+                f" (Inductor clones each per call): {bad[:10]}"
+            )
+
     def _run_compiled_eager(self) -> RunCtx:
         """
         opts "capture": False: launch the compiled bound-shaped program eagerly (no graph).
         Outputs are fresh tensors each call -> grads/ctx rebound per step.
         """
         raws = [p.raw_tensor for p in self._rf_params]
+        if self._compiled_n_calls == 0:
+            self._log_misaligned_inputs(raws)
+        self._compiled_n_calls += 1
         outs = self._compiled_fn(raws)
+        if self._debug_nan_dump_inputs:
+            self._check_finite_dump_inputs(outs)
         self._bind_grads(raws, outs)
         if self._post_step is not None:
             self._post_step()  # grad clip + optimizer step (plain eager here)
@@ -692,6 +993,8 @@ class GraphCapturedTrainStep:
         :return: the run ctx holding the losses. Under replay this is the capture-time ctx;
             its loss tensors are the static outputs, refreshed by the replay.
         """
+        if self._debug_nan_dump_inputs:
+            self._last_extern_data_raw = extern_data_raw
         self._copy_in(extern_data_raw)
         self._step_buf.fill_(global_train_step)
         if self._graph is not None:
@@ -704,7 +1007,7 @@ class GraphCapturedTrainStep:
             # eager warmup on a non-default stream, see the module docstring
             self._eager_stream.wait_stream(torch.cuda.current_stream())
             with torch.cuda.stream(self._eager_stream):
-                self._ctx = self._step()
+                self._ctx = self._warmup_step_dynamic(extern_data_raw, global_train_step=global_train_step)
             torch.cuda.current_stream().wait_stream(self._eager_stream)
             return self._ctx
         if not self._compile:
@@ -716,18 +1019,65 @@ class GraphCapturedTrainStep:
                     self._step()
             torch.cuda.current_stream().wait_stream(s)
         torch.cuda.synchronize()
-        if self._compile and not self._capture_graph:
-            self._ensure_compiled()
-            return self._run_compiled_eager()
-        graph = torch.cuda.CUDAGraph()
-        if self._compile:
-            # the compiled step warms itself (trace + compile + autotune, pre-capture)
-            self._capture_compiled(graph)
-        else:
-            with torch.cuda.graph(graph):
-                # cold capture: this _step call recomputes every dim/layout cache IN-graph
-                self._ctx = self._step()
+        # release the warmup's cached blocks before the compiled program / capture
+        # allocates its own (bound-sized, differently-shaped) pool -- see _warmup_step_dynamic
+        torch.cuda.empty_cache()
+        try:
+            if self._compile and not self._capture_graph:
+                self._ensure_compiled()
+                return self._run_compiled_eager()
+            graph = torch.cuda.CUDAGraph()
+            if self._compile:
+                # the compiled step warms itself (trace + compile + autotune, pre-capture)
+                self._capture_compiled(graph)
+            else:
+                with torch.cuda.graph(graph):
+                    # cold capture: this _step call recomputes every dim/layout cache IN-graph
+                    self._ctx = self._step()
+        except torch.OutOfMemoryError:
+            self._write_memory_snapshot()
+            raise
         self._graph = graph
         # capture only RECORDS the kernels; replay now to actually compute this batch
         graph.replay()
         return self._ctx
+
+    def _check_finite_dump_inputs(self, outs: tuple) -> None:
+        """see the debug_nan_dump_inputs option; syncs every step, debug only"""
+        bad = None
+        for i, o in enumerate(outs[: self._compiled_n_loss_outs]):
+            if isinstance(o, torch.Tensor) and not torch.isfinite(o).all():
+                bad = i
+                break
+        if bad is None:
+            return
+        fn = f"nan-step-inputs-call{self._compiled_n_calls}.pt"
+        torch.save(
+            {
+                "call_idx": self._compiled_n_calls,
+                "bad_loss_out_idx": bad,
+                "loss_outs": [
+                    o.detach().cpu() if isinstance(o, torch.Tensor) else o for o in outs[: self._compiled_n_loss_outs]
+                ],
+                "extern_data_raw": {
+                    k: (v.detach().cpu() if isinstance(v, torch.Tensor) else v)
+                    for k, v in (self._last_extern_data_raw or {}).items()
+                },
+            },
+            fn,
+        )
+        raise Exception(
+            f"torch_cuda_graph debug_nan_dump_inputs:"
+            f" non-finite loss output {bad} at compiled call {self._compiled_n_calls},"
+            f" batch dumped to {fn}"
+        )
+
+    def _write_memory_snapshot(self) -> None:
+        """dump the recorded CUDA allocator history (see the dump_memory_snapshot option)"""
+        if not self._dump_memory_snapshot:
+            return
+        import logging
+
+        fn = "cuda-memory-snapshot.pickle"
+        torch.cuda.memory._dump_snapshot(fn)
+        logging.getLogger("returnn").warning("torch_cuda_graph: CUDA memory snapshot dumped to %s", fn)
