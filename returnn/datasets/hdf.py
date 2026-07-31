@@ -477,9 +477,10 @@ class StreamParser:
     Stream parser.
     """
 
-    def __init__(self, seq_names, stream):
+    def __init__(self, seq_names, stream, use_lazy_data_integrity_checks=False):
         self.seq_names = seq_names
         self.stream = stream
+        self.use_lazy_data_integrity_checks = use_lazy_data_integrity_checks
 
         self.num_features = None
         self.feature_type = None  # 1 for sparse, 2 for dense
@@ -524,8 +525,10 @@ class FeatureSequenceStreamParser(StreamParser):
             if self.dtype is None:
                 self.dtype = str(seq_data.dtype)
 
-            assert seq_data.shape[1] == self.num_features
-            assert str(seq_data.dtype) == self.dtype
+            if self.use_lazy_data_integrity_checks:
+                break
+
+            self.check_data_integrity(seq_data, s)
 
         self.feature_type = 2
 
@@ -534,7 +537,12 @@ class FeatureSequenceStreamParser(StreamParser):
         :param str seq_name:
         :rtype: numpy.ndarray
         """
-        return self.stream["data"][seq_name][...]
+        data = self.stream["data"][seq_name][...]
+
+        if self.use_lazy_data_integrity_checks:
+            self.check_data_integrity(data, seq_name)
+
+        return data
 
     def get_seq_length(self, seq_name):
         """
@@ -542,6 +550,18 @@ class FeatureSequenceStreamParser(StreamParser):
         :rtype: int
         """
         return self.stream["data"][seq_name].shape[0]
+
+    def check_data_integrity(self, data, seq_name):
+        """
+        :param numpy.ndarray data:
+        :param str seq_name:
+        """
+
+        assert len(data.shape) == 2, f"shape length mismatch in {seq_name}: {data.shape} (should be 2-dimensional)"
+        assert (
+            self.num_features == data.shape[1]
+        ), f"feature dim mismatch in {seq_name}: {data.shape[1]} (should be {self.num_features})"
+        assert self.dtype == str(data.dtype), f"dtype mismatch {seq_name}: {str(data.dtype)} (should be {self.dtype})"
 
 
 class SparseStreamParser(StreamParser):
@@ -558,7 +578,11 @@ class SparseStreamParser(StreamParser):
 
             if self.dtype is None:
                 self.dtype = str(seq_data.dtype)
-            assert str(seq_data.dtype) == self.dtype
+
+            if self.use_lazy_data_integrity_checks:
+                break
+
+            self.check_data_integrity(seq_data, s)
 
         self.num_features = self.stream["feature_names"].shape[0]
         self.feature_type = 1
@@ -568,7 +592,12 @@ class SparseStreamParser(StreamParser):
         :param str seq_name:
         :rtype: numpy.ndarray
         """
-        return self.stream["data"][seq_name][:]
+        data = self.stream["data"][seq_name][:]
+
+        if self.use_lazy_data_integrity_checks:
+            self.check_data_integrity(data, seq_name)
+
+        return data
 
     def get_seq_length(self, seq_name):
         """
@@ -576,6 +605,17 @@ class SparseStreamParser(StreamParser):
         :rtype: int
         """
         return self.stream["data"][seq_name].shape[0]
+
+    def check_data_integrity(self, data, seq_name):
+        """
+        :param numpy.ndarray data:
+        :param str seq_name:
+        """
+
+        assert len(data.shape) == 1, f"shape length mismatch in {seq_name}: {data.shape} (should be 2-dimensional)"
+        assert self.dtype == str(
+            data.dtype
+        ), f"dtype mismatch in {seq_name}: {str(data.dtype)} (should be {self.dtype})"
 
 
 class SegmentAlignmentStreamParser(StreamParser):
@@ -591,10 +631,11 @@ class SegmentAlignmentStreamParser(StreamParser):
 
             if self.dtype is None:
                 self.dtype = str(seq_data.dtype)
-            assert str(seq_data.dtype) == self.dtype
 
-            assert len(seq_data.shape) == 2
-            assert seq_data.shape[1] == 2
+            if self.use_lazy_data_integrity_checks:
+                break
+
+            self.check_data_integrity(seq_data, s)
 
         self.num_features = self.stream["feature_names"].shape[0]
         self.feature_type = 1
@@ -607,6 +648,9 @@ class SegmentAlignmentStreamParser(StreamParser):
         """
         length = self.get_seq_length(seq_name) // 2
         segments = self.stream["data"][seq_name][:]
+
+        if self.use_lazy_data_integrity_checks:
+            self.check_data_integrity(segments, seq_name)
 
         alignment = numpy.zeros((length, 2), dtype=self.dtype)
         num_segments = segments.shape[0]
@@ -627,6 +671,18 @@ class SegmentAlignmentStreamParser(StreamParser):
         """
         return 2 * sum(self.stream["data"][seq_name][:, 1])
 
+    def check_data_integrity(self, data, seq_name):
+        """
+        :param numpy.ndarray data:
+        :param str seq_name:
+        """
+
+        assert len(data.shape) == 2, f"shape length mismatch in {seq_name}: {data.shape} (should be 2-dimensional)"
+        assert data.shape[1] == 2, f"feature dim mismatch in {seq_name}: {data.shape[1]} (should be 2-dimensional)"
+        assert self.dtype == str(
+            data.dtype
+        ), f"dtype mismatch in {seq_name}: {str(data.dtype)} (should be {self.dtype})"
+
 
 class NextGenHDFDataset(CachedDataset2):
     """
@@ -639,7 +695,7 @@ class NextGenHDFDataset(CachedDataset2):
         "segment_alignment": SegmentAlignmentStreamParser,
     }
 
-    def __init__(self, input_stream_name, files=None, **kwargs):
+    def __init__(self, input_stream_name, files=None, use_lazy_data_integrity_checks=False, **kwargs):
         """
         :param str input_stream_name:
         :param None|list[str] files:
@@ -655,6 +711,7 @@ class NextGenHDFDataset(CachedDataset2):
         self.file_indices = []
         self.seq_order = []
         self.all_parsers = collections.defaultdict(list)
+        self.use_lazy_data_integrity_checks = use_lazy_data_integrity_checks
 
         if files:
             for fn in files:
@@ -692,7 +749,9 @@ class NextGenHDFDataset(CachedDataset2):
         )
 
         parsers = {
-            name: NextGenHDFDataset.parsers[stream.attrs["parser"]](norm_seqs, stream)
+            name: NextGenHDFDataset.parsers[stream.attrs["parser"]](
+                norm_seqs, stream, use_lazy_data_integrity_checks=self.use_lazy_data_integrity_checks
+            )
             for name, stream in cur_file["streams"].items()
         }
         for k, v in parsers.items():
@@ -822,7 +881,15 @@ class SiameseHDFDataset(CachedDataset2):
         "segment_alignment": SegmentAlignmentStreamParser,
     }
 
-    def __init__(self, input_stream_name, seq_label_stream="words", class_distribution=None, files=None, **kwargs):
+    def __init__(
+        self,
+        input_stream_name,
+        seq_label_stream="words",
+        class_distribution=None,
+        files=None,
+        use_lazy_data_integrity_checks=False,
+        **kwargs,
+    ):
         """
         :param str input_stream_name: name of a feature stream
         :param str seq_label_stream: name of a stream with labels
@@ -848,6 +915,8 @@ class SiameseHDFDataset(CachedDataset2):
         self.target_to_seqs = {}  # (int) class_index -> (string) sequence_names
         self.curr_epoch_triplets = []
         self.targets_stream = seq_label_stream
+        self.use_lazy_data_integrity_checks = use_lazy_data_integrity_checks
+
         if files:
             for fn in files:
                 self.add_file(fn)
@@ -889,7 +958,9 @@ class SiameseHDFDataset(CachedDataset2):
             )
 
         parsers = {
-            name: SiameseHDFDataset.parsers[stream.attrs["parser"]](norm_seqs, stream)
+            name: SiameseHDFDataset.parsers[stream.attrs["parser"]](
+                norm_seqs, stream, use_lazy_data_integrity_checks=self.use_lazy_data_integrity_checks
+            )
             for name, stream in cur_file["streams"].items()
         }  # name - stream name (words, features, orth_features)
         for k, v in parsers.items():
