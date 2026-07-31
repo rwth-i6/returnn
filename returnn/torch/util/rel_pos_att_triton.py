@@ -615,6 +615,143 @@ if hasattr(torch.library, "custom_op"):  # torch >= 2.4
 
     torch.library.register_autograd("returnn::rel_pos_att_fwd", _lib_backward, setup_context=_lib_setup_context)
 
+    def _fused_bd(qv: torch.Tensor, pos_emb: torch.Tensor, bd_scale: float, dtype: torch.dtype) -> torch.Tensor:
+        # position term (total,H,R) from qv (total,H,D) and pos_emb (R,H,D),
+        # pre-scaled per the kernel contract (the kernel scales only q k^T)
+        return (torch.einsum("thd,rhd->thr", qv, pos_emb) * bd_scale).to(dtype)
+
+    @torch.library.custom_op("returnn::rel_pos_att_fused_bd_fwd", mutates_args=())
+    def _lib_fused_fwd(
+        q: torch.Tensor,
+        k: torch.Tensor,
+        v: torch.Tensor,
+        qv: torch.Tensor,
+        pos_emb: torch.Tensor,
+        seq_starts: torch.Tensor,
+        seq_lens: torch.Tensor,
+        max_seq_len: int,
+        dropout_p: float,
+        seed: torch.Tensor,
+        bd_scale: float,
+        scale: float,
+    ) -> Tuple[torch.Tensor, torch.Tensor]:
+        # bd lives only inside this opaque op (computed here, RECOMPUTED in the bwd op):
+        # it never becomes a graph intermediate,
+        # so AOT/Inductor cannot retain one bound-sized (total,H,R) buffer per layer for the backward.
+        # contiguous: Inductor feeds custom ops in whatever layout it likes
+        # (no stride constraint registered for these op names),
+        # and the fake promises a contiguous output -- normalize here, both ops
+        q, k, v = q.contiguous(), k.contiguous(), v.contiguous()
+        bd = _fused_bd(qv.contiguous(), pos_emb.contiguous(), bd_scale, q.dtype)
+        out, lse = rel_pos_att_fwd(
+            q, k, v, bd, seq_starts, seq_lens, max_seq_len, dropout_p=dropout_p, seed=seed, scale=scale
+        )
+        return out.contiguous(), lse.contiguous()
+
+    # noinspection PyUnusedLocal
+    @_lib_fused_fwd.register_fake
+    def _lib_fused_fwd_fake(q, k, v, qv, pos_emb, seq_starts, seq_lens, max_seq_len, dropout_p, seed, bd_scale, scale):
+        total, n_heads, d = q.shape
+        # plain new_empty (NOT empty_like):
+        # the fake must promise the real op's contiguous output layout,
+        # regardless of the traced input layout
+        return q.new_empty((total, n_heads, d)), q.new_empty((total, n_heads), dtype=torch.float32)
+
+    @torch.library.custom_op("returnn::rel_pos_att_fused_bd_bwd", mutates_args=())
+    def _lib_fused_bwd(
+        q: torch.Tensor,
+        k: torch.Tensor,
+        v: torch.Tensor,
+        qv: torch.Tensor,
+        pos_emb: torch.Tensor,
+        seq_starts: torch.Tensor,
+        seq_lens: torch.Tensor,
+        max_seq_len: int,
+        out: torch.Tensor,
+        lse: torch.Tensor,
+        d_out: torch.Tensor,
+        dropout_p: float,
+        seed: torch.Tensor,
+        bd_scale: float,
+        scale: float,
+    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+        q, k, v = q.contiguous(), k.contiguous(), v.contiguous()
+        qv, pos_emb = qv.contiguous(), pos_emb.contiguous()
+        bd = _fused_bd(qv, pos_emb, bd_scale, q.dtype)
+        dq, dk, dv, dbd = rel_pos_att_bwd(
+            q,
+            k,
+            v,
+            bd,
+            seq_starts,
+            seq_lens,
+            max_seq_len,
+            out,
+            lse,
+            d_out.contiguous(),
+            dropout_p=dropout_p,
+            seed=seed,
+            scale=scale,
+        )
+        # chain rule through the fused position term,
+        # einsums in the io dtype (matches the out-of-op matmul autograd of the non-fused path)
+        dbd = (dbd * bd_scale).to(qv.dtype)
+        d_qv = torch.einsum("thr,rhd->thd", dbd, pos_emb)
+        d_pos = torch.einsum("thr,thd->rhd", dbd, qv)
+        return (
+            dq.to(q.dtype).contiguous(),
+            dk.to(k.dtype).contiguous(),
+            dv.to(v.dtype).contiguous(),
+            d_qv.contiguous(),
+            d_pos.to(pos_emb.dtype).contiguous(),
+        )
+
+    # noinspection PyUnusedLocal
+    @_lib_fused_bwd.register_fake
+    def _lib_fused_bwd_fake(
+        q, k, v, qv, pos_emb, seq_starts, seq_lens, max_seq_len, out, lse, d_out, dropout_p, seed, bd_scale, scale
+    ):
+        # plain new_empty (NOT empty_like), see _lib_fused_fwd_fake
+        return (
+            q.new_empty(tuple(q.shape)),
+            k.new_empty(tuple(k.shape)),
+            v.new_empty(tuple(v.shape)),
+            qv.new_empty(tuple(qv.shape)),
+            pos_emb.new_empty(tuple(pos_emb.shape)),
+        )
+
+    def _lib_fused_setup_context(ctx, inputs, output):
+        q, k, v, qv, pos_emb, seq_starts, seq_lens, max_seq_len, dropout_p, seed, bd_scale, scale = inputs
+        out, lse = output
+        ctx.save_for_backward(q, k, v, qv, pos_emb, seq_starts, seq_lens, out, lse, seed)
+        ctx.max_seq_len, ctx.dropout_p, ctx.bd_scale, ctx.scale = max_seq_len, dropout_p, bd_scale, scale
+
+    def _lib_fused_backward(ctx, d_out, d_lse):
+        d_lse  # noqa  # unused (lse non-differentiable)
+        q, k, v, qv, pos_emb, seq_starts, seq_lens, out, lse, seed = ctx.saved_tensors
+        dq, dk, dv, d_qv, d_pos = torch.ops.returnn.rel_pos_att_fused_bd_bwd(
+            q,
+            k,
+            v,
+            qv,
+            pos_emb,
+            seq_starts,
+            seq_lens,
+            ctx.max_seq_len,
+            out,
+            lse,
+            d_out,
+            ctx.dropout_p,
+            seed,
+            ctx.bd_scale,
+            ctx.scale,
+        )
+        return dq, dk, dv, d_qv, d_pos, None, None, None, None, None, None, None
+
+    torch.library.register_autograd(
+        "returnn::rel_pos_att_fused_bd_fwd", _lib_fused_backward, setup_context=_lib_fused_setup_context
+    )
+
     _HAVE_LIB_OPS = True
 
 
@@ -662,3 +799,63 @@ def rel_pos_att_varlen(
         return out
     out, _ = _RelPosAttVarlen.apply(q, k, v, bd, seq_starts, seq_lens, max_seq_len, dropout_p, seed, scale)
     return out
+
+
+def rel_pos_att_varlen_fused_bd(
+    q: torch.Tensor,
+    k: torch.Tensor,
+    v: torch.Tensor,
+    qv: torch.Tensor,
+    pos_emb: torch.Tensor,
+    seq_starts: torch.Tensor,
+    seq_lens: torch.Tensor,
+    max_seq_len: int,
+    *,
+    dropout_p: float = 0.0,
+    seed: Optional[Union[int, torch.Tensor]] = None,
+    bd_scale: Optional[float] = None,
+    scale: Optional[float] = None,
+) -> torch.Tensor:
+    """
+    Like :func:`rel_pos_att_varlen`,
+    but takes the factors of the position term (``bd[t,h,r] = bd_scale * sum_d qv[t,h,d] pos_emb[r,h,d]``)
+    instead of the materialized ``bd``,
+    and computes ``bd`` inside the op boundary -- in the forward AND again in the backward.
+    Memory: ``bd`` (total, H, R) is the largest per-layer attention activation;
+    keeping it out of the autograd/AOT graph means nothing retains one per layer for the backward
+    (recompute-from-qv, one extra einsum in the backward).
+    Requires torch >= 2.4 (:func:`torch.library.custom_op`); callers check ``have_lib_ops``.
+
+    :param q: (total, H, D), content query (query + pos_bias_u, projected)
+    :param k: (total, H, D)
+    :param v: (total, H, D)
+    :param qv: (total, H, D), position query (query + pos_bias_v, projected)
+    :param pos_emb: (R, H, D), R = 2*max_seq_len-1, centered layout
+    :param seq_starts: (B,), int32, like :func:`rel_pos_att_varlen`
+    :param seq_lens: (B,), int32
+    :param max_seq_len: max seq len (R = 2*max_seq_len-1)
+    :param dropout_p: post-softmax weight dropout probability
+    :param seed: philox seed, like :func:`rel_pos_att_varlen`
+    :param bd_scale: applied to the position term (default 1/sqrt(D))
+    :param scale: applied to the q k^T term (default 1/sqrt(D))
+    :return: attention output, (total, H, D), dtype of q
+    """
+    assert _HAVE_LIB_OPS
+    if scale is None:
+        scale = 1.0 / math.sqrt(q.shape[-1])
+    if bd_scale is None:
+        bd_scale = 1.0 / math.sqrt(q.shape[-1])
+    if seed is None:
+        seed = torch.randint(0, 2**31 - 1, (1,), dtype=torch.int32, device=q.device) if dropout_p > 0 else 0
+    q, k, v = q.contiguous(), k.contiguous(), v.contiguous()
+    qv, pos_emb = qv.contiguous(), pos_emb.contiguous()
+    seed_t = _seed_tensor(seed, q.device)
+    out, _ = torch.ops.returnn.rel_pos_att_fused_bd_fwd(
+        q, k, v, qv, pos_emb, seq_starts, seq_lens, max_seq_len, dropout_p, seed_t, bd_scale, scale
+    )
+    return out
+
+
+def have_lib_ops() -> bool:
+    """:return: whether the torch.library custom ops are registered (torch >= 2.4), see :func:`rel_pos_att_varlen_fused_bd`"""
+    return _HAVE_LIB_OPS

@@ -1139,7 +1139,7 @@ def _harmonize_qkv_dtypes(q_t, k_t, v_t):
     return q_t.to(dtype), k_t.to(dtype), v_t.to(dtype)
 
 
-def _njt_sdpa_raw(q_t, k_t, v_t, cu_q, cu_k, dropout_p: float, is_causal: bool, scale: float):
+def _torch_njt_sdpa_raw(q_t, k_t, v_t, cu_q, cu_k, dropout_p: float, is_causal: bool, scale: float):
     """
     torch SDPA over nested (jagged) tensors built from the packed values + offsets.
 
@@ -1252,8 +1252,8 @@ def _get_njt_sdpa_fn(device_type: str, *, needs_grad: bool):
     :param needs_grad: whether the call needs autograd.
         Compiled NJT backward is broken (torch 2.7: AOT autograd tangent meta assert),
         so we compile only the inference path;
-        the training no-dropout case avoids NJT via :func:`_flex_doc_attention` instead.
-    :return: (fn to use, eager fn) for :func:`_njt_sdpa_raw`.
+        the training no-dropout case avoids NJT via :func:`_torch_flex_doc_attention` instead.
+    :return: (fn to use, eager fn) for :func:`_torch_njt_sdpa_raw`.
         The eager NJT python-subclass dispatch has a large per-call overhead
         (profiled ~5x the whole padded step time for a Transformer AED);
         NJT is designed to run under torch.compile, which removes that entirely,
@@ -1261,15 +1261,15 @@ def _get_njt_sdpa_fn(device_type: str, *, needs_grad: bool):
     """
     global _njt_sdpa_compiled
     if needs_grad or device_type != "cuda" or _njt_sdpa_compile_failed:
-        return _njt_sdpa_raw, _njt_sdpa_raw
+        return _torch_njt_sdpa_raw, _torch_njt_sdpa_raw
     if _njt_sdpa_compiled is None:
         import torch
 
-        _njt_sdpa_compiled = torch.compile(_njt_sdpa_raw, dynamic=True)
-    return _njt_sdpa_compiled, _njt_sdpa_raw
+        _njt_sdpa_compiled = torch.compile(_torch_njt_sdpa_raw, dynamic=True)
+    return _njt_sdpa_compiled, _torch_njt_sdpa_raw
 
 
-def _sdpa_varlen_attention(
+def _torch_sdpa_varlen_attention(
     query: Tensor,
     key: Tensor,
     value: Tensor,
@@ -1375,6 +1375,35 @@ def _sdpa_varlen_attention(
             else:
                 max_q = int(q_raw.orig_dims[-1].get_dim_value())
                 max_k = int(k_raw.orig_dims[-1].get_dim_value())
+                cu_q_flash, cu_k_flash = cu_q[1], cu_k[1]
+                keep_q = None
+                if rf.is_static_traceable():
+                    # bound regime only (no fillers/slack otherwise; all of this is a no-op then)
+                    if not is_causal:
+                        # filler seqs have >= 1 query row (the BOS/EOS frame) but ZERO keys
+                        # in cross-attention: flash gives such rows lse = -inf,
+                        # and its backward computes exp(qk - -inf) -> NaN, sporadically
+                        # (grad/dropout-value dependent) poisoning the layer's grads.
+                        # The fillers are trailing: clamp the cu_q tail to the real q total
+                        # -> their segments become zero-length.
+                        n_real = (cu_k_flash[1:] > cu_k_flash[:-1]).sum()
+                        eff_total = cu_q_flash.gather(0, n_real.long())
+                        cu_q_flash = torch.minimum(cu_q_flash, eff_total)
+
+                    # Rows not covered by any segment (the bound-buffer slack beyond cu[-1],
+                    # and the clamped filler rows above): flash leaves their out/grad rows
+                    # UNWRITTEN in its internally allocated buffers (arbitrary garbage).
+                    # Pre-mask q/k/v: the where backward then zeroes the uncovered grad rows,
+                    # whatever flash leaves there; the out rows are zeroed after the call.
+                    def _row_keep(t, total):
+                        idx = torch.arange(t.shape[0], device=t.device)
+                        return (idx < total.long()).view(-1, *([1] * (t.ndim - 1)))
+
+                    keep_q = _row_keep(q_f, cu_q_flash[-1])
+                    q_f = torch.where(keep_q, q_f, torch.zeros_like(q_f))
+                    keep_k = _row_keep(k_f, cu_k_flash[-1])
+                    k_f = torch.where(keep_k, k_f, torch.zeros_like(k_f))
+                    v_f = torch.where(keep_k, v_f, torch.zeros_like(v_f))
                 # flash requires a contiguous last dim (transposed views are not)
                 q_f = q_f if q_f.stride(-1) == 1 else q_f.contiguous()
                 k_f = k_f if k_f.stride(-1) == 1 else k_f.contiguous()
@@ -1382,7 +1411,7 @@ def _sdpa_varlen_attention(
                 try:
                     # noinspection PyArgumentList
                     out_t = _get_flash_varlen_fn()(
-                        q_f, k_f, v_f, cu_q[1], cu_k[1], max_q, max_k, dropout_p, is_causal, scale_
+                        q_f, k_f, v_f, cu_q_flash, cu_k_flash, max_q, max_k, dropout_p, is_causal, scale_
                     )
                     _count_attention_path("flash")
                 except (RuntimeError, TypeError, NotImplementedError) as exc:
@@ -1542,7 +1571,7 @@ def _flex_doc_block_mask(q_raw: PackedRawTensor, kv_raw: PackedRawTensor, q_ids,
     return block_mask
 
 
-def _flex_doc_attention(
+def _torch_flex_doc_attention(
     query: Tensor,
     key: Tensor,
     value: Tensor,
@@ -1638,7 +1667,7 @@ def _flex_doc_attention(
     out_inner = Tensor(
         "flex_doc_att",
         dims=[q_raw.packed_dim, heads_dim, v_feat_dim],
-        # dtype from the raw result, see _sdpa_varlen_attention
+        # dtype from the raw result, see _torch_sdpa_varlen_attention
         dtype=q_raw.inner_backend.get_dtype_name_raw(out_t),
         feature_dim=v_feat_dim,
     )
@@ -1647,7 +1676,7 @@ def _flex_doc_attention(
     return q_raw.rewrap(out_inner, name="flex_doc_att")
 
 
-def _flex_rel_pos_attention(
+def _torch_flex_rel_pos_attention(
     query: Tensor,
     key: Tensor,
     value: Tensor,
@@ -1785,7 +1814,7 @@ def _flex_rel_pos_attention(
     out_inner = Tensor(
         "rel_pos_att_flex",
         dims=[qu_raw.packed_dim, heads_dim, v_feat_dim],
-        # dtype from the raw result, see _sdpa_varlen_attention
+        # dtype from the raw result, see _torch_sdpa_varlen_attention
         dtype=qu_raw.inner_backend.get_dtype_name_raw(out_t),
         feature_dim=v_feat_dim,
     )
@@ -1794,7 +1823,7 @@ def _flex_rel_pos_attention(
     return qu_raw.rewrap(out_inner, name="rel_pos_att_flex")
 
 
-def _triton_rel_pos_attention(
+def _torch_triton_rel_pos_attention(
     query: Tensor,
     key: Tensor,
     value: Tensor,
@@ -1839,14 +1868,12 @@ def _triton_rel_pos_attention(
         return None
     # any layout as-is (per-seq starts + lens, junk frames never touched):
     # no re-layout, the output shares the input packing.
-    # the position-based term (matrix b+d, pre-shift), computed packed:
     q_with_bias_u = (query + pos_bias_u) if pos_bias_u is not None else query
     q_with_bias_v = (query + pos_bias_v) if pos_bias_v is not None else query
-    matrix_bd = rf.matmul(q_with_bias_v, pos_emb, reduce=qk_feat_dim)
-    if not is_packed(q_with_bias_u) or not is_packed(matrix_bd):
+    if not is_packed(q_with_bias_u) or not is_packed(q_with_bias_v):
         return None
-    qu_raw, bd_raw = q_with_bias_u.raw_tensor, matrix_bd.raw_tensor
-    q_inner, k_inner, v_inner, bd_inner = qu_raw.inner, k_raw.inner, v_raw.inner, bd_raw.inner
+    qu_raw, qv_raw = q_with_bias_u.raw_tensor, q_with_bias_v.raw_tensor
+    q_inner, k_inner, v_inner = qu_raw.inner, k_raw.inner, v_raw.inner
     head_dims = [d for d in q_inner.dims if d not in (qu_raw.packed_dim, qk_feat_dim)]
     if len(head_dims) != 1 or head_dims[0].dimension is None:
         return None
@@ -1855,7 +1882,7 @@ def _triton_rel_pos_attention(
         return None
     if set(v_inner.dims) != {v_raw.packed_dim, heads_dim, v_feat_dim}:
         return None
-    if set(bd_inner.dims) - {heads_dim} != {bd_raw.packed_dim, pos_emb_spatial_dim}:
+    if not {pos_emb_spatial_dim, qk_feat_dim} <= set(pos_emb.dims) <= {pos_emb_spatial_dim, heads_dim, qk_feat_dim}:
         return None
     q_t = q_inner.copy_transpose([qu_raw.packed_dim, heads_dim, qk_feat_dim]).raw_tensor
     k_t = k_inner.copy_transpose([k_raw.packed_dim, heads_dim, qk_feat_dim]).raw_tensor
@@ -1873,13 +1900,36 @@ def _triton_rel_pos_attention(
         amp_dtype = torch.get_autocast_dtype("cuda")
         if amp_dtype in (torch.float16, torch.bfloat16):
             q_t, k_t, v_t = q_t.to(amp_dtype), k_t.to(amp_dtype), v_t.to(amp_dtype)
-    if heads_dim in bd_inner.dims:
-        bd_t = bd_inner.copy_transpose([bd_raw.packed_dim, heads_dim, pos_emb_spatial_dim]).raw_tensor
+    bd_scale = qk_feat_dim.dimension**-0.5
+    if rel_pos_att_triton.have_lib_ops():
+        # fused position term (matrix b+d, pre-shift): (re)computed INSIDE the op boundary (fwd + bwd),
+        # never a graph intermediate --
+        # nothing retains one bound-sized (total, heads, 2T-1) buffer per layer for the backward
+        qv_t = qv_raw.inner.copy_transpose([qv_raw.packed_dim, heads_dim, qk_feat_dim]).raw_tensor.to(q_t.dtype)
+        pos_t = pos_emb.copy_compatible_to_dims_raw((pos_emb_spatial_dim, heads_dim, qk_feat_dim))
+        if pos_t.shape[1] != heads_dim.dimension:
+            pos_t = pos_t.expand(-1, heads_dim.dimension, -1)
+        pos_t = pos_t.to(q_t.dtype)
+        bd_t = None
+        r_size = pos_t.shape[0]
     else:
-        bd_t = bd_inner.copy_transpose([bd_raw.packed_dim, pos_emb_spatial_dim]).raw_tensor
-        bd_t = bd_t.unsqueeze(1).expand(-1, heads_dim.dimension, -1)
-    # pre-scale the bias like the content-based term (the kernel scales only q k^T)
-    bd_t = (bd_t * qk_feat_dim.dimension**-0.5).to(q_t.dtype)
+        # torch < 2.4 (no torch.library.custom_op): the materialized position term, computed packed
+        matrix_bd = rf.matmul(q_with_bias_v, pos_emb, reduce=qk_feat_dim)
+        if not is_packed(matrix_bd):
+            return None
+        bd_raw = matrix_bd.raw_tensor
+        bd_inner = bd_raw.inner
+        if set(bd_inner.dims) - {heads_dim} != {bd_raw.packed_dim, pos_emb_spatial_dim}:
+            return None
+        if heads_dim in bd_inner.dims:
+            bd_t = bd_inner.copy_transpose([bd_raw.packed_dim, heads_dim, pos_emb_spatial_dim]).raw_tensor
+        else:
+            bd_t = bd_inner.copy_transpose([bd_raw.packed_dim, pos_emb_spatial_dim]).raw_tensor
+            bd_t = bd_t.unsqueeze(1).expand(-1, heads_dim.dimension, -1)
+        # pre-scale the bias like the content-based term (the kernel scales only q k^T)
+        bd_t = (bd_t * bd_scale).to(q_t.dtype)
+        qv_t = pos_t = None
+        r_size = bd_t.shape[-1]
     dev_lens = _device_lens(q_raw)
     if dev_lens is not None:
         # Device-lens regime (see _device_lens): recompute starts/lens as pure device ops on every call
@@ -1921,13 +1971,28 @@ def _triton_rel_pos_attention(
             starts_rf, _ = _seq_starts_math(q_raw.orig_dims, q_raw.gap, q_raw.align, layout_lens=q_raw.layout_lens)
             if starts_rf is None:
                 return None
-            starts = rf.copy_to_device(starts_rf, query.device).raw_tensor.int().flatten()
-            lens = rf.copy_to_device(query_spatial_dim.dyn_size_ext, query.device).raw_tensor.int().flatten()
+            starts = starts_rf.raw_tensor.int().flatten()
+            lens = query_spatial_dim.get_dyn_size_ext_for_device(query.device).raw_tensor.int().flatten()
             _layout_cache.set(starts_key, (starts, lens, max_len))
     try:
-        out_t = rel_pos_att_triton.rel_pos_att_varlen(
-            q_t, k_t, v_t, bd_t, starts, lens, max_len, dropout_p=att_dropout, scale=qk_feat_dim.dimension**-0.5
-        )
+        if bd_t is None:
+            out_t = rel_pos_att_triton.rel_pos_att_varlen_fused_bd(
+                q_t,
+                k_t,
+                v_t,
+                qv_t,
+                pos_t,
+                starts,
+                lens,
+                max_len,
+                dropout_p=att_dropout,
+                bd_scale=bd_scale,
+                scale=qk_feat_dim.dimension**-0.5,
+            )
+        else:
+            out_t = rel_pos_att_triton.rel_pos_att_varlen(
+                q_t, k_t, v_t, bd_t, starts, lens, max_len, dropout_p=att_dropout, scale=qk_feat_dim.dimension**-0.5
+            )
     except (RuntimeError, NotImplementedError) as exc:
         _warn_fallback_once(
             "rel_pos_self_attention",
@@ -1982,7 +2047,7 @@ def _rel_pos_attention_per_seq(
         return None
     if len(q_raw.orig_dims) != 2 or q_raw.orig_dims[-1] != query_spatial_dim:
         return None
-    # kv is packed alike but over its own (copied) spatial dim, cf. _flex_rel_pos_attention
+    # kv is packed alike but over its own (copied) spatial dim, cf. _torch_flex_rel_pos_attention
     if kv_spatial_dim != k_raw.orig_dims[-1] or q_raw.orig_dims[:-1] != k_raw.orig_dims[:-1]:
         return None
     if not _same_seq_lens(query_spatial_dim, kv_spatial_dim):
@@ -2592,7 +2657,7 @@ class PackedBackend(Backend[PackedRawTensor]):
         Scaled dot-product attention. Torch specialization:
         torch SDPA over nested (jagged) tensors built directly from the packed layout
         (no external package, flash varlen internally), incl. is_causal;
-        see :func:`_sdpa_varlen_attention`.
+        see :func:`_torch_sdpa_varlen_attention`.
         Generic fallback otherwise (which then uses the packed matmul/softmax handling).
         """
         dropout_p = 0.0
@@ -2615,7 +2680,7 @@ class PackedBackend(Backend[PackedRawTensor]):
             # Fallbacks: without dropout, flex over eager NJT
             # (allow_njt=False -> None when flash is not available);
             # with dropout, eager NJT (correct, flex has no dropout).
-            out = _sdpa_varlen_attention(
+            out = _torch_sdpa_varlen_attention(
                 query,
                 key,
                 value,
@@ -2630,7 +2695,7 @@ class PackedBackend(Backend[PackedRawTensor]):
             if out is not None:
                 return out
             if not dropout_p:
-                out = _flex_doc_attention(
+                out = _torch_flex_doc_attention(
                     query,
                     key,
                     value,
@@ -2684,11 +2749,11 @@ class PackedBackend(Backend[PackedRawTensor]):
     ):
         """
         Self-attention with relative positional encoding.
-        Packed specialization: prefer our Triton varlen kernel (:func:`_triton_rel_pos_attention`)
+        Packed specialization: prefer our Triton varlen kernel (:func:`_torch_triton_rel_pos_attention`)
         over the packed buffer.
         It indexes per-seq valid frames,
         so it also runs on a bounded (static) buffer for CUDA-graph capture.
-        FlexAttention (:func:`_flex_rel_pos_attention`, document block mask + matrix b+d as score_mod)
+        FlexAttention (:func:`_torch_flex_rel_pos_attention`, document block mask + matrix b+d as score_mod)
         is the fallback when the Triton kernel is unavailable/unsupported and dropout is inactive
         (Flex has no dropout support).
         Otherwise the per-seq / once-unpack path runs.
@@ -2707,7 +2772,7 @@ class PackedBackend(Backend[PackedRawTensor]):
         # It expresses no-dropout and per-element (non-broadcast) dropout;
         # broadcast dropout it cannot, so only that case skips it.
         if not (dropout_active and att_dropout_broadcast):
-            out = _triton_rel_pos_attention(
+            out = _torch_triton_rel_pos_attention(
                 query,
                 key,
                 value,
@@ -2725,7 +2790,7 @@ class PackedBackend(Backend[PackedRawTensor]):
                 return out
         # FlexAttention fallback (no dropout support), so only when dropout is inactive.
         if not dropout_active:
-            out = _flex_rel_pos_attention(
+            out = _torch_flex_rel_pos_attention(
                 query,
                 key,
                 value,
