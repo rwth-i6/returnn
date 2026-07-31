@@ -560,9 +560,19 @@ def _same_seq_lens(a: Dim, b: Dim) -> bool:
 
 
 def _seq_footprints(
-    orig_dims: Sequence[Dim], gap: int, align: int, *, layout_lens: Optional[Tensor] = None
+    orig_dims: Sequence[Dim],
+    gap: int,
+    align: int,
+    *,
+    layout_lens: Optional[Tensor] = None,
+    device: Optional[str] = None,
 ) -> Tuple[Optional[Tensor], Optional[Dim]]:
     """
+    :param orig_dims:
+    :param gap:
+    :param align:
+    :param layout_lens:
+    :param device: target device of the result (the lens (small) get moved there)
     :return: (footprints, seqs_dim): frames occupied per sequence in the packed buffer,
         roundup(len + gap, align) with len = layout_lens (if given) or the content lens,
         flat row-major over the outer packed dims.
@@ -573,10 +583,12 @@ def _seq_footprints(
         return None, None
     if layout_lens is not None:
         lens = layout_lens
+        if device is not None and lens.device != device:
+            lens = rf.copy_to_device(lens, device)
     else:
         last = orig_dims[-1]
         assert last.dyn_size_ext is not None, f"packed dim {last} needs dyn sizes"
-        lens = last.dyn_size_ext
+        lens = last.get_dyn_size_ext_for_device(device) if device is not None else last.dyn_size_ext
     for d in others:
         if d not in lens.dims:
             lens = rf.expand_dim(lens, dim=d)
@@ -591,14 +603,24 @@ def _seq_footprints(
 
 
 def _seq_starts_math(
-    orig_dims: Sequence[Dim], gap: int, align: int, *, layout_lens: Optional[Tensor] = None
+    orig_dims: Sequence[Dim],
+    gap: int,
+    align: int,
+    *,
+    layout_lens: Optional[Tensor] = None,
+    device: Optional[str] = None,
 ) -> Tuple[Optional[Tensor], Optional[Dim]]:
     """
+    :param orig_dims:
+    :param gap:
+    :param align:
+    :param layout_lens:
+    :param device: target device of the result, see :func:`_seq_footprints`
     :return: (starts, seqs_dim): see :func:`PackedRawTensor.seq_starts`:
         exclusive cumsum of the seq footprints.
         (None, None) if there are no outer packed dims (a single sequence; starts trivially at 0).
     """
-    footprints, seqs_dim = _seq_footprints(orig_dims, gap, align, layout_lens=layout_lens)
+    footprints, seqs_dim = _seq_footprints(orig_dims, gap, align, layout_lens=layout_lens, device=device)
     if footprints is None:
         return None, None
     cum = rf.cumsum(footprints, spatial_dim=seqs_dim)
@@ -606,27 +628,44 @@ def _seq_starts_math(
 
 
 def _padded_positions(
-    orig_dims: Sequence[Dim], gap: int, align: int, *, layout_lens: Optional[Tensor] = None
+    orig_dims: Sequence[Dim],
+    gap: int,
+    align: int,
+    *,
+    layout_lens: Optional[Tensor] = None,
+    device: Optional[str] = None,
 ) -> Tensor:
     """
+    :param orig_dims:
+    :param gap:
+    :param align:
+    :param layout_lens:
+    :param device: target device of the result (default: the RF default device);
+        only the per-seq starts (small) get moved there, never the full grid
     :return: [orig_dims...] (int): for every frame of the padded grid,
         its position in the packed buffer (only meaningful on the non-padded frames).
     """
-    pos = rf.range_over_dim(orig_dims[-1])
-    starts, seqs_dim = _seq_starts_math(orig_dims, gap, align, layout_lens=layout_lens)
+    pos = rf.range_over_dim(orig_dims[-1], device=device)
+    starts, seqs_dim = _seq_starts_math(orig_dims, gap, align, layout_lens=layout_lens, device=device)
     if starts is not None:
         others = tuple(orig_dims[:-1])
         if len(others) > 1:
             starts = rf.split_dims(starts, axis=seqs_dim, dims=others)
         if starts.device != pos.device:
-            # starts derive from the dyn sizes (often cpu), pos follows the default device
+            # starts derive from the dyn sizes (often cpu), pos is on the target device
             starts = rf.copy_to_device(starts, pos.device)
         pos = rf.combine_bc(starts, "add", pos)  # cross-dim (seqs x frames) broadcast
     return pos
 
 
 def _clamped_padded_positions(
-    orig_dims: Sequence[Dim], gap: int, align: int, *, out_dim: Dim, layout_lens: Optional[Tensor] = None
+    orig_dims: Sequence[Dim],
+    gap: int,
+    align: int,
+    *,
+    out_dim: Dim,
+    layout_lens: Optional[Tensor] = None,
+    device: Optional[str] = None,
 ) -> Tensor:
     """
     :return: :func:`_padded_positions`, clamped into the out_dim buffer.
@@ -635,7 +674,7 @@ def _clamped_padded_positions(
         (e.g. length-descending laplace batches), or for tight packings.
         They are masked out of the scatter, so clamping keeps them in-bounds without effect.
     """
-    pos = _padded_positions(orig_dims, gap, align, layout_lens=layout_lens)
+    pos = _padded_positions(orig_dims, gap, align, layout_lens=layout_lens, device=device)
     total = out_dim.get_dim_value_tensor()
     if isinstance(total, Tensor):
         # dyn sizes live on cpu; move to the coords device so the clamp does not mix devices
@@ -733,12 +772,17 @@ def _frame_coords(template: PackedRawTensor, d: Dim) -> Tensor:
     hit = _layout_cache.get(key)
     if hit is not None:
         return hit
-    grid = rf.range_over_dim(d)
+    grid = rf.range_over_dim(d, device=template.inner.device)
     for o in template.orig_dims:
         if o not in grid.dims:
             grid = rf.expand_dim(grid, dim=o)  # broadcast view, ints only
     pos = _clamped_padded_positions(
-        template.orig_dims, template.gap, template.align, out_dim=template.packed_dim, layout_lens=template.layout_lens
+        template.orig_dims,
+        template.gap,
+        template.align,
+        out_dim=template.packed_dim,
+        layout_lens=template.layout_lens,
+        device=template.inner.device,
     )
     out = rf.scatter(
         grid, indices=pos, indices_dim=list(template.orig_dims), out_dim=template.packed_dim, use_mask=True
@@ -794,9 +838,14 @@ def _frame_mask(template: PackedRawTensor) -> Optional[Tensor]:
     hit = _layout_cache.get(key)
     if hit is not None:
         return hit
-    ones = rf.cast(rf.sequence_mask(list(template.orig_dims)), "int32")
+    ones = rf.cast(rf.sequence_mask(list(template.orig_dims), device=template.inner.device), "int32")
     pos = _clamped_padded_positions(
-        template.orig_dims, template.gap, template.align, out_dim=template.packed_dim, layout_lens=template.layout_lens
+        template.orig_dims,
+        template.gap,
+        template.align,
+        out_dim=template.packed_dim,
+        layout_lens=template.layout_lens,
+        device=template.inner.device,
     )
     counts = rf.scatter(
         ones, indices=pos, indices_dim=list(template.orig_dims), out_dim=template.packed_dim, use_mask=True
@@ -1568,7 +1617,7 @@ def _flex_seq_ids(raw: PackedRawTensor, spatial_dim: Dim, device) -> Optional[Tu
     # max over the cpu-side dyn sizes (no gpu sync)
     max_len = int(lens_rf.raw_tensor.max()) if lens_rf.raw_tensor.numel() > 0 else 0
     lens = rf.copy_to_device(lens_rf, str(device)).raw_tensor.long().flatten()
-    starts_rf, _ = _seq_starts_math(raw.orig_dims, raw.gap, raw.align, layout_lens=raw.layout_lens)
+    starts_rf, _ = _seq_starts_math(raw.orig_dims, raw.gap, raw.align, layout_lens=raw.layout_lens, device=str(device))
     if starts_rf is None:  # single seq
         starts = torch.zeros(1, dtype=torch.int64, device=device)
     else:
@@ -2013,7 +2062,9 @@ def _torch_triton_rel_pos_attention(
             r_size = int(pos_emb_spatial_dim.get_dim_value())
             if r_size != 2 * max_len - 1:
                 return None  # only the standard centered layout
-            starts_rf, _ = _seq_starts_math(q_raw.orig_dims, q_raw.gap, q_raw.align, layout_lens=q_raw.layout_lens)
+            starts_rf, _ = _seq_starts_math(
+                q_raw.orig_dims, q_raw.gap, q_raw.align, layout_lens=q_raw.layout_lens, device=query.device
+            )
             if starts_rf is None:
                 return None
             starts = starts_rf.raw_tensor.int().flatten()
@@ -2243,28 +2294,27 @@ def _extract_strided(raw: PackedRawTensor, out_inner: Tensor, out_packed_dim: Di
     others = tuple(out_orig[:-1])
     gap_out = raw.gap // st
     align_out = max(raw.align // st, 1)
+    dev = out_inner.device
     new_dim = Dim(_packed_total(out_orig, gap_out, align_out), name="packed_strided")
-    new_pos = _clamped_padded_positions(out_orig, gap_out, align_out, out_dim=new_dim)
+    new_pos = _clamped_padded_positions(out_orig, gap_out, align_out, out_dim=new_dim, device=dev)
     # per new-buffer frame: its local time coord, and its (flat) seq index
-    grid_t = rf.range_over_dim(out_time)
+    grid_t = rf.range_over_dim(out_time, device=dev)
     for d in others:
         if d not in grid_t.dims:
             grid_t = rf.expand_dim(grid_t, dim=d)  # broadcast view, ints only
     t_coords = rf.scatter(grid_t, indices=new_pos, indices_dim=list(out_orig), out_dim=new_dim, use_mask=True)
     src = t_coords
-    old_starts, seqs_dim = _seq_starts_math(raw.orig_dims, raw.gap, raw.align, layout_lens=raw.layout_lens)
+    old_starts, seqs_dim = _seq_starts_math(raw.orig_dims, raw.gap, raw.align, layout_lens=raw.layout_lens, device=dev)
     if old_starts is not None:
         seg_grid = None
         for d in others:
-            coords = rf.range_over_dim(d)
+            coords = rf.range_over_dim(d, device=dev)
             for o in out_orig:
                 if o not in coords.dims:
                     coords = rf.expand_dim(coords, dim=o)
             seg_grid = coords if seg_grid is None else seg_grid * d.get_dim_value_tensor() + coords
         seg = rf.scatter(seg_grid, indices=new_pos, indices_dim=list(out_orig), out_dim=new_dim, use_mask=True)
         old_starts = old_starts // st
-        if old_starts.device != seg.device:
-            old_starts = rf.copy_to_device(old_starts, seg.device)
         src = rf.gather(old_starts, indices=seg, axis=seqs_dim, clip_to_valid=True) + t_coords
     new_inner = rf.gather(out_inner, indices=src, axis=out_packed_dim, clip_to_valid=True)
     helper = PackedRawTensor(inner=new_inner, packed_dim=new_dim, orig_dims=out_orig, gap=gap_out, align=align_out)
@@ -3557,7 +3607,7 @@ def pack(
             out_dim = Dim(
                 total_bound if total_bound is not None else _packed_total(dims, gap, align), name="packed_gap"
             )
-        pos = _clamped_padded_positions(dims, gap, align, out_dim=out_dim)
+        pos = _clamped_padded_positions(dims, gap, align, out_dim=out_dim, device=source.device)
         inner = rf.scatter(source, indices=pos, indices_dim=list(dims), out_dim=out_dim, use_mask=True)
         packed_dim = out_dim
     else:
@@ -3607,26 +3657,25 @@ def regap(
         total_bound if total_bound is not None else _packed_total(raw.orig_dims, gap, align, layout_lens=layout_lens),
         name="packed_regap",
     )
-    new_starts, seqs_dim = _seq_starts_math(raw.orig_dims, gap, align, layout_lens=layout_lens)
+    dev = raw.inner.device
+    new_starts, seqs_dim = _seq_starts_math(raw.orig_dims, gap, align, layout_lens=layout_lens, device=dev)
     t_coords = _frame_coords(raw, last)
     seg, _, _ = _segment_index(raw, others)
-    if _device_lens(raw) is not None and new_starts.device == seg.device:
+    if _device_lens(raw) is not None:
         # device-lens regime (see _device_lens): recompute per call, uncached, capture-safe
         total_dev = new_dim.get_dim_value_tensor()  # static int with total_bound / capacity
     else:
         # cache the on-device starts + total (deterministic per target layout)
         # -> no per-step H2D sync (capture-safe)
-        dev_key = _packing_cache_key("regap_dev", raw, seg.device) + (gap, align, layout_lens)
+        dev_key = _packing_cache_key("regap_dev", raw, dev) + (gap, align, layout_lens)
         hit = _layout_cache.get(dev_key)
         if hit is not None:
             new_starts, total_dev = hit
         else:
-            if new_starts.device != seg.device:
-                # starts derive from the dyn sizes (often cpu), the coords live on the data device
-                new_starts = rf.copy_to_device(new_starts, seg.device)
             total_dev = new_dim.get_dim_value_tensor()
-            if isinstance(total_dev, Tensor) and total_dev.device != seg.device:
-                total_dev = rf.copy_to_device(total_dev, seg.device)
+            if isinstance(total_dev, Tensor) and total_dev.device != dev:
+                # scalar; get_dim_value_tensor has no device notion
+                total_dev = rf.copy_to_device(total_dev, dev)
             _layout_cache.set(dev_key, (new_starts, total_dev))
     pos = rf.gather(new_starts, indices=seg, axis=seqs_dim, clip_to_valid=True) + t_coords
     mask = _frame_mask(raw)
@@ -3657,8 +3706,12 @@ def unpack(source: Tensor) -> Tensor:
     raw = source.raw_tensor
     if not isinstance(raw, PackedRawTensor):
         return source
-    if raw.has_gap_frames:
-        pos = _padded_positions(raw.orig_dims, raw.gap, raw.align, layout_lens=raw.layout_lens)
+    if raw.has_gap_frames or rf.is_static_traceable():
+        # also under static traceable for the dense layout:
+        # the pad_packed path below uses masked_scatter,
+        # whose BACKWARD host-syncs (illegal under CUDA-graph capture);
+        # the gather path's backward is a capture-safe scatter-add
+        pos = _padded_positions(raw.orig_dims, raw.gap, raw.align, layout_lens=raw.layout_lens, device=raw.inner.device)
         out = rf.gather(raw.inner, indices=pos, axis=raw.packed_dim, clip_to_valid=True)
         # zero the padded frames, like the dense masked_scatter does
         out = rf.where(rf.sequence_mask(list(raw.orig_dims), device=out.device), out, 0)
