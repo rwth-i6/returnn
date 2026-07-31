@@ -516,9 +516,16 @@ static void tf_cpu_sgemm(
 #endif  // HAVE_CUSTOM_BLAS
 #endif  // CUDA
 
-#define CHECK_WITH_MSG(condition, message) \
+// variadic like TORCH_CHECK: shared code (e.g. _cudaHandleError) passes multiple message parts
+template<typename... Args>
+static void _check_with_msg_fail(const Args&... args) {
+    (std::cerr << ... << args);
+    std::cerr << std::endl;
+}
+#define CHECK_WITH_MSG(condition, ...) \
     if(!(condition)) { \
-        std::cerr << "NativeOp check failed: " << message << std::endl; \
+        std::cerr << "NativeOp check failed: "; \
+        _check_with_msg_fail(__VA_ARGS__); \
         assert(condition); \
     }
 
