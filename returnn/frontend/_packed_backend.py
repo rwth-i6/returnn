@@ -111,13 +111,13 @@ def _packing_cache_key(kind: str, raw: PackedRawTensor, device) -> Tuple[Any, ..
     )
 
 
-def _device_lens(raw: PackedRawTensor):
+def _device_lens(raw: PackedRawTensor) -> Optional[Tensor]:
     """
-    :return: the device-resident content seq-lens raw tensor (flat, one per seq)
+    :return: the device-resident content seq-lens ([seqs] Tensor, one len per seq)
         if this packing is in the capture-safe device-lens regime, else None.
-        The regime: torch inner backend,
+        The regime:
         static packed dim (an upper-bound buffer, see :func:`pack` total_bound),
-        the seq lens live on the same (non-cpu) device as the data,
+        the seq lens live on the same device as the data,
         layout_lens either None or also device-resident,
         and the standard (seqs, frames) two-level packing.
         In this regime, the layout helpers recompute per call as pure device ops
@@ -126,27 +126,60 @@ def _device_lens(raw: PackedRawTensor):
         and CUDA-graph capture records the recompute,
         so one captured graph replays correctly across varying lengths (<= the bound).
     """
-    if raw.inner_backend.name != "torch":
-        return None
     # only a static packed dim is an upper-bound buffer (pack total_bound); dynamic = exact-sized
     if raw.packed_dim.dimension is None:
         return None
     if len(raw.orig_dims) != 2:
         return None
     last = raw.orig_dims[-1]
-    if last.dyn_size_ext is None or last.dyn_size_ext.raw_tensor is None:
+    lens = last.dyn_size_ext
+    if lens is None or lens.raw_tensor is None:
         return None
-    if last.dyn_size_ext.dims != (raw.orig_dims[0],):
+    if lens.dims != (raw.orig_dims[0],):
         return None
-    lens_raw = last.dyn_size_ext.raw_tensor
-    inner_raw = raw.inner.raw_tensor
-    if inner_raw is None or lens_raw.device != inner_raw.device or inner_raw.device.type == "cpu":
+    if raw.inner.raw_tensor is None:
         return None
-    if raw.layout_lens is not None:
-        ll = raw.layout_lens.raw_tensor
-        if ll is None or ll.device != inner_raw.device:
+    if raw.layout_lens is not None and raw.layout_lens.raw_tensor is None:
+        return None
+    dev = raw.inner.device
+    # device None = the backend handles placement itself (base get_device):
+    # the device conditions are assumed satisfied
+    if dev is not None:
+        if lens.device != dev:
             return None
-    return lens_raw
+        if raw.layout_lens is not None and raw.layout_lens.device != dev:
+            return None
+    return lens
+
+
+def _dev_seq_local(template: PackedRawTensor) -> Tuple[Tensor, Tensor]:
+    """
+    Device-lens regime (see :func:`_device_lens`): for every buffer frame,
+    the seq index and the local coordinate within the seq's slot,
+    as pure device ops over the static bound buffer
+    (no padded (seqs, max-frames) grid -- that grid's size would need a host read).
+
+    :param template: the packing
+    :return: (seq, local), both [packed_dim] (int); seq points into the seqs dim (sparse).
+        Junk/gap frames get arbitrary in-range values, only meaningful on sequence frames.
+    """
+    seqs_dim = template.orig_dims[0]
+    rows = rf.range_over_dim(template.packed_dim, device=template.inner.device)
+    starts_rf, _ = _seq_starts_math(
+        template.orig_dims,
+        template.gap,
+        template.align,
+        layout_lens=template.layout_lens,
+        device=template.inner.device,
+    )
+    if starts_rf is None:  # single seq
+        seq = rf.zeros_like(rows)
+        seq.sparse_dim = seqs_dim
+        return seq, rows
+    seq = rf.search_sorted(starts_rf, rows, axis=seqs_dim, side="right") - 1
+    seq.sparse_dim = seqs_dim
+    local = rows - rf.gather(starts_rf, indices=seq, axis=seqs_dim)
+    return seq, local
 
 
 class PackedRawTensor:
@@ -726,8 +759,6 @@ def _frame_coords(template: PackedRawTensor, d: Dim) -> Tensor:
         # Directly over the static bound buffer, no padded (seqs, max-frames) grid.
         # Junk/gap frames get an arbitrary in-bounds coord (clamped into the seq),
         # only meaningful on sequence frames -- like the cached variant (0 there).
-        import torch
-
         key = _packing_cache_key("frame_coords_dev", template, template.inner.device) + (
             template.packed_dim,
             template.orig_dims.index(d),
@@ -735,25 +766,14 @@ def _frame_coords(template: PackedRawTensor, d: Dim) -> Tensor:
         hit = _layout_cache.get(key)
         if hit is not None:
             return hit
-
-        starts_rf, _ = _seq_starts_math(
-            template.orig_dims, template.gap, template.align, layout_lens=template.layout_lens
-        )
-        rows = torch.arange(template.packed_dim.dimension, device=dev_lens.device)
-        lens_flat = dev_lens.flatten().long()
-        if starts_rf is None:
-            seq = torch.zeros_like(rows)
-            local = rows
-        else:
-            starts = starts_rf.raw_tensor.flatten().long()
-            seq = torch.searchsorted(starts, rows, right=True) - 1
-            local = rows - starts[seq]
+        seq, local = _dev_seq_local(template)
         if d == template.orig_dims[-1]:
-            coord = torch.minimum(local.clamp(min=0), (lens_flat[seq] - 1).clamp(min=0))
+            lens_at = rf.gather(dev_lens, indices=seq, axis=template.orig_dims[0])
+            coord = rf.minimum(rf.relu(local), rf.relu(lens_at - 1))
         else:
-            coord = seq.clamp(min=0)
-        out = Tensor("frame_coords", dims=[template.packed_dim], dtype="int32", sparse_dim=d)
-        out.raw_tensor = coord.int()
+            coord = seq
+        out = rf.cast(coord, "int32")
+        out.sparse_dim = d
         _layout_cache.set(key, out)
         return out
     # The result is Tensor over template.packed_dim,
@@ -811,27 +831,14 @@ def _frame_mask(template: PackedRawTensor) -> Optional[Tensor]:
     if dev_lens is not None:
         # device-lens regime (see _device_lens): pure device ops, capture-safe.
         # Cached in the layout cache, see :func:`_frame_coords`.
-        # Directly over the static bound buffer (searchsorted on the in-graph starts),
+        # Directly over the static bound buffer (search_sorted on the in-graph starts),
         # no padded (seqs, max-frames) grid -- that grid's size would need a host read.
-        import torch
-
         key = _packing_cache_key("frame_mask_dev", template, template.inner.device) + (template.packed_dim,)
         hit = _layout_cache.get(key)
         if hit is not None:
             return hit
-
-        starts_rf, _ = _seq_starts_math(
-            template.orig_dims, template.gap, template.align, layout_lens=template.layout_lens
-        )
-        rows = torch.arange(template.packed_dim.dimension, device=dev_lens.device)
-        if starts_rf is None:
-            valid = rows < dev_lens.flatten().long()
-        else:
-            starts = starts_rf.raw_tensor.flatten().long()
-            seq = torch.searchsorted(starts, rows, right=True) - 1
-            valid = (rows - starts[seq]) < dev_lens.flatten().long()[seq]
-        out = Tensor("frame_mask", dims=[template.packed_dim], dtype="bool")
-        out.raw_tensor = valid
+        seq, local = _dev_seq_local(template)
+        out = local < rf.gather(dev_lens, indices=seq, axis=template.orig_dims[0])
         _layout_cache.set(key, out)
         return out
     # full layout in the key, see _frame_coords
@@ -2068,7 +2075,7 @@ def _torch_triton_rel_pos_attention(
             if starts_rf is None:
                 return None
             starts = starts_rf.raw_tensor.int().flatten()
-            lens = dev_lens.int().flatten()
+            lens = dev_lens.raw_tensor.int().flatten()
             _layout_cache.set(key, (starts, lens))
     else:
         # Host-side seq lens: starts/lens/max_len are cached together.
