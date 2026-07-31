@@ -443,6 +443,9 @@ class GraphCapturedTrainStep:
         # 0..1 fraction of the save-everything activation memory (torch._functorch.config);
         # only meaningful with "partitioned"
         self._activation_memory_budget: Optional[float] = opts.get("activation_memory_budget")
+        # with "partitioned" + budget: lift the min-cut recompute allowlist bans
+        # (matmul-and-friends outputs are otherwise never recomputed, the budget saturates)
+        self._aggressive_recomputation = bool(opts.get("aggressive_recomputation", False))
         if self._partitioned:
             assert self._compile, 'torch_cuda_graph: "partitioned" requires "compile"'
         # debug: Inductor generates a nan-assert after every kernel,
@@ -928,20 +931,37 @@ class GraphCapturedTrainStep:
             # noinspection PyProtectedMember
             from torch._functorch.partitioners import min_cut_rematerialization_partition
 
-            # noinspection PyProtectedMember
-            import torch._inductor.config as inductor_config_
-
-            # saved activations cross the fw/bwd graph boundary with their TRACED strides:
-            # Inductor stride padding on the fw outputs breaks the AOT runtime stride asserts
-            # (raw aot_function has no fw/bwd stride negotiation like torch.compile)
-            inductor_config_.comprehensive_padding = False
             if self._activation_memory_budget is not None:
                 functorch_config.activation_memory_budget = float(self._activation_memory_budget)
+            if self._aggressive_recomputation:
+                functorch_config.aggressive_recomputation = True
+            # make_boxed_compiler: aot_function does not recognize compile_fx's output as boxed
+            # and wraps it (losing the CompiledFxGraph object)
+            from functorch.compile import make_boxed_compiler
+
+            def partition_fn(gm, joint_inputs, **kwargs):
+                """
+                Like the torch.compile path: the Inductor joint-graph passes
+                (incl. pad_mm shape padding) run on the JOINT graph before partitioning,
+                so fw and bwd split a graph whose metas already carry the padded layouts
+                and the saved-activation strides agree across the graph boundary.
+                (Splitting the unpadded joint instead, with compile_fx padding only
+                within the fw, hits the compiled bwd's input stride asserts;
+                the torch.compile fw->bwd stride negotiation does not function
+                under raw aot_function -- repro-verified, torch 2.7.)
+                compile_fx re-runs the joint passes per half; idempotent, mms already aligned.
+                """
+                # noinspection PyProtectedMember
+                from torch._inductor.fx_passes.joint_graph import joint_graph_passes
+
+                joint_graph_passes(gm)
+                return min_cut_rematerialization_partition(gm, joint_inputs, **kwargs)
+
             return aot_function(
                 step_core,
-                fw_compiler=backend,
-                bw_compiler=backend,
-                partition_fn=min_cut_rematerialization_partition,
+                fw_compiler=make_boxed_compiler(backend),
+                bw_compiler=make_boxed_compiler(backend),
+                partition_fn=partition_fn,
             )
         # NOTE: partition_fn / activation_memory_budget are IRRELEVANT in this (default) mode:
         # step_core computes the grads itself, so this is ONE inference-style graph,
