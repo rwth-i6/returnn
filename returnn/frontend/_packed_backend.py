@@ -343,8 +343,50 @@ def _count_attention_path(name: str):
     attention_path_counts[name] = attention_path_counts.get(name, 0) + 1
 
 
-def _warn_fallback_once(op_name: str, reason: str, *, action: str = "using slow unpack -> op -> repack fallback"):
-    """print a warning on the first fallback / slow path per op, so these are visible"""
+def set_allowed_fallbacks(ops: Optional[Union[bool, Sequence[str]]]) -> None:
+    """
+    :param ops: which packed HARD fallbacks (unpack/dense re-layouts, see :func:`_warn_fallback_once`)
+        are allowed: True = all (warning only, the previous default), a collection of op names,
+        False = none (any hard fallback raises), None = read ``packed_fallback_allowed`` from the config.
+        Default (None + no config entry): none allowed -- a hard fallback raises,
+        so it can never be used accidentally.
+    """
+    global _allowed_fallback_ops
+    _allowed_fallback_ops = ops if isinstance(ops, bool) or ops is None else set(ops)
+
+
+_allowed_fallback_ops = None  # None = read the config lazily, see set_allowed_fallbacks
+
+
+def _fallback_allowed(op_name: str) -> bool:
+    allowed = _allowed_fallback_ops
+    if allowed is None:
+        from returnn.config import get_global_config
+
+        config = get_global_config(raise_exception=False)
+        opt = config.typed_value("packed_fallback_allowed", None) if config else None
+        allowed = opt if isinstance(opt, bool) else set(opt) if opt else False
+    if isinstance(allowed, bool):
+        return allowed
+    return op_name in allowed
+
+
+def _warn_fallback_once(
+    op_name: str, reason: str, *, action: str = "using slow unpack -> op -> repack fallback", hard: bool = True
+) -> None:
+    """
+    Print a warning on the first fallback / slow path per op, so these are visible.
+    Hard fallbacks (unpack / dense re-layout, the expensive ones) additionally require
+    explicit allowance (see :func:`set_allowed_fallbacks`), else they raise:
+    a fallback silently eating the packed-backend gains must be a deliberate choice.
+    """
+    if hard and not _fallback_allowed(op_name):
+        raise Exception(
+            f"PackedBackend: op {op_name!r}: {reason}; the fallback ({action}) is NOT allowed by default."
+            f" Fix the op usage to stay packed, or allow it explicitly:"
+            f" config `packed_fallback_allowed = [{op_name!r}]`"
+            f" (or returnn.frontend._packed_backend.set_allowed_fallbacks)."
+        )
     if op_name in _warned_fallback_ops:
         return
     _warned_fallback_ops.add(op_name)
@@ -1115,6 +1157,7 @@ def _sdpa_no(reason: str):
         "scaled_dot_product_attention",
         reason,
         action="using the generic implementation (with the packed matmul/softmax handling)",
+        hard=False,
     )
     return None
 
@@ -1421,6 +1464,7 @@ def _torch_sdpa_varlen_attention(
                         "scaled_dot_product_attention",
                         f"direct flash varlen failed ({type(exc).__name__}: {exc})",
                         action="using the NJT SDPA path",
+                        hard=False,
                     )
         if out_t is None:
             if not allow_njt:
@@ -1472,6 +1516,7 @@ def _flex_no(reason: str):
         "rel_pos_self_attention",
         f"FlexAttention fast path not applicable ({reason})",
         action="using the generic implementation (with the packed op handling)",
+        hard=False,
     )
     return None
 
@@ -2416,6 +2461,7 @@ class PackedBackend(Backend[PackedRawTensor]):
                 "stft:strided-out",
                 "strided stft output layout not expressible in the (lens, gap, align) form",
                 action="re-layouting into the closed form, one extra gather (stft stays packed)",
+                hard=False,
             )
             return _extract_strided(raw, out_inner, out_sp, out_spatial_dim, st)
         return _dim_aware_call(
@@ -2560,6 +2606,7 @@ class PackedBackend(Backend[PackedRawTensor]):
                     f"gap {raw.gap} < required {required_gap} for the packed conv"
                     f" -- specify pack(..., gap=...) to avoid the extra re-layout",
                     action="re-packing with the required gap (conv stays packed)",
+                    hard=False,
                 )
                 source = regap(source, target_gap)
                 raw = source.raw_tensor
@@ -2613,6 +2660,7 @@ class PackedBackend(Backend[PackedRawTensor]):
                 "conv:strided-out",
                 "strided conv output layout not expressible in the (lens, gap, align) form",
                 action="re-layouting into the closed form, one extra gather (conv stays packed)",
+                hard=False,
             )
             return (
                 _extract_strided(raw, out_inner, out_sp[0], out_time, st),
@@ -2899,6 +2947,7 @@ class PackedBackend(Backend[PackedRawTensor]):
                     f"gap {raw.gap} < required {required_gap} for the packed pool"
                     f" -- specify pack(..., gap=...) to avoid the extra re-layout",
                     action="re-packing with the required gap (pool stays packed)",
+                    hard=False,
                 )
                 source = regap(source, target_gap)
                 raw = source.raw_tensor
@@ -2948,6 +2997,7 @@ class PackedBackend(Backend[PackedRawTensor]):
                 "pool:strided-out",
                 "strided pool output layout not expressible in the (lens, gap, align) form",
                 action="re-layouting into the closed form, one extra gather (pool stays packed)",
+                hard=False,
             )
             return (
                 _extract_strided(raw, out_inner, out_sp[0], out_time, st),
@@ -3005,6 +3055,7 @@ class PackedBackend(Backend[PackedRawTensor]):
                         f"gap {raw.gap} < pad {pad_r} for the packed in-place pad"
                         f" -- specify pack(..., gap=...) to avoid the extra re-layout",
                         action="re-packing with the required gap (pad stays packed)",
+                        hard=False,
                     )
                     source = regap(source, target_gap)
                     raw = source.raw_tensor
