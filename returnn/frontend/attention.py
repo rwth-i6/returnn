@@ -28,111 +28,6 @@ __all__ = [
 ]
 
 
-def _rel_pos_self_attention(
-    query: Tensor,
-    key: Tensor,
-    value: Tensor,
-    pos_emb: Tensor,
-    *,
-    pos_bias_u: Optional[Tensor],
-    pos_bias_v: Optional[Tensor],
-    att_dropout: float = 0.0,
-    att_dropout_broadcast: Optional[bool] = None,
-    v_feat_dim: Dim,
-    qk_feat_dim: Dim,
-    kv_spatial_dim: Dim,
-    query_spatial_dim: Dim,
-    pos_emb_spatial_dim: Dim,
-):
-    """
-    Self-attention with relative positional encoding (Transformer-XL style),
-    as used by :class:`RelPosSelfAttention`.
-
-    :param query: {..., query_spatial_dim, qk_feat_dim}. not yet scaled.
-    :param key: {..., kv_spatial_dim, qk_feat_dim}
-    :param value: {..., kv_spatial_dim, v_feat_dim}
-    :param pos_emb: {..., pos_emb_spatial_dim, qk_feat_dim}, relative positional encoding
-    :param pos_bias_u: {..., qk_feat_dim}, added to query for the content-based term (matrix a+c)
-    :param pos_bias_v: {..., qk_feat_dim}, added to query for the position-based term (matrix b+d)
-    :param att_dropout: dropout for attention weights
-    :param att_dropout_broadcast: whether to broadcast over all but ``kv_spatial_dim``.
-        normally not wanted. disabled by default since behavior version 19.
-    :param v_feat_dim: Embedding dimension of value
-    :param qk_feat_dim: Embedding dimension of key and query
-    :param kv_spatial_dim: Spatial axis of key/value to attend over
-    :param query_spatial_dim: Spatial axis of query
-    :param pos_emb_spatial_dim: Relative-position axis of pos_emb (usually 2*time1-1)
-    :return: attention output
-    """
-    from . import _utils
-
-    if att_dropout_broadcast is None:
-        att_dropout_broadcast = _att_dropout_broadcast_default()
-    # Dispatch over all args (not just query), see :func:`dot_attention`.
-    backend = _utils.get_backend_from_tensors(query, key, value, pos_emb)
-    return backend.rel_pos_self_attention(
-        query,
-        key,
-        value,
-        pos_emb,
-        pos_bias_u=pos_bias_u,
-        pos_bias_v=pos_bias_v,
-        att_dropout=att_dropout,
-        att_dropout_broadcast=att_dropout_broadcast,
-        v_feat_dim=v_feat_dim,
-        qk_feat_dim=qk_feat_dim,
-        kv_spatial_dim=kv_spatial_dim,
-        query_spatial_dim=query_spatial_dim,
-        pos_emb_spatial_dim=pos_emb_spatial_dim,
-    )
-
-
-def _infer_att_dims(
-    query: Tensor, keys: Tensor, values: Tensor, *, qk_feat_dim: Dim, kv_spatial_dim: Dim
-) -> Tuple[Tensor, Dim, Dim, Tuple[bool, Optional[List[Dim]]]]:
-    if kv_spatial_dim not in keys.dims_set:
-        raise ValueError(f"kv_spat_dim {kv_spatial_dim} not in keys.dims {keys.dims}")
-
-    # infer query spatial dim, necessary for pytorch backend.
-    # Only remove keys dims actually present in the query:
-    # e.g. packed keys have their packed dim, which the (padded) query does not have
-    # (the batch dim is still removed: it is in the packed keys' implicit dims).
-    query_non_batch_dims = query.remaining_dims(keys.dims_set.intersection(query.dims_set) - {kv_spatial_dim})
-    merged_query_dims = None
-    if len(query_non_batch_dims) == 0:
-        query_spatial = Dim(1, name="dot_att_query_spatial_dummy")
-        query = rf.expand_dim(query, dim=query_spatial)
-    elif len(query_non_batch_dims) == 1:
-        query_spatial = query_non_batch_dims[0]
-    else:
-        # Multiple extra query dims (e.g. rescoring: [batch, beam, targets_spatial, ...]).
-        query, query_spatial = rf.merge_dims(query, dims=query_non_batch_dims)
-        merged_query_dims = query_non_batch_dims
-    return (
-        query,
-        _infer_v_feat_dim(values, keys, qk_feat_dim),
-        query_spatial,
-        (
-            len(query_non_batch_dims) == 0,
-            merged_query_dims,
-        ),
-    )
-
-
-def _infer_v_feat_dim(values: Tensor, keys: Tensor, qk_feat_dim: Dim) -> Dim:
-    v_feat_dim = values.feature_dim
-    if v_feat_dim is None:
-        if qk_feat_dim in values.dims_set:
-            v_feat_dim = qk_feat_dim
-        else:
-            possible_feat_dims = values.dims_set - keys.dims_set
-            if len(possible_feat_dims) == 1:
-                v_feat_dim = list(possible_feat_dims)[0]
-            else:
-                raise ValueError(f"Cannot infer v_feat_dim from values.dims={values.dims}, keys.dims={keys.dims}")
-    return v_feat_dim
-
-
 def dot_attention(
     query: Tensor,
     keys: Tensor,
@@ -226,6 +121,52 @@ def dot_attention(
     if merged_query_dims is not None:
         att = rf.split_dims(att, axis=query_spatial, dims=merged_query_dims)
     return att
+
+
+def _infer_att_dims(
+    query: Tensor, keys: Tensor, values: Tensor, *, qk_feat_dim: Dim, kv_spatial_dim: Dim
+) -> Tuple[Tensor, Dim, Dim, Tuple[bool, Optional[List[Dim]]]]:
+    if kv_spatial_dim not in keys.dims_set:
+        raise ValueError(f"kv_spat_dim {kv_spatial_dim} not in keys.dims {keys.dims}")
+
+    # infer query spatial dim, necessary for pytorch backend.
+    # Only remove keys dims actually present in the query:
+    # e.g. packed keys have their packed dim, which the (padded) query does not have
+    # (the batch dim is still removed: it is in the packed keys' implicit dims).
+    query_non_batch_dims = query.remaining_dims(keys.dims_set.intersection(query.dims_set) - {kv_spatial_dim})
+    merged_query_dims = None
+    if len(query_non_batch_dims) == 0:
+        query_spatial = Dim(1, name="dot_att_query_spatial_dummy")
+        query = rf.expand_dim(query, dim=query_spatial)
+    elif len(query_non_batch_dims) == 1:
+        query_spatial = query_non_batch_dims[0]
+    else:
+        # Multiple extra query dims (e.g. rescoring: [batch, beam, targets_spatial, ...]).
+        query, query_spatial = rf.merge_dims(query, dims=query_non_batch_dims)
+        merged_query_dims = query_non_batch_dims
+    return (
+        query,
+        _infer_v_feat_dim(values, keys, qk_feat_dim),
+        query_spatial,
+        (
+            len(query_non_batch_dims) == 0,
+            merged_query_dims,
+        ),
+    )
+
+
+def _infer_v_feat_dim(values: Tensor, keys: Tensor, qk_feat_dim: Dim) -> Dim:
+    v_feat_dim = values.feature_dim
+    if v_feat_dim is None:
+        if qk_feat_dim in values.dims_set:
+            v_feat_dim = qk_feat_dim
+        else:
+            possible_feat_dims = values.dims_set - keys.dims_set
+            if len(possible_feat_dims) == 1:
+                v_feat_dim = list(possible_feat_dims)[0]
+            else:
+                raise ValueError(f"Cannot infer v_feat_dim from values.dims={values.dims}, keys.dims={keys.dims}")
+    return v_feat_dim
 
 
 # noinspection PyAbstractClass
@@ -744,6 +685,65 @@ class RelPosSelfAttention(SelfAttentionBase):
     @staticmethod
     def _rel_shift(x: Tensor, axis: Dim, pos_emb_spatial_dim: Dim, hist_dim: Dim) -> Tensor:
         return _rel_pos_enc_shift(x, axis, pos_emb_spatial_dim, hist_dim)
+
+
+def _rel_pos_self_attention(
+    query: Tensor,
+    key: Tensor,
+    value: Tensor,
+    pos_emb: Tensor,
+    *,
+    pos_bias_u: Optional[Tensor],
+    pos_bias_v: Optional[Tensor],
+    att_dropout: float = 0.0,
+    att_dropout_broadcast: Optional[bool] = None,
+    v_feat_dim: Dim,
+    qk_feat_dim: Dim,
+    kv_spatial_dim: Dim,
+    query_spatial_dim: Dim,
+    pos_emb_spatial_dim: Dim,
+):
+    """
+    Self-attention with relative positional encoding (Transformer-XL style),
+    as used by :class:`RelPosSelfAttention`.
+
+    :param query: {..., query_spatial_dim, qk_feat_dim}. not yet scaled.
+    :param key: {..., kv_spatial_dim, qk_feat_dim}
+    :param value: {..., kv_spatial_dim, v_feat_dim}
+    :param pos_emb: {..., pos_emb_spatial_dim, qk_feat_dim}, relative positional encoding
+    :param pos_bias_u: {..., qk_feat_dim}, added to query for the content-based term (matrix a+c)
+    :param pos_bias_v: {..., qk_feat_dim}, added to query for the position-based term (matrix b+d)
+    :param att_dropout: dropout for attention weights
+    :param att_dropout_broadcast: whether to broadcast over all but ``kv_spatial_dim``.
+        normally not wanted. disabled by default since behavior version 19.
+    :param v_feat_dim: Embedding dimension of value
+    :param qk_feat_dim: Embedding dimension of key and query
+    :param kv_spatial_dim: Spatial axis of key/value to attend over
+    :param query_spatial_dim: Spatial axis of query
+    :param pos_emb_spatial_dim: Relative-position axis of pos_emb (usually 2*time1-1)
+    :return: attention output
+    """
+    from . import _utils
+
+    if att_dropout_broadcast is None:
+        att_dropout_broadcast = _att_dropout_broadcast_default()
+    # Dispatch over all args (not just query), see :func:`dot_attention`.
+    backend = _utils.get_backend_from_tensors(query, key, value, pos_emb)
+    return backend.rel_pos_self_attention(
+        query,
+        key,
+        value,
+        pos_emb,
+        pos_bias_u=pos_bias_u,
+        pos_bias_v=pos_bias_v,
+        att_dropout=att_dropout,
+        att_dropout_broadcast=att_dropout_broadcast,
+        v_feat_dim=v_feat_dim,
+        qk_feat_dim=qk_feat_dim,
+        kv_spatial_dim=kv_spatial_dim,
+        query_spatial_dim=query_spatial_dim,
+        pos_emb_spatial_dim=pos_emb_spatial_dim,
+    )
 
 
 def _rel_pos_enc_shift(x: Tensor, axis: Dim, pos_emb_spatial_dim: Dim, hist_dim: Dim) -> Tensor:
