@@ -302,6 +302,9 @@ class GraphCapturedTrainStep:
         assert self._batch_dim.dimension == self.batch_size_bound
         self._data_bufs: Dict[str, torch.Tensor] = {}
         self._pinned_bufs: Dict[str, torch.Tensor] = {}  # host staging, see _copy_in
+        # guards the pinned staging: the next host write must wait for the previous async H2D
+        self._copy_in_event: Optional[torch.cuda.Event] = None
+        self._prev_copy_shapes: Dict[str, Tuple[int, ...]] = {}
         self._lens_bufs: Dict[str, torch.Tensor] = {}
         self._host_raws: Dict[str, Any] = {}  # non-capturable (string) keys, passed through host-side
         self._packed_opts: Dict[str, Dict[str, int]] = {}  # for packed-collate keys
@@ -386,6 +389,13 @@ class GraphCapturedTrainStep:
         return buf
 
     def _copy_in(self, extern_data_raw: Dict[str, Union[torch.Tensor, numpy.ndarray]]):
+        if self._copy_in_event is not None:
+            # the pinned staging buffers are reused every step:
+            # the host memcpy below must not overwrite them
+            # while the previous step's async H2D from them is still in flight
+            # (normally hidden by the per-step loss host-read, but NOT guaranteed --
+            # a partially overwritten staging buffer corrupts the previous step's inputs)
+            self._copy_in_event.synchronize()
         for k, data in self._extern_data_template.data.items():
             raw = extern_data_raw[k]
             if data.dtype == "string" or (isinstance(raw, numpy.ndarray) and raw.dtype.kind in "USO"):
@@ -412,6 +422,15 @@ class GraphCapturedTrainStep:
                 assert all(a <= b for a, b in zip(raw.shape, buf.shape)), (
                     f"torch_cuda_graph: {k} shape {tuple(raw.shape)} exceeds bounds {tuple(buf.shape)}"
                 )
+            prev_shape = self._prev_copy_shapes.get(k)
+            if prev_shape is not None and any(n < p for n, p in zip(raw.shape, prev_shape)):
+                # the batch extents shrank (common: sorted_reverse batching):
+                # the region beyond the current extents still holds the PREVIOUS batch's data.
+                # All consumers should mask it -- but stale plausible values there
+                # are exactly the hardest corruption to notice if any masking is imperfect;
+                # a memset is negligible vs the step. Zero it (simplest: the whole buffer).
+                buf.zero_()
+            self._prev_copy_shapes[k] = tuple(raw.shape)
             if raw.is_pinned():
                 # already pinned (e.g. a pinned batch cache): direct true-async H2D, no staging memcpy
                 buf[tuple(slice(0, s) for s in raw.shape)].copy_(raw, non_blocking=True)
@@ -440,9 +459,25 @@ class GraphCapturedTrainStep:
                 assert n <= self.batch_size_bound, (
                     f"torch_cuda_graph: batch size {n} exceeds batch_size_bound {self.batch_size_bound}"
                 )
+                # NEVER truncate silently:
+                # a seq longer than the declared capacity
+                # would have its tail ignored by all capacity-sized masks/positions
+                # -- degraded training with no structural error anywhere
+                # (everything is self-consistently capacity-sized).
+                # This is the one place that sees the true host lens for every key every step,
+                # so the bound is enforced HERE, loudly.
+                max_len = int(size.max()) if n > 0 else 0
+                cap = self.dim_capacity.get(k)
+                assert cap is None or max_len <= cap, (
+                    f"torch_cuda_graph: seq len {max_len} of {k!r} exceeds dim_capacity {cap};"
+                    f" raise dim_capacity (data beyond the capacity would be silently ignored)"
+                )
                 lens_pin[:n].copy_(size.to(dtype=torch.int32))
                 lens_pin[n:].zero_()  # zero-length padding seqs
                 lens_buf.copy_(lens_pin, non_blocking=True)
+        if self._copy_in_event is None:
+            self._copy_in_event = torch.cuda.Event()
+        self._copy_in_event.record()
 
     def _build_extern_data(self) -> TensorDict:
         """
