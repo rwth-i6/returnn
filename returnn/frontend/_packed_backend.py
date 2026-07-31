@@ -3012,6 +3012,13 @@ class PackedBackend(Backend[PackedRawTensor]):
         # Single unpack around the whole attention (instead of per-op unpack round trips inside):
         # the padded intermediates exist only within the attention block,
         # where the O(B * T^2) score matrix is materialized anyway.
+        # Gated like every hard fallback (see scaled_dot_product_attention):
+        # silently unpacking the whole attention would eat the packed gains.
+        if is_packed(query) or is_packed(key) or is_packed(value):
+            _warn_fallback_once(
+                "rel_pos_self_attention",
+                "no packed fast path here (Triton varlen: cuda; flex: torch/device limits; per-seq: cpu)",
+            )
         template = query.raw_tensor if is_packed(query) else None
         out = Backend.rel_pos_self_attention(
             unpack(query),
