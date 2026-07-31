@@ -15,6 +15,8 @@ Config, e.g.::
                                         # the batch dim is made STATIC (= this bound): always filled up to it
         "dim_capacity": {"data": 3000, "classes": 300},  # bound of the dynamic (time) dim per data key
         "packed_total_bound": {"data": 500_000},  # optional: tighter bound of the packed (gapped) total per key
+        "partitioned": True,  # optional: fw/bwd-partitioned compile (min-cut remat) instead of one whole-step graph
+        "activation_memory_budget": 0.9,  # optional, with "partitioned": save-vs-recompute knob (1.0 = save all)
         "warmup_steps": 2,              # eager steps before capture
         "capture_optimizer": True,      # grad clip + optimizer step in-graph (needs capturable optimizer)
         "compile": True,                # Inductor-codegen the whole step first, then capture that
@@ -432,6 +434,16 @@ class GraphCapturedTrainStep:
         self._params = params
         self._compile = bool(opts.get("compile", False))
         self._capture_graph = bool(opts.get("capture", True))
+        # partitioned mode: compile the loss via the joint AOT path instead of the single
+        # inference-style whole-step graph: fw/bwd split by min-cut rematerialization,
+        # grads via .backward() through the compiled autograd.Function (still captured in-graph).
+        # This enables activation_memory_budget as a global save-vs-recompute knob.
+        self._partitioned = bool(opts.get("partitioned", False))
+        # 0..1 fraction of the save-everything activation memory (torch._functorch.config);
+        # only meaningful with "partitioned"
+        self._activation_memory_budget: Optional[float] = opts.get("activation_memory_budget")
+        if self._partitioned:
+            assert self._compile, 'torch_cuda_graph: "partitioned" requires "compile"'
         # debug: Inductor generates a nan-assert after every kernel,
         # pinpointing the first kernel producing nan/inf inside the compiled program
         self._inductor_nan_asserts = bool(opts.get("inductor_nan_asserts", False))
@@ -838,11 +850,16 @@ class GraphCapturedTrainStep:
                         if inv_is_tensor:
                             outs.append(inv.raw_tensor)
                         loss_meta.append((name, loss, inv_is_tensor, None if inv_is_tensor else inv))
+                    self._compiled_loss_meta = loss_meta
+                    self._compiled_n_loss_outs = len(outs)
+                    if self._partitioned:
+                        # joint AOT path: the total is the differentiable output
+                        # (the partitioner traces and splits its backward);
+                        # the per-loss outputs are detached metadata
+                        return (total.raw_tensor,) + tuple(t.detach() for t in outs)
                     train_raws = [t for t, tr in zip(raws, trainable) if tr]
                     grads = torch.autograd.grad(total.raw_tensor, train_raws, allow_unused=True)
                     grads = [g if g is not None else torch.zeros_like(t) for g, t in zip(grads, train_raws)]
-                    self._compiled_loss_meta = loss_meta
-                    self._compiled_n_loss_outs = len(outs)
                 return tuple(t.detach() for t in outs + grads)
             finally:
                 for p_, r0 in zip(rf_params, orig_raws):
@@ -889,6 +906,7 @@ class GraphCapturedTrainStep:
 
             backend = nop
         if self._dump_fx_dir:
+            assert not self._partitioned, "torch_cuda_graph: dump_fx_dir with partitioned not supported"
             dump_dir = self._dump_fx_dir
             inner_backend = backend
 
@@ -900,9 +918,27 @@ class GraphCapturedTrainStep:
                 return inner_backend(gm, example_inputs)
 
             return aot_function(step_core, fw_compiler=fw_compiler)
-        # NOTE: partition_fn / activation_memory_budget are IRRELEVANT here:
+        if self._partitioned:
+            # loss-only joint graph: min-cut partitions fw/bwd,
+            # activation_memory_budget decides save-vs-recompute globally
+            # noinspection PyProtectedMember
+            import torch._functorch.config as functorch_config
+
+            # noinspection PyProtectedMember
+            from torch._functorch.partitioners import min_cut_rematerialization_partition
+
+            if self._activation_memory_budget is not None:
+                functorch_config.activation_memory_budget = float(self._activation_memory_budget)
+            return aot_function(
+                step_core,
+                fw_compiler=backend,
+                bw_compiler=backend,
+                partition_fn=min_cut_rematerialization_partition,
+            )
+        # NOTE: partition_fn / activation_memory_budget are IRRELEVANT in this (default) mode:
         # step_core computes the grads itself, so this is ONE inference-style graph,
         # never fw/bwd-partitioned; buffer lifetimes are Inductor memory planning.
+        # (For the partitioned alternative see opts "partitioned".)
         return aot_function(step_core, fw_compiler=backend)
 
     def _ensure_compiled(self) -> Callable[[List[torch.Tensor]], tuple]:
@@ -911,7 +947,12 @@ class GraphCapturedTrainStep:
             self._compiled_fn = self._make_compiled_step()
             raws = [p.raw_tensor for p in self._rf_params]
             with _allow_non_fake_inputs():
-                self._compiled_fn(raws)
+                outs = self._compiled_fn(raws)
+                if self._partitioned:
+                    # the bwd graph compiles on the first backward
+                    for p in self._params:
+                        p.grad.zero_()
+                    outs[0].backward()
         return self._compiled_fn
 
     def _bind_grads(self, raws: List[torch.Tensor], outs: tuple):
@@ -932,12 +973,24 @@ class GraphCapturedTrainStep:
         compiled = self._ensure_compiled()
         raws = [p.raw_tensor for p in self._rf_params]
         self._log_misaligned_inputs(raws)
-        compiled(raws)  # plain warm run
+        # plain warm run (in partitioned mode incl. backward: autotune + workspaces)
+        outs = compiled(raws)
+        if self._partitioned:
+            for p in self._params:
+                p.grad.zero_()
+            outs[0].backward()
         torch.cuda.synchronize()
         with torch.cuda.graph(graph):
+            if self._partitioned:
+                # in-graph: backward ACCUMULATES into the static grads -> zero first
+                for p in self._params:
+                    p.grad.zero_()
             outs = compiled(raws)
-            # host-side during capture: the grads are stable graph outputs
-            self._bind_grads(raws, outs)
+            if self._partitioned:
+                outs[0].backward()
+            else:
+                # host-side during capture: the grads are stable graph outputs
+                self._bind_grads(raws, outs)
             if self._post_step is not None:
                 self._post_step()  # in-graph: grad clip + optimizer step
         self._ctx = self._build_result_ctx(outs)
@@ -948,7 +1001,8 @@ class GraphCapturedTrainStep:
         (under capture these are stable graph outputs, refreshed in place by each replay).
         """
         ctx = RunCtx(stage="train_step", train_flag=True, step=self._step_t)
-        i = 0
+        # partitioned mode: outs[0] is the differentiable total, the loss outputs follow
+        i = 1 if self._partitioned else 0
         for name, loss_traced, inv_is_tensor, inv_static in self._compiled_loss_meta:
             summed = Tensor(name, dims=(), dtype=str(outs[i].dtype).split(".")[-1])
             summed.raw_tensor = outs[i]
@@ -969,7 +1023,7 @@ class GraphCapturedTrainStep:
                 use_flatten_frames=loss_traced.use_flatten_frames,
                 custom_inv_norm_factor=inv,
             )
-        assert i == self._compiled_n_loss_outs
+        assert i == self._compiled_n_loss_outs + (1 if self._partitioned else 0)
         return ctx
 
     def _log_misaligned_inputs(self, raws: List[torch.Tensor]) -> None:
@@ -994,10 +1048,16 @@ class GraphCapturedTrainStep:
         if self._compiled_n_calls == 0:
             self._log_misaligned_inputs(raws)
         self._compiled_n_calls += 1
+        if self._partitioned:
+            for p in self._params:
+                p.grad.zero_()
         outs = self._compiled_fn(raws)
         if self._debug_nan_dump_inputs:
             self._check_finite_dump_inputs(outs)
-        self._bind_grads(raws, outs)
+        if self._partitioned:
+            outs[0].backward()
+        else:
+            self._bind_grads(raws, outs)
         if self._post_step is not None:
             self._post_step()  # grad clip + optimizer step (plain eager here)
         self._ctx = self._build_result_ctx(outs)
