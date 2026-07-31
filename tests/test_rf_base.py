@@ -1132,3 +1132,89 @@ def test_module_output_keep_dtype():
             a = out_off.copy_transpose(out_on.dims).raw_tensor.detach().to(torch.bfloat16).float().numpy()
             b = out_on.raw_tensor.detach().float().numpy()
             numpy.testing.assert_allclose(a, b, rtol=0, atol=0, err_msg=name)
+
+
+def test_cache_dim_remap_identity():
+    """
+    Dim.__eq__ is looser than identity: any two batch dims compare equal
+    while their static sizes are unknown, incl. derived ones like batch_dim + 1.
+    The Cache value dim remap must go by identity:
+    a cached value containing batch_dim + 1 must come back unchanged
+    for a key containing batch_dim
+    (it used to be remapped to batch_dim, e.g. breaking the packed segment softmax
+    under the bound-shape regime: scatter dim B+1 with dump slot became B).
+    """
+    from returnn.tensor import batch_dim
+    from returnn.frontend._cache import Cache
+
+    derived_dim = batch_dim + 1
+    # the loose batch-kind Dim equality (any two batch dims equal) used to make these equal;
+    # both that and the identity-based cache remap are covered here
+    assert derived_dim != batch_dim
+    cache = Cache(max_size=2)
+    cache.set(("test_cache_dim_remap_identity", batch_dim), (derived_dim, batch_dim))
+    hit = cache.get(("test_cache_dim_remap_identity", batch_dim))
+    assert hit is not None
+    got_derived, got_batch = hit
+    assert got_derived is derived_dim
+    assert got_batch is batch_dim
+
+
+def test_dim_bounded_by_capacity():
+    from returnn.tensor import Dim, Tensor, batch_dim
+
+    time_dim = Dim(Tensor("lens", [batch_dim], dtype="int32"), name="time")
+    bounded = Dim(Tensor("lens2", [batch_dim], dtype="int32"), name="bounded", bounded_by=time_dim)
+    # capacity declared AFTER the bounded dim was created: must still resolve (lazy)
+    time_dim.capacity = 100
+    with rf.set_static_traceable_ctx():
+        assert bounded.get_dim_value() == 100
+
+
+def test_dim_host_value_guard_static_traceable():
+    import torch
+    from returnn.tensor import Dim, Tensor, batch_dim
+
+    time_dim = Dim(Tensor("lens", [batch_dim], dtype="int32"), name="time")
+    time_dim.dyn_size_ext.raw_tensor = torch.tensor([3, 5, 2], dtype=torch.int32)  # cpu
+    # no (derivable) capacity: must raise, on any device --
+    # the value is not static across steps, a read here would bake a stale constant
+    with rf.set_static_traceable_ctx():
+        try:
+            time_dim.get_dim_value_tensor()
+        except Exception as exc:
+            assert "no (derivable) capacity" in str(exc)
+        else:
+            raise AssertionError("expected exception: no capacity under static tracing")
+    # with a declared capacity, the dim value IS the capacity (static across steps)
+    time_dim.capacity = 100
+    with rf.set_static_traceable_ctx():
+        assert time_dim.get_dim_value() == 100
+
+
+def test_packed_fallback_gate():
+    import torch
+    from returnn.frontend import _packed_backend as packed
+    from returnn.tensor import Dim, Tensor, batch_dim
+
+    time_dim = Dim(Tensor("lens", [batch_dim], dtype="int32"), name="time")
+    time_dim.dyn_size_ext.raw_tensor = torch.tensor([3, 5, 2], dtype=torch.int32)
+    batch_dim.dyn_size_ext = Tensor("batch", [], dtype="int32", raw_tensor=torch.tensor(3, dtype=torch.int32))
+    x = Tensor("x", [batch_dim, time_dim], dtype="float32")
+    x.raw_tensor = torch.randn(3, 5)
+    src = packed.pack(x, dims=[batch_dim, time_dim])
+    # arg-reduce over the packed dims has no packed fast path -> unpack fallback -> hard error
+    try:
+        rf.reduce(src, mode="argmax", axis=time_dim)
+    except Exception as exc:
+        assert "NOT allowed by default" in str(exc)
+    else:
+        raise AssertionError("expected exception: hard fallback not allowed by default")
+    # explicitly allowed: works via the fallback
+    # (the result re-pack is its own gated op name)
+    packed.set_allowed_fallbacks({"reduce", "repack:time"})
+    try:
+        out = rf.reduce(src, mode="argmax", axis=time_dim)
+        assert time_dim not in out.dims_set
+    finally:
+        packed.set_allowed_fallbacks(None)
