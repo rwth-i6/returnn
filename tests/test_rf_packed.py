@@ -336,6 +336,11 @@ def test_transformer_aed():
     from returnn.frontend.encoder.transformer import TransformerEncoder
     from returnn.frontend.decoder.transformer import TransformerDecoder
 
+    # torch/device limits can leave NO packed sdpa fast path (e.g. torch<2.5 on cpu:
+    # no flash, no NJT-cpu sdpa, no flex) -- allow the gated unpack fallback;
+    # this test checks correctness, the fast paths are asserted by the benches.
+    packed.set_allowed_fallbacks({"scaled_dot_product_attention"})
+
     batch_dim = Dim(2, name="batch")
     enc_time = Dim(
         Tensor("enc_time", dims=[batch_dim], dtype="int32", raw_tensor=torch.tensor([7, 5], dtype=torch.int32))
@@ -388,6 +393,7 @@ def test_transformer_aed():
     _assert_equal_non_padded(logits_p, logits_ref, batch_dim, dec_time, rtol=1e-4, atol=1e-5)
     assert packed.is_packed(logits_pg)
     _assert_equal_non_padded(logits_pg, logits_ref, batch_dim, dec_time, rtol=1e-4, atol=1e-5)
+    packed.set_allowed_fallbacks(None)
 
 
 def test_batch_norm_packed_gapped_train():
@@ -520,6 +526,10 @@ def test_aed_aux_ctc_stripped_real_model():
     )
     from returnn.frontend.decoder.transformer import TransformerDecoder, FeedForwardGated
 
+    if not _flex_attention_usable():
+        # then no packed sdpa fast path at all (e.g. torch<2.5 cpu): gated unpack fallback
+        packed.set_allowed_fallbacks({"scaled_dot_product_attention"})
+
     # seq lens with distinct residues mod 6 (the total downsampling): per-seq strided re-layout
     x, batch_dim, time_dim, in_dim = _make_input(batch_size=3, seq_lens=(29, 22, 15), feat=8, seed=6)
     vocab_dim = Dim(11, name="vocab")
@@ -629,6 +639,7 @@ def test_aed_aux_ctc_stripped_real_model():
         with torch.autocast(device_type="cpu", dtype=torch.bfloat16):
             ctc_a, ce_a = _losses(packed.pack(x, gap=96, align=6), packed.pack(targets))
         assert numpy.isfinite(float(ctc_a.raw_tensor)) and numpy.isfinite(float(ce_a.raw_tensor))
+    packed.set_allowed_fallbacks(None)
 
 
 def test_ctc_loss_packed_native():

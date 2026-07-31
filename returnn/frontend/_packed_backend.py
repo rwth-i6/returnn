@@ -2796,7 +2796,36 @@ class PackedBackend(Backend[PackedRawTensor]):
                 else:
                     dropout_p = None  # dynamic train flag, cannot resolve to a static dropout_p
         if attention_mask is None and dropout_p is not None:
-            # Preferred: the direct flash varlen kernels (inside _sdpa_varlen_attention;
+            if not is_packed(query) and is_packed(key) and is_packed(value) and not is_causal:
+                k_raw = _raw(key)
+                batch_dims = k_raw.orig_dims[:-1]
+                if (
+                    len(batch_dims) == 1
+                    and query_spatial_dim in query.dims_set
+                    and query_spatial_dim.dyn_size_ext is not None
+                    and set(query_spatial_dim.dyn_size_ext.dims) == set(batch_dims)
+                ):
+                    # Mixed operands (e.g. cross-attention: padded queries over the packed encoder):
+                    # pack the queries on the fly (one scatter), run the fully-packed varlen path,
+                    # unpack the output -- instead of the generic path's per-layer
+                    # unpack -> op -> repack of the KV side.
+                    query_packed = pack(query, dims=list(batch_dims) + [query_spatial_dim])
+                    out = cls.scaled_dot_product_attention(
+                        query_packed,
+                        key,
+                        value,
+                        attention_mask=None,
+                        att_dropout=att_dropout,
+                        att_dropout_broadcast=att_dropout_broadcast,
+                        v_feat_dim=v_feat_dim,
+                        qk_feat_dim=qk_feat_dim,
+                        kv_spatial_dim=kv_spatial_dim,
+                        query_spatial_dim=query_spatial_dim,
+                        is_causal=is_causal,
+                        scale=scale,
+                    )
+                    return unpack(out)
+            # Preferred: the direct flash varlen kernels (inside _torch_sdpa_varlen_attention;
             # 2x faster than flex at model level, native dropout).
             # Fallbacks: without dropout, flex over eager NJT
             # (allow_njt=False -> None when flash is not available);
@@ -2835,6 +2864,39 @@ class PackedBackend(Backend[PackedRawTensor]):
                 if attention_mask is not None
                 else "att_dropout with broadcast (legacy) or dynamic train flag"
             )
+        if is_packed(query) or is_packed(key) or is_packed(value):
+            # No packed fast path applies (flash varlen: cuda bf16/fp16 only;
+            # NJT / flex: torch-version and device limits; or mask / legacy dropout).
+            # The generic path's quadratic energy matmul is inherently un-packable,
+            # so the ONLY correct route is unpack -> padded attention -> repack --
+            # gated like every hard fallback (raises unless explicitly allowed).
+            _warn_fallback_once(
+                "scaled_dot_product_attention",
+                "no packed fast path here (flash varlen: cuda bf16/fp16; NJT/flex: torch/device limits;"
+                " or attention_mask / legacy broadcast dropout / dynamic train flag)",
+            )
+            q_raw = _raw(query) if is_packed(query) else None
+            query_u = unpack(query) if is_packed(query) else query
+            key_u = unpack(key) if is_packed(key) else key
+            value_u = unpack(value) if is_packed(value) else value
+            out = Backend.scaled_dot_product_attention(
+                query_u,
+                key_u,
+                value_u,
+                attention_mask=attention_mask,
+                att_dropout=att_dropout,
+                att_dropout_broadcast=att_dropout_broadcast,
+                v_feat_dim=v_feat_dim,
+                qk_feat_dim=qk_feat_dim,
+                kv_spatial_dim=kv_spatial_dim,
+                query_spatial_dim=query_spatial_dim,
+                is_causal=is_causal,
+                scale=scale,
+            )
+            if q_raw is not None:
+                # the output follows the query packing
+                out = pack(out, dims=list(q_raw.orig_dims), out_dim=q_raw.packed_dim, gap=q_raw.gap, align=q_raw.align)
+            return out
         return Backend.scaled_dot_product_attention(
             query,
             key,
