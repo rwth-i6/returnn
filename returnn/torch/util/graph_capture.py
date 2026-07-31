@@ -86,6 +86,17 @@ def _apply_inductor_workarounds():
       which a CUDA-graph capture would FREEZE (dropout masks repeated across replays).
       fallback_random routes RNG through the aten kernels, whose generator state the capture
       registers -- each replay draws fresh randomness (and numerics match eager).
+    - The addmm fusion pattern (add(mm(a, b), bias) -> addmm) checks shapes but not dtypes.
+      Mixed dtypes are legal for the add (type promotion, e.g. bf16 matmul + f32 bias under AMP,
+      which RF Linear produces: explicit dot + add, not F.linear),
+      but not for addmm -> RuntimeError when the compiled code runs.
+      Wrap the registered patterns' extra_check to require equal dtypes.
+    - The flash varlen extern kernels require a contiguous last dim.
+      Their registered sdpa_constraint misses the 3-dim (varlen, cu_seqlens) case:
+      Inductor fuses away the explicit contiguous clones of q/k
+      and materializes them head-interleaved (last-dim stride = num heads),
+      -> RuntimeError when the compiled code runs.
+      Constrain them to the fx (eager) strides, which were flash-legal.
     """
     global _inductor_workarounds_applied
     if _inductor_workarounds_applied:
@@ -99,7 +110,93 @@ def _apply_inductor_workarounds():
         decomposition.decompositions.pop(overload, None)
         lowering.make_fallback(overload)
     inductor_config.fallback_random = True
+
+    for overload in (
+        torch.ops.aten._flash_attention_forward.default,
+        torch.ops.aten._flash_attention_backward.default,
+    ):
+        lowering.add_layout_constraint(overload, lowering.constrain_to_fx_strides)
+
+    # noinspection PyProtectedMember
+    import torch._inductor.fx_passes.post_grad as post_grad
+
+    num_patched = 0
+    for entries in post_grad.pass_patterns[2].patterns.values():
+        for entry in entries:
+            if getattr(getattr(entry, "handler", None), "__name__", None) != "addmm":
+                continue
+            orig_check = entry.extra_check
+
+            def _addmm_equal_dtypes_check(match, _orig_check=orig_check):
+                """the fused addmm requires equal dtypes, the matched add does not (promotion)"""
+                mat1, mat2 = match.args
+                nodes = [match.kwargs["inp"], mat1, mat2]
+                vals = [n.meta.get("val") for n in nodes if isinstance(n, torch.fx.Node)]
+                if len({v.dtype for v in vals if isinstance(v, torch.Tensor)}) > 1:
+                    return False
+                return _orig_check(match)
+
+            entry.extra_check = _addmm_equal_dtypes_check
+            num_patched += 1
+    assert num_patched, "Inductor addmm fusion patterns not found (torch internals changed?)"
+
+    _register_smoothed_ce_bwd_pattern()
+
     _inductor_workarounds_applied = True
+
+
+def _register_smoothed_ce_bwd_pattern() -> None:
+    """
+    Rewrite the (grad-level label-smoothed) sparse-CE backward chain into its closed form.
+
+    The chain is the PLAIN aten emission of ``-gather(log_probs, targets)`` backward
+    (dense new_zeros + scatter_add accumulator) -> scale + shift*sum(abs)
+    (:func:`scaled_gradient_ext`, i.e. :func:`label_smoothed_log_prob_gradient`)
+    -> _log_softmax_backward_data. No marker op; a guard test asserts the match
+    keeps firing across torch upgrades (decomposition drift fails loudly there).
+    Inductor cannot do this itself: scatter is a fusion barrier, and the rewrite is algebraic
+    (the accumulator has ONE nonzero per row, so its row reductions are analytic in the upstream).
+    The closed form materializes NO dense intermediates:
+    one elementwise kernel over [frames, classes] + one scatter_add into the OUTPUT
+    (~2 GiB f32 per accumulator saved per CE head at the loq scale).
+    """
+    import torch._inductor.fx_passes.post_grad as post_grad
+    from torch._inductor.pattern_matcher import CallFunction, Ignored, KeywordArg, register_graph_pattern
+
+    aten = torch.ops.aten
+    # The POST-GRAD aten emission of the generic gather backward + scaled_gradient_ext
+    # + the DECOMPOSED log_softmax backward (dumped ground truth, see the project notes):
+    # hand-built pattern, so the full() size list and the smoothing scalars are wildcards.
+    full = CallFunction(
+        aten.full.default, Ignored(), 0, dtype=Ignored(), layout=Ignored(), device=Ignored(), pin_memory=Ignored()
+    )
+    unsq = CallFunction(aten.unsqueeze.default, KeywordArg("neg_up"), 1)
+    scat = CallFunction(aten.scatter_add.default, full, 1, KeywordArg("idx"), unsq, _users=2)
+    mul = CallFunction(aten.mul.Tensor, scat, KeywordArg("factor"))
+    abs1 = CallFunction(aten.abs.default, scat)
+    sum1 = CallFunction(aten.sum.dim_IntList, abs1, Ignored(), True)
+    mul1 = CallFunction(aten.mul.Tensor, sum1, KeywordArg("shift"))
+    add = CallFunction(aten.add.Tensor, mul, mul1, _users=2)
+    sum2 = CallFunction(aten.sum.dim_IntList, add, Ignored(), True)
+    mul2 = CallFunction(aten.mul.Tensor, KeywordArg("exp_lp"), sum2)
+    pat = CallFunction(aten.sub.Tensor, add, mul2)
+
+    @register_graph_pattern(pat, pass_dict=post_grad.pass_patterns[1])
+    def _smoothed_ce_bwd_repl(match, *, neg_up, idx, factor, shift, exp_lp):
+        def repl(neg_up_, idx_, exp_lp_):
+            absu = torch.abs(neg_up_)
+            num_classes = exp_lp_.shape[-1]
+            sum_g = factor * neg_up_ + num_classes * shift * absu  # row sum of the dense grad, analytic
+            dense = (shift * absu).unsqueeze(1) - exp_lp_ * sum_g.unsqueeze(1)
+            return dense.scatter_add(1, idx_, (factor * neg_up_).unsqueeze(1))
+
+        global _smoothed_ce_bwd_match_count
+        _smoothed_ce_bwd_match_count += 1
+        match.replace_by_example(repl, [neg_up, idx, exp_lp])
+
+
+# incremented per pattern match at compile time; the guard test asserts it (see tests)
+_smoothed_ce_bwd_match_count = 0
 
 
 @contextmanager

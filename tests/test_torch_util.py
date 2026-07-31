@@ -319,3 +319,74 @@ if __name__ == "__main__":
                 globals()[arg]()  # assume function and execute
             else:
                 eval(arg)  # assume Python code and execute
+
+
+def test_smoothed_ce_bwd_inductor_pattern():
+    """
+    The Inductor rewrite of the grad-level label-smoothed sparse-CE backward
+    (:func:`returnn.torch.util.graph_capture._register_smoothed_ce_bwd_pattern`):
+    numerics vs eager, and the pattern must FIRE on the canonical RF chain --
+    it matches the plain aten emission, so this guards against
+    decomposition drift across torch upgrades.
+    """
+    import tempfile
+
+    if not torch.cuda.is_available():
+        raise unittest.SkipTest("need CUDA (the rewrite targets the compiled GPU step)")
+    # fresh cache: stale generated modules would mask whether the pattern fired
+    os.environ["TORCHINDUCTOR_CACHE_DIR"] = tempfile.mkdtemp(prefix="ce-pattern-test-")
+
+    import returnn.frontend as rf
+    from returnn.tensor import Dim, Tensor
+    from returnn.torch.util import graph_capture
+
+    rf.select_backend_torch()
+    graph_capture._register_smoothed_ce_bwd_pattern()
+    frames, classes = 700, 133
+    time_dim = Dim(frames, name="time")
+    vocab = Dim(classes, name="vocab")
+
+    def step(logits_r, targets_r):
+        logits = Tensor("logits", [time_dim, vocab], dtype="float32", raw_tensor=logits_r)
+        targets = Tensor("targets", [time_dim], dtype="int32", sparse_dim=vocab, raw_tensor=targets_r)
+        lp = rf.log_softmax(logits, axis=vocab)
+        lp = rf.label_smoothed_log_prob_gradient(lp, 0.1, axis=vocab)
+        ce = rf.cross_entropy(estimated=lp, target=targets, axis=vocab, estimated_type="log-probs")
+        return rf.reduce_sum(ce, axis=ce.dims).raw_tensor
+
+    logits_raw = torch.randn(frames, classes, device="cuda", requires_grad=True)
+    targets_raw = torch.randint(0, classes, (frames,), dtype=torch.int32, device="cuda")
+    loss_e = step(logits_raw, targets_raw)
+    (g_e,) = torch.autograd.grad(loss_e, logits_raw)
+
+    from functorch.compile import aot_function
+
+    # noinspection PyProtectedMember
+    from torch._inductor.compile_fx import compile_fx
+
+    count_before = graph_capture._smoothed_ce_bwd_match_count
+    cstep = aot_function(step, fw_compiler=compile_fx)  # like graph_capture (dynamo cannot trace RF)
+    loss_c = cstep(logits_raw, targets_raw)
+    (g_c,) = torch.autograd.grad(loss_c, logits_raw)
+    assert torch.allclose(loss_e, loss_c, atol=1e-4)
+    assert torch.allclose(g_e, g_c, atol=1e-5)
+    assert graph_capture._smoothed_ce_bwd_match_count > count_before, "CE bwd pattern did not fire"
+
+
+def test_masked_select_bound():
+    from returnn.torch.util.array_ import masked_select_bound
+
+    generator = torch.Generator().manual_seed(7)
+    x = torch.randn(3, 5, 4, generator=generator)
+    mask = torch.rand(3, 5, generator=generator) > 0.5
+    out, out_len = masked_select_bound(x, mask)
+    num = int(mask.sum())
+    assert int(out_len) == num
+    assert out.shape == (15, 4)
+    torch.testing.assert_close(out[:num], x[mask])
+    assert (out[num:] == 0).all()
+    # a tighter declared bound shrinks the output buffer
+    out2, out_len2 = masked_select_bound(x, mask, bound=num)
+    assert int(out_len2) == num
+    assert out2.shape == (num, 4)
+    torch.testing.assert_close(out2, x[mask])
