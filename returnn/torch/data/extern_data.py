@@ -134,6 +134,10 @@ def _set_packed_extern_data(
     if spatial.dyn_size_ext is None:
         spatial.dyn_size_ext = Tensor(spatial.name or "time", dims=[batch_dim], dtype=size_dtype)
     spatial.dyn_size_ext.dtype = size_dtype
+    # The lens stay on cpu (like the padded path): they belong to the data/collate domain;
+    # the packed layout helpers move them to the data device where needed.
+    # (Accelerator tensors also never survive a pickle,
+    # see TorchBackend.should_pickle_tensor -- e.g. dataset-worker respawn.)
     spatial.dyn_size_ext.raw_tensor = size
     if raw_tensor.dtype.is_floating_point and float_dtype:
         raw_tensor = raw_tensor.to(dtype=float_dtype)

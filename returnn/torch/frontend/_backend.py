@@ -688,6 +688,16 @@ class TorchBackend(Backend[torch.Tensor]):
         return out
 
     @staticmethod
+    def should_pickle_tensor(raw_tensor: torch.Tensor) -> bool:
+        """
+        Only cpu tensors: an accelerator tensor in a pickle materializes a full
+        CUDA context wherever it is loaded (e.g. every spawned dataset worker),
+        and the values are per-step state that never belongs in a pickle.
+        Dropped raws arrive as None (template), failing visibly if values were expected.
+        """
+        return raw_tensor.device.type == "cpu"
+
+    @staticmethod
     def softmax_cross_entropy_with_logits(*, logits: Tensor, targets: Tensor, axis: Dim):
         """
         Efficient cross entropy. For PyTorch this is actually the default cross entropy function.
