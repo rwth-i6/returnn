@@ -1534,12 +1534,15 @@ class Backend(Generic[T]):
         if is_causal:
             if attention_mask is not None:
                 raise NotImplementedError("causal attention with attention_mask is not supported")
-            if kv_spatial_dim not in query.dims_set:
-                raise ValueError("query and key/value must share the same spatial axis for causal attention")
+            if query_spatial_dim not in query.dims_set:
+                raise ValueError("query must have the query spatial dim for causal attention")
+            # hist lens over the query positions: query position i attends kv positions <= i.
+            # query_spatial_dim can be kv_spatial_dim itself (full-sequence self-attention, both roles):
+            # rewriting the kv side to the separate masked hist dim resolves the double use.
             # bounded_by: the hist lens are 1..axis-size, so the axis bounds them
             # (under the bound-shape regime the axis capacity then bounds hist_dim too)
             hist_dim = Dim(
-                rf.range_over_dim(kv_spatial_dim, device="cpu") + 1,
+                rf.range_over_dim(query_spatial_dim, device="cpu") + 1,
                 name=f"{kv_spatial_dim.description}:kv",
                 bounded_by=kv_spatial_dim,
             )

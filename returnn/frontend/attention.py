@@ -11,8 +11,6 @@ from returnn.frontend._cache import Cache
 
 
 __all__ = [
-    "scaled_dot_product_attention",
-    "rel_pos_self_attention",
     "dot_attention",
     "SelfAttentionBase",
     "SelfAttention",
@@ -30,67 +28,7 @@ __all__ = [
 ]
 
 
-def scaled_dot_product_attention(
-    query: Tensor,
-    key: Tensor,
-    value: Tensor,
-    *,
-    attention_mask: Optional[Tensor] = None,
-    att_dropout: float = 0.0,
-    att_dropout_broadcast: Optional[bool] = None,
-    v_feat_dim: Dim,
-    qk_feat_dim: Dim,
-    kv_spatial_dim: Dim,
-    query_spatial_dim: Dim,
-    is_causal: bool = False,
-    scale: Optional[float] = None,
-):
-    """
-    Scaled dot-product attention. Dispatches to the backend implementation
-    (see :func:`Backend.scaled_dot_product_attention` for the generic one;
-    backends can specialize, e.g. fused / variable-length kernels).
-
-    :param query:
-    :param key:
-    :param value:
-    :param attention_mask:
-    :param att_dropout: dropout for attention weights
-    :param att_dropout_broadcast: whether to broadcast over all but ``axis``.
-        normally not wanted. disabled by default since behavior version 19.
-    :param v_feat_dim: Embedding dimension of value
-    :param qk_feat_dim: Embedding dimension of key (and query)
-    :param kv_spatial_dim: Spatial axis of key/value to attend over
-    :param query_spatial_dim: Spatial axis of query
-    :param is_causal: Special case when the attention mask should be causal (e.g. for auto-regressive decoding).
-        Allows for more efficient implementation in some backends.
-    :param scale: Scaling factor applied prior to softmax
-    :return: attention output
-    """
-    from . import _utils
-
-    if att_dropout_broadcast is None:
-        att_dropout_broadcast = _att_dropout_broadcast_default()
-    # Dispatch over all args (not just query), so that e.g. a packed key/value also selects
-    # the specialized backend (deviation from PR #1798 which uses query._raw_backend).
-    backend = _utils.get_backend_from_tensors(query, key, value)
-    att = backend.scaled_dot_product_attention(
-        query,
-        key,
-        value,
-        attention_mask=attention_mask,
-        att_dropout=att_dropout,
-        att_dropout_broadcast=att_dropout_broadcast,
-        v_feat_dim=v_feat_dim,
-        qk_feat_dim=qk_feat_dim,
-        kv_spatial_dim=kv_spatial_dim,
-        query_spatial_dim=query_spatial_dim,
-        is_causal=is_causal,
-        scale=scale,
-    )
-    return att
-
-
-def rel_pos_self_attention(
+def _rel_pos_self_attention(
     query: Tensor,
     key: Tensor,
     value: Tensor,
@@ -108,9 +46,7 @@ def rel_pos_self_attention(
 ):
     """
     Self-attention with relative positional encoding (Transformer-XL style),
-    as used by :class:`RelPosSelfAttention`. Dispatches to the backend implementation
-    (see :func:`Backend.rel_pos_self_attention` for the generic one;
-    backends can specialize, e.g. fused / variable-length kernels).
+    as used by :class:`RelPosSelfAttention`.
 
     :param query: {..., query_spatial_dim, qk_feat_dim}. not yet scaled.
     :param key: {..., kv_spatial_dim, qk_feat_dim}
@@ -132,7 +68,7 @@ def rel_pos_self_attention(
 
     if att_dropout_broadcast is None:
         att_dropout_broadcast = _att_dropout_broadcast_default()
-    # Dispatch over all args (not just query), see :func:`scaled_dot_product_attention`.
+    # Dispatch over all args (not just query), see :func:`dot_attention`.
     backend = _utils.get_backend_from_tensors(query, key, value, pos_emb)
     return backend.rel_pos_self_attention(
         query,
@@ -206,6 +142,8 @@ def dot_attention(
     axis: Dim,
     att_dropout: float = 0.0,
     att_dropout_broadcast: Optional[bool] = None,
+    causal_query_spatial_dim: Optional[Dim] = None,
+    scale: Optional[float] = None,
 ) -> Tensor:
     """
     Calculates attention over the given axis, for given key dim.
@@ -213,8 +151,10 @@ def dot_attention(
     This can be used for multi-head or single head.
     The query can have other dimensions or not.
 
-    :param query: {..., key_dim}. For self-attention, do not use the `axis` as in `keys` and `values`,
-        but rather replace it by another new dim via :func:`replace_dim`.
+    :param query: {..., key_dim}. Any dim shared with `keys`/`values` acts as a batch dim --
+        except for `axis` itself: that can only mean self-attention,
+        and is handled as such (each query position attends over all kv positions,
+        or causally with ``causal_query_spatial_dim=axis``).
     :param keys: {..., axis, key_dim}
     :param values: {..., axis}
     :param key_dim: dim in keys and query, to be reduced to calculate the attention energies.
@@ -222,13 +162,53 @@ def dot_attention(
     :param att_dropout: dropout for attention weights
     :param att_dropout_broadcast: whether to broadcast over all but ``axis``.
         normally not wanted. disabled by default since behavior version 19.
+    :param causal_query_spatial_dim: if given, the attention is causal along this query spatial dim:
+        query position i attends kv positions <= i, index-wise aligned with ``axis``
+        (same per-sequence lengths).
+        It can be a separate dim in the query (e.g. a :func:`replace_dim` copy of ``axis``),
+        or ``axis`` itself, as in full-sequence causal self-attention:
+        the kv side is internally rewritten to a separate masked hist dim,
+        which makes that double use well-defined.
+        This is never inferred: which query dim aligns causally with ``axis`` is real semantics,
+        and extra query dims must never change behavior.
+        Backends use this to select fused causal implementations.
+    :param scale: scaling factor applied prior to softmax. default: ``key_dim ** -0.5``
     :return: like values but with axis removed, and maybe any additional axes from query
     """
-    query, v_feat_dim, query_spatial, (added_dummy_spat_dim_to_query, merged_query_dims) = _infer_att_dims(
-        query, keys, values, qk_feat_dim=key_dim, kv_spatial_dim=axis
-    )
+    from . import _utils
 
-    att = scaled_dot_product_attention(
+    if att_dropout_broadcast is None:
+        att_dropout_broadcast = _att_dropout_broadcast_default()
+    if causal_query_spatial_dim is None:
+        if axis in query.dims_set:
+            # the axis in the query can only mean (full) self-attention:
+            # as a shared batch dim it would give per-position diagonal energies, no attention semantics.
+            # Rewrite the kv side to a separate dim, so each query position attends over all kv positions
+            # (the causal path resolves the same double use via its masked hist dim instead).
+            kv_dim = Dim(None, name=f"{axis.description}:kv")
+            keys, _ = rf.replace_dim(keys, in_dim=axis, out_dim=kv_dim)
+            values, _ = rf.replace_dim(values, in_dim=axis, out_dim=kv_dim)
+            axis = kv_dim
+        query, v_feat_dim, query_spatial, (added_dummy_spat_dim_to_query, merged_query_dims) = _infer_att_dims(
+            query, keys, values, qk_feat_dim=key_dim, kv_spatial_dim=axis
+        )
+    else:
+        assert causal_query_spatial_dim in query.dims_set, (
+            f"dot_attention: causal_query_spatial_dim {causal_query_spatial_dim} not in query dims {query.dims}"
+        )
+        # only the static extents are cheaply checkable here;
+        # backends check further where needed (e.g. the packed same-seq-lens gate)
+        assert causal_query_spatial_dim.dimension == axis.dimension, (
+            f"dot_attention: causal needs same-length query/kv spatial dims, got {causal_query_spatial_dim} vs {axis}"
+        )
+        query_spatial = causal_query_spatial_dim
+        v_feat_dim = _infer_v_feat_dim(values, keys, key_dim)
+        added_dummy_spat_dim_to_query = False
+        merged_query_dims = None
+    # Dispatch over all args (not just query), so that e.g. a packed key/value also selects
+    # the specialized backend (deviation from PR #1798 which uses query._raw_backend).
+    backend = _utils.get_backend_from_tensors(query, keys, values)
+    att = backend.scaled_dot_product_attention(
         query,
         keys,
         values,
@@ -238,13 +218,13 @@ def dot_attention(
         qk_feat_dim=key_dim,
         kv_spatial_dim=axis,
         query_spatial_dim=query_spatial,
-        is_causal=False,
+        is_causal=causal_query_spatial_dim is not None,
+        scale=scale,
     )
     if added_dummy_spat_dim_to_query:
         att = rf.squeeze(att, axis=query_spatial)
     if merged_query_dims is not None:
         att = rf.split_dims(att, axis=query_spatial, dims=merged_query_dims)
-
     return att
 
 
@@ -386,7 +366,7 @@ class CausalSelfAttention(SelfAttentionBase):
             # (it would require inspecting the dyn size values),
             # so they cannot use fused implementations
             # (torch SDPA is_causal / flash attention / packed varlen SDPA).
-            # Thus pass the explicit is_causal flag to scaled_dot_product_attention here,
+            # Thus pass the explicit causal_query_spatial_dim to dot_attention here,
             # which lets backends select those fused implementations.
             # On generic backends this computes exactly the same as the path below.
             # The state keeps the original axis, see _causal_self_att_step (no-state case).
@@ -394,17 +374,15 @@ class CausalSelfAttention(SelfAttentionBase):
             new_state.k_accum = k
             new_state.v_accum = v
             new_state.accum_axis = axis
-            att = scaled_dot_product_attention(
+            att = dot_attention(
                 q,
                 k,
                 v,
+                key_dim=self.key_dim_per_head,
+                axis=axis,
                 att_dropout=self.att_dropout,
                 att_dropout_broadcast=self.att_dropout_broadcast,
-                v_feat_dim=self.value_dim_per_head,
-                qk_feat_dim=self.key_dim_per_head,
-                kv_spatial_dim=axis,
-                query_spatial_dim=axis,
-                is_causal=True,
+                causal_query_spatial_dim=axis,
             )
             output, _ = rf.merge_dims(att, dims=(self.num_heads, self.value_dim_per_head), out_dim=self.value_dim_total)
             if self.proj:
@@ -552,17 +530,15 @@ class RotaryPosCausalSelfAttention(CausalSelfAttention):
             )  # [T,D]
             q = _apply_rope(q, pos_enc, self.key_dim_per_head)
             k = _apply_rope(k, pos_enc, self.key_dim_per_head)
-            att = scaled_dot_product_attention(
+            att = dot_attention(
                 q,
                 k,
                 v,
+                key_dim=self.key_dim_per_head,
+                axis=axis,
                 att_dropout=self.att_dropout,
                 att_dropout_broadcast=self.att_dropout_broadcast,
-                v_feat_dim=self.value_dim_per_head,
-                qk_feat_dim=self.key_dim_per_head,
-                kv_spatial_dim=axis,
-                query_spatial_dim=axis,
-                is_causal=True,
+                causal_query_spatial_dim=axis,
             )
             output, _ = rf.merge_dims(att, dims=(self.num_heads, self.value_dim_per_head), out_dim=self.value_dim_total)
             if self.proj:
@@ -744,7 +720,7 @@ class RelPosSelfAttention(SelfAttentionBase):
         hist_dim = Dim(None, name=f"{axis.description}:kv")
         k, _ = rf.replace_dim(k, in_dim=axis, out_dim=hist_dim)
         v, _ = rf.replace_dim(v, in_dim=axis, out_dim=hist_dim)
-        att = rel_pos_self_attention(
+        att = _rel_pos_self_attention(
             q,
             k,
             v,
@@ -893,7 +869,7 @@ class RelPosCausalSelfAttention(CausalSelfAttention):
             pos_emb = rf.split_dims(pos_emb, axis=self.key_dim_total, dims=(self.num_heads, self.key_dim_per_head))
         # pos_emb: (head, 2*time1-1, d_k)
 
-        att = rel_pos_self_attention(
+        att = _rel_pos_self_attention(
             q,
             k,
             v,

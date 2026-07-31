@@ -891,3 +891,52 @@ def test_causal_self_attention_static_traceable_bound():
         a = rf.where(mask, out_eager, zero).copy_transpose(out_bound.dims).raw_tensor
         b = rf.where(mask, out_bound, zero).copy_transpose(out_bound.dims).raw_tensor
         torch.testing.assert_close(a, b)
+
+
+def test_dot_attention_keys_dims_not_in_query():
+    # Keys have a dim (here: batch) which the query does not have,
+    # e.g. a flat query (implicit batch) attending to batched keys.
+    # The query-spatial inference must only remove dims actually present in the query;
+    # it crashed in remaining_dims (ValueError list.remove) on the keys-only dim before.
+    import torch
+
+    batch = Dim(2, name="batch_keys_only")
+    kv_time = Dim(5, name="kv_time")
+    feat = Dim(8, name="feat")
+    q_flat = Dim(4, name="q_flat")
+    gen = torch.Generator().manual_seed(42)
+    query = Tensor("q", dims=(q_flat, feat), dtype="float32")
+    query.raw_tensor = torch.randn(4, 8, generator=gen)
+    keys = Tensor("k", dims=(batch, kv_time, feat), dtype="float32")
+    keys.raw_tensor = torch.randn(2, 5, 8, generator=gen)
+    values = Tensor("v", dims=(batch, kv_time, feat), dtype="float32")
+    values.raw_tensor = torch.randn(2, 5, 8, generator=gen)
+    att = rf.dot_attention(query, keys, values, key_dim=feat, axis=kv_time)
+    assert att.dims_set == {q_flat, batch, feat}
+    assert torch.isfinite(att.raw_tensor).all()
+
+
+def test_dot_attention_self_att_axis_in_query():
+    # axis in the query = (full) self-attention: each query position attends over all kv positions.
+    # Must match the explicit replace_dim formulation.
+    import torch
+
+    batch = Dim(2, name="batch")
+    time = Dim(5, name="time")
+    feat = Dim(8, name="feat")
+    gen = torch.Generator().manual_seed(43)
+    x = {}
+    for name in ("q", "k", "v"):
+        t = Tensor(name, dims=(batch, time, feat), dtype="float32")
+        t.raw_tensor = torch.randn(2, 5, 8, generator=gen)
+        x[name] = t
+    att = rf.dot_attention(x["q"], x["k"], x["v"], key_dim=feat, axis=time)
+    assert att.dims_set == {batch, time, feat}
+    kv_time = Dim(None, name="kv_time")
+    k2, _ = rf.replace_dim(x["k"], in_dim=time, out_dim=kv_time)
+    v2, _ = rf.replace_dim(x["v"], in_dim=time, out_dim=kv_time)
+    att_ref = rf.dot_attention(x["q"], k2, v2, key_dim=feat, axis=kv_time)
+    torch.testing.assert_close(
+        att.copy_transpose((batch, time, feat)).raw_tensor,
+        att_ref.copy_transpose((batch, time, feat)).raw_tensor,
+    )

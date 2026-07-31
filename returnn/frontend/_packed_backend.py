@@ -32,7 +32,7 @@ Three layers:
   attention via fused varlen kernels --
   compiled FlexAttention with a document block mask over the flat packed buffer
   (self-/cross-/causal attention, and rel-pos attention via a score_mod bias,
-  see :func:`rf.rel_pos_self_attention`),
+  see :func:`returnn.frontend.attention._rel_pos_self_attention`),
   or NJT (nested-jagged) SDPA where dropout is needed;
   conv/pool/pad directly on the (gapped) packed buffer;
   masked-stats batch_norm;
