@@ -1103,7 +1103,8 @@ def _conform_packing(x, target_raw: PackedRawTensor):
     if isinstance(x, Tensor) and is_packed(x):
         xr = x.raw_tensor
         if not target_raw.same_packing(xr) and xr.orig_dims == target_raw.orig_dims:
-            y = regap(x, target_raw.gap, align=target_raw.align, layout_lens=target_raw.layout_lens)
+            total = int(target_raw.packed_dim.get_dim_value())
+            y = regap(x, target_raw.gap, align=target_raw.align, layout_lens=target_raw.layout_lens, total_bound=total)
             yr = y.raw_tensor
             if yr.packed_dim != target_raw.packed_dim:
                 inner, _ = rf.replace_dim(yr.inner, in_dim=yr.packed_dim, out_dim=target_raw.packed_dim)
