@@ -211,6 +211,7 @@ def _patch_zero_init_generated_buffers() -> None:
     global _zero_init_buffers_patched
     if _zero_init_buffers_patched:
         return
+    # noinspection PyProtectedMember
     import torch._C._dynamo.guards as _guards
 
     # noinspection PyProtectedMember,PyUnresolvedReferences
