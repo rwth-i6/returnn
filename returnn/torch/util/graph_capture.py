@@ -89,13 +89,24 @@ def _patch_inductor_nan_asserts_nan_only() -> None:
     if _inductor_nan_asserts_patched:
         return
     import sympy
+
+    # noinspection PyProtectedMember
     from torch._inductor import ir
+
+    # noinspection PyProtectedMember
     from torch._inductor.codegen.common import TensorArg
+
+    # noinspection PyProtectedMember
     from torch._inductor.codegen.triton import TritonKernel
+
+    # noinspection PyProtectedMember
     from torch._inductor.codegen.wrapper import PythonWrapperCodegen
+
+    # noinspection PyProtectedMember
     from torch._inductor.virtualized import V
 
     def codegen_input_nan_asserts(self) -> None:
+        """patched PythonWrapperCodegen method: nan-only input asserts (inf = legitimate mask values)"""
         self.prefix.writeline("# make sure graph inputs are not nan (inf is legitimate: mask values)")
         for name, buf in self.get_graph_inputs().items():
             if isinstance(buf, (sympy.Expr, ir.TorchBindObject)):
@@ -103,6 +114,7 @@ def _patch_inductor_nan_asserts_nan_only() -> None:
             self.prefix.writeline(f"assert not {name}.isnan().any().item(), {name!r}")
 
     def codegen_nan_check(self) -> None:
+        """patched TritonKernel method: nan-only asserts, with the buffer name in the message"""
         wrapper = V.graph.wrapper_code
         _, call_args, arg_signatures, _ = self.args.python_argdefs()
         for arg, arg_signature in zip(call_args, arg_signatures):
@@ -140,6 +152,7 @@ class _NanTraceMode:
     """
 
     def __new__(cls):
+        # noinspection PyProtectedMember
         from torch.utils._python_dispatch import TorchDispatchMode
 
         class _Mode(TorchDispatchMode):
@@ -198,6 +211,7 @@ def _patch_zero_init_generated_buffers() -> None:
         return
     import torch._C._dynamo.guards as _guards
 
+    # noinspection PyProtectedMember,PyUnresolvedReferences
     orig = _guards._empty_strided_cuda
 
     def _empty_strided_cuda_zeroed(*args, **kwargs) -> torch.Tensor:
@@ -248,6 +262,7 @@ def _apply_inductor_workarounds():
         lowering.make_fallback(overload)
     inductor_config.fallback_random = True
 
+    # noinspection PyProtectedMember
     for overload in (
         torch.ops.aten._flash_attention_forward.default,
         torch.ops.aten._flash_attention_backward.default,
@@ -297,7 +312,10 @@ def _register_smoothed_ce_bwd_pattern() -> None:
     one elementwise kernel over [frames, classes] + one scatter_add into the OUTPUT
     (~2 GiB f32 per accumulator saved per CE head at the loq scale).
     """
+    # noinspection PyProtectedMember
     import torch._inductor.fx_passes.post_grad as post_grad
+
+    # noinspection PyProtectedMember
     from torch._inductor.pattern_matcher import CallFunction, Ignored, KeywordArg, register_graph_pattern
 
     aten = torch.ops.aten
@@ -321,6 +339,7 @@ def _register_smoothed_ce_bwd_pattern() -> None:
     @register_graph_pattern(pat, pass_dict=post_grad.pass_patterns[1])
     def _smoothed_ce_bwd_repl(match, *, neg_up, idx, factor, shift, exp_lp):
         def repl(neg_up_, idx_, exp_lp_):
+            """the closed-form replacement (traced)"""
             absu = torch.abs(neg_up_)
             num_classes = exp_lp_.shape[-1]
             sum_g = factor * neg_up_ + num_classes * shift * absu  # row sum of the dense grad, analytic
@@ -444,6 +463,7 @@ class GraphCapturedTrainStep:
         self._debug_dump_buffer_names = tuple(opts.get("debug_dump_buffer_names", ()))
         self._last_extern_data_raw: Optional[Dict[str, Union[torch.Tensor, numpy.ndarray]]] = None
         if self._dump_memory_snapshot:
+            # noinspection PyProtectedMember
             torch.cuda.memory._record_memory_history(max_entries=200_000)
         assert self._capture_graph or self._compile, 'torch_cuda_graph: "capture": False requires "compile": True'
         self._compiled_fn: Optional[Callable[[List[torch.Tensor]], tuple]] = None
@@ -778,6 +798,7 @@ class GraphCapturedTrainStep:
 
         _apply_inductor_workarounds()
         if self._inductor_nan_asserts:
+            # noinspection PyProtectedMember
             import torch._inductor.config as inductor_config
 
             inductor_config.nan_asserts = True
@@ -789,6 +810,7 @@ class GraphCapturedTrainStep:
         if self._debug_zero_init_buffers:
             _patch_zero_init_generated_buffers()
         if self._inductor_conservative:
+            # noinspection PyProtectedMember
             import torch._inductor.config as inductor_config
 
             inductor_config.epilogue_fusion = False
@@ -1079,5 +1101,6 @@ class GraphCapturedTrainStep:
         import logging
 
         fn = "cuda-memory-snapshot.pickle"
+        # noinspection PyProtectedMember
         torch.cuda.memory._dump_snapshot(fn)
         logging.getLogger("returnn").warning("torch_cuda_graph: CUDA memory snapshot dumped to %s", fn)

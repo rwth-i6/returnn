@@ -82,6 +82,7 @@ def gather_relayout(
     return _GatherSelectBound.apply(values, inv, pos, slot_valid)
 
 
+# noinspection PyAbstractClass
 class _GatherSelectBound(torch.autograd.Function):
     """see :func:`masked_select_bound` and :func:`gather_relayout` (the gather-both-ways core)"""
 
@@ -100,6 +101,7 @@ class _GatherSelectBound(torch.autograd.Function):
         out = torch.where(slot_valid.reshape((-1,) + (1,) * (input_flat.ndim - 1)), out, torch.zeros_like(out))
         return out
 
+    # noinspection PyMethodOverriding
     @staticmethod
     def backward(ctx, grad_out: torch.Tensor):
         """

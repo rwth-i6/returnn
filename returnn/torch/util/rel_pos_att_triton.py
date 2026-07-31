@@ -857,5 +857,8 @@ def rel_pos_att_varlen_fused_bd(
 
 
 def have_lib_ops() -> bool:
-    """:return: whether the torch.library custom ops are registered (torch >= 2.4), see :func:`rel_pos_att_varlen_fused_bd`"""
+    """
+    :return: whether the torch.library custom ops are registered (torch >= 2.4),
+        see :func:`rel_pos_att_varlen_fused_bd`
+    """
     return _HAVE_LIB_OPS
