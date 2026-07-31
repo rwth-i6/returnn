@@ -88,10 +88,11 @@ def collate_batch(
             raise ValueError("batch is empty?")
         if isinstance(ls[0], torch.Tensor):
             if ls[0].ndim > 0:
-                if packing is not None:
+                key_packing = packed_batch_key_opts(packing, key) if packing is not None else None
+                if key_packing is not None:
                     res[key] = torch.cat(ls, dim=0)  # flat [total, ...], no padding
                     # the buffer stays dense here, the target gap is applied on device
-                    res["%s:packed" % key] = packed_batch_key_opts(packing, key)
+                    res["%s:packed" % key] = key_packing
                 else:
                     res[key] = torch.nn.utils.rnn.pad_sequence(ls, batch_first=True, padding_value=0)
                 res["%s:seq_len" % key] = torch.tensor([v.shape[0] for v in ls], dtype=torch.int32)
@@ -133,9 +134,15 @@ def packed_batch_config() -> Optional[Dict[str, Any]]:
     return opt
 
 
-def packed_batch_key_opts(packing: Dict[str, Any], key: str) -> Dict[str, int]:
-    """:return: the ``{"gap", "align"}`` for the given data key, per-key override else global default"""
+def packed_batch_key_opts(packing: Dict[str, Any], key: str) -> Optional[Dict[str, int]]:
+    """
+    :return: the ``{"gap", "align"}`` for the given data key, per-key override else global default;
+        None if the key opts out of packing (``per_key: {<key>: {"packed": False}}`` -> padded),
+        e.g. targets that the train step consumes padded while the audio is packed
+    """
     per = packing.get("per_key", {}).get(key, {})
+    if not per.get("packed", True):
+        return None
     return {
         "gap": int(per.get("gap", packing.get("gap", 0))),
         "align": int(per.get("align", packing.get("align", 1))),
@@ -267,11 +274,12 @@ class BatchingIterDataPipe(torch.utils.data.IterDataPipe):
     Note, that batches are not yet merged into a single (padded) data array here, this happens in 'collate_batch()'.
     """
 
-    def __init__(self, dataset: torch.utils.data.IterableDataset, batch_size=1, max_seqs=None):
+    def __init__(self, dataset: torch.utils.data.IterableDataset, batch_size=1, max_seqs=None, packed_batch_size=None):
         """
         :param dataset: dataset to apply batching to
         :param int|dict[str,int]|None|function batch_size: Maximum number of time steps (e.g. audio frames / words)
-            in one batch (padding included).
+            in one batch (padding included),
+            i.e. a limit on num_seqs * max(seq_len).
             If given as a dict data_key -> value, sets different individual limits per data key.
             If None, no limit.
             Can also be a callable with kwargs epoch, seq_idx, epoch_continuous, **_other_kwargs,
@@ -280,16 +288,23 @@ class BatchingIterDataPipe(torch.utils.data.IterDataPipe):
             None means unlimited (also -1 to match TF backend).
             Can also be a callable with kwargs epoch, seq_idx, epoch_continuous, **_other_kwargs,
             returning the max seqs.
+        :param int|dict[str,int]|None|function packed_batch_size: like ``batch_size``,
+            but a limit on sum(seq_len) (no padding),
+            the natural budget for packed batches (see ``packed_tensors``).
+            Both limits apply if both are set.
         """
         super().__init__()
         self._dataset = dataset
         self._max_batch_size = self._parse_batch_size(batch_size)
         self._max_seqs = self._parse_max_seqs(max_seqs)
+        self._max_packed_batch_size = self._parse_packed_batch_size(packed_batch_size)
 
         if not callable(self._max_batch_size):
             assert isinstance(self._max_batch_size, NumbersDict) and self._max_batch_size.min_value() > 0
         if not callable(self._max_seqs):
             assert isinstance(self._max_seqs, int) and self._max_seqs > 0
+        if self._max_packed_batch_size is not None and not callable(self._max_packed_batch_size):
+            assert isinstance(self._max_packed_batch_size, NumbersDict) and self._max_packed_batch_size.min_value() > 0
 
     @staticmethod
     def _parse_batch_size(
@@ -307,6 +322,20 @@ class BatchingIterDataPipe(torch.utils.data.IterDataPipe):
             else:
                 return batch_size
         return NumbersDict(sys.maxsize if batch_size is None else batch_size)
+
+    @staticmethod
+    def _parse_packed_batch_size(
+        packed_batch_size: Union[int, Dict[str, int], NumbersDict, None, Callable],
+        *,
+        data_dict: Optional[Dict[str, Any]] = None,
+    ) -> Union[NumbersDict, Callable, None]:
+        """
+        :param packed_batch_size: see __init__()
+        :return: packed_batch_size, or None if not set (unlike batch_size, None means no such limit)
+        """
+        if packed_batch_size is None:
+            return None
+        return BatchingIterDataPipe._parse_batch_size(packed_batch_size, data_dict=data_dict)
 
     @staticmethod
     def _parse_max_seqs(
@@ -346,10 +375,12 @@ class BatchingIterDataPipe(torch.utils.data.IterDataPipe):
         """
         current_batch = []
         current_max_sequence_lengths = NumbersDict(0)  # data_key -> length of longest sequence in current batch
+        current_sum_sequence_lengths = NumbersDict(0)  # data_key -> summed sequence lengths in current batch
 
         for data_dict in self._dataset:
             max_seqs = self._parse_max_seqs(self._max_seqs, data_dict=data_dict)
             max_batch_size = self._parse_batch_size(self._max_batch_size, data_dict=data_dict)
+            max_packed_batch_size = self._parse_packed_batch_size(self._max_packed_batch_size, data_dict=data_dict)
             assert isinstance(max_seqs, int) and max_seqs > 0
             assert isinstance(max_batch_size, NumbersDict) and max_batch_size.min_value() > 0
 
@@ -357,6 +388,7 @@ class BatchingIterDataPipe(torch.utils.data.IterDataPipe):
                 yield current_batch
                 current_batch = []
                 current_max_sequence_lengths = NumbersDict(0)
+                current_sum_sequence_lengths = NumbersDict(0)
 
             # TODO: This assumes all data has time as first dimension. Currently we can't know better..
             sequence_lengths = NumbersDict(
@@ -365,14 +397,22 @@ class BatchingIterDataPipe(torch.utils.data.IterDataPipe):
 
             max_sequence_lengths_if_included = NumbersDict.max([current_max_sequence_lengths, sequence_lengths])
             batch_size_if_included = max_sequence_lengths_if_included * (len(current_batch) + 1)  # including padding
+            sum_sequence_lengths_if_included = current_sum_sequence_lengths + sequence_lengths  # no padding
 
-            if current_batch and batch_size_if_included.any_compare(max_batch_size, (lambda a, b: a > b)):
+            over_limit = batch_size_if_included.any_compare(max_batch_size, (lambda a, b: a > b))
+            if max_packed_batch_size is not None:
+                over_limit = over_limit or sum_sequence_lengths_if_included.any_compare(
+                    max_packed_batch_size, (lambda a, b: a > b)
+                )
+            if current_batch and over_limit:
                 yield current_batch
                 current_batch = [data_dict]
                 current_max_sequence_lengths = sequence_lengths
+                current_sum_sequence_lengths = sequence_lengths
             else:
                 current_batch.append(data_dict)
                 current_max_sequence_lengths = max_sequence_lengths_if_included
+                current_sum_sequence_lengths = sum_sequence_lengths_if_included
 
         if current_batch:
             yield current_batch
@@ -490,7 +530,10 @@ def get_batching_iterable_dataset_from_config(
         batch_size = config.typed_value(f"batch_size_{'train' if train else 'dev'}", batch_size)
         assert batch_size != -1, f"batch_size or batch_size_{'train' if train else 'dev'} not defined in config"
         max_seqs = config.typed_value("max_seqs", -1)
-        batches_dataset = BatchingIterDataPipe(dataset, batch_size=batch_size, max_seqs=max_seqs)
+        packed_batch_size = config.typed_value("packed_batch_size", None)
+        batches_dataset = BatchingIterDataPipe(
+            dataset, batch_size=batch_size, max_seqs=max_seqs, packed_batch_size=packed_batch_size
+        )
         return batches_dataset
 
     if isinstance(torch_batching, dict):
