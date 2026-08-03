@@ -731,21 +731,38 @@ def _packed_total(orig_dims: Sequence[Dim], gap: int, align: int, *, layout_lens
     return rf.cast(rf.reduce_sum(footprints, axis=list(footprints.dims)), "int32")
 
 
-def _capacity_total_bound(dims: Sequence[Dim], gap: int, align: int, *, what: str) -> int:
+def _regap_total_bound(raw: PackedRawTensor, gap: int, align: int) -> int:
     """
-    :return: static packed-buffer bound derived from the packed dims' declared capacities
-        (static traceable needs static shapes), see :func:`pack` total_bound
+    :return: static packed-buffer bound for a re-layout of ``raw`` to the given gap/align
+
+    Derived from the bound DECLARED for the packing (see :func:`pack` total_bound):
+    the content does not change, only the per-seq gap does,
+    so the buffer grows by at most the added gap per seq.
+    The declared bound is a property of the packing, not of one tensor,
+    so two tensors of the same packing always derive the SAME bound
+    -- which ops rely on when they combine them.
+    Deriving it from the per-seq capacities instead
+    would put every seq at its full length simultaneously,
+    a batch that the total bound already rules out
+    (loq: 200 * 19.5s = 3900s of audio in a batch that holds 1000s).
     """
-    caps = [d.capacity if d.dimension is None else d.dimension for d in dims]
-    assert all(c is not None for c in caps), (
-        f"{what}: static traceable (rf.is_static_traceable) requires total_bound"
-        f" or capacities on all packed dims, got {list(zip(dims, caps))}"
+    cur_bound = raw.packed_dim.dimension
+    assert cur_bound is not None, (
+        f"regap: static traceable (rf.is_static_traceable) requires a static packed dim (pack total_bound), got {raw}"
     )
-    total_bound = 1
-    for c in caps[:-1]:
-        total_bound *= c
-    total_bound *= -(-(caps[-1] + gap) // align) * align
-    return total_bound
+    if align != raw.align:
+        # a different alignment shifts every per-seq footprint; no cheap relation to the declared bound
+        raise NotImplementedError(f"regap: align {raw.align} -> {align} with a declared total bound")
+    n_seqs = 1
+    for d in raw.orig_dims[:-1]:
+        c = d.capacity if d.dimension is None else d.dimension
+        assert c is not None, f"regap: packed dim {d} needs a static size or capacity"
+        n_seqs *= c
+    # per seq, ceil((len + gap)/align) - ceil((len + raw.gap)/align) <= ceil((gap - raw.gap)/align).
+    # SIGNED: a smaller gap needs less buffer, and only then is the bound a function of the layout --
+    # otherwise regapping away and back (attention: gap -> 0 -> gap) grows it by n_seqs every time.
+    grow = -(-(gap - raw.gap) // align) * align
+    return cur_bound + n_seqs * grow
 
 
 def _frame_coords(template: PackedRawTensor, d: Dim) -> Tensor:
@@ -3726,8 +3743,11 @@ def pack(
             # so the packed dim is STATIC -> capturable in a CUDA graph.
             # The real-length layout fills the first frames,
             # the rest are gap/padding (masked out like any gap frames).
-            if total_bound is None and rf.is_static_traceable():
-                total_bound = _capacity_total_bound(dims, gap, align, what="pack")
+            assert not (total_bound is None and rf.is_static_traceable()), (
+                f"pack: static traceable (rf.is_static_traceable) requires total_bound, got dims {list(dims)}."
+                f" Deriving it from the per-seq capacities would assume every seq at its full length"
+                f" at once, which the batch size already rules out."
+            )
             out_dim = Dim(
                 total_bound if total_bound is not None else _packed_total(dims, gap, align), name="packed_gap"
             )
@@ -3776,7 +3796,7 @@ def regap(
     last = raw.orig_dims[-1]
     if total_bound is None and layout_lens is None and rf.is_static_traceable():
         # like pack(): a static target buffer, e.g. for the packed-conv regap under CUDA-graph capture
-        total_bound = _capacity_total_bound(raw.orig_dims, gap, align, what="regap")
+        total_bound = _regap_total_bound(raw, gap, align)
     new_dim = Dim(
         total_bound if total_bound is not None else _packed_total(raw.orig_dims, gap, align, layout_lens=layout_lens),
         name="packed_regap",

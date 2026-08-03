@@ -278,6 +278,88 @@ def test_conv_packed_gap_junk_robust():
         _assert_equal_non_padded(out_p, out_ref, batch_dim, time_dim)
 
 
+def test_regap_bound_from_declared_total():
+    # A static-traceable regap (the packed conv widening a too-small gap) derives its bound from the
+    # total bound DECLARED at pack() time, plus the gap it adds.
+    # The per-seq capacity product would instead put EVERY seq at its full capacity at once,
+    # which the declared total already rules out (for loq that was 68_400 frames instead of 20_667,
+    # and every downstream op inherits the regapped static shape).
+    rf.select_backend_torch()
+    batch_dim = Dim(2, name="batch")
+    time_dim = Dim(
+        Tensor("time", dims=[batch_dim], dtype="int32", raw_tensor=torch.tensor([5, 3], dtype=torch.int32)),
+        capacity=8,  # static tracing needs a declared capacity
+    )
+    feat_dim = Dim(4, name="feat")
+    x = Tensor("x", dims=[batch_dim, time_dim, feat_dim], dtype="float32")
+    x.raw_tensor = torch.randn(2, 8, 4, generator=torch.Generator().manual_seed(23))  # padded to capacity
+    with rf.set_default_device_ctx("cpu"):
+        rf.set_random_seed(23)
+        conv = rf.Conv1d(feat_dim, Dim(6, name="out"), filter_size=7, padding="same")  # span 6 -> needs gap 3
+        out_ref, _ = conv(x, in_spatial_dim=time_dim)
+        with rf.set_static_traceable_ctx():
+            xp = packed.pack(x, gap=1, total_bound=12)
+            assert xp.raw_tensor.packed_dim.dimension == 12
+            out_p, _ = conv(xp, in_spatial_dim=time_dim)
+            # the same packing, re-laid-out a second time: the base is the DECLARED bound,
+            # never the one derived a step earlier, so the result does not depend on the path
+            out_p2 = packed.regap(out_p, 3)
+        assert packed.is_packed(out_p)
+        # 12 + 2 seqs * ceil((3 - 1) / align 1) = 16.
+        # (the per-seq capacity product would have been 2 * (8 + 3) = 22)
+        assert out_p.raw_tensor.packed_dim.dimension == 16
+        assert out_p.raw_tensor.gap == 3
+        assert out_p2.raw_tensor.packed_dim.dimension == 16  # idempotent, not 16 + 2 * 2
+        # and 16 really holds the content: footprints (5 + 3) + (3 + 3) = 14
+        _assert_equal_non_padded(out_p, out_ref, batch_dim, time_dim)
+
+
+def test_regap_gap_roundtrip_keeps_bound():
+    # The varlen attention path densifies to gap 0 for the nested/jagged offsets and restores the
+    # original layout afterwards (see _torch_sdpa_varlen_attention).
+    # The bound must therefore be a function of the gap, not just grow:
+    # with a one-sided delta each round trip added n_seqs frames, and after the decoder's
+    # attention calls the result no longer matched a tensor that had not been through one.
+    rf.select_backend_torch()
+    batch_dim = Dim(2, name="batch")
+    time_dim = Dim(
+        Tensor("time", dims=[batch_dim], dtype="int32", raw_tensor=torch.tensor([5, 3], dtype=torch.int32)),
+        capacity=8,
+    )
+    feat_dim = Dim(4, name="feat")
+    x = Tensor("x", dims=[batch_dim, time_dim, feat_dim], dtype="float32")
+    x.raw_tensor = torch.randn(2, 8, 4, generator=torch.Generator().manual_seed(5))
+    with rf.set_default_device_ctx("cpu"):
+        with rf.set_static_traceable_ctx():
+            xp = packed.pack(x, gap=1, total_bound=14)
+            assert xp.raw_tensor.packed_dim.dimension == 14
+            dense = packed.regap(xp, 0)
+            # a smaller gap needs less buffer: 14 - 2 seqs * 1
+            assert dense.raw_tensor.packed_dim.dimension == 12
+            back = packed.regap(dense, 1)
+            assert back.raw_tensor.packed_dim.dimension == 14  # exactly where we started
+            # and again, to catch a per-round-trip drift
+            for _ in range(3):
+                back = packed.regap(packed.regap(back, 0), 1)
+            assert back.raw_tensor.packed_dim.dimension == 14
+        _assert_equal_non_padded(back, x, batch_dim, time_dim)
+
+
+def test_pack_static_traceable_requires_total_bound():
+    # Without a declared bound there is nothing sound to derive a static buffer from,
+    # so pack must say so instead of silently inventing the capacity product.
+    rf.select_backend_torch()
+    x, batch_dim, time_dim, feat_dim = _make_input()
+    with rf.set_default_device_ctx("cpu"):
+        with rf.set_static_traceable_ctx():
+            try:
+                packed.pack(x, gap=1)
+            except AssertionError as exc:
+                assert "total_bound" in str(exc)
+            else:
+                raise Exception("pack should require total_bound under static tracing")
+
+
 def test_conv_packed_strided():
     # strided packed conv: stride | align and align | gap; out layout = (lens', gap/st, align/st)
     rf.select_backend_torch()
