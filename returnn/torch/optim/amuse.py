@@ -63,7 +63,7 @@ def muon_update(
         # Muon default scaling used when auxiliary layers are trained by SGD.
         update *= max(1, update.size(-2) / update.size(-1)) ** 0.5
     else:
-        raise ValueError(f"Invalid AMUSE aux_update_type: {aux_update_type}. " "Expected one of {'adamw', 'sgd'}.")
+        raise ValueError(f"Invalid AMUSE aux_update_type: {aux_update_type}. Expected one of {{'adamw', 'sgd'}}.")
 
     return update
 
@@ -136,7 +136,7 @@ class AMUSE(Optimizer):
             update_type = "muon" if group["use_muon"] else group.get("update_type", "adamw")
             if update_type not in UPDATE_TYPES:
                 raise ValueError(
-                    f"Invalid AMUSE update_type: {update_type}. " "Expected one of {'muon', 'adamw', 'sgd'}."
+                    f"Invalid AMUSE update_type: {update_type}. Expected one of {{'muon', 'adamw', 'sgd'}}."
                 )
             if update_type == "muon" and not group["use_muon"]:
                 raise ValueError('AMUSE update_type="muon" requires use_muon=True.')
