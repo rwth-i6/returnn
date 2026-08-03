@@ -254,7 +254,7 @@ class ConformerEncoderLayer(rf.Module):
 
         if conv_norm is NotSpecified or conv_norm is rf.BatchNorm:
             conv_norm_opts = conv_norm_opts.copy() if conv_norm_opts else {}
-            conv_norm_opts.setdefault("use_mask", False)
+            conv_norm_opts.setdefault("use_mask", conv_norm_use_mask_default())
             conv_norm = rf.BatchNorm(out_dim, **conv_norm_opts)
         elif isinstance(conv_norm, type):
             conv_norm = conv_norm(out_dim, **(conv_norm_opts or {}))
@@ -501,3 +501,35 @@ def make_ff(
             raise TypeError(f"unexpected ff type {ff!r}")
     assert isinstance(ff, rf.Module)
     return ff
+
+
+def conv_norm_use_mask_default() -> Optional[bool]:
+    """
+    :return: default for ``use_mask`` of the conv-block :class:`rf.BatchNorm`,
+        see :class:`ConformerEncoderLayer` ``conv_norm_opts``.
+        None means :class:`rf.BatchNorm` decides itself, via :func:`rf.use_mask_default`,
+        which keeps the masking policy in one place and honors the global ``rf_use_mask``.
+
+    Check the global RETURNN config for the ``rf_conformer_conv_norm_use_mask`` option.
+    If that is not specified, with behavior version >= 29 this defers to :class:`rf.BatchNorm`,
+    with behavior version <= 28 the statistics stay unmasked, as they always were here.
+
+    Unmasked, the statistics run over the raw storage, so they depend on the storage layout:
+    a padded batch includes its padding frames, a packed batch includes its gap frames.
+    The same model therefore normalizes differently depending on how the batch is stored,
+    and packed and padded training cannot agree.
+    """
+    from returnn.config import get_global_config
+    from returnn.util.basic import BehaviorVersion
+
+    config = get_global_config(raise_exception=False)
+    config_value = None
+    if config:
+        if "rf_conformer_conv_norm_use_mask" in config.typed_dict:
+            config_value = config.typed_dict["rf_conformer_conv_norm_use_mask"]
+            assert config_value is None or isinstance(config_value, bool)
+        elif "rf_conformer_conv_norm_use_mask" in config.dict:
+            config_value = config.bool("rf_conformer_conv_norm_use_mask", None)
+    if config_value is not None:
+        return config_value
+    return None if BehaviorVersion.get() >= 29 else False

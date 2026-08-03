@@ -22,6 +22,23 @@ and not listing legacy/deprecated parameters.
 Version History
 ---------------
 
+Behavior version 29 (2026-08-03)
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+:class:`ConformerEncoderLayer` conv-block :class:`rf.BatchNorm`:
+``conv_norm_opts`` no longer forces ``use_mask=False``.
+It now leaves the choice to :class:`rf.BatchNorm` itself (via :func:`rf.use_mask_default`),
+which masks by default, so the batch statistics run over the real frames.
+
+Unmasked, the statistics run over the raw storage rather than over the real frames,
+so they depend on how the batch is stored:
+a padded batch includes its padding frames, a packed batch includes its gap frames.
+The same model then normalizes differently depending on the storage layout,
+and packed and padded training cannot agree.
+
+There is also the global config option ``rf_conformer_conv_norm_use_mask: bool``
+to override in both directions.
+
 Behavior version 28 (2026-07-29)
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
