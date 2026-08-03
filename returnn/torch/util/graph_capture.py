@@ -60,6 +60,7 @@ Mechanics (validated by standalone probes first, see the 2026 packed/CUDA-graph 
 from __future__ import annotations
 from typing import Optional, Union, Any, Callable, Dict, List, Tuple
 from contextlib import contextmanager
+import gc
 import os
 import numpy
 import torch
@@ -1077,6 +1078,13 @@ class GraphCapturedTrainStep:
         """build the compiled step once; the first call traces + Inductor-compiles + autotunes"""
         if self._compiled_fn is None:
             self._compiled_fn = self._make_compiled_step()
+            # drop the warmup steps' result ctx before the first compiled run:
+            # its retained tensors (~0.4 GiB) plus cached free blocks
+            # count against a first-run peak
+            # that is short by only a few hundred MiB at the loq bs200k bound
+            self._ctx = None
+            gc.collect()
+            torch.cuda.empty_cache()
             raws = [p.raw_tensor for p in self._rf_params]
             with _allow_non_fake_inputs():
                 outs = self._compiled_fn(self._compiled_call_args(raws))
@@ -1112,6 +1120,13 @@ class GraphCapturedTrainStep:
                 p.grad.zero_()
             outs[0].backward()
         torch.cuda.synchronize()
+        # release the warm runs' cached blocks BEFORE capture:
+        # capture allocates from the separate graph pool and cannot reuse them,
+        # and DURING capture the allocator cannot cudaFree cached blocks either
+        # (illegal under capture, so the usual free-and-retry rescue is disabled)
+        # -- without this release, capture needs the step footprint TWICE
+        del outs
+        torch.cuda.empty_cache()
         with torch.cuda.graph(graph):
             if self._partitioned:
                 # in-graph: backward ACCUMULATES into the static grads -> zero first
