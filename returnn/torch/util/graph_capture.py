@@ -446,6 +446,8 @@ class GraphCapturedTrainStep:
         # with "partitioned" + budget: lift the min-cut recompute allowlist bans
         # (matmul-and-friends outputs are otherwise never recomputed, the budget saturates)
         self._aggressive_recomputation = bool(opts.get("aggressive_recomputation", False))
+        # partitioned mode: sorted (data-buf keys, lens-buf keys) lifted to trace inputs; see _compiled_call_args
+        self._partitioned_buf_keys: Optional[Tuple[List[str], List[str]]] = None
         if self._partitioned:
             assert self._compile, 'torch_cuda_graph: "partitioned" requires "compile"'
         # debug: Inductor generates a nan-assert after every kernel,
@@ -931,13 +933,62 @@ class GraphCapturedTrainStep:
             # noinspection PyProtectedMember
             from torch._functorch.partitioners import min_cut_rematerialization_partition
 
+            # noinspection PyProtectedMember
+            import torch._inductor.config as inductor_config_
+
+            # comprehensive STRIDE padding would re-pad the halves' output strides
+            # (saved activations are not user-visible outputs here, so their layout is free);
+            # without torch.compile's fw->bwd stride negotiation (absent under raw aot_function)
+            # the bwd input stride asserts then fail.
+            # Shape padding (pad_mm, the joint-graph pass in partition_fn) stays on.
+            inductor_config_.comprehensive_padding = False
             if self._activation_memory_budget is not None:
                 functorch_config.activation_memory_budget = float(self._activation_memory_budget)
             if self._aggressive_recomputation:
                 functorch_config.aggressive_recomputation = True
-            # make_boxed_compiler: aot_function does not recognize compile_fx's output as boxed
-            # and wraps it (losing the CompiledFxGraph object)
-            from functorch.compile import make_boxed_compiler
+                # aggressive_recomputation lifts all ban heuristics EXCEPT reductions;
+                # the big loq savers (log-softmax outputs, normalizations) are reductions -- lift that too
+                functorch_config.ban_recompute_reductions = False
+
+            inner_backend_ = backend
+            if inner_backend_ is compile_fx:
+                # compile each half with compile_fx_inner, like torch.compile does after partitioning.
+                # The full compile_fx wraps the half in ANOTHER aot_module_simplified layer,
+                # whose positional-args call frame PINS all inputs for the entire call:
+                # the generated code's progressive input freeing (args.clear + per-arg del)
+                # then never frees anything,
+                # and the bwd runs with the whole saved set resident
+                # (measured: all 46.45 GiB saved still active at 90% through the bwd; OOM at bs200k).
+                # compile_fx_inner returns the boxed CompiledFxGraph directly, no extra layer.
+                # noinspection PyProtectedMember
+                from torch._inductor.compile_fx import compile_fx_inner
+
+                inner_backend_ = compile_fx_inner
+
+            def fw_compiler_logged(gm, example_inputs):
+                """log the saved-activation set (what the budget solver kept), then compile"""
+                out_args = [n for n in gm.graph.nodes if n.op == "output"][0].args[0]
+                total_bytes = 0
+                items = []
+                for a in out_args[self._compiled_n_loss_outs + 1 :]:
+                    v = getattr(a, "meta", {}).get("val") if a is not None else None
+                    if v is not None and hasattr(v, "numel"):
+                        nb = v.numel() * v.element_size()
+                        total_bytes += nb
+                        items.append((nb, tuple(v.shape), tuple(v.stride()), str(v.dtype)))
+                print(
+                    f"torch_cuda_graph partitioned fw: {len(items)} saved activations,"
+                    f" {total_bytes / 2**30:.2f} GiB (traced sizes)",
+                    flush=True,
+                )
+                for nb, shape, stride, dtype in sorted(items, reverse=True)[:15]:
+                    print(f"  saved {nb / 2**20:9.1f} MiB {dtype} {shape} stride {stride}", flush=True)
+                return inner_backend_(gm, example_inputs)
+
+            backend = fw_compiler_logged
+            # no make_boxed_compiler here: compile_fx_inner's CompiledFxGraph is already boxed;
+            # make_boxed_compiler would re-wrap it positionally and break the calling convention
+            # (TypeError: CompiledFxGraph.__call__ takes 2 positional arguments)
 
             def partition_fn(gm, joint_inputs, **kwargs):
                 """
@@ -949,19 +1000,51 @@ class GraphCapturedTrainStep:
                 within the fw, hits the compiled bwd's input stride asserts;
                 the torch.compile fw->bwd stride negotiation does not function
                 under raw aot_function -- repro-verified, torch 2.7.)
-                compile_fx re-runs the joint passes per half; idempotent, mms already aligned.
+                The halves are then compiled with compile_fx_inner (no joint-pass re-run), like torch.compile.
                 """
                 # noinspection PyProtectedMember
                 from torch._inductor.fx_passes.joint_graph import joint_graph_passes
 
                 joint_graph_passes(gm)
-                return min_cut_rematerialization_partition(gm, joint_inputs, **kwargs)
+                fw_module, bw_module = min_cut_rematerialization_partition(gm, joint_inputs, **kwargs)
+                return fw_module, bw_module
+
+            # the full compile_fx applied the Inductor decomp table in its inner aot layer;
+            # with compile_fx_inner halves the OUTER trace must decompose
+            # (else e.g. aten.floor_divide reaches lowering: "both a fallback and a decomp")
+            # noinspection PyProtectedMember
+            from torch._inductor.decomposition import select_decomp_table
+
+            # data/lens buffers + step tensor as explicit trace inputs (see _compiled_call_args)
+            data_keys = sorted(self._data_bufs)
+            lens_keys = sorted(self._lens_bufs)
+            self._partitioned_buf_keys = (data_keys, lens_keys)
+            n_params = len(orig_raws)
+
+            def step_core_buf_inputs(all_raws):
+                """step_core with the closure buffers swapped for the passed trace inputs"""
+                bufs = all_raws[n_params:]
+                data_ph = bufs[: len(data_keys)]
+                lens_ph = bufs[len(data_keys) : len(data_keys) + len(lens_keys)]
+                saved = (dict(self._data_bufs), dict(self._lens_bufs), self._step_t.raw_tensor)
+                try:
+                    for k, t in zip(data_keys, data_ph):
+                        self._data_bufs[k] = t
+                    for k, t in zip(lens_keys, lens_ph):
+                        self._lens_bufs[k] = t
+                    self._step_t.raw_tensor = bufs[-1]
+                    return step_core(all_raws[:n_params])
+                finally:
+                    self._data_bufs.update(saved[0])
+                    self._lens_bufs.update(saved[1])
+                    self._step_t.raw_tensor = saved[2]
 
             return aot_function(
-                step_core,
-                fw_compiler=make_boxed_compiler(backend),
-                bw_compiler=make_boxed_compiler(backend),
+                step_core_buf_inputs,
+                fw_compiler=backend,
+                bw_compiler=inner_backend_,
                 partition_fn=partition_fn,
+                decompositions=select_decomp_table(),
             )
         # NOTE: partition_fn / activation_memory_budget are IRRELEVANT in this (default) mode:
         # step_core computes the grads itself, so this is ONE inference-style graph,
@@ -969,13 +1052,34 @@ class GraphCapturedTrainStep:
         # (For the partitioned alternative see opts "partitioned".)
         return aot_function(step_core, fw_compiler=backend)
 
+    def _compiled_call_args(self, raws: List[torch.Tensor]) -> List[torch.Tensor]:
+        """
+        The compiled step's runtime inputs: the param raws,
+        plus (partitioned mode) the data/lens buffers and the step tensor.
+        These are closure state of step_core.
+        aot_function bakes closed-over tensors as graph CONSTANTS,
+        and compile_fx_inner constant-folds them
+        (measured: the seq lens frozen at their trace-time values -> wrong losses).
+        The full-compile_fx backend hid this by re-lifting closure tensors in its inner aot layer.
+        The buffer objects are created once and refreshed in place, so identity is stable.
+        """
+        if self._partitioned_buf_keys is None:
+            return raws
+        data_keys, lens_keys = self._partitioned_buf_keys
+        return (
+            list(raws)
+            + [self._data_bufs[k] for k in data_keys]
+            + [self._lens_bufs[k] for k in lens_keys]
+            + [self._step_buf]
+        )
+
     def _ensure_compiled(self) -> Callable[[List[torch.Tensor]], tuple]:
         """build the compiled step once; the first call traces + Inductor-compiles + autotunes"""
         if self._compiled_fn is None:
             self._compiled_fn = self._make_compiled_step()
             raws = [p.raw_tensor for p in self._rf_params]
             with _allow_non_fake_inputs():
-                outs = self._compiled_fn(raws)
+                outs = self._compiled_fn(self._compiled_call_args(raws))
                 if self._partitioned:
                     # the bwd graph compiles on the first backward
                     for p in self._params:
@@ -1002,7 +1106,7 @@ class GraphCapturedTrainStep:
         raws = [p.raw_tensor for p in self._rf_params]
         self._log_misaligned_inputs(raws)
         # plain warm run (in partitioned mode incl. backward: autotune + workspaces)
-        outs = compiled(raws)
+        outs = compiled(self._compiled_call_args(raws))
         if self._partitioned:
             for p in self._params:
                 p.grad.zero_()
@@ -1013,7 +1117,7 @@ class GraphCapturedTrainStep:
                 # in-graph: backward ACCUMULATES into the static grads -> zero first
                 for p in self._params:
                     p.grad.zero_()
-            outs = compiled(raws)
+            outs = compiled(self._compiled_call_args(raws))
             if self._partitioned:
                 outs[0].backward()
             else:
@@ -1079,7 +1183,7 @@ class GraphCapturedTrainStep:
         if self._partitioned:
             for p in self._params:
                 p.grad.zero_()
-        outs = self._compiled_fn(raws)
+        outs = self._compiled_fn(self._compiled_call_args(raws))
         if self._debug_nan_dump_inputs:
             self._check_finite_dump_inputs(outs)
         if self._partitioned:
