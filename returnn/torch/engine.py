@@ -1950,7 +1950,7 @@ def _opt_torch_profiler_from_opts(
     opts: Union[None, int, bool, str, Dict[str, Any]], torch_distributed_ctx: Optional[DistributedContext]
 ) -> Optional[_TorchProfiler]:
     # Only profile worker #0: https://github.com/rwth-i6/returnn/issues/1821
-    if torch_distributed_ctx is None or (torch_distributed_ctx is not None and torch_distributed_ctx.local_rank() == 0):
+    if torch_distributed_ctx is not None and torch_distributed_ctx.local_rank() != 0:
         return None
 
     if isinstance(opts, str):
