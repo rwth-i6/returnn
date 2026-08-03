@@ -348,6 +348,71 @@ def test_ctc_loss_grad_padded_vs_packed():
     assert leaf_packed.grad[~mask].abs().max().item() == 0.0
 
 
+def test_ctc_loss_packed_over_allocated_bounds():
+    """
+    Bound regime (CUDA-graph capture):
+    the targets buffer, the frame bound and the batch size are STATIC
+    and much wider than the batch needs,
+    and the unused batch slots are zero-length seqs.
+    Neither the loss nor the grads may depend on that over-allocation,
+    even though the FSA is built over the whole buffer width
+    (``n_edges = n_batch * (5 * (n_time - 1) + 10)``)
+    and the junk beyond each target length is arbitrary.
+    """
+    torch.manual_seed(11)
+    lens = [9, 7, 4]
+    tgt_lens = [4, 3, 2]
+    n_batch, dim, blank = len(lens), 6, 5
+    tgt_cap, frame_bound, batch_bound = 32, 24, 5  # all >> what the batch needs
+
+    logits = torch.randn(sum(lens), dim)
+    starts = torch.tensor([0, lens[0], lens[0] + lens[1]], dtype=torch.int32)
+    targets_tight = torch.randint(0, blank, (n_batch, max(tgt_lens)), dtype=torch.int32)
+    lens_t = torch.tensor(lens, dtype=torch.int32)
+    tgt_lens_t = torch.tensor(tgt_lens, dtype=torch.int32)
+
+    leaf_tight = logits.clone().requires_grad_(True)
+    loss_tight = ctc_loss_packed(
+        logits=leaf_tight,
+        seq_starts=starts,
+        logits_seq_lens=lens_t,
+        max_seq_len=max(lens),
+        targets=targets_tight,
+        targets_seq_lens=tgt_lens_t,
+        blank_index=blank,
+    )
+    loss_tight.sum().backward()
+
+    # over-allocated: targets padded to tgt_cap with JUNK beyond each length,
+    # extra zero-length seqs up to batch_bound,
+    # frame bound well above max(lens)
+    targets_wide = torch.randint(0, blank, (batch_bound, tgt_cap), dtype=torch.int32)
+    for b in range(n_batch):
+        targets_wide[b, : tgt_lens[b]] = targets_tight[b, : tgt_lens[b]]
+    lens_wide = torch.zeros(batch_bound, dtype=torch.int32)
+    lens_wide[:n_batch] = lens_t
+    tgt_lens_wide = torch.zeros(batch_bound, dtype=torch.int32)
+    tgt_lens_wide[:n_batch] = tgt_lens_t
+    starts_wide = torch.zeros(batch_bound, dtype=torch.int32)
+    starts_wide[:n_batch] = starts
+
+    leaf_wide = logits.clone().requires_grad_(True)
+    loss_wide = ctc_loss_packed(
+        logits=leaf_wide,
+        seq_starts=starts_wide,
+        logits_seq_lens=lens_wide,
+        max_seq_len=frame_bound,
+        targets=targets_wide,
+        targets_seq_lens=tgt_lens_wide,
+        blank_index=blank,
+    )
+    loss_wide.sum().backward()
+
+    assert_allclose(loss_wide[:n_batch].detach().numpy(), loss_tight.detach().numpy(), rtol=1e-5, atol=1e-6)
+    assert loss_wide[n_batch:].abs().max().item() == 0.0  # zero-length seqs contribute nothing
+    assert_allclose(leaf_wide.grad.numpy(), leaf_tight.grad.numpy(), rtol=1e-5, atol=1e-6)
+
+
 def test_ctc_fsa_batch3_len6_c8():
     """
     This (:func:`Fsa.get_ctc_fsa_fast_bw`) is used by :func:`ctc_loss`.

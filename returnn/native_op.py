@@ -3263,6 +3263,16 @@ class FastBaumWelchOp(NativeOpGenBase):
           return;
         }
 
+        // A zero-probability edge (INF weight, i.e. -log space) can never contribute:
+        // prob_add(x, INF) == x.
+        // Testing it FIRST costs one coalesced load and skips the RANDOM prev_frame read,
+        // which is what an over-allocated FSA otherwise pays for every one of its dead edges.
+        float    edge_weight  = weight_buffer[idx];
+        if (isinf(edge_weight)) {
+          edge_buffer[idx] = INF_F;
+          return;
+        }
+
         unsigned from     = from_buffer  [idx];
         float    prev_val = prev_frame[from];
         if (isinf(prev_val)) {
@@ -3272,7 +3282,6 @@ class FastBaumWelchOp(NativeOpGenBase):
 
         unsigned to           = to_buffer    [idx];
         unsigned emission_idx = emission_idxs[idx];
-        float    edge_weight  = weight_buffer[idx];
         unsigned sequence_idx = sequence_idxs[idx];
 
         float val = prev_val + edge_weight + am_scores[sequence_idx * num_emissions + emission_idx];
@@ -3307,6 +3316,15 @@ class FastBaumWelchOp(NativeOpGenBase):
 
         for (unsigned e = threadIdx.x; e < num_edges; e += blockDim.x) {
           float v = buffer[e];
+          if (isinf(v)) {
+            // zero-probability edge: prob_add(x, INF) == x, so it cannot contribute.
+            // Most edges are of this kind
+            // whenever the targets buffer is wider than the actual target lengths:
+            // the FSA is built over the buffer width
+            // and routes the unused edges through a dummy state.
+            // Skipping them saves the contended log-space CAS.
+            continue;
+          }
           if (isnan(v)) {
             // junk edges (e.g. masked frames): no contribution.
             // (prob_add(x, NaN) returns INF, i.e. RESETS the accumulator
@@ -3733,6 +3751,16 @@ class FastBaumWelchPackedOp(NativeOpGenBase):
           return;
         }
 
+        // A zero-probability edge (INF weight, i.e. -log space) can never contribute:
+        // prob_add(x, INF) == x.
+        // Testing it FIRST costs one coalesced load and skips the RANDOM prev_frame read,
+        // which is what an over-allocated FSA otherwise pays for every one of its dead edges.
+        float    edge_weight  = weight_buffer[idx];
+        if (isinf(edge_weight)) {
+          edge_buffer[idx] = INF_F;
+          return;
+        }
+
         unsigned from     = from_buffer  [idx];
         float    prev_val = prev_frame[from];
         if (isinf(prev_val)) {
@@ -3742,7 +3770,6 @@ class FastBaumWelchPackedOp(NativeOpGenBase):
 
         unsigned to           = to_buffer    [idx];
         unsigned emission_idx = emission_idxs[idx];
-        float    edge_weight  = weight_buffer[idx];
 
         float val = prev_val + edge_weight
                     + am_scores[(seq_starts[sequence_idx] + t) * num_emissions + emission_idx];
