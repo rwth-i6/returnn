@@ -393,7 +393,9 @@ def test_ctc_loss_packed_over_allocated_bounds():
     lens_wide[:n_batch] = lens_t
     tgt_lens_wide = torch.zeros(batch_bound, dtype=torch.int32)
     tgt_lens_wide[:n_batch] = tgt_lens_t
-    starts_wide = torch.zeros(batch_bound, dtype=torch.int32)
+    # the filler seqs go PAST the content, keeping seq_starts ascending
+    # (ctc_loss_packed maps frames to seqs by searchsorted); that is what the packed collate emits
+    starts_wide = torch.full((batch_bound,), sum(lens), dtype=torch.int32)
     starts_wide[:n_batch] = starts
 
     leaf_wide = logits.clone().requires_grad_(True)

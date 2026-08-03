@@ -752,6 +752,9 @@ def ctc_loss_packed(
     (the biggest buffers are the (frames,dim) logits / log-probs / fwdbwd).
     Any packed layout: seq b occupies [seq_starts[b], seq_starts[b] + logits_seq_lens[b]);
     frames not covered by any seq (gap / alignment padding) are never read and get zero grad.
+    seq_starts must be ASCENDING: the backward maps each frame to its seq by searchsorted over them.
+    Filler (zero-length) seqs of a bound-shaped batch therefore belong past the content,
+    not at offset 0.
 
     :param logits: (total_time, dim), the seqs concatenated along time. unnormalized (before softmax)
     :param seq_starts: (batch,), int32. start offset of each seq in the total_time axis
