@@ -432,7 +432,9 @@ def make_amuse_param_groups(
 
 # the .opt.pt stores param_groups_custom as a functools.partial,
 # allowlist it (+ the wrapped fn) so torch.load can resume.
-torch.serialization.add_safe_globals([functools.partial, _amuse_param_groups])
+# add_safe_globals only exists since torch 2.4; older torch loads with weights_only=False anyway.
+if hasattr(torch.serialization, "add_safe_globals"):
+    torch.serialization.add_safe_globals([functools.partial, _amuse_param_groups])
 
 
 # epoch callbacks
