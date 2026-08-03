@@ -427,11 +427,17 @@ class Updater:
         tmp_filename = filename + ".tmp_write"
         if os.path.exists(tmp_filename):
             os.unlink(tmp_filename)
+        # optimizer_opts is saved as metadata only (load_optimizer ignores it)
+        # Drop callables like param_groups_custom so torch.load (weights_only=True since torch 2.6) can read it.
+        optimizer_opts_to_save = self._optimizer_opts
+        if isinstance(optimizer_opts_to_save, dict):
+            optimizer_opts_to_save = {k: v for k, v in optimizer_opts_to_save.items() if not callable(v)}
+
         torch.save(
             {
                 "optimizer": self.optimizer.state_dict(),
                 "optimizer_class_name": self.optimizer.__class__.__name__,
-                "optimizer_opts": self._optimizer_opts,
+                "optimizer_opts": optimizer_opts_to_save,
                 "param_names": param_names,
                 "epoch": self._current_epoch,
                 "step": self._current_train_step,
