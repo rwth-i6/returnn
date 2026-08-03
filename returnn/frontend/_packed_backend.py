@@ -1500,7 +1500,7 @@ def _torch_sdpa_varlen_attention(
                         # (grad/dropout-value dependent) poisoning the layer's grads.
                         # The fillers are trailing: clamp the cu_q tail to the real q total
                         # -> their segments become zero-length.
-                        n_real = (cu_k_flash[1:] > cu_k_flash[:-1]).sum()
+                        n_real = torch.sum(cu_k_flash[1:] > cu_k_flash[:-1])
                         eff_total = cu_q_flash.gather(0, n_real.long())
                         cu_q_flash = torch.minimum(cu_q_flash, eff_total)
 
