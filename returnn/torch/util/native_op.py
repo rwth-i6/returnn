@@ -622,6 +622,10 @@ def get_ctc_fsa_fast_bw(
         start_end_states is (2,batch), int32, (start,end) state idx in FSA.
     """
     assert targets.ndim == 2
+    cached = _ctc_fsa_cache_get(targets, seq_lens, blank_idx, label_loop)
+    if cached is not None:
+        return cached
+    targets_arg, seq_lens_arg = targets, seq_lens
     targets = targets.to(torch.int32)
     n_batch, n_time = targets.shape
 
@@ -641,7 +645,50 @@ def get_ctc_fsa_fast_bw(
     op = maker.make_op()
     edges, start_end_states = op(targets, seq_lens, blank_idx, weights, label_loop)
 
-    return edges, weights, start_end_states
+    res = (edges, weights, start_end_states)
+    _ctc_fsa_cache_set(targets_arg, seq_lens_arg, blank_idx, label_loop, res)
+    return res
+
+
+# The aux CTC heads (e.g. aux_loss_layers [4, 10, 16]) all score the SAME targets,
+# so they build the same FSA; only the logits differ.
+# This is the chokepoint for every caller, packed and padded alike,
+# which is why the cache sits here and not in a backend.
+# It cannot use returnn.frontend._cache.Cache:
+# that keys on RF Tensors and Dims (_transform_key_item rejects anything else),
+# while these are raw torch tensors.
+# So the step scoping the Cache would give for free is done by hand,
+# keyed by tensor IDENTITY plus _version:
+# under CUDA-graph capture the targets live in a static buffer refilled in place every step,
+# so a data_ptr-only key would return a stale FSA.
+# One slot is enough: the heads are evaluated back to back.
+_CtcFsa = Tuple[torch.Tensor, torch.Tensor, torch.Tensor]  # edges, weights, start_end_states
+# targets, seq_lens, blank_idx, label_loop, targets._version, seq_lens._version, fsa
+_CtcFsaCacheEntry = Tuple[torch.Tensor, torch.Tensor, int, bool, int, int, _CtcFsa]
+_ctc_fsa_cache: Optional[_CtcFsaCacheEntry] = None
+
+
+def _ctc_fsa_cache_get(
+    targets: torch.Tensor, seq_lens: torch.Tensor, blank_idx: int, label_loop: bool
+) -> Optional[_CtcFsa]:
+    """the cached FSA if it was built for exactly these arguments, else None"""
+    if _ctc_fsa_cache is None:
+        return None
+    t, sl, bi, ll, t_ver, sl_ver, res = _ctc_fsa_cache
+    if t is targets and sl is seq_lens and bi == blank_idx and ll == label_loop:
+        # noinspection PyProtectedMember
+        if t_ver == targets._version and sl_ver == seq_lens._version:
+            return res
+    return None
+
+
+# noinspection PyProtectedMember
+def _ctc_fsa_cache_set(
+    targets: torch.Tensor, seq_lens: torch.Tensor, blank_idx: int, label_loop: bool, res: _CtcFsa
+) -> None:
+    """remember the FSA, so the other heads on the same targets reuse it"""
+    global _ctc_fsa_cache
+    _ctc_fsa_cache = (targets, seq_lens, blank_idx, label_loop, targets._version, seq_lens._version, res)
 
 
 def fast_baum_welch(
