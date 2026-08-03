@@ -538,8 +538,13 @@ def _repack_result(out, template: PackedRawTensor, *, replacements: Optional[dic
             for d in out.dims
             if d not in template.orig_dims and d.dyn_size_ext is not None and m in _dim_derivation_bases(d)
         ]
-        if len(candidates) != 1:
-            # cannot infer the new packing (none or ambiguous); stays padded
+        if not candidates:
+            # nothing in the result derives from the packed dim:
+            # the op reduced over it (e.g. ctc_loss -> [B] per-seq losses).
+            # There is no packing to restore.
+            return out
+        if len(candidates) > 1:
+            # ambiguous derivation; stays padded
             _warn_fallback_once(
                 f"repack:{m.name}", f"result {out} has {len(candidates)} replacement candidates for packed dim {m}"
             )
