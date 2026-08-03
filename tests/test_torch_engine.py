@@ -1109,9 +1109,18 @@ def test_torch_engine_sub_proc_cleanup():
         # Check that all sub procs are also killed.
         any_alive = False
         for child_proc in child_procs:
-            if child_proc.is_running():
-                print(f"Child proc still running: {child_proc} {child_proc.cmdline()}")
-                any_alive = True
+            try:
+                # is_running() is True for a ZOMBIE as well,
+                # i.e. a proc which already exited and only waits to be reaped by its parent.
+                # That counts as killed. (The parent is gone here, so init reaps them,
+                # but on a loaded machine that can take a moment.)
+                if not child_proc.is_running() or child_proc.status() == psutil.STATUS_ZOMBIE:
+                    continue
+                cmdline = child_proc.cmdline()
+            except (psutil.NoSuchProcess, psutil.ZombieProcess):
+                continue  # exited in between
+            print(f"Child proc still running: {child_proc} {cmdline}")
+            any_alive = True
         counter += 1
         if any_alive:
             if counter > 100:
