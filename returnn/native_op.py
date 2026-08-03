@@ -5257,7 +5257,7 @@ class GetCtcFsaFastBwOp(NativeOpGenBase):
         int n_batch, int n_time, int n_edges,
         const int32_t* targets, const int32_t* seq_lens,
         int32_t blank_idx,
-        int32_t* edges, int32_t* start_end_states
+        int32_t* edges, int32_t* start_end_states, float* weights
         )
       {
         int idx = threadIdx.x + blockDim.x * blockIdx.x;
@@ -5478,6 +5478,13 @@ class GetCtcFsaFastBwOp(NativeOpGenBase):
           edges[1 * n_edges + idx] = state_idx_offset + to_state_idx; // to
           edges[2 * n_edges + idx] = emission_idx; // emission
           edges[3 * n_edges + idx] = batch_idx; // batch
+          // srel_edge_idx stays -1 exactly for the edges routed into the dummy state,
+          // i.e. the ones this seq does not use
+          // (the FSA spans the targets BUFFER width).
+          // INF weight = zero probability,
+          // so fast_baum_welch can skip them on one coalesced load,
+          // without knowing anything about this topology.
+          weights[idx] = (srel_edge_idx < 0) ? INF_F : 0.0f;
 
           idx += gridDim.x * blockDim.x;
         }
@@ -5522,14 +5529,14 @@ class GetCtcFsaFastBwOp(NativeOpGenBase):
         n_batch, n_time, n_edges,
         Ndarray_DEV_DATA_int32(targets), Ndarray_DEV_DATA_int32(seq_lens),
         blank_idx,
-        Ndarray_DEV_DATA_int32(edges), Ndarray_DEV_DATA_int32(start_end_states)
+        Ndarray_DEV_DATA_int32(edges), Ndarray_DEV_DATA_int32(start_end_states), Ndarray_DEV_DATA(weights)
       ));
     } else {
       start_dev_kernel(construct_kernel<false>, (
         n_batch, n_time, n_edges,
         Ndarray_DEV_DATA_int32(targets), Ndarray_DEV_DATA_int32(seq_lens),
         blank_idx,
-        Ndarray_DEV_DATA_int32(edges), Ndarray_DEV_DATA_int32(start_end_states)
+        Ndarray_DEV_DATA_int32(edges), Ndarray_DEV_DATA_int32(start_end_states), Ndarray_DEV_DATA(weights)
       ));
     }
     HANDLE_LAST_ERROR();
