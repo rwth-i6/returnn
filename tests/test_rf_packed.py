@@ -1203,6 +1203,11 @@ def _full_model_packed_vs_padded(
 
 def test_full_model_packed_vs_padded_grads():
     # CPU: encoder rel-pos attention and the decoder both go through FlexAttention.
+    # That needs a recent torch (CI also runs torch 2.0), and without it there is no packed
+    # fast path for these attentions at all: the expected paths would not match, and the
+    # gated unpack fallback would raise. Nothing to compare then, so skip.
+    if not _flex_attention_usable():
+        raise unittest.SkipTest("needs FlexAttention (torch >= 2.7)")
     _full_model_packed_vs_padded("cpu", rtol=1e-4, expected_att_paths={"rel_pos_flex": 2, "flex_doc": 4})
 
 
