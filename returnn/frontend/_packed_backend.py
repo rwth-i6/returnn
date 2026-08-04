@@ -69,6 +69,7 @@ Import this module explicitly to activate the dispatch registration.
 
 from __future__ import annotations
 from typing import Any, Optional, Union, Sequence, Set, Tuple, Dict
+import math
 
 from returnn.tensor import Tensor, Dim
 import returnn.frontend as rf
@@ -782,14 +783,16 @@ def _regap_total_bound(raw: PackedRawTensor, gap: int, align: int) -> int:
     assert cur_bound is not None, (
         f"regap: static traceable (rf.is_static_traceable) requires a static packed dim (pack total_bound), got {raw}"
     )
-    if align != raw.align:
-        # a different alignment shifts every per-seq footprint; no cheap relation to the declared bound
-        raise NotImplementedError(f"regap: align {raw.align} -> {align} with a declared total bound")
     n_seqs = 1
     for d in raw.orig_dims[:-1]:
         c = d.capacity if d.dimension is None else d.dimension
         assert c is not None, f"regap: packed dim {d} needs a static size or capacity"
         n_seqs *= c
+    if align != raw.align:
+        # a new alignment shifts every per-seq footprint,
+        # so the signed delta below does not apply.
+        # cur_bound >= sum(len), and each seq then needs at most len + gap + align.
+        return cur_bound + n_seqs * (gap + align)
     # per seq, ceil((len + gap)/align) - ceil((len + raw.gap)/align) <= ceil((gap - raw.gap)/align).
     # SIGNED: a smaller gap needs less buffer, and only then is the bound a function of the layout --
     # otherwise regapping away and back (attention: gap -> 0 -> gap) grows it by n_seqs every time.
@@ -2718,10 +2721,8 @@ class PackedBackend(Backend[PackedRawTensor]):
         required_gap = max(pad_l, pad_r) if pad_l is not None else None
         # note: gap % align == 0 is NOT required: starts stay stride-aligned via the footprints;
         # whether the out layout is expressible is verified at runtime (_strided_out_wrapper).
-        stride_ok = st == 1 or raw.align % st == 0
         if (
             pad_l is not None
-            and stride_ok
             and (st > 1 or raw.gap + span - pad_l - pad_r >= 0)
             and in_spatial_dims[0] == raw.orig_dims[-1]
             and not any(_dim_refs_packed(d, raw) for d in in_spatial_dims[1:])
@@ -2729,20 +2730,24 @@ class PackedBackend(Backend[PackedRawTensor]):
             and not is_packed(filter)
             and (bias is None or not is_packed(bias))
         ):
-            if raw.gap < required_gap:
-                # still keep the conv packed: cheap re-layout with the required gap.
-                # The warning stays so this gets noticed and fixed at pack() time.
-                # For strided convs, keep the align | gap convention.
-                target_gap = required_gap if st == 1 else -(-required_gap // raw.align) * raw.align
+            # lcm keeps the old align a divisor; for strided, keep the align | gap convention.
+            realign = raw.align % st != 0
+            need_align = raw.align * st // math.gcd(raw.align, st) if realign else raw.align
+            # max, not required_gap: a realign must not shrink a gap the caller asked for
+            need_gap = max(raw.gap, required_gap)
+            if st > 1:
+                need_gap = -(-need_gap // need_align) * need_align
+            if realign or raw.gap < required_gap:
                 _warn_fallback_once(
                     "conv",
-                    f"gap {raw.gap} < required {required_gap} for the packed conv"
-                    f" -- specify pack(..., gap=...) to avoid the extra re-layout",
-                    action="re-packing with the required gap (conv stays packed)",
+                    f"packed conv needs gap >= {required_gap} and stride {st} | align"
+                    f" (have gap {raw.gap}, align {raw.align})"
+                    f" -- specify pack(..., gap=..., align=...) to avoid the extra re-layout",
+                    action=f"re-laying out to gap {need_gap} align {need_align} (conv stays packed)",
                     hard=False,
                     regap=True,
                 )
-                source = regap(source, target_gap)
+                source = regap(source, need_gap, align=need_align)
                 raw = source.raw_tensor
             inner = raw.inner
             mask = _frame_mask(raw)
@@ -3134,26 +3139,31 @@ class PackedBackend(Backend[PackedRawTensor]):
         else:
             pad_l = pad_r = None
         required_gap = max(pad_l, pad_r) if pad_l is not None else None
-        stride_ok = st == 1 or raw.align % st == 0
         if (
             pad_l is not None
-            and stride_ok
             and (st > 1 or raw.gap + span - pad_l - pad_r >= 0)
             and in_spatial_dims[0] == raw.orig_dims[-1]
             and not any(_dim_refs_packed(d, raw) for d in in_spatial_dims[1:])
             and not out_spatial_dims
         ):
-            if raw.gap < required_gap:
-                target_gap = required_gap if st == 1 else -(-required_gap // raw.align) * raw.align
+            # lcm keeps the old align a divisor; for strided, keep the align | gap convention.
+            realign = raw.align % st != 0
+            need_align = raw.align * st // math.gcd(raw.align, st) if realign else raw.align
+            # max, not required_gap: a realign must not shrink a gap the caller asked for
+            need_gap = max(raw.gap, required_gap)
+            if st > 1:
+                need_gap = -(-need_gap // need_align) * need_align
+            if realign or raw.gap < required_gap:
                 _warn_fallback_once(
                     "pool",
-                    f"gap {raw.gap} < required {required_gap} for the packed pool"
-                    f" -- specify pack(..., gap=...) to avoid the extra re-layout",
-                    action="re-packing with the required gap (pool stays packed)",
+                    f"packed pool needs gap >= {required_gap} and stride {st} | align"
+                    f" (have gap {raw.gap}, align {raw.align})"
+                    f" -- specify pack(..., gap=..., align=...) to avoid the extra re-layout",
+                    action=f"re-laying out to gap {need_gap} align {need_align} (pool stays packed)",
                     hard=False,
                     regap=True,
                 )
-                source = regap(source, target_gap)
+                source = regap(source, need_gap, align=need_align)
                 raw = source.raw_tensor
             inner = raw.inner
             if required_gap:

@@ -45,15 +45,26 @@ def _flex_attention_usable() -> bool:
 
 
 def _assert_equal_non_padded(actual: Tensor, expected: Tensor, batch_dim: Dim, time_dim: Dim, **kwargs):
-    """compare on all non-padded frames. actual can have packed storage."""
+    """
+    compare on all non-padded frames. actual can have packed storage.
+
+    The two sides can have different padded widths:
+    under static tracing the packed side unpacks to the real max length,
+    while the padded reference keeps its capacity-derived width.
+    So slice each seq against its own storage, instead of one shared mask.
+    """
     actual = packed.unpack(actual)
     order = [batch_dim, time_dim] + [d for d in expected.dims if d not in (batch_dim, time_dim)]
-    actual = actual.copy_transpose(order)
-    expected = expected.copy_transpose(order)
-    mask = rf.sequence_mask([batch_dim, time_dim]).copy_compatible_to_dims([batch_dim, time_dim]).raw_tensor.numpy()
-    a = actual.raw_tensor.detach().numpy()
-    e = expected.raw_tensor.detach().numpy()
-    numpy.testing.assert_allclose(a[mask], e[mask], **{"rtol": 1e-5, "atol": 1e-6, **kwargs})
+    a = actual.copy_transpose(order).raw_tensor.detach().cpu().numpy()
+    e = expected.copy_transpose(order).raw_tensor.detach().cpu().numpy()
+    opts = {"rtol": 1e-5, "atol": 1e-6, **kwargs}
+    if time_dim.dyn_size_ext is None:
+        numpy.testing.assert_allclose(a, e, **opts)
+        return
+    lens = time_dim.dyn_size_ext.copy_compatible_to_dims([batch_dim]).raw_tensor.cpu().numpy()
+    assert len(lens) == a.shape[0] == e.shape[0], f"batch {len(lens)} vs {a.shape[0]} vs {e.shape[0]}"
+    for b, n in enumerate(lens):
+        numpy.testing.assert_allclose(a[b, :n], e[b, :n], err_msg=f"seq {b}", **opts)
 
 
 def test_pack_auto_dims():
@@ -1239,6 +1250,63 @@ def test_full_model_packed_vs_padded_grads_gpu_bf16():
     _full_model_packed_vs_padded(
         "cuda", rtol=1e-1, atol=1e-1, amp=True, expected_att_paths={"rel_pos_triton": 2, "flash": 4}
     )
+
+
+def test_conv_packed_auto_realign():
+    # A stride-incompatible align is repaired like an insufficient gap:
+    # the conv re-aligns and stays packed, instead of dropping to the unpack fallback.
+    rf.select_backend_torch()
+    x, batch_dim, time_dim, in_dim = _make_input(batch_size=3, seq_lens=(29, 22, 15), feat=8, seed=6)
+    with rf.set_default_device_ctx("cpu"):
+        rf.set_random_seed(31)
+        conv = rf.Conv1d(in_dim, Dim(6, name="out"), filter_size=3, padding="same", strides=3)
+        out_ref, sp_ref = conv(x, in_spatial_dim=time_dim)
+
+        warned_before = set(packed._warned_fallback_ops)
+        packed._warned_fallback_ops.clear()
+        # align 1 does not divide stride 3
+        out_p, sp_p = conv(packed.pack(x, gap=4, align=1), in_spatial_dim=time_dim)
+        warned = set(packed._warned_fallback_ops)
+        packed._warned_fallback_ops.update(warned_before)
+
+        assert packed.is_packed(out_p), "conv left the packed representation"
+        assert not warned, f"unexpected fallback: {warned}"
+        # the out align is the realigned in align divided by the stride, so it is not checked here
+        _assert_equal_non_padded(out_p, out_ref, batch_dim, sp_ref)
+
+
+def test_conv_packed_auto_realign_static():
+    # Same under static tracing, where the realign must also derive a new total bound
+    # (the align change shifts every per-seq footprint).
+    rf.select_backend_torch()
+    batch_dim = Dim(3, name="batch")
+    seq_lens = [29, 22, 15]
+    cap = 36
+    in_dim = Dim(8, name="feat")
+    time_dim = Dim(
+        Tensor("time", dims=[batch_dim], dtype="int32", raw_tensor=torch.tensor(seq_lens, dtype=torch.int32)),
+        capacity=cap,
+    )
+    x = Tensor("x", dims=[batch_dim, time_dim, in_dim], dtype="float32")
+    x.raw_tensor = torch.randn(3, cap, 8, generator=torch.Generator().manual_seed(6))
+
+    with rf.set_default_device_ctx("cpu"):
+        rf.set_random_seed(31)
+        conv = rf.Conv1d(in_dim, Dim(6, name="out"), filter_size=3, padding="same", strides=3)
+        out_ref, sp_ref = conv(x, in_spatial_dim=time_dim)
+
+        warned_before = set(packed._warned_fallback_ops)
+        packed._warned_fallback_ops.clear()
+        with rf.set_static_traceable_ctx():
+            xp = packed.pack(x, gap=4, align=1, total_bound=3 * (cap + 4))
+            out_p, sp_p = conv(xp, in_spatial_dim=time_dim)
+        warned = set(packed._warned_fallback_ops)
+        packed._warned_fallback_ops.update(warned_before)
+
+        assert packed.is_packed(out_p), "conv left the packed representation"
+        assert not warned, f"unexpected fallback: {warned}"
+        assert out_p.raw_tensor.packed_dim.dimension is not None, "lost the static bound"
+        _assert_equal_non_padded(out_p, out_ref, batch_dim, sp_ref)
 
 
 if __name__ == "__main__":
