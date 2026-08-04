@@ -2586,9 +2586,23 @@ class PackedBackend(Backend[PackedRawTensor]):
             isinstance(raw, PackedRawTensor)
             and len(raw.orig_dims) == 2
             and raw.orig_dims[-1] == in_spatial_dim
-            and raw.align % st == 0
             and out_spatial_dim.dyn_size_ext is not None
         ):
+            if raw.align % st != 0:
+                # auto-realign, as in conv/pool: lcm keeps the old align a divisor,
+                # the gap is rounded up for align | gap
+                new_align = raw.align * st // math.gcd(raw.align, st)
+                new_gap = -(-raw.gap // new_align) * new_align
+                _warn_fallback_once(
+                    "stft",
+                    f"packed stft needs frame_step {st} | align (have align {raw.align})"
+                    f" -- specify pack(..., align=...) to avoid the extra re-layout",
+                    action=f"re-laying out to gap {new_gap} align {new_align} (stft stays packed)",
+                    hard=False,
+                    is_regap=True,
+                )
+                x = regap(x, new_gap, align=new_align)
+                raw = x.raw_tensor
             out_inner, out_sp, _ = rf.stft(raw.inner, in_spatial_dim=raw.packed_dim, out_dim=out_dim, **opts)
             out = _strided_out_wrapper(raw, out_inner, out_sp, out_spatial_dim, st)
             if out is not None:
