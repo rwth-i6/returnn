@@ -1007,6 +1007,235 @@ def test_stft_packed():
     _assert_equal_non_padded(out_p, out_ref, batch_dim, out_sp, rtol=1e-4, atol=1e-4)
 
 
+def _full_model_packed_vs_padded(
+    dev: str, *, rtol: float, expected_att_paths: dict, amp: bool = False, atol: float = 1e-4
+):
+    """
+    Full CTC+AED model, packed vs padded storage: losses, encoder output, and ALL parameter grads.
+
+    The other tests here cover the ops in isolation.
+    This one covers their composition, which is where a wrong per-seq index
+    (a cu_seqlens total, a seq start) can hide:
+    the forward still looks plausible while the backward credits the wrong sequence,
+    so comparing the grads is the essential part of this test, not an extra.
+
+    :param dev: "cpu" or "cuda". The attention fast paths are device-dependent
+        (CPU takes FlexAttention, CUDA the Triton rel-pos kernel),
+        so a CPU-only check leaves the kernels that real training runs untested.
+    :param rtol: relative tolerance on losses and grads
+    :param expected_att_paths: the attention paths the packed run must take.
+        Asserted so a regression that silently reroutes to another path
+        fails here, instead of passing on a path we did not mean to test.
+    :param amp: run the model under autocast bfloat16, as the real trainings do.
+        This is also the only way to reach the flash varlen attention path,
+        which is gated on cuda + fp16/bf16 (see _torch_sdpa_varlen_attention),
+        so an fp32-only test silently covers flex instead.
+    :param atol: absolute tolerance for the encoder output comparison
+    """
+    import contextlib
+
+    from returnn.frontend.encoder.conformer import (
+        ConformerEncoder,
+        ConformerEncoderLayer,
+        ConformerConvSubsample,
+        ConformerPositionwiseFeedForward,
+    )
+    from returnn.frontend.decoder.transformer import TransformerDecoder, FeedForwardGated
+
+    rf.select_backend_torch()
+
+    batch_dim = Dim(3, name="batch")
+    seq_lens = [29, 22, 15]  # distinct residues mod 6 (the total downsampling)
+    in_dim = Dim(8, name="feat")
+    time_dim = Dim(
+        Tensor("time", dims=[batch_dim], dtype="int32", raw_tensor=torch.tensor(seq_lens, dtype=torch.int32))
+    )
+    x = Tensor("x", dims=[batch_dim, time_dim, in_dim], dtype="float32")
+    x.raw_tensor = torch.randn(3, max(seq_lens), 8, generator=torch.Generator().manual_seed(6)).to(dev)
+
+    vocab_dim = Dim(11, name="vocab")
+    wb_vocab_dim = Dim(12, name="vocab_wb")  # + blank
+    tgt_time = Dim(
+        Tensor("tgt_time", dims=[batch_dim], dtype="int32", raw_tensor=torch.tensor([3, 2, 2], dtype=torch.int32))
+    )
+    targets = Tensor("targets", dims=[batch_dim, tgt_time], dtype="int32", sparse_dim=vocab_dim)
+    targets.raw_tensor = torch.randint(0, 11, (3, 3), dtype=torch.int32, generator=torch.Generator().manual_seed(8)).to(
+        dev
+    )
+
+    with rf.set_default_device_ctx(dev):
+        rf.set_random_seed(31)
+        # per-head dim must be >= 16: the Triton rel-pos kernel's tl.dot has a 16x16x16 minimum,
+        # so 2 heads need at least 32 model dim, else the CUDA path does not compile
+        enc_dim = Dim(32, name="enc")
+        encoder = ConformerEncoder(
+            in_dim,
+            enc_dim,
+            ff_dim=Dim(24, name="enc-ff"),
+            input_layer=ConformerConvSubsample(
+                in_dim,
+                out_dims=[Dim(4, name="conv1"), Dim(4, name="conv2"), Dim(4, name="conv3")],
+                filter_sizes=[(3, 3), (3, 3), (3, 3)],
+                pool_sizes=[(1, 2)],
+                strides=[(1, 1), (3, 1), (2, 1)],  # total time downsampling 6
+            ),
+            encoder_layer=rf.build_dict(
+                ConformerEncoderLayer,
+                ff=rf.build_dict(
+                    ConformerPositionwiseFeedForward, activation=rf.build_dict(rf.relu_square), with_bias=False
+                ),
+                num_heads=2,
+                # pin the conv-block BatchNorm masking instead of inheriting the behavior-version
+                # default, so this test isolates the packed ops and does not re-test that default.
+                # Unmasked, the statistics run over the raw storage (padding frames vs gap frames),
+                # so padded and packed cannot agree, see behavior version 29.
+                conv_norm_opts={"use_mask": True},
+            ),
+            num_layers=2,
+        )
+        decoder = TransformerDecoder(
+            enc_dim,
+            vocab_dim,
+            Dim(32, name="dec"),
+            num_layers=2,
+            num_heads=2,
+            norm=rf.build_dict(rf.RMSNorm),
+            ff=rf.build_dict(FeedForwardGated),
+            layer_opts=dict(self_att=rf.build_dict(rf.RotaryPosCausalSelfAttention, with_bias=False)),
+            dropout=0.0,
+            att_dropout=0.0,
+        )
+        aux_logits = rf.Linear(enc_dim, wb_vocab_dim)
+
+        params = {}
+        for mod, prefix in [(encoder, "enc"), (decoder, "dec"), (aux_logits, "aux")]:
+            for name, param in mod.named_parameters():
+                params[f"{prefix}.{name}"] = param
+
+        def _losses(feats_t, targets_t):
+            enc_out, enc_spatial = encoder(feats_t, in_spatial_dim=time_dim)
+            log_probs = rf.log_softmax(aux_logits(enc_out), axis=wb_vocab_dim)
+            ctc = rf.ctc_loss(
+                logits=log_probs,
+                logits_normalized=True,
+                targets=targets,
+                input_spatial_dim=enc_spatial,
+                targets_spatial_dim=tgt_time,
+                blank_index=wb_vocab_dim.dimension - 1,
+            )
+            ctc_sum = rf.reduce_sum(ctc, axis=list(ctc.dims))
+            enc_state = decoder.transform_encoder(enc_out, axis=enc_spatial)
+            logits, _ = decoder(
+                targets_t,
+                spatial_dim=tgt_time,
+                state=decoder.default_initial_state(batch_dims=[batch_dim]),
+                encoder=enc_state,
+            )
+            ce = rf.cross_entropy(estimated=logits, target=targets_t, axis=vocab_dim, estimated_type="logits")
+            ce_sum = rf.reduce_sum(ce, axis=list(ce.dims))
+            return ctc_sum, ce_sum, enc_out, enc_spatial
+
+        def _take_grads():
+            grads = {}
+            for name, param in params.items():
+                g = param.raw_tensor.grad
+                grads[name] = None if g is None else g.detach().float().cpu().clone()
+                param.raw_tensor.grad = None
+            return grads
+
+        amp_ctx = torch.autocast(device_type=dev, dtype=torch.bfloat16) if amp else contextlib.nullcontext()
+
+        for param in params.values():
+            param.raw_tensor.grad = None
+        with amp_ctx:
+            ctc_ref, ce_ref, enc_ref, spatial_ref = _losses(x, targets)
+        (ctc_ref.raw_tensor + ce_ref.raw_tensor).backward()
+        grads_ref = _take_grads()
+
+        # isolate this test's fallback bookkeeping (it is global and warn-once)
+        warned_before = set(packed._warned_fallback_ops)
+        packed._warned_fallback_ops.clear()
+        packed.attention_path_counts.clear()
+        # align 6 = total downsampling; gap 96 -> 16 at the subsampled rate, for the depthwise conv span
+        with amp_ctx:
+            ctc_p, ce_p, enc_p, spatial_p = _losses(packed.pack(x, gap=96, align=6), packed.pack(targets))
+        (ctc_p.raw_tensor + ce_p.raw_tensor).backward()
+        grads_p = _take_grads()
+        warned_here = set(packed._warned_fallback_ops)
+        packed._warned_fallback_ops.update(warned_before)
+
+        assert not warned_here, f"unexpected unpack fallbacks: {warned_here}"
+        assert dict(packed.attention_path_counts) == expected_att_paths, (
+            f"attention paths {dict(packed.attention_path_counts)}, expected {expected_att_paths}"
+        )
+
+        for name, ref_t, p_t in [("ctc", ctc_ref, ctc_p), ("ce", ce_ref, ce_p)]:
+            ref_v, p_v = float(ref_t.raw_tensor), float(p_t.raw_tensor)
+            rel = abs(ref_v - p_v) / max(abs(ref_v), 1e-6)
+            assert rel < rtol, f"{name} loss: padded {ref_v} vs packed {p_v} (rel {rel})"
+
+        # encoder output, on the non-padded frames only
+        actual = packed.unpack(enc_p).copy_transpose([batch_dim, spatial_p, enc_dim])
+        expected = enc_ref.copy_transpose([batch_dim, spatial_ref, enc_dim])
+        mask = (
+            rf.sequence_mask([batch_dim, spatial_ref])
+            .copy_compatible_to_dims([batch_dim, spatial_ref])
+            .raw_tensor.cpu()
+            .numpy()
+        )
+        numpy.testing.assert_allclose(
+            actual.raw_tensor.detach().float().cpu().numpy()[mask],
+            expected.raw_tensor.detach().float().cpu().numpy()[mask],
+            rtol=rtol,
+            atol=atol,
+            err_msg="encoder output differs",
+        )
+
+        assert len(params) > 50, f"expected the whole model, got {len(params)} params"
+        for name in sorted(params):
+            g_ref, g_p = grads_ref[name], grads_p[name]
+            assert (g_ref is None) == (g_p is None), f"grad {name}: padded {g_ref is None}, packed {g_p is None}"
+            if g_ref is None:
+                continue
+            rel = float((g_ref - g_p).abs().max()) / max(float(g_ref.abs().max()), 1e-8)
+            assert rel < rtol, f"grad {name}: max rel diff {rel}"
+
+
+def test_full_model_packed_vs_padded_grads():
+    # CPU: encoder rel-pos attention and the decoder both go through FlexAttention.
+    _full_model_packed_vs_padded("cpu", rtol=1e-4, expected_att_paths={"rel_pos_flex": 2, "flex_doc": 4})
+
+
+def test_full_model_packed_vs_padded_grads_gpu():
+    # CUDA takes the Triton rel-pos kernel for the encoder, which the CPU test cannot reach.
+    # That is the path real training runs, so a failure here is a training bug, not only a test bug.
+    if not torch.cuda.is_available():
+        raise unittest.SkipTest("needs CUDA")
+    # TF32 would lose more precision than the packed-vs-padded difference we are testing for
+    tf32_matmul, tf32_cudnn = torch.backends.cuda.matmul.allow_tf32, torch.backends.cudnn.allow_tf32
+    torch.backends.cuda.matmul.allow_tf32 = False
+    torch.backends.cudnn.allow_tf32 = False
+    try:
+        _full_model_packed_vs_padded("cuda", rtol=1e-3, expected_att_paths={"rel_pos_triton": 2, "flex_doc": 4})
+    finally:
+        torch.backends.cuda.matmul.allow_tf32 = tf32_matmul
+        torch.backends.cudnn.allow_tf32 = tf32_cudnn
+
+
+def test_full_model_packed_vs_padded_grads_gpu_bf16():
+    # autocast bf16, as the real trainings run.
+    # Only here does the decoder reach the flash varlen attention path:
+    # it is gated on cuda + fp16/bf16, so the fp32 test above silently covers flex instead,
+    # and the flash path is where a wrong cu_seqlens total would live.
+    # The tolerance is bf16-wide, but the failure this guards against is not subtle:
+    # attending across a sequence boundary moves grads by O(1), not by a few percent.
+    if not torch.cuda.is_available():
+        raise unittest.SkipTest("needs CUDA")
+    _full_model_packed_vs_padded(
+        "cuda", rtol=1e-1, atol=1e-1, amp=True, expected_att_paths={"rel_pos_triton": 2, "flash": 4}
+    )
+
+
 if __name__ == "__main__":
     better_exchook.install()
     if len(sys.argv) <= 1:
