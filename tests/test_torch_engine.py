@@ -1225,6 +1225,10 @@ def _build_cuda_graph_train_config_and_dataset(*, compile_: bool):
             num_epochs=2,
             learning_rate=1e-3,
             dynamic_learning_rate=_dyn_lr,
+            # covers the pre-clip grad-norm recording in updater.step,
+            # which under capture_optimizer runs in-graph (a static tensor updated per replay)
+            log_grad_norm=True,
+            gradient_clip_global_norm=5.0,
             optimizer={"class": "adamw", "capturable": True},
             torch_cuda_graph=dict(
                 batch_size_bound=10,
