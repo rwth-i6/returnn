@@ -406,7 +406,12 @@ def _fallback_allowed(op_name: str) -> bool:
 
 
 def _warn_fallback_once(
-    op_name: str, reason: str, *, action: str = "using slow unpack -> op -> repack fallback", hard: bool = True
+    op_name: str,
+    reason: str,
+    *,
+    action: str = "using slow unpack -> op -> repack fallback",
+    hard: bool = True,
+    regap: bool = False,
 ) -> None:
     """
     Print a warning on the first fallback / slow path per op, so these are visible.
@@ -421,10 +426,37 @@ def _warn_fallback_once(
             f" config `packed_fallback_allowed = [{op_name!r}]`"
             f" (or returnn.frontend._packed_backend.set_allowed_fallbacks)."
         )
+    if regap and not _warn_regap_enabled():
+        # Auto re-layout keeps the op packed and usually costs nothing measurable.
+        return
     if op_name in _warned_fallback_ops:
         return
     _warned_fallback_ops.add(op_name)
     print(f"PackedBackend warning: op {op_name!r}: {reason}, {action}. (Only warned once per op.)")
+
+
+def _warn_regap_enabled() -> bool:
+    """
+    :return: whether to warn about soft re-layouts (regap / realign) that keep the op packed.
+
+    Config option ``rf_packed_warn_regap``, default False.
+    Hard fallbacks (unpack -> op -> repack) are unaffected: those always warn and, unless
+    explicitly allowed, raise.
+    """
+    from returnn.config import get_global_config
+
+    config = get_global_config(raise_exception=False)
+    if config:
+        if "rf_packed_warn_regap" in config.typed_dict:
+            value = config.typed_dict["rf_packed_warn_regap"]
+            assert value is None or isinstance(value, bool)
+            if value is not None:
+                return value
+        elif "rf_packed_warn_regap" in config.dict:
+            value = config.bool("rf_packed_warn_regap", None)
+            if value is not None:
+                return value
+    return False
 
 
 def _add_dim_with_size_deps(dims: Set[Dim], d: Dim):
@@ -2708,6 +2740,7 @@ class PackedBackend(Backend[PackedRawTensor]):
                     f" -- specify pack(..., gap=...) to avoid the extra re-layout",
                     action="re-packing with the required gap (conv stays packed)",
                     hard=False,
+                    regap=True,
                 )
                 source = regap(source, target_gap)
                 raw = source.raw_tensor
@@ -3118,6 +3151,7 @@ class PackedBackend(Backend[PackedRawTensor]):
                     f" -- specify pack(..., gap=...) to avoid the extra re-layout",
                     action="re-packing with the required gap (pool stays packed)",
                     hard=False,
+                    regap=True,
                 )
                 source = regap(source, target_gap)
                 raw = source.raw_tensor
