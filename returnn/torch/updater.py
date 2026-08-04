@@ -245,6 +245,12 @@ class Updater:
         self._current_epoch_continuous = epoch_continuous
         self._update_effective_learning_rate()
 
+    def _grads(self) -> List[torch.Tensor]:
+        """
+        :return: the current gradients
+        """
+        return [p.grad for p in self.network.parameters() if p.grad is not None]
+
     def step(self, *, grad_scaler: Optional[torch.cuda.amp.GradScaler] = None):
         """
         Perform one step, i.e. update the parameters using the optimizer given the current calculated gradients.
@@ -264,7 +270,9 @@ class Updater:
         has_invalid_gradient = False
         if self._num_allowed_consec_invalid_gradient_steps is not None:
             if norm is None:
-                norm = torch.nn.utils.get_total_norm(self.network.parameters())
+                # only reached when no global-norm clip is configured,
+                # so the grads here are in the same state clip_grad_norm_ would have measured
+                norm = torch.nn.utils.get_total_norm(self._grads())
             has_invalid_gradient = torch.isnan(norm) or torch.isinf(norm)
             if has_invalid_gradient:
                 self._num_consec_invalid_gradients_steps += 1
