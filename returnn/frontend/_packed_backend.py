@@ -412,7 +412,7 @@ def _warn_fallback_once(
     *,
     action: str = "using slow unpack -> op -> repack fallback",
     hard: bool = True,
-    regap: bool = False,
+    is_regap: bool = False,
 ) -> None:
     """
     Print a warning on the first fallback / slow path per op, so these are visible.
@@ -427,7 +427,7 @@ def _warn_fallback_once(
             f" config `packed_fallback_allowed = [{op_name!r}]`"
             f" (or returnn.frontend._packed_backend.set_allowed_fallbacks)."
         )
-    if regap and not _warn_regap_enabled():
+    if is_regap and not _warn_regap_enabled():
         # Auto re-layout keeps the op packed and usually costs nothing measurable.
         return
     if op_name in _warned_fallback_ops:
@@ -2745,7 +2745,7 @@ class PackedBackend(Backend[PackedRawTensor]):
                     f" -- specify pack(..., gap=..., align=...) to avoid the extra re-layout",
                     action=f"re-laying out to gap {need_gap} align {need_align} (conv stays packed)",
                     hard=False,
-                    regap=True,
+                    is_regap=True,
                 )
                 source = regap(source, need_gap, align=need_align)
                 raw = source.raw_tensor
@@ -3161,7 +3161,7 @@ class PackedBackend(Backend[PackedRawTensor]):
                     f" -- specify pack(..., gap=..., align=...) to avoid the extra re-layout",
                     action=f"re-laying out to gap {need_gap} align {need_align} (pool stays packed)",
                     hard=False,
-                    regap=True,
+                    is_regap=True,
                 )
                 source = regap(source, need_gap, align=need_align)
                 raw = source.raw_tensor
