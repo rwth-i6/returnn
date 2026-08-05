@@ -2054,6 +2054,23 @@ def test_amuse_zero_lr():
     opt.eval()
 
 
+def test_amuse_zero_lr_at_warmup_boundary():
+    from returnn.torch.optim.amuse import AMUSE
+
+    # An externally scheduled lr of 0 exactly at the warmup boundary step records c_warmup 0.
+    # The beta1 ramp of the next positive-lr step must not divide by it.
+    model = torch.nn.Linear(4, 3)
+    opt = AMUSE(list(model.parameters()), lr=0.1, warmup_steps=3)
+    opt.train()
+    for lr in (0.1, 0.1, 0.0, 0.1, 0.1):
+        for group in opt.param_groups:
+            group["lr"] = lr
+        for param in model.parameters():
+            param.grad = torch.ones_like(param)
+        opt.step()
+    opt.eval()
+
+
 def test_multi_optimizer_amuse():
     from returnn.torch.optim.amuse import AMUSE
     from returnn.torch.optim.multi import MultiOptimizer
