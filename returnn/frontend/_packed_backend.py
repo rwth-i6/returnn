@@ -2340,6 +2340,14 @@ def _strided_out_wrapper(
     key = _packing_cache_key("strided_out", raw, out_inner.device) + (st,)
     verdict = _layout_cache.get(key)
     if verdict is None:
+        # the verdict reads per-batch values on the host:
+        # under static tracing that would bake ONE batch's layout into the trace
+        # (or die with a DataDependentOutputException deep in fake tensors),
+        # so fail loudly here instead; the device-lens regime above avoids the verdict
+        assert not rf.is_static_traceable(), (
+            "packed strided conv out: host-sync layout verdict under static tracing;"
+            " use the device-lens regime (device-resident seq lens + pack total_bound)"
+        )
         lens_out = out_time.dyn_size_ext
         for d in raw.orig_dims[:-1]:
             if d not in lens_out.dims:
