@@ -475,6 +475,8 @@ class Engine(EngineBase):
         self._reset_dev_memory_stats()
 
         self._on_epoch_start(dataset_name="train")
+        # Schedule-free optimizers: switch to the training iterate (see set_optimizer_training_mode).
+        self._updater.set_optimizer_training_mode(train=True)
 
         if self.config.bool("debug_shell_before_train_loop", False):
             print("debug_shell_before_train_loop", file=log.v1)
@@ -750,6 +752,8 @@ class Engine(EngineBase):
         self._maybe_report_dev_memory_stats()
 
         self._on_epoch_end(dataset_name="train")
+        # Schedule-free optimizers: switch to the averaged weights (see set_optimizer_training_mode).
+        self._updater.set_optimizer_training_mode(train=False)
 
         if self.epoch % self._save_model_epoch_interval == 0 or self.epoch == self._final_epoch:
             if self.model_filename:

@@ -1277,6 +1277,21 @@ def _multi_test_hidden_matrix_filter(*, full_param_name: str, param: torch.nn.Pa
     return param.dim() >= 2 and not isinstance(module, torch.nn.Embedding)
 
 
+# must be in the global scope due to pickling
+class _RecordingScheduleFreeSGD(torch.optim.SGD):
+    """SGD with recording schedule-free train()/eval() methods, for testing the engine hooks."""
+
+    calls = []
+
+    def train(self):
+        """record train mode switch"""
+        type(self).calls.append("train")
+
+    def eval(self):
+        """record eval mode switch"""
+        type(self).calls.append("eval")
+
+
 def _make_multi_test_model() -> torch.nn.Module:
     return torch.nn.Sequential(
         torch.nn.Embedding(10, 5),
@@ -1461,6 +1476,46 @@ def test_multi_optimizer_engine_train():
         engine = Engine(config=config)
         engine.init_train_from_config(train_data=dataset)
         engine.train()
+
+
+def test_engine_schedule_free_optimizer_hooks():
+    _RecordingScheduleFreeSGD.calls = []
+    config = Config(
+        dict(
+            task="train",
+            device="cpu",
+            extern_data={"data": {"dim": 9}, "classes": {"dim": 2, "sparse": True}},
+            get_model=TrainTestModel,
+            train_step=TrainTestModel.train_step,
+            batch_size=500,
+            torch_dataloader_opts={"num_workers": 0},
+            optimizer={"class": _RecordingScheduleFreeSGD},
+        )
+    )
+    dataset = init_dataset({"class": "Task12AXDataset", "num_seqs": 100, "name": "train"})
+    dataset.init_seq_order(epoch=1)
+
+    with global_config_ctx(config):
+        engine = Engine(config=config)
+        engine.init_train_from_config(train_data=dataset)
+        engine.train()
+
+    calls = _RecordingScheduleFreeSGD.calls
+    assert calls, "engine did not call the schedule-free optimizer train()/eval() hooks"
+    assert calls[0] == "train" and calls[-1] == "eval", f"unexpected hook call sequence {calls}"
+
+
+def test_multi_optimizer_schedule_free_forwarding():
+    from returnn.torch.optim.multi import MultiOptimizer
+
+    _RecordingScheduleFreeSGD.calls = []
+    model = torch.nn.Linear(4, 3)
+    sub1 = _RecordingScheduleFreeSGD([model.weight], lr=0.1)
+    sub2 = torch.optim.AdamW([model.bias], lr=0.1)
+    opt = MultiOptimizer(sub_optimizers=[sub1, sub2])
+    opt.train()
+    opt.eval()
+    assert _RecordingScheduleFreeSGD.calls == ["train", "eval"]
 
 
 def test_multi_optimizer_contract():
