@@ -444,10 +444,11 @@ class Updater:
         if os.path.exists(tmp_filename):
             os.unlink(tmp_filename)
         # optimizer_opts is saved as metadata only (load_optimizer ignores it)
-        # Drop callables like param_groups_custom so torch.load (weights_only=True since torch 2.6) can read it.
+        # Drop callables like param_groups_custom or params_filter (also nested, e.g. in the "optimizers" list
+        # of the multi optimizer) so torch.load (weights_only=True since torch 2.6) can read it.
         optimizer_opts_to_save = self._optimizer_opts
         if isinstance(optimizer_opts_to_save, dict):
-            optimizer_opts_to_save = {k: v for k, v in optimizer_opts_to_save.items() if not callable(v)}
+            optimizer_opts_to_save = _drop_callables_deep(optimizer_opts_to_save)
 
         torch.save(
             {
@@ -496,6 +497,11 @@ class Updater:
         optim_class_name = optimizer_opts.pop("class")
         optim_class = get_optimizer_class(optim_class_name)
 
+        from returnn.torch.optim.multi import MultiOptimizer
+
+        if issubclass(optim_class, MultiOptimizer):
+            return self._create_multi_optimizer(optim_class, optimizer_opts)
+
         # Resolve the optimizer arguments
         opt_kwargs = optimizer_opts.copy()
         optim_class_init_kwargs = _get_class_init_kwargs(optim_class)
@@ -537,8 +543,149 @@ class Updater:
 
         return optimizer
 
+    def _create_multi_optimizer(
+        self, optim_class: Type[torch.optim.Optimizer], optimizer_opts
+    ) -> Tuple[torch.optim.Optimizer, Optional[List[Dict[str, Any]]]]:
+        """
+        Create a :class:`returnn.torch.optim.multi.MultiOptimizer`
+        composing multiple sub-optimizers over disjoint parameter subsets.
+        See the module docstring of :mod:`returnn.torch.optim.multi` for the config interface.
+
+        :param optim_class: the resolved optimizer class, :class:`MultiOptimizer` or a subclass of it.
+            Subclasses must keep the keyword-only ``sub_optimizers`` constructor argument.
+        :param dict[str] optimizer_opts: the optimizer options dict, "class" already popped.
+        :return: tuple (optimizer, optional optimizer_param_groups_extra_opts), like :func:`_create_optimizer`.
+        """
+        from returnn.torch.optim.multi import MultiOptimizer
+
+        sub_specs = optimizer_opts.pop("optimizers", None)
+        if not isinstance(sub_specs, (list, tuple)) or not sub_specs:
+            raise ValueError("optimizer 'multi': 'optimizers' must be a non-empty list of sub-optimizer dicts")
+        if optimizer_opts:
+            raise ValueError(f"optimizer 'multi': unexpected options {sorted(optimizer_opts.keys())}")
+        sub_specs = [dict(spec) for spec in sub_specs]
+        for i, spec in enumerate(sub_specs):
+            if "class" not in spec:
+                raise ValueError(f"optimizer 'multi': sub-optimizer {i} has no 'class'")
+            if "params_filter" not in spec and i != len(sub_specs) - 1:
+                raise ValueError(
+                    f"optimizer 'multi': sub-optimizer {i} has no 'params_filter'."
+                    " Only the last sub-optimizer may omit it and then acts as the catch-all."
+                )
+            if "params_filter" in spec and not callable(spec["params_filter"]):
+                raise ValueError(
+                    f"optimizer 'multi': sub-optimizer {i}: invalid params_filter {spec['params_filter']!r}"
+                )
+
+        # Assign each param to the first sub-optimizer whose filter accepts it.
+        named_params = self._named_params_with_modules()
+        assigned_named_params = [[] for _ in sub_specs]
+        leftover_param_names = []
+        for entry in named_params:
+            full_param_name, param, module, rf_module = entry
+            for i, spec in enumerate(sub_specs):
+                params_filter = spec.get("params_filter")
+                if params_filter is None or params_filter(
+                    full_param_name=full_param_name,
+                    param=param,
+                    module=module,
+                    rf_module=rf_module,
+                    **get_fwd_compat_kwargs(),
+                ):
+                    assigned_named_params[i].append(entry)
+                    break
+            else:
+                leftover_param_names.append(full_param_name)
+        if leftover_param_names:
+            raise ValueError(
+                "optimizer 'multi': params matched by no sub-optimizer params_filter"
+                " (add a catch-all sub-optimizer without params_filter, or extend the filters): %s"
+                % ", ".join(leftover_param_names)
+            )
+        for i, assigned in enumerate(assigned_named_params):
+            if not assigned:
+                raise ValueError(f"optimizer 'multi': sub-optimizer {i} ({sub_specs[i]['class']!r}) got no params")
+            print(
+                "Multi optimizer: sub-optimizer %i (%r): %i params / %i elements"
+                % (i, sub_specs[i]["class"], len(assigned), sum(p.numel() for _, p, _, _ in assigned)),
+                file=log.v3,
+            )
+
+        # Build the param groups per sub-optimizer, like in the single-optimizer case.
+        sub_builds = []  # list of (sub_class, sub_kwargs, num_groups)
+        all_param_groups = []
+        for i, spec in enumerate(sub_specs):
+            spec.pop("params_filter", None)
+            sub_class = get_optimizer_class(spec.pop("class"))
+            assert not issubclass(sub_class, MultiOptimizer), "optimizer 'multi': cannot nest 'multi'"
+            lr_multiplier = spec.pop("learning_rate_multiplier", None)
+            sub_kwargs = spec
+            sub_class_init_kwargs = _get_class_init_kwargs(sub_class)
+            if "eps" in sub_class_init_kwargs and "epsilon" in sub_kwargs:
+                sub_kwargs["eps"] = sub_kwargs.pop("epsilon")
+            if "learning_rate" in sub_kwargs or "lr" in sub_kwargs:
+                raise ValueError(
+                    "optimizer 'multi': 'learning_rate'/'lr' not allowed in sub-optimizer opts."
+                    " Use the global learning_rate and per-sub-optimizer 'learning_rate_multiplier'."
+                )
+            sub_kwargs["lr"] = self.learning_rate
+            param_groups = self._get_optimizer_param_groups(
+                sub_class, sub_kwargs, named_params=assigned_named_params[i]
+            )
+            if lr_multiplier is not None:
+                for group in param_groups:
+                    group["learning_rate_multiplier"] = lr_multiplier
+            sub_builds.append((sub_class, sub_kwargs, len(param_groups)))
+            all_param_groups += param_groups
+
+        # Extract the extra opts (learning_rate_multiplier) over the concatenated groups,
+        # in the same order as the MultiOptimizer exposes them.
+        optimizer_param_groups_extra_opts: Optional[List[Dict[str, Any]]] = None
+        if any(any(key in group for key in self._OptimizerParamGroupsExtraOpts) for group in all_param_groups):
+            optimizer_param_groups_extra_opts = [
+                {key: group.pop(key) for key in self._OptimizerParamGroupsExtraOpts if key in group}
+                for group in all_param_groups
+            ]
+
+        sub_optimizers = []
+        group_idx = 0
+        for sub_class, sub_kwargs, num_groups in sub_builds:
+            sub_param_groups = all_param_groups[group_idx : group_idx + num_groups]
+            group_idx += num_groups
+            sub_optimizers.append(sub_class(sub_param_groups, **sub_kwargs))
+        optimizer = optim_class(sub_optimizers=sub_optimizers)
+        print("Optimizer: %s" % optimizer, file=log.v1)
+
+        return optimizer, optimizer_param_groups_extra_opts
+
+    def _named_params_with_modules(self) -> List[Tuple[str, torch.nn.Parameter, torch.nn.Module, Optional[rf.Module]]]:
+        """
+        :return: list of (full_param_name, param, owning module, owning RF module or None),
+            each param exactly once (shared params are listed for their first owning module).
+        """
+        entries = []
+        # Tracker of visited parameters to only add each parameter once, in case two modules share common parameters.
+        # We need the wrapper class RefIdEq because Parameters are compared by value and not by reference.
+        visited_params: Set[RefIdEq[torch.nn.Parameter]] = set()
+        for module_name, module in self.network.named_modules():
+            module_name: str
+            module: torch.nn.Module
+            rf_module = wrapped_pt_module_to_rf_module(module)
+            for param_name, param in module.named_parameters(recurse=False):
+                param_name: str
+                param: torch.nn.Parameter
+                if RefIdEq(param) in visited_params:
+                    continue
+                visited_params.add(RefIdEq(param))
+                full_param_name = "%s.%s" % (module_name, param_name) if module_name else param_name
+                entries.append((full_param_name, param, module, rf_module))
+        return entries
+
     def _get_optimizer_param_groups(
-        self, optim_class: Type[torch.optim.Optimizer], optimizer_opts: Dict[str, Any]
+        self,
+        optim_class: Type[torch.optim.Optimizer],
+        optimizer_opts: Dict[str, Any],
+        named_params: Optional[List[Tuple[str, torch.nn.Parameter, torch.nn.Module, Optional[rf.Module]]]] = None,
     ) -> Union[Iterable[Dict[str, Any]], Iterable[torch.nn.Parameter]]:
         """
         The weight_decay parameter from AdamW affects the weights of layers such as LayerNorm and Embedding.
@@ -566,10 +713,23 @@ class Updater:
 
         :param optim_class: Optimizer class.
         :param optimizer_opts: Optimizer configuration specified by the user. Might be modified inplace here.
+        :param named_params: if given (the multi optimizer sub-optimizer case), build the groups only over
+            this parameter subset (entries as returned by :func:`_named_params_with_modules`),
+            and return a list of param group dicts, dropping empty groups.
+            ``param_groups_custom`` is not supported in this case.
         :return: List of configurations for the different sets of parameters.
         """
+        subset_mode = named_params is not None
+
         custom_param_groups = optimizer_opts.pop("param_groups_custom", None)
         if custom_param_groups is not None:
+            if subset_mode:
+                raise ValueError(
+                    "param_groups_custom is not supported in multi optimizer sub-optimizer opts."
+                    " Use params_filter to assign the params to the sub-optimizers,"
+                    " and weight_decay_custom_include_check / weight_decay_modules_blacklist"
+                    " for the weight-decay split within a sub-optimizer."
+                )
             assert callable(custom_param_groups), f"invalid param_groups_custom {custom_param_groups!r}"
             rf_model = wrapped_pt_module_to_rf_module(self.network)
             custom_param_groups_ = custom_param_groups(
@@ -583,8 +743,6 @@ class Updater:
                 isinstance(group, dict) for group in custom_param_groups_
             ), f"invalid param_groups_custom {custom_param_groups!r} result {custom_param_groups_!r} type"
             return custom_param_groups_
-
-        network_params = self.network.parameters()
 
         # By default, insert the weight_decay constraints in the optimizer, as this is default PyTorch behavior.
         # If the user doesn't accept this, throw an error message.
@@ -600,62 +758,63 @@ class Updater:
                 "weight_decay not accepted by the chosen optimizer. Accepted values: %s"
                 % ", ".join("%s" % optim_name for optim_name in cls_init_kwargs)
             )
-            return network_params
+            if subset_mode:
+                return [{"params": [param for _, param, _, _ in named_params]}]
+            return self.network.parameters()
 
-        weight_decay = optimizer_opts.get("weight_decay", 0.0)
-        if not weight_decay:
-            return network_params
-
-        # Distinguish between parameters with and without weight_decay/L2 regularization.
-        # Parameters without weight decay: biases + LayerNorm/Embedding layers.
-        wd_params = set()
-        no_wd_params = set()
         blacklist_wd_modules = wrap_user_blacklist_wd_modules(
             optimizer_opts.pop("weight_decay_modules_blacklist", None)
         )
         custom_include_check = optimizer_opts.pop("weight_decay_custom_include_check", None)
         if custom_include_check:
             assert callable(custom_include_check), f"invalid weight_decay_custom_include_check {custom_include_check!r}"
-        # Tracker of visited parameters to only add each parameter once, in case two modules share common parameters.
-        # We need the wrapper class RefIdEq because Parameters are compared by value and not by reference.
-        visited_params: Set[RefIdEq[torch.nn.Parameter]] = set()
-        for module_name, module in self.network.named_modules():
-            module_name: str
-            module: torch.nn.Module
-            rf_module = wrapped_pt_module_to_rf_module(module)
-            for param_name, param in module.named_parameters(recurse=False):
-                param_name: str
-                param: torch.nn.Parameter
-                if RefIdEq(param) in visited_params:
-                    continue
-                visited_params.add(RefIdEq(param))
-                full_param_name = "%s.%s" % (module_name, param_name) if module_name else param_name
-                custom_include = None
-                if custom_include_check:
-                    custom_include = custom_include_check(
-                        module=module, rf_module=rf_module, full_param_name=param_name, param=param
-                    )
-                if custom_include is not None:
-                    assert isinstance(custom_include, bool), "weight_decay_custom_include_check did not return bool"
-                    if custom_include:
-                        wd_params.add(full_param_name)
-                    else:
-                        no_wd_params.add(full_param_name)
-                elif (
-                    param_name.endswith("bias")
-                    or isinstance(module, blacklist_wd_modules)
-                    or isinstance(rf_module, blacklist_wd_modules)
-                ):
-                    no_wd_params.add(full_param_name)
-                else:
-                    wd_params.add(full_param_name)
 
-        param_dict = {pn: p for pn, p in self.network.named_parameters()}
+        weight_decay = optimizer_opts.get("weight_decay", 0.0)
+        if not weight_decay:
+            if subset_mode:
+                return [{"params": [param for _, param, _, _ in named_params]}]
+            return self.network.parameters()
+
+        if named_params is None:
+            named_params = self._named_params_with_modules()
+
+        # Distinguish between parameters with and without weight_decay/L2 regularization.
+        # Parameters without weight decay: biases + LayerNorm/Embedding layers.
+        wd_named = []
+        no_wd_named = []
+        for full_param_name, param, module, rf_module in named_params:
+            custom_include = None
+            if custom_include_check:
+                # For backward compatibility, full_param_name carries the module-local param name
+                # (e.g. just "weight" or "bias"), not the full hierarchical name,
+                # as existing callbacks rely on that (despite the misleading argument name).
+                custom_include = custom_include_check(
+                    module=module, rf_module=rf_module, full_param_name=full_param_name.rsplit(".", 1)[-1], param=param
+                )
+            if custom_include is not None:
+                assert isinstance(custom_include, bool), "weight_decay_custom_include_check did not return bool"
+                include_wd = custom_include
+            elif (
+                full_param_name.endswith("bias")
+                or isinstance(module, blacklist_wd_modules)
+                or isinstance(rf_module, blacklist_wd_modules)
+            ):
+                include_wd = False
+            else:
+                include_wd = True
+            (wd_named if include_wd else no_wd_named).append((full_param_name, param))
+
+        wd_named.sort(key=lambda entry: entry[0])
+        no_wd_named.sort(key=lambda entry: entry[0])
         optim_groups = [
-            {"params": [param_dict[pn] for pn in sorted(list(wd_params))], "weight_decay": weight_decay},
-            {"params": [param_dict[pn] for pn in sorted(list(no_wd_params))], "weight_decay": 0.0},
+            {"params": [param for _, param in wd_named], "weight_decay": weight_decay},
+            {"params": [param for _, param in no_wd_named], "weight_decay": 0.0},
         ]
-
+        if subset_mode:
+            # A sub-optimizer only gets the groups it has params for.
+            # The full-network case keeps both groups (even if empty)
+            # for compatibility with existing optimizer checkpoints (the group count must match).
+            optim_groups = [group for group in optim_groups if group["params"]]
         return optim_groups
 
 
@@ -678,6 +837,18 @@ def wrap_user_blacklist_wd_modules(
         assert issubclass(mod, (rf.Module, torch.nn.Module)), f"invalid blacklist_weight_decay_modules {mods!r}"
         res.append(mod)
     return tuple(res)
+
+
+def _drop_callables_deep(obj: Any) -> Any:
+    """
+    :param obj: nested structure of dicts/lists/tuples
+    :return: copy with callable dict values and callable list/tuple entries dropped
+    """
+    if isinstance(obj, dict):
+        return {k: _drop_callables_deep(v) for k, v in obj.items() if not callable(v)}
+    if isinstance(obj, (list, tuple)):
+        return type(obj)(_drop_callables_deep(v) for v in obj if not callable(v))
+    return obj
 
 
 def gradient_noise_(params: Iterable[torch.nn.Parameter], std: float):
