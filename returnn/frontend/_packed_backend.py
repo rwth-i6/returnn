@@ -1695,15 +1695,16 @@ def _flex_seq_ids(raw: PackedRawTensor, spatial_dim: Dim, device) -> Optional[Tu
         return hit
     if spatial_dim.dyn_size_ext is None:
         return None
-    lens_rf = spatial_dim.dyn_size_ext
+    lens_rf = spatial_dim.get_dyn_size_ext_for_device(str(device))
     for d in raw.orig_dims[:-1]:
         if d not in lens_rf.dims:
             lens_rf = rf.expand_dim(lens_rf, dim=d)
     if len(raw.orig_dims) > 2:
         lens_rf, _ = rf.merge_dims(lens_rf, dims=raw.orig_dims[:-1])
-    # max over the cpu-side dyn sizes (no gpu sync)
-    max_len = int(lens_rf.raw_tensor.max()) if lens_rf.raw_tensor.numel() > 0 else 0
-    lens = rf.copy_to_device(lens_rf, str(device)).raw_tensor.long().flatten()
+    # the value pos_emb is sized with: the capacity under static tracing, else the batch max
+    # (max_len only feeds the pos_emb center/size check, so the sizing source is the right one)
+    max_len = int(spatial_dim.get_dim_value())
+    lens = lens_rf.raw_tensor.long().flatten()
     starts_rf, _ = _seq_starts_math(raw.orig_dims, raw.gap, raw.align, layout_lens=raw.layout_lens, device=str(device))
     if starts_rf is None:  # single seq
         starts = torch.zeros(1, dtype=torch.int64, device=device)
