@@ -9,13 +9,14 @@ therefore follows the same rules as the static-traceable regime of the PyTorch b
 """
 
 from __future__ import annotations
-from typing import Optional, Union, Sequence, Tuple
+from typing import Optional, Union, Sequence, Tuple, Dict
 import numpy
 import jax
 import jax.numpy as jnp
 from jax.scipy.special import logsumexp as _logsumexp
 
 from returnn.tensor import Tensor, Dim
+from returnn.util.basic import get_global_inf_value
 
 # noinspection PyProtectedMember
 from returnn.frontend._backend import Backend
@@ -352,6 +353,261 @@ class JaxBackend(Backend[jax.Array]):
             sparse_dim=sparse_dim,
         )
 
+    # --- random
+
+    # JAX has no implicit global RNG: keys are values, and every draw must consume a fresh one.
+    # So the global stream lives here, and each draw splits it.
+    _rng_key: Optional[jax.Array] = None
+
+    @staticmethod
+    def set_random_seed(seed: int):
+        """
+        :param seed:
+        """
+        JaxBackend._rng_key = jax.random.key(seed)
+
+    @staticmethod
+    def get_random_state() -> Dict[str, bytes]:
+        """
+        :return: random state
+        """
+        return {"jax": numpy.asarray(jax.random.key_data(JaxBackend._get_rng_key_())).tobytes()}
+
+    @staticmethod
+    def set_random_state(state: Dict[str, bytes]):
+        """
+        :param state: as returned by :func:`get_random_state`
+        """
+        if "jax" not in state:
+            return
+        key_data = numpy.frombuffer(state["jax"], dtype=numpy.uint32)
+        JaxBackend._rng_key = jax.random.wrap_key_data(jnp.asarray(key_data))
+
+    @staticmethod
+    def _get_rng_key_() -> jax.Array:
+        """
+        :return: the global key, seeded from entropy on first use (like the implicit global RNGs elsewhere)
+        """
+        if JaxBackend._rng_key is None:
+            JaxBackend.set_random_seed(int(numpy.random.SeedSequence().generate_state(1)[0]))
+        return JaxBackend._rng_key
+
+    @staticmethod
+    def _next_rng_key_() -> jax.Array:
+        """
+        :return: a fresh key, advancing the global stream
+        """
+        key, sub = jax.random.split(JaxBackend._get_rng_key_())
+        JaxBackend._rng_key = key
+        return sub
+
+    @staticmethod
+    def random(
+        *,
+        dims: Sequence[Dim],
+        dtype: str,
+        device: Optional[str] = None,
+        sparse_dim: Optional[Dim] = None,
+        feature_dim: Optional[Dim] = None,
+        distribution: str,
+        mean: Optional[Union[int, float, Tensor]] = None,
+        stddev: Optional[Union[int, float, Tensor]] = None,
+        bound: Optional[Union[int, float, Tensor]] = None,
+        minval: Optional[Union[int, float, Tensor]] = None,
+        maxval: Optional[Union[int, float, Tensor]] = None,
+        seed: Optional[Union[int, Sequence[int], numpy.ndarray]] = None,
+        algorithm: Optional[str] = None,
+        explicit_state: Optional[Tensor] = None,
+        auto_update_state: Optional[bool] = None,
+        static: Optional[bool] = None,
+        out: Optional[Tensor[jax.Array]] = None,
+    ) -> Tensor:
+        """
+        random. See :func:`rf.random` for details.
+
+        The drawn values do NOT match any other backend's for the same seed (different PRNG).
+        Cross-backend comparisons therefore copy parameters over, they do not replay RNG streams.
+        """
+        assert explicit_state is None and auto_update_state is None, "RF JaxBackend: random state args not implemented"
+        assert algorithm is None, f"RF JaxBackend: random algorithm {algorithm!r} not implemented"
+        if out is None:
+            out = Tensor(
+                name=f"random_{distribution}", dims=dims, dtype=dtype, sparse_dim=sparse_dim, feature_dim=feature_dim
+            )
+        shape = tuple(d.get_dim_value() for d in dims)
+        dtype_ = JaxBackend.as_dtype_raw(dtype)
+        key = jax.random.key(seed) if static else JaxBackend._next_rng_key_()
+        if static:
+            assert seed is not None
+        else:
+            assert seed is None
+
+        def _scalar(v, default):
+            if v is None:
+                return default
+            if isinstance(v, Tensor):
+                assert v.dims == (), f"RF JaxBackend: only scalar supported here, got {v}"
+                return v.raw_tensor
+            return v
+
+        if distribution == "uniform":
+            assert mean is None and stddev is None
+            minval_ = _scalar(minval, 0)
+            if jnp.issubdtype(dtype_, jnp.floating):
+                maxval_ = _scalar(maxval, 1)
+                if isinstance(maxval, Tensor) and maxval.dims:
+                    # per-element upper bound: affine transform of U[0,1)
+                    maxval_ = maxval.copy_compatible_to_dims_raw(out.dims)
+                    raw = minval_ + jax.random.uniform(key, shape, dtype=dtype_) * (maxval_ - minval_)
+                else:
+                    raw = jax.random.uniform(key, shape, dtype=dtype_, minval=minval_, maxval=maxval_)
+            else:
+                assert maxval is not None, "maxval must be specified for integer random uniform"
+                maxval_ = _scalar(maxval, None)
+                raw = jax.random.randint(key, shape, minval_, maxval_, dtype=dtype_)
+        elif distribution == "normal":
+            assert minval is None and maxval is None
+            mean_, stddev_ = _scalar(mean, 0), _scalar(stddev, 1)
+            raw = mean_ + stddev_ * jax.random.normal(key, shape, dtype=dtype_)
+        elif distribution == "truncated_normal":
+            mean_, stddev_ = _scalar(mean, 0), _scalar(stddev, 1)
+            minval_ = _scalar(minval, mean_ - 2 * stddev_)
+            maxval_ = _scalar(maxval, mean_ + 2 * stddev_)
+            # jax.random.truncated_normal bounds are in standard-normal units
+            raw = mean_ + stddev_ * jax.random.truncated_normal(
+                key, (minval_ - mean_) / stddev_, (maxval_ - mean_) / stddev_, shape, dtype=dtype_
+            )
+        else:
+            raise NotImplementedError(f"RF JaxBackend: random distribution {distribution!r} not implemented")
+        out.raw_tensor = jax.device_put(raw, _device_from_str(device)) if device else raw
+        return out
+
+    # --- parameters
+
+    @staticmethod
+    def create_parameter_raw(tensor: rf.Parameter, *, device: Optional[str] = None) -> jax.Array:
+        """
+        :param tensor:
+        :param device:
+        :return: parameter, zero-initialized (the initial value is set separately)
+        """
+        raw = jnp.zeros(tuple(d.get_dim_value() for d in tensor.dims), dtype=JaxBackend.as_dtype_raw(tensor.dtype))
+        device = device or rf.get_default_device()
+        return jax.device_put(raw, _device_from_str(device)) if device else raw
+
+    @staticmethod
+    def set_parameter_initial_value(param: rf.Parameter, value: Union[None, Tensor, rf.RawTensorTypes]) -> None:
+        """
+        :param param: parameter
+        :param value: initial value
+        """
+        if value is None:
+            value = 0
+        if isinstance(value, Tensor):
+            value_raw = value.copy_compatible_to_dims_raw(param.dims)
+        else:
+            value_raw = jnp.asarray(value)
+        dtype = JaxBackend.as_dtype_raw(param.dtype)
+        param.raw_tensor = jnp.broadcast_to(value_raw.astype(dtype), param.raw_tensor.shape)
+
+    @staticmethod
+    def set_parameter_trainable(param: rf.Parameter, trainable: bool) -> None:
+        """
+        set trainable.
+
+        Nothing to do on the raw side: JAX arrays carry no requires_grad,
+        and which parameters get differentiated is decided by the engine
+        when it builds the pytree it passes to jax.grad, from rf.Parameter.trainable.
+        """
+
+    @staticmethod
+    def parameter_assign(param: rf.Parameter, value: Tensor, *, op: str = "assign") -> None:
+        """param assign"""
+        value_raw = value.copy_compatible_to_dims_raw(param.dims)
+        value_raw = value_raw.astype(JaxBackend.as_dtype_raw(param.dtype))
+        if op == "assign":
+            param.raw_tensor = jnp.broadcast_to(value_raw, param.raw_tensor.shape)
+        elif op == "add":
+            param.raw_tensor = param.raw_tensor + value_raw
+        else:
+            raise ValueError(f"Parameter {param} assign: Unsupported op: {op}")
+
+    @staticmethod
+    def parameter_move_to(param: rf.Parameter, *, device: Optional[str] = None, dtype: Optional[str] = None):
+        """
+        :param param:
+        :param device:
+        :param dtype:
+        """
+        raw = param.raw_tensor
+        if dtype:
+            raw = raw.astype(JaxBackend.as_dtype_raw(dtype))
+        if device:
+            raw = jax.device_put(raw, _device_from_str(device))
+        param.raw_tensor = raw
+
+    # --- gradients
+
+    @staticmethod
+    def stop_gradient(tensor: Tensor) -> Tensor:
+        """stop grad"""
+        out = tensor.copy()
+        out.raw_tensor = jax.lax.stop_gradient(out.raw_tensor)
+        return out
+
+    # --- math
+
+    @staticmethod
+    def matmul(a: _TT, b: _TT, *, reduce: Union[Dim, Sequence[Dim]], use_mask: bool = True) -> _TT:
+        """
+        batched matmul of a and b, see base class doc string.
+
+        One einsum covers every case (common dims, unique dims, multiple reduce dims),
+        and XLA lowers it to the same dot_general the hand-written permute/reshape path would build,
+        so unlike the PyTorch backend there is no reason to special-case the shapes here.
+        """
+        if isinstance(reduce, Dim):
+            reduce = [reduce]
+        if use_mask and any(dim.dyn_size_ext is not None for dim in reduce):
+            raise NotImplementedError("RF JaxBackend: masking in matmul reduce not yet implemented")
+        a_dims, b_dims = a.dims, b.dims
+        assert all(dim in a_dims + b_dims for dim in reduce), "Some reduce Dims not in a or b."
+        # a repeated dim within one tensor would get the same einsum letter, i.e. silently take a diagonal
+        assert len(set(a_dims)) == len(a_dims) and len(set(b_dims)) == len(b_dims), (
+            f"RF JaxBackend: matmul with a repeated dim not supported, got {a_dims} x {b_dims}"
+        )
+        result_dims = [dim for dim in a_dims if dim not in reduce]
+        result_dims += [dim for dim in b_dims if dim not in reduce and dim not in a_dims]
+        letters = {}
+        for dim in a_dims + b_dims:
+            if dim not in letters:
+                letters[dim] = chr(97 + len(letters))
+        subscripts = "%s,%s->%s" % tuple(
+            "".join(letters[dim] for dim in dims_) for dims_ in (a_dims, b_dims, result_dims)
+        )
+        raw_result = jnp.einsum(subscripts, a.raw_tensor, b.raw_tensor)
+        return Tensor("dot", dims=result_dims, raw_tensor=raw_result, dtype=JaxBackend.get_dtype_name_raw(raw_result))
+
+    @staticmethod
+    def softmax(tensor: Tensor, *, axis: Dim, use_mask: bool = True) -> Tensor:
+        """
+        :param tensor:
+        :param axis:
+        :param use_mask:
+        :return: softmax over axis
+        """
+        return _softmax(tensor, axis=axis, use_mask=use_mask, log=False)
+
+    @staticmethod
+    def log_softmax(tensor: Tensor, *, axis: Dim, use_mask: bool = True) -> Tensor:
+        """
+        :param tensor:
+        :param axis:
+        :param use_mask:
+        :return: log_softmax over axis
+        """
+        return _softmax(tensor, axis=axis, use_mask=use_mask, log=True)
+
 
 _CombineKindMap = {
     "sub": "subtract",
@@ -370,6 +626,37 @@ _ActivationFuncMap = {
 }
 
 _ReduceModeMap = {"sum": jnp.sum, "max": jnp.max, "min": jnp.min, "mean": jnp.mean, "any": jnp.any, "all": jnp.all}
+
+
+def _softmax(tensor: Tensor, *, axis: Dim, use_mask: bool, log: bool) -> Tensor:
+    """
+    :param tensor:
+    :param axis:
+    :param use_mask: mask out the padded frames of a dynamic axis before normalizing
+    :param log: log_softmax instead of softmax
+    :return: (log_)softmax over axis
+    """
+    out = tensor.copy_template("log_softmax" if log else "softmax")
+    axis_int = tensor.dims.index(axis)
+    raw = tensor.raw_tensor
+    any_valid = None
+    if use_mask and axis.need_masking():
+        mask = tensor.get_sequence_mask_broadcast(axis=axis)
+        inf_value = get_global_inf_value()
+        raw = jnp.where(mask, raw, -inf_value)
+        # A fully masked row (a zero-length filler seq of the bound-shape regime)
+        # would give NaN from (-inf) - (-inf), poisoning everything downstream.
+        # Substitute a finite uniform row BEFORE the softmax, so not even its backward sees NaN,
+        # and define the result of those rows explicitly afterwards.
+        any_valid = jnp.any(mask, axis=axis_int, keepdims=True)
+        raw = jnp.where(any_valid, raw, jnp.zeros_like(raw))
+    out_raw = (jax.nn.log_softmax if log else jax.nn.softmax)(raw, axis=axis_int)
+    if any_valid is not None:
+        fill = jnp.full_like(out_raw, -get_global_inf_value()) if log else jnp.zeros_like(out_raw)
+        out_raw = jnp.where(any_valid, out_raw, fill)
+    out.dtype = JaxBackend.get_dtype_name_raw(out_raw)
+    out.raw_tensor = out_raw
+    return out
 
 
 def _device_to_str(device: jax.Device) -> str:
