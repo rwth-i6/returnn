@@ -25,6 +25,12 @@ def assert_(cond: torch.Tensor, message: str, *, stop: bool = True):
         # tensor subclass (fake/functional/traced): no real storage,
         # and the raw kernel launch would be invisible to the trace anyway
         return
+    # noinspection PyProtectedMember
+    if hasattr(torch, "_is_functional_tensor") and torch._is_functional_tensor(cond):
+        # torch 2.0 functionalization wraps WITHOUT a Python subclass
+        # (type(cond) is torch.Tensor, so the check above does not see it):
+        # also no real storage; under tracing, reading it is data-dependent and would raise
+        return
     if cond.device.type == "cpu":
         if not cond.item():
             if stop:
