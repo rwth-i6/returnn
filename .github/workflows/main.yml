@@ -306,6 +306,11 @@ jobs:
             python-version: 3.8
             torch-version: 1.13.1
             tf-version: 2.10.0
+          # rf_packed: the flex fast paths and the traced-replay test need a recent torch
+          - action: TEST=rf_packed
+            python-version: "3.10"
+            torch-version: 2.7.1
+            tf-version: 2.10.0
 
     steps:
       - uses: actions/checkout@v4
