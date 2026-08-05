@@ -1518,6 +1518,57 @@ def test_multi_optimizer_schedule_free_forwarding():
     assert _RecordingScheduleFreeSGD.calls == ["train", "eval"]
 
 
+def test_amuse_optimizer():
+    from returnn.torch.optim.amuse import AMUSE
+
+    config = Config(dict(optimizer={"class": "amuse", "update_type": "adamw", "warmup_steps": 5}))
+    model = torch.nn.Linear(4, 3)
+    updater = Updater(config=config, network=model, device=torch.device("cpu"))
+    updater.create_optimizer()
+    updater.set_learning_rate(1e-3)
+    updater.set_current_train_step(global_train_step=0, epoch=1)
+
+    opt = updater.get_optimizer()
+    assert isinstance(opt, AMUSE)
+    assert opt.update_type == "adamw"
+    opt.train()
+    for param in model.parameters():
+        param.grad = torch.ones_like(param)
+    updater.step()
+    opt.eval()
+    assert all("z" in opt.state[p] for p in model.parameters())
+
+    with tempfile.TemporaryDirectory(prefix="returnn_test_amuse_optimizer") as tmp_dir:
+        updater.save_optimizer(tmp_dir + "/model.opt.pt")
+        updater.load_optimizer(tmp_dir + "/model.opt.pt")
+
+
+def test_amuse_engine_train():
+    # Also tests the engine schedule-free hooks: AMUSE raises in step() if not in train mode.
+    config = Config(
+        dict(
+            task="train",
+            device="cpu",
+            extern_data={"data": {"dim": 9}, "classes": {"dim": 2, "sparse": True}},
+            get_model=TrainTestModel,
+            train_step=TrainTestModel.train_step,
+            batch_size=500,
+            torch_dataloader_opts={"num_workers": 0},
+            optimizer={"class": "amuse", "update_type": "adamw", "warmup_steps": 5},
+        )
+    )
+    dataset = init_dataset({"class": "Task12AXDataset", "num_seqs": 100, "name": "train"})
+    dataset.init_seq_order(epoch=1)
+
+    with global_config_ctx(config):
+        engine = Engine(config=config)
+        engine.init_train_from_config(train_data=dataset)
+        engine.train()
+        # The engine must have switched to eval mode at the train epoch end,
+        # so params (and thus any saved checkpoint) hold the averaged weights.
+        assert engine._updater.get_optimizer().train_mode is False
+
+
 def test_multi_optimizer_contract():
     import copy
     import io
@@ -1748,6 +1799,70 @@ def test_multi_optimizer_non_param_state_error():
         assert "999" in str(exc)
     else:
         raise AssertionError("expected NotImplementedError for non-parameter state key on load")
+
+
+def test_amuse_legacy_group_keys_error():
+    from returnn.torch.optim.amuse import AMUSE
+
+    model = torch.nn.Linear(4, 3)
+    for legacy_group_opts in ({"use_muon": True}, {"update_type": "muon"}, {"aux_update_type": "sgd"}):
+        try:
+            AMUSE([{"params": list(model.parameters()), **legacy_group_opts}], warmup_steps=5)
+        except ValueError as exc:
+            assert "no longer supported" in str(exc) or "Per-group update types" in str(exc)
+        else:
+            raise AssertionError(f"expected ValueError for legacy group opts {legacy_group_opts}")
+
+
+def test_multi_optimizer_amuse():
+    from returnn.torch.optim.amuse import AMUSE
+    from returnn.torch.optim.multi import MultiOptimizer
+
+    config = Config(
+        dict(
+            optimizer={
+                "class": "multi",
+                "optimizers": [
+                    {
+                        "class": "amuse",
+                        "update_type": "muon",
+                        "params_filter": _multi_test_hidden_matrix_filter,
+                        "momentum": 0.95,
+                        "weight_decay": 0.05,
+                        "warmup_steps": 5,
+                    },
+                    {
+                        "class": "amuse",
+                        "update_type": "adamw",
+                        "learning_rate_multiplier": 0.015,
+                        "weight_decay": 0.05,
+                        "warmup_steps": 5,
+                    },
+                ],
+            }
+        )
+    )
+    model = _make_multi_test_model()
+    updater = Updater(config=config, network=model, device=torch.device("cpu"))
+    updater.create_optimizer()
+    updater.set_learning_rate(0.02)
+    updater.set_current_train_step(global_train_step=0, epoch=1)
+
+    opt = updater.get_optimizer()
+    assert isinstance(opt, MultiOptimizer)
+    muon_sub, adamw_sub = opt.sub_optimizers
+    assert isinstance(muon_sub, AMUSE) and muon_sub.update_type == "muon"
+    assert isinstance(adamw_sub, AMUSE) and adamw_sub.update_type == "adamw"
+    assert all(pg["lr"] == 0.02 for pg in muon_sub.param_groups)
+    assert all(pg["lr"] == 0.02 * 0.015 for pg in adamw_sub.param_groups)
+
+    updater.set_optimizer_training_mode(train=True)
+    assert muon_sub.train_mode and adamw_sub.train_mode
+    for param in model.parameters():
+        param.grad = torch.ones_like(param)
+    updater.step()
+    updater.set_optimizer_training_mode(train=False)
+    assert not muon_sub.train_mode and not adamw_sub.train_mode
 
 
 if __name__ == "__main__":

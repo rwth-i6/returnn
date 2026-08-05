@@ -2,10 +2,69 @@
 AMUSE optimizer <https://arxiv.org/html/2605.22432>
 
 Code adapted from https://github.com/kjeiun/amuse/
+
+AMUSE is a schedule-free optimizer: the same y/x/z averaging schedule
+(with a warmup-coupled beta1 ramp) is wrapped around one of several inner update rules,
+selected via ``update_type``:
+
+- ``"muon"``: Muon momentum with Newton-Schulz orthogonalization,
+  for matrix hidden-layer weights (ndim >= 2).
+  4D parameters are flattened to a matrix before the orthogonalization,
+  while 3D parameters (e.g. Conv1d kernels) are orthogonalized batch-wise
+  over the leading dim, matching the upstream implementation.
+  Exclude ndim > 2 params via the params_filter if they should use the fallback instead.
+- ``"adamw"``: AdamW-style second-moment normalization,
+  for embeddings, output heads, biases and other parameters.
+- ``"sgd"``: plain gradient update on z.
+
+One AMUSE instance applies a single update type to all its parameters.
+The usual AMUSE setup (Muon on hidden matrices, AdamW-style on the rest)
+is expressed with :class:`returnn.torch.optim.multi.MultiOptimizer`::
+
+    from returnn.torch.optim.multi import make_hidden_matrix_filter
+
+    optimizer = {
+        "class": "multi",
+        "optimizers": [
+            {
+                "class": "amuse",
+                "update_type": "muon",
+                "params_filter": make_hidden_matrix_filter(),
+                "momentum": 0.95,
+                "warmup_steps": 10_000,
+            },
+            {
+                "class": "amuse",
+                "update_type": "adamw",
+                "learning_rate_multiplier": 0.015,
+                "warmup_steps": 10_000,
+            },
+        ],
+    }
+    learning_rate = 0.02
+
+The optimizer follows the schedule-free ``train()``/``eval()`` convention:
+during training, the params hold the training iterate y,
+``eval()`` converts them to the averaged weights x (used for evaluation and checkpoints),
+and ``train()`` converts back.
+The RETURNN engine calls these automatically at the train epoch boundaries
+(see :func:`returnn.torch.updater.Updater.set_optimizer_training_mode`).
+
+The learning rate of each param group (as set externally, e.g. by the RETURNN LR schedule)
+is used as the base learning rate, and AMUSE applies its internal warmup factor
+``min(1, t / warmup_steps)`` on top.
+The warmup is required by the schedule-free averaging (the z/x averaging weights
+are a function of the per-step learning rate), so do not disable it.
+If an external schedule already contains a warmup, the two warmups multiply.
+
+AMUSE reads the learning rate from the param group on the host in each step
+(including ``.item()`` on device lr tensors),
+so captured optimizer steps (``torch_cuda_graph`` with ``"capture_optimizer"``) are not supported.
 """
 
-import functools
-from typing import Any, Callable, Dict, List, Optional, Sequence
+from __future__ import annotations
+
+from typing import Optional
 
 import torch
 from torch.optim.optimizer import Optimizer
@@ -13,31 +72,38 @@ from torch.optim.optimizer import Optimizer
 UPDATE_TYPES = {"muon", "adamw", "sgd"}
 AUX_UPDATE_TYPES = {"adamw", "sgd"}
 
+_DEFAULT_LR_BY_UPDATE_TYPE = {"muon": 0.02, "adamw": 3e-4, "sgd": 1.0}
+
 
 @torch.no_grad()
-def zeropower_via_newtonschulz5(
-    G: torch.Tensor,
-    steps: int = 5,
-) -> torch.Tensor:
-    assert G.ndim >= 2
+def zeropower_via_newtonschulz5(grad: torch.Tensor, steps: int = 5) -> torch.Tensor:
+    """
+    Approximate the orthogonalization of ``grad`` (semi-orthogonal matrix with the same "direction")
+    via a quintic Newton-Schulz iteration, computed in bfloat16.
+
+    :param grad: matrix of shape [..., m, n]
+    :param steps: number of Newton-Schulz iterations
+    :return: orthogonalized matrix, same shape as ``grad``
+    """
+    assert grad.ndim >= 2
     a, b, c = 3.4445, -4.7750, 2.0315
 
-    X = G.bfloat16()
+    x = grad.bfloat16()
     transposed = False
-    if G.size(-2) > G.size(-1):
-        X = X.mT
+    if grad.size(-2) > grad.size(-1):
+        x = x.mT
         transposed = True
 
-    X = X / (X.norm(dim=(-2, -1), keepdim=True) + 1e-7)
+    x = x / (x.norm(dim=(-2, -1), keepdim=True) + 1e-7)
 
     for _ in range(steps):
-        A = X @ X.mT
-        B = b * A + c * (A @ A)
-        X = a * X + B @ X
+        gram = x @ x.mT
+        poly = b * gram + c * (gram @ gram)
+        x = a * x + poly @ x
 
     if transposed:
-        X = X.mT
-    return X
+        x = x.mT
+    return x
 
 
 @torch.no_grad()
@@ -48,6 +114,17 @@ def muon_update(
     aux_update_type: str = "adamw",
     nesterov: bool = True,
 ) -> torch.Tensor:
+    """
+    Compute the Muon update direction: momentum, Newton-Schulz orthogonalization, scaling.
+
+    :param grad: gradient
+    :param momentum: momentum buffer, updated inplace
+    :param beta: momentum factor
+    :param aux_update_type: how the auxiliary (non-Muon) params are trained, "adamw" or "sgd".
+        This selects the scaling of the orthogonalized update.
+    :param nesterov: whether to use Nesterov momentum
+    :return: update direction (to be applied with the negative learning rate)
+    """
     momentum.lerp_(grad, 1 - beta)
     update = grad.lerp_(momentum, beta) if nesterov else momentum
 
@@ -70,42 +147,40 @@ def muon_update(
 
 class AMUSE(Optimizer):
     """
-    AMUSE optimizer.
+    AMUSE optimizer, one update type per instance (see the module docstring).
 
     State convention:
+
     - p stores y while training.
-    - eval() converts y -> x using the current beta1.
-    - train() converts x -> y using the current beta1.
-    - state["z"] stores the anchor z.
+    - ``eval()`` converts y -> x using the current beta1.
+    - ``train()`` converts x -> y using the current beta1.
+    - ``state["z"]`` stores the anchor z.
 
     Hyperparameters:
+
     - beta1: initial y/x interpolation. During warmup beta1 is constant.
     - rho: controls how quickly beta1 approaches 1 after warmup.
       Higher rho pushes beta1 toward 1 faster, so y moves closer to x
       faster. Lower rho keeps y farther from x for longer.
     - r: polynomial power for the z/x averaging weights.
-    - weight_decay: decoupled decay applied to z for Muon and SGD paths.
+    - weight_decay: decoupled decay. Applied to z for the Muon and SGD update types,
+      and added to the update for the AdamW update type.
+      The RETURNN updater applies its default parameter-group split for it
+      (no decay on biases and blacklisted modules).
     - weight_decay_at_y: optional decay applied while p is still y.
-
-    Parameter groups:
-    - Matrix hidden-layer weights should use {"use_muon": True}. These use
-      Muon momentum and Newton-Schulz orthogonalization.
-    - Embeddings, scalar parameters, and output head weights should use
-      {"use_muon": False}. By default these use the AdamW-style fallback.
-    - Non-Muon groups can set {"update_type": "sgd"} to use the same AMUSE
-      y/x/z schedule with a plain SGD z update instead of AdamW.
-    - Muon groups can set {"aux_update_type": "sgd"} to use Muon's default
-      scaling when the auxiliary layers are trained by SGD.
-    - The AdamW-style fallback uses the group's beta2 value.
-    - Each group should provide lr and weight_decay; Muon groups may also
-      provide momentum.
     """
 
     def __init__(
         self,
-        param_groups,
+        params,
         lr: Optional[float] = None,
         *,
+        update_type: str = "adamw",
+        momentum: float = 0.95,
+        aux_update_type: str = "adamw",
+        beta2: float = 0.999,
+        eps: float = 1e-10,
+        weight_decay: float = 0.0,
         weight_decay_at_y: float = 0.0,
         beta1: float = 0.9,
         weight_lr_power: float = 2.0,
@@ -113,9 +188,33 @@ class AMUSE(Optimizer):
         rho: float = 1.0,
         r: float = 0.0,
     ):
+        """
+        :param params: params or param groups
+        :param lr: base learning rate. In RETURNN, this is set and scheduled externally
+            (``learning_rate`` config option, optionally with a per-group learning_rate_multiplier).
+        :param update_type: "muon", "adamw" or "sgd", see the module docstring
+        :param momentum: Muon momentum factor (update_type "muon" only)
+        :param aux_update_type: for update_type "muon": how the remaining params are trained
+            ("adamw" or "sgd"), selects the Muon update scaling
+        :param beta2: second-moment factor (update_type "adamw" only)
+        :param eps: epsilon (update_type "adamw" only)
+        :param weight_decay: decoupled weight decay
+        :param weight_decay_at_y: optional decay applied while p is still y
+        :param beta1: initial y/x interpolation
+        :param weight_lr_power: exponent on the per-step lr in the z/x averaging weights
+        :param warmup_steps: internal lr warmup, required > 0
+        :param rho: beta1 ramp speed after warmup
+        :param r: polynomial power for the z/x averaging weights
+        """
         if warmup_steps <= 0:
             raise ValueError("AMUSE requires warmup_steps > 0.")
+        if update_type not in UPDATE_TYPES:
+            raise ValueError(f"Invalid AMUSE update_type: {update_type}. Expected one of {{'muon', 'adamw', 'sgd'}}.")
+        if aux_update_type not in AUX_UPDATE_TYPES:
+            raise ValueError(f"Invalid AMUSE aux_update_type: {aux_update_type}. Expected one of {{'adamw', 'sgd'}}.")
 
+        self.update_type = update_type
+        self.aux_update_type = aux_update_type
         self.weight_decay_at_y = weight_decay_at_y
         self.beta1_init = float(beta1)
         self.weight_lr_power = weight_lr_power
@@ -124,65 +223,45 @@ class AMUSE(Optimizer):
         self.r = r
         self.train_mode = False
 
-        super().__init__(param_groups, defaults={})
+        if lr is None:
+            lr = _DEFAULT_LR_BY_UPDATE_TYPE[update_type]
+        defaults = {"lr": lr, "weight_decay": weight_decay}
+        if update_type == "muon":
+            defaults["momentum"] = momentum
+        elif update_type == "adamw":
+            defaults["beta2"] = beta2
+            defaults["eps"] = eps
+
+        super().__init__(params, defaults=defaults)
         for group in self.param_groups:
-            group.setdefault("warmup_steps", self.warmup_steps)
+            for legacy_key in ("use_muon", "aux_update_type"):
+                if legacy_key in group:
+                    raise ValueError(
+                        f"AMUSE: param group key {legacy_key!r} is no longer supported."
+                        " AMUSE applies one update type per instance now (update_type constructor argument)."
+                        " Compose multiple update types over different param subsets"
+                        " via returnn.torch.optim.multi.MultiOptimizer."
+                    )
+            if group.get("update_type", self.update_type) != self.update_type:
+                raise ValueError(
+                    f"AMUSE: param group update_type {group['update_type']!r} differs from"
+                    f" the instance update_type {self.update_type!r}. Per-group update types are"
+                    " no longer supported, compose multiple AMUSE instances"
+                    " via returnn.torch.optim.multi.MultiOptimizer."
+                )
             group.setdefault("k", 0)
             group.setdefault("weight_sum", 0.0)
-            group.setdefault("use_muon", False)
-            group.setdefault("weight_decay", 0.0)
             group.setdefault("beta1", self.beta1_init)
 
-            update_type = "muon" if group["use_muon"] else group.get("update_type", "adamw")
-            if update_type not in UPDATE_TYPES:
-                raise ValueError(
-                    f"Invalid AMUSE update_type: {update_type}. Expected one of {{'muon', 'adamw', 'sgd'}}."
-                )
-            if update_type == "muon" and not group["use_muon"]:
-                raise ValueError('AMUSE update_type="muon" requires use_muon=True.')
-
-            group["update_type"] = update_type
-
-            if update_type == "muon":
-                group.setdefault("lr", lr if lr is not None else 0.02)
-                group.setdefault("momentum", 0.95)
-                group.setdefault("aux_update_type", "adamw")
-                if group["aux_update_type"] not in AUX_UPDATE_TYPES:
-                    raise ValueError(
-                        f"Invalid AMUSE aux_update_type: {group['aux_update_type']}. "
-                        "Expected one of {'adamw', 'sgd'}."
-                    )
-                group["params"] = sorted(group["params"], key=lambda x: x.size(), reverse=True)
-                for p in group["params"]:
-                    state = self.state[p]
-                    if "momentum_buffer" not in state:
-                        state["momentum_buffer"] = torch.zeros_like(p)
-            elif update_type == "adamw":
-                group.setdefault("lr", lr if lr is not None else 3e-4)
-                group.setdefault("beta2", 0.999)
-                group.setdefault("eps", 1e-10)
-                for p in group["params"]:
-                    state = self.state[p]
-                    if "exp_avg_sq" not in state:
-                        state["exp_avg_sq"] = torch.zeros_like(p)
-            elif update_type == "sgd":
-                group.setdefault("lr", lr if lr is not None else 1.0)
-
-            group["base_lr"] = group["lr"]
-
-        # RETURNN's epoch callbacks get only the model, never the optimizer, so register here
-        # for amuse_epoch_start/end to drive the Schedule-Free train()/eval() protocol.
-        _register_active_amuse(self)
-
-    def _compute_beta1(self, group, t, ckp1, warmup_steps):
-        if t <= warmup_steps:
-            if t == warmup_steps:
+    def _compute_beta1(self, group, t, ckp1):
+        if t <= self.warmup_steps:
+            if t == self.warmup_steps:
                 group["c_warmup"] = ckp1
             return self.beta1_init
 
-        c_warmup = group.get("c_warmup", 1.0 / warmup_steps)
-        S_t = (ckp1 * (1.0 - c_warmup)) / (c_warmup * (1.0 - ckp1))
-        return 1.0 - (S_t**self.rho) * (1.0 - self.beta1_init)
+        c_warmup = group.get("c_warmup", 1.0 / self.warmup_steps)
+        s_t = (ckp1 * (1.0 - c_warmup)) / (c_warmup * (1.0 - ckp1))
+        return 1.0 - (s_t**self.rho) * (1.0 - self.beta1_init)
 
     def _get_z(self, p):
         state = self.state[p]
@@ -199,6 +278,10 @@ class AMUSE(Optimizer):
 
     @torch.no_grad()
     def eval(self):
+        """
+        Switch the params from the training iterate y to the averaged weights x,
+        for evaluation and checkpoint saving. No-op if already in eval mode.
+        """
         if self.train_mode:
             for group in self.param_groups:
                 beta1 = group.get("beta1", self.beta1_init)
@@ -210,6 +293,10 @@ class AMUSE(Optimizer):
 
     @torch.no_grad()
     def train(self):
+        """
+        Switch the params from the averaged weights x back to the training iterate y.
+        No-op if already in train mode.
+        """
         if not self.train_mode:
             for group in self.param_groups:
                 beta1 = group.get("beta1", self.beta1_init)
@@ -221,6 +308,11 @@ class AMUSE(Optimizer):
 
     @torch.no_grad()
     def step(self, closure=None):
+        """
+        Perform one optimization step.
+
+        :param closure: optional closure to reevaluate the model and return the loss
+        """
         if not self.train_mode:
             raise Exception(
                 "Optimizer was not in train mode when step is called. "
@@ -232,16 +324,14 @@ class AMUSE(Optimizer):
                 loss = closure()
 
         for group in self.param_groups:
-            base_lr = group["base_lr"]
+            base_lr = group["lr"]
+            if isinstance(base_lr, torch.Tensor):
+                base_lr = base_lr.item()
             k = group["k"]
-            warmup_steps = group.get("warmup_steps", self.warmup_steps)
-            if warmup_steps <= 0:
-                raise ValueError("AMUSE requires warmup_steps > 0.")
 
             t = k + 1
-            sched = min(1.0, t / warmup_steps)
+            sched = min(1.0, t / self.warmup_steps)
             lr = base_lr * sched
-            group["lr"] = lr
 
             # ckp1 is the new z-to-x averaging weight c_t.
             weight = (t**self.r) * (lr**self.weight_lr_power)
@@ -250,17 +340,12 @@ class AMUSE(Optimizer):
             group["ckp1"] = ckp1
             group["weight_sum"] = future_weight_sum
 
-            beta1 = self._compute_beta1(group, t, ckp1, warmup_steps)
+            beta1 = self._compute_beta1(group, t, ckp1)
             group["beta1"] = beta1
-            group["r_t"] = ckp1 / ((1.0 - beta1) + beta1 * ckp1 + 1e-12)
             wd = group.get("weight_decay", 0.0)
-            self.beta1 = beta1
 
-            update_type = group["update_type"]
-
-            if update_type == "muon":
-                beta_m = group["momentum"]
-                aux_update_type = group.get("aux_update_type", "adamw")
+            if self.update_type == "muon":
+                beta_m = group.get("momentum", 0.95)
                 for p in group["params"]:
                     if p.grad is None:
                         continue
@@ -277,7 +362,7 @@ class AMUSE(Optimizer):
                         p.grad,
                         state["momentum_buffer"],
                         beta=beta_m,
-                        aux_update_type=aux_update_type,
+                        aux_update_type=self.aux_update_type,
                         nesterov=True,
                     )
                     if wd != 0.0:
@@ -286,7 +371,7 @@ class AMUSE(Optimizer):
                     p.lerp_(end=z, weight=ckp1)
                     p.lerp_(end=z, weight=1.0 - beta1)
 
-            elif update_type == "adamw":
+            elif self.update_type == "adamw":
                 beta2 = group.get("beta2", 0.999)
                 eps = group.get("eps", 1e-10)
                 bias_correction2 = 1.0 - beta2**t
@@ -314,7 +399,7 @@ class AMUSE(Optimizer):
                     p.lerp_(end=z, weight=ckp1)
                     p.lerp_(end=z, weight=1.0 - beta1)
 
-            elif update_type == "sgd":
+            elif self.update_type == "sgd":
                 for p in group["params"]:
                     if p.grad is None:
                         continue
@@ -331,179 +416,8 @@ class AMUSE(Optimizer):
                     p.lerp_(end=z, weight=1.0 - beta1)
 
             else:
-                raise ValueError(f"Invalid AMUSE update_type: {update_type}")
+                raise ValueError(f"Invalid AMUSE update_type: {self.update_type}")
 
             group["k"] = k + 1
 
         return loss
-
-
-_ACTIVE_AMUSE: "AMUSE | None" = None
-
-
-def _register_active_amuse(opt: "AMUSE") -> None:
-    global _ACTIVE_AMUSE
-    _ACTIVE_AMUSE = opt
-
-
-# param-group split: Muon for matrix hidden weights, AdamW-style fallback for
-# everything else (embeddings, output head/logits, LayerNorm weights, biases, scalars).
-# This matches the convention in AMUSE's docstring and the Muon papers.
-_DEFAULT_FALLBACK_NAME_SUBSTRINGS = ("embed", "logit", "lm_head", "head")
-
-
-def _amuse_param_groups(
-    *,
-    model,
-    muon_lr: float,
-    adamw_lr: float,
-    weight_decay: float,
-    muon_momentum: float,
-    fallback_name_substrings: Sequence[str],
-    **_kwargs,
-) -> List[Dict[str, Any]]:
-    subs = tuple(s.lower() for s in fallback_name_substrings)
-    muon_params: List[Any] = []
-    fallback_params: List[Any] = []
-    muon_names: List[str] = []
-    fallback_names: List[str] = []
-    for name, p in model.named_parameters():
-        if not p.requires_grad:
-            continue
-        lname = name.lower()
-        if p.dim() >= 2 and not any(s in lname for s in subs):
-            muon_params.append(p)
-            muon_names.append(name)
-        else:
-            fallback_params.append(p)
-            fallback_names.append(name)
-
-    # surface the split so a misclassification is visible in returnn.log
-    print(
-        "[amuse] param split: muon=%d params / %d elems, fallback=%d params / %d elems"
-        % (
-            len(muon_params),
-            sum(p.numel() for p in muon_params),
-            len(fallback_params),
-            sum(p.numel() for p in fallback_params),
-        )
-    )
-    print("[amuse] muon examples: %s" % (muon_names[:5],))
-    print("[amuse] fallback examples: %s" % (fallback_names[:10],))
-
-    assert muon_params, "AMUSE: no matrix params landed in the Muon group"
-    assert fallback_params, "AMUSE: no params landed in the AdamW-fallback group"
-
-    return [
-        {
-            "params": muon_params,
-            "use_muon": True,
-            "lr": muon_lr,
-            "momentum": muon_momentum,
-            "weight_decay": weight_decay,
-        },
-        {
-            "params": fallback_params,
-            "use_muon": False,
-            "lr": adamw_lr,
-            "weight_decay": weight_decay,
-        },
-    ]
-
-
-def make_amuse_param_groups(
-    *,
-    muon_lr: float = 0.02,
-    adamw_lr: float = 3e-4,
-    weight_decay: float = 0.0,
-    muon_momentum: float = 0.95,
-    fallback_name_substrings: Sequence[str] = _DEFAULT_FALLBACK_NAME_SUBSTRINGS,
-) -> Callable[..., List[Dict[str, Any]]]:
-    """Return a picklable ``param_groups_custom`` callable."""
-    return functools.partial(
-        _amuse_param_groups,
-        muon_lr=muon_lr,
-        adamw_lr=adamw_lr,
-        weight_decay=weight_decay,
-        muon_momentum=muon_momentum,
-        fallback_name_substrings=tuple(fallback_name_substrings),
-    )
-
-
-# the .opt.pt stores param_groups_custom as a functools.partial,
-# allowlist it (+ the wrapped fn) so torch.load can resume.
-# add_safe_globals only exists since torch 2.4; older torch loads with weights_only=False anyway.
-if hasattr(torch.serialization, "add_safe_globals"):
-    torch.serialization.add_safe_globals([functools.partial, _amuse_param_groups])
-
-
-# epoch callbacks
-def amuse_epoch_start(*, dataset_name: str = None, **_kwargs) -> None:
-    if _ACTIVE_AMUSE is not None and dataset_name == "train":
-        _ACTIVE_AMUSE.train()
-
-
-def amuse_epoch_end(*, dataset_name: str = None, **_kwargs) -> None:
-    if _ACTIVE_AMUSE is not None and dataset_name == "train":
-        _ACTIVE_AMUSE.eval()
-
-
-# RETURNN config wiring helpers
-def amuse_returnn_config(
-    *,
-    warmup_steps: int,
-    beta1: float,
-    rho: float,
-    learning_rate: float = 1.0,
-    optim_module: str = "returnn.torch.optim.amuse",
-    param_groups_custom_name: str = "amuse_param_groups",
-    epoch_start_name: str = "amuse_epoch_start",
-    epoch_end_name: str = "amuse_epoch_end",
-) -> Dict[str, Any]:
-    """RETURNN config entries that enable AMUSE (schedule-free) training"""
-    from i6_core.returnn.config import CodeWrapper
-
-    return {
-        "optimizer": {
-            "class": f"{optim_module}.AMUSE",
-            "warmup_steps": warmup_steps,
-            "beta1": beta1,
-            "rho": rho,
-            "param_groups_custom": CodeWrapper(param_groups_custom_name),
-        },
-        "learning_rate": learning_rate,
-        "epoch_start": CodeWrapper(epoch_start_name),
-        "epoch_end": CodeWrapper(epoch_end_name),
-    }
-
-
-def amuse_returnn_prolog(
-    *,
-    muon_lr: float = 0.02,
-    adamw_lr: float = 3e-4,
-    weight_decay: float = 0.0,
-    muon_momentum: float = 0.95,
-    optim_module: str = "returnn.torch.optim.amuse",
-    param_groups_custom_name: str = "amuse_param_groups",
-    epoch_start_name: str = "amuse_epoch_start",
-    epoch_end_name: str = "amuse_epoch_end",
-) -> List[Any]:
-    """python_prolog entries that bind AMUSE's callables into the config namespace"""
-    from i6_core.serialization import CallImport, Import
-
-    return [
-        CallImport(
-            code_object_path=f"{optim_module}.make_amuse_param_groups",
-            unhashed_package_root=None,
-            hashed_arguments={
-                "muon_lr": muon_lr,
-                "adamw_lr": adamw_lr,
-                "weight_decay": weight_decay,
-                "muon_momentum": muon_momentum,
-            },
-            unhashed_arguments={},
-            import_as=param_groups_custom_name,
-        ),
-        Import(f"{optim_module}.amuse_epoch_start", import_as=epoch_start_name),
-        Import(f"{optim_module}.amuse_epoch_end", import_as=epoch_end_name),
-    ]
