@@ -460,6 +460,33 @@ def _warn_regap_enabled() -> bool:
     return False
 
 
+def _att_fast_paths_enabled() -> bool:
+    """
+    :return: whether the packed attention fast paths (Triton rel-pos, flash varlen, flex, NJT, per-seq)
+        may be used.
+
+    Config option ``rf_packed_att_fast_paths``, default True.
+    Disabled, the attentions take the unpack -> padded op -> repack fallback
+    (which must then be allowed, see ``packed_fallback_allowed``):
+    exact padded attention numerics while everything else stays packed.
+    A diagnostic switch, e.g. to bisect a training difference down to the attention kernels.
+    """
+    from returnn.config import get_global_config
+
+    config = get_global_config(raise_exception=False)
+    if config:
+        if "rf_packed_att_fast_paths" in config.typed_dict:
+            value = config.typed_dict["rf_packed_att_fast_paths"]
+            assert value is None or isinstance(value, bool)
+            if value is not None:
+                return value
+        elif "rf_packed_att_fast_paths" in config.dict:
+            value = config.bool("rf_packed_att_fast_paths", None)
+            if value is not None:
+                return value
+    return True
+
+
 def _add_dim_with_size_deps(dims: Set[Dim], d: Dim):
     """add d and the dims its seq lens depend on (conservative: those matter for masking)"""
     dims.add(d)
@@ -2897,7 +2924,7 @@ class PackedBackend(Backend[PackedRawTensor]):
                     dropout_p = att_dropout if train_flag else 0.0
                 else:
                     dropout_p = None  # dynamic train flag, cannot resolve to a static dropout_p
-        if attention_mask is None and dropout_p is not None:
+        if _att_fast_paths_enabled() and attention_mask is None and dropout_p is not None:
             if not is_packed(query) and is_packed(key) and is_packed(value) and not is_causal:
                 k_raw = _raw(key)
                 batch_dims = k_raw.orig_dims[:-1]
@@ -3056,7 +3083,7 @@ class PackedBackend(Backend[PackedRawTensor]):
         # which a fixed CUDA-graph buffer breaks.)
         # It expresses no-dropout and per-element (non-broadcast) dropout;
         # broadcast dropout it cannot, so only that case skips it.
-        if not (dropout_active and att_dropout_broadcast):
+        if _att_fast_paths_enabled() and not (dropout_active and att_dropout_broadcast):
             out = _torch_triton_rel_pos_attention(
                 query,
                 key,
@@ -3074,7 +3101,7 @@ class PackedBackend(Backend[PackedRawTensor]):
             if out is not None:
                 return out
         # FlexAttention fallback (no dropout support), so only when dropout is inactive.
-        if not dropout_active:
+        if _att_fast_paths_enabled() and not dropout_active:
             out = _torch_flex_rel_pos_attention(
                 query,
                 key,
@@ -3092,8 +3119,15 @@ class PackedBackend(Backend[PackedRawTensor]):
                 return out
         else:
             _flex_no("att_dropout active in training (FlexAttention has no dropout support)")
-        if is_packed(query) and query.raw_tensor.inner.device == "cpu":
-            # CPU: per-seq slice loop over the packed buffer, no unpack
+        if (
+            _att_fast_paths_enabled()
+            and not rf.is_static_traceable()
+            and is_packed(query)
+            and query.raw_tensor.inner.device == "cpu"
+        ):
+            # CPU: per-seq slice loop over the packed buffer, no unpack.
+            # Not under static tracing: the per-seq loop reads data-dependent host values
+            # (per-seq lens as Python ints), which cannot be traced
             # (the planned Triton kernel is the CUDA fast path)
             out = _rel_pos_attention_per_seq(
                 query,
