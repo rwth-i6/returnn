@@ -206,8 +206,14 @@ class AMUSE(Optimizer):
         :param rho: beta1 ramp speed after warmup
         :param r: polynomial power for the z/x averaging weights
         """
+        if warmup_steps != int(warmup_steps):
+            raise ValueError(f"AMUSE warmup_steps must be an integer, got {warmup_steps}.")
         if warmup_steps <= 0:
             raise ValueError("AMUSE requires warmup_steps > 0.")
+        if not 0.0 < beta1 < 1.0:
+            raise ValueError(f"AMUSE beta1 must be in (0, 1), got {beta1}.")
+        if rho <= 0.0:
+            raise ValueError(f"AMUSE rho must be > 0, got {rho}.")
         if update_type not in UPDATE_TYPES:
             raise ValueError(f"Invalid AMUSE update_type: {update_type}. Expected one of {{'muon', 'adamw', 'sgd'}}.")
         if aux_update_type not in AUX_UPDATE_TYPES:
@@ -249,6 +255,16 @@ class AMUSE(Optimizer):
                     " no longer supported, compose multiple AMUSE instances"
                     " via returnn.torch.optim.multi.MultiOptimizer."
                 )
+            if self.update_type == "muon":
+                for p in group["params"]:
+                    if p.ndim < 2:
+                        raise ValueError(
+                            f"AMUSE with update_type 'muon' requires matrix params (ndim >= 2),"
+                            f" got a param of shape {tuple(p.shape)}."
+                            " Restrict the params via params_filter"
+                            " and train the rest with another update type"
+                            " via returnn.torch.optim.multi.MultiOptimizer."
+                        )
             group.setdefault("k", 0)
             group.setdefault("weight_sum", 0.0)
             group.setdefault("beta1", self.beta1_init)

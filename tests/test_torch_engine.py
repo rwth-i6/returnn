@@ -2071,6 +2071,36 @@ def test_amuse_zero_lr_at_warmup_boundary():
     opt.eval()
 
 
+def test_amuse_constructor_validation():
+    from returnn.torch.optim.amuse import AMUSE
+
+    model = torch.nn.Linear(4, 3)
+    params = list(model.parameters())
+    for bad_kwargs in (
+        {"warmup_steps": 0},
+        {"warmup_steps": 0.5},
+        {"warmup_steps": 5, "beta1": 0.0},
+        {"warmup_steps": 5, "beta1": 1.0},
+        {"warmup_steps": 5, "rho": 0.0},
+        {"warmup_steps": 5, "rho": -1.0},
+    ):
+        try:
+            AMUSE(params, **bad_kwargs)
+        except ValueError:
+            pass
+        else:
+            raise AssertionError(f"expected ValueError for {bad_kwargs}")
+
+    # Muon needs matrix params, so the 1D bias must be rejected at construction, not at step time.
+    try:
+        AMUSE(params, warmup_steps=5, update_type="muon")
+    except ValueError as exc:
+        assert "ndim" in str(exc)
+    else:
+        raise AssertionError("expected ValueError for a 1D param with update_type muon")
+    AMUSE([p for p in params if p.ndim >= 2], warmup_steps=5, update_type="muon")
+
+
 def test_multi_optimizer_amuse():
     from returnn.torch.optim.amuse import AMUSE
     from returnn.torch.optim.multi import MultiOptimizer
