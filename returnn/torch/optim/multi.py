@@ -291,14 +291,14 @@ class _MultiOptimizerStateView(MutableMapping):
 
     def __init__(self, sub_optimizers: Sequence[torch.optim.Optimizer]):
         self._sub_optimizers = list(sub_optimizers)
-
-    def _owning_sub(self, param: torch.nn.Parameter) -> Optional[torch.optim.Optimizer]:
+        self._sub_by_param_id: Dict[int, torch.optim.Optimizer] = {}
         for sub in self._sub_optimizers:
             for group in sub.param_groups:
-                for other in group["params"]:
-                    if other is param:
-                        return sub
-        return None
+                for param in group["params"]:
+                    self._sub_by_param_id[id(param)] = sub
+
+    def _owning_sub(self, param: torch.nn.Parameter) -> Optional[torch.optim.Optimizer]:
+        return self._sub_by_param_id.get(id(param))
 
     def __getitem__(self, param: torch.nn.Parameter) -> Dict[str, Any]:
         sub = self._owning_sub(param)
