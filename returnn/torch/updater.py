@@ -19,6 +19,14 @@ from returnn.torch.frontend.bridge import wrapped_pt_module_to_rf_module
 _OptimizerClassesDictInitialized = False
 _OptimizerClassesDict = {}
 
+# Custom optimizers shipped with RETURNN, resolvable by short name like the torch.optim ones.
+# torch.optim names take precedence (see :func:`get_optimizer_class`).
+_ReturnnOptimizerClassPathsByName = {
+    "lion": "returnn.torch.optim.lion.Lion",
+    "amuse": "returnn.torch.optim.amuse.AMUSE",
+    "multi": "returnn.torch.optim.multi.MultiOptimizer",
+}
+
 
 def _init_optimizer_classes_dict():
     """
@@ -43,6 +51,7 @@ def get_optimizer_class(
     """
     :param class_name: Optimizer class, either as str (e.g. "adam"), as type (torch.optim.Adam) or callable.
         If str, we support all torch.optim optimizers (ignoring case) (e.g. "adam"),
+        the custom optimizers shipped with RETURNN (e.g. "multi", "lion", "amuse"),
         or class names with full module path (e.g. "returnn.torch.optim.lion.Lion").
     :return: Optimizer class, e.g. torch.optim.Adam
     """
@@ -53,22 +62,29 @@ def get_optimizer_class(
     elif callable(class_name):
         return class_name()
     elif isinstance(class_name, str):
-        if "." in class_name:
-            import importlib
+        import importlib
 
+        if "." in class_name:
             mod_name, class_name_ = class_name.rsplit(".", 1)
             mod = importlib.import_module(mod_name)
             return getattr(mod, class_name_)
 
-        if class_name.lower() not in _OptimizerClassesDict:
-            raise ValueError(
-                "Optimizer %r not found in the available torch optimizers list: %s."
-                % (
-                    class_name.lower(),
-                    ", ".join("'%s'" % key for key in _OptimizerClassesDict),
-                )
+        if class_name.lower() in _OptimizerClassesDict:
+            return _OptimizerClassesDict[class_name.lower()]
+        if class_name.lower() in _ReturnnOptimizerClassPathsByName:
+            mod_name, class_name_ = _ReturnnOptimizerClassPathsByName[class_name.lower()].rsplit(".", 1)
+            mod = importlib.import_module(mod_name)
+            return getattr(mod, class_name_)
+
+        raise ValueError(
+            "Optimizer %r not found in the available optimizers list: %s."
+            % (
+                class_name.lower(),
+                ", ".join(
+                    "'%s'" % key for key in list(_OptimizerClassesDict) + list(_ReturnnOptimizerClassPathsByName)
+                ),
             )
-        return _OptimizerClassesDict[class_name.lower()]
+        )
     else:
         raise TypeError(f"Invalid optimizer class_name {class_name!r} type {type(class_name).__name__}")
 
