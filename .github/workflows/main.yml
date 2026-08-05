@@ -349,6 +349,7 @@ jobs:
           - TEST=rf_rec
           - TEST=rf_reduce
           - TEST=rf_signal
+          - TEST=rf_tf_backend
         include:
           # Some selected tests (but not all) with some other versions.
           - action: TEST=rf_base
