@@ -153,6 +153,9 @@ class Updater:
 
         self._grad_clip = self.config.float("gradient_clip", 0.0)
         self._grad_clip_global_norm = self.config.float("gradient_clip_global_norm", 0.0)
+        self.log_grad_norm_p = _parse_log_grad_norm(self.config)
+        # the pre-clip grad norm of the last step(), when log_grad_norm_p is set.
+        self.last_grad_norm: Optional[torch.Tensor] = None
         self._num_allowed_consec_invalid_gradient_steps = self.config.typed_value(
             "num_allowed_consec_invalid_gradient_steps", None
         )
@@ -261,12 +264,28 @@ class Updater:
         self._current_epoch_continuous = epoch_continuous
         self._update_effective_learning_rate()
 
+    def _grads(self) -> List[torch.Tensor]:
+        """
+        :return: the current gradients
+        """
+        return [p.grad for p in self.network.parameters() if p.grad is not None]
+
     def step(self, *, grad_scaler: Optional[torch.cuda.amp.GradScaler] = None):
         """
         Perform one step, i.e. update the parameters using the optimizer given the current calculated gradients.
         """
         if grad_scaler is not None:
             grad_scaler.unscale_(self.optimizer)
+
+        # last_grad_norm is the norm of the raw grads, before noise/clip touch them.
+        # clip_grad_norm_ returns exactly that when nothing modified the grads before it,
+        # so in that common case (p=2, only global-norm clipping) it is reused below
+        # instead of walking the grads twice.
+        pre_norm = None
+        if self.log_grad_norm_p is not None and not (
+            self.log_grad_norm_p == 2 and self._grad_clip_global_norm and not self._grad_noise and not self._grad_clip
+        ):
+            pre_norm = torch.nn.utils.get_total_norm(self._grads(), norm_type=self.log_grad_norm_p)
 
         if self._grad_noise:
             gradient_noise_(self.network.parameters(), self._grad_noise)
@@ -277,10 +296,17 @@ class Updater:
         else:
             norm = None
 
+        if self.log_grad_norm_p is not None:
+            if pre_norm is None:
+                assert norm is not None
+            self.last_grad_norm = pre_norm if pre_norm is not None else norm
+
         has_invalid_gradient = False
         if self._num_allowed_consec_invalid_gradient_steps is not None:
             if norm is None:
-                norm = torch.nn.utils.get_total_norm(self.network.parameters())
+                # only reached when no global-norm clip is configured,
+                # so the grads here are in the same state clip_grad_norm_ would have measured
+                norm = torch.nn.utils.get_total_norm(self._grads())
             has_invalid_gradient = torch.isnan(norm) or torch.isinf(norm)
             if has_invalid_gradient:
                 self._num_consec_invalid_gradients_steps += 1
@@ -888,3 +914,26 @@ def gradient_noise_(params: Iterable[torch.nn.Parameter], std: float):
             noise = torch.empty_like(param.grad)
             torch.nn.init.trunc_normal_(noise, std=std, a=a, b=b)
             param.grad += noise
+
+
+def _parse_log_grad_norm(config) -> Optional[Union[int, float]]:
+    """
+    :param returnn.config.Config config:
+    :return: the norm order p to record per step, or None if disabled.
+        Config "log_grad_norm": True means p=2, or give p directly.
+    """
+    log_grad_norm = config.opt_typed_value("log_grad_norm", False)
+    if isinstance(log_grad_norm, str):
+        if log_grad_norm.lower() in ["true", "false", "none"]:
+            log_grad_norm = {"true": True, "false": False, "none": None}[log_grad_norm.lower()]
+        else:
+            raise ValueError(f"Invalid value for log_grad_norm: {log_grad_norm!r}")
+    if log_grad_norm is None:
+        pass
+    elif isinstance(log_grad_norm, bool):
+        log_grad_norm = 2 if log_grad_norm else None
+    elif isinstance(log_grad_norm, (int, float)):
+        assert log_grad_norm > 0, f"log_grad_norm {log_grad_norm} > 0 expected"
+    else:
+        raise TypeError(f"Invalid type for log_grad_norm: {log_grad_norm!r} type {type(log_grad_norm)}")
+    return log_grad_norm

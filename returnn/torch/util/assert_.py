@@ -21,6 +21,16 @@ def assert_(cond: torch.Tensor, message: str, *, stop: bool = True):
     :param message: The message to display if the assertion fails.
     :param stop: Whether to stop execution on assertion failure
     """
+    if type(cond) is not torch.Tensor:
+        # tensor subclass (fake/functional/traced): no real storage,
+        # and the raw kernel launch would be invisible to the trace anyway
+        return
+    # noinspection PyProtectedMember,PyCallingNonCallable
+    if hasattr(torch, "_is_functional_tensor") and torch._is_functional_tensor(cond):
+        # torch 2.0 functionalization wraps WITHOUT a Python subclass
+        # (type(cond) is torch.Tensor, so the check above does not see it):
+        # also no real storage; under tracing, reading it is data-dependent and would raise
+        return
     if cond.device.type == "cpu":
         if not cond.item():
             if stop:
@@ -32,10 +42,6 @@ def assert_(cond: torch.Tensor, message: str, *, stop: bool = True):
         if torch.cuda.is_current_stream_capturing():
             # cross-thread launch onto a capturing stream is illegal;
             # the eager warmup steps before a capture already ran the check
-            return
-        if type(cond) is not torch.Tensor:
-            # tensor subclass (fake/functional/traced): no real storage,
-            # and the raw kernel launch would be invisible to the trace anyway
             return
         # This triggers the Lazy initialization on first call
         _CudaAsyncWorker().push(cond, message, stop=stop)

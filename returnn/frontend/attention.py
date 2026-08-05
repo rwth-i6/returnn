@@ -279,7 +279,8 @@ class SelfAttention(SelfAttentionBase):
     def __call__(self, source: Tensor, *, axis: Dim) -> Tensor:
         """forward"""
         q, k, v = self.forward_qkv(source)
-        kv_axis = Dim(None, name=f"{axis.name}-kv")
+        # bounded_by: same extent as axis, so the capacity carries over (static tracing needs it)
+        kv_axis = Dim(None, name=f"{axis.name}-kv", bounded_by=axis)
         k, _ = rf.replace_dim(k, in_dim=axis, out_dim=kv_axis)
         v, _ = rf.replace_dim(v, in_dim=axis, out_dim=kv_axis)
         return self.attention(q, k, v, kv_axis=kv_axis)

@@ -815,6 +815,14 @@ class GraphCapturedTrainStep:
         # noinspection PyProtectedMember
         from torch._inductor.compile_fx import compile_fx
 
+        # torch 2.7: a REAL flex HOP compile earlier in the process
+        # (e.g. FlexAttention in the eager warmup steps) poisons flex compiles under fake tracing
+        # (dynamo skip error on torch._library.utils.is_builtin inside can_auto_functionalize,
+        # then the packed flex paths would decline mid-trace).
+        # Resetting dynamo clears the stale compile state; harmless otherwise
+        # (this path uses no dynamo itself, other compiled artifacts just recompile lazily).
+        # noinspection PyProtectedMember
+        torch._dynamo.reset()
         _apply_inductor_workarounds()
         if self._inductor_nan_asserts:
             # noinspection PyProtectedMember

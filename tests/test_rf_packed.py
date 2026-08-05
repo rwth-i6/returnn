@@ -45,15 +45,26 @@ def _flex_attention_usable() -> bool:
 
 
 def _assert_equal_non_padded(actual: Tensor, expected: Tensor, batch_dim: Dim, time_dim: Dim, **kwargs):
-    """compare on all non-padded frames. actual can have packed storage."""
+    """
+    compare on all non-padded frames. actual can have packed storage.
+
+    The two sides can have different padded widths:
+    under static tracing the packed side unpacks to the real max length,
+    while the padded reference keeps its capacity-derived width.
+    So slice each seq against its own storage, instead of one shared mask.
+    """
     actual = packed.unpack(actual)
     order = [batch_dim, time_dim] + [d for d in expected.dims if d not in (batch_dim, time_dim)]
-    actual = actual.copy_transpose(order)
-    expected = expected.copy_transpose(order)
-    mask = rf.sequence_mask([batch_dim, time_dim]).copy_compatible_to_dims([batch_dim, time_dim]).raw_tensor.numpy()
-    a = actual.raw_tensor.detach().numpy()
-    e = expected.raw_tensor.detach().numpy()
-    numpy.testing.assert_allclose(a[mask], e[mask], **{"rtol": 1e-5, "atol": 1e-6, **kwargs})
+    a = actual.copy_transpose(order).raw_tensor.detach().cpu().numpy()
+    e = expected.copy_transpose(order).raw_tensor.detach().cpu().numpy()
+    opts = {"rtol": 1e-5, "atol": 1e-6, **kwargs}
+    if time_dim.dyn_size_ext is None:
+        numpy.testing.assert_allclose(a, e, **opts)
+        return
+    lens = time_dim.dyn_size_ext.copy_compatible_to_dims([batch_dim]).raw_tensor.cpu().numpy()
+    assert len(lens) == a.shape[0] == e.shape[0], f"batch {len(lens)} vs {a.shape[0]} vs {e.shape[0]}"
+    for b, n in enumerate(lens):
+        numpy.testing.assert_allclose(a[b, :n], e[b, :n], err_msg=f"seq {b}", **opts)
 
 
 def test_pack_auto_dims():
@@ -276,6 +287,88 @@ def test_conv_packed_gap_junk_robust():
         assert packed.is_packed(out_p)
         assert out_p.raw_tensor.packed_dim == xp.raw_tensor.packed_dim  # fast path, layout unchanged
         _assert_equal_non_padded(out_p, out_ref, batch_dim, time_dim)
+
+
+def test_regap_bound_from_declared_total():
+    # A static-traceable regap (the packed conv widening a too-small gap) derives its bound from the
+    # total bound DECLARED at pack() time, plus the gap it adds.
+    # The per-seq capacity product would instead put EVERY seq at its full capacity at once,
+    # which the declared total already rules out (for loq that was 68_400 frames instead of 20_667,
+    # and every downstream op inherits the regapped static shape).
+    rf.select_backend_torch()
+    batch_dim = Dim(2, name="batch")
+    time_dim = Dim(
+        Tensor("time", dims=[batch_dim], dtype="int32", raw_tensor=torch.tensor([5, 3], dtype=torch.int32)),
+        capacity=8,  # static tracing needs a declared capacity
+    )
+    feat_dim = Dim(4, name="feat")
+    x = Tensor("x", dims=[batch_dim, time_dim, feat_dim], dtype="float32")
+    x.raw_tensor = torch.randn(2, 8, 4, generator=torch.Generator().manual_seed(23))  # padded to capacity
+    with rf.set_default_device_ctx("cpu"):
+        rf.set_random_seed(23)
+        conv = rf.Conv1d(feat_dim, Dim(6, name="out"), filter_size=7, padding="same")  # span 6 -> needs gap 3
+        out_ref, _ = conv(x, in_spatial_dim=time_dim)
+        with rf.set_static_traceable_ctx():
+            xp = packed.pack(x, gap=1, total_bound=12)
+            assert xp.raw_tensor.packed_dim.dimension == 12
+            out_p, _ = conv(xp, in_spatial_dim=time_dim)
+            # the same packing, re-laid-out a second time: the base is the DECLARED bound,
+            # never the one derived a step earlier, so the result does not depend on the path
+            out_p2 = packed.regap(out_p, 3)
+        assert packed.is_packed(out_p)
+        # 12 + 2 seqs * ceil((3 - 1) / align 1) = 16.
+        # (the per-seq capacity product would have been 2 * (8 + 3) = 22)
+        assert out_p.raw_tensor.packed_dim.dimension == 16
+        assert out_p.raw_tensor.gap == 3
+        assert out_p2.raw_tensor.packed_dim.dimension == 16  # idempotent, not 16 + 2 * 2
+        # and 16 really holds the content: footprints (5 + 3) + (3 + 3) = 14
+        _assert_equal_non_padded(out_p, out_ref, batch_dim, time_dim)
+
+
+def test_regap_gap_roundtrip_keeps_bound():
+    # The varlen attention path densifies to gap 0 for the nested/jagged offsets and restores the
+    # original layout afterwards (see _torch_sdpa_varlen_attention).
+    # The bound must therefore be a function of the gap, not just grow:
+    # with a one-sided delta each round trip added n_seqs frames, and after the decoder's
+    # attention calls the result no longer matched a tensor that had not been through one.
+    rf.select_backend_torch()
+    batch_dim = Dim(2, name="batch")
+    time_dim = Dim(
+        Tensor("time", dims=[batch_dim], dtype="int32", raw_tensor=torch.tensor([5, 3], dtype=torch.int32)),
+        capacity=8,
+    )
+    feat_dim = Dim(4, name="feat")
+    x = Tensor("x", dims=[batch_dim, time_dim, feat_dim], dtype="float32")
+    x.raw_tensor = torch.randn(2, 8, 4, generator=torch.Generator().manual_seed(5))
+    with rf.set_default_device_ctx("cpu"):
+        with rf.set_static_traceable_ctx():
+            xp = packed.pack(x, gap=1, total_bound=14)
+            assert xp.raw_tensor.packed_dim.dimension == 14
+            dense = packed.regap(xp, 0)
+            # a smaller gap needs less buffer: 14 - 2 seqs * 1
+            assert dense.raw_tensor.packed_dim.dimension == 12
+            back = packed.regap(dense, 1)
+            assert back.raw_tensor.packed_dim.dimension == 14  # exactly where we started
+            # and again, to catch a per-round-trip drift
+            for _ in range(3):
+                back = packed.regap(packed.regap(back, 0), 1)
+            assert back.raw_tensor.packed_dim.dimension == 14
+        _assert_equal_non_padded(back, x, batch_dim, time_dim)
+
+
+def test_pack_static_traceable_requires_total_bound():
+    # Without a declared bound there is nothing sound to derive a static buffer from,
+    # so pack must say so instead of silently inventing the capacity product.
+    rf.select_backend_torch()
+    x, batch_dim, time_dim, feat_dim = _make_input()
+    with rf.set_default_device_ctx("cpu"):
+        with rf.set_static_traceable_ctx():
+            try:
+                packed.pack(x, gap=1)
+            except AssertionError as exc:
+                assert "total_bound" in str(exc)
+            else:
+                raise Exception("pack should require total_bound under static tracing")
 
 
 def test_conv_packed_strided():
@@ -923,6 +1016,543 @@ def test_stft_packed():
     assert "stft" not in warned  # ran the single-call packed stft, no unpack fallback
     assert packed.is_packed(out_p) and out_sp_p == out_sp
     _assert_equal_non_padded(out_p, out_ref, batch_dim, out_sp, rtol=1e-4, atol=1e-4)
+
+
+def _full_model_packed_vs_padded(
+    dev: str, *, rtol: float, expected_att_paths: dict, amp: bool = False, atol: float = 1e-4
+):
+    """
+    Full CTC+AED model, packed vs padded storage: losses, encoder output, and ALL parameter grads.
+
+    The other tests here cover the ops in isolation.
+    This one covers their composition, which is where a wrong per-seq index
+    (a cu_seqlens total, a seq start) can hide:
+    the forward still looks plausible while the backward credits the wrong sequence,
+    so comparing the grads is the essential part of this test, not an extra.
+
+    :param dev: "cpu" or "cuda". The attention fast paths are device-dependent
+        (CPU takes FlexAttention, CUDA the Triton rel-pos kernel),
+        so a CPU-only check leaves the kernels that real training runs untested.
+    :param rtol: relative tolerance on losses and grads
+    :param expected_att_paths: the attention paths the packed run must take.
+        Asserted so a regression that silently reroutes to another path
+        fails here, instead of passing on a path we did not mean to test.
+    :param amp: run the model under autocast bfloat16, as the real trainings do.
+        This is also the only way to reach the flash varlen attention path,
+        which is gated on cuda + fp16/bf16 (see _torch_sdpa_varlen_attention),
+        so an fp32-only test silently covers flex instead.
+    :param atol: absolute tolerance for the encoder output comparison
+    """
+    import contextlib
+
+    from returnn.frontend.encoder.conformer import (
+        ConformerEncoder,
+        ConformerEncoderLayer,
+        ConformerConvSubsample,
+        ConformerPositionwiseFeedForward,
+    )
+    from returnn.frontend.decoder.transformer import TransformerDecoder, FeedForwardGated
+
+    rf.select_backend_torch()
+
+    batch_dim = Dim(3, name="batch")
+    seq_lens = [29, 22, 15]  # distinct residues mod 6 (the total downsampling)
+    in_dim = Dim(8, name="feat")
+    time_dim = Dim(
+        Tensor("time", dims=[batch_dim], dtype="int32", raw_tensor=torch.tensor(seq_lens, dtype=torch.int32))
+    )
+    x = Tensor("x", dims=[batch_dim, time_dim, in_dim], dtype="float32")
+    x.raw_tensor = torch.randn(3, max(seq_lens), 8, generator=torch.Generator().manual_seed(6)).to(dev)
+
+    vocab_dim = Dim(11, name="vocab")
+    wb_vocab_dim = Dim(12, name="vocab_wb")  # + blank
+    tgt_time = Dim(
+        Tensor("tgt_time", dims=[batch_dim], dtype="int32", raw_tensor=torch.tensor([3, 2, 2], dtype=torch.int32))
+    )
+    targets = Tensor("targets", dims=[batch_dim, tgt_time], dtype="int32", sparse_dim=vocab_dim)
+    targets.raw_tensor = torch.randint(0, 11, (3, 3), dtype=torch.int32, generator=torch.Generator().manual_seed(8)).to(
+        dev
+    )
+
+    with rf.set_default_device_ctx(dev):
+        rf.set_random_seed(31)
+        # per-head dim must be >= 16: the Triton rel-pos kernel's tl.dot has a 16x16x16 minimum,
+        # so 2 heads need at least 32 model dim, else the CUDA path does not compile
+        enc_dim = Dim(32, name="enc")
+        encoder = ConformerEncoder(
+            in_dim,
+            enc_dim,
+            ff_dim=Dim(24, name="enc-ff"),
+            input_layer=ConformerConvSubsample(
+                in_dim,
+                out_dims=[Dim(4, name="conv1"), Dim(4, name="conv2"), Dim(4, name="conv3")],
+                filter_sizes=[(3, 3), (3, 3), (3, 3)],
+                pool_sizes=[(1, 2)],
+                strides=[(1, 1), (3, 1), (2, 1)],  # total time downsampling 6
+            ),
+            encoder_layer=rf.build_dict(
+                ConformerEncoderLayer,
+                ff=rf.build_dict(
+                    ConformerPositionwiseFeedForward, activation=rf.build_dict(rf.relu_square), with_bias=False
+                ),
+                num_heads=2,
+                # pin the conv-block BatchNorm masking instead of inheriting the behavior-version
+                # default, so this test isolates the packed ops and does not re-test that default.
+                # Unmasked, the statistics run over the raw storage (padding frames vs gap frames),
+                # so padded and packed cannot agree, see behavior version 29.
+                conv_norm_opts={"use_mask": True},
+            ),
+            num_layers=2,
+        )
+        decoder = TransformerDecoder(
+            enc_dim,
+            vocab_dim,
+            Dim(32, name="dec"),
+            num_layers=2,
+            num_heads=2,
+            norm=rf.build_dict(rf.RMSNorm),
+            ff=rf.build_dict(FeedForwardGated),
+            layer_opts=dict(self_att=rf.build_dict(rf.RotaryPosCausalSelfAttention, with_bias=False)),
+            dropout=0.0,
+            att_dropout=0.0,
+        )
+        aux_logits = rf.Linear(enc_dim, wb_vocab_dim)
+
+        params = {}
+        for mod, prefix in [(encoder, "enc"), (decoder, "dec"), (aux_logits, "aux")]:
+            for name, param in mod.named_parameters():
+                params[f"{prefix}.{name}"] = param
+
+        def _losses(feats_t, targets_t):
+            enc_out, enc_spatial = encoder(feats_t, in_spatial_dim=time_dim)
+            log_probs = rf.log_softmax(aux_logits(enc_out), axis=wb_vocab_dim)
+            ctc = rf.ctc_loss(
+                logits=log_probs,
+                logits_normalized=True,
+                targets=targets,
+                input_spatial_dim=enc_spatial,
+                targets_spatial_dim=tgt_time,
+                blank_index=wb_vocab_dim.dimension - 1,
+            )
+            ctc_sum = rf.reduce_sum(ctc, axis=list(ctc.dims))
+            enc_state = decoder.transform_encoder(enc_out, axis=enc_spatial)
+            logits, _ = decoder(
+                targets_t,
+                spatial_dim=tgt_time,
+                state=decoder.default_initial_state(batch_dims=[batch_dim]),
+                encoder=enc_state,
+            )
+            ce = rf.cross_entropy(estimated=logits, target=targets_t, axis=vocab_dim, estimated_type="logits")
+            ce_sum = rf.reduce_sum(ce, axis=list(ce.dims))
+            return ctc_sum, ce_sum, enc_out, enc_spatial
+
+        def _take_grads():
+            grads = {}
+            for name, param in params.items():
+                g = param.raw_tensor.grad
+                grads[name] = None if g is None else g.detach().float().cpu().clone()
+                param.raw_tensor.grad = None
+            return grads
+
+        amp_ctx = torch.autocast(device_type=dev, dtype=torch.bfloat16) if amp else contextlib.nullcontext()
+
+        for param in params.values():
+            param.raw_tensor.grad = None
+        with amp_ctx:
+            ctc_ref, ce_ref, enc_ref, spatial_ref = _losses(x, targets)
+        (ctc_ref.raw_tensor + ce_ref.raw_tensor).backward()
+        grads_ref = _take_grads()
+
+        # isolate this test's fallback bookkeeping (it is global and warn-once)
+        warned_before = set(packed._warned_fallback_ops)
+        packed._warned_fallback_ops.clear()
+        packed.attention_path_counts.clear()
+        # align 6 = total downsampling; gap 96 -> 16 at the subsampled rate, for the depthwise conv span
+        with amp_ctx:
+            ctc_p, ce_p, enc_p, spatial_p = _losses(packed.pack(x, gap=96, align=6), packed.pack(targets))
+        (ctc_p.raw_tensor + ce_p.raw_tensor).backward()
+        grads_p = _take_grads()
+        warned_here = set(packed._warned_fallback_ops)
+        packed._warned_fallback_ops.update(warned_before)
+
+        assert not warned_here, f"unexpected unpack fallbacks: {warned_here}"
+        assert dict(packed.attention_path_counts) == expected_att_paths, (
+            f"attention paths {dict(packed.attention_path_counts)}, expected {expected_att_paths}"
+        )
+
+        for name, ref_t, p_t in [("ctc", ctc_ref, ctc_p), ("ce", ce_ref, ce_p)]:
+            ref_v, p_v = float(ref_t.raw_tensor), float(p_t.raw_tensor)
+            rel = abs(ref_v - p_v) / max(abs(ref_v), 1e-6)
+            assert rel < rtol, f"{name} loss: padded {ref_v} vs packed {p_v} (rel {rel})"
+
+        # encoder output, on the non-padded frames only
+        actual = packed.unpack(enc_p).copy_transpose([batch_dim, spatial_p, enc_dim])
+        expected = enc_ref.copy_transpose([batch_dim, spatial_ref, enc_dim])
+        mask = (
+            rf.sequence_mask([batch_dim, spatial_ref])
+            .copy_compatible_to_dims([batch_dim, spatial_ref])
+            .raw_tensor.cpu()
+            .numpy()
+        )
+        numpy.testing.assert_allclose(
+            actual.raw_tensor.detach().float().cpu().numpy()[mask],
+            expected.raw_tensor.detach().float().cpu().numpy()[mask],
+            rtol=rtol,
+            atol=atol,
+            err_msg="encoder output differs",
+        )
+
+        assert len(params) > 50, f"expected the whole model, got {len(params)} params"
+        for name in sorted(params):
+            g_ref, g_p = grads_ref[name], grads_p[name]
+            assert (g_ref is None) == (g_p is None), f"grad {name}: padded {g_ref is None}, packed {g_p is None}"
+            if g_ref is None:
+                continue
+            rel = float((g_ref - g_p).abs().max()) / max(float(g_ref.abs().max()), 1e-8)
+            assert rel < rtol, f"grad {name}: max rel diff {rel}"
+
+
+def test_full_model_packed_vs_padded_grads():
+    # CPU: encoder rel-pos attention and the decoder both go through FlexAttention.
+    # That needs a recent torch (CI also runs torch 2.0), and without it there is no packed
+    # fast path for these attentions at all: the expected paths would not match, and the
+    # gated unpack fallback would raise. Nothing to compare then, so skip.
+    if not _flex_attention_usable():
+        raise unittest.SkipTest("needs FlexAttention (torch >= 2.7)")
+    _full_model_packed_vs_padded("cpu", rtol=1e-4, expected_att_paths={"rel_pos_flex": 2, "flex_doc": 4})
+
+
+def test_full_model_packed_vs_padded_grads_gpu():
+    # CUDA takes the Triton rel-pos kernel for the encoder, which the CPU test cannot reach.
+    # That is the path real training runs, so a failure here is a training bug, not only a test bug.
+    if not torch.cuda.is_available():
+        raise unittest.SkipTest("needs CUDA")
+    # TF32 would lose more precision than the packed-vs-padded difference we are testing for
+    tf32_matmul, tf32_cudnn = torch.backends.cuda.matmul.allow_tf32, torch.backends.cudnn.allow_tf32
+    torch.backends.cuda.matmul.allow_tf32 = False
+    torch.backends.cudnn.allow_tf32 = False
+    try:
+        _full_model_packed_vs_padded("cuda", rtol=1e-3, expected_att_paths={"rel_pos_triton": 2, "flex_doc": 4})
+    finally:
+        torch.backends.cuda.matmul.allow_tf32 = tf32_matmul
+        torch.backends.cudnn.allow_tf32 = tf32_cudnn
+
+
+def test_full_model_packed_vs_padded_grads_gpu_bf16():
+    # autocast bf16, as the real trainings run.
+    # Only here does the decoder reach the flash varlen attention path:
+    # it is gated on cuda + fp16/bf16, so the fp32 test above silently covers flex instead,
+    # and the flash path is where a wrong cu_seqlens total would live.
+    # The tolerance is bf16-wide, but the failure this guards against is not subtle:
+    # attending across a sequence boundary moves grads by O(1), not by a few percent.
+    if not torch.cuda.is_available():
+        raise unittest.SkipTest("needs CUDA")
+    _full_model_packed_vs_padded(
+        "cuda", rtol=1e-1, atol=1e-1, amp=True, expected_att_paths={"rel_pos_triton": 2, "flash": 4}
+    )
+
+
+def _full_model_packed_traced_replay(dev: str, *, rtol: float, atol: float, allow_att_fallback: bool = False):
+    # The graph-captured training regime traces the whole packed step ONCE
+    # (aot_function under bound shapes)
+    # and re-executes the traced aten program every step.
+    # Anything wrongly baked static at trace time,
+    # or an op whose backward differs under tracing
+    # (found this way: FlexAttention silently drops the grads
+    # of score_mod-captured tensors, see test below),
+    # is invisible to the eager tests.
+    # So: trace the packed step on one batch,
+    # replay on batches with other lens and content,
+    # and compare losses and every param grad against the non-traced packed run.
+    # nop compiler = the traced graph runs with eager kernels:
+    # this isolates the trace itself (no Inductor, no CUDA graphs).
+    if allow_att_fallback:
+        # unpack -> padded attention -> repack: traceable aten ops, numerically exact,
+        # so the traced-replay coverage of everything else does not depend on flex/flash.
+        # The fast paths must be gated OFF too (rf_packed_att_fast_paths):
+        # allowing the fallback alone would not stop the fast paths from winning.
+        from returnn.config import Config, global_config_ctx
+
+        packed.set_allowed_fallbacks(["scaled_dot_product_attention", "rel_pos_self_attention"])
+        try:
+            with global_config_ctx(Config({"rf_packed_att_fast_paths": False})):
+                _full_model_packed_traced_replay_impl(dev, rtol=rtol, atol=atol, allow_att_fallback=True)
+        finally:
+            packed.set_allowed_fallbacks(None)
+        return
+    # rel-pos self-att on CPU has no traceable grad-correct fast path
+    # (Triton is CUDA-only, flex refuses traced grads, per-seq declines under tracing),
+    # so its unpack fallback must be allowed;
+    # the path assertions below verify CUDA really takes Triton and the decoder stays on flex
+    packed.set_allowed_fallbacks(["rel_pos_self_attention"])
+    try:
+        _full_model_packed_traced_replay_impl(dev, rtol=rtol, atol=atol, allow_att_fallback=False)
+    finally:
+        packed.set_allowed_fallbacks(None)
+
+
+def _full_model_packed_traced_replay_impl(dev: str, *, rtol: float, atol: float, allow_att_fallback: bool):
+    from functorch.compile import aot_function, nop
+    from returnn.frontend.encoder.conformer import (
+        ConformerEncoder,
+        ConformerEncoderLayer,
+        ConformerConvSubsample,
+        ConformerPositionwiseFeedForward,
+    )
+    from returnn.frontend.decoder.transformer import TransformerDecoder, FeedForwardGated
+
+    rf.select_backend_torch()
+    n_batch, t_cap, s_cap = 3, 32, 6
+    in_dim = Dim(8, name="feat")
+    vocab_dim = Dim(11, name="vocab")
+    wb_vocab_dim = Dim(12, name="vocab_wb")
+    with rf.set_default_device_ctx(dev):
+        rf.set_random_seed(31)
+        enc_dim = Dim(32, name="enc")
+        encoder = ConformerEncoder(
+            in_dim,
+            enc_dim,
+            ff_dim=Dim(24, name="enc-ff"),
+            input_layer=ConformerConvSubsample(
+                in_dim,
+                out_dims=[Dim(4, name="conv1"), Dim(4, name="conv2"), Dim(4, name="conv3")],
+                filter_sizes=[(3, 3), (3, 3), (3, 3)],
+                pool_sizes=[(1, 2)],
+                strides=[(1, 1), (3, 1), (2, 1)],
+            ),
+            encoder_layer=rf.build_dict(
+                ConformerEncoderLayer,
+                ff=rf.build_dict(
+                    ConformerPositionwiseFeedForward, activation=rf.build_dict(rf.relu_square), with_bias=False
+                ),
+                num_heads=2,
+                conv_norm_opts={"use_mask": True},
+            ),
+            num_layers=2,
+            dropout=0.0,
+            att_dropout=0.0,
+        )
+        decoder = TransformerDecoder(
+            enc_dim,
+            vocab_dim,
+            Dim(32, name="dec"),
+            num_layers=2,
+            num_heads=2,
+            norm=rf.build_dict(rf.RMSNorm),
+            ff=rf.build_dict(FeedForwardGated),
+            layer_opts=dict(self_att=rf.build_dict(rf.RotaryPosCausalSelfAttention, with_bias=False)),
+            dropout=0.0,
+            att_dropout=0.0,
+        )
+        aux_logits = rf.Linear(enc_dim, wb_vocab_dim)
+        # params are explicit trace inputs, like the training capture does
+        # (closure tensors would be baked as graph constants, then FakeTensor tracing rejects them)
+        rf_params = []
+        param_names = []
+        for mod, prefix in [(encoder, "enc"), (decoder, "dec"), (aux_logits, "aux")]:
+            for name, param in mod.named_parameters():
+                rf_params.append(param)
+                param_names.append(f"{prefix}.{name}")
+        orig_raws = [p.raw_tensor for p in rf_params]
+        trainable = [r.requires_grad for r in orig_raws]
+
+        def step(raws):
+            x_raw, lens_raw, tgt_raw, tgt_lens_raw = raws[:4]
+            param_raws = raws[4:]
+            for p_, t in zip(rf_params, param_raws):
+                p_.raw_tensor = t
+            try:
+                return _step_inner(x_raw, lens_raw, tgt_raw, tgt_lens_raw, param_raws)
+            finally:
+                for p_, r0 in zip(rf_params, orig_raws):
+                    p_.raw_tensor = r0
+
+        def _step_inner(x_raw, lens_raw, tgt_raw, tgt_lens_raw, param_raws):
+            batch_dim = Dim(n_batch, name="batch")
+            time_dim = Dim(Tensor("time", dims=[batch_dim], dtype="int32", raw_tensor=lens_raw), capacity=t_cap)
+            tgt_time = Dim(Tensor("tgt_time", dims=[batch_dim], dtype="int32", raw_tensor=tgt_lens_raw), capacity=s_cap)
+            x = Tensor("x", dims=[batch_dim, time_dim, in_dim], dtype="float32", raw_tensor=x_raw)
+            targets = Tensor(
+                "targets", dims=[batch_dim, tgt_time], dtype="int32", sparse_dim=vocab_dim, raw_tensor=tgt_raw
+            )
+            with rf.set_static_traceable_ctx():
+                # align 6 = total downsampling; gap 96 -> 16 at the subsampled rate
+                xp = packed.pack(x, gap=96, align=6, total_bound=n_batch * (t_cap + 96))
+                tp = packed.pack(targets, total_bound=n_batch * s_cap)
+                enc_out, enc_spatial = encoder(xp, in_spatial_dim=time_dim)
+                log_probs = rf.log_softmax(aux_logits(enc_out), axis=wb_vocab_dim)
+                ctc = rf.ctc_loss(
+                    logits=log_probs,
+                    logits_normalized=True,
+                    targets=tp,
+                    input_spatial_dim=enc_spatial,
+                    targets_spatial_dim=tgt_time,
+                    blank_index=wb_vocab_dim.dimension - 1,
+                )
+                ctc_sum = rf.reduce_sum(ctc, axis=list(ctc.dims))
+                enc_state = decoder.transform_encoder(enc_out, axis=enc_spatial)
+                logits, _ = decoder(
+                    tp,
+                    spatial_dim=tgt_time,
+                    state=decoder.default_initial_state(batch_dims=[batch_dim]),
+                    encoder=enc_state,
+                )
+                ce = rf.cross_entropy(estimated=logits, target=tp, axis=vocab_dim, estimated_type="logits")
+                ce_sum = rf.reduce_sum(ce, axis=list(ce.dims))
+            loss = ctc_sum.raw_tensor + ce_sum.raw_tensor
+            train_raws = [t for t, tr in zip(param_raws, trainable) if tr]
+            grads = torch.autograd.grad(loss, train_raws, allow_unused=True)
+            grads = [g if g is not None else torch.zeros_like(t) for g, t in zip(grads, train_raws)]
+            return tuple(t.detach() for t in [ctc_sum.raw_tensor, ce_sum.raw_tensor, *grads])
+
+        gen = torch.Generator().manual_seed(7)
+
+        def make_batch(seq_lens, tgt_lens):
+            # lens on the SAME device as the data: the device-lens regime the engine uses
+            # (host-side lens would need host reads inside the trace, which is untraceable)
+            x_raw = torch.randn(n_batch, t_cap, 8, generator=gen).to(dev)
+            lens_raw = torch.tensor(seq_lens, dtype=torch.int32).to(dev)
+            tgt_raw = torch.randint(0, 11, (n_batch, s_cap), dtype=torch.int32, generator=gen).to(dev)
+            tgt_lens_raw = torch.tensor(tgt_lens, dtype=torch.int32).to(dev)
+            return x_raw, lens_raw, tgt_raw, tgt_lens_raw
+
+        # trace on the first batch; the later batches differ in lens (order too) and content,
+        # so anything the trace froze from batch 0 fails the comparison there.
+        # Every batch holds one capacity-length seq (audio and targets):
+        # the CPU flex fast path sizes pos_emb from the capacity under static tracing
+        # but checks applicability against the batch max len,
+        # so a batch below capacity would reroute to the generic path mid-test.
+        batches = [
+            make_batch([32, 22, 15], [6, 2, 2]),
+            make_batch([17, 32, 9], [1, 6, 2]),
+            make_batch([12, 26, 32], [5, 1, 6]),
+        ]
+        n_train = sum(trainable)
+        packed.attention_path_counts.clear()
+        compiled = aot_function(step, fw_compiler=nop)
+        for i, batch in enumerate(batches):
+            raws = list(batch) + orig_raws
+            expected = step(raws)
+            actual = compiled(raws)
+            assert len(expected) == len(actual) == 2 + n_train
+            names = ["ctc", "ce"] + [f"grad {n}" for n, tr in zip(param_names, trainable) if tr]
+            for name, e, a in zip(names, expected, actual):
+                numpy.testing.assert_allclose(
+                    a.detach().cpu().numpy(),
+                    e.detach().cpu().numpy(),
+                    rtol=rtol,
+                    atol=atol,
+                    err_msg=f"batch {i}, {name} differs between traced replay and eager",
+                )
+
+        # a silent reroute to another attention path would test something else -- assert what ran
+        paths = dict(packed.attention_path_counts)
+        if allow_att_fallback:
+            assert not paths, f"expected only the unpack fallbacks, got fast paths {paths}"
+        elif dev == "cuda":
+            assert paths.get("rel_pos_triton"), f"expected the Triton rel-pos path, got {paths}"
+        else:
+            assert paths.get("flex_doc") and not paths.get("rel_pos_triton"), f"expected flex_doc only, got {paths}"
+
+
+def test_full_model_packed_traced_program_replay():
+    # CPU, CI-runnable; encoder rel-pos att via the allowed unpack fallback,
+    # decoder self/cross att through flex_doc (see the path assertions in the helper).
+    # This found the FlexAttention captured-grads drop:
+    # the traced grads for linear_pos / pos_bias_v came out exactly zero,
+    # so the rel-pos flex path now refuses traced training steps (see the gate in _packed_backend).
+    # The Triton rel-pos kernel (the CUDA path real training captures) is unaffected,
+    # verified on real checkpoints (the pos params train) and covered by the _gpu variant.
+    if not _flex_attention_usable():
+        raise unittest.SkipTest("needs FlexAttention (torch >= 2.7)")
+    # torch 2.7 dynamo quirk: a REAL flex HOP compile earlier in the process
+    # (e.g. test_conformer's eager rel-pos flex) poisons the next flex compile UNDER FAKE TRACING
+    # (dynamo skip error on torch._library.utils.is_builtin inside can_auto_functionalize).
+    # Resetting dynamo clears the stale compile state; graph_capture does the same before tracing.
+    torch._dynamo.reset()
+    # atol covers fp32 reassociation noise of the decomposed traced ops (observed ~2e-6)
+    _full_model_packed_traced_replay("cpu", rtol=1e-4, atol=1e-5)
+
+
+def test_full_model_packed_traced_program_replay_fallback_att():
+    # No flex/flash dependency: the attentions take the (explicitly allowed) unpack fallback,
+    # which is numerically exact and fully traceable,
+    # so this variant runs on older torch, is immune to the flex dynamo quirk above,
+    # and keeps the REAL model structure (rel-pos self-att) incl. its grads.
+    # Everything else (pack/regap, conv relayouts, packed CTC, losses, all grads)
+    # still gets the traced-replay coverage.
+    _full_model_packed_traced_replay("cpu", rtol=1e-4, atol=1e-5, allow_att_fallback=True)
+
+
+def test_full_model_packed_traced_program_replay_gpu():
+    # CUDA: the encoder takes the Triton rel-pos kernel, i.e. the path real training captures.
+    if not torch.cuda.is_available():
+        raise unittest.SkipTest("needs CUDA")
+    tf32_matmul, tf32_cudnn = torch.backends.cuda.matmul.allow_tf32, torch.backends.cudnn.allow_tf32
+    torch.backends.cuda.matmul.allow_tf32 = False
+    torch.backends.cudnn.allow_tf32 = False
+    try:
+        _full_model_packed_traced_replay("cuda", rtol=1e-3, atol=1e-5)
+    finally:
+        torch.backends.cuda.matmul.allow_tf32 = tf32_matmul
+        torch.backends.cudnn.allow_tf32 = tf32_cudnn
+
+
+def test_conv_packed_auto_realign():
+    # A stride-incompatible align is repaired like an insufficient gap:
+    # the conv re-aligns and stays packed, instead of dropping to the unpack fallback.
+    rf.select_backend_torch()
+    x, batch_dim, time_dim, in_dim = _make_input(batch_size=3, seq_lens=(29, 22, 15), feat=8, seed=6)
+    with rf.set_default_device_ctx("cpu"):
+        rf.set_random_seed(31)
+        conv = rf.Conv1d(in_dim, Dim(6, name="out"), filter_size=3, padding="same", strides=3)
+        out_ref, sp_ref = conv(x, in_spatial_dim=time_dim)
+
+        warned_before = set(packed._warned_fallback_ops)
+        packed._warned_fallback_ops.clear()
+        # align 1 does not divide stride 3
+        out_p, sp_p = conv(packed.pack(x, gap=4, align=1), in_spatial_dim=time_dim)
+        warned = set(packed._warned_fallback_ops)
+        packed._warned_fallback_ops.update(warned_before)
+
+        assert packed.is_packed(out_p), "conv left the packed representation"
+        assert not warned, f"unexpected fallback: {warned}"
+        # the out align is the realigned in align divided by the stride, so it is not checked here
+        _assert_equal_non_padded(out_p, out_ref, batch_dim, sp_ref)
+
+
+def test_conv_packed_auto_realign_static():
+    # Same under static tracing, where the realign must also derive a new total bound
+    # (the align change shifts every per-seq footprint).
+    rf.select_backend_torch()
+    batch_dim = Dim(3, name="batch")
+    seq_lens = [29, 22, 15]
+    cap = 36
+    in_dim = Dim(8, name="feat")
+    time_dim = Dim(
+        Tensor("time", dims=[batch_dim], dtype="int32", raw_tensor=torch.tensor(seq_lens, dtype=torch.int32)),
+        capacity=cap,
+    )
+    x = Tensor("x", dims=[batch_dim, time_dim, in_dim], dtype="float32")
+    x.raw_tensor = torch.randn(3, cap, 8, generator=torch.Generator().manual_seed(6))
+
+    with rf.set_default_device_ctx("cpu"):
+        rf.set_random_seed(31)
+        conv = rf.Conv1d(in_dim, Dim(6, name="out"), filter_size=3, padding="same", strides=3)
+        out_ref, sp_ref = conv(x, in_spatial_dim=time_dim)
+
+        warned_before = set(packed._warned_fallback_ops)
+        packed._warned_fallback_ops.clear()
+        with rf.set_static_traceable_ctx():
+            xp = packed.pack(x, gap=4, align=1, total_bound=3 * (cap + 4))
+            out_p, sp_p = conv(xp, in_spatial_dim=time_dim)
+        warned = set(packed._warned_fallback_ops)
+        packed._warned_fallback_ops.update(warned_before)
+
+        assert packed.is_packed(out_p), "conv left the packed representation"
+        assert not warned, f"unexpected fallback: {warned}"
+        assert out_p.raw_tensor.packed_dim.dimension is not None, "lost the static bound"
+        _assert_equal_non_padded(out_p, out_ref, batch_dim, sp_ref)
 
 
 if __name__ == "__main__":

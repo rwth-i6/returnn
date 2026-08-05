@@ -136,7 +136,6 @@ class Engine(EngineBase):
         self._log_memory_usage = config.bool("torch_log_memory_usage", False)
         self._log_batch_size = config.bool("log_batch_size", False) and log.verbose[5]
         self._calculate_exp_loss = config.bool("calculate_exp_loss", False)
-        self._log_grad_norm = _parse_log_grad_norm(config)
         self._reset_dev_memory_caches = config.bool("reset_dev_memory_caches", False)
         self._forward_auto_split_batch_on_oom = config.bool("forward_auto_split_batch_on_oom", False)
         self._stop_on_nonfinite_train_score = config.bool("stop_on_nonfinite_train_score", True)
@@ -608,18 +607,21 @@ class Engine(EngineBase):
                         else:
                             total_loss.raw_tensor.backward()
 
-                if self._log_grad_norm and perform_update_step:
-                    key = f"grad_norm:p{simplify_and_format_number(self._log_grad_norm)}"
-                    assert key not in losses_dict
-                    inv_norm_factors_dict[key] = 1.0  # once per update step
-                    losses_dict[key] = _get_total_grad_norm(self._pt_model, p=self._log_grad_norm)
-
                 # only update the weights when every gradient accumulation loop ends
                 # (under graph capture with capture_optimizer, the update is inside the graph)
                 if perform_update_step and (self._graph_capture is None or not self._graph_capture.captures_optimizer):
                     with record_function("optimizer_step"):
                         self._updater.step(grad_scaler=self._grad_scaler)
                 zero_grad_next_step = perform_update_step
+
+                if self._updater.log_grad_norm_p is not None and perform_update_step:
+                    key = f"grad_norm:p{simplify_and_format_number(self._updater.log_grad_norm_p)}"
+                    assert key not in losses_dict
+                    inv_norm_factors_dict[key] = 1.0  # once per update step
+                    # recorded pre-clip inside updater.step (in-graph static tensor under capture)
+                    grad_norm = self._updater.last_grad_norm
+                    assert grad_norm is not None
+                    losses_dict[key] = float(grad_norm)  # device sync, as before
 
                 if self._torch_distributed_ctx:
                     self._torch_distributed_ctx.step_after_param_update(module=self._pt_model, epoch_step_idx=step_idx)
@@ -1865,42 +1867,6 @@ def _set_torch_default_dtype_ctx_mgr(dtype: torch.dtype):
         yield
     finally:
         torch.set_default_dtype(old_dtype)
-
-
-def _parse_log_grad_norm(config: Config) -> Optional[Union[int, float]]:
-    log_grad_norm = config.opt_typed_value("log_grad_norm", False)
-    if isinstance(log_grad_norm, str):
-        if log_grad_norm.lower() in ["true", "false", "none"]:
-            log_grad_norm = {"true": True, "false": False, "none": None}[log_grad_norm.lower()]
-        else:
-            raise ValueError(f"Invalid value for log_grad_norm: {log_grad_norm!r}")
-    if log_grad_norm is None:
-        pass
-    elif isinstance(log_grad_norm, bool):
-        if log_grad_norm:
-            log_grad_norm = 2
-        else:
-            log_grad_norm = None
-    elif isinstance(log_grad_norm, (int, float)):
-        assert log_grad_norm > 0, f"log_grad_norm {log_grad_norm} > 0 expected"  # otherwise fine...
-    else:
-        raise TypeError(f"Invalid type for log_grad_norm: {log_grad_norm!r} type {type(log_grad_norm)}")
-    return log_grad_norm
-
-
-def _get_total_grad_norm(model: torch.nn.Module, p: float) -> float:
-    return float(
-        torch.norm(
-            torch.stack(
-                [
-                    param.grad.norm(p=p).detach().cpu()
-                    for param in model.parameters()
-                    if param.requires_grad and param.grad is not None
-                ]
-            ),
-            p=p,
-        ).item()
-    )
 
 
 def _torch_load(filename: Union[str, os.PathLike], *, device: str) -> Dict[str, Any]:

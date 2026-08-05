@@ -3,12 +3,14 @@ Backend for exposing TensorFlow-specific functionality.
 """
 
 from __future__ import annotations
-from typing import Optional, Any, Union, Sequence, Tuple
+from typing import Optional, Any, Dict, List, Union, Sequence, Tuple
 import contextlib
+import string
+import numpy
 import tensorflow as tf
 
 import returnn.tf.compat as tf_compat
-from returnn.util.basic import NotSpecified, is_onnx_export_global
+from returnn.util.basic import NotSpecified, is_onnx_export_global, get_global_inf_value
 from returnn.tensor import Tensor, Dim
 from returnn.tf.util import basic as tf_util
 
@@ -16,6 +18,9 @@ from returnn.tf.util import basic as tf_util
 from returnn.frontend._backend import Backend
 from returnn.frontend import RawTensorTypes
 import returnn.frontend as rf
+
+# noinspection PyProtectedMember
+from returnn.frontend import _random_journal
 
 _TT = Tensor[tf.Tensor]
 
@@ -277,6 +282,51 @@ class TFBackend(Backend[tf.Tensor]):
             raise ValueError(f"unknown activation function {func!r}")
         with tf_util.same_control_flow_ctx(raw_tensor):
             return f(raw_tensor)
+
+    @staticmethod
+    def stop_gradient(tensor: Tensor) -> Tensor:
+        """
+        :param tensor:
+        :return: tensor with stopped gradient
+        """
+        out = tensor.copy_template("stop_gradient")
+        with tf_util.same_control_flow_ctx(tensor):
+            out.raw_tensor = tf.stop_gradient(tensor.raw_tensor)
+        return out
+
+    @staticmethod
+    def softmax(tensor: Tensor, *, axis: Dim, use_mask: bool = True) -> Tensor:
+        """
+        :param tensor:
+        :param axis:
+        :param use_mask:
+        :return: softmax over axis
+        """
+        out = tensor.copy_template("softmax")
+        with tf_util.same_control_flow_ctx(tensor):
+            x_raw = tensor.raw_tensor
+            if use_mask and axis.need_masking():
+                mask = tensor.get_sequence_mask_broadcast(axis=axis)
+                x_raw = tf_util.where_bc(mask, x_raw, -get_global_inf_value())
+            out.raw_tensor = tf.nn.softmax(x_raw, axis=tensor.dims.index(axis))
+        return out
+
+    @staticmethod
+    def log_softmax(tensor: Tensor, *, axis: Dim, use_mask: bool = True) -> Tensor:
+        """
+        :param tensor:
+        :param axis:
+        :param use_mask:
+        :return: log_softmax over axis
+        """
+        out = tensor.copy_template("log_softmax")
+        with tf_util.same_control_flow_ctx(tensor):
+            x_raw = tensor.raw_tensor
+            if use_mask and axis.need_masking():
+                mask = tensor.get_sequence_mask_broadcast(axis=axis)
+                x_raw = tf_util.where_bc(mask, x_raw, -get_global_inf_value())
+            out.raw_tensor = tf.nn.log_softmax(x_raw, axis=tensor.dims.index(axis))
+        return out
 
     @staticmethod
     def have_sequence_mask_raw() -> bool:
@@ -596,3 +646,250 @@ class TFBackend(Backend[tf.Tensor]):
         max_bc_raw = clip_value_max.copy_compatible_to_dims_raw(out.dims)
         out.raw_tensor = tf.clip_by_value(x_bc_raw, min_bc_raw, max_bc_raw)
         return out
+
+    @staticmethod
+    def matmul(a: _TT, b: _TT, *, reduce: Union[Dim, Sequence[Dim]], use_mask: bool = True) -> _TT:
+        """
+        batched matmul of a and b, see base class doc string
+
+        Implemented via tf.einsum, which lowers to (batched) matmul for these patterns
+        and, unlike an explicit transpose + reshape, does not need static shapes.
+        """
+        if isinstance(reduce, Dim):
+            reduce = [reduce]
+        if use_mask and any(dim.dyn_size_ext is not None for dim in reduce):
+            raise NotImplementedError(f"matmul: masking over dynamic reduce dims {reduce} not implemented")
+        a_dims, b_dims = a.dims, b.dims
+        assert all(dim in a_dims or dim in b_dims for dim in reduce), (
+            f"matmul: reduce dims {reduce} must occur in a {a} or b {b}"
+        )
+        # One letter per AXIS, not per dim:
+        # the same dim can occur twice in one input (square matrices, told apart by match_priority).
+        # Shared letters mark the reduce axes and the common (batch) axes,
+        # every remaining axis gets its own letter.
+        letters = iter(string.ascii_lowercase)
+        a_letters: List[Optional[str]] = [None] * len(a_dims)
+        b_letters: List[Optional[str]] = [None] * len(b_dims)
+        a_reduce_axes, b_reduce_axes = [], []
+        for dim in reduce:
+            letter = next(letters)
+            if dim in a_dims:
+                a_reduce_axes.append(a.get_axis_from_description(dim))
+                a_letters[a_reduce_axes[-1]] = letter
+            if dim in b_dims:
+                b_reduce_axes.append(b.get_axis_from_description(dim))
+                b_letters[b_reduce_axes[-1]] = letter
+        common_dims = [dim for i, dim in enumerate(a_dims) if dim in b_dims and i not in a_reduce_axes]
+        a_common_axes = [a_dims.index(dim) for dim in common_dims]
+        b_common_axes = [b_dims.index(dim) for dim in common_dims]
+        assert not set(b_common_axes) & set(b_reduce_axes), (
+            f"matmul: reduce dims {reduce} overlap with common dims in b {b}"
+        )
+        for a_axis, b_axis in zip(a_common_axes, b_common_axes):
+            letter = next(letters)
+            a_letters[a_axis] = letter
+            b_letters[b_axis] = letter
+        a_unique_axes = [i for i in range(len(a_dims)) if i not in a_reduce_axes and i not in a_common_axes]
+        b_unique_axes = [i for i in range(len(b_dims)) if i not in b_reduce_axes and i not in b_common_axes]
+        for axis in a_unique_axes:
+            a_letters[axis] = next(letters)
+        for axis in b_unique_axes:
+            b_letters[axis] = next(letters)
+        out_letters = (
+            [a_letters[i] for i in a_common_axes]
+            + [a_letters[i] for i in a_unique_axes]
+            + [b_letters[i] for i in b_unique_axes]
+        )
+        result_dims = common_dims + [a_dims[i] for i in a_unique_axes] + [b_dims[i] for i in b_unique_axes]
+        subscripts = "%s,%s->%s" % ("".join(a_letters), "".join(b_letters), "".join(out_letters))
+        with tf_util.same_control_flow_ctx([a, b]):
+            raw_result = tf.einsum(subscripts, a.raw_tensor, b.raw_tensor)
+        return Tensor("dot", dims=result_dims, raw_tensor=raw_result, dtype=TFBackend.get_dtype_name_raw(raw_result))
+
+    @staticmethod
+    def create_parameter_raw(tensor: rf.Parameter, *, device: Optional[str] = None) -> tf.Variable:
+        """
+        :return: parameter (by default trainable)
+        """
+        shape = [d.get_dim_value() for d in tensor.dims]
+        assert all(isinstance(d, int) for d in shape), f"parameter {tensor} needs static dims, got shape {shape}"
+        dtype = TFBackend.as_dtype_raw(tensor.dtype)
+        trainable = not (tensor.dtype.startswith("int") or tensor.dtype.startswith("uint") or tensor.dtype == "bool")
+        # The variable gets a zero initializer here;
+        # the real initial value arrives later via set_parameter_initial_value
+        # (rf.Parameter sets it only after the raw tensor exists),
+        # and in graph mode that is an op which the caller runs once, see get_parameters_init_op.
+        # The name is whatever rf.Parameter was constructed with (TF uniquifies it);
+        # proper param naming needs the module tree and comes with the engine integration.
+        device_ctx = tf.device(device) if device else contextlib.nullcontext()
+        with tf.control_dependencies(None), device_ctx:
+            return tf.Variable(tf.zeros(shape, dtype=dtype), trainable=trainable, dtype=dtype, name=tensor.name)
+
+    _param_initial_values: Dict[Any, tf.Tensor] = {}  # tf.Variable ref -> initial value
+
+    @staticmethod
+    def set_parameter_initial_value(param: rf.Parameter, value: Union[None, Tensor, rf.RawTensorTypes]) -> None:
+        """
+        :param param: parameter
+        :param value: initial value
+        """
+        var = TFBackend._get_param_var(param)
+        if value is None:
+            TFBackend._param_initial_values.pop(var.ref(), None)  # falls back to the zero initializer
+            return
+        with tf.control_dependencies(None):
+            if isinstance(value, Tensor):
+                value_raw = value.copy_compatible_to_dims_raw(param.dims)
+            else:
+                value_raw = tf.convert_to_tensor(value, dtype=var.dtype.base_dtype)
+            TFBackend._param_initial_values[var.ref()] = tf.broadcast_to(value_raw, var.shape.as_list())
+
+    @classmethod
+    def get_parameters_init_op(cls, params: Sequence[rf.Parameter]) -> tf.Operation:
+        """
+        :param params: e.g. from rf.Module.parameters()
+        :return: op assigning the initial values, to be run once before the first step.
+            In graph mode an initial value is an op,
+            and rf.Parameter provides it only after the variable exists,
+            so it cannot become the variable's own initializer.
+        """
+        ops = []
+        for param in params:
+            var = cls._get_param_var(param)
+            init = cls._param_initial_values.get(var.ref())
+            ops.append(tf_compat.v1.assign(var, init) if init is not None else var.initializer)
+        return tf.group(*ops)
+
+    @staticmethod
+    def set_parameter_trainable(param: rf.Parameter, trainable: bool) -> None:
+        """
+        :param param: parameter
+        :param trainable: whether the parameter should be trainable
+        """
+        var = TFBackend._get_param_var(param)
+        # TF fixes trainability at variable creation, via membership in the trainable-variables collection,
+        # so update that collection instead.
+        # Membership is tested by identity: `var == other` would build an elementwise-compare op.
+        coll = tf_compat.v1.get_default_graph().get_collection_ref(tf_compat.v1.GraphKeys.TRAINABLE_VARIABLES)
+        contained = any(v is var for v in coll)
+        if trainable and not contained:
+            coll.append(var)
+        elif not trainable and contained:
+            coll[:] = [v for v in coll if v is not var]
+
+    @staticmethod
+    def set_random_seed(seed: int) -> None:
+        """
+        :param seed: sets the graph-level seed, which the stateful random ops derive their seeds from
+        """
+        tf_compat.v1.set_random_seed(seed)
+
+    @staticmethod
+    @contextlib.contextmanager
+    def random_journal_replay(journal: _random_journal.RandomJournal):
+        """
+        Replay recorded random numbers instead of drawing new ones.
+        Used to compare backends op by op, see tests/rf_utils.py.
+        """
+        prev_journal = TFBackend._random_journal
+        try:
+            TFBackend._random_journal = journal
+            yield
+        finally:
+            TFBackend._random_journal = prev_journal
+
+    _random_journal = None  # type: Optional[_random_journal.RandomJournal]
+
+    @staticmethod
+    def random(
+        *,
+        dims: Sequence[Dim],
+        dtype: str,
+        device: Optional[str] = None,
+        sparse_dim: Optional[Dim] = None,
+        feature_dim: Optional[Dim] = None,
+        distribution: str,
+        mean: Optional[Union[int, float, Tensor]] = None,
+        stddev: Optional[Union[int, float, Tensor]] = None,
+        bound: Optional[Union[int, float, Tensor]] = None,
+        minval: Optional[Union[int, float, Tensor]] = None,
+        maxval: Optional[Union[int, float, Tensor]] = None,
+        seed: Optional[Union[int, Sequence[int], numpy.ndarray]] = None,
+        algorithm: Optional[str] = None,
+        explicit_state: Optional[Tensor] = None,
+        auto_update_state: Optional[bool] = None,
+        static: Optional[bool] = None,
+        out: Optional[Tensor] = None,
+    ) -> Tensor:
+        """
+        random. See `rf.random` for details.
+        """
+        assert out is None, "TF random: out not supported"
+        assert explicit_state is None and auto_update_state is None, "TF random: explicit state not implemented"
+        assert algorithm is None, f"TF random: algorithm {algorithm!r} not implemented"
+        res = Tensor(
+            name=f"random_{distribution}", dims=dims, dtype=dtype, sparse_dim=sparse_dim, feature_dim=feature_dim
+        )
+        if TFBackend._random_journal is not None:
+            # The graph is built in the same order as the recorded run,
+            # so reading the journal at graph construction time keeps the sequences aligned.
+            entry = TFBackend._random_journal.get_next(new_out_template=res)
+            assert isinstance(entry.out.raw_tensor, numpy.ndarray)
+            res.raw_tensor = tf.constant(entry.out.raw_tensor, dtype=TFBackend.as_dtype_raw(dtype))
+            return res
+        dtype_raw = TFBackend.as_dtype_raw(dtype)
+        shape = [d.get_dim_value() for d in dims]
+        seed_raw = None
+        if static:
+            assert seed is not None, "TF random: static needs a seed"
+            seed_flat = numpy.asarray(seed).flatten()
+            # the stateless ops take a seed pair
+            seed_raw = [int(seed_flat[0]), int(seed_flat[1]) if seed_flat.size > 1 else 0]
+        else:
+            assert seed is None, "TF random: seed only together with static"
+        if distribution == "uniform":
+            assert mean is None and stddev is None, "TF random uniform: mean/stddev not supported"
+            if bound is not None:
+                assert minval is None and maxval is None, "TF random uniform: bound together with minval/maxval"
+                minval, maxval = -bound, bound
+            minval = _random_scalar_arg(minval, 0)
+            maxval = _random_scalar_arg(maxval, 1 if dtype_raw.is_floating else None)
+            assert maxval is not None, "TF random uniform: maxval required for integer dtype"
+            if seed_raw is not None:
+                raw = tf.random.stateless_uniform(shape, seed_raw, minval=minval, maxval=maxval, dtype=dtype_raw)
+            else:
+                raw = tf.random.uniform(shape, minval=minval, maxval=maxval, dtype=dtype_raw)
+        elif distribution in ("normal", "truncated_normal"):
+            assert minval is None and maxval is None and bound is None, f"TF random {distribution}: got minval/maxval"
+            mean = _random_scalar_arg(mean, 0)
+            stddev = _random_scalar_arg(stddev, 1)
+            if seed_raw is not None:
+                func = tf.random.stateless_normal if distribution == "normal" else tf.random.stateless_truncated_normal
+                raw = func(shape, seed_raw, mean=mean, stddev=stddev, dtype=dtype_raw)
+            else:
+                func = tf.random.normal if distribution == "normal" else tf.random.truncated_normal
+                raw = func(shape, mean=mean, stddev=stddev, dtype=dtype_raw)
+        else:
+            raise NotImplementedError(f"TF random: distribution {distribution!r} not implemented")
+        res.raw_tensor = raw
+        return res
+
+    @staticmethod
+    def _get_param_var(param: rf.Parameter) -> tf.Variable:
+        var = param.raw_tensor
+        assert isinstance(var, tf.Variable), f"parameter {param} has raw tensor {var!r}, expected tf.Variable"
+        return var
+
+
+def _random_scalar_arg(value: Union[None, int, float, Tensor], default: Union[None, int, float]) -> Any:
+    """
+    :param value: distribution argument of :func:`TFBackend.random`
+    :param default: used when value is None
+    :return: raw scalar
+    """
+    if value is None:
+        return default
+    if isinstance(value, Tensor):
+        assert value.dims == (), f"TF random: only scalar distribution args supported, got {value}"
+        return value.raw_tensor
+    return value

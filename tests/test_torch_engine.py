@@ -1225,6 +1225,10 @@ def _build_cuda_graph_train_config_and_dataset(*, compile_: bool):
             num_epochs=2,
             learning_rate=1e-3,
             dynamic_learning_rate=_dyn_lr,
+            # covers the pre-clip grad-norm recording in updater.step,
+            # which under capture_optimizer runs in-graph (a static tensor updated per replay)
+            log_grad_norm=True,
+            gradient_clip_global_norm=5.0,
             optimizer={"class": "adamw", "capturable": True},
             torch_cuda_graph=dict(
                 batch_size_bound=10,
@@ -1258,6 +1262,214 @@ def _run_cuda_graph_train(*, compile_: bool):
             assert lr.item() > 1e-3  # the per-step schedule advanced it
         for name, p in engine._pt_model.named_parameters():
             assert torch.isfinite(p).all(), f"non-finite param {name}"
+
+
+def _cuda_graph_packed_decoder_setup(mode: str):
+    """config+dataset for the packed-decoder capture parity test, see below"""
+    from returnn.datasets import init_dataset
+    from returnn.tensor import Dim, batch_dim
+    import numpy
+
+    time_dim = Dim(None, name=f"time-pdec-{mode}")
+    tgt_time_dim = Dim(None, name=f"tgt-time-pdec-{mode}")
+    feat_dim = Dim(8, name="feat")
+    vocab_dim = Dim(11, name="vocab")
+    wb_vocab_dim = Dim(12, name="vocab_wb")
+
+    class _Model(rf.Module):
+        def __init__(self):
+            super().__init__()
+            from returnn.frontend.encoder.conformer import (
+                ConformerEncoder,
+                ConformerEncoderLayer,
+                ConformerConvSubsample,
+                ConformerPositionwiseFeedForward,
+            )
+            from returnn.frontend.decoder.transformer import TransformerDecoder, FeedForwardGated
+
+            enc_dim = Dim(32, name="enc")
+            self.encoder = ConformerEncoder(
+                feat_dim,
+                enc_dim,
+                ff_dim=Dim(24, name="enc-ff"),
+                # the strided subsample frontend, like the real training model:
+                # covers the strided-conv packed relayout (incl. auto-realign) under capture
+                input_layer=ConformerConvSubsample(
+                    feat_dim,
+                    out_dims=[Dim(4, name="conv1"), Dim(4, name="conv2")],
+                    filter_sizes=[(3, 3), (3, 3)],
+                    pool_sizes=[(1, 2)],
+                    strides=[(1, 1), (3, 1)],
+                ),
+                input_dropout=0.0,
+                dropout=0.0,
+                encoder_layer=rf.build_dict(
+                    ConformerEncoderLayer,
+                    ff=rf.build_dict(ConformerPositionwiseFeedForward, activation=rf.build_dict(rf.relu_square)),
+                    num_heads=2,
+                    conv_kernel_size=8,
+                    dropout=0.0,
+                    att_dropout=0.0,
+                    conv_norm_opts={"use_mask": True},
+                ),
+                num_layers=2,
+            )
+            self.decoder = TransformerDecoder(
+                enc_dim,
+                vocab_dim,
+                Dim(32, name="dec"),
+                num_layers=2,
+                num_heads=2,
+                norm=rf.build_dict(rf.RMSNorm),
+                ff=rf.build_dict(FeedForwardGated),
+                layer_opts=dict(self_att=rf.build_dict(rf.RotaryPosCausalSelfAttention, with_bias=False)),
+                dropout=0.0,
+                att_dropout=0.0,
+            )
+            self.aux_logits = rf.Linear(enc_dim, wb_vocab_dim)
+
+    def _get_model(*, epoch, step, **_kwargs):
+        return _Model()
+
+    def _train_step(*, model: _Model, extern_data: TensorDict, **_kwargs):
+        data = extern_data["data"]
+        targets = extern_data["classes"]
+        enc, enc_sp = model.encoder(data, in_spatial_dim=time_dim)
+        log_probs = rf.log_softmax(model.aux_logits(enc), axis=model.aux_logits.out_dim)
+        ctc = rf.ctc_loss(
+            logits=log_probs,
+            logits_normalized=True,
+            targets=targets,
+            input_spatial_dim=enc_sp,
+            targets_spatial_dim=tgt_time_dim,
+            blank_index=11,
+        )
+        # constant inv norm: under bound shapes the default norm counts the FILLER seqs
+        # (static batch dim = the bound), eager counts real seqs -- the reported values
+        # then differ by that ratio while the sums are identical.
+        # Raw sums are what this parity test must compare.
+        one = rf.constant(1.0, dims=[])
+        ctc.mark_as_loss("ctc", custom_inv_norm_factor=one)
+        enc_state = model.decoder.transform_encoder(enc, axis=enc_sp)
+        logits, _ = model.decoder(
+            targets,
+            spatial_dim=tgt_time_dim,
+            state=model.decoder.default_initial_state(batch_dims=[batch_dim]),
+            encoder=enc_state,
+        )
+        ce = rf.cross_entropy(estimated=logits, target=targets, axis=vocab_dim, estimated_type="logits")
+        ce.mark_as_loss("ce", custom_inv_norm_factor=one)
+
+    # varying lens AND varying seq counts per batch (frame-budget batching):
+    # under capture this varies the filler-seq count and every packed extent per replay
+    rnd = numpy.random.RandomState(7)
+    seqs = []
+    for _i in range(36):
+        t = int(rnd.randint(15, 99))
+        s = 2 + t // 12
+        seqs.append(
+            {
+                "data": rnd.randn(t, 8).astype("float32"),
+                "classes": rnd.randint(0, 11, (s,)).astype("int32"),
+            }
+        )
+    cfg = dict(
+        task="train",
+        device="gpu",
+        random_seed=42,
+        extern_data={
+            "data": {"dims": [batch_dim, time_dim, feat_dim], "dtype": "float32"},
+            "classes": {"dims": [batch_dim, tgt_time_dim], "dtype": "int32", "sparse_dim": vocab_dim},
+        },
+        get_model=_get_model,
+        train_step=_train_step,
+        batch_size=600,
+        max_seqs=10,
+        num_epochs=1,
+        learning_rate=0.0,  # frozen params: each step's losses depend only on its batch
+        optimizer={"class": "adamw", "capturable": True},
+        torch_dataloader_opts={"num_workers": 0},
+        # as the real trainings: the packed decoder self-att fast path is flash varlen,
+        # which exists for cuda bf16/fp16 only
+        torch_amp="bfloat16",
+        grad_scaler=None,  # bf16 needs no scaler; capture forbids one
+    )
+    # both modes use packed batching, so the per-step batches are IDENTICAL;
+    # a padded mode would batch by padded frames and see different batches,
+    # making per-step comparison meaningless.
+    # packed_eager is equivalent to padded by the rf-level full-model tests,
+    # so this test isolates exactly the capture layer.
+    cfg["packed_tensors"] = {"per_key": {"data": {"gap": 8, "align": 1}, "classes": {"gap": 2, "align": 1}}}
+    if mode == "packed_graphc":
+        cfg["torch_cuda_graph"] = dict(
+            batch_size_bound=10,
+            dim_capacity={"data": 100, "classes": 16},
+            packed_total_bound={"data": 600 + 10 * 9, "classes": 10 * 18},
+            warmup_steps=2,
+            capture_optimizer=True,
+            compile=True,
+        )
+    config = Config(cfg)
+    dataset = init_dataset({"class": "StaticDataset", "data": seqs, "input_dim": 8, "output_dim": 11})
+    dataset.init_seq_order(epoch=1)
+    return config, dataset
+
+
+def _cuda_graph_packed_decoder_run(mode: str):
+    """run one epoch in-process; per-step losses parsed from the RETURNN log file"""
+    import os
+    import re
+    import tempfile
+    from returnn.log import log as returnn_log
+
+    torch.backends.cuda.matmul.allow_tf32 = False
+    torch.backends.cudnn.allow_tf32 = False
+    config, dataset = _cuda_graph_packed_decoder_setup(mode)
+    log_file = tempfile.NamedTemporaryFile(mode="wt", suffix=f"-{mode}.log", delete=False)
+    log_file.close()
+    # the engine logs the per-step losses via the RETURNN log module (bound at init):
+    # direct it to a file for this run, so the losses are parseable in-process
+    # (stdout stays attached too, see Log.initialize)
+    returnn_log.initialize(logs=[log_file.name], verbosity=[5])
+    try:
+        with global_config_ctx(config):
+            engine = Engine(config=config)
+            engine.init_train_from_config(train_data=dataset)
+            engine.train()
+    finally:
+        returnn_log.initialize()  # back to the default (stdout only)
+    with open(log_file.name, "rt", encoding="utf-8") as f:
+        txt = f.read()
+    os.remove(log_file.name)
+    steps = re.findall(r"train, step (\d+), ctc ([0-9.]+), ce ([0-9.]+)", txt)
+    assert len(steps) >= 5, f"{mode}: only {len(steps)} steps parsed from the log"
+    return {int(s): (float(a), float(b)) for s, a, b in steps}
+
+
+def test_torch_engine_cuda_graph_packed_decoder_parity():
+    """
+    Full model INCL cross-attention decoder + aux CTC under whole-step capture,
+    with per-step varying seq lens AND seq counts (so the filler count and every
+    packed extent change per replay):
+    the per-step losses must match the padded eager run on identical batches.
+
+    The rf-level full-model tests cover eager and the static-traceable path;
+    capture semantics (host code runs ONCE, persistent buffers, replays reuse
+    baked host scalars) exist only here.
+    A host-derived per-batch scalar frozen at capture time shows up ONLY in this test.
+
+    Both modes run in-process, sequentially; the same config random_seed gives
+    identical model init and batches, so the per-step losses are comparable.
+    """
+    if not torch.cuda.is_available():
+        raise unittest.SkipTest("CUDA not available")
+    losses = {mode: _cuda_graph_packed_decoder_run(mode) for mode in ["packed_eager", "packed_graphc"]}
+    common = sorted(set(losses["packed_eager"]) & set(losses["packed_graphc"]))
+    assert len(common) >= 5
+    for s in common:
+        (ctc_a, ce_a), (ctc_b, ce_b) = losses["packed_eager"][s], losses["packed_graphc"][s]
+        assert abs(ctc_a - ctc_b) / max(abs(ctc_a), 1e-6) < 2e-2, f"step {s} ctc: {ctc_a} vs {ctc_b}"
+        assert abs(ce_a - ce_b) / max(abs(ce_a), 1e-6) < 2e-2, f"step {s} ce: {ce_a} vs {ce_b}"
 
 
 def test_torch_engine_cuda_graph_train():

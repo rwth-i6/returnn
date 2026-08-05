@@ -69,6 +69,7 @@ Import this module explicitly to activate the dispatch registration.
 
 from __future__ import annotations
 from typing import Any, Optional, Union, Sequence, Set, Tuple, Dict
+import math
 
 from returnn.tensor import Tensor, Dim
 import returnn.frontend as rf
@@ -406,7 +407,12 @@ def _fallback_allowed(op_name: str) -> bool:
 
 
 def _warn_fallback_once(
-    op_name: str, reason: str, *, action: str = "using slow unpack -> op -> repack fallback", hard: bool = True
+    op_name: str,
+    reason: str,
+    *,
+    action: str = "using slow unpack -> op -> repack fallback",
+    hard: bool = True,
+    is_regap: bool = False,
 ) -> None:
     """
     Print a warning on the first fallback / slow path per op, so these are visible.
@@ -421,10 +427,64 @@ def _warn_fallback_once(
             f" config `packed_fallback_allowed = [{op_name!r}]`"
             f" (or returnn.frontend._packed_backend.set_allowed_fallbacks)."
         )
+    if is_regap and not _warn_regap_enabled():
+        # Auto re-layout keeps the op packed and usually costs nothing measurable.
+        return
     if op_name in _warned_fallback_ops:
         return
     _warned_fallback_ops.add(op_name)
     print(f"PackedBackend warning: op {op_name!r}: {reason}, {action}. (Only warned once per op.)")
+
+
+def _warn_regap_enabled() -> bool:
+    """
+    :return: whether to warn about soft re-layouts (regap / realign) that keep the op packed.
+
+    Config option ``rf_packed_warn_regap``, default False.
+    Hard fallbacks (unpack -> op -> repack) are unaffected: those always warn and, unless
+    explicitly allowed, raise.
+    """
+    from returnn.config import get_global_config
+
+    config = get_global_config(raise_exception=False)
+    if config:
+        if "rf_packed_warn_regap" in config.typed_dict:
+            value = config.typed_dict["rf_packed_warn_regap"]
+            assert value is None or isinstance(value, bool)
+            if value is not None:
+                return value
+        elif "rf_packed_warn_regap" in config.dict:
+            value = config.bool("rf_packed_warn_regap", None)
+            if value is not None:
+                return value
+    return False
+
+
+def _att_fast_paths_enabled() -> bool:
+    """
+    :return: whether the packed attention fast paths (Triton rel-pos, flash varlen, flex, NJT, per-seq)
+        may be used.
+
+    Config option ``rf_packed_att_fast_paths``, default True.
+    Disabled, the attentions take the unpack -> padded op -> repack fallback
+    (which must then be allowed, see ``packed_fallback_allowed``):
+    exact padded attention numerics while everything else stays packed.
+    A diagnostic switch, e.g. to bisect a training difference down to the attention kernels.
+    """
+    from returnn.config import get_global_config
+
+    config = get_global_config(raise_exception=False)
+    if config:
+        if "rf_packed_att_fast_paths" in config.typed_dict:
+            value = config.typed_dict["rf_packed_att_fast_paths"]
+            assert value is None or isinstance(value, bool)
+            if value is not None:
+                return value
+        elif "rf_packed_att_fast_paths" in config.dict:
+            value = config.bool("rf_packed_att_fast_paths", None)
+            if value is not None:
+                return value
+    return True
 
 
 def _add_dim_with_size_deps(dims: Set[Dim], d: Dim):
@@ -731,21 +791,40 @@ def _packed_total(orig_dims: Sequence[Dim], gap: int, align: int, *, layout_lens
     return rf.cast(rf.reduce_sum(footprints, axis=list(footprints.dims)), "int32")
 
 
-def _capacity_total_bound(dims: Sequence[Dim], gap: int, align: int, *, what: str) -> int:
+def _regap_total_bound(raw: PackedRawTensor, gap: int, align: int) -> int:
     """
-    :return: static packed-buffer bound derived from the packed dims' declared capacities
-        (static traceable needs static shapes), see :func:`pack` total_bound
+    :return: static packed-buffer bound for a re-layout of ``raw`` to the given gap/align
+
+    Derived from the bound DECLARED for the packing (see :func:`pack` total_bound):
+    the content does not change, only the per-seq gap does,
+    so the buffer grows by at most the added gap per seq.
+    The declared bound is a property of the packing, not of one tensor,
+    so two tensors of the same packing always derive the SAME bound
+    -- which ops rely on when they combine them.
+    Deriving it from the per-seq capacities instead
+    would put every seq at its full length simultaneously,
+    a batch that the total bound already rules out
+    (loq: 200 * 19.5s = 3900s of audio in a batch that holds 1000s).
     """
-    caps = [d.capacity if d.dimension is None else d.dimension for d in dims]
-    assert all(c is not None for c in caps), (
-        f"{what}: static traceable (rf.is_static_traceable) requires total_bound"
-        f" or capacities on all packed dims, got {list(zip(dims, caps))}"
+    cur_bound = raw.packed_dim.dimension
+    assert cur_bound is not None, (
+        f"regap: static traceable (rf.is_static_traceable) requires a static packed dim (pack total_bound), got {raw}"
     )
-    total_bound = 1
-    for c in caps[:-1]:
-        total_bound *= c
-    total_bound *= -(-(caps[-1] + gap) // align) * align
-    return total_bound
+    n_seqs = 1
+    for d in raw.orig_dims[:-1]:
+        c = d.capacity if d.dimension is None else d.dimension
+        assert c is not None, f"regap: packed dim {d} needs a static size or capacity"
+        n_seqs *= c
+    if align != raw.align:
+        # a new alignment shifts every per-seq footprint,
+        # so the signed delta below does not apply.
+        # cur_bound >= sum(len), and each seq then needs at most len + gap + align.
+        return cur_bound + n_seqs * (gap + align)
+    # per seq, ceil((len + gap)/align) - ceil((len + raw.gap)/align) <= ceil((gap - raw.gap)/align).
+    # SIGNED: a smaller gap needs less buffer, and only then is the bound a function of the layout --
+    # otherwise regapping away and back (attention: gap -> 0 -> gap) grows it by n_seqs every time.
+    grow = -(-(gap - raw.gap) // align) * align
+    return cur_bound + n_seqs * grow
 
 
 def _frame_coords(template: PackedRawTensor, d: Dim) -> Tensor:
@@ -1643,15 +1722,16 @@ def _flex_seq_ids(raw: PackedRawTensor, spatial_dim: Dim, device) -> Optional[Tu
         return hit
     if spatial_dim.dyn_size_ext is None:
         return None
-    lens_rf = spatial_dim.dyn_size_ext
+    lens_rf = spatial_dim.get_dyn_size_ext_for_device(str(device))
     for d in raw.orig_dims[:-1]:
         if d not in lens_rf.dims:
             lens_rf = rf.expand_dim(lens_rf, dim=d)
     if len(raw.orig_dims) > 2:
         lens_rf, _ = rf.merge_dims(lens_rf, dims=raw.orig_dims[:-1])
-    # max over the cpu-side dyn sizes (no gpu sync)
-    max_len = int(lens_rf.raw_tensor.max()) if lens_rf.raw_tensor.numel() > 0 else 0
-    lens = rf.copy_to_device(lens_rf, str(device)).raw_tensor.long().flatten()
+    # the value pos_emb is sized with: the capacity under static tracing, else the batch max
+    # (max_len only feeds the pos_emb center/size check, so the sizing source is the right one)
+    max_len = int(spatial_dim.get_dim_value())
+    lens = lens_rf.raw_tensor.long().flatten()
     starts_rf, _ = _seq_starts_math(raw.orig_dims, raw.gap, raw.align, layout_lens=raw.layout_lens, device=str(device))
     if starts_rf is None:  # single seq
         starts = torch.zeros(1, dtype=torch.int64, device=device)
@@ -1863,6 +1943,20 @@ def _torch_flex_rel_pos_attention(
     except ImportError:
         return _flex_no("torch.nn.attention.flex_attention not available (torch too old)")
 
+    import torch
+
+    if rf.is_static_traceable() and torch.is_grad_enabled():
+        # verified (test_full_model_packed_traced_program_replay):
+        # aot tracing silently DROPS the grads of score_mod-captured tensors,
+        # the position term (matrix b+d) gets exactly zero grads (pos_emb / pos_bias_v frozen),
+        # while eager flex differentiates it correctly.
+        # So flex must not be picked for a traced training step.
+        needs_grad = pos_emb.raw_tensor.requires_grad or (
+            pos_bias_v is not None and pos_bias_v.raw_tensor.requires_grad
+        )
+        if needs_grad:
+            return _flex_no("static tracing drops the grads of the score_mod-captured position term")
+
     # The position-based term (matrix b+d, pre-shift), computed packed
     # (no packed-dim reduction, so these stay inner ops): {packed.., heads?, pos_emb_spatial}
     q_with_bias_u = (query + pos_bias_u) if pos_bias_u is not None else query
@@ -1884,7 +1978,6 @@ def _torch_flex_rel_pos_attention(
         return _flex_no("unexpected value dims layout")
     if set(bd_inner.dims) - {heads_dim} != {bd_raw.packed_dim, pos_emb_spatial_dim}:
         return _flex_no("unexpected matrix b+d dims layout")
-    import torch
 
     try:
         q_t = q_inner.copy_transpose([qu_raw.packed_dim, heads_dim, qk_feat_dim]).raw_tensor
@@ -2274,6 +2367,14 @@ def _strided_out_wrapper(
     key = _packing_cache_key("strided_out", raw, out_inner.device) + (st,)
     verdict = _layout_cache.get(key)
     if verdict is None:
+        # the verdict reads per-batch values on the host:
+        # under static tracing that would bake ONE batch's layout into the trace
+        # (or die with a DataDependentOutputException deep in fake tensors),
+        # so fail loudly here instead; the device-lens regime above avoids the verdict
+        assert not rf.is_static_traceable(), (
+            "packed strided conv out: host-sync layout verdict under static tracing;"
+            " use the device-lens regime (device-resident seq lens + pack total_bound)"
+        )
         lens_out = out_time.dyn_size_ext
         for d in raw.orig_dims[:-1]:
             if d not in lens_out.dims:
@@ -2534,9 +2635,23 @@ class PackedBackend(Backend[PackedRawTensor]):
             isinstance(raw, PackedRawTensor)
             and len(raw.orig_dims) == 2
             and raw.orig_dims[-1] == in_spatial_dim
-            and raw.align % st == 0
             and out_spatial_dim.dyn_size_ext is not None
         ):
+            if raw.align % st != 0:
+                # auto-realign, as in conv/pool: lcm keeps the old align a divisor,
+                # the gap is rounded up for align | gap
+                new_align = raw.align * st // math.gcd(raw.align, st)
+                new_gap = -(-raw.gap // new_align) * new_align
+                _warn_fallback_once(
+                    "stft",
+                    f"packed stft needs frame_step {st} | align (have align {raw.align})"
+                    f" -- specify pack(..., align=...) to avoid the extra re-layout",
+                    action=f"re-laying out to gap {new_gap} align {new_align} (stft stays packed)",
+                    hard=False,
+                    is_regap=True,
+                )
+                x = regap(x, new_gap, align=new_align)
+                raw = x.raw_tensor
             out_inner, out_sp, _ = rf.stft(raw.inner, in_spatial_dim=raw.packed_dim, out_dim=out_dim, **opts)
             out = _strided_out_wrapper(raw, out_inner, out_sp, out_spatial_dim, st)
             if out is not None:
@@ -2669,10 +2784,8 @@ class PackedBackend(Backend[PackedRawTensor]):
         required_gap = max(pad_l, pad_r) if pad_l is not None else None
         # note: gap % align == 0 is NOT required: starts stay stride-aligned via the footprints;
         # whether the out layout is expressible is verified at runtime (_strided_out_wrapper).
-        stride_ok = st == 1 or raw.align % st == 0
         if (
             pad_l is not None
-            and stride_ok
             and (st > 1 or raw.gap + span - pad_l - pad_r >= 0)
             and in_spatial_dims[0] == raw.orig_dims[-1]
             and not any(_dim_refs_packed(d, raw) for d in in_spatial_dims[1:])
@@ -2680,19 +2793,24 @@ class PackedBackend(Backend[PackedRawTensor]):
             and not is_packed(filter)
             and (bias is None or not is_packed(bias))
         ):
-            if raw.gap < required_gap:
-                # still keep the conv packed: cheap re-layout with the required gap.
-                # The warning stays so this gets noticed and fixed at pack() time.
-                # For strided convs, keep the align | gap convention.
-                target_gap = required_gap if st == 1 else -(-required_gap // raw.align) * raw.align
+            # lcm keeps the old align a divisor; for strided, keep the align | gap convention.
+            realign = raw.align % st != 0
+            need_align = raw.align * st // math.gcd(raw.align, st) if realign else raw.align
+            # max, not required_gap: a realign must not shrink a gap the caller asked for
+            need_gap = max(raw.gap, required_gap)
+            if st > 1:
+                need_gap = -(-need_gap // need_align) * need_align
+            if realign or raw.gap < required_gap:
                 _warn_fallback_once(
                     "conv",
-                    f"gap {raw.gap} < required {required_gap} for the packed conv"
-                    f" -- specify pack(..., gap=...) to avoid the extra re-layout",
-                    action="re-packing with the required gap (conv stays packed)",
+                    f"packed conv needs gap >= {required_gap} and stride {st} | align"
+                    f" (have gap {raw.gap}, align {raw.align})"
+                    f" -- specify pack(..., gap=..., align=...) to avoid the extra re-layout",
+                    action=f"re-laying out to gap {need_gap} align {need_align} (conv stays packed)",
                     hard=False,
+                    is_regap=True,
                 )
-                source = regap(source, target_gap)
+                source = regap(source, need_gap, align=need_align)
                 raw = source.raw_tensor
             inner = raw.inner
             mask = _frame_mask(raw)
@@ -2806,7 +2924,7 @@ class PackedBackend(Backend[PackedRawTensor]):
                     dropout_p = att_dropout if train_flag else 0.0
                 else:
                     dropout_p = None  # dynamic train flag, cannot resolve to a static dropout_p
-        if attention_mask is None and dropout_p is not None:
+        if _att_fast_paths_enabled() and attention_mask is None and dropout_p is not None:
             if not is_packed(query) and is_packed(key) and is_packed(value) and not is_causal:
                 k_raw = _raw(key)
                 batch_dims = k_raw.orig_dims[:-1]
@@ -2965,7 +3083,7 @@ class PackedBackend(Backend[PackedRawTensor]):
         # which a fixed CUDA-graph buffer breaks.)
         # It expresses no-dropout and per-element (non-broadcast) dropout;
         # broadcast dropout it cannot, so only that case skips it.
-        if not (dropout_active and att_dropout_broadcast):
+        if _att_fast_paths_enabled() and not (dropout_active and att_dropout_broadcast):
             out = _torch_triton_rel_pos_attention(
                 query,
                 key,
@@ -2983,7 +3101,7 @@ class PackedBackend(Backend[PackedRawTensor]):
             if out is not None:
                 return out
         # FlexAttention fallback (no dropout support), so only when dropout is inactive.
-        if not dropout_active:
+        if _att_fast_paths_enabled() and not dropout_active:
             out = _torch_flex_rel_pos_attention(
                 query,
                 key,
@@ -3001,8 +3119,15 @@ class PackedBackend(Backend[PackedRawTensor]):
                 return out
         else:
             _flex_no("att_dropout active in training (FlexAttention has no dropout support)")
-        if is_packed(query) and query.raw_tensor.inner.device == "cpu":
-            # CPU: per-seq slice loop over the packed buffer, no unpack
+        if (
+            _att_fast_paths_enabled()
+            and not rf.is_static_traceable()
+            and is_packed(query)
+            and query.raw_tensor.inner.device == "cpu"
+        ):
+            # CPU: per-seq slice loop over the packed buffer, no unpack.
+            # Not under static tracing: the per-seq loop reads data-dependent host values
+            # (per-seq lens as Python ints), which cannot be traced
             # (the planned Triton kernel is the CUDA fast path)
             out = _rel_pos_attention_per_seq(
                 query,
@@ -3084,25 +3209,31 @@ class PackedBackend(Backend[PackedRawTensor]):
         else:
             pad_l = pad_r = None
         required_gap = max(pad_l, pad_r) if pad_l is not None else None
-        stride_ok = st == 1 or raw.align % st == 0
         if (
             pad_l is not None
-            and stride_ok
             and (st > 1 or raw.gap + span - pad_l - pad_r >= 0)
             and in_spatial_dims[0] == raw.orig_dims[-1]
             and not any(_dim_refs_packed(d, raw) for d in in_spatial_dims[1:])
             and not out_spatial_dims
         ):
-            if raw.gap < required_gap:
-                target_gap = required_gap if st == 1 else -(-required_gap // raw.align) * raw.align
+            # lcm keeps the old align a divisor; for strided, keep the align | gap convention.
+            realign = raw.align % st != 0
+            need_align = raw.align * st // math.gcd(raw.align, st) if realign else raw.align
+            # max, not required_gap: a realign must not shrink a gap the caller asked for
+            need_gap = max(raw.gap, required_gap)
+            if st > 1:
+                need_gap = -(-need_gap // need_align) * need_align
+            if realign or raw.gap < required_gap:
                 _warn_fallback_once(
                     "pool",
-                    f"gap {raw.gap} < required {required_gap} for the packed pool"
-                    f" -- specify pack(..., gap=...) to avoid the extra re-layout",
-                    action="re-packing with the required gap (pool stays packed)",
+                    f"packed pool needs gap >= {required_gap} and stride {st} | align"
+                    f" (have gap {raw.gap}, align {raw.align})"
+                    f" -- specify pack(..., gap=..., align=...) to avoid the extra re-layout",
+                    action=f"re-laying out to gap {need_gap} align {need_align} (pool stays packed)",
                     hard=False,
+                    is_regap=True,
                 )
-                source = regap(source, target_gap)
+                source = regap(source, need_gap, align=need_align)
                 raw = source.raw_tensor
             inner = raw.inner
             if required_gap:
@@ -3726,8 +3857,11 @@ def pack(
             # so the packed dim is STATIC -> capturable in a CUDA graph.
             # The real-length layout fills the first frames,
             # the rest are gap/padding (masked out like any gap frames).
-            if total_bound is None and rf.is_static_traceable():
-                total_bound = _capacity_total_bound(dims, gap, align, what="pack")
+            assert not (total_bound is None and rf.is_static_traceable()), (
+                f"pack: static traceable (rf.is_static_traceable) requires total_bound, got dims {list(dims)}."
+                f" Deriving it from the per-seq capacities would assume every seq at its full length"
+                f" at once, which the batch size already rules out."
+            )
             out_dim = Dim(
                 total_bound if total_bound is not None else _packed_total(dims, gap, align), name="packed_gap"
             )
@@ -3776,7 +3910,7 @@ def regap(
     last = raw.orig_dims[-1]
     if total_bound is None and layout_lens is None and rf.is_static_traceable():
         # like pack(): a static target buffer, e.g. for the packed-conv regap under CUDA-graph capture
-        total_bound = _capacity_total_bound(raw.orig_dims, gap, align, what="regap")
+        total_bound = _regap_total_bound(raw, gap, align)
     new_dim = Dim(
         total_bound if total_bound is not None else _packed_total(raw.orig_dims, gap, align, layout_lens=layout_lens),
         name="packed_regap",

@@ -25,6 +25,10 @@ from returnn.frontend._random_journal import RandomJournal
 
 disable_tf = "RETURNN_DISABLE_TF" in os.environ and int(os.environ["RETURNN_DISABLE_TF"]) == 1
 
+# Run the TF side of every comparison on the pure (low-level) TF backend instead of the net-dict one.
+# Set this to run the whole existing RF test suite against that backend.
+tf_low_level_env = os.environ.get("RETURNN_TEST_RF_TF_LOW_LEVEL", "") == "1"
+
 if disable_tf:
     tf = None
 else:
@@ -76,12 +80,29 @@ def run_model(
     dyn_dim_max_sizes: Optional[Dict[Dim, int]] = None,
     dyn_dim_min_sizes: Optional[Dict[Dim, int]] = None,
     test_tensorflow: bool = True,
+    tf_low_level: bool = False,
     allow_inf_nan_in_output: bool = False,
     test_single_batch_entry: bool = True,
     data_rnd_seed: int = 42,
     data_fill_random: bool = True,
 ) -> TensorDict:
-    """run"""
+    """
+    Runs the model with the PyTorch backend and with one of the TF backends, and compares the outputs.
+
+    :param extern_data: model inputs, filled with random data unless data_fill_random is disabled
+    :param get_model:
+    :param forward_step:
+    :param dyn_dim_max_sizes: max sizes for the dynamic dims when filling the data
+    :param dyn_dim_min_sizes: min sizes for the dynamic dims when filling the data
+    :param test_tensorflow: whether to run the TF side at all
+    :param tf_low_level: use the pure (low-level) TF backend for the TF side
+        instead of the net-dict one (also settable for all tests via RETURNN_TEST_RF_TF_LOW_LEVEL=1)
+    :param allow_inf_nan_in_output:
+    :param test_single_batch_entry: also run one smaller sequence alone, and compare it to its batched result
+    :param data_rnd_seed: seed for filling the data
+    :param data_fill_random: whether to fill extern_data with random data
+    :return: outputs of the PyTorch run
+    """
     print(f"* run_model with dyn_dim_max_sizes={dyn_dim_max_sizes!r}")
     extern_data_dims = extern_data.all_dims()
     if data_fill_random:
@@ -132,11 +153,20 @@ def run_model(
         return out_pt
 
     assert tf, "TensorFlow not available. (set RETURNN_DISABLE_TF=1 if you want to test PyTorch only)"
-    print("** run with TensorFlow-net-dict backend")
-    with rfl.ReturnnLayersBackend.random_journal_replay(random_journal):
-        out_tf = _run_model_net_dict_tf(extern_data, get_model, forward_step)
-        _pad_mask_zeros(out_tf)
-        out_tf_raw = out_tf.as_raw_tensor_dict(include_const_sizes=True)
+    if tf_low_level or tf_low_level_env:
+        from returnn.tf.frontend_low_level import TFBackend
+
+        print("** run with TensorFlow low-level backend")
+        with TFBackend.random_journal_replay(random_journal):
+            out_tf = _run_model_tf(extern_data, get_model, forward_step)
+            _pad_mask_zeros(out_tf)
+            out_tf_raw = out_tf.as_raw_tensor_dict(include_const_sizes=True)
+    else:
+        print("** run with TensorFlow-net-dict backend")
+        with rfl.ReturnnLayersBackend.random_journal_replay(random_journal):
+            out_tf = _run_model_net_dict_tf(extern_data, get_model, forward_step)
+            _pad_mask_zeros(out_tf)
+            out_tf_raw = out_tf.as_raw_tensor_dict(include_const_sizes=True)
 
     random_journal: RandomJournal
     assert random_journal.reached_end()
@@ -334,6 +364,78 @@ def _run_model_torch_single_batch(
     # Recover original data.
     extern_data.reset_content()
     extern_data.assign_from_raw_tensor_dict_(extern_data_raw)
+
+
+def _run_model_tf(extern_data: TensorDict, get_model: rf.GetModelFunc, forward_step: rf.StepFunc) -> TensorDict:
+    """
+    Run the model on the pure (low-level) TF backend:
+    build the TF graph directly from the RF code (no net dict), then run it once in a session.
+
+    The extern data goes in as constants, not placeholders:
+    every run builds its own graph, so there is nothing to feed,
+    and the placeholder path only becomes relevant with the engine.
+    """
+    # noinspection PyProtectedMember
+    from returnn.frontend import _backend
+    from returnn.tf.frontend_low_level import TFBackend
+
+    extern_data_raw = extern_data.as_raw_tensor_dict(expected_value_type=numpy.ndarray)
+    extern_data.reset_content()
+    _backend.select_backend_tf()
+
+    with tf_scope() as session:
+        rf.set_random_seed(42)
+        extern_data.assign_from_raw_tensor_dict_(extern_data_raw)
+        _tensor_dict_numpy_to_tf_(extern_data)
+
+        model = get_model(epoch=1, step=0)
+        rf.init_forward_step_run_ctx(epoch=1, step=0)
+        forward_step(model=model, extern_data=extern_data)
+        outputs_tf = rf.get_run_ctx().outputs
+        assert outputs_tf.data
+
+        if "loss" in outputs_tf.data:
+            data_ = {name: data for name, data in extern_data.data.items() if data.dtype.startswith("float")}
+            loss = outputs_tf.data["loss"]
+            assert isinstance(loss, Tensor) and loss.dtype.startswith("float")
+            loss = rf.reduce_sum(loss, axis=loss.dims)
+            d_grads = tf.gradients(loss.raw_tensor, [d.raw_tensor for d in data_.values()])
+            for (name, data), d_grad_tf in zip(data_.items(), d_grads):
+                assert isinstance(d_grad_tf, tf.Tensor), f"no grad for {name}"
+                d_grad = data.copy_template()
+                d_grad.raw_tensor = d_grad_tf
+                outputs_tf.data[f"{name}_grad"] = d_grad
+
+        session.run(tf_compat.v1.global_variables_initializer())
+        session.run(TFBackend.get_parameters_init_op(list(model.parameters())))
+
+        fetches = outputs_tf.as_raw_tensor_dict(expected_value_type=tf.Tensor)
+        outputs_numpy_raw = {k: numpy.asarray(v) for k, v in session.run(fetches).items()}
+        outputs_numpy = outputs_tf.copy_template()
+        outputs_numpy.reset_content()
+        outputs_numpy.assign_from_raw_tensor_dict_(outputs_numpy_raw)
+
+    extern_data.reset_content()
+    extern_data.assign_from_raw_tensor_dict_(extern_data_raw)
+    return outputs_numpy
+
+
+def _tensor_dict_numpy_to_tf_(x: TensorDict):
+    """
+    :func:`_tensor_numpy_to_tf_` on all values
+    """
+    for v in x.data.values():
+        _tensor_numpy_to_tf_(v)
+
+
+def _tensor_numpy_to_tf_(x: Tensor):
+    """
+    tf.constant() on Tensor, including its dims
+    """
+    if isinstance(x.raw_tensor, numpy.ndarray):
+        x.raw_tensor = tf.constant(x.raw_tensor)
+    for dim in x.dims:
+        dim.transform_tensors(_tensor_numpy_to_tf_)
 
 
 def _run_model_net_dict_tf(

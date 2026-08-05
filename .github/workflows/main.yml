@@ -21,6 +21,9 @@ jobs:
           - 2.8.0
         tf-version:
           - 2.10.0
+        jax-version:
+          # Newest JAX for Python 3.10; the tests run a newer one (see rf-jax-tests).
+          - 0.6.2
 
     steps:
       - uses: actions/checkout@v4
@@ -35,7 +38,7 @@ jobs:
           path: |
             ~/.cache
             ~/.local
-          key: cache-${{ runner.os }}-py${{ matrix.python-version }}-torch${{ matrix.torch-version }}-tf${{ matrix.tf-version }}
+          key: cache-${{ runner.os }}-py${{ matrix.python-version }}-torch${{ matrix.torch-version }}-tf${{ matrix.tf-version }}-jax${{ matrix.jax-version }}
           restore-keys: |
             cache-${{ runner.os }}-py${{ matrix.python-version }}-
 
@@ -47,6 +50,8 @@ jobs:
             --python ${{matrix.python-version}} \
             --torch ${{ matrix.torch-version }} \
             --tf ${{ matrix.tf-version }} \
+            --jax ${{ matrix.jax-version }} \
+            --jax-no-deps 1 \
             --espnet 1 \
             --hf-datasets 1
 
@@ -269,6 +274,55 @@ jobs:
           export ${{ matrix.action }}
           python -m pytest tests/test_$TEST.py
 
+  # Own job, not part of rf-tests: JAX needs Python >=3.12 and NumPy >=2.1,
+  # while rf-tests runs Python 3.10 and pins NumPy <2 (1.23.5 with ESPnet).
+  # Torch is installed because the tests compare the JAX backend against it in the same process.
+  rf-jax-tests:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version:
+          - "3.12"
+        torch-version:
+          - 2.7.1
+        jax-version:
+          - 0.11.0
+        action:
+          - TEST=rf_jax
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Cache dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache
+            ~/.local
+          key: cache-${{ runner.os }}-py${{ matrix.python-version }}-torch${{ matrix.torch-version }}-jax${{ matrix.jax-version }}
+          restore-keys: |
+            cache-${{ runner.os }}-py${{ matrix.python-version }}-
+
+      - name: Setup dependencies
+        run: |
+          echo "PATH=$PATH:~/.local/bin" >> $GITHUB_ENV
+          echo "Python ${{matrix.python-version}}"
+
+          python .github/workflows/_setup_deps.py \
+            --python ${{matrix.python-version}} \
+            --torch ${{ matrix.torch-version }} \
+            --jax ${{ matrix.jax-version }}
+
+      - name: Run test
+        run: |
+          export ${{ matrix.action }}
+          python -m pytest tests/test_$TEST.py
+
   rf-tests:
     runs-on: ubuntu-latest
     strategy:
@@ -300,11 +354,17 @@ jobs:
           - TEST=rf_rec
           - TEST=rf_reduce
           - TEST=rf_signal
+          - TEST=rf_tf_backend
         include:
           # Some selected tests (but not all) with some other versions.
           - action: TEST=rf_base
             python-version: 3.8
             torch-version: 1.13.1
+            tf-version: 2.10.0
+          # rf_packed: the flex fast paths and the traced-replay test need a recent torch
+          - action: TEST=rf_packed
+            python-version: "3.10"
+            torch-version: 2.7.1
             tf-version: 2.10.0
 
     steps:

@@ -23,6 +23,10 @@ def main():
     arg_parser.add_argument("--python", help="Verify Python version (optional)")
     arg_parser.add_argument("--torch", help="PyTorch version to install (optional)")
     arg_parser.add_argument("--tf", help="TensorFlow version to install (optional)")
+    arg_parser.add_argument("--jax", help="JAX version to install (optional)")
+    arg_parser.add_argument(
+        "--jax-no-deps", help="install JAX without its dependencies, for static analysis only (optional)"
+    )
     arg_parser.add_argument("--espnet", help="Whether to install ESPnet (optional)")
     arg_parser.add_argument("--hf-datasets", help="Whether to install HF datasets (optional)")
     args = arg_parser.parse_args()
@@ -52,6 +56,8 @@ def main():
         _run(*pip_install, "--upgrade", "dm-tree", "h5py")
         if args.espnet:
             _run(*pip_install, "numpy==1.23.5")  # for ESPnet, ctc-segmentation, etc
+        elif args.jax:
+            _run(*pip_install, "numpy>=2.1")  # JAX requires it
         else:
             _run(*pip_install, "numpy<2")
         _run(*pip_install, "--upgrade", "scipy")  # for some tests
@@ -123,6 +129,22 @@ def main():
                 _run(*pip_install, "transformers")
             else:
                 _run(*pip_install, "safetensors==0.5.3", "transformers==4.49.0")
+
+        if args.jax:
+            print("Installing JAX version:", args.jax)
+            # The plain package is CPU-only (unlike torch, whose PyPI wheel is the CUDA build).
+            # The GPU support would be the cuda12 extra, ~225 MB of extra wheels
+            # for a plugin that a CI runner without a GPU never loads.
+            # jaxlib is pinned to the same version by jax itself.
+            if args.jax_no_deps:
+                # For the code inspection, which reads the sources but never imports JAX:
+                # its NumPy and SciPy requirements would fight the pins other packages need here
+                # (e.g. ESPnet's numpy==1.23.5), and nothing would use them anyway.
+                # jaxlib is still installed: it holds the extension types (jax.Device and friends),
+                # so the inspection cannot resolve them without it. jax pins it to its own version.
+                _run(*pip_install, "--no-deps", f"jax=={args.jax}", f"jaxlib=={args.jax}")
+            else:
+                _run(*pip_install, f"jax=={args.jax}")
 
         if args.hf_datasets:
             assert args.torch, "Need to specify --torch when specifying --hf-datasets"
@@ -203,6 +225,12 @@ def main():
     if args.tf:
         _run(py, "-c", "import tensorflow as tf; print('TensorFlow:', tf.__git_version__, tf.__version__, tf.__file__)")
         _run(py, "-c", f"import tensorflow as tf; assert tf.__version__ == '{args.tf}'")
+    if args.jax:
+        if args.jax_no_deps:
+            _run(*pip, "show", "jax")  # installed without its deps, so it cannot be imported
+        else:
+            _run(py, "-c", "import jax; print('JAX:', jax.__version__, jax.__file__, jax.devices())")
+            _run(py, "-c", f"import jax; assert jax.__version__ == '{args.jax}'")
 
     print("Pytest env:")
     _run(py, "-m", "pytest", "--version")
