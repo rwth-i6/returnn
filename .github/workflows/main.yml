@@ -21,6 +21,9 @@ jobs:
           - 2.8.0
         tf-version:
           - 2.10.0
+        jax-version:
+          # Newest JAX for Python 3.10; the tests run a newer one (see rf-jax-tests).
+          - 0.6.2
 
     steps:
       - uses: actions/checkout@v4
@@ -35,7 +38,7 @@ jobs:
           path: |
             ~/.cache
             ~/.local
-          key: cache-${{ runner.os }}-py${{ matrix.python-version }}-torch${{ matrix.torch-version }}-tf${{ matrix.tf-version }}
+          key: cache-${{ runner.os }}-py${{ matrix.python-version }}-torch${{ matrix.torch-version }}-tf${{ matrix.tf-version }}-jax${{ matrix.jax-version }}
           restore-keys: |
             cache-${{ runner.os }}-py${{ matrix.python-version }}-
 
@@ -47,6 +50,8 @@ jobs:
             --python ${{matrix.python-version}} \
             --torch ${{ matrix.torch-version }} \
             --tf ${{ matrix.tf-version }} \
+            --jax ${{ matrix.jax-version }} \
+            --jax-no-deps 1 \
             --espnet 1 \
             --hf-datasets 1
 
