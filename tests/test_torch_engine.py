@@ -682,6 +682,19 @@ def test_data_loader_oggzip():
     assert batches == [[[12, 8, 9, 11], [16, 0, 0, 0]], [[6, 25, 18, 20, 5], [28, 10, 28, 14, 0]], [[17, 23]]]
 
 
+def test_save_optimizer_callable_config():
+    # The optimizer config can be a callable (e.g. the optimizer class itself).
+    # The saved checkpoint metadata must still be loadable under the torch >= 2.6 weights_only default.
+    config = Config(dict(optimizer=torch.optim.AdamW))
+    model = torch.nn.Linear(7, 5)
+    updater = Updater(config=config, network=model, device=torch.device("cpu"))
+    updater.create_optimizer()
+
+    with tempfile.TemporaryDirectory(prefix="returnn_test_save_optimizer_callable_config") as tmp_dir:
+        updater.save_optimizer(tmp_dir + "/model.opt.pt")
+        updater.load_optimizer(tmp_dir + "/model.opt.pt")
+
+
 def test_load_optimizer_old_format():
     config = Config(dict(optimizer={"class": "adamw", "weight_decay": 1e-3}))
     model = torch.nn.Linear(7, 5)

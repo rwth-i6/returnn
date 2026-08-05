@@ -472,9 +472,12 @@ class Updater:
         # optimizer_opts is saved as metadata only (load_optimizer ignores it)
         # Drop callables like param_groups_custom or params_filter (also nested, e.g. in the "optimizers" list
         # of the multi optimizer) so torch.load (weights_only=True since torch 2.6) can read it.
+        # An optimizer config given as a callable or an optimizer instance is dropped completely for the same reason.
         optimizer_opts_to_save = self._optimizer_opts
         if isinstance(optimizer_opts_to_save, dict):
             optimizer_opts_to_save = _drop_callables_deep(optimizer_opts_to_save)
+        elif isinstance(optimizer_opts_to_save, torch.optim.Optimizer) or callable(optimizer_opts_to_save):
+            optimizer_opts_to_save = None
 
         torch.save(
             {
