@@ -1915,6 +1915,20 @@ def _torch_flex_rel_pos_attention(
     except ImportError:
         return _flex_no("torch.nn.attention.flex_attention not available (torch too old)")
 
+    import torch
+
+    if rf.is_static_traceable() and torch.is_grad_enabled():
+        # verified (test_full_model_packed_traced_program_replay):
+        # aot tracing silently DROPS the grads of score_mod-captured tensors,
+        # the position term (matrix b+d) gets exactly zero grads (pos_emb / pos_bias_v frozen),
+        # while eager flex differentiates it correctly.
+        # So flex must not be picked for a traced training step.
+        needs_grad = pos_emb.raw_tensor.requires_grad or (
+            pos_bias_v is not None and pos_bias_v.raw_tensor.requires_grad
+        )
+        if needs_grad:
+            return _flex_no("static tracing drops the grads of the score_mod-captured position term")
+
     # The position-based term (matrix b+d, pre-shift), computed packed
     # (no packed-dim reduction, so these stay inner ops): {packed.., heads?, pos_emb_spatial}
     q_with_bias_u = (query + pos_bias_u) if pos_bias_u is not None else query
@@ -1936,7 +1950,6 @@ def _torch_flex_rel_pos_attention(
         return _flex_no("unexpected value dims layout")
     if set(bd_inner.dims) - {heads_dim} != {bd_raw.packed_dim, pos_emb_spatial_dim}:
         return _flex_no("unexpected matrix b+d dims layout")
-    import torch
 
     try:
         q_t = q_inner.copy_transpose([qu_raw.packed_dim, heads_dim, qk_feat_dim]).raw_tensor
