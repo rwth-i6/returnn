@@ -1710,7 +1710,7 @@ def select_backend(name: str):
     """
     Select backend by name.
 
-    :param name: "torch", "tf", "returnn_layers_tf", "numpy"
+    :param name: "torch", "tf", "returnn_layers_tf", "jax", "numpy"
     """
     if name == "tf":
         select_backend_tf()
@@ -1718,6 +1718,8 @@ def select_backend(name: str):
         select_backend_returnn_layers_tf()
     elif name == "torch":
         select_backend_torch()
+    elif name == "jax":
+        select_backend_jax()
     elif name == "numpy":
         select_backend_numpy()
     else:
@@ -1784,6 +1786,22 @@ def select_backend_torch():
     _native.setup_torch()
 
 
+def select_backend_jax():
+    """
+    Selects the JAX backend.
+    """
+    import jax
+
+    # RF asks for dtypes explicitly (int64 seq lens, float64 where requested),
+    # and JAX silently downcasts those to 32 bit unless x64 is on,
+    # which would make the raw dtype disagree with Tensor.dtype.
+    jax.config.update("jax_enable_x64", True)
+
+    backend = get_backend_by_raw_tensor_type(jax.Array)  # side-effect: register it
+    global_backend.__class__ = backend
+    BehaviorVersion.set_min_behavior_version(29)
+
+
 def get_backend_by_tensor(tensor: Tensor, *, fallback: Optional[T2] = None) -> Union[Type[Backend[T]], T2]:
     """
     :param tensor:
@@ -1833,6 +1851,17 @@ def get_backend_by_raw_tensor_type(tensor_type: Type[T]) -> Union[Type[Backend[T
 
             backend_type = ReturnnLayersBackend
             tensor_types = (Layer,)
+        elif base_type.__module__.split(".")[0] in ("jax", "jaxlib"):
+            import jax
+            from returnn.jax.frontend import JaxBackend
+
+            # jax.Array is a virtual base:
+            # isinstance(tracer, jax.Array) is True but issubclass(type(tracer), jax.Array) is not,
+            # so neither the MRO walk above nor the issubclass assert below can cover tracers.
+            # Register the concrete type (ArrayImpl, or the tracer class of whatever transform is active).
+            register_backend_by_tensor_type(jax.Array, JaxBackend)
+            register_backend_by_tensor_type(tensor_type, JaxBackend)
+            return JaxBackend
         elif issubclass(base_type, numpy.ndarray):
             from ._numpy_backend import NumpyBackend
 
