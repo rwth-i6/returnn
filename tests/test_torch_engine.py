@@ -2039,6 +2039,21 @@ def test_amuse_legacy_group_keys_error():
             raise AssertionError(f"expected ValueError for legacy group opts {legacy_group_opts}")
 
 
+def test_amuse_zero_lr():
+    from returnn.torch.optim.amuse import AMUSE
+
+    # With lr 0 throughout, all per-step averaging weights are zero, so ckp1 stays at its 1.0 fallback.
+    # Past warmup, the beta1 ramp must not divide by (1 - ckp1) == 0 then.
+    model = torch.nn.Linear(4, 3)
+    opt = AMUSE(list(model.parameters()), lr=0.0, warmup_steps=2)
+    opt.train()
+    for _ in range(4):
+        for param in model.parameters():
+            param.grad = torch.ones_like(param)
+        opt.step()
+    opt.eval()
+
+
 def test_multi_optimizer_amuse():
     from returnn.torch.optim.amuse import AMUSE
     from returnn.torch.optim.multi import MultiOptimizer

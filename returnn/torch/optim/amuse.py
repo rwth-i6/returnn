@@ -259,6 +259,8 @@ class AMUSE(Optimizer):
                 group["c_warmup"] = ckp1
             return self.beta1_init
 
+        if ckp1 >= 1.0:
+            return self.beta1_init
         c_warmup = group.get("c_warmup", 1.0 / self.warmup_steps)
         s_t = (ckp1 * (1.0 - c_warmup)) / (c_warmup * (1.0 - ckp1))
         return 1.0 - (s_t**self.rho) * (1.0 - self.beta1_init)
