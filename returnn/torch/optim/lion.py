@@ -115,8 +115,17 @@ except ImportError as e:
     tl = None
 
 
-# restore_value is not available in older versions of triton
-if triton and "restore_value" in inspect.signature(triton.autotune).parameters:
+_triton_usable = False
+if triton:
+    # restore_value is not available in older versions of triton
+    _triton_usable = "restore_value" in inspect.signature(triton.autotune).parameters
+    # The kernel is only ever used on CUDA tensors (see the p.is_cuda gate in the step).
+    # Without a GPU, triton's lazy driver init inside the kernel decorators below
+    # would crash AT MODULE IMPORT ("0 active drivers"),
+    # e.g. in a CPU-only env that has a CUDA triton installed.
+    _triton_usable = _triton_usable and torch.cuda.is_available()
+
+if _triton_usable:
     # triton cuda kernel
 
     # noinspection PyPep8Naming,PyArgumentList
