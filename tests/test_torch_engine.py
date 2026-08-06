@@ -709,6 +709,47 @@ def test_load_optimizer_old_format():
         updater.load_optimizer(tmp_dir + "/model.opt.new_format.pt")
 
 
+def test_load_optimizer_changed_weight_decay_split():
+    # A changed weight-decay split moves params between the two param groups.
+    # load_optimizer must not fail on that (it warns and remaps the per-param state by name),
+    # and the state must survive the move.
+    model = torch.nn.Sequential(torch.nn.Linear(7, 5), torch.nn.LayerNorm(5))
+
+    config1 = Config(dict(optimizer={"class": "adamw", "weight_decay": 1e-3}))
+    updater1 = Updater(config=config1, network=model, device=torch.device("cpu"))
+    updater1.create_optimizer()
+    updater1.set_current_train_step(global_train_step=0, epoch=1)
+    for param in model.parameters():
+        param.grad = torch.ones_like(param)
+    updater1.get_optimizer().step()
+
+    ln_weight = model[1].weight
+    state1 = updater1.get_optimizer().state[ln_weight]
+    assert "exp_avg" in state1
+    exp_avg1 = state1["exp_avg"].clone()
+
+    def _include_check(*, module, **_kwargs):
+        if isinstance(module, torch.nn.LayerNorm):
+            return True
+        return None
+
+    config2 = Config(
+        dict(optimizer={"class": "adamw", "weight_decay": 1e-3, "weight_decay_custom_include_check": _include_check})
+    )
+    updater2 = Updater(config=config2, network=model, device=torch.device("cpu"))
+    updater2.create_optimizer()
+    updater2.set_current_train_step(global_train_step=0, epoch=1)
+
+    with tempfile.TemporaryDirectory(prefix="returnn_test_load_opt_changed_wd_split") as tmp_dir:
+        updater1.save_optimizer(tmp_dir + "/model.opt.pt")
+        updater2.load_optimizer(tmp_dir + "/model.opt.pt")
+
+    opt2 = updater2.get_optimizer()
+    groups_by_wd = {group["weight_decay"]: group for group in opt2.param_groups}
+    assert any(p is ln_weight for p in groups_by_wd[1e-3]["params"])
+    assert torch.equal(opt2.state[ln_weight]["exp_avg"], exp_avg1)
+
+
 def test_updater_weight_decay_blacklist():
     from returnn.util.basic import DictRefKeys
 

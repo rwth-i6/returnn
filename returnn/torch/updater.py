@@ -417,12 +417,18 @@ class Updater:
                     self_group_param_names.intersection_update(self_param_names_critical_set)
                     ckpt_group_param_names.intersection_update(self_param_names_critical_set)
                     if ckpt_group_param_names != self_group_param_names:
-                        raise ValueError(
-                            "load_optimizer: params in group not in ckpt: %s\n  ckpt params not existing: %s"
+                        print(
+                            "load_optimizer: params moved between param groups"
+                            " (e.g. due to a changed weight-decay split):\n"
+                            "  params newly in this group: %s\n"
+                            "  params no longer in this group: %s\n"
+                            "  Their per-param state is remapped by name and kept."
+                            " Their group hyperparameters (e.g. weight_decay) now follow the current groups."
                             % (
-                                ", ".join(ckpt_group_param_names - self_group_param_names) or "(None)",
-                                ", ".join(self_group_param_names - ckpt_group_param_names) or "(None)",
-                            )
+                                ", ".join(sorted(self_group_param_names - ckpt_group_param_names)) or "(None)",
+                                ", ".join(sorted(ckpt_group_param_names - self_group_param_names)) or "(None)",
+                            ),
+                            file=log.v3,
                         )
                     ckpt_group["params"] = [
                         self_param_names_dict[param_id_to_name[id(p)]] for p in self_group["params"]
