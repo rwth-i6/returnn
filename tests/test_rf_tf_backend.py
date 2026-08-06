@@ -111,7 +111,7 @@ def test_parameter_names_and_init():
         assert all(isinstance(p.raw_tensor, DeferredVariable) for _, p in net.named_parameters())
         TFBackend.create_parameters(net)
 
-        names = {name: p.raw_tensor for name, p in net.named_parameters()}
+        names = {name: TFBackend.get_parameter_variable(p) for name, p in net.named_parameters()}
         assert set(names) == {"linear.weight", "linear.bias", "norm.scale", "norm.bias"}
         for name, var in names.items():
             assert isinstance(var, tf.Variable)

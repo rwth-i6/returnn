@@ -1723,6 +1723,7 @@ class TFBackend(Backend[tf.Tensor]):
 
     _deferred_parameter_creation = False
     _deferred_params: Dict[RefIdEq, _DeferredParam] = {}
+    _param_vars: Dict[RefIdEq, tf.Variable] = {}  # so an assigned parameter can still find its variable
 
     @staticmethod
     @contextlib.contextmanager
@@ -1766,7 +1767,9 @@ class TFBackend(Backend[tf.Tensor]):
         # the real initial value arrives later via set_parameter_initial_value.
         device_ctx = tf.device(device) if device else contextlib.nullcontext()
         with tf.control_dependencies(None), device_ctx:
-            return tf.Variable(tf.zeros(shape, dtype=dtype), trainable=trainable, dtype=dtype, name=tensor.name)
+            var = tf.Variable(tf.zeros(shape, dtype=dtype), trainable=trainable, dtype=dtype, name=tensor.name)
+        TFBackend._param_vars[RefIdEq(tensor)] = var
+        return var.read_value()
 
     @classmethod
     def create_parameters(cls, model: rf.Module) -> None:
@@ -1793,7 +1796,10 @@ class TFBackend(Backend[tf.Tensor]):
                 else:
                     initial = tf.zeros(raw.shape.as_list(), dtype=raw.dtype)
                 var = tf.Variable(initial, trainable=state.trainable, dtype=raw.dtype, name=name.replace(".", "/"))
-            param.raw_tensor = var
+            cls._param_vars[RefIdEq(param)] = var
+            # The parameter holds a READ of the variable, not the variable itself:
+            # in graph mode only that gives reads and assigns a defined order (see parameter_assign).
+            param.raw_tensor = var.read_value()
 
     @staticmethod
     def set_parameter_initial_value(param: rf.Parameter, value: Union[None, Tensor, rf.RawTensorTypes]) -> None:
@@ -1822,6 +1828,29 @@ class TFBackend(Backend[tf.Tensor]):
             # tf.compat.v1.global_variables_initializer() then runs OUR value.
             var._initializer_op = tf_compat.v1.assign(var, value_raw).op
             var._initial_value = value_raw
+
+    @staticmethod
+    def parameter_assign(param: rf.Parameter, value: Tensor, *, op: str = "assign") -> None:
+        """
+        :param param:
+        :param value:
+        :param op: "assign" or "add"
+
+        In graph mode an assign only takes effect when it is run, and its order against reads of the
+        same variable is not defined. So the assign is chained after the value the parameter currently
+        holds, and the parameter then holds the assign result -- later reads get it by data dependency,
+        which is the imperative order the RF API promises.
+        """
+        var = TFBackend._get_param_var(param)
+        value_raw = value.copy_compatible_to_dims_raw(param.dims)
+        with tf.control_dependencies([param.raw_tensor]):
+            if op == "assign":
+                new_value = tf_compat.v1.assign(var, value_raw)
+            elif op == "add":
+                new_value = tf_compat.v1.assign_add(var, value_raw)
+            else:
+                raise ValueError(f"Parameter {param} assign: unsupported op {op!r}")
+        param.raw_tensor = tf.identity(new_value)
 
     @staticmethod
     def set_parameter_trainable(param: rf.Parameter, trainable: bool) -> None:
@@ -1940,10 +1969,22 @@ class TFBackend(Backend[tf.Tensor]):
         res.raw_tensor = raw
         return res
 
+    @classmethod
+    def get_parameter_variable(cls, param: rf.Parameter) -> tf.Variable:
+        """
+        :param param:
+        :return: the tf.Variable behind the parameter
+            (the parameter's raw tensor is a READ of it, see :func:`create_parameters`)
+        """
+        return cls._get_param_var(param)
+
     @staticmethod
     def _get_param_var(param: rf.Parameter) -> tf.Variable:
         var = param.raw_tensor
-        assert isinstance(var, tf.Variable), f"parameter {param} has raw tensor {var!r}, expected tf.Variable"
+        if isinstance(var, tf.Variable):
+            return var
+        var = TFBackend._param_vars.get(RefIdEq(param))
+        assert var is not None, f"parameter {param} has raw tensor {param.raw_tensor!r}, and no variable registered"
         return var
 
 
