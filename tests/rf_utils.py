@@ -405,7 +405,9 @@ def _run_model_tf(extern_data: TensorDict, get_model: rf.GetModelFunc, forward_s
             loss = rf.reduce_sum(loss, axis=loss.dims)
             d_grads = tf.gradients(loss.raw_tensor, [d.raw_tensor for d in data_.values()])
             for (name, data), d_grad_tf in zip(data_.items(), d_grads):
-                assert isinstance(d_grad_tf, tf.Tensor), f"no grad for {name}"
+                assert d_grad_tf is not None, f"no grad for {name}"
+                if isinstance(d_grad_tf, tf.IndexedSlices):
+                    d_grad_tf = tf.convert_to_tensor(d_grad_tf)  # e.g. gather produces a sparse grad
                 d_grad = data.copy_template()
                 d_grad.raw_tensor = d_grad_tf
                 outputs_tf.data[f"{name}_grad"] = d_grad
