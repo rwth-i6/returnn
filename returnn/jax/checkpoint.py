@@ -8,9 +8,10 @@ which is what a parameter-level comparison between the backends needs.
 """
 
 from __future__ import annotations
-from typing import Optional, Dict
+from typing import Optional, Any, Dict
 
 import numpy
+import jax
 import jax.numpy as jnp
 
 from returnn.tensor import Tensor
@@ -21,6 +22,8 @@ from returnn.log import log
 __all__ = [
     "save_checkpoint",
     "load_checkpoint",
+    "save_opt_state",
+    "load_opt_state",
     "load_torch_checkpoint",
     "get_model_params",
     "set_model_params",
@@ -82,6 +85,36 @@ def load_checkpoint(filename: str) -> Dict[str, numpy.ndarray]:
     """
     with numpy.load(filename) as data:
         return {name: data[name] for name in data.files if not name.startswith("_")}
+
+
+def save_opt_state(opt_state: Any, filename: str):
+    """
+    Save the optimizer state (an optax pytree of arrays), so that training can continue exactly.
+
+    Only the leaves are stored: the tree structure follows from the model and the optimizer,
+    so it is rebuilt at load time from a freshly initialized state.
+
+    :param opt_state:
+    :param filename: ``.npz`` file to write
+    """
+    leaves = jax.tree_util.tree_leaves(opt_state)
+    numpy.savez(filename, **{f"_leaf_{i}": numpy.asarray(v) for i, v in enumerate(leaves)})
+    print(f"Saved JAX optimizer state {filename} ({len(leaves)} arrays)", file=log.v3)
+
+
+def load_opt_state(opt_state: Any, filename: str) -> Any:
+    """
+    :param opt_state: a freshly initialized state, giving the tree structure to fill in
+    :param filename: as written by :func:`save_opt_state`
+    :return: the state from the file
+    """
+    leaves, treedef = jax.tree_util.tree_flatten(opt_state)
+    with numpy.load(filename) as data:
+        if len(data.files) != len(leaves):
+            raise ValueError(
+                f"load_opt_state: {filename} has {len(data.files)} arrays, the optimizer state has {len(leaves)}"
+            )
+        return jax.tree_util.tree_unflatten(treedef, [jnp.asarray(data[f"_leaf_{i}"]) for i in range(len(leaves))])
 
 
 def load_torch_checkpoint(filename: str) -> Dict[str, numpy.ndarray]:
