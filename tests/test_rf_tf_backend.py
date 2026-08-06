@@ -127,6 +127,116 @@ def test_scatter_logsumexp_stop_gradient_scope():
     run_model(extern_data, lambda *, epoch, step: rf.Module(), _forward_step, tf_low_level=True)
 
 
+def test_train_step_with_updater():
+    # The core of a TF engine step for a pure-RF model:
+    # extern data as placeholders, get_model + train_step under the TF backend,
+    # the run-ctx losses handed to RETURNN's existing Updater, then a few session.run steps.
+    # This is what the BackendEngine.TensorFlow path has to wire up (see the project plan, item 8).
+    from returnn.config import Config
+
+    # noinspection PyProtectedMember
+    from returnn.frontend import _backend
+
+    time_dim = Dim(Tensor("time", [batch_dim], dtype="int32"))
+    in_dim = Dim(9, name="in")
+    out_dim = Dim(5, name="out")
+    extern_data = TensorDict(
+        {
+            "data": Tensor("data", [batch_dim, time_dim, in_dim], dtype="float32"),
+            "classes": Tensor("classes", [batch_dim, time_dim], dtype="int32", sparse_dim=out_dim),
+        }
+    )
+
+    class _Net(rf.Module):
+        def __init__(self):
+            super().__init__()
+            self.linear = rf.Linear(in_dim, Dim(16, name="hidden"))
+            self.out = rf.Linear(self.linear.out_dim, out_dim)
+
+        def __call__(self, x: Tensor) -> Tensor:
+            return self.out(rf.relu(self.linear(x)))
+
+    def _train_step(*, model: _Net, extern_data: TensorDict) -> Tensor:
+        logits = model(extern_data["data"])
+        loss = rf.cross_entropy(estimated=logits, target=extern_data["classes"], axis=out_dim, estimated_type="logits")
+        return rf.reduce_mean(loss, axis=loss.dims)
+
+    n_batch, n_time = 3, 7
+    rnd = numpy.random.RandomState(42)
+    feed_data = rnd.randn(n_batch, n_time, in_dim.dimension).astype("float32")
+    feed_classes = rnd.randint(0, out_dim.dimension, size=(n_batch, n_time)).astype("int32")
+    feed_sizes = numpy.array([7, 5, 6], dtype="int32")
+
+    config = Config({"optimizer": {"class": "adam"}, "learning_rate": 0.1})
+    _backend.select_backend_tf()
+    losses = []
+    # the batch dim gets a TF tensor below, so restore the global state even when this fails
+    prev_batch_dyn_size_ext = batch_dim.dyn_size_ext
+    try:
+        _train_loop(config, extern_data, _Net, _train_step, losses, feed_data, feed_classes, feed_sizes, time_dim)
+    finally:
+        batch_dim.dyn_size_ext = prev_batch_dyn_size_ext
+        rf.select_backend_torch()
+
+    print("losses:", ["%.4f" % v for v in losses])
+    assert losses[-1] < losses[0] * 0.9, f"loss did not decrease: {losses}"
+
+
+# noinspection PyShadowingNames
+def _train_loop(config, extern_data, net_cls, train_step, losses, feed_data, feed_classes, feed_sizes, time_dim):
+    """the graph + session part of :func:`test_train_step_with_updater`"""
+    import tensorflow as tf
+    import returnn.tf.compat as tf_compat
+    from returnn.config import global_config_ctx
+    from returnn.tf.network import TFNetwork, ExternData
+    from returnn.tf.updater import Updater
+    from returnn.tf.frontend_low_level import TFBackend
+
+    with tf_compat.v1.Graph().as_default(), tf_compat.v1.Session().as_default() as session, global_config_ctx(config):
+        rf.set_random_seed(42)
+        # extern data as placeholders, the way the engine feeds a dataset
+        net = TFNetwork(config=config, extern_data=ExternData(), train_flag=True, name="rf_net")
+        # no BatchInfo: the placeholders are created directly, the legacy batch-info path is not used
+        for key, value in extern_data.data.items():
+            data = net.extern_data.data[key] = value.copy_template()
+            data.raw_tensor = TFBackend.create_placeholder_raw(data)
+            for dim in data.dims:
+                if dim.is_dynamic() and dim.dyn_size_ext is not None and dim.dyn_size_ext.raw_tensor is None:
+                    dim.dyn_size_ext.raw_tensor = TFBackend.create_placeholder_raw(dim.dyn_size_ext)
+
+        # the batch dim gets its size from the data placeholder
+        # (the net-dict path does this via BatchInfo; the RF path needs it for masked reduces)
+        batch_dim.dyn_size_ext = Tensor("batch", dims=(), dtype="int32")
+        batch_dim.dyn_size_ext.raw_tensor = tf.shape(net.extern_data.data["data"].raw_tensor)[0]
+
+        with TFBackend.deferred_parameter_creation():
+            model = net_cls()
+        TFBackend.create_parameters(model)
+        loss = train_step(model=model, extern_data=net.extern_data)
+
+        # the Updater only needs the objective and the trainable vars from the network
+        net.total_loss = loss.raw_tensor
+        net.total_constraints = 0
+        net.total_objective = loss.raw_tensor
+        updater = Updater(config=config, network=net, initial_learning_rate=0.1)
+        updater.set_trainable_vars([TFBackend.get_parameter_variable(p) for _, p in model.named_parameters()])
+        optim_op = updater.get_optim_op()  # creates global_step and the optimizer slots, so before the init
+        session.run(tf_compat.v1.global_variables_initializer())
+        # global_step is an auxiliary var of the network, not in GLOBAL_VARIABLES
+        session.run(tf_compat.v1.variables_initializer(net.get_auxiliary_params()))
+        updater.init_optimizer_vars(session)
+        updater.set_learning_rate(0.1, session=session)
+
+        feed_dict = {
+            net.extern_data.data["data"].raw_tensor: feed_data,
+            net.extern_data.data["classes"].raw_tensor: feed_classes,
+            time_dim.dyn_size_ext.raw_tensor: feed_sizes,
+        }
+        for _ in range(10):
+            loss_v, _ = session.run([loss.raw_tensor, optim_op], feed_dict=feed_dict)
+            losses.append(float(loss_v))
+
+
 def _full_model_setup():
     """
     :return: extern_data, get_model, forward_step, dims.
