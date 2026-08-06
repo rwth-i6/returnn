@@ -12,7 +12,7 @@ import torch
 
 import returnn
 from returnn.log import log
-from returnn.util.basic import RefIdEq, get_fwd_compat_kwargs
+from returnn.util.basic import RefIdEq, get_fwd_compat_kwargs, BehaviorVersion
 import returnn.frontend as rf
 from returnn.torch.frontend.bridge import wrapped_pt_module_to_rf_module
 
@@ -779,6 +779,7 @@ class Updater:
           do get weight decay by default.
           To exclude them as well, pass the blacklist explicitly, e.g.
           ``["torch.nn.LayerNorm", "torch.nn.Embedding", "rf.LayerNorm", "rf.Embedding"]``.
+          Since behavior version 30, the default also includes the RF modules.
 
         :param optim_class: Optimizer class.
         :param optimizer_opts: Optimizer configuration specified by the user. Might be modified inplace here.
@@ -849,8 +850,8 @@ class Updater:
 
         # Distinguish between parameters with and without weight_decay/L2 regularization.
         # Parameters without weight decay: biases + params of modules in the blacklist.
-        # Note that the default blacklist covers only the native torch.nn.LayerNorm/torch.nn.Embedding,
-        # not the RF equivalents (see wrap_user_blacklist_wd_modules).
+        # Note that before behavior version 30, the default blacklist covers only the native
+        # torch.nn.LayerNorm/torch.nn.Embedding, not the RF equivalents (see wrap_user_blacklist_wd_modules).
         wd_named = []
         no_wd_named = []
         for full_param_name, param, module, rf_module in named_params:
@@ -898,8 +899,11 @@ def wrap_user_blacklist_wd_modules(
     and RF modules (e.g. "rf.LayerNorm"), which can be specified as strings or types.
     If ``mods`` is None, returns the default ``(torch.nn.LayerNorm, torch.nn.Embedding)``,
     which covers only the native torch modules.
+    Since behavior version 30, the default also includes :class:`rf.LayerNorm` and :class:`rf.Embedding`.
     """
     if mods is None:
+        if BehaviorVersion.get() >= 30:
+            return torch.nn.LayerNorm, torch.nn.Embedding, rf.LayerNorm, rf.Embedding
         return torch.nn.LayerNorm, torch.nn.Embedding
     assert isinstance(mods, (list, tuple)), f"invalid blacklist_weight_decay_modules {mods!r}"
     res = []
