@@ -1237,6 +1237,34 @@ def test_engine_continue_from_checkpoint():
             numpy.testing.assert_allclose(numpy.asarray(param.raw_tensor), saved[name], rtol=0, atol=0)
 
 
+def test_engine_unsupported_config_opts():
+    """
+    Options which other engines implement and this one does not are rejected, not ignored.
+    """
+    import tempfile
+    import pytest
+    from returnn.jax.engine import Engine
+
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        for opts in [
+            {"accum_grad_multiple_step": 2},
+            {"preload_from_files": {"base": {"filename": "/dev/null"}}, "torch_amp": "bfloat16"},
+            {"chunking": "200:100"},
+            {"forward_step": lambda **_kwargs: None},
+        ]:
+            config, make_dataset = _simple_train_setup(tmp_dir, **opts)
+            dataset = make_dataset()
+            engine = Engine(config=config)
+            with pytest.raises(NotImplementedError) as exc:
+                engine.init_train_from_config(train_data=dataset)
+            for key in opts:
+                assert key in str(exc.value), f"{key} not in {exc.value}"
+
+        # the no-op values of those options do not trip the check
+        config, make_dataset = _simple_train_setup(tmp_dir, accum_grad_multiple_step=1, save_interval=1)
+        Engine(config=config).init_train_from_config(train_data=make_dataset())
+
+
 def test_stft_and_logmel_vs_torch():
     """
     stft, and the log-mel feature extraction the real recipe uses

@@ -94,6 +94,7 @@ class Engine(EngineBase):
         self._train_step_func = config.typed_value("train_step")
         assert self._train_step_func, "train_step not defined in config"
 
+        _check_config_opts_supported(config)
         self.model_filename = config.value("model", None)
         self.epoch = self.get_train_start_epoch(config)
         if self.global_train_step is None:
@@ -217,6 +218,7 @@ class Engine(EngineBase):
             max_seqs=self._batch_opts["max_seqs"],
             epoch=self.epoch,
             device=self._device,
+            **{k: v for k, v in self._batch_opts.items() if k not in ("batch_size", "eval_batch_size", "max_seqs")},
         )
 
     def _create_model(self, *, epoch: int, step: int):
@@ -302,11 +304,81 @@ def _batch_opts_from_config(config: Config) -> Dict[str, Any]:
     :param config:
     :return: the batching options this engine supports
     """
-    return {
+    opts = {
         "batch_size": config.typed_value("batch_size", None) or config.int("batch_size", 10000),
         "eval_batch_size": config.typed_value("eval_batch_size", None),
         "max_seqs": config.int("max_seqs", -1),
     }
+    # Further options of the shared batching layer (Dataset.generate_batches), passed through as given.
+    for key in ("max_seq_length", "min_seq_length", "max_pad_size", "max_total_num_seqs", "seq_drop"):
+        value = config.typed_value(key, None)
+        if value is not None:
+            opts[key] = value
+    return opts
+
+
+# Config options which other engines implement and this one does not (yet),
+# mapped to the value at which they are a no-op.
+# They are rejected rather than ignored: silently dropping e.g. accum_grad_multiple_step
+# or preload_from_files changes what the config means, while the run would still look fine.
+_UnsupportedConfigOpts = {
+    "accum_grad_multiple_step": 1,
+    "apply_cleanup_old_models_to_optim_states": False,
+    "calculate_exp_loss": False,
+    "chunking": None,
+    "min_chunk_size": None,
+    "debug_shell_before_train_loop": False,
+    "default_float_dtype": None,
+    "epoch_end": None,
+    "epoch_start": None,
+    "eval_datasets": None,  # dev and eval are supported, further ones are not
+    "forward_step": None,  # forward / search
+    "model_outputs": None,  # forward / search
+    "forward_auto_split_batch_on_oom": False,
+    "grad_scaler": None,
+    "load_model_post_hooks": None,
+    "log_batch_size": False,
+    "online_shuffle_batches": None,
+    "preload_from_files": None,
+    "pretrain": None,
+    "reset_dev_memory_caches": False,
+    "save_interval": 1,
+    "sort_dataset": None,
+    "stop_on_nonfinite_train_score": None,
+    "tensorboard_opts": None,
+    "use_tensorboard": False,
+    "torch_amp": None,
+    "torch_cuda_graph": None,
+    "torch_dataloader_opts": None,
+    "torch_distributed": None,
+    "torch_log_memory_usage": False,
+    "torch_profile": None,
+}
+
+
+def _check_config_opts_supported(config: Config):
+    """
+    :param config:
+    :raise NotImplementedError: if the config sets an option this engine would ignore
+    """
+    unsupported = []
+    for key, noop_value in sorted(_UnsupportedConfigOpts.items()):
+        if not config.has(key):
+            continue
+        value = config.typed_value(key, None)
+        if value is None:  # not in the typed dict, e.g. an old-style config file
+            value = config.value(key, None)
+        if value is None or value is False or value in ((), [], {}, ""):
+            continue
+        if value == noop_value or value == str(noop_value):
+            continue
+        unsupported.append(f"{key} = {value!r}")
+    if unsupported:
+        raise NotImplementedError(
+            "JAX engine: the config sets options which this engine does not implement:\n  "
+            + "\n  ".join(unsupported)
+            + "\nThey would otherwise be ignored silently, which would change what the config means."
+        )
 
 
 def _load_learning_rate_control(config: Config):
