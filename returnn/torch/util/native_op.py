@@ -306,6 +306,9 @@ class OpMaker:
             #define _ns  // so _ns::something will use the root namespace
             #define TORCH 1
             #define CUDA 0
+            // survives the later `#undef CUDA` (Torch name collision): op code that needs a
+            // compile-time CUDA test must use RETURNN_CUDA (see e.g. norm_block_dim in native_op.py)
+            #define RETURNN_CUDA 0
             #include "{self.support_native_op_cpp_filename}"
 
             TORCH_LIBRARY({self.op_name}, m) {{
@@ -378,10 +381,15 @@ class OpMaker:
 
                     #undef CUDA
                     #define CUDA 1
+                    #undef RETURNN_CUDA
+                    #define RETURNN_CUDA 1  // survives the CUDA undef below
 
                     #include "{self.support_native_op_cpp_filename}"
 
                     #undef CUDA  // name collision in Torch code below
+                    // NOTE: `#if CUDA` in op code appended after this point sees CUDA UNDEFINED (0!)
+                    // -- that silently serialized the normalize kernel (block dim 1) for years.
+                    // Use RETURNN_CUDA instead.
                 """)
             # noinspection PyProtectedMember
             code_cuda_op += self.description._reduce_c_extra_support_code(self.description.c_extra_support_code)
@@ -606,23 +614,38 @@ class _FastBaumWelchScoresAutogradFunc(torch.autograd.Function):
 
 
 def get_ctc_fsa_fast_bw(
-    *, targets: torch.Tensor, seq_lens: torch.Tensor, blank_idx: int, label_loop: bool = True
+    *,
+    targets: torch.Tensor,
+    seq_lens: torch.Tensor,
+    blank_idx: int,
+    label_loop: bool = True,
+    edges_bound: Optional[int] = None,
 ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
     """
-    See :class:`NativeOp.GetCtcFsaFastBwOp`.
+    See :class:`NativeOp.GetCtcFsaFastBwOp` (and :class:`NativeOp.GetCtcFsaFastBwPackedOp`).
     Generates a FSA with CTC topology. The output format is compatible to :func:`fast_baum_welch`.
 
     :param targets: shape (batch,time), int32
     :param seq_lens: shape (batch), int32
     :param blank_idx: vocab index of the blank symbol
     :param label_loop: True -> normal CTC; False -> RNA-like
+    :param edges_bound: total edge count for the PACKED edge layout: seq b owns edge slots
+        ``[offsets[b], offsets[b+1])``, sized ``5*len+5`` = exactly its valid edge count,
+        the rest up to the bound is INF filler.
+        Must be >= ``5*sum(seq_lens) + 5*batch`` (asserted, capture-safe).
+        With a static over-allocated targets buffer (CUDA-graph regime), tie this to the
+        packed targets TOTAL bound: the FastBaumWelch kernels then iterate a content-sized
+        edge list instead of the buffer-sized one (batch * capacity), which otherwise
+        dominates their per-frame cost.
+        None = the rectangular layout over the targets buffer width.
     :return: edges, weights, start_end_states;
         edges is (4,num_edges), int32, edges of the graph (from,to,emission_idx,sequence_idx).
-        weights is (num_edges,), float32. all zero.
+        weights is (num_edges,), float32. zero for the used edges, +inf for filler edges
+        (packed layout; the rectangular layout marks the unused-tail edges the same way).
         start_end_states is (2,batch), int32, (start,end) state idx in FSA.
     """
     assert targets.ndim == 2
-    cached = _ctc_fsa_cache_get(targets, seq_lens, blank_idx, label_loop)
+    cached = _ctc_fsa_cache_get(targets, seq_lens, blank_idx, label_loop, edges_bound)
     if cached is not None:
         return cached
     targets_arg, seq_lens_arg = targets, seq_lens
@@ -639,14 +662,26 @@ def get_ctc_fsa_fast_bw(
     # the op handles shorter lens per seq anyway, only lens beyond the buffer are dangerous
     assert_(seq_lens.max() <= n_time, "get_ctc_fsa_fast_bw seq_lens invalid")
 
-    n_edges = n_batch * (5 * (n_time - 1) + 10)  # see op documentation
-    weights = torch.zeros((n_edges,), device=targets.device)
-    maker = OpMaker(OpDescription.from_gen_base(native_op.GetCtcFsaFastBwOp))
-    op = maker.make_op()
-    edges, start_end_states = op(targets, seq_lens, blank_idx, weights, label_loop)
+    if edges_bound is not None:
+        seq_lens_i32 = seq_lens.to(torch.int32)
+        n_e_per_seq = seq_lens_i32 * 5 + 5  # exact valid count per seq (len 0 uses 2 of its 5 slots)
+        edge_offsets = torch.zeros((n_batch + 1,), dtype=torch.int32, device=targets.device)
+        edge_offsets[1:] = torch.cumsum(n_e_per_seq, dim=0)
+        # a too-small bound would silently DROP edges of the tail seqs -> must trip loudly
+        assert_(edge_offsets[-1] <= edges_bound, "get_ctc_fsa_fast_bw edges_bound too small")
+        weights = torch.zeros((edges_bound,), device=targets.device)
+        maker = OpMaker(OpDescription.from_gen_base(native_op.GetCtcFsaFastBwPackedOp))
+        op = maker.make_op()
+        edges, start_end_states = op(targets, seq_lens_i32, edge_offsets, blank_idx, weights, label_loop)
+    else:
+        n_edges = n_batch * (5 * (n_time - 1) + 10)  # see op documentation
+        weights = torch.zeros((n_edges,), device=targets.device)
+        maker = OpMaker(OpDescription.from_gen_base(native_op.GetCtcFsaFastBwOp))
+        op = maker.make_op()
+        edges, start_end_states = op(targets, seq_lens, blank_idx, weights, label_loop)
 
     res = (edges, weights, start_end_states)
-    _ctc_fsa_cache_set(targets_arg, seq_lens_arg, blank_idx, label_loop, res)
+    _ctc_fsa_cache_set(targets_arg, seq_lens_arg, blank_idx, label_loop, edges_bound, res)
     return res
 
 
@@ -663,19 +698,19 @@ def get_ctc_fsa_fast_bw(
 # so a data_ptr-only key would return a stale FSA.
 # One slot is enough: the heads are evaluated back to back.
 _CtcFsa = Tuple[torch.Tensor, torch.Tensor, torch.Tensor]  # edges, weights, start_end_states
-# targets, seq_lens, blank_idx, label_loop, targets._version, seq_lens._version, fsa
-_CtcFsaCacheEntry = Tuple[torch.Tensor, torch.Tensor, int, bool, int, int, _CtcFsa]
+# targets, seq_lens, blank_idx, label_loop, edges_bound, targets._version, seq_lens._version, fsa
+_CtcFsaCacheEntry = Tuple[torch.Tensor, torch.Tensor, int, bool, Optional[int], int, int, _CtcFsa]
 _ctc_fsa_cache: Optional[_CtcFsaCacheEntry] = None
 
 
 def _ctc_fsa_cache_get(
-    targets: torch.Tensor, seq_lens: torch.Tensor, blank_idx: int, label_loop: bool
+    targets: torch.Tensor, seq_lens: torch.Tensor, blank_idx: int, label_loop: bool, edges_bound: Optional[int]
 ) -> Optional[_CtcFsa]:
     """the cached FSA if it was built for exactly these arguments, else None"""
     if _ctc_fsa_cache is None:
         return None
-    t, sl, bi, ll, t_ver, sl_ver, res = _ctc_fsa_cache
-    if t is targets and sl is seq_lens and bi == blank_idx and ll == label_loop:
+    t, sl, bi, ll, eb, t_ver, sl_ver, res = _ctc_fsa_cache
+    if t is targets and sl is seq_lens and bi == blank_idx and ll == label_loop and eb == edges_bound:
         # noinspection PyProtectedMember
         if t_ver == targets._version and sl_ver == seq_lens._version:
             return res
@@ -684,11 +719,16 @@ def _ctc_fsa_cache_get(
 
 # noinspection PyProtectedMember
 def _ctc_fsa_cache_set(
-    targets: torch.Tensor, seq_lens: torch.Tensor, blank_idx: int, label_loop: bool, res: _CtcFsa
+    targets: torch.Tensor,
+    seq_lens: torch.Tensor,
+    blank_idx: int,
+    label_loop: bool,
+    edges_bound: Optional[int],
+    res: _CtcFsa,
 ) -> None:
     """remember the FSA, so the other heads on the same targets reuse it"""
     global _ctc_fsa_cache
-    _ctc_fsa_cache = (targets, seq_lens, blank_idx, label_loop, targets._version, seq_lens._version, res)
+    _ctc_fsa_cache = (targets, seq_lens, blank_idx, label_loop, edges_bound, targets._version, seq_lens._version, res)
 
 
 def fast_baum_welch(
@@ -743,6 +783,7 @@ def ctc_loss_packed(
     label_loop: bool = True,
     logits_normalize: bool = True,
     blank_index: int = -1,
+    edges_bound: Optional[int] = None,
 ) -> torch.Tensor:
     """
     Packed variant of :func:`ctc_loss`:
@@ -765,6 +806,10 @@ def ctc_loss_packed(
     :param label_loop: (ctc_merge_repeated in tf.nn.ctc_loss)
     :param logits_normalize: apply log_softmax on logits (default)
     :param blank_index: vocab index of the blank symbol
+    :param edges_bound: packed FSA edge layout, see :func:`get_ctc_fsa_fast_bw`.
+        With a static over-allocated targets buffer (CUDA-graph regime), pass
+        ``5 * targets_total_bound + 5 * batch``: the BW kernels then iterate the
+        content-sized edge list instead of batch * capacity edges.
     :return: loss, shape (batch,)
     """
     from .array_ import sequence_mask_time_major
@@ -775,7 +820,11 @@ def ctc_loss_packed(
         blank_index += dim
     assert 0 <= blank_index < dim
     edges, weights, start_end_states = get_ctc_fsa_fast_bw(
-        targets=targets, seq_lens=targets_seq_lens, blank_idx=blank_index, label_loop=label_loop
+        targets=targets,
+        seq_lens=targets_seq_lens,
+        blank_idx=blank_index,
+        label_loop=label_loop,
+        edges_bound=edges_bound,
     )
     seq_mask = sequence_mask_time_major(logits_seq_lens, maxlen=max_seq_len)  # (time,batch), bool
     # static state-buffer size, see the construct_kernel state numbering: (2*n_time+3) states per seq.

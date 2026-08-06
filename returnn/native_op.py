@@ -3620,7 +3620,12 @@ class FastBaumWelchOp(NativeOpGenBase):
     // normalize at each time frame
     // (block-parallel on CUDA; the CPU kernel emulation runs threads sequentially,
     // so block=1 there keeps the old exact sequential behavior)
-    #if CUDA
+    // RETURNN_CUDA, NOT CUDA: the torch build UNDEFINES CUDA before this code
+    // (name collision), which silently selected block dim 1 = a fully SERIAL kernel.
+    #ifndef RETURNN_CUDA
+    #define RETURNN_CUDA CUDA
+    #endif
+    #if RETURNN_CUDA
     const unsigned norm_block_dim = 512;
     #else
     const unsigned norm_block_dim = 1;
@@ -3930,7 +3935,12 @@ class FastBaumWelchPackedOp(NativeOpGenBase):
     // normalize at each time frame
     // (block-parallel on CUDA; the CPU kernel emulation runs threads sequentially,
     // so block=1 there keeps the old exact sequential behavior)
-    #if CUDA
+    // RETURNN_CUDA, NOT CUDA: the torch build UNDEFINES CUDA before this code
+    // (name collision), which silently selected block dim 1 = a fully SERIAL kernel.
+    #ifndef RETURNN_CUDA
+    #define RETURNN_CUDA CUDA
+    #endif
+    #if RETURNN_CUDA
     const unsigned norm_block_dim = 512;
     #else
     const unsigned norm_block_dim = 1;
@@ -5290,16 +5300,44 @@ class GetCtcFsaFastBwOp(NativeOpGenBase):
         (
         int n_batch, int n_time, int n_edges,
         const int32_t* targets, const int32_t* seq_lens,
+        const int32_t* edge_offsets,
         int32_t blank_idx,
         int32_t* edges, int32_t* start_end_states, float* weights
         )
       {
         int idx = threadIdx.x + blockDim.x * blockIdx.x;
-        // n_edges should be n_batch * (5 * (n_time - 1) + 10).
-        assert(n_edges % n_batch == 0);
+        // edge_offsets == NULL: rectangular layout, n_edges == n_batch * (5 * (n_time - 1) + 10),
+        //   seq b owns the slice [b * n_edges/n_batch, (b+1) * n_edges/n_batch)
+        //   and its unused tail (targets buffer wider than the actual len) becomes INF edges.
+        // edge_offsets != NULL (packed layout, (n_batch+1,) ascending): seq b owns
+        //   [edge_offsets[b], edge_offsets[b+1]), sized 5*len+5 = EXACTLY its valid edge count
+        //   (the valid edges are the contiguous rel prefix, see the construction below);
+        //   slots past edge_offsets[n_batch] are global filler (INF weight, from/to 0),
+        //   skipped by all FastBaumWelch kernels on one coalesced load.
         while(idx < n_edges) {
-          int batch_idx = idx / (n_edges / n_batch);
-          int rel_edge_idx = idx % (n_edges / n_batch);
+          int batch_idx, rel_edge_idx;
+          if(edge_offsets) {
+            if(idx >= edge_offsets[n_batch]) {
+              edges[0 * n_edges + idx] = 0; // from
+              edges[1 * n_edges + idx] = 0; // to
+              edges[2 * n_edges + idx] = 0; // emission
+              edges[3 * n_edges + idx] = 0; // batch
+              weights[idx] = INF_F;
+              idx += gridDim.x * blockDim.x;
+              continue;
+            }
+            int lo = 0, hi = n_batch; // find b with edge_offsets[b] <= idx < edge_offsets[b+1]
+            while(lo + 1 < hi) {
+              int mid = (lo + hi) / 2;
+              if(idx >= edge_offsets[mid]) lo = mid; else hi = mid;
+            }
+            batch_idx = lo;
+            rel_edge_idx = idx - edge_offsets[batch_idx];
+          } else {
+            assert(n_edges % n_batch == 0);
+            batch_idx = idx / (n_edges / n_batch);
+            rel_edge_idx = idx % (n_edges / n_batch);
+          }
           int32_t seq_len = seq_lens[batch_idx];
           // state_idx: 0 b, 1 l, 2 b, 3 l, ..., (T-1)*2 b, T*2-1 l, T*2 b, T*2+1 dummy, T*2+2 end
           // i.e. T*2+3 states per seq.
@@ -5562,6 +5600,7 @@ class GetCtcFsaFastBwOp(NativeOpGenBase):
       start_dev_kernel(construct_kernel<true>, (
         n_batch, n_time, n_edges,
         Ndarray_DEV_DATA_int32(targets), Ndarray_DEV_DATA_int32(seq_lens),
+        (const int32_t*) NULL,
         blank_idx,
         Ndarray_DEV_DATA_int32(edges), Ndarray_DEV_DATA_int32(start_end_states), Ndarray_DEV_DATA(weights)
       ));
@@ -5569,6 +5608,148 @@ class GetCtcFsaFastBwOp(NativeOpGenBase):
       start_dev_kernel(construct_kernel<false>, (
         n_batch, n_time, n_edges,
         Ndarray_DEV_DATA_int32(targets), Ndarray_DEV_DATA_int32(seq_lens),
+        (const int32_t*) NULL,
+        blank_idx,
+        Ndarray_DEV_DATA_int32(edges), Ndarray_DEV_DATA_int32(start_end_states), Ndarray_DEV_DATA(weights)
+      ));
+    }
+    HANDLE_LAST_ERROR();
+  """
+
+
+class GetCtcFsaFastBwPackedOp(NativeOpGenBase):
+    # noinspection PyUnresolvedReferences
+    """
+    Like :class:`GetCtcFsaFastBwOp`, but emits the edges PACKED:
+    seq b owns the edge slice ``[edge_offsets[b], edge_offsets[b+1])``,
+    sized ``5 * seq_len + 5`` = exactly its valid edge count
+    (the rectangular op instead sizes every seq by the targets BUFFER width,
+    so with a static over-allocated buffer -- the CUDA-graph regime -- most edges
+    are INF padding that every FastBaumWelch kernel still has to visit each frame).
+    Slots past ``edge_offsets[n_batch]`` (up to the bound ``num_edges``) are INF filler.
+    The FastBaumWelch ops take the edge list as-is, so they iterate only
+    ``num_edges = bound`` edges, with the bound tied to the packed targets total
+    instead of ``n_batch * capacity``.
+
+    inputs:
+      :param targets: shape (batch,time), int32
+      :param seq_lens: shape (batch), int32
+      :param edge_offsets: shape (batch+1,), int32, ascending; cumsum of ``5 * seq_len + 5``
+      :param blank_idx: scalar, int32
+      :param weights: shape (num_edges,), float32 (not used, except for target shape;
+        ``num_edges`` >= ``edge_offsets[batch]``, the excess is filler)
+      :param label_loop: scalar, int32 (casted from bool). True -> normal CTC; False -> RNA-like
+    outputs:
+      :param edges: (4,num_edges), int32, edges of the graph (from,to,emission_idx,sequence_idx)
+      :param start_end_states: (2,batch), int32, (start,end) state idx in FSA
+    """
+
+    in_info = (
+        {
+            "name": "targets",
+            "ndim": 2,
+            "shape": (None, None),
+            "dtype": "int32",
+            "need_contiguous": True,
+            "gradient": "disconnected",
+        },
+        {
+            "name": "seq_lens",
+            "ndim": 1,
+            "shape": (None,),
+            "dtype": "int32",
+            "need_contiguous": True,
+            "gradient": "disconnected",
+        },
+        {
+            "name": "edge_offsets",
+            "ndim": 1,
+            "shape": (None,),
+            "dtype": "int32",
+            "need_contiguous": True,
+            "gradient": "disconnected",
+        },
+        {
+            "name": "blank_idx",
+            "ndim": 0,
+            "shape": (),
+            "dtype": "int32",
+            "need_contiguous": True,
+            "gradient": "disconnected",
+            "host_memory": True,
+        },
+        {
+            "name": "weights",
+            "ndim": 1,
+            "shape": (None,),
+            "dtype": "float32",
+            "need_contiguous": True,
+            "gradient": "disconnected",
+        },
+        {
+            "name": "label_loop",
+            "ndim": 0,
+            "shape": (),
+            "dtype": "int32",
+            "need_contiguous": True,
+            "gradient": "disconnected",
+            "host_memory": True,
+        },
+    )
+    out_info = (
+        {"name": "edges", "ndim": 2, "shape": (4, (4, 0)), "dtype": "int32", "need_contiguous": True},
+        {"name": "start_end_states", "ndim": 2, "shape": (2, (1, 0)), "dtype": "int32", "need_contiguous": True},
+    )
+
+    c_extra_support_code = {
+        "01_kernel": GetCtcFsaFastBwOp.c_extra_support_code["01_kernel"],
+    }
+
+    c_fw_code = """
+    assert(n_inputs == 6);
+    assert(n_outputs == 2);
+    Ndarray* targets = inputs[0];
+    Ndarray* seq_lens = inputs[1];
+    Ndarray* edge_offsets = inputs[2];
+    Ndarray* blank_idx_ref = inputs[3];
+    Ndarray* weights = inputs[4];
+    bool label_loop = (bool) Ndarray_DEV_DATA_int32_scalar(inputs[5]);
+    Ndarray* edges = *outputs[0];
+    Ndarray* start_end_states = *outputs[1];
+    assert_cmp(Ndarray_NDIM(targets), ==, 2);
+    assert_cmp(Ndarray_NDIM(seq_lens), ==, 1);
+    assert_cmp(Ndarray_NDIM(edge_offsets), ==, 1);
+    assert_cmp(Ndarray_NDIM(blank_idx_ref), ==, 0);
+    assert_cmp(Ndarray_NDIM(weights), ==, 1);
+    assert_cmp(Ndarray_NDIM(edges), ==, 2);
+    assert_cmp(Ndarray_NDIM(start_end_states), ==, 2);
+    int n_batch = Ndarray_DIMS(seq_lens)[0];
+    assert_cmp(Ndarray_DIMS(targets)[0], ==, n_batch);
+    assert_cmp(Ndarray_DIMS(edge_offsets)[0], ==, n_batch + 1);
+    assert_cmp(Ndarray_DIMS(start_end_states)[1], ==, n_batch);
+    int n_time = Ndarray_DIMS(targets)[1];
+    int n_edges = Ndarray_DIMS(weights)[0];
+    assert_cmp(Ndarray_DIMS(start_end_states)[0], ==, 2);
+    assert_cmp(Ndarray_DIMS(edges)[0], ==, 4);
+    assert_cmp(Ndarray_DIMS(edges)[1], ==, n_edges);
+
+    Ndarray_memset(Ndarray_DEV_DATA_int32(edges), 255, 4 * n_edges * sizeof(int32_t));
+    Ndarray_memset(Ndarray_DEV_DATA_int32(start_end_states), 255, 2 * n_batch * sizeof(int32_t));
+    int32_t blank_idx = Ndarray_DEV_DATA_int32_scalar(blank_idx_ref);
+
+    if(label_loop) {
+      start_dev_kernel(construct_kernel<true>, (
+        n_batch, n_time, n_edges,
+        Ndarray_DEV_DATA_int32(targets), Ndarray_DEV_DATA_int32(seq_lens),
+        Ndarray_DEV_DATA_int32(edge_offsets),
+        blank_idx,
+        Ndarray_DEV_DATA_int32(edges), Ndarray_DEV_DATA_int32(start_end_states), Ndarray_DEV_DATA(weights)
+      ));
+    } else {
+      start_dev_kernel(construct_kernel<false>, (
+        n_batch, n_time, n_edges,
+        Ndarray_DEV_DATA_int32(targets), Ndarray_DEV_DATA_int32(seq_lens),
+        Ndarray_DEV_DATA_int32(edge_offsets),
         blank_idx,
         Ndarray_DEV_DATA_int32(edges), Ndarray_DEV_DATA_int32(start_end_states), Ndarray_DEV_DATA(weights)
       ));

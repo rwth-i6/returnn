@@ -414,6 +414,43 @@ def test_ctc_loss_packed_over_allocated_bounds():
     assert loss_wide[n_batch:].abs().max().item() == 0.0  # zero-length seqs contribute nothing
     assert_allclose(leaf_wide.grad.numpy(), leaf_tight.grad.numpy(), rtol=1e-5, atol=1e-6)
 
+    # PACKED FSA edge layout (GetCtcFsaFastBwPackedOp): same over-allocated buffers,
+    # but the edge list is content-sized (5*len+5 per seq) under a total-edge bound
+    # instead of batch_bound * (5*(tgt_cap-1)+10). Same loss, same grads.
+    edges_bound = 5 * (sum(tgt_lens) + 40) + 5 * batch_bound  # some slack over the exact total
+    leaf_packed = logits.clone().requires_grad_(True)
+    loss_packed = ctc_loss_packed(
+        logits=leaf_packed,
+        seq_starts=starts_wide,
+        logits_seq_lens=lens_wide,
+        max_seq_len=frame_bound,
+        targets=targets_wide,
+        targets_seq_lens=tgt_lens_wide,
+        blank_index=blank,
+        edges_bound=edges_bound,
+    )
+    loss_packed.sum().backward()
+    assert_allclose(loss_packed[:n_batch].detach().numpy(), loss_tight.detach().numpy(), rtol=1e-5, atol=1e-6)
+    assert loss_packed[n_batch:].abs().max().item() == 0.0
+    assert_allclose(leaf_packed.grad.numpy(), leaf_tight.grad.numpy(), rtol=1e-5, atol=1e-6)
+
+    # ... and with the EXACT edge total (no tail filler at all)
+    exact_bound = int(5 * tgt_lens_wide.sum().item() + 5 * batch_bound)
+    leaf_exact = logits.clone().requires_grad_(True)
+    loss_exact = ctc_loss_packed(
+        logits=leaf_exact,
+        seq_starts=starts_wide,
+        logits_seq_lens=lens_wide,
+        max_seq_len=frame_bound,
+        targets=targets_wide,
+        targets_seq_lens=tgt_lens_wide,
+        blank_index=blank,
+        edges_bound=exact_bound,
+    )
+    loss_exact.sum().backward()
+    assert_allclose(loss_exact[:n_batch].detach().numpy(), loss_tight.detach().numpy(), rtol=1e-5, atol=1e-6)
+    assert_allclose(leaf_exact.grad.numpy(), leaf_tight.grad.numpy(), rtol=1e-5, atol=1e-6)
+
 
 def test_ctc_fsa_batch3_len6_c8():
     """

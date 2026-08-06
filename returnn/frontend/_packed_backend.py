@@ -3672,6 +3672,20 @@ class PackedBackend(Backend[PackedRawTensor]):
             in_lens = input_spatial_dim.dyn_size_ext.copy_compatible_to_dims_raw([batch_dim]).to(device)
             targets_raw = targets_.copy_compatible_to_dims_raw([batch_dim, targets_spatial_dim]).to(device)
             tgt_lens = targets_spatial_dim.dyn_size_ext.copy_compatible_to_dims_raw([batch_dim]).to(device)
+            edges_bound = None
+            if not is_packed(targets):
+                # one-shot diagnostic: the packed-FSA layout only engages for packed targets;
+                # if this fires in a packed training, the targets lost their packing upstream
+                _warn_fallback_once("ctc_loss_edges", "targets not packed -> rectangular FSA edge layout")
+            if is_packed(targets):
+                # packed FSA edge layout: content-sized edge list (5*len+5 edges per seq).
+                # Under the static bound regime this ties the edge count to the packed text
+                # TOTAL bound instead of batch * capacity, which otherwise dominates the
+                # per-frame cost of the BW kernels (they visit every edge every frame).
+                # Eager: get_dim_value() is the actual total -> zero tail slack.
+                edges_bound = 5 * int(targets.raw_tensor.packed_dim.get_dim_value()) + 5 * int(
+                    batch_dim.get_dim_value()
+                )
             loss_raw = torch_native_op.ctc_loss_packed(
                 logits=logits_t,
                 seq_starts=seq_starts,
@@ -3682,6 +3696,7 @@ class PackedBackend(Backend[PackedRawTensor]):
                 label_loop=label_loop,
                 logits_normalize=not logits_normalized,
                 blank_index=blank_index,
+                edges_bound=edges_bound,
             )
             # zero-length seqs (e.g. bound-regime padding seqs): the op returns loss 0 for them
             loss = Tensor("ctc_loss", dims=[batch_dim], dtype="float32")
