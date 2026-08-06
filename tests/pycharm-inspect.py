@@ -187,15 +187,16 @@ def create_stub_dir(pycharm_dir, stub_dir, pycharm_major_version):
     print("Generating Python stubs via helpers/generator3.py...")
     if pycharm_major_version >= 2020:
         # "python-ce" in the Community edition, "python" in the unified PyCharm (2025.3+)
-        generator_path = None
         for plugin_name in ["python", "python-ce"]:
-            generator_path = "%s/plugins/%s/helpers/generator3/__main__.py" % (pycharm_dir, plugin_name)
-            if os.path.exists(generator_path):
+            helpers_dir = "%s/plugins/%s/helpers" % (pycharm_dir, plugin_name)
+            if os.path.exists("%s/generator3/__main__.py" % helpers_dir):
                 break
-        assert generator_path and os.path.exists(generator_path)
-        cmd = [sys.executable, generator_path, "-d", stub_dir]
+        assert helpers_dir and os.path.exists("%s/generator3/__main__.py" % helpers_dir)
+        # -m with cwd=helpers: running __main__.py by path puts the package dir itself on sys.path,
+        # and `import generator3` then fails (generator3 became a package at some point after 2020.2)
+        cmd = [sys.executable, "-m", "generator3", "-d", stub_dir]
         # The stdout can sometimes be very long. Thus we pipe and filter it a bit.
-        proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+        proc = subprocess.Popen(cmd, cwd=helpers_dir, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
         stdout, _ = proc.communicate()
         if proc.returncode != 0:
             raise subprocess.CalledProcessError(returncode=proc.returncode, cmd=cmd, output=stdout)
