@@ -157,7 +157,7 @@ class TorchBackend(Backend[torch.Tensor]):
     @staticmethod
     def get_device(x: Tensor[torch.Tensor]) -> Optional[str]:
         """device"""
-        raw_tensor: torch.Tensor = x.raw_tensor
+        raw_tensor: Optional[torch.Tensor] = x.raw_tensor
         if raw_tensor is None:
             return None
         dev = raw_tensor.device

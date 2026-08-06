@@ -3,7 +3,7 @@ Provides :class:`HDFDataset`.
 """
 
 from __future__ import annotations
-from typing import TYPE_CHECKING, Union
+from typing import TYPE_CHECKING, Optional, Union
 import typing
 import bisect
 import collections
@@ -481,9 +481,9 @@ class StreamParser:
         self.seq_names = seq_names
         self.stream = stream
 
-        self.num_features = None
-        self.feature_type = None  # 1 for sparse, 2 for dense
-        self.dtype = None
+        self.num_features: Optional[int] = None
+        self.feature_type: Optional[int] = None  # 1 for sparse, 2 for dense
+        self.dtype: Optional[str] = None
 
     def get_data(self, seq_name):
         """

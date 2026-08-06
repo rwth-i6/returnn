@@ -299,8 +299,8 @@ class LearningRateControl:
     def get_last_epoch(self, epoch):
         """
         :param int epoch:
-        :return: last epoch before ``epoch`` where we have some epoch data
-        :rtype: int
+        :return: last epoch before ``epoch`` where we have some epoch data, None if there is none
+        :rtype: int|None
         """
         epochs = sorted([e for e in self.epoch_data.keys() if e < epoch])
         if not epochs:
@@ -329,8 +329,9 @@ class LearningRateControl:
         """
         :param int old_epoch:
         :param int new_epoch:
-        :return: relative error between old epoch and new epoch
-        :rtype: float
+        :return: relative error between old epoch and new epoch,
+            None if either epoch has no error value or the error keys differ
+        :rtype: float|None
         """
         old_key, old_error = self.get_epoch_error_key_value(old_epoch)
         new_key, new_error = self.get_epoch_error_key_value(new_epoch)
@@ -430,8 +431,9 @@ class LearningRateControl:
     def get_epoch_error_value(self, epoch):
         """
         :param int epoch:
-        :return: error/score for the specific epoch, given the error-key, see :func:`get_error_key`
-        :rtype: float
+        :return: error/score for the specific epoch, given the error-key, see :func:`get_error_key`,
+            None if there is no error value for that epoch
+        :rtype: float|None
         """
         error = self.get_epoch_error_dict(epoch)
         if not error:
