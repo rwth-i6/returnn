@@ -429,6 +429,113 @@ def test_shape_ops_vs_torch():
         numpy.testing.assert_allclose(got_raw, ref_raw, rtol=1e-6, atol=1e-6, err_msg=f"op {key} differs")
 
 
+def _make_dyn_time(batch: Dim, seq_lens, name="time") -> Dim:
+    """a dynamic time dim with the given seq lens, on the currently selected backend"""
+    lens = rf.convert_to_tensor(numpy.array(seq_lens, dtype="int32"), dims=[batch], dtype="int32")
+    return Dim(lens, name=name)
+
+
+def test_masked_reduce_vs_torch():
+    import torch
+
+    batch = Dim(3, name="batch")
+    feat = Dim(4, name="feat")
+    seq_lens = [6, 3, 5]
+    x_np = numpy.random.RandomState(31).normal(size=(3, 6, 4)).astype("float32")
+
+    def _run(make):
+        time = _make_dyn_time(batch, seq_lens)
+        x = make("x", x_np, [batch, time, feat])
+        return {
+            "sum": rf.reduce_sum(x, axis=time),
+            "mean": rf.reduce_mean(x, axis=time),
+            "max": rf.reduce_max(x, axis=time),
+            "min": rf.reduce_min(x, axis=time),
+            "logsumexp": rf.reduce_logsumexp(x, axis=time),
+            "argmax": rf.reduce_argmax(x, axis=time),
+        }
+
+    rf.select_backend_torch()
+    ref = {
+        k: v.copy_compatible_to_dims_raw(v.dims).detach().cpu().numpy()
+        for k, v in _run(
+            lambda name, arr, d: Tensor(name, dims=d, dtype=arr.dtype.name, raw_tensor=torch.from_numpy(arr))
+        ).items()
+    }
+
+    _rf_jax()
+    got = {k: numpy.asarray(v.copy_compatible_to_dims_raw(v.dims)) for k, v in _run(_make).items()}
+
+    for key in sorted(ref):
+        numpy.testing.assert_allclose(got[key], ref[key], rtol=1e-5, atol=1e-6, err_msg=f"masked reduce {key} differs")
+
+    # the masking must actually matter: an unmasked reduce over the padded frames gives something else
+    _rf_jax()
+    time = _make_dyn_time(batch, seq_lens)
+    x = _make("x", x_np, [batch, time, feat])
+    unmasked = numpy.asarray(rf.reduce_sum(x, axis=time, use_mask=False).copy_compatible_to_dims_raw([batch, feat]))
+    assert not numpy.allclose(unmasked, ref["sum"]), "masking had no effect, so the test proves nothing"
+
+
+def test_gather_scatter_pad_vs_torch():
+    import torch
+
+    batch, time, feat = Dim(3, name="batch"), Dim(5, name="time"), Dim(4, name="feat")
+    vocab = Dim(7, name="vocab")
+    padded_time = Dim(8, name="padded_time")
+    rnd = numpy.random.RandomState(37)
+    x_np = rnd.normal(size=(3, 5, 4)).astype("float32")
+    emb_np = rnd.normal(size=(7, 4)).astype("float32")
+    ids_np = rnd.randint(0, 7, size=(3, 5)).astype("int32")
+    pos_np = rnd.randint(0, 5, size=(3, 5)).astype("int32")
+    seg_np = numpy.array([[0, 0, 1, 1, 2], [2, 2, 0, 1, 1], [1, 0, 0, 2, 2]], dtype="int32")
+    segments = Dim(3, name="segments")
+
+    def _run(make):
+        x = make("x", x_np, [batch, time, feat])
+        emb = make("emb", emb_np, [vocab, feat])
+        ids = Tensor("ids", dims=[batch, time], dtype="int32", sparse_dim=vocab, raw_tensor=make("i", ids_np, None))
+        pos = Tensor("pos", dims=[batch, time], dtype="int32", sparse_dim=time, raw_tensor=make("p", pos_np, None))
+        seg = Tensor("seg", dims=[batch, time], dtype="int32", sparse_dim=segments, raw_tensor=make("s", seg_np, None))
+        return {
+            # embedding lookup: indices carry no dim of the source
+            "embed": rf.gather(emb, indices=ids, axis=vocab),
+            # per-batch reordering: indices share the batch dim with the source
+            "reorder": rf.gather(x, indices=pos, axis=time),
+            # single index
+            "first": rf.gather(x, indices=0, axis=time),
+            "scatter_sum": rf.scatter(x, indices=seg, indices_dim=time, mode="sum", fill_value=0, out_dim=segments),
+            "pad": rf.pad(
+                x, axes=[time], padding=[(1, 2)], out_dims=[padded_time], handle_dynamic_dims=False, value=0.5
+            )[0],
+        }
+
+    def _raw_torch(name, arr, dims):
+        return (
+            torch.from_numpy(arr)
+            if dims is None
+            else Tensor(name, dims=dims, dtype=arr.dtype.name, raw_tensor=torch.from_numpy(arr))
+        )
+
+    def _raw_jax(name, arr, dims):
+        return jnp.asarray(arr) if dims is None else _make(name, arr, dims)
+
+    rf.select_backend_torch()
+    ref = {
+        k: (v.copy_compatible_to_dims_raw(v.dims).detach().cpu().numpy(), v.dims) for k, v in _run(_raw_torch).items()
+    }
+
+    _rf_jax()
+    got = {k: (numpy.asarray(v.copy_compatible_to_dims_raw(v.dims)), v.dims) for k, v in _run(_raw_jax).items()}
+
+    assert set(got) == set(ref)
+    for key in sorted(ref):
+        ref_raw, ref_dims = ref[key]
+        got_raw, got_dims = got[key]
+        assert got_dims == ref_dims, f"{key}: dims {got_dims} vs {ref_dims}"
+        numpy.testing.assert_allclose(got_raw, ref_raw, rtol=1e-6, atol=1e-6, err_msg=f"op {key} differs")
+
+
 def test_device():
     _rf_jax()
     x = _make("x", numpy.zeros((2,), dtype="float32"), [Dim(2, name="d")])

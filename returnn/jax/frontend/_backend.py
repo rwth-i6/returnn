@@ -329,17 +329,42 @@ class JaxBackend(Backend[jax.Array]):
         axis: Union[Dim, Sequence[Dim]],
         use_mask: bool = True,
     ) -> Tensor[jax.Array]:
-        """reduce"""
+        """
+        :param source:
+        :param axis: dims to reduce over
+        :param mode: "sum", "max", "min", "mean", "logsumexp", "any", "all", "argmin", "argmax"
+        :param use_mask: mask out the padded frames of a dynamic axis first
+        :return: reduced tensor
+        """
         assert mode in Backend._AllowedReduceModes
-        if use_mask:
-            # Masked reduce needs the seq mask, which comes with the array ops.
-            if isinstance(axis, Dim):
-                assert not axis.need_masking(), "RF JaxBackend: masked reduce not implemented yet"
-            else:
-                assert all(not dim.need_masking() for dim in axis), "RF JaxBackend: masked reduce not implemented yet"
         axes = [axis] if isinstance(axis, Dim) else list(axis)
         raw_axes = [source.get_axis_from_description(dim) for dim in axes]
         res_dims = [dim for i, dim in enumerate(source.dims) if i not in raw_axes]
+        correction_factor = None
+        if use_mask and any(dim.need_masking() for dim in axes):
+            source = source.copy()
+            dtype = source.raw_tensor.dtype
+            # replace the padded frames by the neutral element of the reduction
+            if mode in ("max", "logsumexp", "argmax"):
+                mask_value = _dtype_min(dtype)
+            elif mode in ("min", "argmin"):
+                mask_value = _dtype_max(dtype)
+            elif mode == "sum":
+                mask_value = 0
+            elif mode == "mean":
+                # summing over the padded frames as 0 and dividing by the full width is off by exactly this factor
+                mask_value = 0
+                correction_factor = rf.masked_fraction_of_shape(axes, inverse=True, device=source.device)
+            elif mode == "all":
+                mask_value = True
+            elif mode == "any":
+                mask_value = False
+            else:
+                raise NotImplementedError(f"RF JaxBackend: reduce_{mode} with masking on {source!r}")
+            for dim in axes:
+                if dim.need_masking():
+                    mask = source.get_sequence_mask_broadcast(dim)
+                    source.raw_tensor = jnp.where(mask, source.raw_tensor, jnp.asarray(mask_value, dtype=dtype))
         if mode in ("argmin", "argmax"):
             assert len(raw_axes) == 1, f"RF JaxBackend: {mode} needs exactly one axis, got {axes}"
             raw_result = getattr(jnp, mode)(source.raw_tensor, axis=raw_axes[0])
@@ -353,6 +378,8 @@ class JaxBackend(Backend[jax.Array]):
             raw_result = func(source.raw_tensor, axis=tuple(raw_axes))
             out_dtype = "bool" if mode in ("any", "all") else source.dtype
             sparse_dim = source.sparse_dim
+        if correction_factor is not None:
+            raw_result = raw_result * correction_factor.copy_compatible_to_dims_raw(res_dims)
         return Tensor(
             name=f"reduce_{mode}",
             raw_tensor=raw_result,
@@ -360,6 +387,223 @@ class JaxBackend(Backend[jax.Array]):
             dtype=out_dtype,
             sparse_dim=sparse_dim,
         )
+
+    @staticmethod
+    def gather(source: Tensor, *, indices: Union[Tensor, int], axis: Dim, clip_to_valid: bool = False) -> Tensor:
+        """
+        :param source:
+        :param indices: index tensor, or a single index
+        :param axis: the dim of source to index into
+        :param clip_to_valid: clip the indices into the valid range of axis first
+        :return: source with axis replaced by the dims of indices
+        """
+        axis_int = source.get_axis_from_description(axis, allow_int=False)
+        if isinstance(indices, int):
+            out = Tensor(
+                "gather",
+                dims=source.dims[:axis_int] + source.dims[axis_int + 1 :],
+                dtype=source.dtype,
+                sparse_dim=source.sparse_dim,
+            )
+            if source.feature_dim and source.feature_dim in out.dims:
+                out.feature_dim = source.feature_dim
+            index = indices
+            if clip_to_valid and index != 0:
+                index = min(max(index, 0), source.raw_tensor.shape[axis_int] - 1)
+            out.raw_tensor = jax.lax.index_in_dim(source.raw_tensor, index, axis=axis_int, keepdims=False)
+            return out
+        assert isinstance(indices, Tensor), f"gather: unsupported type for indices: {type(indices)}"
+        if clip_to_valid:
+            if axis.dyn_size_ext is not None:
+                indices = rf.clip_by_value(
+                    indices,
+                    0,
+                    rf.relu(rf.cast(axis.get_dyn_size_ext_for_device(indices.device), indices.dtype) - 1),
+                    allow_broadcast_all_sources=True,
+                )
+            else:
+                indices = indices.copy()
+                indices.raw_tensor = jnp.clip(indices.raw_tensor, 0, source.raw_tensor.shape[axis_int] - 1)
+        index_own_dims = [dim for dim in indices.dims if dim not in source.dims or dim == axis]
+        out = Tensor(
+            "gather",
+            dims=list(source.dims[:axis_int]) + index_own_dims + list(source.dims[axis_int + 1 :]),
+            dtype=source.dtype,
+            sparse_dim=source.sparse_dim,
+        )
+        if source.feature_dim and source.feature_dim in out.dims:
+            out.feature_dim = source.feature_dim
+        if indices.dims_set.intersection(source.dims_set - {axis}):
+            # indices vary along dims of the source: one index per (batch, ...) position, i.e. take_along_axis.
+            # Bring indices into exactly the source's layout, with axis replaced by the index's own dims.
+            indices = indices.copy_compatible_to(out, check_dtype=False, check_sparse=False, unbroadcast=True)
+            if len(index_own_dims) == 1:
+                index_own_dims_flat = index_own_dims[0]
+            elif len(index_own_dims) == 0:
+                index_own_dims_flat = Dim(1, name="dummy")
+                indices = indices.copy_add_dim_by_tag(index_own_dims_flat, unbroadcast=True, axis=axis_int)
+            else:
+                indices, index_own_dims_flat = rf.merge_dims(indices, dims=index_own_dims)
+            index_ext_dims = list(source.dims)
+            index_ext_dims[axis_int] = index_own_dims_flat
+            assert indices.dims == tuple(index_ext_dims)
+            out_raw = jnp.take_along_axis(
+                source.raw_tensor, indices.raw_tensor.astype(jnp.int32), axis=axis_int, mode="clip"
+            )
+            if len(index_own_dims) == 0:
+                out_raw = jnp.squeeze(out_raw, axis=axis_int)
+            elif len(index_own_dims) > 1:
+                out_raw = jnp.reshape(out_raw, [d.get_dim_value() for d in out.dims])
+            out.raw_tensor = out_raw
+        else:
+            # indices are independent of the source's other dims: a plain take along axis
+            out_raw = jnp.take(
+                source.raw_tensor, indices.raw_tensor.astype(jnp.int32).reshape(-1), axis=axis_int, mode="clip"
+            )
+            out_shape = (
+                source.raw_tensor.shape[:axis_int]
+                + tuple(indices.raw_tensor.shape)
+                + source.raw_tensor.shape[axis_int + 1 :]
+            )
+            out.raw_tensor = jnp.reshape(out_raw, out_shape)
+        return out
+
+    @staticmethod
+    def scatter(
+        source: Tensor,
+        *,
+        indices: Tensor,
+        indices_dim: Union[Dim, Sequence[Dim]],
+        mode: str,
+        fill_value: Union[int, float],
+        out_dim: Union[Dim, Sequence[Dim]],
+    ) -> Tensor:
+        """
+        Scatters into a new tensor filled with fill_value.
+        Duplicated indices are combined by mode.
+
+        :param source: [batch_dims..., indices_dim(s)..., feature_dims...]
+        :param indices: [batch_dims..., indices_dim(s)...] -> out_dim
+        :param indices_dim:
+        :param mode: "sum", "max", "min"
+        :param fill_value: must be the neutral element of mode
+            (JAX's scatter always combines with what is already there, so a non-neutral fill would leak in)
+        :param out_dim:
+        :return: [batch_dims..., out_dim, feature_dims...]
+        """
+        indices_dim = [indices_dim] if isinstance(indices_dim, Dim) else list(indices_dim)
+        assert indices.dtype.startswith("int")
+        if isinstance(out_dim, Dim):
+            out_dim = [out_dim]
+        else:
+            out_dim = list(out_dim)
+        out_flat_dim = out_dim[0]
+        for dim in out_dim[1:]:
+            out_flat_dim = out_flat_dim * dim
+        batch_dims = indices.remaining_dims(indices_dim)
+        feature_dims = source.remaining_dims(batch_dims + indices_dim)
+        if len(indices_dim) > 1:
+            indices, indices_flat_dim = rf.merge_dims(indices, dims=indices_dim)
+            source, _ = rf.merge_dims(source, dims=indices_dim, out_dim=indices_flat_dim)
+        else:
+            indices_flat_dim = indices_dim[0]
+        source = source.copy_transpose(batch_dims + [indices_flat_dim] + feature_dims)
+        indices = indices.copy_compatible_to(
+            source, unbroadcast=True, add_dims=True, check_sparse=False, check_dtype=False
+        )
+        out_dims = batch_dims + [out_flat_dim] + feature_dims
+        out_shape = [d.get_dim_value() for d in out_dims]
+        # flatten to [batch, indices, feature] so one advanced-index scatter covers every case
+        batch_size = int(numpy.prod([d.get_dim_value() for d in batch_dims], dtype="int64")) if batch_dims else 1
+        feature_size = int(numpy.prod([d.get_dim_value() for d in feature_dims], dtype="int64")) if feature_dims else 1
+        src_raw = jnp.reshape(source.raw_tensor, (batch_size, -1, feature_size))
+        idx_raw = jnp.reshape(indices.raw_tensor.astype(jnp.int32), (batch_size, -1, feature_size))
+        out_raw = jnp.full((batch_size, out_flat_dim.get_dim_value(), feature_size), fill_value, dtype=src_raw.dtype)
+        b_idx = jnp.arange(batch_size)[:, None, None]
+        f_idx = jnp.arange(feature_size)[None, None, :]
+        if mode == "sum":
+            assert fill_value == 0, f"RF JaxBackend: scatter sum needs fill_value 0, got {fill_value}"
+            out_raw = out_raw.at[b_idx, idx_raw, f_idx].add(src_raw)
+        elif mode == "max":
+            out_raw = out_raw.at[b_idx, idx_raw, f_idx].max(src_raw)
+        elif mode == "min":
+            out_raw = out_raw.at[b_idx, idx_raw, f_idx].min(src_raw)
+        else:
+            raise ValueError(f"RF JaxBackend: scatter mode {mode!r} not supported")
+        res = Tensor(
+            "scatter",
+            dims=out_dims,
+            dtype=source.dtype,
+            sparse_dim=source.sparse_dim,
+            raw_tensor=jnp.reshape(out_raw, out_shape),
+        )
+        if len(out_dim) > 1:
+            res = rf.split_dims(res, axis=out_flat_dim, dims=out_dim)
+        return res
+
+    @staticmethod
+    def pad(
+        source: Tensor,
+        *,
+        axes: Sequence[Dim],
+        padding: Sequence[Tuple[Union[Dim, int, Tensor], Union[Dim, int, Tensor]]],
+        out_dims: Sequence[Dim],
+        handle_dynamic_dims: bool,
+        mode: str = "constant",
+        value: Optional[Union[rf.RawTensorTypes, Tensor]] = None,
+    ) -> Tensor:
+        """
+        :param source:
+        :param axes: dims to pad
+        :param padding: (left, right) per axis
+        :param out_dims: resulting dims, per axis
+        :param handle_dynamic_dims: re-mask the padded-in frames of a dynamic axis afterwards
+        :param mode: "constant", "reflect", "replicate" or "circular"
+        :param value: for mode "constant"
+        :return: padded tensor
+        """
+        assert len(out_dims) == len(axes) == len(padding)
+        assert not isinstance(value, Tensor) or value.dims == (), (
+            "RF JaxBackend: pad with a non-scalar value not implemented"
+        )
+        raw_pad = []
+        for dim in source.dims:
+            if dim not in axes:
+                raw_pad.append((0, 0))
+                continue
+            left, right = padding[axes.index(dim)]
+            raw_pad.append((_pad_amount(left, handle_dynamic_dims), _pad_amount(right, handle_dynamic_dims)))
+        out = source.copy_template_new_dim_tags(
+            [out_dims[axes.index(dim)] if dim in axes else dim for dim in source.dim_tags], keep_special_axes=True
+        )
+        value_ = value.raw_tensor if isinstance(value, Tensor) else value
+        jnp_mode = _PadModeMap.get(mode, mode)
+        if jnp_mode == "constant":
+            out.raw_tensor = jnp.pad(source.raw_tensor, raw_pad, mode="constant", constant_values=value_ or 0)
+        else:
+            out.raw_tensor = jnp.pad(source.raw_tensor, raw_pad, mode=jnp_mode)
+        if handle_dynamic_dims and any(dim.need_masking() for dim in out_dims):
+            if all(right == 0 for _, right in raw_pad) and mode != "circular":
+                return out  # nothing padded on the right, so no valid frame moved
+            assert mode == "constant", (
+                f"RF JaxBackend: pad mode {mode} not implemented with dynamic dims and handle_dynamic_dims=True"
+            )
+            for out_dim, middle, (left, right) in zip(out_dims, axes, padding):
+                if not (middle.need_masking() or (isinstance(left, Dim) and left.need_masking())):
+                    continue
+                if isinstance(left, Dim):
+                    left = left.get_size_tensor(device=out.device)
+                mask = rf.compare_bc(
+                    rf.range_over_dim(out_dim, device=out.device),
+                    "<",
+                    left + middle.get_size_tensor(device=out.device),
+                )
+                out.raw_tensor = jnp.where(
+                    mask.copy_compatible_to_dims_raw(out.dims),
+                    out.raw_tensor,
+                    jnp.asarray(value_ or 0, dtype=out.raw_tensor.dtype),
+                )
+        return out
 
     # --- shapes and indexing
 
@@ -1069,6 +1313,43 @@ _ActivationFuncMap = {
 }
 
 _ReduceModeMap = {"sum": jnp.sum, "max": jnp.max, "min": jnp.min, "mean": jnp.mean, "any": jnp.any, "all": jnp.all}
+
+
+_PadModeMap = {"replicate": "edge", "circular": "wrap"}
+
+
+def _dtype_min(dtype) -> Union[int, float]:
+    """
+    :param dtype:
+    :return: smallest representable value, i.e. the neutral element of max
+    """
+    return jnp.finfo(dtype).min if jnp.issubdtype(dtype, jnp.floating) else jnp.iinfo(dtype).min
+
+
+def _dtype_max(dtype) -> Union[int, float]:
+    """
+    :param dtype:
+    :return: largest representable value, i.e. the neutral element of min
+    """
+    return jnp.finfo(dtype).max if jnp.issubdtype(dtype, jnp.floating) else jnp.iinfo(dtype).max
+
+
+def _pad_amount(amount: Union[Dim, int, Tensor], handle_dynamic_dims: bool) -> int:
+    """
+    :param amount: one side of one axis' padding
+    :param handle_dynamic_dims:
+    :return: the amount as a static int (JAX shapes cannot depend on data)
+    """
+    if isinstance(amount, Dim):
+        if handle_dynamic_dims:
+            assert not amount.need_masking(), f"pad: {amount} needs masking, not supported currently"
+        return amount.get_dim_value()
+    if isinstance(amount, Tensor):
+        assert amount.dims == (), f"RF JaxBackend: pad amount {amount} must be scalar and static"
+        return int(amount.raw_tensor)
+    if isinstance(amount, int):
+        return amount
+    raise TypeError(f"pad: invalid amount {amount!r}")
 
 
 def _raw(value: Union[float, Tensor], dtype) -> jax.Array:
