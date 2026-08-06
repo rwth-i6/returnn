@@ -115,7 +115,6 @@ It depends on whether the full network is recurrent or not.
 
 from __future__ import annotations
 
-import contextlib
 import sys
 import typing
 from typing import Optional, Dict
@@ -311,78 +310,21 @@ class FeedDictDataProvider(DataProviderBase):
                 return None
             if step > 1 and (cur_batch_idx - start) % step != 0:
                 return None
-        from returnn.datasets.basic import Batch, shapes_for_batches
+        from returnn.datasets.basic import Batch
+        from returnn.engine.batch import batch_to_raw_dict
 
         assert isinstance(batch, Batch)
-        # In Returnn with Theano, we usually have the shape (time,batch,feature).
-        # In TensorFlow, the default is (batch,time,feature).
-        # This is also what we use here, i.e. batch_dim_first=True.
-        # This must match the Data specification in TFNetwork.ExternData.init_from_config().
-        shapes = shapes_for_batches(
-            [batch], data_keys=self.data_keys, extern_data=self.extern_data, enforce_min_len1=self.enforce_min_len1
+        # The assembly itself is backend independent and shared with the other engines.
+        # Shape convention here is (batch, time, feature),
+        # matching the Data specification in TFNetwork.ExternData.init_from_config().
+        return batch_to_raw_dict(
+            batch,
+            dataset=self.dataset,
+            extern_data=self.extern_data,
+            data_keys=self.data_keys,
+            enforce_min_len1=self.enforce_min_len1,
+            exclude_data_key=self._exclude_data_key,
         )
-        data = {
-            k: numpy.zeros(shape=shapes[k], dtype=self.extern_data.data[k].dtype)
-            for k in self.data_keys
-            if self.extern_data.data[k].dtype != "string"
-        }
-        # Numpy cannot handle "string" dtype. Just make it a list[str], which is what TF can handle.
-        data.update({k: [""] * batch.num_slices for k in self.data_keys if self.extern_data.data[k].dtype == "string"})
-        data.update({"seq_idx": [-1] * batch.num_slices, "seq_tag": [""] * batch.num_slices})
-        seq_lens = {
-            k: numpy.zeros(shape=(shapes[k][0],), dtype=self.extern_data.data[k].size_dtype)
-            for k in self.data_keys
-            if self.extern_data.data[k].get_dynamic_axes()
-        }
-        self.dataset.load_seqs(batch.start_seq, batch.end_seq)
-        from returnn.util.basic import slice_pad_zeros
-
-        with self.dataset.lock or contextlib.nullcontext():
-            for seq in batch.seqs:
-                o = seq.batch_frame_offset
-                q = seq.batch_slice
-                length = seq.frame_length
-                # input-data, input-index will also be set in this loop. That is data-key "data".
-                for k in self.data_keys:
-                    # Some special cases first, such as "seq_idx" and "seq_tag".
-                    # See also :func:`TFNetwork.get_extern_data`.
-                    if k in ["seq_idx", "seq_tag"]:
-                        continue  # handled below. will always be added
-                    if self._exclude_data_key(k):
-                        continue
-                    data_ = self.extern_data.data[k]
-                    # Do not rely on time_dim_axis but check for any dynamic axes.
-                    dyn_axes = data_.get_dynamic_axes()
-                    assert len(dyn_axes) <= 1, f"unexpected dynamic axes in data {k!r} {data_}"
-                    if dyn_axes:
-                        if length.get(k) in [0, None]:
-                            continue
-                    v = self.dataset.get_data(seq.seq_idx, k)
-                    if dyn_axes:
-                        v = slice_pad_zeros(v, begin=seq.seq_start_frame[k], end=seq.seq_end_frame[k])
-                        ls = v.shape[0]
-                        if ls != length[k]:
-                            raise Exception(
-                                "got shape[0]: %i, expected: %i, start/end: %r/%r, seq_idx: %i, seq len: %r"
-                                % (
-                                    ls,
-                                    length[k],
-                                    seq.seq_start_frame,
-                                    seq.seq_end_frame,
-                                    seq.seq_idx,
-                                    self.dataset.get_seq_length(seq.seq_idx),
-                                )
-                            )
-                        data[k][q, o[k] : o[k] + ls] = v
-                        seq_lens[k][q] = max(seq_lens[k][q], o[k] + ls)
-                    else:  # no time-axis
-                        data[k][q] = v
-                data["seq_idx"][q] = seq.seq_idx
-                data["seq_tag"][q] = self.dataset.get_tag(seq.seq_idx)
-        for k in seq_lens.keys():
-            data["%s_seq_lens" % k] = seq_lens[k]
-        data["batch_dim"] = batch.num_slices
-        return data
 
     def _thread_main(self):
         try:
