@@ -22,8 +22,12 @@ jobs:
         tf-version:
           - 2.10.0
         jax-version:
-          # Newest JAX for Python 3.10; the tests run a newer one (see rf-jax-tests).
-          - 0.6.2
+          # TF 2.10 imports JAX when it is installed (tensorflow/lite/python/util.py),
+          # so here JAX must be importable next to it, not merely present:
+          # newer JAX needs np.dtypes (NumPy >= 1.25) while ESPnet pins numpy==1.23.5,
+          # and JAX dropped xla_computation (which that TF import wants) in 0.4.38.
+          # 0.4.30 satisfies both. The tests run a current JAX (see rf-jax-tests).
+          - 0.4.30
 
     steps:
       - uses: actions/checkout@v4
@@ -51,7 +55,6 @@ jobs:
             --torch ${{ matrix.torch-version }} \
             --tf ${{ matrix.tf-version }} \
             --jax ${{ matrix.jax-version }} \
-            --jax-no-deps 1 \
             --espnet 1 \
             --hf-datasets 1
 
