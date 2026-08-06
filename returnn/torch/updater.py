@@ -765,7 +765,14 @@ class Updater:
           or None to use the default logic.
         - ``weight_decay_modules_blacklist``: list of modules types which should not get weight decay.
           Those can be RF modules or pure PyTorch modules.
-          The types can be specified as string (e.g. ``"torch.nn.LayerNorm"``) or as the type itself.
+          The types can be specified as string (e.g. ``"torch.nn.LayerNorm"``, ``"rf.LayerNorm"``)
+          or as the type itself.
+          The default (when not specified) is ``(torch.nn.LayerNorm, torch.nn.Embedding)``,
+          which covers only the native torch modules, not the RF equivalents:
+          params of :class:`rf.LayerNorm` / :class:`rf.Embedding` (e.g. the LayerNorm ``scale``)
+          do get weight decay by default.
+          To exclude them as well, pass the blacklist explicitly, e.g.
+          ``["torch.nn.LayerNorm", "torch.nn.Embedding", "rf.LayerNorm", "rf.Embedding"]``.
 
         :param optim_class: Optimizer class.
         :param optimizer_opts: Optimizer configuration specified by the user. Might be modified inplace here.
@@ -835,7 +842,9 @@ class Updater:
             named_params = self._named_params_with_modules()
 
         # Distinguish between parameters with and without weight_decay/L2 regularization.
-        # Parameters without weight decay: biases + LayerNorm/Embedding layers.
+        # Parameters without weight decay: biases + params of modules in the blacklist.
+        # Note that the default blacklist covers only the native torch.nn.LayerNorm/torch.nn.Embedding,
+        # not the RF equivalents (see wrap_user_blacklist_wd_modules).
         wd_named = []
         no_wd_named = []
         for full_param_name, param, module, rf_module in named_params:
@@ -878,9 +887,11 @@ def wrap_user_blacklist_wd_modules(
     mods: Optional[Sequence[Union[str, Type[rf.Module], Type[torch.nn.Module]]]],
 ) -> Tuple[type, ...]:
     """
-    Wraps the user-provided blacklist_weight_decay_modules into a tuple of types.
+    Wraps the user-provided ``weight_decay_modules_blacklist`` into a tuple of types.
     This supports both pure PyTorch modules (e.g. "torch.nn.LayerNorm")
     and RF modules (e.g. "rf.LayerNorm"), which can be specified as strings or types.
+    If ``mods`` is None, returns the default ``(torch.nn.LayerNorm, torch.nn.Embedding)``,
+    which covers only the native torch modules.
     """
     if mods is None:
         return torch.nn.LayerNorm, torch.nn.Embedding
