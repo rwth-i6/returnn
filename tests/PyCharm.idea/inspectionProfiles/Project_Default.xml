@@ -11,7 +11,11 @@
         </value>
       </option>
     </inspection_tool>
-    <inspection_tool class="PyPackageRequirementsInspection" enabled="true" level="WARNING" enabled_by_default="true">
+    <!-- Disabled: in PyCharm 2026.2 this tool NPEs per file (normalizePackageName(null) in
+         DeclaredButNotInstalledPackagesChecker), and one throwing tool aborts the WHOLE
+         per-file inspection batch, silently emptying the report. Its results were never
+         counted anyway (see inspect_class_not_counted in pycharm-inspect.py). -->
+    <inspection_tool class="PyPackageRequirementsInspection" enabled="false" level="WARNING" enabled_by_default="false">
     <option name="ignoredPackages">
       <value>
         <list size="22">

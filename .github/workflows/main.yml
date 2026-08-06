@@ -67,7 +67,7 @@ jobs:
 
       - name: Run PyCharm inspect
         run: |
-          tests/pycharm-inspect.py
+          tests/pycharm-inspect.py --install_py_deps
 
   base-tests:
     runs-on: ubuntu-latest
