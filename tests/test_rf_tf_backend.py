@@ -85,6 +85,107 @@ def test_linear_softmax():
     run_model(extern_data, lambda *, epoch, step: _Net(), _forward_step, tf_low_level=True)
 
 
+def test_full_model():
+    # The model of tests/test_rf_packed.py::test_full_model_packed_traced_program_replay, padded:
+    # Conformer encoder (conv subsample, rel-pos self-att, depthwise conv) + Transformer decoder
+    # + aux CTC head, with both losses. Marking the total as "loss" also compares the input grads.
+    from returnn.frontend.encoder.conformer import (
+        ConformerEncoder,
+        ConformerEncoderLayer,
+        ConformerConvSubsample,
+        ConformerPositionwiseFeedForward,
+    )
+    from returnn.frontend.decoder.transformer import TransformerDecoder, FeedForwardGated
+
+    time_dim = Dim(Tensor("time", [batch_dim], dtype="int32"))
+    target_time_dim = Dim(Tensor("target_time", [batch_dim], dtype="int32"))
+    in_dim = Dim(8, name="feat")
+    vocab_dim = Dim(11, name="vocab")
+    wb_vocab_dim = Dim(12, name="vocab_wb")
+    enc_dim = Dim(32, name="enc")
+    extern_data = TensorDict(
+        {
+            "data": Tensor("data", [batch_dim, time_dim, in_dim], dtype="float32"),
+            "classes": Tensor("classes", [batch_dim, target_time_dim], dtype="int32", sparse_dim=vocab_dim),
+        }
+    )
+
+    class _Net(rf.Module):
+        def __init__(self):
+            super().__init__()
+            self.encoder = ConformerEncoder(
+                in_dim,
+                enc_dim,
+                ff_dim=Dim(24, name="enc-ff"),
+                input_layer=ConformerConvSubsample(
+                    in_dim,
+                    out_dims=[Dim(4, name="conv1"), Dim(4, name="conv2"), Dim(4, name="conv3")],
+                    filter_sizes=[(3, 3), (3, 3), (3, 3)],
+                    pool_sizes=[(1, 2)],
+                    strides=[(1, 1), (3, 1), (2, 1)],
+                ),
+                encoder_layer=rf.build_dict(
+                    ConformerEncoderLayer,
+                    ff=rf.build_dict(
+                        ConformerPositionwiseFeedForward, activation=rf.build_dict(rf.relu_square), with_bias=False
+                    ),
+                    num_heads=2,
+                    conv_norm_opts={"use_mask": True},
+                ),
+                num_layers=2,
+                dropout=0.0,
+                att_dropout=0.0,
+            )
+            self.decoder = TransformerDecoder(
+                enc_dim,
+                vocab_dim,
+                Dim(32, name="dec"),
+                num_layers=2,
+                num_heads=2,
+                norm=rf.build_dict(rf.RMSNorm),
+                ff=rf.build_dict(FeedForwardGated),
+                layer_opts=dict(self_att=rf.build_dict(rf.RotaryPosCausalSelfAttention, with_bias=False)),
+                dropout=0.0,
+                att_dropout=0.0,
+            )
+            self.aux_logits = rf.Linear(enc_dim, wb_vocab_dim)
+
+    # noinspection PyShadowingNames
+    def _forward_step(*, model: _Net, extern_data: TensorDict):
+        targets = extern_data["classes"]
+        enc_out, enc_spatial_dim = model.encoder(extern_data["data"], in_spatial_dim=time_dim)
+        log_probs = rf.log_softmax(model.aux_logits(enc_out), axis=wb_vocab_dim)
+        ctc = rf.ctc_loss(
+            logits=log_probs,
+            logits_normalized=True,
+            targets=targets,
+            input_spatial_dim=enc_spatial_dim,
+            targets_spatial_dim=target_time_dim,
+            blank_index=wb_vocab_dim.dimension - 1,
+        )
+        enc_state = model.decoder.transform_encoder(enc_out, axis=enc_spatial_dim)
+        logits, _ = model.decoder(
+            targets,
+            spatial_dim=target_time_dim,
+            state=model.decoder.default_initial_state(batch_dims=[batch_dim]),
+            encoder=enc_state,
+        )
+        ce = rf.cross_entropy(estimated=logits, target=targets, axis=vocab_dim, estimated_type="logits")
+        logits.mark_as_output("logits", shape=(batch_dim, target_time_dim, vocab_dim))
+        ctc.mark_as_output("ctc", shape=(batch_dim,))
+        (ctc + rf.reduce_sum(ce, axis=target_time_dim)).mark_as_output("loss", shape=(batch_dim,))
+
+    run_model(
+        extern_data,
+        lambda *, epoch, step: _Net(),
+        _forward_step,
+        # the CTC input (after the 6x subsampling) must stay longer than the targets
+        dyn_dim_max_sizes={time_dim: 32, target_time_dim: 4},
+        dyn_dim_min_sizes={time_dim: 24, target_time_dim: 2},
+        tf_low_level=True,
+    )
+
+
 def test_parameter_names_and_init():
     # The variables are created after the model (deferred), so they can be named
     # after their position in the module hierarchy, and the initial values must survive that.
