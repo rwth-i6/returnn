@@ -1081,7 +1081,7 @@ class StaticDataset(CachedDataset2):
         :param list[dict[str,numpy.ndarray]] data: list of seqs, each provide the data for each data-key
         :param target_list:
         :param int|None input_dim:
-        :param int|dict[str,(int,int)|list[int]] output_dim:
+        :param int|dict[str,(int,int)|list[int]]|None output_dim:
         """
         super(StaticDataset, self).__init__(**kwargs)
 
