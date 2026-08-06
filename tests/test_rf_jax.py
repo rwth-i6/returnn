@@ -364,6 +364,71 @@ def test_scaled_gradient_ext_vs_torch():
     )
 
 
+def test_shape_ops_vs_torch():
+    import torch
+
+    batch, time, feat = Dim(3, name="batch"), Dim(6, name="time"), Dim(4, name="feat")
+    half_a, half_b = Dim(2, name="half_a"), Dim(2, name="half_b")
+    merged = Dim(18, name="batch_time")
+    split_t = [Dim(2, name="t_outer"), Dim(3, name="t_inner")]
+    sliced = Dim(2, name="sliced")
+    # every Dim must be shared between the two backend runs: RF compares dims by identity, not by name
+    one_dim, feat2, stacked, expanded = (
+        Dim(1, name="one"),
+        Dim(8, name="feat2"),
+        Dim(2, name="stacked"),
+        Dim(2, name="expanded"),
+    )
+    rnd = numpy.random.RandomState(29)
+    x_np = rnd.normal(size=(3, 6, 4)).astype("float32")
+    y_np = rnd.normal(size=(3, 6, 4)).astype("float32")
+
+    def _run(make):
+        x = make("x", x_np, [batch, time, feat])
+        y = make("y", y_np, [batch, time, feat])
+        first, second = rf.split(x, axis=feat, out_dims=[half_a, half_b])
+        out = {
+            # merge_dims / concat / stack return (tensor, dim) at the rf level
+            "merge": rf.merge_dims(x, dims=[batch, time], out_dim=merged)[0],
+            "split_dims": rf.split_dims(x, axis=time, dims=split_t),
+            "split0": first,
+            "split1": second,
+            "concat": rf.concat((x, feat), (y, feat), out_dim=feat2)[0],
+            "stack": rf.stack([x, y], out_dim=stacked)[0],
+            "unstack0": rf.unstack(x, axis=batch)[0],
+            "unstack2": rf.unstack(x, axis=batch)[2],
+            "expand": rf.expand_dim(x, dim=expanded),
+            "squeeze": rf.squeeze(rf.expand_dim(x, dim=one_dim), axis=one_dim),
+            "slice": rf.slice(x, axis=time, start=1, size=2, out_dim=sliced)[0],
+            "cumsum": rf.cumsum(x, spatial_dim=time),
+            "flip": rf.reverse_sequence(x, axis=time, handle_dynamic_dims=False),
+            "clip": rf.clip_by_value(x, -0.5, 0.5),
+            "lerp": rf.lerp(x, y, 0.3),
+            "is_finite": rf.is_finite(x / 0.0),
+            "is_inf": rf.is_infinite(x / 0.0),
+            "full": rf.full(dims=[batch, feat], fill_value=2.5, dtype="float32"),
+        }
+        return {k: (v.copy_compatible_to_dims_raw(v.dims), v.dims) for k, v in out.items()}
+
+    rf.select_backend_torch()
+    ref = {
+        k: (v.detach().cpu().numpy(), dims)
+        for k, (v, dims) in _run(
+            lambda name, arr, d: Tensor(name, dims=d, dtype=arr.dtype.name, raw_tensor=torch.from_numpy(arr))
+        ).items()
+    }
+
+    _rf_jax()
+    got = {k: (numpy.asarray(v), dims) for k, (v, dims) in _run(_make).items()}
+
+    assert set(got) == set(ref)
+    for key in sorted(ref):
+        ref_raw, ref_dims = ref[key]
+        got_raw, got_dims = got[key]
+        assert got_dims == ref_dims, f"{key}: dims {got_dims} vs {ref_dims}"
+        numpy.testing.assert_allclose(got_raw, ref_raw, rtol=1e-6, atol=1e-6, err_msg=f"op {key} differs")
+
+
 def test_device():
     _rf_jax()
     x = _make("x", numpy.zeros((2,), dtype="float32"), [Dim(2, name="d")])

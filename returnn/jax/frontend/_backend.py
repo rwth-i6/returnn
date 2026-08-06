@@ -11,6 +11,7 @@ therefore follows the same rules as the static-traceable regime of the PyTorch b
 from __future__ import annotations
 from typing import Optional, Union, Sequence, Tuple, Dict
 from functools import partial
+import itertools
 import numpy
 import jax
 import jax.numpy as jnp
@@ -359,6 +360,387 @@ class JaxBackend(Backend[jax.Array]):
             dtype=out_dtype,
             sparse_dim=sparse_dim,
         )
+
+    # --- shapes and indexing
+
+    @classmethod
+    def squeeze_raw(cls, raw_tensor: jax.Array, axes: Sequence[int]) -> jax.Array:
+        """
+        :param raw_tensor:
+        :param axes: axes to squeeze
+        :return: squeezed raw tensor
+        """
+        return jnp.squeeze(raw_tensor, axis=tuple(axes))
+
+    @staticmethod
+    def merge_dims(source: Tensor, *, dims: Sequence[Dim], out_dim: Dim) -> Tensor:
+        """
+        :param source:
+        :param dims: dims to merge, len >= 2
+        :param out_dim: the merged dim
+        :return: source with dims merged into out_dim
+        """
+        assert len(dims) >= 2
+        first_axis = min(source.dims.index(d) for d in dims)
+        pre_dims = source.dims[:first_axis]
+        post_dims = [d for d in source.dims if d not in dims and d not in pre_dims]
+        source = source.copy_transpose(tuple(pre_dims) + tuple(dims) + tuple(post_dims), allow_int=False)
+        out = Tensor(
+            "merge_dims",
+            dims=pre_dims + (out_dim,) + tuple(post_dims),
+            dtype=source.dtype,
+            sparse_dim=source.sparse_dim,
+        )
+        # -1 for the merged block, so no dim value has to be read on the host
+        src_shape = source.raw_tensor.shape
+        out_shape = list(src_shape[: len(pre_dims)]) + [-1] + list(src_shape[len(pre_dims) + len(dims) :])
+        out.raw_tensor = jnp.reshape(source.raw_tensor, out_shape)
+        if source.feature_dim is not None:
+            out.feature_dim = out_dim if source.feature_dim in dims else source.feature_dim
+        return out
+
+    @staticmethod
+    def split_dims(
+        source: Tensor,
+        *,
+        axis: Dim,
+        dims: Sequence[Dim],
+        pad_to_multiples: Optional[bool] = None,
+        pad_value: Union[None, int, float] = None,
+    ) -> Tensor:
+        """
+        :param source:
+        :param axis: the dim to split
+        :param dims: what to split it into
+        :param pad_to_multiples: not implemented
+        :param pad_value: not implemented
+        :return: source with axis replaced by dims
+        """
+        assert pad_to_multiples in (None, False), "RF JaxBackend: split_dims pad_to_multiples not implemented"
+        axis_int = source.get_axis_from_description(axis)
+        out_dims = source.dims[:axis_int] + tuple(dims) + source.dims[axis_int + 1 :]
+        src_shape = source.raw_tensor.shape
+        split_sizes = [d.dimension if d.dimension is not None else -1 for d in dims]
+        if split_sizes.count(-1) > 1:
+            split_sizes = [d.get_dim_value() for d in dims]
+        out_shape = list(src_shape[:axis_int]) + split_sizes + list(src_shape[axis_int + 1 :])
+        out = Tensor(
+            "split_dims",
+            dims=out_dims,
+            dtype=source.dtype,
+            sparse_dim=source.sparse_dim,
+            raw_tensor=jnp.reshape(source.raw_tensor, out_shape),
+        )
+        if source.feature_dim and source.feature_dim != axis:
+            out.feature_dim = source.feature_dim
+        return out
+
+    @staticmethod
+    def split(source: Tensor, *, axis: Dim, out_dims: Sequence[Dim]) -> Tuple[Tensor, ...]:
+        """
+        :param source:
+        :param axis: static axis to split
+        :param out_dims: parts, summing to axis
+        :return: one tensor per out_dim
+        """
+        axis_int = source.get_axis_from_description(axis)
+        sizes = [d.get_dim_value() for d in out_dims]
+        # jnp.split takes split points, not sizes
+        bounds = list(itertools.accumulate(sizes))[:-1]
+        raws = jnp.split(source.raw_tensor, bounds, axis=axis_int)
+        out_tuple = tuple(
+            source.copy_template_replace_dim_tag(axis=axis_int, new_dim_tag=dim, name=f"split{i}")
+            for i, dim in enumerate(out_dims)
+        )
+        for out, raw in zip(out_tuple, raws):
+            out.raw_tensor = raw
+        return out_tuple
+
+    @staticmethod
+    def expand_dim(source: Tensor, dim: Dim) -> Tensor:
+        """
+        :param source:
+        :param dim: the new dim
+        :return: source with dim added (broadcast, not copied, where possible)
+        """
+        assert dim not in source.dims
+        # same placement heuristic as the other backends
+        axis = len(source.dims)
+        if dim.is_static() and source.have_feature_axis():
+            axis = source.feature_dim_axis
+        if dim.is_dynamic():
+            for i, d in reversed(list(enumerate(source.dims))):
+                if d.is_dynamic():
+                    axis = i + 1
+                    break
+        new_dims = list(source.dims)
+        new_dims.insert(axis, dim)
+        out = source.copy_template_new_dim_tags(new_dims)
+        if source.feature_dim:
+            out.feature_dim = source.feature_dim
+        out_raw = jnp.expand_dims(source.raw_tensor, axis)
+        if dim.is_dynamic() or dim.dimension != 1:
+            out_raw = jnp.broadcast_to(
+                out_raw, tuple(dim.get_dim_value() if d == dim else s for d, s in zip(out.dims, out_raw.shape))
+            )
+        out.raw_tensor = out_raw
+        return out
+
+    @staticmethod
+    def squeeze(source: Tensor, axis: Dim) -> Tensor:
+        """
+        :param source:
+        :param axis: dim of size 1
+        :return: source without axis
+        """
+        axis_int = source.get_axis_from_description(axis)
+        out = source.copy_template_excluding_axis(axis_int)
+        out.raw_tensor = jnp.squeeze(source.raw_tensor, axis=axis_int)
+        return out
+
+    @staticmethod
+    def concat(*sources: Tuple[Tensor, Dim], allow_broadcast: bool = False, out_dim: Dim) -> Tensor:
+        """
+        :param sources: (tensor, its dim to concat over) pairs
+        :param allow_broadcast:
+        :param out_dim:
+        :return: concatenated tensor
+        """
+        axis = sources[0][0].get_axis_from_description(sources[0][1])
+        other_dims = list(sources[0][0].dims)
+        other_dims.remove(sources[0][1])
+        need_broadcast = False
+        if allow_broadcast:
+            for source, dim in sources[1:]:
+                assert dim in source.dims
+                if set(source.dims) - {dim} != set(other_dims):
+                    need_broadcast = True
+                for dim_ in source.dims:
+                    if dim_ != dim and dim_ not in other_dims:
+                        other_dims.append(dim_)
+        sources_raw = []
+        for source, dim in sources:
+            templ_dims = other_dims[:axis] + [dim] + other_dims[axis:]
+            if allow_broadcast and need_broadcast:
+                templ = Tensor(source.name, dims=templ_dims, dtype=source.dtype, sparse_dim=source.sparse_dim)
+                sources_raw.append(source.copy_compatible_to(templ, unbroadcast=True).raw_tensor)
+            else:
+                assert set(templ_dims) == set(source.dims), (
+                    f"concat {source} {dim} not allowed with allow_broadcast=False"
+                )
+                sources_raw.append(source.copy_transpose(templ_dims).raw_tensor)
+        out_raw = jnp.concatenate(sources_raw, axis=axis)
+        out = Tensor(
+            "concat",
+            dims=other_dims[:axis] + [out_dim] + other_dims[axis:],
+            dtype=JaxBackend.get_dtype_name_raw(out_raw),
+            sparse_dim=sources[0][0].sparse_dim,
+            raw_tensor=out_raw,
+        )
+        if sources[0][0].feature_dim and sources[0][0].feature_dim != sources[0][1]:
+            out.feature_dim = sources[0][0].feature_dim
+        return out
+
+    @staticmethod
+    def stack(sources: Sequence[Tensor], *, out_dim: Dim) -> Tensor:
+        """
+        :param sources:
+        :param out_dim: the new leading dim
+        :return: stacked tensor
+        """
+        out_dims = (out_dim,) + sources[0].dims
+        out = Tensor("stack", dims=out_dims, dtype=sources[0].dtype, sparse_dim=sources[0].sparse_dim)
+        out.raw_tensor = jnp.stack([s.copy_compatible_to_dims_raw(out_dims[1:]) for s in sources], axis=0)
+        return out
+
+    @staticmethod
+    def unstack(source: Tensor, *, axis: Dim) -> Tuple[Tensor, ...]:
+        """
+        :param source:
+        :param axis: static axis to unstack
+        :return: one tensor per index of axis, each without axis
+        """
+        axis_int = source.dims.index(axis)
+        template = source.copy_template_excluding_axis(axis_int)
+        result = []
+        for i in range(source.raw_tensor.shape[axis_int]):
+            out = template.copy_template()
+            out.raw_tensor = jax.lax.index_in_dim(source.raw_tensor, i, axis=axis_int, keepdims=False)
+            result.append(out)
+        return tuple(result)
+
+    @staticmethod
+    def full(
+        dims: Sequence[Dim],
+        fill_value: Union[RawTensorTypes, Tensor],
+        *,
+        dtype: str,
+        device: Optional[str] = None,
+        sparse_dim: Optional[Dim] = None,
+        feature_dim: Optional[Dim] = None,
+    ) -> Tensor:
+        """
+        :param dims:
+        :param fill_value:
+        :param dtype:
+        :param device:
+        :param sparse_dim:
+        :param feature_dim:
+        :return: tensor of the given shape, filled with fill_value
+        """
+        shape = tuple(dim.get_dim_value() for dim in dims)
+        if isinstance(fill_value, Tensor):
+            fill_value = fill_value.raw_tensor
+        raw = jnp.full(shape, fill_value, dtype=JaxBackend.as_dtype_raw(dtype))
+        device = device or rf.get_default_device()
+        if device:
+            raw = jax.device_put(raw, _device_from_str(device))
+        return Tensor("full", dims=dims, sparse_dim=sparse_dim, feature_dim=feature_dim, dtype=dtype, raw_tensor=raw)
+
+    @staticmethod
+    def slice(
+        source: Tensor,
+        *,
+        axis: Dim,
+        start: Optional[Union[int, Tensor]] = None,
+        end: Optional[Union[int, Tensor]] = None,
+        step: Optional[Union[int, Tensor]] = None,
+        size: Optional[Union[int, Tensor, Dim]] = None,
+        out_dim: Dim,
+    ) -> Tensor:
+        """
+        :param source:
+        :param axis:
+        :param start: may be a device scalar (dynamic_slice clamps it, like torch.narrow)
+        :param end:
+        :param step: only 1
+        :param size:
+        :param out_dim:
+        :return: sliced tensor
+        """
+        assert step is None or (isinstance(step, int) and step == 1), "RF JaxBackend: slice step != 1 not implemented"
+        axis_int = source.get_axis_from_description(axis, allow_int=False)
+        out = source.copy_template_replace_dim_tag(axis=axis_int, new_dim_tag=out_dim)
+        if isinstance(start, Tensor):
+            assert start.dims == ()
+            start = start.raw_tensor
+        elif start is None:
+            start = 0
+        # the size must be static: JAX has no data-dependent shapes
+        if isinstance(size, Dim):
+            assert end is None
+            size = size.get_dim_value()
+        elif isinstance(size, Tensor):
+            assert end is None and size.dims == (), f"RF JaxBackend: slice size {size} must be scalar and static"
+            size = int(size.raw_tensor)
+        elif size is None:
+            if isinstance(end, Tensor):
+                assert end.dims == (), f"RF JaxBackend: slice end {end} must be scalar and static"
+                end = int(end.raw_tensor)
+            elif isinstance(end, int):
+                if end < 0:
+                    end += axis.get_dim_value()
+            elif end is None:
+                end = axis.get_dim_value()
+            else:
+                raise TypeError(f"slice: unsupported type for end: {type(end)}")
+            size = end - int(start) if not isinstance(start, jax.Array) else end - start
+        elif not isinstance(size, int):
+            raise TypeError(f"slice: unsupported type for size: {type(size)}")
+        out.raw_tensor = jax.lax.dynamic_slice_in_dim(source.raw_tensor, start, int(size), axis=axis_int)
+        return out
+
+    @staticmethod
+    def flip_no_mask(source: Tensor, *, axis: Dim) -> Tensor:
+        """
+        :param source:
+        :param axis:
+        :return: source reversed along axis, ignoring masking
+        """
+        axis_int = source.get_axis_from_description(axis, allow_int=False)
+        out = source.copy_template("flip")
+        out.raw_tensor = jnp.flip(source.raw_tensor, axis=axis_int)
+        return out
+
+    @staticmethod
+    def cumsum(source: Tensor, *, spatial_dim: Dim) -> Tensor:
+        """
+        :param source:
+        :param spatial_dim:
+        :return: cumsum over spatial_dim
+        """
+        axis = source.get_axis_from_description(spatial_dim)
+        out = source.copy_template("cumsum")
+        out.raw_tensor = jnp.cumsum(source.raw_tensor, axis=axis, dtype=source.raw_tensor.dtype)
+        return out
+
+    @staticmethod
+    def is_finite(x: Tensor) -> Tensor:
+        """is finite"""
+        out = x.copy_template("is_finite", dtype="bool")
+        out.raw_tensor = jnp.isfinite(x.raw_tensor)
+        return out
+
+    @staticmethod
+    def is_infinite(x: Tensor) -> Tensor:
+        """is positive or negative infinite"""
+        out = x.copy_template("is_infinite", dtype="bool")
+        out.raw_tensor = jnp.isinf(x.raw_tensor)
+        return out
+
+    @staticmethod
+    def is_neg_infinite(x: Tensor) -> Tensor:
+        """is negative infinite"""
+        out = x.copy_template("is_neg_infinite", dtype="bool")
+        out.raw_tensor = jnp.isneginf(x.raw_tensor)
+        return out
+
+    @staticmethod
+    def clip_by_value(
+        x: Tensor,
+        clip_value_min: Union[Tensor, rf.RawTensorTypes],
+        clip_value_max: Union[Tensor, rf.RawTensorTypes],
+        *,
+        allow_broadcast_all_sources: bool = False,
+    ) -> Tensor:
+        """clip by value"""
+        clip_value_min = rf.convert_to_tensor(clip_value_min, _backend=JaxBackend, device=x.device)
+        clip_value_max = rf.convert_to_tensor(clip_value_max, _backend=JaxBackend, device=x.device)
+        out = Tensor.get_common_data(
+            [x, clip_value_min, clip_value_max],
+            allow_broadcast_all_sources=allow_broadcast_all_sources,
+            name="clip_by_value",
+        )
+        out.dtype = x.dtype
+        out.sparse_dim = x.sparse_dim
+        out.feature_dim = x.feature_dim
+        out.raw_tensor = jnp.clip(
+            x.copy_compatible_to_dims_raw(out.dims),
+            clip_value_min.copy_compatible_to_dims_raw(out.dims),
+            clip_value_max.copy_compatible_to_dims_raw(out.dims),
+        )
+        return out
+
+    @staticmethod
+    def lerp(
+        start: Tensor, end: Tensor, weight: Union[float, Tensor], *, allow_broadcast_all_sources: bool = False
+    ) -> Tensor:
+        """
+        :param start:
+        :param end:
+        :param weight:
+        :param allow_broadcast_all_sources:
+        :return: start + weight * (end - start)
+        """
+        weight = rf.convert_to_tensor(weight, _backend=JaxBackend, device=start.device)
+        out = Tensor.get_common_data(
+            [start, end, weight], allow_broadcast_all_sources=allow_broadcast_all_sources, name="lerp"
+        )
+        start_raw = start.copy_compatible_to_dims_raw(out.dims)
+        end_raw = end.copy_compatible_to_dims_raw(out.dims)
+        weight_raw = weight.copy_compatible_to_dims_raw(out.dims)
+        out.raw_tensor = start_raw + weight_raw * (end_raw - start_raw)
+        return out
 
     # --- random
 
