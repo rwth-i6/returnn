@@ -935,6 +935,152 @@ class TFBackend(Backend[tf.Tensor]):
         out.feature_dim = in_dim
         return out
 
+    @staticmethod
+    def gradient(y: Tensor, x: Tensor) -> Tensor:
+        """
+        :param y:
+        :param x:
+        :return: gradient of y w.r.t. x
+        """
+        out = x.copy_template("gradient")
+        with tf_util.same_control_flow_ctx([y, x]):
+            (grad,) = tf.gradients(y.raw_tensor, [x.raw_tensor])
+            assert grad is not None, f"gradient: {y} does not depend on {x}"
+            out.raw_tensor = grad
+        return out
+
+    @staticmethod
+    def set_requires_gradient(tensor: Tensor) -> None:
+        """
+        :param tensor:
+
+        No-op: TF computes whatever gradient is asked for; there is no autograd flag to set.
+        (Same as the TF-layers backend.)
+        """
+
+    @staticmethod
+    @contextlib.contextmanager
+    def stop_gradient_scope():
+        """
+        No-op scope. TF has no gradient tape to disable: which gradients exist follows from the
+        graph, so stopping them means putting `tf.stop_gradient` on the values themselves
+        (:func:`stop_gradient`). Kept as a no-op rather than an error so that RF code using the
+        scope keeps working; the RF-internal user (rf.scatter_logsumexp) only shifts by a max
+        whose contributions cancel analytically, so its result and gradient stay correct.
+        """
+        yield
+
+    @staticmethod
+    def scaled_gradient(tensor: Tensor, scale: Union[float, Tensor]) -> Tensor:
+        """
+        :param tensor:
+        :param scale:
+        :return: identity, with the gradient scaled in the backward pass
+        """
+        return TFBackend.scaled_gradient_ext(tensor, scale=scale)
+
+    @staticmethod
+    def scaled_gradient_ext(
+        x: Tensor,
+        *,
+        scale: Union[float, Tensor] = 1.0,
+        shift: Optional[Union[float, Tensor]] = None,
+        scale_shift_by_sum_over_axis: Optional[Dim] = None,
+    ) -> Tensor:
+        """
+        :param x:
+        :param scale: scales the gradient
+        :param shift: shifts the gradient
+        :param scale_shift_by_sum_over_axis: if given, scale the shift by the sum over this axis
+        :return: just x, with the gradient transformed accordingly
+        """
+        out = x.copy_template("scaled_gradient")
+        with tf_util.same_control_flow_ctx(x):
+            out.raw_tensor = tf_util.scaled_gradient(
+                x.raw_tensor,
+                scale=scale.raw_tensor if isinstance(scale, Tensor) else scale,
+                shift=(shift.raw_tensor if isinstance(shift, Tensor) else shift) or 0.0,
+                scale_shift_by_sum_over_axis=(
+                    x.get_axis_from_description(scale_shift_by_sum_over_axis)
+                    if scale_shift_by_sum_over_axis is not None
+                    else None
+                ),
+            )
+        return out
+
+    # noinspection PyShadowingBuiltins
+    @staticmethod
+    def transposed_conv(
+        source: Tensor,
+        *,
+        in_dim: Dim,
+        out_dim: Dim,
+        in_spatial_dims: Sequence[Dim],
+        out_spatial_dims: Optional[Sequence[Dim]] = None,
+        filter: Tensor,
+        filter_size: Sequence[Dim],
+        padding: str,
+        remove_padding: Union[Sequence[int], int] = 0,
+        output_padding: Optional[Union[Sequence[Optional[int]], int]] = None,
+        strides: Optional[Sequence[int]] = None,
+        bias: Optional[Tensor] = None,
+    ) -> Tuple[Tensor, Sequence[Dim]]:
+        """
+        :param source:
+        :param in_dim:
+        :param out_dim:
+        :param in_spatial_dims:
+        :param out_spatial_dims:
+        :param filter:
+        :param filter_size:
+        :param padding:
+        :param remove_padding:
+        :param output_padding:
+        :param strides:
+        :param bias:
+        :return: transposed conv output, out spatial dims
+        """
+        if not out_spatial_dims:
+            out_spatial_dims = rf.make_transposed_conv_out_spatial_dims(
+                in_spatial_dims=in_spatial_dims,
+                filter_size=filter_size,
+                strides=strides,
+                padding=padding,
+                output_padding=output_padding,
+            )
+            assert remove_padding == 0, "transposed_conv: remove_padding not implemented"
+        if strides is None:
+            strides = [fs.dimension for fs in filter_size]
+        batch_dims = [d for d in source.dims if d not in (in_dim,) + tuple(in_spatial_dims)]
+        with tf_util.same_control_flow_ctx([source, filter]):
+            # TF wants the data channels-last and the filter as [*filter_size, out_dim, in_dim]
+            # (note the channel order, reversed against conv)
+            filter_raw = filter.copy_compatible_to_dims_raw(tuple(filter_size) + (out_dim, in_dim))
+            source = source.copy_transpose(batch_dims + list(in_spatial_dims) + [in_dim])
+            src_raw = source.raw_tensor
+            if len(batch_dims) != 1:  # merge the batch dims into one
+                src_shape = TFBackend.get_shape_tuple_raw(src_raw)
+                src_raw = tf.reshape(src_raw, _shape_raw([-1] + list(src_shape[len(batch_dims) :])))
+            out_shape = [tf.shape(src_raw)[0]] + [d.get_dim_value() for d in out_spatial_dims]
+            out_shape += [out_dim.get_dim_value()]
+            out_raw = tf.nn.conv_transpose(
+                src_raw, filter_raw, output_shape=_shape_raw(out_shape), strides=strides, padding=padding.upper()
+            )
+            if bias is not None:
+                out_raw = out_raw + bias.copy_compatible_to_dims_raw([out_dim])
+            if len(batch_dims) != 1:  # and split them again
+                out_raw = tf.reshape(
+                    out_raw, _shape_raw(list(batch_dims) + list(TFBackend.get_shape_tuple_raw(out_raw)[1:]))
+                )
+        out = Tensor(
+            "transposed_conv",
+            dims=batch_dims + list(out_spatial_dims) + [out_dim],
+            feature_dim=out_dim,
+            dtype=TFBackend.get_dtype_name_raw(out_raw),
+            raw_tensor=out_raw,
+        )
+        return out, out_spatial_dims
+
     # noinspection PyShadowingBuiltins
     @staticmethod
     def conv(
