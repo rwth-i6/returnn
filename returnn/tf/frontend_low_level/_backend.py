@@ -669,6 +669,28 @@ class TFBackend(Backend[tf.Tensor]):
         return out
 
     @staticmethod
+    def is_infinite(x: Tensor) -> Tensor:
+        """
+        :param x:
+        :return: elementwise whether x is +inf or -inf
+        """
+        out = x.copy_template("is_infinite", dtype="bool")
+        with tf_util.same_control_flow_ctx(x):
+            out.raw_tensor = tf.math.is_inf(x.raw_tensor)
+        return out
+
+    @staticmethod
+    def is_neg_infinite(x: Tensor) -> Tensor:
+        """
+        :param x:
+        :return: elementwise whether x is -inf
+        """
+        out = x.copy_template("is_neg_infinite", dtype="bool")
+        with tf_util.same_control_flow_ctx(x):
+            out.raw_tensor = tf.logical_and(tf.math.is_inf(x.raw_tensor), x.raw_tensor < 0)
+        return out
+
+    @staticmethod
     def clip_by_value(
         x: Tensor,
         clip_value_min: Union[Tensor, rf.RawTensorTypes],
@@ -1710,6 +1732,81 @@ class TFBackend(Backend[tf.Tensor]):
                     other = tf.cast(0 if value is None else value, out.raw_tensor.dtype)
                 out.raw_tensor = tf_util.where_bc(mask.copy_compatible_to_dims_raw(out.dims), out.raw_tensor, other)
         return out
+
+    @staticmethod
+    def scatter(
+        source: Tensor,
+        *,
+        indices: Tensor,
+        indices_dim: Union[Dim, Sequence[Dim]],
+        mode: str,
+        fill_value: Union[int, float],
+        out_dim: Union[Dim, Sequence[Dim]],
+    ) -> Tensor:
+        """
+        :param source: [batch_dims..., indices_dim(s)..., feature_dims...]
+        :param indices: [batch_dims..., indices_dim(s)...] -> out_dim
+        :param indices_dim:
+        :param mode: "sum", "max" or "min"
+        :param fill_value: for the entries no index points to
+        :param out_dim:
+        :return: [batch_dims..., out_dim, feature_dims...]
+
+        Implemented via the unsorted_segment ops: the batch and the indices are flattened into
+        one segment id per element (batch_idx * out_size + index), which handles duplicate indices
+        by definition, and any feature dims ride along on the reduced axis.
+        """
+        indices_dim = [indices_dim] if isinstance(indices_dim, Dim) else list(indices_dim)
+        assert indices.dtype.startswith("int")
+        if isinstance(out_dim, Dim):
+            out_dims, out_flat_dim = [out_dim], out_dim
+        else:
+            out_dims = list(out_dim)
+            out_flat_dim = out_dims[0]
+            for dim in out_dims[1:]:
+                out_flat_dim = out_flat_dim * dim
+        batch_dims = indices.remaining_dims(indices_dim)
+        feature_dims = source.remaining_dims(batch_dims + indices_dim)
+        if len(indices_dim) > 1:
+            indices, indices_flat_dim = rf.merge_dims(indices, dims=indices_dim)
+            source, _ = rf.merge_dims(source, dims=indices_dim, out_dim=indices_flat_dim)
+        else:
+            indices_flat_dim = indices_dim[0]
+        func = {
+            "sum": tf.math.unsorted_segment_sum,
+            "max": tf.math.unsorted_segment_max,
+            "min": tf.math.unsorted_segment_min,
+        }.get(mode)
+        if not func:
+            raise ValueError(f"scatter: mode {mode!r} not supported")
+        with tf_util.same_control_flow_ctx([source, indices]):
+            src_raw = source.copy_compatible_to_dims_raw(batch_dims + [indices_flat_dim] + feature_dims)
+            idx_raw = tf.cast(indices.copy_compatible_to_dims_raw(batch_dims + [indices_flat_dim]), tf.int32)
+            src_shape = TFBackend.get_shape_tuple_raw(src_raw)
+            feature_shape = list(src_shape[len(batch_dims) + 1 :])
+            out_size = out_flat_dim.get_dim_value()
+            n_batch = tf.reduce_prod(tf.shape(idx_raw)[: len(batch_dims)]) if batch_dims else tf.constant(1)
+            seg_flat = tf.reshape(
+                tf.reshape(idx_raw, [n_batch, -1]) + tf.expand_dims(tf.range(n_batch) * out_size, axis=1), [-1]
+            )
+            data_flat = tf.reshape(src_raw, _shape_raw([-1] + feature_shape))
+            num_segments = n_batch * out_size
+            out_flat = func(data_flat, seg_flat, num_segments=num_segments)
+            # the segments no index points to keep the identity of the op (0, or the dtype extreme)
+            counts = tf.math.unsorted_segment_sum(tf.ones_like(seg_flat), seg_flat, num_segments)
+            counts = tf.reshape(counts, _shape_raw([-1] + [1] * len(feature_dims)))
+            out_flat = tf_util.where_bc(counts > 0, out_flat, tf.cast(fill_value, out_flat.dtype))
+            out_raw = tf.reshape(out_flat, _shape_raw(list(src_shape[: len(batch_dims)]) + [out_size] + feature_shape))
+        res = Tensor(
+            "scatter",
+            dims=batch_dims + [out_flat_dim] + feature_dims,
+            dtype=source.dtype,
+            sparse_dim=source.sparse_dim,
+            raw_tensor=out_raw,
+        )
+        if len(out_dims) > 1:
+            res = rf.split_dims(res, axis=out_flat_dim, dims=out_dims)
+        return res
 
     @staticmethod
     def gather(source: Tensor, *, indices: Union[Tensor, int], axis: Dim, clip_to_valid: bool = False) -> Tensor:
