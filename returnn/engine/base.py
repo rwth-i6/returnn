@@ -106,6 +106,14 @@ class EngineBase:
                                 continue
                         file_list[epoch] = fn
                         break
+                elif util.BackendEngine.is_jax_selected():
+                    if os.path.exists(fn + ".npz"):
+                        if for_training:
+                            # Same as for PyTorch: without the optimizer state, this is not a resumable model.
+                            if not os.path.exists(fn + ".opt.npz"):
+                                continue
+                        file_list[epoch] = fn
+                        break
         return file_list
 
     @classmethod

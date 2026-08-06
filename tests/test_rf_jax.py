@@ -1098,19 +1098,24 @@ def test_dataset_batches_to_jax():
         assert tuple(seq["data"].flatten().tolist()) in seen, "a sequence went missing"
 
 
-def test_engine_train_from_config():
+_EngineTestNumFeat, _EngineTestNumClasses = 5, 4
+
+
+def _simple_train_setup(tmp_dir: str, **extra_config_opts):
     """
-    The engine end to end: a config with get_model / train_step, a dataset, two epochs of training,
-    checkpoints written per epoch, and the train score going down.
+    A minimal but complete training config, as :mod:`returnn.__main__` would set it up.
+
+    :param tmp_dir: for the model and the learning-rate file
+    :param extra_config_opts: added to the config
+    :return: (config, func creating the dataset)
     """
-    import tempfile
-    from returnn.config import Config
+    from returnn.config import Config, set_global_config
     from returnn.datasets.generating import StaticDataset
-    from returnn.jax.engine import Engine
-    from returnn.jax.checkpoint import load_checkpoint
+    from returnn.tensor import batch_dim
+    from returnn.util.basic import BackendEngine
 
     _rf_jax()
-    n_feat, n_classes = 5, 4
+    n_feat, n_classes = _EngineTestNumFeat, _EngineTestNumClasses
     rnd = numpy.random.RandomState(73)
     seqs = [
         {
@@ -1124,8 +1129,6 @@ def test_engine_train_from_config():
         return StaticDataset(data=seqs, output_dim={"data": (n_feat, 2), "classes": (n_classes, 1)})
 
     # the dims are declared once and shared by extern_data and the model, as a real config does
-    from returnn.tensor import batch_dim
-
     time_dim = Dim(None, name="time")
     in_dim = Dim(n_feat, name="in")
     classes_dim = Dim(n_classes, name="classes")
@@ -1150,43 +1153,53 @@ def test_engine_train_from_config():
         loss = rf.cross_entropy(estimated=logits, target=targets, axis=model.out_dim, estimated_type="logits")
         rf.get_run_ctx().mark_as_loss(loss, "ce", custom_inv_norm_factor=time_dim.get_size_tensor())
 
+    config = Config(
+        {
+            "backend": "jax",
+            "extern_data": {
+                "data": {"dims": [batch_dim, time_dim, in_dim], "dtype": "float32"},
+                "classes": {"dims": [batch_dim, time_dim], "sparse_dim": classes_dim, "dtype": "int32"},
+            },
+            "get_model": get_model,
+            "train_step": train_step,
+            "batch_size": 20,
+            "max_seqs": 3,
+            "num_epochs": 2,
+            "learning_rate": 0.05,
+            "optimizer": {"class": "adamw", "weight_decay": 0.0},
+            "model": f"{tmp_dir}/model",
+            "learning_rate_file": f"{tmp_dir}/lr",
+            **extra_config_opts,
+        }
+    )
+    # the engine machinery reads the global config (as returnn.__main__.init_config sets it up),
+    # and selects the backend from it
+    set_global_config(config)
+    BackendEngine.select_engine(config=config)
+    assert BackendEngine.is_jax_selected()
+    return config, _make_dataset
+
+
+def test_engine_train_from_config():
+    """
+    The engine end to end: a config with get_model / train_step, a dataset, two epochs of training,
+    checkpoints written per epoch, and the train score going down.
+    """
+    import tempfile
+    from returnn.jax.engine import Engine
+    from returnn.jax.checkpoint import load_checkpoint
+
     with tempfile.TemporaryDirectory() as tmp_dir:
-        config = Config(
-            {
-                "backend": "jax",
-                "extern_data": {
-                    "data": {"dims": [batch_dim, time_dim, in_dim], "dtype": "float32"},
-                    "classes": {"dims": [batch_dim, time_dim], "sparse_dim": classes_dim, "dtype": "int32"},
-                },
-                "get_model": get_model,
-                "train_step": train_step,
-                "batch_size": 20,
-                "max_seqs": 3,
-                "num_epochs": 2,
-                "learning_rate": 0.05,
-                "optimizer": {"class": "adamw", "weight_decay": 0.0},
-                "model": f"{tmp_dir}/model",
-                "learning_rate_file": f"{tmp_dir}/lr",
-            }
-        )
-        # the engine machinery reads the global config (as returnn.__main__.init_config sets it up),
-        # and selects the backend from it
-        from returnn.config import set_global_config
-        from returnn.util.basic import BackendEngine
-
-        set_global_config(config)
-        BackendEngine.select_engine(config=config)
-        assert BackendEngine.is_jax_selected()
-
+        config, make_dataset = _simple_train_setup(tmp_dir)
         engine = Engine(config=config)
-        engine.init_train_from_config(train_data=_make_dataset(), dev_data=_make_dataset())
+        engine.init_train_from_config(train_data=make_dataset(), dev_data=make_dataset())
         engine.train()
 
         # a checkpoint per epoch, holding the model's parameters
         for epoch in (1, 2):
             params = load_checkpoint(f"{tmp_dir}/model.{epoch:03d}.npz")
             assert set(params) == {"linear.weight", "linear.bias"}, sorted(params)
-            assert params["linear.weight"].shape == (n_feat, n_classes)
+            assert params["linear.weight"].shape == (_EngineTestNumFeat, _EngineTestNumClasses)
         # and training moved the parameters
         assert not numpy.allclose(
             load_checkpoint(f"{tmp_dir}/model.001.npz")["linear.weight"],
@@ -1197,6 +1210,31 @@ def test_engine_train_from_config():
         train_scores = [scores[ep].error["train_score_ce"] for ep in (1, 2)]
         assert train_scores[1] < train_scores[0], f"train score did not improve: {train_scores}"
         assert "dev_score_ce" in scores[1].error, sorted(scores[1].error)
+
+
+def test_engine_continue_from_checkpoint():
+    """
+    A second run in the same model dir continues from the existing checkpoint
+    instead of silently starting over and overwriting it.
+    """
+    import tempfile
+    from returnn.jax.engine import Engine
+    from returnn.jax.checkpoint import load_checkpoint
+
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        config, make_dataset = _simple_train_setup(tmp_dir, num_epochs=1)
+        engine = Engine(config=config)
+        engine.init_train_from_config(train_data=make_dataset(), dev_data=make_dataset())
+        engine.train()
+        assert engine.epoch == 2  # after the last trained epoch
+        saved = load_checkpoint(f"{tmp_dir}/model.001.npz")
+
+        config, make_dataset = _simple_train_setup(tmp_dir, num_epochs=2)
+        engine = Engine(config=config)
+        engine.init_train_from_config(train_data=make_dataset(), dev_data=make_dataset())
+        assert engine.epoch == 2, "did not continue after the existing checkpoint"
+        for name, param in engine.get_model().named_parameters():
+            numpy.testing.assert_allclose(numpy.asarray(param.raw_tensor), saved[name], rtol=0, atol=0)
 
 
 def test_stft_and_logmel_vs_torch():

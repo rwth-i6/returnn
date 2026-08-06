@@ -14,6 +14,7 @@ which also makes the whole step jit-able as one unit.
 
 from __future__ import annotations
 from typing import Optional, Any, Dict, List
+import os
 import time
 
 import jax
@@ -100,6 +101,12 @@ class Engine(EngineBase):
         self._create_model(epoch=self.epoch, step=self.global_train_step)
         self._updater = Updater(config=config)
         self._init_step_func()
+        # Continue from an existing checkpoint if there is one (or one was configured via `load`).
+        # Without this the engine would silently restart from scratch and overwrite it.
+        load_epoch, load_filename = self.get_epoch_model(config)
+        if load_filename:
+            self._load_model(filename=load_filename)
+            print(f"Continuing after epoch {load_epoch} ({load_filename})", file=log.v3)
         print(f"JAX engine: starting at epoch {self.epoch}, devices {jax.devices()}", file=log.v3)
 
     def train(self):
@@ -264,16 +271,30 @@ class Engine(EngineBase):
         if not self.model_filename:
             print("No 'model' in the config, not saving.", file=log.v4)
             return
-        filename = self.get_epoch_model_filename() + util.get_model_filename_postfix()
-        _checkpoint.save_checkpoint(self.model, filename, step=self.global_train_step, epoch=self.epoch)
+        filename = self.get_epoch_model_filename()
+        _checkpoint.save_checkpoint(
+            self.model,
+            filename + util.get_model_filename_postfix(),
+            step=self.global_train_step,
+            epoch=self.epoch,
+        )
+        # The optimizer state goes next to it, as for PyTorch, so that a continued run
+        # keeps the moments instead of restarting the optimizer.
+        _checkpoint.save_opt_state(self._opt_state, filename + ".opt" + util.get_model_filename_postfix())
 
-    def _load_model(self, *, epoch: int):
+    def _load_model(self, *, filename: str):
         """
-        :param epoch:
+        :param filename: without the ``.npz`` postfix, as :func:`EngineBase.get_epoch_model` returns it
         """
-        filename = self.get_epoch_model_filename(epoch=epoch) + util.get_model_filename_postfix()
-        _checkpoint.set_model_params(self.model, _checkpoint.load_checkpoint(filename))
-        print(f"Loaded model {filename}", file=log.v3)
+        postfix = util.get_model_filename_postfix()
+        if filename.endswith(postfix):
+            filename = filename[: -len(postfix)]
+        _checkpoint.set_model_params(self.model, _checkpoint.load_checkpoint(filename + postfix))
+        print(f"Loaded model {filename + postfix}", file=log.v3)
+        opt_filename = filename + ".opt" + postfix
+        if os.path.exists(opt_filename):
+            self._opt_state = _checkpoint.load_opt_state(self._opt_state, opt_filename)
+            print(f"Loaded optimizer state {opt_filename}", file=log.v3)
 
 
 def _batch_opts_from_config(config: Config) -> Dict[str, Any]:
