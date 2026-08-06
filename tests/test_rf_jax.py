@@ -630,6 +630,72 @@ def test_conv_pool_vs_torch():
         numpy.testing.assert_allclose(got_raw, ref_raw, rtol=1e-5, atol=1e-5, err_msg=f"{key} differs")
 
 
+@pytest.mark.parametrize("use_mask", [False, True])
+@pytest.mark.parametrize("train_flag", [False, True])
+def test_batch_norm_vs_torch(use_mask: bool, train_flag: bool):
+    """
+    BatchNorm, which the real Conformer uses in its conv block (and on the features).
+    Both paths matter and they are different code: with masking, rf.BatchNorm does it with generic
+    RF ops; without, it calls the backend's own ``batch_norm``.
+    In train mode the current batch's statistics normalize AND the running ones get updated,
+    so the test checks the updated running stats as well.
+    """
+    import torch
+
+    batch = Dim(3, name="batch")
+    in_dim = Dim(5, name="in")
+    seq_lens = [7, 4, 2]
+    x_np = numpy.random.RandomState(3).normal(size=(3, 7, 5)).astype("float32")
+    init = {
+        "gamma": numpy.random.RandomState(4).normal(size=(5,)).astype("float32"),
+        "beta": numpy.random.RandomState(5).normal(size=(5,)).astype("float32"),
+        "running_mean": numpy.random.RandomState(6).normal(size=(5,)).astype("float32") * 0.1,
+        "running_variance": numpy.abs(numpy.random.RandomState(7).normal(size=(5,)).astype("float32")) + 0.5,
+    }
+
+    def _run(make, make_dyn_time):
+        rf.init_train_step_run_ctx(train_flag=train_flag, step=0, epoch=1)
+        bn = rf.BatchNorm(in_dim, use_mask=use_mask)
+        for name, value in init.items():
+            param = getattr(bn, name)
+            param.assign(make(name, value, [in_dim]))
+        time_dim = make_dyn_time(batch, seq_lens)
+        out = bn(make("x", x_np, [batch, time_dim, in_dim]))
+        return {
+            "out": out.copy_compatible_to_dims_raw(out.dims),
+            "running_mean": bn.running_mean.raw_tensor,
+            "running_variance": bn.running_variance.raw_tensor,
+        }
+
+    _no_tf32_torch()
+    rf.select_backend_torch()
+    ref = {
+        k: v.detach().cpu().numpy()
+        for k, v in _run(
+            lambda name, arr, d: Tensor(name, dims=d, dtype=arr.dtype.name, raw_tensor=torch.from_numpy(arr.copy())),
+            lambda b, lens: Dim(
+                Tensor("l", dims=[b], dtype="int32", raw_tensor=torch.tensor(lens, dtype=torch.int32)), name="time"
+            ),
+        ).items()
+    }
+
+    _rf_jax()
+    try:
+        got = {k: numpy.asarray(v) for k, v in _run(_make, _make_dyn_time).items()}
+    finally:
+        # do not leave a train flag behind: the later comparisons run modules whose dropout
+        # would then be live (and drawn from two independent RNG streams)
+        rf.init_forward_step_run_ctx()
+
+    for key in ref:
+        numpy.testing.assert_allclose(got[key], ref[key], rtol=1e-5, atol=1e-6, err_msg=key)
+    if train_flag:
+        # the update actually happened, so the comparison above is not vacuous
+        assert not numpy.allclose(got["running_mean"], init["running_mean"]), "running stats were not updated"
+    else:
+        numpy.testing.assert_allclose(got["running_mean"], init["running_mean"], rtol=0, atol=0)
+
+
 def test_conformer_subsample_vs_torch():
     """the real frontend of the target model: ConformerConvSubsample as configured in test_rf_packed"""
     import torch

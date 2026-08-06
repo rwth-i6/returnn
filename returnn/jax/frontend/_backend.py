@@ -1295,6 +1295,72 @@ class JaxBackend(Backend[jax.Array]):
             dtype=JaxBackend.get_dtype_name_raw(loss_raw),
         )
 
+    # --- normalization
+
+    @staticmethod
+    def batch_norm(
+        source: _TT,
+        *,
+        in_dim: Union[Dim, Sequence[Dim]],
+        running_mean: Optional[Tensor],
+        running_variance: Optional[Tensor],
+        gamma: Optional[Tensor],
+        beta: Optional[Tensor],
+        epsilon: float,
+        momentum: float,
+        affine: bool,
+        use_mask: bool,
+    ) -> _TT:
+        """batch norm
+
+        This is the unmasked path; :class:`rf.BatchNorm` handles masking itself
+        with generic RF ops and only calls the backend when no masking is needed.
+        Written out rather than calling a library op, so that the details which decide
+        parity with PyTorch are visible: the BIASED variance normalizes,
+        while the UNBIASED one goes into the running estimate.
+        """
+        if use_mask:
+            raise NotImplementedError("batch_norm with masking not implemented")
+        if (running_mean is None) != (running_variance is None):
+            raise ValueError("running_mean and running_variance must be both None or both not None")
+        assert isinstance(in_dim, Dim)  # multiple dims not supported yet
+        if affine:
+            if gamma is None or beta is None:
+                raise ValueError("gamma and beta must be given if affine=True")
+            if not gamma.dims == beta.dims == (in_dim,):
+                raise ValueError(f"gamma and beta must have shape [{in_dim}], got gamma {gamma} and beta {beta}")
+        if running_mean is not None and not running_mean.dims == running_variance.dims == (in_dim,):
+            raise ValueError(
+                f"running_mean and running_variance must have shape [{in_dim}],"
+                f" got running_mean {running_mean} and running_variance {running_variance}"
+            )
+        feat_axis = source.get_axis_from_description(in_dim)
+        x = source.raw_tensor
+        reduce_axes = tuple(i for i in range(x.ndim) if i != feat_axis)
+        # broadcast shape of the per-feature statistics, to apply them to x
+        stats_shape = tuple(x.shape[i] if i == feat_axis else 1 for i in range(x.ndim))
+        train_flag = rf.get_run_ctx().is_train_flag_enabled(func=rf.BatchNorm.__call__)
+        use_current_batch_stats = train_flag or running_mean is None
+        if use_current_batch_stats:
+            mean = jnp.mean(x, axis=reduce_axes)
+            variance = jnp.mean(jnp.square(x - jnp.reshape(mean, stats_shape)), axis=reduce_axes)
+            if running_mean is not None:
+                count = x.size // x.shape[feat_axis]
+                # as torch: the running variance tracks the unbiased estimate
+                unbiased_variance = variance * (count / (count - 1)) if count > 1 else variance
+                for param, value in ((running_mean, mean), (running_variance, unbiased_variance)):
+                    new = param.raw_tensor * (1.0 - momentum) + value.astype(param.raw_tensor.dtype) * momentum
+                    param.assign(Tensor(param.name, dims=param.dims, dtype=param.dtype, raw_tensor=new))
+        else:
+            mean, variance = running_mean.raw_tensor, running_variance.raw_tensor
+        out_raw = (x - jnp.reshape(mean, stats_shape)) * jax.lax.rsqrt(jnp.reshape(variance, stats_shape) + epsilon)
+        if affine:
+            out_raw = out_raw * jnp.reshape(gamma.raw_tensor, stats_shape) + jnp.reshape(beta.raw_tensor, stats_shape)
+        out = source.copy_template()
+        out.raw_tensor = out_raw.astype(x.dtype)
+        out.feature_dim = in_dim
+        return out
+
     # --- convolution
 
     @staticmethod
