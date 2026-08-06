@@ -1007,6 +1007,71 @@ def test_train_steps_and_checkpoint():
         numpy.testing.assert_array_equal(after[name], before[name], err_msg=f"{name} did not round-trip")
 
 
+def test_dataset_batches_to_jax():
+    """
+    The data path: a RETURNN dataset, through the shared backend-agnostic batching,
+    into JAX tensors with the right dims and seq lens.
+    """
+    from returnn.datasets.generating import StaticDataset
+    from returnn.tensor import TensorDict, batch_dim
+    from returnn.jax.data import iter_dataset_batches
+
+    _rf_jax()
+    n_feat, n_classes = 5, 4
+    seq_lens = [7, 3, 11, 5, 2, 9]
+    rnd = numpy.random.RandomState(71)
+    seqs = [
+        {
+            "data": rnd.normal(size=(t, n_feat)).astype("float32"),
+            "classes": rnd.randint(0, n_classes, size=(t,)).astype("int32"),
+        }
+        for t in seq_lens
+    ]
+    dataset = StaticDataset(data=seqs, output_dim={"data": (n_feat, 2), "classes": (n_classes, 1)})
+
+    time_dim = Dim(None, name="time")
+    feat_dim, classes_dim = Dim(n_feat, name="feat"), Dim(n_classes, name="classes")
+    extern_data = TensorDict(
+        {
+            "data": Tensor("data", dims=[batch_dim, time_dim, feat_dim], dtype="float32"),
+            "classes": Tensor("classes", dims=[batch_dim, time_dim], dtype="int32", sparse_dim=classes_dim),
+        }
+    )
+
+    batches = list(iter_dataset_batches(dataset, extern_data=extern_data, batch_size=20, max_seqs=3))
+    assert batches, "no batches"
+    total_seqs, total_frames = 0, 0
+    for batch in batches:
+        data, classes = batch.data["data"], batch.data["classes"]
+        assert isinstance(data.raw_tensor, jax.Array) and isinstance(classes.raw_tensor, jax.Array)
+        assert data.dtype == "float32" and classes.dtype == "int32"
+        b_dim, t_dim, f_dim = data.dims
+        assert f_dim == feat_dim
+        assert t_dim.is_dynamic() and t_dim.capacity == data.raw_tensor.shape[1]
+        lens = numpy.asarray(t_dim.dyn_size_ext.raw_tensor)
+        assert lens.max() == data.raw_tensor.shape[1], f"padded extent {data.raw_tensor.shape} vs lens {lens}"
+        assert b_dim.dimension == data.raw_tensor.shape[0] == len(lens)
+        # the padded frames must be zero, and the real ones must match the dataset
+        raw = numpy.asarray(data.raw_tensor)
+        for i, length in enumerate(lens):
+            numpy.testing.assert_array_equal(raw[i, length:], 0.0, err_msg="padding is not zero")
+        total_seqs += len(lens)
+        total_frames += int(lens.sum())
+    assert total_seqs == len(seq_lens), f"{total_seqs} seqs over all batches, expected {len(seq_lens)}"
+    assert total_frames == sum(seq_lens), f"{total_frames} frames, expected {sum(seq_lens)}"
+
+    # every seq must appear exactly once, with its original content
+    seen = {}
+    for batch in batches:
+        data = batch.data["data"]
+        lens = numpy.asarray(data.dims[1].dyn_size_ext.raw_tensor)
+        raw = numpy.asarray(data.raw_tensor)
+        for i, length in enumerate(lens):
+            seen[tuple(raw[i, :length].flatten().tolist())] = True
+    for seq in seqs:
+        assert tuple(seq["data"].flatten().tolist()) in seen, "a sequence went missing"
+
+
 def test_device():
     _rf_jax()
     x = _make("x", numpy.zeros((2,), dtype="float32"), [Dim(2, name="d")])
