@@ -552,7 +552,10 @@ def run_inspect(pycharm_dir, src_dir, skip_pycharm_inspect=False):
 
     # PyCharm does not do PEP8 code style checks by itself but uses the (bundled) pycodestyle tool.
     # https://youtrack.jetbrains.com/issue/PY-43901
-    # Do that now.
+    # Do that now. pycodestyle must be in the env (CI installs it via --install_py_deps;
+    # never skip silently -- a missing module here means a broken env, and skipping
+    # would hide all PEP8 problems from the report).
+    subprocess.check_output([sys.executable, "-m", "pycodestyle", "--version"], stderr=subprocess.STDOUT)
     root = ElementTree.Element("problems")
     from lint_common import find_all_py_source_files
 
@@ -855,6 +858,9 @@ def main():
             ("PyMethodOverridingInspection", r"^Signature of method "),
             # same Optional-flow family as the Member-'None' filter above
             ("PyCallingNonCallableInspection", r"^'None' object is not callable"),
+            # indexing artifact: Cython's bundled numpy .pxd shadow joins the union type
+            # whenever Cython is installed in the env; not a property of our code
+            ("PyUnresolvedReferencesInspection", r"^Member 'Cython\.Includes\.numpy' of "),
         ],
         inspect_class_not_counted={
             # Here we disable more than what you would do in the IDE.
