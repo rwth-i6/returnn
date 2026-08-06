@@ -376,7 +376,9 @@ class JaxBackend(Backend[jax.Array]):
             assert mode in _ReduceModeMap or mode == "logsumexp", f"RF JaxBackend: reduce mode {mode!r}"
             func = _ReduceModeMap.get(mode, _logsumexp)
             raw_result = func(source.raw_tensor, axis=tuple(raw_axes))
-            out_dtype = "bool" if mode in ("any", "all") else source.dtype
+            # read the dtype off the result, do not assume the source's:
+            # summing int32 gives int64 (numpy promotion, visible because x64 is on), same as torch does
+            out_dtype = JaxBackend.get_dtype_name_raw(raw_result)
             sparse_dim = source.sparse_dim
         if correction_factor is not None:
             raw_result = raw_result * correction_factor.copy_compatible_to_dims_raw(res_dims)
@@ -896,10 +898,13 @@ class JaxBackend(Backend[jax.Array]):
             start = start.raw_tensor
         elif start is None:
             start = 0
-        # the size must be static: JAX has no data-dependent shapes
+        # The size must be static: JAX has no data-dependent shapes.
+        # The raw shape always is static, so prefer it over Dim.get_dim_value(),
+        # which is a traced value for a dynamic dim (its max over the seq lens).
+        axis_len = source.raw_tensor.shape[axis_int]
         if isinstance(size, Dim):
             assert end is None
-            size = size.get_dim_value()
+            size = _static_size(size)
         elif isinstance(size, Tensor):
             assert end is None and size.dims == (), f"RF JaxBackend: slice size {size} must be scalar and static"
             size = int(size.raw_tensor)
@@ -909,12 +914,15 @@ class JaxBackend(Backend[jax.Array]):
                 end = int(end.raw_tensor)
             elif isinstance(end, int):
                 if end < 0:
-                    end += axis.get_dim_value()
+                    end += axis_len
             elif end is None:
-                end = axis.get_dim_value()
+                end = axis_len
             else:
                 raise TypeError(f"slice: unsupported type for end: {type(end)}")
-            size = end - int(start) if not isinstance(start, jax.Array) else end - start
+            assert not isinstance(start, jax.Array), (
+                f"RF JaxBackend: slice with a device-side start needs an explicit static size, got {start}"
+            )
+            size = end - start
         elif not isinstance(size, int):
             raise TypeError(f"slice: unsupported type for size: {type(size)}")
         out.raw_tensor = jax.lax.dynamic_slice_in_dim(source.raw_tensor, start, int(size), axis=axis_int)
@@ -1011,6 +1019,108 @@ class JaxBackend(Backend[jax.Array]):
         weight_raw = weight.copy_compatible_to_dims_raw(out.dims)
         out.raw_tensor = start_raw + weight_raw * (end_raw - start_raw)
         return out
+
+    # --- losses
+
+    @staticmethod
+    def softmax_cross_entropy_with_logits(*, logits: Tensor, targets: Tensor, axis: Dim):
+        """
+        Efficient cross entropy.
+
+        Written in RF ops rather than a fused kernel:
+        XLA fuses the log_softmax with the gather / weighted sum anyway,
+        so there is nothing to win from a special case here.
+
+        :param logits: unnormalized scores over axis
+        :param targets: probabilities over axis, or sparse indices into axis
+        :param targets: class labels dim over which softmax is computed
+        :param axis:
+        :return: cross entropy, same dims as logits but without axis
+        """
+        assert axis in logits.dims, "Specified axis not present in logits."
+        log_probs = rf.log_softmax(logits, axis=axis)
+        if targets.sparse_dim:
+            assert targets.sparse_dim == axis, (
+                f"softmax_cross_entropy_with_logits: targets sparse dim {targets.sparse_dim} != axis {axis}"
+            )
+            return -rf.gather(log_probs, indices=targets, axis=axis)
+        assert axis in targets.dims, "Specified axis not present in targets."
+        return -rf.reduce_sum(targets * log_probs, axis=axis)
+
+    @staticmethod
+    def ctc_loss(
+        *,
+        logits: Tensor,
+        logits_normalized: bool = False,
+        targets: Tensor,
+        input_spatial_dim: Dim,
+        targets_spatial_dim: Dim,
+        blank_index: int,
+        max_approx: bool = False,
+        use_native_op: Optional[bool] = None,
+        label_loop: bool = True,
+    ) -> Tensor:
+        """
+        CTC loss, via optax.
+
+        :param logits: [batch_dims..., input_spatial_dim, vocab]
+        :param logits_normalized: whether logits are already log probs
+            (optax log_softmaxes internally, which is a no-op on normalized input)
+        :param targets: [batch_dims..., targets_spatial_dim] -> vocab
+        :param input_spatial_dim:
+        :param targets_spatial_dim:
+        :param blank_index:
+        :param max_approx: not implemented
+        :param use_native_op: not implemented
+        :param label_loop: only the standard label loop
+        :return: loss [batch_dims...], summed over time, not normalized
+        """
+        import optax
+
+        assert not max_approx, "RF JaxBackend: ctc_loss max_approx not implemented"
+        assert label_loop, "RF JaxBackend: ctc_loss label_loop=False not implemented"
+        assert not use_native_op, "RF JaxBackend: ctc_loss use_native_op not implemented"
+        assert targets.sparse_dim and targets.sparse_dim.dimension <= logits.feature_dim.dimension
+        batch_dims = logits.remaining_dims((input_spatial_dim, logits.feature_dim))
+        batch_dims_targets = targets.remaining_dims(targets_spatial_dim)
+        if set(batch_dims) != set(batch_dims_targets):
+            logits = rf.expand_dims(logits, [d for d in batch_dims_targets if d not in batch_dims])
+            targets = rf.expand_dims(targets, [d for d in batch_dims if d not in batch_dims_targets])
+            batch_dims = logits.remaining_dims((input_spatial_dim, logits.feature_dim))
+        batch_shape = [d.get_dim_value() for d in batch_dims]
+        batch_n_elems = prod(batch_shape)
+
+        # optax wants [B, T, C] / [B, S], with 1.0 marking padded frames
+        logits_raw = logits.copy_compatible_to_dims_raw(batch_dims + [input_spatial_dim, logits.feature_dim])
+        logits_raw = jnp.reshape(logits_raw, (batch_n_elems,) + logits_raw.shape[-2:])
+        targets_raw = targets.copy_compatible_to_dims_raw(batch_dims + [targets_spatial_dim])
+        targets_raw = jnp.reshape(
+            jnp.broadcast_to(targets_raw, tuple(batch_shape) + (targets_spatial_dim.get_dim_value(),)),
+            (batch_n_elems, targets_spatial_dim.get_dim_value()),
+        )
+        input_lengths = jnp.reshape(
+            jnp.broadcast_to(input_spatial_dim.dyn_size_ext.copy_compatible_to_dims_raw(batch_dims), batch_shape),
+            (batch_n_elems,),
+        )
+        target_lengths = jnp.reshape(
+            jnp.broadcast_to(targets_spatial_dim.dyn_size_ext.copy_compatible_to_dims_raw(batch_dims), batch_shape),
+            (batch_n_elems,),
+        )
+        logit_paddings = (jnp.arange(logits_raw.shape[1])[None, :] >= input_lengths[:, None]).astype(logits_raw.dtype)
+        label_paddings = (jnp.arange(targets_raw.shape[1])[None, :] >= target_lengths[:, None]).astype(logits_raw.dtype)
+        loss_raw = optax.ctc_loss(
+            logits=logits_raw,
+            logit_paddings=logit_paddings,
+            labels=targets_raw.astype(jnp.int32),
+            label_paddings=label_paddings,
+            blank_id=blank_index,
+        )
+        return Tensor(
+            name="ctc_loss",
+            dims=batch_dims,
+            raw_tensor=jnp.reshape(loss_raw, batch_shape),
+            dtype=JaxBackend.get_dtype_name_raw(loss_raw),
+        )
 
     # --- convolution
 
@@ -1136,8 +1246,13 @@ class JaxBackend(Backend[jax.Array]):
             pad = [(0, 0)] + list(pad)
         dtype = src_raw.dtype
         if mode == "max":
+            # The init value must be the monoid IDENTITY (-inf), not just a very small number:
+            # only then does JAX lower this to reduce_window_max, which has a transpose rule.
+            # With finfo.min it builds a generic reduce_window, and the backward pass then fails with
+            # "Linearization failed to produce known values for all output primals".
+            init = -numpy.inf if jnp.issubdtype(dtype, jnp.floating) else _dtype_min(dtype)
             out_raw = jax.lax.reduce_window(
-                src_raw, _dtype_min(dtype), jax.lax.max, window, window_strides, pad, window_dilation=window_dilation
+                src_raw, init, jax.lax.max, window, window_strides, pad, window_dilation=window_dilation
             )
         elif mode == "avg":
             assert all(d == 1 for d in window_dilation), "RF JaxBackend: dilation_rate only supported for max_pool"
@@ -1573,6 +1688,28 @@ def _dtype_max(dtype) -> Union[int, float]:
     :return: largest representable value, i.e. the neutral element of min
     """
     return jnp.finfo(dtype).max if jnp.issubdtype(dtype, jnp.floating) else jnp.iinfo(dtype).max
+
+
+def _static_size(dim: Dim) -> int:
+    """
+    :param dim:
+    :return: the extent of the dim as a Python int, for use as a shape.
+
+    JAX shapes can never depend on traced values.
+    A static dim gives its size directly, a dynamic one its capacity if it declares one,
+    and outside of tracing its concrete max is fine as well.
+    """
+    if dim.dimension is not None:
+        return dim.dimension
+    if dim.capacity is not None:
+        return dim.capacity
+    try:
+        return int(dim.get_dim_value())
+    except jax.errors.ConcretizationTypeError:
+        raise AssertionError(
+            f"RF JaxBackend: dynamic dim {dim} is used as a shape under tracing,"
+            " so it needs a static capacity (Dim(..., capacity=...))"
+        ) from None
 
 
 def _pad_amount(amount: Union[Dim, int, Tensor], handle_dynamic_dims: bool) -> int:
