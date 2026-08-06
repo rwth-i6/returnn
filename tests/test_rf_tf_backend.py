@@ -11,6 +11,8 @@ The same comparison runs for all the other ``test_rf_*`` tests with ``RETURNN_TE
 from __future__ import annotations
 from typing import Tuple
 import _setup_test_env  # noqa
+import shutil
+import tempfile
 import numpy
 import returnn.frontend as rf
 from returnn.tensor import Tensor, Dim, TensorDict, batch_dim
@@ -340,6 +342,149 @@ def test_train_from_dataset():
         rf.select_backend_torch()
 
     assert losses[-1] < losses[0], f"loss did not decrease over epochs: {losses}"
+
+
+def test_checkpoint_save_load():
+    # Checkpoints for the RF path: the TF Saver takes an explicit {name: var} mapping,
+    # so the checkpoint keys are the RF parameter names (module hierarchy), independent of
+    # what the variables happen to be called in the graph. That is what makes a checkpoint
+    # written here loadable by name from another backend (and what the engine needs).
+    import tensorflow as tf
+    import returnn.tf.compat as tf_compat
+    from returnn.tf.frontend_low_level import TFBackend
+
+    # noinspection PyProtectedMember
+    from returnn.frontend import _backend
+
+    in_dim = Dim(4, name="in")
+    out_dim = Dim(3, name="out")
+
+    class _Net(rf.Module):
+        def __init__(self):
+            super().__init__()
+            self.linear = rf.Linear(in_dim, out_dim)
+            self.norm = rf.LayerNorm(out_dim)
+
+    ckpt_dir = tempfile.mkdtemp(prefix="returnn-test-rf-tf-ckpt-")
+    ckpt_path = ckpt_dir + "/model.001"
+    _backend.select_backend_tf()
+    try:
+        # write
+        with tf_compat.v1.Graph().as_default(), tf_compat.v1.Session().as_default() as session:
+            rf.set_random_seed(42)
+            with TFBackend.deferred_parameter_creation():
+                model = _Net()
+            TFBackend.create_parameters(model)
+            var_by_name = {name: TFBackend.get_parameter_variable(p) for name, p in model.named_parameters()}
+            saver = tf_compat.v1.train.Saver(var_by_name)
+            session.run(tf_compat.v1.global_variables_initializer())
+            written = {name: session.run(var) for name, var in var_by_name.items()}
+            saver.save(session, ckpt_path)
+
+        assert set(name for name, _ in tf.train.list_variables(ckpt_path)) == set(var_by_name)
+
+        # read back into a fresh graph and model
+        with tf_compat.v1.Graph().as_default(), tf_compat.v1.Session().as_default() as session:
+            rf.set_random_seed(1234)  # different init, so a failed restore would show
+            with TFBackend.deferred_parameter_creation():
+                model2 = _Net()
+            TFBackend.create_parameters(model2)
+            var_by_name2 = {name: TFBackend.get_parameter_variable(p) for name, p in model2.named_parameters()}
+            session.run(tf_compat.v1.global_variables_initializer())
+            tf_compat.v1.train.Saver(var_by_name2).restore(session, ckpt_path)
+            restored = {name: session.run(var) for name, var in var_by_name2.items()}
+    finally:
+        rf.select_backend_torch()
+        shutil.rmtree(ckpt_dir, ignore_errors=True)
+
+    assert set(written) == set(restored) == {"linear.weight", "linear.bias", "norm.scale", "norm.bias"}
+    for name in written:
+        numpy.testing.assert_array_equal(restored[name], written[name], err_msg=f"param {name} differs")
+
+
+def test_engine_train():
+    # The engine (returnn/tf/engine_rf.py) driving a config end to end:
+    # epoch loop, learning-rate control, dev evaluation, checkpoint per epoch.
+    from returnn.config import Config, global_config_ctx
+    from returnn.datasets.generating import DummyDataset
+    from returnn.tf.engine_rf import Engine
+
+    # noinspection PyProtectedMember
+    from returnn.frontend import _backend
+
+    n_data_dim, n_classes_dim, seq_len = 2, 3, 5
+    train_data = DummyDataset(input_dim=n_data_dim, output_dim=n_classes_dim, num_seqs=8, seq_len=seq_len)
+    train_data.init_seq_order(epoch=1)
+    dev_data = DummyDataset(input_dim=n_data_dim, output_dim=n_classes_dim, num_seqs=4, seq_len=seq_len)
+    dev_data.init_seq_order(epoch=1)
+
+    time_dim = Dim(Tensor("time", [batch_dim], dtype="int32"))
+    in_dim = Dim(n_data_dim, name="in")
+    out_dim = Dim(n_classes_dim, name="out")
+
+    class _Net(rf.Module):
+        def __init__(self):
+            super().__init__()
+            self.out = rf.Linear(in_dim, out_dim)
+
+    # noinspection PyShadowingNames
+    def _get_model(*, epoch: int, step: int, **_kwargs) -> rf.Module:
+        return _Net()
+
+    # noinspection PyShadowingNames
+    def _train_step(*, model: _Net, extern_data: TensorDict, **_kwargs):
+        logits = model.out(extern_data["data"])
+        loss = rf.cross_entropy(estimated=logits, target=extern_data["classes"], axis=out_dim, estimated_type="logits")
+        loss.mark_as_loss("ce")
+
+    model_dir = tempfile.mkdtemp(prefix="returnn-test-rf-tf-engine-")
+    config = Config(
+        {
+            "backend": "tensorflow",
+            "model": model_dir + "/model",
+            "extern_data": {
+                "data": {"dims": [batch_dim, time_dim, in_dim], "dtype": "float32"},
+                "classes": {"dims": [batch_dim, time_dim], "sparse_dim": out_dim, "dtype": "int32"},
+            },
+            "get_model": _get_model,
+            "train_step": _train_step,
+            "optimizer": {"class": "adam"},
+            "learning_rate": 0.05,
+            "batch_size": 20,
+            "max_seqs": 4,
+            "num_epochs": 3,
+        }
+    )
+
+    _backend.select_backend_tf()
+    prev_batch_dyn_size_ext = batch_dim.dyn_size_ext
+    try:
+        # the engine resolves the backend and the existing model files via the GLOBAL config
+        with global_config_ctx(config):
+            engine = Engine(config=config)
+            engine.init_train_from_config(config=config, train_data=train_data, dev_data=dev_data)
+            engine.train()
+            assert engine.epoch == 4  # trained epochs 1..3
+            scores = {
+                key: engine.learning_rate_control.get_epoch_error_dict(epoch) for epoch, key in [(1, "ep1"), (3, "ep3")]
+            }
+            print("scores:", scores)
+            assert scores["ep3"]["train_loss"] < scores["ep1"]["train_loss"], scores
+            assert "dev_loss" in scores["ep3"], scores
+            # the checkpoint of the last epoch is there, and holds the RF parameter names
+            import tensorflow as tf
+
+            ckpt = engine.get_epoch_model_filename(epoch=3)
+            assert set(name for name, _ in tf.train.list_variables(ckpt)) == {"out.weight", "out.bias"}
+
+            # a fresh engine continues from that checkpoint instead of starting over
+            engine2 = Engine(config=config)
+            engine2.init_train_from_config(config=config, train_data=train_data, dev_data=dev_data)
+            assert engine2.epoch == 4, "did not continue from the existing checkpoint"
+    finally:
+        batch_dim.dyn_size_ext = prev_batch_dyn_size_ext
+        rf.select_backend_torch()
+        shutil.rmtree(model_dir, ignore_errors=True)
 
 
 def _full_model_setup():

@@ -285,7 +285,13 @@ def init_engine():
     Initializes global ``engine``, for example :class:`returnn.tf.engine.Engine`.
     """
     global engine
-    if BackendEngine.is_tensorflow_selected():
+    if BackendEngine.get_selected_engine() == BackendEngine.TensorFlow:
+        # backend = "tensorflow": the model comes from RF code (get_model / train_step),
+        # not from a net dict, so this is the RF engine, not returnn.tf.engine.
+        from returnn.tf.engine_rf import Engine
+
+        engine = Engine(config=config)
+    elif BackendEngine.is_tensorflow_selected():
         from returnn.tf.engine import Engine
 
         engine = Engine(config=config)
