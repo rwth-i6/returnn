@@ -10,7 +10,7 @@ def hdf5_strings(handle, name, data):
         dset = handle.create_dataset(name, (len(data),), dtype="S" + str(S))
         dset[...] = data
     except Exception:
-        dt = h5py.special_dtype(vlen=unicode)
+        dt = h5py.special_dtype(vlen=str)
         del handle[name]
         dset = handle.create_dataset(name, (len(data),), dtype=dt)
         dset[...] = data

@@ -2,8 +2,7 @@
 # coding=utf-8
 import h5py
 import numpy
-from scipy.ndimage import imread
-from scipy.misc import imsave, imresize
+from PIL import Image
 import os
 import glob
 import sys
@@ -89,7 +88,7 @@ def write_to_hdf(
         targets = []
         for i, (img_name, transcription) in enumerate(zip(file_list, transcription_list)):
             targets += transcription
-            img = imread(img_name)
+            img = numpy.array(Image.open(img_name))
             img = 255 - img
             img = numpy.pad(img, ((pad_y, pad_y), (pad_x, pad_x)), "constant")
             sizes.append(img.shape)
