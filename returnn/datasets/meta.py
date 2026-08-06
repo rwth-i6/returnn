@@ -41,7 +41,9 @@ class EpochWiseFilter:
     """
 
     def __init__(
-        self, epochs_opts: Dict[Tuple[int, Optional[int]], Dict[str, Any]], debug_msg_prefix: str = "EpochWiseFilter"
+        self,
+        epochs_opts: Dict[Tuple[Optional[int], Optional[int]], Dict[str, Any]],
+        debug_msg_prefix: str = "EpochWiseFilter",
     ):
         """
         :param epochs_opts: (ep_start, ep_end) -> epoch opts

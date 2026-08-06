@@ -231,7 +231,7 @@ class ExternData(TensorDict):
     def check_matched_dataset(self, dataset, used_data_keys=None):
         """
         :param Dataset.Dataset dataset:
-        :param set[str]|list[str] used_data_keys:
+        :param set[str]|list[str]|None used_data_keys: all data keys of the dataset by default
         :return: nothing, will assert the check
         """
         if used_data_keys is None:
@@ -569,12 +569,15 @@ class TFNetwork:
         name="",
     ):
         """
-        :param returnn.config.Config config: only needed to init extern_data if not specified explicitly
+        :param returnn.config.Config|None config: only needed to init extern_data if not specified explicitly
         :param ExternData|None extern_data:
         :param int|None rnd_seed:
-        :param bool|tf.Tensor train_flag: True if we want to use this model in training, False if in eval, or dynamic
-        :param bool eval_flag: whether to calculate losses. if train_flag is not False, this will be set to True
-        :param bool search_flag: whether we perform a beam-search. see usage
+        :param bool|tf.Tensor|None train_flag: True if we want to use this model in training, False if in eval,
+          or dynamic. None means inherited from the base net, else False
+        :param bool|None eval_flag: whether to calculate losses. if train_flag is not False, this will be set to True.
+          None means inherited from the base net, else False
+        :param bool|None search_flag: whether we perform a beam-search. see usage.
+          None means inherited from the base net, else False
         :param returnn.tf.layers.base.LayerBase|None parent_layer:
         :param TFNetwork|None parent_net:
         :param TFNetwork|None extra_parent_net: we are on the same level (not really a child),
