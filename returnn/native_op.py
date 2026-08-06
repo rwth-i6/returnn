@@ -3353,8 +3353,15 @@ class FastBaumWelchOp(NativeOpGenBase):
       #endif
 
         for (unsigned e = threadIdx.x; e < num_edges; e += blockDim.x) {
+          float v = buffer[e];
+          if (isinf(v) || isnan(v)) {
+            // unused/masked edges: v - sum stays inf/nan anyway -- skip the write
+            // (and the sequence_idxs load). With a bound-shaped buffer most edges are
+            // of this kind, so this halves the normalize traffic. Bit-identical.
+            continue;
+          }
           unsigned s = sequence_idxs[e];
-          buffer[e] -= sum[s];
+          buffer[e] = v - sum[s];
         }
       }
     """,
