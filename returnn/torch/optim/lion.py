@@ -110,7 +110,7 @@ try:
 
     # noinspection PyPackageRequirements
     import triton.language as tl
-except ImportError as e:
+except ImportError:
     triton = None
     tl = None
 

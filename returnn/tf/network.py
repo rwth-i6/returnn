@@ -1995,7 +1995,7 @@ class TFNetwork:
         if should_train or should_eval:
             # These values are cached internally and the graph nodes are created on the first call.
             loss = self.get_objective()
-            if loss is 0:
+            if isinstance(loss, int) and loss == 0:  # int 0 = no loss; a tf.Tensor must not go into `==`
                 loss = tf_util.global_tensor(lambda: tf.constant(0.0), name="zero_loss")
             else:  # non-constant-zero loss
                 assert self.losses_dict

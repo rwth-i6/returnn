@@ -460,7 +460,7 @@ class BucketOrderingIterDataPipe(torch.utils.data.IterDataPipe):
 
         assert buckets, "empty bucket batching configuration"
         if not all(size > 0 and max_seqs > 0 for size, max_seqs in buckets):
-            raise ValueError(f"bucket sizes and max seqs in bucket must be positive")
+            raise ValueError("bucket sizes and max seqs in bucket must be positive")
         self._max_seq_lens, self._max_bucket_sizes = zip(*sorted(buckets))
         assert len(set(self._max_seq_lens)) == len(self._max_seq_lens), "seq len boundaries must all be unique"
 
@@ -549,7 +549,7 @@ def get_batching_iterable_dataset_from_config(
         cls = torch_batching
     else:
         raise ValueError(
-            f"custom_batching must either be a dict containing a `class` key naming a type, a type or a callable."
+            "custom_batching must either be a dict containing a `class` key naming a type, a type or a callable."
         )
     batches_dataset = cls(dataset, **batching_args)
     assert isinstance(batches_dataset, torch.utils.data.IterableDataset)

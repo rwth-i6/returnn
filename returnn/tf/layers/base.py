@@ -1710,7 +1710,7 @@ class LayerBase:
             c += self.spatial_smoothing * self.get_output_spatial_smoothing_energy()
         if self.darc1:
             c += self.darc1 * self.get_darc1()
-        if c is 0:
+        if isinstance(c, int) and c == 0:  # int 0 means no constraints; a tf.Tensor is never 0 here
             return None
         return c
 

@@ -296,7 +296,7 @@ class Config:
             # the config which require the global variable to be available.
             # See :func:`test_rnn_init_config_py_global_var`.
             value_type = type(self.typed_dict[key])
-            if value_type == str:
+            if value_type is str:
                 pass  # keep as-is
             else:
                 try:

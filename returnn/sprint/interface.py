@@ -997,7 +997,7 @@ def make_criterion_class():
         errorSignal = None
 
         def __eq__(self, other):
-            return type(self) == type(other)  # nopep8
+            return type(self) is type(other)
 
         def __hash__(self):
             return hash(type(self))

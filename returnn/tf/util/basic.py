@@ -2217,7 +2217,7 @@ def expand_dims_unbroadcast(x, axis, dim, name="expand_dims_unbroadcast"):
     with tf.name_scope(name):
         x = tf.convert_to_tensor(x)
         x = tf.expand_dims(x, axis)
-        if dim is not 1:
+        if not (isinstance(dim, int) and dim == 1):  # dim can be a tf.Tensor, keep it out of `==`
             new_ndim = x.get_shape().ndims
             assert new_ndim is not None, "not implemented otherwise yet"
             assert isinstance(axis, int), "not implemented otherwise yet"
@@ -6051,7 +6051,7 @@ def tensor_array_stack(ta, start=0, stop=None, name="TensorArrayStack"):
     :param str name:
     :rtype: tf.Tensor
     """
-    if start is 0 and stop is None:
+    if isinstance(start, int) and start == 0 and stop is None:  # start can be a tf.Tensor, keep it out of `==`
         return ta.stack(name=name)
     with tf_compat.v1.colocate_with(_tensor_array_ref(ta)):
         with tf.name_scope(name):
