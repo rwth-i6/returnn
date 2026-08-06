@@ -234,6 +234,114 @@ def _train_loop(config, extern_data, net_cls, train_step, losses, feed_data, fee
             losses.append(float(loss_v))
 
 
+def test_train_from_dataset():
+    # The data half of a TF engine step: batches from a real RETURNN Dataset,
+    # assembled by the backend-independent batch_to_raw_dict, fed into the placeholders.
+    # Together with test_train_step_with_updater this is everything the engine loop does per step.
+    import tensorflow as tf
+    import returnn.tf.compat as tf_compat
+    from returnn.config import Config, global_config_ctx
+    from returnn.datasets.generating import DummyDataset
+    from returnn.engine.batch import batch_to_raw_dict
+    from returnn.tf.updater import Updater
+    from returnn.tf.frontend_low_level import TFBackend
+
+    # noinspection PyProtectedMember
+    from returnn.frontend import _backend
+
+    n_data_dim, n_classes_dim, seq_len = 2, 3, 5
+    time_dim = Dim(Tensor("time", [batch_dim], dtype="int32"))
+    in_dim = Dim(n_data_dim, name="in")
+    out_dim = Dim(n_classes_dim, name="out")
+    extern_data = TensorDict(
+        {
+            "data": Tensor("data", [batch_dim, time_dim, in_dim], dtype="float32"),
+            "classes": Tensor("classes", [batch_dim, time_dim], dtype="int32", sparse_dim=out_dim),
+        }
+    )
+    dataset = DummyDataset(input_dim=n_data_dim, output_dim=n_classes_dim, num_seqs=8, seq_len=seq_len)
+    dataset.init_seq_order(epoch=1)
+
+    class _Net(rf.Module):
+        def __init__(self):
+            super().__init__()
+            self.out = rf.Linear(in_dim, out_dim)
+
+        def __call__(self, x: Tensor) -> Tensor:
+            return self.out(x)
+
+    def _train_step(*, model: _Net, extern_data: TensorDict) -> Tensor:
+        logits = model(extern_data["data"])
+        loss = rf.cross_entropy(estimated=logits, target=extern_data["classes"], axis=out_dim, estimated_type="logits")
+        return rf.reduce_mean(loss, axis=loss.dims)
+
+    config = Config({"optimizer": {"class": "adam"}, "learning_rate": 0.05})
+    _backend.select_backend_tf()
+    losses = []
+    prev_batch_dyn_size_ext = batch_dim.dyn_size_ext
+    try:
+        with (
+            tf_compat.v1.Graph().as_default(),
+            tf_compat.v1.Session().as_default() as session,
+            global_config_ctx(config),
+        ):
+            rf.set_random_seed(42)
+            for value in extern_data.data.values():
+                value.raw_tensor = TFBackend.create_placeholder_raw(value)
+                for dim in value.dims:
+                    if dim.is_dynamic() and dim.dyn_size_ext is not None and dim.dyn_size_ext.raw_tensor is None:
+                        dim.dyn_size_ext.raw_tensor = TFBackend.create_placeholder_raw(dim.dyn_size_ext)
+            batch_dim.dyn_size_ext = Tensor("batch", dims=(), dtype="int32")
+            batch_dim.dyn_size_ext.raw_tensor = tf.shape(extern_data.data["data"].raw_tensor)[0]
+
+            with TFBackend.deferred_parameter_creation():
+                model = _Net()
+            TFBackend.create_parameters(model)
+            loss = _train_step(model=model, extern_data=extern_data)
+
+            global_train_step_var = tf.Variable(0, dtype="int64", trainable=False, name="global_step")
+            updater = Updater(
+                config=config,
+                initial_learning_rate=0.05,
+                objective=loss.raw_tensor,
+                global_train_step_var=global_train_step_var,
+            )
+            updater.set_trainable_vars([TFBackend.get_parameter_variable(p) for _, p in model.named_parameters()])
+            optim_op = updater.get_optim_op()
+            session.run(tf_compat.v1.global_variables_initializer())
+            updater.init_optimizer_vars(session)
+            updater.set_learning_rate(0.05, session=session)
+
+            n_steps = 0
+            for epoch in range(1, 6):
+                dataset.init_seq_order(epoch=epoch)
+                batches = dataset.generate_batches(recurrent_net=False, batch_size=20, max_seqs=4)
+                epoch_losses = []
+                while batches.has_more():
+                    (batch,) = batches.peek_next_n(1)
+                    raw = batch_to_raw_dict(
+                        batch, dataset=dataset, extern_data=extern_data, data_keys=["data", "classes"]
+                    )
+                    feed_dict = {
+                        extern_data.data["data"].raw_tensor: raw["data"],
+                        extern_data.data["classes"].raw_tensor: raw["classes"],
+                        time_dim.dyn_size_ext.raw_tensor: raw["data_seq_lens"],
+                    }
+                    loss_v, _ = session.run([loss.raw_tensor, optim_op], feed_dict=feed_dict)
+                    epoch_losses.append(float(loss_v))
+                    n_steps += 1
+                    batches.advance(1)
+                losses.append(sum(epoch_losses) / len(epoch_losses))
+                print("epoch %i: %d steps, mean loss %.4f" % (epoch, len(epoch_losses), losses[-1]))
+            # the Updater increments the step counter as part of the optim op
+            assert int(session.run(global_train_step_var)) == n_steps
+    finally:
+        batch_dim.dyn_size_ext = prev_batch_dyn_size_ext
+        rf.select_backend_torch()
+
+    assert losses[-1] < losses[0], f"loss did not decrease over epochs: {losses}"
+
+
 def _full_model_setup():
     """
     :return: extern_data, get_model, forward_step, dims.
