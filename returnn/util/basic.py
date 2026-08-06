@@ -139,6 +139,7 @@ class BackendEngine:
     TensorFlowNetDict = 1
     TensorFlow = 2
     Torch = 3  # PyTorch
+    Jax = 4
     selected_engine = None  # type: typing.Optional[int]  # One of the possible engines.
 
     @classmethod
@@ -160,6 +161,7 @@ class BackendEngine:
                     "tensorflow-net-dict": cls.TensorFlowNetDict,
                     "tensorflow": cls.TensorFlow,
                     "torch": cls.Torch,
+                    "jax": cls.Jax,
                 }[backend]
             elif config.bool("use_tensorflow", False):
                 engine = cls.TensorFlowNetDict
@@ -183,6 +185,8 @@ class BackendEngine:
                 _backend.select_backend_returnn_layers_tf()
             elif engine == cls.Torch:
                 _backend.select_backend_torch()
+            elif engine == cls.Jax:
+                _backend.select_backend_jax()
         cls.selected_engine = engine
 
     @classmethod
@@ -208,6 +212,13 @@ class BackendEngine:
         :rtype: bool
         """
         return cls.get_selected_engine() == cls.Torch
+
+    @classmethod
+    def is_jax_selected(cls):
+        """
+        :rtype: bool
+        """
+        return cls.get_selected_engine() == cls.Jax
 
 
 class BehaviorVersion:
@@ -354,6 +365,9 @@ def get_model_filename_postfix():
         return ".meta"
     if BackendEngine.is_torch_selected():
         return ".pt"
+    if BackendEngine.is_jax_selected():
+        # plain NumPy, so a checkpoint is readable without JAX (see returnn.jax.checkpoint)
+        return ".npz"
     return ""
 
 

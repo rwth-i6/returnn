@@ -955,6 +955,58 @@ def test_full_model_vs_torch():
     # test_gradients_vs_torch already covers jit for a model with static dims.
 
 
+def test_train_steps_and_checkpoint():
+    """
+    The training mechanics: optax updater + checkpoint I/O.
+
+    Trains the Linear+LayerNorm model of test_gradients_vs_torch for a few steps on a fixed batch,
+    which must reduce the loss, and round-trips a checkpoint through the file system.
+    """
+    import tempfile
+    from returnn.jax.updater import Updater
+    from returnn.jax.checkpoint import save_checkpoint, load_checkpoint, set_model_params, get_model_params
+
+    _rf_jax()
+    batch, time, in_dim, out_dim = Dim(3, name="batch"), Dim(5, name="time"), Dim(4, name="in"), Dim(6, name="out")
+    x_np = numpy.random.RandomState(67).normal(size=(3, 5, 4)).astype("float32")
+    x = _make("x", x_np, [batch, time, in_dim])
+    mods, loss_fn = _model_and_loss(x, in_dim, out_dim)
+    params = [p for mod in mods for _, p in mod.named_parameters()]
+
+    raw_fn, value_and_grad = _jax_step_and_grad(params, loss_fn)
+    step_fn = jax.jit(jax.value_and_grad(raw_fn))
+
+    updater = Updater(optimizer_opts={"class": "adamw", "epsilon": 1e-8, "weight_decay": 0.0})
+    raws = [p.raw_tensor for p in params]
+    opt_state = updater.init(raws)
+
+    losses = []
+    for _ in range(20):
+        loss, grads = step_fn(raws)
+        losses.append(float(loss))
+        raws, opt_state = updater.step(params=raws, grads=grads, opt_state=opt_state, learning_rate=0.05)
+    for p, raw in zip(params, raws):
+        p.raw_tensor = raw
+
+    assert losses[-1] < losses[0] * 0.5, f"loss did not go down: {losses[0]} -> {losses[-1]}"
+    assert all(numpy.isfinite(losses)), losses
+
+    # checkpoint round-trip: write, perturb the model, load back, and the values must match again
+    linear = mods[0]
+    before = get_model_params(linear)
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        filename = f"{tmp_dir}/model.npz"
+        save_checkpoint(linear, filename, step=20, epoch=1)
+        for _, p in linear.named_parameters():
+            p.assign(rf.zeros(p.dims, dtype=p.dtype))
+        assert not numpy.allclose(get_model_params(linear)["weight"], before["weight"])
+        set_model_params(linear, load_checkpoint(filename))
+    after = get_model_params(linear)
+    assert set(after) == set(before)
+    for name in before:
+        numpy.testing.assert_array_equal(after[name], before[name], err_msg=f"{name} did not round-trip")
+
+
 def test_device():
     _rf_jax()
     x = _make("x", numpy.zeros((2,), dtype="float32"), [Dim(2, name="d")])
