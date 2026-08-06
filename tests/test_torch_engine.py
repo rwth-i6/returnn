@@ -751,6 +751,48 @@ def test_load_optimizer_changed_weight_decay_split():
     assert torch.equal(opt2.state[ln_weight]["exp_avg"], exp_avg1)
 
 
+def test_multi_optimizer_load_cross_algorithm_error():
+    model = torch.nn.Sequential(torch.nn.Linear(4, 4), torch.nn.Linear(4, 4))
+
+    def _filter_first(*, full_param_name, **_kwargs):
+        return full_param_name.startswith("0.")
+
+    def _filter_second(*, full_param_name, **_kwargs):
+        return full_param_name.startswith("1.")
+
+    def _make_updater(params_filter):
+        config = Config(
+            dict(
+                optimizer={
+                    "class": "multi",
+                    "optimizers": [
+                        {"class": "adamw", "params_filter": params_filter, "weight_decay": 1e-3},
+                        {"class": "sgd", "momentum": 0.9},
+                    ],
+                }
+            )
+        )
+        updater = Updater(config=config, network=model, device=torch.device("cpu"))
+        updater.create_optimizer()
+        updater.set_current_train_step(global_train_step=0, epoch=1)
+        return updater
+
+    updater1 = _make_updater(_filter_first)
+    for param in model.parameters():
+        param.grad = torch.ones_like(param)
+    updater1.get_optimizer().step()
+    updater2 = _make_updater(_filter_second)
+
+    with tempfile.TemporaryDirectory(prefix="returnn_test_multi_load_cross_algo") as tmp_dir:
+        updater1.save_optimizer(tmp_dir + "/model.opt.pt")
+        try:
+            updater2.load_optimizer(tmp_dir + "/model.opt.pt")
+        except ValueError as exc:
+            assert "moved" in str(exc) and "AdamW" in str(exc) and "SGD" in str(exc)
+        else:
+            raise AssertionError("expected ValueError for a cross-optimizer param move")
+
+
 def test_updater_weight_decay_blacklist():
     from returnn.util.basic import DictRefKeys
 

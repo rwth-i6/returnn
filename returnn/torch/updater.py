@@ -408,6 +408,30 @@ class Updater:
                 else:
                     print("load_optimizer: Params in different order.", file=log.v3)
                 print("load_optimizer: Will remap the state dict.", file=log.v3)
+                sub_optimizers = getattr(self.optimizer, "sub_optimizers", None)
+                if sub_optimizers is not None:
+                    group_owner_classes = []
+                    for sub in sub_optimizers:
+                        group_owner_classes += [type(sub)] * len(sub.param_groups)
+                    ckpt_group_idx_by_param_name = {}
+                    for group_idx, ckpt_group in enumerate(optimizer_state["optimizer"]["param_groups"]):
+                        for param_idx in ckpt_group["params"]:
+                            ckpt_group_idx_by_param_name[ckpt_param_names[param_idx]] = group_idx
+                    for group_idx, self_group in enumerate(self.optimizer.param_groups):
+                        for param in self_group["params"]:
+                            param_name = param_id_to_name[id(param)]
+                            if param_name not in self_param_names_critical_set:
+                                continue
+                            old_group_idx = ckpt_group_idx_by_param_name.get(param_name)
+                            if old_group_idx is None:
+                                continue
+                            if group_owner_classes[old_group_idx] is not group_owner_classes[group_idx]:
+                                raise ValueError(
+                                    f"load_optimizer: param {param_name!r} moved from"
+                                    f" {group_owner_classes[old_group_idx].__name__} (group {old_group_idx})"
+                                    f" to {group_owner_classes[group_idx].__name__} (group {group_idx})."
+                                    " Optimizer state cannot be transferred across optimizer algorithms."
+                                )
                 for ckpt_group, self_group in zip(
                     optimizer_state["optimizer"]["param_groups"], self.optimizer.param_groups
                 ):
