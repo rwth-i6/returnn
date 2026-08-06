@@ -147,7 +147,7 @@ class BackendEngine:
         """
         :param int engine: see the global class attribs for possible values
         :param int|None default_fallback_engine: if engine is None and not defined in config, use this
-        :param returnn.config.Config config:
+        :param returnn.config.Config|None config: the global config by default
         :param _select_rf_backend: internal. avoids that Torch/TF/anything further gets imported at this point
         """
         if engine is None:
@@ -445,7 +445,7 @@ def sys_exec_ret_code(*args, **kwargs):
 
 def git_commit_rev(commit="HEAD", git_dir=".", length=None):
     """
-    :param str commit:
+    :param str|None commit: None is treated like "HEAD"
     :param str git_dir:
     :param int|None length:
     :rtype: str
@@ -1026,7 +1026,8 @@ def set_pretty_print_as_bytes(as_bytes):
 def pretty_print(obj, limit=None):
     """
     :param object obj:
-    :param int|float limit: use float("inf") to disable. None will use the default, via set_pretty_print_default_limit
+    :param int|float|None limit: use float("inf") to disable.
+        None will use the default, via set_pretty_print_default_limit
     :return: repr(obj), or some shorted version of that, maybe with extra info
     :rtype: str
     """
@@ -1672,7 +1673,7 @@ def random_orthogonal(shape, gain=1.0, seed=None):
 
     :param tuple[int] shape:
     :param float gain:
-    :param int seed: for Numpy random generator
+    :param int|None seed: for Numpy random generator; None uses the global Numpy random state
     :return: random orthogonal matrix
     :rtype: numpy.ndarray
     """
