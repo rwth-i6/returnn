@@ -771,6 +771,170 @@ class TFBackend(Backend[tf.Tensor]):
             raw_result = tf.einsum(subscripts, a.raw_tensor, b.raw_tensor)
         return Tensor("dot", dims=result_dims, raw_tensor=raw_result, dtype=TFBackend.get_dtype_name_raw(raw_result))
 
+    @staticmethod
+    def softmax_cross_entropy_with_logits(*, logits: Tensor, targets: Tensor, axis: Dim) -> Tensor:
+        """
+        :param logits: unnormalized
+        :param targets: probabilities, or sparse
+        :param axis: class labels dim
+        :return: cross entropy, logits dims without axis
+        """
+        assert axis in logits.dims, f"softmax_cross_entropy_with_logits: {axis} not in logits {logits}"
+        with tf_util.same_control_flow_ctx([logits, targets]):
+            if axis == targets.sparse_dim:
+                assert logits.dims_set - {axis} == targets.dims_set, (
+                    f"logits {logits} and targets {targets} dims must match (except the sparse dim)"
+                )
+                out_dims = list(targets.dims)
+                # TF wants the classes on the last axis
+                logits_raw = logits.copy_compatible_to_dims_raw(out_dims + [axis])
+                targets_raw = targets.copy_compatible_to_dims_raw(out_dims)
+                raw = tf.nn.sparse_softmax_cross_entropy_with_logits(
+                    labels=tf.cast(targets_raw, tf.int32), logits=logits_raw
+                )
+            else:
+                assert not targets.sparse_dim, (
+                    f"cross entropy is expected along the sparse dim, got targets {targets} and axis {axis}"
+                )
+                assert logits.dims_set == targets.dims_set and axis in targets.dims
+                out_dims = [d for d in logits.dims if d != axis]
+                logits_raw = logits.copy_compatible_to_dims_raw(out_dims + [axis])
+                targets_raw = targets.copy_compatible_to_dims_raw(out_dims + [axis])
+                raw = tf.nn.softmax_cross_entropy_with_logits(labels=targets_raw, logits=logits_raw, axis=-1)
+        return Tensor("cross_entropy", dims=out_dims, raw_tensor=raw, dtype=TFBackend.get_dtype_name_raw(raw))
+
+    @staticmethod
+    def ctc_loss(
+        *,
+        logits: Tensor,
+        logits_normalized: bool = False,
+        targets: Tensor,
+        input_spatial_dim: Dim,
+        targets_spatial_dim: Dim,
+        blank_index: int,
+        max_approx: bool = False,
+        use_native_op: Optional[bool] = None,
+        label_loop: bool = True,
+    ) -> Tensor:
+        """
+        :param logits: [batch_dims..., input_spatial_dim, vocab]
+        :param logits_normalized: whether the logits are already log probs
+        :param targets: [batch_dims..., targets_spatial_dim] -> vocab (without blank)
+        :param input_spatial_dim:
+        :param targets_spatial_dim:
+        :param blank_index:
+        :param max_approx: not implemented
+        :param use_native_op: not implemented
+        :param label_loop: not implemented otherwise
+        :return: CTC loss, [batch_dims...]
+        """
+        if max_approx:
+            raise NotImplementedError("ctc_loss: max_approx not implemented for TF")
+        if not label_loop:
+            raise NotImplementedError("ctc_loss: label_loop=False not implemented for TF")
+        if use_native_op:
+            raise NotImplementedError("ctc_loss: use_native_op not implemented for TF")
+        assert targets.sparse_dim and targets.sparse_dim.dimension <= logits.feature_dim.dimension
+        batch_dims = logits.remaining_dims((input_spatial_dim, logits.feature_dim))
+        with tf_util.same_control_flow_ctx([logits, targets]):
+            # tf.nn.ctc_loss wants one batch axis: [batch, time, vocab] and [batch, targets]
+            logits_raw = logits.copy_compatible_to_dims_raw(batch_dims + [input_spatial_dim, logits.feature_dim])
+            targets_raw = targets.copy_compatible_to_dims_raw(batch_dims + [targets_spatial_dim])
+            input_lens = input_spatial_dim.dyn_size_ext.copy_compatible_to_dims_raw(batch_dims)
+            targets_lens = targets_spatial_dim.dyn_size_ext.copy_compatible_to_dims_raw(batch_dims)
+            batch_shape = _shape_raw(batch_dims)
+            if len(batch_dims) != 1:
+                logits_raw = tf.reshape(logits_raw, _shape_raw([-1] + list(logits_raw.shape[len(batch_dims) :])))
+                targets_raw = tf.reshape(targets_raw, _shape_raw([-1, targets_spatial_dim]))
+                input_lens = tf.reshape(input_lens, [-1])
+                targets_lens = tf.reshape(targets_lens, [-1])
+            loss_raw = tf.nn.ctc_loss(
+                labels=tf.cast(targets_raw, tf.int32),
+                # tf.nn.ctc_loss log-softmaxes internally, which is a no-op on already normalized logits
+                logits=logits_raw,
+                label_length=tf.cast(targets_lens, tf.int32),
+                logit_length=tf.cast(input_lens, tf.int32),
+                logits_time_major=False,
+                blank_index=blank_index,
+            )
+            if len(batch_dims) != 1:
+                loss_raw = tf.reshape(loss_raw, batch_shape)
+        return Tensor("ctc_loss", dims=batch_dims, raw_tensor=loss_raw, dtype=TFBackend.get_dtype_name_raw(loss_raw))
+
+    @staticmethod
+    def batch_norm(
+        source: Tensor,
+        *,
+        in_dim: Union[Dim, Sequence[Dim]],
+        running_mean: Optional[Tensor],
+        running_variance: Optional[Tensor],
+        gamma: Optional[Tensor],
+        beta: Optional[Tensor],
+        epsilon: float,
+        momentum: float,
+        affine: bool,
+        use_mask: bool,
+    ) -> Tensor:
+        """
+        :param source:
+        :param in_dim: the feature dim
+        :param running_mean:
+        :param running_variance:
+        :param gamma:
+        :param beta:
+        :param epsilon:
+        :param momentum:
+        :param affine:
+        :param use_mask: not implemented
+        :return: normalized source
+        """
+        if use_mask:
+            raise NotImplementedError("batch_norm with masking not implemented")
+        if (running_mean is None) != (running_variance is None):
+            raise ValueError("running_mean and running_variance must be both None or both not None")
+        assert isinstance(in_dim, Dim), "batch_norm: multiple in_dims not supported"
+        if affine and (gamma is None or beta is None):
+            raise ValueError("gamma and beta must be given if affine=True")
+        feat_axis = source.get_axis_from_description(in_dim)
+        reduce_axes = [i for i in range(len(source.dims)) if i != feat_axis]
+        bc_shape = [1] * len(source.dims)
+        bc_shape[feat_axis] = in_dim.get_dim_value()
+        # training means: use the current batch statistics, and update the running ones
+        training = rf.get_run_ctx().is_train_flag_enabled(func=rf.BatchNorm.__call__) or (running_mean is None)
+        with tf_util.same_control_flow_ctx(source):
+            if training:
+                mean_raw, variance_raw = tf.nn.moments(source.raw_tensor, axes=reduce_axes, keepdims=False)
+                update_ops = []
+                if running_mean is not None:
+                    n = tf.cast(tf.size(source.raw_tensor) // tf.shape(source.raw_tensor)[feat_axis], tf.float32)
+                    # the running variance is the unbiased one, as in the other backends
+                    update_ops = [
+                        tf_compat.v1.assign_add(
+                            running_mean.raw_tensor, momentum * (mean_raw - running_mean.raw_tensor)
+                        ),
+                        tf_compat.v1.assign_add(
+                            running_variance.raw_tensor,
+                            momentum * (variance_raw * n / (n - 1) - running_variance.raw_tensor),
+                        ),
+                    ]
+            else:
+                mean_raw, variance_raw = running_mean.raw_tensor, running_variance.raw_tensor
+                update_ops = []
+            out_raw = (source.raw_tensor - tf.reshape(mean_raw, bc_shape)) * tf.math.rsqrt(
+                tf.reshape(variance_raw, bc_shape) + epsilon
+            )
+            if affine:
+                out_raw = out_raw * tf.reshape(gamma.raw_tensor, bc_shape) + tf.reshape(beta.raw_tensor, bc_shape)
+            if update_ops:
+                # in graph mode an assign only happens when it is run,
+                # so tie the running-stats updates to the output
+                with tf.control_dependencies(update_ops):
+                    out_raw = tf.identity(out_raw)
+        out = source.copy_template("batch_norm")
+        out.raw_tensor = out_raw
+        out.feature_dim = in_dim
+        return out
+
     # noinspection PyShadowingBuiltins
     @staticmethod
     def conv(
