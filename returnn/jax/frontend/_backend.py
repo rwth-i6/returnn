@@ -10,6 +10,7 @@ therefore follows the same rules as the static-traceable regime of the PyTorch b
 
 from __future__ import annotations
 from typing import Optional, Union, Sequence, Tuple, Dict
+from functools import partial
 import numpy
 import jax
 import jax.numpy as jnp
@@ -125,7 +126,13 @@ class JaxBackend(Backend[jax.Array]):
         raw_tensor: jax.Array = x.raw_tensor
         if raw_tensor is None:
             return None
-        return _device_to_str(raw_tensor.device)
+        # Under a JAX transform (jit, grad, vmap) the raw tensor is a tracer, which has no device:
+        # the value does not exist yet, so its placement is not a question that can be answered here.
+        # RF treats None as unknown and then does not force any placement, which is what we want.
+        device = getattr(raw_tensor, "device", None)
+        if device is None:
+            return None
+        return _device_to_str(device)
 
     @staticmethod
     def copy_to_device(x: Tensor, device: Optional[str]) -> Tensor:
@@ -555,6 +562,60 @@ class JaxBackend(Backend[jax.Array]):
         out.raw_tensor = jax.lax.stop_gradient(out.raw_tensor)
         return out
 
+    @staticmethod
+    def gradient(y: Tensor, x: Tensor) -> Tensor:
+        """
+        :param y:
+        :param x:
+        :return: nothing -- this cannot work on JAX
+        """
+        raise NotImplementedError(
+            "RF JaxBackend: rf.gradient(y, x) has no JAX equivalent."
+            " JAX has no tape, so a gradient exists only for a FUNCTION,"
+            " and by the time you hold y, the computation that produced it is gone."
+            " Differentiate the step function instead (jax.grad / jax.value_and_grad),"
+            " which is what the engine does."
+        )
+
+    @staticmethod
+    def scaled_gradient(tensor: Tensor, scale: Union[float, Tensor]) -> Tensor:
+        """
+        :param tensor:
+        :param scale:
+        :return: just the tensor, but its gradient is scaled by the given factor
+        """
+        out = tensor.copy()
+        out.raw_tensor = _scale_grad(out.raw_tensor, _raw(scale, out.raw_tensor.dtype))
+        return out
+
+    @staticmethod
+    def scaled_gradient_ext(
+        x: Tensor,
+        *,
+        scale: Union[float, Tensor] = 1.0,
+        shift: Optional[Union[float, Tensor]] = None,
+        scale_shift_by_sum_over_axis: Optional[Dim] = None,
+    ):
+        """
+        :param x:
+        :param scale: will scale gradient by this value
+        :param shift: will shift gradient by this value
+        :param scale_shift_by_sum_over_axis: if given, will scale and shift by the sum over the given axis
+        :return: just x, but gradient in backward pass will be transformed accordingly
+        """
+        out = x.copy()
+        dtype = out.raw_tensor.dtype
+        if shift is None:
+            out.raw_tensor = _scale_grad(out.raw_tensor, _raw(scale, dtype))
+            return out
+        axis = (
+            x.get_axis_from_description(scale_shift_by_sum_over_axis, allow_int=False)
+            if scale_shift_by_sum_over_axis is not None
+            else None
+        )
+        out.raw_tensor = _scale_shift_grad(out.raw_tensor, _raw(scale, dtype), _raw(shift, dtype), axis)
+        return out
+
     # --- math
 
     @staticmethod
@@ -626,6 +687,68 @@ _ActivationFuncMap = {
 }
 
 _ReduceModeMap = {"sum": jnp.sum, "max": jnp.max, "min": jnp.min, "mean": jnp.mean, "any": jnp.any, "all": jnp.all}
+
+
+def _raw(value: Union[float, Tensor], dtype) -> jax.Array:
+    """
+    :param value: scalar, or a Tensor holding one
+    :param dtype: dtype to convert a plain scalar to
+    :return: the value as a JAX array, so that a custom_vjp gets a well-defined aval for it
+    """
+    if isinstance(value, Tensor):
+        return value.raw_tensor
+    return jnp.asarray(value, dtype=dtype)
+
+
+@jax.custom_vjp
+def _scale_grad(x: jax.Array, scale: jax.Array) -> jax.Array:
+    """
+    :param x:
+    :param scale:
+    :return: x unchanged; the backward pass scales the gradient by scale (scale=-1 is gradient reversal)
+    """
+    return x
+
+
+def _scale_grad_fwd(x: jax.Array, scale: jax.Array):
+    return x, scale
+
+
+def _scale_grad_bwd(scale: jax.Array, grad: jax.Array):
+    # the cotangent for scale itself is zero: it is a knob on the gradient, not an input of the value
+    return grad * scale, jnp.zeros_like(scale)
+
+
+_scale_grad.defvjp(_scale_grad_fwd, _scale_grad_bwd)
+
+
+@partial(jax.custom_vjp, nondiff_argnums=(3,))
+def _scale_shift_grad(x: jax.Array, scale: jax.Array, shift: jax.Array, axis: Optional[int]) -> jax.Array:
+    """
+    :param x:
+    :param scale:
+    :param shift:
+    :param axis: if given, the shift is weighted by the summed absolute gradient over this axis
+    :return: x unchanged; the backward pass scales and shifts the gradient
+    """
+    return x
+
+
+def _scale_shift_grad_fwd(x: jax.Array, scale: jax.Array, shift: jax.Array, axis: Optional[int]):
+    return x, (scale, shift)
+
+
+def _scale_shift_grad_bwd(axis: Optional[int], res, grad: jax.Array):
+    scale, shift = res
+    grad_out = grad * scale
+    if axis is not None:
+        grad_out = grad_out + shift * jnp.sum(jnp.abs(grad), axis=axis, keepdims=True)
+    else:
+        grad_out = grad_out + shift
+    return grad_out, jnp.zeros_like(scale), jnp.zeros_like(shift)
+
+
+_scale_shift_grad.defvjp(_scale_shift_grad_fwd, _scale_shift_grad_bwd)
 
 
 def _softmax(tensor: Tensor, *, axis: Dim, use_mask: bool, log: bool) -> Tensor:
