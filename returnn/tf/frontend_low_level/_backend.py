@@ -4,25 +4,67 @@ Backend for exposing TensorFlow-specific functionality.
 
 from __future__ import annotations
 from typing import Optional, Any, Dict, List, Union, Sequence, Tuple
+from dataclasses import dataclass
 import contextlib
 import string
 import numpy
 import tensorflow as tf
 
 import returnn.tf.compat as tf_compat
-from returnn.util.basic import NotSpecified, is_onnx_export_global, get_global_inf_value
+from returnn.util.basic import NotSpecified, is_onnx_export_global, get_global_inf_value, RefIdEq
 from returnn.tensor import Tensor, Dim
 from returnn.tf.util import basic as tf_util
 
 # noinspection PyProtectedMember
-from returnn.frontend._backend import Backend
+from returnn.frontend._backend import Backend, register_backend_by_tensor_type
 from returnn.frontend import RawTensorTypes
 import returnn.frontend as rf
 
 # noinspection PyProtectedMember
 from returnn.frontend import _random_journal
 
+__all__ = ["TFBackend", "DeferredVariable"]
+
 _TT = Tensor[tf.Tensor]
+
+
+class DeferredVariable:
+    """
+    Stands in as the raw tensor of an rf.Parameter whose tf.Variable does not exist yet,
+    see :func:`TFBackend.deferred_parameter_creation`.
+
+    It carries only what parameter construction needs (dtype, shape);
+    any attempt to use it in an op raises, at graph construction time.
+    """
+
+    def __init__(self, *, dtype: tf.DType, shape: Sequence[int]):
+        self.dtype = dtype
+        self.shape = tf.TensorShape(shape)
+
+    def __repr__(self):
+        return f"<DeferredVariable {self.dtype.name} {self.shape.as_list()}>"
+
+    def set_shape(self, shape):
+        """
+        No-op. The shape is known and fixed; this exists because the Tensor.raw_tensor setter calls it.
+
+        :param shape:
+        """
+
+    def __tf_tensor__(self, dtype=None, name=None):
+        raise RuntimeError(
+            f"{self}: the parameter variable was not created yet."
+            f" TFBackend.create_parameters(model) must run before the model is used."
+        )
+
+
+@dataclass
+class _DeferredParam:
+    """What we know about a parameter before its tf.Variable exists."""
+
+    initial: Optional[tf.Tensor] = None
+    trainable: bool = True
+    device: Optional[str] = None
 
 
 # Ignore this warning until we really expect that we implemented everything.
@@ -706,26 +748,79 @@ class TFBackend(Backend[tf.Tensor]):
             raw_result = tf.einsum(subscripts, a.raw_tensor, b.raw_tensor)
         return Tensor("dot", dims=result_dims, raw_tensor=raw_result, dtype=TFBackend.get_dtype_name_raw(raw_result))
 
+    _deferred_parameter_creation = False
+    _deferred_params: Dict[RefIdEq, _DeferredParam] = {}
+
     @staticmethod
-    def create_parameter_raw(tensor: rf.Parameter, *, device: Optional[str] = None) -> tf.Variable:
+    @contextlib.contextmanager
+    def deferred_parameter_creation():
         """
-        :return: parameter (by default trainable)
+        Inside this context, parameters do not get their tf.Variable yet:
+        the variable name should come from the module hierarchy,
+        which only exists once the model is fully constructed.
+        Wrap the model construction in this, then call :func:`create_parameters`::
+
+            with TFBackend.deferred_parameter_creation():
+                model = get_model(epoch=..., step=...)
+            TFBackend.create_parameters(model)
+
+        Until then the parameters hold a :class:`DeferredVariable`, which raises on any use.
+        """
+        prev = TFBackend._deferred_parameter_creation
+        try:
+            TFBackend._deferred_parameter_creation = True
+            yield
+        finally:
+            TFBackend._deferred_parameter_creation = prev
+
+    @staticmethod
+    def create_parameter_raw(
+        tensor: rf.Parameter, *, device: Optional[str] = None
+    ) -> Union[tf.Variable, DeferredVariable]:
+        """
+        :return: parameter (by default trainable), or a DeferredVariable, see deferred_parameter_creation
         """
         shape = [d.get_dim_value() for d in tensor.dims]
         assert all(isinstance(d, int) for d in shape), f"parameter {tensor} needs static dims, got shape {shape}"
         dtype = TFBackend.as_dtype_raw(tensor.dtype)
         trainable = not (tensor.dtype.startswith("int") or tensor.dtype.startswith("uint") or tensor.dtype == "bool")
+        if TFBackend._deferred_parameter_creation:
+            TFBackend._deferred_params[RefIdEq(tensor)] = _DeferredParam(trainable=trainable, device=device)
+            return DeferredVariable(dtype=dtype, shape=shape)
+        # Eager creation (ad-hoc use outside a model): the name is whatever rf.Parameter was
+        # constructed with, so the variables end up as "parameter", "parameter_1", ...
         # The variable gets a zero initializer here;
-        # the real initial value arrives later via set_parameter_initial_value
-        # (rf.Parameter sets it only after the raw tensor exists),
-        # and in graph mode that is an op which the caller runs once, see get_parameters_init_op.
-        # The name is whatever rf.Parameter was constructed with (TF uniquifies it);
-        # proper param naming needs the module tree and comes with the engine integration.
+        # the real initial value arrives later via set_parameter_initial_value.
         device_ctx = tf.device(device) if device else contextlib.nullcontext()
         with tf.control_dependencies(None), device_ctx:
             return tf.Variable(tf.zeros(shape, dtype=dtype), trainable=trainable, dtype=dtype, name=tensor.name)
 
-    _param_initial_values: Dict[Any, tf.Tensor] = {}  # tf.Variable ref -> initial value
+    @classmethod
+    def create_parameters(cls, model: rf.Module) -> None:
+        """
+        Creates the tf.Variable of every parameter of the model,
+        named after its position in the module hierarchy (`.` -> `/`).
+        Call this right after the model was constructed
+        inside :func:`deferred_parameter_creation`, before the model is used.
+
+        :param model:
+        """
+        for name, param in model.named_parameters():
+            raw = param.raw_tensor
+            assert isinstance(raw, DeferredVariable), (
+                f"parameter {name} has raw tensor {raw!r};"
+                f" expected a DeferredVariable, i.e. the model built inside deferred_parameter_creation()"
+            )
+            state = cls._deferred_params.pop(RefIdEq(param), _DeferredParam())
+            device_ctx = tf.device(state.device) if state.device else contextlib.nullcontext()
+            with tf.control_dependencies(None), device_ctx:
+                if state.initial is not None:
+                    # broadcast: a scalar init (e.g. bias 0.0) would otherwise give a scalar variable
+                    initial = tf.broadcast_to(state.initial, raw.shape.as_list())
+                else:
+                    initial = tf.zeros(raw.shape.as_list(), dtype=raw.dtype)
+                var = tf.Variable(initial, trainable=state.trainable, dtype=raw.dtype, name=name.replace(".", "/"))
+            param.raw_tensor = var
 
     @staticmethod
     def set_parameter_initial_value(param: rf.Parameter, value: Union[None, Tensor, rf.RawTensorTypes]) -> None:
@@ -733,32 +828,27 @@ class TFBackend(Backend[tf.Tensor]):
         :param param: parameter
         :param value: initial value
         """
-        var = TFBackend._get_param_var(param)
+        raw = param.raw_tensor
         if value is None:
-            TFBackend._param_initial_values.pop(var.ref(), None)  # falls back to the zero initializer
-            return
+            return  # keep the zero init
         with tf.control_dependencies(None):
             if isinstance(value, Tensor):
                 value_raw = value.copy_compatible_to_dims_raw(param.dims)
             else:
-                value_raw = tf.convert_to_tensor(value, dtype=var.dtype.base_dtype)
-            TFBackend._param_initial_values[var.ref()] = tf.broadcast_to(value_raw, var.shape.as_list())
-
-    @classmethod
-    def get_parameters_init_op(cls, params: Sequence[rf.Parameter]) -> tf.Operation:
-        """
-        :param params: e.g. from rf.Module.parameters()
-        :return: op assigning the initial values, to be run once before the first step.
-            In graph mode an initial value is an op,
-            and rf.Parameter provides it only after the variable exists,
-            so it cannot become the variable's own initializer.
-        """
-        ops = []
-        for param in params:
-            var = cls._get_param_var(param)
-            init = cls._param_initial_values.get(var.ref())
-            ops.append(tf_compat.v1.assign(var, init) if init is not None else var.initializer)
-        return tf.group(*ops)
+                value_raw = tf.convert_to_tensor(value, dtype=raw.dtype.base_dtype)
+            if isinstance(raw, DeferredVariable):
+                # The value tensor is built HERE, not at variable creation,
+                # so a random init keeps its place in the op order (and thus the RandomJournal order).
+                TFBackend._deferred_params[RefIdEq(param)].initial = value_raw
+                return
+            var = TFBackend._get_param_var(param)
+            value_raw = tf.broadcast_to(value_raw, var.shape.as_list())
+            # Without deferral, rf.Parameter provides the initial value only after the variable exists,
+            # so replace the variable's initializer (the zeros assign built at creation).
+            # These two attributes are where TF stores it;
+            # tf.compat.v1.global_variables_initializer() then runs OUR value.
+            var._initializer_op = tf_compat.v1.assign(var, value_raw).op
+            var._initial_value = value_raw
 
     @staticmethod
     def set_parameter_trainable(param: rf.Parameter, trainable: bool) -> None:
@@ -766,6 +856,9 @@ class TFBackend(Backend[tf.Tensor]):
         :param param: parameter
         :param trainable: whether the parameter should be trainable
         """
+        if isinstance(param.raw_tensor, DeferredVariable):
+            TFBackend._deferred_params[RefIdEq(param)].trainable = trainable
+            return
         var = TFBackend._get_param_var(param)
         # TF fixes trainability at variable creation, via membership in the trainable-variables collection,
         # so update that collection instead.
@@ -879,6 +972,22 @@ class TFBackend(Backend[tf.Tensor]):
         var = param.raw_tensor
         assert isinstance(var, tf.Variable), f"parameter {param} has raw tensor {var!r}, expected tf.Variable"
         return var
+
+
+# So that an rf.Parameter holding a DeferredVariable still dispatches to this backend
+# (the native dispatch consults this same table).
+register_backend_by_tensor_type(DeferredVariable, TFBackend)
+
+
+def _transpose_raw(raw_tensor: tf.Tensor, perm: Sequence[int]) -> tf.Tensor:
+    """
+    :param raw_tensor:
+    :param perm:
+    :return: transposed raw tensor, or the input itself if perm is the identity
+    """
+    if list(perm) == list(range(len(perm))):
+        return raw_tensor
+    return tf.transpose(raw_tensor, perm)
 
 
 def _random_scalar_arg(value: Union[None, int, float, Tensor], default: Union[None, int, float]) -> Any:

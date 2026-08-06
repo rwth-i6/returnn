@@ -11,8 +11,10 @@ The same comparison runs for all the other ``test_rf_*`` tests with ``RETURNN_TE
 from __future__ import annotations
 from typing import Tuple
 import _setup_test_env  # noqa
+import numpy
 import returnn.frontend as rf
 from returnn.tensor import Tensor, Dim, TensorDict, batch_dim
+from returnn.tf.frontend_low_level import DeferredVariable
 from rf_utils import run_model
 
 
@@ -81,6 +83,46 @@ def test_linear_softmax():
         log_probs.mark_as_output("log_probs", shape=(batch_dim, time_dim, classes_dim))
 
     run_model(extern_data, lambda *, epoch, step: _Net(), _forward_step, tf_low_level=True)
+
+
+def test_parameter_names_and_init():
+    # The variables are created after the model (deferred), so they can be named
+    # after their position in the module hierarchy, and the initial values must survive that.
+    import tensorflow as tf
+    import returnn.tf.compat as tf_compat
+    from returnn.tf.frontend_low_level import TFBackend
+
+    # noinspection PyProtectedMember
+    from returnn.frontend import _backend
+
+    in_dim = Dim(7, name="in")
+    out_dim = Dim(5, name="out")
+
+    class _Net(rf.Module):
+        def __init__(self):
+            super().__init__()
+            self.linear = rf.Linear(in_dim, out_dim)
+            self.norm = rf.LayerNorm(out_dim)
+
+    _backend.select_backend_tf()
+    with tf_compat.v1.Graph().as_default(), tf_compat.v1.Session().as_default() as session:
+        with TFBackend.deferred_parameter_creation():
+            net = _Net()
+        assert all(isinstance(p.raw_tensor, DeferredVariable) for _, p in net.named_parameters())
+        TFBackend.create_parameters(net)
+
+        names = {name: p.raw_tensor for name, p in net.named_parameters()}
+        assert set(names) == {"linear.weight", "linear.bias", "norm.scale", "norm.bias"}
+        for name, var in names.items():
+            assert isinstance(var, tf.Variable)
+            assert var.op.name == name.replace(".", "/"), f"{name}: unexpected variable name {var.op.name}"
+
+        # the standard init path must produce the values rf.Parameter asked for,
+        # incl. a scalar init broadcast to the full param shape
+        session.run(tf_compat.v1.global_variables_initializer())
+        numpy.testing.assert_almost_equal(session.run(names["norm.scale"]), numpy.ones([5]))
+        numpy.testing.assert_almost_equal(session.run(names["norm.bias"]), numpy.zeros([5]))
+        assert session.run(names["linear.weight"]).std() > 0  # Glorot init, not zeros
 
 
 def test_matmul_common_and_unique_dims():

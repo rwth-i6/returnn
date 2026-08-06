@@ -388,7 +388,11 @@ def _run_model_tf(extern_data: TensorDict, get_model: rf.GetModelFunc, forward_s
         extern_data.assign_from_raw_tensor_dict_(extern_data_raw)
         _tensor_dict_numpy_to_tf_(extern_data)
 
-        model = get_model(epoch=1, step=0)
+        # the variables are created after the model, so that they can be named by module hierarchy
+        with TFBackend.deferred_parameter_creation():
+            model = get_model(epoch=1, step=0)
+        TFBackend.create_parameters(model)
+
         rf.init_forward_step_run_ctx(epoch=1, step=0)
         forward_step(model=model, extern_data=extern_data)
         outputs_tf = rf.get_run_ctx().outputs
@@ -407,7 +411,6 @@ def _run_model_tf(extern_data: TensorDict, get_model: rf.GetModelFunc, forward_s
                 outputs_tf.data[f"{name}_grad"] = d_grad
 
         session.run(tf_compat.v1.global_variables_initializer())
-        session.run(TFBackend.get_parameters_init_op(list(model.parameters())))
 
         fetches = outputs_tf.as_raw_tensor_dict(expected_value_type=tf.Tensor)
         outputs_numpy_raw = {k: numpy.asarray(v) for k, v in session.run(fetches).items()}
