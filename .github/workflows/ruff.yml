@@ -22,3 +22,6 @@ jobs:
           cache-dependency-path: '.github/workflows/ruff.yml'
       - run: pip install ruff==0.11.8
       - run: ruff format --diff .
+      # lint: curated always-clean subset
+      # (a full `ruff check` still has legacy findings: F401/F403 re-exports + star imports, E741, ...)
+      - run: ruff check --select F541,F632,E713,E721 .
