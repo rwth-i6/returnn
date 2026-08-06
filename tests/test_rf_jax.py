@@ -1173,6 +1173,116 @@ def test_engine_train_from_config():
         assert "dev_score_ce" in scores[1].error, sorted(scores[1].error)
 
 
+def test_stft_and_logmel_vs_torch():
+    """
+    stft, and the log-mel feature extraction the real recipe uses
+    (`rf.audio.log_mel_filterbank_from_raw`), which is what a production config feeds the model.
+    """
+    import torch
+
+    batch, time_dim = Dim(2, name="batch"), Dim(4000, name="samples")
+    audio_np = numpy.random.RandomState(79).normal(size=(2, 4000)).astype("float32") * 0.1
+
+    def _run(make):
+        audio = make("audio", audio_np, [batch, time_dim])
+        out = {}
+        # rf.stft derives the out dims itself and returns them
+        stft, _, _ = rf.stft(audio, in_spatial_dim=time_dim, frame_step=160, frame_length=400, fft_length=400)
+        out["stft_abs"] = rf.abs(stft)
+        feat_dim = Dim(80, name="logmel")
+        mel, mel_spatial = rf.audio.log_mel_filterbank_from_raw(
+            audio, in_spatial_dim=time_dim, out_dim=feat_dim, sampling_rate=16_000
+        )
+        out["log_mel"] = mel
+        return out
+
+    rf.select_backend_torch()
+    ref = {
+        k: v.copy_compatible_to_dims_raw(v.dims).detach().cpu().numpy()
+        for k, v in _run(
+            lambda name, arr, d: Tensor(name, dims=d, dtype=arr.dtype.name, raw_tensor=torch.from_numpy(arr))
+        ).items()
+    }
+
+    _rf_jax()
+    got = {k: numpy.asarray(v.copy_compatible_to_dims_raw(v.dims)) for k, v in _run(_make).items()}
+
+    for key in sorted(ref):
+        assert got[key].shape == ref[key].shape, f"{key}: {got[key].shape} vs {ref[key].shape}"
+        numpy.testing.assert_allclose(got[key], ref[key], rtol=1e-4, atol=1e-4, err_msg=f"{key} differs")
+
+
+def test_top_k_vs_torch():
+    import torch
+
+    batch, time_dim, vocab = Dim(3, name="batch"), Dim(5, name="time"), Dim(7, name="vocab")
+    k_dim = Dim(3, name="k")
+    scores_np = numpy.random.RandomState(83).normal(size=(3, 5, 7)).astype("float32")
+
+    def _run(make):
+        scores = make("scores", scores_np, [batch, time_dim, vocab])
+        values, indices, _ = rf.top_k(scores, axis=vocab, k=3, k_dim=k_dim)
+        # over two axes at once, as beam search does (beam x vocab)
+        values2, (idx_time, idx_vocab), _ = rf.top_k(scores, axis=[time_dim, vocab], k=3, k_dim=k_dim)
+        return {
+            "values": values,
+            "indices": indices,
+            "values_2d": values2,
+            "idx_time": idx_time,
+            "idx_vocab": idx_vocab,
+        }
+
+    rf.select_backend_torch()
+    ref = {
+        k: v.copy_compatible_to_dims_raw(v.dims).detach().cpu().numpy()
+        for k, v in _run(
+            lambda name, arr, d: Tensor(name, dims=d, dtype=arr.dtype.name, raw_tensor=torch.from_numpy(arr))
+        ).items()
+    }
+
+    _rf_jax()
+    got = {k: numpy.asarray(v.copy_compatible_to_dims_raw(v.dims)) for k, v in _run(_make).items()}
+
+    for key in sorted(ref):
+        numpy.testing.assert_allclose(got[key], ref[key], rtol=1e-6, err_msg=f"top_k {key} differs")
+
+
+def test_edit_distance_vs_reference():
+    """
+    edit_distance, used as an error metric in RF code (nn_rf/encoder/layered.py, nn_rf/text_augment.py).
+    Compared against an independent Python implementation, per sequence and at its own lengths.
+    """
+    _rf_jax()
+    batch = Dim(4, name="batch")
+    a_lens, b_lens = [5, 3, 0, 6], [4, 3, 2, 6]
+    rnd = numpy.random.RandomState(89)
+    a_np = rnd.randint(0, 5, size=(4, 6)).astype("int32")
+    b_np = rnd.randint(0, 5, size=(4, 6)).astype("int32")
+    # one pair identical, so a zero distance is covered too
+    b_np[1, : b_lens[1]] = a_np[1, : a_lens[1]][: b_lens[1]]
+
+    def _ref(x, y):
+        """plain Levenshtein, the definition"""
+        prev = list(range(len(y) + 1))
+        for i, xi in enumerate(x, start=1):
+            cur = [i]
+            for j, yj in enumerate(y, start=1):
+                cur.append(min(prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + (xi != yj)))
+            prev = cur
+        return prev[-1]
+
+    a_time = _make_dyn_time(batch, a_lens, name="a_time")
+    b_time = _make_dyn_time(batch, b_lens, name="b_time")
+    vocab = Dim(5, name="vocab")
+    a = Tensor("a", dims=[batch, a_time], dtype="int32", sparse_dim=vocab, raw_tensor=jnp.asarray(a_np))
+    b = Tensor("b", dims=[batch, b_time], dtype="int32", sparse_dim=vocab, raw_tensor=jnp.asarray(b_np))
+    got = numpy.asarray(rf.edit_distance(a, a_time, b, b_time).raw_tensor)
+
+    expected = [_ref(list(a_np[i, : a_lens[i]]), list(b_np[i, : b_lens[i]])) for i in range(4)]
+    numpy.testing.assert_array_equal(got, expected, err_msg=f"edit distances {got} vs {expected}")
+    assert expected[1] == 0, "the identical pair should have distance 0"
+
+
 def test_device():
     _rf_jax()
     x = _make("x", numpy.zeros((2,), dtype="float32"), [Dim(2, name="d")])

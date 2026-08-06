@@ -1021,6 +1021,174 @@ class JaxBackend(Backend[jax.Array]):
         out.raw_tensor = start_raw + weight_raw * (end_raw - start_raw)
         return out
 
+    @staticmethod
+    def have_edit_distance() -> bool:
+        """whether edit distance is available"""
+        return True
+
+    @staticmethod
+    def edit_distance(a: Tensor, a_spatial_dim: Dim, b: Tensor, b_spatial_dim: Dim) -> Tensor:
+        """
+        :param a: [B, Ta]
+        :param a_spatial_dim: Ta
+        :param b: [B, Tb]
+        :param b_spatial_dim: Tb
+        :return: [B] Levenshtein distance
+        """
+        a_batch_dims = a.remaining_dims(a_spatial_dim)
+        b_batch_dims = b.remaining_dims(b_spatial_dim)
+        batch_dims = a_batch_dims + [d for d in b_batch_dims if d not in a_batch_dims]
+        a_raw = a.copy_compatible_to_dims_raw(batch_dims + [a_spatial_dim], unbroadcast=True)
+        b_raw = b.copy_compatible_to_dims_raw(batch_dims + [b_spatial_dim], unbroadcast=True)
+        a_seq_len = a_spatial_dim.dyn_size_ext.copy_compatible_to_dims_raw(batch_dims, unbroadcast=True)
+        b_seq_len = b_spatial_dim.dyn_size_ext.copy_compatible_to_dims_raw(batch_dims, unbroadcast=True)
+        batch_shape = [_static_size(d) for d in batch_dims]
+        batch_n_elems = prod(batch_shape)
+        a_raw = jnp.reshape(a_raw, (batch_n_elems, a_raw.shape[-1]))
+        b_raw = jnp.reshape(b_raw, (batch_n_elems, b_raw.shape[-1]))
+        dist_raw = _levenshtein(
+            a_raw, b_raw, jnp.reshape(a_seq_len, (batch_n_elems,)), jnp.reshape(b_seq_len, (batch_n_elems,))
+        )
+        return rf.convert_to_tensor(jnp.reshape(dist_raw, batch_shape), name="edit_distance", dims=batch_dims)
+
+    # --- signal / search
+
+    @staticmethod
+    def top_k(
+        source: Tensor,
+        *,
+        axis: Union[Dim, Sequence[Dim]],
+        k: Union[int, Tensor],
+        k_dim: Optional[Dim] = None,
+        sorted: bool = True,
+    ) -> Tuple[Tensor, Union[Tensor, Sequence[Tensor]], Dim]:
+        """
+        :param source:
+        :param axis: axis (or axes) to take the top k over
+        :param k:
+        :param k_dim:
+        :param sorted: JAX always sorts, so this only ever holds
+        :return: (values, indices, k_dim); indices is one tensor per axis if several are given
+        """
+        if not k_dim:
+            k_dim = Dim(k, name="top-k-dim")
+        axes = [axis] if isinstance(axis, Dim) else list(axis)
+        if any(a.need_masking() for a in axes):
+            # masked-out positions must never win, so push them to the smallest representable value
+            mask_value = _dtype_min(source.raw_tensor.dtype)
+            source = source.copy()
+            for a in axes:
+                if a.need_masking():
+                    source = rf.where(a.get_mask(dim_order=source.dims, device=source.device), source, mask_value)
+        k_value = _static_size(k_dim)
+
+        if isinstance(axis, (list, tuple)):
+            # flatten the axes into one, take top k there, then unravel the flat index per axis
+            source = source.copy_transpose([d for d in source.dims if d not in axis] + list(axis))
+            flat_shape = source.raw_tensor.shape[: source.batch_ndim - len(axis)] + (-1,)
+            values_raw, indices_raw = jax.lax.top_k(jnp.reshape(source.raw_tensor, flat_shape), k_value)
+            values = source.copy_template_new_dim_tags(
+                new_dim_tags=source.dims[: -len(axis)] + (k_dim,), name="top_k_values"
+            )
+            if source.feature_dim and source.feature_dim in values.dims:
+                values.feature_dim = source.feature_dim
+            values.raw_tensor = values_raw
+            indices_out = []
+            for i, a in reversed(list(enumerate(axis))):
+                indices_out_raw = indices_raw % a.dimension
+                indices_raw = indices_raw // a.dimension
+                indices = values.copy_template(name=f"top_k_indices_{a.name or i}")
+                indices.feature_dim = None
+                indices.dtype = JaxBackend.get_dtype_name_raw(indices_out_raw)
+                indices.sparse_dim = a
+                indices.raw_tensor = indices_out_raw
+                indices_out.insert(0, indices)
+            return values, indices_out, k_dim
+
+        assert isinstance(axis, Dim)
+        axis_int = source.get_axis_from_description(axis, allow_int=False)
+        # jax.lax.top_k works on the last axis
+        source = source.copy_move_axis(axis_int, -1)
+        axis_int = source.batch_ndim - 1
+        values_raw, indices_raw = jax.lax.top_k(source.raw_tensor, k_value)
+        values = source.copy_template_replace_dim_tag(axis=axis_int, new_dim_tag=k_dim, name="top_k_values")
+        values.raw_tensor = values_raw
+        indices = source.copy_template_replace_dim_tag(axis=axis_int, new_dim_tag=k_dim, name="top_k_indices")
+        indices.feature_dim = None
+        indices.dtype = JaxBackend.get_dtype_name_raw(indices_raw)
+        indices.sparse_dim = axis
+        indices.raw_tensor = indices_raw
+        return values, indices, k_dim
+
+    @staticmethod
+    def stft(
+        x: Tensor,
+        *,
+        in_spatial_dim: Dim,
+        frame_step: int,
+        frame_length: int,
+        fft_length: int,
+        window_use_frame_length: bool = True,
+        align_window_left: bool = True,
+        window_enforce_even: bool = True,
+        out_spatial_dim: Dim,
+        out_dim: Dim,
+    ) -> Tensor:
+        """
+        Short-time Fourier transform.
+
+        Written out (frame -> window -> rfft) rather than calling a library STFT,
+        because the conventions differ between them
+        (window length vs FFT length, where a shorter window sits inside the frame, periodic vs symmetric Hann),
+        and RF's semantics are the TF/SciPy ones, which the PyTorch backend also emulates.
+
+        :param x:
+        :param in_spatial_dim:
+        :param frame_step:
+        :param frame_length:
+        :param fft_length:
+        :param window_use_frame_length: window covers frame_length, not fft_length (the TF/SciPy convention)
+        :param align_window_left: a shorter window sits at the left of the frame (TF/SciPy), not centered (librosa)
+        :param window_enforce_even:
+        :param out_spatial_dim:
+        :param out_dim:
+        :return: [batch_dims..., out_dim, out_spatial_dim], complex
+        """
+        batch_dims = [d for d in x.dims if d != in_spatial_dim]
+        x = x.copy_transpose(batch_dims + [in_spatial_dim])
+        x_raw = jnp.reshape(x.raw_tensor, (-1, x.raw_tensor.shape[-1]))
+
+        if frame_length < fft_length and window_use_frame_length:
+            # TF/SciPy window the frame_length, PyTorch/librosa the fft_length.
+            # Padding the difference to the right makes the frame COUNT match the TF convention.
+            x_raw = jnp.pad(x_raw, ((0, 0), (0, fft_length - frame_length)))
+        if frame_length > x_raw.shape[1]:
+            # no full frame fits
+            y = Tensor("stft", dims=batch_dims + [out_dim, out_spatial_dim], feature_dim=out_dim, dtype="complex64")
+            y.raw_tensor = jnp.zeros([_static_size(d) for d in y.dims], dtype=jnp.complex64)
+            return y
+        if window_enforce_even:
+            frame_length -= frame_length % 2
+
+        # torch.hann_window / tf are PERIODIC by default; jnp.hanning is symmetric, hence the +1 and drop
+        window = jnp.hanning(frame_length + 1)[:-1].astype(x_raw.dtype)
+        if frame_length < fft_length:
+            if align_window_left:
+                window = jnp.pad(window, (0, fft_length - frame_length))
+            else:
+                pad_left = (fft_length - frame_length) // 2
+                window = jnp.pad(window, (pad_left, fft_length - frame_length - pad_left))
+
+        num_frames = 1 + (x_raw.shape[1] - fft_length) // frame_step
+        frame_idx = jnp.arange(num_frames)[:, None] * frame_step + jnp.arange(fft_length)[None, :]
+        frames = x_raw[:, frame_idx] * window  # [B', frames, fft_length]
+        y_raw = jnp.fft.rfft(frames, n=fft_length, axis=-1)  # [B', frames, freq]
+        y_raw = jnp.swapaxes(y_raw, -1, -2)  # [B', freq, frames]
+        y = Tensor("stft", dims=batch_dims + [out_dim, out_spatial_dim], dtype=JaxBackend.get_dtype_name_raw(y_raw))
+        y.feature_dim = out_dim
+        y.raw_tensor = jnp.reshape(y_raw, [_static_size(d) for d in y.dims])
+        return y
+
     # --- losses
 
     @staticmethod
@@ -1687,6 +1855,55 @@ def _dtype_max(dtype) -> Union[int, float]:
     :return: largest representable value, i.e. the neutral element of min
     """
     return jnp.finfo(dtype).max if jnp.issubdtype(dtype, jnp.floating) else jnp.iinfo(dtype).max
+
+
+def _levenshtein(a: jax.Array, b: jax.Array, a_len: jax.Array, b_len: jax.Array) -> jax.Array:
+    """
+    Batched Levenshtein distance.
+
+    Written as a scan over the rows with an inner scan over the columns:
+    the recurrence needs the cell to its left, so both directions are sequential.
+    That is O(Ta * Tb) scan steps with the batch in parallel,
+    which is fine for label sequences and would not be for raw audio lengths.
+    (The PyTorch backend calls RETURNN's native op here instead.)
+
+    :param a: [B, Ta] labels
+    :param b: [B, Tb] labels
+    :param a_len: [B]
+    :param b_len: [B]
+    :return: [B] distance, taken at each sequence's own lengths
+    """
+    n_batch, len_b = b.shape
+    len_a = a.shape[1]
+    dtype = jnp.int32
+    a, b = a.astype(jnp.int32), b.astype(jnp.int32)
+    a_len, b_len = a_len.astype(jnp.int32), b_len.astype(jnp.int32)
+
+    # row i holds the distances of a[:i] to every prefix of b, so row 0 is just the number of insertions
+    row0 = jnp.broadcast_to(jnp.arange(len_b + 1, dtype=dtype), (n_batch, len_b + 1))
+    # for an empty a, the distance is the length of b
+    res0 = jnp.where(a_len == 0, b_len, 0).astype(dtype)
+
+    def _row(carry, i):
+        prev, res = carry
+        a_i = a[:, i]
+
+        def _cell(left, j):
+            # left = the new row's cell j-1; prev holds the previous row
+            cost = (a_i != b[:, j]).astype(dtype)
+            val = jnp.minimum(jnp.minimum(prev[:, j + 1] + 1, left + 1), prev[:, j] + cost)
+            return val, val
+
+        first = jnp.full((n_batch,), i + 1, dtype=dtype)  # deleting the first i+1 symbols of a
+        _, cells = jax.lax.scan(_cell, first, jnp.arange(len_b))
+        new_row = jnp.concatenate([first[:, None], jnp.swapaxes(cells, 0, 1)], axis=1)
+        # each sequence's answer is this row read at its own b_len, taken when the row reaches its own a_len
+        at_b_len = jnp.take_along_axis(new_row, b_len[:, None], axis=1)[:, 0]
+        res = jnp.where(i + 1 == a_len, at_b_len, res)
+        return (new_row, res), None
+
+    (_, res), _ = jax.lax.scan(_row, (row0, res0), jnp.arange(len_a))
+    return res
 
 
 def _static_size(dim: Dim) -> int:
