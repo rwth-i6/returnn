@@ -197,6 +197,9 @@ class TFBackend(Backend[tf.Tensor]):
         assert a.shape.ndims == b.shape.ndims or a.shape.ndims == 0 or b.shape.ndims == 0
         if kind == "floordiv" and is_onnx_export_global():
             op = tf_util.onnx_compat_floor_div
+        elif kind == "logaddexp":
+            # TF has no logaddexp op; this is the numerically stable form
+            op = lambda a_, b_: tf.maximum(a_, b_) + tf.math.log1p(tf.exp(-tf.abs(a_ - b_)))  # noqa: E731
         else:
             kind = {
                 "sub": "subtract",
@@ -314,6 +317,7 @@ class TFBackend(Backend[tf.Tensor]):
         :return: raw tensor after activation
         """
         assert func in Backend._AllowedActivationFuncs
+        func = _ACTIVATION_FUNC_NAME_MAP.get(func, func)
         if hasattr(tf.math, func):
             f = getattr(tf.math, func)
         elif hasattr(tf.nn, func):
@@ -897,6 +901,84 @@ class TFBackend(Backend[tf.Tensor]):
         )
 
     @staticmethod
+    def cumsum(source: Tensor, *, spatial_dim: Dim) -> Tensor:
+        """
+        :param source:
+        :param spatial_dim:
+        :return: cumsum over spatial dim
+        """
+        axis = source.get_axis_from_description(spatial_dim)
+        out = source.copy_template("cumsum")
+        with tf_util.same_control_flow_ctx(source):
+            out.raw_tensor = tf.cumsum(source.raw_tensor, axis=axis)
+        return out
+
+    # noinspection PyShadowingBuiltins
+    @staticmethod
+    def top_k(
+        source: Tensor,
+        *,
+        axis: Union[Dim, Sequence[Dim]],
+        k: Union[int, Tensor],
+        k_dim: Optional[Dim] = None,
+        sorted: bool = True,
+    ) -> Tuple[Tensor, Union[Tensor, Sequence[Tensor]], Dim]:
+        """
+        :param source:
+        :param axis: one dim, or multiple dims which are then searched jointly
+        :param k:
+        :param k_dim:
+        :param sorted:
+        :return: values, indices (one tensor per axis), k_dim
+        """
+        if not k_dim:
+            k_dim = Dim(k, name="top-k-dim")
+        axes = [axis] if isinstance(axis, Dim) else list(axis)
+        if any(a.need_masking() for a in axes):
+            # tf.math.top_k has no masking, so push the masked entries to the bottom
+            mask_value = source.raw_tensor.dtype.min
+            for a in axes:
+                if a.need_masking():
+                    source = rf.where(a.get_mask(dim_order=source.dims), source, mask_value)
+        with tf_util.same_control_flow_ctx(source):
+            if isinstance(axis, (list, tuple)):
+                # tf.math.top_k works on the last axis, so move the searched dims there and flatten them
+                source = source.copy_transpose([d for d in source.dims if d not in axis] + list(axis))
+                flat_shape = list(TFBackend.get_shape_tuple_raw(source.raw_tensor)[: -len(axis)]) + [-1]
+                source_raw_flat = tf.reshape(source.raw_tensor, _shape_raw(flat_shape))
+                values_raw, indices_raw = tf.math.top_k(source_raw_flat, k=k_dim.get_dim_value(), sorted=sorted)
+                values = source.copy_template_new_dim_tags(
+                    new_dim_tags=source.dims[: -len(axis)] + (k_dim,), name="top_k_values"
+                )
+                if source.feature_dim and source.feature_dim in values.dims:
+                    values.feature_dim = source.feature_dim
+                values.raw_tensor = values_raw
+                indices_out = []
+                for i, a in reversed(list(enumerate(axis))):
+                    # the flat index decomposes into one index per searched dim
+                    indices_out_raw = indices_raw % a.dimension
+                    indices_raw = indices_raw // a.dimension
+                    indices = values.copy_template(name=f"top_k_indices_{a.name or i}")
+                    indices.feature_dim = None
+                    indices.dtype = TFBackend.get_dtype_name_raw(indices_out_raw)
+                    indices.sparse_dim = a
+                    indices.raw_tensor = indices_out_raw
+                    indices_out.insert(0, indices)
+                return values, indices_out, k_dim
+            assert isinstance(axis, Dim)
+            source = source.copy_move_axis(source.get_axis_from_description(axis, allow_int=False), -1)
+            axis_int = len(source.dims) - 1
+            values_raw, indices_raw = tf.math.top_k(source.raw_tensor, k=k_dim.get_dim_value(), sorted=sorted)
+        values = source.copy_template_replace_dim_tag(axis=axis_int, new_dim_tag=k_dim, name="top_k_values")
+        values.raw_tensor = values_raw
+        indices = source.copy_template_replace_dim_tag(axis=axis_int, new_dim_tag=k_dim, name="top_k_indices")
+        indices.feature_dim = None
+        indices.dtype = TFBackend.get_dtype_name_raw(indices_raw)
+        indices.sparse_dim = axis
+        indices.raw_tensor = indices_raw
+        return values, indices, k_dim
+
+    @staticmethod
     def pad(
         source: Tensor,
         *,
@@ -1395,6 +1477,10 @@ class TFBackend(Backend[tf.Tensor]):
 # So that an rf.Parameter holding a DeferredVariable still dispatches to this backend
 # (the native dispatch consults this same table).
 register_backend_by_tensor_type(DeferredVariable, TFBackend)
+
+
+# RF activation names which TF spells differently
+_ACTIVATION_FUNC_NAME_MAP = {"neg": "negative"}
 
 
 def _seq_mask_raw(tensor: Tensor, axis: int) -> tf.Tensor:
