@@ -446,24 +446,39 @@ def prepare_src_dir(files=None):
     """
     New clean source dir, where we symlink only the relevant src files.
 
-    :param list[str]|None files:
+    With an explicit `files` list (``--files``), the whole package tree is still
+    laid out -- only the listed files are real copies, everything else is a symlink to
+    the original. The inspection then sees a COMPLETE project (imports resolve, the
+    type inference matches a full run) while the report step can filter to the listed
+    files. Copying the listed files (instead of symlinking them like the rest) keeps
+    the original tree untouched no matter what the IDE does to its project files.
+
+    :param list[str]|None files: relative paths, e.g. ["returnn/datasets/hdf.py"]
     :return: src dir
     :rtype: str
     """
     fold_start("script.prepare")
     print("Prepare project source files...")
-    if not files:
-        files = ["returnn", "tools", "demos", "rnn.py", "setup.py", "__init__.py"]
+    explicit_files = list(files) if files else None
+    top_level = ["returnn", "tools", "demos", "rnn.py", "setup.py", "__init__.py"]
     src_tmp_dir = "%s/returnn" % tempfile.mkdtemp()
     os.mkdir(src_tmp_dir)
     shutil.copytree("%s/PyCharm.idea" % my_dir, "%s/.idea" % src_tmp_dir, symlinks=True)
-    for fn in files:
-        fn = "%s/%s" % (root_dir, fn)
-        dst = "%s/%s" % (src_tmp_dir, os.path.basename(fn))
-        if os.path.isdir(fn):
-            shutil.copytree(fn, dst, symlinks=True)
+    for fn in top_level:
+        src = "%s/%s" % (root_dir, fn)
+        dst = "%s/%s" % (src_tmp_dir, fn)
+        if os.path.isdir(src):
+            shutil.copytree(src, dst, symlinks=True)
         else:
-            shutil.copy(fn, dst)
+            shutil.copy(src, dst)
+    if explicit_files:
+        # keep the paths (a flattened copy breaks the package structure and every import in it)
+        for fn in explicit_files:
+            src = "%s/%s" % (root_dir, fn)
+            dst = "%s/%s" % (src_tmp_dir, fn)
+            assert os.path.isfile(src), "--files: %s does not exist" % src
+            os.makedirs(os.path.dirname(dst), exist_ok=True)
+            shutil.copy(src, dst)
     create_spelling_dict_xml(src_tmp_dir)
     print("All source files:")
     sys.stdout.flush()
@@ -472,11 +487,14 @@ def prepare_src_dir(files=None):
     return src_tmp_dir
 
 
-def run_inspect(pycharm_dir, src_dir, skip_pycharm_inspect=False):
+def run_inspect(pycharm_dir, src_dir, skip_pycharm_inspect=False, scope_dir=None):
     """
     :param str pycharm_dir:
     :param str src_dir:
     :param bool skip_pycharm_inspect:
+    :param str|None scope_dir: relative dir to limit the ANALYSIS to (inspect.sh -d),
+        while the whole project stays indexed, so type inference matches a full run.
+        Used by ``--files`` to keep that mode fast without changing what is inferred.
     :return: dir of xml files
     :rtype: str
     """
@@ -532,6 +550,8 @@ def run_inspect(pycharm_dir, src_dir, skip_pycharm_inspect=False):
             out_tmp_dir,
             "-v2",
         ]
+        if scope_dir:
+            cmd += ["-d", "%s/%s" % (src_dir, scope_dir)]
         env = dict(os.environ)
         if os.environ.get("PYCHARM_INSPECT_CONFIG_DIR"):
             # match the env-override dirs of setup_pycharm_python_interpreter:
@@ -938,7 +958,15 @@ def main():
         return
 
     src_dir = prepare_src_dir(files=args.files)
-    res_dir = run_inspect(pycharm_dir=pycharm_dir, src_dir=src_dir, skip_pycharm_inspect=args.skip_pycharm_inspect)
+    # --files: analyze only the smallest dir covering them (the rest of the project stays
+    # indexed for type inference), and report only those files
+    scope_dir = os.path.commonpath([os.path.dirname(f) for f in args.files]) if args.files else None
+    res_dir = run_inspect(
+        pycharm_dir=pycharm_dir,
+        src_dir=src_dir,
+        skip_pycharm_inspect=args.skip_pycharm_inspect,
+        scope_dir=scope_dir,
+    )
     if report_inspect_dir(res_dir, **inspect_kwargs) > 0:
         sys.exit(1)
 
