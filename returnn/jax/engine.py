@@ -58,6 +58,14 @@ class Engine(EngineBase):
         self._train_param_idx: List[int] = []
         self._value_and_grad = None
         self._batch_opts = _batch_opts_from_config(config)
+        # Numeric defaults stay JAX's own -- notably, float32 matmuls run in TF32 on GPU,
+        # which PyTorch does not do by default. We do not override that here:
+        # each backend follows its own conventions.
+        # Set this option to "highest" if you want a run to match a PyTorch baseline numerically.
+        precision = config.value("jax_default_matmul_precision", None)
+        if precision:
+            jax.config.update("jax_default_matmul_precision", precision)
+            print(f"JAX default matmul precision: {precision}", file=log.v3)
 
     def init_train_from_config(
         self,
