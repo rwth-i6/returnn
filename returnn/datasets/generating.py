@@ -818,7 +818,7 @@ class DummyDatasetMultipleSequenceLength(DummyDataset):
         :param int input_dim:
         :param int output_dim:
         :param int|float num_seqs:
-        :param int|dict[str,int] seq_len:
+        :param int|dict[str,int]|None seq_len:
         :param float input_max_value:
         :param float|None input_shift:
         :param float|None input_scale:
