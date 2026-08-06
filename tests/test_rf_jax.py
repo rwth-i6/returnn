@@ -982,6 +982,9 @@ def test_full_model_vs_torch():
         return time_dim, tgt_time
 
     # --- torch reference
+    # No train flag, set explicitly rather than inherited: the encoder's input_dropout defaults to 0.1,
+    # and under a train flag the two backends would draw it from their own RNG streams.
+    rf.init_forward_step_run_ctx()
     _no_tf32_torch()
     rf.select_backend_torch()
     mods_pt = _build()
@@ -1491,6 +1494,11 @@ def test_torch_checkpoint_import_parity():
             dropout=0.0,
             att_dropout=0.0,
         )
+
+    # Inference semantics, and set explicitly: without a run ctx of its own this test would inherit
+    # whatever a previous test left behind, and under a train flag the encoder's input_dropout (0.1 by
+    # default) is live -- two independent RNG streams, so the comparison could never hold.
+    rf.init_forward_step_run_ctx()
 
     with tempfile.TemporaryDirectory() as tmp_dir:
         # --- torch side: build, give the params non-trivial values, save a checkpoint as the engine does
