@@ -1252,6 +1252,19 @@ class TFBackend(Backend[tf.Tensor]):
         return out
 
     @staticmethod
+    def stack(sources: Sequence[Tensor], *, out_dim: Dim) -> Tensor:
+        """
+        :param sources:
+        :param out_dim: the new dim, of size len(sources)
+        :return: stacked tensor, out_dim first
+        """
+        out_dims = (out_dim,) + sources[0].dims
+        out = Tensor("stack", dims=out_dims, dtype=sources[0].dtype, sparse_dim=sources[0].sparse_dim)
+        with tf_util.same_control_flow_ctx(list(sources)):
+            out.raw_tensor = tf.stack([s.copy_compatible_to_dims_raw(out_dims[1:]) for s in sources], axis=0)
+        return out
+
+    @staticmethod
     def split(source: Tensor, *, axis: Dim, out_dims: Sequence[Dim]) -> Tuple[Tensor, ...]:
         """
         :param source:
