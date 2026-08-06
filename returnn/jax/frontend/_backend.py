@@ -986,6 +986,149 @@ class JaxBackend(Backend[jax.Array]):
         out.raw_tensor = start_raw + weight_raw * (end_raw - start_raw)
         return out
 
+    # --- convolution
+
+    @staticmethod
+    def conv(
+        source: Tensor,
+        *,
+        in_dim: Dim,
+        out_dim: Dim,
+        in_spatial_dims: Sequence[Dim],
+        out_spatial_dims: Optional[Sequence[Dim]] = None,
+        filter: Tensor,
+        filter_size: Sequence[Dim],
+        padding: Union[str, int, Sequence[int]],
+        strides: Optional[Union[int, Sequence[int]]] = None,
+        dilation_rate: Optional[Union[int, Sequence[int]]] = None,
+        groups: Optional[int] = None,
+        bias: Optional[Tensor] = None,
+    ) -> Tuple[Tensor, Sequence[Dim]]:
+        """
+        :param source:
+        :param in_dim: input feature dim
+        :param out_dim: output feature dim
+        :param in_spatial_dims:
+        :param out_spatial_dims:
+        :param filter: [out_dim, in_dim // groups, *filter_size]
+        :param filter_size:
+        :param padding: "same", "valid", or explicit amounts
+        :param strides:
+        :param dilation_rate:
+        :param groups: depthwise conv = groups == in_dim
+        :param bias:
+        :return: (output, out_spatial_dims)
+        """
+        if not out_spatial_dims:
+            out_spatial_dims = rf.make_conv_out_spatial_dims(
+                in_spatial_dims=in_spatial_dims,
+                filter_size=filter_size,
+                strides=strides or 1,
+                dilation_rate=dilation_rate or 1,
+                padding=padding,
+            )
+        n_spatial = len(filter_size)
+        filter_in_dim = in_dim if not groups or groups == 1 else in_dim // groups
+        filter = filter.copy_transpose((out_dim, filter_in_dim) + tuple(filter_size))
+        batch_dims = [d for d in source.dims if d not in (in_dim,) + tuple(in_spatial_dims)]
+        # conv wants (N, C, *spatial)
+        source = source.copy_transpose(batch_dims + [in_dim] + list(in_spatial_dims))
+        if len(batch_dims) == 1:
+            src_raw = source.raw_tensor
+        else:
+            src_raw = jnp.reshape(
+                source.raw_tensor,
+                [-1, in_dim.get_dim_value()] + [d.get_dim_value() for d in in_spatial_dims],
+            )
+        # JAX's "SAME" is the TF convention (out = ceil(in / stride), extra padding on the right),
+        # which is what rf.make_conv_out_spatial_dims computes,
+        # so unlike the PyTorch backend there is no need to emulate strided "same" padding by hand.
+        out_raw = jax.lax.conv_general_dilated(
+            src_raw,
+            filter.raw_tensor,
+            window_strides=_to_seq(strides or 1, n_spatial),
+            padding=_conv_padding(padding, n_spatial),
+            rhs_dilation=_to_seq(dilation_rate or 1, n_spatial),
+            dimension_numbers=_conv_dim_numbers(n_spatial),
+            feature_group_count=groups or 1,
+        )
+        if bias is not None:
+            out_raw = out_raw + jnp.reshape(bias.raw_tensor, (1, -1) + (1,) * n_spatial)
+        out = Tensor(
+            "conv",
+            dims=batch_dims + [out_dim] + list(out_spatial_dims),
+            dtype=JaxBackend.get_dtype_name_raw(out_raw),
+        )
+        out.raw_tensor = (
+            out_raw if len(batch_dims) == 1 else jnp.reshape(out_raw, [d.get_dim_value() for d in out.dims])
+        )
+        out.feature_dim = out_dim
+        return out, out_spatial_dims
+
+    @staticmethod
+    def pool(
+        source: Tensor,
+        *,
+        mode: str,
+        pool_size: Sequence[int],
+        padding: Union[str, int, Sequence[int]] = "valid",
+        dilation_rate: Union[Sequence[int], int] = 1,
+        strides: Sequence[int],
+        in_spatial_dims: Sequence[Dim],
+        out_spatial_dims: Optional[Sequence[Dim]] = None,
+    ) -> Tuple[Tensor, Sequence[Dim]]:
+        """
+        :param source:
+        :param mode: "max" or "avg"
+        :param pool_size:
+        :param padding:
+        :param dilation_rate:
+        :param strides:
+        :param in_spatial_dims:
+        :param out_spatial_dims:
+        :return: (output, out_spatial_dims)
+        """
+        if out_spatial_dims is None:
+            out_spatial_dims = rf.make_conv_out_spatial_dims(
+                in_spatial_dims=in_spatial_dims,
+                filter_size=pool_size,
+                strides=strides,
+                dilation_rate=dilation_rate,
+                padding=padding,
+            )
+        n_spatial = len(in_spatial_dims)
+        assert len(strides) == n_spatial == len(pool_size)
+        batch_dims = [d for d in source.dims if d not in tuple(in_spatial_dims)]
+        source = source.copy_transpose(batch_dims + list(in_spatial_dims))
+        # all batch-like dims merged into one leading axis; the window is 1 there
+        src_raw = jnp.reshape(source.raw_tensor, [-1] + [d.get_dim_value() for d in in_spatial_dims])
+        window = (1,) + tuple(pool_size)
+        window_strides = (1,) + tuple(strides)
+        window_dilation = (1,) + _to_seq(dilation_rate or 1, n_spatial)
+        pad = _conv_padding(padding, n_spatial)
+        if not isinstance(pad, str):
+            pad = [(0, 0)] + list(pad)
+        dtype = src_raw.dtype
+        if mode == "max":
+            out_raw = jax.lax.reduce_window(
+                src_raw, _dtype_min(dtype), jax.lax.max, window, window_strides, pad, window_dilation=window_dilation
+            )
+        elif mode == "avg":
+            assert all(d == 1 for d in window_dilation), "RF JaxBackend: dilation_rate only supported for max_pool"
+            sums = jax.lax.reduce_window(src_raw, jnp.zeros((), dtype), jax.lax.add, window, window_strides, pad)
+            # divide by the number of REAL frames per window, i.e. torch's count_include_pad=False
+            counts = jax.lax.reduce_window(
+                jnp.ones_like(src_raw), jnp.zeros((), dtype), jax.lax.add, window, window_strides, pad
+            )
+            out_raw = sums / counts
+        else:
+            raise NotImplementedError(f"RF JaxBackend: pool mode {mode!r} not implemented")
+        out = Tensor("pool", dims=batch_dims + list(out_spatial_dims), dtype=source.dtype)
+        out.raw_tensor = jnp.reshape(out_raw, [d.get_dim_value() for d in out.dims])
+        if source.feature_dim and source.feature_dim in out.dims:
+            out.feature_dim = source.feature_dim
+        return out, out_spatial_dims
+
     # --- random
 
     # JAX has no implicit global RNG: keys are values, and every draw must consume a fresh one.
@@ -1316,6 +1459,46 @@ _ReduceModeMap = {"sum": jnp.sum, "max": jnp.max, "min": jnp.min, "mean": jnp.me
 
 
 _PadModeMap = {"replicate": "edge", "circular": "wrap"}
+
+
+def _to_seq(value: Union[int, Sequence[int]], n: int) -> Tuple[int, ...]:
+    """
+    :param value: a scalar to broadcast, or a sequence
+    :param n: number of spatial dims
+    :return: value as a tuple of length n
+    """
+    if isinstance(value, int):
+        return (value,) * n
+    value = tuple(value)
+    assert len(value) == n, f"expected {n} values, got {value}"
+    return value
+
+
+def _conv_padding(padding: Union[str, int, Sequence[int]], n: int) -> Union[str, Sequence[Tuple[int, int]]]:
+    """
+    :param padding: "same" / "valid", one amount for all spatial dims, or one per spatial dim
+    :param n: number of spatial dims
+    :return: what jax.lax expects: "SAME" / "VALID", or explicit (low, high) per spatial dim
+    """
+    if isinstance(padding, str):
+        assert padding.lower() in ("same", "valid"), f"invalid padding {padding!r}"
+        return padding.upper()
+    if isinstance(padding, int):
+        return [(padding, padding)] * n
+    out = [(p, p) if isinstance(p, int) else tuple(p) for p in padding]
+    assert len(out) == n, f"expected {n} paddings, got {padding}"
+    return out
+
+
+def _conv_dim_numbers(n_spatial: int) -> Tuple[str, str, str]:
+    """
+    :param n_spatial: number of spatial dims
+    :return: (lhs, rhs, out) layout labels for jax.lax.conv_general_dilated,
+        matching the (N, C, *spatial) / (O, I, *filter) layout the RF conv builds
+    """
+    spatial = "HWDEFG"[:n_spatial]
+    assert len(spatial) == n_spatial, f"conv with {n_spatial} spatial dims not supported"
+    return "NC" + spatial, "OI" + spatial, "NC" + spatial
 
 
 def _dtype_min(dtype) -> Union[int, float]:

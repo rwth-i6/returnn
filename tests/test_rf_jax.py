@@ -140,8 +140,13 @@ def _copy_params_from(src_mod, dst_mod):
     assert set(src) == set(dst), f"different parameter sets: {sorted(src)} vs {sorted(dst)}"
     for name, p_dst in dst.items():
         p_src = src[name]
-        assert p_src.dims == p_dst.dims, f"{name}: {p_src.dims} vs {p_dst.dims}"
-        value = p_src.copy_compatible_to_dims_raw(p_dst.dims).detach().cpu().numpy()
+        # dims cannot be compared by identity here: each module construction makes its own internal Dims
+        # (filter-dim0, conv_dummy_in, ...). Both modules come from the same code, so the dim ORDER matches,
+        # and comparing the sizes in that order is the real check.
+        src_shape = [d.dimension for d in p_src.dims]
+        dst_shape = [d.dimension for d in p_dst.dims]
+        assert src_shape == dst_shape, f"{name}: shape {src_shape} vs {dst_shape} ({p_src.dims} vs {p_dst.dims})"
+        value = p_src.copy_compatible_to_dims_raw(p_src.dims).detach().cpu().numpy()
         p_dst.assign(Tensor(name, dims=p_dst.dims, dtype=p_dst.dtype, raw_tensor=jnp.asarray(value)))
 
 
@@ -534,6 +539,101 @@ def test_gather_scatter_pad_vs_torch():
         got_raw, got_dims = got[key]
         assert got_dims == ref_dims, f"{key}: dims {got_dims} vs {ref_dims}"
         numpy.testing.assert_allclose(got_raw, ref_raw, rtol=1e-6, atol=1e-6, err_msg=f"op {key} differs")
+
+
+def test_conv_pool_vs_torch():
+    import torch
+
+    batch, time, in_dim, out_dim = Dim(3, name="batch"), Dim(12, name="time"), Dim(4, name="in"), Dim(6, name="out")
+    freq, out2d = Dim(8, name="freq"), Dim(5, name="out2d")
+    x_np = numpy.random.RandomState(41).normal(size=(3, 12, 4)).astype("float32")
+    x2d_np = numpy.random.RandomState(43).normal(size=(3, 12, 8, 4)).astype("float32")
+
+    def _build():
+        rf.set_random_seed(31)
+        return (
+            rf.Conv1d(in_dim, out_dim, filter_size=3, padding="same"),
+            rf.Conv1d(in_dim, out_dim, filter_size=3, padding="valid", strides=2),
+            # depthwise, as in the Conformer conv block
+            rf.Conv1d(in_dim, in_dim, filter_size=5, padding="same", groups=in_dim.dimension),
+            rf.Conv2d(in_dim, out2d, filter_size=(3, 3), padding="same", strides=(2, 1)),
+        )
+
+    def _fwd(mods, x, x2d):
+        c_same, c_valid, c_depth, c_2d = mods
+        outs = {}
+        outs["conv_same"] = c_same(x, in_spatial_dim=time)[0]
+        outs["conv_valid_stride"] = c_valid(x, in_spatial_dim=time)[0]
+        outs["conv_depthwise"] = c_depth(x, in_spatial_dim=time)[0]
+        outs["conv2d"] = c_2d(x2d, in_spatial_dims=[time, freq])[0]
+        outs["max_pool"] = rf.max_pool1d(x, pool_size=2, strides=2, padding="valid", in_spatial_dim=time)[0]
+        outs["avg_pool"] = rf.pool1d(x, mode="avg", pool_size=3, strides=2, padding="same", in_spatial_dim=time)[0]
+        return outs
+
+    rf.select_backend_torch()
+    mods_pt = _build()
+    x_pt = Tensor("x", dims=[batch, time, in_dim], dtype="float32", raw_tensor=torch.from_numpy(x_np))
+    x2d_pt = Tensor("x2d", dims=[batch, time, freq, in_dim], dtype="float32", raw_tensor=torch.from_numpy(x2d_np))
+    ref = {
+        k: (v.copy_compatible_to_dims_raw(v.dims).detach().cpu().numpy(), v.dims)
+        for k, v in _fwd(mods_pt, x_pt, x2d_pt).items()
+    }
+
+    _rf_jax()
+    mods_jax = _build()
+    for mod_pt, mod_jax in zip(mods_pt, mods_jax):
+        _copy_params_from(mod_pt, mod_jax)
+    x_jax = _make("x", x_np, [batch, time, in_dim])
+    x2d_jax = _make("x2d", x2d_np, [batch, time, freq, in_dim])
+    got = {
+        k: (numpy.asarray(v.copy_compatible_to_dims_raw(v.dims)), v.dims)
+        for k, v in _fwd(mods_jax, x_jax, x2d_jax).items()
+    }
+
+    assert set(got) == set(ref)
+    for key in sorted(ref):
+        ref_raw, ref_dims = ref[key]
+        got_raw, got_dims = got[key]
+        assert got_dims == ref_dims, f"{key}: dims {got_dims} vs {ref_dims}"
+        numpy.testing.assert_allclose(got_raw, ref_raw, rtol=1e-5, atol=1e-5, err_msg=f"{key} differs")
+
+
+def test_conformer_subsample_vs_torch():
+    """the real frontend of the target model: ConformerConvSubsample as configured in test_rf_packed"""
+    import torch
+    from returnn.frontend.encoder.conformer import ConformerConvSubsample
+
+    batch, time, in_dim = Dim(3, name="batch"), Dim(20, name="time"), Dim(8, name="feat")
+    out_dims = [Dim(4, name="conv1"), Dim(4, name="conv2"), Dim(4, name="conv3")]
+    x_np = numpy.random.RandomState(47).normal(size=(3, 20, 8)).astype("float32")
+
+    def _build():
+        rf.set_random_seed(31)
+        return ConformerConvSubsample(
+            in_dim,
+            out_dims=out_dims,
+            filter_sizes=[(3, 3), (3, 3), (3, 3)],
+            pool_sizes=[(1, 2)],
+            strides=[(1, 1), (3, 1), (2, 1)],
+        )
+
+    rf.select_backend_torch()
+    mod_pt = _build()
+    x_pt = Tensor("x", dims=[batch, time, in_dim], dtype="float32", raw_tensor=torch.from_numpy(x_np))
+    out_pt, spatial_pt = mod_pt(x_pt, in_spatial_dim=time)
+    ref = out_pt.copy_compatible_to_dims_raw(out_pt.dims).detach().cpu().numpy()
+
+    _rf_jax()
+    mod_jax = _build()
+    _copy_params_from(mod_pt, mod_jax)
+    x_jax = _make("x", x_np, [batch, time, in_dim])
+    out_jax, spatial_jax = mod_jax(x_jax, in_spatial_dim=time)
+
+    assert out_jax.dims == out_pt.dims, f"dims {out_jax.dims} vs {out_pt.dims}"
+    assert spatial_jax == spatial_pt
+    numpy.testing.assert_allclose(
+        numpy.asarray(out_jax.copy_compatible_to_dims_raw(out_jax.dims)), ref, rtol=1e-5, atol=1e-5
+    )
 
 
 def test_device():
