@@ -891,8 +891,8 @@ class ExternSprintDataset(SprintDatasetBase):
         if self.predefined_seq_list_order:
             import tempfile
 
-            self.seq_list_file = tempfile.mktemp(prefix="returnn-sprint-predefined-seq-list")
-            with open(self.seq_list_file, "w") as f:
+            fd, self.seq_list_file = tempfile.mkstemp(prefix="returnn-sprint-predefined-seq-list")
+            with os.fdopen(fd, "w") as f:
                 for tag in self.predefined_seq_list_order:
                     f.write(tag)
                     f.write("\n")
@@ -906,8 +906,8 @@ class ExternSprintDataset(SprintDatasetBase):
             assert not self.predefined_seq_list_order
             import tempfile
 
-            self.seq_list_file = tempfile.mktemp(prefix="returnn-sprint-predefined-seq-filter")
-            with open(self.seq_list_file, "w") as f:
+            fd, self.seq_list_file = tempfile.mkstemp(prefix="returnn-sprint-predefined-seq-filter")
+            with os.fdopen(fd, "w") as f:
                 for tag in self.seq_tags_filter:
                     f.write(tag)
                     f.write("\n")

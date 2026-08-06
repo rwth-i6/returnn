@@ -594,12 +594,12 @@ class Engine(EngineBase):
                 cur_count_grad_accum += 1
                 perform_update_step = cur_count_grad_accum >= accum_grad_multiple_step
                 if self._graph_capture is None:  # under graph capture, backward is inside the graph
-                    with (
+                    no_sync_ctx = (
                         self._ddp_pt_model.no_sync()
                         if (self._ddp_pt_model is not None and not perform_update_step)
-                        else nullcontext(),
-                        record_function("backward"),
-                    ):
+                        else nullcontext()
+                    )
+                    with no_sync_ctx, record_function("backward"):
                         if self._grad_scaler is not None:
                             self._grad_scaler.scale(total_loss.raw_tensor).backward()
                         else:

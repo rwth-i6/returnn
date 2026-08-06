@@ -660,11 +660,7 @@ class LmDataset(CachedDataset2):
                                 map(self.orth_symbols_map.__getitem__, orth_syms)
                             )  # convert to list to trigger map (it's lazy)
                         except KeyError as e:
-                            if sys.version_info >= (3, 0):
-                                orth_sym = e.args[0]
-                            else:
-                                # noinspection PyUnresolvedReferences
-                                orth_sym = e.message
+                            orth_sym = e.args[0]
                             if self.log_auto_replace_unknown_symbols:
                                 print(
                                     "LmDataset: unknown orth symbol %r, adding to orth_replace_map as %r"

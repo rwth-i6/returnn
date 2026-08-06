@@ -5,7 +5,6 @@ import numpy
 from PIL import Image
 import os
 import glob
-import sys
 import errno
 import re
 
@@ -57,7 +56,7 @@ def load_file_list_and_transcriptions_and_sizes_and_n_labels(file_list_path, cha
             name = sp[0]
             text = "".join(sp[8:])
             # add space before '
-            text = re.sub("([^|])'", "\g<1>|'", text)
+            text = re.sub("([^|])'", r"\g<1>|'", text)
             width = int(sp[6])
             height = int(sp[7])
             if height < 1 or width < 1:
