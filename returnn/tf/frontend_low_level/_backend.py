@@ -764,6 +764,405 @@ class TFBackend(Backend[tf.Tensor]):
             raw_result = tf.einsum(subscripts, a.raw_tensor, b.raw_tensor)
         return Tensor("dot", dims=result_dims, raw_tensor=raw_result, dtype=TFBackend.get_dtype_name_raw(raw_result))
 
+    @staticmethod
+    def reshape(source: Tensor, in_dims: Sequence[Dim], out_dims: Sequence[Dim]) -> Tensor:
+        """
+        :param source: e.g. (..., in_dims, ...)
+        :param in_dims: the dims to reshape, not necessarily all dims of the source
+        :param out_dims: what to reshape them into
+        :return: e.g. (..., out_dims, ...)
+        """
+        in_dims_axes = [source.get_axis_from_description(d, allow_int=False) for d in in_dims]
+        assert sorted(set(in_dims_axes)) == sorted(in_dims_axes), f"reshape {source}: invalid in_dims {in_dims}"
+        insert_axis = min(in_dims_axes)
+        dims = list(source.dims)
+        permute = list(range(len(source.dims)))
+        for axis in sorted(set(in_dims_axes), reverse=True):
+            dims.pop(axis)
+            permute.pop(axis)
+        permute = permute[:insert_axis] + in_dims_axes + permute[insert_axis:]
+        source = source.copy_transpose(permute)
+        dims = dims[:insert_axis] + list(out_dims) + dims[insert_axis:]
+        out = Tensor("reshape", dims=dims, dtype=source.dtype, sparse_dim=source.sparse_dim)
+        if source.feature_dim and source.feature_dim not in in_dims:
+            out.feature_dim = source.feature_dim
+        with tf_util.same_control_flow_ctx(source):
+            out.raw_tensor = tf.reshape(source.raw_tensor, _shape_raw(dims))
+        return out
+
+    @staticmethod
+    def expand_dim(source: Tensor, dim: Dim) -> Tensor:
+        """
+        :param source:
+        :param dim:
+        :return: source with dim added
+        """
+        assert dim not in source.dims
+        # Some heuristic where to put the new dim (same as the other backends).
+        axis = len(source.dims)  # default: at the end
+        if dim.is_static() and source.have_feature_axis():
+            axis = source.feature_dim_axis
+        if dim.is_dynamic():
+            for i, d in reversed(list(enumerate(source.dims))):
+                if d.is_dynamic():
+                    axis = i + 1
+                    break
+        new_dims = list(source.dims)
+        new_dims.insert(axis, dim)
+        out = source.copy_template_new_dim_tags(new_dims)
+        if source.feature_dim:
+            out.feature_dim = source.feature_dim
+        with tf_util.same_control_flow_ctx(source):
+            out_raw = tf.expand_dims(source.raw_tensor, axis=axis)
+            if dim.is_dynamic() or dim.dimension != 1:
+                # TF has no stride-0 view like torch expand, so this materializes
+                multiples = [1] * len(new_dims)
+                multiples[axis] = dim.get_dim_value()
+                out_raw = tf.tile(out_raw, _shape_raw(multiples))
+        out.raw_tensor = out_raw
+        return out
+
+    @staticmethod
+    def concat(*sources: Tuple[Tensor, Dim], allow_broadcast: bool = False, out_dim: Dim) -> Tensor:
+        """
+        :param sources: tensors with the dim to concat over
+        :param allow_broadcast: whether the sources may have differing other dims
+        :param out_dim:
+        :return: concatenated tensor
+        """
+        axis = sources[0][0].get_axis_from_description(sources[0][1])
+        other_dims = list(sources[0][0].dims)
+        other_dims.remove(sources[0][1])
+        need_broadcast = False
+        if allow_broadcast:
+            for source, dim in sources[1:]:
+                assert dim in source.dims
+                if set(source.dims) - {dim} != set(other_dims):
+                    need_broadcast = True
+                for dim_ in source.dims:
+                    if dim_ != dim and dim_ not in other_dims:
+                        other_dims.append(dim_)
+        sources_raw = []
+        for source, dim in sources:
+            templ_dims = other_dims[:axis] + [dim] + other_dims[axis:]
+            if allow_broadcast and need_broadcast:
+                templ = Tensor(source.name, dims=templ_dims, dtype=source.dtype, sparse_dim=source.sparse_dim)
+                sources_raw.append(source.copy_compatible_to(templ, unbroadcast=True).raw_tensor)
+            else:
+                assert set(templ_dims) == set(source.dims), (
+                    f"concat {source} {dim} not allowed with allow_broadcast=False"
+                )
+                sources_raw.append(source.copy_transpose(templ_dims).raw_tensor)
+        with tf_util.same_control_flow_ctx(sources_raw):
+            out_raw = tf.concat(sources_raw, axis=axis)
+        out = Tensor(
+            "concat",
+            dims=other_dims[:axis] + [out_dim] + other_dims[axis:],
+            dtype=TFBackend.get_dtype_name_raw(out_raw),
+            sparse_dim=sources[0][0].sparse_dim,
+            raw_tensor=out_raw,
+        )
+        if sources[0][0].feature_dim and sources[0][0].feature_dim != sources[0][1]:
+            out.feature_dim = sources[0][0].feature_dim
+        return out
+
+    @staticmethod
+    def full(
+        dims: Sequence[Dim],
+        fill_value: Union[RawTensorTypes, Tensor],
+        *,
+        dtype: str,
+        device: Optional[str] = None,
+        sparse_dim: Optional[Dim] = None,
+        feature_dim: Optional[Dim] = None,
+    ) -> Tensor:
+        """
+        :param dims:
+        :param fill_value:
+        :param dtype:
+        :param device:
+        :param sparse_dim:
+        :param feature_dim:
+        :return: tensor filled with fill_value
+        """
+        if isinstance(fill_value, Tensor):
+            fill_value = fill_value.raw_tensor
+        with tf_util.same_control_flow_ctx([d.get_dim_value() for d in dims]):
+            raw_tensor = tf.fill(_shape_raw(dims), tf.cast(fill_value, TFBackend.as_dtype_raw(dtype)))
+        return Tensor(
+            "full", dims=dims, sparse_dim=sparse_dim, feature_dim=feature_dim, dtype=dtype, raw_tensor=raw_tensor
+        )
+
+    @staticmethod
+    def pad(
+        source: Tensor,
+        *,
+        axes: Sequence[Dim],
+        padding: Sequence[Tuple[Union[Dim, int, Tensor], Union[Dim, int, Tensor]]],
+        out_dims: Sequence[Dim],
+        handle_dynamic_dims: bool,
+        mode: str = "constant",
+        value: Optional[Union[rf.RawTensorTypes, Tensor]] = None,
+    ) -> Tensor:
+        """
+        :param source:
+        :param axes:
+        :param padding: per axis, (left, right)
+        :param out_dims:
+        :param handle_dynamic_dims: mask the padding of the sequences shorter than the padded dim
+        :param mode: "constant" or "reflect"
+        :param value: for mode "constant"
+        :return: padded tensor
+        """
+        assert len(out_dims) == len(axes) == len(padding)
+        raw_pad = []  # per source axis, (left, right), the tf.pad order
+        for dim in source.dims:
+            if dim not in axes:
+                raw_pad.append((0, 0))
+                continue
+            left, right = padding[axes.index(dim)]
+            if isinstance(left, Dim):
+                if handle_dynamic_dims:
+                    assert not left.need_masking(), f"pad: left {left} needs masking, not supported currently"
+                left = left.get_dim_value()
+            elif isinstance(left, Tensor):
+                if handle_dynamic_dims:
+                    assert not left.dims, f"pad: left {left} needs masking, not supported currently"
+                left = tf.reduce_max(left.raw_tensor)
+            if isinstance(right, Dim):
+                right = right.get_dim_value()
+            elif isinstance(right, Tensor):
+                right = tf.reduce_max(right.raw_tensor)
+            raw_pad.append((left, right))
+        if (isinstance(value, Tensor) and value.dims == ()) or not isinstance(value, Tensor):
+            if isinstance(value, Tensor):
+                value_raw = value.raw_tensor
+            else:
+                value_raw = 0 if value is None else value
+            tf_mode = {"constant": "CONSTANT", "reflect": "REFLECT"}.get(mode)
+            if not tf_mode:
+                raise NotImplementedError(f"pad: mode {mode!r} not implemented")
+            out = source.copy_template_new_dim_tags(
+                [out_dims[axes.index(dim)] if dim in axes else dim for dim in source.dims], keep_special_axes=True
+            )
+            with tf_util.same_control_flow_ctx(source):
+                paddings = _shape_raw([_shape_raw(lr) for lr in raw_pad])
+                if tf_mode == "CONSTANT":
+                    out.raw_tensor = tf.pad(source.raw_tensor, paddings, mode=tf_mode, constant_values=value_raw)
+                else:
+                    out.raw_tensor = tf.pad(source.raw_tensor, paddings, mode=tf_mode)
+        else:  # non-scalar value: build it by concat instead
+            assert isinstance(value, Tensor) and value.dims
+            assert all(dim in source.dims and dim not in axes for dim in value.dims)
+            assert len(axes) == 1, "pad: non-scalar value only implemented for a single axis"
+            pad_left, pad_right = padding[0]
+            pad_left = pad_left if isinstance(pad_left, Dim) else Dim(pad_left, name="pad_left")
+            pad_right = pad_right if isinstance(pad_right, Dim) else Dim(pad_right, name="pad_right")
+            out = TFBackend.concat(
+                *(
+                    ([(rf.expand_dim(value, pad_left), pad_left)] if pad_left.dimension else [])
+                    + [(source, axes[0])]
+                    + ([(rf.expand_dim(value, pad_right), pad_right)] if pad_right.dimension else [])
+                ),
+                allow_broadcast=True,
+                out_dim=out_dims[0],
+            )
+        if handle_dynamic_dims and any(dim.need_masking() for dim in out_dims):
+            if all(right == 0 for _, right in raw_pad) and mode != "circular":
+                return out  # nothing was padded on the right, so nothing to mask
+            if mode != "constant":
+                raise NotImplementedError(f"pad: mode {mode} not implemented with dynamic dims")
+            for out_dim, middle, (left, right) in zip(out_dims, axes, padding):
+                if not (
+                    middle.need_masking()
+                    or (isinstance(left, Dim) and left.need_masking())
+                    or (isinstance(left, Tensor) and left.dims)
+                ):
+                    continue
+                if not (isinstance(right, (Dim, Tensor)) or (isinstance(right, int) and right > 0)):
+                    continue
+                if isinstance(left, Dim):
+                    left = left.get_size_tensor()
+                # the padded frames beyond (left + real len) are junk from the padding of the shorter seqs
+                mask = rf.compare_bc(rf.range_over_dim(out_dim), "<", left + middle.get_size_tensor())
+                if isinstance(value, Tensor):
+                    other = value.copy_compatible_to_dims_raw(out.dims)
+                else:
+                    # the fill value must have the tensor dtype: tf.where does not promote
+                    # (e.g. a float tensor with the int scalar 0)
+                    other = tf.cast(0 if value is None else value, out.raw_tensor.dtype)
+                out.raw_tensor = tf_util.where_bc(mask.copy_compatible_to_dims_raw(out.dims), out.raw_tensor, other)
+        return out
+
+    @staticmethod
+    def gather(source: Tensor, *, indices: Union[Tensor, int], axis: Dim, clip_to_valid: bool = False) -> Tensor:
+        """
+        :param source:
+        :param indices: all dims shared with the source (except axis) are batch dims
+        :param axis: the axis to gather from
+        :param clip_to_valid: clip the indices to the valid range, taking seq lens into account
+        :return: gathered values
+        """
+        axis_int = source.get_axis_from_description(axis, allow_int=False)
+        if isinstance(indices, int):
+            if not clip_to_valid:  # fast path: a plain slice
+                out = Tensor(
+                    "gather",
+                    dims=list(source.dims[:axis_int]) + list(source.dims[axis_int + 1 :]),
+                    dtype=source.dtype,
+                    sparse_dim=source.sparse_dim,
+                )
+                if source.feature_dim and source.feature_dim in out.dims:
+                    out.feature_dim = source.feature_dim
+                with tf_util.same_control_flow_ctx(source):
+                    out.raw_tensor = source.raw_tensor[(slice(None),) * axis_int + (indices,)]
+                return out
+            indices = Tensor(
+                "indices_int",
+                dims=(),
+                dtype=rf.get_default_array_index_dtype(),
+                raw_tensor=tf.constant(indices, dtype=TFBackend.as_dtype_raw(rf.get_default_array_index_dtype())),
+            )
+        assert isinstance(indices, Tensor), f"gather: unsupported indices {indices!r}"
+        if clip_to_valid:
+            if axis.dyn_size_ext is not None:
+                indices = rf.clip_by_value(
+                    indices,
+                    0,
+                    rf.relu(rf.cast(axis.get_dyn_size_ext_for_device(indices.device), indices.dtype) - 1),
+                    allow_broadcast_all_sources=True,
+                )
+            else:
+                indices = indices.copy()
+                indices.raw_tensor = tf.clip_by_value(indices.raw_tensor, 0, axis.get_dim_value() - 1)
+        # tf.gather handles the batch dims itself, as long as they lead in both source and indices
+        index_own_dims = [d for d in indices.dims if d not in source.dims or d == axis]
+        common_dims = [d for d in indices.dims if d not in index_own_dims]
+        rest_dims = [d for i, d in enumerate(source.dims) if i != axis_int and d not in common_dims]
+        out = Tensor(
+            "gather",
+            dims=common_dims + index_own_dims + rest_dims,
+            dtype=source.dtype,
+            sparse_dim=source.sparse_dim,
+        )
+        if source.feature_dim and source.feature_dim in out.dims:
+            out.feature_dim = source.feature_dim
+        with tf_util.same_control_flow_ctx([source, indices]):
+            source_raw = source.copy_compatible_to_dims_raw(common_dims + [axis] + rest_dims)
+            indices_raw = indices.copy_compatible_to_dims_raw(common_dims + index_own_dims)
+            indices_raw = tf.cast(indices_raw, tf.int32)
+            out.raw_tensor = tf.gather(source_raw, indices_raw, axis=len(common_dims), batch_dims=len(common_dims))
+        return out
+
+    @staticmethod
+    def masked_select(
+        tensor: Tensor, *, mask: Tensor, dims: Sequence[Dim], out_dim: Optional[Dim] = None
+    ) -> Tuple[Tensor, Dim]:
+        """
+        :param tensor:
+        :param mask:
+        :param dims: the dims of the mask, their order defines the format
+        :param out_dim:
+        :return: tensor with the mask dims replaced by a single new dim, and that dim
+        """
+        assert mask.dtype == "bool"
+        assert set(mask.dims) == set(dims)
+        remaining_dims = [d for d in tensor.dims if d not in mask.dims]
+        if not out_dim:
+            out_dim = Dim(None, name="masked_select")
+        with tf_util.same_control_flow_ctx([tensor, mask]):
+            in_raw = tensor.copy_compatible_to_dims_raw(tuple(dims) + tuple(remaining_dims))
+            mask_raw = mask.copy_compatible_to_dims_raw(tuple(dims))
+            # unbroadcast: the input may be broadcast over some of the mask dims
+            in_raw = tf.broadcast_to(
+                in_raw, _shape_raw(list(dims) + [tf.shape(in_raw)[len(dims) + i] for i in range(len(remaining_dims))])
+            )
+            out_raw = tf.boolean_mask(in_raw, mask_raw)
+            if out_dim.dyn_size_ext is None:
+                out_dim.dyn_size_ext = Tensor("masked_select_size", dims=(), dtype="int32")
+            if out_dim.dyn_size_ext.raw_tensor is None:
+                out_dim.dyn_size_ext.raw_tensor = tf.shape(out_raw)[0]
+        out = Tensor(
+            "masked_select",
+            dims=(out_dim,) + tuple(remaining_dims),
+            dtype=tensor.dtype,
+            sparse_dim=tensor.sparse_dim,
+            feature_dim=tensor.feature_dim if tensor.feature_dim in remaining_dims else None,
+            raw_tensor=out_raw,
+        )
+        return out, out_dim
+
+    @staticmethod
+    def slice(
+        source: Tensor,
+        *,
+        axis: Dim,
+        start: Optional[Union[int, Tensor]] = None,
+        end: Optional[Union[int, Tensor]] = None,
+        step: Optional[Union[int, Tensor]] = None,
+        size: Optional[Union[int, Tensor, Dim]] = None,
+        out_dim: Dim,
+    ) -> Tensor:
+        """
+        :param source:
+        :param axis:
+        :param start:
+        :param end:
+        :param step:
+        :param size: alternative to end
+        :param out_dim:
+        :return: source sliced on axis
+        """
+        assert step is None or (isinstance(step, int) and step == 1), "slice: step != 1 not yet implemented"
+        axis_int = source.get_axis_from_description(axis, allow_int=False)
+        out = source.copy_template_replace_dim_tag(axis=axis_int, new_dim_tag=out_dim)
+        if isinstance(start, Tensor):
+            assert start.dims == ()
+            start = start.raw_tensor
+        elif start is None:
+            start = 0
+        if isinstance(size, Dim):
+            assert end is None
+            size = size.get_dim_value()
+        elif isinstance(size, Tensor):
+            assert end is None
+            size = size.raw_tensor if size.dims == () else tf.reduce_max(size.raw_tensor)
+        elif isinstance(size, int):
+            pass
+        elif size is None:
+            if isinstance(end, Tensor):
+                end = end.raw_tensor if end.dims == () else tf.reduce_max(end.raw_tensor)
+            elif isinstance(end, int):
+                if end < 0:
+                    end += axis.get_dim_value()
+            elif end is None:
+                end = axis.get_dim_value()
+            else:
+                raise TypeError(f"slice: unsupported type for end: {type(end)}")
+            size = end - start
+        else:
+            raise TypeError(f"slice: unsupported type for size: {type(size)}")
+        begin = [0] * len(source.dims)
+        begin[axis_int] = start
+        sizes = [-1] * len(source.dims)  # -1 = all remaining
+        sizes[axis_int] = size
+        with tf_util.same_control_flow_ctx(source):
+            out.raw_tensor = tf.slice(source.raw_tensor, _shape_raw(begin), _shape_raw(sizes))
+        return out
+
+    @staticmethod
+    def flip_no_mask(source: Tensor, *, axis: Dim) -> Tensor:
+        """
+        :param source:
+        :param axis:
+        :return: source reversed over axis, ignoring masking
+        """
+        axis_int = source.get_axis_from_description(axis)
+        out = source.copy_template("flip")
+        with tf_util.same_control_flow_ctx(source):
+            out.raw_tensor = tf.reverse(source.raw_tensor, axis=[axis_int])
+        return out
+
     _deferred_parameter_creation = False
     _deferred_params: Dict[RefIdEq, _DeferredParam] = {}
 
