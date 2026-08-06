@@ -549,7 +549,22 @@ def run_inspect(pycharm_dir, src_dir, skip_pycharm_inspect=False):
             vmopts_fn = "%s/pycharm-inspect.vmoptions" % out_tmp_dir
             with open("%s/bin/pycharm64.vmoptions" % pycharm_dir) as f_in, open(vmopts_fn, "w") as f_out:
                 f_out.write(f_in.read())
+                # extra JVM options for experiments, whitespace-separated
+                # (e.g. -Djava.util.concurrent.ForkJoinPool.common.parallelism=1
+                #  to serialize the concurrent inspection engine when chasing per-file races)
+                for opt in os.environ.get("RETURNN_PYCHARM_INSPECT_VM_EXTRA", "").split():
+                    f_out.write(opt + "\n")
             env["PYCHARM_VM_OPTIONS"] = vmopts_fn
+        # Headless index/skeleton prebuild (the remote-dev "warmup" command) BEFORE inspecting:
+        # inspect.sh otherwise analyzes files concurrently with indexing the site-packages
+        # (torch alone is huge), and files analyzed before the relevant index part is complete
+        # get nondeterministic unresolved-reference noise (measured: three identical runs gave
+        # 1182/920/1087 "Cannot find reference ... in 'torch'" findings).
+        warmup_cmd = ["%s/bin/pycharm.sh" % pycharm_dir, "warmup", "--project-dir=%s" % src_dir]
+        fold_start("script.inspect.warmup")
+        print("$ %s" % " ".join(warmup_cmd))
+        subprocess.check_call(warmup_cmd, stderr=subprocess.STDOUT, env=env)
+        fold_end()
         print("$ %s" % " ".join(cmd))
         subprocess.check_call(cmd, stderr=subprocess.STDOUT, env=env)
 
@@ -834,11 +849,19 @@ def main():
         # a running IDE holds the single-instance lock (the inspect then just dies)
         # and would get its jdk.table.xml edited underneath it.
         # Persistent cache dir (not per-run tmp) so the generated python stubs survive across runs.
-        _base = os.path.expanduser("~/.cache/returnn-pycharm-inspect")
+        # PER-INTERPRETER subdir: config+system MUST NOT be shared across envs -- the IDE
+        # rewrites jdk.table.xml on shutdown from its own cached model, silently reverting a
+        # freshly registered interpreter to the previous env's (observed: every "torch2.12"
+        # inspection actually ran against the first run's torch2.7 site-packages).
+        import hashlib
+
+        _env_tag = hashlib.sha1(sys.executable.encode()).hexdigest()[:10]
+        _base = os.path.expanduser("~/.cache/returnn-pycharm-inspect") + "/" + _env_tag
         os.environ["PYCHARM_INSPECT_CONFIG_DIR"] = _base + "/config"
         os.environ.setdefault("PYCHARM_INSPECT_SYSTEM_DIR", _base + "/system")
         os.makedirs(os.environ["PYCHARM_INSPECT_CONFIG_DIR"], exist_ok=True)
         os.makedirs(os.environ["PYCHARM_INSPECT_SYSTEM_DIR"], exist_ok=True)
+        print("PyCharm inspect isolated dirs:", _base, "(interpreter: %s)" % sys.executable)
     arg_parser = argparse.ArgumentParser()
     arg_parser.add_argument("--xml")
     arg_parser.add_argument("--pycharm")
@@ -874,6 +897,12 @@ def main():
             # indexing artifact: Cython's bundled numpy .pxd shadow joins the union type
             # whenever Cython is installed in the env; not a property of our code
             ("PyUnresolvedReferencesInspection", r"^Member 'Cython\.Includes\.numpy' of "),
+            # union-member attr findings (member is a real class, union has '|'): triaged 2026-08-06
+            # (205 distinct sites incl. every crash-looking candidate read individually) -- all were
+            # duck-typing idioms (type[X] | X, Dim | str), guarded branches PyCharm cannot correlate,
+            # heterogeneous-list or loose annotations, or indexing artifacts ('torch | torch').
+            # Keep AFTER the Member-'None' pattern so that family keeps its own count.
+            ("PyUnresolvedReferencesInspection", r"^Member '[^']+' of '[^']*\|[^']*' does not have attribute "),
         ],
         inspect_class_not_counted={
             # Here we disable more than what you would do in the IDE.

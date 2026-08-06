@@ -11,6 +11,13 @@
         </value>
       </option>
     </inspection_tool>
+    <!-- Disabled: in PyCharm 2026.2 (PY-262.8665) this tool throws
+         IndexOutOfBoundsException in PyLiteralType promoteDictLiteralOrDictComprehension
+         (~30x per run; the code got a size guard upstream after our build). The exception
+         aborts/poisons the per-file analysis session, which made OTHER inspections
+         (PyUnresolvedReferences on torch members) nondeterministic per file per run.
+         Results were never counted anyway (inspect_class_not_counted: too many false alarms). -->
+    <inspection_tool class="PyTypeCheckerInspection" enabled="false" level="WARNING" enabled_by_default="false" />
     <!-- Disabled: in PyCharm 2026.2 this tool NPEs per file (normalizePackageName(null) in
          DeclaredButNotInstalledPackagesChecker), and one throwing tool aborts the WHOLE
          per-file inspection batch, silently emptying the report. Its results were never
