@@ -348,7 +348,7 @@ class TFBackend(Backend[tf.Tensor]):
         with tf_util.same_control_flow_ctx(tensor):
             x_raw = tensor.raw_tensor
             if use_mask and axis.need_masking():
-                mask = tensor.get_sequence_mask_broadcast(axis=axis)
+                mask = _seq_mask_raw(tensor, tensor.dims.index(axis))
                 x_raw = tf_util.where_bc(mask, x_raw, -get_global_inf_value())
             out.raw_tensor = tf.nn.softmax(x_raw, axis=tensor.dims.index(axis))
         return out
@@ -365,7 +365,7 @@ class TFBackend(Backend[tf.Tensor]):
         with tf_util.same_control_flow_ctx(tensor):
             x_raw = tensor.raw_tensor
             if use_mask and axis.need_masking():
-                mask = tensor.get_sequence_mask_broadcast(axis=axis)
+                mask = _seq_mask_raw(tensor, tensor.dims.index(axis))
                 x_raw = tf_util.where_bc(mask, x_raw, -get_global_inf_value())
             out.raw_tensor = tf.nn.log_softmax(x_raw, axis=tensor.dims.index(axis))
         return out
@@ -600,7 +600,7 @@ class TFBackend(Backend[tf.Tensor]):
                             continue
                         if not x.has_dynamic_size(axis):
                             continue
-                        mask = x.get_sequence_mask_broadcast(axis=axis)
+                        mask = _seq_mask_raw(x, axis)
 
                         zeros = tf.zeros((), dtype=x.placeholder.dtype)
                         # Cannot call x.placeholder.dtype.{min,max} in case input is e.g. a bool
@@ -686,6 +686,9 @@ class TFBackend(Backend[tf.Tensor]):
         x_bc_raw = x.copy_compatible_to_dims_raw(out.dims)
         min_bc_raw = clip_value_min.copy_compatible_to_dims_raw(out.dims)
         max_bc_raw = clip_value_max.copy_compatible_to_dims_raw(out.dims)
+        # tf.clip_by_value broadcasts the bounds against x, but not x itself,
+        # so x must already have the full shape (e.g. a scalar clipped by per-seq bounds).
+        x_bc_raw = tf.broadcast_to(x_bc_raw, _shape_raw(out.dims))
         out.raw_tensor = tf.clip_by_value(x_bc_raw, min_bc_raw, max_bc_raw)
         return out
 
@@ -1392,6 +1395,32 @@ class TFBackend(Backend[tf.Tensor]):
 # So that an rf.Parameter holding a DeferredVariable still dispatches to this backend
 # (the native dispatch consults this same table).
 register_backend_by_tensor_type(DeferredVariable, TFBackend)
+
+
+def _seq_mask_raw(tensor: Tensor, axis: int) -> tf.Tensor:
+    """
+    :param tensor:
+    :param axis: an axis with a dynamic size
+    :return: seq mask, broadcastable to the tensor dims
+
+    Deliberately not Tensor.get_sequence_mask_broadcast:
+    its fast path (taken because this backend has sequence_mask_raw) resolves the batch dim via
+    Tensor.get_batch_dim -> LayerBase.get_recent_layer, i.e. the net-dict layer registry,
+    which does not exist when the graph comes from RF code directly.
+    """
+    return tensor.get_sequence_mask_tensor(axis).copy_compatible_to_dims_raw(tensor.dims)
+
+
+def _shape_raw(dims_or_sizes: Sequence[Union[Dim, int, tf.Tensor]]) -> Union[List[int], tf.Tensor]:
+    """
+    :param dims_or_sizes: dims, or their sizes directly
+    :return: shape for tf.reshape / tf.fill / tf.tile:
+        a plain list while all sizes are static, else a stacked tensor
+    """
+    sizes = [d.get_dim_value() if isinstance(d, Dim) else d for d in dims_or_sizes]
+    if any(isinstance(s, tf.Tensor) for s in sizes):
+        return tf.stack(sizes)
+    return sizes
 
 
 def _transpose_raw(raw_tensor: tf.Tensor, perm: Sequence[int]) -> tf.Tensor:
