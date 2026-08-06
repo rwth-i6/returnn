@@ -377,11 +377,31 @@ def _run_model_tf(extern_data: TensorDict, get_model: rf.GetModelFunc, forward_s
     """
     # noinspection PyProtectedMember
     from returnn.frontend import _backend
-    from returnn.tf.frontend_low_level import TFBackend
 
     extern_data_raw = extern_data.as_raw_tensor_dict(expected_value_type=numpy.ndarray)
     extern_data.reset_content()
+    prev_backend = rf.get_selected_backend()
     _backend.select_backend_tf()
+
+    # Restore even when the run raises:
+    # the dims (incl. the global batch_dim) are converted in place below,
+    # and the selected backend is global state that later tests inherit.
+    try:
+        return _run_model_tf_impl(extern_data, extern_data_raw, get_model, forward_step)
+    finally:
+        extern_data.reset_content()
+        extern_data.assign_from_raw_tensor_dict_(extern_data_raw)
+        rf.select_backend(prev_backend)
+
+
+def _run_model_tf_impl(
+    extern_data: TensorDict,
+    extern_data_raw: Dict[str, numpy.ndarray],
+    get_model: rf.GetModelFunc,
+    forward_step: rf.StepFunc,
+) -> TensorDict:
+    """see :func:`_run_model_tf`"""
+    from returnn.tf.frontend_low_level import TFBackend
 
     with tf_scope() as session:
         rf.set_random_seed(42)
@@ -419,9 +439,6 @@ def _run_model_tf(extern_data: TensorDict, get_model: rf.GetModelFunc, forward_s
         outputs_numpy = outputs_tf.copy_template()
         outputs_numpy.reset_content()
         outputs_numpy.assign_from_raw_tensor_dict_(outputs_numpy_raw)
-
-    extern_data.reset_content()
-    extern_data.assign_from_raw_tensor_dict_(extern_data_raw)
     return outputs_numpy
 
 
