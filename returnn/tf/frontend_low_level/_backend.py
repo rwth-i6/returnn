@@ -771,6 +771,156 @@ class TFBackend(Backend[tf.Tensor]):
             raw_result = tf.einsum(subscripts, a.raw_tensor, b.raw_tensor)
         return Tensor("dot", dims=result_dims, raw_tensor=raw_result, dtype=TFBackend.get_dtype_name_raw(raw_result))
 
+    # noinspection PyShadowingBuiltins
+    @staticmethod
+    def conv(
+        source: Tensor,
+        *,
+        in_dim: Dim,
+        out_dim: Dim,
+        in_spatial_dims: Sequence[Dim],
+        out_spatial_dims: Optional[Sequence[Dim]] = None,
+        filter: Tensor,
+        filter_size: Sequence[Dim],
+        padding: Union[str, int, Sequence[int]],
+        strides: Optional[Union[int, Sequence[int]]] = None,
+        dilation_rate: Optional[Union[int, Sequence[int]]] = None,
+        groups: Optional[int] = None,
+        bias: Optional[Tensor] = None,
+    ) -> Tuple[Tensor, Sequence[Dim]]:
+        """
+        :param source:
+        :param in_dim:
+        :param out_dim:
+        :param in_spatial_dims:
+        :param out_spatial_dims:
+        :param filter:
+        :param filter_size:
+        :param padding: "same", "valid", or explicit
+        :param strides:
+        :param dilation_rate:
+        :param groups:
+        :param bias:
+        :return: conv output, out spatial dims
+
+        tf.nn.convolution takes "SAME" / "VALID" directly, also with striding,
+        so unlike the torch backend there is no padding arithmetic here.
+        """
+        if not out_spatial_dims:
+            out_spatial_dims = rf.make_conv_out_spatial_dims(
+                in_spatial_dims=in_spatial_dims,
+                filter_size=filter_size,
+                strides=strides or 1,
+                dilation_rate=dilation_rate or 1,
+                padding=padding,
+            )
+        filter_in_dim = in_dim if not groups or groups == 1 else in_dim // groups
+        batch_dims = [d for d in source.dims if d not in (in_dim,) + tuple(in_spatial_dims)]
+        with tf_util.same_control_flow_ctx([source, filter]):
+            # TF wants the data channels-last and the filter as [*filter_size, in_dim/groups, out_dim]
+            filter_raw = filter.copy_compatible_to_dims_raw(tuple(filter_size) + (filter_in_dim, out_dim))
+            source = source.copy_transpose(batch_dims + list(in_spatial_dims) + [in_dim])
+            src_raw = source.raw_tensor
+            src_shape = TFBackend.get_shape_tuple_raw(src_raw)
+            if len(batch_dims) != 1:  # merge the batch dims into one
+                src_raw = tf.reshape(src_raw, _shape_raw([-1] + list(src_shape[len(batch_dims) :])))
+            if isinstance(padding, str):
+                tf_padding = padding.upper()
+            else:  # explicit padding: pad here, then convolve without padding
+                pads = padding if isinstance(padding, (list, tuple)) else [padding] * len(filter_size)
+                src_raw = tf.pad(src_raw, [[0, 0]] + [[p, p] for p in pads] + [[0, 0]])
+                tf_padding = "VALID"
+            out_raw = tf.nn.convolution(
+                src_raw, filter_raw, strides=strides, padding=tf_padding, dilations=dilation_rate
+            )
+            if bias is not None:
+                out_raw = out_raw + bias.copy_compatible_to_dims_raw([out_dim])
+            if len(batch_dims) != 1:  # and split them again
+                out_raw = tf.reshape(
+                    out_raw, _shape_raw(list(batch_dims) + list(TFBackend.get_shape_tuple_raw(out_raw)[1:]))
+                )
+        out = Tensor(
+            "conv",
+            dims=batch_dims + list(out_spatial_dims) + [out_dim],
+            feature_dim=out_dim,
+            dtype=TFBackend.get_dtype_name_raw(out_raw),
+            raw_tensor=out_raw,
+        )
+        return out, out_spatial_dims
+
+    @staticmethod
+    def pool(
+        source: Tensor,
+        *,
+        mode: str,
+        pool_size: Sequence[int],
+        padding: Union[str, int, Sequence[int]] = "valid",
+        dilation_rate: Union[Sequence[int], int] = 1,
+        strides: Sequence[int],
+        in_spatial_dims: Sequence[Dim],
+        out_spatial_dims: Optional[Sequence[Dim]] = None,
+    ) -> Tuple[Tensor, Sequence[Dim]]:
+        """
+        :param source:
+        :param mode: "max" or "avg"
+        :param pool_size:
+        :param padding:
+        :param dilation_rate:
+        :param strides:
+        :param in_spatial_dims:
+        :param out_spatial_dims:
+        :return: pooled output, out spatial dims
+        """
+        if not out_spatial_dims:
+            out_spatial_dims = rf.make_conv_out_spatial_dims(
+                in_spatial_dims=in_spatial_dims,
+                filter_size=pool_size,
+                strides=strides,
+                dilation_rate=dilation_rate,
+                padding=padding,
+            )
+        tf_mode = {"max": "MAX", "avg": "AVG", "mean": "AVG"}.get(mode.lower())
+        if not tf_mode:
+            raise NotImplementedError(f"pool: mode {mode!r} not implemented")
+        # tf.nn.pool wants these per spatial dim, it does not broadcast a scalar
+        nd = len(in_spatial_dims)
+        pool_size = list(pool_size) if isinstance(pool_size, (list, tuple)) else [pool_size] * nd
+        strides = list(strides) if isinstance(strides, (list, tuple)) else [strides] * nd
+        dilation_rate = list(dilation_rate) if isinstance(dilation_rate, (list, tuple)) else [dilation_rate] * nd
+        rest_dims = [d for d in source.dims if d not in in_spatial_dims]
+        with tf_util.same_control_flow_ctx(source):
+            source = source.copy_transpose(rest_dims + list(in_spatial_dims))
+            src_shape = TFBackend.get_shape_tuple_raw(source.raw_tensor)
+            # tf.nn.pool wants [batch, *spatial, channels]:
+            # all non-spatial dims become the batch, and a dummy channel axis is appended
+            src_raw = tf.reshape(source.raw_tensor, _shape_raw([-1] + list(src_shape[len(rest_dims) :]) + [1]))
+            if isinstance(padding, str):
+                tf_padding = padding.upper()
+            else:
+                pads = padding if isinstance(padding, (list, tuple)) else [padding] * len(pool_size)
+                src_raw = tf.pad(src_raw, [[0, 0]] + [[p, p] for p in pads] + [[0, 0]])
+                tf_padding = "VALID"
+            out_raw = tf.nn.pool(
+                src_raw,
+                window_shape=pool_size,
+                pooling_type=tf_mode,
+                strides=strides,
+                padding=tf_padding,
+                dilations=dilation_rate,
+            )
+            out_shape = list(rest_dims) + list(TFBackend.get_shape_tuple_raw(out_raw)[1:-1])
+            out_raw = tf.reshape(out_raw, _shape_raw(out_shape))
+        out = Tensor(
+            "pool",
+            dims=rest_dims + list(out_spatial_dims),
+            dtype=TFBackend.get_dtype_name_raw(out_raw),
+            sparse_dim=source.sparse_dim,
+            raw_tensor=out_raw,
+        )
+        if source.feature_dim and source.feature_dim in out.dims:
+            out.feature_dim = source.feature_dim
+        return out, out_spatial_dims
+
     @staticmethod
     def stft(
         x: Tensor,
@@ -936,6 +1086,25 @@ class TFBackend(Backend[tf.Tensor]):
         with tf_util.same_control_flow_ctx(source):
             out.raw_tensor = tf.reshape(source.raw_tensor, _shape_raw(dims))
         return out
+
+    @staticmethod
+    def split(source: Tensor, *, axis: Dim, out_dims: Sequence[Dim]) -> Tuple[Tensor, ...]:
+        """
+        :param source:
+        :param axis: some static axis
+        :param out_dims: sum(out_dims) == axis
+        :return: one tensor per out_dim, with axis replaced by it
+        """
+        axis_int = source.get_axis_from_description(axis)
+        with tf_util.same_control_flow_ctx(source):
+            out_raw_list = tf.split(source.raw_tensor, [d.get_dim_value() for d in out_dims], axis=axis_int)
+        out_tuple = tuple(
+            source.copy_template_replace_dim_tag(axis=axis_int, new_dim_tag=dim, name=f"split{i}")
+            for i, dim in enumerate(out_dims)
+        )
+        for out, out_raw in zip(out_tuple, out_raw_list):
+            out.raw_tensor = out_raw
+        return out_tuple
 
     @staticmethod
     def expand_dim(source: Tensor, dim: Dim) -> Tensor:
