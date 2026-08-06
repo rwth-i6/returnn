@@ -113,7 +113,12 @@ def install_pycharm():
     print("Install PyCharm into:", pycharm_dir)
     sys.stdout.flush()
 
-    name = "pycharm-community-2020.2"
+    # Keep the pin recent enough for the CI python of the pycharm-inspect job:
+    # 2020.2 topped out at language level ~3.10, and with a 3.12 interpreter it fell back to "3.1"
+    # (PyInterpreterInspection EOL warning in every file + wrong-syntax inspections).
+    # Since 2025.3 there is no separate Community tarball anymore, only the unified PyCharm
+    # (free mode included) -- pycharm-<ver>.tar.gz, python plugin dir "python" instead of "python-ce".
+    name = "pycharm-2026.2"
     fn = "%s.tar.gz" % name
 
     subprocess.check_call(
@@ -123,9 +128,11 @@ def install_pycharm():
     )
     tar_out = subprocess.check_output(["tar", "-xzvf", fn], cwd=install_dir, stderr=subprocess.STDOUT)
     print((b"\n".join(tar_out.splitlines()[-10:])).decode("utf8"))
-    assert os.path.isdir("%s/%s" % (install_dir, name))
+    # the tarball's top-level dir does not always match `name` exactly (patch-versioned): take it from the listing
+    top_dir = tar_out.splitlines()[0].decode("utf8").split("/")[0].strip()
+    assert os.path.isdir("%s/%s" % (install_dir, top_dir))
     os.remove("%s/%s" % (install_dir, fn))
-    os.rename("%s/%s" % (install_dir, name), pycharm_dir)
+    os.rename("%s/%s" % (install_dir, top_dir), pycharm_dir)
     check_pycharm_dir(pycharm_dir)
 
     fold_end()
@@ -179,8 +186,13 @@ def create_stub_dir(pycharm_dir, stub_dir, pycharm_major_version):
     fold_start("script.create_python_stubs")
     print("Generating Python stubs via helpers/generator3.py...")
     if pycharm_major_version >= 2020:
-        generator_path = "%s/plugins/python-ce/helpers/generator3/__main__.py" % pycharm_dir
-        assert os.path.exists(generator_path)
+        # "python-ce" in the Community edition, "python" in the unified PyCharm (2025.3+)
+        generator_path = None
+        for plugin_name in ["python", "python-ce"]:
+            generator_path = "%s/plugins/%s/helpers/generator3/__main__.py" % (pycharm_dir, plugin_name)
+            if os.path.exists(generator_path):
+                break
+        assert generator_path and os.path.exists(generator_path)
         cmd = [sys.executable, generator_path, "-d", stub_dir]
         # The stdout can sometimes be very long. Thus we pipe and filter it a bit.
         proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
