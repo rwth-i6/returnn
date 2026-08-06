@@ -35,6 +35,19 @@ BehaviorVersion.set_min_behavior_version(29)
 
 def _rf_jax():
     rf.select_backend("jax")
+    # On GPU, JAX computes float32 matmuls in TF32 by default while torch does not
+    # (torch.backends.cuda.matmul.allow_tf32 is False by default),
+    # which alone makes grads differ by ~1e-3 relative -- more than the difference these tests look for.
+    # Same reasoning as the TF32 toggles in the packed GPU tests.
+    jax.config.update("jax_default_matmul_precision", "highest")
+
+
+def _no_tf32_torch():
+    """torch side of the same: cuDNN convolutions default to TF32, matmuls do not"""
+    import torch
+
+    torch.backends.cuda.matmul.allow_tf32 = False
+    torch.backends.cudnn.allow_tf32 = False
 
 
 def _make(name: str, arr: numpy.ndarray, dims) -> Tensor:
@@ -109,6 +122,7 @@ def test_basic_ops_vs_torch():
         }
         return {k: v.raw_tensor for k, v in out.items()}
 
+    _no_tf32_torch()
     rf.select_backend_torch()
     import torch
 
@@ -180,6 +194,7 @@ def test_linear_and_norms_vs_torch():
             "log_softmax": rf.log_softmax(linear(x), axis=out_dim),
         }
 
+    _no_tf32_torch()
     rf.select_backend_torch()
     mods_pt = _build()
     x_pt = Tensor("x", dims=[batch, time, in_dim], dtype="float32", raw_tensor=torch.from_numpy(x_np))
@@ -250,6 +265,7 @@ def test_matmul_vs_torch():
             "two_reduce": rf.matmul(x, x, reduce=[time, a_dim]),
         }
 
+    _no_tf32_torch()
     rf.select_backend_torch()
     ref = {
         k: (v.copy_compatible_to_dims_raw(v.dims).detach().cpu().numpy(), v.dims)
@@ -318,6 +334,7 @@ def test_gradients_vs_torch(grad_scale):
     batch, time, in_dim, out_dim = Dim(3, name="batch"), Dim(5, name="time"), Dim(4, name="in"), Dim(6, name="out")
     x_np = numpy.random.RandomState(17).normal(size=(3, 5, 4)).astype("float32")
 
+    _no_tf32_torch()
     rf.select_backend_torch()
     x_pt = Tensor("x", dims=[batch, time, in_dim], dtype="float32", raw_tensor=torch.from_numpy(x_np))
     mods_pt, loss_fn_pt = _model_and_loss(x_pt, in_dim, out_dim, grad_scale=grad_scale)
@@ -362,6 +379,7 @@ def test_scaled_gradient_ext_vs_torch():
         y = rf.scaled_gradient_ext(x, scale=2.0, shift=-0.1, scale_shift_by_sum_over_axis=feat)
         return rf.reduce_sum(y * y, axis=y.dims)
 
+    _no_tf32_torch()
     rf.select_backend_torch()
     x_pt_raw = torch.from_numpy(x_np).requires_grad_(True)
     loss_pt = _run(Tensor("x", dims=[batch, feat], dtype="float32", raw_tensor=x_pt_raw))
@@ -425,6 +443,7 @@ def test_shape_ops_vs_torch():
         }
         return {k: (v.copy_compatible_to_dims_raw(v.dims), v.dims) for k, v in out.items()}
 
+    _no_tf32_torch()
     rf.select_backend_torch()
     ref = {
         k: (v.detach().cpu().numpy(), dims)
@@ -470,6 +489,7 @@ def test_masked_reduce_vs_torch():
             "argmax": rf.reduce_argmax(x, axis=time),
         }
 
+    _no_tf32_torch()
     rf.select_backend_torch()
     ref = {
         k: v.copy_compatible_to_dims_raw(v.dims).detach().cpu().numpy()
@@ -535,6 +555,7 @@ def test_gather_scatter_pad_vs_torch():
     def _raw_jax(name, arr, dims):
         return jnp.asarray(arr) if dims is None else _make(name, arr, dims)
 
+    _no_tf32_torch()
     rf.select_backend_torch()
     ref = {
         k: (v.copy_compatible_to_dims_raw(v.dims).detach().cpu().numpy(), v.dims) for k, v in _run(_raw_torch).items()
@@ -580,6 +601,7 @@ def test_conv_pool_vs_torch():
         outs["avg_pool"] = rf.pool1d(x, mode="avg", pool_size=3, strides=2, padding="same", in_spatial_dim=time)[0]
         return outs
 
+    _no_tf32_torch()
     rf.select_backend_torch()
     mods_pt = _build()
     x_pt = Tensor("x", dims=[batch, time, in_dim], dtype="float32", raw_tensor=torch.from_numpy(x_np))
@@ -627,6 +649,7 @@ def test_conformer_subsample_vs_torch():
             strides=[(1, 1), (3, 1), (2, 1)],
         )
 
+    _no_tf32_torch()
     rf.select_backend_torch()
     mod_pt = _build()
     x_pt = Tensor("x", dims=[batch, time, in_dim], dtype="float32", raw_tensor=torch.from_numpy(x_np))
@@ -697,6 +720,7 @@ def test_attention_vs_torch():
             "cross_att": cross_att(x, cross_att.transform_encoder(enc, axis=kv_time)),
         }
 
+    _no_tf32_torch()
     rf.select_backend_torch()
     mods_pt = _build()
     x_pt = Tensor("x", dims=[batch, time, model_dim], dtype="float32", raw_tensor=torch.from_numpy(x_np))
@@ -780,6 +804,7 @@ def test_losses_vs_torch():
     def _raw_jax(name, arr, dims):
         return jnp.asarray(arr) if dims is None else _make(name, arr, dims)
 
+    _no_tf32_torch()
     rf.select_backend_torch()
     ref = {k: v.copy_compatible_to_dims_raw(v.dims).detach().cpu().numpy() for k, v in _run(_raw_torch).items()}
 
@@ -891,6 +916,7 @@ def test_full_model_vs_torch():
         return time_dim, tgt_time
 
     # --- torch reference
+    _no_tf32_torch()
     rf.select_backend_torch()
     mods_pt = _build()
     time_pt, tgt_time_pt = _dims(
@@ -1196,6 +1222,7 @@ def test_stft_and_logmel_vs_torch():
         out["log_mel"] = mel
         return out
 
+    _no_tf32_torch()
     rf.select_backend_torch()
     ref = {
         k: v.copy_compatible_to_dims_raw(v.dims).detach().cpu().numpy()
@@ -1232,6 +1259,7 @@ def test_top_k_vs_torch():
             "idx_vocab": idx_vocab,
         }
 
+    _no_tf32_torch()
     rf.select_backend_torch()
     ref = {
         k: v.copy_compatible_to_dims_raw(v.dims).detach().cpu().numpy()
@@ -1375,7 +1403,12 @@ def test_torch_checkpoint_import_parity():
 
 
 def test_device():
+    # device-agnostic on purpose: the default is cpu on a CPU-only run and cuda:0 on a GPU node
     _rf_jax()
     x = _make("x", numpy.zeros((2,), dtype="float32"), [Dim(2, name="d")])
-    assert x.device == "cpu"
-    assert rf.copy_to_device(x, "cpu").device == "cpu"
+    default = x.device
+    assert default == "cpu" or default.startswith("cuda:"), f"unexpected device name {default!r}"
+    # the RF device naming must round-trip through copy_to_device
+    assert rf.copy_to_device(x, default).device == default
+    if default != "cpu":
+        assert numpy.asarray(rf.copy_to_device(x, "cpu").raw_tensor).shape == (2,)
