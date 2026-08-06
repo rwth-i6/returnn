@@ -136,7 +136,9 @@ def main():
             # The GPU support would be the cuda12 extra, ~225 MB of extra wheels
             # for a plugin that a CI runner without a GPU never loads.
             # jaxlib is pinned to the same version by jax itself.
-            _run(*pip_install, f"jax=={args.jax}")
+            # optax is a separate package (not part of jax/jaxlib) but a hard dependency of the
+            # RF JAX backend: JAX ships neither losses nor optimizers.
+            _run(*pip_install, f"jax=={args.jax}", "optax")
 
         if args.hf_datasets:
             assert args.torch, "Need to specify --torch when specifying --hf-datasets"

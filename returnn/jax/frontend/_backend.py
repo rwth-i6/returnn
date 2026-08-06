@@ -16,6 +16,7 @@ import numpy
 import jax
 import jax.numpy as jnp
 from jax.scipy.special import logsumexp as _logsumexp
+import optax
 
 from returnn.tensor import Tensor, Dim
 from returnn.util.basic import get_global_inf_value, prod
@@ -1075,8 +1076,6 @@ class JaxBackend(Backend[jax.Array]):
         :param label_loop: only the standard label loop
         :return: loss [batch_dims...], summed over time, not normalized
         """
-        import optax
-
         assert not max_approx, "RF JaxBackend: ctc_loss max_approx not implemented"
         assert label_loop, "RF JaxBackend: ctc_loss label_loop=False not implemented"
         assert not use_native_op, "RF JaxBackend: ctc_loss use_native_op not implemented"
