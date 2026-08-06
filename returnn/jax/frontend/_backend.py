@@ -167,7 +167,13 @@ class JaxBackend(Backend[jax.Array]):
         else:
             name = name or "const"
             value = jnp.asarray(value, dtype=JaxBackend.as_dtype_raw(dtype))
-        if device:
+        # Scalars are deliberately NOT placed on a device.
+        # RF asks for scalars on the CPU (keep_scalar_on_cpu), which is a PyTorch optimization:
+        # there a CPU scalar can meet a CUDA tensor. In JAX a device_put COMMITS the array,
+        # and an op mixing arrays committed to different devices is an error,
+        # so committing the scalar would break every "tensor + 2.0" on the GPU.
+        # Left uncommitted, JAX co-locates it with the other operand.
+        if device and value.ndim > 0:
             value = jax.device_put(value, _device_from_str(device))
         return Tensor(name, dims=dims, dtype=dtype, sparse_dim=sparse_dim, feature_dim=feature_dim, raw_tensor=value)
 
@@ -2051,13 +2057,19 @@ def _device_to_str(device: jax.Device) -> str:
     return f"{device.platform}:{device.id}"
 
 
-def _device_from_str(device: str) -> jax.Device:
+def _device_from_str(device: str) -> Optional[jax.Device]:
     """
     :param device: RF device string ("cpu", "cuda", "cuda:1", ...)
-    :return: JAX device
+    :return: the JAX device, or None if that platform is not available in this process
+        (e.g. JAX_PLATFORMS=cuda restricts it to the GPU).
+        None means "wherever JAX puts it", which device_put accepts,
+        and is the right answer for a placement RF asks for as an optimization.
     """
     kind, _, idx = device.partition(":")
     if kind == "cuda":
         kind = "gpu"
-    devices = jax.devices(kind)
+    try:
+        devices = jax.devices(kind)
+    except RuntimeError:
+        return None
     return devices[int(idx)] if idx else devices[0]
