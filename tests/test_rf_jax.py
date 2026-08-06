@@ -636,6 +636,85 @@ def test_conformer_subsample_vs_torch():
     )
 
 
+def test_attention_vs_torch():
+    """the attentions of the target model: Conformer rel-pos self-att, decoder rotary causal self-att, cross-att"""
+    import torch
+    from returnn.frontend.attention import RelPosSelfAttention, RotaryPosCausalSelfAttention, CrossAttention
+
+    batch, time, kv_time = Dim(3, name="batch"), Dim(7, name="time"), Dim(5, name="kv_time")
+    model_dim, enc_dim = Dim(8, name="model"), Dim(8, name="enc")
+    rnd = numpy.random.RandomState(53)
+    x_np = rnd.normal(size=(3, 7, 8)).astype("float32")
+    enc_np = rnd.normal(size=(3, 5, 8)).astype("float32")
+
+    def _build():
+        rf.set_random_seed(31)
+        # att_dropout=0: the two backends have unrelated RNG streams, so any dropout would differ
+        return (
+            rf.SelfAttention(
+                model_dim, model_dim, key_dim_total=model_dim, value_dim_total=model_dim, num_heads=2, att_dropout=0.0
+            ),
+            RelPosSelfAttention(
+                model_dim, model_dim, key_dim_total=model_dim, value_dim_total=model_dim, num_heads=2, att_dropout=0.0
+            ),
+            RotaryPosCausalSelfAttention(
+                model_dim,
+                model_dim,
+                key_dim_total=model_dim,
+                value_dim_total=model_dim,
+                num_heads=2,
+                with_bias=False,
+                att_dropout=0.0,
+            ),
+            CrossAttention(
+                encoder_dim=enc_dim,
+                query_in_dim=model_dim,
+                proj_dim=model_dim,
+                key_dim_total=model_dim,
+                value_dim_total=model_dim,
+                num_heads=2,
+                att_dropout=0.0,
+            ),
+        )
+
+    def _fwd(mods, x, enc):
+        self_att, rel_pos_att, rope_att, cross_att = mods
+        return {
+            "self_att": self_att(x, axis=time),
+            "rel_pos_att": rel_pos_att(x, axis=time),
+            # causal self-att returns (output, state)
+            "rope_causal_att": rope_att(x, axis=time)[0],
+            "cross_att": cross_att(x, cross_att.transform_encoder(enc, axis=kv_time)),
+        }
+
+    rf.select_backend_torch()
+    mods_pt = _build()
+    x_pt = Tensor("x", dims=[batch, time, model_dim], dtype="float32", raw_tensor=torch.from_numpy(x_np))
+    enc_pt = Tensor("enc", dims=[batch, kv_time, enc_dim], dtype="float32", raw_tensor=torch.from_numpy(enc_np))
+    ref = {
+        k: (v.copy_compatible_to_dims_raw(v.dims).detach().cpu().numpy(), v.dims)
+        for k, v in _fwd(mods_pt, x_pt, enc_pt).items()
+    }
+
+    _rf_jax()
+    mods_jax = _build()
+    for mod_pt, mod_jax in zip(mods_pt, mods_jax):
+        _copy_params_from(mod_pt, mod_jax)
+    x_jax = _make("x", x_np, [batch, time, model_dim])
+    enc_jax = _make("enc", enc_np, [batch, kv_time, enc_dim])
+    got = {
+        k: (numpy.asarray(v.copy_compatible_to_dims_raw(v.dims)), v.dims)
+        for k, v in _fwd(mods_jax, x_jax, enc_jax).items()
+    }
+
+    assert set(got) == set(ref)
+    for key in sorted(ref):
+        ref_raw, ref_dims = ref[key]
+        got_raw, got_dims = got[key]
+        assert [d.dimension for d in got_dims] == [d.dimension for d in ref_dims], f"{key}: {got_dims} vs {ref_dims}"
+        numpy.testing.assert_allclose(got_raw, ref_raw, rtol=1e-5, atol=1e-5, err_msg=f"{key} differs")
+
+
 def test_device():
     _rf_jax()
     x = _make("x", numpy.zeros((2,), dtype="float32"), [Dim(2, name="d")])

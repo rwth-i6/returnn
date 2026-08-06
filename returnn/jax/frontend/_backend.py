@@ -18,7 +18,7 @@ import jax.numpy as jnp
 from jax.scipy.special import logsumexp as _logsumexp
 
 from returnn.tensor import Tensor, Dim
-from returnn.util.basic import get_global_inf_value
+from returnn.util.basic import get_global_inf_value, prod
 
 # noinspection PyProtectedMember
 from returnn.frontend._backend import Backend
@@ -677,6 +677,32 @@ class JaxBackend(Backend[jax.Array]):
         )
         if source.feature_dim and source.feature_dim != axis:
             out.feature_dim = source.feature_dim
+        return out
+
+    @staticmethod
+    def reshape(source: Tensor, in_dims: Sequence[Dim], out_dims: Sequence[Dim]) -> Tensor:
+        """
+        :param source:
+        :param in_dims: dims of source to reshape, need not be adjacent
+        :param out_dims: what to reshape them into, same total size
+        :return: source with in_dims replaced by out_dims
+        """
+        in_dims_axes = [source.get_axis_from_description(d, allow_int=False) for d in in_dims]
+        assert sorted(set(in_dims_axes)) == sorted(in_dims_axes), f"reshape {source}: invalid in_dims {in_dims}"
+        insert_axis = min(in_dims_axes)
+        dims = list(source.dim_tags)
+        permute = list(range(source.batch_ndim))
+        for axis in sorted(set(in_dims_axes), reverse=True):
+            dims.pop(axis)
+            permute.pop(axis)
+        # bring the in_dims next to each other, in the given order, at the position of the first of them
+        permute = permute[:insert_axis] + in_dims_axes + permute[insert_axis:]
+        source = source.copy_transpose(permute)
+        dims = dims[:insert_axis] + list(out_dims) + dims[insert_axis:]
+        out = Tensor("reshape", dims=dims, dtype=source.dtype, sparse_dim=source.sparse_dim)
+        if source.feature_dim and source.feature_dim not in in_dims:
+            out.feature_dim = source.feature_dim
+        out.raw_tensor = jnp.reshape(source.raw_tensor, [d.get_dim_value() for d in dims])
         return out
 
     @staticmethod
@@ -1392,9 +1418,10 @@ class JaxBackend(Backend[jax.Array]):
         """
         batched matmul of a and b, see base class doc string.
 
-        One einsum covers every case (common dims, unique dims, multiple reduce dims),
-        and XLA lowers it to the same dot_general the hand-written permute/reshape path would build,
-        so unlike the PyTorch backend there is no reason to special-case the shapes here.
+        Works on axis INDICES, not on dim identity, because a dim can occur twice in one tensor
+        (rf.Linear from a dim to itself, e.g. the attention output projection).
+        `get_axis_from_description` resolves which occurrence is the reduce axis (via match_priority);
+        an einsum over dim-keyed letters could not express that and would silently take a diagonal.
         """
         if isinstance(reduce, Dim):
             reduce = [reduce]
@@ -1402,20 +1429,51 @@ class JaxBackend(Backend[jax.Array]):
             raise NotImplementedError("RF JaxBackend: masking in matmul reduce not yet implemented")
         a_dims, b_dims = a.dims, b.dims
         assert all(dim in a_dims + b_dims for dim in reduce), "Some reduce Dims not in a or b."
-        # a repeated dim within one tensor would get the same einsum letter, i.e. silently take a diagonal
-        assert len(set(a_dims)) == len(a_dims) and len(set(b_dims)) == len(b_dims), (
-            f"RF JaxBackend: matmul with a repeated dim not supported, got {a_dims} x {b_dims}"
+
+        if not all(dim in a_dims for dim in reduce) or not all(dim in b_dims for dim in reduce):
+            # reduce dims not on both sides: a generic einsum handles it (no repeated dims in this case)
+            result_dims = [dim for dim in a_dims if dim not in reduce]
+            result_dims += [dim for dim in b_dims if dim not in reduce and dim not in a_dims]
+            letters = {}
+            for dim in a_dims + b_dims:
+                if dim not in letters:
+                    letters[dim] = chr(97 + len(letters))
+            subscripts = "%s,%s->%s" % tuple(
+                "".join(letters[dim] for dim in dims_) for dims_ in (a_dims, b_dims, result_dims)
+            )
+            raw_result = jnp.einsum(subscripts, a.raw_tensor, b.raw_tensor)
+            return Tensor(
+                "dot", dims=result_dims, raw_tensor=raw_result, dtype=JaxBackend.get_dtype_name_raw(raw_result)
+            )
+
+        if len(reduce) > 1:
+            reduce = sorted(reduce, key=lambda dim: a_dims.index(dim))
+        a_reduce_axes = [a.get_axis_from_description(dim) for dim in reduce]
+        b_reduce_axes = [b.get_axis_from_description(dim) for dim in reduce]
+        common_dims = [dim for i, dim in enumerate(a_dims) if dim in b_dims and i not in a_reduce_axes]
+        a_common_axes = [a_dims.index(dim) for dim in common_dims]
+        b_common_axes = [b_dims.index(dim) for dim in common_dims]
+        a_unique_axes = [i for i in range(len(a_dims)) if i not in a_reduce_axes and i not in a_common_axes]
+        b_unique_axes = [i for i in range(len(b_dims)) if i not in b_reduce_axes and i not in b_common_axes]
+
+        a_shape, b_shape = a.raw_tensor.shape, b.raw_tensor.shape
+        common_shape = tuple(a_shape[i] for i in a_common_axes)
+        a_unique_shape = tuple(a_shape[i] for i in a_unique_axes)
+        b_unique_shape = tuple(b_shape[i] for i in b_unique_axes)
+        assert common_shape == tuple(b_shape[i] for i in b_common_axes), "common dims of a and b do not match"
+        assert tuple(a_shape[i] for i in a_reduce_axes) == tuple(b_shape[i] for i in b_reduce_axes), (
+            "reduce dims of a and b do not match"
         )
-        result_dims = [dim for dim in a_dims if dim not in reduce]
-        result_dims += [dim for dim in b_dims if dim not in reduce and dim not in a_dims]
-        letters = {}
-        for dim in a_dims + b_dims:
-            if dim not in letters:
-                letters[dim] = chr(97 + len(letters))
-        subscripts = "%s,%s->%s" % tuple(
-            "".join(letters[dim] for dim in dims_) for dims_ in (a_dims, b_dims, result_dims)
+
+        a_raw = jnp.transpose(a.raw_tensor, a_common_axes + a_unique_axes + a_reduce_axes)
+        b_raw = jnp.transpose(b.raw_tensor, b_common_axes + b_reduce_axes + b_unique_axes)
+        reduce_total = prod(tuple(a_shape[i] for i in a_reduce_axes))
+        raw_result = jnp.matmul(
+            jnp.reshape(a_raw, (prod(common_shape), prod(a_unique_shape), reduce_total)),
+            jnp.reshape(b_raw, (prod(common_shape), reduce_total, prod(b_unique_shape))),
         )
-        raw_result = jnp.einsum(subscripts, a.raw_tensor, b.raw_tensor)
+        raw_result = jnp.reshape(raw_result, common_shape + a_unique_shape + b_unique_shape)
+        result_dims = common_dims + [a_dims[i] for i in a_unique_axes] + [b_dims[i] for i in b_unique_axes]
         return Tensor("dot", dims=result_dims, raw_tensor=raw_result, dtype=JaxBackend.get_dtype_name_raw(raw_result))
 
     @staticmethod
