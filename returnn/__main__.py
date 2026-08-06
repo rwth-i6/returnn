@@ -293,6 +293,10 @@ def init_engine():
         from returnn.torch.engine import Engine
 
         engine = Engine(config=config)
+    elif BackendEngine.is_jax_selected():
+        from returnn.jax.engine import Engine
+
+        engine = Engine(config=config)
     else:
         raise NotImplementedError("Backend engine not implemented")
 

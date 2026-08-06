@@ -51,7 +51,12 @@ def raw_dict_to_extern_data(
         data = Tensor(
             key, dims=dims, dtype=template.dtype, sparse_dim=template.sparse_dim, feature_dim=template.feature_dim
         )
-        data.raw_tensor = _to_jax(raw[key], dtype=template.dtype, device=device)
+        if template.dtype == "string":
+            # JAX has no string arrays; keep them as NumPy, which RF dispatches to its NumPy backend.
+            # That keeps entries like seq_tag available to the step function, just not on the device.
+            data.raw_tensor = numpy.asarray(raw[key])
+        else:
+            data.raw_tensor = _to_jax(raw[key], dtype=template.dtype, device=device)
         out.data[key] = data
     return out
 

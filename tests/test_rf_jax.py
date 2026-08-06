@@ -1072,6 +1072,107 @@ def test_dataset_batches_to_jax():
         assert tuple(seq["data"].flatten().tolist()) in seen, "a sequence went missing"
 
 
+def test_engine_train_from_config():
+    """
+    The engine end to end: a config with get_model / train_step, a dataset, two epochs of training,
+    checkpoints written per epoch, and the train score going down.
+    """
+    import tempfile
+    from returnn.config import Config
+    from returnn.datasets.generating import StaticDataset
+    from returnn.jax.engine import Engine
+    from returnn.jax.checkpoint import load_checkpoint
+
+    _rf_jax()
+    n_feat, n_classes = 5, 4
+    rnd = numpy.random.RandomState(73)
+    seqs = [
+        {
+            "data": rnd.normal(size=(t, n_feat)).astype("float32"),
+            "classes": rnd.randint(0, n_classes, size=(t,)).astype("int32"),
+        }
+        for t in [7, 3, 11, 5, 2, 9, 6, 8]
+    ]
+
+    def _make_dataset():
+        return StaticDataset(data=seqs, output_dim={"data": (n_feat, 2), "classes": (n_classes, 1)})
+
+    # the dims are declared once and shared by extern_data and the model, as a real config does
+    from returnn.tensor import batch_dim
+
+    time_dim = Dim(None, name="time")
+    in_dim = Dim(n_feat, name="in")
+    classes_dim = Dim(n_classes, name="classes")
+
+    def get_model(*, epoch: int, step: int, **_kwargs):
+        """model, as the config API defines it"""
+
+        class _Model(rf.Module):
+            def __init__(self):
+                super().__init__()
+                self.linear = rf.Linear(in_dim, classes_dim)
+                self.in_dim, self.out_dim = in_dim, classes_dim
+
+        return _Model()
+
+    def train_step(*, model, extern_data, **_kwargs):
+        """train step, as the config API defines it"""
+        data = extern_data["data"]
+        targets = extern_data["classes"]
+        time_dim = data.dims[1]
+        logits = model.linear(data)
+        loss = rf.cross_entropy(estimated=logits, target=targets, axis=model.out_dim, estimated_type="logits")
+        rf.get_run_ctx().mark_as_loss(loss, "ce", custom_inv_norm_factor=time_dim.get_size_tensor())
+
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        config = Config(
+            {
+                "backend": "jax",
+                "extern_data": {
+                    "data": {"dims": [batch_dim, time_dim, in_dim], "dtype": "float32"},
+                    "classes": {"dims": [batch_dim, time_dim], "sparse_dim": classes_dim, "dtype": "int32"},
+                },
+                "get_model": get_model,
+                "train_step": train_step,
+                "batch_size": 20,
+                "max_seqs": 3,
+                "num_epochs": 2,
+                "learning_rate": 0.05,
+                "optimizer": {"class": "adamw", "weight_decay": 0.0},
+                "model": f"{tmp_dir}/model",
+                "learning_rate_file": f"{tmp_dir}/lr",
+            }
+        )
+        # the engine machinery reads the global config (as returnn.__main__.init_config sets it up),
+        # and selects the backend from it
+        from returnn.config import set_global_config
+        from returnn.util.basic import BackendEngine
+
+        set_global_config(config)
+        BackendEngine.select_engine(config=config)
+        assert BackendEngine.is_jax_selected()
+
+        engine = Engine(config=config)
+        engine.init_train_from_config(train_data=_make_dataset(), dev_data=_make_dataset())
+        engine.train()
+
+        # a checkpoint per epoch, holding the model's parameters
+        for epoch in (1, 2):
+            params = load_checkpoint(f"{tmp_dir}/model.{epoch:03d}.npz")
+            assert set(params) == {"linear.weight", "linear.bias"}, sorted(params)
+            assert params["linear.weight"].shape == (n_feat, n_classes)
+        # and training moved the parameters
+        assert not numpy.allclose(
+            load_checkpoint(f"{tmp_dir}/model.001.npz")["linear.weight"],
+            load_checkpoint(f"{tmp_dir}/model.002.npz")["linear.weight"],
+        ), "the parameters did not change between epochs"
+
+        scores = engine.learning_rate_control.epoch_data
+        train_scores = [scores[ep].error["train_score_ce"] for ep in (1, 2)]
+        assert train_scores[1] < train_scores[0], f"train score did not improve: {train_scores}"
+        assert "dev_score_ce" in scores[1].error, sorted(scores[1].error)
+
+
 def test_device():
     _rf_jax()
     x = _make("x", numpy.zeros((2,), dtype="float32"), [Dim(2, name="d")])
