@@ -510,7 +510,10 @@ def run_inspect(pycharm_dir, src_dir, skip_pycharm_inspect=False):
                     # 8g: indexing modern site-packages (torch+TF+...) fails half-way at the old 4g
                     # (partially-unresolved core torch members), and silently so
                     print("Note: Patching Xmx settings...")
-                    content = ["-Xmx8000m\n" if line.startswith("-Xmx") else line for line in content]
+                    # overridable for heap experiments (e.g. checking whether unresolved-reference
+                    # noise is a memory-pressure artifact of the batch inspection)
+                    xmx = os.environ.get("RETURNN_PYCHARM_INSPECT_XMX", "8000m")
+                    content = [f"-Xmx{xmx}\n" if line.startswith("-Xmx") else line for line in content]
                     with open(fn, "w") as f:
                         f.write("".join(content))
         else:
@@ -826,6 +829,16 @@ def main():
     """
     Main entry point for this script.
     """
+    if not os.environ.get("GITHUB_ACTIONS") and not os.environ.get("PYCHARM_INSPECT_CONFIG_DIR"):
+        # Local (non-CI) run: NEVER default to the user's real IDE config --
+        # a running IDE holds the single-instance lock (the inspect then just dies)
+        # and would get its jdk.table.xml edited underneath it.
+        # Persistent cache dir (not per-run tmp) so the generated python stubs survive across runs.
+        _base = os.path.expanduser("~/.cache/returnn-pycharm-inspect")
+        os.environ["PYCHARM_INSPECT_CONFIG_DIR"] = _base + "/config"
+        os.environ.setdefault("PYCHARM_INSPECT_SYSTEM_DIR", _base + "/system")
+        os.makedirs(os.environ["PYCHARM_INSPECT_CONFIG_DIR"], exist_ok=True)
+        os.makedirs(os.environ["PYCHARM_INSPECT_SYSTEM_DIR"], exist_ok=True)
     arg_parser = argparse.ArgumentParser()
     arg_parser.add_argument("--xml")
     arg_parser.add_argument("--pycharm")
