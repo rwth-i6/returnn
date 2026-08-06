@@ -101,6 +101,32 @@ def test_full_model():
     )
 
 
+def test_scatter_logsumexp_stop_gradient_scope():
+    # rf.scatter_logsumexp is the RF-internal user of rf.stop_gradient_scope,
+    # which this backend cannot implement faithfully (see TFBackend.stop_gradient_scope).
+    # Marking the total as "loss" makes the harness compare the input gradients too,
+    # so this checks that the no-op scope really leaves values AND gradients correct.
+    time_dim = Dim(Tensor("time", [batch_dim], dtype="int32"))
+    in_dim = Dim(5, name="in")
+    out_dim = Dim(3, name="out")
+    extern_data = TensorDict(
+        {
+            "data": Tensor("data", [batch_dim, time_dim, in_dim], dtype="float32"),
+            "indices": Tensor("indices", [batch_dim, time_dim], dtype="int32", sparse_dim=out_dim),
+        }
+    )
+
+    # noinspection PyShadowingNames
+    def _forward_step(*, model: rf.Module, extern_data: TensorDict):
+        out = rf.scatter_logsumexp(
+            extern_data["data"], indices=extern_data["indices"], indices_dim=time_dim, out_dim=out_dim
+        )
+        out.mark_as_default_output(shape=(batch_dim, out_dim, in_dim))
+        rf.reduce_sum(out, axis=(out_dim, in_dim)).mark_as_output("loss", shape=(batch_dim,))
+
+    run_model(extern_data, lambda *, epoch, step: rf.Module(), _forward_step, tf_low_level=True)
+
+
 def _full_model_setup():
     """
     :return: extern_data, get_model, forward_step, dims.
