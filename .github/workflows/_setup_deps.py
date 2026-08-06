@@ -25,6 +25,9 @@ def main():
     arg_parser.add_argument("--tf", help="TensorFlow version to install (optional)")
     arg_parser.add_argument("--jax", help="JAX version to install (optional)")
     arg_parser.add_argument("--espnet", help="Whether to install ESPnet (optional)")
+    arg_parser.add_argument(
+        "--espnet-no-deps", help="install ESPnet without its dependencies, for the code inspection (optional)"
+    )
     arg_parser.add_argument("--hf-datasets", help="Whether to install HF datasets (optional)")
     args = arg_parser.parse_args()
 
@@ -51,7 +54,7 @@ def main():
         _run(*pip_install, "--upgrade", "psutil")  # for some tests
         _run("sudo", "apt-get", "install", "-y", "libsndfile1")  # soundfile, librosa, ESPnet
         _run(*pip_install, "--upgrade", "dm-tree", "h5py")
-        if args.espnet:
+        if args.espnet and not args.espnet_no_deps:
             _run(*pip_install, "numpy==1.23.5")  # for ESPnet, ctc-segmentation, etc
         elif args.jax:
             _run(*pip_install, "numpy>=2.1")  # JAX requires it
@@ -145,27 +148,36 @@ def main():
             _run(*pip_install, "torchcodec==0.7")  # for HF datasets
             _run(*pip_install, "datasets")
 
-        if args.espnet and sys.version_info[:2] <= (3, 8):
+        if args.espnet and not args.espnet_no_deps and sys.version_info[:2] <= (3, 8):
             # https://github.com/rwth-i6/returnn/issues/1729
             _run(*pip_install, "ctc-segmentation==1.6.6", "pyworld==0.3.4")
 
         if args.espnet:
-            assert args.torch, "Need to specify --torch when specifying --espnet"
             if args.espnet.lower() in ["yes", "1", "true"]:
                 espnet = "202506"  # last version w/ numpy<2
             else:
                 raise ValueError(f"Invalid value for --espnet: {args.espnet}")
-            # Install ESPnet. Fix Torch version (https://github.com/rwth-i6/returnn/issues/1770#issuecomment-3536630432).
-            _run(*pip_install, f"espnet=={espnet}", f"torch=={args.torch}")
 
-            # TorchAudio needed by ESPnet.
-            # https://pytorch.org/audio/stable/installation.html#compatibility-matrix
-            if args.torch == "2.0.0":
-                _run(*pip_install, "torchaudio==2.0.1")
-            elif args.torch == "1.13.1":
-                _run(*pip_install, "torchaudio==0.13.1")
+            if args.espnet_no_deps:
+                # The code inspection only needs to resolve the espnet imports, it never imports them,
+                # and nothing else in that job does either.
+                # With its dependencies, ESPnet would pin numpy<1.24,
+                # which modern TF (numpy>=1.26) and modern JAX cannot live with.
+                _run(*pip_install, "--no-deps", f"espnet=={espnet}")
             else:
-                _run(*pip_install, f"torchaudio=={args.torch}")
+                assert args.torch, "Need to specify --torch when specifying --espnet"
+                # Install ESPnet.
+                # Fix Torch version (https://github.com/rwth-i6/returnn/issues/1770#issuecomment-3536630432).
+                _run(*pip_install, f"espnet=={espnet}", f"torch=={args.torch}")
+
+                # TorchAudio needed by ESPnet.
+                # https://pytorch.org/audio/stable/installation.html#compatibility-matrix
+                if args.torch == "2.0.0":
+                    _run(*pip_install, "torchaudio==2.0.1")
+                elif args.torch == "1.13.1":
+                    _run(*pip_install, "torchaudio==0.13.1")
+                else:
+                    _run(*pip_install, f"torchaudio=={args.torch}")
 
         if args.tf and tf_version[:2] <= (2, 3):
             # Do this after installing other packages, as those other packages might install newer numpy.

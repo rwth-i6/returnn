@@ -14,20 +14,19 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
+        # The inspection should see the versions we develop against, so this job runs modern packages,
+        # unlike the test jobs, which deliberately also cover old ones.
+        # ESPnet is the odd one out: it pins numpy<1.24, which no modern TF or JAX accepts,
+        # so it is installed without its dependencies here (--espnet-no-deps).
         python-version:
-          - "3.10"
+          - "3.12"
         torch-version:
           # Some code uses newer features.
           - 2.8.0
         tf-version:
-          - 2.10.0
+          - 2.21.0
         jax-version:
-          # TF 2.10 imports JAX when it is installed (tensorflow/lite/python/util.py),
-          # so here JAX must be importable next to it, not merely present:
-          # newer JAX needs np.dtypes (NumPy >= 1.25) while ESPnet pins numpy==1.23.5,
-          # and JAX dropped xla_computation (which that TF import wants) in 0.4.38.
-          # 0.4.30 satisfies both. The tests run a current JAX (see rf-jax-tests).
-          - 0.4.30
+          - 0.11.0
 
     steps:
       - uses: actions/checkout@v4
@@ -56,6 +55,7 @@ jobs:
             --tf ${{ matrix.tf-version }} \
             --jax ${{ matrix.jax-version }} \
             --espnet 1 \
+            --espnet-no-deps 1 \
             --hf-datasets 1
 
       - name: Cache PyCharm
