@@ -188,48 +188,45 @@ def _train_loop(config, extern_data, net_cls, train_step, losses, feed_data, fee
     import tensorflow as tf
     import returnn.tf.compat as tf_compat
     from returnn.config import global_config_ctx
-    from returnn.tf.network import TFNetwork, ExternData
     from returnn.tf.updater import Updater
     from returnn.tf.frontend_low_level import TFBackend
 
     with tf_compat.v1.Graph().as_default(), tf_compat.v1.Session().as_default() as session, global_config_ctx(config):
         rf.set_random_seed(42)
-        # extern data as placeholders, the way the engine feeds a dataset
-        net = TFNetwork(config=config, extern_data=ExternData(), train_flag=True, name="rf_net")
-        # no BatchInfo: the placeholders are created directly, the legacy batch-info path is not used
-        for key, value in extern_data.data.items():
-            data = net.extern_data.data[key] = value.copy_template()
-            data.raw_tensor = TFBackend.create_placeholder_raw(data)
-            for dim in data.dims:
+        # extern data as placeholders, the way the engine feeds a dataset.
+        # No TFNetwork / ExternData: this path builds the graph from RF code, it has no layers.
+        for value in extern_data.data.values():
+            value.raw_tensor = TFBackend.create_placeholder_raw(value)
+            for dim in value.dims:
                 if dim.is_dynamic() and dim.dyn_size_ext is not None and dim.dyn_size_ext.raw_tensor is None:
                     dim.dyn_size_ext.raw_tensor = TFBackend.create_placeholder_raw(dim.dyn_size_ext)
 
         # the batch dim gets its size from the data placeholder
         # (the net-dict path does this via BatchInfo; the RF path needs it for masked reduces)
         batch_dim.dyn_size_ext = Tensor("batch", dims=(), dtype="int32")
-        batch_dim.dyn_size_ext.raw_tensor = tf.shape(net.extern_data.data["data"].raw_tensor)[0]
+        batch_dim.dyn_size_ext.raw_tensor = tf.shape(extern_data.data["data"].raw_tensor)[0]
 
         with TFBackend.deferred_parameter_creation():
             model = net_cls()
         TFBackend.create_parameters(model)
-        loss = train_step(model=model, extern_data=net.extern_data)
+        loss = train_step(model=model, extern_data=extern_data)
 
-        # the Updater only needs the objective and the trainable vars from the network
-        net.total_loss = loss.raw_tensor
-        net.total_constraints = 0
-        net.total_objective = loss.raw_tensor
-        updater = Updater(config=config, network=net, initial_learning_rate=0.1)
+        global_train_step_var = tf.Variable(0, dtype="int64", trainable=False, name="global_step")
+        updater = Updater(
+            config=config,
+            initial_learning_rate=0.1,
+            objective=loss.raw_tensor,
+            global_train_step_var=global_train_step_var,
+        )
         updater.set_trainable_vars([TFBackend.get_parameter_variable(p) for _, p in model.named_parameters()])
-        optim_op = updater.get_optim_op()  # creates global_step and the optimizer slots, so before the init
+        optim_op = updater.get_optim_op()  # creates the optimizer slots, so before the init
         session.run(tf_compat.v1.global_variables_initializer())
-        # global_step is an auxiliary var of the network, not in GLOBAL_VARIABLES
-        session.run(tf_compat.v1.variables_initializer(net.get_auxiliary_params()))
         updater.init_optimizer_vars(session)
         updater.set_learning_rate(0.1, session=session)
 
         feed_dict = {
-            net.extern_data.data["data"].raw_tensor: feed_data,
-            net.extern_data.data["classes"].raw_tensor: feed_classes,
+            extern_data.data["data"].raw_tensor: feed_data,
+            extern_data.data["classes"].raw_tensor: feed_classes,
             time_dim.dyn_size_ext.raw_tensor: feed_sizes,
         }
         for _ in range(10):
