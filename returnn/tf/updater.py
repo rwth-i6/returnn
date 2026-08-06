@@ -155,11 +155,23 @@ class Updater:
     Also relevant are config options ``debug_add_check_numerics_on_output`` and ``debug_grad_summaries``.
     """
 
-    def __init__(self, config, network, initial_learning_rate=1.0):
+    def __init__(
+        self,
+        config,
+        network=None,
+        initial_learning_rate=1.0,
+        *,
+        objective=None,
+        global_train_step_var=None,
+    ):
         """
         :param returnn.config.Config config:
-        :param TFNetwork network:
+        :param TFNetwork|None network: the net-dict network. Without it, pass objective and
+            global_train_step_var directly -- that is the RF path, which builds the graph from
+            RF code and has no layers.
         :param float initial_learning_rate:
+        :param tf.Tensor|None objective: what to minimize, instead of network.get_objective()
+        :param tf.Variable|None global_train_step_var: the step counter, instead of the network's
         """
         self.config = config
         self.learning_rate_var = tf.Variable(name="learning_rate", initial_value=0.0, trainable=False, dtype="float32")
@@ -167,9 +179,19 @@ class Updater:
         self.learning_rate = None  # type: typing.Optional[tf.Tensor]
         self.trainable_vars = []  # type: typing.List[tf.Variable]
         self.network = network
-        self.global_train_step = self.network.global_train_step
+        if network is not None:
+            assert objective is None and global_train_step_var is None, "either network or objective, not both"
+            self.global_train_step_var = network.global_train_step_var
+            self.global_train_step = network.global_train_step
+            self.loss = network.get_objective()
+        else:
+            assert objective is not None and global_train_step_var is not None, (
+                "without a network, objective and global_train_step_var are required"
+            )
+            self.global_train_step_var = global_train_step_var
+            self.global_train_step = tf.convert_to_tensor(global_train_step_var)
+            self.loss = objective
         self.use_locking = self.config.bool("optimizer_use_locking", False)
-        self.loss = network.get_objective()
         # https://arxiv.org/abs/1711.05101, Fixing Weight Decay Regularization in Adam
         self.decouple_constraints = self.config.bool("decouple_constraints", False)
         self.optimizers = OrderedDict()  # optimizer_opts|None -> tf.compat.v1.train.Optimizer
@@ -371,6 +393,7 @@ class Updater:
         if self.config.bool_or_other("debug_grad_summaries", False):
             from returnn.tf.util.basic import variable_summaries, get_base_name, reuse_name_scope_of_tensor
 
+            assert self.network is not None, "debug_grad_summaries needs the network"
             for key in self.network.used_data_keys:
                 data = self.network.extern_data.data[key]
                 if data.sparse:
@@ -383,13 +406,12 @@ class Updater:
             self.optim_op = tf.group(self.optim_op, add_check_numerics_ops([self.optim_op]))
 
         # Do this at the very end.
-        with tf.control_dependencies([self.optim_op, self.network.global_train_step]):
-            incr_step_op = tf_compat.v1.assign_add(
-                self.network.global_train_step_var, 1, name="global_train_step_increment"
-            )
+        with tf.control_dependencies([self.optim_op, self.global_train_step]):
+            incr_step_op = tf_compat.v1.assign_add(self.global_train_step_var, 1, name="global_train_step_increment")
         self.optim_op = tf.group(self.optim_op, incr_step_op, name="optim_and_step_incr")
 
         if self.config.bool("debug_save_updater_vars", False):
+            assert self.network is not None, "debug_save_updater_vars needs the network"
             print("Save updater/optimizer vars:", file=log.v3)
             print(self.optimizer_vars)
             for v in self.optimizer_vars:
