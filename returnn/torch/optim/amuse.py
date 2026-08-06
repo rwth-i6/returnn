@@ -204,7 +204,7 @@ class AMUSE(Optimizer):
         :param beta1: initial y/x interpolation
         :param weight_lr_power: exponent on the per-step lr in the z/x averaging weights
         :param warmup_steps: internal lr warmup, required > 0
-        :param rho: beta1 ramp speed after warmup
+        :param rho: beta1 ramp speed after warmup, in [0, 1]. 0 keeps beta1 constant at ``beta1``.
         :param r: polynomial power for the z/x averaging weights
         """
         if warmup_steps != int(warmup_steps):
@@ -213,8 +213,8 @@ class AMUSE(Optimizer):
             raise ValueError("AMUSE requires warmup_steps > 0.")
         if not 0.0 < beta1 < 1.0:
             raise ValueError(f"AMUSE beta1 must be in (0, 1), got {beta1}.")
-        if rho <= 0.0:
-            raise ValueError(f"AMUSE rho must be > 0, got {rho}.")
+        if not 0.0 <= rho <= 1.0:
+            raise ValueError(f"AMUSE rho must be in [0, 1], got {rho}.")
         if update_type not in UPDATE_TYPES:
             raise ValueError(f"Invalid AMUSE update_type: {update_type}. Expected one of {{'muon', 'adamw', 'sgd'}}.")
         if aux_update_type not in AUX_UPDATE_TYPES:
@@ -279,8 +279,9 @@ class AMUSE(Optimizer):
         if ckp1 >= 1.0:
             return self.beta1_init
         c_warmup = group.get("c_warmup", 1.0 / self.warmup_steps)
-        if c_warmup <= 0.0:
-            c_warmup = 1.0 / self.warmup_steps
+        if not 0.0 < c_warmup < 1.0:
+            group["c_warmup"] = ckp1
+            return self.beta1_init
         s_t = (ckp1 * (1.0 - c_warmup)) / (c_warmup * (1.0 - ckp1))
         return 1.0 - (s_t**self.rho) * (1.0 - self.beta1_init)
 

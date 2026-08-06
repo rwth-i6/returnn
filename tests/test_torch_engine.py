@@ -2179,17 +2179,22 @@ def test_amuse_zero_lr_at_warmup_boundary():
     from returnn.torch.optim.amuse import AMUSE
 
     # An externally scheduled lr of 0 exactly at the warmup boundary step records c_warmup 0.
-    # The beta1 ramp of the next positive-lr step must not divide by it.
+    # The next positive-lr step must re-anchor the beta1 ramp there,
+    # not crash and not ramp away from beta1_init.
     model = torch.nn.Linear(4, 3)
     opt = AMUSE(list(model.parameters()), lr=0.1, warmup_steps=3)
     opt.train()
+    betas = []
     for lr in (0.1, 0.1, 0.0, 0.1, 0.1):
         for group in opt.param_groups:
             group["lr"] = lr
         for param in model.parameters():
             param.grad = torch.ones_like(param)
         opt.step()
+        betas.append(opt.param_groups[0]["beta1"])
     opt.eval()
+    assert all(opt.beta1_init <= beta < 1.0 for beta in betas), betas
+    assert betas[-1] > opt.beta1_init, betas
 
 
 def test_amuse_constructor_validation():
@@ -2202,7 +2207,7 @@ def test_amuse_constructor_validation():
         {"warmup_steps": 0.5},
         {"warmup_steps": 5, "beta1": 0.0},
         {"warmup_steps": 5, "beta1": 1.0},
-        {"warmup_steps": 5, "rho": 0.0},
+        {"warmup_steps": 5, "rho": 2.0},
         {"warmup_steps": 5, "rho": -1.0},
     ):
         try:
@@ -2211,6 +2216,9 @@ def test_amuse_constructor_validation():
             pass
         else:
             raise AssertionError(f"expected ValueError for {bad_kwargs}")
+
+    # rho 0 is the fixed-beta1 AMUSE variant from the paper, must be accepted.
+    AMUSE(params, warmup_steps=5, rho=0.0)
 
     # Muon needs matrix params, so the 1D bias must be rejected at construction, not at step time.
     try:
