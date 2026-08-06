@@ -89,6 +89,24 @@ def test_full_model():
     # The model of tests/test_rf_packed.py::test_full_model_packed_traced_program_replay, padded:
     # Conformer encoder (conv subsample, rel-pos self-att, depthwise conv) + Transformer decoder
     # + aux CTC head, with both losses. Marking the total as "loss" also compares the input grads.
+    extern_data, get_model, forward_step, dims = _full_model_setup()
+    run_model(
+        extern_data,
+        get_model,
+        forward_step,
+        # the CTC input (after the 6x subsampling) must stay longer than the targets
+        dyn_dim_max_sizes={dims["time_dim"]: 32, dims["target_time_dim"]: 4},
+        dyn_dim_min_sizes={dims["time_dim"]: 24, dims["target_time_dim"]: 2},
+        tf_low_level=True,
+    )
+
+
+def _full_model_setup():
+    """
+    :return: extern_data, get_model, forward_step, dims.
+        The model of tests/test_rf_packed.py::test_full_model_packed_traced_program_replay, padded.
+        forward_step marks "logits", "ctc" and the total per-seq "loss".
+    """
     from returnn.frontend.encoder.conformer import (
         ConformerEncoder,
         ConformerEncoderLayer,
@@ -175,15 +193,98 @@ def test_full_model():
         ctc.mark_as_output("ctc", shape=(batch_dim,))
         (ctc + rf.reduce_sum(ce, axis=target_time_dim)).mark_as_output("loss", shape=(batch_dim,))
 
-    run_model(
+    dims = {"time_dim": time_dim, "target_time_dim": target_time_dim, "vocab_dim": vocab_dim}
+    return extern_data, (lambda *, epoch, step: _Net()), _forward_step, dims
+
+
+def test_full_model_param_grads():
+    # Every PARAMETER gradient of the full model, TF vs PT.
+    # (test_full_model already covers the outputs and the input gradients.)
+    # The param values must be identical on both sides, so the PT run records its random draws
+    # and the TF run replays them, as rf_utils does for the output comparison.
+    import tensorflow as tf
+    import returnn.tf.compat as tf_compat
+    import returnn.torch.frontend as rft
+    from returnn.tf.frontend_low_level import TFBackend
+    from returnn.tensor.utils import tensor_dict_fill_random_numpy_
+    from returnn.torch.data.tensor_utils import tensor_dict_numpy_to_torch_
+
+    # noinspection PyProtectedMember
+    from returnn.frontend import _backend
+
+    extern_data, get_model, forward_step, dims = _full_model_setup()
+    extern_data.reset_content()
+    tensor_dict_fill_random_numpy_(
         extern_data,
-        lambda *, epoch, step: _Net(),
-        _forward_step,
-        # the CTC input (after the 6x subsampling) must stay longer than the targets
-        dyn_dim_max_sizes={time_dim: 32, target_time_dim: 4},
-        dyn_dim_min_sizes={time_dim: 24, target_time_dim: 2},
-        tf_low_level=True,
+        dyn_dim_max_sizes={dims["time_dim"]: 32, dims["target_time_dim"]: 4},
+        dyn_dim_min_sizes={dims["time_dim"]: 24, dims["target_time_dim"]: 2},
     )
+    extern_data_raw = extern_data.as_raw_tensor_dict(expected_value_type=numpy.ndarray)
+
+    def _total_loss(model) -> Tensor:
+        rf.init_forward_step_run_ctx(epoch=1, step=0)
+        forward_step(model=model, extern_data=extern_data)
+        loss = rf.get_run_ctx().outputs["loss"]
+        return rf.reduce_sum(loss, axis=loss.dims)
+
+    try:
+        with rft.TorchBackend.random_journal_record() as journal:
+            rf.select_backend_torch()
+            rf.set_random_seed(42)
+            extern_data.assign_from_raw_tensor_dict_(extern_data_raw)
+            tensor_dict_numpy_to_torch_(extern_data)
+            model = get_model(epoch=1, step=0)
+            # the batch-norm running stats are not trainable and have no gradient
+            params_pt = {name: p for name, p in model.named_parameters() if p.raw_tensor.requires_grad}
+            _total_loss(model).raw_tensor.backward()
+            missing_pt = [name for name, p in params_pt.items() if p.raw_tensor.grad is None]
+            assert not missing_pt, "no PT grad for %s" % missing_pt
+            grads_pt = {name: p.raw_tensor.grad.detach().numpy() for name, p in params_pt.items()}
+
+        extern_data.reset_content()
+        _backend.select_backend_tf()
+        with TFBackend.random_journal_replay(journal):
+            with tf_compat.v1.Graph().as_default(), tf_compat.v1.Session().as_default() as session:
+                rf.set_random_seed(42)
+                extern_data.assign_from_raw_tensor_dict_(extern_data_raw)
+                _tensor_dict_numpy_to_tf(extern_data)
+                with TFBackend.deferred_parameter_creation():
+                    model = get_model(epoch=1, step=0)
+                TFBackend.create_parameters(model)
+                params_tf = dict(model.named_parameters())
+                names = sorted(grads_pt)
+                variables = [TFBackend.get_parameter_variable(params_tf[name]) for name in names]
+                grads_raw = tf.gradients(_total_loss(model).raw_tensor, variables)
+                missing = [n for n, g in zip(names, grads_raw) if g is None]
+                assert not missing, f"no TF grad for {missing}"
+                session.run(tf_compat.v1.global_variables_initializer())
+                grads_tf = dict(zip(names, session.run(grads_raw)))
+        assert journal.reached_end()
+    finally:
+        extern_data.reset_content()
+        extern_data.assign_from_raw_tensor_dict_(extern_data_raw)
+        rf.select_backend_torch()
+
+    assert set(grads_pt) == set(grads_tf)
+    for name in sorted(grads_pt):
+        print("comparing grad %r %s" % (name, grads_pt[name].shape))
+        numpy.testing.assert_allclose(
+            grads_tf[name], grads_pt[name], rtol=1e-4, atol=1e-5, err_msg="grad %s differs" % name
+        )
+
+
+def _tensor_dict_numpy_to_tf(x: TensorDict):
+    """tf.constant() on all values, including their dims"""
+    import tensorflow as tf
+
+    def _convert(v: Tensor):
+        if isinstance(v.raw_tensor, numpy.ndarray):
+            v.raw_tensor = tf.constant(v.raw_tensor)
+        for dim in v.dims:
+            dim.transform_tensors(_convert)
+
+    for v_ in x.data.values():
+        _convert(v_)
 
 
 def test_parameter_names_and_init():
