@@ -18,7 +18,13 @@ import returnn.frontend as rf
 from returnn.log import log
 
 
-__all__ = ["save_checkpoint", "load_checkpoint", "get_model_params", "set_model_params"]
+__all__ = [
+    "save_checkpoint",
+    "load_checkpoint",
+    "load_torch_checkpoint",
+    "get_model_params",
+    "set_model_params",
+]
 
 
 def get_model_params(model: rf.Module) -> Dict[str, numpy.ndarray]:
@@ -76,3 +82,29 @@ def load_checkpoint(filename: str) -> Dict[str, numpy.ndarray]:
     """
     with numpy.load(filename) as data:
         return {name: data[name] for name in data.files if not name.startswith("_")}
+
+
+def load_torch_checkpoint(filename: str) -> Dict[str, numpy.ndarray]:
+    """
+    Read a PyTorch checkpoint written by the PyTorch engine, as plain NumPy arrays.
+
+    The PyTorch engine stores ``{"model": state_dict, "epoch": ..., "step": ...}``,
+    and the state dict is keyed by the same RF parameter names this backend uses
+    (``rf_module_to_pt_module`` keeps them), so the values transfer one to one.
+
+    Needs PyTorch installed -- reading a PyTorch checkpoint does.
+    JAX-side training does not; the format written here is plain ``.npz``.
+
+    :param filename: a ``.pt`` file
+    :return: the parameters, keyed by RF parameter name
+    """
+    try:
+        import torch
+    except ImportError:
+        raise ImportError(
+            f"load_torch_checkpoint({filename!r}) needs PyTorch installed, to read the checkpoint."
+        ) from None
+
+    obj = torch.load(filename, map_location="cpu", weights_only=False)
+    state_dict = obj["model"] if isinstance(obj, dict) and "model" in obj else obj
+    return {name: value.detach().cpu().numpy() for name, value in state_dict.items()}

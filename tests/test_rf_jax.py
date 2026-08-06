@@ -1283,6 +1283,97 @@ def test_edit_distance_vs_reference():
     assert expected[1] == 0, "the identical pair should have distance 0"
 
 
+def test_torch_checkpoint_import_parity():
+    """
+    The decisive cross-backend check, on the target model:
+    take a PyTorch checkpoint, load its parameters into the JAX model, and the outputs must match.
+
+    Unlike the other comparisons, nothing is copied in memory here --
+    it goes through a real checkpoint file, i.e. the path a production PT baseline would take.
+    """
+    import tempfile
+    import torch
+    from returnn.torch.frontend.bridge import rf_module_to_pt_module
+    from returnn.jax.checkpoint import load_torch_checkpoint, set_model_params
+    from returnn.frontend.encoder.conformer import (
+        ConformerEncoder,
+        ConformerEncoderLayer,
+        ConformerConvSubsample,
+        ConformerPositionwiseFeedForward,
+    )
+
+    batch, in_dim, enc_dim = Dim(2, name="batch"), Dim(8, name="feat"), Dim(32, name="enc")
+    seq_lens = [16, 11]
+    x_np = numpy.random.RandomState(97).normal(size=(2, 16, 8)).astype("float32")
+
+    def _build():
+        rf.set_random_seed(31)
+        return ConformerEncoder(
+            in_dim,
+            enc_dim,
+            ff_dim=Dim(24, name="enc-ff"),
+            input_layer=ConformerConvSubsample(
+                in_dim,
+                out_dims=[Dim(4, name="conv1"), Dim(4, name="conv2")],
+                filter_sizes=[(3, 3), (3, 3)],
+                pool_sizes=[(1, 2)],
+                strides=[(1, 1), (3, 1)],
+            ),
+            encoder_layer=rf.build_dict(
+                ConformerEncoderLayer,
+                ff=rf.build_dict(
+                    ConformerPositionwiseFeedForward, activation=rf.build_dict(rf.relu_square), with_bias=False
+                ),
+                num_heads=2,
+                conv_norm_opts={"use_mask": True},
+            ),
+            num_layers=1,
+            dropout=0.0,
+            att_dropout=0.0,
+        )
+
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        # --- torch side: build, give the params non-trivial values, save a checkpoint as the engine does
+        _no_tf32_torch()
+        rf.select_backend_torch()
+        model_pt = _build()
+        pt_module = rf_module_to_pt_module(model_pt)
+        with torch.no_grad():
+            for param in pt_module.parameters():
+                param.copy_(torch.randn_like(param) * 0.1)
+        filename = f"{tmp_dir}/model.001.pt"
+        torch.save({"model": pt_module.state_dict(), "epoch": 1, "step": 0}, filename)
+
+        time_pt = Dim(
+            Tensor("l", dims=[batch], dtype="int32", raw_tensor=torch.tensor(seq_lens, dtype=torch.int32)), name="time"
+        )
+        x_pt = Tensor("x", dims=[batch, time_pt, in_dim], dtype="float32", raw_tensor=torch.from_numpy(x_np))
+        out_pt, spatial_pt = model_pt(x_pt, in_spatial_dim=time_pt)
+        ref = out_pt.copy_compatible_to_dims_raw(out_pt.dims).detach().cpu().numpy()
+        ref_lens = spatial_pt.dyn_size_ext.raw_tensor.detach().cpu().numpy()
+
+        # --- jax side: build the same model, load the checkpoint, run
+        _rf_jax()
+        model_jax = _build()
+        params = load_torch_checkpoint(filename)
+        assert set(params) == {name for name, _ in model_jax.named_parameters()}, (
+            f"parameter names differ: {sorted(set(params) ^ {n for n, _ in model_jax.named_parameters()})}"
+        )
+        set_model_params(model_jax, params)
+
+        time_jax = Dim(
+            Tensor("l", dims=[batch], dtype="int32", raw_tensor=jnp.asarray(seq_lens, dtype=jnp.int32)), name="time"
+        )
+        x_jax = _make("x", x_np, [batch, time_jax, in_dim])
+        out_jax, spatial_jax = model_jax(x_jax, in_spatial_dim=time_jax)
+        got = numpy.asarray(out_jax.copy_compatible_to_dims_raw(out_jax.dims))
+        got_lens = numpy.asarray(spatial_jax.dyn_size_ext.raw_tensor)
+
+    numpy.testing.assert_array_equal(got_lens, ref_lens, err_msg="subsampled seq lens differ")
+    assert got.shape == ref.shape, f"{got.shape} vs {ref.shape}"
+    numpy.testing.assert_allclose(got, ref, rtol=1e-4, atol=1e-5, err_msg="outputs differ after checkpoint import")
+
+
 def test_device():
     _rf_jax()
     x = _make("x", numpy.zeros((2,), dtype="float32"), [Dim(2, name="d")])
