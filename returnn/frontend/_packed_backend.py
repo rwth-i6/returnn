@@ -460,16 +460,19 @@ def _warn_regap_enabled() -> bool:
     return False
 
 
-def _att_fast_paths_enabled() -> bool:
+def _att_fast_paths_enabled(op_name: str) -> bool:
     """
-    :return: whether the packed attention fast paths (Triton rel-pos, flash varlen, flex, NJT, per-seq)
+    :param op_name: "rel_pos_self_attention" or "scaled_dot_product_attention"
+    :return: whether this op's packed fast paths (Triton rel-pos, flash varlen, flex, NJT, per-seq)
         may be used.
 
-    Config option ``rf_packed_att_fast_paths``, default True.
-    Disabled, the attentions take the unpack -> padded op -> repack fallback
+    Config option ``rf_packed_att_fast_paths``, default True:
+    True = all ops use their fast paths, False = none,
+    or a collection of op names = only those ops use their fast paths.
+    An op without its fast paths takes the unpack -> padded op -> repack fallback
     (which must then be allowed, see ``packed_fallback_allowed``):
     exact padded attention numerics while everything else stays packed.
-    A diagnostic switch, e.g. to bisect a training difference down to the attention kernels.
+    A diagnostic switch, e.g. to bisect a training difference down to one attention kernel.
     """
     from returnn.config import get_global_config
 
@@ -477,7 +480,9 @@ def _att_fast_paths_enabled() -> bool:
     if config:
         if "rf_packed_att_fast_paths" in config.typed_dict:
             value = config.typed_dict["rf_packed_att_fast_paths"]
-            assert value is None or isinstance(value, bool)
+            assert value is None or isinstance(value, (bool, list, tuple, set))
+            if isinstance(value, (list, tuple, set)):
+                return op_name in value
             if value is not None:
                 return value
         elif "rf_packed_att_fast_paths" in config.dict:
@@ -2924,7 +2929,7 @@ class PackedBackend(Backend[PackedRawTensor]):
                     dropout_p = att_dropout if train_flag else 0.0
                 else:
                     dropout_p = None  # dynamic train flag, cannot resolve to a static dropout_p
-        if _att_fast_paths_enabled() and attention_mask is None and dropout_p is not None:
+        if _att_fast_paths_enabled("scaled_dot_product_attention") and attention_mask is None and dropout_p is not None:
             if not is_packed(query) and is_packed(key) and is_packed(value) and not is_causal:
                 k_raw = _raw(key)
                 batch_dims = k_raw.orig_dims[:-1]
@@ -3083,7 +3088,7 @@ class PackedBackend(Backend[PackedRawTensor]):
         # which a fixed CUDA-graph buffer breaks.)
         # It expresses no-dropout and per-element (non-broadcast) dropout;
         # broadcast dropout it cannot, so only that case skips it.
-        if _att_fast_paths_enabled() and not (dropout_active and att_dropout_broadcast):
+        if _att_fast_paths_enabled("rel_pos_self_attention") and not (dropout_active and att_dropout_broadcast):
             out = _torch_triton_rel_pos_attention(
                 query,
                 key,
@@ -3101,7 +3106,7 @@ class PackedBackend(Backend[PackedRawTensor]):
             if out is not None:
                 return out
         # FlexAttention fallback (no dropout support), so only when dropout is inactive.
-        if _att_fast_paths_enabled() and not dropout_active:
+        if _att_fast_paths_enabled("rel_pos_self_attention") and not dropout_active:
             out = _torch_flex_rel_pos_attention(
                 query,
                 key,
@@ -3120,7 +3125,7 @@ class PackedBackend(Backend[PackedRawTensor]):
         else:
             _flex_no("att_dropout active in training (FlexAttention has no dropout support)")
         if (
-            _att_fast_paths_enabled()
+            _att_fast_paths_enabled("rel_pos_self_attention")
             and not rf.is_static_traceable()
             and is_packed(query)
             and query.raw_tensor.inner.device == "cpu"
