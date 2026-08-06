@@ -772,6 +772,146 @@ class TFBackend(Backend[tf.Tensor]):
         return Tensor("dot", dims=result_dims, raw_tensor=raw_result, dtype=TFBackend.get_dtype_name_raw(raw_result))
 
     @staticmethod
+    def stft(
+        x: Tensor,
+        *,
+        in_spatial_dim: Dim,
+        frame_step: int,
+        frame_length: int,
+        fft_length: int,
+        window_use_frame_length: bool = True,
+        align_window_left: bool = True,
+        window_enforce_even: bool = True,
+        out_spatial_dim: Dim,
+        out_dim: Dim,
+    ) -> Tensor:
+        """
+        :param x:
+        :param in_spatial_dim:
+        :param frame_step:
+        :param frame_length:
+        :param fft_length:
+        :param window_use_frame_length: window of frame_length (not fft_length), what tf.signal.stft does
+        :param align_window_left: zero-pad the window on the right, what tf.signal.stft does
+        :param window_enforce_even: round the window length down to even
+        :param out_spatial_dim:
+        :param out_dim:
+        :return: stft of x, complex
+
+        tf.signal.stft is the reference behavior which the other backends emulate,
+        so this is just a direct call, with the window built to match the flags.
+        """
+        assert window_use_frame_length and align_window_left, (
+            f"stft: tf.signal.stft windows by frame_length, left-aligned;"
+            f" got window_use_frame_length={window_use_frame_length} align_window_left={align_window_left}"
+        )
+        win_len = frame_length - (frame_length % 2) if window_enforce_even else frame_length
+
+        def _window_fn(length, dtype):
+            # length is frame_length, but symbolic, so compare the python ints instead
+            del length
+            window = tf.signal.hann_window(win_len, dtype=dtype)
+            if win_len < frame_length:
+                window = tf.pad(window, [[0, frame_length - win_len]])
+            return window
+
+        batch_dims = [d for d in x.dims if d != in_spatial_dim]
+        x = x.copy_transpose(batch_dims + [in_spatial_dim])
+        with tf_util.same_control_flow_ctx(x):
+            # keeps the leading dims and appends [frames, fft_unique_bins]
+            y_raw = tf.signal.stft(
+                x.raw_tensor,
+                frame_length=frame_length,
+                frame_step=frame_step,
+                fft_length=fft_length,
+                window_fn=_window_fn,
+            )
+        return Tensor(
+            "stft",
+            dims=batch_dims + [out_spatial_dim, out_dim],
+            feature_dim=out_dim,
+            dtype=TFBackend.get_dtype_name_raw(y_raw),
+            raw_tensor=y_raw,
+        )
+
+    @staticmethod
+    def get_random_state() -> Dict[str, bytes]:
+        """
+        :return: random state
+        """
+        # Like the TF-layers backend: the stateful TF random ops keep their state in the session,
+        # and there is no TF1 API to read it out. Reproducibility comes from set_random_seed.
+        return {}
+
+    @staticmethod
+    def set_random_state(state: Dict[str, bytes]) -> None:
+        """
+        :param state: as returned by :func:`get_random_state`
+        """
+        assert not state, f"TF: cannot restore a random state, got {state}"
+
+    @staticmethod
+    def merge_dims(source: Tensor, *, dims: Sequence[Dim], out_dim: Dim) -> Tensor:
+        """
+        :param source:
+        :param dims: the dims to merge, at least two
+        :param out_dim: the merged dim
+        :return: source with dims merged into out_dim
+        """
+        assert len(dims) >= 2
+        first_axis = min([source.dims.index(d) for d in dims])
+        pre_dims = source.dims[:first_axis]
+        post_dims = [d for d in source.dims if d not in dims and d not in pre_dims]
+        source = source.copy_transpose(tuple(pre_dims) + tuple(dims) + tuple(post_dims), allow_int=False)
+        out = Tensor(
+            "merge_dims",
+            dims=pre_dims + (out_dim,) + tuple(post_dims),
+            dtype=source.dtype,
+            sparse_dim=source.sparse_dim,
+        )
+        if source.feature_dim is not None:
+            out.feature_dim = out_dim if source.feature_dim in dims else source.feature_dim
+        with tf_util.same_control_flow_ctx(source):
+            # the merged block is the single -1, the other axes are taken from the raw shape,
+            # so a dynamic dim needs no get_dim_value()
+            src_shape = TFBackend.get_shape_tuple_raw(source.raw_tensor)
+            out_shape = list(src_shape[: len(pre_dims)]) + [-1] + list(src_shape[len(pre_dims) + len(dims) :])
+            out.raw_tensor = tf.reshape(source.raw_tensor, _shape_raw(out_shape))
+        return out
+
+    @staticmethod
+    def split_dims(
+        source: Tensor,
+        *,
+        axis: Dim,
+        dims: Sequence[Dim],
+        pad_to_multiples: Optional[bool] = None,
+        pad_value: Union[None, int, float] = None,
+    ) -> Tensor:
+        """
+        :param source:
+        :param axis: the dim to split
+        :param dims: what to split it into
+        :param pad_to_multiples: not implemented
+        :param pad_value: not implemented
+        :return: source with axis replaced by dims
+        """
+        assert pad_to_multiples in (None, False), "split_dims: pad_to_multiples not implemented"
+        axis_ = source.get_axis_from_description(axis)
+        out_dims = source.dims[:axis_] + tuple(dims) + source.dims[axis_ + 1 :]
+        split_sizes = [d.dimension if d.dimension is not None else -1 for d in dims]
+        if split_sizes.count(-1) > 1:  # one -1 at most, so fall back to the explicit sizes
+            split_sizes = [d.get_dim_value() for d in dims]
+        with tf_util.same_control_flow_ctx(source):
+            src_shape = TFBackend.get_shape_tuple_raw(source.raw_tensor)
+            out_shape = list(src_shape[:axis_]) + split_sizes + list(src_shape[axis_ + 1 :])
+            out_raw = tf.reshape(source.raw_tensor, _shape_raw(out_shape))
+        out = Tensor("split_dims", dims=out_dims, dtype=source.dtype, sparse_dim=source.sparse_dim, raw_tensor=out_raw)
+        if source.feature_dim and source.feature_dim != axis:
+            out.feature_dim = source.feature_dim
+        return out
+
+    @staticmethod
     def reshape(source: Tensor, in_dims: Sequence[Dim], out_dims: Sequence[Dim]) -> Tensor:
         """
         :param source: e.g. (..., in_dims, ...)
