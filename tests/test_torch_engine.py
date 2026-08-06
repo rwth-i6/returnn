@@ -2153,6 +2153,28 @@ def test_amuse_zero_lr():
     opt.eval()
 
 
+def test_muon_update_higher_rank():
+    from returnn.torch.optim.amuse import muon_update
+
+    # 3D params are orthogonalized batch-wise over the last two dims,
+    # so the update scaling must be based on those dims as well.
+    grad = torch.randn(8, 1, 5)
+    momentum = torch.zeros_like(grad)
+    batched = muon_update(grad.clone(), momentum.clone(), aux_update_type="adamw")
+    per_slice = torch.stack(
+        [muon_update(grad[i].clone(), momentum[i].clone(), aux_update_type="adamw") for i in range(len(grad))]
+    )
+    assert torch.allclose(batched, per_slice, atol=1e-2)
+
+    # Channels-last conv grads are non-contiguous, the 4D flatten must handle that.
+    grad4 = torch.randn(8, 4, 3, 3)
+    ref = muon_update(grad4.clone(), torch.zeros_like(grad4), aux_update_type="adamw")
+    out = muon_update(
+        grad4.clone().to(memory_format=torch.channels_last), torch.zeros_like(grad4), aux_update_type="adamw"
+    )
+    assert torch.allclose(out, ref, atol=1e-2)
+
+
 def test_amuse_zero_lr_at_warmup_boundary():
     from returnn.torch.optim.amuse import AMUSE
 

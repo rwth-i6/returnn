@@ -129,13 +129,14 @@ def muon_update(
     update = grad.lerp_(momentum, beta) if nesterov else momentum
 
     if update.ndim == 4:
-        update = update.view(len(update), -1)
+        update = update.reshape(len(update), -1)
 
     update = zeropower_via_newtonschulz5(update)
 
     if aux_update_type == "adamw":
         # Scaling used in the AdamW-aux AMUSE setting.
-        update *= 0.2 * max(update.size(0), update.size(1)) ** 0.5
+        # Based on the last two dims, i.e. per orthogonalized matrix (3D params are batches of matrices).
+        update *= 0.2 * max(update.size(-2), update.size(-1)) ** 0.5
     elif aux_update_type == "sgd":
         # Muon default scaling used when auxiliary layers are trained by SGD.
         update *= max(1, update.size(-2) / update.size(-1)) ** 0.5
