@@ -1449,7 +1449,10 @@ def test_engine_unsupported_config_opts():
     with tempfile.TemporaryDirectory() as tmp_dir:
         for opts in [
             {"accum_grad_multiple_step": 2},
-            {"preload_from_files": {"base": {"filename": "/dev/null"}}, "torch_amp": "bfloat16"},
+            {"preload_from_files": {"base": {"filename": "/dev/null"}}, "jax_amp": "bfloat16"},
+            # a config copied from a PyTorch setup: the torch_ names are rejected too,
+            # rather than silently doing nothing
+            {"torch_amp": "bfloat16"},
             {"chunking": "200:100"},
             {"forward_step": lambda **_kwargs: None},
         ]:

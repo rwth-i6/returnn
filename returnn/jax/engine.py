@@ -389,12 +389,24 @@ _UnsupportedConfigOpts = {
     "stop_on_nonfinite_train_score": None,
     "tensorboard_opts": None,
     "use_tensorboard": False,
-    "torch_amp": None,
-    "torch_cuda_graph": None,
-    "torch_dataloader_opts": None,
-    "torch_distributed": None,
-    "torch_log_memory_usage": False,
-    "torch_profile": None,
+    # backend-specific options are named after the backend, as `torch_...` is on PyTorch
+    "jax_amp": None,
+    "jax_distributed": None,
+    "jax_jit": None,  # the compiled/captured step
+    "jax_log_memory_usage": False,
+    "jax_profile": None,
+}
+
+# PyTorch-specific options, with the JAX name they correspond to (None: no equivalent).
+# A config copied from a PyTorch setup carries these, and ignoring them silently
+# -- `torch_amp` above all -- is exactly what this check exists to prevent.
+_TorchOnlyConfigOpts = {
+    "torch_amp": "jax_amp",
+    "torch_cuda_graph": "jax_jit",
+    "torch_dataloader_opts": None,  # this engine uses the shared batching, which has no worker pool
+    "torch_distributed": "jax_distributed",
+    "torch_log_memory_usage": "jax_log_memory_usage",
+    "torch_profile": "jax_profile",
 }
 
 
@@ -403,18 +415,31 @@ def _check_config_opts_supported(config: Config):
     :param config:
     :raise NotImplementedError: if the config sets an option this engine would ignore
     """
-    unsupported = []
-    for key, noop_value in sorted(_UnsupportedConfigOpts.items()):
+    def _value_if_set(key: str, noop_value: Any = None) -> Optional[Any]:
+        """:return: the configured value, or None if unset or at its no-op value"""
         if not config.has(key):
-            continue
+            return None
         value = config.typed_value(key, None)
         if value is None:  # not in the typed dict, e.g. an old-style config file
             value = config.value(key, None)
         if value is None or value is False or value in ((), [], {}, ""):
-            continue
+            return None
         if value == noop_value or value == str(noop_value):
-            continue
-        unsupported.append(f"{key} = {value!r}")
+            return None
+        return value
+
+    unsupported = []
+    for key, noop_value in sorted(_UnsupportedConfigOpts.items()):
+        value = _value_if_set(key, noop_value)
+        if value is not None:
+            unsupported.append(f"{key} = {value!r}")
+    for key, jax_name in sorted(_TorchOnlyConfigOpts.items()):
+        value = _value_if_set(key)
+        if value is not None:
+            unsupported.append(
+                f"{key} = {value!r} is PyTorch specific"
+                + (f", the JAX engine reads {jax_name} (not implemented either)" if jax_name else "")
+            )
     if unsupported:
         raise NotImplementedError(
             "JAX engine: the config sets options which this engine does not implement:\n  "
