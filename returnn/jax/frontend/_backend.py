@@ -344,6 +344,10 @@ class JaxBackend(Backend[jax.Array]):
         :return: reduced tensor
         """
         assert mode in Backend._AllowedReduceModes
+        if mode in ("sum", "mean", "logsumexp"):
+            # mixed precision: accumulating in the reduced dtype is where it hurts most,
+            # and the norms/statistics of the model are built on these
+            source = rf.amp_cast_float32(source)
         axes = [axis] if isinstance(axis, Dim) else list(axis)
         raw_axes = [source.get_axis_from_description(dim) for dim in axes]
         res_dims = [dim for i, dim in enumerate(source.dims) if i not in raw_axes]
@@ -1307,6 +1311,7 @@ class JaxBackend(Backend[jax.Array]):
         assert label_loop, "RF JaxBackend: ctc_loss label_loop=False not implemented"
         assert not use_native_op, "RF JaxBackend: ctc_loss use_native_op not implemented"
         assert targets.sparse_dim and targets.sparse_dim.dimension <= logits.feature_dim.dimension
+        logits = rf.amp_cast_float32(logits)  # mixed precision: losses are computed in float32
         batch_dims = logits.remaining_dims((input_spatial_dim, logits.feature_dim))
         batch_dims_targets = targets.remaining_dims(targets_spatial_dim)
         if set(batch_dims) != set(batch_dims_targets):
@@ -1456,6 +1461,8 @@ class JaxBackend(Backend[jax.Array]):
                 padding=padding,
             )
         n_spatial = len(filter_size)
+        # mixed precision, as for matmul: the conv itself runs in the reduced dtype, the bias follows
+        source, filter, bias = rf.amp_cast_compute(source, filter, bias)
         filter_in_dim = in_dim if not groups or groups == 1 else in_dim // groups
         filter = filter.copy_transpose((out_dim, filter_in_dim) + tuple(filter_size))
         batch_dims = [d for d in source.dims if d not in (in_dim,) + tuple(in_spatial_dims)]
@@ -1832,6 +1839,9 @@ class JaxBackend(Backend[jax.Array]):
             reduce = [reduce]
         if use_mask and any(dim.dyn_size_ext is not None for dim in reduce):
             raise NotImplementedError("RF JaxBackend: masking in matmul reduce not yet implemented")
+        # mixed precision: this is the op AMP exists for. It also covers the parameters,
+        # which stay float32 and are cast here, where they are used.
+        a, b = rf.amp_cast_compute(a, b)
         a_dims, b_dims = a.dims, b.dims
         assert all(dim in a_dims + b_dims for dim in reduce), "Some reduce Dims not in a or b."
 
@@ -2139,6 +2149,7 @@ def _softmax(tensor: Tensor, *, axis: Dim, use_mask: bool, log: bool) -> Tensor:
     :param log: log_softmax instead of softmax
     :return: (log_)softmax over axis
     """
+    tensor = rf.amp_cast_float32(tensor)  # mixed precision: normalization is done in float32
     out = tensor.copy_template("log_softmax" if log else "softmax")
     axis_int = tensor.dims.index(axis)
     raw = tensor.raw_tensor
