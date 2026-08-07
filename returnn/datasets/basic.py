@@ -163,7 +163,9 @@ class Dataset:
         self.labels: Dict[str, List[str]] = {}
         self.weights = {}
         self._num_timesteps = 0
-        self._num_seqs = 0
+        # None where the count is not known in advance (e.g. CachedDataset2 subclasses that
+        # discover it while loading); the is_less_than_num_seqs logic depends on that distinction
+        self._num_seqs: Optional[int] = 0
         self._estimated_num_seqs = estimated_num_seqs
         self.min_chunk_size = NumbersDict(min_chunk_size)
         self.chunking_variance = chunking_variance
@@ -1280,7 +1282,7 @@ class Dataset:
         :param int|dict[str,int]|NumbersDict max_pad_size: Max number of zero-padded frames in one batch.
         :param int max_seqs: Max number of seqs per batch.
         :param int max_total_num_seqs:
-        :param int|dict[str,int]|NumbersDict max_seq_length:
+        :param int|dict[str,int]|NumbersDict|None max_seq_length: None/0 = no limit (sys.maxsize)
         :param set(str)|None used_data_keys:
         """
         if not batch_size:

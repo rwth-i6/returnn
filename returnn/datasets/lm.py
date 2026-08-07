@@ -960,8 +960,8 @@ class AllophoneState:
 
         :param int ctx_offset: 0 for center, >0 for future, <0 for history
         :param str|None out_of_context_id: what to return out of our context
-        :return: phone-id from the offset
-        :rtype: str
+        :return: phone-id from the offset, or out_of_context_id (None by default) beyond the context
+        :rtype: str|None
         """
         if ctx_offset == 0:
             return self.id
