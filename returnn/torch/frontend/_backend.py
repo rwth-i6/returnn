@@ -2637,6 +2637,14 @@ class TorchBackend(Backend[torch.Tensor]):
 
         if fft_length > x_raw.shape[1]:
             # Torch does not really support the empty case.
+            # Under static tracing this branch is baked into the graph: the traced graph would then
+            # contain no stft at all, and every later replay returns zeros, whatever the input.
+            # The shapes are static there, so this is a config error (buffer smaller than one frame),
+            # not something a later step could recover from -- fail loudly instead of silently.
+            assert not rf.is_static_traceable(), (
+                f"stft: input {x_raw.shape[1]} < fft_length {fft_length} under static tracing;"
+                f" the traced graph would have no stft op and replay only zeros"
+            )
             y = Tensor("stft", dims=batch_dims + [out_dim, out_spatial_dim], feature_dim=out_dim, dtype="complex64")
             y.raw_tensor = torch.zeros([d.get_dim_value() for d in y.dims], dtype=torch.complex64)
             return y
