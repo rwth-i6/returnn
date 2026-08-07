@@ -1057,6 +1057,56 @@ class JaxBackend(Backend[jax.Array]):
         )
         return rf.convert_to_tensor(jnp.reshape(dist_raw, batch_shape), name="edit_distance", dims=batch_dims)
 
+    @staticmethod
+    def masked_select(
+        tensor: Tensor, *, mask: Tensor, dims: Sequence[Dim], out_dim: Optional[Dim] = None
+    ) -> Tuple[Tensor, Dim]:
+        """
+        :param tensor:
+        :param mask: over ``dims``
+        :param dims: the order of these defines the packing order
+        :param out_dim:
+        :return: the selected elements, with ``dims`` replaced by one new dim, and that dim
+
+        Only eager: the number of selected elements is a property of the VALUES, and JAX shapes
+        cannot depend on values. Under jit this needs a declared bound
+        (as ``masked_select_bound`` gives the PyTorch graph-capture path) -- that is the packed work.
+        """
+        assert mask.dtype == "bool"
+        assert set(mask.dims) == set(dims)
+        remaining_dims = [d for d in tensor.dims if d not in mask.dims]
+        templ_dims = tuple(dims) + tuple(remaining_dims)
+        full_shape = tuple(d.get_dim_value() for d in templ_dims)
+        in_raw = jnp.broadcast_to(tensor.copy_compatible_to_dims_raw(templ_dims), full_shape)
+        mask_raw = jnp.broadcast_to(
+            mask.copy_compatible_to_dims_raw(tuple(dims)), tuple(d.get_dim_value() for d in dims)
+        )
+        if isinstance(mask_raw, jax.core.Tracer):
+            raise NotImplementedError(
+                "RF JaxBackend: masked_select under jit needs a bound on the number of selected elements"
+            )
+        (indices,) = jnp.nonzero(jnp.reshape(mask_raw, (-1,)))
+        rest_shape = full_shape[len(dims) :]
+        out_raw = jnp.take(jnp.reshape(in_raw, (-1,) + rest_shape), indices, axis=0)
+        if not out_dim:
+            out_dim = Dim(None, name="masked_select")
+        if out_dim.dyn_size_ext is None:
+            out_dim.dyn_size_ext = Tensor("masked_select_size", dims=(), dtype="int64")
+        if out_dim.dyn_size_ext.raw_tensor is None:
+            out_dim.dyn_size_ext.raw_tensor = jnp.asarray(out_raw.shape[0], dtype=jnp.int64)
+        out_dim.capacity = int(out_raw.shape[0])
+        return (
+            Tensor(
+                "masked_select",
+                dims=(out_dim,) + tuple(remaining_dims),
+                dtype=tensor.dtype,
+                sparse_dim=tensor.sparse_dim,
+                feature_dim=tensor.feature_dim,
+                raw_tensor=out_raw,
+            ),
+            out_dim,
+        )
+
     # --- signal / search
 
     @staticmethod

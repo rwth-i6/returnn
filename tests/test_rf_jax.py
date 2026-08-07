@@ -572,6 +572,45 @@ def test_gather_scatter_pad_vs_torch():
         numpy.testing.assert_allclose(got_raw, ref_raw, rtol=1e-6, atol=1e-6, err_msg=f"op {key} differs")
 
 
+def test_masked_select_vs_torch():
+    """
+    masked_select, and rf.pack_padded on top of it, which the real train step uses
+    to pack the targets before the CE loss.
+    """
+    import torch
+
+    batch = Dim(3, name="batch")
+    feat = Dim(4, name="feat")
+    seq_lens = [5, 2, 4]
+    x_np = numpy.random.RandomState(17).normal(size=(3, 5, 4)).astype("float32")
+
+    def _run(make, make_dyn_time):
+        time_dim = make_dyn_time(batch, seq_lens)
+        x = make("x", x_np, [batch, time_dim, feat])
+        packed, pack_dim = rf.pack_padded(x, dims=[batch, time_dim])
+        assert packed.dims[1:] == (feat,)
+        return packed.copy_compatible_to_dims_raw(packed.dims), int(pack_dim.get_dim_value())
+
+    rf.select_backend_torch()
+    ref, ref_size = _run(
+        lambda name, arr, d: Tensor(name, dims=d, dtype=arr.dtype.name, raw_tensor=torch.from_numpy(arr)),
+        lambda b, lens: Dim(
+            Tensor("l", dims=[b], dtype="int32", raw_tensor=torch.tensor(lens, dtype=torch.int32)), name="time"
+        ),
+    )
+    ref = ref.detach().cpu().numpy()
+
+    _rf_jax()
+    got, got_size = _run(_make, _make_dyn_time)
+    got = numpy.asarray(got)
+
+    assert got_size == ref_size == sum(seq_lens), f"{got_size} vs {ref_size}, expected {sum(seq_lens)}"
+    numpy.testing.assert_allclose(got, ref, rtol=0, atol=0)
+    # and it really is the unpadded content, in order
+    expected = numpy.concatenate([x_np[i, :length] for i, length in enumerate(seq_lens)], axis=0)
+    numpy.testing.assert_allclose(got, expected, rtol=0, atol=0)
+
+
 def test_conv_pool_vs_torch():
     import torch
 
