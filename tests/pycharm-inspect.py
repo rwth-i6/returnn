@@ -931,6 +931,11 @@ def main():
             # heterogeneous-list or loose annotations, or indexing artifacts ('torch | torch').
             # Keep AFTER the Member-'None' pattern so that family keeps its own count.
             ("PyUnresolvedReferencesInspection", r"^Member '[^']+' of '[^']*\|[^']*' does not have attribute "),
+            # f-string format specs on inferred numeric unions (float | int | Any, numpy
+            # signedinteger): PyCharm falls back to object.__format__ and rejects the spec,
+            # but every such value formats fine at runtime. Triaged 2026-08-07: all 8 sites
+            # (graph_capture GiB prints, file_cache ages, util stats) verified by execution.
+            ("PyStringFormatInspection", r"^Format spec is not supported for "),
         ],
         inspect_class_not_counted={
             # Here we disable more than what you would do in the IDE.
