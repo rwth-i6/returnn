@@ -1415,6 +1415,26 @@ def test_PostprocessingDataset():
     assert func(2) == 21
 
 
+def test_PostprocessingDataset_unknown_sparse_dim():
+    from returnn.tensor import Dim
+
+    def _identity(tdict: TensorDict, **_kwargs) -> TensorDict:
+        return tdict
+
+    dataset = init_dataset(
+        {
+            "class": "PostprocessingDataset",
+            "dataset": {"class": "DummyDataset", "input_dim": 13, "output_dim": 7, "num_seqs": 1},
+            "map_seq": _identity,
+            "map_outputs": {
+                "data": {"dims": [Dim(None, name="time"), Dim(13, name="feature")], "dtype": "float32"},
+                "classes": {"dims": [Dim(None, name="classes_time")], "dtype": "uint8"},
+            },
+        }
+    )
+    assert "classes" not in dataset.labels
+
+
 def _repeat2(input_iter: Iterator[TensorDict], **kwargs) -> Iterator[TensorDict]:
     for tdict in input_iter:
         yield tdict
