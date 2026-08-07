@@ -2570,9 +2570,9 @@ class _SubnetworkRecCell:
             """
             :param str name:
             :param ()->(Data|tf.Tensor|None) get:
-            :param tf.DType|str dtype:
-            :param tuple[int|None] element_shape:
-            :param bool same_shape_every_frame:
+            :param tf.DType|str|None dtype: from `data` by default (then `data` is required)
+            :param tuple[int|None]|None element_shape: from `data` by default (then `data` is required)
+            :param bool|None same_shape_every_frame: from `data` by default, else True
             :param Data|None data:
             """
             from returnn.tf.util.basic import get_valid_scope_name_from_str

@@ -2441,8 +2441,8 @@ class SoftmaxOverSpatialLayer(_ConcatInputLayer):
           the window start.
         :param LayerBase|int|None window_size: Layer with output of shape (B,) or (constant) int value indicating
           the window size.
-        :param bool use_time_mask: if True, assumes dyn seq len, and use it for masking.
-          By default, if dyn seq len exists, it uses it.
+        :param bool|None use_time_mask: if True, assumes dyn seq len, and use it for masking.
+          By default (None), if dyn seq len exists, it uses it.
         :param bool log_space: if True, returns in log space (i.e. uses log_softmax)
         """
         from returnn.tf.util.basic import where_bc, set_padding_info
@@ -7759,17 +7759,17 @@ class ReduceLayer(_ConcatInputLayer):
         """
         :param Data input_data:
         :param str mode: "sum" or "max", "argmin", "min", "argmax", "mean", "logsumexp"
-        :param int|list[int]|str axes: One axis or multiple axis to reduce.
+        :param int|list[int]|str|None axes: One axis or multiple axis to reduce.
           It accepts the special tokens "B"|"batch", "spatial", "spatial_except_time", or "F"|"feature",
           and it is strongly recommended to use some of these symbolic names.
           See :func:`Data.get_axes_from_description`.
         :param bool keep_dims: if dimensions should be kept (will be 1)
-        :param int enforce_batch_dim_axis: will swap the batch-dim-axis of the input with the given axis.
+        :param int|None enforce_batch_dim_axis: will swap the batch-dim-axis of the input with the given axis.
           e.g. 0: will convert the input into batch-major format if not already like that.
           Note that this is still not enough in some cases, e.g. when the other axes are also not as expected.
           The strong recommendation is to use a symbolic axis description.
-        :param bool use_time_mask: if we reduce over the time-dim axis, use the seq len info.
-          By default, in that case, it will be True.
+        :param bool|None use_time_mask: if we reduce over the time-dim axis, use the seq len info.
+          By default (None), in that case, it will be True.
         :rtype: tf.Tensor
         """
         from returnn.tf.util.basic import expand_multiple_dims
