@@ -474,6 +474,39 @@ def init_backend_engine(*, config_opts: Optional[Dict[str, Any]] = None):
     # Deferred backend-frontend import (see `_select_rf_backend=False` comment above).
     BackendEngine.select_engine(config=config)
 
+    _warn_about_foreign_backend_config_opts()
+
+
+# Backend name and the prefix its own config options carry.
+# A config carried over from another backend keeps those options, and the selected engine simply
+# does not read them -- so say so, rather than let them look effective.
+# E.g. torch_amp in a JAX config: the run trains, just not in mixed precision.
+_BackendNameAndConfigOptPrefix = {
+    BackendEngine.TensorFlowNetDict: ("TensorFlow", "tf_"),
+    BackendEngine.TensorFlow: ("TensorFlow", "tf_"),
+    BackendEngine.Torch: ("PyTorch", "torch_"),
+    BackendEngine.Jax: ("JAX", "jax_"),
+}
+
+
+def _warn_about_foreign_backend_config_opts():
+    """
+    Warn about config options named after a backend which is not the selected one.
+    """
+    selected = BackendEngine.get_selected_engine()
+    selected_name, own_prefix = _BackendNameAndConfigOptPrefix.get(selected, (str(selected), None))
+    keys = sorted(set(config.typed_dict) | set(config.dict))
+    for key in keys:
+        for engine, (name, prefix) in _BackendNameAndConfigOptPrefix.items():
+            if prefix == own_prefix or not key.startswith(prefix):
+                continue
+            print(
+                f"Warning: config option {key!r} is for the {name} backend,"
+                f" but {selected_name} is selected, so it has no effect.",
+                file=log.v2,
+            )
+            break
+
 
 def init(config_filename=None, command_line_options=(), config_updates=None, extra_greeting=None):
     """
