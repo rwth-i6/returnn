@@ -76,5 +76,8 @@ def get_default_array_index_dtype() -> str:
 def is_float_dtype(dtype: str) -> bool:
     """
     :return: whether the dtype is float, e.g. it supports backprop etc
+
+    Note bfloat16: it is a float like any other here -- it backprops, and a loss or an activation
+    can have it (mixed precision, see :mod:`returnn.frontend.amp`), it just does not start with "float".
     """
-    return dtype.startswith("float")
+    return dtype.startswith("float") or dtype.startswith("bfloat")
