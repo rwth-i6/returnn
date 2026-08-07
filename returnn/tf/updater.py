@@ -191,6 +191,13 @@ class Updater:
             self.global_train_step_var = global_train_step_var
             self.global_train_step = tf.convert_to_tensor(global_train_step_var)
             self.loss = objective
+        # log_grad_norm: the L2 global norm only, which is what the TF path can compute here
+        # (the PyTorch updater also takes a p; a different p would need a second norm op).
+        log_grad_norm = self.config.opt_typed_value("log_grad_norm", False)
+        if log_grad_norm not in (None, False, True, 2, 2.0):
+            raise NotImplementedError(f"TF updater: log_grad_norm {log_grad_norm!r}, only p=2 supported")
+        self.log_grad_norm = bool(log_grad_norm)
+        self.log_grad_norm_tensor = None  # type: typing.Optional[tf.Tensor]
         self.use_locking = self.config.bool("optimizer_use_locking", False)
         # https://arxiv.org/abs/1711.05101, Fixing Weight Decay Regularization in Adam
         self.decouple_constraints = self.config.bool("decouple_constraints", False)
@@ -967,6 +974,10 @@ class Updater:
         if not var_grads:
             raise Exception("no single variable to train")
         global_info = self._GetGlobalInfo(updater=self, all_vars=var_list, var_grads=var_grads)
+        if self.log_grad_norm:
+            # Before any clipping, as in the PyTorch updater: the point of logging it is to see
+            # what the gradients do, which the clipping would hide.
+            self.log_grad_norm_tensor = global_info.get_global_grad_norm()
         if self.config.bool_or_other("debug_grad_summaries", False):
             tf_compat.v1.summary.scalar("global_grad_norm", global_info.get_global_grad_norm())
         grads_per_apply_grad_opts = {}  # dict apply_grad_opts -> list of (grad, var)
