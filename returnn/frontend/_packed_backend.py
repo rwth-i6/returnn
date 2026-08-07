@@ -203,6 +203,7 @@ class PackedRawTensor:
         gap: int = 0,
         align: int = 1,
         layout_lens: Optional[Tensor] = None,
+        content_bound: Optional[int] = None,
     ):
         self.inner = inner
         self.packed_dim = packed_dim
@@ -231,6 +232,14 @@ class PackedRawTensor:
         # where the out footprint old_footprint // stride is not a function of the out content length.
         # None = the footprint follows the content lens (the default closed form).
         self.layout_lens = layout_lens
+        # content_bound = static upper bound on the packed CONTENT total (sum of seq lens),
+        # carried under static tracing to derive re-layout buffer bounds ABSOLUTELY
+        # (regap target = content_bound + capacity * (gap' + align' - 1), see _regap_total_bound):
+        # the declared buffer bound mixes content room and layout slack, and deriving one
+        # from the other is exactly what under-allocated buffers (shrink) or ratcheted them
+        # (never-shrink). Unchanged by regap; divided by strides; grows with pad.
+        # None = unknown (dynamic packings; regap bounds then fall back to conservative).
+        self.content_bound = content_bound
 
     @property
     def has_gap_frames(self) -> bool:
@@ -347,6 +356,7 @@ class PackedRawTensor:
             gap=self.gap,
             align=self.align,
             layout_lens=self.layout_lens,
+            content_bound=self.content_bound,
         )
         return out
 
@@ -796,39 +806,66 @@ def _packed_total(orig_dims: Sequence[Dim], gap: int, align: int, *, layout_lens
     return rf.cast(rf.reduce_sum(footprints, axis=list(footprints.dims)), "int32")
 
 
+def _capacity_n(orig_dims: Sequence[Dim]) -> Optional[int]:
+    """:return: static product of the outer packed dims' sizes/capacities, None if unknown"""
+    n = 1
+    for d in orig_dims[:-1]:
+        c = d.capacity if d.dimension is None else d.dimension
+        if c is None:
+            return None
+        n *= c
+    return n
+
+
+def _content_bound_strided(raw: PackedRawTensor, st: int) -> Optional[int]:
+    """
+    :return: content bound of a stride-st output packing.
+        Per seq the content maps len -> ceildiv(len - span, st) <= len/st + 1,
+        so the sum is bounded by ceildiv(content_bound, st) + capacity.
+    """
+    if raw.content_bound is None or st == 1:
+        return raw.content_bound
+    n = _capacity_n(raw.orig_dims)
+    if n is None:
+        return None
+    return -(-raw.content_bound // st) + n
+
+
 def _regap_total_bound(raw: PackedRawTensor, gap: int, align: int) -> int:
     """
     :return: static packed-buffer bound for a re-layout of ``raw`` to the given gap/align
 
-    Derived from the bound DECLARED for the packing (see :func:`pack` total_bound):
-    the content does not change, only the per-seq gap does,
-    so the buffer grows by at most the added gap per seq.
-    The declared bound is a property of the packing, not of one tensor,
-    so two tensors of the same packing always derive the SAME bound
-    -- which ops rely on when they combine them.
-    Deriving it from the per-seq capacities instead
-    would put every seq at its full length simultaneously,
-    a batch that the total bound already rules out
+    Primary derivation: ABSOLUTE, from the carried content bound (see PackedRawTensor.content_bound):
+    each seq occupies at most len + gap + align - 1 frames, so
+    content_bound + capacity * (gap + align - 1) always suffices -- for growing AND shrinking,
+    with exact gap -> 0 -> gap round trips (no ratchet, no under-allocation).
+    The content bound is a property of the packing, so two tensors of the same packing
+    always derive the SAME bound -- which ops rely on when they combine them.
+
+    Fallback (no content bound carried): conservative, derived from the DECLARED buffer bound.
+    Its decomposition into content room and layout slack is unknown, so a shrink must not
+    subtract anything (a bound sized without capacity*gap slack -- e.g. a measured bound --
+    would then under-allocate -> out-of-bounds scatter, a corrupted CUDA context).
+    Deriving from the per-seq capacities instead would put every seq at its full length
+    simultaneously, which the batch size already rules out
     (loq: 200 * 19.5s = 3900s of audio in a batch that holds 1000s).
     """
+    n_seqs = _capacity_n(raw.orig_dims)
+    assert n_seqs is not None, f"regap: packed dims {raw.orig_dims[:-1]} need a static size or capacity"
+    if raw.content_bound is not None:
+        return raw.content_bound + n_seqs * (gap + align - 1)
     cur_bound = raw.packed_dim.dimension
     assert cur_bound is not None, (
         f"regap: static traceable (rf.is_static_traceable) requires a static packed dim (pack total_bound), got {raw}"
     )
-    n_seqs = 1
-    for d in raw.orig_dims[:-1]:
-        c = d.capacity if d.dimension is None else d.dimension
-        assert c is not None, f"regap: packed dim {d} needs a static size or capacity"
-        n_seqs *= c
     if align != raw.align:
-        # a new alignment shifts every per-seq footprint,
-        # so the signed delta below does not apply.
+        # a new alignment shifts every per-seq footprint, so the signed delta below does not apply.
         # cur_bound >= sum(len), and each seq then needs at most len + gap + align.
         return cur_bound + n_seqs * (gap + align)
     # per seq, ceil((len + gap)/align) - ceil((len + raw.gap)/align) <= ceil((gap - raw.gap)/align).
-    # SIGNED: a smaller gap needs less buffer, and only then is the bound a function of the layout --
-    # otherwise regapping away and back (attention: gap -> 0 -> gap) grows it by n_seqs every time.
     grow = -(-(gap - raw.gap) // align) * align
+    if grow < 0:
+        return cur_bound  # shrink: unknown decomposition, see the docstring
     return cur_bound + n_seqs * grow
 
 
@@ -2327,7 +2364,14 @@ def _rel_pos_attention_per_seq(
         off += seq_len
     inner_new, cat_dim = rf.concat(*outs)
     inner_new, _ = rf.replace_dim(inner_new, in_dim=cat_dim, out_dim=q_raw.packed_dim)
-    helper = PackedRawTensor(inner=inner_new, packed_dim=q_raw.packed_dim, orig_dims=q_raw.orig_dims, gap=0, align=1)
+    helper = PackedRawTensor(
+        inner=inner_new,
+        packed_dim=q_raw.packed_dim,
+        orig_dims=q_raw.orig_dims,
+        gap=0,
+        align=1,
+        content_bound=q_raw.content_bound,
+    )
     out = helper.rewrap(inner_new, name="rel_pos_att_per_seq")
     _count_attention_path("rel_pos_per_seq")
     if orig_layout != (0, 1) or orig_layout_lens is not None:
@@ -2348,9 +2392,15 @@ def _strided_out_wrapper(
     """
     footprints, seqs_dim = _seq_footprints(raw.orig_dims, raw.gap, raw.align, layout_lens=raw.layout_lens)
     align_out = max(raw.align // st, 1)
+    cb_out = _content_bound_strided(raw, st)
     if footprints is None:
         helper = PackedRawTensor(
-            inner=out_inner, packed_dim=out_packed_dim, orig_dims=(out_time,), gap=0, align=align_out
+            inner=out_inner,
+            packed_dim=out_packed_dim,
+            orig_dims=(out_time,),
+            gap=0,
+            align=align_out,
+            content_bound=cb_out,
         )
         return helper.rewrap(out_inner, name="conv")
     gap_out = raw.gap // st
@@ -2367,6 +2417,7 @@ def _strided_out_wrapper(
             gap=gap_out,
             align=align_out,
             layout_lens=footprints // st - gap_out,
+            content_bound=cb_out,
         )
         return helper.rewrap(out_inner, name="conv")
     # the closed-form verdict (uniform residual?) is deterministic per packing+stride -> cache it.
@@ -2405,7 +2456,12 @@ def _strided_out_wrapper(
     if kind == "uniform":
         # uniform residual: expressible as the plain (lens, gap, align) form
         helper = PackedRawTensor(
-            inner=out_inner, packed_dim=out_packed_dim, orig_dims=out_orig_dims, gap=residual0, align=align_out
+            inner=out_inner,
+            packed_dim=out_packed_dim,
+            orig_dims=out_orig_dims,
+            gap=residual0,
+            align=align_out,
+            content_bound=cb_out,
         )
     else:
         # non-uniform residuals (mixed seq-len residuals mod stride): exact via per-seq layout lens,
@@ -2417,6 +2473,7 @@ def _strided_out_wrapper(
             gap=gap_out,
             align=align_out,
             layout_lens=footprints // st - gap_out,
+            content_bound=cb_out,
         )
     return helper.rewrap(out_inner, name="conv")
 
@@ -2460,7 +2517,14 @@ def _extract_strided(raw: PackedRawTensor, out_inner: Tensor, out_packed_dim: Di
         old_starts = old_starts // st
         src = rf.gather(old_starts, indices=seg, axis=seqs_dim, clip_to_valid=True) + t_coords
     new_inner = rf.gather(out_inner, indices=src, axis=out_packed_dim, clip_to_valid=True)
-    helper = PackedRawTensor(inner=new_inner, packed_dim=new_dim, orig_dims=out_orig, gap=gap_out, align=align_out)
+    helper = PackedRawTensor(
+        inner=new_inner,
+        packed_dim=new_dim,
+        orig_dims=out_orig,
+        gap=gap_out,
+        align=align_out,
+        content_bound=_content_bound_strided(raw, st),
+    )
     return helper.rewrap(new_inner, name="conv")
 
 
@@ -2528,6 +2592,7 @@ class PackedBackend(Backend[PackedRawTensor]):
             gap=raw_tensor.gap,
             align=raw_tensor.align,
             layout_lens=raw_tensor.layout_lens,
+            content_bound=raw_tensor.content_bound,
         )
 
     @staticmethod
@@ -2568,6 +2633,7 @@ class PackedBackend(Backend[PackedRawTensor]):
                 gap=raw.gap,
                 align=raw.align,
                 layout_lens=layout_lens,
+                content_bound=raw.content_bound,
             )
         else:
             inner_out, _ = rf.replace_dim(raw.inner, in_dim=in_dim, out_dim=out_dim)
@@ -2579,6 +2645,7 @@ class PackedBackend(Backend[PackedRawTensor]):
                 gap=raw.gap,
                 align=raw.align,
                 layout_lens=layout_lens,
+                content_bound=raw.content_bound,
             )
         return out
 
@@ -2603,6 +2670,7 @@ class PackedBackend(Backend[PackedRawTensor]):
             gap=raw_tensor.gap,
             align=raw_tensor.align,
             layout_lens=raw_tensor.layout_lens,
+            content_bound=raw_tensor.content_bound,
         )
 
     @staticmethod
@@ -2688,6 +2756,7 @@ class PackedBackend(Backend[PackedRawTensor]):
             gap=raw_tensor.gap,
             align=raw_tensor.align,
             layout_lens=raw_tensor.layout_lens,
+            content_bound=raw_tensor.content_bound,
         )
 
     @classmethod
@@ -2859,6 +2928,8 @@ class PackedBackend(Backend[PackedRawTensor]):
                     align=raw.align,
                     # constant footprints: the layout lens shift by the same content-len delta
                     layout_lens=(raw.layout_lens + pad_l + pad_r - span) if raw.layout_lens is not None else None,
+                    # content shrinks (or stays) per seq -> keeping the bound is a safe overestimate
+                    content_bound=raw.content_bound,
                 )
                 out = helper.rewrap(out_inner, name="conv")
                 return out, [out_time] + list(out_sp[1:])
@@ -3279,6 +3350,8 @@ class PackedBackend(Backend[PackedRawTensor]):
                     align=raw.align,
                     # constant footprints: the layout lens shift by the same content-len delta
                     layout_lens=(raw.layout_lens + pad_l + pad_r - span) if raw.layout_lens is not None else None,
+                    # content shrinks (or stays) per seq -> keeping the bound is a safe overestimate
+                    content_bound=raw.content_bound,
                 )
                 out = helper.rewrap(out_inner, name="pool")
                 return out, [out_time] + list(out_sp[1:])
@@ -3376,6 +3449,12 @@ class PackedBackend(Backend[PackedRawTensor]):
                     align=raw.align,
                     # constant footprints: the pad frames come out of the gap
                     layout_lens=(raw.layout_lens + total_pad) if raw.layout_lens is not None else None,
+                    # every seq's content grows by total_pad
+                    content_bound=(
+                        raw.content_bound + _capacity_n(raw.orig_dims) * total_pad
+                        if raw.content_bound is not None and _capacity_n(raw.orig_dims) is not None
+                        else None
+                    ),
                 )
                 if pad_l:
                     # global shift by pad_l (seq starts stay fixed, see the docstring),
@@ -3832,7 +3911,13 @@ def pack_import(
     assert packed_dim in inner_flat.dims
     if feature_dim is not None and inner_flat.feature_dim is None:
         inner_flat.feature_dim = feature_dim
-    helper = PackedRawTensor(inner=inner_flat, packed_dim=packed_dim, orig_dims=(batch_dim, spatial_dim))
+    helper = PackedRawTensor(
+        inner=inner_flat,
+        packed_dim=packed_dim,
+        orig_dims=(batch_dim, spatial_dim),
+        # dense flat storage: a static buffer bound is a content bound
+        content_bound=packed_dim.dimension,
+    )
     return helper.rewrap(inner_flat, name=inner_flat.name)
 
 
@@ -3889,6 +3974,52 @@ def pack(
                 total_bound if total_bound is not None else _packed_total(dims, gap, align), name="packed_gap"
             )
         pos = _clamped_padded_positions(dims, gap, align, out_dim=out_dim, device=source.device)
+        content_bound = None
+        if out_dim.dimension is not None:
+            n_cap = _capacity_n(dims)
+            if n_cap is not None:
+                # the content bound implied by the declared buffer bound and this layout,
+                # carried on the packing so ALL later re-layout bounds derive absolutely from it.
+                # Sound: bound >= sum(roundup(len+gap, align)) >= sum(len) + capacity*gap.
+                # NOT minus capacity*(align-1) too: that assumes worst-case align rounding on
+                # every seq, which footprint-filling batchers (packed_batch_size: the budget
+                # IS the bound, filled with sum(roundup(len, align))) legitimately exceed.
+                content_bound = out_dim.dimension - n_cap * gap
+                assert content_bound > 0, (
+                    f"pack: declared total_bound {out_dim.dimension} cannot hold ANY content"
+                    f" for capacity {n_cap} seqs with gap {gap}"
+                    f" (gap slack alone is {n_cap * gap}); raise total_bound"
+                )
+            # Verify the DECLARED bound EARLY, right at the pack entry.
+            # Every seq's last content frame must lie inside the buffer; only trailing gap /
+            # padding-slot slack may legitimately overhang (clamped + masked above). With a
+            # mis-sized bound the clamp would silently fold REAL frames onto the last slot
+            # -> data corruption far downstream; this turns it into a loud error in the eager
+            # (warmup) steps. Device-side + async (no host sync); no-op under fake tracing.
+            # The content-total check additionally validates the DERIVED content bound above,
+            # which every later regap target depends on.
+            starts, _ = _seq_starts_math(dims, gap, align, device=source.device)
+            lens_flat, _ = _seq_footprints(dims, 0, 1, device=source.device)  # gap 0 align 1 = content lens
+            # noinspection PyProtectedMember
+            if starts is not None and lens_flat is not None and starts._raw_backend.name == "torch":
+                # torch-only: assert_ is the torch device-side assert,
+                # and torch must not be imported under other backends
+                from returnn.torch.util.assert_ import assert_
+
+                ends = starts + rf.cast(lens_flat, starts.dtype)
+                ends_max = rf.reduce_max(ends, axis=list(ends.dims))
+                cond = ends_max.raw_tensor <= out_dim.dimension
+                if content_bound is not None:
+                    total_len = rf.reduce_sum(lens_flat, axis=list(lens_flat.dims))
+                    cond = cond & (total_len.raw_tensor <= content_bound)
+                assert_(
+                    cond,
+                    f"pack: content overflows the declared total_bound {out_dim.dimension}"
+                    f" (dims {list(dims)}, gap {gap}, align {align},"
+                    f" implied content bound {content_bound}):"
+                    f" the bound must hold every seq's content at its layout position"
+                    f" AND the content total; raise total_bound (e.g. config packed_total_bound)",
+                )
         inner = rf.scatter(source, indices=pos, indices_dim=list(dims), out_dim=out_dim, use_mask=True)
         packed_dim = out_dim
     else:
@@ -3897,7 +4028,15 @@ def pack(
         inner.feature_dim = source.feature_dim  # masked_select / scatter drop it
     # Note: the returned dims order is the canonical virtual order (packed dims first),
     # which can differ from source.dims order (dims are unordered semantically in RF).
-    helper = PackedRawTensor(inner=inner, packed_dim=packed_dim, orig_dims=dims, gap=gap, align=align)
+    helper = PackedRawTensor(
+        inner=inner,
+        packed_dim=packed_dim,
+        orig_dims=dims,
+        gap=gap,
+        align=align,
+        # dense path (gap 0, align 1): the buffer bound IS a content bound
+        content_bound=(content_bound if (gap or align > 1) else packed_dim.dimension),
+    )
     return helper.rewrap(inner, name=(source.name or "packed") + "_packed")
 
 
@@ -3948,7 +4087,12 @@ def regap(
     else:
         # cache the on-device starts + total (deterministic per target layout)
         # -> no per-step H2D sync (capture-safe)
-        dev_key = _packing_cache_key("regap_dev", raw, dev) + (gap, align, layout_lens)
+        # new_dim.dimension (the TARGET total) must be in the key: it comes from the caller's
+        # total_bound (or _regap_total_bound), so two calls with the same source layout and the
+        # same target gap/align/layout_lens can still target DIFFERENT buffer sizes. Without it,
+        # the second call reuses the first one's starts/total and scatters positions computed for
+        # the larger layout into the smaller buffer -> out-of-bounds writes.
+        dev_key = _packing_cache_key("regap_dev", raw, dev) + (gap, align, layout_lens, new_dim.dimension)
         hit = _layout_cache.get(dev_key)
         if hit is not None:
             new_starts, total_dev = hit
@@ -3958,7 +4102,17 @@ def regap(
                 # scalar; get_dim_value_tensor has no device notion
                 total_dev = rf.copy_to_device(total_dev, dev)
             _layout_cache.set(dev_key, (new_starts, total_dev))
-    pos = rf.gather(new_starts, indices=seg, axis=seqs_dim, clip_to_valid=True) + t_coords
+    # Clamp the within-seq offset to the TARGET slot, not just to the source seq len:
+    # the source layout's lens and the target footprints can come from different derivations
+    # (e.g. an explicit layout_lens with a gap vs the plain content lens), and then
+    # start + offset could reach into the next seq's slot or past the buffer -- an out-of-bounds
+    # scatter, which corrupts the CUDA context and resurfaces as an unrelated illegal access.
+    new_footprints, _ = _seq_footprints(raw.orig_dims, gap, align, layout_lens=layout_lens, device=dev)
+    starts_at = rf.gather(new_starts, indices=seg, axis=seqs_dim, clip_to_valid=True)
+    if new_footprints is not None:
+        slot_at = rf.gather(new_footprints, indices=seg, axis=seqs_dim, clip_to_valid=True)
+        t_coords = rf.minimum(t_coords, rf.relu(rf.cast(slot_at, t_coords.dtype) - 1))
+    pos = starts_at + t_coords
     mask = _frame_mask(raw)
     if mask is not None:
         # route old gap frames to the dump slot (== the new total), dropped in the re-layout
@@ -3967,7 +4121,13 @@ def regap(
     if raw.inner.feature_dim is not None and inner_new.feature_dim is None:
         inner_new.feature_dim = raw.inner.feature_dim
     helper = PackedRawTensor(
-        inner=inner_new, packed_dim=new_dim, orig_dims=raw.orig_dims, gap=gap, align=align, layout_lens=layout_lens
+        inner=inner_new,
+        packed_dim=new_dim,
+        orig_dims=raw.orig_dims,
+        gap=gap,
+        align=align,
+        layout_lens=layout_lens,
+        content_bound=raw.content_bound,  # a re-layout never changes the content
     )
     out = helper.rewrap(inner_new, name="regap")
     if source.feature_dim is not None and out.feature_dim is None:
@@ -3995,6 +4155,7 @@ def _torch_relayout_frames(inner: Tensor, pos: Tensor, *, packed_dim: Dim, out_d
     """
     import torch
     from returnn.torch.util.array_ import gather_relayout
+    from returnn.torch.util.assert_ import assert_
 
     axis = inner.get_axis_from_description(packed_dim)
     if axis != 0:
@@ -4009,6 +4170,16 @@ def _torch_relayout_frames(inner: Tensor, pos: Tensor, *, packed_dim: Dim, out_d
         n_out = int(n_out)
     assert isinstance(n_out, int)
     n_in = values.shape[0]
+    # Loud, capture-safe bound check. Without it a too-small target buffer writes OUT OF BOUNDS
+    # here (index_put with pos > n_out), which corrupts the CUDA context and then surfaces far
+    # away as an unrelated "illegal memory access". The usual cause is a declared
+    # packed_total_bound / regap total_bound that does not cover the per-seq gap+align slack
+    # of the TARGET layout.
+    assert_(
+        pos_raw.max() <= n_out,
+        f"packed relayout: target position beyond the buffer ({out_dim}, {n_out} frames + dump slot)."
+        f" The target total is too small for this layout (per-seq gap/align slack not covered?).",
+    )
     # small int scatters only (1-D, no feature dims involved)
     inv = torch.zeros((n_out + 1,), dtype=torch.int64, device=values.device)
     slot_valid = torch.zeros((n_out + 1,), dtype=torch.bool, device=values.device)
