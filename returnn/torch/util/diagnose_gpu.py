@@ -97,8 +97,10 @@ def print_using_cuda_device_report(dev: Union[str, torch.device], *, file: Optio
     if isinstance(dev, str):
         dev = torch.device(dev)
     assert dev.type == "cuda", f"expected CUDA device, got {dev}"
-    if dev.index is not None:
-        idx = dev.index
+    # None for a bare device like "cuda" (the torch stub claims int, hence the annotation)
+    index: Optional[int] = dev.index
+    if index is not None:
+        idx = index
     else:
         idx = torch.cuda.current_device()
     if "CUDA_VISIBLE_DEVICES" in os.environ:

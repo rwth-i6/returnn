@@ -161,9 +161,11 @@ class TorchBackend(Backend[torch.Tensor]):
         if raw_tensor is None:
             return None
         dev = raw_tensor.device
-        if dev.index is None:
+        # None for a bare device like "cuda" (the torch stub claims int, hence the annotation)
+        index: Optional[int] = dev.index
+        if index is None:
             return dev.type
-        return f"{dev.type}:{dev.index}"
+        return f"{dev.type}:{index}"
 
     @staticmethod
     def copy_to_device(x: Tensor, device: Optional[str]) -> Tensor:
