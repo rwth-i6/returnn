@@ -3675,11 +3675,11 @@ class PackedBackend(Backend[PackedRawTensor]):
             in_lens = input_spatial_dim.dyn_size_ext.copy_compatible_to_dims_raw([batch_dim]).to(device)
             targets_raw = targets_.copy_compatible_to_dims_raw([batch_dim, targets_spatial_dim]).to(device)
             tgt_lens = targets_spatial_dim.dyn_size_ext.copy_compatible_to_dims_raw([batch_dim]).to(device)
+            # Packed targets get the content-sized (packed) FSA edge layout, padded ones the
+            # rectangular batch x capacity layout. Both are correct; the packed one is just
+            # narrower. This is NOT a fallback (no unpack/re-layout happens), so it must not go
+            # through _warn_fallback_once -- callers legitimately pass padded targets.
             edges_bound = None
-            if not is_packed(targets):
-                # one-shot diagnostic: the packed-FSA layout only engages for packed targets;
-                # if this fires in a packed training, the targets lost their packing upstream
-                _warn_fallback_once("ctc_loss_edges", "targets not packed -> rectangular FSA edge layout")
             if is_packed(targets):
                 # packed FSA edge layout: content-sized edge list (5*len+5 edges per seq).
                 # Under the static bound regime this ties the edge count to the packed text
