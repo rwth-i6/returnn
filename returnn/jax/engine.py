@@ -67,6 +67,13 @@ class Engine(EngineBase):
         if precision:
             jax.config.update("jax_default_matmul_precision", precision)
             print(f"JAX default matmul precision: {precision}", file=log.v3)
+        # Mixed precision: the compute dtype of matmul/conv. Parameters, gradients and the
+        # optimizer stay float32, as with PyTorch AMP -- see returnn.frontend.amp for what it covers.
+        # Scoped to the step (like torch.autocast is), not set globally, so nothing outside sees it.
+        amp = config.value("jax_amp", None)
+        self._amp_policy: Optional[rf.AmpPolicy] = rf.AmpPolicy(compute_dtype=amp) if amp else None
+        if self._amp_policy:
+            print(f"JAX engine: mixed precision, compute dtype {amp}", file=log.v3)
 
     def init_train_from_config(
         self,
@@ -275,10 +282,11 @@ class Engine(EngineBase):
             try:
                 rf.init_train_step_run_ctx(train_flag=train_flag, step=step, epoch=self.epoch)
                 sentinel_kw = util.get_fwd_compat_kwargs()
-                self._train_step_func(model=self.model, extern_data=extern_data, **sentinel_kw)
-                run_ctx = rf.get_run_ctx()
-                total = run_ctx.total_loss()
-                losses = {name: loss.get_mean_loss().raw_tensor for name, loss in run_ctx.losses.items()}
+                with rf.set_amp_policy_ctx(self._amp_policy):  # None = plain float32
+                    self._train_step_func(model=self.model, extern_data=extern_data, **sentinel_kw)
+                    run_ctx = rf.get_run_ctx()
+                    total = run_ctx.total_loss()
+                    losses = {name: loss.get_mean_loss().raw_tensor for name, loss in run_ctx.losses.items()}
                 return total.raw_tensor if isinstance(total, Tensor) else total, losses
             finally:
                 for param, raw in zip(self._params, orig):
@@ -390,7 +398,6 @@ _UnsupportedConfigOpts = {
     "tensorboard_opts": None,
     "use_tensorboard": False,
     # backend-specific options are named after the backend, as `torch_...` is on PyTorch
-    "jax_amp": None,
     "jax_distributed": None,
     "jax_jit": None,  # the compiled/captured step
     "jax_log_memory_usage": False,
@@ -401,7 +408,7 @@ _UnsupportedConfigOpts = {
 # A config copied from a PyTorch setup carries these, and ignoring them silently
 # -- `torch_amp` above all -- is exactly what this check exists to prevent.
 _TorchOnlyConfigOpts = {
-    "torch_amp": "jax_amp",
+    "torch_amp": "jax_amp",  # implemented, but under its own name
     "torch_cuda_graph": "jax_jit",
     "torch_dataloader_opts": None,  # this engine uses the shared batching, which has no worker pool
     "torch_distributed": "jax_distributed",
@@ -415,6 +422,7 @@ def _check_config_opts_supported(config: Config):
     :param config:
     :raise NotImplementedError: if the config sets an option this engine would ignore
     """
+
     def _value_if_set(key: str, noop_value: Any = None) -> Optional[Any]:
         """:return: the configured value, or None if unset or at its no-op value"""
         if not config.has(key):

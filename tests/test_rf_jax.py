@@ -627,6 +627,46 @@ def test_random_uniform_per_element_bounds():
         assert (raw >= numpy.asarray(minval.raw_tensor)).all() and (raw < numpy.asarray(maxval.raw_tensor)).all(), raw
 
 
+def test_amp_policy_dtypes():
+    """
+    Mixed precision: which op runs in which dtype, and that the parameters stay float32.
+    See returnn.frontend.amp -- matmul/conv in the compute dtype, the sensitive ops in float32.
+    """
+    _rf_jax()
+    in_dim, out_dim = Dim(4, name="in"), Dim(3, name="out")
+    batch, time_dim = Dim(2, name="batch"), Dim(5, name="time")
+    x_np = numpy.random.RandomState(23).normal(size=(2, 5, 4)).astype("float32")
+
+    linear = rf.Linear(in_dim, out_dim)
+    norm = rf.LayerNorm(out_dim)
+    x = _make("x", x_np, [batch, time_dim, in_dim])
+
+    with rf.set_amp_policy_ctx("bfloat16"):
+        assert rf.get_amp_policy().compute_dtype == "bfloat16"
+        y = linear(x)
+        assert y.dtype == "bfloat16", y  # matmul: the compute dtype
+        normed = norm(y)
+        assert normed.dtype == "bfloat16", normed  # statistics in float32, result back to the input dtype
+        probs = rf.softmax(y, axis=out_dim)
+        assert probs.dtype == "float32", probs  # normalization: float32
+        summed = rf.reduce_sum(y, axis=time_dim)
+        assert summed.dtype == "float32", summed  # accumulation: float32
+        # the parameters themselves are untouched, they are cast where they are USED
+        assert linear.weight.dtype == "float32" and norm.scale.dtype == "float32"
+        # elementwise ops are not in any list: they follow their inputs
+        assert (y * 2.0).dtype == "bfloat16"
+
+    # and without a policy nothing is cast at all
+    assert rf.get_amp_policy() is None
+    assert linear(x).dtype == "float32"
+
+    # the values still agree with the float32 computation, within bf16 resolution
+    with rf.set_amp_policy_ctx("bfloat16"):
+        got = numpy.asarray(linear(x).copy_compatible_to_dims_raw([batch, time_dim, out_dim]).astype(jnp.float32))
+    ref = numpy.asarray(linear(x).copy_compatible_to_dims_raw([batch, time_dim, out_dim]))
+    numpy.testing.assert_allclose(got, ref, rtol=0.05, atol=0.05)
+
+
 def test_conv_pool_vs_torch():
     import torch
 
@@ -1438,6 +1478,30 @@ def test_updater_weight_decay_blacklist():
     assert got["linear.bias"] == 1.0, got
 
 
+def test_engine_train_amp():
+    """
+    ``jax_amp`` end to end: the step computes in bfloat16, while the checkpoint
+    (parameters and optimizer state) stays float32, as with PyTorch AMP.
+    """
+    import tempfile
+    from returnn.jax.engine import Engine
+    from returnn.jax.checkpoint import load_checkpoint
+
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        config, make_dataset = _simple_train_setup(tmp_dir, num_epochs=1, jax_amp="bfloat16")
+        engine = Engine(config=config)
+        engine.init_train_from_config(train_data=make_dataset(), dev_data=make_dataset())
+        engine.train()
+
+        params = load_checkpoint(f"{tmp_dir}/model.001.npz")
+        for name, value in params.items():
+            assert value.dtype == numpy.float32, f"{name} is {value.dtype}, expected float32"
+        scores = engine.learning_rate_control.epoch_data[1].error
+        assert numpy.isfinite(scores["train_score_ce"]), scores
+    # the policy is scoped to the step, so nothing outside the engine is left in bfloat16
+    assert rf.get_amp_policy() is None
+
+
 def test_engine_unsupported_config_opts():
     """
     Options which other engines implement and this one does not are rejected, not ignored.
@@ -1449,7 +1513,7 @@ def test_engine_unsupported_config_opts():
     with tempfile.TemporaryDirectory() as tmp_dir:
         for opts in [
             {"accum_grad_multiple_step": 2},
-            {"preload_from_files": {"base": {"filename": "/dev/null"}}, "jax_amp": "bfloat16"},
+            {"preload_from_files": {"base": {"filename": "/dev/null"}}, "jax_distributed": {"reduce_type": "grad"}},
             # a config copied from a PyTorch setup: the torch_ names are rejected too,
             # rather than silently doing nothing
             {"torch_amp": "bfloat16"},
