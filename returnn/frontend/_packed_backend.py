@@ -1306,8 +1306,11 @@ def _flatten(values):
 _njt_sdpa_env_broken = False
 
 
-def _sdpa_no(reason: str):
-    """warn once + None: the packed varlen SDPA is not applicable, the generic path runs"""
+def _sdpa_no(reason: str) -> None:
+    """warn once + None: the packed varlen SDPA is not applicable, the generic path runs.
+
+    Returns None so callers can ``return _sdpa_no(...)`` from a ``-> Optional[Tensor]`` function.
+    """
     _warn_fallback_once(
         "scaled_dot_product_attention",
         reason,
