@@ -19,13 +19,16 @@ are reused as they are: the :class:`returnn.tf.updater.Updater`, the batching
 
 from __future__ import annotations
 from typing import Optional, Any, Dict, List, Tuple
+import copy
+import inspect
+import os
 import time
 
 import numpy
 import tensorflow as tf
 
 from returnn.config import Config
-from returnn.datasets.basic import Dataset
+from returnn.datasets.basic import Dataset, init_dataset
 from returnn.engine.base import EngineBase
 from returnn.engine.batch import batch_to_raw_dict
 from returnn.log import log
@@ -33,6 +36,7 @@ from returnn.tensor import Tensor, TensorDict, Dim, batch_dim
 from returnn.util import basic as util
 import returnn.frontend as rf
 import returnn.tf.compat as tf_compat
+import returnn.tf.util.basic as tf_util
 from returnn.tf.updater import Updater
 from returnn.tf.frontend_low_level import TFBackend
 
@@ -60,11 +64,17 @@ class Engine(EngineBase):
         self._updater: Optional[Updater] = None
         self._train_step_func = None
         self._batch_opts = _batch_opts_from_config(config)
+        self._save_model_epoch_interval = config.int("save_interval", 1)
+        self._amp_policy = _amp_policy_from_config(config)
+        self._log_batch_size = config.bool("log_batch_size", False)
+        self._log_memory_usage = config.bool("tf_log_memory_usage", False)
+        self._extra_fetches: Dict[str, tf.Tensor] = {}  # per step, for the log only
         self._loss: Optional[tf.Tensor] = None  # the objective, per step
         self._losses: Dict[str, tf.Tensor] = {}  # per-loss mean, for the log
         self._optim_op: Optional[tf.Operation] = None
         self._global_train_step_var: Optional[tf.Variable] = None
         self._train_flag: Optional[tf.Tensor] = None  # fed False for eval
+        self._dyn_lr_func: Optional[Any] = None  # dynamic_learning_rate, applied per step
         self._step_placeholder: Optional[tf.Tensor] = None
         self._saver: Optional[tf_compat.v1.train.Saver] = None
         self._data_keys: List[str] = []
@@ -87,6 +97,9 @@ class Engine(EngineBase):
         config = self.config
         self.train_dataset = train_data
         self.eval_datasets = {name: ds for name, ds in [("dev", dev_data), ("eval", eval_data)] if ds is not None}
+        # Extra eval datasets named in the config, e.g. "devtrain". Same as the torch engine reads them.
+        for dataset_name, dataset_opts in (config.typed_value("eval_datasets", None) or {}).items():
+            self.eval_datasets[dataset_name] = init_dataset(dataset_opts, default_kwargs={"name": dataset_name})
         self.learning_rate_control = _load_learning_rate_control(config)
 
         from returnn.torch.data.extern_data import extern_data_template_from_config_opts
@@ -106,7 +119,10 @@ class Engine(EngineBase):
             self.session = tf_compat.v1.Session(graph=self._graph)
             self._create_placeholders()
             self._create_model(epoch=self.epoch, step=self.global_train_step)
-            self._init_step_func()
+            # The step graph is built once, so mixed precision is a property of the BUILD here,
+            # not of a step: the casts end up in the graph and every session.run uses them.
+            with rf.set_amp_policy_ctx(self._amp_policy):
+                self._init_step_func()
             self.session.run(tf_compat.v1.global_variables_initializer())
             self._updater.init_optimizer_vars(self.session)
         # Continue from an existing checkpoint if there is one (or one was configured via `load`).
@@ -146,14 +162,37 @@ class Engine(EngineBase):
         num_steps = 0
         fetches = {"loss": self._loss, "optim": self._optim_op}
         fetches.update({f"loss:{name}": value for name, value in self._losses.items()})
+        fetches.update(self._extra_fetches)
 
-        for feed_dict in self._iter_batches(self.train_dataset, train=True):
+        for feed_dict, complete_frac in self._iter_batches(self.train_dataset, train=True):
             feed_dict[self._step_placeholder] = self.global_train_step
+            if self._dyn_lr_func is not None:
+                self._updater.set_learning_rate(
+                    float(
+                        self._dyn_lr_func(
+                            global_train_step=self.global_train_step,
+                            epoch=self.epoch,
+                            epoch_continuous=(self.epoch - 1 + complete_frac) if complete_frac is not None else None,
+                            learning_rate=self.learning_rate,
+                            **util.get_fwd_compat_kwargs(),
+                        )
+                    ),
+                    session=self.session,
+                )
             res = self.session.run(fetches, feed_dict=feed_dict)
-            for key, value in res.items():
-                if key == "optim":
-                    continue
-                accumulated[key] = accumulated.get(key, 0.0) + float(value)
+            # the extra fetches are diagnostics of the step, not scores of the epoch
+            scores = {k: float(v) for k, v in res.items() if k != "optim" and k not in self._extra_fetches}
+            for key, value in scores.items():
+                accumulated[key] = accumulated.get(key, 0.0) + value
+            if log.verbose[5]:
+                info = [f"ep {self.epoch} train, step {num_steps}"]
+                info += [f"{k} {v:.5f}" for k, v in sorted(scores.items())]
+                info += [_format_extra_fetch(k, res[k]) for k in sorted(self._extra_fetches)]
+                if self._log_batch_size:
+                    info += [f"{k} {v}" for k, v in self._batch_size_info(feed_dict).items()]
+                if complete_frac is not None:
+                    info += [f"complete {complete_frac * 100:.2f}%"]
+                print(", ".join(info), file=log.v5)
             num_steps += 1
             self.global_train_step += 1
 
@@ -166,9 +205,13 @@ class Engine(EngineBase):
         )
         self.learning_rate_control.set_epoch_error(self.epoch, {f"train_{k}": v for k, v in scores.items()})
         self.learning_rate_control.save()
-        self._save_model()
+        if self.epoch % self._save_model_epoch_interval == 0 or self.epoch == self.config_get_final_epoch(self.config):
+            self._save_model()
+        if self.config.bool_or_other("cleanup_old_models", None):
+            self.cleanup_old_models()
         for name, dataset in self.eval_datasets.items():
             self.eval_model(name, dataset)
+        self._maybe_stop_for_resubmission(time.time() - start_time)
 
     def eval_model(self, name: str, dataset: Dataset):
         """
@@ -179,7 +222,7 @@ class Engine(EngineBase):
         num_steps = 0
         fetches = {"loss": self._loss}
         fetches.update({f"loss:{key}": value for key, value in self._losses.items()})
-        for feed_dict in self._iter_batches(dataset, train=False):
+        for feed_dict, _ in self._iter_batches(dataset, train=False):
             feed_dict[self._train_flag] = False  # no dropout etc. in eval
             feed_dict[self._step_placeholder] = self.global_train_step
             res = self.session.run(fetches, feed_dict=feed_dict)
@@ -233,7 +276,13 @@ class Engine(EngineBase):
         """
         :param dataset:
         :param train: whether this is the train dataset (affects only the batch options from the config)
-        :return: iterator over feed dicts for the placeholders
+        :return: iterator over (feed dict for the placeholders, complete_frac of the dataset or None)
+
+        ``complete_frac`` is what the other engines derive ``epoch_continuous`` from,
+        and it comes from the dataset rather than from a batch count:
+        the number of batches per epoch is not known before the epoch is over,
+        and a resumed run would never learn it for the epoch it resumes in.
+        It is None when the dataset cannot tell (then a schedule using it must say so itself).
         """
         batch_size = (
             self._batch_opts["batch_size"]
@@ -253,7 +302,10 @@ class Engine(EngineBase):
             feed_dict = {self.extern_data.data[key].raw_tensor: raw[key] for key in self._data_keys}
             for key, dim in self._fed_dims:
                 feed_dict[dim.dyn_size_ext.raw_tensor] = raw[f"{key}_seq_lens"]
-            yield feed_dict
+            # allow_only_lr_suitable: a dataset which cannot give a monotonic fraction says None here
+            # rather than a number an LR schedule would step backwards on.
+            complete_frac = dataset.get_complete_frac(batch.end_seq - 1, allow_only_lr_suitable=True)
+            yield feed_dict, complete_frac
             batches.advance(1)
 
     def _create_model(self, *, epoch: int, step: int):
@@ -306,8 +358,30 @@ class Engine(EngineBase):
         self._global_train_step_var = tf.Variable(
             self.global_train_step, dtype="int64", trainable=False, name="global_step"
         )
+        # The whole LR schedule of a setup can live in dynamic_learning_rate, so it must be applied.
+        # The TF Updater has an in-graph path for it, but that one only passes global_train_step,
+        # while such a function may also want epoch / epoch_continuous
+        # (e.g. dyn_lr_piecewise_linear with learning_rate_piecewise_by_epoch_continuous asserts on it),
+        # and it computes on plain floats, not on tensors.
+        # So apply it per step in Python, as the PyTorch engine does,
+        # and hide it from the Updater so its in-graph path stays out of the way.
+        self._dyn_lr_func = self.config.typed_value("dynamic_learning_rate", None)
+        updater_config = self.config
+        if self._dyn_lr_func is not None:
+            if not callable(self._dyn_lr_func):
+                raise NotImplementedError(f"dynamic_learning_rate {self._dyn_lr_func!r} is not callable")
+            signature = inspect.signature(self._dyn_lr_func)
+            assert any(arg.kind == inspect.Parameter.VAR_KEYWORD for arg in signature.parameters.values()), (
+                "please specify **kwargs in dynamic_learning_rate for future compatibility"
+            )
+            if "network" in signature.parameters:
+                raise ValueError("TF RF engine: dynamic_learning_rate with network is net-dict specific")
+            print("Using dynamic learning rate scheduler that updates based on global train steps", file=log.v2)
+            updater_config = copy.copy(self.config)
+            updater_config.typed_dict = dict(self.config.typed_dict)
+            updater_config.typed_dict.pop("dynamic_learning_rate", None)
         self._updater = Updater(
-            config=self.config,
+            config=updater_config,
             initial_learning_rate=self.learning_rate,
             objective=self._loss,
             global_train_step_var=self._global_train_step_var,
@@ -316,6 +390,11 @@ class Engine(EngineBase):
             [TFBackend.get_parameter_variable(p) for _, p in self.model.named_parameters() if p.trainable is not False]
         )
         self._optim_op = self._updater.get_optim_op()
+        if self._updater.log_grad_norm_tensor is not None:
+            self._extra_fetches["grad_norm:p2"] = self._updater.log_grad_norm_tensor
+        if self._log_memory_usage:
+            # An in-graph op, so it has to be added here rather than read out per step.
+            self._extra_fetches["mem_usage:GPU:0"] = tf_util.mem_usage_for_dev("/device:GPU:0")
 
     def _save_model(self):
         """
@@ -327,6 +406,75 @@ class Engine(EngineBase):
         filename = self.get_epoch_model_filename()
         self._saver.save(self.session, filename)
         print(f"Saved model {filename}", file=log.v3)
+
+    def _batch_size_info(self, feed_dict: Dict[Any, numpy.ndarray]) -> Dict[str, int]:
+        """
+        :param feed_dict: as :func:`_iter_batches` yields it
+        :return: for the log: per data key the padded size and the used (summed seq len)
+
+        Read off the fed arrays rather than off the batch: what matters for the log
+        is what actually goes into the graph, padding included.
+        """
+        info = {"num_seqs": int(feed_dict[self.extern_data.data[self._data_keys[0]].raw_tensor].shape[0])}
+        for key in self._data_keys:
+            info[f"batch_size:{key}"] = int(numpy.prod(feed_dict[self.extern_data.data[key].raw_tensor].shape))
+        for key, dim in self._fed_dims:
+            info[f"seq_len:{key}"] = int(numpy.sum(feed_dict[dim.dyn_size_ext.raw_tensor]))
+        return info
+
+    def _maybe_stop_for_resubmission(self, last_epoch_wall_sec: float):
+        """
+        :param last_epoch_wall_sec: wall time of the epoch that just finished
+
+        Stop now if the SLURM wall time left is less than the (safety-scaled) last epoch,
+        so that sisyphus resubmits instead of the job dying mid-epoch and losing it.
+        Same mechanism and the same reasoning as the PyTorch engine's, minus the torchelastic case
+        (this engine is one process): SIGINT to our own process group reaches the sisyphus task
+        worker as a KeyboardInterrupt, which it does not catch,
+        so the job counts as interrupted rather than failed.
+        See https://github.com/rwth-i6/returnn/issues/1818.
+        """
+        import signal
+        from returnn.util.basic import slurm_time_left_sec
+
+        if not self.config.bool("stop_for_resubmission_when_low_time_left", False):
+            return
+        time_left = slurm_time_left_sec()
+        if time_left is None:
+            return  # not in SLURM, or the squeue query failed
+        safety = self.config.float("stop_for_resubmission_safety_factor", 1.2)
+        needed = last_epoch_wall_sec * safety
+        if time_left >= needed:
+            return
+        print(
+            f"stop_for_resubmission_when_low_time_left:"
+            f" SLURM time_left={time_left}s, last epoch wall={last_epoch_wall_sec:.1f}s,"
+            f" needed (x{safety})={needed:.1f}s -- stopping early so sisyphus can resubmit.",
+            file=log.v1,
+        )
+        os.kill(-os.getpgrp(), signal.SIGINT)
+
+    @staticmethod
+    def delete_model(filename: str) -> int:
+        """
+        :param filename: as :func:`EngineBase.get_epoch_model` returns it, without extension
+        :return: accumulated size in bytes of the deleted files
+
+        For :func:`EngineBase.cleanup_old_models`. A TF checkpoint is a set of files
+        (``.index``, ``.meta``, ``.data-*``) sharing that prefix.
+        """
+        from glob import glob
+
+        count_bytes = 0
+        assert os.path.exists(filename + ".index"), f"delete_model: no checkpoint {filename}"
+        for fn in glob(filename + "*"):
+            fn_ext = os.path.splitext(fn)[1]
+            if fn_ext not in (".index", ".meta") and not fn_ext.startswith(".data"):
+                continue
+            count_bytes += os.stat(fn).st_size
+            os.remove(fn)
+        assert count_bytes > 0
+        return count_bytes
 
     def _load_model(self, *, filename: str):
         """
@@ -342,37 +490,27 @@ _UnsupportedConfigOpts = {
     "calculate_exp_loss": False,
     "chunking": None,
     "min_chunk_size": None,
-    "cleanup_old_models": None,
     "debug_shell_before_train_loop": False,
     "default_float_dtype": None,
     "epoch_end": None,
     "epoch_start": None,
-    "eval_datasets": None,  # this engine takes dev/eval datasets via init_train_from_config
     "forward_step": None,  # forward / search
     "model_outputs": None,  # forward / search
     "forward_auto_split_batch_on_oom": False,
     "grad_scaler": None,
     "load_model_post_hooks": None,
-    "log_batch_size": False,
-    "log_grad_norm": False,
     "online_shuffle_batches": None,
     "preload_from_files": None,
     "pretrain": None,
     "reset_dev_memory_caches": False,
-    "save_interval": 1,
     "sort_dataset": None,
-    # no graceful stop before the job's time limit; a run that hits it loses the running (sub)epoch
-    "stop_for_resubmission_when_low_time_left": False,
-    "stop_for_resubmission_safety_factor": None,
     "stop_on_nonfinite_train_score": None,
     "tensorboard_opts": None,
     "use_tensorboard": False,
     "use_train_proc_manager": False,
     # backend-specific options are named after the backend, as `torch_...` is on PyTorch
     "tf_distributed": None,
-    "tf_amp": None,
     "tf_jit": None,  # the XLA-compiled step
-    "tf_log_memory_usage": False,
     "tf_profile": None,
 }
 
@@ -380,7 +518,7 @@ _UnsupportedConfigOpts = {
 # A config copied from a PyTorch setup carries these, and ignoring them silently
 # -- `torch_amp` above all -- is exactly what this check exists to prevent.
 _TorchOnlyConfigOpts = {
-    "torch_amp": "tf_amp",  # the baseline trains in bf16; this engine would run fp32
+    "torch_amp": "tf_amp",
     "torch_cuda_graph": "tf_jit",
     "torch_dataloader_opts": None,  # this engine uses the shared batching, which has no worker pool
     "torch_distributed": "tf_distributed",
@@ -430,6 +568,43 @@ def _check_config_opts_supported(config: Config):
             + "\n  ".join(unsupported)
             + "\nThey would otherwise be ignored silently, which would change what the config means."
         )
+
+
+def _format_extra_fetch(key: str, value: Any) -> str:
+    """
+    :param key: e.g. "grad_norm:p2" or "mem_usage:GPU:0"
+    :param value:
+    :return: one entry for the step log line
+    """
+    if key.startswith("mem_usage:"):
+        return f"{key} {util.human_bytes_size(int(value))}"
+    return f"{key} {float(value):.5f}"
+
+
+def _amp_policy_from_config(config: Config) -> Optional[rf.AmpPolicy]:
+    """
+    :param config:
+    :return: the mixed-precision policy from ``tf_amp``, or None
+
+    ``tf_amp`` is the TF counterpart of ``torch_amp``, and takes the compute dtype
+    ("bfloat16", "float16") or a dict with a ``dtype`` key.
+    Unlike PyTorch, TF has no autocast, so the casts are placed by RF itself
+    (see :mod:`returnn.frontend.amp`); the parameters and the optimizer stay float32 either way.
+    """
+    opts = config.typed_value("tf_amp", None)
+    if opts is None:
+        return None
+    if isinstance(opts, str):
+        return rf.AmpPolicy(compute_dtype=opts)
+    if isinstance(opts, dict):
+        opts = dict(opts)
+        dtype = opts.pop("dtype", None)
+        if not dtype:
+            raise ValueError(f"tf_amp {opts!r}: no dtype")
+        if opts:
+            raise NotImplementedError(f"tf_amp: unsupported options {sorted(opts)}")
+        return rf.AmpPolicy(compute_dtype=dtype)
+    raise TypeError(f"tf_amp {opts!r}: expected a dtype name or a dict")
 
 
 def _batch_opts_from_config(config: Config) -> Dict[str, Any]:

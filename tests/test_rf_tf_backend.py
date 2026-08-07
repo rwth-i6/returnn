@@ -640,6 +640,370 @@ def test_engine_eval_no_dropout():
     assert abs(dev_ce[0] - numpy.log(n_classes_dim)) > 1e-3, f"eval CE looks dropped-out: {dev_ce}"
 
 
+def test_engine_dynamic_learning_rate():
+    # The whole LR schedule of a real setup can live in dynamic_learning_rate, so the engine must
+    # apply it per step. Without it the run would silently train at a constant LR.
+    from returnn.config import Config, global_config_ctx
+    from returnn.datasets.generating import DummyDataset
+    from returnn.tf.engine_rf import Engine
+
+    # noinspection PyProtectedMember
+    from returnn.frontend import _backend
+
+    n_data_dim, n_classes_dim, seq_len = 2, 3, 5
+    train_data = DummyDataset(input_dim=n_data_dim, output_dim=n_classes_dim, num_seqs=8, seq_len=seq_len)
+    train_data.init_seq_order(epoch=1)
+
+    time_dim = Dim(Tensor("time", [batch_dim], dtype="int32"))
+    in_dim = Dim(n_data_dim, name="in")
+    out_dim = Dim(n_classes_dim, name="out")
+    seen = []
+
+    class _Net(rf.Module):
+        def __init__(self):
+            super().__init__()
+            self.out = rf.Linear(in_dim, out_dim)
+
+    # noinspection PyShadowingNames
+    def _get_model(*, epoch: int, step: int, **_kwargs) -> rf.Module:
+        return _Net()
+
+    # noinspection PyShadowingNames
+    def _train_step(*, model: _Net, extern_data: TensorDict, **_kwargs):
+        loss = rf.cross_entropy(
+            estimated=model.out(extern_data["data"]),
+            target=extern_data["classes"],
+            axis=out_dim,
+            estimated_type="logits",
+        )
+        loss.mark_as_loss("ce")
+
+    def _dyn_lr(
+        *, global_train_step: int, epoch: int, epoch_continuous: float, learning_rate: float, **_kwargs
+    ) -> float:
+        seen.append((global_train_step, epoch, epoch_continuous, learning_rate))
+        return 0.001 * (global_train_step + 1)  # a schedule the engine cannot guess
+
+    config = Config(
+        {
+            "backend": "tensorflow",
+            "extern_data": {
+                "data": {"dims": [batch_dim, time_dim, in_dim], "dtype": "float32"},
+                "classes": {"dims": [batch_dim, time_dim], "sparse_dim": out_dim, "dtype": "int32"},
+            },
+            "get_model": _get_model,
+            "train_step": _train_step,
+            "optimizer": {"class": "adam"},
+            "learning_rate": 0.5,
+            "dynamic_learning_rate": _dyn_lr,
+            "batch_size": 20,
+            "max_seqs": 4,
+            "num_epochs": 2,
+        }
+    )
+
+    _backend.select_backend_tf()
+    prev_batch_dyn_size_ext = batch_dim.dyn_size_ext
+    try:
+        with global_config_ctx(config):
+            engine = Engine(config=config)
+            engine.init_train_from_config(config=config, train_data=train_data)
+            engine.train()
+            # the LR the optimizer ended up with must be the one the schedule asked for
+            final_lr = float(engine.session.run(engine._updater.learning_rate_var))
+    finally:
+        batch_dim.dyn_size_ext = prev_batch_dyn_size_ext
+        rf.select_backend_torch()
+
+    print("dyn_lr called with (step, epoch, epoch_continuous, lr):", seen)
+    assert seen, "dynamic_learning_rate was never called -- the schedule would be ignored"
+    steps = [s for s, _, _, _ in seen]
+    assert steps == sorted(steps) and steps[0] == 0, f"unexpected step sequence: {steps}"
+    assert len(steps) == len(set(steps)), f"a step was repeated: {steps}"
+    assert {e for _, e, _, _ in seen} == {1, 2}, f"epochs not passed through: {seen}"
+    assert all(lr == 0.5 for _, _, _, lr in seen), f"base learning_rate not passed through: {seen}"
+    # epoch_continuous comes from the dataset's complete_frac, so it advances within [epoch-1, epoch)
+    # from the very first epoch, and ends at the epoch boundary
+    for ep in (1, 2):
+        got = [ec for _, e, ec, _ in seen if e == ep]
+        assert got == sorted(got), f"epoch {ep} epoch_continuous not monotonic: {got}"
+        assert ep - 1 < got[0] <= got[-1] == float(ep), f"epoch {ep} epoch_continuous: {got}"
+    numpy.testing.assert_allclose(final_lr, 0.001 * (steps[-1] + 1), rtol=1e-6)
+
+
+def test_engine_eval_datasets_save_interval_cleanup():
+    # eval_datasets / save_interval / cleanup_old_models decide what a long run reports and keeps
+    # on disk, so all three must actually take effect rather than be ignored.
+    import glob
+    import tempfile
+    from returnn.config import Config, global_config_ctx
+    from returnn.datasets.generating import DummyDataset
+    from returnn.tf.engine_rf import Engine
+
+    # noinspection PyProtectedMember
+    from returnn.frontend import _backend
+
+    n_data_dim, n_classes_dim, seq_len = 2, 3, 5
+    train_data = DummyDataset(input_dim=n_data_dim, output_dim=n_classes_dim, num_seqs=8, seq_len=seq_len)
+    train_data.init_seq_order(epoch=1)
+
+    time_dim = Dim(Tensor("time", [batch_dim], dtype="int32"))
+    in_dim = Dim(n_data_dim, name="in")
+    out_dim = Dim(n_classes_dim, name="out")
+
+    class _Net(rf.Module):
+        def __init__(self):
+            super().__init__()
+            self.out = rf.Linear(in_dim, out_dim)
+
+    # noinspection PyShadowingNames
+    def _get_model(**_kwargs) -> rf.Module:
+        return _Net()
+
+    # noinspection PyShadowingNames
+    def _train_step(*, model: _Net, extern_data: TensorDict, **_kwargs):
+        rf.cross_entropy(
+            estimated=model.out(extern_data["data"]),
+            target=extern_data["classes"],
+            axis=out_dim,
+            estimated_type="logits",
+        ).mark_as_loss("ce")
+
+    num_epochs = 6
+    keep_last_n = 2
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        config = Config(
+            {
+                "backend": "tensorflow",
+                "extern_data": {
+                    "data": {"dims": [batch_dim, time_dim, in_dim], "dtype": "float32"},
+                    "classes": {"dims": [batch_dim, time_dim], "sparse_dim": out_dim, "dtype": "int32"},
+                },
+                "get_model": _get_model,
+                "train_step": _train_step,
+                "optimizer": {"class": "adam"},
+                "learning_rate": 0.01,
+                "batch_size": 20,
+                "max_seqs": 4,
+                "num_epochs": num_epochs,
+                "model": tmp_dir + "/model/epoch",
+                "learning_rate_file": tmp_dir + "/learning_rates",
+                # the extra eval dataset a real setup uses for its devtrain scores
+                "eval_datasets": {
+                    "devtrain": {
+                        "class": "DummyDataset",
+                        "input_dim": n_data_dim,
+                        "output_dim": n_classes_dim,
+                        "num_seqs": 4,
+                        "seq_len": seq_len,
+                    }
+                },
+                "save_interval": 2,
+                "cleanup_old_models": {"keep_last_n": keep_last_n, "keep_best_n": 1, "keep": []},
+            }
+        )
+
+        _backend.select_backend_tf()
+        prev_batch_dyn_size_ext = batch_dim.dyn_size_ext
+        try:
+            with global_config_ctx(config):
+                engine = Engine(config=config)
+                engine.init_train_from_config(config=config, train_data=train_data)
+                assert set(engine.eval_datasets.keys()) == {"devtrain"}, engine.eval_datasets
+                engine.train()
+                lr_control = engine.learning_rate_control
+        finally:
+            batch_dim.dyn_size_ext = prev_batch_dyn_size_ext
+            rf.select_backend_torch()
+
+        saved = sorted(int(fn.split(".")[-2]) for fn in glob.glob(tmp_dir + "/model/epoch.*.index"))
+        print("saved epochs on disk:", saved)
+        # save_interval=2 plus the final epoch; cleanup then keeps only the last n (plus the best)
+        assert saved, "nothing was saved"
+        assert all(ep % 2 == 0 for ep in saved), f"save_interval ignored: {saved}"
+        assert saved[-1] == num_epochs, f"final epoch not saved: {saved}"
+        assert len(saved) <= keep_last_n + 1, f"cleanup_old_models ignored: {saved}"
+        assert set(range(num_epochs - 2 * keep_last_n + 2, num_epochs + 1, 2)).issubset(saved), saved
+
+    # the extra eval dataset must have produced scores, else it silently did nothing
+    for epoch in range(1, num_epochs + 1):
+        errors = lr_control.get_epoch_error_dict(epoch)
+        assert any(key.startswith("devtrain_") for key in errors), f"epoch {epoch}: {errors}"
+
+
+def test_engine_tf_amp_bfloat16():
+    # tf_amp must actually reach the graph: the matmuls in bfloat16, the parameters and the
+    # optimizer still float32. Silently running fp32 would look fine but be a different setup.
+    from returnn.config import Config, global_config_ctx
+    from returnn.datasets.generating import DummyDataset
+    from returnn.tf.engine_rf import Engine
+    from returnn.tf.frontend_low_level import TFBackend
+
+    # noinspection PyProtectedMember
+    from returnn.frontend import _backend
+
+    n_data_dim, n_classes_dim, seq_len = 2, 3, 5
+    train_data = DummyDataset(input_dim=n_data_dim, output_dim=n_classes_dim, num_seqs=8, seq_len=seq_len)
+    train_data.init_seq_order(epoch=1)
+
+    time_dim = Dim(Tensor("time", [batch_dim], dtype="int32"))
+    in_dim = Dim(n_data_dim, name="in")
+    out_dim = Dim(n_classes_dim, name="out")
+
+    class _Net(rf.Module):
+        def __init__(self):
+            super().__init__()
+            self.hidden = rf.Linear(in_dim, Dim(4, name="hidden"))
+            self.out = rf.Linear(self.hidden.out_dim, out_dim)
+
+    # noinspection PyShadowingNames
+    def _get_model(**_kwargs) -> rf.Module:
+        return _Net()
+
+    # noinspection PyShadowingNames
+    def _train_step(*, model: _Net, extern_data: TensorDict, **_kwargs):
+        rf.cross_entropy(
+            estimated=model.out(rf.relu(model.hidden(extern_data["data"]))),
+            target=extern_data["classes"],
+            axis=out_dim,
+            estimated_type="logits",
+        ).mark_as_loss("ce")
+
+    config = Config(
+        {
+            "backend": "tensorflow",
+            "extern_data": {
+                "data": {"dims": [batch_dim, time_dim, in_dim], "dtype": "float32"},
+                "classes": {"dims": [batch_dim, time_dim], "sparse_dim": out_dim, "dtype": "int32"},
+            },
+            "get_model": _get_model,
+            "train_step": _train_step,
+            "optimizer": {"class": "adam"},
+            "learning_rate": 0.01,
+            "batch_size": 20,
+            "max_seqs": 4,
+            "num_epochs": 1,
+            "tf_amp": "bfloat16",
+        }
+    )
+
+    _backend.select_backend_tf()
+    prev_batch_dyn_size_ext = batch_dim.dyn_size_ext
+    try:
+        with global_config_ctx(config):
+            engine = Engine(config=config)
+            engine.init_train_from_config(config=config, train_data=train_data)
+            assert rf.get_amp_policy() is None, "the policy must not leak out of the graph build"
+            graph = engine.session.graph
+            matmuls = [op for op in graph.get_operations() if op.type in ("MatMul", "BatchMatMulV2", "Einsum")]
+            assert matmuls, "no matmul in the graph?"
+            dtypes = {out.dtype.name for op in matmuls for out in op.outputs}
+            assert "bfloat16" in dtypes, f"tf_amp did not reach the matmuls, dtypes {dtypes}"
+            params = dict(engine.get_model().named_parameters())
+            assert params and all(p.dtype == "float32" for p in params.values()), (
+                f"parameters must stay float32: {[(n, p.dtype) for n, p in params.items()]}"
+            )
+            # the loss is float32 (losses are computed there), and training still runs
+            assert engine._loss.dtype.name == "float32", engine._loss.dtype
+            engine.train()
+            after = engine.session.run({name: TFBackend.get_parameter_variable(p) for name, p in params.items()})
+    finally:
+        batch_dim.dyn_size_ext = prev_batch_dyn_size_ext
+        rf.select_backend_torch()
+
+    for name, value in after.items():
+        assert value.dtype == numpy.float32, f"{name}: {value.dtype}"
+        assert numpy.all(numpy.isfinite(value)), f"{name} is not finite after training in bf16"
+
+
+def test_engine_log_grad_norm_and_batch_size():
+    # log_grad_norm and log_batch_size are diagnostics of a real run, and both are per step,
+    # so they must be in the graph / in the step log and must not land in the epoch scores.
+    import io
+    from returnn.config import Config, global_config_ctx
+    from returnn.datasets.generating import DummyDataset
+    from returnn.log import log
+    from returnn.tf.engine_rf import Engine
+
+    # noinspection PyProtectedMember
+    from returnn.frontend import _backend
+
+    n_data_dim, n_classes_dim, seq_len = 2, 3, 5
+    train_data = DummyDataset(input_dim=n_data_dim, output_dim=n_classes_dim, num_seqs=8, seq_len=seq_len)
+    train_data.init_seq_order(epoch=1)
+
+    time_dim = Dim(Tensor("time", [batch_dim], dtype="int32"))
+    in_dim = Dim(n_data_dim, name="in")
+    out_dim = Dim(n_classes_dim, name="out")
+
+    class _Net(rf.Module):
+        def __init__(self):
+            super().__init__()
+            self.out = rf.Linear(in_dim, out_dim)
+
+    # noinspection PyShadowingNames
+    def _get_model(**_kwargs) -> rf.Module:
+        return _Net()
+
+    # noinspection PyShadowingNames
+    def _train_step(*, model: _Net, extern_data: TensorDict, **_kwargs):
+        rf.cross_entropy(
+            estimated=model.out(extern_data["data"]),
+            target=extern_data["classes"],
+            axis=out_dim,
+            estimated_type="logits",
+        ).mark_as_loss("ce")
+
+    config = Config(
+        {
+            "backend": "tensorflow",
+            "extern_data": {
+                "data": {"dims": [batch_dim, time_dim, in_dim], "dtype": "float32"},
+                "classes": {"dims": [batch_dim, time_dim], "sparse_dim": out_dim, "dtype": "int32"},
+            },
+            "get_model": _get_model,
+            "train_step": _train_step,
+            "optimizer": {"class": "adam"},
+            "learning_rate": 0.01,
+            "batch_size": 20,
+            "max_seqs": 4,
+            "num_epochs": 1,
+            "log_grad_norm": True,
+            "log_batch_size": True,
+            "gradient_clip_global_norm": 5.0,
+        }
+    )
+
+    _backend.select_backend_tf()
+    prev_batch_dyn_size_ext = batch_dim.dyn_size_ext
+    prev_v5 = log.v5
+    captured = io.StringIO()
+    try:
+        with global_config_ctx(config):
+            engine = Engine(config=config)
+            engine.init_train_from_config(config=config, train_data=train_data)
+            assert "grad_norm:p2" in engine._extra_fetches, engine._extra_fetches
+            log.v5 = captured
+            engine.train()
+            lr_control = engine.learning_rate_control
+    finally:
+        log.v5 = prev_v5
+        batch_dim.dyn_size_ext = prev_batch_dyn_size_ext
+        rf.select_backend_torch()
+
+    out = captured.getvalue()
+    print(out)
+    step_lines = [line for line in out.splitlines() if line.startswith("ep 1 train, step ")]
+    assert step_lines, f"no per-step log line in:\n{out}"
+    for line in step_lines:
+        assert "grad_norm:p2 " in line, line
+        assert "batch_size:" in line, line
+        assert "loss " in line, line
+    # the diagnostics are not scores of the epoch
+    errors = lr_control.get_epoch_error_dict(1)
+    assert not any("grad_norm" in key or "batch_size" in key for key in errors), errors
+
+
 def _full_model_setup():
     """
     :return: extern_data, get_model, forward_step, dims.
@@ -734,6 +1098,71 @@ def _full_model_setup():
 
     dims = {"time_dim": time_dim, "target_time_dim": target_time_dim, "vocab_dim": vocab_dim}
     return extern_data, (lambda *, epoch, step: _Net()), _forward_step, dims
+
+
+def test_full_model_tf_amp_bfloat16():
+    # The full model under mixed precision: LayerNorm / RMSNorm, rel-pos self-att, the depthwise
+    # conv and the CTC loss all go through the amp cast sites, so a wrong cast shows up here
+    # as a dtype error or as a result that is nowhere near the float32 one.
+    # Both graphs use the SAME parameters, so the casts are the only difference between them.
+    import returnn.tf.compat as tf_compat
+    from returnn.tf.frontend_low_level import TFBackend
+    from returnn.tensor.utils import tensor_dict_fill_random_numpy_
+
+    # noinspection PyProtectedMember
+    from returnn.frontend import _backend
+
+    extern_data, get_model, forward_step, dims = _full_model_setup()
+    extern_data.reset_content()
+    tensor_dict_fill_random_numpy_(
+        extern_data,
+        dyn_dim_max_sizes={dims["time_dim"]: 32, dims["target_time_dim"]: 4},
+        dyn_dim_min_sizes={dims["time_dim"]: 24, dims["target_time_dim"]: 2},
+    )
+    extern_data_raw = extern_data.as_raw_tensor_dict(expected_value_type=numpy.ndarray)
+
+    def _outputs(model) -> TensorDict:
+        rf.init_forward_step_run_ctx(epoch=1, step=0)
+        forward_step(model=model, extern_data=extern_data)
+        return rf.get_run_ctx().outputs
+
+    try:
+        _backend.select_backend_tf()
+        with tf_compat.v1.Graph().as_default(), tf_compat.v1.Session().as_default() as session:
+            rf.set_random_seed(42)
+            extern_data.assign_from_raw_tensor_dict_(extern_data_raw)
+            _tensor_dict_numpy_to_tf(extern_data)
+            with TFBackend.deferred_parameter_creation():
+                model = get_model(epoch=1, step=0)
+            TFBackend.create_parameters(model)
+
+            fetches_f32 = {key: value.raw_tensor for key, value in _outputs(model).data.items()}
+            with rf.set_amp_policy_ctx("bfloat16"):
+                out_amp = _outputs(model)
+            fetches_amp = {key: value.raw_tensor for key, value in out_amp.data.items()}
+            assert set(fetches_f32) == set(fetches_amp) and fetches_f32
+            assert rf.get_amp_policy() is None, "the policy must not leak out of the scope"
+
+            session.run(tf_compat.v1.global_variables_initializer())
+            res_f32, res_amp = session.run((fetches_f32, fetches_amp))
+    finally:
+        extern_data.reset_content()
+        extern_data.assign_from_raw_tensor_dict_(extern_data_raw)
+        rf.select_backend_torch()
+
+    # The losses stay float32. The logits do not, and must not: they are the output of a matmul,
+    # which is exactly what runs in the reduced dtype (PyTorch autocast leaves them there too).
+    for key in ("loss", "ctc"):
+        assert out_amp.data[key].dtype == "float32", f"{key} dtype {out_amp.data[key].dtype} under amp"
+    assert out_amp.data["logits"].dtype == "bfloat16", out_amp.data["logits"].dtype
+    for key in sorted(res_f32):
+        a, b = res_f32[key], res_amp[key]
+        scale = float(numpy.max(numpy.abs(a)))
+        print(f"{key}: float32 vs bf16 max abs diff {numpy.max(numpy.abs(a - b)):.4e}, scale {scale:.4e}")
+        assert numpy.all(numpy.isfinite(b)), f"{key} not finite under amp"
+        # bf16 keeps ~3 significant digits and the error accumulates over the layers,
+        # so this asserts that it is the same computation, not the same number
+        numpy.testing.assert_allclose(a, b, rtol=0.2, atol=0.2 * scale + 1e-3, err_msg=key)
 
 
 def test_full_model_param_grads():
