@@ -53,6 +53,7 @@ from .util import graph_capture
 from .util import module as util_module
 from .util.exception_helper import help_on_torch_exception
 from .util.debug_inf_nan import debug_inf_nan
+from .util.graph_capture import graph_pools_reserved
 from .distributed import DistributedContext, get_ctx as dist_get_ctx
 
 
@@ -1753,8 +1754,6 @@ def _print_process(
                 info += [
                     f"mem_usage:{log_memory_usage_device} {util.human_bytes_size(torch.cuda.max_memory_allocated(dev))}"
                 ]
-                from returnn.torch.util.graph_capture import graph_pools_reserved
-
                 pool = graph_pools_reserved()
                 if pool:
                     # CUDA-graph private pool: replay working memory, freed as tensors but
