@@ -331,7 +331,7 @@ class NativeCodeCompiler:
         print("%s call: %s" % (self.__class__.__name__, " ".join(cmd_args)), file=self._log_stream)
         proc = Popen(cmd_args, cwd=self._mod_path, stdout=PIPE, stderr=STDOUT)
         stdout, stderr = proc.communicate()
-        assert stderr is None  # should only have stdout
+        assert not stderr
         if proc.returncode != 0:
             print("%s: %s failed." % (self.__class__.__name__, cmd_bin))
             print("Original stdout/stderr:")
