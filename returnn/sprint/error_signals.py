@@ -153,6 +153,8 @@ class SprintSubprocessInstance:
             finally:
                 # noinspection PyUnresolvedReferences,PyProtectedMember
                 os._exit(1)
+                # defensive: _exit should never return (but e.g. a monkey-patched _exit might)
+                # noinspection PyUnreachableCode
                 return  # Not reached.
 
         # parent

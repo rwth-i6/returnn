@@ -3924,6 +3924,8 @@ def restart_returnn():
     # https://stackoverflow.com/questions/72335904/simple-way-to-restart-application
     close_all_fds_except({0, 1, 2})
     os.execv(sys.executable, [sys.executable] + sys.argv)
+    # defensive: execv should never return (but e.g. a monkey-patched execv might)
+    # noinspection PyUnreachableCode
     raise Exception("restart_returnn: execv failed")
 
 
@@ -3959,6 +3961,8 @@ def maybe_restart_returnn_with_atfork_patch():
     print("Restarting Returnn with atfork patch...", sys.executable, sys.argv)
     sys.stdout.flush()
     os.execvpe(sys.executable, [sys.executable] + sys.argv, env)
+    # defensive: execvpe should never return (but e.g. a monkey-patched execvpe might)
+    # noinspection PyUnreachableCode
     print("execvpe did not work?")
 
 

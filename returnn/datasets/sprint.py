@@ -805,6 +805,8 @@ class ExternSprintDataset(SprintDatasetBase):
                 print("%s child: exit" % self)
                 # noinspection PyProtectedMember,PyUnresolvedReferences
                 os._exit(1)
+                # defensive: _exit should never return (but e.g. a monkey-patched _exit might)
+                # noinspection PyUnreachableCode
                 return  # Not reached.
 
         # parent
