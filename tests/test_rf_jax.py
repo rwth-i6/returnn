@@ -611,6 +611,22 @@ def test_masked_select_vs_torch():
     numpy.testing.assert_allclose(got, expected, rtol=0, atol=0)
 
 
+def test_random_uniform_per_element_bounds():
+    """
+    SpecAugment draws the number and the position of its masks with PER-SEQ bounds,
+    i.e. minval / maxval are tensors, not numbers.
+    """
+    _rf_jax()
+    batch = Dim(4, name="batch")
+    minval = _make("min", numpy.array([0, 2, 5, 7], dtype="int32"), [batch])
+    maxval = _make("max", numpy.array([1, 4, 6, 20], dtype="int32"), [batch])
+    for _ in range(5):
+        out = rf.random_uniform([batch], minval=minval, maxval=maxval, dtype="int32")
+        raw = numpy.asarray(out.raw_tensor)
+        assert raw.dtype == numpy.int32 and raw.shape == (4,)
+        assert (raw >= numpy.asarray(minval.raw_tensor)).all() and (raw < numpy.asarray(maxval.raw_tensor)).all(), raw
+
+
 def test_conv_pool_vs_torch():
     import torch
 

@@ -1648,37 +1648,35 @@ class JaxBackend(Backend[jax.Array]):
         else:
             assert seed is None
 
-        def _scalar(v, default):
+        def _arg(v, default):
+            """
+            :param v: a number, or a Tensor which may be per-element (SpecAugment draws per-seq bounds)
+            :param default: when v is None
+            :return: a number or a raw array broadcastable to the output shape,
+                which is what jax.random accepts for these arguments
+            """
             if v is None:
                 return default
             if isinstance(v, Tensor):
-                assert v.dims == (), f"RF JaxBackend: only scalar supported here, got {v}"
-                return v.raw_tensor
+                return v.raw_tensor if not v.dims else v.copy_compatible_to_dims_raw(out.dims)
             return v
 
         if distribution == "uniform":
             assert mean is None and stddev is None
-            minval_ = _scalar(minval, 0)
+            minval_ = _arg(minval, 0)
             if jnp.issubdtype(dtype_, jnp.floating):
-                maxval_ = _scalar(maxval, 1)
-                if isinstance(maxval, Tensor) and maxval.dims:
-                    # per-element upper bound: affine transform of U[0,1)
-                    maxval_ = maxval.copy_compatible_to_dims_raw(out.dims)
-                    raw = minval_ + jax.random.uniform(key, shape, dtype=dtype_) * (maxval_ - minval_)
-                else:
-                    raw = jax.random.uniform(key, shape, dtype=dtype_, minval=minval_, maxval=maxval_)
+                raw = jax.random.uniform(key, shape, dtype=dtype_, minval=minval_, maxval=_arg(maxval, 1))
             else:
                 assert maxval is not None, "maxval must be specified for integer random uniform"
-                maxval_ = _scalar(maxval, None)
-                raw = jax.random.randint(key, shape, minval_, maxval_, dtype=dtype_)
+                raw = jax.random.randint(key, shape, minval_, _arg(maxval, None), dtype=dtype_)
         elif distribution == "normal":
             assert minval is None and maxval is None
-            mean_, stddev_ = _scalar(mean, 0), _scalar(stddev, 1)
+            mean_, stddev_ = _arg(mean, 0), _arg(stddev, 1)
             raw = mean_ + stddev_ * jax.random.normal(key, shape, dtype=dtype_)
         elif distribution == "truncated_normal":
-            mean_, stddev_ = _scalar(mean, 0), _scalar(stddev, 1)
-            minval_ = _scalar(minval, mean_ - 2 * stddev_)
-            maxval_ = _scalar(maxval, mean_ + 2 * stddev_)
+            mean_, stddev_ = _arg(mean, 0), _arg(stddev, 1)
+            minval_ = _arg(minval, mean_ - 2 * stddev_)
+            maxval_ = _arg(maxval, mean_ + 2 * stddev_)
             # jax.random.truncated_normal bounds are in standard-normal units
             raw = mean_ + stddev_ * jax.random.truncated_normal(
                 key, (minval_ - mean_) / stddev_, (maxval_ - mean_) / stddev_, shape, dtype=dtype_
