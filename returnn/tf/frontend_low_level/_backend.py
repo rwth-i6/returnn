@@ -402,6 +402,7 @@ class TFBackend(Backend[tf.Tensor]):
         :param use_mask:
         :return: softmax over axis
         """
+        tensor = rf.amp_cast_float32(tensor)  # mixed precision: normalization is done in float32
         out = tensor.copy_template("softmax")
         with tf_util.same_control_flow_ctx(tensor):
             x_raw = tensor.raw_tensor
@@ -419,6 +420,7 @@ class TFBackend(Backend[tf.Tensor]):
         :param use_mask:
         :return: log_softmax over axis
         """
+        tensor = rf.amp_cast_float32(tensor)  # mixed precision: normalization is done in float32
         out = tensor.copy_template("log_softmax")
         with tf_util.same_control_flow_ctx(tensor):
             x_raw = tensor.raw_tensor
@@ -617,6 +619,10 @@ class TFBackend(Backend[tf.Tensor]):
     def reduce(source: _TT, *, mode: str, axis: Union[Dim, Sequence[Dim]], use_mask: bool = True) -> _TT:
         """Reduce"""
         assert mode in Backend._AllowedReduceModes
+        if mode.lower() in ("sum", "mean", "logsumexp"):
+            # mixed precision: accumulating in the reduced dtype is where it hurts most,
+            # and the norms/statistics of the model are built on these
+            source = rf.amp_cast_float32(source)
         with tf_util.same_control_flow_ctx(source):
             x = source
             axes = x.get_axes_from_description(axis)
@@ -784,6 +790,9 @@ class TFBackend(Backend[tf.Tensor]):
             reduce = [reduce]
         if use_mask and any(dim.dyn_size_ext is not None for dim in reduce):
             raise NotImplementedError(f"matmul: masking over dynamic reduce dims {reduce} not implemented")
+        # mixed precision: this is the op AMP exists for. It also covers the parameters,
+        # which stay float32 and are cast here, where they are used.
+        a, b = rf.amp_cast_compute(a, b)
         a_dims, b_dims = a.dims, b.dims
         assert all(dim in a_dims or dim in b_dims for dim in reduce), (
             f"matmul: reduce dims {reduce} must occur in a {a} or b {b}"
@@ -856,6 +865,8 @@ class TFBackend(Backend[tf.Tensor]):
         :return: cross entropy, logits dims without axis
         """
         assert axis in logits.dims, f"softmax_cross_entropy_with_logits: {axis} not in logits {logits}"
+        # mixed precision: losses are computed in float32 (sparse targets pass through unchanged)
+        logits, targets = rf.amp_cast_float32(logits, targets)
         with tf_util.same_control_flow_ctx([logits, targets]):
             if axis == targets.sparse_dim:
                 assert logits.dims_set - {axis} == targets.dims_set, (
@@ -911,6 +922,7 @@ class TFBackend(Backend[tf.Tensor]):
         if use_native_op:
             raise NotImplementedError("ctc_loss: use_native_op not implemented for TF")
         assert targets.sparse_dim and targets.sparse_dim.dimension <= logits.feature_dim.dimension
+        logits = rf.amp_cast_float32(logits)  # mixed precision: losses are computed in float32
         batch_dims = logits.remaining_dims((input_spatial_dim, logits.feature_dim))
         with tf_util.same_control_flow_ctx([logits, targets]):
             # tf.nn.ctc_loss wants one batch axis: [batch, time, vocab] and [batch, targets]
@@ -1200,6 +1212,8 @@ class TFBackend(Backend[tf.Tensor]):
                 dilation_rate=dilation_rate or 1,
                 padding=padding,
             )
+        # mixed precision, as for matmul: the conv itself runs in the reduced dtype, the bias follows
+        source, filter, bias = rf.amp_cast_compute(source, filter, bias)
         filter_in_dim = in_dim if not groups or groups == 1 else in_dim // groups
         batch_dims = [d for d in source.dims if d not in (in_dim,) + tuple(in_spatial_dims)]
         with tf_util.same_control_flow_ctx([source, filter]):
