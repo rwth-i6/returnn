@@ -723,14 +723,27 @@ class Engine(EngineBase):
 
         elapsed = time.monotonic() - epoch_start_time
         elapsed_computation_percentage = elapsed_computation_time / elapsed
-        total_padding_ratio = NumbersDict.constant_like(1.0, total_data_size_packed) - (
-            total_data_size_packed / total_data_size_padded
+        # Frames the computation ran over but which carry no content.
+        # Padded: the padding of each batch. Packed: zero by construction -- EXCEPT under
+        # bound shapes (graph capture), where every step computes over the full static buffer,
+        # so the unused part of that bound is exactly the same waste as padding, just elsewhere.
+        # Hence "bound slack" (bound - content) there and "padding" (padded - content) otherwise;
+        # both are 1 - content/computed, so the numbers stay comparable across the modes.
+        bound_shapes = self._graph_capture is not None
+        if bound_shapes:
+            bound_sizes = NumbersDict(self._graph_capture.data_bound_sizes())
+            total_data_size_computed = bound_sizes * step_idx
+        else:
+            total_data_size_computed = total_data_size_padded
+        total_slack_ratio = NumbersDict.constant_like(1.0, total_data_size_packed) - (
+            total_data_size_packed / total_data_size_computed
         )
-        assert 0.0 <= total_padding_ratio.min_value() <= total_padding_ratio.max_value() <= 1.0
-        pad_str = ", ".join(f"{k}: {v:.1%}" for k, v in total_padding_ratio.items())
+        assert 0.0 <= total_slack_ratio.min_value() <= total_slack_ratio.max_value() <= 1.0
+        slack_str = ", ".join(f"{k}: {v:.1%}" for k, v in total_slack_ratio.items())
         print(
             f"Epoch {self.epoch}: Trained {step_idx} steps, {hms(elapsed)} elapsed "
-            f"({elapsed_computation_percentage:.1%} computing time, {pad_str} padding)",
+            f"({elapsed_computation_percentage:.1%} computing time, "
+            f"{slack_str} {'bound slack' if bound_shapes else 'padding'})",
             file=log.v3,
         )
 
@@ -1740,6 +1753,16 @@ def _print_process(
                 info += [
                     f"mem_usage:{log_memory_usage_device} {util.human_bytes_size(torch.cuda.max_memory_allocated(dev))}"
                 ]
+                from returnn.torch.util.graph_capture import graph_pools_reserved
+
+                pool = graph_pools_reserved()
+                if pool:
+                    # CUDA-graph private pool: replay working memory, freed as tensors but
+                    # retained for replay -- INVISIBLE in the allocated stat above; the real
+                    # resident footprint is their SUM (steady state; measured loq graphc:
+                    # 9GB allocated + 37GB pool = 46GB resident). Deliberately NOT
+                    # memory_reserved: that also counts unrelated allocator cache.
+                    info += [f"mem_graph_pool:{log_memory_usage_device} {util.human_bytes_size(pool)}"]
         if step_duration is not None:
             info += ["%.3f sec/step" % step_duration]
         if start_elapsed is not None:

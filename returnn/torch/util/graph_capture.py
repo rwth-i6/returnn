@@ -73,8 +73,19 @@ from returnn.frontend.run_ctx import RunCtx, Loss
 # noinspection PyProtectedMember
 from ..data.extern_data import get_batch_dim_from_extern_data, _get_dyn_dims_from_extern_data
 
+__all__ = ["GraphCapturedTrainStep", "graph_pools_reserved"]
 
-__all__ = ["GraphCapturedTrainStep"]
+# total bytes reserved by the current CUDA-graph private pool(s), set after capture
+# (single active graph per engine; a recapture overwrites). For the engine memory log.
+_graph_pools_reserved = 0
+
+
+def graph_pools_reserved() -> int:
+    """
+    :return: bytes reserved by live CUDA-graph private pools --
+        replay working memory, freed as tensors, thus INVISIBLE in (max_)memory_allocated
+    """
+    return _graph_pools_reserved
 
 
 _inductor_workarounds_applied = False
@@ -559,6 +570,21 @@ class GraphCapturedTrainStep:
                     dim.capacity = self.dim_capacity[k]
                     self._cap_dims.append((dim, self.dim_capacity[k]))
 
+    def data_bound_sizes(self) -> Dict[str, int]:
+        """
+        :return: per extern-data key, the number of frames ONE captured step computes over,
+            i.e. the static buffer extent: the packed total bound for packed keys,
+            batch bound * capacity for the padded ones.
+            The engine reports the unused part of this as the epoch's bound slack.
+        """
+        res = {}
+        for k, buf in self._data_bufs.items():
+            if k in self._packed_opts:
+                res[k] = int(buf.shape[0])
+            elif buf.ndim >= 2:
+                res[k] = int(buf.shape[0]) * int(buf.shape[1])
+        return res
+
     def set_bound_shapes_enabled(self, enabled: bool):
         """
         Toggle the process-wide bound-shape dim state:
@@ -604,6 +630,18 @@ class GraphCapturedTrainStep:
             # bound = declared packed_total_bound, else batch bound * capacity
             self._packed_opts[k] = dict(packed)
             total = self.packed_total_bound.get(k, self.batch_size_bound * self.dim_capacity[k])
+            # early static sanity check of the DECLARED bound (before any step runs):
+            # a single seq at full dim_capacity, laid out with the configured gap/align,
+            # must fit -- a bound below that is certainly mis-configured (the per-batch
+            # content check happens in pack(); this catches gross mistakes at startup).
+            gap = int(packed.get("gap", 0))
+            align = int(packed.get("align", 1))
+            one_seq = -(-(self.dim_capacity[k] + gap) // align) * align
+            assert total >= one_seq, (
+                f"torch_cuda_graph: packed_total_bound[{k!r}] = {total} cannot hold one seq at"
+                f" dim_capacity {self.dim_capacity[k]} with gap {gap} align {align}"
+                f" (needs >= {one_seq}); raise packed_total_bound or lower dim_capacity"
+            )
             shape = [total] + list(raw.shape[1:])
         else:
             assert all(d.dimension is not None for d in data.dims[2:]), (
@@ -647,6 +685,17 @@ class GraphCapturedTrainStep:
             if packed is not None:
                 assert raw.shape[0] <= buf.shape[0], (
                     f"torch_cuda_graph: packed {k} total {raw.shape[0]} exceeds bound {buf.shape[0]}"
+                )
+                # the packed CONTENT bound (see pack(): bound - capacity*gap) sizes the traced
+                # re-layout buffers; a batch above it would overflow them INSIDE the replay
+                # (an async illegal access) -- reject it here, host-side, every step
+                gap_k = int(self._packed_opts[k].get("gap", 0))
+                content_bound = buf.shape[0] - self.batch_size_bound * gap_k
+                assert raw.shape[0] <= content_bound, (
+                    f"torch_cuda_graph: packed {k} content total {raw.shape[0]} exceeds the"
+                    f" content bound {content_bound} (= packed_total_bound {buf.shape[0]}"
+                    f" - batch_size_bound {self.batch_size_bound} * gap {gap_k});"
+                    f" raise packed_total_bound"
                 )
             else:
                 assert all(a <= b for a, b in zip(raw.shape, buf.shape)), (
@@ -1347,11 +1396,57 @@ class GraphCapturedTrainStep:
             return self._run_compiled_eager()
         if self._n_eager < self.warmup_steps:
             self._n_eager += 1
+            warmup_raw = extern_data_raw
+            dummy_saved_lrs = None
+            dummy_lr_opt = None
+            if self.dummy_warmup:
+                # The eager warmup exists only to materialize lazy state (optimizer moment buffers,
+                # cudnn/cublas handles/workspaces). What it computes is irrelevant, but eager keeps
+                # every intermediate and every autograd-saved tensor alive with no reuse planning,
+                # so at real shapes it peaks far above the planned captured step (measured on loq
+                # base: 61.6GB warmup vs 9.0GB replay), and THAT peak sizes the job's GPU.
+                # A minimal batch makes it collapse to ~the param/optimizer footprint.
+                # The params/optimizer state are restored afterwards (see _restore_after_dummy_warmup),
+                # so the garbage gradients of these steps never reach the model.
+                warmup_raw = self._make_dummy_extern_data_raw(extern_data_raw)
+                if self._pre_dummy_warmup_buffers is None and self._get_buffers is not None:
+                    # running stats (batch norm etc) are updated in the FORWARD pass,
+                    # so an lr of 0 cannot protect them: snapshot + restore (small, stats only)
+                    self._pre_dummy_warmup_buffers = [b.detach().clone() for b in self._get_buffers()]
+                opt = self._get_optimizer() if self._get_optimizer is not None else None
+                if opt is not None and type(opt).__name__ in ("SGD", "Adam", "AdamW"):
+                    # lr 0 makes the param update EXACTLY zero for these optimizers
+                    # (every update term scales with lr, incl. the decoupled weight decay),
+                    # so no param snapshot is needed -- a full extra param copy would be
+                    # real memory at the warmup peak for large models. lr restored below;
+                    # the moments/step counters the dummy step wrote are zeroed afterwards
+                    # (_restore_after_dummy_warmup), only their EXISTENCE is kept.
+                    dummy_lr_opt = opt
+                    dummy_saved_lrs = []
+                    for g in opt.param_groups:
+                        lr = g["lr"]
+                        if isinstance(lr, torch.Tensor):  # capturable: device-tensor lr
+                            dummy_saved_lrs.append(lr.clone())
+                            lr.fill_(0)
+                        else:
+                            dummy_saved_lrs.append(lr)
+                            g["lr"] = 0.0
+                elif self._pre_dummy_warmup_params is None:
+                    # unknown optimizer: its update may not scale with lr -> full param snapshot
+                    self._pre_dummy_warmup_params = [p.detach().clone() for p in self._params]
             # eager warmup on a non-default stream, see the module docstring
             self._eager_stream.wait_stream(torch.cuda.current_stream())
             with torch.cuda.stream(self._eager_stream):
-                self._ctx = self._warmup_step_dynamic(extern_data_raw, global_train_step=global_train_step)
+                self._ctx = self._warmup_step_dynamic(warmup_raw, global_train_step=global_train_step)
             torch.cuda.current_stream().wait_stream(self._eager_stream)
+            if dummy_saved_lrs is not None:
+                for g, lr in zip(dummy_lr_opt.param_groups, dummy_saved_lrs):
+                    if isinstance(g["lr"], torch.Tensor):
+                        g["lr"].copy_(lr)
+                    else:
+                        g["lr"] = lr
+            if self.dummy_warmup and self._n_eager >= self.warmup_steps:
+                self._restore_after_dummy_warmup()
             return self._ctx
         if not self._compile:
             # side-stream warmup (kernel/cudnn warmup; each _step call is cold w.r.t. dim/layout caches)
