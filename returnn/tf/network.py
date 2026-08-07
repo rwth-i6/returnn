@@ -3920,8 +3920,7 @@ class LossHolder:
         self._layer = layer
         if self._only_on_eval is None:
             self._only_on_eval = layer.only_on_eval
-        if self._network is None:
-            self._network = layer.network
+        # (no network refill: __init__ asserts network is always provided)
         return self
 
     def get_layer(self):
