@@ -922,7 +922,7 @@ class DomTerm:
             If this is sys.stdout, it will replace that stream,
             and collect the data during the context (in the `with` block).
         :param str postfix: always visible, right after. "" by default.
-        :param io.TextIOBase|io.StringIO file: sys.stdout by default.
+        :param io.TextIOBase|io.StringIO|None file: sys.stdout by default.
         :param int align: remove this number of initial chars from hidden
         """
         if file is None:
@@ -1139,7 +1139,7 @@ def format_tb(
     :param dict[str,typing.Any]|None allGlobals: if set, will update it with all globals from all frames
     :param bool withTitle:
     :param bool|None with_color: output with ANSI escape codes for color
-    :param bool with_vars: will print var contents that are referenced in the source code line. by default enabled.
+    :param bool|None with_vars: will print var contents that are referenced in the source code line. by default enabled (unless at exit or on a GC stack).
     :param bool clear_frames: whether to call frame.clear() after processing it.
         That will potentially fix some mem leaks regarding locals, so it can be important.
         Also see https://github.com/python/cpython/issues/113939.
@@ -1695,10 +1695,10 @@ _func_from_code_object_cache = WeakKeyDictionary()  # code object -> function
 
 def get_func_from_code_object(co, frame=None):
     """
-    :param types.CodeType co:
+    :param types.CodeType|DummyFrame co:
     :param types.FrameType|DummyFrame|None frame: if given, might provide a faster way to get the function name
     :return: function, such that ``func.__code__ is co``, or None
-    :rtype: types.FunctionType
+    :rtype: types.FunctionType|None
 
     This is CPython specific (to some degree; it uses the `gc` module to find references).
     Inspired from:
