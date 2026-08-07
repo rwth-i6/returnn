@@ -1178,7 +1178,7 @@ class Engine(EngineBase):
             # In order to get consistent behavior, we use the reversed order.
             for preload_key, opts in reversed(sorted(preload_from_files.items())):
                 assert isinstance(opts, dict) and "filename" in opts
-                init_for_train = opts.get("init_for_train", False)
+                init_for_train: Union[bool, str] = opts.get("init_for_train", False)
                 if init_for_train:
                     if isinstance(init_for_train, str) and init_for_train == "always":
                         # No matter if this is the first train epoch

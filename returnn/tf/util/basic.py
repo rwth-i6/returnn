@@ -1775,9 +1775,10 @@ def dropout(
 
     :param tf.Tensor x:
     :param float|tf.Tensor keep_prob:
-    :param tf.Tensor|tuple[int|None] noise_shape: 1 will broadcast in that dimension, None will not broadcast
-    :param int seed:
-    :param str name:
+    :param tf.Tensor|tuple[int|None]|None noise_shape: 1 will broadcast in that dimension,
+        None will not broadcast (the shape of x by default)
+    :param int|None seed:
+    :param str|None name:
     :param bool cond_on_train: automatically wrap through :func:`cond_on_train_flag`
     :param bool apply_correction_factor:
     :param bool grad_checkpointing: use gradient checkpointing for the result
@@ -2126,9 +2127,9 @@ def flatten_with_seq_len_mask(x, seq_lens, batch_dim_axis=None, time_dim_axis=No
     """
     :param tf.Tensor x: shape (batch,...s..., time, ...s'...) or shape (time,...s...., batch, ...s'...)
     :param tf.Tensor seq_lens: shape (batch,) of int32
-    :param int batch_dim_axis: index of batch_dim in x
-    :param int time_dim_axis: index of time_dim in x
-    :param bool time_major: whether time axis is 0 (redundant, kept for compatibility)
+    :param int|None batch_dim_axis: index of batch_dim in x; derived from time_major if not given
+    :param int|None time_dim_axis: index of time_dim in x; derived from time_major if not given
+    :param bool|None time_major: whether time axis is 0 (redundant, kept for compatibility)
     :return: tensor of shape (time', ...s...s'...) where time' = sum(seq_len) <= batch*time
     :rtype: tf.Tensor
     """
@@ -4988,7 +4989,8 @@ def smoothing_cross_entropy(
 
     :param tf.Tensor logits: Tensor of size shape(labels) + [vocab_size]
     :param tf.Tensor labels: Tensor of size [...]
-    :param int|tf.Tensor vocab_size: Tensor representing the size of the vocabulary.
+    :param int|tf.Tensor|None vocab_size: Tensor representing the size of the vocabulary.
+      Taken from the last axis of logits by default.
     :param float label_smoothing: confidence = 1.0 - label_smoothing.
       Used to determine on and off values for label smoothing.
       If `gaussian` is true, `confidence` is the variance to the gaussian distribution.
@@ -5565,7 +5567,7 @@ def add_check_numerics_ops(
     It adds some more logic and options.
 
     :param list[tf.Operation|tf.Tensor]|None fetches: in case this is given, will only look at these and dependent ops
-    :param list[str] ignore_ops: e.g. ""
+    :param list[str]|set[str]|None ignore_ops: op types to ignore. A sensible default set if not given.
     :param bool use_check_numerics: if False, instead of :func:`tf.check_numerics`,
       it does the check manually (via :func:`tf.is_finite`) and in case there is inf/nan,
       it will also print the tensor (while `tf.check_numerics` does not print the tensor).
@@ -6306,7 +6308,7 @@ def unflatten_nd(x, nd_sizes, num_axes=None):
 
     :param tf.Tensor x: (B, T, <Ds>)
     :param tf.Tensor nd_sizes: (B, N = num_axes)
-    :param int num_axes:
+    :param int|None num_axes: derived from the static shape of nd_sizes if not given
     :return: (B, T_1, ..., T_N, <Ds>), T_i == max(nd_sizes[:, i])
     :rtype: tf.Tensor
     """

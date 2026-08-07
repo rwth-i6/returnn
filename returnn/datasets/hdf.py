@@ -826,7 +826,7 @@ class SiameseHDFDataset(CachedDataset2):
         """
         :param str input_stream_name: name of a feature stream
         :param str seq_label_stream: name of a stream with labels
-        :param str class_distribution: path to .npz file of size n x n (n is a number of classes),
+        :param str|None class_distribution: path to .npz file of size n x n (n is a number of classes),
                where each line i contains probs of other classes to be picked in triplets
                when sampling a pair for element from class i
         :param list[str] files: list of paths to .hdf files
@@ -1091,7 +1091,7 @@ class SimpleHDFWriter:
         """
         :param str filename: Create file, truncate if exists
         :param int|None dim:
-        :param int ndim: counted without batch
+        :param int|None ndim: counted without batch; derived from dim by default
         :param list[str]|None labels:
         :param dict[str,(int,int,str)]|None extra_type: key -> (dim,ndim,dtype)
         :param bool swmr: see https://docs.h5py.org/en/stable/swmr.html

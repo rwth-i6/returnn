@@ -202,9 +202,9 @@ class NonDaemonicSpawnContext(BaseContext):
 
 
 class _AtExitCleanupProcess:
-    def __init__(self, proc_pid: int):
+    def __init__(self, proc_pid: Optional[int]):
         self.cur_pid = os.getpid()
-        self.proc_pid = proc_pid
+        self.proc_pid = proc_pid  # None = already cleaned
 
     def __call__(self):
         try:

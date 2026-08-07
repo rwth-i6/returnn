@@ -9,7 +9,7 @@ import numpy
 def find_obj_in_stack(cls, stack=None, all_threads=True):
     """
     :param type cls:
-    :param types.FrameType|traceback.FrameSummary stack:
+    :param types.FrameType|traceback.FrameSummary|None stack: current frame (or all threads) by default
     :param bool all_threads:
     :return: obj
     """

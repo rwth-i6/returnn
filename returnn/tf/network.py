@@ -420,7 +420,7 @@ def _num_inputs_outputs_from_config(config):
          dim is the feature dimension or the number of classes,
          and ndim is the ndim counted without batch-dim,
          i.e. ndim=1 means usually sparse data and ndim=2 means dense data.
-    :rtype: (int,dict[str,(int,int)])
+    :rtype: (int,dict[str,(int,int)|dict[str]])
     """
     num_inputs = config.int("num_inputs", 0)
     target = config.value("target", "classes")
@@ -3867,10 +3867,10 @@ class LossHolder:
           but for losses coming from a subnetwork or other extended losses,
           it can be something else.
           It could look like "output", or "output/sublayer".
-        :param LayerBase layer:
+        :param LayerBase|None layer:
           We can always point to a layer where this comes from (either in the subnet, or the parent layer).
         :param Data layer_output: template describing the layer output
-        :param TFNetwork network: for which network to create this LossHolder. might be different from layer.network
+        :param TFNetwork|None network: for which network to create this LossHolder. might be different from layer.network
         :param returnn.tf.layers.base.Loss loss:
         :param ((tf.Tensor)->tf.Tensor)|None reduce_func: if given, will overwrite the reduce func for the loss.
           By default, every loss_value and error_value is a scalar
@@ -3878,8 +3878,8 @@ class LossHolder:
           However, if you provide reduce_func = TFUtil.identity, you can get the unreduced tensor.
         :param tf.Tensor|None loss_value:
         :param tf.Tensor|None error_value:
-        :param tf.Tensor norm_factor:
-        :param bool only_on_eval:
+        :param tf.Tensor|None norm_factor:
+        :param bool|None only_on_eval: from the layer by default
         """
         if layer and not network:
             network = layer.network

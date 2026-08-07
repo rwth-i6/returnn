@@ -37,7 +37,7 @@ class ExtractAudioFeatures:
         """
         :param float window_len: in seconds
         :param float step_len: in seconds
-        :param int num_feature_filters:
+        :param int|None num_feature_filters: derived from the feature type by default
         :param bool|int with_delta:
         :param numpy.ndarray|str|int|float|None norm_mean: if str, will interpret as filename, or "per_seq"
         :param numpy.ndarray|str|int|float|None norm_std_dev: if str, will interpret as filename, or "per_seq"

@@ -145,7 +145,7 @@ class BackendEngine:
     @classmethod
     def select_engine(cls, *, engine=None, default_fallback_engine=None, config=None, _select_rf_backend: bool = True):
         """
-        :param int engine: see the global class attribs for possible values
+        :param int|None engine: see the global class attribs for possible values. From the config by default.
         :param int|None default_fallback_engine: if engine is None and not defined in config, use this
         :param returnn.config.Config|None config: the global config by default
         :param _select_rf_backend: internal. avoids that Torch/TF/anything further gets imported at this point
@@ -1891,9 +1891,9 @@ class NumbersDict:
 
     def __init__(self, auto_convert=None, numbers_dict=None, broadcast_value=None):
         """
-        :param dict|NumbersDict|T auto_convert: first argument, so that we can automatically convert/copy
-        :param dict numbers_dict:
-        :param T broadcast_value:
+        :param dict|NumbersDict|T|None auto_convert: first argument, so that we can automatically convert/copy
+        :param dict|None numbers_dict:
+        :param T|None broadcast_value:
         """
         if auto_convert is not None:
             assert broadcast_value is None
@@ -4096,7 +4096,7 @@ class Stats:
         """
         :param str|None output_file_prefix: if given, will numpy.savetxt mean|std_dev to disk
         :param str stream_prefix:
-        :param io.TextIOBase stream: sys.stdout by default
+        :param io.TextIOBase|None stream: sys.stdout by default
         """
         if stream is None:
             stream = sys.stdout

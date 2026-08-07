@@ -5294,7 +5294,7 @@ class RnnCellLayer(_ConcatInputLayer):
         """
         :param tf.Tensor|tuple[tf.Tensor]|namedtuple state:
         :param int|str|None key:
-        :param tuple[int|None] shape: Shape of the state.
+        :param tuple[int|None]|None shape: Shape of the state. Assumes (batch, dim) if not given.
         :rtype: tf.Tensor
         """
         from tensorflow.python.util import nest
@@ -5490,7 +5490,7 @@ class RnnCellLayer(_ConcatInputLayer):
         :param str|int|None key: key/attribute of the state if state is a dictionary/namedtuple
             (like 'c' and 'h' for LSTM states).
         :param LayerBase|str|int|float|None|list|tuple|namedtuple initial_state: see code
-        :param tuple shape_invariant: If provided, directly used.
+        :param tuple|None shape_invariant: If provided, directly used.
             Otherwise, guessed from initial_shape (see code below).
         :param RecLayer|LayerBase|None rec_layer: For the scope.
         :rtype: tf.Tensor
@@ -5636,7 +5636,7 @@ class RnnCellLayer(_ConcatInputLayer):
 
         def resolve(v):
             """
-            :param str|tuple|list|float|int|None v:
+            :param str|tuple|list|dict|float|int|None v:
             :return:
             """
             if isinstance(v, str):
@@ -6053,7 +6053,7 @@ class ChoiceLayer(BaseChoiceLayer):
         :param dict|None scheduled_sampling:
         :param bool|str cheating: if True, will always add the true target in the beam.
             if "exclusive", enables cheating_exclusive. see :func:`returnn.tf.util.basic.beam_search`.
-        :param list[LayerBase]|None explicit_search_sources: will mark it as an additional dependency.
+        :param list[LayerBase]|dict[str,LayerBase]|None explicit_search_sources: will mark it as an additional dependency.
             You might use these also in custom_score_combine.
         :param callable|None custom_score_combine:
         """
@@ -9991,7 +9991,7 @@ class RHNCell(BaseRNNCell):
         :param bool|tf.Tensor|None is_training:
         :param int depth:
         :param float dropout:
-        :param int dropout_seed:
+        :param int|None dropout_seed:
         :param float|None transform_bias:
         :param int|tf.Tensor|None batch_size:
         """
@@ -10410,10 +10410,11 @@ class LayerNormVariantsLSTMCell(BaseRNNCell):
         :param float norm_shift: layer normalization shift (bias) value
         :param float forget_bias: the bias added to forget gates
         :param activation: Activation function to be applied in the lstm cell
-        :param bool is_training: if True then we are in the training phase
+        :param bool|tf.Tensor|None is_training: if True then we are in the training phase.
+            Taken from the current network train flag by default.
         :param float dropout: dropout rate, applied on cell-in (j)
         :param float dropout_h: dropout rate, applied on hidden state (h) when it enters the LSTM (variational dropout)
-        :param int dropout_seed: used to create random seeds
+        :param int|None dropout_seed: used to create random seeds. Random by default.
         :param bool with_concat: if True then the input and prev hidden state
           is concatenated for the computation. this is just about computation performance.
         :param bool global_norm: if True then layer normalization is applied

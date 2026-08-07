@@ -1639,7 +1639,7 @@ class ConcatSeqsDataset(CachedDataset2):
             This option would pad/narrow so that align_len * F == data_len for all but the last sub-sequences
             by setting it to {"data": ("classes", F)} to ensure concat_align_len == ceildiv(concat_data_len - P, F)
         :param bool use_cache_manager:
-        :param dict[(int,int),dict] epoch_wise_filter: see :class:`EpochWiseFilter`
+        :param dict[(int,int),dict]|EpochWiseFilter|None epoch_wise_filter: see :class:`EpochWiseFilter`
         """
         super(ConcatSeqsDataset, self).__init__(**kwargs)
         self.seq_tag_delim = seq_tag_delim

@@ -693,10 +693,10 @@ class RecSeqCellOp:
     def __init__(self, n_hidden, n_input_dim=None, n_input_dim_parts=None, input_is_sparse=False, step=None):
         """
         :param int n_hidden:
-        :param int n_input_dim:
-        :param int|list[int] n_input_dim_parts:
+        :param int|None n_input_dim: n_hidden by default
+        :param int|list[int]|None n_input_dim_parts: [n_input_dim] by default
         :param bool input_is_sparse:
-        :param int step: what direction and step to use
+        :param int|None step: what direction and step to use
         """
         if n_input_dim is None:
             n_input_dim = n_hidden
@@ -1335,7 +1335,7 @@ def fast_baum_welch(am_scores, edges, weights, start_end_states, float_idx, stat
     :param tf.Tensor start_end_states: (2, batch), (start,end) state idx in automaton.
         there is only one single automaton.
     :param tf.Tensor float_idx: (time, batch) -> 0 or 1 (index mask, via seq lens)
-    :param tf.Tensor state_buffer: (2, num_states)
+    :param tf.Tensor|None state_buffer: (2, num_states); derived from start_end_states by default
     :return: (fwdbwd, obs_scores), fwdbwd is (time, batch, dim), obs_scores is (time, batch), in -log space
     :rtype: (tf.Tensor, tf.Tensor)
     """

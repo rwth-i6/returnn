@@ -367,7 +367,8 @@ class SprintDatasetBase(Dataset):
         This is called via the Sprint main thread.
 
         :param numpy.ndarray features: format (input-feature,time) (via Sprint)
-        :param dict[str,numpy.ndarray|str] targets: format (time) (idx of output-feature)
+        :param dict[str,numpy.ndarray|str]|numpy.ndarray|None targets: format (time) (idx of output-feature).
+            A non-dict is wrapped as {"classes": targets}.
         :param str|None segment_name:
         :returns the sorted seq index
         :rtype: int
@@ -1024,7 +1025,7 @@ class ExternSprintDataset(SprintDatasetBase):
 
     def init_seq_order(self, epoch=None, seq_list=None, seq_order=None):
         """
-        :param int epoch:
+        :param int|None epoch:
         :param list[str]|None seq_list:
         :param list[int]|None seq_order:
         :rtype: bool

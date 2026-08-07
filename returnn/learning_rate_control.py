@@ -31,14 +31,15 @@ class LearningRateControl:
         def __init__(
             self,
             *,
-            learning_rate: float = None,
-            error: Optional[Dict[str, float]] = None,
+            learning_rate: Optional[float] = None,
+            error: Optional[Union[Dict[str, float], float]] = None,
             meta: Optional[Dict[str, Any]] = None,
             **kwargs,
         ):
             """
             :param learning_rate:
-            :param error: scores (loss values) and errors (frame error rates, etc)
+            :param error: scores (loss values) and errors (frame error rates, etc);
+                a plain float is the old serialization format
             :param meta: any other extra information (e.g. effective learning rate)
 
             Note that this is serialized as EpochData(learningRate=..., error=...),
@@ -128,14 +129,15 @@ class LearningRateControl:
     ):
         """
         :param float default_learning_rate: default learning rate. usually for epoch 1
-        :param list[float] | dict[int,float] default_learning_rates: learning rates
+        :param list[float]|dict[int,float]|str|None default_learning_rates: learning rates
+            (a str is evaluated)
         :param str|list[str]|None error_measure_key: for get_epoch_error_value() the key for EpochData.error
             which is a dict
         :param int min_num_epochs_per_new_learning_rate: if the lr was recently updated, use it for at least N epochs
         :param bool relative_error_div_by_old: if True, compute relative error as (new - old) / old.
         :param float|(float)->float learning_rate_decay:
         :param float|(float)->float learning_rate_growth:
-        :param str filename: load from and save to file
+        :param str|None filename: load from and save to file
         """
         self.epoch_data = {}  # type: typing.Dict[int,LearningRateControl.EpochData]
         self.filename = filename

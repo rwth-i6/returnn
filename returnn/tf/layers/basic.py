@@ -2620,7 +2620,7 @@ class SeqLenMaskLayer(_ConcatInputLayer):
           In that case, explicitly set this to True.
         :param Data|None seq_len_source:
         :param Data|None start:
-        :param Data|None window_start:
+        :param Data|int|None window_start:
         :param Data|int|None window_size:
         :return: mask which is broadcastable to energy_data,
             thus you can e.g. use :func:`returnn.tf.util.basic.where_bc`
@@ -4854,7 +4854,7 @@ class SplitDimsLayer(_ConcatInputLayer):
 
     def __init__(self, axis, dims, pad_to_multiples=None, pad_value=0, **kwargs):
         """
-        :param Dim|str axis: e.g. "F"
+        :param Dim|str|int axis: e.g. "F"
         :param tuple[Dim|int]|list[Dim|int] dims: what the axis should be split into. e.g. (window, -1)
         :param bool|None pad_to_multiples: If true, input will be padded to the next multiple of the product of the
           static dims, such that splitting is actually possible.
@@ -5003,7 +5003,7 @@ class SplitDimsLayer(_ConcatInputLayer):
     def get_out_data_from_opts(cls, name, axis, dims, pad_to_multiples=None, sources=(), **kwargs):
         """
         :param str name:
-        :param Dim|str axis:
+        :param Dim|str|int axis:
         :param list[Dim|int]|tuple[Dim|int] dims:
         :param bool|None pad_to_multiples:
         :param list[LayerBase] sources:
@@ -6019,7 +6019,7 @@ class ReinterpretDataLayer(_ConcatInputLayer):
         :param str|list[str] switch_axes: e.g. "bt" to switch batch and time axes
         :param LayerBase|None size_base: copy the size_placeholder from the given layer
         :param LayerBase|None batch_dim_base: copy the batch dim from this layer
-        :param dict[str,Dim|str|None] set_axes:
+        :param dict[str,Dim|str|int|None] set_axes:
           This can be used to overwrite the special axes like time_dim_axis or feature_dim_axis.
           For that, use keys "B","T" or "F", and a value via :func:`Data.get_axis_from_description`.
         :param dict[str|Dim,Dim]|Sequence[Tuple[Dim,Dim]]|None set_dim_tags: axis -> new dim tag. assigns new dim tags.
@@ -6127,7 +6127,7 @@ class ReinterpretDataLayer(_ConcatInputLayer):
         :param str|list[str] switch_axes: e.g. "bt" to switch batch and time axes
         :param LayerBase|None size_base: similar as size_target
         :param LayerBase|None batch_dim_base:
-        :param dict[str,Dim|str|None] set_axes:
+        :param dict[str,Dim|str|int|None] set_axes:
         :param dict[str|Dim,Dim]|Sequence[Tuple[Dim,Dim]]|None set_dim_tags:
         :param bool enforce_batch_major:
         :param bool enforce_time_major:
@@ -7283,7 +7283,7 @@ class PoolLayer(_ConcatInputLayer):
         :param list[LayerBase] sources:
         :param returnn.tf.network.TFNetwork network:
         :param Sequence[int] pool_size:
-        :param Sequence[int]|int strides:
+        :param Sequence[int]|int|None strides: pool_size by default
         :param int|Sequence[int] dilation_rate:
         :param str|int|Sequence[int] padding:
         :param Dim|None in_dim:
@@ -7728,17 +7728,17 @@ class ReduceLayer(_ConcatInputLayer):
     ):
         """
         :param str mode: "sum" or "max", "argmin", "min", "argmax", "mean", "logsumexp"
-        :param typing.Sequence[Dim|str] axes: One axis or multiple axis to reduce.
+        :param typing.Sequence[Dim|str]|None axes: One axis or multiple axis to reduce.
           It accepts the special tokens "B"|"batch", "spatial", "spatial_except_time", or "F"|"feature",
           and it is strongly recommended to use some of these symbolic names.
           See :func:`Data.get_axes_from_description`.
-        :param Dim|str axis: for compatibility, can be used instead of ``axes``
+        :param Dim|str|None axis: for compatibility, can be used instead of ``axes``
         :param bool keep_dims: if dimensions should be kept (will be 1)
         :param int|None enforce_batch_dim_axis: will swap the batch-dim-axis of the input with the given axis.
           e.g. 0: will convert the input into batch-major format if not already like that.
           Note that this is still not enough in some cases, e.g. when the other axes are also not as expected.
           The strong recommendation is to use a symbolic axis description.
-        :param bool use_time_mask: if we reduce over the time-dim axis, use the seq len info.
+        :param bool|None use_time_mask: if we reduce over the time-dim axis, use the seq len info.
           By default, in that case, it will be True.
         """
         super(ReduceLayer, self).__init__(**kwargs)
@@ -8306,7 +8306,7 @@ class ElemwiseProdLayer(_ConcatInputLayer):
     def __init__(self, axes, size=None, **kwargs):
         """
         :param str|list[str] axes: e.g. "spatial", but all those axes must be of fixed dimension
-        :param tuple[int] size: for double-checking, you can explicitly provide the size
+        :param tuple[int]|None size: for double-checking, you can explicitly provide the size
         """
         super(ElemwiseProdLayer, self).__init__(**kwargs)
         axes = self.input_data.get_axes_from_description(axes)
@@ -11183,7 +11183,7 @@ class AccumulateMeanLayer(ReduceLayer):
         """
         :param float exp_average: momentum in exponential average calculation
         :param int|list[str]|str axes: the axes to reduce. must contain batch and time.
-        :param float initial_value: how to initialize the variable which accumulates the mean
+        :param float|None initial_value: how to initialize the variable which accumulates the mean
         :param bool is_prob_distribution: if provided, better default for initial_value
         """
         super(AccumulateMeanLayer, self).__init__(mode="mean", keep_dims=False, axes=axes, **kwargs)
@@ -11690,7 +11690,7 @@ class FastBaumWelchLayer(_ConcatInputLayer):
         """
         :param str align_target: e.g. "sprint", "ctc" or "staircase"
         :param str|None align_target_key: e.g. "classes", used for e.g. align_target "ctc"
-        :param dict[str] ctc_opts: used for align_target "ctc"
+        :param dict[str]|None ctc_opts: used for align_target "ctc"
         :param dict[str] sprint_opts: used for Sprint (RASR) for align_target "sprint"
         :param str input_type: "log_prob" or "prob"
         :param float tdp_scale:
@@ -13710,7 +13710,7 @@ class SamplingBasedLoss(Loss):
             If not specified (None), the value is determined based on the choosen objective.
             For sampled softmax this should be set to True; for NCE the default is False.
             Set this to True in case of NCE training and the objective is equal to sampled logistic loss.
-        :param dict[str] sampler_args: additional arguments for the candidate sampler.
+        :param dict[str]|None sampler_args: additional arguments for the candidate sampler.
             This is most relevant to the fixed_unigram sampler.
             See https://www.tensorflow.org/api_docs/python/tf/random/fixed_unigram_candidate_sampler for details.
         :param float nce_log_norm_term: The logarithm of the constant normalization term for NCE.

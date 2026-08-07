@@ -907,7 +907,7 @@ def make_transposed_conv_out_spatial_dims(
 def calc_transposed_conv_out_length(
     in_length: Union[T, int, Dim, Tensor],
     *,
-    filter_size: Union[int, Dim],
+    filter_size: Union[int, Dim, Tensor],
     padding: Union[int, str],
     output_padding: Optional[int] = None,
     stride: Optional[int] = None,

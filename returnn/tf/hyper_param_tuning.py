@@ -355,8 +355,8 @@ class Optimization:
 
     def _find_hyper_params(self, base=None, visited=None):
         """
-        :param _AttrChain base:
-        :param set[int] visited: set of ids
+        :param _AttrChain|None base:
+        :param set[int]|None visited: set of ids
         """
         from inspect import ismodule
 

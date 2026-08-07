@@ -456,7 +456,7 @@ class PythonControl:
 
     def _handle_cmd_get_loss_and_error_signal(self, seg_name, seg_len, posteriors):
         """
-        :param str seg_name: seg name
+        :param str|bytes seg_name: seg name (bytes from some Sprint builds)
         :param int seg_len: the segment length in frames
         :param numpy.ndarray posteriors: 2d (time,label) float array
 
@@ -722,8 +722,8 @@ class PythonControl:
 
     def segment_list_iterator(self):
         """
-        :return: yields segment names
-        :rtype: typing.Iterator[str]
+        :return: yields segment names (bytes from some Sprint builds; callers decode)
+        :rtype: typing.Iterator[str|bytes]
         """
         with self.cond:
             assert self.control_loop_started
