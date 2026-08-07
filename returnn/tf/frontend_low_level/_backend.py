@@ -3,7 +3,7 @@ Backend for exposing TensorFlow-specific functionality.
 """
 
 from __future__ import annotations
-from typing import Optional, Any, Dict, List, Union, Sequence, Tuple
+from typing import Optional, Any, Callable, Dict, List, Union, Sequence, Tuple
 from dataclasses import dataclass
 import contextlib
 import string
@@ -328,6 +328,58 @@ class TFBackend(Backend[tf.Tensor]):
             raise ValueError(f"unknown activation function {func!r}")
         with tf_util.same_control_flow_ctx(raw_tensor):
             return f(raw_tensor)
+
+    @staticmethod
+    def cond(pred: Tensor, true_fn: Callable, false_fn: Callable):
+        """
+        :param pred: scalar bool
+        :param true_fn:
+        :param false_fn:
+        :return: the result of whichever branch runs
+
+        Both branches are traced into the graph and only one executes.
+        tf.cond only picks between the RAW tensors; the RF metadata (dims, dtype) comes from the
+        branch functions and must agree between them, which it does for the RF users of this
+        (e.g. rf.dropout, which returns the same tensor template either way).
+        `tf.nest` sees an RF Tensor as a leaf, so a branch may also return a tuple or dict of them.
+        """
+        true_out = []
+
+        def _branch(fn, out_list):
+            out = fn()
+            out_list.append(out)
+            if out is None:
+                # A branch which only has side effects (e.g. a parameter assign) returns nothing,
+                # but tf.cond needs both branches to return the same structure, so give it a dummy.
+                # (tf.nest.flatten(None) is [None], so this cannot be handled by the flatten below.)
+                return [tf.constant(0)]
+            return [x.raw_tensor if isinstance(x, Tensor) else x for x in tf.nest.flatten(out)]
+
+        params_before = {ref: ref.obj.raw_tensor for ref in TFBackend._param_vars}
+        raw_res = tf.cond(pred.raw_tensor, lambda: _branch(true_fn, true_out), lambda: _branch(false_fn, []))
+        assigned = [ref.obj for ref, raw in params_before.items() if ref.obj.raw_tensor is not raw]
+        if assigned:
+            # The parameter now points at a tensor inside the branch graph, which is not readable
+            # outside it. Re-reading the variable after the cond does produce a usable graph, but
+            # the values come out wrong (the assign and the read do not order as the RF API
+            # promises), so refuse instead of computing something wrong silently.
+            raise NotImplementedError(
+                f"TF cond: parameter assignment inside a branch is not supported (assigned: {assigned})."
+                f" Compute the new value in the branch and assign it outside the cond instead."
+            )
+        if true_out[0] is None:
+            return None
+        if not isinstance(raw_res, (list, tuple)):
+            raw_res = [raw_res]
+        res = []
+        for template, raw in zip(tf.nest.flatten(true_out[0]), raw_res):
+            if isinstance(template, Tensor):
+                out = template.copy_template("cond")
+                out.raw_tensor = raw
+                res.append(out)
+            else:
+                res.append(raw)
+        return tf.nest.pack_sequence_as(true_out[0], res)
 
     @staticmethod
     def stop_gradient(tensor: Tensor) -> Tensor:

@@ -64,6 +64,8 @@ class Engine(EngineBase):
         self._losses: Dict[str, tf.Tensor] = {}  # per-loss mean, for the log
         self._optim_op: Optional[tf.Operation] = None
         self._global_train_step_var: Optional[tf.Variable] = None
+        self._train_flag: Optional[tf.Tensor] = None  # fed False for eval
+        self._step_placeholder: Optional[tf.Tensor] = None
         self._saver: Optional[tf_compat.v1.train.Saver] = None
         self._data_keys: List[str] = []
         self._fed_dims: List[Tuple[str, Dim]] = []  # (data key, dim) per fed dyn-size placeholder
@@ -145,6 +147,7 @@ class Engine(EngineBase):
         fetches.update({f"loss:{name}": value for name, value in self._losses.items()})
 
         for feed_dict in self._iter_batches(self.train_dataset, train=True):
+            feed_dict[self._step_placeholder] = self.global_train_step
             res = self.session.run(fetches, feed_dict=feed_dict)
             for key, value in res.items():
                 if key == "optim":
@@ -176,6 +179,8 @@ class Engine(EngineBase):
         fetches = {"loss": self._loss}
         fetches.update({f"loss:{key}": value for key, value in self._losses.items()})
         for feed_dict in self._iter_batches(dataset, train=False):
+            feed_dict[self._train_flag] = False  # no dropout etc. in eval
+            feed_dict[self._step_placeholder] = self.global_train_step
             res = self.session.run(fetches, feed_dict=feed_dict)
             for key, value in res.items():
                 accumulated[key] = accumulated.get(key, 0.0) + float(value)
@@ -278,7 +283,18 @@ class Engine(EngineBase):
         Build the step graph: the model outputs, the losses, and the optimizer op.
         """
         sentinel_kw = util.get_fwd_compat_kwargs()
-        rf.init_train_step_run_ctx(train_flag=True, step=self.global_train_step, epoch=self.epoch)
+        # The train flag is a placeholder, not a Python bool: the graph is built once and eval must
+        # run it WITHOUT dropout etc. RunCtx supports a dynamic flag exactly for graph backends,
+        # and the net-dict engine feeds its train flag the same way.
+        self._train_flag = tf_compat.v1.placeholder_with_default(True, shape=(), name="train_flag")
+        self._step_placeholder = tf_compat.v1.placeholder_with_default(
+            tf.constant(0, dtype="int64"), shape=(), name="global_train_step"
+        )
+        rf.init_train_step_run_ctx(
+            train_flag=rf.convert_to_tensor(self._train_flag, dims=(), dtype="bool"),
+            step=self._step_placeholder,
+            epoch=self.epoch,
+        )
         self._train_step_func(model=self.model, extern_data=self.extern_data, **sentinel_kw)
         run_ctx = rf.get_run_ctx()
         assert run_ctx.losses, "train_step did not mark any loss"

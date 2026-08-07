@@ -560,6 +560,86 @@ def test_full_model_torch_checkpoint_parity():
         numpy.testing.assert_allclose(out_tf[key], out_pt[key], rtol=1e-4, atol=1e-5, err_msg=f"{key} differs")
 
 
+def test_engine_eval_no_dropout():
+    # The engine builds ONE graph, so the train flag has to be dynamic: eval must run without
+    # dropout. With dropout p=0.9 a train-graph eval would be far off, and eval is deterministic
+    # only if the flag really reaches rf.dropout, so both properties are checked here.
+    from returnn.config import Config, global_config_ctx
+    from returnn.datasets.generating import DummyDataset
+    from returnn.tf.engine_rf import Engine
+
+    # noinspection PyProtectedMember
+    from returnn.frontend import _backend
+
+    n_data_dim, n_classes_dim, seq_len = 2, 3, 5
+    dev_data = DummyDataset(input_dim=n_data_dim, output_dim=n_classes_dim, num_seqs=4, seq_len=seq_len)
+    dev_data.init_seq_order(epoch=1)
+    train_data = DummyDataset(input_dim=n_data_dim, output_dim=n_classes_dim, num_seqs=4, seq_len=seq_len)
+    train_data.init_seq_order(epoch=1)
+
+    time_dim = Dim(Tensor("time", [batch_dim], dtype="int32"))
+    in_dim = Dim(n_data_dim, name="in")
+    out_dim = Dim(n_classes_dim, name="out")
+
+    class _Net(rf.Module):
+        def __init__(self):
+            super().__init__()
+            self.out = rf.Linear(in_dim, out_dim)
+
+    # noinspection PyShadowingNames
+    def _get_model(*, epoch: int, step: int, **_kwargs) -> rf.Module:
+        return _Net()
+
+    # noinspection PyShadowingNames
+    def _train_step(*, model: _Net, extern_data: TensorDict, **_kwargs):
+        x = rf.dropout(extern_data["data"], 0.9, axis=in_dim)
+        loss = rf.cross_entropy(
+            estimated=model.out(x), target=extern_data["classes"], axis=out_dim, estimated_type="logits"
+        )
+        loss.mark_as_loss("ce")
+
+    config = Config(
+        {
+            "backend": "tensorflow",
+            "extern_data": {
+                "data": {"dims": [batch_dim, time_dim, in_dim], "dtype": "float32"},
+                "classes": {"dims": [batch_dim, time_dim], "sparse_dim": out_dim, "dtype": "int32"},
+            },
+            "get_model": _get_model,
+            "train_step": _train_step,
+            "optimizer": {"class": "adam"},
+            "learning_rate": 0.0,  # no updates, so repeated evals must give the same number
+            "batch_size": 20,
+            "max_seqs": 4,
+            "num_epochs": 2,
+        }
+    )
+
+    _backend.select_backend_tf()
+    prev_batch_dyn_size_ext = batch_dim.dyn_size_ext
+    try:
+        with global_config_ctx(config):
+            engine = Engine(config=config)
+            engine.init_train_from_config(config=config, train_data=train_data, dev_data=dev_data)
+            engine.train()
+            errors = [engine.learning_rate_control.get_epoch_error_dict(ep) for ep in (1, 2)]
+            dev_ce = [e["dev_loss:ce"] for e in errors]
+            train_ce = [e["train_loss:ce"] for e in errors]
+    finally:
+        batch_dim.dyn_size_ext = prev_batch_dyn_size_ext
+        rf.select_backend_torch()
+
+    print("dev ce:", dev_ce, "train ce:", train_ce)
+    # Two independent checks that the flag really reaches rf.dropout:
+    # 1. eval is deterministic -- with dropout on, each run would draw a fresh mask.
+    assert dev_ce[0] == dev_ce[1], f"eval is not deterministic, dropout still active? {dev_ce}"
+    # 2. the value differs from the dropped-out one. With p=0.9 the train inputs are nearly all
+    #    zero, so the logits are ~bias=0 and the train CE sits at ln(num_classes); the eval CE
+    #    sees the real inputs and must differ from that.
+    assert abs(train_ce[0] - numpy.log(n_classes_dim)) < 1e-4, f"expected the train CE at ln(3), got {train_ce}"
+    assert abs(dev_ce[0] - numpy.log(n_classes_dim)) > 1e-3, f"eval CE looks dropped-out: {dev_ce}"
+
+
 def _full_model_setup():
     """
     :return: extern_data, get_model, forward_step, dims.
