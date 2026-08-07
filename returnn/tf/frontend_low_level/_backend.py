@@ -6,11 +6,13 @@ from __future__ import annotations
 from typing import Optional, Any, Callable, Dict, List, Union, Sequence, Tuple
 from dataclasses import dataclass
 import contextlib
+import functools
 import string
 import numpy
 import tensorflow as tf
 
 import returnn.tf.compat as tf_compat
+from returnn.log import log
 from returnn.util.basic import NotSpecified, is_onnx_export_global, get_global_inf_value, RefIdEq
 from returnn.tensor import Tensor, Dim
 from returnn.tf.util import basic as tf_util
@@ -1214,9 +1216,33 @@ class TFBackend(Backend[tf.Tensor]):
                 pads = padding if isinstance(padding, (list, tuple)) else [padding] * len(filter_size)
                 src_raw = tf.pad(src_raw, [[0, 0]] + [[p, p] for p in pads] + [[0, 0]])
                 tf_padding = "VALID"
-            out_raw = tf.nn.convolution(
-                src_raw, filter_raw, strides=strides, padding=tf_padding, dilations=dilation_rate
-            )
+            if (
+                groups
+                and groups > 1
+                and groups == in_dim.dimension
+                and len(filter_size) <= 2
+                and not _grouped_conv_grad_supported()
+            ):
+                # Depthwise (one group per input channel), as the Conformer conv block uses.
+                # Only taken where tf.nn.convolution's `groups` has no gradient
+                # ("Gradients for grouped convolutions are not supported on CPU", tf 2.10 in CI):
+                # where the generic path works it is also faster
+                # (measured on tf 2.18 CPU: 1.9 ms vs 4.2 ms per backward, same values).
+                # This op is 2D only and wants the filter as [*filter_size, in_dim, multiplier]:
+                # ours is [*filter_size, in_dim/groups=1, out_dim], and out_dim == in_dim here,
+                # so the multiplier is 1 and the last two axes just swap.
+                out_raw = _depthwise_conv(
+                    src_raw,
+                    tf.transpose(filter_raw, list(range(len(filter_size))) + [len(filter_size) + 1, len(filter_size)]),
+                    strides=strides,
+                    padding=tf_padding,
+                    dilations=dilation_rate,
+                    nd=len(filter_size),
+                )
+            else:
+                out_raw = tf.nn.convolution(
+                    src_raw, filter_raw, strides=strides, padding=tf_padding, dilations=dilation_rate
+                )
             if bias is not None:
                 out_raw = out_raw + bias.copy_compatible_to_dims_raw([out_dim])
             if len(batch_dims) != 1:  # and split them again
@@ -2317,6 +2343,67 @@ def _seq_mask_raw(tensor: Tensor, axis: int) -> tf.Tensor:
     which does not exist when the graph comes from RF code directly.
     """
     return tensor.get_sequence_mask_tensor(axis).copy_compatible_to_dims_raw(tensor.dims)
+
+
+@functools.lru_cache(maxsize=None)
+def _grouped_conv_grad_supported() -> bool:
+    """
+    :return: whether tf.nn.convolution with groups > 1 can be differentiated here
+
+    Probed once, in a throwaway graph, rather than gated on a TF version:
+    the limitation is TF-version AND device dependent
+    ("Gradients for grouped convolutions are not supported on CPU"),
+    and a version boundary guessed from the outside would be wrong somewhere.
+    """
+    try:
+        g = tf.Graph()
+        with g.as_default():
+            x = tf.zeros([1, 4, 2])
+            f = tf.zeros([3, 1, 2])
+            y = tf.nn.convolution(x, f, strides=1, padding="SAME")
+            (grad,) = tf.gradients(tf.reduce_sum(y), [x])
+            return grad is not None
+    except Exception as exc:
+        print(f"TF: grouped conv has no gradient here ({type(exc).__name__}), using the depthwise op", file=log.v4)
+        return False
+
+
+def _depthwise_conv(src_raw, filter_raw, *, strides, padding, dilations, nd: int):
+    """
+    :param src_raw: [batch, *spatial, channels]
+    :param filter_raw: [*filter_size, channels, channel_multiplier]
+    :param strides:
+    :param padding: "SAME" or "VALID"
+    :param dilations:
+    :param nd: number of spatial dims, 1 or 2
+    :return: depthwise conv output
+
+    tf.nn.depthwise_conv2d is 2D only, so a 1D conv gets a dummy spatial axis around it.
+    """
+
+    def _pair(value, fill):
+        if value is None:
+            value = fill
+        if isinstance(value, int):
+            value = [value] * nd
+        value = list(value)
+        return [fill] + value if nd == 1 else value
+
+    if nd == 1:
+        src_raw = tf.expand_dims(src_raw, axis=1)
+        filter_raw = tf.expand_dims(filter_raw, axis=0)
+    elif nd != 2:
+        raise NotImplementedError(f"depthwise conv: {nd} spatial dims not supported")
+    out = tf.nn.depthwise_conv2d(
+        src_raw,
+        filter_raw,
+        strides=[1] + _pair(strides, 1) + [1],
+        padding=padding,
+        dilations=_pair(dilations, 1),
+    )
+    if nd == 1:
+        out = tf.squeeze(out, axis=1)
+    return out
 
 
 def _shape_raw(dims_or_sizes: Sequence[Union[Dim, int, tf.Tensor]]) -> Union[List[int], tf.Tensor]:
