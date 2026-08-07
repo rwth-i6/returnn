@@ -711,14 +711,23 @@ def _is_tracing_tensor(x: torch.Tensor) -> bool:
     :param x:
     :return: whether this is a trace-time tensor (fake/meta), i.e. one WITHOUT storage
     """
+    if x.device.type == "meta":
+        return True
+    try:
+        # noinspection PyProtectedMember
+        from torch._subclasses.fake_tensor import FakeTensor
+    except ImportError:  # older torch: no fake tensors, thus nothing to detect
+        return False
+    if isinstance(x, FakeTensor):
+        return True
+    # an ACTIVE fake mode also fakes plain tensors on use (older torch lacks this API)
     # noinspection PyProtectedMember
-    from torch._subclasses.fake_tensor import FakeTensor
-
-    return (
-        isinstance(x, FakeTensor)
-        or x.device.type == "meta"
-        or torch._C._get_dispatch_mode(torch._C._TorchDispatchModeKey.FAKE) is not None
-    )
+    get_dispatch_mode = getattr(torch._C, "_get_dispatch_mode", None)
+    # noinspection PyProtectedMember
+    mode_key = getattr(getattr(torch._C, "_TorchDispatchModeKey", None), "FAKE", None)
+    if get_dispatch_mode is not None and mode_key is not None:
+        return get_dispatch_mode(mode_key) is not None
+    return False
 
 
 def _ctc_fsa_cache_get(
