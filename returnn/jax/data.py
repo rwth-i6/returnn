@@ -9,7 +9,7 @@ Only the last step is JAX-specific: putting the NumPy arrays into a :class:`Tens
 """
 
 from __future__ import annotations
-from typing import Optional, Any, Dict, Iterator, Sequence
+from typing import Optional, Any, Dict, Iterator, List, Sequence
 
 import numpy
 import jax.numpy as jnp
@@ -26,31 +26,40 @@ def raw_dict_to_extern_data(
     extern_data: TensorDict, raw: Dict[str, Any], *, device: Optional[str] = None
 ) -> TensorDict:
     """
+    The dims of the template are REUSED and filled in, not replaced by fresh ones per batch,
+    exactly as the PyTorch pipeline does it. Two reasons, both found the hard way:
+    RF compares dims by identity, so the model's dims and these have to be the same objects;
+    and RETURNN's legacy axis attributes (``Tensor.time_dim_axis``, which recipe code reaches
+    through ``get_time_dim_tag``) are derived from the batch dim being the config's batch dim.
+
     :param extern_data: templates (dims, dtypes), as from the config
     :param raw: as from :func:`batch_to_raw_dict`: the data arrays plus "<key>_seq_lens" and "batch_dim"
     :param device: where to put the arrays, None for the JAX default
-    :return: a new TensorDict holding JAX arrays, with the dynamic dims' sizes filled in
+    :return: a TensorDict holding JAX arrays, with the dynamic dims' sizes filled in
     """
     batch_dim_value = int(raw["batch_dim"])
+    batch_dim_ = _batch_dim_of(extern_data)
+    if batch_dim_.size is None:
+        if batch_dim_.dyn_size_ext is None:
+            batch_dim_.dyn_size_ext = Tensor(batch_dim_.name or "batch", dims=[], dtype="int32")
+        # scalar: deliberately NOT device-committed, see _to_jax
+        batch_dim_.dyn_size_ext.raw_tensor = jnp.asarray(batch_dim_value, dtype=jnp.int32)
+    for dim in _dyn_dims_of(extern_data):
+        dim.reset_eager()  # filled in below, for this batch
     out = TensorDict()
     for key, template in extern_data.data.items():
         if key not in raw:
             continue
         data = template.copy_template()
-        # the batch dim is shared by all entries, the dyn dims are per key
-        dims = []
         for i, dim in enumerate(data.dims):
-            if i == 0:
-                dim.dyn_size_ext = None
-                dim.capacity = None
-                dims.append(_static_batch_dim(dim, batch_dim_value))
-            elif dim.is_dynamic():
-                dims.append(_dyn_dim_with_sizes(dim, raw[f"{key}_seq_lens"], batch_dim=dims[0], device=device))
-            else:
-                dims.append(dim)
-        data = Tensor(
-            key, dims=dims, dtype=template.dtype, sparse_dim=template.sparse_dim, feature_dim=template.feature_dim
-        )
+            if i == 0 or not dim.is_dynamic():
+                continue
+            seq_lens = raw[f"{key}_seq_lens"]
+            if dim.dyn_size_ext is None:
+                dim.dyn_size_ext = Tensor(dim.name or "time", dims=[batch_dim_], dtype="int32")
+            dim.dyn_size_ext.raw_tensor = _to_jax(seq_lens, dtype=dim.dyn_size_ext.dtype, device=device)
+            # capacity = the padded extent, which is what every shape in the step is built from
+            dim.capacity = int(numpy.max(seq_lens)) if len(seq_lens) else 0
         if template.dtype == "string":
             # JAX has no string arrays; keep them as NumPy, which RF dispatches to its NumPy backend.
             # That keeps entries like seq_tag available to the step function, just not on the device.
@@ -59,6 +68,30 @@ def raw_dict_to_extern_data(
             data.raw_tensor = _to_jax(raw[key], dtype=template.dtype, device=device)
         out.data[key] = data
     return out
+
+
+def _batch_dim_of(extern_data: TensorDict) -> Dim:
+    """
+    :param extern_data: templates
+    :return: the batch dim, which every entry has as its first dim
+    """
+    dims = {data.dims[0] for data in extern_data.data.values() if data.dims}
+    assert len(dims) == 1, f"extern_data entries do not share one batch dim: {dims}"
+    return next(iter(dims))
+
+
+def _dyn_dims_of(extern_data: TensorDict) -> List[Dim]:
+    """
+    :param extern_data: templates
+    :return: the dynamic dims, except the batch dim
+    """
+    batch_dim_ = _batch_dim_of(extern_data)
+    res = []
+    for data in extern_data.data.values():
+        for dim in data.dims:
+            if dim is not batch_dim_ and dim.is_dynamic() and dim not in res:
+                res.append(dim)
+    return res
 
 
 def iter_dataset_batches(
@@ -122,33 +155,3 @@ def _to_jax(value: numpy.ndarray, *, dtype: str, device: Optional[str]):
 
         raw = jax.device_put(raw, _device_from_str(device))
     return raw
-
-
-def _static_batch_dim(template_dim: Dim, size: int) -> Dim:
-    """
-    :param template_dim: the batch dim of the template
-    :param size: the actual number of seqs in this batch
-    :return: a static dim of that size
-
-    Static rather than dynamic on purpose: under jit the batch extent is part of the shape,
-    and a batch dim that varies per step would retrigger compilation anyway.
-    """
-    return Dim(size, name=template_dim.name or "batch")
-
-
-def _dyn_dim_with_sizes(template_dim: Dim, seq_lens: numpy.ndarray, *, batch_dim: Dim, device: Optional[str]) -> Dim:
-    """
-    :param template_dim: the dynamic dim of the template
-    :param seq_lens: [batch] the per-seq lengths
-    :param batch_dim:
-    :param device:
-    :return: a dim carrying those sizes, and the padded extent as its capacity
-    """
-    sizes = Tensor(
-        f"{template_dim.name or 'time'}:seq_lens",
-        dims=[batch_dim],
-        dtype="int32",
-        raw_tensor=_to_jax(seq_lens, dtype="int32", device=device),
-    )
-    # capacity = the padded extent, which is what every shape in the step is built from
-    return Dim(sizes, name=template_dim.name or "time", capacity=int(numpy.max(seq_lens)) if len(seq_lens) else 0)

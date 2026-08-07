@@ -1188,36 +1188,33 @@ def test_dataset_batches_to_jax():
         }
     )
 
-    batches = list(iter_dataset_batches(dataset, extern_data=extern_data, batch_size=20, max_seqs=3))
-    assert batches, "no batches"
-    total_seqs, total_frames = 0, 0
-    for batch in batches:
+    # Everything is checked INSIDE the loop: the dims are the template's own and get filled in per
+    # batch (as in the PyTorch pipeline), so a batch's dims are only valid until the next one.
+    num_batches, total_seqs, total_frames = 0, 0, 0
+    seen = {}
+    for batch in iter_dataset_batches(dataset, extern_data=extern_data, batch_size=20, max_seqs=3):
         data, classes = batch.data["data"], batch.data["classes"]
         assert isinstance(data.raw_tensor, jax.Array) and isinstance(classes.raw_tensor, jax.Array)
         assert data.dtype == "float32" and classes.dtype == "int32"
         b_dim, t_dim, f_dim = data.dims
-        assert f_dim == feat_dim
+        assert b_dim is batch_dim and f_dim == feat_dim
+        assert t_dim is time_dim, "the dynamic dim must be the template's own, not a fresh one"
         assert t_dim.is_dynamic() and t_dim.capacity == data.raw_tensor.shape[1]
         lens = numpy.asarray(t_dim.dyn_size_ext.raw_tensor)
         assert lens.max() == data.raw_tensor.shape[1], f"padded extent {data.raw_tensor.shape} vs lens {lens}"
-        assert b_dim.dimension == data.raw_tensor.shape[0] == len(lens)
+        assert data.raw_tensor.shape[0] == len(lens) == int(batch_dim.dyn_size_ext.raw_tensor)
         # the padded frames must be zero, and the real ones must match the dataset
         raw = numpy.asarray(data.raw_tensor)
         for i, length in enumerate(lens):
             numpy.testing.assert_array_equal(raw[i, length:], 0.0, err_msg="padding is not zero")
+            seen[tuple(raw[i, :length].flatten().tolist())] = True
+        num_batches += 1
         total_seqs += len(lens)
         total_frames += int(lens.sum())
+    assert num_batches, "no batches"
     assert total_seqs == len(seq_lens), f"{total_seqs} seqs over all batches, expected {len(seq_lens)}"
     assert total_frames == sum(seq_lens), f"{total_frames} frames, expected {sum(seq_lens)}"
-
-    # every seq must appear exactly once, with its original content
-    seen = {}
-    for batch in batches:
-        data = batch.data["data"]
-        lens = numpy.asarray(data.dims[1].dyn_size_ext.raw_tensor)
-        raw = numpy.asarray(data.raw_tensor)
-        for i, length in enumerate(lens):
-            seen[tuple(raw[i, :length].flatten().tolist())] = True
+    # every seq appeared, with its original content
     for seq in seqs:
         assert tuple(seq["data"].flatten().tolist()) in seen, "a sequence went missing"
 
