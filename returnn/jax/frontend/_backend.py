@@ -388,7 +388,10 @@ class JaxBackend(Backend[jax.Array]):
             out_dtype = JaxBackend.get_dtype_name_raw(raw_result)
             sparse_dim = source.sparse_dim
         if correction_factor is not None:
-            raw_result = raw_result * correction_factor.copy_compatible_to_dims_raw(res_dims)
+            # cast: the factor is computed from the seq lens and can come out as float64 under x64,
+            # which would silently widen the result away from its declared dtype
+            factor = correction_factor.copy_compatible_to_dims_raw(res_dims)
+            raw_result = raw_result * factor.astype(raw_result.dtype)
         return Tensor(
             name=f"reduce_{mode}",
             raw_tensor=raw_result,
