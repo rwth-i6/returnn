@@ -70,6 +70,7 @@ def iter_dataset_batches(
     epoch: int = 1,
     data_keys: Optional[Sequence[str]] = None,
     device: Optional[str] = None,
+    with_complete_frac: bool = False,
     **batch_opts,
 ) -> Iterator[TensorDict]:
     """
@@ -82,6 +83,9 @@ def iter_dataset_batches(
     :param epoch: passed to init_seq_order, so the dataset's seq_ordering (laplace, random, ...) applies
     :param data_keys: which entries to read, default all of extern_data
     :param device:
+    :param with_complete_frac: yield ``(batch, complete_frac)`` instead of just the batch,
+        where complete_frac is how much of the epoch is done after this batch,
+        or None when the dataset cannot say it accurately enough (it feeds the LR schedule)
     :param batch_opts: further options for Dataset.generate_batches (max_seq_length, seq_drop, ...)
     :return: one TensorDict per batch
     """
@@ -94,7 +98,11 @@ def iter_dataset_batches(
     while batches.has_more():
         (batch,) = batches.peek_next_n(1)
         raw = batch_to_raw_dict(batch, dataset=dataset, extern_data=extern_data, data_keys=data_keys)
-        yield raw_dict_to_extern_data(extern_data, raw, device=device)
+        out = raw_dict_to_extern_data(extern_data, raw, device=device)
+        if with_complete_frac:
+            yield out, dataset.get_complete_frac(batch.end_seq - 1, allow_only_lr_suitable=True)
+        else:
+            yield out
         batches.advance(1)
 
 

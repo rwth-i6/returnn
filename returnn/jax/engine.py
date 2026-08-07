@@ -85,6 +85,11 @@ class Engine(EngineBase):
         config = self.config
         self.train_dataset = train_data
         self.eval_datasets = {name: ds for name, ds in [("dev", dev_data), ("eval", eval_data)] if ds is not None}
+        if config.has("eval_datasets"):
+            from returnn.datasets import init_dataset
+
+            for name, dataset_opts in config.typed_value("eval_datasets", {}).items():
+                self.eval_datasets[name] = init_dataset(dataset_opts, default_kwargs={"name": name})
         self.learning_rate_control = _load_learning_rate_control(config)
 
         from returnn.torch.data.extern_data import extern_data_template_from_config_opts
@@ -186,6 +191,8 @@ class Engine(EngineBase):
         self._save_model()
         self.eval_model()
         self.learning_rate_control.save()
+        if self.config.bool_or_other("cleanup_old_models", None):
+            self.cleanup_old_models()
 
     def eval_model(self):
         """
@@ -214,8 +221,10 @@ class Engine(EngineBase):
     def _iter_batches(self, dataset: Dataset, *, train: bool):
         """
         :param dataset:
-        :param train: whether this is the train dataset (affects only the batch options read from the config)
-        :return: iterator over batches as TensorDicts of JAX arrays
+        :param train: whether this is the train dataset. Affects the batch options read from the config,
+            and only the train iterator carries the complete-frac the LR schedule needs.
+        :return: iterator over batches as TensorDicts of JAX arrays,
+            or over ``(batch, complete_frac)`` when train
         """
         batch_size = (
             self._batch_opts["batch_size"]
@@ -229,6 +238,7 @@ class Engine(EngineBase):
             max_seqs=self._batch_opts["max_seqs"],
             epoch=self.epoch,
             device=self._device,
+            with_complete_frac=train,
             **{k: v for k, v in self._batch_opts.items() if k not in ("batch_size", "eval_batch_size", "max_seqs")},
         )
 
@@ -245,6 +255,7 @@ class Engine(EngineBase):
         model = get_model_func(epoch=epoch, step=step, **sentinel_kw)
         assert isinstance(model, rf.Module), f"get_model returned {model!r}, expected an rf.Module"
         self.model = model
+        self._param_names = [name for name, _ in model.named_parameters()]
         self._params = [param for _, param in model.named_parameters()]
         self._train_param_idx = [i for i, param in enumerate(self._params) if param.trainable is not False]
         num_params = sum(int(numpy.prod(p.batch_shape)) for p in self._params)
@@ -295,6 +306,24 @@ class Engine(EngineBase):
         # keeps the moments instead of restarting the optimizer.
         _checkpoint.save_opt_state(self._opt_state, filename + ".opt" + util.get_model_filename_postfix())
 
+    @staticmethod
+    def delete_model(filename: str) -> int:
+        """
+        :param filename: without the postfix
+        :return: accumulated file size in bytes of the deleted files
+
+        Used by :func:`EngineBase.cleanup_old_models`. A JAX checkpoint is the ``.npz``
+        plus the optimizer state next to it.
+        """
+        postfix = util.get_model_filename_postfix()
+        count_bytes = 0
+        for fname in (filename + postfix, filename + ".opt" + postfix):
+            if os.path.exists(fname):
+                count_bytes += os.stat(fname).st_size
+                os.remove(fname)
+        assert count_bytes > 0, f"delete_model: nothing to delete for {filename!r}"
+        return count_bytes
+
     def _load_model(self, *, filename: str):
         """
         :param filename: without the ``.npz`` postfix, as :func:`EngineBase.get_epoch_model` returns it
@@ -342,7 +371,6 @@ _UnsupportedConfigOpts = {
     "default_float_dtype": None,
     "epoch_end": None,
     "epoch_start": None,
-    "eval_datasets": None,  # dev and eval are supported, further ones are not
     "forward_step": None,  # forward / search
     "model_outputs": None,  # forward / search
     "forward_auto_split_batch_on_oom": False,
@@ -355,6 +383,9 @@ _UnsupportedConfigOpts = {
     "reset_dev_memory_caches": False,
     "save_interval": 1,
     "sort_dataset": None,
+    # no graceful stop before the job's time limit; a run that hits it loses the running (sub)epoch
+    "stop_for_resubmission_when_low_time_left": False,
+    "stop_for_resubmission_safety_factor": None,
     "stop_on_nonfinite_train_score": None,
     "tensorboard_opts": None,
     "use_tensorboard": False,
