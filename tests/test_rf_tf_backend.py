@@ -9,7 +9,7 @@ The same comparison runs for all the other ``test_rf_*`` tests with ``RETURNN_TE
 """
 
 from __future__ import annotations
-from typing import Tuple
+from typing import Dict, Tuple
 import _setup_test_env  # noqa
 import shutil
 import tempfile
@@ -485,6 +485,79 @@ def test_engine_train():
         batch_dim.dyn_size_ext = prev_batch_dyn_size_ext
         rf.select_backend_torch()
         shutil.rmtree(model_dir, ignore_errors=True)
+
+
+def test_full_model_torch_checkpoint_parity():
+    # Item 9: take the target model's parameters from a real PyTorch checkpoint file
+    # (as the PT engine writes it), load them into the TF model by RF parameter name,
+    # and check that the outputs agree. This is the decisive correctness test:
+    # unlike the other comparisons it does not rely on both sides drawing the same random init.
+    import torch
+    import returnn.tf.compat as tf_compat
+    from returnn.tensor.utils import tensor_dict_fill_random_numpy_
+    from returnn.torch.data.tensor_utils import tensor_dict_numpy_to_torch_
+    from returnn.tf.frontend_low_level import TFBackend
+    from returnn.tf.checkpoint_rf import load_torch_checkpoint_into_model, get_model_params
+
+    # noinspection PyProtectedMember
+    from returnn.frontend import _backend
+
+    extern_data, get_model, forward_step, dims = _full_model_setup()
+    extern_data.reset_content()
+    tensor_dict_fill_random_numpy_(
+        extern_data,
+        dyn_dim_max_sizes={dims["time_dim"]: 32, dims["target_time_dim"]: 4},
+        dyn_dim_min_sizes={dims["time_dim"]: 24, dims["target_time_dim"]: 2},
+    )
+    extern_data_raw = extern_data.as_raw_tensor_dict(expected_value_type=numpy.ndarray)
+    ckpt_dir = tempfile.mkdtemp(prefix="returnn-test-rf-tf-parity-")
+    ckpt_file = ckpt_dir + "/model.pt"
+
+    def _outputs() -> Dict[str, numpy.ndarray]:
+        rf.init_forward_step_run_ctx(epoch=1, step=0)
+        forward_step(model=model, extern_data=extern_data)
+        return rf.get_run_ctx().outputs
+
+    try:
+        # PT: build the model, write a checkpoint the way the PT engine does, and run it
+        rf.select_backend_torch()
+        rf.set_random_seed(42)
+        extern_data.assign_from_raw_tensor_dict_(extern_data_raw)
+        tensor_dict_numpy_to_torch_(extern_data)
+        model = get_model(epoch=1, step=0)
+        torch.save(
+            {"model": {name: p.raw_tensor for name, p in model.named_parameters()}, "epoch": 1, "step": 0}, ckpt_file
+        )
+        out_pt = {key: value.raw_tensor.detach().numpy() for key, value in _outputs().data.items()}
+
+        # TF: fresh model with a DIFFERENT init, then the PT parameters loaded into it by name
+        extern_data.reset_content()
+        _backend.select_backend_tf()
+        with tf_compat.v1.Graph().as_default(), tf_compat.v1.Session().as_default() as session:
+            rf.set_random_seed(1234)
+            extern_data.assign_from_raw_tensor_dict_(extern_data_raw)
+            _tensor_dict_numpy_to_tf(extern_data)
+            with TFBackend.deferred_parameter_creation():
+                model = get_model(epoch=1, step=0)
+            TFBackend.create_parameters(model)
+            outputs_tf = _outputs()
+            session.run(tf_compat.v1.global_variables_initializer())
+            before = get_model_params(model, session)
+            load_torch_checkpoint_into_model(model, session, ckpt_file)
+            after = get_model_params(model, session)
+            out_tf = session.run({key: value.raw_tensor for key, value in outputs_tf.data.items()})
+    finally:
+        extern_data.reset_content()
+        extern_data.assign_from_raw_tensor_dict_(extern_data_raw)
+        rf.select_backend_torch()
+        shutil.rmtree(ckpt_dir, ignore_errors=True)
+
+    # the load really changed the parameters (otherwise the comparison below would prove nothing)
+    assert any(not numpy.allclose(before[name], after[name]) for name in before), "checkpoint load was a no-op"
+    assert set(out_pt) == set(out_tf)
+    for key in sorted(out_pt):
+        print(f"comparing {key!r} {out_pt[key].shape}")
+        numpy.testing.assert_allclose(out_tf[key], out_pt[key], rtol=1e-4, atol=1e-5, err_msg=f"{key} differs")
 
 
 def _full_model_setup():
