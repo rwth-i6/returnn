@@ -18,6 +18,7 @@ from .module import *
 from .state import *
 
 # Now the rest, in alphabetical order.
+from .amp import *
 from .array_ import *
 from .assert_ import *
 from .attention import *
