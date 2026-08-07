@@ -95,6 +95,7 @@ class Engine(EngineBase):
         self._train_step_func = config.typed_value("train_step")
         assert self._train_step_func, "train_step not defined in config"
 
+        _check_config_opts_supported(config)
         self.model_filename = config.value("model", None)
         self.epoch = self.get_train_start_epoch(config)
         if self.global_train_step is None:
@@ -333,6 +334,102 @@ class Engine(EngineBase):
         """
         self._saver.restore(self.session, filename)
         print(f"Loaded model {filename}", file=log.v3)
+
+
+_UnsupportedConfigOpts = {
+    "accum_grad_multiple_step": 1,
+    "apply_cleanup_old_models_to_optim_states": False,
+    "calculate_exp_loss": False,
+    "chunking": None,
+    "min_chunk_size": None,
+    "cleanup_old_models": None,
+    "debug_shell_before_train_loop": False,
+    "default_float_dtype": None,
+    "epoch_end": None,
+    "epoch_start": None,
+    "eval_datasets": None,  # this engine takes dev/eval datasets via init_train_from_config
+    "forward_step": None,  # forward / search
+    "model_outputs": None,  # forward / search
+    "forward_auto_split_batch_on_oom": False,
+    "grad_scaler": None,
+    "load_model_post_hooks": None,
+    "log_batch_size": False,
+    "log_grad_norm": False,
+    "online_shuffle_batches": None,
+    "preload_from_files": None,
+    "pretrain": None,
+    "reset_dev_memory_caches": False,
+    "save_interval": 1,
+    "sort_dataset": None,
+    # no graceful stop before the job's time limit; a run that hits it loses the running (sub)epoch
+    "stop_for_resubmission_when_low_time_left": False,
+    "stop_for_resubmission_safety_factor": None,
+    "stop_on_nonfinite_train_score": None,
+    "tensorboard_opts": None,
+    "use_tensorboard": False,
+    "use_train_proc_manager": False,
+    # backend-specific options are named after the backend, as `torch_...` is on PyTorch
+    "tf_distributed": None,
+    "tf_amp": None,
+    "tf_jit": None,  # the XLA-compiled step
+    "tf_log_memory_usage": False,
+    "tf_profile": None,
+}
+
+# PyTorch-specific options, with the TF name they correspond to (None: no equivalent).
+# A config copied from a PyTorch setup carries these, and ignoring them silently
+# -- `torch_amp` above all -- is exactly what this check exists to prevent.
+_TorchOnlyConfigOpts = {
+    "torch_amp": "tf_amp",  # the baseline trains in bf16; this engine would run fp32
+    "torch_cuda_graph": "tf_jit",
+    "torch_dataloader_opts": None,  # this engine uses the shared batching, which has no worker pool
+    "torch_distributed": "tf_distributed",
+    "torch_log_memory_usage": "tf_log_memory_usage",
+    "torch_profile": "tf_profile",
+}
+
+
+def _check_config_opts_supported(config: Config):
+    """
+    :param config:
+    :raise NotImplementedError: if the config sets an option this engine would ignore
+
+    Same check as the JAX engine's (`returnn/jax/engine.py`), for the same reason:
+    a config written for another backend carries options which this engine does not read,
+    and silently ignoring them changes what the config means.
+    """
+
+    def _value_if_set(key: str, noop_value: Any = None) -> Optional[Any]:
+        """:return: the configured value, or None if unset or at its no-op value"""
+        if not config.has(key):
+            return None
+        value = config.typed_value(key, None)
+        if value is None:  # not in the typed dict, e.g. an old-style config file
+            value = config.value(key, None)
+        if value is None or value is False or value in ((), [], {}, ""):
+            return None
+        if value == noop_value or value == str(noop_value):
+            return None
+        return value
+
+    unsupported = []
+    for key, noop_value in sorted(_UnsupportedConfigOpts.items()):
+        value = _value_if_set(key, noop_value)
+        if value is not None:
+            unsupported.append(f"{key} = {value!r}")
+    for key, tf_name in sorted(_TorchOnlyConfigOpts.items()):
+        value = _value_if_set(key)
+        if value is not None:
+            unsupported.append(
+                f"{key} = {value!r} is PyTorch specific"
+                + (f", the TF engine reads {tf_name} (not implemented either)" if tf_name else "")
+            )
+    if unsupported:
+        raise NotImplementedError(
+            "TF engine: the config sets options which this engine does not implement:\n  "
+            + "\n  ".join(unsupported)
+            + "\nThey would otherwise be ignored silently, which would change what the config means."
+        )
 
 
 def _batch_opts_from_config(config: Config) -> Dict[str, Any]:
