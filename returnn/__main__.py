@@ -462,6 +462,12 @@ def init_backend_engine(*, config_opts: Optional[Dict[str, Any]] = None):
             except ImportError as exc:
                 print("Warning: could not import lovely_tensors:", exc, file=log.v3)
 
+    elif BackendEngine.is_jax_selected():
+        import jax
+
+        print("JAX:", jax.__version__, file=log.v3)
+        print("JAX devices:", jax.devices(), file=log.v2)
+
     else:
         raise NotImplementedError(f"Backend engine {BackendEngine.get_selected_engine()} not implemented")
 
