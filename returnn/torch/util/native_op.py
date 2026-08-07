@@ -646,8 +646,11 @@ def get_ctc_fsa_fast_bw(
     """
     assert targets.ndim == 2
     cached = _ctc_fsa_cache_get(targets, seq_lens, blank_idx, label_loop, edges_bound)
-    if cached is not None:
+    if cached is not None and not _is_tracing_tensor(targets):
         return cached
+    # Under tracing the cache is bypassed on purpose: a cached FSA would be baked into the
+    # graph as a constant, so every replay would score against the FIRST step's targets.
+    # (Within one traced step the aux heads then rebuild it; the construction op is cheap.)
     targets_arg, seq_lens_arg = targets, seq_lens
     targets = targets.to(torch.int32)
     n_batch, n_time = targets.shape
@@ -703,6 +706,21 @@ _CtcFsaCacheEntry = Tuple[torch.Tensor, torch.Tensor, int, bool, Optional[int], 
 _ctc_fsa_cache: Optional[_CtcFsaCacheEntry] = None
 
 
+def _is_tracing_tensor(x: torch.Tensor) -> bool:
+    """
+    :param x:
+    :return: whether this is a trace-time tensor (fake/meta), i.e. one WITHOUT storage
+    """
+    # noinspection PyProtectedMember
+    from torch._subclasses.fake_tensor import FakeTensor
+
+    return (
+        isinstance(x, FakeTensor)
+        or x.device.type == "meta"
+        or torch._C._get_dispatch_mode(torch._C._TorchDispatchModeKey.FAKE) is not None
+    )
+
+
 def _ctc_fsa_cache_get(
     targets: torch.Tensor, seq_lens: torch.Tensor, blank_idx: int, label_loop: bool, edges_bound: Optional[int]
 ) -> Optional[_CtcFsa]:
@@ -710,6 +728,12 @@ def _ctc_fsa_cache_get(
     if _ctc_fsa_cache is None:
         return None
     t, sl, bi, ll, eb, t_ver, sl_ver, res = _ctc_fsa_cache
+    # NEVER hand an FSA across the trace/runtime boundary:
+    # a trace-time (fake) FSA reaching the compiled program makes the fast-BW op dispatch to its
+    # Meta kernel -> storage-less outputs -> illegal memory access in the next kernel;
+    # a real FSA captured into a trace would bake the FIRST step's targets into every replay.
+    if _is_tracing_tensor(res[0]) != _is_tracing_tensor(targets):
+        return None
     if t is targets and sl is seq_lens and bi == blank_idx and ll == label_loop and eb == edges_bound:
         # noinspection PyProtectedMember
         if t_ver == targets._version and sl_ver == seq_lens._version:
