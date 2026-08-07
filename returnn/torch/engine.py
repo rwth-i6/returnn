@@ -271,6 +271,9 @@ class Engine(EngineBase):
                     )
                 ),
                 post_step=lambda: self._updater.step(grad_scaler=None),
+                # only for opts "dummy_warmup": to reset the state the dummy steps create
+                get_optimizer=lambda: self._updater.get_optimizer(),
+                get_buffers=lambda: list(self._pt_model.buffers()),
                 rf_params=(list(self._orig_model.parameters()) if isinstance(self._orig_model, rf.Module) else None),
             )
             if self._graph_capture.captures_optimizer:

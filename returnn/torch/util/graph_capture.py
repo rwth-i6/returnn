@@ -403,6 +403,8 @@ class GraphCapturedTrainStep:
         params: List[torch.nn.Parameter],
         run_step: Callable[..., None],
         post_step: Optional[Callable[[], None]] = None,
+        get_optimizer: Optional[Callable[[], torch.optim.Optimizer]] = None,
+        get_buffers: Optional[Callable[[], List[torch.Tensor]]] = None,
         rf_params: Optional[List[rf.Parameter]] = None,
     ):
         """
@@ -428,6 +430,26 @@ class GraphCapturedTrainStep:
         # can be far larger and the activations scale with it
         self.packed_total_bound: Dict[str, int] = dict(opts.get("packed_total_bound", {}))
         self.warmup_steps = int(opts.get("warmup_steps", 2))
+        # Run the eager warmup steps on a minimal dummy batch instead of the real one
+        # (params + optimizer state are restored afterwards, so the model never sees them).
+        # The warmup peaks far above the captured step (eager, no buffer-reuse planning),
+        # and that peak, not the steady state, is what the job's GPU must fit.
+        # Value: True = seq len 1 for every key. Deliberately extreme, NOT a tuned default:
+        # the warmup exists for its SIDE EFFECTS (lazy allocs -- optimizer moments,
+        # cuDNN/cuFFT plans -- must happen here, not inside the capture), so a front-end that
+        # cannot take a length-1 seq (e.g. an stft/conv chain: empty-input branch, negative
+        # "valid" out length) must fail LOUDLY here rather than silently warm up a branch the
+        # traced graph never takes. Then set an int (frames per seq, all keys) or a per-key
+        # dict, just above what the front-end needs (e.g. one stft window of audio).
+        dummy_warmup_opt = opts.get("dummy_warmup", False)
+        self.dummy_warmup = bool(dummy_warmup_opt)
+        self._dummy_warmup_seq_len: Union[int, Dict[str, int]] = (
+            1 if isinstance(dummy_warmup_opt, bool) else dummy_warmup_opt
+        )
+        self._get_optimizer = get_optimizer
+        self._get_buffers = get_buffers
+        self._pre_dummy_warmup_params: Optional[List[torch.Tensor]] = None
+        self._pre_dummy_warmup_buffers: Optional[List[torch.Tensor]] = None
         self._device = torch.device(device)
         self._float_dtype = float_dtype
         self._extern_data_template = extern_data_template
@@ -758,6 +780,90 @@ class GraphCapturedTrainStep:
         if self._post_step is not None:
             self._post_step()  # in-graph: grad clip + optimizer step
         return ctx
+
+    def _make_dummy_extern_data_raw(
+        self, extern_data_raw: Dict[str, Union[torch.Tensor, numpy.ndarray]]
+    ) -> Dict[str, Union[torch.Tensor, numpy.ndarray]]:
+        """
+        :param extern_data_raw: a real batch, as template for keys/dtypes/devices
+        :return: the same keys, but a single minimal seq -- for the dummy warmup (see the call site)
+        """
+
+        def _dummy_len(key: str) -> int:
+            n = self._dummy_warmup_seq_len
+            if isinstance(n, dict):
+                assert key in n, f"dummy_warmup: no seq len for data key {key!r} in {n}"
+                n = n[key]
+            assert isinstance(n, int) and n >= 1, f"dummy_warmup: invalid seq len {n!r} for data key {key!r}"
+            return n
+
+        res = {}
+        seq_lens = {}
+        for k, v in extern_data_raw.items():
+            if k.endswith(":seq_len"):
+                v = v[:1] * 0 + _dummy_len(k[: -len(":seq_len")])
+                seq_lens[k[: -len(":seq_len")]] = v
+            res[k] = v
+        for k, v in extern_data_raw.items():
+            if k.endswith(":seq_len") or not isinstance(v, torch.Tensor):
+                continue
+            if k in seq_lens:  # data with a seq dim: one seq of the configured dummy len
+                if k in self._packed_opts:  # packed collate: flat [total, ...]
+                    shape = (_dummy_len(k),) + tuple(v.shape[1:])
+                else:
+                    shape = (1, _dummy_len(k)) + tuple(v.shape[2:])
+                res[k] = torch.zeros(shape, dtype=v.dtype, device=v.device)
+            elif v.ndim >= 1 and v.shape[0] == self._last_batch_n_seqs(extern_data_raw):
+                res[k] = v[:1]
+        if "num_seqs" in res:
+            res["num_seqs"] = (
+                type(res["num_seqs"])(1)
+                if not isinstance(res["num_seqs"], torch.Tensor)
+                else torch.ones_like(res["num_seqs"])
+            )
+        return res
+
+    @staticmethod
+    def _last_batch_n_seqs(extern_data_raw: Dict[str, Union[torch.Tensor, numpy.ndarray]]) -> int:
+        for k, v in extern_data_raw.items():
+            if k.endswith(":seq_len") and hasattr(v, "shape"):
+                return int(v.shape[0])
+        return 1
+
+    def _restore_after_dummy_warmup(self):
+        """
+        Undo the dummy warmup steps: restore the module buffers (and, for optimizers whose
+        update is not provably lr-multiplicative, the parameters -- see the dispatch site:
+        for SGD/Adam/AdamW the dummy steps ran with lr 0, so the params never moved and no
+        snapshot was taken), and zero the optimizer state, so only the EXISTENCE of the
+        lazily created state (e.g. AdamW moments) is kept, not its dummy-batch values.
+
+        Buffers need explicit restore in EVERY mode: running statistics (batch norm and
+        friends) are updated in the forward pass, not by the optimizer, so neither
+        restoring params nor a zero learning rate protects them.
+        """
+        with torch.no_grad():
+            if self._pre_dummy_warmup_params is not None:
+                for p, p_orig in zip(self._params, self._pre_dummy_warmup_params):
+                    p.copy_(p_orig)
+            for p in self._params:
+                if p.grad is not None:
+                    p.grad.zero_()
+            if self._pre_dummy_warmup_buffers is not None:
+                for b, b_orig in zip(self._get_buffers(), self._pre_dummy_warmup_buffers):
+                    b.copy_(b_orig)
+        self._pre_dummy_warmup_params = None
+        self._pre_dummy_warmup_buffers = None
+        opt = self._get_optimizer() if self._get_optimizer is not None else None
+        if opt is not None:
+            for state in opt.state.values():
+                for v in state.values():
+                    if isinstance(v, torch.Tensor) and v.is_floating_point():
+                        v.zero_()
+                    elif isinstance(v, torch.Tensor):  # step counters
+                        v.zero_()
+        torch.cuda.synchronize()
+        torch.cuda.empty_cache()
 
     def _warmup_step_dynamic(
         self, extern_data_raw: Dict[str, Union[torch.Tensor, numpy.ndarray]], *, global_train_step: int
@@ -1275,9 +1381,34 @@ class GraphCapturedTrainStep:
             self._write_memory_snapshot()
             raise
         self._graph = graph
+        self._log_graph_pool_size(graph)
         # capture only RECORDS the kernels; replay now to actually compute this batch
         graph.replay()
         return self._ctx
+
+    @staticmethod
+    def _log_graph_pool_size(graph: torch.cuda.CUDAGraph) -> None:
+        """
+        One-time report of the graph's PRIVATE memory pool: its blocks are freed as tensors
+        after capture (they leave max_memory_allocated) but stay reserved for replay, so the
+        allocated stat alone under-reports the resident footprint by the whole pool
+        (measured loq base: 9GB allocated vs ~46GB resident).
+        Also registers the size for the engine's per-step memory log (allocated + pool).
+        """
+        pool_id = graph.pool()
+        segs = torch.cuda.memory_snapshot()
+        # segment_pool_id absent (older torch) -> .get() None never matches -> tot 0, no report
+        tot = sum(s.get("total_size", 0) for s in segs if s.get("segment_pool_id") == pool_id)
+        live = sum(s.get("allocated_size", 0) for s in segs if s.get("segment_pool_id") == pool_id)
+        global _graph_pools_reserved
+        _graph_pools_reserved = tot
+        if tot:
+            print(
+                f"torch_cuda_graph: private pool {tot / 2**30:.2f} GiB reserved"
+                f" ({live / 2**30:.2f} GiB live outputs/buffers)"
+                f" -- the pool is INVISIBLE in (max_)memory_allocated",
+                flush=True,
+            )
 
     def _check_finite_dump_inputs(self, outs: tuple) -> None:
         """see the debug_nan_dump_inputs option; syncs every step, debug only"""
