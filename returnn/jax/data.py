@@ -39,13 +39,15 @@ def raw_dict_to_extern_data(
     """
     batch_dim_value = int(raw["batch_dim"])
     batch_dim_ = _batch_dim_of(extern_data)
+    # Reset FIRST, and the batch dim with them: reset_eager also drops Dim's cached size max,
+    # which otherwise keeps reporting the first batch's value for every later batch.
+    for dim in _dyn_dims_of(extern_data):
+        dim.reset_eager()
     if batch_dim_.size is None:
         if batch_dim_.dyn_size_ext is None:
             batch_dim_.dyn_size_ext = Tensor(batch_dim_.name or "batch", dims=[], dtype="int32")
         # scalar: deliberately NOT device-committed, see _to_jax
         batch_dim_.dyn_size_ext.raw_tensor = jnp.asarray(batch_dim_value, dtype=jnp.int32)
-    for dim in _dyn_dims_of(extern_data):
-        dim.reset_eager()  # filled in below, for this batch
     out = TensorDict()
     for key, template in extern_data.data.items():
         if key not in raw:
@@ -83,13 +85,13 @@ def _batch_dim_of(extern_data: TensorDict) -> Dim:
 def _dyn_dims_of(extern_data: TensorDict) -> List[Dim]:
     """
     :param extern_data: templates
-    :return: the dynamic dims, except the batch dim
+    :return: the dynamic dims, the batch dim included -- it varies per batch just as much,
+        and its cached size max has to be dropped with the others
     """
-    batch_dim_ = _batch_dim_of(extern_data)
     res = []
     for data in extern_data.data.values():
         for dim in data.dims:
-            if dim is not batch_dim_ and dim.is_dynamic() and dim not in res:
+            if dim.is_dynamic() and not any(dim is d for d in res):
                 res.append(dim)
     return res
 

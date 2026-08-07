@@ -1251,12 +1251,22 @@ def test_dataset_batches_to_jax():
         num_batches += 1
         total_seqs += len(lens)
         total_frames += int(lens.sum())
-    assert num_batches, "no batches"
+    assert num_batches > 1, f"{num_batches} batches, need several with DIFFERENT sizes for the check below"
     assert total_seqs == len(seq_lens), f"{total_seqs} seqs over all batches, expected {len(seq_lens)}"
     assert total_frames == sum(seq_lens), f"{total_frames} frames, expected {sum(seq_lens)}"
     # every seq appeared, with its original content
     for seq in seqs:
         assert tuple(seq["data"].flatten().tolist()) in seen, "a sequence went missing"
+
+    # A second pass over a SMALLER dataset: the dims are shared and must not report the
+    # previous pass's sizes. Dim caches its size max, so filling a dim in without resetting it
+    # first leaves every later batch (e.g. the dev set after training) with a stale extent.
+    small = StaticDataset(data=seqs[:2], output_dim={"data": (n_feat, 2), "classes": (n_classes, 1)})
+    for batch in iter_dataset_batches(small, extern_data=extern_data, batch_size=20, max_seqs=3):
+        data = batch.data["data"]
+        b_dim, t_dim, _ = data.dims
+        assert b_dim.get_dim_value() == data.raw_tensor.shape[0], "stale batch dim"
+        assert t_dim.get_dim_value() == data.raw_tensor.shape[1], "stale time dim"
 
 
 _EngineTestNumFeat, _EngineTestNumClasses = 5, 4
