@@ -100,7 +100,11 @@ class Engine(EngineBase):
         if self.global_train_step is None:
             self.global_train_step = 0
         self._create_model(epoch=self.epoch, step=self.global_train_step)
-        self._updater = Updater(config=config)
+        self._updater = Updater(
+            config=config,
+            model=self.model,
+            param_names=[self._param_names[i] for i in self._train_param_idx],
+        )
         self._init_step_func()
         # Continue from an existing checkpoint if there is one (or one was configured via `load`).
         # Without this the engine would silently restart from scratch and overwrite it.
@@ -144,15 +148,22 @@ class Engine(EngineBase):
         num_steps = 0
         raws = [p.raw_tensor for p in self._params]
 
-        for extern_data in self._iter_batches(self.train_dataset, train=True):
+        for extern_data, complete_frac in self._iter_batches(self.train_dataset, train=True):
             (loss, losses), grads = self._value_and_grad(
                 [raws[i] for i in self._train_param_idx], extern_data, self.global_train_step
+            )
+            # The LR of the STEP: the epoch-level value, put through the config's schedule if it has one.
+            learning_rate = self._updater.get_effective_learning_rate(
+                learning_rate=self.learning_rate,
+                global_train_step=self.global_train_step,
+                epoch=self.epoch,
+                epoch_continuous=(self.epoch - 1 + complete_frac) if complete_frac is not None else None,
             )
             train_raws, self._opt_state = self._updater.step(
                 params=[raws[i] for i in self._train_param_idx],
                 grads=grads,
                 opt_state=self._opt_state,
-                learning_rate=self.learning_rate,
+                learning_rate=learning_rate,
             )
             for i, raw in zip(self._train_param_idx, train_raws):
                 raws[i] = raw

@@ -1306,6 +1306,86 @@ def test_engine_continue_from_checkpoint():
             numpy.testing.assert_allclose(numpy.asarray(param.raw_tensor), saved[name], rtol=0, atol=0)
 
 
+def test_engine_dynamic_learning_rate():
+    """
+    The config's ``dynamic_learning_rate`` decides the learning rate of each STEP
+    (that is where the piecewise-linear schedules of the real setups live),
+    on top of the epoch-level rate from the learning-rate control.
+    """
+    import tempfile
+    from returnn.jax.engine import Engine
+
+    calls = []
+
+    def _dyn_lr(*, global_train_step: int, epoch: int, epoch_continuous, learning_rate: float, **_kwargs):
+        """dynamic_learning_rate, as the config API defines it"""
+        calls.append((global_train_step, epoch, epoch_continuous, learning_rate))
+        return 0.0  # freezes the parameters, which is what the test checks
+
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        config, make_dataset = _simple_train_setup(tmp_dir, num_epochs=1, dynamic_learning_rate=_dyn_lr)
+        engine = Engine(config=config)
+        engine.init_train_from_config(train_data=make_dataset())
+        before = {name: numpy.asarray(p.raw_tensor) for name, p in engine.get_model().named_parameters()}
+        engine.train()
+        after = {name: numpy.asarray(p.raw_tensor) for name, p in engine.get_model().named_parameters()}
+
+    assert calls, "dynamic_learning_rate was never called"
+    steps = [c[0] for c in calls]
+    assert steps == list(range(len(calls))), f"global_train_step not consecutive from 0: {steps}"
+    assert all(c[1] == 1 for c in calls), calls  # epoch
+    for _, _, epoch_continuous, learning_rate in calls:
+        assert epoch_continuous is not None and 0.0 < epoch_continuous <= 1.0, calls
+        assert learning_rate == 0.05, calls  # the epoch-level rate the function gets to modify
+    for name, value in before.items():
+        numpy.testing.assert_allclose(after[name], value, rtol=0, atol=0, err_msg=f"{name} moved at lr 0")
+
+
+def test_updater_weight_decay_blacklist():
+    """
+    ``weight_decay_modules_blacklist`` (and the bias rule) decide which parameters decay,
+    as in the PyTorch updater. Checked through the update itself, on zero gradients,
+    where adamw's whole update IS the decay.
+    """
+    import jax.numpy as jnp
+    from returnn.jax.updater import Updater
+
+    _rf_jax()
+    in_dim, out_dim = Dim(3, name="in"), Dim(2, name="out")
+
+    class _Model(rf.Module):
+        def __init__(self):
+            super().__init__()
+            self.emb = rf.Embedding(in_dim, out_dim)
+            self.linear = rf.Linear(out_dim, out_dim)
+
+    model = _Model()
+    for _, param in model.named_parameters():
+        ones = jnp.ones(param.batch_shape, dtype=param.dtype)
+        param.assign(Tensor("v", dims=param.dims, dtype=param.dtype, raw_tensor=ones))
+    names = [name for name, _ in model.named_parameters()]
+    params = [param.raw_tensor for _, param in model.named_parameters()]
+    assert set(names) == {"emb.weight", "linear.weight", "linear.bias"}, names
+
+    updater = Updater(
+        optimizer_opts={
+            "class": "adamw",
+            "weight_decay": 0.5,
+            "weight_decay_modules_blacklist": ["rf.Embedding"],
+        },
+        model=model,
+        param_names=names,
+    )
+    new_params, _ = updater.step(
+        params=params, grads=[jnp.zeros_like(p) for p in params], opt_state=updater.init(params), learning_rate=1.0
+    )
+    got = {name: float(numpy.asarray(p).flat[0]) for name, p in zip(names, new_params)}
+    # decayed: linear.weight. not decayed: emb.weight (blacklisted module), linear.bias (a bias)
+    assert got["linear.weight"] == 0.5, got
+    assert got["emb.weight"] == 1.0, got
+    assert got["linear.bias"] == 1.0, got
+
+
 def test_engine_unsupported_config_opts():
     """
     Options which other engines implement and this one does not are rejected, not ignored.
