@@ -782,7 +782,7 @@ class ClusteringDataset(CachedDataset2):
                 continue
             if length.max_value() > batch_size:
                 print(
-                    "warning: sequence length (%i) larger than limit (%i)" % (length.max_value(), batch_size),
+                    "warning: sequence length (%i) larger than limit (%s)" % (length.max_value(), batch_size),
                     file=log.v4,
                 )
             if self.rnd_seq_drop.random() < seq_drop:

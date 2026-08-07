@@ -1003,7 +1003,7 @@ class LayerNormLayer(_ConcatInputLayer):
         else:
             axis = self.input_data.feature_dim_axis
         dim = self.input_data.batch_shape[axis]
-        assert dim is not None, "%s: in_dim %i must be static in input %s" % (self, in_dim or axis, self.input_data)
+        assert dim is not None, "%s: in_dim %s must be static in input %s" % (self, in_dim or axis, self.input_data)
         with self.var_creation_scope():
             scale = self.add_param(tf_compat.v1.get_variable("scale", [dim], initializer=tf.ones_initializer()))
             bias = self.add_param(tf_compat.v1.get_variable("bias", [dim], initializer=tf.zeros_initializer()))

@@ -442,7 +442,7 @@ def _num_inputs_outputs_from_config(config):
                 else:
                     num_inputs = num_inputs["shape"][-1]
             else:
-                raise TypeError("data key %r" % num_inputs)
+                raise TypeError("data key %r" % (num_inputs,))  # tuple-safe
     elif config.has("num_outputs"):
         num_outputs = {target: [config.int("num_outputs", 0), 1]}
     else:
