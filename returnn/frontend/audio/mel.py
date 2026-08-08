@@ -55,10 +55,18 @@ def mel_filterbank(
         filter_bank_matrix_np = _mel_filter_bank_matrix_np(
             f_min=f_min, f_max=f_max, sampling_rate=sampling_rate, fft_size=fft_length, nr_of_filters=out_dim.dimension
         )
-        filter_bank_matrix = rf.convert_to_tensor(filter_bank_matrix_np, dims=(in_dim, out_dim), _backend=backend)
+        # create DIRECTLY on the target device (no create-then-copy): the default device is
+        # not necessarily set here (e.g. under the graph-capture trace), and a CPU-created
+        # matrix becomes a lifted CPU graph input with a per-call H2D copy in the compiled
+        # program -- a sync, illegal under CUDA-graph capture (hit with warmup_steps 0)
+        filter_bank_matrix = rf.convert_to_tensor(
+            filter_bank_matrix_np, dims=(in_dim, out_dim), _backend=backend, device=x.device
+        )
         filter_bank_matrix = rf.cast(filter_bank_matrix, dtype=x.dtype)
-        filter_bank_matrix = rf.copy_to_device(filter_bank_matrix, x.device)
-        if backend.executing_eagerly():
+        if backend.executing_eagerly() and not rf.is_static_traceable():
+            # Not under static traceable: what was computed there belongs to that one step
+            # (a tracer of that trace, or a tensor in the captured graph region),
+            # so it must not be handed out to the next one.
             if len(_mel_filter_bank_matrix_cache) > 100:
                 # Very simple cache management. No LRU logic or anything like that.
                 _mel_filter_bank_matrix_cache.clear()
