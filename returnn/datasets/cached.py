@@ -232,7 +232,9 @@ class CachedDataset(Dataset):
 
         if self.cache_byte_size_limit_at_start > 0:  # If the cache is enabled.
             self._load_seqs_with_cache(start, end)
-            return self.is_cached(start, end, blocking=True)
+            # blocking wait for the cache to be filled
+            self.is_cached(start, end, blocking=True)
+            return
 
         super(CachedDataset, self).load_seqs(start, end)
 
