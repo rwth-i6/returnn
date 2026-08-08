@@ -1075,9 +1075,11 @@ class JaxBackend(Backend[jax.Array]):
         :param out_dim:
         :return: the selected elements, with ``dims`` replaced by one new dim, and that dim
 
-        Only eager: the number of selected elements is a property of the VALUES, and JAX shapes
-        cannot depend on values. Under jit this needs a declared bound
-        (as ``masked_select_bound`` gives the PyTorch graph-capture path) -- that is the packed work.
+        The number of selected elements is a property of the VALUES, and JAX shapes cannot depend
+        on values, so under tracing the output gets a STATIC size instead: the capacity of
+        ``out_dim`` if it declares one, else the full mask size, which is always valid.
+        The selected elements are packed at the front, in input order, zeros after --
+        the same contract as ``masked_select_bound`` of the PyTorch graph-capture path.
         """
         assert mask.dtype == "bool"
         assert set(mask.dims) == set(dims)
@@ -1088,20 +1090,36 @@ class JaxBackend(Backend[jax.Array]):
         mask_raw = jnp.broadcast_to(
             mask.copy_compatible_to_dims_raw(tuple(dims)), tuple(d.get_dim_value() for d in dims)
         )
-        if isinstance(mask_raw, jax.core.Tracer):
-            raise NotImplementedError(
-                "RF JaxBackend: masked_select under jit needs a bound on the number of selected elements"
-            )
-        (indices,) = jnp.nonzero(jnp.reshape(mask_raw, (-1,)))
         rest_shape = full_shape[len(dims) :]
-        out_raw = jnp.take(jnp.reshape(in_raw, (-1,) + rest_shape), indices, axis=0)
+        in_flat = jnp.reshape(in_raw, (-1,) + rest_shape)
+        mask_flat = jnp.reshape(mask_raw, (-1,))
         if not out_dim:
             out_dim = Dim(None, name="masked_select")
+        if isinstance(mask_raw, jax.core.Tracer):
+            bound = out_dim.capacity if out_dim.capacity is not None else mask_flat.shape[0]
+            pos = jnp.cumsum(mask_flat.astype(jnp.int32)) - 1  # element -> its slot
+            # masked-out elements, and selected ones beyond the bound, go to a dump slot, dropped below
+            pos = jnp.where(mask_flat, jnp.minimum(pos, bound), bound)
+            # gather-based select (out[slot] = in_flat[inv[slot]]) through the inverse permutation:
+            # every index stays 1-D, and the gradient is the scatter-add of one gather
+            inv = jnp.zeros((bound + 1,), dtype=jnp.int32).at[pos].set(jnp.arange(mask_flat.shape[0], dtype=jnp.int32))
+            out_len = jnp.sum(mask_flat.astype(jnp.int32))
+            out_raw = jnp.take(in_flat, inv[:bound], axis=0)
+            # slots past the selected count point at stale inv entries: zero them, also so that
+            # no gradient reaches the elements they happen to point at
+            slot_valid = jnp.reshape(jnp.arange(bound) < out_len, (-1,) + (1,) * len(rest_shape))
+            out_raw = jnp.where(slot_valid, out_raw, jnp.zeros((), dtype=out_raw.dtype))
+            size_raw = out_len.astype(jnp.int64)
+        else:
+            (indices,) = jnp.nonzero(mask_flat)
+            out_raw = jnp.take(in_flat, indices, axis=0)
+            bound = int(out_raw.shape[0])
+            size_raw = jnp.asarray(bound, dtype=jnp.int64)
         if out_dim.dyn_size_ext is None:
             out_dim.dyn_size_ext = Tensor("masked_select_size", dims=(), dtype="int64")
         if out_dim.dyn_size_ext.raw_tensor is None:
-            out_dim.dyn_size_ext.raw_tensor = jnp.asarray(out_raw.shape[0], dtype=jnp.int64)
-        out_dim.capacity = int(out_raw.shape[0])
+            out_dim.dyn_size_ext.raw_tensor = size_raw
+        out_dim.capacity = bound
         return (
             Tensor(
                 "masked_select",
