@@ -40,7 +40,7 @@ def init_warprnnt(verbose=False):
     """
     global _tf_mod
     if _tf_mod:
-        return
+        return _tf_mod
     assert is_checked_out(), "submodule not checked out? Run `git submodule update --init --recursive`"
 
     # References:
