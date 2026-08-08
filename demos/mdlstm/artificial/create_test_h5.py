@@ -18,8 +18,8 @@ def hdf5_strings(handle, name, data):
     :param list[str] data:
     """
     try:
-        S = max([len(d) for d in data])
-        dset = handle.create_dataset(name, (len(data),), dtype="S" + str(S))
+        s = max([len(d) for d in data])
+        dset = handle.create_dataset(name, (len(data),), dtype="S" + str(s))
         dset[...] = data
     except Exception:
         dt = h5py.special_dtype(vlen=str)
