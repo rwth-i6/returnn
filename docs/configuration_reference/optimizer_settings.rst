@@ -142,6 +142,12 @@ optimizer
     A dictionary with a ``class`` entry for the optimizer.
     Other keys are passed as parameters to the constructor of the optimizer class.
 
+    With ``class: "multi"``, multiple optimizers can be combined over disjoint parameter subsets,
+    e.g. ``torch.optim.Muon`` (which only accepts 2D parameters) for the hidden matrix weights
+    together with ``torch.optim.AdamW`` for all remaining parameters.
+    See the module docstring of :mod:`returnn.torch.optim.multi` for the config interface
+    (PyTorch backend only).
+
 relative_error_div_by_old
     If true the relative error is computed by dividing the error difference by the old error value instead of the
     current error value.
