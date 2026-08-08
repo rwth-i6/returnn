@@ -67,6 +67,13 @@ def get_wav_time_len(filename):
 
 
 def iter_bliss(filename, options, callback):
+    """
+    Iterate over the segments of a Bliss XML corpus (optionally gzipped), calling back per orth.
+
+    :param str filename:
+    :param options: command line options
+    :param callback: called with the orth of each segment
+    """
     corpus_file = open(filename, "rb")
     if filename.endswith(".gz"):
         corpus_file = gzip.GzipFile(fileobj=corpus_file)

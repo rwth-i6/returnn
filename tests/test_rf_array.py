@@ -702,8 +702,9 @@ def test_stack():
     batch_dim_ = Dim(3, name="batch")
     time_dim = Dim(5, name="time")
 
-    # noinspection PyShadowingNames,PyUnusedLocal
+    # noinspection PyShadowingNames
     def _forward_step(*, model: rf.Module, extern_data: TensorDict):
+        del model, extern_data  # fixed forward_step signature
         seq = rf.range_over_dim(time_dim)  # [T]
         out, _ = rf.stack([seq, seq, seq], out_dim=batch_dim_)  # [B,T]
         out.mark_as_default_output(shape=(batch_dim_, time_dim))
@@ -718,8 +719,9 @@ def test_unstack():
     batch_dim_ = Dim(3, name="batch")
     time_dim = Dim(5, name="time")
 
-    # noinspection PyShadowingNames,PyUnusedLocal
+    # noinspection PyShadowingNames
     def _forward_step(*, model: rf.Module, extern_data: TensorDict):
+        del model, extern_data  # fixed forward_step signature
         seq = rf.range_over_dim(time_dim)  # [T]
         stacked, out_dim = rf.stack([seq, seq, seq], out_dim=batch_dim_)  # [B,T]
         parts = rf.unstack(stacked, axis=out_dim)  # 3 x [T]
@@ -1228,8 +1230,9 @@ def test_where():
         }
     )
 
-    # noinspection PyShadowingNames,PyUnusedLocal
+    # noinspection PyShadowingNames
     def _forward_step(*, model: rf.Module, extern_data: TensorDict):
+        del model  # fixed forward_step signature
         out = rf.where(extern_data["cond"], extern_data["true"], extern_data["false"])
         out.mark_as_default_output(shape=(batch_dim, time_dim, in_dim))
 
@@ -1240,8 +1243,9 @@ def test_search_sorted():
     batch_dim_ = Dim(3, name="batch")
     time_dim = Dim(13, name="time")
 
-    # noinspection PyShadowingNames,PyUnusedLocal
+    # noinspection PyShadowingNames
     def _forward_step(*, model: rf.Module, extern_data: TensorDict):
+        del model, extern_data  # fixed forward_step signature
         sorted_seq = rf.range_over_dim(time_dim, dtype="float32")  # [T]
         index1 = rf.search_sorted(sorted_seq, rf.constant(4.5, dims=()), axis=time_dim)  # [] -> T
         assert index1.dims == () and index1.sparse_dim == time_dim and index1.dtype == "int32"
@@ -1275,8 +1279,9 @@ def test_where_int():
         }
     )
 
-    # noinspection PyShadowingNames,PyUnusedLocal
+    # noinspection PyShadowingNames
     def _forward_step(*, model: rf.Module, extern_data: TensorDict):
+        del model  # fixed forward_step signature
         out = rf.where(extern_data["cond"], extern_data["true"], 0)
         out.mark_as_default_output(shape=(batch_dim, time_dim, in_dim))
 
@@ -1292,8 +1297,9 @@ def test_copy_masked():
         }
     )
 
-    # noinspection PyShadowingNames,PyUnusedLocal
+    # noinspection PyShadowingNames
     def _forward_step(*, model: rf.Conv1d, extern_data: TensorDict):
+        del model  # fixed forward_step signature
         x = extern_data["data"]
         x = x.copy_masked(1)
         # Do some pooling to make sure the copy_masked has an effect on the output.
@@ -1312,8 +1318,9 @@ def test_cast_sparse():
         }
     )
 
-    # noinspection PyShadowingNames,PyUnusedLocal
+    # noinspection PyShadowingNames
     def _forward_step(*, model: rf.Conv1d, extern_data: TensorDict):
+        del model  # fixed forward_step signature
         x = rf.reduce_argmax(extern_data["data"], axis=in_dim)
         assert x.sparse_dim == in_dim
         x.mark_as_output("argmax", shape=[batch_dim, time_dim])
@@ -1332,7 +1339,7 @@ def test_repeat():
         }
     )
 
-    # noinspection PyShadowingNames,PyUnusedLocal
+    # noinspection PyShadowingNames
     def _forward_step(*, extern_data: TensorDict, **_other):
         x = extern_data["data"]
         repeats = rf.abs(extern_data["repeats"]) % 4
@@ -1351,7 +1358,7 @@ def test_repeat():
         }
     )
 
-    # noinspection PyShadowingNames,PyUnusedLocal
+    # noinspection PyShadowingNames
     def _forward_step(*, extern_data: TensorDict, **_other):
         x = extern_data["data"]
         repeats = rf.abs(extern_data["repeats"]) % 4
@@ -1401,8 +1408,9 @@ def test_replace_dim_v2_bool():
     time_dim = Dim(Tensor("time", [batch_dim], dtype="int32"))
     extern_data = TensorDict({"cond": Tensor("cond", [batch_dim, time_dim], dtype="bool")})
 
-    # noinspection PyShadowingNames,PyUnusedLocal
+    # noinspection PyShadowingNames
     def _forward_step(*, model: rf.Module, extern_data: TensorDict):
+        del model  # fixed forward_step signature
         cond = extern_data["cond"]
         time_dim_ext = time_dim + 1
         cond_ext = rf.replace_dim_v2(cond, in_dim=time_dim, out_dim=time_dim_ext)

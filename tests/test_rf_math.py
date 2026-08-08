@@ -41,8 +41,9 @@ def test_compare_bc():
     in_dim = Dim(7, name="in")
     extern_data = TensorDict({"idx": Tensor("idx", [batch_dim, beam_dim], dtype="int32", sparse_dim=in_dim)})
 
-    # noinspection PyShadowingNames,PyUnusedLocal
+    # noinspection PyShadowingNames
     def _forward_step(*, model: rf.Module, extern_data: TensorDict):
+        del model  # fixed forward_step signature
         idx = extern_data["idx"]
         cond = rf.compare_bc(idx, "!=", rf.range_over_dim(in_dim))
         cond.mark_as_default_output(shape=(batch_dim, beam_dim, in_dim))
@@ -60,8 +61,9 @@ def test_logical_or():
         }
     )
 
-    # noinspection PyShadowingNames,PyUnusedLocal
+    # noinspection PyShadowingNames
     def _forward_step(*, model: rf.Module, extern_data: TensorDict):
+        del model  # fixed forward_step signature
         a, b = extern_data["a"], extern_data["b"]
         cond = a | b
         cond.mark_as_default_output(shape=(batch_dim, beam_dim, in_dim))

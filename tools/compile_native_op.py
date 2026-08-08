@@ -2,7 +2,7 @@
 
 """
 This explicitly compiles some of the native ops, and will tell you the so-filenames.
-Normally all native ops (e.g. NativeLstm2 etc) are compiled on-the-fly within RETURNN.
+Normally all native ops (e.g. NativeLstm2 etc.) are compiled on-the-fly within RETURNN.
 When you export the computation graph (e.g. via ``compile_tf_graph.py``),
 you explicitly must load these native ops.
 """
