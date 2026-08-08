@@ -382,7 +382,17 @@ class Engine(EngineBase):
         self._forward = _forward
         # Only the epoch is static (config code may branch on it, and a recompile per epoch is nothing).
         # The step number is not: it changes every step, and baking it in would recompile every step.
-        self._train_step = jax.jit(_train_step, static_argnums=(7,)) if self._jit_opts is not None else _train_step
+        # Donated: the parameters and the optimizer state. XLA then writes the new values into
+        # those buffers instead of allocating a second set, which is what keeps the peak at one copy
+        # of each. Donated buffers are DELETED on return, so the caller must hold exactly one
+        # reference to each (the engine does: the rf.Parameter, reassigned right after the step).
+        # Not donated: the batch, since no output aliases it, and the RNG key, which is two uint32s
+        # -- nothing to save, and it is the one argument a caller may reasonably want to reuse.
+        self._train_step = (
+            jax.jit(_train_step, static_argnums=(7,), donate_argnums=(0, 1, 3))
+            if self._jit_opts is not None
+            else _train_step
+        )
         self._opt_state = self._updater.init([self._params[i].raw_tensor for i in self._train_param_idx])
 
     def _save_model(self):

@@ -1442,6 +1442,40 @@ def test_engine_train_jit(time_multiple: int):
         numpy.testing.assert_allclose(jit_params[name], value, rtol=1e-4, atol=1e-6, err_msg=name)
 
 
+def test_engine_jit_donates_buffers():
+    """
+    The compiled step donates the parameters, the optimizer state and the RNG key -- the arguments
+    it returns a new version of. XLA then writes the new values into those buffers instead of
+    allocating a second set, which is what keeps the peak at one copy of each.
+
+    Donation DELETES the input buffers, so this also checks the engine's side of that contract:
+    it must hold exactly one reference to each and replace it right after the step.
+    """
+    import tempfile
+    import jax
+    from returnn.jax.engine import Engine
+
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        config, make_dataset = _simple_train_setup(tmp_dir, jax_jit=True, num_epochs=1)
+        engine = Engine(config=config)
+        engine.init_train_from_config(train_data=make_dataset(), dev_data=make_dataset())
+        # noinspection PyProtectedMember
+        params_before = [engine._params[i].raw_tensor for i in engine._train_param_idx]
+        # noinspection PyProtectedMember
+        opt_state_before = [
+            leaf for leaf in jax.tree_util.tree_leaves(engine._opt_state) if hasattr(leaf, "is_deleted")
+        ]
+        assert params_before and opt_state_before
+        engine.train()
+
+        assert all(raw.is_deleted() for raw in params_before), "the parameter buffers were not donated"
+        assert all(leaf.is_deleted() for leaf in opt_state_before), "the optimizer state was not donated"
+        # and what the engine holds now is live, and is what training produced
+        for name, param in engine.model.named_parameters():
+            assert not param.raw_tensor.is_deleted(), name
+            assert numpy.all(numpy.isfinite(numpy.asarray(param.raw_tensor))), name
+
+
 def test_engine_jit_rng_advances():
     """
     The RNG stream goes through the compiled step as a value, in and out.
@@ -1457,26 +1491,43 @@ def test_engine_jit_rng_advances():
 
     with tempfile.TemporaryDirectory() as tmp_dir:
         config, make_dataset = _simple_train_setup(tmp_dir, dropout=0.5, jax_jit=True)
-        engine = Engine(config=config)
-        engine.init_train_from_config(train_data=make_dataset(), dev_data=make_dataset())
-        # noinspection PyProtectedMember
-        batch_raws, _ = next(iter(engine._iter_batches(make_dataset(), train=True)))
-        # string data cannot be an argument of a compiled function, so the step does not get it
-        assert "seq_tag" in batch_raws and "seq_tag" not in engine._step_raws(batch_raws)
+
+        def _step_with(key):
+            """
+            :param key: the RNG key to run one step with
+            :return: (loss, the key the step returns)
+
+            A fresh engine per call: the step donates the parameters and the optimizer state,
+            so their buffers are gone afterwards. The model is seeded, so every engine here
+            starts from the very same parameters.
+            """
+            engine = Engine(config=config)
+            engine.init_train_from_config(train_data=make_dataset(), dev_data=make_dataset())
+            # noinspection PyProtectedMember
+            batch_raws, _ = next(iter(engine._iter_batches(make_dataset(), train=True)))
+            # string data cannot be an argument of a compiled function, so the step does not get it
+            # noinspection PyProtectedMember
+            assert "seq_tag" in batch_raws and "seq_tag" not in engine._step_raws(batch_raws)
+            # noinspection PyProtectedMember
+            *_, key_out, loss, _ = engine._train_step(
+                [engine._params[i].raw_tensor for i in engine._train_param_idx],
+                [engine._params[i].raw_tensor for i in engine._other_param_idx],
+                engine._step_raws(batch_raws),
+                engine._opt_state,
+                key,
+                jnp.asarray(0.05, dtype=jnp.float32),
+                jnp.asarray(0, dtype=jnp.int32),
+                1,
+            )
+            return float(loss), key_out
+
         # everything but the key held fixed, so any difference in the loss comes from the RNG
-        args = (
-            [engine._params[i].raw_tensor for i in engine._train_param_idx],
-            [engine._params[i].raw_tensor for i in engine._other_param_idx],
-            engine._step_raws(batch_raws),
-            engine._opt_state,
-        )
-        rest = (jnp.asarray(0.05, dtype=jnp.float32), jnp.asarray(0, dtype=jnp.int32), 1)
-        key = JaxBackend._get_rng_key_()
-        *_, key_2, loss_1, _ = engine._train_step(*args, key, *rest)
-        *_, loss_2, _ = engine._train_step(*args, key_2, *rest)
-        *_, loss_3, _ = engine._train_step(*args, key, *rest)
-        assert float(loss_1) == float(loss_3), "the same key gave a different result"
-        assert float(loss_1) != float(loss_2), "the RNG stream did not advance across steps"
+        key_1 = JaxBackend._get_rng_key_()
+        loss_1, key_2 = _step_with(key_1)
+        loss_2, _ = _step_with(key_2)
+        loss_3, _ = _step_with(key_1)
+        assert loss_1 == loss_3, "the same key gave a different result"
+        assert loss_1 != loss_2, "the RNG stream did not advance across steps"
 
 
 def test_engine_sets_rf_default_device():
