@@ -1683,6 +1683,13 @@ class JaxBackend(Backend[jax.Array]):
             assert seed is not None
         else:
             assert seed is None
+        # The key decides where the values are drawn, and JAX refuses a computation whose arguments
+        # live on different devices. So the key and the bounds go to the requested device.
+        # SpecAugment is the case that needs this: it asks for the number of masks on the cpu
+        # (to keep the data-dependent loop off the accelerator) while the data is on the gpu.
+        target_device = _device_from_str(device) if device else None
+        if target_device is not None:
+            key = jax.device_put(key, target_device)
 
         def _arg(v, default):
             """
@@ -1694,7 +1701,9 @@ class JaxBackend(Backend[jax.Array]):
             if v is None:
                 return default
             if isinstance(v, Tensor):
-                return v.raw_tensor if not v.dims else v.copy_compatible_to_dims_raw(out.dims)
+                v = v.raw_tensor if not v.dims else v.copy_compatible_to_dims_raw(out.dims)
+            if target_device is not None and isinstance(v, jax.Array):
+                v = jax.device_put(v, target_device)
             return v
 
         if distribution == "uniform":
