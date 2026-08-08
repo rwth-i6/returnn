@@ -562,7 +562,7 @@ def feedInputAndTarget(
     alignment=None,
     speaker_name=None,
     speaker_gender=None,
-    **kwargs,
+    **_kwargs,
 ):
     """
     :param numpy.ndarray features:

@@ -125,7 +125,7 @@ def init(name, reference, config, sprint_unit=None, version_number=None, callbac
 
 # Keep names for compatibility.
 # noinspection PyPep8Naming
-def getSegmentList(corpusName, segmentList, config, **kwargs):
+def getSegmentList(corpusName, segmentList, config, **_kwargs):
     """
     Sprint will directly call this function.
     """
@@ -352,7 +352,7 @@ class PythonControl:
             if callback:
                 self.sprint_callback = callback
 
-    def init_processing(self, input_dim=None, output_dim=None, **kwargs):
+    def init_processing(self, input_dim=None, output_dim=None, **_kwargs):
         """
         This is called via Sprint when we use PythonControl to iterate the corpus,
         i.e. we set --*.action=python-control in Sprint in the NN trainer tool.
@@ -371,7 +371,7 @@ class PythonControl:
         self.loss_and_error_signal_via_sprint_callback = True
         assert self.sprint_callback
 
-    def process_segment(self, name, orthography, features=None, alignment=None, soft_alignment=None, **kwargs):
+    def process_segment(self, name, orthography, features=None, alignment=None, soft_alignment=None, **_kwargs):
         """
         This is called via Sprint when we use PythonControl to iterate the corpus.
 

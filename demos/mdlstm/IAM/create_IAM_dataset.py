@@ -121,6 +121,7 @@ def write_to_hdf(
     :param int pad_x:
     :param bool compress:
     """
+    del n_labels  # derived from charlist instead
     with h5py.File(out_file_name, "w") as f:
         f.attrs["inputPattSize"] = 1
         f.attrs["numDims"] = 1

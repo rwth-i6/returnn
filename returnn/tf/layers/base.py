@@ -548,7 +548,7 @@ class LayerBase:
         _target_layers=None,
         sources=(),
         _src_common_search_choices=None,
-        **kwargs,
+        **_kwargs,
     ):
         """
         :param Data output:

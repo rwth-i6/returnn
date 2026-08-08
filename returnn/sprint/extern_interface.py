@@ -22,7 +22,7 @@ segmentOrderList = None  # type: typing.Optional[typing.List[str]]
 
 # Cannot change name, this need to stay like this for compatibility.
 # noinspection PyPep8Naming
-def getSegmentList(corpusName, segmentList, **kwargs):
+def getSegmentList(corpusName, segmentList, **_kwargs):
     """
     Called by Sprint PythonSegmentOrder.
     Set python-segment-order = true in Sprint to use this.
@@ -209,7 +209,7 @@ def feedInputAndTarget(
     alignment=None,
     speaker_name=None,
     speaker_gender=None,
-    **kwargs,
+    **_kwargs,
 ):
     """
     :param numpy.ndarray features:
@@ -257,7 +257,7 @@ class PythonControl:
         return cls.instance
 
     # Maybe other kwargs by Sprint.
-    def __init__(self, config, **kwargs):
+    def __init__(self, config, **_kwargs):
         self.config = _parse_config_str(config)
         _common_init(self.config)
 
@@ -276,7 +276,7 @@ class PythonControl:
         _init_global_sprint_dataset(input_dim=input_dim, output_dim=output_dim, config=self.config)
 
     # noinspection PyMethodMayBeStatic
-    def process_segment(self, name, orthography, features, alignment, soft_alignment, speaker_name=None, **kwargs):
+    def process_segment(self, name, orthography, features, alignment, soft_alignment, speaker_name=None, **_kwargs):
         """
         Called by Sprint.
 
