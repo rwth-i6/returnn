@@ -252,6 +252,7 @@ class _RecordGraph(TorchDispatchMode):
         self.graph = _Graph([])
 
     def __torch_dispatch__(self, func, types, args=(), kwargs=None):
+        del types  # required by __torch_dispatch__
         kwargs = {} if kwargs is None else kwargs
         graph = self.graph
         graph.maybe_store_rng_state(torch.device("cpu"))

@@ -3326,7 +3326,7 @@ class RangeLayer(LayerBase):
         :param bool sparse:
         :param Dim|None out_spatial_dim:
         """
-        del sparse  # only used in get_out_data_from_opts
+        del sparse, dtype  # only used in get_out_data_from_opts
         out_spatial_dim  # noqa  # used in get_out_data_from_opts
         super(RangeLayer, self).__init__(**kwargs)
         self.output.placeholder = tf.range(start=start, limit=limit, delta=delta, dtype=self.output.dtype)
@@ -3573,7 +3573,7 @@ class ConstantLayer(LayerBase):
         :param Dim|None feature_dim:
         :param list[LayerBase] shape_deps: for dyn dim tags in shape
         """
-        del sparse_dim, feature_dim  # only used in get_out_data_from_opts
+        del sparse_dim, feature_dim, shape, dtype  # only used in get_out_data_from_opts
         import numpy
 
         assert not sources, "constant layer cannot have sources"

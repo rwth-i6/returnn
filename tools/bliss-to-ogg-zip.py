@@ -171,7 +171,7 @@ class SprintCacheHandler:
             items = list(iter_bliss(opt))
         return {seq.segment_name: (seq.start_time, seq.end_time) for seq in items}
 
-    def feature_post_process(self, feature_data, seq_name, **kwargs):
+    def feature_post_process(self, feature_data, seq_name, **_kwargs):
         """
         :param numpy.ndarray feature_data:
         :param str seq_name:

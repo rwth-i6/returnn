@@ -3902,7 +3902,7 @@ class _SubnetworkRecCell:
 
                 return i - 1, src_choice_beams, new_acc_output_ta_
 
-        def search_resolve_cond(i, *args):
+        def search_resolve_cond(i, *_args):
             """
             :param tf.Tensor i: rec step index, scalar, int32
             :return: whether to continue with this i, scalar, bool
@@ -5256,7 +5256,7 @@ class RnnCellLayer(_ConcatInputLayer):
         return ls
 
     @classmethod
-    def get_hidden_state_size(cls, n_out, unit, unit_opts=None, **kwargs):
+    def get_hidden_state_size(cls, n_out, unit, unit_opts=None, **_kwargs):
         """
         :param int n_out:
         :param str unit:
@@ -9349,7 +9349,7 @@ class MaskedComputationLayer(LayerBase):
         out_spatial_dim=None,
         get_layer=None,
         _parent_layer_cache=None,
-        **kwargs,
+        **_kwargs,
     ):
         """
         :param str name:

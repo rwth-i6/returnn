@@ -179,6 +179,7 @@ class _NanTraceMode:
 
         class _Mode(TorchDispatchMode):
             def __torch_dispatch__(self, func, types, args=(), kwargs=None):
+                del types  # required by __torch_dispatch__
                 out = func(*args, **(kwargs or {}))
                 fname = str(func)
                 # allocations are uninitialized by design; flash filler/tail rows are

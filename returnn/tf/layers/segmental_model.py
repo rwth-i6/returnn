@@ -159,6 +159,7 @@ class ClassesToLengthDistributionLayer(_ConcatInputLayer):
     layer_class = "classes_to_length_distribution"
 
     def __init__(self, window=15, scale=1.0, **kwargs):
+        del scale  # only used in get_out_data_from_opts
         super(ClassesToLengthDistributionLayer, self).__init__(**kwargs)
         assert self.input_data.sparse
 
