@@ -9,7 +9,14 @@ What differs is the step itself, and it is the reason this is not a copy of the 
 JAX has no gradient tape, so the loss must be a FUNCTION of the parameters.
 The step therefore binds the parameter arrays into the ``rf.Parameter`` objects for the duration
 of one call, and ``jax.value_and_grad`` differentiates through it,
-which also makes the whole step jit-able as one unit.
+which also makes the whole step jit-able as one unit -- see ``jax_jit``.
+
+Everything a compiled step depends on is an argument of it, not a Python global:
+the parameters, the optimizer state, the RNG stream, the learning rate and the step number.
+A global would be read once, when the step is traced, and silently keep that first value
+(the RNG stream is the case that matters: every step would draw the same dropout masks).
+The exception is the epoch, which is a static argument, so that config code may branch on it;
+that costs one recompile per epoch.
 """
 
 from __future__ import annotations
@@ -18,6 +25,7 @@ import os
 import time
 
 import jax
+import jax.numpy as jnp
 import numpy
 
 from returnn.config import Config
@@ -28,7 +36,8 @@ from returnn.tensor import Tensor, TensorDict
 from returnn.util import basic as util
 import returnn.frontend as rf
 
-from .data import iter_dataset_batches
+from .data import iter_dataset_batches, fill_extern_data, reset_extern_data_dims
+from .frontend._backend import JaxBackend
 from .updater import Updater
 from . import checkpoint as _checkpoint
 
@@ -59,6 +68,8 @@ class Engine(EngineBase):
         self._train_param_idx: List[int] = []
         self._value_and_grad = None
         self._batch_opts = _batch_opts_from_config(config)
+        self._jit_opts = _jit_opts_from_config(config)
+        self._rng_key = None
         # Numeric defaults stay JAX's own -- notably, float32 matmuls run in TF32 on GPU,
         # which PyTorch does not do by default. We do not override that here:
         # each backend follows its own conventions.
@@ -70,6 +81,8 @@ class Engine(EngineBase):
         # Mixed precision: the compute dtype of matmul/conv. Parameters, gradients and the
         # optimizer stay float32, as with PyTorch AMP -- see returnn.frontend.amp for what it covers.
         # Scoped to the step (like torch.autocast is), not set globally, so nothing outside sees it.
+        if self._jit_opts is not None:
+            print(f"JAX engine: compiled step, {self._jit_opts}", file=log.v3)
         amp = config.value("jax_amp", None)
         self._amp_policy: Optional[rf.AmpPolicy] = rf.AmpPolicy(compute_dtype=amp) if amp else None
         if self._amp_policy:
@@ -102,6 +115,10 @@ class Engine(EngineBase):
         from returnn.torch.data.extern_data import extern_data_template_from_config_opts
 
         self.extern_data = extern_data_template_from_config_opts(config.typed_value("extern_data"))
+        if self._jit_opts is not None:
+            host_only = [key for key, data in self.extern_data.data.items() if data.dtype == "string"]
+            if host_only:
+                print(f"JAX engine: compiled step, {host_only} is not available inside it", file=log.v3)
 
         self._train_step_func = config.typed_value("train_step")
         assert self._train_step_func, "train_step not defined in config"
@@ -158,12 +175,11 @@ class Engine(EngineBase):
         start_time = time.time()
         accumulated: Dict[str, float] = {}
         num_steps = 0
-        raws = [p.raw_tensor for p in self._params]
+        # The RNG stream goes through the step as a value, so take it out of the backend here
+        # and put the advanced one back at the end of the epoch.
+        self._rng_key = JaxBackend._get_rng_key_()
 
-        for extern_data, complete_frac in self._iter_batches(self.train_dataset, train=True):
-            (loss, losses), grads = self._value_and_grad(
-                [raws[i] for i in self._train_param_idx], extern_data, self.global_train_step
-            )
+        for batch_raws, complete_frac in self._iter_batches(self.train_dataset, train=True):
             # The LR of the STEP: the epoch-level value, put through the config's schedule if it has one.
             learning_rate = self._updater.get_effective_learning_rate(
                 learning_rate=self.learning_rate,
@@ -171,14 +187,21 @@ class Engine(EngineBase):
                 epoch=self.epoch,
                 epoch_continuous=(self.epoch - 1 + complete_frac) if complete_frac is not None else None,
             )
-            train_raws, self._opt_state = self._updater.step(
-                params=[raws[i] for i in self._train_param_idx],
-                grads=grads,
-                opt_state=self._opt_state,
-                learning_rate=learning_rate,
+            train_raws, other_raws, self._opt_state, self._rng_key, loss, losses = self._train_step(
+                [self._params[i].raw_tensor for i in self._train_param_idx],
+                [self._params[i].raw_tensor for i in self._other_param_idx],
+                self._step_raws(batch_raws),
+                self._opt_state,
+                self._rng_key,
+                jnp.asarray(learning_rate, dtype=jnp.float32),
+                jnp.asarray(self.global_train_step, dtype=jnp.int32),
+                self.epoch,
             )
-            for i, raw in zip(self._train_param_idx, train_raws):
-                raws[i] = raw
+            for idx, raw in zip(self._train_param_idx + self._other_param_idx, list(train_raws) + list(other_raws)):
+                self._params[idx].raw_tensor = raw
+            # The dims of the templates hold what the step filled in; after a compiled step that is
+            # a tracer of a finished trace, which any later use would fail on.
+            reset_extern_data_dims(self.extern_data)
             for name, value in losses.items():
                 accumulated[name] = accumulated.get(name, 0.0) + float(value)
             num_steps += 1
@@ -186,8 +209,7 @@ class Engine(EngineBase):
             if num_steps % 100 == 0:
                 print(f"ep {self.epoch} step {num_steps}, loss {float(loss):.5f}", file=log.v4)
 
-        for param, raw in zip(self._params, raws):
-            param.raw_tensor = raw
+        JaxBackend._rng_key = self._rng_key
         scores = {name: value / max(num_steps, 1) for name, value in accumulated.items()}
         print(
             f"epoch {self.epoch} finished: {num_steps} steps, {_format_scores(scores)},"
@@ -208,9 +230,14 @@ class Engine(EngineBase):
         for name, dataset in self.eval_datasets.items():
             accumulated: Dict[str, float] = {}
             num_steps = 0
-            for extern_data in self._iter_batches(dataset, train=False):
-                _, losses = self._loss_func(
-                    [p.raw_tensor for p in self._params], extern_data, self.global_train_step, train_flag=False
+            for batch_raws in self._iter_batches(dataset, train=False):
+                _, (losses, _) = self._forward(
+                    [self._params[i].raw_tensor for i in self._train_param_idx],
+                    [self._params[i].raw_tensor for i in self._other_param_idx],
+                    self._step_raws(batch_raws),
+                    self.global_train_step,
+                    self.epoch,
+                    False,
                 )
                 for loss_name, value in losses.items():
                     accumulated[loss_name] = accumulated.get(loss_name, 0.0) + float(value)
@@ -230,7 +257,8 @@ class Engine(EngineBase):
         :param dataset:
         :param train: whether this is the train dataset. Affects the batch options read from the config,
             and only the train iterator carries the complete-frac the LR schedule needs.
-        :return: iterator over batches as TensorDicts of JAX arrays,
+        :return: iterator over batches as raw dicts of JAX arrays (the templates are filled in
+            inside the step, which is what makes the step compilable),
             or over ``(batch, complete_frac)`` when train
         """
         batch_size = (
@@ -246,8 +274,21 @@ class Engine(EngineBase):
             epoch=self.epoch,
             device=self._device,
             with_complete_frac=train,
+            as_raws=True,
+            time_multiple=self._jit_opts["time_multiple"] if self._jit_opts else 0,
             **{k: v for k, v in self._batch_opts.items() if k not in ("batch_size", "eval_batch_size", "max_seqs")},
         )
+
+    def _step_raws(self, batch_raws: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        :param batch_raws: one batch, as the data pipeline yields it
+        :return: what the step gets. Entries which are not device arrays -- the string ones,
+            i.e. seq_tag -- cannot be arguments of a compiled function, so the compiled step
+            does not get them at all; passing them would bake the first batch's values into the trace.
+        """
+        if self._jit_opts is None:
+            return batch_raws
+        return {key: value for key, value in batch_raws.items() if not _is_host_only(value)}
 
     def _create_model(self, *, epoch: int, step: int):
         """
@@ -265,6 +306,7 @@ class Engine(EngineBase):
         self._param_names = [name for name, _ in model.named_parameters()]
         self._params = [param for _, param in model.named_parameters()]
         self._train_param_idx = [i for i, param in enumerate(self._params) if param.trainable is not False]
+        self._other_param_idx = [i for i in range(len(self._params)) if i not in set(self._train_param_idx)]
         num_params = sum(int(numpy.prod(p.batch_shape)) for p in self._params)
         print(
             f"net params #: {num_params} ({len(self._train_param_idx)} of {len(self._params)} trainable)", file=log.v2
@@ -272,28 +314,66 @@ class Engine(EngineBase):
 
     def _init_step_func(self):
         """
-        Build the differentiable step. See the module docstring for why it has this shape.
+        Build the differentiable step, and the compiled step around it.
+        See the module docstring for why they have this shape.
         """
 
-        def _loss_func(train_raws, extern_data: TensorDict, step, train_flag: bool = True):
+        def _forward(train_raws, other_raws, batch_raws, step, epoch, train_flag):
+            """
+            :return: (total loss, (the individual losses, the non-trainable params after the step))
+            """
             orig = [p.raw_tensor for p in self._params]
-            for idx, raw in zip(self._train_param_idx, train_raws):
+            for idx, raw in zip(self._train_param_idx + self._other_param_idx, list(train_raws) + list(other_raws)):
                 self._params[idx].raw_tensor = raw
             try:
-                rf.init_train_step_run_ctx(train_flag=train_flag, step=step, epoch=self.epoch)
+                extern_data = fill_extern_data(self.extern_data, batch_raws)
+                if not isinstance(step, int):  # traced: wrap it, the run ctx takes an int or a Tensor
+                    step = Tensor("step", dims=(), dtype="int32", raw_tensor=step)
+                rf.init_train_step_run_ctx(train_flag=train_flag, step=step, epoch=epoch)
                 sentinel_kw = util.get_fwd_compat_kwargs()
-                with rf.set_amp_policy_ctx(self._amp_policy):  # None = plain float32
+                # Static traceable == static shapes: every dynamic dim must report a capacity,
+                # which for the DERIVED ones (subsampled time, attention kv) means deriving it
+                # from the dims they come from. That derivation is gated on this flag.
+                with rf.set_static_traceable_ctx(self._jit_opts is not None), rf.set_amp_policy_ctx(self._amp_policy):
                     self._train_step_func(model=self.model, extern_data=extern_data, **sentinel_kw)
                     run_ctx = rf.get_run_ctx()
                     total = run_ctx.total_loss()
                     losses = {name: loss.get_mean_loss().raw_tensor for name, loss in run_ctx.losses.items()}
-                return total.raw_tensor if isinstance(total, Tensor) else total, losses
+                # Non-trainable parameters can be WRITTEN by the step -- rf.BatchNorm's running statistics
+                # are the case that matters -- so they leave this function as values.
+                # The restore below undoes the write, and under jit it would happen at trace time only.
+                new_other = [self._params[idx].raw_tensor for idx in self._other_param_idx]
+                total_raw = total.raw_tensor if isinstance(total, Tensor) else total
+                return total_raw, (losses, new_other)
             finally:
                 for param, raw in zip(self._params, orig):
                     param.raw_tensor = raw
 
-        self._loss_func = _loss_func
-        self._value_and_grad = jax.value_and_grad(_loss_func, has_aux=True)
+        value_and_grad = jax.value_and_grad(_forward, has_aux=True)
+
+        def _train_step(train_raws, other_raws, batch_raws, opt_state, rng_key, learning_rate, step, epoch):
+            """
+            One update: forward, gradients, optimizer. The whole thing is one compiled unit,
+            so XLA fuses across the model, the losses and the optimizer.
+            """
+            # The RNG stream in and out, see the module docstring.
+            prev_key, JaxBackend._rng_key = JaxBackend._rng_key, rng_key
+            try:
+                (loss, (losses, other_raws)), grads = value_and_grad(
+                    train_raws, other_raws, batch_raws, step, epoch, True
+                )
+                rng_key = JaxBackend._rng_key
+            finally:
+                JaxBackend._rng_key = prev_key
+            train_raws, opt_state = self._updater.step(
+                params=train_raws, grads=grads, opt_state=opt_state, learning_rate=learning_rate
+            )
+            return train_raws, other_raws, opt_state, rng_key, loss, losses
+
+        self._forward = _forward
+        # Only the epoch is static (config code may branch on it, and a recompile per epoch is nothing).
+        # The step number is not: it changes every step, and baking it in would recompile every step.
+        self._train_step = jax.jit(_train_step, static_argnums=(7,)) if self._jit_opts is not None else _train_step
         self._opt_state = self._updater.init([self._params[i].raw_tensor for i in self._train_param_idx])
 
     def _save_model(self):
@@ -399,7 +479,6 @@ _UnsupportedConfigOpts = {
     "use_tensorboard": False,
     # backend-specific options are named after the backend, as `torch_...` is on PyTorch
     "jax_distributed": None,
-    "jax_jit": None,  # the compiled/captured step
     "jax_log_memory_usage": False,
     "jax_profile": None,
 }
@@ -444,16 +523,50 @@ def _check_config_opts_supported(config: Config):
     for key, jax_name in sorted(_TorchOnlyConfigOpts.items()):
         value = _value_if_set(key)
         if value is not None:
-            unsupported.append(
-                f"{key} = {value!r} is PyTorch specific"
-                + (f", the JAX engine reads {jax_name} (not implemented either)" if jax_name else "")
-            )
+            hint = ""
+            if jax_name:
+                hint = f", the JAX engine reads {jax_name}"
+                if jax_name in _UnsupportedConfigOpts:
+                    hint += " (not implemented either)"
+            unsupported.append(f"{key} = {value!r} is PyTorch specific" + hint)
     if unsupported:
         raise NotImplementedError(
             "JAX engine: the config sets options which this engine does not implement:\n  "
             + "\n  ".join(unsupported)
             + "\nThey would otherwise be ignored silently, which would change what the config means."
         )
+
+
+def _is_host_only(value: Any) -> bool:
+    """
+    :param value:
+    :return: whether this is data which stays on the host, i.e. is no device array.
+        Only the string entries are (JAX has no string arrays, see :func:`batch_to_jax_raws`).
+    """
+    return isinstance(value, numpy.ndarray) and value.dtype.kind in ("U", "S", "O")
+
+
+def _jit_opts_from_config(config: Config) -> Optional[Dict[str, Any]]:
+    """
+    :param config: ``jax_jit``: True, or the options as a dict
+    :return: the options of the compiled step, or None when it is off
+    """
+    opts = config.typed_value("jax_jit", None)
+    if opts is None:
+        opts = config.bool("jax_jit", False)
+    if not opts:
+        return None
+    if opts is True:
+        opts = {}
+    if not isinstance(opts, dict):
+        raise TypeError(f"JAX engine: expected jax_jit True or a dict, got {opts!r}")
+    opts = dict(opts)
+    # A compiled step is specialized per input shape, and the padded time extent of a batch
+    # is different almost every time, so without this every step would trigger a compile.
+    res = {"time_multiple": int(opts.pop("time_multiple", 0))}
+    if opts:
+        raise NotImplementedError(f"JAX engine: jax_jit options not supported: {sorted(opts)}")
+    return res
 
 
 def _load_learning_rate_control(config: Config):

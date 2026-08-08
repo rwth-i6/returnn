@@ -1272,11 +1272,12 @@ def test_dataset_batches_to_jax():
 _EngineTestNumFeat, _EngineTestNumClasses = 5, 4
 
 
-def _simple_train_setup(tmp_dir: str, **extra_config_opts):
+def _simple_train_setup(tmp_dir: str, *, dropout: float = 0.0, **extra_config_opts):
     """
     A minimal but complete training config, as :mod:`returnn.__main__` would set it up.
 
     :param tmp_dir: for the model and the learning-rate file
+    :param dropout: if set, the step draws random numbers, which is what the RNG stream tests need
     :param extra_config_opts: added to the config
     :return: (config, func creating the dataset)
     """
@@ -1320,6 +1321,8 @@ def _simple_train_setup(tmp_dir: str, **extra_config_opts):
         data = extern_data["data"]
         targets = extern_data["classes"]
         time_dim = data.dims[1]
+        if dropout:
+            data = rf.dropout(data, dropout, axis=data.dims[1:])
         logits = model.linear(data)
         loss = rf.cross_entropy(estimated=logits, target=targets, axis=model.out_dim, estimated_type="logits")
         rf.get_run_ctx().mark_as_loss(loss, "ce", custom_inv_norm_factor=time_dim.get_size_tensor())
@@ -1381,6 +1384,72 @@ def test_engine_train_from_config():
         train_scores = [scores[ep].error["train_score_ce"] for ep in (1, 2)]
         assert train_scores[1] < train_scores[0], f"train score did not improve: {train_scores}"
         assert "dev_score_ce" in scores[1].error, sorted(scores[1].error)
+
+
+@pytest.mark.parametrize("time_multiple", [0, 4])
+def test_engine_train_jit(time_multiple: int):
+    """
+    The compiled step (``jax_jit``) trains the same as the eager one -- also with the time axis
+    padded up to a multiple, which is what keeps the number of compiled variants small
+    (a compiled step is specialized per input shape).
+    """
+    import tempfile
+    from returnn.jax.engine import Engine
+
+    def _run(**extra):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            config, make_dataset = _simple_train_setup(tmp_dir, **extra)
+            engine = Engine(config=config)
+            engine.init_train_from_config(train_data=make_dataset(), dev_data=make_dataset())
+            engine.train()
+            scores = engine.learning_rate_control.epoch_data
+            return (
+                {name: numpy.asarray(param.raw_tensor) for name, param in engine.model.named_parameters()},
+                [scores[ep].error["train_score_ce"] for ep in (1, 2)],
+            )
+
+    eager_params, eager_scores = _run()
+    jit_params, jit_scores = _run(jax_jit={"time_multiple": time_multiple} if time_multiple else True)
+    numpy.testing.assert_allclose(jit_scores, eager_scores, rtol=1e-5)
+    for name, value in eager_params.items():
+        numpy.testing.assert_allclose(jit_params[name], value, rtol=1e-4, atol=1e-6, err_msg=name)
+
+
+def test_engine_jit_rng_advances():
+    """
+    The RNG stream goes through the compiled step as a value, in and out.
+    If it did not -- if the step read the backend's global key -- that key would be captured once,
+    when the step is traced, and every step would then draw the very same dropout mask.
+    """
+    import tempfile
+    import jax.numpy as jnp
+    from returnn.jax.engine import Engine
+
+    # noinspection PyProtectedMember
+    from returnn.jax.frontend._backend import JaxBackend
+
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        config, make_dataset = _simple_train_setup(tmp_dir, dropout=0.5, jax_jit=True)
+        engine = Engine(config=config)
+        engine.init_train_from_config(train_data=make_dataset(), dev_data=make_dataset())
+        # noinspection PyProtectedMember
+        batch_raws, _ = next(iter(engine._iter_batches(make_dataset(), train=True)))
+        # string data cannot be an argument of a compiled function, so the step does not get it
+        assert "seq_tag" in batch_raws and "seq_tag" not in engine._step_raws(batch_raws)
+        # everything but the key held fixed, so any difference in the loss comes from the RNG
+        args = (
+            [engine._params[i].raw_tensor for i in engine._train_param_idx],
+            [engine._params[i].raw_tensor for i in engine._other_param_idx],
+            engine._step_raws(batch_raws),
+            engine._opt_state,
+        )
+        rest = (jnp.asarray(0.05, dtype=jnp.float32), jnp.asarray(0, dtype=jnp.int32), 1)
+        key = JaxBackend._get_rng_key_()
+        *_, key_2, loss_1, _ = engine._train_step(*args, key, *rest)
+        *_, loss_2, _ = engine._train_step(*args, key_2, *rest)
+        *_, loss_3, _ = engine._train_step(*args, key, *rest)
+        assert float(loss_1) == float(loss_3), "the same key gave a different result"
+        assert float(loss_1) != float(loss_2), "the RNG stream did not advance across steps"
 
 
 def test_engine_continue_from_checkpoint():
