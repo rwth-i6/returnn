@@ -559,7 +559,11 @@ def test_full_model_torch_checkpoint_parity():
         torch.save(
             {"model": {name: p.raw_tensor for name, p in model.named_parameters()}, "epoch": 1, "step": 0}, ckpt_file
         )
-        out_pt = {key: value.raw_tensor.detach().numpy() for key, value in _outputs().data.items()}
+        outputs_pt = _outputs()
+        # read the sizes now: the same Dim objects get re-bound to TF tensors below
+        dyn_sizes = _dyn_sizes_numpy(outputs_pt)
+        templates = {key: value.copy_template() for key, value in outputs_pt.data.items()}
+        out_pt = {key: value.raw_tensor.detach().numpy() for key, value in outputs_pt.data.items()}
 
         # TF: fresh model with a DIFFERENT init, then the PT parameters loaded into it by name
         extern_data.reset_content()
@@ -594,6 +598,8 @@ def test_full_model_torch_checkpoint_parity():
     # Loosening it costs no coverage, because "logits" guards the same encoder far more sharply:
     # measured, it responds to an encoder perturbation ~750x more strongly than "ctc" does,
     # so an encoder that had really drifted would fail there first.
+    out_tf = {key: _mask_padded(templates[key], value, dyn_sizes) for key, value in out_tf.items()}
+    out_pt = {key: _mask_padded(templates[key], value, dyn_sizes) for key, value in out_pt.items()}
     _assert_all_close("checkpoint parity", out_tf, out_pt, rtol={"ctc": 2e-2})
 
 
@@ -1160,7 +1166,7 @@ def _full_model_setup():
     """
     :return: extern_data, get_model, forward_step, dims.
         The model of tests/test_rf_packed.py::test_full_model_packed_traced_program_replay, padded.
-        forward_step marks "logits", "ctc" and the total per-seq "loss".
+        forward_step marks the encoder output "enc", "logits", "ctc" and the total per-seq "loss".
     """
     from returnn.frontend.encoder.conformer import (
         ConformerEncoder,
@@ -1244,6 +1250,9 @@ def _full_model_setup():
             encoder=enc_state,
         )
         ce = rf.cross_entropy(estimated=logits, target=targets, axis=vocab_dim, estimated_type="logits")
+        # marked so a parity failure localizes: if "enc" matches and "logits" does not,
+        # the divergence is in the decoder, not the encoder
+        enc_out.mark_as_output("enc", shape=(batch_dim, enc_spatial_dim, enc_dim))
         logits.mark_as_output("logits", shape=(batch_dim, target_time_dim, vocab_dim))
         ctc.mark_as_output("ctc", shape=(batch_dim,))
         (ctc + rf.reduce_sum(ce, axis=target_time_dim)).mark_as_output("loss", shape=(batch_dim,))
@@ -1389,6 +1398,54 @@ def test_full_model_param_grads():
         rf.select_backend_torch()
 
     _assert_all_close("param grads", grads_tf, grads_pt, rtol={})
+
+
+def _dyn_sizes_numpy(outputs: TensorDict) -> Dict[Dim, numpy.ndarray]:
+    """
+    :param outputs: whose dims are currently backed by raw tensors
+    :return: per dynamic dim its per-sequence sizes, as numpy
+
+    Taken while the PyTorch side is still live: the same Dim objects are re-bound to TF tensors
+    afterwards, so the sizes have to be read out before that.
+    """
+    sizes = {}
+    for value in outputs.data.values():
+        for dim in value.dims:
+            size = dim.dyn_size_ext
+            if size is None or not size.dims or size.raw_tensor is None:
+                continue  # static, or a scalar size (the batch dim)
+            raw = size.raw_tensor
+            sizes[dim] = numpy.asarray(raw.detach().cpu().numpy() if hasattr(raw, "detach") else raw)
+    return sizes
+
+
+def _mask_padded(template: Tensor, raw: numpy.ndarray, sizes: Dict[Dim, numpy.ndarray]) -> numpy.ndarray:
+    """
+    :param template: gives the dims of each axis
+    :param raw:
+    :param sizes: as :func:`_dyn_sizes_numpy` returns
+    :return: raw with the padded positions zeroed
+
+    Padded positions hold whatever the ops left there. Nothing constrains them to agree between
+    two backends, and they are not part of the model's output, so comparing them compares noise.
+    Here that is not a detail: with target lengths 2..4 in a [B, 4, V] logits tensor,
+    up to half the entries are padding.
+    """
+    out = numpy.asarray(raw)
+    if batch_dim not in template.dims:
+        return out
+    batch_axis = template.dims.index(batch_dim)
+    for axis, dim in enumerate(template.dims):
+        lens = sizes.get(dim)
+        if lens is None:
+            continue
+        idx_shape = [1] * out.ndim
+        idx_shape[axis] = -1
+        len_shape = [1] * out.ndim
+        len_shape[batch_axis] = -1
+        mask = numpy.arange(out.shape[axis]).reshape(idx_shape) < lens.reshape(len_shape)
+        out = numpy.where(mask, out, numpy.zeros((), dtype=out.dtype))
+    return out
 
 
 def _assert_all_close(
