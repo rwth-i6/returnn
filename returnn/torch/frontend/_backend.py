@@ -1140,18 +1140,40 @@ class TorchBackend(Backend[torch.Tensor]):
             name = name or "raw_tensor"
         else:
             name = name or "const"
-            if isinstance(value, (bool, int, float, bool, complex, numpy.number)):
-                # torch.full avoids a device sync.
-                # https://github.com/pytorch/pytorch/issues/120996#issuecomment-2319976284
-                value = torch.full(
-                    (), value, dtype=TorchBackend.as_dtype_raw(dtype), device=device or rf.get_default_device()
-                )
-            else:
-                value = torch.tensor(
-                    value,
-                    dtype=TorchBackend.as_dtype_raw(dtype),
-                    device=device or rf.get_default_device(),
-                )
+            # Host data (numpy array etc.) is REAL and trace-independent: create it OUTSIDE
+            # every active python dispatch mode (fake AND functional), so a trace sees an
+            # already-materialized real device tensor and bakes it as a graph CONSTANT.
+            # Created INSIDE the modes it becomes a lifted input with a per-call H2D copy
+            # in the compiled program -- a sync, illegal under CUDA-graph capture.
+            # (Hit via the mel filterbank matrix with torch_cuda_graph warmup_steps 0, where
+            # the trace is the very first execution; with a warmup the matrix was already in
+            # the eager cache, which is why this never showed up before.)
+            # Scalars are exempt: they are inlined into the graph anyway.
+            from contextlib import nullcontext
+
+            ctx = nullcontext()
+            if not isinstance(value, (bool, int, float, complex, numpy.number)):
+                try:
+                    # noinspection PyProtectedMember
+                    from torch.utils._python_dispatch import _disable_current_modes
+                except ImportError:  # older torch: no python dispatch modes to disable
+                    pass
+                else:
+                    ctx = _disable_current_modes()
+
+            with ctx:
+                if isinstance(value, (bool, int, float, complex, numpy.number)):
+                    # torch.full avoids a device sync.
+                    # https://github.com/pytorch/pytorch/issues/120996#issuecomment-2319976284
+                    value = torch.full(
+                        (), value, dtype=TorchBackend.as_dtype_raw(dtype), device=device or rf.get_default_device()
+                    )
+                else:
+                    value = torch.tensor(
+                        value,
+                        dtype=TorchBackend.as_dtype_raw(dtype),
+                        device=device or rf.get_default_device(),
+                    )
         assert isinstance(value, torch.Tensor)
         return Tensor(name, dims=dims, dtype=dtype, sparse_dim=sparse_dim, feature_dim=feature_dim, raw_tensor=value)
 
