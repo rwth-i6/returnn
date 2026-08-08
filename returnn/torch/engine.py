@@ -644,7 +644,14 @@ class Engine(EngineBase):
                     complete_frac=complete_frac,
                     num_seqs=num_seqs,
                     batch_size_info=(
-                        _get_batch_size_info(extern_data) if self._log_batch_size and extern_data is not None else None
+                        (
+                            _get_batch_size_info(extern_data)
+                            if extern_data is not None
+                            # graph capture: no TensorDict is built, use the raw batch
+                            else _get_batch_size_info_raw(extern_data_raw)
+                        )
+                        if self._log_batch_size
+                        else None
                     ),
                     log_memory_usage_device=self._device if self._log_memory_usage else None,
                 )
@@ -1822,6 +1829,36 @@ def _get_batch_size_info(extern_data: TensorDict) -> Dict[str, int]:
             if dim.is_dynamic() and dim not in covered_dims:
                 covered_dims.add(dim)
                 info[f"max_size:{dim.name}"] = int(dim.get_dim_value())
+                size = dim.dyn_size_ext
+                if size is not None and size.dims and size.raw_tensor is not None:
+                    # summed seq lens = the CONTENT along this dim. The padded step computes on
+                    # num_seqs * max_size instead, so the two together say how much of the batch
+                    # was padding -- and it is the number comparable to a packed step's content.
+                    info[f"sum_size:{dim.name}"] = int(size.raw_tensor.sum())
+    return info
+
+
+def _get_batch_size_info_raw(extern_data_raw: Dict[str, Any]) -> Dict[str, int]:
+    """
+    Same purpose as :func:`_get_batch_size_info`, but from the raw data-loader batch:
+    under graph capture the engine never builds a :class:`TensorDict`
+    (the raw dict goes straight into the captured step's copy-in),
+    so that variant would report nothing there.
+
+    :param extern_data_raw: raw batch dict from the data loader
+    :return: num seqs, and per data key the max seq len and the summed (content) seq len.
+        The sum is what a packed step actually computes on, so it is the meaningful
+        throughput measure -- for a padded step it differs from num_seqs * max_size.
+    """
+    info = {}
+    for k in extern_data_raw:
+        seq_lens = extern_data_raw.get(f"{k}:seq_len")
+        if seq_lens is None:
+            continue
+        if "num_seqs" not in info:
+            info["num_seqs"] = int(len(seq_lens))
+        info[f"max_size:{k}"] = int(max(seq_lens)) if len(seq_lens) else 0
+        info[f"sum_size:{k}"] = int(sum(seq_lens))
     return info
 
 
