@@ -837,7 +837,6 @@ def pad_packed(source: Tensor, *, in_dim: Dim, dims: Sequence[Dim]) -> Tensor:
     return rf.masked_scatter(source, mask=mask, in_dim=in_dim, dims=dims)
 
 
-# noinspection PyUnusedLocal
 def gather(
     source: Tensor,
     *,
