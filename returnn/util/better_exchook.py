@@ -444,7 +444,7 @@ def output_limit():
 def fallback_findfile(filename):
     """
     :param str filename:
-    :return: try to find the full filename, e.g. in modules, etc
+    :return: try to find the full filename, e.g. in modules, etc.
     :rtype: str|None
     """
     mods = [m for m in list(sys.modules.values()) if m and getattr(m, "__file__", None) and filename in m.__file__]
@@ -1139,7 +1139,8 @@ def format_tb(
     :param dict[str,typing.Any]|None allGlobals: if set, will update it with all globals from all frames
     :param bool withTitle:
     :param bool|None with_color: output with ANSI escape codes for color
-    :param bool|None with_vars: will print var contents that are referenced in the source code line. by default enabled (unless at exit or on a GC stack).
+    :param bool|None with_vars: will print var contents that are referenced in the source code line.
+        by default enabled (unless at exit or on a GC stack).
     :param bool clear_frames: whether to call frame.clear() after processing it.
         That will potentially fix some mem leaks regarding locals, so it can be important.
         Also see https://github.com/python/cpython/issues/113939.
@@ -1902,7 +1903,7 @@ class DummyFrame:
         self.f_locals = None
 
 
-# noinspection PyPep8Naming,PyUnusedLocal
+# noinspection PyPep8Naming
 def _StackSummary_extract(frame_gen, limit=None, lookup_lines=True, capture_locals=False):
     """
     Replacement for :func:`StackSummary.extract`.
@@ -1922,6 +1923,7 @@ def _StackSummary_extract(frame_gen, limit=None, lookup_lines=True, capture_loca
     :param capture_locals: If True, the local variables from each frame will
         be captured as object representations into the FrameSummary.
     """
+    del limit, lookup_lines, capture_locals  # part of the StackSummary.extract signature, not honoured here
     result = StackSummary()
     for f, lineno in frame_gen:
         co = f.f_code
