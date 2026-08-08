@@ -497,7 +497,7 @@ def exit():
 
 
 # Keep name for compatibility.
-# noinspection PyPep8Naming,PyUnusedLocal
+# noinspection PyPep8Naming,PyUnusedLocal,PyUnusedParameter
 def feedInput(features, weights=None, segmentName=None):
     """
     :param numpy.ndarray features:
@@ -552,7 +552,7 @@ def finishError(error, errorSignal, naturalPairingType=None):
 
 
 # Keep name for compatibility.
-# noinspection PyPep8Naming,PyUnusedLocal
+# noinspection PyPep8Naming,PyUnusedLocal,PyUnusedParameter
 def feedInputAndTarget(
     features,
     weights=None,
@@ -583,7 +583,7 @@ def feedInputAndTarget(
 
 
 # Keep name for compatibility.
-# noinspection PyPep8Naming,PyUnusedLocal
+# noinspection PyPep8Naming,PyUnusedLocal,PyUnusedParameter
 def feedInputAndTargetAlignment(features, targetAlignment, weights=None, segmentName=None):
     """
     :param numpy.ndarray features:
@@ -598,7 +598,7 @@ def feedInputAndTargetAlignment(features, targetAlignment, weights=None, segment
 
 
 # Keep name for compatibility.
-# noinspection PyPep8Naming,PyUnusedLocal
+# noinspection PyPep8Naming,PyUnusedLocal,PyUnusedParameter
 def feedInputAndTargetSegmentOrth(features, targetSegmentOrth, weights=None, segmentName=None):
     """
     :param numpy.ndarray features:
@@ -613,7 +613,7 @@ def feedInputAndTargetSegmentOrth(features, targetSegmentOrth, weights=None, seg
 
 
 # Keep name for compatibility.
-# noinspection PyPep8Naming,PyUnusedLocal
+# noinspection PyPep8Naming,PyUnusedLocal,PyUnusedParameter
 def feedInputUnsupervised(features, weights=None, segmentName=None):
     """
     :param numpy.ndarray features:
@@ -864,7 +864,7 @@ def _train(segment_name, features, targets=None):
     assert sprintDataset
 
     if sprintDataset.sprint_finalized:
-        return
+        return None
     sprintDataset.add_new_data(features, targets, segment_name=segment_name)
 
     # The CRNN train thread started via start() will do the actual training.
@@ -1018,7 +1018,7 @@ def make_criterion_class():
             assert seq_lengths.ndim == 1  # vector of seqs lengths
             return theano.Apply(op=self, inputs=[posteriors, seq_lengths], outputs=[T.fvector(), posteriors.type()])
 
-        # noinspection PyUnusedLocal
+        # noinspection PyUnusedLocal,PyUnusedParameter
         def perform(self, node, inputs, output_storage, params=None):
             """
             :param node:

@@ -124,7 +124,7 @@ def init(name, reference, config, sprint_unit=None, version_number=None, callbac
 
 
 # Keep names for compatibility.
-# noinspection PyPep8Naming,PyUnusedLocal
+# noinspection PyPep8Naming,PyUnusedLocal,PyUnusedParameter
 def getSegmentList(corpusName, segmentList, config, **kwargs):
     """
     Sprint will directly call this function.
@@ -341,7 +341,7 @@ class PythonControl:
         print("RETURNN SprintControl[pid %i] PythonControl additional_init %r" % (os.getpid(), kwargs))
         self._init(**kwargs)
 
-    # noinspection PyUnusedLocal
+    # noinspection PyUnusedLocal,PyUnusedParameter
     def _init(self, name, sprint_unit=None, callback=None, version_number=None, min_version_number=None, **kwargs):
         if name == "Sprint.PythonControl":
             print("RETURNN SprintControl[pid %i] init for Sprint.PythonControl %r" % (os.getpid(), kwargs))
@@ -351,7 +351,7 @@ class PythonControl:
             if callback:
                 self.sprint_callback = callback
 
-    # noinspection PyUnusedLocal
+    # noinspection PyUnusedLocal,PyUnusedParameter
     def init_processing(self, input_dim=None, output_dim=None, **kwargs):
         """
         This is called via Sprint when we use PythonControl to iterate the corpus,
@@ -371,7 +371,7 @@ class PythonControl:
         self.loss_and_error_signal_via_sprint_callback = True
         assert self.sprint_callback
 
-    # noinspection PyUnusedLocal
+    # noinspection PyUnusedLocal,PyUnusedParameter
     def process_segment(self, name, orthography, features=None, alignment=None, soft_alignment=None, **kwargs):
         """
         This is called via Sprint when we use PythonControl to iterate the corpus.
@@ -450,7 +450,7 @@ class PythonControl:
         self.close()
         raise SystemExit
 
-    # noinspection PyUnusedLocal
+    # noinspection PyUnusedLocal,PyUnusedParameter
     def _handle_cmd_init(self, name, version):
         assert version == self.Version
         return "SprintControl", self.Version
@@ -612,7 +612,7 @@ class PythonControl:
         """
         return "<version>RETURNN.own_threaded_callback</version>"
 
-    # noinspection PyUnusedLocal
+    # noinspection PyUnusedLocal,PyUnusedParameter
     def own_tcb_get_loss_and_error_signal(self, seg_name, seg_len, posteriors):
         """
         :param seg_name:

@@ -343,7 +343,8 @@ class _LoopStateHolder:
 
     def __setattr__(self, key, value):
         if key in {"_state", "_loop"}:
-            return super().__setattr__(key, value)
+            super().__setattr__(key, value)
+            return
         self[key] = value
 
     def keys(self) -> Iterable[str]:

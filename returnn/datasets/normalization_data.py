@@ -1,3 +1,7 @@
+"""
+Normalization data (mean/variance) for inputs and outputs, and the HDF file holding it.
+"""
+
 import os
 import numpy as np
 

@@ -1911,8 +1911,9 @@ class TranslationFactorsDataset(TranslationDataset):
 
     def __init__(self, source_factors=None, target_factors=None, factor_separator="|", **kwargs):
         """
-        :param list[str]|str|None source_factors: Data keys for the source factors (excluding first factor, which is always
-          called 'data'). Words in source file have to have that many factors. Also, a vocabulary
+        :param list[str]|str|None source_factors: Data keys for the source factors
+          (excluding first factor, which is always called 'data').
+          Words in source file have to have that many factors. Also, a vocabulary
           "<factor_data_key>.vocab.pkl" has to exist for each factor.
         :param list[str]|str|None target_factors: analogous to source_factors. Excluding first factor, which is always
           called 'classes'.

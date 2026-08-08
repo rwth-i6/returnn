@@ -93,7 +93,7 @@ base_settings = {
 
 def make_config_dict(lstm_unit, use_gpu):
     """
-    :param str lstm_unit: "NativeLSTM", "LSTMBlock", "LSTMBlockFused", "CudnnLSTM", etc, one of LstmCellTypes
+    :param str lstm_unit: "NativeLSTM", "LSTMBlock", "LSTMBlockFused", "CudnnLSTM", etc., one of LstmCellTypes
     :param bool use_gpu:
     :return: config dict
     :rtype: dict[str]

@@ -129,7 +129,7 @@ def concat_sources(src_layers, out_dim=None, allow_broadcast_all_sources=NotSpec
         axes_split_info: List[Optional[List[int]]] = [None] * data.batch_ndim
         axes_split_info[data.feature_dim_axis] = [layer_data.dim for layer_data in layers_data]
         tf_util.set_param_axes_split_info(data.placeholder, axes_split_info)
-        # Note: We will loose this info for any further op (e.g. dropout, activation, etc). Should be better...
+        # Note: We will loose this info for any further op (e.g. dropout, activation, etc.). Should be better...
         # Maybe instead in Data class?
         # Also note, even for tf.Variable, e.g. with weight noise, we might loose this?
     network.concat_sources_dropout_cache[cache_key] = data.copy()
@@ -868,7 +868,7 @@ class ActivationLayer(_ConcatInputLayer):
 
     def __init__(self, activation, opts=None, **kwargs):
         """
-        :param str activation: e.g. "relu", "tanh", etc
+        :param str activation: e.g. "relu", "tanh", etc.
         :param dict[str]|None opts: for activation function, e.g. eps for safe_log
         """
         super(ActivationLayer, self).__init__(**kwargs)
@@ -2277,7 +2277,7 @@ class LengthLayer(LayerBase):
 
     layer_class = "length"
 
-    # noinspection PyUnusedLocal
+    # noinspection PyUnusedLocal,PyUnusedParameter
     def __init__(self, axis="T", add_time_axis=False, dtype="int32", sparse=False, **kwargs):
         """
         :param str|Dim axis:
@@ -3209,7 +3209,7 @@ class RandIntLayer(LayerBase):
 
     layer_class = "rand_int"
 
-    # noinspection PyUnusedLocal
+    # noinspection PyUnusedLocal,PyUnusedParameter
     def __init__(self, shape, maxval, minval=0, dtype="int32", sparse_dim=None, seed=None, **kwargs):
         """
         :param tuple[Dim|int]|list[Dim|int] shape: desired shape of output tensor
@@ -3317,7 +3317,7 @@ class RangeLayer(LayerBase):
 
     layer_class = "range"
 
-    # noinspection PyUnusedLocal
+    # noinspection PyUnusedLocal,PyUnusedParameter
     def __init__(self, limit, start=0, delta=1, dtype=None, sparse=False, out_spatial_dim=None, **kwargs):
         """
         :param int|float limit:
@@ -3380,7 +3380,7 @@ class RangeInAxisLayer(LayerBase):
     layer_class = "range_in_axis"
     recurrent = True  # if axis=="T", the time-dim order matters
 
-    # noinspection PyUnusedLocal
+    # noinspection PyUnusedLocal,PyUnusedParameter
     def __init__(self, axis, dtype="int32", unbroadcast=False, keepdims=False, sparse=False, **kwargs):
         """
         :param str|Dim axis:
@@ -3456,7 +3456,7 @@ class RangeFromLengthLayer(LayerBase):
     layer_class = "range_from_length"
     recurrent = True
 
-    # noinspection PyUnusedLocal
+    # noinspection PyUnusedLocal,PyUnusedParameter
     def __init__(self, dtype="int32", sparse=False, out_spatial_dim=None, **kwargs):
         """
         :param str axis:
@@ -3551,7 +3551,7 @@ class ConstantLayer(LayerBase):
 
     layer_class = "constant"
 
-    # noinspection PyUnusedLocal
+    # noinspection PyUnusedLocal,PyUnusedParameter
     def __init__(
         self,
         sources,
@@ -6000,7 +6000,7 @@ class ReinterpretDataLayer(_ConcatInputLayer):
 
     layer_class = "reinterpret_data"
 
-    # noinspection PyUnusedLocal
+    # noinspection PyUnusedLocal,PyUnusedParameter
     def __init__(
         self,
         switch_axes=None,
@@ -6248,7 +6248,7 @@ class ConvLayer(_ConcatInputLayer):
     layer_class = "conv"
     recurrent = True  # we must not allow any shuffling in the time-dim or so
 
-    # noinspection PyUnusedLocal,PyShadowingBuiltins
+    # noinspection PyUnusedLocal,PyShadowingBuiltins,PyUnusedParameter
     def __init__(
         self,
         filter_size,
@@ -7109,7 +7109,7 @@ class PoolLayer(_ConcatInputLayer):
     layer_class = "pool"
     recurrent = True  # we should not shuffle in the time-dimension
 
-    # noinspection PyUnusedLocal
+    # noinspection PyUnusedLocal,PyUnusedParameter
     def __init__(
         self,
         mode,
@@ -8029,7 +8029,7 @@ class SqueezeLayer(_ConcatInputLayer):
 
     layer_class = "squeeze"
 
-    # noinspection PyUnusedLocal
+    # noinspection PyUnusedLocal,PyUnusedParameter
     def __init__(self, axis, enforce_batch_dim_axis=None, allow_no_op=False, **kwargs):
         """
         :param Dim|int|list[int]|str axis: one axis or multiple axis to squeeze.
@@ -8849,7 +8849,7 @@ class DotLayer(LayerBase):
         # For A, if transpose_a, we must reorder the axes as: a_rem_axes + a_reduce_axes + a_var_axes.
         # For B, if not transpose_b, we must reorder the axes as: b_rem_axes + b_reduce_axes + b_var_axes.
         # For B, if transpose_b, we must reorder the axes as: b_rem_axes + b_var_axes + b_reduce_axes.
-        # For matmul, all the first dims must match (batch dim etc), and for the remaining 2 dims,
+        # For matmul, all the first dims must match (batch dim etc.), and for the remaining 2 dims,
         # we get (I, J) * (J, K) -> (I, K).
         # So we reshape such that we collapse all reduce-axes and var-axes into each a single axis.
         a_shape = get_shape(a_out.placeholder)
@@ -10306,13 +10306,14 @@ class CondLayer(LayerBase):
         :param str key: e.g. "true_layer"
         :param returnn.tf.network.TFNetwork network:
         :param (str)->LayerBase get_layer:
-        :return: will replace inplace in ``d``; returns the sublayer class and desc
-        :rtype: (type[LayerBase], dict[str])
+        :return: will replace inplace in ``d``; the sublayer class and desc,
+            or None when the entry was a layer NAME (resolved in ``d``, nothing to report)
+        :rtype: (type[LayerBase], dict[str])|None
         """
         layer_desc = d[key]
         if isinstance(layer_desc, str):
             d[key] = get_layer(layer_desc)
-            return
+            return None  # replaced in d, no sublayer class/desc to report
         assert isinstance(layer_desc, dict)
         name = d["_name"]
         extra_net = network.make_extra_net(
@@ -11901,7 +11902,7 @@ class TikhonovRegularizationLayer(CopyLayer):
 
 class FramewiseStatisticsLayer(LayerBase):
     """
-    Collects various statistics (such as FER, etc) on the sources.
+    Collects various statistics (such as FER, etc.) on the sources.
     The tensors will get stored in self.stats which will be collected by TFEngine.
     """
 
@@ -12544,7 +12545,7 @@ class GenericCELoss(Loss):
     def __init__(self, **kwargs):
         super(GenericCELoss, self).__init__(**kwargs)
 
-        # noinspection PyUnusedLocal
+        # noinspection PyUnusedLocal,PyUnusedParameter
         def loss(z, y, grad_f, target):
             """
             :param tf.Tensor z:
@@ -12560,7 +12561,7 @@ class GenericCELoss(Loss):
             gathered = tf.gather_nd(nlog_scores, target_exp)  # (time,)
             return self.reduce_func(gathered)
 
-        # noinspection PyUnusedLocal
+        # noinspection PyUnusedLocal,PyUnusedParameter
         def loss_grad(op, grad):
             """
             :param tf.Operation op:
@@ -13195,7 +13196,7 @@ class DeepClusteringLoss(Loss):
         with tf.name_scope("loss_deep_clustering"):
             # iterate through all chunks and compute affinity cost function for every chunk separately
 
-            # noinspection PyUnusedLocal,PyShadowingNames
+            # noinspection PyUnusedLocal,PyShadowingNames,PyUnusedParameter
             def iterate_sequences(s, start, c):
                 """
                 :param tf.Tensor s:

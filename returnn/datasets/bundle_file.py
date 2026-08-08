@@ -1,3 +1,8 @@
+"""
+Bundle file: a text file listing the HDF dataset files that make up a corpus.
+"""
+
+
 class BundleFile:
     """Holds paths to HDF dataset files."""
 
@@ -31,7 +36,7 @@ class BundleFile:
         with open(self._filePath, "r") as bundleFile:
             self._datasetFilesPaths = filter(
                 lambda f: bool(f),  # filter off empty lines
-                map(lambda l: l.strip(), bundleFile.readlines()),  # strip spaces from left and right
+                map(lambda line: line.strip(), bundleFile.readlines()),  # strip spaces from left and right
             )
 
     @property

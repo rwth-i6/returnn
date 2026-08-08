@@ -755,9 +755,11 @@ class Layer:
                 dep_name_set.add(x)
                 return
             if isinstance(x, Tensor):
-                return _maybe_add_dep(x.raw_tensor)
+                _maybe_add_dep(x.raw_tensor)
+                return
             if isinstance(x, Net):
-                return _maybe_add_dep(x.name_ctx.children["output"].tensor)
+                _maybe_add_dep(x.name_ctx.children["output"].tensor)
+                return
 
         if _extra_layer_dict:
             nest.map_structure(_maybe_add_dep, _extra_layer_dict)

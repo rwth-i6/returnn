@@ -24,8 +24,8 @@ class GeneratingDataset(Dataset):
     Some base class for datasets with artificially generated data.
     """
 
-    _input_classes = None
-    _output_classes = None
+    _input_classes: Optional[str] = None  # label chars, set by subclasses
+    _output_classes: Optional[str] = None  # label chars, set by subclasses
     _getnewargs_remap = dict(num_seqs="_total_num_seqs", **Dataset._getnewargs_remap)
 
     def __init__(self, input_dim, output_dim, num_seqs=float("inf"), **kwargs):
@@ -2403,7 +2403,7 @@ class Enwik8Corpus(CachedDataset2):
     """
 
     # Use a single HDF file, and cache it across all instances.
-    _hdf_file = None
+    _hdf_file: Optional[Any] = None  # h5py.File, opened lazily
 
     def __init__(self, path, subset, seq_len, batch_num_seqs=None, subsubset=None, **kwargs):
         """

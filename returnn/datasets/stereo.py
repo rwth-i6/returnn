@@ -50,6 +50,10 @@ class StereoDataset(CachedDataset2):
 
     @property
     def seqs_per_epoch(self):
+        """
+        :return: number of sequences per (partitioned) epoch, computed once and cached
+        :rtype: int
+        """
         if self._seqs_per_epoch is None:
             self._seqs_per_epoch = self._get_total_number_of_sequences() // self._partition_epoch
         return self._seqs_per_epoch

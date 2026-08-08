@@ -192,7 +192,7 @@ class LayerBase:
         self.name = name
         self.network = network
         self._register_layer()
-        self.kwargs: Optional[Dict[str]] = None  # set via self.post_init
+        self.kwargs: Optional[typing.Dict[str, typing.Any]] = None  # set via self.post_init
         self.target = None
         self.targets = None
         if target:
@@ -355,7 +355,7 @@ class LayerBase:
     @classmethod
     def get_out_data_from_opts(cls, **kwargs):
         """
-        Gets a Data template (i.e. shape etc is set but not the placeholder) for our __init__ args.
+        Gets a Data template (i.e. shape etc. is set but not the placeholder) for our __init__ args.
         The purpose of having this as a separate classmethod is to be able to infer the shape information
         without having to construct the layer.
         This function should not create any nodes in the computation graph.
@@ -415,7 +415,7 @@ class LayerBase:
             )
         # Any template construction should be aware of that, and eventually resolve it.
         if out_type is None:
-            out_type = {}  # type: typing.Dict[str]
+            out_type = {}  # type: typing.Dict[str,typing.Any]
         else:
             out_type = out_type.copy()
         out_type.setdefault("name", "%s_output" % name)
@@ -538,7 +538,7 @@ class LayerBase:
         )
         return output
 
-    # noinspection PyUnusedLocal
+    # noinspection PyUnusedLocal,PyUnusedParameter
     @classmethod
     def _post_init_output(
         cls,
@@ -823,7 +823,7 @@ class LayerBase:
                 if cls.layer_class in {"linear", "softmax"}:
                     d["out_dim"] = guessed_out_dim
                 else:
-                    # Many layers don't introduce a new out_dim (e.g. activation, copy, etc),
+                    # Many layers don't introduce a new out_dim (e.g. activation, copy, etc.),
                     # and setting out_dim would break many old configs.
                     d["n_out"] = guessed_out_dim.dimension
         if "out_shape" in d:
@@ -2941,7 +2941,7 @@ class Loss:
         Also, some code overwrites this function externally,
         e.g. with returnn.tf.util.basic.identity, to not do reducing.
 
-        :param tf.Tensor loss: e.g. (batch*time,), or (time_flat,), or (batch*time,dim), etc
+        :param tf.Tensor loss: e.g. (batch*time,), or (time_flat,), or (batch*time,dim), etc.
         :return: by default just a scalar. but this can be overwritten, to not reduce
         :rtype: tf.Tensor
         """
@@ -2952,7 +2952,7 @@ class Loss:
 
     def reduce_to_batch(self, loss, normalize):
         """
-        :param tf.Tensor loss: e.g. (batch*time,), or (time_flat,), or (batch*time,dim), etc
+        :param tf.Tensor loss: e.g. (batch*time,), or (time_flat,), or (batch*time,dim), etc.
         :param bool normalize: reduce mean instead of reduce sum
         :return: (batch,)
         :rtype: tf.Tensor

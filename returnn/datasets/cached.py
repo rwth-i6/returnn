@@ -1,3 +1,7 @@
+"""
+CachedDataset: dataset base class that preloads sequences into a fixed-size memory cache.
+"""
+
 from __future__ import annotations
 from typing import List
 import gc
@@ -307,11 +311,11 @@ class CachedDataset(Dataset):
         idi = self.alloc_interval_index(idc)
         assert idi >= 0
         o = self._seq_start[idc][0] - self._seq_start[self.alloc_intervals[idi][0]][0]
-        l = data.shape[0]
+        length = data.shape[0]
         x = data
         if self.window > 1:
             x = self._sliding_window(x)
-        self.alloc_intervals[idi][2][o : o + l] = x
+        self.alloc_intervals[idi][2][o : o + length] = x
 
     def alloc_interval_index(self, ids):
         """
@@ -590,8 +594,8 @@ class CachedDataset(Dataset):
         if self.num_inputs > 0:
             d["data"] = lengths[0]
             first_target_idx = 1
-        for k, l in zip(self.target_keys, lengths[first_target_idx:]):
-            d[k] = l
+        for k, length in zip(self.target_keys, lengths[first_target_idx:]):
+            d[k] = length
         return NumbersDict(d)
 
     def get_seq_start(self, sorted_seq_idx):
@@ -613,9 +617,9 @@ class CachedDataset(Dataset):
         alloc_start_seq, alloc_end_seq, alloc_data = self.alloc_intervals[idi]
         o = self.get_seq_start(seq_idx)[0] - self.get_seq_start(alloc_start_seq)[0]
         assert o >= 0
-        l = self.get_seq_length_nd(sorted_seq_idx)[0]
-        assert alloc_data.shape[0] >= o + l
-        return alloc_data[o : o + l]
+        length = self.get_seq_length_nd(sorted_seq_idx)[0]
+        assert alloc_data.shape[0] >= o + length
+        return alloc_data[o : o + length]
 
     def get_data_dim(self, key):
         if key == "data" and self.num_inputs > 0:  # if num_inputs == 0, we allow "data" as a target key

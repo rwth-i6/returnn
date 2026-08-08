@@ -42,7 +42,7 @@ class RawWavDataset(CachedDataset2):
         self._listFile = listFile
         with open(self._listFile, "r") as f:
             self._wavFiles = f.readlines()
-        self._wavFiles = [l.strip() for l in self._wavFiles]
+        self._wavFiles = [line.strip() for line in self._wavFiles]
         self._frameLength = frameLength
         self._frameShift = frameShift
         self._flag_pad = True  # specifies if signal is getting cut or zero padded for last frame

@@ -51,7 +51,7 @@ def copy_to_device(x: Tensor, device: Optional[str] = None) -> Tensor:
 
 def get_default_device() -> Optional[str]:
     """
-    :return: default device, where to put new tensors (via random number generators, constant, range_over_dim, etc)
+    :return: default device, where to put new tensors (via random number generators, constant, range_over_dim, etc.)
     """
     return _default_device
 

@@ -138,7 +138,7 @@ def _normalize_pkg_name(name):
 
 
 # For every `module_name` call, we insert an entry in here.
-_registered_modules = {}  # type: typing.Dict[str]
+_registered_modules = {}  # type: typing.Dict[str,object]  # mod name -> info, just for reporting
 
 
 def _register_module(mod_name, info):
