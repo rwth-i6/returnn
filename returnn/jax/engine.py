@@ -20,7 +20,7 @@ that costs one recompile per epoch.
 """
 
 from __future__ import annotations
-from typing import Optional, Union, Any, Dict, List
+from typing import Optional, Union, Any, Dict, List, Tuple
 import os
 import time
 
@@ -36,7 +36,13 @@ from returnn.tensor import Tensor, TensorDict
 from returnn.util import basic as util
 import returnn.frontend as rf
 
-from .data import iter_dataset_batches, fill_extern_data, reset_extern_data_dims
+from .data import (
+    iter_dataset_batches,
+    fill_extern_data,
+    reset_extern_data_dims,
+    pad_raws_to_bucket,
+    batch_to_jax_raws,
+)
 from .frontend._backend import JaxBackend, _device_from_str
 from .updater import Updater
 from . import checkpoint as _checkpoint
@@ -76,6 +82,14 @@ class Engine(EngineBase):
         self._batch_opts = _batch_opts_from_config(config)
         self._jit_opts = _jit_opts_from_config(config)
         self._rng_key = None
+        self._jitted_step = None
+        self._compiled_steps: Dict[Any, Any] = {}  # input signature -> executable, see _run_compiled_step
+        # The epoch is TRACED by default. As a static argument it looked harmless -- config code may
+        # branch on it, and one recompile per epoch sounded cheap -- but a compile of this step costs
+        # minutes per input shape, so it would be one full recompile of EVERY shape at EVERY epoch
+        # (measured: 204 sec x 3 shapes x 100 subepochs). Configs which really need a Python-level
+        # epoch inside the step can ask for the old behaviour and pay for it.
+        self._static_argnums: Tuple[int, ...] = (7,) if (self._jit_opts or {}).get("epoch_static") else ()
         # Numeric defaults stay JAX's own -- notably, float32 matmuls run in TF32 on GPU,
         # which PyTorch does not do by default. We do not override that here:
         # each backend follows its own conventions.
@@ -152,6 +166,8 @@ class Engine(EngineBase):
             f"JAX engine: starting at epoch {self.epoch}, device {self._device}, devices {jax.devices()}",
             file=log.v3,
         )
+        if self._jit_opts is not None:
+            self._precompile_buckets()
 
     def train(self):
         """
@@ -205,7 +221,7 @@ class Engine(EngineBase):
                 self._rng_key,
                 jnp.asarray(learning_rate, dtype=jnp.float32),
                 jnp.asarray(self.global_train_step, dtype=jnp.int32),
-                self.epoch,
+                self.epoch if self._static_argnums else jnp.asarray(self.epoch, dtype=jnp.int32),
             )
             for idx, raw in zip(self._train_param_idx + self._other_param_idx, list(train_raws) + list(other_raws)):
                 self._params[idx].raw_tensor = raw
@@ -289,6 +305,126 @@ class Engine(EngineBase):
             **{k: v for k, v in self._batch_opts.items() if k not in ("batch_size", "eval_batch_size", "max_seqs")},
         )
 
+    def _bucket_for(self, batch_raws: Dict[str, Any]) -> Dict[str, int]:
+        """
+        :param batch_raws: one batch
+        :return: the first declared bucket the batch fits into
+        :raise ValueError: when none does -- the batch cannot be run without compiling a program
+            that was not declared, which is exactly what buckets exist to prevent
+        """
+        shapes = {key: value.shape for key, value in batch_raws.items() if hasattr(value, "shape")}
+        for bucket in self._jit_opts["buckets"]:
+            if all(
+                value.shape[0] <= bucket["batch_dim"]
+                and all(
+                    value.shape[axis] <= int(bucket[key])
+                    for axis, dim in enumerate(self.extern_data.data[key].dims[1:], start=1)
+                    if dim.is_dynamic()
+                )
+                for key, value in batch_raws.items()
+                if key in self.extern_data.data and hasattr(value, "shape") and value.ndim
+            ):
+                return bucket
+        raise ValueError(
+            f"JAX engine: no jax_jit bucket fits this batch.\n  batch: {shapes}\n  buckets:"
+            + "".join(f"\n    {bucket}" for bucket in self._jit_opts["buckets"])
+            + "\nDeclare a bucket that covers it, or bound the batching so it cannot occur."
+        )
+
+    def _precompile_buckets(self):
+        """
+        Compile one executable per declared bucket, before training starts.
+
+        This is the whole point of declaring them: after this, every batch is padded into one of
+        these shapes and there is no compilation left to do. A compile costs minutes, so it belongs
+        at startup where it is paid once and visibly, not in the middle of an epoch.
+        """
+        buckets = self._jit_opts.get("buckets")
+        if not buckets:
+            return
+        start = time.time()
+        for bucket in buckets:
+            # Through the REAL data path (batch_to_jax_raws + _step_raws), not hand-built arrays:
+            # the signature includes things like whether each array is committed to a device, and
+            # batch_dim is deliberately left uncommitted there. Building it separately produced a
+            # signature that did not match a single real batch, so nothing was actually precompiled.
+            raw = {"batch_dim": bucket["batch_dim"]}
+            for key, template in self.extern_data.data.items():
+                if template.dtype == "string":
+                    continue
+                shape, has_dyn = [bucket["batch_dim"]], False
+                for dim in template.dims[1:]:
+                    if dim.is_dynamic():
+                        shape.append(int(bucket[key]))
+                        has_dyn = True
+                    else:
+                        shape.append(dim.dimension)
+                raw[key] = numpy.zeros(shape, dtype=template.dtype)
+                if has_dyn:
+                    raw[f"{key}_seq_lens"] = numpy.zeros((bucket["batch_dim"],), dtype="int32")
+            raws = self._step_raws(
+                batch_to_jax_raws(
+                    raw,
+                    extern_data=self.extern_data,
+                    device=self._device,
+                    time_multiple=self._jit_opts["time_multiple"],
+                )
+            )
+            self._run_compiled_step(
+                [self._params[i].raw_tensor for i in self._train_param_idx],
+                [self._params[i].raw_tensor for i in self._other_param_idx],
+                raws,
+                self._opt_state,
+                self._rng_key if self._rng_key is not None else self._commit_one(JaxBackend._get_rng_key_()),
+                jnp.asarray(0.0, dtype=jnp.float32),  # lr 0: this call must not change the model
+                jnp.asarray(0, dtype=jnp.int32),
+                self.epoch if self._static_argnums else jnp.asarray(self.epoch, dtype=jnp.int32),
+                _compile_only=True,
+            )
+        print(
+            f"JAX engine: compiled {len(buckets)} bucket programs in {time.time() - start:.1f} sec",
+            file=log.v3,
+        )
+
+    def _run_compiled_step(self, *args, _compile_only: bool = False):
+        """
+        :param args: the arguments of one train step
+        :param _compile_only: only compile the executable for these arguments, do not run it
+            (see :func:`_precompile_buckets`)
+        :return: what the step returns, or None when only compiling
+
+        Compiles the step explicitly (lower + compile) and keeps one executable per input
+        signature, instead of leaving it to ``jax.jit``'s implicit cache. Same executables either
+        way -- the difference is that a compile here is a visible, counted event with its cost in
+        the log, and that with declared buckets there is nothing left to compile at all.
+
+        With ``jax_jit`` buckets, a signature that is not already compiled is an ERROR rather than
+        a compile: the buckets ARE the set of programs, so meeting a shape outside them means the
+        padding did not do its job, and silently spending minutes on a new program would hide that.
+        """
+        signature = _step_signature(args)
+        compiled = self._compiled_steps.get(signature)
+        if compiled is None:
+            if self._jit_opts.get("buckets") and not _compile_only:
+                raise RuntimeError(
+                    f"JAX engine: a batch reached the step with a signature no bucket program covers."
+                    f"\n  got: {signature}\nCompiled bucket programs:"
+                    + "".join(f"\n  {known}" for known in self._compiled_steps)
+                )
+            start = time.time()
+            compiled = self._jitted_step.lower(*args).compile()
+            self._compiled_steps[signature] = compiled
+            print(
+                f"JAX engine: compiled the step in {time.time() - start:.1f} sec"
+                f" (compile #{len(self._compiled_steps)}, for {signature})",
+                file=log.v3,
+            )
+        if _compile_only:
+            return None
+        # A compiled executable has the static arguments BAKED IN (that is what static means),
+        # so they are not passed again -- unlike the jitted function, which still takes them.
+        return compiled(*[arg for i, arg in enumerate(args) if i not in self._static_argnums])
+
     def _commit_one(self, raw: Any) -> Any:
         """
         :param raw: a JAX array, or anything else (left alone)
@@ -325,7 +461,12 @@ class Engine(EngineBase):
         """
         if self._jit_opts is None:
             return batch_raws
-        return {key: value for key, value in batch_raws.items() if not _is_host_only(value)}
+        batch_raws = {key: value for key, value in batch_raws.items() if not _is_host_only(value)}
+        if self._jit_opts.get("buckets"):
+            batch_raws = pad_raws_to_bucket(
+                batch_raws, extern_data=self.extern_data, bucket=self._bucket_for(batch_raws)
+            )
+        return batch_raws
 
     def _create_model(self, *, epoch: int, step: int):
         """
@@ -365,8 +506,13 @@ class Engine(EngineBase):
                 self._params[idx].raw_tensor = raw
             try:
                 extern_data = fill_extern_data(self.extern_data, batch_raws)
-                if not isinstance(step, int):  # traced: wrap it, the run ctx takes an int or a Tensor
-                    step = Tensor("step", dims=(), dtype="int32", raw_tensor=step)
+                # traced values: wrap them, the run ctx takes an int or a Tensor.
+                # The dtype comes from the array, not assumed: a plain Python int becomes int64
+                # under x64, which this backend enables.
+                if not isinstance(step, int):
+                    step = Tensor("step", dims=(), dtype=JaxBackend.get_dtype_name_raw(step), raw_tensor=step)
+                if not isinstance(epoch, int):
+                    epoch = Tensor("epoch", dims=(), dtype=JaxBackend.get_dtype_name_raw(epoch), raw_tensor=epoch)
                 rf.init_train_step_run_ctx(train_flag=train_flag, step=step, epoch=epoch)
                 sentinel_kw = util.get_fwd_compat_kwargs()
                 # Static traceable == static shapes: every dynamic dim must report a capacity,
@@ -417,11 +563,14 @@ class Engine(EngineBase):
         # reference to each (the engine does: the rf.Parameter, reassigned right after the step).
         # Not donated: the batch, since no output aliases it, and the RNG key, which is two uint32s
         # -- nothing to save, and it is the one argument a caller may reasonably want to reuse.
-        self._train_step = (
-            jax.jit(_train_step, static_argnums=(7,), donate_argnums=(0, 1, 3))
-            if self._jit_opts is not None
-            else _train_step
-        )
+        if self._jit_opts is None:
+            self._train_step = _train_step
+        else:
+            self._jitted_step = jax.jit(_train_step, static_argnums=self._static_argnums, donate_argnums=(0, 1, 3))
+            # NOT the jitted function directly: that compiles implicitly, whenever an input signature
+            # it has not seen turns up, in the middle of an epoch, silently. A compile of this step
+            # costs minutes, so it is done explicitly, counted and logged. See :func:`_run_compiled_step`.
+            self._train_step = self._run_compiled_step
         self._opt_state = self._updater.init([self._params[i].raw_tensor for i in self._train_param_idx])
         self._opt_state = jax.tree_util.tree_map(self._commit_one, self._opt_state)
 
@@ -630,6 +779,26 @@ def _check_time_multiple(time_multiple: Union[int, Dict[str, int]], *, extern_da
             )
 
 
+def _step_signature(args) -> Any:
+    """
+    :param args: the arguments of one step
+    :return: a hashable key holding everything a compiled executable is specialized on:
+        the pytree structure, and per array its shape, dtype and whether it is committed to a
+        device (which is part of the signature too -- an uncommitted array and a committed one
+        compile separately).
+    """
+    leaves, structure = jax.tree_util.tree_flatten(args)
+    return (
+        str(structure),
+        tuple(
+            (tuple(leaf.shape), str(leaf.dtype), bool(getattr(leaf, "committed", False)))
+            if isinstance(leaf, jax.Array)
+            else (type(leaf).__name__, repr(leaf) if isinstance(leaf, (int, float, bool, str)) else None)
+            for leaf in leaves
+        ),
+    )
+
+
 def _is_host_only(value: Any) -> bool:
     """
     :param value:
@@ -661,7 +830,18 @@ def _jit_opts_from_config(config: Config) -> Optional[Dict[str, Any]]:
         time_multiple = int(time_multiple)
     else:
         time_multiple = {key: int(value) for key, value in time_multiple.items()}
-    res = {"time_multiple": time_multiple}
+    buckets = opts.pop("buckets", None)
+    if buckets is not None:
+        if not isinstance(buckets, (list, tuple)) or not all(isinstance(b, dict) for b in buckets):
+            raise TypeError(f"JAX engine: jax_jit buckets must be a list of dicts, got {buckets!r}")
+        buckets = [{key: int(value) for key, value in bucket.items()} for bucket in buckets]
+    res = {
+        "time_multiple": time_multiple,
+        "buckets": buckets,
+        # only for configs whose step branches on the epoch in Python: it costs a full recompile
+        # of every input shape at every epoch
+        "epoch_static": bool(opts.pop("epoch_static", False)),
+    }
     if opts:
         raise NotImplementedError(f"JAX engine: jax_jit options not supported: {sorted(opts)}")
     return res

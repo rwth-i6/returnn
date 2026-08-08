@@ -1442,6 +1442,51 @@ def test_engine_train_jit(time_multiple: int):
         numpy.testing.assert_allclose(jit_params[name], value, rtol=1e-4, atol=1e-6, err_msg=name)
 
 
+def test_pad_raws_to_bucket_changes_nothing():
+    """
+    Padding the batch axis with zero-length sequences is only safe if every masked op ignores them.
+    If it does not, training would be silently wrong rather than broken, so this compares the
+    masked results of a batch against the same batch padded up to a bucket -- no RNG involved.
+    """
+    import jax.numpy as jnp
+    from returnn.tensor import batch_dim, TensorDict
+
+    # noinspection PyProtectedMember
+    from returnn.jax.data import fill_extern_data, pad_raws_to_bucket, reset_extern_data_dims
+
+    _rf_jax()
+    time_dim = Dim(None, name="time")
+    feat = Dim(3, name="feat")
+    extern_data = TensorDict()
+    extern_data.data["data"] = Tensor("data", dims=[batch_dim, time_dim, feat], dtype="float32")
+
+    values = numpy.arange(2 * 4 * 3, dtype="float32").reshape(2, 4, 3)
+    raws = {
+        "data": jnp.asarray(values),
+        "data_seq_lens": jnp.asarray([4, 2], dtype="int32"),
+        "batch_dim": jnp.asarray(2, dtype="int32"),
+    }
+    bucket = {"batch_dim": 5, "data": 7}
+    padded = pad_raws_to_bucket(raws, extern_data=extern_data, bucket=bucket)
+    assert padded["data"].shape == (5, 7, 3) and padded["data_seq_lens"].shape == (5,)
+    assert list(numpy.asarray(padded["data_seq_lens"])) == [4, 2, 0, 0, 0]
+
+    results = []
+    for name, one in [("plain", raws), ("padded", padded)]:
+        data = fill_extern_data(extern_data, one)["data"]
+        results.append(
+            {
+                "sum": numpy.asarray(rf.reduce_sum(data, axis=data.dims).raw_tensor),
+                "mean": numpy.asarray(rf.reduce_mean(data, axis=data.dims).raw_tensor),
+                "max": numpy.asarray(rf.reduce_max(data, axis=data.dims).raw_tensor),
+            }
+        )
+        reset_extern_data_dims(extern_data)
+        del name
+    for key in results[0]:
+        numpy.testing.assert_allclose(results[1][key], results[0][key], rtol=1e-6, err_msg=key)
+
+
 def test_jit_time_multiple_validation():
     """
     ``time_multiple`` is in the unit of the axis it pads. One number for keys whose axes are

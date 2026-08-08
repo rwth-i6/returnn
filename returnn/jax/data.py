@@ -24,6 +24,7 @@ __all__ = [
     "batch_to_jax_raws",
     "fill_extern_data",
     "reset_extern_data_dims",
+    "pad_raws_to_bucket",
     "iter_dataset_batches",
 ]
 
@@ -137,6 +138,39 @@ def fill_extern_data(extern_data: TensorDict, raws: Dict[str, Any]) -> TensorDic
             dim.capacity = raw.shape[i]
         data.raw_tensor = raw
         out.data[key] = data
+    return out
+
+
+def pad_raws_to_bucket(raws: Dict[str, Any], *, extern_data: TensorDict, bucket: Dict[str, int]) -> Dict[str, Any]:
+    """
+    Pad one batch up to a declared bucket: the batch axis to ``bucket["batch_dim"]`` sequences,
+    and every dynamic axis to the extent the bucket declares for its key.
+
+    The added sequences get length 0, so every mask in the step excludes them, and the batch dim's
+    VALUE stays the true number of sequences -- only its capacity becomes the bucket's.
+    That is what makes a padded batch axis correct rather than merely shaped right.
+
+    :param raws: as from :func:`batch_to_jax_raws`
+    :param extern_data: templates
+    :param bucket: ``batch_dim`` plus one entry per data key that has a dynamic axis
+    :return: raws with exactly the bucket's shapes
+    """
+    num_seqs = int(bucket["batch_dim"])
+    out = dict(raws)
+    for key, template in extern_data.data.items():
+        if key not in raws or template.dtype == "string":
+            continue
+        value = raws[key]
+        pad_width = [(0, num_seqs - value.shape[0])]
+        for axis, dim in enumerate(template.dims[1:], start=1):
+            target = int(bucket[key]) if dim.is_dynamic() else value.shape[axis]
+            pad_width.append((0, target - value.shape[axis]))
+        if any(before or after for before, after in pad_width):
+            out[key] = jnp.pad(value, pad_width)
+        lens_key = f"{key}_seq_lens"
+        if lens_key in raws:
+            # length 0 for the added sequences: they exist in the buffer and nowhere else
+            out[lens_key] = jnp.pad(raws[lens_key], [(0, num_seqs - raws[lens_key].shape[0])])
     return out
 
 
