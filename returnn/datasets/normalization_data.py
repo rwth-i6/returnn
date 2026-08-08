@@ -95,25 +95,25 @@ class NormalizationData:
         """
         import h5py
 
-        accumulatedSum = None
-        accumulatedSumOfSqr = None
-        totalFrames = long()
+        accumulated_sum = None
+        accumulated_sum_of_sqr = None
+        total_frames = long()
         bundle = BundleFile(bundleFilePath)
-        for filePath in bundle.datasetFilePaths:
-            with h5py.File(filePath, mode="r") as datasetFile:
-                intermSum, intermSumOfSqr, intermTotalFrames = NormalizationData._accumulateSums(
-                    datasetFile, groupName, dtype=dtype
+        for file_path in bundle.datasetFilePaths:
+            with h5py.File(file_path, mode="r") as dataset_file:
+                interm_sum, interm_sum_of_sqr, interm_total_frames = NormalizationData._accumulateSums(
+                    dataset_file, groupName, dtype=dtype
                 )
-                accumulatedSum = NormalizationData._updateTotalSum(accumulatedSum, intermSum)
-                accumulatedSumOfSqr = NormalizationData._updateTotalSum(accumulatedSumOfSqr, intermSumOfSqr)
-                totalFrames += intermTotalFrames
+                accumulated_sum = NormalizationData._updateTotalSum(accumulated_sum, interm_sum)
+                accumulated_sum_of_sqr = NormalizationData._updateTotalSum(accumulated_sum_of_sqr, interm_sum_of_sqr)
+                total_frames += interm_total_frames
 
-        mean, meanOfSquares, variance = NormalizationData._calculateMeans(
-            accumulatedSum, accumulatedSumOfSqr, totalFrames
+        mean, mean_of_squares, variance = NormalizationData._calculateMeans(
+            accumulated_sum, accumulated_sum_of_sqr, total_frames
         )
 
         with h5py.File(outputFilePath, mode="a") as out:
-            NormalizationData._writeData(out, groupName, mean, meanOfSquares, variance, totalFrames, dtype=dtype)
+            NormalizationData._writeData(out, groupName, mean, mean_of_squares, variance, total_frames, dtype=dtype)
 
     @staticmethod
     def _accumulateSums(f, groupName, dtype=np.float64):
