@@ -1157,8 +1157,8 @@ class TorchBackend(Backend[torch.Tensor]):
                     # noinspection PyProtectedMember
                     from torch.utils._python_dispatch import _disable_current_modes
                 except ImportError:  # older torch: no python dispatch modes to disable
-                    pass
-                else:
+                    _disable_current_modes = None
+                if _disable_current_modes is not None:
                     ctx = _disable_current_modes()
 
             with ctx:
