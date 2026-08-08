@@ -311,9 +311,10 @@ class PythonControl:
         self.cond = Condition()
         self.pipe_c2p = os.fdopen(c2p_fd, "wb")
         self.pipe_p2c = os.fdopen(p2c_fd, "rb")
-        self.sprint_callback = None  # via self._init
+        self.sprint_callback: typing.Optional[typing.Callable] = None  # via self._init
         self.sprint_version_number = None  # via self._init
-        self.callback = None  # either via Sprint, or self.own_threaded_callback
+        # either via Sprint, or self.own_threaded_callback
+        self.callback: typing.Optional[typing.Callable] = None
         self.loss_and_error_signal_via_sprint_callback = False
         # So, we get posteriors here from SprintErrorSignals. This will give us always log-probs for now.
         self.posteriors_in_log_space = True  # right now, not configurable

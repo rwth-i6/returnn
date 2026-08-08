@@ -10134,7 +10134,8 @@ class _WrapBaseCell(BaseRNNCell):
     Simpler helper wrapper class, for :class:`BaseRNNCell`.
     """
 
-    cell_type = None
+    # the wrapped cell class; set by the subclass (class attr) or in its __init__
+    cell_type: typing.Optional[typing.Type[rnn_cell.RNNCell]] = None
 
     def __init__(self, *args, **kwargs):
         """

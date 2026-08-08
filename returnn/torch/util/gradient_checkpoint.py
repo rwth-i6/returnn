@@ -147,7 +147,7 @@ class gradient_checkpoint_scope:
         # Note: saved_tensors_hooks is thread local.
         self.saved_tensors_hooks_scope = torch.autograd.graph.saved_tensors_hooks(self._pack_hook, self._unpack_hook)
         self.entered = False
-        self.entered_thread_ref = None
+        self.entered_thread_ref: Optional[ref] = None
         self.exit_args: Optional[tuple] = None
         self.exited_saved_tensors_hooks_scope = False
 

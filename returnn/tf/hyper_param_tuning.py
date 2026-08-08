@@ -74,7 +74,7 @@ class HyperParam:
         if classes is not None:
             assert isinstance(classes, (list, tuple)), "should be with a defined order"
             assert len(classes) > 0
-        self.dtype = dtype
+        self.dtype: typing.Optional[typing.Type[typing.Union[float, int, bool]]] = dtype
         self.bounds = bounds
         self.classes = classes
         self.log_space = log
