@@ -30,6 +30,7 @@ import tensorflow as tf
 from returnn.config import Config
 from returnn.datasets.basic import Dataset, init_dataset
 from returnn.engine.base import EngineBase
+from returnn.forward_iface import ForwardCallbackIface
 from returnn.engine.batch import batch_to_raw_dict
 from returnn.log import log
 from returnn.tensor import Tensor, TensorDict, Dim, batch_dim
@@ -75,6 +76,10 @@ class Engine(EngineBase):
         self._global_train_step_var: Optional[tf.Variable] = None
         self._train_flag: Optional[tf.Tensor] = None  # fed False for eval
         self._dyn_lr_func: Optional[Any] = None  # dynamic_learning_rate, applied per step
+        self._forward_step_func = None
+        self._forward_outputs: Optional[TensorDict] = None  # templates of the marked outputs
+        self._forward_fetches: Dict[str, tf.Tensor] = {}
+        self._forward_dim_fetches: Dict[Dim, str] = {}  # dyn dim -> its key in _forward_fetches
         self._step_placeholder: Optional[tf.Tensor] = None
         self._saver: Optional[tf_compat.v1.train.Saver] = None
         self._data_keys: List[str] = []
@@ -164,7 +169,7 @@ class Engine(EngineBase):
         fetches.update({f"loss:{name}": value for name, value in self._losses.items()})
         fetches.update(self._extra_fetches)
 
-        for feed_dict, complete_frac in self._iter_batches(self.train_dataset, train=True):
+        for feed_dict, complete_frac, _ in self._iter_batches(self.train_dataset, train=True):
             feed_dict[self._step_placeholder] = self.global_train_step
             if self._dyn_lr_func is not None:
                 self._updater.set_learning_rate(
@@ -222,7 +227,7 @@ class Engine(EngineBase):
         num_steps = 0
         fetches = {"loss": self._loss}
         fetches.update({f"loss:{key}": value for key, value in self._losses.items()})
-        for feed_dict, _ in self._iter_batches(dataset, train=False):
+        for feed_dict, _, _ in self._iter_batches(dataset, train=False):
             feed_dict[self._train_flag] = False  # no dropout etc. in eval
             feed_dict[self._step_placeholder] = self.global_train_step
             res = self.session.run(fetches, feed_dict=feed_dict)
@@ -235,6 +240,94 @@ class Engine(EngineBase):
         print(f"{name} epoch {self.epoch} score: {_format_scores(scores)}", file=log.v3)
         self.learning_rate_control.set_epoch_error(self.epoch, {f"{name}_{k}": v for k, v in scores.items()})
         self.learning_rate_control.save()
+
+    def init_network_from_config(self, config: Optional[Config] = None):
+        """
+        :param config:
+
+        Build the graph for the "forward" task, the way :func:`init_train_from_config` does for
+        training. Named after the net-dict engine's method because :mod:`returnn.__main__`
+        calls it by that name for this task.
+        """
+        assert config is self.config or config is None
+        config = self.config
+
+        from returnn.torch.data.extern_data import extern_data_template_from_config_opts
+
+        self.extern_data = extern_data_template_from_config_opts(config.typed_value("extern_data"))
+        self._forward_step_func = config.typed_value("forward_step")
+        assert self._forward_step_func, "forward_step not defined in config"
+        _check_config_opts_supported(config)
+        self.model_filename = config.value("model", None)
+        load_epoch, load_filename = self.get_epoch_model(config)
+        self.epoch = load_epoch or 1
+
+        self._graph = tf_compat.v1.Graph()
+        with self._graph.as_default():
+            self.session = tf_compat.v1.Session(graph=self._graph)
+            self._create_placeholders()
+            self._create_model(epoch=self.epoch, step=0)
+            with rf.set_amp_policy_ctx(self._amp_policy):
+                self._init_forward_func()
+            self.session.run(tf_compat.v1.global_variables_initializer())
+        assert load_filename, "forward task: no checkpoint to load (set `load` or `model` in the config)"
+        self._load_model(filename=load_filename)
+        print(f"TF engine: forward with epoch {self.epoch} ({load_filename})", file=log.v3)
+
+    def _init_forward_func(self):
+        """
+        Build the forward graph: run ``forward_step`` once and keep what it marked as output.
+        """
+        rf.init_forward_step_run_ctx(epoch=self.epoch, step=0)
+        self._forward_step_func(model=self.model, extern_data=self.extern_data, **util.get_fwd_compat_kwargs())
+        outputs = rf.get_run_ctx().outputs
+        assert outputs.data, "forward_step did not mark any output"
+        expected = self.config.typed_value("model_outputs")
+        if expected is not None:
+            expected_dict = TensorDict()
+            expected_dict.update(expected, auto_convert=True)
+            if set(expected_dict.data) != set(outputs.data):
+                raise ValueError(
+                    f"model_outputs declares {sorted(expected_dict.data)}"
+                    f" but forward_step marked {sorted(outputs.data)}"
+                )
+        self._forward_outputs = outputs
+        self._forward_fetches = {key: value.raw_tensor for key, value in outputs.data.items()}
+        # the dynamic sizes come along: they are what cuts each sequence out of the padded batch
+        for value in outputs.data.values():
+            for dim in value.dims:
+                size = dim.dyn_size_ext
+                if dim in self._forward_dim_fetches or size is None or not size.dims or size.raw_tensor is None:
+                    continue
+                key = f"size:{len(self._forward_dim_fetches)}"
+                self._forward_dim_fetches[dim] = key
+                self._forward_fetches[key] = size.raw_tensor
+
+    def forward_with_callback(
+        self, *, dataset: Dataset, callback: ForwardCallbackIface, dataset_init_epoch: bool = True
+    ):
+        """
+        :param dataset:
+        :param callback:
+        :param dataset_init_epoch: whether to call ``dataset.init_seq_order`` here
+        """
+        assert self._forward_fetches, "forward_with_callback: init_network_from_config was not called"
+        if dataset_init_epoch:
+            dataset.init_seq_order(epoch=self.epoch)
+        callback.init(model=self.model)
+        num_seqs = 0
+        start_time = time.time()
+        for feed_dict, _, seq_tags in self._iter_batches(dataset, train=False, init_seq_order=False):
+            res = self.session.run(self._forward_fetches, feed_dict=feed_dict)
+            sizes = {dim: res[key] for dim, key in self._forward_dim_fetches.items()}
+            for seq_idx, seq_tag in enumerate(seq_tags):
+                out = TensorDict()
+                for key, template in self._forward_outputs.data.items():
+                    out.data[key] = _seq_from_batch(template, res[key], seq_idx, sizes)
+                callback.process_seq(seq_tag=seq_tag, outputs=out)
+                num_seqs += 1
+        callback.finish()
+        print(f"forward: {num_seqs} seqs, {time.time() - start_time:.1f} sec", file=log.v3)
 
     def get_model(self) -> rf.Module:
         """
@@ -272,11 +365,12 @@ class Engine(EngineBase):
         batch_dim.dyn_size_ext = Tensor("batch", dims=(), dtype="int32")
         batch_dim.dyn_size_ext.raw_tensor = tf.shape(data.raw_tensor)[0]
 
-    def _iter_batches(self, dataset: Dataset, *, train: bool):
+    def _iter_batches(self, dataset: Dataset, *, train: bool, init_seq_order: bool = True):
         """
         :param dataset:
         :param train: whether this is the train dataset (affects only the batch options from the config)
-        :return: iterator over (feed dict for the placeholders, complete_frac of the dataset or None)
+        :param init_seq_order: whether to call ``dataset.init_seq_order`` here
+        :return: iterator over (feed dict for the placeholders, complete_frac or None, seq tags)
 
         ``complete_frac`` is what the other engines derive ``epoch_continuous`` from,
         and it comes from the dataset rather than from a batch count:
@@ -289,7 +383,8 @@ class Engine(EngineBase):
             if train
             else self._batch_opts.get("eval_batch_size") or self._batch_opts["batch_size"]
         )
-        dataset.init_seq_order(epoch=self.epoch)
+        if init_seq_order:
+            dataset.init_seq_order(epoch=self.epoch)
         batches = dataset.generate_batches(
             recurrent_net=True,
             batch_size=batch_size,
@@ -305,7 +400,14 @@ class Engine(EngineBase):
             # allow_only_lr_suitable: a dataset which cannot give a monotonic fraction says None here
             # rather than a number an LR schedule would step backwards on.
             complete_frac = dataset.get_complete_frac(batch.end_seq - 1, allow_only_lr_suitable=True)
-            yield feed_dict, complete_frac
+            # in the order the rows sit in the batch, which is what a per-sequence callback needs
+            seq_tags, seen = [], set()
+            for part in batch.seqs:
+                if part.seq_idx in seen:
+                    continue  # chunking can split one sequence over several parts
+                seen.add(part.seq_idx)
+                seq_tags.append(dataset.get_tag(part.seq_idx))
+            yield feed_dict, complete_frac, seq_tags
             batches.advance(1)
 
     def _create_model(self, *, epoch: int, step: int):
@@ -494,8 +596,6 @@ _UnsupportedConfigOpts = {
     "default_float_dtype": None,
     "epoch_end": None,
     "epoch_start": None,
-    "forward_step": None,  # forward / search
-    "model_outputs": None,  # forward / search
     "forward_auto_split_batch_on_oom": False,
     "grad_scaler": None,
     "load_model_post_hooks": None,
@@ -568,6 +668,35 @@ def _check_config_opts_supported(config: Config):
             + "\n  ".join(unsupported)
             + "\nThey would otherwise be ignored silently, which would change what the config means."
         )
+
+
+def _seq_from_batch(template: Tensor, raw: numpy.ndarray, seq_idx: int, sizes: Dict[Dim, numpy.ndarray]) -> Tensor:
+    """
+    :param template: a marked output, batched
+    :param raw: its value for the whole batch
+    :param seq_idx: the row in the batch
+    :param sizes: per dynamic dim, its size per sequence
+    :return: that row, without the batch dim and with the padding cut off
+
+    The callback gets one sequence at a time, so the dynamic dims become static here
+    (their value for this sequence), as they do in the PyTorch engine.
+    """
+    if batch_dim not in template.dims:
+        raise Exception(f"forward output {template} has no batch dim")
+    batch_axis = template.dims.index(batch_dim)
+    value = numpy.take(raw, seq_idx, axis=batch_axis)
+    dims = []
+    for axis, dim in enumerate([d for i, d in enumerate(template.dims) if i != batch_axis]):
+        lens = sizes.get(dim)
+        if lens is None:
+            dims.append(dim)
+            continue
+        size = int(lens[seq_idx])
+        value = value[(slice(None),) * axis + (slice(0, size),)]
+        dims.append(Dim(size, name=dim.name or "spatial"))
+    out = Tensor(template.name, dims=dims, dtype=template.dtype, sparse_dim=template.sparse_dim)
+    out.raw_tensor = value
+    return out
 
 
 def _format_extra_fetch(key: str, value: Any) -> str:

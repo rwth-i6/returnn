@@ -631,7 +631,10 @@ def execute_main_task():
             lr_control_update_scores=lr_control_update_scores,
         )
     elif task in ["forward", "hpx"]:
-        if config.typed_value("forward_callback") or not BackendEngine.is_tensorflow_selected():
+        if (
+            config.typed_value("forward_callback")
+            or BackendEngine.get_selected_engine() != BackendEngine.TensorFlowNetDict
+        ):
             engine.init_network_from_config(config)
             if config.value("forward_data", "eval") in ["train", "dev", "eval"]:
                 data = {"train": train_data, "dev": dev_data, "eval": eval_data}[config.value("forward_data", "eval")]

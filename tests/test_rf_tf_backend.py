@@ -1041,6 +1041,121 @@ def test_engine_log_grad_norm_and_batch_size():
     assert not any("grad_norm" in key or "batch_size" in key for key in errors), errors
 
 
+def test_engine_forward_with_callback():
+    # The forward task end to end: train a model, save it, then run the "forward" task on a fresh
+    # engine and check the callback gets one entry per sequence, with the batch dim gone and the
+    # padding cut off. That per-seq shaping is where a forward implementation usually goes wrong.
+    import tempfile
+    from returnn.config import Config, global_config_ctx
+    from returnn.datasets.generating import DummyDataset
+    from returnn.forward_iface import ForwardCallbackIface
+    from returnn.tf.engine_rf import Engine
+
+    # noinspection PyProtectedMember
+    from returnn.frontend import _backend
+
+    n_data_dim, n_classes_dim, seq_len = 2, 3, 5
+    data = DummyDataset(input_dim=n_data_dim, output_dim=n_classes_dim, num_seqs=7, seq_len=seq_len)
+    data.init_seq_order(epoch=1)
+
+    time_dim = Dim(Tensor("time", [batch_dim], dtype="int32"))
+    in_dim = Dim(n_data_dim, name="in")
+    out_dim = Dim(n_classes_dim, name="out")
+
+    class _Net(rf.Module):
+        def __init__(self):
+            super().__init__()
+            self.out = rf.Linear(in_dim, out_dim)
+
+    # noinspection PyShadowingNames
+    def _get_model(**_kwargs) -> rf.Module:
+        return _Net()
+
+    # noinspection PyShadowingNames
+    def _train_step(*, model: _Net, extern_data: TensorDict, **_kwargs):
+        rf.cross_entropy(
+            estimated=model.out(extern_data["data"]),
+            target=extern_data["classes"],
+            axis=out_dim,
+            estimated_type="logits",
+        ).mark_as_loss("ce")
+
+    # noinspection PyShadowingNames
+    def _forward_step(*, model: _Net, extern_data: TensorDict, **_kwargs):
+        logits = model.out(extern_data["data"])
+        logits.mark_as_output("logits", shape=(batch_dim, time_dim, out_dim))
+        rf.reduce_max(logits, axis=out_dim).mark_as_output("best", shape=(batch_dim, time_dim))
+
+    seen = []
+
+    class _Callback(ForwardCallbackIface):
+        def __init__(self):
+            self.model = None
+
+        def init(self, *, model):
+            self.model = model
+
+        def process_seq(self, *, seq_tag: str, outputs: TensorDict):
+            seen.append(
+                (
+                    seq_tag,
+                    {k: (v.raw_tensor.shape, tuple(d.dimension for d in v.dims)) for k, v in outputs.data.items()},
+                )
+            )
+
+        def finish(self):
+            seen.append(("<finish>", {}))
+
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        common = {
+            "backend": "tensorflow",
+            "extern_data": {
+                "data": {"dims": [batch_dim, time_dim, in_dim], "dtype": "float32"},
+                "classes": {"dims": [batch_dim, time_dim], "sparse_dim": out_dim, "dtype": "int32"},
+            },
+            "get_model": _get_model,
+            "batch_size": 20,
+            "max_seqs": 3,
+            "model": tmp_dir + "/model/epoch",
+            "learning_rate_file": tmp_dir + "/learning_rates",
+        }
+
+        _backend.select_backend_tf()
+        prev_batch_dyn_size_ext = batch_dim.dyn_size_ext
+        try:
+            train_config = Config(
+                {**common, "train_step": _train_step, "optimizer": {"class": "adam"}, "num_epochs": 1}
+            )
+            with global_config_ctx(train_config):
+                engine = Engine(config=train_config)
+                engine.init_train_from_config(config=train_config, train_data=data)
+                engine.train()
+
+            # a FRESH engine, forward task only, loading that checkpoint
+            fwd_config = Config({**common, "forward_step": _forward_step, "task": "forward"})
+            with global_config_ctx(fwd_config):
+                engine = Engine(config=fwd_config)
+                engine.init_network_from_config(config=fwd_config)
+                callback = _Callback()
+                engine.forward_with_callback(dataset=data, callback=callback)
+                assert callback.model is not None, "callback.init(model=...) was not called"
+        finally:
+            batch_dim.dyn_size_ext = prev_batch_dyn_size_ext
+            rf.select_backend_torch()
+
+    assert seen and seen[-1][0] == "<finish>", f"finish() not called last: {[t for t, _ in seen]}"
+    entries = seen[:-1]
+    assert len(entries) == data.num_seqs, f"expected {data.num_seqs} seqs, got {len(entries)}"
+    tags = [t for t, _ in entries]
+    assert len(set(tags)) == len(tags), f"duplicate seq tags: {tags}"
+    # not data.get_tag(i): the dataset only keeps the currently loaded seqs, and iteration is over
+    assert tags == ["seq-%i" % i for i in range(data.num_seqs)], tags
+    for tag, shapes in entries:
+        # batch dim gone, padding cut off: the dims are static and match the raw shape
+        assert shapes["logits"] == ((seq_len, n_classes_dim), (seq_len, n_classes_dim)), (tag, shapes)
+        assert shapes["best"] == ((seq_len,), (seq_len,)), (tag, shapes)
+
+
 def _full_model_setup():
     """
     :return: extern_data, get_model, forward_step, dims.
