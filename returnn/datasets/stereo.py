@@ -196,7 +196,7 @@ class StereoHdfDataset(StereoDataset):
         self._fileHandlers = []
         if hdfFile.endswith(".bundle"):  # a bundle file containing a list of hdf files is given
             bundle = BundleFile(hdfFile)
-            for hdfFilePath in bundle.datasetFilePaths:
+            for hdfFilePath in bundle.dataset_file_paths:
                 self._filePaths.append(hdfFilePath)
                 self._fileHandlers.append(h5py.File(hdfFilePath, "r"))
         else:  # only a single hdf file is given

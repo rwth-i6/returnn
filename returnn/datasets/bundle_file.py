@@ -6,7 +6,7 @@ Bundle file: a text file listing the HDF dataset files that make up a corpus.
 class BundleFile:
     """Holds paths to HDF dataset files."""
 
-    def __init__(self, filePath):
+    def __init__(self, file_path):
         """Reads paths to HDF dataset files from a bundle file.
         Example of contents of a bundle file:
 
@@ -23,36 +23,36 @@ class BundleFile:
         /work/asr2/ryndin/crnnRegressionSpeechEnhancemenent/data/data_tr05_simu_5_100.hdf
         /work/asr2/ryndin/crnnRegressionSpeechEnhancemenent/data/data_tr05_simu_6_100.hdf
 
-        :type filePath: str
-        :param filePath: path to a bundle file which contains paths to HDF
+        :type file_path: str
+        :param file_path: path to a bundle file which contains paths to HDF
                          dataset files. One path per line.
         """
-        self._filePath = filePath
-        self._datasetFilesPaths = []
-        self._readDatasetFilesPaths()
+        self._file_path = file_path
+        self._dataset_files_paths = []
+        self._read_dataset_files_paths()
 
-    def _readDatasetFilesPaths(self):
+    def _read_dataset_files_paths(self):
         """Reads paths to HDF dataset files from a bundle file."""
-        with open(self._filePath, "r") as bundleFile:
-            self._datasetFilesPaths = filter(
+        with open(self._file_path, "r") as bundle_file:
+            self._dataset_files_paths = filter(
                 lambda f: bool(f),  # filter off empty lines
-                map(lambda line: line.strip(), bundleFile.readlines()),  # strip spaces from left and right
+                map(lambda line: line.strip(), bundle_file.readlines()),  # strip spaces from left and right
             )
 
     @property
-    def datasetFilePaths(self):
+    def dataset_file_paths(self):
         """Paths to HDF dataset files.
 
         :rtype: list of str
         :return: Paths to HDF dataset files.
         """
-        return self._datasetFilesPaths
+        return self._dataset_files_paths
 
     @property
-    def numberOfDatasetFiles(self):
+    def number_of_dataset_files(self):
         """Number of HDF dataset files.
 
         :rtype: int
         :return: Number of HDF dataset files.
         """
-        return len(self._datasetFilesPaths)
+        return len(self._dataset_files_paths)
