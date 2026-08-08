@@ -1044,7 +1044,8 @@ class ExternSprintDataset(SprintDatasetBase):
                 and self.expected_load_seq_start == 0
                 and seq_list == self.predefined_seq_list_order
             ):
-                return
+                # nothing changed: same epoch, nothing consumed yet, same seq list.
+                return False
             # Reset epoch such that exiting the child will go smoothly.
             super(ExternSprintDataset, self).init_seq_order(epoch=None, seq_list=None, seq_order=None)
         # Exit child, before we overwrite anything, such as new epoch or seq_list.
