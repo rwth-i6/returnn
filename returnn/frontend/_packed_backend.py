@@ -87,7 +87,7 @@ __all__ = ["PackedRawTensor", "PackedBackend", "pack", "pack_import", "unpack", 
 # so equal-length dims share the entry
 # (e.g. the fresh kv dim which attention creates per layer via replace_dim),
 # and it maps dims in cached outputs back to the queried dims.
-_layout_cache = Cache(128)
+_layout_cache = Cache(128)  # trace-boundary-safe, see rf._cache
 
 
 def _packing_cache_key(kind: str, raw: PackedRawTensor, device) -> Tuple[Any, ...]:
@@ -3956,6 +3956,7 @@ def pack(
     if dims is None:
         dims = _auto_pack_dims(source)
         assert dims, f"pack: no dims with dynamic length found in {source}"
+    content_bound = None  # set below in the gapped/aligned branch (dense path: see the ctor call)
     if gap or align > 1:
         # gapped/aligned layout: scatter frames to their positions, zeros in between the sequences
         last = dims[-1]
