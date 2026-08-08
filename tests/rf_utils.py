@@ -199,7 +199,27 @@ def run_model(
     for k, v_pt in out_pt_raw.items():
         v_tf = out_tf_raw[k]
         print(f"  comparing {k!r} {_array_repr(v_pt)} PT vs TF")
-        if not numpy.allclose(v_pt, v_tf, atol=1e-5, rtol=1e-5):
+        # Tolerance relative to the tensor MAGNITUDE, not just per element:
+        # different backends use different op implementations (e.g. the FFT in stft),
+        # so the error scales with the values in the tensor, and a fixed atol either
+        # fails on large-magnitude outputs or hides real errors on small ones.
+        rtol = 1e-5
+        a_pt, a_tf = numpy.asarray(v_pt), numpy.asarray(v_tf)  # scalars (e.g. static dim sizes) too
+        scale = float(numpy.max(numpy.abs(a_pt))) if a_pt.size else 0.0
+        atol = 1e-5 + rtol * scale
+        if not numpy.allclose(a_pt, a_tf, atol=atol, rtol=rtol):
+            # report WHAT differs and by how much (numpy elides the arrays themselves,
+            # so a bare dump does not tell whether this is noise or a real mismatch)
+            d_pt, d_tf = a_pt.astype("complex128"), a_tf.astype("complex128")
+            diff = numpy.abs(d_pt - d_tf)
+            bad = diff > (atol + rtol * numpy.abs(d_tf))
+            i_max = numpy.unravel_index(int(numpy.argmax(diff)), diff.shape)
+            print(
+                f"  MISMATCH {k!r}: {int(bad.sum())} of {a_pt.size} elements,"
+                f" max abs diff {float(diff.max()):.3e} at {i_max}"
+                f" (PT {a_pt[i_max]!r} vs TF {a_tf[i_max]!r}),"
+                f" tensor max abs {scale:.3e}, tolerance atol {atol:.3e} rtol {rtol:.0e}"
+            )
             print(f"  PT:\n{v_pt}")
             print(f"  TF:\n{v_tf}")
             raise CompareResultsMismatchTfVsPtException(f"output {k!r} differs")
