@@ -1725,7 +1725,8 @@ class _DimMixin:
         if other_same_base.get_same_derived_base() is self_same_as:
             # We actually want it to be the other way around.
             with util.guard_infinite_recursion(_d.Dim.declare_same_as, other, self):
-                return other.declare_same_as(self)
+                other.declare_same_as(self)
+                return
         if self.batch:
             # If self is defined (self.is_dim_known), be fair to other, and adapt it to the right batch,
             # such that other.is_dim_known is correct, by potentially completing it.
@@ -1745,13 +1746,15 @@ class _DimMixin:
             or (not self.undefined and other_.undefined)
         ):
             with util.guard_infinite_recursion(_d.Dim.declare_same_as, other, self):
-                return other.declare_same_as(self)
+                other.declare_same_as(self)
+                return
         other_derived_bases = other.get_derived_bases_set()
         self_derived_bases = self.get_derived_bases_set()
         if other_derived_bases != self_derived_bases and self_derived_bases.issubset(other_derived_bases):
             # Avoid cycles on derived_from_tag. https://github.com/rwth-i6/returnn/issues/1054
             with util.guard_infinite_recursion(_d.Dim.declare_same_as, other, self):
-                return other.declare_same_as(self)
+                other.declare_same_as(self)
+                return
         if self._extra:
             self._extra.derived_from_op = None
             self._extra.derived_from_tag = None
