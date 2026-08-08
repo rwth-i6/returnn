@@ -1187,7 +1187,7 @@ class SimpleHDFWriter:
         for data_key, (dim, ndim, dtype) in extra_type.items():
             assert data_key != "inputs"
             if data_key in self._prepared_extra:
-                return
+                return bool(added_count)
             if not self._prepared_extra and not self.extend_existing_file:
                 # For the first time, need to create the groups.
                 self._file.create_group("targets/data")
