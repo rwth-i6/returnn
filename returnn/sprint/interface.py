@@ -898,6 +898,8 @@ def _train(segment_name, features, targets=None):
 
         return posteriors
 
+    return None
+
 
 def features_to_dataset(features, segment_name):
     """

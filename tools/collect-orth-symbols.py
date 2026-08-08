@@ -37,9 +37,11 @@ def found_sub_seq(sub_seq, seq):
 
 def iter_dataset(dataset: Dataset, options, callback):
     """
-    :param dataset:
+    :param dataset: dataset to iterate over
+    :param options: unused
+    :param callback: called per seq as callback(frame_len=..., orth=...)
     """
-    options  # unused  # noqa
+    del options  # unused
     dataset.init_seq_order(epoch=1)
     assert "orth" in dataset.get_target_list()
 

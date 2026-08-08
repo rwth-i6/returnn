@@ -61,7 +61,15 @@ class NonDaemonicSpawnProcess(SpawnProcess):
     Note, if SIGINT does nothing on the subproc, this will hang.
     """
 
-    daemon = property(lambda self: False, lambda self, v: None)  # always False
+    @property
+    def daemon(self) -> bool:
+        """always False: this proc type is deliberately non-daemonic, see the class docstring"""
+        return False
+
+    @daemon.setter
+    def daemon(self, value: bool):
+        """ignored: multiprocessing sets this, but we always stay non-daemonic"""
+        del value  # see above
 
     pre_init_func: Optional[Callable[[], None]] = None
 

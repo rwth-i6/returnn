@@ -515,9 +515,21 @@ class CachedDataset(Dataset):
         return selection
 
     def insert_alloc_interval(self, start, end=None):
+        """
+        :param int start: like in load_seqs(), sorted seq idx
+        :param int|None end: like in load_seqs(), sorted seq idx, exclusive; start+1 if None
+        :return: selection list, the sorted seq idxs now covered by self.alloc_intervals
+        :rtype: list[int]
+        """
         return self._modify_alloc_intervals(start, end, True)
 
     def remove_alloc_interval(self, start, end=None):
+        """
+        :param int start: like in load_seqs(), sorted seq idx
+        :param int|None end: like in load_seqs(), sorted seq idx, exclusive; start+1 if None
+        :return: selection list, the sorted seq idxs no longer covered by self.alloc_intervals
+        :rtype: list[int]
+        """
         return self._modify_alloc_intervals(start, end, False)
 
     def delete(self, nframes):
@@ -552,6 +564,8 @@ class CachedDataset(Dataset):
         """
         :param int start: like in load_seqs(), sorted seq idx
         :param int end: like in load_seqs(), sorted seq idx
+        :param bool blocking: if the range is within the preload range, wait for it to be preloaded
+          instead of reporting it as not cached
         :rtype: bool
         :returns whether we have the full range (start,end) of sorted seq idx
           cached in self.alloc_intervals (end is exclusive).

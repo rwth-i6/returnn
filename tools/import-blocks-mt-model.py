@@ -10,14 +10,23 @@ Example Returnn network topology:
     network = {
     "source_embed": {"class": "linear", "activation": None, "with_bias": False, "n_out": 620},
 
-    "lstm0_fw" : { "class": "rec", "unit": "standardlstm", "unit_opts": {"use_peepholes": True, "forget_bias": 0.0}, "initial_state": "var", "n_out" : 1000, "direction": 1, "from": ["source_embed"] },
-    "lstm0_bw" : { "class": "rec", "unit": "standardlstm", "unit_opts": {"use_peepholes": True, "forget_bias": 0.0}, "initial_state": "var", "n_out" : 1000, "direction": -1, "from": ["source_embed"] },
+    "lstm0_fw" : { "class": "rec", "unit": "standardlstm",
+        "unit_opts": {"use_peepholes": True, "forget_bias": 0.0},
+        "initial_state": "var", "n_out" : 1000, "direction": 1, "from": ["source_embed"] },
+    "lstm0_bw" : { "class": "rec", "unit": "standardlstm",
+        "unit_opts": {"use_peepholes": True, "forget_bias": 0.0},
+        "initial_state": "var", "n_out" : 1000, "direction": -1, "from": ["source_embed"] },
 
-    "lstm1_fw" : { "class": "rec", "unit": "standardlstm", "unit_opts": {"use_peepholes": True, "forget_bias": 0.0}, "initial_state": "var", "n_out" : 1000, "direction": 1, "from": ["lstm0_fw", "lstm0_bw"] },
-    "lstm1_bw" : { "class": "rec", "unit": "standardlstm", "unit_opts": {"use_peepholes": True, "forget_bias": 0.0}, "initial_state": "var", "n_out" : 1000, "direction": -1, "from": ["lstm0_fw", "lstm0_bw"] },
+    "lstm1_fw" : { "class": "rec", "unit": "standardlstm",
+        "unit_opts": {"use_peepholes": True, "forget_bias": 0.0},
+        "initial_state": "var", "n_out" : 1000, "direction": 1, "from": ["lstm0_fw", "lstm0_bw"] },
+    "lstm1_bw" : { "class": "rec", "unit": "standardlstm",
+        "unit_opts": {"use_peepholes": True, "forget_bias": 0.0},
+        "initial_state": "var", "n_out" : 1000, "direction": -1, "from": ["lstm0_fw", "lstm0_bw"] },
 
     "encoder": {"class": "copy", "from": ["lstm1_fw", "lstm1_bw"]},
-    "enc_ctx": {"class": "linear", "activation": None, "with_bias": True, "from": ["encoder"], "n_out": 1000},  # preprocessed_attended in Blocks
+    # "enc_ctx" is the preprocessed_attended in Blocks
+    "enc_ctx": {"class": "linear", "activation": None, "with_bias": True, "from": ["encoder"], "n_out": 1000},
     "fertility": {"class": "linear", "activation": "sigmoid", "with_bias": False, "from": ["encoder"], "n_out": 1},
 
     "output": {"class": "rec", "from": [], "unit": {
