@@ -37,7 +37,7 @@ from returnn.util import basic as util
 import returnn.frontend as rf
 
 from .data import iter_dataset_batches, fill_extern_data, reset_extern_data_dims
-from .frontend._backend import JaxBackend
+from .frontend._backend import JaxBackend, _device_from_str
 from .updater import Updater
 from . import checkpoint as _checkpoint
 
@@ -187,7 +187,7 @@ class Engine(EngineBase):
         num_steps = 0
         # The RNG stream goes through the step as a value, so take it out of the backend here
         # and put the advanced one back at the end of the epoch.
-        self._rng_key = JaxBackend._get_rng_key_()
+        self._rng_key = self._commit_one(JaxBackend._get_rng_key_())
 
         for batch_raws, complete_frac in self._iter_batches(self.train_dataset, train=True):
             # The LR of the STEP: the epoch-level value, put through the config's schedule if it has one.
@@ -289,6 +289,33 @@ class Engine(EngineBase):
             **{k: v for k, v in self._batch_opts.items() if k not in ("batch_size", "eval_batch_size", "max_seqs")},
         )
 
+    def _commit_one(self, raw: Any) -> Any:
+        """
+        :param raw: a JAX array, or anything else (left alone)
+        :return: the same, placed on this engine's device
+
+        A jitted function is compiled per input SIGNATURE, and whether an array is committed to a
+        device is part of that signature -- an uncommitted array and a committed one of the same
+        shape give two compiled executables (verified: one trace, cache size two). The parameters
+        start uncommitted (created by the backend's initializers), and from the first step on they
+        are the compiled step's outputs, which are committed. Without this, every run pays a second
+        full compile of the whole step, for nothing.
+        """
+        if not isinstance(raw, jax.Array):
+            return raw
+        device = _device_from_str(self._device) if self._device else None
+        return jax.device_put(raw, device) if device is not None else raw
+
+    def _commit_to_device(self, raws: List[Any], *, into: Optional[List[rf.Parameter]] = None):
+        """
+        :param raws: JAX arrays
+        :param into: if given, the parameters to write the committed arrays back into
+        """
+        committed = [self._commit_one(raw) for raw in raws]
+        if into is not None:
+            for param, raw in zip(into, committed):
+                param.raw_tensor = raw
+
     def _step_raws(self, batch_raws: Dict[str, Any]) -> Dict[str, Any]:
         """
         :param batch_raws: one batch, as the data pipeline yields it
@@ -317,6 +344,7 @@ class Engine(EngineBase):
         self._params = [param for _, param in model.named_parameters()]
         self._train_param_idx = [i for i, param in enumerate(self._params) if param.trainable is not False]
         self._other_param_idx = [i for i in range(len(self._params)) if i not in set(self._train_param_idx)]
+        self._commit_to_device([param.raw_tensor for param in self._params], into=self._params)
         num_params = sum(int(numpy.prod(p.batch_shape)) for p in self._params)
         print(
             f"net params #: {num_params} ({len(self._train_param_idx)} of {len(self._params)} trainable)", file=log.v2
@@ -395,6 +423,7 @@ class Engine(EngineBase):
             else _train_step
         )
         self._opt_state = self._updater.init([self._params[i].raw_tensor for i in self._train_param_idx])
+        self._opt_state = jax.tree_util.tree_map(self._commit_one, self._opt_state)
 
     def _save_model(self):
         """
