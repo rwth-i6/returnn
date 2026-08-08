@@ -827,7 +827,7 @@ def calc_conv_out_length(
             filter_right_dilated = (filter_size_ - 1) * dilation_rate - filter_left_dilated
             valid_part = in_length.sub_left(filter_left_dilated).sub_right(filter_right_dilated)
         else:
-            valid_part = in_length - (filter_size_ - 1) * dilation_rate
+            valid_part = rf.maximum(0, in_length - (filter_size_ - 1) * dilation_rate)
 
         if isinstance(valid_part, Dim):
             out_length = valid_part.ceildiv_right(stride)
