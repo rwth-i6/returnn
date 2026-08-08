@@ -140,7 +140,7 @@ class OpMaker:
                 name = "_in_%s" % name
             return name
 
-        # noinspection PyShadowingNames,PyUnusedLocal
+        # noinspection PyShadowingNames
         def map_type(v: Dict[str, Any]) -> str:
             """dtype"""
             t = v.get("dtype", "float32")

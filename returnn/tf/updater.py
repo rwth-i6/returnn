@@ -1,5 +1,5 @@
 """
-This module covers the optimizer (SGD, Adam, etc) logic,
+This module covers the optimizer (SGD, Adam, etc.) logic,
 and model param update logic in general.
 """
 

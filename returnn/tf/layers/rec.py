@@ -114,7 +114,7 @@ class RecLayer(_ConcatInputLayer):
         **kwargs,
     ):
         """
-        :param str|_SubnetworkRecCell unit: the RNNCell/etc name, e.g. "nativelstm". see comment below.
+        :param str|_SubnetworkRecCell unit: the RNNCell/etc. name, e.g. "nativelstm". see comment below.
           alternatively a whole subnetwork, which will be executed step by step,
           and which can include "prev" in addition to "from" to refer to previous steps.
           The subnetwork is specified as a net dict in the config.
@@ -3406,7 +3406,6 @@ class _SubnetworkRecCell:
                     res = (identity_with_debug_log(out=self._debug_out, x=res[0], args=args),) + res[1:]
                 return res
 
-        # noinspection PyUnusedLocal
         def cond(i, net_vars, acc_tas, seq_len_info=None, allow_inf_max_len=False):
             """
             :param tf.Tensor i: loop counter, scalar
@@ -3417,6 +3416,8 @@ class _SubnetworkRecCell:
             :return: True -> we should run the current loop-iteration, False -> stop loop
             :rtype: tf.Tensor
             """
+            # the tf.while_loop cond signature must mirror the body signature
+            del net_vars, acc_tas  # cond mirrors the body signature
             with tf.name_scope("loop_cond"):
                 from returnn.tf.util.basic import opt_logical_and
 
@@ -3901,7 +3902,6 @@ class _SubnetworkRecCell:
 
                 return i - 1, src_choice_beams, new_acc_output_ta_
 
-        # noinspection PyUnusedLocal
         def search_resolve_cond(i, *args):
             """
             :param tf.Tensor i: rec step index, scalar, int32
@@ -4491,7 +4491,7 @@ class _TemplateLayer(LayerBase):
         self.is_prev_time_frame = False
         self.is_initialized = False
         self.layer_class_type = None  # type: typing.Optional[typing.Type[LayerBase]]
-        self.kwargs = None  # type: typing.Optional[typing.Dict[str]]  # after transform_config_dict
+        self.kwargs = None  # type: typing.Optional[typing.Dict[str,typing.Any]]  # after transform_config_dict
         self.dependencies = []  # type: typing.List[LayerBase]
         self.cur_frame_dependencies = []  # type: typing.List[LayerBase]
         self.prev_frame_dependencies = []  # type: typing.List[_TemplateLayer]
@@ -4629,7 +4629,7 @@ class _TemplateLayer(LayerBase):
                 layer.search_choices.set_beam_from_own_rec()
             assert layer.output.beam and layer.output.beam.beam_size == self.search_choices.beam_size
         # Note: When the sanity check fails because of missing dynamic sequence length information,
-        # then the layer might dynamically construct a new sequence length, such as ConvLayer etc
+        # then the layer might dynamically construct a new sequence length, such as ConvLayer etc.
         # (https://github.com/rwth-i6/returnn/wiki/Layers-which-introduce-new-dynamic-sequence-lengths).
         # In case this seq len is different per frame as mentioned in the comment above,
         # this is a problem and not supported currently.
@@ -5255,7 +5255,6 @@ class RnnCellLayer(_ConcatInputLayer):
         visit(self._initial_state)
         return ls
 
-    # noinspection PyUnusedLocal
     @classmethod
     def get_hidden_state_size(cls, n_out, unit, unit_opts=None, **kwargs):
         """
@@ -5268,7 +5267,6 @@ class RnnCellLayer(_ConcatInputLayer):
         cell = cls._get_cell(unit=unit, unit_opts=unit_opts, n_out=n_out)
         return cell.state_size
 
-    # noinspection PyUnusedLocal
     @classmethod
     def get_output_from_state(cls, state, unit):
         """
@@ -5276,6 +5274,8 @@ class RnnCellLayer(_ConcatInputLayer):
         :param str unit:
         :rtype: tf.Tensor
         """
+        # the cell is rebuilt from self, not from the passed unit
+        del unit  # cell is rebuilt from self
         if isinstance(state, rnn_cell.LSTMStateTuple):
             return state.h
         # Assume the state is the output. This might be wrong...
@@ -5625,7 +5625,6 @@ class RnnCellLayer(_ConcatInputLayer):
         if "initial_state" in d:
             d["initial_state"] = cls.transform_initial_state(d["initial_state"], network=network, get_layer=get_layer)
 
-    # noinspection PyUnusedLocal
     @staticmethod
     def transform_initial_state(initial_state, network, get_layer):
         """
@@ -5633,6 +5632,8 @@ class RnnCellLayer(_ConcatInputLayer):
         :param returnn.tf.network.TFNetwork network:
         :param ((str) -> LayerBase) get_layer: function to get or construct another layer
         """
+        # part of the fixed transform signature
+        del network  # fixed transform signature
 
         def resolve(v):
             """
@@ -5759,11 +5760,11 @@ class GetRecAccumulatedOutputLayer(LayerBase):
 
     layer_class = "get_rec_accumulated"
 
-    # noinspection PyUnusedLocal
     def __init__(self, sub_layer, **kwargs):
         """
         :param str sub_layer: layer of subnet in RecLayer source, which has 'is_output_layer': True
         """
+        del sub_layer  # only used in get_out_data_from_opts
         super(GetRecAccumulatedOutputLayer, self).__init__(**kwargs)
         # Nothing needs to be done, all logic in self.get_out_data_from_opts already.
 
@@ -5876,7 +5877,6 @@ class BaseChoiceLayer(LayerBase):
     i.e. which defines ``self.search_choices``.
     """
 
-    # noinspection PyUnusedLocal
     def __init__(self, beam_size, search=NotSpecified, add_to_beam_scores=NotSpecified, **kwargs):
         """
         :param int|None beam_size: the outgoing beam size. i.e. our output will be (batch * beam_size, ...)
@@ -5888,9 +5888,9 @@ class BaseChoiceLayer(LayerBase):
           By default, this is derived from `search or network.search_flag`.
           So with enabled net search flag, even when `search` is disabled here, it will add the scores.
         """
+        del beam_size, search, add_to_beam_scores  # only used in get_out_data_from_opts
         super(BaseChoiceLayer, self).__init__(**kwargs)
 
-    # noinspection PyUnusedLocal
     @classmethod
     def cls_get_search_beam_size(
         cls,
@@ -5914,6 +5914,7 @@ class BaseChoiceLayer(LayerBase):
             then the corresponding beam size
         :rtype: int|None
         """
+        del sources, _src_common_search_choices  # fixed signature
         search = NotSpecified.resolve(search, network.search_flag)
         add_to_beam_scores = NotSpecified.resolve(add_to_beam_scores, search or network.search_flag)
         if not search and not add_to_beam_scores:
@@ -6053,7 +6054,8 @@ class ChoiceLayer(BaseChoiceLayer):
         :param dict|None scheduled_sampling:
         :param bool|str cheating: if True, will always add the true target in the beam.
             if "exclusive", enables cheating_exclusive. see :func:`returnn.tf.util.basic.beam_search`.
-        :param list[LayerBase]|dict[str,LayerBase]|None explicit_search_sources: will mark it as an additional dependency.
+        :param list[LayerBase]|dict[str,LayerBase]|None explicit_search_sources:
+            will mark it as an additional dependency.
             You might use these also in custom_score_combine.
         :param callable|None custom_score_combine:
         """
@@ -6997,6 +6999,8 @@ class DecideLayer(BaseChoiceLayer):
         :param returnn.tf.network.TFNetwork network:
         :rtype: Data
         """
+        # part of the LayerBase.get_out_data_from_opts signature
+        del network  # fixed get_out_data_from_opts signature
         assert len(sources) == 1
         data = sources[0].output.copy_template(name="%s_output" % name).copy_as_batch_major()
         data.beam = None
@@ -7045,6 +7049,8 @@ class DecideKeepBeamLayer(BaseChoiceLayer):
         :param returnn.tf.network.TFNetwork network:
         :rtype: int|None
         """
+        # part of the LayerBase.cls_get_search_beam_size signature
+        del network  # fixed signature
         assert len(sources) == 1
         return sources[0].output.beam.beam_size if sources[0].output.beam else None
 
@@ -7214,6 +7220,8 @@ class SplitBatchBeamLayer(BaseChoiceLayer):
         :param Dim|None beam_dim:
         :rtype: Data
         """
+        # part of the LayerBase.get_out_data_from_opts signature
+        del network  # fixed get_out_data_from_opts signature
         assert len(sources) == 1
         data = sources[0].output.copy_template(name="%s_output" % name).copy_as_batch_major()
         beam = data.beam
@@ -8218,7 +8226,7 @@ class SelfAttentionLayer(_ConcatInputLayer):
         :param tf.Tensor mask: shape [B,T]
         """
 
-        # noinspection PyUnusedLocal,PyShadowingNames
+        # noinspection PyShadowingNames
         def _masked_transform_mask(value, prev_value, mask):
             """
             :param tf.Tensor value: mask [B,T]
@@ -8227,9 +8235,11 @@ class SelfAttentionLayer(_ConcatInputLayer):
             :return: masked value
             :rtype: tf.Tensor
             """
+            # only the mask shape matters here
+            del value  # only the mask shape is used
             return tf.concat([prev_value, mask[:, None]], axis=1)
 
-        # noinspection PyUnusedLocal,PyShadowingNames
+        # noinspection PyShadowingNames
         def _masked_transform_kv(value, prev_value, mask):
             """
             :param tf.Tensor value: mask [B,H,T,K|V]
@@ -8238,6 +8248,8 @@ class SelfAttentionLayer(_ConcatInputLayer):
             :return: masked value
             :rtype: tf.Tensor
             """
+            # this variant recomputes rather than reusing the previous value
+            del prev_value, mask  # recomputed, not reused
             return value
 
         mask.RETURNN_masked_comp_state_transform = _masked_transform_mask
@@ -8381,6 +8393,8 @@ class PositionalEncodingLayer(_ConcatInputLayer):
         :param returnn.tf.network.TFNetwork network:
         :rtype: dict[str,tf.Tensor]
         """
+        # part of the fixed rec-initial-state signature
+        del network  # fixed rec-initial-state signature
         return {"position": tf.fill(value=-1, dims=[batch_dim])}
 
     # noinspection PyMethodOverriding
@@ -8392,6 +8406,8 @@ class PositionalEncodingLayer(_ConcatInputLayer):
         :return: optional shapes for the tensors by get_rec_initial_extra_outputs
         :rtype: dict[str,tf.TensorShape]
         """
+        # part of the fixed rec-initial-state signature
+        del network  # fixed rec-initial-state signature
         return {"position": tf.TensorShape([None])}
 
 
@@ -9321,7 +9337,6 @@ class MaskedComputationLayer(LayerBase):
         else:
             d["mask"] = get_layer(d["mask"])
 
-    # noinspection PyUnusedLocal
     @classmethod
     def _create_template(
         cls,

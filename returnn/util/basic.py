@@ -862,7 +862,7 @@ def terminal_size(file=sys.stdout):
     def ioctl_gwinsz(fd):
         """
         :param int fd: file descriptor
-        :rtype: tuple[int]
+        :rtype: tuple[int]|None
         """
         # noinspection PyBroadException
         try:
@@ -872,7 +872,7 @@ def terminal_size(file=sys.stdout):
 
             cr_ = struct.unpack("hh", fcntl.ioctl(fd, termios.TIOCGWINSZ, "1234"))  # noqa
         except Exception:
-            return
+            return None
         return cr_
 
     cr = ioctl_gwinsz(file.fileno) or ioctl_gwinsz(0) or ioctl_gwinsz(1) or ioctl_gwinsz(2)
@@ -1694,7 +1694,6 @@ def random_orthogonal(shape, gain=1.0, seed=None):
     return gain * q[: shape[0], : shape[1]]
 
 
-# noinspection PyUnusedLocal
 def inplace_increment(x: numpy.ndarray, idx: numpy.ndarray, y: Union[numpy.ndarray, float, int]) -> numpy.ndarray:
     """
     This basically does `x[idx] += y`.
@@ -1706,6 +1705,9 @@ def inplace_increment(x: numpy.ndarray, idx: numpy.ndarray, y: Union[numpy.ndarr
     :param idx:
     :param y:
     """
+    # the body only raises: the feature went away with Theano support,
+    # the signature is kept so callers still type-check
+    del x, idx, y  # body only raises (Theano dropped)
     raise NotImplementedError("This feature was removed with dropped Theano support")
 
 
@@ -2919,13 +2921,14 @@ def overwrite_os_exec(prefix_args):
         # noinspection PyProtectedMember,PyUnresolvedReferences
         _original_execvpe = os._execvpe
 
-    # noinspection PyUnusedLocal
     def wrapped_execvpe(file, args, env=None):
         """
         :param file:
         :param list[str]|tuple[str] args:
         :param dict[str] env:
         """
+        # mirrors os._execvpe; the executable is deliberately replaced by prefix_args[0] below
+        del file  # replaced by prefix_args[0] below
         new_args = prefix_args + [which(args[0])] + args[1:]
         sys.stderr.write("$ %s\n" % " ".join(new_args))
         sys.stderr.flush()

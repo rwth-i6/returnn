@@ -1,6 +1,6 @@
 """
 This module contains pretrain related code.
-This is independent from the backend (TF or Theano, etc).
+This is independent from the backend (TF or Theano, etc.).
 """
 
 from __future__ import annotations

@@ -1,5 +1,5 @@
 """
-Here are all subprocess, threading etc related utilities,
+Here are all subprocess, threading etc. related utilities,
 most of them quite low level.
 """
 
@@ -20,11 +20,15 @@ _abs_mod_file = os.path.abspath(__file__)
 
 
 class SharedMem:
+    """
+    POSIX shared memory (shm_open/mmap via ctypes), used to share data between processes.
+    """
+
     class ShmException(Exception):
-        pass
+        """any shared-memory error"""
 
     class CCallException(ShmException):
-        pass
+        """a libc call failed"""
 
     if sys.platform != "win32":
         import ctypes

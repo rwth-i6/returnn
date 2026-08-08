@@ -210,13 +210,15 @@ class OpMaker:
                     name = "out_%s" % name
             return name
 
-        # noinspection PyShadowingNames,PyUnusedLocal
+        # noinspection PyShadowingNames
         def map_type(v, is_out=False):
             """
             :param dict[str] v:
             :param bool is_out:
             :rtype: str
             """
+            # the mapping does not differ between in and out here
+            del is_out  # same mapping for in and out
             t = v.get("dtype", "float32")
             return t
 
@@ -1188,7 +1190,7 @@ class TwoDNativeLstmCell(RecSeqCellOp):
             out_sum = tf.reduce_sum(out_complete, axis=1)  # (trg_len, batch, n_hidden)
             return out_sum / src_len  # (trg_len, batch, n_hidden)
 
-        # noinspection PyUnusedLocal,PyShadowingNames
+        # noinspection PyShadowingNames
         def weighted_pooling(src_mask, out_complete, target):
             """
             :param tf.Tensor src_mask:
@@ -1196,6 +1198,8 @@ class TwoDNativeLstmCell(RecSeqCellOp):
             :param tf.Tensor target:
             :rtype: tf.Tensor
             """
+            # no masking needed in this pooling variant
+            del src_mask  # no masking in this variant
             trg_features = target.shape[2]
             mat_w_att = tf_compat.v1.get_variable(  # (trg_features, n_hidden)
                 name="W_att", shape=(trg_features, self.n_hidden), initializer=recurrent_weights_initializer
@@ -1729,13 +1733,14 @@ def edit_distance_via_next_edit_distance_row(a, a_len, b, b_len, optimal_complet
     with tf.name_scope("edit_distance_via_next_edit_distance_row"):
         initial_row = expand_dims_unbroadcast(tf.range(tf.shape(b)[1] + 1), axis=0, dim=tf.shape(b)[0])  # (B,time2+1)
 
-        # noinspection PyUnusedLocal
         def cond(i, last_row):
             """
             :param tf.Tensor i:
             :param tf.Tensor last_row:
             :rtype: tf.Tensor
             """
+            # the tf.while_loop cond signature must mirror the body signature
+            del last_row  # cond mirrors the body signature
             return tf.less(i, tf.shape(a)[1])
 
         def body(i, last_row):

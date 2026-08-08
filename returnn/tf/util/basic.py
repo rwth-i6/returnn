@@ -681,9 +681,9 @@ class _ScaledGradientBuilder:
 
         from tensorflow.python.framework import ops
 
-        # noinspection PyUnusedLocal
         @ops.RegisterGradient(grad_name)
         def _scale_gradients(op, grad):
+            del op  # TF grad signature (op, grad)
             grad_out = grad
             if isinstance(scale, tf.Tensor) or scale != 1.0:
                 grad_out = grad_out * scale
@@ -772,8 +772,8 @@ def identity_with_check_numerics(x, with_grad=True, name="identity_with_check_nu
         ):
             if with_grad:
                 # An alternative to gradient_override_map would be :class:`CustomGradient` which is more generic.
-                # noinspection PyUnusedLocal
                 def _identity_with_check_numerics_grad(op, grad):
+                    del op  # TF grad signature (op, grad)
                     return identity_with_check_numerics(grad, with_grad=True, name="%s_grad" % name)
 
                 grad_name = "%s_with_grad" % name
@@ -3101,7 +3101,6 @@ class CustomGradient:
         self.registered_ops[cache_key] = op_with_new_grad
         return op_with_new_grad
 
-    # noinspection PyUnusedLocal
     @classmethod
     def _generic_loss_and_error_signal(cls, loss, x, grad_x):
         """
@@ -3111,6 +3110,8 @@ class CustomGradient:
         :return: just loss
         :rtype: tf.Tensor
         """
+        # the CustomGradient signature; this variant returns a pre-computed error signal
+        del x, grad_x  # error signal is passed in directly
         return loss
 
     @classmethod
@@ -3256,7 +3257,6 @@ class MetaLosses:
         """
         cls.scope_ctx.scope.exit()
 
-    # noinspection PyUnusedLocal
     @classmethod
     def _identity_ignore_second_fwd(cls, x, dummy):
         """
@@ -3265,6 +3265,8 @@ class MetaLosses:
         :return: x
         :rtype: tf.Tensor
         """
+        # the second input exists only to create the gradient dependency
+        del dummy  # only there for the grad dependency
         return x
 
     @classmethod
@@ -3315,7 +3317,6 @@ class MetaLosses:
         y.set_shape(x.get_shape())
         return y
 
-    # noinspection PyUnusedLocal
     @classmethod
     def _tikhonov_gradient_bwd(cls, op, grad_out):
         """
@@ -6382,7 +6383,6 @@ def kernels_registered_for_op(op_name):
 
         res = None
 
-        # noinspection PyUnusedLocal
         @classmethod
         def callback(cls, string, size):
             """
@@ -6390,6 +6390,8 @@ def kernels_registered_for_op(op_name):
             :param int size:
             :rtype: None
             """
+            # the callback signature is fixed by the caller
+            del size  # fixed callback signature
             cls.res = string
 
     cb = set_string_callback_type(Res.callback)

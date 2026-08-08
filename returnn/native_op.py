@@ -134,13 +134,14 @@ class NativeOpBaseMixin:
         assert len(inputs) == len(self.in_info) + len(self.out_info) * 2
         return [inputs[i] for i in self.grad_input_map]
 
-    # noinspection PyUnusedLocal
     def infer_shape(self, node, input_shapes):
         """
         :param node:
         :param input_shapes:
         :rtype: list[tuple[int]]
         """
+        # the Theano-era Op.infer_shape signature; shapes come from the input shapes only
+        del node  # shape comes from the input shapes
         assert len(input_shapes) == len(self.in_info)
         out_shapes = []
         for info in self.out_info:
@@ -188,7 +189,7 @@ class NativeOpBaseMixin:
 
     def kwargs_for_grad_op(self):
         """
-        :returns: the kwargs for creating a NativeOp for the gradient op. e.g. includes in_info, out_info, etc
+        :returns: the kwargs for creating a NativeOp for the gradient op. e.g. includes in_info, out_info, etc.
         :rtype: dict[str]
 
         Note: The inputs of the gradient are by default: fwd_op.inputs + fwd_op.outputs + output_grads.
@@ -325,12 +326,13 @@ class LstmGenericBase(NativeOpGenBase):
         {"name": "d", "ndim": 2, "shape": ((2, 0), (2, 1)), "need_contiguous": True},
     )
 
-    # noinspection PyPep8Naming,PyUnusedLocal
+    # noinspection PyPep8Naming
     @classmethod
     def grad_input_map(cls, Z, V_h, c, i, Y, H, d, DY, DH, Dd):
         """
         Map grads.
         """
+        del Z, d, DH  # not needed by the bwd kernel
         return V_h, c, i, Y, H, DY, Dd
 
     c_extra_support_code = {
@@ -562,12 +564,13 @@ class LstmLowMem(NativeOpGenBase):
         {"name": "d", "ndim": 2, "shape": ((0, 1), (4, 1)), "need_contiguous": True},
     )
 
-    # noinspection PyPep8Naming,PyUnusedLocal
+    # noinspection PyPep8Naming
     @classmethod
     def grad_input_map(cls, X, W, b, y0, c0, i, start, step, Y, C, d, DY, DC, Dd):
         """
         Map args.
         """
+        del d, DC  # not needed by the bwd kernel
         return X, W, b, y0, c0, i, start, step, Y, C, DY, Dd
 
     c_extra_support_code = {
@@ -914,7 +917,7 @@ class LstmLowMem(NativeOpGenBase):
     for(; (step > 0) ? (t >= start) : (t <= start); t -= step) {
       bool right = (step > 0) ? (t - step >= start) : (t - step <= start);
 
-      // TODO: correct handling of mask in grad, fwd, initial cell,hidden, etc
+      // TODO: correct handling of mask in grad, fwd, initial cell,hidden, etc.
       // x_h = X[t], Y[t-1]
       start_dev_kernel(copy_x_h_kernel,
         (n_batch, n_in, n_cells,
@@ -1015,10 +1018,11 @@ class NativeLstm2(NativeOpGenBase):
         {"name": "d", "ndim": 2, "shape": ((0, 1), (1, 0)), "need_contiguous": True},
     )
 
-    # noinspection PyMissingOrEmptyDocstring,PyUnusedLocal,PyPep8Naming
+    # noinspection PyMissingOrEmptyDocstring,PyPep8Naming
     @classmethod
     def grad_input_map(cls, X, W, y0, c0, i, start, step, Y, C, H, d, DY, DC, DH, Dd):
         # noinspection PyRedundantParentheses
+        del d, DC, DH  # not needed by the bwd kernel
         return (X, W, y0, c0, i, start, step, Y, C, H, DY, Dd)
 
     c_extra_support_code = {
@@ -2606,12 +2610,13 @@ class SubtensorBatchedIndex(NativeOpGenBase):
     )
     out_info = ({"name": "y", "ndim": 2, "shape": ((0, 0), (0, 1))},)
 
-    # noinspection PyUnusedLocal,PyPep8Naming
+    # noinspection PyPep8Naming
     @classmethod
     def grad_input_map(cls, x, idx, y, DY):
         """
         Map.
         """
+        del y  # not needed by the bwd kernel
         return x, idx, DY
 
     c_extra_support_code = {

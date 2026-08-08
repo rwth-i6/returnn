@@ -756,7 +756,6 @@ class StftLayer(_ConcatInputLayer):
     layer_class = "stft"
     recurrent = True  # we should not shuffle in the time-dimension
 
-    # noinspection PyUnusedLocal
     def __init__(
         self,
         frame_shift,
@@ -777,6 +776,7 @@ class StftLayer(_ConcatInputLayer):
         :param Dim|None out_dim:
         :param bool use_time_mask:
         """
+        del out_spatial_dims, out_dim  # only used in get_out_data_from_opts
         fft_size = fft_size or frame_size
         assert "n_out" not in kwargs
         assert "out_type" not in kwargs
@@ -867,7 +867,6 @@ class IstftLayer(_ConcatInputLayer):
     layer_class = "istft"
     recurrent = True  # we should not shuffle in the time-dimension
 
-    # noinspection PyUnusedLocal
     def __init__(
         self,
         frame_shift,
@@ -888,6 +887,7 @@ class IstftLayer(_ConcatInputLayer):
         :param Dim|None out_dim:
         :param bool use_time_mask:
         """
+        del out_spatial_dims, out_dim  # only used in get_out_data_from_opts
         fft_size = fft_size or frame_size
         assert "n_out" not in kwargs
         assert "out_type" not in kwargs

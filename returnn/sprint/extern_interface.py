@@ -21,7 +21,7 @@ segmentOrderList = None  # type: typing.Optional[typing.List[str]]
 
 
 # Cannot change name, this need to stay like this for compatibility.
-# noinspection PyPep8Naming,PyUnusedLocal,PyUnusedParameter
+# noinspection PyPep8Naming
 def getSegmentList(corpusName, segmentList, **kwargs):
     """
     Called by Sprint PythonSegmentOrder.
@@ -200,7 +200,7 @@ feedInputUnsupervised = feedInput
 
 
 # Name/params need to stay like this, for compatibility.
-# noinspection PyPep8Naming,PyUnusedLocal,PyUnusedParameter
+# noinspection PyPep8Naming
 def feedInputAndTarget(
     features,
     weights=None,
@@ -220,6 +220,7 @@ def feedInputAndTarget(
     :param str|None speaker_name:
     :param str|None speaker_gender:
     """
+    del weights, speaker_name, speaker_gender  # part of the Sprint callback signature
     assert features.shape[0] == InputDim
     targets = {}
     if alignment is not None:
@@ -256,7 +257,6 @@ class PythonControl:
         return cls.instance
 
     # Maybe other kwargs by Sprint.
-    # noinspection PyUnusedLocal,PyUnusedParameter
     def __init__(self, config, **kwargs):
         self.config = _parse_config_str(config)
         _common_init(self.config)
@@ -275,7 +275,7 @@ class PythonControl:
         )
         _init_global_sprint_dataset(input_dim=input_dim, output_dim=output_dim, config=self.config)
 
-    # noinspection PyMethodMayBeStatic,PyUnusedLocal,PyUnusedParameter
+    # noinspection PyMethodMayBeStatic
     def process_segment(self, name, orthography, features, alignment, soft_alignment, speaker_name=None, **kwargs):
         """
         Called by Sprint.

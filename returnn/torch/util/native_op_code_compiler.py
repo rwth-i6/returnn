@@ -294,7 +294,7 @@ def _get_available_gpu_cuda_min_compute_capability() -> Optional[float]:
     """
     Uses :func:`get_available_gpu_devices`.
 
-    :return: e.g. 3.0, or 5.0, etc, or None
+    :return: e.g. 3.0, or 5.0, etc., or None
     """
     count = torch.cuda.device_count()
     cap = None

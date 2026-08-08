@@ -2277,7 +2277,6 @@ class LengthLayer(LayerBase):
 
     layer_class = "length"
 
-    # noinspection PyUnusedLocal,PyUnusedParameter
     def __init__(self, axis="T", add_time_axis=False, dtype="int32", sparse=False, **kwargs):
         """
         :param str|Dim axis:
@@ -2285,6 +2284,7 @@ class LengthLayer(LayerBase):
         :param str dtype:
         :param bool sparse:
         """
+        del sparse  # only used in get_out_data_from_opts
         super(LengthLayer, self).__init__(**kwargs)
         if isinstance(axis, Dim):
             dim = self.fixup_dim(axis, self.sources)
@@ -3209,7 +3209,6 @@ class RandIntLayer(LayerBase):
 
     layer_class = "rand_int"
 
-    # noinspection PyUnusedLocal,PyUnusedParameter
     def __init__(self, shape, maxval, minval=0, dtype="int32", sparse_dim=None, seed=None, **kwargs):
         """
         :param tuple[Dim|int]|list[Dim|int] shape: desired shape of output tensor
@@ -3219,6 +3218,7 @@ class RandIntLayer(LayerBase):
         :param Dim|None sparse_dim:
         :param int|None seed: random seed
         """
+        del shape, sparse_dim  # only used in get_out_data_from_opts
         super(RandIntLayer, self).__init__(**kwargs)
         seed = seed if seed is not None else self.network.random.randint(2**31)
         batch = self.output.batch or self.get_batch_info()
@@ -3317,7 +3317,6 @@ class RangeLayer(LayerBase):
 
     layer_class = "range"
 
-    # noinspection PyUnusedLocal,PyUnusedParameter
     def __init__(self, limit, start=0, delta=1, dtype=None, sparse=False, out_spatial_dim=None, **kwargs):
         """
         :param int|float limit:
@@ -3327,6 +3326,7 @@ class RangeLayer(LayerBase):
         :param bool sparse:
         :param Dim|None out_spatial_dim:
         """
+        del sparse  # only used in get_out_data_from_opts
         out_spatial_dim  # noqa  # used in get_out_data_from_opts
         super(RangeLayer, self).__init__(**kwargs)
         self.output.placeholder = tf.range(start=start, limit=limit, delta=delta, dtype=self.output.dtype)
@@ -3380,7 +3380,6 @@ class RangeInAxisLayer(LayerBase):
     layer_class = "range_in_axis"
     recurrent = True  # if axis=="T", the time-dim order matters
 
-    # noinspection PyUnusedLocal,PyUnusedParameter
     def __init__(self, axis, dtype="int32", unbroadcast=False, keepdims=False, sparse=False, **kwargs):
         """
         :param str|Dim axis:
@@ -3389,6 +3388,7 @@ class RangeInAxisLayer(LayerBase):
         :param bool keepdims: DEPRECATED, unsupported, and not needed
         :param bool sparse:
         """
+        del sparse  # only used in get_out_data_from_opts
         super(RangeInAxisLayer, self).__init__(**kwargs)
         source = self.sources[0].output if self.sources else None
         if isinstance(axis, Dim):
@@ -3456,7 +3456,6 @@ class RangeFromLengthLayer(LayerBase):
     layer_class = "range_from_length"
     recurrent = True
 
-    # noinspection PyUnusedLocal,PyUnusedParameter
     def __init__(self, dtype="int32", sparse=False, out_spatial_dim=None, **kwargs):
         """
         :param str axis:
@@ -3464,6 +3463,7 @@ class RangeFromLengthLayer(LayerBase):
         :param bool sparse:
         :param Dim|None out_spatial_dim:
         """
+        del sparse  # only used in get_out_data_from_opts
         out_spatial_dim  # noqa  # used in get_out_data_from_opts
         super(RangeFromLengthLayer, self).__init__(**kwargs)
         source = self.sources[0].output
@@ -3551,7 +3551,6 @@ class ConstantLayer(LayerBase):
 
     layer_class = "constant"
 
-    # noinspection PyUnusedLocal,PyUnusedParameter
     def __init__(
         self,
         sources,
@@ -3574,6 +3573,7 @@ class ConstantLayer(LayerBase):
         :param Dim|None feature_dim:
         :param list[LayerBase] shape_deps: for dyn dim tags in shape
         """
+        del sparse_dim, feature_dim  # only used in get_out_data_from_opts
         import numpy
 
         assert not sources, "constant layer cannot have sources"
@@ -6000,7 +6000,6 @@ class ReinterpretDataLayer(_ConcatInputLayer):
 
     layer_class = "reinterpret_data"
 
-    # noinspection PyUnusedLocal,PyUnusedParameter
     def __init__(
         self,
         switch_axes=None,
@@ -6032,6 +6031,7 @@ class ReinterpretDataLayer(_ConcatInputLayer):
         :param Dim|int|None|NotSpecified set_sparse_dim: set sparse dim to this. assumes that it is sparse
         :param int|None increase_sparse_dim: add this to the dim. assumes that it is sparse
         """
+        del switch_axes, batch_dim_base, set_axes, set_sparse, set_sparse_dim, increase_sparse_dim
         from returnn.tf.util.basic import get_valid_scope_name_from_str
 
         super(ReinterpretDataLayer, self).__init__(**kwargs)
@@ -6248,7 +6248,7 @@ class ConvLayer(_ConcatInputLayer):
     layer_class = "conv"
     recurrent = True  # we must not allow any shuffling in the time-dim or so
 
-    # noinspection PyUnusedLocal,PyShadowingBuiltins,PyUnusedParameter
+    # noinspection PyShadowingBuiltins
     def __init__(
         self,
         filter_size,
@@ -6317,6 +6317,7 @@ class ConvLayer(_ConcatInputLayer):
             See https://github.com/rwth-i6/returnn/issues/1450 and
             https://github.com/tensorflow/tensorflow/issues/62441.
         """
+        del out_spatial_dims, auto_use_channel_first  # only used in get_out_data_from_opts
         from returnn.util import BehaviorVersion
 
         padding = padding.upper() if isinstance(padding, str) else padding
@@ -7109,7 +7110,6 @@ class PoolLayer(_ConcatInputLayer):
     layer_class = "pool"
     recurrent = True  # we should not shuffle in the time-dimension
 
-    # noinspection PyUnusedLocal,PyUnusedParameter
     def __init__(
         self,
         mode,
@@ -7146,6 +7146,7 @@ class PoolLayer(_ConcatInputLayer):
         :param bool|NotSpecified use_channel_first: if set, will transform input to NCHW format
         :param bool use_time_mask:
         """
+        del out_spatial_dims, use_channel_first  # only used in get_out_data_from_opts
         assert "n_out" not in kwargs
         assert "out_type" not in kwargs
         mode = mode.upper()
@@ -8029,7 +8030,6 @@ class SqueezeLayer(_ConcatInputLayer):
 
     layer_class = "squeeze"
 
-    # noinspection PyUnusedLocal,PyUnusedParameter
     def __init__(self, axis, enforce_batch_dim_axis=None, allow_no_op=False, **kwargs):
         """
         :param Dim|int|list[int]|str axis: one axis or multiple axis to squeeze.
@@ -8038,6 +8038,7 @@ class SqueezeLayer(_ConcatInputLayer):
         :param int|None enforce_batch_dim_axis:
         :param bool allow_no_op:
         """
+        del allow_no_op  # only used in get_out_data_from_opts
         super(SqueezeLayer, self).__init__(**kwargs)
         input_data = self.input_data
         if enforce_batch_dim_axis is not None and input_data.batch_dim_axis != enforce_batch_dim_axis:
@@ -12545,7 +12546,6 @@ class GenericCELoss(Loss):
     def __init__(self, **kwargs):
         super(GenericCELoss, self).__init__(**kwargs)
 
-        # noinspection PyUnusedLocal,PyUnusedParameter
         def loss(z, y, grad_f, target):
             """
             :param tf.Tensor z:
@@ -12554,6 +12554,8 @@ class GenericCELoss(Loss):
             :param tf.Tensor target:
             :rtype: tf.Tensor
             """
+            # the GenericCELoss signature; this branch needs only the target and weights
+            del z, grad_f  # fixed GenericCELoss signature
             nlog_scores = -tf_compat.v1.log(tf.clip_by_value(y, 1.0e-20, 1.0e20))  # (time,dim)
             # target is shape (time,) -> index.
             target_exp = tf.stack([tf.range(tf.shape(target)[0], dtype=tf.int32), target], axis=1)  # (time,2)
@@ -12561,13 +12563,14 @@ class GenericCELoss(Loss):
             gathered = tf.gather_nd(nlog_scores, target_exp)  # (time,)
             return self.reduce_func(gathered)
 
-        # noinspection PyUnusedLocal,PyUnusedParameter
         def loss_grad(op, grad):
             """
             :param tf.Operation op:
             :param tf.Tensor grad: grad for loss
             :return: grad for op.outputs
             """
+            # the GenericCELoss grad signature; the error signal is computed from the forward values
+            del grad  # fixed GenericCELoss signature
             z, y, grad_f, target = op.inputs
             num_classes = tf.shape(z)[-1]
             bw = tf.one_hot(target, depth=num_classes)
@@ -13196,7 +13199,7 @@ class DeepClusteringLoss(Loss):
         with tf.name_scope("loss_deep_clustering"):
             # iterate through all chunks and compute affinity cost function for every chunk separately
 
-            # noinspection PyUnusedLocal,PyShadowingNames,PyUnusedParameter
+            # noinspection PyShadowingNames
             def iterate_sequences(s, start, c):
                 """
                 :param tf.Tensor s:
@@ -13204,6 +13207,8 @@ class DeepClusteringLoss(Loss):
                 :param c:
                 :rtype: tf.Tensor
                 """
+                # the loop signature is fixed by tf.while_loop
+                del start, c  # fixed tf.while_loop signature
                 return tf.less(s, tf.shape(self.output_seq_lens)[0])
 
             # noinspection PyShadowingNames
@@ -13971,8 +13976,7 @@ class TripletLoss(Loss):
                 aembeds_anchor = sources[0]
                 aembeds_pair = sources[1]
                 aembeds_diff = sources[2]
-                # noinspection PyUnusedLocal
-                cembeds_anchor = sources[3]
+                _cembeds_anchor = sources[3]  # unused, kept to document the source order
                 cembeds_pair = sources[4]
                 cembeds_diff = sources[5]
                 embeds_1 = tf.concat(values=[aembeds_anchor, cembeds_pair, cembeds_diff], axis=0)

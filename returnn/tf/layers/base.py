@@ -538,7 +538,6 @@ class LayerBase:
         )
         return output
 
-    # noinspection PyUnusedLocal,PyUnusedParameter
     @classmethod
     def _post_init_output(
         cls,
@@ -1055,7 +1054,6 @@ class LayerBase:
             layers += [layer for _, layer in sorted(self._target_layers.items())]
         return layers
 
-    # noinspection PyUnusedLocal
     @classmethod
     def cls_get_sub_network(cls, name, network, layer_desc):
         """
@@ -1073,6 +1071,7 @@ class LayerBase:
         :param dict[str] layer_desc:
         :rtype: returnn.tf.network.Subnetwork|None
         """
+        del name, network, layer_desc  # fixed signature
         return None
 
     def get_sub_layer(self, layer_name):

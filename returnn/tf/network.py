@@ -1098,7 +1098,7 @@ class TFNetwork:
                     # We explicitly allow this, and want to construct it here in this extra net, from this layer desc.
                     layer_desc = net_dict[name]
                 # In any case, this layer should have the name without that prefix,
-                # such that param-sharing etc works as expected.
+                # such that param-sharing etc. works as expected.
                 name = name_
             else:
                 return self.construct_extra_net(
@@ -3231,7 +3231,7 @@ class TFNetwork:
         """
         The run options are valid during one loop over some dataset.
 
-        Contrary to epoch_step, train_flag, etc, we do not provide these as TF placeholders,
+        Contrary to epoch_step, train_flag, etc., we do not provide these as TF placeholders,
         for convenience, because it is not needed right now.
         If it is needed, it probably is easier to introduce auxiliary TF variables (on CPU) instead
         and just set them once here.
@@ -3342,7 +3342,8 @@ class TFNetwork:
         root_net = self.get_root_network()
         if root_net is not self:
             # Use the root network, to just use a single map where to look at.
-            return root_net.register_search_choices_for_beam(beam, search_choices)
+            root_net.register_search_choices_for_beam(beam, search_choices)
+            return
         self._map_search_beam_to_search_choices[beam] = search_choices
 
 
@@ -3870,7 +3871,8 @@ class LossHolder:
         :param LayerBase|None layer:
           We can always point to a layer where this comes from (either in the subnet, or the parent layer).
         :param Data layer_output: template describing the layer output
-        :param TFNetwork|None network: for which network to create this LossHolder. might be different from layer.network
+        :param TFNetwork|None network: for which network to create this LossHolder.
+            might be different from layer.network
         :param returnn.tf.layers.base.Loss loss:
         :param ((tf.Tensor)->tf.Tensor)|None reduce_func: if given, will overwrite the reduce func for the loss.
           By default, every loss_value and error_value is a scalar
@@ -4588,12 +4590,13 @@ class CustomCheckpointLoader:
         def __repr__(self):
             return "<CustomParamImporter %r on layer %r>" % (self.layer.custom_param_importer, self.layer.name)
 
-        # noinspection PyUnusedLocal
         def assign_var(self, var, session):
             """
             :param tf.Variable var:
             :param tf.compat.v1.Session session:
             """
+            # the CustomParamImporter callback signature; the value is written via the session
+            del var  # written via the session
             # This function gets called for every param of the layer.
             # However, the underlying custom_param_importer API
             # will assign all the layer params together,
@@ -5145,7 +5148,7 @@ class CustomLoadParamFunc(Protocol):
     """
 
     def __call__(
-        self, *, name: str, shape: Tuple[int], reader: tf.compat.v1.train.NewCheckpointReader
+        self, *, name: str, shape: Tuple[int, ...], reader: tf.compat.v1.train.NewCheckpointReader
     ) -> Optional[numpy.ndarray]: ...
 
 

@@ -2266,7 +2266,6 @@ class Engine(EngineBase):
         assert output_value.shape[1] == 1  # batch-dim
         return output_value[:, 0]  # remove batch-dim
 
-    # noinspection PyUnusedLocal
     def forward_to_hdf(self, data, output_file, combine_labels="", batch_size=0, output_layer=None):
         """
         Is aiming at recreating the same interface and output as :func:`Engine.forward_to_hdf`.
@@ -2278,6 +2277,7 @@ class Engine(EngineBase):
         :param int batch_size:
         :param LayerBase output_layer:
         """
+        del combine_labels  # not used by this implementation
         from returnn.datasets.hdf import SimpleHDFWriter
 
         if not output_layer:
@@ -2354,7 +2354,6 @@ class Engine(EngineBase):
         # https://github.com/rwth-i6/returnn/issues/1336
         raise NotImplementedError("TF engine does not support the generic forward func yet...")
 
-    # noinspection PyUnusedLocal
     def analyze(self, data, statistics):
         """
         :param Dataset.Dataset data:
@@ -2362,6 +2361,7 @@ class Engine(EngineBase):
         :return: print everything to log.v1, and return the Runner instance to get access to all the stats
         :rtype: Runner
         """
+        del statistics  # not used by this implementation
         print("Analyze with network on %r." % data, file=log.v1)
 
         if "analyze" not in self.network.layers:

@@ -38,7 +38,7 @@ class LearningRateControl:
         ):
             """
             :param learning_rate:
-            :param error: scores (loss values) and errors (frame error rates, etc);
+            :param error: scores (loss values) and errors (frame error rates, etc.);
                 a plain float is the old serialization format
             :param meta: any other extra information (e.g. effective learning rate)
 

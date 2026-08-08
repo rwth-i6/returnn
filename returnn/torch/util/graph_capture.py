@@ -1460,7 +1460,7 @@ class GraphCapturedTrainStep:
                 # so the garbage gradients of these steps never reach the model.
                 warmup_raw = self._make_dummy_extern_data_raw(extern_data_raw)
                 if self._pre_dummy_warmup_buffers is None and self._get_buffers is not None:
-                    # running stats (batch norm etc) are updated in the FORWARD pass,
+                    # running stats (batch norm etc.) are updated in the FORWARD pass,
                     # so an lr of 0 cannot protect them: snapshot + restore (small, stats only)
                     self._pre_dummy_warmup_buffers = [b.detach().clone() for b in self._get_buffers()]
                 opt = self._get_optimizer() if self._get_optimizer is not None else None

@@ -211,7 +211,6 @@ def format_signum(signum):
     return "%s (%s)" % (signum, signum_to_signame.get(signum, "unknown"))
 
 
-# noinspection PyUnusedLocal
 def signal_handler(signum, frame):
     """
     Prints a message on stdout and dump all thread stacks.
@@ -219,11 +218,11 @@ def signal_handler(signum, frame):
     :param int signum: e.g. signal.SIGUSR1
     :param frame: ignored, will dump all threads
     """
+    del frame  # signal handler signature
     print("Signal handler: got signal %s" % format_signum(signum))
     dump_all_thread_tracebacks()
 
 
-# noinspection PyUnusedLocal
 def _fatal_signal_handler(signum, frame):
     """
     Like :func:`signal_handler`, but also broadcasts SIGUSR1 to descendant processes
@@ -233,6 +232,7 @@ def _fatal_signal_handler(signum, frame):
     Use for signals where the expectation is termination,
     e.g. SIGTERM from job schedulers / torchelastic.
     """
+    del frame  # signal handler signature
     import psutil
 
     print("Signal handler: got signal %s, dumping threads and children." % format_signum(signum))

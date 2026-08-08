@@ -497,7 +497,7 @@ def exit():
 
 
 # Keep name for compatibility.
-# noinspection PyPep8Naming,PyUnusedLocal,PyUnusedParameter
+# noinspection PyPep8Naming
 def feedInput(features, weights=None, segmentName=None):
     """
     :param numpy.ndarray features:
@@ -506,6 +506,7 @@ def feedInput(features, weights=None, segmentName=None):
     :return: posteriors
     :rtype: numpy.ndarray
     """
+    del weights  # part of the Sprint callback signature
     assert features.shape[0] == InputDim
     if Task == "train":
         posteriors = _train(segmentName, features)
@@ -552,7 +553,7 @@ def finishError(error, errorSignal, naturalPairingType=None):
 
 
 # Keep name for compatibility.
-# noinspection PyPep8Naming,PyUnusedLocal,PyUnusedParameter
+# noinspection PyPep8Naming
 def feedInputAndTarget(
     features,
     weights=None,
@@ -573,6 +574,7 @@ def feedInputAndTarget(
     :param str|None speaker_gender:
     :return: nothing
     """
+    del weights, speaker_name, speaker_gender  # part of the Sprint callback signature
     assert features.shape[0] == InputDim
     targets = {}
     if alignment is not None:
@@ -583,7 +585,7 @@ def feedInputAndTarget(
 
 
 # Keep name for compatibility.
-# noinspection PyPep8Naming,PyUnusedLocal,PyUnusedParameter
+# noinspection PyPep8Naming
 def feedInputAndTargetAlignment(features, targetAlignment, weights=None, segmentName=None):
     """
     :param numpy.ndarray features:
@@ -592,13 +594,14 @@ def feedInputAndTargetAlignment(features, targetAlignment, weights=None, segment
     :param str|None segmentName:
     :return: nothing
     """
+    del weights  # part of the Sprint callback signature
     assert features.shape[0] == InputDim
     assert Task == "train"
     _train(segmentName, features, targetAlignment)
 
 
 # Keep name for compatibility.
-# noinspection PyPep8Naming,PyUnusedLocal,PyUnusedParameter
+# noinspection PyPep8Naming
 def feedInputAndTargetSegmentOrth(features, targetSegmentOrth, weights=None, segmentName=None):
     """
     :param numpy.ndarray features:
@@ -607,13 +610,14 @@ def feedInputAndTargetSegmentOrth(features, targetSegmentOrth, weights=None, seg
     :param segmentName:
     :return:
     """
+    del weights  # part of the Sprint callback signature
     assert features.shape[0] == InputDim
     assert Task == "train"
     _train(segmentName, features, {"orth": targetSegmentOrth})
 
 
 # Keep name for compatibility.
-# noinspection PyPep8Naming,PyUnusedLocal,PyUnusedParameter
+# noinspection PyPep8Naming
 def feedInputUnsupervised(features, weights=None, segmentName=None):
     """
     :param numpy.ndarray features:
@@ -621,6 +625,7 @@ def feedInputUnsupervised(features, weights=None, segmentName=None):
     :param str|None segmentName:
     :return: nothing
     """
+    del weights  # part of the Sprint callback signature
     assert features.shape[0] == InputDim
     _train(segmentName, features)
 
@@ -1018,7 +1023,6 @@ def make_criterion_class():
             assert seq_lengths.ndim == 1  # vector of seqs lengths
             return theano.Apply(op=self, inputs=[posteriors, seq_lengths], outputs=[T.fvector(), posteriors.type()])
 
-        # noinspection PyUnusedLocal,PyUnusedParameter
         def perform(self, node, inputs, output_storage, params=None):
             """
             :param node:
@@ -1027,6 +1031,8 @@ def make_criterion_class():
             :param params:
             :return:
             """
+            # the Sprint criterion node interface passes these; only the inputs are used
+            del node, params  # part of the Sprint callback signature
             posteriors, seq_lengths = inputs
             num_time_frames = posteriors.shape[0]
             seq_lengths = numpy.array([num_time_frames])  # TODO: fix or so?
