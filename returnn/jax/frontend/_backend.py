@@ -237,6 +237,7 @@ class JaxBackend(Backend[jax.Array]):
         :return: a `kind` b
         """
         assert a.ndim == b.ndim or a.ndim == 0 or b.ndim == 0
+        a, b = _match_device(a, b)
         op = getattr(jnp, kind)  # e.g. jnp.equal
         return op(a, b)
 
@@ -250,6 +251,7 @@ class JaxBackend(Backend[jax.Array]):
         :return: a `kind` b
         """
         assert a.ndim == b.ndim or a.ndim == 0 or b.ndim == 0
+        a, b = _match_device(a, b)
         if kind == "squared_difference":
             return jnp.square(jnp.subtract(a, b))
         op = getattr(jnp, _CombineKindMap.get(kind, kind), None)
@@ -2201,6 +2203,32 @@ def _device_to_str(device: jax.Device) -> str:
     if device.platform == "gpu":
         return f"cuda:{device.id}"
     return f"{device.platform}:{device.id}"
+
+
+def _match_device(a, b):
+    """
+    :param a:
+    :param b:
+    :return: the two, on one device: a scalar operand is moved to where the other one lives.
+
+    RETURNN keeps the dynamic sizes of dims on the CPU by design (see :func:`rf.masked_fraction_of_shape`),
+    so scalars derived from them meet device tensors constantly -- a masked reduce_mean is one line
+    of RF code that does it. PyTorch accepts that for a 0-dim operand of a pointwise op and promotes
+    it to the other one's device (measured: a 1-element 1-dim cpu tensor already raises, as does
+    torch.cat even for 0-dim); JAX rejects the whole computation. Doing the transfer here, at the one
+    place binary ops go through, keeps that RF code backend-independent, and it moves a scalar.
+    """
+    if not isinstance(a, jax.Array) or not isinstance(b, jax.Array):
+        return a, b
+    if a.ndim and b.ndim:  # same rule as torch: only scalars are auto-moved to meet the other operand
+        return a, b
+    if isinstance(a, jax.core.Tracer) or isinstance(b, jax.core.Tracer):
+        return a, b  # inside a trace there is nothing to compare, and no transfer to insert
+    if a.device == b.device:
+        return a, b
+    if a.ndim == 0:
+        return jax.device_put(a, b.device), b
+    return a, jax.device_put(b, a.device)
 
 
 def _device_from_str(device: str) -> Optional[jax.Device]:
