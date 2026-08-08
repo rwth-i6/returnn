@@ -1751,16 +1751,18 @@ def _print_process(
         if log_memory_usage_device:
             dev = torch.device(log_memory_usage_device)
             if dev.type == "cuda":
-                info += [
-                    f"mem_usage:{log_memory_usage_device} {util.human_bytes_size(torch.cuda.max_memory_allocated(dev))}"
-                ]
                 pool = graph_pools_reserved()
+                # The reported usage is the real GPU need: the tracked peak PLUS the
+                # CUDA-graph private pool (replay working memory, freed as tensors but
+                # retained for replay -- INVISIBLE in the allocated stats; measured loq
+                # graphc: 9GB allocated peak, 46GB resident). No double counting: the peak
+                # stats are reset right after the capture, where the pool was still live
+                # (see GraphCapturedTrainStep). With no pool this is max_memory_allocated,
+                # exactly as before. Deliberately NOT memory_reserved: that also counts
+                # unrelated allocator cache.
+                usage = torch.cuda.max_memory_allocated(dev) + pool
+                info += [f"mem_usage:{log_memory_usage_device} {util.human_bytes_size(usage)}"]
                 if pool:
-                    # CUDA-graph private pool: replay working memory, freed as tensors but
-                    # retained for replay -- INVISIBLE in the allocated stat above; the real
-                    # resident footprint is their SUM (steady state; measured loq graphc:
-                    # 9GB allocated + 37GB pool = 46GB resident). Deliberately NOT
-                    # memory_reserved: that also counts unrelated allocator cache.
                     info += [f"mem_graph_pool:{log_memory_usage_device} {util.human_bytes_size(pool)}"]
         if step_duration is not None:
             info += ["%.3f sec/step" % step_duration]
