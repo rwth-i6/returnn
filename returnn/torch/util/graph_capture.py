@@ -17,7 +17,7 @@ Config, e.g.::
         "packed_total_bound": {"data": 500_000},  # optional: tighter bound of the packed (gapped) total per key
         "partitioned": True,  # optional: fw/bwd-partitioned compile (min-cut remat) instead of one whole-step graph
         "activation_memory_budget": 0.9,  # optional, with "partitioned": save-vs-recompute knob (1.0 = save all)
-        "warmup_steps": 2,              # eager steps before capture
+        "warmup_steps": 2,              # eager steps before capture; 0 works too (see below)
         "capture_optimizer": True,      # grad clip + optimizer step in-graph (needs capturable optimizer)
         "compile": True,                # Inductor-codegen the whole step first, then capture that
         "capture": True,                # False (with compile): run the compiled step eagerly, no graph
@@ -48,6 +48,14 @@ Mechanics (validated by standalone probes first, see the 2026 packed/CUDA-graph 
   so at capture time every dim/layout cache misses and the whole layout chain
   (seq starts, masks, derived subsample lens, ...) is computed IN-graph from the lens buffers
   -- one captured graph then replays correctly across varying batch sizes and seq lengths.
+- ``warmup_steps: 0`` (no eager step at all) works: the two things a warmup used to provide
+  are handled explicitly -- the lazily created optimizer state + grads via
+  :func:`GraphCapturedTrainStep._materialize_optimizer_state` (they are graph inputs of the
+  in-graph optimizer step, so they must exist before the trace), and host-derived constants
+  (e.g. the mel filterbank matrix) via creation outside all python dispatch modes in the torch
+  backend's ``convert_to_tensor`` (created INSIDE the trace they become lifted inputs with a
+  per-call H2D copy -- illegal under capture). Everything else (cuDNN/cuFFT plans, workspaces,
+  autotune) is covered by the compiled warm run that precedes the capture.
 - All eager steps before the capture run on a non-default CUDA stream:
   the first-ever backward binds autograd/grad-accumulator state to the stream it runs on,
   and a default-stream first backward makes any later capture-time backward fail
@@ -879,6 +887,48 @@ class GraphCapturedTrainStep:
                 return int(v.shape[0])
         return 1
 
+    def _materialize_optimizer_state(self) -> None:
+        """
+        Create the optimizer's lazily-initialized state (e.g. AdamW moments, capturable
+        step counters) plus the param grads WITHOUT any model step, enabling
+        ``warmup_steps: 0``: the captured in-graph optimizer step reads/writes the state
+        tensors as stable graph inputs, so they must exist BEFORE trace/capture
+        (a lazy init during capture recording would allocate them inside the graph pool).
+        Optimizer-agnostic: one ``step()`` with ALL-ZERO grads at lr 0 creates whatever
+        state the optimizer wants, doubly neutral for the params (no gradient signal, and
+        every update term scales with lr); the values the step wrote (step counters) are
+        zeroed afterwards, only the EXISTENCE is kept.
+        No-op when state already exists (real or dummy warmup ran).
+        """
+        opt = self._get_optimizer() if self._get_optimizer is not None else None
+        if opt is None or opt.state:
+            return
+        with torch.no_grad():
+            for p in self._params:
+                if p.grad is None:
+                    # also needed pre-capture: the partitioned capture zeroes + accumulates
+                    # into pre-existing grads
+                    p.grad = torch.zeros_like(p)
+            saved_lrs = []
+            for g in opt.param_groups:
+                lr = g["lr"]
+                if isinstance(lr, torch.Tensor):  # capturable: device-tensor lr
+                    saved_lrs.append(lr.clone())
+                    lr.fill_(0)
+                else:
+                    saved_lrs.append(lr)
+                    g["lr"] = 0.0
+            opt.step()
+            for g, lr in zip(opt.param_groups, saved_lrs):
+                if isinstance(g["lr"], torch.Tensor):
+                    g["lr"].copy_(lr)
+                else:
+                    g["lr"] = lr
+            for state in opt.state.values():
+                for v in state.values():
+                    if isinstance(v, torch.Tensor):
+                        v.zero_()
+
     def _restore_after_dummy_warmup(self):
         """
         Undo the dummy warmup steps: restore the module buffers (and, for optimizers whose
@@ -1456,6 +1506,9 @@ class GraphCapturedTrainStep:
                 for _ in range(3):
                     self._step()
             torch.cuda.current_stream().wait_stream(s)
+        # with warmup_steps 0 there was no real optimizer step yet: create the lazy state
+        # (and the param grads) explicitly -- no-op if a warmup step already did
+        self._materialize_optimizer_state()
         torch.cuda.synchronize()
         # release the warmup's cached blocks before the compiled program / capture
         # allocates its own (bound-sized, differently-shaped) pool -- see _warmup_step_dynamic
@@ -1477,6 +1530,11 @@ class GraphCapturedTrainStep:
             raise
         self._graph = graph
         self._log_graph_pool_size(graph)
+        # The graph pool's blocks were LIVE allocations during the capture (thus inside
+        # max_memory_allocated) and are freed-but-retained afterwards (thus outside it).
+        # Reset the peak here so the reported usage (allocated + pool, see the engine)
+        # counts the pool exactly once, in every epoch.
+        torch.cuda.reset_peak_memory_stats()
         # capture only RECORDS the kernels; replay now to actually compute this batch
         graph.replay()
         return self._ctx
