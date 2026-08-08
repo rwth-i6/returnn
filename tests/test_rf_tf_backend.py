@@ -1193,7 +1193,10 @@ def test_full_model_tf_amp_bfloat16():
         assert out_amp.data[key].dtype == "float32", f"{key} dtype {out_amp.data[key].dtype} under amp"
     assert out_amp.data["logits"].dtype == "bfloat16", out_amp.data["logits"].dtype
     for key in sorted(res_f32):
-        a, b = res_f32[key], res_amp[key]
+        # bfloat16 is an ml_dtypes extension dtype; older numpy refuses to compare it against
+        # float32 at all ("do not have a common DType"), so widen before comparing
+        a = numpy.asarray(res_f32[key], dtype=numpy.float32)
+        b = numpy.asarray(res_amp[key], dtype=numpy.float32)
         scale = float(numpy.max(numpy.abs(a)))
         print(f"{key}: float32 vs bf16 max abs diff {numpy.max(numpy.abs(a - b)):.4e}, scale {scale:.4e}")
         assert numpy.all(numpy.isfinite(b)), f"{key} not finite under amp"
