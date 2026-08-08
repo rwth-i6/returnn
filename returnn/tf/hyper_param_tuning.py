@@ -694,6 +694,7 @@ class _IndividualTrainer:
             file=self.optim.log,
         )
         self.individual.cost = cost
+        return cost
 
 
 class _AttribOrKey:
