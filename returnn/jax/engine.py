@@ -61,6 +61,12 @@ class Engine(EngineBase):
         self.eval_datasets: Dict[str, Dataset] = {}
         self.learning_rate: float = config.float("learning_rate", 1.0)
         self._device: Optional[str] = config.value("device", None)
+        if not self._device:
+            # Resolved, never left open: RF puts the tensors IT creates (constants, ranges, random)
+            # on rf.get_default_device(), while JAX puts everything else on its own default device.
+            # When those two disagree, JAX refuses the computation ("incompatible devices").
+            self._device = jax.devices()[0].platform
+        rf.set_default_device(self._device)
         self._updater: Optional[Updater] = None
         self._opt_state: Any = None
         self._train_step_func = None
@@ -141,7 +147,10 @@ class Engine(EngineBase):
         if load_filename:
             self._load_model(filename=load_filename)
             print(f"Continuing after epoch {load_epoch} ({load_filename})", file=log.v3)
-        print(f"JAX engine: starting at epoch {self.epoch}, devices {jax.devices()}", file=log.v3)
+        print(
+            f"JAX engine: starting at epoch {self.epoch}, device {self._device}, devices {jax.devices()}",
+            file=log.v3,
+        )
 
     def train(self):
         """

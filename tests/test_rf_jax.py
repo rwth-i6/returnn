@@ -1479,6 +1479,31 @@ def test_engine_jit_rng_advances():
         assert float(loss_1) != float(loss_2), "the RNG stream did not advance across steps"
 
 
+def test_engine_sets_rf_default_device():
+    """
+    RF puts the tensors IT creates (constants, ranges, random, the correction factor of a masked
+    reduce) on ``rf.get_default_device()``, while JAX puts everything else on its own default.
+    If the engine leaves the first one unset, those two disagree on any machine with an accelerator
+    and JAX rejects the computation -- which is invisible on a cpu-only box, hence this test.
+    """
+    import tempfile
+    import jax
+    from returnn.jax.engine import Engine
+
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        config, make_dataset = _simple_train_setup(tmp_dir, device="cpu")
+        engine = Engine(config=config)
+        engine.init_train_from_config(train_data=make_dataset())
+        assert rf.get_default_device() == "cpu"
+
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        # unset in the config: resolved to what JAX itself would use, never left open
+        config, make_dataset = _simple_train_setup(tmp_dir)
+        engine = Engine(config=config)
+        engine.init_train_from_config(train_data=make_dataset())
+        assert rf.get_default_device() == jax.devices()[0].platform
+
+
 def test_engine_continue_from_checkpoint():
     """
     A second run in the same model dir continues from the existing checkpoint
