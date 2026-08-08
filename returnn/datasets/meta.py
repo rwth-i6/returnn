@@ -70,7 +70,7 @@ class EpochWiseFilter:
         if not isinstance(opts, util.CollectionReadCheckCovered):
             opts = util.CollectionReadCheckCovered(opts)
         if opts.get("max_mean_len"):
-            max_mean_len = opts.get("max_mean_len")
+            max_mean_len = float(opts.get("max_mean_len"))
             lens_and_seqs = numpy.array(sorted([(get_seq_len(idx), idx) for idx in seq_order]))
             best_num = util.binary_search_any(
                 cmp=lambda num: numpy.mean(lens_and_seqs[:num, 0]) - max_mean_len, low=1, high=len(lens_and_seqs) + 1
