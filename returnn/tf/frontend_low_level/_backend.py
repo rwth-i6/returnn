@@ -2368,15 +2368,25 @@ def _grouped_conv_grad_supported() -> bool:
     the limitation is TF-version AND device dependent
     ("Gradients for grouped convolutions are not supported on CPU"),
     and a version boundary guessed from the outside would be wrong somewhere.
+
+    The probe RUNS the gradient, it does not only build it.
+    Where the kernel refuses, the graph still builds fine and ``tf.gradients`` returns a tensor --
+    on TF 2.10 CPU the refusal is an InvalidArgumentError raised by the kernel at run time.
+    A build-only probe therefore reports "supported" and the failure lands in the caller's
+    session.run, which is what rwth-i6/returnn CI hit.
     """
     try:
         g = tf.Graph()
         with g.as_default():
             x = tf.zeros([1, 4, 2])
-            f = tf.zeros([3, 1, 2])
+            f = tf.zeros([3, 1, 2])  # in_channels 2, filter in-depth 1, i.e. groups=2
             y = tf.nn.convolution(x, f, strides=1, padding="SAME")
             (grad,) = tf.gradients(tf.reduce_sum(y), [x])
-            return grad is not None
+            if grad is None:
+                return False
+            with tf_compat.v1.Session(graph=g) as session:
+                session.run(grad)
+        return True
     except Exception as exc:
         print(f"TF: grouped conv has no gradient here ({type(exc).__name__}), using the depthwise op", file=log.v4)
         return False

@@ -103,6 +103,37 @@ def test_full_model():
     )
 
 
+def test_depthwise_conv_grad_runs():
+    # A grouped conv whose gradient is BUILT but not RUNNABLE is the CI failure mode
+    # ("Gradients for grouped convolutions are not supported on CPU", TF 2.10):
+    # tf.gradients returns a tensor and only session.run fails, so the fallback probe
+    # in TFBackend must have executed the gradient to answer correctly.
+    # Marking the sum as "loss" makes the harness run the input gradient too,
+    # which is what fails when the probe got it wrong.
+    # noinspection PyProtectedMember
+    from returnn.tf.frontend_low_level._backend import _grouped_conv_grad_supported
+
+    print("grouped conv gradient supported here:", _grouped_conv_grad_supported())
+
+    time_dim = Dim(Tensor("time", [batch_dim], dtype="int32"))
+    in_dim = Dim(4, name="in")
+    extern_data = TensorDict({"data": Tensor("data", [batch_dim, time_dim, in_dim], dtype="float32")})
+
+    class _Net(rf.Module):
+        def __init__(self):
+            super().__init__()
+            # groups == in_dim: the depthwise case the Conformer conv block uses
+            self.conv = rf.Conv1d(in_dim, in_dim, filter_size=3, groups=in_dim.dimension, padding="same")
+
+    # noinspection PyShadowingNames
+    def _forward_step(*, model: _Net, extern_data: TensorDict):
+        out, _ = model.conv(extern_data["data"], in_spatial_dim=time_dim)
+        out.mark_as_default_output(shape=(batch_dim, time_dim, in_dim))
+        rf.reduce_sum(out, axis=out.dims).mark_as_output("loss", shape=())
+
+    run_model(extern_data, lambda *, epoch, step: _Net(), _forward_step, tf_low_level=True)
+
+
 def test_scatter_logsumexp_stop_gradient_scope():
     # rf.scatter_logsumexp is the RF-internal user of rf.stop_gradient_scope,
     # which this backend cannot implement faithfully (see TFBackend.stop_gradient_scope).
