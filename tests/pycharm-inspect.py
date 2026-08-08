@@ -936,6 +936,37 @@ def main():
             # but every such value formats fine at runtime. Triaged 2026-08-07: all 8 sites
             # (graph_capture GiB prints, file_cache ages, util stats) verified by execution.
             ("PyStringFormatInspection", r"^Format spec is not supported for "),
+            # Sequence[...] is an ABC that declares no __str__/__repr__/__format__ of its own, so
+            # PyCharm flags every interpolation of a value annotated that way -- even explicit !r.
+            # At runtime these are list/tuple (spot-checked across tensor_dict, array_,
+            # _tensor_extra, jax/_backend, decoder/transformer: dims, perm, padding in error and
+            # assert messages), whose repr is informative and delegates to the elements.
+            ("PyStringConversionWithoutDunderMethodInspection", r"^Type 'Sequence\["),
+            # numpy scalar/array types: the bundled stubs do not DECLARE __repr__, but the runtime
+            # classes all define it (verified by execution: dtype -> dtype('float32'), ndarray ->
+            # array([...]), float64 -> np.float64(1.5)). Same stub-artifact class as the Cython
+            # numpy filter above.
+            (
+                "PyStringConversionWithoutDunderMethodInspection",
+                r"^Type '(?:ndarray|dtype|number|bool_|float\d+|int\d+|uint\d+|complex\d+)\b",
+            ),
+            # interpolating a CLASS gives "<class 'module.Name'>", which is precisely what the
+            # type-mismatch messages these sites live in want to say. Sampled 12 of the 60 sites,
+            # spread over 12 different files: every one is `type(x)` (or str(type(x))) inside a
+            # TypeError / assert message. Unlike most inspections this one can never indicate a
+            # runtime fault -- the worst case is a message that reads awkwardly.
+            ("PyStringConversionWithoutDunderMethodInspection", r"^Type 'type' string value"),
+            # `return _sdpa_no(...)` / `return _flex_no(...)` is a DELIBERATE, documented idiom:
+            # both helpers warn once and return None so an `-> Optional[Tensor]` fast path can bail
+            # out in one line (see _sdpa_no's own docstring in _packed_backend.py). 28 of the 36
+            # findings of this class are those two helpers; rewriting every call site to
+            # `_sdpa_no(...); return None` would be churn against the documented intent.
+            ("PyNoneFunctionAssignmentInspection", r"^Function '_(?:sdpa|flex)_no' doesn't return anything"),
+            # A note carried by shutil.which's STUB, not a property of our call: it fires even on
+            # `shutil.which("cc")` with a string literal (all 9 findings are the 9 shutil.which
+            # calls in native_code_compiler.py, incl. literal args). We never pass a PathLike, and
+            # RETURNN does not support Windows anyway.
+            ("PyDeprecationInspection", r"^On Windows before Python 3\.12, using a PathLike as `cmd`"),
         ],
         inspect_class_not_counted={
             # Here we disable more than what you would do in the IDE.
@@ -945,6 +976,13 @@ def main():
             # Not critical.
             "SpellCheckingInspection",  # way too much for now...
             "GrazieInspection",  # grammar
+            # GrazieStyle is a SEPARATE class from GrazieInspection, so excluding the latter left
+            # 89 of these counted. Triaged 2026-08-08 by message: 27x "etc. requires a period",
+            # ~35x "long sentence (40-66 words)", the rest redundant phrases, British-vs-American
+            # spelling and adverb placement -- prose style in comments and docstrings, none of it
+            # a defect. The Grazie findings that WOULD be worth acting on (repeated word, unpaired
+            # bracket, two consecutive dots) are GrazieInspection and already not counted.
+            "GrazieStyle",  # prose style (as above)
             "PyClassHasNoInitInspection",  # not relevant?
             "PyMethodMayBeStaticInspection",  # not critical
             "DuplicatedCode",  # fires on ancient demo scripts; dedup there has no value
