@@ -20,7 +20,7 @@ that costs one recompile per epoch.
 """
 
 from __future__ import annotations
-from typing import Optional, Any, Dict, List
+from typing import Optional, Union, Any, Dict, List
 import os
 import time
 
@@ -122,6 +122,7 @@ class Engine(EngineBase):
 
         self.extern_data = extern_data_template_from_config_opts(config.typed_value("extern_data"))
         if self._jit_opts is not None:
+            _check_time_multiple(self._jit_opts["time_multiple"], extern_data=self.extern_data)
             host_only = [key for key, data in self.extern_data.data.items() if data.dtype == "string"]
             if host_only:
                 print(f"JAX engine: compiled step, {host_only} is not available inside it", file=log.v3)
@@ -556,6 +557,50 @@ def _check_config_opts_supported(config: Config):
         )
 
 
+def _check_time_multiple(time_multiple: Union[int, Dict[str, int]], *, extern_data: TensorDict):
+    """
+    :param time_multiple: as configured, see :func:`returnn.jax.data.batch_to_jax_raws`
+    :param extern_data: templates
+    :raise NotImplementedError: when it cannot be applied unambiguously
+
+    Two ways to get this wrong, both of which produce a step that runs (slowly, or not at all)
+    rather than an error:
+
+    - One number for all keys, when the keys have different axes. The number is in the UNIT of the
+      axis it pads, so a multiple meant for audio samples applied to a label sequence pads a
+      12-token target to that many tokens -- measured once at 16000, where the decoder's
+      self-attention became a 152 GiB buffer.
+    - Different numbers for keys which SHARE a dim: the dim would need two capacities at once.
+    """
+    dim_of_key = {}
+    for key, data in extern_data.data.items():
+        dyn = [dim for i, dim in enumerate(data.dims) if i > 0 and dim.is_dynamic()]
+        if dyn:
+            dim_of_key[key] = dyn[0]
+    if not dim_of_key:
+        return
+    if not isinstance(time_multiple, dict):
+        if time_multiple > 1 and len({id(dim) for dim in dim_of_key.values()}) > 1:
+            raise NotImplementedError(
+                f"JAX engine: jax_jit time_multiple {time_multiple} is one number for the keys"
+                f" {sorted(dim_of_key)}, whose axes are different dims and different units."
+                f" Give it per key, e.g. {{{', '.join(repr(k) + ': ...' for k in sorted(dim_of_key))}}}."
+            )
+        return
+    unknown = set(time_multiple) - set(extern_data.data)
+    if unknown:
+        raise NotImplementedError(f"JAX engine: jax_jit time_multiple for unknown data keys {sorted(unknown)}")
+    by_dim = {}
+    for key, dim in dim_of_key.items():
+        by_dim.setdefault(id(dim), []).append((key, time_multiple.get(key, 0)))
+    for entries in by_dim.values():
+        if len({multiple for _, multiple in entries}) > 1:
+            raise NotImplementedError(
+                f"JAX engine: jax_jit time_multiple differs for keys sharing one dim: {sorted(entries)}."
+                f" They are padded to the same extent, so the dim cannot have two capacities."
+            )
+
+
 def _is_host_only(value: Any) -> bool:
     """
     :param value:
@@ -582,7 +627,12 @@ def _jit_opts_from_config(config: Config) -> Optional[Dict[str, Any]]:
     opts = dict(opts)
     # A compiled step is specialized per input shape, and the padded time extent of a batch
     # is different almost every time, so without this every step would trigger a compile.
-    res = {"time_multiple": int(opts.pop("time_multiple", 0))}
+    time_multiple = opts.pop("time_multiple", 0)
+    if not isinstance(time_multiple, dict):
+        time_multiple = int(time_multiple)
+    else:
+        time_multiple = {key: int(value) for key, value in time_multiple.items()}
+    res = {"time_multiple": time_multiple}
     if opts:
         raise NotImplementedError(f"JAX engine: jax_jit options not supported: {sorted(opts)}")
     return res

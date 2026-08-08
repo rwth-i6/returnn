@@ -1442,6 +1442,40 @@ def test_engine_train_jit(time_multiple: int):
         numpy.testing.assert_allclose(jit_params[name], value, rtol=1e-4, atol=1e-6, err_msg=name)
 
 
+def test_jit_time_multiple_validation():
+    """
+    ``time_multiple`` is in the unit of the axis it pads. One number for keys whose axes are
+    different dims silently pads a label sequence by an audio-sample granularity -- measured once
+    at 16000, where the decoder self-attention became a 152 GiB buffer and the compile OOMed.
+    And keys sharing a dim must pad to the same extent, or the dim needs two capacities.
+    """
+    from returnn.tensor import batch_dim, TensorDict
+
+    # noinspection PyProtectedMember
+    from returnn.jax.engine import _check_time_multiple
+
+    _rf_jax()
+    audio_time, text_time = Dim(None, name="audio_time"), Dim(None, name="text_time")
+    feat = Dim(4, name="feat")
+    separate = TensorDict()
+    separate.data["audio"] = Tensor("audio", dims=[batch_dim, audio_time, feat], dtype="float32")
+    separate.data["text"] = Tensor("text", dims=[batch_dim, text_time], dtype="int32")
+    shared = TensorDict()
+    shared.data["data"] = Tensor("data", dims=[batch_dim, audio_time, feat], dtype="float32")
+    shared.data["classes"] = Tensor("classes", dims=[batch_dim, audio_time], dtype="int32")
+
+    with pytest.raises(NotImplementedError, match="different dims and different units"):
+        _check_time_multiple(16_000, extern_data=separate)
+    _check_time_multiple({"audio": 16_000, "text": 8}, extern_data=separate)  # per key: fine
+    _check_time_multiple(0, extern_data=separate)  # off: nothing to check
+
+    _check_time_multiple(4, extern_data=shared)  # one dim, so one number is unambiguous
+    with pytest.raises(NotImplementedError, match="sharing one dim"):
+        _check_time_multiple({"data": 4, "classes": 8}, extern_data=shared)
+    with pytest.raises(NotImplementedError, match="unknown data keys"):
+        _check_time_multiple({"nope": 4}, extern_data=shared)
+
+
 def test_engine_jit_donates_buffers():
     """
     The compiled step donates the parameters, the optimizer state and the RNG key -- the arguments

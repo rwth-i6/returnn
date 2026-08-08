@@ -9,7 +9,7 @@ Only the last step is JAX-specific: putting the NumPy arrays into a :class:`Tens
 """
 
 from __future__ import annotations
-from typing import Optional, Any, Dict, Iterator, List, Sequence
+from typing import Optional, Any, Dict, Iterator, List, Sequence, Union
 
 import numpy
 import jax.numpy as jnp
@@ -48,7 +48,11 @@ def raw_dict_to_extern_data(
 
 
 def batch_to_jax_raws(
-    raw: Dict[str, Any], *, extern_data: TensorDict, device: Optional[str] = None, time_multiple: int = 0
+    raw: Dict[str, Any],
+    *,
+    extern_data: TensorDict,
+    device: Optional[str] = None,
+    time_multiple: Union[int, Dict[str, int]] = 0,
 ) -> Dict[str, Any]:
     """
     Host side of the data path: the arrays of one batch as JAX arrays, keys unchanged.
@@ -61,6 +65,10 @@ def batch_to_jax_raws(
     :param time_multiple: if >1, pad the time axis up to a multiple of this.
         A compiled step is specialized per input shape, so rounding the padded extent up
         bounds how many variants get compiled -- at the price of computing on the padding.
+        PER DATA KEY (``{"audio": 16000, "text": 8}``), because the multiple is in the unit of the
+        axis it pads: 16000 audio samples and 16000 target labels are not remotely the same thing.
+        A bare int applies to every key, which is only unambiguous with a single dynamic dim --
+        see :func:`returnn.jax.engine._check_time_multiple`.
     :return: the data arrays plus "<key>_seq_lens" and "batch_dim", as JAX arrays
     """
     out: Dict[str, Any] = {}
@@ -74,8 +82,9 @@ def batch_to_jax_raws(
             # That keeps entries like seq_tag available to the step function, just not on the device.
             out[key] = numpy.asarray(value)
         else:
-            if seq_lens is not None and time_multiple > 1 and value.ndim > 1:
-                value = _pad_time(value, multiple=time_multiple)
+            multiple = time_multiple.get(key, 0) if isinstance(time_multiple, dict) else time_multiple
+            if seq_lens is not None and multiple > 1 and value.ndim > 1:
+                value = _pad_time(value, multiple=multiple)
             out[key] = _to_jax(value, dtype=template.dtype, device=device)
         if seq_lens is not None:
             out[f"{key}_seq_lens"] = _to_jax(seq_lens, dtype="int32", device=device)
@@ -193,7 +202,7 @@ def iter_dataset_batches(
     device: Optional[str] = None,
     with_complete_frac: bool = False,
     as_raws: bool = False,
-    time_multiple: int = 0,
+    time_multiple: Union[int, Dict[str, int]] = 0,
     **batch_opts,
 ) -> Iterator[TensorDict]:
     """
