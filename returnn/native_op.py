@@ -1018,12 +1018,14 @@ class NativeLstm2(NativeOpGenBase):
         {"name": "d", "ndim": 2, "shape": ((0, 1), (1, 0)), "need_contiguous": True},
     )
 
-    # noinspection PyMissingOrEmptyDocstring,PyPep8Naming
+    # noinspection PyPep8Naming
     @classmethod
     def grad_input_map(cls, X, W, y0, c0, i, start, step, Y, C, H, d, DY, DC, DH, Dd):
-        # noinspection PyRedundantParentheses
+        """
+        Map grads.
+        """
         del d, DC, DH  # not needed by the bwd kernel
-        return (X, W, y0, c0, i, start, step, Y, C, H, DY, Dd)
+        return X, W, y0, c0, i, start, step, Y, C, H, DY, Dd
 
     c_extra_support_code = {
         # language=C++
@@ -1502,7 +1504,7 @@ class TwoDLSTM(NativeOpGenBase):
         },  # "bw_in_var": {"want_inplace": "dummy_out"}},
     )
 
-    # noinspection PyMissingOrEmptyDocstring,PyPep8Naming
+    # noinspection PyPep8Naming
     @classmethod
     def grad_input_map(
         cls,
@@ -1526,6 +1528,9 @@ class TwoDLSTM(NativeOpGenBase):
         DCompleteY,
         DH,
     ):
+        """
+        Map grads.
+        """
         return (
             X,
             V_h,
@@ -1548,9 +1553,12 @@ class TwoDLSTM(NativeOpGenBase):
             DH,
         )
 
-    # noinspection PyMissingOrEmptyDocstring,PyPep8Naming
+    # noinspection PyPep8Naming
     @classmethod
     def map_layer_inputs_to_op(cls, Zs, Zt, V_h, V_v, W, b, ptr_storage):
+        """
+        Map layer inputs to op inputs. Theano only, unsupported.
+        """
         assert False  # no support for Theano
 
     c_extra_support_code = {

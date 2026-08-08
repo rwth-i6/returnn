@@ -286,7 +286,7 @@ class PythonControl:
         :param numpy.ndarray|None alignment:
         :param numpy.ndarray|None soft_alignment:
         :param str|None speaker_name:
-        :param kwargs: maybe others
+        :param _kwargs: maybe others
         """
         assert sprintDataset
         targets = {}

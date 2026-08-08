@@ -563,8 +563,12 @@ def ctc_loss(
     return loss
 
 
-# noinspection PyMethodOverriding,PyAbstractClass,PyMissingOrEmptyDocstring
+# noinspection PyMethodOverriding,PyAbstractClass
 class _FastBaumWelchScoresAutogradFunc(torch.autograd.Function):
+    """
+    Full-sum (Baum-Welch) score as an autograd function.
+    """
+
     @staticmethod
     def forward(
         ctx,
@@ -576,6 +580,9 @@ class _FastBaumWelchScoresAutogradFunc(torch.autograd.Function):
         start_end_states: torch.Tensor,
         state_buffer: Optional[torch.Tensor] = None,
     ) -> torch.Tensor:
+        """
+        :return: full-sum loss per seq (batch,)
+        """
         if logits_normalize:
             log_sm = torch.log_softmax(logits, dim=-1)  # (time,batch,dim)
         else:
@@ -598,6 +605,9 @@ class _FastBaumWelchScoresAutogradFunc(torch.autograd.Function):
 
     @staticmethod
     def backward(ctx, grad_output: torch.Tensor) -> Tuple[Optional[torch.Tensor], ...]:
+        """
+        :return: grad w.r.t. the logits, None for the other inputs
+        """
         if ctx.grad_wrt_softmax_in:
             log_sm, seq_mask, fwdbwd = ctx.saved_tensors
         else:
@@ -871,8 +881,12 @@ def ctc_loss_packed(
     return loss
 
 
-# noinspection PyMethodOverriding,PyAbstractClass,PyMissingOrEmptyDocstring
+# noinspection PyMethodOverriding,PyAbstractClass
 class _FastBaumWelchScoresPackedAutogradFunc(torch.autograd.Function):
+    """
+    Full-sum (Baum-Welch) score as an autograd function, on packed logits.
+    """
+
     @staticmethod
     def forward(
         ctx,
@@ -885,6 +899,9 @@ class _FastBaumWelchScoresPackedAutogradFunc(torch.autograd.Function):
         start_end_states: torch.Tensor,
         state_buffer: Optional[torch.Tensor] = None,
     ) -> torch.Tensor:
+        """
+        :return: full-sum loss per seq (batch,)
+        """
         if logits_normalize:
             log_sm = torch.log_softmax(logits, dim=-1)  # (total_time,dim)
         else:
@@ -920,6 +937,9 @@ class _FastBaumWelchScoresPackedAutogradFunc(torch.autograd.Function):
 
     @staticmethod
     def backward(ctx, grad_output: torch.Tensor) -> Tuple[Optional[torch.Tensor], ...]:
+        """
+        :return: grad w.r.t. the logits, None for the other inputs
+        """
         if ctx.grad_wrt_softmax_in:
             log_sm, frame_seq_idx, valid_mask, fwdbwd = ctx.saved_tensors
         else:

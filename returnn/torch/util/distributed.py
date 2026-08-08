@@ -9,10 +9,17 @@ from __future__ import annotations
 import torch
 
 
-# noinspection PyMethodOverriding,PyAbstractClass,PyMissingOrEmptyDocstring
+# noinspection PyMethodOverriding,PyAbstractClass
 class _AllReduceSum(torch.autograd.Function):
+    """
+    All-reduce-sum, whose gradient is again an all-reduce-sum.
+    """
+
     @staticmethod
     def forward(ctx, x: torch.Tensor, group) -> torch.Tensor:
+        """
+        :return: the summed tensor
+        """
         import torch.distributed as dist
 
         ctx.group = group
@@ -22,6 +29,9 @@ class _AllReduceSum(torch.autograd.Function):
 
     @staticmethod
     def backward(ctx, grad_output):
+        """
+        :return: the summed gradient
+        """
         import torch.distributed as dist
 
         # The gradient of an all-reduce-sum is the all-reduce-sum of the upstream gradient:

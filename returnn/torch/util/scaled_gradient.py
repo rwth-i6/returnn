@@ -19,15 +19,25 @@ from typing import Optional, Union
 import torch
 
 
-# noinspection PyMethodOverriding,PyAbstractClass,PyMissingOrEmptyDocstring
+# noinspection PyMethodOverriding,PyAbstractClass
 class _ScaledGradient(torch.autograd.Function):
+    """
+    Identity in the forward pass, scales the gradient in the backward pass.
+    """
+
     @staticmethod
     def forward(ctx, x: torch.Tensor, scale: float) -> torch.Tensor:
+        """
+        :return: x unchanged
+        """
         ctx.scale = scale
         return x
 
     @staticmethod
     def backward(ctx, grad_output):
+        """
+        :return: the scaled gradient
+        """
         return grad_output * ctx.scale, None
 
 
@@ -40,8 +50,12 @@ def scaled_gradient(x: torch.Tensor, scale: float) -> torch.Tensor:
     return _ScaledGradient.apply(x, scale)
 
 
-# noinspection PyMethodOverriding,PyAbstractClass,PyMissingOrEmptyDocstring
+# noinspection PyMethodOverriding,PyAbstractClass
 class _ScaledGradientExt(torch.autograd.Function):
+    """
+    Identity in the forward pass; scales and optionally shifts the gradient in the backward pass.
+    """
+
     @staticmethod
     def forward(
         ctx,
@@ -50,6 +64,9 @@ class _ScaledGradientExt(torch.autograd.Function):
         shift: Optional[Union[float, torch.Tensor]] = None,
         scale_shift_by_sum_over_axis: Optional[int] = None,
     ):
+        """
+        :return: x unchanged
+        """
         ctx.scale = scale
         ctx.shift = shift
         ctx.scale_shift_by_sum_over_axis = scale_shift_by_sum_over_axis
@@ -57,6 +74,9 @@ class _ScaledGradientExt(torch.autograd.Function):
 
     @staticmethod
     def backward(ctx, grad):
+        """
+        :return: the scaled and shifted gradient
+        """
         grad_out = grad
         if isinstance(ctx.scale, torch.Tensor) or ctx.scale != 1:
             grad_out = grad_out * ctx.scale
