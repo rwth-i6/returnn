@@ -637,6 +637,7 @@ def _check_config_opts_supported(config: Config):
     and silently ignoring them changes what the config means.
     """
 
+    # noinspection PyShadowingNames  -- local helper, shadowing the outer key/value is intended
     def _value_if_set(key: str, noop_value: Any = None) -> Optional[Any]:
         """:return: the configured value, or None if unset or at its no-op value"""
         if not config.has(key):

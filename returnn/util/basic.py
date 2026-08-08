@@ -2435,8 +2435,9 @@ def make_hashable(obj):
         if isinstance(obj, tf.Tensor):
             return RefIdEq(obj)
     # Try if this is already hashable.
+    # noinspection PyUnhashable
     try:
-        hash(obj)
+        hash(obj)  # failing is the point of the check, hence the suppression above
     except Exception:
         raise TypeError("don't know how to make hashable: %r (%r)" % (obj, type(obj)))
     return obj

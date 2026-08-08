@@ -157,6 +157,8 @@ def collect_stats(options, iter_corpus):
         assert not os.path.exists(orth_symbols_filename)
 
     class Stats:
+        """accumulated over the corpus by :func:`cb` below"""
+
         count = 0
         process_last_time = time.time()
         total_frame_len = 0
@@ -171,6 +173,7 @@ def collect_stats(options, iter_corpus):
         Stats.orth_syms_set.update(map(chr, list(range(ord("A"), ord("Z") + 1))))
 
     def cb(frame_len, orth):
+        """per-seq callback for iter_corpus: filters by length, then accumulates into Stats"""
         if frame_len >= options.max_seq_frame_len:
             return
         orth_syms = parse_orthography(orth)

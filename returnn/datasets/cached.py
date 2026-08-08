@@ -469,7 +469,8 @@ class CachedDataset(Dataset):
         """
         Inserts/removes sorted seq idx range (start,end).
         :param int start: like in load_seqs(), sorted seq idx
-        :param int end: like in load_seqs(), sorted seq idx
+        :param int|None end: like in load_seqs(), sorted seq idx, exclusive; start+1 if None,
+            which is what both callers pass by default
         :param bool invert: True->insert, False->remove
         :rtype: list[int]
         :return selection list, modified sorted seq idx in self.alloc_intervals

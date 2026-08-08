@@ -118,6 +118,11 @@ class StereoHdfDataset(StereoDataset):
     dataset and the respective 'output' dataset need to be the same.
     """
 
+    # These are dataset kwargs, i.e. they are written by name in user CONFIGS
+    # ({"class": "StereoHdfDataset", "hdfFile": ...}), which live outside any repo we can grep.
+    # Renaming them would silently break those configs. Same reasoning (and same wording) as
+    # RawWavDataset.__init__ in raw_wav.py.
+    # noinspection PyPep8Naming
     def __init__(
         self,
         hdfFile,

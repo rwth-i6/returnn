@@ -157,6 +157,7 @@ class RFModuleAsPTModule(torch.nn.Module):
     def _apply(self, *args, **kwargs):
         # Note: Use generic *args, **kwargs, as the signature slightly changed,
         # `recurse` was added in PyTorch 2.0 or so.
+        # noinspection PyProtectedMember  -- _apply is torch's own documented extension point
         super()._apply(*args, **kwargs)
 
         # This could get called via `rf_module.to(device)`,
