@@ -4,7 +4,7 @@ This module contains the layer base class :class:`LayerBase`.
 
 from __future__ import annotations
 
-from typing import Optional, Dict, List, Union
+from typing import Optional, Dict, List, Union, Any
 import typing
 from typing import TYPE_CHECKING
 import contextlib
@@ -192,7 +192,7 @@ class LayerBase:
         self.name = name
         self.network = network
         self._register_layer()
-        self.kwargs: Optional[typing.Dict[str, typing.Any]] = None  # set via self.post_init
+        self.kwargs: Optional[Dict[str, Any]] = None  # set via self.post_init
         self.target = None
         self.targets = None
         if target:
@@ -415,7 +415,7 @@ class LayerBase:
             )
         # Any template construction should be aware of that, and eventually resolve it.
         if out_type is None:
-            out_type = {}  # type: typing.Dict[str,typing.Any]
+            out_type: Dict[str, Any] = {}
         else:
             out_type = out_type.copy()
         out_type.setdefault("name", "%s_output" % name)

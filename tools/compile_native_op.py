@@ -11,16 +11,18 @@ from __future__ import annotations
 
 import os
 import sys
-import typing
+from typing import Optional
 
 import _setup_returnn_env  # noqa
+
 from returnn import __main__ as rnn
 from returnn.log import log
+from returnn.config import Config
 import argparse
 import returnn.util.basic as util
 
 
-config = None  # type: typing.Optional["returnn.config.Config"]
+config: Optional[Config] = None
 
 
 def init(config_filename, log_verbosity):

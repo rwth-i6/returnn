@@ -6,7 +6,7 @@ from __future__ import annotations
 
 import contextlib
 import typing
-from typing import Dict, Optional, Tuple, Union
+from typing import Dict, Optional, Tuple, Union, Any
 import tensorflow as tf
 import returnn.tf.compat as tf_compat
 
@@ -4491,7 +4491,7 @@ class _TemplateLayer(LayerBase):
         self.is_prev_time_frame = False
         self.is_initialized = False
         self.layer_class_type = None  # type: typing.Optional[typing.Type[LayerBase]]
-        self.kwargs = None  # type: typing.Optional[typing.Dict[str,typing.Any]]  # after transform_config_dict
+        self.kwargs: Optional[Dict[str, Any]] = None  # after transform_config_dict
         self.dependencies = []  # type: typing.List[LayerBase]
         self.cur_frame_dependencies = []  # type: typing.List[LayerBase]
         self.prev_frame_dependencies = []  # type: typing.List[_TemplateLayer]

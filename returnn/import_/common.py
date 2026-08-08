@@ -2,9 +2,12 @@
 Some global configurations
 """
 
+from __future__ import annotations
+
 import sys
 import os
 import typing
+from typing import Dict
 import logging
 
 ModuleNamePrefix = "returnn_import."
@@ -138,7 +141,7 @@ def _normalize_pkg_name(name):
 
 
 # For every `module_name` call, we insert an entry in here.
-_registered_modules = {}  # type: typing.Dict[str,object]  # mod name -> info, just for reporting
+_registered_modules: Dict[str, object] = {}  # mod name -> info, just for reporting
 
 
 def _register_module(mod_name, info):
