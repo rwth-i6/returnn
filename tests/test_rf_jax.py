@@ -512,6 +512,33 @@ def test_masked_reduce_vs_torch():
     assert not numpy.allclose(unmasked, ref["sum"]), "masking had no effect, so the test proves nothing"
 
 
+def test_reduce_over_padded_batch():
+    """
+    A batch dim with a static capacity (what tracing needs) and a dynamic size is padded like
+    any other axis, so a reduce over it has to mask. That the batch axis is special here is a
+    property of the legacy ``Tensor.get_sequence_mask_broadcast`` only, not of the mask itself.
+    """
+    import jax.numpy as jnp
+
+    _rf_jax()
+    batch = Dim(None, name="batch", kind=Dim.Types.Batch)
+    batch.dyn_size_ext = Tensor("batch_size", dims=(), dtype="int32", raw_tensor=jnp.asarray(3, dtype="int32"))
+    batch.capacity = 5  # two padded entries, which must not reach any of the reductions
+    feat = Dim(4, name="feat")
+    values = numpy.arange(20, dtype="float32").reshape(5, 4)
+    x = Tensor("x", dims=(batch, feat), dtype="float32", raw_tensor=jnp.asarray(values))
+
+    assert batch.need_masking()
+    for mode, ref in [
+        ("sum", values[:3].sum(axis=0)),
+        ("mean", values[:3].mean(axis=0)),
+        ("max", values[:3].max(axis=0)),
+        ("min", values[:3].min(axis=0)),
+    ]:
+        out = rf.reduce(x, mode=mode, axis=batch)
+        numpy.testing.assert_allclose(numpy.asarray(out.raw_tensor), ref, rtol=1e-6, err_msg=mode)
+
+
 def test_gather_scatter_pad_vs_torch():
     import torch
 

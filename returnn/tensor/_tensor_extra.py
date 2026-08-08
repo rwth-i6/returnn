@@ -2924,7 +2924,9 @@ class _TensorMixin(_TensorMixinBase):
             assert axis + self.batch_ndim > 0
             axis += self.batch_ndim
         assert 0 <= axis < self.batch_ndim
-        assert axis != self.batch_dim_axis
+        # The batch axis is allowed: a batch dim with a static capacity (as tracing requires)
+        # and a dynamic size is padded like any other axis, and its mask is the same comparison.
+        # Its size is a scalar, so it does not take the [B]-size fast path below.
         tag: Dim = self.dim_tags[axis]
         assert tag.dyn_size_ext is not None and tag.dyn_size_ext.raw_tensor is not None
         backend = tag.dyn_size_ext._raw_backend
@@ -2958,8 +2960,7 @@ class _TensorMixin(_TensorMixinBase):
             assert axis + self.batch_ndim > 0
             axis += self.batch_ndim
         assert 0 <= axis < self.batch_ndim
-        assert axis != self.batch_dim_axis
-        tag: Dim = self.dim_tags[axis]
+        tag: Dim = self.dim_tags[axis]  # the batch axis included, see :func:`get_sequence_mask_broadcast`
         return tag.get_mask(dim_order=self.dims, device=self.device)
 
     def get_sequence_lengths_broadcast(self, axis=None):
