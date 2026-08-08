@@ -477,7 +477,7 @@ class CachedDataset(Dataset):
         if end is None:
             end = start + 1
         if start == end:
-            return
+            return []
         assert start < end
         i = 0
         selection = []  # type: typing.List[int]
