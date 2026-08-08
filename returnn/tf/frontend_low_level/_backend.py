@@ -1212,8 +1212,9 @@ class TFBackend(Backend[tf.Tensor]):
                 dilation_rate=dilation_rate or 1,
                 padding=padding,
             )
-        # mixed precision, as for matmul: the conv itself runs in the reduced dtype, the bias follows
-        source, filter, bias = rf.amp_cast_compute(source, filter, bias)
+        # mixed precision, as for matmul: the conv itself runs in the reduced dtype, the bias
+        # follows -- unless this TF/device has no conv kernel for that dtype, see the helper
+        source, filter, bias = _amp_cast_conv(source, filter, bias)
         filter_in_dim = in_dim if not groups or groups == 1 else in_dim // groups
         batch_dims = [d for d in source.dims if d not in (in_dim,) + tuple(in_spatial_dims)]
         with tf_util.same_control_flow_ctx([source, filter]):
@@ -2387,9 +2388,72 @@ def _grouped_conv_grad_supported() -> bool:
             with tf_compat.v1.Session(graph=g) as session:
                 session.run(grad)
         return True
-    except Exception as exc:
-        print(f"TF: grouped conv has no gradient here ({type(exc).__name__}), using the depthwise op", file=log.v4)
+    except tf.errors.OpError as exc:
+        # The one failure mode there is: the kernel refusing the op at RUN time
+        # (InvalidArgumentError "Gradients for grouped convolutions are not supported on CPU",
+        # and NotFound/Unimplemented for a device without the kernel -- all OpError).
+        # Not caught, because they are not failure modes here:
+        # a missing registered gradient makes tf.gradients return None (handled above, measured),
+        # and the probe's dtypes and shapes are fixed, so construction cannot reject them.
+        print(
+            f"TF: grouped conv has no gradient here ({type(exc).__name__}: {str(exc).splitlines()[0][:120]}),"
+            f" using the depthwise op",
+            file=log.v4,
+        )
         return False
+
+
+@functools.lru_cache(maxsize=None)
+def _conv_supported_for_dtype(dtype: str) -> bool:
+    """
+    :param dtype: the mixed-precision compute dtype, e.g. "bfloat16"
+    :return: whether a conv can actually be COMPUTED in it here
+
+    TF 2.10 on CPU has no bfloat16 conv kernel, and says so only at run time
+    ("Missing 0-th output from {{node convolution}}"), so this runs the op rather than
+    building it -- same lesson as :func:`_grouped_conv_grad_supported`.
+    Both the plain and the grouped form are probed: they are separate kernels.
+    """
+    try:
+        g = tf.Graph()
+        with g.as_default():
+            x = tf.zeros([1, 4, 2], dtype=dtype)
+            plain = tf.nn.convolution(x, tf.zeros([3, 2, 2], dtype=dtype), strides=1, padding="SAME")
+            grouped = tf.nn.convolution(x, tf.zeros([3, 1, 2], dtype=dtype), strides=1, padding="SAME")
+            with tf_compat.v1.Session(graph=g) as session:
+                session.run([plain, grouped])
+        return True
+    except (TypeError, tf.errors.OpError) as exc:
+        # The two ways an unsupported compute dtype shows up, both measured:
+        # TypeError at construction when the op signature does not accept it at all
+        # ("Value passed to parameter 'input' has DataType int8 not in list of allowed values"),
+        # and OpError at run time when the signature allows it but no kernel is registered
+        # (InternalError "Missing 0-th output from {{node convolution}}" on TF 2.10 CPU bfloat16).
+        print(
+            f"TF: no conv kernel for {dtype} here ({type(exc).__name__}: {str(exc).splitlines()[0][:120]}),"
+            f" mixed precision keeps the conv in float32",
+            file=log.v4,
+        )
+        return False
+
+
+def _amp_cast_conv(*tensors):
+    """
+    :param tensors: source, filter, bias
+    :return: them in the mixed-precision compute dtype, or all in float32 where there is no kernel
+
+    AMP is a speed optimization, so where the platform cannot do a conv in the reduced dtype
+    the right answer is to run that conv in float32, not to fail the whole model.
+
+    Note it must cast DOWN, not merely skip casting up: the source usually arrives already in
+    the compute dtype from the ops before it, so leaving the filter alone would just make the
+    two disagree ("Input 'filter' of 'Conv2D' Op has type float32 that does not match type
+    bfloat16 of argument 'input'").
+    """
+    policy = rf.get_amp_policy()
+    if policy is not None and not _conv_supported_for_dtype(policy.compute_dtype):
+        return rf.amp_cast_float32(*tensors)
+    return rf.amp_cast_compute(*tensors)
 
 
 def _depthwise_conv(src_raw, filter_raw, *, strides, padding, dilations, nd: int):
