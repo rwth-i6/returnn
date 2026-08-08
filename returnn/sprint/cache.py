@@ -412,6 +412,9 @@ class FileArchive:
             else:
                 raise Exception("No valid alignment header found (found: %r). Wrong cache?" % alignment_header)
 
+        else:
+            raise ValueError(f"{self}: unknown typ {typ!r}")
+
     def has_entry(self, filename):
         """
         :param str filename: argument for self.read()
