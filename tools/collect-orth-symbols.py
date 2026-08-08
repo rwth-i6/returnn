@@ -126,6 +126,11 @@ def iter_bliss(filename, options, callback):
 
 
 def iter_txt(filename, options, callback):
+    """
+    :param filename: text file, gzip-decompressed if it ends in .gz
+    :param options: argparse.Namespace; collect_time is switched off here, txt has no time info
+    :param callback: called per non-empty line as callback(frame_len=0, orth=...)
+    """
     f = open(filename, "rb")
     if filename.endswith(".gz"):
         f = gzip.GzipFile(fileobj=f)
@@ -145,6 +150,7 @@ def iter_txt(filename, options, callback):
 def collect_stats(options, iter_corpus):
     """
     :param options: argparse.Namespace
+    :param iter_corpus: called with a per-seq callback, see e.g. :func:`iter_txt`
     """
     orth_symbols_filename = options.output
     if orth_symbols_filename:
