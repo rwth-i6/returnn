@@ -291,7 +291,7 @@ class Engine(EngineBase):
         )
         dataset.init_seq_order(epoch=self.epoch)
         batches = dataset.generate_batches(
-            recurrent_net=False,
+            recurrent_net=True,
             batch_size=batch_size,
             max_seqs=self._batch_opts["max_seqs"],
             **{k: v for k, v in self._batch_opts.items() if k not in ("batch_size", "eval_batch_size", "max_seqs")},
