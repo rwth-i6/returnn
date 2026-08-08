@@ -367,7 +367,12 @@ class JaxBackend(Backend[jax.Array]):
             elif mode == "mean":
                 # summing over the padded frames as 0 and dividing by the full width is off by exactly this factor
                 mask_value = 0
-                correction_factor = rf.masked_fraction_of_shape(axes, inverse=True, device=source.device)
+                # source.device is None while tracing (jax.value_and_grad traces even in eager mode),
+                # and masked_fraction_of_shape then builds the factor on the cpu by default,
+                # where it cannot meet the traced result. The default device is where the step runs.
+                correction_factor = rf.masked_fraction_of_shape(
+                    axes, inverse=True, device=source.device or rf.get_default_device()
+                )
             elif mode == "all":
                 mask_value = True
             elif mode == "any":
@@ -397,7 +402,8 @@ class JaxBackend(Backend[jax.Array]):
             # cast: the factor is computed from the seq lens and can come out as float64 under x64,
             # which would silently widen the result away from its declared dtype
             factor = correction_factor.copy_compatible_to_dims_raw(res_dims)
-            raw_result = raw_result * factor.astype(raw_result.dtype)
+            factor, raw_result = _match_device(factor.astype(raw_result.dtype), raw_result)
+            raw_result = raw_result * factor
         return Tensor(
             name=f"reduce_{mode}",
             raw_tensor=raw_result,
