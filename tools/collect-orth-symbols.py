@@ -15,6 +15,7 @@ from returnn.log import log
 from returnn.config import Config
 from returnn.datasets import Dataset
 import argparse
+import functools
 from returnn.util.basic import hms, human_size, parse_orthography, parse_orthography_into_symbols, unicode
 import gzip
 from xml.etree import ElementTree
@@ -207,7 +208,7 @@ def collect_stats(options, iter_corpus):
             else:
                 print("Collect process, total orth len so far:", human_size(Stats.total_orth_len), file=log.v3)
 
-    iter_corpus(cb)
+    iter_corpus(callback=cb)
 
     if options.remove_symbols:
         filter_syms = parse_orthography_into_symbols(options.remove_symbols)
@@ -319,11 +320,11 @@ def main(argv):
     init(config_filename=crnn_config_filename)
 
     if bliss_filename:
-        iter_corpus = lambda cb: iter_bliss(bliss_filename, options=args, callback=cb)
+        iter_corpus = functools.partial(iter_bliss, bliss_filename, options=args)
     elif txt_filename:
-        iter_corpus = lambda cb: iter_txt(txt_filename, options=args, callback=cb)
+        iter_corpus = functools.partial(iter_txt, txt_filename, options=args)
     else:
-        iter_corpus = lambda cb: iter_dataset(rnn.train_data, options=args, callback=cb)
+        iter_corpus = functools.partial(iter_dataset, rnn.train_data, options=args)
     collect_stats(args, iter_corpus)
 
     if crnn_config_filename:
