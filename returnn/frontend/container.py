@@ -213,7 +213,7 @@ class ParameterList(rf.Module):
 
     def __setitem__(self, idx: int, parameter: rf.Parameter) -> None:
         key = list(self._get_parameters().keys())[idx]
-        return setattr(self, key, rf.Parameter)
+        setattr(self, key, parameter)
 
     __call__ = rf.Module.__call__  # stays abstract
 
