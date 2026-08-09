@@ -426,6 +426,7 @@ class GraphCapturedTrainStep:
         get_optimizer: Optional[Callable[[], torch.optim.Optimizer]] = None,
         get_buffers: Optional[Callable[[], List[torch.Tensor]]] = None,
         rf_params: Optional[List[rf.Parameter]] = None,
+        packed_batch_size: Optional[Dict[str, int]] = None,
     ):
         """
         :param opts: the ``torch_cuda_graph`` config dict, see the module docstring
@@ -440,6 +441,9 @@ class GraphCapturedTrainStep:
             capturable optimizer (device step counters), no host reads, constant/device-tensor lr).
         :param rf_params: the RF-level model params (required for opts "compile":
             the compiled step takes the param raw tensors as graph inputs via RF-level raw swap).
+        :param packed_batch_size: the config option of the same name, when set and statically
+            known (a dict/int, not a callable). Used ONLY to infer a missing per-key
+            "packed_total_bound", see :func:`_get_data_buf`.
         """
         assert str(device).startswith("cuda"), f"torch_cuda_graph requires a cuda device, got {device!r}"
         opts = CollectionReadCheckCovered(opts)  # catch unknown (e.g. typo'd) option keys, see below
@@ -449,6 +453,8 @@ class GraphCapturedTrainStep:
         # (e.g. batch size + per-seq gap slack); the default -- every seq at full capacity --
         # can be far larger and the activations scale with it
         self.packed_total_bound: Dict[str, int] = dict(opts.get("packed_total_bound", {}))
+        # only for inferring a missing packed_total_bound entry, see _get_data_buf
+        self._packed_batch_size: Dict[str, int] = dict(packed_batch_size) if isinstance(packed_batch_size, dict) else {}
         self.warmup_steps = int(opts.get("warmup_steps", 2))
         # Run the eager warmup steps on a minimal dummy batch instead of the real one
         # (params + optimizer state are restored afterwards, so the model never sees them).
@@ -638,13 +644,25 @@ class GraphCapturedTrainStep:
             # packed collate: flat contiguous [total, ...feature];
             # bound = declared packed_total_bound, else batch bound * capacity
             self._packed_opts[k] = dict(packed)
-            total = self.packed_total_bound.get(k, self.batch_size_bound * self.dim_capacity[k])
+            gap = int(packed.get("gap", 0))
+            align = int(packed.get("align", 1))
+            total = self.packed_total_bound.get(k)
+            if total is None and k in self._packed_batch_size:
+                # packed_batch_size budgets CONTENT; the LAYOUT additionally needs the per-seq
+                # gap and align rounding: each seq occupies at most len + gap + align - 1 frames
+                # (same derivation as _regap_total_bound in the packed backend). At the usual
+                # gap 0 / align 1 this is exactly packed_batch_size, i.e. the rule everyone
+                # already writes by hand; with a gap/align layout it is the term that is easy
+                # to forget, and forgetting it only shows up as an async device-side assert.
+                total = self._packed_batch_size[k] + self.batch_size_bound * (gap + align - 1)
+            if total is None:
+                # no content budget known (no packed_batch_size, or a callable one):
+                # fall back to every seq at full capacity, which is correct but far larger
+                total = self.batch_size_bound * self.dim_capacity[k]
             # early static sanity check of the DECLARED bound (before any step runs):
             # a single seq at full dim_capacity, laid out with the configured gap/align,
             # must fit -- a bound below that is certainly mis-configured (the per-batch
             # content check happens in pack(); this catches gross mistakes at startup).
-            gap = int(packed.get("gap", 0))
-            align = int(packed.get("align", 1))
             one_seq = -(-(self.dim_capacity[k] + gap) // align) * align
             assert total >= one_seq, (
                 f"torch_cuda_graph: packed_total_bound[{k!r}] = {total} cannot hold one seq at"
@@ -699,12 +717,17 @@ class GraphCapturedTrainStep:
                 # re-layout buffers; a batch above it would overflow them INSIDE the replay
                 # (an async illegal access) -- reject it here, host-side, every step
                 gap_k = int(self._packed_opts[k].get("gap", 0))
-                content_bound = buf.shape[0] - self.batch_size_bound * gap_k
+                align_k = int(self._packed_opts[k].get("align", 1))
+                # the align term belongs here too: a seq occupies roundup(len + gap, align),
+                # i.e. up to align-1 frames MORE than len + gap. Leaving it out made this check
+                # pass for a batch the layout could not hold, and the overflow then surfaced as
+                # an async device-side assert inside the replay instead of here.
+                content_bound = buf.shape[0] - self.batch_size_bound * (gap_k + align_k - 1)
                 assert raw.shape[0] <= content_bound, (
                     f"torch_cuda_graph: packed {k} content total {raw.shape[0]} exceeds the"
                     f" content bound {content_bound} (= packed_total_bound {buf.shape[0]}"
-                    f" - batch_size_bound {self.batch_size_bound} * gap {gap_k});"
-                    f" raise packed_total_bound"
+                    f" - batch_size_bound {self.batch_size_bound} * (gap {gap_k}"
+                    f" + align {align_k} - 1)); raise packed_total_bound"
                 )
             else:
                 assert all(a <= b for a, b in zip(raw.shape, buf.shape)), (

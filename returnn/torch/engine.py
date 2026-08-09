@@ -276,6 +276,8 @@ class Engine(EngineBase):
                 get_optimizer=lambda: self._updater.get_optimizer(),
                 get_buffers=lambda: list(self._pt_model.buffers()),
                 rf_params=(list(self._orig_model.parameters()) if isinstance(self._orig_model, rf.Module) else None),
+                # lets the capture infer a missing packed_total_bound from the content budget
+                packed_batch_size=self.config.typed_value("packed_batch_size", None),
             )
             if self._graph_capture.captures_optimizer:
                 # LR as a device tensor = a graph input: the per-step LR schedule
