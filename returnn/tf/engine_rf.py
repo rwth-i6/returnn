@@ -666,10 +666,15 @@ def _check_config_opts_supported(config: Config):
     for key, tf_name in sorted(_TorchOnlyConfigOpts.items()):
         value = _value_if_set(key)
         if value is not None:
-            unsupported.append(
-                f"{key} = {value!r} is PyTorch specific"
-                + (f", the TF engine reads {tf_name} (not implemented either)" if tf_name else "")
-            )
+            if not tf_name:
+                hint = ""
+            elif tf_name in _UnsupportedConfigOpts:
+                # derived, not asserted: an option drops out of _UnsupportedConfigOpts when it
+                # gets implemented, and this message then follows by itself
+                hint = f", the TF engine reads {tf_name} (not implemented either)"
+            else:
+                hint = f", set {tf_name} instead"
+            unsupported.append(f"{key} = {value!r} is PyTorch specific{hint}")
     if unsupported:
         raise NotImplementedError(
             "TF engine: the config sets options which this engine does not implement:\n  "
