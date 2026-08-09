@@ -271,7 +271,7 @@ class ExtractAudioFeatures:
                 new_shape = (new_len // self.join_frames, self.num_channels, feature_data.shape[-1] * self.join_frames)
                 pad_width = ((0, pad_len), (0, 0), (0, 0))
             feature_data = numpy.pad(feature_data, pad_width=pad_width, mode="edge")
-            feature_data = numpy.reshape(feature_data, newshape=new_shape, order="C")
+            feature_data = numpy.reshape(feature_data, new_shape, order="C")
 
         assert feature_data.shape[-1] == self.get_feature_dimension()
         if self.post_process:
