@@ -193,7 +193,7 @@ def main_custom():
             ctc.run()
             ctc_run_end_time = time.time()
             sav_ctc = fsa_util.Store(fsa.num_states_ctc, fsa.edges_ctc)
-            sav_ctc.filename = "_+_ctc_{}".format(fsa.filename, date_str)
+            sav_ctc.filename = "{}_ctc_{}".format(fsa.filename, date_str)
             sav_ctc.fsa_to_dot_format()
             sav_ctc.save_to_file()
             ctc_end_time = time.time()

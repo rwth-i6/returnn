@@ -20,7 +20,6 @@ import unittest
 import numpy
 import numpy.testing
 from numpy.testing import assert_almost_equal, assert_allclose
-import os
 from pprint import pprint
 from returnn.util import better_exchook
 import returnn.util.debug as debug

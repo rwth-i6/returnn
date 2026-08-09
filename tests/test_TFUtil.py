@@ -53,7 +53,7 @@ def test_Data_dim():
 
 def test_Data_dim_none():
     data = Data(name="my_data", dim=None)
-    assert data.dim == None
+    assert data.dim is None
     assert data.batch_dim_axis == 0
     assert data.time_dim_axis == 1
     assert data.feature_dim_axis == 2
@@ -65,7 +65,7 @@ def test_Data_dim_none():
 
 def test_Data_dim_none_auto_create_placeholders():
     data = Data(name="my_data", dim=None, auto_create_placeholders=True)
-    assert data.dim == None
+    assert data.dim is None
     assert data.batch_dim_axis == 0
     assert data.time_dim_axis == 1
     assert data.feature_dim_axis == 2
@@ -1218,7 +1218,7 @@ def test_Data_feature_dim_axis_none():
     d2 = Data(name="d2", shape=(), feature_dim_axis=None)
     d3 = Data(name="d3", shape=(None,), sparse=True, dim=7)
     d4 = Data(name="d4", shape=(None,), sparse=True, dim=7, feature_dim_axis=None)
-    assert d1.feature_dim_axis == d2.feature_dim_axis == d3.feature_dim_axis == d4.feature_dim_axis == None
+    assert d1.feature_dim_axis == d2.feature_dim_axis == d3.feature_dim_axis == d4.feature_dim_axis is None
     assert d1.feature_dim_axis_or_unspecified is NotSpecified
     assert d2.feature_dim_axis_or_unspecified is None
 
@@ -1239,7 +1239,7 @@ def test_Data_feature_dim_axis_bd():
     d1 = Data(name="d1", time_dim_axis=None, dim=11)
     d2 = Data(name="d2", shape=(11,))
     assert d1.batch_dim_axis == d2.batch_dim_axis == 0
-    assert d1.time_dim_axis == d2.time_dim_axis == None
+    assert d1.time_dim_axis == d2.time_dim_axis is None
     assert d1.feature_dim_axis == d2.feature_dim_axis == 1
     assert d1.dim == d2.dim == 11
     assert d1.batch_shape == d2.batch_shape == (None, 11)
@@ -1248,8 +1248,8 @@ def test_Data_feature_dim_axis_bd():
 def test_Data_feature_dim_axis_d():
     d1 = Data(name="d1", batch_dim_axis=None, time_dim_axis=None, dim=11)
     d2 = Data(name="d2", batch_dim_axis=None, shape=(11,))
-    assert d1.batch_dim_axis == d2.batch_dim_axis == None
-    assert d1.time_dim_axis == d2.time_dim_axis == None
+    assert d1.batch_dim_axis == d2.batch_dim_axis is None
+    assert d1.time_dim_axis == d2.time_dim_axis is None
     assert d1.feature_dim_axis == d2.feature_dim_axis == 0
     assert d1.dim == d2.dim == 11
     assert d1.batch_shape == d2.batch_shape == (11,)

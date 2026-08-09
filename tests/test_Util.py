@@ -810,9 +810,9 @@ def test_bpe_DepthFirstSearch():
     dfs = DepthFirstSearch(tree, "hello")
     assert dfs.search() == ["he@@", "llo"]
     dfs = DepthFirstSearch(tree, "helo")
-    assert dfs.search() == None
+    assert dfs.search() is None
     dfs = DepthFirstSearch(tree, "x")
-    assert dfs.search() == None
+    assert dfs.search() is None
     dfs = DepthFirstSearch(tree, "llo")
     assert dfs.search() == ["llo"]
 
