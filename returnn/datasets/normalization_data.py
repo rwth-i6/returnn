@@ -130,24 +130,26 @@ class NormalizationData:
         :return: tuple (sum, sum of squares, total number of time frames)
                  if they are available
         """
-        sum = None
-        sumOfSqr = None
+        total_sum = None
+        sum_of_sqr = None
         total_frames = np.int64(0)
         if group_name not in f:
-            return sum, sumOfSqr, total_frames
+            return total_sum, sum_of_sqr, total_frames
         group = f[group_name]
-        datasetNames = group.keys()
-        if len(datasetNames) == 0:
-            return sum, sumOfSqr, total_frames
-        featDims = group[datasetNames[0]].shape[NormalizationData.DATASET_FEATURE_DIMENSION_INDEX]
-        sum = np.zeros(featDims, dtype=dtype)
-        sumOfSqr = np.zeros(featDims, dtype=dtype)
-        for dsName in datasetNames:
-            dataset = group[dsName][...]
-            sum += np.sum(dataset, axis=NormalizationData.DATASET_TIME_DIMENSION_INDEX)
-            sumOfSqr += np.sum(np.square(dataset), axis=NormalizationData.DATASET_TIME_DIMENSION_INDEX)
+        # list(...): h5py's .keys() is a set-like view on py3, so it is NOT subscriptable --
+        # the old `dataset_names[0]` raised TypeError.
+        dataset_names = list(group.keys())
+        if len(dataset_names) == 0:
+            return total_sum, sum_of_sqr, total_frames
+        feat_dims = group[dataset_names[0]].shape[NormalizationData.DATASET_FEATURE_DIMENSION_INDEX]
+        total_sum = np.zeros(feat_dims, dtype=dtype)
+        sum_of_sqr = np.zeros(feat_dims, dtype=dtype)
+        for ds_name in dataset_names:
+            dataset = group[ds_name][...]
+            total_sum += np.sum(dataset, axis=NormalizationData.DATASET_TIME_DIMENSION_INDEX)
+            sum_of_sqr += np.sum(np.square(dataset), axis=NormalizationData.DATASET_TIME_DIMENSION_INDEX)
             total_frames += dataset.shape[NormalizationData.DATASET_TIME_DIMENSION_INDEX]
-        return sum, sumOfSqr, total_frames
+        return total_sum, sum_of_sqr, total_frames
 
     @staticmethod
     def _update_total_sum(totalSum, intermediateSum):

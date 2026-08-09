@@ -6,7 +6,7 @@ We make use of torch.utils.data.IterDataPipe.
 
 from __future__ import annotations
 
-from typing import Callable, Optional, Iterable, Dict
+from typing import Callable, Optional, Iterator, Dict
 import sys
 import numpy
 import torch.utils.data
@@ -93,7 +93,7 @@ class ReturnnDatasetIterDataPipe(torch.utils.data.IterDataPipe):
         """
         self._reset_callback()
 
-    def __iter__(self) -> Iterable[Dict[str, numpy.ndarray]]:
+    def __iter__(self) -> Iterator[Dict[str, numpy.ndarray]]:
         """
         :return: generator providing data samples in the form of a dict data_key -> data
         """

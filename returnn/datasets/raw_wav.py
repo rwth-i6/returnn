@@ -137,9 +137,7 @@ class RawWavDataset(CachedDataset2):
             self._load_wav_file_id_into_buffer(wav_file_id)
         if str(wav_file_id) not in self._hdfBufferHandler["outputs"].keys():
             return None
-        else:
-            # TBD !!!
-            pass
+        return None
 
     def _isInBuffer(self, wav_file_id):
         """
