@@ -118,7 +118,7 @@ def init(config_filename, command_line_options, args):
     epoch, model_epoch_filename = Engine.get_epoch_model(config)
     engine.pretrain = pretrain_from_config(config)
     engine.custom_get_net_dict = config.typed_value("get_network")
-    net_dict = engine.get_net_dict_for_epoch(epoch)
+    net_dict = engine.get_net_dict_for_epoch(epoch=epoch)
     engine.make_tf_session()
     engine.network = TFNetwork(name="root")
     engine.network.construct_layer(net_dict, args.layer)
