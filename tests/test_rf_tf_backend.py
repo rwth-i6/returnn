@@ -10,6 +10,19 @@ The same comparison runs for all the other ``test_rf_*`` tests with ``RETURNN_TE
 
 from __future__ import annotations
 from typing import Dict, Tuple
+import os
+
+# These tests compare the TF backend against PyTorch for exactness.
+# TF enables TF32 by default since Ampere, torch does not,
+# so matmuls would run at different precision on the two sides
+# (test_linear, test_matmul*, test_full_model*, test_depthwise_conv_grad_runs).
+# Set before TF is imported below, and via the CUDA-level switch rather than
+# tf.config.experimental.enable_tensor_float_32_execution:
+# that call initializes the TF context at import time,
+# which makes test_engine_dynamic_learning_rate and test_engine_weight_decay_modules_blacklist
+# fail in a full-file run while still passing alone.
+os.environ.setdefault("NVIDIA_TF32_OVERRIDE", "0")
+
 import _setup_test_env  # noqa
 import shutil
 import tempfile
