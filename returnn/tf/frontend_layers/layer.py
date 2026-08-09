@@ -1022,6 +1022,9 @@ class _ReturnnConfigSerializer:
         if isinstance(obj, tuple) and type(obj) is not tuple:
             # noinspection PyProtectedMember,PyUnresolvedReferences,PyArgumentList
             return type(obj)(*(cls._post_process_transform(getattr(obj, key), imports=imports) for key in obj._fields))
+        # Pass anything else through unchanged.
+        # (This runs while trainings serialize their net dict, so keep it non-fatal for now.)
+        return obj
 
     class _CodeWrapper:
         def __init__(self, code: str, obj: Any):
