@@ -331,10 +331,32 @@ def setup_pycharm_python_interpreter(pycharm_dir, install_py_deps=False):
         assert isinstance(jdk_collection, ElementTree.Element)
 
     existing_jdk = jdk_collection.find("./jdk/name[@value='%s']/.." % name)
-    if existing_jdk:
-        print("Found existing Python interpreter %r. Remove and recreate." % name)
+    # `is not None`, NOT truthiness: an Element is falsy when it has no children
+    # (and Python warns about it), so the old `if existing_jdk:` also missed empty entries.
+    if existing_jdk is not None:
         assert isinstance(existing_jdk, ElementTree.Element)
         assert existing_jdk.find("./name").attrib["value"] == name
+        home_el = existing_jdk.find("./homePath")
+        existing_home = home_el.attrib["value"] if home_el is not None else ""
+        # the IDE writes the $USER_HOME$ macro back into this file
+        existing_home = existing_home.replace("$USER_HOME$", os.path.expanduser("~"))
+        if existing_home and os.path.realpath(existing_home) == os.path.realpath(sys.executable):
+            # Same interpreter: KEEP the entry as the IDE last left it, do not rewrite.
+            # Rewriting it every run is what made the inspection unreliable: we point the SDK
+            # back at OUR stub dir, so on the next start the IDE finds its own (hashed) skeleton
+            # root missing, runs PySkeletonRefresher ~50 s INTO the run and then updates the SDK
+            # -- and every file analyzed after that point stops resolving `torch` (measured:
+            # nothing wrong in the first ~30% of the file order, ~1200 bogus
+            # "Cannot find reference ... in 'torch'" after it).
+            # Recreating is still right when the interpreter DIFFERS -- that is the cross-env
+            # stale-SDK case this remove/recreate was originally added for.
+            print("Existing Python interpreter %r already points at %s. Keeping it." % (name, existing_home))
+            fold_end()
+            return
+        print(
+            "Found existing Python interpreter %r for a DIFFERENT interpreter (%s != %s)."
+            " Remove and recreate." % (name, existing_home, sys.executable)
+        )
         jdk_collection.remove(existing_jdk)
 
     # Example content:
