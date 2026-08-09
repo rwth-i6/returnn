@@ -2340,13 +2340,32 @@ class TFBackend(Backend[tf.Tensor]):
             if bound is not None:
                 assert minval is None and maxval is None, "TF random uniform: bound together with minval/maxval"
                 minval, maxval = -bound, bound
-            minval = _random_scalar_arg(minval, 0)
-            maxval = _random_scalar_arg(maxval, 1 if dtype_raw.is_floating else None)
-            assert maxval is not None, "TF random uniform: maxval required for integer dtype"
-            if seed_raw is not None:
-                raw = tf.random.stateless_uniform(shape, seed_raw, minval=minval, maxval=maxval, dtype=dtype_raw)
+            if _random_arg_is_per_element(minval) or _random_arg_is_per_element(maxval):
+                # tf.random.uniform takes only SCALAR bounds, so draw in [0,1) and scale.
+                # rf.audio.specaugment needs per-element bounds: its mask positions and lengths
+                # are drawn per sequence, so maxval is a [B] tensor.
+                min_raw = _random_bound_raw(minval, 0, dims)
+                max_raw = _random_bound_raw(maxval, None, dims)
+                assert max_raw is not None, "TF random uniform: maxval required with a per-element bound"
+                unit = (
+                    tf.random.stateless_uniform(shape, seed_raw, dtype=tf.float32)
+                    if seed_raw is not None
+                    else tf.random.uniform(shape, dtype=tf.float32)
+                )
+                span = tf.cast(max_raw, tf.float32) - tf.cast(min_raw, tf.float32)
+                scaled = unit * span
+                if not dtype_raw.is_floating:
+                    # floor keeps it uniform over the integers [minval, maxval), as randint is
+                    scaled = tf.floor(scaled)
+                raw = tf.cast(tf.cast(min_raw, tf.float32) + scaled, dtype_raw)
             else:
-                raw = tf.random.uniform(shape, minval=minval, maxval=maxval, dtype=dtype_raw)
+                minval = _random_scalar_arg(minval, 0)
+                maxval = _random_scalar_arg(maxval, 1 if dtype_raw.is_floating else None)
+                assert maxval is not None, "TF random uniform: maxval required for integer dtype"
+                if seed_raw is not None:
+                    raw = tf.random.stateless_uniform(shape, seed_raw, minval=minval, maxval=maxval, dtype=dtype_raw)
+                else:
+                    raw = tf.random.uniform(shape, minval=minval, maxval=maxval, dtype=dtype_raw)
         elif distribution in ("normal", "truncated_normal"):
             assert minval is None and maxval is None and bound is None, f"TF random {distribution}: got minval/maxval"
             mean = _random_scalar_arg(mean, 0)
@@ -2575,6 +2594,30 @@ def _transpose_raw(raw_tensor: tf.Tensor, perm: Sequence[int]) -> tf.Tensor:
     if list(perm) == list(range(len(perm))):
         return raw_tensor
     return tf.transpose(raw_tensor, perm)
+
+
+def _random_arg_is_per_element(value: Union[None, int, float, Tensor]) -> bool:
+    """
+    :param value: distribution argument of :func:`TFBackend.random`
+    :return: whether it varies per element, i.e. cannot go to tf.random.* as a scalar bound
+    """
+    return isinstance(value, Tensor) and value.dims != ()
+
+
+def _random_bound_raw(
+    value: Union[None, int, float, Tensor], default: Union[None, int, float], dims: Sequence[Dim]
+) -> Any:
+    """
+    :param value: distribution argument of :func:`TFBackend.random`
+    :param default: used when value is None
+    :param dims: of the random tensor being drawn
+    :return: raw scalar, or a raw tensor broadcastable to dims
+    """
+    if value is None:
+        return default
+    if isinstance(value, Tensor):
+        return value.raw_tensor if value.dims == () else value.copy_compatible_to_dims_raw(dims)
+    return value
 
 
 def _random_scalar_arg(value: Union[None, int, float, Tensor], default: Union[None, int, float]) -> Any:
