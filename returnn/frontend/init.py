@@ -188,7 +188,7 @@ class VarianceScaling(ParamInit):
 
 class Glorot(VarianceScaling):
     """
-    Xavier Glorot (http://proceedings.mlr.press/v9/glorot10a/glorot10a.pdf).
+    Xavier Glorot (https://proceedings.mlr.press/v9/glorot10a/glorot10a.pdf).
     scale 1, fan_avg, uniform
     """
 
