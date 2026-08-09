@@ -237,6 +237,31 @@ Ndarray* Ndarray_Copy(const Ndarray* self) {
 #define TWOD_LSTM_SUPPORT 0
 #endif
 
+// StreamExecutor moved out of the perftools::gputools namespace, and the Stream::ThenBlas*
+// wrappers were dropped in favour of calling BlasSupport directly.
+// Both are gone in TF 2.20; the exact removal versions were not established here, so the switch
+// is set at the version actually verified. Anything older keeps the code it always had and
+// cannot regress; if CI shows an earlier TF also lacks ThenBlas*, lower this bound.
+#if (TF_MAJOR_VERSION > 2) || (TF_MAJOR_VERSION == 2 && TF_MINOR_VERSION >= 20)
+#define RETURNN_TF_MODERN_STREAM_EXECUTOR 1
+#else
+#define RETURNN_TF_MODERN_STREAM_EXECUTOR 0
+#endif
+
+#if GOOGLE_CUDA
+#if RETURNN_TF_MODERN_STREAM_EXECUTOR
+#include "xla/stream_executor/blas.h"
+#include "xla/stream_executor/data_type.h"
+#include "xla/stream_executor/numeric_options.h"
+#include "xla/stream_executor/stream_executor.h"
+#include "tensorflow/core/platform/tensor_float_32_utils.h"
+namespace returnn_se = stream_executor;
+#else
+// alias only: on these versions every use below resolves exactly as it did before
+namespace returnn_se = perftools::gputools;
+#endif
+#endif  // GOOGLE_CUDA
+
 #if TF_issue_6602_workaround
 
 #if GOOGLE_CUDA && !CUDA
@@ -260,23 +285,23 @@ struct TensorCuBlasGemm {
 #if GOOGLE_CUDA
 // or tensorflow/include/tensorflow/core/util/stream_executor_util.h ?
 template <typename T>
-perftools::gputools::DeviceMemory<T> AsDeviceMemory(const T* cuda_memory) {
-  perftools::gputools::DeviceMemoryBase wrapped(const_cast<T*>(cuda_memory));
-  perftools::gputools::DeviceMemory<T> typed(wrapped);
+returnn_se::DeviceMemory<T> AsDeviceMemory(const T* cuda_memory) {
+  returnn_se::DeviceMemoryBase wrapped(const_cast<T*>(cuda_memory));
+  returnn_se::DeviceMemory<T> typed(wrapped);
   return typed;
 }
 
-static perftools::gputools::blas::Transpose get_transpose(char t) {
+static returnn_se::blas::Transpose get_transpose(char t) {
     switch(t) {
     case 'T':
-        return perftools::gputools::blas::Transpose::kTranspose;
+        return returnn_se::blas::Transpose::kTranspose;
     case 'C':
-        return perftools::gputools::blas::Transpose::kConjugateTranspose;
+        return returnn_se::blas::Transpose::kConjugateTranspose;
     case 'N':
-        return perftools::gputools::blas::Transpose::kNoTranspose;
+        return returnn_se::blas::Transpose::kNoTranspose;
     default:
         assert("invalid transpose option" || 0);
-        return perftools::gputools::blas::Transpose::kNoTranspose;
+        return returnn_se::blas::Transpose::kNoTranspose;
     }
 }
 #endif  // GOOGLE_CUDA
@@ -316,12 +341,32 @@ static void tf_cuda_sgemm(
     auto* dev_stream = dev_ctx->stream();
     OP_REQUIRES(context, dev_stream, errors::Internal("No GPU stream available."));
 
+#if RETURNN_TF_MODERN_STREAM_EXECUTOR
+    // Stream::ThenBlasGemm is gone; go through BlasSupport directly. Same operation,
+    // but alpha/beta are passed by pointer and the element type is explicit.
+    auto* blas = dev_stream->parent()->AsBlas();
+    OP_REQUIRES(context, blas, errors::Internal("No BLAS support for this device."));
+    bool blas_launch_status =
+        blas->DoBlasGemm(dev_stream, get_transpose(transa), get_transpose(transb),
+                         (uint64_t)m, (uint64_t)n, (uint64_t)k,
+                         returnn_se::dnn::ToDataType<T>::value, &alpha, a_ptr, lda,
+                         b_ptr, ldb, &beta, &c_ptr, ldc,
+                         // Follow TF's global TF32 setting, as TF's own kernels do, so enabling or
+                         // disabling TF32 applies here too. TF32 costs ~5e-5 relative on float32
+                         // GEMM, so the native-op tests, which compare against TF references for
+                         // exactness, turn TF32 off process-wide rather than us hardcoding it.
+                         returnn_se::NumericOptions(/*require_determinism=*/false,
+                                                   tensorflow::tensor_float_32_execution_enabled()),
+                         returnn_se::blas::CallContext::kNone)
+            .ok();
+#else
     bool blas_launch_status =
         dev_stream
              ->ThenBlasGemm(get_transpose(transa), get_transpose(transb),
                             m, n, k, alpha, a_ptr,
                             lda, b_ptr, ldb, beta, &c_ptr, ldc)
              .ok();
+#endif
     OP_REQUIRES(context, blas_launch_status, errors::Aborted("CuBlasGemm failed!"));
 #endif  // TF_issue_6602_workaround
 #else  // GOOGLE_CUDA
@@ -348,7 +393,7 @@ static void tf_cuda_sgemm_batched(
 // https://github.com/tensorflow/tensorflow/blob/master/tensorflow/contrib/rnn/kernels/blas_gemm.cc
 #if GOOGLE_CUDA
 #if TWOD_LSTM_SUPPORT
-    typedef perftools::gputools::DeviceMemory<float> DeviceMemoryType;
+    typedef returnn_se::DeviceMemory<float> DeviceMemoryType;
     std::vector<DeviceMemoryType> a_device_memory;
     std::vector<DeviceMemoryType> b_device_memory;
     std::vector<DeviceMemoryType> c_device_memory;
@@ -376,15 +421,30 @@ static void tf_cuda_sgemm_batched(
     // cublasCreate, https://docs.nvidia.com/cuda/cublas/#cublascreate
 
     auto dev_ctx = context->op_device_context();
-    perftools::gputools::Stream* dev_stream = dev_ctx->stream();
+    returnn_se::Stream* dev_stream = dev_ctx->stream();
     OP_REQUIRES(context, dev_stream, errors::Internal("No GPU stream available."));
 
+#if RETURNN_TF_MODERN_STREAM_EXECUTOR
+    // as in tf_cuda_sgemm: ThenBlasGemmBatched is gone, call BlasSupport directly.
+    // This one already returns bool rather than a chainable status.
+    auto* blas = dev_stream->parent()->AsBlas();
+    OP_REQUIRES(context, blas, errors::Internal("No BLAS support for this device."));
+    bool blas_launch_status = blas->DoBlasGemmBatched(
+        dev_stream, get_transpose(transa), get_transpose(transb),
+        (uint64_t)m, (uint64_t)n, (uint64_t)k, alpha, a_ptrs, lda, b_ptrs, ldb,
+        beta, c_ptrs, ldc, batchSize,
+        // TF32 follows TF's global setting, see tf_cuda_sgemm
+        returnn_se::NumericOptions(/*require_determinism=*/false,
+                                   tensorflow::tensor_float_32_execution_enabled()),
+        /*scratch_allocator=*/nullptr, returnn_se::blas::CallContext::kNone);
+#else
     bool blas_launch_status =
         dev_stream
              ->ThenBlasGemmBatched(get_transpose(transa), get_transpose(transb),
                             (uint64)m, (uint64)n, (uint64)k, alpha, a_ptrs,
                             lda, b_ptrs, ldb, beta, c_ptrs, ldc, batchSize)
              .ok();
+#endif
     OP_REQUIRES(context, blas_launch_status, errors::Aborted("CuBlasGemm failed!"));
 
     // The above call to ThenBlasGemmBatched allocates temporary memory on the GPU

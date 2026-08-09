@@ -34,6 +34,13 @@ print("TF version:", tf.__version__)
 CudaEnv.verbose_find_cuda = True
 os.environ["RETURNN_NATIVE_CODE_COMPILER_VERBOSE"] = "1"
 
+# These tests compare the native ops against TF reference implementations for exactness.
+# TF enables TF32 by default on Ampere and later, which costs about 5e-5 relative on a float32
+# GEMM -- enough to fail test_native_lstm2_grad and test_native_lstm2_grad_start_step, on either
+# side of the comparison (the native op follows this same global setting).
+# Turn it off process-wide so both sides compute in plain float32.
+tf.config.experimental.enable_tensor_float_32_execution(False)
+
 session = tf_compat.v1.InteractiveSession()
 tf_compat.v1.set_random_seed(42)
 
