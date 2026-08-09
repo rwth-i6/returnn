@@ -205,7 +205,16 @@ class Engine(EngineBase):
         # and put the advanced one back at the end of the epoch.
         self._rng_key = self._commit_one(JaxBackend._get_rng_key_())
 
+        pending_losses: Optional[Dict[str, Any]] = None  # of the step still running on the device
         for batch_raws, complete_frac in self._iter_batches(self.train_dataset, train=True):
+            # Read the PREVIOUS step's losses here, not right after issuing it. JAX dispatch is
+            # async, so producing the batch above already ran on the host while the device was still
+            # working on that step; reading a loss blocks, and reading it any earlier would put the
+            # host pipeline (measured 0.16 s) and the step (0.105 s) back to back instead of overlapping.
+            if pending_losses is not None:
+                for name, value in pending_losses.items():
+                    accumulated[name] = accumulated.get(name, 0.0) + float(value)
+                pending_losses = None
             # The LR of the STEP: the epoch-level value, put through the config's schedule if it has one.
             learning_rate = self._updater.get_effective_learning_rate(
                 learning_rate=self.learning_rate,
@@ -228,13 +237,15 @@ class Engine(EngineBase):
             # The dims of the templates hold what the step filled in; after a compiled step that is
             # a tracer of a finished trace, which any later use would fail on.
             reset_extern_data_dims(self.extern_data)
-            for name, value in losses.items():
-                accumulated[name] = accumulated.get(name, 0.0) + float(value)
+            pending_losses = losses
             num_steps += 1
             self.global_train_step += 1
             if num_steps % 100 == 0:
                 print(f"ep {self.epoch} step {num_steps}, loss {float(loss):.5f}", file=log.v4)
 
+        if pending_losses is not None:  # the last step of the epoch
+            for name, value in pending_losses.items():
+                accumulated[name] = accumulated.get(name, 0.0) + float(value)
         JaxBackend._rng_key = self._rng_key
         scores = {name: value / max(num_steps, 1) for name, value in accumulated.items()}
         print(
