@@ -241,6 +241,21 @@ class PackedRawTensor:
         # None = unknown (dynamic packings; regap bounds then fall back to conservative).
         self.content_bound = content_bound
 
+    def __repr__(self) -> str:
+        # the asserts in pack()/regap() interpolate the raw tensor, and the layout is exactly
+        # what one needs to see there; the default <object at 0x...> says nothing.
+        parts = [
+            f"packed_dim={self.packed_dim}",
+            f"orig_dims={list(self.orig_dims)}",
+            f"gap={self.gap}",
+            f"align={self.align}",
+        ]
+        if self.layout_lens is not None:
+            parts.append("layout_lens=set")
+        if self.content_bound is not None:
+            parts.append(f"content_bound={self.content_bound}")
+        return f"<{type(self).__name__} {' '.join(parts)} inner={self.inner}>"
+
     @property
     def has_gap_frames(self) -> bool:
         """:return: whether the buffer has non-content frames (gap / alignment / footprint junk)"""
@@ -3981,10 +3996,15 @@ def pack(
             if n_cap is not None:
                 # the content bound implied by the declared buffer bound and this layout,
                 # carried on the packing so ALL later re-layout bounds derive absolutely from it.
-                # Sound: bound >= sum(roundup(len+gap, align)) >= sum(len) + capacity*gap.
-                # NOT minus capacity*(align-1) too: that assumes worst-case align rounding on
-                # every seq, which footprint-filling batchers (packed_batch_size: the budget
-                # IS the bound, filled with sum(roundup(len, align))) legitimately exceed.
+                # Only the gap term is subtracted, because the batcher sums RAW CONTENT lens
+                # (packed_batch_size, see pipeline.py) -- so this stays a valid bound on what a
+                # batch may carry. Deliberately NOT also minus capacity*(align-1): that would be
+                # tighter than the batcher's own budget and would reject batches it legitimately
+                # forms. The consequence, once align > 1: this is a NECESSARY but not sufficient
+                # condition, and the per-seq ends_max check right below is the one that actually
+                # catches a layout that does not fit.
+                # (An earlier version of this comment justified the same formula by claiming the
+                # batcher fills with sum(roundup(len, align)). It does not -- it sums raw lens.)
                 content_bound = out_dim.dimension - n_cap * gap
                 assert content_bound > 0, (
                     f"pack: declared total_bound {out_dim.dimension} cannot hold ANY content"
