@@ -615,7 +615,6 @@ _UnsupportedConfigOpts = {
     "stop_on_nonfinite_train_score": None,
     "tensorboard_opts": None,
     "use_tensorboard": False,
-    "use_train_proc_manager": False,
     # backend-specific options are named after the backend, as `torch_...` is on PyTorch
     "tf_distributed": None,
     "tf_jit": None,  # the XLA-compiled step
