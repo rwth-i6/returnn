@@ -345,43 +345,70 @@ class TFBackend(Backend[tf.Tensor]):
         (e.g. rf.dropout, which returns the same tensor template either way).
         `tf.nest` sees an RF Tensor as a leaf, so a branch may also return a tuple or dict of them.
         """
-        true_out = []
+        # A parameter assigned inside a branch is handled by making the branches RETURN the
+        # assigned values, so the parameter afterwards holds the cond's own output.
+        # Re-reading the variable after the cond instead would build a working graph but give
+        # wrong values -- the assign and the read do not order as the RF API promises.
+        # This is the same principle as :func:`parameter_assign`: order by data dependency.
+        params_before = {ref: ref.obj.raw_tensor for ref in TFBackend._param_vars}
+        outs = {}
+        assigned: List[RefIdEq] = []  # filled while the TRUE branch is traced, then fixed
 
-        def _branch(fn, out_list):
+        def _restore_params():
+            # every branch must be traced from the same parameter state, or the second one would
+            # build on the first one's assigns
+            for ref_, raw_ in params_before.items():
+                ref_.obj.raw_tensor = raw_
+
+        def _branch(name: str, fn: Callable):
+            _restore_params()
             out = fn()
-            out_list.append(out)
+            outs[name] = out
+            now = [ref_ for ref_, raw_ in params_before.items() if ref_.obj.raw_tensor is not raw_]
+            if name == "true":
+                assigned.extend(now)
+            else:
+                extra = [ref_.obj for ref_ in now if ref_ not in assigned]
+                if extra:
+                    # tf.cond needs one output structure for both branches, and the set is fixed
+                    # while the true branch is traced (TF traces true first).
+                    raise NotImplementedError(
+                        f"TF cond: the false branch assigns parameters the true branch does not"
+                        f" ({extra}). Assign the same parameters in both branches."
+                    )
             if out is None:
                 # A branch which only has side effects (e.g. a parameter assign) returns nothing,
                 # but tf.cond needs both branches to return the same structure, so give it a dummy.
                 # (tf.nest.flatten(None) is [None], so this cannot be handled by the flatten below.)
-                return [tf.constant(0)]
-            return [x.raw_tensor if isinstance(x, Tensor) else x for x in tf.nest.flatten(out)]
+                res_ = [tf.constant(0)]
+            else:
+                res_ = [x.raw_tensor if isinstance(x, Tensor) else x for x in tf.nest.flatten(out)]
+            # the assigned values come last, in the order fixed by the true branch. For a parameter
+            # this branch did not assign, this is its pre-cond tensor, i.e. "unchanged".
+            return res_ + [ref_.obj.raw_tensor for ref_ in assigned]
 
-        params_before = {ref: ref.obj.raw_tensor for ref in TFBackend._param_vars}
-        raw_res = tf.cond(pred.raw_tensor, lambda: _branch(true_fn, true_out), lambda: _branch(false_fn, []))
-        assigned = [ref.obj for ref, raw in params_before.items() if ref.obj.raw_tensor is not raw]
-        if assigned:
-            # The parameter now points at a tensor inside the branch graph, which is not readable
-            # outside it. Re-reading the variable after the cond does produce a usable graph, but
-            # the values come out wrong (the assign and the read do not order as the RF API
-            # promises), so refuse instead of computing something wrong silently.
-            raise NotImplementedError(
-                f"TF cond: parameter assignment inside a branch is not supported (assigned: {assigned})."
-                f" Compute the new value in the branch and assign it outside the cond instead."
-            )
-        if true_out[0] is None:
-            return None
+        raw_res = tf.cond(pred.raw_tensor, lambda: _branch("true", true_fn), lambda: _branch("false", false_fn))
         if not isinstance(raw_res, (list, tuple)):
             raw_res = [raw_res]
+        raw_res = list(raw_res)
+        _restore_params()
+        if assigned:
+            # rebind to the cond OUTPUT: reads after the cond then see the branch that ran
+            param_raws = raw_res[len(raw_res) - len(assigned) :]
+            raw_res = raw_res[: len(raw_res) - len(assigned)]
+            for ref, raw in zip(assigned, param_raws):
+                ref.obj.raw_tensor = raw
+        if outs["true"] is None:
+            return None
         res = []
-        for template, raw in zip(tf.nest.flatten(true_out[0]), raw_res):
+        for template, raw in zip(tf.nest.flatten(outs["true"]), raw_res):
             if isinstance(template, Tensor):
                 out = template.copy_template("cond")
                 out.raw_tensor = raw
                 res.append(out)
             else:
                 res.append(raw)
-        return tf.nest.pack_sequence_as(true_out[0], res)
+        return tf.nest.pack_sequence_as(outs["true"], res)
 
     @staticmethod
     def stop_gradient(tensor: Tensor) -> Tensor:
