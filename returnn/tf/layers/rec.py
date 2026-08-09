@@ -4932,6 +4932,7 @@ class RecStepInfoLayer(LayerBase):
           I.e. if the "end" layer exists and is used, this is "prev:end".
         :rtype: tf.Tensor
         """
+        end_flag = None
         if self._end_flag is not None:
             end_flag = self._end_flag
         else:
@@ -11227,6 +11228,7 @@ class RelativePositionalEncodingLayer(_ConcatInputLayer):
             else:
                 query_offset = 0
 
+        encoding_matrix = None
         if fixed:
             from returnn.tf.util.basic import get_positional_encoding
 

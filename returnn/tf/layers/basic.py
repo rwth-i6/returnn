@@ -6430,6 +6430,7 @@ class ConvLayer(_ConcatInputLayer):
         filter_shape = list(filter_size) + [filter_in_dim, out_dim]
         from returnn.tf.util.basic import get_initializer
 
+        filters = None
         if filter_data is not None:
             if filter_perm:
                 filter_data = TransposeLayer.transpose(filter_data, perm=filter_perm, name="filter_transposed")
@@ -7485,6 +7486,7 @@ class TransposedConvLayer(_ConcatInputLayer):
             output_padding = list(output_padding) + [0]
         filter_shape = list(filter_size) + [self.output.dim, input_data.dim]  # transposed
         self.filter_layer = None
+        filters = None
         if filter:
             self.filter_layer = filter
             filter_data = filter.output
