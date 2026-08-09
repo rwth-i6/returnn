@@ -119,6 +119,7 @@ class NativeOpBaseMixin:
         if gi_map is None:
             gi_map = tuple(range(num_params))
         if callable(gi_map):
+            # noinspection PyCallingNonCallable
             gi_map = gi_map(*range(num_params))
         if isinstance(gi_map, list):
             gi_map = tuple(gi_map)
@@ -233,7 +234,8 @@ class NativeOpBaseMixin:
         if disconnected_type is None:
 
             def disconnected_type():
-                """Dummy"""
+                """Dummy: no disconnected type given, so the gradient entry is just None."""
+                return None
 
         grad_op_outputs = list(grad_op_outputs)
         results = []

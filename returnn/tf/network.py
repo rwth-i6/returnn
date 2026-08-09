@@ -610,6 +610,7 @@ class TFNetwork:
 
                 set_global_config(config)
         if not config and base_net:
+            # noinspection PyProtectedMember
             config = base_net._config
         if extern_data is None:
             if extra_parent_net:

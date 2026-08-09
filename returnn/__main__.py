@@ -497,7 +497,7 @@ def _warn_about_foreign_backend_config_opts():
     selected_name, own_prefix = _BackendNameAndConfigOptPrefix.get(selected, (str(selected), None))
     keys = sorted(set(config.typed_dict) | set(config.dict))
     for key in keys:
-        for engine, (name, prefix) in _BackendNameAndConfigOptPrefix.items():
+        for name, prefix in _BackendNameAndConfigOptPrefix.values():
             if prefix == own_prefix or not key.startswith(prefix):
                 continue
             print(

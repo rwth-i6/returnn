@@ -352,6 +352,7 @@ class BatchInfo:
                 continue
             if dim in beams:
                 continue
+            # noinspection PyProtectedMember
             base = base._copy_extend_dim(new_dim=dim, new_dim_idx=dim_idx)
             dim_idx += 1
         return base
