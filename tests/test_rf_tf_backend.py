@@ -1162,6 +1162,82 @@ def test_engine_forward_with_callback():
         assert shapes["best"] == ((seq_len,), (seq_len,)), (tag, shapes)
 
 
+def test_engine_train_extern_data_dim_tags_without_size_template():
+    # A dim declared as `Dim(None, name=...)` in extern_data (what `dim_tags` in a real config
+    # gives) carries NO dyn_size_ext template -- unlike Dim(Tensor(...)), which every other test
+    # here uses. The engine must create the template itself, otherwise the dim stays size-less
+    # and anything that masks (rf.dropout's seq mask, copy_masked, masked reduces) hits None.
+    # This is what the first production launch died on.
+    from returnn.config import Config, global_config_ctx
+    from returnn.datasets.generating import DummyDataset
+    from returnn.tf.engine_rf import Engine
+
+    # noinspection PyProtectedMember
+    from returnn.frontend import _backend
+
+    n_data_dim, n_classes_dim, seq_len = 2, 3, 5
+    train_data = DummyDataset(input_dim=n_data_dim, output_dim=n_classes_dim, num_seqs=8, seq_len=seq_len)
+    train_data.init_seq_order(epoch=1)
+
+    time_dim = Dim(None, name="time")  # no size template, as a config's dim_tags gives it
+    in_dim = Dim(n_data_dim, name="in")
+    out_dim = Dim(n_classes_dim, name="out")
+    assert time_dim.dyn_size_ext is None, "the point of this test"
+
+    class _Net(rf.Module):
+        def __init__(self):
+            super().__init__()
+            self.out = rf.Linear(in_dim, out_dim)
+
+    # noinspection PyShadowingNames
+    def _get_model(**_kwargs) -> rf.Module:
+        return _Net()
+
+    # noinspection PyShadowingNames
+    def _train_step(*, model: _Net, extern_data: TensorDict, **_kwargs):
+        x = extern_data["data"]
+        # masking needs the dim's size: this is what failed in production
+        x = x.copy_masked(0.0, dims=[time_dim])
+        loss = rf.cross_entropy(
+            estimated=model.out(x), target=extern_data["classes"], axis=out_dim, estimated_type="logits"
+        )
+        loss.mark_as_loss("ce")
+        # a masked reduce over the spatial dim needs it too
+        rf.reduce_mean(loss, axis=loss.dims).mark_as_loss("ce_mean", as_error=True)
+
+    config = Config(
+        {
+            "backend": "tensorflow",
+            "extern_data": {
+                "data": {"dims": [batch_dim, time_dim, in_dim], "dtype": "float32"},
+                "classes": {"dims": [batch_dim, time_dim], "sparse_dim": out_dim, "dtype": "int32"},
+            },
+            "get_model": _get_model,
+            "train_step": _train_step,
+            "optimizer": {"class": "adam"},
+            "learning_rate": 0.01,
+            "batch_size": 20,
+            "max_seqs": 3,
+            "num_epochs": 1,
+        }
+    )
+
+    _backend.select_backend_tf()
+    prev_batch_dyn_size_ext = batch_dim.dyn_size_ext
+    try:
+        with global_config_ctx(config):
+            engine = Engine(config=config)
+            engine.init_train_from_config(config=config, train_data=train_data)
+            # the engine created the missing template and wired a placeholder to it
+            assert time_dim.dyn_size_ext is not None, "engine did not create the size template"
+            assert time_dim.dyn_size_ext.raw_tensor is not None, "size template got no placeholder"
+            engine.train()
+    finally:
+        batch_dim.dyn_size_ext = prev_batch_dyn_size_ext
+        time_dim.reset_raw()
+        rf.select_backend_torch()
+
+
 def _full_model_setup():
     """
     :return: extern_data, get_model, forward_step, dims.

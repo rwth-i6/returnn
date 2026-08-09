@@ -354,8 +354,16 @@ class Engine(EngineBase):
             value = self.extern_data.data[key]
             value.raw_tensor = TFBackend.create_placeholder_raw(value)
             for dim in value.dims:
-                if dim == batch_dim or not dim.is_dynamic() or dim.dyn_size_ext is None:
+                if dim == batch_dim or not dim.is_dynamic():
                     continue
+                if dim.dyn_size_ext is None:
+                    # A dim declared via `dim_tags` in the config carries no size template at all
+                    # (Dim(None, name=...)); only a dim built as Dim(Tensor(...)) does.
+                    # The PyTorch engine never notices, because its data pipeline attaches the
+                    # sizes per batch. Here the size is a fed placeholder, so the template has to
+                    # exist first -- without it the dim stays size-less and anything that masks
+                    # (copy_masked, the seq masks) fails on dyn_size_ext being None.
+                    dim.dyn_size_ext = Tensor(dim.name or "size", dims=[batch_dim], dtype="int32")
                 if dim.dyn_size_ext.raw_tensor is None:
                     dim.dyn_size_ext.raw_tensor = TFBackend.create_placeholder_raw(dim.dyn_size_ext)
                     self._fed_dims.append((key, dim))
