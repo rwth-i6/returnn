@@ -22,6 +22,30 @@ and not listing legacy/deprecated parameters.
 Version History
 ---------------
 
+Behavior version 30 (2026-08-09)
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+:func:`returnn.tf.native_op.ctc_loss` and :func:`returnn.tf.native_op.ctc_loss_viterbi`:
+a sequence with no valid alignment
+(targets longer than the input, or repeated labels with too few frames for the blanks between them)
+now contributes 0 loss AND 0 gradient, as PyTorch ``ctc_loss(zero_infinity=True)`` does.
+
+Before, the two failed differently, both silently wrong:
+
+``ctc_loss`` gave loss 0 but an error signal of ``softmax(logits)``.
+:func:`fast_baum_welch` finds no path, so the Baum-Welch term is 0 and only ``exp(log_sm)`` remains,
+i.e. a full-magnitude gradient pushing the distribution toward uniform
+on exactly the frames that carry no supervision.
+
+``ctc_loss_viterbi`` gave loss ``inf``, which poisons the batch loss,
+and :func:`fast_viterbi` fills the alignment of such a sequence with its mask index,
+so the cross entropy trained toward that filler label at full strength.
+
+There is also the global config option ``tf_native_ctc_zero_infinity: bool``
+and the explicit ``zero_infinity`` argument to override in both directions.
+The RF TF backend always passes ``zero_infinity=True``, independent of the behavior version,
+so it matches the PyTorch backend.
+
 Behavior version 29 (2026-08-03)
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 

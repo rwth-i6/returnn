@@ -1488,6 +1488,7 @@ def ctc_loss(
     logits_normalize=True,
     grad_wrt_softmax_in=True,
     blank_index=-1,
+    zero_infinity: Optional[bool] = None,
 ):
     """
     Similar to :func:`tf.nn.ctc_loss`.
@@ -1508,6 +1509,11 @@ def ctc_loss(
       If logits are already normalized (e.g. we just use ``log p(s|x) = logits``),
       the error signal to logits should be ``-bw``.
     :param int blank_index: vocab index of the blank symbol
+    :param zero_infinity: for sequences with no valid alignment, contribute 0 loss AND 0 gradient,
+      like PyTorch ctc_loss(zero_infinity=True).
+      Without it, such a sequence gets loss 0 (fast_baum_welch finds no path)
+      but an error signal of softmax(logits), i.e. a full-magnitude gradient toward uniform.
+      Default from the config option ``tf_native_ctc_zero_infinity``, else behavior version >= 30.
     :return: loss, shape (batch,)
     :rtype: tf.Tensor
     """
@@ -1545,6 +1551,17 @@ def ctc_loss(
     else:
         grad_x = -bw  # (time,batch,dim)
     grad_x = where_bc(seq_mask[:, :, None], grad_x, 0.0)
+    if zero_infinity is None:
+        zero_infinity = _ctc_zero_infinity_default()
+    if zero_infinity:
+        # No valid alignment -> no path -> bw == 0, so grad_x above is just softmax(logits):
+        # a full-magnitude gradient toward uniform, on frames with no supervision.
+        # The loss is already 0 here, so strictly only the gradient needs zeroing.
+        valid = _ctc_seq_has_valid_path(
+            targets=targets, targets_seq_lens=targets_seq_lens, logits_seq_lens=logits_seq_lens, label_loop=label_loop
+        )
+        grad_x = where_bc(valid[None, :, None], grad_x, 0.0)
+        loss = tf.where(valid, loss, tf.zeros_like(loss))
     from returnn.tf.util.basic import custom_gradient
 
     loss = tf.reshape(loss, [1, n_batch, 1])  # (1,batch,1), such that we can broadcast to logits/grad_x
@@ -1573,8 +1590,54 @@ def fast_viterbi(*, am_scores, am_seq_len, edges, weights, start_end_states, mas
     return alignment, scores
 
 
+def _ctc_seq_has_valid_path(*, targets, targets_seq_lens, logits_seq_lens, label_loop: bool):
+    """
+    :param tf.Tensor targets: batch-major, [batch,time]
+    :param tf.Tensor targets_seq_lens: (batch,)
+    :param tf.Tensor logits_seq_lens: (batch,)
+    :param label_loop: if set, repeated labels need a blank between them, costing an extra frame
+    :return: (batch,) bool, whether any alignment exists at all
+    :rtype: tf.Tensor
+    """
+    required_lens = targets_seq_lens
+    if label_loop:
+        targets_mask = tf.sequence_mask(targets_seq_lens, maxlen=tf.shape(targets)[1])
+        adjacent_repeats = tf.logical_and(tf.equal(targets[:, 1:], targets[:, :-1]), targets_mask[:, 1:])
+        required_lens += tf.reduce_sum(tf.cast(adjacent_repeats, targets_seq_lens.dtype), axis=1)
+    return tf.greater_equal(logits_seq_lens, tf.cast(required_lens, logits_seq_lens.dtype))
+
+
+def _ctc_zero_infinity_default() -> bool:
+    """
+    :return: default for :func:`ctc_loss` ``zero_infinity``
+    """
+    from returnn.config import get_global_config
+    from returnn.util.basic import BehaviorVersion
+
+    config = get_global_config(raise_exception=False)
+    if config:
+        if "tf_native_ctc_zero_infinity" in config.typed_dict:
+            value = config.typed_dict["tf_native_ctc_zero_infinity"]
+            assert value is None or isinstance(value, bool)
+            if value is not None:
+                return value
+        elif "tf_native_ctc_zero_infinity" in config.dict:
+            value = config.bool("tf_native_ctc_zero_infinity", None)
+            if value is not None:
+                return value
+    return BehaviorVersion.get() >= 30
+
+
 def ctc_loss_viterbi(
-    *, logits, logits_seq_lens, logits_time_major, targets, targets_seq_lens, blank_index=-1, label_loop: bool = True
+    *,
+    logits,
+    logits_seq_lens,
+    logits_time_major,
+    targets,
+    targets_seq_lens,
+    blank_index=-1,
+    label_loop: bool = True,
+    zero_infinity: Optional[bool] = None,
 ):
     """
     Similar to :func:`ctc_loss`.
@@ -1588,6 +1651,12 @@ def ctc_loss_viterbi(
     :param tf.Tensor targets_seq_lens: (batch,)
     :param int blank_index: vocab index of the blank symbol
     :param label_loop:
+    :param zero_infinity: for sequences with no valid alignment, contribute 0 loss AND 0 gradient,
+      like PyTorch ctc_loss(zero_infinity=True).
+      Without it, such a sequence gets loss inf, which poisons the batch loss,
+      and :func:`fast_viterbi` fills its alignment with the mask index,
+      so the cross entropy below trains toward that filler label.
+      Default from the config option ``tf_native_ctc_zero_infinity``, else behavior version >= 30.
     :return: loss, shape (batch,)
     :rtype: tf.Tensor
     """
@@ -1622,11 +1691,24 @@ def ctc_loss_viterbi(
     assert isinstance(ce_grad, tf.Tensor)
     ce_grad.set_shape(logits_flat.get_shape())  # (time*batch,dim)
     ce_grad = tf.reshape(ce_grad, tf.shape(logits))  # (time,batch,dim)
-    from returnn.tf.util.basic import sequence_mask_time_major
+    from returnn.tf.util.basic import sequence_mask_time_major, where_bc
 
     seq_mask = sequence_mask_time_major(logits_seq_lens)  # (time,batch)
     seq_mask_bc_float = tf.cast(tf.expand_dims(seq_mask, 2), tf.float32)  # (time,batch,1)
     ce_grad *= seq_mask_bc_float
+
+    if zero_infinity is None:
+        zero_infinity = _ctc_zero_infinity_default()
+    if zero_infinity:
+        # No valid alignment -> fast_viterbi scores -inf and fills the alignment with its mask
+        # index, so the CE above is a real gradient toward that filler label.
+        # Both need zeroing: generic_loss_and_error_signal takes the gradient from grad_x,
+        # so masking the loss alone would leave the gradient untouched.
+        valid = _ctc_seq_has_valid_path(
+            targets=targets, targets_seq_lens=targets_seq_lens, logits_seq_lens=logits_seq_lens, label_loop=label_loop
+        )
+        ce_grad = where_bc(valid[None, :, None], ce_grad, 0.0)
+        loss = tf.where(valid, loss, tf.zeros_like(loss))
 
     from returnn.tf.util.basic import custom_gradient
 
