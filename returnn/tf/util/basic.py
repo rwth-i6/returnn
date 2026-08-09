@@ -3656,7 +3656,7 @@ def spatial_smoothing_energy(x, dim, use_circular_conv=True):
             tf.constant([[-0.125, -0.125, -0.125], [-0.125, 1.0, -0.125], [-0.125, -0.125, -0.125]]), [3, 3, 1, 1]
         )
         # out shape: [batch, out_height, out_width, out_channels=1]
-        out = tf.nn.conv2d(x, filter=filter, strides=[1, 1, 1, 1], padding="VALID")
+        out = tf.nn.conv2d(x, filter, strides=[1, 1, 1, 1], padding="VALID")
         out = tf.reshape(out, shape[:-1] + [-1])  # (..., out_height*out_width)
         # Note: Square all the filter values.
         return tf.reduce_sum(out**2, axis=-1)
