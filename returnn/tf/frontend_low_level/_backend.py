@@ -1184,8 +1184,11 @@ class TFBackend(Backend[tf.Tensor]):
             if bias is not None:
                 out_raw = out_raw + bias.copy_compatible_to_dims_raw([out_dim])
             if len(batch_dims) != 1:  # and split them again
-                out_raw = tf.reshape(
-                    out_raw, _shape_raw(list(batch_dims) + list(TFBackend.get_shape_tuple_raw(out_raw)[1:]))
+                out_raw = _with_static_shape(
+                    tf.reshape(
+                        out_raw, _shape_raw(list(batch_dims) + list(TFBackend.get_shape_tuple_raw(out_raw)[1:]))
+                    ),
+                    list(batch_dims) + list(out_spatial_dims) + [out_dim],
                 )
         out = Tensor(
             "transposed_conv",
@@ -1288,8 +1291,11 @@ class TFBackend(Backend[tf.Tensor]):
             if bias is not None:
                 out_raw = out_raw + bias.copy_compatible_to_dims_raw([out_dim])
             if len(batch_dims) != 1:  # and split them again
-                out_raw = tf.reshape(
-                    out_raw, _shape_raw(list(batch_dims) + list(TFBackend.get_shape_tuple_raw(out_raw)[1:]))
+                out_raw = _with_static_shape(
+                    tf.reshape(
+                        out_raw, _shape_raw(list(batch_dims) + list(TFBackend.get_shape_tuple_raw(out_raw)[1:]))
+                    ),
+                    list(batch_dims) + list(out_spatial_dims) + [out_dim],
                 )
         out = Tensor(
             "conv",
@@ -1361,7 +1367,9 @@ class TFBackend(Backend[tf.Tensor]):
                 dilations=dilation_rate,
             )
             out_shape = list(rest_dims) + list(TFBackend.get_shape_tuple_raw(out_raw)[1:-1])
-            out_raw = tf.reshape(out_raw, _shape_raw(out_shape))
+            out_raw = _with_static_shape(
+                tf.reshape(out_raw, _shape_raw(out_shape)), list(rest_dims) + list(out_spatial_dims)
+            )
         out = Tensor(
             "pool",
             dims=rest_dims + list(out_spatial_dims),
@@ -1478,7 +1486,7 @@ class TFBackend(Backend[tf.Tensor]):
             # so a dynamic dim needs no get_dim_value()
             src_shape = TFBackend.get_shape_tuple_raw(source.raw_tensor)
             out_shape = list(src_shape[: len(pre_dims)]) + [-1] + list(src_shape[len(pre_dims) + len(dims) :])
-            out.raw_tensor = tf.reshape(source.raw_tensor, _shape_raw(out_shape))
+            out.raw_tensor = _with_static_shape(tf.reshape(source.raw_tensor, _shape_raw(out_shape)), out.dims)
         return out
 
     @staticmethod
@@ -1507,7 +1515,7 @@ class TFBackend(Backend[tf.Tensor]):
         with tf_util.same_control_flow_ctx(source):
             src_shape = TFBackend.get_shape_tuple_raw(source.raw_tensor)
             out_shape = list(src_shape[:axis_]) + split_sizes + list(src_shape[axis_ + 1 :])
-            out_raw = tf.reshape(source.raw_tensor, _shape_raw(out_shape))
+            out_raw = _with_static_shape(tf.reshape(source.raw_tensor, _shape_raw(out_shape)), out_dims)
         out = Tensor("split_dims", dims=out_dims, dtype=source.dtype, sparse_dim=source.sparse_dim, raw_tensor=out_raw)
         if source.feature_dim and source.feature_dim != axis:
             out.feature_dim = source.feature_dim
@@ -1536,7 +1544,7 @@ class TFBackend(Backend[tf.Tensor]):
         if source.feature_dim and source.feature_dim not in in_dims:
             out.feature_dim = source.feature_dim
         with tf_util.same_control_flow_ctx(source):
-            out.raw_tensor = tf.reshape(source.raw_tensor, _shape_raw(dims))
+            out.raw_tensor = _with_static_shape(tf.reshape(source.raw_tensor, _shape_raw(dims)), dims)
         return out
 
     @staticmethod
@@ -1599,7 +1607,7 @@ class TFBackend(Backend[tf.Tensor]):
                 # TF has no stride-0 view like torch expand, so this materializes
                 multiples = [1] * len(new_dims)
                 multiples[axis] = dim.get_dim_value()
-                out_raw = tf.tile(out_raw, _shape_raw(multiples))
+                out_raw = _with_static_shape(tf.tile(out_raw, _shape_raw(multiples)), out.dims)
         out.raw_tensor = out_raw
         return out
 
@@ -1669,7 +1677,9 @@ class TFBackend(Backend[tf.Tensor]):
         if isinstance(fill_value, Tensor):
             fill_value = fill_value.raw_tensor
         with tf_util.same_control_flow_ctx([d.get_dim_value() for d in dims]):
-            raw_tensor = tf.fill(_shape_raw(dims), tf.cast(fill_value, TFBackend.as_dtype_raw(dtype)))
+            raw_tensor = _with_static_shape(
+                tf.fill(_shape_raw(dims), tf.cast(fill_value, TFBackend.as_dtype_raw(dtype))), dims
+            )
         return Tensor(
             "full", dims=dims, sparse_dim=sparse_dim, feature_dim=feature_dim, dtype=dtype, raw_tensor=raw_tensor
         )
@@ -1916,7 +1926,10 @@ class TFBackend(Backend[tf.Tensor]):
             counts = tf.math.unsorted_segment_sum(tf.ones_like(seg_flat), seg_flat, num_segments)
             counts = tf.reshape(counts, _shape_raw([-1] + [1] * len(feature_dims)))
             out_flat = tf_util.where_bc(counts > 0, out_flat, tf.cast(fill_value, out_flat.dtype))
-            out_raw = tf.reshape(out_flat, _shape_raw(list(src_shape[: len(batch_dims)]) + [out_size] + feature_shape))
+            out_raw = _with_static_shape(
+                tf.reshape(out_flat, _shape_raw(list(src_shape[: len(batch_dims)]) + [out_size] + feature_shape)),
+                batch_dims + [out_flat_dim] + feature_dims,
+            )
         res = Tensor(
             "scatter",
             dims=batch_dims + [out_flat_dim] + feature_dims,
@@ -2011,7 +2024,7 @@ class TFBackend(Backend[tf.Tensor]):
             in_raw = tf.broadcast_to(
                 in_raw, _shape_raw(list(dims) + [tf.shape(in_raw)[len(dims) + i] for i in range(len(remaining_dims))])
             )
-            out_raw = tf.boolean_mask(in_raw, mask_raw)
+            out_raw = _with_static_shape(tf.boolean_mask(in_raw, mask_raw), (out_dim,) + tuple(remaining_dims))
             if out_dim.dyn_size_ext is None:
                 out_dim.dyn_size_ext = Tensor("masked_select_size", dims=(), dtype="int32")
             if out_dim.dyn_size_ext.raw_tensor is None:
@@ -2081,7 +2094,11 @@ class TFBackend(Backend[tf.Tensor]):
         sizes = [-1] * len(source.dims)  # -1 = all remaining
         sizes[axis_int] = size
         with tf_util.same_control_flow_ctx(source):
-            out.raw_tensor = tf.slice(source.raw_tensor, _shape_raw(begin), _shape_raw(sizes))
+            # same static-shape restoration as the reshape ops: a tf.slice whose begin/size come
+            # from tensors reports an unknown static shape, which RF then rejects
+            out.raw_tensor = _with_static_shape(
+                tf.slice(source.raw_tensor, _shape_raw(begin), _shape_raw(sizes)), out.dims
+            )
         return out
 
     @staticmethod
@@ -2531,6 +2548,22 @@ def _shape_raw(dims_or_sizes: Sequence[Union[Dim, int, tf.Tensor]]) -> Union[Lis
     if any(isinstance(s, tf.Tensor) for s in sizes):
         return tf.stack(sizes)
     return sizes
+
+
+def _with_static_shape(raw: tf.Tensor, dims: Sequence[Dim]) -> tf.Tensor:
+    """
+    :param raw: result of a tf.reshape whose target shape was built from tensors
+    :param dims: the RF dims this raw tensor will carry
+    :return: raw, with its STATIC shape restored
+
+    ``tf.reshape`` with a stacked (tensor) shape yields a fully UNKNOWN static shape, even for the
+    axes that are static. RF then rejects the raw tensor
+    ("Mismatching shape: Raw tensor (None, None, None) vs Tensor ..."),
+    and TF loses shape information it could otherwise propagate.
+    Only the statically known dims are set here; a dynamic dim stays None.
+    """
+    raw.set_shape([d.dimension for d in dims])
+    return raw
 
 
 def _transpose_raw(raw_tensor: tf.Tensor, perm: Sequence[int]) -> tf.Tensor:
