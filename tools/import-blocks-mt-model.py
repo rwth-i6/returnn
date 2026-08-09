@@ -72,9 +72,7 @@ from numpy.testing import assert_almost_equal
 import tensorflow as tf
 import pickle
 
-my_dir = os.path.dirname(os.path.abspath(__file__))
-returnn_dir = os.path.dirname(my_dir)
-sys.path.insert(0, returnn_dir)
+import _setup_returnn_env  # noqa
 
 from returnn.util import better_exchook
 import returnn.__main__ as rnn
