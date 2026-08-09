@@ -791,7 +791,7 @@ def check_py_traces_rf_to_pt_equal(
         Tuple[
             Tuple[Callable, int, str, int],
             Tuple[Callable, int, str, int],
-            Union[Tuple[Union[Dim, str], ...], Callable[[torch.Tensor], Tensor]],
+            Union[Tuple[Union[Dim, str], ...], Callable[..., Tensor]],
         ],
     ],
 ):
@@ -808,6 +808,8 @@ def check_py_traces_rf_to_pt_equal(
             Instead of Dim, you can also use a string, which will be resolved from the RF trace
             (then you also need ``Dim`` in ``capture_type`` of the :class:`PyTracer`).
             If callable, it gets the PyTorch tensor and should return the RETURNN tensor.
+            It is called as ``f(tensor, name=..., resolve_dim=..., **kwargs)``,
+            so it must accept ``**kwargs`` -- we pass a dummy one to check for that.
             Sometimes you might want to perform some reshaping, slicing, or similar,
             and then use rf.convert_to_tensor.
     """

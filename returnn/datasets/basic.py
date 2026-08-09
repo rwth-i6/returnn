@@ -1065,9 +1065,10 @@ class Dataset:
             return False
         return True
 
-    def get_data_shape(self, key: str) -> List[int]:
+    def get_data_shape(self, key: str) -> List[Optional[int]]:
         """
-        :returns get_data(*, key).shape[1:], i.e. num-frames excluded
+        :returns get_data(*, key).shape[1:], i.e. num-frames excluded.
+            None entries are dynamic (only the last axis is known for dense data).
         """
         if key in self.num_outputs:
             if self.num_outputs[key][1] <= 1:

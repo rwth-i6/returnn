@@ -249,7 +249,7 @@ class TextDictDataset(CachedDataset2):
         """:return: available data keys"""
         return list(self.num_outputs.keys())
 
-    def get_data_shape(self, key: str) -> List[int]:
+    def get_data_shape(self, key: str) -> List[Optional[int]]:
         """
         :returns get_data(*, key).shape[1:], i.e. num-frames excluded
         """

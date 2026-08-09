@@ -267,9 +267,7 @@ class _RecordGraph(TorchDispatchMode):
 @dataclass
 class _Graph:
     ops_to_be_recomputed: List[_GraphOp] = field(default_factory=list)
-    graph_tensor_from_weak_raw_tensor: WeakTensorKeyDictionary[torch.Tensor, _GraphTensor] = field(
-        default_factory=WeakTensorKeyDictionary
-    )
+    graph_tensor_from_weak_raw_tensor: WeakTensorKeyDictionary = field(default_factory=WeakTensorKeyDictionary)
     stored_device_rng_states: Dict[torch.device, Any] = field(default_factory=dict)
     stored_device_amp_states: Dict[torch.device, Any] = field(default_factory=dict)
     # Keep scope alive as long as any _GraphTensor is alive due to backprop pack_hook.

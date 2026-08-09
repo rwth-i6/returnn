@@ -12,6 +12,7 @@ import time
 import contextlib
 import sys
 import os
+import builtins
 import types as _types
 
 
@@ -321,7 +322,7 @@ class Config:
         else:
             self.dict[key] = value
 
-    def has(self, key: str) -> bool:
+    def has(self, key: str) -> builtins.bool:
         """
         Returns whether the given key is present in the inner set of parameters
 
@@ -332,14 +333,14 @@ class Config:
             return True
         return key in self.dict
 
-    def is_typed(self, key: str) -> bool:
+    def is_typed(self, key: str) -> builtins.bool:
         """
         :param key:
         :returns: True if and only if the value of the given key has a specified data type
         """
         return key in self.typed_dict
 
-    def is_true(self, key: str, default: bool = False) -> bool:
+    def is_true(self, key: str, default: builtins.bool = False) -> builtins.bool:
         """
         :param key:
         :param default:
@@ -349,7 +350,7 @@ class Config:
             return bool(self.typed_dict[key])
         return self.bool(key, default=default)
 
-    def is_of_type(self, key: str, types: Union[type, Tuple[type, ...]]) -> bool:
+    def is_of_type(self, key: str, types: Union[type, Tuple[type, ...]]) -> builtins.bool:
         """
         :param key:
         :param types: for isinstance() check
@@ -400,7 +401,9 @@ class Config:
 
         setattr(self, "value", wrapped_value_func)
 
-    def value(self, key: str, default: T, index: Optional[int] = None, list_join_str: str = ",") -> Union[T, str]:
+    def value(
+        self, key: str, default: T, index: Optional[builtins.int] = None, list_join_str: str = ","
+    ) -> Union[T, str]:
         """
         :param key:
         :param default:
@@ -426,7 +429,7 @@ class Config:
                 return ls[index]
         return default
 
-    def typed_value(self, key: str, default: Optional[T] = None, index: Optional[int] = None) -> Union[T, Any]:
+    def typed_value(self, key: str, default: Optional[T] = None, index: Optional[builtins.int] = None) -> Union[T, Any]:
         """
         :param key:
         :param default:
@@ -450,7 +453,7 @@ class Config:
             return self.typed_dict[key]
         return self.value(key, default)
 
-    def int(self, key: str, default: T, index: int = 0) -> Union[int, T]:
+    def int(self, key: str, default: T, index: builtins.int = 0) -> Union[builtins.int, T]:
         """
         Parses the value of the given key as integer, returning default if not existent
 
@@ -467,7 +470,7 @@ class Config:
             return int(self.value(key, default, index))
         return default
 
-    def bool(self, key: str, default: T, index: int = 0) -> Union[bool, T]:
+    def bool(self, key: str, default: T, index: builtins.int = 0) -> Union[builtins.bool, T]:
         """
         Parses the value of the given key as boolean, returning default if not existent
 
@@ -491,7 +494,9 @@ class Config:
 
         return to_bool(v)
 
-    def bool_or_other(self, key: str, default: Optional[T] = None, index: int = 0) -> Union[bool, T, Any]:
+    def bool_or_other(
+        self, key: str, default: Optional[T] = None, index: builtins.int = 0
+    ) -> Union[builtins.bool, T, Any]:
         """
         :param key:
         :param default:
@@ -512,7 +517,7 @@ class Config:
         except ValueError:
             return v
 
-    def float(self, key: str, default: T, index: int = 0) -> Union[float, T]:
+    def float(self, key: str, default: T, index: builtins.int = 0) -> Union[builtins.float, T]:
         """
         Parses the value of the given key as float, returning default if not existent
 
@@ -550,7 +555,7 @@ class Config:
             return default
         return self.dict[key]
 
-    def int_list(self, key: str, default: Optional[T] = None) -> Union[List[int], T]:
+    def int_list(self, key: str, default: Optional[T] = None) -> Union[List[builtins.int], T]:
         """
         :param key:
         :param default:
@@ -568,7 +573,7 @@ class Config:
             return list(value)
         return [int(x) for x in self.list(key, default)]
 
-    def float_list(self, key: str, default: Optional[T] = None) -> Union[List[float], T]:
+    def float_list(self, key: str, default: Optional[T] = None) -> Union[List[builtins.float], T]:
         """
         :param key:
         :param default:
@@ -586,7 +591,9 @@ class Config:
             return list(value)
         return [float(x) for x in self.list(key, default)]
 
-    def int_pair(self, key: str, default: Optional[Tuple[int, int]] = None) -> Tuple[int, int]:
+    def int_pair(
+        self, key: str, default: Optional[Tuple[builtins.int, builtins.int]] = None
+    ) -> Tuple[builtins.int, builtins.int]:
         """
         :param key:
         :param default:

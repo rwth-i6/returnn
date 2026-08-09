@@ -208,8 +208,8 @@ def load_hyps_refs(filename):
     return content
 
 
-wer_compute = None  # type: typing.Optional[WerComputeGraph]
-session = None  # type: typing.Optional[tf.compat.v1.Session]
+wer_compute: Optional[WerComputeGraph] = None
+session: Optional[tf.compat.v1.Session] = None
 
 
 def main(argv):
