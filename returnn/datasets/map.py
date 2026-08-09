@@ -23,6 +23,9 @@ class MapDatasetBase:
         """
         self.data_types = data_types or {}
 
+    def __repr__(self):
+        return f"<{self.__class__.__name__} data_types={list(self.data_types)}>"
+
     def __len__(self):
         """
         :return: total number of sequences in the dataset

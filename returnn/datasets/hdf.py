@@ -1169,6 +1169,9 @@ class SimpleHDFWriter:
             # See comments in test_SimpleHDFWriter_swmr...
             raise NotImplementedError("SimpleHDFWriter SWMR is not really finished...")
 
+    def __repr__(self):
+        return f"<{self.__class__.__name__} {self.filename!r} dim={self.dim} ndim={self.ndim}>"
+
     def __del__(self):
         if self._file:
             self._file.close()
