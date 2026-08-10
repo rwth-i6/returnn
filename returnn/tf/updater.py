@@ -1112,11 +1112,13 @@ class _KerasOptimizerWrapper(Optimizer):
             kwargs = kwargs.copy()
             kwargs.pop("use_locking", None)  # this is not used. just ignore
             lr = kwargs.get("learning_rate", None)
-            if isinstance(lr, (tf.Variable, tf.Tensor)):
-                # RETURNN drives the learning rate through a variable (Updater.learning_rate_var),
-                # which Keras rejects ("should be float, or an instance of LearningRateSchedule").
-                # A schedule that ignores the step and reads that variable is what Keras accepts,
-                # and keeps the value dynamic.
+            if isinstance(lr, (tf.Variable, tf.Tensor)) and not hasattr(keras_class, "_set_hyper"):
+                # RETURNN drives the learning rate through a variable (Updater.learning_rate_var).
+                # Old Keras (optimizer_v2, has `_set_hyper`) takes a tensor/variable directly,
+                # and e.g. its Nadam REJECTS schedules -- pass through unchanged there.
+                # Keras >= 2.11 rejects a variable ("should be float, or an instance of
+                # LearningRateSchedule") or would copy it into a NEW variable,
+                # so it gets a schedule that ignores the step and reads the variable live.
                 kwargs["learning_rate"] = _VarLearningRateSchedule(lr)
             opt = keras_class(**kwargs)
             return cls(opt, name=kwargs.get("name", None))
