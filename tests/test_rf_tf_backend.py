@@ -1251,6 +1251,189 @@ def test_engine_train_extern_data_dim_tags_without_size_template():
         rf.select_backend_torch()
 
 
+def test_reshape_ops_keep_static_shape_with_placeholders():
+    # tf.reshape with a stacked (tensor) target shape loses the STATIC shape,
+    # and RF then rejects the raw tensor
+    # ("Mismatching shape: Raw tensor (None, None, None) vs Tensor ...").
+    # It only shows up when the input shapes are dynamic, i.e. fed through PLACEHOLDERS:
+    # run_model feeds constants, which is why the full-model tests never caught it,
+    # while the production run died on it inside ConformerConvSubsample.
+    import returnn.tf.compat as tf_compat
+    from returnn.tf.frontend_low_level import TFBackend
+
+    # noinspection PyProtectedMember
+    from returnn.frontend import _backend
+
+    _backend.select_backend_tf()
+    prev_batch_dyn_size_ext = batch_dim.dyn_size_ext
+    try:
+        with tf_compat.v1.Graph().as_default(), tf_compat.v1.Session().as_default() as session:
+            import tensorflow as tf
+
+            time_dim = Dim(Tensor("time", [batch_dim], dtype="int32"))
+            f1, f2 = Dim(3, name="f1"), Dim(4, name="f2")
+            x = Tensor("x", dims=[batch_dim, time_dim, f1, f2], dtype="float32")
+            x.raw_tensor = TFBackend.create_placeholder_raw(x)
+            time_dim.dyn_size_ext.raw_tensor = TFBackend.create_placeholder_raw(time_dim.dyn_size_ext)
+            batch_dim.dyn_size_ext = Tensor("batch", dims=(), dtype="int32")
+            batch_dim.dyn_size_ext.raw_tensor = tf.shape(x.raw_tensor)[0]
+
+            merged, merged_dim = rf.merge_dims(x, dims=[f1, f2])
+            # the static part of the shape must survive, else RF would already have rejected it
+            assert merged.raw_tensor.shape.as_list() == [None, None, 12], merged.raw_tensor.shape
+            split = rf.split_dims(merged, axis=merged_dim, dims=[f1, f2])
+            assert split.raw_tensor.shape.as_list() == [None, None, 3, 4], split.raw_tensor.shape
+
+            values = numpy.random.RandomState(42).normal(size=(2, 5, 3, 4)).astype("float32")
+            out_merged, out_split = session.run(
+                [merged.raw_tensor, split.raw_tensor],
+                feed_dict={x.raw_tensor: values, time_dim.dyn_size_ext.raw_tensor: numpy.array([5, 4], "int32")},
+            )
+    finally:
+        batch_dim.dyn_size_ext = prev_batch_dyn_size_ext
+        time_dim.reset_raw()
+        rf.select_backend_torch()
+
+    assert out_merged.shape == (2, 5, 12) and out_split.shape == (2, 5, 3, 4)
+    numpy.testing.assert_allclose(out_merged, values.reshape(2, 5, 12), rtol=1e-6)
+    numpy.testing.assert_allclose(out_split, values, rtol=1e-6)
+
+
+def test_engine_weight_decay_modules_blacklist():
+    # The production config passes optimizer.weight_decay_modules_blacklist.
+    # The optimizer class does not know that option ("Argument(s) not recognized"),
+    # and weight decay must be off for exactly those parameters,
+    # so the engine tags their variables with per-variable optimizer opts instead.
+    # Same rule as the PyTorch updater: biases + the blacklisted module types.
+    from returnn.config import Config, global_config_ctx
+    from returnn.datasets.generating import DummyDataset
+    from returnn.tf.engine_rf import Engine
+    from returnn.tf.frontend_low_level import TFBackend
+
+    # noinspection PyProtectedMember
+    from returnn.frontend import _backend
+
+    n_data_dim, n_classes_dim, seq_len = 2, 3, 5
+    train_data = DummyDataset(input_dim=n_data_dim, output_dim=n_classes_dim, num_seqs=4, seq_len=seq_len)
+    train_data.init_seq_order(epoch=1)
+
+    time_dim = Dim(Tensor("time", [batch_dim], dtype="int32"))
+    in_dim = Dim(n_data_dim, name="in")
+    out_dim = Dim(n_classes_dim, name="out")
+
+    class _Net(rf.Module):
+        def __init__(self):
+            super().__init__()
+            self.emb = rf.Embedding(out_dim, in_dim)  # blacklisted type
+            self.lin = rf.Linear(in_dim, out_dim)  # weight -> decay, bias -> no decay
+
+    # noinspection PyShadowingNames
+    def _get_model(**_kwargs) -> rf.Module:
+        return _Net()
+
+    # noinspection PyShadowingNames
+    def _train_step(*, model: _Net, extern_data: TensorDict, **_kwargs):
+        x = extern_data["data"] + rf.reduce_mean(model.emb(extern_data["classes"]), axis=time_dim)
+        rf.cross_entropy(
+            estimated=model.lin(x), target=extern_data["classes"], axis=out_dim, estimated_type="logits"
+        ).mark_as_loss("ce")
+
+    config = Config(
+        {
+            "backend": "tensorflow",
+            "extern_data": {
+                "data": {"dims": [batch_dim, time_dim, in_dim], "dtype": "float32"},
+                "classes": {"dims": [batch_dim, time_dim], "sparse_dim": out_dim, "dtype": "int32"},
+            },
+            "get_model": _get_model,
+            "train_step": _train_step,
+            "optimizer": {
+                "class": "adamw",
+                "weight_decay": 0.01,
+                "weight_decay_modules_blacklist": ["rf.Embedding"],
+            },
+            "learning_rate": 0.01,
+            "batch_size": 20,
+            "max_seqs": 2,
+            "num_epochs": 1,
+        }
+    )
+
+    # noinspection PyProtectedMember
+    from returnn.tf.engine_rf import _no_weight_decay_params
+
+    _backend.select_backend_tf()
+    prev_batch_dyn_size_ext = batch_dim.dyn_size_ext
+    try:
+        with global_config_ctx(config):
+            engine = Engine(config=config)
+            engine.init_train_from_config(config=config, train_data=train_data)
+            model = engine.get_model()
+            all_names = {name for name, _ in model.named_parameters()}
+            no_wd = set(_no_weight_decay_params(model, config.typed_value("optimizer")))
+            decayed = {name for name, p in model.named_parameters() if any(p is q for q in engine._weight_decay_params)}
+            # "adamw" must NOT reach the updater: it maps to a Keras optimizer whose wrapper is
+            # dead on Keras 3. The engine runs TF1-native Adam and decays itself.
+            assert engine._weight_decay == 0.01, engine._weight_decay
+            before = engine.session.run(TFBackend.get_parameter_variable(dict(model.named_parameters())["lin.weight"]))
+            engine.train()
+            after = engine.session.run(TFBackend.get_parameter_variable(dict(model.named_parameters())["lin.weight"]))
+    finally:
+        batch_dim.dyn_size_ext = prev_batch_dyn_size_ext
+        rf.select_backend_torch()
+
+    # the embedding (blacklisted type) and every bias are excluded; a plain weight is not
+    assert "emb.weight" in no_wd, no_wd
+    assert "lin.bias" in no_wd, no_wd
+    assert "lin.weight" in all_names and "lin.weight" not in no_wd, no_wd
+    # and that is exactly the set the engine decays
+    assert decayed == all_names - no_wd, (decayed, all_names - no_wd)
+    assert not numpy.allclose(before, after), "the decayed parameter did not move at all"
+
+
+def test_ctc_loss_target_longer_than_input():
+    # Real data contains sequences whose targets do not fit the (subsampled) input.
+    # PyTorch's ctc_loss is called with zero_infinity=True and contributes 0 for them;
+    # TF's classic kernel raises "Not enough time for target transition sequence"
+    # unless told to ignore them.
+    # This is what killed the production run after 595 steps,
+    # so pin the behaviour on both sides.
+    time_dim = Dim(Tensor("time", [batch_dim], dtype="int32"))
+    targets_dim = Dim(Tensor("targets", [batch_dim], dtype="int32"))
+    wb_dim = Dim(6, name="wb")  # blank is the LAST class -> the classic TF kernel
+    vocab_dim = Dim(5, name="vocab")
+    extern_data = TensorDict(
+        {
+            "logits": Tensor("logits", [batch_dim, time_dim, wb_dim], dtype="float32", feature_dim=wb_dim),
+            "targets": Tensor("targets", [batch_dim, targets_dim], dtype="int32", sparse_dim=vocab_dim),
+        }
+    )
+
+    # noinspection PyShadowingNames
+    def _forward_step(*, model: rf.Module, extern_data: TensorDict):
+        loss = rf.ctc_loss(
+            logits=extern_data["logits"],
+            targets=extern_data["targets"],
+            input_spatial_dim=time_dim,
+            targets_spatial_dim=targets_dim,
+            blank_index=wb_dim.dimension - 1,
+        )
+        loss.mark_as_default_output(shape=(batch_dim,))
+        # marking the total as "loss" makes the harness compare the INPUT GRADIENTS too, which is
+        # where zeroing an inf could still go wrong (a 0 * inf in the backward would give nan)
+        rf.reduce_sum(loss, axis=loss.dims).mark_as_output("loss", shape=())
+
+    # targets (up to 6) can exceed the input length (down to 2), i.e. the degenerate case
+    run_model(
+        extern_data,
+        lambda *, epoch, step: rf.Module(),
+        _forward_step,
+        dyn_dim_max_sizes={time_dim: 8, targets_dim: 6},
+        dyn_dim_min_sizes={time_dim: 2, targets_dim: 4},
+        tf_low_level=True,
+    )
+
+
 def _full_model_setup():
     """
     :return: extern_data, get_model, forward_step, dims.

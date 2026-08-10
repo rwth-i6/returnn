@@ -937,17 +937,24 @@ class TFBackend(Backend[tf.Tensor]):
         :param input_spatial_dim:
         :param targets_spatial_dim:
         :param blank_index:
-        :param max_approx: not implemented
-        :param use_native_op: not implemented
-        :param label_loop: not implemented otherwise
+        :param max_approx: Viterbi (best path) instead of the full sum. Needs the native op.
+        :param use_native_op: RETURNN's own CTC op, default True, see below.
+        :param label_loop: allow label loops (standard CTC). False needs the native op.
         :return: CTC loss, [batch_dims...]
         """
-        if max_approx:
-            raise NotImplementedError("ctc_loss: max_approx not implemented for TF")
-        if not label_loop:
-            raise NotImplementedError("ctc_loss: label_loop=False not implemented for TF")
-        if use_native_op:
-            raise NotImplementedError("ctc_loss: use_native_op not implemented for TF")
+        if use_native_op is None:
+            # Our op is one fused GPU kernel.
+            # tf.nn.ctc_loss broadcasts to [time, batch, targets, vocab],
+            # dying with an illegal memory access past 2**31 elements
+            # (vocab 10241, 183 frames: already at batch 40).
+            # https://github.com/tensorflow/tensorflow/issues/124949
+            # https://github.com/rwth-i6/returnn/issues/1834
+            use_native_op = True
+        if not use_native_op:
+            if max_approx:
+                raise NotImplementedError("ctc_loss: max_approx needs use_native_op")
+            if not label_loop:
+                raise NotImplementedError("ctc_loss: label_loop=False needs use_native_op")
         assert targets.sparse_dim and targets.sparse_dim.dimension <= logits.feature_dim.dimension
         logits = rf.amp_cast_float32(logits)  # mixed precision: losses are computed in float32
         batch_dims = logits.remaining_dims((input_spatial_dim, logits.feature_dim))
@@ -963,15 +970,41 @@ class TFBackend(Backend[tf.Tensor]):
                 targets_raw = tf.reshape(targets_raw, _shape_raw([-1, targets_spatial_dim]))
                 input_lens = tf.reshape(input_lens, [-1])
                 targets_lens = tf.reshape(targets_lens, [-1])
-            loss_raw = tf.nn.ctc_loss(
-                labels=tf.cast(targets_raw, tf.int32),
-                # tf.nn.ctc_loss log-softmaxes internally, which is a no-op on already normalized logits
-                logits=logits_raw,
-                label_length=tf.cast(targets_lens, tf.int32),
-                logit_length=tf.cast(input_lens, tf.int32),
-                logits_time_major=False,
-                blank_index=blank_index,
-            )
+            if use_native_op:
+                from returnn.tf import native_op as tf_native_op
+
+                input_lens_i32 = tf.cast(input_lens, tf.int32)
+                targets_lens_i32 = tf.cast(targets_lens, tf.int32)
+                targets_raw_i32 = tf.cast(targets_raw, tf.int32)
+                native_kwargs = dict(
+                    logits=logits_raw,
+                    logits_seq_lens=input_lens_i32,
+                    logits_time_major=False,
+                    targets=targets_raw_i32,
+                    targets_seq_lens=targets_lens_i32,
+                    blank_index=blank_index,
+                    label_loop=label_loop,
+                    logits_normalize=not logits_normalized,
+                    # error signal is p - bw w.r.t. raw logits, but -bw w.r.t. normalized log probs
+                    grad_wrt_softmax_in=not logits_normalized,
+                    zero_infinity=True,
+                )
+                if max_approx:
+                    loss_raw = tf_native_op.ctc_loss_viterbi(**native_kwargs)
+                else:
+                    loss_raw = tf_native_op.ctc_loss(**native_kwargs)
+            else:
+                # tf.nn.ctc_loss log-softmaxes internally,
+                # which is a no-op on already normalized logits,
+                # so logits_normalized needs no branch here.
+                loss_raw = tf.nn.ctc_loss(
+                    labels=tf.cast(targets_raw, tf.int32),
+                    logits=logits_raw,
+                    label_length=tf.cast(targets_lens, tf.int32),
+                    logit_length=tf.cast(input_lens, tf.int32),
+                    logits_time_major=False,
+                    blank_index=blank_index,
+                )
             if len(batch_dims) != 1:
                 loss_raw = tf.reshape(loss_raw, batch_shape)
         return Tensor("ctc_loss", dims=batch_dims, raw_tensor=loss_raw, dtype=TFBackend.get_dtype_name_raw(loss_raw))
