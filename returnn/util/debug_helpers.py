@@ -2,7 +2,7 @@
 This file is going to be imported by Debug.debug_shell() and available as interactive commands.
 """
 
-from typing import Union
+from typing import Optional, Union
 import types
 import sys
 import numpy
@@ -34,7 +34,7 @@ def find_obj_in_stack(cls, stack=None, all_threads=True):
 
     isframe = inspect.isframe
 
-    _tb: Union[types.FrameType, types.TracebackType] = stack
+    _tb: Optional[Union[types.FrameType, types.TracebackType]] = stack
     while _tb is not None:
         if isframe(_tb):
             f = _tb

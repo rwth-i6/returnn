@@ -2055,6 +2055,8 @@ class TFNetwork:
         targets = set()
         for layer in self.layers.values():
             if layer.target:
+                # layer.target is a str here; the declared type is wider
+                # noinspection PyUnhashable
                 targets.add(layer.target)
         return list(sorted(targets))
 
