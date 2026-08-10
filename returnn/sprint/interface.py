@@ -79,7 +79,7 @@ def init(name=None, sprint_unit=None, **kwargs):
     )
     if name is None:
         init_python_trainer(**kwargs)
-        return
+        return None
     elif name == "Sprint.PythonControl":
         # Any PythonControl interface.
         if sprint_unit == "PythonFeatureScorer":
