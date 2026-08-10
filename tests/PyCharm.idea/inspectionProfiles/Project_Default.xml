@@ -61,5 +61,16 @@
         </list>
       </option>
     </inspection_tool>
+    <!-- 'function' in the ignored types: the findings are all f-strings of a callable in an
+         error message ("seq_ordering function {f} should return a str"), where the default repr
+         is exactly what we want to print. The inspection can only ever say "this repr may be
+         unhelpful", never indicate a runtime fault. -->
+    <inspection_tool class="PyStringConversionWithoutDunderMethodInspection" enabled="true" level="WARNING" enabled_by_default="true">
+      <option name="ignoredTypes">
+        <list>
+          <option value="function" />
+        </list>
+      </option>
+    </inspection_tool>
   </profile>
 </component>
