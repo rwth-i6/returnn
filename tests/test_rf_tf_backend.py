@@ -22,6 +22,16 @@ import os
 # which makes test_engine_dynamic_learning_rate and test_engine_weight_decay_modules_blacklist
 # fail in a full-file run while still passing alone.
 os.environ.setdefault("NVIDIA_TF32_OVERRIDE", "0")
+# Same story on CPU: test_full_model_torch_checkpoint_parity drifts to enc diff/scale ~1e-1
+# exactly on the AMX-capable GitHub runners (hardware is a per-job lottery) and passes at
+# ~2e-6 on every AVX2-only runner: 6 green AVX2 jobs vs the 1 red AMX job on 2026-08-10,
+# including a same-commit rerun pair whose result flipped with the hardware
+# (cpu_feature_guard: "AVX2 FMA" vs "... AVX512_BF16 ... AMX_BF16").
+# ~1e-1 is bf16-class for this depth (the amp test needs atol 0.2*scale for real bf16),
+# far beyond f32 rounding, so the suspect is TF 2.10's oneDNN using AMX/bf16 kernels on
+# f32 data -- the correlation is hardware-controlled, the oneDNN sub-mechanism is not pinned.
+# Disable oneDNN so the CPU path is plain f32 Eigen on every runner.
+os.environ.setdefault("TF_ENABLE_ONEDNN_OPTS", "0")
 
 import _setup_test_env  # noqa
 import shutil
