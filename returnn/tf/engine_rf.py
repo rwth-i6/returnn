@@ -123,7 +123,12 @@ class Engine(EngineBase):
 
         self._graph = tf_compat.v1.Graph()
         with self._graph.as_default():
-            self.session = tf_compat.v1.Session(graph=self._graph)
+            # session options from the config, as the net-dict engine (make_tf_session) takes them;
+            # https://github.com/tensorflow/tensorflow/blob/master/tensorflow/core/protobuf/config.proto
+            session_opts = dict(config.typed_value("tf_session_opts") or {})
+            session_opts.setdefault("log_device_placement", False)
+            print(f"Setup TF session with options {session_opts!r} ...", file=log.v4)
+            self.session = tf_compat.v1.Session(graph=self._graph, config=tf_compat.v1.ConfigProto(**session_opts))
             self._create_placeholders()
             self._create_model(epoch=self.epoch, step=self.global_train_step)
             # The step graph is built once, so mixed precision is a property of the BUILD here,
@@ -282,7 +287,12 @@ class Engine(EngineBase):
 
         self._graph = tf_compat.v1.Graph()
         with self._graph.as_default():
-            self.session = tf_compat.v1.Session(graph=self._graph)
+            # session options from the config, as the net-dict engine (make_tf_session) takes them;
+            # https://github.com/tensorflow/tensorflow/blob/master/tensorflow/core/protobuf/config.proto
+            session_opts = dict(config.typed_value("tf_session_opts") or {})
+            session_opts.setdefault("log_device_placement", False)
+            print(f"Setup TF session with options {session_opts!r} ...", file=log.v4)
+            self.session = tf_compat.v1.Session(graph=self._graph, config=tf_compat.v1.ConfigProto(**session_opts))
             self._create_placeholders()
             self._create_model(epoch=self.epoch, step=0)
             with rf.set_amp_policy_ctx(self._amp_policy):
