@@ -50,13 +50,28 @@ class JaxBackend(Backend[jax.Array]):
 
     @staticmethod
     def assert_(condition: Tensor, message: str, *, stop: bool = True):
-        """assert"""
+        """
+        assert, on a traced condition as well
+
+        Under tracing the value is not known, so the check becomes part of the program:
+        a ``lax.cond`` on the negated condition, whose taken branch calls back to the host.
+        That is the JAX analogue of ``tf.Assert``, and of the device-side assert the torch
+        backend uses -- a plain Python ``assert`` would test a tracer and always pass.
+        """
         assert condition.dims == (), "condition for assert must be a scalar"
-        if bool(condition.raw_tensor):
+        raw = condition.raw_tensor
+
+        def _failed():
+            if stop:
+                raise AssertionError(message)
+            print(f"[ASSERT FAILED WARNING]: {message}")
+
+        if isinstance(raw, jax.core.Tracer):
+            jax.lax.cond(jnp.logical_not(raw), lambda _: jax.debug.callback(_failed) or 0, lambda _: 0, 0)
             return
-        if stop:
-            raise AssertionError(message)
-        print(f"[ASSERT FAILED WARNING]: {message}")
+        if bool(raw):
+            return
+        _failed()
 
     @staticmethod
     def raw_to_numpy(raw_tensor: jax.Array) -> numpy.ndarray:
