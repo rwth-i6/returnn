@@ -84,6 +84,7 @@ class Engine(EngineBase):
         self._forward_dim_fetches: Dict[Dim, str] = {}  # dyn dim -> its key in _forward_fetches
         self._step_placeholder: Optional[tf.Tensor] = None
         self._saver: Optional[tf_compat.v1.train.Saver] = None
+        self._save_saver: Optional[tf_compat.v1.train.Saver] = None  # params + global_step, see _init_step_func
         self._data_keys: List[str] = []
         self._fed_dims: List[Tuple[str, Dim]] = []  # (data key, dim) per fed dyn-size placeholder
 
@@ -120,6 +121,16 @@ class Engine(EngineBase):
         self.epoch = self.get_train_start_epoch(config)
         if self.global_train_step is None:
             self.global_train_step = 0
+            # On resume, read "global_step" back from the checkpoint,
+            # as the net-dict engine does (returnn/tf/engine.py init_network_from_config).
+            # Without this a restart resets the counter,
+            # silently restarting every step-based schedule (e.g. the specaugment ramp),
+            # and get_model below sees step 0.
+            _, load_filename = self.get_epoch_model(config)
+            if load_filename:
+                reader = tf_compat.v1.train.NewCheckpointReader(util.get_checkpoint_filepattern(load_filename))
+                if reader.has_tensor("global_step"):
+                    self.global_train_step = int(reader.get_tensor("global_step"))
 
         self._graph = tf_compat.v1.Graph()
         with self._graph.as_default():
@@ -497,6 +508,17 @@ class Engine(EngineBase):
         self._global_train_step_var = tf.Variable(
             self.global_train_step, dtype="int64", trainable=False, name="global_step"
         )
+        # The save-side saver additionally stores the step counter,
+        # under the net-dict engine's tensor name "global_step".
+        # The load-side saver (_saver) stays params-only,
+        # so older checkpoints without the counter still restore;
+        # the counter is read back separately via NewCheckpointReader, see __init__.
+        self._save_saver = tf_compat.v1.train.Saver(
+            {
+                **{name: TFBackend.get_parameter_variable(p) for name, p in self.model.named_parameters()},
+                "global_step": self._global_train_step_var,
+            }
+        )
         # The whole LR schedule of a setup can live in dynamic_learning_rate, so it must be applied.
         # The TF Updater has an in-graph path for it, but that one only passes global_train_step,
         # while such a function may also want epoch / epoch_continuous
@@ -579,7 +601,7 @@ class Engine(EngineBase):
             print("No 'model' in the config, not saving.", file=log.v4)
             return
         filename = self.get_epoch_model_filename()
-        self._saver.save(self.session, filename)
+        self._save_saver.save(self.session, filename)
         print(f"Saved model {filename}", file=log.v3)
 
     def _batch_size_info(self, feed_dict: Dict[Any, numpy.ndarray]) -> Dict[str, int]:

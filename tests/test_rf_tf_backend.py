@@ -519,12 +519,17 @@ def test_engine_train():
             import tensorflow as tf
 
             ckpt = engine.get_epoch_model_filename(epoch=3)
-            assert set(name for name, _ in tf.train.list_variables(ckpt)) == {"out.weight", "out.bias"}
+            assert set(name for name, _ in tf.train.list_variables(ckpt)) == {"out.weight", "out.bias", "global_step"}
 
-            # a fresh engine continues from that checkpoint instead of starting over
+            # a fresh engine continues from that checkpoint instead of starting over,
+            # including the step counter (else every step-based schedule would restart)
             engine2 = Engine(config=config)
             engine2.init_train_from_config(config=config, train_data=train_data, dev_data=dev_data)
             assert engine2.epoch == 4, "did not continue from the existing checkpoint"
+            assert engine2.global_train_step == engine.global_train_step > 0, (
+                engine2.global_train_step,
+                engine.global_train_step,
+            )
     finally:
         batch_dim.dyn_size_ext = prev_batch_dyn_size_ext
         rf.select_backend_torch()
