@@ -31,6 +31,9 @@ __all__ = [
 ]
 
 
+_T = TypeVar("_T")
+
+
 # noinspection PyAbstractClass
 class _ConvOrTransposedConv(rf.Module):
     """
@@ -1090,7 +1093,8 @@ def _consistent_same_padding(
     return source, in_spatial_dims, 0
 
 
-def _make_sequence(value: Union[int, Sequence[int]], *, nd: int) -> Sequence[int]:
+# generic: filter_size is passed as int|Dim
+def _make_sequence(value: Union[_T, Sequence[_T]], *, nd: int) -> Sequence[_T]:
     if isinstance(value, int):
         return [value] * nd
     assert len(value) == nd

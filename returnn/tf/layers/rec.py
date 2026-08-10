@@ -6709,7 +6709,7 @@ class ChoiceLayer(BaseChoiceLayer):
         """
         :param str name:
         :param list[LayerBase] sources:
-        :param str target:
+        :param str|list[str] target: a list is accepted, only its first entry matters here
         :param returnn.tf.network.TFNetwork network:
         :param int beam_size:
         :param NotSpecified|bool search:

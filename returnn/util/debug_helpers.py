@@ -2,6 +2,8 @@
 This file is going to be imported by Debug.debug_shell() and available as interactive commands.
 """
 
+from typing import Union
+import types
 import sys
 import numpy
 
@@ -9,7 +11,7 @@ import numpy
 def find_obj_in_stack(cls, stack=None, all_threads=True):
     """
     :param type cls:
-    :param types.FrameType|traceback.FrameSummary|None stack: current frame (or all threads) by default
+    :param types.FrameType|types.TracebackType|None stack: current frame (or all threads) by default
     :param bool all_threads:
     :return: obj
     """
@@ -32,7 +34,7 @@ def find_obj_in_stack(cls, stack=None, all_threads=True):
 
     isframe = inspect.isframe
 
-    _tb = stack
+    _tb: Union[types.FrameType, types.TracebackType] = stack
     while _tb is not None:
         if isframe(_tb):
             f = _tb

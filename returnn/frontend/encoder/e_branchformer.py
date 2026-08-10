@@ -195,15 +195,14 @@ class FeedForwardConvGated(rf.Module):
         """
         super().__init__()
 
-        if ff_dim is NotSpecified:
-            ff_dim = out_dim * 3  # somewhat arbitrary. with 512, this is 3072/2.
-        if isinstance(ff_dim, int):
-            ff_dim = Dim(ff_dim, name="e-branchformer-ff-dim")
-        if not isinstance(ff_dim, Dim):
+        ff_dim_: Union[int, Dim] = out_dim * 3 if ff_dim is NotSpecified else ff_dim
+        if isinstance(ff_dim_, int):
+            ff_dim_ = Dim(ff_dim_, name="e-branchformer-ff-dim")
+        if not isinstance(ff_dim_, Dim):
             raise TypeError(f"E-Branchformer FeedForwardConvGated: unexpected ff_dim {ff_dim!r} type {type(ff_dim)}")
 
         self.out_dim = out_dim
-        self.ff_dim = ff_dim
+        self.ff_dim = ff_dim_
         self.dropout = dropout
         self.dropout_broadcast = rf.dropout_broadcast_default()
         if activation is NotSpecified:
