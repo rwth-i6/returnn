@@ -260,6 +260,7 @@ class FeedDictDataProvider(DataProviderBase):
         self.queue = Queue(maxsize=capacity)
         self.thread = None  # type: typing.Optional[Thread]
         self.thread_finished = False
+        self.thread_exception = None  # type: typing.Optional[BaseException]
         self.cur_batch_idx = 0
         self.reached_end = False
 
@@ -317,7 +318,7 @@ class FeedDictDataProvider(DataProviderBase):
         # The assembly itself is backend independent and shared with the other engines.
         # Shape convention here is (batch, time, feature),
         # matching the Data specification in TFNetwork.ExternData.init_from_config().
-        return batch_to_raw_dict(
+        d = batch_to_raw_dict(
             batch,
             dataset=self.dataset,
             extern_data=self.extern_data,
@@ -325,6 +326,11 @@ class FeedDictDataProvider(DataProviderBase):
             enforce_min_len1=self.enforce_min_len1,
             exclude_data_key=self._exclude_data_key,
         )
+        # For the epoch_continuous of a dynamic LR schedule (see the RF TF engine):
+        # None if the dataset cannot give a monotonic fraction.
+        # Computed here, in the producer thread, since the consumer no longer sees the Batch.
+        d["complete_frac"] = self.dataset.get_complete_frac(batch.end_seq - 1, allow_only_lr_suitable=True)
+        return d
 
     def _thread_main(self):
         try:
@@ -345,6 +351,10 @@ class FeedDictDataProvider(DataProviderBase):
         except Exception as exc:
             print("Exception in DataProvider thread: %r" % exc, file=log.v1)
             sys.excepthook(*sys.exc_info())
+            # re-raised in the consumer (have_more_data).
+            # Without this the consumer just sees end-of-data
+            # and finishes the epoch "successfully" on a TRUNCATED dataset.
+            self.thread_exception = exc
 
         finally:
             with self.state_change_cond:
@@ -364,9 +374,10 @@ class FeedDictDataProvider(DataProviderBase):
                 # First check if there is still data in the queue to be processed.
                 if self.queue and not self.queue.empty():
                     return True
-                if self.thread_finished:
-                    return False
-                if not self.thread.is_alive:
+                if self.thread_finished or not self.thread.is_alive:
+                    # not during shutdown (_flush_all_data after request_stop): cleanup must finish
+                    if self.thread_exception is not None and not self.coord.should_stop():
+                        raise self.thread_exception
                     return False
                 # The thread is alive and working. Wait for a change.
                 self.state_change_cond.wait()
@@ -416,19 +427,25 @@ class FeedDictDataProvider(DataProviderBase):
                         "dataset currently does not support variable shape in other dimensions than the first. "
                         "dim=%i, placeholder=%r" % (dim, len_placeholder)
                     )
-        assert isinstance(self.extern_data, ExternData)
-        batch_info = self.extern_data.get_batch_info()
-        batch_dim = batch_info.dim
-        if isinstance(batch_dim, int):
-            assert batch_dim == output["batch_dim"], "configured static batch dim %s %s != actual batch dim %s" % (
-                batch_info,
-                batch_dim,
-                output["batch_dim"],
-            )
-        else:
-            assert isinstance(batch_dim, tf.Tensor)
-            d[batch_dim] = output["batch_dim"]
-        return d, {"seq_idx": output["seq_idx"], "seq_tag": output["seq_tag"]}
+        if isinstance(self.extern_data, ExternData):
+            batch_info = self.extern_data.get_batch_info()
+            batch_dim = batch_info.dim
+            if isinstance(batch_dim, int):
+                assert batch_dim == output["batch_dim"], "configured static batch dim %s %s != actual batch dim %s" % (
+                    batch_info,
+                    batch_dim,
+                    output["batch_dim"],
+                )
+            else:
+                assert isinstance(batch_dim, tf.Tensor)
+                d[batch_dim] = output["batch_dim"]
+        # else: a bare TensorDict (the RF TF engine) -- no batch info to feed,
+        # the engine derives the batch dim from the data itself
+        return d, {
+            "seq_idx": output["seq_idx"],
+            "seq_tag": output["seq_tag"],
+            "complete_frac": output.get("complete_frac"),
+        }
 
     def get_dataset_name(self):
         """
