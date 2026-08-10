@@ -6,13 +6,16 @@ We make use of torch.utils.data.IterDataPipe.
 
 from __future__ import annotations
 
-from typing import Callable, Optional, Iterator, Dict
+from typing import TYPE_CHECKING, Callable, Optional, Iterator, Dict
 import sys
 import numpy
 import torch.utils.data
 from returnn.datasets.basic import Dataset as ReturnnDataset
 from returnn.datasets.util.strings import str_to_numpy_array
 from returnn.util.better_exchook import better_exchook
+
+if TYPE_CHECKING:
+    import multiprocessing.sharedctypes
 
 ResetCallbackT = Callable[[], None]
 
@@ -44,7 +47,7 @@ class ReturnnDatasetResetMpSharedEpochCallback:
     Can be used as reset_callback.
     """
 
-    def __init__(self, dataset: ReturnnDataset, epoch_mp_shared: torch.multiprocessing.Value):
+    def __init__(self, dataset: ReturnnDataset, epoch_mp_shared: multiprocessing.sharedctypes.Synchronized):
         self.dataset = dataset
         self.epoch_mp_shared = epoch_mp_shared
 
