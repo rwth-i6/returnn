@@ -1637,6 +1637,8 @@ def ctc_loss_viterbi(
     targets_seq_lens,
     blank_index=-1,
     label_loop: bool = True,
+    logits_normalize=True,
+    grad_wrt_softmax_in=True,
     zero_infinity: Optional[bool] = None,
 ):
     """
@@ -1651,6 +1653,14 @@ def ctc_loss_viterbi(
     :param tf.Tensor targets_seq_lens: (batch,)
     :param int blank_index: vocab index of the blank symbol
     :param label_loop:
+    :param bool logits_normalize: apply log_softmax on logits (default).
+      The cross entropy below runs on the logits either way,
+      which stays well defined when they are already normalized, as softmax(log p) == p.
+    :param bool grad_wrt_softmax_in: assume ``p(s|x) = softmax(logits)``,
+      and define the gradient w.r.t. logits, which is ``p(s|x) - onehot(alignment)``.
+      If logits are already normalized (``log p(s|x) = logits``),
+      the error signal to logits should be ``-onehot(alignment)``, so set this False.
+      As in :func:`ctc_loss`, follow ``logits_normalize``.
     :param zero_infinity: for sequences with no valid alignment, contribute 0 loss AND 0 gradient,
       like PyTorch ctc_loss(zero_infinity=True).
       Without it, such a sequence gets loss inf, which poisons the batch loss,
@@ -1664,7 +1674,10 @@ def ctc_loss_viterbi(
     dim = logits.get_shape().dims[-1].value
     if not logits_time_major:
         logits = tf.transpose(logits, [1, 0, 2])  # (time,batch,dim)
-    log_sm = tf.nn.log_softmax(logits)  # (time,batch,dim)
+    if logits_normalize:
+        log_sm = tf.nn.log_softmax(logits)  # (time,batch,dim)
+    else:
+        log_sm = logits
 
     if blank_index < 0:
         blank_index += dim
@@ -1677,20 +1690,25 @@ def ctc_loss_viterbi(
     )
     loss = -scores
 
-    # We make use of the original TF sparse CE function,
-    # which also calculates the gradient.
-    # The CE op works on the flat tensor, thus we first convert it here, to get the op directly.
-    logits_flat = tf.reshape(logits, [-1, dim])
-    alignment_flat = tf.reshape(alignment, tf.shape(logits_flat)[:-1])
-    loss_ce = tf.nn.sparse_softmax_cross_entropy_with_logits(logits=logits_flat, labels=alignment_flat)
-    assert loss_ce.op.type == "SparseSoftmaxCrossEntropyWithLogits"
-    # See _SparseSoftmaxCrossEntropyWithLogitsGrad.
-    from tensorflow.python.ops import array_ops
+    if grad_wrt_softmax_in:
+        # We make use of the original TF sparse CE function,
+        # which also calculates the gradient, p - onehot(alignment).
+        # The CE op works on the flat tensor, thus we first convert it here, to get the op directly.
+        logits_flat = tf.reshape(logits, [-1, dim])
+        alignment_flat = tf.reshape(alignment, tf.shape(logits_flat)[:-1])
+        loss_ce = tf.nn.sparse_softmax_cross_entropy_with_logits(logits=logits_flat, labels=alignment_flat)
+        assert loss_ce.op.type == "SparseSoftmaxCrossEntropyWithLogits"
+        # See _SparseSoftmaxCrossEntropyWithLogitsGrad.
+        from tensorflow.python.ops import array_ops
 
-    ce_grad = array_ops.prevent_gradient(loss_ce.op.outputs[1], message="No second order grad for CE.")
-    assert isinstance(ce_grad, tf.Tensor)
-    ce_grad.set_shape(logits_flat.get_shape())  # (time*batch,dim)
-    ce_grad = tf.reshape(ce_grad, tf.shape(logits))  # (time,batch,dim)
+        ce_grad = array_ops.prevent_gradient(loss_ce.op.outputs[1], message="No second order grad for CE.")
+        assert isinstance(ce_grad, tf.Tensor)
+        ce_grad.set_shape(logits_flat.get_shape())  # (time*batch,dim)
+        ce_grad = tf.reshape(ce_grad, tf.shape(logits))  # (time,batch,dim)
+    else:
+        # w.r.t. already normalized log probs the error signal is just -onehot(alignment),
+        # so build it directly instead of subtracting p back off the CE gradient
+        ce_grad = -tf.one_hot(alignment, depth=dim, dtype=logits.dtype)  # (time,batch,dim)
     from returnn.tf.util.basic import sequence_mask_time_major, where_bc
 
     seq_mask = sequence_mask_time_major(logits_seq_lens)  # (time,batch)
