@@ -1211,6 +1211,59 @@ def other(x):
 """
 
 
+def test_lru_cache_evict_with_reentrant_finalizer():
+    """
+    Evicting an entry drops the cached VALUE's last reference.
+    If that value owns an object with a weakref finalizer that re-enters the cache
+    -- which is exactly what the RF cache does
+    (returnn.frontend._cache.Cache.set registers a finalizer calling cache_pop) --
+    the finalizer runs *inside* the link update, through the reentrant RLock.
+
+    CPython's functools keeps the evicted result alive across that update for this reason.
+    Without it, the finalizer's cache_pop finds the link whose KEY was just set to None
+    (the root sentinel), clears it,
+    and the NEXT insert dies with `IndexError: list assignment index out of range`.
+
+    Relies on CPython refcounting to run the finalizer at the moment the reference drops.
+    """
+    import weakref
+    from returnn.util.lru_cache import lru_cache
+
+    evicted = []
+    unraisable = []
+
+    class _Holder:
+        def __init__(self, x):
+            self.x = x
+
+    def _on_dead(x):
+        evicted.append(x)
+        f.cache_pop(x, fallback=None)  # re-entry: same shape as the RF cache finalizer
+
+    @lru_cache(maxsize=2)
+    def f(x):
+        h = _Holder(x)
+        weakref.finalize(h, _on_dead, x)
+        return h
+
+    # An exception inside a finalizer does not propagate:
+    # it becomes "unraisable" and is merely printed,
+    # so without this hook the cache_pop/cache_clear ordering bugs pass silently.
+    prev_hook = sys.unraisablehook
+    sys.unraisablehook = lambda args: unraisable.append(f"{args.exc_type.__name__}: {args.exc_value}")
+    try:
+        for x in range(6):  # more than maxsize, so evictions happen and finalizers fire
+            assert f(x).x == x
+        assert evicted, "no finalizer ran -- the test no longer exercises the eviction path"
+        # the cache must still be usable; before the fix this raised IndexError
+        assert f(100).x == 100
+        assert f.cache_len() <= 2
+        f.cache_clear()  # clears links too -> finalizers fire here as well
+    finally:
+        sys.unraisablehook = prev_hook
+    assert not unraisable, f"finalizer raised inside the cache: {unraisable}"
+
+
 if __name__ == "__main__":
     better_exchook.install()
     if len(sys.argv) <= 1:
