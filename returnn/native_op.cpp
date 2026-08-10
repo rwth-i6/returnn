@@ -237,11 +237,11 @@ Ndarray* Ndarray_Copy(const Ndarray* self) {
 #define TWOD_LSTM_SUPPORT 0
 #endif
 
-// StreamExecutor moved out of the perftools::gputools namespace, and the Stream::ThenBlas*
-// wrappers were dropped in favour of calling BlasSupport directly.
-// Both are gone in TF 2.20; the exact removal versions were not established here, so the switch
-// is set at the version actually verified. Anything older keeps the code it always had and
-// cannot regress; if CI shows an earlier TF also lacks ThenBlas*, lower this bound.
+// StreamExecutor left the perftools::gputools namespace,
+// and Stream::ThenBlas* was dropped in favour of calling BlasSupport directly.
+// Both are gone in TF 2.20. The exact removal versions are unknown,
+// so this is set at the version verified here: older TF keeps the code it had.
+// If CI shows an earlier TF also lacks ThenBlas*, lower this bound.
 #if (TF_MAJOR_VERSION > 2) || (TF_MAJOR_VERSION == 2 && TF_MINOR_VERSION >= 20)
 #define RETURNN_TF_MODERN_STREAM_EXECUTOR 1
 #else
@@ -351,10 +351,9 @@ static void tf_cuda_sgemm(
                          (uint64_t)m, (uint64_t)n, (uint64_t)k,
                          returnn_se::dnn::ToDataType<T>::value, &alpha, a_ptr, lda,
                          b_ptr, ldb, &beta, &c_ptr, ldc,
-                         // Follow TF's global TF32 setting, as TF's own kernels do, so enabling or
-                         // disabling TF32 applies here too. TF32 costs ~5e-5 relative on float32
-                         // GEMM, so the native-op tests, which compare against TF references for
-                         // exactness, turn TF32 off process-wide rather than us hardcoding it.
+                         // Follow TF's global TF32 setting, as TF's own kernels do.
+                         // TF32 costs ~5e-5 relative on float32 GEMM,
+                         // so the native-op tests turn it off process-wide.
                          returnn_se::NumericOptions(/*require_determinism=*/false,
                                                    tensorflow::tensor_float_32_execution_enabled()),
                          returnn_se::blas::CallContext::kNone)

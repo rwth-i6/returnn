@@ -2127,8 +2127,8 @@ class TFBackend(Backend[tf.Tensor]):
         sizes = [-1] * len(source.dims)  # -1 = all remaining
         sizes[axis_int] = size
         with tf_util.same_control_flow_ctx(source):
-            # same static-shape restoration as the reshape ops: a tf.slice whose begin/size come
-            # from tensors reports an unknown static shape, which RF then rejects
+            # as for the reshape ops:
+            # a tf.slice with tensor begin/size reports an unknown static shape, which RF rejects
             out.raw_tensor = _with_static_shape(
                 tf.slice(source.raw_tensor, _shape_raw(begin), _shape_raw(sizes)), out.dims
             )
@@ -2374,9 +2374,9 @@ class TFBackend(Backend[tf.Tensor]):
                 assert minval is None and maxval is None, "TF random uniform: bound together with minval/maxval"
                 minval, maxval = -bound, bound
             if _random_arg_is_per_element(minval) or _random_arg_is_per_element(maxval):
-                # tf.random.uniform takes only SCALAR bounds, so draw in [0,1) and scale.
-                # rf.audio.specaugment needs per-element bounds: its mask positions and lengths
-                # are drawn per sequence, so maxval is a [B] tensor.
+                # tf.random.uniform takes only scalar bounds, so draw in [0,1) and scale.
+                # rf.audio.specaugment draws mask positions and lengths per sequence,
+                # i.e. maxval is a [B] tensor.
                 min_raw = _random_bound_raw(minval, 0, dims)
                 max_raw = _random_bound_raw(maxval, None, dims)
                 assert max_raw is not None, "TF random uniform: maxval required with a per-element bound"
@@ -2608,10 +2608,9 @@ def _with_static_shape(raw: tf.Tensor, dims: Sequence[Dim]) -> tf.Tensor:
     :param dims: the RF dims this raw tensor will carry
     :return: raw, with its STATIC shape restored
 
-    ``tf.reshape`` with a stacked (tensor) shape yields a fully UNKNOWN static shape, even for the
-    axes that are static. RF then rejects the raw tensor
-    ("Mismatching shape: Raw tensor (None, None, None) vs Tensor ..."),
-    and TF loses shape information it could otherwise propagate.
+    A tf.reshape with a stacked (tensor) shape yields a fully unknown static shape,
+    even for the static axes,
+    and RF then rejects it ("Mismatching shape: Raw tensor (None, None, None) vs Tensor ...").
     Only the statically known dims are set here; a dynamic dim stays None.
     """
     raw.set_shape([d.dimension for d in dims])
