@@ -1312,7 +1312,9 @@ def _dim_aware_call(name: str, args, kwargs):
                     {k: (dense if v is src else v) for k, v in kwargs.items()},
                 )
                 if isinstance(out, Tensor) and is_packed(out) and out.raw_tensor.same_packing(dense.raw_tensor):
-                    back = regap(out, raw0.gap, align=raw0.align)
+                    # match raw0's CAPACITY too, not just its layout:
+                    # the replace_dim below relabels the packed dim, it cannot resize the buffer
+                    back = regap(out, raw0.gap, align=raw0.align, total_bound=raw0.packed_dim.dimension)
                     inner, _ = rf.replace_dim(
                         back.raw_tensor.inner, in_dim=back.raw_tensor.packed_dim, out_dim=raw0.packed_dim
                     )
@@ -3626,8 +3628,11 @@ class PackedBackend(Backend[PackedRawTensor]):
         """
         CE over a non-packed axis (vocab), targets over the same sequences -> on packed data.
         logits [packed, vocab], targets [packed] (sparse).
-        The targets are matched to the logits packing (regap, a no-op if the layout already agrees,
-        e.g. a different per-key gap), then rewrapped onto the logits packed dim.
+        The targets are matched to the logits packing (regap, a no-op if layout AND capacity
+        already agree, e.g. a different per-key gap), then rewrapped onto the logits packed dim.
+        The capacity must be matched too, not just the layout:
+        under graph capture the logits buffer is bound-sized while the targets buffer can be exact,
+        and the rewrap only relabels the dim -- it cannot resize the raw tensor.
         Falls back if the axis is packed or the targets are not packed over the same sequences.
         """
         logits_raw = _raw(logits)
@@ -3637,7 +3642,14 @@ class PackedBackend(Backend[PackedRawTensor]):
             and isinstance(targets_raw, PackedRawTensor)
             and targets_raw.orig_dims == logits_raw.orig_dims
         ):
-            targets = regap(targets, logits_raw.gap, align=logits_raw.align, layout_lens=logits_raw.layout_lens)
+            targets = regap(
+                targets,
+                logits_raw.gap,
+                align=logits_raw.align,
+                layout_lens=logits_raw.layout_lens,
+                # None for a dynamic logits dim = keep the exact total, the previous behavior
+                total_bound=logits_raw.packed_dim.dimension,
+            )
             targets_raw = targets.raw_tensor
             target_inner = targets_raw.inner
             if targets_raw.packed_dim != logits_raw.packed_dim:
