@@ -15,12 +15,16 @@ you only care about some encoded vector of type :class:`Tensor`.
 
 from __future__ import annotations
 from typing import Tuple, Union
-from abc import ABC
 from returnn.tensor import Tensor, Dim
 import returnn.frontend as rf
 
+# Note: these interfaces deliberately do NOT derive from abc.ABC.
+# They declare no @abstractmethod (the bodies raise NotImplementedError),
+# so ABC enforced nothing, but it made the metaclass ABCMeta
+# which can confuse type checkers.
 
-class IEncoder(rf.Module, ABC):
+
+class IEncoder(rf.Module):
     """
     Generic encoder interface
 
@@ -38,7 +42,7 @@ class IEncoder(rf.Module, ABC):
         raise NotImplementedError
 
 
-class ISeqFramewiseEncoder(rf.Module, ABC):
+class ISeqFramewiseEncoder(rf.Module):
     """
     This specializes IEncoder that it operates on a sequence.
     The output sequence length here is the same as the input.
@@ -50,7 +54,7 @@ class ISeqFramewiseEncoder(rf.Module, ABC):
         raise NotImplementedError
 
 
-class ISeqDownsamplingEncoder(rf.Module, ABC):
+class ISeqDownsamplingEncoder(rf.Module):
     """
     This is more specific than IEncoder in that it operates on a sequence.
     The output sequence length here is shorter than the input.

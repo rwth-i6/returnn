@@ -939,14 +939,14 @@ def main():
             # indexing artifact: Cython's bundled numpy .pxd shadow joins the union type
             # whenever Cython is installed in the env; not a property of our code
             ("PyUnresolvedReferencesInspection", r"^Member 'Cython\.Includes\.numpy' of "),
-            # rf.Module construction mis-resolved to the base class' __call__ (2026.2):
-            # `ConformerEncoder(in_dim, out_dim, ff_dim=...)` gets checked against
-            # ISeqDownsamplingEncoder.__call__(source, *, in_spatial_dim) -- hence "unexpected
-            # argument" for every real __init__ kwarg, "parameter 'in_spatial_dim' unfilled",
-            # and the follow-up attribute errors on the __call__ return type '(Tensor, Dim)'.
-            # Verified per-file (--files) against the real signatures: the code is correct.
-            ("PyUnresolvedReferencesInspection", r"for class '\(Tensor, Dim\)'$"),
-            ("PyArgumentListInspection", r"^Parameter 'in_spatial_dim' unfilled$"),
+            # Two filters used to sit here:
+            # "Parameter 'in_spatial_dim' unfilled" and "for class '(Tensor, Dim)'".
+            # They worked around PyCharm checking an rf.Module construction
+            # against the base class' __call__ instead of __init__,
+            # which only happened because the I*Encoder interfaces derived from abc.ABC.
+            # That ABC was inert and is gone, see returnn/frontend/encoder/base.py.
+            # Measured on demos/demo-rf-pt-benchmark.py, the only file either filter matched:
+            # 23 findings from that root cause with ABC, 0 without.
             # union-member attr findings (member is a real class, union has '|'): triaged 2026-08-06
             # (205 distinct sites incl. every crash-looking candidate read individually) -- all were
             # duck-typing idioms (type[X] | X, Dim | str), guarded branches PyCharm cannot correlate,
