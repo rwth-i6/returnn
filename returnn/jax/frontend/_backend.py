@@ -229,6 +229,15 @@ class JaxBackend(Backend[jax.Array]):
         return jnp.reshape(raw_tensor, tuple(shape))
 
     @staticmethod
+    def should_pickle_tensor(raw_tensor: jax.Array) -> bool:
+        """
+        Never: under tracing a raw is a TRACER, which cannot be pickled at all.
+        DistributeFilesDataset spawns workers mid-epoch, and spawning pickles the global config,
+        which holds the extern_data dims the engine filled in -- that killed a run.
+        """
+        return False
+
+    @staticmethod
     def compare_raw(a: jax.Array, kind: str, b: jax.Array) -> jax.Array:
         """
         :param a:
