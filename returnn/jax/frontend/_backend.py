@@ -10,6 +10,7 @@ therefore follows the same rules as the static-traceable regime of the PyTorch b
 
 from __future__ import annotations
 from typing import Optional, Union, Sequence, Tuple, Dict
+import contextlib
 from functools import partial
 import itertools
 import numpy
@@ -1374,13 +1375,14 @@ class JaxBackend(Backend[jax.Array]):
         )
         logit_paddings = (jnp.arange(logits_raw.shape[1])[None, :] >= input_lengths[:, None]).astype(logits_raw.dtype)
         label_paddings = (jnp.arange(targets_raw.shape[1])[None, :] >= target_lengths[:, None]).astype(logits_raw.dtype)
-        loss_raw = optax.ctc_loss(
-            logits=logits_raw,
-            logit_paddings=logit_paddings,
-            labels=targets_raw.astype(jnp.int32),
-            label_paddings=label_paddings,
-            blank_id=blank_index,
-        )
+        with _x64_disabled():
+            loss_raw = optax.ctc_loss(
+                logits=logits_raw,
+                logit_paddings=logit_paddings,
+                labels=targets_raw.astype(jnp.int32),
+                label_paddings=label_paddings,
+                blank_id=blank_index,
+            )
         return Tensor(
             name="ctc_loss",
             dims=batch_dims,
@@ -2255,6 +2257,22 @@ def _match_device(a, b):
     if a.ndim == 0:
         return jax.device_put(a, b.device), b
     return a, jax.device_put(b, a.device)
+
+
+@contextlib.contextmanager
+def _x64_disabled():
+    """
+    Trace the enclosed code with x64 off, so ``jnp.float_`` is float32.
+
+    jax 0.11 dropped ``jax.experimental.disable_x64``; the config flag is the remaining lever.
+    It only affects dtype canonicalization at TRACE time, which is what the callers here need.
+    """
+    prev = jax.config.jax_enable_x64
+    jax.config.update("jax_enable_x64", False)
+    try:
+        yield
+    finally:
+        jax.config.update("jax_enable_x64", prev)
 
 
 def _device_from_str(device: str) -> Optional[jax.Device]:
