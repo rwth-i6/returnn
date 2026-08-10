@@ -26,47 +26,8 @@ _base_dir = os.path.dirname(os.path.abspath(os.path.dirname(__file__)))
 _base_dir = os.path.realpath(_base_dir)  # Make canonical path-name.
 
 
-class OpDescription(native_op.NativeOpBaseMixin):
-    """
-    Meta-info about an op, used by :class:`OpMaker`.
-    """
-
-    @classmethod
-    def from_gen_base(cls, gen_base):
-        """
-        :param returnn.native_op.NativeOpGenBase|type[returnn.native_op.NativeOpGenBase] gen_base:
-        :rtype: OpDescription
-        """
-        name = gen_base.__name__
-        assert gen_base.in_info is not None
-        assert gen_base.out_info is not None
-        assert gen_base.c_fw_code is not None
-        return OpDescription(
-            in_info=gen_base.in_info,
-            out_info=gen_base.out_info,
-            c_fw_code=gen_base.c_fw_code,
-            c_bw_code=gen_base.c_bw_code,
-            c_extra_support_code=gen_base.c_extra_support_code,
-            cpu_support=gen_base.cpu_support,
-            grad_input_map=gen_base.grad_input_map,
-            name=name,
-        )
-
-    @property
-    def is_grad_defined(self):
-        """
-        :rtype: bool
-        """
-        return bool(self.c_bw_code)
-
-    def grad(self):
-        """
-        :rtype: OpDescription|None
-        """
-        if not self.is_grad_defined:
-            return None
-        kwargs = self.kwargs_for_grad_op()
-        return OpDescription(**kwargs)
+# backend-neutral, so it lives in returnn.native_op; re-exported here for the existing callers
+OpDescription = native_op.OpDescription
 
 
 class OpMaker:

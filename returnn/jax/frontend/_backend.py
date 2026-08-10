@@ -1329,23 +1329,30 @@ class JaxBackend(Backend[jax.Array]):
         label_loop: bool = True,
     ) -> Tensor:
         """
-        CTC loss, via optax.
+        CTC loss, via our fast-Baum-Welch native op or via optax; see ``use_native_op``.
 
         :param logits: [batch_dims..., input_spatial_dim, vocab]
         :param logits_normalized: whether logits are already log probs
-            (optax log_softmaxes internally, which is a no-op on normalized input)
+            (both paths log_softmax internally, which is a no-op on normalized input)
         :param targets: [batch_dims..., targets_spatial_dim] -> vocab
         :param input_spatial_dim:
         :param targets_spatial_dim:
         :param blank_index:
         :param max_approx: not implemented
-        :param use_native_op: not implemented
+        :param use_native_op: our fast-Baum-Welch native op instead of optax's DP. Default (None)
+            is the native op: it is faster (measured 2.1x on fwd+bwd at production shapes), it is
+            the only path that can do max_approx / label_loop=False, and it avoids the f64
+            promotion optax's jax.nn.one_hot causes under x64. The PyTorch backend defaults the
+            other way only because its optax-equivalent path predates its native op.
         :param label_loop: only the standard label loop
         :return: loss [batch_dims...], summed over time, not normalized
         """
-        assert not max_approx, "RF JaxBackend: ctc_loss max_approx not implemented"
-        assert label_loop, "RF JaxBackend: ctc_loss label_loop=False not implemented"
-        assert not use_native_op, "RF JaxBackend: ctc_loss use_native_op not implemented"
+        if use_native_op is None:
+            use_native_op = True
+        if max_approx:
+            raise NotImplementedError("RF JaxBackend: ctc_loss max_approx not implemented")
+        if not label_loop:
+            raise NotImplementedError("RF JaxBackend: ctc_loss label_loop=False not implemented")
         assert targets.sparse_dim and targets.sparse_dim.dimension <= logits.feature_dim.dimension
         logits = rf.amp_cast_float32(logits)  # mixed precision: losses are computed in float32
         batch_dims = logits.remaining_dims((input_spatial_dim, logits.feature_dim))
@@ -1375,14 +1382,34 @@ class JaxBackend(Backend[jax.Array]):
         )
         logit_paddings = (jnp.arange(logits_raw.shape[1])[None, :] >= input_lengths[:, None]).astype(logits_raw.dtype)
         label_paddings = (jnp.arange(targets_raw.shape[1])[None, :] >= target_lengths[:, None]).astype(logits_raw.dtype)
-        with _x64_disabled():
-            loss_raw = optax.ctc_loss(
+        if use_native_op:
+            # The fast-Baum-Welch native op, the same kernels the TF and PyTorch backends use.
+            # It does not go through jax.nn.one_hot, so the f64 promotion described below
+            # cannot arise either.
+            from returnn.jax.util.native_op import ctc_loss as _native_ctc_loss
+
+            loss_raw = _native_ctc_loss(
                 logits=logits_raw,
-                logit_paddings=logit_paddings,
-                labels=targets_raw.astype(jnp.int32),
-                label_paddings=label_paddings,
-                blank_id=blank_index,
+                logits_seq_lens=input_lengths,
+                targets=targets_raw.astype(jnp.int32),
+                targets_seq_lens=target_lengths,
+                blank_index=blank_index,
             )
+        else:
+            # x64 is on for this backend (int64 seq lens need it), and optax's ctc_loss builds its
+            # label one-hot with jax.nn.one_hot, whose default dtype is jnp.float_ = FLOAT64 under
+            # x64. The einsum against the [B,T,vocab] log-probs then runs as an f64 GEMM: measured
+            # as the largest single op of the step (~20% of device time, plus ~7% of f32->f64
+            # converts). Tracing with x64 off keeps jnp.float_ at f32; the inputs are already
+            # f32/int32, so nothing else changes.
+            with _x64_disabled():
+                loss_raw = optax.ctc_loss(
+                    logits=logits_raw,
+                    logit_paddings=logit_paddings,
+                    labels=targets_raw.astype(jnp.int32),
+                    label_paddings=label_paddings,
+                    blank_id=blank_index,
+                )
         return Tensor(
             name="ctc_loss",
             dims=batch_dims,

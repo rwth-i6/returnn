@@ -250,6 +250,52 @@ class NativeOpBaseMixin:
         return results
 
 
+class OpDescription(NativeOpBaseMixin):
+    """
+    Meta-info about an op, used by the per-backend ``OpMaker``s.
+
+    Backend-neutral: it only carries the op's declaration (in/out info, the C code, the grad map),
+    which is why it lives here rather than in one of the backends.
+    """
+
+    @classmethod
+    def from_gen_base(cls, gen_base):
+        """
+        :param NativeOpGenBase|type[NativeOpGenBase] gen_base:
+        :rtype: OpDescription
+        """
+        name = gen_base.__name__
+        assert gen_base.in_info is not None
+        assert gen_base.out_info is not None
+        assert gen_base.c_fw_code is not None
+        return OpDescription(
+            in_info=gen_base.in_info,
+            out_info=gen_base.out_info,
+            c_fw_code=gen_base.c_fw_code,
+            c_bw_code=gen_base.c_bw_code,
+            c_extra_support_code=gen_base.c_extra_support_code,
+            cpu_support=gen_base.cpu_support,
+            grad_input_map=gen_base.grad_input_map,
+            name=name,
+        )
+
+    @property
+    def is_grad_defined(self) -> bool:
+        """
+        :return: whether the gradient is defined
+        """
+        return bool(self.c_bw_code)
+
+    def grad(self):
+        """
+        :rtype: OpDescription|None
+        """
+        if not self.is_grad_defined:
+            return None
+        kwargs = self.kwargs_for_grad_op()
+        return OpDescription(**kwargs)
+
+
 class NativeOpGenBase:
     """
     Base interface for op generation.

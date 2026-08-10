@@ -31,6 +31,10 @@ CUDA: If defined and set to 1, CUDA is used for GPU support.
 #define TORCH 0
 #endif
 
+#ifndef JAX
+#define JAX 0
+#endif
+
 #ifndef _ns
 #define _ns
 #endif
@@ -627,11 +631,64 @@ static void Ndarray_sgemm(
     assert("Torch Ndarray_sgemm not implemented" && 0);
 }
 
-#else  // TENSORFLOW or TORCH
+#elif JAX
+// XLA hands the kernel a raw device pointer plus a shape, so there is no tensor object here:
+// NdarrayJax is that pair, filled by the generated FFI handler from an xla::ffi::Buffer.
+// Sizes are int64 (the FFI dimension type), like torch.
 
-#error "No framework defined: TENSORFLOW or TORCH"
+struct NdarrayJax {
+    void* data;
+    const int64_t* dims;
+    int ndim;
+};
 
-#endif // TENSORFLOW or TORCH
+#define Ndarray NdarrayJax
+#define Ndarray_DEV_DATA(x) ((float*)(x)->data)
+#define Ndarray_DEV_DATA_int32(x) ((int32_t*)(x)->data)
+#define Ndarray_DEV_DATA_uint32(x) ((uint32_t*)(x)->data)
+#define Ndarray_DEV_DATA_int32_scalar(x) (*((int32_t*)(x)->data))
+#define Ndarray_HOST_DIMS(x) ((x)->dims)
+#define Ndarray_DIMS(x) ((x)->dims)
+typedef const int64_t* Ndarray_DIMS_Type;
+#define Ndarray_NDIM(x) ((x)->ndim)
+#define Ndarray_dtype_size(x) (4)  // only float32/int32 ops are wired
+typedef int64_t Ndarray_DIM_Type;
+
+static inline int64_t Ndarray_SIZE(const Ndarray* x) {
+    int64_t n = 1;
+    for(int i = 0; i < x->ndim; ++i) n *= x->dims[i];
+    return n;
+}
+
+// in elements, C-contiguous: XLA buffers always are
+static inline int64_t Ndarray_STRIDE(const Ndarray* x, int dim) {
+    int64_t s = 1;
+    for(int i = dim + 1; i < x->ndim; ++i) s *= x->dims[i];
+    return s;
+}
+
+// variadic: callers pass a message built from several comma-separated parts (as TORCH_CHECK takes)
+#define CHECK_WITH_MSG(cond, ...) do { if(!(cond)) { fprintf(stderr, "NativeOp check failed: " #cond "\n"); assert(false); } } while(0)
+
+// See Context struct below.
+#define CONTEXT_ARGS
+
+template<typename T>
+static void Ndarray_sgemm(
+    char transa_, char transb_,
+    int m, int n, int k,
+    const T* alpha_ptr, const T* a_ptr, int lda,
+    const T* b_ptr, int ldb, const T* beta_ptr,
+    T* c_ptr, int ldc)
+{
+    assert("JAX Ndarray_sgemm not implemented" && 0);
+}
+
+#else  // TENSORFLOW or TORCH or JAX
+
+#error "No framework defined: TENSORFLOW or TORCH or JAX"
+
+#endif // TENSORFLOW or TORCH or JAX
 
 
 #if CUDA
@@ -643,6 +700,14 @@ static void Ndarray_sgemm(
 #elif TORCH
 
 #define CUDA_CUR_STREAM (at::cuda::getCurrentCUDAStream().stream())
+
+#elif JAX
+
+// XLA passes its stream into the FFI handler; the generated wrapper puts it here,
+// so the op is ordered inside the compiled program with no extra synchronization.
+#define CUDA_CUR_STREAM (_returnn_jax_stream)
+extern __thread cudaStream_t _returnn_jax_stream;
+extern __thread xla::ffi::ScratchAllocator* _returnn_jax_scratch;
 
 #else
 #error Unknown backend
@@ -851,7 +916,25 @@ void* _malloc(size_t num_bytes) { return c10::GetCPUAllocator()->raw_allocate(nu
 void _free(void* ptr) { c10::GetCPUAllocator()->raw_deallocate(ptr); }
 #endif  // CUDA
 
-#endif  // TENSORFLOW or TORCH
+#elif JAX
+
+// Scratch for the op's own temporaries (FastBaumWelch's edge/state buffers, the LSTM ops,
+// the edit-distance ops). XLA's own mechanism for this is ffi::ScratchAllocator: it allocates
+// from the same arena as the rest of the program -- no cudaMalloc on the critical path -- and
+// frees everything when the handler returns, so _free has nothing to do.
+#if CUDA
+void* _malloc(size_t num_bytes) {
+    assert(_returnn_jax_scratch);
+    auto p = _returnn_jax_scratch->Allocate(num_bytes, 16);
+    return p.has_value() ? *p : nullptr;
+}
+void _free(void* ptr) {}  // XLA releases the scratch after the call
+#else  // not CUDA
+void* _malloc(size_t num_bytes) { return malloc(num_bytes); }
+void _free(void* ptr) { free(ptr); }
+#endif  // CUDA
+
+#endif  // TENSORFLOW or TORCH or JAX
 
 
 #define device_malloc Context(CONTEXT_ARGS)._malloc

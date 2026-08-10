@@ -1447,6 +1447,49 @@ def test_engine_train_jit(time_multiple: int):
         numpy.testing.assert_allclose(jit_params[name], value, rtol=1e-4, atol=1e-6, err_msg=name)
 
 
+def test_ctc_loss_native_op_matches_optax():
+    """
+    The native fast-Baum-Welch CTC gives the same loss and gradient as the optax DP.
+
+    Same kernels the TF and PyTorch backends use, reached through an XLA FFI custom call.
+    Runs on whichever platform JAX picks: the op is compiled and registered for both,
+    and the CPU build is the same translation unit with CUDA=0.
+    """
+    import jax
+    import optax
+    from returnn.jax.util.native_op import ctc_loss as native_ctc_loss
+
+    _rf_jax()
+    rnd = numpy.random.RandomState(42)
+    n_batch, n_time, n_targets, vocab = 3, 12, 4, 7
+    blank = vocab - 1
+    logits = jnp.asarray(rnd.randn(n_batch, n_time, vocab).astype("float32"))
+    targets = jnp.asarray(rnd.randint(0, blank, size=(n_batch, n_targets)).astype("int32"))
+    in_lens = jnp.asarray(numpy.array([12, 10, 8], dtype="int32"))
+    tgt_lens = jnp.asarray(numpy.array([4, 3, 2], dtype="int32"))
+
+    def _native(x):
+        return native_ctc_loss(
+            logits=x, logits_seq_lens=in_lens, targets=targets, targets_seq_lens=tgt_lens, blank_index=blank
+        )
+
+    def _ref(x):
+        return optax.ctc_loss(
+            logits=x,
+            logit_paddings=(jnp.arange(n_time)[None, :] >= in_lens[:, None]).astype(jnp.float32),
+            labels=targets,
+            label_paddings=(jnp.arange(n_targets)[None, :] >= tgt_lens[:, None]).astype(jnp.float32),
+            blank_id=blank,
+        )
+
+    numpy.testing.assert_allclose(
+        numpy.asarray(jax.jit(_native)(logits)), numpy.asarray(jax.jit(_ref)(logits)), rtol=1e-5, atol=1e-5
+    )
+    grad_native = numpy.asarray(jax.jit(jax.grad(lambda x: _native(x).sum()))(logits))
+    grad_ref = numpy.asarray(jax.jit(jax.grad(lambda x: _ref(x).sum()))(logits))
+    numpy.testing.assert_allclose(grad_native, grad_ref, rtol=1e-4, atol=1e-5)
+
+
 def test_checkpoint_is_ocdbt_and_compact():
     """
     Checkpoints must use OCDBT: 18 inodes vs 513 at 169 arrays, ~3.6k vs ~103k over 100 epochs.
