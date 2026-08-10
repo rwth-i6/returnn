@@ -29,6 +29,7 @@ class _TensorOpOverloadsMixin(_TensorMixinBase):
 
     # --- comparisons
 
+    # noinspection PyMethodOverriding
     def __eq__(self: Tensor, other: Union[_rf_types.RawTensorTypes, Tensor]) -> Union[Tensor, bool]:
         # When comparing to some other invalid type, return False, not a Tensor.
         # This is to allow easy equality checks with other random objects.
@@ -45,6 +46,7 @@ class _TensorOpOverloadsMixin(_TensorMixinBase):
             return _rf().compare(self, "==", other)
         return False
 
+    # noinspection PyMethodOverriding
     def __ne__(self: Tensor, other: Union[_rf_types.RawTensorTypes, Tensor]) -> Tensor:
         return _rf().compare(self, "!=", other)
 

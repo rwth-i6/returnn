@@ -9832,6 +9832,7 @@ class CombineLayer(LayerBase):
         vs.update({"source": source, "self": self})
         vs.update(eval_locals or {})
         if callable(eval_str):
+            # noinspection PyCallingNonCallable
             x = eval_str(**vs)
         else:
             x = eval(eval_str, vs)
@@ -10877,6 +10878,7 @@ class SubnetworkLayer(LayerBase):
         load_on_init = self.load_on_init
         if load_on_init:
             if callable(load_on_init):
+                # noinspection PyCallingNonCallable
                 load_on_init = load_on_init()
             print("loading initial weights from", load_on_init, file=log.v2)
             self_prefix = self.get_absolute_name_scope_prefix()  # with "/" at end

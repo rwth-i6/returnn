@@ -83,7 +83,7 @@ def init(**kwargs):
     # We need to catch these cases.
     if "name" in kwargs and kwargs["name"] == "Sprint.PythonControl":
         return PythonControl.init(**kwargs)
-    return _init_python_trainer(**kwargs)
+    _init_python_trainer(**kwargs)
 
 
 def _parse_config_str(config_str):
