@@ -23,6 +23,7 @@ from __future__ import annotations
 from typing import Optional, Union, Any, Dict, List, Tuple
 import os
 import time
+import shutil
 
 import jax
 import jax.numpy as jnp
@@ -612,21 +613,23 @@ class Engine(EngineBase):
         :param filename: without the postfix
         :return: accumulated file size in bytes of the deleted files
 
-        Used by :func:`EngineBase.cleanup_old_models`. A JAX checkpoint is the ``.npz``
-        plus the optimizer state next to it.
+        Used by :func:`EngineBase.cleanup_old_models`. A JAX checkpoint is the ``.orbax``
+        DIRECTORY plus the optimizer state next to it, so this removes trees, not files.
         """
         postfix = util.get_model_filename_postfix()
         count_bytes = 0
         for fname in (filename + postfix, filename + ".opt" + postfix):
-            if os.path.exists(fname):
-                count_bytes += os.stat(fname).st_size
-                os.remove(fname)
+            if not os.path.exists(fname):
+                continue
+            for root, _dirs, files in os.walk(fname):
+                count_bytes += sum(os.stat(os.path.join(root, f)).st_size for f in files)
+            shutil.rmtree(fname)
         assert count_bytes > 0, f"delete_model: nothing to delete for {filename!r}"
         return count_bytes
 
     def _load_model(self, *, filename: str):
         """
-        :param filename: without the ``.npz`` postfix, as :func:`EngineBase.get_epoch_model` returns it
+        :param filename: without the ``.orbax`` postfix, as :func:`EngineBase.get_epoch_model` returns it
         """
         postfix = util.get_model_filename_postfix()
         if filename.endswith(postfix):

@@ -1,15 +1,18 @@
 """
-Checkpoints for the JAX backend.
+Checkpoints for the JAX backend: Orbax with OCDBT storage.
+A checkpoint is a DIRECTORY (postfix ``.orbax``), not a file.
 
-The format is plain NumPy (``.npz``), keyed by the RF parameter names,
-i.e. deliberately backend-neutral:
-the same file can be read by any backend, and a PyTorch checkpoint can be converted into it,
-which is what a parameter-level comparison between the backends needs.
+OCDBT is required, not preferred: 18 inodes per checkpoint against 513 without it (169 arrays),
+i.e. ~3.6k vs ~103k over a 100-epoch training with optimizer state.
+
+Keys are the RF parameter names, so a PyTorch checkpoint converts across one to one
+(see :func:`load_torch_checkpoint`).
 """
 
 from __future__ import annotations
 from typing import Optional, Any, Dict
 
+import os
 import numpy
 import jax
 import jax.numpy as jnp
@@ -61,60 +64,75 @@ def set_model_params(model: rf.Module, params: Dict[str, numpy.ndarray], *, allo
         param.assign(Tensor(name, dims=param.dims, dtype=param.dtype, raw_tensor=jnp.asarray(value)))
 
 
+def _checkpointer():
+    """
+    :return: an Orbax checkpointer writing OCDBT (its default)
+
+    Imported lazily: ``load_torch_checkpoint`` and the NumPy helpers do not need Orbax.
+    """
+    import orbax.checkpoint as ocp
+
+    return ocp.PyTreeCheckpointer()
+
+
 def save_checkpoint(model: rf.Module, filename: str, *, step: Optional[int] = None, epoch: Optional[int] = None):
     """
     :param model:
-    :param filename: ``.npz`` file to write
+    :param filename: ``.orbax`` DIRECTORY to write
     :param step: stored alongside, for the engine
     :param epoch: stored alongside, for the engine
     """
     values = get_model_params(model)
-    meta = {}
+    tree = dict(values)
     if step is not None:
-        meta["_step"] = numpy.array(step)
+        tree["_step"] = numpy.array(step)
     if epoch is not None:
-        meta["_epoch"] = numpy.array(epoch)
-    numpy.savez(filename, **values, **meta)
+        tree["_epoch"] = numpy.array(epoch)
+    _save_tree(tree, filename)
     print(f"Saved JAX checkpoint {filename} ({len(values)} params)", file=log.v3)
 
 
 def load_checkpoint(filename: str) -> Dict[str, numpy.ndarray]:
     """
-    :param filename: ``.npz`` file, as written by :func:`save_checkpoint`
+    :param filename: ``.orbax`` directory, as written by :func:`save_checkpoint`
     :return: the parameters, without the meta entries (which start with an underscore)
     """
-    with numpy.load(filename) as data:
-        return {name: data[name] for name in data.files if not name.startswith("_")}
+    tree = _checkpointer().restore(os.path.abspath(filename))
+    return {name: numpy.asarray(value) for name, value in tree.items() if not name.startswith("_")}
 
 
 def save_opt_state(opt_state: Any, filename: str):
     """
-    Save the optimizer state (an optax pytree of arrays), so that training can continue exactly.
+    Save the optimizer state, so that training continues exactly.
 
-    Only the leaves are stored: the tree structure follows from the model and the optimizer,
-    so it is rebuilt at load time from a freshly initialized state.
+    Orbax keeps the pytree structure, so this does not depend on the leaf ORDER
+    matching between the run that wrote it and the run that reads it.
 
     :param opt_state:
-    :param filename: ``.npz`` file to write
+    :param filename: ``.orbax`` DIRECTORY to write
     """
-    leaves = jax.tree_util.tree_leaves(opt_state)
-    numpy.savez(filename, **{f"_leaf_{i}": numpy.asarray(v) for i, v in enumerate(leaves)})
-    print(f"Saved JAX optimizer state {filename} ({len(leaves)} arrays)", file=log.v3)
+    _save_tree(opt_state, filename)
+    print(f"Saved JAX optimizer state {filename} ({len(jax.tree_util.tree_leaves(opt_state))} arrays)", file=log.v3)
 
 
 def load_opt_state(opt_state: Any, filename: str) -> Any:
     """
-    :param opt_state: a freshly initialized state, giving the tree structure to fill in
+    :param opt_state: a freshly initialized state, giving the structure to restore into.
+        A mismatch is an error: the optimizer or the trained parameter set changed.
     :param filename: as written by :func:`save_opt_state`
     :return: the state from the file
     """
-    leaves, treedef = jax.tree_util.tree_flatten(opt_state)
-    with numpy.load(filename) as data:
-        if len(data.files) != len(leaves):
-            raise ValueError(
-                f"load_opt_state: {filename} has {len(data.files)} arrays, the optimizer state has {len(leaves)}"
-            )
-        return jax.tree_util.tree_unflatten(treedef, [jnp.asarray(data[f"_leaf_{i}"]) for i in range(len(leaves))])
+    return _checkpointer().restore(os.path.abspath(filename), item=opt_state)
+
+
+def _save_tree(tree: Any, filename: str) -> None:
+    """
+    :param tree: pytree of arrays
+    :param filename: directory to write; an existing one is replaced
+
+    Orbax needs an absolute path, and refuses to write over an existing directory unless told to.
+    """
+    _checkpointer().save(os.path.abspath(filename), tree, force=True)
 
 
 def load_torch_checkpoint(filename: str) -> Dict[str, numpy.ndarray]:
@@ -126,7 +144,7 @@ def load_torch_checkpoint(filename: str) -> Dict[str, numpy.ndarray]:
     (``rf_module_to_pt_module`` keeps them), so the values transfer one to one.
 
     Needs PyTorch installed -- reading a PyTorch checkpoint does.
-    JAX-side training does not; the format written here is plain ``.npz``.
+    JAX-side training does not; the format written here is Orbax (see the module docstring).
 
     :param filename: a ``.pt`` file
     :return: the parameters, keyed by RF parameter name

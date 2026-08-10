@@ -366,8 +366,9 @@ def get_model_filename_postfix():
     if BackendEngine.is_torch_selected():
         return ".pt"
     if BackendEngine.is_jax_selected():
-        # plain NumPy, so a checkpoint is readable without JAX (see returnn.jax.checkpoint)
-        return ".npz"
+        # Orbax with OCDBT storage; the checkpoint is a directory, not a file
+        # (see returnn.jax.checkpoint)
+        return ".orbax"
     return ""
 
 

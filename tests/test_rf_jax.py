@@ -1212,7 +1212,7 @@ def test_train_steps_and_checkpoint():
     linear = mods[0]
     before = get_model_params(linear)
     with tempfile.TemporaryDirectory() as tmp_dir:
-        filename = f"{tmp_dir}/model.npz"
+        filename = f"{tmp_dir}/model.orbax"
         save_checkpoint(linear, filename, step=20, epoch=1)
         for _, p in linear.named_parameters():
             p.assign(rf.zeros(p.dims, dtype=p.dtype))
@@ -1403,13 +1403,13 @@ def test_engine_train_from_config():
 
         # a checkpoint per epoch, holding the model's parameters
         for epoch in (1, 2):
-            params = load_checkpoint(f"{tmp_dir}/model.{epoch:03d}.npz")
+            params = load_checkpoint(f"{tmp_dir}/model.{epoch:03d}.orbax")
             assert set(params) == {"linear.weight", "linear.bias"}, sorted(params)
             assert params["linear.weight"].shape == (_EngineTestNumFeat, _EngineTestNumClasses)
         # and training moved the parameters
         assert not numpy.allclose(
-            load_checkpoint(f"{tmp_dir}/model.001.npz")["linear.weight"],
-            load_checkpoint(f"{tmp_dir}/model.002.npz")["linear.weight"],
+            load_checkpoint(f"{tmp_dir}/model.001.orbax")["linear.weight"],
+            load_checkpoint(f"{tmp_dir}/model.002.orbax")["linear.weight"],
         ), "the parameters did not change between epochs"
 
         scores = engine.learning_rate_control.epoch_data
@@ -1445,6 +1445,53 @@ def test_engine_train_jit(time_multiple: int):
     numpy.testing.assert_allclose(jit_scores, eager_scores, rtol=1e-5)
     for name, value in eager_params.items():
         numpy.testing.assert_allclose(jit_params[name], value, rtol=1e-4, atol=1e-6, err_msg=name)
+
+
+def test_checkpoint_is_ocdbt_and_compact():
+    """
+    Checkpoints must use OCDBT: 18 inodes vs 513 at 169 arrays, ~3.6k vs ~103k over 100 epochs.
+    A silent fallback to the plain layout breaks nothing, it just exhausts inodes days later.
+    """
+    import tempfile
+    from returnn.jax.checkpoint import save_checkpoint, load_checkpoint
+
+    _rf_jax()
+    in_dim, out_dim = Dim(7, name="in"), Dim(5, name="out")
+    model = rf.Linear(in_dim, out_dim)
+
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        path = f"{tmp_dir}/model.001.orbax"
+        save_checkpoint(model, path, step=3, epoch=1)
+
+        assert os.path.isdir(path), "an Orbax checkpoint is a directory"
+        assert os.path.exists(f"{path}/manifest.ocdbt"), sorted(os.listdir(path))
+        # the metadata file the engine's existence check keys on
+        assert os.path.exists(f"{path}/_CHECKPOINT_METADATA"), sorted(os.listdir(path))
+        inodes = sum(len(dirs) + len(files) for _root, dirs, files in os.walk(path)) + 1
+        assert inodes < 40, f"{inodes} inodes for a 2-array checkpoint -- OCDBT not in use?"
+
+        restored = load_checkpoint(path)
+        assert set(restored) == {"weight", "bias"}, sorted(restored)  # no _step / _epoch
+        for name, param in model.named_parameters():
+            numpy.testing.assert_allclose(restored[name], numpy.asarray(param.raw_tensor), rtol=0, atol=0)
+
+
+def test_get_existing_models_ignores_empty_checkpoint_dir():
+    """
+    An empty checkpoint directory is not a checkpoint.
+    Pre-created job outputs and runs killed mid-save both leave one,
+    and keying on the directory would resume a fresh run from an unreadable "last" epoch.
+    """
+    import tempfile
+    from returnn.config import Config
+    from returnn.engine.base import EngineBase
+
+    _rf_jax()
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        config = Config({"backend": "jax", "model": f"{tmp_dir}/model", "num_epochs": 3, "task": "train"})
+        os.makedirs(f"{tmp_dir}/model.001.orbax")
+        os.makedirs(f"{tmp_dir}/model.001.opt.orbax")
+        assert EngineBase.get_existing_models(config) == {}
 
 
 def test_engine_batch_norm_running_stats():
@@ -1685,7 +1732,7 @@ def test_engine_continue_from_checkpoint():
         engine.init_train_from_config(train_data=make_dataset(), dev_data=make_dataset())
         engine.train()
         assert engine.epoch == 2  # after the last trained epoch
-        saved = load_checkpoint(f"{tmp_dir}/model.001.npz")
+        saved = load_checkpoint(f"{tmp_dir}/model.001.orbax")
 
         config, make_dataset = _simple_train_setup(tmp_dir, num_epochs=2)
         engine = Engine(config=config)
@@ -1790,7 +1837,7 @@ def test_engine_train_amp():
         engine.init_train_from_config(train_data=make_dataset(), dev_data=make_dataset())
         engine.train()
 
-        params = load_checkpoint(f"{tmp_dir}/model.001.npz")
+        params = load_checkpoint(f"{tmp_dir}/model.001.orbax")
         for name, value in params.items():
             assert value.dtype == numpy.float32, f"{name} is {value.dtype}, expected float32"
         scores = engine.learning_rate_control.epoch_data[1].error
