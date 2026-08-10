@@ -298,6 +298,7 @@ class Engine(EngineBase):
                 "global_train_step_end": self.global_train_step,
             }
         )
+        self._report_dev_memory_stats()
         self._maybe_stop_for_resubmission(time.time() - start_time)
         self._save_model()
         self.eval_model()
@@ -360,6 +361,26 @@ class Engine(EngineBase):
             time_multiple=self._jit_opts["time_multiple"] if self._jit_opts else 0,
             **{k: v for k, v in self._batch_opts.items() if k not in ("batch_size", "eval_batch_size", "max_seqs")},
         )
+
+    def _report_dev_memory_stats(self):
+        """
+        Device memory after the epoch, as the PyTorch engine reports it.
+
+        ``peak_bytes_in_use`` is what decides whether a batch size fits, and it is the number
+        a bucket change moves; ``bytes_in_use`` is the live set, so a gap between them is the
+        allocator holding freed blocks, not a leak.
+        """
+        for dev in jax.local_devices():
+            stats = dev.memory_stats()  # None on backends without an allocator (cpu)
+            if not stats:
+                continue
+            parts = [f"dev {dev.id}"]
+            for key in ("bytes_in_use", "peak_bytes_in_use", "bytes_reservable_limit"):
+                if key in stats:
+                    parts.append(f"{key} {stats[key] / (1024**3):.2f} GB")
+            if "num_allocs" in stats:
+                parts.append(f"num_allocs {stats['num_allocs']}")
+            print(f"epoch {self.epoch} device memory: {', '.join(parts)}", file=log.v3)
 
     def _maybe_stop_for_resubmission(self, last_epoch_wall_sec: float):
         """
