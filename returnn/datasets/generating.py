@@ -1532,8 +1532,9 @@ class TimitDataset(CachedDataset2):
         self._norm_std_dev = self._load_feature_vec(norm_std_dev)
         assert num_phones in {61, 48, 39}
         self._phone_map = {61: self.PhoneMapTo61, 48: self.PhoneMapTo48, 39: self.PhoneMapTo39}[num_phones]
-        self.labels = self._get_labels_by_phone_map(self._phone_map)
-        self.num_outputs = {"data": (self.num_inputs, 2), "classes": (len(self.labels), 1)}
+        self._phone_labels = self._get_labels_by_phone_map(self._phone_map)
+        self.labels = {"classes": self._phone_labels}
+        self.num_outputs = {"data": (self.num_inputs, 2), "classes": (len(self._phone_labels), 1)}
         self._timit_dir = timit_dir
         self._is_train = train
         self._demo_play_audio = demo_play_audio
@@ -1779,7 +1780,7 @@ class TimitDataset(CachedDataset2):
         phone_seq = self._get_phone_seq(seq_tag)
         phone_seq = [self._phone_map[p] for p in phone_seq]
         phone_seq = [p for p in phone_seq if p]
-        phone_id_seq = numpy.array([self.labels.index(p) for p in phone_seq], dtype="int32")
+        phone_id_seq = numpy.array([self._phone_labels.index(p) for p in phone_seq], dtype="int32")
         # see: https://github.com/rdadolf/fathom/blob/master/fathom/speech/preproc.py
         # and: https://groups.google.com/forum/#!topic/librosa/V4Z1HpTKn8Q
         audio, sample_rate = self._get_audio(seq_tag)
