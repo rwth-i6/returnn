@@ -1331,7 +1331,7 @@ def make_fast_baum_welch_op(**kwargs):
     return maker.make_op()
 
 
-def fast_baum_welch(am_scores, edges, weights, start_end_states, float_idx, state_buffer=None):
+def fast_baum_welch(am_scores, edges, weights, start_end_states, float_idx):
     """
     :param tf.Tensor am_scores: (time, batch, dim), in -log space
     :param tf.Tensor edges: (4,num_edges), edges of the graph (from,to,emission_idx,sequence_idx)
@@ -1339,24 +1339,25 @@ def fast_baum_welch(am_scores, edges, weights, start_end_states, float_idx, stat
     :param tf.Tensor start_end_states: (2, batch), (start,end) state idx in automaton.
         there is only one single automaton.
     :param tf.Tensor float_idx: (time, batch) -> 0 or 1 (index mask, via seq lens)
-    :param tf.Tensor|None state_buffer: (2, num_states); derived from start_end_states by default
     :return: (fwdbwd, obs_scores), fwdbwd is (time, batch, dim), obs_scores is (time, batch), in -log space
     :rtype: (tf.Tensor, tf.Tensor)
     """
-    # edges, weights, start_end_states, state_buffer = SprintAlignmentAutomataOp(self.sprint_opts)(self.network.tags)
     op = make_fast_baum_welch_op()
     float_idx = tf.cast(float_idx, tf.float32)
-    if state_buffer is None:
-        last_state_idx = tf.reduce_max(start_end_states[1])  # see get_automata_for_batch
-        with tf.control_dependencies(
-            [
-                tf_compat.v1.assert_greater_equal(
-                    last_state_idx, 0, data=["last_state_idx must be >= 0 but is:", last_state_idx]
-                )
-            ]
-        ):
-            state_buffer = tf.zeros((2, last_state_idx + 1))
-    fwdbwd, obs_scores = op(am_scores, edges, weights, start_end_states, float_idx, state_buffer)  # noqa
+    # The op takes the state count as a host scalar and allocates its state scratch itself
+    # (like fast_viterbi). An earlier version took a (2, n_states) state_buffer tensor as op
+    # input, which the kernel wrote into -- unsound, a shared/CSE-merged input corrupted
+    # concurrent op instances -- and whose content was never used anyway.
+    last_state_idx = tf.reduce_max(start_end_states[1])  # see get_automata_for_batch
+    with tf.control_dependencies(
+        [
+            tf_compat.v1.assert_greater_equal(
+                last_state_idx, 0, data=["last_state_idx must be >= 0 but is:", last_state_idx]
+            )
+        ]
+    ):
+        n_states = tf.cast(last_state_idx, tf.int32) + 1
+    fwdbwd, obs_scores = op(am_scores, edges, weights, start_end_states, float_idx, n_states)  # noqa
     return fwdbwd, obs_scores
 
 
@@ -1944,7 +1945,7 @@ def _debug_dumped_fast_baum_welch(prefix, postfix=".dump"):
                 "weights": None,
                 "start_end_states": None,
                 "float_idx": "index",
-                "state_buffer": None,
+                # state_buffer dumps are ignored: the op allocates its scratch itself now
             }
             args = {}
             for name, file_postfix in list(arg_names.items()):

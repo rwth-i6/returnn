@@ -3246,7 +3246,15 @@ class FastBaumWelchOp(NativeOpGenBase):
             "gradient": "disconnected",
         },
         {"name": "index", "ndim": 2, "shape": ((0, 0), (0, 1)), "need_contiguous": True, "gradient": "disconnected"},
-        {"name": "state_buffer", "ndim": 2, "shape": (2, None), "need_contiguous": True, "gradient": "disconnected"},
+        {
+            "name": "n_states",
+            "ndim": 0,
+            "shape": (),
+            "dtype": "int32",
+            "need_contiguous": True,
+            "gradient": "disconnected",
+            "host_memory": True,
+        },
     )
     out_info = (
         {"name": "output", "ndim": 3, "shape": ((0, 0), (0, 1), (0, 2)), "need_contiguous": True},
@@ -3476,7 +3484,7 @@ class FastBaumWelchOp(NativeOpGenBase):
     )
 
     c_fw_code = """
-    // am_scores, edges, weights, start_end_states, index, state_buffer* = input_names (*: inplace)
+    // am_scores, edges, weights, start_end_states, index, n_states = input_names
     // output = output_names
     assert(n_inputs  == 6);
     assert(n_outputs == 2);
@@ -3485,7 +3493,6 @@ class FastBaumWelchOp(NativeOpGenBase):
     Ndarray* weights          = inputs[2];
     Ndarray* start_end_states = inputs[3];
     Ndarray* index            = inputs[4];
-    Ndarray* state_buffer     = inputs[5];
     Ndarray* out              = *outputs[0];
     Ndarray* sum_output       = *outputs[1];
 
@@ -3495,7 +3502,6 @@ class FastBaumWelchOp(NativeOpGenBase):
     debug_print(context, weights, "weights");
     debug_print(context, start_end_states, "start_end_states");
     debug_print(context, index, "index");
-    debug_print(context, state_buffer, "state_buffer");
     */
 
     assert_cmp(Ndarray_DIMS(am_scores)[0], ==, Ndarray_DIMS(out)[0]);
@@ -3527,15 +3533,13 @@ class FastBaumWelchOp(NativeOpGenBase):
     unsigned* d_end_states = reinterpret_cast<unsigned*>(Ndarray_DEV_DATA_int32(start_end_states)
       + 1 * Ndarray_STRIDE(start_end_states, 0));
     float*    d_index             = Ndarray_DEV_DATA(index);
-    float*    d_state_buffer_prev = Ndarray_DEV_DATA(state_buffer) + 0 * Ndarray_STRIDE(state_buffer, 0);
-    float*    d_state_buffer_next = Ndarray_DEV_DATA(state_buffer) + 1 * Ndarray_STRIDE(state_buffer, 0);
     float*    d_out               = Ndarray_DEV_DATA(out);
     float*    d_sum_output        = Ndarray_DEV_DATA(sum_output);
 
     unsigned n_frames    = Ndarray_DIMS(am_scores)[0];
     unsigned n_seqs      = Ndarray_DIMS(am_scores)[1];
     unsigned n_emissions = Ndarray_DIMS(am_scores)[2];
-    unsigned n_states    = Ndarray_DIMS(state_buffer)[1];
+    unsigned n_states    = (unsigned) Ndarray_DEV_DATA_int32_scalar(inputs[5]);
     unsigned n_edges     = Ndarray_DIMS(edges)[1];
     unsigned n_threads   = 1024u;
     unsigned n_blocks    = (n_edges + n_threads - 1) / n_threads;
@@ -3546,6 +3550,14 @@ class FastBaumWelchOp(NativeOpGenBase):
 
     assert_cmp(n_frames, >, 0);
     assert_cmp(n_states, >, 0);
+    // Kernel-owned fwd/bwd state scratch, sized by the n_states host scalar input
+    // (like FastViterbiOp). An earlier version took a (2, n_states) state_buffer tensor
+    // as op input, which the kernel wrote into -- unsound: a shared/CSE-merged input
+    // corrupted concurrent op instances.
+    float* d_state_buffer_base = reinterpret_cast<float*>(device_malloc(2u * n_states * sizeof(float)));
+    if(!d_state_buffer_base) { HANDLE_LAST_ERROR(); abort(); }  // error should have been set in device_malloc
+    float* d_state_buffer_prev = d_state_buffer_base;
+    float* d_state_buffer_next = d_state_buffer_base + n_states;
     //std::cerr << "n_frames: "    << n_frames    << std::endl;
     //std::cerr << "n_seqs: "      << n_seqs      << std::endl;
     //std::cerr << "n_emissions: " << n_emissions << std::endl;
@@ -3682,6 +3694,7 @@ class FastBaumWelchOp(NativeOpGenBase):
     }
 
     device_free(d_edge_buffer);
+    device_free(d_state_buffer_base);
     if (d_state_buffer_all != NULL) {
       device_free(d_state_buffer_all);
     }
@@ -3707,7 +3720,7 @@ class FastBaumWelchPackedOp(NativeOpGenBase):
         also provides max_time (the fwd/bwd recursion length),
         which cannot be derived from the packed am_scores shape
       :param seq_starts: (batch,), int32. start offset of each seq in the total_time axis
-      :param state_buffer: (2, num_states)
+      :param n_states: scalar, int32
     outputs:
       :param output: Baum-Welch alignment, scores in -log space. 2d (total_time,dim), like am_scores
       :param sums: (max_time, batch), the frame-wise normalization sums (obs scores)
@@ -3747,7 +3760,15 @@ class FastBaumWelchPackedOp(NativeOpGenBase):
             "need_contiguous": True,
             "gradient": "disconnected",
         },
-        {"name": "state_buffer", "ndim": 2, "shape": (2, None), "need_contiguous": True, "gradient": "disconnected"},
+        {
+            "name": "n_states",
+            "ndim": 0,
+            "shape": (),
+            "dtype": "int32",
+            "need_contiguous": True,
+            "gradient": "disconnected",
+            "host_memory": True,
+        },
     )
     out_info = (
         {"name": "output", "ndim": 2, "shape": ((0, 0), (0, 1)), "need_contiguous": True},
@@ -3840,7 +3861,7 @@ class FastBaumWelchPackedOp(NativeOpGenBase):
 
     # language=C++
     c_fw_code = """
-    // am_scores, edges, weights, start_end_states, index, seq_starts, state_buffer* = input_names (*: inplace)
+    // am_scores, edges, weights, start_end_states, index, seq_starts, n_states = input_names
     // output, sums = output_names
     assert(n_inputs  == 7);
     assert(n_outputs == 2);
@@ -3850,7 +3871,6 @@ class FastBaumWelchPackedOp(NativeOpGenBase):
     Ndarray* start_end_states = inputs[3];
     Ndarray* index            = inputs[4];
     Ndarray* seq_starts       = inputs[5];
-    Ndarray* state_buffer     = inputs[6];
     Ndarray* out              = *outputs[0];
     Ndarray* sum_output       = *outputs[1];
 
@@ -3877,8 +3897,6 @@ class FastBaumWelchPackedOp(NativeOpGenBase):
       + 1 * Ndarray_STRIDE(start_end_states, 0));
     float*    d_index             = Ndarray_DEV_DATA(index);
     unsigned* d_seq_starts        = reinterpret_cast<unsigned*>(Ndarray_DEV_DATA_int32(seq_starts));
-    float*    d_state_buffer_prev = Ndarray_DEV_DATA(state_buffer) + 0 * Ndarray_STRIDE(state_buffer, 0);
-    float*    d_state_buffer_next = Ndarray_DEV_DATA(state_buffer) + 1 * Ndarray_STRIDE(state_buffer, 0);
     float*    d_out               = Ndarray_DEV_DATA(out);
     float*    d_sum_output        = Ndarray_DEV_DATA(sum_output);
 
@@ -3886,7 +3904,7 @@ class FastBaumWelchPackedOp(NativeOpGenBase):
     unsigned n_seqs      = Ndarray_DIMS(index)[1];
     unsigned n_total     = Ndarray_DIMS(am_scores)[0];
     unsigned n_emissions = Ndarray_DIMS(am_scores)[1];
-    unsigned n_states    = Ndarray_DIMS(state_buffer)[1];
+    unsigned n_states    = (unsigned) Ndarray_DEV_DATA_int32_scalar(inputs[6]);
     unsigned n_edges     = Ndarray_DIMS(edges)[1];
     unsigned n_threads   = 1024u;
     unsigned n_blocks    = (n_edges + n_threads - 1) / n_threads;
@@ -3895,6 +3913,11 @@ class FastBaumWelchPackedOp(NativeOpGenBase):
 
     assert_cmp(n_frames, >, 0);
     assert_cmp(n_states, >, 0);
+    // Kernel-owned fwd/bwd state scratch, like FastBaumWelchOp / FastViterbiOp
+    float* d_state_buffer_base = reinterpret_cast<float*>(device_malloc(2u * n_states * sizeof(float)));
+    if(!d_state_buffer_base) { HANDLE_LAST_ERROR(); abort(); }  // error should have been set in device_malloc
+    float* d_state_buffer_prev = d_state_buffer_base;
+    float* d_state_buffer_next = d_state_buffer_base + n_states;
 
     // initialize edge buffer
     float* d_edge_buffer = reinterpret_cast<float*>(device_malloc(n_edges * n_frames * sizeof(float)));
@@ -3985,6 +4008,7 @@ class FastBaumWelchPackedOp(NativeOpGenBase):
     #endif
 
     device_free(d_edge_buffer);
+    device_free(d_state_buffer_base);
   """
 
     c_bw_code = None
@@ -4042,7 +4066,15 @@ class MultiEndFastBaumWelchOp(NativeOpGenBase):
             "gradient": "disconnected",
         },
         {"name": "index", "ndim": 2, "shape": ((0, 0), (0, 1)), "need_contiguous": True, "gradient": "disconnected"},
-        {"name": "state_buffer", "ndim": 2, "shape": (2, None), "need_contiguous": True, "gradient": "disconnected"},
+        {
+            "name": "n_states",
+            "ndim": 0,
+            "shape": (),
+            "dtype": "int32",
+            "need_contiguous": True,
+            "gradient": "disconnected",
+            "host_memory": True,
+        },
     )
     out_info = (
         {"name": "output", "ndim": 3, "shape": ((0, 0), (0, 1), (0, 2)), "need_contiguous": True},
@@ -4076,7 +4108,7 @@ class MultiEndFastBaumWelchOp(NativeOpGenBase):
 
     c_fw_code = """
     // am_scores, edges, weights, start_states, end_states, end_state_weights,
-    //   index, state_buffer* = input_names (*: inplace)
+    //   index, n_states = input_names
     // output = output_names
     assert(n_inputs  == 8);
     assert(n_outputs == 2);
@@ -4087,7 +4119,6 @@ class MultiEndFastBaumWelchOp(NativeOpGenBase):
     Ndarray* end_states        = inputs[4];
     Ndarray* end_state_weights = inputs[5];
     Ndarray* index             = inputs[6];
-    Ndarray* state_buffer      = inputs[7];
     Ndarray* out               = *outputs[0];
     Ndarray* sum_output        = *outputs[1];
 
@@ -4119,15 +4150,13 @@ class MultiEndFastBaumWelchOp(NativeOpGenBase):
     unsigned* d_end_states        = reinterpret_cast<unsigned*>(Ndarray_DEV_DATA_int32(end_states));
     float*    d_end_state_weights = Ndarray_DEV_DATA(end_state_weights);
     float*    d_index             = Ndarray_DEV_DATA(index);
-    float*    d_state_buffer_prev = Ndarray_DEV_DATA(state_buffer) + 0 * Ndarray_STRIDE(state_buffer, 0);
-    float*    d_state_buffer_next = Ndarray_DEV_DATA(state_buffer) + 1 * Ndarray_STRIDE(state_buffer, 0);
     float*    d_out               = Ndarray_DEV_DATA(out);
     float*    d_sum_output        = Ndarray_DEV_DATA(sum_output);
 
     unsigned n_frames       = Ndarray_DIMS(am_scores)[0];
     unsigned n_seqs         = Ndarray_DIMS(am_scores)[1];
     unsigned n_emissions    = Ndarray_DIMS(am_scores)[2];
-    unsigned n_states       = Ndarray_DIMS(state_buffer)[1];
+    unsigned n_states       = (unsigned) Ndarray_DEV_DATA_int32_scalar(inputs[7]);
     unsigned n_edges        = Ndarray_DIMS(edges)[1];
     unsigned n_start_states = Ndarray_DIMS(start_states)[0];
     unsigned n_end_states   = Ndarray_DIMS(end_states)[0];
@@ -4139,6 +4168,10 @@ class MultiEndFastBaumWelchOp(NativeOpGenBase):
     unsigned index_stride    = Ndarray_STRIDE(index, 0);
 
     assert(n_frames > 0);
+    // Kernel-owned fwd/bwd state scratch, like FastBaumWelchOp / FastViterbiOp
+    float* d_state_buffer_base = reinterpret_cast<float*>(device_malloc(2u * n_states * sizeof(float)));
+    float* d_state_buffer_prev = d_state_buffer_base;
+    float* d_state_buffer_next = d_state_buffer_base + n_states;
 
 //    std::cerr << "n_frames: "       << n_frames       << std::endl;
 //    std::cerr << "n_seqs: "         << n_seqs         << std::endl;
@@ -4274,6 +4307,7 @@ class MultiEndFastBaumWelchOp(NativeOpGenBase):
     }
 
     device_free(d_edge_buffer);
+    device_free(d_state_buffer_base);
     if (d_state_buffer_all != NULL) {
       device_free(d_state_buffer_all);
     }

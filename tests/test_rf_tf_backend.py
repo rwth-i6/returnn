@@ -621,6 +621,48 @@ def test_full_model_torch_checkpoint_parity():
     _assert_all_close("checkpoint parity", out_tf, out_pt, rtol={"ctc": 2e-2})
 
 
+def test_native_ctc_two_instances_joint_fetch():
+    # Two native CTC instances fetched in ONE session.run used to corrupt each other
+    # (both sometimes returning the no-path sentinel 0 for valid sequences):
+    # the FastBaumWelch scratch state_buffer was an op INPUT the kernel wrote into,
+    # and CSE merged the identical zeros subgraphs, so concurrent instances shared one buffer.
+    # The op now takes only the buffer SHAPE and allocates kernel-owned scratch (is_buffer).
+    import tensorflow as tf
+    import returnn.tf.compat as tf_compat
+    from returnn.tf import native_op as tf_native_op
+
+    rng = numpy.random.default_rng(3)
+    n_time, n_batch, dim, n_targets = 6, 5, 12, 3
+    input_lens = numpy.array([6, 5, 6, 4, 5], "int32")
+    target_lens = numpy.array([3, 2, 3, 3, 3], "int32")
+    # no adjacent repeats -> every seq has a valid alignment
+    targets_np = numpy.stack([rng.permutation(dim - 1)[:n_targets] for _ in range(n_batch)]).astype("int32")
+
+    def _make(logits_np):
+        return tf_native_op.ctc_loss(
+            logits=tf.constant(logits_np),
+            logits_seq_lens=tf.constant(input_lens),
+            logits_time_major=False,
+            targets=tf.constant(targets_np),
+            targets_seq_lens=tf.constant(target_lens),
+            blank_index=dim - 1,
+            zero_infinity=False,
+        )
+
+    logits_a = rng.standard_normal((n_batch, n_time, dim)).astype("float32")
+    logits_b = rng.standard_normal((n_batch, n_time, dim)).astype("float32")
+    with tf_compat.v1.Graph().as_default(), tf_compat.v1.Session() as session:
+        loss_a, loss_b = _make(logits_a), _make(logits_b)
+        sep_a = session.run(loss_a)
+        sep_b = session.run(loss_b)
+        for _ in range(3):  # the corruption was schedule-dependent, repeat a few times
+            joint_a, joint_b = session.run((loss_a, loss_b))
+            numpy.testing.assert_allclose(sep_a, joint_a, rtol=0, atol=0, err_msg="a: joint fetch differs")
+            numpy.testing.assert_allclose(sep_b, joint_b, rtol=0, atol=0, err_msg="b: joint fetch differs")
+    assert numpy.all(numpy.isfinite(sep_a)) and numpy.all(sep_a > 0)
+    assert numpy.all(numpy.isfinite(sep_b)) and numpy.all(sep_b > 0)
+
+
 def test_engine_eval_no_dropout():
     # The engine builds ONE graph, so the train flag has to be dynamic: eval must run without
     # dropout. With dropout p=0.9 a train-graph eval would be far off, and eval is deterministic

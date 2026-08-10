@@ -578,7 +578,7 @@ class _FastBaumWelchScoresAutogradFunc(torch.autograd.Function):
         edges: torch.Tensor,
         weights: torch.Tensor,
         start_end_states: torch.Tensor,
-        state_buffer: Optional[torch.Tensor] = None,
+        n_states: Optional[int] = None,
     ) -> torch.Tensor:
         """
         :return: full-sum loss per seq (batch,)
@@ -593,7 +593,7 @@ class _FastBaumWelchScoresAutogradFunc(torch.autograd.Function):
             edges=edges,
             weights=weights,
             start_end_states=start_end_states,
-            state_buffer=state_buffer,
+            n_states=n_states,
         )
         loss = obs_scores[0]  # (batch,)
         ctx.grad_wrt_softmax_in = logits_normalize
@@ -635,7 +635,7 @@ def get_ctc_fsa_fast_bw(
     See :class:`NativeOp.GetCtcFsaFastBwOp` (and :class:`NativeOp.GetCtcFsaFastBwPackedOp`).
     Generates a FSA with CTC topology. The output format is compatible to :func:`fast_baum_welch`.
 
-    :param targets: shape (batch,time), int32
+    :param targets: shape (batch,target_time), int32
     :param seq_lens: shape (batch), int32
     :param blank_idx: vocab index of the blank symbol
     :param label_loop: True -> normal CTC; False -> RNA-like
@@ -781,7 +781,7 @@ def fast_baum_welch(
     edges: torch.Tensor,
     weights: torch.Tensor,
     start_end_states: torch.Tensor,
-    state_buffer: Optional[torch.Tensor] = None,
+    n_states: Optional[int] = None,
 ) -> Tuple[torch.Tensor, torch.Tensor]:
     """
     :param am_scores: (time, batch, dim), in -log space
@@ -790,19 +790,19 @@ def fast_baum_welch(
     :param weights: (num_edges,), weights of the edges
     :param start_end_states: (2, batch), (start,end) state idx in automaton.
         there is only one single automaton.
-    :param state_buffer: (2, num_states)
+    :param n_states: state count of the automaton. derived from start_end_states by default
+        (a data-dependent device read, i.e. a sync -- pass it if you know it statically).
+        The op allocates its state scratch itself, like fast_viterbi;
+        an earlier version took a writable state_buffer tensor as op input, which was unsound.
     :return: (fwdbwd, obs_scores), fwdbwd is (time, batch, dim), obs_scores is (time, batch), in -log space
     """
-    from .assert_ import assert_
-
-    # edges, weights, start_end_states, state_buffer = SprintAlignmentAutomataOp(self.sprint_opts)(self.network.tags)
     op = make_fast_baum_welch_op()
     float_idx = seq_mask.float()
-    if state_buffer is None:
-        last_state_idx = start_end_states[1].max()  # see get_automata_for_batch
-        assert_(last_state_idx >= 0, "fast_baum_welch last_state_idx must be >= 0")
-        state_buffer = torch.zeros((2, last_state_idx + 1))
-    fwdbwd, obs_scores = op(am_scores, edges, weights, start_end_states, float_idx, state_buffer)  # noqa
+    if n_states is None:
+        last_state_idx = int(start_end_states[1].max())  # see get_automata_for_batch
+        assert last_state_idx >= 0, f"fast_baum_welch last_state_idx must be >= 0, got {last_state_idx}"
+        n_states = last_state_idx + 1
+    fwdbwd, obs_scores = op(am_scores, edges, weights, start_end_states, float_idx, n_states)  # noqa
     return fwdbwd, obs_scores
 
 
@@ -844,7 +844,7 @@ def ctc_loss_packed(
     :param seq_starts: (batch,), int32. start offset of each seq in the total_time axis
     :param logits_seq_lens: shape (batch,) of int32|int64
     :param max_seq_len: max of logits_seq_lens. pass it if known, to avoid a device sync
-    :param targets: batch-major, [batch,time]
+    :param targets: batch-major, [batch,target_time]
     :param targets_seq_lens: (batch,)
     :param label_loop: (ctc_merge_repeated in tf.nn.ctc_loss)
     :param logits_normalize: apply log_softmax on logits (default)
@@ -870,13 +870,13 @@ def ctc_loss_packed(
         edges_bound=edges_bound,
     )
     seq_mask = sequence_mask_time_major(logits_seq_lens, maxlen=max_seq_len)  # (time,batch), bool
-    # static state-buffer size, see the construct_kernel state numbering: (2*n_time+3) states per seq.
-    # (the default alloc in fast_baum_welch_packed sizes by start_end_states.max(),
+    # static state count, see the construct_kernel state numbering: (2*n_time+3) states per seq.
+    # (the default in fast_baum_welch_packed sizes by start_end_states.max(),
     # a data-dependent device read -- a sync, and illegal under CUDA-graph capture)
     n_batch, n_tgt_time = targets.shape
-    state_buffer = torch.zeros((2, n_batch * (2 * n_tgt_time + 3)), device=logits.device)
+    n_states = n_batch * (2 * n_tgt_time + 3)
     loss = _FastBaumWelchScoresPackedAutogradFunc.apply(
-        logits, logits_normalize, seq_starts, seq_mask, edges, weights, start_end_states, state_buffer
+        logits, logits_normalize, seq_starts, seq_mask, edges, weights, start_end_states, n_states
     )
     return loss
 
@@ -897,7 +897,7 @@ class _FastBaumWelchScoresPackedAutogradFunc(torch.autograd.Function):
         edges: torch.Tensor,
         weights: torch.Tensor,
         start_end_states: torch.Tensor,
-        state_buffer: Optional[torch.Tensor] = None,
+        n_states: Optional[int] = None,
     ) -> torch.Tensor:
         """
         :return: full-sum loss per seq (batch,)
@@ -913,7 +913,7 @@ class _FastBaumWelchScoresPackedAutogradFunc(torch.autograd.Function):
             edges=edges,
             weights=weights,
             start_end_states=start_end_states,
-            state_buffer=state_buffer,
+            n_states=n_states,
         )
         loss = obs_scores[0]  # (batch,)
         # map every frame of the (possibly gapped) packed buffer to its seq, to scale grads by the
@@ -964,7 +964,7 @@ def fast_baum_welch_packed(
     edges: torch.Tensor,
     weights: torch.Tensor,
     start_end_states: torch.Tensor,
-    state_buffer: Optional[torch.Tensor] = None,
+    n_states: Optional[int] = None,
 ) -> Tuple[torch.Tensor, torch.Tensor]:
     """
     Packed variant of :func:`fast_baum_welch`, see :class:`NativeOp.FastBaumWelchPackedOp`.
@@ -976,19 +976,19 @@ def fast_baum_welch_packed(
     :param weights: (num_edges,), weights of the edges
     :param start_end_states: (2, batch), (start,end) state idx in automaton.
         there is only one single automaton.
-    :param state_buffer: (2, num_states)
+    :param n_states: state count of the automaton. derived from start_end_states by default
+        (a data-dependent device read, i.e. a sync, and illegal under CUDA-graph capture --
+        pass it if you know it statically, as :func:`ctc_loss_packed` does).
     :return: (fwdbwd, obs_scores), fwdbwd is (total_time, dim), obs_scores is (max_time, batch), in -log space
     """
-    from .assert_ import assert_
-
     op = make_fast_baum_welch_packed_op()
     float_idx = seq_mask.float()
-    if state_buffer is None:
-        last_state_idx = start_end_states[1].max()  # see get_automata_for_batch
-        assert_(last_state_idx >= 0, "fast_baum_welch_packed last_state_idx must be >= 0")
-        state_buffer = torch.zeros((2, last_state_idx + 1), device=am_scores.device)
+    if n_states is None:
+        last_state_idx = int(start_end_states[1].max())  # see get_automata_for_batch
+        assert last_state_idx >= 0, f"fast_baum_welch_packed last_state_idx must be >= 0, got {last_state_idx}"
+        n_states = last_state_idx + 1
     seq_starts = seq_starts.to(torch.int32)
-    fwdbwd, obs_scores = op(am_scores, edges, weights, start_end_states, float_idx, seq_starts, state_buffer)  # noqa
+    fwdbwd, obs_scores = op(am_scores, edges, weights, start_end_states, float_idx, seq_starts, n_states)  # noqa
     return fwdbwd, obs_scores
 
 

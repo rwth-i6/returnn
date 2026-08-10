@@ -97,7 +97,7 @@ def test_fast_bw_uniform():
     op = make_fast_baum_welch_op(
         compiler_opts=dict(verbose=True)
     )  # will be cached, used inside :func:`fast_baum_welch`
-    # args: (am_scores, edges, weights, start_end_states, float_idx, state_buffer)
+    # args: (am_scores, edges, weights, start_end_states, float_idx, n_states)
     print("Op:", op)
     n_batch = 3
     seq_len = 7
@@ -1412,7 +1412,7 @@ def test_fast_baum_welch_fake_tensor_mode():
     from torch._subclasses.fake_tensor import FakeTensor, FakeTensorMode
 
     op = make_fast_baum_welch_op(compiler_opts=dict(verbose=True))
-    # args: (am_scores, edges, weights, start_end_states, float_idx, state_buffer)
+    # args: (am_scores, edges, weights, start_end_states, float_idx, n_states)
     n_batch, seq_len, n_classes = 3, 7, 5
     fsa = FastBwFsaShared()
     for i in range(n_classes):
@@ -1425,15 +1425,14 @@ def test_fast_baum_welch_fake_tensor_mode():
     am_scores = torch.full((seq_len, n_batch, n_classes), float(numpy.log(n_classes)))  # -log space, uniform
     float_idx = torch.ones((seq_len, n_batch), dtype=torch.float32)
     n_states = int(start_end_states.max()) + 1
-    state_buffer = torch.zeros((2, n_states), dtype=torch.float32)
 
-    args = (am_scores, edges, weights, start_end_states, float_idx, state_buffer)
-    fwdbwd_real, obs_scores_real = op(*args)
+    tensor_args = (am_scores, edges, weights, start_end_states, float_idx)
+    fwdbwd_real, obs_scores_real = op(*tensor_args, n_states)
 
     mode = FakeTensorMode()
-    fake_args = [mode.from_tensor(t) for t in args]
+    fake_args = [mode.from_tensor(t) for t in tensor_args]
     with mode:
-        fwdbwd_fake, obs_scores_fake = op(*fake_args)
+        fwdbwd_fake, obs_scores_fake = op(*fake_args, n_states)
     for fake, real in [(fwdbwd_fake, fwdbwd_real), (obs_scores_fake, obs_scores_real)]:
         assert isinstance(fake, FakeTensor)
         assert fake.shape == real.shape and fake.dtype == real.dtype
