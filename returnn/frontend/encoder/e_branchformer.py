@@ -212,12 +212,17 @@ class FeedForwardConvGated(rf.Module):
             gate_activation = rf.identity
         self.gate_activation = _make_activation(gate_activation)
 
-        self.linear_ff = rf.Linear(out_dim, 2 * ff_dim, with_bias=with_bias)  # x2 to split for gating
-        self.norm = make_norm(norm, ff_dim)
+        self.linear_ff = rf.Linear(out_dim, 2 * self.ff_dim, with_bias=with_bias)  # x2 to split for gating
+        self.norm = make_norm(norm, self.ff_dim)
         self.conv = rf.Conv1d(  # depthwise convolution
-            ff_dim, ff_dim, filter_size=kernel_size, groups=ff_dim.dimension, padding="same", with_bias=with_bias
+            self.ff_dim,
+            self.ff_dim,
+            filter_size=kernel_size,
+            groups=self.ff_dim.dimension,
+            padding="same",
+            with_bias=with_bias,
         )
-        self.linear_out = rf.Linear(ff_dim, out_dim, with_bias=with_bias)
+        self.linear_out = rf.Linear(self.ff_dim, out_dim, with_bias=with_bias)
 
     def __call__(self, x: Tensor, *, spatial_dim: Dim) -> Tensor:
         """forward"""
