@@ -1761,7 +1761,9 @@ def _assert_all_close(
             failed.append(key)
     print(f"{name}: TF vs PT")
     print("\n".join(lines))
-    assert not failed, f"{name}: {failed} differ beyond tolerance, see the table above"
+    # the full table also goes into the assert message: the pytest summary shows only that,
+    # and a failure report without the magnitudes is useless
+    assert not failed, f"{name}: {failed} differ beyond tolerance\n" + "\n".join(lines)
 
 
 # float32 through a model this deep, compared across two frameworks and two BLAS/kernel stacks.
