@@ -84,6 +84,7 @@ def init(**kwargs):
     if "name" in kwargs and kwargs["name"] == "Sprint.PythonControl":
         return PythonControl.init(**kwargs)
     _init_python_trainer(**kwargs)
+    return None
 
 
 def _parse_config_str(config_str):
