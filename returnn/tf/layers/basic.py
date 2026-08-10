@@ -3049,6 +3049,8 @@ class RandomLayer(LayerBase):
             assert static is None or static is False, "%s: state is given, thus it is not static" % self
             assert seed is None, "%s: explicit state and seed are mutually exclusive" % self
             state_ = explicit_state.output.placeholder
+            # auto_update_state is tri-state: None means "not specified"
+            # noinspection PySimplifyBooleanCheck
             if auto_update_state is True:
                 state_ = tf_util.get_variable_from_tensor(state_)
                 if not isinstance(state_, tf.Variable):

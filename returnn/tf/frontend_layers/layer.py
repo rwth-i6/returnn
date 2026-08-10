@@ -1011,6 +1011,8 @@ class _ReturnnConfigSerializer:
             imports[f"import {obj.__module__}"] = None
             return cls._CodeWrapper(f"{obj.__module__}.{obj.__qualname__}", obj)
         if isinstance(obj, dict):
+            # the transformed keys stay hashable (str/int/tuple, or a _CodeWrapper)
+            # noinspection PyUnhashable
             return {
                 cls._post_process_transform(key, imports=imports): cls._post_process_transform(value, imports=imports)
                 for key, value in obj.items()
@@ -1490,6 +1492,8 @@ class ReturnnDimTagsProxy:
                 self.reserved_names.add(name)
                 return ref
             if isinstance(value, dict):
+                # the mapped keys stay hashable (str/int/tuple, or a DimRefProxy)
+                # noinspection PyUnhashable
                 return {
                     _map(path + (key, "key"), key): _map(path + (key, "value"), value_) for key, value_ in value.items()
                 }

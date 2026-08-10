@@ -739,6 +739,8 @@ class ExternSprintDataset(SprintDatasetBase):
         """
         if self.child_pid:
             expected_exit_status = 0 if wait_thread and not self.python_exit else None
+            # _join_child is tri-state: None means "unknown", so `is False` is not `not`
+            # noinspection PySimplifyBooleanCheck
             if self._join_child(wait=False, expected_exit_status=expected_exit_status) is False:  # Not yet terminated.
                 interrupt = not self.reached_final_seq_seen_all or not wait_thread
                 if interrupt:

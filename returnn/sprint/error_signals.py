@@ -382,6 +382,7 @@ class SprintInstancePool:
             if sprint_opts in cls.global_instances:
                 return cls.global_instances[sprint_opts]
             instance = SprintInstancePool(sprint_opts=sprint_opts)
+            # noinspection PyUnhashable
             cls.global_instances[sprint_opts] = instance
             return instance
 

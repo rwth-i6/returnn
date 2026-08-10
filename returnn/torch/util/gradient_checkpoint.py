@@ -574,7 +574,7 @@ def _custom_saved_tensors_hooks_enter(self: torch.autograd.graph.saved_tensors_h
     # The callbacks might have unregistered us. Only add to the stack if we are still active.
     if _custom_saved_tensors_hooks_tls_ctx.active:
         _custom_saved_tensors_hooks_tls_ctx.stack.append(self)
-    return _orig_saved_tensors_hooks_enter(self)
+    _orig_saved_tensors_hooks_enter(self)
 
 
 def _custom_saved_tensors_hooks_exit(

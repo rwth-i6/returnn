@@ -79,6 +79,7 @@ class ConformerConvBlock(rf.Module):
         x_conv1 = self.positionwise_conv1(inp)
         x_act, _ = rf.gating(x_conv1)
         x_depthwise_conv, _ = self.depthwise_conv(x_act, in_spatial_dim=spatial_dim)
+        # noinspection PyArgumentList
         x_normed = self.norm(x_depthwise_conv, **({"spatial_dim": spatial_dim} if self._norm_wants_spatial_dim else {}))
         x_swish = rf.swish(x_normed)
         x_conv2 = self.positionwise_conv2(x_swish)

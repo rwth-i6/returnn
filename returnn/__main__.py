@@ -24,7 +24,6 @@ import sys
 import time
 from typing import TYPE_CHECKING, Optional, Union, Any, Sequence, Dict
 import numpy
-import returnn
 from returnn.log import log
 from returnn.config import Config, get_global_config
 from returnn.datasets import Dataset, init_dataset, init_dataset_via_str
