@@ -57,6 +57,8 @@ class Updater:
             self.gradient_clip_global_norm = config.float("gradient_clip_global_norm", 0.0) or None
         if config:
             _check_unsupported_grad_opts(config)
+        # log_grad_norm: True means the 2-norm, or give p directly, as the PyTorch updater reads it
+        self.log_grad_norm_p: Optional[float] = _parse_log_grad_norm(config) if config else None
         self.learning_rate_function = config.typed_value("dynamic_learning_rate", None) if config else None
         if self.learning_rate_function is not None:
             if not callable(self.learning_rate_function):
@@ -128,6 +130,43 @@ class Updater:
         updates, opt_state = self._optimizer.update(list(grads), opt_state, list(params))
         updates = [u * learning_rate for u in updates]
         return optax.apply_updates(list(params), updates), opt_state
+
+
+def global_grad_norm(grads: Sequence[Any], *, p: float) -> Any:
+    """
+    :param grads: the gradients, as raw arrays
+    :param p: the norm order
+    :return: the global p-norm over all gradients, as one scalar
+
+    PRE-clip, as the PyTorch engine reports ``grad_norm:pN``:
+    the raw gradients, before noise or clipping touch them.
+    """
+    import jax.numpy as jnp
+
+    if p == 2:  # the common case, and the numerically stable one
+        return jnp.sqrt(sum(jnp.sum(jnp.square(g)) for g in grads))
+    return sum(jnp.sum(jnp.abs(g) ** p) for g in grads) ** (1.0 / p)
+
+
+def _parse_log_grad_norm(config: Config) -> Optional[float]:
+    """
+    :param config: ``log_grad_norm``: True (meaning p=2), or the order p directly
+    :return: the norm order, or None when off
+    """
+    value = config.opt_typed_value("log_grad_norm", False)
+    if isinstance(value, str):
+        if value.lower() not in ("true", "false", "none"):
+            raise ValueError(f"JAX updater: invalid log_grad_norm {value!r}")
+        value = {"true": True, "false": False, "none": None}[value.lower()]
+    if value is None or value is False:
+        return None
+    if value is True:
+        return 2.0
+    if isinstance(value, (int, float)):
+        if value <= 0:
+            raise ValueError(f"JAX updater: log_grad_norm {value} must be > 0")
+        return float(value)
+    raise TypeError(f"JAX updater: invalid log_grad_norm {value!r} of type {type(value)}")
 
 
 def _make_optimizer(
@@ -229,7 +268,6 @@ _UnsupportedGradOpts = [
     "maximize_grad_norm",
     "gradient_nan_inf_filter",
     "num_allowed_consec_invalid_gradient_steps",
-    "log_grad_norm",
 ]
 
 

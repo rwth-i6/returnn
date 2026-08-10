@@ -22,6 +22,7 @@ that costs one recompile per epoch.
 from __future__ import annotations
 from typing import Optional, Union, Any, Dict, List, Tuple
 import os
+import socket
 import time
 import shutil
 
@@ -45,7 +46,7 @@ from .data import (
     batch_to_jax_raws,
 )
 from .frontend._backend import JaxBackend, _device_from_str
-from .updater import Updater
+from .updater import Updater, global_grad_norm
 from . import checkpoint as _checkpoint
 
 
@@ -104,6 +105,9 @@ class Engine(EngineBase):
         # Scoped to the step (like torch.autocast is), not set globally, so nothing outside sees it.
         if self._jit_opts is not None:
             print(f"JAX engine: compiled step, {self._jit_opts}", file=log.v3)
+        # Diagnostics, the same ones the PyTorch engine has, so the logs of a JAX run and a torch
+        # run parse identically (the throughput tooling reads these lines).
+        self._log_batch_size = config.bool("log_batch_size", False) and log.verbose[5]
         amp = config.value("jax_amp", None)
         self._amp_policy: Optional[rf.AmpPolicy] = rf.AmpPolicy(compute_dtype=amp) if amp else None
         if self._amp_policy:
@@ -187,6 +191,25 @@ class Engine(EngineBase):
         Learning rate and random seed for this (sub)epoch.
         """
         self.learning_rate = self.learning_rate_control.get_learning_rate_for_epoch(self.epoch)
+        # The PyTorch engine's fields, above all the learning rate the epoch actually ran at:
+        # the schedule makes it a function of the step, so it is otherwise not recoverable.
+        self.learning_rate_control.epoch_data[self.epoch].meta.update(
+            {
+                "global_train_step": self.global_train_step,
+                "effective_learning_rate": self._updater.get_effective_learning_rate(
+                    learning_rate=self.learning_rate,
+                    global_train_step=self.global_train_step,
+                    epoch=self.epoch,
+                    epoch_continuous=self.epoch - 1,
+                ),
+                "returnn": util.describe_returnn_version(),
+                "jax": jax.__version__,
+                "time": time.strftime("%Y-%m-%d-%H-%M-%S (UTC%z)"),
+                "hostname": socket.gethostname(),
+                "device": str(rf.get_default_device()),
+                "cpu": util.get_cpu_model_name(),
+            }
+        )
         # Same seeding logic as the other engines: the epoch and step take part,
         # so dropout and dataset shuffling differ per epoch but stay reproducible.
         random_seed = self.config.int("random_seed", 42)
@@ -200,22 +223,26 @@ class Engine(EngineBase):
         """
         print(f"start epoch {self.epoch} with learning rate {self.learning_rate} ...", file=log.v3)
         start_time = time.time()
+        # summed losses and summed normalization factors, divided into a score at the end
         accumulated: Dict[str, float] = {}
+        accumulated_norms: Dict[str, float] = {}
         num_steps = 0
         # The RNG stream goes through the step as a value, so take it out of the backend here
         # and put the advanced one back at the end of the epoch.
         self._rng_key = self._commit_one(JaxBackend._get_rng_key_())
 
         pending_losses: Optional[Dict[str, Any]] = None  # of the step still running on the device
+        pending_log: Optional[Dict[str, Any]] = None  # what to log about it, read at the same time
         for batch_raws, complete_frac in self._iter_batches(self.train_dataset, train=True):
             # Read the PREVIOUS step's losses here, not right after issuing it. JAX dispatch is
             # async, so producing the batch above already ran on the host while the device was still
             # working on that step; reading a loss blocks, and reading it any earlier would put the
             # host pipeline (measured 0.16 s) and the step (0.105 s) back to back instead of overlapping.
             if pending_losses is not None:
-                for name, value in pending_losses.items():
-                    accumulated[name] = accumulated.get(name, 0.0) + float(value)
-                pending_losses = None
+                _accumulate_losses(pending_losses, sums=accumulated, norms=accumulated_norms)
+                if pending_log:
+                    print(_format_step_log(self.epoch, pending_losses, pending_log), file=log.v5)
+                pending_losses, pending_log = None, None
             # The LR of the STEP: the epoch-level value, put through the config's schedule if it has one.
             learning_rate = self._updater.get_effective_learning_rate(
                 learning_rate=self.learning_rate,
@@ -223,7 +250,7 @@ class Engine(EngineBase):
                 epoch=self.epoch,
                 epoch_continuous=(self.epoch - 1 + complete_frac) if complete_frac is not None else None,
             )
-            train_raws, other_raws, self._opt_state, self._rng_key, loss, losses = self._train_step(
+            train_raws, other_raws, self._opt_state, self._rng_key, loss, losses, grad_norm = self._train_step(
                 [self._params[i].raw_tensor for i in self._train_param_idx],
                 [self._params[i].raw_tensor for i in self._other_param_idx],
                 self._step_raws(batch_raws),
@@ -238,23 +265,40 @@ class Engine(EngineBase):
             # The dims of the templates hold what the step filled in; after a compiled step that is
             # a tracer of a finished trace, which any later use would fail on.
             reset_extern_data_dims(self.extern_data)
+            # Everything to log about this step, read back at the deferred point below so that
+            # reading it costs no extra device sync (see the comment there).
             pending_losses = losses
+            pending_log = {"step": num_steps}
+            if self._updater.log_grad_norm_p:
+                pending_log[f"grad_norm:p{self._updater.log_grad_norm_p:g}"] = grad_norm
+            if self._log_batch_size:
+                pending_log.update(_batch_size_info(batch_raws))
             num_steps += 1
             self.global_train_step += 1
             if num_steps % 100 == 0:
                 print(f"ep {self.epoch} step {num_steps}, loss {float(loss):.5f}", file=log.v4)
 
         if pending_losses is not None:  # the last step of the epoch
-            for name, value in pending_losses.items():
-                accumulated[name] = accumulated.get(name, 0.0) + float(value)
+            _accumulate_losses(pending_losses, sums=accumulated, norms=accumulated_norms)
+            if pending_log:
+                print(_format_step_log(self.epoch, pending_losses, pending_log), file=log.v5)
         JaxBackend._rng_key = self._rng_key
-        scores = {name: value / max(num_steps, 1) for name, value in accumulated.items()}
+        elapsed = time.time() - start_time
+        scores = {name: value / accumulated_norms[name] for name, value in accumulated.items()}
         print(
-            f"epoch {self.epoch} finished: {num_steps} steps, {_format_scores(scores)},"
-            f" {time.time() - start_time:.1f} sec",
-            file=log.v3,
+            f"epoch {self.epoch} finished: {num_steps} steps, {_format_scores(scores)}, {elapsed:.1f} sec", file=log.v3
         )
-        self.learning_rate_control.set_epoch_error(self.epoch, {f"train_score_{k}": v for k, v in scores.items()})
+        # train_loss_, not train_score_: the key names are the PyTorch engine's, so that a run of
+        # either engine can be read by the same downstream code and compared key by key.
+        self.learning_rate_control.set_epoch_error(self.epoch, {f"train_loss_{k}": v for k, v in scores.items()})
+        self.learning_rate_control.epoch_data[self.epoch].meta.update(
+            {
+                "epoch_num_train_steps": num_steps,
+                "epoch_train_time_secs": round(elapsed),
+                "global_train_step_end": self.global_train_step,
+            }
+        )
+        self._maybe_stop_for_resubmission(time.time() - start_time)
         self._save_model()
         self.eval_model()
         self.learning_rate_control.save()
@@ -267,6 +311,7 @@ class Engine(EngineBase):
         """
         for name, dataset in self.eval_datasets.items():
             accumulated: Dict[str, float] = {}
+            accumulated_norms: Dict[str, float] = {}
             num_steps = 0
             for batch_raws in self._iter_batches(dataset, train=False):
                 _, (losses, _) = self._forward(
@@ -277,10 +322,9 @@ class Engine(EngineBase):
                     self.epoch,
                     False,
                 )
-                for loss_name, value in losses.items():
-                    accumulated[loss_name] = accumulated.get(loss_name, 0.0) + float(value)
+                _accumulate_losses(losses, sums=accumulated, norms=accumulated_norms)
                 num_steps += 1
-            scores = {f"{name}_score_{k}": v / max(num_steps, 1) for k, v in accumulated.items()}
+            scores = {f"{name}_loss_{k}": v / accumulated_norms[k] for k, v in accumulated.items()}
             print(f"epoch {self.epoch} {name}: {_format_scores(scores)}", file=log.v3)
             self.learning_rate_control.set_epoch_error(self.epoch, scores)
 
@@ -316,6 +360,38 @@ class Engine(EngineBase):
             time_multiple=self._jit_opts["time_multiple"] if self._jit_opts else 0,
             **{k: v for k, v in self._batch_opts.items() if k not in ("batch_size", "eval_batch_size", "max_seqs")},
         )
+
+    def _maybe_stop_for_resubmission(self, last_epoch_wall_sec: float):
+        """
+        :param last_epoch_wall_sec: how long the epoch just finished took
+
+        With less wall-time left than the (safety-scaled) last epoch needed, stop now:
+        SIGINT to our process group reaches the Sisyphus worker as KeyboardInterrupt,
+        which it does not catch, so the job ends as interrupted and gets resubmitted.
+        Otherwise the time limit kills an epoch half-way and it is lost entirely.
+        Same as the PyTorch engine, minus torchelastic (we are one process).
+        See https://github.com/rwth-i6/returnn/issues/1818.
+        """
+        import os
+        import signal
+        from returnn.util.basic import slurm_time_left_sec
+
+        if not self.config.bool("stop_for_resubmission_when_low_time_left", False):
+            return
+        time_left = slurm_time_left_sec()
+        if time_left is None:
+            return  # not under SLURM, or the query failed -- nothing to decide on
+        safety = self.config.float("stop_for_resubmission_safety_factor", 1.2)
+        needed = last_epoch_wall_sec * safety
+        if time_left >= needed:
+            return
+        print(
+            f"stop_for_resubmission_when_low_time_left:"
+            f" SLURM time_left={time_left}s, last epoch wall={last_epoch_wall_sec:.1f}s,"
+            f" needed (x{safety})={needed:.1f}s -- stopping early so sisyphus can resubmit.",
+            file=log.v1,
+        )
+        os.kill(-os.getpgrp(), signal.SIGINT)
 
     def _bucket_for(self, batch_raws: Dict[str, Any]) -> Dict[str, int]:
         """
@@ -537,7 +613,12 @@ class Engine(EngineBase):
                     self._train_step_func(model=self.model, extern_data=extern_data, **sentinel_kw)
                     run_ctx = rf.get_run_ctx()
                     total = run_ctx.total_loss()
-                    losses = {name: loss.get_mean_loss().raw_tensor for name, loss in run_ctx.losses.items()}
+                    # Summed loss and norm factor, not the mean, as the PyTorch engine does it:
+                    # averaging per-batch means would weight 200 short seqs like 51 long ones.
+                    losses = {
+                        name: (loss.get_summed_loss().raw_tensor, _inv_norm_factor_raw(loss))
+                        for name, loss in run_ctx.losses.items()
+                    }
                 # Non-trainable parameters can be WRITTEN by the step -- rf.BatchNorm's running statistics
                 # are the case that matters -- so they leave this function as values.
                 # The restore below undoes the write, and under jit it would happen at trace time only.
@@ -564,10 +645,16 @@ class Engine(EngineBase):
                 rng_key = JaxBackend._rng_key
             finally:
                 JaxBackend._rng_key = prev_key
+            # PRE-clip, like the PyTorch engine reports it: computed before the optimizer runs
+            grad_norm = (
+                global_grad_norm(grads, p=self._updater.log_grad_norm_p)
+                if self._updater.log_grad_norm_p
+                else jnp.zeros((), dtype=jnp.float32)
+            )
             train_raws, opt_state = self._updater.step(
                 params=train_raws, grads=grads, opt_state=opt_state, learning_rate=learning_rate
             )
-            return train_raws, other_raws, opt_state, rng_key, loss, losses
+            return train_raws, other_raws, opt_state, rng_key, loss, losses, grad_norm
 
         self._forward = _forward
         # Only the epoch is static (config code may branch on it, and a recompile per epoch is nothing).
@@ -679,16 +766,12 @@ _UnsupportedConfigOpts = {
     "forward_auto_split_batch_on_oom": False,
     "grad_scaler": None,
     "load_model_post_hooks": None,
-    "log_batch_size": False,
     "online_shuffle_batches": None,
     "preload_from_files": None,
     "pretrain": None,
     "reset_dev_memory_caches": False,
     "save_interval": 1,
     "sort_dataset": None,
-    # no graceful stop before the job's time limit; a run that hits it loses the running (sub)epoch
-    "stop_for_resubmission_when_low_time_left": False,
-    "stop_for_resubmission_safety_factor": None,
     "stop_on_nonfinite_train_score": None,
     "tensorboard_opts": None,
     "use_tensorboard": False,
@@ -814,6 +897,73 @@ def _step_signature(args) -> Any:
             for leaf in leaves
         ),
     )
+
+
+def _batch_size_info(batch_raws: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    :param batch_raws: one batch, as the data pipeline yields it
+    :return: num_seqs, and per data key the max and the summed (content) seq len
+
+    The PyTorch engine's ``log_batch_size`` keys, so the throughput tooling parses either log.
+    Sums stay DEVICE scalars: they are read with the step's losses, so they cost no extra sync.
+    """
+    info: Dict[str, Any] = {}
+    for key, value in sorted(batch_raws.items()):
+        if not key.endswith("_seq_lens"):
+            continue
+        name = key[: -len("_seq_lens")]
+        data = batch_raws.get(name)
+        if data is None or not getattr(data, "ndim", 0):
+            continue
+        info.setdefault("num_seqs", int(value.shape[0]))
+        info[f"max_size:{name}"] = int(data.shape[1])
+        # the CONTENT, i.e. what a packed step would compute on; num_seqs * max_size - this is
+        # exactly the padding the bucket regime adds
+        info[f"sum_size:{name}"] = jnp.sum(value)
+    return info
+
+
+def _inv_norm_factor_raw(loss: Any) -> jax.Array:
+    """
+    :param loss: a :class:`LossHolder` of the run ctx
+    :return: its normalization factor as a device scalar
+
+    A loss without dynamic axes yields a plain int, which the compiled step would bake in.
+    """
+    inv_norm = loss.get_inv_norm_factor()
+    if isinstance(inv_norm, Tensor):
+        return inv_norm.raw_tensor
+    return jnp.asarray(inv_norm, dtype=jnp.float32)
+
+
+def _accumulate_losses(losses: Dict[str, Any], *, sums: Dict[str, float], norms: Dict[str, float]) -> None:
+    """
+    :param losses: of one step, each a (summed loss, normalization factor) pair
+    :param sums: accumulated summed losses, updated in place
+    :param norms: accumulated normalization factors, updated in place
+    """
+    for name, (loss_sum, inv_norm) in losses.items():
+        sums[name] = sums.get(name, 0.0) + float(loss_sum)
+        norms[name] = norms.get(name, 0.0) + float(inv_norm)
+
+
+def _format_step_log(epoch: int, losses: Dict[str, Any], extra: Dict[str, Any]) -> str:
+    """
+    :param epoch:
+    :param losses: of that step, each a (summed loss, normalization factor) pair
+    :param extra: ``step`` plus whatever diagnostics were collected
+    :return: one log line, in the same shape as the PyTorch engine's per-step line
+    """
+    parts = [f"ep {epoch} train, step {extra['step']}"]
+    parts += [f"{name} {float(loss_sum) / float(inv_norm):.3f}" for name, (loss_sum, inv_norm) in losses.items()]
+    parts += [
+        f"{name} {int(value) if name.startswith(('num_seqs', 'max_size', 'sum_size')) else float(value):.0f}"
+        if name.startswith(("num_seqs", "max_size", "sum_size"))
+        else f"{name} {float(value):.3f}"
+        for name, value in extra.items()
+        if name != "step"
+    ]
+    return ", ".join(parts)
 
 
 def _is_host_only(value: Any) -> bool:

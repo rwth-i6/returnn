@@ -1413,9 +1413,9 @@ def test_engine_train_from_config():
         ), "the parameters did not change between epochs"
 
         scores = engine.learning_rate_control.epoch_data
-        train_scores = [scores[ep].error["train_score_ce"] for ep in (1, 2)]
+        train_scores = [scores[ep].error["train_loss_ce"] for ep in (1, 2)]
         assert train_scores[1] < train_scores[0], f"train score did not improve: {train_scores}"
-        assert "dev_score_ce" in scores[1].error, sorted(scores[1].error)
+        assert "dev_loss_ce" in scores[1].error, sorted(scores[1].error)
 
 
 @pytest.mark.parametrize("time_multiple", [0, 4])
@@ -1437,7 +1437,7 @@ def test_engine_train_jit(time_multiple: int):
             scores = engine.learning_rate_control.epoch_data
             return (
                 {name: numpy.asarray(param.raw_tensor) for name, param in engine.model.named_parameters()},
-                [scores[ep].error["train_score_ce"] for ep in (1, 2)],
+                [scores[ep].error["train_loss_ce"] for ep in (1, 2)],
             )
 
     eager_params, eager_scores = _run()
@@ -1671,7 +1671,8 @@ def test_engine_jit_rng_advances():
             # noinspection PyProtectedMember
             assert "seq_tag" in batch_raws and "seq_tag" not in engine._step_raws(batch_raws)
             # noinspection PyProtectedMember
-            *_, key_out, loss, _ = engine._train_step(
+            # (train raws, other raws, opt state, rng key, loss, losses, grad norm)
+            _, _, _, key_out, loss, _, _ = engine._train_step(
                 [engine._params[i].raw_tensor for i in engine._train_param_idx],
                 [engine._params[i].raw_tensor for i in engine._other_param_idx],
                 engine._step_raws(batch_raws),
@@ -1767,10 +1768,15 @@ def test_engine_dynamic_learning_rate():
         after = {name: numpy.asarray(p.raw_tensor) for name, p in engine.get_model().named_parameters()}
 
     assert calls, "dynamic_learning_rate was never called"
-    steps = [c[0] for c in calls]
-    assert steps == list(range(len(calls))), f"global_train_step not consecutive from 0: {steps}"
+    # The first call is the one at the START of the epoch, which is what records
+    # :meta:effective_learning_rate in the learning_rates file (the PyTorch engine does the same).
+    # Being at the start, its epoch_continuous is exactly 0, which the per-step calls never are.
+    init_call, step_calls = calls[0], calls[1:]
+    assert (init_call[0], init_call[2], init_call[3]) == (0, 0, 0.05), init_call
+    steps = [c[0] for c in step_calls]
+    assert steps == list(range(len(step_calls))), f"global_train_step not consecutive from 0: {steps}"
     assert all(c[1] == 1 for c in calls), calls  # epoch
-    for _, _, epoch_continuous, learning_rate in calls:
+    for _, _, epoch_continuous, learning_rate in step_calls:
         assert epoch_continuous is not None and 0.0 < epoch_continuous <= 1.0, calls
         assert learning_rate == 0.05, calls  # the epoch-level rate the function gets to modify
     for name, value in before.items():
@@ -1841,7 +1847,7 @@ def test_engine_train_amp():
         for name, value in params.items():
             assert value.dtype == numpy.float32, f"{name} is {value.dtype}, expected float32"
         scores = engine.learning_rate_control.epoch_data[1].error
-        assert numpy.isfinite(scores["train_score_ce"]), scores
+        assert numpy.isfinite(scores["train_loss_ce"]), scores
     # the policy is scoped to the step, so nothing outside the engine is left in bfloat16
     assert rf.get_amp_policy() is None
 
