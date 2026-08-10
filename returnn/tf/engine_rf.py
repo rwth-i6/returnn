@@ -167,6 +167,10 @@ class Engine(EngineBase):
         start_time = time.time()
         accumulated: Dict[str, float] = {}
         num_steps = 0
+        # session.run time vs everything else (batch assembly, feed, bookkeeping).
+        # "computing" percentage as the other engines report it -- the primary throughput diagnostic:
+        # a low value means the GPU starves on the host loop, not on the graph.
+        computing_time = 0.0
         fetches = {"loss": self._loss, "optim": self._optim_op}
         fetches.update({f"loss:{name}": value for name, value in self._losses.items()})
         fetches.update(self._extra_fetches)
@@ -186,7 +190,10 @@ class Engine(EngineBase):
                     ),
                     session=self.session,
                 )
+            step_start_time = time.time()
             res = self.session.run(fetches, feed_dict=feed_dict)
+            step_duration = time.time() - step_start_time
+            computing_time += step_duration
             # the extra fetches are diagnostics of the step, not scores of the epoch
             scores = {k: float(v) for k, v in res.items() if k != "optim" and k not in self._extra_fetches}
             for key, value in scores.items():
@@ -197,6 +204,7 @@ class Engine(EngineBase):
                 info += [_format_extra_fetch(k, res[k]) for k in sorted(self._extra_fetches)]
                 if self._log_batch_size:
                     info += [f"{k} {v}" for k, v in self._batch_size_info(feed_dict).items()]
+                info += [f"{step_duration:.3f} sec/step"]
                 if complete_frac is not None:
                     info += [f"complete {complete_frac * 100:.2f}%"]
                 print(", ".join(info), file=log.v5)
@@ -205,9 +213,11 @@ class Engine(EngineBase):
 
         assert num_steps > 0, f"no data in epoch {self.epoch}"
         scores = {key: value / num_steps for key, value in accumulated.items()}
+        elapsed = time.time() - start_time
         print(
             f"epoch {self.epoch} score: {_format_scores(scores)},"
-            f" {num_steps} steps, {time.time() - start_time:.1f} sec",
+            f" {num_steps} steps, {elapsed:.1f} sec,"
+            f" computing {computing_time / elapsed * 100:.1f}%",
             file=log.v3,
         )
         self.learning_rate_control.set_epoch_error(self.epoch, {f"train_{k}": v for k, v in scores.items()})
