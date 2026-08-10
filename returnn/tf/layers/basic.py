@@ -6518,8 +6518,6 @@ class ConvLayer(_ConcatInputLayer):
             )
             if len(filter_size) == 1:
                 y = tf.squeeze(y, axis=-1 if out_batch_feature_major else -2)
-                strides = strides[:-1]
-                dilation_rate = dilation_rate[:-1]
         elif max(strides) > 1 and max(dilation_rate) > 1:
             # tf.nn.convolution does not support this, therefore resort to tf.nn.conv2d which requires some adaptations
             squeeze_axis = None
