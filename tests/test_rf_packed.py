@@ -182,14 +182,18 @@ def test_conformer():
         # gap 64 -> after the two stages exactly 16 left, as needed by the depthwise conv kernel 32
         # (each stage: pad consumes 1, pool divides by 2).
         xp = packed.pack(x, gap=64, align=4)
+        warned_before = set(packed._warned_fallback_ops)  # isolate the warn-once bookkeeping
+        packed._warned_fallback_ops.clear()
         out_p, out_spatial_dim_p = model(xp, in_spatial_dim=time_dim)
+        warned_here = set(packed._warned_fallback_ops)
+        packed._warned_fallback_ops.update(warned_before)
         # the whole subsample chain + depthwise convs must have run packed (no fallback warnings)
-        assert "conv" not in packed._warned_fallback_ops
-        assert "pad" not in packed._warned_fallback_ops
-        assert "pool" not in packed._warned_fallback_ops
+        assert "conv" not in warned_here
+        assert "pad" not in warned_here
+        assert "pool" not in warned_here
         if _flex_attention_usable():
             # the rel-pos self-attention must have run via the FlexAttention fast path
-            assert "rel_pos_self_attention" not in packed._warned_fallback_ops
+            assert "rel_pos_self_attention" not in warned_here
     assert out_spatial_dim == out_spatial_dim_p
     # fallbacks repack, so the encoder output must still be packed (over (batch, subsampled time))
     assert packed.is_packed(out_p)
@@ -581,11 +585,15 @@ def test_rel_pos_self_attention_packed():
         )
         out_ref = att(x, axis=time_dim)
         xp = packed.pack(x, gap=4)  # some gap, to also cover the regap inside the fast path
+        warned_before = set(packed._warned_fallback_ops)  # isolate the warn-once bookkeeping
+        packed._warned_fallback_ops.clear()
         out_p = att(xp, axis=time_dim)
+        warned_here = set(packed._warned_fallback_ops)
+        packed._warned_fallback_ops.update(warned_before)
         assert packed.is_packed(out_p)
         if _flex_attention_usable():
             # must have taken the FlexAttention fast path (works eagerly on CPU too)
-            assert "rel_pos_self_attention" not in packed._warned_fallback_ops
+            assert "rel_pos_self_attention" not in warned_here
     _assert_equal_non_padded(out_p, out_ref, batch_dim, time_dim)
 
 
