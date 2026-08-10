@@ -5,8 +5,7 @@ The base class is :class:`LearningRateControl`.
 
 from __future__ import annotations
 
-from typing import Optional, Union, Any, Dict
-import typing
+from typing import Optional, Union, Any, Dict, Tuple
 import os
 import returnn.util.basic as util
 from returnn.util.basic import better_repr, simple_obj_repr, unicode
@@ -52,7 +51,7 @@ class LearningRateControl:
                 raise TypeError(f"EpochData: unexpected learning_rate type: {type(learning_rate)}")
             if kwargs:
                 raise TypeError(f"EpochData: unexpected kwargs: {kwargs}")
-            self.learning_rate = learning_rate
+            self.learning_rate: Optional[float] = learning_rate
             if isinstance(error, float):  # Old format.
                 error = {"old_format_score": error}
             elif error is None:
@@ -139,7 +138,7 @@ class LearningRateControl:
         :param float|(float)->float learning_rate_growth:
         :param str|None filename: load from and save to file
         """
-        self.epoch_data = {}  # type: typing.Dict[int,LearningRateControl.EpochData]
+        self.epoch_data: Dict[int, LearningRateControl.EpochData] = {}
         self.filename = filename
         if filename:
             if os.path.exists(filename):
@@ -450,11 +449,10 @@ class LearningRateControl:
         )
         return error[key]
 
-    def get_epoch_error_key_value(self, epoch):
+    def get_epoch_error_key_value(self, epoch) -> Tuple[Optional[str], Optional[float]]:
         """
         :param int epoch:
         :return: key, error
-        :rtype: (str, float)
         """
         error = self.get_epoch_error_dict(epoch)
         if not error:
