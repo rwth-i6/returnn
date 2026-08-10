@@ -36,9 +36,20 @@ class Config:
         if items is not None:
             self.typed_dict.update(items)
 
+    # typed_dict can reference the Config itself.
+    # We must not recurse into it while pickling,
+    # so it is emitted as a persistent id,
+    # and resolved back to the receiving instance on load.
+    # persistent_id/persistent_load is the documented API
+    # for referring to an object living outside the pickle;
+    # the memo we used before is a CPython implementation detail.
+    _SelfPersistentId = "returnn.config.Config.self"
+
     def __getstate__(self):
         import io
         from returnn.util.task_system import Pickler
+
+        config = self
 
         class _CustomPickler(Pickler):
             use_whichmodule = False
@@ -49,32 +60,37 @@ class Config:
             # We explicitly want to pickle it as-is.
             module_name_black_list = {_PyModuleName}
 
+            def persistent_id(self, obj):
+                """:return: the marker for the Config being pickled, None for everything else"""
+                return Config._SelfPersistentId if obj is config else None
+
         buffer = io.BytesIO()
-        pickler = _CustomPickler(buffer)
-        memo_idx = len(pickler.memo)
-        pickler.memo[id(self)] = memo_idx, self
-        pickler.dump(self.typed_dict)
+        _CustomPickler(buffer).dump(self.typed_dict)
 
         return {
             "_pid": os.getpid(),
-            "_self_memo_idx": memo_idx,
             "_typed_dict_pickled": buffer.getvalue(),
             "_is_global": self is get_global_config(raise_exception=False),
         }
 
     def __setstate__(self, state):
         import io
-
-        # Use pure-Python unpickling to be able to extend the memo.
-        # noinspection PyUnresolvedReferences,PyProtectedMember
-        from pickle import _Unpickler
+        import pickle
 
         self.__init__()
 
-        buffer = io.BytesIO(state["_typed_dict_pickled"])
-        unpickler = _Unpickler(buffer)
-        unpickler.memo[state["_self_memo_idx"]] = self
-        self.typed_dict = unpickler.load()
+        config = self
+
+        class _Unpickler(pickle.Unpickler):
+            """resolves the self-reference marker emitted by :func:`Config.__getstate__`"""
+
+            def persistent_load(self, pid):
+                """:return: the Config instance being restored"""
+                if pid == Config._SelfPersistentId:
+                    return config
+                raise pickle.UnpicklingError(f"Config.__setstate__: unexpected persistent id {pid!r}")
+
+        self.typed_dict = _Unpickler(io.BytesIO(state["_typed_dict_pickled"])).load()
 
         if state["_is_global"] and os.getpid() != state["_pid"]:
             set_global_config(self)
