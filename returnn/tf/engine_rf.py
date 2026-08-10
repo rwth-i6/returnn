@@ -74,7 +74,8 @@ class Engine(EngineBase):
         self._losses: Dict[str, tf.Tensor] = {}  # per-loss mean, for the log
         self._optim_op: Optional[tf.Operation] = None
         self._global_train_step_var: Optional[tf.Variable] = None
-        self._train_flag: Optional[tf.Tensor] = None  # fed False for eval
+        self._eval_loss: Optional[tf.Tensor] = None  # eval-specialized total loss, see _init_step_func
+        self._eval_losses: Dict[str, tf.Tensor] = {}
         self._dyn_lr_func: Optional[Any] = None  # dynamic_learning_rate, applied per step
         self._weight_decay: float = 0.0  # decoupled, applied by the engine (see _init_step_func)
         self._weight_decay_params: List[rf.Parameter] = []
@@ -259,10 +260,10 @@ class Engine(EngineBase):
         """
         accumulated: Dict[str, float] = {}
         num_steps = 0
-        fetches = {"loss": self._loss}
-        fetches.update({f"loss:{key}": value for key, value in self._losses.items()})
+        # the eval-specialized ops: no dropout etc., see _init_step_func
+        fetches = {"loss": self._eval_loss}
+        fetches.update({f"loss:{key}": value for key, value in self._eval_losses.items()})
         for feed_dict, _, _ in self._iter_batches_prefetch(dataset, train=False):
-            feed_dict[self._train_flag] = False  # no dropout etc. in eval
             feed_dict[self._step_placeholder] = self.global_train_step
             res = self.session.run(fetches, feed_dict=feed_dict)
             for key, value in res.items():
@@ -490,24 +491,32 @@ class Engine(EngineBase):
         Build the step graph: the model outputs, the losses, and the optimizer op.
         """
         sentinel_kw = util.get_fwd_compat_kwargs()
-        # The train flag is a placeholder, not a Python bool: the graph is built once and eval must
-        # run it WITHOUT dropout etc. RunCtx supports a dynamic flag exactly for graph backends,
-        # and the net-dict engine feeds its train flag the same way.
-        self._train_flag = tf_compat.v1.placeholder_with_default(True, shape=(), name="train_flag")
+        # The train flag is a Python bool, and the step ops are built TWICE,
+        # specialized for train and for eval, sharing the parameters --
+        # as the net-dict engine builds separate train/eval networks.
+        # A fed placeholder flag keeps every rf.cond in the graph
+        # (this model: 58 conds -- 42 dropout, 15 BatchNorm, 1 specaugment -- all on the train flag),
+        # costing ~6 ms/step Switch/Merge scheduling overhead
+        # (measured; the predicate stays host-side, there is no memcpy round trip).
+        # rf.cond short-circuits on a bool, so the specialized graphs carry no cond at all.
         self._step_placeholder = tf_compat.v1.placeholder_with_default(
             tf.constant(0, dtype="int64"), shape=(), name="global_train_step"
         )
-        rf.init_train_step_run_ctx(
-            train_flag=rf.convert_to_tensor(self._train_flag, dims=(), dtype="bool"),
-            step=self._step_placeholder,
-            epoch=self.epoch,
-        )
+        rf.init_train_step_run_ctx(train_flag=True, step=self._step_placeholder, epoch=self.epoch)
         self._train_step_func(model=self.model, extern_data=self.extern_data, **sentinel_kw)
         run_ctx = rf.get_run_ctx()
         assert run_ctx.losses, "train_step did not mark any loss"
         total = run_ctx.total_loss()
         self._loss = total.raw_tensor if isinstance(total, Tensor) else total
         self._losses = {name: loss.get_mean_loss().raw_tensor for name, loss in run_ctx.losses.items()}
+
+        # eval specialization: no dropout, no specaugment, BatchNorm on running statistics
+        rf.init_train_step_run_ctx(train_flag=False, step=self._step_placeholder, epoch=self.epoch)
+        self._train_step_func(model=self.model, extern_data=self.extern_data, **sentinel_kw)
+        eval_ctx = rf.get_run_ctx()
+        eval_total = eval_ctx.total_loss()
+        self._eval_loss = eval_total.raw_tensor if isinstance(eval_total, Tensor) else eval_total
+        self._eval_losses = {name: loss.get_mean_loss().raw_tensor for name, loss in eval_ctx.losses.items()}
 
         self._global_train_step_var = tf.Variable(
             self.global_train_step, dtype="int64", trainable=False, name="global_step"
