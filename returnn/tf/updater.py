@@ -1063,6 +1063,34 @@ def accum_grad_multiple_step(grad, var, train_step, num_accum_steps):
         )
 
 
+class _VarLearningRateSchedule(tf.keras.optimizers.schedules.LearningRateSchedule):
+    """
+    Keras learning-rate "schedule" that just reads a tf.Variable.
+
+    Keras optimizers accept a float, a schedule or a callable, but not a variable,
+    while RETURNN keeps the learning rate IN a variable,
+    so it can be set per step (Updater.set_learning_rate).
+    This is the thinnest adapter between the two: the step is ignored, the value is read live.
+    """
+
+    def __init__(self, var):
+        super().__init__()
+        self.var = var
+
+    def __call__(self, step):
+        """
+        :param step: ignored; the value is whatever the variable holds when the step runs
+        :return: the learning rate
+        """
+        return tf.convert_to_tensor(self.var)
+
+    def get_config(self):
+        """
+        :return: config (not serializable -- the variable belongs to the live graph)
+        """
+        return {}
+
+
 # noinspection PyAbstractClass
 class _KerasOptimizerWrapper(Optimizer):
     """
@@ -1083,6 +1111,13 @@ class _KerasOptimizerWrapper(Optimizer):
             """
             kwargs = kwargs.copy()
             kwargs.pop("use_locking", None)  # this is not used. just ignore
+            lr = kwargs.get("learning_rate", None)
+            if isinstance(lr, (tf.Variable, tf.Tensor)):
+                # RETURNN drives the learning rate through a variable (Updater.learning_rate_var),
+                # which Keras rejects ("should be float, or an instance of LearningRateSchedule").
+                # A schedule that ignores the step and reads that variable is what Keras accepts,
+                # and keeps the value dynamic.
+                kwargs["learning_rate"] = _VarLearningRateSchedule(lr)
             opt = keras_class(**kwargs)
             return cls(opt, name=kwargs.get("name", None))
 

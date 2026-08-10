@@ -76,6 +76,8 @@ class Engine(EngineBase):
         self._global_train_step_var: Optional[tf.Variable] = None
         self._train_flag: Optional[tf.Tensor] = None  # fed False for eval
         self._dyn_lr_func: Optional[Any] = None  # dynamic_learning_rate, applied per step
+        self._weight_decay: float = 0.0  # decoupled, applied by the engine (see _init_step_func)
+        self._weight_decay_params: List[rf.Parameter] = []
         self._forward_step_func = None
         self._forward_outputs: Optional[TensorDict] = None  # templates of the marked outputs
         self._forward_fetches: Dict[str, tf.Tensor] = {}
@@ -478,6 +480,31 @@ class Engine(EngineBase):
         # and hide it from the Updater so its in-graph path stays out of the way.
         self._dyn_lr_func = self.config.typed_value("dynamic_learning_rate", None)
         updater_config = self.config
+        optimizer_opts = self.config.typed_value("optimizer", None)
+        if isinstance(optimizer_opts, dict) and str(optimizer_opts.get("class", "")).lower() == "adamw":
+            # RETURNN maps "adamw" to a Keras optimizer,
+            # and every private API its wrapper hooks is gone in Keras 3.
+            # AdamW is Adam plus decoupled weight decay,
+            # so run TF1-native Adam and apply the decay below, after the update.
+            # PyTorch decays BEFORE the update; the two differ by lr^2 * wd * update,
+            # i.e. ~1e-8 relative at lr <= 1e-3, wd 1e-2.
+            clean_opts = {
+                k: v for k, v in optimizer_opts.items() if k not in ("weight_decay", "weight_decay_modules_blacklist")
+            }
+            clean_opts["class"] = "adam"
+            self._weight_decay = float(optimizer_opts.get("weight_decay") or 0.0)
+            no_wd = set(_no_weight_decay_params(self.model, optimizer_opts))
+            all_params = list(self.model.named_parameters())
+            self._weight_decay_params = [p for name, p in all_params if p.trainable is not False and name not in no_wd]
+            updater_config = copy.copy(self.config)
+            updater_config.typed_dict = dict(self.config.typed_dict)
+            updater_config.typed_dict["optimizer"] = clean_opts
+            print(
+                f"AdamW as Adam + decoupled weight decay {self._weight_decay},"
+                f" on {len(self._weight_decay_params)} of {len(all_params)} parameters"
+                f" (excluded: biases and {optimizer_opts.get('weight_decay_modules_blacklist')})",
+                file=log.v3,
+            )
         if self._dyn_lr_func is not None:
             if not callable(self._dyn_lr_func):
                 raise NotImplementedError(f"dynamic_learning_rate {self._dyn_lr_func!r} is not callable")
@@ -488,8 +515,9 @@ class Engine(EngineBase):
             if "network" in signature.parameters:
                 raise ValueError("TF RF engine: dynamic_learning_rate with network is net-dict specific")
             print("Using dynamic learning rate scheduler that updates based on global train steps", file=log.v2)
-            updater_config = copy.copy(self.config)
-            updater_config.typed_dict = dict(self.config.typed_dict)
+            if updater_config is self.config:  # not already copied for the optimizer opts above
+                updater_config = copy.copy(self.config)
+                updater_config.typed_dict = dict(self.config.typed_dict)
             updater_config.typed_dict.pop("dynamic_learning_rate", None)
         self._updater = Updater(
             config=updater_config,
@@ -501,6 +529,16 @@ class Engine(EngineBase):
             [TFBackend.get_parameter_variable(p) for _, p in self.model.named_parameters() if p.trainable is not False]
         )
         self._optim_op = self._updater.get_optim_op()
+        if self._weight_decay and self._weight_decay_params:
+            # decoupled: theta -= lr * wd * theta, once per step,
+            # ordered after the update so gradients see the pre-decay values
+            lr = self._updater.learning_rate_var
+            with tf.control_dependencies([self._optim_op]):
+                decay_ops = []
+                for param in self._weight_decay_params:
+                    var = TFBackend.get_parameter_variable(param)
+                    decay_ops.append(tf_compat.v1.assign_sub(var, lr * self._weight_decay * var))
+            self._optim_op = tf.group(*decay_ops)
         if self._updater.log_grad_norm_tensor is not None:
             self._extra_fetches["grad_norm:p2"] = self._updater.log_grad_norm_tensor
         if self._log_memory_usage:
@@ -682,6 +720,37 @@ def _check_config_opts_supported(config: Config):
             + "\n  ".join(unsupported)
             + "\nThey would otherwise be ignored silently, which would change what the config means."
         )
+
+
+def _no_weight_decay_params(model: rf.Module, opts: Dict[str, Any]) -> List[str]:
+    """
+    :param model:
+    :param opts: the optimizer options (read only here)
+    :return: names of the parameters that must NOT get weight decay
+
+    Same rule as the PyTorch updater: the biases, plus the parameters of the blacklisted module
+    types. Duplicates :func:`returnn.jax.updater._weight_decay_mask`; the rule is backend neutral
+    and the two should be factored into one place once both sides have settled.
+    """
+    blacklist = []
+    for mod in opts.get("weight_decay_modules_blacklist") or ():
+        if isinstance(mod, str):
+            if not mod.startswith("rf."):
+                # "torch.nn.LayerNorm" and the like cannot be checked against an RF model
+                raise NotImplementedError(f"TF engine: weight_decay_modules_blacklist entry {mod!r} not supported")
+            mod = eval(mod)  # noqa: S307  # as the PyTorch and JAX updaters do
+        if not (isinstance(mod, type) and issubclass(mod, rf.Module)):
+            raise TypeError(f"TF engine: invalid weight_decay_modules_blacklist entry {mod!r}")
+        blacklist.append(mod)
+    no_wd = set()
+    if blacklist:
+        for prefix, module in model.named_modules():
+            if not isinstance(module, tuple(blacklist)):
+                continue
+            for key, value in vars(module).items():
+                if isinstance(value, rf.Parameter):
+                    no_wd.add(f"{prefix}.{key}" if prefix else key)
+    return sorted(name for name, _ in model.named_parameters() if name.split(".")[-1].endswith("bias") or name in no_wd)
 
 
 def _seq_from_batch(template: Tensor, raw: numpy.ndarray, seq_idx: int, sizes: Dict[Dim, numpy.ndarray]) -> Tensor:
