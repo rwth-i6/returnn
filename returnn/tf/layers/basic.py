@@ -1086,15 +1086,14 @@ class NormLayer(_ConcatInputLayer):
         assert not self.input_data.sparse
         x = self.input_data.placeholder
         if scale or bias:
-            if param_shape is NotSpecified:
-                param_shape = "F"
-            if isinstance(param_shape, (list, tuple)):
-                param_axes = [self.input_data.get_axis_from_description(a, allow_int=False) for a in param_shape]
+            param_shape_ = "F" if param_shape is NotSpecified else param_shape
+            if isinstance(param_shape_, (list, tuple)):
+                param_axes = [self.input_data.get_axis_from_description(a, allow_int=False) for a in param_shape_]
             else:
-                param_axes = [self.input_data.get_axis_from_description(param_shape, allow_int=False)]
+                param_axes = [self.input_data.get_axis_from_description(param_shape_, allow_int=False)]
             assert sorted(set(param_axes)) == sorted(param_axes), "%s: param_shape %r should be unique" % (
                 self,
-                param_shape,
+                param_shape_,
             )
             param_shape = [self.input_data.batch_shape[axis] for axis in param_axes]
             assert all(isinstance(dim, int) for dim in param_shape), "%s: only static param shape allowed" % self
