@@ -446,7 +446,11 @@ class Engine(EngineBase):
             **{k: v for k, v in self._batch_opts.items() if k not in ("batch_size", "eval_batch_size", "max_seqs")},
         )
         provider = FeedDictDataProvider(
-            dataset=dataset, batches=batches, extern_data=self.extern_data, data_keys=self._data_keys
+            dataset=dataset,
+            batches=batches,
+            extern_data=self.extern_data,
+            data_keys=self._data_keys,
+            capacity=self.config.int("tf_data_provider_capacity", 10),
         )
         provider.start_threads(session=self.session)
         try:
