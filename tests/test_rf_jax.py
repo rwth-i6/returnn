@@ -1299,12 +1299,14 @@ def test_dataset_batches_to_jax():
 _EngineTestNumFeat, _EngineTestNumClasses = 5, 4
 
 
-def _simple_train_setup(tmp_dir: str, *, dropout: float = 0.0, **extra_config_opts):
+def _simple_train_setup(tmp_dir: str, *, dropout: float = 0.0, batch_norm: bool = False, **extra_config_opts):
     """
     A minimal but complete training config, as :mod:`returnn.__main__` would set it up.
 
     :param tmp_dir: for the model and the learning-rate file
     :param dropout: if set, the step draws random numbers, which is what the RNG stream tests need
+    :param batch_norm: if set, the model normalizes its input with rf.BatchNorm, whose running
+        statistics are auxiliary parameters written by the step itself, not by the optimizer
     :param extra_config_opts: added to the config
     :return: (config, func creating the dataset)
     """
@@ -1339,6 +1341,7 @@ def _simple_train_setup(tmp_dir: str, *, dropout: float = 0.0, **extra_config_op
             def __init__(self):
                 super().__init__()
                 self.linear = rf.Linear(in_dim, classes_dim)
+                self.norm = rf.BatchNorm(in_dim) if batch_norm else None
                 self.in_dim, self.out_dim = in_dim, classes_dim
 
         return _Model()
@@ -1350,6 +1353,8 @@ def _simple_train_setup(tmp_dir: str, *, dropout: float = 0.0, **extra_config_op
         time_dim = data.dims[1]
         if dropout:
             data = rf.dropout(data, dropout, axis=data.dims[1:])
+        if model.norm is not None:
+            data = model.norm(data)
         logits = model.linear(data)
         loss = rf.cross_entropy(estimated=logits, target=targets, axis=model.out_dim, estimated_type="logits")
         rf.get_run_ctx().mark_as_loss(loss, "ce", custom_inv_norm_factor=time_dim.get_size_tensor())
@@ -1440,6 +1445,37 @@ def test_engine_train_jit(time_multiple: int):
     numpy.testing.assert_allclose(jit_scores, eager_scores, rtol=1e-5)
     for name, value in eager_params.items():
         numpy.testing.assert_allclose(jit_params[name], value, rtol=1e-4, atol=1e-6, err_msg=name)
+
+
+def test_engine_batch_norm_running_stats():
+    """
+    rf.BatchNorm's running statistics are written BY THE STEP, and stay out of the optimizer.
+
+    ``rf.Parameter.trainable`` reports them as None, not False (the resolution lives in the setter),
+    so splitting on it hands them to the optimizer, where weight decay shrinks them,
+    and drops the step's own updates. Train does not notice; only eval degrades, epoch by epoch.
+    """
+    import tempfile
+    from returnn.jax.engine import Engine
+
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        config, make_dataset = _simple_train_setup(tmp_dir, batch_norm=True, num_epochs=1)
+        engine = Engine(config=config)
+        engine.init_train_from_config(train_data=make_dataset(), dev_data=make_dataset())
+
+        params = dict(engine.model.named_parameters())
+        # noinspection PyProtectedMember
+        other = {engine._param_names[i] for i in engine._other_param_idx}
+        assert other == {"norm.running_mean", "norm.running_variance"}
+
+        engine.train()
+
+        mean = numpy.asarray(params["norm.running_mean"].raw_tensor)
+        variance = numpy.asarray(params["norm.running_variance"].raw_tensor)
+        # Not the values (standard-normal data lands near (0, 1) either way) but their variation:
+        # a weight-decayed constant stays uniform, a real estimate differs per feature.
+        assert not numpy.allclose(mean, 0.0) and not numpy.allclose(variance, 1.0)
+        assert mean.std() > 0.0 and variance.std() > 0.0
 
 
 def test_pad_raws_to_bucket_changes_nothing():

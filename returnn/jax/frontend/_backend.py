@@ -1773,10 +1773,12 @@ class JaxBackend(Backend[jax.Array]):
         """
         set trainable.
 
-        Nothing to do on the raw side: JAX arrays carry no requires_grad,
-        and which parameters get differentiated is decided by the engine
-        when it builds the pytree it passes to jax.grad, from rf.Parameter.trainable.
+        Records the RESOLVED flag, which is available only here:
+        ``rf.Parameter.trainable`` returns the value as GIVEN, so None wherever unspecified,
+        and auxiliary/int params resolve to False inside the setter.
+        Reading the property instead put rf.BatchNorm's running stats through the optimizer.
         """
+        param.jax_trainable = trainable
 
     @staticmethod
     def parameter_assign(param: rf.Parameter, value: Tensor, *, op: str = "assign") -> None:

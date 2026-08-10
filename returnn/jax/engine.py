@@ -494,7 +494,10 @@ class Engine(EngineBase):
         self.model = model
         self._param_names = [name for name, _ in model.named_parameters()]
         self._params = [param for _, param in model.named_parameters()]
-        self._train_param_idx = [i for i, param in enumerate(self._params) if param.trainable is not False]
+        # jax_trainable, not param.trainable: the latter is the value as given, so None wherever it
+        # was left unspecified, and None resolves to NOT trainable for auxiliary parameters.
+        # See JaxBackend.set_parameter_trainable.
+        self._train_param_idx = [i for i, param in enumerate(self._params) if param.jax_trainable]
         self._other_param_idx = [i for i in range(len(self._params)) if i not in set(self._train_param_idx)]
         self._commit_to_device([param.raw_tensor for param in self._params], into=self._params)
         num_params = sum(int(numpy.prod(p.batch_shape)) for p in self._params)
