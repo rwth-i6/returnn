@@ -196,6 +196,12 @@ class Engine(EngineBase):
             computing_time += step_duration
             # the extra fetches are diagnostics of the step, not scores of the epoch
             scores = {k: float(v) for k, v in res.items() if k != "optim" and k not in self._extra_fetches}
+            if self.config.bool("stop_on_nonfinite_train_score", True):
+                # as the net-dict engine: better to stop than to train on from a broken state
+                if any(numpy.isinf(v) or numpy.isnan(v) for v in scores.values()):
+                    print("Model seems broken, got inf or nan score.", file=log.v1)
+                    print(f"Scores: {scores}", file=log.v1)
+                    raise Exception(f"Inf/nan score in step {num_steps} of epoch {self.epoch}.")
             for key, value in scores.items():
                 accumulated[key] = accumulated.get(key, 0.0) + value
             if log.verbose[5]:
@@ -661,7 +667,6 @@ _UnsupportedConfigOpts = {
     "pretrain": None,
     "reset_dev_memory_caches": False,
     "sort_dataset": None,
-    "stop_on_nonfinite_train_score": None,
     "tensorboard_opts": None,
     "use_tensorboard": False,
     # backend-specific options are named after the backend, as `torch_...` is on PyTorch
