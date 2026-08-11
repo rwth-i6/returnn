@@ -22,6 +22,7 @@ import copy as _copy
 from returnn.util.basic import NotSpecified, BehaviorVersion
 from returnn.util.math import ceil_div
 import returnn.frontend as rf
+from returnn.frontend.attention import CrossAttention
 from returnn.tensor import Tensor, Dim, single_step_dim
 
 
@@ -357,7 +358,7 @@ class TransformerDecoderLayer(rf.Module):
             raise TypeError(f"unexpected self_att type {self_att!r}")
         self.self_att_layer_norm = make_norm(norm, out_dim)
 
-        self.cross_att: Optional[rf.CrossAttention] = None  # type might be inaccurate, but we expect this interface
+        self.cross_att: Optional[CrossAttention] = None  # type might be inaccurate, but we expect this interface
         self.cross_att_layer_norm = None
         if encoder_dim is not None:
             cross_att_opts = dict(
