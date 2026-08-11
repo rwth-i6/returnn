@@ -1031,10 +1031,14 @@ def _pack_like(x: Tensor, template: PackedRawTensor) -> Optional[Tensor]:
     for d in in_dims:
         coords = _frame_coords(template, d)
         if idx is not None:
-            # stride from x's BACKED raw shape (a plain int, no get_dim_value host read):
+            # stride from x's BACKED raw shape (no get_dim_value host read):
             # it must match the actual flat buffer layout,
             # and under CUDA-graph capture a dyn-size read would sync / go stale on replay.
-            idx = idx * x.raw_tensor.shape[x.dims.index(d)] + coords
+            # get_shape_tuple_raw: an int where statically known (torch: always),
+            # else a graph-side scalar (TF graph mode; also fine: stays in-graph, no host read).
+            # noinspection PyProtectedMember
+            stride = x._raw_backend.get_shape_tuple_raw(x.raw_tensor)[x.dims.index(d)]
+            idx = idx * stride + coords
         else:
             idx = coords
     return rf.gather(x_flat, indices=idx, axis=flat_dim)
@@ -1260,7 +1264,15 @@ def _conform_packing(x, target_raw: PackedRawTensor):
     if isinstance(x, Tensor) and is_packed(x):
         xr = x.raw_tensor
         if not target_raw.same_packing(xr) and xr.orig_dims == target_raw.orig_dims:
-            total = int(target_raw.packed_dim.get_dim_value())
+            total = target_raw.packed_dim.get_dim_value()
+            if not isinstance(total, int):
+                # graph-mode build (TF), dynamic packed dim: int() would need a host read.
+                # regap then derives the total itself -- the same layout formula the target
+                # packing used, so the sizes agree and the replace_dim below rewraps cleanly.
+                # (A static target dim -- tf_static_shapes / pack total_bound -- stays an int.)
+                total = None
+            else:
+                total = int(total)
             y = regap(x, target_raw.gap, align=target_raw.align, layout_lens=target_raw.layout_lens, total_bound=total)
             yr = y.raw_tensor
             if yr.packed_dim != target_raw.packed_dim:
@@ -2451,6 +2463,12 @@ def _strided_out_wrapper(
             "packed strided conv out: host-sync layout verdict under static tracing;"
             " use the device-lens regime (device-resident seq lens + pack total_bound)"
         )
+        # noinspection PyProtectedMember
+        if not out_inner._raw_backend.executing_eagerly():
+            # graph-mode build (TF): the host reads below are impossible on symbolic tensors;
+            # skip the closed-form verdict and take the always-correct explicit re-layout
+            # instead (return None -> _extract_strided). Not cached: no data was inspected.
+            return None
         lens_out = out_time.dyn_size_ext
         for d in raw.orig_dims[:-1]:
             if d not in lens_out.dims:
@@ -4186,13 +4204,27 @@ def _torch_relayout_frames(inner: Tensor, pos: Tensor, *, packed_dim: Dim, out_d
     :param out_dim:
     :return: [out_dim, feature...]
     """
+    axis = inner.get_axis_from_description(packed_dim)
+    if axis != 0:
+        inner = inner.copy_move_axis(axis, 0)
+    # noinspection PyProtectedMember
+    if inner._raw_backend.name != "torch":
+        # Non-torch (e.g. the TF graph backend): a plain value scatter.
+        # The gather-in-both-directions below exists to dodge AOT/Inductor's scatter-index
+        # materialization and to give a capture-safe backward -- torch-only concerns.
+        # The dump slot (pos == out size = dropped frames) scatters into one extra slot,
+        # sliced off again (duplicate dump writes sum up there and are discarded).
+        ext_dim = out_dim + 1
+        out_ext = rf.scatter(inner, indices=pos, indices_dim=packed_dim, out_dim=ext_dim, use_mask=False)
+        out, _ = rf.slice(out_ext, axis=ext_dim, size=out_dim)
+        if inner.feature_dim is not None and inner.feature_dim in out.dims:
+            out.feature_dim = inner.feature_dim
+        return out
+
     import torch
     from returnn.torch.util.array_ import gather_relayout
     from returnn.torch.util.assert_ import assert_
 
-    axis = inner.get_axis_from_description(packed_dim)
-    if axis != 0:
-        inner = inner.copy_move_axis(axis, 0)
     values = inner.raw_tensor
     assert isinstance(values, torch.Tensor), f"_torch_relayout_frames: torch only, got {type(values)}"
     pos_raw = pos.copy_compatible_to_dims_raw([packed_dim]).to(torch.int64)
