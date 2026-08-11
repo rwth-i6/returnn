@@ -61,7 +61,7 @@
         </list>
       </option>
     </inspection_tool>
-    <!-- 'function' in the ignored types: the findings are all f-strings of a callable in an
+    <!-- the callable types in the ignored list: the findings are all f-strings of a callable in an
          error message ("seq_ordering function {f} should return a str"), where the default repr
          is exactly what we want to print. The inspection can only ever say "this repr may be
          unhelpful", never indicate a runtime fault. -->
@@ -69,6 +69,9 @@
       <option name="ignoredTypes">
         <list>
           <option value="function" />
+          <option value="FunctionType" />
+          <option value="BuiltinFunctionType" />
+          <option value="MethodType" />
         </list>
       </option>
     </inspection_tool>
