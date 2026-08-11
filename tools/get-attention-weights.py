@@ -200,6 +200,7 @@ def main(argv):
     if hasattr(dataset, "epoch_wise_filter") and args.reset_epoch_wise_filter is None:
         if dataset.epoch_wise_filter:
             print("NOTE: Resetting epoch_wise_filter to None.")
+            # noinspection PyUnresolvedReferences
             dataset.epoch_wise_filter = None
     if args.reset_partition_epoch:
         assert dataset.partition_epoch == args.reset_partition_epoch
