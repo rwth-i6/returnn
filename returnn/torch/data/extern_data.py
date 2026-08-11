@@ -92,6 +92,7 @@ def raw_dict_to_extern_data(
                 f"extern_data {data}, dyn spatial dim, missing {k}:seq_len in raw dict, check dataset or collate_batch"
             )
             size = extern_data_raw[k + ":seq_len"]
+            assert isinstance(size, torch.Tensor)
             # Sequence lengths have to be on CPU for the later call to rnn.pack_padded_sequence
             assert size.device.type == "cpu"
             size_dtype = str(size.dtype).split(".")[-1]
@@ -125,6 +126,7 @@ def _set_packed_extern_data(
     opts = extern_data_raw[key + ":packed"]
     gap, align = opts["gap"], opts["align"]
     size = extern_data_raw[key + ":seq_len"]
+    assert isinstance(size, torch.Tensor)
     assert size.device.type == "cpu"
     n_seqs = int(size.shape[0])
     if batch_dim.dyn_size_ext is not None and batch_dim.dyn_size_ext.raw_tensor is None:
