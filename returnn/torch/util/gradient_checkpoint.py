@@ -444,7 +444,7 @@ def _reset_amp_states_scope(states: Dict[torch.device, Any]):
             if not state:
                 continue
             if dev.type == "cpu":
-                stack.enter_context(torch.cpu.amp.autocast(**state))
+                stack.enter_context(torch.amp.autocast("cpu", **state))
             else:
                 device_module = getattr(torch, dev.type)
                 stack.enter_context(device_module.amp.autocast(**state))
