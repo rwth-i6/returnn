@@ -1719,7 +1719,7 @@ def get_initializer(
             k_short = k[: -len("_initializer")]
             if k_short not in ns:
                 ns[k_short] = ns[k]
-    f = None
+    f: Union[init_ops.Initializer, init_ops.RandomUniform, Any] = None
     try:
         if isinstance(s, str):
             if "(" in s:
