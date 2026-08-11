@@ -219,6 +219,8 @@ class BatchInfo:
             """
             return "Packed{%r}" % (self.dim_tag.description,)
 
+    virtual_dims: List[BatchInfo.VirtualDimBase]
+
     def __init__(self, base, new_dim, new_dim_index=None):
         """
         :param BatchInfo|None base:
@@ -241,7 +243,7 @@ class BatchInfo:
                 virtual_dims.append(new_dim)
             else:
                 virtual_dims.insert(new_dim_index, new_dim)
-        self.virtual_dims = virtual_dims  # type: typing.List[BatchInfo.VirtualDimBase]
+        self.virtual_dims = virtual_dims
         self._dim = None  # type: typing.Optional[typing.Union[tf.Tensor,int]]
         self.batch_dim_tag: Optional[Dim] = None
         if not base and isinstance(new_dim, BatchInfo.GlobalBatchDim):
@@ -666,6 +668,8 @@ class SearchBeam:
     This is somewhat parallel to :class:`SearchChoices`, but simpler,
     and independent from the layers/network (:class:`returnn.tf.layers.base.LayerBase`).
     """
+
+    name: Optional[str]
 
     def __init__(self, beam_size, dependency=NotSpecified, name=None, _next_frame=None):
         """
