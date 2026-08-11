@@ -76,6 +76,18 @@ class Updater:
         self._optimizer = _make_optimizer(
             self.optimizer_opts, clip_global_norm=self.gradient_clip_global_norm, wd_mask=wd_mask
         )
+        self.accum_grad_multiple_step = _parse_accum_grad_multiple_step(config) if config else 1
+        if self.accum_grad_multiple_step > 1:
+            # optax.MultiSteps holds the accumulated gradients in its own state and lets the wrapped
+            # optimizer see them only on every k-th step, returning zero updates in between --
+            # so the conditional stays inside the compiled step, with no host-side branching.
+            # use_grad_mean=False: the other engines SUM the gradients of the accumulated steps
+            # (torch's .backward() accumulates), so the effective gradient is k times as large.
+            # Clipping is inside the wrapped optimizer, hence applied to the SUM, as there.
+            self._optimizer = optax.MultiSteps(
+                self._optimizer, every_k_schedule=self.accum_grad_multiple_step, use_grad_mean=False
+            )
+            print(f"JAX updater: accumulating gradients over {self.accum_grad_multiple_step} steps", file=log.v3)
         print(f"JAX updater: {self.optimizer_opts}", file=log.v3)
 
     def get_effective_learning_rate(
@@ -130,6 +142,24 @@ class Updater:
         updates, opt_state = self._optimizer.update(list(grads), opt_state, list(params))
         updates = [u * learning_rate for u in updates]
         return optax.apply_updates(list(params), updates), opt_state
+
+
+def _parse_accum_grad_multiple_step(config: Config) -> int:
+    """
+    :param config:
+    :return: over how many steps to accumulate gradients before applying them, 1 for every step
+    """
+    value = config.typed_dict.get("accum_grad_multiple_step")
+    if value is None:
+        return config.int("accum_grad_multiple_step", 1)
+    if not isinstance(value, int):
+        # The PyTorch engine also takes a callable of (epoch, global_train_step, ...), which decides
+        # per step. Here the count lives INSIDE the compiled step (optax.MultiSteps), so a host-side
+        # callable would have to become a traced argument -- not done, and not silently ignored.
+        raise NotImplementedError(
+            f"JAX updater: accum_grad_multiple_step {value!r}: only a constant int is implemented"
+        )
+    return value
 
 
 def global_grad_norm(grads: Sequence[Any], *, p: float) -> Any:

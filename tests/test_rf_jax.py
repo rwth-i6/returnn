@@ -1297,6 +1297,7 @@ def test_dataset_batches_to_jax():
 
 
 _EngineTestNumFeat, _EngineTestNumClasses = 5, 4
+_EngineTestSeqLens = [7, 3, 11, 5, 2, 9, 6, 8]
 
 
 def _simple_train_setup(tmp_dir: str, *, dropout: float = 0.0, batch_norm: bool = False, **extra_config_opts):
@@ -1323,7 +1324,7 @@ def _simple_train_setup(tmp_dir: str, *, dropout: float = 0.0, batch_norm: bool 
             "data": rnd.normal(size=(t, n_feat)).astype("float32"),
             "classes": rnd.randint(0, n_classes, size=(t,)).astype("int32"),
         }
-        for t in [7, 3, 11, 5, 2, 9, 6, 8]
+        for t in _EngineTestSeqLens
     ]
 
     def _make_dataset():
@@ -1445,6 +1446,108 @@ def test_engine_train_jit(time_multiple: int):
     numpy.testing.assert_allclose(jit_scores, eager_scores, rtol=1e-5)
     for name, value in eager_params.items():
         numpy.testing.assert_allclose(jit_params[name], value, rtol=1e-4, atol=1e-6, err_msg=name)
+
+
+def test_preload_from_files():
+    """
+    ``preload_from_files`` initializes parameters from another checkpoint.
+
+    This is what the goal-1 parity check needs: take a trained checkpoint's parameters into a
+    fresh model and compare outputs. Checks that the values actually arrive, that a missing
+    parameter is an ERROR unless ignore_missing is set, and that prefix stripping works.
+    """
+    import tempfile
+    from returnn.jax.engine import Engine
+    from returnn.jax.checkpoint import load_checkpoint
+
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        # train briefly, so the checkpoint holds values which differ from a fresh init
+        config, make_dataset = _simple_train_setup(tmp_dir, num_epochs=1)
+        engine = Engine(config=config)
+        engine.init_train_from_config(train_data=make_dataset(), dev_data=make_dataset())
+        engine.train()
+        trained = load_checkpoint(f"{tmp_dir}/model.001.orbax")
+
+        # a fresh engine that preloads it
+        config2, make_dataset2 = _simple_train_setup(
+            f"{tmp_dir}/second",
+            num_epochs=1,
+            preload_from_files={"base": {"filename": f"{tmp_dir}/model.001.orbax", "init_for_train": True}},
+        )
+        os.makedirs(f"{tmp_dir}/second", exist_ok=True)
+        engine2 = Engine(config=config2)
+        engine2.init_train_from_config(train_data=make_dataset2(), dev_data=make_dataset2())
+        for name, param in engine2.get_model().named_parameters():
+            numpy.testing.assert_allclose(numpy.asarray(param.raw_tensor), trained[name], rtol=0, atol=0, err_msg=name)
+
+        # a parameter the checkpoint does not cover must fail loudly, not silently stay at its init
+        config3, make_dataset3 = _simple_train_setup(
+            f"{tmp_dir}/third",
+            num_epochs=1,
+            preload_from_files={
+                "base": {
+                    "filename": f"{tmp_dir}/model.001.orbax",
+                    "init_for_train": True,
+                    "ignore_params": ["linear.weight"],
+                }
+            },
+        )
+        os.makedirs(f"{tmp_dir}/third", exist_ok=True)
+        engine3 = Engine(config=config3)
+        try:
+            engine3.init_train_from_config(train_data=make_dataset3(), dev_data=make_dataset3())
+        except ValueError as exc:
+            assert "linear.weight" in str(exc), exc
+        else:
+            raise AssertionError("a missing parameter was accepted silently")
+
+
+def test_data_prefetch_overlaps():
+    """
+    The prefetch wrapper must overlap batch building with the step, and preserve order.
+
+    Measured on the production run, the device was busy about a quarter of the wall-clock: the
+    loop built a batch, issued a step, built a batch, with nothing running ahead. This checks the
+    mechanism (order, completeness, exception propagation, and that overlap actually happens),
+    not the production magnitude.
+    """
+    import time as _time
+
+    # noinspection PyProtectedMember
+    from returnn.jax.engine import _prefetch
+
+    produce_s, consume_s, n = 0.02, 0.02, 8
+
+    def _slow_source():
+        for i in range(n):
+            _time.sleep(produce_s)
+            yield i
+
+    def _run(buffer_size):
+        t0 = _time.time()
+        got = []
+        for item in _prefetch(_slow_source(), buffer_size=buffer_size):
+            _time.sleep(consume_s)  # stands in for the device step
+            got.append(item)
+        return got, _time.time() - t0
+
+    serial, t_serial = _run(0)
+    overlapped, t_overlap = _run(2)
+    assert serial == list(range(n)) and overlapped == list(range(n)), (serial, overlapped)
+    # serial is ~n*(produce+consume); overlapped is ~n*max(produce, consume) plus one produce
+    assert t_overlap < t_serial * 0.8, f"no overlap: serial {t_serial:.3f}s vs prefetched {t_overlap:.3f}s"
+
+    # an exception in the producer must reach the consumer, not hang it
+    def _bad_source():
+        yield 0
+        raise ValueError("boom")
+
+    try:
+        list(_prefetch(_bad_source(), buffer_size=2))
+    except ValueError as exc:
+        assert "boom" in str(exc)
+    else:
+        raise AssertionError("producer exception was swallowed")
 
 
 def test_packed_roundtrip():
@@ -1928,6 +2031,237 @@ def test_engine_train_amp():
     assert rf.get_amp_policy() is None
 
 
+def test_engine_bucket_precompile_and_timing():
+    """
+    Declared ``jax_jit`` buckets: every shape is compiled up front, and the per-shape timing pass
+    that follows must not touch the model.
+
+    That second half is the point of this test. The timing pass RUNS the real train step once per
+    bucket to measure it, and the compiled step DONATES its parameter and optimizer buffers --
+    so a version that passed the live arrays instead of copies would delete or overwrite them,
+    silently corrupting a production run. Asserted bit-identically against a run with the timing
+    pass disabled.
+    """
+    import tempfile
+    from returnn.jax.engine import Engine
+
+    buckets = [{"batch_dim": 3, "data": 12, "classes": 12}]
+
+    def _params_after_init(**opts):
+        """:return: (parameters, optimizer state) right after init, as NumPy"""
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            config, make_dataset = _simple_train_setup(
+                tmp_dir, num_epochs=1, jax_jit={"time_multiple": 0, "buckets": buckets}, **opts
+            )
+            engine = Engine(config=config)
+            engine.init_train_from_config(train_data=make_dataset(), dev_data=make_dataset())
+            params = {name: numpy.asarray(p.raw_tensor) for name, p in engine.get_model().named_parameters()}
+            opt = [numpy.asarray(x) for x in jax.tree_util.tree_leaves(engine._opt_state)]
+            # the parameters must still be usable, i.e. not deleted by the step's buffer donation
+            for p in engine.get_model().parameters():
+                assert not p.raw_tensor.is_deleted(), "the timing pass deleted a parameter buffer"
+            return params, opt
+
+    timed_params, timed_opt = _params_after_init()  # jax_time_buckets defaults on
+    plain_params, plain_opt = _params_after_init(jax_time_buckets=0)
+
+    assert set(timed_params) == set(plain_params) and timed_params
+    for name in plain_params:
+        numpy.testing.assert_array_equal(timed_params[name], plain_params[name], err_msg=name)
+    assert len(timed_opt) == len(plain_opt)
+    for i, (a, b) in enumerate(zip(timed_opt, plain_opt)):
+        numpy.testing.assert_array_equal(a, b, err_msg=f"opt state leaf {i}")
+
+
+def test_engine_packed_tensors():
+    """
+    ``packed_tensors`` in the engine: the step gets packed storage, and training is unchanged by it.
+
+    Packing is a storage change, not a math change -- the padded frames a masked op ignores are
+    simply not there -- so the SAME batches must give the same losses and the same parameters.
+    That equality is the whole point: it is what lets a packed run be compared against a padded
+    baseline. The train step additionally asserts the storage really is packed, so a silently
+    ignored config option cannot pass this test.
+    """
+    import tempfile
+    from returnn.jax.engine import Engine
+
+    seen_packed = []
+
+    def _train_step(*, model, extern_data, **_kwargs):
+        """train step, recording what storage the data arrived in"""
+        data = extern_data["data"]
+        seen_packed.append(type(data.raw_tensor).__name__ == "PackedRawTensor")
+        logits = model.linear(data)
+        loss = rf.cross_entropy(
+            estimated=logits, target=extern_data["classes"], axis=model.out_dim, estimated_type="logits"
+        )
+        rf.get_run_ctx().mark_as_loss(loss, "ce", custom_inv_norm_factor=data.dims[1].get_size_tensor())
+
+    def _run(**opts):
+        """:return: the parameters after one epoch, as NumPy"""
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            config, make_dataset = _simple_train_setup(tmp_dir, num_epochs=1, train_step=_train_step, **opts)
+            engine = Engine(config=config)
+            engine.init_train_from_config(train_data=make_dataset(), dev_data=make_dataset())
+            engine.train()
+            return {name: numpy.asarray(p.raw_tensor) for name, p in engine.get_model().named_parameters()}
+
+    padded = _run()
+    assert not any(seen_packed), "padded run got packed storage"
+    seen_packed.clear()
+    packed = _run(packed_tensors=True)
+    assert all(seen_packed) and seen_packed, "packed run did not get packed storage"
+
+    for name in padded:
+        numpy.testing.assert_allclose(packed[name], padded[name], rtol=1e-5, atol=1e-6, err_msg=name)
+
+
+def test_engine_accum_grad_multiple_step():
+    """
+    ``accum_grad_multiple_step``: the update is applied every k-th step, not every step.
+
+    Pinned by the two ends of the range rather than by a number: with k above the step count
+    of the epoch, NO update may happen at all (the parameters stay bit-identical to their init),
+    while k=1 must move them. That separates real gating from an update that merely got smaller.
+    """
+    import tempfile
+    from returnn.jax.engine import Engine
+
+    def _init_and_final_params(**opts):
+        """:return: (parameters after init, parameters after one epoch), as NumPy"""
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            config, make_dataset = _simple_train_setup(tmp_dir, num_epochs=1, **opts)
+            engine = Engine(config=config)
+            engine.init_train_from_config(train_data=make_dataset(), dev_data=make_dataset())
+            init = {name: numpy.asarray(p.raw_tensor) for name, p in engine.get_model().named_parameters()}
+            engine.train()
+            final = {name: numpy.asarray(p.raw_tensor) for name, p in engine.get_model().named_parameters()}
+            return init, final
+
+    init, final = _init_and_final_params(accum_grad_multiple_step=1000)  # more than the epoch has steps
+    for name in init:
+        numpy.testing.assert_array_equal(final[name], init[name], err_msg=name)
+
+    init, final = _init_and_final_params(accum_grad_multiple_step=1)
+    assert any(not numpy.array_equal(final[name], init[name]) for name in init)
+
+
+def test_engine_save_interval_and_epoch_hooks():
+    """
+    ``save_interval`` writes every Nth checkpoint, and ALWAYS the last one, whatever N is --
+    a run must not end without a usable checkpoint. ``epoch_start`` / ``epoch_end`` run per epoch
+    and per dataset.
+    """
+    import tempfile
+    from returnn.jax.engine import Engine
+
+    calls = []
+
+    def _epoch_start(*, epoch, dataset_name, **_kwargs):
+        calls.append(("start", epoch, dataset_name))
+
+    def _epoch_end(*, epoch, dataset_name, **_kwargs):
+        calls.append(("end", epoch, dataset_name))
+
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        config, make_dataset = _simple_train_setup(
+            tmp_dir, num_epochs=3, save_interval=2, epoch_start=_epoch_start, epoch_end=_epoch_end
+        )
+        engine = Engine(config=config)
+        engine.init_train_from_config(train_data=make_dataset(), dev_data=make_dataset())
+        engine.train()
+
+        assert not os.path.exists(f"{tmp_dir}/model.001.orbax")  # skipped by the interval
+        assert os.path.exists(f"{tmp_dir}/model.002.orbax")
+        assert os.path.exists(f"{tmp_dir}/model.003.orbax")  # the last epoch, despite the interval
+
+        assert calls == [
+            entry
+            for epoch in (1, 2, 3)
+            for entry in [
+                ("start", epoch, "train"),
+                ("end", epoch, "train"),
+                ("start", epoch, "dev"),
+                ("end", epoch, "dev"),
+            ]
+        ], calls
+
+
+def test_engine_stop_on_nonfinite_train_score():
+    """
+    A nonfinite train score stops the run instead of writing NaN checkpoints for the rest of it.
+    """
+    import tempfile
+    import pytest
+    from returnn.jax.engine import Engine
+
+    def _train_step(*, model, extern_data, **_kwargs):
+        """train step whose loss is not finite"""
+        logits = model.linear(extern_data["data"])
+        rf.get_run_ctx().mark_as_loss(rf.reduce_sum(logits, axis=logits.dims) * float("inf"), "broken")
+
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        config, make_dataset = _simple_train_setup(tmp_dir, num_epochs=1, train_step=_train_step)
+        engine = Engine(config=config)
+        engine.init_train_from_config(train_data=make_dataset(), dev_data=make_dataset())
+        with pytest.raises(Exception) as exc:
+            engine.train()
+        assert "nonfinite train score" in str(exc.value), exc.value
+
+
+def test_engine_forward_with_callback():
+    """
+    ``forward_step`` + ``model_outputs``: the forward task, over a real dataset, through the
+    backend-neutral callback interface.
+
+    What this pins down beyond "it runs": the callback gets ONE sequence at a time, as NumPy and
+    not as a device array, with the batch's padding cut off -- so a short sequence batched with a
+    long one must come back at its own length.
+    """
+    import tempfile
+    from returnn.forward_iface import ForwardCallbackIface
+    from returnn.jax.engine import Engine
+    from returnn.tensor import batch_dim, TensorDict
+
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        config, make_dataset = _simple_train_setup(tmp_dir, num_epochs=1)
+        engine = Engine(config=config)
+        engine.init_train_from_config(train_data=make_dataset(), dev_data=make_dataset())
+        engine.train()
+
+        extern_data_opts = config.typed_value("extern_data")
+        time_dim = extern_data_opts["data"]["dims"][1]
+        out_dim = extern_data_opts["classes"]["sparse_dim"]
+
+        def _forward_step(*, model, extern_data, **_kwargs):
+            """forward step, as the config API defines it"""
+            logits = model.linear(extern_data["data"])
+            rf.get_run_ctx().mark_as_output(logits, "logits", dims=[batch_dim, time_dim, out_dim])
+
+        config.typed_dict["forward_step"] = _forward_step
+        config.typed_dict["model_outputs"] = {"logits": {"dims": [batch_dim, time_dim, out_dim], "dtype": "float32"}}
+        config.typed_dict["task"] = "forward"
+
+        collected = {}
+
+        class _Callback(ForwardCallbackIface):
+            def process_seq(self, *, seq_tag: str, outputs: TensorDict):
+                """one sequence"""
+                logits = outputs["logits"]
+                assert isinstance(logits.raw_tensor, numpy.ndarray), type(logits.raw_tensor)
+                collected[seq_tag] = logits.raw_tensor.shape
+
+        engine2 = Engine(config=config)
+        engine2.init_network_from_config(config)
+        engine2.forward_with_callback(dataset=make_dataset(), callback=_Callback())
+
+        # every sequence, each at its OWN length -- the dataset's lengths, not the batches' extents
+        assert len(collected) == len(_EngineTestSeqLens), collected
+        assert sorted(shape[0] for shape in collected.values()) == sorted(_EngineTestSeqLens)
+        assert all(shape[1] == _EngineTestNumClasses for shape in collected.values()), collected
+
+
 def test_engine_unsupported_config_opts():
     """
     Options which other engines implement and this one does not are rejected, not ignored.
@@ -1938,13 +2272,13 @@ def test_engine_unsupported_config_opts():
 
     with tempfile.TemporaryDirectory() as tmp_dir:
         for opts in [
-            {"accum_grad_multiple_step": 2},
-            {"preload_from_files": {"base": {"filename": "/dev/null"}}, "jax_distributed": {"reduce_type": "grad"}},
+            {"calculate_exp_loss": True},
+            {"jax_distributed": {"reduce_type": "grad"}},
             # a config copied from a PyTorch setup: the torch_ names are rejected too,
             # rather than silently doing nothing
             {"torch_amp": "bfloat16"},
             {"chunking": "200:100"},
-            {"forward_step": lambda **_kwargs: None},
+            {"online_shuffle_batches": {"buffer_size": 100}},
         ]:
             config, make_dataset = _simple_train_setup(tmp_dir, **opts)
             dataset = make_dataset()

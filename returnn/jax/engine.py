@@ -22,7 +22,9 @@ that costs one recompile per epoch.
 from __future__ import annotations
 from typing import Optional, Union, Any, Dict, List, Tuple
 import os
+import queue as _queue
 import socket
+import threading as _threading
 import time
 import shutil
 
@@ -33,8 +35,9 @@ import numpy
 from returnn.config import Config
 from returnn.datasets.basic import Dataset
 from returnn.engine.base import EngineBase
+from returnn.forward_iface import ForwardCallbackIface
 from returnn.log import log
-from returnn.tensor import Tensor, TensorDict
+from returnn.tensor import Tensor, Dim, TensorDict, batch_dim
 from returnn.util import basic as util
 import returnn.frontend as rf
 
@@ -45,6 +48,8 @@ from .data import (
     pad_raws_to_bucket,
     batch_to_jax_raws,
 )
+from returnn.datasets.packing import packed_batch_config, packed_batch_key_opts
+
 from .frontend._backend import JaxBackend, _device_from_str
 from .updater import Updater, global_grad_norm
 from . import checkpoint as _checkpoint
@@ -78,6 +83,17 @@ class Engine(EngineBase):
         self._updater: Optional[Updater] = None
         self._opt_state: Any = None
         self._train_step_func = None
+        # Config hooks around an epoch, e.g. to switch a dataset's parameters per epoch.
+        # They run on the HOST, outside the step, so they may do whatever Python they like.
+        self._epoch_start_func = config.typed_value("epoch_start")
+        self._epoch_end_func = config.typed_value("epoch_end")
+        # A nonfinite train score means the run is producing garbage from here on; the default
+        # is to stop, so that a broken run does not spend its whole budget writing NaN checkpoints.
+        self._stop_on_nonfinite_train_score = config.bool("stop_on_nonfinite_train_score", True)
+        self._save_model_epoch_interval = config.int("save_interval", 1)
+        self._final_epoch = config.int("num_epochs", 1)
+        self._forward_step_func = None
+        self._forward_step_expected_outputs: Optional[TensorDict] = None
         self._params: List[rf.Parameter] = []
         self._train_param_idx: List[int] = []
         self._value_and_grad = None
@@ -103,11 +119,39 @@ class Engine(EngineBase):
         # Mixed precision: the compute dtype of matmul/conv. Parameters, gradients and the
         # optimizer stay float32, as with PyTorch AMP -- see returnn.frontend.amp for what it covers.
         # Scoped to the step (like torch.autocast is), not set globally, so nothing outside sees it.
+        # Persistent compilation cache: one bucket costs ~35 s to compile, and the whole declared
+        # grid is compiled at startup -- which is paid again on every resubmission (the 11.9h SLURM
+        # limit splits a 100-epoch run into several). With the cache, a resubmitted run reloads the
+        # programs instead of rebuilding them, so the bucket count stops trading against restarts.
+        cache_dir = config.value("jax_compilation_cache_dir", None)
+        if cache_dir:
+            jax.config.update("jax_compilation_cache_dir", cache_dir)
+            # default 1s: our step compiles take far longer, so cache all of them
+            jax.config.update("jax_persistent_cache_min_compile_time_secs", 1.0)
+            print(f"JAX compilation cache: {cache_dir}", file=log.v3)
         if self._jit_opts is not None:
             print(f"JAX engine: compiled step, {self._jit_opts}", file=log.v3)
         # Diagnostics, the same ones the PyTorch engine has, so the logs of a JAX run and a torch
         # run parse identically (the throughput tooling reads these lines).
         self._log_batch_size = config.bool("log_batch_size", False) and log.verbose[5]
+        # How many batches the input pipeline runs ahead of the step. Default 2: enough to cover
+        # one step's worth of device time, and it bounds the extra host memory to 2 batches.
+        # 0 restores the serial loop, for comparing.
+        self._data_prefetch = config.int("jax_data_prefetch", 2)
+        # packed_tensors: the model computes on sum(lens) frames instead of n_seqs * max_len.
+        # The packing itself happens inside the step (one gather per key), so the batching layer
+        # only has to budget by CONTENT -- that is what packed_batch_size does.
+        self._packing = packed_batch_config()
+        if self._packing is not None:
+            print(f"JAX engine: packed tensors, {self._packing}", file=log.v3)
+            if self._jit_opts is not None:
+                # A compiled step needs a static shape for the packed buffer, i.e. a declared
+                # capacity per packed key, which nothing here derives yet. Loud, not silent:
+                # tracing rf.pack without one would fail deep inside the model instead.
+                raise NotImplementedError(
+                    "JAX engine: packed_tensors together with jax_jit is not implemented yet"
+                    " (the packed dim needs a declared capacity for a static shape)"
+                )
         amp = config.value("jax_amp", None)
         self._amp_policy: Optional[rf.AmpPolicy] = rf.AmpPolicy(compute_dtype=amp) if amp else None
         if self._amp_policy:
@@ -167,8 +211,11 @@ class Engine(EngineBase):
         if load_filename:
             self._load_model(filename=load_filename)
             print(f"Continuing after epoch {load_epoch} ({load_filename})", file=log.v3)
+        # After the checkpoint, so an explicitly preloaded part wins over what the checkpoint has.
+        self._preload_from_files(is_first_train_epoch=not load_filename)
         print(
-            f"JAX engine: starting at epoch {self.epoch}, device {self._device}, devices {jax.devices()}",
+            f"JAX engine: starting at epoch {self.epoch}, device {_device_description()},"
+            f" host {socket.gethostname()}, devices {jax.devices()}",
             file=log.v3,
         )
         if self._jit_opts is not None:
@@ -179,7 +226,7 @@ class Engine(EngineBase):
         Train for the configured number of epochs.
         """
         assert self.train_dataset is not None, "no train dataset"
-        final_epoch = self.config.int("num_epochs", 1)
+        final_epoch = self._final_epoch
         while self.epoch <= final_epoch:
             self.init_train_epoch()
             self.train_epoch()
@@ -206,7 +253,10 @@ class Engine(EngineBase):
                 "jax": jax.__version__,
                 "time": time.strftime("%Y-%m-%d-%H-%M-%S (UTC%z)"),
                 "hostname": socket.gethostname(),
-                "device": str(rf.get_default_device()),
+                # The GPU MODEL, as the PyTorch engine records it -- not the RF device string,
+                # which is just "gpu" and cannot tell two runs' hardware apart. Comparing runs
+                # across nodes without it silently compares hardware as much as backends.
+                "device": _device_description(),
                 "cpu": util.get_cpu_model_name(),
             }
         )
@@ -222,6 +272,7 @@ class Engine(EngineBase):
         One epoch over the train dataset.
         """
         print(f"start epoch {self.epoch} with learning rate {self.learning_rate} ...", file=log.v3)
+        self._on_epoch_start(dataset_name="train")
         start_time = time.time()
         # summed losses and summed normalization factors, divided into a score at the end
         accumulated: Dict[str, float] = {}
@@ -233,16 +284,38 @@ class Engine(EngineBase):
 
         pending_losses: Optional[Dict[str, Any]] = None  # of the step still running on the device
         pending_log: Optional[Dict[str, Any]] = None  # what to log about it, read at the same time
-        for batch_raws, complete_frac in self._iter_batches(self.train_dataset, train=True):
+        pending_bucket: Optional[Tuple[int, ...]] = None  # the shape that step ran on
+        bucket_stats: Dict[Tuple[int, ...], List[Any]] = {}  # shape -> [n steps, summed device wait]
+        # Where the epoch's wall-clock goes. JAX dispatch is async, so the only place the host
+        # waits for the device is the loss read below: t_dev_wait is device time the host could
+        # not hide, t_data is the pipeline producing the next batch. A step whose t_data dominates
+        # is HOST-bound, and no amount of kernel work will speed it up.
+        t_data = t_dev_wait = 0.0
+        t_mark = time.time()
+        for batch_raws, complete_frac in _prefetch(
+            self._iter_batches(self.train_dataset, train=True), buffer_size=self._data_prefetch
+        ):
+            t_data += time.time() - t_mark  # the generator ran between the iterations
             # Read the PREVIOUS step's losses here, not right after issuing it. JAX dispatch is
             # async, so producing the batch above already ran on the host while the device was still
             # working on that step; reading a loss blocks, and reading it any earlier would put the
             # host pipeline (measured 0.16 s) and the step (0.105 s) back to back instead of overlapping.
             if pending_losses is not None:
+                _t0 = time.time()
                 _accumulate_losses(pending_losses, sums=accumulated, norms=accumulated_norms)
+                _waited = time.time() - _t0  # blocks until the previous step finished
+                t_dev_wait += _waited
+                # Attribute that wait to the SHAPE it was waiting on. Per-bucket cost cannot be
+                # recovered from epoch totals -- the bucket counts of an epoch are collinear
+                # (they sum to the step count), so a least-squares solve returns nonsense.
+                # Measuring it needs no extra sync: this read already blocks.
+                if pending_bucket is not None:
+                    entry = bucket_stats.setdefault(pending_bucket, [0, 0.0])
+                    entry[0] += 1
+                    entry[1] += _waited
                 if pending_log:
                     print(_format_step_log(self.epoch, pending_losses, pending_log), file=log.v5)
-                pending_losses, pending_log = None, None
+                pending_losses, pending_log, pending_bucket = None, None, None
             # The LR of the STEP: the epoch-level value, put through the config's schedule if it has one.
             learning_rate = self._updater.get_effective_learning_rate(
                 learning_rate=self.learning_rate,
@@ -250,10 +323,12 @@ class Engine(EngineBase):
                 epoch=self.epoch,
                 epoch_continuous=(self.epoch - 1 + complete_frac) if complete_frac is not None else None,
             )
+            step_raws = self._step_raws(batch_raws)
+            pending_bucket = _bucket_key(step_raws) if self._jit_opts else None
             train_raws, other_raws, self._opt_state, self._rng_key, loss, losses, grad_norm = self._train_step(
                 [self._params[i].raw_tensor for i in self._train_param_idx],
                 [self._params[i].raw_tensor for i in self._other_param_idx],
-                self._step_raws(batch_raws),
+                step_raws,
                 self._opt_state,
                 self._rng_key,
                 jnp.asarray(learning_rate, dtype=jnp.float32),
@@ -275,11 +350,19 @@ class Engine(EngineBase):
                 pending_log.update(_batch_size_info(batch_raws))
             num_steps += 1
             self.global_train_step += 1
+            t_mark = time.time()
             if num_steps % 100 == 0:
                 print(f"ep {self.epoch} step {num_steps}, loss {float(loss):.5f}", file=log.v4)
 
         if pending_losses is not None:  # the last step of the epoch
+            _t0 = time.time()
             _accumulate_losses(pending_losses, sums=accumulated, norms=accumulated_norms)
+            _waited = time.time() - _t0  # read ONCE, so the two accumulators agree
+            t_dev_wait += _waited
+            if pending_bucket is not None:
+                entry = bucket_stats.setdefault(pending_bucket, [0, 0.0])
+                entry[0] += 1
+                entry[1] += _waited
             if pending_log:
                 print(_format_step_log(self.epoch, pending_losses, pending_log), file=log.v5)
         JaxBackend._rng_key = self._rng_key
@@ -288,6 +371,28 @@ class Engine(EngineBase):
         print(
             f"epoch {self.epoch} finished: {num_steps} steps, {_format_scores(scores)}, {elapsed:.1f} sec", file=log.v3
         )
+        # host vs device: the split that says which side is worth optimizing
+        print(
+            f"epoch {self.epoch} time split:"
+            f" data {t_data:.1f}s ({100 * t_data / max(elapsed, 1e-9):.0f}%),"
+            f" device-wait {t_dev_wait:.1f}s ({100 * t_dev_wait / max(elapsed, 1e-9):.0f}%),"
+            f" other {elapsed - t_data - t_dev_wait:.1f}s"
+            f" -- per step: {t_data / max(num_steps, 1) * 1000:.1f} ms data,"
+            f" {t_dev_wait / max(num_steps, 1) * 1000:.1f} ms device-wait",
+            file=log.v3,
+        )
+        # Per-SHAPE cost. The device wait is a LOWER BOUND on a step's device time (it is the part
+        # the host could not hide behind building the next batch), so these numbers compare shapes
+        # against each other honestly and understate all of them equally.
+        if bucket_stats:
+            ranked = sorted(bucket_stats.items(), key=lambda kv: -kv[1][1])
+            print(
+                f"epoch {self.epoch} per-shape device wait:"
+                + "".join(
+                    f"\n  {key} n {n} mean {total / n * 1000:.1f} ms total {total:.1f} s" for key, (n, total) in ranked
+                ),
+                file=log.v3,
+            )
         # train_loss_, not train_score_: the key names are the PyTorch engine's, so that a run of
         # either engine can be read by the same downstream code and compared key by key.
         self.learning_rate_control.set_epoch_error(self.epoch, {f"train_loss_{k}": v for k, v in scores.items()})
@@ -299,18 +404,71 @@ class Engine(EngineBase):
             }
         )
         self._report_dev_memory_stats()
+        if self._stop_on_nonfinite_train_score:
+            nonfinite = {name: value for name, value in scores.items() if not numpy.isfinite(value)}
+            if nonfinite:
+                print(f"Model seems broken, got inf or nan score: {nonfinite}", file=log.v1)
+                self._report_nonfinite_params()
+                raise Exception(f"epoch {self.epoch}: nonfinite train score {nonfinite}")
+        self._on_epoch_end(dataset_name="train")
         self._maybe_stop_for_resubmission(time.time() - start_time)
-        self._save_model()
+        # save_interval: the LAST epoch is always saved, whatever the interval, so that a run
+        # always ends with a usable checkpoint.
+        if self.epoch % self._save_model_epoch_interval == 0 or self.epoch == self._final_epoch:
+            self._save_model()
         self.eval_model()
         self.learning_rate_control.save()
         if self.config.bool_or_other("cleanup_old_models", None):
             self.cleanup_old_models()
+
+    def _on_epoch_start(self, *, dataset_name: str):
+        """
+        :param dataset_name: which dataset the epoch is about to run over
+        """
+        if self._epoch_start_func:
+            self._epoch_start_func(
+                epoch=self.epoch,
+                step=self.global_train_step,
+                model=self.model,
+                dataset_name=dataset_name,
+                **util.get_fwd_compat_kwargs(),
+            )
+
+    def _on_epoch_end(self, *, dataset_name: str):
+        """
+        :param dataset_name: which dataset the epoch just ran over
+        """
+        if self._epoch_end_func:
+            self._epoch_end_func(
+                epoch=self.epoch,
+                step=self.global_train_step,
+                model=self.model,
+                dataset_name=dataset_name,
+                **util.get_fwd_compat_kwargs(),
+            )
+
+    def _report_nonfinite_params(self):
+        """
+        Which parameters hold inf/nan, for a broken run. Whether any do at all is the first thing
+        that separates a diverged model from a single bad batch.
+        """
+        count = 0
+        for name, param in zip(self._param_names, self._params):
+            raw = param.raw_tensor
+            got_nan, got_inf = bool(jnp.isnan(raw).any()), bool(jnp.isinf(raw).any())
+            if got_nan or got_inf:
+                what = "/".join(s for s, b in [("nan", got_nan), ("inf", got_inf)] if b)
+                print(f"  {name} {param}: {what}", file=log.v1)
+                count += 1
+        if not count:
+            print("(No inf/nan in model parameters.)", file=log.v1)
 
     def eval_model(self):
         """
         Run over the eval datasets and report the scores.
         """
         for name, dataset in self.eval_datasets.items():
+            self._on_epoch_start(dataset_name=name)
             accumulated: Dict[str, float] = {}
             accumulated_norms: Dict[str, float] = {}
             num_steps = 0
@@ -328,6 +486,7 @@ class Engine(EngineBase):
             scores = {f"{name}_loss_{k}": v / accumulated_norms[k] for k, v in accumulated.items()}
             print(f"epoch {self.epoch} {name}: {_format_scores(scores)}", file=log.v3)
             self.learning_rate_control.set_epoch_error(self.epoch, scores)
+            self._on_epoch_end(dataset_name=name)
 
     def get_model(self) -> rf.Module:
         """
@@ -452,6 +611,7 @@ class Engine(EngineBase):
         if not buckets:
             return
         start = time.time()
+        timed: List[Tuple[Dict[str, int], Dict[str, Any]]] = []  # (bucket, its dummy batch), for _time_buckets
         for bucket in buckets:
             # Through the REAL data path (batch_to_jax_raws + _step_raws), not hand-built arrays:
             # the signature includes things like whether each array is committed to a device, and
@@ -490,8 +650,64 @@ class Engine(EngineBase):
                 self.epoch if self._static_argnums else jnp.asarray(self.epoch, dtype=jnp.int32),
                 _compile_only=True,
             )
+            timed.append((bucket, raws))
         print(
             f"JAX engine: compiled {len(buckets)} bucket programs in {time.time() - start:.1f} sec",
+            file=log.v3,
+        )
+        self._time_buckets(timed)
+
+    def _time_buckets(self, timed: List[Tuple[Dict[str, int], Dict[str, Any]]]):
+        """
+        :param timed: (bucket, its dummy batch) per compiled program
+
+        Time each compiled program on its own dummy batch, blocking on the result: the PURE
+        device cost of one step per shape, with no data pipeline and no host overlap in it.
+
+        This is the number the whole speed investigation needs and could not get otherwise --
+        per-shape cost is not recoverable from epoch totals (the bucket counts of an epoch sum to
+        its step count, so a least-squares solve over them is collinear and returns nonsense), and
+        the per-step device wait during training is only a lower bound, since the host hides part
+        of it. Here nothing is hidden.
+
+        It cannot disturb training: the parameters and optimizer state go in as COPIES (the step
+        donates its input buffers, which would otherwise delete the real ones), the learning rate
+        is 0, and every output is discarded.
+        """
+        reps = self.config.int("jax_time_buckets", 2)
+        if not reps or not timed:
+            return
+        rows = []
+        for bucket, raws in timed:
+            # copies: the compiled step donates args 0, 1 and 3, i.e. it DELETES what it is given
+            train_raws = [jnp.array(self._params[i].raw_tensor) for i in self._train_param_idx]
+            other_raws = [jnp.array(self._params[i].raw_tensor) for i in self._other_param_idx]
+            best = None
+            for rep in range(reps + 1):  # one warmup, then the timed reps
+                args = (
+                    [jnp.array(x) for x in train_raws],
+                    [jnp.array(x) for x in other_raws],
+                    raws,
+                    jax.tree_util.tree_map(jnp.array, self._opt_state),
+                    self._rng_key if self._rng_key is not None else self._commit_one(JaxBackend._get_rng_key_()),
+                    jnp.asarray(0.0, dtype=jnp.float32),  # lr 0: this must not change the model
+                    jnp.asarray(0, dtype=jnp.int32),
+                    self.epoch if self._static_argnums else jnp.asarray(self.epoch, dtype=jnp.int32),
+                )
+                t0 = time.time()
+                jax.block_until_ready(self._run_compiled_step(*args))
+                took = time.time() - t0
+                if rep and (best is None or took < best):
+                    best = took  # min over reps: the least contaminated by anything else on the device
+            volume = bucket["batch_dim"] * max((int(v) for k, v in bucket.items() if k != "batch_dim"), default=1)
+            rows.append((bucket, best, volume))
+        print(
+            "JAX engine: per-shape step cost (pure device, min of"
+            f" {reps} reps, no data pipeline):"
+            + "".join(
+                f"\n  {bucket} {sec * 1000:8.1f} ms  {vol / 1e6:7.1f}M padded  {sec / (vol / 1e6) * 1000:6.2f} ms/M"
+                for bucket, sec, vol in rows
+            ),
             file=log.v3,
         )
 
@@ -577,6 +793,29 @@ class Engine(EngineBase):
             )
         return batch_raws
 
+    def _pack_extern_data(self, extern_data: TensorDict):
+        """
+        :param extern_data: modified in place
+
+        Repack the padded batch into packed storage (``packed_tensors``), in the step rather than
+        in the data pipeline: one gather per key, on the device, after which every op of the model
+        runs on sum(lens) frames instead of n_seqs * max_len. The dims stay the same -- what changes
+        is the storage behind them (``PackedRawTensor``), so nothing in the config's model code
+        or in RF has to know.
+        """
+        if self._packing is None:
+            return
+        for key, value in list(extern_data.data.items()):
+            opts = packed_batch_key_opts(self._packing, key)
+            if opts is None:
+                continue  # this key opted out, it stays padded
+            if len(value.dims) < 2 or not value.dims[1].is_dynamic():
+                continue  # nothing to pack
+            packed = rf.pack(value, dims=[batch_dim, value.dims[1]])
+            new_value = value.copy()
+            new_value.raw_tensor = packed.raw_tensor
+            extern_data.data[key] = new_value
+
     def _create_model(self, *, epoch: int, step: int):
         """
         :param epoch:
@@ -618,6 +857,7 @@ class Engine(EngineBase):
                 self._params[idx].raw_tensor = raw
             try:
                 extern_data = fill_extern_data(self.extern_data, batch_raws)
+                self._pack_extern_data(extern_data)
                 # traced values: wrap them, the run ctx takes an int or a Tensor.
                 # The dtype comes from the array, not assumed: a plain Python int becomes int64
                 # under x64, which this backend enables.
@@ -735,9 +975,199 @@ class Engine(EngineBase):
         assert count_bytes > 0, f"delete_model: nothing to delete for {filename!r}"
         return count_bytes
 
-    def _load_model(self, *, filename: str):
+    def init_network_from_config(self, config: Optional[Config] = None):
+        """
+        :param config:
+
+        Init for the forward / search task, i.e. everything :func:`forward_with_callback` needs:
+        the model with its checkpoint loaded, and the ``forward_step`` of the config.
+        No optimizer and no learning-rate control -- nothing here updates parameters.
+        """
+        assert config is self.config or config is None
+        config = self.config
+
+        from returnn.torch.data.extern_data import extern_data_template_from_config_opts
+
+        self.extern_data = extern_data_template_from_config_opts(config.typed_value("extern_data"))
+        self._forward_step_func = config.typed_value("forward_step")
+        assert self._forward_step_func, "forward_step not defined in config"
+        model_outputs = config.typed_value("model_outputs")
+        # The declared outputs, if any. They are what makes a missing mark_as_output an ERROR
+        # (run_ctx.check_outputs_complete) instead of a silently shorter result dict.
+        # Built plainly, NOT through extern_data_template_from_config_opts, which adds a seq_tag
+        # entry -- correct for input data, wrong for a declaration of what the step produces.
+        self._forward_step_expected_outputs = None
+        if model_outputs is not None:
+            self._forward_step_expected_outputs = TensorDict()
+            self._forward_step_expected_outputs.update(model_outputs, auto_convert=True)
+
+        self.model_filename = config.value("model", None)
+        epoch, load_filename = self.get_epoch_model(config)
+        self.epoch = epoch or 1
+        if self.global_train_step is None:
+            self.global_train_step = 0
+        self._create_model(epoch=self.epoch, step=self.global_train_step)
+        if load_filename:
+            self._load_model(filename=load_filename, with_opt_state=False)
+            print(f"Loaded model {load_filename} (epoch {epoch})", file=log.v3)
+        else:
+            print("No model checkpoint to load, using the initial parameters.", file=log.v3)
+        self._preload_from_files(is_first_train_epoch=False)
+        print(f"JAX engine: forward, device {self._device}, devices {jax.devices()}", file=log.v3)
+
+    def forward_with_callback(
+        self,
+        *,
+        dataset: Dataset,
+        callback: ForwardCallbackIface,
+        dataset_init_epoch: bool = True,
+        allow_skipping_seqs: bool = False,
+    ):
+        """
+        :param dataset: to forward over
+        :param callback: gets every sequence's outputs, one at a time
+        :param dataset_init_epoch: whether to sort the dataset for us (as the PyTorch engine does)
+        :param allow_skipping_seqs: whether min/max_seq_length may drop sequences here
+
+        The step runs EAGER, deliberately, even when ``jax_jit`` is set for training: a compiled
+        function's outputs have static shapes, while the outputs of a forward step (a beam search
+        above all) have a length which is a property of the values. Bounding them is the same work
+        as the packed/bucketed training path, and it only pays once a forward pass is a bottleneck.
+        """
+        assert isinstance(dataset, Dataset)
+        assert isinstance(callback, ForwardCallbackIface)
+        assert self.model is not None, "call init_network_from_config first"
+
+        if dataset_init_epoch and self.config.bool("sort_dataset", True):
+            if dataset.seq_ordering != "sorted_reverse" and dataset.supports_seq_order_sorting():
+                # reverse, so the largest batch is the first one: it either fits or fails at once
+                print("Dataset supports sorting, i.e. it will be sorted for optimal performance.", file=log.v3)
+                dataset.seq_ordering = "sorted_reverse"
+        if not allow_skipping_seqs:
+            for key in ("min_seq_length", "max_seq_length"):
+                assert not self._batch_opts.get(key), (
+                    f"{key} {self._batch_opts[key]} would DROP sequences from the forward output."
+                    f" Set allow_skipping_seqs=True if that is really wanted."
+                )
+
+        from returnn.torch.data.extern_data import get_batch_dim_from_extern_data
+
+        batch_dim_ = get_batch_dim_from_extern_data(self.extern_data)
+        report_prefix = f"ep {self.epoch} {dataset.name} forward"
+        start_time = time.time()
+        compute_time = 0.0
+        step_idx = 0
+        callback.init(model=self.model)
+        for batch_raws in self._iter_batches(dataset, train=False):
+            step_begin = time.time()
+            if self._forward_step_expected_outputs is not None:
+                # also resets the dyn dims the previous step set on them
+                self._forward_step_expected_outputs.reset_content()
+            outputs = self._forward_pass(batch_raws)
+            # One host read per step: the sizes of the output dims. Everything below indexes
+            # per sequence, which needs them as numbers anyway.
+            for batch_idx in range(batch_dim_.get_dim_value()):
+                seq_tag = batch_raws["seq_tag"][batch_idx]
+                outputs_per_seq = TensorDict()
+                for key, value in outputs.data.items():
+                    outputs_per_seq.data[key] = _tensor_of_seq_numpy(value, batch_idx=batch_idx, batch_dim=batch_dim_)
+                callback.process_seq(seq_tag=seq_tag, outputs=outputs_per_seq)
+            compute_time += time.time() - step_begin
+            step_idx += 1
+        callback.finish()
+
+        elapsed = time.time() - start_time
+        print(
+            f"{report_prefix}: {step_idx} steps, {util.hms(elapsed)} elapsed"
+            f" ({compute_time / elapsed * 100.0:.1f}% computing time)",
+            file=log.v3,
+        )
+        self._report_dev_memory_stats()
+
+    def _forward_pass(self, batch_raws: Dict[str, Any]) -> TensorDict:
+        """
+        :param batch_raws: one batch, as the data pipeline yields it
+        :return: what the step marked as output, still batched, raw tensors on the device
+
+        Same parameter binding as the train step, without the gradient transform around it.
+        """
+        orig = [p.raw_tensor for p in self._params]
+        try:
+            extern_data = fill_extern_data(self.extern_data, batch_raws)
+            rf.init_forward_step_run_ctx(
+                expected_outputs=self._forward_step_expected_outputs, step=self.global_train_step, epoch=self.epoch
+            )
+            sentinel_kw = util.get_fwd_compat_kwargs()
+            with rf.set_amp_policy_ctx(self._amp_policy):
+                self._forward_step_func(model=self.model, extern_data=extern_data, **sentinel_kw)
+            run_ctx = rf.get_run_ctx()
+            run_ctx.check_outputs_complete()
+            return run_ctx.outputs
+        finally:
+            for param, raw in zip(self._params, orig):
+                param.raw_tensor = raw
+
+    def _preload_from_files(self, *, is_first_train_epoch: bool):
+        """
+        :param is_first_train_epoch: whether no checkpoint was loaded, i.e. training starts fresh
+
+        ``preload_from_files``: initialize (parts of) the model from other checkpoints. Same option
+        shape as the PyTorch engine, and the same reversed-sorted order, so that the FIRST key in
+        sorted order wins where two of them match a parameter.
+
+        Supported per entry: ``filename`` (an ``.orbax`` directory or a PyTorch ``.pt``),
+        ``prefix`` (only parameters under it, with the prefix stripped from the checkpoint names),
+        ``init_for_train`` (else the entry is for recognition and is skipped while training),
+        ``ignore_missing``, and ``ignore_params`` / ``ignore_params_prefixes``.
+        """
+        opts_dict = self.config.typed_value("preload_from_files", None)
+        if not opts_dict:
+            return
+        params = dict(self.model.named_parameters())
+        for key, opts in reversed(sorted(opts_dict.items())):
+            if not isinstance(opts, dict) or "filename" not in opts:
+                raise ValueError(f"preload_from_files {key!r}: expected a dict with 'filename', got {opts!r}")
+            init_for_train = opts.get("init_for_train", False)
+            if init_for_train:
+                # "always" also on a continued run; True only when starting fresh
+                if init_for_train != "always" and not is_first_train_epoch:
+                    continue
+            else:
+                continue  # for recognition; this engine only trains so far
+            filename = opts["filename"]
+            print(f"Pre-load weights for key {key!r} from {filename}", file=log.v3)
+            if filename.endswith(".pt"):
+                loaded = _checkpoint.load_torch_checkpoint(filename)
+            else:
+                loaded = _checkpoint.load_checkpoint(filename)
+
+            prefix = opts.get("prefix", "")
+            if prefix:
+                loaded = {name[len(prefix) :]: v for name, v in loaded.items() if name.startswith(prefix)}
+            ignore = set(opts.get("ignore_params", ()))
+            ignore_prefixes = tuple(opts.get("ignore_params_prefixes", ()))
+            if ignore or ignore_prefixes:
+                loaded = {
+                    name: v for name, v in loaded.items() if name not in ignore and not name.startswith(ignore_prefixes)
+                }
+
+            missing = [name for name in params if name not in loaded]
+            if missing and not opts.get("ignore_missing", False):
+                raise ValueError(
+                    f"preload_from_files {key!r}: {len(missing)} parameter(s) not in {filename}:"
+                    f" {missing[:10]}{' ...' if len(missing) > 10 else ''}."
+                    f" Set ignore_missing=True to initialize them normally instead."
+                )
+            _checkpoint.set_model_params(self.model, loaded, allow_missing=True)
+            print(f"  loaded {len(loaded)} parameter(s), {len(missing)} left at their init", file=log.v3)
+        # the params were replaced in place; re-commit so the step sees them on the device
+        self._commit_to_device([p.raw_tensor for p in self._params], into=self._params)
+
+    def _load_model(self, *, filename: str, with_opt_state: bool = True):
         """
         :param filename: without the ``.orbax`` postfix, as :func:`EngineBase.get_epoch_model` returns it
+        :param with_opt_state: whether to also restore the optimizer state next to it.
+            False for forward / search, which have no optimizer to restore it into.
         """
         postfix = util.get_model_filename_postfix()
         if filename.endswith(postfix):
@@ -745,9 +1175,86 @@ class Engine(EngineBase):
         _checkpoint.set_model_params(self.model, _checkpoint.load_checkpoint(filename + postfix))
         print(f"Loaded model {filename + postfix}", file=log.v3)
         opt_filename = filename + ".opt" + postfix
-        if os.path.exists(opt_filename):
+        if with_opt_state and os.path.exists(opt_filename):
             self._opt_state = _checkpoint.load_opt_state(self._opt_state, opt_filename)
             print(f"Loaded optimizer state {opt_filename}", file=log.v3)
+
+
+def _bucket_key(step_raws: Dict[str, Any]) -> Tuple[int, ...]:
+    """
+    :param step_raws: what goes into the step, after padding to a bucket
+    :return: the shapes it runs on, flattened, as a hashable key
+
+    The shapes AFTER bucket padding, i.e. what the compiled program actually sees -- which is also
+    what selects the executable, so one key is one program.
+    """
+    key: List[int] = []
+    for name in sorted(step_raws):
+        value = step_raws[name]
+        if hasattr(value, "shape"):
+            key.extend(int(d) for d in value.shape)
+    return tuple(key)
+
+
+def _device_description() -> str:
+    """
+    :return: what the run computes on, e.g. "NVIDIA H100 80GB HBM3 (cuda)"
+
+    ``device_kind`` is the GPU model; ``rf.get_default_device()`` only says "gpu", which is not
+    enough to tell whether two runs shared hardware -- and a cross-node comparison that nobody
+    noticed was cross-node is worthless.
+    """
+    devices = jax.local_devices()
+    if not devices:
+        return "none"
+    dev = devices[0]
+    kind = getattr(dev, "device_kind", None) or dev.platform
+    return f"{kind} ({dev.platform})" + (f" x{len(devices)}" if len(devices) > 1 else "")
+
+
+def _tensor_of_seq_numpy(x: Tensor, *, batch_idx: int, batch_dim: Dim) -> Tensor:
+    """
+    :param x: batched, with ``batch_dim`` among its dims
+    :param batch_idx: which sequence
+    :param batch_dim:
+    :return: that one sequence, as a NumPy tensor, padding cut off, without the batch dim
+
+    NumPy and not a JAX array: the callback interface is backend-neutral -- the same callback
+    is used by the PyTorch and TF engines -- so what it gets must not be a device array.
+    """
+    if batch_dim not in x.dims:
+        raise Exception(f"Expected {batch_dim} in {x}.")
+    if x.dims.index(batch_dim) != 0:
+        x = x.copy_move_axis(x.dims.index(batch_dim), 0)
+
+    kwargs = x.copy_template_excluding_axis(0).get_kwargs()
+    kwargs["dims"] = [_dim_of_seq(dim, batch_idx=batch_idx, batch_dim=batch_dim) for dim in kwargs["dims"]]
+    y = Tensor(**kwargs)
+
+    raw = numpy.asarray(x.raw_tensor)
+    # a scalar per sequence stays an ndarray, so the callback sees the same type either way
+    raw = raw[batch_idx] if x.batch_ndim > 1 else raw[batch_idx : batch_idx + 1].reshape(())
+    if any(d is not d_ for d, d_ in zip(x.dims[1:], y.dims)):  # any dim replaced above?
+        raw = raw[tuple(slice(None, dim.get_dim_value()) for dim in y.dims)]  # cut the padding
+    y.raw_tensor = raw
+    return y
+
+
+def _dim_of_seq(dim: Dim, *, batch_idx: int, batch_dim: Dim) -> Dim:
+    """
+    :param dim:
+    :param batch_idx:
+    :param batch_dim:
+    :return: the dim as it applies to ONE sequence
+
+    A dynamic dim's size is itself a tensor over the batch (``[B]``), and the callback gets one
+    sequence at a time, so that size has to lose its batch dim too.
+    """
+    if dim.dyn_size_ext is None or batch_dim not in dim.dyn_size_ext.dims:
+        return dim
+    new_dim = dim.copy()
+    new_dim.dyn_size_ext = _tensor_of_seq_numpy(dim.dyn_size_ext, batch_idx=batch_idx, batch_dim=batch_dim)
+    return new_dim
 
 
 def _batch_opts_from_config(config: Config) -> Dict[str, Any]:
@@ -755,11 +1262,17 @@ def _batch_opts_from_config(config: Config) -> Dict[str, Any]:
     :param config:
     :return: the batching options this engine supports
     """
+    packed_batch_size = config.typed_value("packed_batch_size", None)
     opts = {
-        "batch_size": config.typed_value("batch_size", None) or config.int("batch_size", 10000),
+        # With packed_batch_size the CONTENT is what is budgeted, and a padded budget on top of it
+        # would cut batches short for no reason -- so batch_size defaults to unlimited there.
+        "batch_size": config.typed_value("batch_size", None)
+        or (None if packed_batch_size is not None else config.int("batch_size", 10000)),
         "eval_batch_size": config.typed_value("eval_batch_size", None),
         "max_seqs": config.int("max_seqs", -1),
     }
+    if packed_batch_size is not None:
+        opts["packed_batch_size"] = packed_batch_size
     # Further options of the shared batching layer (Dataset.generate_batches), passed through as given.
     for key in ("max_seq_length", "min_seq_length", "max_pad_size", "max_total_num_seqs", "seq_drop"):
         value = config.typed_value(key, None)
@@ -773,27 +1286,18 @@ def _batch_opts_from_config(config: Config) -> Dict[str, Any]:
 # They are rejected rather than ignored: silently dropping e.g. accum_grad_multiple_step
 # or preload_from_files changes what the config means, while the run would still look fine.
 _UnsupportedConfigOpts = {
-    "accum_grad_multiple_step": 1,
     "apply_cleanup_old_models_to_optim_states": False,
     "calculate_exp_loss": False,
     "chunking": None,
     "min_chunk_size": None,
     "debug_shell_before_train_loop": False,
     "default_float_dtype": None,
-    "epoch_end": None,
-    "epoch_start": None,
-    "forward_step": None,  # forward / search
-    "model_outputs": None,  # forward / search
     "forward_auto_split_batch_on_oom": False,
     "grad_scaler": None,
     "load_model_post_hooks": None,
     "online_shuffle_batches": None,
-    "preload_from_files": None,
     "pretrain": None,
     "reset_dev_memory_caches": False,
-    "save_interval": 1,
-    "sort_dataset": None,
-    "stop_on_nonfinite_train_score": None,
     "tensorboard_opts": None,
     "use_tensorboard": False,
     # backend-specific options are named after the backend, as `torch_...` is on PyTorch
@@ -918,6 +1422,47 @@ def _step_signature(args) -> Any:
             for leaf in leaves
         ),
     )
+
+
+def _prefetch(iterable, *, buffer_size: int):
+    """
+    :param iterable: the batch iterator
+    :param buffer_size: how many batches to run ahead; 0 disables
+    :return: the same items, produced by a background thread
+
+    The step is issued asynchronously, so the host is free while the device works -- but only if
+    something else is producing the next batch. Without this the loop alternates: build a batch,
+    issue a step, build a batch. Measured on the production run, the device was busy about a
+    quarter of the wall-clock, so the batch build was the limit, not the kernels.
+
+    A thread (not a process) because the work that dominates -- the dataset's own reads and the
+    numpy/JAX array conversion -- releases the GIL.
+    """
+    if not buffer_size:
+        yield from iterable
+        return
+
+    queue: "_queue.Queue" = _queue.Queue(maxsize=buffer_size)
+    end = object()
+
+    def _produce():
+        try:
+            for item in iterable:
+                queue.put(item)
+        except BaseException as exc:  # noqa: BLE001  # re-raised in the consumer below
+            queue.put(exc)
+        else:
+            queue.put(end)
+
+    thread = _threading.Thread(target=_produce, name="jax-data-prefetch", daemon=True)
+    thread.start()
+    while True:
+        item = queue.get()
+        if item is end:
+            return
+        if isinstance(item, BaseException):
+            raise item
+        yield item
 
 
 def _batch_size_info(batch_raws: Dict[str, Any]) -> Dict[str, Any]:
