@@ -6,7 +6,7 @@ from __future__ import annotations
 
 import contextlib
 import typing
-from typing import Dict, Optional, Tuple, Union, Any, TypeVar
+from typing import Dict, Optional, Tuple, Union, Any, TypeVar, Callable
 import tensorflow as tf
 import returnn.tf.compat as tf_compat
 
@@ -1446,7 +1446,7 @@ class _SubnetworkRecCell:
         self.input_layers_net = None  # type: typing.Optional[TFNetwork]
         self.output_layers_net = None  # type: typing.Optional[TFNetwork]
         self.final_acc_tas_dict = None  # type: typing.Optional[typing.Dict[str, tf.TensorArray]]
-        self.get_final_rec_vars = None
+        self.get_final_rec_vars: Optional[Callable] = None
         self.accumulated_losses = {}  # type: typing.Dict[str,LossHolder]
 
     def __repr__(self):
@@ -5508,6 +5508,7 @@ class RnnCellLayer(_ConcatInputLayer):
             # `name` refers to the inner rec layer.
             # https://github.com/rwth-i6/returnn/pull/1248#issuecomment-1618125397
             if isinstance(rec_layer, RecLayer) and isinstance(rec_layer.cell, _SubnetworkRecCell):
+                assert rec_layer.cell.get_final_rec_vars is not None
                 final_rec_vars = rec_layer.cell.get_final_rec_vars(name)
                 last_state = cls.get_state_by_key(final_rec_vars[state_key or "state"], key=key, shape=initial_shape)
             else:
