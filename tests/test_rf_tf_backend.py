@@ -546,6 +546,205 @@ def test_engine_train():
         shutil.rmtree(model_dir, ignore_errors=True)
 
 
+def test_engine_train_tf_jit():
+    # tf_jit: XLA auto-clustering on the session (global_jit_level), see _make_tf_session_config.
+    # The engine seeds the model init from (epoch, step, random_seed), so two runs of the same
+    # config are init-identical and the jit run must reproduce the non-jit losses up to
+    # XLA-vs-Eigen float reassociation.
+    from returnn.config import Config, global_config_ctx
+    from returnn.datasets.generating import DummyDataset
+    from returnn.tf.engine_rf import Engine
+
+    # noinspection PyProtectedMember
+    from returnn.frontend import _backend
+
+    n_data_dim, n_classes_dim, seq_len = 2, 3, 5
+
+    time_dim = Dim(Tensor("time", [batch_dim], dtype="int32"))
+    in_dim = Dim(n_data_dim, name="in")
+    out_dim = Dim(n_classes_dim, name="out")
+
+    class _Net(rf.Module):
+        def __init__(self):
+            super().__init__()
+            self.out = rf.Linear(in_dim, out_dim)
+
+    # noinspection PyShadowingNames
+    def _get_model(*, epoch: int, step: int, **_kwargs) -> rf.Module:
+        return _Net()
+
+    # noinspection PyShadowingNames
+    def _train_step(*, model: _Net, extern_data: TensorDict, **_kwargs):
+        logits = model.out(extern_data["data"])
+        loss = rf.cross_entropy(estimated=logits, target=extern_data["classes"], axis=out_dim, estimated_type="logits")
+        loss.mark_as_loss("ce")
+
+    scores = {}
+    _backend.select_backend_tf()
+    prev_batch_dyn_size_ext = batch_dim.dyn_size_ext
+    try:
+        for tf_jit in (False, True):
+            train_data = DummyDataset(input_dim=n_data_dim, output_dim=n_classes_dim, num_seqs=8, seq_len=seq_len)
+            train_data.init_seq_order(epoch=1)
+            model_dir = tempfile.mkdtemp(prefix="returnn-test-rf-tf-engine-jit-")
+            config = Config(
+                {
+                    "backend": "tensorflow",
+                    "model": model_dir + "/model",
+                    "tf_jit": tf_jit,
+                    "extern_data": {
+                        "data": {"dims": [batch_dim, time_dim, in_dim], "dtype": "float32"},
+                        "classes": {"dims": [batch_dim, time_dim], "sparse_dim": out_dim, "dtype": "int32"},
+                    },
+                    "get_model": _get_model,
+                    "train_step": _train_step,
+                    "optimizer": {"class": "adam"},
+                    "learning_rate": 0.05,
+                    "batch_size": 20,
+                    "max_seqs": 4,
+                    "num_epochs": 2,
+                }
+            )
+            try:
+                with global_config_ctx(config):
+                    engine = Engine(config=config)
+                    engine.init_train_from_config(config=config, train_data=train_data)
+                    engine.train()
+                    scores[tf_jit] = engine.learning_rate_control.get_epoch_error_dict(2)["train_loss:ce"]
+            finally:
+                shutil.rmtree(model_dir, ignore_errors=True)
+        print("train_loss:ce ep 2, tf_jit False vs True:", scores)
+        assert scores[True] < 2.0, scores  # sane (ce starts around ln(3)=1.1, must not blow up)
+        numpy.testing.assert_allclose(scores[False], scores[True], rtol=1e-4)
+    finally:
+        batch_dim.dyn_size_ext = prev_batch_dyn_size_ext
+        rf.select_backend_torch()
+
+
+def test_generate_batches_packed_batch_size():
+    # The sum-of-lens batch budget (packed_batch_size) in the shared batcher
+    # (Dataset._generate_batches), which the TF RF engine passes through.
+    # Fixed seq len 5: budget 12 holds 2 seqs (sum 10), a third (15) exceeds it;
+    # batch_size None is allowed when the packed budget is given.
+    from returnn.datasets.generating import DummyDataset
+
+    dataset = DummyDataset(input_dim=2, output_dim=3, num_seqs=7, seq_len=5)
+    dataset.init_seq_order(epoch=1)
+    batches = dataset.generate_batches(recurrent_net=True, batch_size=None, max_seqs=-1, packed_batch_size=12)
+    seqs_per_batch = []
+    while batches.has_more():
+        (batch,) = batches.peek_next_n(1)
+        seqs_per_batch.append(batch.num_slices)
+        batches.advance(1)
+    assert seqs_per_batch == [2, 2, 2, 1], seqs_per_batch
+
+
+def test_engine_train_packed():
+    # packed_tensors on the TF engine: the extern data is repacked IN-GRAPH into packed storage
+    # (engine _pack_extern_data), so the model computes on sum(lens) frames instead of
+    # n_seqs * max_len; the feed stays the padded placeholders. Varying seq lens (Task12AX,
+    # 10..100) make the packing non-trivial. Same batching in the packed and padded run,
+    # so the losses must agree up to reduce order. A third run additionally uses the
+    # sum-of-lens batch budget (packed_batch_size, batch_size None) and just has to train sanely
+    # (different batch composition, so no loss comparison).
+    from returnn.config import Config, global_config_ctx
+    from returnn.datasets.generating import Task12AXDataset
+    from returnn.tf.engine_rf import Engine
+
+    # noinspection PyProtectedMember
+    from returnn.frontend import _backend
+
+    n_data_dim, n_classes_dim = 9, 2
+
+    time_dim = Dim(Tensor("time", [batch_dim], dtype="int32"))
+    in_dim = Dim(n_data_dim, name="in")
+    out_dim = Dim(n_classes_dim, name="out")
+
+    class _Net(rf.Module):
+        def __init__(self):
+            super().__init__()
+            self.out = rf.Linear(in_dim, out_dim)
+
+    # noinspection PyShadowingNames
+    def _get_model(*, epoch: int, step: int, **_kwargs) -> rf.Module:
+        return _Net()
+
+    # noinspection PyShadowingNames
+    def _train_step(*, model: _Net, extern_data: TensorDict, **_kwargs):
+        logits = model.out(extern_data["data"])
+        loss = rf.cross_entropy(estimated=logits, target=extern_data["classes"], axis=out_dim, estimated_type="logits")
+        loss.mark_as_loss("ce")
+
+    scores = {}
+    _backend.select_backend_tf()
+    prev_batch_dyn_size_ext = batch_dim.dyn_size_ext
+    try:
+        for name, extra_opts in {
+            "padded": {},
+            "packed": {"packed_tensors": True},
+            # budget 120 with lens 10..100 really bites (with 200, max_seqs 3 dominated and the
+            # batch composition -- and thus the score -- was identical to the other variants)
+            "packed_budget": {"packed_tensors": True, "batch_size": None, "packed_batch_size": 120},
+            # tf_static_shapes: every step feeds the same shapes (see _staticize_feed);
+            # LAST in the dict: they set capacities on the shared dims, harmless without the
+            # static flag, but keep the plain variants unpolluted anyway
+            "static_padded": {
+                "tf_static_shapes": {"batch_size_bound": 3, "dim_capacity": {"data": 100, "classes": 100}},
+            },
+            # packed + static: the feed itself is packed (flat total-bound buffer, _make_packed_feed);
+            # max_seqs 3 seqs of len <= 100 make 300 a valid total bound
+            "packed_static": {
+                "packed_tensors": True,
+                "tf_static_shapes": {
+                    "batch_size_bound": 3,
+                    "dim_capacity": {"data": 100, "classes": 100},
+                    "packed_total_bound": {"data": 300, "classes": 300},
+                },
+            },
+        }.items():
+            train_data = Task12AXDataset(num_seqs=8)
+            train_data.init_seq_order(epoch=1)
+            model_dir = tempfile.mkdtemp(prefix="returnn-test-rf-tf-engine-packed-")
+            config = Config(
+                {
+                    "backend": "tensorflow",
+                    "model": model_dir + "/model",
+                    "extern_data": {
+                        "data": {"dims": [batch_dim, time_dim, in_dim], "dtype": "float32"},
+                        "classes": {"dims": [batch_dim, time_dim], "sparse_dim": out_dim, "dtype": "int32"},
+                    },
+                    "get_model": _get_model,
+                    "train_step": _train_step,
+                    "optimizer": {"class": "adam"},
+                    "learning_rate": 0.05,
+                    "batch_size": 300,
+                    "max_seqs": 3,
+                    "num_epochs": 2,
+                    **extra_opts,
+                }
+            )
+            try:
+                with global_config_ctx(config):
+                    engine = Engine(config=config)
+                    engine.init_train_from_config(config=config, train_data=train_data)
+                    engine.train()
+                    scores[name] = engine.learning_rate_control.get_epoch_error_dict(2)["train_loss:ce"]
+            finally:
+                shutil.rmtree(model_dir, ignore_errors=True)
+        print("train_loss:ce ep 2 per variant:", scores)
+        # ce starts around ln(2)=0.69 and the task is learnable, so anything near/above 1 is broken
+        assert all(s < 1.0 for s in scores.values()), scores
+        # identical batching in these variants, so identical losses up to reduce order
+        # (packed_budget differs by construction: other batch composition)
+        for name in ("packed", "static_padded", "packed_static"):
+            numpy.testing.assert_allclose(scores["padded"], scores[name], rtol=1e-4, err_msg=name)
+    finally:
+        batch_dim.dyn_size_ext = prev_batch_dyn_size_ext
+        batch_dim.size = None  # the static variants staticize the GLOBAL batch dim
+        batch_dim.capacity = None
+        rf.select_backend_torch()
+
+
 def test_full_model_torch_checkpoint_parity():
     # Item 9: take the target model's parameters from a real PyTorch checkpoint file
     # (as the PT engine writes it), load them into the TF model by RF parameter name,

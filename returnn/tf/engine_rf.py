@@ -29,6 +29,7 @@ import tensorflow as tf
 
 from returnn.config import Config
 from returnn.datasets.basic import Dataset, init_dataset
+from returnn.datasets.packing import packed_batch_config, packed_batch_key_opts
 from returnn.engine.base import EngineBase
 from returnn.forward_iface import ForwardCallbackIface
 from returnn.log import log
@@ -57,6 +58,9 @@ class Engine(EngineBase):
         super().__init__(config=config)
         self.model: Optional[rf.Module] = None
         self.extern_data: Optional[TensorDict] = None
+        # What the provider fills per batch. Same as extern_data, except with packed_tensors:
+        # then extern_data holds the packed (in-graph repacked) views and this the padded placeholders.
+        self._feed_extern_data: Optional[TensorDict] = None
         self.train_dataset: Optional[Dataset] = None
         self.eval_datasets: Dict[str, Dataset] = {}
         self.learning_rate: float = config.float("learning_rate", 1.0)
@@ -65,6 +69,9 @@ class Engine(EngineBase):
         self._updater: Optional[Updater] = None
         self._train_step_func = None
         self._batch_opts = _batch_opts_from_config(config)
+        self._static_shapes_opts = _static_shapes_opts_from_config(config)
+        # data key -> (flat placeholder, total bound) for keys fed packed, see _make_packed_feed
+        self._packed_feed_placeholders: Dict[str, Tuple[Any, int]] = {}
         self._save_model_epoch_interval = config.int("save_interval", 1)
         self._amp_policy = _amp_policy_from_config(config)
         self._log_batch_size = config.bool("log_batch_size", False)
@@ -134,13 +141,11 @@ class Engine(EngineBase):
                     self.global_train_step = int(reader.get_tensor("global_step"))
 
         self._graph = tf_compat.v1.Graph()
-        with self._graph.as_default():
-            # session options from the config, as the net-dict engine (make_tf_session) takes them;
-            # https://github.com/tensorflow/tensorflow/blob/master/tensorflow/core/protobuf/config.proto
-            session_opts = dict(config.typed_value("tf_session_opts") or {})
-            session_opts.setdefault("log_device_placement", False)
-            print(f"Setup TF session with options {session_opts!r} ...", file=log.v4)
-            self.session = tf_compat.v1.Session(graph=self._graph, config=tf_compat.v1.ConfigProto(**session_opts))
+        # Static shapes: RF code paths consulted at BUILD time (rf.is_static_traceable) then
+        # prefer capacity-bounded buffers over data-dependent sizes, so the graph keeps one
+        # shape signature. A ctx (not a global set) so other engines in the process are unaffected.
+        with self._graph.as_default(), rf.set_static_traceable_ctx(bool(self._static_shapes_opts)):
+            self.session = tf_compat.v1.Session(graph=self._graph, config=_make_tf_session_config(config))
             self._create_placeholders()
             self._create_model(epoch=self.epoch, step=self.global_train_step)
             # The step graph is built once, so mixed precision is a property of the BUILD here,
@@ -298,13 +303,9 @@ class Engine(EngineBase):
         self.epoch = load_epoch or 1
 
         self._graph = tf_compat.v1.Graph()
-        with self._graph.as_default():
-            # session options from the config, as the net-dict engine (make_tf_session) takes them;
-            # https://github.com/tensorflow/tensorflow/blob/master/tensorflow/core/protobuf/config.proto
-            session_opts = dict(config.typed_value("tf_session_opts") or {})
-            session_opts.setdefault("log_device_placement", False)
-            print(f"Setup TF session with options {session_opts!r} ...", file=log.v4)
-            self.session = tf_compat.v1.Session(graph=self._graph, config=tf_compat.v1.ConfigProto(**session_opts))
+        # see init_train_from_config for the static-traceable ctx
+        with self._graph.as_default(), rf.set_static_traceable_ctx(bool(self._static_shapes_opts)):
+            self.session = tf_compat.v1.Session(graph=self._graph, config=_make_tf_session_config(config))
             self._create_placeholders()
             self._create_model(epoch=self.epoch, step=0)
             with rf.set_amp_policy_ctx(self._amp_policy):
@@ -390,6 +391,26 @@ class Engine(EngineBase):
         for key in self._data_keys:
             for dim in self.extern_data.data[key].dims:
                 dim.reset_raw()
+        if self._static_shapes_opts:
+            # Static shapes: the feed pads every array to these bounds (see _staticize_feed),
+            # so the raw shapes are constant per step. The batch dim becomes STATIC (= the bound;
+            # smaller batches are padded with length-0 seqs), exactly as the torch cuda-graph
+            # staticization does, and the capacities let static-traceable code paths
+            # (rf.is_static_traceable) size derived buffers statically.
+            batch_bound = self._static_shapes_opts["batch_size_bound"]
+            batch_dim.size = batch_bound
+            batch_dim.capacity = batch_bound
+            batch_dim.dyn_size_ext = None
+            for key, cap in (self._static_shapes_opts.get("dim_capacity") or {}).items():
+                value = self.extern_data.data[key]
+                assert len(value.dims) >= 2 and value.dims[1].is_dynamic(), (
+                    f"tf_static_shapes dim_capacity for {key}: no dynamic spatial dim in {value}"
+                )
+                value.dims[1].capacity = cap
+        else:
+            # the batch dim is GLOBAL: undo a possible staticization by a previous engine
+            batch_dim.size = None
+            batch_dim.capacity = None
         for key in self._data_keys:
             value = self.extern_data.data[key]
             value.raw_tensor = TFBackend.create_placeholder_raw(value)
@@ -407,11 +428,144 @@ class Engine(EngineBase):
                 if dim.dyn_size_ext.raw_tensor is None:
                     dim.dyn_size_ext.raw_tensor = TFBackend.create_placeholder_raw(dim.dyn_size_ext)
                     self._fed_dims.append((key, dim))
-        # The batch dim gets its size from the data itself. The net-dict path derives this from
-        # its BatchInfo, which the RF path does not build, but masked reduces need it.
-        data = self.extern_data.data[self._data_keys[0]]
-        batch_dim.dyn_size_ext = Tensor("batch", dims=(), dtype="int32")
-        batch_dim.dyn_size_ext.raw_tensor = tf.shape(data.raw_tensor)[0]
+        if not self._static_shapes_opts:
+            # The batch dim gets its size from the data itself. The net-dict path derives this from
+            # its BatchInfo, which the RF path does not build, but masked reduces need it.
+            # (Static shapes: the batch dim is a static dim instead, see above.)
+            data = self.extern_data.data[self._data_keys[0]]
+            batch_dim.dyn_size_ext = Tensor("batch", dims=(), dtype="int32")
+            batch_dim.dyn_size_ext.raw_tensor = tf.shape(data.raw_tensor)[0]
+        self._feed_extern_data = self.extern_data
+        self._pack_extern_data()
+
+    def _pack_extern_data(self):
+        """
+        Repack the padded extern data into packed storage (``packed_tensors`` config,
+        see :func:`returnn.datasets.packing.packed_batch_config`) --
+        like the torch data pipeline does in collate, but IN-GRAPH:
+        the feed stays the padded placeholders
+        (kept in ``self._feed_extern_data``, which is what the provider fills),
+        and one gather per key packs on device,
+        so all model compute runs on sum(lens) frames instead of n_seqs * max_len.
+        Dense layout only (gap 0, align 1 -- the production-decided defaults);
+        a gapped/aligned layout only pays off with the torch-only relayout fast paths.
+        """
+        packing = packed_batch_config()
+        if packing is None:
+            return
+        feed = TensorDict()
+        for key, value in self.extern_data.data.items():
+            feed.data[key] = value  # packed keys below get a fresh copy in self.extern_data instead
+        self._feed_extern_data = feed
+        for key in self._data_keys:
+            opts = packed_batch_key_opts(packing, key)
+            if opts is None:
+                continue  # key opted out (stays padded)
+            value = self.extern_data.data[key]
+            if len(value.dims) < 2 or not value.dims[1].is_dynamic():
+                continue  # nothing to pack
+            assert (opts["gap"], opts["align"]) == (0, 1), (
+                f"packed_tensors: the TF engine only supports the dense layout (gap 0, align 1), got {opts} for {key}"
+            )
+            if self._static_shapes_opts is None:
+                packed = rf.pack(value, dims=[batch_dim, value.dims[1]])
+            else:
+                packed = self._make_packed_feed(key, value)
+            new_value = value.copy()
+            new_value.raw_tensor = packed.raw_tensor
+            self.extern_data.data[key] = new_value
+
+    def _make_packed_feed(self, key: str, value: Tensor) -> Tensor:
+        """
+        Static shapes (tf_static_shapes) + packed: in-graph packing would feed the padded
+        placeholder at [batch_size_bound, capacity, ...] -- for long spatial dims that is a
+        huge host-device transfer of mostly padding. So the FEED itself is packed here
+        (like the torch pipeline packs in collate): a flat placeholder of the fixed total
+        bound, filled by :func:`_staticize_feed`, imported as packed storage at graph build.
+        The padded placeholder stays in the graph unused (never fed, never run).
+
+        :return: the packed view of value (same virtual dims, packed storage)
+        """
+        total_bound = (self._static_shapes_opts.get("packed_total_bound") or {}).get(key)
+        if total_bound is None:
+            # dense packing: the batcher fills by sum of raw lens, so the budget is a valid bound
+            pbs = self._batch_opts.get("packed_batch_size")
+            if isinstance(pbs, dict):
+                total_bound = pbs.get(key)
+            elif isinstance(pbs, int):
+                total_bound = pbs
+        assert isinstance(total_bound, int), (
+            f"tf_static_shapes: no packed total bound for key {key!r}:"
+            f" set tf_static_shapes packed_total_bound[{key!r}], or a packed_batch_size covering it"
+        )
+        packed_dim = Dim(total_bound, name=f"{value.dims[1].name or key}:packed")
+        # underscore, not the usual ":packed": the name becomes a TF op name scope, ":" is invalid there
+        inner = Tensor(
+            f"{key}_packed", dims=[packed_dim] + list(value.dims[2:]), dtype=value.dtype, sparse_dim=value.sparse_dim
+        )
+        inner.raw_tensor = TFBackend.create_placeholder_raw(inner)
+        self._packed_feed_placeholders[key] = (inner.raw_tensor, total_bound)
+        return rf.pack_import(
+            inner,
+            batch_dim=batch_dim,
+            spatial_dim=value.dims[1],
+            packed_dim=packed_dim,
+            feature_dim=value.feature_dim,
+        )
+
+    def _staticize_feed(self, feed_dict: Dict[Any, numpy.ndarray]) -> Dict[Any, numpy.ndarray]:
+        """
+        Pad the fed arrays to the tf_static_shapes bounds, so every step feeds the same
+        shapes (one XLA compile signature under tf_jit): seq lens to batch_size_bound
+        (the extra seqs have length 0), padded arrays to [batch_size_bound, dim_capacity, ...],
+        and packed keys to their flat total-bound buffer (replacing the padded array,
+        see :func:`_make_packed_feed`).
+        """
+        opts = self._static_shapes_opts
+        batch_bound = opts["batch_size_bound"]
+        dim_capacity = opts.get("dim_capacity") or {}
+        d = dict(feed_dict)
+        # the true per-seq lens per key, before the batch padding below (for the packed flattening)
+        true_lens = {}
+        for key in self._data_keys:
+            dims = self._feed_extern_data.data[key].dims
+            if len(dims) >= 2 and dims[1].is_dynamic():
+                true_lens[key] = feed_dict[dims[1].dyn_size_ext.raw_tensor]
+        for _, dim in self._fed_dims:
+            ph = dim.dyn_size_ext.raw_tensor
+            lens = d[ph]
+            n = lens.shape[0]
+            assert n <= batch_bound, f"batch has {n} seqs > tf_static_shapes batch_size_bound {batch_bound}"
+            d[ph] = numpy.pad(lens, (0, batch_bound - n))
+        for key in self._data_keys:
+            ph = self._feed_extern_data.data[key].raw_tensor
+            arr = d.pop(ph)
+            if key in self._packed_feed_placeholders:
+                flat_ph, total_bound = self._packed_feed_placeholders[key]
+                lens = true_lens[key]
+                total = int(numpy.sum(lens))
+                assert total <= total_bound, f"{key}: packed total {total} > declared bound {total_bound}"
+                flat = numpy.zeros((total_bound,) + arr.shape[2:], dtype=arr.dtype)
+                pos = 0
+                for i in range(lens.shape[0]):
+                    flat[pos : pos + lens[i]] = arr[i, : lens[i]]
+                    pos += int(lens[i])
+                d[flat_ph] = flat
+            else:
+                pad = [(0, batch_bound - arr.shape[0])]
+                if key in true_lens:
+                    cap = dim_capacity.get(key)
+                    # without a declared capacity the padded width varies per batch,
+                    # silently defeating the one-compile-signature purpose -> loud instead
+                    assert cap is not None, (
+                        f"tf_static_shapes: key {key!r} has a dynamic spatial dim but neither"
+                        f" dim_capacity[{key!r}] nor packing (packed_tensors) -- set one"
+                    )
+                    assert arr.shape[1] <= cap, f"{key}: seq len {arr.shape[1]} > dim_capacity {cap}"
+                    pad.append((0, cap - arr.shape[1]))
+                pad += [(0, 0)] * (arr.ndim - len(pad))
+                d[ph] = numpy.pad(arr, pad)
+        return d
 
     def _iter_batches_prefetch(self, dataset: Dataset, *, train: bool, init_seq_order: bool = True):
         """
@@ -449,7 +603,7 @@ class Engine(EngineBase):
         provider = FeedDictDataProvider(
             dataset=dataset,
             batches=batches,
-            extern_data=self.extern_data,
+            extern_data=self._feed_extern_data,
             data_keys=self._data_keys,
             capacity=self.config.int("tf_data_provider_capacity", 10),
         )
@@ -457,6 +611,8 @@ class Engine(EngineBase):
         try:
             while provider.have_more_data(session=self.session):
                 feed_dict, meta = provider.get_feed_dict()
+                if self._static_shapes_opts:
+                    feed_dict = self._staticize_feed(feed_dict)
                 # in the order the rows sit in the batch, which is what a per-sequence callback needs
                 seq_tags = [str(tag) for tag in meta["seq_tag"]]
                 yield feed_dict, meta["complete_frac"], seq_tags
@@ -625,9 +781,17 @@ class Engine(EngineBase):
         Read off the fed arrays rather than off the batch: what matters for the log
         is what actually goes into the graph, padding included.
         """
-        info = {"num_seqs": int(feed_dict[self.extern_data.data[self._data_keys[0]].raw_tensor].shape[0])}
+        first_ph = self._feed_extern_data.data[self._data_keys[0]].raw_tensor
+        if first_ph in feed_dict:
+            num_seqs = int(feed_dict[first_ph].shape[0])
+        else:  # packed-static: the padded placeholder is not fed; a lens vector has the batch length
+            num_seqs = int(feed_dict[self._fed_dims[0][1].dyn_size_ext.raw_tensor].shape[0])
+        info = {"num_seqs": num_seqs}
         for key in self._data_keys:
-            info[f"batch_size:{key}"] = int(numpy.prod(feed_dict[self.extern_data.data[key].raw_tensor].shape))
+            ph = self._feed_extern_data.data[key].raw_tensor
+            if ph not in feed_dict:  # packed-static: fed as the flat buffer instead
+                ph, _ = self._packed_feed_placeholders[key]
+            info[f"batch_size:{key}"] = int(numpy.prod(feed_dict[ph].shape))
         for key, dim in self._fed_dims:
             info[f"seq_len:{key}"] = int(numpy.sum(feed_dict[dim.dyn_size_ext.raw_tensor]))
         return info
@@ -716,7 +880,6 @@ _UnsupportedConfigOpts = {
     "use_tensorboard": False,
     # backend-specific options are named after the backend, as `torch_...` is on PyTorch
     "tf_distributed": None,
-    "tf_jit": None,  # the XLA-compiled step
     "tf_profile": None,
 }
 
@@ -731,6 +894,28 @@ _TorchOnlyConfigOpts = {
     "torch_log_memory_usage": "tf_log_memory_usage",
     "torch_profile": "tf_profile",
 }
+
+
+def _make_tf_session_config(config: Config) -> "tf_compat.v1.ConfigProto":
+    """
+    :param config:
+    :return: session ConfigProto, from ``tf_session_opts`` (as the net-dict engine's
+        make_tf_session takes them) plus ``tf_jit``;
+        https://github.com/tensorflow/tensorflow/blob/master/tensorflow/core/protobuf/config.proto
+    """
+    session_opts = dict(config.typed_value("tf_session_opts") or {})
+    session_opts.setdefault("log_device_placement", False)
+    tf_jit = config.bool("tf_jit", False)
+    print(f"Setup TF session with options {session_opts!r}, tf_jit {tf_jit} ...", file=log.v4)
+    session_config = tf_compat.v1.ConfigProto(**session_opts)
+    if tf_jit:
+        # XLA auto-clustering over the whole graph, incl. backward and optimizer.
+        # Measured on the production AED step (H100): 157 -> 92 ms (73 ms with staged inputs),
+        # vs PyTorch's 120 ms; numerics verified from a trained checkpoint (~1e-6 rel).
+        # Caveat: XLA compiles per SHAPE SIGNATURE, so varying batch shapes recompile;
+        # static shapes (packed_tensors with capacities, or bucketing) compile exactly once.
+        session_config.graph_options.optimizer_options.global_jit_level = tf_compat.v1.OptimizerOptions.ON_1
+    return session_config
 
 
 def _check_config_opts_supported(config: Config):
@@ -879,16 +1064,42 @@ def _amp_policy_from_config(config: Config) -> Optional[rf.AmpPolicy]:
     raise TypeError(f"tf_amp {opts!r}: expected a dtype name or a dict")
 
 
+def _static_shapes_opts_from_config(config: Config) -> Optional[Dict[str, Any]]:
+    """
+    :param config:
+    :return: the ``tf_static_shapes`` options, or None:
+        ``{"batch_size_bound": int, "dim_capacity": {data key: int}, "packed_total_bound": {data key: int}}``.
+        The TF analogue of the shape-staticization half of the PyTorch engine's ``torch_cuda_graph``:
+        every fed array is padded to fixed bounds (see :func:`Engine._staticize_feed`),
+        so every step has ONE shape signature -- paired with ``tf_jit``, XLA compiles exactly once.
+        The capture/warmup/compile knobs of ``torch_cuda_graph`` have no TF meaning:
+        the TF1 graph is built once and is static by construction.
+    """
+    opts = config.typed_value("tf_static_shapes", None)
+    if opts is None:
+        return None
+    assert isinstance(opts, dict), f"tf_static_shapes: expected a dict, got {opts!r}"
+    allowed = {"batch_size_bound", "dim_capacity", "packed_total_bound"}
+    assert set(opts).issubset(allowed), f"tf_static_shapes: unexpected keys {set(opts) - allowed}, allowed {allowed}"
+    assert isinstance(opts.get("batch_size_bound"), int), f"tf_static_shapes: batch_size_bound required, got {opts!r}"
+    return opts
+
+
 def _batch_opts_from_config(config: Config) -> Dict[str, Any]:
     """
     :param config:
     :return: the batching options this engine supports
     """
+    packed_batch_size = config.typed_value("packed_batch_size", None)
     opts = {
-        "batch_size": config.typed_value("batch_size", None) or config.int("batch_size", 10000),
+        # With a packed budget, batch_size None is meaningful (no padded-frames limit).
+        "batch_size": config.typed_value("batch_size", None)
+        or (None if packed_batch_size is not None else config.int("batch_size", 10000)),
         "eval_batch_size": config.typed_value("eval_batch_size", None),
         "max_seqs": config.int("max_seqs", -1),
     }
+    if packed_batch_size is not None:
+        opts["packed_batch_size"] = packed_batch_size
     # Further options of the shared batching layer (Dataset.generate_batches), passed through as given.
     for key in ("max_seq_length", "min_seq_length", "max_pad_size", "max_total_num_seqs", "seq_drop"):
         value = config.typed_value(key, None)
