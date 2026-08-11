@@ -719,9 +719,7 @@ class PyTracer:
     In Python >=3.13, you likely get a few more locals than before.
     """
 
-    def __init__(
-        self, funcs_to_trace_list: Sequence[Union[Callable, FunctionType]], capture_type: Union[type, Tuple[type, ...]]
-    ):
+    def __init__(self, funcs_to_trace_list: Sequence[FunctionType], capture_type: Union[type, Tuple[type, ...]]):
         """
         :param funcs_to_trace_list: list of functions to trace the locals. only those functions will be traced.
         :param capture_type: only capture variables of this type, e.g. torch.Tensor.
@@ -729,6 +727,7 @@ class PyTracer:
 
         def _get_func_code(func: FunctionType) -> CodeType:
             while getattr(func, "__wrapped__", None) is not None:
+                # noinspection unresolved-references
                 func = func.__wrapped__
             return func.__code__
 
@@ -736,7 +735,7 @@ class PyTracer:
         self._code_obj_to_func = {_get_func_code(func): func for func in self.funcs_to_trace_list}
         self.capture_type = capture_type
 
-        self._prev_trace_func = None
+        self._prev_trace_func: Optional[Callable] = None
         self.captured_locals = {}  # func -> (list of calls) -> tensor local name -> (list of versions) -> tensor
 
     def __enter__(self) -> PyTracer:
@@ -755,11 +754,11 @@ class PyTracer:
         sys.settrace(self._prev_trace_func)
         self._prev_trace_func = None
 
-    def __call__(self, frame: FrameType, event, arg) -> Optional[PyTracer]:
+    def __call__(self, frame: FrameType, event, arg) -> Optional[Union[PyTracer, Callable]]:
         """
         Trace func to get intermediate outputs.
         """
-        prev_trace_func_res = None
+        prev_trace_func_res: Optional[Callable] = None
         if self._prev_trace_func:
             assert callable(self._prev_trace_func)
             prev_trace_func_res = self._prev_trace_func(frame, event, arg)
