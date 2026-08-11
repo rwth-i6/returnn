@@ -1447,6 +1447,39 @@ def test_engine_train_jit(time_multiple: int):
         numpy.testing.assert_allclose(jit_params[name], value, rtol=1e-4, atol=1e-6, err_msg=name)
 
 
+def test_packed_roundtrip():
+    """
+    Packed tensors work over the JAX backend.
+
+    The packed layer is backend-neutral: PackedRawTensor routes to PackedBackend, which delegates
+    ops that do not touch the packed dim to the inner backend. Only ``masked_scatter`` was missing
+    on JAX, which is what ``unpack`` needs.
+    """
+    _rf_jax()
+    n_batch, n_time, n_feat = 3, 5, 4
+    lens = numpy.array([5, 3, 4], dtype="int32")
+    rnd = numpy.random.RandomState(0)
+    x_np = rnd.randn(n_batch, n_time, n_feat).astype("float32")
+    for b in range(n_batch):
+        x_np[b, lens[b] :] = 0.0
+
+    # a LOCAL batch dim: the global batch_dim carries dyn_size_ext across tests
+    bdim = Dim(n_batch, name="batch")
+    time_dim = Dim(Tensor("t", dims=(bdim,), dtype="int32", raw_tensor=jnp.asarray(lens)), name="time")
+    feat = Dim(n_feat, name="feat")
+    x = Tensor("x", dims=(bdim, time_dim, feat), dtype="float32", raw_tensor=jnp.asarray(x_np))
+
+    packed = rf.pack(x)
+    assert type(packed.raw_tensor).__name__ == "PackedRawTensor"
+    y = packed * 2.0 + 1.0  # delegated to JAX on the packed data
+    assert type(y.raw_tensor).__name__ == "PackedRawTensor"
+
+    got = numpy.asarray(rf.unpack(y).copy_compatible_to_dims_raw((bdim, time_dim, feat)))
+    ref = x_np * 2.0 + 1.0
+    for b in range(n_batch):
+        numpy.testing.assert_allclose(got[b, : lens[b]], ref[b, : lens[b]], rtol=1e-6, atol=1e-6)
+
+
 def test_ctc_loss_native_op_matches_optax():
     """
     The native fast-Baum-Welch CTC gives the same loss and gradient as the optax DP.

@@ -1098,6 +1098,61 @@ class JaxBackend(Backend[jax.Array]):
         return rf.convert_to_tensor(jnp.reshape(dist_raw, batch_shape), name="edit_distance", dims=batch_dims)
 
     @staticmethod
+    def masked_scatter(
+        source: Tensor, backup: Optional[Tensor] = None, *, mask: Tensor, dims: Sequence[Dim], in_dim: Dim
+    ) -> Tensor:
+        """
+        :param source: the values to place, over ``in_dim`` (+ remaining dims)
+        :param backup: what the unselected positions get; zeros when not given
+        :param mask: over ``dims``
+        :param dims: the target layout
+        :param in_dim: the packed axis of ``source``
+        :return: ``dims`` (+ remaining dims), source scattered where the mask holds
+
+        The inverse of :func:`masked_select`, and written the same way: the mask's prefix sum gives
+        each target position its slot in ``source``, and the result is one gather from source by
+        that slot. A gather (rather than a scatter into a buffer) keeps this traceable with a
+        scatter-add gradient, and needs no data-dependent shape.
+        """
+        assert mask.dtype == "bool"
+        assert set(mask.dims) == set(dims)
+        assert in_dim in source.dims
+        remaining_dims = [d for d in source.dims if d not in mask.dims and d != in_dim]
+        source_raw = source.copy_compatible_to_dims_raw((in_dim,) + tuple(remaining_dims))
+        rest_shape = source_raw.shape[1:]
+
+        out_dims = tuple(dims) + tuple(remaining_dims)
+        mask_raw = jnp.broadcast_to(
+            mask.copy_compatible_to_dims_raw(tuple(dims)), tuple(d.get_dim_value() for d in dims)
+        )
+        mask_flat = jnp.reshape(mask_raw, (-1,))
+        n_slots = source_raw.shape[0]
+        # target position -> its slot in source; unselected positions are clamped and then discarded
+        pos = jnp.cumsum(mask_flat.astype(jnp.int32)) - 1
+        pos = jnp.clip(pos, 0, max(n_slots - 1, 0))
+        gathered = jnp.take(source_raw, pos, axis=0)  # [prod(dims), ...rest]
+
+        if backup is None:
+            base = jnp.zeros(gathered.shape, dtype=gathered.dtype)
+        else:
+            b = backup
+            for d in out_dims:
+                if d not in b.dims:
+                    b = rf.expand_dim(b, dim=d)
+            base = jnp.reshape(b.copy_compatible_to_dims_raw(out_dims), (-1,) + tuple(rest_shape))
+        sel = jnp.reshape(mask_flat, (-1,) + (1,) * len(rest_shape))
+        out_raw = jnp.where(sel, gathered, base)
+        out_raw = jnp.reshape(out_raw, tuple(d.get_dim_value() for d in dims) + tuple(rest_shape))
+        return Tensor(
+            "masked_scatter",
+            dims=out_dims,
+            dtype=source.dtype,
+            sparse_dim=source.sparse_dim,
+            feature_dim=source.feature_dim,
+            raw_tensor=out_raw,
+        )
+
+    @staticmethod
     def masked_select(
         tensor: Tensor, *, mask: Tensor, dims: Sequence[Dim], out_dim: Optional[Dim] = None
     ) -> Tuple[Tensor, Dim]:
