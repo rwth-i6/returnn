@@ -761,6 +761,7 @@ class PyTracer:
         """
         prev_trace_func_res = None
         if self._prev_trace_func:
+            assert callable(self._prev_trace_func)
             prev_trace_func_res = self._prev_trace_func(frame, event, arg)
         func = self._code_obj_to_func.get(frame.f_code)
         if func:
