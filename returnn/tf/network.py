@@ -5023,7 +5023,7 @@ class CustomCheckpointLoader:
                 )
         var_name_map.update({name: make_load_renamed(old_name) for name, old_name in self.var_name_mapping.items()})
 
-        if self.custom_missing_load_func:
+        if self.custom_missing_load_func is not None:
             for var_name in missing_var_names:
                 if var_name in var_name_map:
                     continue
