@@ -11299,43 +11299,45 @@ class RelativePositionalEncodingLayer(_ConcatInputLayer):
             )
         if query_spatial_dim is NotSpecified:
             if data.have_time_axis():
-                query_spatial_dim = data.get_time_dim_tag()
+                query_dim = data.get_time_dim_tag()
             else:
-                query_spatial_dim = Dim(
+                query_dim = Dim(
                     kind=Dim.Types.Spatial, description="%s_rel_pos_enc_dummy" % name, dimension=1, auto_generated=True
                 )
-        if query_spatial_dim is not None:
-            if isinstance(query_spatial_dim, str):
-                query_spatial_dim = data.get_dim_tag_from_description(query_spatial_dim)
-            assert isinstance(query_spatial_dim, Dim)
+        elif isinstance(query_spatial_dim, str):
+            query_dim = data.get_dim_tag_from_description(query_spatial_dim)
+        else:
+            query_dim = query_spatial_dim
+        if query_dim is not None:
+            assert isinstance(query_dim, Dim)
         if key_value_spatial_dim is NotSpecified:
             if data.have_time_axis():
-                key_value_spatial_dim = data.get_time_dim_tag()
+                kv_dim = data.get_time_dim_tag()
             else:
-                key_value_spatial_dim = Dim(
+                kv_dim = Dim(
                     kind=Dim.Types.Spatial,
                     description="%s_rel_pos_enc_time" % name,
                     dimension=None,
                     auto_generated=True,
                 )
-                key_value_spatial_dim.batch = data.batch
-                key_value_spatial_dim.control_flow_ctx = network.get_control_flow_ctx()
-                key_value_spatial_dim.dyn_size_ext = Data(
+                kv_dim.batch = data.batch
+                kv_dim.control_flow_ctx = network.get_control_flow_ctx()
+                kv_dim.dyn_size_ext = Data(
                     name="%s:size-inside" % name,
                     dim_tags=[],  # scalar
                     dtype="int32",
                     batch=data.batch,
                     control_flow_ctx=network.get_control_flow_ctx(),
                 )
-        if isinstance(key_value_spatial_dim, str):
-            key_value_spatial_dim = data.get_dim_tag_from_description(key_value_spatial_dim)
-        assert isinstance(key_value_spatial_dim, Dim)
+        elif isinstance(key_value_spatial_dim, str):
+            kv_dim = data.get_dim_tag_from_description(key_value_spatial_dim)
+        else:
+            kv_dim = key_value_spatial_dim
+        assert isinstance(kv_dim, Dim)
         # Note: The defaults would use the same dim tag twice when data.have_time_axis().
         #   This will not be supported at some future point...
         return data.copy_template_new_dim_tags(
-            (query_spatial_dim, key_value_spatial_dim, feature_dim_tag)
-            if query_spatial_dim is not None
-            else (key_value_spatial_dim, feature_dim_tag)
+            (query_dim, kv_dim, feature_dim_tag) if query_dim is not None else (kv_dim, feature_dim_tag)
         )
 
 
