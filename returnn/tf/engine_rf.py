@@ -249,6 +249,15 @@ class Engine(EngineBase):
             file=log.v3,
         )
         self.learning_rate_control.set_epoch_error(self.epoch, {f"train_{k}": v for k, v in scores.items()})
+        # the same per-epoch meta the other engines store (downstream tooling reads it,
+        # e.g. GetTotalRuntimeFromReturnnTrainingJob sums epoch_train_time_secs)
+        self.learning_rate_control.epoch_data[self.epoch].meta.update(
+            {
+                "epoch_num_train_steps": num_steps,
+                "epoch_train_time_secs": round(elapsed),
+                "global_train_step_end": self.global_train_step,
+            }
+        )
         self.learning_rate_control.save()
         if self.epoch % self._save_model_epoch_interval == 0 or self.epoch == self.config_get_final_epoch(self.config):
             self._save_model()
