@@ -61,10 +61,11 @@
         </list>
       </option>
     </inspection_tool>
-    <!-- the callable types in the ignored list: the findings are all f-strings of a callable in an
-         error message ("seq_ordering function {f} should return a str"), where the default repr
-         is exactly what we want to print. The inspection can only ever say "this repr may be
-         unhelpful", never indicate a runtime fault. -->
+    <!-- Ignored types: everything here is a type RETURNN does not own
+         (stdlib, numpy, torch, typeshed protocols, ABCs).
+         Their runtime values format fine; only the stub omits the dunder,
+         and this inspection can never indicate a runtime fault, just an unhelpful repr.
+         RETURNN's OWN types are not listed: those get a real __repr__ instead. -->
     <inspection_tool class="PyStringConversionWithoutDunderMethodInspection" enabled="true" level="WARNING" enabled_by_default="true">
       <option name="ignoredTypes">
         <list>
@@ -72,6 +73,16 @@
           <option value="FunctionType" />
           <option value="BuiltinFunctionType" />
           <option value="MethodType" />
+          <option value="object" />
+          <option value="Decimal" />
+          <option value="floating" />
+          <option value="signedinteger" />
+          <option value="PathLike" />
+          <option value="Sequence" />
+          <option value="Iterable" />
+          <option value="saved_tensors_hooks" />
+          <option value="SupportsDunderGT" />
+          <option value="SupportsDunderLT" />
         </list>
       </option>
     </inspection_tool>
