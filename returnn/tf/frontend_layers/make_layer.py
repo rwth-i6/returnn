@@ -142,9 +142,8 @@ def _get_sub_layer(layer: Tensor[rfl.Layer], name: str, *, data: Tensor) -> Tens
 
         assert isinstance(layer.raw_tensor.debug_layer, returnn.tf.layers.base.LayerBase)
         sub_layer = layer.raw_tensor.debug_layer.get_sub_layer(name)
-        assert sub_layer and sub_layer.output.dim_tags == out.data.dim_tags
+        assert sub_layer and sub_layer.output.dims == out.dims
         out.raw_tensor.debug_layer = sub_layer
-        out.data = sub_layer.output
     return out
 
 
