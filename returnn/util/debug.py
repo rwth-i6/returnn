@@ -23,7 +23,7 @@ if TYPE_CHECKING:
 
 
 signum_to_signame = {
-    k: v for v, k in reversed(sorted(signal.__dict__.items())) if v.startswith("SIG") and not v.startswith("SIG_")
+    k: v for v, k in reversed(sorted(vars(signal).items())) if v.startswith("SIG") and not v.startswith("SIG_")
 }
 
 

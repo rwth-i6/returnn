@@ -4,7 +4,7 @@ Many canonical basic layers.
 
 from __future__ import annotations
 
-from typing import Callable, Optional, Union, Sequence, List, Tuple, Dict
+from typing import Callable, Optional, Union, Sequence, List, Tuple, Dict, TypeVar
 import typing
 import tensorflow as tf
 import contextlib
@@ -16,6 +16,8 @@ from returnn.tf.util.data import Data, SearchBeam, FeatureDim, SpatialDim
 from returnn.tf.util.basic import OutputWithActivation, dimshuffle, swapaxes
 from returnn.log import log
 from .base import LayerBase, Loss, InternalLayer, SearchChoices
+
+T = TypeVar("T")
 
 
 class SourceLayer(LayerBase):

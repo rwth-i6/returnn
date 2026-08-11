@@ -1892,6 +1892,10 @@ class NumbersDict:
     It implements the standard math bin ops in a straight-forward way.
     """
 
+    # assigned at the end of __init__, i.e. below the reads of OTHER instances
+    dict: typing.Dict[str, typing.Any]
+    value: typing.Optional[typing.Any]
+
     def __init__(self, auto_convert=None, numbers_dict=None, broadcast_value=None):
         """
         :param dict|NumbersDict|T|None auto_convert: first argument, so that we can automatically convert/copy

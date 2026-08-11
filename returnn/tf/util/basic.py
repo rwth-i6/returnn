@@ -4,7 +4,7 @@ Lots of random utility functions for TensorFlow.
 
 from __future__ import annotations
 
-from typing import Optional, Union, Any, Sequence, List, Dict
+from typing import Optional, Union, Any, Sequence, List, Dict, TypeVar
 import typing
 import contextlib
 from dataclasses import dataclass
@@ -29,6 +29,8 @@ try:
 except ImportError:
     ControlFlowFuncGraph = None
 from tensorflow.python.ops.control_flow_ops import ControlFlowContext
+
+T = TypeVar("T")
 
 
 class CollectionKeys:
@@ -3282,7 +3284,7 @@ class MetaLosses:
             with tf.name_scope("grad_prediction_loss"):
                 grad_prediction_loss = tf.reduce_mean(tf.square(synthetic_grad_x - tf.stop_gradient(grad_out)))
                 tf_compat.v1.summary.scalar("loss", grad_prediction_loss)
-            # noinspection PyProtectedMember
+            # noinspection PyProtectedMember,PyUnresolvedReferences
             loss_info = op._RETURNN_loss_info
             cls.scope_ctx.scope.register_loss(MetaLosses.LossInfo(value=grad_prediction_loss, **loss_info))
         return synthetic_grad_x, None
@@ -3329,7 +3331,7 @@ class MetaLosses:
             with tf.name_scope("tikhonov_regularization_loss"):
                 loss = tf.nn.l2_loss(grad_out)
                 tf_compat.v1.summary.scalar("loss", loss)
-            # noinspection PyProtectedMember
+            # noinspection PyProtectedMember,PyUnresolvedReferences
             loss_info = op._RETURNN_loss_info
             cls.scope_ctx.scope.register_loss(MetaLosses.LossInfo(value=loss, **loss_info))
         return grad_out, tf.constant(0.0)
@@ -6005,10 +6007,20 @@ def tensor_array_element_shape(ta):
     else:
         # If it is know, _element_shape is a list with 1 entry, the element shape as tf.TensorShape.
         # Otherwise it is an empty list.
+        # TF internal, pre-1.14 fallback
+        # noinspection PyUnresolvedReferences
         assert isinstance(ta._element_shape, list)
+        # TF internal, pre-1.14 fallback
+        # noinspection PyUnresolvedReferences
         assert len(ta._element_shape) <= 1
+        # TF internal, pre-1.14 fallback
+        # noinspection PyUnresolvedReferences
         if ta._element_shape:
+            # TF internal, pre-1.14 fallback
+            # noinspection PyUnresolvedReferences
             assert isinstance(ta._element_shape[0], tf.TensorShape)
+            # TF internal, pre-1.14 fallback
+            # noinspection PyUnresolvedReferences
             return ta._element_shape[0]
         return tf.TensorShape(None)
 
@@ -6594,7 +6606,7 @@ def var_handle_or_ref(var):
     if isinstance(var, ResourceVariable):
         return var.handle
     if isinstance(var, tf_compat.v1.Variable):
-        # noinspection PyProtectedMember
+        # noinspection PyProtectedMember,PyUnresolvedReferences
         return var._ref()
     raise TypeError("invalid type for var %r" % var)
 
@@ -6626,7 +6638,7 @@ def find_ops_with_tensor_input(tensors, fetches=None, graph=None):
                     ops.append(op)
             return ops
         else:
-            # noinspection PyProtectedMember
+            # noinspection PyProtectedMember,PyUnresolvedReferences
             tensors = [tensors._ref(), tensors.value()]
     if isinstance(tensors, tf.Tensor):
         tensors = [tensors]
@@ -6667,7 +6679,7 @@ def find_ops_path_output_to_input(tensors, fetches):
     :rtype: list[tf.Operation]|None
     """
     if isinstance(tensors, tf.Variable):
-        # noinspection PyProtectedMember
+        # noinspection PyProtectedMember,PyUnresolvedReferences
         tensors = [tensors._ref(), tensors.value()]
     if isinstance(tensors, tf.Tensor):
         tensors = [tensors]

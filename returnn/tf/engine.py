@@ -12,7 +12,7 @@ See :ref:`tech_overview` for an overview how it fits all together.
 
 from __future__ import annotations
 
-from typing import Callable, Dict, List, Optional, Union
+from typing import Callable, Dict, List, Optional, Union, TypeVar
 import typing
 import os
 import sys
@@ -38,6 +38,8 @@ import returnn.util.basic as util
 from returnn.util.basic import hms, NumbersDict, BackendEngine
 from returnn.forward_iface import ForwardCallbackIface
 from pprint import pprint
+
+T = TypeVar("T")
 
 
 class CancelTrainingException(Exception):

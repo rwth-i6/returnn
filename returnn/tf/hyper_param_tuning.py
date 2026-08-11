@@ -25,6 +25,7 @@ from __future__ import annotations
 import sys
 import time
 import typing
+from typing import TypeVar
 import numpy
 import returnn.tf.compat as tf_compat
 from returnn.config import Config
@@ -33,6 +34,8 @@ from returnn.datasets import Dataset
 from returnn.datasets.generating import StaticDataset
 from returnn.tf.engine import Engine, Runner, CancelTrainingException
 from returnn.util.basic import CollectionReadCheckCovered, hms_fraction, guess_requested_max_num_threads
+
+T = TypeVar("T")
 
 
 Eps = 1e-16

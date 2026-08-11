@@ -6,7 +6,7 @@ from __future__ import annotations
 
 import contextlib
 import typing
-from typing import Dict, Optional, Tuple, Union, Any
+from typing import Dict, Optional, Tuple, Union, Any, TypeVar
 import tensorflow as tf
 import returnn.tf.compat as tf_compat
 
@@ -21,6 +21,8 @@ from returnn.tf.util.basic import reuse_name_scope
 from returnn.tf.util import basic as tf_util
 from returnn.util.basic import NotSpecified
 from returnn.log import log
+
+T = TypeVar("T")
 
 
 class RecLayer(_ConcatInputLayer):
@@ -1492,6 +1494,8 @@ class _SubnetworkRecCell:
             try:
                 return parent_get_layer(layer_name)
             except Exception as exc:
+                # RETURNN plants this attr on the exception
+                # noinspection PyUnresolvedReferences
                 exc._is_exc_from_parent_get_layer = True
                 raise
 
@@ -2065,6 +2069,8 @@ class _SubnetworkRecCell:
             # Don't print twice.
             self._template_construction_exceptions = None
         print(file=out)
+        # RETURNN plants this attr on the exception
+        # noinspection PyUnresolvedReferences
         exception._RETURNN_handled_construct_exception = True
 
     def _get_parent_layer(self, layer_name):

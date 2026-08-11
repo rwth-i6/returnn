@@ -1414,10 +1414,16 @@ class LayerBase:
         if not saveable:
             self.saveable_param_replace[param] = None
         if getattr(param, "RETURNN_layer", None) is None:
+            # RETURNN plants this attr on tf.Variable
+            # noinspection PyUnresolvedReferences
             param.RETURNN_layer = self
         if getattr(param, "RETURNN_updater_opts", None) is None and self.updater_opts.truth_value:
+            # RETURNN plants this attr on tf.Variable
+            # noinspection PyUnresolvedReferences
             param.RETURNN_updater_opts = self.updater_opts
         if non_critical_for_restore:
+            # RETURNN plants this attr on tf.Variable
+            # noinspection PyUnresolvedReferences
             param.RETURNN_non_critical_for_restore = True
         # Note that any further postprocessing on the parameter should not be done here,
         # as we cannot guarantee that the result from this method is really used,

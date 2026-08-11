@@ -8,18 +8,18 @@ import sys
 import numpy
 
 
-def find_obj_in_stack(cls, stack=None, all_threads=True):
+def find_obj_in_stack(cls, stack: Optional[Union[types.FrameType, types.TracebackType]] = None, all_threads=True):
     """
     :param type cls:
-    :param types.FrameType|types.TracebackType|None stack: current frame (or all threads) by default
+    :param stack: current frame (or all threads) by default
     :param bool all_threads:
     :return: obj
     """
     if all_threads:
         assert stack is None
         # noinspection PyProtectedMember,PyUnresolvedReferences
-        for tid, stack in sys._current_frames().items():
-            obj = find_obj_in_stack(cls=cls, stack=stack, all_threads=False)
+        for tid, thread_stack in sys._current_frames().items():
+            obj = find_obj_in_stack(cls=cls, stack=thread_stack, all_threads=False)
             if obj is not None:
                 return obj
         return None

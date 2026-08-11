@@ -640,6 +640,8 @@ class InputContext:
         :rtype: tf.Operation
         """
         assert self.final_dataset
+        # TF internal API, no public equivalent for an explicit iterator initializer
+        # noinspection PyUnresolvedReferences
         return iterator.make_initializer(self.final_dataset)
 
 

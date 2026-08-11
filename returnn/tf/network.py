@@ -549,6 +549,16 @@ class TFNetwork:
     The main neural network, i.e. collection of interconnected layers, i.e. computation graph with trainable params.
     """
 
+    # assigned in __init__ (partly below the first reads of other instances' attrs)
+    parent_layer: Optional[LayerBase]
+    parent_net: Optional[TFNetwork]
+    extern_data: ExternData
+    _config: Optional[Config]
+    random: numpy.random.RandomState
+    train_flag: Union[bool, tf.Tensor]
+    eval_flag: bool
+    search_flag: bool
+
     def __init__(
         self,
         config=None,

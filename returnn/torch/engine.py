@@ -1964,6 +1964,9 @@ class _TorchProfiler:
             self.profiler.export_chrome_trace("torch_profile.json")
             if self.profiler.profile_memory:
                 print("Exporting Torch memory profile to torch_memory_profile.html...", file=log.v2)
+                # deprecated, but the named replacement (_record_memory_history/_export_memory_snapshot)
+                # is private API and emits a snapshot pickle instead of this HTML timeline
+                # noinspection PyDeprecation
                 self.profiler.export_memory_timeline("torch_memory_profile.html")
 
             print("Exiting program after Torch profiling.", file=log.v2)

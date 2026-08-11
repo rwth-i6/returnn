@@ -217,6 +217,8 @@ class gradient_checkpoint_scope:
         # _RecordGraph.__torch_dispatch__ should have recorded all newly created tensors.
         x_ = self.record_graph_scope.graph.graph_tensor_from_weak_raw_tensor.get(x, x)
         if isinstance(x_, _GraphTensor):
+            # RETURNN plants this attr on torch.Tensor
+            # noinspection PyUnresolvedReferences
             x._RETURNN_grad_ckpt_del_hook = _DelHook(_WeakMethod(self._tensor_del_hook))
         return x_
 
