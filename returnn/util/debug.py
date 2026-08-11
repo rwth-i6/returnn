@@ -354,7 +354,7 @@ def install_native_signal_handler(*, reraise_exceptions: bool = False):
 
         # C code: https://github.com/albertz/playground/blob/master/signal_handler.c
         lib = ctypes.CDLL(_get_native_signal_handler_lib_filename())
-        lib.install_signal_handler.return_type = None
+        lib.install_signal_handler.restype = None  # void
         lib.install_signal_handler()
         print("Installed native_signal_handler.so.")
 
