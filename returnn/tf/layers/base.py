@@ -4,7 +4,7 @@ This module contains the layer base class :class:`LayerBase`.
 
 from __future__ import annotations
 
-from typing import Optional, Dict, List, Union, Any
+from typing import Optional, Dict, List, Union, Any, TypeVar
 import typing
 from typing import TYPE_CHECKING
 import contextlib
@@ -20,6 +20,11 @@ from returnn.log import log
 
 if TYPE_CHECKING:
     from tensorflow.python.training.saver import BaseSaverBuilder
+
+
+# what translate_to_this_search_beam gets and gives back:
+# a layer, a nested dict/list/tuple of them, or an unrelated value passed through
+_SourcesT = TypeVar("_SourcesT")
 
 
 class LayerBase:
@@ -2775,11 +2780,10 @@ class SearchChoices:
     def __gt__(self, other):
         return self.__cmp__(other) > 0
 
-    def translate_to_this_search_beam(self, sources):
+    def translate_to_this_search_beam(self, sources: _SourcesT) -> _SourcesT:
         """
-        :param LayerBase|list[LayerBase]|dict[str,LayerBase|object]|tuple[LayerBase|object]|T sources:
-        :return: sources but all layers transformed when needed
-        :rtype: T
+        :param sources: a layer, or a dict / list / tuple of them, or anything else (returned as-is)
+        :return: sources but all layers transformed when needed, same structure as given
         """
         from .basic import SelectSearchSourcesLayer
 
