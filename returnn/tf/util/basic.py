@@ -6874,9 +6874,9 @@ def add_control_input(op, control_input):
         op._add_control_input(control_input)
         return
     # Fallback. I think I have seen this in OpenAI code.
-    # noinspection PyProtectedMember
+    # noinspection PyProtectedMember,PyUnresolvedReferences
     op._control_inputs.append(control_input)
-    # noinspection PyProtectedMember
+    # noinspection PyProtectedMember,PyUnresolvedReferences
     op._recompute_node_def()
 
 
