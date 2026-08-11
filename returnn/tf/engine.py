@@ -12,7 +12,7 @@ See :ref:`tech_overview` for an overview how it fits all together.
 
 from __future__ import annotations
 
-from typing import Callable, Dict, List, Optional, Union, TypeVar
+from typing import Callable, Dict, List, Optional, Union, TypeVar, Tuple
 import typing
 import os
 import sys
@@ -133,7 +133,7 @@ class Runner:
             self._horovod_finish_all = True
         # With Horovod, during the main session.run, if reduce_type != grad or not training,
         # the following tensors are enough to ensure that we are in sync.
-        self._horovod_collected_reduce_inputs: Dict[str, (tf.Tensor, tf.Tensor)] = {}  # name -> (input,output)
+        self._horovod_collected_reduce_inputs: Dict[str, Tuple[tf.Tensor, tf.Tensor]] = {}  # name -> (input,output)
 
         from returnn.util.basic import terminal_size
 
@@ -1288,7 +1288,7 @@ class Engine(EngineBase):
         This is a slightly hacky way to overwrite entries in the config, via the network description.
         This can e.g. be used in pretraining to overwrite certain settings such as batch_size.
 
-        :param dict[str,dict[str]] net_desc:
+        :param dict[str,dict[str,typing.Any]] net_desc:
         :param int epoch:
         """
         updated_datasets = {}  # type: typing.Dict[str,Dataset]
