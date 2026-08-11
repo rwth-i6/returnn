@@ -12,8 +12,7 @@ See :ref:`tech_overview` for an overview how it fits all together.
 
 from __future__ import annotations
 
-from typing import Callable, Dict, List, Optional, Union, TypeVar, Tuple
-import typing
+from typing import Callable, Dict, List, Optional, Union, TypeVar, Tuple, Any
 import os
 import sys
 import time
@@ -1283,22 +1282,19 @@ class Engine(EngineBase):
                 print("%s:" % type(exc).__name__, exc, file=log.v1)
                 sys.exit(1)
 
-    def _maybe_update_config(self, net_desc, epoch):
+    def _maybe_update_config(self, net_desc: Dict[str, Dict[str, Any]], epoch: int):
         """
         This is a slightly hacky way to overwrite entries in the config, via the network description.
         This can e.g. be used in pretraining to overwrite certain settings such as batch_size.
 
-        :param dict[str,dict[str,typing.Any]] net_desc:
-        :param int epoch:
+        :param net_desc:
+        :param epoch:
         """
-        updated_datasets = {}  # type: typing.Dict[str,Dataset]
+        updated_datasets: Dict[str, Dataset] = {}
 
         # noinspection PyShadowingNames
-        def set_value(key, value):
-            """
-            :param str key:
-            :param value:
-            """
+        def set_value(key: str, value: Any):
+            """set value"""
             assert key in self.config.typed_dict
             self.config.typed_dict[key] = value
             # Some entries need specific handling, e.g. to update our attribs.
@@ -2469,10 +2465,10 @@ class Engine(EngineBase):
         num_output_layers = len(output_layer_names)
 
         # Create lists with information about the output layers. All of length num_output_layers.
-        output_layers = []  # type: typing.List[LayerBase]
-        out_beam_sizes = []  # type: typing.List[typing.Optional[int]]
-        output_layer_beam_scores = []  # type: typing.List[typing.Optional[tf.Tensor]]
-        target_keys = []  # type: typing.List[typing.Optional[str]]
+        output_layers: List[LayerBase] = []
+        out_beam_sizes: List[Optional[int]] = []
+        output_layer_beam_scores: List[Optional[tf.Tensor]] = []
+        target_keys: List[Optional[str]] = []
 
         for output_layer_name in output_layer_names:
             output_layer = self.network.layers[output_layer_name]
