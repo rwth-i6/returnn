@@ -939,6 +939,14 @@ def main():
             # indexing artifact: Cython's bundled numpy .pxd shadow joins the union type
             # whenever Cython is installed in the env; not a property of our code
             ("PyUnresolvedReferencesInspection", r"^Member 'Cython\.Includes\.numpy' of "),
+            # Stub gaps, no code fix possible (attribute exists at runtime, stub omits it):
+            # librosa does not re-export .feature in its stub; torch stubs miss the dtype alias.
+            ("PyUnresolvedReferencesInspection", r"^Cannot find reference '(?:feature|__version__)' in 'librosa'"),
+            ("PyUnresolvedReferencesInspection", r"^Cannot find reference 'dtype' in 'torch'"),
+            # optional deps, imported behind guards / lazily:
+            ("PyUnresolvedReferencesInspection", r"^Module '(?:transformers|load_file)' not found"),
+            ("PyUnresolvedReferencesInspection", r"^Unresolved reference 'safetensors'"),
+            ("PyUnresolvedReferencesInspection", r"^No module named '(?:orbax|seaborn|tensor2tensor)'"),
             # Two filters used to sit here:
             # "Parameter 'in_spatial_dim' unfilled" and "for class '(Tensor, Dim)'".
             # They worked around PyCharm checking an rf.Module construction
@@ -978,6 +986,13 @@ def main():
             # TypeError / assert message. Unlike most inspections this one can never indicate a
             # runtime fault -- the worst case is a message that reads awkwardly.
             ("PyStringConversionWithoutDunderMethodInspection", r"^Type 'type' string value"),
+            # the "string value might not be useful" sub-check bypasses the profile's
+            # ignoredTypes (measured 2026-08-11); same rationale as 'type' above:
+            # str() of a callable/object in a message is exactly what we want printed
+            (
+                "PyStringConversionWithoutDunderMethodInspection",
+                r"^Type '(?:function|FunctionType|BuiltinFunctionType|MethodType|object)' string value",
+            ),
             # `return _sdpa_no(...)` / `return _flex_no(...)` is a DELIBERATE, documented idiom:
             # both helpers warn once and return None so an `-> Optional[Tensor]` fast path can bail
             # out in one line (see _sdpa_no's own docstring in _packed_backend.py). 28 of the 36

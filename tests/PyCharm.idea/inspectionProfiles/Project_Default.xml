@@ -70,19 +70,24 @@
       <option name="ignoredTypes">
         <list>
           <option value="function" />
-          <option value="FunctionType" />
-          <option value="BuiltinFunctionType" />
-          <option value="MethodType" />
           <option value="object" />
-          <option value="Decimal" />
-          <option value="floating" />
-          <option value="signedinteger" />
-          <option value="PathLike" />
-          <option value="Sequence" />
-          <option value="Iterable" />
-          <option value="saved_tensors_hooks" />
-          <option value="SupportsDunderGT" />
-          <option value="SupportsDunderLT" />
+          <option value="builtins.object" />
+          <option value="types.FunctionType" />
+          <option value="types.BuiltinFunctionType" />
+          <option value="types.MethodType" />
+          <option value="decimal.Decimal" />
+          <option value="numpy.floating" />
+          <option value="numpy.signedinteger" />
+          <option value="numpy.ndarray" />
+          <option value="numpy.dtype" />
+          <option value="os.PathLike" />
+          <option value="typing.Sequence" />
+          <option value="typing.Iterable" />
+          <option value="collections.abc.Sequence" />
+          <option value="collections.abc.Iterable" />
+          <option value="torch.autograd.graph.saved_tensors_hooks" />
+          <option value="_typeshed.SupportsDunderGT" />
+          <option value="_typeshed.SupportsDunderLT" />
         </list>
       </option>
     </inspection_tool>
