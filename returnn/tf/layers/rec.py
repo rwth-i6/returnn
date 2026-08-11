@@ -5308,17 +5308,17 @@ class RnnCellLayer(_ConcatInputLayer):
         from returnn.util.basic import is_namedtuple
 
         if key == "*":
-            if nest.is_sequence(state):
+            if nest.is_nested(state):
                 x = tf.concat(state, axis=-1)  # in dim-axis
             else:
                 x = state
         elif key == "flat":
-            assert nest.is_sequence(state), "only a sequence can be flattened, but got %r" % (state,)
+            assert nest.is_nested(state), "only a sequence can be flattened, but got %r" % (state,)
             x = tf.concat(state, axis=-1)  # in dim-axis
         elif is_namedtuple(type(state)):
             assert isinstance(key, str), "state %r is a named tuple, thus key %r must be a string" % (state, key)
             x = getattr(state, key)
-        elif nest.is_sequence(state):
+        elif nest.is_nested(state):
             assert isinstance(key, int), "state %r is a tuple, thus key %r must be an int" % (state, key)
             x = state[key]
         else:
