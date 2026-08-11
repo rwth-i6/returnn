@@ -385,6 +385,21 @@ class Engine(EngineBase):
         """
         return self.model
 
+    def finalize(self, error_occurred: bool = False):
+        """
+        Called at the very end of a RETURNN run (:func:`returnn.__main__.finalize`),
+        after all tasks finished. Finalizes the datasets and the TF session.
+        (Missing this made every COMPLETED training exit with return code 1 --
+        earlier runs never reached a clean exit, they were always preempted first.)
+        """
+        del error_occurred  # the net-dict engine resets its graph differently on errors; nothing to do here
+        for dataset in [self.train_dataset] + list(self.eval_datasets.values()):
+            if dataset:
+                dataset.finish_epoch()
+        if self.session is not None:
+            self.session.close()
+            self.session = None
+
     def _create_placeholders(self):
         """
         One placeholder per extern data entry and per dynamic dim, fed by :func:`_iter_batches_prefetch`.
