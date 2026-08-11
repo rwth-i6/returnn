@@ -2073,6 +2073,84 @@ class TFBackend(Backend[tf.Tensor]):
         return out, out_dim
 
     @staticmethod
+    def masked_scatter(
+        source: Tensor, backup: Optional[Tensor] = None, *, mask: Tensor, dims: Sequence[Dim], in_dim: Dim
+    ) -> Tensor:
+        """
+        The inverse of :func:`masked_select`: scatter the source rows (in order along ``in_dim``)
+        into the True positions of the mask (row-major over ``dims``), backup (or zero) elsewhere.
+        """
+        assert mask.dtype == "bool"
+        assert set(mask.dims) == set(dims)
+        assert in_dim in source.dims
+        remaining_dims = [d for d in source.dims if d not in mask.dims and d != in_dim]
+        out_dims = tuple(dims) + tuple(remaining_dims)
+        with tf_util.same_control_flow_ctx([source, mask] + ([backup] if backup is not None else [])):
+            source_raw = source.copy_compatible_to_dims_raw((in_dim,) + tuple(remaining_dims))
+            mask_ = mask.copy_masked(mask_value=False)
+            mask_raw = mask_.copy_compatible_to_dims_raw(tuple(dims))
+            # flat positions of the True mask entries, in row-major order (tf.where is row-major)
+            positions = tf.where(tf.reshape(mask_raw, [-1]))  # [n_true, 1], int64
+            n_true = tf.shape(positions)[0]
+            out_flat_shape = tf.concat(
+                [tf.reduce_prod(_shape_raw(list(dims)), keepdims=True), tf.shape(source_raw)[1:]], axis=0
+            )
+            if backup is None:
+                base_flat = tf.zeros(out_flat_shape, dtype=source_raw.dtype)
+            else:
+                assert set(backup.dims).issubset(out_dims), f"backup dims {backup.dims} not in out dims {out_dims}"
+                backup_raw = backup.copy_compatible_to_dims_raw(out_dims)
+                base_flat = tf.reshape(tf.broadcast_to(backup_raw, _shape_raw(out_dims)), out_flat_shape)
+            # exactly n_true source rows land on the True positions (in_dim is dynamic, slice defensively)
+            out_flat = tf.tensor_scatter_nd_update(base_flat, positions, source_raw[:n_true])
+            out_raw = _with_static_shape(tf.reshape(out_flat, _shape_raw(out_dims)), out_dims)
+        return Tensor(
+            "masked_scatter",
+            dims=out_dims,
+            dtype=source.dtype,
+            sparse_dim=source.sparse_dim,
+            feature_dim=source.feature_dim if source.feature_dim in remaining_dims else None,
+            raw_tensor=out_raw,
+        )
+
+    @staticmethod
+    def search_sorted(
+        sorted_seq: Tensor, values: Tensor, *, axis: Dim, side: str = "left", out_dtype: str = "int32"
+    ) -> Tensor:
+        """search sorted, like the torch backend"""
+        if out_dtype == "int32":
+            out_type = tf.int32
+        elif out_dtype == "int64":
+            out_type = tf.int64
+        else:
+            raise NotImplementedError(f"search_sorted: out_dtype {out_dtype} not supported")
+        if axis not in sorted_seq.dims:
+            raise ValueError(f"search_sorted: axis {axis} not in sorted_seq {sorted_seq}")
+        if axis.need_masking():
+            raise NotImplementedError(f"search_sorted: dynamic axis {axis} not supported")
+        sorted_seq_dims = [dim for dim in sorted_seq.dims if dim != axis] + [axis]
+        for dim in sorted_seq_dims[:-1]:
+            if dim not in values.dims:
+                raise ValueError(f"search_sorted: dim {dim} in sorted_seq {sorted_seq} but not in values {values}")
+        values_rem_dims = [dim for dim in values.dims if dim not in sorted_seq_dims[:-1]]
+        values_dims = sorted_seq_dims[:-1] + values_rem_dims
+        with tf_util.same_control_flow_ctx([sorted_seq, values]):
+            sorted_seq_raw = sorted_seq.copy_compatible_to_dims_raw(sorted_seq_dims)
+            values_raw = values.copy_compatible_to_dims_raw(values_dims)
+            if len(values_rem_dims) != 1:
+                # tf.searchsorted wants matching leading dims and exactly one search dim
+                values_raw = tf.reshape(
+                    values_raw,
+                    tf.concat([tf.shape(sorted_seq_raw)[:-1], [-1]], axis=0) if sorted_seq_dims[:-1] else [-1],
+                )
+            out = Tensor("search_sorted", dims=sorted_seq_dims[:-1] + values_rem_dims, dtype=out_dtype, sparse_dim=axis)
+            out_raw = tf.searchsorted(sorted_seq_raw, values_raw, side=side, out_type=out_type)
+            if len(values_rem_dims) != 1:
+                out_raw = tf.reshape(out_raw, _shape_raw(out.dims))
+            out.raw_tensor = _with_static_shape(out_raw, out.dims)
+        return out
+
+    @staticmethod
     def slice(
         source: Tensor,
         *,
