@@ -180,6 +180,9 @@ class _DimExtra:
             # noinspection PyTypeChecker
             self.kind = {v.name: v for v in DimTypes.Types}[self.kind]
 
+    def __repr__(self):
+        return f"<{self.__class__.__name__} of {self._dim_ref()!r}>"
+
     def _relink_dim(self, dim: Dim):
         self._dim_ref = weakref.ref(dim)
 

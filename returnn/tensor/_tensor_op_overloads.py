@@ -16,7 +16,7 @@ class _TensorOpOverloadsMixin(_TensorMixinBase):
     # Note that all those ops have native implementations as well,
     # so keep the logic in sync.
 
-    def __bool__(self):
+    def __bool__(self: Tensor):
         from returnn.log import log
         from returnn.util.basic import BehaviorVersion
 
