@@ -5436,7 +5436,16 @@ class GetCtcFsaFastBwOp(NativeOpGenBase):
           int32_t seq_len = seq_lens[batch_idx];
           // state_idx: 0 b, 1 l, 2 b, 3 l, ..., (T-1)*2 b, T*2-1 l, T*2 b, T*2+1 dummy, T*2+2 end
           // i.e. T*2+3 states per seq.
-          int state_idx_offset = (n_time * 2 + 3) * batch_idx;
+          // Packed layout: number the STATES by content as well, not by buffer capacity.
+          // edge_offsets[b] == 5 * sum(len_0..len_(b-1)) + 5 * b,
+          // so the content state offset 2 * sum(...) + 3 * b
+          // is exactly 2 * edge_offsets[b] / 5 + b, and that division is exact.
+          // Each seq then owns exactly its 2*len+3 states (dummy and end are its last two),
+          // so n_states follows the targets total instead of batch * capacity.
+          // Rectangular layout keeps the capacity stride.
+          int state_idx_offset = edge_offsets
+            ? (edge_offsets[batch_idx] / 5) * 2 + batch_idx
+            : (n_time * 2 + 3) * batch_idx;
           int t = -1; // pos in targets
           int srel_edge_idx = -1; // state relative edge
           // (seq_len * 2) - 1 is last label state idx. seq_len * 2 is last blank state idx.

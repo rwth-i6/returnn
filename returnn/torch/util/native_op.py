@@ -608,6 +608,8 @@ def get_ctc_fsa_fast_bw(
         packed targets TOTAL bound: the FastBaumWelch kernels then iterate a content-sized
         edge list instead of the buffer-sized one (batch * capacity), which otherwise
         dominates their per-frame cost.
+        The packed layout also numbers the STATES by content,
+        so the state count follows the targets total as well.
         None = the rectangular layout over the targets buffer width.
     :return: edges, weights, start_end_states;
         edges is (4,num_edges), int32, edges of the graph (from,to,emission_idx,sequence_idx).
@@ -835,7 +837,14 @@ def ctc_loss_packed(
     # (the default in fast_baum_welch_packed sizes by start_end_states.max(),
     # a data-dependent device read -- a sync, and illegal under CUDA-graph capture)
     n_batch, n_tgt_time = targets.shape
-    n_states = n_batch * (2 * n_tgt_time + 3)
+    if edges_bound is not None:
+        # packed FSA: the states are numbered by content too (see construct_kernel),
+        # so the count follows the targets TOTAL bound implied by edges_bound
+        # (edges_bound == 5 * targets_total_bound + 5 * batch),
+        # not batch * buffer capacity. Floor division stays an upper bound.
+        n_states = 2 * (edges_bound // 5) + n_batch
+    else:
+        n_states = n_batch * (2 * n_tgt_time + 3)
     loss = _FastBaumWelchScoresPackedAutogradFunc.apply(
         logits, logits_normalize, seq_starts, seq_mask, edges, weights, start_end_states, n_states
     )
