@@ -2088,11 +2088,9 @@ class _TensorMixin(_TensorMixinBase):
         return self.get_batch_axis_excluding_batch(self.time_dim_axis)
 
     @property
-    def placeholder(self):
+    def placeholder(self: _t.Tensor) -> Optional[_t.RawTensorType]:
         """
         (Old alias for raw_tensor.)
-
-        :rtype: T
         """
         return self._raw_tensor
 
