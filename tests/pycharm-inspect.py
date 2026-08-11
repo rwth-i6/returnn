@@ -118,6 +118,10 @@ def install_pycharm():
     # (PyInterpreterInspection EOL warning in every file + wrong-syntax inspections).
     # Since 2025.3 there is no separate Community tarball anymore, only the unified PyCharm
     # (free mode included) -- pycharm-<ver>.tar.gz, python plugin dir "python" instead of "python-ce".
+    # NOTE: 2026.2 (262.8665.309) AND 2026.2.0.1 (262.8665.369) both have the PyLiteralType
+    # promoteDictLiteralOrDictComprehension IndexOutOfBoundsException (measured 2026-08-11);
+    # GlobalInspectionContextImpl then aborts the whole file's inspection -> zero reports
+    # (e.g. returnn/tf/engine.py). No fixed build available yet.
     name = "pycharm-2026.2"
     fn = "%s.tar.gz" % name
 
@@ -507,6 +511,72 @@ def prepare_src_dir(files=None):
     subprocess.check_call(["ls", "-la", src_tmp_dir])
     fold_end()
     return src_tmp_dir
+
+
+def get_pycharm_system_dir(pycharm_dir):
+    """
+    :param str pycharm_dir:
+    :return: the system dir this run uses (mirrors setup_pycharm_python_interpreter)
+    :rtype: str
+    """
+    version_str = get_version_str_from_pycharm(pycharm_dir)
+    version, _ = parse_pycharm_version(version_str)
+    if sys.platform == "darwin":
+        system_dir = os.path.expanduser("~/Library/Caches/PyCharm%s" % version_str)
+    elif version[0] >= 2020:
+        system_dir = os.path.expanduser("~/.cache/JetBrains/PyCharm%s" % version_str)
+    else:
+        system_dir = os.path.expanduser("~/.PyCharm%s/system" % version_str)
+    return os.environ.get("PYCHARM_INSPECT_SYSTEM_DIR", system_dir)
+
+
+def report_inspection_aborts(pycharm_dir, idea_log_offset):
+    """
+    Scan idea.log (from the given offset, i.e. this run only) for per-file inspection ABORTS:
+    an exception inside GlobalInspectionContextImpl kills the WHOLE file's inspection pass,
+    so the file reports zero findings and is indistinguishable from clean
+    (this hid 300+ findings in returnn/tf/engine.py behind a PyCharm 2026.2
+    PyLiteralType IndexOutOfBoundsException, see the docstring there).
+
+    :param str pycharm_dir:
+    :param int idea_log_offset: log size before the run, see get_idea_log_path
+    :return: number of aborted files
+    :rtype: int
+    """
+    log_fn = get_idea_log_path(pycharm_dir)
+    if not os.path.exists(log_fn):
+        print("WARNING: idea.log not found (%s), cannot check for per-file inspection aborts" % log_fn)
+        return 0
+    with open(log_fn, errors="replace") as f:
+        f.seek(idea_log_offset)
+        content = f.read()
+    from lint_common import ignore_count_for_files
+
+    aborts = []
+    for m in re.finditer(r"SEVERE - #c\.i\.c\.e\.GlobalInspectionContextImpl - In file: (\S+)\n(.*)", content):
+        fn, exc = m.group(1), m.group(2).strip()
+        # the inspected tree is a temp copy: /tmp/.../returnn/<repo-relative>
+        m2 = re.search(r"/returnn/((?:returnn|tools|demos|tests)/.*|rnn\.py|setup\.py|__init__\.py)$", fn)
+        rel = m2.group(1) if m2 else fn
+        aborts.append((rel, exc))
+    fatal = [(rel, exc) for rel, exc in aborts if rel not in ignore_count_for_files]
+    if aborts:
+        print("=" * 70)
+        print("WARNING: the inspection ABORTED on %i file(s); their findings are MISSING" % len(aborts))
+        print("(they show up as 'No reports for this file' although they are NOT clean):")
+        for rel, exc in aborts:
+            note = "" if (rel, exc) in fatal else "  (on the ignore list, not fatal)"
+            print("  %s%s\n    %s" % (rel, note, exc[:200]))
+        print("=" * 70)
+    return len(fatal)
+
+
+def get_idea_log_path(pycharm_dir):
+    """
+    :param str pycharm_dir:
+    :rtype: str
+    """
+    return "%s/log/idea.log" % get_pycharm_system_dir(pycharm_dir)
 
 
 def run_inspect(pycharm_dir, src_dir, skip_pycharm_inspect=False, scope_dir=None):
@@ -1049,12 +1119,18 @@ def main():
     # --files: analyze only the smallest dir covering them (the rest of the project stays
     # indexed for type inference), and report only those files
     scope_dir = os.path.commonpath([os.path.dirname(f) for f in args.files]) if args.files else None
+    idea_log_fn = get_idea_log_path(pycharm_dir)
+    idea_log_offset = os.path.getsize(idea_log_fn) if os.path.exists(idea_log_fn) else 0
     res_dir = run_inspect(
         pycharm_dir=pycharm_dir,
         src_dir=src_dir,
         skip_pycharm_inspect=args.skip_pycharm_inspect,
         scope_dir=scope_dir,
     )
+    if report_inspection_aborts(pycharm_dir, idea_log_offset) > 0:
+        # findings of the aborted files are missing entirely, so the count below cannot be
+        # trusted -- fail regardless of it
+        sys.exit(1)
     if report_inspect_dir(res_dir, **inspect_kwargs) > 0:
         sys.exit(1)
 
