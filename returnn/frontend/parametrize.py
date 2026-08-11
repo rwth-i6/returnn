@@ -128,6 +128,9 @@ class _ParametrizationTransform(Protocol):
     def __call__(self, x: Tensor) -> Tensor:
         """Return the parametrized tensor based on the original parameter."""
 
+    def __repr__(self) -> str:
+        """Declared so the parametrization can be formatted in messages (object.__repr__ always exists)."""
+
 
 class _ParametrizationWithAssign(Protocol):
     def __call__(self) -> Tensor:
@@ -136,10 +139,16 @@ class _ParametrizationWithAssign(Protocol):
     def assign(self, x: Tensor):
         """Assign as if it was a single parameter."""
 
+    def __repr__(self) -> str:
+        """Declared so the parametrization can be formatted in messages (object.__repr__ always exists)."""
+
 
 class _ParametrizationWithoutAssign(Protocol):
     def __call__(self) -> Tensor:
         """Return the parametrized tensor."""
+
+    def __repr__(self) -> str:
+        """Declared so the parametrization can be formatted in messages (object.__repr__ always exists)."""
 
 
 _ParametrizationType = Union[
