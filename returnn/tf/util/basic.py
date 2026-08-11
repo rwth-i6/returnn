@@ -6787,7 +6787,6 @@ def get_variable_grad_from_update_ops(var, update_ops):
     op = update_ops[0]
     op_inputs = get_op_inputs_by_name(op)
     if op.type == "ScatterSub":  # e.g. sparse grad with GradientDescentOptimizer
-        # noinspection PyProtectedMember
         assert op_inputs["ref"] == var_handle_or_ref(var)
         indices = op_inputs["indices"]
         delta = op_inputs["updates"]
@@ -6797,7 +6796,6 @@ def get_variable_grad_from_update_ops(var, update_ops):
         return tf.IndexedSlices(values=grad, indices=indices, dense_shape=tf.convert_to_tensor(get_shape(var)))
     if op.type == "AssignSub":
         op_name_prefix = os.path.dirname(op.name) + "/"
-        # noinspection PyProtectedMember
         assert op_inputs["ref"] == var_handle_or_ref(var)
         # Case for sparse update in Adam:
         # m_scaled_g_values = grad * (1 - beta1_t)
@@ -6817,7 +6815,6 @@ def get_variable_grad_from_update_ops(var, update_ops):
         assert "gradients" in grad.name or grad.op.type == "UnsortedSegmentSum"
         return tf.IndexedSlices(values=grad, indices=indices, dense_shape=tf.convert_to_tensor(get_shape(var)))
     assert "var" in op_inputs
-    # noinspection PyProtectedMember
     assert op_inputs["var"] == var_handle_or_ref(var)
     if "grad" in op_inputs:  # e.g. ApplyAdam
         grad = op_inputs["grad"]
