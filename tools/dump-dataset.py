@@ -7,10 +7,10 @@ This can also be used to collect statistics over the data like mean/variance.
 
 from __future__ import annotations
 
+from typing import Optional
 import os
 import sys
 import time
-import typing
 
 import _setup_returnn_env  # noqa
 from returnn import __main__ as rnn
@@ -23,7 +23,7 @@ from returnn.util.basic import Stats, hms, hms_fraction, pretty_print, NumbersDi
 from returnn.util import basic as util
 
 
-dataset = None  # type: typing.Optional[Dataset]
+dataset: Optional[Dataset] = None
 
 
 def plot(m):
