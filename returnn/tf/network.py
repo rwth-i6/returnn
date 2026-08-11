@@ -5176,6 +5176,8 @@ def set_custom_post_init(var, func):
     # This custom attribute is a big ugly but simple.
     # It's read in TFNetwork.initialize_params().
     assert callable(func)
+    # RETURNN plants this attr on tf.Variable
+    # noinspection PyUnresolvedReferences
     var.custom_post_init = func
 
 
