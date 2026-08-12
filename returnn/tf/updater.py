@@ -1426,7 +1426,7 @@ class GradVarianceScaledOptimizer(BaseCustomOptimizer):
 class NadamOptimizer(tf_compat.v1.train.AdamOptimizer):
     """
     Optimizer that implements the Nadam algorithm.
-    See [Dozat, T., 2015](http://cs229.stanford.edu/proj2015/054_report.pdf).
+    See [Dozat, T., 2015](https://cs229.stanford.edu/proj2015/054_report.pdf).
 
     Copied from:
     https://github.com/tensorflow/tensorflow/blob/v1.15.5/tensorflow/contrib/opt/python/training/nadam_optimizer.py
