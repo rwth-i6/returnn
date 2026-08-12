@@ -176,6 +176,7 @@ class OpMaker:
             __thread cudaStream_t _returnn_jax_stream = nullptr;
             __thread ffi::ScratchAllocator* _returnn_jax_scratch = nullptr;
             """)
+        # noinspection PyProtectedMember
         return dedent(f"""\
             #define JAX 1
             #define CUDA {1 if cuda else 0}
@@ -371,6 +372,7 @@ def _fast_bw_loss_fwd(logits, logits_normalize, seq_mask, edges, weights, start_
 
 
 def _fast_bw_loss_bwd(logits_normalize, n_states, res, grad_output):
+    del n_states
     log_sm, seq_mask, fwdbwd = res
     bw = jnp.exp(-fwdbwd)  # (time,batch,dim), the soft alignment
     grad_x = (jnp.exp(log_sm) - bw) if logits_normalize else -bw
