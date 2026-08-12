@@ -19,7 +19,7 @@ from returnn.util.basic import get_fwd_compat_kwargs
 import returnn.frontend as rf
 
 
-__all__ = ["Updater"]
+__all__ = ["Updater", "global_grad_norm"]
 
 
 class Updater:
