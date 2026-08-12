@@ -50,6 +50,7 @@ from .data import (
 )
 from returnn.datasets.packing import packed_batch_config, packed_batch_key_opts
 
+# noinspection PyProtectedMember
 from .frontend._backend import JaxBackend, _device_from_str
 from .updater import Updater, global_grad_norm
 from . import checkpoint as _checkpoint
@@ -280,6 +281,7 @@ class Engine(EngineBase):
         num_steps = 0
         # The RNG stream goes through the step as a value, so take it out of the backend here
         # and put the advanced one back at the end of the epoch.
+        # noinspection PyProtectedMember
         self._rng_key = self._commit_one(JaxBackend._get_rng_key_())
 
         pending_losses: Optional[Dict[str, Any]] = None  # of the step still running on the device
@@ -315,7 +317,7 @@ class Engine(EngineBase):
                     entry[1] += _waited
                 if pending_log:
                     print(_format_step_log(self.epoch, pending_losses, pending_log), file=log.v5)
-                pending_losses, pending_log, pending_bucket = None, None, None
+                del pending_losses, pending_log, pending_bucket
             # The LR of the STEP: the epoch-level value, put through the config's schedule if it has one.
             learning_rate = self._updater.get_effective_learning_rate(
                 learning_rate=self.learning_rate,
@@ -639,6 +641,7 @@ class Engine(EngineBase):
                     time_multiple=self._jit_opts["time_multiple"],
                 )
             )
+            # noinspection PyProtectedMember
             self._run_compiled_step(
                 [self._params[i].raw_tensor for i in self._train_param_idx],
                 [self._params[i].raw_tensor for i in self._other_param_idx],
@@ -684,6 +687,7 @@ class Engine(EngineBase):
             other_raws = [jnp.array(self._params[i].raw_tensor) for i in self._other_param_idx]
             best = None
             for rep in range(reps + 1):  # one warmup, then the timed reps
+                # noinspection PyProtectedMember
                 args = (
                     [jnp.array(x) for x in train_raws],
                     [jnp.array(x) for x in other_raws],
@@ -834,6 +838,7 @@ class Engine(EngineBase):
         # jax_trainable, not param.trainable: the latter is the value as given, so None wherever it
         # was left unspecified, and None resolves to NOT trainable for auxiliary parameters.
         # See JaxBackend.set_parameter_trainable.
+        # noinspection PyUnresolvedReferences
         self._train_param_idx = [i for i, param in enumerate(self._params) if param.jax_trainable]
         self._other_param_idx = [i for i in range(len(self._params)) if i not in set(self._train_param_idx)]
         self._commit_to_device([param.raw_tensor for param in self._params], into=self._params)
@@ -871,6 +876,7 @@ class Engine(EngineBase):
                 # which for the DERIVED ones (subsampled time, attention kv) means deriving it
                 # from the dims they come from. That derivation is gated on this flag.
                 with rf.set_static_traceable_ctx(self._jit_opts is not None), rf.set_amp_policy_ctx(self._amp_policy):
+                    assert callable(self._train_step_func)
                     self._train_step_func(model=self.model, extern_data=extern_data, **sentinel_kw)
                     run_ctx = rf.get_run_ctx()
                     total = run_ctx.total_loss()
@@ -898,11 +904,13 @@ class Engine(EngineBase):
             so XLA fuses across the model, the losses and the optimizer.
             """
             # The RNG stream in and out, see the module docstring.
+            # noinspection PyProtectedMember
             prev_key, JaxBackend._rng_key = JaxBackend._rng_key, rng_key
             try:
                 (loss, (losses, other_raws)), grads = value_and_grad(
                     train_raws, other_raws, batch_raws, step, epoch, True
                 )
+                # noinspection PyProtectedMember
                 rng_key = JaxBackend._rng_key
             finally:
                 JaxBackend._rng_key = prev_key
@@ -1067,6 +1075,8 @@ class Engine(EngineBase):
             # One host read per step: the sizes of the output dims. Everything below indexes
             # per sequence, which needs them as numbers anyway.
             for batch_idx in range(batch_dim_.get_dim_value()):
+                # seq_tag is a numpy string array in the raw dict, not a Tensor
+                # noinspection PyUnresolvedReferences
                 seq_tag = batch_raws["seq_tag"][batch_idx]
                 outputs_per_seq = TensorDict()
                 for key, value in outputs.data.items():
@@ -1099,6 +1109,7 @@ class Engine(EngineBase):
             )
             sentinel_kw = util.get_fwd_compat_kwargs()
             with rf.set_amp_policy_ctx(self._amp_policy):
+                assert callable(self._forward_step_func)
                 self._forward_step_func(model=self.model, extern_data=extern_data, **sentinel_kw)
             run_ctx = rf.get_run_ctx()
             run_ctx.check_outputs_complete()
@@ -1212,6 +1223,7 @@ def _device_description() -> str:
     return f"{kind} ({dev.platform})" + (f" x{len(devices)}" if len(devices) > 1 else "")
 
 
+# noinspection PyShadowingNames
 def _tensor_of_seq_numpy(x: Tensor, *, batch_idx: int, batch_dim: Dim) -> Tensor:
     """
     :param x: batched, with ``batch_dim`` among its dims
@@ -1240,6 +1252,7 @@ def _tensor_of_seq_numpy(x: Tensor, *, batch_idx: int, batch_dim: Dim) -> Tensor
     return y
 
 
+# noinspection PyShadowingNames
 def _dim_of_seq(dim: Dim, *, batch_idx: int, batch_dim: Dim) -> Dim:
     """
     :param dim:
@@ -1325,6 +1338,7 @@ def _check_config_opts_supported(config: Config):
     :raise NotImplementedError: if the config sets an option this engine would ignore
     """
 
+    # noinspection PyShadowingNames
     def _value_if_set(key: str, noop_value: Any = None) -> Optional[Any]:
         """:return: the configured value, or None if unset or at its no-op value"""
         if not config.has(key):
@@ -1445,6 +1459,7 @@ def _prefetch(iterable, *, buffer_size: int):
     queue: "_queue.Queue" = _queue.Queue(maxsize=buffer_size)
     end = object()
 
+    # noinspection PyShadowingNames
     def _produce():
         try:
             for item in iterable:
