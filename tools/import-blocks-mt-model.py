@@ -63,11 +63,11 @@ Example Returnn network topology:
 
 from __future__ import annotations
 
+from typing import Any, List, Dict
 import os
 import sys
 import numpy
 import re
-from pprint import pprint
 from numpy.testing import assert_almost_equal
 import tensorflow as tf
 import pickle
@@ -82,17 +82,14 @@ from returnn.tf.layers.basic import SourceLayer, LayerBase, LinearLayer
 from returnn.tf.layers.rec import ChoiceLayer
 
 
-def get_network():
-    """
-    :rtype: TFNetwork
-    """
+def get_network() -> TFNetwork:
+    """net"""
+    assert rnn.engine.network is not None
     return rnn.engine.network
 
 
-def get_input_layers():
-    """
-    :rtype: list[LayerBase]
-    """
+def get_input_layers() -> List[LayerBase]:
+    """inputs"""
     ls = []
     for layer in get_network().layers.values():
         if len(layer.sources) != 1:
@@ -102,10 +99,8 @@ def get_input_layers():
     return ls
 
 
-def find_our_input_embed_layer():
-    """
-    :rtype: LinearLayer
-    """
+def find_our_input_embed_layer() -> LinearLayer:
+    """in"""
     input_layers = get_input_layers()
     assert len(input_layers) == 1
     layer = input_layers[0]
@@ -113,11 +108,11 @@ def find_our_input_embed_layer():
     return layer
 
 
-def get_in_hierarchy(name, hierarchy):
+def get_in_hierarchy(name: str, hierarchy: Dict[str, dict[str, Any]]) -> Dict[str, dict[str, Any]]:
     """
-    :param str name: e.g. "decoder/sequencegenerator"
-    :param dict[str,dict[str]] hierarchy: nested hierarchy
-    :rtype: dict[str,dict[str]]
+    :param name: e.g. "decoder/sequencegenerator"
+    :param hierarchy: nested hierarchy
+        (one-arg dict[str] here crashes PyCharm 2026.2 inspection on the whole file, see tf/engine.py)
     """
     if "/" in name:
         name, rest = name.split("/", 1)
@@ -171,8 +166,8 @@ def main():
         blocks_mt_model_fn,
     )
     print("Params found in Blocks model:")
-    blocks_params = {}  # type: dict[str,numpy.ndarray]
-    blocks_params_hierarchy = {}  # type: dict[str,dict[str]]
+    blocks_params: Dict[str, numpy.ndarray] = {}
+    blocks_params_hierarchy: Dict[str, Dict[str, Any]] = {}
     blocks_total_num_params = 0
     for key in sorted(blocks_mt_model.keys()):
         value = blocks_mt_model[key]
