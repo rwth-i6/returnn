@@ -141,7 +141,7 @@ class JaxBackend(Backend[jax.Array]):
         """
         :return: device of the tensor, in the RF naming ("cpu", "cuda:0", ...)
         """
-        raw_tensor: jax.Array = x.raw_tensor
+        raw_tensor: Optional[jax.Array] = x.raw_tensor
         if raw_tensor is None:
             return None
         # Under a JAX transform (jit, grad, vmap) the raw tensor is a tracer, which has no device:
@@ -1222,6 +1222,7 @@ class JaxBackend(Backend[jax.Array]):
 
     # --- signal / search
 
+    # noinspection PyShadowingBuiltins
     @staticmethod
     def top_k(
         source: Tensor,
@@ -1472,6 +1473,7 @@ class JaxBackend(Backend[jax.Array]):
             # as the largest single op of the step (~20% of device time, plus ~7% of f32->f64
             # converts). Tracing with x64 off keeps jnp.float_ at f32; the inputs are already
             # f32/int32, so nothing else changes.
+            loss_raw = None
             with _x64_disabled():
                 loss_raw = optax.ctc_loss(
                     logits=logits_raw,
@@ -1555,6 +1557,7 @@ class JaxBackend(Backend[jax.Array]):
 
     # --- convolution
 
+    # noinspection PyShadowingBuiltins
     @staticmethod
     def conv(
         source: Tensor,
@@ -1910,6 +1913,7 @@ class JaxBackend(Backend[jax.Array]):
         and auxiliary/int params resolve to False inside the setter.
         Reading the property instead put rf.BatchNorm's running stats through the optimizer.
         """
+        # noinspection PyUnresolvedReferences
         param.jax_trainable = trainable
 
     @staticmethod
@@ -2195,6 +2199,7 @@ def _levenshtein(a: jax.Array, b: jax.Array, a_len: jax.Array, b_len: jax.Array)
     # for an empty a, the distance is the length of b
     res0 = jnp.where(a_len == 0, b_len, 0).astype(dtype)
 
+    # noinspection PyShadowingNames
     def _row(carry, i):
         prev, res = carry
         a_i = a[:, i]
@@ -2275,6 +2280,7 @@ def _scale_grad(x: jax.Array, scale: jax.Array) -> jax.Array:
     :param scale:
     :return: x unchanged; the backward pass scales the gradient by scale (scale=-1 is gradient reversal)
     """
+    del scale
     return x
 
 
@@ -2299,10 +2305,12 @@ def _scale_shift_grad(x: jax.Array, scale: jax.Array, shift: jax.Array, axis: Op
     :param axis: if given, the shift is weighted by the summed absolute gradient over this axis
     :return: x unchanged; the backward pass scales and shifts the gradient
     """
+    del scale, shift, axis
     return x
 
 
 def _scale_shift_grad_fwd(x: jax.Array, scale: jax.Array, shift: jax.Array, axis: Optional[int]):
+    del axis
     return x, (scale, shift)
 
 
