@@ -618,7 +618,7 @@ class _TensorMixin(_TensorMixinBase[RawTensorType]):
         return sis_hash_helper(self.get_kwargs())
 
     def __getstate__(self):
-        d = {k: getattr(self, k) for k in self.__slots__}
+        d = {k: getattr(self, k) for k in self.__slots__ if k != "__weakref__"}
         if (
             self._raw_tensor is not None
             and self._raw_backend is not None
