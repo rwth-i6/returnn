@@ -5,7 +5,21 @@ Various generic utilities, which are shared across different backend engines.
 """
 
 from __future__ import annotations
-from typing import Optional, Union, Any, Generic, TypeVar, Iterable, Tuple, Dict, List, Set, Callable
+from typing import (
+    Optional,
+    Union,
+    Any,
+    Generic,
+    TypeVar,
+    Iterable,
+    Tuple,
+    Dict,
+    List,
+    Set,
+    Callable,
+    Hashable,
+    overload,
+)
 
 import subprocess
 from subprocess import CalledProcessError
@@ -2418,13 +2432,23 @@ class FrozenDict(dict):
         return hash(tuple(sorted(self.items())))
 
 
+@overload
+def make_hashable(obj: dict) -> FrozenDict: ...
+
+
+@overload
+def make_hashable(obj: Union[list, tuple]) -> tuple: ...
+
+
+@overload
+def make_hashable(obj: Hashable) -> Hashable: ...
+
+
 def make_hashable(obj):
     """
     Theano needs hashable objects in some cases, e.g. the properties of Ops.
     This converts all objects as such, i.e. into immutable frozen types.
-
-    :param T|dict|list|tuple obj:
-    :rtype: T|FrozenDict|tuple
+    The return is always hashable; anything not convertible raises a TypeError.
     """
     if isinstance(obj, dict):
         return FrozenDict([make_hashable(item) for item in obj.items()])
