@@ -74,7 +74,7 @@ class Runner:
         :param bool|None train_flag: normally just as train.
             but e.g. maybe you want to have the train_flag but not train
         :param bool eval: whether to evaluate (i.e. calculate loss/error)
-        :param dict[str,tf.Tensor|Data|LayerBase|(()->tf.Tensor)]|None extra_fetches:
+        :param dict[str,tf.Tensor|Data|LayerBase|(()->tf.Tensor)|None]|None extra_fetches:
             additional fetches per step.
             `extra_fetches_callback` will be called with these.
             In case of Data/LayerBase, it will return a list,
@@ -188,6 +188,7 @@ class Runner:
                 if isinstance(v, LayerBase):
                     v = v.output
                 if callable(v):
+                    # noinspection PyCallingNonCallable
                     v = v()
                     assert isinstance(v, tf.Tensor)
                     d["extra:%s" % k] = v
@@ -857,7 +858,8 @@ class Runner:
         assert not self.finalized
         if self.run_exception:
             # If this is run inside a debugger, reraise the exception.
-            get_trace = getattr(sys, "gettrace", None)
+            get_trace: Optional[Callable] = getattr(sys, "gettrace", None)
+            # noinspection PyCallingNonCallable
             if get_trace and get_trace() is not None:
                 raise self.run_exception
             # We do not handle the exception otherwise anymore as this was already handled in Runner.run().
@@ -907,7 +909,7 @@ class Engine(EngineBase):
         self.use_search_flag = self.config.value("task", None) == "search"
         self.use_eval_flag = self.config.value("task", None) != "forward"
         self._const_cache: Dict[str, tf.Tensor] = {}
-        self.preload_from_files: Optional[Dict[str, Dict[str]]] = None
+        self.preload_from_files: Optional[Dict[str, Dict[str, Any]]] = None
         self.max_seqs: Optional[int] = None
 
     def finalize(self, error_occurred=False):
