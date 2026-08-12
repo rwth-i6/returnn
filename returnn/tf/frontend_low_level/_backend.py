@@ -13,7 +13,7 @@ import tensorflow as tf
 
 import returnn.tf.compat as tf_compat
 from returnn.log import log
-from returnn.util.basic import NotSpecified, is_onnx_export_global, get_global_inf_value, RefIdEq
+from returnn.util.basic import is_onnx_export_global, get_global_inf_value, RefIdEq
 from returnn.tensor import Tensor, Dim
 from returnn.tf.util import basic as tf_util
 
