@@ -22,6 +22,7 @@ from returnn.tf.util.data import Data
 from returnn.util import basic as util
 
 if TYPE_CHECKING:
+    from tensorflow.python.training.py_checkpoint_reader import CheckpointReader
     from returnn.config import Config
     from returnn.tf.layers.base import SearchChoices
     from returnn.tf.util.data import BatchInfo
@@ -5161,9 +5162,7 @@ class CustomLoadParamFunc(Protocol):
     This is a custom param importer function.
     """
 
-    def __call__(
-        self, *, name: str, shape: Tuple[int, ...], reader: tf.compat.v1.train.NewCheckpointReader
-    ) -> Optional[numpy.ndarray]: ...
+    def __call__(self, *, name: str, shape: Tuple[int, ...], reader: CheckpointReader) -> Optional[numpy.ndarray]: ...
 
 
 def set_custom_post_init(var, func):
