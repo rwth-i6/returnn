@@ -7667,12 +7667,17 @@ class TransposedConvLayer(_ConcatInputLayer):
             assert len(out_spatial_dims) == len(filter_size)
         # Be relaxed about incorrect input data. Throw errors later. This can also work during template construction.
         for i in range(len(filter_size)):
-            old_tag = old_spatial_dim_tags[i] if i < len(old_spatial_dim_tags) else None
             if out_spatial_dims and out_spatial_dims[i].is_dim_known():
                 new_tag = out_spatial_dims[i]  # reuse
             else:
+                if i >= len(old_spatial_dim_tags):
+                    # without an input spatial dim, the out length is only defined via known out_spatial_dims
+                    raise ValueError(
+                        "%s %r: missing spatial dim %i in input %r, and out_spatial_dims[%i] is not known"
+                        % (cls.__name__, name, i, input_data, i)
+                    )
                 new_tag = cls.deconv_output_length(
-                    old_tag,
+                    old_spatial_dim_tags[i],
                     filter_size=filter_size[i],
                     stride=strides[i],
                     padding=padding,
