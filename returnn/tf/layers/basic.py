@@ -6276,7 +6276,7 @@ class ConvLayer(_ConcatInputLayer):
         filter_perm=None,
         bias=None,
         use_time_mask=False,
-        pad_seq_len_to_power=None,
+        pad_seq_len_to_power: Optional[float] = None,
         **kwargs,
     ):
         """
@@ -7179,12 +7179,12 @@ class PoolLayer(_ConcatInputLayer):
         if in_dim and out_dim:
             assert in_dim == out_dim
         elif in_dim:
-            out_dim = in_dim
+            pass  # out_dim is not needed below, only in_dim is
         elif out_dim:
             in_dim = out_dim
         else:
             assert self.input_data.have_feature_axis()
-            out_dim = in_dim = self.input_data.feature_dim_or_sparse_dim
+            in_dim = self.input_data.feature_dim_or_sparse_dim
         input_data, num_batch_dims = ConvLayer.transform_input(
             self.input_data,
             network=self.network,
