@@ -5030,6 +5030,7 @@ class CustomCheckpointLoader:
                 var = self.var_net_names[var_name]
                 var_shape = tuple(var.get_shape().as_list())
                 assert all(isinstance(d, int) for d in var_shape), f"var {var_name} {var} unknown?"
+                assert callable(self.custom_missing_load_func)
                 res = self.custom_missing_load_func(
                     name=var_name,
                     shape=var_shape,
