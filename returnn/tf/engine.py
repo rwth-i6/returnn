@@ -2741,7 +2741,7 @@ class Engine(EngineBase):
         output_layer = self.network.layers[output_layer_name]
         output_t = output_layer.output.get_placeholder_as_batch_major()
         output_seq_lens_t = output_layer.output.get_sequence_lengths()
-        out_beam_size = output_layer.output.beam.beam_size
+        out_beam_size = output_layer.output.beam.beam_size if output_layer.output.beam else None
         output_layer_beam_scores_t = None
         if out_beam_size is None:
             print("Given output %r is after decision (no beam)." % output_layer, file=log.v4)
@@ -2956,7 +2956,7 @@ class Engine(EngineBase):
         output_layer = self.network.layers[output_layer_name]
         output_t = output_layer.output.get_placeholder_as_batch_major()
         output_seq_lens_t = output_layer.output.get_sequence_lengths()
-        out_beam_size = output_layer.output.beam.beam_size
+        out_beam_size = output_layer.output.beam.beam_size if output_layer.output.beam else None
         output_layer_beam_scores_t = None
         if out_beam_size is None:
             print("Given output %r is after decision (no beam)." % output_layer, file=log.v1)
