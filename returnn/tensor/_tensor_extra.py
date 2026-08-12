@@ -23,7 +23,7 @@ from .dim import Dim, batch_dim, VerifyOutShapeException
 import returnn.tensor.tensor as _t
 import returnn.tensor.marked_dim as _m
 
-from ._tensor_mixin_base import _TensorMixinBase
+from ._tensor_mixin_base import _TensorMixinBase, RawTensorType
 
 
 class _TensorExtra:
@@ -104,7 +104,9 @@ class _TensorExtra:
         self._tensor_ref = weakref.ref(tensor)
 
 
-class _TensorMixin(_TensorMixinBase):
+class _TensorMixin(_TensorMixinBase[RawTensorType]):
+    __slots__ = ()
+
     @staticmethod
     def from_tensor(x) -> Tensor:
         """

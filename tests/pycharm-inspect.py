@@ -1017,6 +1017,15 @@ def main():
             ("PyUnresolvedReferencesInspection", r"^Module '(?:transformers|load_file)' not found"),
             ("PyUnresolvedReferencesInspection", r"^Unresolved reference 'safetensors'"),
             ("PyUnresolvedReferencesInspection", r"^No module named '(?:orbax|seaborn|tensor2tensor)'"),
+            # TF stub gaps: compat v2 aliases and internal modules exist at runtime,
+            # and tf.Variable installs its operators at runtime (_OverloadAllOperators)
+            ("PyUnresolvedReferencesInspection", r"^Cannot find reference '(?:keras|optimizers)' in 'tensorflow._api"),
+            (
+                "PyUnresolvedReferencesInspection",
+                r"^Cannot find reference 'training_ops' in 'tensorflow.python.training'",
+            ),
+            ("PyUnresolvedReferencesInspection", r"^Class 'Variable' does not define '__"),
+            ("PyUnresolvedReferencesInspection", r"^Cannot find reference 'version' in 'torch'"),
             # Two filters used to sit here:
             # "Parameter 'in_spatial_dim' unfilled" and "for class '(Tensor, Dim)'".
             # They worked around PyCharm checking an rf.Module construction

@@ -332,6 +332,8 @@ def main():
     argparser.add_argument("--max_seq_length", help="'config' or dict or int")
     argparser.add_argument("--min_seq_length", help="'config' or dict or int")
     args = argparser.parse_args()
+    # argparse: type=int with default=None, so the attr IS Optional despite the inferred int
+    # noinspection PyUnreachableCode
     if args.endseq is None:
         args.endseq = 10 if not args.seqtags else -1
     init(args)

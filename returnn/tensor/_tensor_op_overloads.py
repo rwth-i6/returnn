@@ -9,10 +9,12 @@ if TYPE_CHECKING:
     from .tensor import Tensor  # just for type hints; otherwise use _t.Tensor
     import returnn.frontend.types as _rf_types
 
-from ._tensor_mixin_base import _TensorMixinBase
+from ._tensor_mixin_base import _TensorMixinBase, RawTensorType
 
 
-class _TensorOpOverloadsMixin(_TensorMixinBase):
+class _TensorOpOverloadsMixin(_TensorMixinBase[RawTensorType]):
+    __slots__ = ()
+
     # Note that all those ops have native implementations as well,
     # so keep the logic in sync.
 
