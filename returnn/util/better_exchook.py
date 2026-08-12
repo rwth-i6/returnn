@@ -69,14 +69,17 @@ try:
 except ImportError:
     typing = None
 
-try:
+if sys.version_info >= (3, 5):
     from traceback import StackSummary, FrameSummary
-except ImportError:  # StackSummary, FrameSummary were added in Python 3.5
 
-    class _Dummy:
-        pass
+else:
 
-    StackSummary = FrameSummary = _Dummy
+    class StackSummary(list):
+        """dummy stub stack summary"""
+
+    class FrameSummary:
+        """dummy stub frame summary"""
+
 
 # noinspection PySetFunctionToLiteral,SpellCheckingInspection
 py_keywords = set(keyword.kwlist) | set(["None", "True", "False"])
@@ -402,6 +405,9 @@ def debug_shell(user_ns, user_global_ns, traceback=None, execWrapper=None):
 
                 class DummyMod:
                     """Dummy module"""
+
+                    __name__: str
+                    __dict__: dict
 
                 module = DummyMod()
                 module.__dict__ = user_global_ns
@@ -1182,16 +1188,8 @@ def format_tb(
             output(color("format_tb: tb is None and sys._getframe() failed", color.fg_colors[1], bold=True))
             return output.lines
 
-    def is_stack_summary(_tb):
-        """
-        :param StackSummary|object _tb:
-        :rtype: bool
-        """
-        return isinstance(_tb, StackSummary)
-
-    isframe = inspect.isframe
     if withTitle:
-        if isframe(tb) or is_stack_summary(tb):
+        if isinstance(tb, (types.FrameType, StackSummary)):
             output(color("Traceback (most recent call first):", color.fg_colors[0]))
         else:  # expect traceback-object (or compatible)
             output(color("Traceback (most recent call last):", color.fg_colors[0]))
@@ -1226,11 +1224,11 @@ def format_tb(
         _tb = tb
 
         while _tb is not None and (limit is None or n < limit):
-            if isframe(_tb):
+            if isinstance(_tb, types.FrameType):
                 f = _tb
                 lasti = f.f_lasti
                 lineno, end_lineno, colno, end_colno = _get_code_position(f.f_code, lasti)
-            elif is_stack_summary(_tb):
+            elif isinstance(_tb, StackSummary):
                 _tb0 = _tb[0]
                 if isinstance(_tb0, ExtendedFrameSummary):
                     f = _tb0.tb_frame
@@ -1249,7 +1247,7 @@ def format_tb(
             if lineno is None:
                 if hasattr(_tb, "tb_lineno"):
                     lineno = _tb.tb_lineno
-                elif is_stack_summary(_tb):
+                elif isinstance(_tb, StackSummary):
                     lineno = _tb[0].lineno
                 else:
                     lineno = f.f_lineno
@@ -1385,9 +1383,9 @@ def format_tb(
                     # https://github.com/python/cpython/issues/113939
                     f.f_locals  # noqa
 
-            if isframe(_tb):
+            if isinstance(_tb, types.FrameType):
                 _tb = _tb.f_back
-            elif is_stack_summary(_tb):
+            elif isinstance(_tb, StackSummary):
                 _tb = StackSummary.from_list(_tb[1:])
                 if not _tb:
                     _tb = None
@@ -1788,16 +1786,9 @@ def iter_traceback(tb=None, enforce_most_recent_call_first=False):
     if tb is None:
         tb = get_current_frame()
 
-    def is_stack_summary(_tb):
-        """
-        :param StackSummary|object _tb:
-        :rtype: bool
-        """
-        return isinstance(_tb, StackSummary)
-
     is_frame = inspect.isframe
     is_traceback = inspect.istraceback
-    assert is_traceback(tb) or is_frame(tb) or is_stack_summary(tb)
+    assert is_traceback(tb) or is_frame(tb) or isinstance(tb, StackSummary)
     # Frame or stack summery: most recent call first
     # Traceback: most recent call last
     if is_traceback(tb) and enforce_most_recent_call_first:
@@ -1810,7 +1801,7 @@ def iter_traceback(tb=None, enforce_most_recent_call_first=False):
     while _tb is not None:
         if is_frame(_tb):
             frame = _tb
-        elif is_stack_summary(_tb):
+        elif isinstance(_tb, StackSummary):
             _tb0 = _tb[0]
             if isinstance(_tb0, ExtendedFrameSummary):
                 frame = _tb0.tb_frame
@@ -1821,7 +1812,7 @@ def iter_traceback(tb=None, enforce_most_recent_call_first=False):
         yield frame
         if is_frame(_tb):
             _tb = _tb.f_back
-        elif is_stack_summary(_tb):
+        elif isinstance(_tb, StackSummary):
             _tb = StackSummary.from_list(_tb[1:])
             if not _tb:
                 _tb = None
