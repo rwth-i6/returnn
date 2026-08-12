@@ -653,8 +653,6 @@ class TFBackend(Backend[tf.Tensor]):
         with tf_util.same_control_flow_ctx(source):
             x = source
             axes = x.get_axes_from_description(axis)
-            if use_mask in (None, NotSpecified):
-                use_mask = any(x.has_dynamic_size(a) for a in axes)
             out_data = x.copy_template()
             dim_tags = [dim_tag for i, dim_tag in enumerate(x.dim_tags) if i not in axes]
             out_data = out_data.copy_template_new_dim_tags(dim_tags)
