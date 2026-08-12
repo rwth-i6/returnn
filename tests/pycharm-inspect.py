@@ -1006,9 +1006,6 @@ def main():
             ("PyMethodOverridingInspection", r"^Signature of method "),
             # same Optional-flow family as the Member-'None' filter above
             ("PyCallingNonCallableInspection", r"^'None' object is not callable"),
-            # indexing artifact: Cython's bundled numpy .pxd shadow joins the union type
-            # whenever Cython is installed in the env; not a property of our code
-            ("PyUnresolvedReferencesInspection", r"^Member 'Cython\.Includes\.numpy' of "),
             # Stub gaps, no code fix possible (attribute exists at runtime, stub omits it):
             # librosa does not re-export .feature in its stub; torch stubs miss the dtype alias.
             ("PyUnresolvedReferencesInspection", r"^Cannot find reference '(?:feature|__version__)' in 'librosa'"),
@@ -1072,12 +1069,6 @@ def main():
                 "PyStringConversionWithoutDunderMethodInspection",
                 r"^Type '(?:function|FunctionType|BuiltinFunctionType|MethodType|object)' string value",
             ),
-            # `return _sdpa_no(...)` / `return _flex_no(...)` is a DELIBERATE, documented idiom:
-            # both helpers warn once and return None so an `-> Optional[Tensor]` fast path can bail
-            # out in one line (see _sdpa_no's own docstring in _packed_backend.py). 28 of the 36
-            # findings of this class are those two helpers; rewriting every call site to
-            # `_sdpa_no(...); return None` would be churn against the documented intent.
-            ("PyNoneFunctionAssignmentInspection", r"^Function '_(?:sdpa|flex)_no' doesn't return anything"),
             # A note carried by shutil.which's STUB, not a property of our call: it fires even on
             # `shutil.which("cc")` with a string literal (all 9 findings are the 9 shutil.which
             # calls in native_code_compiler.py, incl. literal args). We never pass a PathLike, and
