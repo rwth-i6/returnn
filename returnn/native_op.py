@@ -241,6 +241,7 @@ class NativeOpBaseMixin:
         results = []
         for info in self.in_info:
             if info.get("gradient", "") == "disconnected":
+                # noinspection PyNoneFunctionAssignment
                 results += [disconnected_type()]
             else:
                 results += grad_op_outputs[:1]

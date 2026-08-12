@@ -401,6 +401,7 @@ class TransformerDecoderLayer(rf.Module):
         # (multi-head) cross-attention (CA)
         if self.cross_att is not None:
             x_ca_ln = self.cross_att_layer_norm(x)
+            # noinspection PyCallingNonCallable
             x_ca = self.cross_att(x_ca_ln, encoder.cross_att)
             x_ca = rf.dropout(x_ca, self.dropout, axis=self.dropout_broadcast and self.out_dim)
             x = x_ca + x

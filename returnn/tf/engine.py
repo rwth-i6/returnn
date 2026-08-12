@@ -735,6 +735,7 @@ class Runner:
                         )
                         elapsed_time_tf += time.time() - session_run_start_time
                         writer.add_summary(fetches_results["summary"], step + step_offset)
+                        # noinspection PyStringFormat
                         writer.add_run_metadata(run_metadata, "step_{:04d}".format(step + step_offset))
                         tl = timeline.Timeline(run_metadata.step_stats)
                         timeline_path = os.path.join(logdir, "timeline.trace")
