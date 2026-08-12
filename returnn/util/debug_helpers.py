@@ -30,13 +30,9 @@ def find_obj_in_stack(cls, stack: Optional[Union[types.FrameType, types.Tracebac
         stack = sys._getframe()
         assert stack, "could not get stack"
 
-    import inspect
-
-    isframe = inspect.isframe
-
     _tb: Optional[Union[types.FrameType, types.TracebackType]] = stack
     while _tb is not None:
-        if isframe(_tb):
+        if isinstance(_tb, types.FrameType):
             f = _tb
         else:
             f = _tb.tb_frame
@@ -45,7 +41,7 @@ def find_obj_in_stack(cls, stack: Optional[Union[types.FrameType, types.Tracebac
             if isinstance(obj, cls):
                 return obj
 
-        if isframe(_tb):
+        if isinstance(_tb, types.FrameType):
             _tb = _tb.f_back
         else:
             _tb = _tb.tb_next
