@@ -329,6 +329,7 @@ class Engine(EngineBase):
         Build the forward graph: run ``forward_step`` once and keep what it marked as output.
         """
         rf.init_forward_step_run_ctx(epoch=self.epoch, step=0)
+        assert callable(self._forward_step_func)
         self._forward_step_func(model=self.model, extern_data=self.extern_data, **util.get_fwd_compat_kwargs())
         outputs = rf.get_run_ctx().outputs
         assert outputs.data, "forward_step did not mark any output"
@@ -683,6 +684,7 @@ class Engine(EngineBase):
             tf.constant(0, dtype="int64"), shape=(), name="global_train_step"
         )
         rf.init_train_step_run_ctx(train_flag=True, step=self._step_placeholder, epoch=self.epoch)
+        assert callable(self._train_step_func)
         self._train_step_func(model=self.model, extern_data=self.extern_data, **sentinel_kw)
         run_ctx = rf.get_run_ctx()
         assert run_ctx.losses, "train_step did not mark any loss"
@@ -692,6 +694,7 @@ class Engine(EngineBase):
 
         # eval specialization: no dropout, no specaugment, BatchNorm on running statistics
         rf.init_train_step_run_ctx(train_flag=False, step=self._step_placeholder, epoch=self.epoch)
+        assert callable(self._train_step_func)
         self._train_step_func(model=self.model, extern_data=self.extern_data, **sentinel_kw)
         eval_ctx = rf.get_run_ctx()
         eval_total = eval_ctx.total_loss()
@@ -952,7 +955,8 @@ def _check_config_opts_supported(config: Config):
     and silently ignoring them changes what the config means.
     """
 
-    # noinspection PyShadowingNames  -- local helper, shadowing the outer key/value is intended
+    # local helper, shadowing the outer key/value is intended
+    # noinspection PyShadowingNames
     def _value_if_set(key: str, noop_value: Any = None) -> Optional[Any]:
         """:return: the configured value, or None if unset or at its no-op value"""
         if not config.has(key):
