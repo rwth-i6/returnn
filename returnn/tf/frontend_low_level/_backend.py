@@ -200,8 +200,10 @@ class TFBackend(Backend[tf.Tensor]):
         if kind == "floordiv" and is_onnx_export_global():
             op = tf_util.onnx_compat_floor_div
         elif kind == "logaddexp":
-            # TF has no logaddexp op; this is the numerically stable form
-            op = lambda a_, b_: tf.maximum(a_, b_) + tf.math.log1p(tf.exp(-tf.abs(a_ - b_)))  # noqa: E731
+
+            def op(a_, b_):
+                """Numerically stable logaddexp; TF has no logaddexp op."""
+                return tf.maximum(a_, b_) + tf.math.log1p(tf.exp(-tf.abs(a_ - b_)))
         else:
             kind = {
                 "sub": "subtract",
@@ -362,6 +364,7 @@ class TFBackend(Backend[tf.Tensor]):
 
         def _branch(name: str, fn: Callable):
             _restore_params()
+            # noinspection PyShadowingNames
             out = fn()
             outs[name] = out
             now = [ref_ for ref_, raw_ in params_before.items() if ref_.obj.raw_tensor is not raw_]
@@ -2333,7 +2336,9 @@ class TFBackend(Backend[tf.Tensor]):
             # so replace the variable's initializer (the zeros assign built at creation).
             # These two attributes are where TF stores it;
             # tf.compat.v1.global_variables_initializer() then runs OUR value.
+            # noinspection PyUnresolvedReferences,PyProtectedMember
             var._initializer_op = tf_compat.v1.assign(var, value_raw).op
+            # noinspection PyUnresolvedReferences,PyProtectedMember
             var._initial_value = value_raw
 
     @staticmethod
