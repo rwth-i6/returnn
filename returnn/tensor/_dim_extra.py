@@ -555,6 +555,7 @@ class _DimMixin:
                 if same.dyn_size_ext is not None and same.dyn_size_ext.placeholder is not None:
                     if self.dyn_size_ext.placeholder is None:
                         self.dyn_size_ext = same.dyn_size_ext
+                # noinspection PyUnreachableCode
                 if self.dyn_size_ext is not None and same.dyn_size_ext is None:
                     same.dyn_size_ext = self.dyn_size_ext
                 if self.dyn_size_ext is not None and self.dyn_size_ext.placeholder is not None:
@@ -564,7 +565,7 @@ class _DimMixin:
                 if self._dyn_size_max_value is None and same._dyn_size_max_value is not None:
                     # noinspection PyProtectedMember
                     self._dyn_size_max_value = same._dyn_size_max_value
-                # noinspection PyProtectedMember
+                # noinspection PyProtectedMember,PyUnreachableCode
                 if same._dyn_size_max_value is None and self._dyn_size_max_value is not None:
                     # noinspection PyProtectedMember
                     same._dyn_size_max_value = self._dyn_size_max_value
