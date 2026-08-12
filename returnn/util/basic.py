@@ -2433,15 +2433,18 @@ class FrozenDict(dict):
 
 
 @overload
-def make_hashable(obj: dict) -> FrozenDict: ...
+def make_hashable(obj: dict) -> FrozenDict:
+    """dict -> FrozenDict (hashable)"""
 
 
 @overload
-def make_hashable(obj: Union[list, tuple]) -> tuple: ...
+def make_hashable(obj: Union[list, tuple]) -> tuple:
+    """list/tuple -> tuple (hashable)"""
 
 
 @overload
-def make_hashable(obj: Hashable) -> Hashable: ...
+def make_hashable(obj: Hashable) -> Hashable:
+    """anything else must already be hashable"""
 
 
 def make_hashable(obj):
