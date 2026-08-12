@@ -30,21 +30,22 @@ def find_obj_in_stack(cls, stack: Optional[Union[types.FrameType, types.Tracebac
         stack = sys._getframe()
         assert stack, "could not get stack"
 
-    _tb: Optional[Union[types.FrameType, types.TracebackType]] = stack
-    while _tb is not None:
-        if isinstance(_tb, types.FrameType):
-            f = _tb
-        else:
-            f = _tb.tb_frame
-
-        for obj in f.f_locals.values():
-            if isinstance(obj, cls):
-                return obj
-
-        if isinstance(_tb, types.FrameType):
-            _tb = _tb.f_back
-        else:
+    if isinstance(stack, types.FrameType):
+        frame: Optional[types.FrameType] = stack
+        while frame is not None:
+            for obj in frame.f_locals.values():
+                if isinstance(obj, cls):
+                    return obj
+            frame = frame.f_back
+    elif isinstance(stack, types.TracebackType):
+        _tb: Optional[types.TracebackType] = stack
+        while _tb is not None:
+            for obj in _tb.tb_frame.f_locals.values():
+                if isinstance(obj, cls):
+                    return obj
             _tb = _tb.tb_next
+    else:
+        raise TypeError(f"find obj in stack: {stack=} invalid {type(stack)=}")
 
     return None
 
