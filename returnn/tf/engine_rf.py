@@ -359,13 +359,22 @@ class Engine(EngineBase):
                 self._forward_fetches[key] = size.raw_tensor
 
     def forward_with_callback(
-        self, *, dataset: Dataset, callback: ForwardCallbackIface, dataset_init_epoch: bool = True
+        self,
+        *,
+        dataset: Dataset,
+        callback: ForwardCallbackIface,
+        dataset_init_epoch: bool = True,
+        allow_skipping_seqs: bool = False,
     ):
         """
         :param dataset:
         :param callback:
         :param dataset_init_epoch: whether to call ``dataset.init_seq_order`` here
+        :param allow_skipping_seqs: PERMISSION to skip seqs the batching cannot take
+            (returnn.__main__ passes it through). This engine never skips any, which is a
+            valid implementation for both values, so it only needs to be accepted here.
         """
+        del allow_skipping_seqs  # see docstring: we never skip, valid either way
         assert self._forward_fetches, "forward_with_callback: init_network_from_config was not called"
         if dataset_init_epoch:
             dataset.init_seq_order(epoch=self.epoch)
