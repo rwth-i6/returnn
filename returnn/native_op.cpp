@@ -224,6 +224,30 @@ Ndarray* Ndarray_Copy(const Ndarray* self) {
 // fixed in TF version >= 1.5
 
 #include "tensorflow/core/public/version.h"
+// TF 2.21 gutted tensorflow/core/platform/notification.h (empty header, class gone).
+// absl::Notification would be the drop-in replacement, but current absl headers do not
+// compile under nvcc (raw_hash_map template errors), so use a plain std:: one instead.
+// Used in debug_print below.
+#if (TF_MAJOR_VERSION > 2) || (TF_MAJOR_VERSION == 2 && TF_MINOR_VERSION >= 21)
+#include <mutex>
+#include <condition_variable>
+struct ReturnnNotification {
+    std::mutex mutex_;
+    std::condition_variable cv_;
+    bool done_ = false;
+    void Notify() {
+        { std::lock_guard<std::mutex> lock(mutex_); done_ = true; }
+        cv_.notify_all();
+    }
+    void WaitForNotification() {
+        std::unique_lock<std::mutex> lock(mutex_);
+        cv_.wait(lock, [this] { return done_; });
+    }
+};
+#else
+#include "tensorflow/core/platform/notification.h"
+typedef tensorflow::Notification ReturnnNotification;
+#endif
 
 #ifndef TF_MAJOR_VERSION
 #error "TF_MAJOR_VERSION is not defined!"
@@ -252,14 +276,35 @@ Ndarray* Ndarray_Copy(const Ndarray* self) {
 #define RETURNN_TF_MODERN_STREAM_EXECUTOR 0
 #endif
 
+// TF 2.21 renamed NumericOptions -> EngineOptions (numeric_options.h is gone;
+// engine_options.h adds a require_command_buffer field).
+#if (TF_MAJOR_VERSION > 2) || (TF_MAJOR_VERSION == 2 && TF_MINOR_VERSION >= 21)
+#define RETURNN_TF_SE_ENGINE_OPTIONS 1
+#else
+#define RETURNN_TF_SE_ENGINE_OPTIONS 0
+#endif
+
 #if GOOGLE_CUDA
 #if RETURNN_TF_MODERN_STREAM_EXECUTOR
 #include "xla/stream_executor/blas.h"
 #include "xla/stream_executor/data_type.h"
+#if RETURNN_TF_SE_ENGINE_OPTIONS
+#include "xla/stream_executor/engine_options.h"
+#else
 #include "xla/stream_executor/numeric_options.h"
+#endif
 #include "xla/stream_executor/stream_executor.h"
 #include "tensorflow/core/platform/tensor_float_32_utils.h"
 namespace returnn_se = stream_executor;
+#if RETURNN_TF_SE_ENGINE_OPTIONS
+static inline returnn_se::EngineOptions returnn_se_gemm_options(bool allow_tf32) {
+  return returnn_se::EngineOptions(/*require_determinism=*/false, allow_tf32, /*require_command_buffer=*/false);
+}
+#else
+static inline returnn_se::NumericOptions returnn_se_gemm_options(bool allow_tf32) {
+  return returnn_se::NumericOptions(/*require_determinism=*/false, allow_tf32);
+}
+#endif
 #else
 // alias only: on these versions every use below resolves exactly as it did before
 namespace returnn_se = perftools::gputools;
@@ -358,8 +403,7 @@ static void tf_cuda_sgemm(
                          // Follow TF's global TF32 setting, as TF's own kernels do.
                          // TF32 costs ~5e-5 relative on float32 GEMM,
                          // so the native-op tests turn it off process-wide.
-                         returnn_se::NumericOptions(/*require_determinism=*/false,
-                                                   tensorflow::tensor_float_32_execution_enabled()),
+                         returnn_se_gemm_options(tensorflow::tensor_float_32_execution_enabled()),
                          returnn_se::blas::CallContext::kNone)
             .ok();
 #else
@@ -437,8 +481,7 @@ static void tf_cuda_sgemm_batched(
         (uint64_t)m, (uint64_t)n, (uint64_t)k, alpha, a_ptrs, lda, b_ptrs, ldb,
         beta, c_ptrs, ldc, batchSize,
         // TF32 follows TF's global setting, see tf_cuda_sgemm
-        returnn_se::NumericOptions(/*require_determinism=*/false,
-                                   tensorflow::tensor_float_32_execution_enabled()),
+        returnn_se_gemm_options(tensorflow::tensor_float_32_execution_enabled()),
         /*scratch_allocator=*/nullptr, returnn_se::blas::CallContext::kNone);
 #else
     bool blas_launch_status =
@@ -1155,7 +1198,7 @@ void debug_print(OpKernelContext* context, tensorflow::Tensor* v, const std::str
     std::string full_name = context->op_kernel().name() + ":" + name;
     tensorflow::Tensor cpy(v->dtype(), v->shape());
     if(context->op_device_context()) {  // GPU
-        Notification done_copy;
+        ReturnnNotification done_copy;
         context->op_device_context()->CopyDeviceTensorToCPU(
             v, name, static_cast<Device*>(context->device()), &cpy,
             [&done_copy](const Status& s) { done_copy.Notify(); });
