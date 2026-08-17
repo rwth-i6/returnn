@@ -55,11 +55,12 @@ def main():
         _run("sudo", "apt-get", "install", "-y", "libsndfile1")  # soundfile, librosa, ESPnet
         _run(*pip_install, "--upgrade", "dm-tree", "h5py")
         if args.espnet and not args.espnet_no_deps:
-            _run(*pip_install, "numpy==1.23.5")  # for ESPnet, ctc-segmentation, etc
+            numpy_req = "numpy==1.23.5"  # for ESPnet, ctc-segmentation, etc
         elif args.jax:
-            _run(*pip_install, "numpy>=2.1")  # JAX requires it
+            numpy_req = "numpy>=2.1"  # JAX requires it
         else:
-            _run(*pip_install, "numpy<2")
+            numpy_req = "numpy<2"
+        _run(*pip_install, numpy_req)
         _run(*pip_install, "--upgrade", "scipy")  # for some tests
 
         if sys.version_info[:2] == (3, 10):
@@ -113,7 +114,10 @@ def main():
                                 _run(*pip, "uninstall", "-y", pkg_s)
 
             _run(*pip_install, f"torch=={args.torch}")
-            _run(*pip_install, "onnx", "onnxruntime")
+            # numpy pin in the SAME resolve: recent onnxruntime requires numpy>=2, and a bare
+            # install silently upgraded numpy, breaking the ABI of torch built against 1.x
+            # (CI 2026-08-17: "_ARRAY_API not found" on the torch 1.13 jobs).
+            _run(*pip_install, "onnx", "onnxruntime", numpy_req)
             # lovely-numpy==0.2.20, lovely-tensors==0.1.22 cause some issues:
             # https://github.com/rwth-i6/returnn/issues/1819
             # Maybe specifically with numpy==1.23.5?
