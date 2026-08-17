@@ -35,13 +35,28 @@ def _make_input(*, batch_size: int = 2, seq_lens=(5, 3), feat: int = 4, seed: in
 
 def _flex_attention_usable() -> bool:
     # FlexAttention exists since torch 2.5, usable CPU (eager) support only later; we validated 2.7.
+    # torch 2.12 REMOVED FlexAttention backward on CPU (NotImplementedError), and every use here
+    # runs backward on CPU, so probe exactly that (version checks alone cannot express it).
+    global _flex_attention_usable_cache
+    if _flex_attention_usable_cache is not None:
+        return _flex_attention_usable_cache
+    _flex_attention_usable_cache = False
     if tuple(int(x) for x in torch.__version__.split("+")[0].split(".")[:2]) < (2, 7):
         return False
     try:
         from torch.nn.attention.flex_attention import flex_attention  # noqa
     except ImportError:
         return False
+    try:
+        q, k, v = (torch.randn(1, 1, 4, 8, requires_grad=True) for _ in range(3))
+        flex_attention(q, k, v).sum().backward()
+    except (NotImplementedError, RuntimeError):
+        return False
+    _flex_attention_usable_cache = True
     return True
+
+
+_flex_attention_usable_cache = None
 
 
 def _assert_equal_non_padded(actual: Tensor, expected: Tensor, batch_dim: Dim, time_dim: Dim, **kwargs):
