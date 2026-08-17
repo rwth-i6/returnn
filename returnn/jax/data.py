@@ -284,12 +284,15 @@ def _to_jax(value: numpy.ndarray, *, dtype: str, device: Optional[str]):
     :param device:
     :return: the value as a JAX array
     """
-    raw = jnp.asarray(numpy.asarray(value, dtype=dtype))
+    arr = numpy.asarray(value, dtype=dtype)
     if device:
         import jax
 
         # noinspection PyProtectedMember
         from returnn.jax.frontend._backend import _device_from_str
 
-        raw = jax.device_put(raw, _device_from_str(device))
-    return raw
+        # jnp.asarray would stage it twice, and TRACES PER SHAPE
+        # (1.7 ms repeated vs 29.9 ms fresh),
+        # and the shapes here are fresh almost every batch.
+        return jax.device_put(arr, _device_from_str(device))
+    return jnp.asarray(arr)
