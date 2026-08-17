@@ -718,11 +718,20 @@ class Engine(EngineBase):
         # The save-side saver additionally stores the step counter,
         # under the net-dict engine's tensor name "global_step".
         # The load-side saver (_saver) stays params-only,
-        # so older checkpoints without the counter still restore;
-        # the counter is read back separately via NewCheckpointReader, see __init__.
+        # so older checkpoints without the counters still restore;
+        # the counters are read back separately via NewCheckpointReader, see __init__.
         self._save_saver = tf_compat.v1.train.Saver(
             {
-                **{name: TFBackend.get_parameter_variable(p) for name, p in self.model.named_parameters()},
+                # ALL names of shared parameters (weight tying), not the deduplicated
+                # named_parameters view: the torch engine's state_dict lists every alias,
+                # and converted checkpoints must satisfy torch's loader
+                # (e.g. decoder.logits.weight tied to decoder.input_embedding.weight).
+                # The load side (_saver) stays on named_parameters: loading each parameter
+                # once suffices, and older checkpoints without aliases still restore.
+                **{
+                    name: TFBackend.get_parameter_variable(p)
+                    for name, p in _named_parameters_with_aliases(self.model).items()
+                },
                 "global_step": self._global_train_step_var,
                 "epoch": self._epoch_var,
             }
@@ -1147,6 +1156,22 @@ def _amp_policy_from_config(config: Config) -> Optional[rf.AmpPolicy]:
             raise NotImplementedError(f"tf_amp: unsupported options {sorted(opts)}")
         return rf.AmpPolicy(compute_dtype=dtype)
     raise TypeError(f"tf_amp {opts!r}: expected a dtype name or a dict")
+
+
+def _named_parameters_with_aliases(model: rf.Module) -> Dict[str, rf.Parameter]:
+    """
+    :return: name -> parameter, including EVERY alias name of shared parameters
+        (weight tying: the same Parameter reachable under several module attributes).
+        ``rf.Module.named_parameters`` deduplicates by Parameter identity (first name wins),
+        matching what loading needs; saving wants the full name set instead,
+        as the torch engine's ``state_dict`` provides it.
+    """
+    out: Dict[str, rf.Parameter] = {}
+    for mod_name, module in model.named_modules():
+        for attr, value in vars(module).items():
+            if isinstance(value, rf.Parameter):
+                out[f"{mod_name}.{attr}" if mod_name else attr] = value
+    return out
 
 
 def _static_shapes_opts_from_config(config: Config) -> Optional[Dict[str, Any]]:
