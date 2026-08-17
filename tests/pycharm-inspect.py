@@ -1009,7 +1009,14 @@ def main():
             # Stub gaps, no code fix possible (attribute exists at runtime, stub omits it):
             # librosa does not re-export .feature in its stub; torch stubs miss the dtype alias.
             ("PyUnresolvedReferencesInspection", r"^Cannot find reference '(?:feature|__version__)' in 'librosa'"),
-            ("PyUnresolvedReferencesInspection", r"^Cannot find reference 'dtype' in 'torch'"),
+            # dtype/device/version: torch stub-resolution flakiness; 'device' flared 0 -> 26 between
+            # two same-env CI runs (2026-08-12), so keep the whole family filtered
+            ("PyUnresolvedReferencesInspection", r"^Cannot find reference '(?:dtype|device|version)' in 'torch'"),
+            # `return _sdpa_no(...)` / `return _flex_no(...)` is a DELIBERATE, documented idiom (see
+            # _sdpa_no's docstring in _packed_backend.py). NOTE: 0 matches in a local torch2.12 run,
+            # but 28 on the CI env (2026-08-12, despite the -> None annotation) -- removed once on the
+            # 0-count and CI went red; only remove when the call sites themselves are gone.
+            ("PyNoneFunctionAssignmentInspection", r"^Function '_(?:sdpa|flex)_no' doesn't return anything"),
             # optional deps, imported behind guards / lazily:
             ("PyUnresolvedReferencesInspection", r"^Module '(?:transformers|load_file)' not found"),
             ("PyUnresolvedReferencesInspection", r"^Unresolved reference 'safetensors'"),
@@ -1022,7 +1029,6 @@ def main():
                 r"^Cannot find reference 'training_ops' in 'tensorflow.python.training'",
             ),
             ("PyUnresolvedReferencesInspection", r"^Class 'Variable' does not define '__"),
-            ("PyUnresolvedReferencesInspection", r"^Cannot find reference 'version' in 'torch'"),
             # Two filters used to sit here:
             # "Parameter 'in_spatial_dim' unfilled" and "for class '(Tensor, Dim)'".
             # They worked around PyCharm checking an rf.Module construction
