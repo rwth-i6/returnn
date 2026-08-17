@@ -529,7 +529,12 @@ def test_engine_train():
             import tensorflow as tf
 
             ckpt = engine.get_epoch_model_filename(epoch=3)
-            assert set(name for name, _ in tf.train.list_variables(ckpt)) == {"out.weight", "out.bias", "global_step"}
+            assert set(name for name, _ in tf.train.list_variables(ckpt)) == {
+                "out.weight",
+                "out.bias",
+                "global_step",
+                "epoch",
+            }
 
             # a fresh engine continues from that checkpoint instead of starting over,
             # including the step counter (else every step-based schedule would restart)

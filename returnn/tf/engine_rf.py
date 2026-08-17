@@ -92,7 +92,9 @@ class Engine(EngineBase):
         self._forward_dim_fetches: Dict[Dim, str] = {}  # dyn dim -> its key in _forward_fetches
         self._step_placeholder: Optional[tf.Tensor] = None
         self._saver: Optional[tf_compat.v1.train.Saver] = None
-        self._save_saver: Optional[tf_compat.v1.train.Saver] = None  # params + global_step, see _init_step_func
+        self._save_saver: Optional[tf_compat.v1.train.Saver] = None  # params + global_step + epoch, see _init_step_func
+        self._epoch_var: Optional[tf.Variable] = None
+        self._epoch_assign: Optional[Any] = None  # (assign op, placeholder), see _save_model
         self._data_keys: List[str] = []
         self._fed_dims: List[Tuple[str, Dim]] = []  # (data key, dim) per fed dyn-size placeholder
 
@@ -706,6 +708,13 @@ class Engine(EngineBase):
         self._global_train_step_var = tf.Variable(
             self.global_train_step, dtype="int64", trainable=False, name="global_step"
         )
+        # The epoch alongside, assigned right before each save (see _save_model) --
+        # so a checkpoint knows its epoch WITHOUT filename conventions,
+        # like the torch engine's {"model": ..., "epoch": ..., "step": ...} dict
+        # (e.g. the TF->PT checkpoint conversion reads it).
+        self._epoch_var = tf.Variable(self.epoch, dtype="int64", trainable=False, name="epoch")
+        epoch_placeholder = tf_compat.v1.placeholder(dtype="int64", shape=(), name="epoch_save")
+        self._epoch_assign = (tf_compat.v1.assign(self._epoch_var, epoch_placeholder), epoch_placeholder)
         # The save-side saver additionally stores the step counter,
         # under the net-dict engine's tensor name "global_step".
         # The load-side saver (_saver) stays params-only,
@@ -715,6 +724,7 @@ class Engine(EngineBase):
             {
                 **{name: TFBackend.get_parameter_variable(p) for name, p in self.model.named_parameters()},
                 "global_step": self._global_train_step_var,
+                "epoch": self._epoch_var,
             }
         )
         # The whole LR schedule of a setup can live in dynamic_learning_rate, so it must be applied.
@@ -799,6 +809,8 @@ class Engine(EngineBase):
             print("No 'model' in the config, not saving.", file=log.v4)
             return
         filename = self.get_epoch_model_filename()
+        assign_op, placeholder = self._epoch_assign
+        self.session.run(assign_op, feed_dict={placeholder: self.epoch})
         self._save_saver.save(self.session, filename)
         print(f"Saved model {filename}", file=log.v3)
 
