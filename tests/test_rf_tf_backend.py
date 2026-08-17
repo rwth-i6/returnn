@@ -745,6 +745,113 @@ def test_engine_train_packed():
         rf.select_backend_torch()
 
 
+def test_engine_forward_preload_from_files():
+    # preload_from_files on the TF engine (combined recog models preload e.g. an LM):
+    # after init, the prefixed params must equal the PRELOAD source checkpoint
+    # and the remaining params the MAIN checkpoint -- verified directly against both files.
+    import tensorflow as tf
+    from returnn.config import Config, global_config_ctx
+    from returnn.datasets.generating import DummyDataset
+    from returnn.tf.engine_rf import Engine
+    from returnn.tf.frontend_low_level import TFBackend
+
+    # noinspection PyProtectedMember
+    from returnn.frontend import _backend
+
+    n_data_dim, n_classes_dim, seq_len = 2, 3, 5
+
+    time_dim = Dim(Tensor("time", [batch_dim], dtype="int32"))
+    in_dim = Dim(n_data_dim, name="in")
+    out_dim = Dim(n_classes_dim, name="out")
+
+    class _SubNet(rf.Module):  # what gets preloaded, e.g. the LM
+        def __init__(self):
+            super().__init__()
+            self.out = rf.Linear(in_dim, out_dim)
+
+    class _Net(rf.Module):
+        def __init__(self):
+            super().__init__()
+            self.out = rf.Linear(in_dim, out_dim)
+            self.lm = _SubNet()
+
+    # noinspection PyShadowingNames
+    def _train_step(*, model, extern_data: TensorDict, **_kwargs):
+        logits = model.out(extern_data["data"]) if not isinstance(model, _Net) else model.lm.out(extern_data["data"])
+        loss = rf.cross_entropy(estimated=logits, target=extern_data["classes"], axis=out_dim, estimated_type="logits")
+        loss.mark_as_loss("ce")
+
+    # noinspection PyShadowingNames
+    def _forward_step(*, model: _Net, extern_data: TensorDict, **_kwargs):
+        out = model.out(extern_data["data"])
+        out.mark_as_output("out", shape=(batch_dim, time_dim, out_dim))
+
+    extern_data_opts = {
+        "data": {"dims": [batch_dim, time_dim, in_dim], "dtype": "float32"},
+        "classes": {"dims": [batch_dim, time_dim], "sparse_dim": out_dim, "dtype": "int32"},
+    }
+    _backend.select_backend_tf()
+    prev_batch_dyn_size_ext = batch_dim.dyn_size_ext
+    dirs = {}
+    try:
+        # two 1-epoch trainings with different seeds: the main model (with .lm inside) and,
+        # separately, the bare sub model whose checkpoint gets preloaded under the "lm." prefix
+        for name, net_cls, seed in (("main", _Net, 1), ("sub", _SubNet, 2)):
+            train_data = DummyDataset(input_dim=n_data_dim, output_dim=n_classes_dim, num_seqs=4, seq_len=seq_len)
+            train_data.init_seq_order(epoch=1)
+            model_dir = tempfile.mkdtemp(prefix=f"returnn-test-rf-tf-engine-preload-{name}-")
+            dirs[name] = model_dir
+            config = Config(
+                {
+                    "backend": "tensorflow",
+                    "model": model_dir + "/model",
+                    "random_seed": seed,
+                    "extern_data": extern_data_opts,
+                    "get_model": lambda *, net_cls=net_cls, **_kwargs: net_cls(),
+                    "train_step": _train_step,
+                    "optimizer": {"class": "adam"},
+                    "learning_rate": 0.05,
+                    "batch_size": 20,
+                    "num_epochs": 1,
+                }
+            )
+            with global_config_ctx(config):
+                engine = Engine(config=config)
+                engine.init_train_from_config(config=config, train_data=train_data)
+                engine.train()
+
+        fwd_config = Config(
+            {
+                "backend": "tensorflow",
+                "load": dirs["main"] + "/model.001",
+                "preload_from_files": {"lm": {"prefix": "lm.", "filename": dirs["sub"] + "/model.001"}},
+                "extern_data": extern_data_opts,
+                "get_model": lambda **_kwargs: _Net(),
+                "forward_step": _forward_step,
+            }
+        )
+        with global_config_ctx(fwd_config):
+            engine = Engine(config=fwd_config)
+            engine.init_network_from_config(fwd_config)
+            variables = {name: TFBackend.get_parameter_variable(p) for name, p in engine.get_model().named_parameters()}
+            loaded = engine.session.run(variables)
+        main_reader = tf.train.load_checkpoint(dirs["main"] + "/model.001")
+        sub_reader = tf.train.load_checkpoint(dirs["sub"] + "/model.001")
+        # different seeds: the preload must actually CHANGE the lm params vs the main checkpoint
+        assert not numpy.allclose(main_reader.get_tensor("lm.out.weight"), sub_reader.get_tensor("out.weight"))
+        for name, value in loaded.items():
+            if name.startswith("lm."):
+                expected = sub_reader.get_tensor(name[len("lm.") :])
+            else:
+                expected = main_reader.get_tensor(name)
+            assert numpy.array_equal(value, expected), f"param {name} not from the expected checkpoint"
+    finally:
+        batch_dim.dyn_size_ext = prev_batch_dyn_size_ext
+        rf.select_backend_torch()
+        for model_dir in dirs.values():
+            shutil.rmtree(model_dir, ignore_errors=True)
+
+
 def test_full_model_torch_checkpoint_parity():
     # Item 9: take the target model's parameters from a real PyTorch checkpoint file
     # (as the PT engine writes it), load them into the TF model by RF parameter name,

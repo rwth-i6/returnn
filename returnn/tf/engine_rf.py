@@ -160,6 +160,7 @@ class Engine(EngineBase):
         if load_filename:
             self._load_model(filename=load_filename)
             print(f"Continuing from epoch {load_epoch} ({load_filename})", file=log.v3)
+        self._preload_from_files()
         print(f"TF engine: starting at epoch {self.epoch}", file=log.v3)
 
     def train(self):
@@ -322,6 +323,7 @@ class Engine(EngineBase):
             self.session.run(tf_compat.v1.global_variables_initializer())
         assert load_filename, "forward task: no checkpoint to load (set `load` or `model` in the config)"
         self._load_model(filename=load_filename)
+        self._preload_from_files()
         print(f"TF engine: forward with epoch {self.epoch} ({load_filename})", file=log.v3)
 
     def _init_forward_func(self):
@@ -877,6 +879,50 @@ class Engine(EngineBase):
         assert count_bytes > 0
         return count_bytes
 
+    def _preload_from_files(self):
+        """
+        ``preload_from_files``: load a SUBSET of the model parameters from other checkpoints,
+        AFTER the main checkpoint, with the torch engine's semantics:
+        per entry a checkpoint ``filename`` (TF format here) and a name ``prefix`` --
+        the model params whose RF name starts with the prefix are loaded from that file,
+        looked up there WITHOUT the prefix
+        (e.g. a combined recog model's ``lm.*`` params from a converted LM checkpoint).
+        """
+        opts_dict = self.config.typed_value("preload_from_files")
+        if not opts_dict:
+            return
+        from returnn.tf import checkpoint_rf
+
+        model_params = dict(self.model.named_parameters())
+        for preload_key, opts in sorted(opts_dict.items()):
+            assert isinstance(opts, dict), f"preload_from_files[{preload_key!r}]: expected a dict, got {opts!r}"
+            supported = {"filename", "prefix", "ignore_missing"}
+            assert set(opts).issubset(supported), (
+                f"preload_from_files[{preload_key!r}]: options {sorted(set(opts) - supported)} not implemented"
+                f" on the TF engine (supported: {sorted(supported)})"
+            )
+            prefix = opts.get("prefix", "")
+            sub_params = {name: p for name, p in model_params.items() if name.startswith(prefix)}
+            assert sub_params, f"preload_from_files[{preload_key!r}]: no model params with prefix {prefix!r}"
+            reader = tf_compat.v1.train.NewCheckpointReader(util.get_checkpoint_filepattern(str(opts["filename"])))
+            values = {}
+            for name in sorted(sub_params):
+                src_name = name[len(prefix) :]
+                if not reader.has_tensor(src_name):
+                    if opts.get("ignore_missing"):
+                        continue
+                    raise KeyError(
+                        f"preload_from_files[{preload_key!r}]: {src_name!r} (for model param {name!r})"
+                        f" not in {opts['filename']} (set ignore_missing to skip)"
+                    )
+                values[name] = reader.get_tensor(src_name)
+            with self._graph.as_default():
+                checkpoint_rf.set_model_params(self.model, values, self.session, allow_missing=True)
+            print(
+                f"Pre-loaded {len(values)} params with prefix {prefix!r} from {opts['filename']}",
+                file=log.v3,
+            )
+
     def _load_model(self, *, filename: str):
         """
         :param filename: as :func:`EngineBase.get_epoch_model` returns it
@@ -899,7 +945,6 @@ _UnsupportedConfigOpts = {
     "grad_scaler": None,
     "load_model_post_hooks": None,
     "online_shuffle_batches": None,
-    "preload_from_files": None,
     "pretrain": None,
     "reset_dev_memory_caches": False,
     "sort_dataset": None,
