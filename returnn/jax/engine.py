@@ -1185,6 +1185,7 @@ class Engine(EngineBase):
             filename = filename[: -len(postfix)]
         _checkpoint.set_model_params(self.model, _checkpoint.load_checkpoint(filename + postfix))
         print(f"Loaded model {filename + postfix}", file=log.v3)
+        self._commit_to_device([p.raw_tensor for p in self._params], into=self._params)
         opt_filename = filename + ".opt" + postfix
         if with_opt_state and os.path.exists(opt_filename):
             self._opt_state = _checkpoint.load_opt_state(self._opt_state, opt_filename)
