@@ -1638,8 +1638,8 @@ class Backend(Generic[T]):
             att.feature_dim = v_feat_dim
         return att
 
-    # For eager-based backends, this is a reasonable default implementation and type.
-    TensorArrayType = List[Tensor]
+    # For eager-based backends, List[Tensor] is a reasonable default implementation and type.
+    TensorArrayType = Any
 
     @classmethod
     def tensor_array_create(cls) -> TensorArrayType:
