@@ -3,7 +3,7 @@ Backends for the frontend API
 """
 
 from __future__ import annotations
-from typing import Optional, Any, Union, TypeVar, Generic, Type, Callable, Sequence, Dict, Tuple, List
+from typing import Optional, Any, Union, TypeVar, Generic, Type, Callable, Sequence, Dict, Tuple
 import contextlib
 import numpy
 import returnn.frontend as rf
