@@ -93,8 +93,8 @@ class Engine(EngineBase):
         self._step_placeholder: Optional[tf.Tensor] = None
         self._saver: Optional[tf_compat.v1.train.Saver] = None
         self._save_saver: Optional[tf_compat.v1.train.Saver] = None  # params + global_step + epoch, see _init_step_func
-        self._epoch_var: Optional[tf.Variable] = None
-        self._epoch_assign: Optional[Any] = None  # (assign op, placeholder), see _save_model
+        self._epoch_var: Optional[tf.Variable] = None  # in-graph epoch, see _init_step_func
+        self._epoch_assign: Optional[Any] = None  # (assign op, placeholder), see init_train_epoch
         self._data_keys: List[str] = []
         self._fed_dims: List[Tuple[str, Dim]] = []  # (data key, dim) per fed dyn-size placeholder
 
@@ -179,10 +179,12 @@ class Engine(EngineBase):
 
     def init_train_epoch(self):
         """
-        Learning rate for this (sub)epoch.
+        Learning rate and epoch counter for this (sub)epoch.
         """
         self.learning_rate = self.learning_rate_control.get_learning_rate_for_epoch(self.epoch)
         self._updater.set_learning_rate(self.learning_rate, session=self.session)
+        assign_op, placeholder = self._epoch_assign
+        self.session.run(assign_op, feed_dict={placeholder: self.epoch})
 
     def train_epoch(self):
         """
@@ -696,7 +698,11 @@ class Engine(EngineBase):
         self._step_placeholder = tf_compat.v1.placeholder_with_default(
             tf.constant(0, dtype="int64"), shape=(), name="global_train_step"
         )
-        rf.init_train_step_run_ctx(train_flag=True, step=self._step_placeholder, epoch=self.epoch)
+        self._epoch_var = tf.Variable(self.epoch, dtype="int64", trainable=False, name="epoch")
+        epoch_placeholder = tf_compat.v1.placeholder(dtype="int64", shape=(), name="epoch_assign")
+        self._epoch_assign = (tf_compat.v1.assign(self._epoch_var, epoch_placeholder), epoch_placeholder)
+        epoch_value = self._epoch_var.read_value()
+        rf.init_train_step_run_ctx(train_flag=True, step=self._step_placeholder, epoch=epoch_value)
         assert callable(self._train_step_func)
         self._train_step_func(model=self.model, extern_data=self.extern_data, **sentinel_kw)
         run_ctx = rf.get_run_ctx()
@@ -706,7 +712,7 @@ class Engine(EngineBase):
         self._losses = {name: loss.get_mean_loss().raw_tensor for name, loss in run_ctx.losses.items()}
 
         # eval specialization: no dropout, no specaugment, BatchNorm on running statistics
-        rf.init_train_step_run_ctx(train_flag=False, step=self._step_placeholder, epoch=self.epoch)
+        rf.init_train_step_run_ctx(train_flag=False, step=self._step_placeholder, epoch=epoch_value)
         assert callable(self._train_step_func)
         self._train_step_func(model=self.model, extern_data=self.extern_data, **sentinel_kw)
         eval_ctx = rf.get_run_ctx()
@@ -717,13 +723,6 @@ class Engine(EngineBase):
         self._global_train_step_var = tf.Variable(
             self.global_train_step, dtype="int64", trainable=False, name="global_step"
         )
-        # The epoch alongside, assigned right before each save (see _save_model) --
-        # so a checkpoint knows its epoch WITHOUT filename conventions,
-        # like the torch engine's {"model": ..., "epoch": ..., "step": ...} dict
-        # (e.g. the TF->PT checkpoint conversion reads it).
-        self._epoch_var = tf.Variable(self.epoch, dtype="int64", trainable=False, name="epoch")
-        epoch_placeholder = tf_compat.v1.placeholder(dtype="int64", shape=(), name="epoch_save")
-        self._epoch_assign = (tf_compat.v1.assign(self._epoch_var, epoch_placeholder), epoch_placeholder)
         # The save-side saver additionally stores the step counter,
         # under the net-dict engine's tensor name "global_step".
         # The load-side saver (_saver) stays params-only,
@@ -827,8 +826,6 @@ class Engine(EngineBase):
             print("No 'model' in the config, not saving.", file=log.v4)
             return
         filename = self.get_epoch_model_filename()
-        assign_op, placeholder = self._epoch_assign
-        self.session.run(assign_op, feed_dict={placeholder: self.epoch})
         self._save_saver.save(self.session, filename)
         print(f"Saved model {filename}", file=log.v3)
 

@@ -750,6 +750,76 @@ def test_engine_train_packed():
         rf.select_backend_torch()
 
 
+def test_engine_train_run_ctx_epoch():
+    # rf.get_run_ctx().epoch inside the step must advance with the epochs.
+    # The graph is built ONCE for all epochs, so a Python int would bake the build-time epoch in
+    # (and every epoch-scheduled dropout/schedule would silently freeze) -- it is an in-graph
+    # variable, assigned per epoch. The step here scales the loss by the epoch, so a frozen
+    # epoch shows up directly in the reported scores.
+    from returnn.config import Config, global_config_ctx
+    from returnn.datasets.generating import DummyDataset
+    from returnn.tf.engine_rf import Engine
+
+    # noinspection PyProtectedMember
+    from returnn.frontend import _backend
+
+    n_data_dim, n_classes_dim, seq_len = 2, 3, 5
+
+    time_dim = Dim(Tensor("time", [batch_dim], dtype="int32"))
+    in_dim = Dim(n_data_dim, name="in")
+    out_dim = Dim(n_classes_dim, name="out")
+
+    class _Net(rf.Module):
+        def __init__(self):
+            super().__init__()
+            self.out = rf.Linear(in_dim, out_dim)
+
+    # noinspection PyShadowingNames
+    def _train_step(*, model: _Net, extern_data: TensorDict, **_kwargs):
+        logits = model.out(extern_data["data"])
+        loss = rf.cross_entropy(estimated=logits, target=extern_data["classes"], axis=out_dim, estimated_type="logits")
+        loss *= rf.cast(rf.get_run_ctx().get_epoch_tensor(), loss.dtype)
+        loss.mark_as_loss("ce_x_epoch")
+
+    _backend.select_backend_tf()
+    prev_batch_dyn_size_ext = batch_dim.dyn_size_ext
+    model_dir = tempfile.mkdtemp(prefix="returnn-test-rf-tf-engine-epoch-")
+    try:
+        train_data = DummyDataset(input_dim=n_data_dim, output_dim=n_classes_dim, num_seqs=4, seq_len=seq_len)
+        train_data.init_seq_order(epoch=1)
+        config = Config(
+            {
+                "backend": "tensorflow",
+                "model": model_dir + "/model",
+                "extern_data": {
+                    "data": {"dims": [batch_dim, time_dim, in_dim], "dtype": "float32"},
+                    "classes": {"dims": [batch_dim, time_dim], "sparse_dim": out_dim, "dtype": "int32"},
+                },
+                "get_model": lambda **_kwargs: _Net(),
+                "train_step": _train_step,
+                "optimizer": {"class": "adam"},
+                "learning_rate": 0.0,  # params fixed, so only the epoch factor moves the loss
+                "batch_size": 20,
+                "num_epochs": 3,
+            }
+        )
+        with global_config_ctx(config):
+            engine = Engine(config=config)
+            engine.init_train_from_config(config=config, train_data=train_data)
+            engine.train()
+            scores = {
+                ep: engine.learning_rate_control.get_epoch_error_dict(ep)["train_loss:ce_x_epoch"] for ep in (1, 2, 3)
+            }
+        print("train_loss:ce_x_epoch per epoch:", scores)
+        # with a frozen epoch all three would be equal
+        numpy.testing.assert_allclose(scores[2], 2 * scores[1], rtol=1e-5)
+        numpy.testing.assert_allclose(scores[3], 3 * scores[1], rtol=1e-5)
+    finally:
+        batch_dim.dyn_size_ext = prev_batch_dyn_size_ext
+        rf.select_backend_torch()
+        shutil.rmtree(model_dir, ignore_errors=True)
+
+
 def test_engine_forward_preload_from_files():
     # preload_from_files on the TF engine (combined recog models preload e.g. an LM):
     # after init, the prefixed params must equal the PRELOAD source checkpoint
