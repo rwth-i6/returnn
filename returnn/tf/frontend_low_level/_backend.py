@@ -2086,14 +2086,26 @@ class TFBackend(Backend[tf.Tensor]):
         var_idxs = [i for i, v in enumerate(flat_initial) if isinstance(v, (Tensor, TensorArray))]
         assert var_idxs, f"while_loop: no Tensor/TensorArray among the loop vars {initial}"
 
-        def _raw(value: Union[Tensor, TensorArray]):
+        def _raw(value: Union[Tensor, TensorArray], template: Optional[Tensor] = None):
             if isinstance(value, Tensor):
-                return value.raw_tensor
+                return value.copy_compatible_to_dims_raw(template.dims) if template is not None else value.raw_tensor
             # noinspection PyProtectedMember
             raw = value._backend_tensor_array
-            assert isinstance(raw, _TensorArray) and raw.ta is not None, (
-                f"while_loop: TensorArray loop var {value} is empty; push_back once before the loop"
-            )
+            assert isinstance(raw, _TensorArray)
+            if raw.ta is None:
+                raw = _TensorArray(
+                    ta=tf.TensorArray(
+                        dtype=tf.as_dtype(value.tensor_template.dtype),
+                        size=0,
+                        dynamic_size=True,
+                        clear_after_read=False,
+                        infer_shape=True,
+                    ),
+                    template=value.tensor_template.copy_template(),
+                    size=0,
+                )
+                # noinspection PyProtectedMember
+                value._backend_tensor_array = raw  # so _rebuild sees the same template
             return raw.ta
 
         def _rebuild(flat_raws) -> Any:
@@ -2153,7 +2165,7 @@ class TFBackend(Backend[tf.Tensor]):
             tree.assert_same_structure(initial, new)
             tree.map_structure_with_path(_check_invariant, initial, new)
             flat_new = tree.flatten(new)
-            return tuple(_raw(flat_new[i]) for i in var_idxs)
+            return tuple(_raw(flat_new[i], flat_initial[i]) for i in var_idxs)
 
         loop_vars = tuple(_raw(flat_initial[i]) for i in var_idxs)
         # Permissive shape invariants: a loop var may grow (e.g. a hypothesis history),
@@ -2256,8 +2268,7 @@ class TFBackend(Backend[tf.Tensor]):
             assert index.dims == (), f"tensor_array_get_item: index {index} must be scalar"
             index = index.raw_tensor
         out = tensor_array.template.copy_template()
-        with tf_util.same_control_flow_ctx(tensor_array.ta.flow):
-            out.raw_tensor = tensor_array.ta.read(index)
+        out.raw_tensor = tensor_array.ta.read(index)
         return out
 
     @staticmethod
