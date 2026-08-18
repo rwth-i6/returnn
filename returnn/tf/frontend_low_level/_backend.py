@@ -1630,6 +1630,19 @@ class TFBackend(Backend[tf.Tensor]):
         return out
 
     @staticmethod
+    def squeeze(source: Tensor, axis: Dim) -> Tensor:
+        """
+        :param source:
+        :param axis: size 1
+        :return: source with axis removed
+        """
+        axis_int = source.get_axis_from_description(axis)
+        out = source.copy_template_excluding_axis(axis_int)
+        with tf_util.same_control_flow_ctx(source):
+            out.raw_tensor = _with_static_shape(tf.squeeze(source.raw_tensor, axis=[axis_int]), out.dims)
+        return out
+
+    @staticmethod
     def concat(*sources: Tuple[Tensor, Dim], allow_broadcast: bool = False, out_dim: Dim) -> Tensor:
         """
         :param sources: tensors with the dim to concat over
