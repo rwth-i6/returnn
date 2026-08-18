@@ -30,6 +30,24 @@ __all__ = ["TFBackend", "DeferredVariable"]
 _TT = Tensor[tf.Tensor]
 
 
+@dataclass
+class _TensorArray:
+    """
+    What :class:`returnn.frontend.TensorArray` holds on this backend: a ``tf.TensorArray``
+    (the graph-mode construct: dynamic length, tensor indices, usable inside ``tf.while_loop``)
+    plus what the backend API needs on top of it --
+    the element TEMPLATE, because the raw ``tf.TensorArray`` only knows dtype and shape,
+    while ``tensor_array_get_item`` has to return a :class:`Tensor` with dims.
+
+    ``ta`` is None until the first write: :func:`Backend.tensor_array_create` has no template,
+    and a ``tf.TensorArray`` needs the dtype, so it is created on the first ``push_back``.
+    """
+
+    ta: Optional[tf.TensorArray] = None
+    template: Optional[Tensor] = None  # element dims/dtype/sparse_dim; also the STORED dim order
+    size: Optional[int] = 0  # number of written elements, None if only known at runtime
+
+
 # Ignore this warning until we really expect that we implemented everything.
 # noinspection PyAbstractClass
 class TFBackend(Backend[tf.Tensor]):
@@ -2038,6 +2056,209 @@ class TFBackend(Backend[tf.Tensor]):
             raw_tensor=out_raw,
         )
         return out, out_dim
+
+    @staticmethod
+    def while_loop(
+        cond: Callable[[Any], Union[bool, Tensor]],
+        body: Callable[[Any], Any],
+        initial: Any,
+    ) -> Any:
+        """
+        ``tf.while_loop`` over the RF loop-var structure: the loop stays in the graph
+        (one body, evaluated as often as the data needs) instead of being unrolled,
+        so nothing here needs a static trip count.
+
+        Loop vars are the :class:`Tensor` and :class:`TensorArray` entries of the structure;
+        everything else (dims, python values) is loop-invariant and must come back unchanged
+        from ``body`` -- a :class:`Dim` that changes per iteration is the open design question
+        of https://github.com/rwth-i6/returnn/issues/1327 (see ``_DimUpdatesEager``),
+        and is rejected here rather than silently mis-traced.
+
+        :param cond: gets the loop vars, returns a scalar bool Tensor
+        :param body: gets the loop vars, returns the next loop vars, same structure
+        :param initial: initial loop vars
+        :return: final loop vars
+        """
+        import tree
+        from returnn.frontend.tensor_array import TensorArray
+
+        flat_initial = tree.flatten(initial)
+        var_idxs = [i for i, v in enumerate(flat_initial) if isinstance(v, (Tensor, TensorArray))]
+        assert var_idxs, f"while_loop: no Tensor/TensorArray among the loop vars {initial}"
+
+        def _raw(value: Union[Tensor, TensorArray]):
+            if isinstance(value, Tensor):
+                return value.raw_tensor
+            # noinspection PyProtectedMember
+            raw = value._backend_tensor_array
+            assert isinstance(raw, _TensorArray) and raw.ta is not None, (
+                f"while_loop: TensorArray loop var {value} is empty; push_back once before the loop"
+            )
+            return raw.ta
+
+        def _rebuild(flat_raws) -> Any:
+            """the loop vars of one iteration, as the RF structure body/cond expect"""
+            out = list(flat_initial)
+            for i, raw in zip(var_idxs, flat_raws):
+                value = flat_initial[i]
+                if isinstance(value, Tensor):
+                    tensor = value.copy_template()
+                    # the shape invariants below drop the static shape; the dims know it
+                    tensor.raw_tensor = _with_static_shape(raw, tensor.dims)
+                    out[i] = tensor
+                else:
+                    # noinspection PyProtectedMember
+                    template = value._backend_tensor_array.template
+                    out[i] = TensorArray(
+                        tensor_template=value.tensor_template,
+                        # size unknown inside the loop -> push_back writes at ta.size()
+                        _backend_tensor_array=_TensorArray(ta=raw, template=template, size=None),
+                        _backend=TFBackend,
+                    )
+            return tree.unflatten_as(initial, out)
+
+        def _check_invariant(path, before, after):
+            if isinstance(before, (Tensor, TensorArray)):
+                if isinstance(before, Tensor):
+                    assert isinstance(after, Tensor) and before.dims_set == after.dims_set, (
+                        f"while_loop: loop var {path} changed its dims, {before} -> {after}."
+                        f" Dims changing per iteration are not supported in the graph loop"
+                        f" (https://github.com/rwth-i6/returnn/issues/1327);"
+                        f" use a fixed dim across iterations."
+                    )
+                return
+            if isinstance(before, Dim):
+                assert before is after, (
+                    f"while_loop: loop var {path} is a Dim which body() replaced, {before} -> {after}."
+                    f" See https://github.com/rwth-i6/returnn/issues/1327."
+                )
+                return
+            assert before is after or before == after, (
+                f"while_loop: loop var {path} is not a Tensor/TensorArray, so it cannot change"
+                f" per iteration, but body() returned {after} instead of {before}"
+            )
+
+        def _cond(*flat_raws):
+            res = cond(_rebuild(flat_raws))
+            if isinstance(res, Tensor):
+                assert res.dims == () and res.dtype == "bool", f"while_loop: cond must be scalar bool, got {res}"
+                return res.raw_tensor
+            assert isinstance(res, bool), f"while_loop: cond: unexpected return type {type(res)}"
+            # a python bool cannot depend on the loop vars: constant-true would never terminate
+            assert not res, "while_loop: cond returned constant True"
+            return tf.constant(False)
+
+        def _body(*flat_raws):
+            new = body(_rebuild(flat_raws))
+            tree.assert_same_structure(initial, new)
+            tree.map_structure_with_path(_check_invariant, initial, new)
+            flat_new = tree.flatten(new)
+            return tuple(_raw(flat_new[i]) for i in var_idxs)
+
+        loop_vars = tuple(_raw(flat_initial[i]) for i in var_idxs)
+        # Permissive shape invariants: a loop var may grow (e.g. a hypothesis history),
+        # and the RF dims -- not the raw static shape -- are what the ops read anyway
+        # (see _rebuild, which puts the known static dims back).
+        shape_invariants = tuple(
+            tf.TensorShape(None) if isinstance(raw, tf.TensorArray) else tf.TensorShape([None] * raw.shape.rank)
+            for raw in loop_vars
+        )
+        final = tf_compat.v1.while_loop(cond=_cond, body=_body, loop_vars=loop_vars, shape_invariants=shape_invariants)
+        if len(loop_vars) == 1:
+            final = (final,)  # tf unwraps a single loop var
+        return _rebuild(final)
+
+    TensorArrayType = _TensorArray
+
+    @classmethod
+    def tensor_array_create(cls) -> TensorArrayType:
+        """
+        :return: empty TensorArray. The ``tf.TensorArray`` follows on the first write,
+            when the element dtype is known (see :class:`_TensorArray`).
+        """
+        return _TensorArray()
+
+    @staticmethod
+    def tensor_array_unstack(tensor: Tensor, *, axis: Dim) -> TensorArrayType:
+        """
+        :param tensor:
+        :param axis: may be dynamic -- ``tf.TensorArray.unstack`` takes the length from the value
+        :return: tensor array
+        """
+        axis_int = tensor.get_axis_from_description(axis)
+        template = tensor.copy_template().copy_template_excluding_axis(axis_int)
+        with tf_util.same_control_flow_ctx(tensor):
+            raw = tensor.raw_tensor
+            if axis_int != 0:
+                raw = tf.transpose(raw, [axis_int] + [i for i in range(len(tensor.dims)) if i != axis_int])
+            ta = tf.TensorArray(
+                dtype=tf.as_dtype(tensor.dtype),
+                size=0,
+                dynamic_size=True,
+                # the same element can be read more than once (the default drops it after one read)
+                clear_after_read=False,
+                infer_shape=True,
+            )
+            ta = ta.unstack(raw)
+        size = axis.get_dim_value_tensor()
+        return _TensorArray(ta=ta, template=template, size=size if isinstance(size, int) else None)
+
+    @staticmethod
+    def tensor_array_stack(tensor_array: TensorArrayType, *, axis: Dim, tensor_template: Tensor) -> Tensor:
+        """
+        :param tensor_array:
+        :param axis:
+        :param tensor_template: per element shape, excluding axis
+        :return: tensor
+        """
+        if tensor_array.template is not None:
+            # what is physically stored (dim order fixed at the first write / by unstack)
+            tensor_template = tensor_array.template
+        out_tensor = tensor_template.copy_add_dim_by_tag(axis, unbroadcast=True, axis=0)
+        if tensor_array.ta is None:  # nothing was ever written
+            return rf.zeros_like(out_tensor)
+        out_tensor.raw_tensor = tensor_array.ta.stack()
+        return out_tensor
+
+    @classmethod
+    def tensor_array_push_back(cls, tensor_array: TensorArrayType, value: Tensor) -> TensorArrayType:
+        """
+        :param tensor_array:
+        :param value:
+        :return: tensor_array. A NEW object, as ``tf.TensorArray.write`` returns a new handle --
+            which is exactly the functional API :class:`returnn.frontend.TensorArray` expects.
+        """
+        ta, template, size = tensor_array.ta, tensor_array.template, tensor_array.size
+        with tf_util.same_control_flow_ctx(value):
+            if ta is None:
+                template = value.copy_template()
+                ta = tf.TensorArray(
+                    dtype=tf.as_dtype(value.dtype),
+                    size=0,
+                    dynamic_size=True,
+                    clear_after_read=False,  # see tensor_array_unstack
+                    infer_shape=True,
+                )
+            # store in the template's dim order, so stack() can label the result without transposing
+            raw = value.copy_compatible_to_dims_raw(template.dims)
+            ta = ta.write(size if size is not None else ta.size(), raw)
+        return _TensorArray(ta=ta, template=template, size=size + 1 if size is not None else None)
+
+    @classmethod
+    def tensor_array_get_item(cls, tensor_array: TensorArrayType, index: Union[int, Tensor]) -> Tensor:
+        """
+        :param tensor_array:
+        :param index: python int, or a scalar Tensor (``tf.TensorArray`` reads at a tensor index)
+        :return: tensor
+        """
+        assert tensor_array.ta is not None, "tensor_array_get_item: empty TensorArray"
+        if isinstance(index, Tensor):
+            assert index.dims == (), f"tensor_array_get_item: index {index} must be scalar"
+            index = index.raw_tensor
+        out = tensor_array.template.copy_template()
+        with tf_util.same_control_flow_ctx(tensor_array.ta.flow):
+            out.raw_tensor = tensor_array.ta.read(index)
+        return out
 
     @staticmethod
     def masked_scatter(
