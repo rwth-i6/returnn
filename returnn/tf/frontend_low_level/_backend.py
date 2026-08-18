@@ -30,45 +30,6 @@ __all__ = ["TFBackend", "DeferredVariable"]
 _TT = Tensor[tf.Tensor]
 
 
-class DeferredVariable:
-    """
-    Stands in as the raw tensor of an rf.Parameter whose tf.Variable does not exist yet,
-    see :func:`TFBackend.deferred_parameter_creation`.
-
-    It carries only what parameter construction needs (dtype, shape);
-    any attempt to use it in an op raises, at graph construction time.
-    """
-
-    def __init__(self, *, dtype: tf.DType, shape: Sequence[int]):
-        self.dtype = dtype
-        self.shape = tf.TensorShape(shape)
-
-    def __repr__(self):
-        return f"<DeferredVariable {self.dtype.name} {self.shape.as_list()}>"
-
-    def set_shape(self, shape):
-        """
-        No-op. The shape is known and fixed; this exists because the Tensor.raw_tensor setter calls it.
-
-        :param shape:
-        """
-
-    def __tf_tensor__(self, dtype=None, name=None):
-        raise RuntimeError(
-            f"{self}: the parameter variable was not created yet."
-            f" TFBackend.create_parameters(model) must run before the model is used."
-        )
-
-
-@dataclass
-class _DeferredParam:
-    """What we know about a parameter before its tf.Variable exists."""
-
-    initial: Optional[tf.Tensor] = None
-    trainable: bool = True
-    device: Optional[str] = None
-
-
 # Ignore this warning until we really expect that we implemented everything.
 # noinspection PyAbstractClass
 class TFBackend(Backend[tf.Tensor]):
@@ -2517,6 +2478,45 @@ class TFBackend(Backend[tf.Tensor]):
         var = TFBackend._param_vars.get(RefIdEq(param))
         assert var is not None, f"parameter {param} has raw tensor {param.raw_tensor!r}, and no variable registered"
         return var
+
+
+class DeferredVariable:
+    """
+    Stands in as the raw tensor of an rf.Parameter whose tf.Variable does not exist yet,
+    see :func:`TFBackend.deferred_parameter_creation`.
+
+    It carries only what parameter construction needs (dtype, shape);
+    any attempt to use it in an op raises, at graph construction time.
+    """
+
+    def __init__(self, *, dtype: tf.DType, shape: Sequence[int]):
+        self.dtype = dtype
+        self.shape = tf.TensorShape(shape)
+
+    def __repr__(self):
+        return f"<DeferredVariable {self.dtype.name} {self.shape.as_list()}>"
+
+    def set_shape(self, shape):
+        """
+        No-op. The shape is known and fixed; this exists because the Tensor.raw_tensor setter calls it.
+
+        :param shape:
+        """
+
+    def __tf_tensor__(self, dtype=None, name=None):
+        raise RuntimeError(
+            f"{self}: the parameter variable was not created yet."
+            f" TFBackend.create_parameters(model) must run before the model is used."
+        )
+
+
+@dataclass
+class _DeferredParam:
+    """What we know about a parameter before its tf.Variable exists."""
+
+    initial: Optional[tf.Tensor] = None
+    trainable: bool = True
+    device: Optional[str] = None
 
 
 # So that an rf.Parameter holding a DeferredVariable still dispatches to this backend
