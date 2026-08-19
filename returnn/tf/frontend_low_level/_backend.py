@@ -2096,6 +2096,21 @@ class TFBackend(Backend[tf.Tensor]):
         from returnn.frontend.tensor_array import TensorArray
 
         flat_initial = tree.flatten(initial)
+        # A Dim loop var must be dynamic to be able to grow: the body is traced once,
+        # and static dim math (axis + 1) would bake the first iteration's extent into the graph.
+        # Promote here, so that callers need not know this, and relabel the tensors which use it.
+        static_dims: Dict[Dim, Dim] = {}
+        for i, v in enumerate(flat_initial):
+            if isinstance(v, Dim) and v.dimension is not None:
+                size = Tensor(f"{v.name}:size", dims=(), dtype="int32", raw_tensor=tf.constant(v.dimension))
+                static_dims[v] = flat_initial[i] = Dim(size, name=v.name)
+        if static_dims:
+            for i, v in enumerate(flat_initial):
+                if isinstance(v, Tensor) and any(d in static_dims for d in v.dims):
+                    tensor = v.copy_template_new_dim_tags([static_dims.get(d, d) for d in v.dims])
+                    tensor.raw_tensor = v.raw_tensor
+                    flat_initial[i] = tensor
+            initial = tree.unflatten_as(initial, flat_initial)
         var_idxs = [i for i, v in enumerate(flat_initial) if isinstance(v, (Tensor, TensorArray))]
         assert var_idxs, f"while_loop: no Tensor/TensorArray among the loop vars {initial}"
         # Dims that may grow: their size travels as an implicit loop var,
