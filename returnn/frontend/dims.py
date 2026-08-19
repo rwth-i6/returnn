@@ -151,14 +151,23 @@ def replace_dim_v2(
     :param allow_shrink: if True, allow to shrink the dim, i.e. if ``out_dim.size < in_dim.size``.
     :return: ``source`` with ``in_dim`` replaced by ``out_dim``.
     """
-    if not rf.is_executing_eagerly():
-        raise NotImplementedError  # just not implemented yet. we can do via :func:`cond`
     if in_dim not in source.dims:
         raise ValueError(f"replace_dim_v2: dim {in_dim} not in {source}")
     if out_dim in source.dims:
         raise ValueError(f"replace_dim_v2: dim {out_dim} already in {source}")
     old_size = in_dim.get_dim_value()
     new_size = out_dim.get_dim_value()
+    if not rf.is_executing_eagerly() and not (isinstance(old_size, int) and isinstance(new_size, int)):
+        old_ext = rf.copy_to_device(in_dim.get_dim_value_tensor(), source.device)
+        padded, (padded_dim,) = rf.pad(
+            source,
+            axes=[in_dim],
+            padding=[(0, 1)],
+            value=rf.zeros((), dtype=source.dtype, device=source.device),
+            handle_dynamic_dims=False,
+        )
+        idx = rf.range_over_dim(out_dim, device=source.device)
+        return rf.gather(padded, axis=padded_dim, indices=rf.minimum(idx, old_ext), clip_to_valid=False)
     if new_size == old_size:
         res, _ = rf.replace_dim(source, in_dim=in_dim, out_dim=out_dim)
     elif new_size > old_size:
