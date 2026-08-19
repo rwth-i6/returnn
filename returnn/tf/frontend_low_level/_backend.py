@@ -2098,6 +2098,18 @@ class TFBackend(Backend[tf.Tensor]):
         flat_initial = tree.flatten(initial)
         var_idxs = [i for i, v in enumerate(flat_initial) if isinstance(v, (Tensor, TensorArray))]
         assert var_idxs, f"while_loop: no Tensor/TensorArray among the loop vars {initial}"
+        # Dims that may grow: their size travels as an implicit loop var,
+        # so body() may return a new dim for that slot (returnn#1327).
+        # Only a DYNAMIC dim can grow:
+        # a static one has no size tensor to carry,
+        # and its raw extent is baked into the tensors built from it.
+        dim_idxs = [
+            i
+            for i, v in enumerate(flat_initial)
+            if isinstance(v, Dim) and v.dyn_size_ext is not None and v.dyn_size_ext.raw_tensor is not None
+        ]
+        dim_initial_sizes = {i: flat_initial[i].dyn_size_ext for i in dim_idxs}
+        dims_changed = set()  # dim_idxs entries that body() actually replaced, known after tracing
 
         def _raw(value: Union[Tensor, TensorArray], template: Optional[Tensor] = None):
             if isinstance(value, Tensor):
@@ -2124,6 +2136,14 @@ class TFBackend(Backend[tf.Tensor]):
         def _rebuild(flat_raws) -> Any:
             """the loop vars of one iteration, as the RF structure body/cond expect"""
             out = list(flat_initial)
+            for i, raw in zip(dim_idxs, flat_raws[len(var_idxs) :]):
+                # the same Dim object throughout, holding this iteration's size.
+                # Its caches (max value, seq mask, per-device copies) are the previous iteration's;
+                # the initial ones would claim extent 0 for a growing dim.
+                size = dim_initial_sizes[i].copy_template()
+                size.raw_tensor = _with_static_shape(raw, size.dims)
+                flat_initial[i].reset_batch_ctx()
+                flat_initial[i].dyn_size_ext = size
             for i, raw in zip(var_idxs, flat_raws):
                 value = flat_initial[i]
                 if isinstance(value, Tensor):
@@ -2173,14 +2193,44 @@ class TFBackend(Backend[tf.Tensor]):
             assert not res, "while_loop: cond returned constant True"
             return tf.constant(False)
 
+        def _retag(value, dim_map: Dict[Dim, Dim]):
+            """the same tensor, with the body's fresh dims relabelled to the canonical loop dims"""
+            if not isinstance(value, Tensor) or not any(d in dim_map for d in value.dims):
+                return value
+            out = value.copy_template_new_dim_tags([dim_map.get(d, d) for d in value.dims])
+            out.raw_tensor = value.raw_tensor
+            return out
+
         def _body(*flat_raws):
             new = body(_rebuild(flat_raws))
             tree.assert_same_structure(initial, new)
+            flat_new = list(tree.flatten(new))
+            # Same slot = the same conceptual dim, one iteration later.
+            # Take its size for the next iteration, then relabel it away,
+            # so the invariant check below sees stable dims.
+            dim_map: Dict[Dim, Dim] = {}
+            new_sizes = []
+            for i in dim_idxs:
+                old_dim, new_dim = flat_initial[i], flat_new[i]
+                assert isinstance(new_dim, Dim), f"while_loop: loop var {i} must stay a Dim, got {new_dim}"
+                assert new_dim.dyn_size_ext is not None and new_dim.dyn_size_ext.raw_tensor is not None, (
+                    f"while_loop: dim loop var {new_dim} must stay dynamic (its size travels with the loop)"
+                )
+                new_sizes.append(_raw(new_dim.dyn_size_ext, dim_initial_sizes[i]))
+                if new_dim is not old_dim:
+                    dim_map[new_dim] = old_dim
+                    dims_changed.add(i)
+                    flat_new[i] = old_dim
+            if dim_map:
+                flat_new = [_retag(v, dim_map) for v in flat_new]
+            new = tree.unflatten_as(initial, flat_new)
             tree.map_structure_with_path(_check_invariant, initial, new)
             flat_new = tree.flatten(new)
-            return tuple(_raw(flat_new[i], flat_initial[i]) for i in var_idxs)
+            return tuple(_raw(flat_new[i], flat_initial[i]) for i in var_idxs) + tuple(new_sizes)
 
-        loop_vars = tuple(_raw(flat_initial[i]) for i in var_idxs)
+        loop_vars = tuple(_raw(flat_initial[i]) for i in var_idxs) + tuple(
+            dim_initial_sizes[i].raw_tensor for i in dim_idxs
+        )
         # Permissive shape invariants: a loop var may grow (e.g. a hypothesis history),
         # and the RF dims -- not the raw static shape -- are what the ops read anyway
         # (see _rebuild, which puts the known static dims back).
@@ -2191,7 +2241,14 @@ class TFBackend(Backend[tf.Tensor]):
         final = tf_compat.v1.while_loop(cond=_cond, body=_body, loop_vars=loop_vars, shape_invariants=shape_invariants)
         if len(loop_vars) == 1:
             final = (final,)  # tf unwraps a single loop var
-        return _rebuild(final)
+        out = _rebuild(final)
+        for i in dim_idxs:
+            if i not in dims_changed:
+                # never grown, so keep the original size:
+                # the loop output for it is the unchanged input,
+                # and binding that would drag a loop-carried tensor into the outer context
+                flat_initial[i].dyn_size_ext = dim_initial_sizes[i]
+        return out
 
     TensorArrayType = _TensorArray
 
