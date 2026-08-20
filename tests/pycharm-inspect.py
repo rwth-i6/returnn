@@ -648,9 +648,7 @@ def run_inspect(pycharm_dir, src_dir, skip_pycharm_inspect=False, scope_dir=None
         vmopts_fn = "%s/pycharm-inspect.vmoptions" % out_tmp_dir
         with open("%s/bin/pycharm64.vmoptions" % pycharm_dir) as f_in, open(vmopts_fn, "w") as f_out:
             f_out.write(f_in.read())
-            # bigger thread stack: the default (~1m) overflowed on returnn/jax/engine.py
-            # (java.lang.StackOverflowError -> inspection ABORTED on the file 2026-08-20);
-            # deep type-inference recursion needs more, 4m is plenty
+            # bigger thread stack than the default (~1m)
             f_out.write("-Xss4m\n")
             # extra JVM options for experiments, whitespace-separated
             # (e.g. -Djava.util.concurrent.ForkJoinPool.common.parallelism=1
