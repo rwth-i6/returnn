@@ -765,6 +765,13 @@ class TorchBackend(Backend[torch.Tensor]):
         return cross_entropy
 
     @staticmethod
+    def ctc_loss_packed_raw(**kwargs):
+        """CTC loss on a packed logits buffer, see :func:`Backend.ctc_loss_packed_raw`"""
+        from returnn.torch.util import native_op
+
+        return native_op.ctc_loss_packed(**kwargs)
+
+    @staticmethod
     def ctc_loss(
         *,
         logits: Tensor,

@@ -1427,6 +1427,54 @@ class JaxBackend(Backend[jax.Array]):
         return -rf.reduce_sum(targets * log_probs, axis=axis)
 
     @staticmethod
+    def sdpa_varlen_raw(
+        *,
+        query: jax.Array,
+        key: jax.Array,
+        value: jax.Array,
+        seq_starts_q: jax.Array,
+        seq_lens_q: jax.Array,
+        seq_starts_kv: jax.Array,
+        seq_lens_kv: jax.Array,
+        max_len_q: int,
+        max_len_kv: int,
+        is_causal: bool,
+        dropout_p: float,
+        scale: float,
+    ) -> Optional[jax.Array]:
+        """Packed varlen attention on the Triton kernels, see :func:`Backend.sdpa_varlen_raw`"""
+        import jax
+
+        if jax.devices()[0].platform != "gpu":
+            return None  # the kernels are CUDA-only
+        try:
+            from returnn.jax.util.sdpa_varlen_triton import sdpa_varlen
+        except ImportError:
+            return None  # no jax-triton in this env
+        return sdpa_varlen(
+            query,
+            key,
+            value,
+            seq_starts_q,
+            seq_lens_q,
+            seq_starts_kv,
+            seq_lens_kv,
+            max_len_q,
+            max_len_kv,
+            is_causal,
+            dropout_p,
+            0,
+            scale,
+        )
+
+    @staticmethod
+    def ctc_loss_packed_raw(**kwargs):
+        """CTC loss on a packed logits buffer, see :func:`Backend.ctc_loss_packed_raw`"""
+        from returnn.jax.util import native_op
+
+        return native_op.ctc_loss_packed(**kwargs)
+
+    @staticmethod
     def ctc_loss(
         *,
         logits: Tensor,

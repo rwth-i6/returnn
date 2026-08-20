@@ -667,6 +667,84 @@ class Backend(Generic[T]):
         raise NotImplementedError
 
     @staticmethod
+    def sdpa_varlen_raw(
+        *,
+        query: T,
+        key: T,
+        value: T,
+        seq_starts_q: T,
+        seq_lens_q: T,
+        seq_starts_kv: T,
+        seq_lens_kv: T,
+        max_len_q: int,
+        max_len_kv: int,
+        is_causal: bool,
+        dropout_p: float,
+        scale: float,
+    ) -> Optional[T]:
+        """
+        Attention over PACKED (total,heads,dim) buffers, on raw tensors, no padded intermediate.
+        Query and key/value may carry different packings (cross-attention).
+
+        Raw rather than :class:`Tensor`:
+        the packed layout has no Tensor representation on this side,
+        so the packed backend does the Tensor-level work around it.
+
+        :param query: (total_q,heads,dim)
+        :param key: (total_kv,heads,dim)
+        :param value: (total_kv,heads,dim)
+        :param seq_starts_q: (batch,) int32, ascending
+        :param seq_lens_q: (batch,) int32
+        :param seq_starts_kv: (batch,) int32, ascending
+        :param seq_lens_kv: (batch,) int32
+        :param max_len_q: static bound on the per-seq query length
+        :param max_len_kv: static bound on the per-seq kv length
+        :param is_causal: only valid when query and key/value share the packing
+        :param dropout_p: attention dropout
+        :param scale: qk scale
+        :return: out, shape (total_q,heads,dim), packed like the query.
+            None if this backend has no such kernel,
+            or has one but not for these inputs (device, dtype),
+            so the caller can pick another path.
+        """
+        return None
+
+    @staticmethod
+    def ctc_loss_packed_raw(
+        *,
+        logits: T,
+        seq_starts: T,
+        logits_seq_lens: T,
+        max_seq_len: int,
+        targets: T,
+        targets_seq_lens: T,
+        label_loop: bool,
+        logits_normalize: bool,
+        blank_index: int,
+        edges_bound: Optional[int],
+    ) -> T:
+        """
+        CTC loss over a PACKED (total,dim) logits buffer, on raw tensors,
+        via the backend's packed fast-baum-welch native op
+        (see :class:`returnn.native_op.FastBaumWelchPackedOp`).
+        Raw rather than :class:`Tensor`:
+        the packed layout has no Tensor representation on this side.
+
+        :param logits: (total_time,dim), float32, unnormalized unless logits_normalize is False
+        :param seq_starts: (batch,), int32, ascending start offset of each seq
+        :param logits_seq_lens: (batch,)
+        :param max_seq_len: max of logits_seq_lens as a host int (the mask width must be static)
+        :param targets: (batch,target_time)
+        :param targets_seq_lens: (batch,)
+        :param label_loop: True = CTC, False = RNA-like
+        :param logits_normalize: apply log_softmax on the logits
+        :param blank_index: vocab index of blank
+        :param edges_bound: packed FSA edge layout, see the packed native op
+        :return: loss, (batch,)
+        """
+        raise NotImplementedError
+
+    @staticmethod
     def ctc_best_path(
         *,
         logits: Tensor,

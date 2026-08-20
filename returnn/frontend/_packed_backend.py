@@ -2308,6 +2308,239 @@ def _torch_triton_rel_pos_attention(
     return qu_raw.rewrap(out_inner, name="rel_pos_att_triton")
 
 
+def _jax_triton_rel_pos_attention(
+    query: Tensor,
+    key: Tensor,
+    value: Tensor,
+    pos_emb: Tensor,
+    *,
+    pos_bias_u: Optional[Tensor],
+    pos_bias_v: Optional[Tensor],
+    att_dropout: float,
+    v_feat_dim: Dim,
+    qk_feat_dim: Dim,
+    kv_spatial_dim: Dim,
+    query_spatial_dim: Dim,
+    pos_emb_spatial_dim: Dim,
+) -> Optional[Tensor]:
+    """
+    Packed rel-pos self-attention under the JAX backend, on the same Triton kernels as torch.
+
+    The kernels are framework-neutral; only their launcher differs
+    (:mod:`returnn.jax.util.rel_pos_att_triton` wraps them in jax.custom_vjp).
+    Verified bit-identical to the torch wrapper, forward and all four gradients.
+
+    Materialized position term only -- torch's fused-bd variant is a torch.library custom op.
+    None if not applicable, then the caller's fallbacks run.
+
+    :param query:
+    :param key:
+    :param value:
+    :param pos_emb:
+    :param pos_bias_u:
+    :param pos_bias_v:
+    :param att_dropout:
+    :param v_feat_dim:
+    :param qk_feat_dim:
+    :param kv_spatial_dim:
+    :param query_spatial_dim:
+    :param pos_emb_spatial_dim:
+    :return: the attention output, packed like the query
+    """
+    if not (is_packed(query) and is_packed(key) and is_packed(value)) or is_packed(pos_emb):
+        return None
+    q_raw, k_raw, v_raw = query.raw_tensor, key.raw_tensor, value.raw_tensor
+    if q_raw.inner_backend.name != "jax":
+        return None
+    # Not the tensor's device: under jit it is a tracer, which has none (see JaxBackend.get_device),
+    # and that is exactly the case this path is for. The backend's default device decides.
+    if query.device is not None and not str(query.device).startswith("cuda"):
+        return None
+    import jax
+
+    if jax.devices()[0].platform != "gpu":
+        return None
+    try:
+        from returnn.jax.util import rel_pos_att_triton as jax_rel_pos
+    except ImportError:
+        return None
+    if not k_raw.same_packing(v_raw):
+        return None
+    if kv_spatial_dim != k_raw.orig_dims[-1] or query_spatial_dim != q_raw.orig_dims[-1]:
+        return None
+    if q_raw.orig_dims[:-1] != k_raw.orig_dims[:-1] or not _same_seq_lens(query_spatial_dim, kv_spatial_dim):
+        return None
+    if (q_raw.gap, q_raw.align) != (k_raw.gap, k_raw.align) or q_raw.layout_lens is not k_raw.layout_lens:
+        return None
+    if len(q_raw.orig_dims) != 2:
+        return None
+
+    import jax.numpy as jnp
+
+    q_with_bias_u = (query + pos_bias_u) if pos_bias_u is not None else query
+    q_with_bias_v = (query + pos_bias_v) if pos_bias_v is not None else query
+    if not is_packed(q_with_bias_u) or not is_packed(q_with_bias_v):
+        return None
+    qu_raw = q_with_bias_u.raw_tensor
+    q_inner, k_inner, v_inner = qu_raw.inner, k_raw.inner, v_raw.inner
+    head_dims = [d for d in q_inner.dims if d not in (qu_raw.packed_dim, qk_feat_dim)]
+    if len(head_dims) != 1 or head_dims[0].dimension is None:
+        return None
+    heads_dim = head_dims[0]
+    if set(k_inner.dims) != {k_raw.packed_dim, heads_dim, qk_feat_dim}:
+        return None
+    if set(v_inner.dims) != {v_raw.packed_dim, heads_dim, v_feat_dim}:
+        return None
+    q_t = q_inner.copy_transpose([qu_raw.packed_dim, heads_dim, qk_feat_dim]).raw_tensor
+    k_t = k_inner.copy_transpose([k_raw.packed_dim, heads_dim, qk_feat_dim]).raw_tensor
+    v_t = v_inner.copy_transpose([v_raw.packed_dim, heads_dim, v_feat_dim]).raw_tensor
+
+    matrix_bd = rf.matmul(q_with_bias_v, pos_emb, reduce=qk_feat_dim)
+    if not is_packed(matrix_bd):
+        return None
+    bd_raw = matrix_bd.raw_tensor
+    bd_inner = bd_raw.inner
+    if set(bd_inner.dims) - {heads_dim} != {bd_raw.packed_dim, pos_emb_spatial_dim}:
+        return None
+    if heads_dim in bd_inner.dims:
+        bd_t = bd_inner.copy_transpose([bd_raw.packed_dim, heads_dim, pos_emb_spatial_dim]).raw_tensor
+    else:
+        bd_t = bd_inner.copy_transpose([bd_raw.packed_dim, pos_emb_spatial_dim]).raw_tensor
+        bd_t = jnp.broadcast_to(bd_t[:, None], (bd_t.shape[0], heads_dim.dimension, bd_t.shape[-1]))
+    # pre-scale the bias like the content term (the kernel scales only q k^T)
+    bd_scale = qk_feat_dim.dimension**-0.5
+    bd_t = (bd_t * bd_scale).astype(q_t.dtype)
+
+    max_len = int(query_spatial_dim.get_dim_value())
+    if int(pos_emb_spatial_dim.get_dim_value()) != 2 * max_len - 1:
+        return None  # only the standard centered layout
+    starts_rf, _ = _seq_starts_math(
+        q_raw.orig_dims, q_raw.gap, q_raw.align, layout_lens=q_raw.layout_lens, device=query.device
+    )
+    if starts_rf is None:
+        return None
+    starts = starts_rf.raw_tensor.astype(jnp.int32).reshape(-1)
+    lens = query_spatial_dim.get_dyn_size_ext_for_device(query.device).raw_tensor.astype(jnp.int32).reshape(-1)
+
+    out_t = jax_rel_pos.rel_pos_att_varlen(
+        q_t, k_t, v_t, bd_t, starts, lens, max_len, att_dropout, 0, qk_feat_dim.dimension**-0.5
+    )
+    out_inner = Tensor(
+        "rel_pos_att_triton",
+        dims=[qu_raw.packed_dim, heads_dim, v_feat_dim],
+        dtype=qu_raw.inner_backend.get_dtype_name_raw(out_t),
+        feature_dim=v_feat_dim,
+    )
+    out_inner.raw_tensor = out_t
+    _count_attention_path("rel_pos_triton_jax")
+    return qu_raw.rewrap(out_inner, name="rel_pos_att_triton")
+
+
+def _packed_sdpa_varlen(
+    query: Tensor,
+    key: Tensor,
+    value: Tensor,
+    *,
+    att_dropout: float,
+    v_feat_dim: Dim,
+    qk_feat_dim: Dim,
+    kv_spatial_dim: Dim,
+    query_spatial_dim: Dim,
+    is_causal: bool,
+    scale: Optional[float],
+) -> Optional[Tensor]:
+    """
+    Packed attention through the backend's varlen kernel (:func:`Backend.sdpa_varlen_raw`),
+    for a fully packed query and key/value,
+    which may carry different packings (cross-attention).
+
+    Everything here is backend-neutral RF/layout work.
+    Only the kernel call goes to the backend,
+    which returns None when it has none,
+    so the caller falls through to its other paths.
+
+    :param query: packed
+    :param key: packed
+    :param value: packed, same packing as key
+    :param att_dropout:
+    :param v_feat_dim:
+    :param qk_feat_dim:
+    :param kv_spatial_dim:
+    :param query_spatial_dim:
+    :param is_causal:
+    :param scale: qk scale, 1/sqrt(qk_feat_dim) if not given
+    :return: the attention output packed like the query, or None
+    """
+    if not (is_packed(query) and is_packed(key) and is_packed(value)):
+        return None
+    q_raw, k_raw, v_raw = query.raw_tensor, key.raw_tensor, value.raw_tensor
+    if not k_raw.same_packing(v_raw):
+        return None
+    if kv_spatial_dim != k_raw.orig_dims[-1] or query_spatial_dim != q_raw.orig_dims[-1]:
+        return None
+    if q_raw.orig_dims[:-1] != k_raw.orig_dims[:-1] or len(q_raw.orig_dims) != 2:
+        return None
+    if is_causal and not q_raw.same_packing(k_raw):
+        # causal needs one shared diagonal, i.e. self-attention
+        return None
+    q_inner, k_inner, v_inner = q_raw.inner, k_raw.inner, v_raw.inner
+    head_dims = [d for d in q_inner.dims if d not in (q_raw.packed_dim, qk_feat_dim)]
+    if len(head_dims) != 1 or head_dims[0].dimension is None:
+        return None
+    heads_dim = head_dims[0]
+    if set(k_inner.dims) != {k_raw.packed_dim, heads_dim, qk_feat_dim}:
+        return None
+    if set(v_inner.dims) != {v_raw.packed_dim, heads_dim, v_feat_dim}:
+        return None
+    starts_q, lens_q = _packed_seq_starts_lens_raw(q_raw, query_spatial_dim, query.device)
+    starts_kv, lens_kv = _packed_seq_starts_lens_raw(k_raw, kv_spatial_dim, query.device)
+    if starts_q is None or starts_kv is None:
+        return None
+    out_t = q_raw.inner_backend.sdpa_varlen_raw(
+        query=q_inner.copy_transpose([q_raw.packed_dim, heads_dim, qk_feat_dim]).raw_tensor,
+        key=k_inner.copy_transpose([k_raw.packed_dim, heads_dim, qk_feat_dim]).raw_tensor,
+        value=v_inner.copy_transpose([v_raw.packed_dim, heads_dim, v_feat_dim]).raw_tensor,
+        seq_starts_q=starts_q,
+        seq_lens_q=lens_q,
+        seq_starts_kv=starts_kv,
+        seq_lens_kv=lens_kv,
+        max_len_q=int(query_spatial_dim.get_dim_value()),
+        max_len_kv=int(kv_spatial_dim.get_dim_value()),
+        is_causal=is_causal,
+        dropout_p=att_dropout,
+        scale=scale if scale is not None else qk_feat_dim.dimension**-0.5,
+    )
+    if out_t is None:
+        return None
+    out_inner = Tensor(
+        "sdpa_varlen",
+        dims=[q_raw.packed_dim, heads_dim, v_feat_dim],
+        dtype=q_raw.inner_backend.get_dtype_name_raw(out_t),
+        feature_dim=v_feat_dim,
+    )
+    out_inner.raw_tensor = out_t
+    _count_attention_path("sdpa_varlen")
+    return q_raw.rewrap(out_inner, name="sdpa_varlen")
+
+
+def _packed_seq_starts_lens_raw(raw, spatial_dim: Dim, device: Optional[str]):
+    """
+    :param raw: the packed raw tensor
+    :param spatial_dim: its (unpacked) spatial dim
+    :param device:
+    :return: (starts, lens) as flat int32 raw tensors, or (None, None)
+    """
+    starts_rf, _ = _seq_starts_math(raw.orig_dims, raw.gap, raw.align, layout_lens=raw.layout_lens, device=device)
+    if starts_rf is None:
+        return None, None
+    batch_dim = raw.orig_dims[0]
+    starts = rf.cast(starts_rf, "int32").copy_compatible_to_dims_raw([batch_dim])
+    lens = rf.cast(rf.copy_to_device(spatial_dim.dyn_size_ext, device), "int32").copy_compatible_to_dims_raw(
+        [batch_dim]
+    )
+    return starts, lens
+
+
 def _rel_pos_attention_per_seq(
     query: Tensor,
     key: Tensor,
@@ -3068,6 +3301,22 @@ class PackedBackend(Backend[PackedRawTensor]):
                         scale=scale,
                     )
                     return unpack(out)
+            # A backend varlen kernel, if it has one (jax: Triton; torch keeps its richer path
+            # below, which also covers the non-CUDA and dtype cases this one does not).
+            out = _packed_sdpa_varlen(
+                query,
+                key,
+                value,
+                att_dropout=dropout_p,
+                v_feat_dim=v_feat_dim,
+                qk_feat_dim=qk_feat_dim,
+                kv_spatial_dim=kv_spatial_dim,
+                query_spatial_dim=query_spatial_dim,
+                is_causal=is_causal,
+                scale=scale,
+            )
+            if out is not None:
+                return out
             # Preferred: the direct flash varlen kernels (inside _torch_sdpa_varlen_attention;
             # 2x faster than flex at model level, native dropout).
             # Fallbacks: without dropout, flex over eager NJT
@@ -3233,6 +3482,24 @@ class PackedBackend(Backend[PackedRawTensor]):
                 return out
         else:
             _flex_no("att_dropout active in training (FlexAttention has no dropout support)")
+        if _att_fast_paths_enabled("rel_pos_self_attention"):
+            # JAX: the same Triton kernels as the torch path above, via jax.custom_vjp
+            out = _jax_triton_rel_pos_attention(
+                query,
+                key,
+                value,
+                pos_emb,
+                pos_bias_u=pos_bias_u,
+                pos_bias_v=pos_bias_v,
+                att_dropout=att_dropout,
+                v_feat_dim=v_feat_dim,
+                qk_feat_dim=qk_feat_dim,
+                kv_spatial_dim=kv_spatial_dim,
+                query_spatial_dim=query_spatial_dim,
+                pos_emb_spatial_dim=pos_emb_spatial_dim,
+            )
+            if out is not None:
+                return out
         if (
             _att_fast_paths_enabled("rel_pos_self_attention")
             and not rf.is_static_traceable()
@@ -3775,7 +4042,7 @@ class PackedBackend(Backend[PackedRawTensor]):
         raw = logits.raw_tensor if is_packed(logits) else None
         if (
             raw is not None
-            and raw.inner_backend.name == "torch"
+            and raw.inner_backend.name in ("torch", "jax")
             and not max_approx
             and use_native_op is not False
             and len(raw.orig_dims) == 2
@@ -3784,21 +4051,23 @@ class PackedBackend(Backend[PackedRawTensor]):
             and set(raw.inner.dims) == {raw.packed_dim, logits.feature_dim}
             and targets_.dims_set == {raw.orig_dims[0], targets_spatial_dim}
         ):
-            import torch
-            from returnn.torch.util import native_op as torch_native_op
-
             batch_dim = raw.orig_dims[0]
-            logits_t = raw.inner.copy_transpose([raw.packed_dim, logits.feature_dim]).raw_tensor
-            if logits_t.dtype != torch.float32:
-                logits_t = logits_t.to(torch.float32)  # the native op is float32-only
-            device = logits_t.device
+            device = logits.device
+            # float32: the native op is float32-only. Cast as a Tensor, so this is one code path
+            # for every backend instead of a per-backend raw cast.
+            logits_t = rf.cast(raw.inner.copy_transpose([raw.packed_dim, logits.feature_dim]), "float32").raw_tensor
             # per-seq start offsets into the packed buffer (gapped or dense): the native op reads each
             # seq at [start, start+len), so the gap frames are never touched -- no regap needed.
             starts_rf, _ = raw.seq_starts()
-            seq_starts = rf.copy_to_device(starts_rf, device).raw_tensor.to(torch.int32).flatten()
-            in_lens = input_spatial_dim.dyn_size_ext.copy_compatible_to_dims_raw([batch_dim]).to(device)
-            targets_raw = targets_.copy_compatible_to_dims_raw([batch_dim, targets_spatial_dim]).to(device)
-            tgt_lens = targets_spatial_dim.dyn_size_ext.copy_compatible_to_dims_raw([batch_dim]).to(device)
+            # int32 at RF level: the native op wants int32 starts on every backend
+            seq_starts = rf.cast(rf.copy_to_device(starts_rf, device), "int32").copy_compatible_to_dims_raw([batch_dim])
+            in_lens = rf.copy_to_device(input_spatial_dim.dyn_size_ext, device).copy_compatible_to_dims_raw([batch_dim])
+            targets_raw = rf.copy_to_device(targets_, device).copy_compatible_to_dims_raw(
+                [batch_dim, targets_spatial_dim]
+            )
+            tgt_lens = rf.copy_to_device(targets_spatial_dim.dyn_size_ext, device).copy_compatible_to_dims_raw(
+                [batch_dim]
+            )
             # Packed targets get the content-sized (packed) FSA edge layout, padded ones the
             # rectangular batch x capacity layout. Both are correct; the packed one is just
             # narrower. This is NOT a fallback (no unpack/re-layout happens), so it must not go
@@ -3813,7 +4082,7 @@ class PackedBackend(Backend[PackedRawTensor]):
                 edges_bound = 5 * int(targets.raw_tensor.packed_dim.get_dim_value()) + 5 * int(
                     batch_dim.get_dim_value()
                 )
-            loss_raw = torch_native_op.ctc_loss_packed(
+            loss_raw = raw.inner_backend.ctc_loss_packed_raw(
                 logits=logits_t,
                 seq_starts=seq_starts,
                 logits_seq_lens=in_lens,
