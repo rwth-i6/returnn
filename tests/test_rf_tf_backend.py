@@ -1616,10 +1616,10 @@ def test_engine_forward_with_callback():
     # not data.get_tag(i): the dataset only keeps the currently loaded seqs, and iteration is over
     assert tags == ["seq-%i" % i for i in range(data.num_seqs)], tags
     for tag, shapes in entries:
-        # batch dim gone and the padding cut off, but the spatial dim stays DYNAMIC,
-        # as in the PyTorch engine:
-        # the callback reads the seq length off dyn_size_ext, so a static dim
-        # would leave the output without any length at all.
+        # batch dim gone and the padding cut off,
+        # but the spatial dim stays dynamic, as in the PyTorch engine:
+        # the callback reads the seq length off dyn_size_ext,
+        # so a static dim would leave the output without any length.
         assert shapes["logits"] == ((seq_len, n_classes_dim), None, seq_len), (tag, shapes)
         assert shapes["best"] == ((seq_len,), None, seq_len), (tag, shapes)
 
