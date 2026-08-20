@@ -2,21 +2,15 @@
 Engine for the JAX backend.
 
 The RF-side API is the same as for the other backends
-(``get_model`` / ``train_step`` in the config, losses via ``rf.get_run_ctx().mark_as_loss``),
-so a config that trains on PyTorch trains here as well.
+(``get_model`` / ``train_step`` in the config, losses via ``rf.get_run_ctx().mark_as_loss``).
 
-What differs is the step itself, and it is the reason this is not a copy of the PyTorch engine:
-JAX has no gradient tape, so the loss must be a FUNCTION of the parameters.
-The step therefore binds the parameter arrays into the ``rf.Parameter`` objects for the duration
-of one call, and ``jax.value_and_grad`` differentiates through it,
-which also makes the whole step jit-able as one unit -- see ``jax_jit``.
+The step differs: JAX has no gradient tape, so the loss must be a function of the parameters.
+The step binds the parameter arrays into the ``rf.Parameter`` objects for one call,
+and ``jax.value_and_grad`` differentiates through it. Whole step jit-able, see ``jax_jit``.
 
-Everything a compiled step depends on is an argument of it, not a Python global:
-the parameters, the optimizer state, the RNG stream, the learning rate and the step number.
-A global would be read once, when the step is traced, and silently keep that first value
-(the RNG stream is the case that matters: every step would draw the same dropout masks).
-The exception is the epoch, which is a static argument, so that config code may branch on it;
-that costs one recompile per epoch.
+Everything a compiled step depends on is an argument of it, not a Python global
+(a global is read once at trace time, e.g. every step would draw the same dropout masks).
+The epoch is a static argument, so config code can branch on it, at one recompile per epoch.
 """
 
 from __future__ import annotations
@@ -76,20 +70,20 @@ class Engine(EngineBase):
         self.learning_rate: float = config.float("learning_rate", 1.0)
         self._device: Optional[str] = config.value("device", None)
         if not self._device:
-            # Resolved, never left open: RF puts the tensors IT creates (constants, ranges, random)
-            # on rf.get_default_device(), while JAX puts everything else on its own default device.
-            # When those two disagree, JAX refuses the computation ("incompatible devices").
+            # RF creates its own tensors (constants, ranges, random) on rf.get_default_device(),
+            # JAX everything else on its default device, and mixing the two is an error.
             self._device = jax.devices()[0].platform
         rf.set_default_device(self._device)
         self._updater: Optional[Updater] = None
         self._opt_state: Any = None
         self._train_step_func = None
         # Config hooks around an epoch, e.g. to switch a dataset's parameters per epoch.
-        # They run on the HOST, outside the step, so they may do whatever Python they like.
+        # They run on the host, outside the step, so they may do whatever Python they like.
         self._epoch_start_func = config.typed_value("epoch_start")
         self._epoch_end_func = config.typed_value("epoch_end")
-        # A nonfinite train score means the run is producing garbage from here on; the default
-        # is to stop, so that a broken run does not spend its whole budget writing NaN checkpoints.
+        # A nonfinite train score means the run is producing garbage from here on;
+        # the default is to stop,
+        # so that a broken run does not spend its whole budget writing NaN checkpoints.
         self._stop_on_nonfinite_train_score = config.bool("stop_on_nonfinite_train_score", True)
         self._save_model_epoch_interval = config.int("save_interval", 1)
         self._final_epoch = config.int("num_epochs", 1)
@@ -103,11 +97,8 @@ class Engine(EngineBase):
         self._rng_key = None
         self._jitted_step = None
         self._compiled_steps: Dict[Any, Any] = {}  # input signature -> executable, see _run_compiled_step
-        # The epoch is TRACED by default. As a static argument it looked harmless -- config code may
-        # branch on it, and one recompile per epoch sounded cheap -- but a compile of this step costs
-        # minutes per input shape, so it would be one full recompile of EVERY shape at EVERY epoch
-        # (measured: 204 sec x 3 shapes x 100 subepochs). Configs which really need a Python-level
-        # epoch inside the step can ask for the old behaviour and pay for it.
+        # Traced by default: as a static argument it is one full recompile of every shape
+        # per epoch (measured 204 sec x 3 shapes x 100 subepochs).
         self._static_argnums: Tuple[int, ...] = (7,) if (self._jit_opts or {}).get("epoch_static") else ()
         # Numeric defaults stay JAX's own -- notably, float32 matmuls run in TF32 on GPU,
         # which PyTorch does not do by default. We do not override that here:
@@ -130,32 +121,41 @@ class Engine(EngineBase):
             # default 1s: our step compiles take far longer, so cache all of them
             jax.config.update("jax_persistent_cache_min_compile_time_secs", 1.0)
             print(f"JAX compilation cache: {cache_dir}", file=log.v3)
+        # Mixed precision: the compute dtype of matmul/conv, scoped to the step.
+        # Parameters, gradients and the optimizer stay float32, see returnn.frontend.amp.
+        # Persistent compilation cache: a bucket costs ~35 s, and the whole grid is compiled
+        # at startup, again after every resubmission (the 11.9h SLURM limit splits a run).
+        # Located like the other RETURNN caches, via util.get_cache_dir() (RETURNN_CACHE_DIR),
+        # whose default is node-local: point it at a shared filesystem to survive a resubmission.
         if self._jit_opts is not None:
             print(f"JAX engine: compiled step, {self._jit_opts}", file=log.v3)
         # Diagnostics, the same ones the PyTorch engine has, so the logs of a JAX run and a torch
         # run parse identically (the throughput tooling reads these lines).
         self._log_batch_size = config.bool("log_batch_size", False) and log.verbose[5]
-        # How many batches the input pipeline runs ahead of the step. Default 2: enough to cover
-        # one step's worth of device time, and it bounds the extra host memory to 2 batches.
+        # How many batches the input pipeline runs ahead of the step.
+        # Default 2: enough to cover one step's worth of device time,
+        # and it bounds the extra host memory to 2 batches.
         # 0 restores the serial loop, for comparing.
         self._data_prefetch = config.int("jax_data_prefetch", 2)
         # Declared bounds instead of the bucket grid:
-        # every batch is brought to ONE signature,
+        # every batch is brought to one signature,
         # rather than rounded up to the nearest of many declared shapes.
         # Same options as the TF engine's tf_static_shapes and the PyTorch one's torch_cuda_graph.
         self._static_shapes_opts = _static_shapes_opts_from_config(config)
         if self._static_shapes_opts is not None:
             print(f"JAX engine: static shapes, {self._static_shapes_opts}", file=log.v3)
         # packed_tensors: the model computes on sum(lens) frames instead of n_seqs * max_len.
-        # The packing itself happens inside the step (one gather per key), so the batching layer
-        # only has to budget by CONTENT -- that is what packed_batch_size does.
+        # The packing itself happens inside the step (one gather per key),
+        # so the batching layer only has to budget by content
+        # -- that is what packed_batch_size does.
         self._packing = packed_batch_config()
         if self._packing is not None:
             print(f"JAX engine: packed tensors, {self._packing}", file=log.v3)
             if self._jit_opts is not None and self._static_shapes_opts is None:
-                # A compiled step needs a static shape for the packed buffer, i.e. a declared total
-                # per packed key. Loud, not silent: tracing rf.pack without one would fail deep
-                # inside the model instead.
+                # A compiled step needs a static shape for the packed buffer,
+                # i.e. a declared total per packed key.
+                # Loud, not silent:
+                # tracing rf.pack without one would fail deep inside the model instead.
                 raise NotImplementedError(
                     "JAX engine: packed_tensors with jax_jit needs jax_static_shapes"
                     " (packed_total_bound per packed key), or drop jax_jit"
@@ -261,9 +261,8 @@ class Engine(EngineBase):
                 "jax": jax.__version__,
                 "time": time.strftime("%Y-%m-%d-%H-%M-%S (UTC%z)"),
                 "hostname": socket.gethostname(),
-                # The GPU MODEL, as the PyTorch engine records it -- not the RF device string,
-                # which is just "gpu" and cannot tell two runs' hardware apart. Comparing runs
-                # across nodes without it silently compares hardware as much as backends.
+                # The GPU model, as the PyTorch engine records it:
+                # rf.get_default_device() only says "gpu", which cannot tell two runs apart.
                 "device": _device_description(),
                 "cpu": util.get_cpu_model_name(),
             }
@@ -295,29 +294,26 @@ class Engine(EngineBase):
         pending_log: Optional[Dict[str, Any]] = None  # what to log about it, read at the same time
         pending_bucket: Optional[Tuple[int, ...]] = None  # the shape that step ran on
         bucket_stats: Dict[Tuple[int, ...], List[Any]] = {}  # shape -> [n steps, summed device wait]
-        # Where the epoch's wall-clock goes. JAX dispatch is async, so the only place the host
-        # waits for the device is the loss read below: t_dev_wait is device time the host could
-        # not hide, t_data is the pipeline producing the next batch. A step whose t_data dominates
-        # is HOST-bound, and no amount of kernel work will speed it up.
+        # Where the epoch's wall-clock goes.
+        # Dispatch is async, so the loss read below is the only place the host waits:
+        # t_dev_wait is device time the host could not hide, t_data is the input pipeline.
         t_data = t_dev_wait = 0.0
         t_mark = time.time()
         for batch_raws, complete_frac in _prefetch(
             self._iter_batches(self.train_dataset, train=True), buffer_size=self._data_prefetch
         ):
             t_data += time.time() - t_mark  # the generator ran between the iterations
-            # Read the PREVIOUS step's losses here, not right after issuing it. JAX dispatch is
-            # async, so producing the batch above already ran on the host while the device was still
-            # working on that step; reading a loss blocks, and reading it any earlier would put the
-            # host pipeline (measured 0.16 s) and the step (0.105 s) back to back instead of overlapping.
+            # The previous step's losses, not the one just issued.
+            # Dispatch is async, so reading any earlier would serialize
+            # the host pipeline (0.16 s) and the step (0.105 s).
             if pending_losses is not None:
                 _t0 = time.time()
                 _accumulate_losses(pending_losses, sums=accumulated, norms=accumulated_norms)
                 _waited = time.time() - _t0  # blocks until the previous step finished
                 t_dev_wait += _waited
-                # Attribute that wait to the SHAPE it was waiting on. Per-bucket cost cannot be
-                # recovered from epoch totals -- the bucket counts of an epoch are collinear
-                # (they sum to the step count), so a least-squares solve returns nonsense.
-                # Measuring it needs no extra sync: this read already blocks.
+                # Per-bucket cost, attributed to the shape it waited on.
+                # Not recoverable from epoch totals (the bucket counts are collinear),
+                # and it needs no extra sync: this read already blocks.
                 if pending_bucket is not None:
                     entry = bucket_stats.setdefault(pending_bucket, [0, 0.0])
                     entry[0] += 1
@@ -325,7 +321,7 @@ class Engine(EngineBase):
                 if pending_log:
                     print(_format_step_log(self.epoch, pending_losses, pending_log), file=log.v5)
                 del pending_losses, pending_log, pending_bucket
-            # The LR of the STEP: the epoch-level value, put through the config's schedule if it has one.
+            # The learning rate of the step: the epoch-level value, put through the config's schedule if it has one.
             learning_rate = self._updater.get_effective_learning_rate(
                 learning_rate=self.learning_rate,
                 global_train_step=self.global_train_step,
@@ -390,9 +386,9 @@ class Engine(EngineBase):
             f" {t_dev_wait / max(num_steps, 1) * 1000:.1f} ms device-wait",
             file=log.v3,
         )
-        # Per-SHAPE cost. The device wait is a LOWER BOUND on a step's device time (it is the part
-        # the host could not hide behind building the next batch), so these numbers compare shapes
-        # against each other honestly and understate all of them equally.
+        # Per-shape cost.
+        # The device wait is a lower bound (the part the host could not hide),
+        # so it understates all shapes equally and still compares them honestly.
         if bucket_stats:
             ranked = sorted(bucket_stats.items(), key=lambda kv: -kv[1][1])
             print(
@@ -402,8 +398,10 @@ class Engine(EngineBase):
                 ),
                 file=log.v3,
             )
-        # train_loss_, not train_score_: the key names are the PyTorch engine's, so that a run of
-        # either engine can be read by the same downstream code and compared key by key.
+        # train_loss_, not train_score_:
+        # the key names are the PyTorch engine's,
+        # so that a run of either engine can be read by the same downstream code
+        # and compared key by key.
         self.learning_rate_control.set_epoch_error(self.epoch, {f"train_loss_{k}": v for k, v in scores.items()})
         self.learning_rate_control.epoch_data[self.epoch].meta.update(
             {
@@ -421,7 +419,7 @@ class Engine(EngineBase):
                 raise Exception(f"epoch {self.epoch}: nonfinite train score {nonfinite}")
         self._on_epoch_end(dataset_name="train")
         self._maybe_stop_for_resubmission(time.time() - start_time)
-        # save_interval: the LAST epoch is always saved, whatever the interval, so that a run
+        # save_interval: the last epoch is always saved, whatever the interval, so that a run
         # always ends with a usable checkpoint.
         if self.epoch % self._save_model_epoch_interval == 0 or self.epoch == self._final_epoch:
             self._save_model()
@@ -536,9 +534,8 @@ class Engine(EngineBase):
         """
         Device memory after the epoch, as the PyTorch engine reports it.
 
-        ``peak_bytes_in_use`` is what decides whether a batch size fits, and it is the number
-        a bucket change moves; ``bytes_in_use`` is the live set, so a gap between them is the
-        allocator holding freed blocks, not a leak.
+        ``peak_bytes_in_use`` is what decides whether a batch size fits;
+        a gap to ``bytes_in_use`` (the live set) is the allocator holding freed blocks.
         """
         for dev in jax.local_devices():
             stats = dev.memory_stats()  # None on backends without an allocator (cpu)
@@ -557,9 +554,8 @@ class Engine(EngineBase):
         :param last_epoch_wall_sec: how long the epoch just finished took
 
         With less wall-time left than the (safety-scaled) last epoch needed, stop now:
-        SIGINT to our process group reaches the Sisyphus worker as KeyboardInterrupt,
-        which it does not catch, so the job ends as interrupted and gets resubmitted.
-        Otherwise the time limit kills an epoch half-way and it is lost entirely.
+        SIGINT reaches the Sisyphus worker as KeyboardInterrupt, so the job gets resubmitted,
+        instead of the time limit killing an epoch half-way.
         Same as the PyTorch engine, minus torchelastic (we are one process).
         See https://github.com/rwth-i6/returnn/issues/1818.
         """
@@ -614,9 +610,7 @@ class Engine(EngineBase):
         """
         Compile one executable per declared bucket, before training starts.
 
-        This is the whole point of declaring them: after this, every batch is padded into one of
-        these shapes and there is no compilation left to do. A compile costs minutes, so it belongs
-        at startup where it is paid once and visibly, not in the middle of an epoch.
+        A compile costs minutes, so it is paid at startup, not in the middle of an epoch.
         """
         buckets = self._jit_opts.get("buckets")
         if not buckets:
@@ -624,10 +618,8 @@ class Engine(EngineBase):
         start = time.time()
         timed: List[Tuple[Dict[str, int], Dict[str, Any]]] = []  # (bucket, its dummy batch), for _time_buckets
         for bucket in buckets:
-            # Through the REAL data path (batch_to_jax_raws + _step_raws), not hand-built arrays:
-            # the signature includes things like whether each array is committed to a device, and
-            # batch_dim is deliberately left uncommitted there. Building it separately produced a
-            # signature that did not match a single real batch, so nothing was actually precompiled.
+            # Through the real data path (batch_to_jax_raws + _step_raws), not hand-built arrays:
+            # the signature includes device commitment, and hand-built ones matched no real batch.
             raw = {"batch_dim": bucket["batch_dim"]}
             for key, template in self.extern_data.data.items():
                 if template.dtype == "string":
@@ -673,25 +665,20 @@ class Engine(EngineBase):
         """
         :param timed: (bucket, its dummy batch) per compiled program
 
-        Time each compiled program on its own dummy batch, blocking on the result: the PURE
-        device cost of one step per shape, with no data pipeline and no host overlap in it.
+        Time each compiled program on its own dummy batch, blocking on the result:
+        the pure device cost of one step per shape, with no data pipeline and no host overlap.
+        Per-shape cost is not recoverable from epoch totals (the bucket counts are collinear),
+        and the per-step device wait during training is only a lower bound.
 
-        This is the number the whole speed investigation needs and could not get otherwise --
-        per-shape cost is not recoverable from epoch totals (the bucket counts of an epoch sum to
-        its step count, so a least-squares solve over them is collinear and returns nonsense), and
-        the per-step device wait during training is only a lower bound, since the host hides part
-        of it. Here nothing is hidden.
-
-        It cannot disturb training: the parameters and optimizer state go in as COPIES (the step
-        donates its input buffers, which would otherwise delete the real ones), the learning rate
-        is 0, and every output is discarded.
+        It cannot disturb training: parameters and optimizer state go in as copies
+        (the step donates its input buffers), the learning rate is 0, and the outputs are dropped.
         """
         reps = self.config.int("jax_time_buckets", 2)
         if not reps or not timed:
             return
         rows = []
         for bucket, raws in timed:
-            # copies: the compiled step donates args 0, 1 and 3, i.e. it DELETES what it is given
+            # copies: the compiled step donates args 0, 1 and 3, i.e. it deletes what it is given
             train_raws = [jnp.array(self._params[i].raw_tensor) for i in self._train_param_idx]
             other_raws = [jnp.array(self._params[i].raw_tensor) for i in self._other_param_idx]
             best = None
@@ -731,14 +718,10 @@ class Engine(EngineBase):
             (see :func:`_precompile_buckets`)
         :return: what the step returns, or None when only compiling
 
-        Compiles the step explicitly (lower + compile) and keeps one executable per input
-        signature, instead of leaving it to ``jax.jit``'s implicit cache. Same executables either
-        way -- the difference is that a compile here is a visible, counted event with its cost in
-        the log, and that with declared buckets there is nothing left to compile at all.
-
-        With ``jax_jit`` buckets, a signature that is not already compiled is an ERROR rather than
-        a compile: the buckets ARE the set of programs, so meeting a shape outside them means the
-        padding did not do its job, and silently spending minutes on a new program would hide that.
+        Compiles explicitly (lower + compile) and keeps one executable per input signature,
+        so that a compile is a visible, counted event rather than ``jax.jit``'s implicit cache.
+        With ``jax_jit`` buckets, an uncompiled signature is an error:
+        the buckets are the set of programs, so a shape outside them means the padding failed.
         """
         signature = _step_signature(args)
         compiled = self._compiled_steps.get(signature)
@@ -759,8 +742,9 @@ class Engine(EngineBase):
             )
         if _compile_only:
             return None
-        # A compiled executable has the static arguments BAKED IN (that is what static means),
-        # so they are not passed again -- unlike the jitted function, which still takes them.
+        # A compiled executable has the static arguments baked in (that is what static means),
+        # so they are not passed again,
+        # unlike the jitted function, which still takes them.
         return compiled(*[arg for i, arg in enumerate(args) if i not in self._static_argnums])
 
     def _commit_one(self, raw: Any) -> Any:
@@ -768,12 +752,8 @@ class Engine(EngineBase):
         :param raw: a JAX array, or anything else (left alone)
         :return: the same, placed on this engine's device
 
-        A jitted function is compiled per input SIGNATURE, and whether an array is committed to a
-        device is part of that signature -- an uncommitted array and a committed one of the same
-        shape give two compiled executables (verified: one trace, cache size two). The parameters
-        start uncommitted (created by the backend's initializers), and from the first step on they
-        are the compiled step's outputs, which are committed. Without this, every run pays a second
-        full compile of the whole step, for nothing.
+        Whether an array is committed to a device is part of the input signature,
+        so mixing committed and uncommitted parameters compiles the whole step twice.
         """
         if not isinstance(raw, jax.Array):
             return raw
@@ -793,9 +773,11 @@ class Engine(EngineBase):
     def _step_raws(self, batch_raws: Dict[str, Any]) -> Dict[str, Any]:
         """
         :param batch_raws: one batch, as the data pipeline yields it
-        :return: what the step gets. Entries which are not device arrays -- the string ones,
-            i.e. seq_tag -- cannot be arguments of a compiled function, so the compiled step
-            does not get them at all; passing them would bake the first batch's values into the trace.
+        :return: what the step gets.
+            Entries which are not device arrays -- the string ones, i.e. seq_tag --
+            cannot be arguments of a compiled function,
+            so the compiled step does not get them at all;
+            passing them would bake the first batch's values into the trace.
         """
         if self._jit_opts is None:
             return batch_raws
@@ -810,11 +792,10 @@ class Engine(EngineBase):
         """
         :param extern_data: modified in place
 
-        Repack the padded batch into packed storage (``packed_tensors``), in the step rather than
-        in the data pipeline: one gather per key, on the device, after which every op of the model
-        runs on sum(lens) frames instead of n_seqs * max_len. The dims stay the same -- what changes
-        is the storage behind them (``PackedRawTensor``), so nothing in the config's model code
-        or in RF has to know.
+        Repack the padded batch into packed storage (``packed_tensors``),
+        in the step rather than in the data pipeline: one gather per key, on the device.
+        The dims stay the same, only the storage behind them (``PackedRawTensor``),
+        so the config's model code and RF do not have to know.
         """
         if self._packing is None:
             return
@@ -852,7 +833,7 @@ class Engine(EngineBase):
         :param batch_raws: holds ``<key>:packed``, the flat buffer built on the host
 
         The seqs arrive already concatenated (see :func:`returnn.jax.data.staticize_raws`),
-        so nothing is packed here -- the buffer is IMPORTED as packed storage.
+        so nothing is packed here -- the buffer is imported as packed storage.
         The padded array was never built nor transferred, which is the point.
         """
         # the templates, not the filled dict:
@@ -868,9 +849,10 @@ class Engine(EngineBase):
             if batch_dim.dyn_size_ext is None:
                 batch_name: str = batch_dim.name or "batch"
                 batch_dim.dyn_size_ext = Tensor(batch_name, dims=[], dtype="int32")
-            # The batch is FULL at the bound, with zero-length filler seqs -- the regime the torch
-            # bound path uses (its CTC returns loss 0 for them). Carrying the true count instead
-            # would make the batch dim need masking, which ops like search_sorted refuse.
+            # The batch is full at the bound, with zero-length filler seqs,
+            # the regime the torch bound path uses (its CTC returns loss 0 for them).
+            # Carrying the true count instead would make the batch dim need masking,
+            # which ops like search_sorted refuse.
             batch_dim.dyn_size_ext.raw_tensor = jnp.asarray(batch_bound, dtype=jnp.int32)
             batch_dim.capacity = batch_bound
             if spatial.dyn_size_ext is None:
@@ -911,8 +893,8 @@ class Engine(EngineBase):
         self.model = model
         self._param_names = [name for name, _ in model.named_parameters()]
         self._params = [param for _, param in model.named_parameters()]
-        # jax_trainable, not param.trainable: the latter is the value as given, so None wherever it
-        # was left unspecified, and None resolves to NOT trainable for auxiliary parameters.
+        # jax_trainable, not param.trainable:
+        # the latter is the value as given, and None means not trainable only for aux params.
         # See JaxBackend.set_parameter_trainable.
         # noinspection PyUnresolvedReferences
         self._train_param_idx = [i for i, param in enumerate(self._params) if param.jax_trainable]
@@ -952,9 +934,9 @@ class Engine(EngineBase):
                     epoch = Tensor("epoch", dims=(), dtype=JaxBackend.get_dtype_name_raw(epoch), raw_tensor=epoch)
                 rf.init_train_step_run_ctx(train_flag=train_flag, step=step, epoch=epoch)
                 sentinel_kw = util.get_fwd_compat_kwargs()
-                # Static traceable == static shapes: every dynamic dim must report a capacity,
-                # which for the DERIVED ones (subsampled time, attention kv) means deriving it
-                # from the dims they come from. That derivation is gated on this flag.
+                # Static shapes need a capacity per dynamic dim,
+                # and the derived ones (subsampled time, attention kv)
+                # must derive it from the dims they come from.
                 with rf.set_static_traceable_ctx(self._jit_opts is not None), rf.set_amp_policy_ctx(self._amp_policy):
                     assert callable(self._train_step_func)
                     self._train_step_func(model=self.model, extern_data=extern_data, **sentinel_kw)
@@ -966,7 +948,7 @@ class Engine(EngineBase):
                         name: (loss.get_summed_loss().raw_tensor, _inv_norm_factor_raw(loss))
                         for name, loss in run_ctx.losses.items()
                     }
-                # Non-trainable parameters can be WRITTEN by the step -- rf.BatchNorm's running statistics
+                # Non-trainable parameters can be written by the step -- rf.BatchNorm's running statistics
                 # are the case that matters -- so they leave this function as values.
                 # The restore below undoes the write, and under jit it would happen at trace time only.
                 new_other = [self._params[idx].raw_tensor for idx in self._other_param_idx]
@@ -994,7 +976,7 @@ class Engine(EngineBase):
                 rng_key = JaxBackend._rng_key
             finally:
                 JaxBackend._rng_key = prev_key
-            # PRE-clip, like the PyTorch engine reports it: computed before the optimizer runs
+            # Pre-clip, like the PyTorch engine reports it: computed before the optimizer runs
             grad_norm = (
                 global_grad_norm(grads, p=self._updater.log_grad_norm_p)
                 if self._updater.log_grad_norm_p
@@ -1006,21 +988,16 @@ class Engine(EngineBase):
             return train_raws, other_raws, opt_state, rng_key, loss, losses, grad_norm
 
         self._forward = _forward
-        # Only the epoch is static (config code may branch on it, and a recompile per epoch is nothing).
-        # The step number is not: it changes every step, and baking it in would recompile every step.
-        # Donated: the parameters and the optimizer state. XLA then writes the new values into
-        # those buffers instead of allocating a second set, which is what keeps the peak at one copy
-        # of each. Donated buffers are DELETED on return, so the caller must hold exactly one
-        # reference to each (the engine does: the rf.Parameter, reassigned right after the step).
-        # Not donated: the batch, since no output aliases it, and the RNG key, which is two uint32s
-        # -- nothing to save, and it is the one argument a caller may reasonably want to reuse.
+        # Static: only the epoch; the step number would recompile every step.
+        # Donated: parameters and optimizer state, so XLA writes into those buffers, not a copy.
+        # Donated buffers are deleted on return, so the caller holds exactly one reference each.
+        # Not donated: the batch and the RNG key.
         if self._jit_opts is None:
             self._train_step = _train_step
         else:
             self._jitted_step = jax.jit(_train_step, static_argnums=self._static_argnums, donate_argnums=(0, 1, 3))
-            # NOT the jitted function directly: that compiles implicitly, whenever an input signature
-            # it has not seen turns up, in the middle of an epoch, silently. A compile of this step
-            # costs minutes, so it is done explicitly, counted and logged. See :func:`_run_compiled_step`.
+            # Not the jitted function directly: that compiles implicitly, mid-epoch and silently,
+            # and a compile of this step costs minutes. See :func:`_run_compiled_step`.
             self._train_step = self._run_compiled_step
         self._opt_state = self._updater.init([self._params[i].raw_tensor for i in self._train_param_idx])
         self._opt_state = jax.tree_util.tree_map(self._commit_one, self._opt_state)
@@ -1049,8 +1026,9 @@ class Engine(EngineBase):
         :param filename: without the postfix
         :return: accumulated file size in bytes of the deleted files
 
-        Used by :func:`EngineBase.cleanup_old_models`. A JAX checkpoint is the ``.orbax``
-        DIRECTORY plus the optimizer state next to it, so this removes trees, not files.
+        Used by :func:`EngineBase.cleanup_old_models`.
+        A JAX checkpoint is the ``.orbax`` directory plus the optimizer state next to it,
+        so this removes trees, not files.
         """
         postfix = util.get_model_filename_postfix()
         count_bytes = 0
@@ -1080,10 +1058,9 @@ class Engine(EngineBase):
         self._forward_step_func = config.typed_value("forward_step")
         assert self._forward_step_func, "forward_step not defined in config"
         model_outputs = config.typed_value("model_outputs")
-        # The declared outputs, if any. They are what makes a missing mark_as_output an ERROR
-        # (run_ctx.check_outputs_complete) instead of a silently shorter result dict.
-        # Built plainly, NOT through extern_data_template_from_config_opts, which adds a seq_tag
-        # entry -- correct for input data, wrong for a declaration of what the step produces.
+        # The declared outputs, if any:
+        # they make a missing mark_as_output an error (run_ctx.check_outputs_complete).
+        # Built plainly, as extern_data_template_from_config_opts would add a seq_tag entry.
         self._forward_step_expected_outputs = None
         if model_outputs is not None:
             self._forward_step_expected_outputs = TensorDict()
@@ -1117,10 +1094,9 @@ class Engine(EngineBase):
         :param dataset_init_epoch: whether to sort the dataset for us (as the PyTorch engine does)
         :param allow_skipping_seqs: whether min/max_seq_length may drop sequences here
 
-        The step runs EAGER, deliberately, even when ``jax_jit`` is set for training: a compiled
-        function's outputs have static shapes, while the outputs of a forward step (a beam search
-        above all) have a length which is a property of the values. Bounding them is the same work
-        as the packed/bucketed training path, and it only pays once a forward pass is a bottleneck.
+        The step runs eager, also with ``jax_jit`` set for training:
+        forward outputs (a beam search above all) have value-dependent lengths,
+        and bounding them is the same work as the packed/bucketed training path.
         """
         assert isinstance(dataset, Dataset)
         assert isinstance(callback, ForwardCallbackIface)
@@ -1202,14 +1178,11 @@ class Engine(EngineBase):
         """
         :param is_first_train_epoch: whether no checkpoint was loaded, i.e. training starts fresh
 
-        ``preload_from_files``: initialize (parts of) the model from other checkpoints. Same option
-        shape as the PyTorch engine, and the same reversed-sorted order, so that the FIRST key in
-        sorted order wins where two of them match a parameter.
-
-        Supported per entry: ``filename`` (an ``.orbax`` directory or a PyTorch ``.pt``),
-        ``prefix`` (only parameters under it, with the prefix stripped from the checkpoint names),
-        ``init_for_train`` (else the entry is for recognition and is skipped while training),
-        ``ignore_missing``, and ``ignore_params`` / ``ignore_params_prefixes``.
+        ``preload_from_files``: initialize (parts of) the model from other checkpoints.
+        Same option shape and reversed-sorted order as the PyTorch engine.
+        Per entry: ``filename`` (an ``.orbax`` directory or a PyTorch ``.pt``),
+        ``prefix``, ``init_for_train``, ``ignore_missing``,
+        ``ignore_params`` / ``ignore_params_prefixes``.
         """
         opts_dict = self.config.typed_value("preload_from_files", None)
         if not opts_dict:
@@ -1277,7 +1250,7 @@ def _bucket_key(step_raws: Dict[str, Any]) -> Tuple[int, ...]:
     :param step_raws: what goes into the step, after padding to a bucket
     :return: the shapes it runs on, flattened, as a hashable key
 
-    The shapes AFTER bucket padding, i.e. what the compiled program actually sees -- which is also
+    The shapes after bucket padding, i.e. what the compiled program actually sees -- which is also
     what selects the executable, so one key is one program.
     """
     key: List[int] = []
@@ -1292,9 +1265,10 @@ def _device_description() -> str:
     """
     :return: what the run computes on, e.g. "NVIDIA H100 80GB HBM3 (cuda)"
 
-    ``device_kind`` is the GPU model; ``rf.get_default_device()`` only says "gpu", which is not
-    enough to tell whether two runs shared hardware -- and a cross-node comparison that nobody
-    noticed was cross-node is worthless.
+    ``device_kind`` is the GPU model;
+    ``rf.get_default_device()`` only says "gpu",
+    which is not enough to tell whether two runs shared hardware
+    -- and a cross-node comparison that nobody noticed was cross-node is worthless.
     """
     devices = jax.local_devices()
     if not devices:
@@ -1312,8 +1286,10 @@ def _tensor_of_seq_numpy(x: Tensor, *, batch_idx: int, batch_dim: Dim) -> Tensor
     :param batch_dim:
     :return: that one sequence, as a NumPy tensor, padding cut off, without the batch dim
 
-    NumPy and not a JAX array: the callback interface is backend-neutral -- the same callback
-    is used by the PyTorch and TF engines -- so what it gets must not be a device array.
+    NumPy and not a JAX array:
+    the callback interface is backend-neutral
+    -- the same callback is used by the PyTorch and TF engines --
+    so what it gets must not be a device array.
     """
     if batch_dim not in x.dims:
         raise Exception(f"Expected {batch_dim} in {x}.")
@@ -1339,7 +1315,7 @@ def _dim_of_seq(dim: Dim, *, batch_idx: int, batch_dim: Dim) -> Dim:
     :param dim:
     :param batch_idx:
     :param batch_dim:
-    :return: the dim as it applies to ONE sequence
+    :return: the dim as it applies to one sequence
 
     A dynamic dim's size is itself a tensor over the batch (``[B]``), and the callback gets one
     sequence at a time, so that size has to lose its batch dim too.
@@ -1379,8 +1355,9 @@ def _batch_opts_from_config(config: Config) -> Dict[str, Any]:
     """
     packed_batch_size = config.typed_value("packed_batch_size", None)
     opts = {
-        # With packed_batch_size the CONTENT is what is budgeted, and a padded budget on top of it
-        # would cut batches short for no reason -- so batch_size defaults to unlimited there.
+        # With packed_batch_size the content is what is budgeted,
+        # and a padded budget on top of it would cut batches short for no reason,
+        # so batch_size defaults to unlimited there.
         "batch_size": config.typed_value("batch_size", None)
         or (None if packed_batch_size is not None else config.int("batch_size", 10000)),
         "eval_batch_size": config.typed_value("eval_batch_size", None),
@@ -1398,8 +1375,8 @@ def _batch_opts_from_config(config: Config) -> Dict[str, Any]:
 
 # Config options which other engines implement and this one does not (yet),
 # mapped to the value at which they are a no-op.
-# They are rejected rather than ignored: silently dropping e.g. accum_grad_multiple_step
-# or preload_from_files changes what the config means, while the run would still look fine.
+# Rejected rather than ignored: silently dropping e.g. accum_grad_multiple_step
+# changes what the config means.
 _UnsupportedConfigOpts = {
     "apply_cleanup_old_models_to_optim_states": False,
     "calculate_exp_loss": False,
@@ -1482,14 +1459,9 @@ def _check_time_multiple(time_multiple: Union[int, Dict[str, int]], *, extern_da
     :param extern_data: templates
     :raise NotImplementedError: when it cannot be applied unambiguously
 
-    Two ways to get this wrong, both of which produce a step that runs (slowly, or not at all)
-    rather than an error:
-
-    - One number for all keys, when the keys have different axes. The number is in the UNIT of the
-      axis it pads, so a multiple meant for audio samples applied to a label sequence pads a
-      12-token target to that many tokens -- measured once at 16000, where the decoder's
-      self-attention became a 152 GiB buffer.
-    - Different numbers for keys which SHARE a dim: the dim would need two capacities at once.
+    One number for all keys is ambiguous when the keys have different axes
+    (the multiple is in the unit of the axis it pads),
+    and different numbers for keys sharing a dim would need two capacities for that dim.
     """
     dim_of_key = {}
     for key, data in extern_data.data.items():
@@ -1524,9 +1496,10 @@ def _step_signature(args) -> Any:
     """
     :param args: the arguments of one step
     :return: a hashable key holding everything a compiled executable is specialized on:
-        the pytree structure, and per array its shape, dtype and whether it is committed to a
-        device (which is part of the signature too -- an uncommitted array and a committed one
-        compile separately).
+        the pytree structure,
+        and per array its shape, dtype and whether it is committed to a device
+        (which is part of the signature too --
+        an uncommitted array and a committed one compile separately).
     """
     leaves, structure = jax.tree_util.tree_flatten(args)
     return (
@@ -1546,13 +1519,9 @@ def _prefetch(iterable, *, buffer_size: int):
     :param buffer_size: how many batches to run ahead; 0 disables
     :return: the same items, produced by a background thread
 
-    The step is issued asynchronously, so the host is free while the device works -- but only if
-    something else is producing the next batch. Without this the loop alternates: build a batch,
-    issue a step, build a batch. Measured on the production run, the device was busy about a
-    quarter of the wall-clock, so the batch build was the limit, not the kernels.
-
-    A thread (not a process) because the work that dominates -- the dataset's own reads and the
-    numpy/JAX array conversion -- releases the GIL.
+    The step is issued asynchronously, so the host is free while the device works,
+    but only if something else builds the next batch.
+    A thread, not a process: the dataset reads and the array conversion release the GIL.
     """
     if not buffer_size:
         yield from iterable
@@ -1588,7 +1557,8 @@ def _batch_size_info(batch_raws: Dict[str, Any]) -> Dict[str, Any]:
     :return: num_seqs, and per data key the max and the summed (content) seq len
 
     The PyTorch engine's ``log_batch_size`` keys, so the throughput tooling parses either log.
-    Sums stay DEVICE scalars: they are read with the step's losses, so they cost no extra sync.
+    Sums stay device scalars:
+    they are read with the step's losses, so they cost no extra sync.
     """
     info: Dict[str, Any] = {}
     for key, value in sorted(batch_raws.items()):
@@ -1600,7 +1570,7 @@ def _batch_size_info(batch_raws: Dict[str, Any]) -> Dict[str, Any]:
             continue
         info.setdefault("num_seqs", int(value.shape[0]))
         info[f"max_size:{name}"] = int(data.shape[1])
-        # the CONTENT, i.e. what a packed step would compute on; num_seqs * max_size - this is
+        # the content, i.e. what a packed step would compute on; num_seqs * max_size - this is
         # exactly the padding the bucket regime adds
         info[f"sum_size:{name}"] = jnp.sum(value)
     return info
@@ -1673,8 +1643,9 @@ def _jit_opts_from_config(config: Config) -> Optional[Dict[str, Any]]:
     if not isinstance(opts, dict):
         raise TypeError(f"JAX engine: expected jax_jit True or a dict, got {opts!r}")
     opts = dict(opts)
-    # A compiled step is specialized per input shape, and the padded time extent of a batch
-    # is different almost every time, so without this every step would trigger a compile.
+    # A compiled step is specialized per input shape,
+    # and the padded time extent of a batch is different almost every time,
+    # so without this every step would trigger a compile.
     time_multiple = opts.pop("time_multiple", 0)
     if not isinstance(time_multiple, dict):
         time_multiple = int(time_multiple)

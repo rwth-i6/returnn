@@ -2,36 +2,25 @@
 Packed (varlen) scaled dot-product attention for the JAX backend, in Triton.
 
 Covers what :mod:`returnn.jax.util.rel_pos_att_triton` does not:
-causal self-attention,
-and cross-attention, where queries and keys/values carry DIFFERENT packings
-(decoder queries over a packed encoder).
-That is the whole decoder side of an AED model.
-Without it the packed backend has to unpack -> attend -> repack,
-throwing away the packing it just built.
+causal self-attention, and cross-attention with different packings for q and kv,
+i.e. the whole decoder side of an AED model.
+Without it the packed backend has to unpack -> attend -> repack.
 
-Why a kernel at all, when JAX ships attention:
-``jax.nn.dot_product_attention`` takes seq lens only in the PADDED (B,T,N,H) layout,
-and the Pallas GPU kernels are padded-layout too,
-so either would first have to unpack.
-A dense block-diagonal mask over the packed axis costs ``total_q * total_k``, far above padded.
+Why a kernel at all: ``jax.nn.dot_product_attention`` and the Pallas GPU kernels
+take seq lens only in the padded (B,T,N,H) layout, so either would first have to unpack,
+and a dense block-diagonal mask costs ``total_q * total_k``, far above padded.
 Only a varlen kernel computes the ``sum(len_q*len_k)`` that packing is worth.
 
-The torch backend gets this from the aten flash varlen kernels,
-so there is no kernel to share (unlike the rel-pos ones).
-These are modelled on it closely,
-including the separate f32 delta pass -- see :func:`_sdpa_bwd_kernel_delta`.
+Modelled closely on the aten flash varlen kernels the torch backend uses
+(there is no kernel to share here, unlike the rel-pos ones),
+including the separate f32 delta pass, see :func:`_sdpa_bwd_kernel_delta`.
+Dropout uses Triton's philox, so only the distribution matches aten's, not the masks,
+and cross-framework checks run at ``dropout_p = 0``.
 
-Dropout uses Triton's philox,
-so its MASKS do not match the aten flash kernels', only the distribution does.
-Cross-framework checks therefore run at ``dropout_p = 0``.
-
-ENV REQUIREMENT: the ptxas XLA finds first must be new enough for the PTX Triton emits
-(3.7 emits 8.7, needing CUDA >= 12.8),
-else a compiled step dies with a late, opaque ``ptxas ... Unsupported .version 8.7``.
-An older cluster module easily shadows a newer toolkit;
-the nvidia-cuda-nvcc wheel in a jax env ships a suitable one.
-Env setup, deliberately not fixed from inside RETURNN:
-a library rewriting PATH at import would silently override a deliberate toolchain choice.
+Env requirement: the ptxas XLA finds first must be new enough for the PTX Triton emits
+(3.7 emits 8.7, needing CUDA >= 12.8), else a compiled step dies late with
+``ptxas ... Unsupported .version 8.7``. An older cluster module easily shadows a newer
+toolkit; this is left to the env, as rewriting PATH at import would override it silently.
 """
 
 from __future__ import annotations
@@ -175,12 +164,12 @@ def _sdpa_bwd_kernel_delta(
 ):
     # delta_i = sum_j p_ij * dp_ij,
     # recomputed in f32 from the same p/dp the other bwd kernels use.
-    # NOT the flash shortcut delta = rowsum(out * do):
+    # Not the flash shortcut delta = rowsum(out * do):
     # that identity holds only for an exact out = sum_j p_ij v_j,
     # while the stored out is bf16, accumulated from a bf16-rounded p.
     # ds = p * (dp - delta) sits on the cancellation dp ~= delta
     # at the dominant entries of sharp attention rows,
-    # so the rounding mismatch takes over exactly there, as a per-row BIAS rather than noise.
+    # so the rounding mismatch takes over exactly there, as a per-row bias rather than noise.
     # That is what collapsed training around ep 7 through the rel-pos bias grads.
     # Cost: one extra attention-shaped pass, fwd and memory unchanged.
     pid_m = tl.program_id(0)
@@ -404,11 +393,8 @@ def _on_device_of(ref, *arrays):
     :param arrays: index arrays (starts/lens), often built on the host
     :return: the arrays, moved to ref's device where needed
 
-    A kernel launch needs all operands on ONE device.
-    Starts/lens come from the dataset side and can stay on the host,
-    which a CUDA-only process hides (nothing else can be on CPU there),
-    but which fails as soon as a CPU device exists at all.
-    Under tracing there is no device to query and the compiler places everything.
+    A kernel launch needs all operands on one device, and starts/lens can stay on the host,
+    which a CUDA-only process hides but which fails once a CPU device exists at all.
     """
     if isinstance(ref, jax.core.Tracer):
         return arrays
@@ -589,7 +575,7 @@ def sdpa_varlen(
 ) -> jax.Array:
     """
     :param q: [total_q, heads, dim], packed
-    :param k: [total_k, heads, dim], packed, possibly a DIFFERENT packing than q (cross-attention)
+    :param k: [total_k, heads, dim], packed, possibly a different packing than q (cross-attention)
     :param v: [total_k, heads, dim], same packing as k
     :param cu_q: [batch], first row of each query seq
     :param len_q: [batch]
@@ -598,7 +584,7 @@ def sdpa_varlen(
     :param max_q: static bound on the per-seq query length (grid size)
     :param max_k: static bound on the per-seq kv length (grid size, dropout offset stride)
     :param is_causal: only valid with q and k packed identically (self-attention)
-    :param dropout_p: attention dropout, philox (NOT the aten flash RNG, see the module docstring)
+    :param dropout_p: attention dropout, philox (not the aten flash RNG, see the module docstring)
     :param seed: dropout seed
     :param scale: qk scale, 1/sqrt(dim) if not given
     :return: out [total_q, heads, dim]
@@ -627,8 +613,8 @@ def _sdpa_varlen_fwd_vjp(q, k, v, cu_q, len_q, cu_k, len_k, max_q, max_k, is_cau
     """
     :return: (out, residuals)
 
-    Argument order: the fwd rule takes the PRIMAL order (statics last),
-    while the bwd rule below takes the nondiff args FIRST.
+    Argument order: the fwd rule takes the primal order (statics last),
+    while the bwd rule below takes the nondiff args first.
     That asymmetry is jax's, and getting it wrong binds q to cu_q.
     """
     out, lse = sdpa_varlen_fwd(

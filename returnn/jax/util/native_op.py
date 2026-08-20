@@ -1,18 +1,14 @@
 """
 Native ops for the JAX backend.
 
-Same ops as the TF and PyTorch backends (:mod:`returnn.native_op` describes them, and
-``native_op.cpp`` holds the shared support code) -- what differs is only how they are wired in.
-JAX has no operator registry: an op is an XLA FFI custom call, so this module generates a C++
-handler per op, compiles it to a shared library, registers it with ``jax.ffi``, and calls it
-through ``jax.ffi.ffi_call``.
+Same ops as the TF and PyTorch backends (:mod:`returnn.native_op` describes them),
+wired in differently: JAX has no operator registry, so an op is an XLA FFI custom call.
+This module generates a C++ handler per op, compiles it, and registers it with ``jax.ffi``.
 
-The op's own ``c_fw_code`` is used unchanged. It addresses its arguments through the
-``inputs``/``outputs`` arrays of ``Ndarray*``, and the JAX branch of ``native_op.cpp`` defines
-``Ndarray`` as a pointer plus a shape -- which is exactly what XLA hands to an FFI handler.
+The op's own ``c_fw_code`` is used unchanged: it addresses its arguments through the
+``inputs``/``outputs`` arrays of ``Ndarray*``, which is what XLA hands to an FFI handler.
 
-Gradients are :func:`jax.custom_vjp`, in place of the ``torch.autograd.Function`` the PyTorch
-backend uses; the math is the same.
+Gradients are :func:`jax.custom_vjp` in place of ``torch.autograd.Function``; same math.
 """
 
 from __future__ import annotations
@@ -39,9 +35,8 @@ class OpCodeCompiler(NativeCodeCompiler):
     """
     Compiles an op with nvcc.
 
-    Not :class:`returnn.torch.util.native_op_code_compiler.OpCodeCompiler`: that one locates CUDA
-    from the libcudart TORCH has mapped into the process, which a JAX run never loads.
-    The generic :class:`CudaEnv` finds it from CUDA_HOME / the usual paths instead.
+    Not :class:`returnn.torch.util.native_op_code_compiler.OpCodeCompiler`:
+    that one locates CUDA from the libcudart torch mapped in, which a JAX run never loads.
     """
 
     def __init__(self, *, with_cuda: bool = True, **kwargs):
@@ -126,8 +121,9 @@ class OpMaker:
         self._attr_names = []
         for i, v in enumerate(in_info):
             if v.get("host_memory", False):
-                # A host_memory scalar must be READABLE ON THE HOST, and an FFI buffer never is
-                # (it is a device pointer). XLA's equivalent is an attribute, passed by value.
+                # A host_memory scalar must be readable on the host,
+                # and an FFI buffer never is (it is a device pointer).
+                # XLA's equivalent is an attribute, passed by value.
                 assert v["ndim"] == 0, f"{self.name}: host_memory input {v['name']!r} must be scalar"
                 name = v["name"]
                 self._attr_names.append(name)
@@ -226,9 +222,8 @@ class OpMaker:
         """
         Compile and register the op, for every platform it can be built for.
 
-        The same source serves both: ``native_op.cpp`` and the ops themselves branch on ``CUDA``,
-        so the CPU variant is the same translation unit with ``CUDA=0``. Registering both means a
-        JAX program picks the right one by device, as the TF and PyTorch backends do.
+        The same source serves both: the ops branch on ``CUDA``, so the CPU variant is
+        the same translation unit with ``CUDA=0``, and a JAX program picks by device.
 
         :return: the registered custom-call target name (the same for every platform)
         """
@@ -296,14 +291,11 @@ def get_ctc_fsa_fast_bw(
     :param seq_lens: (batch,), int32
     :param blank_idx: vocab index of blank
     :param label_loop: True = CTC, False = RNA-like
-    :param edges_bound: total edge count for the PACKED edge layout:
-        seq b owns the slots ``[offsets[b], offsets[b+1])``, sized ``5*len+5``,
-        the rest up to the bound is filler.
-        That layout also numbers the STATES by content,
-        which is what makes the packed state count correct (see :func:`ctc_loss_packed`).
-        Passing the bound to the CALLER but not here
-        gives a state numbering that does not match the edges,
-        and every seq past the point where the two numberings drift apart silently scores garbage.
+    :param edges_bound: total edge count for the packed edge layout:
+        seq b owns the slots ``[offsets[b], offsets[b+1])``, sized ``5*len+5``, rest is filler.
+        That layout also numbers the states by content, so it has to match what the caller
+        assumes (see :func:`ctc_loss_packed`); a mismatch silently scores garbage
+        for every seq past the point where the two numberings drift apart.
         None = the rectangular layout over the targets buffer width.
     :return: edges (4,n_edges) int32, weights (n_edges,) float32, start_end_states (2,batch) int32
     """
@@ -313,7 +305,7 @@ def get_ctc_fsa_fast_bw(
         target = make_op(native_op.GetCtcFsaFastBwPackedOp)
         n_e_per_seq = seq_lens_i32 * 5 + 5  # exact valid count per seq (len 0 uses 2 of its 5 slots)
         edge_offsets = jnp.concatenate([jnp.zeros((1,), dtype=jnp.int32), jnp.cumsum(n_e_per_seq, dtype=jnp.int32)])
-        # weights is an INPUT: the op fills it, and takes the edge count from its shape
+        # weights is an input: the op fills it, and takes the edge count from its shape
         weights = jnp.zeros((edges_bound,), dtype=jnp.float32)
         args = (targets_i32, seq_lens_i32, edge_offsets, weights)
         n_edges = edges_bound
@@ -346,9 +338,9 @@ def fast_baum_welch(
     :param edges: (4,n_edges), (from,to,emission_idx,sequence_idx)
     :param weights: (n_edges,)
     :param start_end_states: (2,batch), (start,end) state idx
-    :param n_states: total number of FSA states. The op sizes its own state buffer from this, and
-        it is a host_memory scalar, so it must be a Python int -- a traced value cannot reach it.
-        Take the CTC bound: 2*S+2 states per seq over the batch, from the DECLARED targets width.
+    :param n_states: total number of FSA states, as a Python int (a host_memory scalar).
+        The op sizes its state buffer from this:
+        the CTC bound is 2*S+2 per seq, from the declared targets width.
     :return: (fwdbwd, obs_scores), (time,batch,dim) and (time,batch), in -log space
     """
     target = make_op(native_op.FastBaumWelchOp)
@@ -447,7 +439,7 @@ def ctc_loss(
         targets=targets, seq_lens=targets_seq_lens, blank_idx=blank_index, label_loop=label_loop
     )
     n_batch, n_targets = targets.shape
-    # The FSA numbers states per seq at a fixed stride over the targets BUFFER width:
+    # The FSA numbers states per seq at a fixed stride over the targets buffer width:
     # "state_idx: 0 b, 1 l, ..., T*2 b, T*2+1 dummy, T*2+2 end, i.e. T*2+3 states per seq",
     # with state_idx_offset = (n_time*2+3)*batch_idx (see GetCtcFsaFastBwOp's construct_kernel).
     # One less than this and the op writes past its state buffer.
@@ -473,7 +465,7 @@ def fast_baum_welch_packed(
 ) -> Tuple[jax.Array, jax.Array]:
     """
     :param am_scores: (total_time,dim), the seqs concatenated, in -log space
-    :param seq_starts: (batch,), start offset of each seq in total_time, ASCENDING
+    :param seq_starts: (batch,), start offset of each seq in total_time, ascending
     :param seq_mask: (time,batch) -> 0 or 1
     :param edges: (4,n_edges), (from,to,emission_idx,sequence_idx)
     :param weights: (n_edges,)
@@ -495,7 +487,7 @@ def fast_baum_welch_packed(
             jax.ShapeDtypeStruct((n_time, seq_mask.shape[1]), jnp.float32),  # obs_scores
         ],
         (
-            # the order the op declares (in_info): seq_starts comes AFTER index, not with am_scores
+            # the order the op declares (in_info): seq_starts comes after index, not with am_scores
             am_scores.astype(jnp.float32),
             edges.astype(jnp.int32),
             weights.astype(jnp.float32),
@@ -541,9 +533,10 @@ def _fast_bw_loss_packed_bwd(logits_normalize, n_states, res, grad_output):
     log_sm, seq_starts, seq_mask, fwdbwd = res
     bw = jnp.exp(-fwdbwd)  # (total_time,dim), the soft alignment
     grad_x = (jnp.exp(log_sm) - bw) if logits_normalize else -bw
-    # Each packed frame belongs to the last seq starting at or before it, which is what makes the
-    # ASCENDING seq_starts contract necessary. Frames beyond a seq's length (gap / alignment
-    # padding) belong to no seq and get zero grad.
+    # Each packed frame belongs to the last seq starting at or before it,
+    # which is what makes the ascending seq_starts contract necessary.
+    # Frames beyond a seq's length (gap / alignment padding)
+    # belong to no seq and get zero grad.
     total = grad_x.shape[0]
     frame = jnp.arange(total, dtype=seq_starts.dtype)
     seq_idx = jnp.searchsorted(seq_starts, frame, side="right") - 1
@@ -572,7 +565,7 @@ def ctc_loss_packed(
 ) -> jax.Array:
     """
     :param logits: (total_time,dim), the seqs concatenated along time, unnormalized
-    :param seq_starts: (batch,), int32, ASCENDING (see :func:`_fast_bw_loss_packed_bwd`)
+    :param seq_starts: (batch,), int32, ascending (see :func:`_fast_bw_loss_packed_bwd`)
     :param logits_seq_lens: (batch,)
     :param max_seq_len: max of logits_seq_lens, as a host int (the mask width must be static)
     :param targets: (batch,target_time)
@@ -602,8 +595,10 @@ def ctc_loss_packed(
     n_batch, n_tgt_time = targets.shape
     seq_mask = (jnp.arange(max_seq_len)[:, None] < logits_seq_lens[None, :]).astype(jnp.float32)
     if edges_bound is not None:
-        # packed FSA: states are numbered by content, so the count follows the targets TOTAL bound
-        # implied by edges_bound, not batch * capacity. Floor division stays an upper bound.
+        # packed FSA: states are numbered by content,
+        # so the count follows the targets total bound implied by edges_bound,
+        # not batch * capacity.
+        # Floor division stays an upper bound.
         n_states = 2 * (edges_bound // 5) + n_batch
     else:
         n_states = n_batch * (2 * n_tgt_time + 3)

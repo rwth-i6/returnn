@@ -1,26 +1,17 @@
 """
 Packed rel-pos self-attention for the JAX backend, on the Triton kernels the PyTorch backend uses.
 
-Why this and not the traceable alternatives:
-a per-seq scan needs a STATIC window per sequence,
-so it costs ``batch_bound * T_cap^2`` -- exactly padded attention.
-A dense block-diagonal mask costs ``(sum len)^2``, ~14x more than padded.
-Only a varlen kernel computes the ``sum len^2`` that packing is worth
-(~15x below padded at this batching).
+Why this and not the traceable alternatives: a per-seq scan needs a static window per seq,
+so it costs ``batch_bound * T_cap^2``, exactly padded attention, and a dense
+block-diagonal mask costs ``(sum len)^2``, ~14x more than padded.
+Only a varlen kernel computes the ``sum len^2`` that packing is worth.
 
-The kernels in :mod:`returnn.torch.util.rel_pos_att_triton` are plain ``@triton.jit``
-(pointers, strides, constexprs), so they are framework-neutral;
-only their wrapper is torch (autograd.Function, torch tensors).
-Here they get a JAX wrapper:
-:func:`jax_triton.triton_call` for the launch,
-:func:`jax.custom_vjp` for the gradient.
-
-Two mechanical differences to the torch launcher:
-- jax_triton appends outputs AFTER the inputs,
-  while the kernels take ``Out``/``Lse`` in the middle,
-  so thin ``@triton.jit`` wrappers below re-order them.
-- strides are passed explicitly;
-  JAX arrays here are contiguous, so they follow from the shape.
+The kernels in :mod:`returnn.torch.util.rel_pos_att_triton` are plain ``@triton.jit``,
+so only their wrapper is torch; here they get a JAX one
+(:func:`jax_triton.triton_call` for the launch, :func:`jax.custom_vjp` for the gradient).
+Two mechanical differences: jax_triton appends outputs after the inputs, while the kernels
+take ``Out``/``Lse`` in the middle, so thin wrappers below re-order them;
+and strides are passed explicitly, following from the shape (these arrays are contiguous).
 """
 
 from __future__ import annotations
@@ -32,8 +23,10 @@ import math
 import jax
 import jax.numpy as jnp
 
-# The kernels, not the torch wrapper. That module imports torch at module level; torch is present in
-# every env that has this backend, but the kernels themselves touch nothing torch-specific.
+# The kernels, not the torch wrapper.
+# That module imports torch at module level;
+# torch is present in every env that has this backend,
+# but the kernels themselves touch nothing torch-specific.
 # noinspection PyProtectedMember
 from returnn.torch.util.rel_pos_att_triton import (
     _rel_pos_fwd_kernel,
@@ -78,7 +71,7 @@ def rel_pos_att_fwd(
     assert r == 2 * max_len - 1, f"bias width {r} != 2*{max_len}-1"
     if scale is None:
         scale = 1.0 / math.sqrt(d)
-    # a kernel launch needs all operands on ONE device,
+    # a kernel launch needs all operands on one device,
     # and starts/lens come from the dataset side, so they can still be on the host.
     # A CUDA-only process hides that; it fails once a CPU device exists.
     # Under tracing the compiler places everything, so there is nothing to move.
@@ -90,11 +83,14 @@ def rel_pos_att_fwd(
         )
     n_batch = seq_starts.shape[0]
     block_m, block_n = 64, 64
-    # Out and Lse are in-out Refs, in their own argument positions, so the shared kernel is called
-    # unchanged. jax_triton's out_shape appends outputs AFTER the inputs, which this kernel's
-    # signature does not match, and a wrapper kernel calling it does not compile.
-    # zeros, not empty, for the same reason as the torch launcher: the kernel writes only valid
-    # rows, so junk rows would carry garbage into the residual adds.
+    # Out and Lse are in-out Refs, in their own argument positions,
+    # so the shared kernel is called unchanged.
+    # jax_triton's out_shape appends outputs after the inputs,
+    # which this kernel's signature does not match,
+    # and a wrapper kernel calling it does not compile.
+    # zeros, not empty, for the same reason as the torch launcher:
+    # the kernel writes only valid rows,
+    # so junk rows would carry garbage into the residual adds.
     out_ref = jax.new_ref(jnp.zeros_like(q))
     lse_ref = jax.new_ref(jnp.zeros((total, n_heads), dtype=jnp.float32))
     jt.triton_call(

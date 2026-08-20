@@ -4,7 +4,7 @@ Backend for exposing JAX-specific functionality.
 JAX dispatches op-by-op like PyTorch, so this backend is eager,
 and the same code runs unchanged inside ``jax.jit``
 (the raw tensors are tracers there, see :func:`returnn.frontend._backend.get_backend_by_raw_tensor_type`).
-Everything that must NOT read a value on the host (shapes, seq lens)
+Everything that must not read a value on the host (shapes, seq lens)
 therefore follows the same rules as the static-traceable regime of the PyTorch backend.
 """
 
@@ -53,10 +53,9 @@ class JaxBackend(Backend[jax.Array]):
         """
         assert, on a traced condition as well
 
-        Under tracing the value is not known, so the check becomes part of the program:
-        a ``lax.cond`` on the negated condition, whose taken branch calls back to the host.
-        That is the JAX analogue of ``tf.Assert``, and of the device-side assert the torch
-        backend uses -- a plain Python ``assert`` would test a tracer and always pass.
+        Under tracing the check becomes part of the program:
+        a ``lax.cond`` whose taken branch calls back to the host,
+        as a plain Python ``assert`` would test a tracer and always pass.
         """
         assert condition.dims == (), "condition for assert must be a scalar"
         raw = condition.raw_tensor
@@ -183,9 +182,10 @@ class JaxBackend(Backend[jax.Array]):
         else:
             name = name or "const"
             value = jnp.asarray(value, dtype=JaxBackend.as_dtype_raw(dtype))
-        # Scalars are deliberately NOT placed on a device.
+        # Scalars are deliberately not placed on a device.
         # RF asks for scalars on the CPU (keep_scalar_on_cpu), which is a PyTorch optimization:
-        # there a CPU scalar can meet a CUDA tensor. In JAX a device_put COMMITS the array,
+        # there a CPU scalar can meet a CUDA tensor.
+        # In JAX a device_put commits the array,
         # and an op mixing arrays committed to different devices is an error,
         # so committing the scalar would break every "tensor + 2.0" on the GPU.
         # Left uncommitted, JAX co-locates it with the other operand.
@@ -247,7 +247,7 @@ class JaxBackend(Backend[jax.Array]):
     @staticmethod
     def should_pickle_tensor(raw_tensor: jax.Array) -> bool:
         """
-        Never: under tracing a raw is a TRACER, which cannot be pickled at all.
+        Never: under tracing a raw is a tracer, which cannot be pickled at all.
         DistributeFilesDataset spawns workers mid-epoch, and spawning pickles the global config,
         which holds the extern_data dims the engine filled in -- that killed a run.
         """
@@ -363,13 +363,7 @@ class JaxBackend(Backend[jax.Array]):
         axis: Union[Dim, Sequence[Dim]],
         use_mask: bool = True,
     ) -> Tensor[jax.Array]:
-        """
-        :param source:
-        :param axis: dims to reduce over
-        :param mode: "sum", "max", "min", "mean", "logsumexp", "any", "all", "argmin", "argmax"
-        :param use_mask: mask out the padded frames of a dynamic axis first
-        :return: reduced tensor
-        """
+        """reduce"""
         assert mode in Backend._AllowedReduceModes
         if mode in ("sum", "mean", "logsumexp"):
             # mixed precision: accumulating in the reduced dtype is where it hurts most,
@@ -439,13 +433,7 @@ class JaxBackend(Backend[jax.Array]):
 
     @staticmethod
     def gather(source: Tensor, *, indices: Union[Tensor, int], axis: Dim, clip_to_valid: bool = False) -> Tensor:
-        """
-        :param source:
-        :param indices: index tensor, or a single index
-        :param axis: the dim of source to index into
-        :param clip_to_valid: clip the indices into the valid range of axis first
-        :return: source with axis replaced by the dims of indices
-        """
+        """gather"""
         axis_int = source.get_axis_from_description(axis, allow_int=False)
         if isinstance(indices, int):
             out = Tensor(
@@ -601,16 +589,7 @@ class JaxBackend(Backend[jax.Array]):
         mode: str = "constant",
         value: Optional[Union[rf.RawTensorTypes, Tensor]] = None,
     ) -> Tensor:
-        """
-        :param source:
-        :param axes: dims to pad
-        :param padding: (left, right) per axis
-        :param out_dims: resulting dims, per axis
-        :param handle_dynamic_dims: re-mask the padded-in frames of a dynamic axis afterwards
-        :param mode: "constant", "reflect", "replicate" or "circular"
-        :param value: for mode "constant"
-        :return: padded tensor
-        """
+        """pad"""
         assert len(out_dims) == len(axes) == len(padding)
         assert not isinstance(value, Tensor) or value.dims == (), (
             "RF JaxBackend: pad with a non-scalar value not implemented"
@@ -658,11 +637,7 @@ class JaxBackend(Backend[jax.Array]):
 
     @classmethod
     def squeeze_raw(cls, raw_tensor: jax.Array, axes: Sequence[int]) -> jax.Array:
-        """
-        :param raw_tensor:
-        :param axes: axes to squeeze
-        :return: squeezed raw tensor
-        """
+        """squeeze"""
         return jnp.squeeze(raw_tensor, axis=tuple(axes))
 
     @staticmethod
@@ -701,14 +676,7 @@ class JaxBackend(Backend[jax.Array]):
         pad_to_multiples: Optional[bool] = None,
         pad_value: Union[None, int, float] = None,
     ) -> Tensor:
-        """
-        :param source:
-        :param axis: the dim to split
-        :param dims: what to split it into
-        :param pad_to_multiples: not implemented
-        :param pad_value: not implemented
-        :return: source with axis replaced by dims
-        """
+        """split dims"""
         assert pad_to_multiples in (None, False), "RF JaxBackend: split_dims pad_to_multiples not implemented"
         axis_int = source.get_axis_from_description(axis)
         out_dims = source.dims[:axis_int] + tuple(dims) + source.dims[axis_int + 1 :]
@@ -730,12 +698,7 @@ class JaxBackend(Backend[jax.Array]):
 
     @staticmethod
     def reshape(source: Tensor, in_dims: Sequence[Dim], out_dims: Sequence[Dim]) -> Tensor:
-        """
-        :param source:
-        :param in_dims: dims of source to reshape, need not be adjacent
-        :param out_dims: what to reshape them into, same total size
-        :return: source with in_dims replaced by out_dims
-        """
+        """reshape"""
         in_dims_axes = [source.get_axis_from_description(d, allow_int=False) for d in in_dims]
         assert sorted(set(in_dims_axes)) == sorted(in_dims_axes), f"reshape {source}: invalid in_dims {in_dims}"
         insert_axis = min(in_dims_axes)
@@ -756,12 +719,7 @@ class JaxBackend(Backend[jax.Array]):
 
     @staticmethod
     def split(source: Tensor, *, axis: Dim, out_dims: Sequence[Dim]) -> Tuple[Tensor, ...]:
-        """
-        :param source:
-        :param axis: static axis to split
-        :param out_dims: parts, summing to axis
-        :return: one tensor per out_dim
-        """
+        """split"""
         axis_int = source.get_axis_from_description(axis)
         sizes = [d.get_dim_value() for d in out_dims]
         # jnp.split takes split points, not sizes
@@ -777,11 +735,7 @@ class JaxBackend(Backend[jax.Array]):
 
     @staticmethod
     def expand_dim(source: Tensor, dim: Dim) -> Tensor:
-        """
-        :param source:
-        :param dim: the new dim
-        :return: source with dim added (broadcast, not copied, where possible)
-        """
+        """expand dim"""
         assert dim not in source.dims
         # same placement heuristic as the other backends
         axis = len(source.dims)
@@ -807,11 +761,7 @@ class JaxBackend(Backend[jax.Array]):
 
     @staticmethod
     def squeeze(source: Tensor, axis: Dim) -> Tensor:
-        """
-        :param source:
-        :param axis: dim of size 1
-        :return: source without axis
-        """
+        """squeeze"""
         axis_int = source.get_axis_from_description(axis)
         out = source.copy_template_excluding_axis(axis_int)
         out.raw_tensor = jnp.squeeze(source.raw_tensor, axis=axis_int)
@@ -819,12 +769,7 @@ class JaxBackend(Backend[jax.Array]):
 
     @staticmethod
     def concat(*sources: Tuple[Tensor, Dim], allow_broadcast: bool = False, out_dim: Dim) -> Tensor:
-        """
-        :param sources: (tensor, its dim to concat over) pairs
-        :param allow_broadcast:
-        :param out_dim:
-        :return: concatenated tensor
-        """
+        """concat"""
         axis = sources[0][0].get_axis_from_description(sources[0][1])
         other_dims = list(sources[0][0].dims)
         other_dims.remove(sources[0][1])
@@ -862,11 +807,7 @@ class JaxBackend(Backend[jax.Array]):
 
     @staticmethod
     def stack(sources: Sequence[Tensor], *, out_dim: Dim) -> Tensor:
-        """
-        :param sources:
-        :param out_dim: the new leading dim
-        :return: stacked tensor
-        """
+        """stack"""
         out_dims = (out_dim,) + sources[0].dims
         out = Tensor("stack", dims=out_dims, dtype=sources[0].dtype, sparse_dim=sources[0].sparse_dim)
         out.raw_tensor = jnp.stack([s.copy_compatible_to_dims_raw(out_dims[1:]) for s in sources], axis=0)
@@ -874,11 +815,7 @@ class JaxBackend(Backend[jax.Array]):
 
     @staticmethod
     def unstack(source: Tensor, *, axis: Dim) -> Tuple[Tensor, ...]:
-        """
-        :param source:
-        :param axis: static axis to unstack
-        :return: one tensor per index of axis, each without axis
-        """
+        """unstack via torch.unbind"""
         axis_int = source.dims.index(axis)
         template = source.copy_template_excluding_axis(axis_int)
         result = []
@@ -898,15 +835,7 @@ class JaxBackend(Backend[jax.Array]):
         sparse_dim: Optional[Dim] = None,
         feature_dim: Optional[Dim] = None,
     ) -> Tensor:
-        """
-        :param dims:
-        :param fill_value:
-        :param dtype:
-        :param device:
-        :param sparse_dim:
-        :param feature_dim:
-        :return: tensor of the given shape, filled with fill_value
-        """
+        """full"""
         shape = tuple(dim.get_dim_value() for dim in dims)
         if isinstance(fill_value, Tensor):
             fill_value = fill_value.raw_tensor
@@ -927,16 +856,7 @@ class JaxBackend(Backend[jax.Array]):
         size: Optional[Union[int, Tensor, Dim]] = None,
         out_dim: Dim,
     ) -> Tensor:
-        """
-        :param source:
-        :param axis:
-        :param start: may be a device scalar (dynamic_slice clamps it, like torch.narrow)
-        :param end:
-        :param step: only 1
-        :param size:
-        :param out_dim:
-        :return: sliced tensor
-        """
+        """slice"""
         assert step is None or (isinstance(step, int) and step == 1), "RF JaxBackend: slice step != 1 not implemented"
         axis_int = source.get_axis_from_description(axis, allow_int=False)
         out = source.copy_template_replace_dim_tag(axis=axis_int, new_dim_tag=out_dim)
@@ -977,11 +897,7 @@ class JaxBackend(Backend[jax.Array]):
 
     @staticmethod
     def flip_no_mask(source: Tensor, *, axis: Dim) -> Tensor:
-        """
-        :param source:
-        :param axis:
-        :return: source reversed along axis, ignoring masking
-        """
+        """flip, ignoring masking"""
         axis_int = source.get_axis_from_description(axis, allow_int=False)
         out = source.copy_template("flip")
         out.raw_tensor = jnp.flip(source.raw_tensor, axis=axis_int)
@@ -989,11 +905,7 @@ class JaxBackend(Backend[jax.Array]):
 
     @staticmethod
     def cumsum(source: Tensor, *, spatial_dim: Dim) -> Tensor:
-        """
-        :param source:
-        :param spatial_dim:
-        :return: cumsum over spatial_dim
-        """
+        """cumsum"""
         axis = source.get_axis_from_description(spatial_dim)
         out = source.copy_template("cumsum")
         out.raw_tensor = jnp.cumsum(source.raw_tensor, axis=axis, dtype=source.raw_tensor.dtype)
@@ -1014,7 +926,7 @@ class JaxBackend(Backend[jax.Array]):
             # A scalar length is fine: the tail entries are junk,
             # and every caller here treats the result there as meaningless (see _dev_seq_local).
             # need_masking() alone cannot decide this:
-            # in the bound regime it is True for ANY dynamic dim.
+            # in the bound regime it is True for any dynamic dim.
             raise NotImplementedError(f"search_sorted: per-entry dynamic axis {axis} not supported")
         sorted_seq_dims = [dim for dim in sorted_seq.dims if dim != axis] + [axis]
         for dim in sorted_seq_dims[:-1]:
@@ -1090,13 +1002,7 @@ class JaxBackend(Backend[jax.Array]):
     def lerp(
         start: Tensor, end: Tensor, weight: Union[float, Tensor], *, allow_broadcast_all_sources: bool = False
     ) -> Tensor:
-        """
-        :param start:
-        :param end:
-        :param weight:
-        :param allow_broadcast_all_sources:
-        :return: start + weight * (end - start)
-        """
+        """lerp"""
         weight = rf.convert_to_tensor(weight, _backend=JaxBackend, device=start.device)
         out = Tensor.get_common_data(
             [start, end, weight], allow_broadcast_all_sources=allow_broadcast_all_sources, name="lerp"
@@ -1114,13 +1020,7 @@ class JaxBackend(Backend[jax.Array]):
 
     @staticmethod
     def edit_distance(a: Tensor, a_spatial_dim: Dim, b: Tensor, b_spatial_dim: Dim) -> Tensor:
-        """
-        :param a: [B, Ta]
-        :param a_spatial_dim: Ta
-        :param b: [B, Tb]
-        :param b_spatial_dim: Tb
-        :return: [B] Levenshtein distance
-        """
+        """edit distance"""
         a_batch_dims = a.remaining_dims(a_spatial_dim)
         b_batch_dims = b.remaining_dims(b_spatial_dim)
         batch_dims = a_batch_dims + [d for d in b_batch_dims if d not in a_batch_dims]
@@ -1149,10 +1049,9 @@ class JaxBackend(Backend[jax.Array]):
         :param in_dim: the packed axis of ``source``
         :return: ``dims`` (+ remaining dims), source scattered where the mask holds
 
-        The inverse of :func:`masked_select`, and written the same way: the mask's prefix sum gives
-        each target position its slot in ``source``, and the result is one gather from source by
-        that slot. A gather (rather than a scatter into a buffer) keeps this traceable with a
-        scatter-add gradient, and needs no data-dependent shape.
+        The inverse of :func:`masked_select`, and written the same way:
+        the mask's prefix sum gives each target position its slot in ``source``.
+        A gather, not a scatter, so it stays traceable and needs no data-dependent shape.
         """
         assert mask.dtype == "bool"
         assert set(mask.dims) == set(dims)
@@ -1203,10 +1102,9 @@ class JaxBackend(Backend[jax.Array]):
         :param out_dim:
         :return: the selected elements, with ``dims`` replaced by one new dim, and that dim
 
-        The number of selected elements is a property of the VALUES, and JAX shapes cannot depend
-        on values, so under tracing the output gets a STATIC size instead: the capacity of
-        ``out_dim`` if it declares one, else the full mask size, which is always valid.
-        The selected elements are packed at the front, in input order, zeros after --
+        JAX shapes cannot depend on values, so under tracing the output gets a static size:
+        the capacity of ``out_dim`` if it declares one, else the full mask size.
+        Selected elements are packed at the front, zeros after,
         the same contract as ``masked_select_bound`` of the PyTorch graph-capture path.
         """
         assert mask.dtype == "bool"
@@ -1272,14 +1170,7 @@ class JaxBackend(Backend[jax.Array]):
         k_dim: Optional[Dim] = None,
         sorted: bool = True,
     ) -> Tuple[Tensor, Union[Tensor, Sequence[Tensor]], Dim]:
-        """
-        :param source:
-        :param axis: axis (or axes) to take the top k over
-        :param k:
-        :param k_dim:
-        :param sorted: JAX always sorts, so this only ever holds
-        :return: (values, indices, k_dim); indices is one tensor per axis if several are given
-        """
+        """top_k"""
         if not k_dim:
             k_dim = Dim(k, name="top-k-dim")
         axes = [axis] if isinstance(axis, Dim) else list(axis)
@@ -1348,9 +1239,8 @@ class JaxBackend(Backend[jax.Array]):
         Short-time Fourier transform.
 
         Written out (frame -> window -> rfft) rather than calling a library STFT,
-        because the conventions differ between them
-        (window length vs FFT length, where a shorter window sits inside the frame, periodic vs symmetric Hann),
-        and RF's semantics are the TF/SciPy ones, which the PyTorch backend also emulates.
+        whose conventions differ (window vs FFT length, periodic vs symmetric Hann).
+        RF's semantics are the TF/SciPy ones, which the PyTorch backend also emulates.
 
         :param x:
         :param in_spatial_dim:
@@ -1370,7 +1260,7 @@ class JaxBackend(Backend[jax.Array]):
 
         if frame_length < fft_length and window_use_frame_length:
             # TF/SciPy window the frame_length, PyTorch/librosa the fft_length.
-            # Padding the difference to the right makes the frame COUNT match the TF convention.
+            # Padding the difference to the right makes the frame count match the TF convention.
             x_raw = jnp.pad(x_raw, ((0, 0), (0, fft_length - frame_length)))
         if frame_length > x_raw.shape[1]:
             # no full frame fits
@@ -1380,7 +1270,7 @@ class JaxBackend(Backend[jax.Array]):
         if window_enforce_even:
             frame_length -= frame_length % 2
 
-        # torch.hann_window / tf are PERIODIC by default; jnp.hanning is symmetric, hence the +1 and drop
+        # torch.hann_window / tf are periodic by default; jnp.hanning is symmetric, hence the +1 and drop
         window = jnp.hanning(frame_length + 1)[:-1].astype(x_raw.dtype)
         if frame_length < fft_length:
             if align_window_left:
@@ -1498,11 +1388,10 @@ class JaxBackend(Backend[jax.Array]):
         :param targets_spatial_dim:
         :param blank_index:
         :param max_approx: not implemented
-        :param use_native_op: our fast-Baum-Welch native op instead of optax's DP. Default (None)
-            is the native op: it is faster (measured 2.1x on fwd+bwd at production shapes), it is
-            the only path that can do max_approx / label_loop=False, and it avoids the f64
-            promotion optax's jax.nn.one_hot causes under x64. The PyTorch backend defaults the
-            other way only because its optax-equivalent path predates its native op.
+        :param use_native_op: our fast-Baum-Welch native op instead of optax's DP.
+            Default (None) is the native op: faster (measured 2.1x on fwd+bwd),
+            the only path that can do max_approx / label_loop=False,
+            and it avoids the f64 promotion optax's jax.nn.one_hot causes under x64.
         :param label_loop: only the standard label loop
         :return: loss [batch_dims...], summed over time, not normalized
         """
@@ -1555,12 +1444,14 @@ class JaxBackend(Backend[jax.Array]):
                 blank_index=blank_index,
             )
         else:
-            # x64 is on for this backend (int64 seq lens need it), and optax's ctc_loss builds its
-            # label one-hot with jax.nn.one_hot, whose default dtype is jnp.float_ = FLOAT64 under
-            # x64. The einsum against the [B,T,vocab] log-probs then runs as an f64 GEMM: measured
-            # as the largest single op of the step (~20% of device time, plus ~7% of f32->f64
-            # converts). Tracing with x64 off keeps jnp.float_ at f32; the inputs are already
-            # f32/int32, so nothing else changes.
+            # x64 is on for this backend (int64 seq lens need it),
+            # and optax's ctc_loss builds its label one-hot with jax.nn.one_hot,
+            # whose default dtype is jnp.float_ = float64 under x64.
+            # The einsum against the [B,T,vocab] log-probs then runs as an f64 GEMM:
+            # measured as the largest single op of the step
+            # (~20% of device time, plus ~7% of f32->f64 converts).
+            # Tracing with x64 off keeps jnp.float_ at f32;
+            # the inputs are already f32/int32, so nothing else changes.
             loss_raw = None
             with _x64_disabled():
                 loss_raw = optax.ctc_loss(
@@ -1595,11 +1486,9 @@ class JaxBackend(Backend[jax.Array]):
     ) -> _TT:
         """batch norm
 
-        This is the unmasked path; :class:`rf.BatchNorm` handles masking itself
-        with generic RF ops and only calls the backend when no masking is needed.
-        Written out rather than calling a library op, so that the details which decide
-        parity with PyTorch are visible: the BIASED variance normalizes,
-        while the UNBIASED one goes into the running estimate.
+        The unmasked path; :class:`rf.BatchNorm` handles masking itself.
+        Written out so that the detail deciding parity with PyTorch is visible:
+        the biased variance normalizes, the unbiased one goes into the running estimate.
         """
         if use_mask:
             raise NotImplementedError("batch_norm with masking not implemented")
@@ -1662,21 +1551,7 @@ class JaxBackend(Backend[jax.Array]):
         groups: Optional[int] = None,
         bias: Optional[Tensor] = None,
     ) -> Tuple[Tensor, Sequence[Dim]]:
-        """
-        :param source:
-        :param in_dim: input feature dim
-        :param out_dim: output feature dim
-        :param in_spatial_dims:
-        :param out_spatial_dims:
-        :param filter: [out_dim, in_dim // groups, *filter_size]
-        :param filter_size:
-        :param padding: "same", "valid", or explicit amounts
-        :param strides:
-        :param dilation_rate:
-        :param groups: depthwise conv = groups == in_dim
-        :param bias:
-        :return: (output, out_spatial_dims)
-        """
+        """conv"""
         if not out_spatial_dims:
             out_spatial_dims = rf.make_conv_out_spatial_dims(
                 in_spatial_dims=in_spatial_dims,
@@ -1691,10 +1566,12 @@ class JaxBackend(Backend[jax.Array]):
         filter_in_dim = in_dim if not groups or groups == 1 else in_dim // groups
         filter = filter.copy_transpose((out_dim, filter_in_dim) + tuple(filter_size))
         batch_dims = [d for d in source.dims if d not in (in_dim,) + tuple(in_spatial_dims)]
-        # conv_general_dilated takes the layout as dimension_numbers, so with a single batch dim the
-        # input can be fed WHERE IT LIES instead of being transposed into (N, C, *spatial) first --
-        # that transpose was a full materialised copy of the input on every call.
-        # The OUTPUT is still produced as (N, C, *spatial), which is the order this returns anyway.
+        # conv_general_dilated takes the layout as dimension_numbers,
+        # so with a single batch dim the input can be fed where it lies,
+        # instead of being transposed into (N, C, *spatial) first
+        # -- that transpose was a full materialised copy of the input on every call.
+        # The output is still produced as (N, C, *spatial),
+        # which is the order this returns anyway.
         # Several batch dims still need the merge, hence the transpose, so that path is unchanged.
         _src_dims = list(source.dims)
         if len(batch_dims) == 1 and len(set(_src_dims)) == len(_src_dims):
@@ -1749,17 +1626,7 @@ class JaxBackend(Backend[jax.Array]):
         in_spatial_dims: Sequence[Dim],
         out_spatial_dims: Optional[Sequence[Dim]] = None,
     ) -> Tuple[Tensor, Sequence[Dim]]:
-        """
-        :param source:
-        :param mode: "max" or "avg"
-        :param pool_size:
-        :param padding:
-        :param dilation_rate:
-        :param strides:
-        :param in_spatial_dims:
-        :param out_spatial_dims:
-        :return: (output, out_spatial_dims)
-        """
+        """pool"""
         if out_spatial_dims is None:
             out_spatial_dims = rf.make_conv_out_spatial_dims(
                 in_spatial_dims=in_spatial_dims,
@@ -1775,10 +1642,11 @@ class JaxBackend(Backend[jax.Array]):
         assert len(set(in_spatial_dims)) == n_spatial and all(d in dims for d in in_spatial_dims), (
             f"RF JaxBackend pool: {in_spatial_dims} must be distinct dims of {source}"
         )
-        # The window is built IN PLACE -- 1 on every non-spatial axis -- instead of transposing the
-        # spatial dims to the back first. reduce_window does not care where they sit, and the
-        # transpose was a full materialised copy of the input on every call: measured at 1.59x on
-        # the whole ConformerConvSubsample, with bit-identical output.
+        # The window is built in place -- 1 on every non-spatial axis --
+        # instead of transposing the spatial dims to the back first.
+        # reduce_window does not care where they sit,
+        # and the transpose was a full materialised copy of the input on every call:
+        # measured at 1.59x on the whole ConformerConvSubsample, with bit-identical output.
         axes = [dims.index(d) for d in in_spatial_dims]
         rank = len(dims)
         window = [1] * rank
@@ -1796,7 +1664,7 @@ class JaxBackend(Backend[jax.Array]):
         src_raw = source.raw_tensor
         dtype = src_raw.dtype
         if mode == "max":
-            # The init value must be the monoid IDENTITY (-inf), not just a very small number:
+            # The init value must be the monoid identity (-inf), not just a very small number:
             # only then does JAX lower this to reduce_window_max, which has a transpose rule.
             # With finfo.min it builds a generic reduce_window, and the backward pass then fails with
             # "Linearization failed to produce known values for all output primals".
@@ -1807,15 +1675,16 @@ class JaxBackend(Backend[jax.Array]):
         elif mode == "avg":
             assert all(d == 1 for d in window_dilation), "RF JaxBackend: dilation_rate only supported for max_pool"
             sums = jax.lax.reduce_window(src_raw, jnp.zeros((), dtype), jax.lax.add, window, window_strides, pad)
-            # divide by the number of REAL frames per window, i.e. torch's count_include_pad=False
+            # divide by the number of real frames per window, i.e. torch's count_include_pad=False
             counts = jax.lax.reduce_window(
                 jnp.ones_like(src_raw), jnp.zeros((), dtype), jax.lax.add, window, window_strides, pad
             )
             out_raw = sums / counts
         else:
             raise NotImplementedError(f"RF JaxBackend: pool mode {mode!r} not implemented")
-        # reduce_window kept the input's dim order; the RF contract (and the cross-backend parity
-        # test) is batch dims first, spatial last, so reorder HERE rather than on the input --
+        # reduce_window kept the input's dim order;
+        # the RF contract (and the cross-backend parity test) is batch dims first, spatial last,
+        # so reorder here rather than on the input --
         # the pooled output is smaller than what it was pooled from, so this copies less.
         out_dims = [out_spatial_dims[in_spatial_dims.index(d)] if d in in_spatial_dims else d for d in dims]
         out = Tensor("pool", dims=out_dims, dtype=source.dtype)
@@ -1899,7 +1768,7 @@ class JaxBackend(Backend[jax.Array]):
         """
         random. See :func:`rf.random` for details.
 
-        The drawn values do NOT match any other backend's for the same seed (different PRNG).
+        The drawn values do not match any other backend's for the same seed (different PRNG).
         Cross-backend comparisons therefore copy parameters over, they do not replay RNG streams.
         """
         assert explicit_state is None and auto_update_state is None, "RF JaxBackend: random state args not implemented"
@@ -1915,9 +1784,11 @@ class JaxBackend(Backend[jax.Array]):
             assert seed is not None
         else:
             assert seed is None
-        # The key decides where the values are drawn, and JAX refuses a computation whose arguments
-        # live on different devices. So the key and the bounds go to the requested device.
-        # SpecAugment is the case that needs this: it asks for the number of masks on the cpu
+        # The key decides where the values are drawn,
+        # and JAX refuses a computation whose arguments live on different devices.
+        # So the key and the bounds go to the requested device.
+        # SpecAugment is the case that needs this:
+        # it asks for the number of masks on the cpu
         # (to keep the data-dependent loop off the accelerator) while the data is on the gpu.
         target_device = _device_from_str(device) if device else None
         if target_device is not None:
@@ -1968,8 +1839,6 @@ class JaxBackend(Backend[jax.Array]):
     @staticmethod
     def create_parameter_raw(tensor: rf.Parameter, *, device: Optional[str] = None) -> jax.Array:
         """
-        :param tensor:
-        :param device:
         :return: parameter, zero-initialized (the initial value is set separately)
         """
         raw = jnp.zeros(tuple(d.get_dim_value() for d in tensor.dims), dtype=JaxBackend.as_dtype_raw(tensor.dtype))
@@ -1996,9 +1865,8 @@ class JaxBackend(Backend[jax.Array]):
         """
         set trainable.
 
-        Records the RESOLVED flag, which is available only here:
-        ``rf.Parameter.trainable`` returns the value as GIVEN, so None wherever unspecified,
-        and auxiliary/int params resolve to False inside the setter.
+        Records the resolved flag, available only here:
+        ``rf.Parameter.trainable`` returns the value as given, so None wherever unspecified.
         Reading the property instead put rf.BatchNorm's running stats through the optimizer.
         """
         # noinspection PyUnresolvedReferences
@@ -2018,11 +1886,7 @@ class JaxBackend(Backend[jax.Array]):
 
     @staticmethod
     def parameter_move_to(param: rf.Parameter, *, device: Optional[str] = None, dtype: Optional[str] = None):
-        """
-        :param param:
-        :param device:
-        :param dtype:
-        """
+        """to"""
         raw = param.raw_tensor
         if dtype:
             raw = raw.astype(JaxBackend.as_dtype_raw(dtype))
@@ -2041,11 +1905,7 @@ class JaxBackend(Backend[jax.Array]):
 
     @staticmethod
     def gradient(y: Tensor, x: Tensor) -> Tensor:
-        """
-        :param y:
-        :param x:
-        :return: nothing -- this cannot work on JAX
-        """
+        """gradient"""
         raise NotImplementedError(
             "RF JaxBackend: rf.gradient(y, x) has no JAX equivalent."
             " JAX has no tape, so a gradient exists only for a FUNCTION,"
@@ -2056,11 +1916,7 @@ class JaxBackend(Backend[jax.Array]):
 
     @staticmethod
     def scaled_gradient(tensor: Tensor, scale: Union[float, Tensor]) -> Tensor:
-        """
-        :param tensor:
-        :param scale:
-        :return: just the tensor, but its gradient is scaled by the given factor
-        """
+        """scaled gradient"""
         out = tensor.copy()
         out.raw_tensor = _scale_grad(out.raw_tensor, _raw(scale, out.raw_tensor.dtype))
         return out
@@ -2073,13 +1929,7 @@ class JaxBackend(Backend[jax.Array]):
         shift: Optional[Union[float, Tensor]] = None,
         scale_shift_by_sum_over_axis: Optional[Dim] = None,
     ):
-        """
-        :param x:
-        :param scale: will scale gradient by this value
-        :param shift: will shift gradient by this value
-        :param scale_shift_by_sum_over_axis: if given, will scale and shift by the sum over the given axis
-        :return: just x, but gradient in backward pass will be transformed accordingly
-        """
+        """scaled gradient ext"""
         out = x.copy()
         dtype = out.raw_tensor.dtype
         if shift is None:
@@ -2100,10 +1950,9 @@ class JaxBackend(Backend[jax.Array]):
         """
         batched matmul of a and b, see base class doc string.
 
-        Works on axis INDICES, not on dim identity, because a dim can occur twice in one tensor
-        (rf.Linear from a dim to itself, e.g. the attention output projection).
-        `get_axis_from_description` resolves which occurrence is the reduce axis (via match_priority);
-        an einsum over dim-keyed letters could not express that and would silently take a diagonal.
+        Works on axis indices, not on dim identity, because a dim can occur twice in one tensor
+        (rf.Linear from a dim to itself). `get_axis_from_description` resolves which occurrence
+        is the reduce axis; an einsum over dim-keyed letters would silently take a diagonal.
         """
         if isinstance(reduce, Dim):
             reduce = [reduce]
@@ -2264,10 +2113,8 @@ def _levenshtein(a: jax.Array, b: jax.Array, a_len: jax.Array, b_len: jax.Array)
     """
     Batched Levenshtein distance.
 
-    Written as a scan over the rows with an inner scan over the columns:
-    the recurrence needs the cell to its left, so both directions are sequential.
-    That is O(Ta * Tb) scan steps with the batch in parallel,
-    which is fine for label sequences and would not be for raw audio lengths.
+    A scan over the rows with an inner scan over the columns, as the recurrence is sequential
+    in both directions: O(Ta * Tb) scan steps, fine for labels, not for raw audio lengths.
     (The PyTorch backend calls RETURNN's native op here instead.)
 
     :param a: [B, Ta] labels
@@ -2434,7 +2281,7 @@ def _softmax(tensor: Tensor, *, axis: Dim, use_mask: bool, log: bool) -> Tensor:
         raw = jnp.where(mask, raw, -inf_value)
         # A fully masked row (a zero-length filler seq of the bound-shape regime)
         # would give NaN from (-inf) - (-inf), poisoning everything downstream.
-        # Substitute a finite uniform row BEFORE the softmax, so not even its backward sees NaN,
+        # Substitute a finite uniform row before the softmax, so not even its backward sees NaN,
         # and define the result of those rows explicitly afterwards.
         any_valid = jnp.any(mask, axis=axis_int, keepdims=True)
         raw = jnp.where(any_valid, raw, jnp.zeros_like(raw))
@@ -2465,12 +2312,10 @@ def _match_device(a, b):
     :param b:
     :return: the two, on one device: a scalar operand is moved to where the other one lives.
 
-    RETURNN keeps the dynamic sizes of dims on the CPU by design (see :func:`rf.masked_fraction_of_shape`),
-    so scalars derived from them meet device tensors constantly -- a masked reduce_mean is one line
-    of RF code that does it. PyTorch accepts that for a 0-dim operand of a pointwise op and promotes
-    it to the other one's device (measured: a 1-element 1-dim cpu tensor already raises, as does
-    torch.cat even for 0-dim); JAX rejects the whole computation. Doing the transfer here, at the one
-    place binary ops go through, keeps that RF code backend-independent, and it moves a scalar.
+    RETURNN keeps the dynamic sizes of dims on the CPU by design,
+    so scalars derived from them meet device tensors constantly (a masked reduce_mean does).
+    PyTorch promotes a 0-dim operand to the other one's device, JAX rejects the computation,
+    so the transfer happens here, at the one place binary ops go through.
     """
     if not isinstance(a, jax.Array) or not isinstance(b, jax.Array):
         return a, b
@@ -2491,7 +2336,7 @@ def _x64_disabled():
     Trace the enclosed code with x64 off, so ``jnp.float_`` is float32.
 
     jax 0.11 dropped ``jax.experimental.disable_x64``; the config flag is the remaining lever.
-    It only affects dtype canonicalization at TRACE time, which is what the callers here need.
+    It only affects dtype canonicalization at trace time, which is what the callers here need.
     """
     prev = jax.config.jax_enable_x64
     jax.config.update("jax_enable_x64", False)
