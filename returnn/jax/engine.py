@@ -108,25 +108,17 @@ class Engine(EngineBase):
         if precision:
             jax.config.update("jax_default_matmul_precision", precision)
             print(f"JAX default matmul precision: {precision}", file=log.v3)
-        # Mixed precision: the compute dtype of matmul/conv. Parameters, gradients and the
-        # optimizer stay float32, as with PyTorch AMP -- see returnn.frontend.amp for what it covers.
-        # Scoped to the step (like torch.autocast is), not set globally, so nothing outside sees it.
-        # Persistent compilation cache: one bucket costs ~35 s to compile, and the whole declared
-        # grid is compiled at startup -- which is paid again on every resubmission (the 11.9h SLURM
-        # limit splits a 100-epoch run into several). With the cache, a resubmitted run reloads the
-        # programs instead of rebuilding them, so the bucket count stops trading against restarts.
-        cache_dir = config.value("jax_compilation_cache_dir", None)
-        if cache_dir:
-            jax.config.update("jax_compilation_cache_dir", cache_dir)
-            # default 1s: our step compiles take far longer, so cache all of them
-            jax.config.update("jax_persistent_cache_min_compile_time_secs", 1.0)
-            print(f"JAX compilation cache: {cache_dir}", file=log.v3)
         # Mixed precision: the compute dtype of matmul/conv, scoped to the step.
         # Parameters, gradients and the optimizer stay float32, see returnn.frontend.amp.
         # Persistent compilation cache: a bucket costs ~35 s, and the whole grid is compiled
         # at startup, again after every resubmission (the 11.9h SLURM limit splits a run).
         # Located like the other RETURNN caches, via util.get_cache_dir() (RETURNN_CACHE_DIR),
         # whose default is node-local: point it at a shared filesystem to survive a resubmission.
+        cache_dir = config.value("jax_compilation_cache_dir", None) or f"{util.get_cache_dir()}/returnn_jax_compile"
+        jax.config.update("jax_compilation_cache_dir", cache_dir)
+        # default 1s: our step compiles take far longer, so cache all of them
+        jax.config.update("jax_persistent_cache_min_compile_time_secs", 1.0)
+        print(f"JAX compilation cache: {cache_dir}", file=log.v3)
         if self._jit_opts is not None:
             print(f"JAX engine: compiled step, {self._jit_opts}", file=log.v3)
         # Diagnostics, the same ones the PyTorch engine has, so the logs of a JAX run and a torch
