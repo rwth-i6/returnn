@@ -89,6 +89,18 @@ def batch_to_jax_raws(
             out[key] = _to_jax(value, dtype=template.dtype, device=device)
         if seq_lens is not None:
             out[f"{key}_seq_lens"] = _to_jax(seq_lens, dtype="int32", device=device)
+    # packed keys carry a flat <key>:packed buffer instead of the padded array,
+    # under a name extern_data does not have (see staticize_raws).
+    # Their seq lens come along here too: the loop above transfers lens only for keys it sees,
+    # and it never sees a packed key.
+    for key, value in raw.items():
+        if not key.endswith(":packed"):
+            continue
+        base = key[: -len(":packed")]
+        out[key] = _to_jax(value, dtype=extern_data.data[base].dtype, device=device)
+        lens = raw.get(f"{base}_seq_lens")
+        if lens is not None:
+            out[f"{base}_seq_lens"] = _to_jax(lens, dtype="int32", device=device)
     # scalar: deliberately NOT device-committed, see _to_jax
     out["batch_dim"] = jnp.asarray(int(raw["batch_dim"]), dtype=jnp.int32)
     return out
@@ -237,6 +249,8 @@ def iter_dataset_batches(
     with_complete_frac: bool = False,
     as_raws: bool = False,
     time_multiple: Union[int, Dict[str, int]] = 0,
+    static_shapes: Optional[Dict[str, Any]] = None,
+    packed_keys: Sequence[str] = (),
     **batch_opts,
 ) -> Iterator[TensorDict]:
     """
@@ -255,6 +269,9 @@ def iter_dataset_batches(
     :param as_raws: yield the raw arrays (see :func:`batch_to_jax_raws`) instead of a TensorDict.
         That is what a compiled step takes: filling the templates is part of the traced function.
     :param time_multiple: see :func:`batch_to_jax_raws`
+    :param static_shapes: bring every batch to these declared shapes on the host,
+        see :func:`staticize_raws` -- what a compiled step needs, instead of buckets
+    :param packed_keys: keys to store packed, with ``static_shapes``
     :param batch_opts: further options for Dataset.generate_batches (max_seq_length, seq_drop, ...)
     :return: one TensorDict (or raw dict, see ``as_raws``) per batch
     """
@@ -267,6 +284,8 @@ def iter_dataset_batches(
     while batches.has_more():
         (batch,) = batches.peek_next_n(1)
         raw = batch_to_raw_dict(batch, dataset=dataset, extern_data=extern_data, data_keys=data_keys)
+        if static_shapes is not None:
+            raw = staticize_raws(raw, extern_data=extern_data, opts=static_shapes, packed_keys=packed_keys)
         out = batch_to_jax_raws(raw, extern_data=extern_data, device=device, time_multiple=time_multiple)
         if not as_raws:
             out = fill_extern_data(extern_data, out)
@@ -275,6 +294,68 @@ def iter_dataset_batches(
         else:
             yield out
         batches.advance(1)
+
+
+def staticize_raws(
+    raw: Dict[str, Any],
+    *,
+    extern_data: TensorDict,
+    opts: Dict[str, Any],
+    packed_keys: Sequence[str] = (),
+) -> Dict[str, Any]:
+    """
+    Bring one batch to the DECLARED shapes, on the host, before any transfer.
+
+    A compiled step needs ONE input signature.
+    Buckets get there by rounding each batch up to the nearest declared shape;
+    bounds get there directly, as the TF and PyTorch engines do it.
+    Packed keys have no padded array at all: the seqs are concatenated into a flat buffer,
+    which is why this runs here and not in the step --
+    feeding ``[batch_size_bound, capacity, ...]`` would transfer mostly padding.
+
+    :param raw: as from :func:`batch_to_raw_dict`, NumPy
+    :param extern_data: templates
+    :param opts: ``batch_size_bound``, and optionally ``dim_capacity`` / ``packed_total_bound``
+    :param packed_keys: stored packed, as a flat ``<key>:packed`` entry
+    :return: raws with the declared shapes
+    """
+    batch_bound = opts["batch_size_bound"]
+    dim_capacity = opts.get("dim_capacity") or {}
+    total_bounds = opts.get("packed_total_bound") or {}
+    out: Dict[str, Any] = {"batch_dim": raw["batch_dim"]}
+    for key, template in extern_data.data.items():
+        if key not in raw:
+            continue
+        value = raw[key]
+        lens = raw.get(f"{key}_seq_lens")
+        if lens is None or template.dtype == "string":
+            out[key] = value
+            continue
+        n = lens.shape[0]
+        assert n <= batch_bound, f"batch has {n} seqs > batch_size_bound {batch_bound}"
+        out[f"{key}_seq_lens"] = numpy.pad(lens, (0, batch_bound - n))
+        if key in packed_keys:
+            total_bound = total_bounds.get(key)
+            assert isinstance(total_bound, int), f"jax_static_shapes: no packed_total_bound for packed key {key!r}"
+            total = int(lens.sum())
+            assert total <= total_bound, f"{key}: packed total {total} > declared bound {total_bound}"
+            flat = numpy.zeros((total_bound,) + value.shape[2:], dtype=value.dtype)
+            pos = 0
+            for i in range(n):
+                flat[pos : pos + lens[i]] = value[i, : lens[i]]
+                pos += int(lens[i])
+            out[f"{key}:packed"] = flat
+            continue
+        cap = dim_capacity.get(key)
+        assert cap is not None, (
+            f"jax_static_shapes: key {key!r} has a dynamic spatial dim but neither"
+            f" dim_capacity[{key!r}] nor packing (packed_tensors) -- set one"
+        )
+        assert value.shape[1] <= cap, f"{key}: seq len {value.shape[1]} > dim_capacity {cap}"
+        pad = [(0, batch_bound - value.shape[0]), (0, cap - value.shape[1])]
+        pad += [(0, 0)] * (value.ndim - 2)
+        out[key] = numpy.pad(value, pad)
+    return out
 
 
 def _to_jax(value: numpy.ndarray, *, dtype: str, device: Optional[str]):

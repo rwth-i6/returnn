@@ -139,19 +139,26 @@ class Engine(EngineBase):
         # one step's worth of device time, and it bounds the extra host memory to 2 batches.
         # 0 restores the serial loop, for comparing.
         self._data_prefetch = config.int("jax_data_prefetch", 2)
+        # Declared bounds instead of the bucket grid:
+        # every batch is brought to ONE signature,
+        # rather than rounded up to the nearest of many declared shapes.
+        # Same options as the TF engine's tf_static_shapes and the PyTorch one's torch_cuda_graph.
+        self._static_shapes_opts = _static_shapes_opts_from_config(config)
+        if self._static_shapes_opts is not None:
+            print(f"JAX engine: static shapes, {self._static_shapes_opts}", file=log.v3)
         # packed_tensors: the model computes on sum(lens) frames instead of n_seqs * max_len.
         # The packing itself happens inside the step (one gather per key), so the batching layer
         # only has to budget by CONTENT -- that is what packed_batch_size does.
         self._packing = packed_batch_config()
         if self._packing is not None:
             print(f"JAX engine: packed tensors, {self._packing}", file=log.v3)
-            if self._jit_opts is not None:
-                # A compiled step needs a static shape for the packed buffer, i.e. a declared
-                # capacity per packed key, which nothing here derives yet. Loud, not silent:
-                # tracing rf.pack without one would fail deep inside the model instead.
+            if self._jit_opts is not None and self._static_shapes_opts is None:
+                # A compiled step needs a static shape for the packed buffer, i.e. a declared total
+                # per packed key. Loud, not silent: tracing rf.pack without one would fail deep
+                # inside the model instead.
                 raise NotImplementedError(
-                    "JAX engine: packed_tensors together with jax_jit is not implemented yet"
-                    " (the packed dim needs a declared capacity for a static shape)"
+                    "JAX engine: packed_tensors with jax_jit needs jax_static_shapes"
+                    " (packed_total_bound per packed key), or drop jax_jit"
                 )
         amp = config.value("jax_amp", None)
         self._amp_policy: Optional[rf.AmpPolicy] = rf.AmpPolicy(compute_dtype=amp) if amp else None
@@ -519,6 +526,8 @@ class Engine(EngineBase):
             device=self._device,
             with_complete_frac=train,
             as_raws=True,
+            static_shapes=self._static_shapes_opts,
+            packed_keys=self._packed_keys(),
             time_multiple=self._jit_opts["time_multiple"] if self._jit_opts else 0,
             **{k: v for k, v in self._batch_opts.items() if k not in ("batch_size", "eval_batch_size", "max_seqs")},
         )
@@ -820,6 +829,72 @@ class Engine(EngineBase):
             new_value.raw_tensor = packed.raw_tensor
             extern_data.data[key] = new_value
 
+    def _packed_keys(self) -> List[str]:
+        """
+        :return: extern-data keys stored packed:
+            those `packed_tensors` opts in, with a dynamic spatial dim.
+            Empty when packing is off.
+        """
+        if self._packing is None:
+            return []
+        keys = []
+        for key, value in self.extern_data.data.items():
+            if packed_batch_key_opts(self._packing, key) is None:
+                continue
+            if len(value.dims) < 2 or not value.dims[1].is_dynamic():
+                continue
+            keys.append(key)
+        return keys
+
+    def _import_packed_extern_data(self, extern_data: TensorDict, batch_raws: Dict[str, Any]):
+        """
+        :param extern_data: modified in place
+        :param batch_raws: holds ``<key>:packed``, the flat buffer built on the host
+
+        The seqs arrive already concatenated (see :func:`returnn.jax.data.staticize_raws`),
+        so nothing is packed here -- the buffer is IMPORTED as packed storage.
+        The padded array was never built nor transferred, which is the point.
+        """
+        # the templates, not the filled dict:
+        # a packed key has no padded entry, so fill_extern_data skipped it, dims included
+        batch_bound = self._static_shapes_opts["batch_size_bound"]
+        capacities = self._static_shapes_opts.get("dim_capacity") or {}
+        for key, value in self.extern_data.data.items():
+            flat = batch_raws.get(f"{key}:packed")
+            if flat is None:
+                continue
+            value = value.copy_template()
+            spatial = value.dims[1]
+            if batch_dim.dyn_size_ext is None:
+                batch_dim.dyn_size_ext = Tensor(batch_dim.name or "batch", dims=[], dtype="int32")
+            # The batch is FULL at the bound, with zero-length filler seqs -- the regime the torch
+            # bound path uses (its CTC returns loss 0 for them). Carrying the true count instead
+            # would make the batch dim need masking, which ops like search_sorted refuse.
+            batch_dim.dyn_size_ext.raw_tensor = jnp.asarray(batch_bound, dtype=jnp.int32)
+            batch_dim.capacity = batch_bound
+            if spatial.dyn_size_ext is None:
+                spatial.dyn_size_ext = Tensor(spatial.name or "time", dims=[batch_dim], dtype="int32")
+            spatial.dyn_size_ext.raw_tensor = batch_raws[f"{key}_seq_lens"]
+            spatial.capacity = capacities.get(key, spatial.capacity)
+            packed_dim = Dim(int(flat.shape[0]), name=f"{spatial.name or key}:packed")
+            inner = Tensor(
+                f"{key}_packed",
+                dims=[packed_dim] + list(value.dims[2:]),
+                dtype=value.dtype,
+                sparse_dim=value.sparse_dim,
+                raw_tensor=flat,
+            )
+            imported = rf.pack_import(
+                inner,
+                batch_dim=batch_dim,
+                spatial_dim=spatial,
+                packed_dim=packed_dim,
+                feature_dim=value.feature_dim,
+            )
+            new_value = value.copy()
+            new_value.raw_tensor = imported.raw_tensor
+            extern_data.data[key] = new_value
+
     def _create_model(self, *, epoch: int, step: int):
         """
         :param epoch:
@@ -862,7 +937,11 @@ class Engine(EngineBase):
                 self._params[idx].raw_tensor = raw
             try:
                 extern_data = fill_extern_data(self.extern_data, batch_raws)
-                self._pack_extern_data(extern_data)
+                if self._static_shapes_opts is not None:
+                    # the sequences arrived already concatenated, so import instead of pack
+                    self._import_packed_extern_data(extern_data, batch_raws)
+                else:
+                    self._pack_extern_data(extern_data)
                 # traced values: wrap them, the run ctx takes an int or a Tensor.
                 # The dtype comes from the array, not assumed: a plain Python int becomes int64
                 # under x64, which this backend enables.
@@ -1269,6 +1348,27 @@ def _dim_of_seq(dim: Dim, *, batch_idx: int, batch_dim: Dim) -> Dim:
     new_dim = dim.copy()
     new_dim.dyn_size_ext = _tensor_of_seq_numpy(dim.dyn_size_ext, batch_idx=batch_idx, batch_dim=batch_dim)
     return new_dim
+
+
+def _static_shapes_opts_from_config(config: Config) -> Optional[Dict[str, Any]]:
+    """
+    :param config:
+    :return: ``jax_static_shapes``: ``batch_size_bound`` (int),
+        and optionally ``dim_capacity`` and ``packed_total_bound``, both per data key.
+
+    Same option names as the TF engine's ``tf_static_shapes``
+    and the PyTorch engine's ``torch_cuda_graph``,
+    so one set of declared bounds carries across backends.
+    """
+    opts = config.typed_value("jax_static_shapes", None)
+    if not opts:
+        return None
+    assert isinstance(opts, dict), f"jax_static_shapes: expected a dict, got {opts!r}"
+    allowed = {"batch_size_bound", "dim_capacity", "packed_total_bound"}
+    unknown = set(opts) - allowed
+    assert not unknown, f"jax_static_shapes: unknown options {sorted(unknown)}, allowed {sorted(allowed)}"
+    assert isinstance(opts.get("batch_size_bound"), int), f"jax_static_shapes: batch_size_bound required, got {opts!r}"
+    return opts
 
 
 def _batch_opts_from_config(config: Config) -> Dict[str, Any]:
