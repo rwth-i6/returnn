@@ -291,9 +291,7 @@ def test_gather_ragged_hist_after_mask():
         hist_dim = Dim(rf.zeros(batch_dims, dtype="int32"), name="hist")
         hist = rf.zeros(batch_dims + [hist_dim], dtype="int32")
         new_hist, new_hist_dim = rf.cum_concat_step(target, prev_accum=hist, axis=hist_dim)
-        hist, hist_dim = rf.nested.mask_nested(
-            (new_hist, new_hist_dim), mask=target != 0, mask_value=(hist, hist_dim)
-        )
+        hist, hist_dim = rf.nested.mask_nested((new_hist, new_hist_dim), mask=target != 0, mask_value=(hist, hist_dim))
         hist, hist_dim = rf.nested.gather_nested((hist, hist_dim), indices=backrefs)
 
         hist_dim.get_size_tensor().mark_as_output("lens", shape=(batch_dim, beam_dim))
