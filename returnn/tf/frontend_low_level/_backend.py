@@ -376,7 +376,7 @@ class TFBackend(Backend[tf.Tensor]):
         _restore_params()
         if assigned:
             # rebind to the cond OUTPUT: reads after the cond then see the branch that ran
-            param_raws = raw_res[len(raw_res) - len(assigned) :]
+            param_raws = raw_res[len(raw_res) - len(assigned):]
             raw_res = raw_res[: len(raw_res) - len(assigned)]
             for ref, raw in zip(assigned, param_raws):
                 ref.obj.raw_tensor = raw
@@ -951,7 +951,7 @@ class TFBackend(Backend[tf.Tensor]):
             targets_lens = targets_spatial_dim.dyn_size_ext.copy_compatible_to_dims_raw(batch_dims)
             batch_shape = _shape_raw(batch_dims)
             if len(batch_dims) != 1:
-                logits_raw = tf.reshape(logits_raw, _shape_raw([-1] + list(logits_raw.shape[len(batch_dims) :])))
+                logits_raw = tf.reshape(logits_raw, _shape_raw([-1] + list(logits_raw.shape[len(batch_dims):])))
                 targets_raw = tf.reshape(targets_raw, _shape_raw([-1, targets_spatial_dim]))
                 input_lens = tf.reshape(input_lens, [-1])
                 targets_lens = tf.reshape(targets_lens, [-1])
@@ -1193,7 +1193,7 @@ class TFBackend(Backend[tf.Tensor]):
             src_raw = source.raw_tensor
             if len(batch_dims) != 1:  # merge the batch dims into one
                 src_shape = TFBackend.get_shape_tuple_raw(src_raw)
-                src_raw = tf.reshape(src_raw, _shape_raw([-1] + list(src_shape[len(batch_dims) :])))
+                src_raw = tf.reshape(src_raw, _shape_raw([-1] + list(src_shape[len(batch_dims):])))
             out_shape = [tf.shape(src_raw)[0]] + [d.get_dim_value() for d in out_spatial_dims]
             out_shape += [out_dim.get_dim_value()]
             out_raw = tf.nn.conv_transpose(
@@ -1272,7 +1272,7 @@ class TFBackend(Backend[tf.Tensor]):
             src_raw = source.raw_tensor
             src_shape = TFBackend.get_shape_tuple_raw(src_raw)
             if len(batch_dims) != 1:  # merge the batch dims into one
-                src_raw = tf.reshape(src_raw, _shape_raw([-1] + list(src_shape[len(batch_dims) :])))
+                src_raw = tf.reshape(src_raw, _shape_raw([-1] + list(src_shape[len(batch_dims):])))
             if isinstance(padding, str):
                 tf_padding = padding.upper()
             else:  # explicit padding: pad here, then convolve without padding
@@ -1369,7 +1369,7 @@ class TFBackend(Backend[tf.Tensor]):
             src_shape = TFBackend.get_shape_tuple_raw(source.raw_tensor)
             # tf.nn.pool wants [batch, *spatial, channels]:
             # all non-spatial dims become the batch, and a dummy channel axis is appended
-            src_raw = tf.reshape(source.raw_tensor, _shape_raw([-1] + list(src_shape[len(rest_dims) :]) + [1]))
+            src_raw = tf.reshape(source.raw_tensor, _shape_raw([-1] + list(src_shape[len(rest_dims):]) + [1]))
             if isinstance(padding, str):
                 tf_padding = padding.upper()
             else:
@@ -1503,7 +1503,7 @@ class TFBackend(Backend[tf.Tensor]):
             # the merged block is the single -1, the other axes are taken from the raw shape,
             # so a dynamic dim needs no get_dim_value()
             src_shape = TFBackend.get_shape_tuple_raw(source.raw_tensor)
-            out_shape = list(src_shape[: len(pre_dims)]) + [-1] + list(src_shape[len(pre_dims) + len(dims) :])
+            out_shape = list(src_shape[: len(pre_dims)]) + [-1] + list(src_shape[len(pre_dims) + len(dims):])
             out.raw_tensor = _with_static_shape(tf.reshape(source.raw_tensor, _shape_raw(out_shape)), out.dims)
         return out
 
@@ -1526,13 +1526,13 @@ class TFBackend(Backend[tf.Tensor]):
         """
         assert pad_to_multiples in (None, False), "split_dims: pad_to_multiples not implemented"
         axis_ = source.get_axis_from_description(axis)
-        out_dims = source.dims[:axis_] + tuple(dims) + source.dims[axis_ + 1 :]
+        out_dims = source.dims[:axis_] + tuple(dims) + source.dims[axis_ + 1:]
         split_sizes = [d.dimension if d.dimension is not None else -1 for d in dims]
         if split_sizes.count(-1) > 1:  # one -1 at most, so fall back to the explicit sizes
             split_sizes = [d.get_dim_value() for d in dims]
         with tf_util.same_control_flow_ctx(source):
             src_shape = TFBackend.get_shape_tuple_raw(source.raw_tensor)
-            out_shape = list(src_shape[:axis_]) + split_sizes + list(src_shape[axis_ + 1 :])
+            out_shape = list(src_shape[:axis_]) + split_sizes + list(src_shape[axis_ + 1:])
             out_raw = _with_static_shape(tf.reshape(source.raw_tensor, _shape_raw(out_shape)), out_dims)
         out = Tensor("split_dims", dims=out_dims, dtype=source.dtype, sparse_dim=source.sparse_dim, raw_tensor=out_raw)
         if source.feature_dim and source.feature_dim != axis:
@@ -1944,7 +1944,7 @@ class TFBackend(Backend[tf.Tensor]):
             src_raw = source.copy_compatible_to_dims_raw(batch_dims + [indices_flat_dim] + feature_dims)
             idx_raw = tf.cast(indices.copy_compatible_to_dims_raw(batch_dims + [indices_flat_dim]), tf.int32)
             src_shape = TFBackend.get_shape_tuple_raw(src_raw)
-            feature_shape = list(src_shape[len(batch_dims) + 1 :])
+            feature_shape = list(src_shape[len(batch_dims) + 1:])
             out_size = out_flat_dim.get_dim_value()
             n_batch = tf.reduce_prod(tf.shape(idx_raw)[: len(batch_dims)]) if batch_dims else tf.constant(1)
             seg_flat = tf.reshape(
@@ -1986,7 +1986,7 @@ class TFBackend(Backend[tf.Tensor]):
             if not clip_to_valid:  # fast path: a plain slice
                 out = Tensor(
                     "gather",
-                    dims=list(source.dims[:axis_int]) + list(source.dims[axis_int + 1 :]),
+                    dims=list(source.dims[:axis_int]) + list(source.dims[axis_int + 1:]),
                     dtype=source.dtype,
                     sparse_dim=source.sparse_dim,
                 )
@@ -2148,10 +2148,11 @@ class TFBackend(Backend[tf.Tensor]):
                 value._backend_tensor_array = raw  # so _rebuild sees the same template
             return raw.ta
 
+        # noinspection shadowing-names
         def _rebuild(flat_raws) -> Any:
             """the loop vars of one iteration, as the RF structure body/cond expect"""
             out = list(flat_initial)
-            for i, raw in zip(dim_idxs, flat_raws[len(var_idxs) :]):
+            for i, raw in zip(dim_idxs, flat_raws[len(var_idxs):]):
                 # the same Dim object throughout, holding this iteration's size.
                 # Its caches (max value, seq mask, per-device copies) are the previous iteration's;
                 # the initial ones would claim extent 0 for a growing dim.
@@ -2212,6 +2213,7 @@ class TFBackend(Backend[tf.Tensor]):
             """the same tensor, with the body's fresh dims relabelled to the canonical loop dims"""
             if not isinstance(value, Tensor) or not any(d in dim_map for d in value.dims):
                 return value
+            # noinspection shadowing-names
             out = value.copy_template_new_dim_tags([dim_map.get(d, d) for d in value.dims])
             out.raw_tensor = value.raw_tensor
             return out
@@ -2839,7 +2841,6 @@ class _DeferredParam:
 # So that an rf.Parameter holding a DeferredVariable still dispatches to this backend
 # (the native dispatch consults this same table).
 register_backend_by_tensor_type(DeferredVariable, TFBackend)
-
 
 # RF activation names which TF spells differently
 _ACTIVATION_FUNC_NAME_MAP = {"neg": "negative"}
