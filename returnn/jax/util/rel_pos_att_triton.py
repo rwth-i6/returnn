@@ -34,6 +34,7 @@ import jax.numpy as jnp
 
 # The kernels, not the torch wrapper. That module imports torch at module level; torch is present in
 # every env that has this backend, but the kernels themselves touch nothing torch-specific.
+# noinspection PyProtectedMember
 from returnn.torch.util.rel_pos_att_triton import (
     _rel_pos_fwd_kernel,
     _rel_pos_bwd_kernel_delta,
