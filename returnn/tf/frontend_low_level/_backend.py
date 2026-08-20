@@ -2218,6 +2218,7 @@ class TFBackend(Backend[tf.Tensor]):
             out.raw_tensor = value.raw_tensor
             return out
 
+        # noinspection shadowing-names
         def _body(*flat_raws):
             new = body(_rebuild(flat_raws))
             tree.assert_same_structure(initial, new)
