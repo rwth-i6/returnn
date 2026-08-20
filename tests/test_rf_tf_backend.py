@@ -1545,6 +1545,10 @@ def test_engine_forward_with_callback():
 
     seen = []
 
+    def _dyn_size(dim: Dim):
+        """:return: the dim's size for this sequence, None if it is static"""
+        return None if dim.dyn_size_ext is None else int(dim.dyn_size_ext.raw_tensor)
+
     class _Callback(ForwardCallbackIface):
         def __init__(self):
             self.model = None
@@ -1553,10 +1557,14 @@ def test_engine_forward_with_callback():
             self.model = model
 
         def process_seq(self, *, seq_tag: str, outputs: TensorDict):
+            # dims[0] is the spatial dim of both outputs, the batch dim being gone here
             seen.append(
                 (
                     seq_tag,
-                    {k: (v.raw_tensor.shape, tuple(d.dimension for d in v.dims)) for k, v in outputs.data.items()},
+                    {
+                        k: (v.raw_tensor.shape, v.dims[0].dimension, _dyn_size(v.dims[0]))
+                        for k, v in outputs.data.items()
+                    },
                 )
             )
 
@@ -1608,9 +1616,12 @@ def test_engine_forward_with_callback():
     # not data.get_tag(i): the dataset only keeps the currently loaded seqs, and iteration is over
     assert tags == ["seq-%i" % i for i in range(data.num_seqs)], tags
     for tag, shapes in entries:
-        # batch dim gone, padding cut off: the dims are static and match the raw shape
-        assert shapes["logits"] == ((seq_len, n_classes_dim), (seq_len, n_classes_dim)), (tag, shapes)
-        assert shapes["best"] == ((seq_len,), (seq_len,)), (tag, shapes)
+        # batch dim gone and the padding cut off, but the spatial dim stays DYNAMIC,
+        # as in the PyTorch engine:
+        # the callback reads the seq length off dyn_size_ext, so a static dim
+        # would leave the output without any length at all.
+        assert shapes["logits"] == ((seq_len, n_classes_dim), None, seq_len), (tag, shapes)
+        assert shapes["best"] == ((seq_len,), None, seq_len), (tag, shapes)
 
 
 def test_engine_train_extern_data_dim_tags_without_size_template():
