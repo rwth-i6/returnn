@@ -1000,6 +1000,46 @@ class JaxBackend(Backend[jax.Array]):
         return out
 
     @staticmethod
+    def search_sorted(
+        sorted_seq: Tensor, values: Tensor, *, axis: Dim, side: str = "left", out_dtype: str = "int32"
+    ) -> Tensor:
+        """search sorted"""
+        if out_dtype not in ("int32", "int64"):
+            raise NotImplementedError(f"search_sorted: out_dtype {out_dtype} not supported")
+        if axis not in sorted_seq.dims:
+            raise ValueError(f"search_sorted: axis {axis} not in sorted_seq {sorted_seq}")
+        if axis.need_masking() and axis.dyn_size_ext is not None and axis.dyn_size_ext.batch_ndim > 0:
+            # A per-batch-entry length would mean a different sorted sequence per entry,
+            # which this does not handle.
+            # A scalar length is fine: the tail entries are junk,
+            # and every caller here treats the result there as meaningless (see _dev_seq_local).
+            # need_masking() alone cannot decide this:
+            # in the bound regime it is True for ANY dynamic dim.
+            raise NotImplementedError(f"search_sorted: per-entry dynamic axis {axis} not supported")
+        sorted_seq_dims = [dim for dim in sorted_seq.dims if dim != axis] + [axis]
+        for dim in sorted_seq_dims[:-1]:
+            if dim not in values.dims:
+                raise ValueError(f"search_sorted: dim {dim} in sorted_seq {sorted_seq} but not in values {values}")
+        values_rem_dims = [dim for dim in values.dims if dim not in sorted_seq_dims[:-1]]
+        values_dims = sorted_seq_dims[:-1] + values_rem_dims
+        sorted_seq_raw = sorted_seq.copy_compatible_to_dims_raw(sorted_seq_dims)
+        values_raw = values.copy_compatible_to_dims_raw(values_dims)
+        if len(values_rem_dims) != 1:
+            values_raw = values_raw.reshape(values_raw.shape[: len(sorted_seq_dims[:-1])] + (-1,))
+        out = Tensor("search_sorted", dims=sorted_seq_dims[:-1] + values_rem_dims, dtype=out_dtype, sparse_dim=axis)
+        # jnp.searchsorted takes a 1-D sequence, so the shared dims are vmapped over,
+        # where torch.searchsorted batches them itself
+        search = partial(jnp.searchsorted, side=side)
+        for _ in sorted_seq_dims[:-1]:
+            search = jax.vmap(search, in_axes=(0, 0))
+        out_raw = search(sorted_seq_raw, values_raw)
+        out_raw = out_raw.astype(jnp.int32 if out_dtype == "int32" else jnp.int64)
+        if len(values_rem_dims) != 1:
+            out_raw = out_raw.reshape([dim.get_dim_value() for dim in out.dims])
+        out.raw_tensor = out_raw
+        return out
+
+    @staticmethod
     def is_finite(x: Tensor) -> Tensor:
         """is finite"""
         out = x.copy_template("is_finite", dtype="bool")
