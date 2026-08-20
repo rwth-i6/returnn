@@ -1018,7 +1018,7 @@ def main():
             # optional deps, imported behind guards / lazily:
             ("PyUnresolvedReferencesInspection", r"^Module '(?:transformers|load_file)' not found"),
             ("PyUnresolvedReferencesInspection", r"^Unresolved reference 'safetensors'"),
-            ("PyUnresolvedReferencesInspection", r"^No module named '(?:orbax|seaborn|tensor2tensor)'"),
+            ("PyUnresolvedReferencesInspection", r"^No module named '(?:orbax|seaborn|tensor2tensor|jax_triton)'"),
             # secondary per-name findings on the same guarded imports (tools/import-t2t-model.py,
             # seaborn's light_palette): flare nondeterministically with import resolution, 0 -> 9
             # between same-env CI runs (2026-08-19); same idiom as the safetensors entry above
