@@ -1106,8 +1106,10 @@ def _seq_from_batch(template: Tensor, raw: numpy.ndarray, seq_idx: int, sizes: D
     :param sizes: per dynamic dim, its size per sequence
     :return: that row, without the batch dim and with the padding cut off
 
-    The callback gets one sequence at a time, so the dynamic dims become static here
-    (their value for this sequence), as they do in the PyTorch engine.
+    The dims stay dynamic, only their sizes lose the batch dim, as in the PyTorch engine
+    (see _get_dim_tag_wo_batch there).
+    The callback reads the seq lengths from dyn_size_ext,
+    and they can still differ per beam for one sequence.
     """
     if batch_dim not in template.dims:
         raise Exception(f"forward output {template} has no batch dim")
@@ -1115,13 +1117,23 @@ def _seq_from_batch(template: Tensor, raw: numpy.ndarray, seq_idx: int, sizes: D
     value = numpy.take(raw, seq_idx, axis=batch_axis)
     dims = []
     for axis, dim in enumerate([d for i, d in enumerate(template.dims) if i != batch_axis]):
-        lens = sizes.get(dim)
-        if lens is None:
+        raw_size = sizes.get(dim)
+        if raw_size is None:
             dims.append(dim)
             continue
-        size = int(lens[seq_idx])
-        value = value[(slice(None),) * axis + (slice(0, size),)]
-        dims.append(Dim(size, name=dim.name or "spatial"))
+        size_template = dim.dyn_size_ext
+        # asarray: taking from a 1-D size gives a numpy scalar, but a Tensor needs an array
+        seq_size = numpy.asarray(numpy.take(raw_size, seq_idx, axis=size_template.dims.index(batch_dim)))
+        new_dim = dim.copy()
+        new_dim.dyn_size_ext = Tensor(
+            size_template.name,
+            dims=[d for d in size_template.dims if d != batch_dim],
+            dtype=size_template.dtype,
+            raw_tensor=seq_size,
+        )
+        # the buffer must still cover the longest of them, e.g. over the beam
+        value = value[(slice(None),) * axis + (slice(0, int(numpy.max(seq_size))),)]
+        dims.append(new_dim)
     out = Tensor(template.name, dims=dims, dtype=template.dtype, sparse_dim=template.sparse_dim)
     out.raw_tensor = value
     return out
