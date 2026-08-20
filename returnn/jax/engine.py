@@ -864,9 +864,10 @@ class Engine(EngineBase):
             if flat is None:
                 continue
             value = value.copy_template()
-            spatial = value.dims[1]
+            spatial: Dim = value.dims[1]
             if batch_dim.dyn_size_ext is None:
-                batch_dim.dyn_size_ext = Tensor(batch_dim.name or "batch", dims=[], dtype="int32")
+                batch_name: str = batch_dim.name or "batch"
+                batch_dim.dyn_size_ext = Tensor(batch_name, dims=[], dtype="int32")
             # The batch is FULL at the bound, with zero-length filler seqs -- the regime the torch
             # bound path uses (its CTC returns loss 0 for them). Carrying the true count instead
             # would make the batch dim need masking, which ops like search_sorted refuse.
