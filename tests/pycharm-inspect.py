@@ -645,6 +645,19 @@ def run_inspect(pycharm_dir, src_dir, skip_pycharm_inspect=False, scope_dir=None
         if scope_dir:
             cmd += ["-d", "%s/%s" % (src_dir, scope_dir)]
         env = dict(os.environ)
+        vmopts_fn = "%s/pycharm-inspect.vmoptions" % out_tmp_dir
+        with open("%s/bin/pycharm64.vmoptions" % pycharm_dir) as f_in, open(vmopts_fn, "w") as f_out:
+            f_out.write(f_in.read())
+            # bigger thread stack: the default (~1m) overflowed on returnn/jax/engine.py
+            # (java.lang.StackOverflowError -> inspection ABORTED on the file 2026-08-20);
+            # deep type-inference recursion needs more, 4m is plenty
+            f_out.write("-Xss4m\n")
+            # extra JVM options for experiments, whitespace-separated
+            # (e.g. -Djava.util.concurrent.ForkJoinPool.common.parallelism=1
+            #  to serialize the concurrent inspection engine when chasing per-file races)
+            for opt in os.environ.get("RETURNN_PYCHARM_INSPECT_VM_EXTRA", "").split():
+                f_out.write(opt + "\n")
+        env["PYCHARM_VM_OPTIONS"] = vmopts_fn
         if os.environ.get("PYCHARM_INSPECT_CONFIG_DIR"):
             # match the env-override dirs of setup_pycharm_python_interpreter:
             # point the IDE itself at them via a properties file (PYCHARM_PROPERTIES)
@@ -654,23 +667,6 @@ def run_inspect(pycharm_dir, src_dir, skip_pycharm_inspect=False, scope_dir=None
                 if os.environ.get("PYCHARM_INSPECT_SYSTEM_DIR"):
                     f.write("idea.system.path=%s\n" % os.environ["PYCHARM_INSPECT_SYSTEM_DIR"])
             env["PYCHARM_PROPERTIES"] = props_fn
-            # ... and pin the vmoptions: otherwise the IDE ALSO loads the user's real
-            # pycharm64.vmoptions (jb.vmOptionsFile), whose -Xmx comes last and WINS
-            # (observed: our 8000m silently reduced to the user's 3072m -> indexing
-            # under-provisioned -> core torch members unresolved).
-            vmopts_fn = "%s/pycharm-inspect.vmoptions" % out_tmp_dir
-            with open("%s/bin/pycharm64.vmoptions" % pycharm_dir) as f_in, open(vmopts_fn, "w") as f_out:
-                f_out.write(f_in.read())
-                # bigger thread stack: the default (~1m) overflowed on returnn/jax/engine.py
-                # (java.lang.StackOverflowError -> inspection ABORTED on the file 2026-08-20);
-                # deep type-inference recursion needs more, 4m is plenty
-                f_out.write("-Xss4m\n")
-                # extra JVM options for experiments, whitespace-separated
-                # (e.g. -Djava.util.concurrent.ForkJoinPool.common.parallelism=1
-                #  to serialize the concurrent inspection engine when chasing per-file races)
-                for opt in os.environ.get("RETURNN_PYCHARM_INSPECT_VM_EXTRA", "").split():
-                    f_out.write(opt + "\n")
-            env["PYCHARM_VM_OPTIONS"] = vmopts_fn
         # Headless index/skeleton prebuild (the remote-dev "warmup" command) BEFORE inspecting:
         # inspect.sh otherwise analyzes files concurrently with indexing the site-packages
         # (torch alone is huge), and files analyzed before the relevant index part is complete
