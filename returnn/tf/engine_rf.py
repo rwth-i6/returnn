@@ -1116,6 +1116,7 @@ def _seq_from_batch(template: Tensor, raw: numpy.ndarray, seq_idx: int, sizes: D
     batch_axis = template.dims.index(batch_dim)
     value = numpy.take(raw, seq_idx, axis=batch_axis)
     dims = []
+    dim_map = {}  # replaced dims, to map the feature dim below
     for axis, dim in enumerate([d for i, d in enumerate(template.dims) if i != batch_axis]):
         raw_size = sizes.get(dim)
         if raw_size is None:
@@ -1133,8 +1134,12 @@ def _seq_from_batch(template: Tensor, raw: numpy.ndarray, seq_idx: int, sizes: D
         )
         # the buffer must still cover the longest of them, e.g. over the beam
         value = value[(slice(None),) * axis + (slice(0, int(numpy.max(seq_size))),)]
+        dim_map[dim] = new_dim
         dims.append(new_dim)
     out = Tensor(template.name, dims=dims, dtype=template.dtype, sparse_dim=template.sparse_dim)
+    if template.feature_dim is not None:
+        # a fresh Tensor does not infer it, and consumers assert on it (collect_model_dataset_stats)
+        out.feature_dim = dim_map.get(template.feature_dim, template.feature_dim)
     out.raw_tensor = value
     return out
 
