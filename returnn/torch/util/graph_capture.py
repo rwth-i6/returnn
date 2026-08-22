@@ -1288,12 +1288,57 @@ class GraphCapturedTrainStep:
         # step_core computes the grads itself, so this is ONE inference-style graph,
         # never fw/bwd-partitioned; buffer lifetimes are Inductor memory planning.
         # (For the partitioned alternative see opts "partitioned".)
+        if tuple(int(v) for v in torch.__version__.split("+")[0].split(".")[:2]) >= (2, 12):
+            # torch >= 2.12: compile_fx's compat wrapper declares _boxed_call=True
+            # but re-wraps an already-boxed args list, so the generated runner sees [[args]];
+            # call it star-unpacked instead, while the shim stays boxed towards aot_function.
+            _compile_fx_raw = backend
+
+            def _compile_fx_call_unboxed(gm, example_inputs):
+                """compile via compile_fx, call the result star-unpacked"""
+                compiled = _compile_fx_raw(gm, example_inputs)
+
+                def _call(args):
+                    return compiled(*args)
+
+                _call._boxed_call = True
+                return _call
+
+            backend = _compile_fx_call_unboxed
+            # torch >= 2.12 also lifts closed-over tensors into runtime args of the generated code
+            # instead of baking them as graph constants, and raw aot_function does not supply them;
+            # pass the buffers as explicit trace inputs, like the partitioned mode above.
+            data_keys = sorted(self._data_bufs)
+            lens_keys = sorted(self._lens_bufs)
+            self._partitioned_buf_keys = (data_keys, lens_keys)
+            n_params = len(orig_raws)
+
+            def step_core_buf_inputs_v212(all_raws):
+                """step_core with the closure buffers swapped for the passed trace inputs"""
+                bufs = all_raws[n_params:]
+                data_ph = bufs[: len(data_keys)]
+                lens_ph = bufs[len(data_keys) : len(data_keys) + len(lens_keys)]
+                saved = (dict(self._data_bufs), dict(self._lens_bufs), self._step_t.raw_tensor)
+                try:
+                    for k, t in zip(data_keys, data_ph):
+                        self._data_bufs[k] = t
+                    for k, t in zip(lens_keys, lens_ph):
+                        self._lens_bufs[k] = t
+                    self._step_t.raw_tensor = bufs[-1]
+                    return step_core(all_raws[:n_params])
+                finally:
+                    self._data_bufs.update(saved[0])
+                    self._lens_bufs.update(saved[1])
+                    self._step_t.raw_tensor = saved[2]
+
+            return aot_function(step_core_buf_inputs_v212, fw_compiler=backend)
         return aot_function(step_core, fw_compiler=backend)
 
     def _compiled_call_args(self, raws: List[torch.Tensor]) -> List[torch.Tensor]:
         """
         The compiled step's runtime inputs: the param raws,
-        plus (partitioned mode) the data/lens buffers and the step tensor.
+        plus (partitioned mode, or any mode on torch >= 2.12) the data/lens buffers
+        and the step tensor.
         These are closure state of step_core.
         aot_function bakes closed-over tensors as graph CONSTANTS,
         and compile_fx_inner constant-folds them
