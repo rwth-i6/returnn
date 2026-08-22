@@ -1445,7 +1445,9 @@ def test_masked_select_scatter_nested_roundtrip():
         out.mark_as_default_output(shape=[batch_dim, time_dim, in_dim])
         data.mark_as_output("data_ref", shape=[batch_dim, time_dim, in_dim])
 
-    outputs = run_model(extern_data, lambda **_kwargs: rf.Module(), _forward_step, test_single_batch_entry=False)
+    outputs = run_model(
+        extern_data, lambda **_kwargs: rf.Module(), _forward_step, test_single_batch_entry=False, test_tensorflow=False
+    )
     assert np.allclose(outputs["output"].raw_tensor, outputs["data_ref"].raw_tensor)
 
 
@@ -1482,7 +1484,9 @@ def test_masked_scatter_nested_select_dim_passthrough_other_backup_dim():
         expected = rf.where(mask, time_dim.get_size_tensor(), other_dim.get_size_tensor())
         rf.cast(out_dim.get_size_tensor() - expected, "int32").mark_as_output("size_diff", shape=[batch_dim])
 
-    outputs = run_model(extern_data, lambda **_kwargs: rf.Module(), _forward_step, test_single_batch_entry=False)
+    outputs = run_model(
+        extern_data, lambda **_kwargs: rf.Module(), _forward_step, test_single_batch_entry=False, test_tensorflow=False
+    )
     assert not outputs["size_diff"].raw_tensor.any(), f"merged sizes wrong: {outputs['size_diff'].raw_tensor}"
 
 
@@ -1534,5 +1538,7 @@ def test_masked_scatter_nested_two_branch_merge_via_stub():
         expected = rf.where(mask_a, time_a_dim.get_size_tensor(), time_b_dim.get_size_tensor())
         rf.cast(out_dim.get_size_tensor() - expected, "int32").mark_as_output("size_diff", shape=[batch_dim])
 
-    outputs = run_model(extern_data, lambda **_kwargs: rf.Module(), _forward_step, test_single_batch_entry=False)
+    outputs = run_model(
+        extern_data, lambda **_kwargs: rf.Module(), _forward_step, test_single_batch_entry=False, test_tensorflow=False
+    )
     assert not outputs["size_diff"].raw_tensor.any(), f"merged sizes wrong: {outputs['size_diff'].raw_tensor}"
