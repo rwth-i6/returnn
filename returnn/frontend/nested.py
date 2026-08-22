@@ -354,6 +354,7 @@ def _masked_scatter_merge_dims(
         assert isinstance(backup, Dim)
         # This is slightly more complex than in the _masked_select case:
         # We need to merge the s and backup depending on the mask.
+        s_packed = s
         if s in reverse_dim_map:
             s = reverse_dim_map[s]
         if s == backup:
@@ -365,7 +366,7 @@ def _masked_scatter_merge_dims(
         assert backup not in merged_dim_map, f"nested masked_scatter: mismatch of s {s} vs backup {backup}"
         # Note: s/backup might even be static dims.
         new_size = _masked_scatter(
-            s.get_size_tensor(),
+            s_packed.get_size_tensor(),
             backup.get_size_tensor(),
             mask=mask,
             dims=dims,
@@ -374,10 +375,11 @@ def _masked_scatter_merge_dims(
             merged_dim_map=merged_dim_map,
         )
         assert new_size.dims_set == (
-            (s.get_size_tensor().dims_set | backup.get_size_tensor().dims_set) - {in_dim}
+            (s_packed.get_size_tensor().dims_set | backup.get_size_tensor().dims_set) - {in_dim}
         ) | set(dims)
         new_dim = Dim(new_size, name=backup.name)
         merged_dim_map[s] = new_dim
+        merged_dim_map[s_packed] = new_dim
         merged_dim_map[backup] = new_dim
         return new_dim
     # everything else ignored at this stage
@@ -402,15 +404,14 @@ def _masked_scatter(
         if in_dim not in s.dims:
             s = rf.expand_dim(s, in_dim)
         # Do the reverse of _masked_select above.
-        # First replace the dims back.
-        if any(d in reverse_dim_map for d in s.dims):
-            for d in s.dims:
-                if d in reverse_dim_map:
-                    s = rf.replace_dim_v2(s, in_dim=d, out_dim=reverse_dim_map[d], allow_shrink=False)
-        # We also might need to replace newly merged dims, both in s and backup.
+        # Replace the dims back, preferring a merged dim when the dim is in both maps:
+        # reverse_dim_map would map it to the unpacked dim, which does not fit the still-packed s.
         for d in s.dims:
             if d in merged_dim_map:
                 s = rf.replace_dim_v2(s, in_dim=d, out_dim=merged_dim_map[d])
+            elif d in reverse_dim_map:
+                s = rf.replace_dim_v2(s, in_dim=d, out_dim=reverse_dim_map[d], allow_shrink=False)
+        # The backup might also carry newly merged dims.
         for d in backup.dims:
             if d in merged_dim_map:
                 backup = rf.replace_dim_v2(backup, in_dim=d, out_dim=merged_dim_map[d])

@@ -1417,3 +1417,122 @@ def test_replace_dim_v2_bool():
         cond_ext.mark_as_default_output(shape=(batch_dim, time_dim_ext))
 
     run_model(extern_data, lambda *, epoch, step: rf.Module(), _forward_step, test_tensorflow=False)
+
+
+def test_masked_select_scatter_nested_roundtrip():
+    time_dim = Dim(Tensor("time", [batch_dim], dtype="int32"))
+    in_dim = Dim(5, name="in")
+    extern_data = TensorDict({"data": Tensor("data", [batch_dim, time_dim, in_dim], dtype="float32")})
+
+    # noinspection PyShadowingNames
+    def _forward_step(*, extern_data: TensorDict, **_kwargs):
+        data = extern_data["data"]
+        # Every other batch entry, so the selection is never empty and never everything.
+        mask = rf.range_over_dim(batch_dim) % 2 == 0
+        (sel, sel_time_dim), sel_batch_dim, sel_dim_map = rf.nested.masked_select_nested(
+            (data, time_dim), mask=mask, mask_cpu=mask, dims=[batch_dim]
+        )
+        out, out_time_dim = rf.nested.masked_scatter_nested(
+            (sel, sel_time_dim),
+            (data, time_dim),
+            mask=mask,
+            mask_cpu=mask,
+            dims=[batch_dim],
+            in_dim=sel_batch_dim,
+            masked_select_dim_map=sel_dim_map,
+        )
+        assert out_time_dim == time_dim, f"roundtrip changed the spatial dim: {out_time_dim} vs {time_dim}"
+        out.mark_as_default_output(shape=[batch_dim, time_dim, in_dim])
+        data.mark_as_output("data_ref", shape=[batch_dim, time_dim, in_dim])
+
+    outputs = run_model(extern_data, lambda **_kwargs: rf.Module(), _forward_step, test_single_batch_entry=False)
+    assert np.allclose(outputs["output"].raw_tensor, outputs["data_ref"].raw_tensor)
+
+
+def test_masked_scatter_nested_select_dim_passthrough_other_backup_dim():
+    time_dim = Dim(Tensor("time", [batch_dim], dtype="int32"))
+    other_dim = Dim(Tensor("other", [batch_dim], dtype="int32"))
+    in_dim = Dim(5, name="in")
+    extern_data = TensorDict(
+        {
+            "data": Tensor("data", [batch_dim, time_dim, in_dim], dtype="float32"),
+            "backup": Tensor("backup", [batch_dim, other_dim, in_dim], dtype="float32"),
+        }
+    )
+
+    # noinspection PyShadowingNames
+    def _forward_step(*, extern_data: TensorDict, **_kwargs):
+        data = extern_data["data"]
+        backup = extern_data["backup"]
+        mask = rf.range_over_dim(batch_dim) % 2 == 0
+        (sel, sel_time_dim), sel_batch_dim, sel_dim_map = rf.nested.masked_select_nested(
+            (data, time_dim), mask=mask, mask_cpu=mask, dims=[batch_dim]
+        )
+        out, out_dim = rf.nested.masked_scatter_nested(
+            (sel, sel_time_dim),
+            (backup, other_dim),
+            mask=mask,
+            mask_cpu=mask,
+            dims=[batch_dim],
+            in_dim=sel_batch_dim,
+            masked_select_dim_map=sel_dim_map,
+        )
+        out.mark_as_default_output(shape=[batch_dim, out_dim, in_dim])
+        # each row keeps its own branch's length
+        expected = rf.where(mask, time_dim.get_size_tensor(), other_dim.get_size_tensor())
+        rf.cast(out_dim.get_size_tensor() - expected, "int32").mark_as_output("size_diff", shape=[batch_dim])
+
+    outputs = run_model(extern_data, lambda **_kwargs: rf.Module(), _forward_step, test_single_batch_entry=False)
+    assert not outputs["size_diff"].raw_tensor.any(), f"merged sizes wrong: {outputs['size_diff'].raw_tensor}"
+
+
+def test_masked_scatter_nested_two_branch_merge_via_stub():
+    time_a_dim = Dim(Tensor("time_a", [batch_dim], dtype="int32"))
+    time_b_dim = Dim(Tensor("time_b", [batch_dim], dtype="int32"))
+    in_dim = Dim(3, name="in")
+    extern_data = TensorDict(
+        {
+            "a": Tensor("a", [batch_dim, time_a_dim, in_dim], dtype="float32"),
+            "b": Tensor("b", [batch_dim, time_b_dim, in_dim], dtype="float32"),
+        }
+    )
+
+    # noinspection PyShadowingNames
+    def _forward_step(*, extern_data: TensorDict, **_kwargs):
+        a = extern_data["a"]
+        b = extern_data["b"]
+        mask_a = rf.range_over_dim(batch_dim) % 2 == 0
+        mask_b = rf.logical_not(mask_a)
+        (sel_a, sel_a_dim), a_bdim, sel_map_a = rf.nested.masked_select_nested(
+            (a, time_a_dim), mask=mask_a, mask_cpu=mask_a, dims=[batch_dim]
+        )
+        (sel_b, sel_b_dim), b_bdim, sel_map_b = rf.nested.masked_select_nested(
+            (b, time_b_dim), mask=mask_b, mask_cpu=mask_b, dims=[batch_dim]
+        )
+        stub_dim = Dim(rf.zeros([batch_dim], dtype="int32", device="cpu"), name="merge_stub")
+        stub = rf.zeros([batch_dim, stub_dim, in_dim], dtype=a.dtype)
+        half, half_dim = rf.nested.masked_scatter_nested(
+            (sel_a, sel_a_dim),
+            (stub, stub_dim),
+            mask=mask_a,
+            mask_cpu=mask_a,
+            dims=[batch_dim],
+            in_dim=a_bdim,
+            masked_select_dim_map=sel_map_a,
+        )
+        out, out_dim = rf.nested.masked_scatter_nested(
+            (sel_b, sel_b_dim),
+            (half, half_dim),
+            mask=mask_b,
+            mask_cpu=mask_b,
+            dims=[batch_dim],
+            in_dim=b_bdim,
+            masked_select_dim_map=sel_map_b,
+        )
+        out.mark_as_default_output(shape=[batch_dim, out_dim, in_dim])
+        # each row takes the length of whichever branch it came from
+        expected = rf.where(mask_a, time_a_dim.get_size_tensor(), time_b_dim.get_size_tensor())
+        rf.cast(out_dim.get_size_tensor() - expected, "int32").mark_as_output("size_diff", shape=[batch_dim])
+
+    outputs = run_model(extern_data, lambda **_kwargs: rf.Module(), _forward_step, test_single_batch_entry=False)
+    assert not outputs["size_diff"].raw_tensor.any(), f"merged sizes wrong: {outputs['size_diff'].raw_tensor}"
