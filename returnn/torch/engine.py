@@ -257,9 +257,19 @@ class Engine(EngineBase):
                 "torch_cuda_graph: grad accumulation not supported"
             )
             assert self._grad_scaler is None, "torch_cuda_graph: grad scaler not supported"
-            assert self._ddp_pt_model is None and not self._torch_distributed_ctx, (
-                "torch_cuda_graph: distributed training not supported"
+            # DDP reduces grads via autograd hooks during backward.
+            # The compiled step returns the grads instead, so those hooks never fire.
+            # The reduce types without a DDP wrap are fine.
+            assert self._ddp_pt_model is None, (
+                "torch_cuda_graph: DistributedDataParallel not supported, use reduce_type 'grad_explicit' or 'param'"
             )
+            # "param" syncs after the optimizer step, outside the compiled region, so it needs nothing.
+            # "grad_explicit" reduces between step and optimizer, so the optimizer cannot be in-graph.
+            if self._torch_distributed_ctx and self._torch_distributed_ctx.reduce_type() == "grad_explicit":
+                assert not self._graph_capture_opts.get("capture_optimizer", False), (
+                    "torch_cuda_graph: capture_optimizer with reduce_type 'grad_explicit' is not supported,"
+                    " the grad reduce must run between the step and the optimizer"
+                )
             self._graph_capture = graph_capture.GraphCapturedTrainStep(
                 opts=self._graph_capture_opts,
                 extern_data_template=self.extern_data,
@@ -610,6 +620,12 @@ class Engine(EngineBase):
                             self._grad_scaler.scale(total_loss.raw_tensor).backward()
                         else:
                             total_loss.raw_tensor.backward()
+
+                # The grads are complete here, and the optimizer step follows,
+                # so this is where they get averaged over the ranks.
+                if perform_update_step and self._torch_distributed_ctx:
+                    with record_function("reduce_grads"):
+                        self._torch_distributed_ctx.maybe_reduce_grads(module=self._pt_model)
 
                 # only update the weights when every gradient accumulation loop ends
                 # (under graph capture with capture_optimizer, the update is inside the graph)

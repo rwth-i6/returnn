@@ -69,6 +69,8 @@ class DistributedContext:
             _logger.info(f"reduce_type param: param_sync_step {self._param_sync_step}")
         elif self._reduce_type == "grad":
             _logger.info("reduce_type grad")
+        elif self._reduce_type == "grad_explicit":
+            _logger.info("reduce_type grad_explicit")
         else:
             raise ValueError(f"invalid reduce_type {self._reduce_type!r}")
 
@@ -119,7 +121,7 @@ class DistributedContext:
         :param module: original module
         :return: potentially wrapped module
         """
-        if self._reduce_type == "param":
+        if self._reduce_type in ("param", "grad_explicit"):
             return None
         assert self._reduce_type == "grad"
         cls = self._opts.get("class", DistributedDataParallel)
@@ -132,12 +134,38 @@ class DistributedContext:
             **kwargs,
         )
 
+    def reduce_type(self) -> str:
+        """reduce type"""
+        return self._reduce_type
+
+    def maybe_reduce_grads(self, *, module: torch.nn.Module):
+        """
+        Average the grads over all ranks, for reduce_type "grad_explicit". No-op otherwise.
+
+        DistributedDataParallel does this via autograd hooks during backward.
+        A compiled or captured step returns the grads instead, so those hooks never fire.
+        Call this once the grads are complete, before the optimizer step.
+
+        :param module: to take the params (and their grads) from
+        """
+        if self._reduce_type != "grad_explicit":
+            return
+        grads = [p.grad for p in module.parameters() if p.grad is not None]
+        if not grads:
+            return
+        # One flat buffer: thousands of small allreduces would be latency-bound.
+        flat = torch._utils._flatten_dense_tensors(grads)
+        torch.distributed.all_reduce(flat, op=torch.distributed.ReduceOp.SUM)
+        flat /= self._size
+        for grad, reduced in zip(grads, torch._utils._unflatten_dense_tensors(flat, grads)):
+            grad.copy_(reduced)
+
     def should_sync_now(self, *, epoch_step_idx: int) -> bool:
         """
         :param epoch_step_idx: current step index
         :return: whether to sync the training processes in this step
         """
-        if self._reduce_type == "grad":
+        if self._reduce_type in ("grad", "grad_explicit"):
             return True
         elif self._reduce_type == "param":
             return (epoch_step_idx % self._param_sync_step) == (self._param_sync_step - 1)
