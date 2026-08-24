@@ -59,6 +59,7 @@ __all__ = [
     "top_k_mask",
     "top_p_mask",
     "repeat",
+    "limit_repeats",
     "expand_make_non_empty",
     "real_as_complex",
     "complex_as_real",
@@ -1481,7 +1482,12 @@ def top_p_mask(
 
 
 def repeat(
-    values: Tensor, *, in_spatial_dim: Dim, repeats: Tensor, out_spatial_dim: Optional[Dim] = None
+    values: Tensor,
+    *,
+    in_spatial_dim: Dim,
+    repeats: Tensor,
+    out_spatial_dim: Optional[Dim] = None,
+    max_len_factor: Optional[int] = None,
 ) -> Tuple[Tensor, Dim]:
     """
     Repeats certain elements in a tensor along a given spatial dimension.
@@ -1493,32 +1499,70 @@ def repeat(
     :param in_spatial_dim:
     :param repeats: [common..., repeats..., in_spatial_dim] -> int32 durations / number of repetitions for each element
     :param out_spatial_dim:
+    :param max_len_factor: bound the expansion,
+        so the output stays within ``max_len_factor * in_spatial_dim``,
+        which out_spatial_dim then declares as its capacity.
+        A sequence over the bound has all its repeats scaled by one factor,
+        keeping their ratios; rounding is down, so elements can drop out.
     :return: expanded_values: [common..., values..., repeats..., out_spatial_dim], out_spatial_dim
     """
     # Similar to masked_select
     repeats = repeats.copy_masked(0, dims=[in_spatial_dim])
-    idxs = rf.cumsum(repeats, spatial_dim=in_spatial_dim)  # [batch...,in_spatial_dim] -> idx in out_spatial_dim + 1
-    new_size = rf.gather(idxs, indices=in_spatial_dim.get_dim_value_tensor() - 1, axis=in_spatial_dim)  # [batch...]
-    dim_dev = rf.get_default_dim_size_device()
+    if max_len_factor is not None:
+        # Idempotent, so a caller that pre-scaled (to derive e.g. segment starts) can pass both.
+        repeats = limit_repeats(repeats, in_spatial_dim=in_spatial_dim, max_len_factor=max_len_factor)
     if out_spatial_dim is None:
-        out_spatial_dim = Dim(rf.copy_to_device(new_size, dim_dev), name="repeat")
-    elif out_spatial_dim.dyn_size_ext is None:
-        out_spatial_dim.dyn_size_ext = rf.copy_to_device(new_size, dim_dev)
-    elif out_spatial_dim.dyn_size_ext is not None and out_spatial_dim.dyn_size_ext.raw_tensor is None:
-        out_spatial_dim.dyn_size_ext.raw_tensor = rf.copy_to_device(new_size, dim_dev).raw_tensor
-    out_spatial_dim_ext = out_spatial_dim + 1
-    rel_idx_counts = rf.scatter(
-        rf.expand_dims(rf.ones((), device=idxs.device, dtype="int32"), dims=idxs.dims),
-        indices=idxs,
-        indices_dim=in_spatial_dim,
-        out_dim=out_spatial_dim_ext,
+        new_size = rf.reduce_sum(repeats, axis=in_spatial_dim)
+        if not rf.is_static_traceable():
+            # dim sizes live on the host by convention,
+            # but under tracing that copy is a sync, which capture does not allow
+            new_size = rf.copy_to_device(new_size, rf.get_default_dim_size_device())
+        out_spatial_dim = Dim(
+            new_size,
+            name="repeat",
+            **({"bounded_by": in_spatial_dim * max_len_factor} if max_len_factor is not None else {}),
+        )
+    # noinspection PyProtectedMember
+    return values._raw_backend.repeat(
+        values, in_spatial_dim=in_spatial_dim, repeats=repeats, out_spatial_dim=out_spatial_dim
     )
-    # rel_idx_counts: [batch...,out_spatial_dim+1] -> count of how many times each index was selected
-    idxs_ = rf.cumsum(rel_idx_counts, spatial_dim=out_spatial_dim_ext)
-    # idxs_: [batch...,out_spatial_dim+1] -> idx in in_spatial_dim
-    idxs_, _ = rf.slice(idxs_, axis=out_spatial_dim_ext, size=out_spatial_dim)  # remove last element
-    # idxs_: [batch...,out_spatial_dim] -> idx in in_spatial_dim (potentially with invalid indices in padded area)
-    return rf.gather(values, indices=idxs_, axis=in_spatial_dim, clip_to_valid=True), out_spatial_dim
+
+
+def limit_repeats(repeats: Tensor, *, in_spatial_dim: Dim, max_len_factor: float) -> Tensor:
+    """
+    Scales repeats (durations) down
+    where a sequence would expand by more than max_len_factor,
+    so that :func:`repeat` on them yields at most ``max_len_factor * in_spatial_dim`` frames.
+
+    Every non-empty element keeps one frame, so scaling can never drop one:
+    for durations the element is a unit of the sequence,
+    and losing it is a different sequence, not a shorter one.
+    Only the surplus above that reserved frame is scaled,
+    by one factor per sequence, which keeps the relative durations.
+    Sequences within the factor pass through unchanged,
+    which also makes this idempotent.
+
+    :param repeats: [batch..., in_spatial_dim] -> int32 number of repetitions per element
+    :param in_spatial_dim:
+    :param max_len_factor: bounds the total expansion per sequence, not the individual repeats.
+        Must be at least 1, else the reserved frames alone would not fit.
+    :return: repeats, scaled where needed
+    """
+    assert max_len_factor >= 1, f"limit_repeats: max_len_factor {max_len_factor} < 1"
+    repeats = repeats.copy_masked(0, dims=[in_spatial_dim])
+    in_len = in_spatial_dim.get_size_tensor(device=repeats.device)
+    target_len = rf.cast(in_len, "float32") * float(max_len_factor)
+    total_len = rf.cast(rf.reduce_sum(repeats, axis=in_spatial_dim), "float32")
+    keep = rf.cast(repeats > 0, "int32")  # the reserved frame
+    surplus = repeats - keep
+    n_keep = rf.cast(rf.reduce_sum(keep, axis=in_spatial_dim), "float32")
+    surplus_total = rf.cast(rf.reduce_sum(surplus, axis=in_spatial_dim), "float32")
+    # n_keep <= in_len <= target_len, so the budget for the surplus is never negative
+    budget = rf.maximum(target_len - n_keep, 0.0)
+    scale = rf.where(total_len > target_len, budget / rf.maximum(surplus_total, 1.0), 1.0)
+    # sum(keep) + sum(floor(surplus * scale)) <= n_keep + budget = target_len, bound holds
+    repeats = keep + rf.cast(rf.cast(surplus, "float32") * scale, "int32")
+    return repeats.copy_masked(0, dims=[in_spatial_dim])
 
 
 def expand_make_non_empty(source: Tensor, *, axis: Dim, out_dim: Optional[Dim] = None) -> Tuple[Tensor, Dim]:

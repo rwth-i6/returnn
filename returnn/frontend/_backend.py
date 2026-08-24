@@ -534,6 +534,41 @@ class Backend(Generic[T]):
         return out
 
     @staticmethod
+    def repeat(
+        values: Tensor,
+        *,
+        in_spatial_dim: Dim,
+        repeats: Tensor,
+        out_spatial_dim: Dim,
+    ) -> Tuple[Tensor, Dim]:
+        """
+        Repeat each element along in_spatial_dim as often as repeats says.
+
+        This generic implementation scans and gathers along in_spatial_dim.
+        A backend whose storage cannot be indexed along that dim brings its own.
+        """
+        idxs = rf.cumsum(repeats, spatial_dim=in_spatial_dim)  # [batch...,in_spatial_dim] -> idx in out_spatial_dim + 1
+        new_size = rf.gather(idxs, indices=in_spatial_dim.get_dim_value_tensor() - 1, axis=in_spatial_dim)  # [batch...]
+        dim_dev = rf.get_default_dim_size_device()
+        if out_spatial_dim.dyn_size_ext is None:
+            out_spatial_dim.dyn_size_ext = rf.copy_to_device(new_size, dim_dev)
+        elif out_spatial_dim.dyn_size_ext.raw_tensor is None:
+            out_spatial_dim.dyn_size_ext.raw_tensor = rf.copy_to_device(new_size, dim_dev).raw_tensor
+        out_spatial_dim_ext = out_spatial_dim + 1
+        rel_idx_counts = rf.scatter(
+            rf.expand_dims(rf.ones((), device=idxs.device, dtype="int32"), dims=idxs.dims),
+            indices=idxs,
+            indices_dim=in_spatial_dim,
+            out_dim=out_spatial_dim_ext,
+        )
+        # rel_idx_counts: [batch...,out_spatial_dim+1] -> count of how many times each index was selected
+        idxs_ = rf.cumsum(rel_idx_counts, spatial_dim=out_spatial_dim_ext)
+        # idxs_: [batch...,out_spatial_dim+1] -> idx in in_spatial_dim
+        idxs_, _ = rf.slice(idxs_, axis=out_spatial_dim_ext, size=out_spatial_dim)  # remove last element
+        # idxs_: [batch...,out_spatial_dim] -> idx in in_spatial_dim (potentially invalid in the padded area)
+        return rf.gather(values, indices=idxs_, axis=in_spatial_dim, clip_to_valid=True), out_spatial_dim
+
+    @staticmethod
     def pad(
         source: Tensor,
         *,
