@@ -195,9 +195,14 @@ def timeout(info: str, *, seconds: int = 30):
     potential hanging funcs will block the main thread and thus block the signal handler from executing.
     Thus, we use a subprocess.
 
+    Under a profiler (Nsight Compute / Systems) CUDA init takes far longer than the default,
+    so the guard would abort a healthy run; scale it up when a profiler is detected.
+
     :param seconds:
     :param info:
     """
+    if _is_profiled():
+        seconds *= 20
     # "spawn" context so child does not inherit SIGTERM handler so that we don't call _fatal_signal_handler.
     proc = multiprocessing.get_context("spawn").Process(
         target=_timeout_handler, kwargs={"seconds": seconds, "proc_id": os.getpid(), "info": info}
@@ -208,6 +213,16 @@ def timeout(info: str, *, seconds: int = 30):
     finally:
         proc.terminate()
         proc.join()
+
+
+def _is_profiled() -> bool:
+    """
+    :return: whether we run under Nsight Compute / Systems, which slows CUDA init a lot
+    """
+    if any("NSIGHT" in k.upper() or "NSYS" in k.upper() for k in os.environ):
+        return True
+    # ncu/nsys inject their interception library via LD_PRELOAD
+    return any(n in os.environ.get("LD_PRELOAD", "") for n in ("nsight", "ncu", "nsys"))
 
 
 def _timeout_handler(*, seconds: Union[float, int], proc_id: int, info: str):
