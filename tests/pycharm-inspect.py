@@ -1053,6 +1053,10 @@ def main():
             # but every such value formats fine at runtime. Triaged 2026-08-07: all 8 sites
             # (graph_capture GiB prints, file_cache ages, util stats) verified by execution.
             ("PyStringFormatInspection", r"^Format spec is not supported for "),
+            # Optional-narrowing flare on %-format args (0 -> 4 between unchanged runs,
+            # all in files untouched for years); same instability family as the
+            # torch dtype/device entries above
+            ("PyStringFormatInspection", r"^Unexpected type None"),
             # Sequence[...] is an ABC that declares no __str__/__repr__/__format__ of its own, so
             # PyCharm flags every interpolation of a value annotated that way -- even explicit !r.
             # At runtime these are list/tuple (spot-checked across tensor_dict, array_,
