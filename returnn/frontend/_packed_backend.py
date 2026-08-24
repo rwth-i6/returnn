@@ -4001,6 +4001,140 @@ class PackedBackend(Backend[PackedRawTensor]):
         return res
 
     @staticmethod
+    def gather(source: Tensor, *, indices, axis: Dim, clip_to_valid: bool = False) -> Tensor:
+        """
+        gather.
+        Along the innermost packed dim the index is a position inside a sequence,
+        so it only needs its sequence's start added to become a row in the flat buffer
+        (this is what shifts like a successor or predecessor lookup do).
+        Anything else takes the generic dim-aware route.
+        """
+        kwargs = dict(indices=indices, axis=axis, clip_to_valid=clip_to_valid)
+        if not is_packed(source) or not isinstance(indices, Tensor):
+            return _dim_aware_call("gather", (source,), kwargs)
+        raw = _raw(source)
+        if axis != raw.orig_dims[-1] or len(raw.orig_dims) != 2:
+            return _dim_aware_call("gather", (source,), kwargs)
+        if is_packed(indices):
+            idx = _raw(_conform_packing(indices, raw)).inner
+        elif set(indices.dims).issubset(set(raw.orig_dims)):
+            idx = _pack_like(indices, raw)
+            if idx is None:
+                return _dim_aware_call("gather", (source,), kwargs)
+        else:
+            return _dim_aware_call("gather", (source,), kwargs)
+
+        dev = raw.inner.device
+        rows = rf.range_over_dim(raw.packed_dim, device=dev)
+        local = _frame_coords(raw, axis)
+        idx = rf.cast(idx, local.dtype)
+        if clip_to_valid:
+            seq = _frame_coords(raw, raw.orig_dims[0])
+            # in the traced regime the lens already live on the data's device,
+            # where copying them would be a sync
+            lens = _device_lens(raw)
+            if lens is None:
+                lens = rf.copy_to_device(raw.seq_lens, dev)
+            last = rf.cast(rf.gather(lens, indices=seq, axis=raw.orig_dims[0]), idx.dtype) - 1
+            idx = rf.clip_by_value(idx, rf.zeros_like(last), last)
+        # the sequence starts at this frame's own row minus its position within the sequence
+        src = rows - local + idx
+        src = rf.clip_by_value(src, 0, _last_row(raw.packed_dim, src.dtype))
+        out = raw.rewrap(rf.gather(raw.inner, indices=src, axis=raw.packed_dim), name="gather")
+        # a sparse dim assigned on the virtual tensor never reached the inner buffer
+        if source.sparse_dim is not None:
+            out.sparse_dim = source.sparse_dim
+        return out
+
+    @staticmethod
+    def repeat(
+        values: Tensor, *, in_spatial_dim: Dim, repeats: Tensor, out_spatial_dim: Dim
+    ) -> Tuple[Tensor, Dim]:
+        """
+        repeat (duration-based upsampling), packed-native.
+
+        One global scan over the durations gives a monotone table over the whole buffer,
+        so every output frame finds its source frame by a search,
+        instead of by indexing along the packed dim,
+        and the upsampling itself is a single gather.
+        The output is a fresh dense packed buffer;
+        any gap the model wants comes from a later regap.
+        """
+        in_raw = _raw(values)
+        assert in_spatial_dim == in_raw.orig_dims[-1], (
+            f"packed repeat: in_spatial_dim {in_spatial_dim} is not the innermost packed dim"
+            f" {in_raw.orig_dims[-1]}"
+        )
+        assert len(in_raw.orig_dims) == 2, f"packed repeat: expects (batch, spatial) packing, got {in_raw.orig_dims}"
+        batch_dim_ = in_raw.orig_dims[0]
+        dev = in_raw.inner.device
+
+        # durations, in this buffer's layout, with gap and junk frames contributing nothing
+        r_raw = _raw(_conform_packing(repeats, in_raw))
+        r_inner = r_raw.inner
+        r_mask = _frame_mask(r_raw)
+        if r_mask is not None:
+            r_inner = r_inner * rf.cast(r_mask, r_inner.dtype)
+        # global (not per-seq) inclusive scan: source frame i covers output offsets [g[i-1], g[i])
+        g = rf.cumsum(r_inner, spatial_dim=in_raw.packed_dim)
+
+        # get_size_tensor defaults to CPU; ask for the data's device, since a host round trip
+        # is a sync and illegal under capture
+        out_lens = out_spatial_dim.get_size_tensor(device=dev)
+        # output frames preceding each sequence, matching how the scan accumulates across sequences
+        out_starts = rf.cumsum(out_lens, spatial_dim=batch_dim_) - out_lens
+
+        out_packed_dim = _repeat_out_packed_dim(in_raw, out_spatial_dim, out_lens, batch_dim_, dev)
+        helper = PackedRawTensor(
+            inner=rf.zeros([out_packed_dim], dtype="int32", device=dev),
+            packed_dim=out_packed_dim,
+            orig_dims=(batch_dim_, out_spatial_dim),
+            content_bound=out_packed_dim.dimension,
+        )
+        seq = _frame_coords(helper, batch_dim_)
+        local = _frame_coords(helper, out_spatial_dim)
+        target = rf.gather(out_starts, indices=seq, axis=batch_dim_) + local
+        src = rf.search_sorted(g, target, axis=in_raw.packed_dim, side="right")
+        # junk frames search past the content; clip so the gather stays inside the buffer
+        src = rf.clip_by_value(src, 0, _last_row(in_raw.packed_dim, src.dtype))
+        out_inner = rf.gather(in_raw.inner, indices=src, axis=in_raw.packed_dim)
+        out = helper.rewrap(out_inner, name="repeat")
+        # see the note in gather: the inner buffer keeps the pre-assignment sparse dim
+        if values.sparse_dim is not None:
+            out.sparse_dim = values.sparse_dim
+        return out, out_spatial_dim
+
+    @staticmethod
+    def cumsum(source: Tensor, *, spatial_dim: Dim) -> Tensor:
+        """
+        cumsum.
+        Over a packed dim this is a segment scan:
+        one global scan over the flat buffer,
+        then subtract each sequence's own starting offset,
+        which makes the sequences independent.
+        Gap and junk frames are zeroed first,
+        so they add nothing and do not shift the sums.
+        """
+        raw = _raw(source)
+        if not _dim_refs_packed(spatial_dim, raw):
+            return raw.rewrap(rf.cumsum(raw.inner, spatial_dim=spatial_dim), name="cumsum")
+        assert spatial_dim == raw.orig_dims[-1], (
+            f"packed cumsum: only over the innermost packed dim {raw.orig_dims[-1]}, got {spatial_dim}"
+        )
+        inner = raw.inner
+        mask = _frame_mask(raw)
+        if mask is not None:
+            inner = inner * rf.cast(mask, inner.dtype)
+        total = rf.cumsum(inner, spatial_dim=raw.packed_dim)
+        # the frame a sequence starts at: its own row minus its coordinate within the sequence
+        rows = rf.range_over_dim(raw.packed_dim, device=inner.device)
+        starts = rows - _frame_coords(raw, spatial_dim)
+        prev = rf.gather(total, indices=rf.maximum(starts - 1, 0), axis=raw.packed_dim)
+        # the first sequence has nothing before it, and its scan is already correct
+        out = total - prev * rf.cast(starts > 0, prev.dtype)
+        return raw.rewrap(out, name="cumsum")
+
+    @staticmethod
     def reduce(source: Tensor, *, mode: str, axis: Union[Dim, Sequence[Dim]], use_mask: bool = True) -> Tensor:
         """
         reduce. fast paths:
@@ -4170,10 +4304,8 @@ for _name in [
     "batch_norm",
     "compare",
     "concat",
-    "cumsum",
     "expand_dim",
     "flip_no_mask",
-    "gather",
     "masked_scatter",
     "masked_select",
     "merge_dims",
@@ -4242,6 +4374,32 @@ def _concat_out_packed_dim(
     )
     del out_dim  # the bound is the sum of the sources', not derived from the concat dim
     return Dim(sum(bounds), name="packed_concat")
+
+
+def _repeat_out_packed_dim(
+    in_raw: PackedRawTensor, out_spatial_dim: Dim, out_lens: Tensor, batch_dim_: Dim, dev: str
+) -> Dim:
+    """
+    :return: the packed dim for a repeat result. Static when tracing, since a captured buffer
+        size must not vary per batch; the exact total otherwise.
+
+        The static size is the input's content bound scaled by the declared expansion factor,
+        which the caller put on out_spatial_dim.
+        Bounding each sequence separately instead
+        would assume every one of them at its full length at once, which is far looser.
+    """
+    if not rf.is_static_traceable():
+        return Dim(rf.copy_to_device(rf.reduce_sum(out_lens, axis=batch_dim_), dev), name="repeat_packed")
+    in_spatial_dim = in_raw.orig_dims[-1]
+    in_cap = in_spatial_dim.capacity or in_spatial_dim._derived_capacity()
+    out_cap = out_spatial_dim.capacity or out_spatial_dim._derived_capacity()
+    assert in_cap and out_cap and in_raw.content_bound, (
+        f"packed repeat: static traceable needs a bound on {out_spatial_dim}"
+        f" (in cap {in_cap}, out cap {out_cap}, in content bound {in_raw.content_bound})."
+        f" Pass max_len_factor to rf.repeat, which declares one."
+    )
+    factor = -(-out_cap // in_cap)
+    return Dim(in_raw.content_bound * factor, name="repeat_packed")
 
 
 def is_packed(source: Tensor) -> bool:
