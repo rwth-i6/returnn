@@ -4384,7 +4384,9 @@ def _repeat_out_packed_dim(
     if not rf.is_static_traceable():
         return Dim(rf.copy_to_device(rf.reduce_sum(out_lens, axis=batch_dim_), dev), name="repeat_packed")
     in_spatial_dim = in_raw.orig_dims[-1]
+    # noinspection PyProtectedMember
     in_cap = in_spatial_dim.capacity or in_spatial_dim._derived_capacity()
+    # noinspection PyProtectedMember
     out_cap = out_spatial_dim.capacity or out_spatial_dim._derived_capacity()
     assert in_cap and out_cap and in_raw.content_bound, (
         f"packed repeat: static traceable needs a bound on {out_spatial_dim}"
