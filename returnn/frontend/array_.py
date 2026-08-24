@@ -1512,7 +1512,7 @@ def repeat(
         # Idempotent, so a caller that pre-scaled (to derive e.g. segment starts) can pass both.
         repeats = limit_repeats(repeats, in_spatial_dim=in_spatial_dim, max_len_factor=max_len_factor)
     if out_spatial_dim is None:
-        new_size = rf.reduce_sum(repeats, axis=in_spatial_dim)
+        new_size = rf.cast(rf.reduce_sum(repeats, axis=in_spatial_dim), repeats.dtype)
         if not rf.is_static_traceable():
             # dim sizes live on the host by convention,
             # but under tracing that copy is a sync, which capture does not allow
