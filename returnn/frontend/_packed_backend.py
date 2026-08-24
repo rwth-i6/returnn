@@ -271,8 +271,11 @@ class PackedRawTensor:
         assert last.dyn_size_ext is not None, f"packed dim {last} needs dyn sizes"
         return last.dyn_size_ext
 
-    def seq_starts(self) -> Tuple[Tensor, Dim]:
+    def seq_starts(self, *, device: Optional[str] = None) -> Tuple[Tensor, Dim]:
         """
+        :param device: where to put the starts;
+            they derive from dim sizes, which live on the host,
+            so a caller indexing data on the device must ask for it
         :return: (starts, seqs_dim):
             start offset of every sequence in the packed buffer,
             flattened row-major over the packed dims except the innermost (matching the packed layout),
@@ -281,6 +284,8 @@ class PackedRawTensor:
         """
         starts, seqs_dim = _seq_starts_math(self.orig_dims, self.gap, self.align, layout_lens=self.layout_lens)
         assert starts is not None, f"seq_starts: no outer packed dims in {self.orig_dims}"
+        if device is not None:
+            starts = rf.copy_to_device(starts, device)
         return starts, seqs_dim
 
     def cu_seqlens(self, *, device: Optional[str] = None) -> Tuple[Tensor, Dim]:
@@ -3984,7 +3989,12 @@ class PackedBackend(Backend[PackedRawTensor]):
             lens = raw.orig_dims[-1].get_size_tensor(device=dev)
             lens_at = rf.cast(rf.gather(lens, indices=seq, axis=batch), local.dtype)
             within = local if offset is None else local - offset
-            starts, seqs_dim = raw.seq_starts()
+            # an empty source has no last row to clip to, so the gather would read nothing;
+            # it contributes no frames either, so skip it and keep the running offset
+            if not rf.is_static_traceable() and int(raw.packed_dim.get_dim_value()) == 0:
+                offset = lens_at if offset is None else offset + lens_at
+                continue
+            starts, seqs_dim = raw.seq_starts(device=dev)
             rows = rf.cast(rf.gather(starts, indices=seq, axis=seqs_dim), local.dtype) + within
             rows = rf.clip_by_value(rows, 0, _last_row(raw.packed_dim, rows.dtype))
             vals = rf.gather(raw.inner, indices=rows, axis=raw.packed_dim)
@@ -3993,6 +4003,7 @@ class PackedBackend(Backend[PackedRawTensor]):
             else:
                 out = rf.where((within >= 0) & (within < lens_at), vals, out)
                 offset = offset + lens_at
+        assert out is not None, "concat_seq_wise: every source empty"
         res = helper.rewrap(out, name="concat")
         if sources[0][0].feature_dim is not None and sources[0][0].feature_dim in res.dims:
             res.feature_dim = sources[0][0].feature_dim

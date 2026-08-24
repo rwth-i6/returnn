@@ -298,6 +298,23 @@ def test_concat_packed_separate_packings():
     _assert_equal_non_padded(out_p, ref, batch_dim, out_dim)
 
 
+def test_concat_packed_empty_source():
+    # eval feeds no text stream, so one source is empty and its packed buffer has zero rows.
+    # such a buffer has no last row to clip indices to, and it contributes no frames at all.
+    rf.select_backend_torch()
+    a, batch_dim, a_dim, feat_dim = _make_input(batch_size=3, seq_lens=(5, 1, 4), seed=1)
+    b_dim = Dim(
+        Tensor("b_len", dims=[batch_dim], dtype="int32", raw_tensor=torch.zeros(3, dtype=torch.int32)),
+        name="b_time",
+    )
+    b = Tensor("b", dims=[batch_dim, b_dim, feat_dim], dtype="float32", raw_tensor=torch.zeros(3, 0, 4))
+    ref, out_dim = rf.concat((a, a_dim), (b, b_dim), handle_dynamic_dims=True)
+    ap, bp = packed.pack(a), packed.pack(b)
+    out_p, _ = rf.concat((ap, a_dim), (bp, b_dim), handle_dynamic_dims=True, out_dim=out_dim)
+    assert packed.is_packed(out_p)
+    _assert_equal_non_padded(out_p, ref, batch_dim, out_dim)
+
+
 def test_concat_packed_static_traceable():
     # captured regime: static batch dim and static per-stream buffers,
     # so the concat buffer must be a static size derived from the sources' content bounds
