@@ -258,9 +258,26 @@ class OpMaker:
             return "Tensor"
 
         # https://github.com/pytorch/pytorch/blob/main/aten/src/ATen/native/README.md#func
+        alias_of_out = {}
+        for v in in_info:
+            out_idx = v.get("want_inplace", -1)
+            if out_idx >= 0:
+                alias_of_out[out_idx] = chr(ord("a") + len(alias_of_out))
+        in_alias = {id(v): alias_of_out[v["want_inplace"]] for v in in_info if v.get("want_inplace", -1) >= 0}
+
+        def _in_schema_str(v: Dict[str, Any]) -> str:
+            s = _schema_type_str(v)
+            a = in_alias.get(id(v))
+            return f"Tensor({a}!)" if a and s == "Tensor" else s
+
+        def _out_schema_str(i: int, v: Dict[str, Any]) -> str:
+            s = _schema_type_str(v)
+            a = alias_of_out.get(i)
+            return f"Tensor({a}!)" if a and s == "Tensor" else s
+
         func_schema_str = "(%s)" % ", ".join(
-            f"{_schema_type_str(v)} {v['name']}" for v in in_info
-        ) + " -> (%s)" % ", ".join(_schema_type_str(v) for v in out_info)
+            f"{_in_schema_str(v)} {v['name']}" for v in in_info
+        ) + " -> (%s)" % ", ".join(_out_schema_str(i, v) for i, v in enumerate(out_info))
 
         code_header += dedent(
             f"""\
