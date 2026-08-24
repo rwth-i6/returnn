@@ -305,7 +305,7 @@ def get_ctc_fsa_fast_bw(
         target = make_op(native_op.GetCtcFsaFastBwPackedOp)
         n_e_per_seq = seq_lens_i32 * 5 + 5  # exact valid count per seq (len 0 uses 2 of its 5 slots)
         edge_offsets = jnp.concatenate([jnp.zeros((1,), dtype=jnp.int32), jnp.cumsum(n_e_per_seq, dtype=jnp.int32)])
-        # weights is an input: the op fills it, and takes the edge count from its shape
+        # weights is an input only to size the outputs: the op takes the edge count from its shape
         weights = jnp.zeros((edges_bound,), dtype=jnp.float32)
         args = (targets_i32, seq_lens_i32, edge_offsets, weights)
         n_edges = edges_bound
