@@ -773,6 +773,11 @@ class Engine(EngineBase):
         bound_shapes = self._graph_capture is not None
         if bound_shapes:
             bound_sizes = NumbersDict(self._graph_capture.data_bound_sizes())
+            # a key the captured graph never gets has no bound, so no slack to report;
+            # keeping it would divide by a missing key, which yields the numerator
+            total_data_size_packed = NumbersDict(
+                {k: v for k, v in total_data_size_packed.items() if k in bound_sizes.dict}
+            )
             total_data_size_computed = bound_sizes * step_idx
         else:
             total_data_size_computed = total_data_size_padded
