@@ -5328,14 +5328,15 @@ class GetCtcFsaFastBwOp(NativeOpGenBase):
       :param targets: shape (batch,time), int32
       :param seq_lens: shape (batch), int32
       :param blank_idx: scalar, int32
-      :param weights: shape (num_edges,), float32.
-        Written here (0.0 valid, INF_F dead), declared ``want_inplace`` and returned as output.
+      :param weights: shape (num_edges,), float32. Only the shape is used, to size the outputs.
       :param label_loop: scalar, int32 (casted from bool). True -> normal CTC; False -> RNA-like
     outputs:
       :param edges: (4,num_edges), int32, edges of the graph (from,to,emission_idx,sequence_idx)
       :param start_end_states: (2,batch), int32, (start,end) state idx in FSA
+      :param weights: (num_edges,), float32, 0.0 valid, INF_F dead
 
-    To construct `weights` (for FastBaumWelch), `weights` should be just `tf.zeros((num_edges,))`.
+    The passed `weights` is only a shape template, e.g. `tf.zeros((num_edges,))`;
+    the returned one is what goes into FastBaumWelch.
     `num_edges` should be `n_batch * (5 * (n_time - 1) + 10)`
       (see construction in kernel why that number).
     """
@@ -5373,8 +5374,6 @@ class GetCtcFsaFastBwOp(NativeOpGenBase):
             "dtype": "float32",
             "need_contiguous": True,
             "gradient": "disconnected",
-            # construct_kernel writes this buffer (0.0 valid, INF_F dead)
-            "want_inplace": 2,
         },
         {
             "name": "label_loop",
@@ -5389,7 +5388,6 @@ class GetCtcFsaFastBwOp(NativeOpGenBase):
     out_info = (
         {"name": "edges", "ndim": 2, "shape": (4, (3, 0)), "dtype": "int32", "need_contiguous": True},
         {"name": "start_end_states", "ndim": 2, "shape": (2, (1, 0)), "dtype": "int32", "need_contiguous": True},
-        # aliases input 3 via want_inplace, see the weights entry above
         {"name": "weights", "ndim": 1, "shape": ((3, 0),), "dtype": "float32", "need_contiguous": True},
     )
 
@@ -5676,7 +5674,7 @@ class GetCtcFsaFastBwOp(NativeOpGenBase):
 
     c_fw_code = """
     assert(n_inputs == 5);
-    assert(n_outputs == 3);  // edges, start_end_states, weights (weights aliases input 3)
+    assert(n_outputs == 3);
     Ndarray* targets = inputs[0];
     Ndarray* seq_lens = inputs[1];
     Ndarray* blank_idx_ref = inputs[2];
@@ -5684,6 +5682,7 @@ class GetCtcFsaFastBwOp(NativeOpGenBase):
     bool label_loop = (bool) Ndarray_DEV_DATA_int32_scalar(inputs[4]);
     Ndarray* edges = *outputs[0];
     Ndarray* start_end_states = *outputs[1];
+    Ndarray* weights_out = *outputs[2];
     assert_cmp(Ndarray_NDIM(targets), ==, 2);
     assert_cmp(Ndarray_NDIM(seq_lens), ==, 1);
     assert_cmp(Ndarray_NDIM(blank_idx_ref), ==, 0);
@@ -5704,6 +5703,7 @@ class GetCtcFsaFastBwOp(NativeOpGenBase):
 
     Ndarray_memset(Ndarray_DEV_DATA_int32(edges), 255, 4 * n_edges * sizeof(int32_t));
     Ndarray_memset(Ndarray_DEV_DATA_int32(start_end_states), 255, 2 * n_batch * sizeof(int32_t));
+    Ndarray_memset(Ndarray_DEV_DATA(weights_out), 255, n_edges * sizeof(float));
     int32_t blank_idx = Ndarray_DEV_DATA_int32_scalar(blank_idx_ref);
 
     if(label_loop) {
@@ -5712,7 +5712,7 @@ class GetCtcFsaFastBwOp(NativeOpGenBase):
         Ndarray_DEV_DATA_int32(targets), Ndarray_DEV_DATA_int32(seq_lens),
         (const int32_t*) NULL,
         blank_idx,
-        Ndarray_DEV_DATA_int32(edges), Ndarray_DEV_DATA_int32(start_end_states), Ndarray_DEV_DATA(weights)
+        Ndarray_DEV_DATA_int32(edges), Ndarray_DEV_DATA_int32(start_end_states), Ndarray_DEV_DATA(weights_out)
       ));
     } else {
       start_dev_kernel(construct_kernel<false>, (
@@ -5720,7 +5720,7 @@ class GetCtcFsaFastBwOp(NativeOpGenBase):
         Ndarray_DEV_DATA_int32(targets), Ndarray_DEV_DATA_int32(seq_lens),
         (const int32_t*) NULL,
         blank_idx,
-        Ndarray_DEV_DATA_int32(edges), Ndarray_DEV_DATA_int32(start_end_states), Ndarray_DEV_DATA(weights)
+        Ndarray_DEV_DATA_int32(edges), Ndarray_DEV_DATA_int32(start_end_states), Ndarray_DEV_DATA(weights_out)
       ));
     }
     HANDLE_LAST_ERROR();
@@ -5748,11 +5748,12 @@ class GetCtcFsaFastBwPackedOp(NativeOpGenBase):
       :param blank_idx: scalar, int32
       :param weights: shape (num_edges,), float32;
         ``num_edges`` >= ``edge_offsets[batch]``, the excess is filler.
-        Written here (0.0 valid, INF_F filler), declared ``want_inplace`` and returned as output.
+        Only the shape is used, to size the outputs.
       :param label_loop: scalar, int32 (casted from bool). True -> normal CTC; False -> RNA-like
     outputs:
       :param edges: (4,num_edges), int32, edges of the graph (from,to,emission_idx,sequence_idx)
       :param start_end_states: (2,batch), int32, (start,end) state idx in FSA
+      :param weights: (num_edges,), float32, 0.0 valid, INF_F filler
     """
 
     in_info = (
@@ -5796,8 +5797,6 @@ class GetCtcFsaFastBwPackedOp(NativeOpGenBase):
             "dtype": "float32",
             "need_contiguous": True,
             "gradient": "disconnected",
-            # construct_kernel writes this buffer (0.0 valid, INF_F filler)
-            "want_inplace": 2,
         },
         {
             "name": "label_loop",
@@ -5812,7 +5811,6 @@ class GetCtcFsaFastBwPackedOp(NativeOpGenBase):
     out_info = (
         {"name": "edges", "ndim": 2, "shape": (4, (4, 0)), "dtype": "int32", "need_contiguous": True},
         {"name": "start_end_states", "ndim": 2, "shape": (2, (1, 0)), "dtype": "int32", "need_contiguous": True},
-        # aliases input 4 via want_inplace; see the weights docstring above
         {"name": "weights", "ndim": 1, "shape": ((4, 0),), "dtype": "float32", "need_contiguous": True},
     )
 
@@ -5822,7 +5820,7 @@ class GetCtcFsaFastBwPackedOp(NativeOpGenBase):
 
     c_fw_code = """
     assert(n_inputs == 6);
-    assert(n_outputs == 3);  // edges, start_end_states, weights (weights aliases input 4)
+    assert(n_outputs == 3);
     Ndarray* targets = inputs[0];
     Ndarray* seq_lens = inputs[1];
     Ndarray* edge_offsets = inputs[2];
@@ -5831,6 +5829,7 @@ class GetCtcFsaFastBwPackedOp(NativeOpGenBase):
     bool label_loop = (bool) Ndarray_DEV_DATA_int32_scalar(inputs[5]);
     Ndarray* edges = *outputs[0];
     Ndarray* start_end_states = *outputs[1];
+    Ndarray* weights_out = *outputs[2];
     assert_cmp(Ndarray_NDIM(targets), ==, 2);
     assert_cmp(Ndarray_NDIM(seq_lens), ==, 1);
     assert_cmp(Ndarray_NDIM(edge_offsets), ==, 1);
@@ -5850,6 +5849,7 @@ class GetCtcFsaFastBwPackedOp(NativeOpGenBase):
 
     Ndarray_memset(Ndarray_DEV_DATA_int32(edges), 255, 4 * n_edges * sizeof(int32_t));
     Ndarray_memset(Ndarray_DEV_DATA_int32(start_end_states), 255, 2 * n_batch * sizeof(int32_t));
+    Ndarray_memset(Ndarray_DEV_DATA(weights_out), 255, n_edges * sizeof(float));
     int32_t blank_idx = Ndarray_DEV_DATA_int32_scalar(blank_idx_ref);
 
     if(label_loop) {
@@ -5858,7 +5858,7 @@ class GetCtcFsaFastBwPackedOp(NativeOpGenBase):
         Ndarray_DEV_DATA_int32(targets), Ndarray_DEV_DATA_int32(seq_lens),
         Ndarray_DEV_DATA_int32(edge_offsets),
         blank_idx,
-        Ndarray_DEV_DATA_int32(edges), Ndarray_DEV_DATA_int32(start_end_states), Ndarray_DEV_DATA(weights)
+        Ndarray_DEV_DATA_int32(edges), Ndarray_DEV_DATA_int32(start_end_states), Ndarray_DEV_DATA(weights_out)
       ));
     } else {
       start_dev_kernel(construct_kernel<false>, (
@@ -5866,7 +5866,7 @@ class GetCtcFsaFastBwPackedOp(NativeOpGenBase):
         Ndarray_DEV_DATA_int32(targets), Ndarray_DEV_DATA_int32(seq_lens),
         Ndarray_DEV_DATA_int32(edge_offsets),
         blank_idx,
-        Ndarray_DEV_DATA_int32(edges), Ndarray_DEV_DATA_int32(start_end_states), Ndarray_DEV_DATA(weights)
+        Ndarray_DEV_DATA_int32(edges), Ndarray_DEV_DATA_int32(start_end_states), Ndarray_DEV_DATA(weights_out)
       ));
     }
     HANDLE_LAST_ERROR();
