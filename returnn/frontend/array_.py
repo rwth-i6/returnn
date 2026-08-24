@@ -456,21 +456,8 @@ def concat(
             # Just add the dim values.
             out_dim = Dim(sum(d.get_dim_value_tensor() for _, d in sources), name="concat")
     if handle_dynamic_dims:
-        out_non_masked_dim = Dim(sum(d.get_dim_value_tensor() for _, d in sources))
         # noinspection PyProtectedMember
-        out = sources[0][0]._raw_backend.concat(*sources, allow_broadcast=allow_broadcast, out_dim=out_non_masked_dim)
-        masks = []
-        for _, dim in sources:
-            masks.append(
-                dim.get_mask(dim_order=(dim,) + dim.dyn_size_ext.dims, device=out.device)
-                if dim.need_masking()
-                else rf.constant(True, dims=[dim], device=out.device)
-            )
-        # noinspection PyProtectedMember
-        mask_concat = sources[0][0]._raw_backend.concat(
-            *[(mask, dim) for (_, dim), mask in zip(sources, masks)], allow_broadcast=True, out_dim=out_non_masked_dim
-        )
-        out, _ = rf.masked_select(out, mask=mask_concat, dims=[out_non_masked_dim], out_dim=out_dim)
+        out = sources[0][0]._raw_backend.concat_seq_wise(*sources, allow_broadcast=allow_broadcast, out_dim=out_dim)
     else:
         # noinspection PyProtectedMember
         out = sources[0][0]._raw_backend.concat(*sources, allow_broadcast=allow_broadcast, out_dim=out_dim)

@@ -504,6 +504,36 @@ class Backend(Generic[T]):
         raise NotImplementedError
 
     @staticmethod
+    def concat_seq_wise(
+        *sources: Tuple[Tensor, Dim],
+        allow_broadcast: bool = False,
+        out_dim: Dim,
+    ) -> Tensor:
+        """
+        Concat along dims that need masking, i.e. dropping each source's padding
+        so that sequence n of the output holds the sequences n of all sources back to back.
+
+        This generic implementation concatenates the padded rectangles and compacts afterwards.
+        A backend whose storage is already per-sequence can override it and concat directly.
+        """
+        out_non_masked_dim = Dim(sum(d.get_dim_value_tensor() for _, d in sources))
+        # noinspection PyProtectedMember
+        backend = sources[0][0]._raw_backend
+        out = backend.concat(*sources, allow_broadcast=allow_broadcast, out_dim=out_non_masked_dim)
+        masks = []
+        for _, dim in sources:
+            masks.append(
+                dim.get_mask(dim_order=(dim,) + dim.dyn_size_ext.dims, device=out.device)
+                if dim.need_masking()
+                else rf.constant(True, dims=[dim], device=out.device)
+            )
+        mask_concat = backend.concat(
+            *[(mask, dim) for (_, dim), mask in zip(sources, masks)], allow_broadcast=True, out_dim=out_non_masked_dim
+        )
+        out, _ = rf.masked_select(out, mask=mask_concat, dims=[out_non_masked_dim], out_dim=out_dim)
+        return out
+
+    @staticmethod
     def pad(
         source: Tensor,
         *,
