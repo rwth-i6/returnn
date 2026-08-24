@@ -314,9 +314,13 @@ def get_ctc_fsa_fast_bw(
         n_edges = n_batch * (5 * (n_time - 1) + 10)  # see the op's docs
         weights = jnp.zeros((n_edges,), dtype=jnp.float32)
         args = (targets_i32, seq_lens_i32, weights)
-    edges, start_end_states = _call(
+    edges, start_end_states, weights = _call(
         target,
-        [jax.ShapeDtypeStruct((4, n_edges), jnp.int32), jax.ShapeDtypeStruct((2, n_batch), jnp.int32)],
+        [
+            jax.ShapeDtypeStruct((4, n_edges), jnp.int32),
+            jax.ShapeDtypeStruct((2, n_batch), jnp.int32),
+            jax.ShapeDtypeStruct((n_edges,), jnp.float32),
+        ],
         args,
         {"blank_idx": numpy.int32(blank_idx), "label_loop": numpy.int32(1 if label_loop else 0)},
     )

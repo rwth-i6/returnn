@@ -665,13 +665,13 @@ def get_ctc_fsa_fast_bw(
         weights = torch.zeros((edges_bound,), device=targets.device)
         maker = OpMaker(OpDescription.from_gen_base(native_op.GetCtcFsaFastBwPackedOp))
         op = maker.make_op()
-        edges, start_end_states = op(targets, seq_lens_i32, edge_offsets, blank_idx, weights, label_loop)
+        edges, start_end_states, weights = op(targets, seq_lens_i32, edge_offsets, blank_idx, weights, label_loop)
     else:
         n_edges = n_batch * (5 * (n_time - 1) + 10)  # see op documentation
         weights = torch.zeros((n_edges,), device=targets.device)
         maker = OpMaker(OpDescription.from_gen_base(native_op.GetCtcFsaFastBwOp))
         op = maker.make_op()
-        edges, start_end_states = op(targets, seq_lens, blank_idx, weights, label_loop)
+        edges, start_end_states, weights = op(targets, seq_lens, blank_idx, weights, label_loop)
 
     res = (edges, weights, start_end_states)
     _ctc_fsa_cache_set(targets_arg, seq_lens_arg, blank_idx, label_loop, edges_bound, res)

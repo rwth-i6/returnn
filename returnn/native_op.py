@@ -5328,7 +5328,8 @@ class GetCtcFsaFastBwOp(NativeOpGenBase):
       :param targets: shape (batch,time), int32
       :param seq_lens: shape (batch), int32
       :param blank_idx: scalar, int32
-      :param weights: shape (num_edges,), float32 (not used, except for target shape)
+      :param weights: shape (num_edges,), float32.
+        Written here (0.0 valid, INF_F dead), declared ``want_inplace`` and returned as output.
       :param label_loop: scalar, int32 (casted from bool). True -> normal CTC; False -> RNA-like
     outputs:
       :param edges: (4,num_edges), int32, edges of the graph (from,to,emission_idx,sequence_idx)
@@ -5372,6 +5373,8 @@ class GetCtcFsaFastBwOp(NativeOpGenBase):
             "dtype": "float32",
             "need_contiguous": True,
             "gradient": "disconnected",
+            # construct_kernel writes this buffer (0.0 valid, INF_F dead)
+            "want_inplace": 2,
         },
         {
             "name": "label_loop",
@@ -5386,6 +5389,8 @@ class GetCtcFsaFastBwOp(NativeOpGenBase):
     out_info = (
         {"name": "edges", "ndim": 2, "shape": (4, (3, 0)), "dtype": "int32", "need_contiguous": True},
         {"name": "start_end_states", "ndim": 2, "shape": (2, (1, 0)), "dtype": "int32", "need_contiguous": True},
+        # aliases input 3 via want_inplace, see the weights entry above
+        {"name": "weights", "ndim": 1, "shape": ((3, 0),), "dtype": "float32", "need_contiguous": True},
     )
 
     c_extra_support_code = {
@@ -5671,7 +5676,7 @@ class GetCtcFsaFastBwOp(NativeOpGenBase):
 
     c_fw_code = """
     assert(n_inputs == 5);
-    assert(n_outputs == 2);
+    assert(n_outputs == 3);  // edges, start_end_states, weights (weights aliases input 3)
     Ndarray* targets = inputs[0];
     Ndarray* seq_lens = inputs[1];
     Ndarray* blank_idx_ref = inputs[2];
@@ -5741,8 +5746,9 @@ class GetCtcFsaFastBwPackedOp(NativeOpGenBase):
       :param seq_lens: shape (batch), int32
       :param edge_offsets: shape (batch+1,), int32, ascending; cumsum of ``5 * seq_len + 5``
       :param blank_idx: scalar, int32
-      :param weights: shape (num_edges,), float32 (not used, except for target shape;
-        ``num_edges`` >= ``edge_offsets[batch]``, the excess is filler)
+      :param weights: shape (num_edges,), float32;
+        ``num_edges`` >= ``edge_offsets[batch]``, the excess is filler.
+        Written here (0.0 valid, INF_F filler), declared ``want_inplace`` and returned as output.
       :param label_loop: scalar, int32 (casted from bool). True -> normal CTC; False -> RNA-like
     outputs:
       :param edges: (4,num_edges), int32, edges of the graph (from,to,emission_idx,sequence_idx)
@@ -5790,6 +5796,8 @@ class GetCtcFsaFastBwPackedOp(NativeOpGenBase):
             "dtype": "float32",
             "need_contiguous": True,
             "gradient": "disconnected",
+            # construct_kernel writes this buffer (0.0 valid, INF_F filler)
+            "want_inplace": 2,
         },
         {
             "name": "label_loop",
@@ -5804,6 +5812,8 @@ class GetCtcFsaFastBwPackedOp(NativeOpGenBase):
     out_info = (
         {"name": "edges", "ndim": 2, "shape": (4, (4, 0)), "dtype": "int32", "need_contiguous": True},
         {"name": "start_end_states", "ndim": 2, "shape": (2, (1, 0)), "dtype": "int32", "need_contiguous": True},
+        # aliases input 4 via want_inplace; see the weights docstring above
+        {"name": "weights", "ndim": 1, "shape": ((4, 0),), "dtype": "float32", "need_contiguous": True},
     )
 
     c_extra_support_code = {
@@ -5812,7 +5822,7 @@ class GetCtcFsaFastBwPackedOp(NativeOpGenBase):
 
     c_fw_code = """
     assert(n_inputs == 6);
-    assert(n_outputs == 2);
+    assert(n_outputs == 3);  // edges, start_end_states, weights (weights aliases input 4)
     Ndarray* targets = inputs[0];
     Ndarray* seq_lens = inputs[1];
     Ndarray* edge_offsets = inputs[2];

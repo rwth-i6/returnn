@@ -1417,7 +1417,7 @@ def get_ctc_fsa_fast_bw(targets, seq_lens, blank_idx, label_loop=True):
         weights = tf.zeros((n_edges,))
         maker = OpMaker(OpDescription.from_gen_base(native_op.GetCtcFsaFastBwOp))
         op = maker.make_op()
-        edges, start_end_states = op(targets, seq_lens, blank_idx, weights, label_loop)
+        edges, start_end_states, weights = op(targets, seq_lens, blank_idx, weights, label_loop)
     return edges, weights, start_end_states
 
 
