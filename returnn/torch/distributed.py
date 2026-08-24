@@ -154,9 +154,11 @@ class DistributedContext:
         if not grads:
             return
         # One flat buffer: thousands of small allreduces would be latency-bound.
+        # noinspection protected-member
         flat = torch._utils._flatten_dense_tensors(grads)
         torch.distributed.all_reduce(flat, op=torch.distributed.ReduceOp.SUM)
         flat /= self._size
+        # noinspection protected-member
         for grad, reduced in zip(grads, torch._utils._unflatten_dense_tensors(flat, grads)):
             grad.copy_(reduced)
 

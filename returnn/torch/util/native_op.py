@@ -112,6 +112,7 @@ class OpMaker:
             else:
                 raise NotImplementedError("unsupported dtype %r" % t)
 
+        # noinspection shadowing-names
         def make_compute_code(*, cuda: bool = False) -> str:
             """compute code"""
 
@@ -239,6 +240,7 @@ class OpMaker:
               #include <c10/cuda/CUDACachingAllocator.h>
               """)
 
+        # noinspection shadowing-names
         def _schema_type_str(v: Dict[str, Any], *, c: bool = False) -> str:
             if v.get("host_memory", False):
                 assert v["ndim"] == 0  # not supported otherwise...
@@ -265,11 +267,13 @@ class OpMaker:
                 alias_of_out[out_idx] = chr(ord("a") + len(alias_of_out))
         in_alias = {id(v): alias_of_out[v["want_inplace"]] for v in in_info if v.get("want_inplace", -1) >= 0}
 
+        # noinspection shadowing-names
         def _in_schema_str(v: Dict[str, Any]) -> str:
             s = _schema_type_str(v)
             a = in_alias.get(id(v))
             return f"Tensor({a}!)" if a and s == "Tensor" else s
 
+        # noinspection shadowing-names
         def _out_schema_str(i: int, v: Dict[str, Any]) -> str:
             s = _schema_type_str(v)
             a = alias_of_out.get(i)
