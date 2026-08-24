@@ -145,6 +145,18 @@ class Engine(EngineBase):
         self._graph_capture_opts = config.typed_value("torch_cuda_graph", None)
         self._graph_capture: Optional[graph_capture.GraphCapturedTrainStep] = None
 
+        # Dump stacks when a train step stops making progress, see returnn.util.watch_stall.
+        self._stall_heartbeat = None
+        _stall_opts = config.typed_value("torch_watch_stall", None)
+        if isinstance(_stall_opts, (int, float)):
+            _stall_opts = {"timeout": float(_stall_opts)}
+        if not _stall_opts and os.environ.get("RETURNN_WATCH_STALL"):
+            _stall_opts = {"timeout": float(os.environ["RETURNN_WATCH_STALL"])}
+        if _stall_opts:
+            from returnn.util.watch_stall import watch_stall
+
+            self._stall_heartbeat = watch_stall(**_stall_opts)
+
         if config.bool("use_tensorboard", False):
             from torch.utils.tensorboard import SummaryWriter
 
@@ -545,6 +557,9 @@ class Engine(EngineBase):
                     torch.distributed.all_reduce(_has_data, op=torch.distributed.ReduceOp.MIN)
                 if not _has_data[0]:
                     break
+
+                if self._stall_heartbeat is not None:
+                    self._stall_heartbeat.value = time.time()
 
                 # convert values from torch int32 to Python ints to prevent overflow
                 keys_w_seq_len = [k for k in extern_data_raw if f"{k}:seq_len" in extern_data_raw]
