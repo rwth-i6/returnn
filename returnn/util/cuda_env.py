@@ -106,13 +106,14 @@ class CudaEnv:
 
     @classmethod
     def _cuda_path_candidates(cls):
-        p = cls._cuda_path_candidate_via_proc_map_libcudart()
-        if p:
-            yield p
+        # an explicitly configured toolkit wins over any probe
         if os.environ.get("CUDA_HOME"):
             yield os.environ.get("CUDA_HOME")
         if os.environ.get("CUDA_PATH"):
             yield os.environ.get("CUDA_PATH")
+        p = cls._cuda_path_candidate_via_proc_map_libcudart()
+        if p:
+            yield p
         for p in cls._find_nvcc_in_path():
             # Expect p == "/usr/local/cuda-8.0/bin/nvcc" or so.
             postfix = "/bin/nvcc"
