@@ -196,16 +196,12 @@ def test_cumsum_over_non_packed_dim():
 def _repeat_case(seq_lens, dur_rows, **repeat_kwargs):
     """padded vs packed repeat on the same durations, compared on the real frames"""
     x, batch_dim, time_dim, feat_dim = _make_input(batch_size=len(seq_lens), seq_lens=seq_lens)
-    dur = Tensor(
-        "dur", dims=[batch_dim, time_dim], dtype="int32", raw_tensor=torch.tensor(dur_rows, dtype=torch.int32)
-    )
+    dur = Tensor("dur", dims=[batch_dim, time_dim], dtype="int32", raw_tensor=torch.tensor(dur_rows, dtype=torch.int32))
     out_ref, out_dim = rf.repeat(x, in_spatial_dim=time_dim, repeats=dur, **repeat_kwargs)
     xp = packed.pack(x)
     # share the input packing, so the durations need no relayout
     durp = packed.pack(dur, dims=(batch_dim, time_dim), out_dim=xp.raw_tensor.packed_dim)
-    out_p, out_dim_p = rf.repeat(
-        xp, in_spatial_dim=time_dim, repeats=durp, out_spatial_dim=out_dim, **repeat_kwargs
-    )
+    out_p, out_dim_p = rf.repeat(xp, in_spatial_dim=time_dim, repeats=durp, out_spatial_dim=out_dim, **repeat_kwargs)
     assert packed.is_packed(out_p)
     assert out_dim_p == out_dim
     _assert_equal_non_padded(out_p, out_ref, batch_dim, out_dim)
@@ -242,8 +238,11 @@ def test_gather_packed_keeps_sparse_dim():
     x, batch_dim, time_dim, feat_dim = _make_input(batch_size=2, seq_lens=(4, 2))
     vocab = Dim(7, name="vocab")
     labels = Tensor(
-        "labels", dims=[batch_dim, time_dim], dtype="int32",
-        raw_tensor=torch.randint(0, 7, (2, 4), dtype=torch.int32), sparse_dim=vocab,
+        "labels",
+        dims=[batch_dim, time_dim],
+        dtype="int32",
+        raw_tensor=torch.randint(0, 7, (2, 4), dtype=torch.int32),
+        sparse_dim=vocab,
     )
     lp = packed.pack(labels, dims=(batch_dim, time_dim))
     wider = Dim(8, name="vocab+1")
@@ -261,16 +260,12 @@ def test_repeat_packed_static_traceable():
     live = [12, 5, 20]
     lens = live + [0] * (n_seq_cap - len(live))
     b_dim = Dim(n_seq_cap, name="batch")
-    sd = Dim(
-        Tensor("len", dims=[b_dim], dtype="int32", raw_tensor=torch.tensor(lens, dtype=torch.int32)), name="time"
-    )
+    sd = Dim(Tensor("len", dims=[b_dim], dtype="int32", raw_tensor=torch.tensor(lens, dtype=torch.int32)), name="time")
     sd.capacity = cap
     packed_dim = Dim(buf, name="packed")
     flat = Tensor("flat", dims=[packed_dim], dtype="int32", raw_tensor=torch.arange(buf, dtype=torch.int32))
     x = packed.pack_import(flat, batch_dim=b_dim, spatial_dim=sd, packed_dim=packed_dim)
-    dur_flat = Tensor(
-        "dur", dims=[packed_dim], dtype="int32", raw_tensor=torch.ones((buf,), dtype=torch.int32) * 3
-    )
+    dur_flat = Tensor("dur", dims=[packed_dim], dtype="int32", raw_tensor=torch.ones((buf,), dtype=torch.int32) * 3)
     dur = packed.pack_import(dur_flat, batch_dim=b_dim, spatial_dim=sd, packed_dim=packed_dim)
     with rf.set_static_traceable_ctx():
         out, out_dim = rf.repeat(x, in_spatial_dim=sd, repeats=dur, max_len_factor=factor)
@@ -289,8 +284,12 @@ def test_concat_packed_separate_packings():
         Tensor("b_len", dims=[batch_dim], dtype="int32", raw_tensor=torch.tensor([2, 3, 0], dtype=torch.int32)),
         name="b_time",
     )
-    b = Tensor("b", dims=[batch_dim, b_dim, feat_dim], dtype="float32",
-               raw_tensor=torch.randn(3, 3, 4, generator=torch.Generator().manual_seed(7)))
+    b = Tensor(
+        "b",
+        dims=[batch_dim, b_dim, feat_dim],
+        dtype="float32",
+        raw_tensor=torch.randn(3, 3, 4, generator=torch.Generator().manual_seed(7)),
+    )
     ref, out_dim = rf.concat((a, a_dim), (b, b_dim), handle_dynamic_dims=True)
     ap, bp = packed.pack(a), packed.pack(b)  # deliberately separate packings
     assert ap.raw_tensor.packed_dim != bp.raw_tensor.packed_dim
@@ -311,8 +310,12 @@ def test_concat_packed_static_traceable():
 
     def mk(lens, buf, name):
         d = Dim(
-            Tensor(f"{name}_len", dims=[b_dim], dtype="int32",
-                   raw_tensor=torch.tensor(lens + [0] * (n_seq_cap - len(lens)), dtype=torch.int32)),
+            Tensor(
+                f"{name}_len",
+                dims=[b_dim],
+                dtype="int32",
+                raw_tensor=torch.tensor(lens + [0] * (n_seq_cap - len(lens)), dtype=torch.int32),
+            ),
             name=name,
         )
         d.capacity = buf

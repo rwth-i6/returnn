@@ -3952,9 +3952,7 @@ class PackedBackend(Backend[PackedRawTensor]):
         return _repack_result(out, logits_raw)
 
     @staticmethod
-    def concat_seq_wise(
-        *sources: Tuple[Tensor, Dim], allow_broadcast: bool = False, out_dim: Dim
-    ) -> Tensor:
+    def concat_seq_wise(*sources: Tuple[Tensor, Dim], allow_broadcast: bool = False, out_dim: Dim) -> Tensor:
         """
         Per-sequence concat along the packed spatial dim of separately packed sources,
         e.g. joining an audio stream with a pseudo-speech stream.
@@ -4047,9 +4045,7 @@ class PackedBackend(Backend[PackedRawTensor]):
         return out
 
     @staticmethod
-    def repeat(
-        values: Tensor, *, in_spatial_dim: Dim, repeats: Tensor, out_spatial_dim: Dim
-    ) -> Tuple[Tensor, Dim]:
+    def repeat(values: Tensor, *, in_spatial_dim: Dim, repeats: Tensor, out_spatial_dim: Dim) -> Tuple[Tensor, Dim]:
         """
         repeat (duration-based upsampling), packed-native.
 
@@ -4062,8 +4058,7 @@ class PackedBackend(Backend[PackedRawTensor]):
         """
         in_raw = _raw(values)
         assert in_spatial_dim == in_raw.orig_dims[-1], (
-            f"packed repeat: in_spatial_dim {in_spatial_dim} is not the innermost packed dim"
-            f" {in_raw.orig_dims[-1]}"
+            f"packed repeat: in_spatial_dim {in_spatial_dim} is not the innermost packed dim {in_raw.orig_dims[-1]}"
         )
         assert len(in_raw.orig_dims) == 2, f"packed repeat: expects (batch, spatial) packing, got {in_raw.orig_dims}"
         batch_dim_ = in_raw.orig_dims[0]
@@ -4353,9 +4348,7 @@ def _concat_seq_wise_applicable(
     return out_dim.dyn_size_ext is not None
 
 
-def _concat_out_packed_dim(
-    raws: Sequence[PackedRawTensor], out_dim: Dim, batch: Dim, dev: str
-) -> Dim:
+def _concat_out_packed_dim(raws: Sequence[PackedRawTensor], out_dim: Dim, batch: Dim, dev: str) -> Dim:
     """
     :return: the packed dim for a concat result: every source's content, end to end.
         Static when tracing, since a captured buffer size must not vary per batch.
