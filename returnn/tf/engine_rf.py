@@ -742,7 +742,8 @@ class Engine(EngineBase):
                 },
                 "global_step": self._global_train_step_var,
                 "epoch": self._epoch_var,
-            }
+            },
+            max_to_keep=None,  # we have our own logic to clean checkpoints
         )
         # The whole LR schedule of a setup can live in dynamic_learning_rate, so it must be applied.
         # The TF Updater has an in-graph path for it, but that one only passes global_train_step,
