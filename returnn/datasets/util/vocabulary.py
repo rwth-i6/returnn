@@ -711,6 +711,7 @@ class HuggingFaceTokenizer(Vocabulary):
         map_bos_to_eos: bool = False,
         text_preprocessing: Optional[Callable[[str], str]] = None,
         bpe_dropout: float = 0.0,
+        add_special_tokens: Optional[List[str]] = None,
     ):
         """
         :param huggingface_repo_dir: the directory containing the `tokenizer_config.json` file.
@@ -760,6 +761,9 @@ class HuggingFaceTokenizer(Vocabulary):
                 f" does not support bpe_dropout"
             )
             self.tokenizer.backend_tokenizer.model.dropout = bpe_dropout
+
+        if add_special_tokens:
+            self.tokenizer.add_special_tokens({"additional_special_tokens": add_special_tokens})
 
     def __repr__(self):
         return "%s(%r)" % (self.__class__.__name__, self._opts)
