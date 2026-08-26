@@ -829,6 +829,8 @@ class SubProcCopyGlobalConfigPreInitFunc:
     """
 
     def __init__(self):
+        from returnn.util.basic import BehaviorVersion
+
         # Get the RETURNN global config here. Allow this to be optional (for use outside of RETURNN).
         # We store it here such that pickling this worker init func will also pickle the config,
         # so that we can reset it as global config inside the worker.
@@ -836,14 +838,27 @@ class SubProcCopyGlobalConfigPreInitFunc:
         # https://github.com/rwth-i6/returnn/issues/1495
         # MultiProcDataset has a similar logic, see https://github.com/rwth-i6/returnn/issues/1384.
         self.global_config = get_global_config(raise_exception=False)
+        # Decided here in the parent proc, where the behavior version is set (behavior version 31).
+        propagate_behavior_version = (
+            self.global_config.bool("propagate_behavior_version_to_subprocs", None) if self.global_config else None
+        )
+        if propagate_behavior_version is None:
+            propagate_behavior_version = BehaviorVersion.get() >= 31
+        # noinspection protected-member
+        self.behavior_version_state = BehaviorVersion._get_state() if propagate_behavior_version else None
 
+    # called in sub proc
     def __call__(self):
         from returnn.util import better_exchook
         from returnn.log import log
         from returnn import __old_mod_loader__
+        from returnn.util.basic import BehaviorVersion
 
         better_exchook.setup_all()
         __old_mod_loader__.disable_lazy_mod_loads()
+        if self.behavior_version_state is not None:
+            # noinspection protected-member
+            BehaviorVersion._reset(self.behavior_version_state)
 
         if self.global_config:
             set_global_config(self.global_config)

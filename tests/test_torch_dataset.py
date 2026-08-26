@@ -15,6 +15,7 @@ from returnn.datasets.generating import Task12AXDataset
 from returnn.torch.data import pipeline as data_pipeline
 from returnn.torch.data import returnn_dataset_wrapper
 from returnn.util import better_exchook
+from returnn.util.basic import BehaviorVersion
 from returnn.util import multi_proc_manager_with_watchdog
 
 
@@ -74,11 +75,13 @@ class _DummyDatasetWithChecks(Task12AXDataset):
         parent_pid: int,
         num_seqs: int = 1000,
         check_in_global_config: Optional[Dict[str, Any]] = None,
+        check_behavior_version: Optional[int] = None,
         **kwargs,
     ):
         super().__init__(num_seqs=num_seqs, **kwargs)
         self.parent_pid = parent_pid
         self.check_in_global_config = check_in_global_config
+        self.check_behavior_version = check_behavior_version
 
     def generate_seq(self, seq_idx: int) -> DatasetSeq:
         """generate seq"""
@@ -88,6 +91,11 @@ class _DummyDatasetWithChecks(Task12AXDataset):
             config = get_global_config()
             for k, v in self.check_in_global_config.items():
                 assert config.typed_dict[k] == v
+        if self.check_behavior_version is not None:
+            assert BehaviorVersion.get() == self.check_behavior_version, (
+                f"behavior_version {BehaviorVersion.get()} in dataset worker proc,"
+                f" expected {self.check_behavior_version} as in the parent proc"
+            )
         return seq
 
 
@@ -108,6 +116,34 @@ def test_correct_global_config():
                 break
 
         assert c == n
+
+
+def test_correct_behavior_version():
+    # The dataset lives in a spawned worker proc, and the behavior version must be visible there:
+    # code such as DistributeFilesDataset sharding decides via BehaviorVersion.get().
+    # https://github.com/rwth-i6/returnn/issues/1738
+    behavior_version_orig_state = BehaviorVersion._get_state()
+    try:
+        BehaviorVersion._reset()
+        BehaviorVersion.set(26)
+        config = Config({"behavior_version": 26, "propagate_behavior_version_to_subprocs": True})
+        with global_config_ctx(config):
+            dataset = _DummyDatasetWithChecks(parent_pid=os.getpid(), check_behavior_version=26)
+
+            mp_manager = multi_proc_manager_with_watchdog.create_manager()
+            loader = get_loader_from_returnn_dataset(dataset, mp_manager)
+
+            c = 0
+            n = 3
+            for batch in loader:
+                print(batch)
+                c += 1
+                if c >= n:
+                    break
+
+            assert c == n
+    finally:
+        BehaviorVersion._reset(behavior_version_orig_state)
 
 
 def test_func_in_global_config():

@@ -22,6 +22,28 @@ and not listing legacy/deprecated parameters.
 Version History
 ---------------
 
+Behavior version 31 (2026-08-26)
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+The behavior version is now propagated to spawned dataset worker subprocesses:
+the PyTorch dataloader workers, :class:`MultiProcDataset`, :class:`PostprocessingDataset`
+and the :class:`DistributeFilesDataset` sub-epoch workers.
+
+Before, only the config was copied there, and ``BehaviorVersion.get()`` fell back to the minimum
+(normally 0), so version-gated behavior silently differed between main process and dataset worker.
+Note that the dataset lives in such a worker by default,
+since the dataloader defaults to ``num_workers = 1``.
+
+The visible case is :class:`DistributeFilesDataset` sharding:
+its ``behavior_version >= 26`` gate is evaluated in the worker,
+so a config with ``behavior_version = 26`` still got the legacy double sharding,
+where every rank consumes only 1/N^2 of the data.
+
+There is also the global config option ``propagate_behavior_version_to_subprocs: bool``
+to override in both directions.
+
+See issue `#1837 <https://github.com/rwth-i6/returnn/issues/1837>`__.
+
 Behavior version 30 (2026-08-09)
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
@@ -107,6 +129,11 @@ rather than silently doing the wrong thing as a special flag value would);
 ``sharding_fix=False`` keeps the legacy behavior.
 
 See issue `#1738 <https://github.com/rwth-i6/returnn/issues/1738>`__.
+
+**Important/warning**:
+there is a high chance that behavior version 26 is still not enough,
+because of issue `#1837 <https://github.com/rwth-i6/returnn/issues/1837>`__,
+and you actually need at least behavior version 31.
 
 Behavior version 25 (2026-03-01)
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
