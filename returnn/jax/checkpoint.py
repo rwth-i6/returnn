@@ -53,7 +53,7 @@ def set_model_params(model: rf.Module, params: Dict[str, numpy.ndarray], *, allo
         raise ValueError(f"set_model_params: missing in checkpoint: {missing}")
     unexpected = [name for name in params if name not in model_params]
     if unexpected:
-        raise ValueError(f"set_model_params: not in model: {unexpected}")
+        print(f"set_model_params: not in model, ignored: {unexpected}", file=log.v3)
     for name, param in model_params.items():
         if name not in params:
             continue
