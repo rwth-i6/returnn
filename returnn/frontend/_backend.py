@@ -1841,9 +1841,8 @@ class Backend(Generic[T]):
 
 # We use a global instance, and we modify __class__ inplace,
 # such that any reference to this can be updated.
-# This is exposed to the user as `returnn.frontend`.
 # The __class__ assignment is done in `select_engine`.
-# Use object.__new__ because we disallow creating instances of Frontend.
+# Use object.__new__ because we disallow creating instances of Backend.
 global_backend = object.__new__(Backend)
 
 _backend_tensor_type_dispatch_table = {}  # type: Dict[Type, Type[Backend]]
