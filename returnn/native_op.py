@@ -4952,7 +4952,9 @@ class FastViterbiOp(NativeOpGenBase):
       :param am_scores: scores in +log space. 3d (time,batch,dim)
       :param am_seq_len: (batch,)
       :param edges: edges of the graph (from,to,emission_idx,sequence_idx), i.e. (4, n_edges)
-      :param weights: weights of the edges (n_edges,)
+      :param weights: weights of the edges (n_edges,), in -log space,
+        i.e. the same FSA format as :class:`FastBaumWelchOp`,
+        even though am_scores here are in +log space
       :param start_end_states: (2, batch)
       :param n_states: scalar, int32
     outputs:
@@ -5111,25 +5113,27 @@ class FastViterbiOp(NativeOpGenBase):
         const int32_t* d_end_states // (n_batch,)
       )
       {
-        int idx = threadIdx.x + blockDim.x * blockIdx.x;
-        while(idx < n_edges) {
+        for(int idx = threadIdx.x + blockDim.x * blockIdx.x; idx < n_edges; idx += gridDim.x * blockDim.x) {
+          int seq_idx = d_edge_seq_idx[idx];
+          if(t >= d_am_seq_len[seq_idx])
+            continue;
+          // weights are -log like fast_baum_welch, while the scores here are +log
+          float edge_weight = -d_edge_weights[idx];
+          if(isinf(edge_weight))
+            continue;
           int from_idx = d_edge_from[idx];
           //assert_cmp(0, <=, from_idx); assert_cmp(from_idx, <, n_states);
-
-          int seq_idx = d_edge_seq_idx[idx];
-          if(t < d_am_seq_len[seq_idx]) {
-            float prev_val = prev_frame[from_idx].val;
-            int emission_idx = d_edge_emission_idx[idx];
-            //assert_cmp(0, <=, emission_idx); assert_cmp(emission_idx, <, n_classes);
-            int to_idx = d_edge_to[idx];
-            //assert_cmp(0, <=, to_idx); assert_cmp(to_idx, <, n_states);
-            IdxAndVal candidate;
-            candidate.val = prev_val + d_edge_weights[idx] + d_am_scores[seq_idx * n_classes + emission_idx];
-            candidate.idx = idx;
-            select_max(&frame[to_idx], candidate);
-          }
-
-          idx += gridDim.x * blockDim.x;
+          float prev_val = prev_frame[from_idx].val;
+          if(isinf(prev_val))
+            continue;
+          int emission_idx = d_edge_emission_idx[idx];
+          //assert_cmp(0, <=, emission_idx); assert_cmp(emission_idx, <, n_classes);
+          int to_idx = d_edge_to[idx];
+          //assert_cmp(0, <=, to_idx); assert_cmp(to_idx, <, n_states);
+          IdxAndVal candidate;
+          candidate.val = prev_val + edge_weight + d_am_scores[seq_idx * n_classes + emission_idx];
+          candidate.idx = idx;
+          select_max(&frame[to_idx], candidate);
         }
       }
     """,

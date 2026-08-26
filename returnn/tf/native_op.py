@@ -1537,7 +1537,7 @@ def fast_viterbi(*, am_scores, am_seq_len, edges, weights, start_end_states, mas
     :param tf.Tensor am_scores: (time, batch, dim), in +log space (unlike fast_baum_welch)
     :param tf.Tensor am_seq_len: (batch,), int32
     :param tf.Tensor edges: (4,num_edges), edges of the graph (from,to,emission_idx,sequence_idx)
-    :param tf.Tensor weights: (num_edges,), weights of the edges
+    :param tf.Tensor weights: (num_edges,), weights of the edges (-log space, same as for fast_baum_welch)
     :param tf.Tensor start_end_states: (2, batch), (start,end) state idx in automaton.
         there is only one single automaton.
     :param mask_idx: vocab index used for masking (e.g. padding, or if not path was found)
