@@ -68,8 +68,9 @@ def setup():
 
     import returnn.util.basic as util
 
-    # noinspection PyProtectedMember
-    util.BehaviorVersion.set_min_behavior_version(util.BehaviorVersion._latest_behavior_version)
+    if not util.BehaviorVersion.is_set():
+        # noinspection PyProtectedMember
+        util.BehaviorVersion.set_min_behavior_version(util.BehaviorVersion._latest_behavior_version)
 
     from returnn.util import better_exchook
 
