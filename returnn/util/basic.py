@@ -356,6 +356,8 @@ class BehaviorVersion:
         # Reset things we did in _handle_new_min_version.
         for cb in cls.reset_callbacks:
             cb()
+        # Then apply them again for the version we just restored.
+        cls._handle_new_min_version()
 
     @classmethod
     def _handle_new_min_version(cls):
