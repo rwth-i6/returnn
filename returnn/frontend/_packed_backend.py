@@ -3084,6 +3084,18 @@ class PackedBackend(Backend[PackedRawTensor]):
         out = rf.combine(_unpack_if_packed(a), kind, _unpack_if_packed(b), **opts)
         return _repack_result(out, template)
 
+    @staticmethod
+    def clip_by_value(
+        x: Tensor,
+        clip_value_min: Union[Tensor, Any],
+        clip_value_max: Union[Tensor, Any],
+        *,
+        allow_broadcast_all_sources: bool = False,
+    ) -> Tensor:
+        """clip by value"""
+        x = rf.combine(x, "maximum", clip_value_min, allow_broadcast_all_sources=allow_broadcast_all_sources)
+        return rf.combine(x, "minimum", clip_value_max, allow_broadcast_all_sources=allow_broadcast_all_sources)
+
     # noinspection PyShadowingBuiltins
     @staticmethod
     def conv(
