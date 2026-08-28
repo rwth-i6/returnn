@@ -105,12 +105,52 @@ class CudaEnv:
         return p
 
     @classmethod
+    def _report_rejected_configured_path(cls, p: str, source: str):
+        """Say why an explicitly configured CUDA path is unusable.
+
+        Without this the fallback probe runs silently and fails much later,
+        with a bare assert naming neither the path nor the missing file.
+
+        :param p: the configured path
+        :param source: the env var it came from
+        """
+        print(f"CudaEnv: {source}={p!r} is set but not a valid CUDA path:")
+        if not os.path.isdir(p):
+            print("  the directory does not exist, or is not readable from here")
+            # Which part of the path is wrong is the actual question, e.g. a stage or a version
+            # that moved, so walk up to what does exist and list it.
+            missing = p
+            parent = os.path.dirname(p.rstrip("/"))
+            while parent not in ("", "/") and not os.path.isdir(parent):
+                missing = parent
+                parent = os.path.dirname(parent)
+            print(f"  first missing component: {missing}")
+            try:
+                print(f"  its parent {parent} contains: {sorted(os.listdir(parent))[:24]}")
+            except OSError as exc:
+                print(f"  cannot list its parent {parent}: {exc}")
+            return
+        for rel in ("bin/nvcc", "include/cuda.h"):
+            print(f"  {rel}: {'ok' if os.path.exists(f'{p}/{rel}') else 'MISSING'}")
+        lib_dir = cls._get_lib_dir_name(p)
+        print(f"  {lib_dir}/libcudart.so: {'ok' if os.path.exists(f'{p}/{lib_dir}/libcudart.so') else 'MISSING'}")
+        for d in ("lib", "lib64", "targets"):
+            full = f"{p}/{d}"
+            if os.path.isdir(full):
+                names = sorted(n for n in os.listdir(full) if "cudart" in n)
+                print(f"  {d}/: {names if names else sorted(os.listdir(full))[:8]}")
+        print(f"  top level: {sorted(os.listdir(p))[:12]}")
+
+    @classmethod
     def _cuda_path_candidates(cls):
         # an explicitly configured toolkit wins over any probe
-        if os.environ.get("CUDA_HOME"):
-            yield os.environ.get("CUDA_HOME")
-        if os.environ.get("CUDA_PATH"):
-            yield os.environ.get("CUDA_PATH")
+        for env_var in ("CUDA_HOME", "CUDA_PATH"):
+            configured = os.environ.get(env_var)
+            if not configured:
+                continue
+            if not cls._check_valid_cuda_path(configured):
+                cls._report_rejected_configured_path(configured, env_var)
+            yield configured
         p = cls._cuda_path_candidate_via_proc_map_libcudart()
         if p:
             yield p
