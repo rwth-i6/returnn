@@ -1748,6 +1748,52 @@ def test_reshape_ops_keep_static_shape_with_placeholders():
     numpy.testing.assert_allclose(out_split, values, rtol=1e-6)
 
 
+def test_cum_concat_step_dyn_dim_static_raw_size():
+    # The self-att history dim is dynamic, but its raw size can be static (0 in the first step).
+    # rf.pad then masks with a mask whose static shape is unknown there,
+    # and where_bc rejected that as "all inputs require broadcasting" (behavior version 4).
+    import returnn.tf.compat as tf_compat
+    from returnn.tf.frontend_low_level import TFBackend
+
+    # noinspection PyProtectedMember
+    from returnn.frontend import _backend
+
+    _backend.select_backend_tf()
+    prev_batch_dyn_size_ext = batch_dim.dyn_size_ext
+    try:
+        with tf_compat.v1.Graph().as_default(), tf_compat.v1.Session().as_default() as session:
+            import tensorflow as tf
+
+            beam_dim = Dim(4, name="beam")
+            head_dim, key_dim = Dim(2, name="heads"), Dim(3, name="key")
+            hist_dim = Dim(Tensor("self_att_hist", [beam_dim, batch_dim], dtype="int32"), name="self_att_hist")
+
+            accum = Tensor("k_accum", dims=[beam_dim, batch_dim, hist_dim, head_dim, key_dim], dtype="float32")
+            accum.raw_tensor = tf_compat.v1.placeholder(tf.float32, shape=(4, None, 0, 2, 3), name="k_accum")
+            hist_dim.dyn_size_ext.raw_tensor = TFBackend.create_placeholder_raw(hist_dim.dyn_size_ext)
+            batch_dim.dyn_size_ext = Tensor("batch", dims=(), dtype="int32")
+            batch_dim.dyn_size_ext.raw_tensor = tf.shape(accum.raw_tensor)[1]
+
+            step = Tensor("k_step", dims=[beam_dim, batch_dim, head_dim, key_dim], dtype="float32")
+            step.raw_tensor = TFBackend.create_placeholder_raw(step)
+
+            out, out_dim = rf.cum_concat_step(step, prev_accum=accum, axis=hist_dim)
+            res = session.run(
+                out.raw_tensor,
+                feed_dict={
+                    accum.raw_tensor: numpy.zeros((4, 2, 0, 2, 3), "float32"),
+                    step.raw_tensor: numpy.ones((4, 2, 2, 3), "float32"),
+                    hist_dim.dyn_size_ext.raw_tensor: numpy.zeros((4, 2), "int32"),
+                },
+            )
+    finally:
+        batch_dim.dyn_size_ext = prev_batch_dyn_size_ext
+        rf.select_backend_torch()
+
+    assert res.shape == (4, 2, 1, 2, 3), res.shape
+    numpy.testing.assert_allclose(res, numpy.ones((4, 2, 1, 2, 3), "float32"), rtol=1e-6)
+
+
 def test_engine_weight_decay_modules_blacklist():
     # The production config passes optimizer.weight_decay_modules_blacklist.
     # The optimizer class does not know that option ("Argument(s) not recognized"),

@@ -1891,7 +1891,17 @@ class TFBackend(Backend[tf.Tensor]):
                     # the fill value must have the tensor dtype: tf.where does not promote
                     # (e.g. a float tensor with the int scalar 0)
                     other = tf.cast(0 if value is None else value, out.raw_tensor.dtype)
-                out.raw_tensor = tf_util.where_bc(mask.copy_compatible_to_dims_raw(out.dims), out.raw_tensor, other)
+                mask_raw = mask.copy_compatible_to_dims_raw(out.dims)
+                # a dynamic dim can still have a static raw size here (e.g. 1 after the concat above),
+                # which the mask does not know; refine it, else where_bc sees all sources broadcasting
+                mask_raw = tf.ensure_shape(
+                    mask_raw,
+                    [
+                        m if m is not None else o
+                        for m, o in zip(mask_raw.shape.as_list(), out.raw_tensor.shape.as_list())
+                    ],
+                )
+                out.raw_tensor = tf_util.where_bc(mask_raw, out.raw_tensor, other)
         return out
 
     @staticmethod
