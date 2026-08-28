@@ -482,6 +482,7 @@ class GraphCapturedTrainStep:
         self._run_step = run_step
         self._post_step = post_step if opts.get("capture_optimizer", False) else None
         self._params = params
+        self._grad_params = [p for p in params if p.requires_grad]
         self._compile = bool(opts.get("compile", False))
         self._capture_graph = bool(opts.get("capture", True))
         # partitioned mode: compile the loss via the joint AOT path instead of the single
@@ -542,7 +543,7 @@ class GraphCapturedTrainStep:
         self._compiled_loss_meta: List[Tuple[str, Loss, bool, Optional[int]]] = []
         self._compiled_n_loss_outs = 0
         opts.assert_all_read()
-        for p in self._params:
+        for p in self._grad_params:
             p.grad = torch.zeros_like(p)  # static, never freed (the captured graph writes into these)
 
         self._batch_dim = get_batch_dim_from_extern_data(extern_data_template)
@@ -850,7 +851,7 @@ class GraphCapturedTrainStep:
         return self._post_step is not None
 
     def _step(self) -> RunCtx:
-        for p in self._params:
+        for p in self._grad_params:
             p.grad.zero_()  # in-graph
         with rf.set_static_traceable_ctx():
             extern_data = self._build_extern_data()
@@ -928,7 +929,7 @@ class GraphCapturedTrainStep:
         if opt is None or opt.state:
             return
         with torch.no_grad():
-            for p in self._params:
+            for p in self._grad_params:
                 if p.grad is None:
                     # also needed pre-capture: the partitioned capture zeroes + accumulates
                     # into pre-existing grads
@@ -1016,7 +1017,7 @@ class GraphCapturedTrainStep:
             extern_data = extern_data_util.raw_dict_to_extern_data(
                 extern_data_raw, extern_data_template=self._extern_data_template, device=self._device
             )
-            for p in self._params:
+            for p in self._grad_params:
                 p.grad.zero_()
             # plain int step, like the normal eager engine path
             # (the device step tensor would mix devices with the cpu-resident dyn sizes here)
@@ -1372,7 +1373,7 @@ class GraphCapturedTrainStep:
                 outs = self._compiled_fn(self._compiled_call_args(raws))
                 if self._partitioned:
                     # the bwd graph compiles on the first backward
-                    for p in self._params:
+                    for p in self._grad_params:
                         p.grad.zero_()
                     outs[0].backward()
         return self._compiled_fn
@@ -1398,7 +1399,7 @@ class GraphCapturedTrainStep:
         # plain warm run (in partitioned mode incl. backward: autotune + workspaces)
         outs = compiled(self._compiled_call_args(raws))
         if self._partitioned:
-            for p in self._params:
+            for p in self._grad_params:
                 p.grad.zero_()
             outs[0].backward()
         torch.cuda.synchronize()
@@ -1412,7 +1413,7 @@ class GraphCapturedTrainStep:
         with torch.cuda.graph(graph):
             if self._partitioned:
                 # in-graph: backward ACCUMULATES into the static grads -> zero first
-                for p in self._params:
+                for p in self._grad_params:
                     p.grad.zero_()
             outs = compiled(self._compiled_call_args(raws))
             if self._partitioned:
@@ -1478,7 +1479,7 @@ class GraphCapturedTrainStep:
             self._log_misaligned_inputs(raws)
         self._compiled_n_calls += 1
         if self._partitioned:
-            for p in self._params:
+            for p in self._grad_params:
                 p.grad.zero_()
         outs = self._compiled_fn(self._compiled_call_args(raws))
         if self._debug_nan_dump_inputs:
