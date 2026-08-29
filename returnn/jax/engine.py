@@ -290,7 +290,7 @@ class Engine(EngineBase):
         # Dispatch is async, so the loss read below is the only place the host waits:
         # t_dev_wait is device time the host could not hide, t_data is the input pipeline.
         t_data = t_dev_wait = 0.0
-        t_mark = time.time()
+        t_mark = t_step_done = time.time()
         for batch_raws, complete_frac in _prefetch(
             self._iter_batches(self.train_dataset, train=True), buffer_size=self._data_prefetch
         ):
@@ -311,6 +311,13 @@ class Engine(EngineBase):
                     entry[0] += 1
                     entry[1] += _waited
                 if pending_log:
+                    _now = time.time()
+                    # completion to completion, i.e. the throughput figure,
+                    # which is also what the torch engine's sec/step measures
+                    pending_log["sec_per_step"] = _now - t_step_done
+                    pending_log["start_elapsed"] = _now - start_time
+                    pending_log["mem_usage"] = _device_peak_bytes()
+                    t_step_done = _now
                     print(_format_step_log(self.epoch, pending_losses, pending_log), file=log.v5)
                 del pending_losses, pending_log, pending_bucket
             # The learning rate of the step: the epoch-level value, put through the config's schedule if it has one.
@@ -361,6 +368,10 @@ class Engine(EngineBase):
                 entry[0] += 1
                 entry[1] += _waited
             if pending_log:
+                _now = time.time()
+                pending_log["sec_per_step"] = _now - t_step_done
+                pending_log["start_elapsed"] = _now - start_time
+                pending_log["mem_usage"] = _device_peak_bytes()
                 print(_format_step_log(self.epoch, pending_losses, pending_log), file=log.v5)
         JaxBackend._rng_key = self._rng_key
         elapsed = time.time() - start_time
@@ -1599,6 +1610,7 @@ def _format_step_log(epoch: int, losses: Dict[str, Any], extra: Dict[str, Any]) 
     :param extra: ``step`` plus whatever diagnostics were collected
     :return: one log line, in the same shape as the PyTorch engine's per-step line
     """
+    trailing = ("step", "mem_usage", "sec_per_step", "start_elapsed")
     parts = [f"ep {epoch} train, step {extra['step']}"]
     parts += [f"{name} {float(loss_sum) / float(inv_norm):.3f}" for name, (loss_sum, inv_norm) in losses.items()]
     parts += [
@@ -1606,9 +1618,35 @@ def _format_step_log(epoch: int, losses: Dict[str, Any], extra: Dict[str, Any]) 
         if name.startswith(("num_seqs", "max_size", "sum_size"))
         else f"{name} {float(value):.3f}"
         for name, value in extra.items()
-        if name != "step"
+        if name not in trailing
     ]
+    # spelled and ordered like the torch engine's line, so one parser reads either log
+    if extra.get("mem_usage") is not None:
+        label, peak = extra["mem_usage"]
+        parts.append(f"mem_usage:{label} {util.human_bytes_size(peak)}")
+    if extra.get("sec_per_step") is not None:
+        parts.append(f"{extra['sec_per_step']:.3f} sec/step")
+    if extra.get("start_elapsed") is not None:
+        parts.append(f"elapsed {util.hms(extra['start_elapsed'])}")
     return ", ".join(parts)
+
+
+def _device_peak_bytes() -> Optional[Tuple[str, int]]:
+    """
+    :return: (device label, peak bytes in use), or None where the platform does not report it
+
+    The counterpart of torch's ``max_memory_allocated``, labelled as the torch engine labels it
+    (RF calls the JAX GPU device "cuda" as well), so one parser reads either log.
+    A host-side counter read, no device sync.
+    """
+    try:
+        dev = jax.local_devices()[0]
+        stats = dev.memory_stats()
+    except (RuntimeError, IndexError, AttributeError):
+        return None
+    if not stats or stats.get("peak_bytes_in_use") is None:
+        return None
+    return ("cuda" if dev.platform == "gpu" else dev.platform), stats["peak_bytes_in_use"]
 
 
 def _is_host_only(value: Any) -> bool:
