@@ -157,8 +157,12 @@ class NativeCodeCompiler:
         if not os.path.exists(filename):
             return None
         s = open(filename).read()
-        res = eval(s)
-        assert isinstance(res, dict)
+        try:
+            res = eval(s)
+        except SyntaxError:
+            return None
+        if not isinstance(res, dict):
+            return None
         return res
 
     _relevant_info_keys = (
