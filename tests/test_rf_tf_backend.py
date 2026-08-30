@@ -456,6 +456,101 @@ def test_checkpoint_save_load():
         numpy.testing.assert_array_equal(restored[name], written[name], err_msg=f"param {name} differs")
 
 
+def test_engine_train_save_load_tied_params():
+    # Weight tying: one Parameter reachable under two names (here as in a transformer decoder,
+    # where the output projection reuses the input embedding).
+    # named_parameters deduplicates, the save side maps every alias, so the saver sees one
+    # variable under two names -- and a fresh engine must restore that model from the checkpoint.
+    from returnn.config import Config, global_config_ctx
+    from returnn.datasets.generating import DummyDataset
+    from returnn.tf.engine_rf import Engine
+    from returnn.tf.frontend_low_level import TFBackend
+
+    # noinspection PyProtectedMember
+    from returnn.frontend import _backend
+
+    n_data_dim, n_classes_dim, seq_len = 2, 3, 5
+    train_data = DummyDataset(input_dim=n_data_dim, output_dim=n_classes_dim, num_seqs=8, seq_len=seq_len)
+    train_data.init_seq_order(epoch=1)
+
+    time_dim = Dim(Tensor("time", [batch_dim], dtype="int32"))
+    in_dim = Dim(n_data_dim, name="in")
+    out_dim = Dim(n_classes_dim, name="out")
+
+    class _Net(rf.Module):
+        def __init__(self):
+            super().__init__()
+            self.embed = rf.Linear(in_dim, out_dim)
+            self.logits = rf.Linear(in_dim, out_dim)
+            self.logits.weight = self.embed.weight  # tied
+
+    # noinspection PyShadowingNames
+    def _get_model(*, epoch: int, step: int, **_kwargs) -> rf.Module:
+        return _Net()
+
+    # noinspection PyShadowingNames
+    def _train_step(*, model: _Net, extern_data: TensorDict, **_kwargs):
+        logits = model.logits(extern_data["data"]) + model.embed(extern_data["data"])
+        loss = rf.cross_entropy(estimated=logits, target=extern_data["classes"], axis=out_dim, estimated_type="logits")
+        loss.mark_as_loss("ce")
+
+    model_dir = tempfile.mkdtemp(prefix="returnn-test-rf-tf-tied-")
+    config = Config(
+        {
+            "backend": "tensorflow",
+            "model": model_dir + "/model",
+            "extern_data": {
+                "data": {"dims": [batch_dim, time_dim, in_dim], "dtype": "float32"},
+                "classes": {"dims": [batch_dim, time_dim], "sparse_dim": out_dim, "dtype": "int32"},
+            },
+            "get_model": _get_model,
+            "train_step": _train_step,
+            "optimizer": {"class": "adam"},
+            "learning_rate": 0.05,
+            "batch_size": 20,
+            "max_seqs": 4,
+            "num_epochs": 1,
+        }
+    )
+
+    _backend.select_backend_tf()
+    prev_batch_dyn_size_ext = batch_dim.dyn_size_ext
+    try:
+        with global_config_ctx(config):
+            engine = Engine(config=config)
+            engine.init_train_from_config(config=config, train_data=train_data)
+            engine.train()
+            trained = {
+                name: engine.session.run(TFBackend.get_parameter_variable(p))
+                for name, p in engine.model.named_parameters()
+            }
+
+            import tensorflow as tf
+
+            ckpt = engine.get_epoch_model_filename(epoch=1)
+            ckpt_names = set(name for name, _ in tf.train.list_variables(ckpt))
+            # the tied weight is stored once, under whichever alias comes first
+            assert "embed.weight" in ckpt_names or "logits.weight" in ckpt_names, ckpt_names
+            assert {"embed.bias", "logits.bias", "global_step", "epoch"}.issubset(ckpt_names), ckpt_names
+
+            # a fresh engine restores it, and the tying survives
+            engine2 = Engine(config=config)
+            engine2.init_train_from_config(config=config, train_data=train_data)
+            restored = {
+                name: engine2.session.run(TFBackend.get_parameter_variable(p))
+                for name, p in engine2.model.named_parameters()
+            }
+            assert set(restored) == set(trained), (sorted(restored), sorted(trained))
+            for name in trained:
+                numpy.testing.assert_array_equal(restored[name], trained[name], err_msg=f"param {name} differs")
+            # still one variable behind both names, and it holds the restored value
+            assert engine2.model.logits.weight is engine2.model.embed.weight
+    finally:
+        batch_dim.dyn_size_ext = prev_batch_dyn_size_ext
+        rf.select_backend_torch()
+        shutil.rmtree(model_dir, ignore_errors=True)
+
+
 def test_engine_train():
     # The engine (returnn/tf/engine_rf.py) driving a config end to end:
     # epoch loop, learning-rate control, dev evaluation, checkpoint per epoch.

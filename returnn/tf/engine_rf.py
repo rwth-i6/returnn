@@ -744,6 +744,16 @@ class Engine(EngineBase):
         self._global_train_step_var = tf.Variable(
             self.global_train_step, dtype="int64", trainable=False, name="global_step"
         )
+        # Tied parameters arrive here as several names for the same variable which tf.train.Saver does not allow.
+        save_var_list: Dict[str, tf.Variable] = {}
+        seen_vars: Dict[int, str] = {}
+        for name, p in _named_parameters_with_aliases(self.model).items():
+            var = TFBackend.get_parameter_variable(p)
+            if id(var) in seen_vars:
+                print(f"param {name!r} is tied to {seen_vars[id(var)]!r}, saved once", file=log.v4)
+                continue
+            seen_vars[id(var)] = name
+            save_var_list[name] = var
         # The save-side saver additionally stores the step counter,
         # under the net-dict engine's tensor name "global_step".
         # The load-side saver (_saver) stays params-only,
@@ -751,16 +761,7 @@ class Engine(EngineBase):
         # the counters are read back separately via NewCheckpointReader, see __init__.
         self._save_saver = tf_compat.v1.train.Saver(
             {
-                # ALL names of shared parameters (weight tying), not the deduplicated
-                # named_parameters view: the torch engine's state_dict lists every alias,
-                # and converted checkpoints must satisfy torch's loader
-                # (e.g. decoder.logits.weight tied to decoder.input_embedding.weight).
-                # The load side (_saver) stays on named_parameters: loading each parameter
-                # once suffices, and older checkpoints without aliases still restore.
-                **{
-                    name: TFBackend.get_parameter_variable(p)
-                    for name, p in _named_parameters_with_aliases(self.model).items()
-                },
+                **save_var_list,
                 "global_step": self._global_train_step_var,
                 "epoch": self._epoch_var,
             },
