@@ -1785,8 +1785,11 @@ class Backend(Generic[T]):
     TensorArrayType = Any
 
     @classmethod
-    def tensor_array_create(cls) -> TensorArrayType:
+    def tensor_array_create(cls, *, capacity: Optional[int] = None) -> TensorArrayType:
         """
+        :param capacity: max number of entries, if known.
+            A backend whose graph loop needs a fixed-size carry (JAX: ``lax.while_loop``)
+            cannot grow the array and requires it; the eager and TF paths ignore it.
         :return: empty TensorArray
         """
         if cls.executing_eagerly():

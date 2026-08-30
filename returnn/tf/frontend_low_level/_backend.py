@@ -2296,11 +2296,13 @@ class TFBackend(Backend[tf.Tensor]):
     TensorArrayType = _TensorArray
 
     @classmethod
-    def tensor_array_create(cls) -> TensorArrayType:
+    def tensor_array_create(cls, *, capacity: Optional[int] = None) -> TensorArrayType:
         """
+        :param capacity: ignored, the tf.TensorArray grows on demand
         :return: empty TensorArray. The ``tf.TensorArray`` follows on the first write,
             when the element dtype is known (see :class:`_TensorArray`).
         """
+        del capacity  # tf.TensorArray is dynamic_size
         return _TensorArray()
 
     @staticmethod
