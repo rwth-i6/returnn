@@ -9,7 +9,7 @@ therefore follows the same rules as the static-traceable regime of the PyTorch b
 """
 
 from __future__ import annotations
-from typing import Optional, Union, Sequence, Tuple, List, Dict
+from typing import Any, Callable, Optional, Union, Sequence, Tuple, List, Dict
 import contextlib
 from functools import partial
 import itertools
@@ -28,6 +28,36 @@ from returnn.frontend import RawTensorTypes
 import returnn.frontend as rf
 
 _TT = Tensor[jax.Array]
+
+
+class _BufferTensorArray:
+    """
+    A TensorArray as a preallocated buffer plus a write index.
+
+    The eager path keeps a Python list, which cannot be a ``lax.while_loop`` carry:
+    the carry must have one fixed shape across iterations.
+    So a TensorArray that travels through the graph loop takes this form,
+    which needs the entry count up front (``TensorArray(capacity=...)``).
+    """
+
+    def __init__(
+        self,
+        *,
+        capacity: int,
+        buffer: Optional[jax.Array] = None,
+        index: Optional[jax.Array] = None,
+        template: Optional[Tensor] = None,
+    ):
+        """
+        :param capacity: max number of entries
+        :param buffer: [capacity, ...], allocated on the first push
+        :param index: next write position
+        :param template: dims and dtype of one entry, taken from the first push
+        """
+        self.capacity = capacity
+        self.buffer = buffer
+        self.index = jnp.asarray(0, dtype=jnp.int32) if index is None else index
+        self.template = template
 
 
 # Ignore this warning until we really expect that we implemented everything.
@@ -842,7 +872,187 @@ class JaxBackend(Backend[jax.Array]):
             result.append(out)
         return tuple(result)
 
-    TensorArrayType = List[Tensor]
+    # a Python list while eager; a _BufferTensorArray when it must cross the graph loop
+    TensorArrayType = Union[List[Tensor], _BufferTensorArray]
+
+    @staticmethod
+    def while_loop(
+        cond: Callable[[Any], Union[bool, Tensor]],
+        body: Callable[[Any], Any],
+        initial: Any,
+    ) -> Any:
+        """
+        ``jax.lax.while_loop`` over the RF loop-var structure: the loop stays in the graph
+        instead of being unrolled, so the body is traced once whatever the trip count.
+
+        Loop vars are the :class:`Tensor` and :class:`TensorArray` entries of the structure;
+        everything else is loop-invariant and must come back unchanged from ``body``.
+        The carry is fixed-shape, as ``lax`` requires:
+        a Tensor may not change its dims per iteration,
+        and a TensorArray needs ``TensorArray(capacity=...)`` so it is a buffer, not a list.
+
+        :param cond: gets the loop vars, returns a scalar bool Tensor
+        :param body: gets the loop vars, returns the next loop vars, same structure
+        :param initial: initial loop vars
+        :return: final loop vars
+        """
+        import tree
+        from returnn.frontend.tensor_array import TensorArray
+
+        flat_initial = list(tree.flatten(initial))
+        var_idxs = [i for i, v in enumerate(flat_initial) if isinstance(v, (Tensor, TensorArray))]
+        assert var_idxs, f"while_loop: no Tensor/TensorArray among the loop vars {initial}"
+
+        def _init_carry(v: Union[Tensor, TensorArray]) -> Any:
+            """:param v: one loop var :return: its raw carry"""
+            if isinstance(v, Tensor):
+                return v.raw_tensor
+            # noinspection PyProtectedMember
+            raw = v._backend_tensor_array
+            assert isinstance(raw, _BufferTensorArray), (
+                f"while_loop: TensorArray {v.tensor_template} must be created with a capacity"
+                f" to cross the graph loop, as lax.while_loop cannot grow the carry"
+            )
+            buffer = raw.buffer
+            if buffer is None:  # nothing pushed yet, so allocate from the template
+                tmpl = v.tensor_template
+                shape = tuple(d.get_dim_value() for d in tmpl.dims)
+                buffer = jnp.zeros((raw.capacity,) + shape, dtype=JaxBackend.as_dtype_raw(tmpl.dtype))
+            return buffer, raw.index
+
+        def _carry_like(v: Union[Tensor, TensorArray], ref: Union[Tensor, TensorArray]) -> Any:
+            """
+            :param v: the loop var after one body call
+            :param ref: the same slot before it
+            :return: its raw carry, in ``ref``'s dim order
+
+            An RF Tensor is dim-order agnostic, but the lax carry is not:
+            the body may return the same tensor transposed, which lax rejects as a type change.
+            """
+            if isinstance(v, Tensor):
+                return v.copy_compatible_to_dims_raw(ref.dims)
+            return _init_carry(v)
+
+        def _rebuild(carry: Sequence[Any]) -> Any:
+            """:param carry: raw values :return: the loop vars as body/cond expect them"""
+            out = list(flat_initial)
+            for i, raw in zip(var_idxs, carry):
+                value = flat_initial[i]
+                if isinstance(value, Tensor):
+                    tensor = value.copy_template()
+                    tensor.raw_tensor = raw
+                    out[i] = tensor
+                else:
+                    buffer, index = raw
+                    # noinspection PyProtectedMember
+                    prev = value._backend_tensor_array
+                    out[i] = TensorArray(
+                        tensor_template=value.tensor_template,
+                        capacity=prev.capacity,
+                        _backend_tensor_array=_BufferTensorArray(
+                            capacity=prev.capacity,
+                            buffer=buffer,
+                            index=index,
+                            template=prev.template if prev.template is not None else value.tensor_template,
+                        ),
+                        _backend=JaxBackend,
+                    )
+            return tree.unflatten_as(initial, out)
+
+        def _cond(carry: Sequence[Any]):
+            res = cond(_rebuild(carry))
+            assert isinstance(res, Tensor) and res.dims == () and res.dtype == "bool", (
+                f"while_loop: cond must return a scalar bool Tensor, got {res}"
+            )
+            return res.raw_tensor
+
+        def _body(carry: Sequence[Any]):
+            new = body(_rebuild(carry))
+            tree.assert_same_structure(initial, new)
+            flat_new = list(tree.flatten(new))
+            for i in var_idxs:
+                before, after = flat_initial[i], flat_new[i]
+                if isinstance(before, Tensor):
+                    assert isinstance(after, Tensor) and before.dims_set == after.dims_set, (
+                        f"while_loop: loop var {i} changed its dims, {before} -> {after}."
+                        f" The graph loop needs one fixed shape across iterations;"
+                        f" give the dim a capacity instead of growing it."
+                    )
+            return tuple(_carry_like(flat_new[i], flat_initial[i]) for i in var_idxs)
+
+        init = tuple(_init_carry(flat_initial[i]) for i in var_idxs)
+        # One device for the whole carry, as lax requires.
+        # The loop counter is on CPU by design, for the host-driven eager loop;
+        # in the graph loop the control flow lives on the device with everything else.
+        dev = None
+        for raw in tree.flatten(init):
+            if isinstance(raw, jax.core.Tracer):
+                dev = None
+                break
+            d = next(iter(raw.devices()), None)
+            if d is not None and d.platform != "cpu":
+                dev = d
+                break
+        if dev is not None:
+            init = tree.map_structure(
+                lambda raw: raw if isinstance(raw, jax.core.Tracer) else jax.device_put(raw, dev), init
+            )
+        final = jax.lax.while_loop(_cond, _body, init)
+        return _rebuild(final)
+
+    @classmethod
+    def tensor_array_create(cls, *, capacity: Optional[int] = None) -> TensorArrayType:
+        """
+        :param capacity: if given, the array can travel through the graph loop
+        :return: empty TensorArray
+        """
+        if capacity is None:
+            return []  # eager: a Python list, grows on demand
+        return _BufferTensorArray(capacity=capacity)
+
+    @staticmethod
+    def tensor_array_push_back(tensor_array: TensorArrayType, tensor: Tensor) -> TensorArrayType:
+        """push_back"""
+        if isinstance(tensor_array, list):
+            return tensor_array + [tensor]
+        # the buffer has the template's dim order, the pushed tensor need not
+        template = tensor_array.template if tensor_array.template is not None else tensor.copy_template()
+        raw = tensor.copy_transpose(template.dims).raw_tensor
+        buffer = tensor_array.buffer
+        if buffer is None:
+            # the entry shape is only known at the first write
+            buffer = jnp.zeros((tensor_array.capacity,) + raw.shape, dtype=raw.dtype)
+        buffer = jax.lax.dynamic_update_index_in_dim(buffer, raw, tensor_array.index, axis=0)
+        return _BufferTensorArray(
+            capacity=tensor_array.capacity,
+            buffer=buffer,
+            index=tensor_array.index + 1,
+            template=template,
+        )
+
+    @staticmethod
+    def tensor_array_get_item(tensor_array: TensorArrayType, index: Union[int, Tensor]) -> Tensor:
+        """get_item"""
+        if isinstance(tensor_array, list):
+            if isinstance(index, int):
+                return tensor_array[index]
+            if not isinstance(index.raw_tensor, jax.core.Tracer):
+                return tensor_array[int(index.raw_tensor)]
+            # Traced index, e.g. the loop counter of the graph loop reading an unstacked array.
+            # The list has to become one array to be indexed in the graph;
+            # its entries are loop invariant, so XLA hoists the stack out of the loop.
+            assert tensor_array, "TensorArray: get_item on an empty array"
+            template = tensor_array[0].copy_template()
+            stacked = jnp.stack([t.copy_transpose(template.dims).raw_tensor for t in tensor_array], axis=0)
+            out = template.copy_template()
+            out.raw_tensor = jax.lax.dynamic_index_in_dim(stacked, index.raw_tensor, axis=0, keepdims=False)
+            return out
+        assert tensor_array.buffer is not None, "TensorArray: get_item before any push_back"
+        idx = index if isinstance(index, int) else index.raw_tensor
+        raw = jax.lax.dynamic_index_in_dim(tensor_array.buffer, idx, axis=0, keepdims=False)
+        out = tensor_array.template.copy_template()
+        out.raw_tensor = raw
+        return out
 
     @staticmethod
     def tensor_array_unstack(tensor: Tensor, *, axis: Dim) -> TensorArrayType:
@@ -859,6 +1069,13 @@ class JaxBackend(Backend[jax.Array]):
     @staticmethod
     def tensor_array_stack(tensor_array: TensorArrayType, *, axis: Dim, tensor_template: Tensor) -> Tensor:
         """stack"""
+        if isinstance(tensor_array, _BufferTensorArray):
+            # already contiguous along axis 0, which is what the buffer was allocated for
+            assert tensor_array.buffer is not None, "TensorArray: stack before any push_back"
+            template = tensor_array.template if tensor_array.template is not None else tensor_template
+            out = template.copy_template().copy_add_dim_by_tag(axis, unbroadcast=True, axis=0)
+            out.raw_tensor = tensor_array.buffer
+            return out
         if tensor_array:
             # the stored tensors carry the better template (dim order),
             # and TensorArray already checked that they are compatible
