@@ -1569,12 +1569,21 @@ def _batch_size_info(batch_raws: Dict[str, Any]) -> Dict[str, Any]:
             continue
         name = key[: -len("_seq_lens")]
         data = batch_raws.get(name)
-        if data is None or not getattr(data, "ndim", 0):
+        if data is not None and getattr(data, "ndim", 0) > 1:
+            info.setdefault("num_seqs", int(value.shape[0]))
+            info[f"max_size:{name}"] = int(data.shape[1])
+            # the content, i.e. what a packed step would compute on; num_seqs * max_size - this is
+            # exactly the padding the bucket regime adds
+            info[f"sum_size:{name}"] = jnp.sum(value)
             continue
-        info.setdefault("num_seqs", int(value.shape[0]))
-        info[f"max_size:{name}"] = int(data.shape[1])
-        # the content, i.e. what a packed step would compute on; num_seqs * max_size - this is
-        # exactly the padding the bucket regime adds
+        packed = batch_raws.get(f"{name}:packed")
+        if packed is None or not getattr(packed, "ndim", 0):
+            continue
+        # packed: one flat buffer, so its length is the padded extent.
+        # The lens are zero-padded to the batch bound,
+        # so the non-zero count is the real seq count.
+        info.setdefault("num_seqs", jnp.count_nonzero(value))
+        info[f"max_size:{name}"] = int(packed.shape[0])
         info[f"sum_size:{name}"] = jnp.sum(value)
     return info
 
