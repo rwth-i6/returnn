@@ -14,7 +14,7 @@ import tree
 from returnn.tensor import Tensor, Dim
 import returnn.frontend as rf
 from .tensor_array import TensorArray
-from ._backend import global_backend
+from ._backend import Backend, global_backend
 
 
 __all__ = ["while_loop", "scan"]
@@ -55,6 +55,9 @@ def while_loop(
         v = init_tensors[0]
         # noinspection PyProtectedMember
         backend = v._raw_backend
+    # Prefer the backend's graph loop where it has one.
+    if backend.while_loop is not Backend.while_loop:
+        return backend.while_loop(cond, body, initial)
     if backend.executing_eagerly():
         loop_vars = initial
         loop_var_templates = _templates_for_loop_vars(loop_vars)
