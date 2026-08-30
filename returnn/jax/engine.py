@@ -1210,7 +1210,7 @@ class Engine(EngineBase):
             for batch_idx in range(batch_dim_.get_dim_value()):
                 # seq_tag is a numpy string array in the raw dict, not a Tensor
                 # noinspection PyUnresolvedReferences
-                seq_tag = batch_raws["seq_tag"][batch_idx]
+                seq_tag = str(batch_raws["seq_tag"][batch_idx])
                 outputs_per_seq = TensorDict()
                 for key, value in outputs.data.items():
                     outputs_per_seq.data[key] = _tensor_of_seq_numpy(value, batch_idx=batch_idx, batch_dim=batch_dim_)
