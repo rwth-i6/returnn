@@ -168,6 +168,9 @@ def replace_dim_v2(
         )
         idx = rf.range_over_dim(out_dim, device=source.device)
         return rf.gather(padded, axis=padded_dim, indices=rf.minimum(idx, old_ext), clip_to_valid=False)
+    # Eager from here, so the sizes are concrete.
+    old_size = int(old_size)
+    new_size = int(new_size)
     if new_size == old_size:
         res, _ = rf.replace_dim(source, in_dim=in_dim, out_dim=out_dim)
     elif new_size > old_size:
