@@ -92,6 +92,7 @@ class Engine(EngineBase):
         self._forward_dim_fetches: Dict[Dim, str] = {}  # dyn dim -> its key in _forward_fetches
         self._step_placeholder: Optional[tf.Tensor] = None
         self._saver: Optional[tf_compat.v1.train.Saver] = None
+        self._non_critical_params: Dict[str, rf.Parameter] = {}  # not in the saver, see _load_model
         self._save_saver: Optional[tf_compat.v1.train.Saver] = None  # params + global_step + epoch, see _init_step_func
         self._epoch_var: Optional[tf.Variable] = None  # in-graph epoch, see _init_step_func
         self._epoch_assign: Optional[Any] = None  # (assign op, placeholder), see init_train_epoch
@@ -678,8 +679,23 @@ class Engine(EngineBase):
         params = dict(model.named_parameters())
         num_params = sum(int(numpy.prod([d.dimension for d in p.dims])) for p in params.values())
         print(f"net params #: {num_params} ({len(params)} params)", file=log.v2)
+        # A saver restores its whole var_list or fails, so two kinds of params stay out of it:
+        # those the model def sets up itself (non_critical_for_restore, e.g. a prior read from a file),
+        # and those preload_from_files brings in right after, see _preload_from_files.
+        # The PyTorch engine likewise only warns when such params are missing.
+        self._non_critical_params = {name: p for name, p in params.items() if p.non_critical_for_restore}
+        # an entry without a prefix covers every param, so only a real prefix excludes anything
+        preload_prefixes = tuple(
+            prefix
+            for opts in (self.config.typed_value("preload_from_files") or {}).values()
+            for prefix in [opts.get("prefix", "")]
+            if prefix
+        )
+        skip = set(self._non_critical_params)
+        if preload_prefixes:
+            skip.update(name for name in params if name.startswith(preload_prefixes))
         self._saver = tf_compat.v1.train.Saver(
-            {name: TFBackend.get_parameter_variable(p) for name, p in params.items()}
+            {name: TFBackend.get_parameter_variable(p) for name, p in params.items() if name not in skip}
         )
 
     def _init_step_func(self):
@@ -956,6 +972,17 @@ class Engine(EngineBase):
         :param filename: as :func:`EngineBase.get_epoch_model` returns it
         """
         self._saver.restore(self.session, filename)
+        if self._non_critical_params:
+            # take them from the checkpoint when it has them, keep the model def's values otherwise
+            reader = tf_compat.v1.train.NewCheckpointReader(filename)
+            present = {name: p for name, p in self._non_critical_params.items() if reader.has_tensor(name)}
+            missing = sorted(set(self._non_critical_params) - set(present))
+            if missing:
+                print(f"Not in checkpoint, non-critical for restore: {missing}", file=log.v3)
+            if present:
+                tf_compat.v1.train.Saver(
+                    {name: TFBackend.get_parameter_variable(p) for name, p in present.items()}
+                ).restore(self.session, filename)
         print(f"Loaded model {filename}", file=log.v3)
 
 
