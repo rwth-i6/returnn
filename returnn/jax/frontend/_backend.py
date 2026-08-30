@@ -2633,7 +2633,10 @@ def _to_device_of(x: jax.Array, ref: jax.Array) -> jax.Array:
     :param ref: array whose device decides the placement
     :return: ``x`` on ``ref``'s device
     """
-    if rf.is_static_traceable():
+    # Tracers are on one device by construction, and devices() on one forces concretization.
+    # rf.is_static_traceable() alone is not enough: it is set around the jitted train step,
+    # but not inside a lax.while_loop trace, which also passes tracers here.
+    if rf.is_static_traceable() or isinstance(x, jax.core.Tracer) or isinstance(ref, jax.core.Tracer):
         return x
     dx = next(iter(x.devices()), None)
     dr = next(iter(ref.devices()), None)
