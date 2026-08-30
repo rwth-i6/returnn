@@ -9,7 +9,7 @@ therefore follows the same rules as the static-traceable regime of the PyTorch b
 """
 
 from __future__ import annotations
-from typing import Optional, Union, Sequence, Tuple, Dict
+from typing import Optional, Union, Sequence, Tuple, List, Dict
 import contextlib
 from functools import partial
 import itertools
@@ -824,6 +824,35 @@ class JaxBackend(Backend[jax.Array]):
             out.raw_tensor = jax.lax.index_in_dim(source.raw_tensor, i, axis=axis_int, keepdims=False)
             result.append(out)
         return tuple(result)
+
+    TensorArrayType = List[Tensor]
+
+    @staticmethod
+    def tensor_array_unstack(tensor: Tensor, *, axis: Dim) -> TensorArrayType:
+        """unstack"""
+        axis_int = tensor.get_axis_from_description(axis)
+        template = tensor.copy_template().copy_template_excluding_axis(axis_int)
+        out = []
+        for i in range(tensor.raw_tensor.shape[axis_int]):
+            entry = template.copy_template()
+            entry.raw_tensor = jax.lax.index_in_dim(tensor.raw_tensor, i, axis=axis_int, keepdims=False)
+            out.append(entry)
+        return out
+
+    @staticmethod
+    def tensor_array_stack(tensor_array: TensorArrayType, *, axis: Dim, tensor_template: Tensor) -> Tensor:
+        """stack"""
+        if tensor_array:
+            # the stored tensors carry the better template (dim order),
+            # and TensorArray already checked that they are compatible
+            tensor_template = tensor_array[0].copy_template()
+        out = tensor_template.copy_add_dim_by_tag(axis, unbroadcast=True, axis=0)
+        if not tensor_array:
+            return rf.zeros_like(out)
+        out.raw_tensor = jnp.stack(
+            [tensor.copy_transpose(tensor_template.dims).raw_tensor for tensor in tensor_array], axis=0
+        )
+        return out
 
     @staticmethod
     def full(
