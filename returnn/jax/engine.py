@@ -52,6 +52,47 @@ from . import checkpoint as _checkpoint
 
 __all__ = ["Engine"]
 
+# Diagnostic only: wait for the step's result right after dispatching it,
+# so the per-step timing separates enqueue from device execution
+# (a jit call blocks on busy buffers otherwise).
+_SYNC_STEP_PROBE = bool(os.environ.get("RETURNN_JAX_SYNC_STEP_PROBE"))
+
+# Diagnostic only: sample GPU utilization in the background.
+# The in-loop timers cannot tell host work from a call that blocks through the device execution;
+# this can.
+_GPU_UTIL_PROBE = bool(os.environ.get("RETURNN_JAX_GPU_UTIL_PROBE"))
+
+
+def _start_gpu_util_probe() -> None:
+    """Sample nvidia-smi utilization in a daemon thread and log the distribution periodically."""
+    import subprocess
+
+    def _sample():
+        """poll utilization until the process exits"""
+        vals: List[int] = []
+        while True:
+            try:
+                out = subprocess.run(
+                    ["nvidia-smi", "--query-gpu=utilization.gpu", "--format=csv,noheader,nounits"],
+                    capture_output=True, text=True, timeout=10,
+                )
+            except (OSError, subprocess.TimeoutExpired):
+                return
+            line = out.stdout.strip().splitlines()
+            if not line:
+                return
+            vals.append(int(line[0].strip()))
+            if len(vals) % 40 == 0:
+                ordered = sorted(vals[-40:])
+                print(
+                    f"GPU util probe: n={len(vals)} last40 median={ordered[20]}%"
+                    f" min={ordered[0]}% max={ordered[-1]}%",
+                    file=log.v3,
+                )
+            time.sleep(0.25)
+
+    _threading.Thread(target=_sample, name="gpu-util-probe", daemon=True).start()
+
 
 class Engine(EngineBase):
     """
@@ -285,12 +326,15 @@ class Engine(EngineBase):
         pending_losses: Optional[Dict[str, Any]] = None  # of the step still running on the device
         pending_log: Optional[Dict[str, Any]] = None  # what to log about it, read at the same time
         pending_bucket: Optional[Tuple[int, ...]] = None  # the shape that step ran on
+        pending_host: Optional[Tuple[float, float, float, float]] = None  # its cost, split by phase
         bucket_stats: Dict[Tuple[int, ...], List[Any]] = {}  # shape -> [n steps, summed device wait]
         # Where the epoch's wall-clock goes.
         # Dispatch is async, so the loss read below is the only place the host waits:
         # t_dev_wait is device time the host could not hide, t_data is the input pipeline.
-        t_data = t_dev_wait = 0.0
+        t_data = t_dev_wait = t_data_prev = 0.0
         t_mark = t_step_done = time.time()
+        if _GPU_UTIL_PROBE:
+            _start_gpu_util_probe()
         for batch_raws, complete_frac in _prefetch(
             self._iter_batches(self.train_dataset, train=True), buffer_size=self._data_prefetch
         ):
@@ -319,7 +363,25 @@ class Engine(EngineBase):
                     pending_log["mem_usage"] = _device_peak_bytes()
                     t_step_done = _now
                     print(_format_step_log(self.epoch, pending_losses, pending_log), file=log.v5)
-                del pending_losses, pending_log, pending_bucket
+                    # host vs device for this step,
+                    # on its own line so the step-line parsers are unaffected:
+                    # data is the input pipeline, device-wait is unhidden device time
+                    _data_step = t_data - t_data_prev
+                    t_data_prev = t_data
+                    print(
+                        f"ep {self.epoch} train, step {pending_log['step']} timing:"
+                        f" data {_data_step * 1e3:.1f} ms,"
+                        f" device-wait {_waited * 1e3:.1f} ms,"
+                        f" other {(pending_log['sec_per_step'] - _data_step - _waited) * 1e3:.1f} ms"
+                        + (
+                            f" (raws {pending_host[0] * 1e3:.1f}, enqueue {pending_host[1] * 1e3:.1f},"
+                            f" exec {pending_host[2] * 1e3:.1f}, bind {pending_host[3] * 1e3:.1f})"
+                            if pending_host
+                            else ""
+                        ),
+                        file=log.v5,
+                    )
+                del pending_losses, pending_log, pending_bucket, pending_host
             # The learning rate of the step: the epoch-level value, put through the config's schedule if it has one.
             learning_rate = self._updater.get_effective_learning_rate(
                 learning_rate=self.learning_rate,
@@ -327,8 +389,10 @@ class Engine(EngineBase):
                 epoch=self.epoch,
                 epoch_continuous=(self.epoch - 1 + complete_frac) if complete_frac is not None else None,
             )
+            _t_raws0 = time.time()
             step_raws = self._step_raws(batch_raws)
             pending_bucket = _bucket_key(step_raws) if self._jit_opts else None
+            _t_raws1 = time.time()
             train_raws, other_raws, self._opt_state, self._rng_key, loss, losses, grad_norm = self._train_step(
                 [self._params[i].raw_tensor for i in self._train_param_idx],
                 [self._params[i].raw_tensor for i in self._other_param_idx],
@@ -339,6 +403,12 @@ class Engine(EngineBase):
                 jnp.asarray(self.global_train_step, dtype=jnp.int32),
                 self.epoch if self._static_argnums else jnp.asarray(self.epoch, dtype=jnp.int32),
             )
+            _t_enq = time.time()
+            if _SYNC_STEP_PROBE:
+                # diagnostic: a jit call blocks while the device still holds the buffers it needs,
+                # so enqueue and execution are indistinguishable above. Waiting here splits them.
+                jax.block_until_ready(loss)
+            _t_disp = time.time()
             for idx, raw in zip(self._train_param_idx + self._other_param_idx, list(train_raws) + list(other_raws)):
                 self._params[idx].raw_tensor = raw
             # The dims of the templates hold what the step filled in; after a compiled step that is
@@ -352,6 +422,9 @@ class Engine(EngineBase):
                 pending_log[f"grad_norm:p{self._updater.log_grad_norm_p:g}"] = grad_norm
             if self._log_batch_size:
                 pending_log.update(_batch_size_info(batch_raws))
+            # host cost of this step, by phase: building the raws, the jit dispatch itself,
+            # and rebinding the returned params. Read on the next iteration, with the losses.
+            pending_host = (_t_raws1 - _t_raws0, _t_enq - _t_raws1, _t_disp - _t_enq, time.time() - _t_disp)
             num_steps += 1
             self.global_train_step += 1
             t_mark = time.time()
