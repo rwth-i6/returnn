@@ -2065,11 +2065,26 @@ class TFBackend(Backend[tf.Tensor]):
             in_raw = tf.broadcast_to(
                 in_raw, _shape_raw(list(dims) + [tf.shape(in_raw)[len(dims) + i] for i in range(len(remaining_dims))])
             )
-            out_raw = _with_static_shape(tf.boolean_mask(in_raw, mask_raw), (out_dim,) + tuple(remaining_dims))
-            if out_dim.dyn_size_ext is None:
-                out_dim.dyn_size_ext = Tensor("masked_select_size", dims=(), dtype="int32")
-            if out_dim.dyn_size_ext.raw_tensor is None:
-                out_dim.dyn_size_ext.raw_tensor = tf.shape(out_raw)[0]
+            if rf.is_static_traceable():
+                # the bound regime needs a static out shape:
+                # pack into a buffer sized by the declared bound, and carry the count as a tensor.
+                # Same contract as the PyTorch masked_select_bound, see there.
+                out_raw, out_len_raw = _masked_select_bound(in_raw, mask_raw, bound=out_dim.capacity)
+                if out_dim.capacity is None:
+                    out_dim.capacity = int(out_raw.shape[0])
+                if out_dim.dyn_size_ext is None:
+                    out_dim.dyn_size_ext = Tensor("masked_select_size", dims=(), dtype="int32")
+                if out_dim.dyn_size_ext.raw_tensor is None:
+                    out_dim.dyn_size_ext.raw_tensor = out_len_raw
+                # no _with_static_shape here:
+                # it restores shapes from Dim.dimension, which is None for the packed dim,
+                # and the buffer is already statically sized by the bound.
+            else:
+                out_raw = _with_static_shape(tf.boolean_mask(in_raw, mask_raw), (out_dim,) + tuple(remaining_dims))
+                if out_dim.dyn_size_ext is None:
+                    out_dim.dyn_size_ext = Tensor("masked_select_size", dims=(), dtype="int32")
+                if out_dim.dyn_size_ext.raw_tensor is None:
+                    out_dim.dyn_size_ext.raw_tensor = tf.shape(out_raw)[0]
         out = Tensor(
             "masked_select",
             dims=(out_dim,) + tuple(remaining_dims),
@@ -3030,6 +3045,47 @@ def _with_static_shape(raw: tf.Tensor, dims: Sequence[Dim]) -> tf.Tensor:
     """
     raw.set_shape([d.dimension for d in dims])
     return raw
+
+
+def _masked_select_bound(
+    in_raw: tf.Tensor, mask_raw: tf.Tensor, *, bound: Optional[int]
+) -> Tuple[tf.Tensor, tf.Tensor]:
+    """
+    Masked select with a static output shape,
+    the TF counterpart of :func:`returnn.torch.util.array_.masked_select_bound`.
+    Same contract: the selected elements packed at the front in input order,
+    zeros after, and the count returned as a tensor instead of shaping the output.
+    ``tf.boolean_mask`` cannot serve the bound-shape regime:
+    its output extent is the data-dependent count, so the resulting dim has no capacity.
+
+    :param in_raw: [mask_dims..., remaining_dims...]
+    :param mask_raw: [mask_dims...], bool
+    :param bound: upper bound on the number of selected elements.
+        By default the full mask size (always valid).
+        Selected elements beyond it are dropped, as in the PyTorch version.
+    :return: (out [bound, remaining_dims...], out_len scalar int32)
+    """
+    n_mask_dims = mask_raw.shape.ndims
+    n_rows_static = mask_raw.shape.num_elements()
+    if bound is None:
+        assert n_rows_static is not None, f"masked_select bound regime: mask shape {mask_raw.shape} not static"
+        bound = n_rows_static
+    mask_flat = tf.reshape(mask_raw, [-1])
+    in_flat = tf.reshape(in_raw, tf.concat([[-1], tf.shape(in_raw)[n_mask_dims:]], axis=0))
+    # slot index per row; masked-out rows (and any beyond the bound) go to a dump slot, dropped below
+    pos = tf.cumsum(tf.cast(mask_flat, tf.int64)) - 1
+    pos = tf.where(mask_flat, tf.minimum(pos, tf.constant(bound, tf.int64)), tf.constant(bound, tf.int64))
+    n_rows = tf.shape(mask_flat, out_type=tf.int64)[0]
+    # the inverse permutation, so the select itself is a gather (slot -> source row)
+    inv = tf.scatter_nd(pos[:, None], tf.range(n_rows, dtype=tf.int64), [bound + 1])[:bound]
+    out_len = tf.reduce_sum(tf.cast(mask_flat, tf.int32))
+    out = tf.gather(in_flat, inv)
+    # slots past the count point at stale inv entries: zero them, as the packed tail is defined zero
+    slot_valid = tf.range(bound, dtype=tf.int32) < out_len
+    slot_valid = tf.reshape(slot_valid, [bound] + [1] * (in_raw.shape.ndims - n_mask_dims))
+    out = tf.where(slot_valid, out, tf.zeros_like(out))
+    out.set_shape([bound] + in_raw.shape.as_list()[n_mask_dims:])
+    return out, out_len
 
 
 def _transpose_raw(raw_tensor: tf.Tensor, perm: Sequence[int]) -> tf.Tensor:
