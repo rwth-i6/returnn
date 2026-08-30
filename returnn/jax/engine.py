@@ -62,6 +62,26 @@ _SYNC_STEP_PROBE = bool(os.environ.get("RETURNN_JAX_SYNC_STEP_PROBE"))
 # this can.
 _GPU_UTIL_PROBE = bool(os.environ.get("RETURNN_JAX_GPU_UTIL_PROBE"))
 
+# Diagnostic only: ``<first>,<last>,<dir>``, trace those steps with jax.profiler.
+# Gated on the step index, not on wall clock:
+# compile and autotune take minutes and vary per node, so a timed window misses the steps.
+_PROFILE_STEPS = os.environ.get("RETURNN_JAX_PROFILE_STEPS")
+
+
+def _profile_steps_opts() -> Tuple[Optional[int], Optional[int], Optional[str]]:
+    """
+    :return: (first step, last step, output dir) of ``RETURNN_JAX_PROFILE_STEPS``, or (None, None, None)
+
+    Step-gated rather than timed: compile and autotune take minutes and vary per node,
+    so a wall-clock profiler window does not reliably contain the steady-state steps.
+    """
+    spec = _PROFILE_STEPS
+    if not spec:
+        return None, None, None
+    parts = spec.split(",")
+    assert len(parts) == 3, f"RETURNN_JAX_PROFILE_STEPS: expected '<first>,<last>,<dir>', got {spec!r}"
+    return int(parts[0]), int(parts[1]), parts[2]
+
 
 def _start_gpu_util_probe() -> None:
     """Sample nvidia-smi utilization in a daemon thread and log the distribution periodically."""
@@ -336,10 +356,18 @@ class Engine(EngineBase):
         t_mark = t_step_done = time.time()
         if _GPU_UTIL_PROBE:
             _start_gpu_util_probe()
+        prof_first, prof_last, prof_dir = _profile_steps_opts()
+        prof_active = False
         for batch_raws, complete_frac in _prefetch(
             self._iter_batches(self.train_dataset, train=True), buffer_size=self._data_prefetch
         ):
             t_data += time.time() - t_mark  # the generator ran between the iterations
+            if prof_first is not None and not prof_active and num_steps == prof_first:
+                # the device work of the previous steps must not land in the trace
+                jax.block_until_ready(pending_losses) if pending_losses is not None else None
+                jax.profiler.start_trace(prof_dir)
+                prof_active = True
+                print(f"JAX engine: profile trace started at step {num_steps}, to {prof_dir}", file=log.v3)
             # The previous step's losses, not the one just issued.
             # Dispatch is async, so reading any earlier would serialize
             # the host pipeline (0.16 s) and the step (0.105 s).
@@ -428,6 +456,12 @@ class Engine(EngineBase):
             pending_host = (_t_raws1 - _t_raws0, _t_enq - _t_raws1, _t_disp - _t_enq, time.time() - _t_disp)
             num_steps += 1
             self.global_train_step += 1
+            if prof_active and num_steps > prof_last:
+                # the traced steps must be complete before the trace closes
+                jax.block_until_ready(loss)
+                jax.profiler.stop_trace()
+                prof_active = False
+                print(f"JAX engine: profile trace stopped after step {num_steps - 1}", file=log.v3)
             t_mark = time.time()
             if num_steps % 100 == 0:
                 print(f"ep {self.epoch} step {num_steps}, loss {float(loss):.5f}", file=log.v4)
