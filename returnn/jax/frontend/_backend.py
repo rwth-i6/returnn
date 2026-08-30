@@ -591,9 +591,6 @@ class JaxBackend(Backend[jax.Array]):
     ) -> Tensor:
         """pad"""
         assert len(out_dims) == len(axes) == len(padding)
-        assert not isinstance(value, Tensor) or value.dims == (), (
-            "RF JaxBackend: pad with a non-scalar value not implemented"
-        )
         raw_pad = []
         for dim in source.dims:
             if dim not in axes:
@@ -601,15 +598,36 @@ class JaxBackend(Backend[jax.Array]):
                 continue
             left, right = padding[axes.index(dim)]
             raw_pad.append((_pad_amount(left, handle_dynamic_dims), _pad_amount(right, handle_dynamic_dims)))
-        out = source.copy_template_new_dim_tags(
-            [out_dims[axes.index(dim)] if dim in axes else dim for dim in source.dim_tags], keep_special_axes=True
-        )
-        value_ = value.raw_tensor if isinstance(value, Tensor) else value
         jnp_mode = _PadModeMap.get(mode, mode)
-        if jnp_mode == "constant":
-            out.raw_tensor = jnp.pad(source.raw_tensor, raw_pad, mode="constant", constant_values=value_ or 0)
+        value_ = (value.raw_tensor if not value.dims else None) if isinstance(value, Tensor) else value
+        if isinstance(value, Tensor) and value.dims:
+            # jnp.pad fills with a scalar only, so build the padding from the value itself,
+            # as the torch backend does
+            assert all(dim in source.dims and dim not in axes for dim in value.dims)
+            assert len(axes) == 1, "RF JaxBackend: pad with a non-scalar value, only a single axis is supported"
+            assert jnp_mode == "constant", f"RF JaxBackend: pad mode {mode} with a non-scalar value"
+            pad_left, pad_right = padding[0]
+            pad_left = pad_left if isinstance(pad_left, Dim) else Dim(pad_left, name="pad_left")
+            pad_right = pad_right if isinstance(pad_right, Dim) else Dim(pad_right, name="pad_right")
+            out = JaxBackend.concat(
+                *(
+                    ([(rf.expand_dim(value, pad_left), pad_left)] if pad_left.dimension else [])
+                    + [(source, axes[0])]
+                    + ([(rf.expand_dim(value, pad_right), pad_right)] if pad_right.dimension else [])
+                ),
+                allow_broadcast=True,
+                out_dim=out_dims[0],
+            )
         else:
-            out.raw_tensor = jnp.pad(source.raw_tensor, raw_pad, mode=jnp_mode)
+            out = source.copy_template_new_dim_tags(
+                [out_dims[axes.index(dim)] if dim in axes else dim for dim in source.dim_tags], keep_special_axes=True
+            )
+            if jnp_mode == "constant":
+                out.raw_tensor = jnp.pad(
+                    source.raw_tensor, raw_pad, mode="constant", constant_values=value_ if value_ is not None else 0
+                )
+            else:
+                out.raw_tensor = jnp.pad(source.raw_tensor, raw_pad, mode=jnp_mode)
         if handle_dynamic_dims and any(dim.need_masking() for dim in out_dims):
             if all(right == 0 for _, right in raw_pad) and mode != "circular":
                 return out  # nothing padded on the right, so no valid frame moved
