@@ -349,6 +349,11 @@ class Engine(EngineBase):
                     f"model_outputs declares {sorted(expected_dict.data)}"
                     f" but forward_step marked {sorted(outputs.data)}"
                 )
+        if self._static_shapes_opts:
+            # batch_dim is global, and the forward task inits the dataset after the network,
+            # where a static batch dim contradicts the dataset's own [B,...] templates.
+            # The graph is built by now; only the capacity is still needed, for dim math.
+            batch_dim.size = None
         self._forward_outputs = outputs
         self._forward_fetches = {key: value.raw_tensor for key, value in outputs.data.items()}
         # the dynamic sizes come along: they are what cuts each sequence out of the padded batch
