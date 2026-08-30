@@ -74,7 +74,9 @@ def _start_gpu_util_probe() -> None:
             try:
                 out = subprocess.run(
                     ["nvidia-smi", "--query-gpu=utilization.gpu", "--format=csv,noheader,nounits"],
-                    capture_output=True, text=True, timeout=10,
+                    capture_output=True,
+                    text=True,
+                    timeout=10,
                 )
             except (OSError, subprocess.TimeoutExpired):
                 return
@@ -85,8 +87,7 @@ def _start_gpu_util_probe() -> None:
             if len(vals) % 40 == 0:
                 ordered = sorted(vals[-40:])
                 print(
-                    f"GPU util probe: n={len(vals)} last40 median={ordered[20]}%"
-                    f" min={ordered[0]}% max={ordered[-1]}%",
+                    f"GPU util probe: n={len(vals)} last40 median={ordered[20]}% min={ordered[0]}% max={ordered[-1]}%",
                     file=log.v3,
                 )
             time.sleep(0.25)
