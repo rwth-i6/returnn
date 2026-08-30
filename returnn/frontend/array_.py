@@ -716,6 +716,11 @@ def masked_select(
         out_dim.dyn_size_ext.raw_tensor = rf.copy_to_device(new_size, rf.get_default_dim_size_device()).raw_tensor
     new_time = rf.reduce_max(new_size, axis=new_size.dims)  # T'
     idxs = rf.where(mask, idxs - 1, new_time)  # new_time is the padding idx
+    if out_dim.capacity is None:
+        # noinspection PyProtectedMember
+        capacity = in_dim_ext._derived_capacity()
+        if capacity is not None:
+            out_dim.capacity = capacity
     ext_out_dim = out_dim + 1  # one more for the padded data
     ext_res = rf.scatter(tensor, indices=idxs, indices_dim=in_dim_ext, out_dim=ext_out_dim)
     res, _ = rf.slice(ext_res, axis=ext_out_dim, size=out_dim)

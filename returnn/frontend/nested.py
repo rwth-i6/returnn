@@ -82,7 +82,13 @@ def _mask_prepare_dims(
             dim_map=dim_map,
             allow_dim_extension=allow_dim_extension,
         )
-        new_dim = Dim(new_dyn_size, name=_extend_dim_name(s.name))
+        # noinspection PyProtectedMember
+        caps = [d._derived_capacity() for d in (s, mask_value)]
+        new_dim = Dim(
+            new_dyn_size,
+            name=_extend_dim_name(s.name),
+            capacity=max(caps) if all(c is not None for c in caps) else None,
+        )
         dim_map[s] = dim_map[mask_value] = new_dim
         return new_dim
     return s
@@ -155,7 +161,7 @@ def _gather_prepare_dims(s: T, *, indices: Tensor, dim_map: Dict[Dim, Dim]) -> T
             return dim_map[s]
         if indices.sparse_dim in s.dyn_size_ext.dims:
             new_dyn_size = _gather(s.dyn_size_ext, indices=indices, dim_map=dim_map)
-            new_dim = Dim(new_dyn_size, name=_extend_dim_name(s.name))
+            new_dim = Dim(new_dyn_size, name=_extend_dim_name(s.name), bounded_by=s)
             dim_map[s] = new_dim
             return new_dim
         return s
@@ -243,7 +249,7 @@ def _masked_select_prepare_dims(s, *, mask: Tensor, dims: Sequence[Dim], out_dim
         if s in dim_map:
             return dim_map[s]
         new_dyn_size = _masked_select(s.dyn_size_ext, mask=mask, dims=dims, out_dim=out_dim, dim_map=dim_map)
-        new_dim = Dim(new_dyn_size, name=_extend_dim_name(s.name))
+        new_dim = Dim(new_dyn_size, name=_extend_dim_name(s.name), bounded_by=s)
         dim_map[s] = new_dim
         return new_dim
     # everything else ignored at this stage
