@@ -82,13 +82,15 @@ def _mask_prepare_dims(
             dim_map=dim_map,
             allow_dim_extension=allow_dim_extension,
         )
-        # noinspection PyProtectedMember
-        caps = [d._derived_capacity() for d in (s, mask_value)]
-        new_dim = Dim(
-            new_dyn_size,
-            name=_extend_dim_name(s.name),
-            capacity=max(caps) if all(c is not None for c in caps) else None,
-        )
+        capacity = None
+        if rf.is_static_traceable():
+            # the masked size is where(mask, s, mask_value), so the larger of the two bounds it.
+            # Only here: a capacity is the padded extent everywhere it is read,
+            # so in eager it would replace the true size.
+            # noinspection PyProtectedMember
+            caps = [d._derived_capacity() for d in (s, mask_value)]
+            capacity = max(caps) if all(c is not None for c in caps) else None
+        new_dim = Dim(new_dyn_size, name=_extend_dim_name(s.name), capacity=capacity)
         dim_map[s] = dim_map[mask_value] = new_dim
         return new_dim
     return s

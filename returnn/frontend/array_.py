@@ -716,7 +716,10 @@ def masked_select(
         out_dim.dyn_size_ext.raw_tensor = rf.copy_to_device(new_size, rf.get_default_dim_size_device()).raw_tensor
     new_time = rf.reduce_max(new_size, axis=new_size.dims)  # T'
     idxs = rf.where(mask, idxs - 1, new_time)  # new_time is the padding idx
-    if out_dim.capacity is None:
+    if out_dim.capacity is None and rf.is_static_traceable():
+        # the packed count never exceeds the input extent, and the bound regime needs that bound:
+        # ext_out_dim below is dim math on out_dim, and the scatter asks for its value.
+        # Only in that regime: a capacity replaces the true size wherever it is read.
         # noinspection PyProtectedMember
         capacity = in_dim_ext._derived_capacity()
         if capacity is not None:
