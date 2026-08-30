@@ -1215,7 +1215,17 @@ class Engine(EngineBase):
                 for key, value in outputs.data.items():
                     outputs_per_seq.data[key] = _tensor_of_seq_numpy(value, batch_idx=batch_idx, batch_dim=batch_dim_)
                 callback.process_seq(seq_tag=seq_tag, outputs=outputs_per_seq)
-            compute_time += time.time() - step_begin
+            step_duration = time.time() - step_begin
+            compute_time += step_duration
+            if log.verbose[5]:
+                info = [report_prefix, f"step {step_idx}", f"num_seqs {int(batch_dim_.get_dim_value())}"]
+                mem = _device_peak_bytes()
+                if mem is not None:
+                    label, peak = mem
+                    info.append(f"mem_usage:{label} {util.human_bytes_size(peak)}")
+                info.append(f"{step_duration:.3f} sec/step")
+                info.append(f"elapsed {util.hms(time.time() - start_time)}")
+                print(", ".join(info), file=log.v5)
             step_idx += 1
         callback.finish()
 
