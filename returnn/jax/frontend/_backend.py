@@ -484,9 +484,9 @@ class JaxBackend(Backend[jax.Array]):
             index_ext_dims = list(source.dims)
             index_ext_dims[axis_int] = index_own_dims_flat
             assert indices.dims == tuple(index_ext_dims)
-            out_raw = jnp.take_along_axis(
-                source.raw_tensor, indices.raw_tensor.astype(jnp.int32), axis=axis_int, mode="clip"
-            )
+            # the indices should be the same device as the source
+            idx_raw = _to_device_of(indices.raw_tensor.astype(jnp.int32), source.raw_tensor)
+            out_raw = jnp.take_along_axis(source.raw_tensor, idx_raw, axis=axis_int, mode="clip")
             if len(index_own_dims) == 0:
                 out_raw = jnp.squeeze(out_raw, axis=axis_int)
             elif len(index_own_dims) > 1:
@@ -494,9 +494,8 @@ class JaxBackend(Backend[jax.Array]):
             out.raw_tensor = out_raw
         else:
             # indices are independent of the source's other dims: a plain take along axis
-            out_raw = jnp.take(
-                source.raw_tensor, indices.raw_tensor.astype(jnp.int32).reshape(-1), axis=axis_int, mode="clip"
-            )
+            idx_raw = _to_device_of(indices.raw_tensor.astype(jnp.int32).reshape(-1), source.raw_tensor)
+            out_raw = jnp.take(source.raw_tensor, idx_raw, axis=axis_int, mode="clip")
             out_shape = (
                 source.raw_tensor.shape[:axis_int]
                 + tuple(indices.raw_tensor.shape)
@@ -2409,3 +2408,18 @@ def _device_from_str(device: str) -> Optional[jax.Device]:
     except RuntimeError:
         return None
     return devices[int(idx)] if idx else devices[0]
+
+
+def _to_device_of(x: jax.Array, ref: jax.Array) -> jax.Array:
+    """
+    :param x: array to place
+    :param ref: array whose device decides the placement
+    :return: ``x`` on ``ref``'s device
+    """
+    if rf.is_static_traceable():
+        return x
+    dx = next(iter(x.devices()), None)
+    dr = next(iter(ref.devices()), None)
+    if dx is None or dr is None or dx == dr:
+        return x
+    return jax.device_put(x, dr)
