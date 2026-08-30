@@ -1451,6 +1451,73 @@ def test_masked_select_scatter_nested_roundtrip():
     assert np.allclose(outputs["output"].raw_tensor, outputs["data_ref"].raw_tensor)
 
 
+def test_mask_nested_dim_value_is_true_size():
+    # The merged dim of mask_nested must report the true per-entry sizes, not an upper bound:
+    # anything that pads or slices by it (rf.pad, rf.slice) sizes its buffer from get_dim_value.
+    time_dim = Dim(Tensor("time", [batch_dim], dtype="int32"))
+    in_dim = Dim(5, name="in")
+    extern_data = TensorDict({"data": Tensor("data", [batch_dim, time_dim, in_dim], dtype="float32")})
+
+    # noinspection PyShadowingNames
+    def _forward_step(*, extern_data: TensorDict, **_kwargs):
+        data = extern_data["data"]
+        # one branch a step longer than the other, so bound and true size differ
+        longer, longer_dim = rf.pad(
+            data, axes=[time_dim], padding=[(0, 1)], value=rf.zeros((), dtype=data.dtype, device=data.device)
+        )
+        (merged, merged_dim) = rf.nested.mask_nested(
+            (longer, longer_dim[0]),
+            mask=rf.range_over_dim(batch_dim) % 2 == 0,
+            mask_value=(data, time_dim),
+        )
+        # the padded extent the raw tensor actually has, vs what the dim claims
+        assert merged.raw_tensor.shape[merged.dims.index(merged_dim)] == merged_dim.get_dim_value(), (
+            f"raw extent {merged.raw_tensor.shape} does not match {merged_dim} value {merged_dim.get_dim_value()}"
+        )
+        merged.mark_as_default_output(shape=[batch_dim, merged_dim, in_dim])
+        merged_dim.dyn_size_ext.mark_as_output("merged_size", shape=[batch_dim])
+        time_dim.dyn_size_ext.mark_as_output("in_size", shape=[batch_dim])
+
+    outputs = run_model(
+        extern_data, lambda **_kwargs: rf.Module(), _forward_step, test_single_batch_entry=False, test_tensorflow=False
+    )
+    in_size = outputs["in_size"].raw_tensor
+    merged_size = outputs["merged_size"].raw_tensor
+    for b in range(in_size.shape[0]):
+        # masked entries took the longer branch (+1), the others the original size
+        expected = in_size[b] + 1 if b % 2 == 0 else in_size[b]
+        assert merged_size[b] == expected, f"batch {b}: merged {merged_size[b]}, expected {expected}"
+
+
+def test_masked_select_out_dim_value_is_true_count():
+    # The packed dim of masked_select must report the true count, not the input extent.
+    # A static select axis is the case that bites: static dims always carry a capacity,
+    # so the packed dim can inherit one and then claim the full extent.
+    static_dim = Dim(6, name="static_time")
+    in_dim = Dim(5, name="in")
+    extern_data = TensorDict({"data": Tensor("data", [batch_dim, static_dim, in_dim], dtype="float32")})
+
+    # noinspection PyShadowingNames
+    def _forward_step(*, extern_data: TensorDict, **_kwargs):
+        data = extern_data["data"]
+        # 3 or 4 of the 6 positions per batch entry, so the count is deterministic and below the extent.
+        # Two mask dims but one select dim, so this takes the generic (non-backend) path.
+        mask = rf.compare_bc(rf.range_over_dim(static_dim), "<", rf.range_over_dim(batch_dim) % 2 + 3)
+        packed, packed_dim = rf.masked_select(data, mask=mask, dims=[static_dim])
+        assert packed.raw_tensor.shape[packed.dims.index(packed_dim)] == packed_dim.get_dim_value(), (
+            f"raw extent {packed.raw_tensor.shape} does not match {packed_dim} value {packed_dim.get_dim_value()}"
+        )
+        packed.mark_as_default_output(shape=[batch_dim, packed_dim, in_dim])
+        packed_dim.dyn_size_ext.mark_as_output("packed_size", shape=[batch_dim])
+
+    outputs = run_model(
+        extern_data, lambda **_kwargs: rf.Module(), _forward_step, test_single_batch_entry=False, test_tensorflow=False
+    )
+    packed_size = outputs["packed_size"].raw_tensor
+    for b in range(packed_size.shape[0]):
+        assert packed_size[b] == b % 2 + 3, f"batch {b}: packed {packed_size[b]}, expected {b % 2 + 3}"
+
+
 def test_masked_scatter_nested_select_dim_passthrough_other_backup_dim():
     time_dim = Dim(Tensor("time", [batch_dim], dtype="int32"))
     other_dim = Dim(Tensor("other", [batch_dim], dtype="int32"))
