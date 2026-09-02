@@ -204,7 +204,9 @@ def test_Dim_math_cache_keys_becoming_equal():
     static.declare_same_as(dynamic)
     assert static == dynamic
     p.reset_raw()
-    assert (p + static).dimension == 13
+    out = p + static
+    assert out.dimension == 13
+    assert out is static_result, "clear_dynamic must not evict the live static entry under an equal key"
 
 
 def test_Dim_derived_pickle():
