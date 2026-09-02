@@ -903,6 +903,7 @@ class JaxBackend(Backend[jax.Array]):
         var_idxs = [i for i, v in enumerate(flat_initial) if isinstance(v, (Tensor, TensorArray))]
         assert var_idxs, f"while_loop: no Tensor/TensorArray among the loop vars {initial}"
 
+        # noinspection shadowing-names
         def _init_carry(v: Union[Tensor, TensorArray]) -> Any:
             """:param v: one loop var :return: its raw carry"""
             if isinstance(v, Tensor):
@@ -933,6 +934,7 @@ class JaxBackend(Backend[jax.Array]):
                 return v.copy_compatible_to_dims_raw(ref.dims)
             return _init_carry(v)
 
+        # noinspection shadowing-names
         def _rebuild(carry: Sequence[Any]) -> Any:
             """:param carry: raw values :return: the loop vars as body/cond expect them"""
             out = list(flat_initial)
@@ -994,9 +996,7 @@ class JaxBackend(Backend[jax.Array]):
                 dev = d
                 break
         if dev is not None:
-            init = tree.map_structure(
-                lambda raw: raw if isinstance(raw, jax.core.Tracer) else jax.device_put(raw, dev), init
-            )
+            init = tree.map_structure(partial(_to_device, dev=dev), init)
         final = jax.lax.while_loop(_cond, _body, init)
         return _rebuild(final)
 
@@ -2643,3 +2643,13 @@ def _to_device_of(x: jax.Array, ref: jax.Array) -> jax.Array:
     if dx is None or dr is None or dx == dr:
         return x
     return jax.device_put(x, dr)
+
+
+def _to_device(x: jax.Array, dev: jax.Device) -> jax.Array:
+    """
+    :param x: array to place
+    :param dev:
+    """
+    if isinstance(x, jax.core.Tracer):
+        return x
+    return jax.device_put(x, dev)
