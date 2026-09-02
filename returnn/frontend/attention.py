@@ -1219,9 +1219,10 @@ def sinusoidal_positional_encoding(
     and our TF util :func:`get_positional_encoding`.
 
     Note that this encoding is stored in a cache so that it is only calculated once
-    and then reused, except under eager execution with a dynamic spatial dim
-    (or a Tensor offset), where caching would keep the per-batch dim
-    and its attached state alive (memory leak), so it is recomputed instead.
+    and then reused, except under eager execution with a dynamic spatial dim,
+    where caching would keep the per-batch dim and its attached state alive
+    (memory leak), or with a Tensor offset, where the identity-keyed cache
+    would never hit for fresh per-step offset tensors, so it is recomputed instead.
 
     Note that we could extend the implementation later to also buffer it
     even across mini-batches, like the ESPnet implementation does,
@@ -1238,8 +1239,9 @@ def sinusoidal_positional_encoding(
     # Do not cache when, under eager execution, the result would carry a dynamic
     # (e.g. per-batch) spatial dim: the cached value holds that dim strongly, and the
     # dim drags its _extra state (seq masks, dim math caches), which accumulates across
-    # steps (memory leak). A Tensor offset is excluded for the same reason, the cache
-    # key and value would hold it and its dims alive. Recomputing is cheap.
+    # steps (memory leak). A Tensor offset is also excluded: the cache keys tensors
+    # by identity (and holds them only weakly), so fresh per-step offset tensors
+    # would never hit and would only churn entries. Recomputing is cheap.
     # Graph-based backends are unaffected, their cache entries are run-ctx-scoped.
     # single_step_dim results carry no spatial dim and stay cacheable.
     unsafe_eager = rf.is_executing_eagerly() and (
