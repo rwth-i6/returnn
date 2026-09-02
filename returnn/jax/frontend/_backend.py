@@ -176,6 +176,8 @@ class JaxBackend(Backend[jax.Array]):
         # Under a JAX transform (jit, grad, vmap) the raw tensor is a tracer, which has no device:
         # the value does not exist yet, so its placement is not a question that can be answered here.
         # RF treats None as unknown and then does not force any placement, which is what we want.
+        if isinstance(raw_tensor, jax.core.Tracer):
+            return None
         device = getattr(raw_tensor, "device", None)
         if device is None:
             return None
