@@ -2967,13 +2967,18 @@ class _WeakKeyWeakValueDict:
     def __init__(self):
         self._entries: List[Tuple[Any, Any]] = []  # (weakref to key, weakref to value)
 
-    def _find(self, key):
+    def _find_all(self, key):
+        found = []
         for i, (key_ref, value_ref) in enumerate(self._entries):
             entry_key = key_ref()
             entry_value = value_ref()
             if entry_key is not None and entry_value is not None and entry_key == key:
-                return i, entry_value
-        return -1, None
+                found.append((i, entry_value))
+        return found
+
+    def _find(self, key):
+        found = self._find_all(key)
+        return found[0] if found else (-1, None)
 
     def __getitem__(self, key):
         i, value = self._find(key)
@@ -2984,16 +2989,18 @@ class _WeakKeyWeakValueDict:
     def __setitem__(self, key, value):
         # prune dead entries, they would otherwise bypass any size cap based on len()
         self._entries[:] = [(kr, vr) for (kr, vr) in self._entries if kr() is not None and vr() is not None]
-        i, _ = self._find(key)
-        if i >= 0:
+        # remove every equal entry: initially different keys can become equal later
+        # (e.g. Dim.declare_same_as), which would leave duplicate logical keys
+        for i, _ in reversed(self._find_all(key)):
             del self._entries[i]
         self._entries.append((weakref.ref(key), weakref.ref(value)))
 
     def __delitem__(self, key):
-        i, _ = self._find(key)
-        if i < 0:
+        found = self._find_all(key)
+        if not found:
             raise KeyError(key)
-        del self._entries[i]
+        for i, _ in reversed(found):
+            del self._entries[i]
 
     def __contains__(self, key):
         return self._find(key)[0] >= 0
@@ -3108,7 +3115,9 @@ class _CacheDimMath:
         for op_dict in self._ops.values():
             for k, v in list(op_dict.dims.items()):
                 if v.dyn_size_ext is not None or v.dimension is None:
-                    del op_dict.dims[k]
+                    # deleting one key can remove other equal snapshot entries as well
+                    if k in op_dict.dims:
+                        del op_dict.dims[k]
 
     def __len__(self):
         count = 0
