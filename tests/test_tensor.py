@@ -140,6 +140,7 @@ def test_Dim_math_cache_dict_equal_key_replace():
 
     from returnn.tensor._dim_extra import _WeakKeyWeakValueDict
 
+    gc_was_enabled = gc.isenabled()
     gc.disable()
     try:
         d = _WeakKeyWeakValueDict()
@@ -153,7 +154,8 @@ def test_Dim_math_cache_dict_equal_key_replace():
         del key1
         assert d.get(key2) is value2, "live entry must survive the death of an equal old key"
     finally:
-        gc.enable()
+        if gc_was_enabled:
+            gc.enable()
 
 
 def test_Dim_math_cache_dict_prunes_dead():
@@ -161,6 +163,7 @@ def test_Dim_math_cache_dict_prunes_dead():
 
     from returnn.tensor._dim_extra import _WeakKeyWeakValueDict
 
+    gc_was_enabled = gc.isenabled()
     gc.disable()
     try:
         d = _WeakKeyWeakValueDict()
@@ -176,7 +179,8 @@ def test_Dim_math_cache_dict_prunes_dead():
         assert len(d._entries) == 1, "dead entries must be pruned on insert"
         assert d.get(key_live) is value_live
     finally:
-        gc.enable()
+        if gc_was_enabled:
+            gc.enable()
 
 
 def test_Dim_math_cache_hash_change_after_declare_same_as():
@@ -204,6 +208,7 @@ def test_Dim_math_cache_weak():
     import gc
     import weakref
 
+    gc_was_enabled = gc.isenabled()
     gc.disable()
     try:
         a = Dim(3, name="a")
@@ -219,7 +224,8 @@ def test_Dim_math_cache_weak():
         assert (a + 1) == (a + 1)
         assert (a + b) == (a + b)
     finally:
-        gc.enable()
+        if gc_was_enabled:
+            gc.enable()
 
 
 def test_Dim_get_mask_cache_identity():
@@ -242,6 +248,7 @@ def test_Dim_get_mask_no_cycle():
     import gc
     import weakref
 
+    gc_was_enabled = gc.isenabled()
     gc.disable()
     try:
         batch_dim = Dim(2, name="batch")
@@ -257,7 +264,8 @@ def test_Dim_get_mask_no_cycle():
         assert ref_dim() is None, "dim with cached mask must be freed by refcount"
         assert ref_mask_raw() is None, "cached mask raw tensor must die with the dim"
     finally:
-        gc.enable()
+        if gc_was_enabled:
+            gc.enable()
 
 
 def test_Tensor_pickle():

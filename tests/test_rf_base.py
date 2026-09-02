@@ -311,6 +311,7 @@ def test_sinusoidal_positional_encoding_eager_dynamic_no_cache():
     import torch
     from returnn.frontend.attention import _sinusoidal_positional_encoding_cache as pos_enc_cache
 
+    gc_was_enabled = gc.isenabled()
     gc.disable()
     try:
         feat_dim = Dim(8, name="feat")
@@ -332,7 +333,8 @@ def test_sinusoidal_positional_encoding_eager_dynamic_no_cache():
         assert ref_dim() is None, "per-batch dim must be freed by refcount"
         assert ref_emb_raw() is None, "encoding raw tensor must be freed by refcount"
     finally:
-        gc.enable()
+        if gc_was_enabled:
+            gc.enable()
 
 
 def test_dim_mask():
