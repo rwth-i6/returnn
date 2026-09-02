@@ -213,11 +213,9 @@ def test_Dim_math_cache_weak():
 
 
 def test_Dim_get_mask_cache_identity():
-    import torch
-
     batch_dim = Dim(2, name="batch")
     time_dim = Dim(
-        Tensor("time", [batch_dim], dtype="int32", raw_tensor=torch.tensor([3, 2], dtype=torch.int32)),
+        Tensor("time", [batch_dim], dtype="int32", raw_tensor=numpy.array([3, 2], dtype="int32")),
         name="time",
     )
     mask1 = time_dim.get_mask(device="cpu")
@@ -233,13 +231,12 @@ def test_Dim_get_mask_cache_identity():
 def test_Dim_get_mask_no_cycle():
     import gc
     import weakref
-    import torch
 
     gc.disable()
     try:
         batch_dim = Dim(2, name="batch")
         time_dim = Dim(
-            Tensor("time", [batch_dim], dtype="int32", raw_tensor=torch.tensor([3, 2], dtype=torch.int32)),
+            Tensor("time", [batch_dim], dtype="int32", raw_tensor=numpy.array([3, 2], dtype="int32")),
             name="time",
         )
         mask = time_dim.get_mask(device="cpu")
