@@ -306,3 +306,84 @@ def _rel_pos_att_varlen_bwd(max_len, dropout_p, seed, scale, res, d_out):
 
 
 rel_pos_att_varlen.defvjp(_rel_pos_att_varlen_fwd, _rel_pos_att_varlen_bwd)
+
+
+def _fused_bd(qv, pos_emb, bd_scale, dtype):
+    """
+    :param qv: [total, heads, dim], the position query
+    :param pos_emb: [2*max_len-1, heads, dim], centered
+    :param bd_scale: applied here, since the kernel scales only q k^T
+    :param dtype: the kernel's io dtype
+    :return: the position term [total, heads, 2*max_len-1]
+    """
+    return (jnp.einsum("thd,rhd->thr", qv, pos_emb) * bd_scale).astype(dtype)
+
+
+@partial(jax.custom_vjp, nondiff_argnums=(7, 8, 9, 10, 11))
+def rel_pos_att_varlen_fused_bd(q, k, v, qv, pos_emb, seq_starts, seq_lens, max_len, dropout_p, seed, bd_scale, scale):
+    """
+    :param q: [total, heads, dim], the content query
+    :param k: [total, heads, dim]
+    :param v: [total, heads, dim]
+    :param qv: [total, heads, dim], the position query
+    :param pos_emb: [2*max_len-1, heads, dim], centered
+    :param seq_starts: [batch]
+    :param seq_lens: [batch]
+    :param max_len: static per-seq bound
+    :param dropout_p:
+    :param seed:
+    :param bd_scale: applied to the position term
+    :param scale: applied to q k^T
+    :return: out [total, heads, dim]
+
+    Like :func:`rel_pos_att_varlen`,
+    but takes the factors of the position term instead of the materialized ``bd``
+    (``bd[t,h,r] = bd_scale * sum_d qv[t,h,d] pos_emb[r,h,d]``),
+    and builds it in the forward and again in the backward.
+    ``bd`` is the largest per-layer attention activation, [total, heads, 2*max_len-1].
+    Keeping it out of the residuals costs one extra einsum in the backward.
+    The counterpart of the torch backend's ``rel_pos_att_varlen_fused_bd``.
+    """
+    bd = _fused_bd(qv, pos_emb, bd_scale, q.dtype)
+    out, _ = rel_pos_att_fwd(q, k, v, bd, seq_starts, seq_lens, max_len, dropout_p=dropout_p, seed=seed, scale=scale)
+    return out
+
+
+def _rel_pos_att_varlen_fused_bd_fwd(
+    q, k, v, qv, pos_emb, seq_starts, seq_lens, max_len, dropout_p, seed, bd_scale, scale
+):
+    """
+    :return: (out, residuals for the backward)
+    """
+    bd = _fused_bd(qv, pos_emb, bd_scale, q.dtype)
+    out, lse = rel_pos_att_fwd(q, k, v, bd, seq_starts, seq_lens, max_len, dropout_p=dropout_p, seed=seed, scale=scale)
+    # bd is deliberately not a residual: recomputing it below is the point of this path
+    return out, (q, k, v, qv, pos_emb, seq_starts, seq_lens, lse)
+
+
+def _rel_pos_att_varlen_fused_bd_bwd(max_len, dropout_p, seed, bd_scale, scale, res, d_out):
+    """
+    :return: gradients for the differentiable arguments
+    """
+    q, k, v, qv, pos_emb, seq_starts, seq_lens, lse = res
+    bd = _fused_bd(qv, pos_emb, bd_scale, q.dtype)
+    dq, dk, dv, dbd = rel_pos_att_bwd(
+        q, k, v, bd, seq_starts, seq_lens, max_len, lse, d_out, dropout_p=dropout_p, seed=seed, scale=scale
+    )
+    # chain rule through the position term, einsums in the io dtype,
+    # matching the out-of-op matmul autograd of the non-fused path
+    dbd = (dbd * bd_scale).astype(qv.dtype)
+    d_qv = jnp.einsum("thr,rhd->thd", dbd, pos_emb)
+    d_pos = jnp.einsum("thr,thd->rhd", dbd, qv)
+    return (
+        dq.astype(q.dtype),
+        dk.astype(k.dtype),
+        dv.astype(v.dtype),
+        d_qv.astype(qv.dtype),
+        d_pos.astype(pos_emb.dtype),
+        None,  # seq_starts
+        None,  # seq_lens
+    )
+
+
+rel_pos_att_varlen_fused_bd.defvjp(_rel_pos_att_varlen_fused_bd_fwd, _rel_pos_att_varlen_fused_bd_bwd)

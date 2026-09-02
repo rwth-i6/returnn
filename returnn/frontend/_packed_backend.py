@@ -2400,21 +2400,25 @@ def _jax_triton_rel_pos_attention(
     k_t = k_inner.copy_transpose([k_raw.packed_dim, heads_dim, qk_feat_dim]).raw_tensor
     v_t = v_inner.copy_transpose([v_raw.packed_dim, heads_dim, v_feat_dim]).raw_tensor
 
-    matrix_bd = rf.matmul(q_with_bias_v, pos_emb, reduce=qk_feat_dim)
-    if not is_packed(matrix_bd):
-        return None
-    bd_raw = matrix_bd.raw_tensor
-    bd_inner = bd_raw.inner
-    if set(bd_inner.dims) - {heads_dim} != {bd_raw.packed_dim, pos_emb_spatial_dim}:
-        return None
-    if heads_dim in bd_inner.dims:
-        bd_t = bd_inner.copy_transpose([bd_raw.packed_dim, heads_dim, pos_emb_spatial_dim]).raw_tensor
-    else:
-        bd_t = bd_inner.copy_transpose([bd_raw.packed_dim, pos_emb_spatial_dim]).raw_tensor
-        bd_t = jnp.broadcast_to(bd_t[:, None], (bd_t.shape[0], heads_dim.dimension, bd_t.shape[-1]))
-    # pre-scale the bias like the content term (the kernel scales only q k^T)
     bd_scale = qk_feat_dim.dimension**-0.5
-    bd_t = (bd_t * bd_scale).astype(q_t.dtype)
+    if not {pos_emb_spatial_dim, qk_feat_dim} <= set(pos_emb.dims) <= {pos_emb_spatial_dim, heads_dim, qk_feat_dim}:
+        return None
+    qv_raw = q_with_bias_v.raw_tensor
+    if set(qv_raw.inner.dims) != {qv_raw.packed_dim, heads_dim, qk_feat_dim}:
+        return None
+    # q and qv are indexed by the same rows below, so they must share the packing.
+    # The non-fused path got this for free: it derived bd from qv and checked bd's packed dim.
+    if not qu_raw.same_packing(qv_raw):
+        return None
+    # Fused position term: bd is built inside the op, forward and backward,
+    # so it never becomes a residual,
+    # and nothing retains a (total, heads, 2T-1) buffer per layer.
+    # The torch backend does the same, see rel_pos_att_varlen_fused_bd.
+    qv_t = qv_raw.inner.copy_transpose([qv_raw.packed_dim, heads_dim, qk_feat_dim]).raw_tensor.astype(q_t.dtype)
+    pos_t = pos_emb.copy_compatible_to_dims_raw((pos_emb_spatial_dim, heads_dim, qk_feat_dim))
+    if pos_t.shape[1] != heads_dim.dimension:
+        pos_t = jnp.broadcast_to(pos_t, (pos_t.shape[0], heads_dim.dimension, pos_t.shape[2]))
+    pos_t = pos_t.astype(q_t.dtype)
 
     max_len = int(query_spatial_dim.get_dim_value())
     if int(pos_emb_spatial_dim.get_dim_value()) != 2 * max_len - 1:
@@ -2427,8 +2431,8 @@ def _jax_triton_rel_pos_attention(
     starts = starts_rf.raw_tensor.astype(jnp.int32).reshape(-1)
     lens = query_spatial_dim.get_dyn_size_ext_for_device(query.device).raw_tensor.astype(jnp.int32).reshape(-1)
 
-    out_t = jax_rel_pos.rel_pos_att_varlen(
-        q_t, k_t, v_t, bd_t, starts, lens, max_len, att_dropout, 0, qk_feat_dim.dimension**-0.5
+    out_t = jax_rel_pos.rel_pos_att_varlen_fused_bd(
+        q_t, k_t, v_t, qv_t, pos_t, starts, lens, max_len, att_dropout, 0, bd_scale, bd_scale
     )
     out_inner = Tensor(
         "rel_pos_att_triton",
