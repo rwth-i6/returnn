@@ -2850,6 +2850,17 @@ class Op:
     def output(self, dim: Optional[_d.Dim]):
         self._output_ref = weakref.ref(dim) if dim is not None else None
 
+    def __getstate__(self):
+        d = dict(self.__dict__)
+        del d["_output_ref"]
+        d["output"] = self.output  # weakrefs are not picklable, stored strong, restored via the setter
+        return d
+
+    def __setstate__(self, state):
+        output = state.pop("output", None)
+        self.__dict__.update(state)
+        self.output = output
+
     def __repr__(self):
         attribs = (" %r" % self.attribs) if self.attribs else ""
         return "<Dim.Op %r %s%s>" % (self.kind, self.inputs, attribs)
