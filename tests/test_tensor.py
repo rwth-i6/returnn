@@ -120,6 +120,80 @@ def test_dim_math_pad_window():
     assert sizes == expected_sizes
 
 
+def test_Dim_derived_pickle():
+    import pickle
+
+    a = Dim(3, name="a")
+    d = a + 1
+    d2 = pickle.loads(pickle.dumps(d))
+    assert d2.dimension == d.dimension == 4
+    assert d2.derived_from_op is not None
+    assert d2.derived_from_op.kind == d.derived_from_op.kind
+
+
+def test_Dim_math_cache_weak():
+    import gc
+    import weakref
+
+    gc.disable()
+    try:
+        a = Dim(3, name="a")
+        b = Dim(4, name="b")
+        d_static = a + 1
+        ref_static = weakref.ref(d_static)
+        del d_static
+        assert ref_static() is None, "dim + int derived dim must be freed by refcount"
+        d_dyn = a + b
+        ref_dyn = weakref.ref(d_dyn)
+        del d_dyn
+        assert ref_dyn() is None, "dim + dim derived dim must be freed by refcount"
+        assert (a + 1) == (a + 1)
+        assert (a + b) == (a + b)
+    finally:
+        gc.enable()
+
+
+def test_Dim_get_mask_cache_identity():
+    import torch
+
+    batch_dim = Dim(2, name="batch")
+    time_dim = Dim(
+        Tensor("time", [batch_dim], dtype="int32", raw_tensor=torch.tensor([3, 2], dtype=torch.int32)),
+        name="time",
+    )
+    mask1 = time_dim.get_mask(device="cpu")
+    mask2 = time_dim.get_mask(device="cpu")
+    assert mask1 is mask2  # cached wrapper, stable identity while alive
+    raw1 = mask1.raw_tensor
+    del mask1, mask2
+    mask3 = time_dim.get_mask(device="cpu")
+    assert set(mask3.dims) == {batch_dim, time_dim}
+    assert mask3.raw_tensor is raw1  # raw tensor stays cached across wrapper rebuilds
+
+
+def test_Dim_get_mask_no_cycle():
+    import gc
+    import weakref
+    import torch
+
+    gc.disable()
+    try:
+        batch_dim = Dim(2, name="batch")
+        time_dim = Dim(
+            Tensor("time", [batch_dim], dtype="int32", raw_tensor=torch.tensor([3, 2], dtype=torch.int32)),
+            name="time",
+        )
+        mask = time_dim.get_mask(device="cpu")
+        ref_mask_raw = weakref.ref(mask.raw_tensor)
+        ref_dim = weakref.ref(time_dim)
+        del mask
+        del time_dim
+        assert ref_dim() is None, "dim with cached mask must be freed by refcount"
+        assert ref_mask_raw() is None, "cached mask raw tensor must die with the dim"
+    finally:
+        gc.enable()
+
+
 def test_Tensor_pickle():
     import pickle
 
