@@ -2956,15 +2956,60 @@ def dim_cmp_value(obj):
     return obj
 
 
+class _WeakKeyWeakValueDict:
+    """Mapping with weak keys and weak values, entries with a dead value behave as missing."""
+
+    def __init__(self):
+        self._refs: MutableMapping[Any, Any] = weakref.WeakKeyDictionary()  # key -> weakref to value
+
+    def __getitem__(self, key):
+        value = self._refs[key]()
+        if value is None:
+            raise KeyError(key)
+        return value
+
+    def __setitem__(self, key, value):
+        self._refs[key] = weakref.ref(value)
+
+    def __delitem__(self, key):
+        del self._refs[key]
+
+    def __contains__(self, key):
+        ref = self._refs.get(key)
+        return ref is not None and ref() is not None
+
+    def __len__(self):
+        return sum(1 for _ in self.items())
+
+    def get(self, key, default=None):
+        """get"""
+        ref = self._refs.get(key)
+        if ref is None:
+            return default
+        value = ref()
+        return value if value is not None else default
+
+    def items(self):
+        """items, skipping entries whose value already died"""
+        for key, ref in list(self._refs.items()):
+            value = ref()
+            if value is not None:
+                yield key, value
+
+    def clear(self):
+        """clear"""
+        self._refs.clear()
+
+
 class _CacheDimMath:
     """op (add,sub,...), operand -> Dim"""
 
     class _OperandCache:
         def __init__(self):
-            self.dims: MutableMapping[Dim, Dim] = weakref.WeakKeyDictionary()
-            # weak values: the cache must not keep derived dims alive, as the derived
+            # weak values in both: the cache must not keep derived dims alive, as the derived
             # dim holds its parents via derived_from_op.inputs and the parent holds
             # this cache, which would form a parent <-> derived reference cycle
+            self.dims: MutableMapping[Dim, Dim] = _WeakKeyWeakValueDict()
             self.statics: MutableMapping[int, Dim] = weakref.WeakValueDictionary()
 
     def __init__(self):
