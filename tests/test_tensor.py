@@ -193,6 +193,20 @@ def test_Dim_math_cache_hash_change_after_declare_same_as():
     assert d.dimension == 8
 
 
+def test_Dim_math_cache_keys_becoming_equal():
+    p = Dim(10, name="p")
+    static = Dim(3, name="static")
+    dynamic = Dim(None, name="dynamic")
+    static_result = p + static
+    assert static_result.dimension == 13
+    dynamic_result = p + dynamic
+    assert dynamic_result.dimension is None
+    static.declare_same_as(dynamic)
+    assert static == dynamic
+    p.reset_raw()
+    assert (p + static).dimension == 13
+
+
 def test_Dim_derived_pickle():
     import pickle
 
