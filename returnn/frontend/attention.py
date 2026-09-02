@@ -1243,7 +1243,8 @@ def sinusoidal_positional_encoding(
     # by identity (and holds them only weakly), so fresh per-step offset tensors
     # would never hit and would only churn entries. Recomputing is cheap.
     # Graph-based backends are unaffected, their cache entries are run-ctx-scoped.
-    # single_step_dim results carry no spatial dim and stay cacheable.
+    # single_step_dim results carry no spatial dim and stay cacheable
+    # (unless the offset is a Tensor, see above).
     unsafe_eager = rf.is_executing_eagerly() and (
         (spatial_dim != single_step_dim and spatial_dim.dimension is None) or isinstance(offset, Tensor)
     )
