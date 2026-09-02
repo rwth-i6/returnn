@@ -120,6 +120,65 @@ def test_dim_math_pad_window():
     assert sizes == expected_sizes
 
 
+class _EqKey:
+    def __init__(self, value):
+        self.value = value
+
+    def __eq__(self, other):
+        return isinstance(other, _EqKey) and other.value == self.value
+
+    def __hash__(self):
+        return hash(self.value)
+
+
+class _AnyValue:
+    pass
+
+
+def test_Dim_math_cache_dict_equal_key_replace():
+    import gc
+
+    from returnn.tensor._dim_extra import _WeakKeyWeakValueDict
+
+    gc.disable()
+    try:
+        d = _WeakKeyWeakValueDict()
+        key1 = _EqKey(1)
+        key2 = _EqKey(1)
+        value1 = _AnyValue()
+        d[key1] = value1
+        del value1
+        value2 = _AnyValue()
+        d[key2] = value2
+        del key1
+        assert d.get(key2) is value2, "live entry must survive the death of an equal old key"
+    finally:
+        gc.enable()
+
+
+def test_Dim_math_cache_dict_prunes_dead():
+    import gc
+
+    from returnn.tensor._dim_extra import _WeakKeyWeakValueDict
+
+    gc.disable()
+    try:
+        d = _WeakKeyWeakValueDict()
+        keys = [_EqKey(i) for i in range(10)]
+        for key in keys:
+            value = _AnyValue()
+            d[key] = value
+            del value
+        assert len(d) == 0
+        key_live = _EqKey("live")
+        value_live = _AnyValue()
+        d[key_live] = value_live
+        assert len(d._refs) == 1, "dead entries must be pruned on insert"
+        assert d.get(key_live) is value_live
+    finally:
+        gc.enable()
+
+
 def test_Dim_derived_pickle():
     import pickle
 

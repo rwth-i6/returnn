@@ -2969,6 +2969,14 @@ class _WeakKeyWeakValueDict:
         return value
 
     def __setitem__(self, key, value):
+        # prune dead entries, they would otherwise bypass any size cap based on len()
+        for k, ref in list(self._refs.items()):
+            if ref() is None:
+                del self._refs[k]
+        # delete an existing equal key first: the dict would keep the old physical key,
+        # and that key dying would evict this new live entry
+        if key in self._refs:
+            del self._refs[key]
         self._refs[key] = weakref.ref(value)
 
     def __delitem__(self, key):
