@@ -114,6 +114,9 @@ def rel_pos_att_fwd(
         kernel=_rel_pos_fwd_kernel,
         out_type=(),
         grid=(triton.cdiv(max_len, block_m), n_batch * n_heads),
+        # jax_triton and the torch launcher both default to 4 warps.
+        # 8 is faster here.
+        num_warps=8,
         H=n_heads,
         D=d,
         R=r,
@@ -185,6 +188,8 @@ def rel_pos_att_bwd(
         BLOCK_N=block_n,
         ENABLE_DROPOUT=dropout_p > 0.0,
         IEEE=q.dtype == jnp.float32,
+        # No num_warps override here, unlike the forward:
+        # these kernels use 32x32 tiles, where 8 warps are slower than the default 4.
     )
 
     delta_ref = jax.new_ref(jnp.zeros((total, n_heads), dtype=jnp.float32))
