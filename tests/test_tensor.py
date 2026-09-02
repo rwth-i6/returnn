@@ -173,10 +173,20 @@ def test_Dim_math_cache_dict_prunes_dead():
         key_live = _EqKey("live")
         value_live = _AnyValue()
         d[key_live] = value_live
-        assert len(d._refs) == 1, "dead entries must be pruned on insert"
+        assert len(d._entries) == 1, "dead entries must be pruned on insert"
         assert d.get(key_live) is value_live
     finally:
         gc.enable()
+
+
+def test_Dim_math_cache_hash_change_after_declare_same_as():
+    p = Dim(3, name="p")
+    b = Dim(4, name="b")
+    r = p + b
+    del r
+    b.declare_same_as(Dim(4, name="base"))
+    d = p + Dim(5, name="c")
+    assert d.dimension == 8
 
 
 def test_Dim_derived_pickle():

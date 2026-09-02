@@ -2957,56 +2957,66 @@ def dim_cmp_value(obj):
 
 
 class _WeakKeyWeakValueDict:
-    """Mapping with weak keys and weak values, entries with a dead value behave as missing."""
+    """
+    Small mapping with weak keys and weak values, entries with a dead key or value behave as missing.
+    A linear list with live equality lookup instead of a hash table:
+    Dim.__hash__ can change after declare_same_as, which would corrupt any hash-based key storage.
+    Intended for small capped caches only (lookup is O(n)).
+    """
 
     def __init__(self):
-        self._refs: MutableMapping[Any, Any] = weakref.WeakKeyDictionary()  # key -> weakref to value
+        self._entries: List[Tuple[Any, Any]] = []  # (weakref to key, weakref to value)
+
+    def _find(self, key):
+        for i, (key_ref, value_ref) in enumerate(self._entries):
+            entry_key = key_ref()
+            entry_value = value_ref()
+            if entry_key is not None and entry_value is not None and entry_key == key:
+                return i, entry_value
+        return -1, None
 
     def __getitem__(self, key):
-        value = self._refs[key]()
-        if value is None:
+        i, value = self._find(key)
+        if i < 0:
             raise KeyError(key)
         return value
 
     def __setitem__(self, key, value):
         # prune dead entries, they would otherwise bypass any size cap based on len()
-        for k, ref in list(self._refs.items()):
-            if ref() is None:
-                del self._refs[k]
-        # delete an existing equal key first: the dict would keep the old physical key,
-        # and that key dying would evict this new live entry
-        if key in self._refs:
-            del self._refs[key]
-        self._refs[key] = weakref.ref(value)
+        self._entries[:] = [(kr, vr) for (kr, vr) in self._entries if kr() is not None and vr() is not None]
+        i, _ = self._find(key)
+        if i >= 0:
+            del self._entries[i]
+        self._entries.append((weakref.ref(key), weakref.ref(value)))
 
     def __delitem__(self, key):
-        del self._refs[key]
+        i, _ = self._find(key)
+        if i < 0:
+            raise KeyError(key)
+        del self._entries[i]
 
     def __contains__(self, key):
-        ref = self._refs.get(key)
-        return ref is not None and ref() is not None
+        return self._find(key)[0] >= 0
 
     def __len__(self):
         return sum(1 for _ in self.items())
 
     def get(self, key, default=None):
         """get"""
-        ref = self._refs.get(key)
-        if ref is None:
-            return default
-        value = ref()
-        return value if value is not None else default
+        i, value = self._find(key)
+        return value if i >= 0 else default
 
     def items(self):
-        """items, skipping entries whose value already died"""
-        for key, ref in list(self._refs.items()):
-            value = ref()
-            if value is not None:
+        """items, skipping entries whose key or value already died"""
+        for key_ref, value_ref in list(self._entries):
+            key = key_ref()
+            value = value_ref()
+            if key is not None and value is not None:
                 yield key, value
 
     def clear(self):
         """clear"""
-        self._refs.clear()
+        self._entries.clear()
 
 
 class _CacheDimMath:
