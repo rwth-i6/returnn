@@ -1238,13 +1238,14 @@ def sinusoidal_positional_encoding(
     # Do not cache when, under eager execution, the result would carry a dynamic
     # (e.g. per-batch) spatial dim: the cached value holds that dim strongly, and the
     # dim drags its _extra state (seq masks, dim math caches), which accumulates across
-    # steps (memory leak). Recomputing the encoding for dynamic dims is cheap.
+    # steps (memory leak). A Tensor offset is excluded for the same reason, the cache
+    # key and value would hold it and its dims alive. Recomputing is cheap.
     # Graph-based backends are unaffected, their cache entries are run-ctx-scoped.
     # single_step_dim results carry no spatial dim and stay cacheable.
-    unsafe_eager_dynamic = (
-        rf.is_executing_eagerly() and spatial_dim != single_step_dim and spatial_dim.dimension is None
+    unsafe_eager = rf.is_executing_eagerly() and (
+        (spatial_dim != single_step_dim and spatial_dim.dimension is None) or isinstance(offset, Tensor)
     )
-    use_cache = not unsafe_eager_dynamic and not isinstance(offset, Tensor)
+    use_cache = not unsafe_eager
     if use_cache:
         cache_entry = _sinusoidal_positional_encoding_cache.get(cache_key)
         if cache_entry is not None:
