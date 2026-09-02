@@ -3021,6 +3021,16 @@ class _WeakKeyWeakValueDict:
             if key is not None and value is not None:
                 yield key, value
 
+    def remove_value_matches(self, predicate):
+        """drop entries whose value is alive and matches, without touching equal keys with other values"""
+        kept = []
+        for key_ref, value_ref in self._entries:
+            value = value_ref()
+            if value is not None and predicate(value):
+                continue
+            kept.append((key_ref, value_ref))
+        self._entries[:] = kept
+
     def clear(self):
         """clear"""
         self._entries.clear()
@@ -3113,11 +3123,7 @@ class _CacheDimMath:
     def clear_dynamic(self):
         """clear dynamic part"""
         for op_dict in self._ops.values():
-            for k, v in list(op_dict.dims.items()):
-                if v.dyn_size_ext is not None or v.dimension is None:
-                    # deleting one key can remove other equal snapshot entries as well
-                    if k in op_dict.dims:
-                        del op_dict.dims[k]
+            op_dict.dims.remove_value_matches(lambda v: v.dyn_size_ext is not None or v.dimension is None)
 
     def __len__(self):
         count = 0
