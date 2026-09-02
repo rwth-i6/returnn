@@ -141,7 +141,11 @@ class _DimExtra:
         # They each have same_as = self. The same_base should have the base (global) batch info.
         self.same_for_batch_ctx: Dict[Tuple[BatchInfo, Optional[ControlFlowContext]], Dim] = {}
         self.cache_dyn_size_ext_dev: Dict[str, _t.Tensor] = {}  # device -> dyn_size_ext
-        self.cache_seq_mask: Dict[Tuple[str, Optional[Tuple[Dim, ...]]], _t.Tensor] = {}  # (dev,dim_order) -> seq_mask
+        # (dev, dim_order with self as None) -> (dtype, raw seq_mask tensor).
+        # Storing the raw tensor with a self-free key avoids a self reference cycle
+        # (dim -> extra -> mask Tensor -> dims -> dim), so the dim and its cached
+        # masks are freed by plain refcounting when the dim dies.
+        self.cache_seq_mask: Dict[Tuple[str, Optional[Tuple[Optional[Dim], ...]]], Tuple[str, Any]] = {}
         self.cache_dim_math = _CacheDimMath()  # op (add,sub,...), operand -> Dim
 
     @property
@@ -916,9 +920,11 @@ class _DimMixin:
             dim_order = tuple([d for d in dim_order if d in dim_order_default])  # filter
         else:
             dim_order = dim_order_default
-        cache_key = (device, dim_order)
-        if cache_key in self._extra.cache_seq_mask:
-            return self._extra.cache_seq_mask[cache_key]
+        cache_key = (device, tuple(None if d is self else d for d in dim_order))
+        cached = self._extra.cache_seq_mask.get(cache_key)
+        if cached is not None:
+            cached_dtype, cached_raw = cached
+            return _t.Tensor("seq_mask", dims=dim_order, dtype=cached_dtype, raw_tensor=cached_raw)
 
         if self._extra.copy_same_as:
             if dim_order:
@@ -948,7 +954,7 @@ class _DimMixin:
         size_ext = size_ext.copy_masked(max_idx)
         idx_range = backend.range_over_dim(self, device=device)
         seq_mask = rf.compare(idx_range, "<", size_ext, allow_broadcast_all_sources=True, dim_order=dim_order)
-        self._extra.cache_seq_mask[cache_key] = seq_mask
+        self._extra.cache_seq_mask[cache_key] = (seq_mask.dtype, seq_mask.raw_tensor)
         return seq_mask
 
     def is_batch_dim(self):
@@ -2829,8 +2835,20 @@ class Op:
         """
         self.kind = kind
         self.inputs = inputs
-        self.output = None  # type: Optional[_d.Dim]
+        # weakref, see the output property: op.output pointing back at the derived dim
+        # while the derived dim holds this op would form a reference cycle,
+        # making every derived dim uncollectable by refcounting
+        self._output_ref = None  # type: Optional[weakref.ref]
         self.attribs = attribs
+
+    @property
+    def output(self) -> Optional[_d.Dim]:
+        """the derived output dim, or None if never set or already collected"""
+        return self._output_ref() if self._output_ref is not None else None
+
+    @output.setter
+    def output(self, dim: Optional[_d.Dim]):
+        self._output_ref = weakref.ref(dim) if dim is not None else None
 
     def __repr__(self):
         attribs = (" %r" % self.attribs) if self.attribs else ""
@@ -2927,7 +2945,10 @@ class _CacheDimMath:
     class _OperandCache:
         def __init__(self):
             self.dims: MutableMapping[Dim, Dim] = weakref.WeakKeyDictionary()
-            self.statics: Dict[int, Dim] = {}
+            # weak values: the cache must not keep derived dims alive, as the derived
+            # dim holds its parents via derived_from_op.inputs and the parent holds
+            # this cache, which would form a parent <-> derived reference cycle
+            self.statics: MutableMapping[int, Dim] = weakref.WeakValueDictionary()
 
     def __init__(self):
         self._ops: Dict[str, _CacheDimMath._OperandCache] = {}
