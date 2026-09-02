@@ -997,7 +997,10 @@ class JaxBackend(Backend[jax.Array]):
                 break
         if dev is not None:
             init = tree.map_structure(partial(_to_device, dev=dev), init)
-        final = jax.lax.while_loop(_cond, _body, init)
+        # Inside lax.while_loop every shape is static and every value is a tracer,
+        # so we must take a dim's capacity, not its dyn size.
+        with rf.set_static_traceable_ctx(True):
+            final = jax.lax.while_loop(_cond, _body, init)
         return _rebuild(final)
 
     @classmethod
