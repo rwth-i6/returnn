@@ -1837,6 +1837,33 @@ class JaxBackend(Backend[jax.Array]):
         # which is the order this returns anyway.
         # Several batch dims still need the merge, hence the transpose, so that path is unchanged.
         _src_dims = list(source.dims)
+        _strides_seq = _to_seq(strides or 1, n_spatial)
+        _dilation_seq = _to_seq(dilation_rate or 1, n_spatial)
+        # A 1-D depthwise conv has no cuDNN kernel,
+        # so XLA routes it through the 2-D implicit-GEMM path,
+        # whose layout transforms cost more than the arithmetic.
+        # See _conv_depthwise_1d.
+        if (
+            n_spatial == 1
+            and groups
+            and groups == in_dim.dimension == out_dim.dimension
+            and _strides_seq[0] == 1
+            and _dilation_seq[0] == 1
+            # any number of batch dims, including none: the packed layout is just (time, feature).
+            # Distinctness is what matters, so the axis lookups below are unambiguous.
+            and len(set(_src_dims)) == len(_src_dims)
+        ):
+            return _conv_depthwise_1d(
+                source,
+                in_dim=in_dim,
+                out_dim=out_dim,
+                in_spatial_dim=in_spatial_dims[0],
+                out_spatial_dim=out_spatial_dims[0],
+                filter=filter,
+                filter_size=filter_size[0],
+                padding=padding,
+                bias=bias,
+            )
         if len(batch_dims) == 1 and len(set(_src_dims)) == len(_src_dims):
             dim_numbers = jax.lax.ConvDimensionNumbers(
                 lhs_spec=(_src_dims.index(batch_dims[0]), _src_dims.index(in_dim))
@@ -1858,9 +1885,9 @@ class JaxBackend(Backend[jax.Array]):
         out_raw = jax.lax.conv_general_dilated(
             src_raw,
             filter.raw_tensor,
-            window_strides=_to_seq(strides or 1, n_spatial),
+            window_strides=_strides_seq,
             padding=_conv_padding(padding, n_spatial),
-            rhs_dilation=_to_seq(dilation_rate or 1, n_spatial),
+            rhs_dilation=_dilation_seq,
             dimension_numbers=dim_numbers,
             feature_group_count=groups or 1,
         )
@@ -1926,7 +1953,20 @@ class JaxBackend(Backend[jax.Array]):
             pad = _full_pad
         src_raw = source.raw_tensor
         dtype = src_raw.dtype
-        if mode == "max":
+        # Non-overlapping max pooling as reshape + max over a new axis.
+        # reduce_window's gradient is select_and_scatter,
+        # which rescans every window instead of using saved argmax indices.
+        if (
+            mode == "max"
+            and all(d == 1 for d in window_dilation)
+            and all(_s == _w for _s, _w in zip(strides, pool_size))
+            # any, not all: the Conformer pools (1, 2), i.e. window 1 on time and 2 on mel
+            and any(_w > 1 for _w in pool_size)
+            and _pool_no_padding(pad, axes)
+            and all(src_raw.shape[_a] is not None for _a in axes)
+        ):
+            out_raw = _pool_max_reshape(src_raw, axes, pool_size)
+        elif mode == "max":
             # The init value must be the monoid identity (-inf), not just a very small number:
             # only then does JAX lower this to reduce_window_max, which has a transpose rule.
             # With finfo.min it builds a generic reduce_window, and the backward pass then fails with
@@ -2354,6 +2394,130 @@ def _conv_dim_numbers(n_spatial: int) -> Tuple[str, str, str]:
     spatial = "HWDEFG"[:n_spatial]
     assert len(spatial) == n_spatial, f"conv with {n_spatial} spatial dims not supported"
     return "NC" + spatial, "OI" + spatial, "NC" + spatial
+
+
+def _pool_no_padding(pad, axes: Sequence[int]) -> bool:
+    """
+    :param pad: what _conv_padding returned: "SAME" / "VALID", or explicit (low, high) per axis
+    :param axes: the spatial axes
+    :return: whether pooling adds no padding, so the windows tile the axis exactly
+    """
+    if isinstance(pad, str):
+        return pad == "VALID"
+    return all(pad[_a] == (0, 0) for _a in axes)
+
+
+def _pool_max_reshape(src_raw, axes: Sequence[int], pool_size: Sequence[int]):
+    """
+    Non-overlapping max pool, as a reshape and a max over the split axis.
+
+    Equivalent to reduce_window with window == strides and no padding,
+    which drops any remainder; the slice below does the same.
+    The point is the gradient:
+    reducing over a plain axis lowers to a comparison-select, not to select_and_scatter.
+
+    :param src_raw: the input
+    :param axes: spatial axes to pool
+    :param pool_size: window per spatial axis
+    :return: the pooled output, same rank as the input
+    """
+    out = src_raw
+    for _axis, _size in zip(axes, pool_size):
+        n_out = out.shape[_axis] // _size
+        if n_out * _size != out.shape[_axis]:
+            out = jax.lax.slice_in_dim(out, 0, n_out * _size, axis=_axis)
+        shape = list(out.shape)
+        out = jnp.reshape(out, shape[:_axis] + [n_out, _size] + shape[_axis + 1 :])
+        out = jnp.max(out, axis=_axis + 1)
+    return out
+
+
+def _conv_depthwise_1d(
+    source: Tensor,
+    *,
+    in_dim: Dim,
+    out_dim: Dim,
+    in_spatial_dim: Dim,
+    out_spatial_dim: Dim,
+    filter: Tensor,
+    filter_size: Dim,
+    padding: Union[str, int, Sequence[int]],
+    bias: Optional[Tensor],
+) -> Tuple[Tensor, Sequence[Dim]]:
+    """
+    Depthwise 1-D conv, one filter per channel, stride 1 and no dilation,
+    written as a weighted sum of shifted copies of the input.
+    This keeps it inside XLA's own fusion,
+    instead of cuDNN's 2-D grouped path with its layout transforms.
+
+    :param source: with in_dim and in_spatial_dim
+    :param in_dim: channel dim, equal to out_dim and to the group count
+    :param out_dim:
+    :param in_spatial_dim:
+    :param out_spatial_dim:
+    :param filter: already transposed to (out_dim, 1, filter_size)
+    :param filter_size: kernel width
+    :param padding:
+    :param bias: over out_dim, or None
+    :return: output in the source's own axis order, and (out_spatial_dim,)
+    """
+    src_raw = source.raw_tensor
+    src_dims = list(source.dims)
+    rank = len(src_dims)
+    feat_ax, time_ax = src_dims.index(in_dim), src_dims.index(in_spatial_dim)
+    width = filter_size.dimension
+    pad = _conv_padding(padding, 1)
+    if pad == "SAME":
+        # the TF convention that rf.make_conv_out_spatial_dims assumes: the odd frame goes right
+        pad = [((width - 1) // 2, width // 2)]
+    elif pad == "VALID":
+        pad = [(0, 0)]
+    # Tiled Triton kernel where it applies:
+    # the contiguous (time, channel) packed layout with "same" padding.
+    # Every other layout falls through to the shifted-sum, which is general.
+    if rank == 2 and time_ax == 0 and feat_ax == 1 and pad[0][0] + pad[0][1] == width - 1:
+        from returnn.jax.util import depthwise_conv_triton
+
+        filter_2d = jnp.transpose(filter.raw_tensor[:, 0, :])
+        if depthwise_conv_triton.depthwise_conv1d_available(src_raw, filter_2d):
+            out_raw = depthwise_conv_triton.depthwise_conv1d(src_raw, filter_2d, pad[0][0])
+            if bias is not None:
+                out_raw = out_raw + bias.raw_tensor
+            out = Tensor(
+                "conv",
+                dims=[out_dim if d == in_dim else out_spatial_dim if d == in_spatial_dim else d for d in src_dims],
+                dtype=JaxBackend.get_dtype_name_raw(out_raw),
+            )
+            out.raw_tensor = out_raw
+            out.feature_dim = out_dim
+            return out, (out_spatial_dim,)
+    pad_width = [(0, 0)] * rank
+    pad_width[time_ax] = pad[0]
+    padded = jnp.pad(src_raw, pad_width)
+    # from the padded shape rather than out_spatial_dim, which need not be static here
+    out_shape = list(padded.shape)
+    out_shape[time_ax] = padded.shape[time_ax] - width + 1
+    weight_shape = [1] * rank
+    weight_shape[feat_ax] = filter.raw_tensor.shape[0]
+    # f32 accumulation, as cuDNN does: summing this many taps in bf16 would lose the low bits
+    acc = jnp.zeros(out_shape, dtype=jnp.float32)
+    for i in range(width):
+        start = [0] * rank
+        start[time_ax] = i
+        shifted = jax.lax.dynamic_slice(padded, start, out_shape)
+        weight = jnp.reshape(filter.raw_tensor[:, 0, i], weight_shape)
+        acc += shifted.astype(jnp.float32) * weight.astype(jnp.float32)
+    out_raw = acc.astype(src_raw.dtype)
+    if bias is not None:
+        out_raw = out_raw + jnp.reshape(bias.raw_tensor, weight_shape)
+    out = Tensor(
+        "conv",
+        dims=[out_dim if d == in_dim else out_spatial_dim if d == in_spatial_dim else d for d in src_dims],
+        dtype=JaxBackend.get_dtype_name_raw(out_raw),
+    )
+    out.raw_tensor = out_raw
+    out.feature_dim = out_dim
+    return out, (out_spatial_dim,)
 
 
 def _dtype_min(dtype) -> Union[int, float]:
