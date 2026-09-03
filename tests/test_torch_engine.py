@@ -2377,55 +2377,145 @@ def test_multi_optimizer_amuse():
     assert not muon_sub.train_mode and not adamw_sub.train_mode
 
 
-def test_amuse_beta1_decode_consistency():
+@torch.no_grad()
+def _reference_amuse_muon_update(grad, momentum, beta, aux_update_type):
+    """muon_update transcribed from kjeiun/amuse src/optim/AMUSE.py at commit 4892274"""
+    from returnn.torch.optim.amuse import zeropower_via_newtonschulz5
+
+    momentum.lerp_(grad, 1 - beta)
+    update = grad.lerp_(momentum, beta)
+    if update.ndim == 4:
+        update = update.view(len(update), -1)
+    update = zeropower_via_newtonschulz5(update)
+    if aux_update_type == "adamw":
+        update *= 0.2 * max(update.size(0), update.size(1)) ** 0.5
+    else:
+        update *= max(1, update.size(-2) / update.size(-1)) ** 0.5
+    return update
+
+
+@torch.no_grad()
+def _reference_amuse_step(groups, states, *, beta1_init, warmup_steps, rho, r, weight_lr_power):
+    """AMUSE.step transcribed from kjeiun/amuse src/optim/AMUSE.py at commit 4892274, group level state"""
+    for group in groups:
+        k = group["k"]
+        t = k + 1
+        lr = group["base_lr"] * min(1.0, t / warmup_steps)
+        weight = (t**r) * (lr**weight_lr_power)
+        future_weight_sum = group.get("weight_sum", 0.0) + weight
+        ckp1 = weight / future_weight_sum if future_weight_sum > 0 else 1.0
+        group["ckp1"] = ckp1
+        group["weight_sum"] = future_weight_sum
+        if t <= warmup_steps:
+            if t == warmup_steps:
+                group["c_warmup"] = ckp1
+            beta1 = beta1_init
+        else:
+            c_warmup = group.get("c_warmup", 1.0 / warmup_steps)
+            s_t = (ckp1 * (1.0 - c_warmup)) / (c_warmup * (1.0 - ckp1))
+            beta1 = 1.0 - (s_t**rho) * (1.0 - beta1_init)
+        group["beta1"] = beta1
+        wd = group.get("weight_decay", 0.0)
+        for p in group["params"]:
+            if p.grad is None:
+                continue
+            state = states[p]
+            z = state.get("z")
+            if z is None:
+                z = state["z"] = p.detach().clone()
+            p.lerp_(end=z, weight=1.0 - 1.0 / beta1)
+            if group["update_type"] == "muon":
+                if "momentum_buffer" not in state:
+                    state["momentum_buffer"] = torch.zeros_like(p)
+                update = _reference_amuse_muon_update(p.grad, state["momentum_buffer"], group["momentum"], "adamw")
+                if wd != 0.0:
+                    z.mul_(1.0 - lr * wd)
+                z.add_(update.reshape(p.shape), alpha=-lr)
+            else:
+                if "exp_avg_sq" not in state:
+                    state["exp_avg_sq"] = torch.zeros_like(p)
+                v = state["exp_avg_sq"]
+                grad = p.grad
+                v.mul_(group["beta2"]).addcmul_(grad, grad, value=1.0 - group["beta2"])
+                denom = v.div(1.0 - group["beta2"] ** t).sqrt_().add_(group["eps"])
+                update = grad / denom
+                if wd != 0.0:
+                    update = update.add(z, alpha=wd)
+                z.add_(update, alpha=-lr)
+            p.lerp_(end=z, weight=ckp1)
+            p.lerp_(end=z, weight=1.0 - beta1)
+        group["k"] = k + 1
+
+
+def test_amuse_matches_reference_implementation():
     from returnn.torch.optim.amuse import AMUSE
 
-    # Once beta1 ramps after warmup, y must be decoded with the beta1 it was encoded with.
-    # With a constant gradient, z is independent of that, so x must match the explicit averaging.
-    warmup, steps, lr_base, grad = 5, 8, 0.5, 1.0
-    p = torch.nn.Parameter(torch.tensor([1.0], dtype=torch.float64))
-    opt = AMUSE([p], lr=lr_base, update_type="sgd", warmup_steps=warmup, beta1=0.9, rho=1.0)
-    opt.train()
-    x_ref = z_ref = 1.0
-    for _ in range(steps):
-        p.grad = torch.tensor([grad], dtype=torch.float64)
-        opt.step()
-        group = opt.param_groups[0]
-        z_ref = z_ref - lr_base * min(1.0, group["k"] / warmup) * grad
-        x_ref = (1.0 - group["ckp1"]) * x_ref + group["ckp1"] * z_ref
-    opt.eval()
-    assert abs(p.item() - x_ref) < 1e-9, (p.item(), x_ref)
+    # Muon on a matrix and a 4D kernel, AdamW-style on a matrix and a vector,
+    # the vector gets no gradient in some steps, run past the warmup so beta1 ramps.
+    torch.manual_seed(1)
+    shapes = [(6, 4), (3, 2, 3, 3), (5, 4), (6,)]
+    params = [torch.nn.Parameter(torch.randn(*shape, dtype=torch.float64)) for shape in shapes]
+    params_ref = [torch.nn.Parameter(p.detach().clone()) for p in params]
+    warmup, steps, base_lr, wd = 3, 10, 0.05, 0.01
+    schedule = dict(beta1=0.9, rho=1.0, r=0.0, weight_lr_power=2.0)
+    opt_muon = AMUSE(
+        params[:2], lr=base_lr, update_type="muon", momentum=0.95, weight_decay=wd, warmup_steps=warmup, **schedule
+    )
+    opt_adamw = AMUSE(
+        params[2:],
+        lr=base_lr * 0.5,
+        update_type="adamw",
+        beta2=0.999,
+        eps=1e-10,
+        weight_decay=wd,
+        warmup_steps=warmup,
+        **schedule,
+    )
+    groups_ref = [
+        {
+            "params": params_ref[:2],
+            "base_lr": base_lr,
+            "k": 0,
+            "weight_decay": wd,
+            "update_type": "muon",
+            "momentum": 0.95,
+        },
+        {
+            "params": params_ref[2:],
+            "base_lr": base_lr * 0.5,
+            "k": 0,
+            "weight_decay": wd,
+            "update_type": "adamw",
+            "beta2": 0.999,
+            "eps": 1e-10,
+        },
+    ]
+    states_ref = {p: {} for p in params_ref}
+    ref_schedule = dict(beta1_init=0.9, rho=1.0, r=0.0, weight_lr_power=2.0, warmup_steps=warmup)
 
-
-def test_amuse_skipped_param_state():
-    from returnn.torch.optim.amuse import AMUSE
-
-    # Param a only gets gradients during warmup (beta1 still constant), then none while beta1 ramps.
-    # Its y stays encoded with the old beta1, so eval() must decode it with that, not the group beta1.
-    p_a = torch.nn.Parameter(torch.tensor([8.7], dtype=torch.float64))
-    p_b = torch.nn.Parameter(torch.tensor([1.0], dtype=torch.float64))
-    opt = AMUSE([p_a, p_b], lr=0.1, update_type="sgd", warmup_steps=2, beta1=0.9, rho=1.0)
-    opt.train()
-    for t in range(6):
-        p_a.grad = torch.tensor([1.0], dtype=torch.float64) if t < 2 else None
-        p_b.grad = torch.tensor([1.0], dtype=torch.float64)
-        opt.step()
-    opt.eval()
-    # z_a: 8.7 -> 8.65 (lr 0.05) -> 8.55 (lr 0.1), x_a: 8.65 -> 0.2 * 8.65 + 0.8 * 8.55
-    assert abs(p_a.item() - 8.57) < 1e-9, p_a.item()
-
-    # AdamW bias correction must use the param's own step count:
-    # a param getting its first gradient late must get a normalized first update, |dz| == lr.
-    p_c = torch.nn.Parameter(torch.tensor([3.0], dtype=torch.float64))
-    p_d = torch.nn.Parameter(torch.tensor([5.0], dtype=torch.float64))
-    opt = AMUSE([p_c, p_d], lr=0.1, update_type="adamw", warmup_steps=2, beta1=0.9, rho=1.0, eps=0.0)
-    opt.train()
-    for t in range(20):
-        p_c.grad = torch.tensor([1.0], dtype=torch.float64)
-        p_d.grad = torch.tensor([1.0], dtype=torch.float64) if t == 19 else None
-        opt.step()
-    dz_d = abs(opt.state[p_d]["z"].item() - 5.0)
-    assert abs(dz_d - 0.1) < 1e-9, dz_d
+    opt_muon.train()
+    opt_adamw.train()
+    for step in range(steps):
+        for i, (p, p_ref) in enumerate(zip(params, params_ref)):
+            grad = None if (i == 3 and step % 4 == 1) else torch.randn_like(p)
+            p.grad = None if grad is None else grad.clone()
+            p_ref.grad = None if grad is None else grad.clone()
+        opt_muon.step()
+        opt_adamw.step()
+        _reference_amuse_step(groups_ref, states_ref, **ref_schedule)
+        for p, p_ref in zip(params, params_ref):
+            assert torch.allclose(p, p_ref, rtol=1e-10, atol=1e-10), step
+            opt = opt_muon if p in {params[0], params[1]} else opt_adamw
+            assert torch.allclose(opt.state[p]["z"], states_ref[p_ref]["z"], rtol=1e-10, atol=1e-10), step
+    assert opt_muon.param_groups[0]["beta1"] > 0.9
+    opt_muon.eval()
+    opt_adamw.eval()
+    with torch.no_grad():
+        for group in groups_ref:
+            for p_ref in group["params"]:
+                p_ref.lerp_(end=states_ref[p_ref]["z"], weight=1.0 - 1.0 / group["beta1"])
+    for p, p_ref in zip(params, params_ref):
+        assert torch.allclose(p, p_ref, rtol=1e-10, atol=1e-10)
 
 
 if __name__ == "__main__":
