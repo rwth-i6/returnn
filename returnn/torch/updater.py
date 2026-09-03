@@ -5,10 +5,13 @@ and model param update logic in general.
 
 from __future__ import annotations
 
-from typing import Optional, Union, Any, Type, Callable, Sequence, Iterable, Set, Dict, List, Tuple
+from typing import TYPE_CHECKING, Optional, Union, Any, Type, Callable, Sequence, Iterable, Set, Dict, List, Tuple
 import os
 import gc
 import torch
+
+if TYPE_CHECKING:
+    from returnn.torch.optim.multi import MultiOptimizer
 
 import returnn
 from returnn.log import log
@@ -631,7 +634,7 @@ class Updater:
         return optimizer
 
     def _create_multi_optimizer(
-        self, optim_class: Type[torch.optim.Optimizer], optimizer_opts
+        self, optim_class: Type[MultiOptimizer], optimizer_opts
     ) -> Tuple[torch.optim.Optimizer, Optional[List[Dict[str, Any]]]]:
         """
         Create a :class:`returnn.torch.optim.multi.MultiOptimizer`
