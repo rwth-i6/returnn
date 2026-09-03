@@ -4,7 +4,7 @@ or just rarely used attribs, such that we can save memory for the common case.
 """
 
 from __future__ import annotations
-from typing import TYPE_CHECKING, Optional, Union, Any, Tuple, Sequence, MutableMapping, Dict, List, Set, Callable
+from typing import TYPE_CHECKING, Optional, Union, Any, Tuple, Sequence, Dict, List, Set, Callable
 import operator
 import weakref
 
@@ -141,12 +141,8 @@ class _DimExtra:
         # They each have same_as = self. The same_base should have the base (global) batch info.
         self.same_for_batch_ctx: Dict[Tuple[BatchInfo, Optional[ControlFlowContext]], Dim] = {}
         self.cache_dyn_size_ext_dev: Dict[str, _t.Tensor] = {}  # device -> dyn_size_ext
-        # (dev, dim_order with self as None) -> (dtype, mask dims with self as None, raw tensor, wrapper weakref).
-        # Storing the raw tensor with self-free key and dims avoids a self reference cycle
-        # (dim -> extra -> mask Tensor -> dims -> dim), so the dim and its cached
-        # masks are freed by plain refcounting when the dim dies.
-        # The mask dims are stored because they can be a superset of the requested dim_order.
-        # The wrapper weakref keeps get_mask() identity stable while the wrapper is alive.
+        # (dev, dim_order with self as None) -> (dtype, mask dims with self as None, raw tensor, wrapper weakref)
+        # self-free entries avoid the dim -> mask -> dim cycle, the weakref keeps get_mask identity while alive
         self.cache_seq_mask: Dict[Tuple[str, Optional[Tuple[Optional[Dim], ...]]], Tuple[str, Any, Any, Any]] = {}
         self.cache_dim_math = _CacheDimMath()  # op (add,sub,...), operand -> Dim
 
@@ -2848,9 +2844,7 @@ class Op:
         """
         self.kind = kind
         self.inputs = inputs
-        # weakref, see the output property: op.output pointing back at the derived dim
-        # while the derived dim holds this op would form a reference cycle,
-        # making every derived dim uncollectable by refcounting
+        # weakref, a strong back reference would make every derived dim uncollectable by refcount
         self._output_ref = None  # type: Optional[weakref.ref]
         self.attribs = attribs
 
@@ -2963,16 +2957,27 @@ def dim_cmp_value(obj):
     return obj
 
 
-class _WeakKeyWeakValueDict:
-    """
-    Small mapping with weak keys and weak values, entries with a dead key or value behave as missing.
-    A linear list with live equality lookup instead of a hash table:
-    Dim.__hash__ can change after declare_same_as, which would corrupt any hash-based key storage.
-    Intended for small capped caches only (lookup is O(n)).
-    """
+class _StrongRef:
+    """callable holder, so strong and weak cache entries are dereferenced the same way"""
 
-    def __init__(self):
-        self._entries: List[Tuple[Any, Any]] = []  # (weakref to key, weakref to value)
+    __slots__ = ("_obj",)
+
+    def __init__(self, obj):
+        self._obj = obj
+
+    def __call__(self):
+        return self._obj
+
+
+class _DimMathCacheDict:
+    """dim math cache map: weak keys (strong for ints), weak or strong values, linear lookup (Dim hashes can change)"""
+
+    def __init__(self, *, weak_keys: bool = True):
+        self._weak_keys = weak_keys
+        self._entries: List[Tuple[Any, Any]] = []  # (ref to key, ref to value), both callables
+
+    def _key_ref(self, key):
+        return weakref.ref(key) if self._weak_keys else _StrongRef(key)
 
     def _find_all(self, key):
         found = []
@@ -2993,14 +2998,16 @@ class _WeakKeyWeakValueDict:
             raise KeyError(key)
         return value
 
-    def __setitem__(self, key, value):
-        # prune dead entries, they would otherwise bypass any size cap based on len()
+    def set(self, key, value, *, weak_value: bool):
+        """set, holding the value weakly or strongly"""
         self._entries[:] = [(kr, vr) for (kr, vr) in self._entries if kr() is not None and vr() is not None]
-        # remove every equal entry: initially different keys can become equal later
-        # (e.g. Dim.declare_same_as), which would leave duplicate logical keys
+        # also drops keys that became equal via declare_same_as
         for i, _ in reversed(self._find_all(key)):
             del self._entries[i]
-        self._entries.append((weakref.ref(key), weakref.ref(value)))
+        self._entries.append((self._key_ref(key), weakref.ref(value) if weak_value else _StrongRef(value)))
+
+    def __setitem__(self, key, value):
+        self.set(key, value, weak_value=True)
 
     def __delitem__(self, key):
         found = self._find_all(key)
@@ -3043,16 +3050,29 @@ class _WeakKeyWeakValueDict:
         self._entries.clear()
 
 
+def _dim_math_cache_hold_weak(dim: Dim) -> bool:
+    """weak only for eager dynamic dims (per-batch webs must die by refcount), else keep the canonical derived dim"""
+    op = dim.derived_from_op
+    for d in (dim,) + (tuple(op.inputs) if op else ()):
+        if not isinstance(d, _d.Dim):
+            continue
+        size_ext = d.dyn_size_ext
+        if size_ext is None or size_ext.raw_tensor is None:
+            continue
+        # noinspection PyProtectedMember
+        backend = size_ext._raw_backend
+        if backend is not None and backend.executing_eagerly():
+            return True
+    return False
+
+
 class _CacheDimMath:
     """op (add,sub,...), operand -> Dim"""
 
     class _OperandCache:
         def __init__(self):
-            # weak values in both: the cache must not keep derived dims alive, as the derived
-            # dim holds its parents via derived_from_op.inputs and the parent holds
-            # this cache, which would form a parent <-> derived reference cycle
-            self.dims: _WeakKeyWeakValueDict = _WeakKeyWeakValueDict()
-            self.statics: MutableMapping[int, Dim] = weakref.WeakValueDictionary()
+            self.dims = _DimMathCacheDict()
+            self.statics = _DimMathCacheDict(weak_keys=False)
 
     def __init__(self):
         self._ops: Dict[str, _CacheDimMath._OperandCache] = {}
@@ -3074,13 +3094,14 @@ class _CacheDimMath:
             value_dict = op_dict.statics
         else:
             value_dict = op_dict.dims
+        weak_value = _dim_math_cache_hold_weak(__value)
         if __key[1] in value_dict:
-            value_dict[__key[1]] = __value
+            value_dict.set(__key[1], __value, weak_value=weak_value)
             return
         if len(value_dict) >= 5:
             # Just to avoid memory leaks.
             value_dict.clear()
-        value_dict[__key[1]] = __value
+        value_dict.set(__key[1], __value, weak_value=weak_value)
 
     def __delitem__(self, __key: Tuple[str, Union[Dim, int]]):
         op_dict = self._ops[__key[0]]
