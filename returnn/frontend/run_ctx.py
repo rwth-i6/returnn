@@ -293,7 +293,7 @@ class RunCtx:
         This has the effect that RETURNN will in any case construct the corresponding layer.
         Also see :func:`mark_as_default_output`.
 
-        This is intended mostly for forwarding, or exporting the model (TF graph, TFLite, ONNX, etc).
+        This is intended mostly for forwarding, or exporting the model (TF graph, TFLite, ONNX, etc.).
         You must specify a shape to have the output shape (order of dims) well-defined
         (if not specified, we check if some defaults are possible, like BTF, or BF).
 
@@ -410,7 +410,7 @@ class RunCtx:
                 f"check_outputs_complete: expected outputs {self.expected_outputs} do not match"
                 f" actual outputs {self.outputs}"
             )
-            # We don't need to check the dims, dtype, etc, as this is already done in mark_as_output.
+            # We don't need to check the dims, dtype, etc., as this is already done in mark_as_output.
 
     def total_loss(self) -> Union[Tensor, float]:
         """

@@ -21,8 +21,8 @@ segmentOrderList = None  # type: typing.Optional[typing.List[str]]
 
 
 # Cannot change name, this need to stay like this for compatibility.
-# noinspection PyPep8Naming,PyUnusedLocal
-def getSegmentList(corpusName, segmentList, **kwargs):
+# noinspection PyPep8Naming
+def getSegmentList(corpusName, segmentList, **_kwargs):
     """
     Called by Sprint PythonSegmentOrder.
     Set python-segment-order = true in Sprint to use this.
@@ -83,7 +83,8 @@ def init(**kwargs):
     # We need to catch these cases.
     if "name" in kwargs and kwargs["name"] == "Sprint.PythonControl":
         return PythonControl.init(**kwargs)
-    return _init_python_trainer(**kwargs)
+    _init_python_trainer(**kwargs)
+    return None
 
 
 def _parse_config_str(config_str):
@@ -200,7 +201,7 @@ feedInputUnsupervised = feedInput
 
 
 # Name/params need to stay like this, for compatibility.
-# noinspection PyPep8Naming,PyUnusedLocal
+# noinspection PyPep8Naming
 def feedInputAndTarget(
     features,
     weights=None,
@@ -209,7 +210,7 @@ def feedInputAndTarget(
     alignment=None,
     speaker_name=None,
     speaker_gender=None,
-    **kwargs,
+    **_kwargs,
 ):
     """
     :param numpy.ndarray features:
@@ -220,6 +221,7 @@ def feedInputAndTarget(
     :param str|None speaker_name:
     :param str|None speaker_gender:
     """
+    del weights, speaker_name, speaker_gender  # part of the Sprint callback signature
     assert features.shape[0] == InputDim
     targets = {}
     if alignment is not None:
@@ -256,8 +258,7 @@ class PythonControl:
         return cls.instance
 
     # Maybe other kwargs by Sprint.
-    # noinspection PyUnusedLocal
-    def __init__(self, config, **kwargs):
+    def __init__(self, config, **_kwargs):
         self.config = _parse_config_str(config)
         _common_init(self.config)
 
@@ -275,8 +276,8 @@ class PythonControl:
         )
         _init_global_sprint_dataset(input_dim=input_dim, output_dim=output_dim, config=self.config)
 
-    # noinspection PyMethodMayBeStatic,PyUnusedLocal
-    def process_segment(self, name, orthography, features, alignment, soft_alignment, speaker_name=None, **kwargs):
+    # noinspection PyMethodMayBeStatic
+    def process_segment(self, name, orthography, features, alignment, soft_alignment, speaker_name=None, **_kwargs):
         """
         Called by Sprint.
 
@@ -286,7 +287,7 @@ class PythonControl:
         :param numpy.ndarray|None alignment:
         :param numpy.ndarray|None soft_alignment:
         :param str|None speaker_name:
-        :param kwargs: maybe others
+        :param _kwargs: maybe others
         """
         assert sprintDataset
         targets = {}

@@ -109,8 +109,8 @@ def _print_key_value(
     print_all_tensors: bool = False,
     stats_only: bool = False,
     prefix: str = "",
-    ctx: PrintCtx,
-    ctx_name: str,
+    ctx: Optional[PrintCtx] = None,
+    ctx_name: Optional[str] = None,
 ):
     if isinstance(v, numpy.ndarray):
         v = torch.tensor(v)

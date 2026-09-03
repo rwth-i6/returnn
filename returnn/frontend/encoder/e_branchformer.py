@@ -25,7 +25,7 @@ Example usage:
 """
 
 from __future__ import annotations
-from typing import Union, Any, Callable, Dict
+from typing import Union, Any, Callable, Dict, Type
 import copy as _copy
 from returnn.util.basic import NotSpecified
 from returnn.tensor import Tensor, Dim
@@ -48,15 +48,15 @@ class EBranchformerLayer(rf.Module):
         self,
         out_dim: Dim = Dim(512, name="conformer-enc-default-out-dim"),
         *,
-        ff: Union[type, Dict[str, Any], rf.Module] = NotSpecified,
-        ff_dim: Union[Dim, int] = NotSpecified,
-        ff_activation: Union[Callable[[Tensor], Tensor], Dict[str, Any], rf.Module] = NotSpecified,
+        ff: Union[type, Dict[str, Any], rf.Module, Type[NotSpecified]] = NotSpecified,
+        ff_dim: Union[Dim, int, Type[NotSpecified]] = NotSpecified,
+        ff_activation: Union[Callable[[Tensor], Tensor], Dict[str, Any], rf.Module, Type[NotSpecified]] = NotSpecified,
         dropout: float = 0.1,
         num_heads: int = 4,
         self_att: Union[rf.RelPosSelfAttention, rf.Module, type, Dict[str, Any], Any] = NotSpecified,
         att_dropout: float = 0.1,
-        cgmlp: Union[type, Dict[str, Any]] = NotSpecified,
-        cgmlp_ff_dim: Union[Dim, int] = NotSpecified,
+        cgmlp: Union[type, Dict[str, Any], Type[NotSpecified]] = NotSpecified,
+        cgmlp_ff_dim: Union[Dim, int, Type[NotSpecified]] = NotSpecified,
         cgmlp_conv_kernel: int = 31,
         merge_conv_kernel: int = 3,
         norm: Union[type, Dict[str, Any], rf.Module, Callable] = rf.LayerNorm,
@@ -163,7 +163,7 @@ class FeedForwardConvGated(rf.Module):
         self,
         out_dim: Dim,
         *,
-        ff_dim: Union[Dim, int] = NotSpecified,
+        ff_dim: Union[Dim, int, Type[NotSpecified]] = NotSpecified,
         kernel_size: int = 31,
         dropout: float = 0.1,
         activation: Union[Callable[[Tensor], Tensor], Dict[str, Any], rf.Module] = rf.gelu,
@@ -195,15 +195,14 @@ class FeedForwardConvGated(rf.Module):
         """
         super().__init__()
 
-        if ff_dim is NotSpecified:
-            ff_dim = out_dim * 3  # somewhat arbitrary. with 512, this is 3072/2.
-        if isinstance(ff_dim, int):
-            ff_dim = Dim(ff_dim, name="e-branchformer-ff-dim")
-        if not isinstance(ff_dim, Dim):
+        ff_dim_: Union[int, Dim] = out_dim * 3 if ff_dim is NotSpecified else ff_dim
+        if isinstance(ff_dim_, int):
+            ff_dim_ = Dim(ff_dim_, name="e-branchformer-ff-dim")
+        if not isinstance(ff_dim_, Dim):
             raise TypeError(f"E-Branchformer FeedForwardConvGated: unexpected ff_dim {ff_dim!r} type {type(ff_dim)}")
 
         self.out_dim = out_dim
-        self.ff_dim = ff_dim
+        self.ff_dim = ff_dim_
         self.dropout = dropout
         self.dropout_broadcast = rf.dropout_broadcast_default()
         if activation is NotSpecified:
@@ -213,12 +212,17 @@ class FeedForwardConvGated(rf.Module):
             gate_activation = rf.identity
         self.gate_activation = _make_activation(gate_activation)
 
-        self.linear_ff = rf.Linear(out_dim, 2 * ff_dim, with_bias=with_bias)  # x2 to split for gating
-        self.norm = make_norm(norm, ff_dim)
+        self.linear_ff = rf.Linear(out_dim, 2 * self.ff_dim, with_bias=with_bias)  # x2 to split for gating
+        self.norm = make_norm(norm, self.ff_dim)
         self.conv = rf.Conv1d(  # depthwise convolution
-            ff_dim, ff_dim, filter_size=kernel_size, groups=ff_dim.dimension, padding="same", with_bias=with_bias
+            self.ff_dim,
+            self.ff_dim,
+            filter_size=kernel_size,
+            groups=self.ff_dim.dimension,
+            padding="same",
+            with_bias=with_bias,
         )
-        self.linear_out = rf.Linear(ff_dim, out_dim, with_bias=with_bias)
+        self.linear_out = rf.Linear(self.ff_dim, out_dim, with_bias=with_bias)
 
     def __call__(self, x: Tensor, *, spatial_dim: Dim) -> Tensor:
         """forward"""

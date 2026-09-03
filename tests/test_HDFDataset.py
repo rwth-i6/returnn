@@ -14,7 +14,6 @@ from returnn.datasets.hdf import *
 import returnn.util.basic as util
 import h5py
 import numpy as np
-import os
 import unittest
 from returnn.util import better_exchook
 

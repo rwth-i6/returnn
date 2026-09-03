@@ -20,7 +20,6 @@ import unittest
 import numpy
 import numpy.testing
 from numpy.testing import assert_almost_equal, assert_allclose
-import os
 from pprint import pprint
 from returnn.util import better_exchook
 import returnn.util.debug as debug
@@ -34,6 +33,12 @@ print("TF version:", tf.__version__)
 
 CudaEnv.verbose_find_cuda = True
 os.environ["RETURNN_NATIVE_CODE_COMPILER_VERBOSE"] = "1"
+
+# These tests compare the native ops against TF references for exactness.
+# TF32 (on by default since Ampere) costs ~5e-5 relative on a float32 GEMM,
+# enough to fail test_native_lstm2_grad[_start_step] on either side of the comparison.
+# The native op follows this same global setting.
+tf.config.experimental.enable_tensor_float_32_execution(False)
 
 session = tf_compat.v1.InteractiveSession()
 tf_compat.v1.set_random_seed(42)

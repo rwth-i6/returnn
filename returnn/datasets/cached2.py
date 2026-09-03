@@ -7,6 +7,7 @@ import numpy
 from typing import Optional, List
 from threading import Condition
 from .basic import Dataset, DatasetSeq
+from ..util import NumbersDict
 
 
 class CachedDataset2(Dataset):
@@ -30,7 +31,7 @@ class CachedDataset2(Dataset):
         self.reached_final_seq = False
         self.added_data: List[DatasetSeq] = []
         self.expected_load_seq_start = 0
-        self._num_timesteps_accumulated = 0
+        self._num_timesteps_accumulated = NumbersDict(0)
 
     def init_seq_order(self, epoch=None, seq_list=None, seq_order=None):
         """
@@ -48,7 +49,7 @@ class CachedDataset2(Dataset):
         self.expected_load_seq_start = 0
         self.reached_final_seq = False
         self.added_data = []
-        self._num_timesteps_accumulated = 0
+        self._num_timesteps_accumulated = NumbersDict(0)
         self._num_seqs = None
         self.epoch = epoch
         return True

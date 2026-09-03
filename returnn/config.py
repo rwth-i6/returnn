@@ -12,6 +12,7 @@ import time
 import contextlib
 import sys
 import os
+import builtins
 import types as _types
 
 
@@ -35,9 +36,20 @@ class Config:
         if items is not None:
             self.typed_dict.update(items)
 
+    # typed_dict can reference the Config itself.
+    # We must not recurse into it while pickling,
+    # so it is emitted as a persistent id,
+    # and resolved back to the receiving instance on load.
+    # persistent_id/persistent_load is the documented API
+    # for referring to an object living outside the pickle;
+    # the memo we used before is a CPython implementation detail.
+    _SelfPersistentId = "returnn.config.Config.self"
+
     def __getstate__(self):
         import io
         from returnn.util.task_system import Pickler
+
+        config = self
 
         class _CustomPickler(Pickler):
             use_whichmodule = False
@@ -48,32 +60,37 @@ class Config:
             # We explicitly want to pickle it as-is.
             module_name_black_list = {_PyModuleName}
 
+            def persistent_id(self, obj):
+                """:return: the marker for the Config being pickled, None for everything else"""
+                return Config._SelfPersistentId if obj is config else None
+
         buffer = io.BytesIO()
-        pickler = _CustomPickler(buffer)
-        memo_idx = len(pickler.memo)
-        pickler.memo[id(self)] = memo_idx, self
-        pickler.dump(self.typed_dict)
+        _CustomPickler(buffer).dump(self.typed_dict)
 
         return {
             "_pid": os.getpid(),
-            "_self_memo_idx": memo_idx,
             "_typed_dict_pickled": buffer.getvalue(),
             "_is_global": self is get_global_config(raise_exception=False),
         }
 
     def __setstate__(self, state):
         import io
-
-        # Use pure-Python unpickling to be able to extend the memo.
-        # noinspection PyUnresolvedReferences,PyProtectedMember
-        from pickle import _Unpickler
+        import pickle
 
         self.__init__()
 
-        buffer = io.BytesIO(state["_typed_dict_pickled"])
-        unpickler = _Unpickler(buffer)
-        unpickler.memo[state["_self_memo_idx"]] = self
-        self.typed_dict = unpickler.load()
+        config = self
+
+        class _Unpickler(pickle.Unpickler):
+            """resolves the self-reference marker emitted by :func:`Config.__getstate__`"""
+
+            def persistent_load(self, pid):
+                """:return: the Config instance being restored"""
+                if pid == Config._SelfPersistentId:
+                    return config
+                raise pickle.UnpicklingError(f"Config.__setstate__: unexpected persistent id {pid!r}")
+
+        self.typed_dict = _Unpickler(io.BytesIO(state["_typed_dict_pickled"])).load()
 
         if state["_is_global"] and os.getpid() != state["_pid"]:
             set_global_config(self)
@@ -296,7 +313,7 @@ class Config:
             # the config which require the global variable to be available.
             # See :func:`test_rnn_init_config_py_global_var`.
             value_type = type(self.typed_dict[key])
-            if value_type == str:
+            if value_type is str:
                 pass  # keep as-is
             else:
                 try:
@@ -321,7 +338,7 @@ class Config:
         else:
             self.dict[key] = value
 
-    def has(self, key: str) -> bool:
+    def has(self, key: str) -> builtins.bool:
         """
         Returns whether the given key is present in the inner set of parameters
 
@@ -332,14 +349,14 @@ class Config:
             return True
         return key in self.dict
 
-    def is_typed(self, key: str) -> bool:
+    def is_typed(self, key: str) -> builtins.bool:
         """
         :param key:
         :returns: True if and only if the value of the given key has a specified data type
         """
         return key in self.typed_dict
 
-    def is_true(self, key: str, default: bool = False) -> bool:
+    def is_true(self, key: str, default: builtins.bool = False) -> builtins.bool:
         """
         :param key:
         :param default:
@@ -349,7 +366,7 @@ class Config:
             return bool(self.typed_dict[key])
         return self.bool(key, default=default)
 
-    def is_of_type(self, key: str, types: Union[type, Tuple[type, ...]]) -> bool:
+    def is_of_type(self, key: str, types: Union[type, Tuple[type, ...]]) -> builtins.bool:
         """
         :param key:
         :param types: for isinstance() check
@@ -400,7 +417,9 @@ class Config:
 
         setattr(self, "value", wrapped_value_func)
 
-    def value(self, key: str, default: T, index: Optional[int] = None, list_join_str: str = ",") -> Union[T, str]:
+    def value(
+        self, key: str, default: T, index: Optional[builtins.int] = None, list_join_str: str = ","
+    ) -> Union[T, str]:
         """
         :param key:
         :param default:
@@ -426,7 +445,7 @@ class Config:
                 return ls[index]
         return default
 
-    def typed_value(self, key: str, default: Optional[T] = None, index: Optional[int] = None) -> Union[T, Any]:
+    def typed_value(self, key: str, default: Optional[T] = None, index: Optional[builtins.int] = None) -> Union[T, Any]:
         """
         :param key:
         :param default:
@@ -450,7 +469,7 @@ class Config:
             return self.typed_dict[key]
         return self.value(key, default)
 
-    def int(self, key: str, default: T, index: int = 0) -> Union[int, T]:
+    def int(self, key: str, default: T, index: builtins.int = 0) -> Union[builtins.int, T]:
         """
         Parses the value of the given key as integer, returning default if not existent
 
@@ -467,7 +486,7 @@ class Config:
             return int(self.value(key, default, index))
         return default
 
-    def bool(self, key: str, default: T, index: int = 0) -> Union[bool, T]:
+    def bool(self, key: str, default: T, index: builtins.int = 0) -> Union[builtins.bool, T]:
         """
         Parses the value of the given key as boolean, returning default if not existent
 
@@ -491,7 +510,9 @@ class Config:
 
         return to_bool(v)
 
-    def bool_or_other(self, key: str, default: Optional[T] = None, index: int = 0) -> Union[bool, T, Any]:
+    def bool_or_other(
+        self, key: str, default: Optional[T] = None, index: builtins.int = 0
+    ) -> Union[builtins.bool, T, Any]:
         """
         :param key:
         :param default:
@@ -512,7 +533,7 @@ class Config:
         except ValueError:
             return v
 
-    def float(self, key: str, default: T, index: int = 0) -> Union[float, T]:
+    def float(self, key: str, default: T, index: builtins.int = 0) -> Union[builtins.float, T]:
         """
         Parses the value of the given key as float, returning default if not existent
 
@@ -550,7 +571,7 @@ class Config:
             return default
         return self.dict[key]
 
-    def int_list(self, key: str, default: Optional[T] = None) -> Union[List[int], T]:
+    def int_list(self, key: str, default: Optional[T] = None) -> Union[List[builtins.int], T]:
         """
         :param key:
         :param default:
@@ -568,7 +589,7 @@ class Config:
             return list(value)
         return [int(x) for x in self.list(key, default)]
 
-    def float_list(self, key: str, default: Optional[T] = None) -> Union[List[float], T]:
+    def float_list(self, key: str, default: Optional[T] = None) -> Union[List[builtins.float], T]:
         """
         :param key:
         :param default:
@@ -586,7 +607,9 @@ class Config:
             return list(value)
         return [float(x) for x in self.list(key, default)]
 
-    def int_pair(self, key: str, default: Optional[Tuple[int, int]] = None) -> Tuple[int, int]:
+    def int_pair(
+        self, key: str, default: Optional[Tuple[builtins.int, builtins.int]] = None
+    ) -> Tuple[builtins.int, builtins.int]:
         """
         :param key:
         :param default:
@@ -806,6 +829,8 @@ class SubProcCopyGlobalConfigPreInitFunc:
     """
 
     def __init__(self):
+        from returnn.util.basic import BehaviorVersion
+
         # Get the RETURNN global config here. Allow this to be optional (for use outside of RETURNN).
         # We store it here such that pickling this worker init func will also pickle the config,
         # so that we can reset it as global config inside the worker.
@@ -813,14 +838,27 @@ class SubProcCopyGlobalConfigPreInitFunc:
         # https://github.com/rwth-i6/returnn/issues/1495
         # MultiProcDataset has a similar logic, see https://github.com/rwth-i6/returnn/issues/1384.
         self.global_config = get_global_config(raise_exception=False)
+        # Decided here in the parent proc, where the behavior version is set (behavior version 31).
+        propagate_behavior_version = (
+            self.global_config.bool("propagate_behavior_version_to_subprocs", None) if self.global_config else None
+        )
+        if propagate_behavior_version is None:
+            propagate_behavior_version = BehaviorVersion.get() >= 31
+        # noinspection protected-member
+        self.behavior_version_state = BehaviorVersion._get_state() if propagate_behavior_version else None
 
+    # called in sub proc
     def __call__(self):
         from returnn.util import better_exchook
         from returnn.log import log
         from returnn import __old_mod_loader__
+        from returnn.util.basic import BehaviorVersion
 
         better_exchook.setup_all()
         __old_mod_loader__.disable_lazy_mod_loads()
+        if self.behavior_version_state is not None:
+            # noinspection protected-member
+            BehaviorVersion._reset(self.behavior_version_state)
 
         if self.global_config:
             set_global_config(self.global_config)

@@ -3,6 +3,7 @@ __pycache__
 .history*
 /.idea
 ipython-kernel-*.json
+*.log
 .*.swp
 .nfs*
 *~
@@ -27,6 +28,10 @@ ipython-kernel-*.json
 
 # via test cases run directly in this directory, or maybe in the tests dir
 dataset_id*
+
+# core dumps of crashed test runs (kernel.core_pattern often includes host and pid)
+core.*.[0-9]*
+core.[0-9]*
 
 # via GitHub codespaces
 /pythonenv*

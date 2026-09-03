@@ -127,7 +127,7 @@ def py_viterbi(am_scores, am_seq_len, edges, weights, start_end_states):
     :param numpy.ndarray am_scores: (time, batch, dim), in +log space
     :param numpy.ndarray am_seq_len: (batch,) -> int32
     :param numpy.ndarray edges: (4,num_edges), edges of the graph (from,to,emission_idx,sequence_idx)
-    :param numpy.ndarray weights: (num_edges,), weights of the edges
+    :param numpy.ndarray weights: (num_edges,), weights of the edges (in -log space, same as py_baum_welch)
     :param numpy.ndarray start_end_states: (2, batch), (start,end) state idx in FSA. there is only one single FSA.
     :return: (alignment, obs_scores), alignment is (time, batch), obs_scores is (batch,), in +log space
     :rtype: (numpy.ndarray, numpy.ndarray)
@@ -162,7 +162,8 @@ def py_viterbi(am_scores, am_seq_len, edges, weights, start_end_states):
                 if from_idx not in states or states[from_idx] == zero_score:
                     continue
                 assert 0 <= emission_idx < dim
-                score = states[from_idx][0] + weights[edge_idx] + am_scores[t, sequence_idx, emission_idx]
+                # weights are -log, like the native op takes them
+                score = states[from_idx][0] - weights[edge_idx] + am_scores[t, sequence_idx, emission_idx]
                 scores[to_idx].append((score, edge_idx))
             states.clear()
             for state_idx in scores.keys():

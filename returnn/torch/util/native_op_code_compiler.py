@@ -260,8 +260,11 @@ class CudaEnv(_CudaEnvBase):
         # that we want to use, as this is likely the same that PyTorch uses.
         if not os.path.exists("%s/include/cuda.h" % p):
             return False
-        if p.endswith("/site-packages/nvidia/cuda_runtime"):
-            # special case for the nvidia CUDA pip package
+        if "/site-packages/nvidia/" in p:
+            # The nvidia CUDA pip packages ship only a versioned libcudart, under lib/,
+            # and the package name varies by layout: nvidia/cuda_runtime, nvidia/cu13, ...
+            if not os.path.isdir(p + "/lib"):
+                return False
             if not any(name.startswith("libcudart.") for name in os.listdir(p + "/lib")):
                 return False
         else:
@@ -294,7 +297,7 @@ def _get_available_gpu_cuda_min_compute_capability() -> Optional[float]:
     """
     Uses :func:`get_available_gpu_devices`.
 
-    :return: e.g. 3.0, or 5.0, etc, or None
+    :return: e.g. 3.0, or 5.0, etc., or None
     """
     count = torch.cuda.device_count()
     cap = None

@@ -31,6 +31,9 @@ __all__ = [
 ]
 
 
+_T = TypeVar("_T")
+
+
 # noinspection PyAbstractClass
 class _ConvOrTransposedConv(rf.Module):
     """
@@ -827,7 +830,7 @@ def calc_conv_out_length(
             filter_right_dilated = (filter_size_ - 1) * dilation_rate - filter_left_dilated
             valid_part = in_length.sub_left(filter_left_dilated).sub_right(filter_right_dilated)
         else:
-            valid_part = in_length - (filter_size_ - 1) * dilation_rate
+            valid_part = rf.maximum(0, in_length - (filter_size_ - 1) * dilation_rate)
 
         if isinstance(valid_part, Dim):
             out_length = valid_part.ceildiv_right(stride)
@@ -907,7 +910,7 @@ def make_transposed_conv_out_spatial_dims(
 def calc_transposed_conv_out_length(
     in_length: Union[T, int, Dim, Tensor],
     *,
-    filter_size: Union[int, Dim],
+    filter_size: Union[int, Dim, Tensor],
     padding: Union[int, str],
     output_padding: Optional[int] = None,
     stride: Optional[int] = None,
@@ -1090,7 +1093,8 @@ def _consistent_same_padding(
     return source, in_spatial_dims, 0
 
 
-def _make_sequence(value: Union[int, Sequence[int]], *, nd: int) -> Sequence[int]:
+# generic: filter_size is passed as int|Dim
+def _make_sequence(value: Union[_T, Sequence[_T]], *, nd: int) -> Sequence[_T]:
     if isinstance(value, int):
         return [value] * nd
     assert len(value) == nd

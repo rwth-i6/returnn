@@ -24,8 +24,8 @@ class GeneratingDataset(Dataset):
     Some base class for datasets with artificially generated data.
     """
 
-    _input_classes = None
-    _output_classes = None
+    _input_classes: Optional[str] = None  # label chars, set by subclasses
+    _output_classes: Optional[str] = None  # label chars, set by subclasses
     _getnewargs_remap = dict(num_seqs="_total_num_seqs", **Dataset._getnewargs_remap)
 
     def __init__(self, input_dim, output_dim, num_seqs=float("inf"), **kwargs):
@@ -818,7 +818,7 @@ class DummyDatasetMultipleSequenceLength(DummyDataset):
         :param int input_dim:
         :param int output_dim:
         :param int|float num_seqs:
-        :param int|dict[str,int] seq_len:
+        :param int|dict[str,int]|None seq_len:
         :param float input_max_value:
         :param float|None input_shift:
         :param float|None input_scale:
@@ -1081,7 +1081,7 @@ class StaticDataset(CachedDataset2):
         :param list[dict[str,numpy.ndarray]] data: list of seqs, each provide the data for each data-key
         :param target_list:
         :param int|None input_dim:
-        :param int|dict[str,(int,int)|list[int]] output_dim:
+        :param int|dict[str,(int,int)|list[int]]|None output_dim:
         """
         super(StaticDataset, self).__init__(**kwargs)
 
@@ -1532,8 +1532,9 @@ class TimitDataset(CachedDataset2):
         self._norm_std_dev = self._load_feature_vec(norm_std_dev)
         assert num_phones in {61, 48, 39}
         self._phone_map = {61: self.PhoneMapTo61, 48: self.PhoneMapTo48, 39: self.PhoneMapTo39}[num_phones]
-        self.labels = self._get_labels_by_phone_map(self._phone_map)
-        self.num_outputs = {"data": (self.num_inputs, 2), "classes": (len(self.labels), 1)}
+        self._phone_labels = self._get_labels_by_phone_map(self._phone_map)
+        self.labels = {"classes": self._phone_labels}
+        self.num_outputs = {"data": (self.num_inputs, 2), "classes": (len(self._phone_labels), 1)}
         self._timit_dir = timit_dir
         self._is_train = train
         self._demo_play_audio = demo_play_audio
@@ -1779,7 +1780,7 @@ class TimitDataset(CachedDataset2):
         phone_seq = self._get_phone_seq(seq_tag)
         phone_seq = [self._phone_map[p] for p in phone_seq]
         phone_seq = [p for p in phone_seq if p]
-        phone_id_seq = numpy.array([self.labels.index(p) for p in phone_seq], dtype="int32")
+        phone_id_seq = numpy.array([self._phone_labels.index(p) for p in phone_seq], dtype="int32")
         # see: https://github.com/rdadolf/fathom/blob/master/fathom/speech/preproc.py
         # and: https://groups.google.com/forum/#!topic/librosa/V4Z1HpTKn8Q
         audio, sample_rate = self._get_audio(seq_tag)
@@ -2403,7 +2404,7 @@ class Enwik8Corpus(CachedDataset2):
     """
 
     # Use a single HDF file, and cache it across all instances.
-    _hdf_file = None
+    _hdf_file: Optional[Any] = None  # h5py.File, opened lazily
 
     def __init__(self, path, subset, seq_len, batch_num_seqs=None, subsubset=None, **kwargs):
         """

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from typing import Any, Iterator, TYPE_CHECKING, List, Dict, Optional
+import multiprocessing
 import os
 import sys
 import _setup_test_env  # noqa
@@ -1102,6 +1103,88 @@ def iter_identity(x, **kwargs):
     yield from x
 
 
+def map_identity(x, **kwargs):
+    return x
+
+
+def _dfd_get_sub_epoch_dataset_with_multi_proc_postprocessing(_files_subepoch: List[str]) -> Dict[str, Any]:
+    return {
+        "class": "PostprocessingDataset",
+        "dataset": {
+            "class": "PostprocessingDataset",
+            "dataset": {
+                "class": "PostprocessingDataset",
+                "dataset": {
+                    "class": "DummyDataset",
+                    "input_dim": 2,
+                    "output_dim": 3,
+                    # Keep the feeder thread active while the DFD worker is replaced for the next subepoch.
+                    "num_seqs": 1000,
+                    "seq_len": 5,
+                },
+                "map_seq_stream": iter_identity,
+                "num_workers": 2,
+                "buf_size": 1,
+            },
+            "map_seq_stream": iter_identity,
+            "num_workers": 0,
+        },
+        "map_seq": map_identity,
+        "num_workers": 0,
+    }
+
+
+def _run_dfd_with_multi_proc_postprocessing_epoch_transition(files: List[str]):
+    dataset = init_dataset(
+        {
+            "class": "DistributeFilesDataset",
+            "files": files,
+            "get_sub_epoch_dataset": _dfd_get_sub_epoch_dataset_with_multi_proc_postprocessing,
+            "partition_epoch": 2,
+            "preload_next_n_sub_epochs": 1,
+        }
+    )
+    for epoch in (1, 2):
+        dataset.init_seq_order(epoch=epoch)
+        dataset.load_seqs(0, 1)
+    dataset.finish_epoch(free_resources=True)
+
+
+def test_nested_PostprocessingDataset_finish_epoch_propagates():
+    dataset = init_dataset(_dfd_get_sub_epoch_dataset_with_multi_proc_postprocessing([]))
+    worker_dataset = dataset._dataset._dataset
+    try:
+        dataset.init_seq_order(epoch=1)
+        dataset.load_seqs(0, 1)
+        assert worker_dataset._worker_procs
+        dataset.finish_epoch(free_resources=True)
+        assert worker_dataset._worker_procs is None
+        assert worker_dataset._multi_proc_data_iter is None
+    finally:
+        worker_dataset.finish_epoch(free_resources=True)
+
+
+def test_DistributeFilesDataset_with_multi_proc_postprocessing_cleanup():
+    # This matches the production nesting where workerless postprocessing wrappers surround the multiprocessing one.
+    # Keep the timeout outside the actual test process so a lifecycle regression fails instead of hanging the test run.
+    with tempfile.TemporaryDirectory() as temp_dir:
+        files = [os.path.join(temp_dir, f"part-{i}") for i in range(2)]
+        for filename in files:
+            with open(filename, "wb") as f:
+                f.write(b"x")
+
+        proc = multiprocessing.get_context("spawn").Process(
+            target=_run_dfd_with_multi_proc_postprocessing_epoch_transition, args=(files,)
+        )
+        proc.start()
+        proc.join(timeout=30)
+        if proc.is_alive():
+            proc.kill()
+            proc.join()
+            raise AssertionError("DistributeFilesDataset worker did not release the wrapped PostprocessingDataset")
+        assert proc.exitcode == 0
+
+
 def test_DistributeFilesDataset():
     from returnn.datasets.distrib_files import DistributeFilesDataset
     from test_HDFDataset import generate_hdf_from_other, get_test_tmp_file
@@ -1413,6 +1496,26 @@ def test_PostprocessingDataset():
 
     func = Sequential(lambda x: x * 10, lambda y: y + 1)
     assert func(2) == 21
+
+
+def test_PostprocessingDataset_unknown_sparse_dim():
+    from returnn.tensor import Dim
+
+    def _identity(tdict: TensorDict, **_kwargs) -> TensorDict:
+        return tdict
+
+    dataset = init_dataset(
+        {
+            "class": "PostprocessingDataset",
+            "dataset": {"class": "DummyDataset", "input_dim": 13, "output_dim": 7, "num_seqs": 1},
+            "map_seq": _identity,
+            "map_outputs": {
+                "data": {"dims": [Dim(None, name="time"), Dim(13, name="feature")], "dtype": "float32"},
+                "classes": {"dims": [Dim(None, name="classes_time")], "dtype": "uint8"},
+            },
+        }
+    )
+    assert "classes" not in dataset.labels
 
 
 def _repeat2(input_iter: Iterator[TensorDict], **kwargs) -> Iterator[TensorDict]:

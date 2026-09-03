@@ -97,7 +97,7 @@ def test_fast_bw_uniform():
     op = make_fast_baum_welch_op(
         compiler_opts=dict(verbose=True)
     )  # will be cached, used inside :func:`fast_baum_welch`
-    # args: (am_scores, edges, weights, start_end_states, float_idx, state_buffer)
+    # args: (am_scores, edges, weights, start_end_states, float_idx, n_states)
     print("Op:", op)
     n_batch = 3
     seq_len = 7
@@ -414,6 +414,43 @@ def test_ctc_loss_packed_over_allocated_bounds():
     assert loss_wide[n_batch:].abs().max().item() == 0.0  # zero-length seqs contribute nothing
     assert_allclose(leaf_wide.grad.numpy(), leaf_tight.grad.numpy(), rtol=1e-5, atol=1e-6)
 
+    # PACKED FSA edge layout (GetCtcFsaFastBwPackedOp): same over-allocated buffers,
+    # but the edge list is content-sized (5*len+5 per seq) under a total-edge bound
+    # instead of batch_bound * (5*(tgt_cap-1)+10). Same loss, same grads.
+    edges_bound = 5 * (sum(tgt_lens) + 40) + 5 * batch_bound  # some slack over the exact total
+    leaf_packed = logits.clone().requires_grad_(True)
+    loss_packed = ctc_loss_packed(
+        logits=leaf_packed,
+        seq_starts=starts_wide,
+        logits_seq_lens=lens_wide,
+        max_seq_len=frame_bound,
+        targets=targets_wide,
+        targets_seq_lens=tgt_lens_wide,
+        blank_index=blank,
+        edges_bound=edges_bound,
+    )
+    loss_packed.sum().backward()
+    assert_allclose(loss_packed[:n_batch].detach().numpy(), loss_tight.detach().numpy(), rtol=1e-5, atol=1e-6)
+    assert loss_packed[n_batch:].abs().max().item() == 0.0
+    assert_allclose(leaf_packed.grad.numpy(), leaf_tight.grad.numpy(), rtol=1e-5, atol=1e-6)
+
+    # ... and with the EXACT edge total (no tail filler at all)
+    exact_bound = int(5 * tgt_lens_wide.sum().item() + 5 * batch_bound)
+    leaf_exact = logits.clone().requires_grad_(True)
+    loss_exact = ctc_loss_packed(
+        logits=leaf_exact,
+        seq_starts=starts_wide,
+        logits_seq_lens=lens_wide,
+        max_seq_len=frame_bound,
+        targets=targets_wide,
+        targets_seq_lens=tgt_lens_wide,
+        blank_index=blank,
+        edges_bound=exact_bound,
+    )
+    loss_exact.sum().backward()
+    assert_allclose(loss_exact[:n_batch].detach().numpy(), loss_tight.detach().numpy(), rtol=1e-5, atol=1e-6)
+    assert_allclose(leaf_exact.grad.numpy(), leaf_tight.grad.numpy(), rtol=1e-5, atol=1e-6)
+
 
 def test_ctc_fsa_batch3_len6_c8():
     """
@@ -592,6 +629,89 @@ def test_fast_viterbi(device: torch.device = torch.device("cpu")):
         for i in range(n_batch):
             assert alignment[:, i].tolist() == [0, 1, 1, 2, 3, 3, 4]
     print("Done.")
+
+
+def test_fast_viterbi_weight_sign(device: torch.device = torch.device("cpu")):
+    # Weights are -log, like fast_baum_welch takes them, so the cheaper edge must win
+    # even though am_scores here are +log. With the all-zero weights of the other tests
+    # the sign is unobservable, so this is what pins the convention.
+    n_batch, seq_len, n_classes = 1, 4, 2
+
+    def align(cost_of_second: float):
+        fsa = FastBwFsaShared()
+        # two ways to leave state 0, differing only in cost, each looping to the end
+        fsa.add_edge(0, 1, emission_idx=0, weight=0.0)
+        fsa.add_edge(0, 1, emission_idx=1, weight=cost_of_second)
+        fsa.add_edge(1, 1, emission_idx=0, weight=0.0)
+        fast_bw_fsa = fsa.get_fast_bw_fsa(n_batch=n_batch)
+        am = numpy.zeros((seq_len, n_batch, n_classes), dtype="float32")
+        alignment, scores = fast_viterbi(
+            am_scores=torch.tensor(am, device=device),
+            am_seq_len=torch.tensor(numpy.array([seq_len] * n_batch, dtype="int32"), device=device),
+            edges=torch.tensor(fast_bw_fsa.edges, device=device),
+            weights=torch.tensor(fast_bw_fsa.weights, device=device),
+            start_end_states=torch.tensor(fast_bw_fsa.start_end_states, device=device),
+        )
+        return alignment.cpu().numpy()[0, 0], float(scores.cpu().numpy()[0])
+
+    # a positive cost on the second edge makes it the worse one, so emission 0 is taken
+    emission, score = align(2.0)
+    assert emission == 0, f"expected the cheap edge, got emission {emission}"
+    # a negative cost makes it the better one
+    emission_neg, score_neg = align(-2.0)
+    assert emission_neg == 1, f"expected the cheap edge, got emission {emission_neg}"
+    assert score_neg > score, f"cheaper path should score higher: {score_neg} vs {score}"
+
+
+def test_fast_viterbi_weight_sign_cuda():
+    if not torch.cuda.is_available():
+        raise SkipTest("CUDA not available")
+    test_fast_viterbi_weight_sign(device=torch.device("cuda"))
+
+
+def test_fast_viterbi_ctc_fsa_dead_edges(device: torch.device = torch.device("cpu")):
+    # The CTC FSA marks unused edges with +INF_F, in the BaumWelch cost convention,
+    # and ForcedAlignmentLayer feeds those weights to fast_viterbi unnegated.
+    # Viterbi maximizes, so such an edge must be skipped rather than win.
+    # Widening the targets buffer adds dead edges without changing the data.
+    from returnn.torch.util.native_op import get_ctc_fsa_fast_bw
+
+    n_batch, n_time, n_classes, blank_idx = 2, 9, 4, 0
+    rnd = numpy.random.RandomState(42)
+    seq_lens = numpy.array([3, 2], dtype="int32")
+    am = numpy.log(rnd.uniform(0.01, 1.0, (n_time, n_batch, n_classes)).astype("float32"))
+
+    # same targets in both buffers, so the only difference is the dead edges
+    tgt_vals = [rnd.randint(1, n_classes, seq_lens[b]).astype("int32") for b in range(n_batch)]
+
+    aligns = []
+    for width in (int(seq_lens.max()), int(seq_lens.max()) + 5):
+        targets = numpy.zeros((n_batch, width), dtype="int32")
+        for b in range(n_batch):
+            targets[b, : seq_lens[b]] = tgt_vals[b]
+        edges, weights, start_end_states = get_ctc_fsa_fast_bw(
+            targets=torch.tensor(targets, device=device),
+            seq_lens=torch.tensor(seq_lens, device=device),
+            blank_idx=blank_idx,
+        )
+        assert torch.isinf(weights).any(), f"width {width}: expected dead edges"
+        alignment, scores = fast_viterbi(
+            am_scores=torch.tensor(am, device=device),
+            am_seq_len=torch.tensor(numpy.array([n_time] * n_batch, dtype="int32"), device=device),
+            edges=edges,
+            weights=weights,
+            start_end_states=start_end_states,
+        )
+        assert torch.isfinite(scores).all(), f"width {width}: scores {scores}"
+        aligns.append(alignment.cpu().numpy())
+
+    numpy.testing.assert_array_equal(aligns[0], aligns[1])
+
+
+def test_fast_viterbi_ctc_fsa_dead_edges_cuda():
+    if not torch.cuda.is_available():
+        raise SkipTest("CUDA not available")
+    test_fast_viterbi_ctc_fsa_dead_edges(device=torch.device("cuda"))
 
 
 def test_fast_viterbi_cuda():
@@ -1375,7 +1495,7 @@ def test_fast_baum_welch_fake_tensor_mode():
     from torch._subclasses.fake_tensor import FakeTensor, FakeTensorMode
 
     op = make_fast_baum_welch_op(compiler_opts=dict(verbose=True))
-    # args: (am_scores, edges, weights, start_end_states, float_idx, state_buffer)
+    # args: (am_scores, edges, weights, start_end_states, float_idx, n_states)
     n_batch, seq_len, n_classes = 3, 7, 5
     fsa = FastBwFsaShared()
     for i in range(n_classes):
@@ -1388,15 +1508,14 @@ def test_fast_baum_welch_fake_tensor_mode():
     am_scores = torch.full((seq_len, n_batch, n_classes), float(numpy.log(n_classes)))  # -log space, uniform
     float_idx = torch.ones((seq_len, n_batch), dtype=torch.float32)
     n_states = int(start_end_states.max()) + 1
-    state_buffer = torch.zeros((2, n_states), dtype=torch.float32)
 
-    args = (am_scores, edges, weights, start_end_states, float_idx, state_buffer)
-    fwdbwd_real, obs_scores_real = op(*args)
+    tensor_args = (am_scores, edges, weights, start_end_states, float_idx)
+    fwdbwd_real, obs_scores_real = op(*tensor_args, n_states)
 
     mode = FakeTensorMode()
-    fake_args = [mode.from_tensor(t) for t in args]
+    fake_args = [mode.from_tensor(t) for t in tensor_args]
     with mode:
-        fwdbwd_fake, obs_scores_fake = op(*fake_args)
+        fwdbwd_fake, obs_scores_fake = op(*fake_args, n_states)
     for fake, real in [(fwdbwd_fake, fwdbwd_real), (obs_scores_fake, obs_scores_real)]:
         assert isinstance(fake, FakeTensor)
         assert fake.shape == real.shape and fake.dtype == real.dtype

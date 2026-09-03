@@ -35,13 +35,28 @@ def _make_input(*, batch_size: int = 2, seq_lens=(5, 3), feat: int = 4, seed: in
 
 def _flex_attention_usable() -> bool:
     # FlexAttention exists since torch 2.5, usable CPU (eager) support only later; we validated 2.7.
+    # torch 2.12 REMOVED FlexAttention backward on CPU (NotImplementedError), and every use here
+    # runs backward on CPU, so probe exactly that (version checks alone cannot express it).
+    global _flex_attention_usable_cache
+    if _flex_attention_usable_cache is not None:
+        return _flex_attention_usable_cache
+    _flex_attention_usable_cache = False
     if tuple(int(x) for x in torch.__version__.split("+")[0].split(".")[:2]) < (2, 7):
         return False
     try:
         from torch.nn.attention.flex_attention import flex_attention  # noqa
     except ImportError:
         return False
+    try:
+        q, k, v = (torch.randn(1, 1, 4, 8, requires_grad=True) for _ in range(3))
+        flex_attention(q, k, v).sum().backward()
+    except (NotImplementedError, RuntimeError):
+        return False
+    _flex_attention_usable_cache = True
     return True
+
+
+_flex_attention_usable_cache = None
 
 
 def _assert_equal_non_padded(actual: Tensor, expected: Tensor, batch_dim: Dim, time_dim: Dim, **kwargs):
@@ -148,6 +163,194 @@ def test_reduce_over_time_segment():
     )
 
 
+def test_cumsum_over_packed_time():
+    rf.select_backend_torch()
+    x, batch_dim, time_dim, feat_dim = _make_input()
+    xp = packed.pack(x)
+    out_p = rf.cumsum(xp, spatial_dim=time_dim)  # segment scan over the flat buffer
+    assert packed.is_packed(out_p)
+    _assert_equal_non_padded(out_p, rf.cumsum(x, spatial_dim=time_dim), batch_dim, time_dim)
+
+
+def test_cumsum_over_packed_time_gap():
+    # gap/align frames carry junk, and a total_bound buffer has a junk tail;
+    # neither may leak into a sequence's running sum.
+    rf.select_backend_torch()
+    x, batch_dim, time_dim, feat_dim = _make_input(batch_size=3, seq_lens=(5, 1, 4))
+    xp = packed.pack(x, gap=2, align=4, total_bound=64)
+    out_p = rf.cumsum(xp, spatial_dim=time_dim)
+    assert packed.is_packed(out_p)
+    _assert_equal_non_padded(out_p, rf.cumsum(x, spatial_dim=time_dim), batch_dim, time_dim)
+
+
+def test_cumsum_over_non_packed_dim():
+    # feature is not packed, so this is a plain scan on the flat buffer, storage untouched
+    rf.select_backend_torch()
+    x, batch_dim, time_dim, feat_dim = _make_input()
+    xp = packed.pack(x)
+    out_p = rf.cumsum(xp, spatial_dim=feat_dim)
+    assert packed.is_packed(out_p)
+    _assert_equal_non_padded(out_p, rf.cumsum(x, spatial_dim=feat_dim), batch_dim, time_dim)
+
+
+def _repeat_case(seq_lens, dur_rows, **repeat_kwargs):
+    """padded vs packed repeat on the same durations, compared on the real frames"""
+    x, batch_dim, time_dim, feat_dim = _make_input(batch_size=len(seq_lens), seq_lens=seq_lens)
+    dur = Tensor("dur", dims=[batch_dim, time_dim], dtype="int32", raw_tensor=torch.tensor(dur_rows, dtype=torch.int32))
+    out_ref, out_dim = rf.repeat(x, in_spatial_dim=time_dim, repeats=dur, **repeat_kwargs)
+    xp = packed.pack(x)
+    # share the input packing, so the durations need no relayout
+    durp = packed.pack(dur, dims=(batch_dim, time_dim), out_dim=xp.raw_tensor.packed_dim)
+    out_p, out_dim_p = rf.repeat(xp, in_spatial_dim=time_dim, repeats=durp, out_spatial_dim=out_dim, **repeat_kwargs)
+    assert packed.is_packed(out_p)
+    assert out_dim_p == out_dim
+    _assert_equal_non_padded(out_p, out_ref, batch_dim, out_dim)
+
+
+def test_repeat_packed():
+    rf.select_backend_torch()
+    # includes a 0 duration (element dropped) and a one-element sequence
+    _repeat_case((5, 1, 4), [[2, 1, 3, 0, 2], [4, 0, 0, 0, 0], [1, 1, 1, 5, 0]])
+
+
+def test_repeat_packed_max_len_factor():
+    rf.select_backend_torch()
+    # row 0 expands 3.6x and gets scaled down, row 1 stays; the two sides must agree either way
+    _repeat_case((5, 3), [[9, 3, 3, 2, 1], [1, 2, 1, 0, 0]], max_len_factor=2)
+
+
+def test_gather_packed_shift_within_seq():
+    # successor lookup: index is a position inside the sequence, so it must not read the next one
+    rf.select_backend_torch()
+    x, batch_dim, time_dim, feat_dim = _make_input(batch_size=3, seq_lens=(5, 1, 4))
+    idx = rf.range_over_dim(time_dim) + 1
+    out_ref = rf.gather(x, indices=idx, axis=time_dim, clip_to_valid=True)
+    xp = packed.pack(x)
+    out_p = rf.gather(xp, indices=idx, axis=time_dim, clip_to_valid=True)
+    assert packed.is_packed(out_p)
+    _assert_equal_non_padded(out_p, out_ref, batch_dim, time_dim)
+
+
+def test_gather_packed_keeps_sparse_dim():
+    # a sparse dim assigned on the virtual tensor does not reach the inner buffer,
+    # so an op rewrapping from the inner must not restore the old one
+    rf.select_backend_torch()
+    x, batch_dim, time_dim, feat_dim = _make_input(batch_size=2, seq_lens=(4, 2))
+    vocab = Dim(7, name="vocab")
+    labels = Tensor(
+        "labels",
+        dims=[batch_dim, time_dim],
+        dtype="int32",
+        raw_tensor=torch.randint(0, 7, (2, 4), dtype=torch.int32),
+        sparse_dim=vocab,
+    )
+    lp = packed.pack(labels, dims=(batch_dim, time_dim))
+    wider = Dim(8, name="vocab+1")
+    lp = lp.copy()
+    lp.sparse_dim = wider
+    out = rf.gather(lp, indices=rf.range_over_dim(time_dim) + 1, axis=time_dim, clip_to_valid=True)
+    assert out.sparse_dim == wider, f"sparse dim lost: {out.sparse_dim}"
+
+
+def test_repeat_packed_static_traceable():
+    # the captured regime: batch_size_bound makes the batch dim static, so the repeat buffer
+    # must be a static size derived from the declared expansion factor
+    rf.select_backend_torch()
+    n_seq_cap, buf, cap, factor = 8, 200, 20, 4
+    live = [12, 5, 20]
+    lens = live + [0] * (n_seq_cap - len(live))
+    b_dim = Dim(n_seq_cap, name="batch")
+    sd = Dim(Tensor("len", dims=[b_dim], dtype="int32", raw_tensor=torch.tensor(lens, dtype=torch.int32)), name="time")
+    sd.capacity = cap
+    packed_dim = Dim(buf, name="packed")
+    flat = Tensor("flat", dims=[packed_dim], dtype="int32", raw_tensor=torch.arange(buf, dtype=torch.int32))
+    x = packed.pack_import(flat, batch_dim=b_dim, spatial_dim=sd, packed_dim=packed_dim)
+    dur_flat = Tensor("dur", dims=[packed_dim], dtype="int32", raw_tensor=torch.ones((buf,), dtype=torch.int32) * 3)
+    dur = packed.pack_import(dur_flat, batch_dim=b_dim, spatial_dim=sd, packed_dim=packed_dim)
+    with rf.set_static_traceable_ctx():
+        out, out_dim = rf.repeat(x, in_spatial_dim=sd, repeats=dur, max_len_factor=factor)
+    raw = out.raw_tensor
+    assert raw.packed_dim.dimension == buf * factor, f"buffer {raw.packed_dim} != {buf * factor}"
+    out_lens = out_dim.dyn_size_ext.raw_tensor
+    assert out_lens[: len(live)].tolist() == [3 * n for n in live], out_lens[: len(live)].tolist()
+    assert int(out_lens[len(live)]) == 0, "padding seq must stay empty"
+
+
+def test_concat_packed_separate_packings():
+    # joining two streams that live in different buffers, e.g. audio + pseudo speech
+    rf.select_backend_torch()
+    a, batch_dim, a_dim, feat_dim = _make_input(batch_size=3, seq_lens=(5, 1, 4), seed=1)
+    b_dim = Dim(
+        Tensor("b_len", dims=[batch_dim], dtype="int32", raw_tensor=torch.tensor([2, 3, 0], dtype=torch.int32)),
+        name="b_time",
+    )
+    b = Tensor(
+        "b",
+        dims=[batch_dim, b_dim, feat_dim],
+        dtype="float32",
+        raw_tensor=torch.randn(3, 3, 4, generator=torch.Generator().manual_seed(7)),
+    )
+    ref, out_dim = rf.concat((a, a_dim), (b, b_dim), handle_dynamic_dims=True)
+    ap, bp = packed.pack(a), packed.pack(b)  # deliberately separate packings
+    assert ap.raw_tensor.packed_dim != bp.raw_tensor.packed_dim
+    out_p, out_dim_p = rf.concat((ap, a_dim), (bp, b_dim), handle_dynamic_dims=True, out_dim=out_dim)
+    assert packed.is_packed(out_p)
+    _assert_equal_non_padded(out_p, ref, batch_dim, out_dim)
+
+
+def test_concat_packed_empty_source():
+    # eval feeds no text stream, so one source is empty and its packed buffer has zero rows.
+    # such a buffer has no last row to clip indices to, and it contributes no frames at all.
+    rf.select_backend_torch()
+    a, batch_dim, a_dim, feat_dim = _make_input(batch_size=3, seq_lens=(5, 1, 4), seed=1)
+    b_dim = Dim(
+        Tensor("b_len", dims=[batch_dim], dtype="int32", raw_tensor=torch.zeros(3, dtype=torch.int32)),
+        name="b_time",
+    )
+    b = Tensor("b", dims=[batch_dim, b_dim, feat_dim], dtype="float32", raw_tensor=torch.zeros(3, 0, 4))
+    ref, out_dim = rf.concat((a, a_dim), (b, b_dim), handle_dynamic_dims=True)
+    ap, bp = packed.pack(a), packed.pack(b)
+    out_p, _ = rf.concat((ap, a_dim), (bp, b_dim), handle_dynamic_dims=True, out_dim=out_dim)
+    assert packed.is_packed(out_p)
+    _assert_equal_non_padded(out_p, ref, batch_dim, out_dim)
+
+
+def test_concat_packed_static_traceable():
+    # captured regime: static batch dim and static per-stream buffers,
+    # so the concat buffer must be a static size derived from the sources' content bounds
+    rf.select_backend_torch()
+    n_seq_cap, feat = 6, 4
+    live_a, live_b = [4, 2, 5], [3, 1, 0]
+    buf_a, buf_b = 40, 20
+    b_dim = Dim(n_seq_cap, name="batch")
+    f_dim = Dim(feat, name="feat")  # shared: a per-source dim would differ
+
+    def mk(lens, buf, name):
+        d = Dim(
+            Tensor(
+                f"{name}_len",
+                dims=[b_dim],
+                dtype="int32",
+                raw_tensor=torch.tensor(lens + [0] * (n_seq_cap - len(lens)), dtype=torch.int32),
+            ),
+            name=name,
+        )
+        d.capacity = buf
+        pd = Dim(buf, name=f"packed_{name}")
+        flat = Tensor("flat", dims=[pd, f_dim], dtype="float32", raw_tensor=torch.randn(buf, feat))
+        return packed.pack_import(flat, batch_dim=b_dim, spatial_dim=d, packed_dim=pd, feature_dim=f_dim), d
+
+    ap, a_dim = mk(live_a, buf_a, "a")
+    bp, b_sp = mk(live_b, buf_b, "b")
+    with rf.set_static_traceable_ctx():
+        out, out_dim = rf.concat((ap, a_dim), (bp, b_sp), handle_dynamic_dims=True)
+    assert packed.is_packed(out)
+    raw = out.raw_tensor
+    assert raw.packed_dim.dimension == buf_a + buf_b, f"buffer {raw.packed_dim} != {buf_a + buf_b}"
+    lens = out_dim.dyn_size_ext.raw_tensor
+    assert lens[: len(live_a)].tolist() == [x + y for x, y in zip(live_a, live_b)], lens[:3].tolist()
+
+
 def test_conformer():
     """
     The goal test: a full Conformer forward pass on packed input matches the padded path.
@@ -182,14 +385,18 @@ def test_conformer():
         # gap 64 -> after the two stages exactly 16 left, as needed by the depthwise conv kernel 32
         # (each stage: pad consumes 1, pool divides by 2).
         xp = packed.pack(x, gap=64, align=4)
+        warned_before = set(packed._warned_fallback_ops)  # isolate the warn-once bookkeeping
+        packed._warned_fallback_ops.clear()
         out_p, out_spatial_dim_p = model(xp, in_spatial_dim=time_dim)
+        warned_here = set(packed._warned_fallback_ops)
+        packed._warned_fallback_ops.update(warned_before)
         # the whole subsample chain + depthwise convs must have run packed (no fallback warnings)
-        assert "conv" not in packed._warned_fallback_ops
-        assert "pad" not in packed._warned_fallback_ops
-        assert "pool" not in packed._warned_fallback_ops
+        assert "conv" not in warned_here
+        assert "pad" not in warned_here
+        assert "pool" not in warned_here
         if _flex_attention_usable():
             # the rel-pos self-attention must have run via the FlexAttention fast path
-            assert "rel_pos_self_attention" not in packed._warned_fallback_ops
+            assert "rel_pos_self_attention" not in warned_here
     assert out_spatial_dim == out_spatial_dim_p
     # fallbacks repack, so the encoder output must still be packed (over (batch, subsampled time))
     assert packed.is_packed(out_p)
@@ -581,11 +788,15 @@ def test_rel_pos_self_attention_packed():
         )
         out_ref = att(x, axis=time_dim)
         xp = packed.pack(x, gap=4)  # some gap, to also cover the regap inside the fast path
+        warned_before = set(packed._warned_fallback_ops)  # isolate the warn-once bookkeeping
+        packed._warned_fallback_ops.clear()
         out_p = att(xp, axis=time_dim)
+        warned_here = set(packed._warned_fallback_ops)
+        packed._warned_fallback_ops.update(warned_before)
         assert packed.is_packed(out_p)
         if _flex_attention_usable():
             # must have taken the FlexAttention fast path (works eagerly on CPU too)
-            assert "rel_pos_self_attention" not in packed._warned_fallback_ops
+            assert "rel_pos_self_attention" not in warned_here
     _assert_equal_non_padded(out_p, out_ref, batch_dim, time_dim)
 
 

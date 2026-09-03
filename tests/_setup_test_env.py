@@ -11,6 +11,31 @@ See :func:`setup` below for details.
 from __future__ import annotations
 
 
+def _preload_triton_before_tf():
+    """
+    Import triton before TensorFlow can be imported.
+
+    Importing TF and THEN triton segfaults,
+    with "random_device could not be read" raised from libtorch_cpu's static init.
+    The reverse order is fine.
+    Importing torch early is not enough,
+    because torch.compile pulls triton in lazily (e.g. via returnn/torch/util/rope.py),
+    long after TF is loaded.
+
+    Measured here: tf 2.21 + torch 2.12 crashes,
+    tf 2.18 + torch 2.5 does not,
+    and CI pins tf 2.10, which is why CI never hit this.
+
+    See:
+      https://github.com/rwth-i6/returnn/issues/1339
+      https://github.com/pytorch/pytorch/issues/102360
+    """
+    try:
+        import triton  # noqa
+    except ImportError:  # no triton (no torch, or a CPU-only install): nothing to order
+        pass
+
+
 def setup():
     """
     Calls necessary setups.
@@ -20,6 +45,8 @@ def setup():
     import sys
 
     os.environ["RETURNN_TEST"] = "1"
+
+    _preload_triton_before_tf()
 
     # Enable all logging, up to debug level.
     logging.basicConfig(level=logging.DEBUG, format="%(message)s")
@@ -41,8 +68,9 @@ def setup():
 
     import returnn.util.basic as util
 
-    # noinspection PyProtectedMember
-    util.BehaviorVersion.set_min_behavior_version(util.BehaviorVersion._latest_behavior_version)
+    if not util.BehaviorVersion.is_set():
+        # noinspection PyProtectedMember
+        util.BehaviorVersion.set_min_behavior_version(util.BehaviorVersion._latest_behavior_version)
 
     from returnn.util import better_exchook
 

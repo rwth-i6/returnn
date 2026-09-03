@@ -26,47 +26,8 @@ _base_dir = os.path.dirname(os.path.abspath(os.path.dirname(__file__)))
 _base_dir = os.path.realpath(_base_dir)  # Make canonical path-name.
 
 
-class OpDescription(native_op.NativeOpBaseMixin):
-    """
-    Meta-info about an op, used by :class:`OpMaker`.
-    """
-
-    @classmethod
-    def from_gen_base(cls, gen_base):
-        """
-        :param returnn.native_op.NativeOpGenBase|type[returnn.native_op.NativeOpGenBase] gen_base:
-        :rtype: OpDescription
-        """
-        name = gen_base.__name__
-        assert gen_base.in_info is not None
-        assert gen_base.out_info is not None
-        assert gen_base.c_fw_code is not None
-        return OpDescription(
-            in_info=gen_base.in_info,
-            out_info=gen_base.out_info,
-            c_fw_code=gen_base.c_fw_code,
-            c_bw_code=gen_base.c_bw_code,
-            c_extra_support_code=gen_base.c_extra_support_code,
-            cpu_support=gen_base.cpu_support,
-            grad_input_map=gen_base.grad_input_map,
-            name=name,
-        )
-
-    @property
-    def is_grad_defined(self):
-        """
-        :rtype: bool
-        """
-        return bool(self.c_bw_code)
-
-    def grad(self):
-        """
-        :rtype: OpDescription|None
-        """
-        if not self.is_grad_defined:
-            return None
-        kwargs = self.kwargs_for_grad_op()
-        return OpDescription(**kwargs)
+# backend-neutral, so it lives in returnn.native_op; re-exported here for the existing callers
+OpDescription = native_op.OpDescription
 
 
 class OpMaker:
@@ -210,13 +171,15 @@ class OpMaker:
                     name = "out_%s" % name
             return name
 
-        # noinspection PyShadowingNames,PyUnusedLocal
+        # noinspection PyShadowingNames
         def map_type(v, is_out=False):
             """
             :param dict[str] v:
             :param bool is_out:
             :rtype: str
             """
+            # the mapping does not differ between in and out here
+            del is_out  # same mapping for in and out
             t = v.get("dtype", "float32")
             return t
 
@@ -693,10 +656,10 @@ class RecSeqCellOp:
     def __init__(self, n_hidden, n_input_dim=None, n_input_dim_parts=None, input_is_sparse=False, step=None):
         """
         :param int n_hidden:
-        :param int n_input_dim:
-        :param int|list[int] n_input_dim_parts:
+        :param int|None n_input_dim: n_hidden by default
+        :param int|list[int]|None n_input_dim_parts: [n_input_dim] by default
         :param bool input_is_sparse:
-        :param int step: what direction and step to use
+        :param int|None step: what direction and step to use
         """
         if n_input_dim is None:
             n_input_dim = n_hidden
@@ -1188,7 +1151,7 @@ class TwoDNativeLstmCell(RecSeqCellOp):
             out_sum = tf.reduce_sum(out_complete, axis=1)  # (trg_len, batch, n_hidden)
             return out_sum / src_len  # (trg_len, batch, n_hidden)
 
-        # noinspection PyUnusedLocal,PyShadowingNames
+        # noinspection PyShadowingNames
         def weighted_pooling(src_mask, out_complete, target):
             """
             :param tf.Tensor src_mask:
@@ -1196,6 +1159,8 @@ class TwoDNativeLstmCell(RecSeqCellOp):
             :param tf.Tensor target:
             :rtype: tf.Tensor
             """
+            # no masking needed in this pooling variant
+            del src_mask  # no masking in this variant
             trg_features = target.shape[2]
             mat_w_att = tf_compat.v1.get_variable(  # (trg_features, n_hidden)
                 name="W_att", shape=(trg_features, self.n_hidden), initializer=recurrent_weights_initializer
@@ -1327,7 +1292,7 @@ def make_fast_baum_welch_op(**kwargs):
     return maker.make_op()
 
 
-def fast_baum_welch(am_scores, edges, weights, start_end_states, float_idx, state_buffer=None):
+def fast_baum_welch(am_scores, edges, weights, start_end_states, float_idx):
     """
     :param tf.Tensor am_scores: (time, batch, dim), in -log space
     :param tf.Tensor edges: (4,num_edges), edges of the graph (from,to,emission_idx,sequence_idx)
@@ -1335,24 +1300,25 @@ def fast_baum_welch(am_scores, edges, weights, start_end_states, float_idx, stat
     :param tf.Tensor start_end_states: (2, batch), (start,end) state idx in automaton.
         there is only one single automaton.
     :param tf.Tensor float_idx: (time, batch) -> 0 or 1 (index mask, via seq lens)
-    :param tf.Tensor state_buffer: (2, num_states)
     :return: (fwdbwd, obs_scores), fwdbwd is (time, batch, dim), obs_scores is (time, batch), in -log space
     :rtype: (tf.Tensor, tf.Tensor)
     """
-    # edges, weights, start_end_states, state_buffer = SprintAlignmentAutomataOp(self.sprint_opts)(self.network.tags)
     op = make_fast_baum_welch_op()
     float_idx = tf.cast(float_idx, tf.float32)
-    if state_buffer is None:
-        last_state_idx = tf.reduce_max(start_end_states[1])  # see get_automata_for_batch
-        with tf.control_dependencies(
-            [
-                tf_compat.v1.assert_greater_equal(
-                    last_state_idx, 0, data=["last_state_idx must be >= 0 but is:", last_state_idx]
-                )
-            ]
-        ):
-            state_buffer = tf.zeros((2, last_state_idx + 1))
-    fwdbwd, obs_scores = op(am_scores, edges, weights, start_end_states, float_idx, state_buffer)  # noqa
+    # The op takes the state count as a host scalar and allocates its state scratch itself
+    # (like fast_viterbi). An earlier version took a (2, n_states) state_buffer tensor as op
+    # input, which the kernel wrote into -- unsound, a shared/CSE-merged input corrupted
+    # concurrent op instances -- and whose content was never used anyway.
+    last_state_idx = tf.reduce_max(start_end_states[1])  # see get_automata_for_batch
+    with tf.control_dependencies(
+        [
+            tf_compat.v1.assert_greater_equal(
+                last_state_idx, 0, data=["last_state_idx must be >= 0 but is:", last_state_idx]
+            )
+        ]
+    ):
+        n_states = tf.cast(last_state_idx, tf.int32) + 1
+    fwdbwd, obs_scores = op(am_scores, edges, weights, start_end_states, float_idx, n_states)  # noqa
     return fwdbwd, obs_scores
 
 
@@ -1451,7 +1417,7 @@ def get_ctc_fsa_fast_bw(targets, seq_lens, blank_idx, label_loop=True):
         weights = tf.zeros((n_edges,))
         maker = OpMaker(OpDescription.from_gen_base(native_op.GetCtcFsaFastBwOp))
         op = maker.make_op()
-        edges, start_end_states = op(targets, seq_lens, blank_idx, weights, label_loop)
+        edges, start_end_states, weights = op(targets, seq_lens, blank_idx, weights, label_loop)
     return edges, weights, start_end_states
 
 
@@ -1484,6 +1450,7 @@ def ctc_loss(
     logits_normalize=True,
     grad_wrt_softmax_in=True,
     blank_index=-1,
+    zero_infinity: Optional[bool] = None,
 ):
     """
     Similar to :func:`tf.nn.ctc_loss`.
@@ -1504,6 +1471,11 @@ def ctc_loss(
       If logits are already normalized (e.g. we just use ``log p(s|x) = logits``),
       the error signal to logits should be ``-bw``.
     :param int blank_index: vocab index of the blank symbol
+    :param zero_infinity: for sequences with no valid alignment, contribute 0 loss AND 0 gradient,
+      like PyTorch ctc_loss(zero_infinity=True).
+      Without it, such a sequence gets loss 0 (fast_baum_welch finds no path)
+      but an error signal of softmax(logits), i.e. a full-magnitude gradient toward uniform.
+      Default from the config option ``tf_native_ctc_zero_infinity``, else behavior version >= 30.
     :return: loss, shape (batch,)
     :rtype: tf.Tensor
     """
@@ -1541,6 +1513,17 @@ def ctc_loss(
     else:
         grad_x = -bw  # (time,batch,dim)
     grad_x = where_bc(seq_mask[:, :, None], grad_x, 0.0)
+    if zero_infinity is None:
+        zero_infinity = _ctc_zero_infinity_default()
+    if zero_infinity:
+        # No valid alignment -> no path -> bw == 0, so grad_x above is just softmax(logits):
+        # a full-magnitude gradient toward uniform, on frames with no supervision.
+        # The loss is already 0 here, so strictly only the gradient needs zeroing.
+        valid = _ctc_seq_has_valid_path(
+            targets=targets, targets_seq_lens=targets_seq_lens, logits_seq_lens=logits_seq_lens, label_loop=label_loop
+        )
+        grad_x = where_bc(valid[None, :, None], grad_x, 0.0)
+        loss = tf.where(valid, loss, tf.zeros_like(loss))
     from returnn.tf.util.basic import custom_gradient
 
     loss = tf.reshape(loss, [1, n_batch, 1])  # (1,batch,1), such that we can broadcast to logits/grad_x
@@ -1554,7 +1537,7 @@ def fast_viterbi(*, am_scores, am_seq_len, edges, weights, start_end_states, mas
     :param tf.Tensor am_scores: (time, batch, dim), in +log space (unlike fast_baum_welch)
     :param tf.Tensor am_seq_len: (batch,), int32
     :param tf.Tensor edges: (4,num_edges), edges of the graph (from,to,emission_idx,sequence_idx)
-    :param tf.Tensor weights: (num_edges,), weights of the edges
+    :param tf.Tensor weights: (num_edges,), weights of the edges (-log space, same as for fast_baum_welch)
     :param tf.Tensor start_end_states: (2, batch), (start,end) state idx in automaton.
         there is only one single automaton.
     :param mask_idx: vocab index used for masking (e.g. padding, or if not path was found)
@@ -1569,8 +1552,56 @@ def fast_viterbi(*, am_scores, am_seq_len, edges, weights, start_end_states, mas
     return alignment, scores
 
 
+def _ctc_seq_has_valid_path(*, targets, targets_seq_lens, logits_seq_lens, label_loop: bool):
+    """
+    :param tf.Tensor targets: batch-major, [batch,time]
+    :param tf.Tensor targets_seq_lens: (batch,)
+    :param tf.Tensor logits_seq_lens: (batch,)
+    :param label_loop: if set, repeated labels need a blank between them, costing an extra frame
+    :return: (batch,) bool, whether any alignment exists at all
+    :rtype: tf.Tensor
+    """
+    required_lens = targets_seq_lens
+    if label_loop:
+        targets_mask = tf.sequence_mask(targets_seq_lens, maxlen=tf.shape(targets)[1])
+        adjacent_repeats = tf.logical_and(tf.equal(targets[:, 1:], targets[:, :-1]), targets_mask[:, 1:])
+        required_lens += tf.reduce_sum(tf.cast(adjacent_repeats, targets_seq_lens.dtype), axis=1)
+    return tf.greater_equal(logits_seq_lens, tf.cast(required_lens, logits_seq_lens.dtype))
+
+
+def _ctc_zero_infinity_default() -> bool:
+    """
+    :return: default for :func:`ctc_loss` ``zero_infinity``
+    """
+    from returnn.config import get_global_config
+    from returnn.util.basic import BehaviorVersion
+
+    config = get_global_config(raise_exception=False)
+    if config:
+        if "tf_native_ctc_zero_infinity" in config.typed_dict:
+            value = config.typed_dict["tf_native_ctc_zero_infinity"]
+            assert value is None or isinstance(value, bool)
+            if value is not None:
+                return value
+        elif "tf_native_ctc_zero_infinity" in config.dict:
+            value = config.bool("tf_native_ctc_zero_infinity", None)
+            if value is not None:
+                return value
+    return BehaviorVersion.get() >= 30
+
+
 def ctc_loss_viterbi(
-    *, logits, logits_seq_lens, logits_time_major, targets, targets_seq_lens, blank_index=-1, label_loop: bool = True
+    *,
+    logits,
+    logits_seq_lens,
+    logits_time_major,
+    targets,
+    targets_seq_lens,
+    blank_index=-1,
+    label_loop: bool = True,
+    logits_normalize=True,
+    grad_wrt_softmax_in=True,
+    zero_infinity: Optional[bool] = None,
 ):
     """
     Similar to :func:`ctc_loss`.
@@ -1584,6 +1615,20 @@ def ctc_loss_viterbi(
     :param tf.Tensor targets_seq_lens: (batch,)
     :param int blank_index: vocab index of the blank symbol
     :param label_loop:
+    :param bool logits_normalize: apply log_softmax on logits (default).
+      The cross entropy below runs on the logits either way,
+      which stays well defined when they are already normalized, as softmax(log p) == p.
+    :param bool grad_wrt_softmax_in: assume ``p(s|x) = softmax(logits)``,
+      and define the gradient w.r.t. logits, which is ``p(s|x) - onehot(alignment)``.
+      If logits are already normalized (``log p(s|x) = logits``),
+      the error signal to logits should be ``-onehot(alignment)``, so set this False.
+      As in :func:`ctc_loss`, follow ``logits_normalize``.
+    :param zero_infinity: for sequences with no valid alignment, contribute 0 loss AND 0 gradient,
+      like PyTorch ctc_loss(zero_infinity=True).
+      Without it, such a sequence gets loss inf, which poisons the batch loss,
+      and :func:`fast_viterbi` fills its alignment with the mask index,
+      so the cross entropy below trains toward that filler label.
+      Default from the config option ``tf_native_ctc_zero_infinity``, else behavior version >= 30.
     :return: loss, shape (batch,)
     :rtype: tf.Tensor
     """
@@ -1591,7 +1636,10 @@ def ctc_loss_viterbi(
     dim = logits.get_shape().dims[-1].value
     if not logits_time_major:
         logits = tf.transpose(logits, [1, 0, 2])  # (time,batch,dim)
-    log_sm = tf.nn.log_softmax(logits)  # (time,batch,dim)
+    if logits_normalize:
+        log_sm = tf.nn.log_softmax(logits)  # (time,batch,dim)
+    else:
+        log_sm = logits
 
     if blank_index < 0:
         blank_index += dim
@@ -1604,25 +1652,43 @@ def ctc_loss_viterbi(
     )
     loss = -scores
 
-    # We make use of the original TF sparse CE function,
-    # which also calculates the gradient.
-    # The CE op works on the flat tensor, thus we first convert it here, to get the op directly.
-    logits_flat = tf.reshape(logits, [-1, dim])
-    alignment_flat = tf.reshape(alignment, tf.shape(logits_flat)[:-1])
-    loss_ce = tf.nn.sparse_softmax_cross_entropy_with_logits(logits=logits_flat, labels=alignment_flat)
-    assert loss_ce.op.type == "SparseSoftmaxCrossEntropyWithLogits"
-    # See _SparseSoftmaxCrossEntropyWithLogitsGrad.
-    from tensorflow.python.ops import array_ops
+    if grad_wrt_softmax_in:
+        # We make use of the original TF sparse CE function,
+        # which also calculates the gradient, p - onehot(alignment).
+        # The CE op works on the flat tensor, thus we first convert it here, to get the op directly.
+        logits_flat = tf.reshape(logits, [-1, dim])
+        alignment_flat = tf.reshape(alignment, tf.shape(logits_flat)[:-1])
+        loss_ce = tf.nn.sparse_softmax_cross_entropy_with_logits(logits=logits_flat, labels=alignment_flat)
+        assert loss_ce.op.type == "SparseSoftmaxCrossEntropyWithLogits"
+        # See _SparseSoftmaxCrossEntropyWithLogitsGrad.
+        from tensorflow.python.ops import array_ops
 
-    ce_grad = array_ops.prevent_gradient(loss_ce.op.outputs[1], message="No second order grad for CE.")
-    assert isinstance(ce_grad, tf.Tensor)
-    ce_grad.set_shape(logits_flat.get_shape())  # (time*batch,dim)
-    ce_grad = tf.reshape(ce_grad, tf.shape(logits))  # (time,batch,dim)
-    from returnn.tf.util.basic import sequence_mask_time_major
+        ce_grad = array_ops.prevent_gradient(loss_ce.op.outputs[1], message="No second order grad for CE.")
+        assert isinstance(ce_grad, tf.Tensor)
+        ce_grad.set_shape(logits_flat.get_shape())  # (time*batch,dim)
+        ce_grad = tf.reshape(ce_grad, tf.shape(logits))  # (time,batch,dim)
+    else:
+        # w.r.t. already normalized log probs the error signal is just -onehot(alignment),
+        # so build it directly instead of subtracting p back off the CE gradient
+        ce_grad = -tf.one_hot(alignment, depth=dim, dtype=logits.dtype)  # (time,batch,dim)
+    from returnn.tf.util.basic import sequence_mask_time_major, where_bc
 
     seq_mask = sequence_mask_time_major(logits_seq_lens)  # (time,batch)
     seq_mask_bc_float = tf.cast(tf.expand_dims(seq_mask, 2), tf.float32)  # (time,batch,1)
     ce_grad *= seq_mask_bc_float
+
+    if zero_infinity is None:
+        zero_infinity = _ctc_zero_infinity_default()
+    if zero_infinity:
+        # No valid alignment -> fast_viterbi scores -inf and fills the alignment with its mask
+        # index, so the CE above is a real gradient toward that filler label.
+        # Both need zeroing: generic_loss_and_error_signal takes the gradient from grad_x,
+        # so masking the loss alone would leave the gradient untouched.
+        valid = _ctc_seq_has_valid_path(
+            targets=targets, targets_seq_lens=targets_seq_lens, logits_seq_lens=logits_seq_lens, label_loop=label_loop
+        )
+        ce_grad = where_bc(valid[None, :, None], ce_grad, 0.0)
+        loss = tf.where(valid, loss, tf.zeros_like(loss))
 
     from returnn.tf.util.basic import custom_gradient
 
@@ -1729,13 +1795,14 @@ def edit_distance_via_next_edit_distance_row(a, a_len, b, b_len, optimal_complet
     with tf.name_scope("edit_distance_via_next_edit_distance_row"):
         initial_row = expand_dims_unbroadcast(tf.range(tf.shape(b)[1] + 1), axis=0, dim=tf.shape(b)[0])  # (B,time2+1)
 
-        # noinspection PyUnusedLocal
         def cond(i, last_row):
             """
             :param tf.Tensor i:
             :param tf.Tensor last_row:
             :rtype: tf.Tensor
             """
+            # the tf.while_loop cond signature must mirror the body signature
+            del last_row  # cond mirrors the body signature
             return tf.less(i, tf.shape(a)[1])
 
         def body(i, last_row):
@@ -1839,7 +1906,7 @@ def _debug_dumped_fast_baum_welch(prefix, postfix=".dump"):
                 "weights": None,
                 "start_end_states": None,
                 "float_idx": "index",
-                "state_buffer": None,
+                # state_buffer dumps are ignored: the op allocates its scratch itself now
             }
             args = {}
             for name, file_postfix in list(arg_names.items()):

@@ -61,7 +61,15 @@ class NonDaemonicSpawnProcess(SpawnProcess):
     Note, if SIGINT does nothing on the subproc, this will hang.
     """
 
-    daemon = property(lambda self: False, lambda self, v: None)  # always False
+    @property
+    def daemon(self) -> bool:
+        """always False: this proc type is deliberately non-daemonic, see the class docstring"""
+        return False
+
+    @daemon.setter
+    def daemon(self, value: bool):
+        """ignored: multiprocessing sets this, but we always stay non-daemonic"""
+        del value  # see above
 
     pre_init_func: Optional[Callable[[], None]] = None
 
@@ -202,9 +210,9 @@ class NonDaemonicSpawnContext(BaseContext):
 
 
 class _AtExitCleanupProcess:
-    def __init__(self, proc_pid: int):
+    def __init__(self, proc_pid: Optional[int]):
         self.cur_pid = os.getpid()
-        self.proc_pid = proc_pid
+        self.proc_pid = proc_pid  # None = already cleaned
 
     def __call__(self):
         try:

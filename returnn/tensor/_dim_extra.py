@@ -76,7 +76,7 @@ class _DimExtra:
             This implies certain behavior on equality, such as comparing the description,
             to allow for several independent creations of the dim tag during template construction.
         :param derived_from_tag:
-            Whether this new tag is reduced, down/up sampled, padded etc from this given other tag.
+            Whether this new tag is reduced, down/up sampled, padded etc. from this given other tag.
             In situations where dim tags are being matched (Data.get_common_data),
             the behavior is to consider them as equal,
             and assume that the chain of operations (e.g. padding + valid conv) results in the same dim.
@@ -179,6 +179,9 @@ class _DimExtra:
         if self.kind is not None:
             # noinspection PyTypeChecker
             self.kind = {v.name: v for v in DimTypes.Types}[self.kind]
+
+    def __repr__(self):
+        return f"<{self.__class__.__name__} of {self._dim_ref()!r}>"
 
     def _relink_dim(self, dim: Dim):
         self._dim_ref = weakref.ref(dim)
@@ -427,7 +430,7 @@ class _DimMixin:
 
     def reset_eager(self: Dim):
         """
-        In an eager-based framework, dyn_size_ext.raw_tensor etc will be different in each step.
+        In an eager-based framework, dyn_size_ext.raw_tensor etc. will be different in each step.
         This resets everything related.
         This can also include caches.
         """
@@ -552,6 +555,7 @@ class _DimMixin:
                 if same.dyn_size_ext is not None and same.dyn_size_ext.placeholder is not None:
                     if self.dyn_size_ext.placeholder is None:
                         self.dyn_size_ext = same.dyn_size_ext
+                # noinspection PyUnreachableCode
                 if self.dyn_size_ext is not None and same.dyn_size_ext is None:
                     same.dyn_size_ext = self.dyn_size_ext
                 if self.dyn_size_ext is not None and self.dyn_size_ext.placeholder is not None:
@@ -561,7 +565,7 @@ class _DimMixin:
                 if self._dyn_size_max_value is None and same._dyn_size_max_value is not None:
                     # noinspection PyProtectedMember
                     self._dyn_size_max_value = same._dyn_size_max_value
-                # noinspection PyProtectedMember
+                # noinspection PyProtectedMember,PyUnreachableCode
                 if same._dyn_size_max_value is None and self._dyn_size_max_value is not None:
                     # noinspection PyProtectedMember
                     same._dyn_size_max_value = self._dyn_size_max_value
@@ -1725,7 +1729,8 @@ class _DimMixin:
         if other_same_base.get_same_derived_base() is self_same_as:
             # We actually want it to be the other way around.
             with util.guard_infinite_recursion(_d.Dim.declare_same_as, other, self):
-                return other.declare_same_as(self)
+                other.declare_same_as(self)
+                return
         if self.batch:
             # If self is defined (self.is_dim_known), be fair to other, and adapt it to the right batch,
             # such that other.is_dim_known is correct, by potentially completing it.
@@ -1745,13 +1750,15 @@ class _DimMixin:
             or (not self.undefined and other_.undefined)
         ):
             with util.guard_infinite_recursion(_d.Dim.declare_same_as, other, self):
-                return other.declare_same_as(self)
+                other.declare_same_as(self)
+                return
         other_derived_bases = other.get_derived_bases_set()
         self_derived_bases = self.get_derived_bases_set()
         if other_derived_bases != self_derived_bases and self_derived_bases.issubset(other_derived_bases):
             # Avoid cycles on derived_from_tag. https://github.com/rwth-i6/returnn/issues/1054
             with util.guard_infinite_recursion(_d.Dim.declare_same_as, other, self):
-                return other.declare_same_as(self)
+                other.declare_same_as(self)
+                return
         if self._extra:
             self._extra.derived_from_op = None
             self._extra.derived_from_tag = None

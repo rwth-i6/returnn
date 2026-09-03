@@ -1,3 +1,7 @@
+"""
+Segmental model layers: windowing over the time axis, and the losses defined on the segments.
+"""
+
 from __future__ import annotations
 
 import tensorflow as tf
@@ -17,6 +21,7 @@ def batch_sizes_after_windowing(sizes, window):
     """
 
     def fold_times(acc, x):
+        """one sequence: the window sizes it yields, full windows first, then the shorter tail"""
         r1 = tf.tile([window], [tf.maximum(x - window + 1, 0)])
         r2 = tf.range(tf.minimum(x, window - 1), 0, -1)
         return tf.concat([acc, r1, r2], 0)
@@ -34,16 +39,18 @@ def batch_indices_after_windowing(sizes, window):
     here we compute the start and end times for each of the new batches when applying a window
     :param tf.Tensor sizes: (batch_sizes)
     :param int window: size of the applied window
-    :return: tensor of shape (?, 3), contains batch index, start-frame and end-frame for each batch after applying a window
+    :return: tensor of shape (?, 3), contains batch index, start-frame and end-frame
+        for each batch after applying a window
     :rtype: tf.Tensor
     """
 
     def fold_batches(acc, x):
+        """one sequence: its (batch index, start frame, end frame) rows"""
         b = x[0]
-        l = x[1]
-        batch = tf.tile([b], [l])
-        start = tf.range(l)
-        end = tf.minimum(tf.range(window, l + window), l)
+        length = x[1]
+        batch = tf.tile([b], [length])
+        start = tf.range(length)
+        end = tf.minimum(tf.range(window, length + window), length)
         return tf.concat([acc, tf.transpose(tf.stack([batch, start, end]))], axis=0)
 
     return tf.foldl(
@@ -71,6 +78,7 @@ class SegmentInputLayer(_ConcatInputLayer):
         new_sizes = batch_sizes_after_windowing(sizes, window)
 
         def fold_data(acc, x):
+            """one sequence: the frame indices of each window, padded past the end with 0"""
             batch_idx = x[0]
             num_frames = x[1]
             res = tf.expand_dims(tf.range(num_frames), -1)  # start times
@@ -97,8 +105,7 @@ class SegmentInputLayer(_ConcatInputLayer):
     @classmethod
     def get_out_data_from_opts(cls, name, sources, window, **kwargs):
         out = get_concat_sources_data_template(sources, name="%s_output" % name)
-        out.size_placeholder = {}
-        out.size_placeholder[0] = None
+        out.size_placeholder = {0: None}
         return out
 
 
@@ -122,6 +129,7 @@ class ClassesToSegmentsLayer(_ConcatInputLayer):
         onehot = tf.one_hot(self.input_data.get_placeholder_as_batch_major(), num_classes)
 
         def compute(x):
+            """one (batch index, start, end) row: the segment's summed one-hot class counts"""
             batch = x[0]
             start = x[1]
             end = x[2]
@@ -139,8 +147,7 @@ class ClassesToSegmentsLayer(_ConcatInputLayer):
     @classmethod
     def get_out_data_from_opts(cls, name, sources, num_classes, window, **kwargs):
         out = get_concat_sources_data_template(sources, name="%s_output" % name).copy_as_batch_major()
-        out.size_placeholder = {}
-        out.size_placeholder[0] = None
+        out.size_placeholder = {0: None}
         out.sparse = False
         out.shape += (num_classes,)
         out.dtype = "float32"
@@ -152,6 +159,7 @@ class ClassesToLengthDistributionLayer(_ConcatInputLayer):
     layer_class = "classes_to_length_distribution"
 
     def __init__(self, window=15, scale=1.0, **kwargs):
+        del scale  # only used in get_out_data_from_opts
         super(ClassesToLengthDistributionLayer, self).__init__(**kwargs)
         assert self.input_data.sparse
 
@@ -182,8 +190,7 @@ class ClassesToLengthDistributionLayer(_ConcatInputLayer):
     @classmethod
     def get_out_data_from_opts(cls, name, sources, window, **kwargs):
         out = get_concat_sources_data_template(sources, name="%s_output" % name).copy_as_batch_major()
-        out.size_placeholder = {}
-        out.size_placeholder[0] = None
+        out.size_placeholder = {0: None}
         out.shape = (1, window)
         out.dim = window
         out.sparse = False
@@ -211,9 +218,10 @@ class ClassesToLengthDistributionGlobalLayer(_ConcatInputLayer):
         lengths = tf.range(0.0, float(window), 1.0)
         end_distribution = tf.pow((1.0 - weight_falloff), lengths) * weight_falloff
 
-        # add small weight at the last frame in case there is no ending label, then we want the last frame to be a label end
-        # because the windows have different lengths the last frame might not be at index (window -1), but earlier, thus we
-        # also add some zeros at the end
+        # add small weight at the last frame in case there is no ending label,
+        # then we want the last frame to be a label end.
+        # because the windows have different lengths the last frame might not be
+        # at index (window -1), but earlier, thus we also add some zeros at the end
         no_label_backup = tf.convert_to_tensor([0.0] * (window - 1) + [1e-4] + [0.0] * (window - 1))
 
         # As the label ends are not well-defined in most cases, we allow the model a little bit of wiggle-room in the
@@ -275,8 +283,7 @@ class ClassesToLengthDistributionGlobalLayer(_ConcatInputLayer):
     @classmethod
     def get_out_data_from_opts(cls, name, sources, window, broadcast_axis="time", **kwargs):
         out = get_concat_sources_data_template(sources, name="%s_output" % name).copy_as_batch_major()
-        out.size_placeholder = {}
-        out.size_placeholder[0] = None
+        out.size_placeholder = {0: None}
         out.shape = (1, window) if broadcast_axis == "time" else (window, 1)
         out.dim = window if broadcast_axis == "time" else 1
         out.sparse = False
@@ -301,9 +308,10 @@ class SegmentAlignmentLayer(_ConcatInputLayer):
         onehot = tf.one_hot(input[:, :, 0], num_classes)
         onehot = tf.pad(onehot, tf.constant([[0, 0], [0, window - 1], [0, 0]]), "CONSTANT")
 
-        # add small weight at the last frame in case there is no ending label, then we want the last frame to be a label end
-        # because the windows have different lengths the last frame might not be at index (window -1), but earlier, thus we
-        # also add some zeros at the end
+        # add small weight at the last frame in case there is no ending label,
+        # then we want the last frame to be a label end.
+        # because the windows have different lengths the last frame might not be
+        # at index (window -1), but earlier, thus we also add some zeros at the end
         no_label_backup = tf.constant([0.0] * (window - 1) + [1e-4] + [0.0] * (window - 1))
 
         def compute(bse):
@@ -329,8 +337,7 @@ class SegmentAlignmentLayer(_ConcatInputLayer):
     @classmethod
     def get_out_data_from_opts(cls, name, sources, num_classes, window, **kwargs):
         out = get_concat_sources_data_template(sources, name="%s_output" % name).copy_as_batch_major()
-        out.size_placeholder = {}
-        out.size_placeholder[0] = None
+        out.size_placeholder = {0: None}
         out.shape = (window, num_classes)
         out.dim = num_classes
         out.sparse = False

@@ -5,6 +5,7 @@ RETURNN frontend (returnn.frontend) tests
 from __future__ import annotations
 from typing import Tuple
 import _setup_test_env  # noqa
+from returnn.util import math as util_math
 import returnn.frontend as rf
 from returnn.tensor import Tensor, Dim, TensorDict, batch_dim
 from rf_utils import run_model
@@ -64,6 +65,54 @@ def test_stft_after_padding():
         test_tensorflow=False,
         test_single_batch_entry=False,
     )
+
+
+def test_stft_len():
+    time_dim = Dim(Tensor("time", [batch_dim], dtype="int32"))
+    extern_data = TensorDict(
+        {
+            "data": Tensor("data", [batch_dim, time_dim], dtype="float32"),
+        }
+    )
+
+    def _shape(x: Tensor):
+        if hasattr(x.raw_tensor, "shape"):
+            return x.raw_tensor.shape
+        return "(unk)"
+
+    def _lens(dim: Dim):
+        raw_lens = dim.get_dyn_size_ext_for_device("cpu").raw_tensor
+        if hasattr(raw_lens, "numpy"):
+            return raw_lens.numpy()
+        return "(unk)"
+
+    # noinspection PyShadowingNames
+    def _forward_step(*, model: rf.Module, extern_data: TensorDict):
+        model  # unused # noqa
+        x = extern_data["data"]
+
+        sampling_rate: int = 16_000
+        window_len: float = 0.025
+        step_len: float = 0.010
+        window_num_frames = int(window_len * sampling_rate)
+        step_num_frames = int(step_len * sampling_rate)
+        n_fft = util_math.next_power_of_two(window_num_frames)
+        print(
+            f"stft on {x} {_shape(x)} lens={_lens(time_dim)}"
+            f" frame_step={step_num_frames}, frame_length={window_num_frames}, fft_length={n_fft}"
+        )
+        out, out_spatial_dim, out_dim = rf.stft(
+            x, in_spatial_dim=time_dim, frame_step=step_num_frames, frame_length=window_num_frames, fft_length=n_fft
+        )
+        print(f"out: {out} {_shape(out)} lens={_lens(out_spatial_dim)}")
+        axis = out.get_axis_from_description(out_spatial_dim)
+        if hasattr(out.raw_tensor, "shape") and out.raw_tensor.shape[axis] is not None:
+            assert out.raw_tensor.shape[axis] == out_spatial_dim.get_dim_value()
+
+        out.mark_as_output("stft", shape=(batch_dim, out_spatial_dim, out_dim))
+
+    for s in [100, 398, 399, 400, 511, 512, 1024, 160 + 398, 160 + 399, 160 + 400]:
+        run_model(extern_data, lambda **_kw: rf.Module(), _forward_step, dyn_dim_max_sizes={time_dim: s})
 
 
 def test_mel_filterbank():

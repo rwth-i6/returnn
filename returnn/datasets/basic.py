@@ -163,7 +163,9 @@ class Dataset:
         self.labels: Dict[str, List[str]] = {}
         self.weights = {}
         self._num_timesteps = 0
-        self._num_seqs = 0
+        # None where the count is not known in advance (e.g. CachedDataset2 subclasses that
+        # discover it while loading); the is_less_than_num_seqs logic depends on that distinction
+        self._num_seqs: Optional[int] = 0
         self._estimated_num_seqs = estimated_num_seqs
         self.min_chunk_size = NumbersDict(min_chunk_size)
         self.chunking_variance = chunking_variance
@@ -1063,9 +1065,10 @@ class Dataset:
             return False
         return True
 
-    def get_data_shape(self, key: str) -> List[int]:
+    def get_data_shape(self, key: str) -> List[Optional[int]]:
         """
-        :returns get_data(*, key).shape[1:], i.e. num-frames excluded
+        :returns get_data(*, key).shape[1:], i.e. num-frames excluded.
+            None entries are dynamic (only the last axis is known for dense data).
         """
         if key in self.num_outputs:
             if self.num_outputs[key][1] <= 1:
@@ -1272,6 +1275,7 @@ class Dataset:
         seq_drop=0.0,
         max_total_num_seqs=-1,
         used_data_keys=None,
+        packed_batch_size=None,
     ):
         """
         :param bool recurrent_net: If True, the batch might have a batch seq dimension > 1.
@@ -1280,9 +1284,19 @@ class Dataset:
         :param int|dict[str,int]|NumbersDict max_pad_size: Max number of zero-padded frames in one batch.
         :param int max_seqs: Max number of seqs per batch.
         :param int max_total_num_seqs:
-        :param int|dict[str,int]|NumbersDict max_seq_length:
+        :param int|dict[str,int]|NumbersDict|None max_seq_length: None/0 = no limit (sys.maxsize)
         :param set(str)|None used_data_keys:
+        :param int|dict[str,int]|NumbersDict|None packed_batch_size: max total number of frames in one batch,
+          counting the ACTUAL seq lens (sum), not the padded ``max_len * n_seqs`` that ``batch_size`` counts.
+          The right budget when the consumer stores batches packed (``packed_tensors``),
+          where padding costs nothing. ``batch_size`` may then be None (no padded-frames limit).
         """
+        if packed_batch_size is not None:
+            assert recurrent_net, "packed_batch_size: requires recurrent_net batching (whole seqs per slice)"
+            packed_batch_size = NumbersDict(packed_batch_size)
+            assert packed_batch_size.min_value() > 0
+            if not batch_size:
+                batch_size = sys.maxsize  # only the packed budget limits the batch then
         if not batch_size:
             raise Exception("batch_size must be set and be greater than 0")
         batch_size = NumbersDict(batch_size)
@@ -1326,7 +1340,12 @@ class Dataset:
                     continue
                 dt, ds = batch.try_sequence_as_slice(length)
                 if batch.num_slices >= 1:
-                    if (dt * ds).any_compare(batch_size, (lambda a, b: a > b)):
+                    if packed_batch_size is not None and (batch.get_total_num_frames() + length).any_compare(
+                        packed_batch_size, (lambda a, b: a > b)
+                    ):
+                        yield batch
+                        batch = Batch()
+                    elif (dt * ds).any_compare(batch_size, (lambda a, b: a > b)):
                         yield batch
                         batch = Batch()
                     elif ds > max_seqs:

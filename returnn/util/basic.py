@@ -5,7 +5,21 @@ Various generic utilities, which are shared across different backend engines.
 """
 
 from __future__ import annotations
-from typing import Optional, Union, Any, Generic, TypeVar, Iterable, Tuple, Dict, List, Set, Callable
+from typing import (
+    Optional,
+    Union,
+    Any,
+    Generic,
+    TypeVar,
+    Iterable,
+    Tuple,
+    Dict,
+    List,
+    Set,
+    Callable,
+    Hashable,
+    overload,
+)
 
 import subprocess
 from subprocess import CalledProcessError
@@ -139,14 +153,15 @@ class BackendEngine:
     TensorFlowNetDict = 1
     TensorFlow = 2
     Torch = 3  # PyTorch
+    Jax = 4
     selected_engine = None  # type: typing.Optional[int]  # One of the possible engines.
 
     @classmethod
     def select_engine(cls, *, engine=None, default_fallback_engine=None, config=None, _select_rf_backend: bool = True):
         """
-        :param int engine: see the global class attribs for possible values
+        :param int|None engine: see the global class attribs for possible values. From the config by default.
         :param int|None default_fallback_engine: if engine is None and not defined in config, use this
-        :param returnn.config.Config config:
+        :param returnn.config.Config|None config: the global config by default
         :param _select_rf_backend: internal. avoids that Torch/TF/anything further gets imported at this point
         """
         if engine is None:
@@ -160,6 +175,7 @@ class BackendEngine:
                     "tensorflow-net-dict": cls.TensorFlowNetDict,
                     "tensorflow": cls.TensorFlow,
                     "torch": cls.Torch,
+                    "jax": cls.Jax,
                 }[backend]
             elif config.bool("use_tensorflow", False):
                 engine = cls.TensorFlowNetDict
@@ -183,6 +199,8 @@ class BackendEngine:
                 _backend.select_backend_returnn_layers_tf()
             elif engine == cls.Torch:
                 _backend.select_backend_torch()
+            elif engine == cls.Jax:
+                _backend.select_backend_jax()
         cls.selected_engine = engine
 
     @classmethod
@@ -209,6 +227,13 @@ class BackendEngine:
         """
         return cls.get_selected_engine() == cls.Torch
 
+    @classmethod
+    def is_jax_selected(cls):
+        """
+        :rtype: bool
+        """
+        return cls.get_selected_engine() == cls.Jax
+
 
 class BehaviorVersion:
     """
@@ -219,7 +244,7 @@ class BehaviorVersion:
     See :ref:`behavior_version`.
     """
 
-    _latest_behavior_version = 30
+    _latest_behavior_version = 32
     _behavior_version = None  # type: typing.Optional[int]
     _min_behavior_version = 0  # type: int
 
@@ -331,6 +356,8 @@ class BehaviorVersion:
         # Reset things we did in _handle_new_min_version.
         for cb in cls.reset_callbacks:
             cb()
+        # Then apply them again for the version we just restored.
+        cls._handle_new_min_version()
 
     @classmethod
     def _handle_new_min_version(cls):
@@ -354,6 +381,10 @@ def get_model_filename_postfix():
         return ".meta"
     if BackendEngine.is_torch_selected():
         return ".pt"
+    if BackendEngine.is_jax_selected():
+        # Orbax with OCDBT storage; the checkpoint is a directory, not a file
+        # (see returnn.jax.checkpoint)
+        return ".orbax"
     return ""
 
 
@@ -431,7 +462,7 @@ def sys_exec_ret_code(*args, **kwargs):
 
 def git_commit_rev(commit="HEAD", git_dir=".", length=None):
     """
-    :param str commit:
+    :param str|None commit: None is treated like "HEAD"
     :param str git_dir:
     :param int|None length:
     :rtype: str
@@ -848,7 +879,7 @@ def terminal_size(file=sys.stdout):
     def ioctl_gwinsz(fd):
         """
         :param int fd: file descriptor
-        :rtype: tuple[int]
+        :rtype: tuple[int]|None
         """
         # noinspection PyBroadException
         try:
@@ -858,7 +889,7 @@ def terminal_size(file=sys.stdout):
 
             cr_ = struct.unpack("hh", fcntl.ioctl(fd, termios.TIOCGWINSZ, "1234"))  # noqa
         except Exception:
-            return
+            return None
         return cr_
 
     cr = ioctl_gwinsz(file.fileno) or ioctl_gwinsz(0) or ioctl_gwinsz(1) or ioctl_gwinsz(2)
@@ -1012,7 +1043,8 @@ def set_pretty_print_as_bytes(as_bytes):
 def pretty_print(obj, limit=None):
     """
     :param object obj:
-    :param int|float limit: use float("inf") to disable. None will use the default, via set_pretty_print_default_limit
+    :param int|float|None limit: use float("inf") to disable.
+        None will use the default, via set_pretty_print_default_limit
     :return: repr(obj), or some shorted version of that, maybe with extra info
     :rtype: str
     """
@@ -1658,7 +1690,7 @@ def random_orthogonal(shape, gain=1.0, seed=None):
 
     :param tuple[int] shape:
     :param float gain:
-    :param int seed: for Numpy random generator
+    :param int|None seed: for Numpy random generator; None uses the global Numpy random state
     :return: random orthogonal matrix
     :rtype: numpy.ndarray
     """
@@ -1679,7 +1711,6 @@ def random_orthogonal(shape, gain=1.0, seed=None):
     return gain * q[: shape[0], : shape[1]]
 
 
-# noinspection PyUnusedLocal
 def inplace_increment(x: numpy.ndarray, idx: numpy.ndarray, y: Union[numpy.ndarray, float, int]) -> numpy.ndarray:
     """
     This basically does `x[idx] += y`.
@@ -1691,6 +1722,9 @@ def inplace_increment(x: numpy.ndarray, idx: numpy.ndarray, y: Union[numpy.ndarr
     :param idx:
     :param y:
     """
+    # the body only raises: the feature went away with Theano support,
+    # the signature is kept so callers still type-check
+    del x, idx, y  # body only raises (Theano dropped)
     raise NotImplementedError("This feature was removed with dropped Theano support")
 
 
@@ -1874,11 +1908,15 @@ class NumbersDict:
     It implements the standard math bin ops in a straight-forward way.
     """
 
+    # assigned at the end of __init__, i.e. below the reads of OTHER instances
+    dict: typing.Dict[str, typing.Any]
+    value: typing.Optional[typing.Any]
+
     def __init__(self, auto_convert=None, numbers_dict=None, broadcast_value=None):
         """
-        :param dict|NumbersDict|T auto_convert: first argument, so that we can automatically convert/copy
-        :param dict numbers_dict:
-        :param T broadcast_value:
+        :param dict|NumbersDict|T|None auto_convert: first argument, so that we can automatically convert/copy
+        :param dict|None numbers_dict:
+        :param T|None broadcast_value:
         """
         if auto_convert is not None:
             assert broadcast_value is None
@@ -2400,13 +2438,26 @@ class FrozenDict(dict):
         return hash(tuple(sorted(self.items())))
 
 
+@overload
+def make_hashable(obj: dict) -> FrozenDict:
+    """dict -> FrozenDict (hashable)"""
+
+
+@overload
+def make_hashable(obj: Union[list, tuple]) -> tuple:
+    """list/tuple -> tuple (hashable)"""
+
+
+@overload
+def make_hashable(obj: Hashable) -> Hashable:
+    """anything else must already be hashable"""
+
+
 def make_hashable(obj):
     """
     Theano needs hashable objects in some cases, e.g. the properties of Ops.
     This converts all objects as such, i.e. into immutable frozen types.
-
-    :param T|dict|list|tuple obj:
-    :rtype: T|FrozenDict|tuple
+    The return is always hashable; anything not convertible raises a TypeError.
     """
     if isinstance(obj, dict):
         return FrozenDict([make_hashable(item) for item in obj.items()])
@@ -2423,7 +2474,8 @@ def make_hashable(obj):
             return RefIdEq(obj)
     # Try if this is already hashable.
     try:
-        hash(obj)
+        # noinspection PyUnhashable
+        hash(obj)  # failing is the point of the check, hence the suppression
     except Exception:
         raise TypeError("don't know how to make hashable: %r (%r)" % (obj, type(obj)))
     return obj
@@ -2908,13 +2960,14 @@ def overwrite_os_exec(prefix_args):
         # noinspection PyProtectedMember,PyUnresolvedReferences
         _original_execvpe = os._execvpe
 
-    # noinspection PyUnusedLocal
     def wrapped_execvpe(file, args, env=None):
         """
         :param file:
         :param list[str]|tuple[str] args:
         :param dict[str] env:
         """
+        # mirrors os._execvpe; the executable is deliberately replaced by prefix_args[0] below
+        del file  # replaced by prefix_args[0] below
         new_args = prefix_args + [which(args[0])] + args[1:]
         sys.stderr.write("$ %s\n" % " ".join(new_args))
         sys.stderr.flush()
@@ -3913,6 +3966,8 @@ def restart_returnn():
     # https://stackoverflow.com/questions/72335904/simple-way-to-restart-application
     close_all_fds_except({0, 1, 2})
     os.execv(sys.executable, [sys.executable] + sys.argv)
+    # defensive: execv should never return (but e.g. a monkey-patched execv might)
+    # noinspection PyUnreachableCode
     raise Exception("restart_returnn: execv failed")
 
 
@@ -3948,6 +4003,8 @@ def maybe_restart_returnn_with_atfork_patch():
     print("Restarting Returnn with atfork patch...", sys.executable, sys.argv)
     sys.stdout.flush()
     os.execvpe(sys.executable, [sys.executable] + sys.argv, env)
+    # defensive: execvpe should never return (but e.g. a monkey-patched execvpe might)
+    # noinspection PyUnreachableCode
     print("execvpe did not work?")
 
 
@@ -4085,7 +4142,7 @@ class Stats:
         """
         :param str|None output_file_prefix: if given, will numpy.savetxt mean|std_dev to disk
         :param str stream_prefix:
-        :param io.TextIOBase stream: sys.stdout by default
+        :param io.TextIOBase|None stream: sys.stdout by default
         """
         if stream is None:
             stream = sys.stdout

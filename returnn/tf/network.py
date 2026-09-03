@@ -22,6 +22,7 @@ from returnn.tf.util.data import Data
 from returnn.util import basic as util
 
 if TYPE_CHECKING:
+    from tensorflow.python.training.py_checkpoint_reader import CheckpointReader
     from returnn.config import Config
     from returnn.tf.layers.base import SearchChoices
     from returnn.tf.util.data import BatchInfo
@@ -231,7 +232,7 @@ class ExternData(TensorDict):
     def check_matched_dataset(self, dataset, used_data_keys=None):
         """
         :param Dataset.Dataset dataset:
-        :param set[str]|list[str] used_data_keys:
+        :param set[str]|list[str]|None used_data_keys: all data keys of the dataset by default
         :return: nothing, will assert the check
         """
         if used_data_keys is None:
@@ -420,7 +421,7 @@ def _num_inputs_outputs_from_config(config):
          dim is the feature dimension or the number of classes,
          and ndim is the ndim counted without batch-dim,
          i.e. ndim=1 means usually sparse data and ndim=2 means dense data.
-    :rtype: (int,dict[str,(int,int)])
+    :rtype: (int,dict[str,(int,int)|dict[str]])
     """
     num_inputs = config.int("num_inputs", 0)
     target = config.value("target", "classes")
@@ -442,7 +443,7 @@ def _num_inputs_outputs_from_config(config):
                 else:
                     num_inputs = num_inputs["shape"][-1]
             else:
-                raise TypeError("data key %r" % num_inputs)
+                raise TypeError("data key %r" % (num_inputs,))  # tuple-safe
     elif config.has("num_outputs"):
         num_outputs = {target: [config.int("num_outputs", 0), 1]}
     else:
@@ -549,6 +550,16 @@ class TFNetwork:
     The main neural network, i.e. collection of interconnected layers, i.e. computation graph with trainable params.
     """
 
+    # assigned in __init__ (partly below the first reads of other instances' attrs)
+    parent_layer: Optional[LayerBase]
+    parent_net: Optional[TFNetwork]
+    extern_data: ExternData
+    _config: Optional[Config]
+    random: numpy.random.RandomState
+    train_flag: Union[bool, tf.Tensor]
+    eval_flag: bool
+    search_flag: bool
+
     def __init__(
         self,
         config=None,
@@ -569,12 +580,15 @@ class TFNetwork:
         name="",
     ):
         """
-        :param returnn.config.Config config: only needed to init extern_data if not specified explicitly
+        :param returnn.config.Config|None config: only needed to init extern_data if not specified explicitly
         :param ExternData|None extern_data:
         :param int|None rnd_seed:
-        :param bool|tf.Tensor train_flag: True if we want to use this model in training, False if in eval, or dynamic
-        :param bool eval_flag: whether to calculate losses. if train_flag is not False, this will be set to True
-        :param bool search_flag: whether we perform a beam-search. see usage
+        :param bool|tf.Tensor|None train_flag: True if we want to use this model in training, False if in eval,
+          or dynamic. None means inherited from the base net, else False
+        :param bool|None eval_flag: whether to calculate losses. if train_flag is not False, this will be set to True.
+          None means inherited from the base net, else False
+        :param bool|None search_flag: whether we perform a beam-search. see usage.
+          None means inherited from the base net, else False
         :param returnn.tf.layers.base.LayerBase|None parent_layer:
         :param TFNetwork|None parent_net:
         :param TFNetwork|None extra_parent_net: we are on the same level (not really a child),
@@ -607,6 +621,7 @@ class TFNetwork:
 
                 set_global_config(config)
         if not config and base_net:
+            # noinspection PyProtectedMember
             config = base_net._config
         if extern_data is None:
             if extra_parent_net:
@@ -1095,7 +1110,7 @@ class TFNetwork:
                     # We explicitly allow this, and want to construct it here in this extra net, from this layer desc.
                     layer_desc = net_dict[name]
                 # In any case, this layer should have the name without that prefix,
-                # such that param-sharing etc works as expected.
+                # such that param-sharing etc. works as expected.
                 name = name_
             else:
                 return self.construct_extra_net(
@@ -1995,7 +2010,7 @@ class TFNetwork:
         if should_train or should_eval:
             # These values are cached internally and the graph nodes are created on the first call.
             loss = self.get_objective()
-            if loss is 0:
+            if isinstance(loss, int) and loss == 0:  # int 0 = no loss; a tf.Tensor must not go into `==`
                 loss = tf_util.global_tensor(lambda: tf.constant(0.0), name="zero_loss")
             else:  # non-constant-zero loss
                 assert self.losses_dict
@@ -2051,6 +2066,8 @@ class TFNetwork:
         targets = set()
         for layer in self.layers.values():
             if layer.target:
+                # layer.target is a str here; the declared type is wider
+                # noinspection PyUnhashable
                 targets.add(layer.target)
         return list(sorted(targets))
 
@@ -3228,7 +3245,7 @@ class TFNetwork:
         """
         The run options are valid during one loop over some dataset.
 
-        Contrary to epoch_step, train_flag, etc, we do not provide these as TF placeholders,
+        Contrary to epoch_step, train_flag, etc., we do not provide these as TF placeholders,
         for convenience, because it is not needed right now.
         If it is needed, it probably is easier to introduce auxiliary TF variables (on CPU) instead
         and just set them once here.
@@ -3339,7 +3356,8 @@ class TFNetwork:
         root_net = self.get_root_network()
         if root_net is not self:
             # Use the root network, to just use a single map where to look at.
-            return root_net.register_search_choices_for_beam(beam, search_choices)
+            root_net.register_search_choices_for_beam(beam, search_choices)
+            return
         self._map_search_beam_to_search_choices[beam] = search_choices
 
 
@@ -3864,10 +3882,11 @@ class LossHolder:
           but for losses coming from a subnetwork or other extended losses,
           it can be something else.
           It could look like "output", or "output/sublayer".
-        :param LayerBase layer:
+        :param LayerBase|None layer:
           We can always point to a layer where this comes from (either in the subnet, or the parent layer).
         :param Data layer_output: template describing the layer output
-        :param TFNetwork network: for which network to create this LossHolder. might be different from layer.network
+        :param TFNetwork|None network: for which network to create this LossHolder.
+            might be different from layer.network
         :param returnn.tf.layers.base.Loss loss:
         :param ((tf.Tensor)->tf.Tensor)|None reduce_func: if given, will overwrite the reduce func for the loss.
           By default, every loss_value and error_value is a scalar
@@ -3875,8 +3894,8 @@ class LossHolder:
           However, if you provide reduce_func = TFUtil.identity, you can get the unreduced tensor.
         :param tf.Tensor|None loss_value:
         :param tf.Tensor|None error_value:
-        :param tf.Tensor norm_factor:
-        :param bool only_on_eval:
+        :param tf.Tensor|None norm_factor:
+        :param bool|None only_on_eval: from the layer by default
         """
         if layer and not network:
             network = layer.network
@@ -3917,8 +3936,7 @@ class LossHolder:
         self._layer = layer
         if self._only_on_eval is None:
             self._only_on_eval = layer.only_on_eval
-        if self._network is None:
-            self._network = layer.network
+        # (no network refill: __init__ asserts network is always provided)
         return self
 
     def get_layer(self):
@@ -4586,12 +4604,13 @@ class CustomCheckpointLoader:
         def __repr__(self):
             return "<CustomParamImporter %r on layer %r>" % (self.layer.custom_param_importer, self.layer.name)
 
-        # noinspection PyUnusedLocal
         def assign_var(self, var, session):
             """
             :param tf.Variable var:
             :param tf.compat.v1.Session session:
             """
+            # the CustomParamImporter callback signature; the value is written via the session
+            del var  # written via the session
             # This function gets called for every param of the layer.
             # However, the underlying custom_param_importer API
             # will assign all the layer params together,
@@ -5005,13 +5024,14 @@ class CustomCheckpointLoader:
                 )
         var_name_map.update({name: make_load_renamed(old_name) for name, old_name in self.var_name_mapping.items()})
 
-        if self.custom_missing_load_func:
+        if self.custom_missing_load_func is not None:
             for var_name in missing_var_names:
                 if var_name in var_name_map:
                     continue
                 var = self.var_net_names[var_name]
                 var_shape = tuple(var.get_shape().as_list())
                 assert all(isinstance(d, int) for d in var_shape), f"var {var_name} {var} unknown?"
+                assert callable(self.custom_missing_load_func)
                 res = self.custom_missing_load_func(
                     name=var_name,
                     shape=var_shape,
@@ -5142,9 +5162,7 @@ class CustomLoadParamFunc(Protocol):
     This is a custom param importer function.
     """
 
-    def __call__(
-        self, *, name: str, shape: Tuple[int], reader: tf.compat.v1.train.NewCheckpointReader
-    ) -> Optional[numpy.ndarray]: ...
+    def __call__(self, *, name: str, shape: Tuple[int, ...], reader: CheckpointReader) -> Optional[numpy.ndarray]: ...
 
 
 def set_custom_post_init(var, func):
@@ -5158,6 +5176,8 @@ def set_custom_post_init(var, func):
     # This custom attribute is a big ugly but simple.
     # It's read in TFNetwork.initialize_params().
     assert callable(func)
+    # RETURNN plants this attr on tf.Variable
+    # noinspection PyUnresolvedReferences
     var.custom_post_init = func
 
 

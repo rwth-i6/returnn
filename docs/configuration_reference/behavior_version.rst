@@ -22,7 +22,7 @@ and not listing legacy/deprecated parameters.
 Version History
 ---------------
 
-Behavior version 30 (2026-08-06)
+Behavior version 32 (2026-09-03)
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 PyTorch backend optimizer weight-decay split:
@@ -44,6 +44,52 @@ and remaps their per-parameter state by name
 (their group hyperparameters then follow the new groups).
 
 See PR `#1830 <https://github.com/rwth-i6/returnn/pull/1830>`__.
+
+Behavior version 31 (2026-08-26)
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+The behavior version is now propagated to spawned dataset worker subprocesses:
+the PyTorch dataloader workers, :class:`MultiProcDataset`, :class:`PostprocessingDataset`
+and the :class:`DistributeFilesDataset` sub-epoch workers.
+
+Before, only the config was copied there, and ``BehaviorVersion.get()`` fell back to the minimum
+(normally 0), so version-gated behavior silently differed between main process and dataset worker.
+Note that the dataset lives in such a worker by default,
+since the dataloader defaults to ``num_workers = 1``.
+
+The visible case is :class:`DistributeFilesDataset` sharding:
+its ``behavior_version >= 26`` gate is evaluated in the worker,
+so a config with ``behavior_version = 26`` still got the legacy double sharding,
+where every rank consumes only 1/N^2 of the data.
+
+There is also the global config option ``propagate_behavior_version_to_subprocs: bool``
+to override in both directions.
+
+See issue `#1837 <https://github.com/rwth-i6/returnn/issues/1837>`__.
+
+Behavior version 30 (2026-08-09)
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+:func:`returnn.tf.native_op.ctc_loss` and :func:`returnn.tf.native_op.ctc_loss_viterbi`:
+a sequence with no valid alignment
+(targets longer than the input, or repeated labels with too few frames for the blanks between them)
+now contributes 0 loss AND 0 gradient, as PyTorch ``ctc_loss(zero_infinity=True)`` does.
+
+Before, the two failed differently, both silently wrong:
+
+``ctc_loss`` gave loss 0 but an error signal of ``softmax(logits)``.
+:func:`fast_baum_welch` finds no path, so the Baum-Welch term is 0 and only ``exp(log_sm)`` remains,
+i.e. a full-magnitude gradient pushing the distribution toward uniform
+on exactly the frames that carry no supervision.
+
+``ctc_loss_viterbi`` gave loss ``inf``, which poisons the batch loss,
+and :func:`fast_viterbi` fills the alignment of such a sequence with its mask index,
+so the cross entropy trained toward that filler label at full strength.
+
+There is also the global config option ``tf_native_ctc_zero_infinity: bool``
+and the explicit ``zero_infinity`` argument to override in both directions.
+The RF TF backend always passes ``zero_infinity=True``, independent of the behavior version,
+so it matches the PyTorch backend.
 
 Behavior version 29 (2026-08-03)
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -106,6 +152,11 @@ rather than silently doing the wrong thing as a special flag value would);
 ``sharding_fix=False`` keeps the legacy behavior.
 
 See issue `#1738 <https://github.com/rwth-i6/returnn/issues/1738>`__.
+
+**Important/warning**:
+there is a high chance that behavior version 26 is still not enough,
+because of issue `#1837 <https://github.com/rwth-i6/returnn/issues/1837>`__,
+and you actually need at least behavior version 31.
 
 Behavior version 25 (2026-03-01)
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~

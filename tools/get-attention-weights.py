@@ -26,12 +26,14 @@ import sys
 import numpy as np
 import argparse
 from glob import glob
-import typing
+from typing import Optional
 
-# Returnn imports
+# RETURNN imports
 import _setup_returnn_env  # noqa
+
 import returnn.__main__ as rnn
 from returnn.tf.engine import Runner
+from returnn.config import Config
 from returnn.datasets import init_dataset
 from returnn.util.basic import NumbersDict, Stats, deep_update_dict_values
 
@@ -64,7 +66,7 @@ def inject_retrieval_code(net_dict, rec_layer_name, layers, dropout):
     return new_layers_descr
 
 
-config = None  # type: typing.Optional["returnn.config.Config"]
+config: Optional[Config] = None
 
 
 def init_returnn(config_fn, args):
@@ -198,6 +200,7 @@ def main(argv):
     if hasattr(dataset, "epoch_wise_filter") and args.reset_epoch_wise_filter is None:
         if dataset.epoch_wise_filter:
             print("NOTE: Resetting epoch_wise_filter to None.")
+            # noinspection PyUnresolvedReferences
             dataset.epoch_wise_filter = None
     if args.reset_partition_epoch:
         assert dataset.partition_epoch == args.reset_partition_epoch

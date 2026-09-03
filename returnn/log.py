@@ -75,10 +75,10 @@ class Log:
         """
         This resets and configures the "returnn" logger.
 
-        :param list[str|logging.Handler] logs: "stdout", "|<pipe-cmd>", "<filename>"|"<filename>$date<ext>".
+        :param list[str|logging.Handler]|None logs: "stdout", "|<pipe-cmd>", "<filename>"|"<filename>$date<ext>".
           "stdout" is always added when propagate=False.
-        :param list[int] verbosity: levels 0-5 for the log handlers
-        :param list[str] formatter: 'default', 'timed', 'raw' or 'verbose', for the log handlers
+        :param list[int]|None verbosity: levels 0-5 for the log handlers
+        :param list[str]|None formatter: 'default', 'timed', 'raw' or 'verbose', for the log handlers
         :param bool propagate:
         """
         if formatter is None:

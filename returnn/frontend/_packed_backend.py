@@ -87,7 +87,7 @@ __all__ = ["PackedRawTensor", "PackedBackend", "pack", "pack_import", "unpack", 
 # so equal-length dims share the entry
 # (e.g. the fresh kv dim which attention creates per layer via replace_dim),
 # and it maps dims in cached outputs back to the queried dims.
-_layout_cache = Cache(128)
+_layout_cache = Cache(128)  # trace-boundary-safe, see rf._cache
 
 
 def _packing_cache_key(kind: str, raw: PackedRawTensor, device) -> Tuple[Any, ...]:
@@ -203,6 +203,7 @@ class PackedRawTensor:
         gap: int = 0,
         align: int = 1,
         layout_lens: Optional[Tensor] = None,
+        content_bound: Optional[int] = None,
     ):
         self.inner = inner
         self.packed_dim = packed_dim
@@ -231,6 +232,29 @@ class PackedRawTensor:
         # where the out footprint old_footprint // stride is not a function of the out content length.
         # None = the footprint follows the content lens (the default closed form).
         self.layout_lens = layout_lens
+        # content_bound = static upper bound on the packed CONTENT total (sum of seq lens),
+        # carried under static tracing to derive re-layout buffer bounds ABSOLUTELY
+        # (regap target = content_bound + capacity * (gap' + align' - 1), see _regap_total_bound):
+        # the declared buffer bound mixes content room and layout slack, and deriving one
+        # from the other is exactly what under-allocated buffers (shrink) or ratcheted them
+        # (never-shrink). Unchanged by regap; divided by strides; grows with pad.
+        # None = unknown (dynamic packings; regap bounds then fall back to conservative).
+        self.content_bound = content_bound
+
+    def __repr__(self) -> str:
+        # the asserts in pack()/regap() interpolate the raw tensor, and the layout is exactly
+        # what one needs to see there; the default <object at 0x...> says nothing.
+        parts = [
+            f"packed_dim={self.packed_dim}",
+            f"orig_dims={list(self.orig_dims)}",
+            f"gap={self.gap}",
+            f"align={self.align}",
+        ]
+        if self.layout_lens is not None:
+            parts.append("layout_lens=set")
+        if self.content_bound is not None:
+            parts.append(f"content_bound={self.content_bound}")
+        return f"<{type(self).__name__} {' '.join(parts)} inner={self.inner}>"
 
     @property
     def has_gap_frames(self) -> bool:
@@ -247,8 +271,11 @@ class PackedRawTensor:
         assert last.dyn_size_ext is not None, f"packed dim {last} needs dyn sizes"
         return last.dyn_size_ext
 
-    def seq_starts(self) -> Tuple[Tensor, Dim]:
+    def seq_starts(self, *, device: Optional[str] = None) -> Tuple[Tensor, Dim]:
         """
+        :param device: where to put the starts;
+            they derive from dim sizes, which live on the host,
+            so a caller indexing data on the device must ask for it
         :return: (starts, seqs_dim):
             start offset of every sequence in the packed buffer,
             flattened row-major over the packed dims except the innermost (matching the packed layout),
@@ -257,6 +284,8 @@ class PackedRawTensor:
         """
         starts, seqs_dim = _seq_starts_math(self.orig_dims, self.gap, self.align, layout_lens=self.layout_lens)
         assert starts is not None, f"seq_starts: no outer packed dims in {self.orig_dims}"
+        if device is not None:
+            starts = rf.copy_to_device(starts, device)
         return starts, seqs_dim
 
     def cu_seqlens(self, *, device: Optional[str] = None) -> Tuple[Tensor, Dim]:
@@ -347,6 +376,7 @@ class PackedRawTensor:
             gap=self.gap,
             align=self.align,
             layout_lens=self.layout_lens,
+            content_bound=self.content_bound,
         )
         return out
 
@@ -460,16 +490,19 @@ def _warn_regap_enabled() -> bool:
     return False
 
 
-def _att_fast_paths_enabled() -> bool:
+def _att_fast_paths_enabled(op_name: str) -> bool:
     """
-    :return: whether the packed attention fast paths (Triton rel-pos, flash varlen, flex, NJT, per-seq)
+    :param op_name: "rel_pos_self_attention" or "scaled_dot_product_attention"
+    :return: whether this op's packed fast paths (Triton rel-pos, flash varlen, flex, NJT, per-seq)
         may be used.
 
-    Config option ``rf_packed_att_fast_paths``, default True.
-    Disabled, the attentions take the unpack -> padded op -> repack fallback
+    Config option ``rf_packed_att_fast_paths``, default True:
+    True = all ops use their fast paths, False = none,
+    or a collection of op names = only those ops use their fast paths.
+    An op without its fast paths takes the unpack -> padded op -> repack fallback
     (which must then be allowed, see ``packed_fallback_allowed``):
     exact padded attention numerics while everything else stays packed.
-    A diagnostic switch, e.g. to bisect a training difference down to the attention kernels.
+    A diagnostic switch, e.g. to bisect a training difference down to one attention kernel.
     """
     from returnn.config import get_global_config
 
@@ -477,7 +510,9 @@ def _att_fast_paths_enabled() -> bool:
     if config:
         if "rf_packed_att_fast_paths" in config.typed_dict:
             value = config.typed_dict["rf_packed_att_fast_paths"]
-            assert value is None or isinstance(value, bool)
+            assert value is None or isinstance(value, (bool, list, tuple, set))
+            if isinstance(value, (list, tuple, set)):
+                return op_name in value
             if value is not None:
                 return value
         elif "rf_packed_att_fast_paths" in config.dict:
@@ -791,39 +826,66 @@ def _packed_total(orig_dims: Sequence[Dim], gap: int, align: int, *, layout_lens
     return rf.cast(rf.reduce_sum(footprints, axis=list(footprints.dims)), "int32")
 
 
+def _capacity_n(orig_dims: Sequence[Dim]) -> Optional[int]:
+    """:return: static product of the outer packed dims' sizes/capacities, None if unknown"""
+    n = 1
+    for d in orig_dims[:-1]:
+        c = d.capacity if d.dimension is None else d.dimension
+        if c is None:
+            return None
+        n *= c
+    return n
+
+
+def _content_bound_strided(raw: PackedRawTensor, st: int) -> Optional[int]:
+    """
+    :return: content bound of a stride-st output packing.
+        Per seq the content maps len -> ceildiv(len - span, st) <= len/st + 1,
+        so the sum is bounded by ceildiv(content_bound, st) + capacity.
+    """
+    if raw.content_bound is None or st == 1:
+        return raw.content_bound
+    n = _capacity_n(raw.orig_dims)
+    if n is None:
+        return None
+    return -(-raw.content_bound // st) + n
+
+
 def _regap_total_bound(raw: PackedRawTensor, gap: int, align: int) -> int:
     """
     :return: static packed-buffer bound for a re-layout of ``raw`` to the given gap/align
 
-    Derived from the bound DECLARED for the packing (see :func:`pack` total_bound):
-    the content does not change, only the per-seq gap does,
-    so the buffer grows by at most the added gap per seq.
-    The declared bound is a property of the packing, not of one tensor,
-    so two tensors of the same packing always derive the SAME bound
-    -- which ops rely on when they combine them.
-    Deriving it from the per-seq capacities instead
-    would put every seq at its full length simultaneously,
-    a batch that the total bound already rules out
+    Primary derivation: ABSOLUTE, from the carried content bound (see PackedRawTensor.content_bound):
+    each seq occupies at most len + gap + align - 1 frames, so
+    content_bound + capacity * (gap + align - 1) always suffices -- for growing AND shrinking,
+    with exact gap -> 0 -> gap round trips (no ratchet, no under-allocation).
+    The content bound is a property of the packing, so two tensors of the same packing
+    always derive the SAME bound -- which ops rely on when they combine them.
+
+    Fallback (no content bound carried): conservative, derived from the DECLARED buffer bound.
+    Its decomposition into content room and layout slack is unknown, so a shrink must not
+    subtract anything (a bound sized without capacity*gap slack -- e.g. a measured bound --
+    would then under-allocate -> out-of-bounds scatter, a corrupted CUDA context).
+    Deriving from the per-seq capacities instead would put every seq at its full length
+    simultaneously, which the batch size already rules out
     (loq: 200 * 19.5s = 3900s of audio in a batch that holds 1000s).
     """
+    n_seqs = _capacity_n(raw.orig_dims)
+    assert n_seqs is not None, f"regap: packed dims {raw.orig_dims[:-1]} need a static size or capacity"
+    if raw.content_bound is not None:
+        return raw.content_bound + n_seqs * (gap + align - 1)
     cur_bound = raw.packed_dim.dimension
     assert cur_bound is not None, (
         f"regap: static traceable (rf.is_static_traceable) requires a static packed dim (pack total_bound), got {raw}"
     )
-    n_seqs = 1
-    for d in raw.orig_dims[:-1]:
-        c = d.capacity if d.dimension is None else d.dimension
-        assert c is not None, f"regap: packed dim {d} needs a static size or capacity"
-        n_seqs *= c
     if align != raw.align:
-        # a new alignment shifts every per-seq footprint,
-        # so the signed delta below does not apply.
+        # a new alignment shifts every per-seq footprint, so the signed delta below does not apply.
         # cur_bound >= sum(len), and each seq then needs at most len + gap + align.
         return cur_bound + n_seqs * (gap + align)
     # per seq, ceil((len + gap)/align) - ceil((len + raw.gap)/align) <= ceil((gap - raw.gap)/align).
-    # SIGNED: a smaller gap needs less buffer, and only then is the bound a function of the layout --
-    # otherwise regapping away and back (attention: gap -> 0 -> gap) grows it by n_seqs every time.
     grow = -(-(gap - raw.gap) // align) * align
+    if grow < 0:
+        return cur_bound  # shrink: unknown decomposition, see the docstring
     return cur_bound + n_seqs * grow
 
 
@@ -974,10 +1036,14 @@ def _pack_like(x: Tensor, template: PackedRawTensor) -> Optional[Tensor]:
     for d in in_dims:
         coords = _frame_coords(template, d)
         if idx is not None:
-            # stride from x's BACKED raw shape (a plain int, no get_dim_value host read):
+            # stride from x's BACKED raw shape (no get_dim_value host read):
             # it must match the actual flat buffer layout,
             # and under CUDA-graph capture a dyn-size read would sync / go stale on replay.
-            idx = idx * x.raw_tensor.shape[x.dims.index(d)] + coords
+            # get_shape_tuple_raw: an int where statically known (torch: always),
+            # else a graph-side scalar (TF graph mode; also fine: stays in-graph, no host read).
+            # noinspection PyProtectedMember
+            stride = x._raw_backend.get_shape_tuple_raw(x.raw_tensor)[x.dims.index(d)]
+            idx = idx * stride + coords
         else:
             idx = coords
     return rf.gather(x_flat, indices=idx, axis=flat_dim)
@@ -1203,7 +1269,15 @@ def _conform_packing(x, target_raw: PackedRawTensor):
     if isinstance(x, Tensor) and is_packed(x):
         xr = x.raw_tensor
         if not target_raw.same_packing(xr) and xr.orig_dims == target_raw.orig_dims:
-            total = int(target_raw.packed_dim.get_dim_value())
+            total = target_raw.packed_dim.get_dim_value()
+            if not isinstance(total, int):
+                # graph-mode build (TF), dynamic packed dim: int() would need a host read.
+                # regap then derives the total itself -- the same layout formula the target
+                # packing used, so the sizes agree and the replace_dim below rewraps cleanly.
+                # (A static target dim -- tf_static_shapes / pack total_bound -- stays an int.)
+                total = None
+            else:
+                total = int(total)
             y = regap(x, target_raw.gap, align=target_raw.align, layout_lens=target_raw.layout_lens, total_bound=total)
             yr = y.raw_tensor
             if yr.packed_dim != target_raw.packed_dim:
@@ -1255,7 +1329,9 @@ def _dim_aware_call(name: str, args, kwargs):
                     {k: (dense if v is src else v) for k, v in kwargs.items()},
                 )
                 if isinstance(out, Tensor) and is_packed(out) and out.raw_tensor.same_packing(dense.raw_tensor):
-                    back = regap(out, raw0.gap, align=raw0.align)
+                    # match raw0's CAPACITY too, not just its layout:
+                    # the replace_dim below relabels the packed dim, it cannot resize the buffer
+                    back = regap(out, raw0.gap, align=raw0.align, total_bound=raw0.packed_dim.dimension)
                     inner, _ = rf.replace_dim(
                         back.raw_tensor.inner, in_dim=back.raw_tensor.packed_dim, out_dim=raw0.packed_dim
                     )
@@ -1301,8 +1377,11 @@ def _flatten(values):
 _njt_sdpa_env_broken = False
 
 
-def _sdpa_no(reason: str):
-    """warn once + None: the packed varlen SDPA is not applicable, the generic path runs"""
+def _sdpa_no(reason: str) -> None:
+    """warn once + None: the packed varlen SDPA is not applicable, the generic path runs.
+
+    Returns None so callers can ``return _sdpa_no(...)`` from a ``-> Optional[Tensor]`` function.
+    """
     _warn_fallback_once(
         "scaled_dot_product_attention",
         reason,
@@ -2234,6 +2313,243 @@ def _torch_triton_rel_pos_attention(
     return qu_raw.rewrap(out_inner, name="rel_pos_att_triton")
 
 
+def _jax_triton_rel_pos_attention(
+    query: Tensor,
+    key: Tensor,
+    value: Tensor,
+    pos_emb: Tensor,
+    *,
+    pos_bias_u: Optional[Tensor],
+    pos_bias_v: Optional[Tensor],
+    att_dropout: float,
+    v_feat_dim: Dim,
+    qk_feat_dim: Dim,
+    kv_spatial_dim: Dim,
+    query_spatial_dim: Dim,
+    pos_emb_spatial_dim: Dim,
+) -> Optional[Tensor]:
+    """
+    Packed rel-pos self-attention under the JAX backend, on the same Triton kernels as torch.
+
+    The kernels are framework-neutral; only their launcher differs
+    (:mod:`returnn.jax.util.rel_pos_att_triton` wraps them in jax.custom_vjp).
+    Verified bit-identical to the torch wrapper, forward and all four gradients.
+
+    Materialized position term only -- torch's fused-bd variant is a torch.library custom op.
+    None if not applicable, then the caller's fallbacks run.
+
+    :param query:
+    :param key:
+    :param value:
+    :param pos_emb:
+    :param pos_bias_u:
+    :param pos_bias_v:
+    :param att_dropout:
+    :param v_feat_dim:
+    :param qk_feat_dim:
+    :param kv_spatial_dim:
+    :param query_spatial_dim:
+    :param pos_emb_spatial_dim:
+    :return: the attention output, packed like the query
+    """
+    if not (is_packed(query) and is_packed(key) and is_packed(value)) or is_packed(pos_emb):
+        return None
+    q_raw, k_raw, v_raw = query.raw_tensor, key.raw_tensor, value.raw_tensor
+    if q_raw.inner_backend.name != "jax":
+        return None
+    # Not the tensor's device: under jit it is a tracer, which has none (see JaxBackend.get_device),
+    # and that is exactly the case this path is for. The backend's default device decides.
+    if query.device is not None and not str(query.device).startswith("cuda"):
+        return None
+    import jax
+
+    if jax.devices()[0].platform != "gpu":
+        return None
+    try:
+        from returnn.jax.util import rel_pos_att_triton as jax_rel_pos
+    except ImportError:
+        return None
+    if not k_raw.same_packing(v_raw):
+        return None
+    if kv_spatial_dim != k_raw.orig_dims[-1] or query_spatial_dim != q_raw.orig_dims[-1]:
+        return None
+    if q_raw.orig_dims[:-1] != k_raw.orig_dims[:-1] or not _same_seq_lens(query_spatial_dim, kv_spatial_dim):
+        return None
+    if (q_raw.gap, q_raw.align) != (k_raw.gap, k_raw.align) or q_raw.layout_lens is not k_raw.layout_lens:
+        return None
+    if len(q_raw.orig_dims) != 2:
+        return None
+
+    import jax.numpy as jnp
+
+    q_with_bias_u = (query + pos_bias_u) if pos_bias_u is not None else query
+    q_with_bias_v = (query + pos_bias_v) if pos_bias_v is not None else query
+    if not is_packed(q_with_bias_u) or not is_packed(q_with_bias_v):
+        return None
+    qu_raw = q_with_bias_u.raw_tensor
+    q_inner, k_inner, v_inner = qu_raw.inner, k_raw.inner, v_raw.inner
+    head_dims = [d for d in q_inner.dims if d not in (qu_raw.packed_dim, qk_feat_dim)]
+    if len(head_dims) != 1 or head_dims[0].dimension is None:
+        return None
+    heads_dim = head_dims[0]
+    if set(k_inner.dims) != {k_raw.packed_dim, heads_dim, qk_feat_dim}:
+        return None
+    if set(v_inner.dims) != {v_raw.packed_dim, heads_dim, v_feat_dim}:
+        return None
+    q_t = q_inner.copy_transpose([qu_raw.packed_dim, heads_dim, qk_feat_dim]).raw_tensor
+    k_t = k_inner.copy_transpose([k_raw.packed_dim, heads_dim, qk_feat_dim]).raw_tensor
+    v_t = v_inner.copy_transpose([v_raw.packed_dim, heads_dim, v_feat_dim]).raw_tensor
+
+    bd_scale = qk_feat_dim.dimension**-0.5
+    if not {pos_emb_spatial_dim, qk_feat_dim} <= set(pos_emb.dims) <= {pos_emb_spatial_dim, heads_dim, qk_feat_dim}:
+        return None
+    qv_raw = q_with_bias_v.raw_tensor
+    if set(qv_raw.inner.dims) != {qv_raw.packed_dim, heads_dim, qk_feat_dim}:
+        return None
+    # q and qv are indexed by the same rows below, so they must share the packing.
+    # The non-fused path got this for free: it derived bd from qv and checked bd's packed dim.
+    if not qu_raw.same_packing(qv_raw):
+        return None
+    # Fused position term: bd is built inside the op, forward and backward,
+    # so it never becomes a residual,
+    # and nothing retains a (total, heads, 2T-1) buffer per layer.
+    # The torch backend does the same, see rel_pos_att_varlen_fused_bd.
+    qv_t = qv_raw.inner.copy_transpose([qv_raw.packed_dim, heads_dim, qk_feat_dim]).raw_tensor.astype(q_t.dtype)
+    pos_t = pos_emb.copy_compatible_to_dims_raw((pos_emb_spatial_dim, heads_dim, qk_feat_dim))
+    if pos_t.shape[1] != heads_dim.dimension:
+        pos_t = jnp.broadcast_to(pos_t, (pos_t.shape[0], heads_dim.dimension, pos_t.shape[2]))
+    pos_t = pos_t.astype(q_t.dtype)
+
+    max_len = int(query_spatial_dim.get_dim_value())
+    if int(pos_emb_spatial_dim.get_dim_value()) != 2 * max_len - 1:
+        return None  # only the standard centered layout
+    starts_rf, _ = _seq_starts_math(
+        q_raw.orig_dims, q_raw.gap, q_raw.align, layout_lens=q_raw.layout_lens, device=query.device
+    )
+    if starts_rf is None:
+        return None
+    starts = starts_rf.raw_tensor.astype(jnp.int32).reshape(-1)
+    lens = query_spatial_dim.get_dyn_size_ext_for_device(query.device).raw_tensor.astype(jnp.int32).reshape(-1)
+
+    out_t = jax_rel_pos.rel_pos_att_varlen_fused_bd(
+        q_t, k_t, v_t, qv_t, pos_t, starts, lens, max_len, att_dropout, 0, bd_scale, bd_scale
+    )
+    out_inner = Tensor(
+        "rel_pos_att_triton",
+        dims=[qu_raw.packed_dim, heads_dim, v_feat_dim],
+        dtype=qu_raw.inner_backend.get_dtype_name_raw(out_t),
+        feature_dim=v_feat_dim,
+    )
+    out_inner.raw_tensor = out_t
+    _count_attention_path("rel_pos_triton_jax")
+    return qu_raw.rewrap(out_inner, name="rel_pos_att_triton")
+
+
+def _packed_sdpa_varlen(
+    query: Tensor,
+    key: Tensor,
+    value: Tensor,
+    *,
+    att_dropout: float,
+    v_feat_dim: Dim,
+    qk_feat_dim: Dim,
+    kv_spatial_dim: Dim,
+    query_spatial_dim: Dim,
+    is_causal: bool,
+    scale: Optional[float],
+) -> Optional[Tensor]:
+    """
+    Packed attention through the backend's varlen kernel (:func:`Backend.sdpa_varlen_raw`),
+    for a fully packed query and key/value,
+    which may carry different packings (cross-attention).
+
+    Everything here is backend-neutral RF/layout work.
+    Only the kernel call goes to the backend,
+    which returns None when it has none,
+    so the caller falls through to its other paths.
+
+    :param query: packed
+    :param key: packed
+    :param value: packed, same packing as key
+    :param att_dropout:
+    :param v_feat_dim:
+    :param qk_feat_dim:
+    :param kv_spatial_dim:
+    :param query_spatial_dim:
+    :param is_causal:
+    :param scale: qk scale, 1/sqrt(qk_feat_dim) if not given
+    :return: the attention output packed like the query, or None
+    """
+    if not (is_packed(query) and is_packed(key) and is_packed(value)):
+        return None
+    q_raw, k_raw, v_raw = query.raw_tensor, key.raw_tensor, value.raw_tensor
+    if not k_raw.same_packing(v_raw):
+        return None
+    if kv_spatial_dim != k_raw.orig_dims[-1] or query_spatial_dim != q_raw.orig_dims[-1]:
+        return None
+    if q_raw.orig_dims[:-1] != k_raw.orig_dims[:-1] or len(q_raw.orig_dims) != 2:
+        return None
+    if is_causal and not q_raw.same_packing(k_raw):
+        # causal needs one shared diagonal, i.e. self-attention
+        return None
+    q_inner, k_inner, v_inner = q_raw.inner, k_raw.inner, v_raw.inner
+    head_dims = [d for d in q_inner.dims if d not in (q_raw.packed_dim, qk_feat_dim)]
+    if len(head_dims) != 1 or head_dims[0].dimension is None:
+        return None
+    heads_dim = head_dims[0]
+    if set(k_inner.dims) != {k_raw.packed_dim, heads_dim, qk_feat_dim}:
+        return None
+    if set(v_inner.dims) != {v_raw.packed_dim, heads_dim, v_feat_dim}:
+        return None
+    starts_q, lens_q = _packed_seq_starts_lens_raw(q_raw, query_spatial_dim, query.device)
+    starts_kv, lens_kv = _packed_seq_starts_lens_raw(k_raw, kv_spatial_dim, query.device)
+    if starts_q is None or starts_kv is None:
+        return None
+    out_t = q_raw.inner_backend.sdpa_varlen_raw(
+        query=q_inner.copy_transpose([q_raw.packed_dim, heads_dim, qk_feat_dim]).raw_tensor,
+        key=k_inner.copy_transpose([k_raw.packed_dim, heads_dim, qk_feat_dim]).raw_tensor,
+        value=v_inner.copy_transpose([v_raw.packed_dim, heads_dim, v_feat_dim]).raw_tensor,
+        seq_starts_q=starts_q,
+        seq_lens_q=lens_q,
+        seq_starts_kv=starts_kv,
+        seq_lens_kv=lens_kv,
+        max_len_q=int(query_spatial_dim.get_dim_value()),
+        max_len_kv=int(kv_spatial_dim.get_dim_value()),
+        is_causal=is_causal,
+        dropout_p=att_dropout,
+        scale=scale if scale is not None else qk_feat_dim.dimension**-0.5,
+    )
+    if out_t is None:
+        return None
+    out_inner = Tensor(
+        "sdpa_varlen",
+        dims=[q_raw.packed_dim, heads_dim, v_feat_dim],
+        dtype=q_raw.inner_backend.get_dtype_name_raw(out_t),
+        feature_dim=v_feat_dim,
+    )
+    out_inner.raw_tensor = out_t
+    _count_attention_path("sdpa_varlen")
+    return q_raw.rewrap(out_inner, name="sdpa_varlen")
+
+
+def _packed_seq_starts_lens_raw(raw, spatial_dim: Dim, device: Optional[str]):
+    """
+    :param raw: the packed raw tensor
+    :param spatial_dim: its (unpacked) spatial dim
+    :param device:
+    :return: (starts, lens) as flat int32 raw tensors, or (None, None)
+    """
+    starts_rf, _ = _seq_starts_math(raw.orig_dims, raw.gap, raw.align, layout_lens=raw.layout_lens, device=device)
+    if starts_rf is None:
+        return None, None
+    batch_dim = raw.orig_dims[0]
+    starts = rf.cast(starts_rf, "int32").copy_compatible_to_dims_raw([batch_dim])
+    lens = rf.cast(rf.copy_to_device(spatial_dim.dyn_size_ext, device), "int32").copy_compatible_to_dims_raw(
+        [batch_dim]
+    )
+    return starts, lens
+
+
 def _rel_pos_attention_per_seq(
     query: Tensor,
     key: Tensor,
@@ -2319,7 +2635,14 @@ def _rel_pos_attention_per_seq(
         off += seq_len
     inner_new, cat_dim = rf.concat(*outs)
     inner_new, _ = rf.replace_dim(inner_new, in_dim=cat_dim, out_dim=q_raw.packed_dim)
-    helper = PackedRawTensor(inner=inner_new, packed_dim=q_raw.packed_dim, orig_dims=q_raw.orig_dims, gap=0, align=1)
+    helper = PackedRawTensor(
+        inner=inner_new,
+        packed_dim=q_raw.packed_dim,
+        orig_dims=q_raw.orig_dims,
+        gap=0,
+        align=1,
+        content_bound=q_raw.content_bound,
+    )
     out = helper.rewrap(inner_new, name="rel_pos_att_per_seq")
     _count_attention_path("rel_pos_per_seq")
     if orig_layout != (0, 1) or orig_layout_lens is not None:
@@ -2340,9 +2663,15 @@ def _strided_out_wrapper(
     """
     footprints, seqs_dim = _seq_footprints(raw.orig_dims, raw.gap, raw.align, layout_lens=raw.layout_lens)
     align_out = max(raw.align // st, 1)
+    cb_out = _content_bound_strided(raw, st)
     if footprints is None:
         helper = PackedRawTensor(
-            inner=out_inner, packed_dim=out_packed_dim, orig_dims=(out_time,), gap=0, align=align_out
+            inner=out_inner,
+            packed_dim=out_packed_dim,
+            orig_dims=(out_time,),
+            gap=0,
+            align=align_out,
+            content_bound=cb_out,
         )
         return helper.rewrap(out_inner, name="conv")
     gap_out = raw.gap // st
@@ -2359,6 +2688,7 @@ def _strided_out_wrapper(
             gap=gap_out,
             align=align_out,
             layout_lens=footprints // st - gap_out,
+            content_bound=cb_out,
         )
         return helper.rewrap(out_inner, name="conv")
     # the closed-form verdict (uniform residual?) is deterministic per packing+stride -> cache it.
@@ -2375,6 +2705,12 @@ def _strided_out_wrapper(
             "packed strided conv out: host-sync layout verdict under static tracing;"
             " use the device-lens regime (device-resident seq lens + pack total_bound)"
         )
+        # noinspection PyProtectedMember
+        if not out_inner._raw_backend.executing_eagerly():
+            # graph-mode build (TF): the host reads below are impossible on symbolic tensors;
+            # skip the closed-form verdict and take the always-correct explicit re-layout
+            # instead (return None -> _extract_strided). Not cached: no data was inspected.
+            return None
         lens_out = out_time.dyn_size_ext
         for d in raw.orig_dims[:-1]:
             if d not in lens_out.dims:
@@ -2397,7 +2733,12 @@ def _strided_out_wrapper(
     if kind == "uniform":
         # uniform residual: expressible as the plain (lens, gap, align) form
         helper = PackedRawTensor(
-            inner=out_inner, packed_dim=out_packed_dim, orig_dims=out_orig_dims, gap=residual0, align=align_out
+            inner=out_inner,
+            packed_dim=out_packed_dim,
+            orig_dims=out_orig_dims,
+            gap=residual0,
+            align=align_out,
+            content_bound=cb_out,
         )
     else:
         # non-uniform residuals (mixed seq-len residuals mod stride): exact via per-seq layout lens,
@@ -2409,6 +2750,7 @@ def _strided_out_wrapper(
             gap=gap_out,
             align=align_out,
             layout_lens=footprints // st - gap_out,
+            content_bound=cb_out,
         )
     return helper.rewrap(out_inner, name="conv")
 
@@ -2452,7 +2794,14 @@ def _extract_strided(raw: PackedRawTensor, out_inner: Tensor, out_packed_dim: Di
         old_starts = old_starts // st
         src = rf.gather(old_starts, indices=seg, axis=seqs_dim, clip_to_valid=True) + t_coords
     new_inner = rf.gather(out_inner, indices=src, axis=out_packed_dim, clip_to_valid=True)
-    helper = PackedRawTensor(inner=new_inner, packed_dim=new_dim, orig_dims=out_orig, gap=gap_out, align=align_out)
+    helper = PackedRawTensor(
+        inner=new_inner,
+        packed_dim=new_dim,
+        orig_dims=out_orig,
+        gap=gap_out,
+        align=align_out,
+        content_bound=_content_bound_strided(raw, st),
+    )
     return helper.rewrap(new_inner, name="conv")
 
 
@@ -2520,6 +2869,7 @@ class PackedBackend(Backend[PackedRawTensor]):
             gap=raw_tensor.gap,
             align=raw_tensor.align,
             layout_lens=raw_tensor.layout_lens,
+            content_bound=raw_tensor.content_bound,
         )
 
     @staticmethod
@@ -2560,6 +2910,7 @@ class PackedBackend(Backend[PackedRawTensor]):
                 gap=raw.gap,
                 align=raw.align,
                 layout_lens=layout_lens,
+                content_bound=raw.content_bound,
             )
         else:
             inner_out, _ = rf.replace_dim(raw.inner, in_dim=in_dim, out_dim=out_dim)
@@ -2571,6 +2922,7 @@ class PackedBackend(Backend[PackedRawTensor]):
                 gap=raw.gap,
                 align=raw.align,
                 layout_lens=layout_lens,
+                content_bound=raw.content_bound,
             )
         return out
 
@@ -2595,6 +2947,7 @@ class PackedBackend(Backend[PackedRawTensor]):
             gap=raw_tensor.gap,
             align=raw_tensor.align,
             layout_lens=raw_tensor.layout_lens,
+            content_bound=raw_tensor.content_bound,
         )
 
     @staticmethod
@@ -2680,6 +3033,7 @@ class PackedBackend(Backend[PackedRawTensor]):
             gap=raw_tensor.gap,
             align=raw_tensor.align,
             layout_lens=raw_tensor.layout_lens,
+            content_bound=raw_tensor.content_bound,
         )
 
     @classmethod
@@ -2733,6 +3087,18 @@ class PackedBackend(Backend[PackedRawTensor]):
             opts["dim_order"] = dim_order
         out = rf.combine(_unpack_if_packed(a), kind, _unpack_if_packed(b), **opts)
         return _repack_result(out, template)
+
+    @staticmethod
+    def clip_by_value(
+        x: Tensor,
+        clip_value_min: Union[Tensor, Any],
+        clip_value_max: Union[Tensor, Any],
+        *,
+        allow_broadcast_all_sources: bool = False,
+    ) -> Tensor:
+        """clip by value"""
+        x = rf.combine(x, "maximum", clip_value_min, allow_broadcast_all_sources=allow_broadcast_all_sources)
+        return rf.combine(x, "minimum", clip_value_max, allow_broadcast_all_sources=allow_broadcast_all_sources)
 
     # noinspection PyShadowingBuiltins
     @staticmethod
@@ -2851,6 +3217,8 @@ class PackedBackend(Backend[PackedRawTensor]):
                     align=raw.align,
                     # constant footprints: the layout lens shift by the same content-len delta
                     layout_lens=(raw.layout_lens + pad_l + pad_r - span) if raw.layout_lens is not None else None,
+                    # content shrinks (or stays) per seq -> keeping the bound is a safe overestimate
+                    content_bound=raw.content_bound,
                 )
                 out = helper.rewrap(out_inner, name="conv")
                 return out, [out_time] + list(out_sp[1:])
@@ -2924,7 +3292,7 @@ class PackedBackend(Backend[PackedRawTensor]):
                     dropout_p = att_dropout if train_flag else 0.0
                 else:
                     dropout_p = None  # dynamic train flag, cannot resolve to a static dropout_p
-        if _att_fast_paths_enabled() and attention_mask is None and dropout_p is not None:
+        if _att_fast_paths_enabled("scaled_dot_product_attention") and attention_mask is None and dropout_p is not None:
             if not is_packed(query) and is_packed(key) and is_packed(value) and not is_causal:
                 k_raw = _raw(key)
                 batch_dims = k_raw.orig_dims[:-1]
@@ -2954,6 +3322,22 @@ class PackedBackend(Backend[PackedRawTensor]):
                         scale=scale,
                     )
                     return unpack(out)
+            # A backend varlen kernel, if it has one (jax: Triton; torch keeps its richer path
+            # below, which also covers the non-CUDA and dtype cases this one does not).
+            out = _packed_sdpa_varlen(
+                query,
+                key,
+                value,
+                att_dropout=dropout_p,
+                v_feat_dim=v_feat_dim,
+                qk_feat_dim=qk_feat_dim,
+                kv_spatial_dim=kv_spatial_dim,
+                query_spatial_dim=query_spatial_dim,
+                is_causal=is_causal,
+                scale=scale,
+            )
+            if out is not None:
+                return out
             # Preferred: the direct flash varlen kernels (inside _torch_sdpa_varlen_attention;
             # 2x faster than flex at model level, native dropout).
             # Fallbacks: without dropout, flex over eager NJT
@@ -3083,7 +3467,7 @@ class PackedBackend(Backend[PackedRawTensor]):
         # which a fixed CUDA-graph buffer breaks.)
         # It expresses no-dropout and per-element (non-broadcast) dropout;
         # broadcast dropout it cannot, so only that case skips it.
-        if _att_fast_paths_enabled() and not (dropout_active and att_dropout_broadcast):
+        if _att_fast_paths_enabled("rel_pos_self_attention") and not (dropout_active and att_dropout_broadcast):
             out = _torch_triton_rel_pos_attention(
                 query,
                 key,
@@ -3101,7 +3485,7 @@ class PackedBackend(Backend[PackedRawTensor]):
             if out is not None:
                 return out
         # FlexAttention fallback (no dropout support), so only when dropout is inactive.
-        if _att_fast_paths_enabled() and not dropout_active:
+        if _att_fast_paths_enabled("rel_pos_self_attention") and not dropout_active:
             out = _torch_flex_rel_pos_attention(
                 query,
                 key,
@@ -3119,8 +3503,26 @@ class PackedBackend(Backend[PackedRawTensor]):
                 return out
         else:
             _flex_no("att_dropout active in training (FlexAttention has no dropout support)")
+        if _att_fast_paths_enabled("rel_pos_self_attention"):
+            # JAX: the same Triton kernels as the torch path above, via jax.custom_vjp
+            out = _jax_triton_rel_pos_attention(
+                query,
+                key,
+                value,
+                pos_emb,
+                pos_bias_u=pos_bias_u,
+                pos_bias_v=pos_bias_v,
+                att_dropout=att_dropout,
+                v_feat_dim=v_feat_dim,
+                qk_feat_dim=qk_feat_dim,
+                kv_spatial_dim=kv_spatial_dim,
+                query_spatial_dim=query_spatial_dim,
+                pos_emb_spatial_dim=pos_emb_spatial_dim,
+            )
+            if out is not None:
+                return out
         if (
-            _att_fast_paths_enabled()
+            _att_fast_paths_enabled("rel_pos_self_attention")
             and not rf.is_static_traceable()
             and is_packed(query)
             and query.raw_tensor.inner.device == "cpu"
@@ -3271,6 +3673,8 @@ class PackedBackend(Backend[PackedRawTensor]):
                     align=raw.align,
                     # constant footprints: the layout lens shift by the same content-len delta
                     layout_lens=(raw.layout_lens + pad_l + pad_r - span) if raw.layout_lens is not None else None,
+                    # content shrinks (or stays) per seq -> keeping the bound is a safe overestimate
+                    content_bound=raw.content_bound,
                 )
                 out = helper.rewrap(out_inner, name="pool")
                 return out, [out_time] + list(out_sp[1:])
@@ -3368,6 +3772,12 @@ class PackedBackend(Backend[PackedRawTensor]):
                     align=raw.align,
                     # constant footprints: the pad frames come out of the gap
                     layout_lens=(raw.layout_lens + total_pad) if raw.layout_lens is not None else None,
+                    # every seq's content grows by total_pad
+                    content_bound=(
+                        raw.content_bound + _capacity_n(raw.orig_dims) * total_pad
+                        if raw.content_bound is not None and _capacity_n(raw.orig_dims) is not None
+                        else None
+                    ),
                 )
                 if pad_l:
                     # global shift by pad_l (seq starts stay fixed, see the docstring),
@@ -3524,8 +3934,11 @@ class PackedBackend(Backend[PackedRawTensor]):
         """
         CE over a non-packed axis (vocab), targets over the same sequences -> on packed data.
         logits [packed, vocab], targets [packed] (sparse).
-        The targets are matched to the logits packing (regap, a no-op if the layout already agrees,
-        e.g. a different per-key gap), then rewrapped onto the logits packed dim.
+        The targets are matched to the logits packing (regap, a no-op if layout AND capacity
+        already agree, e.g. a different per-key gap), then rewrapped onto the logits packed dim.
+        The capacity must be matched too, not just the layout:
+        under graph capture the logits buffer is bound-sized while the targets buffer can be exact,
+        and the rewrap only relabels the dim -- it cannot resize the raw tensor.
         Falls back if the axis is packed or the targets are not packed over the same sequences.
         """
         logits_raw = _raw(logits)
@@ -3535,7 +3948,14 @@ class PackedBackend(Backend[PackedRawTensor]):
             and isinstance(targets_raw, PackedRawTensor)
             and targets_raw.orig_dims == logits_raw.orig_dims
         ):
-            targets = regap(targets, logits_raw.gap, align=logits_raw.align, layout_lens=logits_raw.layout_lens)
+            targets = regap(
+                targets,
+                logits_raw.gap,
+                align=logits_raw.align,
+                layout_lens=logits_raw.layout_lens,
+                # None for a dynamic logits dim = keep the exact total, the previous behavior
+                total_bound=logits_raw.packed_dim.dimension,
+            )
             targets_raw = targets.raw_tensor
             target_inner = targets_raw.inner
             if targets_raw.packed_dim != logits_raw.packed_dim:
@@ -3551,6 +3971,190 @@ class PackedBackend(Backend[PackedRawTensor]):
             estimated=unpack(logits), target=_unpack_if_packed(targets), axis=axis, estimated_type="logits"
         )
         return _repack_result(out, logits_raw)
+
+    @staticmethod
+    def concat_seq_wise(*sources: Tuple[Tensor, Dim], allow_broadcast: bool = False, out_dim: Dim) -> Tensor:
+        """
+        Per-sequence concat along the packed spatial dim of separately packed sources,
+        e.g. joining an audio stream with a pseudo-speech stream.
+        Each output frame lies in exactly one source's range,
+        so it reads that source's buffer at its own sequence start plus the offset within it.
+        No padded intermediate, so no mask-and-compact afterwards.
+
+        :return: the concatenated packed tensor
+        """
+        raws = [_raw(s) if is_packed(s) else None for s, _ in sources]
+        if not _concat_seq_wise_applicable(sources, raws, out_dim):
+            return Backend.concat_seq_wise(*sources, allow_broadcast=allow_broadcast, out_dim=out_dim)
+        batch = raws[0].orig_dims[0]
+
+        dev = raws[0].inner.device
+        out_packed_dim = _concat_out_packed_dim(raws, out_dim, batch, dev)
+        helper = PackedRawTensor(
+            inner=rf.zeros([out_packed_dim], dtype="int32", device=dev),
+            packed_dim=out_packed_dim,
+            orig_dims=(batch, out_dim),
+            content_bound=out_packed_dim.dimension,
+        )
+        seq = _frame_coords(helper, batch)
+        local = _frame_coords(helper, out_dim)
+
+        out = None
+        offset = None  # where this source's frames begin within the output sequence
+        for (src, _), raw in zip(sources, raws):
+            lens = raw.orig_dims[-1].get_size_tensor(device=dev)
+            lens_at = rf.cast(rf.gather(lens, indices=seq, axis=batch), local.dtype)
+            within = local if offset is None else local - offset
+            # an empty source has no last row to clip to, so the gather would read nothing;
+            # it contributes no frames either, so skip it and keep the running offset
+            if not rf.is_static_traceable() and int(raw.packed_dim.get_dim_value()) == 0:
+                offset = lens_at if offset is None else offset + lens_at
+                continue
+            starts, seqs_dim = raw.seq_starts(device=dev)
+            rows = rf.cast(rf.gather(starts, indices=seq, axis=seqs_dim), local.dtype) + within
+            rows = rf.clip_by_value(rows, 0, _last_row(raw.packed_dim, rows.dtype))
+            vals = rf.gather(raw.inner, indices=rows, axis=raw.packed_dim)
+            if out is None:
+                out, offset = vals, lens_at
+            else:
+                out = rf.where((within >= 0) & (within < lens_at), vals, out)
+                offset = offset + lens_at
+        assert out is not None, "concat_seq_wise: every source empty"
+        res = helper.rewrap(out, name="concat")
+        if sources[0][0].feature_dim is not None and sources[0][0].feature_dim in res.dims:
+            res.feature_dim = sources[0][0].feature_dim
+        return res
+
+    @staticmethod
+    def gather(source: Tensor, *, indices, axis: Dim, clip_to_valid: bool = False) -> Tensor:
+        """
+        gather.
+        Along the innermost packed dim the index is a position inside a sequence,
+        so it only needs its sequence's start added to become a row in the flat buffer
+        (this is what shifts like a successor or predecessor lookup do).
+        Anything else takes the generic dim-aware route.
+        """
+        kwargs = dict(indices=indices, axis=axis, clip_to_valid=clip_to_valid)
+        if not is_packed(source) or not isinstance(indices, Tensor):
+            return _dim_aware_call("gather", (source,), kwargs)
+        raw = _raw(source)
+        if axis != raw.orig_dims[-1] or len(raw.orig_dims) != 2:
+            return _dim_aware_call("gather", (source,), kwargs)
+        if is_packed(indices):
+            idx = _raw(_conform_packing(indices, raw)).inner
+        elif set(indices.dims).issubset(set(raw.orig_dims)):
+            idx = _pack_like(indices, raw)
+            if idx is None:
+                return _dim_aware_call("gather", (source,), kwargs)
+        else:
+            return _dim_aware_call("gather", (source,), kwargs)
+
+        dev = raw.inner.device
+        rows = rf.range_over_dim(raw.packed_dim, device=dev)
+        local = _frame_coords(raw, axis)
+        idx = rf.cast(idx, local.dtype)
+        if clip_to_valid:
+            seq = _frame_coords(raw, raw.orig_dims[0])
+            # in the traced regime the lens already live on the data's device,
+            # where copying them would be a sync
+            lens = _device_lens(raw)
+            if lens is None:
+                lens = rf.copy_to_device(raw.seq_lens, dev)
+            last = rf.cast(rf.gather(lens, indices=seq, axis=raw.orig_dims[0]), idx.dtype) - 1
+            idx = rf.clip_by_value(idx, rf.zeros_like(last), last)
+        # the sequence starts at this frame's own row minus its position within the sequence
+        src = rows - local + idx
+        src = rf.clip_by_value(src, 0, _last_row(raw.packed_dim, src.dtype))
+        out = raw.rewrap(rf.gather(raw.inner, indices=src, axis=raw.packed_dim), name="gather")
+        # a sparse dim assigned on the virtual tensor never reached the inner buffer
+        if source.sparse_dim is not None:
+            out.sparse_dim = source.sparse_dim
+        return out
+
+    @staticmethod
+    def repeat(values: Tensor, *, in_spatial_dim: Dim, repeats: Tensor, out_spatial_dim: Dim) -> Tuple[Tensor, Dim]:
+        """
+        repeat (duration-based upsampling), packed-native.
+
+        One global scan over the durations gives a monotone table over the whole buffer,
+        so every output frame finds its source frame by a search,
+        instead of by indexing along the packed dim,
+        and the upsampling itself is a single gather.
+        The output is a fresh dense packed buffer;
+        any gap the model wants comes from a later regap.
+        """
+        in_raw = _raw(values)
+        assert in_spatial_dim == in_raw.orig_dims[-1], (
+            f"packed repeat: in_spatial_dim {in_spatial_dim} is not the innermost packed dim {in_raw.orig_dims[-1]}"
+        )
+        assert len(in_raw.orig_dims) == 2, f"packed repeat: expects (batch, spatial) packing, got {in_raw.orig_dims}"
+        batch_dim_ = in_raw.orig_dims[0]
+        dev = in_raw.inner.device
+
+        # durations, in this buffer's layout, with gap and junk frames contributing nothing
+        r_raw = _raw(_conform_packing(repeats, in_raw))
+        r_inner = r_raw.inner
+        r_mask = _frame_mask(r_raw)
+        if r_mask is not None:
+            r_inner = r_inner * rf.cast(r_mask, r_inner.dtype)
+        # global (not per-seq) inclusive scan: source frame i covers output offsets [g[i-1], g[i])
+        g = rf.cumsum(r_inner, spatial_dim=in_raw.packed_dim)
+
+        # get_size_tensor defaults to CPU; ask for the data's device, since a host round trip
+        # is a sync and illegal under capture
+        out_lens = out_spatial_dim.get_size_tensor(device=dev)
+        # output frames preceding each sequence, matching how the scan accumulates across sequences
+        out_starts = rf.cumsum(out_lens, spatial_dim=batch_dim_) - out_lens
+
+        out_packed_dim = _repeat_out_packed_dim(in_raw, out_spatial_dim, out_lens, batch_dim_, dev)
+        helper = PackedRawTensor(
+            inner=rf.zeros([out_packed_dim], dtype="int32", device=dev),
+            packed_dim=out_packed_dim,
+            orig_dims=(batch_dim_, out_spatial_dim),
+            content_bound=out_packed_dim.dimension,
+        )
+        seq = _frame_coords(helper, batch_dim_)
+        local = _frame_coords(helper, out_spatial_dim)
+        target = rf.gather(out_starts, indices=seq, axis=batch_dim_) + local
+        src = rf.search_sorted(g, target, axis=in_raw.packed_dim, side="right")
+        # junk frames search past the content; clip so the gather stays inside the buffer
+        src = rf.clip_by_value(src, 0, _last_row(in_raw.packed_dim, src.dtype))
+        out_inner = rf.gather(in_raw.inner, indices=src, axis=in_raw.packed_dim)
+        out = helper.rewrap(out_inner, name="repeat")
+        # see the note in gather: the inner buffer keeps the pre-assignment sparse dim
+        if values.sparse_dim is not None:
+            out.sparse_dim = values.sparse_dim
+        return out, out_spatial_dim
+
+    @staticmethod
+    def cumsum(source: Tensor, *, spatial_dim: Dim) -> Tensor:
+        """
+        cumsum.
+        Over a packed dim this is a segment scan:
+        one global scan over the flat buffer,
+        then subtract each sequence's own starting offset,
+        which makes the sequences independent.
+        Gap and junk frames are zeroed first,
+        so they add nothing and do not shift the sums.
+        """
+        raw = _raw(source)
+        if not _dim_refs_packed(spatial_dim, raw):
+            return raw.rewrap(rf.cumsum(raw.inner, spatial_dim=spatial_dim), name="cumsum")
+        assert spatial_dim == raw.orig_dims[-1], (
+            f"packed cumsum: only over the innermost packed dim {raw.orig_dims[-1]}, got {spatial_dim}"
+        )
+        inner = raw.inner
+        mask = _frame_mask(raw)
+        if mask is not None:
+            inner = inner * rf.cast(mask, inner.dtype)
+        total = rf.cumsum(inner, spatial_dim=raw.packed_dim)
+        # the frame a sequence starts at: its own row minus its coordinate within the sequence
+        rows = rf.range_over_dim(raw.packed_dim, device=inner.device)
+        starts = rows - _frame_coords(raw, spatial_dim)
+        prev = rf.gather(total, indices=rf.maximum(starts - 1, 0), axis=raw.packed_dim)
+        # the first sequence has nothing before it, and its scan is already correct
+        out = total - prev * rf.cast(starts > 0, prev.dtype)
+        return raw.rewrap(out, name="cumsum")
 
     @staticmethod
     def reduce(source: Tensor, *, mode: str, axis: Union[Dim, Sequence[Dim]], use_mask: bool = True) -> Tensor:
@@ -3643,7 +4247,7 @@ class PackedBackend(Backend[PackedRawTensor]):
         raw = logits.raw_tensor if is_packed(logits) else None
         if (
             raw is not None
-            and raw.inner_backend.name == "torch"
+            and raw.inner_backend.name in ("torch", "jax")
             and not max_approx
             and use_native_op is not False
             and len(raw.orig_dims) == 2
@@ -3652,22 +4256,38 @@ class PackedBackend(Backend[PackedRawTensor]):
             and set(raw.inner.dims) == {raw.packed_dim, logits.feature_dim}
             and targets_.dims_set == {raw.orig_dims[0], targets_spatial_dim}
         ):
-            import torch
-            from returnn.torch.util import native_op as torch_native_op
-
             batch_dim = raw.orig_dims[0]
-            logits_t = raw.inner.copy_transpose([raw.packed_dim, logits.feature_dim]).raw_tensor
-            if logits_t.dtype != torch.float32:
-                logits_t = logits_t.to(torch.float32)  # the native op is float32-only
-            device = logits_t.device
+            device = logits.device
+            # float32: the native op is float32-only. Cast as a Tensor, so this is one code path
+            # for every backend instead of a per-backend raw cast.
+            logits_t = rf.cast(raw.inner.copy_transpose([raw.packed_dim, logits.feature_dim]), "float32").raw_tensor
             # per-seq start offsets into the packed buffer (gapped or dense): the native op reads each
             # seq at [start, start+len), so the gap frames are never touched -- no regap needed.
             starts_rf, _ = raw.seq_starts()
-            seq_starts = rf.copy_to_device(starts_rf, device).raw_tensor.to(torch.int32).flatten()
-            in_lens = input_spatial_dim.dyn_size_ext.copy_compatible_to_dims_raw([batch_dim]).to(device)
-            targets_raw = targets_.copy_compatible_to_dims_raw([batch_dim, targets_spatial_dim]).to(device)
-            tgt_lens = targets_spatial_dim.dyn_size_ext.copy_compatible_to_dims_raw([batch_dim]).to(device)
-            loss_raw = torch_native_op.ctc_loss_packed(
+            # int32 at RF level: the native op wants int32 starts on every backend
+            seq_starts = rf.cast(rf.copy_to_device(starts_rf, device), "int32").copy_compatible_to_dims_raw([batch_dim])
+            in_lens = rf.copy_to_device(input_spatial_dim.dyn_size_ext, device).copy_compatible_to_dims_raw([batch_dim])
+            targets_raw = rf.copy_to_device(targets_, device).copy_compatible_to_dims_raw(
+                [batch_dim, targets_spatial_dim]
+            )
+            tgt_lens = rf.copy_to_device(targets_spatial_dim.dyn_size_ext, device).copy_compatible_to_dims_raw(
+                [batch_dim]
+            )
+            # Packed targets get the content-sized (packed) FSA edge layout, padded ones the
+            # rectangular batch x capacity layout. Both are correct; the packed one is just
+            # narrower. This is NOT a fallback (no unpack/re-layout happens), so it must not go
+            # through _warn_fallback_once -- callers legitimately pass padded targets.
+            edges_bound = None
+            if is_packed(targets):
+                # packed FSA edge layout: content-sized edge list (5*len+5 edges per seq).
+                # Under the static bound regime this ties the edge count to the packed text
+                # TOTAL bound instead of batch * capacity, which otherwise dominates the
+                # per-frame cost of the BW kernels (they visit every edge every frame).
+                # Eager: get_dim_value() is the actual total -> zero tail slack.
+                edges_bound = 5 * int(targets.raw_tensor.packed_dim.get_dim_value()) + 5 * int(
+                    batch_dim.get_dim_value()
+                )
+            loss_raw = raw.inner_backend.ctc_loss_packed_raw(
                 logits=logits_t,
                 seq_starts=seq_starts,
                 logits_seq_lens=in_lens,
@@ -3677,6 +4297,7 @@ class PackedBackend(Backend[PackedRawTensor]):
                 label_loop=label_loop,
                 logits_normalize=not logits_normalized,
                 blank_index=blank_index,
+                edges_bound=edges_bound,
             )
             # zero-length seqs (e.g. bound-regime padding seqs): the op returns loss 0 for them
             loss = Tensor("ctc_loss", dims=[batch_dim], dtype="float32")
@@ -3705,10 +4326,8 @@ for _name in [
     "batch_norm",
     "compare",
     "concat",
-    "cumsum",
     "expand_dim",
     "flip_no_mask",
-    "gather",
     "masked_scatter",
     "masked_select",
     "merge_dims",
@@ -3725,6 +4344,84 @@ for _name in [
     "transposed_conv",
 ]:
     setattr(PackedBackend, _name, _make_dim_aware_op(_name))
+
+
+def _last_row(packed_dim: Dim, dtype: str) -> Union[int, Tensor]:
+    """
+    :return: index of the last row of a packed buffer, to clip gather indices against.
+        A static packed dim (the traced/captured regime) gives a plain int, a dynamic one a Tensor.
+    """
+    n = packed_dim.get_dim_value_tensor()
+    return n - 1 if isinstance(n, int) else rf.cast(n - 1, dtype)
+
+
+def _concat_seq_wise_applicable(
+    sources: Sequence[Tuple[Tensor, Dim]],
+    raws: Sequence[Optional[PackedRawTensor]],
+    out_dim: Dim,
+) -> bool:
+    """
+    Whether the per-seq concat can serve these sources, i.e. every one of them is packed,
+    is concatenated along its own packed spatial dim over a shared batch,
+    and the output lens are known per seq.
+    """
+    if len(sources) < 2 or any(r is None for r in raws):
+        return False
+    if any(len(r.orig_dims) != 2 for r in raws):
+        return False
+    batch = raws[0].orig_dims[0]
+    if any(r.orig_dims[0] != batch or d != r.orig_dims[-1] for (_, d), r in zip(sources, raws)):
+        return False
+    return out_dim.dyn_size_ext is not None
+
+
+def _concat_out_packed_dim(raws: Sequence[PackedRawTensor], out_dim: Dim, batch: Dim, dev: str) -> Dim:
+    """
+    :return: the packed dim for a concat result: every source's content, end to end.
+        Static when tracing, since a captured buffer size must not vary per batch.
+    """
+    if not rf.is_static_traceable():
+        total = None
+        for raw in raws:
+            lens = raw.orig_dims[-1].get_size_tensor(device=dev)
+            n = rf.reduce_sum(lens, axis=batch)
+            total = n if total is None else total + n
+        return Dim(total, name="packed_concat")
+    bounds = [r.content_bound for r in raws]
+    assert all(b is not None for b in bounds), (
+        f"packed concat: static traceable needs a content bound on every source, got {bounds}."
+        f" It comes from the packed buffer size (pack total_bound / packed_batch_size)."
+    )
+    del out_dim  # the bound is the sum of the sources', not derived from the concat dim
+    return Dim(sum(bounds), name="packed_concat")
+
+
+def _repeat_out_packed_dim(
+    in_raw: PackedRawTensor, out_spatial_dim: Dim, out_lens: Tensor, batch_dim_: Dim, dev: str
+) -> Dim:
+    """
+    :return: the packed dim for a repeat result. Static when tracing, since a captured buffer
+        size must not vary per batch; the exact total otherwise.
+
+        The static size is the input's content bound scaled by the declared expansion factor,
+        which the caller put on out_spatial_dim.
+        Bounding each sequence separately instead
+        would assume every one of them at its full length at once, which is far looser.
+    """
+    if not rf.is_static_traceable():
+        return Dim(rf.copy_to_device(rf.reduce_sum(out_lens, axis=batch_dim_), dev), name="repeat_packed")
+    in_spatial_dim = in_raw.orig_dims[-1]
+    # noinspection PyProtectedMember
+    in_cap = in_spatial_dim.capacity or in_spatial_dim._derived_capacity()
+    # noinspection PyProtectedMember
+    out_cap = out_spatial_dim.capacity or out_spatial_dim._derived_capacity()
+    assert in_cap and out_cap and in_raw.content_bound, (
+        f"packed repeat: static traceable needs a bound on {out_spatial_dim}"
+        f" (in cap {in_cap}, out cap {out_cap}, in content bound {in_raw.content_bound})."
+        f" Pass max_len_factor to rf.repeat, which declares one."
+    )
+    factor = -(-out_cap // in_cap)
+    return Dim(in_raw.content_bound * factor, name="repeat_packed")
 
 
 def is_packed(source: Tensor) -> bool:
@@ -3809,7 +4506,13 @@ def pack_import(
     assert packed_dim in inner_flat.dims
     if feature_dim is not None and inner_flat.feature_dim is None:
         inner_flat.feature_dim = feature_dim
-    helper = PackedRawTensor(inner=inner_flat, packed_dim=packed_dim, orig_dims=(batch_dim, spatial_dim))
+    helper = PackedRawTensor(
+        inner=inner_flat,
+        packed_dim=packed_dim,
+        orig_dims=(batch_dim, spatial_dim),
+        # dense flat storage: a static buffer bound is a content bound
+        content_bound=packed_dim.dimension,
+    )
     return helper.rewrap(inner_flat, name=inner_flat.name)
 
 
@@ -3848,6 +4551,7 @@ def pack(
     if dims is None:
         dims = _auto_pack_dims(source)
         assert dims, f"pack: no dims with dynamic length found in {source}"
+    content_bound = None  # set below in the gapped/aligned branch (dense path: see the ctor call)
     if gap or align > 1:
         # gapped/aligned layout: scatter frames to their positions, zeros in between the sequences
         last = dims[-1]
@@ -3866,6 +4570,57 @@ def pack(
                 total_bound if total_bound is not None else _packed_total(dims, gap, align), name="packed_gap"
             )
         pos = _clamped_padded_positions(dims, gap, align, out_dim=out_dim, device=source.device)
+        content_bound = None
+        if out_dim.dimension is not None:
+            n_cap = _capacity_n(dims)
+            if n_cap is not None:
+                # the content bound implied by the declared buffer bound and this layout,
+                # carried on the packing so ALL later re-layout bounds derive absolutely from it.
+                # Only the gap term is subtracted, because the batcher sums RAW CONTENT lens
+                # (packed_batch_size, see pipeline.py) -- so this stays a valid bound on what a
+                # batch may carry. Deliberately NOT also minus capacity*(align-1): that would be
+                # tighter than the batcher's own budget and would reject batches it legitimately
+                # forms. The consequence, once align > 1: this is a NECESSARY but not sufficient
+                # condition, and the per-seq ends_max check right below is the one that actually
+                # catches a layout that does not fit.
+                # (An earlier version of this comment justified the same formula by claiming the
+                # batcher fills with sum(roundup(len, align)). It does not -- it sums raw lens.)
+                content_bound = out_dim.dimension - n_cap * gap
+                assert content_bound > 0, (
+                    f"pack: declared total_bound {out_dim.dimension} cannot hold ANY content"
+                    f" for capacity {n_cap} seqs with gap {gap}"
+                    f" (gap slack alone is {n_cap * gap}); raise total_bound"
+                )
+            # Verify the DECLARED bound EARLY, right at the pack entry.
+            # Every seq's last content frame must lie inside the buffer; only trailing gap /
+            # padding-slot slack may legitimately overhang (clamped + masked above). With a
+            # mis-sized bound the clamp would silently fold REAL frames onto the last slot
+            # -> data corruption far downstream; this turns it into a loud error in the eager
+            # (warmup) steps. Device-side + async (no host sync); no-op under fake tracing.
+            # The content-total check additionally validates the DERIVED content bound above,
+            # which every later regap target depends on.
+            starts, _ = _seq_starts_math(dims, gap, align, device=source.device)
+            lens_flat, _ = _seq_footprints(dims, 0, 1, device=source.device)  # gap 0 align 1 = content lens
+            # noinspection PyProtectedMember
+            if starts is not None and lens_flat is not None and starts._raw_backend.name == "torch":
+                # torch-only: assert_ is the torch device-side assert,
+                # and torch must not be imported under other backends
+                from returnn.torch.util.assert_ import assert_
+
+                ends = starts + rf.cast(lens_flat, starts.dtype)
+                ends_max = rf.reduce_max(ends, axis=list(ends.dims))
+                cond = ends_max.raw_tensor <= out_dim.dimension
+                if content_bound is not None:
+                    total_len = rf.reduce_sum(lens_flat, axis=list(lens_flat.dims))
+                    cond = cond & (total_len.raw_tensor <= content_bound)
+                assert_(
+                    cond,
+                    f"pack: content overflows the declared total_bound {out_dim.dimension}"
+                    f" (dims {list(dims)}, gap {gap}, align {align},"
+                    f" implied content bound {content_bound}):"
+                    f" the bound must hold every seq's content at its layout position"
+                    f" AND the content total; raise total_bound (e.g. config packed_total_bound)",
+                )
         inner = rf.scatter(source, indices=pos, indices_dim=list(dims), out_dim=out_dim, use_mask=True)
         packed_dim = out_dim
     else:
@@ -3874,7 +4629,15 @@ def pack(
         inner.feature_dim = source.feature_dim  # masked_select / scatter drop it
     # Note: the returned dims order is the canonical virtual order (packed dims first),
     # which can differ from source.dims order (dims are unordered semantically in RF).
-    helper = PackedRawTensor(inner=inner, packed_dim=packed_dim, orig_dims=dims, gap=gap, align=align)
+    helper = PackedRawTensor(
+        inner=inner,
+        packed_dim=packed_dim,
+        orig_dims=dims,
+        gap=gap,
+        align=align,
+        # dense path (gap 0, align 1): the buffer bound IS a content bound
+        content_bound=(content_bound if (gap or align > 1) else packed_dim.dimension),
+    )
     return helper.rewrap(inner, name=(source.name or "packed") + "_packed")
 
 
@@ -3925,7 +4688,12 @@ def regap(
     else:
         # cache the on-device starts + total (deterministic per target layout)
         # -> no per-step H2D sync (capture-safe)
-        dev_key = _packing_cache_key("regap_dev", raw, dev) + (gap, align, layout_lens)
+        # new_dim.dimension (the TARGET total) must be in the key: it comes from the caller's
+        # total_bound (or _regap_total_bound), so two calls with the same source layout and the
+        # same target gap/align/layout_lens can still target DIFFERENT buffer sizes. Without it,
+        # the second call reuses the first one's starts/total and scatters positions computed for
+        # the larger layout into the smaller buffer -> out-of-bounds writes.
+        dev_key = _packing_cache_key("regap_dev", raw, dev) + (gap, align, layout_lens, new_dim.dimension)
         hit = _layout_cache.get(dev_key)
         if hit is not None:
             new_starts, total_dev = hit
@@ -3935,7 +4703,17 @@ def regap(
                 # scalar; get_dim_value_tensor has no device notion
                 total_dev = rf.copy_to_device(total_dev, dev)
             _layout_cache.set(dev_key, (new_starts, total_dev))
-    pos = rf.gather(new_starts, indices=seg, axis=seqs_dim, clip_to_valid=True) + t_coords
+    # Clamp the within-seq offset to the TARGET slot, not just to the source seq len:
+    # the source layout's lens and the target footprints can come from different derivations
+    # (e.g. an explicit layout_lens with a gap vs the plain content lens), and then
+    # start + offset could reach into the next seq's slot or past the buffer -- an out-of-bounds
+    # scatter, which corrupts the CUDA context and resurfaces as an unrelated illegal access.
+    new_footprints, _ = _seq_footprints(raw.orig_dims, gap, align, layout_lens=layout_lens, device=dev)
+    starts_at = rf.gather(new_starts, indices=seg, axis=seqs_dim, clip_to_valid=True)
+    if new_footprints is not None:
+        slot_at = rf.gather(new_footprints, indices=seg, axis=seqs_dim, clip_to_valid=True)
+        t_coords = rf.minimum(t_coords, rf.relu(rf.cast(slot_at, t_coords.dtype) - 1))
+    pos = starts_at + t_coords
     mask = _frame_mask(raw)
     if mask is not None:
         # route old gap frames to the dump slot (== the new total), dropped in the re-layout
@@ -3944,7 +4722,13 @@ def regap(
     if raw.inner.feature_dim is not None and inner_new.feature_dim is None:
         inner_new.feature_dim = raw.inner.feature_dim
     helper = PackedRawTensor(
-        inner=inner_new, packed_dim=new_dim, orig_dims=raw.orig_dims, gap=gap, align=align, layout_lens=layout_lens
+        inner=inner_new,
+        packed_dim=new_dim,
+        orig_dims=raw.orig_dims,
+        gap=gap,
+        align=align,
+        layout_lens=layout_lens,
+        content_bound=raw.content_bound,  # a re-layout never changes the content
     )
     out = helper.rewrap(inner_new, name="regap")
     if source.feature_dim is not None and out.feature_dim is None:
@@ -3970,12 +4754,27 @@ def _torch_relayout_frames(inner: Tensor, pos: Tensor, *, packed_dim: Dim, out_d
     :param out_dim:
     :return: [out_dim, feature...]
     """
-    import torch
-    from returnn.torch.util.array_ import gather_relayout
-
     axis = inner.get_axis_from_description(packed_dim)
     if axis != 0:
         inner = inner.copy_move_axis(axis, 0)
+    # noinspection PyProtectedMember
+    if inner._raw_backend.name != "torch":
+        # Non-torch (e.g. the TF graph backend): a plain value scatter.
+        # The gather-in-both-directions below exists to dodge AOT/Inductor's scatter-index
+        # materialization and to give a capture-safe backward -- torch-only concerns.
+        # The dump slot (pos == out size = dropped frames) scatters into one extra slot,
+        # sliced off again (duplicate dump writes sum up there and are discarded).
+        ext_dim = out_dim + 1
+        out_ext = rf.scatter(inner, indices=pos, indices_dim=packed_dim, out_dim=ext_dim, use_mask=False)
+        out, _ = rf.slice(out_ext, axis=ext_dim, size=out_dim)
+        if inner.feature_dim is not None and inner.feature_dim in out.dims:
+            out.feature_dim = inner.feature_dim
+        return out
+
+    import torch
+    from returnn.torch.util.array_ import gather_relayout
+    from returnn.torch.util.assert_ import assert_
+
     values = inner.raw_tensor
     assert isinstance(values, torch.Tensor), f"_torch_relayout_frames: torch only, got {type(values)}"
     pos_raw = pos.copy_compatible_to_dims_raw([packed_dim]).to(torch.int64)
@@ -3986,6 +4785,16 @@ def _torch_relayout_frames(inner: Tensor, pos: Tensor, *, packed_dim: Dim, out_d
         n_out = int(n_out)
     assert isinstance(n_out, int)
     n_in = values.shape[0]
+    # Loud, capture-safe bound check. Without it a too-small target buffer writes OUT OF BOUNDS
+    # here (index_put with pos > n_out), which corrupts the CUDA context and then surfaces far
+    # away as an unrelated "illegal memory access". The usual cause is a declared
+    # packed_total_bound / regap total_bound that does not cover the per-seq gap+align slack
+    # of the TARGET layout.
+    assert_(
+        pos_raw.max() <= n_out,
+        f"packed relayout: target position beyond the buffer ({out_dim}, {n_out} frames + dump slot)."
+        f" The target total is too small for this layout (per-seq gap/align slack not covered?).",
+    )
     # small int scatters only (1-D, no feature dims involved)
     inv = torch.zeros((n_out + 1,), dtype=torch.int64, device=values.device)
     slot_valid = torch.zeros((n_out + 1,), dtype=torch.bool, device=values.device)

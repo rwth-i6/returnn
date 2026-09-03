@@ -124,11 +124,12 @@ def init(name, reference, config, sprint_unit=None, version_number=None, callbac
 
 
 # Keep names for compatibility.
-# noinspection PyPep8Naming,PyUnusedLocal
-def getSegmentList(corpusName, segmentList, config, **kwargs):
+# noinspection PyPep8Naming
+def getSegmentList(corpusName, segmentList, config, **_kwargs):
     """
     Sprint will directly call this function.
     """
+    del segmentList  # part of the Sprint callback signature
     print("RETURNN SprintControl[pid %i] getSegmentList: corpus=%r, config=%r" % (os.getpid(), corpusName, config))
 
     # If we were not initialized via PythonControl interface, this will initialize us
@@ -311,9 +312,10 @@ class PythonControl:
         self.cond = Condition()
         self.pipe_c2p = os.fdopen(c2p_fd, "wb")
         self.pipe_p2c = os.fdopen(p2c_fd, "rb")
-        self.sprint_callback = None  # via self._init
+        self.sprint_callback: typing.Optional[typing.Callable] = None  # via self._init
         self.sprint_version_number = None  # via self._init
-        self.callback = None  # either via Sprint, or self.own_threaded_callback
+        # either via Sprint, or self.own_threaded_callback
+        self.callback: typing.Optional[typing.Callable] = None
         self.loss_and_error_signal_via_sprint_callback = False
         # So, we get posteriors here from SprintErrorSignals. This will give us always log-probs for now.
         self.posteriors_in_log_space = True  # right now, not configurable
@@ -340,8 +342,8 @@ class PythonControl:
         print("RETURNN SprintControl[pid %i] PythonControl additional_init %r" % (os.getpid(), kwargs))
         self._init(**kwargs)
 
-    # noinspection PyUnusedLocal
     def _init(self, name, sprint_unit=None, callback=None, version_number=None, min_version_number=None, **kwargs):
+        del sprint_unit  # part of the Sprint callback signature
         if name == "Sprint.PythonControl":
             print("RETURNN SprintControl[pid %i] init for Sprint.PythonControl %r" % (os.getpid(), kwargs))
             assert min_version_number
@@ -350,8 +352,7 @@ class PythonControl:
             if callback:
                 self.sprint_callback = callback
 
-    # noinspection PyUnusedLocal
-    def init_processing(self, input_dim=None, output_dim=None, **kwargs):
+    def init_processing(self, input_dim=None, output_dim=None, **_kwargs):
         """
         This is called via Sprint when we use PythonControl to iterate the corpus,
         i.e. we set --*.action=python-control in Sprint in the NN trainer tool.
@@ -370,8 +371,7 @@ class PythonControl:
         self.loss_and_error_signal_via_sprint_callback = True
         assert self.sprint_callback
 
-    # noinspection PyUnusedLocal
-    def process_segment(self, name, orthography, features=None, alignment=None, soft_alignment=None, **kwargs):
+    def process_segment(self, name, orthography, features=None, alignment=None, soft_alignment=None, **_kwargs):
         """
         This is called via Sprint when we use PythonControl to iterate the corpus.
 
@@ -449,14 +449,14 @@ class PythonControl:
         self.close()
         raise SystemExit
 
-    # noinspection PyUnusedLocal
     def _handle_cmd_init(self, name, version):
+        del name  # part of the Sprint callback signature
         assert version == self.Version
         return "SprintControl", self.Version
 
     def _handle_cmd_get_loss_and_error_signal(self, seg_name, seg_len, posteriors):
         """
-        :param str seg_name: seg name
+        :param str|bytes seg_name: seg name (bytes from some Sprint builds)
         :param int seg_len: the segment length in frames
         :param numpy.ndarray posteriors: 2d (time,label) float array
 
@@ -611,7 +611,6 @@ class PythonControl:
         """
         return "<version>RETURNN.own_threaded_callback</version>"
 
-    # noinspection PyUnusedLocal
     def own_tcb_get_loss_and_error_signal(self, seg_name, seg_len, posteriors):
         """
         :param seg_name:
@@ -619,6 +618,7 @@ class PythonControl:
         :param posteriors:
         :return:
         """
+        del seg_name, seg_len, posteriors  # part of the Sprint callback signature
         # Wait until we get the loss and error signal.
         while True:
             with self.cond:
@@ -722,8 +722,8 @@ class PythonControl:
 
     def segment_list_iterator(self):
         """
-        :return: yields segment names
-        :rtype: typing.Iterator[str]
+        :return: yields segment names (bytes from some Sprint builds; callers decode)
+        :rtype: typing.Iterator[str|bytes]
         """
         with self.cond:
             assert self.control_loop_started

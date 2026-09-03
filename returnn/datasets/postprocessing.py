@@ -231,7 +231,7 @@ class PostprocessingDataset(CachedDataset2):
                 continue
             if t.vocab:
                 self.labels[k] = t.vocab.labels
-            elif t.sparse_dim:  # sparse_dim but not vocab
+            elif t.sparse_dim and t.sparse_dim.dimension is not None:  # sparse_dim but not vocab
                 self.labels[k] = list(map(str, range(t.sparse_dim.dimension)))  # dummy labels
 
     def init_seq_order(
@@ -364,15 +364,21 @@ class PostprocessingDataset(CachedDataset2):
     def finish_epoch(self, *, free_resources=False):
         """finish_epoch"""
         super().finish_epoch(free_resources=free_resources)
-        if not free_resources:
-            return
-        if self._multi_proc_data_iter is not None:
-            self._multi_proc_data_iter.stop(join=True)
-            self._multi_proc_data_iter = None
-        if self._worker_procs is not None:
-            for wp in self._worker_procs:
-                wp.exit(join=True)
-            self._worker_procs = None
+        if free_resources:
+            data_iter = self._multi_proc_data_iter
+            if data_iter is not None:
+                data_iter.stop(join=False)
+            if self._worker_procs is not None:
+                for wp in self._worker_procs:
+                    wp.exit(join=False)
+            if data_iter is not None:
+                data_iter.stop(join=True)
+                self._multi_proc_data_iter = None
+            if self._worker_procs is not None:
+                for wp in self._worker_procs:
+                    wp.worker_proc.join()
+                self._worker_procs = None
+        self._dataset.finish_epoch(free_resources=free_resources)
 
     def _collect_single_seq(self, seq_idx: int) -> Optional[DatasetSeq]:
         while True:
@@ -718,9 +724,8 @@ class _MultiProcDataIter:
 
         Once this is called, the iterator cannot be used anymore.
         """
-        if self.quit_event.is_set():
-            return
-        self.quit_event.set()
+        if not self.quit_event.is_set():
+            self.quit_event.set()
         if join:
             util.try_run(self.dataset_thread.join)
 

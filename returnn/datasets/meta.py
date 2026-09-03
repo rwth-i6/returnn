@@ -41,7 +41,9 @@ class EpochWiseFilter:
     """
 
     def __init__(
-        self, epochs_opts: Dict[Tuple[int, Optional[int]], Dict[str, Any]], debug_msg_prefix: str = "EpochWiseFilter"
+        self,
+        epochs_opts: Dict[Tuple[Optional[int], Optional[int]], Dict[str, Any]],
+        debug_msg_prefix: str = "EpochWiseFilter",
     ):
         """
         :param epochs_opts: (ep_start, ep_end) -> epoch opts
@@ -68,7 +70,7 @@ class EpochWiseFilter:
         if not isinstance(opts, util.CollectionReadCheckCovered):
             opts = util.CollectionReadCheckCovered(opts)
         if opts.get("max_mean_len"):
-            max_mean_len = opts.get("max_mean_len")
+            max_mean_len = float(opts.get("max_mean_len"))
             lens_and_seqs = numpy.array(sorted([(get_seq_len(idx), idx) for idx in seq_order]))
             best_num = util.binary_search_any(
                 cmp=lambda num: numpy.mean(lens_and_seqs[:num, 0]) - max_mean_len, low=1, high=len(lens_and_seqs) + 1
@@ -780,7 +782,7 @@ class ClusteringDataset(CachedDataset2):
                 continue
             if length.max_value() > batch_size:
                 print(
-                    "warning: sequence length (%i) larger than limit (%i)" % (length.max_value(), batch_size),
+                    "warning: sequence length (%i) larger than limit (%s)" % (length.max_value(), batch_size),
                     file=log.v4,
                 )
             if self.rnd_seq_drop.random() < seq_drop:
@@ -1637,7 +1639,7 @@ class ConcatSeqsDataset(CachedDataset2):
             This option would pad/narrow so that align_len * F == data_len for all but the last sub-sequences
             by setting it to {"data": ("classes", F)} to ensure concat_align_len == ceildiv(concat_data_len - P, F)
         :param bool use_cache_manager:
-        :param dict[(int,int),dict] epoch_wise_filter: see :class:`EpochWiseFilter`
+        :param dict[(int,int),dict]|EpochWiseFilter|None epoch_wise_filter: see :class:`EpochWiseFilter`
         """
         super(ConcatSeqsDataset, self).__init__(**kwargs)
         self.seq_tag_delim = seq_tag_delim

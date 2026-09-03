@@ -24,7 +24,6 @@ import sys
 import time
 from typing import TYPE_CHECKING, Optional, Union, Any, Sequence, Dict
 import numpy
-import returnn
 from returnn.log import log
 from returnn.config import Config, get_global_config
 from returnn.datasets import Dataset, init_dataset, init_dataset_via_str
@@ -285,12 +284,22 @@ def init_engine():
     Initializes global ``engine``, for example :class:`returnn.tf.engine.Engine`.
     """
     global engine
-    if BackendEngine.is_tensorflow_selected():
+    if BackendEngine.get_selected_engine() == BackendEngine.TensorFlow:
+        # backend = "tensorflow": the model comes from RF code (get_model / train_step),
+        # not from a net dict, so this is the RF engine, not returnn.tf.engine.
+        from returnn.tf.engine_rf import Engine
+
+        engine = Engine(config=config)
+    elif BackendEngine.is_tensorflow_selected():
         from returnn.tf.engine import Engine
 
         engine = Engine(config=config)
     elif BackendEngine.is_torch_selected():
         from returnn.torch.engine import Engine
+
+        engine = Engine(config=config)
+    elif BackendEngine.is_jax_selected():
+        from returnn.jax.engine import Engine
 
         engine = Engine(config=config)
     else:
@@ -452,11 +461,50 @@ def init_backend_engine(*, config_opts: Optional[Dict[str, Any]] = None):
             except ImportError as exc:
                 print("Warning: could not import lovely_tensors:", exc, file=log.v3)
 
+    elif BackendEngine.is_jax_selected():
+        import jax
+
+        print("JAX:", jax.__version__, file=log.v3)
+        print("JAX devices:", jax.devices(), file=log.v2)
+
     else:
         raise NotImplementedError(f"Backend engine {BackendEngine.get_selected_engine()} not implemented")
 
     # Deferred backend-frontend import (see `_select_rf_backend=False` comment above).
     BackendEngine.select_engine(config=config)
+
+    _warn_about_foreign_backend_config_opts()
+
+
+# Backend name and the prefix its own config options carry.
+# A config carried over from another backend keeps those options, and the selected engine simply
+# does not read them -- so say so, rather than let them look effective.
+# E.g. torch_amp in a JAX config: the run trains, just not in mixed precision.
+_BackendNameAndConfigOptPrefix = {
+    BackendEngine.TensorFlowNetDict: ("TensorFlow", "tf_"),
+    BackendEngine.TensorFlow: ("TensorFlow", "tf_"),
+    BackendEngine.Torch: ("PyTorch", "torch_"),
+    BackendEngine.Jax: ("JAX", "jax_"),
+}
+
+
+def _warn_about_foreign_backend_config_opts():
+    """
+    Warn about config options named after a backend which is not the selected one.
+    """
+    selected = BackendEngine.get_selected_engine()
+    selected_name, own_prefix = _BackendNameAndConfigOptPrefix.get(selected, (str(selected), None))
+    keys = sorted(set(config.typed_dict) | set(config.dict))
+    for key in keys:
+        for name, prefix in _BackendNameAndConfigOptPrefix.values():
+            if prefix == own_prefix or not key.startswith(prefix):
+                continue
+            print(
+                f"Warning: config option {key!r} is for the {name} backend,"
+                f" but {selected_name} is selected, so it has no effect.",
+                file=log.v2,
+            )
+            break
 
 
 def init(config_filename=None, command_line_options=(), config_updates=None, extra_greeting=None):
@@ -582,7 +630,10 @@ def execute_main_task():
             lr_control_update_scores=lr_control_update_scores,
         )
     elif task in ["forward", "hpx"]:
-        if config.typed_value("forward_callback") or not BackendEngine.is_tensorflow_selected():
+        if (
+            config.typed_value("forward_callback")
+            or BackendEngine.get_selected_engine() != BackendEngine.TensorFlowNetDict
+        ):
             engine.init_network_from_config(config)
             if config.value("forward_data", "eval") in ["train", "dev", "eval"]:
                 data = {"train": train_data, "dev": dev_data, "eval": eval_data}[config.value("forward_data", "eval")]

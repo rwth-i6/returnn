@@ -31,6 +31,10 @@ CUDA: If defined and set to 1, CUDA is used for GPU support.
 #define TORCH 0
 #endif
 
+#ifndef JAX
+#define JAX 0
+#endif
+
 #ifndef _ns
 #define _ns
 #endif
@@ -220,6 +224,30 @@ Ndarray* Ndarray_Copy(const Ndarray* self) {
 // fixed in TF version >= 1.5
 
 #include "tensorflow/core/public/version.h"
+// TF 2.21 gutted tensorflow/core/platform/notification.h (empty header, class gone).
+// absl::Notification would be the drop-in replacement, but current absl headers do not
+// compile under nvcc (raw_hash_map template errors), so use a plain std:: one instead.
+// Used in debug_print below.
+#if (TF_MAJOR_VERSION > 2) || (TF_MAJOR_VERSION == 2 && TF_MINOR_VERSION >= 21)
+#include <mutex>
+#include <condition_variable>
+struct ReturnnNotification {
+    std::mutex mutex_;
+    std::condition_variable cv_;
+    bool done_ = false;
+    void Notify() {
+        { std::lock_guard<std::mutex> lock(mutex_); done_ = true; }
+        cv_.notify_all();
+    }
+    void WaitForNotification() {
+        std::unique_lock<std::mutex> lock(mutex_);
+        cv_.wait(lock, [this] { return done_; });
+    }
+};
+#else
+#include "tensorflow/core/platform/notification.h"
+typedef tensorflow::Notification ReturnnNotification;
+#endif
 
 #ifndef TF_MAJOR_VERSION
 #error "TF_MAJOR_VERSION is not defined!"
@@ -236,6 +264,52 @@ Ndarray* Ndarray_Copy(const Ndarray* self) {
 #define TF_issue_6602_workaround 1
 #define TWOD_LSTM_SUPPORT 0
 #endif
+
+// StreamExecutor left the perftools::gputools namespace,
+// and Stream::ThenBlas* was dropped in favour of calling BlasSupport directly.
+// Both are gone in TF 2.20. The exact removal versions are unknown,
+// so this is set at the version verified here: older TF keeps the code it had.
+// If CI shows an earlier TF also lacks ThenBlas*, lower this bound.
+#if (TF_MAJOR_VERSION > 2) || (TF_MAJOR_VERSION == 2 && TF_MINOR_VERSION >= 20)
+#define RETURNN_TF_MODERN_STREAM_EXECUTOR 1
+#else
+#define RETURNN_TF_MODERN_STREAM_EXECUTOR 0
+#endif
+
+// TF 2.21 renamed NumericOptions -> EngineOptions (numeric_options.h is gone;
+// engine_options.h adds a require_command_buffer field).
+#if (TF_MAJOR_VERSION > 2) || (TF_MAJOR_VERSION == 2 && TF_MINOR_VERSION >= 21)
+#define RETURNN_TF_SE_ENGINE_OPTIONS 1
+#else
+#define RETURNN_TF_SE_ENGINE_OPTIONS 0
+#endif
+
+#if GOOGLE_CUDA
+#if RETURNN_TF_MODERN_STREAM_EXECUTOR
+#include "xla/stream_executor/blas.h"
+#include "xla/stream_executor/data_type.h"
+#if RETURNN_TF_SE_ENGINE_OPTIONS
+#include "xla/stream_executor/engine_options.h"
+#else
+#include "xla/stream_executor/numeric_options.h"
+#endif
+#include "xla/stream_executor/stream_executor.h"
+#include "tensorflow/core/platform/tensor_float_32_utils.h"
+namespace returnn_se = stream_executor;
+#if RETURNN_TF_SE_ENGINE_OPTIONS
+static inline returnn_se::EngineOptions returnn_se_gemm_options(bool allow_tf32) {
+  return returnn_se::EngineOptions(/*require_determinism=*/false, allow_tf32, /*require_command_buffer=*/false);
+}
+#else
+static inline returnn_se::NumericOptions returnn_se_gemm_options(bool allow_tf32) {
+  return returnn_se::NumericOptions(/*require_determinism=*/false, allow_tf32);
+}
+#endif
+#else
+// alias only: on these versions every use below resolves exactly as it did before
+namespace returnn_se = perftools::gputools;
+#endif
+#endif  // GOOGLE_CUDA
 
 #if TF_issue_6602_workaround
 
@@ -260,23 +334,23 @@ struct TensorCuBlasGemm {
 #if GOOGLE_CUDA
 // or tensorflow/include/tensorflow/core/util/stream_executor_util.h ?
 template <typename T>
-perftools::gputools::DeviceMemory<T> AsDeviceMemory(const T* cuda_memory) {
-  perftools::gputools::DeviceMemoryBase wrapped(const_cast<T*>(cuda_memory));
-  perftools::gputools::DeviceMemory<T> typed(wrapped);
+returnn_se::DeviceMemory<T> AsDeviceMemory(const T* cuda_memory) {
+  returnn_se::DeviceMemoryBase wrapped(const_cast<T*>(cuda_memory));
+  returnn_se::DeviceMemory<T> typed(wrapped);
   return typed;
 }
 
-static perftools::gputools::blas::Transpose get_transpose(char t) {
+static returnn_se::blas::Transpose get_transpose(char t) {
     switch(t) {
     case 'T':
-        return perftools::gputools::blas::Transpose::kTranspose;
+        return returnn_se::blas::Transpose::kTranspose;
     case 'C':
-        return perftools::gputools::blas::Transpose::kConjugateTranspose;
+        return returnn_se::blas::Transpose::kConjugateTranspose;
     case 'N':
-        return perftools::gputools::blas::Transpose::kNoTranspose;
+        return returnn_se::blas::Transpose::kNoTranspose;
     default:
         assert("invalid transpose option" || 0);
-        return perftools::gputools::blas::Transpose::kNoTranspose;
+        return returnn_se::blas::Transpose::kNoTranspose;
     }
 }
 #endif  // GOOGLE_CUDA
@@ -316,12 +390,30 @@ static void tf_cuda_sgemm(
     auto* dev_stream = dev_ctx->stream();
     OP_REQUIRES(context, dev_stream, errors::Internal("No GPU stream available."));
 
+#if RETURNN_TF_MODERN_STREAM_EXECUTOR
+    // Stream::ThenBlasGemm is gone; go through BlasSupport directly. Same operation,
+    // but alpha/beta are passed by pointer and the element type is explicit.
+    auto* blas = dev_stream->parent()->AsBlas();
+    OP_REQUIRES(context, blas, errors::Internal("No BLAS support for this device."));
+    bool blas_launch_status =
+        blas->DoBlasGemm(dev_stream, get_transpose(transa), get_transpose(transb),
+                         (uint64_t)m, (uint64_t)n, (uint64_t)k,
+                         returnn_se::dnn::ToDataType<T>::value, &alpha, a_ptr, lda,
+                         b_ptr, ldb, &beta, &c_ptr, ldc,
+                         // Follow TF's global TF32 setting, as TF's own kernels do.
+                         // TF32 costs ~5e-5 relative on float32 GEMM,
+                         // so the native-op tests turn it off process-wide.
+                         returnn_se_gemm_options(tensorflow::tensor_float_32_execution_enabled()),
+                         returnn_se::blas::CallContext::kNone)
+            .ok();
+#else
     bool blas_launch_status =
         dev_stream
              ->ThenBlasGemm(get_transpose(transa), get_transpose(transb),
                             m, n, k, alpha, a_ptr,
                             lda, b_ptr, ldb, beta, &c_ptr, ldc)
              .ok();
+#endif
     OP_REQUIRES(context, blas_launch_status, errors::Aborted("CuBlasGemm failed!"));
 #endif  // TF_issue_6602_workaround
 #else  // GOOGLE_CUDA
@@ -348,7 +440,7 @@ static void tf_cuda_sgemm_batched(
 // https://github.com/tensorflow/tensorflow/blob/master/tensorflow/contrib/rnn/kernels/blas_gemm.cc
 #if GOOGLE_CUDA
 #if TWOD_LSTM_SUPPORT
-    typedef perftools::gputools::DeviceMemory<float> DeviceMemoryType;
+    typedef returnn_se::DeviceMemory<float> DeviceMemoryType;
     std::vector<DeviceMemoryType> a_device_memory;
     std::vector<DeviceMemoryType> b_device_memory;
     std::vector<DeviceMemoryType> c_device_memory;
@@ -376,15 +468,29 @@ static void tf_cuda_sgemm_batched(
     // cublasCreate, https://docs.nvidia.com/cuda/cublas/#cublascreate
 
     auto dev_ctx = context->op_device_context();
-    perftools::gputools::Stream* dev_stream = dev_ctx->stream();
+    returnn_se::Stream* dev_stream = dev_ctx->stream();
     OP_REQUIRES(context, dev_stream, errors::Internal("No GPU stream available."));
 
+#if RETURNN_TF_MODERN_STREAM_EXECUTOR
+    // as in tf_cuda_sgemm: ThenBlasGemmBatched is gone, call BlasSupport directly.
+    // This one already returns bool rather than a chainable status.
+    auto* blas = dev_stream->parent()->AsBlas();
+    OP_REQUIRES(context, blas, errors::Internal("No BLAS support for this device."));
+    bool blas_launch_status = blas->DoBlasGemmBatched(
+        dev_stream, get_transpose(transa), get_transpose(transb),
+        (uint64_t)m, (uint64_t)n, (uint64_t)k, alpha, a_ptrs, lda, b_ptrs, ldb,
+        beta, c_ptrs, ldc, batchSize,
+        // TF32 follows TF's global setting, see tf_cuda_sgemm
+        returnn_se_gemm_options(tensorflow::tensor_float_32_execution_enabled()),
+        /*scratch_allocator=*/nullptr, returnn_se::blas::CallContext::kNone);
+#else
     bool blas_launch_status =
         dev_stream
              ->ThenBlasGemmBatched(get_transpose(transa), get_transpose(transb),
                             (uint64)m, (uint64)n, (uint64)k, alpha, a_ptrs,
                             lda, b_ptrs, ldb, beta, c_ptrs, ldc, batchSize)
              .ok();
+#endif
     OP_REQUIRES(context, blas_launch_status, errors::Aborted("CuBlasGemm failed!"));
 
     // The above call to ThenBlasGemmBatched allocates temporary memory on the GPU
@@ -568,11 +674,64 @@ static void Ndarray_sgemm(
     assert("Torch Ndarray_sgemm not implemented" && 0);
 }
 
-#else  // TENSORFLOW or TORCH
+#elif JAX
+// XLA hands the kernel a raw device pointer plus a shape, so there is no tensor object here:
+// NdarrayJax is that pair, filled by the generated FFI handler from an xla::ffi::Buffer.
+// Sizes are int64 (the FFI dimension type), like torch.
 
-#error "No framework defined: TENSORFLOW or TORCH"
+struct NdarrayJax {
+    void* data;
+    const int64_t* dims;
+    int ndim;
+};
 
-#endif // TENSORFLOW or TORCH
+#define Ndarray NdarrayJax
+#define Ndarray_DEV_DATA(x) ((float*)(x)->data)
+#define Ndarray_DEV_DATA_int32(x) ((int32_t*)(x)->data)
+#define Ndarray_DEV_DATA_uint32(x) ((uint32_t*)(x)->data)
+#define Ndarray_DEV_DATA_int32_scalar(x) (*((int32_t*)(x)->data))
+#define Ndarray_HOST_DIMS(x) ((x)->dims)
+#define Ndarray_DIMS(x) ((x)->dims)
+typedef const int64_t* Ndarray_DIMS_Type;
+#define Ndarray_NDIM(x) ((x)->ndim)
+#define Ndarray_dtype_size(x) (4)  // only float32/int32 ops are wired
+typedef int64_t Ndarray_DIM_Type;
+
+static inline int64_t Ndarray_SIZE(const Ndarray* x) {
+    int64_t n = 1;
+    for(int i = 0; i < x->ndim; ++i) n *= x->dims[i];
+    return n;
+}
+
+// in elements, C-contiguous: XLA buffers always are
+static inline int64_t Ndarray_STRIDE(const Ndarray* x, int dim) {
+    int64_t s = 1;
+    for(int i = dim + 1; i < x->ndim; ++i) s *= x->dims[i];
+    return s;
+}
+
+// variadic: callers pass a message built from several comma-separated parts (as TORCH_CHECK takes)
+#define CHECK_WITH_MSG(cond, ...) do { if(!(cond)) { fprintf(stderr, "NativeOp check failed: " #cond "\n"); assert(false); } } while(0)
+
+// See Context struct below.
+#define CONTEXT_ARGS
+
+template<typename T>
+static void Ndarray_sgemm(
+    char transa_, char transb_,
+    int m, int n, int k,
+    const T* alpha_ptr, const T* a_ptr, int lda,
+    const T* b_ptr, int ldb, const T* beta_ptr,
+    T* c_ptr, int ldc)
+{
+    assert("JAX Ndarray_sgemm not implemented" && 0);
+}
+
+#else  // TENSORFLOW or TORCH or JAX
+
+#error "No framework defined: TENSORFLOW or TORCH or JAX"
+
+#endif // TENSORFLOW or TORCH or JAX
 
 
 #if CUDA
@@ -584,6 +743,14 @@ static void Ndarray_sgemm(
 #elif TORCH
 
 #define CUDA_CUR_STREAM (at::cuda::getCurrentCUDAStream().stream())
+
+#elif JAX
+
+// XLA passes its stream into the FFI handler; the generated wrapper puts it here,
+// so the op is ordered inside the compiled program with no extra synchronization.
+#define CUDA_CUR_STREAM (_returnn_jax_stream)
+extern __thread cudaStream_t _returnn_jax_stream;
+extern __thread xla::ffi::ScratchAllocator* _returnn_jax_scratch;
 
 #else
 #error Unknown backend
@@ -792,7 +959,25 @@ void* _malloc(size_t num_bytes) { return c10::GetCPUAllocator()->raw_allocate(nu
 void _free(void* ptr) { c10::GetCPUAllocator()->raw_deallocate(ptr); }
 #endif  // CUDA
 
-#endif  // TENSORFLOW or TORCH
+#elif JAX
+
+// Scratch for the op's own temporaries (FastBaumWelch's edge/state buffers, the LSTM ops,
+// the edit-distance ops). XLA's own mechanism for this is ffi::ScratchAllocator: it allocates
+// from the same arena as the rest of the program -- no cudaMalloc on the critical path -- and
+// frees everything when the handler returns, so _free has nothing to do.
+#if CUDA
+void* _malloc(size_t num_bytes) {
+    assert(_returnn_jax_scratch);
+    auto p = _returnn_jax_scratch->Allocate(num_bytes, 16);
+    return p.has_value() ? *p : nullptr;
+}
+void _free(void* ptr) {}  // XLA releases the scratch after the call
+#else  // not CUDA
+void* _malloc(size_t num_bytes) { return malloc(num_bytes); }
+void _free(void* ptr) { free(ptr); }
+#endif  // CUDA
+
+#endif  // TENSORFLOW or TORCH or JAX
 
 
 #define device_malloc Context(CONTEXT_ARGS)._malloc
@@ -1013,7 +1198,7 @@ void debug_print(OpKernelContext* context, tensorflow::Tensor* v, const std::str
     std::string full_name = context->op_kernel().name() + ":" + name;
     tensorflow::Tensor cpy(v->dtype(), v->shape());
     if(context->op_device_context()) {  // GPU
-        Notification done_copy;
+        ReturnnNotification done_copy;
         context->op_device_context()->CopyDeviceTensorToCPU(
             v, name, static_cast<Device*>(context->device()), &cpy,
             [&done_copy](const Status& s) { done_copy.Notify(); });

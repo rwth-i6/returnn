@@ -106,6 +106,16 @@ class EngineBase:
                                 continue
                         file_list[epoch] = fn
                         break
+                elif util.BackendEngine.is_jax_selected():
+                    # Test for Orbax's metadata file, not for the DIRECTORY:
+                    # an empty or half-written one exists but cannot be restored.
+                    if os.path.exists(fn + ".orbax/_CHECKPOINT_METADATA"):
+                        if for_training:
+                            # Same as for PyTorch: without the optimizer state, this is not a resumable model.
+                            if not os.path.exists(fn + ".opt.orbax/_CHECKPOINT_METADATA"):
+                                continue
+                        file_list[epoch] = fn
+                        break
         return file_list
 
     @classmethod

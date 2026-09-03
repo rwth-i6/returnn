@@ -10,14 +10,23 @@ Example Returnn network topology:
     network = {
     "source_embed": {"class": "linear", "activation": None, "with_bias": False, "n_out": 620},
 
-    "lstm0_fw" : { "class": "rec", "unit": "standardlstm", "unit_opts": {"use_peepholes": True, "forget_bias": 0.0}, "initial_state": "var", "n_out" : 1000, "direction": 1, "from": ["source_embed"] },
-    "lstm0_bw" : { "class": "rec", "unit": "standardlstm", "unit_opts": {"use_peepholes": True, "forget_bias": 0.0}, "initial_state": "var", "n_out" : 1000, "direction": -1, "from": ["source_embed"] },
+    "lstm0_fw" : { "class": "rec", "unit": "standardlstm",
+        "unit_opts": {"use_peepholes": True, "forget_bias": 0.0},
+        "initial_state": "var", "n_out" : 1000, "direction": 1, "from": ["source_embed"] },
+    "lstm0_bw" : { "class": "rec", "unit": "standardlstm",
+        "unit_opts": {"use_peepholes": True, "forget_bias": 0.0},
+        "initial_state": "var", "n_out" : 1000, "direction": -1, "from": ["source_embed"] },
 
-    "lstm1_fw" : { "class": "rec", "unit": "standardlstm", "unit_opts": {"use_peepholes": True, "forget_bias": 0.0}, "initial_state": "var", "n_out" : 1000, "direction": 1, "from": ["lstm0_fw", "lstm0_bw"] },
-    "lstm1_bw" : { "class": "rec", "unit": "standardlstm", "unit_opts": {"use_peepholes": True, "forget_bias": 0.0}, "initial_state": "var", "n_out" : 1000, "direction": -1, "from": ["lstm0_fw", "lstm0_bw"] },
+    "lstm1_fw" : { "class": "rec", "unit": "standardlstm",
+        "unit_opts": {"use_peepholes": True, "forget_bias": 0.0},
+        "initial_state": "var", "n_out" : 1000, "direction": 1, "from": ["lstm0_fw", "lstm0_bw"] },
+    "lstm1_bw" : { "class": "rec", "unit": "standardlstm",
+        "unit_opts": {"use_peepholes": True, "forget_bias": 0.0},
+        "initial_state": "var", "n_out" : 1000, "direction": -1, "from": ["lstm0_fw", "lstm0_bw"] },
 
     "encoder": {"class": "copy", "from": ["lstm1_fw", "lstm1_bw"]},
-    "enc_ctx": {"class": "linear", "activation": None, "with_bias": True, "from": ["encoder"], "n_out": 1000},  # preprocessed_attended in Blocks
+    # "enc_ctx" is the preprocessed_attended in Blocks
+    "enc_ctx": {"class": "linear", "activation": None, "with_bias": True, "from": ["encoder"], "n_out": 1000},
     "fertility": {"class": "linear", "activation": "sigmoid", "with_bias": False, "from": ["encoder"], "n_out": 1},
 
     "output": {"class": "rec", "from": [], "unit": {
@@ -54,18 +63,16 @@ Example Returnn network topology:
 
 from __future__ import annotations
 
+from typing import Any, List, Dict
 import os
 import sys
 import numpy
 import re
-from pprint import pprint
 from numpy.testing import assert_almost_equal
 import tensorflow as tf
 import pickle
 
-my_dir = os.path.dirname(os.path.abspath(__file__))
-returnn_dir = os.path.dirname(my_dir)
-sys.path.insert(0, returnn_dir)
+import _setup_returnn_env  # noqa
 
 from returnn.util import better_exchook
 import returnn.__main__ as rnn
@@ -75,17 +82,14 @@ from returnn.tf.layers.basic import SourceLayer, LayerBase, LinearLayer
 from returnn.tf.layers.rec import ChoiceLayer
 
 
-def get_network():
-    """
-    :rtype: TFNetwork
-    """
+def get_network() -> TFNetwork:
+    """net"""
+    assert rnn.engine.network is not None
     return rnn.engine.network
 
 
-def get_input_layers():
-    """
-    :rtype: list[LayerBase]
-    """
+def get_input_layers() -> List[LayerBase]:
+    """inputs"""
     ls = []
     for layer in get_network().layers.values():
         if len(layer.sources) != 1:
@@ -95,10 +99,8 @@ def get_input_layers():
     return ls
 
 
-def find_our_input_embed_layer():
-    """
-    :rtype: LinearLayer
-    """
+def find_our_input_embed_layer() -> LinearLayer:
+    """in"""
     input_layers = get_input_layers()
     assert len(input_layers) == 1
     layer = input_layers[0]
@@ -106,11 +108,11 @@ def find_our_input_embed_layer():
     return layer
 
 
-def get_in_hierarchy(name, hierarchy):
+def get_in_hierarchy(name: str, hierarchy: Dict[str, dict[str, Any]]) -> Dict[str, dict[str, Any]]:
     """
-    :param str name: e.g. "decoder/sequencegenerator"
-    :param dict[str,dict[str]] hierarchy: nested hierarchy
-    :rtype: dict[str,dict[str]]
+    :param name: e.g. "decoder/sequencegenerator"
+    :param hierarchy: nested hierarchy
+        (one-arg dict[str] here crashes PyCharm 2026.2 inspection on the whole file, see tf/engine.py)
     """
     if "/" in name:
         name, rest = name.split("/", 1)
@@ -164,8 +166,8 @@ def main():
         blocks_mt_model_fn,
     )
     print("Params found in Blocks model:")
-    blocks_params = {}  # type: dict[str,numpy.ndarray]
-    blocks_params_hierarchy = {}  # type: dict[str,dict[str]]
+    blocks_params: Dict[str, numpy.ndarray] = {}
+    blocks_params_hierarchy: Dict[str, Dict[str, Any]] = {}
     blocks_total_num_params = 0
     for key in sorted(blocks_mt_model.keys()):
         value = blocks_mt_model[key]

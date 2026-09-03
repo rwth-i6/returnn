@@ -34,7 +34,7 @@ def init_warprna(verbose=False):
     """
     global _tf_mod
     if _tf_mod:
-        return
+        return _tf_mod
     assert is_checked_out(), "submodule not checked out? Run `git submodule update --init --recursive`"
     enable_gpu = OpCodeCompiler.cuda_available()
     enable_cpu = os.path.exists("%s/core_cpu.cpp" % submodule_dir)

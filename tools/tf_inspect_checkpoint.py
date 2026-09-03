@@ -129,11 +129,12 @@ def parse_numpy_printoption(kv_str):
     numpy.set_printoptions(**{k: v})
 
 
-# noinspection PyUnusedLocal
 def main(unused_argv):
     """
     Main entry:
     """
+    # tf.app.run passes argv; the flags are read from FLAGS instead
+    del unused_argv  # flags come from FLAGS
     if not FLAGS.file_name:
         print("Usage: inspect_checkpoint --file_name=checkpoint_file_name [--tensor_name=tensor_to_print]")
         sys.exit(1)

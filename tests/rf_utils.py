@@ -199,7 +199,27 @@ def run_model(
     for k, v_pt in out_pt_raw.items():
         v_tf = out_tf_raw[k]
         print(f"  comparing {k!r} {_array_repr(v_pt)} PT vs TF")
-        if not numpy.allclose(v_pt, v_tf, atol=1e-5, rtol=1e-5):
+        # Tolerance relative to the tensor MAGNITUDE, not just per element:
+        # different backends use different op implementations (e.g. the FFT in stft),
+        # so the error scales with the values in the tensor, and a fixed atol either
+        # fails on large-magnitude outputs or hides real errors on small ones.
+        rtol = 1e-5
+        a_pt, a_tf = numpy.asarray(v_pt), numpy.asarray(v_tf)  # scalars (e.g. static dim sizes) too
+        scale = float(numpy.max(numpy.abs(a_pt))) if a_pt.size else 0.0
+        atol = 1e-5 + rtol * scale
+        if not numpy.allclose(a_pt, a_tf, atol=atol, rtol=rtol):
+            # report WHAT differs and by how much (numpy elides the arrays themselves,
+            # so a bare dump does not tell whether this is noise or a real mismatch)
+            d_pt, d_tf = a_pt.astype("complex128"), a_tf.astype("complex128")
+            diff = numpy.abs(d_pt - d_tf)
+            bad = diff > (atol + rtol * numpy.abs(d_tf))
+            i_max = numpy.unravel_index(int(numpy.argmax(diff)), diff.shape)
+            print(
+                f"  MISMATCH {k!r}: {int(bad.sum())} of {a_pt.size} elements,"
+                f" max abs diff {float(diff.max()):.3e} at {i_max}"
+                f" (PT {a_pt[i_max]!r} vs TF {a_tf[i_max]!r}),"
+                f" tensor max abs {scale:.3e}, tolerance atol {atol:.3e} rtol {rtol:.0e}"
+            )
             print(f"  PT:\n{v_pt}")
             print(f"  TF:\n{v_tf}")
             raise CompareResultsMismatchTfVsPtException(f"output {k!r} differs")
@@ -377,18 +397,42 @@ def _run_model_tf(extern_data: TensorDict, get_model: rf.GetModelFunc, forward_s
     """
     # noinspection PyProtectedMember
     from returnn.frontend import _backend
-    from returnn.tf.frontend_low_level import TFBackend
 
     extern_data_raw = extern_data.as_raw_tensor_dict(expected_value_type=numpy.ndarray)
     extern_data.reset_content()
+    prev_backend = rf.get_selected_backend()
     _backend.select_backend_tf()
+
+    # Restore even when the run raises:
+    # the dims (incl. the global batch_dim) are converted in place below,
+    # and the selected backend is global state that later tests inherit.
+    try:
+        return _run_model_tf_impl(extern_data, extern_data_raw, get_model, forward_step)
+    finally:
+        extern_data.reset_content()
+        extern_data.assign_from_raw_tensor_dict_(extern_data_raw)
+        rf.select_backend(prev_backend)
+
+
+def _run_model_tf_impl(
+    extern_data: TensorDict,
+    extern_data_raw: Dict[str, numpy.ndarray],
+    get_model: rf.GetModelFunc,
+    forward_step: rf.StepFunc,
+) -> TensorDict:
+    """see :func:`_run_model_tf`"""
+    from returnn.tf.frontend_low_level import TFBackend
 
     with tf_scope() as session:
         rf.set_random_seed(42)
         extern_data.assign_from_raw_tensor_dict_(extern_data_raw)
         _tensor_dict_numpy_to_tf_(extern_data)
 
-        model = get_model(epoch=1, step=0)
+        # the variables are created after the model, so that they can be named by module hierarchy
+        with TFBackend.deferred_parameter_creation():
+            model = get_model(epoch=1, step=0)
+        TFBackend.create_parameters(model)
+
         rf.init_forward_step_run_ctx(epoch=1, step=0)
         forward_step(model=model, extern_data=extern_data)
         outputs_tf = rf.get_run_ctx().outputs
@@ -401,22 +445,20 @@ def _run_model_tf(extern_data: TensorDict, get_model: rf.GetModelFunc, forward_s
             loss = rf.reduce_sum(loss, axis=loss.dims)
             d_grads = tf.gradients(loss.raw_tensor, [d.raw_tensor for d in data_.values()])
             for (name, data), d_grad_tf in zip(data_.items(), d_grads):
-                assert isinstance(d_grad_tf, tf.Tensor), f"no grad for {name}"
+                assert d_grad_tf is not None, f"no grad for {name}"
+                if isinstance(d_grad_tf, tf.IndexedSlices):
+                    d_grad_tf = tf.convert_to_tensor(d_grad_tf)  # e.g. gather produces a sparse grad
                 d_grad = data.copy_template()
                 d_grad.raw_tensor = d_grad_tf
                 outputs_tf.data[f"{name}_grad"] = d_grad
 
         session.run(tf_compat.v1.global_variables_initializer())
-        session.run(TFBackend.get_parameters_init_op(list(model.parameters())))
 
         fetches = outputs_tf.as_raw_tensor_dict(expected_value_type=tf.Tensor)
         outputs_numpy_raw = {k: numpy.asarray(v) for k, v in session.run(fetches).items()}
         outputs_numpy = outputs_tf.copy_template()
         outputs_numpy.reset_content()
         outputs_numpy.assign_from_raw_tensor_dict_(outputs_numpy_raw)
-
-    extern_data.reset_content()
-    extern_data.assign_from_raw_tensor_dict_(extern_data_raw)
     return outputs_numpy
 
 

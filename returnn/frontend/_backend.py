@@ -3,7 +3,7 @@ Backends for the frontend API
 """
 
 from __future__ import annotations
-from typing import Optional, Any, Union, TypeVar, Generic, Type, Callable, Sequence, Dict, Tuple, List
+from typing import Optional, Any, Union, TypeVar, Generic, Type, Callable, Sequence, Dict, Tuple
 import contextlib
 import numpy
 import returnn.frontend as rf
@@ -504,6 +504,71 @@ class Backend(Generic[T]):
         raise NotImplementedError
 
     @staticmethod
+    def concat_seq_wise(
+        *sources: Tuple[Tensor, Dim],
+        allow_broadcast: bool = False,
+        out_dim: Dim,
+    ) -> Tensor:
+        """
+        Concat along dims that need masking, i.e. dropping each source's padding
+        so that sequence n of the output holds the sequences n of all sources back to back.
+
+        This generic implementation concatenates the padded rectangles and compacts afterwards.
+        A backend whose storage is already per-sequence can override it and concat directly.
+        """
+        out_non_masked_dim = Dim(sum(d.get_dim_value_tensor() for _, d in sources))
+        # noinspection PyProtectedMember
+        backend = sources[0][0]._raw_backend
+        out = backend.concat(*sources, allow_broadcast=allow_broadcast, out_dim=out_non_masked_dim)
+        masks = []
+        for _, dim in sources:
+            masks.append(
+                dim.get_mask(dim_order=(dim,) + dim.dyn_size_ext.dims, device=out.device)
+                if dim.need_masking()
+                else rf.constant(True, dims=[dim], device=out.device)
+            )
+        mask_concat = backend.concat(
+            *[(mask, dim) for (_, dim), mask in zip(sources, masks)], allow_broadcast=True, out_dim=out_non_masked_dim
+        )
+        out, _ = rf.masked_select(out, mask=mask_concat, dims=[out_non_masked_dim], out_dim=out_dim)
+        return out
+
+    @staticmethod
+    def repeat(
+        values: Tensor,
+        *,
+        in_spatial_dim: Dim,
+        repeats: Tensor,
+        out_spatial_dim: Dim,
+    ) -> Tuple[Tensor, Dim]:
+        """
+        Repeat each element along in_spatial_dim as often as repeats says.
+
+        This generic implementation scans and gathers along in_spatial_dim.
+        A backend whose storage cannot be indexed along that dim brings its own.
+        """
+        idxs = rf.cumsum(repeats, spatial_dim=in_spatial_dim)  # [batch...,in_spatial_dim] -> idx in out_spatial_dim + 1
+        new_size = rf.gather(idxs, indices=in_spatial_dim.get_dim_value_tensor() - 1, axis=in_spatial_dim)  # [batch...]
+        dim_dev = rf.get_default_dim_size_device()
+        if out_spatial_dim.dyn_size_ext is None:
+            out_spatial_dim.dyn_size_ext = rf.copy_to_device(new_size, dim_dev)
+        elif out_spatial_dim.dyn_size_ext.raw_tensor is None:
+            out_spatial_dim.dyn_size_ext.raw_tensor = rf.copy_to_device(new_size, dim_dev).raw_tensor
+        out_spatial_dim_ext = out_spatial_dim + 1
+        rel_idx_counts = rf.scatter(
+            rf.expand_dims(rf.ones((), device=idxs.device, dtype="int32"), dims=idxs.dims),
+            indices=idxs,
+            indices_dim=in_spatial_dim,
+            out_dim=out_spatial_dim_ext,
+        )
+        # rel_idx_counts: [batch...,out_spatial_dim+1] -> count of how many times each index was selected
+        idxs_ = rf.cumsum(rel_idx_counts, spatial_dim=out_spatial_dim_ext)
+        # idxs_: [batch...,out_spatial_dim+1] -> idx in in_spatial_dim
+        idxs_, _ = rf.slice(idxs_, axis=out_spatial_dim_ext, size=out_spatial_dim)  # remove last element
+        # idxs_: [batch...,out_spatial_dim] -> idx in in_spatial_dim (potentially invalid in the padded area)
+        return rf.gather(values, indices=idxs_, axis=in_spatial_dim, clip_to_valid=True), out_spatial_dim
+
+    @staticmethod
     def pad(
         source: Tensor,
         *,
@@ -663,6 +728,84 @@ class Backend(Generic[T]):
     ) -> Tensor:
         """
         Calculates the CTC loss.
+        """
+        raise NotImplementedError
+
+    @staticmethod
+    def sdpa_varlen_raw(
+        *,
+        query: T,
+        key: T,
+        value: T,
+        seq_starts_q: T,
+        seq_lens_q: T,
+        seq_starts_kv: T,
+        seq_lens_kv: T,
+        max_len_q: int,
+        max_len_kv: int,
+        is_causal: bool,
+        dropout_p: float,
+        scale: float,
+    ) -> Optional[T]:
+        """
+        Attention over PACKED (total,heads,dim) buffers, on raw tensors, no padded intermediate.
+        Query and key/value may carry different packings (cross-attention).
+
+        Raw rather than :class:`Tensor`:
+        the packed layout has no Tensor representation on this side,
+        so the packed backend does the Tensor-level work around it.
+
+        :param query: (total_q,heads,dim)
+        :param key: (total_kv,heads,dim)
+        :param value: (total_kv,heads,dim)
+        :param seq_starts_q: (batch,) int32, ascending
+        :param seq_lens_q: (batch,) int32
+        :param seq_starts_kv: (batch,) int32, ascending
+        :param seq_lens_kv: (batch,) int32
+        :param max_len_q: static bound on the per-seq query length
+        :param max_len_kv: static bound on the per-seq kv length
+        :param is_causal: only valid when query and key/value share the packing
+        :param dropout_p: attention dropout
+        :param scale: qk scale
+        :return: out, shape (total_q,heads,dim), packed like the query.
+            None if this backend has no such kernel,
+            or has one but not for these inputs (device, dtype),
+            so the caller can pick another path.
+        """
+        return None
+
+    @staticmethod
+    def ctc_loss_packed_raw(
+        *,
+        logits: T,
+        seq_starts: T,
+        logits_seq_lens: T,
+        max_seq_len: int,
+        targets: T,
+        targets_seq_lens: T,
+        label_loop: bool,
+        logits_normalize: bool,
+        blank_index: int,
+        edges_bound: Optional[int],
+    ) -> T:
+        """
+        CTC loss over a PACKED (total,dim) logits buffer, on raw tensors,
+        via the backend's packed fast-baum-welch native op
+        (see :class:`returnn.native_op.FastBaumWelchPackedOp`).
+        Raw rather than :class:`Tensor`:
+        the packed layout has no Tensor representation on this side.
+
+        :param logits: (total_time,dim), float32, unnormalized unless logits_normalize is False
+        :param seq_starts: (batch,), int32, ascending start offset of each seq
+        :param logits_seq_lens: (batch,)
+        :param max_seq_len: max of logits_seq_lens as a host int (the mask width must be static)
+        :param targets: (batch,target_time)
+        :param targets_seq_lens: (batch,)
+        :param label_loop: True = CTC, False = RNA-like
+        :param logits_normalize: apply log_softmax on the logits
+        :param blank_index: vocab index of blank
+        :param edges_bound: packed FSA edge layout, see the packed native op
+        :return: loss, (batch,)
         """
         raise NotImplementedError
 
@@ -1638,12 +1781,15 @@ class Backend(Generic[T]):
             att.feature_dim = v_feat_dim
         return att
 
-    # For eager-based backends, this is a reasonable default implementation and type.
-    TensorArrayType = List[Tensor]
+    # For eager-based backends, List[Tensor] is a reasonable default implementation and type.
+    TensorArrayType = Any
 
     @classmethod
-    def tensor_array_create(cls) -> TensorArrayType:
+    def tensor_array_create(cls, *, capacity: Optional[int] = None) -> TensorArrayType:
         """
+        :param capacity: max number of entries, if known.
+            A backend whose graph loop needs a fixed-size carry (JAX: ``lax.while_loop``)
+            cannot grow the array and requires it; the eager and TF paths ignore it.
         :return: empty TensorArray
         """
         if cls.executing_eagerly():
@@ -1698,9 +1844,8 @@ class Backend(Generic[T]):
 
 # We use a global instance, and we modify __class__ inplace,
 # such that any reference to this can be updated.
-# This is exposed to the user as `returnn.frontend`.
 # The __class__ assignment is done in `select_engine`.
-# Use object.__new__ because we disallow creating instances of Frontend.
+# Use object.__new__ because we disallow creating instances of Backend.
 global_backend = object.__new__(Backend)
 
 _backend_tensor_type_dispatch_table = {}  # type: Dict[Type, Type[Backend]]

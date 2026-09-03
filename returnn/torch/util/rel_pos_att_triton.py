@@ -221,6 +221,99 @@ def _dropout_mask_kernel(
 
 # noinspection PyPep8Naming
 @triton.jit
+def _rel_pos_bwd_kernel_delta(
+    Q,
+    K,
+    V,
+    BD,
+    DO,
+    Lse,
+    Delta,
+    SeqStarts,
+    SeqLens,
+    Seed,
+    dropout_p,
+    scale,
+    stride_qt,
+    stride_qh,
+    stride_bt,
+    stride_bh,
+    H: tl.constexpr,
+    D: tl.constexpr,
+    R,
+    center,
+    BLOCK_M: tl.constexpr,
+    BLOCK_N: tl.constexpr,
+    ENABLE_DROPOUT: tl.constexpr,
+    IEEE: tl.constexpr,
+):
+    # delta_i = sum_j p_ij * dp_ij in f32, from the same recomputed p/dp the other bwd kernels use.
+    #
+    # Why a dedicated pass, instead of the flash-style shortcut delta = rowsum(out * d_out)?
+    # The shortcut rests on the identity sum_j p_ij dp_ij = do_i . out_i,
+    # which holds only for out = sum_j p_ij v_j EXACTLY.
+    # The stored out is bf16 (and was computed with p rounded to bf16 for the tensor-core dot),
+    # while dp = do v^T is f32-accumulated,
+    # so shortcut-delta and dp disagree at bf16 rounding scale (~2^-8).
+    # ds = p * (dp - delta) lives on the cancellation dp ~= delta
+    # at the dominant entries of sharp (trained) attention rows:
+    # the true difference shrinks with sharpness, the rounding mismatch does not,
+    # so it takes over exactly there -- and not as noise but as a per-row BIAS
+    # (one delta error hits the whole row coherently).
+    # ds is also the bd grad verbatim (DBD below), reduced over all rows
+    # into the few pos-bias params: the bias survives the reduction,
+    # drifts the pos term, sharpens attention further, and compounds into
+    # training collapse (observed at head dim 128 by ~ep 7, 64 later).
+    # The padded path is immune: torch's softmax bwd computes the row sum
+    # from the same stored p and dp it multiplies, exact by construction --
+    # this pass restores that property without materializing p
+    # (f32 out storage would only shrink the mismatch, not remove it:
+    # the fwd p is still rounded for the p.v dot).
+    # Cost: one extra attention-shaped pass; fwd and memory unchanged.
+    pid_m = tl.program_id(0)
+    pid_bh = tl.program_id(1)
+    b = pid_bh // H
+    h = pid_bh % H
+    seq_start = tl.load(SeqStarts + b)
+    seq_len = tl.load(SeqLens + b)
+    if pid_m * BLOCK_M >= seq_len:
+        return
+    offs_m = pid_m * BLOCK_M + tl.arange(0, BLOCK_M)
+    offs_d = tl.arange(0, D)
+    m_mask = offs_m < seq_len
+    q_rows = seq_start + offs_m
+    q = tl.load(Q + q_rows[:, None] * stride_qt + h * stride_qh + offs_d[None, :], mask=m_mask[:, None], other=0.0)
+    do = tl.load(DO + q_rows[:, None] * stride_qt + h * stride_qh + offs_d[None, :], mask=m_mask[:, None], other=0.0)
+    lse = tl.load(Lse + q_rows * H + h, mask=m_mask, other=0.0)
+    delta = tl.zeros([BLOCK_M], dtype=tl.float32)
+    for start_n in range(0, seq_len, BLOCK_N):
+        offs_n = start_n + tl.arange(0, BLOCK_N)
+        n_mask = offs_n < seq_len
+        k_rows = seq_start + offs_n
+        k = tl.load(K + k_rows[:, None] * stride_qt + h * stride_qh + offs_d[None, :], mask=n_mask[:, None], other=0.0)
+        v = tl.load(V + k_rows[:, None] * stride_qt + h * stride_qh + offs_d[None, :], mask=n_mask[:, None], other=0.0)
+        if IEEE:
+            s = tl.dot(q, tl.trans(k), input_precision="ieee") * scale
+            dp = tl.dot(do, tl.trans(v), input_precision="ieee")
+        else:
+            s = tl.dot(q, tl.trans(k)) * scale
+            dp = tl.dot(do, tl.trans(v))
+        rel = center + offs_n[None, :] - offs_m[:, None]
+        valid = m_mask[:, None] & n_mask[None, :]
+        bd = tl.load(BD + q_rows[:, None] * stride_bt + h * stride_bh + rel, mask=valid, other=0.0)
+        s = tl.where(valid, s + bd, float("-inf"))
+        p = tl.exp(s - lse[:, None])
+        if ENABLE_DROPOUT:
+            # int32 offsets, head in the seed -- see the fwd kernel
+            offs = q_rows[:, None] * R + offs_n[None, :]
+            keep = tl.rand(tl.load(Seed) + h * 1000003, offs) >= dropout_p
+            dp = tl.where(keep, dp / (1.0 - dropout_p), 0.0)
+        delta += tl.sum(tl.where(valid, p * dp, 0.0), 1)
+    tl.store(Delta + q_rows * H + h, delta, mask=m_mask)
+
+
+# noinspection PyPep8Naming
+@triton.jit
 def _rel_pos_bwd_kernel_dkv(
     Q,
     K,
@@ -400,7 +493,8 @@ def rel_pos_att_bwd(q, k, v, bd, seq_starts, seq_lens, max_len, out, lse, d_out,
     if scale is None:
         scale = 1.0 / math.sqrt(d)
     seed = _seed_tensor(seed, q.device)
-    delta = (d_out.float() * out.float()).sum(-1)  # (total, H)
+    del out  # unused since delta is recomputed in-kernel (see _rel_pos_bwd_kernel_delta); kept in the API
+    delta = torch.zeros(q.shape[0], n_heads, device=q.device, dtype=torch.float32)
     dq = torch.zeros_like(q, dtype=torch.float32)
     dk = torch.zeros_like(k, dtype=torch.float32)
     dv = torch.zeros_like(v, dtype=torch.float32)
@@ -417,6 +511,25 @@ def rel_pos_att_bwd(q, k, v, bd, seq_starts, seq_lens, max_len, out, lse, d_out,
         BLOCK_N=block_n,
         ENABLE_DROPOUT=dropout_p > 0.0,
         IEEE=q.dtype == torch.float32,
+    )
+    _rel_pos_bwd_kernel_delta[(triton.cdiv(max_len, block_m), n_batch * n_heads)](
+        q,
+        k,
+        v,
+        bd,
+        d_out,
+        lse,
+        delta,
+        seq_starts,
+        seq_lens,
+        seed,
+        dropout_p,
+        scale,
+        q.stride(0),
+        q.stride(1),
+        bd.stride(0),
+        bd.stride(1),
+        **args,
     )
     _rel_pos_bwd_kernel_dkv[(triton.cdiv(max_len, block_n), n_batch * n_heads)](
         q,
@@ -555,9 +668,9 @@ if hasattr(torch.library, "custom_op"):  # torch >= 2.4
             q, k, v, bd, seq_starts, seq_lens, max_seq_len, dropout_p=dropout_p, seed=seed, scale=scale
         )
 
-    # noinspection PyUnusedLocal
     @_lib_fwd.register_fake
     def _lib_fwd_fake(q, k, v, bd, seq_starts, seq_lens, max_seq_len, dropout_p, seed, scale):
+        del k, v, bd, seq_starts, seq_lens, max_seq_len, dropout_p, seed, scale
         total, n_heads, _ = q.shape
         return torch.empty_like(q), q.new_empty((total, n_heads), dtype=torch.float32)
 
@@ -594,9 +707,9 @@ if hasattr(torch.library, "custom_op"):  # torch >= 2.4
         )
         return dq.to(q.dtype), dk.to(k.dtype), dv.to(v.dtype), dbd.to(bd.dtype)
 
-    # noinspection PyUnusedLocal
     @_lib_bwd.register_fake
     def _lib_bwd_fake(q, k, v, bd, seq_starts, seq_lens, max_seq_len, out, lse, d_out, dropout_p, seed, scale):
+        del seq_starts, seq_lens, max_seq_len, out, lse, d_out, dropout_p, seed, scale
         return torch.empty_like(q), torch.empty_like(k), torch.empty_like(v), torch.empty_like(bd)
 
     def _lib_setup_context(ctx, inputs, output):
@@ -648,9 +761,9 @@ if hasattr(torch.library, "custom_op"):  # torch >= 2.4
         )
         return out.contiguous(), lse.contiguous()
 
-    # noinspection PyUnusedLocal
     @_lib_fused_fwd.register_fake
     def _lib_fused_fwd_fake(q, k, v, qv, pos_emb, seq_starts, seq_lens, max_seq_len, dropout_p, seed, bd_scale, scale):
+        del k, v, qv, pos_emb, seq_starts, seq_lens, max_seq_len, dropout_p, seed, bd_scale, scale
         total, n_heads, d = q.shape
         # plain new_empty (NOT empty_like):
         # the fake must promise the real op's contiguous output layout,
@@ -706,12 +819,12 @@ if hasattr(torch.library, "custom_op"):  # torch >= 2.4
             d_pos.to(pos_emb.dtype).contiguous(),
         )
 
-    # noinspection PyUnusedLocal
     @_lib_fused_bwd.register_fake
     def _lib_fused_bwd_fake(
         q, k, v, qv, pos_emb, seq_starts, seq_lens, max_seq_len, out, lse, d_out, dropout_p, seed, bd_scale, scale
     ):
         # plain new_empty (NOT empty_like), see _lib_fused_fwd_fake
+        del seq_starts, seq_lens, max_seq_len, out, lse, d_out, dropout_p, seed, bd_scale, scale
         return (
             q.new_empty(tuple(q.shape)),
             k.new_empty(tuple(k.shape)),

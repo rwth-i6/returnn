@@ -11,10 +11,21 @@
         </value>
       </option>
     </inspection_tool>
-    <inspection_tool class="PyPackageRequirementsInspection" enabled="true" level="WARNING" enabled_by_default="true">
+    <!-- Disabled: in PyCharm 2026.2 (PY-262.8665) this tool throws
+         IndexOutOfBoundsException in PyLiteralType promoteDictLiteralOrDictComprehension
+         (~30x per run; the code got a size guard upstream after our build). The exception
+         aborts/poisons the per-file analysis session, which made OTHER inspections
+         (PyUnresolvedReferences on torch members) nondeterministic per file per run.
+         Results were never counted anyway (inspect_class_not_counted: too many false alarms). -->
+    <inspection_tool class="PyTypeCheckerInspection" enabled="false" level="WARNING" enabled_by_default="false" />
+    <!-- Disabled: in PyCharm 2026.2 this tool NPEs per file (normalizePackageName(null) in
+         DeclaredButNotInstalledPackagesChecker), and one throwing tool aborts the WHOLE
+         per-file inspection batch, silently emptying the report. Its results were never
+         counted anyway (see inspect_class_not_counted in pycharm-inspect.py). -->
+    <inspection_tool class="PyPackageRequirementsInspection" enabled="false" level="WARNING" enabled_by_default="false">
     <option name="ignoredPackages">
       <value>
-        <list size="21">
+        <list size="22">
           <item index="0" class="java.lang.String" itemvalue="tensorflow" />
           <item index="1" class="java.lang.String" itemvalue="theano" />
           <item index="2" class="java.lang.String" itemvalue="numpy" />
@@ -36,6 +47,7 @@
           <item index="18" class="java.lang.String" itemvalue="transformers" />
           <item index="19" class="java.lang.String" itemvalue="espnet" />
           <item index="20" class="java.lang.String" itemvalue="jax" />
+          <item index="21" class="java.lang.String" itemvalue="optax" />
         </list>
       </value>
     </option>
@@ -46,6 +58,36 @@
       <option name="ignoredErrors">
         <list>
           <option value="E203" />
+        </list>
+      </option>
+    </inspection_tool>
+    <!-- Ignored types: everything here is a type RETURNN does not own
+         (stdlib, numpy, torch, typeshed protocols, ABCs).
+         Their runtime values format fine; only the stub omits the dunder,
+         and this inspection can never indicate a runtime fault, just an unhelpful repr.
+         RETURNN's OWN types are not listed: those get a real __repr__ instead. -->
+    <inspection_tool class="PyStringConversionWithoutDunderMethodInspection" enabled="true" level="WARNING" enabled_by_default="true">
+      <option name="ignoredTypes">
+        <list>
+          <option value="function" />
+          <option value="object" />
+          <option value="builtins.object" />
+          <option value="types.FunctionType" />
+          <option value="types.BuiltinFunctionType" />
+          <option value="types.MethodType" />
+          <option value="decimal.Decimal" />
+          <option value="numpy.floating" />
+          <option value="numpy.signedinteger" />
+          <option value="numpy.ndarray" />
+          <option value="numpy.dtype" />
+          <option value="os.PathLike" />
+          <option value="typing.Sequence" />
+          <option value="typing.Iterable" />
+          <option value="collections.abc.Sequence" />
+          <option value="collections.abc.Iterable" />
+          <option value="torch.autograd.graph.saved_tensors_hooks" />
+          <option value="_typeshed.SupportsDunderGT" />
+          <option value="_typeshed.SupportsDunderLT" />
         </list>
       </option>
     </inspection_tool>

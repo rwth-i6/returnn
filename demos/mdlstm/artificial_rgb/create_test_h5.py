@@ -1,22 +1,43 @@
 #!/usr/bin/env python
 # coding=utf-8
+
+"""
+Create a small artificial HDF dataset (RGB images) for the MDLSTM demo.
+"""
+
 import h5py
 import numpy
 
 
 def hdf5_strings(handle, name, data):
+    """
+    Write a list of strings as an HDF5 dataset.
+
+    :param h5py.File handle:
+    :param str name: dataset name
+    :param list[str] data:
+    """
     try:
-        S = max([len(d) for d in data])
-        dset = handle.create_dataset(name, (len(data),), dtype="S" + str(S))
+        s = max([len(d) for d in data])
+        dset = handle.create_dataset(name, (len(data),), dtype="S" + str(s))
         dset[...] = data
     except Exception:
-        dt = h5py.special_dtype(vlen=unicode)
+        dt = h5py.special_dtype(vlen=str)
         del handle[name]
         dset = handle.create_dataset(name, (len(data),), dtype=dt)
         dset[...] = data
 
 
 def write_to_hdf(img_list, transcription_list, charlist, out_file_name, dataset_prefix="train"):
+    """
+    Write the RGB images and their transcriptions to an HDF dataset.
+
+    :param list[numpy.ndarray] img_list:
+    :param list[list[int]] transcription_list: indices into charlist
+    :param list[str] charlist:
+    :param str out_file_name:
+    :param str dataset_prefix:
+    """
     with h5py.File(out_file_name, "w") as f:
         f.attrs["inputPattSize"] = 3  # 3 for rgb (I think this value isn't actually used anymore)
         f.attrs["numDims"] = 1
@@ -59,8 +80,13 @@ def write_to_hdf(img_list, transcription_list, charlist, out_file_name, dataset_
 
 
 def main():
-    # TODO: replace this by the list of your chars (do not include the blank from CTC here, but you can include whitespace)
-    # attention: at the moment, the number of chars needs to be hardcoded in the config: "classes": [4,1], there the 4 must be len(char_list)
+    """
+    Write the demo dataset. Edit the char/image/transcription lists below for your own data.
+    """
+    # TODO: replace this by the list of your chars
+    # (do not include the blank from CTC here, but you can include whitespace)
+    # attention: at the moment, the number of chars needs to be hardcoded in the config:
+    # "classes": [4,1], there the 4 must be len(char_list)
     char_list = ["a", "b", "c", "d"]
     # TODO: replace this by some read images to use your own data
     # rgb data: 3rd dimension is 3

@@ -127,6 +127,14 @@ def _lru_cache_wrapper(user_function, maxsize: int, typed: bool):
                 # still adjusting the links.
                 root = oldroot[NEXT]
                 oldkey = root[KEY]
+                # oldresult is deliberately unused:
+                # it only keeps the evicted value alive across the mutation below.
+                # Dropping it here frees the value mid-update,
+                # and a weakref finalizer (returnn.frontend._cache.Cache.set)
+                # re-enters cache_pop through the RLock,
+                # finds this link with KEY already None -- the root sentinel -- and clears it,
+                # so the next insert hits `oldroot[KEY] = key` on an empty list.
+                oldresult = root[RESULT]  # noqa: F841
                 root[KEY] = root[RESULT] = None
                 # Now update the cache dictionary.
                 del cache[oldkey]
@@ -152,9 +160,14 @@ def _lru_cache_wrapper(user_function, maxsize: int, typed: bool):
         """Clear the cache and cache statistics"""
         nonlocal hits, misses, full
         with lock:
-            for link in cache.values():
-                link.clear()  # make GC happy
+            # Unmap first, then clear the links (see cache_pop):
+            # link.clear() can drop the last reference to a cached value,
+            # whose finalizer may re-enter through the reentrant lock.
+            # With the dict already empty, such a re-entry just misses.
+            links = list(cache.values())
             cache.clear()
+            for link in links:
+                link.clear()  # make GC happy
             root[:] = [root, root, None, None]
             hits = misses = 0
             full = False
@@ -201,13 +214,19 @@ def _lru_cache_wrapper(user_function, maxsize: int, typed: bool):
         with lock:
             link = cache_get(key)
             if link is not None:
-                # Take out link.
-                link[PREV][NEXT] = link[NEXT]
-                link[NEXT][PREV] = link[PREV]
                 oldkey = link[KEY]
                 oldvalue = link[RESULT]
-                link.clear()
+                # Unmap FIRST, then take the link out.
+                # Dropping references below can run a weakref finalizer,
+                # which may re-enter cache_pop through the reentrant lock
+                # (returnn.frontend._cache.Cache.set registers exactly such a finalizer).
+                # While the dict still mapped to this link,
+                # that re-entry would mutate a half-updated or already-cleared link.
+                # Unmapped, it simply misses.
                 del cache[oldkey]
+                link[PREV][NEXT] = link[NEXT]
+                link[NEXT][PREV] = link[PREV]
+                link.clear()
                 full = cache_len() >= maxsize
                 return oldvalue
             if fallback is not_specified:
@@ -227,12 +246,12 @@ def _lru_cache_wrapper(user_function, maxsize: int, typed: bool):
             assert cache
             # Take out oldest link.
             link: list = root[NEXT]
-            link[NEXT][PREV] = root
-            root[NEXT] = link[NEXT]
             oldkey = link[KEY]
             oldvalue = link[RESULT]
+            del cache[oldkey]  # unmap first, see cache_pop
+            link[NEXT][PREV] = root
+            root[NEXT] = link[NEXT]
             link.clear()
-            del cache[oldkey]
             full = cache_len() >= maxsize
             return oldvalue
 

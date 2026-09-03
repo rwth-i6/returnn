@@ -115,7 +115,6 @@ It depends on whether the full network is recurrent or not.
 
 from __future__ import annotations
 
-import contextlib
 import sys
 import typing
 from typing import Optional, Dict
@@ -261,6 +260,7 @@ class FeedDictDataProvider(DataProviderBase):
         self.queue = Queue(maxsize=capacity)
         self.thread = None  # type: typing.Optional[Thread]
         self.thread_finished = False
+        self.thread_exception = None  # type: typing.Optional[BaseException]
         self.cur_batch_idx = 0
         self.reached_end = False
 
@@ -311,78 +311,26 @@ class FeedDictDataProvider(DataProviderBase):
                 return None
             if step > 1 and (cur_batch_idx - start) % step != 0:
                 return None
-        from returnn.datasets.basic import Batch, shapes_for_batches
+        from returnn.datasets.basic import Batch
+        from returnn.engine.batch import batch_to_raw_dict
 
         assert isinstance(batch, Batch)
-        # In Returnn with Theano, we usually have the shape (time,batch,feature).
-        # In TensorFlow, the default is (batch,time,feature).
-        # This is also what we use here, i.e. batch_dim_first=True.
-        # This must match the Data specification in TFNetwork.ExternData.init_from_config().
-        shapes = shapes_for_batches(
-            [batch], data_keys=self.data_keys, extern_data=self.extern_data, enforce_min_len1=self.enforce_min_len1
+        # The assembly itself is backend independent and shared with the other engines.
+        # Shape convention here is (batch, time, feature),
+        # matching the Data specification in TFNetwork.ExternData.init_from_config().
+        d = batch_to_raw_dict(
+            batch,
+            dataset=self.dataset,
+            extern_data=self.extern_data,
+            data_keys=self.data_keys,
+            enforce_min_len1=self.enforce_min_len1,
+            exclude_data_key=self._exclude_data_key,
         )
-        data = {
-            k: numpy.zeros(shape=shapes[k], dtype=self.extern_data.data[k].dtype)
-            for k in self.data_keys
-            if self.extern_data.data[k].dtype != "string"
-        }
-        # Numpy cannot handle "string" dtype. Just make it a list[str], which is what TF can handle.
-        data.update({k: [""] * batch.num_slices for k in self.data_keys if self.extern_data.data[k].dtype == "string"})
-        data.update({"seq_idx": [-1] * batch.num_slices, "seq_tag": [""] * batch.num_slices})
-        seq_lens = {
-            k: numpy.zeros(shape=(shapes[k][0],), dtype=self.extern_data.data[k].size_dtype)
-            for k in self.data_keys
-            if self.extern_data.data[k].get_dynamic_axes()
-        }
-        self.dataset.load_seqs(batch.start_seq, batch.end_seq)
-        from returnn.util.basic import slice_pad_zeros
-
-        with self.dataset.lock or contextlib.nullcontext():
-            for seq in batch.seqs:
-                o = seq.batch_frame_offset
-                q = seq.batch_slice
-                length = seq.frame_length
-                # input-data, input-index will also be set in this loop. That is data-key "data".
-                for k in self.data_keys:
-                    # Some special cases first, such as "seq_idx" and "seq_tag".
-                    # See also :func:`TFNetwork.get_extern_data`.
-                    if k in ["seq_idx", "seq_tag"]:
-                        continue  # handled below. will always be added
-                    if self._exclude_data_key(k):
-                        continue
-                    data_ = self.extern_data.data[k]
-                    # Do not rely on time_dim_axis but check for any dynamic axes.
-                    dyn_axes = data_.get_dynamic_axes()
-                    assert len(dyn_axes) <= 1, f"unexpected dynamic axes in data {k!r} {data_}"
-                    if dyn_axes:
-                        if length.get(k) in [0, None]:
-                            continue
-                    v = self.dataset.get_data(seq.seq_idx, k)
-                    if dyn_axes:
-                        v = slice_pad_zeros(v, begin=seq.seq_start_frame[k], end=seq.seq_end_frame[k])
-                        ls = v.shape[0]
-                        if ls != length[k]:
-                            raise Exception(
-                                "got shape[0]: %i, expected: %i, start/end: %r/%r, seq_idx: %i, seq len: %r"
-                                % (
-                                    ls,
-                                    length[k],
-                                    seq.seq_start_frame,
-                                    seq.seq_end_frame,
-                                    seq.seq_idx,
-                                    self.dataset.get_seq_length(seq.seq_idx),
-                                )
-                            )
-                        data[k][q, o[k] : o[k] + ls] = v
-                        seq_lens[k][q] = max(seq_lens[k][q], o[k] + ls)
-                    else:  # no time-axis
-                        data[k][q] = v
-                data["seq_idx"][q] = seq.seq_idx
-                data["seq_tag"][q] = self.dataset.get_tag(seq.seq_idx)
-        for k in seq_lens.keys():
-            data["%s_seq_lens" % k] = seq_lens[k]
-        data["batch_dim"] = batch.num_slices
-        return data
+        # For the epoch_continuous of a dynamic LR schedule (see the RF TF engine):
+        # None if the dataset cannot give a monotonic fraction.
+        # Computed here, in the producer thread, since the consumer no longer sees the Batch.
+        d["complete_frac"] = self.dataset.get_complete_frac(batch.end_seq - 1, allow_only_lr_suitable=True)
+        return d
 
     def _thread_main(self):
         try:
@@ -403,6 +351,10 @@ class FeedDictDataProvider(DataProviderBase):
         except Exception as exc:
             print("Exception in DataProvider thread: %r" % exc, file=log.v1)
             sys.excepthook(*sys.exc_info())
+            # re-raised in the consumer (have_more_data).
+            # Without this the consumer just sees end-of-data
+            # and finishes the epoch "successfully" on a TRUNCATED dataset.
+            self.thread_exception = exc
 
         finally:
             with self.state_change_cond:
@@ -422,9 +374,10 @@ class FeedDictDataProvider(DataProviderBase):
                 # First check if there is still data in the queue to be processed.
                 if self.queue and not self.queue.empty():
                     return True
-                if self.thread_finished:
-                    return False
-                if not self.thread.is_alive:
+                if self.thread_finished or not self.thread.is_alive:
+                    # not during shutdown (_flush_all_data after request_stop): cleanup must finish
+                    if self.thread_exception is not None and not self.coord.should_stop():
+                        raise self.thread_exception
                     return False
                 # The thread is alive and working. Wait for a change.
                 self.state_change_cond.wait()
@@ -474,19 +427,25 @@ class FeedDictDataProvider(DataProviderBase):
                         "dataset currently does not support variable shape in other dimensions than the first. "
                         "dim=%i, placeholder=%r" % (dim, len_placeholder)
                     )
-        assert isinstance(self.extern_data, ExternData)
-        batch_info = self.extern_data.get_batch_info()
-        batch_dim = batch_info.dim
-        if isinstance(batch_dim, int):
-            assert batch_dim == output["batch_dim"], "configured static batch dim %s %s != actual batch dim %s" % (
-                batch_info,
-                batch_dim,
-                output["batch_dim"],
-            )
-        else:
-            assert isinstance(batch_dim, tf.Tensor)
-            d[batch_dim] = output["batch_dim"]
-        return d, {"seq_idx": output["seq_idx"], "seq_tag": output["seq_tag"]}
+        if isinstance(self.extern_data, ExternData):
+            batch_info = self.extern_data.get_batch_info()
+            batch_dim = batch_info.dim
+            if isinstance(batch_dim, int):
+                assert batch_dim == output["batch_dim"], "configured static batch dim %s %s != actual batch dim %s" % (
+                    batch_info,
+                    batch_dim,
+                    output["batch_dim"],
+                )
+            else:
+                assert isinstance(batch_dim, tf.Tensor)
+                d[batch_dim] = output["batch_dim"]
+        # else: a bare TensorDict (the RF TF engine) -- no batch info to feed,
+        # the engine derives the batch dim from the data itself
+        return d, {
+            "seq_idx": output["seq_idx"],
+            "seq_tag": output["seq_tag"],
+            "complete_frac": output.get("complete_frac"),
+        }
 
     def get_dataset_name(self):
         """
@@ -681,6 +640,8 @@ class InputContext:
         :rtype: tf.Operation
         """
         assert self.final_dataset
+        # TF internal API, no public equivalent for an explicit iterator initializer
+        # noinspection PyUnresolvedReferences
         return iterator.make_initializer(self.final_dataset)
 
 

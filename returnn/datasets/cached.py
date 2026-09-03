@@ -1,3 +1,7 @@
+"""
+CachedDataset: dataset base class that preloads sequences into a fixed-size memory cache.
+"""
+
 from __future__ import annotations
 from typing import List
 import gc
@@ -232,7 +236,9 @@ class CachedDataset(Dataset):
 
         if self.cache_byte_size_limit_at_start > 0:  # If the cache is enabled.
             self._load_seqs_with_cache(start, end)
-            return self.is_cached(start, end, blocking=True)
+            # blocking wait for the cache to be filled
+            self.is_cached(start, end, blocking=True)
+            return
 
         super(CachedDataset, self).load_seqs(start, end)
 
@@ -305,11 +311,11 @@ class CachedDataset(Dataset):
         idi = self.alloc_interval_index(idc)
         assert idi >= 0
         o = self._seq_start[idc][0] - self._seq_start[self.alloc_intervals[idi][0]][0]
-        l = data.shape[0]
+        length = data.shape[0]
         x = data
         if self.window > 1:
             x = self._sliding_window(x)
-        self.alloc_intervals[idi][2][o : o + l] = x
+        self.alloc_intervals[idi][2][o : o + length] = x
 
     def alloc_interval_index(self, ids):
         """
@@ -463,7 +469,8 @@ class CachedDataset(Dataset):
         """
         Inserts/removes sorted seq idx range (start,end).
         :param int start: like in load_seqs(), sorted seq idx
-        :param int end: like in load_seqs(), sorted seq idx
+        :param int|None end: like in load_seqs(), sorted seq idx, exclusive; start+1 if None,
+            which is what both callers pass by default
         :param bool invert: True->insert, False->remove
         :rtype: list[int]
         :return selection list, modified sorted seq idx in self.alloc_intervals
@@ -471,7 +478,7 @@ class CachedDataset(Dataset):
         if end is None:
             end = start + 1
         if start == end:
-            return
+            return []
         assert start < end
         i = 0
         selection = []  # type: typing.List[int]
@@ -509,9 +516,21 @@ class CachedDataset(Dataset):
         return selection
 
     def insert_alloc_interval(self, start, end=None):
+        """
+        :param int start: like in load_seqs(), sorted seq idx
+        :param int|None end: like in load_seqs(), sorted seq idx, exclusive; start+1 if None
+        :return: selection list, the sorted seq idxs now covered by self.alloc_intervals
+        :rtype: list[int]
+        """
         return self._modify_alloc_intervals(start, end, True)
 
     def remove_alloc_interval(self, start, end=None):
+        """
+        :param int start: like in load_seqs(), sorted seq idx
+        :param int|None end: like in load_seqs(), sorted seq idx, exclusive; start+1 if None
+        :return: selection list, the sorted seq idxs no longer covered by self.alloc_intervals
+        :rtype: list[int]
+        """
         return self._modify_alloc_intervals(start, end, False)
 
     def delete(self, nframes):
@@ -546,6 +565,8 @@ class CachedDataset(Dataset):
         """
         :param int start: like in load_seqs(), sorted seq idx
         :param int end: like in load_seqs(), sorted seq idx
+        :param bool blocking: if the range is within the preload range, wait for it to be preloaded
+          instead of reporting it as not cached
         :rtype: bool
         :returns whether we have the full range (start,end) of sorted seq idx
           cached in self.alloc_intervals (end is exclusive).
@@ -588,8 +609,8 @@ class CachedDataset(Dataset):
         if self.num_inputs > 0:
             d["data"] = lengths[0]
             first_target_idx = 1
-        for k, l in zip(self.target_keys, lengths[first_target_idx:]):
-            d[k] = l
+        for k, length in zip(self.target_keys, lengths[first_target_idx:]):
+            d[k] = length
         return NumbersDict(d)
 
     def get_seq_start(self, sorted_seq_idx):
@@ -611,9 +632,9 @@ class CachedDataset(Dataset):
         alloc_start_seq, alloc_end_seq, alloc_data = self.alloc_intervals[idi]
         o = self.get_seq_start(seq_idx)[0] - self.get_seq_start(alloc_start_seq)[0]
         assert o >= 0
-        l = self.get_seq_length_nd(sorted_seq_idx)[0]
-        assert alloc_data.shape[0] >= o + l
-        return alloc_data[o : o + l]
+        length = self.get_seq_length_nd(sorted_seq_idx)[0]
+        assert alloc_data.shape[0] >= o + length
+        return alloc_data[o : o + length]
 
     def get_data_dim(self, key):
         if key == "data" and self.num_inputs > 0:  # if num_inputs == 0, we allow "data" as a target key

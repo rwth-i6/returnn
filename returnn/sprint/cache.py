@@ -209,6 +209,7 @@ class FileArchive:
     end_recovery_tag = 0x55AA55AA
 
     def __init__(self, filename, must_exists=True, encoding="ascii"):
+        self.filename = filename
         self.encoding = encoding
 
         self.ft: Dict[str, FileInfo] = {}
@@ -234,6 +235,9 @@ class FileArchive:
         if len(self._short_seg_names) < len(self.ft):
             # We don't have a unique mapping, so we cannot use this.
             self._short_seg_names.clear()
+
+    def __repr__(self):
+        return f"<{self.__class__.__name__} {self.filename!r} {len(self.ft)} entries>"
 
     def file_list(self):
         """
@@ -411,6 +415,9 @@ class FileArchive:
                     return alignment
             else:
                 raise Exception("No valid alignment header found (found: %r). Wrong cache?" % alignment_header)
+
+        else:
+            raise ValueError(f"{self}: unknown typ {typ!r}")
 
     def has_entry(self, filename):
         """

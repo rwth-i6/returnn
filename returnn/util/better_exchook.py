@@ -69,14 +69,17 @@ try:
 except ImportError:
     typing = None
 
-try:
+if sys.version_info >= (3, 5):
     from traceback import StackSummary, FrameSummary
-except ImportError:  # StackSummary, FrameSummary were added in Python 3.5
 
-    class _Dummy:
-        pass
+else:
 
-    StackSummary = FrameSummary = _Dummy
+    class StackSummary(list):
+        """dummy stub stack summary"""
+
+    class FrameSummary:
+        """dummy stub frame summary"""
+
 
 # noinspection PySetFunctionToLiteral,SpellCheckingInspection
 py_keywords = set(keyword.kwlist) | set(["None", "True", "False"])
@@ -403,6 +406,9 @@ def debug_shell(user_ns, user_global_ns, traceback=None, execWrapper=None):
                 class DummyMod:
                     """Dummy module"""
 
+                    __name__: str
+                    __dict__: dict
+
                 module = DummyMod()
                 module.__dict__ = user_global_ns
                 module.__name__ = "_DummyMod"
@@ -444,7 +450,7 @@ def output_limit():
 def fallback_findfile(filename):
     """
     :param str filename:
-    :return: try to find the full filename, e.g. in modules, etc
+    :return: try to find the full filename, e.g. in modules, etc.
     :rtype: str|None
     """
     mods = [m for m in list(sys.modules.values()) if m and getattr(m, "__file__", None) and filename in m.__file__]
@@ -825,12 +831,8 @@ class Color:
                 pass
         if state == 3:
             finish_identifier()
-        out = ""
-        i = 0
-        while i < len(s):
-            j = min([k for k in color_args.keys() if k > i])
-            out += self.color(s[i:j], **color_args[i])
-            i = j
+        keys = sorted(color_args)
+        out = "".join(self.color(s[i:j], **color_args[i]) for i, j in zip(keys, keys[1:]))
         return out
 
 
@@ -904,7 +906,7 @@ class DomTerm:
         """
         :param str prefix: always visible
         :param str postfix: always visible, right after.
-        :param io.TextIOBase|io.StringIO hidden_stream: sys.stdout by default.
+        :param io.TextIOBase|io.StringIO|None hidden_stream: sys.stdout by default.
             If this is sys.stdout, it will replace that stream,
             and collect the data during the context (in the `with` block).
         """
@@ -926,7 +928,7 @@ class DomTerm:
             If this is sys.stdout, it will replace that stream,
             and collect the data during the context (in the `with` block).
         :param str postfix: always visible, right after. "" by default.
-        :param io.TextIOBase|io.StringIO file: sys.stdout by default.
+        :param io.TextIOBase|io.StringIO|None file: sys.stdout by default.
         :param int align: remove this number of initial chars from hidden
         """
         if file is None:
@@ -1137,13 +1139,14 @@ def format_tb(
 
     Replacement for traceback.format_tb.
 
-    :param types.TracebackType|types.FrameType|StackSummary tb: traceback. If None, will use sys._getframe
+    :param types.TracebackType|types.FrameType|StackSummary|None tb: traceback. If None, will use sys._getframe
     :param int|None limit: limit the traceback to this number of frames. by default, will look at sys.tracebacklimit
     :param dict[str,typing.Any]|None allLocals: if set, will update it with all locals from all frames
     :param dict[str,typing.Any]|None allGlobals: if set, will update it with all globals from all frames
     :param bool withTitle:
     :param bool|None with_color: output with ANSI escape codes for color
-    :param bool with_vars: will print var contents that are referenced in the source code line. by default enabled.
+    :param bool|None with_vars: will print var contents that are referenced in the source code line.
+        by default enabled (unless at exit or on a GC stack).
     :param bool clear_frames: whether to call frame.clear() after processing it.
         That will potentially fix some mem leaks regarding locals, so it can be important.
         Also see https://github.com/python/cpython/issues/113939.
@@ -1185,16 +1188,8 @@ def format_tb(
             output(color("format_tb: tb is None and sys._getframe() failed", color.fg_colors[1], bold=True))
             return output.lines
 
-    def is_stack_summary(_tb):
-        """
-        :param StackSummary|object _tb:
-        :rtype: bool
-        """
-        return isinstance(_tb, StackSummary)
-
-    isframe = inspect.isframe
     if withTitle:
-        if isframe(tb) or is_stack_summary(tb):
+        if isinstance(tb, (types.FrameType, StackSummary)):
             output(color("Traceback (most recent call first):", color.fg_colors[0]))
         else:  # expect traceback-object (or compatible)
             output(color("Traceback (most recent call last):", color.fg_colors[0]))
@@ -1229,11 +1224,11 @@ def format_tb(
         _tb = tb
 
         while _tb is not None and (limit is None or n < limit):
-            if isframe(_tb):
+            if isinstance(_tb, types.FrameType):
                 f = _tb
                 lasti = f.f_lasti
                 lineno, end_lineno, colno, end_colno = _get_code_position(f.f_code, lasti)
-            elif is_stack_summary(_tb):
+            elif isinstance(_tb, StackSummary):
                 _tb0 = _tb[0]
                 if isinstance(_tb0, ExtendedFrameSummary):
                     f = _tb0.tb_frame
@@ -1252,7 +1247,7 @@ def format_tb(
             if lineno is None:
                 if hasattr(_tb, "tb_lineno"):
                     lineno = _tb.tb_lineno
-                elif is_stack_summary(_tb):
+                elif isinstance(_tb, StackSummary):
                     lineno = _tb[0].lineno
                 else:
                     lineno = f.f_lineno
@@ -1388,9 +1383,9 @@ def format_tb(
                     # https://github.com/python/cpython/issues/113939
                     f.f_locals  # noqa
 
-            if isframe(_tb):
+            if isinstance(_tb, types.FrameType):
                 _tb = _tb.f_back
-            elif is_stack_summary(_tb):
+            elif isinstance(_tb, StackSummary):
                 _tb = StackSummary.from_list(_tb[1:])
                 if not _tb:
                     _tb = None
@@ -1699,10 +1694,10 @@ _func_from_code_object_cache = WeakKeyDictionary()  # code object -> function
 
 def get_func_from_code_object(co, frame=None):
     """
-    :param types.CodeType co:
+    :param types.CodeType|DummyFrame co:
     :param types.FrameType|DummyFrame|None frame: if given, might provide a faster way to get the function name
     :return: function, such that ``func.__code__ is co``, or None
-    :rtype: types.FunctionType
+    :rtype: types.FunctionType|None
 
     This is CPython specific (to some degree; it uses the `gc` module to find references).
     Inspired from:
@@ -1791,16 +1786,9 @@ def iter_traceback(tb=None, enforce_most_recent_call_first=False):
     if tb is None:
         tb = get_current_frame()
 
-    def is_stack_summary(_tb):
-        """
-        :param StackSummary|object _tb:
-        :rtype: bool
-        """
-        return isinstance(_tb, StackSummary)
-
     is_frame = inspect.isframe
     is_traceback = inspect.istraceback
-    assert is_traceback(tb) or is_frame(tb) or is_stack_summary(tb)
+    assert is_traceback(tb) or is_frame(tb) or isinstance(tb, StackSummary)
     # Frame or stack summery: most recent call first
     # Traceback: most recent call last
     if is_traceback(tb) and enforce_most_recent_call_first:
@@ -1813,7 +1801,7 @@ def iter_traceback(tb=None, enforce_most_recent_call_first=False):
     while _tb is not None:
         if is_frame(_tb):
             frame = _tb
-        elif is_stack_summary(_tb):
+        elif isinstance(_tb, StackSummary):
             _tb0 = _tb[0]
             if isinstance(_tb0, ExtendedFrameSummary):
                 frame = _tb0.tb_frame
@@ -1824,7 +1812,7 @@ def iter_traceback(tb=None, enforce_most_recent_call_first=False):
         yield frame
         if is_frame(_tb):
             _tb = _tb.f_back
-        elif is_stack_summary(_tb):
+        elif isinstance(_tb, StackSummary):
             _tb = StackSummary.from_list(_tb[1:])
             if not _tb:
                 _tb = None
@@ -1906,7 +1894,7 @@ class DummyFrame:
         self.f_locals = None
 
 
-# noinspection PyPep8Naming,PyUnusedLocal
+# noinspection PyPep8Naming
 def _StackSummary_extract(frame_gen, limit=None, lookup_lines=True, capture_locals=False):
     """
     Replacement for :func:`StackSummary.extract`.
@@ -1926,6 +1914,7 @@ def _StackSummary_extract(frame_gen, limit=None, lookup_lines=True, capture_loca
     :param capture_locals: If True, the local variables from each frame will
         be captured as object representations into the FrameSummary.
     """
+    del limit, lookup_lines, capture_locals  # part of the StackSummary.extract signature, not honoured here
     result = StackSummary()
     for f, lineno in frame_gen:
         co = f.f_code

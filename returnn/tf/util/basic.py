@@ -4,7 +4,7 @@ Lots of random utility functions for TensorFlow.
 
 from __future__ import annotations
 
-from typing import Optional, Union, Any, Sequence, List, Dict
+from typing import Optional, Union, Any, Sequence, List, Dict, TypeVar
 import typing
 import contextlib
 from dataclasses import dataclass
@@ -29,6 +29,8 @@ try:
 except ImportError:
     ControlFlowFuncGraph = None
 from tensorflow.python.ops.control_flow_ops import ControlFlowContext
+
+T = TypeVar("T")
 
 
 class CollectionKeys:
@@ -681,9 +683,9 @@ class _ScaledGradientBuilder:
 
         from tensorflow.python.framework import ops
 
-        # noinspection PyUnusedLocal
         @ops.RegisterGradient(grad_name)
         def _scale_gradients(op, grad):
+            del op  # TF grad signature (op, grad)
             grad_out = grad
             if isinstance(scale, tf.Tensor) or scale != 1.0:
                 grad_out = grad_out * scale
@@ -772,8 +774,8 @@ def identity_with_check_numerics(x, with_grad=True, name="identity_with_check_nu
         ):
             if with_grad:
                 # An alternative to gradient_override_map would be :class:`CustomGradient` which is more generic.
-                # noinspection PyUnusedLocal
                 def _identity_with_check_numerics_grad(op, grad):
+                    del op  # TF grad signature (op, grad)
                     return identity_with_check_numerics(grad, with_grad=True, name="%s_grad" % name)
 
                 grad_name = "%s_with_grad" % name
@@ -1717,7 +1719,7 @@ def get_initializer(
             k_short = k[: -len("_initializer")]
             if k_short not in ns:
                 ns[k_short] = ns[k]
-    f = None
+    f: Union[init_ops.Initializer, init_ops.RandomUniform, Any] = None
     try:
         if isinstance(s, str):
             if "(" in s:
@@ -1775,9 +1777,10 @@ def dropout(
 
     :param tf.Tensor x:
     :param float|tf.Tensor keep_prob:
-    :param tf.Tensor|tuple[int|None] noise_shape: 1 will broadcast in that dimension, None will not broadcast
-    :param int seed:
-    :param str name:
+    :param tf.Tensor|tuple[int|None]|None noise_shape: 1 will broadcast in that dimension,
+        None will not broadcast (the shape of x by default)
+    :param int|None seed:
+    :param str|None name:
     :param bool cond_on_train: automatically wrap through :func:`cond_on_train_flag`
     :param bool apply_correction_factor:
     :param bool grad_checkpointing: use gradient checkpointing for the result
@@ -2126,9 +2129,9 @@ def flatten_with_seq_len_mask(x, seq_lens, batch_dim_axis=None, time_dim_axis=No
     """
     :param tf.Tensor x: shape (batch,...s..., time, ...s'...) or shape (time,...s...., batch, ...s'...)
     :param tf.Tensor seq_lens: shape (batch,) of int32
-    :param int batch_dim_axis: index of batch_dim in x
-    :param int time_dim_axis: index of time_dim in x
-    :param bool time_major: whether time axis is 0 (redundant, kept for compatibility)
+    :param int|None batch_dim_axis: index of batch_dim in x; derived from time_major if not given
+    :param int|None time_dim_axis: index of time_dim in x; derived from time_major if not given
+    :param bool|None time_major: whether time axis is 0 (redundant, kept for compatibility)
     :return: tensor of shape (time', ...s...s'...) where time' = sum(seq_len) <= batch*time
     :rtype: tf.Tensor
     """
@@ -2217,7 +2220,7 @@ def expand_dims_unbroadcast(x, axis, dim, name="expand_dims_unbroadcast"):
     with tf.name_scope(name):
         x = tf.convert_to_tensor(x)
         x = tf.expand_dims(x, axis)
-        if dim is not 1:
+        if not (isinstance(dim, int) and dim == 1):  # dim can be a tf.Tensor, keep it out of `==`
             new_ndim = x.get_shape().ndims
             assert new_ndim is not None, "not implemented otherwise yet"
             assert isinstance(axis, int), "not implemented otherwise yet"
@@ -3100,7 +3103,6 @@ class CustomGradient:
         self.registered_ops[cache_key] = op_with_new_grad
         return op_with_new_grad
 
-    # noinspection PyUnusedLocal
     @classmethod
     def _generic_loss_and_error_signal(cls, loss, x, grad_x):
         """
@@ -3110,6 +3112,8 @@ class CustomGradient:
         :return: just loss
         :rtype: tf.Tensor
         """
+        # the CustomGradient signature; this variant returns a pre-computed error signal
+        del x, grad_x  # error signal is passed in directly
         return loss
 
     @classmethod
@@ -3255,7 +3259,6 @@ class MetaLosses:
         """
         cls.scope_ctx.scope.exit()
 
-    # noinspection PyUnusedLocal
     @classmethod
     def _identity_ignore_second_fwd(cls, x, dummy):
         """
@@ -3264,6 +3267,8 @@ class MetaLosses:
         :return: x
         :rtype: tf.Tensor
         """
+        # the second input exists only to create the gradient dependency
+        del dummy  # only there for the grad dependency
         return x
 
     @classmethod
@@ -3279,7 +3284,7 @@ class MetaLosses:
             with tf.name_scope("grad_prediction_loss"):
                 grad_prediction_loss = tf.reduce_mean(tf.square(synthetic_grad_x - tf.stop_gradient(grad_out)))
                 tf_compat.v1.summary.scalar("loss", grad_prediction_loss)
-            # noinspection PyProtectedMember
+            # noinspection PyProtectedMember,PyUnresolvedReferences
             loss_info = op._RETURNN_loss_info
             cls.scope_ctx.scope.register_loss(MetaLosses.LossInfo(value=grad_prediction_loss, **loss_info))
         return synthetic_grad_x, None
@@ -3314,7 +3319,6 @@ class MetaLosses:
         y.set_shape(x.get_shape())
         return y
 
-    # noinspection PyUnusedLocal
     @classmethod
     def _tikhonov_gradient_bwd(cls, op, grad_out):
         """
@@ -3327,7 +3331,7 @@ class MetaLosses:
             with tf.name_scope("tikhonov_regularization_loss"):
                 loss = tf.nn.l2_loss(grad_out)
                 tf_compat.v1.summary.scalar("loss", loss)
-            # noinspection PyProtectedMember
+            # noinspection PyProtectedMember,PyUnresolvedReferences
             loss_info = op._RETURNN_loss_info
             cls.scope_ctx.scope.register_loss(MetaLosses.LossInfo(value=loss, **loss_info))
         return grad_out, tf.constant(0.0)
@@ -3654,7 +3658,7 @@ def spatial_smoothing_energy(x, dim, use_circular_conv=True):
             tf.constant([[-0.125, -0.125, -0.125], [-0.125, 1.0, -0.125], [-0.125, -0.125, -0.125]]), [3, 3, 1, 1]
         )
         # out shape: [batch, out_height, out_width, out_channels=1]
-        out = tf.nn.conv2d(x, filter=filter, strides=[1, 1, 1, 1], padding="VALID")
+        out = tf.nn.conv2d(x, filter, strides=[1, 1, 1, 1], padding="VALID")
         out = tf.reshape(out, shape[:-1] + [-1])  # (..., out_height*out_width)
         # Note: Square all the filter values.
         return tf.reduce_sum(out**2, axis=-1)
@@ -4988,7 +4992,8 @@ def smoothing_cross_entropy(
 
     :param tf.Tensor logits: Tensor of size shape(labels) + [vocab_size]
     :param tf.Tensor labels: Tensor of size [...]
-    :param int|tf.Tensor vocab_size: Tensor representing the size of the vocabulary.
+    :param int|tf.Tensor|None vocab_size: Tensor representing the size of the vocabulary.
+      Taken from the last axis of logits by default.
     :param float label_smoothing: confidence = 1.0 - label_smoothing.
       Used to determine on and off values for label smoothing.
       If `gaussian` is true, `confidence` is the variance to the gaussian distribution.
@@ -5565,7 +5570,7 @@ def add_check_numerics_ops(
     It adds some more logic and options.
 
     :param list[tf.Operation|tf.Tensor]|None fetches: in case this is given, will only look at these and dependent ops
-    :param list[str] ignore_ops: e.g. ""
+    :param list[str]|set[str]|None ignore_ops: op types to ignore. A sensible default set if not given.
     :param bool use_check_numerics: if False, instead of :func:`tf.check_numerics`,
       it does the check manually (via :func:`tf.is_finite`) and in case there is inf/nan,
       it will also print the tensor (while `tf.check_numerics` does not print the tensor).
@@ -6002,10 +6007,20 @@ def tensor_array_element_shape(ta):
     else:
         # If it is know, _element_shape is a list with 1 entry, the element shape as tf.TensorShape.
         # Otherwise it is an empty list.
+        # TF internal, pre-1.14 fallback
+        # noinspection PyUnresolvedReferences
         assert isinstance(ta._element_shape, list)
+        # TF internal, pre-1.14 fallback
+        # noinspection PyUnresolvedReferences
         assert len(ta._element_shape) <= 1
+        # TF internal, pre-1.14 fallback
+        # noinspection PyUnresolvedReferences
         if ta._element_shape:
+            # TF internal, pre-1.14 fallback
+            # noinspection PyUnresolvedReferences
             assert isinstance(ta._element_shape[0], tf.TensorShape)
+            # TF internal, pre-1.14 fallback
+            # noinspection PyUnresolvedReferences
             return ta._element_shape[0]
         return tf.TensorShape(None)
 
@@ -6051,7 +6066,7 @@ def tensor_array_stack(ta, start=0, stop=None, name="TensorArrayStack"):
     :param str name:
     :rtype: tf.Tensor
     """
-    if start is 0 and stop is None:
+    if isinstance(start, int) and start == 0 and stop is None:  # start can be a tf.Tensor, keep it out of `==`
         return ta.stack(name=name)
     with tf_compat.v1.colocate_with(_tensor_array_ref(ta)):
         with tf.name_scope(name):
@@ -6306,7 +6321,7 @@ def unflatten_nd(x, nd_sizes, num_axes=None):
 
     :param tf.Tensor x: (B, T, <Ds>)
     :param tf.Tensor nd_sizes: (B, N = num_axes)
-    :param int num_axes:
+    :param int|None num_axes: derived from the static shape of nd_sizes if not given
     :return: (B, T_1, ..., T_N, <Ds>), T_i == max(nd_sizes[:, i])
     :rtype: tf.Tensor
     """
@@ -6380,7 +6395,6 @@ def kernels_registered_for_op(op_name):
 
         res = None
 
-        # noinspection PyUnusedLocal
         @classmethod
         def callback(cls, string, size):
             """
@@ -6388,6 +6402,8 @@ def kernels_registered_for_op(op_name):
             :param int size:
             :rtype: None
             """
+            # the callback signature is fixed by the caller
+            del size  # fixed callback signature
             cls.res = string
 
     cb = set_string_callback_type(Res.callback)
@@ -6590,7 +6606,7 @@ def var_handle_or_ref(var):
     if isinstance(var, ResourceVariable):
         return var.handle
     if isinstance(var, tf_compat.v1.Variable):
-        # noinspection PyProtectedMember
+        # noinspection PyProtectedMember,PyUnresolvedReferences
         return var._ref()
     raise TypeError("invalid type for var %r" % var)
 
@@ -6622,7 +6638,7 @@ def find_ops_with_tensor_input(tensors, fetches=None, graph=None):
                     ops.append(op)
             return ops
         else:
-            # noinspection PyProtectedMember
+            # noinspection PyProtectedMember,PyUnresolvedReferences
             tensors = [tensors._ref(), tensors.value()]
     if isinstance(tensors, tf.Tensor):
         tensors = [tensors]
@@ -6663,7 +6679,7 @@ def find_ops_path_output_to_input(tensors, fetches):
     :rtype: list[tf.Operation]|None
     """
     if isinstance(tensors, tf.Variable):
-        # noinspection PyProtectedMember
+        # noinspection PyProtectedMember,PyUnresolvedReferences
         tensors = [tensors._ref(), tensors.value()]
     if isinstance(tensors, tf.Tensor):
         tensors = [tensors]
@@ -6771,7 +6787,6 @@ def get_variable_grad_from_update_ops(var, update_ops):
     op = update_ops[0]
     op_inputs = get_op_inputs_by_name(op)
     if op.type == "ScatterSub":  # e.g. sparse grad with GradientDescentOptimizer
-        # noinspection PyProtectedMember
         assert op_inputs["ref"] == var_handle_or_ref(var)
         indices = op_inputs["indices"]
         delta = op_inputs["updates"]
@@ -6781,7 +6796,6 @@ def get_variable_grad_from_update_ops(var, update_ops):
         return tf.IndexedSlices(values=grad, indices=indices, dense_shape=tf.convert_to_tensor(get_shape(var)))
     if op.type == "AssignSub":
         op_name_prefix = os.path.dirname(op.name) + "/"
-        # noinspection PyProtectedMember
         assert op_inputs["ref"] == var_handle_or_ref(var)
         # Case for sparse update in Adam:
         # m_scaled_g_values = grad * (1 - beta1_t)
@@ -6801,7 +6815,6 @@ def get_variable_grad_from_update_ops(var, update_ops):
         assert "gradients" in grad.name or grad.op.type == "UnsortedSegmentSum"
         return tf.IndexedSlices(values=grad, indices=indices, dense_shape=tf.convert_to_tensor(get_shape(var)))
     assert "var" in op_inputs
-    # noinspection PyProtectedMember
     assert op_inputs["var"] == var_handle_or_ref(var)
     if "grad" in op_inputs:  # e.g. ApplyAdam
         grad = op_inputs["grad"]
@@ -6858,9 +6871,9 @@ def add_control_input(op, control_input):
         op._add_control_input(control_input)
         return
     # Fallback. I think I have seen this in OpenAI code.
-    # noinspection PyProtectedMember
+    # noinspection PyProtectedMember,PyUnresolvedReferences
     op._control_inputs.append(control_input)
-    # noinspection PyProtectedMember
+    # noinspection PyProtectedMember,PyUnresolvedReferences
     op._recompute_node_def()
 
 

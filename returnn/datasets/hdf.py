@@ -3,7 +3,7 @@ Provides :class:`HDFDataset`.
 """
 
 from __future__ import annotations
-from typing import TYPE_CHECKING, Union
+from typing import TYPE_CHECKING, Optional, Union
 import typing
 import bisect
 import collections
@@ -481,9 +481,9 @@ class StreamParser:
         self.seq_names = seq_names
         self.stream = stream
 
-        self.num_features = None
-        self.feature_type = None  # 1 for sparse, 2 for dense
-        self.dtype = None
+        self.num_features: Optional[int] = None
+        self.feature_type: Optional[int] = None  # 1 for sparse, 2 for dense
+        self.dtype: Optional[str] = None
 
     def get_data(self, seq_name):
         """
@@ -826,7 +826,7 @@ class SiameseHDFDataset(CachedDataset2):
         """
         :param str input_stream_name: name of a feature stream
         :param str seq_label_stream: name of a stream with labels
-        :param str class_distribution: path to .npz file of size n x n (n is a number of classes),
+        :param str|None class_distribution: path to .npz file of size n x n (n is a number of classes),
                where each line i contains probs of other classes to be picked in triplets
                when sampling a pair for element from class i
         :param list[str] files: list of paths to .hdf files
@@ -1091,7 +1091,7 @@ class SimpleHDFWriter:
         """
         :param str filename: Create file, truncate if exists
         :param int|None dim:
-        :param int ndim: counted without batch
+        :param int|None ndim: counted without batch; derived from dim by default
         :param list[str]|None labels:
         :param dict[str,(int,int,str)]|None extra_type: key -> (dim,ndim,dtype)
         :param bool swmr: see https://docs.h5py.org/en/stable/swmr.html
@@ -1169,6 +1169,9 @@ class SimpleHDFWriter:
             # See comments in test_SimpleHDFWriter_swmr...
             raise NotImplementedError("SimpleHDFWriter SWMR is not really finished...")
 
+    def __repr__(self):
+        return f"<{self.__class__.__name__} {self.filename!r} dim={self.dim} ndim={self.ndim}>"
+
     def __del__(self):
         if self._file:
             self._file.close()
@@ -1187,7 +1190,7 @@ class SimpleHDFWriter:
         for data_key, (dim, ndim, dtype) in extra_type.items():
             assert data_key != "inputs"
             if data_key in self._prepared_extra:
-                return
+                return bool(added_count)
             if not self._prepared_extra and not self.extend_existing_file:
                 # For the first time, need to create the groups.
                 self._file.create_group("targets/data")

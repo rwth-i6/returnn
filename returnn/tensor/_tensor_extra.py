@@ -23,7 +23,7 @@ from .dim import Dim, batch_dim, VerifyOutShapeException
 import returnn.tensor.tensor as _t
 import returnn.tensor.marked_dim as _m
 
-from ._tensor_mixin_base import _TensorMixinBase
+from ._tensor_mixin_base import _TensorMixinBase, RawTensorType
 
 
 class _TensorExtra:
@@ -104,7 +104,9 @@ class _TensorExtra:
         self._tensor_ref = weakref.ref(tensor)
 
 
-class _TensorMixin(_TensorMixinBase):
+class _TensorMixin(_TensorMixinBase[RawTensorType]):
+    __slots__ = ()
+
     @staticmethod
     def from_tensor(x) -> Tensor:
         """
@@ -616,7 +618,7 @@ class _TensorMixin(_TensorMixinBase):
         return sis_hash_helper(self.get_kwargs())
 
     def __getstate__(self):
-        d = {k: getattr(self, k) for k in self.__slots__}
+        d = {k: getattr(self, k) for k in self.__slots__ if k != "__weakref__"}
         if (
             self._raw_tensor is not None
             and self._raw_backend is not None
@@ -2088,11 +2090,9 @@ class _TensorMixin(_TensorMixinBase):
         return self.get_batch_axis_excluding_batch(self.time_dim_axis)
 
     @property
-    def placeholder(self):
+    def placeholder(self: _t.Tensor) -> Optional[_t.RawTensorType]:
         """
         (Old alias for raw_tensor.)
-
-        :rtype: T
         """
         return self._raw_tensor
 
@@ -2924,7 +2924,9 @@ class _TensorMixin(_TensorMixinBase):
             assert axis + self.batch_ndim > 0
             axis += self.batch_ndim
         assert 0 <= axis < self.batch_ndim
-        assert axis != self.batch_dim_axis
+        # The batch axis is allowed: a batch dim with a static capacity (as tracing requires)
+        # and a dynamic size is padded like any other axis, and its mask is the same comparison.
+        # Its size is a scalar, so it does not take the [B]-size fast path below.
         tag: Dim = self.dim_tags[axis]
         assert tag.dyn_size_ext is not None and tag.dyn_size_ext.raw_tensor is not None
         backend = tag.dyn_size_ext._raw_backend
@@ -2958,8 +2960,7 @@ class _TensorMixin(_TensorMixinBase):
             assert axis + self.batch_ndim > 0
             axis += self.batch_ndim
         assert 0 <= axis < self.batch_ndim
-        assert axis != self.batch_dim_axis
-        tag: Dim = self.dim_tags[axis]
+        tag: Dim = self.dim_tags[axis]  # the batch axis included, see :func:`get_sequence_mask_broadcast`
         return tag.get_mask(dim_order=self.dims, device=self.device)
 
     def get_sequence_lengths_broadcast(self, axis=None):

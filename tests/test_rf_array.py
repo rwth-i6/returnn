@@ -702,8 +702,9 @@ def test_stack():
     batch_dim_ = Dim(3, name="batch")
     time_dim = Dim(5, name="time")
 
-    # noinspection PyShadowingNames,PyUnusedLocal
+    # noinspection PyShadowingNames
     def _forward_step(*, model: rf.Module, extern_data: TensorDict):
+        del model, extern_data  # fixed forward_step signature
         seq = rf.range_over_dim(time_dim)  # [T]
         out, _ = rf.stack([seq, seq, seq], out_dim=batch_dim_)  # [B,T]
         out.mark_as_default_output(shape=(batch_dim_, time_dim))
@@ -718,8 +719,9 @@ def test_unstack():
     batch_dim_ = Dim(3, name="batch")
     time_dim = Dim(5, name="time")
 
-    # noinspection PyShadowingNames,PyUnusedLocal
+    # noinspection PyShadowingNames
     def _forward_step(*, model: rf.Module, extern_data: TensorDict):
+        del model, extern_data  # fixed forward_step signature
         seq = rf.range_over_dim(time_dim)  # [T]
         stacked, out_dim = rf.stack([seq, seq, seq], out_dim=batch_dim_)  # [B,T]
         parts = rf.unstack(stacked, axis=out_dim)  # 3 x [T]
@@ -1228,8 +1230,9 @@ def test_where():
         }
     )
 
-    # noinspection PyShadowingNames,PyUnusedLocal
+    # noinspection PyShadowingNames
     def _forward_step(*, model: rf.Module, extern_data: TensorDict):
+        del model  # fixed forward_step signature
         out = rf.where(extern_data["cond"], extern_data["true"], extern_data["false"])
         out.mark_as_default_output(shape=(batch_dim, time_dim, in_dim))
 
@@ -1240,8 +1243,9 @@ def test_search_sorted():
     batch_dim_ = Dim(3, name="batch")
     time_dim = Dim(13, name="time")
 
-    # noinspection PyShadowingNames,PyUnusedLocal
+    # noinspection PyShadowingNames
     def _forward_step(*, model: rf.Module, extern_data: TensorDict):
+        del model, extern_data  # fixed forward_step signature
         sorted_seq = rf.range_over_dim(time_dim, dtype="float32")  # [T]
         index1 = rf.search_sorted(sorted_seq, rf.constant(4.5, dims=()), axis=time_dim)  # [] -> T
         assert index1.dims == () and index1.sparse_dim == time_dim and index1.dtype == "int32"
@@ -1275,8 +1279,9 @@ def test_where_int():
         }
     )
 
-    # noinspection PyShadowingNames,PyUnusedLocal
+    # noinspection PyShadowingNames
     def _forward_step(*, model: rf.Module, extern_data: TensorDict):
+        del model  # fixed forward_step signature
         out = rf.where(extern_data["cond"], extern_data["true"], 0)
         out.mark_as_default_output(shape=(batch_dim, time_dim, in_dim))
 
@@ -1292,8 +1297,9 @@ def test_copy_masked():
         }
     )
 
-    # noinspection PyShadowingNames,PyUnusedLocal
+    # noinspection PyShadowingNames
     def _forward_step(*, model: rf.Conv1d, extern_data: TensorDict):
+        del model  # fixed forward_step signature
         x = extern_data["data"]
         x = x.copy_masked(1)
         # Do some pooling to make sure the copy_masked has an effect on the output.
@@ -1312,8 +1318,9 @@ def test_cast_sparse():
         }
     )
 
-    # noinspection PyShadowingNames,PyUnusedLocal
+    # noinspection PyShadowingNames
     def _forward_step(*, model: rf.Conv1d, extern_data: TensorDict):
+        del model  # fixed forward_step signature
         x = rf.reduce_argmax(extern_data["data"], axis=in_dim)
         assert x.sparse_dim == in_dim
         x.mark_as_output("argmax", shape=[batch_dim, time_dim])
@@ -1332,7 +1339,7 @@ def test_repeat():
         }
     )
 
-    # noinspection PyShadowingNames,PyUnusedLocal
+    # noinspection PyShadowingNames
     def _forward_step(*, extern_data: TensorDict, **_other):
         x = extern_data["data"]
         repeats = rf.abs(extern_data["repeats"]) % 4
@@ -1351,7 +1358,7 @@ def test_repeat():
         }
     )
 
-    # noinspection PyShadowingNames,PyUnusedLocal
+    # noinspection PyShadowingNames
     def _forward_step(*, extern_data: TensorDict, **_other):
         x = extern_data["data"]
         repeats = rf.abs(extern_data["repeats"]) % 4
@@ -1401,11 +1408,204 @@ def test_replace_dim_v2_bool():
     time_dim = Dim(Tensor("time", [batch_dim], dtype="int32"))
     extern_data = TensorDict({"cond": Tensor("cond", [batch_dim, time_dim], dtype="bool")})
 
-    # noinspection PyShadowingNames,PyUnusedLocal
+    # noinspection PyShadowingNames
     def _forward_step(*, model: rf.Module, extern_data: TensorDict):
+        del model  # fixed forward_step signature
         cond = extern_data["cond"]
         time_dim_ext = time_dim + 1
         cond_ext = rf.replace_dim_v2(cond, in_dim=time_dim, out_dim=time_dim_ext)
         cond_ext.mark_as_default_output(shape=(batch_dim, time_dim_ext))
 
     run_model(extern_data, lambda *, epoch, step: rf.Module(), _forward_step, test_tensorflow=False)
+
+
+def test_masked_select_scatter_nested_roundtrip():
+    time_dim = Dim(Tensor("time", [batch_dim], dtype="int32"))
+    in_dim = Dim(5, name="in")
+    extern_data = TensorDict({"data": Tensor("data", [batch_dim, time_dim, in_dim], dtype="float32")})
+
+    # noinspection PyShadowingNames
+    def _forward_step(*, extern_data: TensorDict, **_kwargs):
+        data = extern_data["data"]
+        # Every other batch entry, so the selection is never empty and never everything.
+        mask = rf.range_over_dim(batch_dim) % 2 == 0
+        (sel, sel_time_dim), sel_batch_dim, sel_dim_map = rf.nested.masked_select_nested(
+            (data, time_dim), mask=mask, mask_cpu=mask, dims=[batch_dim]
+        )
+        out, out_time_dim = rf.nested.masked_scatter_nested(
+            (sel, sel_time_dim),
+            (data, time_dim),
+            mask=mask,
+            mask_cpu=mask,
+            dims=[batch_dim],
+            in_dim=sel_batch_dim,
+            masked_select_dim_map=sel_dim_map,
+        )
+        assert out_time_dim == time_dim, f"roundtrip changed the spatial dim: {out_time_dim} vs {time_dim}"
+        out.mark_as_default_output(shape=[batch_dim, time_dim, in_dim])
+        data.mark_as_output("data_ref", shape=[batch_dim, time_dim, in_dim])
+
+    outputs = run_model(
+        extern_data, lambda **_kwargs: rf.Module(), _forward_step, test_single_batch_entry=False, test_tensorflow=False
+    )
+    assert np.allclose(outputs["output"].raw_tensor, outputs["data_ref"].raw_tensor)
+
+
+def test_mask_nested_dim_value_is_true_size():
+    # The merged dim of mask_nested must report the true per-entry sizes, not an upper bound:
+    # anything that pads or slices by it (rf.pad, rf.slice) sizes its buffer from get_dim_value.
+    time_dim = Dim(Tensor("time", [batch_dim], dtype="int32"))
+    in_dim = Dim(5, name="in")
+    extern_data = TensorDict({"data": Tensor("data", [batch_dim, time_dim, in_dim], dtype="float32")})
+
+    # noinspection PyShadowingNames
+    def _forward_step(*, extern_data: TensorDict, **_kwargs):
+        data = extern_data["data"]
+        # one branch a step longer than the other, so bound and true size differ
+        longer, longer_dim = rf.pad(
+            data, axes=[time_dim], padding=[(0, 1)], value=rf.zeros((), dtype=data.dtype, device=data.device)
+        )
+        (merged, merged_dim) = rf.nested.mask_nested(
+            (longer, longer_dim[0]),
+            mask=rf.range_over_dim(batch_dim) % 2 == 0,
+            mask_value=(data, time_dim),
+        )
+        # the padded extent the raw tensor actually has, vs what the dim claims
+        assert merged.raw_tensor.shape[merged.dims.index(merged_dim)] == merged_dim.get_dim_value(), (
+            f"raw extent {merged.raw_tensor.shape} does not match {merged_dim} value {merged_dim.get_dim_value()}"
+        )
+        merged.mark_as_default_output(shape=[batch_dim, merged_dim, in_dim])
+        merged_dim.dyn_size_ext.mark_as_output("merged_size", shape=[batch_dim])
+        time_dim.dyn_size_ext.mark_as_output("in_size", shape=[batch_dim])
+
+    outputs = run_model(
+        extern_data, lambda **_kwargs: rf.Module(), _forward_step, test_single_batch_entry=False, test_tensorflow=False
+    )
+    in_size = outputs["in_size"].raw_tensor
+    merged_size = outputs["merged_size"].raw_tensor
+    for b in range(in_size.shape[0]):
+        # masked entries took the longer branch (+1), the others the original size
+        expected = in_size[b] + 1 if b % 2 == 0 else in_size[b]
+        assert merged_size[b] == expected, f"batch {b}: merged {merged_size[b]}, expected {expected}"
+
+
+def test_masked_select_out_dim_value_is_true_count():
+    # The packed dim of masked_select must report the true count, not the input extent.
+    # A static select axis is the case that bites: static dims always carry a capacity,
+    # so the packed dim can inherit one and then claim the full extent.
+    static_dim = Dim(6, name="static_time")
+    in_dim = Dim(5, name="in")
+    extern_data = TensorDict({"data": Tensor("data", [batch_dim, static_dim, in_dim], dtype="float32")})
+
+    # noinspection PyShadowingNames
+    def _forward_step(*, extern_data: TensorDict, **_kwargs):
+        data = extern_data["data"]
+        # 3 or 4 of the 6 positions per batch entry, so the count is deterministic and below the extent.
+        # Two mask dims but one select dim, so this takes the generic (non-backend) path.
+        mask = rf.compare_bc(rf.range_over_dim(static_dim), "<", rf.range_over_dim(batch_dim) % 2 + 3)
+        packed, packed_dim = rf.masked_select(data, mask=mask, dims=[static_dim])
+        assert packed.raw_tensor.shape[packed.dims.index(packed_dim)] == packed_dim.get_dim_value(), (
+            f"raw extent {packed.raw_tensor.shape} does not match {packed_dim} value {packed_dim.get_dim_value()}"
+        )
+        packed.mark_as_default_output(shape=[batch_dim, packed_dim, in_dim])
+        packed_dim.dyn_size_ext.mark_as_output("packed_size", shape=[batch_dim])
+
+    outputs = run_model(
+        extern_data, lambda **_kwargs: rf.Module(), _forward_step, test_single_batch_entry=False, test_tensorflow=False
+    )
+    packed_size = outputs["packed_size"].raw_tensor
+    for b in range(packed_size.shape[0]):
+        assert packed_size[b] == b % 2 + 3, f"batch {b}: packed {packed_size[b]}, expected {b % 2 + 3}"
+
+
+def test_masked_scatter_nested_select_dim_passthrough_other_backup_dim():
+    time_dim = Dim(Tensor("time", [batch_dim], dtype="int32"))
+    other_dim = Dim(Tensor("other", [batch_dim], dtype="int32"))
+    in_dim = Dim(5, name="in")
+    extern_data = TensorDict(
+        {
+            "data": Tensor("data", [batch_dim, time_dim, in_dim], dtype="float32"),
+            "backup": Tensor("backup", [batch_dim, other_dim, in_dim], dtype="float32"),
+        }
+    )
+
+    # noinspection PyShadowingNames
+    def _forward_step(*, extern_data: TensorDict, **_kwargs):
+        data = extern_data["data"]
+        backup = extern_data["backup"]
+        mask = rf.range_over_dim(batch_dim) % 2 == 0
+        (sel, sel_time_dim), sel_batch_dim, sel_dim_map = rf.nested.masked_select_nested(
+            (data, time_dim), mask=mask, mask_cpu=mask, dims=[batch_dim]
+        )
+        out, out_dim = rf.nested.masked_scatter_nested(
+            (sel, sel_time_dim),
+            (backup, other_dim),
+            mask=mask,
+            mask_cpu=mask,
+            dims=[batch_dim],
+            in_dim=sel_batch_dim,
+            masked_select_dim_map=sel_dim_map,
+        )
+        out.mark_as_default_output(shape=[batch_dim, out_dim, in_dim])
+        # each row keeps its own branch's length
+        expected = rf.where(mask, time_dim.get_size_tensor(), other_dim.get_size_tensor())
+        rf.cast(out_dim.get_size_tensor() - expected, "int32").mark_as_output("size_diff", shape=[batch_dim])
+
+    outputs = run_model(
+        extern_data, lambda **_kwargs: rf.Module(), _forward_step, test_single_batch_entry=False, test_tensorflow=False
+    )
+    assert not outputs["size_diff"].raw_tensor.any(), f"merged sizes wrong: {outputs['size_diff'].raw_tensor}"
+
+
+def test_masked_scatter_nested_two_branch_merge_via_stub():
+    time_a_dim = Dim(Tensor("time_a", [batch_dim], dtype="int32"))
+    time_b_dim = Dim(Tensor("time_b", [batch_dim], dtype="int32"))
+    in_dim = Dim(3, name="in")
+    extern_data = TensorDict(
+        {
+            "a": Tensor("a", [batch_dim, time_a_dim, in_dim], dtype="float32"),
+            "b": Tensor("b", [batch_dim, time_b_dim, in_dim], dtype="float32"),
+        }
+    )
+
+    # noinspection PyShadowingNames
+    def _forward_step(*, extern_data: TensorDict, **_kwargs):
+        a = extern_data["a"]
+        b = extern_data["b"]
+        mask_a = rf.range_over_dim(batch_dim) % 2 == 0
+        mask_b = rf.logical_not(mask_a)
+        (sel_a, sel_a_dim), a_bdim, sel_map_a = rf.nested.masked_select_nested(
+            (a, time_a_dim), mask=mask_a, mask_cpu=mask_a, dims=[batch_dim]
+        )
+        (sel_b, sel_b_dim), b_bdim, sel_map_b = rf.nested.masked_select_nested(
+            (b, time_b_dim), mask=mask_b, mask_cpu=mask_b, dims=[batch_dim]
+        )
+        stub_dim = Dim(rf.zeros([batch_dim], dtype="int32", device="cpu"), name="merge_stub")
+        stub = rf.zeros([batch_dim, stub_dim, in_dim], dtype=a.dtype)
+        half, half_dim = rf.nested.masked_scatter_nested(
+            (sel_a, sel_a_dim),
+            (stub, stub_dim),
+            mask=mask_a,
+            mask_cpu=mask_a,
+            dims=[batch_dim],
+            in_dim=a_bdim,
+            masked_select_dim_map=sel_map_a,
+        )
+        out, out_dim = rf.nested.masked_scatter_nested(
+            (sel_b, sel_b_dim),
+            (half, half_dim),
+            mask=mask_b,
+            mask_cpu=mask_b,
+            dims=[batch_dim],
+            in_dim=b_bdim,
+            masked_select_dim_map=sel_map_b,
+        )
+        out.mark_as_default_output(shape=[batch_dim, out_dim, in_dim])
+        # each row takes the length of whichever branch it came from
+        expected = rf.where(mask_a, time_a_dim.get_size_tensor(), time_b_dim.get_size_tensor())
+        rf.cast(out_dim.get_size_tensor() - expected, "int32").mark_as_output("size_diff", shape=[batch_dim])
+
+    outputs = run_model(
+        extern_data, lambda **_kwargs: rf.Module(), _forward_step, test_single_batch_entry=False, test_tensorflow=False
+    )
+    assert not outputs["size_diff"].raw_tensor.any(), f"merged sizes wrong: {outputs['size_diff'].raw_tensor}"

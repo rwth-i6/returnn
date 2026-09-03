@@ -60,7 +60,7 @@ def build_dict(cls: Union[Type, FunctionType, BuiltinFunctionType, Callable[...,
     return {"class": _get_cls_name(cls), **kwargs}
 
 
-def _get_cls(cls_name: str) -> Type:
+def _get_cls(cls_name: str) -> Union[Type, FunctionType, BuiltinFunctionType]:
     if "." not in cls_name:
         raise ValueError(f"Expected '.' in class name: {cls_name}")
     mod_name, cls_name = cls_name.rsplit(".", 1)

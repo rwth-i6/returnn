@@ -110,7 +110,7 @@ try:
 
     # noinspection PyPackageRequirements
     import triton.language as tl
-except ImportError as e:
+except ImportError:
     triton = None
     tl = None
 
@@ -208,6 +208,8 @@ if _triton_usable:
         def _grid(meta):
             return tuple((triton.cdiv(n_elements, meta["BLOCK_SIZE"]),))
 
+        # BLOCK_SIZE comes from the Triton launcher metadata, it is not passed by the caller
+        # noinspection PyArgumentList
         _triton_update_fn_kernel[_grid](p, grad, exp_avg, lr, wd, beta1, beta2, n_elements)
 
 else:

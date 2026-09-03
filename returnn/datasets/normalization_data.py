@@ -1,3 +1,7 @@
+"""
+Normalization data (mean/variance) for inputs and outputs, and the HDF file holding it.
+"""
+
 import os
 import numpy as np
 
@@ -24,7 +28,7 @@ class NormalizationData:
     SUMMATION_PRECISION = 1e-5
 
     @staticmethod
-    def createNormalizationFile(bundleFilePath, outputFilePath, dtype=np.float64, flag_includeOutputs=True):
+    def create_normalization_file(bundle_file_path, output_file_path, dtype=np.float64, flag_include_outputs=True):
         """Calculates means over inputs and outputs of datasets in the HDF files
         described by the given bundle file.
 
@@ -51,38 +55,38 @@ class NormalizationData:
         It is OK if *all* the datasets have only the input group.
         In this case means and variance only for inputs will be calculated.
 
-        :type bundleFilePath: str
-        :param bundleFilePath: path to the bundle file. :see: BundleFile.BundleFile
-        :type outputFilePath: str
-        :param outputFilePath: path to the output HDF normalization file.
+        :type bundle_file_path: str
+        :param bundle_file_path: path to the bundle file. :see: BundleFile.BundleFile
+        :type output_file_path: str
+        :param output_file_path: path to the output HDF normalization file.
         :type dtype: numpy.dtype
         :param dtype: type of data to use during calculations.
-        :type flag_includeOutputs: bool
-        :param flag_includeOutputs: if True then normalization data will be
+        :type flag_include_outputs: bool
+        :param flag_include_outputs: if True then normalization data will be
                                     calculated for outputs (targets) as well.
         """
-        NormalizationData._calculateNormalizationData(
-            bundleFilePath, outputFilePath, NormalizationData.GROUP_INPUTS, dtype=dtype
+        NormalizationData._calculate_normalization_data(
+            bundle_file_path, output_file_path, NormalizationData.GROUP_INPUTS, dtype=dtype
         )
-        if flag_includeOutputs:
-            NormalizationData._calculateNormalizationData(
-                bundleFilePath, outputFilePath, NormalizationData.GROUP_OUTPUTS, dtype=dtype
+        if flag_include_outputs:
+            NormalizationData._calculate_normalization_data(
+                bundle_file_path, output_file_path, NormalizationData.GROUP_OUTPUTS, dtype=dtype
             )
 
     @staticmethod
-    def _calculateNormalizationData(bundleFilePath, outputFilePath, groupName, dtype=np.float64):
+    def _calculate_normalization_data(bundle_file_path, output_file_path, group_name, dtype=np.float64):
         """Helper method.
         Calculates and writes into the output HDF file mean, mean of squares,
         variance and total number of frames for the datasets in the given HDF
         group.
 
-        :type bundleFilePath: str
-        :param bundleFilePath: path to the bundle file. :see: BundleFile.BundleFile
-        :type outputFilePath: str
-        :param outputFilePath: path to the output HDF normalization file. If file
+        :type bundle_file_path: str
+        :param bundle_file_path: path to the bundle file. :see: BundleFile.BundleFile
+        :type output_file_path: str
+        :param output_file_path: path to the output HDF normalization file. If file
                                already exists it will not be truncated.
-        :type groupName: str
-        :param groupName: name of the HDF group for which normalization data
+        :type group_name: str
+        :param group_name: name of the HDF group for which normalization data
                           should be calculated. Also, a group with this name will
                           be created in the output HDF file to store the calculated
                           normalization data.
@@ -91,62 +95,64 @@ class NormalizationData:
         """
         import h5py
 
-        accumulatedSum = None
-        accumulatedSumOfSqr = None
-        totalFrames = long()
-        bundle = BundleFile(bundleFilePath)
-        for filePath in bundle.datasetFilePaths:
-            with h5py.File(filePath, mode="r") as datasetFile:
-                intermSum, intermSumOfSqr, intermTotalFrames = NormalizationData._accumulateSums(
-                    datasetFile, groupName, dtype=dtype
+        accumulated_sum = None
+        accumulated_sum_of_sqr = None
+        total_frames = long()
+        bundle = BundleFile(bundle_file_path)
+        for file_path in bundle.dataset_file_paths:
+            with h5py.File(file_path, mode="r") as dataset_file:
+                interm_sum, interm_sum_of_sqr, interm_total_frames = NormalizationData._accumulate_sums(
+                    dataset_file, group_name, dtype=dtype
                 )
-                accumulatedSum = NormalizationData._updateTotalSum(accumulatedSum, intermSum)
-                accumulatedSumOfSqr = NormalizationData._updateTotalSum(accumulatedSumOfSqr, intermSumOfSqr)
-                totalFrames += intermTotalFrames
+                accumulated_sum = NormalizationData._update_total_sum(accumulated_sum, interm_sum)
+                accumulated_sum_of_sqr = NormalizationData._update_total_sum(accumulated_sum_of_sqr, interm_sum_of_sqr)
+                total_frames += interm_total_frames
 
-        mean, meanOfSquares, variance = NormalizationData._calculateMeans(
-            accumulatedSum, accumulatedSumOfSqr, totalFrames
+        mean, mean_of_squares, variance = NormalizationData._calculate_means(
+            accumulated_sum, accumulated_sum_of_sqr, total_frames
         )
 
-        with h5py.File(outputFilePath, mode="a") as out:
-            NormalizationData._writeData(out, groupName, mean, meanOfSquares, variance, totalFrames, dtype=dtype)
+        with h5py.File(output_file_path, mode="a") as out:
+            NormalizationData._write_data(out, group_name, mean, mean_of_squares, variance, total_frames, dtype=dtype)
 
     @staticmethod
-    def _accumulateSums(f, groupName, dtype=np.float64):
+    def _accumulate_sums(f, group_name, dtype=np.float64):
         """Helper method.
         Accumulate sums and sums of squares over feature vectors for a given group.
 
         :type f: h5py.File
         :param f: handle to an opened HDF file with datasets
-        :type groupName: str
-        :param groupName: HDF group containing datasets
+        :type group_name: str
+        :param group_name: HDF group containing datasets
         :type dtype: numpy.dtype
         :param dtype: type of data to use during calculations.
         :rtype: tuple (numpy.ndarray | None, numpy.ndarray | None, long)
         :return: tuple (sum, sum of squares, total number of time frames)
                  if they are available
         """
-        sum = None
-        sumOfSqr = None
-        totalFrames = np.int64(0)
-        if groupName not in f:
-            return sum, sumOfSqr, totalFrames
-        group = f[groupName]
-        datasetNames = group.keys()
-        if len(datasetNames) == 0:
-            return sum, sumOfSqr, totalFrames
-        featDims = group[datasetNames[0]].shape[NormalizationData.DATASET_FEATURE_DIMENSION_INDEX]
-        sum = np.zeros(featDims, dtype=dtype)
-        sumOfSqr = np.zeros(featDims, dtype=dtype)
-        for dsName in datasetNames:
-            dataset = group[dsName][...]
-            sum += np.sum(dataset, axis=NormalizationData.DATASET_TIME_DIMENSION_INDEX)
-            sumOfSqr += np.sum(np.square(dataset), axis=NormalizationData.DATASET_TIME_DIMENSION_INDEX)
-            totalFrames += dataset.shape[NormalizationData.DATASET_TIME_DIMENSION_INDEX]
-        return sum, sumOfSqr, totalFrames
+        total_sum = None
+        sum_of_sqr = None
+        total_frames = np.int64(0)
+        if group_name not in f:
+            return total_sum, sum_of_sqr, total_frames
+        group = f[group_name]
+        # list(...): h5py's .keys() is a set-like view on py3, so it is NOT subscriptable --
+        # the old `dataset_names[0]` raised TypeError.
+        dataset_names = list(group.keys())
+        if len(dataset_names) == 0:
+            return total_sum, sum_of_sqr, total_frames
+        feat_dims = group[dataset_names[0]].shape[NormalizationData.DATASET_FEATURE_DIMENSION_INDEX]
+        total_sum = np.zeros(feat_dims, dtype=dtype)
+        sum_of_sqr = np.zeros(feat_dims, dtype=dtype)
+        for ds_name in dataset_names:
+            dataset = group[ds_name][...]
+            total_sum += np.sum(dataset, axis=NormalizationData.DATASET_TIME_DIMENSION_INDEX)
+            sum_of_sqr += np.sum(np.square(dataset), axis=NormalizationData.DATASET_TIME_DIMENSION_INDEX)
+            total_frames += dataset.shape[NormalizationData.DATASET_TIME_DIMENSION_INDEX]
+        return total_sum, sum_of_sqr, total_frames
 
     @staticmethod
-    def _updateTotalSum(totalSum, intermediateSum):
+    def _update_total_sum(totalSum, intermediateSum):
         """Helper method.
         Updates total sum with intermediate sum if the latter is available.
 
@@ -174,7 +180,7 @@ class NormalizationData:
         return newSum
 
     @staticmethod
-    def _calculateMeans(totalSum, totalSumOfSqr, totalFrames):
+    def _calculate_means(totalSum, totalSumOfSqr, total_frames):
         """Helper method.
         Calculate mean, mean of squares and variance if they are available.
 
@@ -182,47 +188,47 @@ class NormalizationData:
         :param totalSum: total sum of features
         :type totalSumOfSqr: numpy.ndarray | None
         :param totalSumOfSqr: total sum of squares of features
-        :type totalFrames: long
-        :param totalFrames: total number of timeframes
+        :type total_frames: long
+        :param total_frames: total number of timeframes
         :rtype: tuple (numpy.ndarray | None, numpy.ndarray | None, numpy.ndarray | None)
         :return: tuple (mean, mean of squares, variance) if they are available
         """
         mean = None
-        meanOfSquares = None
+        mean_of_squares = None
         variance = None
         if totalSum is not None:
-            assert totalFrames > 0
-            mean = totalSum / totalFrames
+            assert total_frames > 0
+            mean = totalSum / total_frames
         if mean is not None and totalSumOfSqr is not None:
-            assert totalFrames > 0
-            meanOfSquares = totalSumOfSqr / totalFrames
+            assert total_frames > 0
+            mean_of_squares = totalSumOfSqr / total_frames
             # Var[X] = E[X ^ 2] - (E[X]) ^ 2
-            variance = meanOfSquares - np.square(mean)
-        return mean, meanOfSquares, variance
+            variance = mean_of_squares - np.square(mean)
+        return mean, mean_of_squares, variance
 
     @staticmethod
-    def _writeData(f, groupName, mean, meanOfSqr, variance, totalFrames, dtype=np.float64):
+    def _write_data(f, group_name, mean, meanOfSqr, variance, total_frames, dtype=np.float64):
         """Helper method.
         Writes means and variance for a given group.
 
         :type f: h5py.File
         :param f: handle to an opened HDF file to which data should be written.
-        :type groupName: str
-        :param groupName: HDF group name
+        :type group_name: str
+        :param group_name: HDF group name
         :type mean: numpy.ndarray | None
         :param mean: mean
         :type meanOfSqr: numpy.ndarray | None
         :param meanOfSqr: mean of squares
         :type variance: numpy.ndarray | None
         :param variance: variance
-        :type totalFrames: long
-        :param totalFrames: total number of time frames
+        :type total_frames: long
+        :param total_frames: total number of time frames
         :type dtype: numpy.dtype
         :param dtype: type of data to use for writing the data
         """
-        if groupName in f:
-            del f[groupName]
-        group = f.create_group(groupName)
+        if group_name in f:
+            del f[group_name]
+        group = f.create_group(group_name)
         dsNames = [
             NormalizationData.DATASET_MEAN,
             NormalizationData.DATASET_MEAN_OF_SQUARES,
@@ -231,8 +237,8 @@ class NormalizationData:
         datasets = [mean, meanOfSqr, variance]
         for name, ds in zip(dsNames, datasets):
             NormalizationData._writeDataset(group, name, ds, dtype)
-        if totalFrames > 0:
-            group.create_dataset(NormalizationData.DATASET_TOTAL_FRAMES, data=totalFrames)
+        if total_frames > 0:
+            group.create_dataset(NormalizationData.DATASET_TOTAL_FRAMES, data=total_frames)
 
     @staticmethod
     def _writeDataset(group, datasetName, dataset, dtype=np.float64):
@@ -295,15 +301,15 @@ class NormalizationData:
             self._outputMean, self._outputVariance = self._getMeanAndVarianceFromGroup(f, self.GROUP_OUTPUTS)
 
     @staticmethod
-    def _getMeanAndVarianceFromGroup(f, groupName):
+    def _getMeanAndVarianceFromGroup(f, group_name):
         """Reads mean and variance from the given group if they are available.
         Both mean and variance are optional i.e. they may be absent in the
         given HDF group.
 
         :type f: h5py.File
         :param f: handle to an opened HDF file with normalization data.
-        :type groupName: str
-        :param groupName: name of the HDF group from which mean and variance
+        :type group_name: str
+        :param group_name: name of the HDF group from which mean and variance
                           should be read.
         :rtype: tuple (numpy.ndarray | None, numpy.ndarray | None)
         :return: a tuple (mean, variance) each of which may be None
@@ -311,9 +317,9 @@ class NormalizationData:
         """
         mean = None
         variance = None
-        if groupName not in f:
+        if group_name not in f:
             return mean, variance
-        group = f[groupName]
+        group = f[group_name]
         if NormalizationData.DATASET_MEAN in group:
             mean = group[NormalizationData.DATASET_MEAN][...]
         if NormalizationData.DATASET_VARIANCE in group:

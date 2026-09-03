@@ -2,22 +2,24 @@
 This file is going to be imported by Debug.debug_shell() and available as interactive commands.
 """
 
+from typing import Optional, Union
+import types
 import sys
 import numpy
 
 
-def find_obj_in_stack(cls, stack=None, all_threads=True):
+def find_obj_in_stack(cls, stack: Optional[Union[types.FrameType, types.TracebackType]] = None, all_threads=True):
     """
     :param type cls:
-    :param types.FrameType|traceback.FrameSummary stack:
+    :param stack: current frame (or all threads) by default
     :param bool all_threads:
     :return: obj
     """
     if all_threads:
         assert stack is None
         # noinspection PyProtectedMember,PyUnresolvedReferences
-        for tid, stack in sys._current_frames().items():
-            obj = find_obj_in_stack(cls=cls, stack=stack, all_threads=False)
+        for tid, thread_stack in sys._current_frames().items():
+            obj = find_obj_in_stack(cls=cls, stack=thread_stack, all_threads=False)
             if obj is not None:
                 return obj
         return None
@@ -28,25 +30,22 @@ def find_obj_in_stack(cls, stack=None, all_threads=True):
         stack = sys._getframe()
         assert stack, "could not get stack"
 
-    import inspect
-
-    isframe = inspect.isframe
-
-    _tb = stack
-    while _tb is not None:
-        if isframe(_tb):
-            f = _tb
-        else:
-            f = _tb.tb_frame
-
-        for obj in f.f_locals.values():
-            if isinstance(obj, cls):
-                return obj
-
-        if isframe(_tb):
-            _tb = _tb.f_back
-        else:
+    if isinstance(stack, types.FrameType):
+        frame: Optional[types.FrameType] = stack
+        while frame is not None:
+            for obj in frame.f_locals.values():
+                if isinstance(obj, cls):
+                    return obj
+            frame = frame.f_back
+    elif isinstance(stack, types.TracebackType):
+        _tb: Optional[types.TracebackType] = stack
+        while _tb is not None:
+            for obj in _tb.tb_frame.f_locals.values():
+                if isinstance(obj, cls):
+                    return obj
             _tb = _tb.tb_next
+    else:
+        raise TypeError(f"find obj in stack: {stack=} invalid {type(stack)=}")
 
     return None
 

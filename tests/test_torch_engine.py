@@ -842,7 +842,7 @@ def set_behavior_version(version: int):
 
 
 def test_updater_weight_decay_blacklist_rf_modules():
-    # Since behavior version 30, the default weight-decay blacklist also covers
+    # Since behavior version 32, the default weight-decay blacklist also covers
     # rf.LayerNorm and rf.Embedding, matching torch.nn.LayerNorm / torch.nn.Embedding.
     from returnn.torch.frontend.bridge import rf_module_to_pt_module
     from returnn.util.basic import DictRefKeys
@@ -868,12 +868,12 @@ def test_updater_weight_decay_blacklist_rf_modules():
         param_to_name = DictRefKeys((param, name) for name, param in pt_model.named_parameters())
         return {pg["weight_decay"]: {param_to_name[p] for p in pg["params"]} for pg in opt.param_groups}
 
-    with set_behavior_version(29):
+    with set_behavior_version(31):
         params_by_wd = _params_by_wd()
         assert params_by_wd[1e-3] == {"embed.weight", "layer_norm.scale", "linear.weight"}
         assert params_by_wd[0.0] == {"layer_norm.bias", "linear.bias"}
 
-    with set_behavior_version(30):
+    with set_behavior_version(32):
         params_by_wd = _params_by_wd()
         assert params_by_wd[1e-3] == {"linear.weight"}
         assert params_by_wd[0.0] == {"embed.weight", "layer_norm.scale", "layer_norm.bias", "linear.bias"}

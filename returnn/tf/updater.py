@@ -1,5 +1,5 @@
 """
-This module covers the optimizer (SGD, Adam, etc) logic,
+This module covers the optimizer (SGD, Adam, etc.) logic,
 and model param update logic in general.
 """
 
@@ -155,11 +155,23 @@ class Updater:
     Also relevant are config options ``debug_add_check_numerics_on_output`` and ``debug_grad_summaries``.
     """
 
-    def __init__(self, config, network, initial_learning_rate=1.0):
+    def __init__(
+        self,
+        config,
+        network=None,
+        initial_learning_rate=1.0,
+        *,
+        objective=None,
+        global_train_step_var=None,
+    ):
         """
         :param returnn.config.Config config:
-        :param TFNetwork network:
+        :param TFNetwork|None network: the net-dict network. Without it, pass objective and
+            global_train_step_var directly -- that is the RF path, which builds the graph from
+            RF code and has no layers.
         :param float initial_learning_rate:
+        :param tf.Tensor|None objective: what to minimize, instead of network.get_objective()
+        :param tf.Variable|None global_train_step_var: the step counter, instead of the network's
         """
         self.config = config
         self.learning_rate_var = tf.Variable(name="learning_rate", initial_value=0.0, trainable=False, dtype="float32")
@@ -167,9 +179,26 @@ class Updater:
         self.learning_rate = None  # type: typing.Optional[tf.Tensor]
         self.trainable_vars = []  # type: typing.List[tf.Variable]
         self.network = network
-        self.global_train_step = self.network.global_train_step
+        if network is not None:
+            assert objective is None and global_train_step_var is None, "either network or objective, not both"
+            self.global_train_step_var = network.global_train_step_var
+            self.global_train_step = network.global_train_step
+            self.loss = network.get_objective()
+        else:
+            assert objective is not None and global_train_step_var is not None, (
+                "without a network, objective and global_train_step_var are required"
+            )
+            self.global_train_step_var = global_train_step_var
+            self.global_train_step = tf.convert_to_tensor(global_train_step_var)
+            self.loss = objective
+        # log_grad_norm: the L2 global norm only, which is what the TF path can compute here
+        # (the PyTorch updater also takes a p; a different p would need a second norm op).
+        log_grad_norm = self.config.opt_typed_value("log_grad_norm", False)
+        if log_grad_norm not in (None, False, True, 2, 2.0):
+            raise NotImplementedError(f"TF updater: log_grad_norm {log_grad_norm!r}, only p=2 supported")
+        self.log_grad_norm = bool(log_grad_norm)
+        self.log_grad_norm_tensor = None  # type: typing.Optional[tf.Tensor]
         self.use_locking = self.config.bool("optimizer_use_locking", False)
-        self.loss = network.get_objective()
         # https://arxiv.org/abs/1711.05101, Fixing Weight Decay Regularization in Adam
         self.decouple_constraints = self.config.bool("decouple_constraints", False)
         self.optimizers = OrderedDict()  # optimizer_opts|None -> tf.compat.v1.train.Optimizer
@@ -371,6 +400,7 @@ class Updater:
         if self.config.bool_or_other("debug_grad_summaries", False):
             from returnn.tf.util.basic import variable_summaries, get_base_name, reuse_name_scope_of_tensor
 
+            assert self.network is not None, "debug_grad_summaries needs the network"
             for key in self.network.used_data_keys:
                 data = self.network.extern_data.data[key]
                 if data.sparse:
@@ -383,13 +413,12 @@ class Updater:
             self.optim_op = tf.group(self.optim_op, add_check_numerics_ops([self.optim_op]))
 
         # Do this at the very end.
-        with tf.control_dependencies([self.optim_op, self.network.global_train_step]):
-            incr_step_op = tf_compat.v1.assign_add(
-                self.network.global_train_step_var, 1, name="global_train_step_increment"
-            )
+        with tf.control_dependencies([self.optim_op, self.global_train_step]):
+            incr_step_op = tf_compat.v1.assign_add(self.global_train_step_var, 1, name="global_train_step_increment")
         self.optim_op = tf.group(self.optim_op, incr_step_op, name="optim_and_step_incr")
 
         if self.config.bool("debug_save_updater_vars", False):
+            assert self.network is not None, "debug_save_updater_vars needs the network"
             print("Save updater/optimizer vars:", file=log.v3)
             print(self.optimizer_vars)
             for v in self.optimizer_vars:
@@ -945,6 +974,10 @@ class Updater:
         if not var_grads:
             raise Exception("no single variable to train")
         global_info = self._GetGlobalInfo(updater=self, all_vars=var_list, var_grads=var_grads)
+        if self.log_grad_norm:
+            # Before any clipping, as in the PyTorch updater: the point of logging it is to see
+            # what the gradients do, which the clipping would hide.
+            self.log_grad_norm_tensor = global_info.get_global_grad_norm()
         if self.config.bool_or_other("debug_grad_summaries", False):
             tf_compat.v1.summary.scalar("global_grad_norm", global_info.get_global_grad_norm())
         grads_per_apply_grad_opts = {}  # dict apply_grad_opts -> list of (grad, var)
@@ -1030,6 +1063,34 @@ def accum_grad_multiple_step(grad, var, train_step, num_accum_steps):
         )
 
 
+class _VarLearningRateSchedule(tf.keras.optimizers.schedules.LearningRateSchedule):
+    """
+    Keras learning-rate "schedule" that just reads a tf.Variable.
+
+    Keras optimizers accept a float, a schedule or a callable, but not a variable,
+    while RETURNN keeps the learning rate IN a variable,
+    so it can be set per step (Updater.set_learning_rate).
+    This is the thinnest adapter between the two: the step is ignored, the value is read live.
+    """
+
+    def __init__(self, var):
+        super().__init__()
+        self.var = var
+
+    def __call__(self, step):
+        """
+        :param step: ignored; the value is whatever the variable holds when the step runs
+        :return: the learning rate
+        """
+        return tf.convert_to_tensor(self.var)
+
+    def get_config(self):
+        """
+        :return: config (not serializable -- the variable belongs to the live graph)
+        """
+        return {}
+
+
 # noinspection PyAbstractClass
 class _KerasOptimizerWrapper(Optimizer):
     """
@@ -1050,6 +1111,15 @@ class _KerasOptimizerWrapper(Optimizer):
             """
             kwargs = kwargs.copy()
             kwargs.pop("use_locking", None)  # this is not used. just ignore
+            lr = kwargs.get("learning_rate", None)
+            if isinstance(lr, (tf.Variable, tf.Tensor)) and not hasattr(keras_class, "_set_hyper"):
+                # RETURNN drives the learning rate through a variable (Updater.learning_rate_var).
+                # Old Keras (optimizer_v2, has `_set_hyper`) takes a tensor/variable directly,
+                # and e.g. its Nadam REJECTS schedules -- pass through unchanged there.
+                # Keras >= 2.11 rejects a variable ("should be float, or an instance of
+                # LearningRateSchedule") or would copy it into a NEW variable,
+                # so it gets a schedule that ignores the step and reads the variable live.
+                kwargs["learning_rate"] = _VarLearningRateSchedule(lr)
             opt = keras_class(**kwargs)
             return cls(opt, name=kwargs.get("name", None))
 
@@ -1356,7 +1426,7 @@ class GradVarianceScaledOptimizer(BaseCustomOptimizer):
 class NadamOptimizer(tf_compat.v1.train.AdamOptimizer):
     """
     Optimizer that implements the Nadam algorithm.
-    See [Dozat, T., 2015](http://cs229.stanford.edu/proj2015/054_report.pdf).
+    See [Dozat, T., 2015](https://cs229.stanford.edu/proj2015/054_report.pdf).
 
     Copied from:
     https://github.com/tensorflow/tensorflow/blob/v1.15.5/tensorflow/contrib/opt/python/training/nadam_optimizer.py

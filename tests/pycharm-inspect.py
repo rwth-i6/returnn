@@ -113,7 +113,16 @@ def install_pycharm():
     print("Install PyCharm into:", pycharm_dir)
     sys.stdout.flush()
 
-    name = "pycharm-community-2020.2"
+    # Keep the pin recent enough for the CI python of the pycharm-inspect job:
+    # 2020.2 topped out at language level ~3.10, and with a 3.12 interpreter it fell back to "3.1"
+    # (PyInterpreterInspection EOL warning in every file + wrong-syntax inspections).
+    # Since 2025.3 there is no separate Community tarball anymore, only the unified PyCharm
+    # (free mode included) -- pycharm-<ver>.tar.gz, python plugin dir "python" instead of "python-ce".
+    # NOTE: 2026.2 (262.8665.309) AND 2026.2.0.1 (262.8665.369) both have the PyLiteralType
+    # promoteDictLiteralOrDictComprehension IndexOutOfBoundsException (measured 2026-08-11);
+    # GlobalInspectionContextImpl then aborts the whole file's inspection -> zero reports
+    # (e.g. returnn/tf/engine.py). No fixed build available yet.
+    name = "pycharm-2026.2"
     fn = "%s.tar.gz" % name
 
     subprocess.check_call(
@@ -123,9 +132,11 @@ def install_pycharm():
     )
     tar_out = subprocess.check_output(["tar", "-xzvf", fn], cwd=install_dir, stderr=subprocess.STDOUT)
     print((b"\n".join(tar_out.splitlines()[-10:])).decode("utf8"))
-    assert os.path.isdir("%s/%s" % (install_dir, name))
+    # the tarball's top-level dir does not always match `name` exactly (patch-versioned): take it from the listing
+    top_dir = tar_out.splitlines()[0].decode("utf8").split("/")[0].strip()
+    assert os.path.isdir("%s/%s" % (install_dir, top_dir))
     os.remove("%s/%s" % (install_dir, fn))
-    os.rename("%s/%s" % (install_dir, name), pycharm_dir)
+    os.rename("%s/%s" % (install_dir, top_dir), pycharm_dir)
     check_pycharm_dir(pycharm_dir)
 
     fold_end()
@@ -179,11 +190,17 @@ def create_stub_dir(pycharm_dir, stub_dir, pycharm_major_version):
     fold_start("script.create_python_stubs")
     print("Generating Python stubs via helpers/generator3.py...")
     if pycharm_major_version >= 2020:
-        generator_path = "%s/plugins/python-ce/helpers/generator3/__main__.py" % pycharm_dir
-        assert os.path.exists(generator_path)
-        cmd = [sys.executable, generator_path, "-d", stub_dir]
+        # "python-ce" in the Community edition, "python" in the unified PyCharm (2025.3+)
+        for plugin_name in ["python", "python-ce"]:
+            helpers_dir = "%s/plugins/%s/helpers" % (pycharm_dir, plugin_name)
+            if os.path.exists("%s/generator3/__main__.py" % helpers_dir):
+                break
+        assert helpers_dir and os.path.exists("%s/generator3/__main__.py" % helpers_dir)
+        # -m with cwd=helpers: running __main__.py by path puts the package dir itself on sys.path,
+        # and `import generator3` then fails (generator3 became a package at some point after 2020.2)
+        cmd = [sys.executable, "-m", "generator3", "-d", stub_dir]
         # The stdout can sometimes be very long. Thus we pipe and filter it a bit.
-        proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+        proc = subprocess.Popen(cmd, cwd=helpers_dir, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
         stdout, _ = proc.communicate()
         if proc.returncode != 0:
             raise subprocess.CalledProcessError(returncode=proc.returncode, cmd=cmd, output=stdout)
@@ -219,7 +236,7 @@ def create_stub_dir(pycharm_dir, stub_dir, pycharm_major_version):
 _use_stub_zip = False
 
 
-def setup_pycharm_python_interpreter(pycharm_dir):
+def setup_pycharm_python_interpreter(pycharm_dir, install_py_deps=False):
     """
     Unfortunately, the headless PyCharm bin/inspect will use the global PyCharm settings,
     and requires that we have a Python interpreter set up,
@@ -230,19 +247,22 @@ def setup_pycharm_python_interpreter(pycharm_dir):
     ``~/.PyCharm<VERSION>/config/options/jdk.table.xml`` such that it has the right Python interpreter.
 
     :param str pycharm_dir:
+    :param bool install_py_deps: pip-install TF and further packages the inspection expects (for CI)
     """
-    fold_start("script.opt_install_further_py_deps")
-    if not pip_check_is_installed("tensorflow") and not pip_check_is_installed("tensorflow-gpu"):
-        pip_install("tensorflow")
-    # Note: Horovod will usually fail to install in this env.
-    for pkg in ["typing", "librosa==0.8.1", "PySoundFile", "nltk", "matplotlib", "mpi4py", "pycodestyle"]:
-        if not pip_check_is_installed(pkg):
-            try:
-                pip_install(pkg)
-            except subprocess.CalledProcessError as exc:
-                print("Pip install failed:", exc)
-                print("Ignore...")
-    fold_end()
+    if install_py_deps:
+        # only with --install_py_deps (CI): never modify a user's local env implicitly
+        fold_start("script.opt_install_further_py_deps")
+        if not pip_check_is_installed("tensorflow") and not pip_check_is_installed("tensorflow-gpu"):
+            pip_install("tensorflow")
+        # Note: Horovod will usually fail to install in this env.
+        for pkg in ["typing", "librosa==0.8.1", "PySoundFile", "nltk", "matplotlib", "mpi4py", "pycodestyle"]:
+            if not pip_check_is_installed(pkg):
+                try:
+                    pip_install(pkg)
+                except subprocess.CalledProcessError as exc:
+                    print("Pip install failed:", exc)
+                    print("Ignore...")
+        fold_end()
 
     fold_start("script.setup_pycharm_python_interpreter")
     print("Setup PyCharm Python interpreter... (jdk.table.xml)")
@@ -260,6 +280,11 @@ def setup_pycharm_python_interpreter(pycharm_dir):
         else:  # <= 2020
             pycharm_config_dir = os.path.expanduser("~/.PyCharm%s/config" % pycharm_version_str)
             pycharm_system_dir = os.path.expanduser("~/.PyCharm%s/system" % pycharm_version_str)
+    # Env overrides, for running this OUTSIDE a disposable CI runner:
+    # the default dirs are the user's REAL IDE config (a running IDE both holds the
+    # single-instance lock and would have its jdk.table.xml edited underneath it).
+    pycharm_config_dir = os.environ.get("PYCHARM_INSPECT_CONFIG_DIR", pycharm_config_dir)
+    pycharm_system_dir = os.environ.get("PYCHARM_INSPECT_SYSTEM_DIR", pycharm_system_dir)
 
     # I just zipped the stubs from my current installation on Linux.
     # Maybe we can also reuse these stubs for other PyCharm versions, or even other Python versions.
@@ -310,10 +335,32 @@ def setup_pycharm_python_interpreter(pycharm_dir):
         assert isinstance(jdk_collection, ElementTree.Element)
 
     existing_jdk = jdk_collection.find("./jdk/name[@value='%s']/.." % name)
-    if existing_jdk:
-        print("Found existing Python interpreter %r. Remove and recreate." % name)
+    # `is not None`, NOT truthiness: an Element is falsy when it has no children
+    # (and Python warns about it), so the old `if existing_jdk:` also missed empty entries.
+    if existing_jdk is not None:
         assert isinstance(existing_jdk, ElementTree.Element)
         assert existing_jdk.find("./name").attrib["value"] == name
+        home_el = existing_jdk.find("./homePath")
+        existing_home = home_el.attrib["value"] if home_el is not None else ""
+        # the IDE writes the $USER_HOME$ macro back into this file
+        existing_home = existing_home.replace("$USER_HOME$", os.path.expanduser("~"))
+        if existing_home and os.path.realpath(existing_home) == os.path.realpath(sys.executable):
+            # Same interpreter: KEEP the entry as the IDE last left it, do not rewrite.
+            # Rewriting it every run is what made the inspection unreliable: we point the SDK
+            # back at OUR stub dir, so on the next start the IDE finds its own (hashed) skeleton
+            # root missing, runs PySkeletonRefresher ~50 s INTO the run and then updates the SDK
+            # -- and every file analyzed after that point stops resolving `torch` (measured:
+            # nothing wrong in the first ~30% of the file order, ~1200 bogus
+            # "Cannot find reference ... in 'torch'" after it).
+            # Recreating is still right when the interpreter DIFFERS -- that is the cross-env
+            # stale-SDK case this remove/recreate was originally added for.
+            print("Existing Python interpreter %r already points at %s. Keeping it." % (name, existing_home))
+            fold_end()
+            return
+        print(
+            "Found existing Python interpreter %r for a DIFFERENT interpreter (%s != %s)."
+            " Remove and recreate." % (name, existing_home, sys.executable)
+        )
         jdk_collection.remove(existing_jdk)
 
     # Example content:
@@ -425,24 +472,39 @@ def prepare_src_dir(files=None):
     """
     New clean source dir, where we symlink only the relevant src files.
 
-    :param list[str]|None files:
+    With an explicit `files` list (``--files``), the whole package tree is still
+    laid out -- only the listed files are real copies, everything else is a symlink to
+    the original. The inspection then sees a COMPLETE project (imports resolve, the
+    type inference matches a full run) while the report step can filter to the listed
+    files. Copying the listed files (instead of symlinking them like the rest) keeps
+    the original tree untouched no matter what the IDE does to its project files.
+
+    :param list[str]|None files: relative paths, e.g. ["returnn/datasets/hdf.py"]
     :return: src dir
     :rtype: str
     """
     fold_start("script.prepare")
     print("Prepare project source files...")
-    if not files:
-        files = ["returnn", "tools", "demos", "rnn.py", "setup.py", "__init__.py"]
+    explicit_files = list(files) if files else None
+    top_level = ["returnn", "tools", "demos", "rnn.py", "setup.py", "__init__.py"]
     src_tmp_dir = "%s/returnn" % tempfile.mkdtemp()
     os.mkdir(src_tmp_dir)
     shutil.copytree("%s/PyCharm.idea" % my_dir, "%s/.idea" % src_tmp_dir, symlinks=True)
-    for fn in files:
-        fn = "%s/%s" % (root_dir, fn)
-        dst = "%s/%s" % (src_tmp_dir, os.path.basename(fn))
-        if os.path.isdir(fn):
-            shutil.copytree(fn, dst, symlinks=True)
+    for fn in top_level:
+        src = "%s/%s" % (root_dir, fn)
+        dst = "%s/%s" % (src_tmp_dir, fn)
+        if os.path.isdir(src):
+            shutil.copytree(src, dst, symlinks=True)
         else:
-            shutil.copy(fn, dst)
+            shutil.copy(src, dst)
+    if explicit_files:
+        # keep the paths (a flattened copy breaks the package structure and every import in it)
+        for fn in explicit_files:
+            src = "%s/%s" % (root_dir, fn)
+            dst = "%s/%s" % (src_tmp_dir, fn)
+            assert os.path.isfile(src), "--files: %s does not exist" % src
+            os.makedirs(os.path.dirname(dst), exist_ok=True)
+            shutil.copy(src, dst)
     create_spelling_dict_xml(src_tmp_dir)
     print("All source files:")
     sys.stdout.flush()
@@ -451,11 +513,80 @@ def prepare_src_dir(files=None):
     return src_tmp_dir
 
 
-def run_inspect(pycharm_dir, src_dir, skip_pycharm_inspect=False):
+def get_pycharm_system_dir(pycharm_dir):
+    """
+    :param str pycharm_dir:
+    :return: the system dir this run uses (mirrors setup_pycharm_python_interpreter)
+    :rtype: str
+    """
+    version_str = get_version_str_from_pycharm(pycharm_dir)
+    version, _ = parse_pycharm_version(version_str)
+    if sys.platform == "darwin":
+        system_dir = os.path.expanduser("~/Library/Caches/PyCharm%s" % version_str)
+    elif version[0] >= 2020:
+        system_dir = os.path.expanduser("~/.cache/JetBrains/PyCharm%s" % version_str)
+    else:
+        system_dir = os.path.expanduser("~/.PyCharm%s/system" % version_str)
+    return os.environ.get("PYCHARM_INSPECT_SYSTEM_DIR", system_dir)
+
+
+def report_inspection_aborts(pycharm_dir, idea_log_offset):
+    """
+    Scan idea.log (from the given offset, i.e. this run only) for per-file inspection ABORTS:
+    an exception inside GlobalInspectionContextImpl kills the WHOLE file's inspection pass,
+    so the file reports zero findings and is indistinguishable from clean
+    (this hid 300+ findings in returnn/tf/engine.py behind a PyCharm 2026.2
+    PyLiteralType IndexOutOfBoundsException, see the docstring there).
+
+    :param str pycharm_dir:
+    :param int idea_log_offset: log size before the run, see get_idea_log_path
+    :return: number of aborted files
+    :rtype: int
+    """
+    log_fn = get_idea_log_path(pycharm_dir)
+    if not os.path.exists(log_fn):
+        print("WARNING: idea.log not found (%s), cannot check for per-file inspection aborts" % log_fn)
+        return 0
+    with open(log_fn, errors="replace") as f:
+        f.seek(idea_log_offset)
+        content = f.read()
+    from lint_common import ignore_count_for_files
+
+    aborts = []
+    for m in re.finditer(r"SEVERE - #c\.i\.c\.e\.GlobalInspectionContextImpl - In file: (\S+)\n(.*)", content):
+        fn, exc = m.group(1), m.group(2).strip()
+        # the inspected tree is a temp copy: /tmp/.../returnn/<repo-relative>
+        m2 = re.search(r"/returnn/((?:returnn|tools|demos|tests)/.*|rnn\.py|setup\.py|__init__\.py)$", fn)
+        rel = m2.group(1) if m2 else fn
+        aborts.append((rel, exc))
+    fatal = [(rel, exc) for rel, exc in aborts if rel not in ignore_count_for_files]
+    if aborts:
+        print("=" * 70)
+        print("WARNING: the inspection ABORTED on %i file(s); their findings are MISSING" % len(aborts))
+        print("(they show up as 'No reports for this file' although they are NOT clean):")
+        for rel, exc in aborts:
+            note = "" if (rel, exc) in fatal else "  (on the ignore list, not fatal)"
+            print("  %s%s\n    %s" % (rel, note, exc[:200]))
+        print("=" * 70)
+    return len(fatal)
+
+
+def get_idea_log_path(pycharm_dir):
+    """
+    :param str pycharm_dir:
+    :rtype: str
+    """
+    return "%s/log/idea.log" % get_pycharm_system_dir(pycharm_dir)
+
+
+def run_inspect(pycharm_dir, src_dir, skip_pycharm_inspect=False, scope_dir=None):
     """
     :param str pycharm_dir:
     :param str src_dir:
     :param bool skip_pycharm_inspect:
+    :param str|None scope_dir: relative dir to limit the ANALYSIS to (inspect.sh -d),
+        while the whole project stays indexed, so type inference matches a full run.
+        Used by ``--files`` to keep that mode fast without changing what is inferred.
     :return: dir of xml files
     :rtype: str
     """
@@ -486,8 +617,13 @@ def run_inspect(pycharm_dir, src_dir, skip_pycharm_inspect=False):
                     content = f.read().splitlines(keepends=True)
                 print("".join(content))
                 if any(line.startswith("-Xmx") for line in content):
+                    # 8g: indexing modern site-packages (torch+TF+...) fails half-way at the old 4g
+                    # (partially-unresolved core torch members), and silently so
                     print("Note: Patching Xmx settings...")
-                    content = ["-Xmx4000m\n" if line.startswith("-Xmx") else line for line in content]
+                    # overridable for heap experiments (e.g. checking whether unresolved-reference
+                    # noise is a memory-pressure artifact of the batch inspection)
+                    xmx = os.environ.get("RETURNN_PYCHARM_INSPECT_XMX", "8000m")
+                    content = [f"-Xmx{xmx}\n" if line.startswith("-Xmx") else line for line in content]
                     with open(fn, "w") as f:
                         f.write("".join(content))
         else:
@@ -506,12 +642,48 @@ def run_inspect(pycharm_dir, src_dir, skip_pycharm_inspect=False):
             out_tmp_dir,
             "-v2",
         ]
+        if scope_dir:
+            cmd += ["-d", "%s/%s" % (src_dir, scope_dir)]
+        env = dict(os.environ)
+        vmopts_fn = "%s/pycharm-inspect.vmoptions" % out_tmp_dir
+        with open("%s/bin/pycharm64.vmoptions" % pycharm_dir) as f_in, open(vmopts_fn, "w") as f_out:
+            f_out.write(f_in.read())
+            # bigger thread stack than the default (~1m)
+            f_out.write("-Xss4m\n")
+            # extra JVM options for experiments, whitespace-separated
+            # (e.g. -Djava.util.concurrent.ForkJoinPool.common.parallelism=1
+            #  to serialize the concurrent inspection engine when chasing per-file races)
+            for opt in os.environ.get("RETURNN_PYCHARM_INSPECT_VM_EXTRA", "").split():
+                f_out.write(opt + "\n")
+        env["PYCHARM_VM_OPTIONS"] = vmopts_fn
+        if os.environ.get("PYCHARM_INSPECT_CONFIG_DIR"):
+            # match the env-override dirs of setup_pycharm_python_interpreter:
+            # point the IDE itself at them via a properties file (PYCHARM_PROPERTIES)
+            props_fn = "%s/pycharm-inspect.properties" % out_tmp_dir
+            with open(props_fn, "w") as f:
+                f.write("idea.config.path=%s\n" % os.environ["PYCHARM_INSPECT_CONFIG_DIR"])
+                if os.environ.get("PYCHARM_INSPECT_SYSTEM_DIR"):
+                    f.write("idea.system.path=%s\n" % os.environ["PYCHARM_INSPECT_SYSTEM_DIR"])
+            env["PYCHARM_PROPERTIES"] = props_fn
+        # Headless index/skeleton prebuild (the remote-dev "warmup" command) BEFORE inspecting:
+        # inspect.sh otherwise analyzes files concurrently with indexing the site-packages
+        # (torch alone is huge), and files analyzed before the relevant index part is complete
+        # get nondeterministic unresolved-reference noise (measured: three identical runs gave
+        # 1182/920/1087 "Cannot find reference ... in 'torch'" findings).
+        warmup_cmd = ["%s/bin/pycharm.sh" % pycharm_dir, "warmup", "--project-dir=%s" % src_dir]
+        fold_start("script.inspect.warmup")
+        print("$ %s" % " ".join(warmup_cmd))
+        subprocess.check_call(warmup_cmd, stderr=subprocess.STDOUT, env=env)
+        fold_end()
         print("$ %s" % " ".join(cmd))
-        subprocess.check_call(cmd, stderr=subprocess.STDOUT)
+        subprocess.check_call(cmd, stderr=subprocess.STDOUT, env=env)
 
     # PyCharm does not do PEP8 code style checks by itself but uses the (bundled) pycodestyle tool.
     # https://youtrack.jetbrains.com/issue/PY-43901
-    # Do that now.
+    # Do that now. pycodestyle must be in the env (CI installs it via --install_py_deps;
+    # never skip silently -- a missing module here means a broken env, and skipping
+    # would hide all PEP8 problems from the report).
+    subprocess.check_output([sys.executable, "-m", "pycodestyle", "--version"], stderr=subprocess.STDOUT)
     root = ElementTree.Element("problems")
     from lint_common import find_all_py_source_files
 
@@ -583,6 +755,10 @@ def report_inspect_xml(fn):
     inspect_class = os.path.splitext(os.path.basename(fn))[0]  # e.g. "PyPackageRequirementsInspection"
     root = ElementTree.parse(fn).getroot()
     assert isinstance(root, ElementTree.Element)
+    if root.tag != "problems":
+        # e.g. DuplicatedCode_aggregate.xml (PyCharm 2026.2): a summary artifact, not a problem list
+        print("Skipping %s (root tag %r, not a problems list)" % (os.path.basename(fn), root.tag))
+        return []
     assert root.tag == "problems"
     result = []
     for problem in root.findall("./problem"):
@@ -614,16 +790,36 @@ def report_inspect_xml(fn):
 
 
 def report_inspect_dir(
-    inspect_xml_dir, inspect_class_blacklist=None, inspect_class_not_counted=None, ignore_count_for_files=()
+    inspect_xml_dir,
+    inspect_class_blacklist=None,
+    inspect_class_not_counted=None,
+    inspect_class_msg_not_counted=None,
+    ignore_count_for_files=(),
 ):
     """
     :param str inspect_xml_dir:
     :param set[str]|None inspect_class_blacklist:
     :param set[str]|None inspect_class_not_counted:
+    :param list[(str,str)]|None inspect_class_msg_not_counted: (inspect class, description regex) pairs:
+        matching findings are reported but not counted.
+        More precise than inspect_class_not_counted when only one sub-analysis of an otherwise
+        useful inspection is noisy. How many findings each pattern filtered is reported at the end,
+        so drift stays visible (a filter that suddenly matches thousands more is a red flag).
     :param set[str]|tuple[str]|None ignore_count_for_files:
     :return: count of reports
     :rtype: int
     """
+    import re
+
+    msg_not_counted = [(cls, re.compile(pat)) for cls, pat in (inspect_class_msg_not_counted or [])]
+    msg_not_counted_hits = {(cls, pat.pattern): 0 for cls, pat in msg_not_counted}
+
+    def _msg_match(inspect_class_, description_):
+        for cls_, pat_ in msg_not_counted:
+            if inspect_class_ == cls_ and pat_.search(description_):
+                return cls_, pat_.pattern
+        return None
+
     if os.path.isfile(inspect_xml_dir):
         assert inspect_xml_dir.endswith(".xml")
         inspect_xml_files = [inspect_xml_dir]
@@ -658,6 +854,8 @@ def report_inspect_dir(
             continue
         if inspect_class in inspect_class_not_counted:
             continue
+        if _msg_match(inspect_class, description):
+            continue
         if problem_severity.startswith("POSSIBLE-FALSE "):
             continue
         relevant_inspections_for_file.add(filename)
@@ -665,8 +863,12 @@ def report_inspect_dir(
         if filename not in relevant_inspections_for_file:
             ignore_count_for_files.add(filename)
 
-    print("Reporting individual files. We skip all files which have no warnings at all.")
+    print("Reporting individual files.")
     color = better_exchook.Color()
+    # Files with zero reports are listed as such at the end:
+    # "no reports at all" for most files usually means the inspection did not really run
+    # (e.g. unresolved interpreter/profile), NOT that the code is clean --
+    # silently skipping them made exactly that failure look like a pass.
     total_relevant_count = 0
     file_count = None
     last_filename = None
@@ -713,6 +915,10 @@ def report_inspect_dir(
         msg_counted = True
         if inspect_class in inspect_class_not_counted:
             msg_counted = False
+        matched_pattern = _msg_match(inspect_class, description)
+        if matched_pattern:
+            msg_not_counted_hits[matched_pattern] += 1
+            msg_counted = False
         if problem_severity.startswith("POSSIBLE-FALSE "):
             msg_counted = False
         if msg_counted:
@@ -723,6 +929,23 @@ def report_inspect_dir(
             print(color.color(msg, color=gray_color))
         file_count += 1
 
+    files_without_reports = sorted(returnn_py_source_files - all_files)
+    fold_start("inspect.files_without_reports")
+    print(
+        "RETURNN Python source files WITHOUT any inspection report (%i of %i):"
+        % (len(files_without_reports), len(returnn_py_source_files))
+    )
+    for filename in files_without_reports:
+        print("File: %s (No reports for this file.)" % filename)
+    fold_end()
+    if len(files_without_reports) == len(returnn_py_source_files):
+        print("WARNING: NO file got any inspection report -- the inspection likely did not run properly.")
+
+    if msg_not_counted:
+        print("Findings filtered as not-counted by message pattern:")
+        for (cls_, pattern_), n_ in sorted(msg_not_counted_hits.items()):
+            print("  %6i  %s: /%s/" % (n_, cls_, pattern_))
+
     print("Total relevant inspection reports:", total_relevant_count)
     return total_relevant_count
 
@@ -731,10 +954,34 @@ def main():
     """
     Main entry point for this script.
     """
+    if not os.environ.get("GITHUB_ACTIONS") and not os.environ.get("PYCHARM_INSPECT_CONFIG_DIR"):
+        # Local (non-CI) run: NEVER default to the user's real IDE config --
+        # a running IDE holds the single-instance lock (the inspect then just dies)
+        # and would get its jdk.table.xml edited underneath it.
+        # Persistent cache dir (not per-run tmp) so the generated python stubs survive across runs.
+        # PER-INTERPRETER subdir: config+system MUST NOT be shared across envs -- the IDE
+        # rewrites jdk.table.xml on shutdown from its own cached model, silently reverting a
+        # freshly registered interpreter to the previous env's (observed: every "torch2.12"
+        # inspection actually ran against the first run's torch2.7 site-packages).
+        import hashlib
+
+        _env_tag = hashlib.sha1(sys.executable.encode()).hexdigest()[:10]
+        _base = os.path.expanduser("~/.cache/returnn-pycharm-inspect") + "/" + _env_tag
+        os.environ["PYCHARM_INSPECT_CONFIG_DIR"] = _base + "/config"
+        os.environ.setdefault("PYCHARM_INSPECT_SYSTEM_DIR", _base + "/system")
+        os.makedirs(os.environ["PYCHARM_INSPECT_CONFIG_DIR"], exist_ok=True)
+        os.makedirs(os.environ["PYCHARM_INSPECT_SYSTEM_DIR"], exist_ok=True)
+        print("PyCharm inspect isolated dirs:", _base, "(interpreter: %s)" % sys.executable)
     arg_parser = argparse.ArgumentParser()
     arg_parser.add_argument("--xml")
     arg_parser.add_argument("--pycharm")
     arg_parser.add_argument("--setup_pycharm_only", action="store_true")
+    arg_parser.add_argument(
+        "--install_py_deps",
+        action="store_true",
+        help="pip-install TF and further packages the inspection expects (CI passes this; "
+        "without it, the current env is used as-is and never modified)",
+    )
     arg_parser.add_argument("--skip_setup_pycharm", action="store_true")
     arg_parser.add_argument("--skip_pycharm_inspect", action="store_true", help="only PEP8")
     arg_parser.add_argument("--files", nargs="*")
@@ -744,6 +991,105 @@ def main():
 
     inspect_kwargs = dict(
         inspect_class_blacklist={},
+        inspect_class_msg_not_counted=[
+            # PyCharm 2026.2 Optional/None type-flow analysis (mypy union-attr / pyright
+            # reportOptionalMemberAccess equivalent): technically right, but the codebase predates
+            # strict Optional narrowing, so most hits are guarded-by-invariant false alarms.
+            # Message-level, NOT class-level: real unresolved names must stay counted.
+            # Mid-term plan: narrow Optionals (assert x is not None) in code we touch, then drop this.
+            ("PyUnresolvedReferencesInspection", r"^Member 'None' of "),
+            ("PyStringConversionWithoutDunderMethodInspection", r"^Type 'None' doesn't define "),
+            # historic Dataset-family API loosening (param names/extras differ from the base);
+            # aligning ~50 signatures is API churn, not a lint fix
+            ("PyMethodOverridingInspection", r"^Signature of method "),
+            # same Optional-flow family as the Member-'None' filter above
+            ("PyCallingNonCallableInspection", r"^'None' object is not callable"),
+            # Stub gaps, no code fix possible (attribute exists at runtime, stub omits it):
+            # librosa does not re-export .feature in its stub; torch stubs miss the dtype alias.
+            ("PyUnresolvedReferencesInspection", r"^Cannot find reference '(?:feature|__version__)' in 'librosa'"),
+            # dtype/device/version: torch stub-resolution flakiness; 'device' flared 0 -> 26 between
+            # two same-env CI runs (2026-08-12), so keep the whole family filtered
+            ("PyUnresolvedReferencesInspection", r"^Cannot find reference '(?:dtype|device|version)' in 'torch'"),
+            # `return _sdpa_no(...)` / `return _flex_no(...)` is a DELIBERATE, documented idiom (see
+            # _sdpa_no's docstring in _packed_backend.py). NOTE: 0 matches in a local torch2.12 run,
+            # but 28 on the CI env (2026-08-12, despite the -> None annotation) -- removed once on the
+            # 0-count and CI went red; only remove when the call sites themselves are gone.
+            ("PyNoneFunctionAssignmentInspection", r"^Function '_(?:sdpa|flex)_no' doesn't return anything"),
+            # optional deps, imported behind guards / lazily:
+            ("PyUnresolvedReferencesInspection", r"^Module '(?:transformers|load_file)' not found"),
+            ("PyUnresolvedReferencesInspection", r"^Unresolved reference 'safetensors'"),
+            ("PyUnresolvedReferencesInspection", r"^No module named '(?:orbax|seaborn|tensor2tensor|jax_triton)'"),
+            # secondary per-name findings on the same guarded imports (tools/import-t2t-model.py,
+            # seaborn's light_palette): flare nondeterministically with import resolution, 0 -> 9
+            # between same-env CI runs (2026-08-19); same idiom as the safetensors entry above
+            (
+                "PyUnresolvedReferencesInspection",
+                r"^Unresolved reference '(?:tensor2tensor|t2t_trainer|trainer_lib|text_encoder|registry|light_palette)'",
+            ),
+            # TF stub gaps: compat v2 aliases and internal modules exist at runtime,
+            # and tf.Variable installs its operators at runtime (_OverloadAllOperators)
+            ("PyUnresolvedReferencesInspection", r"^Cannot find reference '(?:keras|optimizers)' in 'tensorflow._api"),
+            (
+                "PyUnresolvedReferencesInspection",
+                r"^Cannot find reference 'training_ops' in 'tensorflow.python.training'",
+            ),
+            ("PyUnresolvedReferencesInspection", r"^Class 'Variable' does not define '__"),
+            # Two filters used to sit here:
+            # "Parameter 'in_spatial_dim' unfilled" and "for class '(Tensor, Dim)'".
+            # They worked around PyCharm checking an rf.Module construction
+            # against the base class' __call__ instead of __init__,
+            # which only happened because the I*Encoder interfaces derived from abc.ABC.
+            # That ABC was inert and is gone, see returnn/frontend/encoder/base.py.
+            # Measured on demos/demo-rf-pt-benchmark.py, the only file either filter matched:
+            # 23 findings from that root cause with ABC, 0 without.
+            # union-member attr findings (member is a real class, union has '|'): triaged 2026-08-06
+            # (205 distinct sites incl. every crash-looking candidate read individually) -- all were
+            # duck-typing idioms (type[X] | X, Dim | str), guarded branches PyCharm cannot correlate,
+            # heterogeneous-list or loose annotations, or indexing artifacts ('torch | torch').
+            # Keep AFTER the Member-'None' pattern so that family keeps its own count.
+            ("PyUnresolvedReferencesInspection", r"^Member '[^']+' of '[^']*\|[^']*' does not have attribute "),
+            # f-string format specs on inferred numeric unions (float | int | Any, numpy
+            # signedinteger): PyCharm falls back to object.__format__ and rejects the spec,
+            # but every such value formats fine at runtime. Triaged 2026-08-07: all 8 sites
+            # (graph_capture GiB prints, file_cache ages, util stats) verified by execution.
+            ("PyStringFormatInspection", r"^Format spec is not supported for "),
+            # Optional-narrowing flare on %-format args (0 -> 4 between unchanged runs,
+            # all in files untouched for years); same instability family as the
+            # torch dtype/device entries above
+            ("PyStringFormatInspection", r"^Unexpected type None"),
+            # Sequence[...] is an ABC that declares no __str__/__repr__/__format__ of its own, so
+            # PyCharm flags every interpolation of a value annotated that way -- even explicit !r.
+            # At runtime these are list/tuple (spot-checked across tensor_dict, array_,
+            # _tensor_extra, jax/_backend, decoder/transformer: dims, perm, padding in error and
+            # assert messages), whose repr is informative and delegates to the elements.
+            ("PyStringConversionWithoutDunderMethodInspection", r"^Type 'Sequence\["),
+            # numpy scalar/array types: the bundled stubs do not DECLARE __repr__, but the runtime
+            # classes all define it (verified by execution: dtype -> dtype('float32'), ndarray ->
+            # array([...]), float64 -> np.float64(1.5)). Same stub-artifact class as the Cython
+            # numpy filter above.
+            (
+                "PyStringConversionWithoutDunderMethodInspection",
+                r"^Type '(?:ndarray|dtype|number|bool_|float\d+|int\d+|uint\d+|complex\d+)\b",
+            ),
+            # interpolating a CLASS gives "<class 'module.Name'>", which is precisely what the
+            # type-mismatch messages these sites live in want to say. Sampled 12 of the 60 sites,
+            # spread over 12 different files: every one is `type(x)` (or str(type(x))) inside a
+            # TypeError / assert message. Unlike most inspections this one can never indicate a
+            # runtime fault -- the worst case is a message that reads awkwardly.
+            ("PyStringConversionWithoutDunderMethodInspection", r"^Type 'type' string value"),
+            # the "string value might not be useful" sub-check bypasses the profile's
+            # ignoredTypes (measured 2026-08-11); same rationale as 'type' above:
+            # str() of a callable/object in a message is exactly what we want printed
+            (
+                "PyStringConversionWithoutDunderMethodInspection",
+                r"^Type '(?:function|FunctionType|BuiltinFunctionType|MethodType|object)' string value",
+            ),
+            # A note carried by shutil.which's STUB, not a property of our call: it fires even on
+            # `shutil.which("cc")` with a string literal (all 9 findings are the 9 shutil.which
+            # calls in native_code_compiler.py, incl. literal args). We never pass a PathLike, and
+            # RETURNN does not support Windows anyway.
+            ("PyDeprecationInspection", r"^On Windows before Python 3\.12, using a PathLike as `cmd`"),
+        ],
         inspect_class_not_counted={
             # Here we disable more than what you would do in the IDE.
             # The aim is that any left over warnings are always indeed important and should be fixed.
@@ -752,8 +1098,16 @@ def main():
             # Not critical.
             "SpellCheckingInspection",  # way too much for now...
             "GrazieInspection",  # grammar
+            # GrazieStyle is a SEPARATE class from GrazieInspection, so excluding the latter left
+            # 89 of these counted. Triaged 2026-08-08 by message: 27x "etc. requires a period",
+            # ~35x "long sentence (40-66 words)", the rest redundant phrases, British-vs-American
+            # spelling and adverb placement -- prose style in comments and docstrings, none of it
+            # a defect. The Grazie findings that WOULD be worth acting on (repeated word, unpaired
+            # bracket, two consecutive dots) are GrazieInspection and already not counted.
+            "GrazieStyle",  # prose style (as above)
             "PyClassHasNoInitInspection",  # not relevant?
             "PyMethodMayBeStaticInspection",  # not critical
+            "DuplicatedCode",  # fires on ancient demo scripts; dedup there has no value
             # Does not work correctly here?
             "PyPackageRequirementsInspection",  # TODO only with newer PyCharm versions?
         },
@@ -772,12 +1126,26 @@ def main():
         pycharm_dir = install_pycharm()
 
     if not args.skip_setup_pycharm and not args.skip_pycharm_inspect:
-        setup_pycharm_python_interpreter(pycharm_dir=pycharm_dir)
+        setup_pycharm_python_interpreter(pycharm_dir=pycharm_dir, install_py_deps=args.install_py_deps)
     if args.setup_pycharm_only:
         return
 
     src_dir = prepare_src_dir(files=args.files)
-    res_dir = run_inspect(pycharm_dir=pycharm_dir, src_dir=src_dir, skip_pycharm_inspect=args.skip_pycharm_inspect)
+    # --files: analyze only the smallest dir covering them (the rest of the project stays
+    # indexed for type inference), and report only those files
+    scope_dir = os.path.commonpath([os.path.dirname(f) for f in args.files]) if args.files else None
+    idea_log_fn = get_idea_log_path(pycharm_dir)
+    idea_log_offset = os.path.getsize(idea_log_fn) if os.path.exists(idea_log_fn) else 0
+    res_dir = run_inspect(
+        pycharm_dir=pycharm_dir,
+        src_dir=src_dir,
+        skip_pycharm_inspect=args.skip_pycharm_inspect,
+        scope_dir=scope_dir,
+    )
+    if report_inspection_aborts(pycharm_dir, idea_log_offset) > 0:
+        # findings of the aborted files are missing entirely, so the count below cannot be
+        # trusted -- fail regardless of it
+        sys.exit(1)
     if report_inspect_dir(res_dir, **inspect_kwargs) > 0:
         sys.exit(1)
 

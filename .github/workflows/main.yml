@@ -14,16 +14,19 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
+        # The inspection should see the versions we develop against, so this job runs modern packages,
+        # unlike the test jobs, which deliberately also cover old ones.
+        # ESPnet is the odd one out: it pins numpy<1.24, which no modern TF or JAX accepts,
+        # so it is installed without its dependencies here (--espnet-no-deps).
         python-version:
-          - "3.10"
+          - "3.12"
         torch-version:
           # Some code uses newer features.
           - 2.8.0
         tf-version:
-          - 2.10.0
+          - 2.21.0
         jax-version:
-          # Newest JAX for Python 3.10; the tests run a newer one (see rf-jax-tests).
-          - 0.6.2
+          - 0.11.0
 
     steps:
       - uses: actions/checkout@v4
@@ -51,8 +54,8 @@ jobs:
             --torch ${{ matrix.torch-version }} \
             --tf ${{ matrix.tf-version }} \
             --jax ${{ matrix.jax-version }} \
-            --jax-no-deps 1 \
             --espnet 1 \
+            --espnet-no-deps 1 \
             --hf-datasets 1
 
       - name: Cache PyCharm
@@ -64,7 +67,7 @@ jobs:
 
       - name: Run PyCharm inspect
         run: |
-          tests/pycharm-inspect.py
+          tests/pycharm-inspect.py --install_py_deps
 
   base-tests:
     runs-on: ubuntu-latest

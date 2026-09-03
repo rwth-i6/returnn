@@ -147,7 +147,7 @@ class gradient_checkpoint_scope:
         # Note: saved_tensors_hooks is thread local.
         self.saved_tensors_hooks_scope = torch.autograd.graph.saved_tensors_hooks(self._pack_hook, self._unpack_hook)
         self.entered = False
-        self.entered_thread_ref = None
+        self.entered_thread_ref: Optional[ref] = None
         self.exit_args: Optional[tuple] = None
         self.exited_saved_tensors_hooks_scope = False
 
@@ -217,6 +217,8 @@ class gradient_checkpoint_scope:
         # _RecordGraph.__torch_dispatch__ should have recorded all newly created tensors.
         x_ = self.record_graph_scope.graph.graph_tensor_from_weak_raw_tensor.get(x, x)
         if isinstance(x_, _GraphTensor):
+            # RETURNN plants this attr on torch.Tensor
+            # noinspection PyUnresolvedReferences
             x._RETURNN_grad_ckpt_del_hook = _DelHook(_WeakMethod(self._tensor_del_hook))
         return x_
 
@@ -252,6 +254,7 @@ class _RecordGraph(TorchDispatchMode):
         self.graph = _Graph([])
 
     def __torch_dispatch__(self, func, types, args=(), kwargs=None):
+        del types  # required by __torch_dispatch__
         kwargs = {} if kwargs is None else kwargs
         graph = self.graph
         graph.maybe_store_rng_state(torch.device("cpu"))
@@ -266,9 +269,7 @@ class _RecordGraph(TorchDispatchMode):
 @dataclass
 class _Graph:
     ops_to_be_recomputed: List[_GraphOp] = field(default_factory=list)
-    graph_tensor_from_weak_raw_tensor: WeakTensorKeyDictionary[torch.Tensor, _GraphTensor] = field(
-        default_factory=WeakTensorKeyDictionary
-    )
+    graph_tensor_from_weak_raw_tensor: WeakTensorKeyDictionary = field(default_factory=WeakTensorKeyDictionary)
     stored_device_rng_states: Dict[torch.device, Any] = field(default_factory=dict)
     stored_device_amp_states: Dict[torch.device, Any] = field(default_factory=dict)
     # Keep scope alive as long as any _GraphTensor is alive due to backprop pack_hook.
@@ -443,7 +444,7 @@ def _reset_amp_states_scope(states: Dict[torch.device, Any]):
             if not state:
                 continue
             if dev.type == "cpu":
-                stack.enter_context(torch.cpu.amp.autocast(**state))
+                stack.enter_context(torch.amp.autocast("cpu", **state))
             else:
                 device_module = getattr(torch, dev.type)
                 stack.enter_context(device_module.amp.autocast(**state))
@@ -575,7 +576,7 @@ def _custom_saved_tensors_hooks_enter(self: torch.autograd.graph.saved_tensors_h
     # The callbacks might have unregistered us. Only add to the stack if we are still active.
     if _custom_saved_tensors_hooks_tls_ctx.active:
         _custom_saved_tensors_hooks_tls_ctx.stack.append(self)
-    return _orig_saved_tensors_hooks_enter(self)
+    _orig_saved_tensors_hooks_enter(self)
 
 
 def _custom_saved_tensors_hooks_exit(

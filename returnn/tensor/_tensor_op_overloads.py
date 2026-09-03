@@ -9,14 +9,16 @@ if TYPE_CHECKING:
     from .tensor import Tensor  # just for type hints; otherwise use _t.Tensor
     import returnn.frontend.types as _rf_types
 
-from ._tensor_mixin_base import _TensorMixinBase
+from ._tensor_mixin_base import _TensorMixinBase, RawTensorType
 
 
-class _TensorOpOverloadsMixin(_TensorMixinBase):
+class _TensorOpOverloadsMixin(_TensorMixinBase[RawTensorType]):
+    __slots__ = ()
+
     # Note that all those ops have native implementations as well,
     # so keep the logic in sync.
 
-    def __bool__(self):
+    def __bool__(self: Tensor):
         from returnn.log import log
         from returnn.util.basic import BehaviorVersion
 
@@ -29,6 +31,7 @@ class _TensorOpOverloadsMixin(_TensorMixinBase):
 
     # --- comparisons
 
+    # noinspection PyMethodOverriding
     def __eq__(self: Tensor, other: Union[_rf_types.RawTensorTypes, Tensor]) -> Union[Tensor, bool]:
         # When comparing to some other invalid type, return False, not a Tensor.
         # This is to allow easy equality checks with other random objects.
@@ -45,6 +48,7 @@ class _TensorOpOverloadsMixin(_TensorMixinBase):
             return _rf().compare(self, "==", other)
         return False
 
+    # noinspection PyMethodOverriding
     def __ne__(self: Tensor, other: Union[_rf_types.RawTensorTypes, Tensor]) -> Tensor:
         return _rf().compare(self, "!=", other)
 

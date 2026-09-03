@@ -35,6 +35,7 @@ from returnn.config import Config
 from returnn.log import log
 from returnn.util.basic import NumbersDict, get_fwd_compat_kwargs
 from returnn.util.debug import install_subproc_faulthandler
+from returnn.datasets.packing import packed_batch_config, packed_batch_key_opts
 
 
 def create_tensor(array: numpy.ndarray) -> Union[torch.Tensor, numpy.ndarray]:
@@ -102,51 +103,6 @@ def collate_batch(
             res[key] = numpy.stack(ls, axis=0)
 
     return res
-
-
-def packed_batch_config() -> Optional[Dict[str, Any]]:
-    """
-    :return: the ``packed_tensors`` config dict, or None if packing is off.
-        ``packed_tensors`` is ``True`` (all defaults: dense, gap 0, align 1)
-        or a dict with the global ``gap``/``align`` and optional per-key overrides
-        under the reserved ``per_key`` sub-dict::
-
-            packed_tensors = {"gap": 120, "align": 6, "per_key": {"data": {"gap": 240}}}
-
-        The defaults are resolved per key by :func:`packed_batch_key_opts`,
-        so this only validates the keys and passes the dict through (``True`` -> ``{}``).
-    """
-    from returnn.config import get_global_config
-
-    config = get_global_config(raise_exception=False)
-    if config is None:
-        return None
-    opt = config.typed_value("packed_tensors", None)
-    if opt is None:
-        opt = config.bool("packed_tensors", False)
-    if not opt:
-        return None
-    if opt is True:
-        return {}
-    assert isinstance(opt, dict), f"packed_tensors: expected bool or dict, got {opt!r}"
-    allowed = {"gap", "align", "per_key"}
-    assert set(opt).issubset(allowed), f"packed_tensors: unexpected keys {set(opt) - allowed}, allowed {allowed}"
-    return opt
-
-
-def packed_batch_key_opts(packing: Dict[str, Any], key: str) -> Optional[Dict[str, int]]:
-    """
-    :return: the ``{"gap", "align"}`` for the given data key, per-key override else global default;
-        None if the key opts out of packing (``per_key: {<key>: {"packed": False}}`` -> padded),
-        e.g. targets that the train step consumes padded while the audio is packed
-    """
-    per = packing.get("per_key", {}).get(key, {})
-    if not per.get("packed", True):
-        return None
-    return {
-        "gap": int(per.get("gap", packing.get("gap", 0))),
-        "align": int(per.get("align", packing.get("align", 1))),
-    }
 
 
 class ChunkingIterDataPipe(torch.utils.data.IterDataPipe):
@@ -460,7 +416,7 @@ class BucketOrderingIterDataPipe(torch.utils.data.IterDataPipe):
 
         assert buckets, "empty bucket batching configuration"
         if not all(size > 0 and max_seqs > 0 for size, max_seqs in buckets):
-            raise ValueError(f"bucket sizes and max seqs in bucket must be positive")
+            raise ValueError("bucket sizes and max seqs in bucket must be positive")
         self._max_seq_lens, self._max_bucket_sizes = zip(*sorted(buckets))
         assert len(set(self._max_seq_lens)) == len(self._max_seq_lens), "seq len boundaries must all be unique"
 
@@ -549,7 +505,7 @@ def get_batching_iterable_dataset_from_config(
         cls = torch_batching
     else:
         raise ValueError(
-            f"custom_batching must either be a dict containing a `class` key naming a type, a type or a callable."
+            "custom_batching must either be a dict containing a `class` key naming a type, a type or a callable."
         )
     batches_dataset = cls(dataset, **batching_args)
     assert isinstance(batches_dataset, torch.utils.data.IterableDataset)

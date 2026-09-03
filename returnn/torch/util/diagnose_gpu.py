@@ -97,8 +97,10 @@ def print_using_cuda_device_report(dev: Union[str, torch.device], *, file: Optio
     if isinstance(dev, str):
         dev = torch.device(dev)
     assert dev.type == "cuda", f"expected CUDA device, got {dev}"
-    if dev.index is not None:
-        idx = dev.index
+    # None for a bare device like "cuda" (the torch stub claims int, hence the annotation)
+    index: Optional[int] = dev.index
+    if index is not None:
+        idx = index
     else:
         idx = torch.cuda.current_device()
     if "CUDA_VISIBLE_DEVICES" in os.environ:
@@ -193,9 +195,14 @@ def timeout(info: str, *, seconds: int = 30):
     potential hanging funcs will block the main thread and thus block the signal handler from executing.
     Thus, we use a subprocess.
 
+    Under a profiler (Nsight Compute / Systems) CUDA init takes far longer than the default,
+    so the guard would abort a healthy run; scale it up when a profiler is detected.
+
     :param seconds:
     :param info:
     """
+    if _is_profiled():
+        seconds *= 20
     # "spawn" context so child does not inherit SIGTERM handler so that we don't call _fatal_signal_handler.
     proc = multiprocessing.get_context("spawn").Process(
         target=_timeout_handler, kwargs={"seconds": seconds, "proc_id": os.getpid(), "info": info}
@@ -206,6 +213,16 @@ def timeout(info: str, *, seconds: int = 30):
     finally:
         proc.terminate()
         proc.join()
+
+
+def _is_profiled() -> bool:
+    """
+    :return: whether we run under Nsight Compute / Systems, which slows CUDA init a lot
+    """
+    if any("NSIGHT" in k.upper() or "NSYS" in k.upper() for k in os.environ):
+        return True
+    # ncu/nsys inject their interception library via LD_PRELOAD
+    return any(n in os.environ.get("LD_PRELOAD", "") for n in ("nsight", "ncu", "nsys"))
 
 
 def _timeout_handler(*, seconds: Union[float, int], proc_id: int, info: str):

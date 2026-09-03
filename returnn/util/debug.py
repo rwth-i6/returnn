@@ -23,7 +23,7 @@ if TYPE_CHECKING:
 
 
 signum_to_signame = {
-    k: v for v, k in reversed(sorted(signal.__dict__.items())) if v.startswith("SIG") and not v.startswith("SIG_")
+    k: v for v, k in reversed(sorted(vars(signal).items())) if v.startswith("SIG") and not v.startswith("SIG_")
 }
 
 
@@ -211,7 +211,6 @@ def format_signum(signum):
     return "%s (%s)" % (signum, signum_to_signame.get(signum, "unknown"))
 
 
-# noinspection PyUnusedLocal
 def signal_handler(signum, frame):
     """
     Prints a message on stdout and dump all thread stacks.
@@ -219,11 +218,11 @@ def signal_handler(signum, frame):
     :param int signum: e.g. signal.SIGUSR1
     :param frame: ignored, will dump all threads
     """
+    del frame  # signal handler signature
     print("Signal handler: got signal %s" % format_signum(signum))
     dump_all_thread_tracebacks()
 
 
-# noinspection PyUnusedLocal
 def _fatal_signal_handler(signum, frame):
     """
     Like :func:`signal_handler`, but also broadcasts SIGUSR1 to descendant processes
@@ -233,6 +232,7 @@ def _fatal_signal_handler(signum, frame):
     Use for signals where the expectation is termination,
     e.g. SIGTERM from job schedulers / torchelastic.
     """
+    del frame  # signal handler signature
     import psutil
 
     print("Signal handler: got signal %s, dumping threads and children." % format_signum(signum))
@@ -354,7 +354,7 @@ def install_native_signal_handler(*, reraise_exceptions: bool = False):
 
         # C code: https://github.com/albertz/playground/blob/master/signal_handler.c
         lib = ctypes.CDLL(_get_native_signal_handler_lib_filename())
-        lib.install_signal_handler.return_type = None
+        lib.install_signal_handler.restype = None  # void
         lib.install_signal_handler()
         print("Installed native_signal_handler.so.")
 
@@ -719,9 +719,7 @@ class PyTracer:
     In Python >=3.13, you likely get a few more locals than before.
     """
 
-    def __init__(
-        self, funcs_to_trace_list: Sequence[Union[Callable, FunctionType]], capture_type: Union[type, Tuple[type, ...]]
-    ):
+    def __init__(self, funcs_to_trace_list: Sequence[FunctionType], capture_type: Union[type, Tuple[type, ...]]):
         """
         :param funcs_to_trace_list: list of functions to trace the locals. only those functions will be traced.
         :param capture_type: only capture variables of this type, e.g. torch.Tensor.
@@ -729,6 +727,7 @@ class PyTracer:
 
         def _get_func_code(func: FunctionType) -> CodeType:
             while getattr(func, "__wrapped__", None) is not None:
+                # noinspection unresolved-references
                 func = func.__wrapped__
             return func.__code__
 
@@ -736,7 +735,7 @@ class PyTracer:
         self._code_obj_to_func = {_get_func_code(func): func for func in self.funcs_to_trace_list}
         self.capture_type = capture_type
 
-        self._prev_trace_func = None
+        self._prev_trace_func: Optional[Callable] = None
         self.captured_locals = {}  # func -> (list of calls) -> tensor local name -> (list of versions) -> tensor
 
     def __enter__(self) -> PyTracer:
@@ -755,12 +754,13 @@ class PyTracer:
         sys.settrace(self._prev_trace_func)
         self._prev_trace_func = None
 
-    def __call__(self, frame: FrameType, event, arg) -> Optional[PyTracer]:
+    def __call__(self, frame: FrameType, event, arg) -> Optional[Union[PyTracer, Callable]]:
         """
         Trace func to get intermediate outputs.
         """
-        prev_trace_func_res = None
+        prev_trace_func_res: Optional[Callable] = None
         if self._prev_trace_func:
+            assert callable(self._prev_trace_func)
             prev_trace_func_res = self._prev_trace_func(frame, event, arg)
         func = self._code_obj_to_func.get(frame.f_code)
         if func:
@@ -791,7 +791,7 @@ def check_py_traces_rf_to_pt_equal(
         Tuple[
             Tuple[Callable, int, str, int],
             Tuple[Callable, int, str, int],
-            Union[Tuple[Union[Dim, str], ...], Callable[[torch.Tensor], Tensor]],
+            Union[Tuple[Union[Dim, str], ...], Callable[..., Tensor]],
         ],
     ],
 ):
@@ -808,6 +808,8 @@ def check_py_traces_rf_to_pt_equal(
             Instead of Dim, you can also use a string, which will be resolved from the RF trace
             (then you also need ``Dim`` in ``capture_type`` of the :class:`PyTracer`).
             If callable, it gets the PyTorch tensor and should return the RETURNN tensor.
+            It is called as ``f(tensor, name=..., resolve_dim=..., **kwargs)``,
+            so it must accept ``**kwargs`` -- we pass a dummy one to check for that.
             Sometimes you might want to perform some reshaping, slicing, or similar,
             and then use rf.convert_to_tensor.
     """

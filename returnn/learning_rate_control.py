@@ -5,8 +5,7 @@ The base class is :class:`LearningRateControl`.
 
 from __future__ import annotations
 
-from typing import Optional, Union, Any, Dict
-import typing
+from typing import Optional, Union, Any, Dict, Tuple
 import os
 import returnn.util.basic as util
 from returnn.util.basic import better_repr, simple_obj_repr, unicode
@@ -31,14 +30,15 @@ class LearningRateControl:
         def __init__(
             self,
             *,
-            learning_rate: float = None,
-            error: Optional[Dict[str, float]] = None,
+            learning_rate: Optional[float] = None,
+            error: Optional[Union[Dict[str, float], float]] = None,
             meta: Optional[Dict[str, Any]] = None,
             **kwargs,
         ):
             """
             :param learning_rate:
-            :param error: scores (loss values) and errors (frame error rates, etc)
+            :param error: scores (loss values) and errors (frame error rates, etc.);
+                a plain float is the old serialization format
             :param meta: any other extra information (e.g. effective learning rate)
 
             Note that this is serialized as EpochData(learningRate=..., error=...),
@@ -51,7 +51,7 @@ class LearningRateControl:
                 raise TypeError(f"EpochData: unexpected learning_rate type: {type(learning_rate)}")
             if kwargs:
                 raise TypeError(f"EpochData: unexpected kwargs: {kwargs}")
-            self.learning_rate = learning_rate
+            self.learning_rate: Optional[float] = learning_rate
             if isinstance(error, float):  # Old format.
                 error = {"old_format_score": error}
             elif error is None:
@@ -128,16 +128,17 @@ class LearningRateControl:
     ):
         """
         :param float default_learning_rate: default learning rate. usually for epoch 1
-        :param list[float] | dict[int,float] default_learning_rates: learning rates
+        :param list[float]|dict[int,float]|str|None default_learning_rates: learning rates
+            (a str is evaluated)
         :param str|list[str]|None error_measure_key: for get_epoch_error_value() the key for EpochData.error
             which is a dict
         :param int min_num_epochs_per_new_learning_rate: if the lr was recently updated, use it for at least N epochs
         :param bool relative_error_div_by_old: if True, compute relative error as (new - old) / old.
         :param float|(float)->float learning_rate_decay:
         :param float|(float)->float learning_rate_growth:
-        :param str filename: load from and save to file
+        :param str|None filename: load from and save to file
         """
-        self.epoch_data = {}  # type: typing.Dict[int,LearningRateControl.EpochData]
+        self.epoch_data: Dict[int, LearningRateControl.EpochData] = {}
         self.filename = filename
         if filename:
             if os.path.exists(filename):
@@ -299,8 +300,8 @@ class LearningRateControl:
     def get_last_epoch(self, epoch):
         """
         :param int epoch:
-        :return: last epoch before ``epoch`` where we have some epoch data
-        :rtype: int
+        :return: last epoch before ``epoch`` where we have some epoch data, None if there is none
+        :rtype: int|None
         """
         epochs = sorted([e for e in self.epoch_data.keys() if e < epoch])
         if not epochs:
@@ -329,8 +330,9 @@ class LearningRateControl:
         """
         :param int old_epoch:
         :param int new_epoch:
-        :return: relative error between old epoch and new epoch
-        :rtype: float
+        :return: relative error between old epoch and new epoch,
+            None if either epoch has no error value or the error keys differ
+        :rtype: float|None
         """
         old_key, old_error = self.get_epoch_error_key_value(old_epoch)
         new_key, new_error = self.get_epoch_error_key_value(new_epoch)
@@ -430,8 +432,9 @@ class LearningRateControl:
     def get_epoch_error_value(self, epoch):
         """
         :param int epoch:
-        :return: error/score for the specific epoch, given the error-key, see :func:`get_error_key`
-        :rtype: float
+        :return: error/score for the specific epoch, given the error-key, see :func:`get_error_key`,
+            None if there is no error value for that epoch
+        :rtype: float|None
         """
         error = self.get_epoch_error_dict(epoch)
         if not error:
@@ -446,11 +449,10 @@ class LearningRateControl:
         )
         return error[key]
 
-    def get_epoch_error_key_value(self, epoch):
+    def get_epoch_error_key_value(self, epoch) -> Tuple[Optional[str], Optional[float]]:
         """
         :param int epoch:
         :return: key, error
-        :rtype: (str, float)
         """
         error = self.get_epoch_error_dict(epoch)
         if not error:

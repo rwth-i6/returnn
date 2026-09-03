@@ -660,11 +660,7 @@ class LmDataset(CachedDataset2):
                                 map(self.orth_symbols_map.__getitem__, orth_syms)
                             )  # convert to list to trigger map (it's lazy)
                         except KeyError as e:
-                            if sys.version_info >= (3, 0):
-                                orth_sym = e.args[0]
-                            else:
-                                # noinspection PyUnresolvedReferences
-                                orth_sym = e.message
+                            orth_sym = e.args[0]
                             if self.log_auto_replace_unknown_symbols:
                                 print(
                                     "LmDataset: unknown orth symbol %r, adding to orth_replace_map as %r"
@@ -964,8 +960,8 @@ class AllophoneState:
 
         :param int ctx_offset: 0 for center, >0 for future, <0 for history
         :param str|None out_of_context_id: what to return out of our context
-        :return: phone-id from the offset
-        :rtype: str
+        :return: phone-id from the offset, or out_of_context_id (None by default) beyond the context
+        :rtype: str|None
         """
         if ctx_offset == 0:
             return self.id
@@ -1915,10 +1911,11 @@ class TranslationFactorsDataset(TranslationDataset):
 
     def __init__(self, source_factors=None, target_factors=None, factor_separator="|", **kwargs):
         """
-        :param list[str]|None source_factors: Data keys for the source factors (excluding first factor, which is always
-          called 'data'). Words in source file have to have that many factors. Also, a vocabulary
+        :param list[str]|str|None source_factors: Data keys for the source factors
+          (excluding first factor, which is always called 'data').
+          Words in source file have to have that many factors. Also, a vocabulary
           "<factor_data_key>.vocab.pkl" has to exist for each factor.
-        :param list[str]|None target_factors: analogous to source_factors. Excluding first factor, which is always
+        :param list[str]|str|None target_factors: analogous to source_factors. Excluding first factor, which is always
           called 'classes'.
         :param str factor_separator: string to separate factors of the words. E.g. if "|", words are expected to be
           of format "<factor_0>|<factor_1>|...".

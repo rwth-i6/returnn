@@ -67,7 +67,8 @@ class ConformerConvBlock(rf.Module):
         self.positionwise_conv2 = rf.Linear(out_dim, out_dim)
         if not callable(norm):
             raise TypeError(f"{self}: unexpected norm type {norm!r}")
-        self.norm = norm
+        # Callable[...]: the norms differ in their kwargs, see _norm_wants_spatial_dim below.
+        self.norm: Callable[..., Tensor] = norm
         # Some norms (e.g. GroupNormSpatial) need the spatial dim to pool the statistics over time.
         # Detect that once here and pass it through in __call__,
         # instead of forcing a no-op spatial_dim arg onto BatchNorm/LayerNorm.
@@ -78,6 +79,7 @@ class ConformerConvBlock(rf.Module):
         x_conv1 = self.positionwise_conv1(inp)
         x_act, _ = rf.gating(x_conv1)
         x_depthwise_conv, _ = self.depthwise_conv(x_act, in_spatial_dim=spatial_dim)
+        # noinspection PyArgumentList
         x_normed = self.norm(x_depthwise_conv, **({"spatial_dim": spatial_dim} if self._norm_wants_spatial_dim else {}))
         x_swish = rf.swish(x_normed)
         x_conv2 = self.positionwise_conv2(x_swish)

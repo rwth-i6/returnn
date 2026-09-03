@@ -42,7 +42,7 @@ class RawWavDataset(CachedDataset2):
         self._listFile = listFile
         with open(self._listFile, "r") as f:
             self._wavFiles = f.readlines()
-        self._wavFiles = [l.strip() for l in self._wavFiles]
+        self._wavFiles = [line.strip() for line in self._wavFiles]
         self._frameLength = frameLength
         self._frameShift = frameShift
         self._flag_pad = True  # specifies if signal is getting cut or zero padded for last frame
@@ -78,12 +78,12 @@ class RawWavDataset(CachedDataset2):
         :rtype: DatasetSeq | None
         :returns DatasetSeq or None if seq_idx >= num_seqs.
         """
-        inputFeatures = self._get_input_features(wav_file_id)
-        outputFeatures = self._get_output_features(wav_file_id)
-        inputFeatures = inputFeatures.astype(np.float32)
-        if outputFeatures is not None:
-            outputFeatures = outputFeatures.astype(np.float32)
-        return DatasetSeq(seq_idx, inputFeatures, targets=outputFeatures)
+        input_features = self._get_input_features(wav_file_id)
+        output_features = self._get_output_features(wav_file_id)
+        input_features = input_features.astype(np.float32)
+        if output_features is not None:
+            output_features = output_features.astype(np.float32)
+        return DatasetSeq(seq_idx, input_features, targets=output_features)
 
     def _get_num_outputs(self, num_outputs):
         """
@@ -94,35 +94,36 @@ class RawWavDataset(CachedDataset2):
         ret_num_outputs = {"classes": (num_outputs, 2)}
         return ret_num_outputs
 
-    def _get_input_features(self, wavFileId):
+    def _get_input_features(self, wav_file_id):
         """
 
-        :type wavFileId: int
-        :param wavFileId: list index of wav file for which to return the input features
+        :type wav_file_id: int
+        :param wav_file_id: list index of wav file for which to return the input features
         :rtype: 2D numpy.ndarray (frames, features)
         :return: the 2d array containing the time signal segment for each frame
         """
-        if not self._isInBuffer(wavFileId):
-            self._load_wav_file_id_into_buffer(wavFileId)
+        if not self._isInBuffer(wav_file_id):
+            self._load_wav_file_id_into_buffer(wav_file_id)
 
-        timeSignal = self._hdfBufferHandler["timeSignal"][str(wavFileId)][...]
-        frameLength = self._frameLength
-        frameShift = self._frameShift
-        nrOfFrames = int(np.ceil((float(timeSignal.shape[0] - frameLength) / frameShift) + 1))
+        # note: "timeSignal" here is the HDF group key, not a variable name
+        time_signal = self._hdfBufferHandler["timeSignal"][str(wav_file_id)][...]
+        frame_length = self._frameLength
+        frame_shift = self._frameShift
+        nr_of_frames = int(np.ceil((float(time_signal.shape[0] - frame_length) / frame_shift) + 1))
         if self._flag_pad:
-            padLength = (nrOfFrames - 1) * frameShift + frameLength - timeSignal.shape[0]
-            timeSignalPad = np.zeros((timeSignal.shape[0] + padLength,))
-            timeSignalPad[0 : timeSignal.shape[0]] = timeSignal
+            pad_length = (nr_of_frames - 1) * frame_shift + frame_length - time_signal.shape[0]
+            time_signal_pad = np.zeros((time_signal.shape[0] + pad_length,))
+            time_signal_pad[0 : time_signal.shape[0]] = time_signal
         else:
-            nrOfFrames -= 1
-            sigLength = (nrOfFrames - 1) * frameShift + frameLength
-            timeSignalPad = np.zeros((sigLength,))
-            timeSignalPad[:] = timeSignal[0:sigLength]
+            nr_of_frames -= 1
+            sig_length = (nr_of_frames - 1) * frame_shift + frame_length
+            time_signal_pad = np.zeros((sig_length,))
+            time_signal_pad[:] = time_signal[0:sig_length]
 
-        inputFeatures = np.zeros((nrOfFrames, frameLength), dtype=np.float32)
-        for i1 in range(nrOfFrames):
-            inputFeatures[i1, :] = timeSignalPad[i1 * frameShift : (i1 * frameShift + frameLength)]
-        return inputFeatures
+        input_features = np.zeros((nr_of_frames, frame_length), dtype=np.float32)
+        for i1 in range(nr_of_frames):
+            input_features[i1, :] = time_signal_pad[i1 * frame_shift : (i1 * frame_shift + frame_length)]
+        return input_features
 
     def _get_output_features(self, wav_file_id):
         """
@@ -134,41 +135,39 @@ class RawWavDataset(CachedDataset2):
         """
         if not self._isInBuffer(wav_file_id):
             self._load_wav_file_id_into_buffer(wav_file_id)
-        if not str(wav_file_id) in self._hdfBufferHandler["outputs"].keys():
+        if str(wav_file_id) not in self._hdfBufferHandler["outputs"].keys():
             return None
-        else:
-            # TBD !!!
-            pass
+        return None
 
-    def _isInBuffer(self, wavFileId):
+    def _isInBuffer(self, wav_file_id):
         """
         returns true if the wav file has already been loaded into the hdf file buffer
 
-        :type wavFileId: int
+        :type wav_file_id: int
         :rtype: bool
         """
-        if str(wavFileId) in self._hdfBufferHandler["timeSignal"].keys():
+        if str(wav_file_id) in self._hdfBufferHandler["timeSignal"].keys():
             return True
         else:
             return False
 
-    def _load_wav_file_id_into_buffer(self, wavFileId):
+    def _load_wav_file_id_into_buffer(self, wav_file_id):
         """
         loads the specified wav file into the hdf file buffer
 
-        :type wavFileId: int
-        :param wavFileId: the list index specifying the wav file to be loaded to the buffer
+        :type wav_file_id: int
+        :param wav_file_id: the list index specifying the wav file to be loaded to the buffer
         """
         if self._flag_buffering:
             time.sleep(3)
         self._flag_buffering = True
-        if self._isInBuffer(wavFileId):
+        if self._isInBuffer(wav_file_id):
             return False
-        wav_file_path = self._wavFiles[wavFileId]
+        wav_file_path = self._wavFiles[wav_file_id]
         import scipy.io.wavfile
 
         (r, x) = scipy.io.wavfile.read(wav_file_path)
-        self._hdfBufferHandler["timeSignal"].create_dataset(str(wavFileId), data=x.astype(np.float32))
+        self._hdfBufferHandler["timeSignal"].create_dataset(str(wav_file_id), data=x.astype(np.float32))
         self._flag_buffering = False
         return True
 

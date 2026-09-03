@@ -53,6 +53,7 @@ from .util import graph_capture
 from .util import module as util_module
 from .util.exception_helper import help_on_torch_exception
 from .util.debug_inf_nan import debug_inf_nan
+from .util.graph_capture import graph_pools_reserved
 from .distributed import DistributedContext, get_ctx as dist_get_ctx
 
 
@@ -143,6 +144,18 @@ class Engine(EngineBase):
         # opts parsed here, the instance is created lazily at the first train step.
         self._graph_capture_opts = config.typed_value("torch_cuda_graph", None)
         self._graph_capture: Optional[graph_capture.GraphCapturedTrainStep] = None
+
+        # Dump stacks when a train step stops making progress, see returnn.util.watch_stall.
+        self._stall_heartbeat = None
+        _stall_opts = config.typed_value("torch_watch_stall", None)
+        if isinstance(_stall_opts, (int, float)):
+            _stall_opts = {"timeout": float(_stall_opts)}
+        if not _stall_opts and os.environ.get("RETURNN_WATCH_STALL"):
+            _stall_opts = {"timeout": float(os.environ["RETURNN_WATCH_STALL"])}
+        if _stall_opts:
+            from returnn.util.watch_stall import watch_stall
+
+            self._stall_heartbeat = watch_stall(**_stall_opts)
 
         if config.bool("use_tensorboard", False):
             from torch.utils.tensorboard import SummaryWriter
@@ -256,9 +269,19 @@ class Engine(EngineBase):
                 "torch_cuda_graph: grad accumulation not supported"
             )
             assert self._grad_scaler is None, "torch_cuda_graph: grad scaler not supported"
-            assert self._ddp_pt_model is None and not self._torch_distributed_ctx, (
-                "torch_cuda_graph: distributed training not supported"
+            # DDP reduces grads via autograd hooks during backward.
+            # The compiled step returns the grads instead, so those hooks never fire.
+            # The reduce types without a DDP wrap are fine.
+            assert self._ddp_pt_model is None, (
+                "torch_cuda_graph: DistributedDataParallel not supported, use reduce_type 'grad_explicit' or 'param'"
             )
+            # "param" syncs after the optimizer step, outside the compiled region, so it needs nothing.
+            # "grad_explicit" reduces between step and optimizer, so the optimizer cannot be in-graph.
+            if self._torch_distributed_ctx and self._torch_distributed_ctx.reduce_type() == "grad_explicit":
+                assert not self._graph_capture_opts.get("capture_optimizer", False), (
+                    "torch_cuda_graph: capture_optimizer with reduce_type 'grad_explicit' is not supported,"
+                    " the grad reduce must run between the step and the optimizer"
+                )
             self._graph_capture = graph_capture.GraphCapturedTrainStep(
                 opts=self._graph_capture_opts,
                 extern_data_template=self.extern_data,
@@ -271,7 +294,12 @@ class Engine(EngineBase):
                     )
                 ),
                 post_step=lambda: self._updater.step(grad_scaler=None),
+                # only for opts "dummy_warmup": to reset the state the dummy steps create
+                get_optimizer=lambda: self._updater.get_optimizer(),
+                get_buffers=lambda: list(self._pt_model.buffers()),
                 rf_params=(list(self._orig_model.parameters()) if isinstance(self._orig_model, rf.Module) else None),
+                # lets the capture infer a missing packed_total_bound from the content budget
+                packed_batch_size=self.config.typed_value("packed_batch_size", None),
             )
             if self._graph_capture.captures_optimizer:
                 # LR as a device tensor = a graph input: the per-step LR schedule
@@ -532,6 +560,9 @@ class Engine(EngineBase):
                 if not _has_data[0]:
                     break
 
+                if self._stall_heartbeat is not None:
+                    self._stall_heartbeat.value = time.time()
+
                 # convert values from torch int32 to Python ints to prevent overflow
                 keys_w_seq_len = [k for k in extern_data_raw if f"{k}:seq_len" in extern_data_raw]
                 total_data_size_packed += NumbersDict(
@@ -596,16 +627,22 @@ class Engine(EngineBase):
                 cur_count_grad_accum += 1
                 perform_update_step = cur_count_grad_accum >= accum_grad_multiple_step
                 if self._graph_capture is None:  # under graph capture, backward is inside the graph
-                    with (
+                    no_sync_ctx = (
                         self._ddp_pt_model.no_sync()
                         if (self._ddp_pt_model is not None and not perform_update_step)
-                        else nullcontext(),
-                        record_function("backward"),
-                    ):
+                        else nullcontext()
+                    )
+                    with no_sync_ctx, record_function("backward"):
                         if self._grad_scaler is not None:
                             self._grad_scaler.scale(total_loss.raw_tensor).backward()
                         else:
                             total_loss.raw_tensor.backward()
+
+                # The grads are complete here, and the optimizer step follows,
+                # so this is where they get averaged over the ranks.
+                if perform_update_step and self._torch_distributed_ctx:
+                    with record_function("reduce_grads"):
+                        self._torch_distributed_ctx.maybe_reduce_grads(module=self._pt_model)
 
                 # only update the weights when every gradient accumulation loop ends
                 # (under graph capture with capture_optimizer, the update is inside the graph)
@@ -642,7 +679,14 @@ class Engine(EngineBase):
                     complete_frac=complete_frac,
                     num_seqs=num_seqs,
                     batch_size_info=(
-                        _get_batch_size_info(extern_data) if self._log_batch_size and extern_data is not None else None
+                        (
+                            _get_batch_size_info(extern_data)
+                            if extern_data is not None
+                            # graph capture: no TensorDict is built, use the raw batch
+                            else _get_batch_size_info_raw(extern_data_raw)
+                        )
+                        if self._log_batch_size
+                        else None
                     ),
                     log_memory_usage_device=self._device if self._log_memory_usage else None,
                 )
@@ -722,14 +766,32 @@ class Engine(EngineBase):
 
         elapsed = time.monotonic() - epoch_start_time
         elapsed_computation_percentage = elapsed_computation_time / elapsed
-        total_padding_ratio = NumbersDict.constant_like(1.0, total_data_size_packed) - (
-            total_data_size_packed / total_data_size_padded
+        # Frames the computation ran over but which carry no content.
+        # Padded: the padding of each batch. Packed: zero by construction -- EXCEPT under
+        # bound shapes (graph capture), where every step computes over the full static buffer,
+        # so the unused part of that bound is exactly the same waste as padding, just elsewhere.
+        # Hence "bound slack" (bound - content) there and "padding" (padded - content) otherwise;
+        # both are 1 - content/computed, so the numbers stay comparable across the modes.
+        bound_shapes = self._graph_capture is not None
+        if bound_shapes:
+            bound_sizes = NumbersDict(self._graph_capture.data_bound_sizes())
+            # a key the captured graph never gets has no bound, so no slack to report;
+            # keeping it would divide by a missing key, which yields the numerator
+            total_data_size_packed = NumbersDict(
+                {k: v for k, v in total_data_size_packed.items() if k in bound_sizes.dict}
+            )
+            total_data_size_computed = bound_sizes * step_idx
+        else:
+            total_data_size_computed = total_data_size_padded
+        total_slack_ratio = NumbersDict.constant_like(1.0, total_data_size_packed) - (
+            total_data_size_packed / total_data_size_computed
         )
-        assert 0.0 <= total_padding_ratio.min_value() <= total_padding_ratio.max_value() <= 1.0
-        pad_str = ", ".join(f"{k}: {v:.1%}" for k, v in total_padding_ratio.items())
+        assert 0.0 <= total_slack_ratio.min_value() <= total_slack_ratio.max_value() <= 1.0
+        slack_str = ", ".join(f"{k}: {v:.1%}" for k, v in total_slack_ratio.items())
         print(
             f"Epoch {self.epoch}: Trained {step_idx} steps, {hms(elapsed)} elapsed "
-            f"({elapsed_computation_percentage:.1%} computing time, {pad_str} padding)",
+            f"({elapsed_computation_percentage:.1%} computing time, "
+            f"{slack_str} {'bound slack' if bound_shapes else 'padding'})",
             file=log.v3,
         )
 
@@ -1166,7 +1228,7 @@ class Engine(EngineBase):
             # In order to get consistent behavior, we use the reversed order.
             for preload_key, opts in reversed(sorted(preload_from_files.items())):
                 assert isinstance(opts, dict) and "filename" in opts
-                init_for_train = opts.get("init_for_train", False)
+                init_for_train: Union[bool, str] = opts.get("init_for_train", False)
                 if init_for_train:
                     if isinstance(init_for_train, str) and init_for_train == "always":
                         # No matter if this is the first train epoch
@@ -1738,9 +1800,19 @@ def _print_process(
         if log_memory_usage_device:
             dev = torch.device(log_memory_usage_device)
             if dev.type == "cuda":
-                info += [
-                    f"mem_usage:{log_memory_usage_device} {util.human_bytes_size(torch.cuda.max_memory_allocated(dev))}"
-                ]
+                pool = graph_pools_reserved()
+                # The reported usage is the real GPU need: the tracked peak PLUS the
+                # CUDA-graph private pool (replay working memory, freed as tensors but
+                # retained for replay -- INVISIBLE in the allocated stats; measured loq
+                # graphc: 9GB allocated peak, 46GB resident). No double counting: the peak
+                # stats are reset right after the capture, where the pool was still live
+                # (see GraphCapturedTrainStep). With no pool this is max_memory_allocated,
+                # exactly as before. Deliberately NOT memory_reserved: that also counts
+                # unrelated allocator cache.
+                usage = torch.cuda.max_memory_allocated(dev) + pool
+                info += [f"mem_usage:{log_memory_usage_device} {util.human_bytes_size(usage)}"]
+                if pool:
+                    info += [f"mem_graph_pool:{log_memory_usage_device} {util.human_bytes_size(pool)}"]
         if step_duration is not None:
             info += ["%.3f sec/step" % step_duration]
         if start_elapsed is not None:
@@ -1799,6 +1871,36 @@ def _get_batch_size_info(extern_data: TensorDict) -> Dict[str, int]:
             if dim.is_dynamic() and dim not in covered_dims:
                 covered_dims.add(dim)
                 info[f"max_size:{dim.name}"] = int(dim.get_dim_value())
+                size = dim.dyn_size_ext
+                if size is not None and size.dims and size.raw_tensor is not None:
+                    # summed seq lens = the CONTENT along this dim. The padded step computes on
+                    # num_seqs * max_size instead, so the two together say how much of the batch
+                    # was padding -- and it is the number comparable to a packed step's content.
+                    info[f"sum_size:{dim.name}"] = int(size.raw_tensor.sum())
+    return info
+
+
+def _get_batch_size_info_raw(extern_data_raw: Dict[str, Any]) -> Dict[str, int]:
+    """
+    Same purpose as :func:`_get_batch_size_info`, but from the raw data-loader batch:
+    under graph capture the engine never builds a :class:`TensorDict`
+    (the raw dict goes straight into the captured step's copy-in),
+    so that variant would report nothing there.
+
+    :param extern_data_raw: raw batch dict from the data loader
+    :return: num seqs, and per data key the max seq len and the summed (content) seq len.
+        The sum is what a packed step actually computes on, so it is the meaningful
+        throughput measure -- for a padded step it differs from num_seqs * max_size.
+    """
+    info = {}
+    for k in extern_data_raw:
+        seq_lens = extern_data_raw.get(f"{k}:seq_len")
+        if seq_lens is None:
+            continue
+        if "num_seqs" not in info:
+            info["num_seqs"] = int(len(seq_lens))
+        info[f"max_size:{k}"] = int(max(seq_lens)) if len(seq_lens) else 0
+        info[f"sum_size:{k}"] = int(sum(seq_lens))
     return info
 
 
@@ -1902,6 +2004,9 @@ class _TorchProfiler:
             self.profiler.export_chrome_trace("torch_profile.json")
             if self.profiler.profile_memory:
                 print("Exporting Torch memory profile to torch_memory_profile.html...", file=log.v2)
+                # deprecated, but the named replacement (_record_memory_history/_export_memory_snapshot)
+                # is private API and emits a snapshot pickle instead of this HTML timeline
+                # noinspection PyDeprecation
                 self.profiler.export_memory_timeline("torch_memory_profile.html")
 
             print("Exiting program after Torch profiling.", file=log.v2)

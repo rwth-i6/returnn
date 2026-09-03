@@ -1472,7 +1472,6 @@ class ChoiceStateVarLayer(LayerBase):
 
     layer_class = "choice_state_var"
 
-    # noinspection PyUnusedLocal
     def __init__(
         self,
         beam_size,
@@ -1490,6 +1489,20 @@ class ChoiceStateVarLayer(LayerBase):
         score_dependent=True,
         **kwargs,
     ):
+        del (  # only used in get_out_data_from_opts
+            beam_size,
+            search,
+            input_type,
+            prob_scale,
+            base_beam_score_scale,
+            random_sample_scale,
+            length_normalization,
+            custom_score_combine,
+            source_beam_sizes,
+            scheduled_sampling,
+            cheating,
+            explicit_search_sources,
+        )
         super(ChoiceStateVarLayer, self).__init__(**kwargs)
         rec_layer = self.network.parent_layer
         assert isinstance(rec_layer, RecStepByStepLayer)
@@ -1547,7 +1560,7 @@ class ChoiceStateVarLayer(LayerBase):
         """
         :param str name:
         :param list[LayerBase] sources:
-        :param str target:
+        :param str|list[str] target: a list is accepted, only its first entry matters here
         :param returnn.tf.network.TFNetwork network:
         :rtype: Data
         """
