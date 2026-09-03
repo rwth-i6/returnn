@@ -155,7 +155,7 @@ optimizer
     Note that this default covers only the native torch modules,
     whereas parameters of the RF modules :class:`rf.LayerNorm` and :class:`rf.Embedding`
     (e.g. the LayerNorm ``scale``) do get weight decay by default.
-    Since behavior version 30, the default also includes the RF modules
+    Since behavior version 32, the default also includes the RF modules
     (see :ref:`behavior_version`).
 
     ``weight_decay_modules_blacklist`` in the optimizer dict overrides the blacklist.
