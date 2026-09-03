@@ -120,6 +120,208 @@ def test_dim_math_pad_window():
     assert sizes == expected_sizes
 
 
+class _EqKey:
+    def __init__(self, value):
+        self.value = value
+
+    def __eq__(self, other):
+        return isinstance(other, _EqKey) and other.value == self.value
+
+    def __hash__(self):
+        return hash(self.value)
+
+
+class _AnyValue:
+    pass
+
+
+def test_Dim_math_cache_dict_equal_key_replace():
+    import gc
+
+    from returnn.tensor._dim_extra import _DimMathCacheDict
+
+    gc_was_enabled = gc.isenabled()
+    gc.disable()
+    try:
+        d = _DimMathCacheDict()
+        key1 = _EqKey(1)
+        key2 = _EqKey(1)
+        value1 = _AnyValue()
+        d[key1] = value1
+        del value1
+        value2 = _AnyValue()
+        d[key2] = value2
+        del key1
+        assert d.get(key2) is value2, "live entry must survive the death of an equal old key"
+    finally:
+        if gc_was_enabled:
+            gc.enable()
+
+
+def test_Dim_math_cache_dict_prunes_dead():
+    import gc
+
+    from returnn.tensor._dim_extra import _DimMathCacheDict
+
+    gc_was_enabled = gc.isenabled()
+    gc.disable()
+    try:
+        d = _DimMathCacheDict()
+        keys = [_EqKey(i) for i in range(10)]
+        for key in keys:
+            value = _AnyValue()
+            d[key] = value
+            del value
+        assert len(d) == 0
+        key_live = _EqKey("live")
+        value_live = _AnyValue()
+        d[key_live] = value_live
+        assert len(d._entries) == 1, "dead entries must be pruned on insert"
+        assert d.get(key_live) is value_live
+    finally:
+        if gc_was_enabled:
+            gc.enable()
+
+
+def test_Dim_math_cache_strong_for_template_dims():
+    import gc
+    import weakref
+
+    gc_was_enabled = gc.isenabled()
+    gc.disable()
+    try:
+        a = Dim(None, name="a")
+        b = Dim(None, name="b")
+        s = Dim(3, name="s")
+        ref_a1 = weakref.ref(a + 1)
+        ref_ab = weakref.ref(a + b)
+        ref_s1 = weakref.ref(s + 1)
+        assert ref_a1() is not None, "template dims keep their canonical derived dims alive"
+        assert ref_ab() is not None
+        assert ref_s1() is not None
+        assert (a + 1) is ref_a1()
+        assert (a + b) is ref_ab()
+    finally:
+        if gc_was_enabled:
+            gc.enable()
+
+
+def test_Dim_math_cache_hash_change_after_declare_same_as():
+    p = Dim(3, name="p")
+    b = Dim(4, name="b")
+    r = p + b
+    del r
+    b.declare_same_as(Dim(4, name="base"))
+    d = p + Dim(5, name="c")
+    assert d.dimension == 8
+
+
+def test_Dim_math_cache_keys_becoming_equal():
+    p = Dim(10, name="p")
+    static = Dim(3, name="static")
+    dynamic = Dim(None, name="dynamic")
+    static_result = p + static
+    assert static_result.dimension == 13
+    dynamic_result = p + dynamic
+    assert dynamic_result.dimension is None
+    static.declare_same_as(dynamic)
+    assert static == dynamic
+    p.reset_raw()
+    out = p + static
+    assert out.dimension == 13
+    assert out is static_result, "clear_dynamic must not evict the live static entry under an equal key"
+
+
+def test_Dim_derived_pickle():
+    import pickle
+
+    a = Dim(3, name="a")
+    d = a + 1
+    d2 = pickle.loads(pickle.dumps(d))
+    assert d2.dimension == d.dimension == 4
+    assert d2.derived_from_op is not None
+    assert d2.derived_from_op.kind == d.derived_from_op.kind
+
+
+def test_Dim_math_cache_weak():
+    import gc
+    import weakref
+
+    gc_was_enabled = gc.isenabled()
+    gc.disable()
+    try:
+        batch_dim = Dim(2, name="batch")
+        a = Dim(Tensor("a", [batch_dim], dtype="int32", raw_tensor=numpy.array([3, 2], dtype="int32")), name="a")
+        b = Dim(Tensor("b", [batch_dim], dtype="int32", raw_tensor=numpy.array([4, 1], dtype="int32")), name="b")
+        d_static = a + 1
+        ref_static = weakref.ref(d_static)
+        del d_static
+        assert ref_static() is None, "dim + int derived from an eager dynamic dim must be freed by refcount"
+        d_dyn = a + b
+        ref_dyn = weakref.ref(d_dyn)
+        del d_dyn
+        assert ref_dyn() is None, "dim + dim derived from eager dynamic dims must be freed by refcount"
+        assert (a + 1) == (a + 1)
+        assert (a + b) == (a + b)
+    finally:
+        if gc_was_enabled:
+            gc.enable()
+
+
+def test_Dim_get_mask_cache_identity():
+    batch_dim = Dim(2, name="batch")
+    time_dim = Dim(
+        Tensor("time", [batch_dim], dtype="int32", raw_tensor=numpy.array([3, 2], dtype="int32")),
+        name="time",
+    )
+    mask1 = time_dim.get_mask(device="cpu")
+    mask2 = time_dim.get_mask(device="cpu")
+    assert mask1 is mask2  # cached wrapper, stable identity while alive
+    raw1 = mask1.raw_tensor
+    del mask1, mask2
+    mask3 = time_dim.get_mask(device="cpu")
+    assert set(mask3.dims) == {batch_dim, time_dim}
+    assert mask3.raw_tensor is raw1  # raw tensor stays cached across wrapper rebuilds
+
+
+def test_Dim_get_mask_partial_dim_order_rebuild():
+    batch_dim = Dim(2, name="batch")
+    time_dim = Dim(
+        Tensor("time", [batch_dim], dtype="int32", raw_tensor=numpy.array([3, 2], dtype="int32")),
+        name="time",
+    )
+    mask1 = time_dim.get_mask(dim_order=[time_dim], device="cpu")
+    dims1 = mask1.dims
+    del mask1
+    mask2 = time_dim.get_mask(dim_order=[time_dim], device="cpu")
+    assert mask2.dims == dims1
+    assert mask2.raw_tensor.ndim == len(dims1)
+
+
+def test_Dim_get_mask_no_cycle():
+    import gc
+    import weakref
+
+    gc_was_enabled = gc.isenabled()
+    gc.disable()
+    try:
+        batch_dim = Dim(2, name="batch")
+        time_dim = Dim(
+            Tensor("time", [batch_dim], dtype="int32", raw_tensor=numpy.array([3, 2], dtype="int32")),
+            name="time",
+        )
+        mask = time_dim.get_mask(device="cpu")
+        ref_mask_raw = weakref.ref(mask.raw_tensor)
+        ref_dim = weakref.ref(time_dim)
+        del mask
+        del time_dim
+        assert ref_dim() is None, "dim with cached mask must be freed by refcount"
+        assert ref_mask_raw() is None, "cached mask raw tensor must die with the dim"
+    finally:
+        if gc_was_enabled:
+            gc.enable()
+
+
 def test_Tensor_pickle():
     import pickle
 
