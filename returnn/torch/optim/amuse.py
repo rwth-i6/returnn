@@ -153,9 +153,11 @@ class AMUSE(Optimizer):
     State convention:
 
     - p stores y while training.
-    - ``eval()`` converts y -> x using the current beta1.
-    - ``train()`` converts x -> y using the current beta1.
     - ``state["z"]`` stores the anchor z.
+    - ``state["beta1"]`` stores the beta1 used to encode the param's current y,
+      ``state["step"]`` the number of updates the param received.
+    - ``eval()`` converts y -> x using the param's ``state["beta1"]``.
+    - ``train()`` converts x -> y using the current group beta1 and records it in ``state["beta1"]``.
 
     Hyperparameters:
 
@@ -306,10 +308,11 @@ class AMUSE(Optimizer):
         """
         if self.train_mode:
             for group in self.param_groups:
-                beta1 = group.get("beta1", self.beta1_init)
+                group_beta1 = group.get("beta1", self.beta1_init)
                 for p in group["params"]:
                     state = self.state[p]
                     if "z" in state:
+                        beta1 = state.get("beta1", group_beta1)
                         p.lerp_(end=state["z"], weight=1.0 - 1.0 / beta1)
         self.train_mode = False
 
@@ -326,6 +329,7 @@ class AMUSE(Optimizer):
                     state = self.state[p]
                     if "z" in state:
                         p.lerp_(end=state["z"], weight=1.0 - beta1)
+                        state["beta1"] = beta1
         self.train_mode = True
 
     @torch.no_grad()
@@ -362,24 +366,35 @@ class AMUSE(Optimizer):
             group["ckp1"] = ckp1
             group["weight_sum"] = future_weight_sum
 
+            beta1_prev_group = group["beta1"]
             beta1 = self._compute_beta1(group, t, ckp1)
             group["beta1"] = beta1
             wd = group.get("weight_decay", 0.0)
+            beta_m = group.get("momentum", 0.95)
+            beta2 = group.get("beta2", 0.999)
+            eps = group.get("eps", 1e-10)
 
-            if self.update_type == "muon":
-                beta_m = group.get("momentum", 0.95)
-                for p in group["params"]:
-                    if p.grad is None:
-                        continue
-                    state = self.state[p]
+            for p in group["params"]:
+                if p.grad is None:
+                    continue
+                state = self.state[p]
+                if "z" in state:
+                    # y was encoded with the group beta1 of the param's last update,
+                    # legacy state without these entries was updated in every group step so far
+                    step = state.get("step", k) + 1
+                    beta1_prev = state.get("beta1", beta1_prev_group)
+                else:
+                    step = 1
+                    beta1_prev = beta1_prev_group
+                state["step"] = step
+                z = self._get_z(p)
+                self._apply_weight_decay_at_y(p, z, lr, beta1_prev)
+
+                # y_t -> x_t with the beta1 that encoded y_t, then update z, then rebuild y_{t+1}.
+                p.lerp_(end=z, weight=1.0 - 1.0 / beta1_prev)
+                if self.update_type == "muon":
                     if "momentum_buffer" not in state:
                         state["momentum_buffer"] = torch.zeros_like(p)
-
-                    z = self._get_z(p)
-                    self._apply_weight_decay_at_y(p, z, lr, beta1)
-
-                    # y_t -> x_t, then update z, then rebuild y_{t+1}.
-                    p.lerp_(end=z, weight=1.0 - 1.0 / beta1)
                     update = muon_update(
                         p.grad,
                         state["momentum_buffer"],
@@ -390,55 +405,26 @@ class AMUSE(Optimizer):
                     if wd != 0.0:
                         z.mul_(1.0 - lr * wd)
                     z.add_(update.reshape(p.shape), alpha=-lr)
-                    p.lerp_(end=z, weight=ckp1)
-                    p.lerp_(end=z, weight=1.0 - beta1)
-
-            elif self.update_type == "adamw":
-                beta2 = group.get("beta2", 0.999)
-                eps = group.get("eps", 1e-10)
-                bias_correction2 = 1.0 - beta2**t
-                for p in group["params"]:
-                    if p.grad is None:
-                        continue
-
-                    state = self.state[p]
+                elif self.update_type == "adamw":
                     if "exp_avg_sq" not in state:
                         state["exp_avg_sq"] = torch.zeros_like(p)
-
-                    z = self._get_z(p)
-                    self._apply_weight_decay_at_y(p, z, lr, beta1)
-
-                    # y_t -> x_t, then update z, then rebuild y_{t+1}.
-                    p.lerp_(end=z, weight=1.0 - 1.0 / beta1)
                     v = state["exp_avg_sq"]
                     grad = p.grad
                     v.mul_(beta2).addcmul_(grad, grad, value=1.0 - beta2)
-                    denom = v.div(bias_correction2).sqrt_().add_(eps)
+                    denom = v.div(1.0 - beta2**step).sqrt_().add_(eps)
                     update = grad / denom
                     if wd != 0.0:
                         update = update.add(z, alpha=wd)
                     z.add_(update, alpha=-lr)
-                    p.lerp_(end=z, weight=ckp1)
-                    p.lerp_(end=z, weight=1.0 - beta1)
-
-            elif self.update_type == "sgd":
-                for p in group["params"]:
-                    if p.grad is None:
-                        continue
-
-                    z = self._get_z(p)
-                    self._apply_weight_decay_at_y(p, z, lr, beta1)
-
-                    # y_t -> x_t, then update z, then rebuild y_{t+1}.
-                    p.lerp_(end=z, weight=1.0 - 1.0 / beta1)
+                elif self.update_type == "sgd":
                     if wd != 0.0:
                         z.mul_(1.0 - lr * wd)
                     z.add_(p.grad, alpha=-lr)
-                    p.lerp_(end=z, weight=ckp1)
-                    p.lerp_(end=z, weight=1.0 - beta1)
-
-            else:
-                raise ValueError(f"Invalid AMUSE update_type: {self.update_type}")
+                else:
+                    raise ValueError(f"Invalid AMUSE update_type: {self.update_type}")
+                p.lerp_(end=z, weight=ckp1)
+                p.lerp_(end=z, weight=1.0 - beta1)
+                state["beta1"] = beta1
 
             group["k"] = k + 1
 
