@@ -141,12 +141,13 @@ class _DimExtra:
         # They each have same_as = self. The same_base should have the base (global) batch info.
         self.same_for_batch_ctx: Dict[Tuple[BatchInfo, Optional[ControlFlowContext]], Dim] = {}
         self.cache_dyn_size_ext_dev: Dict[str, _t.Tensor] = {}  # device -> dyn_size_ext
-        # (dev, dim_order with self as None) -> (dtype, raw seq_mask tensor, weakref to the Tensor wrapper).
-        # Storing the raw tensor with a self-free key avoids a self reference cycle
+        # (dev, dim_order with self as None) -> (dtype, mask dims with self as None, raw tensor, wrapper weakref).
+        # Storing the raw tensor with self-free key and dims avoids a self reference cycle
         # (dim -> extra -> mask Tensor -> dims -> dim), so the dim and its cached
         # masks are freed by plain refcounting when the dim dies.
+        # The mask dims are stored because they can be a superset of the requested dim_order.
         # The wrapper weakref keeps get_mask() identity stable while the wrapper is alive.
-        self.cache_seq_mask: Dict[Tuple[str, Optional[Tuple[Optional[Dim], ...]]], Tuple[str, Any, Any]] = {}
+        self.cache_seq_mask: Dict[Tuple[str, Optional[Tuple[Optional[Dim], ...]]], Tuple[str, Any, Any, Any]] = {}
         self.cache_dim_math = _CacheDimMath()  # op (add,sub,...), operand -> Dim
 
     @property
@@ -924,12 +925,13 @@ class _DimMixin:
         cache_key = (device, tuple(None if d is self else d for d in dim_order))
         cached = self._extra.cache_seq_mask.get(cache_key)
         if cached is not None:
-            cached_dtype, cached_raw, cached_wrapper_ref = cached
+            cached_dtype, cached_dims, cached_raw, cached_wrapper_ref = cached
             cached_wrapper = cached_wrapper_ref()
             if cached_wrapper is not None:
                 return cached_wrapper
-            seq_mask = _t.Tensor("seq_mask", dims=dim_order, dtype=cached_dtype, raw_tensor=cached_raw)
-            self._extra.cache_seq_mask[cache_key] = (cached_dtype, cached_raw, weakref.ref(seq_mask))
+            mask_dims = tuple(self if d is None else d for d in cached_dims)
+            seq_mask = _t.Tensor("seq_mask", dims=mask_dims, dtype=cached_dtype, raw_tensor=cached_raw)
+            self._extra.cache_seq_mask[cache_key] = (cached_dtype, cached_dims, cached_raw, weakref.ref(seq_mask))
             return seq_mask
 
         if self._extra.copy_same_as:
@@ -960,7 +962,12 @@ class _DimMixin:
         size_ext = size_ext.copy_masked(max_idx)
         idx_range = backend.range_over_dim(self, device=device)
         seq_mask = rf.compare(idx_range, "<", size_ext, allow_broadcast_all_sources=True, dim_order=dim_order)
-        self._extra.cache_seq_mask[cache_key] = (seq_mask.dtype, seq_mask.raw_tensor, weakref.ref(seq_mask))
+        self._extra.cache_seq_mask[cache_key] = (
+            seq_mask.dtype,
+            tuple(None if d is self else d for d in seq_mask.dims),
+            seq_mask.raw_tensor,
+            weakref.ref(seq_mask),
+        )
         return seq_mask
 
     def is_batch_dim(self):
@@ -3044,7 +3051,7 @@ class _CacheDimMath:
             # weak values in both: the cache must not keep derived dims alive, as the derived
             # dim holds its parents via derived_from_op.inputs and the parent holds
             # this cache, which would form a parent <-> derived reference cycle
-            self.dims: MutableMapping[Dim, Dim] = _WeakKeyWeakValueDict()
+            self.dims: _WeakKeyWeakValueDict = _WeakKeyWeakValueDict()
             self.statics: MutableMapping[int, Dim] = weakref.WeakValueDictionary()
 
     def __init__(self):

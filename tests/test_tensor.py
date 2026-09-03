@@ -260,6 +260,20 @@ def test_Dim_get_mask_cache_identity():
     assert mask3.raw_tensor is raw1  # raw tensor stays cached across wrapper rebuilds
 
 
+def test_Dim_get_mask_partial_dim_order_rebuild():
+    batch_dim = Dim(2, name="batch")
+    time_dim = Dim(
+        Tensor("time", [batch_dim], dtype="int32", raw_tensor=numpy.array([3, 2], dtype="int32")),
+        name="time",
+    )
+    mask1 = time_dim.get_mask(dim_order=[time_dim], device="cpu")
+    dims1 = mask1.dims
+    del mask1
+    mask2 = time_dim.get_mask(dim_order=[time_dim], device="cpu")
+    assert mask2.dims == dims1
+    assert mask2.raw_tensor.ndim == len(dims1)
+
+
 def test_Dim_get_mask_no_cycle():
     import gc
     import weakref
