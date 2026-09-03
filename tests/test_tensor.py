@@ -138,12 +138,12 @@ class _AnyValue:
 def test_Dim_math_cache_dict_equal_key_replace():
     import gc
 
-    from returnn.tensor._dim_extra import _WeakKeyWeakValueDict
+    from returnn.tensor._dim_extra import _DimMathCacheDict
 
     gc_was_enabled = gc.isenabled()
     gc.disable()
     try:
-        d = _WeakKeyWeakValueDict()
+        d = _DimMathCacheDict()
         key1 = _EqKey(1)
         key2 = _EqKey(1)
         value1 = _AnyValue()
@@ -161,12 +161,12 @@ def test_Dim_math_cache_dict_equal_key_replace():
 def test_Dim_math_cache_dict_prunes_dead():
     import gc
 
-    from returnn.tensor._dim_extra import _WeakKeyWeakValueDict
+    from returnn.tensor._dim_extra import _DimMathCacheDict
 
     gc_was_enabled = gc.isenabled()
     gc.disable()
     try:
-        d = _WeakKeyWeakValueDict()
+        d = _DimMathCacheDict()
         keys = [_EqKey(i) for i in range(10)]
         for key in keys:
             value = _AnyValue()
@@ -178,6 +178,29 @@ def test_Dim_math_cache_dict_prunes_dead():
         d[key_live] = value_live
         assert len(d._entries) == 1, "dead entries must be pruned on insert"
         assert d.get(key_live) is value_live
+    finally:
+        if gc_was_enabled:
+            gc.enable()
+
+
+def test_Dim_math_cache_strong_for_template_dims():
+    import gc
+    import weakref
+
+    gc_was_enabled = gc.isenabled()
+    gc.disable()
+    try:
+        a = Dim(None, name="a")
+        b = Dim(None, name="b")
+        s = Dim(3, name="s")
+        ref_a1 = weakref.ref(a + 1)
+        ref_ab = weakref.ref(a + b)
+        ref_s1 = weakref.ref(s + 1)
+        assert ref_a1() is not None, "template dims keep their canonical derived dims alive"
+        assert ref_ab() is not None
+        assert ref_s1() is not None
+        assert (a + 1) is ref_a1()
+        assert (a + b) is ref_ab()
     finally:
         if gc_was_enabled:
             gc.enable()
@@ -227,16 +250,17 @@ def test_Dim_math_cache_weak():
     gc_was_enabled = gc.isenabled()
     gc.disable()
     try:
-        a = Dim(3, name="a")
-        b = Dim(4, name="b")
+        batch_dim = Dim(2, name="batch")
+        a = Dim(Tensor("a", [batch_dim], dtype="int32", raw_tensor=numpy.array([3, 2], dtype="int32")), name="a")
+        b = Dim(Tensor("b", [batch_dim], dtype="int32", raw_tensor=numpy.array([4, 1], dtype="int32")), name="b")
         d_static = a + 1
         ref_static = weakref.ref(d_static)
         del d_static
-        assert ref_static() is None, "dim + int derived dim must be freed by refcount"
+        assert ref_static() is None, "dim + int derived from an eager dynamic dim must be freed by refcount"
         d_dyn = a + b
         ref_dyn = weakref.ref(d_dyn)
         del d_dyn
-        assert ref_dyn() is None, "dim + dim derived dim must be freed by refcount"
+        assert ref_dyn() is None, "dim + dim derived from eager dynamic dims must be freed by refcount"
         assert (a + 1) == (a + 1)
         assert (a + b) == (a + b)
     finally:
