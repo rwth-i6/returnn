@@ -793,6 +793,50 @@ def test_multi_optimizer_load_cross_algorithm_error():
             raise AssertionError("expected ValueError for a cross-optimizer param move")
 
 
+def test_multi_optimizer_load_cross_update_type_error():
+    model = torch.nn.Sequential(torch.nn.Linear(4, 4), torch.nn.Linear(4, 4))
+
+    def _filter_first_weight(*, full_param_name, **_kwargs):
+        return full_param_name == "0.weight"
+
+    def _filter_second_weight(*, full_param_name, **_kwargs):
+        return full_param_name == "1.weight"
+
+    def _make_updater(params_filter):
+        config = Config(
+            dict(
+                optimizer={
+                    "class": "multi",
+                    "optimizers": [
+                        {"class": "amuse", "update_type": "muon", "params_filter": params_filter, "warmup_steps": 5},
+                        {"class": "amuse", "update_type": "adamw", "warmup_steps": 5},
+                    ],
+                }
+            )
+        )
+        updater = Updater(config=config, network=model, device=torch.device("cpu"))
+        updater.create_optimizer()
+        updater.set_current_train_step(global_train_step=0, epoch=1)
+        return updater
+
+    updater1 = _make_updater(_filter_first_weight)
+    updater1.set_optimizer_training_mode(train=True)
+    for param in model.parameters():
+        param.grad = torch.ones_like(param)
+    updater1.get_optimizer().step()
+    updater1.set_optimizer_training_mode(train=False)
+    updater2 = _make_updater(_filter_second_weight)
+
+    with tempfile.TemporaryDirectory(prefix="returnn_test_multi_load_cross_update_type") as tmp_dir:
+        updater1.save_optimizer(tmp_dir + "/model.opt.pt")
+        try:
+            updater2.load_optimizer(tmp_dir + "/model.opt.pt")
+        except ValueError as exc:
+            assert "moved" in str(exc) and "muon" in str(exc) and "adamw" in str(exc)
+        else:
+            raise AssertionError("expected ValueError for a param move between AMUSE update types")
+
+
 def test_updater_weight_decay_blacklist():
     from returnn.util.basic import DictRefKeys
 
@@ -2321,6 +2365,57 @@ def test_multi_optimizer_amuse():
     updater.step()
     updater.set_optimizer_training_mode(train=False)
     assert not muon_sub.train_mode and not adamw_sub.train_mode
+
+
+def test_amuse_beta1_decode_consistency():
+    from returnn.torch.optim.amuse import AMUSE
+
+    # Once beta1 ramps after warmup, y must be decoded with the beta1 it was encoded with.
+    # With a constant gradient, z is independent of that, so x must match the explicit averaging.
+    warmup, steps, lr_base, grad = 5, 8, 0.5, 1.0
+    p = torch.nn.Parameter(torch.tensor([1.0], dtype=torch.float64))
+    opt = AMUSE([p], lr=lr_base, update_type="sgd", warmup_steps=warmup, beta1=0.9, rho=1.0)
+    opt.train()
+    x_ref = z_ref = 1.0
+    for _ in range(steps):
+        p.grad = torch.tensor([grad], dtype=torch.float64)
+        opt.step()
+        group = opt.param_groups[0]
+        z_ref = z_ref - lr_base * min(1.0, group["k"] / warmup) * grad
+        x_ref = (1.0 - group["ckp1"]) * x_ref + group["ckp1"] * z_ref
+    opt.eval()
+    assert abs(p.item() - x_ref) < 1e-9, (p.item(), x_ref)
+
+
+def test_amuse_skipped_param_state():
+    from returnn.torch.optim.amuse import AMUSE
+
+    # Param a only gets gradients during warmup (beta1 still constant), then none while beta1 ramps.
+    # Its y stays encoded with the old beta1, so eval() must decode it with that, not the group beta1.
+    p_a = torch.nn.Parameter(torch.tensor([8.7], dtype=torch.float64))
+    p_b = torch.nn.Parameter(torch.tensor([1.0], dtype=torch.float64))
+    opt = AMUSE([p_a, p_b], lr=0.1, update_type="sgd", warmup_steps=2, beta1=0.9, rho=1.0)
+    opt.train()
+    for t in range(6):
+        p_a.grad = torch.tensor([1.0], dtype=torch.float64) if t < 2 else None
+        p_b.grad = torch.tensor([1.0], dtype=torch.float64)
+        opt.step()
+    opt.eval()
+    # z_a: 8.7 -> 8.65 (lr 0.05) -> 8.55 (lr 0.1), x_a: 8.65 -> 0.2 * 8.65 + 0.8 * 8.55
+    assert abs(p_a.item() - 8.57) < 1e-9, p_a.item()
+
+    # AdamW bias correction must use the param's own step count:
+    # a param getting its first gradient late must get a normalized first update, |dz| == lr.
+    p_c = torch.nn.Parameter(torch.tensor([3.0], dtype=torch.float64))
+    p_d = torch.nn.Parameter(torch.tensor([5.0], dtype=torch.float64))
+    opt = AMUSE([p_c, p_d], lr=0.1, update_type="adamw", warmup_steps=2, beta1=0.9, rho=1.0, eps=0.0)
+    opt.train()
+    for t in range(20):
+        p_c.grad = torch.tensor([1.0], dtype=torch.float64)
+        p_d.grad = torch.tensor([1.0], dtype=torch.float64) if t == 19 else None
+        opt.step()
+    dz_d = abs(opt.state[p_d]["z"].item() - 5.0)
+    assert abs(dz_d - 0.1) < 1e-9, dz_d
 
 
 if __name__ == "__main__":
