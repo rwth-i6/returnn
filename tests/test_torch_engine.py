@@ -1979,6 +1979,58 @@ def test_amuse_engine_train():
         assert engine._updater.get_optimizer().train_mode is False
 
 
+class TrainTestModelWithBatchNorm(TrainTestModel):
+    def __init__(self, **_kwargs):
+        super().__init__()
+        self.bn = torch.nn.BatchNorm1d(9)
+
+    def __call__(self, x: torch.Tensor) -> torch.Tensor:
+        x = self.bn(x.transpose(1, 2)).transpose(1, 2)
+        return super().__call__(x)
+
+
+def test_amuse_engine_train_batchnorm_refresh():
+    # With a schedule-free optimizer, the engine must refresh the BatchNorm running stats
+    # with some train batches (forwarded without gradient) after switching to the averaged weights.
+    counts = {"grad": 0, "no_grad": 0}
+    running_mean_at_last_update = []
+
+    def _train_step(*, model: TrainTestModelWithBatchNorm, extern_data: TensorDict, **kwargs):
+        TrainTestModel.train_step(model=model, extern_data=extern_data, **kwargs)
+        if torch.is_grad_enabled():
+            counts["grad"] += 1
+            running_mean_at_last_update[:] = [model.bn.running_mean.detach().clone()]
+        else:
+            counts["no_grad"] += 1
+
+    config = Config(
+        dict(
+            task="train",
+            device="cpu",
+            num_epochs=1,
+            extern_data={"data": {"dim": 9}, "classes": {"dim": 2, "sparse": True}},
+            get_model=TrainTestModelWithBatchNorm,
+            train_step=_train_step,
+            batch_size=500,
+            torch_dataloader_opts={"num_workers": 0},
+            optimizer={"class": "amuse", "update_type": "adamw", "warmup_steps": 5},
+            schedule_free_batchnorm_refresh_batches=3,
+        )
+    )
+    dataset = init_dataset({"class": "Task12AXDataset", "num_seqs": 100, "name": "train"})
+    dataset.init_seq_order(epoch=1)
+
+    with global_config_ctx(config):
+        engine = Engine(config=config)
+        engine.init_train_from_config(train_data=dataset)
+        engine.train()
+        model = engine._orig_model
+    assert counts["grad"] > 0
+    assert counts["no_grad"] == 3, counts
+    assert isinstance(model, TrainTestModelWithBatchNorm)
+    assert not torch.allclose(model.bn.running_mean, running_mean_at_last_update[0])
+
+
 def test_multi_optimizer_contract():
     import copy
     import io

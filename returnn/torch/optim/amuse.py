@@ -49,6 +49,10 @@ during training, the params hold the training iterate y,
 and ``train()`` converts back.
 The RETURNN engine calls these automatically at the train epoch boundaries
 (see :func:`returnn.torch.updater.Updater.set_optimizer_training_mode`).
+BatchNorm running statistics are collected under y during training,
+so after switching to x the engine forwards some train batches in train mode without gradient
+before evaluation and checkpoint saving, as the reference implementation does
+(config ``schedule_free_batchnorm_refresh_batches``, default 50, 0 disables it).
 
 The learning rate of each param group (as set externally, e.g. by the RETURNN LR schedule)
 is used as the base learning rate, and AMUSE applies its internal warmup factor

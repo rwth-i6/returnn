@@ -47,7 +47,7 @@ from .data import pipeline as data_pipeline
 from .data import returnn_dataset_wrapper
 from .data import extern_data as extern_data_util
 from .data.queued_data_iter import QueuedDataIter
-from .frontend.bridge import rf_module_to_pt_module
+from .frontend.bridge import rf_module_to_pt_module, wrapped_pt_module_to_rf_module
 from .util import diagnose_gpu
 from .util import graph_capture
 from .util import module as util_module
@@ -471,6 +471,56 @@ class Engine(EngineBase):
                 **util.get_fwd_compat_kwargs(),
             )
 
+    def _refresh_batch_norm_stats_after_optimizer_eval(self):
+        """
+        Schedule-free optimizers (e.g. :class:`returnn.torch.optim.amuse.AMUSE`):
+        the params now hold the averaged weights x,
+        but the BatchNorm running stats were collected under the training iterate y.
+        Like the AMUSE reference implementation, forward some train batches in train mode
+        without gradient, so the running stats follow the averaged weights,
+        before evaluation and checkpoint saving.
+        Config ``schedule_free_batchnorm_refresh_batches`` (default 50), 0 disables it.
+        """
+        if not self._updater.is_schedule_free_optimizer():
+            return
+        num_batches = self.config.int("schedule_free_batchnorm_refresh_batches", 50)
+        if num_batches <= 0:
+            return
+        if self._graph_capture is not None:
+            print(
+                "BatchNorm stats refresh for the schedule-free optimizer: not under graph capture, skip.", file=log.v3
+            )
+            return
+        has_batch_norm = False
+        for module in self._pt_model.modules():
+            if isinstance(module, torch.nn.modules.batchnorm._BatchNorm) and module.track_running_stats:
+                has_batch_norm = True
+                break
+            rf_module = wrapped_pt_module_to_rf_module(module)
+            if isinstance(rf_module, rf.BatchNorm) and rf_module.running_mean is not None:
+                has_batch_norm = True
+                break
+        if not has_batch_norm:
+            return
+        print(
+            f"Refresh BatchNorm running stats with {num_batches} train batches under the averaged weights.",
+            file=log.v3,
+        )
+        data_loader = self._create_data_loader(self.train_dataset, train=True)
+        self._pt_model.train()
+        with torch.no_grad():
+            for batch_idx, extern_data_raw in enumerate(data_loader):
+                if batch_idx >= num_batches:
+                    break
+                extern_data = extern_data_util.raw_dict_to_extern_data(
+                    extern_data_raw,
+                    extern_data_template=self.extern_data,
+                    device=self._device,
+                    float_dtype=self._default_float_dtype,
+                    with_eval_targets=True,
+                )
+                self._run_step(extern_data, train_flag=True, train_func=True)
+
     def train_epoch(self):
         """
         train one (sub)epoch
@@ -818,6 +868,7 @@ class Engine(EngineBase):
         self._on_epoch_end(dataset_name="train")
         # Schedule-free optimizers: switch to the averaged weights (see set_optimizer_training_mode).
         self._updater.set_optimizer_training_mode(train=False)
+        self._refresh_batch_norm_stats_after_optimizer_eval()
 
         if self.epoch % self._save_model_epoch_interval == 0 or self.epoch == self._final_epoch:
             if self.model_filename:

@@ -535,6 +535,15 @@ class Updater:
         """
         return self.optimizer
 
+    def is_schedule_free_optimizer(self) -> bool:
+        """
+        :return: whether the optimizer follows the schedule-free ``train()``/``eval()`` convention,
+            see :func:`set_optimizer_training_mode`
+        """
+        if self.optimizer is None:
+            return False
+        return callable(getattr(self.optimizer, "train", None)) and callable(getattr(self.optimizer, "eval", None))
+
     def set_optimizer_training_mode(self, *, train: bool):
         """
         For optimizers following the schedule-free convention with ``train()``/``eval()`` methods
