@@ -22,6 +22,29 @@ and not listing legacy/deprecated parameters.
 Version History
 ---------------
 
+Behavior version 32 (2026-09-03)
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+PyTorch backend optimizer weight-decay split:
+the default weight-decay module blacklist
+(the module types whose parameters do not get weight decay)
+now also covers the RF modules :class:`rf.LayerNorm` and :class:`rf.Embedding`,
+in addition to :class:`torch.nn.LayerNorm` and :class:`torch.nn.Embedding`.
+Before, RF models got weight decay on the LayerNorm ``scale`` and the Embedding ``weight``,
+contrary to what the documentation suggested.
+
+There is also the optimizer option ``weight_decay_modules_blacklist``
+to override this explicitly in both directions
+(e.g. ``["torch.nn.LayerNorm", "torch.nn.Embedding"]`` to keep the old behavior).
+
+Do not switch the behavior version on a running training:
+the changed split moves parameters between optimizer param groups.
+If you do, loading the optimizer checkpoint warns about the moved parameters
+and remaps their per-parameter state by name
+(their group hyperparameters then follow the new groups).
+
+See PR `#1830 <https://github.com/rwth-i6/returnn/pull/1830>`__.
+
 Behavior version 31 (2026-08-26)
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 

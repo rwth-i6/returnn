@@ -142,6 +142,35 @@ optimizer
     A dictionary with a ``class`` entry for the optimizer.
     Other keys are passed as parameters to the constructor of the optimizer class.
 
+    With ``class: "multi"``, multiple optimizers can be combined over disjoint parameter subsets,
+    e.g. ``torch.optim.Muon`` (which only accepts 2D parameters) for the hidden matrix weights
+    together with ``torch.optim.AdamW`` for all remaining parameters.
+    See the module docstring of :mod:`returnn.torch.optim.multi` for the config interface
+    (PyTorch backend only).
+
+    With ``weight_decay`` set (PyTorch backend), RETURNN splits the parameters
+    into two param groups, one with weight decay and one without.
+    Parameters without weight decay: all biases (parameter name ends with "bias"),
+    and all parameters of modules whose type is in the weight-decay module blacklist (by default ``torch.nn.LayerNorm`` and ``torch.nn.Embedding``).
+    Note that this default covers only the native torch modules,
+    whereas parameters of the RF modules :class:`rf.LayerNorm` and :class:`rf.Embedding`
+    (e.g. the LayerNorm ``scale``) do get weight decay by default.
+    Since behavior version 30, the default also includes the RF modules
+    (see :ref:`behavior_version`).
+
+    ``weight_decay_modules_blacklist`` in the optimizer dict overrides the blacklist.
+    It is a list of module types, given as types or as strings, e.g.
+    ``["torch.nn.LayerNorm", "torch.nn.Embedding", "rf.LayerNorm", "rf.Embedding"]``.
+
+    ``weight_decay_custom_include_check`` in the optimizer dict is a callable
+    ``(*, module, rf_module, full_param_name, param, **kwargs) -> Optional[bool]``,
+    called per parameter, returning True/False to force the parameter into/out of
+    the weight-decay group, or None to apply the default logic.
+    Note that ``full_param_name`` carries the module-local parameter name
+    (e.g. just ``"weight"``), for backward compatibility.
+    For full control over the param groups, see ``param_groups_custom``
+    (see :meth:`returnn.torch.updater.Updater._get_optimizer_param_groups`).
+
 relative_error_div_by_old
     If true the relative error is computed by dividing the error difference by the old error value instead of the
     current error value.
