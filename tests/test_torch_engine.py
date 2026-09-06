@@ -2506,6 +2506,69 @@ def test_multi_optimizer_amuse():
 
 
 @torch.no_grad()
+def test_graph_capture_dummy_warmup_keeps_amuse_state():
+    from returnn.torch.optim.amuse import AMUSE
+    from returnn.torch.optim.multi import MultiOptimizer
+    from returnn.torch.util.graph_capture import (
+        _optimizer_state_zero_init,
+        _snapshot_optimizer_state,
+        _restore_optimizer_state,
+    )
+
+    model = torch.nn.Linear(4, 3)
+    assert _optimizer_state_zero_init(torch.optim.SGD(model.parameters(), lr=0.1))
+    assert _optimizer_state_zero_init(torch.optim.AdamW(model.parameters(), lr=0.1))
+    assert _optimizer_state_zero_init(
+        MultiOptimizer(
+            sub_optimizers=[torch.optim.SGD([model.weight], lr=0.1), torch.optim.AdamW([model.bias], lr=0.1)]
+        )
+    )
+    assert not _optimizer_state_zero_init(AMUSE(model.parameters(), lr=0.1, warmup_steps=5))
+    assert not _optimizer_state_zero_init(
+        MultiOptimizer(
+            sub_optimizers=[
+                torch.optim.SGD([model.weight], lr=0.1),
+                AMUSE([model.bias], lr=0.1, warmup_steps=5),
+            ]
+        )
+    )
+
+    torch.manual_seed(3)
+    model = torch.nn.Linear(4, 3)
+    reference = torch.nn.Linear(4, 3)
+    reference.load_state_dict(model.state_dict())
+    opt = AMUSE(model.parameters(), lr=0.1, warmup_steps=5)
+    opt_ref = AMUSE(reference.parameters(), lr=0.1, warmup_steps=5)
+    opt.train()
+    opt_ref.train()
+
+    # A dummy warmup step with zero grads at lr 0 creates AMUSE's z (a param copy) and advances the counters.
+    snapshot = _snapshot_optimizer_state(opt)
+    for param in model.parameters():
+        param.grad = torch.zeros_like(param)
+    for group in opt.param_groups:
+        group["lr"] = 0.0
+    opt.step()
+    assert all("z" in opt.state[p] for p in model.parameters())
+    assert opt.param_groups[0]["k"] == 1
+    for group in opt.param_groups:
+        group["lr"] = 0.1
+    _restore_optimizer_state(opt, snapshot)
+    assert all("z" not in state for state in opt.state.values())
+    assert opt.param_groups[0]["k"] == 0 and opt.param_groups[0]["lr"] == 0.1
+
+    # The first real step must equal the step of an untouched optimizer.
+    for param, param_ref in zip(model.parameters(), reference.parameters()):
+        grad = torch.randn_like(param)
+        param.grad = grad.clone()
+        param_ref.grad = grad.clone()
+    opt.step()
+    opt_ref.step()
+    for param, param_ref in zip(model.parameters(), reference.parameters()):
+        assert torch.allclose(param, param_ref), (param, param_ref)
+    assert opt.param_groups[0]["k"] == opt_ref.param_groups[0]["k"] == 1
+
+
 def test_schedule_free_check_asks_sub_optimizers():
     model = _make_multi_test_model()
 
