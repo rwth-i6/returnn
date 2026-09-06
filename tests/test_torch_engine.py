@@ -1479,12 +1479,15 @@ def _torch_engine_sub_proc_cleanup_test_main(conn):
         conn.close()
 
 
-def _build_cuda_graph_train_config_and_dataset(*, compile_: bool):
+def _build_cuda_graph_train_config_and_dataset(
+    *, compile_: bool, capture_optimizer: bool = True, dummy_warmup: bool = False
+):
     """small RF model + Task12AXDataset config with torch_cuda_graph, see the tests below"""
     from returnn.datasets import init_dataset
     from returnn.tensor import Dim, batch_dim
 
-    time_dim = Dim(None, name=f"time-cudagraph-{compile_}")  # fresh dims per test: capacities get set on them
+    # fresh dims per test: capacities get set on them
+    time_dim = Dim(None, name=f"time-cudagraph-{compile_}-{capture_optimizer}-{dummy_warmup}")
     feat_dim = Dim(9, name="feat")
     classes_dim = Dim(2, name="classes")
 
@@ -1535,7 +1538,8 @@ def _build_cuda_graph_train_config_and_dataset(*, compile_: bool):
                 batch_size_bound=10,
                 dim_capacity={"data": 100, "classes": 100},
                 warmup_steps=2,
-                capture_optimizer=True,
+                capture_optimizer=capture_optimizer,
+                dummy_warmup=dummy_warmup,
                 **({"compile": True} if compile_ else {}),
             ),
             torch_dataloader_opts={"num_workers": 0},
@@ -1546,6 +1550,12 @@ def _build_cuda_graph_train_config_and_dataset(*, compile_: bool):
     return config, dataset
 
 
+def _reset_bound_shapes(engine: Engine):
+    """the capture staticizes the global batch dim, undo it also when a test fails midway (no cascade)"""
+    if engine._graph_capture is not None:
+        engine._graph_capture.set_bound_shapes_enabled(False)
+
+
 def _run_cuda_graph_train(*, compile_: bool):
     if not torch.cuda.is_available():
         raise unittest.SkipTest("CUDA not available")
@@ -1553,7 +1563,10 @@ def _run_cuda_graph_train(*, compile_: bool):
     with global_config_ctx(config):
         engine = Engine(config=config)
         engine.init_train_from_config(train_data=dataset)
-        engine.train()
+        try:
+            engine.train()
+        finally:
+            _reset_bound_shapes(engine)
         assert engine._graph_capture is not None
         assert engine._graph_capture._graph is not None, "graph never captured"
         assert engine._graph_capture.captures_optimizer
@@ -1732,12 +1745,15 @@ def _cuda_graph_packed_decoder_run(mode: str):
     # direct it to a file for this run, so the losses are parseable in-process
     # (stdout stays attached too, see Log.initialize)
     returnn_log.initialize(logs=[log_file.name], verbosity=[5])
+    engine = None
     try:
         with global_config_ctx(config):
             engine = Engine(config=config)
             engine.init_train_from_config(train_data=dataset)
             engine.train()
     finally:
+        if engine is not None:
+            _reset_bound_shapes(engine)
         returnn_log.initialize()  # back to the default (stdout only)
     with open(log_file.name, "rt", encoding="utf-8") as f:
         txt = f.read()
@@ -1783,6 +1799,61 @@ def test_torch_engine_cuda_graph_compile_train():
     """torch_cuda_graph "compile": the whole step Inductor-compiled (aot_function + compile_fx,
     no Dynamo), then captured; otherwise as :func:`test_torch_engine_cuda_graph_train`"""
     _run_cuda_graph_train(compile_=True)
+
+
+def _run_cuda_graph_dummy_warmup_train(*, capture_optimizer: bool):
+    """the dummy warmup steps must not change the params, with the optimizer step in-graph (at lr 0) or the engine's"""
+    if not torch.cuda.is_available():
+        raise unittest.SkipTest("CUDA not available")
+    config, dataset = _build_cuda_graph_train_config_and_dataset(
+        compile_=False, capture_optimizer=capture_optimizer, dummy_warmup=True
+    )
+    config.typed_dict["num_epochs"] = 1
+    with global_config_ctx(config):
+        engine = Engine(config=config)
+        engine.init_train_from_config(train_data=dataset)
+        capture = engine._graph_capture
+        assert capture is not None and capture.dummy_warmup
+        params_before = [p.detach().clone() for p in engine.get_pt_model().parameters()]
+        params_after_dummy_steps = []
+        run_train_step = capture.run_train_step
+
+        def _run_train_step(extern_data_raw, *, global_train_step):
+            if capture._n_eager == capture.warmup_steps and not params_after_dummy_steps:
+                params_after_dummy_steps.extend(p.detach().clone() for p in engine.get_pt_model().parameters())
+            return run_train_step(extern_data_raw, global_train_step=global_train_step)
+
+        capture.run_train_step = _run_train_step
+        optimizer_steps_on_dummy = []
+        updater_step = engine._updater.step
+
+        def _step(**kwargs):
+            optimizer_steps_on_dummy.append(capture.last_step_dummy)
+            updater_step(**kwargs)
+
+        engine._updater.step = _step
+        try:
+            engine.train()
+        finally:
+            _reset_bound_shapes(engine)
+        assert capture._graph is not None, "graph never captured"
+        for name, p in engine._pt_model.named_parameters():
+            assert torch.isfinite(p).all(), f"non-finite param {name}"
+    assert len(params_after_dummy_steps) == len(params_before) > 0
+    for param, param_before in zip(params_after_dummy_steps, params_before):
+        assert torch.equal(param, param_before)
+    if not capture_optimizer:
+        assert optimizer_steps_on_dummy and not any(optimizer_steps_on_dummy)
+
+
+def test_torch_engine_cuda_graph_dummy_warmup_train():
+    """dummy warmup with the engine's optimizer step"""
+    _run_cuda_graph_dummy_warmup_train(capture_optimizer=False)
+
+
+def test_torch_engine_cuda_graph_dummy_warmup_captured_optimizer_train():
+    """dummy warmup with the in-graph optimizer step (at lr 0 during the warmup)"""
+    _run_cuda_graph_dummy_warmup_train(capture_optimizer=True)
 
 
 # must be in the global scope due to pickling
