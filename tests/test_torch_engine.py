@@ -20,6 +20,7 @@ from returnn.torch.updater import Updater
 import returnn.frontend as rf
 from returnn.forward_iface import ForwardCallbackIface
 from returnn.datasets import init_dataset
+from returnn.datasets.generating import Task12AXDataset
 
 
 # must be in the global scope due to pickling
@@ -2029,6 +2030,59 @@ def test_amuse_engine_train_batchnorm_refresh():
     assert counts["no_grad"] == 3, counts
     assert isinstance(model, TrainTestModelWithBatchNorm)
     assert not torch.allclose(model.bn.running_mean, running_mean_at_last_update[0])
+
+
+class _NoRewindDataset(Task12AXDataset):
+    """Refuses to restart an epoch it already served, like the epoch worker of DistributeFilesDataset."""
+
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        self._served_epoch = None
+
+    def init_seq_order(self, epoch=None, seq_list=None, seq_order=None):
+        if epoch is not None and epoch == self._served_epoch:
+            raise Exception(f"{self}: cannot go backwards in epoch {epoch}")
+        return super().init_seq_order(epoch=epoch, seq_list=seq_list, seq_order=seq_order)
+
+    def _load_seqs(self, start, end):
+        self._served_epoch = self.epoch
+        super()._load_seqs(start, end)
+
+
+def test_amuse_engine_train_batchnorm_refresh_fresh_dataset():
+    # The refresh must not iterate the epoch's train dataset object a second time,
+    # some datasets cannot rewind within an epoch. It has to use a fresh instance from the config.
+    counts = {"no_grad": 0}
+
+    def _train_step(*, model: TrainTestModelWithBatchNorm, extern_data: TensorDict, **kwargs):
+        TrainTestModel.train_step(model=model, extern_data=extern_data, **kwargs)
+        if not torch.is_grad_enabled():
+            counts["no_grad"] += 1
+
+    train_opts = {"class": _NoRewindDataset, "num_seqs": 100, "name": "train"}
+    config = Config(
+        dict(
+            task="train",
+            device="cpu",
+            num_epochs=1,
+            extern_data={"data": {"dim": 9}, "classes": {"dim": 2, "sparse": True}},
+            get_model=TrainTestModelWithBatchNorm,
+            train_step=_train_step,
+            batch_size=500,
+            torch_dataloader_opts={"num_workers": 0},
+            optimizer={"class": "amuse", "update_type": "adamw", "warmup_steps": 5},
+            schedule_free_batchnorm_refresh_batches=3,
+            train=train_opts,
+        )
+    )
+    dataset = init_dataset(train_opts)
+    dataset.init_seq_order(epoch=1)
+
+    with global_config_ctx(config):
+        engine = Engine(config=config)
+        engine.init_train_from_config(train_data=dataset)
+        engine.train()
+    assert counts["no_grad"] == 3, counts
 
 
 def test_multi_optimizer_contract():

@@ -506,20 +506,33 @@ class Engine(EngineBase):
             f"Refresh BatchNorm running stats with {num_batches} train batches under the averaged weights.",
             file=log.v3,
         )
-        data_loader = self._create_data_loader(self.train_dataset, train=True)
+        # Not every dataset can be iterated a second time within the same epoch
+        # (e.g. DistributeFilesDataset keeps its epoch worker, which cannot go backwards),
+        # so use a fresh instance from the config when the config defines the train dataset.
+        train_dataset_opts = self.config.typed_value("train", None)
+        own_dataset = isinstance(train_dataset_opts, (dict, str))
+        dataset = (
+            init_dataset(train_dataset_opts, default_kwargs={"name": "train"}) if own_dataset else self.train_dataset
+        )
+        data_loader = self._create_data_loader(dataset, train=True)
         self._pt_model.train()
-        with torch.no_grad():
-            for batch_idx, extern_data_raw in enumerate(data_loader):
-                if batch_idx >= num_batches:
-                    break
-                extern_data = extern_data_util.raw_dict_to_extern_data(
-                    extern_data_raw,
-                    extern_data_template=self.extern_data,
-                    device=self._device,
-                    float_dtype=self._default_float_dtype,
-                    with_eval_targets=True,
-                )
-                self._run_step(extern_data, train_flag=True, train_func=True)
+        try:
+            with torch.no_grad():
+                for batch_idx, extern_data_raw in enumerate(data_loader):
+                    if batch_idx >= num_batches:
+                        break
+                    extern_data = extern_data_util.raw_dict_to_extern_data(
+                        extern_data_raw,
+                        extern_data_template=self.extern_data,
+                        device=self._device,
+                        float_dtype=self._default_float_dtype,
+                        with_eval_targets=True,
+                    )
+                    self._run_step(extern_data, train_flag=True, train_func=True)
+        finally:
+            del data_loader
+            if own_dataset:
+                dataset.finish_epoch(free_resources=True)
 
     def train_epoch(self):
         """
