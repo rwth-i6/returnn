@@ -493,7 +493,8 @@ class Updater:
         ckpt_groups = optimizer_state["optimizer"]["param_groups"]
         ckpt_group_idx_by_name = {}
         for group_idx, ckpt_group in enumerate(ckpt_groups):
-            for param_idx in ckpt_group["params"]:
+            ckpt_group_param_indices: List[int] = ckpt_group["params"]
+            for param_idx in ckpt_group_param_indices:
                 ckpt_group_idx_by_name[ckpt_param_names[param_idx]] = group_idx
         ckpt_param_owners = optimizer_state.get("param_owners")
         ckpt_owner_by_name = dict(zip(ckpt_param_names, ckpt_param_owners)) if ckpt_param_owners is not None else None

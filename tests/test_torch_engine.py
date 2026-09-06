@@ -2781,6 +2781,7 @@ def test_engine_skips_optimizer_step_on_dummy_warmup_steps():
             batch_size=500,
             learning_rate=0.1,
             log_grad_norm=True,
+            gradient_clip_global_norm=5.0,
             torch_dataloader_opts={"num_workers": 0},
             optimizer={"class": "sgd", "momentum": 0.9},
         )

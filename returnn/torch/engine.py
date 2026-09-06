@@ -514,6 +514,7 @@ class Engine(EngineBase):
             return
         has_batch_norm = False
         for module in self._pt_model.modules():
+            # noinspection PyProtectedMember
             if isinstance(module, torch.nn.modules.batchnorm._BatchNorm) and module.track_running_stats:
                 has_batch_norm = True
                 break
