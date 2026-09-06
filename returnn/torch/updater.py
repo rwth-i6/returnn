@@ -369,6 +369,22 @@ class Updater:
             # Check if we have the same parameters in the same order.
             self_param_names, param_id_to_name = self._get_opt_param_names()
             ckpt_param_names = optimizer_state["param_names"]
+            ckpt_param_owners = optimizer_state.get("param_owners")
+            if ckpt_param_owners is not None and (
+                getattr(self.optimizer, "sub_optimizers", None) is not None or len(set(ckpt_param_owners)) > 1
+            ):
+                # Per-param optimizer algorithm as saved, independent of the param order and the group layout.
+                ckpt_owner_by_name = dict(zip(ckpt_param_names, ckpt_param_owners))
+                for param_name, owner in zip(self_param_names, self._get_opt_param_owners()):
+                    ckpt_owner = ckpt_owner_by_name.get(param_name)
+                    if ckpt_owner is None or ckpt_owner == owner:
+                        continue
+                    if not self.network.get_parameter(param_name).requires_grad:
+                        continue
+                    raise ValueError(
+                        f"load_optimizer: param {param_name!r} moved from {ckpt_owner} to {owner}."
+                        " Optimizer state cannot be transferred across optimizer algorithms."
+                    )
             if self_param_names != ckpt_param_names:
                 self_param_names_dict = {name: i for i, name in enumerate(self_param_names)}
                 self_param_names_critical_set = set()
@@ -412,7 +428,8 @@ class Updater:
                     print("load_optimizer: Params in different order.", file=log.v3)
                 print("load_optimizer: Will remap the state dict.", file=log.v3)
                 sub_optimizers = getattr(self.optimizer, "sub_optimizers", None)
-                if sub_optimizers is not None:
+                if sub_optimizers is not None and ckpt_param_owners is None:
+                    # older checkpoints without param_owners: infer the ownership from the group layout
                     group_owner_keys = []
                     for sub in sub_optimizers:
                         group_owner_keys += [_optimizer_algorithm_key(sub)] * len(sub.param_groups)
@@ -481,6 +498,16 @@ class Updater:
                 param_names.append(param_id_to_name[id(p)])
         return param_names, param_id_to_name
 
+    def _get_opt_param_owners(self) -> List[str]:
+        """
+        :return: param_idx -> name of the optimizer algorithm owning the param (see :func:`_optimizer_owner_name`),
+            in the same order as :func:`_get_opt_param_names`
+        """
+        owners = []
+        for group, owner in zip(self.optimizer.param_groups, _optimizer_group_owner_names(self.optimizer)):
+            owners += [owner] * len(group["params"])
+        return owners
+
     def save_optimizer(self, filename):
         """
         Saves the state of self.optimizer to a file.
@@ -519,6 +546,7 @@ class Updater:
                 "optimizer_class_name": self.optimizer.__class__.__name__,
                 "optimizer_opts": optimizer_opts_to_save,
                 "param_names": param_names,
+                "param_owners": self._get_opt_param_owners(),
                 "epoch": self._current_epoch,
                 "step": self._current_train_step,
                 "effective_learning_rate": self.get_effective_learning_rate(),
@@ -974,6 +1002,27 @@ def _optimizer_algorithm_name(key: Tuple[type, Any]) -> str:
     """readable name for a key from :func:`_optimizer_algorithm_key`"""
     cls, mode = key
     return f"{cls.__name__}({mode})" if mode is not None else cls.__name__
+
+
+def _optimizer_owner_name(optimizer: torch.optim.Optimizer) -> str:
+    """qualified class name plus mode (see :func:`_optimizer_algorithm_key`), as stored in optimizer checkpoints"""
+    cls, mode = _optimizer_algorithm_key(optimizer)
+    name = f"{cls.__module__}.{cls.__qualname__}"
+    return f"{name}({mode})" if mode is not None else name
+
+
+def _optimizer_group_owner_names(optimizer: torch.optim.Optimizer) -> List[str]:
+    """
+    :return: owner name (see :func:`_optimizer_owner_name`) per param group, in the order of ``param_groups``.
+        For a :class:`returnn.torch.optim.multi.MultiOptimizer`, the owning sub-optimizer.
+    """
+    sub_optimizers = getattr(optimizer, "sub_optimizers", None)
+    if sub_optimizers is None:
+        return [_optimizer_owner_name(optimizer)] * len(optimizer.param_groups)
+    names = []
+    for sub in sub_optimizers:
+        names += [_optimizer_owner_name(sub)] * len(sub.param_groups)
+    return names
 
 
 def _drop_callables_deep(obj: Any) -> Any:

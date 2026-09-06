@@ -794,6 +794,51 @@ def test_multi_optimizer_load_cross_algorithm_error():
             raise AssertionError("expected ValueError for a cross-optimizer param move")
 
 
+def test_multi_optimizer_load_cross_algo_error_with_regrouping():
+    # The flattened param order changes while the group count stays equal,
+    # so the checkpoint's group index says nothing about the algorithm which owned a param.
+    model = torch.nn.Sequential(torch.nn.Linear(4, 4), torch.nn.Linear(4, 4))
+
+    def _filter_first_layer(*, full_param_name, **_kwargs):
+        return full_param_name.startswith("0.")
+
+    def _filter_first_weight(*, full_param_name, **_kwargs):
+        return full_param_name == "0.weight"
+
+    def _make_updater(params_filter, sgd_weight_decay):
+        config = Config(
+            dict(
+                optimizer={
+                    "class": "multi",
+                    "optimizers": [
+                        {"class": "adamw", "params_filter": params_filter, "weight_decay": 1e-3},
+                        {"class": "sgd", "momentum": 0.9, "weight_decay": sgd_weight_decay},
+                    ],
+                }
+            )
+        )
+        updater = Updater(config=config, network=model, device=torch.device("cpu"))
+        updater.create_optimizer()
+        updater.set_current_train_step(global_train_step=0, epoch=1)
+        return updater
+
+    updater1 = _make_updater(_filter_first_layer, 0.0)
+    for param in model.parameters():
+        param.grad = torch.ones_like(param)
+    updater1.get_optimizer().step()
+    updater2 = _make_updater(_filter_first_weight, 1e-3)
+    assert len(updater1.get_optimizer().param_groups) == len(updater2.get_optimizer().param_groups) == 3
+
+    with tempfile.TemporaryDirectory(prefix="returnn_test_multi_load_regroup") as tmp_dir:
+        updater1.save_optimizer(tmp_dir + "/model.opt.pt")
+        try:
+            updater2.load_optimizer(tmp_dir + "/model.opt.pt")
+        except ValueError as exc:
+            assert "moved" in str(exc) and "AdamW" in str(exc) and "SGD" in str(exc)
+        else:
+            raise AssertionError("expected ValueError, the AdamW state of 0.bias would enter SGD")
+
+
 def test_multi_optimizer_load_cross_update_type_error():
     model = torch.nn.Sequential(torch.nn.Linear(4, 4), torch.nn.Linear(4, 4))
 
