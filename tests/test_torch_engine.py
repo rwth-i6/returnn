@@ -2291,36 +2291,58 @@ def test_amuse_zero_lr():
     opt.eval()
 
 
+def _exact_orthogonalization(grad: torch.Tensor) -> torch.Tensor:
+    """Float32 polar factor via the SVD, a deterministic stand-in for the bf16 Newton-Schulz in tests."""
+    u, _, vh = torch.linalg.svd(grad.float(), full_matrices=False)
+    return u @ vh
+
+
 def test_muon_update_higher_rank():
-    from returnn.torch.optim.amuse import muon_update
+    """3D params are orthogonalized per matrix over the last two dims, 4D params are flattened to (out, -1)."""
+    from unittest import mock
+    from returnn.torch.optim import amuse
 
-    # 3D params are orthogonalized batch-wise over the last two dims,
-    # so the update scaling must be based on those dims as well.
-    # Newton-Schulz runs in bfloat16, and batched vs single matmuls accumulate in a different order
-    # on some torch versions, so compare per-slice direction and norm instead of elementwise values.
-    def _assert_close_per_slice(a: torch.Tensor, b: torch.Tensor):
-        a = a.float().flatten(1)
-        b = b.float().flatten(1)
-        cos = torch.nn.functional.cosine_similarity(a, b, dim=1)
-        assert torch.all(cos > 0.98), cos
-        norm_ratio = a.norm(dim=1) / b.norm(dim=1)
-        assert torch.all((norm_ratio - 1.0).abs() < 0.05), norm_ratio
+    with mock.patch.object(amuse, "zeropower_via_newtonschulz5", _exact_orthogonalization):
+        torch.manual_seed(0)
+        grad = torch.randn(8, 1, 5)
+        momentum = torch.zeros_like(grad)
+        batched = amuse.muon_update(grad.clone(), momentum.clone(), aux_update_type="adamw")
+        per_slice = torch.stack(
+            [amuse.muon_update(grad[i].clone(), momentum[i].clone(), aux_update_type="adamw") for i in range(len(grad))]
+        )
+        assert torch.allclose(batched, per_slice, atol=1e-6), (batched - per_slice).abs().max()
 
-    grad = torch.randn(8, 1, 5)
-    momentum = torch.zeros_like(grad)
-    batched = muon_update(grad.clone(), momentum.clone(), aux_update_type="adamw")
-    per_slice = torch.stack(
-        [muon_update(grad[i].clone(), momentum[i].clone(), aux_update_type="adamw") for i in range(len(grad))]
-    )
-    _assert_close_per_slice(batched, per_slice)
+        grad4 = torch.randn(8, 4, 3, 3)
+        ref = amuse.muon_update(grad4.clone(), torch.zeros_like(grad4), aux_update_type="adamw")
+        flat = amuse.muon_update(grad4.reshape(8, -1).clone(), torch.zeros(8, 36), aux_update_type="adamw")
+        assert torch.allclose(ref, flat, atol=1e-6), (ref - flat).abs().max()
+        out = amuse.muon_update(
+            grad4.clone().to(memory_format=torch.channels_last), torch.zeros_like(grad4), aux_update_type="adamw"
+        )
+        assert torch.allclose(out, ref, atol=1e-6), (out - ref).abs().max()
 
-    # Channels-last conv grads are non-contiguous, the 4D flatten must handle that.
-    grad4 = torch.randn(8, 4, 3, 3)
-    ref = muon_update(grad4.clone(), torch.zeros_like(grad4), aux_update_type="adamw")
-    out = muon_update(
-        grad4.clone().to(memory_format=torch.channels_last), torch.zeros_like(grad4), aux_update_type="adamw"
-    )
-    _assert_close_per_slice(out, ref)
+
+def test_newton_schulz_orthogonalization():
+    """Newton-Schulz keeps the singular vectors and puts the singular values into the (0.5, 1.5) band Muon relies on."""
+    from returnn.torch.optim.amuse import zeropower_via_newtonschulz5
+
+    for rows, cols in [(8, 16), (16, 8), (4, 36), (1, 5), (5, 1)]:
+        for seed in range(5):
+            torch.manual_seed(seed)
+            rank = min(rows, cols)
+            u, _ = torch.linalg.qr(torch.randn(rows, rank))
+            v, _ = torch.linalg.qr(torch.randn(cols, rank))
+            grad = (u * torch.linspace(0.2, 1.0, rank)) @ v.T
+            polar = u @ v.T
+            out = zeropower_via_newtonschulz5(grad)
+            assert out.dtype == torch.bfloat16 and out.shape == grad.shape
+            assert torch.equal(zeropower_via_newtonschulz5(grad.T), out.T), (rows, cols, seed)
+            out = out.float()
+            singular_values = torch.linalg.svdvals(out)
+            assert torch.all(singular_values > 0.5) and torch.all(singular_values < 1.5), (rows, cols, singular_values)
+            u_out, _, vh_out = torch.linalg.svd(out, full_matrices=False)
+            direction_err = (u_out @ vh_out - polar).norm() / polar.norm()
+            assert direction_err < 0.1, (rows, cols, seed, direction_err)
 
 
 def test_amuse_zero_lr_at_warmup_boundary():
