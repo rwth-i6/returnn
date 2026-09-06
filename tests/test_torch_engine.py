@@ -2569,6 +2569,31 @@ def test_graph_capture_dummy_warmup_keeps_amuse_state():
     assert opt.param_groups[0]["k"] == opt_ref.param_groups[0]["k"] == 1
 
 
+def test_amuse_pickle_keeps_attributes():
+    import copy
+    import pickle
+
+    from returnn.torch.optim.amuse import AMUSE
+    from returnn.torch.optim.multi import MultiOptimizer
+
+    model = torch.nn.Linear(4, 3)
+    opt = MultiOptimizer(
+        sub_optimizers=[
+            AMUSE([model.weight], lr=0.1, update_type="muon", warmup_steps=5),
+            AMUSE([model.bias], lr=0.1, update_type="adamw", warmup_steps=5, rho=0.5),
+        ]
+    )
+    opt.train()
+    copied = copy.deepcopy(opt)
+    copied.eval()
+    copied.train()
+    muon, adamw = copied.sub_optimizers
+    assert muon.update_type == "muon" and adamw.update_type == "adamw"
+    assert adamw.rho == 0.5 and adamw.warmup_steps == 5 and adamw.train_mode
+    unpickled = pickle.loads(pickle.dumps(opt.sub_optimizers[1]))
+    assert unpickled.update_type == "adamw" and unpickled.train_mode
+
+
 def test_schedule_free_check_asks_sub_optimizers():
     model = _make_multi_test_model()
 

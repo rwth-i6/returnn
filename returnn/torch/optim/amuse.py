@@ -274,6 +274,24 @@ class AMUSE(Optimizer):
             group.setdefault("weight_sum", 0.0)
             group.setdefault("beta1", self.beta1_init)
 
+    _pickle_attrs = (
+        "update_type",
+        "aux_update_type",
+        "weight_decay_at_y",
+        "beta1_init",
+        "weight_lr_power",
+        "warmup_steps",
+        "rho",
+        "r",
+        "train_mode",
+    )
+
+    def __getstate__(self):
+        # the base class covers only defaults/state/param_groups, which would drop these on pickle/deepcopy
+        state = super().__getstate__()
+        state.update({name: getattr(self, name) for name in self._pickle_attrs})
+        return state
+
     def _compute_beta1(self, group, t, ckp1):
         if t <= self.warmup_steps:
             if t == self.warmup_steps:
