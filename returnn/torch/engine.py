@@ -800,6 +800,16 @@ class Engine(EngineBase):
                 "global_train_step_end": self.global_train_step,
             }
         )
+        if self._device == "cuda" and torch.cuda.is_initialized():
+            # peak over the epoch, since the counters are reset below.
+            # A later OOM is then attributable to growth versus a single spike.
+            self.learning_rate_control.epoch_data[self.epoch].meta.update(
+                {
+                    "epoch_peak_mem_alloc_gb": round(torch.cuda.max_memory_allocated() / (1024**3), 2),
+                    "epoch_peak_mem_reserved_gb": round(torch.cuda.max_memory_reserved() / (1024**3), 2),
+                }
+            )
+            torch.cuda.reset_peak_memory_stats()
 
         accumulated_losses_dict = accumulated_losses_dict / accumulated_inv_norm_factors_dict
         accumulated_losses_dict = self._maybe_extend_losses_info(accumulated_losses_dict)
