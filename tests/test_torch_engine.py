@@ -794,51 +794,6 @@ def test_multi_optimizer_load_cross_algorithm_error():
             raise AssertionError("expected ValueError for a cross-optimizer param move")
 
 
-def test_multi_optimizer_load_cross_algo_error_with_regrouping():
-    # The flattened param order changes while the group count stays equal,
-    # so the checkpoint's group index says nothing about the algorithm which owned a param.
-    model = torch.nn.Sequential(torch.nn.Linear(4, 4), torch.nn.Linear(4, 4))
-
-    def _filter_first_layer(*, full_param_name, **_kwargs):
-        return full_param_name.startswith("0.")
-
-    def _filter_first_weight(*, full_param_name, **_kwargs):
-        return full_param_name == "0.weight"
-
-    def _make_updater(params_filter, sgd_weight_decay):
-        config = Config(
-            dict(
-                optimizer={
-                    "class": "multi",
-                    "optimizers": [
-                        {"class": "adamw", "params_filter": params_filter, "weight_decay": 1e-3},
-                        {"class": "sgd", "momentum": 0.9, "weight_decay": sgd_weight_decay},
-                    ],
-                }
-            )
-        )
-        updater = Updater(config=config, network=model, device=torch.device("cpu"))
-        updater.create_optimizer()
-        updater.set_current_train_step(global_train_step=0, epoch=1)
-        return updater
-
-    updater1 = _make_updater(_filter_first_layer, 0.0)
-    for param in model.parameters():
-        param.grad = torch.ones_like(param)
-    updater1.get_optimizer().step()
-    updater2 = _make_updater(_filter_first_weight, 1e-3)
-    assert len(updater1.get_optimizer().param_groups) == len(updater2.get_optimizer().param_groups) == 3
-
-    with tempfile.TemporaryDirectory(prefix="returnn_test_multi_load_regroup") as tmp_dir:
-        updater1.save_optimizer(tmp_dir + "/model.opt.pt")
-        try:
-            updater2.load_optimizer(tmp_dir + "/model.opt.pt")
-        except ValueError as exc:
-            assert "moved" in str(exc) and "AdamW" in str(exc) and "SGD" in str(exc)
-        else:
-            raise AssertionError("expected ValueError, the AdamW state of 0.bias would enter SGD")
-
-
 def test_multi_optimizer_load_cross_update_type_error():
     model = torch.nn.Sequential(torch.nn.Linear(4, 4), torch.nn.Linear(4, 4))
 
@@ -881,6 +836,108 @@ def test_multi_optimizer_load_cross_update_type_error():
             assert "moved" in str(exc) and "muon" in str(exc) and "adamw" in str(exc)
         else:
             raise AssertionError("expected ValueError for a param move between AMUSE update types")
+
+
+def test_optimizer_load_cross_class_error():
+    # The owner check does not depend on a multi optimizer on either side.
+    # Two AMUSE adamw children loaded into one AMUSE sgd and plain AdamW into plain SGD (equal group counts).
+    model = torch.nn.Sequential(torch.nn.Linear(4, 4), torch.nn.Linear(4, 4))
+
+    def _filter_first_layer(*, full_param_name, **_kwargs):
+        return full_param_name.startswith("0.")
+
+    def _make_updater(optimizer_opts):
+        updater = Updater(config=Config(dict(optimizer=optimizer_opts)), network=model, device=torch.device("cpu"))
+        updater.create_optimizer()
+        updater.set_current_train_step(global_train_step=0, epoch=1)
+        return updater
+
+    amuse_adamw_twice = {
+        "class": "multi",
+        "optimizers": [
+            {"class": "amuse", "update_type": "adamw", "params_filter": _filter_first_layer, "warmup_steps": 5},
+            {"class": "amuse", "update_type": "adamw", "warmup_steps": 5},
+        ],
+    }
+    amuse_sgd = {"class": "amuse", "update_type": "sgd", "weight_decay": 1e-3, "warmup_steps": 5}
+    adamw = {"class": "adamw", "weight_decay": 1e-3}
+    sgd = {"class": "sgd", "momentum": 0.9, "weight_decay": 1e-3}
+    for save_opts, load_opts, names in [
+        (amuse_adamw_twice, amuse_sgd, ("adamw", "sgd")),
+        (adamw, sgd, ("AdamW", "SGD")),
+    ]:
+        updater1 = _make_updater(save_opts)
+        updater1.set_optimizer_training_mode(train=True)
+        for param in model.parameters():
+            param.grad = torch.ones_like(param)
+        updater1.get_optimizer().step()
+        updater1.set_optimizer_training_mode(train=False)
+        updater2 = _make_updater(load_opts)
+        assert len(updater1.get_optimizer().param_groups) == len(updater2.get_optimizer().param_groups)
+        with tempfile.TemporaryDirectory(prefix="returnn_test_load_cross_class") as tmp_dir:
+            updater1.save_optimizer(tmp_dir + "/model.opt.pt")
+            try:
+                updater2.load_optimizer(tmp_dir + "/model.opt.pt")
+            except ValueError as exc:
+                assert "moved" in str(exc) and all(name in str(exc) for name in names), exc
+            else:
+                raise AssertionError(
+                    f"expected ValueError loading {save_opts['class']} state into {load_opts['class']}"
+                )
+
+
+def test_optimizer_load_legacy_checkpoint_cross_algorithm_error():
+    # For checkpoints from before "param_owners" the param group hyper-parameters identify the algorithm.
+    # Swapped AMUSE update types over the same params keep the param order and the group sizes,
+    # so nothing else would notice.
+    model = torch.nn.Sequential(*(torch.nn.Linear(4, 4, bias=False) for _ in range(3)))
+
+    def _filter_first_weight(*, full_param_name, **_kwargs):
+        return full_param_name == "0.weight"
+
+    def _make_updater(first_update_type, second_update_type):
+        config = Config(
+            dict(
+                optimizer={
+                    "class": "multi",
+                    "optimizers": [
+                        {
+                            "class": "amuse",
+                            "update_type": first_update_type,
+                            "params_filter": _filter_first_weight,
+                            "warmup_steps": 5,
+                        },
+                        {"class": "amuse", "update_type": second_update_type, "warmup_steps": 5},
+                    ],
+                }
+            )
+        )
+        updater = Updater(config=config, network=model, device=torch.device("cpu"))
+        updater.create_optimizer()
+        updater.set_current_train_step(global_train_step=0, epoch=1)
+        return updater
+
+    updater1 = _make_updater("muon", "adamw")
+    updater1.set_optimizer_training_mode(train=True)
+    for param in model.parameters():
+        param.grad = torch.ones_like(param)
+    updater1.get_optimizer().step()
+    updater1.set_optimizer_training_mode(train=False)
+    updater2 = _make_updater("adamw", "muon")
+    assert updater1._get_opt_param_names()[0] == updater2._get_opt_param_names()[0]
+
+    with tempfile.TemporaryDirectory(prefix="returnn_test_load_legacy_cross_algo") as tmp_dir:
+        updater1.save_optimizer(tmp_dir + "/model.opt.pt")
+        legacy_state = torch.load(tmp_dir + "/model.opt.pt")
+        del legacy_state["param_owners"]
+        torch.save(legacy_state, tmp_dir + "/model.opt.pt")
+        try:
+            updater2.load_optimizer(tmp_dir + "/model.opt.pt")
+        except ValueError as exc:
+            message = str(exc)
+            assert "moved" in message and "0.weight" in message and "adamw" in message and "momentum" in message, exc
+        else:
+            raise AssertionError("expected ValueError, the muon state of 0.weight would enter the adamw update")
 
 
 def test_updater_weight_decay_blacklist():
