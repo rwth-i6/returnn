@@ -542,7 +542,7 @@ class Updater:
         """
         if self.optimizer is None:
             return False
-        return callable(getattr(self.optimizer, "train", None)) and callable(getattr(self.optimizer, "eval", None))
+        return _is_schedule_free_optimizer(self.optimizer)
 
     def set_optimizer_training_mode(self, *, train: bool):
         """
@@ -951,6 +951,18 @@ def wrap_user_blacklist_wd_modules(
         assert issubclass(mod, (rf.Module, torch.nn.Module)), f"invalid blacklist_weight_decay_modules {mods!r}"
         res.append(mod)
     return tuple(res)
+
+
+def _is_schedule_free_optimizer(optimizer: torch.optim.Optimizer) -> bool:
+    """
+    :return: whether the optimizer follows the schedule-free ``train()``/``eval()`` convention.
+        A composite optimizer (:class:`returnn.torch.optim.multi.MultiOptimizer`) forwards these methods
+        unconditionally, so it counts as schedule-free only if one of its sub-optimizers is.
+    """
+    sub_optimizers = getattr(optimizer, "sub_optimizers", None)
+    if sub_optimizers is not None:
+        return any(_is_schedule_free_optimizer(sub) for sub in sub_optimizers)
+    return callable(getattr(optimizer, "train", None)) and callable(getattr(optimizer, "eval", None))
 
 
 def _optimizer_algorithm_key(optimizer: torch.optim.Optimizer) -> Tuple[type, Any]:

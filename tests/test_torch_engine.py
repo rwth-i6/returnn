@@ -2452,6 +2452,39 @@ def test_multi_optimizer_amuse():
 
 
 @torch.no_grad()
+def test_schedule_free_check_asks_sub_optimizers():
+    model = _make_multi_test_model()
+
+    def _updater(optimizer_opts):
+        updater = Updater(config=Config(dict(optimizer=optimizer_opts)), network=model, device=torch.device("cpu"))
+        updater.create_optimizer()
+        return updater
+
+    plain = {
+        "class": "multi",
+        "optimizers": [
+            {"class": "sgd", "params_filter": _multi_test_layer2_weight_filter, "momentum": 0.9},
+            {"class": "adamw", "weight_decay": 1e-3},
+        ],
+    }
+    assert not _updater(plain).is_schedule_free_optimizer()
+    assert not _updater({"class": "adamw"}).is_schedule_free_optimizer()
+    with_amuse = {
+        "class": "multi",
+        "optimizers": [
+            {
+                "class": "amuse",
+                "update_type": "adamw",
+                "params_filter": _multi_test_layer2_weight_filter,
+                "warmup_steps": 5,
+            },
+            {"class": "sgd", "momentum": 0.9},
+        ],
+    }
+    assert _updater(with_amuse).is_schedule_free_optimizer()
+    assert _updater({"class": "amuse", "update_type": "adamw", "warmup_steps": 5}).is_schedule_free_optimizer()
+
+
 def _reference_amuse_muon_update(grad, momentum, beta, aux_update_type):
     """muon_update transcribed from kjeiun/amuse src/optim/AMUSE.py at commit 4892274"""
     from returnn.torch.optim.amuse import zeropower_via_newtonschulz5
