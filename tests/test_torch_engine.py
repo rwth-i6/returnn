@@ -25,9 +25,9 @@ from returnn.datasets.generating import Task12AXDataset
 
 # must be in the global scope due to pickling
 class TrainTestModel(torch.nn.Module):
-    def __init__(self, **_kwargs):
+    def __init__(self, in_dim: int = 9, **_kwargs):
         super().__init__()
-        self.lin = torch.nn.Linear(9, 2)
+        self.lin = torch.nn.Linear(in_dim, 2)
 
     def __call__(self, x: torch.Tensor) -> torch.Tensor:
         """
@@ -2083,9 +2083,9 @@ def test_amuse_engine_train():
 
 
 class TrainTestModelWithBatchNorm(TrainTestModel):
-    def __init__(self, **_kwargs):
-        super().__init__()
-        self.bn = torch.nn.BatchNorm1d(9)
+    def __init__(self, in_dim: int = 9, **_kwargs):
+        super().__init__(in_dim=in_dim)
+        self.bn = torch.nn.BatchNorm1d(in_dim)
 
     def __call__(self, x: torch.Tensor) -> torch.Tensor:
         x = self.bn(x.transpose(1, 2)).transpose(1, 2)
@@ -2153,38 +2153,48 @@ class _NoRewindDataset(Task12AXDataset):
 
 def test_amuse_engine_train_batchnorm_refresh_fresh_dataset():
     # The refresh must not iterate the epoch's train dataset object a second time,
-    # some datasets cannot rewind within an epoch. It has to use a fresh instance from the config.
-    counts = {"no_grad": 0}
+    # some datasets cannot rewind within an epoch. It has to use a fresh instance from the config,
+    # built like returnn.__main__.load_data builds the train dataset (the dataset options from the
+    # global config such as window, and a callable config giving a fresh instance too).
+    import functools
+    from returnn.__main__ import load_data
 
-    def _train_step(*, model: TrainTestModelWithBatchNorm, extern_data: TensorDict, **kwargs):
-        TrainTestModel.train_step(model=model, extern_data=extern_data, **kwargs)
-        if not torch.is_grad_enabled():
-            counts["no_grad"] += 1
+    train_opts = {"class": _NoRewindDataset, "num_seqs": 100}
+    for train_config_value, in_dim, config_opts in [
+        (train_opts, 9, {}),
+        (train_opts, 27, {"window": 3}),
+        (lambda: dict(train_opts), 9, {}),
+    ]:
+        counts = {"no_grad": 0}
 
-    train_opts = {"class": _NoRewindDataset, "num_seqs": 100, "name": "train"}
-    config = Config(
-        dict(
-            task="train",
-            device="cpu",
-            num_epochs=1,
-            extern_data={"data": {"dim": 9}, "classes": {"dim": 2, "sparse": True}},
-            get_model=TrainTestModelWithBatchNorm,
-            train_step=_train_step,
-            batch_size=500,
-            torch_dataloader_opts={"num_workers": 0},
-            optimizer={"class": "amuse", "update_type": "adamw", "warmup_steps": 5},
-            schedule_free_batchnorm_refresh_batches=3,
-            train=train_opts,
+        def _train_step(*, model: TrainTestModelWithBatchNorm, extern_data: TensorDict, **kwargs):
+            TrainTestModel.train_step(model=model, extern_data=extern_data, **kwargs)
+            if not torch.is_grad_enabled():
+                counts["no_grad"] += 1
+
+        config = Config(
+            dict(
+                task="train",
+                device="cpu",
+                num_epochs=1,
+                extern_data={"data": {"dim": in_dim}, "classes": {"dim": 2, "sparse": True}},
+                get_model=functools.partial(TrainTestModelWithBatchNorm, in_dim=in_dim),
+                train_step=_train_step,
+                batch_size=500,
+                torch_dataloader_opts={"num_workers": 0},
+                optimizer={"class": "amuse", "update_type": "adamw", "warmup_steps": 5},
+                schedule_free_batchnorm_refresh_batches=3,
+                train=train_config_value,
+                **config_opts,
+            )
         )
-    )
-    dataset = init_dataset(train_opts)
-    dataset.init_seq_order(epoch=1)
-
-    with global_config_ctx(config):
-        engine = Engine(config=config)
-        engine.init_train_from_config(train_data=dataset)
-        engine.train()
-    assert counts["no_grad"] == 3, counts
+        with global_config_ctx(config):
+            dataset, _ = load_data(config, 0, "train")
+            dataset.init_seq_order(epoch=1)
+            engine = Engine(config=config)
+            engine.init_train_from_config(train_data=dataset)
+            engine.train()
+        assert counts["no_grad"] == 3, (config_opts, counts)
 
 
 def test_multi_optimizer_contract():

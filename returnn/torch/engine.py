@@ -31,7 +31,7 @@ from returnn.log import log
 from returnn.engine.base import EngineBase
 import returnn.frontend as rf
 from returnn.tensor import TensorDict, Tensor, Dim
-from returnn.datasets.basic import init_dataset, Dataset
+from returnn.datasets.basic import init_dataset, init_dataset_via_str, Dataset
 from returnn.util import basic as util
 from returnn.util import NumbersDict
 from returnn.util.basic import hms, NotSpecified
@@ -471,6 +471,27 @@ class Engine(EngineBase):
                 **util.get_fwd_compat_kwargs(),
             )
 
+    def _create_train_dataset_from_config(self) -> Optional[Dataset]:
+        """
+        :return: a fresh instance of the train dataset as defined in the config,
+            built like :func:`returnn.__main__.load_data` does
+            (incl. the dataset options taken from the global config, e.g. ``window``),
+            or None if the config does not define it (e.g. holds a dataset instance)
+        """
+        if self.config.is_typed("train"):
+            train_opts = self.config.typed_value("train")
+            if isinstance(train_opts, dict):
+                kwargs = {"name": "train", **train_opts}
+                Dataset.kwargs_update_from_config(self.config, kwargs)
+                return init_dataset(kwargs)
+            if callable(train_opts):
+                return init_dataset(train_opts, default_kwargs={"name": "train"})
+            return None
+        config_str = self.config.value("train", "")
+        if not config_str:
+            return None
+        return init_dataset_via_str(config_str, config=self.config, name="train")
+
     def _refresh_batch_norm_stats_after_optimizer_eval(self):
         """
         Schedule-free optimizers (e.g. :class:`returnn.torch.optim.amuse.AMUSE`):
@@ -508,12 +529,16 @@ class Engine(EngineBase):
         )
         # Not every dataset can be iterated a second time within the same epoch
         # (e.g. DistributeFilesDataset keeps its epoch worker, which cannot go backwards),
-        # so use a fresh instance from the config when the config defines the train dataset.
-        train_dataset_opts = self.config.typed_value("train", None)
-        own_dataset = isinstance(train_dataset_opts, (dict, str))
-        dataset = (
-            init_dataset(train_dataset_opts, default_kwargs={"name": "train"}) if own_dataset else self.train_dataset
-        )
+        # so use a fresh instance from the config when possible.
+        dataset = self._create_train_dataset_from_config()
+        own_dataset = dataset is not None and dataset is not self.train_dataset
+        if not own_dataset:
+            print(
+                "BatchNorm stats refresh without train dataset options in the config,"
+                " iterating the train dataset a second time within the epoch (not every dataset supports that).",
+                file=log.v3,
+            )
+            dataset = self.train_dataset
         data_loader = self._create_data_loader(dataset, train=True)
         self._pt_model.train()
         try:
