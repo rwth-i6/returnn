@@ -1344,8 +1344,8 @@ class GraphCapturedTrainStep:
         # step_core computes the grads itself, so this is ONE inference-style graph,
         # never fw/bwd-partitioned; buffer lifetimes are Inductor memory planning.
         # (For the partitioned alternative see opts "partitioned".)
-        if tuple(int(v) for v in torch.__version__.split("+")[0].split(".")[:2]) >= (2, 12):
-            # torch >= 2.12: compile_fx's compat wrapper declares _boxed_call=True
+        if tuple(int(v) for v in torch.__version__.split("+")[0].split(".")[:2]) >= (2, 11):
+            # torch >= 2.11: compile_fx's compat wrapper declares _boxed_call=True
             # but re-wraps an already-boxed args list, so the generated runner sees [[args]];
             # call it star-unpacked instead, while the shim stays boxed towards aot_function.
             _compile_fx_raw = backend
@@ -1361,7 +1361,7 @@ class GraphCapturedTrainStep:
                 return _call
 
             backend = _compile_fx_call_unboxed
-            # torch >= 2.12 also lifts closed-over tensors into runtime args of the generated code
+            # torch >= 2.11 also lifts closed-over tensors into runtime args of the generated code
             # instead of baking them as graph constants, and raw aot_function does not supply them;
             # pass the buffers as explicit trace inputs, like the partitioned mode above.
             data_keys = sorted(self._data_bufs)
@@ -1393,7 +1393,7 @@ class GraphCapturedTrainStep:
     def _compiled_call_args(self, raws: List[torch.Tensor]) -> List[torch.Tensor]:
         """
         The compiled step's runtime inputs: the param raws,
-        plus (partitioned mode, or any mode on torch >= 2.12) the data/lens buffers
+        plus (partitioned mode, or any mode on torch >= 2.11) the data/lens buffers
         and the step tensor.
         These are closure state of step_core.
         aot_function bakes closed-over tensors as graph CONSTANTS,
