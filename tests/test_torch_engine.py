@@ -2617,68 +2617,79 @@ def test_multi_optimizer_amuse():
     assert not muon_sub.train_mode and not adamw_sub.train_mode
 
 
-@torch.no_grad()
-def test_graph_capture_dummy_warmup_keeps_amuse_state():
-    from returnn.torch.optim.amuse import AMUSE
-    from returnn.torch.optim.multi import MultiOptimizer
-    from returnn.torch.util.graph_capture import (
-        _optimizer_state_zero_init,
-        _snapshot_optimizer_state,
-        _restore_optimizer_state,
-    )
+class _FakeGraphCapture:
+    """Stands in for GraphCapturedTrainStep in the engine on CPU, eager steps with the first ones flagged as dummy."""
 
-    model = torch.nn.Linear(4, 3)
-    assert _optimizer_state_zero_init(torch.optim.SGD(model.parameters(), lr=0.1))
-    assert _optimizer_state_zero_init(torch.optim.AdamW(model.parameters(), lr=0.1))
-    assert _optimizer_state_zero_init(
-        MultiOptimizer(
-            sub_optimizers=[torch.optim.SGD([model.weight], lr=0.1), torch.optim.AdamW([model.bias], lr=0.1)]
+    captures_optimizer = False
+
+    def __init__(self, engine: Engine, *, num_dummy_steps: int):
+        self.engine = engine
+        self.num_dummy_steps = num_dummy_steps
+        self.num_steps = 0
+        self.last_step_dummy = False
+        self.params_after_dummy_steps = None
+
+    def set_bound_shapes_enabled(self, enabled: bool):
+        pass
+
+    def data_bound_sizes(self):
+        return {"data": 10**6, "classes": 10**6}
+
+    def run_train_step(self, extern_data_raw, *, global_train_step):
+        from returnn.torch.data import extern_data as extern_data_util
+
+        engine = self.engine
+        if self.num_steps == self.num_dummy_steps:
+            self.params_after_dummy_steps = [p.detach().clone() for p in engine.get_pt_model().parameters()]
+        self.last_step_dummy = self.num_steps < self.num_dummy_steps
+        self.num_steps += 1
+        extern_data = extern_data_util.raw_dict_to_extern_data(
+            extern_data_raw, extern_data_template=engine.extern_data, device=engine._device, with_eval_targets=True
+        )
+        engine._run_step(extern_data, train_flag=True, train_func=True)
+        ctx = rf.get_run_ctx()
+        ctx.total_loss().raw_tensor.backward()
+        return ctx
+
+
+def test_engine_skips_optimizer_step_on_dummy_warmup_steps():
+    config = Config(
+        dict(
+            task="train",
+            device="cpu",
+            num_epochs=1,
+            extern_data={"data": {"dim": 9}, "classes": {"dim": 2, "sparse": True}},
+            get_model=TrainTestModel,
+            train_step=TrainTestModel.train_step,
+            batch_size=500,
+            learning_rate=0.1,
+            log_grad_norm=True,
+            torch_dataloader_opts={"num_workers": 0},
+            optimizer={"class": "sgd", "momentum": 0.9},
         )
     )
-    assert not _optimizer_state_zero_init(AMUSE(model.parameters(), lr=0.1, warmup_steps=5))
-    assert not _optimizer_state_zero_init(
-        MultiOptimizer(
-            sub_optimizers=[
-                torch.optim.SGD([model.weight], lr=0.1),
-                AMUSE([model.bias], lr=0.1, warmup_steps=5),
-            ]
-        )
-    )
+    dataset = init_dataset({"class": "Task12AXDataset", "num_seqs": 100, "name": "train"})
+    dataset.init_seq_order(epoch=1)
 
-    torch.manual_seed(3)
-    model = torch.nn.Linear(4, 3)
-    reference = torch.nn.Linear(4, 3)
-    reference.load_state_dict(model.state_dict())
-    opt = AMUSE(model.parameters(), lr=0.1, warmup_steps=5)
-    opt_ref = AMUSE(reference.parameters(), lr=0.1, warmup_steps=5)
-    opt.train()
-    opt_ref.train()
+    with global_config_ctx(config):
+        engine = Engine(config=config)
+        engine.init_train_from_config(train_data=dataset)
+        params_before = [p.detach().clone() for p in engine.get_pt_model().parameters()]
+        fake = _FakeGraphCapture(engine, num_dummy_steps=2)
+        engine._graph_capture = fake
+        optimizer_steps_on_dummy = []
+        updater_step = engine._updater.step
 
-    # A dummy warmup step with zero grads at lr 0 creates AMUSE's z (a param copy) and advances the counters.
-    snapshot = _snapshot_optimizer_state(opt)
-    for param in model.parameters():
-        param.grad = torch.zeros_like(param)
-    for group in opt.param_groups:
-        group["lr"] = 0.0
-    opt.step()
-    assert all("z" in opt.state[p] for p in model.parameters())
-    assert opt.param_groups[0]["k"] == 1
-    for group in opt.param_groups:
-        group["lr"] = 0.1
-    _restore_optimizer_state(opt, snapshot)
-    assert all("z" not in state for state in opt.state.values())
-    assert opt.param_groups[0]["k"] == 0 and opt.param_groups[0]["lr"] == 0.1
+        def _step(**kwargs):
+            optimizer_steps_on_dummy.append(fake.last_step_dummy)
+            updater_step(**kwargs)
 
-    # The first real step must equal the step of an untouched optimizer.
-    for param, param_ref in zip(model.parameters(), reference.parameters()):
-        grad = torch.randn_like(param)
-        param.grad = grad.clone()
-        param_ref.grad = grad.clone()
-    opt.step()
-    opt_ref.step()
-    for param, param_ref in zip(model.parameters(), reference.parameters()):
-        assert torch.allclose(param, param_ref), (param, param_ref)
-    assert opt.param_groups[0]["k"] == opt_ref.param_groups[0]["k"] == 1
+        engine._updater.step = _step
+        engine.train()
+    assert fake.num_steps > 2 and fake.params_after_dummy_steps is not None
+    assert len(optimizer_steps_on_dummy) == fake.num_steps - 2 and not any(optimizer_steps_on_dummy)
+    for param, param_before in zip(fake.params_after_dummy_steps, params_before):
+        assert torch.equal(param, param_before)
 
 
 def test_amuse_pickle_keeps_attributes():
