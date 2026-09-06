@@ -886,6 +886,52 @@ def test_optimizer_load_cross_class_error():
                 )
 
 
+def test_load_optimizer_legacy_checkpoint_same_algorithm():
+    # Plain AdamW checkpoints from before "param_owners" keep loading, also with a changed weight-decay split
+    # and with param group keys which a newer or an older torch version adds or lacks.
+    import copy
+
+    model = torch.nn.Sequential(torch.nn.Linear(7, 5), torch.nn.LayerNorm(5))
+
+    def _include_check(*, module, **_kwargs):
+        return True if isinstance(module, torch.nn.LayerNorm) else None
+
+    def _make_updater(optimizer_opts):
+        updater = Updater(config=Config(dict(optimizer=optimizer_opts)), network=model, device=torch.device("cpu"))
+        updater.create_optimizer()
+        updater.set_current_train_step(global_train_step=0, epoch=1)
+        return updater
+
+    updater1 = _make_updater({"class": "adamw", "weight_decay": 1e-3})
+    for param in model.parameters():
+        param.grad = torch.ones_like(param)
+    updater1.get_optimizer().step()
+    ln_weight = model[1].weight
+    exp_avg1 = updater1.get_optimizer().state[ln_weight]["exp_avg"].clone()
+
+    with tempfile.TemporaryDirectory(prefix="returnn_test_load_legacy_same_algo") as tmp_dir:
+        updater1.save_optimizer(tmp_dir + "/model.opt.pt")
+        legacy_state = torch.load(tmp_dir + "/model.opt.pt")
+        del legacy_state["param_owners"]
+        for variant in ("as_is", "extra_group_key", "missing_group_key"):
+            state = copy.deepcopy(legacy_state)
+            for group in state["optimizer"]["param_groups"]:
+                if variant == "extra_group_key":
+                    group["key_of_a_newer_torch"] = True
+                elif variant == "missing_group_key":
+                    del group["amsgrad"]
+            torch.save(state, tmp_dir + f"/model.{variant}.opt.pt")
+            updater2 = _make_updater(
+                {"class": "adamw", "weight_decay": 1e-3, "weight_decay_custom_include_check": _include_check}
+            )
+            updater2.load_optimizer(tmp_dir + f"/model.{variant}.opt.pt")
+            opt2 = updater2.get_optimizer()
+            assert torch.equal(opt2.state[ln_weight]["exp_avg"], exp_avg1), variant
+            for param in model.parameters():
+                param.grad = torch.ones_like(param)
+            opt2.step()
+
+
 def test_optimizer_load_legacy_checkpoint_cross_algorithm_error():
     # For checkpoints from before "param_owners" the param group hyper-parameters identify the algorithm.
     # Swapped AMUSE update types over the same params keep the param order and the group sizes,
