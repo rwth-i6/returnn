@@ -1295,7 +1295,13 @@ def _dim_aware_call(name: str, args, kwargs):
     """see :func:`_make_dim_aware_op`"""
     all_values = list(args) + list(kwargs.values())
     packed_args = [x for x in _flatten(all_values) if isinstance(x, Tensor) and is_packed(x)]
-    assert packed_args, f"PackedBackend.{name}: no packed tensor in args"
+    if not packed_args:
+        # plain helper tensors while the packed backend is the globally selected one
+        # (e.g. masks built next to packed data): their own backend handles the op unchanged
+        tensors = [x for x in _flatten(all_values) if isinstance(x, Tensor)]
+        assert tensors, f"PackedBackend.{name}: no tensor args"
+        # noinspection PyProtectedMember
+        return getattr(tensors[0]._raw_backend, name)(*args, **kwargs)
     raw0 = packed_args[0].raw_tensor
     # conform other packed args (same seqs, possibly a different layout) to raw0's packing,
     # so multi-arg ops (combine, compare, where, concat, ...) stay packed instead of unpacking.
