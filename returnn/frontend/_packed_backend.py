@@ -4279,6 +4279,8 @@ class PackedBackend(Backend[PackedRawTensor]):
         dev = in_raw.inner.device
 
         # durations, in this buffer's layout, with gap and junk frames contributing nothing
+        if not is_packed(repeats) and set(repeats.dims) & set(in_raw.orig_dims):
+            repeats = in_raw.rewrap(_pack_like(repeats, in_raw), name=repeats.name)
         r_raw = _raw(_conform_packing(repeats, in_raw))
         r_inner = r_raw.inner
         r_mask = _frame_mask(r_raw)

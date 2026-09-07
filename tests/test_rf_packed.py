@@ -382,6 +382,21 @@ def test_repeat_packed_max_len_factor():
     _repeat_case((5, 3), [[9, 3, 3, 2, 1], [1, 2, 1, 0, 0]], max_len_factor=2)
 
 
+def test_repeat_padded_repeats():
+    # repeats from creation ops (rf.random_uniform/rf.constant) come padded;
+    # repeat must pack them onto the values' packing, like combine does for mixed operands
+    rf.select_backend_torch()
+    x, batch_dim, time_dim, feat_dim = _make_input(batch_size=3, seq_lens=(5, 1, 4))
+    dur_rows = [[2, 1, 3, 0, 2], [4, 0, 0, 0, 0], [1, 1, 1, 5, 0]]
+    dur = Tensor("dur", dims=[batch_dim, time_dim], dtype="int32", raw_tensor=torch.tensor(dur_rows, dtype=torch.int32))
+    out_ref, out_dim = rf.repeat(x, in_spatial_dim=time_dim, repeats=dur)
+    xp = packed.pack(x)
+    out_p, out_dim_p = rf.repeat(xp, in_spatial_dim=time_dim, repeats=dur, out_spatial_dim=out_dim)
+    assert packed.is_packed(out_p)
+    assert out_dim_p == out_dim
+    _assert_equal_non_padded(out_p, out_ref, batch_dim, out_dim)
+
+
 def test_gather_packed_shift_within_seq():
     # successor lookup: index is a position inside the sequence, so it must not read the next one
     rf.select_backend_torch()
