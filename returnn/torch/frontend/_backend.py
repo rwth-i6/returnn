@@ -578,6 +578,8 @@ class TorchBackend(Backend[torch.Tensor]):
                             )
                             if isinstance(value, Tensor):
                                 other = value.copy_compatible_to_dims_raw(out.dims)
+                            elif value is None:
+                                other = torch.zeros((), dtype=out.raw_tensor.dtype, device=out.raw_tensor.device)
                             elif torch.result_type(out.raw_tensor, value) != out.raw_tensor.dtype:
                                 # E.g. a bool tensor with int scalar value would promote to int64.
                                 other = torch.tensor(value, dtype=out.raw_tensor.dtype, device=out.raw_tensor.device)
