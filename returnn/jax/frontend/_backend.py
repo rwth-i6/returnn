@@ -913,6 +913,14 @@ class JaxBackend(Backend[jax.Array]):
         a Tensor may not change its dims per iteration,
         and a TensorArray needs ``TensorArray(capacity=...)`` so it is a buffer, not a list.
 
+        One device for the whole loop, also as ``lax`` requires.
+        The carry is unified below, but anything ``cond`` or ``body`` only closes over
+        is hoisted into the loop's arguments as well, and is not ours to move:
+        a bound kept on cpu next to an accelerator carry fails with
+        "Received incompatible devices for jitted computation",
+        naming shapes that appear nowhere in the carry, which is a confusing way to find out.
+        Keep such values on the same device as the loop vars.
+
         :param cond: gets the loop vars, returns a scalar bool Tensor
         :param body: gets the loop vars, returns the next loop vars, same structure
         :param initial: initial loop vars
