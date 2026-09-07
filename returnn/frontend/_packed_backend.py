@@ -177,7 +177,11 @@ def _dev_seq_local(template: PackedRawTensor) -> Tuple[Tensor, Tensor]:
         seq = rf.zeros_like(rows)
         seq.sparse_dim = seqs_dim
         return seq, rows
-    seq = rf.search_sorted(starts_rf, rows, axis=seqs_dim, side="right") - 1
+    # search_sorted refuses a dynamic axis; here the buffer is sorted over its full raw width
+    # (junk slots repeat the cumsum total), so re-tag it as a static dim of that width
+    seqs_static = Dim(int(starts_rf.raw_tensor.shape[0]), name="seqs_static")
+    starts_static, _ = rf.replace_dim(starts_rf, in_dim=seqs_dim, out_dim=seqs_static)
+    seq = rf.search_sorted(starts_static, rows, axis=seqs_static, side="right") - 1
     seq.sparse_dim = seqs_dim
     local = rows - rf.gather(starts_rf, indices=seq, axis=seqs_dim)
     return seq, local
