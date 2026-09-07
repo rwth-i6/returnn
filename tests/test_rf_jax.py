@@ -2511,3 +2511,45 @@ def test_device():
     assert rf.copy_to_device(x, default).device == default
     if default != "cpu":
         assert numpy.asarray(rf.copy_to_device(x, "cpu").raw_tensor).shape == (2,)
+
+def test_while_loop_dim_in_state_grows():
+    """a dim in the state may be replaced per iteration, its dyn size growing within a capacity"""
+    _rf_jax()
+    cap = 6
+    batch = Dim(2, name="batch")
+    size0 = Tensor("hist_size", dims=(), dtype="int32", raw_tensor=jnp.asarray(0, dtype=jnp.int32))
+    hist = Dim(size0, name="hist", capacity=cap)
+    buf = rf.zeros([batch, hist], dtype="float32")
+
+    def _cond(s):
+        return rf.compare(s["i"], "<", rf.constant(4, dims=(), dtype="int32", device=s["i"].device))
+
+    def _body(s):
+        d_new = Dim(s["hist"].dyn_size_ext + 1, name="hist", capacity=cap)
+        x, _ = rf.replace_dim(s["x"], in_dim=s["hist"], out_dim=d_new)
+        return {"i": s["i"] + 1, "hist": d_new, "x": x}
+
+    out = rf.while_loop(_cond, _body, {"i": rf.zeros((), dtype="int32"), "hist": hist, "x": buf})
+    assert int(out["i"].raw_tensor) == 4
+    # the growth has to survive the carry, and the buffer stays at the capacity
+    assert int(out["hist"].dyn_size_ext.raw_tensor) == 4, f"dim did not grow: {out['hist']}"
+    assert numpy.asarray(out["x"].raw_tensor).shape == (2, cap)
+
+
+def test_while_loop_dim_in_state_needs_capacity():
+    """a dim in the state without a capacity has no static bound, so the graph loop must refuse"""
+    _rf_jax()
+    batch = Dim(2, name="batch")
+    size0 = Tensor("s", dims=(), dtype="int32", raw_tensor=jnp.asarray(0, dtype=jnp.int32))
+    hist = Dim(size0, name="hist")  # no capacity
+    buf = rf.zeros([batch, Dim(3, name="d")], dtype="float32")
+
+    def _cond(s):
+        return rf.compare(s["i"], "<", rf.constant(1, dims=(), dtype="int32", device=s["i"].device))
+
+    def _body(s):
+        return {"i": s["i"] + 1, "hist": s["hist"], "x": s["x"]}
+
+    with pytest.raises(AssertionError, match="capacity"):
+        rf.while_loop(_cond, _body, {"i": rf.zeros((), dtype="int32"), "hist": hist, "x": buf})
+

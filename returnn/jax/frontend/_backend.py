@@ -904,6 +904,16 @@ class JaxBackend(Backend[jax.Array]):
         flat_initial = list(tree.flatten(initial))
         var_idxs = [i for i, v in enumerate(flat_initial) if isinstance(v, (Tensor, TensorArray))]
         assert var_idxs, f"while_loop: no Tensor/TensorArray among the loop vars {initial}"
+        # Dims explicitly in the state may be replaced per iteration, e.g. a growing history dim.
+        # A dim is not a value, so what actually crosses the loop is its dyn size: carry that and
+        # rebuild the dim from it each iteration. Same idea as _DimUpdatesEager for the eager path.
+        dim_idxs = [i for i, v in enumerate(flat_initial) if isinstance(v, Dim) and v.dyn_size_ext is not None]
+        for _i in dim_idxs:
+            _d = flat_initial[_i]
+            assert _d.capacity is not None, (
+                f"while_loop: dim {_d} in the state has no capacity."
+                f" The graph loop needs a static bound on what it carries."
+            )
 
         # noinspection shadowing-names
         def _init_carry(v: Union[Tensor, TensorArray]) -> Any:
@@ -940,10 +950,20 @@ class JaxBackend(Backend[jax.Array]):
         def _rebuild(carry: Sequence[Any]) -> Any:
             """:param carry: raw values :return: the loop vars as body/cond expect them"""
             out = list(flat_initial)
+            dim_map = {}
+            for i, raw in zip(dim_idxs, carry[len(var_idxs) :]):
+                d = flat_initial[i]
+                size = d.dyn_size_ext.copy_template()
+                size.raw_tensor = raw
+                d_new = Dim(size, name=d.name, capacity=d.capacity)
+                dim_map[d] = d_new
+                out[i] = d_new
             for i, raw in zip(var_idxs, carry):
                 value = flat_initial[i]
                 if isinstance(value, Tensor):
                     tensor = value.copy_template()
+                    if dim_map:
+                        tensor = tensor.copy_template_new_dim_tags([dim_map.get(d, d) for d in tensor.dims])
                     tensor.raw_tensor = raw
                     out[i] = tensor
                 else:
@@ -974,6 +994,21 @@ class JaxBackend(Backend[jax.Array]):
             new = body(_rebuild(carry))
             tree.assert_same_structure(initial, new)
             flat_new = list(tree.flatten(new))
+            # the body may hand back replaced dims; map them onto the initial ones so the carry
+            # is compared and laid out against a single set of tags
+            back_map = {}
+            for i in dim_idxs:
+                d_new = flat_new[i]
+                assert isinstance(d_new, Dim), f"while_loop: loop var {i} was a Dim, got {d_new!r}"
+                back_map[d_new] = flat_initial[i]
+            if back_map:
+                for i in var_idxs:
+                    v = flat_new[i]
+                    if isinstance(v, Tensor) and any(d in back_map for d in v.dims):
+                        flat_new[i] = v.copy_template_new_dim_tags(
+                            [back_map.get(d, d) for d in v.dims], keep_special_axes=True
+                        )
+                        flat_new[i].raw_tensor = v.raw_tensor
             for i in var_idxs:
                 before, after = flat_initial[i], flat_new[i]
                 if isinstance(before, Tensor):
@@ -982,9 +1017,13 @@ class JaxBackend(Backend[jax.Array]):
                         f" The graph loop needs one fixed shape across iterations;"
                         f" give the dim a capacity instead of growing it."
                     )
-            return tuple(_carry_like(flat_new[i], flat_initial[i]) for i in var_idxs)
+            out_vars = tuple(_carry_like(flat_new[i], flat_initial[i]) for i in var_idxs)
+            out_dims = tuple(flat_new[i].dyn_size_ext.raw_tensor for i in dim_idxs)
+            return out_vars + out_dims
 
-        init = tuple(_init_carry(flat_initial[i]) for i in var_idxs)
+        init = tuple(_init_carry(flat_initial[i]) for i in var_idxs) + tuple(
+            flat_initial[i].dyn_size_ext.raw_tensor for i in dim_idxs
+        )
         # One device for the whole carry, as lax requires.
         # The loop counter is on CPU by design, for the host-driven eager loop;
         # in the graph loop the control flow lives on the device with everything else.
