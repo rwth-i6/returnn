@@ -51,7 +51,6 @@ def depthwise_conv1d_available(x, w, block_t: int = _BLOCK_T) -> bool:
 
 
 if triton is not None:
-
     # noinspection PyPep8Naming
     @triton.jit
     def _dw_fwd(X, W, n_time, n_chan, pad_l, Out, BLOCK_T: tl.constexpr, BLOCK_C: tl.constexpr, KW: tl.constexpr):
