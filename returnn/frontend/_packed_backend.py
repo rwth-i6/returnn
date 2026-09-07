@@ -4049,7 +4049,12 @@ class PackedBackend(Backend[PackedRawTensor]):
             if idx is None:
                 return _dim_aware_call("gather", (source,), kwargs)
         else:
-            return _dim_aware_call("gather", (source,), kwargs)
+            out_spatial_dim = _gather_relayout_out_dim(indices, raw)
+            if out_spatial_dim is None:
+                return _dim_aware_call("gather", (source,), kwargs)
+            return _gather_relayout(
+                source, raw, indices=indices, clip_to_valid=clip_to_valid, out_spatial_dim=out_spatial_dim
+            )
 
         dev = raw.inner.device
         rows = rf.range_over_dim(raw.packed_dim, device=dev)
@@ -4424,6 +4429,122 @@ def _repeat_out_packed_dim(
     )
     factor = -(-out_cap // in_cap)
     return Dim(in_raw.content_bound * factor, name="repeat_packed")
+
+
+def _gather_relayout_out_dim(indices: Tensor, raw: PackedRawTensor) -> Optional[Dim]:
+    """
+    :param indices: the gather indices
+    :param raw: the packing gathered from
+    :return: the innermost packed dim of the result, if the indices introduce one,
+        i.e. they are over (new spatial, static...) with a per-sequence length, as :func:`rf.window` builds.
+        None if they have any other shape, and the gather has to take the generic route.
+    """
+    batch = raw.orig_dims[0]
+    out_spatial_dim = None
+    for dim in indices.dims:
+        if dim == batch:
+            continue
+        size = dim.dyn_size_ext
+        if size is None or not size.dims:
+            # static, or one size for every sequence
+            # (a scalar-sized dynamic dim, e.g. a window whose width is drawn per step):
+            # either way a per-frame axis of the result, not a layout
+            continue
+        if size.dims != (batch,):
+            return None  # dynamic over something else: no packing over (batch, dim) describes it
+        if out_spatial_dim is not None:
+            return None  # two new spatial dims: same
+        out_spatial_dim = dim
+    return out_spatial_dim
+
+
+def _gather_relayout(
+    source: Tensor, raw: PackedRawTensor, *, indices: Tensor, clip_to_valid: bool, out_spatial_dim: Dim
+) -> Tensor:
+    """
+    Gather along the innermost packed dim with indices that bring their own spatial dim,
+    e.g. :func:`rf.window`, which asks for [out spatial, window] positions per sequence.
+
+    The result is a fresh dense packed buffer over (batch, out spatial):
+    the strides of the source layout do not carry over, so gap and align start at 0 and 1,
+    and any gap the model wants comes from a later regap.
+    Every output frame reads its own sequence's start plus the position the indices give it,
+    so the source is never unpacked.
+
+    :param source: packed
+    :param raw: its packing
+    :param indices: positions within the sequence, see :func:`_gather_relayout_out_dim`
+    :param clip_to_valid: clip the positions into each sequence
+    :param out_spatial_dim: the innermost packed dim of the result
+    :return: packed over (batch, out_spatial_dim)
+    """
+    batch = raw.orig_dims[0]
+    dev = raw.inner.device
+    out_lens = out_spatial_dim.get_size_tensor(device=dev)
+    out_packed_dim = _gather_out_packed_dim(raw, out_spatial_dim, out_lens, batch, dev)
+    helper = PackedRawTensor(
+        inner=rf.zeros([out_packed_dim], dtype="int32", device=dev),
+        packed_dim=out_packed_dim,
+        orig_dims=(batch, out_spatial_dim),
+        content_bound=out_packed_dim.dimension,
+    )
+    seq = _frame_coords(helper, batch)
+    local = _frame_coords(helper, out_spatial_dim)
+
+    # the indices for this frame; _frame_coords keeps the coords in bounds, so no clipping here
+    idx = rf.gather(indices, indices=local, axis=out_spatial_dim)
+    if batch in idx.dims:
+        idx = rf.gather(idx, indices=seq, axis=batch)
+    idx = rf.cast(idx, local.dtype)
+    if clip_to_valid:
+        # in the traced regime the lens already live on the data's device,
+        # where copying them would be a sync
+        lens = _device_lens(raw)
+        if lens is None:
+            lens = rf.copy_to_device(raw.seq_lens, dev)
+        last = rf.cast(rf.gather(lens, indices=seq, axis=batch), idx.dtype) - 1
+        idx = rf.clip_by_value(idx, rf.zeros_like(last), last)
+    starts, seqs_dim = raw.seq_starts(device=dev)
+    src = rf.cast(rf.gather(starts, indices=seq, axis=seqs_dim), idx.dtype) + idx
+    src = rf.clip_by_value(src, 0, _last_row(raw.packed_dim, src.dtype))
+    out = helper.rewrap(rf.gather(raw.inner, indices=src, axis=raw.packed_dim), name="gather")
+    # a sparse dim assigned on the virtual tensor never reached the inner buffer
+    if source.sparse_dim is not None:
+        out.sparse_dim = source.sparse_dim
+    return out
+
+
+def _gather_out_packed_dim(
+    in_raw: PackedRawTensor, out_spatial_dim: Dim, out_lens: Tensor, batch: Dim, dev: str
+) -> Dim:
+    """
+    :param in_raw: the packing gathered from
+    :param out_spatial_dim: the innermost packed dim of the result
+    :param out_lens: its per-sequence lengths, on the data device
+    :param batch: the outer packed dim
+    :param dev: the data device
+    :return: the packed dim for a re-laid-out gather.
+        Static when tracing, since a captured buffer size must not vary per batch;
+        the exact total otherwise.
+        The static size is the input content bound scaled by the capacity ratio,
+        plus one frame per sequence for the per-sequence rounding up a stride can cost.
+    """
+    if not rf.is_static_traceable():
+        return Dim(rf.copy_to_device(rf.reduce_sum(out_lens, axis=batch), dev), name="gather_packed")
+    in_spatial_dim = in_raw.orig_dims[-1]
+    # noinspection PyProtectedMember
+    in_cap = in_spatial_dim.capacity or in_spatial_dim._derived_capacity()
+    # noinspection PyProtectedMember
+    out_cap = out_spatial_dim.capacity or out_spatial_dim._derived_capacity()
+    assert in_cap and out_cap and in_raw.content_bound, (
+        f"packed gather: static traceable needs a bound on {out_spatial_dim}"
+        f" (in cap {in_cap}, out cap {out_cap}, in content bound {in_raw.content_bound})."
+        f" It comes from the packed buffer size (pack total_bound / packed_batch_size)."
+    )
+    assert batch.dimension is not None, f"packed gather: static traceable needs a static batch dim, got {batch}"
+    # the capacity ratio bounds the content,
+    # plus a frame per sequence for the rounding up that a per-sequence ceildiv (a stride) can cost
+    return Dim(-(-in_raw.content_bound * out_cap // in_cap) + batch.dimension, name="gather_packed")
 
 
 def is_packed(source: Tensor) -> bool:
