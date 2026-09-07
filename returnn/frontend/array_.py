@@ -33,6 +33,7 @@ __all__ = [
     "concat_features",
     "pad",
     "cum_concat_step",
+    "slice_update",
     "stack",
     "unstack",
     "masked_select",
@@ -628,6 +629,22 @@ def cum_concat_step(
         prev_accum, axes=[axis], padding=[(0, 1)], out_dims=[out_spatial_dim], value=source, handle_dynamic_dims=True
     )
     return out, out_spatial_dim
+
+
+def slice_update(target: Tensor, value: Tensor, *, axis: Dim, start: Tensor) -> Tensor:
+    """
+    Write ``value`` into ``target`` at ``start`` along ``axis``.
+
+    :param target: with ``axis``
+    :param value: the frame to write, without ``axis``
+    :param axis: the axis to write into
+    :param start: index in ``axis``, scalar
+    :return: ``target`` with ``value`` written at ``start``
+
+    Backends that can update in place do; the fallback selects over the whole axis.
+    """
+    # noinspection PyProtectedMember
+    return target._raw_backend.slice_update(target, value, axis=axis, start=start)
 
 
 def stack(sources: Sequence[Tensor], *, out_dim: Optional[Dim] = None) -> Tuple[Tensor, Dim]:

@@ -1239,6 +1239,22 @@ class Backend(Generic[T]):
         raise NotImplementedError
 
     @staticmethod
+    def slice_update(target: Tensor, value: Tensor, *, axis: Dim, start: Tensor) -> Tensor:
+        """
+        :param target: with ``axis``
+        :param value: without ``axis``, the frame to write
+        :param axis: the axis to write into
+        :param start: index in ``axis``, scalar
+        :return: ``target`` with ``value`` at ``start`` along ``axis``
+
+        Generic fallback: a select over the whole axis.
+        A backend that can update in place should override this, which matters inside a loop,
+        where the target is a carry and the write is otherwise a full buffer copy per step.
+        """
+        idx = rf.range_over_dim(axis, device=target.device)
+        return rf.where(idx == start, value, target)
+
+    @staticmethod
     def lerp(
         start: Tensor, end: Tensor, weight: Union[float, Tensor], *, allow_broadcast_all_sources: bool = False
     ) -> Tensor:

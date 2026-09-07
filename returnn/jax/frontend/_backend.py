@@ -855,6 +855,26 @@ class JaxBackend(Backend[jax.Array]):
         return out
 
     @staticmethod
+    def slice_update(target: Tensor, value: Tensor, *, axis: Dim, start: Tensor) -> Tensor:
+        """
+        :param target: with ``axis``
+        :param value: without ``axis``
+        :param axis:
+        :param start: index in ``axis``, scalar
+        :return: ``target`` with ``value`` at ``start`` along ``axis``
+
+        ``lax.dynamic_update_slice``, which XLA can alias in place when the target is a loop
+        carry, where the generic select costs a buffer copy per step.
+        """
+        axis_int = target.dims.index(axis)
+        value_ = value.copy_compatible_to_dims(target.dims[:axis_int] + (axis,) + target.dims[axis_int + 1 :])
+        starts = [jnp.asarray(0, dtype=jnp.int32)] * len(target.dims)
+        starts[axis_int] = start.raw_tensor.astype(jnp.int32)
+        out = target.copy_template()
+        out.raw_tensor = jax.lax.dynamic_update_slice(target.raw_tensor, value_.raw_tensor, tuple(starts))
+        return out
+
+    @staticmethod
     def stack(sources: Sequence[Tensor], *, out_dim: Dim) -> Tensor:
         """stack"""
         out_dims = (out_dim,) + sources[0].dims
