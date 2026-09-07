@@ -3897,6 +3897,14 @@ class PackedBackend(Backend[PackedRawTensor]):
         ):
             inner_out = rf.matmul(a_raw.inner, b, reduce=reduce, use_mask=use_mask)
             return a_raw.rewrap(inner_out, name="matmul")
+        if isinstance(b_raw, PackedRawTensor) and not any(_dim_refs_packed(d, a_raw) for d in reduce_dims):
+            # both packed over the same seqs: the packed dims are batch dims of the matmul,
+            # so it runs on the inners (per frame), e.g. chunk-local attention scores
+            b = _conform_packing(b, a_raw)
+            b_raw = b.raw_tensor
+            if a_raw.same_packing(b_raw):
+                inner_out = rf.matmul(a_raw.inner, b_raw.inner, reduce=reduce, use_mask=use_mask)
+                return a_raw.rewrap(inner_out, name="matmul")
         _warn_fallback_once("matmul", "reduce dims or other operand reference the packed dims")
         out = rf.matmul(_unpack_if_packed(a), _unpack_if_packed(b), reduce=reduce, use_mask=use_mask)
         return _repack_result(out, a_raw)
