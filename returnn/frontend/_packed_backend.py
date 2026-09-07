@@ -3732,6 +3732,8 @@ class PackedBackend(Backend[PackedRawTensor]):
         if time_dim in list(axes) and mode == "constant":
             i = list(axes).index(time_dim)
             pad_l, pad_r = padding[i]
+            pad_l = pad_l.dimension if isinstance(pad_l, Dim) else pad_l
+            pad_r = pad_r.dimension if isinstance(pad_r, Dim) else pad_r
             if (
                 isinstance(pad_l, int)
                 and pad_l >= 0
