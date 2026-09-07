@@ -2512,6 +2512,139 @@ def test_device():
     if default != "cpu":
         assert numpy.asarray(rf.copy_to_device(x, "cpu").raw_tensor).shape == (2,)
 
+
+def _preload_test_models():
+    """
+    :return: (main model class, lm-only model class), sharing parameter names with a combined model
+
+    The combined model holds ``w``, ``lm.emb`` and a ``prior`` the model def fills in itself.
+    The main checkpoint has only ``w``,
+    and the LM checkpoint has ``emb``, without the ``lm.`` prefix,
+    which is how the torch and TF engines expect a prefixed preload to be stored.
+    """
+    d, e = Dim(3, name="d"), Dim(4, name="e")
+
+    class _Lm(rf.Module):
+        def __init__(self):
+            super().__init__()
+            self.emb = rf.Parameter([e])
+
+    class _Combined(rf.Module):
+        def __init__(self):
+            super().__init__()
+            self.w = rf.Parameter([d])
+            self.lm = _Lm()
+            # what the model def sets up itself, e.g. a prior read from a file
+            self.prior = rf.Parameter([d], auxiliary=True, non_critical_for_restore=True)
+
+    class _MainOnly(rf.Module):
+        def __init__(self):
+            super().__init__()
+            self.w = rf.Parameter([d])
+
+    return _Combined, _MainOnly, _Lm
+
+
+class _PathLike:
+    """a checkpoint object, as i6_core's PtCheckpoint is: os.PathLike, not a str"""
+
+    def __init__(self, path: str):
+        self.path = path
+
+    def __fspath__(self) -> str:
+        return self.path
+
+    def __str__(self) -> str:
+        return self.path
+
+
+def test_jax_engine_preload_from_files(tmp_path):
+    from returnn.config import Config, global_config_ctx
+    from returnn.jax.engine import Engine
+    from returnn.jax import checkpoint as _checkpoint
+
+    _rf_jax()
+    combined_cls, main_cls, lm_cls = _preload_test_models()
+
+    main_ckpt = str(tmp_path / "main.orbax")
+    lm_ckpt = str(tmp_path / "lm.orbax")
+    main = main_cls()
+    main.w.initial = None
+    main.w.raw_tensor = jnp.asarray([1.0, 2.0, 3.0], dtype=jnp.float32)
+    _checkpoint.save_checkpoint(main, main_ckpt)
+    lm = lm_cls()
+    lm.emb.initial = None
+    lm.emb.raw_tensor = jnp.asarray([4.0, 5.0, 6.0, 7.0], dtype=jnp.float32)
+    _checkpoint.save_checkpoint(lm, lm_ckpt)
+    assert set(_checkpoint.load_checkpoint(lm_ckpt)) == {"emb"}, "the LM checkpoint stores it unprefixed"
+
+    config = Config(
+        {
+            "backend": "jax",
+            "get_model": lambda **_kwargs: combined_cls(),
+            # no init_for_train: a recog preload, and PathLike rather than str
+            "preload_from_files": {"lm": {"prefix": "lm.", "filename": _PathLike(lm_ckpt)}},
+        }
+    )
+    with global_config_ctx(config):
+        engine = Engine(config=config)
+        engine._create_model(epoch=1, step=0)
+        missing = engine._load_model(filename=main_ckpt, with_opt_state=False, allow_missing=True)
+        # `prior` is non_critical_for_restore, so it is not missing even though no checkpoint has it
+        assert missing == {"lm.emb"}, f"unexpected missing set {missing}"
+        preloaded = engine._preload_from_files(is_first_train_epoch=False, is_training=False)
+        assert preloaded == {"lm.emb"}, f"unexpected preloaded set {preloaded}"
+        params = dict(engine.model.named_parameters())
+        numpy.testing.assert_allclose(numpy.asarray(params["w"].raw_tensor), [1.0, 2.0, 3.0])
+        # the prefix must be added to the checkpoint's names, not stripped from them
+        numpy.testing.assert_allclose(numpy.asarray(params["lm.emb"].raw_tensor), [4.0, 5.0, 6.0, 7.0])
+
+
+def test_jax_engine_preload_skipped_when_training(tmp_path):
+    from returnn.config import Config, global_config_ctx
+    from returnn.jax.engine import Engine
+    from returnn.jax import checkpoint as _checkpoint
+
+    _rf_jax()
+    combined_cls, _main_cls, lm_cls = _preload_test_models()
+    lm_ckpt = str(tmp_path / "lm.orbax")
+    lm = lm_cls()
+    lm.emb.initial = None
+    lm.emb.raw_tensor = jnp.asarray([4.0, 5.0, 6.0, 7.0], dtype=jnp.float32)
+    _checkpoint.save_checkpoint(lm, lm_ckpt)
+
+    config = Config(
+        {
+            "backend": "jax",
+            "get_model": lambda **_kwargs: combined_cls(),
+            "preload_from_files": {"lm": {"prefix": "lm.", "filename": lm_ckpt}},
+        }
+    )
+    with global_config_ctx(config):
+        engine = Engine(config=config)
+        engine._create_model(epoch=1, step=0)
+        # a recog preload is for recog: training must not apply it
+        assert engine._preload_from_files(is_first_train_epoch=True, is_training=True) == set()
+
+
+def test_jax_engine_load_model_missing_is_an_error(tmp_path):
+    from returnn.config import Config, global_config_ctx
+    from returnn.jax.engine import Engine
+    from returnn.jax import checkpoint as _checkpoint
+
+    _rf_jax()
+    combined_cls, main_cls, _lm_cls = _preload_test_models()
+    main_ckpt = str(tmp_path / "main.orbax")
+    _checkpoint.save_checkpoint(main_cls(), main_ckpt)
+
+    config = Config({"backend": "jax", "get_model": lambda **_kwargs: combined_cls()})
+    with global_config_ctx(config):
+        engine = Engine(config=config)
+        engine._create_model(epoch=1, step=0)
+        with pytest.raises(ValueError, match="missing parameter"):
+            engine._load_model(filename=main_ckpt, with_opt_state=False)
+
+
 def test_while_loop_dim_in_state_grows():
     """a dim in the state may be replaced per iteration, its dyn size growing within a capacity"""
     _rf_jax()
