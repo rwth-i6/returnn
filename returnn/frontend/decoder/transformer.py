@@ -197,9 +197,14 @@ class TransformerDecoder(rf.Module):
             assert not logits_with_bias, "logits_with_bias=True expected with share_embedding"
             self.logits.weight = self.input_embedding.weight
 
-    def default_initial_state(self, *, batch_dims: Sequence[Dim]) -> rf.State:
-        """default initial state"""
-        state = rf.State({k: v.default_initial_state(batch_dims=batch_dims) for k, v in self.layers.items()})
+    def default_initial_state(self, *, batch_dims: Sequence[Dim], capacity: Optional[int] = None) -> rf.State:
+        """
+        :param batch_dims:
+        :param capacity: max number of steps, passed on to the self-attention KV cache
+        """
+        state = rf.State(
+            {k: v.default_initial_state(batch_dims=batch_dims, capacity=capacity) for k, v in self.layers.items()}
+        )
         state.pos = rf.zeros((), dtype="int32")  # on the default device, like the updates (see below)
         return state
 
@@ -378,8 +383,13 @@ class TransformerDecoderLayer(rf.Module):
                 raise TypeError(f"unexpected cross_att type {cross_att!r}")
             self.cross_att_layer_norm = make_norm(norm, out_dim)
 
-    def default_initial_state(self, *, batch_dims: Sequence[Dim]) -> rf.State:
-        """default initial state"""
+    def default_initial_state(self, *, batch_dims: Sequence[Dim], capacity: Optional[int] = None) -> rf.State:
+        """
+        :param batch_dims:
+        :param capacity: for the self-attention KV cache
+        """
+        if capacity is not None and isinstance(self.self_att, rf.CausalSelfAttention):
+            return rf.State(self_att=self.self_att.default_initial_state(batch_dims=batch_dims, capacity=capacity))
         return rf.State(self_att=self.self_att.default_initial_state(batch_dims=batch_dims))
 
     def transform_encoder(self, encoder: Tensor, *, axis: Dim) -> rf.State:

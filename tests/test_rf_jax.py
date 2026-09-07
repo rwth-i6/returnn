@@ -17,7 +17,7 @@ import numpy.testing
 import pytest
 
 import returnn.frontend as rf
-from returnn.tensor import Tensor, Dim
+from returnn.tensor import Tensor, Dim, single_step_dim
 
 jax = pytest.importorskip("jax")
 import jax.numpy as jnp  # noqa: E402  # after the importorskip
@@ -2553,3 +2553,64 @@ def test_while_loop_dim_in_state_needs_capacity():
     with pytest.raises(AssertionError, match="capacity"):
         rf.while_loop(_cond, _body, {"i": rf.zeros((), dtype="int32"), "hist": hist, "x": buf})
 
+
+def _causal_self_att_for_test():
+    """:return: a small CausalSelfAttention and its model dim"""
+    model_dim = Dim(8, name="model")
+    rf.set_random_seed(7)
+    att = rf.CausalSelfAttention(
+        model_dim, proj_dim=model_dim, key_dim_total=model_dim, value_dim_total=model_dim, num_heads=2
+    )
+    return att, model_dim
+
+
+def test_causal_self_att_bounded_cache_vs_growing():
+    """the bounded cache must give the same outputs as the growing one, step for step"""
+    _rf_jax()
+    att, model_dim = _causal_self_att_for_test()
+    batch = Dim(2, name="batch")
+    n_steps = 5
+    steps = [rf.random_uniform([batch, model_dim], dtype="float32") for _ in range(n_steps)]
+
+    def _run(capacity):
+        kwargs = {"capacity": capacity} if capacity is not None else {}
+        state = att.default_initial_state(batch_dims=[batch], **kwargs)
+        outs = []
+        for x in steps:
+            out, state = att(x, axis=single_step_dim, state=state)
+            outs.append(numpy.asarray(out.copy_compatible_to_dims_raw([batch, model_dim])))
+        return outs, state
+
+    ref, _ = _run(None)
+    got, state = _run(n_steps)
+    for t, (a, b) in enumerate(zip(ref, got)):
+        numpy.testing.assert_allclose(b, a, rtol=1e-5, atol=1e-5, err_msg=f"step {t} differs")
+    # the buffer stays at the capacity while the axis says what is written
+    assert numpy.asarray(state.k_accum.raw_tensor).shape[1] == n_steps
+    assert int(state.accum_axis.dyn_size_ext.raw_tensor) == n_steps
+
+
+def test_causal_self_att_bounded_cache_in_while_loop():
+    """the bounded cache is what lets the decoder state cross a graph loop"""
+    _rf_jax()
+    att, model_dim = _causal_self_att_for_test()
+    batch = Dim(2, name="batch")
+    n_steps = 4
+    x = rf.random_uniform([batch, model_dim], dtype="float32")
+
+    def _cond(s):
+        return rf.compare(s["i"], "<", rf.constant(n_steps, dims=(), dtype="int32", device=s["i"].device))
+
+    def _body(s):
+        out, att_state = att(x, axis=single_step_dim, state=s["att"])
+        return {"i": s["i"] + 1, "att": att_state, "out": out}
+
+    init = {
+        "i": rf.zeros((), dtype="int32"),
+        "att": att.default_initial_state(batch_dims=[batch], capacity=n_steps),
+        "out": rf.zeros([batch, model_dim], dtype="float32"),
+    }
+    final = rf.while_loop(_cond, _body, init)
+    assert int(final["i"].raw_tensor) == n_steps
+    assert set(final["out"].dims) == {batch, model_dim}
+    assert int(final["att"].accum_axis.dyn_size_ext.raw_tensor) == n_steps
