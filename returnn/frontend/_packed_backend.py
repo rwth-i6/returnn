@@ -4059,6 +4059,22 @@ class PackedBackend(Backend[PackedRawTensor]):
             return _dim_aware_call("gather", (source,), kwargs)
         raw = _raw(source)
         if axis != raw.orig_dims[-1] or len(raw.orig_dims) != 2:
+            if axis not in raw.orig_dims and axis != raw.packed_dim and axis in source.dims:
+                # gather along a plain axis with per-frame indices (e.g. a position drawn per frame):
+                # elementwise on the inner buffer, the packing is untouched
+                if is_packed(indices):
+                    idx = _raw(_conform_packing(indices, raw)).inner
+                elif set(indices.dims) & set(raw.orig_dims):
+                    idx = _pack_like(indices, raw)
+                else:
+                    idx = indices  # no packed dims involved at all
+                if idx is not None:
+                    out = raw.rewrap(
+                        rf.gather(raw.inner, indices=idx, axis=axis, clip_to_valid=clip_to_valid), name="gather"
+                    )
+                    if source.sparse_dim is not None and source.sparse_dim in out.dims:
+                        out.sparse_dim = source.sparse_dim
+                    return out
             return _dim_aware_call("gather", (source,), kwargs)
         if is_packed(indices):
             idx = _raw(_conform_packing(indices, raw)).inner
@@ -4095,6 +4111,85 @@ class PackedBackend(Backend[PackedRawTensor]):
         if source.sparse_dim is not None:
             out.sparse_dim = source.sparse_dim
         return out
+
+    @staticmethod
+    def merge_dims(source: Tensor, *, dims: Sequence[Dim], out_dim: Dim) -> Tensor:
+        """
+        merge_dims.
+        Merging the innermost packed dim with a static inner dim is a re-layout:
+        output frame t of a sequence reads packed row start + t // s at inner position t % s
+        (e.g. un-chunking (chunks, chunk_size) back to the time axis).
+        Anything else takes the generic dim-aware route.
+        """
+        kwargs = dict(dims=dims, out_dim=out_dim)
+        if is_packed(source):
+            raw = _raw(source)
+            if (
+                len(raw.orig_dims) == 2
+                and len(dims) == 2
+                and dims[0] == raw.orig_dims[-1]
+                and dims[1].dimension is not None
+                and dims[1] in source.dims
+                and out_dim.dyn_size_ext is not None
+            ):
+                s = dims[1].dimension
+                batch = raw.orig_dims[0]
+                dev = raw.inner.device
+                out_lens = out_dim.get_size_tensor(device=dev)
+                out_packed_dim = _gather_out_packed_dim(raw, out_dim, out_lens, batch, dev)
+                helper = PackedRawTensor(
+                    inner=rf.zeros([out_packed_dim], dtype="int32", device=dev),
+                    packed_dim=out_packed_dim,
+                    orig_dims=(batch, out_dim),
+                    content_bound=out_packed_dim.dimension,
+                )
+                seq = _frame_coords(helper, batch)
+                local = _frame_coords(helper, out_dim)
+                starts, seqs_dim = raw.seq_starts(device=dev)
+                rows = rf.cast(rf.gather(starts, indices=seq, axis=seqs_dim), local.dtype) + local // s
+                rows = rf.clip_by_value(rows, 0, _last_row(raw.packed_dim, rows.dtype))
+                picked = rf.gather(raw.inner, indices=rows, axis=raw.packed_dim)
+                pos = local % s
+                pos.sparse_dim = dims[1]
+                picked = rf.gather(picked, indices=pos, axis=dims[1])
+                out = helper.rewrap(picked, name="merge_dims")
+                if source.feature_dim is not None and source.feature_dim in out.dims:
+                    out.feature_dim = source.feature_dim
+                return out
+        return _dim_aware_call("merge_dims", (source,), kwargs)
+
+    @staticmethod
+    def slice(
+        source: Tensor,
+        *,
+        axis: Dim,
+        start=None,
+        end=None,
+        step=None,
+        size=None,
+        out_dim: Dim,
+    ) -> Tensor:
+        """
+        slice.
+        Along the innermost packed dim a plain truncation/shift is a re-layout gather:
+        output frame i of a sequence reads input frame start + i of the same sequence
+        (e.g. the pad-then-slice pattern that builds chunk history).
+        Anything else takes the generic dim-aware route.
+        """
+        kwargs = dict(axis=axis, start=start, end=end, step=step, size=size, out_dim=out_dim)
+        if (
+            is_packed(source)
+            and axis == _raw(source).orig_dims[-1]
+            and len(_raw(source).orig_dims) == 2
+            and (start is None or isinstance(start, int))
+            and end is None
+            and step in (None, 1)
+            and out_dim.dyn_size_ext is not None
+        ):
+            raw = _raw(source)
+            indices = rf.range_over_dim(out_dim, device=raw.inner.device) + (start or 0)
+            return _gather_relayout(source, raw, indices=indices, clip_to_valid=False, out_spatial_dim=out_dim)
+        return _dim_aware_call("slice", (source,), kwargs)
 
     @staticmethod
     def repeat(values: Tensor, *, in_spatial_dim: Dim, repeats: Tensor, out_spatial_dim: Dim) -> Tuple[Tensor, Dim]:
@@ -4355,11 +4450,9 @@ for _name in [
     "flip_no_mask",
     "masked_scatter",
     "masked_select",
-    "merge_dims",
     "reshape",
     "scatter",
     "search_sorted",
-    "slice",
     "sort",
     "split",
     "split_dims",

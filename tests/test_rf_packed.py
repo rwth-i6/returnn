@@ -271,6 +271,61 @@ def test_window_dynamic_window_dim():
     assert len(shapes) == 1, f"shapes vary across draws: {shapes}"
 
 
+def test_slice_packed_time_shift():
+    # the pad-then-slice pattern that builds chunk history: both stay packed re-layouts
+    rf.select_backend_torch()
+    x, batch_dim, time_dim, feat_dim = _make_input(batch_size=3, seq_lens=(7, 5, 4))
+    xp = packed.pack(x)
+    padded, (pad_dim,) = rf.pad(xp, axes=[time_dim], padding=[(2, 0)], value=0.0)
+    out_p, _ = rf.slice(padded, axis=pad_dim, size=time_dim, out_dim=time_dim)
+    assert packed.is_packed(out_p)
+    ref = rf.shift_right(x, axis=time_dim, pad_value=0.0)
+    ref = rf.shift_right(ref, axis=time_dim, pad_value=0.0)
+    _assert_equal_non_padded(out_p, ref, batch_dim, time_dim)
+
+
+def test_merge_dims_packed_with_static():
+    # un-chunking: merge the innermost packed dim with a static inner dim back to one time axis
+    rf.select_backend_torch()
+    x, batch_dim, time_dim, feat_dim = _make_input(batch_size=3, seq_lens=(6, 4, 2))
+    s_dim = Dim(3, name="s")
+    y = rf.expand_dim(x, dim=s_dim) + rf.range_over_dim(s_dim, dtype=x.dtype)
+    ref, ref_dim = rf.merge_dims(y, dims=(time_dim, s_dim))
+    yp = rf.expand_dim(packed.pack(x), dim=s_dim) + rf.range_over_dim(s_dim, dtype=x.dtype)
+    out_p, out_dim = rf.merge_dims(yp, dims=(time_dim, s_dim))
+    assert packed.is_packed(out_p)
+    _assert_equal_per_seq(out_p, ref, batch_dim, out_dim, ref_dim, feat_dim)
+
+
+def test_matmul_packed_both_operands():
+    # both operands packed over the same seqs (e.g. chunk-local attention scores):
+    # the packed dims are batch dims of the matmul, it runs on the inners
+    rf.select_backend_torch()
+    x, batch_dim, time_dim, feat_dim = _make_input(batch_size=3, seq_lens=(5, 3, 2))
+    y = x * 0.5 + 1.0  # same dims, different content
+    ref = rf.matmul(x, y, reduce=feat_dim, use_mask=False)  # per-frame dot product
+    xp = packed.pack(x)
+    yp = packed.pack(y, out_dim=xp.raw_tensor.packed_dim)
+    out_p = rf.matmul(xp, yp, reduce=feat_dim, use_mask=False)
+    assert packed.is_packed(out_p)
+    _assert_equal_non_padded(out_p, ref, batch_dim, time_dim)
+
+
+def test_gather_packed_plain_axis():
+    # gather along a plain (non-packed) axis with per-frame indices: elementwise on the inner buffer
+    rf.select_backend_torch()
+    x, batch_dim, time_dim, feat_dim = _make_input(batch_size=3, seq_lens=(5, 3, 2))
+    s_dim = Dim(4, name="s")
+    y = rf.expand_dim(x, dim=s_dim) + rf.range_over_dim(s_dim, dtype=x.dtype)
+    idx = rf.cast(rf.range_over_dim(time_dim) % s_dim.dimension, "int32")
+    idx.sparse_dim = s_dim
+    ref = rf.gather(y, indices=idx, axis=s_dim)
+    yp = rf.expand_dim(packed.pack(x), dim=s_dim) + rf.range_over_dim(s_dim, dtype=x.dtype)
+    out_p = rf.gather(yp, indices=idx, axis=s_dim)
+    assert packed.is_packed(out_p)
+    _assert_equal_non_padded(out_p, ref, batch_dim, time_dim)
+
+
 def test_cumsum_over_packed_time():
     rf.select_backend_torch()
     x, batch_dim, time_dim, feat_dim = _make_input()
