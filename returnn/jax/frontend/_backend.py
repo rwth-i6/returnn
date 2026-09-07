@@ -2496,6 +2496,7 @@ def _pool_max_reshape(src_raw, axes: Sequence[int], pool_size: Sequence[int]):
     return out
 
 
+# noinspection PyShadowingBuiltins
 def _conv_depthwise_1d(
     source: Tensor,
     *,

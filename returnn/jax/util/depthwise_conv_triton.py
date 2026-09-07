@@ -26,11 +26,10 @@ import jax
 import jax.numpy as jnp
 
 try:
-    import jax_triton
     import triton
     import triton.language as tl
 except ImportError:  # optional dependency, same as the rel-pos attention kernels
-    jax_triton = triton = None
+    triton = tl = None
 
 # Small time blocks keep the halo in L1.
 # Chosen by sweep at the Conformer shape.
@@ -44,7 +43,7 @@ def depthwise_conv1d_available(x, w, block_t: int = _BLOCK_T) -> bool:
     :param block_t: time block, only powers of two compile
     :return: whether the Triton path applies; callers fall back to the shifted-sum otherwise
     """
-    if jax_triton is None or triton is None:
+    if triton is None:
         return False
     if x.ndim != 2 or w.ndim != 2 or x.shape[-1] != w.shape[-1]:
         return False
@@ -53,6 +52,7 @@ def depthwise_conv1d_available(x, w, block_t: int = _BLOCK_T) -> bool:
 
 if triton is not None:
 
+    # noinspection PyPep8Naming
     @triton.jit
     def _dw_fwd(X, W, n_time, n_chan, pad_l, Out, BLOCK_T: tl.constexpr, BLOCK_C: tl.constexpr, KW: tl.constexpr):
         """out[t,c] = sum_k w[k,c] * x[t+k-pad_l, c]"""
@@ -70,6 +70,7 @@ if triton is not None:
         o_mask = (offs_t[:, None] < n_time) & c_mask[None, :]
         tl.store(Out + offs_t[:, None] * n_chan + offs_c[None, :], acc.to(Out.dtype.element_ty), mask=o_mask)
 
+    # noinspection PyPep8Naming
     @triton.jit
     def _dw_bwd_dx(DO, W, n_time, n_chan, pad_l, DX, BLOCK_T: tl.constexpr, BLOCK_C: tl.constexpr, KW: tl.constexpr):
         """dx[t,c] = sum_k w[k,c] * dout[t-k+pad_l, c], the correlation with the flipped filter"""
@@ -87,6 +88,7 @@ if triton is not None:
         o_mask = (offs_t[:, None] < n_time) & c_mask[None, :]
         tl.store(DX + offs_t[:, None] * n_chan + offs_c[None, :], acc.to(DX.dtype.element_ty), mask=o_mask)
 
+    # noinspection PyPep8Naming
     @triton.jit
     def _dw_bwd_dw(X, DO, DW, n_time, n_chan, pad_l, BLOCK_T: tl.constexpr, BLOCK_C: tl.constexpr, KW: tl.constexpr):
         """dw[k,c] = sum_t dout[t,c] * x[t+k-pad_l, c], accumulated across time blocks"""
@@ -133,6 +135,8 @@ def _fwd(x, w, pad_l, block_t, block_c):
     """
     :return: (out, residuals for the backward)
     """
+    import jax_triton
+
     n_time, n_chan = x.shape
     # the kernels taking out_shape list their output last:
     # jax_triton appends outputs after the inputs, so a mid-signature output binds to a scalar
@@ -157,6 +161,8 @@ def _bwd(pad_l, block_t, block_c, res, d_out):
     """
     :return: (dx, dw)
     """
+    import jax_triton
+
     x, w = res
     n_time, n_chan = x.shape
     width = w.shape[0]
