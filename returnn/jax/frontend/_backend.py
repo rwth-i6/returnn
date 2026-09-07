@@ -1018,6 +1018,7 @@ class JaxBackend(Backend[jax.Array]):
             )
             return res.raw_tensor
 
+        # noinspection shadowing-names
         def _body(carry: Sequence[Any]):
             new = body(_rebuild(carry))
             tree.assert_same_structure(initial, new)
