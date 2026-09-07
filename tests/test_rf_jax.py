@@ -739,16 +739,18 @@ def test_conv_pool_vs_torch():
         _copy_params_from(mod_pt, mod_jax)
     x_jax = _make("x", x_np, [batch, time, in_dim])
     x2d_jax = _make("x2d", x2d_np, [batch, time, freq, in_dim])
-    got = {
-        k: (numpy.asarray(v.copy_compatible_to_dims_raw(v.dims)), v.dims)
-        for k, v in _fwd(mods_jax, x_jax, x2d_jax).items()
-    }
+    got = _fwd(mods_jax, x_jax, x2d_jax)
 
     assert set(got) == set(ref)
     for key in sorted(ref):
         ref_raw, ref_dims = ref[key]
-        got_raw, got_dims = got[key]
-        assert got_dims == ref_dims, f"{key}: dims {got_dims} vs {ref_dims}"
+        got_t = got[key]
+        # Dims carry the order, so each op returns whatever layout it computed in,
+        # and the two backends may pick different ones for the same op:
+        # the JAX depthwise conv keeps channels contiguous, which its kernel wants.
+        # Compare the dims as a set, and the values in a common order.
+        assert set(got_t.dims) == set(ref_dims), f"{key}: dims {got_t.dims} vs {ref_dims}"
+        got_raw = numpy.asarray(got_t.copy_compatible_to_dims_raw(ref_dims))
         numpy.testing.assert_allclose(got_raw, ref_raw, rtol=1e-5, atol=1e-5, err_msg=f"{key} differs")
 
 

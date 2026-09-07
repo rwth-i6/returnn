@@ -2547,14 +2547,7 @@ def _conv_depthwise_1d(
             out_raw = depthwise_conv_triton.depthwise_conv1d(src_raw, filter_2d, pad[0][0])
             if bias is not None:
                 out_raw = out_raw + bias.raw_tensor
-            out = Tensor(
-                "conv",
-                dims=[out_dim if d == in_dim else out_spatial_dim if d == in_spatial_dim else d for d in src_dims],
-                dtype=JaxBackend.get_dtype_name_raw(out_raw),
-            )
-            out.raw_tensor = out_raw
-            out.feature_dim = out_dim
-            return out, (out_spatial_dim,)
+            return _conv_depthwise_out(out_raw, src_dims, in_dim, in_spatial_dim, out_dim, out_spatial_dim)
     pad_width = [(0, 0)] * rank
     pad_width[time_ax] = pad[0]
     padded = jnp.pad(src_raw, pad_width)
@@ -2574,11 +2567,12 @@ def _conv_depthwise_1d(
     out_raw = acc.astype(src_raw.dtype)
     if bias is not None:
         out_raw = out_raw + jnp.reshape(bias.raw_tensor, weight_shape)
-    out = Tensor(
-        "conv",
-        dims=[out_dim if d == in_dim else out_spatial_dim if d == in_spatial_dim else d for d in src_dims],
-        dtype=JaxBackend.get_dtype_name_raw(out_raw),
-    )
+    return _conv_depthwise_out(out_raw, src_dims, in_dim, in_spatial_dim, out_dim, out_spatial_dim)
+
+
+def _conv_depthwise_out(out_raw, src_dims, in_dim, in_spatial_dim, out_dim, out_spatial_dim):
+    dims = [out_dim if d == in_dim else out_spatial_dim if d == in_spatial_dim else d for d in src_dims]
+    out = Tensor("conv", dims=dims, dtype=JaxBackend.get_dtype_name_raw(out_raw))
     out.raw_tensor = out_raw
     out.feature_dim = out_dim
     return out, (out_spatial_dim,)
