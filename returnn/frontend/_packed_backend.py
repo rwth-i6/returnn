@@ -4541,10 +4541,12 @@ def _gather_out_packed_dim(
         f" (in cap {in_cap}, out cap {out_cap}, in content bound {in_raw.content_bound})."
         f" It comes from the packed buffer size (pack total_bound / packed_batch_size)."
     )
-    assert batch.dimension is not None, f"packed gather: static traceable needs a static batch dim, got {batch}"
+    # under tracing this resolves to the batch capacity (e.g. torch_cuda_graph batch_size_bound)
+    n_seqs = batch.get_dim_value_tensor()
+    assert isinstance(n_seqs, int), f"packed gather: static traceable needs a bounded batch dim, got {batch}"
     # the capacity ratio bounds the content,
     # plus a frame per sequence for the rounding up that a per-sequence ceildiv (a stride) can cost
-    return Dim(-(-in_raw.content_bound * out_cap // in_cap) + batch.dimension, name="gather_packed")
+    return Dim(-(-in_raw.content_bound * out_cap // in_cap) + n_seqs, name="gather_packed")
 
 
 def is_packed(source: Tensor) -> bool:
