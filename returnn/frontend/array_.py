@@ -725,12 +725,16 @@ def masked_select(
     tensor, _ = rf.expand_make_non_empty(tensor, axis=in_dim, out_dim=in_dim_ext)
     idxs = rf.cumsum(rf.cast(mask, "int32"), spatial_dim=in_dim_ext)  # [T,B] -> idx in T' + 1
     new_size = rf.gather(idxs, indices=in_dim_ext.get_dim_value_tensor() - 1, axis=in_dim_ext)  # [B]
+    if rf.is_static_traceable():
+        new_size_ = new_size
+    else:
+        new_size_ = rf.copy_to_device(new_size, rf.get_default_dim_size_device())
     if out_dim is None:
-        out_dim = Dim(rf.copy_to_device(new_size, rf.get_default_dim_size_device()), name="masked_select")
+        out_dim = Dim(new_size_, name="masked_select")
     elif out_dim.dyn_size_ext is None:
-        out_dim.dyn_size_ext = rf.copy_to_device(new_size, rf.get_default_dim_size_device())
+        out_dim.dyn_size_ext = new_size_
     elif out_dim.dyn_size_ext is not None and out_dim.dyn_size_ext.raw_tensor is None:
-        out_dim.dyn_size_ext.raw_tensor = rf.copy_to_device(new_size, rf.get_default_dim_size_device()).raw_tensor
+        out_dim.dyn_size_ext.raw_tensor = new_size_.raw_tensor
     new_time = rf.reduce_max(new_size, axis=new_size.dims)  # T'
     idxs = rf.where(mask, idxs - 1, new_time)  # new_time is the padding idx
     if out_dim.capacity is None and rf.is_static_traceable():
