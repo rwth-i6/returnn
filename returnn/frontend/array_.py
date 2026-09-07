@@ -339,7 +339,8 @@ def window(
     window_left: Optional[Union[Dim, int]] = None,
     padding: str = "same",
     pad_value: Optional[Union[int, float]] = None,
-    stride: int = 1,
+    stride: Union[int, Tensor] = 1,
+    out_spatial_dim: Optional[Dim] = None,
     use_mask: Optional[bool] = None,
 ) -> Tuple[Tensor, Dim]:
     """
@@ -353,7 +354,14 @@ def window(
     :param window_right:
     :param padding: "same" or "valid"
     :param pad_value:
-    :param stride:
+    :param stride: int, or a scalar Tensor for a stride that varies per step.
+        A Tensor keeps the shapes out of the host, which a static graph needs;
+        the out spatial dim then has device-side sizes.
+    :param out_spatial_dim: optional, only supported together with stride > 1.
+        With a Tensor stride the derived dim can only inherit the input capacity
+        (a stride of 1 must stay expressible),
+        so a caller that knows the smallest stride should pass a dim bounded by it --
+        the capacity-wide range is real compute.
     :param use_mask: whether we should mask to make sure the zero padding is correct
     :return: out, out_spatial_dim
     """
@@ -364,9 +372,24 @@ def window(
             )
         if use_mask:
             source = source.copy_masked(0, dims=[spatial_dim])
-    assert window_dim.dimension is not None
+    pad_window_dim = window_dim
+    if window_dim.dimension is None:
+        # The strided path below only does dim math on the window and one range over it,
+        # and that range takes the capacity, so a dynamic window keeps the shapes static.
+        # The reshape path cannot express one.
+        assert isinstance(stride, Tensor) or stride > 1, f"window: dynamic {window_dim} needs the strided path"
+        assert window_dim.capacity is not None, f"window: dynamic {window_dim} needs a declared capacity"
+        # The padding has to stay a static amount:
+        # a device-valued one is not a layout that packed storage can express,
+        # and a captured graph cannot resize its buffers per step.
+        # Padding by the capacity pads too much on the right, which the window then masks away,
+        # so only window_left may still shift the alignment and it has to be static.
+        assert window_left is not None and (isinstance(window_left, int) or window_left.dimension is not None), (
+            f"window: dynamic {window_dim} needs a static window_left, got {window_left}"
+        )
+        pad_window_dim = Dim(window_dim.capacity, name=f"{window_dim.name}:capacity")
     if padding == "same":
-        out_spatial_dim = spatial_dim
+        unstrided_out_spatial_dim = spatial_dim
         if window_right is not None:
             if isinstance(window_right, int):
                 window_right = Dim(window_right, name="window_right")
@@ -377,12 +400,12 @@ def window(
             assert isinstance(window_left, Dim)
         if window_right is None:
             if window_left is None:
-                window_right = window_dim // 2
-                window_left = window_dim.ceildiv_right(2) - 1
+                window_right = pad_window_dim // 2
+                window_left = pad_window_dim.ceildiv_right(2) - 1
             else:
-                window_right = window_dim - window_left - 1
+                window_right = pad_window_dim - window_left - 1
         if window_left is None:
-            window_left = window_dim - window_right - 1
+            window_left = pad_window_dim - window_right - 1
         source, (in_spatial_dim,) = rf.pad(
             source,
             axes=[spatial_dim],
@@ -392,16 +415,21 @@ def window(
         # shape[0] == n_time + window - 1
     elif padding == "valid":
         in_spatial_dim = spatial_dim
-        out_spatial_dim = spatial_dim - window_dim + 1
+        unstrided_out_spatial_dim = spatial_dim - window_dim + 1
     else:
         raise ValueError(f"invalid padding {padding!r}")
 
-    if stride > 1:
-        start_times, out_spatial_dim = rf.range_over_dim_strided(out_spatial_dim, stride=stride)  # (n_out_time,)
+    if isinstance(stride, Tensor) or stride > 1:
+        start_times, out_spatial_dim = rf.range_over_dim_strided(
+            unstrided_out_spatial_dim, stride=stride, out_dim=out_spatial_dim
+        )  # (n_out_time,)
         win_range = rf.range_over_dim(window_dim)  # (window,)
         indices = rf.combine_bc(start_times, "+", win_range)  # (n_out_time,window)
-        final = rf.gather(source, indices=indices, axis=in_spatial_dim)  # (n_out_time,window,...)
+        clip = isinstance(stride, Tensor) or window_dim.dimension is None
+        final = rf.gather(source, indices=indices, axis=in_spatial_dim, clip_to_valid=clip)
         return final, out_spatial_dim
+    assert out_spatial_dim is None  # only supported for the strided path
+    out_spatial_dim = unstrided_out_spatial_dim
 
     tiled_dimshuffle = rf.expand_dim(source, dim=window_dim)  # (window,n_time+window-1,...)
     # We want to shift every dim*time block by one to the left.

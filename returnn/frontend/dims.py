@@ -53,14 +53,24 @@ def range_over_dim_strided(
 ) -> Tuple[Tensor[T], Dim]:
     """
     :param dim:
-    :param stride:
+    :param stride: int, or a scalar Tensor for a stride that is only known on the device
     :param out_dim:
     :param dtype:
     :param device,
     :return: tensor with shape [dim], out_dim
     """
     if out_dim is None:
-        out_dim = dim.ceildiv_right(stride)
+        if isinstance(stride, Tensor):
+            # Dim math takes ints and Dims only, so derive the out dim from the sizes instead:
+            # ceildiv per sequence, on the device the sizes are already on.
+            # The capacity carries over: a stride only ever shortens, so it stays an upper bound,
+            # and a static graph needs one that does not depend on the drawn stride.
+            sizes = dim.get_size_tensor(device=stride.device)
+            out_dim = Dim(rf.ceil_divide(sizes, rf.cast(stride, sizes.dtype)), name=f"{dim.name}:strided")
+            # noinspection PyProtectedMember
+            out_dim.capacity = dim.capacity or dim._derived_capacity()
+        else:
+            out_dim = dim.ceildiv_right(stride)
     return rf.range_over_dim(out_dim, dtype=dtype, device=device) * stride, out_dim
 
 
