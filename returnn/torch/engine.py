@@ -31,7 +31,7 @@ from returnn.log import log
 from returnn.engine.base import EngineBase
 import returnn.frontend as rf
 from returnn.tensor import TensorDict, Tensor, Dim
-from returnn.datasets.basic import init_dataset, Dataset
+from returnn.datasets.basic import init_dataset, init_dataset_via_str, Dataset
 from returnn.util import basic as util
 from returnn.util import NumbersDict
 from returnn.util.basic import hms, NotSpecified
@@ -47,7 +47,7 @@ from .data import pipeline as data_pipeline
 from .data import returnn_dataset_wrapper
 from .data import extern_data as extern_data_util
 from .data.queued_data_iter import QueuedDataIter
-from .frontend.bridge import rf_module_to_pt_module
+from .frontend.bridge import rf_module_to_pt_module, wrapped_pt_module_to_rf_module
 from .util import diagnose_gpu
 from .util import graph_capture
 from .util import module as util_module
@@ -471,6 +471,95 @@ class Engine(EngineBase):
                 **util.get_fwd_compat_kwargs(),
             )
 
+    def _create_train_dataset_from_config(self) -> Optional[Dataset]:
+        """
+        :return: a fresh instance of the train dataset as defined in the config,
+            built like :func:`returnn.__main__.load_data` does
+            (incl. the dataset options taken from the global config, e.g. ``window``),
+            or None if the config does not define it (e.g. holds a dataset instance)
+        """
+        if self.config.is_typed("train"):
+            train_opts = self.config.typed_value("train")
+            if isinstance(train_opts, dict):
+                kwargs = {"name": "train", **train_opts}
+                Dataset.kwargs_update_from_config(self.config, kwargs)
+                return init_dataset(kwargs)
+            if callable(train_opts):
+                return init_dataset(train_opts, default_kwargs={"name": "train"})
+            return None
+        config_str = self.config.value("train", "")
+        if not config_str:
+            return None
+        return init_dataset_via_str(config_str, config=self.config, name="train")
+
+    def _refresh_batch_norm_stats_after_optimizer_eval(self):
+        """
+        Schedule-free optimizers (e.g. :class:`returnn.torch.optim.amuse.AMUSE`):
+        the params now hold the averaged weights x,
+        but the BatchNorm running stats were collected under the training iterate y.
+        Like the AMUSE reference implementation, forward some train batches in train mode
+        without gradient, so the running stats follow the averaged weights,
+        before evaluation and checkpoint saving.
+        Config ``schedule_free_batchnorm_refresh_batches`` (default 50), 0 disables it.
+        """
+        if not self._updater.is_schedule_free_optimizer():
+            return
+        num_batches = self.config.int("schedule_free_batchnorm_refresh_batches", 50)
+        if num_batches <= 0:
+            return
+        if self._graph_capture is not None:
+            print(
+                "BatchNorm stats refresh for the schedule-free optimizer: not under graph capture, skip.", file=log.v3
+            )
+            return
+        has_batch_norm = False
+        for module in self._pt_model.modules():
+            # noinspection PyProtectedMember
+            if isinstance(module, torch.nn.modules.batchnorm._BatchNorm) and module.track_running_stats:
+                has_batch_norm = True
+                break
+            rf_module = wrapped_pt_module_to_rf_module(module)
+            if isinstance(rf_module, rf.BatchNorm) and rf_module.running_mean is not None:
+                has_batch_norm = True
+                break
+        if not has_batch_norm:
+            return
+        print(
+            f"Refresh BatchNorm running stats with {num_batches} train batches under the averaged weights.",
+            file=log.v3,
+        )
+        # Not every dataset can be iterated a second time within the same epoch
+        # (e.g. DistributeFilesDataset keeps its epoch worker, which cannot go backwards),
+        # so use a fresh instance from the config when possible.
+        dataset = self._create_train_dataset_from_config()
+        own_dataset = dataset is not None and dataset is not self.train_dataset
+        if not own_dataset:
+            print(
+                "BatchNorm stats refresh without train dataset options in the config,"
+                " iterating the train dataset a second time within the epoch (not every dataset supports that).",
+                file=log.v3,
+            )
+            dataset = self.train_dataset
+        data_loader = self._create_data_loader(dataset, train=True)
+        self._pt_model.train()
+        try:
+            with torch.no_grad():
+                for batch_idx, extern_data_raw in enumerate(data_loader):
+                    if batch_idx >= num_batches:
+                        break
+                    extern_data = extern_data_util.raw_dict_to_extern_data(
+                        extern_data_raw,
+                        extern_data_template=self.extern_data,
+                        device=self._device,
+                        float_dtype=self._default_float_dtype,
+                        with_eval_targets=True,
+                    )
+                    self._run_step(extern_data, train_flag=True, train_func=True)
+        finally:
+            del data_loader
+            if own_dataset:
+                dataset.finish_epoch(free_resources=True)
+
     def train_epoch(self):
         """
         train one (sub)epoch
@@ -502,6 +591,8 @@ class Engine(EngineBase):
         self._reset_dev_memory_stats()
 
         self._on_epoch_start(dataset_name="train")
+        # Schedule-free optimizers: switch to the training iterate (see set_optimizer_training_mode).
+        self._updater.set_optimizer_training_mode(train=True)
 
         if self.config.bool("debug_shell_before_train_loop", False):
             print("debug_shell_before_train_loop", file=log.v1)
@@ -642,14 +733,21 @@ class Engine(EngineBase):
                     with record_function("reduce_grads"):
                         self._torch_distributed_ctx.maybe_reduce_grads(module=self._pt_model)
 
+                # A dummy warmup step of the graph capture computed on a dummy batch (see run_train_step),
+                # so its grads must not update the params and there is no grad norm worth logging.
+                dummy_step = self._graph_capture is not None and self._graph_capture.last_step_dummy
                 # only update the weights when every gradient accumulation loop ends
                 # (under graph capture with capture_optimizer, the update is inside the graph)
-                if perform_update_step and (self._graph_capture is None or not self._graph_capture.captures_optimizer):
+                if (
+                    perform_update_step
+                    and not dummy_step
+                    and (self._graph_capture is None or not self._graph_capture.captures_optimizer)
+                ):
                     with record_function("optimizer_step"):
                         self._updater.step(grad_scaler=self._grad_scaler)
                 zero_grad_next_step = perform_update_step
 
-                if self._updater.log_grad_norm_p is not None and perform_update_step:
+                if self._updater.log_grad_norm_p is not None and perform_update_step and not dummy_step:
                     key = f"grad_norm:p{simplify_and_format_number(self._updater.log_grad_norm_p)}"
                     assert key not in losses_dict
                     inv_norm_factors_dict[key] = 1.0  # once per update step
@@ -824,6 +922,9 @@ class Engine(EngineBase):
         self._maybe_report_dev_memory_stats()
 
         self._on_epoch_end(dataset_name="train")
+        # Schedule-free optimizers: switch to the averaged weights (see set_optimizer_training_mode).
+        self._updater.set_optimizer_training_mode(train=False)
+        self._refresh_batch_norm_stats_after_optimizer_eval()
 
         if self.epoch % self._save_model_epoch_interval == 0 or self.epoch == self._final_epoch:
             if self.model_filename:
