@@ -3302,6 +3302,40 @@ class PackedBackend(Backend[PackedRawTensor]):
                     dropout_p = att_dropout if train_flag else 0.0
                 else:
                     dropout_p = None  # dynamic train flag, cannot resolve to a static dropout_p
+        if is_packed(query) and is_packed(key) and is_packed(value):
+            # Chunk-local attention: every attention axis (kv, query spatial, feat) is a plain dim,
+            # the packed dims are pure batch dims (e.g. (batch, chunked time) with per-chunk axes).
+            # The varlen/flex paths only handle attention along the packed axis, so they cannot
+            # serve this; running on the inner buffers is exact and keeps everything packed.
+            # The operands are conformed first: the mem-chunks re-layouts mint distinct
+            # (but layout-equal) packings for k and v.
+            q_raw = _raw(query)
+            att_dims = [kv_spatial_dim, query_spatial_dim, qk_feat_dim, v_feat_dim]
+            if not any(_dim_refs_packed(d, q_raw) for d in att_dims if d is not None):
+                key = _conform_packing(key, q_raw)
+                value = _conform_packing(value, q_raw)
+                mask_ = (
+                    _conform_packing(attention_mask, q_raw) if isinstance(attention_mask, Tensor) else attention_mask
+                )
+                k_raw, v_raw = _raw(key), _raw(value)
+                if q_raw.same_packing(k_raw) and q_raw.same_packing(v_raw):
+                    if isinstance(mask_, Tensor) and is_packed(mask_):
+                        mask_ = _raw(mask_).inner
+                    inner_out = q_raw.inner_backend.scaled_dot_product_attention(
+                        q_raw.inner,
+                        k_raw.inner,
+                        v_raw.inner,
+                        attention_mask=mask_,
+                        att_dropout=att_dropout,
+                        att_dropout_broadcast=att_dropout_broadcast,
+                        v_feat_dim=v_feat_dim,
+                        qk_feat_dim=qk_feat_dim,
+                        kv_spatial_dim=kv_spatial_dim,
+                        query_spatial_dim=query_spatial_dim,
+                        is_causal=is_causal,
+                        scale=scale,
+                    )
+                    return q_raw.rewrap(inner_out, name="scaled_dot_product_attention")
         if _att_fast_paths_enabled("scaled_dot_product_attention") and attention_mask is None and dropout_p is not None:
             if not is_packed(query) and is_packed(key) and is_packed(value) and not is_causal:
                 k_raw = _raw(key)
