@@ -221,7 +221,15 @@ class OpCodeCompiler(NativeCodeCompiler):
         else:
             # Load as a Torch extension.
             # TORCH_LIBRARY / TORCH_LIBRARY_IMPL was used in the code.
-            torch.ops.load_library(self._so_filename)
+            try:
+                torch.ops.load_library(self._so_filename)
+            except OSError as exc:
+                # e.g. "file too short": a job killed mid-write leaves a truncated .so in the
+                # node-local cache, which then poisons every later run on that node.
+                print(f"{self}: cached lib failed to load ({exc}), recompiling")
+                os.remove(self._so_filename)
+                self._maybe_compile()
+                torch.ops.load_library(self._so_filename)
             module = getattr(torch.ops, self.base_name)
 
         self._mod = module
