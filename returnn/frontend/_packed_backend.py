@@ -4147,6 +4147,39 @@ class PackedBackend(Backend[PackedRawTensor]):
         return out
 
     @staticmethod
+    def scaled_gradient(tensor: Tensor, scale: Union[float, Tensor]) -> Tensor:
+        """scaled_gradient: identity forward, gradient scaled; elementwise, runs on the inner buffer"""
+        raw = _raw(tensor)
+        if isinstance(scale, Tensor) and is_packed(scale):
+            scale = _raw(_conform_packing(scale, raw)).inner
+        return raw.rewrap(raw.inner_backend.scaled_gradient(raw.inner, scale), name="scaled_gradient")
+
+    @staticmethod
+    def scaled_gradient_ext(
+        x: Tensor,
+        *,
+        scale: Union[float, Tensor] = 1.0,
+        shift: Optional[Union[float, Tensor]] = None,
+        scale_shift_by_sum_over_axis: Optional[Dim] = None,
+    ):
+        """
+        scaled_gradient_ext: identity forward, gradient scaled/shifted
+        (optionally by the sum over a plain axis, e.g. label smoothing over the vocab).
+        Elementwise per frame, so it runs on the inner buffer; a packed reduction axis falls back.
+        """
+        raw = _raw(x)
+        if scale_shift_by_sum_over_axis is None or not _dim_refs_packed(scale_shift_by_sum_over_axis, raw):
+            inner_out = raw.inner_backend.scaled_gradient_ext(
+                raw.inner, scale=scale, shift=shift, scale_shift_by_sum_over_axis=scale_shift_by_sum_over_axis
+            )
+            return raw.rewrap(inner_out, name="scaled_gradient_ext")
+        return _dim_aware_call(
+            "scaled_gradient_ext",
+            (x,),
+            dict(scale=scale, shift=shift, scale_shift_by_sum_over_axis=scale_shift_by_sum_over_axis),
+        )
+
+    @staticmethod
     def merge_dims(source: Tensor, *, dims: Sequence[Dim], out_dim: Dim) -> Tensor:
         """
         merge_dims.
