@@ -1284,13 +1284,14 @@ class TFBackend(Backend[tf.Tensor]):
                 and groups > 1
                 and groups == in_dim.dimension
                 and len(filter_size) <= 2
-                and not _grouped_conv_grad_supported()
+                and (tf_util.is_gpu_available_in_session() or not _grouped_conv_grad_supported())
             ):
                 # Depthwise (one group per input channel), as the Conformer conv block uses.
-                # Only taken where tf.nn.convolution's `groups` has no gradient
-                # ("Gradients for grouped convolutions are not supported on CPU", tf 2.10 in CI):
-                # where the generic path works it is also faster
-                # (measured on tf 2.18 CPU: 1.9 ms vs 4.2 ms per backward, same values).
+                # tf.nn.convolution's grouped path splits into per-group kernels on GPU:
+                # 6.2x slower forward at the conformer shape, and it dominated the train step.
+                # CPU keeps the generic path, which measured faster there,
+                # except where the grouped gradient is missing
+                # ("Gradients for grouped convolutions are not supported on CPU", tf 2.10 in CI).
                 # This op is 2D only and wants the filter as [*filter_size, in_dim, multiplier]:
                 # ours is [*filter_size, in_dim/groups=1, out_dim], and out_dim == in_dim here,
                 # so the multiplier is 1 and the last two axes just swap.
