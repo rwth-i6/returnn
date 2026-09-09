@@ -1645,7 +1645,9 @@ def expand_make_non_empty(source: Tensor, *, axis: Dim, out_dim: Optional[Dim] =
         # no-op
         return source, axis
     source, (new_axis,) = rf.pad(source, axes=[axis], padding=[(0, 1)], mode="constant", value=0)
-    source, new_axis = rf.slice(source, axis=new_axis, size=rf.maximum(axis.get_size_tensor(), 1), out_dim=out_dim)
+    size_dev = source.device if rf.is_static_traceable() else None
+    size_t = rf.maximum(axis.get_size_tensor(device=size_dev), 1)
+    source, new_axis = rf.slice(source, axis=new_axis, size=size_t, out_dim=out_dim)
     return source, new_axis
 
 
