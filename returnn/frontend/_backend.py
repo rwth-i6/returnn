@@ -548,7 +548,10 @@ class Backend(Generic[T]):
         A backend whose storage cannot be indexed along that dim brings its own.
         """
         idxs = rf.cumsum(repeats, spatial_dim=in_spatial_dim)  # [batch...,in_spatial_dim] -> idx in out_spatial_dim + 1
-        new_size = rf.gather(idxs, indices=in_spatial_dim.get_dim_value_tensor() - 1, axis=in_spatial_dim)  # [batch...]
+        # sum, not gather-of-last-cumsum: a fully empty in_spatial_dim has no last element to gather
+        # (empty text seqs in a CV set crashed here with index -1), and the reduce also masks padding
+        # instead of relying on the caller having zeroed it.
+        new_size = rf.reduce_sum(repeats, axis=in_spatial_dim)  # [batch...]
         dim_dev = rf.get_default_dim_size_device()
         if out_spatial_dim.dyn_size_ext is None:
             out_spatial_dim.dyn_size_ext = rf.copy_to_device(new_size, dim_dev)
