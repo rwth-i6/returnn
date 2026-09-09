@@ -76,6 +76,9 @@ class Engine(EngineBase):
         self._amp_policy = _amp_policy_from_config(config)
         self._log_batch_size = config.bool("log_batch_size", False)
         self._log_memory_usage = config.bool("tf_log_memory_usage", False)
+        # train steps to trace, printing where their time goes (see _print_profile)
+        self._profile_steps = set(config.int_list("tf_profile_step", []))
+        _set_cudnn_autotune(config.bool("tf_cudnn_autotune", bool(self._static_shapes_opts)))
         self._extra_fetches: Dict[str, tf.Tensor] = {}  # per step, for the log only
         self._loss: Optional[tf.Tensor] = None  # the objective, per step
         self._losses: Dict[str, tf.Tensor] = {}  # per-loss mean, for the log
@@ -218,10 +221,19 @@ class Engine(EngineBase):
                     ),
                     session=self.session,
                 )
+            # tracing costs time itself, so it applies to single steps, not to the whole run
+            run_metadata = tf_compat.v1.RunMetadata() if num_steps in self._profile_steps else None
+            run_options = (
+                tf_compat.v1.RunOptions(trace_level=tf_compat.v1.RunOptions.FULL_TRACE)
+                if run_metadata is not None
+                else None
+            )
             step_start_time = time.time()
-            res = self.session.run(fetches, feed_dict=feed_dict)
+            res = self.session.run(fetches, feed_dict=feed_dict, options=run_options, run_metadata=run_metadata)
             step_duration = time.time() - step_start_time
             computing_time += step_duration
+            if run_metadata is not None:
+                _print_profile(run_metadata, step=num_steps)
             # the extra fetches are diagnostics of the step, not scores of the epoch
             scores = {k: float(v) for k, v in res.items() if k != "optim" and k not in self._extra_fetches}
             if self.config.bool("stop_on_nonfinite_train_score", True):
@@ -1187,6 +1199,120 @@ def _format_extra_fetch(key: str, value: Any) -> str:
     if key.startswith("mem_usage:"):
         return f"{key} {util.human_bytes_size(int(value))}"
     return f"{key} {float(value):.5f}"
+
+
+def _set_cudnn_autotune(enabled: bool):
+    """
+    :param enabled: whether cuDNN may search for a conv algorithm
+
+    cuDNN autotune caches per exact conv shape,
+    so under dynamic shapes every step is a new key and pays the search again:
+    2.5 s/step against 1.0 s/step on the loq model.
+    With bounded shapes the key repeats, so there it stays on.
+
+    The env var is the only knob TF has for this (its own test utils set the same one),
+    and cuDNN reads it at the first conv, i.e. after the engine is constructed.
+    An explicit setting wins over ours.
+    """
+    if "TF_CUDNN_USE_AUTOTUNE" in os.environ:
+        return
+    os.environ["TF_CUDNN_USE_AUTOTUNE"] = "1" if enabled else "0"
+
+
+def _print_profile(run_metadata: Any, *, step: int, top: int = 25):
+    """
+    :param run_metadata: of a step run with trace_level FULL_TRACE
+    :param step: for the log
+    :param top: how many op types to list
+
+    Prints where the step spent its time, from TF's own step stats.
+    The kernel times sit on the per-stream device entries;
+    ``/stream:all`` repeats them, the rest only schedule them.
+    Aggregated by graph node, so the slow step names the layer to fix,
+    with the launch count next to it (a huge count is a split-up op).
+    """
+    per_node: Dict[str, float] = {}
+    per_node_count: Dict[str, int] = {}
+    per_device_ms: Dict[str, float] = {}
+    node_op_type: Dict[str, str] = {}
+    node_label: Dict[str, str] = {}
+    per_kernel: Dict[str, float] = {}
+    per_kernel_count: Dict[str, int] = {}
+    for dev_stats in run_metadata.step_stats.dev_stats:
+        device_ms = sum(node.all_end_rel_micros for node in dev_stats.node_stats) / 1000.0
+        per_device_ms[dev_stats.device] = device_ms
+        if "/stream:" not in dev_stats.device:
+            # the scheduling entries, where the label reads "<name> = <OpType>(<inputs>)":
+            # the op type of a node lives only here, the stream entries name the kernel
+            for node_stats in dev_stats.node_stats:
+                label = node_stats.timeline_label or ""
+                if " = " in label:
+                    node_op_type[node_stats.node_name] = label.split(" = ", 1)[1].split("(", 1)[0]
+                    node_label[node_stats.node_name] = label
+            continue
+        if dev_stats.device.endswith("/stream:all"):
+            continue
+        for node_stats in dev_stats.node_stats:
+            node = node_stats.node_name.split(":")[0]
+            per_node[node] = per_node.get(node, 0.0) + node_stats.all_end_rel_micros / 1000.0
+            per_node_count[node] = per_node_count.get(node, 0) + 1
+            # the CUDA kernel itself, which is the only attribution XLA fusions have:
+            # their kernels carry no graph node name
+            kernel = (node_stats.timeline_label or node).split("(", 1)[0].strip()
+            per_kernel[kernel] = per_kernel.get(kernel, 0.0) + node_stats.all_end_rel_micros / 1000.0
+            per_kernel_count[kernel] = per_kernel_count.get(kernel, 0) + 1
+    total_ms = sum(per_node.values())
+    print(f"profile step {step}: {total_ms:.1f} ms in GPU kernels", file=log.v3)
+    for device, device_ms in sorted(per_device_ms.items()):
+        print(f"  device {device}: {device_ms:.1f} ms", file=log.v3)
+    if not total_ms:  # no per-stream stats, e.g. on CPU or without CUPTI
+        return
+    per_type: Dict[str, float] = {}
+    per_type_count: Dict[str, int] = {}
+    for node, time_ms in per_node.items():
+        op_type = node_op_type.get(node, "?")
+        per_type[op_type] = per_type.get(op_type, 0.0) + time_ms
+        per_type_count[op_type] = per_type_count.get(op_type, 0) + 1
+    per_scope: Dict[str, float] = {}
+    per_scope_count: Dict[str, int] = {}
+    for node, time_ms in per_node.items():
+        # the graph scope, i.e. forward vs gradients vs optimizer vs the norm reductions
+        parts = node.split("/")
+        scope = "/".join(parts[:2]) if len(parts) > 1 else "(top level)"
+        per_scope[scope] = per_scope.get(scope, 0.0) + time_ms
+        per_scope_count[scope] = per_scope_count.get(scope, 0) + 1
+    print("  by scope:", file=log.v3)
+    for scope, time_ms in sorted(per_scope.items(), key=lambda item: -item[1])[:top]:
+        print(
+            f"  {time_ms:8.1f} ms {time_ms / total_ms * 100:5.1f}% {per_scope_count[scope]:6d} nodes {scope}",
+            file=log.v3,
+        )
+    print("  by op type:", file=log.v3)
+    # all types down to 0.1 %, not only the top ones: this table is what a cross-framework
+    # comparison is built from, and the tail carries the op-count difference
+    for op_type, time_ms in sorted(per_type.items(), key=lambda item: -item[1]):
+        if time_ms < 0.001 * total_ms:
+            break
+        # the costliest node of the type, with its inputs: what the type is spent on
+        example = max((n for n in per_node if node_op_type.get(n) == op_type), key=lambda n: per_node[n], default="")
+        print(
+            f"  {time_ms:8.1f} ms {time_ms / total_ms * 100:5.1f}% {per_type_count[op_type]:6d} nodes {op_type}"
+            f"  e.g. {node_label.get(example, example)[:140]}",
+            file=log.v3,
+        )
+    print(f"  by kernel ({len(per_kernel)} distinct, {sum(per_kernel_count.values())} launches):", file=log.v3)
+    for kernel, time_ms in sorted(per_kernel.items(), key=lambda item: -item[1])[:top]:
+        print(
+            f"  {time_ms:8.1f} ms {time_ms / total_ms * 100:5.1f}% {per_kernel_count[kernel]:6d}x {kernel[:110]}",
+            file=log.v3,
+        )
+    print("  by node:", file=log.v3)
+    for node, time_ms in sorted(per_node.items(), key=lambda item: -item[1])[:top]:
+        print(
+            f"  {time_ms:8.1f} ms {time_ms / total_ms * 100:5.1f}%"
+            f" {per_node_count[node]:6d}x {node_op_type.get(node, '?')} {node}",
+            file=log.v3,
+        )
 
 
 def _amp_policy_from_config(config: Config) -> Optional[rf.AmpPolicy]:
