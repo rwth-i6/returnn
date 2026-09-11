@@ -4213,6 +4213,74 @@ class PackedBackend(Backend[PackedRawTensor]):
         )
 
     @staticmethod
+    def masked_select(
+        tensor: Tensor, *, mask: Tensor, dims: Sequence[Dim], out_dim: Optional[Dim] = None
+    ) -> Tuple[Tensor, Dim]:
+        """masked select"""
+        if not is_packed(tensor) or set(dims) == set(mask.dims):
+            return _dim_aware_call("masked_select", (tensor,), dict(mask=mask, dims=dims, out_dim=out_dim))
+        (dim,) = dims  # the frontend pre-merges multiple dims
+        # noinspection PyProtectedMember
+        from .array_ import _masked_select_subset
+
+        if (
+            dim != _raw(tensor).orig_dims[-1]
+            or len(_raw(tensor).orig_dims) != 2
+            or _raw(tensor).inner_backend.name != "torch"  # masked_select_bound + raw indexing are torch
+        ):
+            return _masked_select_subset(tensor, mask=mask, dim=dim, out_dim=out_dim)
+        raw = _raw(tensor)
+        from returnn.torch.util.array_ import masked_select_bound
+
+        batch = raw.orig_dims[0]
+        dev = raw.inner.device
+        mask_p = _conform_packing(mask, raw)
+        if not (is_packed(mask_p) and raw.same_packing(_raw(mask_p))):
+            return _masked_select_subset(tensor, mask=mask, dim=dim, out_dim=out_dim)
+        mask_inner = _raw(mask_p).inner
+        fm = _frame_mask(raw)
+        if fm is not None:  # junk/gap frames must never be selected
+            mask_inner = mask_inner & fm
+        # per-seq counts: sum the mask per sequence (one scatter-add over the seq coords)
+        seq = _frame_coords(raw, batch)
+        lens = rf.scatter(
+            rf.cast(mask_inner, "int32"), indices=seq, indices_dim=raw.packed_dim, out_dim=batch, mode="sum"
+        )
+        if out_dim is None:
+            out_dim = Dim(lens, name="masked_select")
+        elif out_dim.dyn_size_ext is None or out_dim.dyn_size_ext.raw_tensor is None:
+            out_dim.dyn_size_ext = lens
+        # bound: a selection never exceeds its input content
+        if rf.is_static_traceable():
+            assert raw.content_bound, f"packed masked_select: static traceable needs a content bound on {raw}"
+            bound = raw.content_bound
+            if out_dim.capacity is None and raw.orig_dims[-1].capacity is not None:
+                out_dim.capacity = raw.orig_dims[-1].capacity
+        else:
+            bound = None
+        if bound is not None:
+            inner_out_raw, _ = masked_select_bound(raw.inner.raw_tensor, mask_inner.raw_tensor, bound=bound)
+            out_packed_dim = Dim(bound, name="masked_select_packed")
+        else:
+            total = rf.copy_to_device(rf.reduce_sum(lens, axis=batch), dev)
+            out_packed_dim = Dim(total, name="masked_select_packed")
+            inner_out_raw = raw.inner.raw_tensor[mask_inner.raw_tensor.to(raw.inner.raw_tensor.device) != 0]
+        rem_dims = [d for d in raw.inner.dims if d != raw.packed_dim]
+        inner_out = Tensor(
+            "masked_select", dims=[out_packed_dim] + rem_dims, dtype=tensor.dtype, raw_tensor=inner_out_raw
+        )
+        helper = PackedRawTensor(
+            inner=inner_out,
+            packed_dim=out_packed_dim,
+            orig_dims=(batch, out_dim),
+            content_bound=bound,
+        )
+        out = helper.rewrap(inner_out, name="masked_select")
+        if tensor.sparse_dim is not None:
+            out.sparse_dim = tensor.sparse_dim
+        return out, out_dim
+
+    @staticmethod
     def merge_dims(source: Tensor, *, dims: Sequence[Dim], out_dim: Dim) -> Tensor:
         """
         merge_dims.
@@ -4550,7 +4618,6 @@ for _name in [
     "expand_dim",
     "flip_no_mask",
     "masked_scatter",
-    "masked_select",
     "reshape",
     "scatter",
     "search_sorted",

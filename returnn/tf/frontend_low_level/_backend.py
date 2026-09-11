@@ -2055,7 +2055,12 @@ class TFBackend(Backend[tf.Tensor]):
         :return: tensor with the mask dims replaced by a single new dim, and that dim
         """
         assert mask.dtype == "bool"
-        assert set(mask.dims) == set(dims)
+        if set(dims) != set(mask.dims):
+            assert len(dims) == 1  # the frontend pre-merges multiple dims
+            # noinspection PyProtectedMember
+            from returnn.frontend.array_ import _masked_select_subset
+
+            return _masked_select_subset(tensor, mask=mask, dim=dims[0], out_dim=out_dim)
         remaining_dims = [d for d in tensor.dims if d not in mask.dims]
         if not out_dim:
             out_dim = Dim(None, name="masked_select")

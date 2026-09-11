@@ -944,7 +944,12 @@ class ReturnnLayersBackend(Backend[Layer]):
             if mask==True for all elements, the returned tensor would be simply the flattened input tensor.
         """
         assert mask.dtype == "bool"
-        assert set(mask.dims) == set(dims)
+        if set(dims) != set(mask.dims):
+            assert len(dims) == 1  # the frontend pre-merges multiple dims
+            # noinspection PyProtectedMember
+            from returnn.frontend.array_ import _masked_select_subset
+
+            return _masked_select_subset(tensor, mask=mask, dim=dims[0], out_dim=out_dim)
         if not out_dim:
             out_dim = Dim(None, name="mask")
         return (

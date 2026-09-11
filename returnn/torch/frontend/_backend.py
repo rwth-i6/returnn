@@ -2175,7 +2175,12 @@ class TorchBackend(Backend[torch.Tensor]):
         from returnn.torch.util.array_ import masked_select
 
         assert mask.dtype == "bool"
-        assert set(mask.dims) == set(dims)
+        if set(dims) != set(mask.dims):
+            assert len(dims) == 1  # the frontend pre-merges multiple dims
+            # noinspection PyProtectedMember
+            from returnn.frontend.array_ import _masked_select_subset
+
+            return _masked_select_subset(tensor, mask=mask, dim=dims[0], out_dim=out_dim)
         remaining_dims = [d for d in tensor.dims if d not in mask.dims]
         tensor_templ_dims = tuple(dims) + tuple(remaining_dims)
         in_raw = tensor.copy_compatible_to_dims_raw(tensor_templ_dims)
