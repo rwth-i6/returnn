@@ -752,7 +752,9 @@ def masked_select(
     mask, in_dim_ext = rf.expand_make_non_empty(mask, axis=in_dim)
     tensor, _ = rf.expand_make_non_empty(tensor, axis=in_dim, out_dim=in_dim_ext)
     idxs = rf.cumsum(rf.cast(mask, "int32"), spatial_dim=in_dim_ext)  # [T,B] -> idx in T' + 1
-    new_size = rf.gather(idxs, indices=in_dim_ext.get_dim_value_tensor() - 1, axis=in_dim_ext)  # [B]
+    lens = in_dim_ext.get_size_tensor(device=idxs.device)
+    new_size = rf.gather(idxs, indices=rf.maximum(lens - 1, 0), axis=in_dim_ext)  # [B]
+    new_size = rf.where(lens > 0, new_size, 0)
     if rf.is_static_traceable():
         new_size_ = new_size
     else:
