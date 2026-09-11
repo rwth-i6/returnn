@@ -1306,6 +1306,17 @@ def slice(
                 out_dim = size
             elif isinstance(size, (int, Tensor)):
                 out_dim = Dim(size, name="slice")
+                # noinspection PyProtectedMember
+                if (
+                    isinstance(size, Tensor)
+                    and rf.is_static_traceable()
+                    and out_dim.capacity is None
+                    and out_dim._derived_capacity() is None
+                ):
+                    raise ValueError(
+                        f"rf.slice: static traceable needs a capacity for the out dim of a Tensor size;"
+                        f" pass out_dim with an explicit capacity (slicing {axis})"
+                    )
             else:
                 raise TypeError(f"invalid type {type(size)} for size {size}")
             assert step is None or (isinstance(step, int) and step == 1)
@@ -1647,6 +1658,8 @@ def expand_make_non_empty(source: Tensor, *, axis: Dim, out_dim: Optional[Dim] =
     source, (new_axis,) = rf.pad(source, axes=[axis], padding=[(0, 1)], mode="constant", value=0)
     size_dev = source.device if rf.is_static_traceable() else None
     size_t = rf.maximum(axis.get_size_tensor(device=size_dev), 1)
+    if out_dim is None:
+        out_dim = Dim(size_t, name="non_empty", bounded_by=axis)
     source, new_axis = rf.slice(source, axis=new_axis, size=size_t, out_dim=out_dim)
     return source, new_axis
 
