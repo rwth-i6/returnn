@@ -1179,8 +1179,12 @@ class GraphCapturedTrainStep:
             # (saved activations are not user-visible outputs here, so their layout is free);
             # without torch.compile's fw->bwd stride negotiation (absent under raw aot_function)
             # the bwd input stride asserts then fail.
-            # Shape padding (pad_mm, the joint-graph pass in partition_fn) stays on.
             inductor_config_.comprehensive_padding = False
+            # pad_mm shape padding is off for the same reason:
+            # even as a joint pass it can leave a boundary view's meta at the dense strides
+            # while the fw half returns the padded view,
+            # failing the bwd input stride assert (chunked-attention repro).
+            inductor_config_.shape_padding = False
             if self._activation_memory_budget is not None:
                 functorch_config.activation_memory_budget = float(self._activation_memory_budget)
             if self._aggressive_recomputation:
@@ -1231,12 +1235,13 @@ class GraphCapturedTrainStep:
 
             def partition_fn(gm, joint_inputs, **kwargs):
                 """
-                Like the torch.compile path: the Inductor joint-graph passes
-                (incl. pad_mm shape padding) run on the JOINT graph before partitioning,
-                so fw and bwd split a graph whose metas already carry the padded layouts
-                and the saved-activation strides agree across the graph boundary.
-                (Splitting the unpadded joint instead, with compile_fx padding only
-                within the fw, hits the compiled bwd's input stride asserts;
+                Like the torch.compile path:
+                the Inductor joint-graph passes run on the joint graph before partitioning,
+                so fw and bwd split one consistent graph.
+                (Shape padding is disabled entirely, see above:
+                with compile_fx padding only within the fw
+                it hits the compiled bwd's input stride asserts,
+                and even as a joint pass it can leave boundary-view metas dense;
                 the torch.compile fw->bwd stride negotiation does not function
                 under raw aot_function -- repro-verified, torch 2.7.)
                 The halves are then compiled with compile_fx_inner (no joint-pass re-run), like torch.compile.
