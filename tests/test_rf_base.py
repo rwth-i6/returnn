@@ -305,6 +305,38 @@ def test_dim_size_after_declare_same_as():
     run_model(extern_data, lambda **_kwargs: rf.Module(), _forward_step, test_tensorflow=False)
 
 
+def test_sinusoidal_positional_encoding_eager_dynamic_no_cache():
+    import gc
+    import weakref
+    import torch
+    from returnn.frontend.attention import _sinusoidal_positional_encoding_cache as pos_enc_cache
+
+    gc_was_enabled = gc.isenabled()
+    gc.disable()
+    try:
+        feat_dim = Dim(8, name="feat")
+        batch_dim_ = Dim(2, name="batch")
+        time_dim = Dim(
+            Tensor("time", [batch_dim_], dtype="int32", raw_tensor=torch.tensor([5, 3], dtype=torch.int32)),
+            name="time",
+        )
+        # noinspection PyProtectedMember
+        size_before = pos_enc_cache._lru_cache.cache_info().currsize
+        emb = rf.sinusoidal_positional_encoding(spatial_dim=time_dim, feat_dim=feat_dim, device="cpu")
+        # noinspection PyProtectedMember
+        size_after = pos_enc_cache._lru_cache.cache_info().currsize
+        assert size_after == size_before, "eager dynamic spatial dims must not be cached"
+        ref_dim = weakref.ref(time_dim)
+        ref_emb_raw = weakref.ref(emb.raw_tensor)
+        del emb
+        del time_dim
+        assert ref_dim() is None, "per-batch dim must be freed by refcount"
+        assert ref_emb_raw() is None, "encoding raw tensor must be freed by refcount"
+    finally:
+        if gc_was_enabled:
+            gc.enable()
+
+
 def test_dim_mask():
     time_dim = Dim(Tensor("time", [batch_dim], dtype="int32"))
     in_dim = Dim(7, name="in")
