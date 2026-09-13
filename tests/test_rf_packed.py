@@ -2050,6 +2050,20 @@ def test_cu_seqlens_with_host_lens_and_a_device_total():
     assert cu.raw_tensor.tolist() == [0, 5, 8]
 
 
+def test_gather_with_a_static_extra_index_dim_keeps_the_packing():
+    rf.select_backend_torch()
+    x, batch_dim, time_dim, feat_dim = _make_input(batch_size=3, seq_lens=(7, 5, 4))
+    xp = packed.pack(x)
+    mem_dim = Dim(2, name="mem")
+    idx = rf.combine_bc(rf.range_over_dim(time_dim), "+", rf.range_over_dim(mem_dim) - mem_dim.dimension)
+    ref = rf.gather(x, indices=idx, axis=time_dim, clip_to_valid=True)
+    packed._warned_fallback_ops.clear()
+    out = rf.gather(xp, indices=idx, axis=time_dim, clip_to_valid=True)
+    assert not packed._warned_fallback_ops, packed._warned_fallback_ops
+    assert out.raw_tensor.packed_dim is xp.raw_tensor.packed_dim
+    _assert_equal_non_padded(out, ref, batch_dim, time_dim)
+
+
 def test_shift_along_the_packed_dim_keeps_the_packing():
     rf.select_backend_torch()
     x, batch_dim, time_dim, feat_dim = _make_input(batch_size=3, seq_lens=(7, 5, 4))
@@ -2103,6 +2117,36 @@ def test_batch_norm_packed_dense_bound_train():
         numpy.testing.assert_allclose(
             p_dense.raw_tensor.detach().numpy(), p_bound.raw_tensor.detach().numpy(), rtol=1e-5, atol=1e-6
         )
+
+
+def test_gather_per_seq_index_drops_the_time_dim():
+    """indices without the gathered time dim select frames per sequence, so the result has no time dim"""
+    rf.select_backend_torch()
+    x, batch_dim, time_dim, feat_dim = _make_input(batch_size=3, seq_lens=(7, 5, 4))
+    xp = packed.pack(x, gap=2)
+    k_dim = Dim(2, name="k")
+    idx_b = Tensor("idx", dims=[batch_dim], dtype="int32", raw_tensor=torch.tensor([6, 0, 3], dtype=torch.int32))
+    idx_bk = Tensor(
+        "idx",
+        dims=[batch_dim, k_dim],
+        dtype="int32",
+        raw_tensor=torch.tensor([[6, 1], [0, 4], [3, 2]], dtype=torch.int32),
+    )
+    for idx in (idx_b, idx_bk):
+        ref = rf.gather(x, indices=idx, axis=time_dim)
+        out = rf.gather(xp, indices=idx, axis=time_dim)
+        assert time_dim not in out.dims, (idx.dims, out.dims)
+        out = packed.unpack(out) if packed.is_packed(out) else out
+        out = out.copy_compatible_to_dims(ref.dims)
+        numpy.testing.assert_allclose(out.raw_tensor.detach().numpy(), ref.raw_tensor.detach().numpy(), rtol=1e-6)
+    vocab = Dim(9, name="vocab")
+    codes = Tensor("codes", dims=[batch_dim, time_dim], dtype="int32")
+    codes.raw_tensor = torch.arange(21, dtype=torch.int32).reshape(3, 7) % 9
+    codes_p = rf.set_sparse_dim(packed.pack(codes, gap=2), vocab)
+    out = rf.gather(codes_p, indices=idx_b, axis=time_dim)
+    assert out.sparse_dim == vocab, out
+    ref = rf.gather(rf.set_sparse_dim(codes, vocab), indices=idx_b, axis=time_dim)
+    numpy.testing.assert_array_equal(out.raw_tensor.numpy(), ref.raw_tensor.numpy())
 
 
 def test_softmax_over_a_single_packed_axis_with_a_bound():
