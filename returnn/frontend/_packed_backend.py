@@ -4260,13 +4260,16 @@ class PackedBackend(Backend[PackedRawTensor]):
             return _dim_aware_call("gather", (source,), kwargs)
         if is_packed(indices):
             idx = _raw(_conform_packing(indices, raw)).inner
-        elif set(indices.dims).issubset(set(raw.orig_dims)):
+        elif _indices_stay_in_the_packing(indices, raw):
             idx = _pack_like(indices, raw)
             if idx is None:
                 return _dim_aware_call("gather", (source,), kwargs)
         else:
             out_spatial_dim = _gather_relayout_out_dim(indices, raw)
             if out_spatial_dim is None:
+                out = _gather_per_seq(source, raw, indices=indices, clip_to_valid=clip_to_valid)
+                if out is not None:
+                    return out
                 return _dim_aware_call("gather", (source,), kwargs)
             return _gather_relayout(
                 source, raw, indices=indices, clip_to_valid=clip_to_valid, out_spatial_dim=out_spatial_dim
@@ -4776,6 +4779,18 @@ def _last_row(packed_dim: Dim, dtype: str) -> Union[int, Tensor]:
     return n - 1 if isinstance(n, int) else rf.cast(n - 1, dtype)
 
 
+def _indices_stay_in_the_packing(indices: Tensor, raw: PackedRawTensor) -> bool:
+    """
+    :param indices: plain gather indices along the innermost packed dim
+    :param raw: the packing gathered from
+    :return: whether every index addresses a frame within its own sequence, so the result keeps the
+        packing: the indices are over the gathered dim (and maybe the other packed dims) and otherwise
+        only over static dims, which become per-frame axes of the result, e.g. [time, mem] for a chunk history.
+        Indices without the gathered dim select frames per sequence, so the result has no packing to keep.
+    """
+    return raw.orig_dims[-1] in indices.dims and all(
+        d in raw.orig_dims or d.dimension is not None for d in indices.dims
+    )
 
 
 def _shifts_along_the_packed_dim(source: Tensor, axis: Dim) -> bool:
@@ -4891,6 +4906,42 @@ def _repeat_out_packed_dim(
     )
     factor = -(-out_cap // in_cap)
     return Dim(in_raw.content_bound * factor, name="repeat_packed")
+
+
+def _gather_per_seq(source: Tensor, raw: PackedRawTensor, *, indices: Tensor, clip_to_valid: bool) -> Optional[Tensor]:
+    """
+    Gather along the innermost packed dim with indices over the sequences but not over the gathered dim
+    (one frame per sequence, or a static number of them):
+    every sequence selects among its own frames and the packing is left behind,
+    so the result is a plain tensor over the indices dims and the source's other dims,
+    as the padded gather produces.
+
+    :param source: packed over (seqs, frames)
+    :param raw: its packing
+    :param indices: over the seqs dim and otherwise static dims only
+    :param clip_to_valid: clip every index into its sequence
+    :return: the plain result, or None when the indices are over anything else
+    """
+    seqs_dim = raw.orig_dims[0]
+    if seqs_dim not in indices.dims or not all(d == seqs_dim or d.dimension is not None for d in indices.dims):
+        return None
+    dev = raw.inner.device
+    starts, starts_dim = raw.seq_starts(device=dev)
+    assert starts_dim == seqs_dim, (starts_dim, seqs_dim)
+    idx = rf.cast(rf.copy_to_device(indices, dev), starts.dtype)
+    if clip_to_valid:
+        lens = _device_lens(raw)
+        if lens is None:
+            lens = rf.copy_to_device(raw.seq_lens, dev)
+        idx = rf.clip_by_value(idx, 0, rf.maximum(rf.cast(lens, idx.dtype) - 1, 0))
+    rows = rf.combine_bc(starts, "+", idx)
+    rows = rf.clip_by_value(rows, 0, _last_row(raw.packed_dim, rows.dtype))
+    out = rf.gather(raw.inner, indices=rows, axis=raw.packed_dim)
+    if source.sparse_dim is not None:
+        out.sparse_dim = source.sparse_dim
+    if source.feature_dim is not None and source.feature_dim in out.dims:
+        out.feature_dim = source.feature_dim
+    return out
 
 
 def _gather_relayout_out_dim(indices: Tensor, raw: PackedRawTensor) -> Optional[Dim]:
