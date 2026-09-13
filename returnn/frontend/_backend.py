@@ -1730,9 +1730,11 @@ class Backend(Generic[T]):
             # query_spatial_dim can be kv_spatial_dim itself (full-sequence self-attention, both roles):
             # rewriting the kv side to the separate masked hist dim resolves the double use.
             # bounded_by: the hist lens are 1..axis-size, so the axis bounds them
-            # (under the bound-shape regime the axis capacity then bounds hist_dim too)
+            # (under the bound-shape regime the axis capacity then bounds hist_dim too).
+            # dim sizes live on the host by convention, but the softmax mask needs them on the
+            # data device, and under tracing that copy is a sync, which capture does not allow
             hist_dim = Dim(
-                rf.range_over_dim(query_spatial_dim, device="cpu") + 1,
+                rf.range_over_dim(query_spatial_dim, device=query.device if rf.is_static_traceable() else "cpu") + 1,
                 name=f"{kv_spatial_dim.description}:kv",
                 bounded_by=kv_spatial_dim,
             )
