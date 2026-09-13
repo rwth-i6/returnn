@@ -2122,6 +2122,31 @@ def test_softmax_over_a_single_packed_axis_with_a_bound():
         )
 
 
+def test_batch_norm_packed_dense_bound_with_a_static_axis():
+    """the masked batch_norm statistics also cover a static axis next to the packed one, no re-layout loop"""
+    rf.select_backend_torch()
+    x, batch_dim, time_dim, feat_dim = _make_input(seq_lens=(3, 2), feat=2, seed=9)
+    k_dim = Dim(2, name="k")
+    xk = Tensor("xk", dims=[batch_dim, time_dim, k_dim, feat_dim], dtype="float32")
+    xk.raw_tensor = torch.arange(24, dtype=torch.float32).reshape(2, 3, 2, 2)
+    with rf.set_default_device_ctx("cpu"):
+        rf.set_random_seed(3)
+        bn_dense = rf.BatchNorm(feat_dim, use_mask=False)
+        bn_bound = rf.BatchNorm(feat_dim, use_mask=False)
+        with rf.get_run_ctx().train_flag_ctx(True):
+            out_dense = bn_dense(packed.pack(xk))
+            out_bound = bn_bound(packed.regap(packed.pack(xk), 0, total_bound=8))
+        assert packed.is_packed(out_bound)
+    _assert_equal_non_padded(out_bound, packed.unpack(out_dense), batch_dim, time_dim)
+    for p_dense, p_bound in [
+        (bn_dense.running_mean, bn_bound.running_mean),
+        (bn_dense.running_variance, bn_bound.running_variance),
+    ]:
+        numpy.testing.assert_allclose(
+            p_dense.raw_tensor.detach().numpy(), p_bound.raw_tensor.detach().numpy(), rtol=1e-5, atol=1e-6
+        )
+
+
 def test_shift_and_pad_with_a_per_seq_pad_value():
     """a pad value over the batch dim applies per sequence in the packed shift and pad"""
     rf.select_backend_torch()
