@@ -2191,6 +2191,22 @@ def test_batch_norm_packed_dense_bound_with_a_static_axis():
         )
 
 
+def test_pack_dense_total_bound_static_buffer():
+    """a dense pack with total_bound allocates the bound-sized static buffer, content first"""
+    rf.select_backend_torch()
+    x, batch_dim, time_dim, feat_dim = _make_input(seq_lens=(4, 2))
+    xp = packed.pack(x, total_bound=10)
+    raw = xp.raw_tensor
+    assert raw.packed_dim.dimension == 10 and raw.inner.raw_tensor.shape[0] == 10, raw
+    assert raw.content_bound == 10, raw
+    _assert_equal_non_padded(xp, x, batch_dim, time_dim)
+    content = torch.cat([x.raw_tensor[0, :4], x.raw_tensor[1, :2]])
+    numpy.testing.assert_allclose(raw.inner.raw_tensor[:6].detach().numpy(), content.numpy())
+    out = rf.reduce_mean(xp, axis=time_dim).copy_compatible_to_dims([batch_dim, feat_dim])
+    ref = rf.reduce_mean(x, axis=time_dim).copy_compatible_to_dims([batch_dim, feat_dim])
+    numpy.testing.assert_allclose(out.raw_tensor.detach().numpy(), ref.raw_tensor.detach().numpy(), rtol=1e-5)
+
+
 def test_shift_and_pad_with_a_per_seq_pad_value():
     """a pad value over the batch dim applies per sequence in the packed shift and pad"""
     rf.select_backend_torch()

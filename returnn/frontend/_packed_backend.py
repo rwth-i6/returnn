@@ -5223,7 +5223,7 @@ def pack(
         dims = _auto_pack_dims(source)
         assert dims, f"pack: no dims with dynamic length found in {source}"
     content_bound = None  # set below in the gapped/aligned branch (dense path: see the ctor call)
-    if gap or align > 1:
+    if gap or align > 1 or total_bound is not None or (out_dim is not None and out_dim.dimension is not None):
         # gapped/aligned layout: scatter frames to their positions, zeros in between the sequences
         last = dims[-1]
         assert last.dyn_size_ext is not None, f"pack: innermost packed dim {last} needs dyn sizes"
