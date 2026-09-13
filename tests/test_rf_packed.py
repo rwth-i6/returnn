@@ -2063,6 +2063,65 @@ def test_shift_along_the_packed_dim_keeps_the_packing():
         _assert_equal_non_padded(out_p, ref, batch_dim, time_dim)
 
 
+def test_reduce_over_time_dense_bound_tail():
+    """a dense bound-sized buffer has unused rows past the content, which no per-sequence op may count"""
+    rf.select_backend_torch()
+    x, batch_dim, time_dim, feat_dim = _make_input(seq_lens=(4, 2))
+    xp = packed.regap(packed.pack(x), 0, total_bound=10)
+    assert xp.raw_tensor.packed_dim.dimension == 10
+    for mode in ("mean", "sum", "logsumexp"):
+        out_p = rf.reduce(xp, mode=mode, axis=time_dim)
+        out_ref = rf.reduce(x, mode=mode, axis=time_dim)
+        assert not packed.is_packed(out_p)
+        out_p = out_p.copy_compatible_to_dims(out_ref.dims)
+        numpy.testing.assert_allclose(
+            out_p.raw_tensor.detach().numpy(), out_ref.raw_tensor.detach().numpy(), rtol=1e-5, atol=1e-6, err_msg=mode
+        )
+    for fn in (rf.softmax, rf.log_softmax):
+        out_p = fn(xp, axis=time_dim)
+        assert packed.is_packed(out_p), fn.__name__
+        _assert_equal_non_padded(out_p, fn(x, axis=time_dim), batch_dim, time_dim)
+
+
+def test_batch_norm_packed_dense_bound_train():
+    """batch_norm statistics ignore the unused tail of a dense bound-sized buffer"""
+    rf.select_backend_torch()
+    x, batch_dim, time_dim, feat_dim = _make_input(seq_lens=(5, 3), feat=4, seed=8)
+    with rf.set_default_device_ctx("cpu"):
+        rf.set_random_seed(3)
+        bn_dense = rf.BatchNorm(feat_dim, use_mask=False)
+        bn_bound = rf.BatchNorm(feat_dim, use_mask=False)
+        with rf.get_run_ctx().train_flag_ctx(True):
+            out_dense = bn_dense(packed.pack(x))
+            out_bound = bn_bound(packed.regap(packed.pack(x), 0, total_bound=16))
+        assert packed.is_packed(out_bound)
+    _assert_equal_non_padded(out_bound, packed.unpack(out_dense), batch_dim, time_dim)
+    for p_dense, p_bound in [
+        (bn_dense.running_mean, bn_bound.running_mean),
+        (bn_dense.running_variance, bn_bound.running_variance),
+    ]:
+        numpy.testing.assert_allclose(
+            p_dense.raw_tensor.detach().numpy(), p_bound.raw_tensor.detach().numpy(), rtol=1e-5, atol=1e-6
+        )
+
+
+def test_softmax_over_a_single_packed_axis_with_a_bound():
+    """a bound-sized packing of one axis normalizes over its content rows only"""
+    rf.select_backend_torch()
+    size_dim = Dim(Tensor("size", dims=[], dtype="int32", raw_tensor=torch.tensor(3, dtype=torch.int32)), name="size")
+    x = Tensor("x", dims=[size_dim], dtype="float32", raw_tensor=torch.tensor([0.0, 1.0, 2.0]))
+    xp = packed.pack(x, dims=[size_dim], total_bound=5)
+    for fn in (rf.softmax, rf.log_softmax):
+        out = fn(xp, axis=size_dim)
+        assert packed.is_packed(out), fn.__name__
+        numpy.testing.assert_allclose(
+            out.raw_tensor.inner.raw_tensor.numpy()[:3],
+            fn(x, axis=size_dim).raw_tensor.numpy(),
+            rtol=1e-6,
+            err_msg=fn.__name__,
+        )
+
+
 def test_shift_and_pad_with_a_per_seq_pad_value():
     """a pad value over the batch dim applies per sequence in the packed shift and pad"""
     rf.select_backend_torch()

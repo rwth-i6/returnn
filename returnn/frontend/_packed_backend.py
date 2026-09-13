@@ -1012,6 +1012,15 @@ def _frame_coords(template: PackedRawTensor, d: Dim) -> Tensor:
     return out
 
 
+def _has_junk_rows(template: PackedRawTensor) -> bool:
+    """
+    :param template: a packing
+    :return: whether the buffer can hold rows which belong to no sequence,
+        gap frames or the unused tail of a bound-sized buffer, exactly when :func:`_frame_mask` is not None
+    """
+    return template.has_gap_frames or template.packed_dim.dimension is not None or template.packed_dim.need_masking()
+
+
 def _frame_mask(template: PackedRawTensor) -> Optional[Tensor]:
     """
     :return: [packed_dim] (bool): True on sequence frames, False on gap frames.
@@ -1025,7 +1034,7 @@ def _frame_mask(template: PackedRawTensor) -> Optional[Tensor]:
         so has_gap_frames cannot be folded into the dim either.
     """
     # static packed dim = upper-bound buffer with junk tail, which need_masking on the dim cannot see
-    if not template.has_gap_frames and template.packed_dim.dimension is None and not template.packed_dim.need_masking():
+    if not _has_junk_rows(template):
         return None
     dev_lens = _device_lens(template)
     if dev_lens is not None:
@@ -1054,6 +1063,12 @@ def _frame_mask(template: PackedRawTensor) -> Optional[Tensor]:
     hit = _layout_cache.get(key)
     if hit is not None:
         return hit
+    if len(template.orig_dims) == 1:
+        rows = rf.range_over_dim(template.packed_dim, device=template.inner.device)
+        n_content = template.orig_dims[0].get_size_tensor(device=template.inner.device)
+        out = rf.compare_bc(rows, "<", rf.cast(n_content, rows.dtype))
+        _layout_cache.set(key, out)
+        return out
     ones = rf.cast(rf.sequence_mask(list(template.orig_dims), device=template.inner.device), "int32")
     pos = _clamped_padded_positions(
         template.orig_dims,
@@ -1150,9 +1165,10 @@ def _segment_softmax(tensor: Tensor, *, axis: Dim, log: bool) -> Optional[Tensor
     inner = raw.inner
     other_packed = [d for d in raw.orig_dims if d != axis]
     if not other_packed:
-        if raw.has_gap_frames:
-            return None  # single segment incl. gap/pad frames; rare, fallback
-        lse = rf.reduce_logsumexp(inner, axis=raw.packed_dim, use_mask=False)
+        content = inner
+        if _has_junk_rows(raw):
+            content = rf.where(_frame_mask(raw), inner, float("-inf"))
+        lse = rf.reduce_logsumexp(content, axis=raw.packed_dim, use_mask=False)
         out_inner = inner - lse
     else:
         # gap frames (if any) go to the dump segment and only affect other gap frames
@@ -1207,7 +1223,7 @@ def _segment_index(template: PackedRawTensor, seg_dims: Sequence[Dim]) -> Tuple[
         coords = _frame_coords(template, d)
         seg = coords if seg is None else seg * d.get_dim_value_tensor() + coords
         merged = d if merged is None else merged * d
-    if template.has_gap_frames:
+    if _has_junk_rows(template):
         mask = _frame_mask(template)
         dump = merged.get_dim_value_tensor()
         if isinstance(dump, Tensor):
@@ -1399,7 +1415,7 @@ def _dim_aware_call(name: str, args, kwargs):
         overlap = referenced & packed_dims
         if overlap:
             _warn_fallback_once(name, f"references packed dims {sorted(overlap, key=lambda d: d.name or '')}")
-        elif name in _DENSE_ONLY_INNER_OPS and raw0.has_gap_frames and _stats_active(name, kwargs):
+        elif name in _DENSE_ONLY_INNER_OPS and _has_junk_rows(raw0) and _stats_active(name, kwargs):
             # e.g. batch_norm: its statistics implicitly reduce over the packed dim,
             # and gap frames would pollute them.
             # Re-layout to dense, run there, restore the layout:
@@ -1411,7 +1427,11 @@ def _dim_aware_call(name: str, args, kwargs):
                 out = _batch_norm_gapped(src, kwargs)
                 if out is not None:
                     return out
-            if src is not None and (any(x is src for x in args) or any(v is src for v in kwargs.values())):
+            if (
+                src is not None
+                and raw0.has_gap_frames
+                and (any(x is src for x in args) or any(v is src for v in kwargs.values()))
+            ):
                 _warn_fallback_once(
                     name,
                     "implicitly reduces over the packed dim, gapped layout",
