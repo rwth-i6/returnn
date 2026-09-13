@@ -196,6 +196,32 @@ def test_generic_op_packs_plain_frame_operand():
     _assert_equal_non_padded(out_p, out, batch_dim, time_dim)
 
 
+def test_same_layout_over_freshly_minted_packed_dim_does_not_rebuild():
+    rf.select_backend_torch()
+    x, batch_dim, time_dim, feat_dim = _make_input(batch_size=3, seq_lens=(7, 5, 4))
+    xp = packed.pack(x)
+    relaid, _ = rf.slice(xp, axis=time_dim, size=time_dim)
+    assert packed.is_packed(relaid)
+    assert relaid.raw_tensor.packed_dim != xp.raw_tensor.packed_dim
+    assert relaid.raw_tensor.same_layout(xp.raw_tensor)
+
+    n_regap = [0]
+    orig = packed.regap
+
+    def counting(source, gap, **kwargs):
+        n_regap[0] += 1
+        return orig(source, gap, **kwargs)
+
+    packed.regap = counting
+    try:
+        out_p = relaid + xp
+    finally:
+        packed.regap = orig
+    assert n_regap[0] == 0, f"rebuilt the buffer {n_regap[0]} times for an identical layout"
+    ref = packed.unpack(relaid) + packed.unpack(xp)
+    _assert_equal_non_padded(out_p, ref, batch_dim, time_dim)
+
+
 def test_generic_op_keeps_the_fallback_when_a_dim_is_named():
     rf.select_backend_torch()
     x, batch_dim, time_dim, _feat_dim = _make_input(batch_size=3, seq_lens=(7, 5, 4))

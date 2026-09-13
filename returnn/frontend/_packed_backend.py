@@ -351,6 +351,28 @@ class PackedRawTensor:
             and self.layout_lens is other.layout_lens
         )
 
+    def _packed_extent(self):
+        """:return: the buffer extent along the packed dim, from the raw shape (no host read on torch)"""
+        inner = self.inner
+        # noinspection PyProtectedMember
+        return inner._raw_backend.get_shape_tuple_raw(inner.raw_tensor)[inner.dims.index(self.packed_dim)]
+
+    def same_layout(self, other: PackedRawTensor) -> bool:
+        """
+        :return: whether other has the identical buffer layout, even when its packed dim is
+            another Dim object. Every gather-based op mints a fresh packed dim, so
+            :func:`same_packing`, which keys on that object, reports a difference where the bytes
+            already line up. orig_dims, gap, align and layout_lens together fix the layout, the
+            extent additionally separates an exact buffer from a bounded one over the same layout.
+        """
+        return (
+            self.orig_dims == other.orig_dims
+            and self.gap == other.gap
+            and self.align == other.align
+            and self.layout_lens is other.layout_lens
+            and self._packed_extent() == other._packed_extent()
+        )
+
     def virtual_ndim(self) -> int:
         """:return: ndim of the virtual (unpacked) view, i.e. of the outer Tensor"""
         return len(self.dims)
@@ -1300,6 +1322,11 @@ def _conform_packing(x, target_raw: PackedRawTensor):
     if isinstance(x, Tensor) and is_packed(x):
         xr = x.raw_tensor
         if not target_raw.same_packing(xr) and xr.orig_dims == target_raw.orig_dims:
+            if xr.same_layout(target_raw):
+                # identical buffer layout, only the packed dim is another object
+                # (every gather-based op mints a fresh one): relabel, do not rebuild.
+                inner, _ = rf.replace_dim(xr.inner, in_dim=xr.packed_dim, out_dim=target_raw.packed_dim)
+                return target_raw.rewrap(inner, name=x.name)
             total = target_raw.packed_dim.get_dim_value()
             if not isinstance(total, int):
                 # graph-mode build (TF), dynamic packed dim: int() would need a host read.
