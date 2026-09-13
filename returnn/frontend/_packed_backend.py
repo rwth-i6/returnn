@@ -76,7 +76,17 @@ import returnn.frontend as rf
 from ._backend import Backend, register_backend_by_tensor_type, global_backend
 from ._cache import Cache
 
-__all__ = ["PackedRawTensor", "PackedBackend", "pack", "pack_import", "unpack", "regap", "is_packed", "flat_content"]
+__all__ = [
+    "PackedRawTensor",
+    "PackedBackend",
+    "pack",
+    "pack_import",
+    "pack_like",
+    "unpack",
+    "regap",
+    "is_packed",
+    "flat_content",
+]
 
 
 # Layout metadata (cu_seqlens, flex document mask, frame coords/masks, ...)
@@ -4889,6 +4899,39 @@ def pack_import(
         content_bound=packed_dim.dimension,
     )
     return helper.rewrap(inner_flat, name=inner_flat.name)
+
+
+def pack_like(source: Tensor, template: Tensor) -> Tensor:
+    """
+    Put source into the packing of template, so ops combining the two stay packed.
+
+    Model code often builds helper tensors on the virtual (padded) side --
+    a frame mask, targets regridded onto the encoder frames, positions.
+    Handed to an op together with packed data, such a tensor references the packed dims
+    (see :func:`_collect_referenced_dims`) and forces the unpack -> op -> repack fallback,
+    even though its content is per-frame and could be packed directly.
+    Packing it first keeps the op on the packed data.
+    (Elementwise ops like :func:`combine` do this implicitly already,
+    ops taking the tensor as an index or another explicit argument cannot.)
+
+    :param source: plain tensor over (some of) template's packed dims, e.g. [batch, time] or [time].
+        A tensor which is already packed is conformed to template's layout,
+        a tensor over none of the packed dims is returned unchanged.
+    :param template: packed tensor whose packing to follow.
+        If template is not packed, source is returned unchanged,
+        so the same model code runs packed and padded.
+    :return: source in template's packing, with its virtual dims unchanged
+    """
+    if not is_packed(template):
+        return source
+    raw = template.raw_tensor
+    if is_packed(source):
+        return _conform_packing(source, raw)
+    if not any(d in source.dims for d in raw.orig_dims):
+        return source
+    inner = _pack_like(source, raw)
+    assert inner is not None, f"pack_like: cannot pack {source} like {template}"
+    return raw.rewrap(inner, name=source.name)
 
 
 def pack(

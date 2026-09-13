@@ -1382,6 +1382,40 @@ def test_cast_packed():
     _assert_equal_non_padded(out_p, rf.cast(x, "float64"), batch_dim, time_dim)
 
 
+def test_pack_like_plain_helper_tensors():
+    # Helper tensors built on the virtual side (a frame mask, targets regridded onto the frames, positions)
+    # can be put on the data's packing, so the ops consuming them work on the packed buffer.
+    # Without it, an embedding-style lookup (plain source, per-frame indices) runs on padded storage.
+    rf.select_backend_torch()
+    x, batch_dim, time_dim, feat_dim = _make_input(batch_size=3, seq_lens=(5, 1, 4))
+    xp = packed.pack(x)
+    emb_dim = Dim(2, name="emb")
+    emb = Tensor("emb", dims=[feat_dim, emb_dim], dtype="float32")
+    emb.raw_tensor = torch.randn(feat_dim.dimension, emb_dim.dimension, generator=torch.Generator().manual_seed(5))
+    targets = Tensor("targets", dims=[batch_dim, time_dim], dtype="int32", sparse_dim=feat_dim)
+    targets.raw_tensor = torch.randint(0, feat_dim.dimension, (3, 5), dtype=torch.int32)
+    ref = rf.gather(emb, indices=targets, axis=feat_dim)
+    assert not packed.is_packed(ref)  # plain indices keep the lookup on padded storage
+
+    targets_p = rf.pack_like(targets, xp)
+    assert packed.is_packed(targets_p) and targets_p.sparse_dim == feat_dim
+    _assert_equal_non_padded(targets_p, targets, batch_dim, time_dim)
+
+    packed._warned_fallback_ops.clear()
+    out = rf.gather(emb, indices=targets_p, axis=feat_dim)
+    assert packed.is_packed(out) and not packed._warned_fallback_ops
+    _assert_equal_non_padded(out, ref, batch_dim, time_dim)
+
+    # a packed source is conformed to the template's layout, and a padded template is a no-op,
+    # so the same model code runs packed and padded
+    gapped = packed.pack(x, gap=2, align=1)
+    conformed = rf.pack_like(targets_p, gapped)
+    assert packed.is_packed(conformed) and conformed.raw_tensor.same_packing(gapped.raw_tensor)
+    other = Tensor("other", dims=[feat_dim], dtype="float32", raw_tensor=torch.zeros(feat_dim.dimension))
+    assert rf.pack_like(other, xp) is other
+    assert rf.pack_like(targets, x) is targets
+
+
 def test_stft_packed():
     # stft on packed audio runs per-seq on the packed buffer (no unpack, no window crosses a seq),
     # bit-identical to the padded stft on the valid output frames.
