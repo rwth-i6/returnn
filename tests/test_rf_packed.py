@@ -2035,6 +2035,19 @@ def test_conv_packed_auto_realign_static():
         _assert_equal_non_padded(out_p, out_ref, batch_dim, sp_ref)
 
 
+def test_cu_seqlens_with_host_lens_and_a_device_total():
+    if not torch.cuda.is_available():
+        raise unittest.SkipTest("cuda only: needs a second device for the packed total")
+    rf.select_backend_torch()
+    batch_dim = Dim(2, name="batch")
+    lens = Tensor("lens", dims=[batch_dim], dtype="int32", raw_tensor=torch.tensor([5, 3], dtype=torch.int32))
+    time_dim = Dim(lens, name="time")
+    total = Tensor("total", dims=(), dtype="int32", raw_tensor=torch.tensor(8, dtype=torch.int32, device="cuda"))
+    packed_dim = Dim(total, name="packed")
+    inner = Tensor("inner", dims=[packed_dim], dtype="float32", raw_tensor=torch.zeros(8, device="cuda"))
+    raw = packed.PackedRawTensor(inner=inner, packed_dim=packed_dim, orig_dims=(batch_dim, time_dim))
+    cu, _ = raw.cu_seqlens(device="cuda")
+    assert cu.raw_tensor.tolist() == [0, 5, 8]
 
 
 def test_shift_along_the_packed_dim_keeps_the_packing():

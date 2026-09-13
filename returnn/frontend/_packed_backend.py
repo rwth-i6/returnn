@@ -314,7 +314,7 @@ class PackedRawTensor:
         hit = _layout_cache.get(key)
         if hit is not None:
             return hit
-        starts, seqs_dim = self.seq_starts()
+        starts, seqs_dim = self.seq_starts(device=device)
         if _device_lens(self) is not None:
             # the REAL content total (device scalar), NOT the bound.
             lens = self.orig_dims[-1].get_dyn_size_ext_for_device(self.inner.device)
@@ -322,15 +322,15 @@ class PackedRawTensor:
         else:
             total = self.packed_dim.get_dim_value_tensor()
         if isinstance(total, Tensor):
-            total = rf.cast(total, starts.dtype)
+            # the starts follow the seq lens (host side under the engine), the total follows the buffer
+            # (a re-laid-out packing sizes its dim on the data device): bring both to one device
+            total = rf.copy_to_device(rf.cast(total, starts.dtype), starts.device)
         else:
             # a static packed dim (e.g. built by the data pipeline) yields a python int, not a tensor
             total = rf.convert_to_tensor(total, dims=(), dtype=starts.dtype, device=starts.device)
         end_dim = Dim(1, name="cu_seqlens_end")
         cu, cu_dim = rf.concat((starts, seqs_dim), (rf.expand_dim(total, dim=end_dim), end_dim))
         cu = rf.cast(cu, "int32")
-        if device:
-            cu = rf.copy_to_device(cu, device)
         _layout_cache.set(key, (cu, cu_dim))
         return cu, cu_dim
 
