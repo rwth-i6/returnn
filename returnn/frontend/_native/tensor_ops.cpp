@@ -170,6 +170,12 @@ PyObject* tensorCopyTemplateSimple(
     {
         PyObjectScopedRef feature_dim_axis = PyObject_GetAttrString(tensor, "_feature_dim_axis");
         if(!feature_dim_axis) return NULL;
+        if(feature_dim_axis == modState->notSpecified()) {
+            // a version 1 tensor keeps the marker for its dynamic default,
+            // the result is version 2, where only an int or None is valid, resolve it here
+            feature_dim_axis = PyObject_GetAttrString(tensor, "feature_dim_axis");
+            if(!feature_dim_axis) return NULL;
+        }
         if(feature_dim_axis != Py_None)
             if(PyObject_SetAttrString(res, "_feature_dim_axis", feature_dim_axis) < 0)
                 return NULL;
