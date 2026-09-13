@@ -918,7 +918,8 @@ class _FastBaumWelchScoresPackedAutogradFunc(torch.autograd.Function):
         rows = torch.arange(total_time, device=logits.device)
         starts64 = seq_starts.to(torch.int64).contiguous()
         frame_seq_idx = (torch.searchsorted(starts64, rows, right=True) - 1).clamp(min=0)
-        valid_mask = (rows - starts64[frame_seq_idx]) < seq_lens[frame_seq_idx]
+        offsets = rows - starts64[frame_seq_idx]
+        valid_mask = (offsets >= 0) & (offsets < seq_lens[frame_seq_idx])
         ctx.grad_wrt_softmax_in = logits_normalize
         if logits_normalize:
             ctx.save_for_backward(log_sm, frame_seq_idx, valid_mask, fwdbwd)
