@@ -1235,6 +1235,41 @@ def test_graph_capture_bounds_from_config():
     with global_config_ctx(config):
         opts = bounds_from_config({}, config=config, extern_data_template=template)
     assert opts["packed_total_bound"] == {"data": 100, "text_codes": 1000, "labels": 1000}
+
+
+def test_graph_capture_optimizer_state_materialization():
+    """the lazy optimizer state is only created for the captured optimizer, and only where zero-init is right"""
+    from returnn.torch.util.graph_capture import GraphCapturedTrainStep, _optimizer_state_zero_init
+
+    def _stub(opt, *, captured: bool):
+        obj = GraphCapturedTrainStep.__new__(GraphCapturedTrainStep)
+        obj._get_optimizer = lambda: opt
+        obj._grad_params = list(opt.param_groups[0]["params"])
+        obj._post_step = (lambda: None) if captured else None
+        return obj
+
+    p = torch.nn.Parameter(torch.tensor(1.0))
+    opt = torch.optim.Rprop([p], lr=0.1)
+    assert not _optimizer_state_zero_init(opt)
+    assert _optimizer_state_zero_init(torch.optim.AdamW([p], lr=0.1))
+    try:
+        _stub(opt, captured=True)._materialize_optimizer_state()
+    except NotImplementedError:
+        pass
+    else:
+        raise AssertionError("a captured Rprop must be rejected")
+    _stub(opt, captured=False)._materialize_optimizer_state()
+    assert not opt.state
+    for _ in range(3):
+        p.grad = torch.tensor(1.0)
+        opt.step()
+    torch.testing.assert_close(p.detach(), torch.tensor(0.636))
+    q = torch.nn.Parameter(torch.tensor(1.0))
+    adamw = torch.optim.AdamW([q], lr=0.1)
+    _stub(adamw, captured=True)._materialize_optimizer_state()
+    assert adamw.state and all(float(v) == 0 for v in adamw.state[q].values() if v.dim() == 0)
+
+
 def _build_cuda_graph_train_config_and_dataset(*, compile_: bool):
     """small RF model + Task12AXDataset config with torch_cuda_graph, see the tests below"""
     from returnn.datasets import init_dataset
@@ -1527,6 +1562,29 @@ def test_torch_engine_cuda_graph_packed_decoder_parity():
         (ctc_a, ce_a), (ctc_b, ce_b) = losses["packed_eager"][s], losses["packed_graphc"][s]
         assert abs(ctc_a - ctc_b) / max(abs(ctc_a), 1e-6) < 2e-2, f"step {s} ctc: {ctc_a} vs {ctc_b}"
         assert abs(ce_a - ce_b) / max(abs(ce_a), 1e-6) < 2e-2, f"step {s} ce: {ce_a} vs {ce_b}"
+
+
+
+
+def test_graph_capture_optimizer_state_snapshot_roundtrip():
+    """a resumed optimizer state survives the dummy warmup through the snapshot, the lr object stays"""
+    from returnn.torch.util.graph_capture import _snapshot_optimizer_state, _restore_optimizer_state
+
+    torch.manual_seed(3)
+    model = torch.nn.Linear(4, 3)
+    opt = torch.optim.Adam(model.parameters(), lr=torch.tensor(0.1))
+    for p in model.parameters():
+        p.grad = torch.randn_like(p)
+    opt.step()
+    before = {k: v.clone() for k, v in opt.state[model.weight].items()}
+    lr = opt.param_groups[0]["lr"]
+    snapshot = _snapshot_optimizer_state(opt)
+    opt.step()
+    assert not torch.equal(opt.state[model.weight]["exp_avg"], before["exp_avg"])
+    _restore_optimizer_state(opt, snapshot)
+    for k, v in before.items():
+        assert torch.equal(opt.state[model.weight][k], v), k
+    assert opt.param_groups[0]["lr"] is lr
 
 
 def test_torch_engine_cuda_graph_train():
