@@ -1944,6 +1944,38 @@ def test_conv_packed_auto_realign_static():
         _assert_equal_non_padded(out_p, out_ref, batch_dim, sp_ref)
 
 
+
+
+def test_shift_along_the_packed_dim_keeps_the_packing():
+    rf.select_backend_torch()
+    x, batch_dim, time_dim, feat_dim = _make_input(batch_size=3, seq_lens=(7, 5, 4))
+    xp = packed.pack(x)
+    for shift, amount in ((rf.shift_right, 2), (rf.shift_left, 1)):
+        ref = shift(x, axis=time_dim, pad_value=7.0, amount=amount)
+        packed._warned_fallback_ops.clear()
+        out_p = shift(xp, axis=time_dim, pad_value=7.0, amount=amount)
+        assert not packed._warned_fallback_ops, (shift.__name__, packed._warned_fallback_ops)
+        assert out_p.raw_tensor.packed_dim is xp.raw_tensor.packed_dim, shift.__name__
+        _assert_equal_non_padded(out_p, ref, batch_dim, time_dim)
+
+
+def test_shift_and_pad_with_a_per_seq_pad_value():
+    """a pad value over the batch dim applies per sequence in the packed shift and pad"""
+    rf.select_backend_torch()
+    x, batch_dim, time_dim, feat_dim = _make_input(batch_size=3, seq_lens=(7, 5, 4))
+    xp = packed.pack(x, gap=2)
+    pad = Tensor("pad", dims=[batch_dim], dtype="float32", raw_tensor=torch.tensor([100.0, 200.0, 300.0]))
+    for shift, amount in ((rf.shift_right, 2), (rf.shift_left, 1)):
+        ref = shift(x, axis=time_dim, pad_value=pad, amount=amount)
+        out_p = shift(xp, axis=time_dim, pad_value=pad, amount=amount)
+        assert packed.is_packed(out_p), shift.__name__
+        _assert_equal_non_padded(out_p, ref, batch_dim, time_dim)
+    ref, (padded_time,) = rf.pad(x, axes=[time_dim], padding=[(1, 0)], value=pad)
+    out_p, _ = rf.pad(xp, axes=[time_dim], padding=[(1, 0)], out_dims=[padded_time], value=pad)
+    assert packed.is_packed(out_p)
+    _assert_equal_non_padded(out_p, ref, batch_dim, padded_time)
+
+
 if __name__ == "__main__":
     better_exchook.install()
     if len(sys.argv) <= 1:

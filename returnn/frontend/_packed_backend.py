@@ -3825,6 +3825,8 @@ class PackedBackend(Backend[PackedRawTensor]):
                         else None
                     ),
                 )
+                if isinstance(value, Tensor) and set(value.dims) & set(helper.orig_dims):
+                    value = _pack_like(value, helper)
                 if pad_l:
                     # global shift by pad_l (seq starts stay fixed, see the docstring),
                     # then everything that is not shifted content gets the pad value
@@ -4360,6 +4362,26 @@ class PackedBackend(Backend[PackedRawTensor]):
         return _dim_aware_call("slice", (source,), kwargs)
 
     @staticmethod
+    def shift_right(source: Tensor, *, axis: Dim, pad_value: Union[Tensor, Any], amount: int) -> Tensor:
+        """
+        shift_right. Along the innermost packed dim it keeps the packing, see :func:`_packed_shift`.
+        Anything else takes the generic pad and slice.
+        """
+        if _shifts_along_the_packed_dim(source, axis):
+            return _packed_shift(source, axis=axis, amount=amount, pad_value=pad_value)
+        return Backend.shift_right(source, axis=axis, pad_value=pad_value, amount=amount)
+
+    @staticmethod
+    def shift_left(source: Tensor, *, axis: Dim, pad_value: Union[Tensor, Any], amount: int) -> Tensor:
+        """
+        shift_left. Along the innermost packed dim it keeps the packing, see :func:`_packed_shift`.
+        Anything else takes the generic pad and slice.
+        """
+        if _shifts_along_the_packed_dim(source, axis):
+            return _packed_shift(source, axis=axis, amount=-amount, pad_value=pad_value)
+        return Backend.shift_left(source, axis=axis, pad_value=pad_value, amount=amount)
+
+    @staticmethod
     def repeat(values: Tensor, *, in_spatial_dim: Dim, repeats: Tensor, out_spatial_dim: Dim) -> Tuple[Tensor, Dim]:
         """
         repeat (duration-based upsampling), packed-native.
@@ -4639,6 +4661,54 @@ def _last_row(packed_dim: Dim, dtype: str) -> Union[int, Tensor]:
     """
     n = packed_dim.get_dim_value_tensor()
     return n - 1 if isinstance(n, int) else rf.cast(n - 1, dtype)
+
+
+
+
+def _shifts_along_the_packed_dim(source: Tensor, axis: Dim) -> bool:
+    """:return: whether source is packed over (seqs, axis), so a shift along axis can stay in its packing"""
+    raw = source.raw_tensor
+    return isinstance(raw, PackedRawTensor) and len(raw.orig_dims) == 2 and axis == raw.orig_dims[-1]
+
+
+def _packed_shift(source: Tensor, *, axis: Dim, amount: int, pad_value: Union[Tensor, Any]) -> Tensor:
+    """
+    Shifts every sequence along the innermost packed dim, a positive amount to the right.
+
+    The sequence starts stay in place, so the buffer row to read is the own row minus the amount,
+    one gather over the packed buffer. A row from before the start (right shift) or from beyond the
+    length (left shift) takes the pad value instead. Gap and junk frames get arbitrary finite values.
+
+    :param source: packed over (seqs, axis)
+    :param axis: the innermost packed dim
+    :param amount: frames to shift by, negative for a left shift
+    :param pad_value: value of the vacated frames
+    :return: the shifted tensor in the same packing
+    """
+    raw = _raw(source)
+    dev = raw.inner.device
+    if isinstance(pad_value, Tensor) and set(pad_value.dims) & set(raw.orig_dims):
+        pad_value = _pack_like(pad_value, raw)
+    rows = rf.range_over_dim(raw.packed_dim, device=dev)
+    local = _frame_coords(raw, axis)
+    if amount >= 0:
+        valid = local >= amount
+    else:
+        seq = _frame_coords(raw, raw.orig_dims[0])
+        lens = _device_lens(raw)
+        if lens is None:
+            lens = rf.copy_to_device(raw.seq_lens, dev)
+        lens_at = rf.cast(rf.gather(lens, indices=seq, axis=raw.orig_dims[0]), local.dtype)
+        valid = local - amount < lens_at
+    src = rf.clip_by_value(rows - amount, 0, _last_row(raw.packed_dim, rows.dtype))
+    inner = rf.gather(raw.inner, indices=src, axis=raw.packed_dim)
+    inner = rf.where(valid, inner, pad_value)
+    out = raw.rewrap(inner, name="shift")
+    if source.sparse_dim is not None:
+        out.sparse_dim = source.sparse_dim
+    if source.feature_dim is not None and source.feature_dim in out.dims:
+        out.feature_dim = source.feature_dim
+    return out
 
 
 def _concat_seq_wise_applicable(
