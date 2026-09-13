@@ -5486,17 +5486,22 @@ def _torch_relayout_frames(inner: Tensor, pos: Tensor, *, packed_dim: Dim, out_d
     # away as an unrelated "illegal memory access". The usual cause is a declared
     # packed_total_bound / regap total_bound that does not cover the per-seq gap+align slack
     # of the TARGET layout.
-    assert_(
-        pos_raw.max() <= n_out,
-        f"packed relayout: target position beyond the buffer ({out_dim}, {n_out} frames + dump slot)."
-        f" The target total is too small for this layout (per-seq gap/align slack not covered?).",
-    )
-    # small int scatters only (1-D, no feature dims involved)
-    inv = torch.zeros((n_out + 1,), dtype=torch.int64, device=values.device)
-    slot_valid = torch.zeros((n_out + 1,), dtype=torch.bool, device=values.device)
-    inv[pos_raw] = torch.arange(n_in, dtype=torch.int64, device=values.device)
-    slot_valid[pos_raw] = True
-    out_raw = gather_relayout(values, inv=inv[:n_out], pos=pos_raw, slot_valid=slot_valid[:n_out])
+    if n_in == 0:
+        out_raw = values.new_zeros((n_out,) + tuple(values.shape[1:]))
+    else:
+        assert_(
+            pos_raw.max() <= n_out,
+            f"packed relayout: target position beyond the buffer ({out_dim}, {n_out} frames + dump slot)."
+            f" The target total is too small for this layout (per-seq gap/align slack not covered?).",
+        )
+        # small int scatters only (1-D, no feature dims involved)
+        inv = torch.zeros((n_out + 1,), dtype=torch.int64, device=values.device)
+        slot_valid = torch.zeros((n_out + 1,), dtype=torch.bool, device=values.device)
+        inv[pos_raw] = torch.arange(n_in, dtype=torch.int64, device=values.device)
+        # a scalar fill, not an index_put of a python bool: that would stage the bool through an
+        # unpinned host tensor, which CUDA-graph capture rejects
+        slot_valid.index_fill_(0, pos_raw, True)
+        out_raw = gather_relayout(values, inv=inv[:n_out], pos=pos_raw, slot_valid=slot_valid[:n_out])
     out = Tensor("regap", dims=(out_dim,) + inner.dims[1:], dtype=inner.dtype, raw_tensor=out_raw)
     if inner.sparse_dim is not None:
         out.sparse_dim = inner.sparse_dim
