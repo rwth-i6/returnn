@@ -233,6 +233,65 @@ def test_conv1d_depthwise():
     run_model(extern_data, lambda *, epoch, step: _Net(), _forward_step, test_single_batch_entry=True)
 
 
+def test_conv1d_depthwise_cuda_triton_path():
+    """on CUDA the depthwise conv runs through the Triton kernel in the (batch, time, feat) layout, values as torch"""
+    import unittest
+    from unittest import mock
+    import torch
+
+    if not torch.cuda.is_available():
+        raise unittest.SkipTest("needs CUDA")
+    try:
+        import triton  # noqa
+    except ImportError as exc:
+        raise unittest.SkipTest(f"triton not available ({exc})")
+    rf.select_backend_torch()
+    batch, time, feat = Dim(2, name="batch"), Dim(23, name="time"), Dim(6, name="feat")
+    gen = torch.Generator().manual_seed(5)
+    for filter_size, padding in [(4, "same"), (5, "same"), (5, "valid")]:
+        with rf.set_default_device_ctx("cuda"):
+            rf.set_random_seed(3)
+            conv = rf.Conv1d(feat, feat, filter_size=filter_size, groups=feat.dimension, padding=padding)
+        x = Tensor("x", dims=[batch, time, feat], dtype="float32")
+        x.raw_tensor = torch.randn(2, 23, 6, generator=gen).cuda()
+        ref = torch.nn.functional.conv1d(
+            x.raw_tensor.transpose(1, 2), conv.filter.raw_tensor, conv.bias.raw_tensor, padding=padding, groups=6
+        ).transpose(1, 2)
+        with mock.patch.object(torch.nn.functional, "conv1d", side_effect=AssertionError("torch conv1d fallback")):
+            out, out_time = conv(x, in_spatial_dim=time)
+        assert out.dims == (batch, out_time, feat), (filter_size, padding, out.dims)
+        torch.testing.assert_close(out.raw_tensor, ref, rtol=1e-5, atol=1e-5)
+    with rf.set_default_device_ctx("cuda"):
+        conv = rf.Conv1d(feat, feat, filter_size=2, groups=feat.dimension, padding="same")
+    with torch.no_grad():
+        conv.filter.raw_tensor.copy_(torch.tensor([1.003, -1.0]).expand(6, 1, 2))
+        conv.bias.raw_tensor.zero_()
+    for dtype in ("float32", "bfloat16"):
+        x_amp = Tensor("x", dims=[batch, time, feat], dtype=dtype)
+        x_amp.raw_tensor = torch.ones(2, 23, 6).to("cuda", getattr(torch, dtype))
+        with torch.autocast("cuda", dtype=torch.bfloat16):
+            ref = torch.nn.functional.conv1d(
+                x_amp.raw_tensor.transpose(1, 2), conv.filter.raw_tensor, conv.bias.raw_tensor, padding="same", groups=6
+            ).transpose(1, 2)
+            with mock.patch.object(torch.nn.functional, "conv1d", side_effect=AssertionError("torch conv1d fallback")):
+                out, _ = conv(x_amp, in_spatial_dim=time)
+        assert out.raw_tensor.dtype == ref.dtype == torch.bfloat16, (dtype, out.raw_tensor.dtype)
+        assert float(out.raw_tensor[0, 0, 0]) == 0.0, "the autocast path rounds the filter to bfloat16"
+        torch.testing.assert_close(out.raw_tensor, ref, rtol=0, atol=0)
+    x_wide = Tensor("x", dims=[batch, time, feat], dtype="float64")
+    x_wide.raw_tensor = torch.full((2, 23, 6), 1e50, dtype=torch.float64, device="cuda")
+    for param in (conv.filter, conv.bias):
+        param.raw_tensor.data = param.raw_tensor.data.double()
+        param.dtype = "float64"
+    out, out_time = conv(x_wide, in_spatial_dim=time)
+    ref = torch.nn.functional.conv1d(
+        x_wide.raw_tensor.transpose(1, 2), conv.filter.raw_tensor, conv.bias.raw_tensor, padding="same", groups=6
+    ).transpose(1, 2)
+    out_raw = out.copy_transpose([batch, out_time, feat]).raw_tensor
+    assert out_raw.dtype == torch.float64
+    torch.testing.assert_close(out_raw, ref)
+
+
 def test_maxpool1d_padding_valid():
     time_dim = Dim(Tensor("time", [batch_dim], dtype="int32"))
     in_dim = Dim(7, name="in")
