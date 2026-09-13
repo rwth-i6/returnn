@@ -868,6 +868,19 @@ class GraphCapturedTrainStep:
         """whether the optimizer step (incl grad clip) is captured in-graph (opts "capture_optimizer")"""
         return self._post_step is not None
 
+    @staticmethod
+    def _reduce_all_losses(ctx: RunCtx) -> None:
+        """
+        Reduce every loss inside the step, incl. the error measures and zero-scaled losses
+        the total loss leaves out. The engine reads the summed losses after the step, and
+        Loss caches its reduction on first use: computed there it would be an eager op on the
+        result tensors, outside the graph (stale on every replay) and after the dims went back
+        to their bound sizes (a shape mismatch on a masked reduction of a dynamic warmup step).
+        """
+        for loss in ctx.losses.values():
+            loss.get_summed_loss()
+            loss.get_inv_norm_factor()
+
     def _step(self) -> RunCtx:
         for p in self._grad_params:
             p.grad.zero_()  # in-graph
@@ -876,6 +889,7 @@ class GraphCapturedTrainStep:
             self._run_step(extern_data, step=self._step_t)
             ctx = rf.get_run_ctx()
             total_loss = ctx.total_loss()
+            self._reduce_all_losses(ctx)
         total_loss.raw_tensor.backward()
         if self._post_step is not None:
             self._post_step()  # in-graph: grad clip + optimizer step
@@ -929,6 +943,34 @@ class GraphCapturedTrainStep:
             if k.endswith(":seq_len") and hasattr(v, "shape"):
                 return int(v.shape[0])
         return 1
+
+    @contextmanager
+    def _training_state_preserved(self):
+        """
+        Puts the training state back after the enclosed warmup steps, which exist only to warm the kernels:
+        the module buffers and the parameters without gradient (running statistics, counters),
+        the CUDA RNG state, and with the optimizer step in-graph also the trained parameters
+        and the optimizer state, a full copy of both, the price of warming the optimizer kernels in place.
+        """
+        buffers = list(self._get_buffers()) if self._get_buffers is not None else []
+        params = [p for p in self._params if not p.requires_grad]
+        opt = None
+        if self._post_step is not None:
+            params = list(self._params)
+            opt = self._get_optimizer() if self._get_optimizer is not None else None
+        tensors = buffers + params
+        saved = [t.detach().clone() for t in tensors]
+        opt_state = _snapshot_optimizer_state(opt) if opt is not None else None
+        rng_state = torch.cuda.get_rng_state(self._device)
+        try:
+            yield
+        finally:
+            with torch.no_grad():
+                for t, t0 in zip(tensors, saved):
+                    t.copy_(t0)
+            if opt_state is not None:
+                _restore_optimizer_state(opt, opt_state)
+            torch.cuda.set_rng_state(rng_state, self._device)
 
     def _materialize_optimizer_state(self) -> None:
         """
@@ -1028,7 +1070,13 @@ class GraphCapturedTrainStep:
             for dim in _get_dyn_dims_from_extern_data(self._extern_data_template):
                 dim.reset_eager()
             extern_data = extern_data_util.raw_dict_to_extern_data(
-                extern_data_raw, extern_data_template=self._extern_data_template, device=self._device
+                extern_data_raw,
+                extern_data_template=self._extern_data_template,
+                device=self._device,
+                float_dtype=self._float_dtype,
+                # like the engine's eager train path: the targets are usually
+                # declared available_for_inference=False, the train step needs them
+                with_eval_targets=True,
             )
             for p in self._grad_params:
                 p.grad.zero_()
@@ -1037,6 +1085,7 @@ class GraphCapturedTrainStep:
             self._run_step(extern_data, step=global_train_step)
             ctx = rf.get_run_ctx()
             total_loss = ctx.total_loss()
+            self._reduce_all_losses(ctx)
             total_loss.raw_tensor.backward()
             if self._post_step is not None:
                 self._post_step()
@@ -1555,12 +1604,13 @@ class GraphCapturedTrainStep:
             return self._ctx
         if not self._compile:
             # side-stream warmup (kernel/cudnn warmup; each _step call is cold w.r.t. dim/layout caches)
-            s = torch.cuda.Stream()
-            s.wait_stream(torch.cuda.current_stream())
-            with torch.cuda.stream(s):
-                for _ in range(3):
-                    self._step()
-            torch.cuda.current_stream().wait_stream(s)
+            with self._training_state_preserved():
+                s = torch.cuda.Stream()
+                s.wait_stream(torch.cuda.current_stream())
+                with torch.cuda.stream(s):
+                    for _ in range(3):
+                        self._step()
+                torch.cuda.current_stream().wait_stream(s)
         # with warmup_steps 0 there was no real optimizer step yet: create the lazy state
         # (and the param grads) explicitly -- no-op if a warmup step already did
         self._materialize_optimizer_state()
