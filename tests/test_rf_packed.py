@@ -2007,6 +2007,32 @@ def test_conv_packed_auto_realign_static():
         _assert_equal_non_padded(out_p, out_ref, batch_dim, sp_ref)
 
 
+def test_regap_under_cuda_graph_capture():
+    if not torch.cuda.is_available():
+        raise unittest.SkipTest("cuda only: real graph capture")
+    rf.select_backend_torch()
+    batch_dim = Dim(2, name="batch")
+    lens = Tensor(
+        "lens", dims=[batch_dim], dtype="int32", raw_tensor=torch.tensor([5, 3], dtype=torch.int32, device="cuda")
+    )
+    time_dim = Dim(lens, name="time", capacity=6)
+    packed_dim = Dim(16, name="packed")
+    inner = Tensor("inner", dims=[packed_dim], dtype="float32", raw_tensor=torch.arange(16.0, device="cuda"))
+    x = packed.pack_import(inner, batch_dim=batch_dim, spatial_dim=time_dim, packed_dim=packed_dim)
+    side = torch.cuda.Stream()
+    side.wait_stream(torch.cuda.current_stream())
+    with torch.cuda.stream(side), rf.set_static_traceable_ctx():
+        packed.regap(x, 2, align=1, total_bound=20)
+    torch.cuda.current_stream().wait_stream(side)
+    graph = torch.cuda.CUDAGraph()
+    with torch.cuda.graph(graph), rf.set_static_traceable_ctx():
+        out = packed.regap(x, 2, align=1, total_bound=20)
+    graph.replay()
+    torch.cuda.synchronize()
+    values = out.raw_tensor.inner.raw_tensor.tolist()
+    assert values[:5] == [0.0, 1.0, 2.0, 3.0, 4.0] and values[7:10] == [5.0, 6.0, 7.0], values
+
+
 def test_shift_and_pad_with_a_per_seq_pad_value():
     """a pad value over the batch dim applies per sequence in the packed shift and pad"""
     rf.select_backend_torch()
@@ -2022,6 +2048,16 @@ def test_shift_and_pad_with_a_per_seq_pad_value():
     out_p, _ = rf.pad(xp, axes=[time_dim], padding=[(1, 0)], out_dims=[padded_time], value=pad)
     assert packed.is_packed(out_p)
     _assert_equal_non_padded(out_p, ref, batch_dim, padded_time)
+
+
+def test_regap_of_entirely_empty_sequences():
+    """a packing whose sequences are all empty can still be re-laid out"""
+    rf.select_backend_torch()
+    x, batch_dim, time_dim, feat_dim = _make_input(seq_lens=(0, 0), feat=1)
+    x.raw_tensor = torch.empty(2, 0, 1)
+    out = packed.regap(packed.pack(x), 2)
+    assert packed.is_packed(out) and out.raw_tensor.gap == 2
+    assert tuple(packed.unpack(out).copy_transpose([batch_dim, time_dim, feat_dim]).raw_tensor.shape) == (2, 0, 1)
 
 
 def test_pack_dense_total_bound_static_buffer():
