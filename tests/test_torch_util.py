@@ -390,3 +390,45 @@ def test_masked_select_bound():
     assert int(out_len2) == num
     assert out2.shape == (num, 4)
     torch.testing.assert_close(out2, x[mask])
+
+
+def test_depthwise_conv1d_triton_kernel_grad():
+    """fwd and all grads of the Triton depthwise conv vs torch conv1d, small blocks force partial tiles"""
+    if not torch.cuda.is_available():
+        raise unittest.SkipTest("needs CUDA")
+    try:
+        from returnn.torch.util import depthwise_conv_triton as m
+    except ImportError as exc:
+        raise unittest.SkipTest(f"triton not available ({exc})")
+
+    dev = "cuda"
+    gen = torch.Generator(device="cpu").manual_seed(11)
+    n_batch, n_time, n_chan = 3, 37, 70
+    small = (16, 32, 16, 32)
+    cases = [
+        (5, 2, 2, torch.float32, small),
+        (32, 15, 16, torch.float32, small),
+        (4, 0, 0, torch.float32, small),
+        (7, 4, 4, torch.float32, small),
+        (32, 15, 16, torch.bfloat16, None),
+    ]
+    for width, pad_l, pad_r, x_dtype, blocks in cases:
+        x = torch.randn(n_batch, n_time, n_chan, generator=gen).to(dev, x_dtype).requires_grad_(True)
+        w = (torch.randn(n_chan, width, generator=gen) * 0.3).to(dev).requires_grad_(True)
+        bias = torch.randn(2 * n_chan, generator=gen).to(dev)[::2].requires_grad_(True)
+        n_time_out = n_time + pad_l + pad_r - width + 1
+        opts = {"blocks": blocks} if blocks else {}
+        out = m.depthwise_conv1d(x, w, bias, pad_l=pad_l, n_time_out=n_time_out, **opts)
+        d_out = torch.randn(n_batch, n_time_out, n_chan, generator=gen).to(dev, x_dtype)
+        out.backward(d_out)
+        grads = [t.grad.clone() for t in (x, w, bias)]
+        for t in (x, w, bias):
+            t.grad = None
+        x_ref = torch.nn.functional.pad(x.float().transpose(1, 2), (pad_l, pad_r))
+        ref = torch.nn.functional.conv1d(x_ref, w[:, None, :], bias, groups=n_chan).transpose(1, 2)
+        tol = {"rtol": 1e-4, "atol": 1e-4} if x_dtype == torch.float32 else {"rtol": 2e-2, "atol": 2e-2}
+        assert out.shape == ref.shape and out.dtype == x_dtype, (width, pad_l, out.shape, out.dtype)
+        torch.testing.assert_close(out.float(), ref, **tol)
+        ref.backward(d_out.float())
+        for g, t in zip(grads, (x, w, bias)):
+            torch.testing.assert_close(g.float(), t.grad.float(), **tol)
