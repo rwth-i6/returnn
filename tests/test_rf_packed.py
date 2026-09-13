@@ -1429,6 +1429,88 @@ def test_rel_pos_att_triton_kernel_grad():
             numpy.testing.assert_allclose(g_kernel.cpu().numpy(), t.grad.cpu().numpy(), rtol=1e-4, atol=1e-4)
 
 
+def test_chunked_rel_pos_att_triton_kernel_grad():
+    # The chunked variant (chunk of S rows over its own rows and the first C rows of MEM previous
+    # chunks, zero keys before the first chunk): fwd + all grads vs an explicit per-row reference,
+    # at dropout 0 and at dropout > 0 with the kernel's own extracted mask.
+    rf.select_backend_torch()
+    import torch as _torch
+
+    if not _torch.cuda.is_available():
+        raise unittest.SkipTest("needs CUDA")
+    try:
+        from returnn.torch.util import chunked_rel_pos_att_triton as m
+    except ImportError as exc:
+        raise unittest.SkipTest(f"triton not available ({exc})")
+
+    dev = "cuda"
+    s_rows, c_rows, mem = 4, 2, 2
+    chunks = [5, 3, 4]
+    lens = [n * s_rows for n in chunks]
+    starts = [0, 20, 32]
+    total, n_heads, d = 48, 2, 32
+    r = mem * c_rows + 2 * s_rows - 1
+    center = mem * c_rows + s_rows - 1
+    starts_t = torch.tensor(starts, dtype=torch.int32, device=dev)
+    lens_t = torch.tensor(lens, dtype=torch.int32, device=dev)
+    scale = 1.0 / (d**0.5)
+    gen = torch.Generator(device="cpu").manual_seed(17)
+
+    def _reference(q, k, v, bd, keep_mask, dropout_p):
+        outs = []
+        for b, n_chunks in enumerate(chunks):
+            s0 = starts[b]
+            rows = n_chunks * s_rows
+            kb = k[s0 : s0 + rows].view(n_chunks, s_rows, n_heads, d)
+            vb = v[s0 : s0 + rows].view(n_chunks, s_rows, n_heads, d)
+            for c in range(n_chunks):
+                keys = [(kc, kp) for kc in range(c - mem, c) for kp in range(c_rows)] + [
+                    (c, kp) for kp in range(s_rows)
+                ]
+                zero = torch.zeros(n_heads, d, device=dev)
+                kvec = torch.stack([kb[kc, kp] if kc >= 0 else zero for kc, kp in keys])
+                vvec = torch.stack([vb[kc, kp] if kc >= 0 else zero for kc, kp in keys])
+                for i in range(s_rows):
+                    row = s0 + c * s_rows + i
+                    idx = torch.tensor([center + (kc - c) * c_rows + kp - i for kc, kp in keys], device=dev)
+                    sc = torch.einsum("hd,lhd->hl", q[row], kvec) * scale + bd[row][:, idx]
+                    w = torch.softmax(sc, dim=-1)
+                    if keep_mask is not None:
+                        w = w * keep_mask[row][:, idx].float() / (1.0 - dropout_p)
+                    outs.append(torch.einsum("hl,lhd->hd", w, vvec))
+        return torch.stack(outs)
+
+    for dropout_p, seed in [(0.0, 0), (0.3, 999)]:
+        leaves = [torch.randn(total, n_heads, d, generator=gen).to(dev).requires_grad_(True) for _ in range(3)]
+        bd_leaf = (torch.randn(total, n_heads, r, generator=gen) * 0.5).to(dev).requires_grad_(True)
+        out = m.chunked_rel_pos_att(
+            *leaves,
+            bd_leaf,
+            starts_t,
+            lens_t,
+            max(lens),
+            chunk_size=s_rows,
+            kept_rows=c_rows,
+            history=mem,
+            dropout_p=dropout_p,
+            seed=seed,
+            scale=scale,
+        )
+        d_out = torch.randn(total, n_heads, d, generator=gen).to(dev)
+        out.backward(d_out)
+        grads_kernel = [t.grad.clone() for t in leaves] + [bd_leaf.grad.clone()]
+        for t in leaves + [bd_leaf]:
+            t.grad = None
+        keep = None
+        if dropout_p:
+            keep = m.dump_keep_mask(total, n_heads, r, dropout_p=dropout_p, seed=seed, device=dev)
+        ref = _reference(*leaves, bd_leaf, keep, dropout_p)
+        numpy.testing.assert_allclose(out.detach().cpu().numpy(), ref.detach().cpu().numpy(), rtol=1e-4, atol=1e-5)
+        ref.backward(d_out)
+        for g_kernel, t in zip(grads_kernel, leaves + [bd_leaf]):
+            numpy.testing.assert_allclose(g_kernel.cpu().numpy(), t.grad.cpu().numpy(), rtol=1e-4, atol=1e-4)
+
+
 def test_cast_packed():
     # rf.cast on packed data runs elementwise on the packed buffer (PackedBackend.cast_raw),
     # e.g. from the behavior_version>=27 keep-dtype path of LayerNorm/RMSNorm.
