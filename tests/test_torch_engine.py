@@ -1178,6 +1178,63 @@ def _torch_engine_sub_proc_cleanup_test_main(conn):
         conn.close()
 
 
+def test_graph_capture_bounds_from_config():
+    # the bounds a config already implies must not have to be repeated by hand:
+    # max_seqs is the batch bound, max_seq_length the capacity, batch_size plus the per-seq
+    # gap and align slack the packed total bound
+    from returnn.tensor import batch_dim
+    from returnn.torch.util.graph_capture import bounds_from_config
+
+    time_dim = Dim(None, name="time-bounds")
+    text_dim = Dim(None, name="text-bounds")
+    labels_dim = Dim(None, name="labels-bounds")
+    classes_dim = Dim(7, name="classes")
+    template = TensorDict()
+    template.update(
+        {
+            "data": {"dims": [batch_dim, time_dim], "dtype": "float32"},
+            "text_codes": {"dims": [batch_dim, text_dim], "dtype": "int32", "sparse_dim": classes_dim},
+            "labels": {"dims": [batch_dim, labels_dim], "dtype": "int32", "sparse_dim": classes_dim},
+        },
+        auto_convert=True,
+    )
+    config = Config(
+        dict(
+            max_seqs=48,
+            max_seq_length={"data": 680000, "labels": 720},
+            batch_size=4_000_000,
+            packed_tensors={
+                "gap": 8640,
+                "align": 960,
+                "per_key": {"text_codes": {"packed": False}, "labels": {"packed": False}},
+            },
+        )
+    )
+    with global_config_ctx(config):
+        opts = bounds_from_config(
+            {"warmup_steps": 2, "dim_capacity": {"text_codes": 720}}, config=config, extern_data_template=template
+        )
+    assert opts["batch_size_bound"] == 48
+    assert opts["dim_capacity"] == {"data": 680000, "text_codes": 720, "labels": 720}
+    assert opts["packed_total_bound"] == {"data": 4_000_000 + 48 * (8640 + 959)}
+    assert opts["warmup_steps"] == 2
+    with global_config_ctx(config):
+        explicit = bounds_from_config(
+            {
+                "batch_size_bound": 32,
+                "dim_capacity": {"data": 1, "text_codes": 1, "labels": 1},
+                "packed_total_bound": {"data": 5},
+            },
+            config=config,
+            extern_data_template=template,
+        )
+    assert explicit["batch_size_bound"] == 32
+    assert explicit["dim_capacity"] == {"data": 1, "text_codes": 1, "labels": 1}
+    assert explicit["packed_total_bound"] == {"data": 5}
+    config = Config(dict(max_seqs=4, batch_size=1000, packed_batch_size={"data": 100}, packed_tensors=True))
+    with global_config_ctx(config):
+        opts = bounds_from_config({}, config=config, extern_data_template=template)
+    assert opts["packed_total_bound"] == {"data": 100, "text_codes": 1000, "labels": 1000}
 def _build_cuda_graph_train_config_and_dataset(*, compile_: bool):
     """small RF model + Task12AXDataset config with torch_cuda_graph, see the tests below"""
     from returnn.datasets import init_dataset

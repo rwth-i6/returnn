@@ -81,7 +81,59 @@ from returnn.frontend.run_ctx import RunCtx, Loss
 # noinspection PyProtectedMember
 from ..data.extern_data import get_batch_dim_from_extern_data, _get_dyn_dims_from_extern_data
 
-__all__ = ["GraphCapturedTrainStep", "graph_pools_reserved"]
+__all__ = ["GraphCapturedTrainStep", "graph_pools_reserved", "bounds_from_config"]
+
+
+def bounds_from_config(opts: Dict[str, Any], *, config, extern_data_template: TensorDict) -> Dict[str, Any]:
+    """
+    Complete the bound options with what the config already implies, explicit values win:
+    ``max_seqs`` is the batch bound, ``max_seq_length`` (per key or one value for all)
+    the capacity of every dynamic dim it covers, and the batch budget (``packed_batch_size``
+    where set, else ``batch_size``, padded frames, thus at least the content) plus the per-seq
+    gap and align slack the packed total bound.
+
+    :param opts: the ``torch_cuda_graph`` config dict
+    :param config: the RETURNN config
+    :param extern_data_template:
+    :return: a completed copy of opts
+    """
+    from returnn.datasets.packing import packed_batch_config, packed_batch_key_opts
+
+    opts = dict(opts)
+    if "batch_size_bound" not in opts and config.int("max_seqs", -1) > 0:
+        opts["batch_size_bound"] = config.int("max_seqs", -1)
+
+    max_seq_length = config.typed_value("max_seq_length", None)
+    dim_capacity = dict(opts.get("dim_capacity", {}))
+    for k, data in extern_data_template.data.items():
+        if k in dim_capacity or len(data.dims) < 2 or data.dims[1].dimension is not None:
+            continue
+        if isinstance(max_seq_length, dict):
+            if k in max_seq_length:
+                dim_capacity[k] = int(max_seq_length[k])
+        elif isinstance(max_seq_length, (int, float)) and max_seq_length > 0:
+            dim_capacity[k] = int(max_seq_length)
+    opts["dim_capacity"] = dim_capacity
+
+    packing = packed_batch_config()
+    budgets = [config.typed_value("packed_batch_size", None), config.typed_value("batch_size", None)]
+    if packing is not None and "batch_size_bound" in opts:
+        total = dict(opts.get("packed_total_bound", {}))
+        for k in extern_data_template.data:
+            if k in total:
+                continue
+            key_opts = packed_batch_key_opts(packing, k)
+            budget = None
+            for source in budgets:
+                budget = source.get(k) if isinstance(source, dict) else source
+                if budget is not None:
+                    break
+            if key_opts is None or not isinstance(budget, (int, float)) or budget <= 0:
+                continue
+            total[k] = int(budget) + int(opts["batch_size_bound"]) * (key_opts["gap"] + key_opts["align"] - 1)
+        opts["packed_total_bound"] = total
+    return opts
+
 
 # total bytes reserved by the current CUDA-graph private pool(s), set after capture
 # (single active graph per engine; a recapture overwrites). For the engine memory log.

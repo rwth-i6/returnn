@@ -283,7 +283,9 @@ class Engine(EngineBase):
                     " the grad reduce must run between the step and the optimizer"
                 )
             self._graph_capture = graph_capture.GraphCapturedTrainStep(
-                opts=self._graph_capture_opts,
+                opts=graph_capture.bounds_from_config(
+                    self._graph_capture_opts, config=self.config, extern_data_template=self.extern_data
+                ),
                 extern_data_template=self.extern_data,
                 device=self._device,
                 float_dtype=self._default_float_dtype,
