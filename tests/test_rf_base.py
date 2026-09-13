@@ -1264,3 +1264,13 @@ def test_ctc_loss_under_cuda_graph_capture():
         graph.replay()
         torch.cuda.synchronize()
         torch.testing.assert_close(out.copy_compatible_to_dims_raw([batch]), ref, rtol=1e-5, atol=1e-5)
+
+
+def test_combine_on_a_version_1_tensor_resolves_the_feature_axis():
+    import torch
+
+    x = Tensor("x", shape=(None, 3), dtype="float32", batch_dim_axis=0)
+    x.raw_tensor = torch.zeros(2, 4, 3)
+    y = x + 1
+    assert y.version == 2 and y._feature_dim_axis == x.feature_dim_axis == 2
+    y.copy_compatible_to_dims(y.dims)
