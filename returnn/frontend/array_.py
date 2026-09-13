@@ -1362,18 +1362,14 @@ def slice(
 
 def shift_right(source: Tensor, *, axis: Dim, pad_value: Union[rf.RawTensorTypes, Tensor], amount: int = 1) -> Tensor:
     """shift right by amount, pad left with left_pad"""
-    padded, (padded_dim,) = rf.pad(source, axes=[axis], padding=[(amount, 0)], mode="constant", value=pad_value)
-    padded_slice, _ = rf.slice(padded, axis=padded_dim, size=axis)
-    return padded_slice
+    # noinspection PyProtectedMember
+    return source._raw_backend.shift_right(source, axis=axis, pad_value=pad_value, amount=amount)
 
 
 def shift_left(source: Tensor, *, axis: Dim, pad_value: Union[rf.RawTensorTypes, Tensor], amount: int = 1) -> Tensor:
     """shift left by amount, pad right with right_pad"""
-    padded, (padded_dim,) = rf.pad(
-        source, axes=[axis], padding=[(0, amount)], mode="constant", value=pad_value, handle_dynamic_dims=True
-    )
-    padded_slice, _ = rf.slice(padded, axis=padded_dim, start=amount, size=axis)
-    return padded_slice
+    # noinspection PyProtectedMember
+    return source._raw_backend.shift_left(source, axis=axis, pad_value=pad_value, amount=amount)
 
 
 def reverse_sequence(tensor: Tensor, *, axis: Dim, handle_dynamic_dims: bool = True) -> Tensor:
