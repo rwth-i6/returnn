@@ -1286,6 +1286,8 @@ def _build_cuda_graph_train_config_and_dataset(*, compile_: bool):
             hidden = Dim(64, name="hidden")
             self.layer = rf.Linear(feat_dim, hidden)
             self.out = rf.Linear(hidden, classes_dim)
+            self.steps_seen = rf.Parameter([], dtype="int64", auxiliary=True)
+            self.steps_seen.initial = 0
 
     def _get_model(*, epoch, step, **_kwargs):
         return _Model()
@@ -1293,10 +1295,14 @@ def _build_cuda_graph_train_config_and_dataset(*, compile_: bool):
     def _train_step(*, model: _Model, extern_data: TensorDict, **_kwargs):
         data = extern_data["data"]
         classes = extern_data["classes"]
+        if not compile_:
+            model.steps_seen.assign_add(1)
         x = rf.relu(model.layer(data))
         logits = model.out(x)
         loss = rf.cross_entropy(target=classes, estimated=logits, estimated_type="logits", axis=model.out_dim)
         loss.mark_as_loss("ce")
+        frame_err = rf.cast(rf.reduce_argmax(logits, axis=model.out_dim) != classes, "float32")
+        frame_err.mark_as_loss("fer", as_error=True)
 
     def _dyn_lr(*, global_train_step: int, learning_rate: float, **_kwargs) -> float:
         # per-step LR schedule: under capture_optimizer this exercises the device-tensor LR input
@@ -1308,7 +1314,13 @@ def _build_cuda_graph_train_config_and_dataset(*, compile_: bool):
             device="gpu",
             extern_data={
                 "data": {"dims": [batch_dim, time_dim, feat_dim], "dtype": "float32"},
-                "classes": {"dims": [batch_dim, time_dim], "dtype": "int32", "sparse_dim": classes_dim},
+                # targets are declared like this in real configs; the eager warmup step must keep them
+                "classes": {
+                    "dims": [batch_dim, time_dim],
+                    "dtype": "int32",
+                    "sparse_dim": classes_dim,
+                    "available_for_inference": False,
+                },
             },
             get_model=_get_model,
             train_step=_train_step,
@@ -1340,20 +1352,43 @@ def _build_cuda_graph_train_config_and_dataset(*, compile_: bool):
 def _run_cuda_graph_train(*, compile_: bool):
     if not torch.cuda.is_available():
         raise unittest.SkipTest("CUDA not available")
+    import os
+    import re
+    import tempfile
+    from returnn.log import log as returnn_log
+
     config, dataset = _build_cuda_graph_train_config_and_dataset(compile_=compile_)
-    with global_config_ctx(config):
-        engine = Engine(config=config)
-        engine.init_train_from_config(train_data=dataset)
-        engine.train()
-        assert engine._graph_capture is not None
-        assert engine._graph_capture._graph is not None, "graph never captured"
-        assert engine._graph_capture.captures_optimizer
-        for param_group in engine._updater.optimizer.param_groups:
-            lr = param_group["lr"]  # device-tensor LR input of the captured optimizer
-            assert isinstance(lr, torch.Tensor) and lr.is_cuda
-            assert lr.item() > 1e-3  # the per-step schedule advanced it
-        for name, p in engine._pt_model.named_parameters():
-            assert torch.isfinite(p).all(), f"non-finite param {name}"
+    log_file = tempfile.NamedTemporaryFile(mode="wt", suffix=f"-cudagraph-{compile_}.log", delete=False)
+    log_file.close()
+    returnn_log.initialize(logs=[log_file.name], verbosity=[5])
+    try:
+        with global_config_ctx(config):
+            engine = Engine(config=config)
+            engine.init_train_from_config(train_data=dataset)
+            engine.train()
+            assert engine._graph_capture is not None
+            assert engine._graph_capture._graph is not None, "graph never captured"
+            assert engine._graph_capture.captures_optimizer
+            for param_group in engine._updater.optimizer.param_groups:
+                lr = param_group["lr"]  # device-tensor LR input of the captured optimizer
+                assert isinstance(lr, torch.Tensor) and lr.is_cuda
+                assert lr.item() > 1e-3  # the per-step schedule advanced it
+            for name, p in engine._pt_model.named_parameters():
+                assert torch.isfinite(p).all(), f"non-finite param {name}"
+            if not compile_:
+                seen = int(engine._orig_model.steps_seen.raw_tensor)
+                assert seen == engine.global_train_step, (seen, engine.global_train_step)
+    finally:
+        returnn_log.initialize()
+    with open(log_file.name, "rt", encoding="utf-8") as f:
+        txt = f.read()
+    os.remove(log_file.name)
+    # the error measure is not part of the total loss, so its reduction must still be recorded
+    # in the graph: a value reduced once at the first readout would repeat on every replay
+    fer = [float(v) for _, v in re.findall(r"train, step (\d+), ce [0-9.]+, fer ([0-9.]+)", txt)]
+    assert len(fer) >= 10, f"only {len(fer)} steps with the error measure parsed from the log"
+    warmup = config.typed_value("torch_cuda_graph")["warmup_steps"]
+    assert len(set(fer[warmup + 1 :])) > 1, f"the error measure is frozen under replay: {fer}"
 
 
 def _cuda_graph_packed_decoder_setup(mode: str):
