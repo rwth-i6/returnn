@@ -487,6 +487,7 @@ def get_batching_iterable_dataset_from_config(
         assert batch_size != -1, f"batch_size or batch_size_{'train' if train else 'dev'} not defined in config"
         max_seqs = config.typed_value("max_seqs", -1)
         packed_batch_size = config.typed_value("packed_batch_size", None)
+        packed_batch_size = config.typed_value(f"packed_batch_size_{'train' if train else 'dev'}", packed_batch_size)
         batches_dataset = BatchingIterDataPipe(
             dataset, batch_size=batch_size, max_seqs=max_seqs, packed_batch_size=packed_batch_size
         )
