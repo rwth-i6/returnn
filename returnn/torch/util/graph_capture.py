@@ -567,6 +567,7 @@ class GraphCapturedTrainStep:
         self._pre_dummy_warmup_params: Optional[List[torch.Tensor]] = None
         self._pre_dummy_warmup_buffers: Optional[List[torch.Tensor]] = None
         self._pre_dummy_warmup_opt_state: Optional[Dict[str, Any]] = None
+        self.last_step_dummy = False
         self._device = torch.device(device)
         self._float_dtype = float_dtype
         self._extern_data_template = extern_data_template
@@ -1663,12 +1664,14 @@ class GraphCapturedTrainStep:
             return self._ctx
         if self._compiled_fn is not None:  # "capture": False mode, post-warmup
             return self._run_compiled_eager()
+        self.last_step_dummy = False
         if self._n_eager < self.warmup_steps:
             self._n_eager += 1
             warmup_raw = extern_data_raw
             dummy_saved_lrs = None
             dummy_lr_opt = None
             if self.dummy_warmup:
+                self.last_step_dummy = True
                 # The eager warmup exists only to materialize lazy state (optimizer moment buffers,
                 # cudnn/cublas handles/workspaces). What it computes is irrelevant, but eager keeps
                 # every intermediate and every autograd-saved tensor alive with no reuse planning,
