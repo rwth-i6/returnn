@@ -177,6 +177,37 @@ def test_window_over_packed_time():
     _assert_equal_non_padded(out_p, out, batch_dim, out_spatial_dim)
 
 
+def test_generic_op_packs_plain_frame_operand():
+    rf.select_backend_torch()
+    x, batch_dim, time_dim, feat_dim = _make_input(batch_size=3, seq_lens=(7, 5, 4))
+    targets = Tensor(
+        "targets",
+        dims=[batch_dim, time_dim],
+        dtype="int32",
+        sparse_dim=feat_dim,
+        raw_tensor=torch.randint(0, feat_dim.dimension, (3, 7), dtype=torch.int32),
+    )
+    out = rf.reduce_argmax(x, axis=feat_dim) != targets
+    xp = packed.pack(x)
+    packed._warned_fallback_ops.clear()
+    out_p = rf.reduce_argmax(xp, axis=feat_dim) != targets
+    assert packed.is_packed(out_p)
+    assert not packed._warned_fallback_ops
+    _assert_equal_non_padded(out_p, out, batch_dim, time_dim)
+
+
+def test_generic_op_keeps_the_fallback_when_a_dim_is_named():
+    rf.select_backend_torch()
+    x, batch_dim, time_dim, _feat_dim = _make_input(batch_size=3, seq_lens=(7, 5, 4))
+    xp = packed.pack(x)
+    try:
+        rf.top_k(xp, axis=time_dim, k=2)
+    except Exception as exc:
+        assert "references packed dims" in str(exc), exc
+    else:
+        raise AssertionError("top_k names the packed time dim, it must not run on the packed buffer")
+
+
 def _assert_equal_per_seq(actual: Tensor, expected: Tensor, batch_dim: Dim, a_dim: Dim, e_dim: Dim, *rest: Dim):
     """compare two tensors whose spatial dims are separate Dim objects (e.g. an int vs a Tensor stride)"""
     actual = packed.unpack(actual)

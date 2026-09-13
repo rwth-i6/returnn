@@ -567,6 +567,24 @@ def _collect_referenced_dims(*values) -> Set[Dim]:
     return dims
 
 
+def _named_dims(*values) -> Set[Dim]:
+    """
+    :return: only the Dims the call names as explicit args (with their seq len deps),
+        i.e. the dims the op acts along (an axis, an out dim, a window).
+        Those need the padded structure, while a dim which only shows up in a plain Tensor arg's
+        shape says that arg is data over frames, which can be packed instead (see :func:`_pack_plain_like`).
+    """
+    dims = set()
+    for v in values:
+        if isinstance(v, Dim):
+            _add_dim_with_size_deps(dims, v)
+        elif isinstance(v, (list, tuple)):
+            dims.update(_named_dims(*v))
+        elif isinstance(v, dict):
+            dims.update(_named_dims(*v.values()))
+    return dims
+
+
 def _dim_refs_packed(d: Dim, template: PackedRawTensor) -> bool:
     """:return: whether d is a packed dim, or its seq lens depend on one (so masking over d needs the structure)"""
     if d in template.orig_dims or d == template.packed_dim:
@@ -1249,11 +1267,10 @@ def _make_dim_aware_op(name: str):
     """
     Generic wrapper for backend ops without a dedicated packed implementation.
 
-    If the call does not reference any of the packed dims
-    (checked over explicit Dim args and the dims of all other Tensor args),
-    the op cannot see the packed structure,
-    so it runs directly on the packed data (packed args replaced by their inner tensors)
-    and the results are rewrapped.
+    If the call names none of the packed dims as an explicit Dim arg, the op cannot act along them,
+    so plain Tensor args over the packed dims are packed alike (see :func:`_pack_plain_like`)
+    and the op runs directly on the packed data (packed args replaced by their inner tensors),
+    with the results rewrapped.
     Otherwise: unpack fallback (with a one-time warning).
     """
 
@@ -1301,6 +1318,29 @@ def _conform_packing(x, target_raw: PackedRawTensor):
     return x
 
 
+def _pack_plain_like(x, target_raw: PackedRawTensor):
+    """
+    Put a plain tensor arg over the packed dims into target_raw's packing, so the op stays packed.
+    Counterpart of :func:`_conform_packing`, which does the same for an already packed arg.
+    Lists and tuples are handled elementwise. Anything else is returned unchanged,
+    incl. a plain tensor not over the packed dims (a bias, a scalar) and one which cannot be packed.
+
+    :param x: call arg
+    :param target_raw: packing to follow
+    :return: x in target_raw's packing, or x unchanged
+    """
+    if isinstance(x, (list, tuple)):
+        return type(x)(_pack_plain_like(e, target_raw) for e in x)
+    if not isinstance(x, Tensor) or is_packed(x):
+        return x
+    if not (set(x.dims) & set(target_raw.orig_dims)):
+        return x
+    inner = _pack_like(x, target_raw)
+    if inner is None:
+        return x
+    return target_raw.rewrap(inner, name=x.name)
+
+
 def _dim_aware_call(name: str, args, kwargs):
     """see :func:`_make_dim_aware_op`"""
     all_values = list(args) + list(kwargs.values())
@@ -1317,11 +1357,19 @@ def _dim_aware_call(name: str, args, kwargs):
     # so multi-arg ops (combine, compare, where, concat, ...) stay packed instead of unpacking.
     args = [_conform_packing(x, raw0) for x in args]
     kwargs = {k: _conform_packing(v, raw0) for k, v in kwargs.items()}
+    packed_dims = set(raw0.orig_dims) | {raw0.packed_dim}
+    # a plain tensor arg over the packed dims is data over frames, not a reference to their structure,
+    # as long as the call names no packed dim itself (see _named_dims): pack it alike,
+    # so the op runs on packed data instead of unpacking everything.
+    # this is what the dedicated combine / where / gather paths do by hand.
+    if _named_dims(*args, *kwargs.values()).isdisjoint(packed_dims):
+        args = [_pack_plain_like(x, raw0) for x in args]
+        kwargs = {k: _pack_plain_like(v, raw0) for k, v in kwargs.items()}
     all_values = list(args) + list(kwargs.values())
     packed_args = [x for x in _flatten(all_values) if isinstance(x, Tensor) and is_packed(x)]
     referenced = _collect_referenced_dims(*all_values)
     if all(raw0.same_packing(x.raw_tensor) for x in packed_args[1:]):
-        overlap = referenced & (set(raw0.orig_dims) | {raw0.packed_dim})
+        overlap = referenced & packed_dims
         if overlap:
             _warn_fallback_once(name, f"references packed dims {sorted(overlap, key=lambda d: d.name or '')}")
         elif name in _DENSE_ONLY_INNER_OPS and raw0.has_gap_frames and _stats_active(name, kwargs):
