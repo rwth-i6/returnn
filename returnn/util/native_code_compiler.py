@@ -263,6 +263,26 @@ class NativeCodeCompiler:
             if os.path.exists(self._mod_path):
                 self._cleanup_old_path(self._mod_path, reason="need recompile")
         with lock:
+            # Several processes (e.g. the ranks of a distributed training on a cold node)
+            # decided to compile before they got the lock.
+            # Only the first one needs to; the others would rewrite the lib in place
+            # while another process is already loading it.
+            if not self._need_recompile():
+                if self.verbose:
+                    print("%s: No need to recompile after the lock: %s" % (self.__class__.__name__, self._so_filename))
+                os.utime(self._info_filename, None)
+                return
+            self._maybe_compile_inner()
+
+    def force_recompile(self):
+        """
+        Recompile even if the cached lib looks up-to-date, e.g. when it failed to load.
+        Locked like :func:`_maybe_compile`, so no other process sees the lib vanish.
+        """
+        with util.LockFile(self._mod_path):
+            for fn in (self._so_filename, self._info_filename):
+                if os.path.exists(fn):
+                    os.remove(fn)
             self._maybe_compile_inner()
 
     def _get_compiler_bin(self):
@@ -326,7 +346,10 @@ class NativeCodeCompiler:
         common_opts += ["-D_GLIBCXX_USE_CXX11_ABI=%i" % (1 if self.use_cxx11_abi else 0)]
         common_opts += ["-D%s=%s" % item for item in sorted(self.c_macro_defines.items())]
         common_opts += ["-g"]
-        opts = common_opts + [self._c_filename, "-o", self._so_filename]
+        # Compile to a temp file and rename it into place at the end,
+        # so a concurrent loader never sees a partially written lib.
+        so_tmp_filename = "%s.tmp.%i" % (self._so_filename, os.getpid())
+        opts = common_opts + [self._c_filename, "-o", so_tmp_filename]
         opts += self._transform_ld_flags(self.ld_flags)
         cmd_bin = self._get_compiler_bin()
         cmd_args = [cmd_bin] + opts
@@ -348,7 +371,8 @@ class NativeCodeCompiler:
                 print("Your GCC version might be too new. This is a problem with some nvcc versions.")
                 print()
             raise CalledProcessError(returncode=proc.returncode, cmd=cmd_args)
-        assert os.path.exists(self._so_filename)
+        assert os.path.exists(so_tmp_filename)
+        os.replace(so_tmp_filename, self._so_filename)
         with open("%s/compile.log" % self._mod_path, "wb") as f:
             if self.verbose:
                 print("%s: write compile log to: %s" % (self.__class__.__name__, f.name))

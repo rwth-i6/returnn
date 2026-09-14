@@ -227,8 +227,7 @@ class OpCodeCompiler(NativeCodeCompiler):
                 # e.g. "file too short": a job killed mid-write leaves a truncated .so in the
                 # node-local cache, which then poisons every later run on that node.
                 print(f"{self}: cached lib failed to load ({exc}), recompiling")
-                os.remove(self._so_filename)
-                self._maybe_compile()
+                self.force_recompile()
                 torch.ops.load_library(self._so_filename)
             module = getattr(torch.ops, self.base_name)
 
