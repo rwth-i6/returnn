@@ -1516,6 +1516,52 @@ class Backend(Generic[T]):
         """
         raise NotImplementedError
 
+    @staticmethod
+    def layer_norm(
+        x: Tensor, *, in_dim: Union[Dim, Sequence[Dim]], scale: Tensor, bias: Optional[Tensor], eps: float
+    ) -> Tensor:
+        """
+        Layer norm as a composition of generic ops, see :func:`rf.layer_norm`.
+
+        :param x: input
+        :param in_dim: the dim or dims to normalize over
+        :param scale: over in_dim
+        :param bias: over in_dim, or None
+        :param eps: added to the variance
+        :return: the normalized x
+        """
+        from . import _utils
+
+        mean, variance = rf.moments(x, axis=in_dim)
+        norm_x = (x - mean) * rf.rsqrt(variance + eps)
+        out = norm_x * scale
+        if bias is not None:
+            out += bias
+        return _utils.keep_dtype(out, x.dtype)
+
+    @staticmethod
+    def rms_norm(
+        x: Tensor, *, in_dim: Union[Dim, Sequence[Dim]], scale: Tensor, bias: Optional[Tensor], eps: float
+    ) -> Tensor:
+        """
+        RMS norm as a composition of generic ops, see :func:`rf.rms_norm`.
+
+        :param x: input
+        :param in_dim: the dim or dims to normalize over
+        :param scale: over in_dim
+        :param bias: over in_dim, or None
+        :param eps: added to the mean square
+        :return: the normalized x
+        """
+        from . import _utils
+
+        variance = rf.reduce_mean(rf.square(x), axis=in_dim)
+        norm_x = x * rf.rsqrt(variance + eps)
+        out = norm_x * scale
+        if bias is not None:
+            out += bias
+        return _utils.keep_dtype(out, x.dtype)
+
     # noinspection PyShadowingBuiltins
     @staticmethod
     def conv(

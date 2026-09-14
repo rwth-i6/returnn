@@ -11,6 +11,8 @@ from . import _utils
 
 __all__ = [
     "moments",
+    "layer_norm",
+    "rms_norm",
     "LayerNorm",
     "RMSNorm",
     "GroupNorm",
@@ -85,6 +87,38 @@ def moments(
     return mean, variance
 
 
+def layer_norm(
+    x: Tensor, *, in_dim: Union[Dim, Sequence[Dim]], scale: Tensor, bias: Optional[Tensor], eps: float
+) -> Tensor:
+    """
+    Normalizes x over in_dim to zero mean and unit variance and applies the scale and the bias, see :class:`LayerNorm`.
+
+    :param x: input
+    :param in_dim: the dim or dims to normalize over
+    :param scale: over in_dim
+    :param bias: over in_dim, or None
+    :param eps: added to the variance
+    :return: the normalized x, with the dims of x
+    """
+    return _utils.get_backend_from_tensors(x).layer_norm(x, in_dim=in_dim, scale=scale, bias=bias, eps=eps)
+
+
+def rms_norm(
+    x: Tensor, *, in_dim: Union[Dim, Sequence[Dim]], scale: Tensor, bias: Optional[Tensor], eps: float
+) -> Tensor:
+    """
+    Divides x by its root mean square over in_dim and applies the scale and the bias, see :class:`RMSNorm`.
+
+    :param x: input
+    :param in_dim: the dim or dims to normalize over
+    :param scale: over in_dim
+    :param bias: over in_dim, or None
+    :param eps: added to the mean square
+    :return: the normalized x, with the dims of x
+    """
+    return _utils.get_backend_from_tensors(x).rms_norm(x, in_dim=in_dim, scale=scale, bias=bias, eps=eps)
+
+
 class LayerNorm(rf.Module):
     """
     `Layer normalization <https://arxiv.org/abs/1607.06450>`__.
@@ -110,12 +144,7 @@ class LayerNorm(rf.Module):
             self.bias.initial = 0.0
 
     def __call__(self, x: Tensor) -> Tensor:
-        mean, variance = rf.moments(x, axis=self.in_dim)
-        norm_x = (x - mean) * rf.rsqrt(variance + self.eps)
-        out = norm_x * self.scale
-        if self.bias is not None:
-            out += self.bias
-        return _utils.keep_dtype(out, x.dtype)
+        return layer_norm(x, in_dim=self.in_dim, scale=self.scale, bias=self.bias, eps=self.eps)
 
 
 class RMSNorm(rf.Module):
@@ -141,12 +170,7 @@ class RMSNorm(rf.Module):
             self.bias.initial = 0.0
 
     def __call__(self, x: Tensor) -> Tensor:
-        variance = rf.reduce_mean(rf.square(x), axis=self.in_dim)
-        norm_x = x * rf.rsqrt(variance + self.eps)
-        out = norm_x * self.scale
-        if self.bias is not None:
-            out += self.bias
-        return _utils.keep_dtype(out, x.dtype)
+        return rms_norm(x, in_dim=self.in_dim, scale=self.scale, bias=self.bias, eps=self.eps)
 
 
 class GroupNorm(rf.Module):
