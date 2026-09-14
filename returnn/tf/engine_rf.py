@@ -78,6 +78,10 @@ class Engine(EngineBase):
         self._log_memory_usage = config.bool("tf_log_memory_usage", False)
         # train steps to trace, printing where their time goes (see _print_profile)
         self._profile_steps = set(config.int_list("tf_profile_step", []))
+        # TF profiler over the same steps, written to this dir.
+        # Unlike the RunOptions tracing above, it leaves XLA clustering intact,
+        # so it is the only way to see the fused kernels.
+        self._profiler_logdir = config.value("tf_profiler_logdir", None)
         _set_cudnn_autotune(config.bool("tf_cudnn_autotune", bool(self._static_shapes_opts)))
         self._extra_fetches: Dict[str, tf.Tensor] = {}  # per step, for the log only
         self._loss: Optional[tf.Tensor] = None  # the objective, per step
@@ -221,8 +225,18 @@ class Engine(EngineBase):
                     ),
                     session=self.session,
                 )
-            # tracing costs time itself, so it applies to single steps, not to the whole run
-            run_metadata = tf_compat.v1.RunMetadata() if num_steps in self._profile_steps else None
+            if self._profiler_logdir and self._profile_steps:
+                # the profiler spans the range, the RunOptions tracing below is per step
+                if num_steps == min(self._profile_steps):
+                    tf.profiler.experimental.start(self._profiler_logdir)
+                elif num_steps == max(self._profile_steps) + 1:
+                    tf.profiler.experimental.stop()
+                    print(f"TF profiler written to {self._profiler_logdir}", file=log.v3)
+            # tracing costs time itself, so it applies to single steps, not to the whole run.
+            # It also disables XLA clustering for that step, so use the profiler above with tf_jit.
+            run_metadata = (
+                tf_compat.v1.RunMetadata() if (num_steps in self._profile_steps and not self._profiler_logdir) else None
+            )
             run_options = (
                 tf_compat.v1.RunOptions(trace_level=tf_compat.v1.RunOptions.FULL_TRACE)
                 if run_metadata is not None
