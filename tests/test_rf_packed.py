@@ -118,11 +118,14 @@ def test_linear():
 def test_layer_norm():
     rf.select_backend_torch()
     x, batch_dim, time_dim, feat_dim = _make_input()
-    layer = rf.LayerNorm(feat_dim)
     xp = packed.pack(x)
-    out_p = layer(xp)
-    assert packed.is_packed(out_p)  # statistics are over feat only, must stay packed
-    _assert_equal_non_padded(out_p, layer(x), batch_dim, time_dim)
+    # the feature dim often lives only on the outer tensor, e.g. rf.Linear sets it after the matmul
+    xp.feature_dim = feat_dim
+    for layer in (rf.LayerNorm(feat_dim), rf.RMSNorm(feat_dim)):
+        out_p = layer(xp)
+        assert packed.is_packed(out_p)  # statistics are over feat only, must stay packed
+        assert out_p.feature_dim == feat_dim, out_p
+        _assert_equal_non_padded(out_p, layer(x), batch_dim, time_dim)
 
 
 def test_output_block_log_softmax():

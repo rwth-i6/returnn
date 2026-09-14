@@ -3984,6 +3984,20 @@ class PackedBackend(Backend[PackedRawTensor]):
         return _repack_result(rf.log_softmax(unpack(tensor), axis=axis, use_mask=use_mask), raw)
 
     @staticmethod
+    def layer_norm(
+        x: Tensor, *, in_dim: Union[Dim, Sequence[Dim]], scale: Tensor, bias: Optional[Tensor], eps: float
+    ) -> Tensor:
+        """layer_norm, see :func:`_packed_norm`"""
+        return _packed_norm("layer_norm", x, in_dim=in_dim, scale=scale, bias=bias, eps=eps)
+
+    @staticmethod
+    def rms_norm(
+        x: Tensor, *, in_dim: Union[Dim, Sequence[Dim]], scale: Tensor, bias: Optional[Tensor], eps: float
+    ) -> Tensor:
+        """rms_norm, see :func:`_packed_norm`"""
+        return _packed_norm("rms_norm", x, in_dim=in_dim, scale=scale, bias=bias, eps=eps)
+
+    @staticmethod
     def softmax_cross_entropy_with_logits(*, logits: Tensor, targets: Tensor, axis: Dim):
         """
         CE over a non-packed axis (vocab), targets over the same sequences -> on packed data.
@@ -4630,6 +4644,39 @@ for _name in [
     "transposed_conv",
 ]:
     setattr(PackedBackend, _name, _make_dim_aware_op(_name))
+
+
+def _packed_norm(
+    name: str, x: Tensor, *, in_dim: Union[Dim, Sequence[Dim]], scale: Tensor, bias: Optional[Tensor], eps: float
+) -> Tensor:
+    """
+    layer_norm or rms_norm of a packed tensor.
+    Over non-packed dims only (the usual feature dim) the statistics are per frame,
+    so the inner backend's op runs directly on the packed data, e.g. the fused torch kernel.
+    The feature dim is taken over from x, since it often lives only on the outer tensor
+    (see :func:`_set_feature_dim_like_binop`).
+    Anything else composes the generic implementation from the packed ops.
+
+    :param name: "layer_norm" or "rms_norm"
+    :param x: packed input
+    :param in_dim: the dim or dims to normalize over
+    :param scale: over in_dim
+    :param bias: over in_dim, or None
+    :param eps: added to the variance or the mean square
+    :return: the normalized x, in the packing of x
+    """
+    raw = _raw(x)
+    in_dims = [in_dim] if isinstance(in_dim, Dim) else list(in_dim)
+    params = [param for param in (scale, bias) if param is not None]
+    if any(_dim_refs_packed(d, raw) for d in in_dims) or any(
+        is_packed(param) or any(_dim_refs_packed(d, raw) for d in param.dims) for param in params
+    ):
+        return getattr(Backend, name)(x, in_dim=in_dim, scale=scale, bias=bias, eps=eps)
+    inner_out = getattr(raw.inner_backend, name)(raw.inner, in_dim=in_dim, scale=scale, bias=bias, eps=eps)
+    out = raw.rewrap(inner_out, name=name)
+    if x.feature_dim is not None and out.feature_dim is None and x.feature_dim in out.dims:
+        out.feature_dim = x.feature_dim
+    return out
 
 
 def _last_row(packed_dim: Dim, dtype: str) -> Union[int, Tensor]:
