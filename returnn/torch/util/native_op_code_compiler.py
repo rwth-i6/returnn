@@ -8,6 +8,7 @@ See :class:`OpCodeCompiler`.
 from __future__ import annotations
 from typing import Union, Optional, Sequence, Dict, List
 import os
+import sys
 import sysconfig
 
 import torch
@@ -100,7 +101,10 @@ class OpCodeCompiler(NativeCodeCompiler):
         c_macro_defines.setdefault("NDEBUG", 1)
 
         ld_flags = list(ld_flags)
-        ld_flags.append("--no-as-needed")
+        if sys.platform != "darwin":
+            # GNU ld only. Apple's ld rejects it ("unknown options: --no-as-needed")
+            # and records every given dylib anyway.
+            ld_flags.append("--no-as-needed")
         ld_flags.append(f"-L{cpp_extension.TORCH_LIB_PATH}")
         ld_flags.append("-lc10")
         if self._with_cuda():
