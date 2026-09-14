@@ -903,6 +903,13 @@ class TFBackend(Backend[tf.Tensor]):
         return Tensor("cross_entropy", dims=out_dims, raw_tensor=raw, dtype=TFBackend.get_dtype_name_raw(raw))
 
     @staticmethod
+    def ctc_loss_packed_raw(**kwargs):
+        """CTC loss on a packed logits buffer, see :func:`Backend.ctc_loss_packed_raw`"""
+        from returnn.tf import native_op as tf_native_op
+
+        return tf_native_op.ctc_loss_packed(**kwargs)
+
+    @staticmethod
     def ctc_loss(
         *,
         logits: Tensor,
@@ -2055,7 +2062,12 @@ class TFBackend(Backend[tf.Tensor]):
         :return: tensor with the mask dims replaced by a single new dim, and that dim
         """
         assert mask.dtype == "bool"
-        assert set(mask.dims) == set(dims)
+        if set(dims) != set(mask.dims):
+            assert len(dims) == 1  # the frontend pre-merges multiple dims
+            # noinspection PyProtectedMember
+            from returnn.frontend.array_ import _masked_select_subset
+
+            return _masked_select_subset(tensor, mask=mask, dim=dims[0], out_dim=out_dim)
         remaining_dims = [d for d in tensor.dims if d not in mask.dims]
         if not out_dim:
             out_dim = Dim(None, name="masked_select")

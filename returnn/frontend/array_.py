@@ -739,8 +739,8 @@ def masked_select(
     if dims_set == mask_dims_set:
         # noinspection PyProtectedMember
         return tensor._raw_backend.masked_select(tensor, mask=mask, dims=dims, out_dim=out_dim)
-    # Separate implementation for the case where we have a subset of the mask dims, specifically one single dim.
-    # See https://github.com/rwth-i6/returnn/issues/1605 for discussion.
+    # A strict subset of the mask dims: the other dims stay, the result is ragged over them.
+    # Same backend entry; implementations delegate to :func:`_masked_select_subset` by default.
     mask = mask.copy_masked(mask_value=False)
     if len(dims) > 1:
         # Flatten it, in the specified order.
@@ -749,10 +749,29 @@ def masked_select(
     else:
         (in_dim,) = dims
     in_dim: Dim
-    mask, in_dim_ext = rf.expand_make_non_empty(mask, axis=in_dim)
-    tensor, _ = rf.expand_make_non_empty(tensor, axis=in_dim, out_dim=in_dim_ext)
+    # noinspection PyProtectedMember
+    return tensor._raw_backend.masked_select(tensor, mask=mask, dims=[in_dim], out_dim=out_dim)
+
+
+def _masked_select_subset(
+    tensor: Tensor, *, mask: Tensor, dim: Dim, out_dim: Optional[Dim] = None
+) -> Tuple[Tensor, Dim]:
+    """
+    masked_select over a single dim which is a strict subset of the mask dims
+    (see https://github.com/rwth-i6/returnn/issues/1605).
+
+    :param tensor: with ``dim``
+    :param mask: bool, dims incl. ``dim``
+    :param dim: the dim to select along
+    :param out_dim: replaces ``dim`` in the result; created if not given
+    :return: tensor with ``dim`` replaced by ``out_dim``, and ``out_dim``
+    """
+    mask, in_dim_ext = rf.expand_make_non_empty(mask, axis=dim)
+    tensor, _ = rf.expand_make_non_empty(tensor, axis=dim, out_dim=in_dim_ext)
     idxs = rf.cumsum(rf.cast(mask, "int32"), spatial_dim=in_dim_ext)  # [T,B] -> idx in T' + 1
-    new_size = rf.gather(idxs, indices=in_dim_ext.get_dim_value_tensor() - 1, axis=in_dim_ext)  # [B]
+    lens = in_dim_ext.get_size_tensor(device=idxs.device)
+    new_size = rf.gather(idxs, indices=rf.maximum(lens - 1, 0), axis=in_dim_ext)  # [B]
+    new_size = rf.where(lens > 0, new_size, 0)
     if rf.is_static_traceable():
         new_size_ = new_size
     else:
@@ -1306,6 +1325,17 @@ def slice(
                 out_dim = size
             elif isinstance(size, (int, Tensor)):
                 out_dim = Dim(size, name="slice")
+                # noinspection PyProtectedMember
+                if (
+                    isinstance(size, Tensor)
+                    and rf.is_static_traceable()
+                    and out_dim.capacity is None
+                    and out_dim._derived_capacity() is None
+                ):
+                    raise ValueError(
+                        f"rf.slice: static traceable needs a capacity for the out dim of a Tensor size;"
+                        f" pass out_dim with an explicit capacity (slicing {axis})"
+                    )
             else:
                 raise TypeError(f"invalid type {type(size)} for size {size}")
             assert step is None or (isinstance(step, int) and step == 1)
@@ -1643,6 +1673,8 @@ def expand_make_non_empty(source: Tensor, *, axis: Dim, out_dim: Optional[Dim] =
     source, (new_axis,) = rf.pad(source, axes=[axis], padding=[(0, 1)], mode="constant", value=0)
     size_dev = source.device if rf.is_static_traceable() else None
     size_t = rf.maximum(axis.get_size_tensor(device=size_dev), 1)
+    if out_dim is None:
+        out_dim = Dim(size_t, name="non_empty", bounded_by=axis)
     source, new_axis = rf.slice(source, axis=new_axis, size=size_t, out_dim=out_dim)
     return source, new_axis
 

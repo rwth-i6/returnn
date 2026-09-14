@@ -12,7 +12,7 @@ Config, e.g.::
 
     torch_cuda_graph = {
         "batch_size_bound": 200,        # max seqs per batch; smaller batches get zero-length padding seqs.
-                                        # the batch dim is made STATIC (= this bound): always filled up to it
+                                        # the batch dim is made static (= this bound): always filled up to it
         "dim_capacity": {"data": 3000, "classes": 300},  # bound of the dynamic (time) dim per data key
         "packed_total_bound": {"data": 500_000},  # optional: tighter bound of the packed (gapped) total per key
         "partitioned": True,  # optional: fw/bwd-partitioned compile (min-cut remat) instead of one whole-step graph
@@ -23,46 +23,25 @@ Config, e.g.::
         "capture": True,                # False (with compile): run the compiled step eagerly, no graph
     }
 
-Requirements / current limitations (asserted):
+Requirements (asserted):
 
-- ``accum_grad_multiple_step == 1``, no grad scaler, no DDP / torch-distributed, no hot reloading.
-- The batch dim is static (= ``batch_size_bound``);
-  the varying real seq count shows up only as zero-length padding seqs.
-  Ops normalizing by the batch-axis size
-  (e.g. a plain mean over the batch dim, or a per-seq loss with default normalization)
-  COUNT the padding seqs --
-  normalize by lengths instead (e.g. ``custom_inv_norm_factor``, masked reductions).
-- No eval epochs in the same process yet: the declared capacities live on the (global) template dims,
-  so the eager eval path would build capacity-sized grids against normally-padded eval batches.
-- The train step must be static traceable (:func:`rf.set_static_traceable` is enabled around it):
-  static (bounded) shapes, bounded control flow (see e.g. :func:`rf.audio.specaugment`),
+- ``accum_grad_multiple_step == 1``, no grad scaler, no DDP, no hot reloading.
+- The batch dim is static (= ``batch_size_bound``), filled with zero-length padding seqs;
+  normalize by lengths, not by the batch-axis size (which counts the padding).
+- No eval epochs in the same process yet
+  (the declared capacities live on the global template dims).
+- The train step must be static traceable: bounded shapes and control flow,
   no host reads of device values.
 - Every batch must fit the declared bounds (asserted per step).
 
-Mechanics (validated by standalone probes first, see the 2026 packed/CUDA-graph work):
-
-- Static input buffers are the only graph inputs:
-  per data key a capacity-padded data buffer and a device-resident seq-lens buffer,
-  plus one device step scalar. Per step, the batch is copied in and the graph replayed.
-- The extern data is rebuilt per step around these buffers with the template dims RESET,
-  so at capture time every dim/layout cache misses and the whole layout chain
-  (seq starts, masks, derived subsample lens, ...) is computed IN-graph from the lens buffers
-  -- one captured graph then replays correctly across varying batch sizes and seq lengths.
-- ``warmup_steps: 0`` (no eager step at all) works: the two things a warmup used to provide
-  are handled explicitly -- the lazily created optimizer state + grads via
-  :func:`GraphCapturedTrainStep._materialize_optimizer_state` (they are graph inputs of the
-  in-graph optimizer step, so they must exist before the trace), and host-derived constants
-  (e.g. the mel filterbank matrix) via creation outside all python dispatch modes in the torch
-  backend's ``convert_to_tensor`` (created INSIDE the trace they become lifted inputs with a
-  per-call H2D copy -- illegal under capture). Everything else (cuDNN/cuFFT plans, workspaces,
-  autotune) is covered by the compiled warm run that precedes the capture.
-- All eager steps before the capture run on a non-default CUDA stream:
-  the first-ever backward binds autograd/grad-accumulator state to the stream it runs on,
-  and a default-stream first backward makes any later capture-time backward fail
-  (torch 2.7; reproduced in a minimal pure-torch example).
-- Gradients live in static buffers, zeroed in-graph. They must never be freed
-  (``p.grad = None`` would let the allocator hand the memory to other tensors,
-  which the replay would then corrupt) -- thus also no ``optimizer.zero_grad()``.
+Mechanics: the only graph inputs are static buffers
+(per key a capacity-padded data buffer and a device seq-lens buffer, plus a step scalar);
+per step the batch is copied in and the graph replayed.
+The extern data is rebuilt around these buffers with the template dims reset,
+so the whole layout chain computes in-graph from the lens buffers
+and one graph replays across varying batch sizes and lengths.
+Details at the code: warmup/lazy state (:func:`_materialize_optimizer_state`),
+stream discipline and grad buffers (:func:`run_train_step`).
 """
 
 from __future__ import annotations
@@ -136,15 +115,15 @@ def bounds_from_config(opts: Dict[str, Any], *, config, extern_data_template: Te
     return opts
 
 
-# total bytes reserved by the current CUDA-graph private pool(s), set after capture
-# (single active graph per engine; a recapture overwrites). For the engine memory log.
+# bytes reserved by the current CUDA-graph private pool, set after capture,
+# for the engine memory log (single active graph per engine; a recapture overwrites)
 _graph_pools_reserved = 0
 
 
 def graph_pools_reserved() -> int:
     """
-    :return: bytes reserved by live CUDA-graph private pools --
-        replay working memory, freed as tensors, thus INVISIBLE in (max_)memory_allocated
+    :return: bytes reserved by live CUDA-graph private pools:
+        replay working memory, freed as tensors, thus invisible in (max_)memory_allocated
     """
     return _graph_pools_reserved
 
@@ -191,11 +170,11 @@ _inductor_workarounds_applied = False
 
 def _patch_inductor_nan_asserts_nan_only() -> None:
     """
-    Inductor's nan_asserts check isnan AND isinf on every buffer,
-    but inf is legitimate here (mask fill values, -log 0 lattice scores from FastBaumWelch):
+    Inductor's nan_asserts check isnan and isinf,
+    but inf is legitimate here (mask fill values, -log 0 lattice scores):
     only NaN indicates a defect.
     Replace the two emitters (torch 2.7 internals) with NaN-only versions
-    that also put the buffer name into the assert message.
+    that also name the buffer in the assert message.
     """
     global _inductor_nan_asserts_patched
     if _inductor_nan_asserts_patched:
@@ -233,9 +212,8 @@ def _patch_inductor_nan_asserts_nan_only() -> None:
             if isinstance(arg_signature, TensorArg):
                 assert not V.graph.cpp_wrapper  # python wrapper only here
                 if _nan_check_report_mode:
-                    # report-only: NaN counts per buffer, no abort --
-                    # the culprit is the buffer whose NaN pattern CHANGES at the failing call
-                    # (expected masked-lane / pre-guard NaNs stay constant across calls)
+                    # report-only, no abort: the culprit is the buffer whose NaN pattern
+                    # changes at the failing call (masked-lane NaNs stay constant)
                     wrapper.writeline(f"_n_ = {arg}.isnan().sum().item() if {arg}.is_floating_point() else 0")
                     wrapper.writeline(f"_n_ and print('NANREP', {arg!r}, _n_, flush=True)")
                     if arg in _nan_dump_buffer_names:
@@ -257,10 +235,9 @@ _nan_dump_buffer_names = ()
 class _NanTraceMode:
     """
     TorchDispatchMode raising at the first aten op whose float output contains NaN
-    (kernel granularity, catches everything in eager; a host sync per op -- one-step debug only).
-    The flash varlen forward is allowlisted:
-    its filler/tail rows are NaN by construction and cleaned right after (see the guard).
-    Intentional -inf mask values are legal, so only NaN is checked.
+    (a host sync per op: one-step debug only).
+    Flash varlen is allowlisted (filler rows are NaN by construction, cleaned after);
+    -inf mask values are legal, so only NaN is checked.
     """
 
     def __new__(cls):
@@ -274,7 +251,7 @@ class _NanTraceMode:
                 fname = str(func)
                 # allocations are uninitialized by design; flash filler/tail rows are
                 # NaN by construction (cleaned right after, see the guard);
-                # alias/copy ops cannot CREATE NaN (detection moves to the first compute op)
+                # alias/copy ops cannot create NaN (detection moves to the first compute op)
                 _skip = (
                     "flash_attention",
                     "empty",
@@ -310,14 +287,11 @@ class _NanTraceMode:
 
 def _patch_zero_init_generated_buffers() -> None:
     """
-    Debug: zero-fill every buffer the generated code allocates.
-    Bound-regime buffers have unwritten tails (beyond the actual totals) with arbitrary garbage;
-    eager has them too, but Inductor fusion can move a reduction across the masking
-    (then garbage can reach the outputs).
-    Clean run with zero-fill vs broken without = uninitialized-read confirmed.
-    One memset per allocation, debug only.
-    The generated modules bind ``empty_strided_cuda`` from this symbol at load time,
-    so the patch must be in place before compile/cache-load (it is: applied at compile setup).
+    Debug: zero-fill every generated-code allocation.
+    Bound-regime buffers have garbage tails,
+    and fusion can move a reduction across the masking;
+    clean with zero-fill vs broken without = uninitialized read.
+    Must be applied before compile/cache-load (``empty_strided_cuda`` binds at load).
     """
     global _zero_init_buffers_patched
     if _zero_init_buffers_patched:
@@ -344,24 +318,21 @@ def _apply_inductor_workarounds():
     """
     torch 2.7 Inductor issues hit by the compiled whole step:
 
-    - aten.searchsorted lowers to an INLINE ops.bucketize; fused into a reduction's inner_fn,
-      its read is a StarDep -> LoweringException ("StarDep does not have an index").
-      Extern-kernel fallback instead (result realized, downstream reads are normal deps).
-    - Inductor's own philox RNG derives per-call seeds host-side,
-      which a CUDA-graph capture would FREEZE (dropout masks repeated across replays).
-      fallback_random routes RNG through the aten kernels, whose generator state the capture
-      registers -- each replay draws fresh randomness (and numerics match eager).
-    - The addmm fusion pattern (add(mm(a, b), bias) -> addmm) checks shapes but not dtypes.
-      Mixed dtypes are legal for the add (type promotion, e.g. bf16 matmul + f32 bias under AMP,
-      which RF Linear produces: explicit dot + add, not F.linear),
-      but not for addmm -> RuntimeError when the compiled code runs.
-      Wrap the registered patterns' extra_check to require equal dtypes.
-    - The flash varlen extern kernels require a contiguous last dim.
-      Their registered sdpa_constraint misses the 3-dim (varlen, cu_seqlens) case:
-      Inductor fuses away the explicit contiguous clones of q/k
-      and materializes them head-interleaved (last-dim stride = num heads),
-      -> RuntimeError when the compiled code runs.
-      Constrain them to the fx (eager) strides, which were flash-legal.
+    - aten.searchsorted lowers to an inline ops.bucketize;
+      fused into a reduction's inner_fn its read is a StarDep -> LoweringException.
+      Extern-kernel fallback instead.
+    - Inductor's philox RNG derives per-call seeds host-side,
+      which a capture would freeze (dropout masks repeated across replays).
+      fallback_random routes RNG through the aten kernels,
+      whose generator state the capture registers; each replay draws fresh.
+    - The addmm fusion pattern checks shapes but not dtypes.
+      Mixed dtypes are legal for the matched add (promotion, e.g. bf16 mm + f32 bias
+      under AMP from RF Linear) but not for addmm -> RuntimeError at run time.
+      Wrap the patterns' extra_check to require equal dtypes.
+    - The flash varlen extern kernels need a contiguous last dim,
+      and their sdpa_constraint misses the 3-dim (varlen, cu_seqlens) case:
+      Inductor fuses away the contiguous clones of q/k -> RuntimeError at run time.
+      Constrain to the fx strides, which were flash-legal.
     """
     global _inductor_workarounds_applied
     if _inductor_workarounds_applied:
@@ -413,18 +384,12 @@ def _apply_inductor_workarounds():
 
 def _register_smoothed_ce_bwd_pattern() -> None:
     """
-    Rewrite the (grad-level label-smoothed) sparse-CE backward chain into its closed form.
-
-    The chain is the PLAIN aten emission of ``-gather(log_probs, targets)`` backward
-    (dense new_zeros + scatter_add accumulator) -> scale + shift*sum(abs)
-    (:func:`scaled_gradient_ext`, i.e. :func:`label_smoothed_log_prob_gradient`)
-    -> _log_softmax_backward_data. No marker op; a guard test asserts the match
-    keeps firing across torch upgrades (decomposition drift fails loudly there).
-    Inductor cannot do this itself: scatter is a fusion barrier, and the rewrite is algebraic
-    (the accumulator has ONE nonzero per row, so its row reductions are analytic in the upstream).
-    The closed form materializes NO dense intermediates:
-    one elementwise kernel over [frames, classes] + one scatter_add into the OUTPUT
-    (~2 GiB f32 per accumulator saved per CE head at the loq scale).
+    Rewrite the label-smoothed sparse-CE backward chain
+    (gather backward -> :func:`scaled_gradient_ext` -> _log_softmax_backward_data)
+    into its closed form: the accumulator has one nonzero per row,
+    so its row reductions are analytic;
+    no dense intermediates (~2 GiB f32 per CE head saved).
+    No marker op; a guard test asserts the match survives torch upgrades.
     """
     # noinspection PyProtectedMember
     import torch._inductor.fx_passes.post_grad as post_grad
@@ -433,9 +398,8 @@ def _register_smoothed_ce_bwd_pattern() -> None:
     from torch._inductor.pattern_matcher import CallFunction, Ignored, KeywordArg, register_graph_pattern
 
     aten = torch.ops.aten
-    # The POST-GRAD aten emission of the generic gather backward + scaled_gradient_ext
-    # + the DECOMPOSED log_softmax backward (dumped ground truth, see the project notes):
-    # hand-built pattern, so the full() size list and the smoothing scalars are wildcards.
+    # the post-grad aten emission of the chain (dumped ground truth, see the project notes);
+    # hand-built pattern: the full() size list and the smoothing scalars are wildcards
     full = CallFunction(
         aten.full.default, Ignored(), 0, dtype=Ignored(), layout=Ignored(), device=Ignored(), pin_memory=Ignored()
     )
@@ -472,12 +436,9 @@ _smoothed_ce_bwd_match_count = 0
 @contextmanager
 def _allow_non_fake_inputs():
     """
-    The AOT dispatcher runs its analysis under a strict FakeTensorMode,
-    which rejects the closed-over real static buffers of this module.
-    They are effectively graph constants read at runtime
-    (the same static-buffer semantics the plain capture relies on),
-    so relax the mode -- scoped around the trace+compile call, which runs on REAL inputs
-    (fake inputs instead crash Inductor's runtime autotune on fake data ptrs).
+    The AOT dispatcher's strict FakeTensorMode rejects our closed-over static buffers;
+    they are effectively runtime graph constants, so relax the mode,
+    scoped around trace+compile (real inputs: fake ones crash runtime autotune).
     """
     # noinspection PyProtectedMember
     import torch._subclasses.fake_tensor as fake_tensor_mod
@@ -523,17 +484,14 @@ class GraphCapturedTrainStep:
         :param extern_data_template:
         :param device:
         :param float_dtype:
-        :param params: all model parameters. Their .grad becomes static buffers, zeroed in-graph.
-        :param run_step: ``engine._run_step``-like: ``run_step(extern_data, step=step_tensor)``,
-            initializing the train-step run ctx and running the user train step function.
-        :param post_step: optional, captured IN-graph after the backward
-            (opts "capture_optimizer": grad clip + optimizer step; must be capture-safe:
-            capturable optimizer (device step counters), no host reads, constant/device-tensor lr).
-        :param rf_params: the RF-level model params (required for opts "compile":
-            the compiled step takes the param raw tensors as graph inputs via RF-level raw swap).
-        :param packed_batch_size: the config option of the same name, when set and statically
-            known (a dict/int, not a callable). Used ONLY to infer a missing per-key
-            "packed_total_bound", see :func:`_get_data_buf`.
+        :param params: all model parameters; .grad becomes static buffers, zeroed in-graph
+        :param run_step: ``run_step(extern_data, step=step_tensor)``,
+            runs the user train step function under a train run ctx
+        :param post_step: grad clip + optimizer step, captured in-graph
+            with opts "capture_optimizer"; must be capture-safe
+        :param rf_params: RF-level model params, required for opts "compile"
+        :param packed_batch_size: the config option, when statically known;
+            only to infer a missing "packed_total_bound", see :func:`_get_data_buf`
         """
         assert str(device).startswith("cuda"), f"torch_cuda_graph requires a cuda device, got {device!r}"
         opts = CollectionReadCheckCovered(opts)  # catch unknown (e.g. typo'd) option keys, see below
@@ -546,17 +504,11 @@ class GraphCapturedTrainStep:
         # only for inferring a missing packed_total_bound entry, see _get_data_buf
         self._packed_batch_size: Dict[str, int] = dict(packed_batch_size) if isinstance(packed_batch_size, dict) else {}
         self.warmup_steps = int(opts.get("warmup_steps", 2))
-        # Run the eager warmup steps on a minimal dummy batch instead of the real one
-        # (params + optimizer state are restored afterwards, so the model never sees them).
-        # The warmup peaks far above the captured step (eager, no buffer-reuse planning),
-        # and that peak, not the steady state, is what the job's GPU must fit.
-        # Value: True = seq len 1 for every key. Deliberately extreme, NOT a tuned default:
-        # the warmup exists for its SIDE EFFECTS (lazy allocs -- optimizer moments,
-        # cuDNN/cuFFT plans -- must happen here, not inside the capture), so a front-end that
-        # cannot take a length-1 seq (e.g. an stft/conv chain: empty-input branch, negative
-        # "valid" out length) must fail LOUDLY here rather than silently warm up a branch the
-        # traced graph never takes. Then set an int (frames per seq, all keys) or a per-key
-        # dict, just above what the front-end needs (e.g. one stft window of audio).
+        # eager warmup on a minimal dummy batch (params/buffers/opt state restored after);
+        # True = seq len 1, deliberately extreme:
+        # a front end that cannot take it must fail loudly,
+        # not warm up a branch the traced graph never takes;
+        # then set an int or per-key dict just above what the front end needs
         dummy_warmup_opt = opts.get("dummy_warmup", False)
         self.dummy_warmup = bool(dummy_warmup_opt)
         self._dummy_warmup_seq_len: Union[int, Dict[str, int]] = (
@@ -577,10 +529,9 @@ class GraphCapturedTrainStep:
         self._grad_params = [p for p in params if p.requires_grad]
         self._compile = bool(opts.get("compile", False))
         self._capture_graph = bool(opts.get("capture", True))
-        # partitioned mode: compile the loss via the joint AOT path instead of the single
-        # inference-style whole-step graph: fw/bwd split by min-cut rematerialization,
-        # grads via .backward() through the compiled autograd.Function (still captured in-graph).
-        # This enables activation_memory_budget as a global save-vs-recompute knob.
+        # partitioned: joint AOT path instead of one inference-style whole-step graph,
+        # fw/bwd split by min-cut remat, grads via .backward() (still captured in-graph);
+        # enables activation_memory_budget as the save-vs-recompute knob
         self._partitioned = bool(opts.get("partitioned", False))
         # 0..1 fraction of the save-everything activation memory (torch._functorch.config);
         # only meaningful with "partitioned"
@@ -608,14 +559,14 @@ class GraphCapturedTrainStep:
         self._debug_nan_dump_inputs = bool(opts.get("debug_nan_dump_inputs", False))
         # debug: zero-fill every buffer the generated code allocates (see the patch func)
         self._debug_zero_init_buffers = bool(opts.get("debug_zero_init_buffers", False))
-        # debug: with inductor_nan_asserts, PRINT per-buffer NaN counts instead of asserting
+        # debug: with inductor_nan_asserts, print per-buffer NaN counts instead of asserting
         self._debug_nan_report = bool(opts.get("debug_nan_report", False))
         # debug: conservative Inductor codegen (no epilogue fusion, no pattern matcher) --
         # if the sporadic NaN vanishes, a miscompiled fusion is confirmed
         self._inductor_conservative = bool(opts.get("inductor_conservative", False))
         # debug: run the traced AOT graph with eager kernels (no Inductor at all)
         self._debug_aot_eager = bool(opts.get("debug_aot_eager", False))
-        # debug: run step_core UNTRACED, plain eager, on the same bound buffers
+        # debug: run step_core untraced, plain eager, on the same bound buffers
         # (isolates bound-regime semantics from the AOT trace)
         self._debug_eager_bound = bool(opts.get("debug_eager_bound", False))
         # debug: with debug_nan_report, torch.save these generated-code buffers each call
@@ -641,10 +592,9 @@ class GraphCapturedTrainStep:
         self._batch_dim = get_batch_dim_from_extern_data(extern_data_template)
         self._batch_dim_staticized = self._batch_dim.dimension is None  # standard case: True
         if self._batch_dim_staticized:
-            # The copy-in always fills the batch up to the bound (zero-length padding seqs),
-            # so in this regime the batch dim IS static -- make it so.
-            # (A process-wide template-dim mutation, like the declared capacities;
-            # toggled off around the dynamic-shape paths, see set_bound_shapes_enabled.)
+            # the copy-in always fills the batch up to the bound (zero-length padding seqs),
+            # so the batch dim is static here; process-wide template-dim mutation,
+            # toggled off around the dynamic-shape paths (see set_bound_shapes_enabled)
             self._batch_dim.size = self.batch_size_bound
             self._batch_dim.capacity = self.batch_size_bound
             self._batch_dim.dyn_size_ext = None
@@ -680,10 +630,9 @@ class GraphCapturedTrainStep:
 
     def data_bound_sizes(self) -> Dict[str, int]:
         """
-        :return: per extern-data key, the number of frames ONE captured step computes over,
-            i.e. the static buffer extent: the packed total bound for packed keys,
-            batch bound * capacity for the padded ones.
-            The engine reports the unused part of this as the epoch's bound slack.
+        :return: per key, the frames one captured step computes over (the buffer extent:
+            packed total bound, or batch bound * capacity);
+            the engine reports the unused part as bound slack
         """
         res = {}
         for k, buf in self._data_bufs.items():
@@ -695,12 +644,9 @@ class GraphCapturedTrainStep:
 
     def set_bound_shapes_enabled(self, enabled: bool):
         """
-        Toggle the process-wide bound-shape dim state:
-        the static batch dim, the declared capacities, and the derived memoized capacities.
-        The plain dynamic-shape paths (e.g. :func:`Engine.eval_model`) need it OFF --
-        with it on, they would build capacity-sized grids and masks
-        against normally-padded batches.
-        The engine re-enables it at the start of each train epoch.
+        Toggle the process-wide bound-shape dim state (static batch dim, capacities).
+        Dynamic-shape paths (e.g. :func:`Engine.eval_model`) need it off,
+        else they build capacity-sized grids; the engine re-enables it per train epoch.
         """
         # noinspection PyProtectedMember
         from returnn.tensor import _dim_extra
@@ -741,21 +687,17 @@ class GraphCapturedTrainStep:
             align = int(packed.get("align", 1))
             total = self.packed_total_bound.get(k)
             if total is None and k in self._packed_batch_size:
-                # packed_batch_size budgets CONTENT; the LAYOUT additionally needs the per-seq
-                # gap and align rounding: each seq occupies at most len + gap + align - 1 frames
-                # (same derivation as _regap_total_bound in the packed backend). At the usual
-                # gap 0 / align 1 this is exactly packed_batch_size, i.e. the rule everyone
-                # already writes by hand; with a gap/align layout it is the term that is easy
-                # to forget, and forgetting it only shows up as an async device-side assert.
+                # packed_batch_size budgets content; the layout additionally needs the per-seq
+                # gap/align rounding (each seq occupies at most len + gap + align - 1 frames,
+                # as in _regap_total_bound); at gap 0 / align 1 this equals packed_batch_size
                 total = self._packed_batch_size[k] + self.batch_size_bound * (gap + align - 1)
             if total is None:
                 # no content budget known (no packed_batch_size, or a callable one):
                 # fall back to every seq at full capacity, which is correct but far larger
                 total = self.batch_size_bound * self.dim_capacity[k]
-            # early static sanity check of the DECLARED bound (before any step runs):
-            # a single seq at full dim_capacity, laid out with the configured gap/align,
-            # must fit -- a bound below that is certainly mis-configured (the per-batch
-            # content check happens in pack(); this catches gross mistakes at startup).
+            # startup sanity check of the declared bound:
+            # one seq at full dim_capacity with the configured gap/align must fit
+            # (the per-batch content check happens in pack())
             one_seq = -(-(self.dim_capacity[k] + gap) // align) * align
             assert total >= one_seq, (
                 f"torch_cuda_graph: packed_total_bound[{k!r}] = {total} cannot hold one seq at"
@@ -779,17 +721,15 @@ class GraphCapturedTrainStep:
     def _copy_in(self, extern_data_raw: Dict[str, Union[torch.Tensor, numpy.ndarray]]):
         if self._copy_in_event is not None:
             # the pinned staging buffers are reused every step:
-            # the host memcpy below must not overwrite them
-            # while the previous step's async H2D from them is still in flight
-            # (normally hidden by the per-step loss host-read, but NOT guaranteed --
-            # a partially overwritten staging buffer corrupts the previous step's inputs)
+            # do not overwrite them while the previous step's async H2D is still in flight
+            # (normally hidden by the per-step loss host-read, but not guaranteed)
             self._copy_in_event.synchronize()
         for k, data in self._extern_data_template.data.items():
             raw = extern_data_raw[k]
             if data.dtype == "string" or (isinstance(raw, numpy.ndarray) and raw.dtype.kind in "USO"):
-                # strings (e.g. seq_tag) cannot be graph inputs; passed through host-side
-                # (NOTE: under replay, the captured step never re-reads them --
-                # a traceable train step must not consume their values)
+                # strings (e.g. seq_tag) cannot be graph inputs; passed through host-side.
+                # Under replay the captured step never re-reads them:
+                # a traceable train step must not consume their values.
                 if raw.shape[0] < self.batch_size_bound:
                     # pad to the bound (the batch dim is static in this regime)
                     pad_shape = (self.batch_size_bound - raw.shape[0],) + raw.shape[1:]
@@ -806,15 +746,14 @@ class GraphCapturedTrainStep:
                 assert raw.shape[0] <= buf.shape[0], (
                     f"torch_cuda_graph: packed {k} total {raw.shape[0]} exceeds bound {buf.shape[0]}"
                 )
-                # the packed CONTENT bound (see pack(): bound - capacity*gap) sizes the traced
-                # re-layout buffers; a batch above it would overflow them INSIDE the replay
-                # (an async illegal access) -- reject it here, host-side, every step
+                # the packed content bound sizes the traced re-layout buffers;
+                # a batch above it overflows them inside the replay (async illegal access),
+                # so reject it here, host-side, every step
                 gap_k = int(self._packed_opts[k].get("gap", 0))
                 align_k = int(self._packed_opts[k].get("align", 1))
-                # the align term belongs here too: a seq occupies roundup(len + gap, align),
-                # i.e. up to align-1 frames MORE than len + gap. Leaving it out made this check
-                # pass for a batch the layout could not hold, and the overflow then surfaced as
-                # an async device-side assert inside the replay instead of here.
+                # the align term belongs here too:
+                # a seq occupies roundup(len + gap, align),
+                # up to align-1 frames more than len + gap
                 content_bound = buf.shape[0] - self.batch_size_bound * (gap_k + align_k - 1)
                 assert raw.shape[0] <= content_bound, (
                     f"torch_cuda_graph: packed {k} content total {raw.shape[0]} exceeds the"
@@ -828,21 +767,17 @@ class GraphCapturedTrainStep:
                 )
             prev_shape = self._prev_copy_shapes.get(k)
             if prev_shape is not None and any(n < p for n, p in zip(raw.shape, prev_shape)):
-                # the batch extents shrank (common: sorted_reverse batching):
-                # the region beyond the current extents still holds the PREVIOUS batch's data.
-                # All consumers should mask it -- but stale plausible values there
-                # are exactly the hardest corruption to notice if any masking is imperfect;
-                # a memset is negligible vs the step. Zero it (simplest: the whole buffer).
+                # the batch extents shrank: beyond them sits the previous batch's data,
+                # stale plausible values, the hardest corruption to notice
+                # if any masking is imperfect; a memset is negligible vs the step
                 buf.zero_()
             self._prev_copy_shapes[k] = tuple(raw.shape)
             if raw.is_pinned():
-                # already pinned (e.g. a pinned batch cache): direct true-async H2D, no staging memcpy
+                # already pinned: direct true-async H2D, no staging memcpy
                 buf[tuple(slice(0, s) for s in raw.shape)].copy_(raw, non_blocking=True)
             else:
-                # pinned staging: a pageable .to(device, non_blocking=True) is a silent SYNCHRONOUS copy
-                # (plus a temp device alloc);
-                # host-memcpy into pinned,
-                # then one true-async H2D of the actual region into the static buffer slice
+                # pinned staging: a pageable non_blocking copy is silently synchronous,
+                # so host-memcpy into pinned, then one true-async H2D into the buffer slice
                 pin = self._pinned_bufs.get(k)
                 if pin is None or pin.shape[0] < buf.shape[0]:
                     pin = torch.empty(buf.shape, dtype=buf.dtype, pin_memory=True)
@@ -863,13 +798,9 @@ class GraphCapturedTrainStep:
                 assert n <= self.batch_size_bound, (
                     f"torch_cuda_graph: batch size {n} exceeds batch_size_bound {self.batch_size_bound}"
                 )
-                # NEVER truncate silently:
-                # a seq longer than the declared capacity
-                # would have its tail ignored by all capacity-sized masks/positions
-                # -- degraded training with no structural error anywhere
-                # (everything is self-consistently capacity-sized).
-                # This is the one place that sees the true host lens for every key every step,
-                # so the bound is enforced HERE, loudly.
+                # never truncate silently: a seq beyond the capacity would have its tail
+                # ignored by all capacity-sized masks, degraded training with no error.
+                # This is the one place seeing the true host lens every step, so enforce here.
                 max_len = int(size.max()) if n > 0 else 0
                 cap = self.dim_capacity.get(k)
                 assert cap is None or max_len <= cap, (
@@ -886,10 +817,8 @@ class GraphCapturedTrainStep:
     def _build_extern_data(self) -> TensorDict:
         """
         Like :func:`returnn.torch.data.extern_data.raw_dict_to_extern_data`,
-        but around the static buffers:
-        capacity-padded data, device-resident seq lens, the static batch dim.
-        The template dims are reset, so nothing from a previous step is cached
-        (at capture time, the whole layout computes in-graph).
+        but around the static buffers, with the template dims reset
+        (so at capture time the whole layout computes in-graph).
         """
         batch_dim = self._batch_dim
         for dim in _get_dyn_dims_from_extern_data(self._extern_data_template):
@@ -922,10 +851,8 @@ class GraphCapturedTrainStep:
                     inner, batch_dim=batch_dim, spatial_dim=spatial, packed_dim=packed_dim, feature_dim=data.feature_dim
                 )
                 if gap or align > 1:
-                    # a declared packed_total_bound (caller guarantees it)
-                    # is usually much tighter than the worst case
-                    # -- every seq at full capacity (+gap), aligned --
-                    # and the model activations scale with this bound
+                    # a declared packed_total_bound is usually much tighter than the
+                    # worst case (every seq at full capacity), and activations scale with it
                     regap_bound = self.packed_total_bound.get(k)
                     if regap_bound is None:
                         regap_bound = self.batch_size_bound * (-(-(self.dim_capacity[k] + gap) // align) * align)
@@ -974,7 +901,7 @@ class GraphCapturedTrainStep:
     ) -> Dict[str, Union[torch.Tensor, numpy.ndarray]]:
         """
         :param extern_data_raw: a real batch, as template for keys/dtypes/devices
-        :return: the same keys, but a single minimal seq -- for the dummy warmup (see the call site)
+        :return: the same keys with a single minimal seq, for the dummy warmup
         """
 
         def _dummy_len(key: str) -> int:
@@ -1048,18 +975,12 @@ class GraphCapturedTrainStep:
 
     def _materialize_optimizer_state(self) -> None:
         """
-        Create the optimizer's lazily-initialized state (e.g. AdamW moments, capturable
-        step counters) plus the param grads WITHOUT any model step, enabling
-        ``warmup_steps: 0``: the captured in-graph optimizer step reads/writes the state
-        tensors as stable graph inputs, so they must exist BEFORE trace/capture
-        (a lazy init during capture recording would allocate them inside the graph pool).
-        One ``step()`` with ALL-ZERO grads at lr 0 creates whatever
-        state the optimizer wants, doubly neutral for the params (no gradient signal, and
-        every update term scales with lr); the values the step wrote (step counters) are
-        zeroed afterwards, only the EXISTENCE is kept, which equals a fresh start only for
-        SGD, Adam and AdamW (see :func:`_optimizer_state_zero_init`).
-        No-op without the in-graph optimizer step (the optimizer then runs eagerly and
-        creates its state itself) and when state already exists (real or dummy warmup ran).
+        Create the optimizer's lazy state and the param grads without any model step
+        (they are graph inputs, so they must exist before trace/capture);
+        enables ``warmup_steps: 0``.
+        One ``step()`` with zero grads at lr 0 is doubly neutral;
+        written values are zeroed afterwards, only the existence kept.
+        No-op when state exists.
         """
         opt = self._get_optimizer() if (self._get_optimizer is not None and self._post_step is not None) else None
         if opt is None or opt.state:
@@ -1097,15 +1018,11 @@ class GraphCapturedTrainStep:
 
     def _restore_after_dummy_warmup(self):
         """
-        Undo the dummy warmup steps: restore the module buffers (and, for optimizers whose
-        update is not provably lr-multiplicative, the parameters -- see the dispatch site:
-        for SGD/Adam/AdamW the dummy steps ran with lr 0, so the params never moved and no
-        snapshot was taken), and zero the optimizer state, so only the EXISTENCE of the
-        lazily created state (e.g. AdamW moments) is kept, not its dummy-batch values.
-
-        Buffers need explicit restore in EVERY mode: running statistics (batch norm and
-        friends) are updated in the forward pass, not by the optimizer, so neither
-        restoring params nor a zero learning rate protects them.
+        Undo the dummy warmup:
+        restore module buffers (running stats update in the forward pass,
+        so lr 0 cannot protect them),
+        restore params unless lr 0 provably froze them (see the dispatch site),
+        zero the optimizer state keeping only its existence.
         """
         with torch.no_grad():
             if self._pre_dummy_warmup_params is not None:
@@ -1136,23 +1053,17 @@ class GraphCapturedTrainStep:
         self, extern_data_raw: Dict[str, Union[torch.Tensor, numpy.ndarray]], *, global_train_step: int
     ) -> RunCtx:
         """
-        One eager warmup step at the batch's ACTUAL shapes, not the bound-sized buffers:
-        eager execution at the bounds peaks far above both the dynamic eager step
-        and the Inductor-planned captured graph
-        (bound-sized activations without any buffer-reuse planning;
-        the AOT trace itself runs on fake tensors and costs no GPU memory).
-        Kernels/cudnn warm up at approximately the right shapes;
-        dim/layout caches built here are cleared again
-        when the bound shapes get re-enabled.
+        One eager warmup step at the batch's actual shapes:
+        eager at the bounds would peak far above the planned captured graph
+        (no buffer-reuse planning).
+        Dim/layout caches built here are cleared when the bound shapes re-enable.
         """
         from returnn.torch.data import extern_data as extern_data_util
 
         self.set_bound_shapes_enabled(False)
         try:
-            # release the previous step's cached blocks:
-            # each warmup batch has different shapes,
-            # and the caching allocator cannot merge smaller cached blocks to serve bigger tensors,
-            # so the cache from step N would stack on top of step N+1's allocations
+            # release the previous step's cached blocks: shapes differ per warmup batch,
+            # and the allocator cannot merge cached blocks, so caches would stack
             torch.cuda.synchronize()
             torch.cuda.empty_cache()
             for dim in _get_dyn_dims_from_extern_data(self._extern_data_template):
@@ -1185,22 +1096,17 @@ class GraphCapturedTrainStep:
         """
         Build the Inductor-compiled whole step:
         ``compiled(param_raws) -> (per-loss summed / tensor inv-norm raws..., grads...)``.
-        AOT tracing + Inductor codegen only -- no Dynamo, no torch.compile
+        AOT tracing + Inductor codegen only, no Dynamo
         (a static-traceable step is aten-trace-safe by construction).
-        Gradients are computed INSIDE the traced function (torch.autograd.grad, no .backward),
-        all outputs detached: the compiled program is one inference-style graph.
+        Grads are computed inside the traced function: one inference-style graph.
         """
         from functorch.compile import aot_function
 
         # noinspection PyProtectedMember
         from torch._inductor.compile_fx import compile_fx
 
-        # torch 2.7: a REAL flex HOP compile earlier in the process
-        # (e.g. FlexAttention in the eager warmup steps) poisons flex compiles under fake tracing
-        # (dynamo skip error on torch._library.utils.is_builtin inside can_auto_functionalize,
-        # then the packed flex paths would decline mid-trace).
-        # Resetting dynamo clears the stale compile state; harmless otherwise
-        # (this path uses no dynamo itself, other compiled artifacts just recompile lazily).
+        # torch 2.7: an earlier real flex compile poisons flex compiles under fake tracing;
+        # resetting dynamo clears it, harmless (no dynamo used here)
         # noinspection PyProtectedMember
         torch._dynamo.reset()
         _apply_inductor_workarounds()
@@ -1272,8 +1178,8 @@ class GraphCapturedTrainStep:
                 saved_params = [p.detach().clone() for p in self._params]
                 saved_rng = torch.cuda.get_rng_state()
                 outs = step_core(raws)
-                # check ALL outs (losses AND grads): NaN grads poison the params via the
-                # in-step optimizer, and the LOSS only turns non-finite one step later --
+                # check losses and grads both: NaN grads poison the params via the
+                # in-step optimizer, and the loss only turns non-finite one step later;
                 # detecting at the grad step lets the replay trace the producing backward op
                 bad = any(
                     bool(torch.logical_not(torch.isfinite(t)).any().item())
@@ -1294,7 +1200,7 @@ class GraphCapturedTrainStep:
             return eager_bound_step
         backend = compile_fx
         if self._debug_aot_eager:
-            # run the traced AOT graph with EAGER kernels (no Inductor codegen):
+            # run the traced AOT graph with eager kernels (no Inductor codegen):
             # NaN persisting = the aten decompositions in the trace differ from plain eager;
             # clean = Inductor codegen at fault
             from functorch.compile import nop
@@ -1325,30 +1231,27 @@ class GraphCapturedTrainStep:
             # noinspection PyProtectedMember
             import torch._inductor.config as inductor_config_
 
-            # comprehensive STRIDE padding would re-pad the halves' output strides
-            # (saved activations are not user-visible outputs here, so their layout is free);
-            # without torch.compile's fw->bwd stride negotiation (absent under raw aot_function)
-            # the bwd input stride asserts then fail.
-            # Shape padding (pad_mm, the joint-graph pass in partition_fn) stays on.
+            # stride padding would re-pad the halves' output strides;
+            # without torch.compile's fw->bwd stride negotiation
+            # (absent under raw aot_function), the bwd input stride asserts then fail
             inductor_config_.comprehensive_padding = False
+            # shape padding off for the same reason:
+            # even as a joint pass it can leave a boundary view's meta dense
+            # while the fw returns the padded view
+            inductor_config_.shape_padding = False
             if self._activation_memory_budget is not None:
                 functorch_config.activation_memory_budget = float(self._activation_memory_budget)
             if self._aggressive_recomputation:
                 functorch_config.aggressive_recomputation = True
-                # aggressive_recomputation lifts all ban heuristics EXCEPT reductions;
+                # aggressive_recomputation lifts all ban heuristics except reductions;
                 # the big loq savers (log-softmax outputs, normalizations) are reductions -- lift that too
                 functorch_config.ban_recompute_reductions = False
 
             inner_backend_ = backend
             if inner_backend_ is compile_fx:
-                # compile each half with compile_fx_inner, like torch.compile does after partitioning.
-                # The full compile_fx wraps the half in ANOTHER aot_module_simplified layer,
-                # whose positional-args call frame PINS all inputs for the entire call:
-                # the generated code's progressive input freeing (args.clear + per-arg del)
-                # then never frees anything,
-                # and the bwd runs with the whole saved set resident
-                # (measured: all 46.45 GiB saved still active at 90% through the bwd; OOM at bs200k).
-                # compile_fx_inner returns the boxed CompiledFxGraph directly, no extra layer.
+                # compile each half with compile_fx_inner, as torch.compile does;
+                # the full compile_fx adds a layer whose call frame pins all inputs,
+                # so nothing frees progressively (OOM at bs200k)
                 # noinspection PyProtectedMember
                 from torch._inductor.compile_fx import compile_fx_inner
 
@@ -1381,15 +1284,10 @@ class GraphCapturedTrainStep:
 
             def partition_fn(gm, joint_inputs, **kwargs):
                 """
-                Like the torch.compile path: the Inductor joint-graph passes
-                (incl. pad_mm shape padding) run on the JOINT graph before partitioning,
-                so fw and bwd split a graph whose metas already carry the padded layouts
-                and the saved-activation strides agree across the graph boundary.
-                (Splitting the unpadded joint instead, with compile_fx padding only
-                within the fw, hits the compiled bwd's input stride asserts;
-                the torch.compile fw->bwd stride negotiation does not function
-                under raw aot_function -- repro-verified, torch 2.7.)
-                The halves are then compiled with compile_fx_inner (no joint-pass re-run), like torch.compile.
+                As in torch.compile: the Inductor joint-graph passes run before
+                partitioning, so fw and bwd split one consistent graph;
+                the halves then compile with compile_fx_inner (no joint-pass re-run).
+                Shape padding stays disabled, see above.
                 """
                 # noinspection PyProtectedMember
                 from torch._inductor.fx_passes.joint_graph import joint_graph_passes
@@ -1398,9 +1296,9 @@ class GraphCapturedTrainStep:
                 fw_module, bw_module = min_cut_rematerialization_partition(gm, joint_inputs, **kwargs)
                 return fw_module, bw_module
 
-            # the full compile_fx applied the Inductor decomp table in its inner aot layer;
-            # with compile_fx_inner halves the OUTER trace must decompose
-            # (else e.g. aten.floor_divide reaches lowering: "both a fallback and a decomp")
+            # with compile_fx_inner halves,
+            # the outer trace must apply the Inductor decomp table itself
+            # (the full compile_fx did it in its inner aot layer)
             # noinspection PyProtectedMember
             from torch._inductor.decomposition import select_decomp_table
 
@@ -1435,10 +1333,9 @@ class GraphCapturedTrainStep:
                 partition_fn=partition_fn,
                 decompositions=select_decomp_table(),
             )
-        # NOTE: partition_fn / activation_memory_budget are IRRELEVANT in this (default) mode:
-        # step_core computes the grads itself, so this is ONE inference-style graph,
-        # never fw/bwd-partitioned; buffer lifetimes are Inductor memory planning.
-        # (For the partitioned alternative see opts "partitioned".)
+        # default mode: step_core computes the grads itself, one inference-style graph,
+        # never fw/bwd-partitioned (partition_fn / activation_memory_budget do not apply;
+        # for that see opts "partitioned")
         if tuple(int(v) for v in torch.__version__.split("+")[0].split(".")[:2]) >= (2, 12):
             # torch >= 2.12: compile_fx's compat wrapper declares _boxed_call=True
             # but re-wraps an already-boxed args list, so the generated runner sees [[args]];
@@ -1487,15 +1384,11 @@ class GraphCapturedTrainStep:
 
     def _compiled_call_args(self, raws: List[torch.Tensor]) -> List[torch.Tensor]:
         """
-        The compiled step's runtime inputs: the param raws,
-        plus (partitioned mode, or any mode on torch >= 2.12) the data/lens buffers
-        and the step tensor.
-        These are closure state of step_core.
-        aot_function bakes closed-over tensors as graph CONSTANTS,
-        and compile_fx_inner constant-folds them
-        (measured: the seq lens frozen at their trace-time values -> wrong losses).
-        The full-compile_fx backend hid this by re-lifting closure tensors in its inner aot layer.
-        The buffer objects are created once and refreshed in place, so identity is stable.
+        The compiled step's runtime inputs: the param raws, plus (partitioned mode,
+        or torch >= 2.12) the data/lens buffers and the step tensor.
+        Those are closure state of step_core,
+        which would otherwise be baked and constant-folded
+        (seq lens frozen at trace-time values -> wrong losses).
         """
         if self._partitioned_buf_keys is None:
             return raws
@@ -1511,10 +1404,8 @@ class GraphCapturedTrainStep:
         """build the compiled step once; the first call traces + Inductor-compiles + autotunes"""
         if self._compiled_fn is None:
             self._compiled_fn = self._make_compiled_step()
-            # drop the warmup steps' result ctx before the first compiled run:
-            # its retained tensors (~0.4 GiB) plus cached free blocks
-            # count against a first-run peak
-            # that is short by only a few hundred MiB at the loq bs200k bound
+            # drop the warmup ctx before the first compiled run:
+            # its retained ~0.4 GiB counts against a tight first-run peak
             self._ctx = None
             gc.collect()
             torch.cuda.empty_cache()
@@ -1538,8 +1429,7 @@ class GraphCapturedTrainStep:
 
     def _capture_compiled(self, graph: torch.cuda.CUDAGraph):
         """
-        Trace + compile + autotune on real inputs (outside capture), then capture:
-        compiled step, gradient rebinding, optional in-graph optimizer.
+        Trace + compile + autotune on real inputs (outside capture), then capture.
         The compiled outputs are capture-pool allocations with stable addresses,
         refreshed in place by each replay.
         """
@@ -1553,16 +1443,14 @@ class GraphCapturedTrainStep:
                 p.grad.zero_()
             outs[0].backward()
         torch.cuda.synchronize()
-        # release the warm runs' cached blocks BEFORE capture:
-        # capture allocates from the separate graph pool and cannot reuse them,
-        # and DURING capture the allocator cannot cudaFree cached blocks either
-        # (illegal under capture, so the usual free-and-retry rescue is disabled)
-        # -- without this release, capture needs the step footprint TWICE
+        # release the warm runs' cached blocks: capture allocates from its own pool,
+        # cannot reuse them, and cannot cudaFree during capture either;
+        # without this release, capture needs the step footprint twice
         del outs
         torch.cuda.empty_cache()
         with torch.cuda.graph(graph):
             if self._partitioned:
-                # in-graph: backward ACCUMULATES into the static grads -> zero first
+                # in-graph: backward accumulates into the static grads -> zero first
                 for p in self._grad_params:
                     p.grad.zero_()
             outs = compiled(self._compiled_call_args(raws))
@@ -1578,7 +1466,7 @@ class GraphCapturedTrainStep:
     def _build_result_ctx(self, outs: tuple) -> RunCtx:
         """
         Result-facing run ctx: scalar losses wrapping the compiled outputs
-        (under capture these are stable graph outputs, refreshed in place by each replay).
+        (stable graph outputs under capture, refreshed in place by each replay).
         """
         ctx = RunCtx(stage="train_step", train_flag=True, step=self._step_t)
         # partitioned mode: outs[0] is the differentiable total, the loss outputs follow
@@ -1608,9 +1496,9 @@ class GraphCapturedTrainStep:
 
     def _log_misaligned_inputs(self, raws: List[torch.Tensor]) -> None:
         """
-        One-time diagnostic: Inductor CLONES every graph input whose data pointer
-        is not 16-byte aligned (``copy_misaligned_inputs``), per call --
-        both a memory and a per-step-time cost. Log the offenders loudly.
+        One-time diagnostic:
+        Inductor clones every graph input whose data pointer is not 16-byte aligned,
+        per call (memory + step time). Log the offenders.
         """
         bad = [(i, tuple(r.shape), r.data_ptr() % 16) for i, r in enumerate(raws) if r.data_ptr() % 16 != 0]
         if bad:
@@ -1647,13 +1535,12 @@ class GraphCapturedTrainStep:
         self, extern_data_raw: Dict[str, Union[torch.Tensor, numpy.ndarray]], *, global_train_step: int
     ) -> RunCtx:
         """
-        Run one train step: copy the batch into the static buffers, then
-        eager warmup / one-time capture (optionally of the Inductor-compiled step) / graph replay.
-        Backward is included; the optimizer step is the caller's job (on the static grads),
-        unless "capture_optimizer" puts it in-graph.
+        Run one train step: copy the batch into the static buffers,
+        then eager warmup / one-time capture / graph replay. Backward included;
+        the optimizer step is the caller's job unless "capture_optimizer".
 
-        :return: the run ctx holding the losses. Under replay this is the capture-time ctx;
-            its loss tensors are the static outputs, refreshed by the replay.
+        :return: the run ctx holding the losses; under replay the capture-time ctx,
+            its loss tensors refreshed by the replay
         """
         if self._debug_nan_dump_inputs:
             self._last_extern_data_raw = extern_data_raw
@@ -1672,27 +1559,20 @@ class GraphCapturedTrainStep:
             dummy_lr_opt = None
             if self.dummy_warmup:
                 self.last_step_dummy = True
-                # The eager warmup exists only to materialize lazy state (optimizer moment buffers,
-                # cudnn/cublas handles/workspaces). What it computes is irrelevant, but eager keeps
-                # every intermediate and every autograd-saved tensor alive with no reuse planning,
-                # so at real shapes it peaks far above the planned captured step (measured on loq
-                # base: 61.6GB warmup vs 9.0GB replay), and THAT peak sizes the job's GPU.
-                # A minimal batch makes it collapse to ~the param/optimizer footprint.
-                # The params/optimizer state are restored afterwards (see _restore_after_dummy_warmup),
-                # so the garbage gradients of these steps never reach the model.
+                # the warmup only materializes lazy state;
+                # at real shapes it peaks far above the captured step (61.6 vs 9.0 GB)
+                # and sizes the job;
+                # params/state restored afterwards, see _restore_after_dummy_warmup
                 warmup_raw = self._make_dummy_extern_data_raw(extern_data_raw)
                 if self._pre_dummy_warmup_buffers is None and self._get_buffers is not None:
-                    # running stats (batch norm etc.) are updated in the FORWARD pass,
-                    # so an lr of 0 cannot protect them: snapshot + restore (small, stats only)
+                    # running stats (batch norm etc.) update in the forward pass,
+                    # so lr 0 cannot protect them: snapshot + restore (small, stats only)
                     self._pre_dummy_warmup_buffers = [b.detach().clone() for b in self._get_buffers()]
                 opt = self._get_optimizer() if (self._get_optimizer is not None and self.captures_optimizer) else None
                 if opt is not None and type(opt).__name__ in ("SGD", "Adam", "AdamW"):
-                    # lr 0 makes the param update EXACTLY zero for these optimizers
-                    # (every update term scales with lr, incl. the decoupled weight decay),
-                    # so no param snapshot is needed -- a full extra param copy would be
-                    # real memory at the warmup peak for large models. lr restored below;
-                    # the moments/step counters the dummy step wrote are zeroed afterwards
-                    # (_restore_after_dummy_warmup), only their EXISTENCE is kept.
+                    # lr 0 makes the update exactly zero for these optimizers
+                    # (every term scales with lr, incl. decoupled weight decay),
+                    # so no param snapshot, which would be real memory at the peak
                     if self._n_eager == 1 and opt.state:
                         self._pre_dummy_warmup_opt_state = _snapshot_optimizer_state(opt)
                     dummy_lr_opt = opt
@@ -1756,23 +1636,21 @@ class GraphCapturedTrainStep:
             raise
         self._graph = graph
         self._log_graph_pool_size(graph)
-        # The graph pool's blocks were LIVE allocations during the capture (thus inside
-        # max_memory_allocated) and are freed-but-retained afterwards (thus outside it).
-        # Reset the peak here so the reported usage (allocated + pool, see the engine)
-        # counts the pool exactly once, in every epoch.
+        # the pool's blocks were live during capture (inside max_memory_allocated) and are
+        # freed-but-retained after (outside it); reset the peak so the reported usage
+        # (allocated + pool, see the engine) counts the pool exactly once
         torch.cuda.reset_peak_memory_stats()
-        # capture only RECORDS the kernels; replay now to actually compute this batch
+        # capture only records the kernels; replay now to actually compute this batch
         graph.replay()
         return self._ctx
 
     @staticmethod
     def _log_graph_pool_size(graph: torch.cuda.CUDAGraph) -> None:
         """
-        One-time report of the graph's PRIVATE memory pool: its blocks are freed as tensors
-        after capture (they leave max_memory_allocated) but stay reserved for replay, so the
-        allocated stat alone under-reports the resident footprint by the whole pool
-        (measured loq base: 9GB allocated vs ~46GB resident).
-        Also registers the size for the engine's per-step memory log (allocated + pool).
+        One-time report of the graph's private pool:
+        freed as tensors after capture but reserved for replay,
+        so the allocated stat under-reports by the whole pool (9 vs ~46 GB at loq base).
+        Also registered for the engine's memory log.
         """
         pool_id = graph.pool()
         segs = torch.cuda.memory_snapshot()
