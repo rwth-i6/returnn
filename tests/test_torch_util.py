@@ -403,18 +403,20 @@ def test_depthwise_conv1d_triton_kernel_grad():
 
     dev = "cuda"
     gen = torch.Generator(device="cpu").manual_seed(11)
-    n_batch, n_time, n_chan = 3, 37, 70
-    small = (16, 32, 16, 32)
+    f32, bf16 = torch.float32, torch.bfloat16
+    small, small_blocks = (3, 37, 70), (16, 32, 16, 32)
     cases = [
-        (5, 2, 2, torch.float32, small),
-        (32, 15, 16, torch.float32, small),
-        (4, 0, 0, torch.float32, small),
-        (7, 4, 4, torch.float32, small),
-        (32, 15, 16, torch.bfloat16, None),
+        (small, 5, 2, 2, f32, f32, small_blocks),
+        (small, 32, 15, 16, f32, f32, small_blocks),
+        (small, 4, 0, 0, f32, f32, small_blocks),
+        (small, 7, 4, 4, f32, f32, small_blocks),
+        (small, 32, 15, 16, bf16, f32, None),
+        ((920, 24, 1024), 32, 15, 16, bf16, bf16, None),
     ]
-    for width, pad_l, pad_r, x_dtype, blocks in cases:
-        x = torch.randn(n_batch, n_time, n_chan, generator=gen).to(dev, x_dtype).requires_grad_(True)
-        w = (torch.randn(n_chan, width, generator=gen) * 0.3).to(dev).requires_grad_(True)
+    for shape, width, pad_l, pad_r, x_dtype, w_dtype, blocks in cases:
+        n_batch, n_time, n_chan = shape
+        x = torch.randn(shape, generator=gen).to(dev, x_dtype).requires_grad_(True)
+        w = (torch.randn(n_chan, width, generator=gen) * 0.3).to(dev, w_dtype).requires_grad_(True)
         bias = torch.randn(2 * n_chan, generator=gen).to(dev)[::2].requires_grad_(True)
         n_time_out = n_time + pad_l + pad_r - width + 1
         opts = {"blocks": blocks} if blocks else {}
@@ -425,10 +427,12 @@ def test_depthwise_conv1d_triton_kernel_grad():
         for t in (x, w, bias):
             t.grad = None
         x_ref = torch.nn.functional.pad(x.float().transpose(1, 2), (pad_l, pad_r))
-        ref = torch.nn.functional.conv1d(x_ref, w[:, None, :], bias, groups=n_chan).transpose(1, 2)
-        tol = {"rtol": 1e-4, "atol": 1e-4} if x_dtype == torch.float32 else {"rtol": 2e-2, "atol": 2e-2}
+        ref = torch.nn.functional.conv1d(x_ref, w.float()[:, None, :], bias, groups=n_chan).transpose(1, 2)
+        tight = {"rtol": 1e-4, "atol": 1e-4}
+        tol = tight if x_dtype == f32 else {"rtol": 2e-2, "atol": 2e-2}
         assert out.shape == ref.shape and out.dtype == x_dtype, (width, pad_l, out.shape, out.dtype)
         torch.testing.assert_close(out.float(), ref, **tol)
         ref.backward(d_out.float())
-        for g, t in zip(grads, (x, w, bias)):
-            torch.testing.assert_close(g.float(), t.grad.float(), **tol)
+        for g, t, t_tol in zip(grads, (x, w, bias), (tol, tol, tight)):
+            assert g.dtype == t.dtype, (width, g.dtype, t.dtype)
+            torch.testing.assert_close(g.float(), t.grad.float(), **t_tol)
