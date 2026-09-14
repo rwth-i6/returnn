@@ -189,7 +189,7 @@ class _DepthwiseConv1d(torch.autograd.Function):
             num_warps=4,
         )
         ctx.save_for_backward(x, w)
-        ctx.has_bias = bias is not None
+        ctx.bias_dtype = bias.dtype if bias is not None else None
         ctx.pad_l = pad_l
         ctx.blocks = blocks
         return out
@@ -205,6 +205,7 @@ class _DepthwiseConv1d(torch.autograd.Function):
         n_batch, n_time_in, n_chan = x.shape
         n_time_out = d_out.shape[1]
         width = w.shape[1]
+        has_bias = ctx.bias_dtype is not None
         block_r, block_c, block_r_dw, block_c_dw = ctx.blocks
         dx = None
         if ctx.needs_input_grad[0]:
@@ -227,7 +228,7 @@ class _DepthwiseConv1d(torch.autograd.Function):
             )
         n_rows = n_batch * n_time_out
         n_row_blocks = triton.cdiv(n_rows, block_r_dw)
-        partial = torch.empty((n_row_blocks, width + int(ctx.has_bias), n_chan), dtype=torch.float32, device=x.device)
+        partial = torch.empty((n_row_blocks, width + int(has_bias), n_chan), dtype=torch.float32, device=x.device)
         grid = (n_row_blocks, triton.cdiv(n_chan, block_c_dw))
         _dw_bwd_dw[grid](
             x,
@@ -238,16 +239,16 @@ class _DepthwiseConv1d(torch.autograd.Function):
             n_time_out,
             n_chan,
             ctx.pad_l,
-            HAS_BIAS=ctx.has_bias,
+            HAS_BIAS=has_bias,
             BLOCK_R=block_r_dw,
             BLOCK_C=block_c_dw,
             KW=width,
-            KW_P=width + int(ctx.has_bias),
+            KW_P=width + int(has_bias),
             num_warps=4,
         )
         summed = partial.sum(dim=0)
         dw = summed[:width].t().contiguous().to(w.dtype)
-        db = summed[width].to(w.dtype) if ctx.has_bias else None
+        db = summed[width].to(ctx.bias_dtype) if has_bias else None
         return dx, dw, db, None, None, None
 
 
