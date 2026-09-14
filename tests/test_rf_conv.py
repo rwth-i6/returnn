@@ -278,6 +278,25 @@ def test_conv1d_depthwise_cuda_triton_path():
         assert out.raw_tensor.dtype == ref.dtype == torch.bfloat16, (dtype, out.raw_tensor.dtype)
         assert float(out.raw_tensor[0, 0, 0]) == 0.0, "the autocast path rounds the filter to bfloat16"
         torch.testing.assert_close(out.raw_tensor, ref, rtol=0, atol=0)
+    x_half = Tensor("x", dims=[batch, time, feat], dtype="bfloat16")
+    x_half.raw_tensor = torch.ones(2, 23, 6, dtype=torch.bfloat16, device="cuda")
+    x_float = Tensor("x", dims=[batch, time, feat], dtype="float32")
+    x_float.raw_tensor = torch.ones(2, 23, 6, device="cuda")
+    for mixed, amp, params_dtype in (
+        (x_half, False, "float32"),
+        (x_float, False, "float64"),
+        (x_float, True, "float64"),
+    ):
+        for param in (conv.filter, conv.bias):
+            param.raw_tensor.data = param.raw_tensor.data.to(getattr(torch, params_dtype))
+            param.dtype = params_dtype
+        try:
+            with torch.autocast("cuda", dtype=torch.bfloat16, enabled=amp):
+                conv(mixed, in_spatial_dim=time)
+        except RuntimeError:
+            pass
+        else:
+            raise AssertionError(f"{mixed.dtype} input with {params_dtype} params, amp {amp}, must raise like torch")
     x_wide = Tensor("x", dims=[batch, time, feat], dtype="float64")
     x_wide.raw_tensor = torch.full((2, 23, 6), 1e50, dtype=torch.float64, device="cuda")
     for param in (conv.filter, conv.bias):
