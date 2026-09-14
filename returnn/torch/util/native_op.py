@@ -522,7 +522,13 @@ def ctc_loss(
         targets=targets, seq_lens=targets_seq_lens, blank_idx=blank_index, label_loop=label_loop
     )
 
-    seq_mask = sequence_mask_time_major(logits_seq_lens)  # (time,batch), bool
+    # the mask extent from the logits, and the state count from the targets shape
+    # (see the construct_kernel state numbering: (2*n_time+3) states per seq), like ctc_loss_packed:
+    # the max over the lens / states would be a data-dependent device read, a sync,
+    # illegal under CUDA-graph capture
+    seq_mask = sequence_mask_time_major(logits_seq_lens, maxlen=logits.shape[0])  # (time,batch), bool
+    n_batch, n_tgt_time = targets.shape
+    n_states = n_batch * (2 * n_tgt_time + 3)
 
     if max_approx:
         log_probs = torch.log_softmax(logits, dim=-1) if logits_normalize else logits  # (time,batch,dim)
@@ -541,7 +547,9 @@ def ctc_loss(
         loss = -torch.sum(log_probs_, dim=0)  # (batch,)
         return loss
 
-    loss = _FastBaumWelchScoresAutogradFunc.apply(logits, logits_normalize, seq_mask, edges, weights, start_end_states)
+    loss = _FastBaumWelchScoresAutogradFunc.apply(
+        logits, logits_normalize, seq_mask, edges, weights, start_end_states, n_states
+    )
     return loss
 
 
@@ -918,7 +926,8 @@ class _FastBaumWelchScoresPackedAutogradFunc(torch.autograd.Function):
         rows = torch.arange(total_time, device=logits.device)
         starts64 = seq_starts.to(torch.int64).contiguous()
         frame_seq_idx = (torch.searchsorted(starts64, rows, right=True) - 1).clamp(min=0)
-        valid_mask = (rows - starts64[frame_seq_idx]) < seq_lens[frame_seq_idx]
+        offsets = rows - starts64[frame_seq_idx]
+        valid_mask = (offsets >= 0) & (offsets < seq_lens[frame_seq_idx])
         ctx.grad_wrt_softmax_in = logits_normalize
         if logits_normalize:
             ctx.save_for_backward(log_sm, frame_seq_idx, valid_mask, fwdbwd)

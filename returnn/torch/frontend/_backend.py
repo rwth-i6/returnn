@@ -827,6 +827,10 @@ class TorchBackend(Backend[torch.Tensor]):
         if use_native_op is None:
             if max_approx or not label_loop:
                 use_native_op = True
+            elif rf.is_static_traceable():
+                # torch's ctc_loss reads the lengths on the host (a sync), which CUDA-graph capture
+                # rejects; the native op keeps everything on the device
+                use_native_op = True
             else:
                 # This was the current default.
                 # We might change the default in the future, maybe via new behavior version.
@@ -2338,6 +2342,44 @@ class TorchBackend(Backend[torch.Tensor]):
         out.feature_dim = in_dim
         return out
 
+    @staticmethod
+    def layer_norm(
+        x: Tensor, *, in_dim: Union[Dim, Sequence[Dim]], scale: Tensor, bias: Optional[Tensor], eps: float
+    ) -> Tensor:
+        """
+        Layer norm through the fused torch kernel where it applies, else the generic composition.
+
+        :param x: input
+        :param in_dim: the dim or dims to normalize over
+        :param scale: over in_dim
+        :param bias: over in_dim, or None
+        :param eps: added to the variance
+        :return: the normalized x, see :func:`rf.layer_norm`
+        """
+        out = _fused_norm_last_axis(x, in_dim=in_dim, scale=scale, bias=bias, eps=eps, rms=False)
+        if out is None:
+            return Backend.layer_norm(x, in_dim=in_dim, scale=scale, bias=bias, eps=eps)
+        return out
+
+    @staticmethod
+    def rms_norm(
+        x: Tensor, *, in_dim: Union[Dim, Sequence[Dim]], scale: Tensor, bias: Optional[Tensor], eps: float
+    ) -> Tensor:
+        """
+        RMS norm through the fused torch kernel where it applies, else the generic composition.
+
+        :param x: input
+        :param in_dim: the dim or dims to normalize over
+        :param scale: over in_dim
+        :param bias: over in_dim, or None
+        :param eps: added to the mean square
+        :return: the normalized x, see :func:`rf.rms_norm`
+        """
+        out = _fused_norm_last_axis(x, in_dim=in_dim, scale=scale, bias=bias, eps=eps, rms=True)
+        if out is None:
+            return Backend.rms_norm(x, in_dim=in_dim, scale=scale, bias=bias, eps=eps)
+        return out
+
     # noinspection PyShadowingBuiltins
     @staticmethod
     def conv(
@@ -2367,6 +2409,33 @@ class TorchBackend(Backend[torch.Tensor]):
         filter_in_dim = in_dim if not groups or groups == 1 else in_dim // groups
         filter_dims = (out_dim, filter_in_dim) + tuple(filter_size)
         filter = filter.copy_transpose(filter_dims)
+        if (
+            len(filter_size) == 1
+            and groups
+            and groups == in_dim.dimension == out_dim.dimension
+            and _is_unit_conv_arg(strides)
+            and _is_unit_conv_arg(dilation_rate)
+            and (padding in ("same", "valid") or isinstance(padding, int))
+            and source.raw_tensor.is_cuda
+            and all(
+                operand.raw_tensor.dtype in (torch.float16, torch.bfloat16, torch.float32)
+                for operand in [source, filter] + ([bias] if bias is not None else [])
+            )
+            and type(source.raw_tensor) in (torch.Tensor, torch.nn.Parameter)
+            and not torch.onnx.is_in_onnx_export()
+        ):
+            out = _conv_depthwise_1d_triton(
+                source,
+                in_dim=in_dim,
+                out_dim=out_dim,
+                in_spatial_dim=in_spatial_dims[0],
+                out_spatial_dim=out_spatial_dims[0],
+                filter=filter,
+                padding=padding,
+                bias=bias,
+            )
+            if out is not None:
+                return out, out_spatial_dims
         batch_dims = [d for d in source.dims if d not in (in_dim,) + tuple(in_spatial_dims)]
         # Torch conv expects (N,C,<spatial dims>) as shape.
         source = source.copy_transpose(batch_dims + [in_dim] + list(in_spatial_dims))
@@ -2885,3 +2954,130 @@ class TorchBackend(Backend[torch.Tensor]):
         out_tensor_raw = torch.stack(tensor_array_raw, dim=0)
         out_tensor.raw_tensor = out_tensor_raw
         return out_tensor
+
+
+def _is_unit_conv_arg(value: Optional[Union[int, Sequence[int]]]) -> bool:
+    """
+    :param value: strides or dilation rate as given to conv, None or int or per-spatial-dim sequence
+    :return: whether it means 1 on every spatial dim
+    """
+    if value is None or value == 1:
+        return True
+    return isinstance(value, (list, tuple)) and all(v == 1 for v in value)
+
+
+def _fused_norm_last_axis(
+    x: Tensor, *, in_dim: Union[Dim, Sequence[Dim]], scale: Tensor, bias: Optional[Tensor], eps: float, rms: bool
+) -> Optional[Tensor]:
+    """
+    Layer norm or RMS norm over the last axis through the fused torch kernel with autocast off around it,
+    computed in the dtype the generic composition returns.
+
+    :param x: input
+    :param in_dim: the dim to normalize over, the last axis of x
+    :param scale: over in_dim
+    :param bias: over in_dim, or None
+    :param eps: added to the variance or the mean square
+    :param rms: RMS norm instead of layer norm
+    :return: the normalized x, or None where the fused kernel does not apply
+    """
+    x_raw = x.raw_tensor
+    if (
+        not isinstance(in_dim, Dim)
+        or in_dim.dimension is None
+        or not x.dims
+        or x.dims[-1] != in_dim
+        or in_dim in x.dims[:-1]
+        or scale.dims != (in_dim,)
+        or (bias is not None and bias.dims != (in_dim,))
+        or not isinstance(x_raw, torch.Tensor)
+        or not x_raw.dtype.is_floating_point
+        or x_raw.device.type not in ("cpu", "cuda")
+        or (rms and not hasattr(torch.nn.functional, "rms_norm"))
+        or torch.onnx.is_in_onnx_export()
+    ):
+        return None
+    params = [scale.raw_tensor] + ([bias.raw_tensor] if bias is not None else [])
+    dtype = x_raw.dtype
+    if not _utils.should_module_output_keep_dtype():
+        for param in params:
+            dtype = torch.promote_types(dtype, param.dtype)
+    x_raw = x_raw.to(dtype)
+    params = [param.to(dtype) for param in params]
+    with torch.autocast(device_type=x_raw.device.type, enabled=False):
+        if rms:
+            out_raw = torch.nn.functional.rms_norm(x_raw, (in_dim.dimension,), params[0], eps)
+            if bias is not None:
+                out_raw = out_raw + params[1]
+        else:
+            out_raw = torch.nn.functional.layer_norm(
+                x_raw, (in_dim.dimension,), params[0], params[1] if bias is not None else None, eps
+            )
+    out = x.copy_template(name="rms_norm" if rms else "layer_norm")
+    out.dtype = TorchBackend.get_dtype_name_raw(out_raw)
+    out.raw_tensor = out_raw
+    return out
+
+
+def _conv_depthwise_1d_triton(
+    source: Tensor,
+    *,
+    in_dim: Dim,
+    out_dim: Dim,
+    in_spatial_dim: Dim,
+    out_spatial_dim: Dim,
+    filter: Tensor,
+    padding: Union[str, int],
+    bias: Optional[Tensor],
+) -> Optional[Tensor]:
+    """
+    Depthwise 1-D conv (one filter per channel, stride 1, no dilation) on CUDA
+    through :mod:`returnn.torch.util.depthwise_conv_triton`,
+    computed in the (batch..., time, channel) layout, so nothing is transposed around the conv.
+    Under CUDA autocast the operands are cast to the autocast dtype first, as torch's conv would cast them.
+
+    :param source: with in_dim and in_spatial_dim
+    :param in_dim: channel dim, equal to out_dim and to the group count
+    :param out_dim:
+    :param in_spatial_dim:
+    :param out_spatial_dim: as made by :func:`rf.make_conv_out_spatial_dims`
+    :param filter: transposed to (out_dim, in_dim // groups, filter_size)
+    :param padding: "same", "valid" or the frames of zero padding on each side
+    :param bias: over out_dim, or None
+    :return: the output with dims batch dims + (out_spatial_dim, out_dim),
+        or None when Triton is unavailable or torch would reject the mixed dtypes
+    """
+    try:
+        from returnn.torch.util import depthwise_conv_triton
+    except ImportError:
+        return None
+    if not depthwise_conv_triton.is_available():
+        return None
+    if not torch.is_autocast_enabled("cuda") and any(
+        param.raw_tensor.dtype != source.raw_tensor.dtype for param in [filter] + ([bias] if bias is not None else [])
+    ):
+        return None
+    width = filter.dims[-1].dimension
+    if padding == "same":
+        pad_l, pad_r = (width - 1) // 2, width // 2
+    elif padding == "valid":
+        pad_l = pad_r = 0
+    else:
+        pad_l = pad_r = int(padding)
+    batch_dims = [d for d in source.dims if d not in (in_dim, in_spatial_dim)]
+    source = source.copy_transpose(batch_dims + [in_spatial_dim, in_dim])
+    src_shape = list(source.raw_tensor.shape)
+    n_time_in = src_shape[-2]
+    n_time_out = n_time_in + pad_l + pad_r - width + 1
+    x_raw = source.raw_tensor.reshape(-1, n_time_in, in_dim.dimension)
+    w_raw = filter.raw_tensor.reshape(out_dim.dimension, width)
+    bias_raw = bias.raw_tensor if bias is not None else None
+    if torch.is_autocast_enabled("cuda"):
+        amp_dtype = torch.get_autocast_dtype("cuda")
+        x_raw, w_raw = x_raw.to(amp_dtype), w_raw.to(amp_dtype)
+        bias_raw = bias_raw.to(amp_dtype) if bias_raw is not None else None
+    out_raw = depthwise_conv_triton.depthwise_conv1d(x_raw, w_raw, bias_raw, pad_l=pad_l, n_time_out=n_time_out)
+    out = Tensor("conv", dims=batch_dims + [out_spatial_dim, out_dim], dtype=TorchBackend.get_dtype_name_raw(out_raw))
+    out.raw_tensor = out_raw.reshape(src_shape[:-2] + [n_time_out, out_dim.dimension])
+    out.feature_dim = out_dim
+    return out

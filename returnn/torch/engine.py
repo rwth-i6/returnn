@@ -283,7 +283,9 @@ class Engine(EngineBase):
                     " the grad reduce must run between the step and the optimizer"
                 )
             self._graph_capture = graph_capture.GraphCapturedTrainStep(
-                opts=self._graph_capture_opts,
+                opts=graph_capture.bounds_from_config(
+                    self._graph_capture_opts, config=self.config, extern_data_template=self.extern_data
+                ),
                 extern_data_template=self.extern_data,
                 device=self._device,
                 float_dtype=self._default_float_dtype,
@@ -642,14 +644,19 @@ class Engine(EngineBase):
                     with record_function("reduce_grads"):
                         self._torch_distributed_ctx.maybe_reduce_grads(module=self._pt_model)
 
+                dummy_step = self._graph_capture is not None and self._graph_capture.last_step_dummy
                 # only update the weights when every gradient accumulation loop ends
                 # (under graph capture with capture_optimizer, the update is inside the graph)
-                if perform_update_step and (self._graph_capture is None or not self._graph_capture.captures_optimizer):
+                if (
+                    perform_update_step
+                    and not dummy_step
+                    and (self._graph_capture is None or not self._graph_capture.captures_optimizer)
+                ):
                     with record_function("optimizer_step"):
                         self._updater.step(grad_scaler=self._grad_scaler)
                 zero_grad_next_step = perform_update_step
 
-                if self._updater.log_grad_norm_p is not None and perform_update_step:
+                if self._updater.log_grad_norm_p is not None and perform_update_step and not dummy_step:
                     key = f"grad_norm:p{simplify_and_format_number(self._updater.log_grad_norm_p)}"
                     assert key not in losses_dict
                     inv_norm_factors_dict[key] = 1.0  # once per update step

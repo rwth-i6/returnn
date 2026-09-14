@@ -1179,6 +1179,34 @@ class Backend(Generic[T]):
         raise NotImplementedError
 
     @staticmethod
+    def shift_right(source: Tensor, *, axis: Dim, pad_value: Union[Tensor, rf.RawTensorTypes], amount: int) -> Tensor:
+        """
+        :param source:
+        :param axis:
+        :param pad_value: fills the first ``amount`` positions
+        :param amount:
+        :return: source shifted right by amount along axis, same dims
+        """
+        padded, (padded_dim,) = rf.pad(source, axes=[axis], padding=[(amount, 0)], mode="constant", value=pad_value)
+        padded_slice, _ = rf.slice(padded, axis=padded_dim, size=axis)
+        return padded_slice
+
+    @staticmethod
+    def shift_left(source: Tensor, *, axis: Dim, pad_value: Union[Tensor, rf.RawTensorTypes], amount: int) -> Tensor:
+        """
+        :param source:
+        :param axis:
+        :param pad_value: fills the last ``amount`` positions of every sequence
+        :param amount:
+        :return: source shifted left by amount along axis, same dims
+        """
+        padded, (padded_dim,) = rf.pad(
+            source, axes=[axis], padding=[(0, amount)], mode="constant", value=pad_value, handle_dynamic_dims=True
+        )
+        padded_slice, _ = rf.slice(padded, axis=padded_dim, start=amount, size=axis)
+        return padded_slice
+
+    @staticmethod
     def flip_no_mask(source: Tensor, *, axis: Dim) -> Tensor:
         """flip, ignoring masking"""
         raise NotImplementedError
@@ -1488,6 +1516,52 @@ class Backend(Generic[T]):
         """
         raise NotImplementedError
 
+    @staticmethod
+    def layer_norm(
+        x: Tensor, *, in_dim: Union[Dim, Sequence[Dim]], scale: Tensor, bias: Optional[Tensor], eps: float
+    ) -> Tensor:
+        """
+        Layer norm as a composition of generic ops, see :func:`rf.layer_norm`.
+
+        :param x: input
+        :param in_dim: the dim or dims to normalize over
+        :param scale: over in_dim
+        :param bias: over in_dim, or None
+        :param eps: added to the variance
+        :return: the normalized x
+        """
+        from . import _utils
+
+        mean, variance = rf.moments(x, axis=in_dim)
+        norm_x = (x - mean) * rf.rsqrt(variance + eps)
+        out = norm_x * scale
+        if bias is not None:
+            out += bias
+        return _utils.keep_dtype(out, x.dtype)
+
+    @staticmethod
+    def rms_norm(
+        x: Tensor, *, in_dim: Union[Dim, Sequence[Dim]], scale: Tensor, bias: Optional[Tensor], eps: float
+    ) -> Tensor:
+        """
+        RMS norm as a composition of generic ops, see :func:`rf.rms_norm`.
+
+        :param x: input
+        :param in_dim: the dim or dims to normalize over
+        :param scale: over in_dim
+        :param bias: over in_dim, or None
+        :param eps: added to the mean square
+        :return: the normalized x
+        """
+        from . import _utils
+
+        variance = rf.reduce_mean(rf.square(x), axis=in_dim)
+        norm_x = x * rf.rsqrt(variance + eps)
+        out = norm_x * scale
+        if bias is not None:
+            out += bias
+        return _utils.keep_dtype(out, x.dtype)
+
     # noinspection PyShadowingBuiltins
     @staticmethod
     def conv(
@@ -1702,9 +1776,11 @@ class Backend(Generic[T]):
             # query_spatial_dim can be kv_spatial_dim itself (full-sequence self-attention, both roles):
             # rewriting the kv side to the separate masked hist dim resolves the double use.
             # bounded_by: the hist lens are 1..axis-size, so the axis bounds them
-            # (under the bound-shape regime the axis capacity then bounds hist_dim too)
+            # (under the bound-shape regime the axis capacity then bounds hist_dim too).
+            # dim sizes live on the host by convention, but the softmax mask needs them on the
+            # data device, and under tracing that copy is a sync, which capture does not allow
             hist_dim = Dim(
-                rf.range_over_dim(query_spatial_dim, device="cpu") + 1,
+                rf.range_over_dim(query_spatial_dim, device=query.device if rf.is_static_traceable() else "cpu") + 1,
                 name=f"{kv_spatial_dim.description}:kv",
                 bounded_by=kv_spatial_dim,
             )

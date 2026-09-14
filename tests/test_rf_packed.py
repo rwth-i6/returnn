@@ -118,11 +118,14 @@ def test_linear():
 def test_layer_norm():
     rf.select_backend_torch()
     x, batch_dim, time_dim, feat_dim = _make_input()
-    layer = rf.LayerNorm(feat_dim)
     xp = packed.pack(x)
-    out_p = layer(xp)
-    assert packed.is_packed(out_p)  # statistics are over feat only, must stay packed
-    _assert_equal_non_padded(out_p, layer(x), batch_dim, time_dim)
+    # the feature dim often lives only on the outer tensor, e.g. rf.Linear sets it after the matmul
+    xp.feature_dim = feat_dim
+    for layer in (rf.LayerNorm(feat_dim), rf.RMSNorm(feat_dim)):
+        out_p = layer(xp)
+        assert packed.is_packed(out_p)  # statistics are over feat only, must stay packed
+        assert out_p.feature_dim == feat_dim, out_p
+        _assert_equal_non_padded(out_p, layer(x), batch_dim, time_dim)
 
 
 def test_output_block_log_softmax():
@@ -175,6 +178,63 @@ def test_window_over_packed_time():
     raw = out_p.raw_tensor
     assert raw.orig_dims == (batch_dim, out_spatial_dim)
     _assert_equal_non_padded(out_p, out, batch_dim, out_spatial_dim)
+
+
+def test_generic_op_packs_plain_frame_operand():
+    rf.select_backend_torch()
+    x, batch_dim, time_dim, feat_dim = _make_input(batch_size=3, seq_lens=(7, 5, 4))
+    targets = Tensor(
+        "targets",
+        dims=[batch_dim, time_dim],
+        dtype="int32",
+        sparse_dim=feat_dim,
+        raw_tensor=torch.randint(0, feat_dim.dimension, (3, 7), dtype=torch.int32),
+    )
+    out = rf.reduce_argmax(x, axis=feat_dim) != targets
+    xp = packed.pack(x)
+    packed._warned_fallback_ops.clear()
+    out_p = rf.reduce_argmax(xp, axis=feat_dim) != targets
+    assert packed.is_packed(out_p)
+    assert not packed._warned_fallback_ops
+    _assert_equal_non_padded(out_p, out, batch_dim, time_dim)
+
+
+def test_same_layout_over_freshly_minted_packed_dim_does_not_rebuild():
+    rf.select_backend_torch()
+    x, batch_dim, time_dim, feat_dim = _make_input(batch_size=3, seq_lens=(7, 5, 4))
+    xp = packed.pack(x)
+    relaid, _ = rf.slice(xp, axis=time_dim, size=time_dim)
+    assert packed.is_packed(relaid)
+    assert relaid.raw_tensor.packed_dim != xp.raw_tensor.packed_dim
+    assert relaid.raw_tensor.same_layout(xp.raw_tensor)
+
+    n_regap = [0]
+    orig = packed.regap
+
+    def counting(source, gap, **kwargs):
+        n_regap[0] += 1
+        return orig(source, gap, **kwargs)
+
+    packed.regap = counting
+    try:
+        out_p = relaid + xp
+    finally:
+        packed.regap = orig
+    assert n_regap[0] == 0, f"rebuilt the buffer {n_regap[0]} times for an identical layout"
+    ref = packed.unpack(relaid) + packed.unpack(xp)
+    _assert_equal_non_padded(out_p, ref, batch_dim, time_dim)
+
+
+def test_generic_op_keeps_the_fallback_when_a_dim_is_named():
+    rf.select_backend_torch()
+    x, batch_dim, time_dim, _feat_dim = _make_input(batch_size=3, seq_lens=(7, 5, 4))
+    xp = packed.pack(x)
+    try:
+        rf.top_k(xp, axis=time_dim, k=2)
+    except Exception as exc:
+        assert "references packed dims" in str(exc), exc
+    else:
+        raise AssertionError("top_k names the packed time dim, it must not run on the packed buffer")
 
 
 def _assert_equal_per_seq(actual: Tensor, expected: Tensor, batch_dim: Dim, a_dim: Dim, e_dim: Dim, *rest: Dim):
@@ -1371,6 +1431,88 @@ def test_rel_pos_att_triton_kernel_grad():
             numpy.testing.assert_allclose(g_kernel.cpu().numpy(), t.grad.cpu().numpy(), rtol=1e-4, atol=1e-4)
 
 
+def test_chunked_rel_pos_att_triton_kernel_grad():
+    # The chunked variant (chunk of S rows over its own rows and the first C rows of MEM previous
+    # chunks, zero keys before the first chunk): fwd + all grads vs an explicit per-row reference,
+    # at dropout 0 and at dropout > 0 with the kernel's own extracted mask.
+    rf.select_backend_torch()
+    import torch as _torch
+
+    if not _torch.cuda.is_available():
+        raise unittest.SkipTest("needs CUDA")
+    try:
+        from returnn.torch.util import chunked_rel_pos_att_triton as m
+    except ImportError as exc:
+        raise unittest.SkipTest(f"triton not available ({exc})")
+
+    dev = "cuda"
+    s_rows, c_rows, mem = 4, 2, 2
+    chunks = [5, 3, 4]
+    lens = [n * s_rows for n in chunks]
+    starts = [0, 20, 32]
+    total, n_heads, d = 48, 2, 32
+    r = mem * c_rows + 2 * s_rows - 1
+    center = mem * c_rows + s_rows - 1
+    starts_t = torch.tensor(starts, dtype=torch.int32, device=dev)
+    lens_t = torch.tensor(lens, dtype=torch.int32, device=dev)
+    scale = 1.0 / (d**0.5)
+    gen = torch.Generator(device="cpu").manual_seed(17)
+
+    def _reference(q, k, v, bd, keep_mask, dropout_p):
+        outs = []
+        for b, n_chunks in enumerate(chunks):
+            s0 = starts[b]
+            rows = n_chunks * s_rows
+            kb = k[s0 : s0 + rows].view(n_chunks, s_rows, n_heads, d)
+            vb = v[s0 : s0 + rows].view(n_chunks, s_rows, n_heads, d)
+            for c in range(n_chunks):
+                keys = [(kc, kp) for kc in range(c - mem, c) for kp in range(c_rows)] + [
+                    (c, kp) for kp in range(s_rows)
+                ]
+                zero = torch.zeros(n_heads, d, device=dev)
+                kvec = torch.stack([kb[kc, kp] if kc >= 0 else zero for kc, kp in keys])
+                vvec = torch.stack([vb[kc, kp] if kc >= 0 else zero for kc, kp in keys])
+                for i in range(s_rows):
+                    row = s0 + c * s_rows + i
+                    idx = torch.tensor([center + (kc - c) * c_rows + kp - i for kc, kp in keys], device=dev)
+                    sc = torch.einsum("hd,lhd->hl", q[row], kvec) * scale + bd[row][:, idx]
+                    w = torch.softmax(sc, dim=-1)
+                    if keep_mask is not None:
+                        w = w * keep_mask[row][:, idx].float() / (1.0 - dropout_p)
+                    outs.append(torch.einsum("hl,lhd->hd", w, vvec))
+        return torch.stack(outs)
+
+    for dropout_p, seed in [(0.0, 0), (0.3, 999)]:
+        leaves = [torch.randn(total, n_heads, d, generator=gen).to(dev).requires_grad_(True) for _ in range(3)]
+        bd_leaf = (torch.randn(total, n_heads, r, generator=gen) * 0.5).to(dev).requires_grad_(True)
+        out = m.chunked_rel_pos_att(
+            *leaves,
+            bd_leaf,
+            starts_t,
+            lens_t,
+            max(lens),
+            chunk_size=s_rows,
+            kept_rows=c_rows,
+            history=mem,
+            dropout_p=dropout_p,
+            seed=seed,
+            scale=scale,
+        )
+        d_out = torch.randn(total, n_heads, d, generator=gen).to(dev)
+        out.backward(d_out)
+        grads_kernel = [t.grad.clone() for t in leaves] + [bd_leaf.grad.clone()]
+        for t in leaves + [bd_leaf]:
+            t.grad = None
+        keep = None
+        if dropout_p:
+            keep = m.dump_keep_mask(total, n_heads, r, dropout_p=dropout_p, seed=seed, device=dev)
+        ref = _reference(*leaves, bd_leaf, keep, dropout_p)
+        numpy.testing.assert_allclose(out.detach().cpu().numpy(), ref.detach().cpu().numpy(), rtol=1e-4, atol=1e-5)
+        ref.backward(d_out)
+        for g_kernel, t in zip(grads_kernel, leaves + [bd_leaf]):
+            numpy.testing.assert_allclose(g_kernel.cpu().numpy(), t.grad.cpu().numpy(), rtol=1e-4, atol=1e-4)
+
+
 def test_cast_packed():
     # rf.cast on packed data runs elementwise on the packed buffer (PackedBackend.cast_raw),
     # e.g. from the behavior_version>=27 keep-dtype path of LayerNorm/RMSNorm.
@@ -1380,6 +1522,40 @@ def test_cast_packed():
     out_p = rf.cast(xp, "float64")
     assert packed.is_packed(out_p) and out_p.dtype == "float64"
     _assert_equal_non_padded(out_p, rf.cast(x, "float64"), batch_dim, time_dim)
+
+
+def test_pack_like_plain_helper_tensors():
+    # Helper tensors built on the virtual side (a frame mask, targets regridded onto the frames, positions)
+    # can be put on the data's packing, so the ops consuming them work on the packed buffer.
+    # Without it, an embedding-style lookup (plain source, per-frame indices) runs on padded storage.
+    rf.select_backend_torch()
+    x, batch_dim, time_dim, feat_dim = _make_input(batch_size=3, seq_lens=(5, 1, 4))
+    xp = packed.pack(x)
+    emb_dim = Dim(2, name="emb")
+    emb = Tensor("emb", dims=[feat_dim, emb_dim], dtype="float32")
+    emb.raw_tensor = torch.randn(feat_dim.dimension, emb_dim.dimension, generator=torch.Generator().manual_seed(5))
+    targets = Tensor("targets", dims=[batch_dim, time_dim], dtype="int32", sparse_dim=feat_dim)
+    targets.raw_tensor = torch.randint(0, feat_dim.dimension, (3, 5), dtype=torch.int32)
+    ref = rf.gather(emb, indices=targets, axis=feat_dim)
+    assert not packed.is_packed(ref)  # plain indices keep the lookup on padded storage
+
+    targets_p = rf.pack_like(targets, xp)
+    assert packed.is_packed(targets_p) and targets_p.sparse_dim == feat_dim
+    _assert_equal_non_padded(targets_p, targets, batch_dim, time_dim)
+
+    packed._warned_fallback_ops.clear()
+    out = rf.gather(emb, indices=targets_p, axis=feat_dim)
+    assert packed.is_packed(out) and not packed._warned_fallback_ops
+    _assert_equal_non_padded(out, ref, batch_dim, time_dim)
+
+    # a packed source is conformed to the template's layout, and a padded template is a no-op,
+    # so the same model code runs packed and padded
+    gapped = packed.pack(x, gap=2, align=1)
+    conformed = rf.pack_like(targets_p, gapped)
+    assert packed.is_packed(conformed) and conformed.raw_tensor.same_packing(gapped.raw_tensor)
+    other = Tensor("other", dims=[feat_dim], dtype="float32", raw_tensor=torch.zeros(feat_dim.dimension))
+    assert rf.pack_like(other, xp) is other
+    assert rf.pack_like(targets, x) is targets
 
 
 def test_stft_packed():
@@ -1942,6 +2118,231 @@ def test_conv_packed_auto_realign_static():
         assert not warned, f"unexpected fallback: {warned}"
         assert out_p.raw_tensor.packed_dim.dimension is not None, "lost the static bound"
         _assert_equal_non_padded(out_p, out_ref, batch_dim, sp_ref)
+
+
+def test_cu_seqlens_with_host_lens_and_a_device_total():
+    if not torch.cuda.is_available():
+        raise unittest.SkipTest("cuda only: needs a second device for the packed total")
+    rf.select_backend_torch()
+    batch_dim = Dim(2, name="batch")
+    lens = Tensor("lens", dims=[batch_dim], dtype="int32", raw_tensor=torch.tensor([5, 3], dtype=torch.int32))
+    time_dim = Dim(lens, name="time")
+    total = Tensor("total", dims=(), dtype="int32", raw_tensor=torch.tensor(8, dtype=torch.int32, device="cuda"))
+    packed_dim = Dim(total, name="packed")
+    inner = Tensor("inner", dims=[packed_dim], dtype="float32", raw_tensor=torch.zeros(8, device="cuda"))
+    raw = packed.PackedRawTensor(inner=inner, packed_dim=packed_dim, orig_dims=(batch_dim, time_dim))
+    cu, _ = raw.cu_seqlens(device="cuda")
+    assert cu.raw_tensor.tolist() == [0, 5, 8]
+
+
+def test_regap_under_cuda_graph_capture():
+    if not torch.cuda.is_available():
+        raise unittest.SkipTest("cuda only: real graph capture")
+    rf.select_backend_torch()
+    batch_dim = Dim(2, name="batch")
+    lens = Tensor(
+        "lens", dims=[batch_dim], dtype="int32", raw_tensor=torch.tensor([5, 3], dtype=torch.int32, device="cuda")
+    )
+    time_dim = Dim(lens, name="time", capacity=6)
+    packed_dim = Dim(16, name="packed")
+    inner = Tensor("inner", dims=[packed_dim], dtype="float32", raw_tensor=torch.arange(16.0, device="cuda"))
+    x = packed.pack_import(inner, batch_dim=batch_dim, spatial_dim=time_dim, packed_dim=packed_dim)
+    side = torch.cuda.Stream()
+    side.wait_stream(torch.cuda.current_stream())
+    with torch.cuda.stream(side), rf.set_static_traceable_ctx():
+        packed.regap(x, 2, align=1, total_bound=20)
+    torch.cuda.current_stream().wait_stream(side)
+    graph = torch.cuda.CUDAGraph()
+    with torch.cuda.graph(graph), rf.set_static_traceable_ctx():
+        out = packed.regap(x, 2, align=1, total_bound=20)
+    graph.replay()
+    torch.cuda.synchronize()
+    values = out.raw_tensor.inner.raw_tensor.tolist()
+    assert values[:5] == [0.0, 1.0, 2.0, 3.0, 4.0] and values[7:10] == [5.0, 6.0, 7.0], values
+
+
+def test_gather_with_a_static_extra_index_dim_keeps_the_packing():
+    rf.select_backend_torch()
+    x, batch_dim, time_dim, feat_dim = _make_input(batch_size=3, seq_lens=(7, 5, 4))
+    xp = packed.pack(x)
+    mem_dim = Dim(2, name="mem")
+    idx = rf.combine_bc(rf.range_over_dim(time_dim), "+", rf.range_over_dim(mem_dim) - mem_dim.dimension)
+    ref = rf.gather(x, indices=idx, axis=time_dim, clip_to_valid=True)
+    packed._warned_fallback_ops.clear()
+    out = rf.gather(xp, indices=idx, axis=time_dim, clip_to_valid=True)
+    assert not packed._warned_fallback_ops, packed._warned_fallback_ops
+    assert out.raw_tensor.packed_dim is xp.raw_tensor.packed_dim
+    _assert_equal_non_padded(out, ref, batch_dim, time_dim)
+
+
+def test_shift_along_the_packed_dim_keeps_the_packing():
+    rf.select_backend_torch()
+    x, batch_dim, time_dim, feat_dim = _make_input(batch_size=3, seq_lens=(7, 5, 4))
+    xp = packed.pack(x)
+    for shift, amount in ((rf.shift_right, 2), (rf.shift_left, 1)):
+        ref = shift(x, axis=time_dim, pad_value=7.0, amount=amount)
+        packed._warned_fallback_ops.clear()
+        out_p = shift(xp, axis=time_dim, pad_value=7.0, amount=amount)
+        assert not packed._warned_fallback_ops, (shift.__name__, packed._warned_fallback_ops)
+        assert out_p.raw_tensor.packed_dim is xp.raw_tensor.packed_dim, shift.__name__
+        _assert_equal_non_padded(out_p, ref, batch_dim, time_dim)
+
+
+def test_reduce_over_time_dense_bound_tail():
+    """a dense bound-sized buffer has unused rows past the content, which no per-sequence op may count"""
+    rf.select_backend_torch()
+    x, batch_dim, time_dim, feat_dim = _make_input(seq_lens=(4, 2))
+    xp = packed.regap(packed.pack(x), 0, total_bound=10)
+    assert xp.raw_tensor.packed_dim.dimension == 10
+    for mode in ("mean", "sum", "logsumexp"):
+        out_p = rf.reduce(xp, mode=mode, axis=time_dim)
+        out_ref = rf.reduce(x, mode=mode, axis=time_dim)
+        assert not packed.is_packed(out_p)
+        out_p = out_p.copy_compatible_to_dims(out_ref.dims)
+        numpy.testing.assert_allclose(
+            out_p.raw_tensor.detach().numpy(), out_ref.raw_tensor.detach().numpy(), rtol=1e-5, atol=1e-6, err_msg=mode
+        )
+    for fn in (rf.softmax, rf.log_softmax):
+        out_p = fn(xp, axis=time_dim)
+        assert packed.is_packed(out_p), fn.__name__
+        _assert_equal_non_padded(out_p, fn(x, axis=time_dim), batch_dim, time_dim)
+
+
+def test_batch_norm_packed_dense_bound_train():
+    """batch_norm statistics ignore the unused tail of a dense bound-sized buffer"""
+    rf.select_backend_torch()
+    x, batch_dim, time_dim, feat_dim = _make_input(seq_lens=(5, 3), feat=4, seed=8)
+    with rf.set_default_device_ctx("cpu"):
+        rf.set_random_seed(3)
+        bn_dense = rf.BatchNorm(feat_dim, use_mask=False)
+        bn_bound = rf.BatchNorm(feat_dim, use_mask=False)
+        with rf.get_run_ctx().train_flag_ctx(True):
+            out_dense = bn_dense(packed.pack(x))
+            out_bound = bn_bound(packed.regap(packed.pack(x), 0, total_bound=16))
+        assert packed.is_packed(out_bound)
+    _assert_equal_non_padded(out_bound, packed.unpack(out_dense), batch_dim, time_dim)
+    for p_dense, p_bound in [
+        (bn_dense.running_mean, bn_bound.running_mean),
+        (bn_dense.running_variance, bn_bound.running_variance),
+    ]:
+        numpy.testing.assert_allclose(
+            p_dense.raw_tensor.detach().numpy(), p_bound.raw_tensor.detach().numpy(), rtol=1e-5, atol=1e-6
+        )
+
+
+def test_gather_per_seq_index_drops_the_time_dim():
+    """indices without the gathered time dim select frames per sequence, so the result has no time dim"""
+    rf.select_backend_torch()
+    x, batch_dim, time_dim, feat_dim = _make_input(batch_size=3, seq_lens=(7, 5, 4))
+    xp = packed.pack(x, gap=2)
+    k_dim = Dim(2, name="k")
+    idx_b = Tensor("idx", dims=[batch_dim], dtype="int32", raw_tensor=torch.tensor([6, 0, 3], dtype=torch.int32))
+    idx_bk = Tensor(
+        "idx",
+        dims=[batch_dim, k_dim],
+        dtype="int32",
+        raw_tensor=torch.tensor([[6, 1], [0, 4], [3, 2]], dtype=torch.int32),
+    )
+    for idx in (idx_b, idx_bk):
+        ref = rf.gather(x, indices=idx, axis=time_dim)
+        out = rf.gather(xp, indices=idx, axis=time_dim)
+        assert time_dim not in out.dims, (idx.dims, out.dims)
+        out = packed.unpack(out) if packed.is_packed(out) else out
+        out = out.copy_compatible_to_dims(ref.dims)
+        numpy.testing.assert_allclose(out.raw_tensor.detach().numpy(), ref.raw_tensor.detach().numpy(), rtol=1e-6)
+    vocab = Dim(9, name="vocab")
+    codes = Tensor("codes", dims=[batch_dim, time_dim], dtype="int32")
+    codes.raw_tensor = torch.arange(21, dtype=torch.int32).reshape(3, 7) % 9
+    codes_p = rf.set_sparse_dim(packed.pack(codes, gap=2), vocab)
+    out = rf.gather(codes_p, indices=idx_b, axis=time_dim)
+    assert out.sparse_dim == vocab, out
+    ref = rf.gather(rf.set_sparse_dim(codes, vocab), indices=idx_b, axis=time_dim)
+    numpy.testing.assert_array_equal(out.raw_tensor.numpy(), ref.raw_tensor.numpy())
+
+
+def test_softmax_over_a_single_packed_axis_with_a_bound():
+    """a bound-sized packing of one axis normalizes over its content rows only"""
+    rf.select_backend_torch()
+    size_dim = Dim(Tensor("size", dims=[], dtype="int32", raw_tensor=torch.tensor(3, dtype=torch.int32)), name="size")
+    x = Tensor("x", dims=[size_dim], dtype="float32", raw_tensor=torch.tensor([0.0, 1.0, 2.0]))
+    xp = packed.pack(x, dims=[size_dim], total_bound=5)
+    for fn in (rf.softmax, rf.log_softmax):
+        out = fn(xp, axis=size_dim)
+        assert packed.is_packed(out), fn.__name__
+        numpy.testing.assert_allclose(
+            out.raw_tensor.inner.raw_tensor.numpy()[:3],
+            fn(x, axis=size_dim).raw_tensor.numpy(),
+            rtol=1e-6,
+            err_msg=fn.__name__,
+        )
+
+
+def test_batch_norm_packed_dense_bound_with_a_static_axis():
+    """the masked batch_norm statistics also cover a static axis next to the packed one, no re-layout loop"""
+    rf.select_backend_torch()
+    x, batch_dim, time_dim, feat_dim = _make_input(seq_lens=(3, 2), feat=2, seed=9)
+    k_dim = Dim(2, name="k")
+    xk = Tensor("xk", dims=[batch_dim, time_dim, k_dim, feat_dim], dtype="float32")
+    xk.raw_tensor = torch.arange(24, dtype=torch.float32).reshape(2, 3, 2, 2)
+    with rf.set_default_device_ctx("cpu"):
+        rf.set_random_seed(3)
+        bn_dense = rf.BatchNorm(feat_dim, use_mask=False)
+        bn_bound = rf.BatchNorm(feat_dim, use_mask=False)
+        with rf.get_run_ctx().train_flag_ctx(True):
+            out_dense = bn_dense(packed.pack(xk))
+            out_bound = bn_bound(packed.regap(packed.pack(xk), 0, total_bound=8))
+        assert packed.is_packed(out_bound)
+    _assert_equal_non_padded(out_bound, packed.unpack(out_dense), batch_dim, time_dim)
+    for p_dense, p_bound in [
+        (bn_dense.running_mean, bn_bound.running_mean),
+        (bn_dense.running_variance, bn_bound.running_variance),
+    ]:
+        numpy.testing.assert_allclose(
+            p_dense.raw_tensor.detach().numpy(), p_bound.raw_tensor.detach().numpy(), rtol=1e-5, atol=1e-6
+        )
+
+
+def test_regap_of_entirely_empty_sequences():
+    """a packing whose sequences are all empty can still be re-laid out"""
+    rf.select_backend_torch()
+    x, batch_dim, time_dim, feat_dim = _make_input(seq_lens=(0, 0), feat=1)
+    x.raw_tensor = torch.empty(2, 0, 1)
+    out = packed.regap(packed.pack(x), 2)
+    assert packed.is_packed(out) and out.raw_tensor.gap == 2
+    assert tuple(packed.unpack(out).copy_transpose([batch_dim, time_dim, feat_dim]).raw_tensor.shape) == (2, 0, 1)
+
+
+def test_pack_dense_total_bound_static_buffer():
+    """a dense pack with total_bound allocates the bound-sized static buffer, content first"""
+    rf.select_backend_torch()
+    x, batch_dim, time_dim, feat_dim = _make_input(seq_lens=(4, 2))
+    xp = packed.pack(x, total_bound=10)
+    raw = xp.raw_tensor
+    assert raw.packed_dim.dimension == 10 and raw.inner.raw_tensor.shape[0] == 10, raw
+    assert raw.content_bound == 10, raw
+    _assert_equal_non_padded(xp, x, batch_dim, time_dim)
+    content = torch.cat([x.raw_tensor[0, :4], x.raw_tensor[1, :2]])
+    numpy.testing.assert_allclose(raw.inner.raw_tensor[:6].detach().numpy(), content.numpy())
+    out = rf.reduce_mean(xp, axis=time_dim).copy_compatible_to_dims([batch_dim, feat_dim])
+    ref = rf.reduce_mean(x, axis=time_dim).copy_compatible_to_dims([batch_dim, feat_dim])
+    numpy.testing.assert_allclose(out.raw_tensor.detach().numpy(), ref.raw_tensor.detach().numpy(), rtol=1e-5)
+
+
+def test_shift_and_pad_with_a_per_seq_pad_value():
+    """a pad value over the batch dim applies per sequence in the packed shift and pad"""
+    rf.select_backend_torch()
+    x, batch_dim, time_dim, feat_dim = _make_input(batch_size=3, seq_lens=(7, 5, 4))
+    xp = packed.pack(x, gap=2)
+    pad = Tensor("pad", dims=[batch_dim], dtype="float32", raw_tensor=torch.tensor([100.0, 200.0, 300.0]))
+    for shift, amount in ((rf.shift_right, 2), (rf.shift_left, 1)):
+        ref = shift(x, axis=time_dim, pad_value=pad, amount=amount)
+        out_p = shift(xp, axis=time_dim, pad_value=pad, amount=amount)
+        assert packed.is_packed(out_p), shift.__name__
+        _assert_equal_non_padded(out_p, ref, batch_dim, time_dim)
+    ref, (padded_time,) = rf.pad(x, axes=[time_dim], padding=[(1, 0)], value=pad)
+    out_p, _ = rf.pad(xp, axes=[time_dim], padding=[(1, 0)], out_dims=[padded_time], value=pad)
+    assert packed.is_packed(out_p)
+    _assert_equal_non_padded(out_p, ref, batch_dim, padded_time)
 
 
 if __name__ == "__main__":

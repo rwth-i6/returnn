@@ -390,3 +390,82 @@ def test_masked_select_bound():
     assert int(out_len2) == num
     assert out2.shape == (num, 4)
     torch.testing.assert_close(out2, x[mask])
+
+
+def test_depthwise_conv1d_triton_kernel_grad():
+    """fwd and all grads of the Triton depthwise conv vs torch conv1d, small blocks force partial tiles"""
+    if not torch.cuda.is_available():
+        raise unittest.SkipTest("needs CUDA")
+    try:
+        from returnn.torch.util import depthwise_conv_triton as m
+    except ImportError as exc:
+        raise unittest.SkipTest(f"triton not available ({exc})")
+
+    dev = "cuda"
+    gen = torch.Generator(device="cpu").manual_seed(11)
+    f32, bf16 = torch.float32, torch.bfloat16
+    small, small_blocks = (3, 37, 70), (16, 32, 16, 32)
+    cases = [
+        (small, 5, 2, 2, f32, f32, small_blocks),
+        (small, 32, 15, 16, f32, f32, small_blocks),
+        (small, 4, 0, 0, f32, f32, small_blocks),
+        (small, 7, 4, 4, f32, f32, small_blocks),
+        (small, 32, 15, 16, bf16, f32, None),
+        ((920, 24, 1024), 32, 15, 16, bf16, bf16, None),
+    ]
+    for shape, width, pad_l, pad_r, x_dtype, w_dtype, blocks in cases:
+        n_batch, n_time, n_chan = shape
+        x = torch.randn(shape, generator=gen).to(dev, x_dtype).requires_grad_(True)
+        w = (torch.randn(n_chan, width, generator=gen) * 0.3).to(dev, w_dtype).requires_grad_(True)
+        bias = torch.randn(2 * n_chan, generator=gen).to(dev)[::2].requires_grad_(True)
+        n_time_out = n_time + pad_l + pad_r - width + 1
+        opts = {"blocks": blocks} if blocks else {}
+        out = m.depthwise_conv1d(x, w, bias, pad_l=pad_l, n_time_out=n_time_out, **opts)
+        d_out = torch.randn(n_batch, n_time_out, n_chan, generator=gen).to(dev, x_dtype)
+        out.backward(d_out)
+        grads = [t.grad.clone() for t in (x, w, bias)]
+        for t in (x, w, bias):
+            t.grad = None
+        x_ref = torch.nn.functional.pad(x.float().transpose(1, 2), (pad_l, pad_r))
+        ref = torch.nn.functional.conv1d(x_ref, w.float()[:, None, :], bias, groups=n_chan).transpose(1, 2)
+        tight = {"rtol": 1e-4, "atol": 1e-4}
+        tol = tight if x_dtype == f32 else {"rtol": 2e-2, "atol": 2e-2}
+        assert out.shape == ref.shape and out.dtype == x_dtype, (width, pad_l, out.shape, out.dtype)
+        torch.testing.assert_close(out.float(), ref, **tol)
+        ref.backward(d_out.float())
+        for g, t, t_tol in zip(grads, (x, w, bias), (tol, tol, tight)):
+            assert g.dtype == t.dtype, (width, g.dtype, t.dtype)
+            torch.testing.assert_close(g.float(), t.grad.float(), **t_tol)
+
+
+def test_depthwise_conv1d_triton_guards():
+    """a frozen filter skips the weight gradient kernel, second derivatives and invalid blocks or dtypes raise"""
+    if not torch.cuda.is_available():
+        raise unittest.SkipTest("needs CUDA")
+    try:
+        from returnn.torch.util import depthwise_conv_triton as m
+    except ImportError as exc:
+        raise unittest.SkipTest(f"triton not available ({exc})")
+    from unittest import mock
+
+    x = torch.randn(2, 9, 8, device="cuda", requires_grad=True)
+    w = torch.randn(8, 3, device="cuda")
+    with mock.patch.object(m, "_dw_bwd_dw") as dw_kernel:
+        m.depthwise_conv1d(x, w, None, pad_l=1, n_time_out=9).sum().backward()
+    assert not dw_kernel.mock_calls and x.grad is not None, dw_kernel.mock_calls
+    w.requires_grad_(True)
+    out = m.depthwise_conv1d(x, w, None, pad_l=1, n_time_out=9)
+    (gx,) = torch.autograd.grad(out.square().sum(), x, create_graph=True)
+    try:
+        (gx.square().sum() + w.sum()).backward()
+    except RuntimeError as exc:
+        assert "once_differentiable" in str(exc), exc
+    else:
+        raise AssertionError("a second derivative through the conv must raise")
+    for args, opts in (((x.double(), w.double()), {}), ((x, w), {"blocks": (0, 32, 16, 32)})):
+        try:
+            m.depthwise_conv1d(*args, None, pad_l=1, n_time_out=9, **opts)
+        except AssertionError:
+            pass
+        else:
+            raise AssertionError(f"dtype {args[0].dtype} with {opts} must raise")
