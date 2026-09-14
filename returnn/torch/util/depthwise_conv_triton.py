@@ -277,6 +277,8 @@ def depthwise_conv1d(
     """
     assert x.ndim == 3 and w.ndim == 2 and x.shape[2] == w.shape[0]
     assert bias is None or bias.shape == (w.shape[0],)
-    assert all(v & (v - 1) == 0 for v in blocks)
+    operands = (x, w) if bias is None else (x, w, bias)
+    assert all(t.dtype in (torch.float16, torch.bfloat16, torch.float32) for t in operands), [t.dtype for t in operands]
+    assert all(v > 0 and v & (v - 1) == 0 for v in blocks), blocks
     bias = bias.contiguous() if bias is not None else None
     return _DepthwiseConv1d.apply(x.contiguous(), w.contiguous(), bias, pad_l, n_time_out, tuple(blocks))
