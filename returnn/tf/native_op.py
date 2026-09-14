@@ -1405,7 +1405,10 @@ def get_ctc_fsa_fast_bw(targets, seq_lens, blank_idx, label_loop=True):
             # because invalid seq lens might not directly lead to an error here
             # but it might just return an invalid FSA.
             # An invalid FSA can however later cause a crash in the FastBaumWelchOp.
-            tf_compat.v1.assert_equal(
+            # <= (not ==): a static over-allocated targets buffer (tf_static_shapes)
+            # is wider than the max len; the op handles shorter lens per seq anyway,
+            # only lens beyond the buffer are dangerous. Same as the torch counterpart.
+            tf_compat.v1.assert_less_equal(
                 tf.reduce_max(seq_lens),
                 n_time,
                 data=["get_ctc_fsa_fast_bw seq_lens invalid", seq_lens, n_time, targets_shape],
@@ -1494,7 +1497,9 @@ def ctc_loss(
         log_sm = logits
     from returnn.tf.util.basic import sequence_mask_time_major, where_bc
 
-    seq_mask = sequence_mask_time_major(logits_seq_lens)  # (time,batch)
+    # maxlen from the logits, not from the lens: an over-allocated buffer (tf_static_shapes)
+    # is wider than the longest seq, and a mask sized by the lens is then not broadcastable
+    seq_mask = sequence_mask_time_major(logits_seq_lens, maxlen=tf.shape(logits)[0])  # (time,batch)
 
     if blank_index < 0:
         blank_index += dim
