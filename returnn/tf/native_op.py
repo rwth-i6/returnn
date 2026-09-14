@@ -1379,18 +1379,23 @@ def tf_fast_bw_fsa_staircase(seq_lens, **opts):
     return edges, weights, start_end_states
 
 
-def get_ctc_fsa_fast_bw(targets, seq_lens, blank_idx, label_loop=True):
+def get_ctc_fsa_fast_bw(targets, seq_lens, blank_idx, label_loop=True, edges_bound: Optional[int] = None):
     """
-    See :class:`NativeOp.GetCtcFsaFastBwOp`.
+    See :class:`NativeOp.GetCtcFsaFastBwOp` (and :class:`NativeOp.GetCtcFsaFastBwPackedOp`).
     Generates a FSA with CTC topology. The output format is compatible to :func:`fast_baum_welch`.
 
     :param tf.Tensor targets: shape (batch,time), int32
     :param tf.Tensor seq_lens: shape (batch), int32
     :param int blank_idx: vocab index of the blank symbol
     :param bool label_loop: True -> normal CTC; False -> RNA-like
+    :param edges_bound: total edge count for the packed edge layout: seq b owns edge slots
+        ``[offsets[b], offsets[b+1])``, sized ``5*len+5``, the rest up to the bound is filler.
+        Must be >= ``5*sum(seq_lens) + 5*batch``.
+        None = the rectangular layout over the targets buffer width.
+        Same meaning as in the torch counterpart.
     :return: edges, weights, start_end_states;
       edges is (4,num_edges), int32, edges of the graph (from,to,emission_idx,sequence_idx).
-      weights is (num_edges,), float32. all zero.
+      weights is (num_edges,), float32. zero for the used edges, +inf for filler edges.
       start_end_states is (2,batch), int32, (start,end) state idx in FSA.
     :rtype: (tf.Tensor,tf.Tensor,tf.Tensor)
     """
@@ -1416,11 +1421,30 @@ def get_ctc_fsa_fast_bw(targets, seq_lens, blank_idx, label_loop=True):
             )
         ]
     ):
-        n_edges = n_batch * (5 * (n_time - 1) + 10)  # see op documentation
-        weights = tf.zeros((n_edges,))
-        maker = OpMaker(OpDescription.from_gen_base(native_op.GetCtcFsaFastBwOp))
-        op = maker.make_op()
-        edges, start_end_states, weights = op(targets, seq_lens, blank_idx, weights, label_loop)
+        if edges_bound is not None:
+            seq_lens_i32 = tf.cast(seq_lens, tf.int32)
+            n_e_per_seq = seq_lens_i32 * 5 + 5  # exact valid count per seq (len 0 uses 2 of its 5 slots)
+            edge_offsets = tf.concat([[0], tf.cumsum(n_e_per_seq)], axis=0)  # (batch+1,)
+            # a too-small bound would silently drop the edges of the tail seqs
+            with tf.control_dependencies(
+                [
+                    tf_compat.v1.assert_less_equal(
+                        edge_offsets[-1],
+                        tf.constant(edges_bound, dtype=tf.int32),
+                        data=["get_ctc_fsa_fast_bw edges_bound too small", edge_offsets[-1], edges_bound],
+                    )
+                ]
+            ):
+                weights = tf.zeros((edges_bound,))
+            maker = OpMaker(OpDescription.from_gen_base(native_op.GetCtcFsaFastBwPackedOp))
+            op = maker.make_op()
+            edges, start_end_states, weights = op(targets, seq_lens_i32, edge_offsets, blank_idx, weights, label_loop)
+        else:
+            n_edges = n_batch * (5 * (n_time - 1) + 10)  # see op documentation
+            weights = tf.zeros((n_edges,))
+            maker = OpMaker(OpDescription.from_gen_base(native_op.GetCtcFsaFastBwOp))
+            op = maker.make_op()
+            edges, start_end_states, weights = op(targets, seq_lens, blank_idx, weights, label_loop)
     return edges, weights, start_end_states
 
 
@@ -1535,6 +1559,135 @@ def ctc_loss(
     loss = custom_gradient.generic_loss_and_error_signal(loss=loss, x=logits, grad_x=grad_x)
     loss = tf.reshape(loss, [n_batch])
     return loss
+
+
+def make_fast_baum_welch_packed_op(**kwargs):
+    """
+    :param kwargs: passed on to OpMaker
+    :return: op
+    """
+    maker = OpMaker(OpDescription.from_gen_base(native_op.FastBaumWelchPackedOp), **kwargs)
+    return maker.make_op()
+
+
+def fast_baum_welch_packed(am_scores, edges, weights, start_end_states, float_idx, seq_starts, n_states=None):
+    """
+    Packed variant of :func:`fast_baum_welch`: the am scores are one flat buffer over all seqs.
+
+    :param tf.Tensor am_scores: (total_time, dim), in -log space, the seqs concatenated along time
+    :param tf.Tensor edges: (4,num_edges), edges of the graph (from,to,emission_idx,sequence_idx)
+    :param tf.Tensor weights: (num_edges,), weights of the edges
+    :param tf.Tensor start_end_states: (2, batch), (start,end) state idx in the automaton
+    :param tf.Tensor float_idx: (max_time, batch) -> 0 or 1, which also gives the recursion length
+    :param tf.Tensor seq_starts: (batch,), int32, start offset of each seq in the total_time axis
+    :param tf.Tensor|None n_states: state count; derived from start_end_states if not given,
+        which is a device read, so pass it where that matters (bound-shape regime)
+    :return: (fwdbwd, obs_scores), fwdbwd is (total_time, dim), obs_scores is (max_time, batch)
+    :rtype: (tf.Tensor, tf.Tensor)
+    """
+    op = make_fast_baum_welch_packed_op()
+    float_idx = tf.cast(float_idx, tf.float32)
+    if n_states is None:
+        # as in fast_baum_welch: the op allocates its state scratch from this count
+        last_state_idx = tf.reduce_max(start_end_states[1])
+        with tf.control_dependencies(
+            [
+                tf_compat.v1.assert_greater_equal(
+                    last_state_idx, 0, data=["last_state_idx must be >= 0 but is:", last_state_idx]
+                )
+            ]
+        ):
+            n_states = tf.cast(last_state_idx, tf.int32) + 1
+    fwdbwd, obs_scores = op(  # noqa
+        am_scores, edges, weights, start_end_states, float_idx, tf.cast(seq_starts, tf.int32), n_states
+    )
+    return fwdbwd, obs_scores
+
+
+def ctc_loss_packed(
+    *,
+    logits,
+    seq_starts,
+    logits_seq_lens,
+    max_seq_len=None,
+    targets,
+    targets_seq_lens,
+    label_loop: bool = True,
+    logits_normalize: bool = True,
+    blank_index: int = -1,
+    edges_bound: Optional[int] = None,
+):
+    """
+    Packed variant of :func:`ctc_loss`: the logits are one flat buffer over all seqs, no padding.
+    Seq b occupies ``[seq_starts[b], seq_starts[b] + logits_seq_lens[b])``;
+    frames outside any seq are never read and get zero gradient.
+
+    :param tf.Tensor logits: (total_time, dim), unnormalized (before softmax)
+    :param tf.Tensor seq_starts: (batch,), int32, ascending
+    :param tf.Tensor logits_seq_lens: (batch,)
+    :param int|tf.Tensor|None max_seq_len: max of logits_seq_lens; pass it if known
+    :param tf.Tensor targets: batch-major, (batch,target_time)
+    :param tf.Tensor targets_seq_lens: (batch,)
+    :param label_loop: True -> normal CTC; False -> RNA-like
+    :param logits_normalize: apply log_softmax on the logits (default)
+    :param blank_index: vocab index of the blank symbol
+    :param edges_bound: packed FSA edge layout, see :func:`get_ctc_fsa_fast_bw`
+    :return: loss, shape (batch,)
+    :rtype: tf.Tensor
+    """
+    from returnn.tf.util.basic import sequence_mask_time_major, where_bc
+
+    assert logits.get_shape().ndims == 2 and logits.get_shape().dims[-1].value
+    dim = logits.get_shape().dims[-1].value
+    if blank_index < 0:
+        blank_index += dim
+    assert 0 <= blank_index < dim
+    seq_starts = tf.cast(seq_starts, tf.int32)
+    logits_seq_lens_i32 = tf.cast(logits_seq_lens, tf.int32)
+
+    @tf.custom_gradient
+    def _loss(logits_):
+        log_sm = tf.nn.log_softmax(logits_) if logits_normalize else logits_  # (total,dim)
+        edges, weights, start_end_states = get_ctc_fsa_fast_bw(
+            targets=targets,
+            seq_lens=targets_seq_lens,
+            blank_idx=blank_index,
+            label_loop=label_loop,
+            edges_bound=edges_bound,
+        )
+        seq_mask = sequence_mask_time_major(logits_seq_lens_i32, maxlen=max_seq_len)  # (max_time,batch)
+        fwdbwd, obs_scores = fast_baum_welch_packed(
+            am_scores=-log_sm,
+            edges=edges,
+            weights=weights,
+            start_end_states=start_end_states,
+            float_idx=seq_mask,
+            seq_starts=seq_starts,
+        )
+        loss_ = obs_scores[0]  # (batch,)
+        # per frame, the seq it belongs to, and whether it is content at all:
+        # the gap frames of a packed layout are not covered by any seq
+        total_time = tf.shape(logits_)[0]
+        frame_idx = tf.range(total_time, dtype=tf.int32)  # (total,)
+        seq_of_frame = tf.searchsorted(seq_starts, frame_idx, side="right") - 1  # (total,)
+        seq_of_frame = tf.maximum(seq_of_frame, 0)
+        offset_in_seq = frame_idx - tf.gather(seq_starts, seq_of_frame)
+        is_content = offset_in_seq < tf.gather(logits_seq_lens_i32, seq_of_frame)  # (total,)
+
+        def grad(d_loss):
+            """
+            :param tf.Tensor d_loss: (batch,)
+            :return: gradient w.r.t. the logits, (total,dim)
+            """
+            bw = tf.exp(-fwdbwd)  # (total,dim)
+            # p(s|x) - bw w.r.t. the raw logits, -bw if they are already normalized
+            grad_x = (tf.exp(log_sm) - bw) if logits_normalize else -bw
+            grad_x = where_bc(is_content[:, None], grad_x, 0.0)
+            return grad_x * tf.gather(d_loss, seq_of_frame)[:, None]
+
+        return loss_, grad
+
+    return _loss(logits)
 
 
 def fast_viterbi(*, am_scores, am_seq_len, edges, weights, start_end_states, mask_idx: int = 0):

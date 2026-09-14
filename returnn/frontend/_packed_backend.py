@@ -4537,7 +4537,7 @@ class PackedBackend(Backend[PackedRawTensor]):
         raw = logits.raw_tensor if is_packed(logits) else None
         if (
             raw is not None
-            and raw.inner_backend.name in ("torch", "jax")
+            and raw.inner_backend.name in ("torch", "jax", "tensorflow")
             and not max_approx
             and use_native_op is not False
             and len(raw.orig_dims) == 2

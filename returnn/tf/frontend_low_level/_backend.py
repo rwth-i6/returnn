@@ -903,6 +903,13 @@ class TFBackend(Backend[tf.Tensor]):
         return Tensor("cross_entropy", dims=out_dims, raw_tensor=raw, dtype=TFBackend.get_dtype_name_raw(raw))
 
     @staticmethod
+    def ctc_loss_packed_raw(**kwargs):
+        """CTC loss on a packed logits buffer, see :func:`Backend.ctc_loss_packed_raw`"""
+        from returnn.tf import native_op as tf_native_op
+
+        return tf_native_op.ctc_loss_packed(**kwargs)
+
+    @staticmethod
     def ctc_loss(
         *,
         logits: Tensor,
