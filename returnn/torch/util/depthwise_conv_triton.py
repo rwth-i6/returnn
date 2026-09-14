@@ -28,6 +28,7 @@ from typing import Optional, Tuple
 import torch
 import triton
 import triton.language as tl
+from torch.autograd.function import once_differentiable
 
 
 _BLOCK_R, _BLOCK_C = 32, 128
@@ -195,6 +196,7 @@ class _DepthwiseConv1d(torch.autograd.Function):
         return out
 
     @staticmethod
+    @once_differentiable
     def backward(ctx, d_out):
         """
         :param d_out: (batch, time_out, channel)
