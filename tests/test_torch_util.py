@@ -439,16 +439,21 @@ def test_depthwise_conv1d_triton_kernel_grad():
 
 
 def test_depthwise_conv1d_triton_guards():
-    """second derivatives through the conv raise"""
+    """a frozen filter skips the weight gradient kernel and second derivatives raise"""
     if not torch.cuda.is_available():
         raise unittest.SkipTest("needs CUDA")
     try:
         from returnn.torch.util import depthwise_conv_triton as m
     except ImportError as exc:
         raise unittest.SkipTest(f"triton not available ({exc})")
+    from unittest import mock
 
     x = torch.randn(2, 9, 8, device="cuda", requires_grad=True)
-    w = torch.randn(8, 3, device="cuda", requires_grad=True)
+    w = torch.randn(8, 3, device="cuda")
+    with mock.patch.object(m, "_dw_bwd_dw") as dw_kernel:
+        m.depthwise_conv1d(x, w, None, pad_l=1, n_time_out=9).sum().backward()
+    assert not dw_kernel.mock_calls and x.grad is not None, dw_kernel.mock_calls
+    w.requires_grad_(True)
     out = m.depthwise_conv1d(x, w, None, pad_l=1, n_time_out=9)
     (gx,) = torch.autograd.grad(out.square().sum(), x, create_graph=True)
     try:

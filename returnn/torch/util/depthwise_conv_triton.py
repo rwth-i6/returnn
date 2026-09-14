@@ -209,7 +209,7 @@ class _DepthwiseConv1d(torch.autograd.Function):
         width = w.shape[1]
         has_bias = ctx.bias_dtype is not None
         block_r, block_c, block_r_dw, block_c_dw = ctx.blocks
-        dx = None
+        dx = dw = db = None
         if ctx.needs_input_grad[0]:
             dx = torch.empty_like(x)
             n_rows = n_batch * n_time_in
@@ -228,29 +228,32 @@ class _DepthwiseConv1d(torch.autograd.Function):
                 KW=width,
                 num_warps=4,
             )
-        n_rows = n_batch * n_time_out
-        n_row_blocks = triton.cdiv(n_rows, block_r_dw)
-        partial = torch.empty((n_row_blocks, width + int(has_bias), n_chan), dtype=torch.float32, device=x.device)
-        grid = (n_row_blocks, triton.cdiv(n_chan, block_c_dw))
-        _dw_bwd_dw[grid](
-            x,
-            d_out,
-            partial,
-            n_rows,
-            n_time_in,
-            n_time_out,
-            n_chan,
-            ctx.pad_l,
-            HAS_BIAS=has_bias,
-            BLOCK_R=block_r_dw,
-            BLOCK_C=block_c_dw,
-            KW=width,
-            KW_P=width + int(has_bias),
-            num_warps=4,
-        )
-        summed = partial.sum(dim=0)
-        dw = summed[:width].t().contiguous().to(w.dtype)
-        db = summed[width].to(ctx.bias_dtype) if has_bias else None
+        if ctx.needs_input_grad[1] or ctx.needs_input_grad[2]:
+            n_rows = n_batch * n_time_out
+            n_row_blocks = triton.cdiv(n_rows, block_r_dw)
+            partial = torch.empty((n_row_blocks, width + int(has_bias), n_chan), dtype=torch.float32, device=x.device)
+            grid = (n_row_blocks, triton.cdiv(n_chan, block_c_dw))
+            _dw_bwd_dw[grid](
+                x,
+                d_out,
+                partial,
+                n_rows,
+                n_time_in,
+                n_time_out,
+                n_chan,
+                ctx.pad_l,
+                HAS_BIAS=has_bias,
+                BLOCK_R=block_r_dw,
+                BLOCK_C=block_c_dw,
+                KW=width,
+                KW_P=width + int(has_bias),
+                num_warps=4,
+            )
+            summed = partial.sum(dim=0)
+            if ctx.needs_input_grad[1]:
+                dw = summed[:width].t().contiguous().to(w.dtype)
+            if has_bias and ctx.needs_input_grad[2]:
+                db = summed[width].to(ctx.bias_dtype)
         return dx, dw, db, None, None, None
 
 
