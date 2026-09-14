@@ -1026,6 +1026,39 @@ def test_convert_parameter_to_buffer():
     assert type(mod_pt.weight) is torch.Tensor
 
 
+def test_layer_norm_fused_matches_generic():
+    from returnn.config import Config, global_config_ctx
+    from returnn.frontend._backend import Backend
+
+    torch.manual_seed(42)
+    batch_dim_, time_dim, feat_dim = Dim(3, name="batch"), Dim(5, name="time"), Dim(8, name="feat")
+    x_base = torch.randn(3, 5, 8) * 2.0 + 0.5
+    scale_base, bias_base = 1.0 + 0.1 * torch.randn(8), 0.1 * torch.randn(8)
+    grad_out = torch.randn(3, 5, 8)
+    for name in ("layer_norm", "rms_norm"):
+        for dtype, keep_dtype, tolerance in (
+            ("float32", True, 1e-5),
+            ("bfloat16", True, 2e-2),
+            ("bfloat16", False, 2e-2),
+        ):
+            results = []
+            for func in (getattr(rf, name), getattr(Backend, name)):
+                x_raw = x_base.to(getattr(torch, dtype)).detach().requires_grad_()
+                scale_raw, bias_raw = scale_base.clone().requires_grad_(), bias_base.clone().requires_grad_()
+                x = Tensor("x", dims=[batch_dim_, time_dim, feat_dim], dtype=dtype, raw_tensor=x_raw)
+                scale = Tensor("scale", dims=[feat_dim], dtype="float32", raw_tensor=scale_raw)
+                bias = Tensor("bias", dims=[feat_dim], dtype="float32", raw_tensor=bias_raw)
+                with global_config_ctx(Config({"rf_module_output_keep_dtype": keep_dtype})):
+                    out = func(x, in_dim=feat_dim, scale=scale, bias=bias, eps=1e-6)
+                out.raw_tensor.backward(grad_out.to(out.raw_tensor.dtype))
+                raws = (out.raw_tensor, x_raw.grad, scale_raw.grad, bias_raw.grad)
+                results.append((out.dtype, [t.detach().float() for t in raws]))
+            (fused_dtype, fused), (generic_dtype, generic) = results
+            assert fused_dtype == generic_dtype, (name, dtype, keep_dtype)
+            for fused_raw, generic_raw in zip(fused, generic):
+                torch.testing.assert_close(fused_raw, generic_raw, atol=tolerance, rtol=tolerance)
+
+
 if __name__ == "__main__":
     better_exchook.install()
     if len(sys.argv) <= 1:

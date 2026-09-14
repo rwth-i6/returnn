@@ -2338,6 +2338,44 @@ class TorchBackend(Backend[torch.Tensor]):
         out.feature_dim = in_dim
         return out
 
+    @staticmethod
+    def layer_norm(
+        x: Tensor, *, in_dim: Union[Dim, Sequence[Dim]], scale: Tensor, bias: Optional[Tensor], eps: float
+    ) -> Tensor:
+        """
+        Layer norm through the fused torch kernel where it applies, else the generic composition.
+
+        :param x: input
+        :param in_dim: the dim or dims to normalize over
+        :param scale: over in_dim
+        :param bias: over in_dim, or None
+        :param eps: added to the variance
+        :return: the normalized x, see :func:`rf.layer_norm`
+        """
+        out = _fused_norm_last_axis(x, in_dim=in_dim, scale=scale, bias=bias, eps=eps, rms=False)
+        if out is None:
+            return Backend.layer_norm(x, in_dim=in_dim, scale=scale, bias=bias, eps=eps)
+        return out
+
+    @staticmethod
+    def rms_norm(
+        x: Tensor, *, in_dim: Union[Dim, Sequence[Dim]], scale: Tensor, bias: Optional[Tensor], eps: float
+    ) -> Tensor:
+        """
+        RMS norm through the fused torch kernel where it applies, else the generic composition.
+
+        :param x: input
+        :param in_dim: the dim or dims to normalize over
+        :param scale: over in_dim
+        :param bias: over in_dim, or None
+        :param eps: added to the mean square
+        :return: the normalized x, see :func:`rf.rms_norm`
+        """
+        out = _fused_norm_last_axis(x, in_dim=in_dim, scale=scale, bias=bias, eps=eps, rms=True)
+        if out is None:
+            return Backend.rms_norm(x, in_dim=in_dim, scale=scale, bias=bias, eps=eps)
+        return out
+
     # noinspection PyShadowingBuiltins
     @staticmethod
     def conv(
@@ -2885,3 +2923,56 @@ class TorchBackend(Backend[torch.Tensor]):
         out_tensor_raw = torch.stack(tensor_array_raw, dim=0)
         out_tensor.raw_tensor = out_tensor_raw
         return out_tensor
+
+
+def _fused_norm_last_axis(
+    x: Tensor, *, in_dim: Union[Dim, Sequence[Dim]], scale: Tensor, bias: Optional[Tensor], eps: float, rms: bool
+) -> Optional[Tensor]:
+    """
+    Layer norm or RMS norm over the last axis through the fused torch kernel with autocast off around it,
+    computed in the dtype the generic composition returns.
+
+    :param x: input
+    :param in_dim: the dim to normalize over, the last axis of x
+    :param scale: over in_dim
+    :param bias: over in_dim, or None
+    :param eps: added to the variance or the mean square
+    :param rms: RMS norm instead of layer norm
+    :return: the normalized x, or None where the fused kernel does not apply
+    """
+    x_raw = x.raw_tensor
+    if (
+        not isinstance(in_dim, Dim)
+        or in_dim.dimension is None
+        or not x.dims
+        or x.dims[-1] != in_dim
+        or in_dim in x.dims[:-1]
+        or scale.dims != (in_dim,)
+        or (bias is not None and bias.dims != (in_dim,))
+        or not isinstance(x_raw, torch.Tensor)
+        or not x_raw.dtype.is_floating_point
+        or x_raw.device.type not in ("cpu", "cuda")
+        or (rms and not hasattr(torch.nn.functional, "rms_norm"))
+        or torch.onnx.is_in_onnx_export()
+    ):
+        return None
+    params = [scale.raw_tensor] + ([bias.raw_tensor] if bias is not None else [])
+    dtype = x_raw.dtype
+    if not _utils.should_module_output_keep_dtype():
+        for param in params:
+            dtype = torch.promote_types(dtype, param.dtype)
+    x_raw = x_raw.to(dtype)
+    params = [param.to(dtype) for param in params]
+    with torch.autocast(device_type=x_raw.device.type, enabled=False):
+        if rms:
+            out_raw = torch.nn.functional.rms_norm(x_raw, (in_dim.dimension,), params[0], eps)
+            if bias is not None:
+                out_raw = out_raw + params[1]
+        else:
+            out_raw = torch.nn.functional.layer_norm(
+                x_raw, (in_dim.dimension,), params[0], params[1] if bias is not None else None, eps
+            )
+    out = x.copy_template(name="rms_norm" if rms else "layer_norm")
+    out.dtype = TorchBackend.get_dtype_name_raw(out_raw)
+    out.raw_tensor = out_raw
+    return out
