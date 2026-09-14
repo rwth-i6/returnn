@@ -439,7 +439,7 @@ def test_depthwise_conv1d_triton_kernel_grad():
 
 
 def test_depthwise_conv1d_triton_guards():
-    """a frozen filter skips the weight gradient kernel and second derivatives raise"""
+    """a frozen filter skips the weight gradient kernel, second derivatives and invalid blocks or dtypes raise"""
     if not torch.cuda.is_available():
         raise unittest.SkipTest("needs CUDA")
     try:
@@ -462,3 +462,10 @@ def test_depthwise_conv1d_triton_guards():
         assert "once_differentiable" in str(exc), exc
     else:
         raise AssertionError("a second derivative through the conv must raise")
+    for args, opts in (((x.double(), w.double()), {}), ((x, w), {"blocks": (0, 32, 16, 32)})):
+        try:
+            m.depthwise_conv1d(*args, None, pad_l=1, n_time_out=9, **opts)
+        except AssertionError:
+            pass
+        else:
+            raise AssertionError(f"dtype {args[0].dtype} with {opts} must raise")
