@@ -4027,6 +4027,39 @@ class PackedBackend(Backend[PackedRawTensor]):
         return _repack_result(out, logits_raw)
 
     @staticmethod
+    def concat(*sources: Tuple[Tensor, Dim], allow_broadcast: bool = False, out_dim: Optional[Dim] = None) -> Tensor:
+        """
+        concat along a non-packed axis (e.g. the feature dim): on the packed data.
+        Packed sources are conformed to the first one's layout,
+        a plain source without the packed dims is broadcast (e.g. a constant block, needs allow_broadcast),
+        a padded source over the packed sequences is packed onto that layout first.
+        A concat axis touching the packed dims (or sources over other sequences) takes the generic route.
+        """
+        packed = [s for s, _ in sources if is_packed(s)]
+        kwargs = dict(allow_broadcast=allow_broadcast, out_dim=out_dim)
+        if not packed:
+            return _dim_aware_call("concat", sources, kwargs)
+        raw0 = _raw(packed[0])
+        axes = [dim for _, dim in sources] + ([out_dim] if out_dim is not None else [])
+        if any(_dim_refs_packed(dim, raw0) for dim in axes):
+            return _dim_aware_call("concat", sources, kwargs)
+        inner_sources = []
+        for src, dim in sources:
+            if not is_packed(src) and set(src.dims) & (set(raw0.orig_dims) | {raw0.packed_dim}):
+                src = pack(src, dims=raw0.orig_dims, out_dim=raw0.packed_dim, gap=raw0.gap, align=raw0.align)
+            if is_packed(src):
+                src = _conform_packing(src, raw0)
+                if not raw0.same_packing(src.raw_tensor):
+                    return _dim_aware_call("concat", sources, kwargs)
+                src = src.raw_tensor.inner
+            inner_sources.append((src, dim))
+        out, _ = rf.concat(*inner_sources, allow_broadcast=allow_broadcast, out_dim=out_dim, handle_dynamic_dims=False)
+        res = raw0.rewrap(out, name="concat")
+        if out_dim is not None and out_dim in res.dims:
+            res.feature_dim = out_dim
+        return res
+
+    @staticmethod
     def concat_seq_wise(*sources: Tuple[Tensor, Dim], allow_broadcast: bool = False, out_dim: Dim) -> Tensor:
         """
         Per-sequence concat along the packed spatial dim of separately packed sources,
@@ -4514,7 +4547,6 @@ class PackedBackend(Backend[PackedRawTensor]):
 for _name in [
     "batch_norm",
     "compare",
-    "concat",
     "expand_dim",
     "flip_no_mask",
     "masked_scatter",
