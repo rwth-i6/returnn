@@ -2412,7 +2412,10 @@ class TorchBackend(Backend[torch.Tensor]):
             and _is_unit_conv_arg(dilation_rate)
             and (padding in ("same", "valid") or isinstance(padding, int))
             and source.raw_tensor.is_cuda
-            and source.raw_tensor.dtype in (torch.float16, torch.bfloat16, torch.float32)
+            and all(
+                operand.raw_tensor.dtype in (torch.float16, torch.bfloat16, torch.float32)
+                for operand in [source, filter] + ([bias] if bias is not None else [])
+            )
             and type(source.raw_tensor) in (torch.Tensor, torch.nn.Parameter)
             and not torch.onnx.is_in_onnx_export()
         ):
@@ -3036,13 +3039,18 @@ def _conv_depthwise_1d_triton(
     :param filter: transposed to (out_dim, in_dim // groups, filter_size)
     :param padding: "same", "valid" or the frames of zero padding on each side
     :param bias: over out_dim, or None
-    :return: the output with dims batch dims + (out_spatial_dim, out_dim), or None when Triton is unavailable
+    :return: the output with dims batch dims + (out_spatial_dim, out_dim),
+        or None when Triton is unavailable or torch would reject the mixed dtypes
     """
     try:
         from returnn.torch.util import depthwise_conv_triton
     except ImportError:
         return None
     if not depthwise_conv_triton.is_available():
+        return None
+    if not torch.is_autocast_enabled("cuda") and any(
+        param.raw_tensor.dtype != source.raw_tensor.dtype for param in [filter] + ([bias] if bias is not None else [])
+    ):
         return None
     width = filter.dims[-1].dimension
     if padding == "same":
