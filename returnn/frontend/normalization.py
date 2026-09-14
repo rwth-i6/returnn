@@ -50,39 +50,51 @@ def moments(
     :param distributed:
         If True and a Torch DDP process group exists (world size > 1),
         compute the statistics over the global batch across all workers,
-        by all-reducing the per-worker sum / sum-of-squares (differentiable) and count.
-        This matches torch.nn.SyncBatchNorm.
+        by all-reducing the per-worker sums and the count (differentiable),
+        in two passes so that the variance cannot cancel, as in torch.nn.SyncBatchNorm.
         Default False keeps the per-worker (local) statistics.
     :return: tuple (mean, variance). it has the same shape as the input with the axis removed
     """
     if distributed:
-        # Accumulate the global statistics in float32 for numerical stability.
-        # The one-pass variance E[x^2] - E[x]^2 below catastrophically cancels in low precision:
-        # for large-magnitude inputs E[x^2] ~ E[x]^2,
-        # so in bf16 their difference is garbage (can even go negative) -> NaNs.
-        # torch.nn.SyncBatchNorm likewise keeps these stats in float32.
-        # The local (non-distributed) branch below avoids this via the two-pass mean((x-mean)^2).
+        # Two-pass statistics over the global batch, accumulated in float32.
+        # The one-pass variance E[x^2] - E[x]^2 catastrophically cancels whenever the mean dominates
+        # the variance, in float32 just as in bf16: the difference is then noise and can go negative,
+        # which gives NaNs via rsqrt(variance + eps).
+        # torch.nn.SyncBatchNorm instead combines per-worker Welford statistics, which does not cancel.
         compute_dtype = x.dtype
         x = rf.cast(x, "float32")
-        x_sum = rf.reduce_sum(x, axis=axis, use_mask=use_mask, distributed=True)
-        x_sum_sq = rf.reduce_sum(x * x, axis=axis, use_mask=use_mask, distributed=True)
-        count = rf.num_elements_of_shape(axis, use_mask=use_mask)
-        assert isinstance(count, Tensor), f"distributed moments expects a dynamic count, got {count!r}"
-        # the count is local per worker; sum it across workers too.
-        # noinspection PyProtectedMember
-        count = count._raw_backend.reduce_distributed(count, mode="sum")
-        mean = x_sum / count
-        variance = x_sum_sq / count - mean * mean
+        count = _global_num_elements(axis, use_mask=use_mask, device=x.device)
+        mean = rf.reduce_sum(x, axis=axis, use_mask=use_mask, distributed=True) / count
+        # stop_gradient does not change the gradient here: the deviations sum to zero over the global batch
+        sq_dev = rf.squared_difference(x, rf.stop_gradient(mean))
+        variance = rf.reduce_sum(sq_dev, axis=axis, use_mask=use_mask, distributed=True) / count
         if isinstance(correction, Tensor) or correction != 0:
             variance *= count / (count - correction)
         return rf.cast(mean, compute_dtype), rf.cast(variance, compute_dtype)
-    mean = rf.reduce_mean(x, axis=axis)
+    mean = rf.reduce_mean(x, axis=axis, use_mask=use_mask)
     # stop_gradient does not change the gradient here
     variance = rf.reduce_mean(rf.squared_difference(x, rf.stop_gradient(mean)), axis=axis, use_mask=use_mask)
     if isinstance(correction, Tensor) or correction != 0:
         n = rf.num_elements_of_shape(axis, use_mask=use_mask)
         variance *= n / (n - correction)
     return mean, variance
+
+
+def _global_num_elements(axis: Union[Dim, Sequence[Dim]], *, use_mask: bool, device: Optional[str]) -> Tensor:
+    """
+    :param axis: the dim or dims which are reduced
+    :param use_mask: whether padded frames are excluded, as in the reduction itself
+    :param device: where the count is needed, so it does not force a host sync under graph capture
+    :return: number of reduced elements, summed over the Torch DDP workers, as a float32 tensor
+    """
+    count = rf.num_elements_of_shape(axis, use_mask=use_mask, device=device)
+    if isinstance(count, Tensor):
+        count = rf.cast(rf.copy_to_device(count, device), "float32")
+    else:
+        # static dims (or use_mask=False) give a plain int, which is the same on every worker
+        count = rf.constant(count, dims=(), dtype="float32", device=device)
+    # noinspection PyProtectedMember
+    return count._raw_backend.reduce_distributed(count, mode="sum")
 
 
 class LayerNorm(rf.Module):
@@ -340,7 +352,10 @@ class BatchNorm(rf.Module):
             mean_cur_batch, variance_cur_batch = rf.cond(
                 need_current_batch_stats,
                 lambda: rf.moments(
-                    source, axis=[d for d in source.dims if d != self.in_dim], distributed=self.distributed
+                    source,
+                    axis=[d for d in source.dims if d != self.in_dim],
+                    use_mask=use_mask,
+                    distributed=self.distributed,
                 ),
                 lambda: (self.running_mean, self.running_variance),
             )
