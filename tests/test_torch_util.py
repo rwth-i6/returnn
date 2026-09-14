@@ -436,3 +436,24 @@ def test_depthwise_conv1d_triton_kernel_grad():
         for g, t, t_tol in zip(grads, (x, w, bias), (tol, tol, tight)):
             assert g.dtype == t.dtype, (width, g.dtype, t.dtype)
             torch.testing.assert_close(g.float(), t.grad.float(), **t_tol)
+
+
+def test_depthwise_conv1d_triton_guards():
+    """second derivatives through the conv raise"""
+    if not torch.cuda.is_available():
+        raise unittest.SkipTest("needs CUDA")
+    try:
+        from returnn.torch.util import depthwise_conv_triton as m
+    except ImportError as exc:
+        raise unittest.SkipTest(f"triton not available ({exc})")
+
+    x = torch.randn(2, 9, 8, device="cuda", requires_grad=True)
+    w = torch.randn(8, 3, device="cuda", requires_grad=True)
+    out = m.depthwise_conv1d(x, w, None, pad_l=1, n_time_out=9)
+    (gx,) = torch.autograd.grad(out.square().sum(), x, create_graph=True)
+    try:
+        (gx.square().sum() + w.sum()).backward()
+    except RuntimeError as exc:
+        assert "once_differentiable" in str(exc), exc
+    else:
+        raise AssertionError("a second derivative through the conv must raise")
