@@ -2380,6 +2380,71 @@ class TorchBackend(Backend[torch.Tensor]):
             return Backend.rms_norm(x, in_dim=in_dim, scale=scale, bias=bias, eps=eps)
         return out
 
+    @staticmethod
+    def scaled_dot_product_attention(
+        query: Tensor,
+        key: Tensor,
+        value: Tensor,
+        *,
+        attention_mask: Optional[Tensor] = None,
+        att_dropout: float = 0.0,
+        att_dropout_broadcast: bool,
+        v_feat_dim: Dim,
+        qk_feat_dim: Dim,
+        kv_spatial_dim: Dim,
+        query_spatial_dim: Dim,
+        is_causal: bool = False,
+        scale: Optional[float] = None,
+    ) -> Tensor:
+        """
+        Scaled dot-product attention through the fused torch kernel when it is causal with no attention mask tensor,
+        else the generic composition.
+
+        :param query: {..., query_spatial_dim, qk_feat_dim}
+        :param key: {..., kv_spatial_dim, qk_feat_dim}
+        :param value: {..., kv_spatial_dim, v_feat_dim}
+        :param attention_mask: additive or boolean mask, only the generic composition takes one
+        :param att_dropout: dropout on the attention weights
+        :param att_dropout_broadcast: whether that dropout broadcasts over all but the kv spatial dim
+        :param v_feat_dim: feature dim of value
+        :param qk_feat_dim: feature dim of query and key
+        :param kv_spatial_dim: spatial dim of key and value the attention reduces
+        :param query_spatial_dim: spatial dim of query
+        :param is_causal: whether query position i attends kv positions up to i
+        :param scale: applied to the energies, the inverse root of the key dim when not given
+        :return: attention output, see :func:`rf.dot_attention`
+        """
+        out = None
+        if is_causal and attention_mask is None and _utils.should_use_fused_causal_attention():
+            out = _fused_causal_attention(
+                query,
+                key,
+                value,
+                att_dropout=att_dropout,
+                att_dropout_broadcast=att_dropout_broadcast,
+                v_feat_dim=v_feat_dim,
+                qk_feat_dim=qk_feat_dim,
+                kv_spatial_dim=kv_spatial_dim,
+                query_spatial_dim=query_spatial_dim,
+                scale=scale,
+            )
+        if out is None:
+            return Backend.scaled_dot_product_attention(
+                query,
+                key,
+                value,
+                attention_mask=attention_mask,
+                att_dropout=att_dropout,
+                att_dropout_broadcast=att_dropout_broadcast,
+                v_feat_dim=v_feat_dim,
+                qk_feat_dim=qk_feat_dim,
+                kv_spatial_dim=kv_spatial_dim,
+                query_spatial_dim=query_spatial_dim,
+                is_causal=is_causal,
+                scale=scale,
+            )
+        return out
+
     # noinspection PyShadowingBuiltins
     @staticmethod
     def conv(
@@ -3016,6 +3081,87 @@ def _fused_norm_last_axis(
     out = x.copy_template(name="rms_norm" if rms else "layer_norm")
     out.dtype = TorchBackend.get_dtype_name_raw(out_raw)
     out.raw_tensor = out_raw
+    return out
+
+
+def _fused_causal_attention(
+    query: Tensor,
+    key: Tensor,
+    value: Tensor,
+    *,
+    att_dropout: float,
+    att_dropout_broadcast: bool,
+    v_feat_dim: Dim,
+    qk_feat_dim: Dim,
+    kv_spatial_dim: Dim,
+    query_spatial_dim: Dim,
+    scale: Optional[float],
+) -> Optional[Tensor]:
+    """
+    Causal attention through the fused torch kernel, which never materializes the energies,
+    for right-padded sequences where the causal mask alone keeps every valid query position on valid keys.
+
+    :param query: {..., query_spatial_dim, qk_feat_dim}
+    :param key: {..., kv_spatial_dim, qk_feat_dim}
+    :param value: {..., kv_spatial_dim, v_feat_dim}
+    :param att_dropout: dropout on the attention weights
+    :param att_dropout_broadcast: whether that dropout broadcasts over all but the kv spatial dim
+    :param v_feat_dim: feature dim of value
+    :param qk_feat_dim: feature dim of query and key
+    :param kv_spatial_dim: spatial dim of key and value the attention reduces
+    :param query_spatial_dim: spatial dim of query, as long as kv_spatial_dim
+    :param scale: applied to the energies, the inverse root of the key dim when not given
+    :return: the attention output {..., query_spatial_dim, v_feat_dim}, or None where the fused kernel does not apply
+    """
+    raws = (query.raw_tensor, key.raw_tensor, value.raw_tensor)
+    common = [d for d in query.dims if d not in (query_spatial_dim, qk_feat_dim)]
+    key_extra = [d for d in key.dims if d not in (kv_spatial_dim, qk_feat_dim) and d not in common]
+    value_extra = [d for d in value.dims if d not in (kv_spatial_dim, v_feat_dim) and d not in common]
+    train_flag = rf.get_run_ctx().is_train_flag_enabled(func=rf.dropout)
+    if (
+        any(not isinstance(raw, torch.Tensor) or not raw.dtype.is_floating_point for raw in raws)
+        or any(raw.device.type not in ("cpu", "cuda") for raw in raws)
+        or query_spatial_dim not in query.dims
+        or qk_feat_dim not in query.dims
+        or qk_feat_dim not in key.dims
+        or kv_spatial_dim not in key.dims
+        or kv_spatial_dim not in value.dims
+        or v_feat_dim not in value.dims
+        or key_extra
+        or value_extra
+        or not isinstance(train_flag, bool)
+        or (att_dropout > 0.0 and train_flag and att_dropout_broadcast)
+        or torch.onnx.is_in_onnx_export()
+    ):
+        return None
+
+    dtype = raws[0].dtype
+    for raw in raws[1:]:
+        dtype = torch.promote_types(dtype, raw.dtype)
+    q_raw = query.copy_compatible_to_dims_raw(common + [query_spatial_dim, qk_feat_dim]).to(dtype)
+    k_raw = key.copy_compatible_to_dims_raw(common + [kv_spatial_dim, qk_feat_dim]).to(dtype)
+    v_raw = value.copy_compatible_to_dims_raw(common + [kv_spatial_dim, v_feat_dim]).to(dtype)
+    if q_raw.shape[-2] != k_raw.shape[-2]:
+        return None
+    k_raw = k_raw.expand(*q_raw.shape[:-2], *k_raw.shape[-2:])
+    v_raw = v_raw.expand(*q_raw.shape[:-2], *v_raw.shape[-2:])
+
+    out_raw = torch.nn.functional.scaled_dot_product_attention(
+        q_raw,
+        k_raw,
+        v_raw,
+        dropout_p=att_dropout if train_flag else 0.0,
+        is_causal=True,
+        scale=qk_feat_dim.dimension**-0.5 if scale is None else scale,
+    )
+    out = Tensor(
+        "dot_attention",
+        dims=common + [query_spatial_dim, v_feat_dim],
+        dtype=TorchBackend.get_dtype_name_raw(out_raw),
+        raw_tensor=out_raw,
+    )
+    if value.feature_dim in out.dims:
+        out.feature_dim = value.feature_dim
     return out
 
 
