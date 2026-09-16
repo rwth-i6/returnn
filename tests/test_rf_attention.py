@@ -392,6 +392,8 @@ def test_rope_causal_self_att():
     # the cache also hits across equal-valued dims (from earlier tests in this process).
     _sinusoidal_positional_encoding_cache._lru_cache.cache_clear()
 
+    from returnn.config import Config, global_config_ctx
+
     with PyTracer(
         [
             rf.RotaryPosCausalSelfAttention.__call__,
@@ -400,7 +402,7 @@ def test_rope_causal_self_att():
             rf_apply_rope,
         ],
         (Tensor, Dim),
-    ) as trace_rf:
+    ) as trace_rf, global_config_ctx(Config({"rf_fused_causal_attention": False})):
         out_rf, _ = model_rf(in_, axis=seq_dim, state=model_rf.default_initial_state(batch_dims=[batch_dim]))
         out_rf = out_rf.copy_transpose((batch_dim, seq_dim, model_dim))
     pprint(trace_rf.captured_locals)
