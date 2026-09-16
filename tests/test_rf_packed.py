@@ -2345,6 +2345,40 @@ def test_shift_and_pad_with_a_per_seq_pad_value():
     _assert_equal_non_padded(out_p, ref, batch_dim, padded_time)
 
 
+def test_regap_restoring_a_layout_lens_layout_needs_a_bound():
+    """restoring an exact layout under static tracing takes its bound from the caller, not derived"""
+    rf.select_backend_torch()
+    x, batch_dim, time_dim, feat_dim = _make_input(seq_lens=(6, 4))
+    time_dim.capacity = 6
+    layout_lens = Tensor(
+        "layout_lens", dims=[batch_dim], dtype="int32", raw_tensor=torch.tensor([6, 4], dtype=torch.int32)
+    )
+
+    src = packed.pack(x, dims=[batch_dim, time_dim], gap=2, align=2, total_bound=32)
+    orig_total = src.raw_tensor.packed_dim.dimension
+    assert orig_total == 32, src.raw_tensor
+
+    # the kernel paths strip the gaps, run, then restore. regap derives a bound itself only when
+    # layout_lens is None, so the restoring call has to pass the layout's own size.
+    with rf.set_static_traceable_ctx(True):
+        dense = packed.regap(src, 0, align=1)
+        assert dense.raw_tensor.packed_dim.dimension is not None, dense.raw_tensor
+
+        try:
+            out = packed.regap(dense, 2, align=2, layout_lens=layout_lens)
+            out.raw_tensor.packed_dim.get_dim_value_tensor()
+        except Exception as exc:
+            assert "no (derivable) capacity" in str(exc), exc
+        else:
+            raise Exception("regap without a bound should have no capacity for the restored dim")
+
+        out = packed.regap(dense, 2, align=2, layout_lens=layout_lens, total_bound=orig_total)
+        assert out.raw_tensor.packed_dim.dimension == orig_total, out.raw_tensor
+        out.raw_tensor.packed_dim.get_dim_value_tensor()
+
+    _assert_equal_non_padded(out, x, batch_dim, time_dim)
+
+
 if __name__ == "__main__":
     better_exchook.install()
     if len(sys.argv) <= 1:
