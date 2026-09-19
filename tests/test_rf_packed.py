@@ -2512,6 +2512,14 @@ def test_scatter_relayout_only_valid_frames_write_into_their_own_sequence():
             )
             assert packed.is_packed(out) and out.raw_tensor.inner.raw_tensor.shape[0] == 0, (layout, out.raw_tensor)
 
+    # a plain empty source which follows packed indices is still what the result depends on
+    empty.raw_tensor.requires_grad_(True)
+    out = rf.scatter(
+        empty, indices=packed.pack(no_idx, total_bound=4), indices_dim=empty_time, out_dim=out_dim, use_mask=False
+    )
+    (grad,) = torch.autograd.grad(out.raw_tensor.inner.raw_tensor.sum(), empty.raw_tensor)
+    assert grad.shape == (2, 0), grad
+
 
 def test_scatter_modes_which_the_frontend_composes_from_several_scatters():
     """

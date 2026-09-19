@@ -1102,7 +1102,13 @@ def _pack_like(x: Tensor, template: PackedRawTensor) -> Optional[Tensor]:
         # but it can still have rows (gap frames, the tail of a bound-sized buffer), which a gather could not serve.
         out_dims = [template.packed_dim if d == in_dims[0] else d for d in x.dims if d not in in_dims[1:]]
         feature_dim = x.feature_dim if x.feature_dim in out_dims else None
-        return rf.zeros(out_dims, dtype=x.dtype, sparse_dim=x.sparse_dim, feature_dim=feature_dim, device=x.device)
+        out = rf.zeros(out_dims, dtype=x.dtype, sparse_dim=x.sparse_dim, feature_dim=feature_dim, device=x.device)
+        if rf.is_float_dtype(x.dtype):
+            # Keep the result depending on x (through a sum over nothing, which is zero),
+            # so that a backward still reaches x, with an empty gradient, as the gather would.
+            out = out + rf.reduce_sum(x, axis=in_dims, use_mask=False)
+            out.feature_dim = feature_dim
+        return out
     # Gather via per-frame coordinates instead of broadcast + pack:
     # avoids materializing the full broadcast tensor
     # (e.g. a pos enc [time, feat] would blow up to [batch, time, feat] first).
