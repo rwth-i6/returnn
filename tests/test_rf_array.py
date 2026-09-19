@@ -1269,6 +1269,28 @@ def test_search_sorted():
     assert out["index4"].dims == (batch_dim_,) and out["index4"].raw_tensor.tolist() == [4, 5, 5]
 
 
+def test_search_sorted_dynamic_axis():
+    # What lies behind the end of a sequence is not part of it, whatever the padding holds:
+    # it counts as larger than any value, so no result points behind the end.
+    import torch
+
+    rf.select_backend_torch()
+    batch_dim_ = Dim(2, name="batch")
+    lens = Tensor("lens", dims=[batch_dim_], dtype="int32", raw_tensor=torch.tensor([5, 3], dtype=torch.int32))
+    time_dim = Dim(lens, name="time")
+    sorted_seq = Tensor("sorted_seq", dims=[batch_dim_, time_dim], dtype="int32")
+    sorted_seq.raw_tensor = torch.tensor([[0, 0, 1, 1, 2], [0, 1, 1, 0, 0]], dtype=torch.int32)
+    values = Tensor("values", dims=[batch_dim_], dtype="int32", raw_tensor=torch.tensor([1, 1], dtype=torch.int32))
+    left = rf.search_sorted(sorted_seq, values, axis=time_dim)
+    right = rf.search_sorted(sorted_seq, values, axis=time_dim, side="right")
+    assert left.raw_tensor.tolist() == [2, 1] and right.raw_tensor.tolist() == [4, 3]
+    beyond = rf.search_sorted(sorted_seq, values + 7, axis=time_dim)
+    assert beyond.raw_tensor.tolist() == [5, 3]
+    # not even a value as large as the padding counts points behind the end
+    largest = rf.constant(torch.iinfo(torch.int32).max, dims=[batch_dim_], dtype="int32")
+    assert rf.search_sorted(sorted_seq, largest, axis=time_dim, side="right").raw_tensor.tolist() == [5, 3]
+
+
 def test_where_int():
     time_dim = Dim(Tensor("time", [batch_dim], dtype="int32"))
     in_dim = Dim(7, name="in")
