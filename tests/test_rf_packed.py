@@ -2415,6 +2415,19 @@ def test_gather_along_a_plain_axis_refuses_indices_of_another_packing():
         )
 
 
+def test_scaled_gradient_refuses_a_scale_of_another_packing():
+    """a per-frame gradient scale has to share the packing, else its rows belong to other frames"""
+    rf.select_backend_torch()
+    scores, labels, batch_dim, time_dim, label_dim = _scores_and_labels_over_two_time_dims()
+    x = rf.reduce_sum(scores, axis=labels.sparse_dim)
+    scale = rf.cast(labels, "float32")
+    with pytest.raises(AssertionError, match="scaled_gradient"):
+        rf.scaled_gradient(packed.pack(x), packed.pack(scale))
+    same = Tensor("scale", dims=[batch_dim, time_dim], dtype="float32", raw_tensor=torch.full((2, 4), 0.5))
+    out = rf.scaled_gradient(packed.pack(x), packed.pack(same, gap=2))
+    assert packed.is_packed(out) and out.dims == x.dims
+
+
 def test_softmax_over_a_single_packed_axis_with_a_bound():
     """a bound-sized packing of one axis normalizes over its content rows only"""
     rf.select_backend_torch()
