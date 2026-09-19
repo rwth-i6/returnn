@@ -3164,8 +3164,9 @@ common_fast_bw_kernels = {
   """,
     "010_fill_array": """
     DEF_KERNEL
-    void fill_array(float* array, float value, unsigned size) {
-      unsigned idx = blockIdx.x * blockDim.x + threadIdx.x;
+    void fill_array(float* array, float value, size_t size) {
+      // 64 bit: the (frames, edges) scratch of the Baum-Welch ops can exceed 2^32 entries
+      size_t idx = (size_t) blockIdx.x * blockDim.x + threadIdx.x;
       if (idx < size) {
         array[idx] = value;
       }
@@ -3173,8 +3174,8 @@ common_fast_bw_kernels = {
   """,
     "011_remove_inf": """
   DEF_KERNEL
-  void remove_inf(float* array, unsigned size) {
-    unsigned idx = blockIdx.x * blockDim.x + threadIdx.x;
+  void remove_inf(float* array, size_t size) {
+    size_t idx = (size_t) blockIdx.x * blockDim.x + threadIdx.x;
     if (idx < size) {
       array[idx] = fminf(array[idx], 1e32);
     }
@@ -3370,7 +3371,7 @@ class FastBaumWelchOp(NativeOpGenBase):
       void normalize(float* buffer, unsigned* sequence_idxs, unsigned num_edges, unsigned num_seqs, float* sum_output) {
         DEF_SHARED(float, sum);
 
-        buffer += blockIdx.x * num_edges;
+        buffer += (size_t) blockIdx.x * num_edges;  // 64 bit, see fill_array
 
         // Block-parallel strided loops + shared-mem log-space atomic adds
         // (the old single-thread-per-block serial loops were the dominant cost of the whole op).
@@ -3440,8 +3441,9 @@ class FastBaumWelchOp(NativeOpGenBase):
       void compute_result(float* edge_buffer, float* out, unsigned* emission_idxs, unsigned* sequence_idxs,
                           unsigned frame_stride, unsigned seq_stride,
                           unsigned num_frames, unsigned num_seqs, unsigned num_edges) {
-        unsigned idx = blockIdx.x * blockDim.x + threadIdx.x;
-        if (idx >= num_frames * num_edges) {
+        // 64 bit, see fill_array
+        size_t idx = (size_t) blockIdx.x * blockDim.x + threadIdx.x;
+        if (idx >= (size_t) num_frames * num_edges) {
           return;
         }
 
@@ -3451,7 +3453,7 @@ class FastBaumWelchOp(NativeOpGenBase):
         unsigned seq_idx      = sequence_idxs[e_idx];
         float    score        = edge_buffer[idx];
 
-        atomic_prob_add(out + frame * frame_stride + seq_idx * seq_stride + emission_idx, score);
+        atomic_prob_add(out + (size_t) frame * frame_stride + (size_t) seq_idx * seq_stride + emission_idx, score);
       }
     """,
             "110_write_alignment_to_file": """
@@ -3617,11 +3619,14 @@ class FastBaumWelchOp(NativeOpGenBase):
     //std::cerr << "sequnence_stride: " << sequence_stride << std::endl;
     //std::cerr << "index_stride: "     << index_stride    << std::endl;
 
-    // initialize edge buffer
-    float* d_edge_buffer = reinterpret_cast<float*>(device_malloc(n_edges * n_frames * sizeof(float)));
+    // initialize edge buffer, one score per (frame, edge).
+    // Its size and all offsets into it are 64 bit: n_edges * n_frames can exceed 2^32
+    // (e.g. a large edge bound over many frames), and a wrapped size under-allocates it.
+    size_t n_edge_frames = (size_t) n_edges * n_frames;
+    float* d_edge_buffer = reinterpret_cast<float*>(device_malloc(n_edge_frames * sizeof(float)));
     if(!d_edge_buffer) { HANDLE_LAST_ERROR(); abort(); }  // error should have been set in device_malloc
-    unsigned n_fill_blocks = (n_edges * n_frames + n_threads - 1u) / n_threads;
-    start_dev_kernel2(fill_array, n_fill_blocks, n_threads, 0, (d_edge_buffer, 0.0, n_edges * n_frames));
+    unsigned n_fill_blocks = (n_edge_frames + n_threads - 1u) / n_threads;
+    start_dev_kernel2(fill_array, n_fill_blocks, n_threads, 0, (d_edge_buffer, 0.0, n_edge_frames));
     HANDLE_LAST_ERROR();
 
     // initialize the state buffer
@@ -3651,7 +3656,8 @@ class FastBaumWelchOp(NativeOpGenBase):
       start_dev_kernel2(next_frame, n_blocks, n_threads, 0,
         (true, n_edges, sequence_stride,
          d_sequence_idxs, d_from, d_to, d_weights, d_emission_idxs,
-         d_state_buffer_prev, d_state_buffer_next, d_am_scores + t * frame_stride, d_edge_buffer + t * n_edges));
+         d_state_buffer_prev, d_state_buffer_next, d_am_scores + (size_t) t * frame_stride,
+         d_edge_buffer + (size_t) t * n_edges));
       HANDLE_LAST_ERROR();
       if (dump_alignment && batch_idx %% dump_every == 0) {
         Ndarray_memcpy(d_state_buffer_all + (t + 1u) * n_states, d_state_buffer_next, n_states * sizeof(float));
@@ -3681,8 +3687,8 @@ class FastBaumWelchOp(NativeOpGenBase):
       start_dev_kernel2(next_frame, n_blocks, n_threads, 0,
         (false, n_edges, sequence_stride,
          d_sequence_idxs, d_to, d_from, d_weights, d_emission_idxs,
-         d_state_buffer_prev, d_state_buffer_next, d_am_scores + (t - 1) * frame_stride,
-         d_edge_buffer + (t - 1) * n_edges));
+         d_state_buffer_prev, d_state_buffer_next, d_am_scores + (size_t) (t - 1) * frame_stride,
+         d_edge_buffer + (size_t) (t - 1) * n_edges));
       HANDLE_LAST_ERROR();
       std::swap(d_state_buffer_prev, d_state_buffer_next);
     }
@@ -3714,15 +3720,16 @@ class FastBaumWelchOp(NativeOpGenBase):
                               pruning, n_frames, n_seqs, n_states, batch_idx);
     }
 
-    n_fill_blocks = (n_frames * n_seqs * n_emissions + n_threads - 1u) / n_threads;
+    size_t n_out = (size_t) n_frames * n_seqs * n_emissions;
+    n_fill_blocks = (n_out + n_threads - 1u) / n_threads;
     start_dev_kernel2(
       fill_array, n_fill_blocks, n_threads, 0,
-      (d_out, std::numeric_limits<float>::infinity(), n_frames * n_seqs * n_emissions));
+      (d_out, std::numeric_limits<float>::infinity(), n_out));
     HANDLE_LAST_ERROR();
 
     frame_stride    = Ndarray_STRIDE(out, 0);
     sequence_stride = Ndarray_STRIDE(out, 1);
-    n_blocks        = (n_frames * n_edges + n_threads - 1u) / n_threads;
+    n_blocks        = (n_edge_frames + n_threads - 1u) / n_threads;
     start_dev_kernel2(compute_result, n_blocks, n_threads, 0,
       (d_edge_buffer, d_out, d_emission_idxs, d_sequence_idxs,
        frame_stride, sequence_stride, n_frames, n_seqs, n_edges));
@@ -3732,8 +3739,8 @@ class FastBaumWelchOp(NativeOpGenBase):
     // Certain TensorFlow code doesn't like inf, even if it is just the CheckNumerics,
     // which is helpful for debugging.
     // We replace it by a very high number, so that tf.exp(-out) will still result in 0.0.
-    n_blocks = (n_frames * n_seqs * n_emissions + n_threads - 1u) / n_threads;
-    start_dev_kernel2(remove_inf, n_blocks, n_threads, 0, (d_out, n_frames * n_seqs * n_emissions));
+    n_blocks = (n_out + n_threads - 1u) / n_threads;
+    start_dev_kernel2(remove_inf, n_blocks, n_threads, 0, (d_out, n_out));
     //debug_print(context, out, "out");
     #endif
     if (dump_output && batch_idx %% dump_every == 0) {
@@ -3867,7 +3874,7 @@ class FastBaumWelchPackedOp(NativeOpGenBase):
         unsigned emission_idx = emission_idxs[idx];
 
         float val = prev_val + edge_weight
-                    + am_scores[(seq_starts[sequence_idx] + t) * num_emissions + emission_idx];
+                    + am_scores[(size_t) (seq_starts[sequence_idx] + t) * num_emissions + emission_idx];
 
         if (fwd) {
           edge_buffer[idx] += val;
@@ -3883,8 +3890,9 @@ class FastBaumWelchPackedOp(NativeOpGenBase):
       void compute_result_packed(float* edge_buffer, float* out, unsigned* emission_idxs, unsigned* sequence_idxs,
                           unsigned* seq_starts, unsigned num_emissions,
                           unsigned num_frames, unsigned num_edges) {
-        unsigned idx = blockIdx.x * blockDim.x + threadIdx.x;
-        if (idx >= num_frames * num_edges) {
+        // 64 bit, see fill_array
+        size_t idx = (size_t) blockIdx.x * blockDim.x + threadIdx.x;
+        if (idx >= (size_t) num_frames * num_edges) {
           return;
         }
 
@@ -3900,7 +3908,7 @@ class FastBaumWelchPackedOp(NativeOpGenBase):
         unsigned emission_idx = emission_idxs[e_idx];
         unsigned seq_idx      = sequence_idxs[e_idx];
 
-        atomic_prob_add(out + (seq_starts[seq_idx] + frame) * num_emissions + emission_idx, score);
+        atomic_prob_add(out + (size_t) (seq_starts[seq_idx] + frame) * num_emissions + emission_idx, score);
       }
     """,
         }
@@ -3966,11 +3974,12 @@ class FastBaumWelchPackedOp(NativeOpGenBase):
     float* d_state_buffer_prev = d_state_buffer_base;
     float* d_state_buffer_next = d_state_buffer_base + n_states;
 
-    // initialize edge buffer
-    float* d_edge_buffer = reinterpret_cast<float*>(device_malloc(n_edges * n_frames * sizeof(float)));
+    // initialize edge buffer, one score per (frame, edge), 64 bit sizes and offsets (see FastBaumWelchOp)
+    size_t n_edge_frames = (size_t) n_edges * n_frames;
+    float* d_edge_buffer = reinterpret_cast<float*>(device_malloc(n_edge_frames * sizeof(float)));
     if(!d_edge_buffer) { HANDLE_LAST_ERROR(); abort(); }  // error should have been set in device_malloc
-    unsigned n_fill_blocks = (n_edges * n_frames + n_threads - 1u) / n_threads;
-    start_dev_kernel2(fill_array, n_fill_blocks, n_threads, 0, (d_edge_buffer, 0.0, n_edges * n_frames));
+    unsigned n_fill_blocks = (n_edge_frames + n_threads - 1u) / n_threads;
+    start_dev_kernel2(fill_array, n_fill_blocks, n_threads, 0, (d_edge_buffer, 0.0, n_edge_frames));
     HANDLE_LAST_ERROR();
 
     // initialize the state buffer
@@ -3991,7 +4000,7 @@ class FastBaumWelchPackedOp(NativeOpGenBase):
       start_dev_kernel2(next_frame_packed, n_blocks, n_threads, 0,
         (true, t, n_edges, n_emissions, d_seq_starts, d_index, index_stride,
          d_sequence_idxs, d_from, d_to, d_weights, d_emission_idxs,
-         d_state_buffer_prev, d_state_buffer_next, d_am_scores, d_edge_buffer + t * n_edges));
+         d_state_buffer_prev, d_state_buffer_next, d_am_scores, d_edge_buffer + (size_t) t * n_edges));
       HANDLE_LAST_ERROR();
       std::swap(d_state_buffer_prev, d_state_buffer_next);
     }
@@ -4012,7 +4021,7 @@ class FastBaumWelchPackedOp(NativeOpGenBase):
       start_dev_kernel2(next_frame_packed, n_blocks, n_threads, 0,
         (false, t - 1, n_edges, n_emissions, d_seq_starts, d_index, index_stride,
          d_sequence_idxs, d_to, d_from, d_weights, d_emission_idxs,
-         d_state_buffer_prev, d_state_buffer_next, d_am_scores, d_edge_buffer + (t - 1) * n_edges));
+         d_state_buffer_prev, d_state_buffer_next, d_am_scores, d_edge_buffer + (size_t) (t - 1) * n_edges));
       HANDLE_LAST_ERROR();
       std::swap(d_state_buffer_prev, d_state_buffer_next);
     }
@@ -4034,13 +4043,14 @@ class FastBaumWelchPackedOp(NativeOpGenBase):
       (d_edge_buffer, d_sequence_idxs, n_edges, n_seqs, d_sum_output));
     HANDLE_LAST_ERROR();
 
-    n_fill_blocks = (n_total * n_emissions + n_threads - 1u) / n_threads;
+    size_t n_out = (size_t) n_total * n_emissions;
+    n_fill_blocks = (n_out + n_threads - 1u) / n_threads;
     start_dev_kernel2(
       fill_array, n_fill_blocks, n_threads, 0,
-      (d_out, std::numeric_limits<float>::infinity(), n_total * n_emissions));
+      (d_out, std::numeric_limits<float>::infinity(), n_out));
     HANDLE_LAST_ERROR();
 
-    n_blocks = (n_frames * n_edges + n_threads - 1u) / n_threads;
+    n_blocks = (n_edge_frames + n_threads - 1u) / n_threads;
     start_dev_kernel2(compute_result_packed, n_blocks, n_threads, 0,
       (d_edge_buffer, d_out, d_emission_idxs, d_sequence_idxs,
        d_seq_starts, n_emissions, n_frames, n_edges));
@@ -4050,8 +4060,8 @@ class FastBaumWelchPackedOp(NativeOpGenBase):
     // Certain TensorFlow code doesn't like inf, even if it is just the CheckNumerics,
     // which is helpful for debugging.
     // We replace it by a very high number, so that tf.exp(-out) will still result in 0.0.
-    n_blocks = (n_total * n_emissions + n_threads - 1u) / n_threads;
-    start_dev_kernel2(remove_inf, n_blocks, n_threads, 0, (d_out, n_total * n_emissions));
+    n_blocks = (n_out + n_threads - 1u) / n_threads;
+    start_dev_kernel2(remove_inf, n_blocks, n_threads, 0, (d_out, n_out));
     #endif
 
     device_free(d_edge_buffer);
