@@ -1807,6 +1807,65 @@ class Backend(Generic[T]):
         return att
 
     @classmethod
+    def scaled_dot_product_attention_key_ranges(
+        cls,
+        query: Tensor,
+        key: Tensor,
+        value: Tensor,
+        *,
+        key_start: Optional[Tensor],
+        key_end: Tensor,
+        att_dropout: float = 0.0,
+        att_dropout_broadcast: bool,
+        v_feat_dim: Dim,
+        qk_feat_dim: Dim,
+        kv_spatial_dim: Dim,
+        query_spatial_dim: Dim,
+        scale: Optional[float] = None,
+    ):
+        """
+        Scaled dot-product attention where every query attends one contiguous range of key positions,
+        e.g. a label which attends the encoder frames of its own chunk, or of all chunks up to its own.
+        The ranges say the same as a mask over (queries, keys), with one start and one end per query,
+        so backends with a kernel for it never build (or compute) the energies of the other keys.
+        This generic implementation builds that mask.
+
+        :param query: {..., query_spatial_dim, qk_feat_dim}
+        :param key: {..., kv_spatial_dim, qk_feat_dim}
+        :param value: {..., kv_spatial_dim, v_feat_dim}
+        :param key_start: int, over (some of) the query dims: the first key position every query attends.
+            None: the first key of the sequence.
+        :param key_end: int, over (some of) the query dims: the end (exclusive) of the key positions
+            every query attends.
+            A query with an empty range attends nothing, and its result is not defined here.
+        :param att_dropout: dropout for attention weights
+        :param att_dropout_broadcast: whether to broadcast over all but ``kv_spatial_dim``.
+        :param v_feat_dim: Embedding dimension of value
+        :param qk_feat_dim: Embedding dimension of key and query
+        :param kv_spatial_dim: Spatial axis of key/value to attend over
+        :param query_spatial_dim: Spatial axis of query
+        :param scale: Scaling factor applied prior to softmax
+        :return: attention output
+        """
+        positions = rf.range_over_dim(kv_spatial_dim, dtype=key_end.dtype, device=key_end.device)
+        attention_mask = rf.compare_bc(positions, "<", key_end)
+        if key_start is not None:
+            attention_mask = rf.logical_and(attention_mask, rf.compare_bc(positions, ">=", key_start))
+        return cls.scaled_dot_product_attention(
+            query,
+            key,
+            value,
+            attention_mask=attention_mask,
+            att_dropout=att_dropout,
+            att_dropout_broadcast=att_dropout_broadcast,
+            v_feat_dim=v_feat_dim,
+            qk_feat_dim=qk_feat_dim,
+            kv_spatial_dim=kv_spatial_dim,
+            query_spatial_dim=query_spatial_dim,
+            scale=scale,
+        )
+
+    @classmethod
     def rel_pos_self_attention(
         cls,
         query: Tensor,

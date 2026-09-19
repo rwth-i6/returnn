@@ -79,19 +79,20 @@ def dot_attention(
         where a boolean mask over (queries, keys) is the full lattice,
         which no backend can do anything with but compute all of it.
         A query without any key it may attend has no defined result.
-        With ``max_group_size`` that result is finite (so padded rows are harmless), otherwise it is not.
-    :param key_group: int, over ``axis`` (and maybe batch dims): the group of every key
+        With ``max_group_size`` that result is finite (so padded rows are harmless), otherwise it depends on the backend.
+    :param key_group: int, over ``axis`` (and maybe batch dims): the group of every key.
+        It must be sorted along ``axis``, so that the keys a query attends are one run of consecutive keys,
+        which backends can attend directly (see :func:`Backend.scaled_dot_product_attention_key_ranges`).
     :param group_mode: "equal": a query attends the keys of its own group.
         "less_equal": the keys of all groups up to its own (``key_group <= query_group``).
-    :param max_group_size: for "equal": promises that no group has more keys than this
-        and that ``key_group`` is sorted along ``axis``, so that every group is one run of consecutive keys.
+    :param max_group_size: for "equal": promises that no group has more keys than this.
         Then only those keys are read (a gather of that static size per query)
         and the energies of all other keys are never computed.
     :return: like values but with axis removed, and maybe any additional axes from query
     """
     if att_dropout_broadcast is None:
         att_dropout_broadcast = _att_dropout_broadcast_default()
-    attention_mask = None
+    key_ranges = None
     if query_group is not None or key_group is not None:
         assert query_group is not None and key_group is not None, "dot_attention: query_group and key_group go together"
         assert causal_query_spatial_dim is None, "dot_attention: groups together with causal are not supported"
@@ -120,7 +121,7 @@ def dot_attention(
                 key_group=key_group,
                 max_group_size=max_group_size,
             )
-        attention_mask = rf.compare_bc(key_group, "==" if group_mode == "equal" else "<=", query_group)
+        key_ranges = _group_key_ranges(query_group, key_group, axis=axis, group_mode=group_mode)
     return _dot_attention(
         query,
         keys,
@@ -131,8 +132,33 @@ def dot_attention(
         att_dropout_broadcast=att_dropout_broadcast,
         causal_query_spatial_dim=causal_query_spatial_dim,
         scale=scale,
-        attention_mask=attention_mask,
+        attention_mask=None,
+        key_ranges=key_ranges,
     )
+
+
+def _group_key_ranges(
+    query_group: Tensor, key_group: Tensor, *, axis: Dim, group_mode: str
+) -> Tuple[Optional[Tensor], Tensor]:
+    """
+    The run of keys every query attends, found by a search in the sorted ``key_group``
+    (which stops at the end of a sequence).
+
+    :param query_group: see :func:`dot_attention`
+    :param key_group: see :func:`dot_attention`, sorted along ``axis``
+    :param axis: the key axis
+    :param group_mode: see :func:`dot_attention`
+    :return: (start, end) key positions over the query dims (and the other dims of ``key_group``),
+        start None for "less_equal", where every run begins at the first key
+    """
+    for dim in key_group.dims:
+        if dim != axis and dim not in query_group.dims_set:
+            # e.g. queries without the batch dim of the keys: every sequence of keys is searched for them
+            query_group = rf.expand_dim(query_group, dim=dim)
+    end = rf.search_sorted(key_group, query_group, axis=axis, side="right")
+    if group_mode == "less_equal":
+        return None, end
+    return rf.search_sorted(key_group, query_group, axis=axis, side="left"), end
 
 
 def _dot_attention_over_own_group(
@@ -159,12 +185,7 @@ def _dot_attention_over_own_group(
     """
     device = keys.device
     group_dim = Dim(max_group_size, name="att_group")
-    for dim in key_group.dims:
-        if dim != axis and dim not in query_group.dims_set:
-            # e.g. queries without the batch dim of the keys: every sequence of keys is searched for them
-            query_group = rf.expand_dim(query_group, dim=dim)
-    start = rf.search_sorted(key_group, query_group, axis=axis, side="left")
-    end = rf.search_sorted(key_group, query_group, axis=axis, side="right")
+    start, end = _group_key_ranges(query_group, key_group, axis=axis, group_mode="equal")
     first = rf.range_over_dim(group_dim, dtype=start.dtype, device=device)
     slots = rf.combine_bc(start, "+", first)
     # A query without any key attends its first slot: what the clipped read gives there is finite,
@@ -200,11 +221,14 @@ def _dot_attention(
     causal_query_spatial_dim: Optional[Dim],
     scale: Optional[float],
     attention_mask: Optional[Tensor],
+    key_ranges: Optional[Tuple[Optional[Tensor], Tensor]] = None,
 ) -> Tensor:
     """
     :func:`dot_attention` with all defaults resolved.
 
     :param attention_mask: bool, over ``axis`` and (some of) the query dims, which keys a query attends
+    :param key_ranges: (start, end) over (some of) the query dims, the one run of keys every query attends,
+        see :func:`Backend.scaled_dot_product_attention_key_ranges`
     :return: see :func:`dot_attention`
     """
     from . import _utils
@@ -235,26 +259,44 @@ def _dot_attention(
         v_feat_dim = _infer_v_feat_dim(values, keys, key_dim)
         added_dummy_spat_dim_to_query = False
         merged_query_dims = None
-    assert attention_mask is None or merged_query_dims is None, (
+    assert (attention_mask is None and key_ranges is None) or merged_query_dims is None, (
         f"dot_attention: a mask together with several query dims {merged_query_dims} is not supported"
     )
-    # Dispatch over all args (not just query), so that e.g. a packed key/value also selects
-    # the specialized backend (deviation from PR #1798 which uses query._raw_backend).
-    backend = _utils.get_backend_from_tensors(query, keys, values, attention_mask)
-    att = backend.scaled_dot_product_attention(
-        query,
-        keys,
-        values,
-        attention_mask=attention_mask,
-        att_dropout=att_dropout,
-        att_dropout_broadcast=att_dropout_broadcast,
-        v_feat_dim=v_feat_dim,
-        qk_feat_dim=key_dim,
-        kv_spatial_dim=axis,
-        query_spatial_dim=query_spatial,
-        is_causal=causal_query_spatial_dim is not None,
-        scale=scale,
-    )
+    if key_ranges is not None:
+        key_start, key_end = key_ranges
+        backend = _utils.get_backend_from_tensors(query, keys, values, key_start, key_end)
+        att = backend.scaled_dot_product_attention_key_ranges(
+            query,
+            keys,
+            values,
+            key_start=key_start,
+            key_end=key_end,
+            att_dropout=att_dropout,
+            att_dropout_broadcast=att_dropout_broadcast,
+            v_feat_dim=v_feat_dim,
+            qk_feat_dim=key_dim,
+            kv_spatial_dim=axis,
+            query_spatial_dim=query_spatial,
+            scale=scale,
+        )
+    else:
+        # Dispatch over all args (not just query), so that e.g. a packed key/value also selects
+        # the specialized backend (deviation from PR #1798 which uses query._raw_backend).
+        backend = _utils.get_backend_from_tensors(query, keys, values, attention_mask)
+        att = backend.scaled_dot_product_attention(
+            query,
+            keys,
+            values,
+            attention_mask=attention_mask,
+            att_dropout=att_dropout,
+            att_dropout_broadcast=att_dropout_broadcast,
+            v_feat_dim=v_feat_dim,
+            qk_feat_dim=key_dim,
+            kv_spatial_dim=axis,
+            query_spatial_dim=query_spatial,
+            is_causal=causal_query_spatial_dim is not None,
+            scale=scale,
+        )
     if added_dummy_spat_dim_to_query:
         att = rf.squeeze(att, axis=query_spatial)
     if merged_query_dims is not None:
