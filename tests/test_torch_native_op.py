@@ -488,6 +488,46 @@ def test_ctc_loss_packed_leading_gap_grad():
         assert (rows == 0).all(), leaf.grad
 
 
+def test_ctc_loss_packed_edge_buffer_beyond_32_bit():
+    """
+    The Baum-Welch kernels keep one score per edge and frame. An edge bound far above the labels
+    (e.g. from a label buffer which inherits the gaps of the audio, or from a loose bound)
+    takes that scratch past 2^32 entries: its size and offsets must not wrap around in 32 bit,
+    else the kernels write outside of it. Same loss and gradient as with the tight edge list.
+    """
+    if not torch.cuda.is_available():
+        raise SkipTest("CUDA not available")
+    n_frames = 1100
+    edges_bound = 2**32 // n_frames + 4096
+    free, _ = torch.cuda.mem_get_info()
+    if free < edges_bound * n_frames * 4 + 4 * 2**30:
+        raise SkipTest("needs about 22 GB of free GPU memory")
+    torch.manual_seed(13)
+    lens = torch.tensor([n_frames, 700], dtype=torch.int32)
+    logits = torch.randn(int(lens.sum()), 5)
+    opts = dict(
+        seq_starts=torch.tensor([0, n_frames], dtype=torch.int32),
+        logits_seq_lens=lens,
+        targets=torch.tensor([[1, 2, 3], [3, 1, 0]], dtype=torch.int32),
+        targets_seq_lens=torch.tensor([3, 2], dtype=torch.int32),
+    )
+    losses, grads = [], []
+    for bound in (None, edges_bound):
+        leaf = logits.cuda().requires_grad_(True)
+        loss = ctc_loss_packed(
+            logits=leaf,
+            max_seq_len=n_frames,
+            blank_index=4,
+            edges_bound=bound,
+            **{k: v.cuda() for k, v in opts.items()},
+        )
+        loss.sum().backward()
+        losses.append(loss.detach())
+        grads.append(leaf.grad)
+    torch.testing.assert_close(losses[1], losses[0])
+    torch.testing.assert_close(grads[1], grads[0])
+
+
 def test_ctc_fsa_batch3_len6_c8():
     """
     This (:func:`Fsa.get_ctc_fsa_fast_bw`) is used by :func:`ctc_loss`.
