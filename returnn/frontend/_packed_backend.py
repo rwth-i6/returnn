@@ -4457,7 +4457,7 @@ class PackedBackend(Backend[PackedRawTensor]):
 
         batch = raw.orig_dims[0]
         dev = raw.inner.device
-        mask_p = _conform_packing(mask, raw)
+        mask_p = _pack_plain_like(_conform_packing(mask, raw), raw)
         if not (is_packed(mask_p) and raw.same_packing(_raw(mask_p))):
             return _masked_select_subset(tensor, mask=mask, dim=dim, out_dim=out_dim)
         mask_inner = _raw(mask_p).inner
@@ -4479,6 +4479,11 @@ class PackedBackend(Backend[PackedRawTensor]):
             bound = raw.content_bound
             if out_dim.capacity is None and raw.orig_dims[-1].capacity is not None:
                 out_dim.capacity = raw.orig_dims[-1].capacity
+            # A capacity on the result dim promises how much one sequence selects, e.g. the few labels among
+            # many frames. The padded buffer (seqs, capacity) relies on the same promise, so no more rows are needed.
+            n_seqs = batch.get_dim_value_tensor()
+            if out_dim.capacity is not None and isinstance(n_seqs, int):
+                bound = min(bound, n_seqs * out_dim.capacity)
         else:
             bound = None
         if bound is not None:

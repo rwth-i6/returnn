@@ -2424,6 +2424,30 @@ def _seqs(name: str, batch_dim: Dim, lens, values, **kwargs) -> Tuple[Tensor, Di
     return x, time_dim
 
 
+def test_masked_select_static_buffer_follows_a_declared_capacity():
+    """
+    under static tracing a selection along the packed dim gets a static buffer.
+    The content of the source bounds it, and so does a capacity declared on the result dim:
+    it promises how much one sequence can select (the padded buffer relies on the same promise),
+    e.g. the few labels among many frames
+    """
+    rf.select_backend_torch()
+    batch_dim = Dim(2, name="batch")
+    x, time_dim = _seqs("x", batch_dim, [5, 3], [[1.0, 2.0, 3.0, 4.0, 5.0], [6.0, 7.0, 8.0]])
+    keep, _ = _seqs("keep", batch_dim, [5, 3], [[1, 0, 0, 1, 0], [0, 1, 0]])
+    keep, _ = rf.replace_dim(keep, in_dim=keep.dims[1], out_dim=time_dim)
+    time_dim.capacity = 5
+    # without a capacity of its own the result takes the one of the source dim
+    for capacity, rows in ((None, 2 * 5), (2, 2 * 2)):
+        for mask in (keep > 0, packed.pack(keep > 0, total_bound=12)):
+            out_dim = Dim(None, name="selected", capacity=capacity)
+            with rf.set_static_traceable_ctx():
+                out, _ = rf.masked_select(packed.pack(x, total_bound=12), mask=mask, dims=[time_dim], out_dim=out_dim)
+            assert out.raw_tensor.packed_dim.dimension == out.raw_tensor.content_bound == rows, out.raw_tensor
+            got = packed.unpack(out).copy_compatible_to_dims_raw([batch_dim, out_dim])
+            assert got[0, :2].tolist() == [1.0, 4.0] and got[1, :1].tolist() == [7.0], got
+
+
 def test_scatter_relayout_static_buffer_holds_every_result():
     """
     under static tracing the result buffer has to hold any result the capacities allow:
