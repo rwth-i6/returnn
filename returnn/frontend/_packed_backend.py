@@ -1095,6 +1095,14 @@ def _pack_like(x: Tensor, template: PackedRawTensor) -> Optional[Tensor]:
     """
     in_dims = [d for d in template.orig_dims if d in x.dims]
     assert in_dims
+    # noinspection PyProtectedMember
+    raw_shape = x._raw_backend.get_shape_tuple_raw(x.raw_tensor)
+    if any(isinstance(raw_shape[x.dims.index(d)], int) and raw_shape[x.dims.index(d)] == 0 for d in in_dims):
+        # Nothing to read, so no row of the packing is a sequence frame,
+        # but it can still have rows (gap frames, the tail of a bound-sized buffer), which a gather could not serve.
+        out_dims = [template.packed_dim if d == in_dims[0] else d for d in x.dims if d not in in_dims[1:]]
+        feature_dim = x.feature_dim if x.feature_dim in out_dims else None
+        return rf.zeros(out_dims, dtype=x.dtype, sparse_dim=x.sparse_dim, feature_dim=feature_dim, device=x.device)
     # Gather via per-frame coordinates instead of broadcast + pack:
     # avoids materializing the full broadcast tensor
     # (e.g. a pos enc [time, feat] would blow up to [batch, time, feat] first).
@@ -5148,8 +5156,13 @@ def _scatter_relayout(
         n_rows = rf.cast(rf.copy_to_device(n_rows, dev), dest.dtype)
     dest = rf.where(writes, dest, n_rows)
     dump_dim = out_packed_dim + 1
+    values = raw.inner
+    if mode != "sum":
+        # The backward of a max or min divides by the number of sources equal to the result.
+        # A nan in a row which writes nothing equals nothing, so its gradient would be nan instead of zero.
+        values = rf.where(writes, values, 0)
     out_inner = raw.inner_backend.scatter(
-        raw.inner, indices=dest, indices_dim=[raw.packed_dim], mode=mode, fill_value=fill_value, out_dim=dump_dim
+        values, indices=dest, indices_dim=[raw.packed_dim], mode=mode, fill_value=fill_value, out_dim=dump_dim
     )
     out_inner, _ = rf.slice(out_inner, axis=dump_dim, size=out_packed_dim, out_dim=out_packed_dim)
     out = helper.rewrap(out_inner, name="scatter")
