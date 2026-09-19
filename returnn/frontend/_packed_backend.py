@@ -4258,6 +4258,9 @@ class PackedBackend(Backend[PackedRawTensor]):
         Along the innermost packed dim the index is a position inside a sequence,
         so it only needs its sequence's start added to become a row in the flat buffer
         (this is what shifts like a successor or predecessor lookup do).
+        Packed indices either share the packing of the source, and the result keeps it,
+        or they are packed over another spatial dim of the same sequences, and the result takes theirs
+        (see :func:`_gather_into_indices_packing`).
         Anything else takes the generic dim-aware route.
         """
         kwargs = dict(indices=indices, axis=axis, clip_to_valid=clip_to_valid)
@@ -4269,7 +4272,10 @@ class PackedBackend(Backend[PackedRawTensor]):
                 # gather along a plain axis with per-frame indices (e.g. a position drawn per frame):
                 # elementwise on the inner buffer, the packing is untouched
                 if is_packed(indices):
-                    idx = _raw(_conform_packing(indices, raw)).inner
+                    # _conform_packing leaves indices over other dims as they are,
+                    # and their rows are not the rows of the source: the generic route then
+                    idx_raw = _raw(_conform_packing(indices, raw))
+                    idx = idx_raw.inner if raw.same_packing(idx_raw) else None
                 elif set(indices.dims) & set(raw.orig_dims):
                     idx = _pack_like(indices, raw)
                 else:
@@ -4281,6 +4287,13 @@ class PackedBackend(Backend[PackedRawTensor]):
                     if source.sparse_dim is not None and source.sparse_dim in out.dims:
                         out.sparse_dim = source.sparse_dim
                     return out
+            return _dim_aware_call("gather", (source,), kwargs)
+        if is_packed(indices) and _raw(indices).orig_dims != raw.orig_dims:
+            # _conform_packing only converts between layouts of the same sequences and dims.
+            # Indices over another spatial dim have their own rows, which must not be read as rows of the source.
+            out = _gather_into_indices_packing(source, raw, indices=indices, clip_to_valid=clip_to_valid)
+            if out is not None:
+                return out
             return _dim_aware_call("gather", (source,), kwargs)
         if is_packed(indices):
             idx = _raw(_conform_packing(indices, raw)).inner
@@ -5025,7 +5038,63 @@ def _gather_relayout_out_dim(indices: Tensor, raw: PackedRawTensor) -> Optional[
         if out_spatial_dim is not None:
             return None  # two new spatial dims: same
         out_spatial_dim = dim
+    if out_spatial_dim is not None and out_spatial_dim in raw.inner.dims:
+        # the source carries this dim as a plain dim, see _read_rows_at_frames
+        if _plain_extents(raw, out_spatial_dim) is None:
+            return None
     return out_spatial_dim
+
+
+def _plain_extents(raw: PackedRawTensor, dim: Dim) -> Optional[Tuple[int, int]]:
+    """
+    :param raw: a packing
+    :param dim: a plain dim of its inner buffer
+    :return: (rows, width), the raw extents of the packed dim and of dim (no host read on torch),
+        or None if the backend does not know them as python ints
+    """
+    inner = raw.inner
+    # noinspection PyProtectedMember
+    shape = inner._raw_backend.get_shape_tuple_raw(inner.raw_tensor)
+    rows, width = shape[inner.dims.index(raw.packed_dim)], shape[inner.dims.index(dim)]
+    if not isinstance(rows, int) or not isinstance(width, int):
+        return None
+    return rows, width
+
+
+def _read_rows_at_frames(raw: PackedRawTensor, *, rows: Tensor, frame: Optional[Tensor], frame_dim: Dim) -> Tensor:
+    """
+    Reads one row of the packed source buffer per output frame, for a gather along the innermost packed dim
+    whose indices bring their own spatial dim (frame_dim).
+
+    A dim which the source shares with the indices is a batch dim of the gather.
+    Static shared dims stay dims of the row indices, and the gather on the inner buffer resolves them.
+    The spatial dim of the indices however is folded into the packed dim of the result,
+    so when the source carries it as a plain dim (e.g. a label by frame lattice read along an alignment),
+    frame t must read column t of its row, not the whole row.
+    The buffer is then read through one flat index, row * width + frame, and never expanded per frame.
+
+    :param raw: packing of the source
+    :param rows: [result packed dim, ...], the row of the source buffer for every output frame
+    :param frame: [result packed dim], the position of every output frame within its sequence.
+        Only needed when the source carries frame_dim.
+    :param frame_dim: the spatial dim of the indices
+    :return: [result packed dim, ...] + the remaining dims of the source buffer
+    """
+    inner = raw.inner
+    if frame_dim not in inner.dims:
+        return rf.gather(inner, indices=rows, axis=raw.packed_dim)
+    n_rows, width = _plain_extents(raw, frame_dim)
+    # re-tag both dims static with their raw extents: merging the dynamic ones would derive dynamic sizes
+    # and masks for the flat dim, while only the memory layout matters here
+    rows_dim = Dim(n_rows, name="packed_rows")
+    cols_dim = Dim(width, name=f"{frame_dim.name or 'frame'}_cols")
+    inner, _ = rf.replace_dim(inner, in_dim=raw.packed_dim, out_dim=rows_dim)
+    inner, _ = rf.replace_dim(inner, in_dim=frame_dim, out_dim=cols_dim)
+    flat, flat_dim = rf.merge_dims(inner, dims=[rows_dim, cols_dim])
+    # int64: rows times width exceeds int32 for a big lattice
+    flat_idx = rf.cast(rows, "int64") * width + rf.cast(frame, "int64")
+    flat_idx.sparse_dim = flat_dim
+    return rf.gather(flat, indices=flat_idx, axis=flat_dim)
 
 
 def _gather_relayout(
@@ -5077,7 +5146,57 @@ def _gather_relayout(
     starts, seqs_dim = raw.seq_starts(device=dev)
     src = rf.cast(rf.gather(starts, indices=seq, axis=seqs_dim), idx.dtype) + idx
     src = rf.clip_by_value(src, 0, _last_row(raw.packed_dim, src.dtype))
-    out = helper.rewrap(rf.gather(raw.inner, indices=src, axis=raw.packed_dim), name="gather")
+    out = helper.rewrap(_read_rows_at_frames(raw, rows=src, frame=local, frame_dim=out_spatial_dim), name="gather")
+    # a sparse dim assigned on the virtual tensor never reached the inner buffer
+    if source.sparse_dim is not None:
+        out.sparse_dim = source.sparse_dim
+    return out
+
+
+def _gather_into_indices_packing(
+    source: Tensor, raw: PackedRawTensor, *, indices: Tensor, clip_to_valid: bool
+) -> Optional[Tensor]:
+    """
+    Gather along the innermost packed dim with indices which are packed over another spatial dim
+    of the same sequences, e.g. label states read at the label position every frame of an alignment holds.
+
+    Every frame of the indices reads the start of its own sequence in the source plus the position it holds,
+    so neither side is unpacked.
+    The result takes the packing of the indices as it is (gap, align, layout lens and bound),
+    thus no new buffer bound is needed under static tracing.
+
+    :param source: packed over (seqs, source spatial)
+    :param raw: its packing
+    :param indices: packed over (seqs, another spatial), positions within the source sequence
+    :param clip_to_valid: clip the positions into each sequence
+    :return: packed like the indices, or None if the two packings do not share the seqs dim
+    """
+    idx_raw = _raw(indices)
+    seqs_dim = raw.orig_dims[0]
+    if len(idx_raw.orig_dims) != 2 or idx_raw.orig_dims[0] != seqs_dim:
+        return None
+    frame_dim = idx_raw.orig_dims[-1]
+    if frame_dim in raw.inner.dims and _plain_extents(raw, frame_dim) is None:
+        # the source carries the spatial dim of the indices as a plain dim, see _read_rows_at_frames
+        return None
+    dev = raw.inner.device
+    # the sequence of every frame of the indices; gap frames get an in-bounds one, their result is junk
+    seq = rf.copy_to_device(_frame_coords(idx_raw, seqs_dim), dev)
+    idx = rf.cast(rf.copy_to_device(idx_raw.inner, dev), seq.dtype)
+    if clip_to_valid:
+        # in the traced regime the lens already live on the data's device,
+        # where copying them would be a sync
+        lens = _device_lens(raw)
+        if lens is None:
+            lens = rf.copy_to_device(raw.seq_lens, dev)
+        last = rf.cast(rf.gather(lens, indices=seq, axis=seqs_dim), idx.dtype) - 1
+        idx = rf.clip_by_value(idx, rf.zeros_like(last), last)
+    starts, starts_dim = raw.seq_starts(device=dev)
+    src = rf.cast(rf.gather(starts, indices=seq, axis=starts_dim), idx.dtype) + idx
+    src = rf.clip_by_value(src, 0, _last_row(raw.packed_dim, src.dtype))
+    # the position within the sequence is only needed when the source has a column per frame
+    frame = rf.copy_to_device(_frame_coords(idx_raw, frame_dim), dev) if frame_dim in raw.inner.dims else None
+    out = idx_raw.rewrap(_read_rows_at_frames(raw, rows=src, frame=frame, frame_dim=frame_dim), name="gather")
     # a sparse dim assigned on the virtual tensor never reached the inner buffer
     if source.sparse_dim is not None:
         out.sparse_dim = source.sparse_dim
