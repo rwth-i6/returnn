@@ -4339,7 +4339,14 @@ class PackedBackend(Backend[PackedRawTensor]):
         """scaled_gradient: identity forward, gradient scaled; elementwise, runs on the inner buffer"""
         raw = _raw(tensor)
         if isinstance(scale, Tensor) and is_packed(scale):
-            scale = _raw(_conform_packing(scale, raw)).inner
+            scale_raw = _raw(_conform_packing(scale, raw))
+            # a per-frame scale over other dims has no meaning for the gradient of this tensor,
+            # and its rows would silently scale other frames
+            assert raw.same_packing(scale_raw), (
+                f"scaled_gradient: the scale is packed over {list(scale_raw.orig_dims)},"
+                f" the tensor over {list(raw.orig_dims)}"
+            )
+            scale = scale_raw.inner
         return raw.rewrap(raw.inner_backend.scaled_gradient(raw.inner, scale), name="scaled_gradient")
 
     @staticmethod
