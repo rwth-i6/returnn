@@ -2424,6 +2424,232 @@ def _seqs(name: str, batch_dim: Dim, lens, values, **kwargs) -> Tuple[Tensor, Di
     return x, time_dim
 
 
+def test_dot_attention_over_own_group_stays_packed():
+    """
+    a query which attends only the keys of its own group, e.g. a label over the encoder frames of its chunk.
+    With max_group_size every query reads its own run of keys, which needs no lattice over (queries, keys),
+    so packed keys are never unpacked, and the result is packed like the queries
+    """
+    from test_rf_attention import _grouped_attention_inputs
+
+    rf.select_backend_torch()
+    query, keys, values, query_group, key_group, dims = _grouped_attention_inputs()
+    batch_dim, q_time, kv_time, heads, feat, v_feat = dims
+    opts = dict(key_dim=feat, axis=kv_time, query_group=query_group, key_group=key_group, max_group_size=3)
+    keys.raw_tensor.requires_grad_(True)
+    weight = torch.randn(2, 4, 2, 6, generator=torch.Generator().manual_seed(6))
+    valid = (torch.arange(4)[None, :] < q_time.dyn_size_ext.raw_tensor[:, None])[:, :, None, None]
+    order = [batch_dim, q_time, heads, v_feat]
+
+    ref = rf.dot_attention(query, keys, values, **opts)
+    (ref_grad,) = torch.autograd.grad((ref.copy_transpose(order).raw_tensor * weight * valid).sum(), keys.raw_tensor)
+    for gap in (0, 2):
+        for q in (query, packed.pack(query, gap=gap)):
+            packed._warned_fallback_ops.clear()
+            out = rf.dot_attention(q, packed.pack(keys, gap=gap), packed.pack(values, gap=gap), **opts)
+            assert not packed._warned_fallback_ops, (gap, packed._warned_fallback_ops)
+            assert packed.is_packed(out) and out.raw_tensor.orig_dims == (batch_dim, q_time), out
+            _assert_equal_non_padded(out, ref, batch_dim, q_time)
+            out_raw = packed.unpack(out).copy_transpose(order).raw_tensor
+            (grad,) = torch.autograd.grad((out_raw * weight * valid).sum(), keys.raw_tensor)
+            numpy.testing.assert_allclose(grad.numpy(), ref_grad.numpy(), rtol=1e-5, atol=1e-6)
+
+    # the groups themselves can be packed, of the queries (e.g. computed from packed labels), of the keys, or both
+    key_group_batch = rf.expand_dim(key_group, dim=batch_dim)
+    for gap in (0, 2):
+        for q_group in (query_group, packed.pack(query_group, gap=gap)):
+            for k_group in (key_group, key_group_batch, packed.pack(key_group_batch, gap=gap)):
+                packed._warned_fallback_ops.clear()
+                out = rf.dot_attention(
+                    packed.pack(query, gap=gap),
+                    packed.pack(keys, gap=gap),
+                    packed.pack(values, gap=gap),
+                    **{**opts, "query_group": q_group, "key_group": k_group},
+                )
+                assert not packed._warned_fallback_ops, (gap, q_group, k_group, packed._warned_fallback_ops)
+                assert packed.is_packed(out), (gap, q_group, k_group)
+                _assert_equal_non_padded(out, ref, batch_dim, q_time)
+
+    # the captured regime: bound-sized keys, every shape comes from a capacity or a bound
+    q_time.capacity, kv_time.capacity = 4, 7
+    with rf.set_static_traceable_ctx():
+        bound = dict(total_bound=16)
+        out = rf.dot_attention(query, packed.pack(keys, **bound), packed.pack(values, **bound), **opts)
+    assert packed.is_packed(out) and out.raw_tensor.packed_dim.dimension is not None, out.raw_tensor
+    _assert_equal_non_padded(out, ref, batch_dim, q_time)
+
+
+def test_dot_attention_over_own_group_with_device_lens():
+    """
+    the regime of a captured train step: static buffers, the lengths live on the device,
+    and one graph over forward and backward has to serve every batch, an empty sequence included.
+    Packed keys, the queries once plain (a padded decoder stream) and once packed.
+    Without cuda the traced step runs per batch instead of being replayed.
+    """
+    rf.select_backend_torch()
+    dev = "cuda" if torch.cuda.is_available() else "cpu"
+    n_seqs, q_cap, kv_cap, n_heads, n_feat, n_v_feat, group_size = 3, 5, 7, 2, 4, 3, 3
+    q_bound, kv_bound = 17, 23
+    batch_dim = Dim(n_seqs, name="batch")
+    heads, feat, v_feat = Dim(n_heads, name="heads"), Dim(n_feat, name="feat"), Dim(n_v_feat, name="v_feat")
+    q_lens_buf, kv_lens_buf = (torch.zeros(n_seqs, dtype=torch.int32, device=dev) for _ in range(2))
+    q_time, kv_time = (
+        Dim(Tensor(name, dims=[batch_dim], dtype="int32", raw_tensor=buf), name=name, capacity=cap)
+        for name, buf, cap in (("q_time", q_lens_buf, q_cap), ("kv_time", kv_lens_buf, kv_cap))
+    )
+    q_packed_dim, kv_packed_dim = Dim(q_bound, name="packed_q"), Dim(kv_bound, name="packed_kv")
+
+    # the static buffers the graph reads, every batch is copied into them
+    q_pad_buf = torch.zeros(n_seqs, q_cap, n_heads, n_feat, device=dev, requires_grad=True)
+    q_buf = torch.zeros(q_bound, n_heads, n_feat, device=dev, requires_grad=True)
+    k_buf = torch.zeros(kv_bound, n_heads, n_feat, device=dev, requires_grad=True)
+    v_buf = torch.zeros(kv_bound, n_heads, n_v_feat, device=dev, requires_grad=True)
+    group_buf = torch.zeros(n_seqs, q_cap, dtype=torch.int32, device=dev)
+    group_flat_buf = torch.zeros(q_bound, dtype=torch.int32, device=dev)
+    gen = torch.Generator().manual_seed(8)
+    weight = torch.randn(n_heads, n_v_feat, generator=gen).to(dev)
+    leaves = (q_pad_buf, q_buf, k_buf, v_buf)
+
+    def _import(name, raw, packed_dim, spatial_dim, dims, dtype="float32"):
+        flat = Tensor(name, dims=[packed_dim] + dims, dtype=dtype, raw_tensor=raw)
+        return packed.pack_import(flat, batch_dim=batch_dim, spatial_dim=spatial_dim, packed_dim=packed_dim)
+
+    def _total(out: Tensor) -> torch.Tensor:
+        """a readout which needs no layout: the rows outside the sequences hold copies and must not count"""
+        rows = out.raw_tensor.inner.copy_transpose([out.raw_tensor.packed_dim, heads, v_feat]).raw_tensor
+        n_rows = q_lens_buf.sum()
+        in_seq = torch.arange(rows.shape[0], device=dev) < n_rows
+        return (rows * weight * in_seq[:, None, None]).sum()
+
+    def _step():
+        # as the engine before every step, see returnn.torch.util.graph_capture
+        for dim, lens_buf in ((q_time, q_lens_buf), (kv_time, kv_lens_buf)):
+            dim.reset_eager()
+            dim.dyn_size_ext.raw_tensor = lens_buf
+        keys = _import("k", k_buf, kv_packed_dim, kv_time, [heads, feat])
+        values = _import("v", v_buf, kv_packed_dim, kv_time, [heads, v_feat])
+        q_plain = Tensor("q", dims=[batch_dim, q_time, heads, feat], dtype="float32", raw_tensor=q_pad_buf)
+        query_group = Tensor("q_group", dims=[batch_dim, q_time], dtype="int32", raw_tensor=group_buf)
+        # packed queries come with packed groups, as when both derive from packed labels
+        q_packed = _import("q", q_buf, q_packed_dim, q_time, [heads, feat])
+        query_group_packed = _import("q_group", group_flat_buf, q_packed_dim, q_time, [], dtype="int32")
+        totals = []
+        with rf.set_static_traceable_ctx():
+            key_group = rf.range_over_dim(kv_time, device=dev) // group_size
+            for query, group in ((q_plain, query_group), (q_packed, query_group_packed)):
+                out = rf.dot_attention(
+                    query,
+                    keys,
+                    values,
+                    key_dim=feat,
+                    axis=kv_time,
+                    query_group=group,
+                    key_group=key_group,
+                    max_group_size=group_size,
+                )
+                assert packed.is_packed(out) and out.raw_tensor.packed_dim.dimension is not None, out.raw_tensor
+                totals.append(_total(out))
+        (totals[0] + 2.0 * totals[1]).backward()
+        return totals
+
+    def _load(q_lens, kv_lens, seed):
+        """:return: the padded data of this batch, after writing it densely packed into the static buffers"""
+        g = torch.Generator().manual_seed(seed)
+        q_pad = torch.randn(n_seqs, q_cap, n_heads, n_feat, generator=g)
+        k_pad = torch.randn(n_seqs, kv_cap, n_heads, n_feat, generator=g)
+        v_pad = torch.randn(n_seqs, kv_cap, n_heads, n_v_feat, generator=g)
+        groups = torch.zeros(n_seqs, q_cap, dtype=torch.int32)
+        for b, (n_q, n_kv) in enumerate(zip(q_lens, kv_lens)):
+            if n_q:
+                groups[b, :n_q] = torch.randint(0, -(-n_kv // group_size), (n_q,), generator=g, dtype=torch.int32)
+        with torch.no_grad():
+            for buf in (q_buf, k_buf, v_buf, group_flat_buf):
+                buf.zero_()
+            q_pad_buf.copy_(q_pad)
+            group_buf.copy_(groups)
+            group_flat_buf[: sum(q_lens)] = torch.cat([groups[b, :n] for b, n in enumerate(q_lens)]).to(dev)
+            q_buf[: sum(q_lens)] = torch.cat([q_pad[b, :n] for b, n in enumerate(q_lens)]).to(dev)
+            k_buf[: sum(kv_lens)] = torch.cat([k_pad[b, :n] for b, n in enumerate(kv_lens)]).to(dev)
+            v_buf[: sum(kv_lens)] = torch.cat([v_pad[b, :n] for b, n in enumerate(kv_lens)]).to(dev)
+            q_lens_buf.copy_(torch.tensor(q_lens, dtype=torch.int32))
+            kv_lens_buf.copy_(torch.tensor(kv_lens, dtype=torch.int32))
+        return q_pad, k_pad, v_pad, groups
+
+    def _reference(q_pad, k_pad, v_pad, groups, q_lens, kv_lens):
+        """the same attention through masked energies, on plain padded tensors"""
+
+        def _time(name, lens):
+            lens = Tensor(name, dims=[batch_dim], dtype="int32", raw_tensor=torch.tensor(lens, dtype=torch.int32))
+            return Dim(lens, name=name)
+
+        q_t, kv_t = _time("q_ref", q_lens), _time("kv_ref", kv_lens)
+        n_q, n_kv = max(max(q_lens), 1), max(max(kv_lens), 1)
+        raws = [x.clone().requires_grad_(True) for x in (q_pad[:, :n_q], k_pad[:, :n_kv], v_pad[:, :n_kv])]
+        q, k, v = (
+            Tensor(name, dims=dims, dtype="float32", raw_tensor=raw)
+            for name, dims, raw in zip(
+                "qkv", ([batch_dim, q_t, heads, feat], [batch_dim, kv_t, heads, feat], [batch_dim, kv_t, heads, v_feat]), raws
+            )
+        )
+        query_group = Tensor("q_group", dims=[batch_dim, q_t], dtype="int32", raw_tensor=groups[:, :n_q].clone())
+        out = rf.dot_attention(
+            q, k, v, key_dim=feat, axis=kv_t, query_group=query_group, key_group=rf.range_over_dim(kv_t) // group_size
+        )
+        out_raw = out.copy_transpose([batch_dim, q_t, heads, v_feat]).raw_tensor
+        valid = (torch.arange(n_q)[None, :] < torch.tensor(q_lens)[:, None])[:, :, None, None]
+        total = torch.where(valid, out_raw * weight.cpu(), torch.zeros(())).sum()
+        q_grad, k_grad, v_grad = torch.autograd.grad(total, raws)
+
+        def _rows(grad, lens):
+            return torch.cat([grad[b, :n] for b, n in enumerate(lens)])
+
+        return total.detach(), q_grad * valid, _rows(q_grad, q_lens), _rows(k_grad, kv_lens), _rows(v_grad, kv_lens)
+
+    # an empty last sequence is what the rows behind the content of a bound-sized buffer get mapped to
+    batches = [
+        ((5, 2, 4), (7, 3, 5), 1),
+        ((1, 5, 5), (2, 7, 6), 2),
+        ((3, 0, 2), (4, 0, 1), 3),
+        ((3, 2, 0), (4, 1, 0), 4),
+        ((5, 5, 5), (7, 7, 7), 5),
+    ]
+    _load(*batches[0])
+    if dev == "cuda":
+        side = torch.cuda.Stream()
+        side.wait_stream(torch.cuda.current_stream())
+        with torch.cuda.stream(side):
+            _step()
+        torch.cuda.current_stream().wait_stream(side)
+        for leaf in leaves:
+            leaf.grad = None
+        graph = torch.cuda.CUDAGraph()
+        with torch.cuda.graph(graph):
+            totals_static = _step()
+
+    for q_lens, kv_lens, seed in batches:
+        q_pad, k_pad, v_pad, groups = _load(q_lens, kv_lens, seed)
+        if dev == "cuda":
+            graph.replay()
+            torch.cuda.synchronize()
+            totals = totals_static
+        else:
+            for leaf in leaves:
+                leaf.grad = None
+            totals = _step()
+        ref_total, ref_q_pad, ref_q, ref_k, ref_v = _reference(q_pad, k_pad, v_pad, groups, q_lens, kv_lens)
+        where = f"lens {q_lens} {kv_lens}"
+        for total in totals:
+            numpy.testing.assert_allclose(total.detach().cpu(), ref_total, rtol=1e-5, err_msg=where)
+        n_q, n_kv = sum(q_lens), sum(kv_lens)
+        width = ref_q_pad.shape[1]
+        numpy.testing.assert_allclose(q_pad_buf.grad[:, :width].cpu(), ref_q_pad, rtol=1e-5, atol=1e-6, err_msg=where)
+        numpy.testing.assert_allclose(q_buf.grad[:n_q].cpu(), 2.0 * ref_q, rtol=1e-5, atol=1e-6, err_msg=where)
+        numpy.testing.assert_allclose(k_buf.grad[:n_kv].cpu(), 3.0 * ref_k, rtol=1e-5, atol=1e-6, err_msg=where)
+        numpy.testing.assert_allclose(v_buf.grad[:n_kv].cpu(), 3.0 * ref_v, rtol=1e-5, atol=1e-6, err_msg=where)
+        for leaf in leaves:
+            assert torch.isfinite(leaf.grad).all(), where
+
+
 def test_masked_select_static_buffer_follows_a_declared_capacity():
     """
     under static tracing a selection along the packed dim gets a static buffer.

@@ -944,6 +944,117 @@ def test_dot_attention_self_att_axis_in_query():
     )
 
 
+def _grouped_attention_inputs():
+    """queries and keys of two sequences, the keys in groups of three frames with a partial last group"""
+    import torch
+
+    batch = Dim(2, name="batch")
+    heads, feat, v_feat = Dim(2, name="heads"), Dim(4, name="feat"), Dim(6, name="v_feat")
+
+    def _time(name, lens):
+        lens = torch.tensor(lens, dtype=torch.int32)
+        return Dim(Tensor(f"{name}_lens", dims=[batch], dtype="int32", raw_tensor=lens), name=name)
+
+    q_time, kv_time = _time("q_time", [4, 3]), _time("kv_time", [7, 5])
+    gen = torch.Generator().manual_seed(44)
+    query = Tensor("q", dims=(batch, q_time, heads, feat), dtype="float32", raw_tensor=torch.randn(2, 4, 2, 4, generator=gen))
+    keys = Tensor("k", dims=(batch, kv_time, heads, feat), dtype="float32", raw_tensor=torch.randn(2, 7, 2, 4, generator=gen))
+    values = Tensor(
+        "v", dims=(batch, kv_time, heads, v_feat), dtype="float32", raw_tensor=torch.randn(2, 7, 2, 6, generator=gen)
+    )
+    query_group = Tensor("q_group", dims=(batch, q_time), dtype="int32")
+    query_group.raw_tensor = torch.tensor([[0, 1, 2, 2], [0, 1, 1, 0]], dtype=torch.int32)
+    key_group = rf.range_over_dim(kv_time) // 3
+    return query, keys, values, query_group, key_group, (batch, q_time, kv_time, heads, feat, v_feat)
+
+
+def test_dot_attention_groups_match_masked_energies():
+    # A query attends only the keys of its own group ("equal") or of the groups up to its own ("less_equal"),
+    # e.g. a label over the encoder frames of its chunk.
+    # That is structure the backend can use, where a boolean mask over (queries, keys) is only the full lattice.
+    # It must match the explicit composition with masked energies, also through the regrouped path
+    # (max_group_size), with a partial last group and with padded keys and queries.
+    import torch
+
+    rf.select_backend_torch()
+    query, keys, values, query_group, key_group, dims = _grouped_attention_inputs()
+    batch, q_time, kv_time, heads, feat, v_feat = dims
+    order = (batch, q_time, heads, v_feat)
+    for mode, op in (("equal", "=="), ("less_equal", "<=")):
+        allowed = rf.compare_bc(key_group, op, query_group)
+        energy = rf.matmul(query * feat.dimension**-0.5, keys, reduce=feat)
+        att_weights = rf.softmax(rf.where(allowed, energy, float("-inf")), axis=kv_time)
+        ref = rf.matmul(att_weights, values, reduce=kv_time, use_mask=False).copy_transpose(order).raw_tensor
+        for max_group_size in (None, 3) if mode == "equal" else (None,):
+            att = rf.dot_attention(
+                query,
+                keys,
+                values,
+                key_dim=feat,
+                axis=kv_time,
+                query_group=query_group,
+                key_group=key_group,
+                group_mode=mode,
+                max_group_size=max_group_size,
+            )
+            assert att.dims_set == set(order), (mode, max_group_size, att.dims)
+            got = att.copy_transpose(order).raw_tensor
+            for b, n in enumerate((4, 3)):
+                torch.testing.assert_close(got[b, :n], ref[b, :n], msg=f"{mode} {max_group_size} seq {b}")
+
+
+def test_dot_attention_groups_in_self_attention():
+    # Query and keys share the time dim, and so do their groups.
+    # The groups have to be compared across positions, not position by position, which would allow everything.
+    # With zero queries and keys every allowed key gets the same weight, so the result is the mean of its values.
+    import torch
+
+    rf.select_backend_torch()
+    time = Dim(4, name="time")
+    feat, v_feat = Dim(2, name="feat"), Dim(1, name="v_feat")
+    zeros = Tensor("qk", dims=(time, feat), dtype="float32", raw_tensor=torch.zeros(4, 2))
+    values = Tensor("v", dims=(time, v_feat), dtype="float32", raw_tensor=torch.tensor([[1.0], [3.0], [10.0], [20.0]]))
+    group = Tensor("group", dims=(time,), dtype="int32", raw_tensor=torch.tensor([0, 0, 1, 1], dtype=torch.int32))
+    for mode, max_group_size, expected in (
+        ("equal", None, [2.0, 2.0, 15.0, 15.0]),
+        ("equal", 2, [2.0, 2.0, 15.0, 15.0]),
+        ("less_equal", None, [2.0, 2.0, 8.5, 8.5]),
+    ):
+        att = rf.dot_attention(
+            zeros,
+            zeros,
+            values,
+            key_dim=feat,
+            axis=time,
+            query_group=group,
+            key_group=group,
+            group_mode=mode,
+            max_group_size=max_group_size,
+        )
+        assert att.dims_set == {time, v_feat}, (mode, max_group_size, att.dims)
+        got = att.copy_transpose((time, v_feat)).raw_tensor[:, 0].tolist()
+        assert got == expected, (mode, max_group_size, got)
+
+
+def test_dot_attention_groups_broadcast_over_the_key_batch():
+    # Queries without the batch dim of the keys: their groups broadcast over it, with a group size as without.
+    import torch
+
+    rf.select_backend_torch()
+    _, keys, values, _, _, dims = _grouped_attention_inputs()
+    batch, _, kv_time, heads, feat, v_feat = dims
+    q_flat = Dim(3, name="q_flat")
+    gen = torch.Generator().manual_seed(45)
+    query = Tensor("q", dims=(q_flat, heads, feat), dtype="float32", raw_tensor=torch.randn(3, 2, 4, generator=gen))
+    query_group = Tensor("q_group", dims=(q_flat,), dtype="int32", raw_tensor=torch.tensor([0, 1, 0], dtype=torch.int32))
+    key_group = rf.expand_dim(rf.range_over_dim(kv_time) // 3, dim=batch)
+    opts = dict(key_dim=feat, axis=kv_time, query_group=query_group, key_group=key_group)
+    order = (batch, q_flat, heads, v_feat)
+    ref = rf.dot_attention(query, keys, values, **opts).copy_transpose(order).raw_tensor
+    got = rf.dot_attention(query, keys, values, max_group_size=3, **opts).copy_transpose(order).raw_tensor
+    torch.testing.assert_close(got, ref)
+
+
 def test_causal_dot_attention_under_cuda_graph_capture():
     import torch
     import unittest
