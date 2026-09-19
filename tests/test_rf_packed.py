@@ -2279,6 +2279,158 @@ def test_gather_with_an_index_time_dim_which_the_source_carries_too():
     numpy.testing.assert_allclose(grad.numpy(), grad_ref.numpy(), rtol=1e-6)
 
 
+def test_scatter_along_the_packed_dim_into_another_time_dim():
+    """
+    the inverse of the re-laid-out gather: every frame of the packed source writes to a position of its own
+    sequence along a new time dim, and the result is packed over that dim,
+    e.g. audio frames written to their places in a longer stream which other frames fill up
+    """
+    rf.select_backend_torch()
+    x, batch_dim, time_dim, feat_dim = _make_input(batch_size=3, seq_lens=(4, 2, 3))
+    out_dim = Dim(
+        Tensor("out_lens", dims=[batch_dim], dtype="int32", raw_tensor=torch.tensor([7, 3, 6], dtype=torch.int32)),
+        name="out",
+    )
+    idx = Tensor("idx", dims=[batch_dim, time_dim], dtype="int32", sparse_dim=out_dim)
+    # the last sequence writes two frames to one position, the padded entries of the others point anywhere
+    idx.raw_tensor = torch.tensor([[0, 2, 3, 6], [1, 2, 6, 6], [0, 0, 5, 1]], dtype=torch.int32)
+    for gap in (0, 2):
+        xp = packed.pack(x, gap=gap)
+        for indices in (idx, packed.pack(idx, gap=gap)):
+            for mode in ("sum", "max"):
+                ref = rf.scatter(x, indices=idx, indices_dim=time_dim, out_dim=out_dim, mode=mode)
+                packed._warned_fallback_ops.clear()
+                out = rf.scatter(xp, indices=indices, indices_dim=time_dim, out_dim=out_dim, mode=mode)
+                assert not packed._warned_fallback_ops, packed._warned_fallback_ops
+                assert packed.is_packed(out) and out.raw_tensor.orig_dims == (batch_dim, out_dim), out
+                assert out.dims_set == ref.dims_set, (out.dims, ref.dims)
+                _assert_equal_non_padded(out, ref, batch_dim, out_dim)
+
+    # the captured regime: a bound-sized source, the result gets a static buffer from the capacities
+    time_dim.capacity, out_dim.capacity = 4, 7
+    with rf.set_static_traceable_ctx():
+        out = rf.scatter(packed.pack(x, total_bound=12), indices=idx, indices_dim=time_dim, out_dim=out_dim)
+    assert out.raw_tensor.packed_dim.dimension is not None, out.raw_tensor
+    _assert_equal_non_padded(out, rf.scatter(x, indices=idx, indices_dim=time_dim, out_dim=out_dim), batch_dim, out_dim)
+
+    # the gradient of a written position goes back to the frames which wrote it
+    x.raw_tensor.requires_grad_(True)
+    weight = torch.randn(3, 7, 4, generator=torch.Generator().manual_seed(5))
+    valid = (torch.arange(7)[None, :] < out_dim.dyn_size_ext.raw_tensor[:, None])[:, :, None]
+    ref = rf.scatter(x, indices=idx, indices_dim=time_dim, out_dim=out_dim)
+    ref_raw = ref.copy_transpose([batch_dim, out_dim, feat_dim]).raw_tensor
+    (grad_ref,) = torch.autograd.grad((ref_raw * weight * valid).sum(), x.raw_tensor)
+    out = rf.scatter(packed.pack(x), indices=idx, indices_dim=time_dim, out_dim=out_dim)
+    out_raw = packed.unpack(out).copy_transpose([batch_dim, out_dim, feat_dim]).raw_tensor
+    (grad,) = torch.autograd.grad((out_raw * weight * valid).sum(), x.raw_tensor)
+    numpy.testing.assert_allclose(grad.numpy(), grad_ref.numpy(), rtol=1e-6)
+
+
+def _seqs(name: str, batch_dim: Dim, lens, values, **kwargs) -> Tuple[Tensor, Dim]:
+    """:return: a [batch, time] tensor with the given per-sequence values (rows padded with zeros), and its time dim"""
+    time_dim = Dim(
+        Tensor(f"{name}_lens", dims=[batch_dim], dtype="int32", raw_tensor=torch.tensor(lens, dtype=torch.int32)),
+        name=f"{name}_time",
+    )
+    width = max(max(lens), 1)
+    raw = torch.tensor([list(row) + [0] * (width - len(row)) for row in values])
+    x = Tensor(name, dims=[batch_dim, time_dim], dtype="int32" if raw.dtype == torch.int64 else "float32", **kwargs)
+    x.raw_tensor = raw.to(torch.int32 if raw.dtype == torch.int64 else torch.float32)[:, : max(lens)]
+    return x, time_dim
+
+
+def test_scatter_relayout_static_buffer_holds_every_result():
+    """
+    under static tracing the result buffer has to hold any result the capacities allow:
+    the lengths of the result are independent of those of the source, so the size of the source bounds nothing
+    """
+    rf.select_backend_torch()
+    batch_dim = Dim(2, name="batch")
+    x, time_dim = _seqs("x", batch_dim, [1, 1], [[10.0], [20.0]])
+    out_dim = Dim(
+        Tensor("out_lens", dims=[batch_dim], dtype="int32", raw_tensor=torch.tensor([6, 6], dtype=torch.int32)),
+        name="out",
+    )
+    idx = Tensor("idx", dims=[batch_dim, time_dim], dtype="int32", sparse_dim=out_dim)
+    idx.raw_tensor = torch.tensor([[5], [5]], dtype=torch.int32)
+    time_dim.capacity, out_dim.capacity = 4, 6
+    with rf.set_static_traceable_ctx():
+        out = rf.scatter(packed.pack(x, total_bound=2), indices=idx, indices_dim=time_dim, out_dim=out_dim)
+    assert out.raw_tensor.packed_dim.dimension >= 12, out.raw_tensor
+    got = packed.unpack(out).copy_compatible_to_dims_raw([batch_dim, out_dim])
+    assert got.tolist() == [[0, 0, 0, 0, 0, 10.0], [0, 0, 0, 0, 0, 20.0]], got
+
+    # a result dim which is a sum containing the source dim is bounded by the source content plus the rest
+    rest_dim = Dim(
+        Tensor("rest_lens", dims=[batch_dim], dtype="int32", raw_tensor=torch.tensor([2, 1], dtype=torch.int32)),
+        name="rest",
+        capacity=3,
+    )
+    with rf.set_static_traceable_ctx():
+        out = rf.scatter(
+            packed.pack(x, total_bound=5),
+            indices=rf.zeros_like(idx),
+            indices_dim=time_dim,
+            out_dim=time_dim + rest_dim,
+        )
+    assert out.raw_tensor.packed_dim.dimension == 5 + 2 * 3, out.raw_tensor
+
+
+def test_scatter_relayout_only_valid_frames_write_into_their_own_sequence():
+    rf.select_backend_torch()
+    batch_dim = Dim(2, name="batch")
+
+    # a position beyond the result length of its own sequence is padding, it must not reach the next sequence
+    x, time_dim = _seqs("x", batch_dim, [2, 2], [[10.0, 30.0], [20.0, 40.0]])
+    out_dim = Dim(
+        Tensor("out_lens", dims=[batch_dim], dtype="int32", raw_tensor=torch.tensor([1, 2], dtype=torch.int32)),
+        name="out",
+    )
+    idx, _ = _seqs("idx", batch_dim, [2, 2], [[0, 1], [0, 1]])
+    idx, _ = rf.replace_dim(idx, in_dim=idx.dims[1], out_dim=time_dim)
+    out = rf.scatter(packed.pack(x), indices=idx, indices_dim=time_dim, out_dim=out_dim)
+    got = packed.unpack(out).copy_compatible_to_dims_raw([batch_dim, out_dim])
+    assert got[0, :1].tolist() == [10.0] and got[1].tolist() == [20.0, 40.0], got
+
+    # gap frames write nothing, so an explicit fill value survives at the untouched positions
+    out_dim = Dim(
+        Tensor("out_lens", dims=[batch_dim], dtype="int32", raw_tensor=torch.tensor([3, 3], dtype=torch.int32)),
+        name="out",
+    )
+    for mode in ("sum", "max", "min"):
+        ref = rf.scatter(x, indices=idx, indices_dim=time_dim, out_dim=out_dim, mode=mode, fill_value=7, use_mask=False)
+        for indices in (idx, packed.pack(idx, gap=2)):
+            out = rf.scatter(
+                packed.pack(x, gap=2),
+                indices=indices,
+                indices_dim=time_dim,
+                out_dim=out_dim,
+                mode=mode,
+                fill_value=7,
+                use_mask=False,
+            )
+            got = packed.unpack(out).copy_compatible_to_dims_raw([batch_dim, out_dim])
+            assert got.tolist() == ref.raw_tensor.tolist() == [[10.0, 30.0, 7.0], [20.0, 40.0, 7.0]], (mode, got)
+
+    # an empty result, while the source still has gap or reserved rows which would write
+    _, empty_time = _seqs("empty", batch_dim, [0, 0], [[], []])
+    empty = Tensor("empty", dims=[batch_dim, empty_time], dtype="float32", raw_tensor=torch.zeros(2, 0))
+    no_idx = Tensor("idx", dims=[batch_dim, empty_time], dtype="int32", raw_tensor=torch.zeros(2, 0, dtype=torch.int32))
+    out_dim = Dim(
+        Tensor("out_lens", dims=[batch_dim], dtype="int32", raw_tensor=torch.tensor([0, 0], dtype=torch.int32)),
+        name="out",
+    )
+    for layout in (dict(gap=2), dict(total_bound=4)):
+        out = rf.scatter(
+            packed.pack(empty, **layout),
+            indices=packed.pack(no_idx, **layout),
+            indices_dim=empty_time,
+            out_dim=out_dim,
+            use_mask=False,
+        )
+        assert packed.is_packed(out) and out.raw_tensor.inner.raw_tensor.shape[0] == 0, (layout, out.raw_tensor)
+
+
 def test_gather_into_the_indices_packing_under_cuda_graph_capture():
     """
     one captured graph, forward and backward, has to serve every batch:
@@ -2341,7 +2493,12 @@ def test_gather_into_the_indices_packing_under_cuda_graph_capture():
             frame_lens.raw_tensor.copy_(torch.tensor(n_frames, dtype=torch.int32))
         return states_pad, lattice_pad, idx_pad
 
-    batches = [((4, 2, 3), (6, 3, 5), 1), ((1, 4, 4), (2, 6, 6), 2), ((3, 0, 2), (4, 0, 1), 3), ((4, 4, 4), (6, 6, 6), 4)]
+    batches = [
+        ((4, 2, 3), (6, 3, 5), 1),
+        ((1, 4, 4), (2, 6, 6), 2),
+        ((3, 0, 2), (4, 0, 1), 3),
+        ((4, 4, 4), (6, 6, 6), 4),
+    ]
     _load(*batches[0])
     side = torch.cuda.Stream()
     side.wait_stream(torch.cuda.current_stream())
@@ -2375,6 +2532,116 @@ def test_gather_into_the_indices_packing_under_cuda_graph_capture():
             label_row += n_labels[b]
         numpy.testing.assert_allclose(grad, ref_grad, err_msg=f"lens {n_labels} {n_frames}")
         numpy.testing.assert_allclose(grad_lattice, ref_grad_lattice, err_msg=f"lens {n_labels} {n_frames}")
+
+
+def test_scatter_relayout_under_cuda_graph_capture():
+    """
+    one captured graph, forward and backward, has to serve every batch:
+    the result dim is a sum of the source dim and another one, as for a stream which other frames fill up,
+    its layout is recomputed from the device lens inside the graph,
+    and whatever must not be written (junk rows, positions outside the own result sequence) goes nowhere
+    """
+    if not torch.cuda.is_available():
+        raise unittest.SkipTest("cuda only: real graph capture")
+    rf.select_backend_torch()
+    dev = "cuda"
+    n_seqs, frame_cap, rest_cap, feat, frame_bound = 3, 4, 3, 2, 10
+    batch_dim = Dim(n_seqs, name="batch")
+    frame_lens_buf, rest_lens_buf = (torch.zeros(n_seqs, dtype=torch.int32, device=dev) for _ in range(2))
+    frame_dim, rest_dim = (
+        Dim(Tensor(name, dims=[batch_dim], dtype="int32", raw_tensor=buf), name=name, capacity=cap)
+        for name, buf, cap in (("frames", frame_lens_buf, frame_cap), ("rest", rest_lens_buf, rest_cap))
+    )
+    frame_packed = Dim(frame_bound, name="packed_frames")
+    feat_dim = Dim(feat, name="feat")
+
+    # the static buffers the graph reads, every batch is copied into them
+    x_buf = torch.zeros(frame_bound, feat, device=dev, requires_grad=True)
+    idx_buf = torch.zeros(frame_bound, dtype=torch.int32, device=dev)
+    idx_pad_buf = torch.zeros(n_seqs, frame_cap, dtype=torch.int32, device=dev)
+    out_bound = frame_bound + n_seqs * rest_cap
+    weight_buf = torch.randn(out_bound, feat, device=dev, generator=torch.Generator(dev).manual_seed(9))
+
+    def _import(name, raw, dims, **kwargs):
+        flat = Tensor(name, dims=dims, dtype=kwargs.pop("dtype", "float32"), raw_tensor=raw, **kwargs)
+        return packed.pack_import(flat, batch_dim=batch_dim, spatial_dim=frame_dim, packed_dim=frame_packed)
+
+    def _step():
+        # as the engine before every step: a dim derived from the lens memoizes its sizes when it is built,
+        # so the lens dims forget what earlier calls derived, and the sum is built (and computed) in here
+        for dim, lens_buf in ((frame_dim, frame_lens_buf), (rest_dim, rest_lens_buf)):
+            dim.reset_eager()
+            dim.dyn_size_ext.raw_tensor = lens_buf
+        out_dim = frame_dim + rest_dim
+        x = _import("x", x_buf, [frame_packed, feat_dim])
+        idx_packed = _import("idx", idx_buf, [frame_packed], dtype="int32")
+        idx_plain = Tensor("idx_plain", dims=[batch_dim, frame_dim], dtype="int32", raw_tensor=idx_pad_buf)
+        outs = []
+        with rf.set_static_traceable_ctx():
+            for indices, use_mask in ((idx_packed, False), (idx_plain, True)):
+                out = rf.scatter(x, indices=indices, indices_dim=frame_dim, out_dim=out_dim, use_mask=use_mask)
+                assert out.raw_tensor.packed_dim.dimension == out_bound, out.raw_tensor
+                outs.append(out.raw_tensor.inner.copy_transpose([out.raw_tensor.packed_dim, feat_dim]).raw_tensor)
+        (outs[0] * weight_buf + 2.0 * outs[1] * weight_buf).sum().backward()
+        return outs
+
+    def _load(n_frames, n_rest, seed):
+        """:return: the padded data of this batch, after writing it densely packed into the static buffers"""
+        gen = torch.Generator().manual_seed(seed)
+        x_pad = torch.randn(n_seqs, frame_cap, feat, generator=gen)
+        # positions up to two beyond the longest possible result, so some frames must not write at all
+        idx_pad = torch.randint(0, frame_cap + rest_cap + 2, (n_seqs, frame_cap), generator=gen, dtype=torch.int32)
+        with torch.no_grad():
+            for buf in (x_buf, idx_buf):
+                buf.zero_()
+            x_buf[: sum(n_frames)] = torch.cat([x_pad[b, :n] for b, n in enumerate(n_frames)]).to(dev)
+            idx_buf[: sum(n_frames)] = torch.cat([idx_pad[b, :n] for b, n in enumerate(n_frames)]).to(dev)
+            idx_pad_buf.copy_(idx_pad)
+            frame_lens_buf.copy_(torch.tensor(n_frames, dtype=torch.int32))
+            rest_lens_buf.copy_(torch.tensor(n_rest, dtype=torch.int32))
+        return x_pad, idx_pad
+
+    batches = [
+        ((4, 2, 3), (2, 0, 3), 1),
+        ((1, 4, 4), (3, 3, 1), 2),
+        ((3, 0, 2), (1, 0, 0), 3),
+        ((4, 4, 2), (3, 3, 3), 4),
+    ]
+    _load(*batches[0])
+    side = torch.cuda.Stream()
+    side.wait_stream(torch.cuda.current_stream())
+    with torch.cuda.stream(side):
+        _step()
+    torch.cuda.current_stream().wait_stream(side)
+    x_buf.grad = None
+    graph = torch.cuda.CUDAGraph()
+    with torch.cuda.graph(graph):
+        outs_static = _step()
+
+    for n_frames, n_rest, seed in batches:
+        x_pad, idx_pad = _load(n_frames, n_rest, seed)
+        graph.replay()
+        torch.cuda.synchronize()
+        weight = weight_buf.cpu()
+        ref = torch.zeros(out_bound, feat)
+        ref_grad = torch.zeros(frame_bound, feat)
+        frame_row = out_row = 0
+        for b in range(n_seqs):
+            out_len = n_frames[b] + n_rest[b]
+            for t in range(n_frames[b]):
+                pos = int(idx_pad[b, t])
+                if pos < out_len:
+                    ref[out_row + pos] += x_pad[b, t]
+                    ref_grad[frame_row + t] = 3.0 * weight[out_row + pos]
+            frame_row += n_frames[b]
+            out_row += out_len
+        for out_static in outs_static:
+            numpy.testing.assert_allclose(
+                out_static.detach().cpu(), ref, rtol=1e-6, atol=1e-6, err_msg=f"lens {n_frames} {n_rest}"
+            )
+        numpy.testing.assert_allclose(
+            x_buf.grad.cpu(), ref_grad, rtol=1e-6, atol=1e-6, err_msg=f"lens {n_frames} {n_rest}"
+        )
 
 
 def _scores_and_labels_over_two_time_dims() -> Tuple[Tensor, Tensor, Dim, Dim, Dim]:
