@@ -8,12 +8,16 @@ Layout:
   q: (total_q, H, D), k: (total_k, H, D), v: (total_k, H, Dv), rows of any packed layout, gaps allowed
   lo, hi: (total_q,) int32, query row i attends the key rows [lo[i], hi[i]) of the k buffer.
       An empty range (lo >= hi) gives a zero output row and no gradient.
+      Key rows which no query attends and query rows with an empty range may hold anything, NaN included
+      (gap rows, the tail of a bound-sized buffer): the kernels never read them.
 Dropout and seed work like in :mod:`rel_pos_att_triton`,
 philox on (query row, key row) with int32 offsets plus a per-head-mixed seed,
 the seed a 1-elem int32 device tensor, so CUDA-graph replays draw fresh masks.
 The backward recomputes delta in f32 (see :mod:`rel_pos_att_triton` for why).
 dk and dv are key-owned, each key block loops over the query blocks whose ranges reach it
 (from the range span of every query block), so there are no atomics and the result is deterministic.
+With torch >= 2.4, forward and backward are torch.library custom ops with fake implementations,
+so AOT tracing (the compiled step of torch_cuda_graph) sees them as opaque ops.
 Guard the import at the caller (it needs Triton, the jit decorators run at import time).
 """
 
@@ -89,17 +93,20 @@ def _key_range_fwd_kernel(
     acc = tl.zeros([BLOCK_M, BLOCK_DV], dtype=tl.float32)
     for start_n in range((span_lo // BLOCK_N) * BLOCK_N, span_hi, BLOCK_N):
         offs_n = start_n + tl.arange(0, BLOCK_N)
-        n_mask = offs_n < n_k
+        valid = (offs_n[None, :] >= lo[:, None]) & (offs_n[None, :] < hi[:, None]) & m_mask[:, None]
+        # key rows which no query of this block attends are not read at all:
+        # they can hold anything (gap rows, the tail of a bound-sized buffer, NaN),
+        # and a zero weight times NaN or inf in the matmul would still reach the other rows
+        used = (tl.max(valid.to(tl.int32), 0) > 0) & (offs_n < n_k)
         k = tl.load(
             K + offs_n[:, None] * stride_kt + h * stride_kh + offs_d[None, :],
-            mask=n_mask[:, None] & (offs_d[None, :] < D),
+            mask=used[:, None] & (offs_d[None, :] < D),
             other=0.0,
         )
         if IEEE:
             s = tl.dot(q, tl.trans(k), input_precision="ieee") * scale
         else:
             s = tl.dot(q, tl.trans(k)) * scale
-        valid = (offs_n[None, :] >= lo[:, None]) & (offs_n[None, :] < hi[:, None]) & m_mask[:, None]
         s = tl.where(valid, s, float("-inf"))
         m_new = tl.maximum(m_i, tl.max(s, 1))
         # a row without any valid key so far keeps m = -inf, exp against 0 keeps it at zero mass
@@ -118,7 +125,7 @@ def _key_range_fwd_kernel(
             p_use = p
         v = tl.load(
             V + offs_n[:, None] * stride_vt + h * stride_vh + offs_dv[None, :],
-            mask=n_mask[:, None] & (offs_dv[None, :] < DV),
+            mask=used[:, None] & (offs_dv[None, :] < DV),
             other=0.0,
         )
         if IEEE:
@@ -204,15 +211,17 @@ def _key_range_bwd_kernel_q(
     dq = tl.zeros([BLOCK_M, BLOCK_D], dtype=tl.float32)
     for start_n in range((span_lo // BLOCK_N) * BLOCK_N, span_hi, BLOCK_N):
         offs_n = start_n + tl.arange(0, BLOCK_N)
-        n_mask = offs_n < n_k
+        valid = (offs_n[None, :] >= lo[:, None]) & (offs_n[None, :] < hi[:, None]) & m_mask[:, None]
+        # unused key rows are not read, see the forward
+        used = (tl.max(valid.to(tl.int32), 0) > 0) & (offs_n < n_k)
         k = tl.load(
             K + offs_n[:, None] * stride_kt + h * stride_kh + offs_d[None, :],
-            mask=n_mask[:, None] & (offs_d[None, :] < D),
+            mask=used[:, None] & (offs_d[None, :] < D),
             other=0.0,
         )
         v = tl.load(
             V + offs_n[:, None] * stride_vt + h * stride_vh + offs_dv[None, :],
-            mask=n_mask[:, None] & (offs_dv[None, :] < DV),
+            mask=used[:, None] & (offs_dv[None, :] < DV),
             other=0.0,
         )
         if IEEE:
@@ -221,16 +230,17 @@ def _key_range_bwd_kernel_q(
         else:
             s = tl.dot(q, tl.trans(k)) * scale
             dp = tl.dot(do, tl.trans(v))
-        valid = (offs_n[None, :] >= lo[:, None]) & (offs_n[None, :] < hi[:, None]) & m_mask[:, None]
         p = tl.where(valid, tl.exp(s - lse[:, None]), 0.0)
         if ENABLE_DROPOUT:
             offs = offs_m[:, None] * n_k + offs_n[None, :]
             keep = tl.rand(tl.load(Seed) + h * 1000003, offs) >= dropout_p
             dp = tl.where(keep, dp / (1.0 - dropout_p), 0.0)
         if COMPUTE_DELTA:
+            # NaN for a query without keys whose gradient holds NaN, only ever read through the select below
             delta += tl.sum(p * dp, 1)
         else:
-            ds = p * (dp - delta[:, None])
+            # a select, not a product with p = 0: a query without keys may hold NaN in its gradient
+            ds = tl.where(valid, p * (dp - delta[:, None]), 0.0)
             if IEEE:
                 dq += tl.dot(ds.to(k.dtype), k, input_precision="ieee") * scale
             else:
@@ -312,14 +322,19 @@ def _key_range_bwd_kernel_kv(
             m_mask = offs_m < n_q
             lo = tl.load(Lo + offs_m, mask=m_mask, other=0)
             hi = tl.load(Hi + offs_m, mask=m_mask, other=0)
+            valid = (offs_n[None, :] >= lo[:, None]) & (offs_n[None, :] < hi[:, None])
+            valid = valid & m_mask[:, None] & n_mask[None, :]
+            # query rows which attend no key of this block are not read (they can hold anything, see the forward),
+            # else a zero weight times their q or gradient would still reach dk and dv
+            row_used = tl.max(valid.to(tl.int32), 1) > 0
             q = tl.load(
                 Q + offs_m[:, None] * stride_qt + h * stride_qh + offs_d[None, :],
-                mask=m_mask[:, None] & (offs_d[None, :] < D),
+                mask=row_used[:, None] & (offs_d[None, :] < D),
                 other=0.0,
             )
             do = tl.load(
                 DO + offs_m[:, None] * stride_dot + h * stride_doh + offs_dv[None, :],
-                mask=m_mask[:, None] & (offs_dv[None, :] < DV),
+                mask=row_used[:, None] & (offs_dv[None, :] < DV),
                 other=0.0,
             )
             lse = tl.load(Lse + offs_m * H + h, mask=m_mask, other=0.0)
@@ -328,8 +343,6 @@ def _key_range_bwd_kernel_kv(
                 s = tl.dot(q, tl.trans(k), input_precision="ieee") * scale
             else:
                 s = tl.dot(q, tl.trans(k)) * scale
-            valid = (offs_n[None, :] >= lo[:, None]) & (offs_n[None, :] < hi[:, None])
-            valid = valid & m_mask[:, None] & n_mask[None, :]
             p = tl.where(valid, tl.exp(s - lse[:, None]), 0.0)
             if ENABLE_DROPOUT:
                 offs = offs_m[:, None] * n_k + offs_n[None, :]
@@ -346,7 +359,8 @@ def _key_range_bwd_kernel_kv(
             if ENABLE_DROPOUT:
                 # noinspection PyUnboundLocalVariable
                 dp = tl.where(keep, dp / (1.0 - dropout_p), 0.0)
-            ds = p * (dp - delta[:, None])
+            # a select, not a product with p = 0: this block's own key rows can hold NaN where nobody attends them
+            ds = tl.where(valid, p * (dp - delta[:, None]), 0.0)
             if IEEE:
                 dk += tl.dot(tl.trans(ds.to(q.dtype)), q, input_precision="ieee") * scale
             else:
@@ -561,6 +575,75 @@ class _KeyRangeAtt(torch.autograd.Function):
         return dq.to(q.dtype), dk.to(k.dtype), dv.to(v.dtype), None, None, None, None, None
 
 
+_HAVE_LIB_OPS = False
+if hasattr(torch.library, "custom_op"):  # torch >= 2.4
+    # Opaque ops with fake implementations and a registered backward, like in rel_pos_att_triton:
+    # AOT tracing (the compiled step of torch_cuda_graph, no Dynamo) runs on fake tensors,
+    # which the Triton launch of the autograd.Function above cannot take.
+
+    @torch.library.custom_op("returnn::key_range_att_fwd", mutates_args=())
+    def _lib_fwd(
+        q: torch.Tensor,
+        k: torch.Tensor,
+        v: torch.Tensor,
+        lo: torch.Tensor,
+        hi: torch.Tensor,
+        dropout_p: float,
+        seed: torch.Tensor,
+        scale: float,
+    ) -> Tuple[torch.Tensor, torch.Tensor]:
+        # contiguous: Inductor feeds custom ops in whatever layout it likes, the fake promises contiguous outputs
+        q, k, v, lo, hi = q.contiguous(), k.contiguous(), v.contiguous(), lo.contiguous(), hi.contiguous()
+        out, lse = key_range_att_fwd(q, k, v, lo, hi, dropout_p=dropout_p, seed=seed, scale=scale)
+        return out, lse
+
+    @_lib_fwd.register_fake
+    def _lib_fwd_fake(q, k, v, lo, hi, dropout_p, seed, scale):
+        del k, lo, hi, dropout_p, seed, scale
+        n_q, n_heads, _ = q.shape
+        return v.new_empty((n_q, n_heads, v.shape[-1])), q.new_empty((n_q, n_heads), dtype=torch.float32)
+
+    @torch.library.custom_op("returnn::key_range_att_bwd", mutates_args=())
+    def _lib_bwd(
+        q: torch.Tensor,
+        k: torch.Tensor,
+        v: torch.Tensor,
+        lo: torch.Tensor,
+        hi: torch.Tensor,
+        lse: torch.Tensor,
+        d_out: torch.Tensor,
+        dropout_p: float,
+        seed: torch.Tensor,
+        scale: float,
+    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        q, k, v, lo, hi = q.contiguous(), k.contiguous(), v.contiguous(), lo.contiguous(), hi.contiguous()
+        dq, dk, dv = key_range_att_bwd(
+            q, k, v, lo, hi, lse.contiguous(), d_out.contiguous(), dropout_p=dropout_p, seed=seed, scale=scale
+        )
+        return dq.to(q.dtype), dk.to(k.dtype), dv.to(v.dtype)
+
+    @_lib_bwd.register_fake
+    def _lib_bwd_fake(q, k, v, lo, hi, lse, d_out, dropout_p, seed, scale):
+        del lo, hi, lse, d_out, dropout_p, seed, scale
+        return q.new_empty(tuple(q.shape)), k.new_empty(tuple(k.shape)), v.new_empty(tuple(v.shape))
+
+    def _lib_setup_context(ctx, inputs, output):
+        q, k, v, lo, hi, dropout_p, seed, scale = inputs
+        _, lse = output
+        ctx.save_for_backward(q, k, v, lo, hi, lse, seed)
+        ctx.dropout_p, ctx.scale = dropout_p, scale
+
+    def _lib_backward(ctx, d_out, d_lse):
+        d_lse  # noqa  # unused (lse non-differentiable)
+        q, k, v, lo, hi, lse, seed = ctx.saved_tensors
+        dq, dk, dv = torch.ops.returnn.key_range_att_bwd(q, k, v, lo, hi, lse, d_out, ctx.dropout_p, seed, ctx.scale)
+        return dq, dk, dv, None, None, None, None, None
+
+    torch.library.register_autograd("returnn::key_range_att_fwd", _lib_backward, setup_context=_lib_setup_context)
+
+    _HAVE_LIB_OPS = True
+
+
 def key_range_att(
     q: torch.Tensor,
     k: torch.Tensor,
@@ -594,5 +677,8 @@ def key_range_att(
         seed = torch.randint(0, 2**31 - 1, (1,), dtype=torch.int32, device=q.device) if dropout_p > 0 else 0
     q, k, v = q.contiguous(), k.contiguous(), v.contiguous()
     lo, hi = lo.to(torch.int32).contiguous(), hi.to(torch.int32).contiguous()
+    if _HAVE_LIB_OPS:
+        out, _ = torch.ops.returnn.key_range_att_fwd(q, k, v, lo, hi, dropout_p, _seed_tensor(seed, q.device), scale)
+        return out
     out, _ = _KeyRangeAtt.apply(q, k, v, lo, hi, dropout_p, seed, scale)
     return out
