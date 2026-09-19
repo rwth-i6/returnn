@@ -3070,6 +3070,24 @@ class PackedBackend(Backend[PackedRawTensor]):
         return raw.rewrap(rf.stop_gradient(raw.inner), name="stop_gradient")
 
     @staticmethod
+    def is_finite(x: Tensor) -> Tensor:
+        """is finite -- elementwise, on the packed data"""
+        raw = _raw(x)
+        return raw.rewrap(rf.is_finite(raw.inner), name="is_finite")
+
+    @staticmethod
+    def is_infinite(x: Tensor) -> Tensor:
+        """is positive or negative infinite -- elementwise, on the packed data"""
+        raw = _raw(x)
+        return raw.rewrap(rf.is_infinite(raw.inner), name="is_infinite")
+
+    @staticmethod
+    def is_neg_infinite(x: Tensor) -> Tensor:
+        """is negative infinite -- elementwise, on the packed data"""
+        raw = _raw(x)
+        return raw.rewrap(rf.is_neg_infinite(raw.inner), name="is_neg_infinite")
+
+    @staticmethod
     def activation_raw(raw_tensor: PackedRawTensor, func: str) -> PackedRawTensor:
         """elementwise -- applied directly on the packed data"""
         inner_out = raw_tensor.inner.copy_template(name=func)
@@ -4343,6 +4361,11 @@ class PackedBackend(Backend[PackedRawTensor]):
         Anything else takes the generic dim-aware route.
         """
         kwargs = dict(indices=indices, indices_dim=indices_dim, mode=mode, fill_value=fill_value, out_dim=out_dim)
+        if not is_packed(source) and is_packed(indices):
+            # e.g. the ones which count the writes per position: a plain source follows the packing of the indices
+            idx_raw = _raw(indices)
+            if any(d in source.dims for d in idx_raw.orig_dims):
+                source = idx_raw.rewrap(_pack_like(source, idx_raw), name=source.name)
         out = _scatter_relayout(source, **kwargs) if is_packed(source) else None
         if out is not None:
             return out

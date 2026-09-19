@@ -2428,6 +2428,36 @@ def test_scatter_relayout_only_valid_frames_write_into_their_own_sequence():
             assert packed.is_packed(out) and out.raw_tensor.inner.raw_tensor.shape[0] == 0, (layout, out.raw_tensor)
 
 
+def test_scatter_modes_which_the_frontend_composes_from_several_scatters():
+    """
+    mean, logsumexp, logmeanexp and the correction for an explicit fill value are compositions:
+    they count the writes per position by scattering plain ones, which has to follow packed indices,
+    and they ask where a maximum is -inf, which is elementwise
+    """
+    rf.select_backend_torch()
+    batch_dim = Dim(2, name="batch")
+    x, time_dim = _seqs("x", batch_dim, [3, 2], [[1.0, 2.0, 4.0], [8.0, 16.0]])
+    idx, _ = _seqs("idx", batch_dim, [3, 2], [[0, 0, 2], [1, 1]])
+    idx, _ = rf.replace_dim(idx, in_dim=idx.dims[1], out_dim=time_dim)
+    out_dim = Dim(
+        Tensor("out_lens", dims=[batch_dim], dtype="int32", raw_tensor=torch.tensor([3, 2], dtype=torch.int32)),
+        name="out",
+    )
+    for kwargs in (
+        dict(mode="mean"),
+        dict(mode="logsumexp"),
+        dict(mode="logmeanexp"),
+        dict(mode="max", fill_value=7, use_mask=True),
+        dict(mode="sum", fill_value=7, use_mask=True),
+    ):
+        ref = rf.scatter(x, indices=idx, indices_dim=time_dim, out_dim=out_dim, **kwargs)
+        for indices in (idx, packed.pack(idx)):
+            packed._warned_fallback_ops.clear()
+            out = rf.scatter(packed.pack(x), indices=indices, indices_dim=time_dim, out_dim=out_dim, **kwargs)
+            assert packed.is_packed(out) and not packed._warned_fallback_ops, (kwargs, packed._warned_fallback_ops)
+            _assert_equal_non_padded(out, ref, batch_dim, out_dim)
+
+
 def test_scatter_relayout_rows_which_write_nothing_get_a_zero_gradient():
     """
     whatever a row outside the sequences holds must not come back through the discarded row:
