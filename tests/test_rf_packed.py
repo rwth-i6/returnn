@@ -1529,8 +1529,11 @@ def test_chunked_rel_pos_att_triton_kernel_grad():
 
 def test_key_range_att_triton_kernel_grad():
     # The kernel where every query row attends one range of key rows: fwd + all grads vs masked energies,
-    # at dropout 0 and at dropout > 0 with the kernel's own extracted mask. The ranges overlap, repeat,
-    # come in any order, cross block borders, cover everything or nothing, and the head dims are no powers of 2.
+    # at dropout 0 and at dropout > 0 with the kernel's own extracted mask, in f32, bf16 and f16.
+    # The ranges overlap, repeat, come in any order, cross block borders, cover all attended keys or nothing,
+    # and the head dims are no powers of 2.
+    # The rows which take no part (keys nobody attends, queries without keys and their gradient) hold NaN,
+    # as gap rows or the tail of a bound-sized packed buffer may: nothing of them may reach the other rows.
     rf.select_backend_torch()
     if not torch.cuda.is_available():
         raise unittest.SkipTest("needs CUDA")
@@ -1540,15 +1543,21 @@ def test_key_range_att_triton_kernel_grad():
         raise unittest.SkipTest(f"triton not available ({exc})")
 
     dev = "cuda"
-    n_q, n_k, n_heads = 150, 170, 2
+    n_q, n_k, n_attended, n_heads = 150, 170, 150, 2
     gen = torch.Generator(device="cpu").manual_seed(21)
-    lo = torch.randint(0, n_k, (n_q,), generator=gen)
-    hi = torch.clamp(lo + torch.randint(0, 90, (n_q,), generator=gen), max=n_k)
-    lo[:5], hi[:5] = 0, n_k
+    lo = torch.randint(0, n_attended, (n_q,), generator=gen)
+    hi = torch.clamp(lo + torch.randint(0, 90, (n_q,), generator=gen), max=n_attended)
+    lo[:5], hi[:5] = 0, n_attended
     lo[5:10], hi[5:10] = 30, 30
     lo, hi = lo.to(dev), hi.to(dev)
     cols = torch.arange(n_k, device=dev)
     allowed = (cols[None, :] >= lo[:, None]) & (cols[None, :] < hi[:, None])
+    empty_queries, unused_keys = ~allowed.any(1), ~allowed.any(0)
+    tolerances = {  # rtol, atol of the output, atol of the grads
+        torch.float32: (1e-4, 1e-5, 1e-4),
+        torch.bfloat16: (5e-2, 5e-2, 5e-2),
+        torch.float16: (5e-3, 5e-3, 5e-3),
+    }
 
     def _reference(q, k, v, keep_mask, dropout_p, scale):
         s = torch.einsum("ihd,jhd->hij", q, k) * scale
@@ -1559,31 +1568,53 @@ def test_key_range_att_triton_kernel_grad():
             w = w * keep_mask.permute(1, 0, 2).float() / (1.0 - dropout_p)
         return torch.einsum("hij,jhd->ihd", w, v)
 
-    for d, d_v, dropout_p, seed in [(32, 32, 0.0, 0), (32, 32, 0.3, 999), (24, 40, 0.0, 0), (128, 128, 0.2, 7)]:
+    f32, bf16, f16 = torch.float32, torch.bfloat16, torch.float16
+    for d, d_v, dropout_p, seed, dtype in [
+        (32, 32, 0.0, 0, f32),
+        (32, 32, 0.3, 999, f32),
+        (24, 40, 0.0, 0, f32),
+        (128, 128, 0.2, 7, f32),
+        (32, 32, 0.2, 5, bf16),
+        (128, 128, 0.0, 0, f16),
+    ]:
+        rtol, atol_out, atol_grad = tolerances[dtype]
         scale = d**-0.5
+        clean = [
+            torch.randn(n, n_heads, dim, generator=gen).to(dev, dtype) for n, dim in ((n_q, d), (n_k, d), (n_k, d_v))
+        ]
         leaves = [
-            torch.randn(n, n_heads, dim, generator=gen).to(dev).requires_grad_(True)
-            for n, dim in ((n_q, d), (n_k, d), (n_k, d_v))
+            torch.where(rows[:, None, None], float("nan"), x).requires_grad_(True)
+            for x, rows in zip(clean, (empty_queries, unused_keys, unused_keys))
         ]
         out = m.key_range_att(*leaves, lo, hi, dropout_p=dropout_p, seed=seed, scale=scale)
-        d_out = torch.randn(n_q, n_heads, d_v, generator=gen).to(dev)
-        out.backward(d_out)
-        grads_kernel = [t.grad.clone() for t in leaves]
-        for t in leaves:
-            t.grad = None
+        d_out = torch.randn(n_q, n_heads, d_v, generator=gen).to(dev, dtype)
+        out.backward(torch.where(empty_queries[:, None, None], float("nan"), d_out))
+        refs = [x.float().requires_grad_(True) for x in clean]
         keep = None
         if dropout_p:
             keep = m.dump_keep_mask(n_q, n_heads, n_k, dropout_p=dropout_p, seed=seed, device=dev)
-        ref = _reference(*leaves, keep, dropout_p, scale)
-        where = f"d {d} d_v {d_v} dropout {dropout_p}"
+        ref = _reference(*refs, keep, dropout_p, scale)
+        where = f"d {d} d_v {d_v} dropout {dropout_p} {dtype}"
         numpy.testing.assert_allclose(
-            out.detach().cpu().numpy(), ref.detach().cpu().numpy(), rtol=1e-4, atol=1e-5, err_msg=where
+            out.detach().float().cpu().numpy(), ref.detach().cpu().numpy(), rtol=rtol, atol=atol_out, err_msg=where
         )
-        ref.backward(d_out)
-        for g_kernel, t in zip(grads_kernel, leaves):
+        ref.backward(d_out.float())
+        for t, t_ref in zip(leaves, refs):
             numpy.testing.assert_allclose(
-                g_kernel.cpu().numpy(), t.grad.cpu().numpy(), rtol=1e-4, atol=1e-4, err_msg=where
+                t.grad.float().cpu().numpy(), t_ref.grad.cpu().numpy(), rtol=rtol, atol=atol_grad, err_msg=where
             )
+
+    # The op traces under AOT autograd (fake tensors), as the compiled step of torch_cuda_graph does it.
+    from functorch.compile import aot_function, nop
+
+    def _loss(q_, k_, v_, lo_, hi_):
+        return m.key_range_att(q_, k_, v_, lo_, hi_).square().sum()
+
+    leaves = [torch.randn(n, n_heads, 32, generator=gen).to(dev).requires_grad_(True) for n in (n_q, n_k, n_k)]
+    traced = aot_function(_loss, fw_compiler=nop, bw_compiler=nop)
+    grads = torch.autograd.grad(traced(*leaves, lo, hi), leaves)
+    for g, g_ref in zip(grads, torch.autograd.grad(_loss(*leaves, lo, hi), leaves)):
+        torch.testing.assert_close(g, g_ref)
 
     # Under CUDA-graph capture, the default seed is drawn inside the graph, so every replay drops other weights.
     q, k, v = (torch.randn(n, n_heads, 32, generator=gen).to(dev) for n in (n_q, n_k, n_k))
