@@ -2421,14 +2421,40 @@ def test_scatter_relayout_only_valid_frames_write_into_their_own_sequence():
         name="out",
     )
     for layout in (dict(gap=2), dict(total_bound=4)):
-        out = rf.scatter(
-            packed.pack(empty, **layout),
-            indices=packed.pack(no_idx, **layout),
-            indices_dim=empty_time,
-            out_dim=out_dim,
-            use_mask=False,
-        )
-        assert packed.is_packed(out) and out.raw_tensor.inner.raw_tensor.shape[0] == 0, (layout, out.raw_tensor)
+        for indices in (no_idx, packed.pack(no_idx, **layout)):
+            out = rf.scatter(
+                packed.pack(empty, **layout), indices=indices, indices_dim=empty_time, out_dim=out_dim, use_mask=False
+            )
+            assert packed.is_packed(out) and out.raw_tensor.inner.raw_tensor.shape[0] == 0, (layout, out.raw_tensor)
+
+
+def test_scatter_relayout_rows_which_write_nothing_get_a_zero_gradient():
+    """
+    whatever a row outside the sequences holds must not come back through the discarded row:
+    the backward of a max or min divides by the number of sources equal to the result, and nan equals nothing
+    """
+    rf.select_backend_torch()
+    batch_dim = Dim(2, name="batch")
+    idx, time_dim = _seqs("idx", batch_dim, [1, 1], [[0], [1]])
+    out_dim = Dim(
+        Tensor("out_lens", dims=[batch_dim], dtype="int32", raw_tensor=torch.tensor([2, 2], dtype=torch.int32)),
+        name="out",
+    )
+    packed_dim = Dim(4, name="packed")
+    buf = torch.tensor([1.0, 2.0, float("nan"), float("nan")], requires_grad=True)
+    x = packed.pack_import(
+        Tensor("x", dims=[packed_dim], dtype="float32", raw_tensor=buf),
+        batch_dim=batch_dim,
+        spatial_dim=time_dim,
+        packed_dim=packed_dim,
+    )
+    for mode in ("sum", "max", "min"):
+        for use_mask in (False, True):
+            out = rf.scatter(x, indices=idx, indices_dim=time_dim, out_dim=out_dim, mode=mode, use_mask=use_mask)
+            got = packed.unpack(out).copy_compatible_to_dims_raw([batch_dim, out_dim])
+            assert (got[0, 0], got[1, 1]) == (1.0, 2.0), (mode, use_mask, got)
+            (grad,) = torch.autograd.grad(got[0, 0] + got[1, 1], buf)
+            assert grad.tolist() == [1.0, 1.0, 0.0, 0.0], (mode, use_mask, grad)
 
 
 def test_gather_into_the_indices_packing_under_cuda_graph_capture():
