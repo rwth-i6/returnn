@@ -373,6 +373,33 @@ def test_smoothed_ce_bwd_inductor_pattern():
     assert graph_capture._smoothed_ce_bwd_match_count > count_before, "CE bwd pattern did not fire"
 
 
+def test_all_reduce_sum_traces():
+    """
+    the differentiable all-reduce (the synchronized BatchNorm statistics go through it) traces under AOT autograd:
+    the compiled step of torch_cuda_graph runs on fake tensors, which a direct collective call cannot take
+    """
+    import torch.distributed as dist
+    from functorch.compile import aot_function, nop
+    from returnn.torch.util.distributed import all_reduce_sum
+
+    own_group = not dist.is_initialized()
+    if own_group:
+        dist.init_process_group("gloo", store=dist.HashStore(), rank=0, world_size=1)
+    try:
+
+        def _loss(x_):
+            return all_reduce_sum(x_ * 2.0).square().sum()
+
+        x = torch.randn(5, requires_grad=True)
+        (ref,) = torch.autograd.grad(_loss(x), x)
+        traced = aot_function(_loss, fw_compiler=nop, bw_compiler=nop)
+        (grad,) = torch.autograd.grad(traced(x), x)
+        torch.testing.assert_close(grad, ref)
+    finally:
+        if own_group:
+            dist.destroy_process_group()
+
+
 def test_masked_select_bound():
     from returnn.torch.util.array_ import masked_select_bound
 
