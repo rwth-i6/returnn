@@ -313,6 +313,8 @@ class Engine(EngineBase):
                 # to put the running statistics back after the warm runs, see _training_state_preserved
                 get_buffers=lambda: list(self._pt_model.buffers()),
                 rf_params=(list(self._orig_model.parameters()) if isinstance(self._orig_model, rf.Module) else None),
+                # opts "compile" with a torch module model: its parameters are found on the modules themselves
+                pt_model=self._pt_model,
                 # lets the capture infer a missing packed_total_bound from the content budget
                 packed_batch_size=self.config.typed_value("packed_batch_size", None),
             )
