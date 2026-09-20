@@ -2466,6 +2466,42 @@ def test_scatter_into_a_sum_dim_bounds_both_parts_alike():
     assert got[:, :3].tolist() == [[1.0, 2.0, 7.0], [3.0, 8.0, 0.0]], got
 
 
+def test_gather_relayout_static_buffer_takes_the_proven_bound_of_the_result_dim():
+    """
+    under static tracing a gather along the packed dim into another time dim gets a static buffer.
+    Where a packing over the result dim already proves a bound on its total, that bound sizes it.
+    The capacity ratio of the two dims only holds where the result lengths follow the source lengths
+    (strides, windows), not e.g. for text codes read at the encoder frames, which are a few more per sequence:
+    short sequences then need more rows than the ratio allows
+    """
+    rf.select_backend_torch()
+    batch_dim = Dim(2, name="batch")
+
+    def _wide(name, lens, capacity, rows, dtype="float32"):
+        """a [batch, time] tensor as wide as the capacity, which static tracing demands"""
+        dim = Dim(
+            Tensor(f"{name}_lens", dims=[batch_dim], dtype="int32", raw_tensor=torch.tensor(lens, dtype=torch.int32)),
+            name=f"{name}_time",
+            capacity=capacity,
+        )
+        x = Tensor(name, dims=[batch_dim, dim], dtype=dtype)
+        pad = torch.int32 if dtype == "int32" else torch.float32
+        x.raw_tensor = torch.tensor([row + [0] * (capacity - len(row)) for row in rows]).to(pad)
+        return x, dim
+
+    codes, text_dim = _wide("codes", [1, 1], 5, [[7.0], [9.0]])
+    frames, enc_dim = _wide("frames", [5, 4], 9, [[0.0] * 5, [0.0] * 4])
+    with rf.set_static_traceable_ctx():
+        frames_packed = packed.pack(frames, total_bound=11)
+        idx = rf.range_over_dim(enc_dim)
+        out = rf.gather(packed.pack(codes, total_bound=2), indices=idx, axis=text_dim, clip_to_valid=True)
+        both = out + frames_packed
+    # the ratio gives 2 * 9 / 5 plus a row per sequence = 6 rows, the frames need 5 + 4
+    assert out.raw_tensor.packed_dim.dimension >= 5 + 4, out.raw_tensor
+    got = packed.unpack(both).copy_compatible_to_dims_raw([batch_dim, enc_dim])
+    assert got[0, :5].tolist() == [7.0] * 5 and got[1, :4].tolist() == [9.0] * 4, got
+
+
 def test_scatter_relayout_only_valid_frames_write_into_their_own_sequence():
     rf.select_backend_torch()
     batch_dim = Dim(2, name="batch")

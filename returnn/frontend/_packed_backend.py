@@ -5429,11 +5429,19 @@ def _gather_out_packed_dim(
     :return: the packed dim for a re-laid-out gather.
         Static when tracing, since a captured buffer size must not vary per batch;
         the exact total otherwise.
-        The static size is the input content bound scaled by the capacity ratio,
+        The static size is what a packing over the result dim already proves about its total
+        (see :func:`_record_total_bound`), e.g. for text codes read at the encoder frames.
+        Without one (a fresh dim of a stride or a window, whose lengths follow those of the source)
+        it is the input content bound scaled by the capacity ratio,
         plus one frame per sequence for the per-sequence rounding up a stride can cost.
     """
     if not rf.is_static_traceable():
         return Dim(rf.copy_to_device(rf.reduce_sum(out_lens, axis=batch), dev), name="gather_packed")
+    proven = _total_bounds.get(out_spatial_dim)
+    if proven is not None:
+        # the ratio below holds only where the result lengths follow the source lengths,
+        # which a dim with a packing of its own does not promise
+        return Dim(proven, name="gather_packed")
     in_spatial_dim = in_raw.orig_dims[-1]
     # noinspection PyProtectedMember
     in_cap = in_spatial_dim.capacity or in_spatial_dim._derived_capacity()
