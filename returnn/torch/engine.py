@@ -1737,6 +1737,19 @@ class Engine(EngineBase):
         assert count_bytes > 0
         return count_bytes
 
+    def finalize(self, error_occurred: bool = False):
+        """
+        Called at the very end of a RETURNN run (:func:`returnn.__main__.finalize`),
+        before the process group is destroyed, which a live captured graph would block
+        (see :func:`returnn.torch.util.graph_capture.GraphCapturedTrainStep.release`).
+
+        :param error_occurred:
+        """
+        del error_occurred  # the graph is released either way
+        if self._graph_capture is not None:
+            self._graph_capture.release()
+            self._graph_capture = None
+
     def _check_missing_eval(self):
         """
         Checks if there are outstanding tasks (eval_model) for the epoch,
