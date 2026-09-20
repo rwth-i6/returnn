@@ -2571,6 +2571,51 @@ def test_scatter_relayout_static_buffer_holds_every_result():
     assert out.raw_tensor.packed_dim.dimension == 5 + 2 * 3, out.raw_tensor
 
 
+def test_scatter_into_a_sum_dim_bounds_both_parts_alike():
+    """
+    Two sources written into one stream (the frames and the labels of an interleaved step) have to land in
+    the same layout, so that the parts can be added row by row.
+    Every part of the result dim is bounded by the tighter of what a packing over it holds and what its
+    capacity allows, which is the same number whichever source the scatter starts from.
+    """
+    rf.select_backend_torch()
+    batch_dim = Dim(2, name="batch")
+
+    def _wide(name, lens, capacity, rows, dtype="float32", sparse_dim=None):
+        """a [batch, time] tensor as wide as the capacity, which static tracing demands"""
+        dim = Dim(
+            Tensor(f"{name}_lens", dims=[batch_dim], dtype="int32", raw_tensor=torch.tensor(lens, dtype=torch.int32)),
+            name=f"{name}_time",
+            capacity=capacity,
+        )
+        x = Tensor(name, dims=[batch_dim, dim], dtype=dtype, sparse_dim=sparse_dim)
+        pad = torch.int32 if dtype == "int32" else torch.float32
+        x.raw_tensor = torch.tensor([row + [0] * (capacity - len(row)) for row in rows]).to(pad)
+        return x, dim
+
+    a, a_dim = _wide("a", [2, 1], 5, [[1.0, 2.0], [3.0]])
+    b, b_dim = _wide("b", [1, 1], 3, [[7.0], [8.0]])
+    out_dim = a_dim + b_dim
+    idx_a, _ = _wide("idx_a", [2, 1], 5, [[0, 1], [0]], dtype="int32", sparse_dim=out_dim)
+    idx_a, _ = rf.replace_dim(idx_a, in_dim=idx_a.dims[1], out_dim=a_dim)
+    idx_b, _ = _wide("idx_b", [1, 1], 3, [[2], [1]], dtype="int32", sparse_dim=out_dim)
+    idx_b, _ = rf.replace_dim(idx_b, in_dim=idx_b.dims[1], out_dim=b_dim)
+    with rf.set_static_traceable_ctx():
+        # the content bound of a is loose (20 rows for at most 2 * 5), the one of b is tight
+        a_packed, b_packed = packed.pack(a, total_bound=20), packed.pack(b, total_bound=4)
+        part_a = rf.scatter(a_packed, indices=idx_a, indices_dim=a_dim, out_dim=out_dim)
+        part_b = rf.scatter(b_packed, indices=idx_b, indices_dim=b_dim, out_dim=out_dim)
+        both = part_a + part_b
+    rows = 2 * 5 + 4  # a by its capacity, b by its content
+    for name, part in (("a", part_a), ("b", part_b), ("sum", both)):
+        assert part.raw_tensor.packed_dim.dimension == rows, (name, part.raw_tensor)
+    raw_a, raw_b = packed._raw(part_a), packed._raw(part_b)
+    assert (raw_a.orig_dims, raw_a.gap, raw_a.align) == (raw_b.orig_dims, raw_b.gap, raw_b.align), (raw_a, raw_b)
+    assert raw_a.layout_lens is raw_b.layout_lens, (raw_a, raw_b)
+    got = packed.unpack(both).copy_compatible_to_dims_raw([batch_dim, out_dim])
+    assert got[:, :3].tolist() == [[1.0, 2.0, 7.0], [3.0, 8.0, 0.0]], got
+
+
 def test_scatter_relayout_only_valid_frames_write_into_their_own_sequence():
     rf.select_backend_torch()
     batch_dim = Dim(2, name="batch")
