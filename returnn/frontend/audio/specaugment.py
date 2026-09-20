@@ -198,20 +198,28 @@ def random_mask(
         k=num if isinstance(num, int) else (num_bound if num_bound is not None else max_num),
     )
     # indices should be sorted, and of shape (batch,num), entries (int32) in [0,dim).
-    # Apply ALL masks in one fused pass
-    # (one amount draw, one broadcast compare over (batch,k,dim), one any-reduce, one where)
-    # instead of a per-mask loop -- k-proportional kernels fewer, same mask distribution.
-    # With tensor num, mask slots beyond a seq's num are gated off.
+    # Apply ALL masks in one pass (one amount draw) instead of a per-mask loop, same mask distribution.
+    # Every mask [pos,pos2) adds one at its start and takes it back at its end,
+    # so a position is masked where the running sum is positive.
+    # That needs (batch,dim) entries, where comparing every position against every mask needs (batch,k,dim),
+    # e.g. 128 MB of bools per kernel at 200 seqs, 160 masks and 4000 frames. The mask is the same.
+    # With tensor num, mask slots beyond a seq's num are gated off,
+    # and so is a mask starting beyond its seq (more masks than frames), which covers nothing.
     dim = mask_axis.get_size_tensor_or_int(device=indices.device)
     pos = rf.cast(indices, dtype=dim.dtype if isinstance(dim, Tensor) else rf.get_default_array_index_dtype())
     amount = rf.random_uniform(pos.dims, minval=1, maxval=max_dims + 1, dtype=pos.dtype, device=pos.device)
     pos2 = rf.minimum(pos + amount, dim)
-    idxs = rf.range_over_dim(mask_axis, dtype=pos.dtype, device=pos.device)  # (dim,)
-    cond = rf.compare_bc(idxs, ">=", pos) & rf.compare_bc(idxs, "<", pos2)  # (batch,k,dim)
+    active = pos < dim
     if isinstance(num, Tensor):
         num = rf.copy_to_device(num, x.device)
-        cond = cond & rf.compare_bc(rf.range_over_dim(k_dim, device=num.device), "<", num)
-    cond = rf.reduce_any(cond, axis=k_dim)
+        active = active & rf.compare_bc(rf.range_over_dim(k_dim, device=num.device), "<", num)
+    # an end at the very end of the axis has no position to take the one back at, and none which would read it
+    ends_inside = active & (pos2 < mask_axis.get_dim_value())
+    starts = rf.scatter(rf.cast(active, "int32"), indices=pos, indices_dim=k_dim, out_dim=mask_axis)
+    ends = rf.scatter(
+        rf.cast(ends_inside, "int32"), indices=rf.where(ends_inside, pos2, 0), indices_dim=k_dim, out_dim=mask_axis
+    )
+    cond = rf.cumsum(starts - ends, spatial_dim=mask_axis) > 0  # (batch,dim)
     x = rf.where(cond, mask_value, x)
     return x
 

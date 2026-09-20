@@ -3705,6 +3705,90 @@ def test_regap_restoring_a_layout_lens_layout_needs_a_bound():
     _assert_equal_non_padded(out, x, batch_dim, time_dim)
 
 
+def test_random_mask_equals_the_per_mask_comparison_without_its_size():
+    """
+    random_mask has to give the mask of the per-mask comparison, every position against every drawn interval,
+    from the same draws, but without ever holding masks times positions entries:
+    at 200 sequences, 160 masks and 4000 frames that comparison is 128 MB of bools per kernel.
+    Sequences shorter than the number of masks, and an empty one, draw intervals which cover nothing
+    """
+    from unittest import mock
+    from torch.utils._python_dispatch import TorchDispatchMode
+    from torch.utils._pytree import tree_leaves
+
+    class _MaxNumel(TorchDispatchMode):
+        value = 0
+
+        def __torch_dispatch__(self, func, types, args=(), kwargs=None):
+            out = func(*args, **(kwargs or {}))
+            for leaf in tree_leaves(out):
+                if isinstance(leaf, torch.Tensor):
+                    self.value = max(self.value, leaf.numel())
+            return out
+
+    rf.select_backend_torch()
+    lens, capacity, min_num, max_num, max_amount = (40, 25, 3, 0), 48, 4, 6, 5
+    for layout in ("padded", "packed", "packed static traceable"):
+        x, batch_dim, time_dim, feat_dim = _make_input(batch_size=len(lens), seq_lens=lens, feat=2)
+        x.raw_tensor = x.raw_tensor + 10.0  # no entry is zero, so a zero in the result is a masked entry
+        source = x
+        if layout == "packed static traceable":
+            # a dim with a capacity is as wide as it, whatever the batch holds
+            x.raw_tensor = torch.nn.functional.pad(x.raw_tensor, (0, 0, 0, capacity - max(lens)))
+            time_dim.capacity = capacity
+            source = packed.pack(x, total_bound=len(lens) * capacity)
+        elif layout == "packed":
+            source = packed.pack(x)
+
+        draws, picked = [], []
+        real_uniform, real_top_k = rf.random_uniform, rf.top_k
+
+        def _uniform(*args, **kwargs):
+            draws.append(real_uniform(*args, **kwargs))
+            return draws[-1]
+
+        def _top_k(*args, **kwargs):
+            picked.append(real_top_k(*args, **kwargs))
+            return picked[-1]
+
+        with mock.patch.object(rf, "random_uniform", _uniform), mock.patch.object(rf, "top_k", _top_k):
+            with rf.set_static_traceable_ctx(layout == "packed static traceable"), _MaxNumel() as max_numel:
+                out = rf.audio.random_mask(
+                    source,
+                    mask_axis=time_dim,
+                    broadcast_axis=feat_dim,
+                    min_num=min_num,
+                    max_num=max_num,
+                    max_dims=max_amount,
+                )
+
+        (num, _scores, amount), ((_, indices, k_dim),) = draws, picked
+        num = num.copy_compatible_to_dims_raw([batch_dim]).long()
+        pos = indices.copy_compatible_to_dims_raw([batch_dim, k_dim]).long()
+        amount = amount.copy_compatible_to_dims_raw([batch_dim, k_dim]).long()
+        lens_ = torch.tensor(lens)
+        pos2 = torch.minimum(pos + amount, lens_[:, None])
+        width = max(lens)
+        idx = torch.arange(width)
+        masked = (
+            (idx >= pos[..., None])
+            & (idx < pos2[..., None])
+            & (torch.arange(pos.shape[1])[None, :, None] < num[:, None, None])
+        ).any(dim=1)
+        assert masked[: len(lens) - 1].any(dim=1).all() and not masked[-1].any(), (layout, masked)
+        want = torch.where(masked[..., None], 0.0, x.raw_tensor[:, :width])
+
+        got = packed.unpack(out) if packed.is_packed(out) else out
+        got = got.copy_compatible_to_dims_raw([batch_dim, time_dim, feat_dim])[:, :width]
+        valid = (idx[None, :] < lens_[:, None])[..., None]
+        torch.testing.assert_close(torch.where(valid, got, 0.0), torch.where(valid, want, 0.0), msg=layout)
+        if layout == "padded":
+            torch.testing.assert_close(got, want, msg="the padded frames stay as they are")
+
+        rows = capacity if layout == "packed static traceable" else width
+        assert max_numel.value < len(lens) * pos.shape[1] * rows, (layout, max_numel.value, pos.shape)
+
+
 if __name__ == "__main__":
     better_exchook.install()
     if len(sys.argv) <= 1:
