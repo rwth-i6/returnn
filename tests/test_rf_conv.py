@@ -311,6 +311,54 @@ def test_conv1d_depthwise_cuda_triton_path():
     torch.testing.assert_close(out_raw, ref)
 
 
+def test_conv1d_depthwise_cuda_triton_path_traced():
+    """
+    a traced step keeps the Triton kernel as well (the compiled step of torch_cuda_graph traces on fake tensors,
+    which a raw Triton launch cannot take), with the gradients of the eager path
+    """
+    import unittest
+    from unittest import mock
+    import torch
+
+    if not torch.cuda.is_available():
+        raise unittest.SkipTest("needs CUDA")
+    try:
+        import triton  # noqa
+    except ImportError as exc:
+        raise unittest.SkipTest(f"triton not available ({exc})")
+    from functorch.compile import aot_function, nop
+
+    rf.select_backend_torch()
+    batch, time, feat, width = Dim(2, name="batch"), Dim(23, name="time"), Dim(6, name="feat"), Dim(5, name="width")
+    group_in = feat // feat.dimension
+    gen = torch.Generator().manual_seed(5)
+
+    def _loss(x_raw, filter_raw, bias_raw):
+        x = Tensor("x", dims=[batch, time, feat], dtype="float32", raw_tensor=x_raw)
+        filter_ = Tensor("filter", dims=[feat, group_in, width], dtype="float32", raw_tensor=filter_raw)
+        bias = Tensor("bias", dims=[feat], dtype="float32", raw_tensor=bias_raw)
+        out, _ = rf.conv(
+            x,
+            in_dim=feat,
+            out_dim=feat,
+            in_spatial_dims=[time],
+            filter=filter_,
+            filter_size=[width],
+            padding="same",
+            groups=feat.dimension,
+            bias=bias,
+        )
+        return out.raw_tensor.square().sum()
+
+    leaves = [torch.randn(shape, generator=gen).cuda().requires_grad_(True) for shape in ((2, 23, 6), (6, 1, 5), (6,))]
+    ref_grads = torch.autograd.grad(_loss(*leaves), leaves)
+    traced = aot_function(_loss, fw_compiler=nop, bw_compiler=nop)
+    with mock.patch.object(torch.nn.functional, "conv1d", side_effect=AssertionError("torch conv1d fallback")):
+        grads = torch.autograd.grad(traced(*leaves), leaves)
+    for g, g_ref in zip(grads, ref_grads):
+        torch.testing.assert_close(g, g_ref)
+
+
 def test_maxpool1d_padding_valid():
     time_dim = Dim(Tensor("time", [batch_dim], dtype="int32"))
     in_dim = Dim(7, name="in")
