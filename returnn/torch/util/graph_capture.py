@@ -458,6 +458,64 @@ def _allow_non_fake_inputs():
         fake_tensor_mod.FakeTensorMode.__init__ = orig_init
 
 
+class _ParamSlot:
+    """
+    One model parameter of the compiled step: a trace input,
+    swapped in wherever the model reads the parameter from while the step is traced.
+    An RF module reads it through its :class:`rf.Parameter`, a torch module through its attribute,
+    and a tied parameter has several such places, all of which must see the traced tensor,
+    else the others bake the real one as a constant and their share of the gradient is lost.
+    """
+
+    def __init__(self, raw: torch.Tensor):
+        self.raw = raw
+        self.rf_params: List[rf.Parameter] = []
+        self.torch_attribs: List[Tuple[torch.nn.Module, str]] = []
+
+    def set(self, raw: torch.Tensor):
+        """let the model read this tensor as the parameter"""
+        for param in self.rf_params:
+            param.raw_tensor = raw
+        for module, name in self.torch_attribs:
+            # noinspection PyProtectedMember
+            module._parameters[name] = raw
+
+
+def _model_param_slots(
+    *, rf_params: Optional[List[rf.Parameter]], pt_model: Optional[torch.nn.Module]
+) -> List[_ParamSlot]:
+    """
+    :param rf_params: the parameters of an RF model
+    :param pt_model: a torch module model, possibly with RF parts wrapped via :func:`rf_module_to_pt_module`
+    :return: one slot per parameter tensor, with every place the model reads it from
+    """
+    from ..frontend.bridge import RFModuleAsPTModule
+
+    slots: Dict[int, _ParamSlot] = {}
+
+    def _slot(raw: torch.Tensor) -> _ParamSlot:
+        if id(raw) not in slots:
+            slots[id(raw)] = _ParamSlot(raw)
+        return slots[id(raw)]
+
+    if rf_params is not None:
+        for param in rf_params:
+            _slot(param.raw_tensor).rf_params.append(param)
+        return list(slots.values())
+    assert pt_model is not None, "torch_cuda_graph compile: needs the model parameters (rf_params or pt_model)"
+    for module in pt_model.modules():
+        if isinstance(module, RFModuleAsPTModule):
+            # the RF module computes on the raw tensors of its own parameters, not on the wrapper's attributes
+            for _, param in module.rf_module.named_parameters(recurse=False):
+                _slot(param.raw_tensor).rf_params.append(param)
+        else:
+            # noinspection PyProtectedMember
+            for name, raw in module._parameters.items():
+                if raw is not None:
+                    _slot(raw).torch_attribs.append((module, name))
+    return list(slots.values())
+
+
 class GraphCapturedTrainStep:
     """
     Orchestrates eager warmup steps, the one-time capture, and per-step replay.
@@ -477,6 +535,7 @@ class GraphCapturedTrainStep:
         get_optimizer: Optional[Callable[[], torch.optim.Optimizer]] = None,
         get_buffers: Optional[Callable[[], List[torch.Tensor]]] = None,
         rf_params: Optional[List[rf.Parameter]] = None,
+        pt_model: Optional[torch.nn.Module] = None,
         packed_batch_size: Optional[Dict[str, int]] = None,
     ):
         """
@@ -489,7 +548,9 @@ class GraphCapturedTrainStep:
             runs the user train step function under a train run ctx
         :param post_step: grad clip + optimizer step, captured in-graph
             with opts "capture_optimizer"; must be capture-safe
-        :param rf_params: RF-level model params, required for opts "compile"
+        :param rf_params: RF-level model params of an RF model, for opts "compile"
+        :param pt_model: the model as torch module, for opts "compile" with a model which is no RF module
+            (a torch module, possibly around RF parts), see :func:`_model_param_slots`
         :param packed_batch_size: the config option, when statically known;
             only to infer a missing "packed_total_bound", see :func:`_get_data_buf`
         """
@@ -580,8 +641,14 @@ class GraphCapturedTrainStep:
         self._compiled_fn: Optional[Callable[[List[torch.Tensor]], tuple]] = None
         self._compiled_n_calls = 0
         self._rf_params = rf_params
+        self._pt_model = pt_model
         if self._compile:
-            assert rf_params is not None, "torch_cuda_graph compile: rf_params required (RF model)"
+            assert rf_params is not None or pt_model is not None, (
+                "torch_cuda_graph compile: needs the model parameters (rf_params or pt_model)"
+            )
+        # the compiled step takes every parameter as a trace input, see _ParamSlot;
+        # collected at the first compile, when the parameters are final (device, dtype, preloads)
+        self._param_slots: Optional[List[_ParamSlot]] = None
         # per loss: (name, traced Loss (for the flags), inv norm is a tensor output, else its static value)
         self._compiled_loss_meta: List[Tuple[str, Loss, bool, Optional[int]]] = []
         self._compiled_n_loss_outs = 0
@@ -1128,14 +1195,14 @@ class GraphCapturedTrainStep:
 
             inductor_config.epilogue_fusion = False
             inductor_config.pattern_matcher = False
-        rf_params = self._rf_params
-        orig_raws = [p.raw_tensor for p in rf_params]
+        slots = self._get_param_slots()
+        orig_raws = [slot.raw for slot in slots]
         trainable = [r.requires_grad for r in orig_raws]
 
         def step_core(raws):
             """the whole train step on the given param raws -> (loss raws..., grads...), see above"""
-            for p_, t in zip(rf_params, raws):
-                p_.raw_tensor = t
+            for slot, t in zip(slots, raws):
+                slot.set(t)
             try:
                 with rf.set_static_traceable_ctx():
                     extern_data = self._build_extern_data()
@@ -1163,8 +1230,8 @@ class GraphCapturedTrainStep:
                     grads = [g if g is not None else torch.zeros_like(t) for g, t in zip(grads, train_raws)]
                 return tuple(t.detach() for t in outs + grads)
             finally:
-                for p_, r0 in zip(rf_params, orig_raws):
-                    p_.raw_tensor = r0
+                for slot in slots:
+                    slot.set(slot.raw)
 
         if self._debug_eager_bound:
             # plain eager execution of the untraced step on the bound buffers:
@@ -1383,6 +1450,12 @@ class GraphCapturedTrainStep:
             return aot_function(step_core_buf_inputs_v212, fw_compiler=backend)
         return aot_function(step_core, fw_compiler=backend)
 
+    def _get_param_slots(self) -> List[_ParamSlot]:
+        """the parameters of the compiled step, collected once, see :class:`_ParamSlot`"""
+        if self._param_slots is None:
+            self._param_slots = _model_param_slots(rf_params=self._rf_params, pt_model=self._pt_model)
+        return self._param_slots
+
     def _compiled_call_args(self, raws: List[torch.Tensor]) -> List[torch.Tensor]:
         """
         The compiled step's runtime inputs: the param raws, plus (partitioned mode,
@@ -1410,7 +1483,7 @@ class GraphCapturedTrainStep:
             self._ctx = None
             gc.collect()
             torch.cuda.empty_cache()
-            raws = [p.raw_tensor for p in self._rf_params]
+            raws = [slot.raw for slot in self._get_param_slots()]
             with _allow_non_fake_inputs():
                 outs = self._compiled_fn(self._compiled_call_args(raws))
                 if self._partitioned:
@@ -1435,7 +1508,7 @@ class GraphCapturedTrainStep:
         refreshed in place by each replay.
         """
         compiled = self._ensure_compiled()
-        raws = [p.raw_tensor for p in self._rf_params]
+        raws = [slot.raw for slot in self._get_param_slots()]
         self._log_misaligned_inputs(raws)
         # plain warm run (in partitioned mode incl. backward: autotune + workspaces)
         outs = compiled(self._compiled_call_args(raws))
@@ -1513,7 +1586,7 @@ class GraphCapturedTrainStep:
         opts "capture": False: launch the compiled bound-shaped program eagerly (no graph).
         Outputs are fresh tensors each call -> grads/ctx rebound per step.
         """
-        raws = [p.raw_tensor for p in self._rf_params]
+        raws = [slot.raw for slot in self._get_param_slots()]
         if self._compiled_n_calls == 0:
             self._log_misaligned_inputs(raws)
         self._compiled_n_calls += 1
