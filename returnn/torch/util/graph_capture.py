@@ -1336,8 +1336,8 @@ class GraphCapturedTrainStep:
         # default mode: step_core computes the grads itself, one inference-style graph,
         # never fw/bwd-partitioned (partition_fn / activation_memory_budget do not apply;
         # for that see opts "partitioned")
-        if tuple(int(v) for v in torch.__version__.split("+")[0].split(".")[:2]) >= (2, 12):
-            # torch >= 2.12: compile_fx's compat wrapper declares _boxed_call=True
+        if tuple(int(v) for v in torch.__version__.split("+")[0].split(".")[:2]) >= (2, 11):
+            # torch >= 2.11 (seen on 2.11.0 and 2.12): compile_fx's compat wrapper declares _boxed_call=True
             # but re-wraps an already-boxed args list, so the generated runner sees [[args]];
             # call it star-unpacked instead, while the shim stays boxed towards aot_function.
             _compile_fx_raw = backend
@@ -1352,7 +1352,8 @@ class GraphCapturedTrainStep:
                 _call._boxed_call = True
                 return _call
 
-            backend = _compile_fx_call_unboxed
+            if backend is compile_fx:  # not the eager kernels of debug_aot_eager, which take the boxed list
+                backend = _compile_fx_call_unboxed
             # torch >= 2.12 also lifts closed-over tensors into runtime args of the generated code
             # instead of baking them as graph constants, and raw aot_function does not supply them;
             # pass the buffers as explicit trace inputs, like the partitioned mode above.
