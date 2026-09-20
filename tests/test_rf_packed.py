@@ -3048,6 +3048,29 @@ def test_masked_select_static_buffer_follows_a_declared_capacity():
             assert got[0, :2].tolist() == [1.0, 4.0] and got[1, :1].tolist() == [7.0], got
 
 
+def test_masked_select_eager_result_dim_adds_to_a_host_dim():
+    """
+    outside static tracing the sizes of a dim live on the host, those of the extern data do.
+    The dim of a selection from a packed tensor on the GPU has to follow,
+    else adding it to the dim it was selected from mixes devices
+    (the stream of an interleaved step is such a sum, the frames plus the targets selected from them)
+    """
+    if not torch.cuda.is_available():
+        raise unittest.SkipTest("needs CUDA")
+    rf.select_backend_torch()
+    batch_dim = Dim(2, name="batch")
+    x, time_dim = _seqs("x", batch_dim, [5, 3], [[1.0, 2.0, 3.0, 4.0, 5.0], [6.0, 7.0, 8.0]])
+    keep, _ = _seqs("keep", batch_dim, [5, 3], [[1, 0, 0, 1, 0], [0, 1, 0]])
+    keep, _ = rf.replace_dim(keep, in_dim=keep.dims[1], out_dim=time_dim)
+    x, keep = rf.copy_to_device(x, "cuda"), rf.copy_to_device(keep, "cuda")
+    for mask in (keep > 0, packed.pack(keep > 0)):
+        out, out_dim = rf.masked_select(packed.pack(x), mask=mask, dims=[time_dim])
+        stream_dim = time_dim + out_dim
+        assert stream_dim.dyn_size_ext.raw_tensor.tolist() == [5 + 2, 3 + 1], stream_dim.dyn_size_ext.raw_tensor
+        got = packed.unpack(out).copy_compatible_to_dims_raw([batch_dim, out_dim])
+        assert got[0, :2].tolist() == [1.0, 4.0] and got[1, :1].tolist() == [7.0], got
+
+
 def test_scatter_relayout_static_buffer_holds_every_result():
     """
     under static tracing the result buffer has to hold any result the capacities allow:
