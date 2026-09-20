@@ -694,6 +694,65 @@ def test_rel_pos_self_attention():
     run_model(extern_data, lambda *, epoch, step: _Net(), _forward_step, test_tensorflow=False)
 
 
+def test_rel_pos_self_attention_band():
+    # A query attends only the keys in [i - left_context, i + lookahead], the mask of a streaming encoder.
+    # That is structure a backend can use, where a boolean mask over (queries, keys) is the full lattice,
+    # which is what a hand-built band costs today.
+    # It must match the explicit masked energies, causal, with a left context and with a lookahead,
+    # and without a band it must stay what it was.
+    import torch
+
+    rf.select_backend_torch()
+    n = 6
+    time, kv_time = Dim(n, name="time"), Dim(n, name="kv_time")
+    heads, feat, v_feat = Dim(2, name="heads"), Dim(4, name="feat"), Dim(3, name="v_feat")
+    pos_dim = Dim(2 * n - 1, name="pos")
+    gen = torch.Generator().manual_seed(51)
+
+    def _t(name, dims, *shape):
+        t = Tensor(name, dims=dims, dtype="float32")
+        t.raw_tensor = torch.randn(*shape, generator=gen)
+        return t
+
+    q = _t("q", (time, heads, feat), n, 2, 4)
+    k = _t("k", (kv_time, heads, feat), n, 2, 4)
+    v = _t("v", (kv_time, heads, v_feat), n, 2, 3)
+    pos_emb = _t("pos_emb", (pos_dim, feat), 2 * n - 1, 4)
+    bias_u = _t("bias_u", (heads, feat), 2, 4)
+    bias_v = _t("bias_v", (heads, feat), 2, 4)
+    scale = 4**-0.5
+    rel = torch.arange(n)[None, :] - torch.arange(n)[:, None]
+
+    def _ref(left, ahead):
+        energy = torch.einsum("ihd,jhd->hij", q.raw_tensor + bias_u.raw_tensor, k.raw_tensor)
+        energy = energy + torch.einsum(
+            "ihd,ijd->hij", q.raw_tensor + bias_v.raw_tensor, pos_emb.raw_tensor[rel + n - 1]
+        )
+        allowed = torch.ones(n, n, dtype=torch.bool) if ahead is None else rel <= ahead
+        if left is not None:
+            allowed = allowed & (rel >= -left)
+        energy = torch.where(allowed[None], energy * scale, torch.full_like(energy, float("-inf")))
+        return torch.einsum("hij,jhd->ihd", torch.softmax(energy, dim=-1), v.raw_tensor)
+
+    kwargs = dict(
+        pos_bias_u=bias_u,
+        pos_bias_v=bias_v,
+        att_dropout=0.0,
+        att_dropout_broadcast=False,
+        v_feat_dim=v_feat,
+        qk_feat_dim=feat,
+        kv_spatial_dim=kv_time,
+        query_spatial_dim=time,
+        pos_emb_spatial_dim=pos_dim,
+    )
+    order = (time, heads, v_feat)
+    for left, ahead in ((None, None), (None, 0), (2, 0), (None, 2), (3, 1)):
+        att = Backend.rel_pos_self_attention(q, k, v, pos_emb, left_context=left, lookahead=ahead, **kwargs)
+        torch.testing.assert_close(att.copy_transpose(order).raw_tensor, _ref(left, ahead), msg=f"{left} {ahead}")
+    plain = Backend.rel_pos_self_attention(q, k, v, pos_emb, **kwargs)
+    torch.testing.assert_close(plain.copy_transpose(order).raw_tensor, _ref(None, None))
+
+
 def test_sinusoidal_positional_encoding():
     time_dim = Dim(Tensor("time", [batch_dim], dtype="int32"))
     feat_dim = Dim(8, name="feat")
