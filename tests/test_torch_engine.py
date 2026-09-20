@@ -1270,35 +1270,68 @@ def test_graph_capture_optimizer_state_materialization():
     assert adamw.state and all(float(v) == 0 for v in adamw.state[q].values() if v.dim() == 0)
 
 
-def _build_cuda_graph_train_config_and_dataset(*, compile_: bool):
-    """small RF model + Task12AXDataset config with torch_cuda_graph, see the tests below"""
+def _build_cuda_graph_train_config_and_dataset(*, compile_: bool, torch_model: bool = False):
+    """
+    small model + Task12AXDataset config with torch_cuda_graph, see the tests below
+
+    :param compile_: the step goes through Inductor before the capture
+    :param torch_model: the model is a torch module around an RF part, with parameters torch owns itself
+        (one of them tied, read from two modules), instead of an RF module
+    """
     from returnn.datasets import init_dataset
     from returnn.tensor import Dim, batch_dim
+    from returnn.torch.frontend.bridge import rf_module_to_pt_module
 
-    time_dim = Dim(None, name=f"time-cudagraph-{compile_}")  # fresh dims per test: capacities get set on them
+    time_dim = Dim(None, name=f"time-cudagraph-{compile_}-{torch_model}")  # fresh dims per test: capacities get set
     feat_dim = Dim(9, name="feat")
     classes_dim = Dim(2, name="classes")
+    hidden = Dim(64, name="hidden")
 
     class _Model(rf.Module):
         def __init__(self):
             super().__init__()
             self.out_dim = classes_dim
-            hidden = Dim(64, name="hidden")
             self.layer = rf.Linear(feat_dim, hidden)
             self.out = rf.Linear(hidden, classes_dim)
             self.steps_seen = rf.Parameter([], dtype="int64", auxiliary=True)
             self.steps_seen.initial = 0
 
-    def _get_model(*, epoch, step, **_kwargs):
-        return _Model()
+    class _TorchModel(torch.nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.out_dim = classes_dim
+            self.layer = rf_module_to_pt_module(rf.Linear(feat_dim, hidden))
+            self.mid = torch.nn.Linear(hidden.dimension, hidden.dimension, bias=False)
+            self.mid_tied = torch.nn.Linear(hidden.dimension, hidden.dimension, bias=False)
+            self.mid_tied.weight = self.mid.weight
+            self.out = torch.nn.Linear(hidden.dimension, classes_dim.dimension)
+            self.initial = {name: p.detach().clone() for name, p in self.named_parameters()}
 
-    def _train_step(*, model: _Model, extern_data: TensorDict, **_kwargs):
+        def logits(self, data: Tensor) -> Tensor:
+            """the RF part through its RF module, the torch parameters through the attributes of their modules"""
+            x = rf.relu(self.layer.rf_module(data))
+            for linear in (self.mid, self.mid_tied):
+                weight = Tensor("weight", dims=[hidden.copy(match_priority=1), hidden], dtype="float32")
+                weight.raw_tensor = linear.weight
+                x = rf.relu(rf.matmul(x, weight, reduce=hidden))
+                x, _ = rf.replace_dim(x, in_dim=weight.dims[0], out_dim=hidden)
+            weight = Tensor("weight", dims=[classes_dim, hidden], dtype="float32", raw_tensor=self.out.weight)
+            bias = Tensor("bias", dims=[classes_dim], dtype="float32", raw_tensor=self.out.bias)
+            return rf.matmul(x, weight, reduce=hidden) + bias
+
+    def _get_model(*, epoch, step, **_kwargs):
+        return _TorchModel() if torch_model else _Model()
+
+    def _train_step(*, model, extern_data: TensorDict, **_kwargs):
         data = extern_data["data"]
         classes = extern_data["classes"]
         if not compile_:
             model.steps_seen.assign_add(1)
-        x = rf.relu(model.layer(data))
-        logits = model.out(x)
+        if torch_model:
+            logits = model.logits(data)
+        else:
+            x = rf.relu(model.layer(data))
+            logits = model.out(x)
         loss = rf.cross_entropy(target=classes, estimated=logits, estimated_type="logits", axis=model.out_dim)
         loss.mark_as_loss("ce")
         frame_err = rf.cast(rf.reduce_argmax(logits, axis=model.out_dim) != classes, "float32")
@@ -1349,7 +1382,7 @@ def _build_cuda_graph_train_config_and_dataset(*, compile_: bool):
     return config, dataset
 
 
-def _run_cuda_graph_train(*, compile_: bool):
+def _run_cuda_graph_train(*, compile_: bool, torch_model: bool = False):
     if not torch.cuda.is_available():
         raise unittest.SkipTest("CUDA not available")
     import os
@@ -1357,7 +1390,7 @@ def _run_cuda_graph_train(*, compile_: bool):
     import tempfile
     from returnn.log import log as returnn_log
 
-    config, dataset = _build_cuda_graph_train_config_and_dataset(compile_=compile_)
+    config, dataset = _build_cuda_graph_train_config_and_dataset(compile_=compile_, torch_model=torch_model)
     log_file = tempfile.NamedTemporaryFile(mode="wt", suffix=f"-cudagraph-{compile_}.log", delete=False)
     log_file.close()
     returnn_log.initialize(logs=[log_file.name], verbosity=[5])
@@ -1375,6 +1408,8 @@ def _run_cuda_graph_train(*, compile_: bool):
                 assert lr.item() > 1e-3  # the per-step schedule advanced it
             for name, p in engine._pt_model.named_parameters():
                 assert torch.isfinite(p).all(), f"non-finite param {name}"
+                if torch_model:
+                    assert not torch.equal(p.detach().cpu(), engine._pt_model.initial[name]), f"{name} never trained"
             if not compile_:
                 seen = int(engine._orig_model.steps_seen.raw_tensor)
                 assert seen == engine.global_train_step, (seen, engine.global_train_step)
@@ -1706,6 +1741,15 @@ def test_torch_engine_cuda_graph_train():
     """whole-train-step CUDA-graph capture/replay (torch_cuda_graph), 2 epochs across an epoch boundary,
     in-graph optimizer + per-step LR schedule via the device-tensor LR input"""
     _run_cuda_graph_train(compile_=False)
+
+
+def test_torch_engine_cuda_graph_compile_train_torch_module():
+    """
+    the compiled step differentiates every parameter of a torch module model as well:
+    those an RF part reads through its :class:`rf.Parameter`, and those a torch module reads through its attribute,
+    a tied one through all of its attributes
+    """
+    _run_cuda_graph_train(compile_=True, torch_model=True)
 
 
 def test_torch_engine_cuda_graph_compile_train():
