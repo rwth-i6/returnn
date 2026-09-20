@@ -3341,10 +3341,22 @@ class PackedBackend(Backend[PackedRawTensor]):
                 padding=padding[0] if isinstance(padding, (list, tuple)) else padding,
             )
             if st == 1:
-                # "valid"/int: seq lens and gap change by a constant, starts stay in place
+                # "valid"/int: seq lens and gap change by a constant, starts stay in place.
+                # Every seq keeps its slot, so the layout spans as many frames as before,
+                # while the conv shortened the buffer by that same constant (it falls behind the
+                # last seq). Restore the extent, else the next op meets two buffers of one layout
+                # but different lengths.
+                out_packed_dim = out_sp[0]
+                delta = span - pad_l - pad_r
+                if delta > 0:
+                    out_inner, (out_packed_dim,) = rf.pad(
+                        out_inner, axes=[out_packed_dim], padding=[(0, delta)], value=0.0
+                    )
+                elif delta < 0:
+                    out_inner, out_packed_dim = rf.slice(out_inner, axis=out_packed_dim, start=0, end=delta)
                 helper = PackedRawTensor(
                     inner=out_inner,
-                    packed_dim=out_sp[0],
+                    packed_dim=out_packed_dim,
                     orig_dims=tuple(raw.orig_dims[:-1]) + (out_time,),
                     gap=raw.gap + span - pad_l - pad_r,
                     align=raw.align,
