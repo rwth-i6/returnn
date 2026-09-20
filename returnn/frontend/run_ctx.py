@@ -452,6 +452,7 @@ class Loss:
 
     _summed_loss_cached: Optional[Tensor] = None
     _mean_loss_cached: Optional[Tensor] = None
+    _inv_norm_factor_cached: Optional[Union[int, Tensor]] = None
 
     def get_summed_loss(self) -> Tensor:
         """
@@ -472,12 +473,11 @@ class Loss:
             return self._mean_loss_cached
         if self.custom_inv_norm_factor is not None:
             loss = self.get_summed_loss()
-            inv_norm = rf.reduce_sum(self.custom_inv_norm_factor, axis=self.custom_inv_norm_factor.dims)
-            inv_norm = rf.cast(inv_norm, loss.dtype)
+            inv_norm = rf.cast(self.get_inv_norm_factor(), loss.dtype)
             inv_norm = rf.reciprocal(inv_norm)
             inv_norm = rf.copy_to_device(inv_norm, loss.device)
-            loss *= inv_norm
-            return loss
+            self._mean_loss_cached = loss * inv_norm
+            return self._mean_loss_cached
         if not self.loss.dims:
             return self.loss
         self._mean_loss_cached = rf.reduce_mean(self.loss, axis=self.loss.dims)
@@ -485,13 +485,25 @@ class Loss:
 
     def get_inv_norm_factor(self) -> Union[int, Tensor]:
         """
-        :return: inverse norm factor (scalar)
+        :return: inverse norm factor (scalar), reduced once and then kept, like the summed loss.
+            The counts come from dyn sizes, and those tensors get rebound per step (per eval batch too),
+            while a loss object can outlive its step (graph capture keeps the losses of the captured step).
         """
+        if self._inv_norm_factor_cached is not None:
+            return self._inv_norm_factor_cached
         if self.custom_inv_norm_factor is not None:
             if self.custom_inv_norm_factor.dims:
-                return rf.reduce_sum(self.custom_inv_norm_factor, axis=self.custom_inv_norm_factor.dims)
-            return self.custom_inv_norm_factor
-        return rf.num_elements_of_shape(self.loss.dims, device=self.loss.device)
+                res = rf.reduce_sum(self.custom_inv_norm_factor, axis=self.custom_inv_norm_factor.dims)
+            else:
+                res = self.custom_inv_norm_factor
+        else:
+            res = rf.num_elements_of_shape(self.loss.dims, device=self.loss.device)
+        if isinstance(res, Tensor):
+            # own wrapper around the same raw tensor: a dyn size tensor gets rebound per step,
+            # while the content of the raw tensor is what a graph replay refreshes
+            res = res.copy()
+        self._inv_norm_factor_cached = res
+        return res
 
     def get_scaled_reduced_loss(self) -> Tensor:
         """

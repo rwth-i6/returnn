@@ -494,6 +494,43 @@ def test_loss_normalization():
     assert res4["loss:summed"] == res2["loss:summed"] and res4["loss:inv_norm_factor"] == res2["loss:inv_norm_factor"]
 
 
+def test_loss_inv_norm_factor_stays_at_the_step_it_was_marked_in():
+    import torch
+    from returnn.frontend.run_ctx import Loss
+
+    batch_dim_ = Dim(2, name="batch")
+    time_dim = Dim(Tensor("time", dims=[batch_dim_], dtype="int32"))
+    time_dim.dyn_size_ext.raw_tensor = torch.tensor([3, 5], dtype=torch.int32)
+    loss_t = Tensor("ce", dims=[batch_dim_, time_dim], dtype="float32")
+    loss_t.raw_tensor = torch.ones(2, 5)
+    scalar_count = Tensor("count", dims=(), dtype="int32")
+    scalar_count.raw_tensor = torch.tensor(8, dtype=torch.int32)
+    scalar_dim = Dim(scalar_count)  # a dim whose size tensor is already scalar, like a packed dim
+    flat_t = Tensor("ce_flat", dims=[scalar_dim], dtype="float32")
+    flat_t.raw_tensor = torch.ones(8)
+    losses = [
+        Loss(loss=loss_t, name="ce", custom_inv_norm_factor=time_dim.get_size_tensor()),
+        Loss(loss=loss_t, name="fer", as_error=True),  # the frame count of the loss dims
+        Loss(loss=flat_t, name="ce_flat", custom_inv_norm_factor=scalar_dim.get_size_tensor()),
+        Loss(loss=flat_t, name="fer_flat", as_error=True),
+    ]
+    in_the_step = [int(loss.get_inv_norm_factor().raw_tensor) for loss in losses]
+    assert in_the_step == [8, 8, 8, 8]
+    # a captured train step keeps its losses across steps, and an evaluation in between rebinds
+    # the size tensors of the very dims they are normalized by (raw_dict_to_extern_data)
+    for dim, size in (
+        (time_dim, torch.tensor([1, 1], dtype=torch.int32)),
+        (scalar_dim, torch.tensor(2, dtype=torch.int32)),
+    ):
+        dim.reset_eager()
+        dim.dyn_size_ext.raw_tensor = size
+    assert [int(loss.get_inv_norm_factor().raw_tensor) for loss in losses] == in_the_step
+    # a graph replay writes into the raw tensors the reduction was made from, that must still count
+    for loss in losses:
+        loss.get_inv_norm_factor().raw_tensor.fill_(3)
+    assert [int(loss.get_inv_norm_factor().raw_tensor) for loss in losses] == [3, 3, 3, 3]
+
+
 def test_rf_range_over_dim():
     time_dim = Dim(Tensor("time", [batch_dim], dtype="int32"))
     in_dim = Dim(7, name="in")
