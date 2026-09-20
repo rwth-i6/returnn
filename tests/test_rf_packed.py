@@ -1510,6 +1510,22 @@ def test_chunked_rel_pos_att_triton_kernel_grad():
         for g_kernel, t in zip(grads_kernel, leaves + [bd_leaf]):
             numpy.testing.assert_allclose(g_kernel.cpu().numpy(), t.grad.cpu().numpy(), rtol=1e-4, atol=1e-4)
 
+    # The op traces under AOT autograd (fake tensors), as the compiled step of torch_cuda_graph does it.
+    from functorch.compile import aot_function, nop
+
+    def _loss(q_, k_, v_, bd_, starts_, lens_):
+        out_ = m.chunked_rel_pos_att(
+            q_, k_, v_, bd_, starts_, lens_, max(lens), chunk_size=s_rows, kept_rows=c_rows, history=mem, scale=scale
+        )
+        return out_.square().sum()
+
+    leaves = [torch.randn(total, n_heads, d, generator=gen).to(dev).requires_grad_(True) for _ in range(3)]
+    leaves.append((torch.randn(total, n_heads, r, generator=gen) * 0.5).to(dev).requires_grad_(True))
+    traced = aot_function(_loss, fw_compiler=nop, bw_compiler=nop)
+    grads = torch.autograd.grad(traced(*leaves, starts_t, lens_t), leaves)
+    for g, g_ref in zip(grads, torch.autograd.grad(_loss(*leaves, starts_t, lens_t), leaves)):
+        torch.testing.assert_close(g, g_ref)
+
 
 def test_cast_packed():
     # rf.cast on packed data runs elementwise on the packed buffer (PackedBackend.cast_raw),
