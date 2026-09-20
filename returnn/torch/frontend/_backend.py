@@ -2455,6 +2455,115 @@ class TorchBackend(Backend[torch.Tensor]):
             )
         return out
 
+    @classmethod
+    def chunked_rel_pos_self_attention(
+        cls,
+        query: Tensor,
+        key: Tensor,
+        value: Tensor,
+        pos_emb: Tensor,
+        *,
+        pos_bias_u: Optional[Tensor],
+        pos_bias_v: Optional[Tensor],
+        att_dropout: float = 0.0,
+        att_dropout_broadcast: bool,
+        v_feat_dim: Dim,
+        qk_feat_dim: Dim,
+        chunk_dim: Dim,
+        chunked_time_dim: Dim,
+        hist_dim: Dim,
+        pos_emb_spatial_dim: Dim,
+        chunk_history: int,
+        end_chunk_size_dim: Dim,
+    ):
+        """
+        Chunked self-attention with relative positional encoding through the Triton kernel
+        (:mod:`returnn.torch.util.chunked_rel_pos_att_triton`), which reads the history of a chunk
+        straight from the chunk buffer, so no key or value is replicated per history slot.
+        The generic composition runs where the kernel does not cover the case.
+
+        :param query: {..., chunked_time_dim, chunk_dim, qk_feat_dim}, not yet scaled
+        :param key: {..., chunked_time_dim, chunk_dim, qk_feat_dim}
+        :param value: {..., chunked_time_dim, chunk_dim, v_feat_dim}
+        :param pos_emb: {..., pos_emb_spatial_dim, qk_feat_dim}, relative positional encoding
+        :param pos_bias_u: {..., qk_feat_dim}, added to query for the content-based term
+        :param pos_bias_v: {..., qk_feat_dim}, added to query for the position-based term
+        :param att_dropout: dropout for attention weights
+        :param att_dropout_broadcast: whether to broadcast over all but ``hist_dim``, which the kernel
+            cannot express, so only the generic composition serves it
+        :param v_feat_dim: embedding dimension of value
+        :param qk_feat_dim: embedding dimension of key and query
+        :param chunk_dim: rows of one chunk, its center plus its right context
+        :param chunked_time_dim: the chunks
+        :param hist_dim: the keys one chunk attends over
+        :param pos_emb_spatial_dim: relative-position axis of pos_emb
+        :param chunk_history: how many previous chunks every chunk attends over
+        :param end_chunk_size_dim: rows a previous chunk contributes, its center
+        :return: attention output
+        """
+        dropout_active = False
+        if att_dropout:
+            train_flag = rf.get_run_ctx().is_train_flag_enabled(func=rf.dropout)
+            if not isinstance(train_flag, bool):
+                # a dynamic train flag decides per call, which only the generic composition expresses
+                return Backend.chunked_rel_pos_self_attention(
+                    query,
+                    key,
+                    value,
+                    pos_emb,
+                    pos_bias_u=pos_bias_u,
+                    pos_bias_v=pos_bias_v,
+                    att_dropout=att_dropout,
+                    att_dropout_broadcast=att_dropout_broadcast,
+                    v_feat_dim=v_feat_dim,
+                    qk_feat_dim=qk_feat_dim,
+                    chunk_dim=chunk_dim,
+                    chunked_time_dim=chunked_time_dim,
+                    hist_dim=hist_dim,
+                    pos_emb_spatial_dim=pos_emb_spatial_dim,
+                    chunk_history=chunk_history,
+                    end_chunk_size_dim=end_chunk_size_dim,
+                )
+            dropout_active = train_flag
+        out = None
+        if not (dropout_active and att_dropout_broadcast):
+            out = _chunked_rel_pos_att_triton(
+                query,
+                key,
+                value,
+                pos_emb,
+                pos_bias_u=pos_bias_u,
+                pos_bias_v=pos_bias_v,
+                att_dropout=att_dropout if dropout_active else 0.0,
+                v_feat_dim=v_feat_dim,
+                qk_feat_dim=qk_feat_dim,
+                chunk_dim=chunk_dim,
+                chunked_time_dim=chunked_time_dim,
+                pos_emb_spatial_dim=pos_emb_spatial_dim,
+                chunk_history=chunk_history,
+                end_chunk_size_dim=end_chunk_size_dim,
+            )
+        if out is None:
+            return Backend.chunked_rel_pos_self_attention(
+                query,
+                key,
+                value,
+                pos_emb,
+                pos_bias_u=pos_bias_u,
+                pos_bias_v=pos_bias_v,
+                att_dropout=att_dropout,
+                att_dropout_broadcast=att_dropout_broadcast,
+                v_feat_dim=v_feat_dim,
+                qk_feat_dim=qk_feat_dim,
+                chunk_dim=chunk_dim,
+                chunked_time_dim=chunked_time_dim,
+                hist_dim=hist_dim,
+                pos_emb_spatial_dim=pos_emb_spatial_dim,
+                chunk_history=chunk_history,
+                end_chunk_size_dim=end_chunk_size_dim,
+            )
+        return out
+
     # noinspection PyShadowingBuiltins
     @staticmethod
     def conv(
@@ -3172,6 +3281,115 @@ def _fused_causal_attention(
     )
     if value.feature_dim in out.dims:
         out.feature_dim = value.feature_dim
+    return out
+
+
+def _chunked_rel_pos_att_triton(
+    query: Tensor,
+    key: Tensor,
+    value: Tensor,
+    pos_emb: Tensor,
+    *,
+    pos_bias_u: Optional[Tensor],
+    pos_bias_v: Optional[Tensor],
+    att_dropout: float,
+    v_feat_dim: Dim,
+    qk_feat_dim: Dim,
+    chunk_dim: Dim,
+    chunked_time_dim: Dim,
+    pos_emb_spatial_dim: Dim,
+    chunk_history: int,
+    end_chunk_size_dim: Dim,
+) -> Optional[Tensor]:
+    """
+    The chunked rel-pos self-attention on padded storage through
+    :mod:`returnn.torch.util.chunked_rel_pos_att_triton`, whose rows are the chunk buffer read as
+    (batch times chunks times chunk rows), with one start and one length per sequence.
+
+    :param query: {batch, chunked_time_dim, chunk_dim, heads, qk_feat_dim}, not yet scaled
+    :param key: {batch, chunked_time_dim, chunk_dim, heads, qk_feat_dim}
+    :param value: {batch, chunked_time_dim, chunk_dim, heads, v_feat_dim}
+    :param pos_emb: {pos_emb_spatial_dim, [heads,] qk_feat_dim}, relative positional encoding
+    :param pos_bias_u: added to query for the content-based term
+    :param pos_bias_v: added to query for the position-based term
+    :param att_dropout: dropout for attention weights, zero outside training
+    :param v_feat_dim: embedding dimension of value
+    :param qk_feat_dim: embedding dimension of key and query
+    :param chunk_dim: rows of one chunk
+    :param chunked_time_dim: the chunks
+    :param pos_emb_spatial_dim: relative-position axis of pos_emb
+    :param chunk_history: how many previous chunks every chunk attends over
+    :param end_chunk_size_dim: rows a previous chunk contributes
+    :return: attention output {batch, chunked_time_dim, chunk_dim, heads, v_feat_dim},
+        None where the kernel does not cover the case
+    """
+    try:
+        from ..util import chunked_rel_pos_att_triton as kernel
+    except ImportError:
+        return None
+    if query.device is None or not str(query.device).startswith("cuda"):
+        return None
+    if not kernel.supports_geometry(
+        chunk_size=chunk_dim.dimension,
+        kept_rows=end_chunk_size_dim.dimension,
+        key_dim=qk_feat_dim.dimension,
+        value_dim=v_feat_dim.dimension,
+    ):
+        return None
+    if chunked_time_dim.dyn_size_ext is None:
+        return None
+    batch_dims = list(chunked_time_dim.dyn_size_ext.dims)
+    head_dims = [d for d in query.remaining_dims((chunked_time_dim, chunk_dim, qk_feat_dim)) if d not in batch_dims]
+    if len(batch_dims) != 1 or len(head_dims) != 1 or head_dims[0].dimension is None:
+        return None
+    (batch_dim,), (heads_dim,) = batch_dims, head_dims
+    lead = [batch_dim, chunked_time_dim, chunk_dim, heads_dim]
+    if set(key.dims) != set(lead + [qk_feat_dim]) or set(value.dims) != set(lead + [v_feat_dim]):
+        return None
+    if not {pos_emb_spatial_dim, qk_feat_dim} <= set(pos_emb.dims) <= {pos_emb_spatial_dim, heads_dim, qk_feat_dim}:
+        return None
+
+    scale = qk_feat_dim.dimension**-0.5
+    q_with_bias_u = (query + pos_bias_u) if pos_bias_u is not None else query
+    q_with_bias_v = (query + pos_bias_v) if pos_bias_v is not None else query
+    # the kernel scales the content-based term itself, so the position term arrives pre-scaled
+    matrix_bd = rf.matmul(q_with_bias_v, pos_emb, reduce=qk_feat_dim) * scale
+    n_heads, s_rows = heads_dim.dimension, chunk_dim.dimension
+
+    def _rows(tensor: Tensor, last: Dim) -> torch.Tensor:
+        return tensor.copy_compatible_to_dims_raw(lead + [last]).reshape(-1, n_heads, last.dimension)
+
+    q_raw = q_with_bias_u.copy_compatible_to_dims_raw(lead + [qk_feat_dim])
+    n_batch, n_chunks = q_raw.shape[0], q_raw.shape[1]
+    q_t = q_raw.reshape(-1, n_heads, qk_feat_dim.dimension)
+    k_t, v_t = _rows(key, qk_feat_dim), _rows(value, v_feat_dim)
+    bd_t = _rows(matrix_bd, pos_emb_spatial_dim)
+    dev = q_t.device
+    # one sequence is one row block of chunks, so its rows start where its first chunk does
+    seq_starts = (torch.arange(n_batch, device=dev) * (n_chunks * s_rows)).to(torch.int32)
+    seq_lens = chunked_time_dim.get_dyn_size_ext_for_device(dev).copy_compatible_to_dims_raw([batch_dim])
+    seq_lens = (seq_lens * s_rows).to(torch.int32)
+    out_t = kernel.chunked_rel_pos_att_autocast(
+        q_t,
+        k_t,
+        v_t,
+        bd_t,
+        seq_starts,
+        seq_lens,
+        n_chunks * s_rows,
+        chunk_size=s_rows,
+        kept_rows=end_chunk_size_dim.dimension,
+        history=chunk_history,
+        dropout_p=att_dropout,
+        scale=scale,
+    )
+    out = Tensor(
+        "chunked_rel_pos_att",
+        dims=lead + [v_feat_dim],
+        dtype=TorchBackend.get_dtype_name_raw(out_t),
+        feature_dim=v_feat_dim,
+    )
+    out.raw_tensor = out_t.reshape(n_batch, n_chunks, s_rows, n_heads, v_feat_dim.dimension)
     return out
 
 

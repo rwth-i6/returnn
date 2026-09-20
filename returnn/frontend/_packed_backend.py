@@ -535,7 +535,8 @@ def _warn_regap_enabled() -> bool:
 
 def _att_fast_paths_enabled(op_name: str) -> bool:
     """
-    :param op_name: "rel_pos_self_attention" or "scaled_dot_product_attention"
+    :param op_name: "rel_pos_self_attention", "chunked_rel_pos_self_attention"
+        or "scaled_dot_product_attention"
     :return: whether this op's packed fast paths (Triton rel-pos, flash varlen, flex, NJT, per-seq)
         may be used.
 
@@ -2499,6 +2500,128 @@ def _torch_triton_rel_pos_attention(
     return qu_raw.rewrap(out_inner, name="rel_pos_att_triton")
 
 
+def _torch_triton_chunked_rel_pos_attention(
+    query: Tensor,
+    key: Tensor,
+    value: Tensor,
+    pos_emb: Tensor,
+    *,
+    pos_bias_u: Optional[Tensor],
+    pos_bias_v: Optional[Tensor],
+    att_dropout: float,
+    v_feat_dim: Dim,
+    qk_feat_dim: Dim,
+    chunk_dim: Dim,
+    chunked_time_dim: Dim,
+    pos_emb_spatial_dim: Dim,
+    chunk_history: int,
+    end_chunk_size_dim: Dim,
+) -> Optional[Tensor]:
+    """
+    Packed chunked rel-pos self-attention via :mod:`returnn.torch.util.chunked_rel_pos_att_triton`.
+    The packed buffer holds the chunks of a sequence in order, so the kernel reads the history of a chunk
+    from that buffer by index and no key or value is replicated per history slot.
+    CUDA only, any layout as-is (explicit per-seq starts + lens, so a bounded buffer works too).
+    None if not applicable (then the generic composition runs, which stays packed as well).
+
+    :param query: packed over (batch, chunked_time_dim), {..., chunk_dim, heads, qk_feat_dim}, not yet scaled
+    :param key: packed like query, {..., chunk_dim, heads, qk_feat_dim}
+    :param value: packed like query, {..., chunk_dim, heads, v_feat_dim}
+    :param pos_emb: {pos_emb_spatial_dim, [heads,] qk_feat_dim}, relative positional encoding
+    :param pos_bias_u: added to query for the content-based term
+    :param pos_bias_v: added to query for the position-based term
+    :param att_dropout: dropout for attention weights, zero outside training
+    :param v_feat_dim: embedding dimension of value
+    :param qk_feat_dim: embedding dimension of key and query
+    :param chunk_dim: rows of one chunk
+    :param chunked_time_dim: the chunks
+    :param pos_emb_spatial_dim: relative-position axis of pos_emb
+    :param chunk_history: how many previous chunks every chunk attends over
+    :param end_chunk_size_dim: rows a previous chunk contributes
+    :return: attention output packed like query, or None
+    """
+    if not (is_packed(query) and is_packed(key) and is_packed(value)) or is_packed(pos_emb):
+        return None
+    q_raw, k_raw, v_raw = _raw(query), _raw(key), _raw(value)
+    if q_raw.inner_backend.name != "torch" or query.device is None or not str(query.device).startswith("cuda"):
+        return None
+    try:
+        from returnn.torch.util import chunked_rel_pos_att_triton as kernel
+    except ImportError:
+        return None
+    if not kernel.supports_geometry(
+        chunk_size=chunk_dim.dimension,
+        kept_rows=end_chunk_size_dim.dimension,
+        key_dim=qk_feat_dim.dimension,
+        value_dim=v_feat_dim.dimension,
+    ):
+        return None
+    if len(q_raw.orig_dims) != 2 or q_raw.orig_dims[-1] != chunked_time_dim:
+        return None
+    if not q_raw.same_packing(k_raw) or not q_raw.same_packing(v_raw):
+        return None
+    q_with_bias_u = (query + pos_bias_u) if pos_bias_u is not None else query
+    q_with_bias_v = (query + pos_bias_v) if pos_bias_v is not None else query
+    if not is_packed(q_with_bias_u) or not is_packed(q_with_bias_v):
+        return None
+    qu_raw = _raw(q_with_bias_u)
+    head_dims = [d for d in qu_raw.inner.dims if d not in (qu_raw.packed_dim, chunk_dim, qk_feat_dim)]
+    if len(head_dims) != 1 or head_dims[0].dimension is None:
+        return None
+    (heads_dim,) = head_dims
+    if set(k_raw.inner.dims) != {k_raw.packed_dim, chunk_dim, heads_dim, qk_feat_dim}:
+        return None
+    if set(v_raw.inner.dims) != {v_raw.packed_dim, chunk_dim, heads_dim, v_feat_dim}:
+        return None
+    if not {pos_emb_spatial_dim, qk_feat_dim} <= set(pos_emb.dims) <= {pos_emb_spatial_dim, heads_dim, qk_feat_dim}:
+        return None
+
+    import torch
+
+    scale = qk_feat_dim.dimension**-0.5
+    # the kernel scales the content-based term itself, so the position term arrives pre-scaled
+    matrix_bd = rf.matmul(q_with_bias_v, pos_emb, reduce=qk_feat_dim) * scale
+    if not is_packed(matrix_bd) or not qu_raw.same_packing(_raw(matrix_bd)):
+        return None
+    n_heads, s_rows = heads_dim.dimension, chunk_dim.dimension
+
+    def _rows(tensor: Tensor, last: Dim) -> torch.Tensor:
+        t_raw = _raw(tensor)
+        inner = t_raw.inner.copy_compatible_to_dims_raw([t_raw.packed_dim, chunk_dim, heads_dim, last])
+        return inner.reshape(-1, n_heads, last.dimension)
+
+    q_t, k_t, v_t = _rows(q_with_bias_u, qk_feat_dim), _rows(key, qk_feat_dim), _rows(value, v_feat_dim)
+    bd_t = _rows(matrix_bd, pos_emb_spatial_dim)
+    dev = qu_raw.inner.device
+    starts_rf, _ = q_raw.seq_starts(device=dev)
+    # one packed row is one chunk, so a sequence covers chunk-size kernel rows per packed row
+    seq_starts = (starts_rf.raw_tensor.flatten() * s_rows).to(torch.int32)
+    seq_lens = (rf.copy_to_device(q_raw.seq_lens, dev).raw_tensor.flatten() * s_rows).to(torch.int32)
+    out_t = kernel.chunked_rel_pos_att_autocast(
+        q_t,
+        k_t,
+        v_t,
+        bd_t,
+        seq_starts,
+        seq_lens,
+        int(chunked_time_dim.get_dim_value()) * s_rows,
+        chunk_size=s_rows,
+        kept_rows=end_chunk_size_dim.dimension,
+        history=chunk_history,
+        dropout_p=att_dropout,
+        scale=scale,
+    )
+    out_inner = Tensor(
+        "chunked_rel_pos_att",
+        dims=[qu_raw.packed_dim, chunk_dim, heads_dim, v_feat_dim],
+        dtype=qu_raw.inner_backend.get_dtype_name_raw(out_t),
+        feature_dim=v_feat_dim,
+    )
+    out_inner.raw_tensor = out_t.reshape(-1, s_rows, n_heads, v_feat_dim.dimension)
+    _count_attention_path("chunked_rel_pos_triton")
+    return qu_raw.rewrap(out_inner, name="chunked_rel_pos_att")
+
+
 def _torch_triton_key_range_attention(
     query: Tensor,
     key: Tensor,
@@ -4055,6 +4178,62 @@ class PackedBackend(Backend[PackedRawTensor]):
             lookahead=lookahead,
         )
         return _repack_result(out, template) if template is not None else out
+
+    @classmethod
+    def chunked_rel_pos_self_attention(
+        cls,
+        query: Tensor,
+        key: Tensor,
+        value: Tensor,
+        pos_emb: Tensor,
+        *,
+        pos_bias_u: Optional[Tensor],
+        pos_bias_v: Optional[Tensor],
+        att_dropout: float = 0.0,
+        att_dropout_broadcast: bool,
+        v_feat_dim: Dim,
+        qk_feat_dim: Dim,
+        chunk_dim: Dim,
+        chunked_time_dim: Dim,
+        hist_dim: Dim,
+        pos_emb_spatial_dim: Dim,
+        chunk_history: int,
+        end_chunk_size_dim: Dim,
+    ):
+        """
+        Chunked self-attention with relative positional encoding.
+        Packed specialization which prefers our Triton kernel
+        (:func:`_torch_triton_chunked_rel_pos_attention`) over the packed chunk buffer, since it reads the
+        history of a chunk from that buffer by index and runs on a bounded buffer for CUDA-graph capture.
+        The generic composition is the fallback, which stays packed as well but materializes that history.
+        """
+        shared = dict(
+            pos_bias_u=pos_bias_u,
+            pos_bias_v=pos_bias_v,
+            v_feat_dim=v_feat_dim,
+            qk_feat_dim=qk_feat_dim,
+            chunk_dim=chunk_dim,
+            chunked_time_dim=chunked_time_dim,
+            pos_emb_spatial_dim=pos_emb_spatial_dim,
+            chunk_history=chunk_history,
+            end_chunk_size_dim=end_chunk_size_dim,
+        )
+        generic = dict(shared, att_dropout=att_dropout, att_dropout_broadcast=att_dropout_broadcast, hist_dim=hist_dim)
+        dropout_active = False
+        if att_dropout:
+            train_flag = rf.get_run_ctx().is_train_flag_enabled(func=rf.dropout)
+            if not isinstance(train_flag, bool):
+                # a dynamic train flag decides per call, which only the generic composition expresses
+                return Backend.chunked_rel_pos_self_attention(query, key, value, pos_emb, **generic)
+            dropout_active = train_flag
+        # the kernel expresses no dropout and per-element dropout, broadcast dropout it cannot
+        if _att_fast_paths_enabled("chunked_rel_pos_self_attention") and not (dropout_active and att_dropout_broadcast):
+            out = _torch_triton_chunked_rel_pos_attention(
+                query, key, value, pos_emb, att_dropout=att_dropout if dropout_active else 0.0, **shared
+            )
+            if out is not None:
+                return out
+        return Backend.chunked_rel_pos_self_attention(query, key, value, pos_emb, **generic)
 
     @staticmethod
     def pool(

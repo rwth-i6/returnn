@@ -1734,6 +1734,113 @@ def test_chunked_rel_pos_att_triton_kernel_grad():
         torch.testing.assert_close(g, g_ref)
 
 
+def test_chunked_rel_pos_self_attention_matches_an_explicit_reference():
+    """
+    the chunked attention of the chunked Conformer as a frontend op, where every chunk attends over its
+    own rows and the first kept rows of the MEM previous chunks, with zero keys before the first chunk.
+    Padded and packed storage both give the values of an explicit per-row reference,
+    and the packed run never leaves the packed layout
+    """
+    rf.select_backend_torch()
+    # the head dim is one the kernel covers, and the last sequence holds no chunk at all,
+    # as the tail of a bounded buffer does
+    s_rows, c_rows, mem, n_heads, d = 4, 2, 2, 2, 32
+    chunks = [5, 3, 4, 0]
+    batch_dim = Dim(len(chunks), name="batch")
+    chunked_time_dim = Dim(
+        Tensor("chunk_lens", dims=[batch_dim], dtype="int32", raw_tensor=torch.tensor(chunks, dtype=torch.int32)),
+        name="chunked_time",
+    )
+    chunk_dim, end_chunk_dim = Dim(s_rows, name="chunk"), Dim(c_rows, name="end_chunk")
+    heads_dim, key_dim, value_dim = Dim(n_heads, name="heads"), Dim(d, name="key"), Dim(d, name="value")
+    hist_dim = Dim(mem * c_rows + s_rows, name="hist")
+    pos_dim = Dim(mem * c_rows + 2 * s_rows - 1, name="pos")
+    gen = torch.Generator().manual_seed(11)
+
+    def _tensor(name, dims) -> Tensor:
+        raw = torch.randn(*[dim.get_dim_value() for dim in dims], generator=gen)
+        return Tensor(name, dims=dims, dtype="float32", raw_tensor=raw)
+
+    lead = [batch_dim, chunked_time_dim, chunk_dim, heads_dim]
+    query, key = _tensor("q", lead + [key_dim]), _tensor("k", lead + [key_dim])
+    value = _tensor("v", lead + [value_dim])
+    pos_emb = _tensor("pos_emb", [pos_dim, heads_dim, key_dim])
+    pos_bias_u, pos_bias_v = _tensor("bias_u", [heads_dim, key_dim]), _tensor("bias_v", [heads_dim, key_dim])
+
+    center, scale = mem * c_rows + s_rows - 1, d**-0.5
+    q_raw = query.copy_compatible_to_dims_raw(lead + [key_dim])
+    k_raw = key.copy_compatible_to_dims_raw(lead + [key_dim])
+    v_raw = value.copy_compatible_to_dims_raw(lead + [value_dim])
+    pos_raw = pos_emb.copy_compatible_to_dims_raw([pos_dim, heads_dim, key_dim])
+    u_raw = pos_bias_u.copy_compatible_to_dims_raw([heads_dim, key_dim])
+    v_bias_raw = pos_bias_v.copy_compatible_to_dims_raw([heads_dim, key_dim])
+    want, zero = torch.zeros_like(v_raw), torch.zeros(n_heads, d)
+    for b, n_chunks in enumerate(chunks):
+        for c in range(n_chunks):
+            keys = [(kc, kp) for kc in range(c - mem, c) for kp in range(c_rows)]
+            keys += [(c, kp) for kp in range(s_rows)]
+            k_sel = torch.stack([k_raw[b, kc, kp] if kc >= 0 else zero for kc, kp in keys])
+            v_sel = torch.stack([v_raw[b, kc, kp] if kc >= 0 else zero for kc, kp in keys])
+            for i in range(s_rows):
+                idx = torch.tensor([center + (kc - c) * c_rows + kp - i for kc, kp in keys])
+                matrix_bd = torch.einsum("hd,rhd->hr", q_raw[b, c, i] + v_bias_raw, pos_raw)
+                scores = (torch.einsum("hd,lhd->hl", q_raw[b, c, i] + u_raw, k_sel) + matrix_bd[:, idx]) * scale
+                want[b, c, i] = torch.einsum("hl,lhd->hd", torch.softmax(scores, dim=-1), v_sel)
+
+    kernel = None
+    if torch.cuda.is_available():
+        from returnn.torch.util import chunked_rel_pos_att_triton as kernel
+
+    packing = {
+        "packed": {},
+        # the bounded gapped buffer of a captured step, where the kernel reads per-seq starts and lens
+        "packed bounded": {"gap": 1, "align": 1, "total_bound": len(chunks) * max(chunks) + len(chunks)},
+    }
+    for device in ["cpu"] + (["cuda"] if torch.cuda.is_available() else []):
+        on_device = [rf.copy_to_device(t, device) for t in (query, key, value, pos_emb, pos_bias_u, pos_bias_v)]
+        for layout in ("padded", "packed", "packed bounded"):
+            sources = on_device[:3]
+            if layout != "padded":
+                # one packing for all three, as the qkv projection of one packed source gives them
+                first = packed.pack(sources[0], dims=[batch_dim, chunked_time_dim], **packing[layout])
+                sources = [first] + [packed.pack_like(t, first) for t in sources[1:]]
+            packed._warned_fallback_ops.clear()
+            kernel_calls = []
+            if kernel is not None:
+                inner = kernel.chunked_rel_pos_att_autocast
+                kernel.chunked_rel_pos_att_autocast = lambda *a, **kw: (
+                    kernel_calls.append(a[0].shape) or inner(*a, **kw)
+                )
+            try:
+                out = rf.chunked_rel_pos_self_attention(
+                    *sources,
+                    on_device[3],
+                    pos_bias_u=on_device[4],
+                    pos_bias_v=on_device[5],
+                    att_dropout=0.0,
+                    att_dropout_broadcast=False,
+                    v_feat_dim=value_dim,
+                    qk_feat_dim=key_dim,
+                    chunk_dim=chunk_dim,
+                    chunked_time_dim=chunked_time_dim,
+                    hist_dim=hist_dim,
+                    pos_emb_spatial_dim=pos_dim,
+                    chunk_history=mem,
+                    end_chunk_size_dim=end_chunk_dim,
+                )
+            finally:
+                if kernel is not None:
+                    kernel.chunked_rel_pos_att_autocast = inner
+            case = f"{device} {layout}"
+            # the kernel serves every case on cuda, and none on cpu, where the composition runs
+            assert len(kernel_calls) == (1 if device == "cuda" else 0), (case, kernel_calls)
+            assert not packed._warned_fallback_ops, (case, sorted(packed._warned_fallback_ops))
+            got = packed.unpack(out) if packed.is_packed(out) else out
+            got = got.copy_compatible_to_dims_raw(lead + [value_dim]).cpu()
+            for b, n_chunks in enumerate(chunks):
+                torch.testing.assert_close(got[b, :n_chunks], want[b, :n_chunks], rtol=1e-4, atol=1e-5, msg=case)
+
+
 def test_key_range_att_triton_kernel_grad():
     # The kernel where every query row attends one range of key rows: fwd + all grads vs masked energies,
     # at dropout 0 and at dropout > 0 with the kernel's own extracted mask, in f32, bf16 and f16.

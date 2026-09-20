@@ -20,6 +20,7 @@ __all__ = [
     "RotaryPosCausalSelfAttention",
     "RelPosSelfAttention",
     "RelPosCausalSelfAttention",
+    "chunked_rel_pos_self_attention",
     "CrossAttention",
     "LearnedRelativePositionalEncoding",
     "relative_positional_encoding",
@@ -1034,6 +1035,117 @@ def _rel_pos_enc_shift(x: Tensor, axis: Dim, pos_emb_spatial_dim: Dim, hist_dim:
     x_padded, _ = rf.slice(x_padded, axis=pos_emb_spatial_dim_, size=hist_dim)  # [B,H,T,T']
     x_padded.verify_out_shape(set(batch_dims) | {axis, hist_dim})
     return x_padded
+
+
+def chunked_rel_pos_self_attention(
+    query: Tensor,
+    key: Tensor,
+    value: Tensor,
+    pos_emb: Tensor,
+    *,
+    pos_bias_u: Optional[Tensor],
+    pos_bias_v: Optional[Tensor],
+    att_dropout: float = 0.0,
+    att_dropout_broadcast: Optional[bool] = None,
+    v_feat_dim: Dim,
+    qk_feat_dim: Dim,
+    chunk_dim: Dim,
+    chunked_time_dim: Dim,
+    hist_dim: Dim,
+    pos_emb_spatial_dim: Dim,
+    chunk_history: int,
+    end_chunk_size_dim: Dim,
+) -> Tensor:
+    """
+    Self-attention with relative positional encoding over a chunked encoder,
+    where every chunk attends over its own rows and the first ``end_chunk_size_dim`` rows
+    of each of the ``chunk_history`` previous chunks, with zero keys and values before the first chunk.
+
+    Key and value stay on the chunk grid, so a backend which reads the history straight from the chunk
+    buffer never replicates them per history slot, see :func:`Backend.chunked_rel_pos_self_attention`.
+
+    :param query: {..., chunked_time_dim, chunk_dim, qk_feat_dim}, not yet scaled
+    :param key: {..., chunked_time_dim, chunk_dim, qk_feat_dim}
+    :param value: {..., chunked_time_dim, chunk_dim, v_feat_dim}
+    :param pos_emb: {..., pos_emb_spatial_dim, qk_feat_dim}, relative positional encoding
+    :param pos_bias_u: {..., qk_feat_dim}, added to query for the content-based term (matrix a+c)
+    :param pos_bias_v: {..., qk_feat_dim}, added to query for the position-based term (matrix b+d)
+    :param att_dropout: dropout for attention weights
+    :param att_dropout_broadcast: whether to broadcast over all but ``hist_dim``.
+        normally not wanted. disabled by default since behavior version 19.
+    :param v_feat_dim: embedding dimension of value
+    :param qk_feat_dim: embedding dimension of key and query
+    :param chunk_dim: rows of one chunk, its center plus its right context
+    :param chunked_time_dim: the chunks
+    :param hist_dim: the keys one chunk attends over, ``chunk_history * end_chunk_size_dim + chunk_dim``
+    :param pos_emb_spatial_dim: relative-position axis of pos_emb, ``chunk_dim + hist_dim - 1``
+    :param chunk_history: how many previous chunks every chunk attends over
+    :param end_chunk_size_dim: rows a previous chunk contributes, its center
+    :return: attention output {..., chunked_time_dim, chunk_dim, v_feat_dim}
+    """
+    from . import _utils
+
+    if att_dropout_broadcast is None:
+        att_dropout_broadcast = _att_dropout_broadcast_default()
+    assert hist_dim.dimension == chunk_history * end_chunk_size_dim.dimension + chunk_dim.dimension, (
+        f"chunked_rel_pos_self_attention: history {hist_dim} does not hold"
+        f" {chunk_history} times {end_chunk_size_dim} plus {chunk_dim}"
+    )
+    assert pos_emb_spatial_dim.dimension == chunk_dim.dimension + hist_dim.dimension - 1, (
+        f"chunked_rel_pos_self_attention: position term {pos_emb_spatial_dim} does not hold"
+        f" {chunk_dim} plus {hist_dim} minus one"
+    )
+    # Dispatch over all args (not just query), see :func:`dot_attention`.
+    backend = _utils.get_backend_from_tensors(query, key, value, pos_emb)
+    return backend.chunked_rel_pos_self_attention(
+        query,
+        key,
+        value,
+        pos_emb,
+        pos_bias_u=pos_bias_u,
+        pos_bias_v=pos_bias_v,
+        att_dropout=att_dropout,
+        att_dropout_broadcast=att_dropout_broadcast,
+        v_feat_dim=v_feat_dim,
+        qk_feat_dim=qk_feat_dim,
+        chunk_dim=chunk_dim,
+        chunked_time_dim=chunked_time_dim,
+        hist_dim=hist_dim,
+        pos_emb_spatial_dim=pos_emb_spatial_dim,
+        chunk_history=chunk_history,
+        end_chunk_size_dim=end_chunk_size_dim,
+    )
+
+
+def _chunked_att_history(
+    source: Tensor,
+    *,
+    chunk_dim: Dim,
+    chunked_time_dim: Dim,
+    chunk_history: int,
+    end_chunk_size_dim: Dim,
+    out_dim: Dim,
+) -> Tensor:
+    """
+    The keys or values one chunk attends over, the centers of the previous chunks in order
+    followed by the chunk itself, zero where a previous chunk is before the first one.
+
+    :param source: {..., chunked_time_dim, chunk_dim, feature}
+    :param chunk_dim: rows of one chunk
+    :param chunked_time_dim: the chunks
+    :param chunk_history: how many previous chunks every chunk attends over
+    :param end_chunk_size_dim: rows a previous chunk contributes
+    :param out_dim: the history dim
+    :return: {..., chunked_time_dim, out_dim, feature}
+    """
+    center, _ = rf.slice(source, axis=chunk_dim, size=end_chunk_size_dim)
+    parts = [
+        (rf.shift_right(center, axis=chunked_time_dim, pad_value=0.0, amount=shift), end_chunk_size_dim)
+        for shift in range(chunk_history, 0, -1)
+    ]
+    parts.append((source, chunk_dim))
+    out, _ = rf.concat(*parts, out_dim=out_dim)
+    return out
 
 
 class RelPosCausalSelfAttention(CausalSelfAttention):

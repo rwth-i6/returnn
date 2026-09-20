@@ -791,3 +791,80 @@ def chunked_rel_pos_att(
         q, k, v, bd, seq_starts, seq_lens, max_rows, chunk_size, kept_rows, history, dropout_p, seed, scale
     )
     return out
+
+
+def supports_geometry(*, chunk_size: Optional[int], kept_rows: Optional[int], key_dim: int, value_dim: int) -> bool:
+    """
+    :param chunk_size: rows per chunk, None where the chunk is no static size
+    :param kept_rows: rows of a previous chunk that stay in the history, None where it is no static size
+    :param key_dim: head dim of query and key
+    :param value_dim: head dim of value
+    :return: whether the kernel covers this geometry, which needs both sizes static
+        and one head dim of at least 16 which is a power of two
+    """
+    return bool(
+        is_available()
+        and chunk_size
+        and kept_rows
+        and key_dim == value_dim
+        and key_dim >= 16
+        and not key_dim & (key_dim - 1)
+    )
+
+
+def chunked_rel_pos_att_autocast(
+    q: torch.Tensor,
+    k: torch.Tensor,
+    v: torch.Tensor,
+    bd: torch.Tensor,
+    seq_starts: torch.Tensor,
+    seq_lens: torch.Tensor,
+    max_rows: int,
+    *,
+    chunk_size: int,
+    kept_rows: int,
+    history: int,
+    dropout_p: float = 0.0,
+    scale: Optional[float] = None,
+) -> torch.Tensor:
+    """
+    :func:`chunked_rel_pos_att` with q, k, v and the position term in one dtype, the autocast dtype
+    where autocast is on, since the frontend hands the kernel float32 raws there.
+
+    :param q: (total, H, D), rows = chunk * chunk_size + position
+    :param k: (total, H, D)
+    :param v: (total, H, D)
+    :param bd: (total, H, R), pre-scaled position term
+    :param seq_starts: (B,), int32, start row of each seq
+    :param seq_lens: (B,), int32, rows of each seq
+    :param max_rows: max rows of a seq
+    :param chunk_size: rows per chunk
+    :param kept_rows: rows of a previous chunk that stay in the history
+    :param history: number of previous chunks in the history
+    :param dropout_p: post-softmax weight dropout probability
+    :param scale: applied to the q k^T term (default 1/sqrt(D))
+    :return: attention output, (total, H, D)
+    """
+    dtype = q.dtype
+    if (
+        dtype not in (torch.float16, torch.bfloat16)
+        and hasattr(torch, "get_autocast_dtype")  # torch >= 2.4
+        and torch.is_autocast_enabled("cuda")
+    ):
+        amp_dtype = torch.get_autocast_dtype("cuda")
+        if amp_dtype in (torch.float16, torch.bfloat16):
+            dtype = amp_dtype
+    return chunked_rel_pos_att(
+        q.to(dtype),
+        k.to(dtype),
+        v.to(dtype),
+        bd.to(dtype),
+        seq_starts,
+        seq_lens,
+        max_rows,
+        chunk_size=chunk_size,
+        kept_rows=kept_rows,
+        history=history,
+        dropout_p=dropout_p,
+        scale=scale,
+    )

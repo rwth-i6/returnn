@@ -1950,6 +1950,82 @@ class Backend(Generic[T]):
             att.feature_dim = v_feat_dim
         return att
 
+    @classmethod
+    def chunked_rel_pos_self_attention(
+        cls,
+        query: Tensor,
+        key: Tensor,
+        value: Tensor,
+        pos_emb: Tensor,
+        *,
+        pos_bias_u: Optional[Tensor],
+        pos_bias_v: Optional[Tensor],
+        att_dropout: float = 0.0,
+        att_dropout_broadcast: bool,
+        v_feat_dim: Dim,
+        qk_feat_dim: Dim,
+        chunk_dim: Dim,
+        chunked_time_dim: Dim,
+        hist_dim: Dim,
+        pos_emb_spatial_dim: Dim,
+        chunk_history: int,
+        end_chunk_size_dim: Dim,
+    ):
+        """
+        Self-attention over a chunked encoder with relative positional encoding,
+        as used by :func:`returnn.frontend.chunked_rel_pos_self_attention`.
+        This generic implementation materializes the history of every chunk (the centers of the previous
+        chunks concatenated in front of the chunk itself) and then scores it like
+        :func:`rel_pos_self_attention`. Backends can override this with a kernel which reads the history
+        straight from the chunk buffer, so no key or value is replicated per history slot.
+
+        :param query: {..., chunked_time_dim, chunk_dim, qk_feat_dim}, not yet scaled
+        :param key: {..., chunked_time_dim, chunk_dim, qk_feat_dim}
+        :param value: {..., chunked_time_dim, chunk_dim, v_feat_dim}
+        :param pos_emb: {..., pos_emb_spatial_dim, qk_feat_dim}, relative positional encoding
+        :param pos_bias_u: {..., qk_feat_dim}, added to query for the content-based term (matrix a+c)
+        :param pos_bias_v: {..., qk_feat_dim}, added to query for the position-based term (matrix b+d)
+        :param att_dropout: dropout for attention weights
+        :param att_dropout_broadcast: whether to broadcast over all but ``hist_dim``
+        :param v_feat_dim: embedding dimension of value
+        :param qk_feat_dim: embedding dimension of key and query
+        :param chunk_dim: rows of one chunk, its center plus its right context
+        :param chunked_time_dim: the chunks
+        :param hist_dim: the keys one chunk attends over
+        :param pos_emb_spatial_dim: relative-position axis of pos_emb
+        :param chunk_history: how many previous chunks every chunk attends over
+        :param end_chunk_size_dim: rows a previous chunk contributes, its center
+        :return: attention output
+        """
+        # noinspection PyProtectedMember
+        from returnn.frontend.attention import _chunked_att_history, _rel_pos_enc_shift
+
+        q_with_bias_u = (query + pos_bias_u) if pos_bias_u is not None else query
+        q_with_bias_v = (query + pos_bias_v) if pos_bias_v is not None else query
+        history = dict(
+            chunk_dim=chunk_dim,
+            chunked_time_dim=chunked_time_dim,
+            chunk_history=chunk_history,
+            end_chunk_size_dim=end_chunk_size_dim,
+            out_dim=hist_dim,
+        )
+        key = _chunked_att_history(key, **history)
+        value = _chunked_att_history(value, **history)
+
+        matrix_ac = rf.matmul(q_with_bias_u, key, reduce=qk_feat_dim)
+        matrix_bd = rf.matmul(q_with_bias_v, pos_emb, reduce=qk_feat_dim)
+        matrix_bd = _rel_pos_enc_shift(matrix_bd, chunk_dim, pos_emb_spatial_dim, hist_dim)
+
+        scores = matrix_ac + matrix_bd
+        del matrix_ac, matrix_bd
+        scores *= qk_feat_dim.dimension**-0.5
+        att_weights = rf.softmax(scores, axis=hist_dim)
+        att_weights = rf.dropout(att_weights, att_dropout, axis=att_dropout_broadcast and hist_dim)
+        att = rf.matmul(att_weights, value, reduce=hist_dim, use_mask=False)
+        if v_feat_dim in att.dims:
+            att.feature_dim = v_feat_dim
+        return att
+
     # For eager-based backends, List[Tensor] is a reasonable default implementation and type.
     TensorArrayType = Any
 
