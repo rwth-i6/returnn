@@ -2496,7 +2496,7 @@ class TorchBackend(Backend[torch.Tensor]):
                 operand.raw_tensor.dtype in (torch.float16, torch.bfloat16, torch.float32)
                 for operand in [source, filter] + ([bias] if bias is not None else [])
             )
-            and type(source.raw_tensor) in (torch.Tensor, torch.nn.Parameter)
+            and (type(source.raw_tensor) in (torch.Tensor, torch.nn.Parameter) or _depthwise_conv_triton_traceable())
             and not torch.onnx.is_in_onnx_export()
         ):
             out = _conv_depthwise_1d_triton(
@@ -3173,6 +3173,18 @@ def _fused_causal_attention(
     if value.feature_dim in out.dims:
         out.feature_dim = value.feature_dim
     return out
+
+
+def _depthwise_conv_triton_traceable() -> bool:
+    """
+    :return: whether the Triton depthwise conv also takes the tensors of a traced step
+        (fake or functional tensors, e.g. the compiled step of torch_cuda_graph), through its opaque ops
+    """
+    try:
+        from returnn.torch.util import depthwise_conv_triton
+    except ImportError:
+        return False
+    return depthwise_conv_triton.traceable()
 
 
 def _conv_depthwise_1d_triton(
