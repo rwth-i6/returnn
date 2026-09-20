@@ -4476,6 +4476,10 @@ class PackedBackend(Backend[PackedRawTensor]):
         lens = rf.scatter(
             rf.cast(mask_inner, "int32"), indices=seq, indices_dim=raw.packed_dim, out_dim=batch, mode="sum"
         )
+        if not rf.is_static_traceable():
+            # outside tracing the sizes of a dim live on the host, like those of the extern data,
+            # else dim math with such a dim (e.g. frames + selected) mixes devices
+            lens = rf.copy_to_device(lens, "cpu")
         if out_dim is None:
             out_dim = Dim(lens, name="masked_select")
         elif out_dim.dyn_size_ext is None or out_dim.dyn_size_ext.raw_tensor is None:
