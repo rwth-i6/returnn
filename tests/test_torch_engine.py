@@ -1426,6 +1426,9 @@ def _run_cuda_graph_train(*, compile_: bool, torch_model: bool = False):
                 # or trace and compile the step must leave the training state alone
                 seen = int(engine._orig_model.steps_seen.raw_tensor)
                 assert seen == engine.global_train_step, (seen, engine.global_train_step)
+            # the run end must destroy the graph, else a NCCL comm it captured never shuts down
+            engine.finalize()
+            assert engine._graph_capture is None
     finally:
         returnn_log.initialize()
     with open(log_file.name, "rt", encoding="utf-8") as f:
