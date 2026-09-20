@@ -71,13 +71,20 @@ def moments(
         if isinstance(correction, Tensor) or correction != 0:
             variance *= count / (count - correction)
         return rf.cast(mean, compute_dtype), rf.cast(variance, compute_dtype)
+    # Accumulated in float32 like the distributed branch, and rounded once at the end.
+    # A low-precision reduction drifts by several ulps over a few thousand frames, and it drifts
+    # differently per storage: a padded or exact packed buffer takes a direct mean, a bounded one
+    # divides a masked sum by its count, and under Torch CUDA autocast the sum promotes where the
+    # mean does not. The statistics then depend on the layout, and a running mean keeps that error.
+    compute_dtype = x.dtype
+    x = rf.cast(x, "float32")
     mean = rf.reduce_mean(x, axis=axis, use_mask=use_mask)
     # stop_gradient does not change the gradient here
     variance = rf.reduce_mean(rf.squared_difference(x, rf.stop_gradient(mean)), axis=axis, use_mask=use_mask)
     if isinstance(correction, Tensor) or correction != 0:
         n = rf.num_elements_of_shape(axis, use_mask=use_mask)
         variance *= n / (n - correction)
-    return mean, variance
+    return rf.cast(mean, compute_dtype), rf.cast(variance, compute_dtype)
 
 
 def _global_num_elements(axis: Union[Dim, Sequence[Dim]], *, use_mask: bool, device: Optional[str]) -> Tensor:

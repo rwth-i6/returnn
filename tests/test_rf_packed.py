@@ -1944,6 +1944,41 @@ def test_conv_packed_auto_realign_static():
         _assert_equal_non_padded(out_p, out_ref, batch_dim, sp_ref)
 
 
+def test_moments_round_the_true_statistics_once_in_every_layout():
+    """
+    the statistics of a normalization must not depend on the storage nor on the reduction form.
+    A bfloat16 reduction over a few thousand rows drifts by several ulps, and differently per layout,
+    since the padded and the exact packed path take a direct mean where a bound buffer divides a masked
+    sum by its count, so the moments are taken in float32 and rounded once
+    """
+    rf.select_backend_torch()
+    lens = [997, 613, 421]
+    batch_dim = Dim(len(lens), name="batch")
+    time_dim = Dim(
+        Tensor("lens", dims=[batch_dim], dtype="int32", raw_tensor=torch.tensor(lens, dtype=torch.int32)),
+        name="time",
+    )
+    feat_dim = Dim(8, name="feat")
+    gen = torch.Generator().manual_seed(4)
+    raw = (torch.randn(len(lens), max(lens), feat_dim.dimension, generator=gen) * 0.1 + 3.0).to(torch.bfloat16)
+    x = Tensor("x", dims=[batch_dim, time_dim, feat_dim], dtype="bfloat16", raw_tensor=raw, feature_dim=feat_dim)
+
+    rows = torch.cat([raw[b, :n] for b, n in enumerate(lens)]).double()
+    want = (rows.mean(dim=0).to(torch.bfloat16), rows.var(dim=0, correction=0).to(torch.bfloat16))
+
+    bound = packed.pack(x, dims=[batch_dim, time_dim], gap=3, align=1, total_bound=sum(lens) + 200)
+    # junk past the content, which a wrong mask would pull into the statistics
+    bound.raw_tensor.inner.raw_tensor[sum(lens) + 6 :] = 123.0
+    layouts = (("padded", x), ("packed", packed.pack(x, dims=[batch_dim, time_dim])), ("bound packed", bound))
+    for name, source in layouts:
+        mean, variance = rf.moments(source, axis=[batch_dim, time_dim])
+        assert (mean.dtype, variance.dtype) == ("bfloat16", "bfloat16"), (name, mean.dtype, variance.dtype)
+        for value, reference, what in ((mean, want[0], "mean"), (variance, want[1], "variance")):
+            torch.testing.assert_close(
+                value.copy_compatible_to_dims_raw([feat_dim]), reference, rtol=0, atol=0, msg=f"{name} {what}"
+            )
+
+
 if __name__ == "__main__":
     better_exchook.install()
     if len(sys.argv) <= 1:
