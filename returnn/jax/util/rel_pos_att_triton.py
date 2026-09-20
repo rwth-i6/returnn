@@ -29,6 +29,7 @@ import jax.numpy as jnp
 # but the kernels themselves touch nothing torch-specific.
 # noinspection PyProtectedMember
 from returnn.torch.util.rel_pos_att_triton import (
+    _UNBOUNDED,
     _rel_pos_fwd_kernel,
     _rel_pos_bwd_kernel_delta,
     _rel_pos_bwd_kernel_dkv,
@@ -111,6 +112,8 @@ def rel_pos_att_fwd(
         r,  # stride_bh
         n_heads * d,  # stride_ot
         d,  # stride_oh
+        _UNBOUNDED,  # left_ctx, the band is torch-only (BAND False below)
+        _UNBOUNDED,  # lookahead
         kernel=_rel_pos_fwd_kernel,
         out_type=(),
         grid=(triton.cdiv(max_len, block_m), n_batch * n_heads),
@@ -125,6 +128,7 @@ def rel_pos_att_fwd(
         BLOCK_N=block_n,
         ENABLE_DROPOUT=dropout_p > 0.0,
         IEEE=q.dtype == jnp.float32,
+        BAND=False,
     )
     return out_ref[...], lse_ref[...]
 
@@ -178,7 +182,7 @@ def rel_pos_att_bwd(
     n_batch = seq_starts.shape[0]
     block_m, block_n = (64, 64) if d <= 64 else (32, 32)
     seed_arr = jnp.asarray(seed, dtype=jnp.int32)
-    strides = (n_heads * d, d, n_heads * r, r)
+    strides = (n_heads * d, d, n_heads * r, r, _UNBOUNDED, _UNBOUNDED)
     consts = dict(
         H=n_heads,
         D=d,
@@ -188,6 +192,7 @@ def rel_pos_att_bwd(
         BLOCK_N=block_n,
         ENABLE_DROPOUT=dropout_p > 0.0,
         IEEE=q.dtype == jnp.float32,
+        BAND=False,
         # No num_warps override here, unlike the forward:
         # these kernels use 32x32 tiles, where 8 warps are slower than the default 4.
     )

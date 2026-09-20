@@ -1372,6 +1372,31 @@ def test_rel_pos_self_attention_dropout_train_packed():
         assert bool(numpy.isfinite(packed.unpack(out).raw_tensor.detach().numpy()).all())
 
 
+def test_rel_pos_self_attention_band_packed():
+    # The band of a streaming encoder over packed frames: a packed path has to serve it
+    # (on cpu the per-seq one), nothing may unpack, and the result must match the padded run.
+    rf.select_backend_torch()
+    x, batch_dim, time_dim, feat_dim = _make_input(seq_lens=(9, 6), feat=8, seed=11)
+    with rf.set_default_device_ctx("cpu"):
+        rf.set_random_seed(23)
+        att = rf.RelPosSelfAttention(
+            feat_dim,
+            proj_dim=feat_dim,
+            key_dim_total=Dim(8, name="key_tot"),
+            value_dim_total=Dim(8, name="val_tot"),
+            num_heads=2,
+            att_dropout=0.0,
+            left_context=3,
+            lookahead=0,
+        )
+        out_ref = att(x, axis=time_dim)
+        packed.attention_path_counts.clear()
+        out_p = att(packed.pack(x, gap=4), axis=time_dim)
+        assert packed.is_packed(out_p)
+        assert packed.attention_path_counts.get("rel_pos_per_seq") == 1, packed.attention_path_counts
+    _assert_equal_non_padded(out_p, out_ref, batch_dim, time_dim)
+
+
 def test_rel_pos_att_triton_kernel_grad():
     # The Triton varlen rel-pos kernel (CUDA; the train-mode dropout fast path):
     # fwd + ALL grads (q, k, v, bd) vs autograd through an eager per-seq reference,
@@ -1430,6 +1455,185 @@ def test_rel_pos_att_triton_kernel_grad():
         ref.backward(d_out)
         for g_kernel, t in zip(grads_kernel, leaves + [bd_leaf]):
             numpy.testing.assert_allclose(g_kernel.cpu().numpy(), t.grad.cpu().numpy(), rtol=1e-4, atol=1e-4)
+
+
+def test_rel_pos_band_under_cuda_graph_capture():
+    """
+    the regime of a captured train step: a bound-sized packed buffer, the lens on the device,
+    and one graph over forward and backward for every batch. The band has to reach the Triton kernel
+    and replay correctly when the lengths change, an empty sequence included.
+    """
+    if not torch.cuda.is_available():
+        raise unittest.SkipTest("cuda only: real graph capture")
+    rf.select_backend_torch()
+    dev = "cuda"
+    n_seqs, cap, bound, n_feat = 3, 5, 17, 32
+    batch_dim = Dim(n_seqs, name="batch")
+    feat_dim = Dim(n_feat, name="feat")
+    lens_buf = torch.zeros(n_seqs, dtype=torch.int32, device=dev)
+    time_dim = Dim(Tensor("time", dims=[batch_dim], dtype="int32", raw_tensor=lens_buf), name="time", capacity=cap)
+    packed_dim = Dim(bound, name="packed")
+    x_buf = torch.zeros(bound, n_feat, device=dev, requires_grad=True)
+    with rf.set_default_device_ctx(dev):
+        rf.set_random_seed(29)
+        att = rf.RelPosSelfAttention(
+            feat_dim,
+            proj_dim=feat_dim,
+            key_dim_total=Dim(64, name="key_tot"),
+            value_dim_total=Dim(64, name="val_tot"),
+            num_heads=2,
+            att_dropout=0.0,
+            left_context=3,
+            lookahead=0,
+        )
+    weight = torch.randn(n_feat, generator=torch.Generator().manual_seed(9)).to(dev)
+
+    def _step():
+        """one traced step over the static buffers, as the engine builds it"""
+        time_dim.reset_eager()
+        time_dim.dyn_size_ext.raw_tensor = lens_buf
+        flat = Tensor("x", dims=[packed_dim, feat_dim], dtype="float32", raw_tensor=x_buf)
+        x = packed.pack_import(flat, batch_dim=batch_dim, spatial_dim=time_dim, packed_dim=packed_dim)
+        # outside the engine the index tensors of the position encoding land on cpu without this
+        with rf.set_default_device_ctx(dev), rf.set_static_traceable_ctx():
+            out = att(x, axis=time_dim)
+        assert packed.is_packed(out) and out.raw_tensor.packed_dim.dimension is not None, out.raw_tensor
+        rows = out.raw_tensor.inner.copy_transpose([out.raw_tensor.packed_dim, feat_dim]).raw_tensor
+        in_seq = torch.arange(rows.shape[0], device=dev) < lens_buf.sum()
+        total = (rows * weight * in_seq[:, None]).sum()
+        total.backward()
+        return total
+
+    def _load(lens, seed):
+        """writes one batch densely into the static buffers, and returns its padded form"""
+        pad = torch.randn(n_seqs, cap, n_feat, generator=torch.Generator().manual_seed(seed))
+        with torch.no_grad():
+            x_buf.zero_()
+            x_buf[: sum(lens)] = torch.cat([pad[b, :n] for b, n in enumerate(lens)]).to(dev)
+            lens_buf.copy_(torch.tensor(lens, dtype=torch.int32))
+        return pad
+
+    def _reference(pad, lens):
+        """
+        the same attention per sequence, each at its own length, so no query sees a band of
+        padding alone, which has no defined result
+        """
+        totals, grads = [], []
+        for b, ln in enumerate(lens):
+            if not ln:
+                continue
+            raw = pad[b, :ln].clone().to(dev).requires_grad_(True)
+            time_ref = Dim(ln, name="t_ref")
+            x = Tensor("x", dims=[time_ref, feat_dim], dtype="float32", raw_tensor=raw)
+            with rf.set_default_device_ctx(dev):
+                out = att(x, axis=time_ref).copy_transpose([time_ref, feat_dim]).raw_tensor
+            total = (out * weight).sum()
+            totals.append(total.detach())
+            grads.append(torch.autograd.grad(total, raw)[0])
+        return sum(totals), torch.cat(grads)
+
+    batches = [((5, 2, 4), 1), ((1, 5, 5), 2), ((3, 0, 2), 3), ((5, 5, 5), 4)]
+    _load(*batches[0])
+    side = torch.cuda.Stream()
+    side.wait_stream(torch.cuda.current_stream())
+    with torch.cuda.stream(side):
+        _step()
+    torch.cuda.current_stream().wait_stream(side)
+    x_buf.grad = None
+    packed.attention_path_counts.clear()
+    graph = torch.cuda.CUDAGraph()
+    with torch.cuda.graph(graph):
+        total = _step()
+    assert packed.attention_path_counts == {"rel_pos_triton": 1}, packed.attention_path_counts
+    for lens, seed in batches:
+        pad = _load(lens, seed)
+        with torch.no_grad():
+            x_buf.grad.zero_()
+        graph.replay()
+        torch.cuda.synchronize()
+        want_total, want_grad = _reference(pad, lens)
+        numpy.testing.assert_allclose(
+            float(total.detach()), float(want_total), rtol=1e-4, atol=1e-4, err_msg=f"lens {lens}"
+        )
+        numpy.testing.assert_allclose(
+            x_buf.grad[: sum(lens)].cpu().numpy(), want_grad.cpu().numpy(), rtol=1e-3, atol=1e-4, err_msg=f"lens {lens}"
+        )
+
+
+def test_rel_pos_att_triton_kernel_band_grad():
+    # The same kernel with a band: a query row attends only [i - left_context, i + lookahead] of its
+    # sequence, the mask of a streaming encoder, and the keys outside it never enter the softmax.
+    # fwd + all grads vs the masked per-seq reference, over band shapes which cross the block borders,
+    # at dropout 0 and at dropout > 0 with the kernel's own extracted mask.
+    rf.select_backend_torch()
+    import torch as _torch
+
+    if not _torch.cuda.is_available():
+        raise unittest.SkipTest("needs CUDA")
+    try:
+        from returnn.torch.util import rel_pos_att_triton as m
+    except ImportError as exc:
+        raise unittest.SkipTest(f"triton not available ({exc})")
+
+    dev = "cuda"
+    lens = [33, 21, 9]
+    max_len = max(lens)
+    total, n_heads, d = sum(lens), 2, 32
+    r = 2 * max_len - 1
+    starts = torch.tensor([0, 33, 54], dtype=torch.int32, device=dev)
+    lens_t = torch.tensor(lens, dtype=torch.int32, device=dev)
+    scale = 1.0 / (d**0.5)
+    gen = torch.Generator(device="cpu").manual_seed(19)
+
+    def _reference(q, k, v, bd, keep_mask, dropout_p, left, ahead):
+        outs = []
+        center = max_len - 1
+        for b, ln in enumerate(lens):
+            s0 = int(starts[b])
+            qb, kb, vb, bdb = q[s0 : s0 + ln], k[s0 : s0 + ln], v[s0 : s0 + ln], bd[s0 : s0 + ln]
+            s = torch.einsum("ihd,jhd->hij", qb, kb) * scale
+            rel = torch.arange(ln, device=dev)[None, :] - torch.arange(ln, device=dev)[:, None]
+            s = s + bdb.permute(1, 0, 2).gather(2, (center + rel).unsqueeze(0).expand(s.shape[0], -1, -1))
+            allowed = _torch.ones_like(rel, dtype=_torch.bool) if ahead is None else rel <= ahead
+            if left is not None:
+                allowed = allowed & (rel >= -left)
+            s = torch.where(allowed[None], s, torch.full_like(s, float("-inf")))
+            w = torch.softmax(s, dim=-1)
+            if keep_mask is not None:
+                w = w * keep_mask[s0 : s0 + ln, :, :ln].permute(1, 0, 2).float() / (1.0 - dropout_p)
+            outs.append(torch.einsum("hij,jhd->ihd", w, vb))
+        return torch.cat(outs, 0)
+
+    bands = [(None, 0), (8, 0), (None, 4), (12, 3)]
+    for (left, ahead), (dropout_p, seed) in zip(bands, [(0.0, 0), (0.3, 999), (0.0, 0), (0.3, 7)]):
+        leaves = [torch.randn(total, n_heads, d, generator=gen).to(dev).requires_grad_(True) for _ in range(3)]
+        bd_leaf = (torch.randn(total, n_heads, r, generator=gen) * 0.5).to(dev).requires_grad_(True)
+        out = m.rel_pos_att_varlen(
+            *leaves,
+            bd_leaf,
+            starts,
+            lens_t,
+            max_len,
+            dropout_p=dropout_p,
+            seed=seed,
+            scale=scale,
+            left_context=left,
+            lookahead=ahead,
+        )
+        d_out = torch.randn(total, n_heads, d, generator=gen).to(dev)
+        out.backward(d_out)
+        grads_kernel = [t.grad.clone() for t in leaves] + [bd_leaf.grad.clone()]
+        for t in leaves + [bd_leaf]:
+            t.grad = None
+        keep = m.dump_mask(total, n_heads, max_len, r, dropout_p=dropout_p, seed=seed, device=dev) if dropout_p else None
+        ref = _reference(*leaves, bd_leaf, keep, dropout_p, left, ahead)
+        msg = f"band {left} {ahead} dropout {dropout_p}"
+        numpy.testing.assert_allclose(
+            out.detach().cpu().numpy(), ref.detach().cpu().numpy(), rtol=1e-4, atol=1e-5, err_msg=msg
+        )
+        ref.backward(d_out)
+        for g_kernel, t in zip(grads_kernel, leaves + [bd_leaf]):
+            numpy.testing.assert_allclose(g_kernel.cpu().numpy(), t.grad.cpu().numpy(), rtol=1e-4, atol=1e-4, err_msg=msg)
 
 
 def test_chunked_rel_pos_att_triton_kernel_grad():

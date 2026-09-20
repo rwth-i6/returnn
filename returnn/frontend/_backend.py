@@ -1882,6 +1882,8 @@ class Backend(Generic[T]):
         kv_spatial_dim: Dim,
         query_spatial_dim: Dim,
         pos_emb_spatial_dim: Dim,
+        left_context: Optional[int] = None,
+        lookahead: Optional[int] = None,
     ):
         """
         Self-attention with relative positional encoding (Transformer-XL style),
@@ -1904,10 +1906,14 @@ class Backend(Generic[T]):
         :param kv_spatial_dim: Spatial axis of key/value to attend over
         :param query_spatial_dim: Spatial axis of query
         :param pos_emb_spatial_dim: Relative-position axis of pos_emb (usually 2*time1-1)
+        :param left_context: if given, query i attends only keys j >= i - left_context
+        :param lookahead: if given, query i attends only keys j <= i + lookahead, 0 being causal.
+            Together with ``left_context`` this is the band of a streaming encoder,
+            which backends can use to leave the other energies uncomputed.
         :return: attention output
         """
         # noinspection PyProtectedMember
-        from returnn.frontend.attention import _rel_pos_enc_shift
+        from returnn.frontend.attention import _rel_pos_band_mask, _rel_pos_enc_shift
 
         q_with_bias_u = (query + pos_bias_u) if pos_bias_u is not None else query  # (batch, head, time1, d_k)
         q_with_bias_v = (query + pos_bias_v) if pos_bias_v is not None else query  # (batch, head, time1, d_k)
@@ -1926,6 +1932,15 @@ class Backend(Generic[T]):
         scores = matrix_ac + matrix_bd  # (batch, head, time1, time2)
         del matrix_ac, matrix_bd
         scores *= qk_feat_dim.dimension**-0.5
+        valid = _rel_pos_band_mask(
+            query_spatial_dim=query_spatial_dim,
+            kv_spatial_dim=kv_spatial_dim,
+            left_context=left_context,
+            lookahead=lookahead,
+            device=scores.device,
+        )
+        if valid is not None:
+            scores = rf.where(valid, scores, float("-inf"))
         att_weights = rf.softmax(scores, axis=kv_spatial_dim)
         att_weights = rf.dropout(att_weights, att_dropout, axis=att_dropout_broadcast and kv_spatial_dim)
         # Masking not needed because softmax should already have masked,

@@ -2301,12 +2301,16 @@ def _torch_triton_rel_pos_attention(
     kv_spatial_dim: Dim,
     query_spatial_dim: Dim,
     pos_emb_spatial_dim: Dim,
+    left_context: Optional[int] = None,
+    lookahead: Optional[int] = None,
 ) -> Optional[Tensor]:
     """
     Packed rel-pos self-attention with post-softmax weight dropout
     via :mod:`returnn.torch.util.rel_pos_att_triton`
     (flash: no bias; FlexAttention: no dropout).
     CUDA only; any layout as-is (explicit per-seq starts + lens).
+    A band (``left_context`` / ``lookahead``) goes to the kernel, which then skips the key blocks
+    outside it.
     None if not applicable (then the per-seq / once-unpack fallbacks run).
     """
     if not (is_packed(query) and is_packed(key) and is_packed(value)) or is_packed(pos_emb):
@@ -2453,10 +2457,22 @@ def _torch_triton_rel_pos_attention(
                 dropout_p=att_dropout,
                 bd_scale=bd_scale,
                 scale=qk_feat_dim.dimension**-0.5,
+                left_context=left_context,
+                lookahead=lookahead,
             )
         else:
             out_t = rel_pos_att_triton.rel_pos_att_varlen(
-                q_t, k_t, v_t, bd_t, starts, lens, max_len, dropout_p=att_dropout, scale=qk_feat_dim.dimension**-0.5
+                q_t,
+                k_t,
+                v_t,
+                bd_t,
+                starts,
+                lens,
+                max_len,
+                dropout_p=att_dropout,
+                scale=qk_feat_dim.dimension**-0.5,
+                left_context=left_context,
+                lookahead=lookahead,
             )
     except (RuntimeError, NotImplementedError) as exc:
         _warn_fallback_once(
@@ -2874,6 +2890,8 @@ def _rel_pos_attention_per_seq(
     kv_spatial_dim: Dim,
     query_spatial_dim: Dim,
     pos_emb_spatial_dim: Dim,
+    left_context: Optional[int] = None,
+    lookahead: Optional[int] = None,
 ) -> Optional[Tensor]:
     """
     Per-sequence rel-pos self-attention on the packed buffer, no unpack:
@@ -2941,6 +2959,8 @@ def _rel_pos_attention_per_seq(
             kv_spatial_dim=kv_time,
             query_spatial_dim=q_time,
             pos_emb_spatial_dim=pos_dim,
+            left_context=left_context,
+            lookahead=lookahead,
         )
         outs.append((out_b, q_time))
         off += seq_len
@@ -3880,6 +3900,8 @@ class PackedBackend(Backend[PackedRawTensor]):
         kv_spatial_dim: Dim,
         query_spatial_dim: Dim,
         pos_emb_spatial_dim: Dim,
+        left_context: Optional[int] = None,
+        lookahead: Optional[int] = None,
     ):
         """
         Self-attention with relative positional encoding.
@@ -3919,11 +3941,16 @@ class PackedBackend(Backend[PackedRawTensor]):
                 kv_spatial_dim=kv_spatial_dim,
                 query_spatial_dim=query_spatial_dim,
                 pos_emb_spatial_dim=pos_emb_spatial_dim,
+                left_context=left_context,
+                lookahead=lookahead,
             )
             if out is not None:
                 return out
+        band = left_context is not None or lookahead is not None
         # FlexAttention fallback (no dropout support), so only when dropout is inactive.
-        if _att_fast_paths_enabled("rel_pos_self_attention") and not dropout_active:
+        # A band it cannot serve: its document block mask says seq membership only,
+        # and it is unusable under graph capture anyway (block mask sized to the exact total).
+        if _att_fast_paths_enabled("rel_pos_self_attention") and not dropout_active and not band:
             out = _torch_flex_rel_pos_attention(
                 query,
                 key,
@@ -3940,8 +3967,12 @@ class PackedBackend(Backend[PackedRawTensor]):
             if out is not None:
                 return out
         else:
-            _flex_no("att_dropout active in training (FlexAttention has no dropout support)")
-        if _att_fast_paths_enabled("rel_pos_self_attention"):
+            _flex_no(
+                "band given (FlexAttention has no band support here)"
+                if band
+                else "att_dropout active in training (FlexAttention has no dropout support)"
+            )
+        if _att_fast_paths_enabled("rel_pos_self_attention") and not band:
             # JAX: the same Triton kernels as the torch path above, via jax.custom_vjp
             out = _jax_triton_rel_pos_attention(
                 query,
@@ -3983,6 +4014,8 @@ class PackedBackend(Backend[PackedRawTensor]):
                 kv_spatial_dim=kv_spatial_dim,
                 query_spatial_dim=query_spatial_dim,
                 pos_emb_spatial_dim=pos_emb_spatial_dim,
+                left_context=left_context,
+                lookahead=lookahead,
             )
             if out is not None:
                 return out
@@ -4011,6 +4044,8 @@ class PackedBackend(Backend[PackedRawTensor]):
             kv_spatial_dim=kv_spatial_dim,
             query_spatial_dim=query_spatial_dim,
             pos_emb_spatial_dim=pos_emb_spatial_dim,
+            left_context=left_context,
+            lookahead=lookahead,
         )
         return _repack_result(out, template) if template is not None else out
 
