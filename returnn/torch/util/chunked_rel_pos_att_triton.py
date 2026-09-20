@@ -17,7 +17,7 @@ with the dropout stream keyed by (global row, position-term index).
 
 from __future__ import annotations
 
-from typing import Optional, Union
+from typing import Optional, Tuple, Union
 import math
 
 import torch
@@ -599,6 +599,138 @@ class _ChunkedRelPosAtt(torch.autograd.Function):
         return (dq.to(q.dtype), dk.to(k.dtype), dv.to(v.dtype), dbd.to(bd.dtype)) + (None,) * 9
 
 
+_HAVE_LIB_OPS = False
+if hasattr(torch.library, "custom_op"):  # torch >= 2.4
+    # Opaque ops with fake implementations and a registered backward, like in rel_pos_att_triton:
+    # AOT tracing (the compiled step of torch_cuda_graph, no Dynamo) runs on fake tensors,
+    # which the Triton launch of the autograd.Function above cannot take.
+
+    @torch.library.custom_op("returnn::chunked_rel_pos_att_fwd", mutates_args=())
+    def _lib_fwd(
+        q: torch.Tensor,
+        k: torch.Tensor,
+        v: torch.Tensor,
+        bd: torch.Tensor,
+        seq_starts: torch.Tensor,
+        seq_lens: torch.Tensor,
+        max_rows: int,
+        chunk_size: int,
+        kept_rows: int,
+        history: int,
+        dropout_p: float,
+        seed: torch.Tensor,
+        scale: float,
+    ) -> Tuple[torch.Tensor, torch.Tensor]:
+        # contiguous: Inductor feeds custom ops in whatever layout it likes, the fake promises contiguous outputs
+        out, lse = chunked_rel_pos_att_fwd(
+            q.contiguous(),
+            k.contiguous(),
+            v.contiguous(),
+            bd.contiguous(),
+            seq_starts.contiguous(),
+            seq_lens.contiguous(),
+            max_rows,
+            chunk_size=chunk_size,
+            kept_rows=kept_rows,
+            history=history,
+            dropout_p=dropout_p,
+            seed=seed,
+            scale=scale,
+        )
+        return out, lse
+
+    @_lib_fwd.register_fake
+    def _lib_fwd_fake(
+        q, k, v, bd, seq_starts, seq_lens, max_rows, chunk_size, kept_rows, history, dropout_p, seed, scale
+    ):
+        del k, v, bd, seq_starts, seq_lens, max_rows, chunk_size, kept_rows, history, dropout_p, seed, scale
+        total, n_heads, _ = q.shape
+        return q.new_empty(tuple(q.shape)), q.new_empty((total, n_heads), dtype=torch.float32)
+
+    @torch.library.custom_op("returnn::chunked_rel_pos_att_bwd", mutates_args=())
+    def _lib_bwd(
+        q: torch.Tensor,
+        k: torch.Tensor,
+        v: torch.Tensor,
+        bd: torch.Tensor,
+        seq_starts: torch.Tensor,
+        seq_lens: torch.Tensor,
+        max_rows: int,
+        lse: torch.Tensor,
+        d_out: torch.Tensor,
+        chunk_size: int,
+        kept_rows: int,
+        history: int,
+        dropout_p: float,
+        seed: torch.Tensor,
+        scale: float,
+    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+        dq, dk, dv, dbd = chunked_rel_pos_att_bwd(
+            q.contiguous(),
+            k.contiguous(),
+            v.contiguous(),
+            bd.contiguous(),
+            seq_starts.contiguous(),
+            seq_lens.contiguous(),
+            max_rows,
+            lse.contiguous(),
+            d_out.contiguous(),
+            chunk_size=chunk_size,
+            kept_rows=kept_rows,
+            history=history,
+            dropout_p=dropout_p,
+            seed=seed,
+            scale=scale,
+        )
+        return dq.to(q.dtype), dk.to(k.dtype), dv.to(v.dtype), dbd.to(bd.dtype)
+
+    @_lib_bwd.register_fake
+    def _lib_bwd_fake(
+        q, k, v, bd, seq_starts, seq_lens, max_rows, lse, d_out, chunk_size, kept_rows, history, dropout_p, seed, scale
+    ):
+        del seq_starts, seq_lens, max_rows, lse, d_out, chunk_size, kept_rows, history, dropout_p, seed, scale
+        return (
+            q.new_empty(tuple(q.shape)),
+            k.new_empty(tuple(k.shape)),
+            v.new_empty(tuple(v.shape)),
+            bd.new_empty(tuple(bd.shape)),
+        )
+
+    def _lib_setup_context(ctx, inputs, output):
+        q, k, v, bd, seq_starts, seq_lens, max_rows, chunk_size, kept_rows, history, dropout_p, seed, scale = inputs
+        _, lse = output
+        ctx.save_for_backward(q, k, v, bd, seq_starts, seq_lens, lse, seed)
+        ctx.geometry = (max_rows, chunk_size, kept_rows, history)
+        ctx.dropout_p, ctx.scale = dropout_p, scale
+
+    def _lib_backward(ctx, d_out, d_lse):
+        d_lse  # noqa  # unused (lse non-differentiable)
+        q, k, v, bd, seq_starts, seq_lens, lse, seed = ctx.saved_tensors
+        max_rows, chunk_size, kept_rows, history = ctx.geometry
+        dq, dk, dv, dbd = torch.ops.returnn.chunked_rel_pos_att_bwd(
+            q,
+            k,
+            v,
+            bd,
+            seq_starts,
+            seq_lens,
+            max_rows,
+            lse,
+            d_out,
+            chunk_size,
+            kept_rows,
+            history,
+            ctx.dropout_p,
+            seed,
+            ctx.scale,
+        )
+        return (dq, dk, dv, dbd) + (None,) * 9
+
+    torch.library.register_autograd("returnn::chunked_rel_pos_att_fwd", _lib_backward, setup_context=_lib_setup_context)
+
+    _HAVE_LIB_OPS = True
+
+
 def chunked_rel_pos_att(
     q: torch.Tensor,
     k: torch.Tensor,
@@ -638,6 +770,23 @@ def chunked_rel_pos_att(
     if seed is None:
         seed = torch.randint(0, 2**31 - 1, (1,), dtype=torch.int32, device=q.device) if dropout_p > 0 else 0
     q, k, v, bd = q.contiguous(), k.contiguous(), v.contiguous(), bd.contiguous()
+    if _HAVE_LIB_OPS:
+        out, _ = torch.ops.returnn.chunked_rel_pos_att_fwd(
+            q,
+            k,
+            v,
+            bd,
+            seq_starts,
+            seq_lens,
+            int(max_rows),
+            chunk_size,
+            kept_rows,
+            history,
+            dropout_p,
+            _seed_tensor(seed, q.device),
+            scale,
+        )
+        return out
     out, _ = _ChunkedRelPosAtt.apply(
         q, k, v, bd, seq_starts, seq_lens, max_rows, chunk_size, kept_rows, history, dropout_p, seed, scale
     )
