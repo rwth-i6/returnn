@@ -1325,7 +1325,7 @@ def _build_cuda_graph_train_config_and_dataset(*, compile_: bool, torch_model: b
     def _train_step(*, model, extern_data: TensorDict, **_kwargs):
         data = extern_data["data"]
         classes = extern_data["classes"]
-        if not compile_:
+        if not torch_model:
             model.steps_seen.assign_add(1)
         if torch_model:
             logits = model.logits(data)
@@ -1410,7 +1410,9 @@ def _run_cuda_graph_train(*, compile_: bool, torch_model: bool = False):
                 assert torch.isfinite(p).all(), f"non-finite param {name}"
                 if torch_model:
                     assert not torch.equal(p.detach().cpu(), engine._pt_model.initial[name]), f"{name} never trained"
-            if not compile_:
+            if not torch_model:
+                # every train step counts once: the runs which only warm the kernels
+                # or trace and compile the step must leave the training state alone
                 seen = int(engine._orig_model.steps_seen.raw_tensor)
                 assert seen == engine.global_train_step, (seen, engine.global_train_step)
             # the run end must destroy the graph, else a NCCL comm it captured never shuts down
