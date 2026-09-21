@@ -17,6 +17,27 @@ from returnn.util.basic import NativeCodeCompiler
 from returnn.util.cuda_env import CudaEnv as _CudaEnvBase, get_best_nvcc_path_for_cuda_version
 
 
+def _torch_required_cpp_version() -> int:
+    """
+    :return: the C++ standard the installed torch builds its own extensions with
+        (torch 2.7: 17, torch 2.12: 20; from torch 2.14 the headers enforce it via #error).
+        Read from torch.utils.cpp_extension's compile flags, by count:
+        docstring examples in there can name other standards.
+    """
+    import re
+    import inspect
+    from collections import Counter
+
+    try:
+        src = inspect.getsource(cpp_extension)
+    except OSError:
+        # source unavailable (e.g. frozen build): conservative version gate
+        return 20 if tuple(int(v) for v in torch.__version__.split("+")[0].split(".")[:2]) >= (2, 12) else 17
+    versions = re.findall(r"-std=c\+\+(\d+)", src)
+    assert versions, "no -std=c++NN flag found in torch.utils.cpp_extension"
+    return int(Counter(versions).most_common(1)[0][0])
+
+
 class OpCodeCompiler(NativeCodeCompiler):
     """
     Helper class to compile Torch ops on-the-fly, similar to Theano,
@@ -171,7 +192,9 @@ class OpCodeCompiler(NativeCodeCompiler):
     def _with_cuda(self):
         return bool(self._cuda_env and self._cuda_env.is_available())
 
-    cpp_version = 17
+    # resolved at import, so the compile-cache info dict sees the real value;
+    # assign (class or instance) to override
+    cpp_version = _torch_required_cpp_version()
 
     def _get_compiler_bin(self):
         if self._with_cuda():
