@@ -5759,19 +5759,20 @@ def _packed_total_bound(dim: Dim, in_raw: PackedRawTensor, n_seqs: int) -> Optio
     return min(bounds) if bounds else None
 
 
-_SEARCH_SPAN = 2**32  # room for every int32 behind a sequence index, in int64
-
-
 def _search_sorted_per_seq(
     sorted_seq: Tensor, values: Tensor, *, axis: Dim, side: str, out_dtype: str
 ) -> Optional[Tensor]:
     """
     search_sorted along a time dim with a length per sequence, where at least one operand is packed,
     e.g. the group of every key frame searched for the group of every query.
-    All sequences are searched at once: every number gets its sequence index in front (seq * 2^32 + number),
+    All sequences are searched at once: every number gets its sequence index in front (seq * span + number),
     which makes the whole buffer one sorted sequence, rows outside the sequences count as the largest of their block,
     and the position found is taken relative to the start of its sequence.
-    Integers up to 32 bit only, since that leaves no room for anything else.
+
+    The span is the range the numbers really cover, read from them, not the range their dtype could hold.
+    A span the size of the dtype would put a constant past the largest int32 into the encoding, and a backend
+    that writes such an expression as an index (Inductor does) cannot hold it. The span is also a tensor, so
+    no constant of that size reaches the generated code at all.
 
     :param sorted_seq: over (batch, axis) or only axis, packed over (batch, axis) or plain
     :param values: packed over (batch, some other time dim), or plain with the batch dim
@@ -5821,11 +5822,7 @@ def _search_sorted_per_seq(
     if not isinstance(n_rows, int):
         return None
     in_seq = rf.cast(row_local, "int64") < rf.gather(lens, indices=row_seq, axis=batch)
-    number = rf.where(in_seq, rf.cast(flat, "int64") + _SEARCH_SPAN // 2, _SEARCH_SPAN - 1)
-    flat_sorted = rf.cast(row_seq, "int64") * _SEARCH_SPAN + number
-    # searched over the raw width of the buffer, which is sorted throughout, so no length applies to it
-    rows_static = Dim(n_rows, name="search_sorted_rows")
-    flat_sorted = rf.replace_dim_v2(flat_sorted, in_dim=flat_dim, out_dim=rows_static)
+    keys_i64 = rf.cast(flat, "int64")
 
     # the values, each with the sequence it belongs to
     if is_packed(values):
@@ -5834,13 +5831,32 @@ def _search_sorted_per_seq(
             return None
         values_inner = values_raw.inner
         values_seq = _frame_coords(values_raw, batch)
+        values_valid = _frame_mask(values_raw)
     else:
         if batch not in values.dims or axis in values.dims:
             return None
-        values_raw, values_inner = None, values
+        values_raw, values_inner, values_valid = None, values, None
         values_seq = rf.range_over_dim(batch, device=dev)
     values_seq = rf.cast(values_seq, "int64")
-    wanted = rf.combine_bc(values_seq * _SEARCH_SPAN, "+", rf.cast(values_inner, "int64") + _SEARCH_SPAN // 2)
+    values_i64 = rf.cast(values_inner, "int64")
+
+    # the numbers a junk row holds are whatever its buffer held, so they must not widen the span
+    keys_seen = rf.where(in_seq, keys_i64, 0)
+    values_seen = rf.where(values_valid, values_i64, 0) if values_valid is not None else values_i64
+    lo = rf.minimum(
+        rf.reduce_min(keys_seen, axis=keys_seen.dims), rf.reduce_min(values_seen, axis=values_seen.dims)
+    )
+    hi = rf.maximum(
+        rf.reduce_max(keys_seen, axis=keys_seen.dims), rf.reduce_max(values_seen, axis=values_seen.dims)
+    )
+    span = hi - lo + 2  # one slot above the largest number, where the rows outside a sequence go
+
+    number = rf.where(in_seq, keys_i64 - lo, span - 1)
+    flat_sorted = rf.cast(row_seq, "int64") * span + number
+    # searched over the raw width of the buffer, which is sorted throughout, so no length applies to it
+    rows_static = Dim(n_rows, name="search_sorted_rows")
+    flat_sorted = rf.replace_dim_v2(flat_sorted, in_dim=flat_dim, out_dim=rows_static)
+    wanted = rf.combine_bc(values_seq * span, "+", values_i64 - lo)
 
     found = rf.search_sorted(flat_sorted, wanted, axis=rows_static, side=side, out_dtype="int64")
     seq_start = rf.gather(starts, indices=rf.cast(values_seq, "int32"), axis=batch)
@@ -6146,6 +6162,89 @@ def pack_import(
         content_bound=packed_dim.dimension,
     )
     return helper.rewrap(inner_flat, name=inner_flat.name)
+
+
+def _lattice_source(source: Tensor, spatial_dim: Dim, device) -> Tuple[Tensor, Tensor]:
+    """
+    The flat buffer of one lattice operand and where every sequence starts in it.
+
+    :param source: [batch, spatial_dim, feature], packed or padded
+    :param spatial_dim: the dim the lattice indexes into
+    :param device: where the starts are needed
+    :return: (the flat buffer [positions, feature], the start of every sequence in it)
+    """
+    if is_packed(source):
+        raw = _raw(source)
+        starts, _ = raw.seq_starts(device=device)
+        return raw.inner, rf.cast(starts, "int64")
+    batch = [d for d in source.dims if d not in (spatial_dim, source.feature_dim)]
+    assert len(batch) == 1, f"lattice: expected one batch dim in {source}, got {batch}"
+    flat, _ = rf.merge_dims(source, dims=[batch[0], spatial_dim])
+    starts = rf.range_over_dim(batch[0], device=device) * spatial_dim.get_dim_value()
+    return flat, rf.cast(starts, "int64")
+
+
+def monotonic_rnnt_lattice(
+    enc: Tensor,
+    pred: Tensor,
+    *,
+    enc_spatial_dim: Dim,
+    prefix_dim: Dim,
+    cells_bound: Optional[int] = None,
+) -> Tuple[Tensor, Tensor, Dim]:
+    """
+    Gathers the encoder frame and the predictor state meeting in every cell of the monotonic RNN-T lattice.
+
+    A sequence's lattice is its frames times its prefixes, so a padded lattice would give every sequence
+    the batch's worst case on both axes. This builds the packed form straight away, one entry per real
+    cell, and never materializes the padded one.
+
+    :param enc: [batch, enc_spatial_dim, D_enc], packed or padded
+    :param pred: [batch, prefix_dim, D_pred], packed or padded
+    :param enc_spatial_dim: the encoder frames
+    :param prefix_dim: the label prefixes of the predictor, one more than the labels
+    :param cells_bound: cells the buffer holds, the batch's own sum by default, a static capacity
+        under CUDA graph capture, where reading the sum would be a host read
+    :return: (encoder frames per cell, predictor states per cell, the packed lattice dim), both packed
+    """
+    from returnn.torch.util.monotonic_rnnt import lattice_index
+
+    device = enc.device
+    frame_lens = enc_spatial_dim.get_dyn_size_ext_for_device(device)
+    prefix_lens = prefix_dim.get_dyn_size_ext_for_device(device)
+    batch = frame_lens.dims[0]
+    cells_per_seq = rf.cast(frame_lens, "int32") * rf.cast(prefix_lens, "int32")
+    if cells_bound is None:
+        assert not rf.is_static_traceable(), (
+            "monotonic_rnnt_lattice: a static traceable step needs cells_bound, reading the batch's own"
+            " sum is a host read"
+        )
+        cells_bound = int(rf.reduce_sum(cells_per_seq, axis=list(cells_per_seq.dims)).raw_tensor)
+
+    seq, frame, prefix = lattice_index(
+        frame_lens.raw_tensor, prefix_lens.raw_tensor.long() - 1, cells_bound
+    )
+    lattice_time = Dim(cells_per_seq, name="lattice")
+    cells_dim = Dim(cells_bound, name="lattice:packed")
+
+    out = []
+    for source, spatial, coord, name in (
+        (enc, enc_spatial_dim, frame, "enc_cells"),
+        (pred, prefix_dim, prefix, "pred_cells"),
+    ):
+        flat, starts = _lattice_source(source, spatial, device)
+        flat_dim = [d for d in flat.dims if d != source.feature_dim][0]
+        positions = starts.raw_tensor[seq] + coord
+        raw = flat.raw_tensor[positions.clamp(max=flat.raw_tensor.shape[0] - 1)]
+        inner = Tensor(name, dims=[cells_dim, source.feature_dim], dtype=flat.dtype, raw_tensor=raw)
+        del flat_dim
+        out.append(
+            pack_import(
+                inner, batch_dim=batch, spatial_dim=lattice_time, packed_dim=cells_dim,
+                feature_dim=source.feature_dim,
+            )
+        )
+    return out[0], out[1], lattice_time
 
 
 def pack_like(source: Tensor, template: Tensor) -> Tensor:

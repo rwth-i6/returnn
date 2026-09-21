@@ -2943,6 +2943,52 @@ def test_dot_attention_over_own_group_stays_packed():
     _assert_equal_non_padded(out, ref, batch_dim, q_time)
 
 
+def test_search_sorted_per_seq_encodes_within_the_range_of_its_numbers():
+    """
+    the search over all sequences at once puts the sequence index in front of every number, and the width it
+    reserves per sequence has to follow the numbers, not their dtype: a width of the whole int32 range writes
+    a constant past the largest int32 into the encoding, which a backend that indexes with int32 cannot hold
+    """
+    rf.select_backend_torch()
+    batch_dim_ = Dim(2, name="batch")
+    lens = torch.tensor([5, 3], dtype=torch.int32), torch.tensor([3, 2], dtype=torch.int32)
+    kv_time = Dim(Tensor("kv_lens", [batch_dim_], dtype="int32", raw_tensor=lens[0]), name="kv")
+    q_time = Dim(Tensor("q_lens", [batch_dim_], dtype="int32", raw_tensor=lens[1]), name="q")
+
+    def _search(keys_raw, values_raw):
+        """:return: (the positions per query, the widest number the encoding produced)"""
+        keys = Tensor("keys", [batch_dim_, kv_time], dtype="int32", raw_tensor=keys_raw)
+        values = Tensor("values", [batch_dim_, q_time], dtype="int32", raw_tensor=values_raw)
+        widest = []
+        orig = rf.search_sorted
+
+        def _record(sorted_seq, values_, **kwargs):
+            if not packed.is_packed(sorted_seq):  # the encoded buffer, not the packed operand handed in
+                widest.append(int(sorted_seq.raw_tensor.abs().max()))
+            return orig(sorted_seq, values_, **kwargs)
+
+        rf.search_sorted = _record
+        try:
+            out = rf.search_sorted(
+                packed.pack(keys), packed.pack(values), axis=kv_time, side="right", out_dtype="int32"
+            )
+        finally:
+            rf.search_sorted = orig
+        return packed.unpack(out).copy_transpose([batch_dim_, q_time]).raw_tensor, max(widest)
+
+    small = torch.tensor([[0, 1, 1, 2, 3], [0, 2, 2, 0, 0]], dtype=torch.int32)
+    found, widest = _search(small, torch.tensor([[1, 2, 0], [2, 0, 0]], dtype=torch.int32))
+    numpy.testing.assert_array_equal(found[0, :3].numpy(), [3, 4, 1])
+    numpy.testing.assert_array_equal(found[1, :2].numpy(), [3, 1])
+    assert widest < 2**31, f"the encoding reserves more per sequence than its numbers need: {widest}"
+
+    # the numbers may use the whole int32 range, negative ones included, and still not collide across sequences
+    wide = torch.tensor([[-(2**31), -1, 0, 1, 2**31 - 1], [-(2**31), 0, 2**31 - 1, 0, 0]], dtype=torch.int32)
+    found, _ = _search(wide, torch.tensor([[-1, 0, 2**31 - 1], [0, 2**31 - 1, 0]], dtype=torch.int32))
+    numpy.testing.assert_array_equal(found[0, :3].numpy(), [2, 3, 5])
+    numpy.testing.assert_array_equal(found[1, :2].numpy(), [2, 3])
+
+
 def test_dot_attention_group_ranges_stay_packed():
     """
     "less_equal", and "equal" without a group size, give every query one range of keys (the key groups are sorted),
