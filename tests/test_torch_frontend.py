@@ -1026,6 +1026,45 @@ def test_convert_parameter_to_buffer():
     assert type(mod_pt.weight) is torch.Tensor
 
 
+def test_causal_dot_attention_fused_is_opt_in():
+    from returnn.config import Config, global_config_ctx
+
+    torch.manual_seed(42)
+    batch = Dim(2, name="batch")
+    time_dim = Dim(4, name="time")
+    feat, v_feat = Dim(8, name="feat"), Dim(6, name="v_feat")
+    tensors = {
+        name: Tensor(name, dims=[batch, time_dim, v_feat if name == "v" else feat], dtype="float32")
+        for name in ("q", "k", "v")
+    }
+    for name, t in tensors.items():
+        t.raw_tensor = torch.randn(2, 4, 6 if name == "v" else 8)
+
+    matmul, calls = rf.matmul, []
+
+    def _counting_matmul(*args, **kwargs):
+        calls.append(kwargs.get("reduce"))
+        return matmul(*args, **kwargs)
+
+    # the fused kernel never materializes the energies, so a matmul means the generic path ran
+    for flag, want_generic in ((None, True), (True, False), (False, True)):
+        calls.clear()
+        rf.matmul = _counting_matmul
+        try:
+            with global_config_ctx(Config({} if flag is None else {"rf_fused_causal_attention": flag})):
+                rf.dot_attention(
+                    tensors["q"],
+                    tensors["k"],
+                    tensors["v"],
+                    key_dim=feat,
+                    axis=time_dim,
+                    causal_query_spatial_dim=time_dim,
+                )
+        finally:
+            rf.matmul = matmul
+        assert bool(calls) == want_generic, (flag, calls)
+
+
 def test_causal_dot_attention_fused_matches_generic():
     from returnn.frontend._backend import Backend
 
@@ -1049,7 +1088,12 @@ def test_causal_dot_attention_fused_matches_generic():
         return raws, tensors
 
     def _fused(x):
-        return rf.dot_attention(x["q"], x["k"], x["v"], key_dim=feat, axis=time_dim, causal_query_spatial_dim=time_dim)
+        from returnn.config import Config, global_config_ctx
+
+        with global_config_ctx(Config({"rf_fused_causal_attention": True})):
+            return rf.dot_attention(
+                x["q"], x["k"], x["v"], key_dim=feat, axis=time_dim, causal_query_spatial_dim=time_dim
+            )
 
     def _generic(x):
         return Backend.scaled_dot_product_attention(

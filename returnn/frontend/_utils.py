@@ -336,7 +336,9 @@ def should_use_fused_causal_attention() -> bool:
     :return: whether causal attention whose causality comes from the ``is_causal`` flag alone,
         with no ``attention_mask`` tensor, may go through a backend's fused kernel,
         which never materializes the energies, instead of the generic composition.
-        Config option ``rf_fused_causal_attention: bool``, default True.
+        Config option ``rf_fused_causal_attention: bool``, default False, so a setup opts in:
+        the fused kernel reassociates the reduction and its values differ from the generic path
+        within the float tolerance, which a run must ask for rather than get silently.
     """
     from returnn.config import get_global_config
 
@@ -347,8 +349,8 @@ def should_use_fused_causal_attention() -> bool:
         if config_value is not None:
             return config_value
     if config and "rf_fused_causal_attention" in config.dict:
-        return config.bool("rf_fused_causal_attention", True)
-    return True
+        return config.bool("rf_fused_causal_attention", False)
+    return False
 
 
 def keep_dtype(out: Tensor, dtype: str) -> Tensor:
