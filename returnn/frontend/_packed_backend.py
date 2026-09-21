@@ -5581,6 +5581,90 @@ def pack_import(
     return helper.rewrap(inner_flat, name=inner_flat.name)
 
 
+def _lattice_source(source: Tensor, spatial_dim: Dim, device) -> Tuple[Tensor, Tensor]:
+    """
+    The flat buffer of one lattice operand and where every sequence starts in it.
+
+    :param source: [batch, spatial_dim, feature], packed or padded
+    :param spatial_dim: the dim the lattice indexes into
+    :param device: where the starts are needed
+    :return: (the flat buffer [positions, feature], the start of every sequence in it)
+    """
+    if is_packed(source):
+        raw = _raw(source)
+        starts, _ = raw.seq_starts(device=device)
+        return raw.inner, rf.cast(starts, "int64")
+    batch = [d for d in source.dims if d not in (spatial_dim, source.feature_dim)]
+    assert len(batch) == 1, f"lattice: expected one batch dim in {source}, got {batch}"
+    flat, _ = rf.merge_dims(source, dims=[batch[0], spatial_dim])
+    starts = rf.range_over_dim(batch[0], device=device) * spatial_dim.get_dim_value()
+    return flat, rf.cast(starts, "int64")
+
+
+def monotonic_rnnt_lattice(
+    enc: Tensor,
+    pred: Tensor,
+    *,
+    enc_spatial_dim: Dim,
+    prefix_dim: Dim,
+    cells_bound: Optional[int] = None,
+) -> Tuple[Tensor, Tensor, Dim]:
+    """
+    Gathers the encoder frame and the predictor state meeting in every cell of the monotonic RNN-T lattice.
+
+    A sequence's lattice is its frames times its prefixes, so a padded lattice would give every sequence
+    the batch's worst case on both axes. This builds the packed form straight away, one entry per real
+    cell, and never materializes the padded one.
+
+    :param enc: [batch, enc_spatial_dim, D_enc], packed or padded
+    :param pred: [batch, prefix_dim, D_pred], packed or padded
+    :param enc_spatial_dim: the encoder frames
+    :param prefix_dim: the label prefixes of the predictor, one more than the labels
+    :param cells_bound: cells the buffer holds, the batch's own sum by default, a static capacity
+        under CUDA graph capture, where reading the sum would be a host read
+    :return: (encoder frames per cell, predictor states per cell, the packed lattice dim), both packed
+    """
+    from returnn.torch.util.monotonic_rnnt import lattice_index
+
+    device = enc.device
+    frame_lens = enc_spatial_dim.get_dyn_size_ext_for_device(device)
+    prefix_lens = prefix_dim.get_dyn_size_ext_for_device(device)
+    batch = frame_lens.dims[0]
+    cells_per_seq = rf.cast(frame_lens, "int32") * rf.cast(prefix_lens, "int32")
+    if cells_bound is None:
+        assert not rf.is_static_traceable(), (
+            "monotonic_rnnt_lattice: a static traceable step needs cells_bound, reading the batch's own"
+            " sum is a host read"
+        )
+        cells_bound = int(rf.reduce_sum(cells_per_seq, axis=list(cells_per_seq.dims)).raw_tensor)
+
+    seq, frame, prefix = lattice_index(frame_lens.raw_tensor, prefix_lens.raw_tensor.long() - 1, cells_bound)
+    lattice_time = Dim(cells_per_seq, name="lattice")
+    cells_dim = Dim(cells_bound, name="lattice:packed")
+
+    out = []
+    for source, spatial, coord, name in (
+        (enc, enc_spatial_dim, frame, "enc_cells"),
+        (pred, prefix_dim, prefix, "pred_cells"),
+    ):
+        flat, starts = _lattice_source(source, spatial, device)
+        flat_dim = [d for d in flat.dims if d != source.feature_dim][0]
+        positions = starts.raw_tensor[seq] + coord
+        raw = flat.raw_tensor[positions.clamp(max=flat.raw_tensor.shape[0] - 1)]
+        inner = Tensor(name, dims=[cells_dim, source.feature_dim], dtype=flat.dtype, raw_tensor=raw)
+        del flat_dim
+        out.append(
+            pack_import(
+                inner,
+                batch_dim=batch,
+                spatial_dim=lattice_time,
+                packed_dim=cells_dim,
+                feature_dim=source.feature_dim,
+            )
+        )
+    return out[0], out[1], lattice_time
+
+
 def pack(
     source: Tensor,
     *,

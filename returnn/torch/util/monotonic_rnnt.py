@@ -38,7 +38,7 @@ def _cell_offsets(frame_lens: torch.Tensor, label_lens: torch.Tensor) -> Tuple[t
     return offsets, cells
 
 
-def _lattice_index(
+def lattice_index(
     frame_lens: torch.Tensor, label_lens: torch.Tensor, total: int
 ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
     """
@@ -73,12 +73,12 @@ def _next_label_per_cell(
     :param frame_lens: [B] frames per sequence
     :param label_lens: [B] labels per sequence
     :param blank: blank index, used where a cell has no emitting edge
-    :param total: cells to lay out, see :func:`_lattice_index`
+    :param total: cells to lay out, see :func:`lattice_index`
     :return: [total] int64
     """
     if labels.shape[1] == 0:
         return torch.full((total,), blank, dtype=torch.int64, device=frame_lens.device)
-    seq, _frame, prefix = _lattice_index(frame_lens, label_lens, total)
+    seq, _frame, prefix = lattice_index(frame_lens, label_lens, total)
     lens = label_lens.long()[seq]
     index = torch.clamp(prefix, max=torch.clamp(lens - 1, min=0))
     label = labels.long()[seq, index]
