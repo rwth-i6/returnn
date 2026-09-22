@@ -239,6 +239,38 @@ def test_MultiProcDataset_HDFDataset():
         assert c == n
 
 
+def test_batching_packed_batch_cost_bounds_a_product_of_lengths():
+    """
+    A monotonic RNN-T lattice has frames times prefixes cells per sequence, a product no per-key length
+    budget can bound, so a batch cost derived from the lengths joins the packed budget check.
+    """
+    import numpy
+
+    def _seq(frames: int, labels: int):
+        return {"text_codes": numpy.zeros((frames,), dtype="int32"), "labels": numpy.zeros((labels,), dtype="int32")}
+
+    seqs = [_seq(30, 9), _seq(30, 9), _seq(30, 9), _seq(30, 9), _seq(6, 1), _seq(6, 1)]
+    cells = lambda lengths: lengths["text_codes"] * (lengths["labels"] + 1)  # noqa: E731
+    budget = 700  # two 300-cell sequences fit, a third would not, both 12-cell ones join the second batch
+
+    batches = list(
+        data_pipeline.BatchingIterDataPipe(
+            seqs,
+            batch_size=None,
+            max_seqs=100,
+            packed_batch_size={"lattice": budget},
+            packed_batch_cost={"lattice": cells},
+        )
+    )
+    for batch in batches:
+        used = sum(len(s["text_codes"]) * (len(s["labels"]) + 1) for s in batch)
+        assert used <= budget, (used, [len(s["text_codes"]) for s in batch])
+    assert [len(b) for b in batches] == [2, 4], [len(b) for b in batches]
+
+    without = list(data_pipeline.BatchingIterDataPipe(seqs, batch_size=None, max_seqs=100))
+    assert len(without) == 1, "the length budgets alone must not bound the product"
+
+
 if __name__ == "__main__":
     better_exchook.install()
     if len(sys.argv) <= 1:
