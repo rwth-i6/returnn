@@ -37,22 +37,6 @@ def cell_offsets(frame_lens: torch.Tensor, label_lens: torch.Tensor) -> Tuple[to
     return offsets, cells
 
 
-def reachable_cells(frame_lens: torch.Tensor, label_lens: torch.Tensor) -> torch.Tensor:
-    """
-    Cells that lie on at least one complete alignment, which is fewer than the full rectangle.
-
-    A state (t, u) is reachable from the start only while u <= t and reaches the end only while the
-    frames left cover the labels left, u >= U - T + t, so the lattice is a band and the cells outside
-    it contribute nothing. Dropping them is exact, it prunes no alignment.
-
-    :param frame_lens: [B] frames per sequence
-    :param label_lens: [B] labels per sequence
-    :return: [B] the number of cells inside the band
-    """
-    frames, labels = frame_lens.long(), label_lens.long()
-    return torch.clamp(frames * (labels + 1) - labels * labels, min=0)
-
-
 def lattice_index(
     frame_lens: torch.Tensor, label_lens: torch.Tensor, total: int
 ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
@@ -69,9 +53,17 @@ def lattice_index(
     :return: (sequence [total], frame [total], prefix [total]) int64
     """
     offsets, cells = cell_offsets(frame_lens, label_lens)
+    # a capacity below the batch would cut the last sequence short in silence, so the check runs on the
+    # device, which a captured step can afford where a host read is not allowed
+    torch._assert_async(
+        cells.sum() <= total,
+        f"lattice_index: the batch has more lattice cells than the capacity {total},"
+        " the batcher cost must bound the frames times the prefixes of every sequence",
+    )
     # the cells a capacity leaves over go to the last sequence, and repeat_interleave with a declared
-    # output size stays static, unlike searchsorted, which Inductor only takes as an extern fallback
-    spans = torch.cat([cells[:-1], (cells[-1] + total - cells.sum()).unsqueeze(0)])
+    # output size stays static, unlike searchsorted, which Inductor only takes as an extern fallback.
+    # The clamp keeps the span from going negative, which repeat_interleave does not survive
+    spans = torch.cat([cells[:-1], (cells[-1] + total - cells.sum()).clamp(min=0).unsqueeze(0)])
     seq = torch.repeat_interleave(torch.arange(frame_lens.shape[0], device=frame_lens.device), spans, output_size=total)
     stride = (label_lens.long() + 1)[seq]
     within = torch.arange(total, device=frame_lens.device) - offsets[seq]
@@ -240,7 +232,7 @@ if hasattr(torch.library, "custom_op"):  # torch >= 2.4
         blank_grad, label_grad = backward_scan(
             blank_lp, label_lp, offsets, frame_lens, label_lens, alpha, total, -d_total
         )
-        return cell_grad(logits, next_label, lse, blank_grad, label_grad, blank).to(logits.dtype)
+        return cell_grad(logits, next_label, lse, blank_grad, label_grad, blank)
 
     @_lib_bwd.register_fake
     def _lib_bwd_fake(
@@ -296,11 +288,23 @@ def monotonic_rnnt_loss(
     if max_frames is None:
         max_frames = int(frame_lens.max().item())
     max_prefix = int(labels.shape[1]) + 1
+    vocab = int(logits.shape[1])
+    assert 0 <= blank < vocab, f"monotonic rnnt: blank {blank} outside the vocabulary of {vocab}"
     next_label = next_label_per_cell(labels, frame_lens, label_lens, blank, logits.shape[0])
+    # the cell kernels index every row by these ids unchecked, and a recursion shorter than a sequence would
+    # return a partial score on cuda, so both are checked on the device, which a captured step can afford
+    torch._assert_async(
+        ((next_label >= 0) & (next_label < vocab)).all(),
+        f"monotonic rnnt: a label outside the vocabulary of {vocab}",
+    )
+    torch._assert_async(
+        (frame_lens <= max_frames).all(),
+        f"monotonic rnnt: a sequence longer than the {max_frames} frames of the recursion",
+    )
     if logits.is_cuda:
         assert _HAVE_LIB_OPS, "monotonic rnnt: the loss needs torch.library.custom_op, so torch >= 2.4"
         total = torch.ops.returnn.monotonic_rnnt_fwd(
-            logits.float(), next_label, frame_lens, label_lens, blank, max_frames, max_prefix
+            logits, next_label, frame_lens, label_lens, blank, max_frames, max_prefix
         )[0]
     else:
         offsets, _cells = cell_offsets(frame_lens, label_lens)

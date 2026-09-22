@@ -28,12 +28,8 @@ def _batch():
     prefixes = torch.tensor([u + 1 for _t, u in _CASES], dtype=torch.int32)
     num_seqs = len(_CASES)
     batch = Dim(num_seqs, name="batch")
-    enc_time = Dim(
-        Tensor("enc_lens", dims=[batch], dtype="int32", raw_tensor=frames), name="enc_time"
-    )
-    prefix_dim = Dim(
-        Tensor("prefix_lens", dims=[batch], dtype="int32", raw_tensor=prefixes), name="prefixes"
-    )
+    enc_time = Dim(Tensor("enc_lens", dims=[batch], dtype="int32", raw_tensor=frames), name="enc_time")
+    prefix_dim = Dim(Tensor("prefix_lens", dims=[batch], dtype="int32", raw_tensor=prefixes), name="prefixes")
     enc_feat, pred_feat = Dim(6, name="enc_feat"), Dim(3, name="pred_feat")
     enc = Tensor(
         "enc",
@@ -82,6 +78,23 @@ def test_monotonic_rnnt_lattice_keeps_the_real_cells_under_a_capacity():
     )
     torch.testing.assert_close(enc_cells.raw_tensor.inner.raw_tensor[:cells], want_enc)
     torch.testing.assert_close(pred_cells.raw_tensor.inner.raw_tensor[:cells], want_pred)
+
+
+def test_monotonic_rnnt_lattice_refuses_a_batch_above_the_capacity():
+    """
+    A batch whose cells exceed the capacity would silently lose the tail of its last sequence,
+    the lattice index clamps the cells past the buffer onto its last cell. That is a wrong batcher
+    cost, and it has to fail loudly rather than train on a truncated lattice.
+    """
+    enc, pred, enc_time, prefix_dim, frame_lens, label_lens = _batch()
+    cells = total_cells(frame_lens, label_lens)
+
+    try:
+        monotonic_rnnt_lattice(enc, pred, enc_spatial_dim=enc_time, prefix_dim=prefix_dim, cells_bound=cells - 1)
+    except RuntimeError as exc:
+        assert "cells" in str(exc), exc
+    else:
+        raise AssertionError("a lattice above its capacity was built without an error")
 
 
 if __name__ == "__main__":

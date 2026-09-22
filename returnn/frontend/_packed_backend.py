@@ -5357,12 +5357,8 @@ def _search_sorted_per_seq(
     # the numbers a junk row holds are whatever its buffer held, so they must not widen the span
     keys_seen = rf.where(in_seq, keys_i64, 0)
     values_seen = rf.where(values_valid, values_i64, 0) if values_valid is not None else values_i64
-    lo = rf.minimum(
-        rf.reduce_min(keys_seen, axis=keys_seen.dims), rf.reduce_min(values_seen, axis=values_seen.dims)
-    )
-    hi = rf.maximum(
-        rf.reduce_max(keys_seen, axis=keys_seen.dims), rf.reduce_max(values_seen, axis=values_seen.dims)
-    )
+    lo = rf.minimum(rf.reduce_min(keys_seen, axis=keys_seen.dims), rf.reduce_min(values_seen, axis=values_seen.dims))
+    hi = rf.maximum(rf.reduce_max(keys_seen, axis=keys_seen.dims), rf.reduce_max(values_seen, axis=values_seen.dims))
     span = hi - lo + 2  # one slot above the largest number, where the rows outside a sequence go
 
     number = rf.where(in_seq, keys_i64 - lo, span - 1)
@@ -5735,9 +5731,7 @@ def monotonic_rnnt_lattice(
         )
         cells_bound = int(rf.reduce_sum(cells_per_seq, axis=list(cells_per_seq.dims)).raw_tensor)
 
-    seq, frame, prefix = lattice_index(
-        frame_lens.raw_tensor, prefix_lens.raw_tensor.long() - 1, cells_bound
-    )
+    seq, frame, prefix = lattice_index(frame_lens.raw_tensor, prefix_lens.raw_tensor.long() - 1, cells_bound)
     lattice_time = Dim(cells_per_seq, name="lattice")
     cells_dim = Dim(cells_bound, name="lattice:packed")
 
@@ -5754,7 +5748,10 @@ def monotonic_rnnt_lattice(
         del flat_dim
         out.append(
             pack_import(
-                inner, batch_dim=batch, spatial_dim=lattice_time, packed_dim=cells_dim,
+                inner,
+                batch_dim=batch,
+                spatial_dim=lattice_time,
+                packed_dim=cells_dim,
                 feature_dim=source.feature_dim,
             )
         )
