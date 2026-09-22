@@ -51,7 +51,7 @@ if triton is not None:
         for start in range(0, vocab, BLOCK):
             offs = start + tl.arange(0, BLOCK)
             mask = offs < vocab
-            x = tl.load(logits_ptr + base + offs, mask=mask, other=_NEG_INF)
+            x = tl.load(logits_ptr + base + offs, mask=mask, other=_NEG_INF).to(tl.float32)
             block_max = tl.max(x, axis=0)
             new_max = tl.maximum(running_max, block_max)
             running_sum = running_sum * tl.exp(running_max - new_max) + tl.sum(
@@ -89,7 +89,7 @@ if triton is not None:
         for start in range(0, vocab, BLOCK):
             offs = start + tl.arange(0, BLOCK)
             mask = offs < vocab
-            x = tl.load(logits_ptr + base + offs, mask=mask, other=float("-inf"))
+            x = tl.load(logits_ptr + base + offs, mask=mask, other=float("-inf")).to(tl.float32)
             # a cell carrying no posterior contributes nothing, and its row may not even be normalizable
             grad = tl.where(total == 0.0, 0.0, total * tl.exp(x - lse))
             grad = tl.where(offs == blank, grad - blank_grad, grad)
@@ -193,7 +193,9 @@ if triton is not None:
             blank_lp = tl.load(blank_lp_ptr + cell, mask=valid, other=_NEG_INF)
             label_lp = tl.load(label_lp_ptr + cell, mask=valid, other=_NEG_INF)
             alpha = tl.load(alpha_ptr + seq_row + frame * frame_stride, mask=in_block, other=_NEG_INF)
-            inside = valid & (frame < frame_len)
+            # a sequence without any alignment has its normalizer at the sentinel, where the posterior of
+            # every cell would come out as exp(0), so its cells get no gradient at all
+            inside = valid & (frame < frame_len) & (norm > _NEG_INF)
             blank_post = tl.where(inside, tl.exp(alpha + blank_lp + beta - norm) * weight, 0.0)
             label_post = tl.where(inside & (offs < label_len), tl.exp(alpha + label_lp + ahead - norm) * weight, 0.0)
             tl.store(blank_grad_ptr + cell, blank_post, mask=inside)
@@ -340,7 +342,8 @@ def cell_grad(
     """
     assert logits.is_cuda and triton is not None, "monotonic rnnt: the cell kernels need cuda and triton"
     cells, vocab = logits.shape
-    out = torch.empty_like(logits, dtype=torch.float32)
+    # the gradient goes back to logits, so it is written in their dtype and the store converts it
+    out = torch.empty_like(logits)
     _cell_grad_kernel[(cells,)](
         logits, next_label, lse, blank_grad, label_grad, out, vocab, blank, BLOCK=1024, num_warps=8
     )

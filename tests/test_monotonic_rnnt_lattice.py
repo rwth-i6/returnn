@@ -84,6 +84,23 @@ def test_monotonic_rnnt_lattice_keeps_the_real_cells_under_a_capacity():
     torch.testing.assert_close(pred_cells.raw_tensor.inner.raw_tensor[:cells], want_pred)
 
 
+def test_monotonic_rnnt_lattice_refuses_a_batch_above_the_capacity():
+    """
+    A batch whose cells exceed the capacity would silently lose the tail of its last sequence,
+    the lattice index clamps the cells past the buffer onto its last cell. That is a wrong batcher
+    cost, and it has to fail loudly rather than train on a truncated lattice.
+    """
+    enc, pred, enc_time, prefix_dim, frame_lens, label_lens = _batch()
+    cells = total_cells(frame_lens, label_lens)
+
+    try:
+        monotonic_rnnt_lattice(enc, pred, enc_spatial_dim=enc_time, prefix_dim=prefix_dim, cells_bound=cells - 1)
+    except RuntimeError as exc:
+        assert "cells" in str(exc), exc
+    else:
+        raise AssertionError("a lattice above its capacity was built without an error")
+
+
 if __name__ == "__main__":
     if len(sys.argv) > 1:
         globals()[sys.argv[1]]()
