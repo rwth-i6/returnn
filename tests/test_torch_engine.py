@@ -1442,7 +1442,9 @@ def _run_cuda_graph_train(*, compile_: bool, torch_model: bool = False):
     import os
     import re
     import tempfile
+    from unittest import mock
     from returnn.log import log as returnn_log
+    import returnn.torch.engine as torch_engine_module
 
     config, dataset, dev_dataset = _build_cuda_graph_train_config_and_dataset(
         compile_=compile_, torch_model=torch_model
@@ -1454,7 +1456,27 @@ def _run_cuda_graph_train(*, compile_: bool, torch_model: bool = False):
         with global_config_ctx(config):
             engine = Engine(config=config)
             engine.init_train_from_config(train_data=dataset, dev_data=dev_dataset)
-            engine.train()
+            order = []
+            run_train_step = engine._graph_capture.run_train_step
+            print_process = torch_engine_module._print_process
+
+            def _launch(*args, **kwargs):
+                order.append((engine.epoch, "l"))
+                return run_train_step(*args, **kwargs)
+
+            def _report(report_prefix, **kwargs):
+                if report_prefix.endswith(" train"):
+                    order.append((engine.epoch, "r"))
+                return print_process(report_prefix, **kwargs)
+
+            engine._graph_capture.run_train_step = _launch
+            with mock.patch.object(torch_engine_module, "_print_process", _report):
+                engine.train()
+            # the host reports every step only after it launched the next one, so the GPU never waits for it
+            for epoch in sorted({e for e, _ in order}):
+                kinds = "".join(k for e, k in order if e == epoch)
+                n = kinds.count("l")
+                assert n > 2 and kinds == "l" + "lr" * (n - 1) + "r", (epoch, kinds)
             assert engine._graph_capture is not None
             assert engine._graph_capture._graph is not None, "graph never captured"
             # the loss denominators must follow the static length buffers, not the dyn sizes
