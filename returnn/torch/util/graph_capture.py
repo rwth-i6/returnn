@@ -21,6 +21,9 @@ Config, e.g.::
         "capture_optimizer": True,      # grad clip + optimizer step in-graph (needs capturable optimizer)
         "compile": True,                # Inductor-codegen the whole step first, then capture that
         "capture": True,                # False (with compile): run the compiled step eagerly, no graph
+        "segmented": True,              # optional: capture the first of train_step.graph_segments as a forward
+                                        # and a backward graph, run the second eagerly in between at the batch's
+                                        # own shapes (for a middle part whose sizes no static buffer should hold)
     }
 
 Requirements (asserted):
@@ -516,6 +519,115 @@ def _model_param_slots(
     return list(slots.values())
 
 
+def _flatten_boundary(values: Dict[str, Any], *, batch_dim: Dim) -> Tuple[list, List[torch.Tensor]]:
+    """
+    Take the first segment's outputs apart into plain tensors, which cross the graph boundary,
+    and a spec, from which :func:`_unflatten_boundary` builds them again around other tensors.
+
+    A packed tensor crosses padded, so no packed layout state has to cross with it,
+    and every dynamic dim crosses as its size tensor, on the device of the tensors.
+    Static dims cross as themselves.
+
+    :param values: what the first segment returned: RF tensors, dims and plain values by name
+    :param batch_dim: the static batch dim of the captured step
+    :return: (spec, tensors)
+    """
+    devices = [value.device for value in values.values() if isinstance(value, Tensor)]
+    device = devices[0] if devices else None
+    tensors: List[torch.Tensor] = []
+    dim_entries: Dict[Dim, tuple] = {}
+
+    def _dim_entry(dim: Dim) -> tuple:
+        if dim in dim_entries:
+            return dim_entries[dim]
+        if dim == batch_dim:
+            entry = ("batch",)
+        elif dim.dimension is not None:
+            entry = ("dim", dim)
+        else:
+            size = dim.get_dyn_size_ext_for_device(device)
+            assert size.dims == (batch_dim,), f"boundary: dim {dim} needs one size per sequence, got {size}"
+            entry = ("dyn", len(tensors), dim.name or "time")
+            tensors.append(size.raw_tensor)
+        dim_entries[dim] = entry
+        return entry
+
+    spec = []
+    for key, value in values.items():
+        if isinstance(value, Tensor):
+            value = rf.unpack(value)
+            dims = tuple(_dim_entry(d) for d in value.dims)
+            sparse = _dim_entry(value.sparse_dim) if value.sparse_dim is not None else None
+            feature = _dim_entry(value.feature_dim) if value.feature_dim is not None else None
+            spec.append(("tensor", key, len(tensors), dims, value.dtype, sparse, feature))
+            tensors.append(value.raw_tensor)
+        elif isinstance(value, Dim):
+            spec.append(("dim", key, _dim_entry(value)))
+        else:
+            spec.append(("value", key, value))
+    return spec, tensors
+
+
+def _unflatten_boundary(spec: list, tensors: List[torch.Tensor], *, batch_dim: Dim) -> Dict[str, Any]:
+    """
+    Build the first segment's outputs again around the given tensors, as an eager step sees them:
+    every dynamic dim is a new dim sized by its tensor, and every tensor is cut along its dynamic dims
+    to the longest sequence of the batch, since the captured buffers run to the capacity.
+    The cut takes one host read, for all dims at once.
+
+    :param spec: from :func:`_flatten_boundary`
+    :param tensors: the boundary tensors to build the values around, one per spec index
+    :param batch_dim: the static batch dim of the captured step
+    :return: the first segment's outputs by name
+    """
+    dyn_indices = []
+    for entry in spec:
+        if entry[0] == "tensor":
+            dim_entries = entry[3] + (entry[5], entry[6])
+        elif entry[0] == "dim":
+            dim_entries = (entry[2],)
+        else:
+            dim_entries = ()
+        for dim_entry in dim_entries:
+            if dim_entry is not None and dim_entry[0] == "dyn" and dim_entry[1] not in dyn_indices:
+                dyn_indices.append(dim_entry[1])
+    max_lens = {}
+    if dyn_indices:
+        max_lens = dict(zip(dyn_indices, torch.stack([tensors[i].max() for i in dyn_indices]).tolist()))
+    dims: Dict[int, Dim] = {}
+
+    def _dim(entry: tuple) -> Dim:
+        if entry[0] == "batch":
+            return batch_dim
+        if entry[0] == "dim":
+            return entry[1]
+        _, index, name = entry
+        if index not in dims:
+            size_dtype = str(tensors[index].dtype).split(".")[-1]
+            size = Tensor(name + ":size", dims=[batch_dim], dtype=size_dtype, raw_tensor=tensors[index])
+            dims[index] = Dim(size, name=name)
+        return dims[index]
+
+    values = {}
+    for entry in spec:
+        if entry[0] == "tensor":
+            _, key, index, dim_entries, dtype, sparse, feature = entry
+            cut = tuple(slice(0, max_lens[d[1]]) if d[0] == "dyn" else slice(None) for d in dim_entries)
+            values[key] = Tensor(
+                key,
+                dims=[_dim(d) for d in dim_entries],
+                dtype=dtype,
+                sparse_dim=_dim(sparse) if sparse is not None else None,
+                feature_dim=_dim(feature) if feature is not None else None,
+                raw_tensor=tensors[index][cut],
+            )
+        elif entry[0] == "dim":
+            values[entry[1]] = _dim(entry[2])
+        else:
+            values[entry[1]] = entry[2]
+    return values
+
+
 class GraphCapturedTrainStep:
     """
     Orchestrates eager warmup steps, the one-time capture, and per-step replay.
@@ -537,6 +649,7 @@ class GraphCapturedTrainStep:
         rf_params: Optional[List[rf.Parameter]] = None,
         pt_model: Optional[torch.nn.Module] = None,
         packed_batch_size: Optional[Dict[str, int]] = None,
+        train_step_segments: Optional[Tuple[Callable, Callable]] = None,
     ):
         """
         :param opts: the ``torch_cuda_graph`` config dict, see the module docstring
@@ -544,8 +657,9 @@ class GraphCapturedTrainStep:
         :param device:
         :param float_dtype:
         :param params: all model parameters; .grad becomes static buffers, zeroed in-graph
-        :param run_step: ``run_step(extern_data, step=step_tensor)``,
-            runs the user train step function under a train run ctx
+        :param run_step: ``run_step(extern_data, step=step_tensor, func=None, **func_kwargs)``,
+            runs the user train step function (or ``func`` in its place, with the extra kwargs)
+            under a train run ctx and returns what it returns
         :param post_step: grad clip + optimizer step, captured in-graph
             with opts "capture_optimizer"; must be capture-safe
         :param rf_params: RF-level model params of an RF model, for opts "compile"
@@ -553,6 +667,8 @@ class GraphCapturedTrainStep:
             (a torch module, possibly around RF parts), see :func:`_model_param_slots`
         :param packed_batch_size: the config option, when statically known;
             only to infer a missing "packed_total_bound", see :func:`_get_data_buf`
+        :param train_step_segments: for opts "segmented", the two segments of the train step
+            (its ``graph_segments`` attribute), see :func:`_capture_segmented`
         """
         assert str(device).startswith("cuda"), f"torch_cuda_graph requires a cuda device, got {device!r}"
         opts = CollectionReadCheckCovered(opts)  # catch unknown (e.g. typo'd) option keys, see below
@@ -604,6 +720,25 @@ class GraphCapturedTrainStep:
         self._partitioned_buf_keys: Optional[Tuple[List[str], List[str]]] = None
         if self._partitioned:
             assert self._compile, 'torch_cuda_graph: "partitioned" requires "compile"'
+        # segmented: the first segment of the train step is captured as a forward graph and a backward
+        # graph, the second segment runs eagerly in between at the batch's own shapes, for a step whose
+        # middle has data-dependent sizes no static buffer should reserve (a full-sum lattice);
+        # see _capture_segmented
+        self._segmented = bool(opts.get("segmented", False))
+        self._segments = train_step_segments
+        if self._segmented:
+            assert self._segments is not None and len(self._segments) == 2, (
+                'torch_cuda_graph "segmented": the train step needs a graph_segments attribute'
+                " with the two segments (captured, eager)"
+            )
+            assert not self._partitioned, 'torch_cuda_graph: "segmented" already splits the compiled step'
+        self._graph_bw: Optional[torch.cuda.CUDAGraph] = None
+        self._global_train_step = 0
+        self._boundary_spec: Optional[list] = None
+        self._boundary_outs: List[torch.Tensor] = []
+        self._boundary_grad_bufs: Dict[int, torch.Tensor] = {}
+        self._static_ctx: Optional[RunCtx] = None
+        self._static_total: Optional[torch.Tensor] = None
         # debug: Inductor generates a nan-assert after every kernel,
         # pinpointing the first kernel producing nan/inf inside the compiled program
         self._inductor_nan_asserts = bool(opts.get("inductor_nan_asserts", False))
@@ -1289,118 +1424,8 @@ class GraphCapturedTrainStep:
 
             return aot_function(step_core, fw_compiler=fw_compiler)
         if self._partitioned:
-            # loss-only joint graph: min-cut partitions fw/bwd,
-            # activation_memory_budget decides save-vs-recompute globally
-            # noinspection PyProtectedMember
-            import torch._functorch.config as functorch_config
-
-            # noinspection PyProtectedMember
-            from torch._functorch.partitioners import min_cut_rematerialization_partition
-
-            # noinspection PyProtectedMember
-            import torch._inductor.config as inductor_config_
-
-            # stride padding would re-pad the halves' output strides;
-            # without torch.compile's fw->bwd stride negotiation
-            # (absent under raw aot_function), the bwd input stride asserts then fail
-            inductor_config_.comprehensive_padding = False
-            # shape padding off for the same reason:
-            # even as a joint pass it can leave a boundary view's meta dense
-            # while the fw returns the padded view
-            inductor_config_.shape_padding = False
-            if self._activation_memory_budget is not None:
-                functorch_config.activation_memory_budget = float(self._activation_memory_budget)
-            if self._aggressive_recomputation:
-                functorch_config.aggressive_recomputation = True
-                # aggressive_recomputation lifts all ban heuristics except reductions;
-                # the big loq savers (log-softmax outputs, normalizations) are reductions -- lift that too
-                functorch_config.ban_recompute_reductions = False
-
-            inner_backend_ = backend
-            if inner_backend_ is compile_fx:
-                # compile each half with compile_fx_inner, as torch.compile does;
-                # the full compile_fx adds a layer whose call frame pins all inputs,
-                # so nothing frees progressively (OOM at bs200k)
-                # noinspection PyProtectedMember
-                from torch._inductor.compile_fx import compile_fx_inner
-
-                inner_backend_ = compile_fx_inner
-
-            def fw_compiler_logged(gm, example_inputs):
-                """log the saved-activation set (what the budget solver kept), then compile"""
-                out_args = [n for n in gm.graph.nodes if n.op == "output"][0].args[0]
-                total_bytes = 0
-                items = []
-                for a in out_args[self._compiled_n_loss_outs + 1 :]:
-                    v = getattr(a, "meta", {}).get("val") if a is not None else None
-                    if v is not None and hasattr(v, "numel"):
-                        nb = v.numel() * v.element_size()
-                        total_bytes += nb
-                        items.append((nb, tuple(v.shape), tuple(v.stride()), str(v.dtype)))
-                print(
-                    f"torch_cuda_graph partitioned fw: {len(items)} saved activations,"
-                    f" {total_bytes / 2**30:.2f} GiB (traced sizes)",
-                    flush=True,
-                )
-                for nb, shape, stride, dtype in sorted(items, reverse=True)[:15]:
-                    print(f"  saved {nb / 2**20:9.1f} MiB {dtype} {shape} stride {stride}", flush=True)
-                return inner_backend_(gm, example_inputs)
-
-            backend = fw_compiler_logged
-            # no make_boxed_compiler here: compile_fx_inner's CompiledFxGraph is already boxed;
-            # make_boxed_compiler would re-wrap it positionally and break the calling convention
-            # (TypeError: CompiledFxGraph.__call__ takes 2 positional arguments)
-
-            def partition_fn(gm, joint_inputs, **kwargs):
-                """
-                As in torch.compile: the Inductor joint-graph passes run before
-                partitioning, so fw and bwd split one consistent graph;
-                the halves then compile with compile_fx_inner (no joint-pass re-run).
-                Shape padding stays disabled, see above.
-                """
-                # noinspection PyProtectedMember
-                from torch._inductor.fx_passes.joint_graph import joint_graph_passes
-
-                joint_graph_passes(gm)
-                fw_module, bw_module = min_cut_rematerialization_partition(gm, joint_inputs, **kwargs)
-                return fw_module, bw_module
-
-            # with compile_fx_inner halves,
-            # the outer trace must apply the Inductor decomp table itself
-            # (the full compile_fx did it in its inner aot layer)
-            # noinspection PyProtectedMember
-            from torch._inductor.decomposition import select_decomp_table
-
-            # data/lens buffers + step tensor as explicit trace inputs (see _compiled_call_args)
-            data_keys = sorted(self._data_bufs)
-            lens_keys = sorted(self._lens_bufs)
-            self._partitioned_buf_keys = (data_keys, lens_keys)
-            n_params = len(orig_raws)
-
-            def step_core_buf_inputs(all_raws):
-                """step_core with the closure buffers swapped for the passed trace inputs"""
-                bufs = all_raws[n_params:]
-                data_ph = bufs[: len(data_keys)]
-                lens_ph = bufs[len(data_keys) : len(data_keys) + len(lens_keys)]
-                saved = (dict(self._data_bufs), dict(self._lens_bufs), self._step_t.raw_tensor)
-                try:
-                    for k, t in zip(data_keys, data_ph):
-                        self._data_bufs[k] = t
-                    for k, t in zip(lens_keys, lens_ph):
-                        self._lens_bufs[k] = t
-                    self._step_t.raw_tensor = bufs[-1]
-                    return step_core(all_raws[:n_params])
-                finally:
-                    self._data_bufs.update(saved[0])
-                    self._lens_bufs.update(saved[1])
-                    self._step_t.raw_tensor = saved[2]
-
-            return aot_function(
-                step_core_buf_inputs,
-                fw_compiler=backend,
-                bw_compiler=inner_backend_,
-                partition_fn=partition_fn,
-                decompositions=select_decomp_table(),
+            return self._partitioned_aot(
+                step_core, n_params=len(orig_raws), backend=backend, n_outs=lambda: self._compiled_n_loss_outs + 1
             )
         # default mode: step_core computes the grads itself, one inference-style graph,
         # never fw/bwd-partitioned (partition_fn / activation_memory_budget do not apply;
@@ -1452,6 +1477,188 @@ class GraphCapturedTrainStep:
             return aot_function(step_core_buf_inputs_v212, fw_compiler=backend)
         return aot_function(step_core, fw_compiler=backend)
 
+    def _partitioned_aot(
+        self, core: Callable[[List[torch.Tensor]], tuple], *, n_params: int, backend, n_outs: Callable[[], int]
+    ) -> Callable[[List[torch.Tensor]], tuple]:
+        """
+        The joint AOT path over ``core(param_raws) -> (differentiable total, outputs...)``:
+        min-cut partitions fw/bwd, activation_memory_budget decides save-vs-recompute globally,
+        and the data/lens buffers plus the step tensor are lifted to trace inputs (see :func:`_compiled_call_args`).
+        The result is autograd-aware, its backward runs the compiled bwd half.
+
+        :param core: the traced function
+        :param n_params: how many leading trace inputs are the param raws
+        :param backend: the Inductor compile entry, or the eager kernels of debug_aot_eager
+        :param n_outs: how many outputs core returns before the saved activations, read at compile time (for the log)
+        :return: the aot function
+        """
+        from functorch.compile import aot_function
+
+        # noinspection PyProtectedMember
+        from torch._inductor.compile_fx import compile_fx
+
+        # noinspection PyProtectedMember
+        import torch._functorch.config as functorch_config
+
+        # noinspection PyProtectedMember
+        from torch._functorch.partitioners import min_cut_rematerialization_partition
+
+        # noinspection PyProtectedMember
+        import torch._inductor.config as inductor_config_
+
+        # stride padding would re-pad the halves' output strides;
+        # without torch.compile's fw->bwd stride negotiation
+        # (absent under raw aot_function), the bwd input stride asserts then fail
+        inductor_config_.comprehensive_padding = False
+        # shape padding off for the same reason:
+        # even as a joint pass it can leave a boundary view's meta dense
+        # while the fw returns the padded view
+        inductor_config_.shape_padding = False
+        if self._activation_memory_budget is not None:
+            functorch_config.activation_memory_budget = float(self._activation_memory_budget)
+        if self._aggressive_recomputation:
+            functorch_config.aggressive_recomputation = True
+            # aggressive_recomputation lifts all ban heuristics except reductions;
+            # the big loq savers (log-softmax outputs, normalizations) are reductions -- lift that too
+            functorch_config.ban_recompute_reductions = False
+
+        inner_backend_ = backend
+        if inner_backend_ is compile_fx:
+            # compile each half with compile_fx_inner, as torch.compile does;
+            # the full compile_fx adds a layer whose call frame pins all inputs,
+            # so nothing frees progressively (OOM at bs200k)
+            # noinspection PyProtectedMember
+            from torch._inductor.compile_fx import compile_fx_inner
+
+            inner_backend_ = compile_fx_inner
+
+        def fw_compiler_logged(gm, example_inputs):
+            """log the saved-activation set (what the budget solver kept), then compile"""
+            out_args = [n for n in gm.graph.nodes if n.op == "output"][0].args[0]
+            total_bytes = 0
+            items = []
+            for a in out_args[n_outs() :]:
+                v = getattr(a, "meta", {}).get("val") if a is not None else None
+                if v is not None and hasattr(v, "numel"):
+                    nb = v.numel() * v.element_size()
+                    total_bytes += nb
+                    items.append((nb, tuple(v.shape), tuple(v.stride()), str(v.dtype)))
+            print(
+                f"torch_cuda_graph partitioned fw: {len(items)} saved activations,"
+                f" {total_bytes / 2**30:.2f} GiB (traced sizes)",
+                flush=True,
+            )
+            for nb, shape, stride, dtype in sorted(items, reverse=True)[:15]:
+                print(f"  saved {nb / 2**20:9.1f} MiB {dtype} {shape} stride {stride}", flush=True)
+            return inner_backend_(gm, example_inputs)
+
+        # no make_boxed_compiler here: compile_fx_inner's CompiledFxGraph is already boxed;
+        # make_boxed_compiler would re-wrap it positionally and break the calling convention
+        # (TypeError: CompiledFxGraph.__call__ takes 2 positional arguments)
+
+        def partition_fn(gm, joint_inputs, **kwargs):
+            """
+            As in torch.compile: the Inductor joint-graph passes run before
+            partitioning, so fw and bwd split one consistent graph;
+            the halves then compile with compile_fx_inner (no joint-pass re-run).
+            Shape padding stays disabled, see above.
+            """
+            # noinspection PyProtectedMember
+            from torch._inductor.fx_passes.joint_graph import joint_graph_passes
+
+            joint_graph_passes(gm)
+            fw_module, bw_module = min_cut_rematerialization_partition(gm, joint_inputs, **kwargs)
+            return fw_module, bw_module
+
+        # with compile_fx_inner halves,
+        # the outer trace must apply the Inductor decomp table itself
+        # (the full compile_fx did it in its inner aot layer)
+        # noinspection PyProtectedMember
+        from torch._inductor.decomposition import select_decomp_table
+
+        # data/lens buffers + step tensor as explicit trace inputs (see _compiled_call_args)
+        data_keys = sorted(self._data_bufs)
+        lens_keys = sorted(self._lens_bufs)
+        self._partitioned_buf_keys = (data_keys, lens_keys)
+
+        def core_buf_inputs(all_raws):
+            """core with the closure buffers swapped for the passed trace inputs"""
+            bufs = all_raws[n_params:]
+            data_ph = bufs[: len(data_keys)]
+            lens_ph = bufs[len(data_keys) : len(data_keys) + len(lens_keys)]
+            saved = (dict(self._data_bufs), dict(self._lens_bufs), self._step_t.raw_tensor)
+            try:
+                for k, t in zip(data_keys, data_ph):
+                    self._data_bufs[k] = t
+                for k, t in zip(lens_keys, lens_ph):
+                    self._lens_bufs[k] = t
+                self._step_t.raw_tensor = bufs[-1]
+                return core(all_raws[:n_params])
+            finally:
+                self._data_bufs.update(saved[0])
+                self._lens_bufs.update(saved[1])
+                self._step_t.raw_tensor = saved[2]
+
+        return aot_function(
+            core_buf_inputs,
+            fw_compiler=fw_compiler_logged,
+            bw_compiler=inner_backend_,
+            partition_fn=partition_fn,
+            decompositions=select_decomp_table(),
+        )
+
+    def _make_compiled_segment(self) -> Callable[[List[torch.Tensor]], tuple]:
+        """
+        Build the Inductor-compiled first segment of a segmented step (see :func:`_capture_segmented`):
+        ``compiled(param_raws, bufs...) -> (static total, per-loss outs..., boundary tensors...)``.
+        Autograd-aware through the fw/bwd partition, so the backward graph replays the compiled bwd half
+        from the boundary grads the eager segment leaves behind.
+        """
+        # noinspection PyProtectedMember
+        from torch._inductor.compile_fx import compile_fx
+
+        # noinspection PyProtectedMember
+        torch._dynamo.reset()
+        _apply_inductor_workarounds()
+        slots = self._get_param_slots()
+        n_outs = [0]
+
+        def segment_core(raws):
+            """the first segment on the given param raws, see above"""
+            for slot, t in zip(slots, raws):
+                slot.set(t)
+            try:
+                with rf.set_static_traceable_ctx():
+                    extern_data = self._build_extern_data()
+                    values = self._run_step(extern_data, step=self._step_t, func=self._segments[0])
+                    ctx = rf.get_run_ctx()
+                    outs = []
+                    loss_meta = []
+                    for name, loss in ctx.losses.items():
+                        outs.append(loss.get_summed_loss().raw_tensor)
+                        inv = loss.get_inv_norm_factor()
+                        inv_is_tensor = isinstance(inv, Tensor)
+                        if inv_is_tensor:
+                            outs.append(inv.raw_tensor)
+                        loss_meta.append((name, loss, inv_is_tensor, None if inv_is_tensor else inv))
+                    self._compiled_loss_meta = loss_meta
+                    self._compiled_n_loss_outs = len(outs)
+                    total = ctx.total_loss() if ctx.losses else None
+                    total_raw = total.raw_tensor if isinstance(total, Tensor) else torch.zeros((), device=self._device)
+                    self._boundary_spec, boundary = _flatten_boundary(values, batch_dim=self._batch_dim)
+                n_outs[0] = 1 + len(outs) + len(boundary)
+                return (total_raw,) + tuple(t.detach() for t in outs) + tuple(boundary)
+            finally:
+                for slot in slots:
+                    slot.set(slot.raw)
+
+        backend = compile_fx
+        if self._debug_aot_eager:
+            from functorch.compile import nop
+
+            backend = nop
+        return self._partitioned_aot(segment_core, n_params=len(slots), backend=backend, n_outs=lambda: n_outs[0])
+
     def _get_param_slots(self) -> List[_ParamSlot]:
         """the parameters of the compiled step, collected once, see :class:`_ParamSlot`"""
         if self._param_slots is None:
@@ -1479,7 +1686,7 @@ class GraphCapturedTrainStep:
     def _ensure_compiled(self) -> Callable[[List[torch.Tensor]], tuple]:
         """build the compiled step once; the first call traces + Inductor-compiles + autotunes"""
         if self._compiled_fn is None:
-            self._compiled_fn = self._make_compiled_step()
+            self._compiled_fn = self._make_compiled_segment() if self._segmented else self._make_compiled_step()
             # drop the warmup ctx before the first compiled run:
             # its retained ~0.4 GiB counts against a tight first-run peak
             self._ctx = None
@@ -1490,11 +1697,16 @@ class GraphCapturedTrainStep:
             # it must not count as a train step (running statistics, counters, RNG)
             with _allow_non_fake_inputs(), self._training_state_preserved():
                 outs = self._compiled_fn(self._compiled_call_args(raws))
-                if self._partitioned:
+                if self._partitioned or self._segmented:
                     # the bwd graph compiles on the first backward
                     for p in self._grad_params:
                         p.grad.zero_()
-                    outs[0].backward()
+                    if self._segmented:
+                        self._take_compiled_segment_outs(outs)
+                        self._segment_eager()
+                        self._segment_backward(post_step=False)
+                    else:
+                        outs[0].backward()
         return self._compiled_fn
 
     def _bind_grads(self, raws: List[torch.Tensor], outs: tuple):
@@ -1557,8 +1769,8 @@ class GraphCapturedTrainStep:
         (stable graph outputs under capture, refreshed in place by each replay).
         """
         ctx = RunCtx(stage="train_step", train_flag=True, step=self._step_t)
-        # partitioned mode: outs[0] is the differentiable total, the loss outputs follow
-        i = 1 if self._partitioned else 0
+        # partitioned and segmented mode: outs[0] is the differentiable total, the loss outputs follow
+        i = 1 if (self._partitioned or self._segmented) else 0
         for name, loss_traced, inv_is_tensor, inv_static in self._compiled_loss_meta:
             summed = Tensor(name, dims=(), dtype=str(outs[i].dtype).split(".")[-1])
             summed.raw_tensor = outs[i]
@@ -1579,7 +1791,7 @@ class GraphCapturedTrainStep:
                 use_flatten_frames=loss_traced.use_flatten_frames,
                 custom_inv_norm_factor=inv,
             )
-        assert i == self._compiled_n_loss_outs + (1 if self._partitioned else 0)
+        assert i == self._compiled_n_loss_outs + (1 if (self._partitioned or self._segmented) else 0)
         return ctx
 
     def _log_misaligned_inputs(self, raws: List[torch.Tensor]) -> None:
@@ -1619,6 +1831,160 @@ class GraphCapturedTrainStep:
         self._ctx = self._build_result_ctx(outs)
         return self._ctx
 
+    def _take_compiled_segment_outs(self, outs: tuple) -> None:
+        """
+        :param outs: what the compiled first segment returned, see :func:`_make_compiled_segment`
+        """
+        self._static_total = outs[0]
+        self._boundary_outs = list(outs[1 + self._compiled_n_loss_outs :])
+
+    def _segment_forward(self) -> None:
+        """
+        The first segment on the static buffers, plain (uncompiled): the static losses reduced in place,
+        the boundary taken apart into tensors (see :func:`_flatten_boundary`).
+        Inside a capture, everything it leaves behind refreshes with every replay.
+        """
+        for p in self._grad_params:
+            p.grad.zero_()
+        with rf.set_static_traceable_ctx():
+            extern_data = self._build_extern_data()
+            values = self._run_step(extern_data, step=self._step_t, func=self._segments[0])
+            ctx = rf.get_run_ctx()
+            self._reduce_all_losses(ctx)
+            total = ctx.total_loss() if ctx.losses else None
+            self._boundary_spec, self._boundary_outs = _flatten_boundary(values, batch_dim=self._batch_dim)
+        self._static_ctx = ctx
+        self._static_total = total.raw_tensor if isinstance(total, Tensor) else None
+
+    def _drop_segment_refs(self) -> None:
+        """
+        Let go of everything a previous run of the first segment left behind.
+        Its autograd graph keeps the grad accumulators of the parameters alive,
+        and a capture which picks those up again inherits the stream they were made on,
+        which for a run on the default stream breaks the capture.
+        """
+        self._ctx = None
+        self._static_ctx = None
+        self._static_total = None
+        self._boundary_outs = []
+
+    def _segment_eager(self) -> RunCtx:
+        """
+        The second segment, eager at the batch's own shapes, on leaves detached from the boundary tensors,
+        then its backward, which leaves the boundary grads in the static grad buffers
+        the backward graph starts from (and the grads of the parameters it uses in their .grad, directly).
+        It sees only what the first segment returned, never the extern data, whose packed layouts the graph owns.
+
+        :return: the run ctx with the eager losses
+        """
+        leaves = [t.detach().requires_grad_(t.requires_grad) for t in self._boundary_outs]
+        values = _unflatten_boundary(self._boundary_spec, leaves, batch_dim=self._batch_dim)
+        self._run_step(None, step=self._global_train_step, func=self._segments[1], **values)
+        ctx = rf.get_run_ctx()
+        total = ctx.total_loss() if ctx.losses else None
+        if isinstance(total, Tensor):
+            total.raw_tensor.backward()
+        for i, (out, leaf) in enumerate(zip(self._boundary_outs, leaves)):
+            if not out.requires_grad:
+                continue
+            buf = self._boundary_grad_bufs.get(i)
+            if buf is None:
+                buf = torch.zeros_like(out)
+                self._boundary_grad_bufs[i] = buf
+            if leaf.grad is None:
+                buf.zero_()
+            else:
+                buf.copy_(leaf.grad)
+        return ctx
+
+    def _segment_backward(self, *, post_step: bool) -> None:
+        """
+        The backward of the first segment, from the static total and the boundary grad buffers
+        into the static param grads, which the eager segment already holds its share in.
+
+        :param post_step: whether the in-graph grad clip and optimizer step follow (opts "capture_optimizer")
+        """
+        tensors = []
+        grads = []
+        if self._static_total is not None and self._static_total.requires_grad:
+            tensors.append(self._static_total)
+            grads.append(torch.ones_like(self._static_total))
+        for i, out in enumerate(self._boundary_outs):
+            if out.requires_grad:
+                tensors.append(out)
+                grads.append(self._boundary_grad_bufs[i])
+        if tensors:
+            torch.autograd.backward(tensors, grad_tensors=grads)
+        if post_step and self._post_step is not None:
+            self._post_step()
+
+    def _merged_ctx(self, eager_ctx: RunCtx) -> RunCtx:
+        """
+        :param eager_ctx: the run ctx of the second segment of this step
+        :return: one ctx with the losses of both segments, the static ones refreshed by the replay
+        """
+        both = set(self._ctx.losses) & set(eager_ctx.losses)
+        assert not both, f"torch_cuda_graph segmented: both segments mark the losses {sorted(both)}"
+        ctx = RunCtx(stage="train_step", train_flag=True, step=self._step_t)
+        ctx.losses.update(self._ctx.losses)
+        ctx.losses.update(eager_ctx.losses)
+        return ctx
+
+    def _run_segmented_uncaptured(self) -> RunCtx:
+        """one whole segmented step without a graph, plain, for the kernel warmup"""
+        self._segment_forward()
+        self._ctx = self._static_ctx
+        eager_ctx = self._segment_eager()
+        self._segment_backward(post_step=True)
+        return self._merged_ctx(eager_ctx)
+
+    def _capture_segmented(self) -> RunCtx:
+        """
+        Opts "segmented": capture the first segment as a forward graph, run the eager segment on this batch,
+        capture the backward of the first segment as a second graph on the same pool, replay it, and from
+        then on every step is replay, eager segment, replay (see :func:`run_train_step`).
+
+        :return: the run ctx of this step
+        """
+        graph = torch.cuda.CUDAGraph()
+        if self._compile:
+            compiled = self._ensure_compiled()
+            raws = [slot.raw for slot in self._get_param_slots()]
+            self._log_misaligned_inputs(raws)
+            # plain warm run incl. both backward halves (autotune + workspaces), training state left alone
+            with self._training_state_preserved():
+                self._take_compiled_segment_outs(compiled(self._compiled_call_args(raws)))
+                for p in self._grad_params:
+                    p.grad.zero_()
+                self._segment_eager()
+                self._segment_backward(post_step=False)
+                torch.cuda.synchronize()
+            self._drop_segment_refs()
+            torch.cuda.empty_cache()
+            with torch.cuda.graph(graph):
+                for p in self._grad_params:
+                    p.grad.zero_()
+                outs = compiled(self._compiled_call_args(raws))
+            self._ctx = self._build_result_ctx(outs)
+            self._take_compiled_segment_outs(outs)
+            del outs
+        else:
+            self._drop_segment_refs()
+            with torch.cuda.graph(graph):
+                self._segment_forward()
+            self._ctx = self._static_ctx
+        self._graph = graph
+        self._log_graph_pool_size(graph)
+        graph.replay()
+        eager_ctx = self._segment_eager()
+        graph_bw = torch.cuda.CUDAGraph()
+        with torch.cuda.graph(graph_bw, pool=graph.pool()):
+            self._segment_backward(post_step=True)
+        self._graph_bw = graph_bw
+        torch.cuda.reset_peak_memory_stats()
+        graph_bw.replay()
+        return self._merged_ctx(eager_ctx)
+
     def run_train_step(
         self, extern_data_raw: Dict[str, Union[torch.Tensor, numpy.ndarray]], *, global_train_step: int
     ) -> RunCtx:
@@ -1632,10 +1998,15 @@ class GraphCapturedTrainStep:
         """
         if self._debug_nan_dump_inputs:
             self._last_extern_data_raw = extern_data_raw
+        self._global_train_step = global_train_step
         self._copy_in(extern_data_raw)
         self._step_buf.fill_(global_train_step)
         if self._graph is not None:
             self._graph.replay()
+            if self._segmented:
+                eager_ctx = self._segment_eager()
+                self._graph_bw.replay()
+                return self._merged_ctx(eager_ctx)
             return self._ctx
         if self._compiled_fn is not None:  # "capture": False mode, post-warmup
             return self._run_compiled_eager()
@@ -1698,7 +2069,10 @@ class GraphCapturedTrainStep:
                 s.wait_stream(torch.cuda.current_stream())
                 with torch.cuda.stream(s):
                     for _ in range(3):
-                        self._step()
+                        if self._segmented:
+                            self._run_segmented_uncaptured()
+                        else:
+                            self._step()
                 torch.cuda.current_stream().wait_stream(s)
         # with warmup_steps 0 there was no real optimizer step yet: create the lazy state
         # (and the param grads) explicitly -- no-op if a warmup step already did
@@ -1708,6 +2082,9 @@ class GraphCapturedTrainStep:
         # allocates its own (bound-sized, differently-shaped) pool -- see _warmup_step_dynamic
         torch.cuda.empty_cache()
         try:
+            if self._segmented:
+                assert self._capture_graph, 'torch_cuda_graph: "segmented" needs "capture"'
+                return self._capture_segmented()
             if self._compile and not self._capture_graph:
                 self._ensure_compiled()
                 return self._run_compiled_eager()
@@ -1748,6 +2125,12 @@ class GraphCapturedTrainStep:
             return
         # the ctx losses wrap capture-pool tensors, which the pool release invalidates
         self._ctx = None
+        self._static_ctx = None
+        self._boundary_outs = []
+        self._static_total = None
+        if self._graph_bw is not None:
+            self._graph_bw.reset()
+            self._graph_bw = None
         self._graph.reset()
         self._graph = None
         _graph_pools_reserved = 0

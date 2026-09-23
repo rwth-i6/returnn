@@ -291,10 +291,12 @@ class Engine(EngineBase):
                 float_dtype=self._default_float_dtype,
                 params=list(self._pt_model.parameters()),
                 run_step=(
-                    lambda extern_data_, *, step: self._run_step(
-                        extern_data_, train_flag=True, train_func=True, step=step
+                    lambda extern_data_, *, step, func=None, **func_kwargs: self._run_step(
+                        extern_data_, train_flag=True, train_func=True, step=step, func=func, func_kwargs=func_kwargs
                     )
                 ),
+                # opts "segmented": the two segments of the train step, see graph_capture
+                train_step_segments=getattr(self._train_step_func, "graph_segments", None),
                 post_step=lambda: self._updater.step(grad_scaler=None),
                 # only for opts "dummy_warmup": to reset the state the dummy steps create
                 get_optimizer=lambda: self._updater.get_optimizer(),
@@ -1112,6 +1114,8 @@ class Engine(EngineBase):
         train_func: bool,
         step: Optional[Union[int, Tensor]] = None,
         _inside_wrapped: bool = False,
+        func: Optional[Callable] = None,
+        func_kwargs: Optional[Dict[str, Any]] = None,
     ):
         """
         :param extern_data: model inputs for the step
@@ -1120,7 +1124,11 @@ class Engine(EngineBase):
         :param step: override for the run-ctx global train step
             (e.g. a device tensor under CUDA-graph capture, see :mod:`returnn.torch.util.graph_capture`)
         :param _inside_wrapped: internal, for the DDP-wrapped module call
-        :return: Nothing, all outputs are written to the run context (:func:`rf.get_run_ctx`).
+        :param func: a function to run instead of the configured step function, under the same run ctx,
+            e.g. one segment of a train step (see ``torch_cuda_graph`` "segmented")
+        :param func_kwargs: further keyword arguments for the step function
+        :return: whatever the step function returns; the outputs and losses are written
+            to the run context (:func:`rf.get_run_ctx`).
         """
         if self._ddp_pt_model is not None and not _inside_wrapped:
             self._ddp_pt_model(extern_data=extern_data, train_flag=train_flag, train_func=train_func)
@@ -1138,20 +1146,22 @@ class Engine(EngineBase):
             rf.init_forward_step_run_ctx(
                 expected_outputs=self._forward_step_expected_outputs, step=step, epoch=self.epoch
             )
+        if func is not None:
+            f = func
 
         sentinel_kw = util.get_fwd_compat_kwargs()
         with self._run_ctx_mgr():
             if not self._hot_reloader:  # common path
-                f(model=self._orig_model, extern_data=extern_data, **sentinel_kw)
-                return
+                return f(model=self._orig_model, extern_data=extern_data, **sentinel_kw, **(func_kwargs or {}))
 
+            res = None
             while True:
                 # We are maybe trying again. Clear outputs/losses.
                 rf.get_run_ctx().outputs.data.clear()
                 rf.get_run_ctx().losses.clear()
 
                 try:
-                    f(model=self._orig_model, extern_data=extern_data, **sentinel_kw)
+                    res = f(model=self._orig_model, extern_data=extern_data, **sentinel_kw, **(func_kwargs or {}))
                     r = self._hot_reloader.user_interaction(return_actions={"t": "try again", "c": "continue"})
                     if r == "t":
                         continue
@@ -1165,6 +1175,7 @@ class Engine(EngineBase):
                     help_on_torch_exception(exc, model=self._orig_model)
                     sys.excepthook(type(exc), exc, exc.__traceback__)
                     self._hot_reloader.user_interaction()
+            return res
 
     def _load_model(self):
         """
