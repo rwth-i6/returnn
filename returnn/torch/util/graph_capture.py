@@ -1498,11 +1498,19 @@ class GraphCapturedTrainStep:
         return self._compiled_fn
 
     def _bind_grads(self, raws: List[torch.Tensor], outs: tuple):
-        """rebind .grad to the compiled grad outputs (fresh full grads -- no accumulation, no zeroing)"""
+        """
+        rebind .grad to the compiled grad outputs (fresh full grads -- no accumulation, no zeroing).
+        A grad in another layout than its parameter (e.g. a conv weight grad which cuDNN computed channels-last)
+        is copied into the parameter's layout first, as autograd's grad accumulation does it:
+        the fused and foreach optimizer kernels need the same strides for params, grads and optimizer states
+        (a foreach op takes its per-tensor fallback for the whole list, a fused one raises).
+        """
         grad_outs = outs[self._compiled_n_loss_outs :]
         train_raws = [r for r in raws if r.requires_grad]
         assert len(train_raws) == len(grad_outs)
         for r, g in zip(train_raws, grad_outs):
+            if g.stride() != r.stride():
+                g = torch.empty_like(r).copy_(g)  # inside the capture: a graph-pool buffer, refreshed per replay
             r.grad = g
 
     def _capture_compiled(self, graph: torch.cuda.CUDAGraph):
