@@ -725,6 +725,20 @@ def test_updater_weight_decay_blacklist():
     assert params_by_wd[1e-3] == {"2.weight"}
 
 
+def test_updater_step_does_not_walk_the_modules():
+    """the grad clip and norm take the parameters of the optimizer creation, walking the modules costs every step"""
+    from unittest import mock
+
+    config = Config(dict(optimizer={"class": "adamw"}, gradient_clip_global_norm=1.0, log_grad_norm=True))
+    model = torch.nn.Sequential(torch.nn.Linear(5, 5), torch.nn.Linear(5, 2))
+    updater = Updater(config=config, network=model, device=torch.device("cpu"))
+    updater.create_optimizer()
+    model(torch.randn(3, 5)).sum().backward()
+    with mock.patch.object(torch.nn.Module, "named_modules", side_effect=AssertionError("walked the modules")):
+        updater.step()
+    assert updater.last_grad_norm is not None
+
+
 def test_updater_lr_multipliers():
     from collections import defaultdict
     from fnmatch import fnmatchcase
