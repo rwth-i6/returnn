@@ -4,7 +4,7 @@ Main engine for PyTorch
 
 from __future__ import annotations
 
-from typing import Optional, Any, Union, Callable, Dict, Set
+from typing import Optional, Any, Union, Callable, Dict, List, Set, Tuple
 from contextlib import nullcontext, ExitStack, contextmanager
 
 import sys
@@ -537,6 +537,97 @@ class Engine(EngineBase):
             prof.__enter__()
 
         report_prefix = f"ep {self.epoch} train"
+        # Under graph capture, the host runs one step ahead:
+        # a step's values are read and reported only after the next step is launched,
+        # so the GPU never waits for the host between two steps (see _StepValues).
+        report_one_step_later = self._graph_capture is not None
+        prev_step: Optional[Tuple[_StepValues, Dict[str, Any]]] = None
+
+        def _report_step(values: _StepValues, info: Dict[str, Any]):
+            """
+            Accumulate, log and check the values of one train step, once they are on the host.
+
+            :param values: the losses, loss norm factors and grad norm of the step
+            :param info: what else the report needs of the step
+            """
+            nonlocal accumulated_losses_dict, accumulated_inv_norm_factors_dict
+            host_values = values.get()
+            losses_dict = NumbersDict({name: host_values[name] for name in info["losses"]})
+            inv_norm_factors_dict = NumbersDict({name: host_values[f"{name}:inv_norm"] for name in info["losses"]})
+            grad_norm_key = info["grad_norm_key"]
+            if grad_norm_key is not None:
+                losses_dict[grad_norm_key] = host_values[grad_norm_key]
+                inv_norm_factors_dict[grad_norm_key] = 1.0  # once per update step
+            accumulated_losses_dict += losses_dict
+            accumulated_inv_norm_factors_dict += inv_norm_factors_dict
+            eval_info = self._maybe_extend_losses_info(losses_dict / inv_norm_factors_dict)
+            _print_process(
+                report_prefix,
+                step=info["step_idx"],
+                eval_info=dict(eval_info),
+                step_duration=info["step_duration"],
+                start_elapsed=info["start_elapsed"],
+                complete_frac=info["complete_frac"],
+                num_seqs=info["num_seqs"],
+                batch_size_info=info["batch_size_info"],
+                log_memory_usage_device=self._device if self._log_memory_usage else None,
+            )
+            if (
+                self._tensorboard_writer
+                and info["global_train_step"] % self._tensorboard_opts.get("log_every_n_train_steps", 100) == 0
+            ):
+                # write losses/errors to tensorboard
+                for key, val in eval_info.items():
+                    self._tensorboard_writer.add_scalar(f"train/{key}", val, global_step=info["global_train_step"])
+                self._tensorboard_writer.add_scalar(
+                    "train/learning_rate", info["learning_rate"], global_step=info["global_train_step"]
+                )
+
+            if self._stop_on_nonfinite_train_score:
+                if any(np.isinf(v) or np.isnan(v) for v in accumulated_losses_dict.values()):
+                    print("Model seems broken, got inf or nan score.", file=log.v1)
+                    print(
+                        "Accumulated scores:",
+                        accumulated_losses_dict / accumulated_inv_norm_factors_dict,
+                        file=log.v1,
+                    )
+
+                    print("Checking for inf/nan in model parameters...", file=log.v1)
+                    count_nan_inf_params = 0
+                    for name, param in self._pt_model.named_parameters():
+                        got_nan_inf_t = torch.stack([torch.isnan(param).any(), torch.isinf(param).any()]).cpu()
+                        got_nan = got_nan_inf_t[0].item()
+                        got_inf = got_nan_inf_t[1].item()
+                        if got_nan or got_inf:
+                            s = "/".join([s_ for s_, b in [("nan", got_nan), ("inf", got_inf)] if b])
+                            print(f"  {name} {param}: {s}", file=log.v1)
+                            count_nan_inf_params += 1
+                    if count_nan_inf_params == 0:
+                        print("(No inf/nan in model parameters.)", file=log.v1)
+
+                    step_extern_data = info["extern_data"]
+
+                    def _debug_func() -> torch.Tensor:
+                        self._run_step(step_extern_data, train_flag=True, train_func=True)
+                        loss = rf.get_run_ctx().total_loss()
+                        assert isinstance(loss, Tensor)
+                        return loss.raw_tensor
+
+                    if step_extern_data is not None:
+                        print("Running debug_inf_nan...", file=log.v1)
+                        debug_inf_nan(_debug_func, with_grad=True)
+                    else:
+                        print("(debug_inf_nan not supported under torch_cuda_graph.)", file=log.v1)
+                    if count_nan_inf_params > 0 and info["global_train_step"] == 1:
+                        print(
+                            "This was the second step, so likely the first step grad was broken."
+                            " Try again with reset model...",
+                            file=log.v1,
+                        )
+                        self._load_model()
+                        debug_inf_nan(_debug_func, with_grad=True)
+                    raise Exception(f"Inf/nan score in step {info['step_idx']}.")
+
         try:
             while True:
                 with torch.no_grad(), record_function("data_loading"):
@@ -568,7 +659,7 @@ class Engine(EngineBase):
                 # convert values from torch int32 to Python ints to prevent overflow
                 keys_w_seq_len = [k for k in extern_data_raw if f"{k}:seq_len" in extern_data_raw]
                 total_data_size_packed += NumbersDict(
-                    {k: int(sum(extern_data_raw[f"{k}:seq_len"])) for k in keys_w_seq_len},
+                    {k: int(extern_data_raw[f"{k}:seq_len"].sum()) for k in keys_w_seq_len},
                 )
                 total_data_size_padded += NumbersDict(
                     {k: int(util.prod(extern_data_raw[k].shape[:2])) for k in keys_w_seq_len},
@@ -604,20 +695,6 @@ class Engine(EngineBase):
                     self._run_step(extern_data, train_flag=True, train_func=True)
                     train_ctx = rf.get_run_ctx()
                     total_loss = train_ctx.total_loss()
-
-                losses_dict = NumbersDict(
-                    {
-                        name: (
-                            float(loss.get_summed_loss().raw_tensor.detach().cpu().item())
-                            if self._device != "meta"
-                            else float("nan")
-                        )
-                        for name, loss in train_ctx.losses.items()
-                    }
-                )
-                inv_norm_factors_dict = NumbersDict(
-                    {name: float(_to_raw(loss.get_inv_norm_factor())) for name, loss in train_ctx.losses.items()}
-                )
 
                 if accum_grad_multiple_step_dyn:
                     accum_grad_multiple_step = accum_grad_multiple_step_dyn(
@@ -658,34 +735,28 @@ class Engine(EngineBase):
                         self._updater.step(grad_scaler=self._grad_scaler)
                 zero_grad_next_step = perform_update_step
 
+                values = {}
+                for name, loss in train_ctx.losses.items():
+                    values[name] = loss.get_summed_loss()
+                    values[f"{name}:inv_norm"] = loss.get_inv_norm_factor()
+                grad_norm_key = None
                 if self._updater.log_grad_norm_p is not None and perform_update_step and not dummy_step:
-                    key = f"grad_norm:p{simplify_and_format_number(self._updater.log_grad_norm_p)}"
-                    assert key not in losses_dict
-                    inv_norm_factors_dict[key] = 1.0  # once per update step
+                    grad_norm_key = f"grad_norm:p{simplify_and_format_number(self._updater.log_grad_norm_p)}"
+                    assert grad_norm_key not in train_ctx.losses
                     # recorded pre-clip inside updater.step (in-graph static tensor under capture)
-                    grad_norm = self._updater.last_grad_norm
-                    assert grad_norm is not None
-                    losses_dict[key] = float(grad_norm)  # device sync, as before
-
-                if self._torch_distributed_ctx:
-                    self._torch_distributed_ctx.step_after_param_update(module=self._pt_model, epoch_step_idx=step_idx)
-
-                step_end_time = time.monotonic()
-                step_duration = step_end_time - step_begin_time
-                elapsed_computation_time += step_duration
-
-                accumulated_losses_dict += losses_dict
-                accumulated_inv_norm_factors_dict += inv_norm_factors_dict
-                eval_info = self._maybe_extend_losses_info(losses_dict / inv_norm_factors_dict)
-                _print_process(
-                    report_prefix,
-                    step=step_idx,
-                    eval_info=dict(eval_info),
-                    step_duration=step_duration,
-                    start_elapsed=step_end_time - epoch_start_time,
-                    complete_frac=complete_frac,
-                    num_seqs=num_seqs,
-                    batch_size_info=(
+                    assert self._updater.last_grad_norm is not None
+                    values[grad_norm_key] = self._updater.last_grad_norm
+                step_values = _StepValues(values)
+                step_info = {
+                    "losses": list(train_ctx.losses.keys()),
+                    "grad_norm_key": grad_norm_key,
+                    "step_idx": step_idx,
+                    "global_train_step": self.global_train_step,
+                    "learning_rate": self._updater.get_effective_learning_rate(),
+                    "complete_frac": complete_frac,
+                    "num_seqs": num_seqs,
+                    "extern_data": extern_data,
+                    "batch_size_info": (
                         (
                             _get_batch_size_info(extern_data)
                             if extern_data is not None
@@ -695,63 +766,24 @@ class Engine(EngineBase):
                         if self._log_batch_size
                         else None
                     ),
-                    log_memory_usage_device=self._device if self._log_memory_usage else None,
-                )
-                if (
-                    self._tensorboard_writer
-                    and self.global_train_step % self._tensorboard_opts.get("log_every_n_train_steps", 100) == 0
-                ):
-                    # write losses/errors to tensorboard
-                    for key, val in eval_info.items():
-                        self._tensorboard_writer.add_scalar(f"train/{key}", val, global_step=self.global_train_step)
-                    self._tensorboard_writer.add_scalar(
-                        "train/learning_rate",
-                        self._updater.get_effective_learning_rate(),
-                        global_step=self.global_train_step,
-                    )
+                }
 
-                if self._stop_on_nonfinite_train_score:
-                    if any(np.isinf(v) or np.isnan(v) for v in accumulated_losses_dict.values()):
-                        print("Model seems broken, got inf or nan score.", file=log.v1)
-                        print(
-                            "Accumulated scores:",
-                            accumulated_losses_dict / accumulated_inv_norm_factors_dict,
-                            file=log.v1,
-                        )
+                if self._torch_distributed_ctx:
+                    self._torch_distributed_ctx.step_after_param_update(module=self._pt_model, epoch_step_idx=step_idx)
 
-                        print("Checking for inf/nan in model parameters...", file=log.v1)
-                        count_nan_inf_params = 0
-                        for name, param in self._pt_model.named_parameters():
-                            got_nan_inf_t = torch.stack([torch.isnan(param).any(), torch.isinf(param).any()]).cpu()
-                            got_nan = got_nan_inf_t[0].item()
-                            got_inf = got_nan_inf_t[1].item()
-                            if got_nan or got_inf:
-                                s = "/".join([s_ for s_, b in [("nan", got_nan), ("inf", got_inf)] if b])
-                                print(f"  {name} {param}: {s}", file=log.v1)
-                                count_nan_inf_params += 1
-                        if count_nan_inf_params == 0:
-                            print("(No inf/nan in model parameters.)", file=log.v1)
+                if report_one_step_later:
+                    # this step is launched, so the previous one is reported while the GPU runs this one
+                    if prev_step is not None:
+                        _report_step(*prev_step)
+                    prev_step = (step_values, step_info)
 
-                        def _debug_func() -> torch.Tensor:
-                            self._run_step(extern_data, train_flag=True, train_func=True)
-                            loss = rf.get_run_ctx().total_loss()
-                            assert isinstance(loss, Tensor)
-                            return loss.raw_tensor
-
-                        if extern_data is not None:
-                            print("Running debug_inf_nan...", file=log.v1)
-                            debug_inf_nan(_debug_func, with_grad=True)
-                        else:
-                            print("(debug_inf_nan not supported under torch_cuda_graph.)", file=log.v1)
-                        if count_nan_inf_params > 0 and self.global_train_step == 1:
-                            print(
-                                "This was the second step, so likely the first step grad was broken."
-                                " Try again with reset model...",
-                                file=log.v1,
-                            )
-                            self._load_model()
-                            debug_inf_nan(_debug_func, with_grad=True)
-                        raise Exception(f"Inf/nan score in step {step_idx}.")
+                step_end_time = time.monotonic()
+                step_duration = step_end_time - step_begin_time
+                elapsed_computation_time += step_duration
+                step_info["step_duration"] = step_duration
+                step_info["start_elapsed"] = step_end_time - epoch_start_time
+                if not report_one_step_later:
+                    _report_step(step_values, step_info)
 
                 step_idx += 1
                 self.global_train_step += 1
@@ -761,6 +793,9 @@ class Engine(EngineBase):
 
                 if prof:
                     prof.step()
+
+            if prev_step is not None:
+                _report_step(*prev_step)
 
         except Exception as exc:
             if prof:
@@ -1791,6 +1826,54 @@ def _to_raw(n: Union[int, float, Tensor]):
     raise TypeError(f"Unexpected {n} of type {type(n)}")
 
 
+class _StepValues:
+    """
+    The losses, loss norm factors and grad norm of one train step, read to the host with at most one wait.
+    The values on a CUDA device go into one pinned host buffer through a non-blocking copy,
+    and only :func:`get` waits for that copy.
+    So under graph capture the engine launches the next step before it reads a step's values,
+    and the GPU does not idle while the host reads, logs and prepares the next batch.
+    """
+
+    def __init__(self, values: Dict[str, Union[int, float, Tensor, torch.Tensor]]):
+        """
+        :param values: by name, a number, an RF tensor or a raw tensor, each a scalar
+        """
+        self._host: Dict[str, float] = {}
+        self._pending_names: List[str] = []
+        self._buffer: Optional[torch.Tensor] = None
+        self._event: Optional[torch.cuda.Event] = None
+        pending = []
+        for name, value in values.items():
+            if isinstance(value, Tensor):
+                value = value.raw_tensor
+            if not isinstance(value, torch.Tensor):
+                self._host[name] = float(value)
+            elif value.device.type == "cuda":
+                self._pending_names.append(name)
+                pending.append(value.detach().reshape(()).to(torch.float64))
+            elif value.device.type == "meta":
+                self._host[name] = float("nan")
+            else:
+                self._host[name] = float(value.detach().cpu().double().reshape(()))
+        if pending:
+            stacked = torch.stack(pending)
+            self._buffer = torch.empty(stacked.shape, dtype=stacked.dtype, pin_memory=True)
+            self._buffer.copy_(stacked, non_blocking=True)
+            self._event = torch.cuda.Event()
+            self._event.record()
+
+    def get(self) -> Dict[str, float]:
+        """
+        :return: every value as a float, after waiting for the copy from the device if it still runs
+        """
+        if self._event is not None:
+            self._event.synchronize()
+            self._host.update(zip(self._pending_names, self._buffer.tolist()))
+            self._event = None
+        return self._host
+
+
 def _print_process(
     report_prefix: str,
     *,
@@ -1927,8 +2010,8 @@ def _get_batch_size_info_raw(extern_data_raw: Dict[str, Any]) -> Dict[str, int]:
             continue
         if "num_seqs" not in info:
             info["num_seqs"] = int(len(seq_lens))
-        info[f"max_size:{k}"] = int(max(seq_lens)) if len(seq_lens) else 0
-        info[f"sum_size:{k}"] = int(sum(seq_lens))
+        info[f"max_size:{k}"] = int(seq_lens.max()) if len(seq_lens) else 0
+        info[f"sum_size:{k}"] = int(seq_lens.sum())
     return info
 
 
