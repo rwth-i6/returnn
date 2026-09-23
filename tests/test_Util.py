@@ -1020,6 +1020,43 @@ def test_file_cache():
             break
 
 
+def test_file_cache_opts_from_env():
+    from returnn.config import Config
+    from returnn.util.file_cache import get_instance
+
+    cache_dir = _get_tmp_dir() + "/returnn/file_cache"
+    config = Config({"file_cache_opts": {"cache_directory": cache_dir, "cleanup_disk_usage_wanted_free_ratio": 0.1}})
+    os.environ["RETURNN_FILE_CACHE_OPTS"] = '{"cleanup_disk_usage_wanted_free_ratio": 0.4}'
+    try:
+        cache = get_instance(config)
+    finally:
+        del os.environ["RETURNN_FILE_CACHE_OPTS"]
+    assert cache.cache_directory == cache_dir
+    assert cache._cleanup_disk_usage_wanted_free_ratio == 0.4
+
+
+def test_file_cache_cleanup_wanted_space_keeps_files_in_use():
+    from returnn.util.file_cache import FileCache
+
+    src_dir = _get_tmp_dir()
+    for name in ["old.txt", "used.txt"]:
+        with open(f"{src_dir}/{name}", "w") as f:
+            f.write(name)
+    cache = FileCache(
+        cache_directory=_get_tmp_dir() + "/returnn/file_cache",
+        cleanup_files_wanted_older_than_days=0,
+        cleanup_disk_usage_wanted_free_ratio=1.0,
+    )
+    old = cache.get_file(f"{src_dir}/old.txt")
+    used = cache.get_file(f"{src_dir}/used.txt")
+    cache.release_files(old)
+    stale = time.time() - 60
+    os.utime(old, (stale, stale))
+    cache.cleanup()
+    assert not os.path.exists(old)
+    assert os.path.exists(used)
+
+
 def test_py_baum_welch():
     from fsa_utils import py_baum_welch
     from returnn.util.fsa import FastBwFsaShared
