@@ -469,3 +469,27 @@ def test_depthwise_conv1d_triton_guards():
             pass
         else:
             raise AssertionError(f"dtype {args[0].dtype} with {opts} must raise")
+
+
+def test_depthwise_conv1d_triton_weight_grad_scratch_independent_of_rows():
+    """the weight gradient sums over the rows inside each program, so its f32 scratch does not grow with the rows"""
+    if not torch.cuda.is_available():
+        raise unittest.SkipTest("needs CUDA")
+    try:
+        from returnn.torch.util import depthwise_conv_triton as m
+    except ImportError as exc:
+        raise unittest.SkipTest(f"triton not available ({exc})")
+
+    blocks = (m._BLOCK_R, m._BLOCK_C, m._BLOCK_R_DW, m._BLOCK_C_DW)
+    peaks = []
+    for n_batch in (500, 2000):
+        x = torch.randn(n_batch, 24, 256, device="cuda", dtype=torch.bfloat16)
+        w = torch.randn(256, 32, device="cuda", dtype=torch.bfloat16)
+        d_out = torch.randn(n_batch, 24, 256, device="cuda", dtype=torch.bfloat16)
+        torch.cuda.synchronize()
+        torch.cuda.reset_peak_memory_stats()
+        base = torch.cuda.memory_allocated()
+        m._launch_bwd(x, w, d_out, has_bias=True, pad_l=15, blocks=blocks, need_dx=False, need_dw_db=True)
+        torch.cuda.synchronize()
+        peaks.append(torch.cuda.max_memory_allocated() - base)
+    assert peaks[0] == peaks[1], peaks
