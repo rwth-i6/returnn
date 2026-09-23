@@ -412,6 +412,9 @@ def test_depthwise_conv1d_triton_kernel_grad():
         (small, 7, 4, 4, f32, f32, small_blocks),
         (small, 32, 15, 16, bf16, f32, None),
         ((920, 24, 1024), 32, 15, 16, bf16, bf16, None),
+        ((3, 20, 70), 32, 15, 16, f32, f32, small_blocks),
+        ((3, 20, 70), 32, 0, 16, f32, f32, small_blocks),
+        ((920, 24, 1024), 32, 0, 16, bf16, bf16, None),
     ]
     for shape, width, pad_l, pad_r, x_dtype, w_dtype, blocks in cases:
         n_batch, n_time, n_chan = shape
@@ -469,6 +472,24 @@ def test_depthwise_conv1d_triton_guards():
             pass
         else:
             raise AssertionError(f"dtype {args[0].dtype} with {opts} must raise")
+
+
+def test_depthwise_conv1d_triton_short_window_row_kernels():
+    """a window no longer than the filter runs the row loops for the forward and the input gradient, not the tap loops"""
+    if not torch.cuda.is_available():
+        raise unittest.SkipTest("needs CUDA")
+    try:
+        from returnn.torch.util import depthwise_conv_triton as m
+    except ImportError as exc:
+        raise unittest.SkipTest(f"triton not available ({exc})")
+    from unittest import mock
+
+    x = torch.randn(4, 24, 64, device="cuda", requires_grad=True)
+    w = torch.randn(64, 32, device="cuda")
+    with mock.patch.object(m, "_dw_fwd") as fwd_taps, mock.patch.object(m, "_dw_bwd_dx") as dx_taps:
+        m.depthwise_conv1d(x, w, None, pad_l=0, n_time_out=9).sum().backward()
+    assert not fwd_taps.mock_calls and not dx_taps.mock_calls, (fwd_taps.mock_calls, dx_taps.mock_calls)
+    assert x.grad is not None
 
 
 def test_depthwise_conv1d_triton_weight_grad_scratch_independent_of_rows():
