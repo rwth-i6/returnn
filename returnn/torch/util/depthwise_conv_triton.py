@@ -16,8 +16,12 @@ with the taps masked at the entry boundaries.
     dw[c,k]    = sum_{b,t} dout[b,t,c] * x[b,t+k-pad_l,c]
     db[c]      = sum_{b,t} dout[b,t,c]
 
-dw and db reduce over all rows: each program stores its tile's partial sums
-into an f32 (row block, tap, channel) buffer, summed afterwards, so the result is deterministic.
+dw and db reduce over all rows: each program walks a contiguous range of rows,
+keeps f32 sums per (tap, row, channel) of its tile in registers and reduces over the rows once at the end,
+into an f32 (row split, tap, channel) buffer of a fixed number of splits, summed afterwards,
+so the result is deterministic and the scratch does not grow with the rows.
+Reducing once per program instead of once per tile and tap is what makes this kernel cheap:
+per tile, the reductions and the (row block, tap, channel) stores cost more than the products.
 Guard the import at the caller (needs Triton; the jit decorators run at import time).
 """
 
@@ -32,7 +36,11 @@ from torch.autograd.function import once_differentiable
 
 
 _BLOCK_R, _BLOCK_C = 32, 128
-_BLOCK_R_DW, _BLOCK_C_DW = 64, 64
+# measured on an H100 for (chunks, 24, 1024) with 32 taps: 0.43 ms against 1.19 ms of the per-tile reduction
+_BLOCK_R_DW, _BLOCK_C_DW = 2, 32
+_DW_SPLITS = 128
+# f32 accumulator entries per thread the dw kernel is sized for, it picks its warps from it
+_DW_ACC_PER_THREAD = 64
 
 
 def is_available() -> bool:
@@ -125,32 +133,57 @@ def _dw_bwd_dw(
     n_time_out,
     n_chan,
     pad_l,
+    rows_per_prog,
     HAS_BIAS: tl.constexpr,
     BLOCK_R: tl.constexpr,
     BLOCK_C: tl.constexpr,
     KW: tl.constexpr,
+    KW_P2: tl.constexpr,
     KW_P: tl.constexpr,
 ):
-    """P[rb,k,c] = sum_{rows of block rb} dout[b,t,c] * x[b,t+k-pad_l,c], plus the dout row sum as tap KW for the bias"""
-    pid_r, pid_c = tl.program_id(0), tl.program_id(1)
-    offs_r = pid_r * BLOCK_R + tl.arange(0, BLOCK_R)
+    """
+    P[s,k,c] = sum_{rows of split s} dout[b,t,c] * x[b,t+k-pad_l,c], plus the dout row sum as tap KW for the bias.
+    One program per (row split, channel block), looping over the split in tiles of BLOCK_R rows.
+    """
+    pid_s, pid_c = tl.program_id(0), tl.program_id(1)
     offs_c = pid_c * BLOCK_C + tl.arange(0, BLOCK_C)
-    r_mask = offs_r < n_rows
     c_mask = offs_c < n_chan
-    b = offs_r // n_time_out
-    t = offs_r % n_time_out
-    row_in = (b * n_time_in + t - pad_l).to(tl.int64)
-    g = tl.load(
-        DO + offs_r.to(tl.int64)[:, None] * n_chan + offs_c[None, :], mask=r_mask[:, None] & c_mask[None, :], other=0.0
-    ).to(tl.float32)
-    p_base = P + pid_r.to(tl.int64) * KW_P * n_chan
-    for k in tl.static_range(KW):
-        t_in = t + k - pad_l
-        m = (t_in >= 0)[:, None] & (t_in < n_time_in)[:, None] & r_mask[:, None] & c_mask[None, :]
-        x = tl.load(X + (row_in + k)[:, None] * n_chan + offs_c[None, :], mask=m, other=0.0).to(tl.float32)
-        tl.store(p_base + k * n_chan + offs_c, tl.sum(g * x, axis=0), mask=c_mask)
+    taps = tl.arange(0, KW_P2)
+    tap_mask = taps < KW
+    acc = tl.zeros((KW_P2, BLOCK_R, BLOCK_C), dtype=tl.float32)
+    g_acc = tl.zeros((BLOCK_R, BLOCK_C), dtype=tl.float32)
+    row_start = pid_s * rows_per_prog
+    row_end = tl.minimum(row_start + rows_per_prog, n_rows)
+    for r0 in range(row_start, row_end, BLOCK_R):
+        offs_r = r0 + tl.arange(0, BLOCK_R)
+        r_mask = offs_r < row_end
+        b = offs_r // n_time_out
+        t = offs_r % n_time_out
+        g = tl.load(
+            DO + offs_r.to(tl.int64)[:, None] * n_chan + offs_c[None, :],
+            mask=r_mask[:, None] & c_mask[None, :],
+            other=0.0,
+        ).to(tl.float32)
+        # (tap, row): the input frame of every tap, masked at the entry boundaries
+        t_in = t[None, :] + taps[:, None] - pad_l
+        valid = (t_in >= 0) & (t_in < n_time_in) & tap_mask[:, None] & r_mask[None, :]
+        row_in = (b * n_time_in)[None, :] + t_in
+        x = tl.load(
+            X + row_in.to(tl.int64)[:, :, None] * n_chan + offs_c[None, None, :],
+            mask=valid[:, :, None] & c_mask[None, None, :],
+            other=0.0,
+        ).to(tl.float32)
+        acc += g[None, :, :] * x
+        if HAS_BIAS:
+            g_acc += g
+    p_base = P + pid_s.to(tl.int64) * KW_P * n_chan
+    tl.store(
+        p_base + taps[:, None] * n_chan + offs_c[None, :],
+        tl.sum(acc, axis=1),
+        mask=tap_mask[:, None] & c_mask[None, :],
+    )
     if HAS_BIAS:
-        tl.store(p_base + KW * n_chan + offs_c, tl.sum(g, axis=0), mask=c_mask)
+        tl.store(p_base + KW * n_chan + offs_c, tl.sum(g_acc, axis=0), mask=c_mask)
 
 
 def _launch_fwd(x, w, bias, pad_l: int, n_time_out: int, blocks) -> torch.Tensor:
@@ -209,9 +242,13 @@ def _launch_bwd(x, w, d_out, *, has_bias: bool, pad_l: int, blocks, need_dx: boo
         )
     if need_dw_db:
         n_rows = n_batch * n_time_out
-        n_row_blocks = triton.cdiv(n_rows, block_r_dw)
-        partial = torch.empty((n_row_blocks, width + int(has_bias), n_chan), dtype=torch.float32, device=x.device)
-        grid = (n_row_blocks, triton.cdiv(n_chan, block_c_dw))
+        # a fixed number of splits, each a multiple of the row tile, so the scratch is independent of the rows
+        rows_per_prog = max(triton.cdiv(triton.cdiv(n_rows, _DW_SPLITS), block_r_dw), 1) * block_r_dw
+        n_splits = max(triton.cdiv(n_rows, rows_per_prog), 1)
+        width_p2 = triton.next_power_of_2(width)
+        num_warps = max(1, min(8, width_p2 * block_r_dw * block_c_dw // (32 * _DW_ACC_PER_THREAD)))
+        partial = torch.empty((n_splits, width + int(has_bias), n_chan), dtype=torch.float32, device=x.device)
+        grid = (n_splits, triton.cdiv(n_chan, block_c_dw))
         _dw_bwd_dw[grid](
             x,
             d_out,
@@ -221,12 +258,14 @@ def _launch_bwd(x, w, d_out, *, has_bias: bool, pad_l: int, blocks, need_dx: boo
             n_time_out,
             n_chan,
             pad_l,
+            rows_per_prog,
             HAS_BIAS=has_bias,
             BLOCK_R=block_r_dw,
             BLOCK_C=block_c_dw,
             KW=width,
+            KW_P2=width_p2,
             KW_P=width + int(has_bias),
-            num_warps=4,
+            num_warps=num_warps,
         )
         summed = partial.sum(dim=0)
     return dx, summed
