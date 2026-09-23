@@ -1017,6 +1017,8 @@ class ReturnnLayersBackend(Backend[Layer]):
         bias: Optional[Tensor] = None,
     ) -> Tuple[Tensor, Sequence[Dim]]:
         """conv"""
+        if isinstance(padding, (list, tuple)) and any(isinstance(p, (list, tuple)) for p in padding):
+            raise NotImplementedError(f"conv: the ConvLayer takes no (left, right) padding pair, got {padding!r}")
         if not out_spatial_dims:
             out_spatial_dims = rf.make_conv_out_spatial_dims(
                 description_prefix="conv",
