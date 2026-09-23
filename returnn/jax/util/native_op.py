@@ -303,8 +303,7 @@ def get_ctc_fsa_fast_bw(
     targets_i32, seq_lens_i32 = targets.astype(jnp.int32), seq_lens.astype(jnp.int32)
     if edges_bound is not None:
         target = make_op(native_op.GetCtcFsaFastBwPackedOp)
-        n_e_per_seq = seq_lens_i32 * 5 + 5  # exact valid count per seq (len 0 uses 2 of its 5 slots)
-        edge_offsets = jnp.concatenate([jnp.zeros((1,), dtype=jnp.int32), jnp.cumsum(n_e_per_seq, dtype=jnp.int32)])
+        edge_offsets = _ctc_fsa_edge_offsets(seq_lens_i32, n_time=n_time, edges_bound=edges_bound)
         # weights is an input only to size the outputs: the op takes the edge count from its shape
         weights = jnp.zeros((edges_bound,), dtype=jnp.float32)
         args = (targets_i32, seq_lens_i32, edge_offsets, weights)
@@ -325,6 +324,22 @@ def get_ctc_fsa_fast_bw(
         {"blank_idx": numpy.int32(blank_idx), "label_loop": numpy.int32(1 if label_loop else 0)},
     )
     return edges, weights, start_end_states
+
+
+def _ctc_fsa_edge_offsets(seq_lens: jax.Array, *, n_time: int, edges_bound: Optional[int]) -> jax.Array:
+    """
+    :param seq_lens: (batch,), the target lengths
+    :param n_time: the width of the targets buffer
+    :param edges_bound: see :func:`get_ctc_fsa_fast_bw`, None for the rectangular edge layout
+    :return: (batch+1,), int32, ascending: seq b owns the edges [offsets[b], offsets[b+1]) of the CTC automaton
+        of :func:`get_ctc_fsa_fast_bw`, 5*len+5 of them in the packed layout (len 0 uses 2 of its 5),
+        5*(n_time-1)+10 in the rectangular one. Same as the PyTorch counterpart.
+    """
+    n_batch = seq_lens.shape[0]
+    if edges_bound is None:
+        return jnp.arange(n_batch + 1, dtype=jnp.int32) * (5 * (n_time - 1) + 10)
+    n_e_per_seq = seq_lens.astype(jnp.int32) * 5 + 5
+    return jnp.concatenate([jnp.zeros((1,), dtype=jnp.int32), jnp.cumsum(n_e_per_seq, dtype=jnp.int32)])
 
 
 def fast_baum_welch(
@@ -465,7 +480,8 @@ def fast_baum_welch_packed(
     edges: jax.Array,
     weights: jax.Array,
     start_end_states: jax.Array,
-    n_states: int,
+    edge_offsets: jax.Array,
+    max_seq_states: int,
 ) -> Tuple[jax.Array, jax.Array]:
     """
     :param am_scores: (total_time,dim), the seqs concatenated, in -log space
@@ -474,11 +490,14 @@ def fast_baum_welch_packed(
     :param edges: (4,n_edges), (from,to,emission_idx,sequence_idx)
     :param weights: (n_edges,)
     :param start_end_states: (2,batch), (start,end) state idx
-    :param n_states: total number of FSA states, a host scalar (see :func:`fast_baum_welch`)
+    :param edge_offsets: (batch+1,), ascending, seq b owns the edges [edge_offsets[b], edge_offsets[b+1])
+    :param max_seq_states: the maximum state count of one seq, a host scalar, it sizes the op's shared memory
     :return: (fwdbwd, obs_scores), (total_time,dim) and (time,batch), in -log space
 
     Packed counterpart of :func:`fast_baum_welch`: seq b occupies
     ``[seq_starts[b], seq_starts[b] + len_b)``, and frames no seq covers are never read.
+    Every seq owns a contiguous slice of the automaton, its states from its start to its end state
+    and its edges from ``edge_offsets``, as the CTC automata of :func:`get_ctc_fsa_fast_bw` do.
     """
     target = make_op(native_op.FastBaumWelchPackedOp)
     n_total, n_dim = am_scores.shape
@@ -498,13 +517,16 @@ def fast_baum_welch_packed(
             start_end_states.astype(jnp.int32),
             seq_mask.astype(jnp.float32),  # "index"
             seq_starts.astype(jnp.int32),
+            edge_offsets.astype(jnp.int32),
         ),
-        {"n_states": numpy.int32(n_states)},
+        {"max_seq_states": numpy.int32(max_seq_states)},
     )
 
 
-@partial(jax.custom_vjp, nondiff_argnums=(1, 7))
-def _fast_bw_loss_packed(logits, logits_normalize, seq_starts, seq_mask, edges, weights, start_end_states, n_states):
+@partial(jax.custom_vjp, nondiff_argnums=(1, 8))
+def _fast_bw_loss_packed(
+    logits, logits_normalize, seq_starts, seq_mask, edges, weights, start_end_states, edge_offsets, max_seq_states
+):
     """
     Full-sum (Baum-Welch) score on packed logits.
     Counterpart of the PyTorch ``_FastBaumWelchScoresPackedAutogradFunc``.
@@ -512,12 +534,12 @@ def _fast_bw_loss_packed(logits, logits_normalize, seq_starts, seq_mask, edges, 
     :return: loss per seq (batch,)
     """
     return _fast_bw_loss_packed_fwd(
-        logits, logits_normalize, seq_starts, seq_mask, edges, weights, start_end_states, n_states
+        logits, logits_normalize, seq_starts, seq_mask, edges, weights, start_end_states, edge_offsets, max_seq_states
     )[0]
 
 
 def _fast_bw_loss_packed_fwd(
-    logits, logits_normalize, seq_starts, seq_mask, edges, weights, start_end_states, n_states
+    logits, logits_normalize, seq_starts, seq_mask, edges, weights, start_end_states, edge_offsets, max_seq_states
 ):
     log_sm = jax.nn.log_softmax(logits, axis=-1) if logits_normalize else logits  # (total_time,dim)
     fwdbwd, obs_scores = fast_baum_welch_packed(
@@ -527,13 +549,14 @@ def _fast_bw_loss_packed_fwd(
         edges=edges,
         weights=weights,
         start_end_states=start_end_states,
-        n_states=n_states,
+        edge_offsets=edge_offsets,
+        max_seq_states=max_seq_states,
     )
     return obs_scores[0], (log_sm if logits_normalize else None, seq_starts, seq_mask, fwdbwd)
 
 
-def _fast_bw_loss_packed_bwd(logits_normalize, n_states, res, grad_output):
-    del n_states
+def _fast_bw_loss_packed_bwd(logits_normalize, max_seq_states, res, grad_output):
+    del max_seq_states
     log_sm, seq_starts, seq_mask, fwdbwd = res
     bw = jnp.exp(-fwdbwd)  # (total_time,dim), the soft alignment
     grad_x = (jnp.exp(log_sm) - bw) if logits_normalize else -bw
@@ -548,7 +571,7 @@ def _fast_bw_loss_packed_bwd(logits_normalize, n_states, res, grad_output):
     within = (frame - seq_starts[seq_idx]) < lens[seq_idx]
     grad_x = jnp.where(within[:, None], grad_x, 0.0)
     grad_x = grad_x * grad_output[seq_idx][:, None]
-    return grad_x, None, None, None, None, None
+    return grad_x, None, None, None, None, None, None
 
 
 _fast_bw_loss_packed.defvjp(_fast_bw_loss_packed_fwd, _fast_bw_loss_packed_bwd)
@@ -587,7 +610,7 @@ def ctc_loss_packed(
     if blank_index < 0:
         blank_index += dim
     assert 0 <= blank_index < dim
-    # edges_bound goes to the FSA too, not only into the state count below:
+    # edges_bound goes to the FSA too, not only into the edge offsets below:
     # the two must describe the SAME layout (see get_ctc_fsa_fast_bw)
     edges, weights, start_end_states = get_ctc_fsa_fast_bw(
         targets=targets,
@@ -596,16 +619,19 @@ def ctc_loss_packed(
         label_loop=label_loop,
         edges_bound=edges_bound,
     )
-    n_batch, n_tgt_time = targets.shape
+    n_tgt_time = targets.shape[1]
     seq_mask = (jnp.arange(max_seq_len)[:, None] < logits_seq_lens[None, :]).astype(jnp.float32)
-    if edges_bound is not None:
-        # packed FSA: states are numbered by content,
-        # so the count follows the targets total bound implied by edges_bound,
-        # not batch * capacity.
-        # Floor division stays an upper bound.
-        n_states = 2 * (edges_bound // 5) + n_batch
-    else:
-        n_states = n_batch * (2 * n_tgt_time + 3)
+    # every seq owns a contiguous slice of the automaton (see construct_kernel), the op runs one seq per block,
+    # with (2*len+3) states at most (2*n_tgt_time+3)
+    edge_offsets = _ctc_fsa_edge_offsets(targets_seq_lens, n_time=n_tgt_time, edges_bound=edges_bound)
     return _fast_bw_loss_packed(
-        logits, logits_normalize, seq_starts, seq_mask, edges, weights, start_end_states, n_states
+        logits,
+        logits_normalize,
+        seq_starts,
+        seq_mask,
+        edges,
+        weights,
+        start_end_states,
+        edge_offsets,
+        2 * n_tgt_time + 3,
     )
