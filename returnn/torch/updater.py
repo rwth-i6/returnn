@@ -134,6 +134,9 @@ class Updater:
         self._optimizer_opts: Optional[Dict[str, Any]] = None
         self.optimizer: Optional[torch.optim.Optimizer] = None
         self._optimizer_param_groups_extra_opts: Optional[List[Dict[str, Any]]] = None
+        # The network parameters, collected once with the optimizer, which holds the same objects.
+        # Walking the modules for them in every step costs milliseconds of host time on a large model.
+        self._params: List[torch.nn.Parameter] = []
 
         self._grad_clip = self.config.float("gradient_clip", 0.0)
         self._grad_clip_global_norm = self.config.float("gradient_clip_global_norm", 0.0)
@@ -252,7 +255,7 @@ class Updater:
         """
         :return: the current gradients
         """
-        return [p.grad for p in self.network.parameters() if p.grad is not None]
+        return [p.grad for p in self._params if p.grad is not None]
 
     def step(self, *, grad_scaler: Optional[torch.cuda.amp.GradScaler] = None):
         """
@@ -272,11 +275,11 @@ class Updater:
             pre_norm = torch.nn.utils.get_total_norm(self._grads(), norm_type=self.log_grad_norm_p)
 
         if self._grad_noise:
-            gradient_noise_(self.network.parameters(), self._grad_noise)
+            gradient_noise_(self._params, self._grad_noise)
         if self._grad_clip:
-            torch.nn.utils.clip_grad_value_(self.network.parameters(), self._grad_clip)
+            torch.nn.utils.clip_grad_value_(self._params, self._grad_clip)
         if self._grad_clip_global_norm:
-            norm = torch.nn.utils.clip_grad_norm_(self.network.parameters(), self._grad_clip_global_norm)
+            norm = torch.nn.utils.clip_grad_norm_(self._params, self._grad_clip_global_norm)
         else:
             norm = None
 
@@ -328,6 +331,7 @@ class Updater:
             raise ValueError("config field 'optimizer' needs to be set explicitely for the Torch backend")
         self._optimizer_opts = optimizer_opts
         self.optimizer, self._optimizer_param_groups_extra_opts = self._create_optimizer(optimizer_opts)
+        self._params = list(self.network.parameters())
 
     def load_optimizer(self, filename):
         """
