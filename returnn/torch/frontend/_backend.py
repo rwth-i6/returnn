@@ -2373,7 +2373,7 @@ class TorchBackend(Backend[torch.Tensor]):
             and groups == in_dim.dimension == out_dim.dimension
             and _is_unit_conv_arg(strides)
             and _is_unit_conv_arg(dilation_rate)
-            and (padding in ("same", "valid") or isinstance(padding, int))
+            and (padding in ("same", "valid") or isinstance(padding, int) or _conv_padding_pair_1d(padding) is not None)
             and source.raw_tensor.is_cuda
             and all(
                 operand.raw_tensor.dtype in (torch.float16, torch.bfloat16, torch.float32)
@@ -2406,6 +2406,18 @@ class TorchBackend(Backend[torch.Tensor]):
                 [-1, in_dim.get_dim_value()] + [d.get_dim_value() for d in in_spatial_dims],
             )
         use_striding = strides and (strides > 1 if isinstance(strides, int) else any(s > 1 for s in strides))
+        if isinstance(padding, (list, tuple)) and any(isinstance(p, (list, tuple)) for p in padding):
+            # torch pads both sides of a dim alike, so a (left, right) pair is padded here
+            pads = []
+            for p in reversed(padding):
+                if isinstance(p, (list, tuple)):
+                    pads.extend([int(p[0]), int(p[1])])
+                elif isinstance(p, int):
+                    pads.extend([p, p])
+                else:
+                    raise NotImplementedError(f"conv: padding {padding!r} mixes a (left, right) pair with {p!r}")
+            src_raw = torch.nn.functional.pad(src_raw, pads)
+            padding = 0
         if padding == "same" and not use_striding and all(d.dimension % 2 == 1 for d in filter_size):
             if all(filter_size[0].dimension == d.dimension for d in filter_size):  # all same
                 padding = (filter_size[0].dimension - 1) // 2
@@ -2936,6 +2948,17 @@ def _depthwise_conv_triton_traceable() -> bool:
     return depthwise_conv_triton.traceable()
 
 
+def _conv_padding_pair_1d(padding) -> Optional[Tuple[int, int]]:
+    """
+    :param padding: as :func:`rf.conv` takes it
+    :return: (left, right) when it is a one-entry sequence holding a pair, else None
+    """
+    if isinstance(padding, (list, tuple)) and len(padding) == 1 and isinstance(padding[0], (list, tuple)):
+        pad_l, pad_r = padding[0]
+        return int(pad_l), int(pad_r)
+    return None
+
+
 def _conv_depthwise_1d_triton(
     source: Tensor,
     *,
@@ -2959,7 +2982,8 @@ def _conv_depthwise_1d_triton(
     :param in_spatial_dim:
     :param out_spatial_dim: as made by :func:`rf.make_conv_out_spatial_dims`
     :param filter: transposed to (out_dim, in_dim // groups, filter_size)
-    :param padding: "same", "valid" or the frames of zero padding on each side
+    :param padding: "same", "valid", the frames of zero padding on each side,
+        or a one-entry sequence with a (left, right) pair
     :param bias: over out_dim, or None
     :return: the output with dims batch dims + (out_spatial_dim, out_dim),
         or None when Triton is unavailable or torch would reject the mixed dtypes
@@ -2975,7 +2999,10 @@ def _conv_depthwise_1d_triton(
     ):
         return None
     width = filter.dims[-1].dimension
-    if padding == "same":
+    pair = _conv_padding_pair_1d(padding)
+    if pair is not None:
+        pad_l, pad_r = pair
+    elif padding == "same":
         pad_l, pad_r = (width - 1) // 2, width // 2
     elif padding == "valid":
         pad_l = pad_r = 0
