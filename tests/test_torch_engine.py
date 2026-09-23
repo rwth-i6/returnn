@@ -1307,7 +1307,8 @@ def _build_cuda_graph_train_config_and_dataset(*, compile_: bool, torch_model: b
 
     :param compile_: the step goes through Inductor before the capture
     :param torch_model: the model is a torch module around an RF part, with parameters torch owns itself
-        (one of them tied, read from two modules), instead of an RF module
+        (one of them tied, read from two modules, and a conv weight whose grad cuDNN computes channels-last),
+        instead of an RF module
     """
     from returnn.datasets import init_dataset
     from returnn.tensor import Dim, batch_dim
@@ -1336,11 +1337,16 @@ def _build_cuda_graph_train_config_and_dataset(*, compile_: bool, torch_model: b
             self.mid_tied = torch.nn.Linear(hidden.dimension, hidden.dimension, bias=False)
             self.mid_tied.weight = self.mid.weight
             self.out = torch.nn.Linear(hidden.dimension, classes_dim.dimension)
+            self.conv = torch.nn.Conv2d(3, 4, 3, padding=1, bias=False)
             self.initial = {name: p.detach().clone() for name, p in self.named_parameters()}
 
         def logits(self, data: Tensor) -> Tensor:
             """the RF part through its RF module, the torch parameters through the attributes of their modules"""
             x = rf.relu(self.layer.rf_module(data))
+            # (batch, 3, time, 3) with channels-last strides: cuDNN then computes the weight grad channels-last
+            conv_in = data.raw_tensor.unflatten(-1, (3, 3)).permute(0, 3, 1, 2)
+            conv_out = torch.nn.functional.conv2d(conv_in, self.conv.weight, padding=1).mean(dim=(1, 3))
+            x = x + Tensor("conv", dims=data.dims[:2], dtype="float32", raw_tensor=conv_out)
             for linear in (self.mid, self.mid_tied):
                 weight = Tensor("weight", dims=[hidden.copy(match_priority=1), hidden], dtype="float32")
                 weight.raw_tensor = linear.weight
@@ -1450,6 +1456,8 @@ def _run_cuda_graph_train(*, compile_: bool, torch_model: bool = False):
                 assert lr.item() > 1e-3  # the per-step schedule advanced it
             for name, p in engine._pt_model.named_parameters():
                 assert torch.isfinite(p).all(), f"non-finite param {name}"
+                # the foreach and fused optimizer kernels need every grad in the layout of its parameter
+                assert p.grad is None or p.grad.stride() == p.stride(), (name, p.grad.stride(), p.stride())
                 if torch_model:
                     assert not torch.equal(p.detach().cpu(), engine._pt_model.initial[name]), f"{name} never trained"
             if not torch_model:
@@ -1918,7 +1926,7 @@ def test_torch_engine_cuda_graph_compile_train_torch_module():
     """
     the compiled step differentiates every parameter of a torch module model as well:
     those an RF part reads through its :class:`rf.Parameter`, and those a torch module reads through its attribute,
-    a tied one through all of its attributes
+    a tied one through all of its attributes, and binds every grad in the layout of its parameter
     """
     _run_cuda_graph_train(compile_=True, torch_model=True)
 
