@@ -68,7 +68,8 @@ class FileCache:
             Uses :func:`expand_env_vars` to expand environment variables.
         :param cleanup_files_always_older_than_days: always cleanup files older than this.
         :param cleanup_files_wanted_older_than_days: if cleanup_disk_usage_wanted_free_ratio not reached,
-            cleanup files older than this.
+            cleanup files older than this. Files currently in use are never removed by this rule,
+            so 0 means to remove any unused file as soon as more free space is wanted.
         :param cleanup_disk_usage_wanted_free_ratio: try to free at least this ratio of disk space.
         :param cleanup_disk_usage_wanted_multiplier: when making space for a new file, try to free at
             least this times as much space.
@@ -259,7 +260,11 @@ class FileCache:
                             f"{report_size_str}"
                         )
                 if not delete_reason and want_free_space_size > cur_expected_free:
-                    if cur_time - mtime > self._cleanup_files_wanted_older_than_days * 60 * 60 * 24:
+                    # Files still in use are touched every second, never remove those.
+                    wanted_age_threshold = max(
+                        self._cleanup_files_wanted_older_than_days * 60 * 60 * 24, cur_used_time_threshold
+                    )
+                    if cur_time - mtime > wanted_age_threshold:
                         delete_reason = f"Still want more space, file is {(cur_time - mtime) / 60 / 60:.1f} hours old"
                     else:
                         # All further files are even more recent, so we would neither cleanup them,
@@ -488,9 +493,19 @@ def get_instance(config: Optional[Config] = None) -> FileCache:
     Returns a file cache instance potentially initialized by the global config.
 
     Uses defaults if no global config is set.
+
+    The env var ``RETURNN_FILE_CACHE_OPTS`` (a JSON dict) overrides the config ``file_cache_opts``.
+    This allows to adapt the cache to the local disk of a machine
+    without touching the config (and thus its hash, e.g. in Sisyphus).
     """
     config = config or get_global_config(return_empty_if_none=True)
-    kwargs = config.typed_value("file_cache_opts") or {}
+    kwargs = dict(config.typed_value("file_cache_opts") or {})
+    env_opts = os.environ.get("RETURNN_FILE_CACHE_OPTS")
+    if env_opts:
+        env_kwargs = json.loads(env_opts)
+        assert isinstance(env_kwargs, dict), f"RETURNN_FILE_CACHE_OPTS must be a JSON dict, got {env_opts!r}"
+        print(f"FileCache: options from RETURNN_FILE_CACHE_OPTS: {env_kwargs}")
+        kwargs.update(env_kwargs)
     return FileCache(**kwargs)
 
 
