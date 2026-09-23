@@ -1284,7 +1284,9 @@ class TFBackend(Backend[tf.Tensor]):
                 tf_padding = padding.upper()
             else:  # explicit padding: pad here, then convolve without padding
                 pads = padding if isinstance(padding, (list, tuple)) else [padding] * len(filter_size)
-                src_raw = tf.pad(src_raw, [[0, 0]] + [[p, p] for p in pads] + [[0, 0]])
+                src_raw = tf.pad(
+                    src_raw, [[0, 0]] + [list(p) if isinstance(p, (list, tuple)) else [p, p] for p in pads] + [[0, 0]]
+                )
                 tf_padding = "VALID"
             if (
                 groups
