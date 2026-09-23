@@ -3765,16 +3765,29 @@ class FastBaumWelchPackedOp(NativeOpGenBase):
     the am scores come as one flat buffer over all sequences (no padding),
     with per-sequence start offsets, like the flash-attention varlen layout.
 
+    Two kernels. In the first, one CUDA block runs the forward and backward recursion of one sequence,
+    over its own frames only: its states sit in shared memory, its edges are strided over the threads,
+    and it keeps the score of every edge per frame.
+    The second has one block per frame and sequence, sums the edge scores of that frame
+    and writes the normalized scores to the output, all frames in parallel.
+    So the op is a few launches, whatever the frame bound,
+    where a loop over the frames would launch several kernels per frame up to the bound
+    (under CUDA-graph capture the capacity, far above most sequences).
+    This needs the automaton of every sequence as a contiguous slice:
+    its states from its start to its end state, its edges as given by ``edge_offsets``
+    (as the CTC automata of :class:`GetCtcFsaFastBwOp` and :class:`GetCtcFsaFastBwPackedOp` are).
+
     inputs:
       :param am_scores: scores in -log space. 2d (total_time,dim), the seqs concatenated along time
       :param edges: edges of the graph (from,to,emission_idx,sequence_idx)
       :param weights: weights of the edges
       :param start_end_states: (2, batch), (start,end) state idx in the automaton
-      :param index: (max_time, batch) -> 0 or 1 (index mask, via seq lens).
-        also provides max_time (the fwd/bwd recursion length),
+      :param index: (max_time, batch) -> 0 or 1 (index mask, via seq lens), a prefix per seq.
+        also provides max_time (the rows of the sums),
         which cannot be derived from the packed am_scores shape
       :param seq_starts: (batch,), int32. start offset of each seq in the total_time axis
-      :param n_states: scalar, int32
+      :param edge_offsets: (batch+1,), int32, ascending. seq b owns the edges [edge_offsets[b], edge_offsets[b+1])
+      :param max_seq_states: scalar, int32. the maximum state count of one seq, it sizes the shared memory
     outputs:
       :param output: Baum-Welch alignment, scores in -log space. 2d (total_time,dim), like am_scores
       :param sums: (max_time, batch), the frame-wise normalization sums (obs scores)
@@ -3815,7 +3828,15 @@ class FastBaumWelchPackedOp(NativeOpGenBase):
             "gradient": "disconnected",
         },
         {
-            "name": "n_states",
+            "name": "edge_offsets",
+            "ndim": 1,
+            "shape": (None,),
+            "dtype": "int32",
+            "need_contiguous": True,
+            "gradient": "disconnected",
+        },
+        {
+            "name": "max_seq_states",
             "ndim": 0,
             "shape": (),
             "dtype": "int32",
@@ -3832,83 +3853,150 @@ class FastBaumWelchPackedOp(NativeOpGenBase):
     c_extra_support_code = copy.copy(common_fast_bw_kernels)
     c_extra_support_code.update(
         {
-            "100_init_bwd_state_buffer": FastBaumWelchOp.c_extra_support_code["100_init_bwd_state_buffer"],
-            "102_normalize": FastBaumWelchOp.c_extra_support_code["102_normalize"],
-            "101_next_frame_packed": """
-      DEF_KERNEL
-      void next_frame_packed(bool fwd, unsigned t, unsigned num_edges, unsigned num_emissions,
-                      unsigned* seq_starts, float* index, unsigned index_stride,
-                      unsigned* sequence_idxs, unsigned* from_buffer, unsigned* to_buffer, float* weight_buffer,
-                      unsigned* emission_idxs,
-                      float* prev_frame, float* next_frame, float* am_scores, float* edge_buffer) {
-        unsigned idx = blockIdx.x * blockDim.x + threadIdx.x;
-        if (idx >= num_edges) {
-          return;
-        }
-
-        unsigned sequence_idx = sequence_idxs[idx];
-        if (index[t * index_stride + sequence_idx] == 0.0) {
-          // the sequence has ended: unlike the padded layout, the packed buffer has no frames here
-          edge_buffer[idx] = INF_F;
-          return;
-        }
-
-        // A zero-probability edge (INF weight, i.e. -log space) can never contribute:
-        // prob_add(x, INF) == x.
-        // Testing it FIRST costs one coalesced load and skips the RANDOM prev_frame read,
-        // which is what an over-allocated FSA otherwise pays for every one of its dead edges.
-        float    edge_weight  = weight_buffer[idx];
-        if (isinf(edge_weight)) {
-          edge_buffer[idx] = INF_F;
-          return;
-        }
-
-        unsigned from     = from_buffer  [idx];
-        float    prev_val = prev_frame[from];
-        if (isinf(prev_val)) {
-          edge_buffer[idx] = INF_F;
-          return;
-        }
-
-        unsigned to           = to_buffer    [idx];
-        unsigned emission_idx = emission_idxs[idx];
-
-        float val = prev_val + edge_weight
-                    + am_scores[(size_t) (seq_starts[sequence_idx] + t) * num_emissions + emission_idx];
-
-        if (fwd) {
-          edge_buffer[idx] += val;
-        }
-        else {
-          edge_buffer[idx] += prev_val;
-        }
-        atomic_prob_add(next_frame + to, val);
+            "100_packed_seq_sync": """
+      DEV_FUNC
+      void packed_seq_sync() {
+        // the CPU build runs a block as one thread, which needs no sync
+      #ifdef __CUDA_ARCH__
+        __syncthreads();
+      #endif
       }
     """,
-            "103_compute_result_packed": """
+            "101_fwd_bwd_packed_seq": """
       DEF_KERNEL
-      void compute_result_packed(float* edge_buffer, float* out, unsigned* emission_idxs, unsigned* sequence_idxs,
-                          unsigned* seq_starts, unsigned num_emissions,
-                          unsigned num_frames, unsigned num_edges) {
-        // 64 bit, see fill_array
-        size_t idx = (size_t) blockIdx.x * blockDim.x + threadIdx.x;
-        if (idx >= (size_t) num_frames * num_edges) {
+      void fwd_bwd_packed_seq(unsigned max_seq_states, unsigned num_edges, unsigned num_emissions,
+                              unsigned num_frames, float* index, unsigned index_stride,
+                              unsigned* seq_starts, unsigned* edge_offsets,
+                              unsigned* start_states, unsigned* end_states,
+                              unsigned* from_buffer, unsigned* to_buffer, unsigned* emission_idxs,
+                              float* weight_buffer, float* am_scores, float* edge_buffer) {
+        // Block seq runs the recursion of sequence seq over its own frames:
+        // its states in shared memory, its edges strided over the threads.
+        // The forward pass keeps the score of every edge per frame, the backward pass adds the score from the end,
+        // normalize_packed_seq then sums and writes them out, all frames in parallel.
+        // Three state buffers rotate, so one sync per frame suffices: a frame reads one, adds into the next,
+        // and resets the third for the frame after, which no thread touches in this frame.
+        DEF_SHARED(float, shared);
+        unsigned seq = blockIdx.x;
+        unsigned tid = threadIdx.x;
+        unsigned n_threads = blockDim.x;
+        unsigned state_lo = start_states[seq];
+        unsigned n_seq_states = end_states[seq] - state_lo + 1;
+        unsigned edge_lo = edge_offsets[seq];
+        unsigned edge_hi = edge_offsets[seq + 1];
+        size_t seq_start = seq_starts[seq];
+
+        // the index is a prefix mask per sequence
+        unsigned lo = 0, hi = num_frames;
+        while (lo < hi) {
+          unsigned mid = (lo + hi) / 2;
+          if (index[mid * index_stride + seq] != 0.0) lo = mid + 1;
+          else hi = mid;
+        }
+        unsigned seq_len = lo;
+
+        for (unsigned pass = 0; pass < 2; pass++) {
+          bool fwd = pass == 0;
+          unsigned init_state = fwd ? 0 : end_states[seq] - state_lo;
+          for (unsigned s = tid; s < n_seq_states; s += n_threads) {
+            shared[s] = s == init_state ? 0.0 : INF_F;
+            shared[max_seq_states + s] = INF_F;
+          }
+          packed_seq_sync();
+          for (unsigned i = 0; i < seq_len; i++) {
+            unsigned frame = fwd ? i : seq_len - 1 - i;
+            float* prev = &shared[(i % 3) * max_seq_states];
+            float* next = &shared[((i + 1) % 3) * max_seq_states];
+            float* reset = &shared[((i + 2) % 3) * max_seq_states];
+            for (unsigned s = tid; s < n_seq_states; s += n_threads) {
+              reset[s] = INF_F;
+            }
+            float* scores = am_scores + (seq_start + frame) * num_emissions;
+            float* edge_scores = edge_buffer + (size_t) frame * num_edges;  // 64 bit, see fill_array
+            for (unsigned e = edge_lo + tid; e < edge_hi; e += n_threads) {
+              // a zero-probability edge is tested first, it skips the state read
+              float weight = weight_buffer[e];
+              if (fwd) {
+                float prev_val = isinf(weight) ? INF_F : prev[from_buffer[e] - state_lo];
+                if (isinf(prev_val)) {
+                  edge_scores[e] = INF_F;
+                  continue;
+                }
+                float val = prev_val + weight + scores[emission_idxs[e]];
+                edge_scores[e] = val;
+                atomic_prob_add(&next[to_buffer[e] - state_lo], val);
+              }
+              else {
+                if (isinf(weight)) {
+                  continue;  // its forward score is inf already
+                }
+                float prev_val = prev[to_buffer[e] - state_lo];
+                if (isinf(prev_val)) {
+                  edge_scores[e] = INF_F;
+                  continue;
+                }
+                edge_scores[e] += prev_val;
+                atomic_prob_add(&next[from_buffer[e] - state_lo], prev_val + weight + scores[emission_idxs[e]]);
+              }
+            }
+            packed_seq_sync();
+          }
+        }
+      }
+    """,
+            "102_normalize_packed_seq": """
+      DEF_KERNEL
+      void normalize_packed_seq(unsigned num_edges, unsigned num_emissions, unsigned num_seqs,
+                                float* index, unsigned index_stride,
+                                unsigned* seq_starts, unsigned* edge_offsets, unsigned* emission_idxs,
+                                float* edge_buffer, float* sum_output, float* out) {
+        // Block (frame, seq) sums the edge scores of sequence seq in that frame (the obs score)
+        // and adds the normalized edge scores to the output row of that frame.
+        // All frames run in parallel: many edges of a frame add to one emission (the blank),
+        // and inside the recursion those atomic adds would wait for each other every frame.
+        DEF_SHARED(float, partial);
+        unsigned seq = blockIdx.x % num_seqs;
+        unsigned frame = blockIdx.x / num_seqs;
+        if (index[frame * index_stride + seq] == 0.0) {
+          return;  // past the end of the sequence, its sum stays 0
+        }
+        unsigned tid = threadIdx.x;
+        unsigned n_threads = blockDim.x;
+        unsigned edge_lo = edge_offsets[seq];
+        unsigned edge_hi = edge_offsets[seq + 1];
+        float* edge_scores = edge_buffer + (size_t) frame * num_edges;  // 64 bit, see fill_array
+        float frame_sum = INF_F;
+        for (unsigned e = edge_lo + tid; e < edge_hi; e += n_threads) {
+          float v = edge_scores[e];
+          if (!isinf(v) && !isnan(v)) {
+            frame_sum = prob_add(frame_sum, v);
+          }
+        }
+        // a tree over the threads, a power of two
+        partial[tid] = frame_sum;
+        packed_seq_sync();
+        for (unsigned stride = n_threads / 2; stride > 0; stride /= 2) {
+          if (tid < stride) {
+            partial[tid] = prob_add(partial[tid], partial[tid + stride]);
+          }
+          packed_seq_sync();
+        }
+        float sum = partial[0];
+        if (tid == 0) {
+          // a frame no path reaches sums to 0, like the empty frames past the end
+          sum_output[frame * num_seqs + seq] = isinf(sum) ? 0.0 : sum;
+        }
+        if (isinf(sum)) {
           return;
         }
-
-        unsigned e_idx = idx % num_edges;
-        unsigned frame = idx / num_edges;
-        float    score = edge_buffer[idx];
-        if (isinf(score) || isnan(score)) {
-          // Masked frame or unreachable edge: nothing to add,
-          // and the packed out buffer has no slot for masked frames.
-          // (Masked edges are inf, or nan after normalize subtracted the empty-frame inf sum.)
-          return;
+        float* out_row = out + ((size_t) seq_starts[seq] + frame) * num_emissions;
+        for (unsigned e = edge_lo + tid; e < edge_hi; e += n_threads) {
+          float v = edge_scores[e];
+          if (isinf(v) || isnan(v)) {
+            continue;
+          }
+          atomic_prob_add(&out_row[emission_idxs[e]], v - sum);
         }
-        unsigned emission_idx = emission_idxs[e_idx];
-        unsigned seq_idx      = sequence_idxs[e_idx];
-
-        atomic_prob_add(out + (size_t) (seq_starts[seq_idx] + frame) * num_emissions + emission_idx, score);
       }
     """,
         }
@@ -3916,9 +4004,9 @@ class FastBaumWelchPackedOp(NativeOpGenBase):
 
     # language=C++
     c_fw_code = """
-    // am_scores, edges, weights, start_end_states, index, seq_starts, n_states = input_names
+    // am_scores, edges, weights, start_end_states, index, seq_starts, edge_offsets, max_seq_states = input_names
     // output, sums = output_names
-    assert(n_inputs  == 7);
+    assert(n_inputs  == 8);
     assert(n_outputs == 2);
     Ndarray* am_scores        = inputs[0];
     Ndarray* edges            = inputs[1];
@@ -3926,6 +4014,7 @@ class FastBaumWelchPackedOp(NativeOpGenBase):
     Ndarray* start_end_states = inputs[3];
     Ndarray* index            = inputs[4];
     Ndarray* seq_starts       = inputs[5];
+    Ndarray* edge_offsets     = inputs[6];
     Ndarray* out              = *outputs[0];
     Ndarray* sum_output       = *outputs[1];
 
@@ -3933,6 +4022,7 @@ class FastBaumWelchPackedOp(NativeOpGenBase):
     assert_cmp(Ndarray_DIMS(am_scores)[1], ==, Ndarray_DIMS(out)[1]);
     assert_cmp(Ndarray_DIMS(index)[1], ==, Ndarray_DIMS(start_end_states)[1]);
     assert_cmp(Ndarray_DIMS(index)[1], ==, Ndarray_DIMS(seq_starts)[0]);
+    assert_cmp(Ndarray_DIMS(index)[1] + 1, ==, Ndarray_DIMS(edge_offsets)[0]);
     assert_cmp(Ndarray_DIMS(sum_output)[0], ==, Ndarray_DIMS(index)[0]);
     assert_cmp(Ndarray_DIMS(sum_output)[1], ==, Ndarray_DIMS(index)[1]);
 
@@ -3942,8 +4032,6 @@ class FastBaumWelchPackedOp(NativeOpGenBase):
       + 1 * Ndarray_STRIDE(edges, 0));
     unsigned* d_emission_idxs = reinterpret_cast<unsigned*>(Ndarray_DEV_DATA_int32(edges)
       + 2 * Ndarray_STRIDE(edges, 0));
-    unsigned* d_sequence_idxs = reinterpret_cast<unsigned*>(Ndarray_DEV_DATA_int32(edges)
-      + 3 * Ndarray_STRIDE(edges, 0));
     float*    d_weights = Ndarray_DEV_DATA(weights);
     float*    d_am_scores = Ndarray_DEV_DATA(am_scores);
     unsigned* d_start_states = reinterpret_cast<unsigned*>(Ndarray_DEV_DATA_int32(start_end_states)
@@ -3952,97 +4040,27 @@ class FastBaumWelchPackedOp(NativeOpGenBase):
       + 1 * Ndarray_STRIDE(start_end_states, 0));
     float*    d_index             = Ndarray_DEV_DATA(index);
     unsigned* d_seq_starts        = reinterpret_cast<unsigned*>(Ndarray_DEV_DATA_int32(seq_starts));
+    unsigned* d_edge_offsets      = reinterpret_cast<unsigned*>(Ndarray_DEV_DATA_int32(edge_offsets));
     float*    d_out               = Ndarray_DEV_DATA(out);
     float*    d_sum_output        = Ndarray_DEV_DATA(sum_output);
 
-    unsigned n_frames    = Ndarray_DIMS(index)[0];
-    unsigned n_seqs      = Ndarray_DIMS(index)[1];
-    unsigned n_total     = Ndarray_DIMS(am_scores)[0];
-    unsigned n_emissions = Ndarray_DIMS(am_scores)[1];
-    unsigned n_states    = (unsigned) Ndarray_DEV_DATA_int32_scalar(inputs[6]);
-    unsigned n_edges     = Ndarray_DIMS(edges)[1];
-    unsigned n_threads   = 1024u;
-    unsigned n_blocks    = (n_edges + n_threads - 1) / n_threads;
-
-    unsigned index_stride = Ndarray_STRIDE(index, 0);
+    unsigned n_frames       = Ndarray_DIMS(index)[0];
+    unsigned n_seqs         = Ndarray_DIMS(index)[1];
+    unsigned n_total        = Ndarray_DIMS(am_scores)[0];
+    unsigned n_emissions    = Ndarray_DIMS(am_scores)[1];
+    unsigned max_seq_states = (unsigned) Ndarray_DEV_DATA_int32_scalar(inputs[7]);
+    unsigned n_edges        = Ndarray_DIMS(edges)[1];
+    unsigned n_threads      = 1024u;
+    unsigned index_stride   = Ndarray_STRIDE(index, 0);
 
     assert_cmp(n_frames, >, 0);
-    assert_cmp(n_states, >, 0);
-    // Kernel-owned fwd/bwd state scratch, like FastBaumWelchOp / FastViterbiOp
-    float* d_state_buffer_base = reinterpret_cast<float*>(device_malloc(2u * n_states * sizeof(float)));
-    if(!d_state_buffer_base) { HANDLE_LAST_ERROR(); abort(); }  // error should have been set in device_malloc
-    float* d_state_buffer_prev = d_state_buffer_base;
-    float* d_state_buffer_next = d_state_buffer_base + n_states;
+    assert_cmp(max_seq_states, >, 0);
 
-    // initialize edge buffer, one score per (frame, edge), 64 bit sizes and offsets (see FastBaumWelchOp)
-    size_t n_edge_frames = (size_t) n_edges * n_frames;
-    float* d_edge_buffer = reinterpret_cast<float*>(device_malloc(n_edge_frames * sizeof(float)));
-    if(!d_edge_buffer) { HANDLE_LAST_ERROR(); abort(); }  // error should have been set in device_malloc
-    unsigned n_fill_blocks = (n_edge_frames + n_threads - 1u) / n_threads;
-    start_dev_kernel2(fill_array, n_fill_blocks, n_threads, 0, (d_edge_buffer, 0.0, n_edge_frames));
+    // the frames past the end of a seq sum to 0, and the output is -log 0 wherever no edge adds to it
+    size_t n_sums = (size_t) n_frames * n_seqs;
+    unsigned n_fill_blocks = (n_sums + n_threads - 1u) / n_threads;
+    start_dev_kernel2(fill_array, n_fill_blocks, n_threads, 0, (d_sum_output, 0.0, n_sums));
     HANDLE_LAST_ERROR();
-
-    // initialize the state buffer
-    n_fill_blocks = (n_states + n_threads - 1u) / n_threads;
-    start_dev_kernel2(
-      fill_array, n_fill_blocks, n_threads, 0,
-      (d_state_buffer_prev, std::numeric_limits<float>::infinity(), n_states));
-    HANDLE_LAST_ERROR();
-    start_dev_kernel2(set_start_states, 1, n_seqs, 0, (d_state_buffer_prev, d_start_states));
-    HANDLE_LAST_ERROR();
-
-    // fwd pass
-    for (unsigned t = 0u; t < n_frames; t++) {
-      start_dev_kernel2(
-        fill_array, n_fill_blocks, n_threads, 0,
-        (d_state_buffer_next, std::numeric_limits<float>::infinity(), n_states));
-      HANDLE_LAST_ERROR();
-      start_dev_kernel2(next_frame_packed, n_blocks, n_threads, 0,
-        (true, t, n_edges, n_emissions, d_seq_starts, d_index, index_stride,
-         d_sequence_idxs, d_from, d_to, d_weights, d_emission_idxs,
-         d_state_buffer_prev, d_state_buffer_next, d_am_scores, d_edge_buffer + (size_t) t * n_edges));
-      HANDLE_LAST_ERROR();
-      std::swap(d_state_buffer_prev, d_state_buffer_next);
-    }
-
-    // bwd pass
-    start_dev_kernel2(
-      fill_array, n_fill_blocks, n_threads, 0,
-      (d_state_buffer_prev, std::numeric_limits<float>::infinity(), n_states));
-    HANDLE_LAST_ERROR();
-    for (unsigned t = n_frames; t > 0; t--) {
-      start_dev_kernel2(init_bwd_state_buffer, 1, n_seqs, 0,
-        (d_state_buffer_prev, d_end_states, t - 1, n_frames - 1, d_index, index_stride));
-      HANDLE_LAST_ERROR();
-      start_dev_kernel2(
-        fill_array, n_fill_blocks, n_threads, 0,
-        (d_state_buffer_next, std::numeric_limits<float>::infinity(), n_states));
-      HANDLE_LAST_ERROR();
-      start_dev_kernel2(next_frame_packed, n_blocks, n_threads, 0,
-        (false, t - 1, n_edges, n_emissions, d_seq_starts, d_index, index_stride,
-         d_sequence_idxs, d_to, d_from, d_weights, d_emission_idxs,
-         d_state_buffer_prev, d_state_buffer_next, d_am_scores, d_edge_buffer + (size_t) (t - 1) * n_edges));
-      HANDLE_LAST_ERROR();
-      std::swap(d_state_buffer_prev, d_state_buffer_next);
-    }
-
-    // normalize at each time frame
-    // (block-parallel on CUDA; the CPU kernel emulation runs threads sequentially,
-    // so block=1 there keeps the old exact sequential behavior)
-    // RETURNN_CUDA, NOT CUDA: the torch build UNDEFINES CUDA before this code
-    // (name collision), which silently selected block dim 1 = a fully SERIAL kernel.
-    #ifndef RETURNN_CUDA
-    #define RETURNN_CUDA CUDA
-    #endif
-    #if RETURNN_CUDA
-    const unsigned norm_block_dim = 512;
-    #else
-    const unsigned norm_block_dim = 1;
-    #endif
-    start_dev_kernel2(normalize, n_frames, norm_block_dim, n_seqs * sizeof(float),
-      (d_edge_buffer, d_sequence_idxs, n_edges, n_seqs, d_sum_output));
-    HANDLE_LAST_ERROR();
-
     size_t n_out = (size_t) n_total * n_emissions;
     n_fill_blocks = (n_out + n_threads - 1u) / n_threads;
     start_dev_kernel2(
@@ -4050,22 +4068,47 @@ class FastBaumWelchPackedOp(NativeOpGenBase):
       (d_out, std::numeric_limits<float>::infinity(), n_out));
     HANDLE_LAST_ERROR();
 
-    n_blocks = (n_edge_frames + n_threads - 1u) / n_threads;
-    start_dev_kernel2(compute_result_packed, n_blocks, n_threads, 0,
-      (d_edge_buffer, d_out, d_emission_idxs, d_sequence_idxs,
-       d_seq_starts, n_emissions, n_frames, n_edges));
+    // one score per (frame, edge), 64 bit sizes and offsets (see FastBaumWelchOp).
+    // A seq writes and reads only the rows of its own frames, so it needs no fill.
+    size_t n_edge_frames = (size_t) n_edges * n_frames;
+    float* d_edge_buffer = reinterpret_cast<float*>(device_malloc(n_edge_frames * sizeof(float)));
+    if(!d_edge_buffer) { HANDLE_LAST_ERROR(); abort(); }  // error should have been set in device_malloc
+
+    // RETURNN_CUDA, NOT CUDA: the torch build UNDEFINES CUDA before this code (see FastBaumWelchOp).
+    // The CPU kernel emulation runs the threads of a block one after the other, so one thread per block there.
+    // The recursion waits for its loads every frame, so its block takes the edges of a sequence in one round
+    // where it can (up to 1024 edges, about 200 labels of CTC).
+    #ifndef RETURNN_CUDA
+    #define RETURNN_CUDA CUDA
+    #endif
+    #if RETURNN_CUDA
+    const unsigned seq_block_dim = 1024;
+    const unsigned frame_block_dim = 256;
+    #else
+    const unsigned seq_block_dim = 1;
+    const unsigned frame_block_dim = 1;
+    #endif
+    start_dev_kernel2(
+      fwd_bwd_packed_seq, n_seqs, seq_block_dim, 3 * max_seq_states * sizeof(float),
+      (max_seq_states, n_edges, n_emissions, n_frames, d_index, index_stride,
+       d_seq_starts, d_edge_offsets, d_start_states, d_end_states, d_from, d_to, d_emission_idxs,
+       d_weights, d_am_scores, d_edge_buffer));
+    HANDLE_LAST_ERROR();
+    start_dev_kernel2(
+      normalize_packed_seq, (unsigned) n_sums, frame_block_dim, frame_block_dim * sizeof(float),
+      (n_edges, n_emissions, n_seqs, d_index, index_stride, d_seq_starts, d_edge_offsets, d_emission_idxs,
+       d_edge_buffer, d_sum_output, d_out));
     HANDLE_LAST_ERROR();
 
     #if TENSORFLOW
     // Certain TensorFlow code doesn't like inf, even if it is just the CheckNumerics,
     // which is helpful for debugging.
     // We replace it by a very high number, so that tf.exp(-out) will still result in 0.0.
-    n_blocks = (n_out + n_threads - 1u) / n_threads;
+    unsigned n_blocks = (n_out + n_threads - 1u) / n_threads;
     start_dev_kernel2(remove_inf, n_blocks, n_threads, 0, (d_out, n_out));
     #endif
 
     device_free(d_edge_buffer);
-    device_free(d_state_buffer_base);
   """
 
     c_bw_code = None

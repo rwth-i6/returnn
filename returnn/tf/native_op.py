@@ -1423,8 +1423,7 @@ def get_ctc_fsa_fast_bw(targets, seq_lens, blank_idx, label_loop=True, edges_bou
     ):
         if edges_bound is not None:
             seq_lens_i32 = tf.cast(seq_lens, tf.int32)
-            n_e_per_seq = seq_lens_i32 * 5 + 5  # exact valid count per seq (len 0 uses 2 of its 5 slots)
-            edge_offsets = tf.concat([[0], tf.cumsum(n_e_per_seq)], axis=0)  # (batch+1,)
+            edge_offsets = _ctc_fsa_edge_offsets(seq_lens_i32, n_time=n_time, edges_bound=edges_bound)
             # a too-small bound would silently drop the edges of the tail seqs
             with tf.control_dependencies(
                 [
@@ -1446,6 +1445,22 @@ def get_ctc_fsa_fast_bw(targets, seq_lens, blank_idx, label_loop=True, edges_bou
             op = maker.make_op()
             edges, start_end_states, weights = op(targets, seq_lens, blank_idx, weights, label_loop)
     return edges, weights, start_end_states
+
+
+def _ctc_fsa_edge_offsets(seq_lens, *, n_time, edges_bound: Optional[int]):
+    """
+    :param tf.Tensor seq_lens: (batch,), the target lengths
+    :param tf.Tensor|int n_time: the width of the targets buffer
+    :param edges_bound: see :func:`get_ctc_fsa_fast_bw`, None for the rectangular edge layout
+    :return: (batch+1,), int32, ascending: seq b owns the edges [offsets[b], offsets[b+1]) of the CTC automaton
+        of :func:`get_ctc_fsa_fast_bw`, 5*len+5 of them in the packed layout (len 0 uses 2 of its 5),
+        5*(n_time-1)+10 in the rectangular one. Same as the torch counterpart.
+    :rtype: tf.Tensor
+    """
+    seq_lens = tf.cast(seq_lens, tf.int32)
+    if edges_bound is None:
+        return tf.range(tf.shape(seq_lens)[0] + 1, dtype=tf.int32) * (5 * (n_time - 1) + 10)
+    return tf.concat([[0], tf.cumsum(seq_lens * 5 + 5)], axis=0)
 
 
 def fast_baum_welch_staircase(am_scores, seq_lens, **opts):
@@ -1570,9 +1585,13 @@ def make_fast_baum_welch_packed_op(**kwargs):
     return maker.make_op()
 
 
-def fast_baum_welch_packed(am_scores, edges, weights, start_end_states, float_idx, seq_starts, n_states=None):
+def fast_baum_welch_packed(
+    am_scores, edges, weights, start_end_states, float_idx, seq_starts, edge_offsets, max_seq_states
+):
     """
     Packed variant of :func:`fast_baum_welch`: the am scores are one flat buffer over all seqs.
+    Every seq owns a contiguous slice of the automaton, its states from its start to its end state
+    and its edges from ``edge_offsets``, as the CTC automata of :func:`get_ctc_fsa_fast_bw` do.
 
     :param tf.Tensor am_scores: (total_time, dim), in -log space, the seqs concatenated along time
     :param tf.Tensor edges: (4,num_edges), edges of the graph (from,to,emission_idx,sequence_idx)
@@ -1580,26 +1599,22 @@ def fast_baum_welch_packed(am_scores, edges, weights, start_end_states, float_id
     :param tf.Tensor start_end_states: (2, batch), (start,end) state idx in the automaton
     :param tf.Tensor float_idx: (max_time, batch) -> 0 or 1, which also gives the recursion length
     :param tf.Tensor seq_starts: (batch,), int32, start offset of each seq in the total_time axis
-    :param tf.Tensor|None n_states: state count; derived from start_end_states if not given,
-        which is a device read, so pass it where that matters (bound-shape regime)
+    :param tf.Tensor edge_offsets: (batch+1,), ascending, seq b owns the edges [edge_offsets[b], edge_offsets[b+1])
+    :param tf.Tensor|int max_seq_states: the maximum state count of one seq, it sizes the op's shared memory
     :return: (fwdbwd, obs_scores), fwdbwd is (total_time, dim), obs_scores is (max_time, batch)
     :rtype: (tf.Tensor, tf.Tensor)
     """
     op = make_fast_baum_welch_packed_op()
     float_idx = tf.cast(float_idx, tf.float32)
-    if n_states is None:
-        # as in fast_baum_welch: the op allocates its state scratch from this count
-        last_state_idx = tf.reduce_max(start_end_states[1])
-        with tf.control_dependencies(
-            [
-                tf_compat.v1.assert_greater_equal(
-                    last_state_idx, 0, data=["last_state_idx must be >= 0 but is:", last_state_idx]
-                )
-            ]
-        ):
-            n_states = tf.cast(last_state_idx, tf.int32) + 1
     fwdbwd, obs_scores = op(  # noqa
-        am_scores, edges, weights, start_end_states, float_idx, tf.cast(seq_starts, tf.int32), n_states
+        am_scores,
+        edges,
+        weights,
+        start_end_states,
+        float_idx,
+        tf.cast(seq_starts, tf.int32),
+        tf.cast(edge_offsets, tf.int32),
+        max_seq_states,
     )
     return fwdbwd, obs_scores
 
@@ -1656,6 +1671,9 @@ def ctc_loss_packed(
             edges_bound=edges_bound,
         )
         seq_mask = sequence_mask_time_major(logits_seq_lens_i32, maxlen=max_seq_len)  # (max_time,batch)
+        # every seq owns a contiguous slice of the automaton (see construct_kernel), the op runs one seq per block,
+        # with (2*len+3) states at most (2*n_tgt_time+3)
+        n_tgt_time = tf.shape(targets)[1]
         fwdbwd, obs_scores = fast_baum_welch_packed(
             am_scores=-log_sm,
             edges=edges,
@@ -1663,6 +1681,8 @@ def ctc_loss_packed(
             start_end_states=start_end_states,
             float_idx=seq_mask,
             seq_starts=seq_starts,
+            edge_offsets=_ctc_fsa_edge_offsets(targets_seq_lens, n_time=n_tgt_time, edges_bound=edges_bound),
+            max_seq_states=2 * n_tgt_time + 3,
         )
         loss_ = obs_scores[0]  # (batch,)
         # per frame, the seq it belongs to, and whether it is content at all:
