@@ -14,7 +14,7 @@ The epoch is a static argument, so config code can branch on it, at one recompil
 """
 
 from __future__ import annotations
-from typing import Optional, Union, Any, Dict, List, Tuple
+from typing import Optional, Union, Any, Dict, List, Tuple, Set
 import os
 import queue as _queue
 import socket
@@ -1186,12 +1186,23 @@ class Engine(EngineBase):
         if self.global_train_step is None:
             self.global_train_step = 0
         self._create_model(epoch=self.epoch, step=self.global_train_step)
+        # a recog preload may hold whole submodules (an LM),
+        # so the main checkpoint is allowed to lack them here,
+        # and is checked again once the preloads have run
+        has_preload = bool(config.typed_value("preload_from_files", None))
+        missing = set()
         if load_filename:
-            self._load_model(filename=load_filename, with_opt_state=False)
+            missing = self._load_model(filename=load_filename, with_opt_state=False, allow_missing=has_preload)
             print(f"Loaded model {load_filename} (epoch {epoch})", file=log.v3)
         else:
             print("No model checkpoint to load, using the initial parameters.", file=log.v3)
-        self._preload_from_files(is_first_train_epoch=False)
+        preloaded = self._preload_from_files(is_first_train_epoch=False, is_training=False)
+        still_missing = sorted(missing - preloaded)
+        if still_missing:
+            raise ValueError(
+                f"parameters in neither the checkpoint nor preload_from_files:"
+                f" {still_missing[:10]}{' ...' if len(still_missing) > 10 else ''}"
+            )
         print(f"JAX engine: forward, device {self._device}, devices {jax.devices()}", file=log.v3)
 
     def forward_with_callback(
@@ -1298,19 +1309,25 @@ class Engine(EngineBase):
             for param, raw in zip(self._params, orig):
                 param.raw_tensor = raw
 
-    def _preload_from_files(self, *, is_first_train_epoch: bool):
+    def _preload_from_files(self, *, is_first_train_epoch: bool, is_training: bool = True) -> Set[str]:
         """
         :param is_first_train_epoch: whether no checkpoint was loaded, i.e. training starts fresh
+        :param is_training: False for forward / search
+        :return: the parameter names that were loaded
 
         ``preload_from_files``: initialize (parts of) the model from other checkpoints.
         Same option shape and reversed-sorted order as the PyTorch engine.
         Per entry: ``filename`` (an ``.orbax`` directory or a PyTorch ``.pt``),
         ``prefix``, ``init_for_train``, ``ignore_missing``,
         ``ignore_params`` / ``ignore_params_prefixes``.
+
+        An entry without ``init_for_train`` is a recog preload, an LM subnet say,
+        applied when not training, as the PyTorch engine does.
         """
         opts_dict = self.config.typed_value("preload_from_files", None)
         if not opts_dict:
-            return
+            return set()
+        loaded_names: Set[str] = set()
         params = dict(self.model.named_parameters())
         for key, opts in reversed(sorted(opts_dict.items())):
             if not isinstance(opts, dict) or "filename" not in opts:
@@ -1320,9 +1337,11 @@ class Engine(EngineBase):
                 # "always" also on a continued run; True only when starting fresh
                 if init_for_train != "always" and not is_first_train_epoch:
                     continue
-            else:
-                continue  # for recognition; this engine only trains so far
-            filename = opts["filename"]
+            elif is_training:
+                continue  # a recog preload, and this is training
+            # a config may pass a checkpoint object rather than a string
+            # (i6_core's PtCheckpoint, which is os.PathLike), so normalize before matching on it
+            filename = os.fspath(opts["filename"])
             print(f"Pre-load weights for key {key!r} from {filename}", file=log.v3)
             if filename.endswith(".pt"):
                 loaded = _checkpoint.load_torch_checkpoint(filename)
@@ -1331,7 +1350,10 @@ class Engine(EngineBase):
 
             prefix = opts.get("prefix", "")
             if prefix:
-                loaded = {name[len(prefix) :]: v for name, v in loaded.items() if name.startswith(prefix)}
+                # the checkpoint holds these without the prefix,
+                # so adding it maps them onto the model's names
+                # and restricts the preload to that submodule, as the torch and TF engines do
+                loaded = {prefix + name: v for name, v in loaded.items()}
             ignore = set(opts.get("ignore_params", ()))
             ignore_prefixes = tuple(opts.get("ignore_params_prefixes", ()))
             if ignore or ignore_prefixes:
@@ -1339,34 +1361,56 @@ class Engine(EngineBase):
                     name: v for name, v in loaded.items() if name not in ignore and not name.startswith(ignore_prefixes)
                 }
 
-            missing = [name for name in params if name not in loaded]
+            # scoped to the prefix: a submodule preload covers that submodule, not the whole model,
+            # and the rest comes from the main checkpoint
+            scope = [name for name, p in params.items() if name.startswith(prefix) and not p.non_critical_for_restore]
+            if prefix and not scope:
+                raise ValueError(f"preload_from_files {key!r}: no model parameter has prefix {prefix!r}")
+            missing = [name for name in scope if name not in loaded]
             if missing and not opts.get("ignore_missing", False):
                 raise ValueError(
-                    f"preload_from_files {key!r}: {len(missing)} parameter(s) not in {filename}:"
+                    f"preload_from_files {key!r}: {len(missing)} of {len(scope)} parameter(s)"
+                    f"{' under ' + repr(prefix) if prefix else ''} not in {filename}:"
                     f" {missing[:10]}{' ...' if len(missing) > 10 else ''}."
                     f" Set ignore_missing=True to initialize them normally instead."
                 )
             _checkpoint.set_model_params(self.model, loaded, allow_missing=True)
+            loaded_names.update(name for name in params if name in loaded)
             print(f"  loaded {len(loaded)} parameter(s), {len(missing)} left at their init", file=log.v3)
         # the params were replaced in place; re-commit so the step sees them on the device
         self._commit_to_device([p.raw_tensor for p in self._params], into=self._params)
+        return loaded_names
 
-    def _load_model(self, *, filename: str, with_opt_state: bool = True):
+    def _load_model(self, *, filename: str, with_opt_state: bool = True, allow_missing: bool = False) -> Set[str]:
         """
         :param filename: without the ``.orbax`` postfix, as :func:`EngineBase.get_epoch_model` returns it
         :param with_opt_state: whether to also restore the optimizer state next to it.
             False for forward / search, which have no optimizer to restore it into.
+        :param allow_missing: tolerate parameters absent here, for a ``preload_from_files`` to supply
+        :return: the parameter names not in this checkpoint
         """
         postfix = util.get_model_filename_postfix()
         if filename.endswith(postfix):
             filename = filename[: -len(postfix)]
-        _checkpoint.set_model_params(self.model, _checkpoint.load_checkpoint(filename + postfix))
+        loaded = _checkpoint.load_checkpoint(filename + postfix)
+        params = dict(self.model.named_parameters())
+        # a parameter the model def fills in itself, a prior read from a file say,
+        # is flagged non_critical_for_restore,
+        # and the torch and TF engines drop those from the missing set
+        missing = {name for name, p in params.items() if name not in loaded and not p.non_critical_for_restore}
+        _checkpoint.set_model_params(self.model, loaded, allow_missing=True)
+        if missing and not allow_missing:
+            raise ValueError(
+                f"load model {filename + postfix}: missing parameter(s):"
+                f" {sorted(missing)[:10]}{' ...' if len(missing) > 10 else ''}"
+            )
         print(f"Loaded model {filename + postfix}", file=log.v3)
         self._commit_to_device([p.raw_tensor for p in self._params], into=self._params)
         opt_filename = filename + ".opt" + postfix
         if with_opt_state and os.path.exists(opt_filename):
             self._opt_state = _checkpoint.load_opt_state(self._opt_state, opt_filename)
             print(f"Loaded optimizer state {opt_filename}", file=log.v3)
+        return missing
 
 
 def _bucket_key(step_raws: Dict[str, Any]) -> Tuple[int, ...]:

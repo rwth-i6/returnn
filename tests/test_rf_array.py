@@ -1404,6 +1404,30 @@ def test_repeat():
     assert have_intermediate_zero and have_leading_zero and have_trailing_zero
 
 
+def test_repeat_empty_seqs():
+    # A CV set can carry a fully empty seq; the padded repeat used to gather
+    # the last cumsum element for the out sizes, which is index -1 on a size-0 axis.
+    # Direct construction (not run_model): the empty rows must be deterministic.
+    import torch
+
+    rf.select_backend_torch()
+    for seq_lens, dur_rows in (((0, 0), [[], []]), ((3, 0), [[1, 2, 0], [0, 0, 0]])):
+        batch_dim_ = Dim(len(seq_lens), name="batch")
+        time_dim = Dim(
+            Tensor("time", dims=[batch_dim_], dtype="int32", raw_tensor=torch.tensor(list(seq_lens), dtype=torch.int32))
+        )
+        width = max(seq_lens)
+        x = Tensor("x", dims=[batch_dim_, time_dim], dtype="float32")
+        x.raw_tensor = torch.arange(len(seq_lens) * width, dtype=torch.float32).reshape(len(seq_lens), width)
+        dur = Tensor(
+            "dur", dims=[batch_dim_, time_dim], dtype="int32", raw_tensor=torch.tensor(dur_rows, dtype=torch.int32)
+        )
+        out, out_dim = rf.repeat(x, in_spatial_dim=time_dim, repeats=dur)
+        lens = out_dim.dyn_size_ext.copy_compatible_to_dims([batch_dim_]).raw_tensor
+        expect = [sum(r[: seq_lens[b]]) for b, r in enumerate(dur_rows)]
+        assert lens.tolist() == expect, f"{lens.tolist()} vs {expect} for seq_lens {seq_lens}"
+
+
 def test_replace_dim_v2_bool():
     time_dim = Dim(Tensor("time", [batch_dim], dtype="int32"))
     extern_data = TensorDict({"cond": Tensor("cond", [batch_dim, time_dim], dtype="bool")})

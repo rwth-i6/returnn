@@ -548,7 +548,10 @@ class Backend(Generic[T]):
         A backend whose storage cannot be indexed along that dim brings its own.
         """
         idxs = rf.cumsum(repeats, spatial_dim=in_spatial_dim)  # [batch...,in_spatial_dim] -> idx in out_spatial_dim + 1
-        new_size = rf.gather(idxs, indices=in_spatial_dim.get_dim_value_tensor() - 1, axis=in_spatial_dim)  # [batch...]
+        # sum, not gather-of-last-cumsum: a fully empty in_spatial_dim has no last element to gather
+        # (empty text seqs in a CV set crashed here with index -1), and the reduce also masks padding
+        # instead of relying on the caller having zeroed it.
+        new_size = rf.reduce_sum(repeats, axis=in_spatial_dim)  # [batch...]
         dim_dev = rf.get_default_dim_size_device()
         if out_spatial_dim.dyn_size_ext is None:
             out_spatial_dim.dyn_size_ext = rf.copy_to_device(new_size, dim_dev)
@@ -1237,6 +1240,22 @@ class Backend(Generic[T]):
     ) -> Tensor:
         """clip by value"""
         raise NotImplementedError
+
+    @staticmethod
+    def slice_update(target: Tensor, value: Tensor, *, axis: Dim, start: Tensor) -> Tensor:
+        """
+        :param target: with ``axis``
+        :param value: without ``axis``, the frame to write
+        :param axis: the axis to write into
+        :param start: index in ``axis``, scalar
+        :return: ``target`` with ``value`` at ``start`` along ``axis``
+
+        Generic fallback: a select over the whole axis.
+        A backend that can update in place should override this, which matters inside a loop,
+        where the target is a carry and the write is otherwise a full buffer copy per step.
+        """
+        idx = rf.range_over_dim(axis, device=target.device)
+        return rf.where(idx == start, value, target)
 
     @staticmethod
     def lerp(

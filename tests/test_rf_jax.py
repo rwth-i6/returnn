@@ -17,7 +17,7 @@ import numpy.testing
 import pytest
 
 import returnn.frontend as rf
-from returnn.tensor import Tensor, Dim
+from returnn.tensor import Tensor, Dim, single_step_dim
 
 jax = pytest.importorskip("jax")
 import jax.numpy as jnp  # noqa: E402  # after the importorskip
@@ -739,16 +739,18 @@ def test_conv_pool_vs_torch():
         _copy_params_from(mod_pt, mod_jax)
     x_jax = _make("x", x_np, [batch, time, in_dim])
     x2d_jax = _make("x2d", x2d_np, [batch, time, freq, in_dim])
-    got = {
-        k: (numpy.asarray(v.copy_compatible_to_dims_raw(v.dims)), v.dims)
-        for k, v in _fwd(mods_jax, x_jax, x2d_jax).items()
-    }
+    got = _fwd(mods_jax, x_jax, x2d_jax)
 
     assert set(got) == set(ref)
     for key in sorted(ref):
         ref_raw, ref_dims = ref[key]
-        got_raw, got_dims = got[key]
-        assert got_dims == ref_dims, f"{key}: dims {got_dims} vs {ref_dims}"
+        got_t = got[key]
+        # Dims carry the order, so each op returns whatever layout it computed in,
+        # and the two backends may pick different ones for the same op:
+        # the JAX depthwise conv keeps channels contiguous, which its kernel wants.
+        # Compare the dims as a set, and the values in a common order.
+        assert set(got_t.dims) == set(ref_dims), f"{key}: dims {got_t.dims} vs {ref_dims}"
+        got_raw = numpy.asarray(got_t.copy_compatible_to_dims_raw(ref_dims))
         numpy.testing.assert_allclose(got_raw, ref_raw, rtol=1e-5, atol=1e-5, err_msg=f"{key} differs")
 
 
@@ -2511,3 +2513,239 @@ def test_device():
     assert rf.copy_to_device(x, default).device == default
     if default != "cpu":
         assert numpy.asarray(rf.copy_to_device(x, "cpu").raw_tensor).shape == (2,)
+
+
+def _preload_test_models():
+    """
+    :return: (main model class, lm-only model class), sharing parameter names with a combined model
+
+    The combined model holds ``w``, ``lm.emb`` and a ``prior`` the model def fills in itself.
+    The main checkpoint has only ``w``,
+    and the LM checkpoint has ``emb``, without the ``lm.`` prefix,
+    which is how the torch and TF engines expect a prefixed preload to be stored.
+    """
+    d, e = Dim(3, name="d"), Dim(4, name="e")
+
+    class _Lm(rf.Module):
+        def __init__(self):
+            super().__init__()
+            self.emb = rf.Parameter([e])
+
+    class _Combined(rf.Module):
+        def __init__(self):
+            super().__init__()
+            self.w = rf.Parameter([d])
+            self.lm = _Lm()
+            # what the model def sets up itself, e.g. a prior read from a file
+            self.prior = rf.Parameter([d], auxiliary=True, non_critical_for_restore=True)
+
+    class _MainOnly(rf.Module):
+        def __init__(self):
+            super().__init__()
+            self.w = rf.Parameter([d])
+
+    return _Combined, _MainOnly, _Lm
+
+
+class _PathLike:
+    """a checkpoint object, as i6_core's PtCheckpoint is: os.PathLike, not a str"""
+
+    def __init__(self, path: str):
+        self.path = path
+
+    def __fspath__(self) -> str:
+        return self.path
+
+    def __str__(self) -> str:
+        return self.path
+
+
+def test_jax_engine_preload_from_files(tmp_path):
+    from returnn.config import Config, global_config_ctx
+    from returnn.jax.engine import Engine
+    from returnn.jax import checkpoint as _checkpoint
+
+    _rf_jax()
+    combined_cls, main_cls, lm_cls = _preload_test_models()
+
+    main_ckpt = str(tmp_path / "main.orbax")
+    lm_ckpt = str(tmp_path / "lm.orbax")
+    main = main_cls()
+    main.w.initial = None
+    main.w.raw_tensor = jnp.asarray([1.0, 2.0, 3.0], dtype=jnp.float32)
+    _checkpoint.save_checkpoint(main, main_ckpt)
+    lm = lm_cls()
+    lm.emb.initial = None
+    lm.emb.raw_tensor = jnp.asarray([4.0, 5.0, 6.0, 7.0], dtype=jnp.float32)
+    _checkpoint.save_checkpoint(lm, lm_ckpt)
+    assert set(_checkpoint.load_checkpoint(lm_ckpt)) == {"emb"}, "the LM checkpoint stores it unprefixed"
+
+    config = Config(
+        {
+            "backend": "jax",
+            "get_model": lambda **_kwargs: combined_cls(),
+            # no init_for_train: a recog preload, and PathLike rather than str
+            "preload_from_files": {"lm": {"prefix": "lm.", "filename": _PathLike(lm_ckpt)}},
+        }
+    )
+    with global_config_ctx(config):
+        engine = Engine(config=config)
+        engine._create_model(epoch=1, step=0)
+        missing = engine._load_model(filename=main_ckpt, with_opt_state=False, allow_missing=True)
+        # `prior` is non_critical_for_restore, so it is not missing even though no checkpoint has it
+        assert missing == {"lm.emb"}, f"unexpected missing set {missing}"
+        preloaded = engine._preload_from_files(is_first_train_epoch=False, is_training=False)
+        assert preloaded == {"lm.emb"}, f"unexpected preloaded set {preloaded}"
+        params = dict(engine.model.named_parameters())
+        numpy.testing.assert_allclose(numpy.asarray(params["w"].raw_tensor), [1.0, 2.0, 3.0])
+        # the prefix must be added to the checkpoint's names, not stripped from them
+        numpy.testing.assert_allclose(numpy.asarray(params["lm.emb"].raw_tensor), [4.0, 5.0, 6.0, 7.0])
+
+
+def test_jax_engine_preload_skipped_when_training(tmp_path):
+    from returnn.config import Config, global_config_ctx
+    from returnn.jax.engine import Engine
+    from returnn.jax import checkpoint as _checkpoint
+
+    _rf_jax()
+    combined_cls, _main_cls, lm_cls = _preload_test_models()
+    lm_ckpt = str(tmp_path / "lm.orbax")
+    lm = lm_cls()
+    lm.emb.initial = None
+    lm.emb.raw_tensor = jnp.asarray([4.0, 5.0, 6.0, 7.0], dtype=jnp.float32)
+    _checkpoint.save_checkpoint(lm, lm_ckpt)
+
+    config = Config(
+        {
+            "backend": "jax",
+            "get_model": lambda **_kwargs: combined_cls(),
+            "preload_from_files": {"lm": {"prefix": "lm.", "filename": lm_ckpt}},
+        }
+    )
+    with global_config_ctx(config):
+        engine = Engine(config=config)
+        engine._create_model(epoch=1, step=0)
+        # a recog preload is for recog: training must not apply it
+        assert engine._preload_from_files(is_first_train_epoch=True, is_training=True) == set()
+
+
+def test_jax_engine_load_model_missing_is_an_error(tmp_path):
+    from returnn.config import Config, global_config_ctx
+    from returnn.jax.engine import Engine
+    from returnn.jax import checkpoint as _checkpoint
+
+    _rf_jax()
+    combined_cls, main_cls, _lm_cls = _preload_test_models()
+    main_ckpt = str(tmp_path / "main.orbax")
+    _checkpoint.save_checkpoint(main_cls(), main_ckpt)
+
+    config = Config({"backend": "jax", "get_model": lambda **_kwargs: combined_cls()})
+    with global_config_ctx(config):
+        engine = Engine(config=config)
+        engine._create_model(epoch=1, step=0)
+        with pytest.raises(ValueError, match="missing parameter"):
+            engine._load_model(filename=main_ckpt, with_opt_state=False)
+
+
+def test_while_loop_dim_in_state_grows():
+    """a dim in the state may be replaced per iteration, its dyn size growing within a capacity"""
+    _rf_jax()
+    cap = 6
+    batch = Dim(2, name="batch")
+    size0 = Tensor("hist_size", dims=(), dtype="int32", raw_tensor=jnp.asarray(0, dtype=jnp.int32))
+    hist = Dim(size0, name="hist", capacity=cap)
+    buf = rf.zeros([batch, hist], dtype="float32")
+
+    def _cond(s):
+        return rf.compare(s["i"], "<", rf.constant(4, dims=(), dtype="int32", device=s["i"].device))
+
+    def _body(s):
+        d_new = Dim(s["hist"].dyn_size_ext + 1, name="hist", capacity=cap)
+        x, _ = rf.replace_dim(s["x"], in_dim=s["hist"], out_dim=d_new)
+        return {"i": s["i"] + 1, "hist": d_new, "x": x}
+
+    out = rf.while_loop(_cond, _body, {"i": rf.zeros((), dtype="int32"), "hist": hist, "x": buf})
+    assert int(out["i"].raw_tensor) == 4
+    # the growth has to survive the carry, and the buffer stays at the capacity
+    assert int(out["hist"].dyn_size_ext.raw_tensor) == 4, f"dim did not grow: {out['hist']}"
+    assert numpy.asarray(out["x"].raw_tensor).shape == (2, cap)
+
+
+def test_while_loop_dim_in_state_needs_capacity():
+    """a dim in the state without a capacity has no static bound, so the graph loop must refuse"""
+    _rf_jax()
+    batch = Dim(2, name="batch")
+    size0 = Tensor("s", dims=(), dtype="int32", raw_tensor=jnp.asarray(0, dtype=jnp.int32))
+    hist = Dim(size0, name="hist")  # no capacity
+    buf = rf.zeros([batch, Dim(3, name="d")], dtype="float32")
+
+    def _cond(s):
+        return rf.compare(s["i"], "<", rf.constant(1, dims=(), dtype="int32", device=s["i"].device))
+
+    def _body(s):
+        return {"i": s["i"] + 1, "hist": s["hist"], "x": s["x"]}
+
+    with pytest.raises(AssertionError, match="capacity"):
+        rf.while_loop(_cond, _body, {"i": rf.zeros((), dtype="int32"), "hist": hist, "x": buf})
+
+
+def _causal_self_att_for_test():
+    """:return: a small CausalSelfAttention and its model dim"""
+    model_dim = Dim(8, name="model")
+    rf.set_random_seed(7)
+    att = rf.CausalSelfAttention(
+        model_dim, proj_dim=model_dim, key_dim_total=model_dim, value_dim_total=model_dim, num_heads=2
+    )
+    return att, model_dim
+
+
+def test_causal_self_att_bounded_cache_vs_growing():
+    """the bounded cache must give the same outputs as the growing one, step for step"""
+    _rf_jax()
+    att, model_dim = _causal_self_att_for_test()
+    batch = Dim(2, name="batch")
+    n_steps = 5
+    steps = [rf.random_uniform([batch, model_dim], dtype="float32") for _ in range(n_steps)]
+
+    def _run(capacity):
+        kwargs = {"capacity": capacity} if capacity is not None else {}
+        state = att.default_initial_state(batch_dims=[batch], **kwargs)
+        outs = []
+        for x in steps:
+            out, state = att(x, axis=single_step_dim, state=state)
+            outs.append(numpy.asarray(out.copy_compatible_to_dims_raw([batch, model_dim])))
+        return outs, state
+
+    ref, _ = _run(None)
+    got, state = _run(n_steps)
+    for t, (a, b) in enumerate(zip(ref, got)):
+        numpy.testing.assert_allclose(b, a, rtol=1e-5, atol=1e-5, err_msg=f"step {t} differs")
+    # the buffer stays at the capacity while the axis says what is written
+    assert numpy.asarray(state.k_accum.raw_tensor).shape[1] == n_steps
+    assert int(state.accum_axis.dyn_size_ext.raw_tensor) == n_steps
+
+
+def test_causal_self_att_bounded_cache_in_while_loop():
+    """the bounded cache is what lets the decoder state cross a graph loop"""
+    _rf_jax()
+    att, model_dim = _causal_self_att_for_test()
+    batch = Dim(2, name="batch")
+    n_steps = 4
+    x = rf.random_uniform([batch, model_dim], dtype="float32")
+
+    def _cond(s):
+        return rf.compare(s["i"], "<", rf.constant(n_steps, dims=(), dtype="int32", device=s["i"].device))
+
+    def _body(s):
+        out, att_state = att(x, axis=single_step_dim, state=s["att"])
+        return {"i": s["i"] + 1, "att": att_state, "out": out}
+
+    init = {
+        "i": rf.zeros((), dtype="int32"),
+        "att": att.default_initial_state(batch_dims=[batch], capacity=n_steps),
+        "out": rf.zeros([batch, model_dim], dtype="float32"),
+    }
+    final = rf.while_loop(_cond, _body, init)
+    assert int(final["i"].raw_tensor) == n_steps
+    assert set(final["out"].dims) == {batch, model_dim}
+    assert int(final["att"].accum_axis.dyn_size_ext.raw_tensor) == n_steps

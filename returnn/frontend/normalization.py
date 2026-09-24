@@ -346,8 +346,13 @@ class BatchNorm(rf.Module):
             )
 
             def _update_running_stats():
-                self.running_mean.assign_add((mean_cur_batch - self.running_mean) * self.momentum)
-                self.running_variance.assign_add((variance_cur_batch - self.running_variance) * self.momentum)
+                # A batch without any (unmasked) element has undefined stats (0/0 = NaN).
+                # Skip the update then, otherwise the running stats would stay NaN for good.
+                ok = rf.is_finite(mean_cur_batch)
+                delta_mean = (mean_cur_batch - self.running_mean) * self.momentum
+                delta_variance = (variance_cur_batch - self.running_variance) * self.momentum
+                self.running_mean.assign_add(rf.where(ok, delta_mean, 0.0))
+                self.running_variance.assign_add(rf.where(ok, delta_variance, 0.0))
 
             rf.cond(update_running_stats, _update_running_stats, lambda: None)
 

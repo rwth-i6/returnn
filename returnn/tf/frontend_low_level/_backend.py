@@ -903,6 +903,13 @@ class TFBackend(Backend[tf.Tensor]):
         return Tensor("cross_entropy", dims=out_dims, raw_tensor=raw, dtype=TFBackend.get_dtype_name_raw(raw))
 
     @staticmethod
+    def ctc_loss_packed_raw(**kwargs):
+        """CTC loss on a packed logits buffer, see :func:`Backend.ctc_loss_packed_raw`"""
+        from returnn.tf import native_op as tf_native_op
+
+        return tf_native_op.ctc_loss_packed(**kwargs)
+
+    @staticmethod
     def ctc_loss(
         *,
         logits: Tensor,
@@ -1284,13 +1291,14 @@ class TFBackend(Backend[tf.Tensor]):
                 and groups > 1
                 and groups == in_dim.dimension
                 and len(filter_size) <= 2
-                and not _grouped_conv_grad_supported()
+                and (tf_util.is_gpu_available_in_session() or not _grouped_conv_grad_supported())
             ):
                 # Depthwise (one group per input channel), as the Conformer conv block uses.
-                # Only taken where tf.nn.convolution's `groups` has no gradient
-                # ("Gradients for grouped convolutions are not supported on CPU", tf 2.10 in CI):
-                # where the generic path works it is also faster
-                # (measured on tf 2.18 CPU: 1.9 ms vs 4.2 ms per backward, same values).
+                # tf.nn.convolution's grouped path splits into per-group kernels on GPU:
+                # 6.2x slower forward at the conformer shape, and it dominated the train step.
+                # CPU keeps the generic path, which measured faster there,
+                # except where the grouped gradient is missing
+                # ("Gradients for grouped convolutions are not supported on CPU", tf 2.10 in CI).
                 # This op is 2D only and wants the filter as [*filter_size, in_dim, multiplier]:
                 # ours is [*filter_size, in_dim/groups=1, out_dim], and out_dim == in_dim here,
                 # so the multiplier is 1 and the last two axes just swap.
@@ -2054,7 +2062,12 @@ class TFBackend(Backend[tf.Tensor]):
         :return: tensor with the mask dims replaced by a single new dim, and that dim
         """
         assert mask.dtype == "bool"
-        assert set(mask.dims) == set(dims)
+        if set(dims) != set(mask.dims):
+            assert len(dims) == 1  # the frontend pre-merges multiple dims
+            # noinspection PyProtectedMember
+            from returnn.frontend.array_ import _masked_select_subset
+
+            return _masked_select_subset(tensor, mask=mask, dim=dims[0], out_dim=out_dim)
         remaining_dims = [d for d in tensor.dims if d not in mask.dims]
         if not out_dim:
             out_dim = Dim(None, name="masked_select")

@@ -855,6 +855,26 @@ class JaxBackend(Backend[jax.Array]):
         return out
 
     @staticmethod
+    def slice_update(target: Tensor, value: Tensor, *, axis: Dim, start: Tensor) -> Tensor:
+        """
+        :param target: with ``axis``
+        :param value: without ``axis``
+        :param axis:
+        :param start: index in ``axis``, scalar
+        :return: ``target`` with ``value`` at ``start`` along ``axis``
+
+        ``lax.dynamic_update_slice``, which XLA can alias in place when the target is a loop
+        carry, where the generic select costs a buffer copy per step.
+        """
+        axis_int = target.dims.index(axis)
+        value_ = value.copy_compatible_to_dims(target.dims[:axis_int] + (axis,) + target.dims[axis_int + 1 :])
+        starts = [jnp.asarray(0, dtype=jnp.int32)] * len(target.dims)
+        starts[axis_int] = start.raw_tensor.astype(jnp.int32)
+        out = target.copy_template()
+        out.raw_tensor = jax.lax.dynamic_update_slice(target.raw_tensor, value_.raw_tensor, tuple(starts))
+        return out
+
+    @staticmethod
     def stack(sources: Sequence[Tensor], *, out_dim: Dim) -> Tensor:
         """stack"""
         out_dims = (out_dim,) + sources[0].dims
@@ -893,6 +913,14 @@ class JaxBackend(Backend[jax.Array]):
         a Tensor may not change its dims per iteration,
         and a TensorArray needs ``TensorArray(capacity=...)`` so it is a buffer, not a list.
 
+        One device for the whole loop, also as ``lax`` requires.
+        The carry is unified below, but anything ``cond`` or ``body`` only closes over
+        is hoisted into the loop's arguments as well, and is not ours to move:
+        a bound kept on cpu next to an accelerator carry fails with
+        "Received incompatible devices for jitted computation",
+        naming shapes that appear nowhere in the carry, which is a confusing way to find out.
+        Keep such values on the same device as the loop vars.
+
         :param cond: gets the loop vars, returns a scalar bool Tensor
         :param body: gets the loop vars, returns the next loop vars, same structure
         :param initial: initial loop vars
@@ -904,6 +932,16 @@ class JaxBackend(Backend[jax.Array]):
         flat_initial = list(tree.flatten(initial))
         var_idxs = [i for i, v in enumerate(flat_initial) if isinstance(v, (Tensor, TensorArray))]
         assert var_idxs, f"while_loop: no Tensor/TensorArray among the loop vars {initial}"
+        # Dims explicitly in the state may be replaced per iteration, e.g. a growing history dim.
+        # A dim is not a value, so what actually crosses the loop is its dyn size: carry that and
+        # rebuild the dim from it each iteration. Same idea as _DimUpdatesEager for the eager path.
+        dim_idxs = [i for i, v in enumerate(flat_initial) if isinstance(v, Dim) and v.dyn_size_ext is not None]
+        for _i in dim_idxs:
+            _d = flat_initial[_i]
+            assert _d.capacity is not None, (
+                f"while_loop: dim {_d} in the state has no capacity."
+                f" The graph loop needs a static bound on what it carries."
+            )
 
         # noinspection shadowing-names
         def _init_carry(v: Union[Tensor, TensorArray]) -> Any:
@@ -940,10 +978,20 @@ class JaxBackend(Backend[jax.Array]):
         def _rebuild(carry: Sequence[Any]) -> Any:
             """:param carry: raw values :return: the loop vars as body/cond expect them"""
             out = list(flat_initial)
+            dim_map = {}
+            for i, raw in zip(dim_idxs, carry[len(var_idxs) :]):
+                d = flat_initial[i]
+                size = d.dyn_size_ext.copy_template()
+                size.raw_tensor = raw
+                d_new = Dim(size, name=d.name, capacity=d.capacity)
+                dim_map[d] = d_new
+                out[i] = d_new
             for i, raw in zip(var_idxs, carry):
                 value = flat_initial[i]
                 if isinstance(value, Tensor):
                     tensor = value.copy_template()
+                    if dim_map:
+                        tensor = tensor.copy_template_new_dim_tags([dim_map.get(d, d) for d in tensor.dims])
                     tensor.raw_tensor = raw
                     out[i] = tensor
                 else:
@@ -970,10 +1018,26 @@ class JaxBackend(Backend[jax.Array]):
             )
             return res.raw_tensor
 
+        # noinspection shadowing-names
         def _body(carry: Sequence[Any]):
             new = body(_rebuild(carry))
             tree.assert_same_structure(initial, new)
             flat_new = list(tree.flatten(new))
+            # the body may hand back replaced dims; map them onto the initial ones so the carry
+            # is compared and laid out against a single set of tags
+            back_map = {}
+            for i in dim_idxs:
+                d_new = flat_new[i]
+                assert isinstance(d_new, Dim), f"while_loop: loop var {i} was a Dim, got {d_new!r}"
+                back_map[d_new] = flat_initial[i]
+            if back_map:
+                for i in var_idxs:
+                    v = flat_new[i]
+                    if isinstance(v, Tensor) and any(d in back_map for d in v.dims):
+                        flat_new[i] = v.copy_template_new_dim_tags(
+                            [back_map.get(d, d) for d in v.dims], keep_special_axes=True
+                        )
+                        flat_new[i].raw_tensor = v.raw_tensor
             for i in var_idxs:
                 before, after = flat_initial[i], flat_new[i]
                 if isinstance(before, Tensor):
@@ -982,9 +1046,13 @@ class JaxBackend(Backend[jax.Array]):
                         f" The graph loop needs one fixed shape across iterations;"
                         f" give the dim a capacity instead of growing it."
                     )
-            return tuple(_carry_like(flat_new[i], flat_initial[i]) for i in var_idxs)
+            out_vars = tuple(_carry_like(flat_new[i], flat_initial[i]) for i in var_idxs)
+            out_dims = tuple(flat_new[i].dyn_size_ext.raw_tensor for i in dim_idxs)
+            return out_vars + out_dims
 
-        init = tuple(_init_carry(flat_initial[i]) for i in var_idxs)
+        init = tuple(_init_carry(flat_initial[i]) for i in var_idxs) + tuple(
+            flat_initial[i].dyn_size_ext.raw_tensor for i in dim_idxs
+        )
         # One device for the whole carry, as lax requires.
         # The loop counter is on CPU by design, for the host-driven eager loop;
         # in the graph loop the control flow lives on the device with everything else.
@@ -1376,7 +1444,12 @@ class JaxBackend(Backend[jax.Array]):
         the same contract as ``masked_select_bound`` of the PyTorch graph-capture path.
         """
         assert mask.dtype == "bool"
-        assert set(mask.dims) == set(dims)
+        if set(dims) != set(mask.dims):
+            assert len(dims) == 1  # the frontend pre-merges multiple dims
+            # noinspection PyProtectedMember
+            from returnn.frontend.array_ import _masked_select_subset
+
+            return _masked_select_subset(tensor, mask=mask, dim=dims[0], out_dim=out_dim)
         remaining_dims = [d for d in tensor.dims if d not in mask.dims]
         templ_dims = tuple(dims) + tuple(remaining_dims)
         full_shape = tuple(d.get_dim_value() for d in templ_dims)
@@ -2437,6 +2510,7 @@ def _pool_max_reshape(src_raw, axes: Sequence[int], pool_size: Sequence[int]):
     return out
 
 
+# noinspection PyShadowingBuiltins
 def _conv_depthwise_1d(
     source: Tensor,
     *,
@@ -2488,14 +2562,7 @@ def _conv_depthwise_1d(
             out_raw = depthwise_conv_triton.depthwise_conv1d(src_raw, filter_2d, pad[0][0])
             if bias is not None:
                 out_raw = out_raw + bias.raw_tensor
-            out = Tensor(
-                "conv",
-                dims=[out_dim if d == in_dim else out_spatial_dim if d == in_spatial_dim else d for d in src_dims],
-                dtype=JaxBackend.get_dtype_name_raw(out_raw),
-            )
-            out.raw_tensor = out_raw
-            out.feature_dim = out_dim
-            return out, (out_spatial_dim,)
+            return _conv_depthwise_out(out_raw, src_dims, in_dim, in_spatial_dim, out_dim, out_spatial_dim)
     pad_width = [(0, 0)] * rank
     pad_width[time_ax] = pad[0]
     padded = jnp.pad(src_raw, pad_width)
@@ -2515,11 +2582,12 @@ def _conv_depthwise_1d(
     out_raw = acc.astype(src_raw.dtype)
     if bias is not None:
         out_raw = out_raw + jnp.reshape(bias.raw_tensor, weight_shape)
-    out = Tensor(
-        "conv",
-        dims=[out_dim if d == in_dim else out_spatial_dim if d == in_spatial_dim else d for d in src_dims],
-        dtype=JaxBackend.get_dtype_name_raw(out_raw),
-    )
+    return _conv_depthwise_out(out_raw, src_dims, in_dim, in_spatial_dim, out_dim, out_spatial_dim)
+
+
+def _conv_depthwise_out(out_raw, src_dims, in_dim, in_spatial_dim, out_dim, out_spatial_dim):
+    dims = [out_dim if d == in_dim else out_spatial_dim if d == in_spatial_dim else d for d in src_dims]
+    out = Tensor("conv", dims=dims, dtype=JaxBackend.get_dtype_name_raw(out_raw))
     out.raw_tensor = out_raw
     out.feature_dim = out_dim
     return out, (out_spatial_dim,)

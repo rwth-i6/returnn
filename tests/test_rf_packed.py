@@ -163,6 +163,169 @@ def test_reduce_over_time_segment():
     )
 
 
+def test_window_over_packed_time():
+    rf.select_backend_torch()
+    x, batch_dim, time_dim, feat_dim = _make_input(batch_size=3, seq_lens=(7, 5, 4))
+    win_dim = Dim(3, name="win")
+    out, out_spatial_dim = rf.window(x, spatial_dim=time_dim, window_dim=win_dim, stride=2)
+    xp = packed.pack(x)
+    out_p, out_spatial_dim_p = rf.window(xp, spatial_dim=time_dim, window_dim=win_dim, stride=2)
+    assert out_spatial_dim_p == out_spatial_dim
+    assert packed.is_packed(out_p)  # the window re-lays out the packing, it does not fall back to padded
+    raw = out_p.raw_tensor
+    assert raw.orig_dims == (batch_dim, out_spatial_dim)
+    _assert_equal_non_padded(out_p, out, batch_dim, out_spatial_dim)
+
+
+def _assert_equal_per_seq(actual: Tensor, expected: Tensor, batch_dim: Dim, a_dim: Dim, e_dim: Dim, *rest: Dim):
+    """compare two tensors whose spatial dims are separate Dim objects (e.g. an int vs a Tensor stride)"""
+    actual = packed.unpack(actual)
+    a = actual.copy_transpose([batch_dim, a_dim, *rest]).raw_tensor.detach().cpu().numpy()
+    e = expected.copy_transpose([batch_dim, e_dim, *rest]).raw_tensor.detach().cpu().numpy()
+    a_lens = a_dim.dyn_size_ext.copy_compatible_to_dims([batch_dim]).raw_tensor.cpu().numpy()
+    e_lens = e_dim.dyn_size_ext.copy_compatible_to_dims([batch_dim]).raw_tensor.cpu().numpy()
+    numpy.testing.assert_equal(a_lens, e_lens)
+    for b, n in enumerate(e_lens):
+        numpy.testing.assert_allclose(a[b, :n], e[b, :n], rtol=1e-5, atol=1e-6, err_msg=f"seq {b}")
+
+
+def test_window_tensor_stride():
+    # a device-valued stride, which a static graph needs: same result as the int stride,
+    # but the out spatial dim gets its sizes from a device computation
+    rf.select_backend_torch()
+    x, batch_dim, time_dim, feat_dim = _make_input(batch_size=3, seq_lens=(7, 5, 4))
+    win_dim = Dim(3, name="win")
+    ref, ref_dim = rf.window(x, spatial_dim=time_dim, window_dim=win_dim, stride=2)
+    stride = rf.convert_to_tensor(2, dtype="int32")
+    out, out_dim = rf.window(x, spatial_dim=time_dim, window_dim=win_dim, stride=stride)
+    _assert_equal_per_seq(out, ref, batch_dim, out_dim, ref_dim, win_dim, feat_dim)
+    out_p, out_p_dim = rf.window(packed.pack(x), spatial_dim=time_dim, window_dim=win_dim, stride=stride)
+    assert packed.is_packed(out_p)
+    _assert_equal_per_seq(out_p, ref, batch_dim, out_p_dim, ref_dim, win_dim, feat_dim)
+
+
+def test_window_over_packed_time_static_traceable():
+    # the captured regime:
+    # the window buffer must be a static size,
+    # and one captured graph has to cover every batch, so nothing may depend on the actual lens
+    rf.select_backend_torch()
+    n_seq_cap, buf, cap = 8, 200, 20
+    live = [12, 5, 20]
+    lens = live + [0] * (n_seq_cap - len(live))
+    b_dim = Dim(n_seq_cap, name="batch")
+    sd = Dim(Tensor("len", dims=[b_dim], dtype="int32", raw_tensor=torch.tensor(lens, dtype=torch.int32)), name="time")
+    sd.capacity = cap
+    packed_dim = Dim(buf, name="packed")
+    flat = Tensor("flat", dims=[packed_dim], dtype="float32", raw_tensor=torch.arange(buf, dtype=torch.float32))
+    x = packed.pack_import(flat, batch_dim=b_dim, spatial_dim=sd, packed_dim=packed_dim)
+    win_dim = Dim(3, name="win")
+    with rf.set_static_traceable_ctx():
+        out, out_dim = rf.window(x, spatial_dim=sd, window_dim=win_dim, stride=2)
+    assert packed.is_packed(out)
+    raw = out.raw_tensor
+    assert raw.orig_dims == (b_dim, out_dim)
+    out_lens = out_dim.dyn_size_ext.copy_compatible_to_dims([b_dim]).raw_tensor
+    # the buffer must be a static size that holds every sequence at capacity
+    # (what one capture has to cover),
+    # while still staying under the padded seqs-times-capacity product
+    worst_case = n_seq_cap * -(-(cap + win_dim.dimension - 1) // 2)
+    assert worst_case <= raw.packed_dim.dimension < n_seq_cap * cap, f"buffer {raw.packed_dim}"
+    assert out_lens[: len(live)].tolist() == [-(-n // 2) for n in live], out_lens[: len(live)].tolist()
+    assert int(out_lens[len(live)]) == 0, "padding seq must stay empty"
+
+
+def test_window_dynamic_window_dim():
+    # a window whose width is drawn per step:
+    # the buffer follows the declared capacity and the drawn width only masks,
+    # so every draw gives the same shapes, which is what one capture needs
+    rf.select_backend_torch()
+    x, batch_dim, time_dim, feat_dim = _make_input(batch_size=3, seq_lens=(9, 5, 4))
+    max_win, stride = 6, 2
+    shapes = set()
+    for drawn in (6, 4, 2):
+        win_dim = Dim(rf.convert_to_tensor(drawn, dtype="int32"), name="win")
+        win_dim.capacity = max_win
+        out, out_dim = rf.window(
+            packed.pack(x),
+            spatial_dim=time_dim,
+            window_dim=win_dim,
+            window_left=0,
+            stride=rf.convert_to_tensor(stride, dtype="int32"),
+            pad_value=0.0,
+        )
+        assert packed.is_packed(out)
+        raw = out.raw_tensor
+        shapes.add((raw.packed_dim.dimension, tuple(raw.inner.raw_tensor.shape)))
+
+        ref_win = Dim(drawn, name="ref_win")
+        ref, ref_dim = rf.window(
+            x, spatial_dim=time_dim, window_dim=ref_win, window_left=0, stride=stride, pad_value=0.0
+        )
+        a = packed.unpack(out).copy_transpose([batch_dim, out_dim, win_dim, feat_dim])
+        a = a.raw_tensor.detach().cpu().numpy()[:, :, :drawn]
+        e = ref.copy_transpose([batch_dim, ref_dim, ref_win, feat_dim]).raw_tensor.detach().cpu().numpy()
+        lens = ref_dim.dyn_size_ext.copy_compatible_to_dims([batch_dim]).raw_tensor.cpu().numpy()
+        numpy.testing.assert_equal(out_dim.dyn_size_ext.copy_compatible_to_dims([batch_dim]).raw_tensor.numpy(), lens)
+        for b, n in enumerate(lens):
+            numpy.testing.assert_allclose(a[b, :n], e[b, :n], rtol=1e-5, atol=1e-6, err_msg=f"draw {drawn} seq {b}")
+    assert len(shapes) == 1, f"shapes vary across draws: {shapes}"
+
+
+def test_slice_packed_time_shift():
+    # the pad-then-slice pattern that builds chunk history: both stay packed re-layouts
+    rf.select_backend_torch()
+    x, batch_dim, time_dim, feat_dim = _make_input(batch_size=3, seq_lens=(7, 5, 4))
+    xp = packed.pack(x)
+    padded, (pad_dim,) = rf.pad(xp, axes=[time_dim], padding=[(2, 0)], value=0.0)
+    out_p, _ = rf.slice(padded, axis=pad_dim, size=time_dim, out_dim=time_dim)
+    assert packed.is_packed(out_p)
+    ref = rf.shift_right(x, axis=time_dim, pad_value=0.0)
+    ref = rf.shift_right(ref, axis=time_dim, pad_value=0.0)
+    _assert_equal_non_padded(out_p, ref, batch_dim, time_dim)
+
+
+def test_merge_dims_packed_with_static():
+    # un-chunking: merge the innermost packed dim with a static inner dim back to one time axis
+    rf.select_backend_torch()
+    x, batch_dim, time_dim, feat_dim = _make_input(batch_size=3, seq_lens=(6, 4, 2))
+    s_dim = Dim(3, name="s")
+    y = rf.expand_dim(x, dim=s_dim) + rf.range_over_dim(s_dim, dtype=x.dtype)
+    ref, ref_dim = rf.merge_dims(y, dims=(time_dim, s_dim))
+    yp = rf.expand_dim(packed.pack(x), dim=s_dim) + rf.range_over_dim(s_dim, dtype=x.dtype)
+    out_p, out_dim = rf.merge_dims(yp, dims=(time_dim, s_dim))
+    assert packed.is_packed(out_p)
+    _assert_equal_per_seq(out_p, ref, batch_dim, out_dim, ref_dim, feat_dim)
+
+
+def test_matmul_packed_both_operands():
+    # both operands packed over the same seqs (e.g. chunk-local attention scores):
+    # the packed dims are batch dims of the matmul, it runs on the inners
+    rf.select_backend_torch()
+    x, batch_dim, time_dim, feat_dim = _make_input(batch_size=3, seq_lens=(5, 3, 2))
+    y = x * 0.5 + 1.0  # same dims, different content
+    ref = rf.matmul(x, y, reduce=feat_dim, use_mask=False)  # per-frame dot product
+    xp = packed.pack(x)
+    yp = packed.pack(y, out_dim=xp.raw_tensor.packed_dim)
+    out_p = rf.matmul(xp, yp, reduce=feat_dim, use_mask=False)
+    assert packed.is_packed(out_p)
+    _assert_equal_non_padded(out_p, ref, batch_dim, time_dim)
+
+
+def test_gather_packed_plain_axis():
+    # gather along a plain (non-packed) axis with per-frame indices: elementwise on the inner buffer
+    rf.select_backend_torch()
+    x, batch_dim, time_dim, feat_dim = _make_input(batch_size=3, seq_lens=(5, 3, 2))
+    s_dim = Dim(4, name="s")
+    y = rf.expand_dim(x, dim=s_dim) + rf.range_over_dim(s_dim, dtype=x.dtype)
+    idx = rf.cast(rf.range_over_dim(time_dim) % s_dim.dimension, "int32")
+    idx.sparse_dim = s_dim
+    ref = rf.gather(y, indices=idx, axis=s_dim)
+    yp = rf.expand_dim(packed.pack(x), dim=s_dim) + rf.range_over_dim(s_dim, dtype=x.dtype)
+    out_p = rf.gather(yp, indices=idx, axis=s_dim)
+    assert packed.is_packed(out_p)
+    _assert_equal_non_padded(out_p, ref, batch_dim, time_dim)
+
+
 def test_cumsum_over_packed_time():
     rf.select_backend_torch()
     x, batch_dim, time_dim, feat_dim = _make_input()
@@ -217,6 +380,21 @@ def test_repeat_packed_max_len_factor():
     rf.select_backend_torch()
     # row 0 expands 3.6x and gets scaled down, row 1 stays; the two sides must agree either way
     _repeat_case((5, 3), [[9, 3, 3, 2, 1], [1, 2, 1, 0, 0]], max_len_factor=2)
+
+
+def test_repeat_padded_repeats():
+    # repeats from creation ops (rf.random_uniform/rf.constant) come padded;
+    # repeat must pack them onto the values' packing, like combine does for mixed operands
+    rf.select_backend_torch()
+    x, batch_dim, time_dim, feat_dim = _make_input(batch_size=3, seq_lens=(5, 1, 4))
+    dur_rows = [[2, 1, 3, 0, 2], [4, 0, 0, 0, 0], [1, 1, 1, 5, 0]]
+    dur = Tensor("dur", dims=[batch_dim, time_dim], dtype="int32", raw_tensor=torch.tensor(dur_rows, dtype=torch.int32))
+    out_ref, out_dim = rf.repeat(x, in_spatial_dim=time_dim, repeats=dur)
+    xp = packed.pack(x)
+    out_p, out_dim_p = rf.repeat(xp, in_spatial_dim=time_dim, repeats=dur, out_spatial_dim=out_dim)
+    assert packed.is_packed(out_p)
+    assert out_dim_p == out_dim
+    _assert_equal_non_padded(out_p, out_ref, batch_dim, out_dim)
 
 
 def test_gather_packed_shift_within_seq():

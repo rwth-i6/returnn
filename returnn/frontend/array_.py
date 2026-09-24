@@ -33,6 +33,7 @@ __all__ = [
     "concat_features",
     "pad",
     "cum_concat_step",
+    "slice_update",
     "stack",
     "unstack",
     "masked_select",
@@ -338,7 +339,8 @@ def window(
     window_left: Optional[Union[Dim, int]] = None,
     padding: str = "same",
     pad_value: Optional[Union[int, float]] = None,
-    stride: int = 1,
+    stride: Union[int, Tensor] = 1,
+    out_spatial_dim: Optional[Dim] = None,
     use_mask: Optional[bool] = None,
 ) -> Tuple[Tensor, Dim]:
     """
@@ -352,7 +354,14 @@ def window(
     :param window_right:
     :param padding: "same" or "valid"
     :param pad_value:
-    :param stride:
+    :param stride: int, or a scalar Tensor for a stride that varies per step.
+        A Tensor keeps the shapes out of the host, which a static graph needs;
+        the out spatial dim then has device-side sizes.
+    :param out_spatial_dim: optional, only supported together with stride > 1.
+        With a Tensor stride the derived dim can only inherit the input capacity
+        (a stride of 1 must stay expressible),
+        so a caller that knows the smallest stride should pass a dim bounded by it --
+        the capacity-wide range is real compute.
     :param use_mask: whether we should mask to make sure the zero padding is correct
     :return: out, out_spatial_dim
     """
@@ -363,9 +372,24 @@ def window(
             )
         if use_mask:
             source = source.copy_masked(0, dims=[spatial_dim])
-    assert window_dim.dimension is not None
+    pad_window_dim = window_dim
+    if window_dim.dimension is None:
+        # The strided path below only does dim math on the window and one range over it,
+        # and that range takes the capacity, so a dynamic window keeps the shapes static.
+        # The reshape path cannot express one.
+        assert isinstance(stride, Tensor) or stride > 1, f"window: dynamic {window_dim} needs the strided path"
+        assert window_dim.capacity is not None, f"window: dynamic {window_dim} needs a declared capacity"
+        # The padding has to stay a static amount:
+        # a device-valued one is not a layout that packed storage can express,
+        # and a captured graph cannot resize its buffers per step.
+        # Padding by the capacity pads too much on the right, which the window then masks away,
+        # so only window_left may still shift the alignment and it has to be static.
+        assert window_left is not None and (isinstance(window_left, int) or window_left.dimension is not None), (
+            f"window: dynamic {window_dim} needs a static window_left, got {window_left}"
+        )
+        pad_window_dim = Dim(window_dim.capacity, name=f"{window_dim.name}:capacity")
     if padding == "same":
-        out_spatial_dim = spatial_dim
+        unstrided_out_spatial_dim = spatial_dim
         if window_right is not None:
             if isinstance(window_right, int):
                 window_right = Dim(window_right, name="window_right")
@@ -376,12 +400,12 @@ def window(
             assert isinstance(window_left, Dim)
         if window_right is None:
             if window_left is None:
-                window_right = window_dim // 2
-                window_left = window_dim.ceildiv_right(2) - 1
+                window_right = pad_window_dim // 2
+                window_left = pad_window_dim.ceildiv_right(2) - 1
             else:
-                window_right = window_dim - window_left - 1
+                window_right = pad_window_dim - window_left - 1
         if window_left is None:
-            window_left = window_dim - window_right - 1
+            window_left = pad_window_dim - window_right - 1
         source, (in_spatial_dim,) = rf.pad(
             source,
             axes=[spatial_dim],
@@ -391,16 +415,21 @@ def window(
         # shape[0] == n_time + window - 1
     elif padding == "valid":
         in_spatial_dim = spatial_dim
-        out_spatial_dim = spatial_dim - window_dim + 1
+        unstrided_out_spatial_dim = spatial_dim - window_dim + 1
     else:
         raise ValueError(f"invalid padding {padding!r}")
 
-    if stride > 1:
-        start_times, out_spatial_dim = rf.range_over_dim_strided(out_spatial_dim, stride=stride)  # (n_out_time,)
+    if isinstance(stride, Tensor) or stride > 1:
+        start_times, out_spatial_dim = rf.range_over_dim_strided(
+            unstrided_out_spatial_dim, stride=stride, out_dim=out_spatial_dim
+        )  # (n_out_time,)
         win_range = rf.range_over_dim(window_dim)  # (window,)
         indices = rf.combine_bc(start_times, "+", win_range)  # (n_out_time,window)
-        final = rf.gather(source, indices=indices, axis=in_spatial_dim)  # (n_out_time,window,...)
+        clip = isinstance(stride, Tensor) or window_dim.dimension is None
+        final = rf.gather(source, indices=indices, axis=in_spatial_dim, clip_to_valid=clip)
         return final, out_spatial_dim
+    assert out_spatial_dim is None  # only supported for the strided path
+    out_spatial_dim = unstrided_out_spatial_dim
 
     tiled_dimshuffle = rf.expand_dim(source, dim=window_dim)  # (window,n_time+window-1,...)
     # We want to shift every dim*time block by one to the left.
@@ -630,6 +659,22 @@ def cum_concat_step(
     return out, out_spatial_dim
 
 
+def slice_update(target: Tensor, value: Tensor, *, axis: Dim, start: Tensor) -> Tensor:
+    """
+    Write ``value`` into ``target`` at ``start`` along ``axis``.
+
+    :param target: with ``axis``
+    :param value: the frame to write, without ``axis``
+    :param axis: the axis to write into
+    :param start: index in ``axis``, scalar
+    :return: ``target`` with ``value`` written at ``start``
+
+    Backends that can update in place do; the fallback selects over the whole axis.
+    """
+    # noinspection PyProtectedMember
+    return target._raw_backend.slice_update(target, value, axis=axis, start=start)
+
+
 def stack(sources: Sequence[Tensor], *, out_dim: Optional[Dim] = None) -> Tuple[Tensor, Dim]:
     """
     Stack the sources in a new dimension.
@@ -694,8 +739,8 @@ def masked_select(
     if dims_set == mask_dims_set:
         # noinspection PyProtectedMember
         return tensor._raw_backend.masked_select(tensor, mask=mask, dims=dims, out_dim=out_dim)
-    # Separate implementation for the case where we have a subset of the mask dims, specifically one single dim.
-    # See https://github.com/rwth-i6/returnn/issues/1605 for discussion.
+    # A strict subset of the mask dims: the other dims stay, the result is ragged over them.
+    # Same backend entry; implementations delegate to :func:`_masked_select_subset` by default.
     mask = mask.copy_masked(mask_value=False)
     if len(dims) > 1:
         # Flatten it, in the specified order.
@@ -704,16 +749,39 @@ def masked_select(
     else:
         (in_dim,) = dims
     in_dim: Dim
-    mask, in_dim_ext = rf.expand_make_non_empty(mask, axis=in_dim)
-    tensor, _ = rf.expand_make_non_empty(tensor, axis=in_dim, out_dim=in_dim_ext)
+    # noinspection PyProtectedMember
+    return tensor._raw_backend.masked_select(tensor, mask=mask, dims=[in_dim], out_dim=out_dim)
+
+
+def _masked_select_subset(
+    tensor: Tensor, *, mask: Tensor, dim: Dim, out_dim: Optional[Dim] = None
+) -> Tuple[Tensor, Dim]:
+    """
+    masked_select over a single dim which is a strict subset of the mask dims
+    (see https://github.com/rwth-i6/returnn/issues/1605).
+
+    :param tensor: with ``dim``
+    :param mask: bool, dims incl. ``dim``
+    :param dim: the dim to select along
+    :param out_dim: replaces ``dim`` in the result; created if not given
+    :return: tensor with ``dim`` replaced by ``out_dim``, and ``out_dim``
+    """
+    mask, in_dim_ext = rf.expand_make_non_empty(mask, axis=dim)
+    tensor, _ = rf.expand_make_non_empty(tensor, axis=dim, out_dim=in_dim_ext)
     idxs = rf.cumsum(rf.cast(mask, "int32"), spatial_dim=in_dim_ext)  # [T,B] -> idx in T' + 1
-    new_size = rf.gather(idxs, indices=in_dim_ext.get_dim_value_tensor() - 1, axis=in_dim_ext)  # [B]
+    lens = in_dim_ext.get_size_tensor(device=idxs.device)
+    new_size = rf.gather(idxs, indices=rf.maximum(lens - 1, 0), axis=in_dim_ext)  # [B]
+    new_size = rf.where(lens > 0, new_size, 0)
+    if rf.is_static_traceable():
+        new_size_ = new_size
+    else:
+        new_size_ = rf.copy_to_device(new_size, rf.get_default_dim_size_device())
     if out_dim is None:
-        out_dim = Dim(rf.copy_to_device(new_size, rf.get_default_dim_size_device()), name="masked_select")
+        out_dim = Dim(new_size_, name="masked_select")
     elif out_dim.dyn_size_ext is None:
-        out_dim.dyn_size_ext = rf.copy_to_device(new_size, rf.get_default_dim_size_device())
+        out_dim.dyn_size_ext = new_size_
     elif out_dim.dyn_size_ext is not None and out_dim.dyn_size_ext.raw_tensor is None:
-        out_dim.dyn_size_ext.raw_tensor = rf.copy_to_device(new_size, rf.get_default_dim_size_device()).raw_tensor
+        out_dim.dyn_size_ext.raw_tensor = new_size_.raw_tensor
     new_time = rf.reduce_max(new_size, axis=new_size.dims)  # T'
     idxs = rf.where(mask, idxs - 1, new_time)  # new_time is the padding idx
     if out_dim.capacity is None and rf.is_static_traceable():
@@ -1257,6 +1325,17 @@ def slice(
                 out_dim = size
             elif isinstance(size, (int, Tensor)):
                 out_dim = Dim(size, name="slice")
+                # noinspection PyProtectedMember
+                if (
+                    isinstance(size, Tensor)
+                    and rf.is_static_traceable()
+                    and out_dim.capacity is None
+                    and out_dim._derived_capacity() is None
+                ):
+                    raise ValueError(
+                        f"rf.slice: static traceable needs a capacity for the out dim of a Tensor size;"
+                        f" pass out_dim with an explicit capacity (slicing {axis})"
+                    )
             else:
                 raise TypeError(f"invalid type {type(size)} for size {size}")
             assert step is None or (isinstance(step, int) and step == 1)
@@ -1596,7 +1675,11 @@ def expand_make_non_empty(source: Tensor, *, axis: Dim, out_dim: Optional[Dim] =
         # no-op
         return source, axis
     source, (new_axis,) = rf.pad(source, axes=[axis], padding=[(0, 1)], mode="constant", value=0)
-    source, new_axis = rf.slice(source, axis=new_axis, size=rf.maximum(axis.get_size_tensor(), 1), out_dim=out_dim)
+    size_dev = source.device if rf.is_static_traceable() else None
+    size_t = rf.maximum(axis.get_size_tensor(device=size_dev), 1)
+    if out_dim is None:
+        out_dim = Dim(size_t, name="non_empty", bounded_by=axis)
+    source, new_axis = rf.slice(source, axis=new_axis, size=size_t, out_dim=out_dim)
     return source, new_axis
 
 

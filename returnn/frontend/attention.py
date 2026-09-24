@@ -334,10 +334,27 @@ class CausalSelfAttention(SelfAttentionBase):
         output = self.attention(q, k, v, kv_axis=hist_dim)
         return output, new_state
 
-    def default_initial_state(self, *, batch_dims: Sequence[Dim]) -> CausalSelfAttentionState:
+    def default_initial_state(
+        self, *, batch_dims: Sequence[Dim], capacity: Optional[int] = None
+    ) -> CausalSelfAttentionState:
         """
         For causal attention.
+
+        :param batch_dims:
+        :param capacity: max number of steps.
+            Given, the history axis is bounded by it: the buffers are allocated at the capacity
+            and the axis grows within them, which is what a graph loop can carry.
+            Without it the buffers themselves grow.
         """
+        if capacity is not None:
+            # empty, but bounded: the buffers are allocated at the capacity,
+            # and the dyn size grows per step
+            hist_dim = Dim(rf.zeros((), dtype="int32"), name="self_att_hist", capacity=capacity)
+            return CausalSelfAttentionState(
+                k_accum=rf.zeros(list(batch_dims) + [hist_dim, self.num_heads, self.key_dim_per_head]),
+                v_accum=rf.zeros(list(batch_dims) + [hist_dim, self.num_heads, self.value_dim_per_head]),
+                accum_axis=hist_dim,
+            )
         # Note: This dim tag is wrong. It should match to the expand_dim inside __call__.
         # So the dim tag itself should be part of the layer state, and we need to define the initial value of it here.
         # This is not really supported, in various ways, also including RETURNN.
@@ -362,6 +379,18 @@ def _causal_self_att_step(
     new_state = CausalSelfAttentionState()
     if axis == single_step_dim:
         assert state, f"{self}: need state for single step"
+        if state.accum_axis.dimension is None and state.accum_axis.capacity is not None:
+            # bounded cache: write past what is there, then let the axis grow by one
+            pos = state.accum_axis.dyn_size_ext
+            k = rf.slice_update(state.k_accum, k, axis=state.accum_axis, start=pos)
+            v = rf.slice_update(state.v_accum, v, axis=state.accum_axis, start=pos)
+            hist_dim = Dim(pos + 1, name="self_att_hist", capacity=state.accum_axis.capacity)
+            k, _ = rf.replace_dim(k, in_dim=state.accum_axis, out_dim=hist_dim)
+            v, _ = rf.replace_dim(v, in_dim=state.accum_axis, out_dim=hist_dim)
+            new_state.k_accum = k
+            new_state.v_accum = v
+            new_state.accum_axis = hist_dim
+            return k, v, hist_dim, new_state
         k, concat_dim = rf.cum_concat_step(k, prev_accum=state.k_accum, axis=state.accum_axis)
         v, _ = rf.cum_concat_step(v, prev_accum=state.v_accum, out_spatial_dim=concat_dim, axis=state.accum_axis)
         new_state.k_accum = k
@@ -402,7 +431,9 @@ class CausalSelfAttentionState(rf.State):
         """
         :param k_accum: accumulated keys
         :param v_accum: accumulated values
-        :param accum_axis:
+        :param accum_axis: the history axis. Bounded, i.e. dynamic with a capacity,
+            when the state was built with one: then the buffers are allocated at the capacity
+            and this axis says how much of them is written.
         """
         super().__init__(*_args)
         if not _args:

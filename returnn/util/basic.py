@@ -4380,12 +4380,39 @@ def cf(filename):
     try:
         cached_fn = check_output(["cf", filename]).strip().decode("utf8")
     except (CalledProcessError, OSError):
-        if not _cf_msg_printed:
-            print("Cache manager: Error occurred, using local file")
-            _cf_msg_printed = True
-        return filename
+        # No cache manager tool here (other clusters): our own FileCache gives the same,
+        # a node-local copy of the file.
+        cached_fn = _cf_via_file_cache(filename)
+        if cached_fn is None:
+            if not _cf_msg_printed:
+                print("Cache manager: Error occurred, using local file")
+                _cf_msg_printed = True
+            return filename
     assert os.path.exists(cached_fn)
     _cf_cache[filename] = cached_fn
+    return cached_fn
+
+
+_cf_file_cache = None
+
+
+def _cf_via_file_cache(filename: str) -> Optional[str]:
+    global _cf_file_cache, _cf_msg_printed
+    from returnn.util import file_cache
+
+    if _cf_file_cache is None:
+        _cf_file_cache = file_cache.get_instance()
+    try:
+        cached_fn = _cf_file_cache.get_file(filename)
+    except OSError as exc:  # e.g. no space left in the cache directory
+        print("Cache manager: FileCache failed (%s), using local file" % exc)
+        return None
+    if not _cf_msg_printed:
+        print(
+            "Cache manager: no cf tool, using RETURNN FileCache: %s -> %s (discard further messages)"
+            % (filename, cached_fn)
+        )
+        _cf_msg_printed = True
     return cached_fn
 
 
