@@ -1525,8 +1525,13 @@ class TorchBackend(Backend[torch.Tensor]):
             raise NotImplementedError(f"search_sorted: out_dtype {out_dtype} not supported")
         if axis not in sorted_seq.dims:
             raise ValueError(f"search_sorted: axis {axis} not in sorted_seqs {sorted_seq}")
-        if axis.need_masking():
-            raise NotImplementedError(f"search_sorted: dynamic axis {axis} not supported")
+        masked = axis.need_masking()
+        if masked:
+            # What lies behind the end of a sequence counts as larger than any value,
+            # so the padding stays sorted whatever it holds.
+            dtype = TorchBackend.as_dtype_raw(sorted_seq.dtype)
+            largest = float("inf") if dtype.is_floating_point else torch.iinfo(dtype).max
+            sorted_seq = sorted_seq.copy_masked(largest, dims=[axis])
         sorted_seq_dims = [dim for dim in sorted_seq.dims if dim != axis] + [axis]
         for dim in sorted_seq_dims[:-1]:
             if dim not in values.dims:
@@ -1542,6 +1547,11 @@ class TorchBackend(Backend[torch.Tensor]):
         if len(values_rem_dims) != 1:
             out_raw = out_raw.reshape([dim.get_dim_value() for dim in out.dims])
         out.raw_tensor = out_raw
+        if masked:
+            # a value as large as what the padding counts as would still land behind the end (side="right")
+            lens = axis.get_size_tensor(device=out.device)
+            out = rf.minimum(out, rf.cast(lens, out.dtype))
+            out.sparse_dim = axis
         return out
 
     @staticmethod
