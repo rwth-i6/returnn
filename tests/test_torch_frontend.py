@@ -1029,6 +1029,8 @@ def test_convert_parameter_to_buffer():
 def test_causal_dot_attention_fused_is_opt_in():
     from returnn.config import Config, global_config_ctx
 
+    if not hasattr(torch.nn.functional, "scaled_dot_product_attention"):
+        raise unittest.SkipTest("torch without scaled_dot_product_attention")
     torch.manual_seed(42)
     batch = Dim(2, name="batch")
     time_dim = Dim(4, name="time")
@@ -1068,6 +1070,8 @@ def test_causal_dot_attention_fused_is_opt_in():
 def test_causal_dot_attention_fused_matches_generic():
     from returnn.frontend._backend import Backend
 
+    if not hasattr(torch.nn.functional, "scaled_dot_product_attention"):
+        raise unittest.SkipTest("torch without scaled_dot_product_attention")
     torch.manual_seed(42)
     batch, heads = Dim(3, name="batch"), Dim(2, name="heads")
     lens = Tensor("time", [batch], dtype="int32", raw_tensor=torch.tensor([5, 4, 2], dtype=torch.int32))
