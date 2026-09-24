@@ -33,6 +33,25 @@ def is_available() -> bool:
     return torch.cuda.is_available()
 
 
+_UNBOUNDED = 1 << 30
+
+
+def _band_args(left_context: Optional[int], lookahead: Optional[int]) -> Tuple[int, int, bool]:
+    """
+    :param left_context: first key a query attends is i - left_context, None or -1 for the first of the seq
+    :param lookahead: last key a query attends is i + lookahead, None or -1 for the last of the seq
+    :return: (left, right, whether there is a band at all), an open side as a number beyond any seq,
+        so the kernels compare without a branch
+    """
+    left = -1 if left_context is None else int(left_context)
+    right = -1 if lookahead is None else int(lookahead)
+    return (
+        _UNBOUNDED if left < 0 else left,
+        _UNBOUNDED if right < 0 else right,
+        left >= 0 or right >= 0,
+    )
+
+
 def _seed_tensor(seed: Union[int, torch.Tensor], device) -> torch.Tensor:
     """
     :param seed: int or 1-elem int tensor
@@ -65,6 +84,8 @@ def _rel_pos_fwd_kernel(
     stride_bh,
     stride_ot,
     stride_oh,
+    left_ctx,
+    lookahead,
     H: tl.constexpr,
     D: tl.constexpr,
     R,
@@ -73,6 +94,7 @@ def _rel_pos_fwd_kernel(
     BLOCK_N: tl.constexpr,
     ENABLE_DROPOUT: tl.constexpr,
     IEEE: tl.constexpr,
+    BAND: tl.constexpr,
 ):
     pid_m = tl.program_id(0)
     pid_bh = tl.program_id(1)
@@ -80,9 +102,10 @@ def _rel_pos_fwd_kernel(
     h = pid_bh % H
     seq_start = tl.load(SeqStarts + b)
     seq_len = tl.load(SeqLens + b)
-    if pid_m * BLOCK_M >= seq_len:
+    m0 = pid_m * BLOCK_M
+    if m0 >= seq_len:
         return
-    offs_m = pid_m * BLOCK_M + tl.arange(0, BLOCK_M)  # local q rows
+    offs_m = m0 + tl.arange(0, BLOCK_M)  # local q rows
     offs_d = tl.arange(0, D)
     q_rows = seq_start + offs_m
     q_mask = offs_m < seq_len
@@ -94,7 +117,13 @@ def _rel_pos_fwd_kernel(
     m_i = tl.full([BLOCK_M], float("-inf"), dtype=tl.float32)
     l_i = tl.zeros([BLOCK_M], dtype=tl.float32)
     acc = tl.zeros([BLOCK_M, D], dtype=tl.float32)
-    for start_n in range(0, seq_len, BLOCK_N):
+    lo = 0
+    hi = seq_len
+    if BAND:
+        # the keys any row of this tile may attend, so the blocks outside the band are never read
+        lo = tl.maximum(m0 - left_ctx, 0)
+        hi = tl.minimum(m0 + BLOCK_M + lookahead, seq_len)
+    for start_n in range(lo, hi, BLOCK_N):
         offs_n = start_n + tl.arange(0, BLOCK_N)  # local kv cols
         n_mask = offs_n < seq_len
         k_rows = seq_start + offs_n
@@ -107,8 +136,11 @@ def _rel_pos_fwd_kernel(
             s = tl.dot(q, tl.trans(k), input_precision="ieee") * scale  # (M, N)
         else:
             s = tl.dot(q, tl.trans(k)) * scale  # (M, N)
-        rel = center + offs_n[None, :] - offs_m[:, None]  # (M, N), in [0, R)
+        dist = offs_n[None, :] - offs_m[:, None]  # (M, N)
+        rel = center + dist  # in [0, R)
         rel_valid = q_mask[:, None] & n_mask[None, :]
+        if BAND:
+            rel_valid = rel_valid & (dist <= lookahead) & (dist >= -left_ctx)
         bd = tl.load(
             BD + q_rows[:, None] * stride_bt + h * stride_bh + rel,
             mask=rel_valid,
@@ -151,13 +183,16 @@ def _rel_pos_fwd_kernel(
     tl.store(Lse + q_rows * H + h, lse, mask=q_mask)
 
 
-def rel_pos_att_fwd(q, k, v, bd, seq_starts, seq_lens, max_len, *, dropout_p=0.0, seed=0, scale=None):
+def rel_pos_att_fwd(
+    q, k, v, bd, seq_starts, seq_lens, max_len, *, dropout_p=0.0, seed=0, scale=None, left_context=None, lookahead=None
+):
     """forward, see :func:`rel_pos_att_varlen`. Returns (out, lse)."""
     total, n_heads, d = q.shape
     r = bd.shape[-1]
     assert r == 2 * max_len - 1
     if scale is None:
         scale = 1.0 / math.sqrt(d)
+    left_ctx, right_ctx, band = _band_args(left_context, lookahead)
     seed = _seed_tensor(seed, q.device)
     # zeros, not empty: the kernel writes only the valid rows (per-block early-exit),
     # so gap/junk rows would keep arbitrary garbage (possibly inf/nan),
@@ -185,6 +220,8 @@ def rel_pos_att_fwd(q, k, v, bd, seq_starts, seq_lens, max_len, *, dropout_p=0.0
         bd.stride(1),
         out.stride(0),
         out.stride(1),
+        left_ctx,
+        right_ctx,
         H=n_heads,
         D=d,
         R=r,
@@ -193,6 +230,7 @@ def rel_pos_att_fwd(q, k, v, bd, seq_starts, seq_lens, max_len, *, dropout_p=0.0
         BLOCK_N=block_n,
         ENABLE_DROPOUT=dropout_p > 0.0,
         IEEE=q.dtype == torch.float32,
+        BAND=band,
     )
     return out, lse
 
@@ -238,6 +276,8 @@ def _rel_pos_bwd_kernel_delta(
     stride_qh,
     stride_bt,
     stride_bh,
+    left_ctx,
+    lookahead,
     H: tl.constexpr,
     D: tl.constexpr,
     R,
@@ -246,6 +286,7 @@ def _rel_pos_bwd_kernel_delta(
     BLOCK_N: tl.constexpr,
     ENABLE_DROPOUT: tl.constexpr,
     IEEE: tl.constexpr,
+    BAND: tl.constexpr,
 ):
     # delta_i = sum_j p_ij * dp_ij in f32, from the same recomputed p/dp the other bwd kernels use.
     #
@@ -276,9 +317,10 @@ def _rel_pos_bwd_kernel_delta(
     h = pid_bh % H
     seq_start = tl.load(SeqStarts + b)
     seq_len = tl.load(SeqLens + b)
-    if pid_m * BLOCK_M >= seq_len:
+    m0 = pid_m * BLOCK_M
+    if m0 >= seq_len:
         return
-    offs_m = pid_m * BLOCK_M + tl.arange(0, BLOCK_M)
+    offs_m = m0 + tl.arange(0, BLOCK_M)
     offs_d = tl.arange(0, D)
     m_mask = offs_m < seq_len
     q_rows = seq_start + offs_m
@@ -286,7 +328,12 @@ def _rel_pos_bwd_kernel_delta(
     do = tl.load(DO + q_rows[:, None] * stride_qt + h * stride_qh + offs_d[None, :], mask=m_mask[:, None], other=0.0)
     lse = tl.load(Lse + q_rows * H + h, mask=m_mask, other=0.0)
     delta = tl.zeros([BLOCK_M], dtype=tl.float32)
-    for start_n in range(0, seq_len, BLOCK_N):
+    lo = 0
+    hi = seq_len
+    if BAND:
+        lo = tl.maximum(m0 - left_ctx, 0)
+        hi = tl.minimum(m0 + BLOCK_M + lookahead, seq_len)
+    for start_n in range(lo, hi, BLOCK_N):
         offs_n = start_n + tl.arange(0, BLOCK_N)
         n_mask = offs_n < seq_len
         k_rows = seq_start + offs_n
@@ -298,8 +345,11 @@ def _rel_pos_bwd_kernel_delta(
         else:
             s = tl.dot(q, tl.trans(k)) * scale
             dp = tl.dot(do, tl.trans(v))
-        rel = center + offs_n[None, :] - offs_m[:, None]
+        dist = offs_n[None, :] - offs_m[:, None]
+        rel = center + dist
         valid = m_mask[:, None] & n_mask[None, :]
+        if BAND:
+            valid = valid & (dist <= lookahead) & (dist >= -left_ctx)
         bd = tl.load(BD + q_rows[:, None] * stride_bt + h * stride_bh + rel, mask=valid, other=0.0)
         s = tl.where(valid, s + bd, float("-inf"))
         p = tl.exp(s - lse[:, None])
@@ -333,6 +383,8 @@ def _rel_pos_bwd_kernel_dkv(
     stride_qh,
     stride_bt,
     stride_bh,
+    left_ctx,
+    lookahead,
     H: tl.constexpr,
     D: tl.constexpr,
     R,
@@ -341,6 +393,7 @@ def _rel_pos_bwd_kernel_dkv(
     BLOCK_N: tl.constexpr,
     ENABLE_DROPOUT: tl.constexpr,
     IEEE: tl.constexpr,
+    BAND: tl.constexpr,
 ):
     pid_n = tl.program_id(0)
     pid_bh = tl.program_id(1)
@@ -348,9 +401,10 @@ def _rel_pos_bwd_kernel_dkv(
     h = pid_bh % H
     seq_start = tl.load(SeqStarts + b)
     seq_len = tl.load(SeqLens + b)
-    if pid_n * BLOCK_N >= seq_len:
+    n0 = pid_n * BLOCK_N
+    if n0 >= seq_len:
         return
-    offs_n = pid_n * BLOCK_N + tl.arange(0, BLOCK_N)
+    offs_n = n0 + tl.arange(0, BLOCK_N)
     offs_d = tl.arange(0, D)
     n_mask = offs_n < seq_len
     k_rows = seq_start + offs_n
@@ -358,7 +412,13 @@ def _rel_pos_bwd_kernel_dkv(
     v = tl.load(V + k_rows[:, None] * stride_qt + h * stride_qh + offs_d[None, :], mask=n_mask[:, None], other=0.0)
     dk = tl.zeros([BLOCK_N, D], dtype=tl.float32)
     dv = tl.zeros([BLOCK_N, D], dtype=tl.float32)
-    for start_m in range(0, seq_len, BLOCK_M):
+    lo = 0
+    hi = seq_len
+    if BAND:
+        # the queries which may attend any key of this tile, the band read from the key side
+        lo = tl.maximum(n0 - lookahead, 0)
+        hi = tl.minimum(n0 + BLOCK_N + left_ctx, seq_len)
+    for start_m in range(lo, hi, BLOCK_M):
         offs_m = start_m + tl.arange(0, BLOCK_M)
         m_mask = offs_m < seq_len
         q_rows = seq_start + offs_m
@@ -372,8 +432,11 @@ def _rel_pos_bwd_kernel_dkv(
             s = tl.dot(q, tl.trans(k), input_precision="ieee") * scale
         else:
             s = tl.dot(q, tl.trans(k)) * scale
-        rel = center + offs_n[None, :] - offs_m[:, None]
+        dist = offs_n[None, :] - offs_m[:, None]
+        rel = center + dist
         valid = m_mask[:, None] & n_mask[None, :]
+        if BAND:
+            valid = valid & (dist <= lookahead) & (dist >= -left_ctx)
         bd = tl.load(BD + q_rows[:, None] * stride_bt + h * stride_bh + rel, mask=valid, other=0.0)
         s = tl.where(valid, s + bd, float("-inf"))
         p = tl.exp(s - lse[:, None])  # (M, N), normalized probs
@@ -425,6 +488,8 @@ def _rel_pos_bwd_kernel_dq(
     stride_qh,
     stride_bt,
     stride_bh,
+    left_ctx,
+    lookahead,
     H: tl.constexpr,
     D: tl.constexpr,
     R,
@@ -433,6 +498,7 @@ def _rel_pos_bwd_kernel_dq(
     BLOCK_N: tl.constexpr,
     ENABLE_DROPOUT: tl.constexpr,
     IEEE: tl.constexpr,
+    BAND: tl.constexpr,
 ):
     pid_m = tl.program_id(0)
     pid_bh = tl.program_id(1)
@@ -440,9 +506,10 @@ def _rel_pos_bwd_kernel_dq(
     h = pid_bh % H
     seq_start = tl.load(SeqStarts + b)
     seq_len = tl.load(SeqLens + b)
-    if pid_m * BLOCK_M >= seq_len:
+    m0 = pid_m * BLOCK_M
+    if m0 >= seq_len:
         return
-    offs_m = pid_m * BLOCK_M + tl.arange(0, BLOCK_M)
+    offs_m = m0 + tl.arange(0, BLOCK_M)
     offs_d = tl.arange(0, D)
     m_mask = offs_m < seq_len
     q_rows = seq_start + offs_m
@@ -451,7 +518,12 @@ def _rel_pos_bwd_kernel_dq(
     lse = tl.load(Lse + q_rows * H + h, mask=m_mask, other=0.0)
     delta = tl.load(Delta + q_rows * H + h, mask=m_mask, other=0.0)
     dq = tl.zeros([BLOCK_M, D], dtype=tl.float32)
-    for start_n in range(0, seq_len, BLOCK_N):
+    lo = 0
+    hi = seq_len
+    if BAND:
+        lo = tl.maximum(m0 - left_ctx, 0)
+        hi = tl.minimum(m0 + BLOCK_M + lookahead, seq_len)
+    for start_n in range(lo, hi, BLOCK_N):
         offs_n = start_n + tl.arange(0, BLOCK_N)
         n_mask = offs_n < seq_len
         k_rows = seq_start + offs_n
@@ -461,8 +533,11 @@ def _rel_pos_bwd_kernel_dq(
             s = tl.dot(q, tl.trans(k), input_precision="ieee") * scale
         else:
             s = tl.dot(q, tl.trans(k)) * scale
-        rel = center + offs_n[None, :] - offs_m[:, None]
+        dist = offs_n[None, :] - offs_m[:, None]
+        rel = center + dist
         valid = m_mask[:, None] & n_mask[None, :]
+        if BAND:
+            valid = valid & (dist <= lookahead) & (dist >= -left_ctx)
         bd = tl.load(BD + q_rows[:, None] * stride_bt + h * stride_bh + rel, mask=valid, other=0.0)
         s = tl.where(valid, s + bd, float("-inf"))
         p = tl.exp(s - lse[:, None])
@@ -486,12 +561,30 @@ def _rel_pos_bwd_kernel_dq(
     tl.store(DQ + q_rows[:, None] * stride_qt + h * stride_qh + offs_d[None, :], dq, mask=m_mask[:, None])
 
 
-def rel_pos_att_bwd(q, k, v, bd, seq_starts, seq_lens, max_len, out, lse, d_out, *, dropout_p=0.0, seed=0, scale=None):
+def rel_pos_att_bwd(
+    q,
+    k,
+    v,
+    bd,
+    seq_starts,
+    seq_lens,
+    max_len,
+    out,
+    lse,
+    d_out,
+    *,
+    dropout_p=0.0,
+    seed=0,
+    scale=None,
+    left_context=None,
+    lookahead=None,
+):
     """backward, see :func:`rel_pos_att_varlen`. Returns (dq, dk, dv, dbd)."""
     _, n_heads, d = q.shape
     r = bd.shape[-1]
     if scale is None:
         scale = 1.0 / math.sqrt(d)
+    left_ctx, right_ctx, band = _band_args(left_context, lookahead)
     seed = _seed_tensor(seed, q.device)
     del out  # unused since delta is recomputed in-kernel (see _rel_pos_bwd_kernel_delta); kept in the API
     delta = torch.zeros(q.shape[0], n_heads, device=q.device, dtype=torch.float32)
@@ -511,6 +604,7 @@ def rel_pos_att_bwd(q, k, v, bd, seq_starts, seq_lens, max_len, out, lse, d_out,
         BLOCK_N=block_n,
         ENABLE_DROPOUT=dropout_p > 0.0,
         IEEE=q.dtype == torch.float32,
+        BAND=band,
     )
     _rel_pos_bwd_kernel_delta[(triton.cdiv(max_len, block_m), n_batch * n_heads)](
         q,
@@ -529,6 +623,8 @@ def rel_pos_att_bwd(q, k, v, bd, seq_starts, seq_lens, max_len, out, lse, d_out,
         q.stride(1),
         bd.stride(0),
         bd.stride(1),
+        left_ctx,
+        right_ctx,
         **args,
     )
     _rel_pos_bwd_kernel_dkv[(triton.cdiv(max_len, block_n), n_batch * n_heads)](
@@ -550,6 +646,8 @@ def rel_pos_att_bwd(q, k, v, bd, seq_starts, seq_lens, max_len, out, lse, d_out,
         q.stride(1),
         bd.stride(0),
         bd.stride(1),
+        left_ctx,
+        right_ctx,
         **args,
     )
     _rel_pos_bwd_kernel_dq[(triton.cdiv(max_len, block_m), n_batch * n_heads)](
@@ -571,6 +669,8 @@ def rel_pos_att_bwd(q, k, v, bd, seq_starts, seq_lens, max_len, out, lse, d_out,
         q.stride(1),
         bd.stride(0),
         bd.stride(1),
+        left_ctx,
+        right_ctx,
         **args,
     )
     return dq, dk, dv, dbd
@@ -608,20 +708,32 @@ class _RelPosAttVarlen(torch.autograd.Function):
 
     # noinspection PyMethodOverriding
     @staticmethod
-    def forward(q, k, v, bd, seq_starts, seq_lens, max_seq_len, dropout_p, seed, scale):
+    def forward(q, k, v, bd, seq_starts, seq_lens, max_seq_len, dropout_p, seed, scale, left_context, lookahead):
         """forward. lse is a formal (non-differentiable) output, needed by the backward."""
         out, lse = rel_pos_att_fwd(
-            q, k, v, bd, seq_starts, seq_lens, max_seq_len, dropout_p=dropout_p, seed=seed, scale=scale
+            q,
+            k,
+            v,
+            bd,
+            seq_starts,
+            seq_lens,
+            max_seq_len,
+            dropout_p=dropout_p,
+            seed=seed,
+            scale=scale,
+            left_context=left_context,
+            lookahead=lookahead,
         )
         return out, lse
 
     @staticmethod
     def setup_context(ctx, inputs, output):
         """setup ctx for backward"""
-        q, k, v, bd, seq_starts, seq_lens, max_seq_len, dropout_p, seed, scale = inputs
+        q, k, v, bd, seq_starts, seq_lens, max_seq_len, dropout_p, seed, scale, left_context, lookahead = inputs
         out, lse = output
         ctx.save_for_backward(q, k, v, bd, seq_starts, seq_lens, out, lse)
         ctx.max_seq_len, ctx.dropout_p, ctx.seed, ctx.scale = max_seq_len, dropout_p, seed, scale
+        ctx.left_context, ctx.lookahead = left_context, lookahead
         ctx.mark_non_differentiable(lse)
 
     # noinspection PyMethodOverriding
@@ -644,8 +756,16 @@ class _RelPosAttVarlen(torch.autograd.Function):
             dropout_p=ctx.dropout_p,
             seed=ctx.seed,
             scale=ctx.scale,
+            left_context=ctx.left_context,
+            lookahead=ctx.lookahead,
         )
-        return dq.to(q.dtype), dk.to(k.dtype), dv.to(v.dtype), dbd.to(bd.dtype), None, None, None, None, None, None
+        return (
+            dq.to(q.dtype),
+            dk.to(k.dtype),
+            dv.to(v.dtype),
+            dbd.to(bd.dtype),
+            *([None] * 8),
+        )
 
 
 _HAVE_LIB_OPS = False
@@ -663,14 +783,27 @@ if hasattr(torch.library, "custom_op"):  # torch >= 2.4
         dropout_p: float,
         seed: torch.Tensor,
         scale: float,
+        left_context: int,
+        lookahead: int,
     ) -> Tuple[torch.Tensor, torch.Tensor]:
         return rel_pos_att_fwd(
-            q, k, v, bd, seq_starts, seq_lens, max_seq_len, dropout_p=dropout_p, seed=seed, scale=scale
+            q,
+            k,
+            v,
+            bd,
+            seq_starts,
+            seq_lens,
+            max_seq_len,
+            dropout_p=dropout_p,
+            seed=seed,
+            scale=scale,
+            left_context=left_context,
+            lookahead=lookahead,
         )
 
     @_lib_fwd.register_fake
-    def _lib_fwd_fake(q, k, v, bd, seq_starts, seq_lens, max_seq_len, dropout_p, seed, scale):
-        del k, v, bd, seq_starts, seq_lens, max_seq_len, dropout_p, seed, scale
+    def _lib_fwd_fake(q, k, v, bd, seq_starts, seq_lens, max_seq_len, dropout_p, seed, scale, left_context, lookahead):
+        del k, v, bd, seq_starts, seq_lens, max_seq_len, dropout_p, seed, scale, left_context, lookahead
         total, n_heads, _ = q.shape
         return torch.empty_like(q), q.new_empty((total, n_heads), dtype=torch.float32)
 
@@ -689,6 +822,8 @@ if hasattr(torch.library, "custom_op"):  # torch >= 2.4
         dropout_p: float,
         seed: torch.Tensor,
         scale: float,
+        left_context: int,
+        lookahead: int,
     ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
         dq, dk, dv, dbd = rel_pos_att_bwd(
             q,
@@ -704,27 +839,46 @@ if hasattr(torch.library, "custom_op"):  # torch >= 2.4
             dropout_p=dropout_p,
             seed=seed,
             scale=scale,
+            left_context=left_context,
+            lookahead=lookahead,
         )
         return dq.to(q.dtype), dk.to(k.dtype), dv.to(v.dtype), dbd.to(bd.dtype)
 
     @_lib_bwd.register_fake
-    def _lib_bwd_fake(q, k, v, bd, seq_starts, seq_lens, max_seq_len, out, lse, d_out, dropout_p, seed, scale):
-        del seq_starts, seq_lens, max_seq_len, out, lse, d_out, dropout_p, seed, scale
+    def _lib_bwd_fake(
+        q, k, v, bd, seq_starts, seq_lens, max_seq_len, out, lse, d_out, dropout_p, seed, scale, left_context, lookahead
+    ):
+        del seq_starts, seq_lens, max_seq_len, out, lse, d_out, dropout_p, seed, scale, left_context, lookahead
         return torch.empty_like(q), torch.empty_like(k), torch.empty_like(v), torch.empty_like(bd)
 
     def _lib_setup_context(ctx, inputs, output):
-        q, k, v, bd, seq_starts, seq_lens, max_seq_len, dropout_p, seed, scale = inputs
+        q, k, v, bd, seq_starts, seq_lens, max_seq_len, dropout_p, seed, scale, left_context, lookahead = inputs
         out, lse = output
         ctx.save_for_backward(q, k, v, bd, seq_starts, seq_lens, out, lse, seed)
         ctx.max_seq_len, ctx.dropout_p, ctx.scale = max_seq_len, dropout_p, scale
+        ctx.left_context, ctx.lookahead = left_context, lookahead
 
     def _lib_backward(ctx, d_out, d_lse):
         d_lse  # noqa  # unused (lse non-differentiable)
         q, k, v, bd, seq_starts, seq_lens, out, lse, seed = ctx.saved_tensors
         dq, dk, dv, dbd = torch.ops.returnn.rel_pos_att_bwd(
-            q, k, v, bd, seq_starts, seq_lens, ctx.max_seq_len, out, lse, d_out, ctx.dropout_p, seed, ctx.scale
+            q,
+            k,
+            v,
+            bd,
+            seq_starts,
+            seq_lens,
+            ctx.max_seq_len,
+            out,
+            lse,
+            d_out,
+            ctx.dropout_p,
+            seed,
+            ctx.scale,
+            ctx.left_context,
+            ctx.lookahead,
         )
-        return dq, dk, dv, dbd, None, None, None, None, None, None
+        return dq, dk, dv, dbd, *([None] * 8)
 
     torch.library.register_autograd("returnn::rel_pos_att_fwd", _lib_backward, setup_context=_lib_setup_context)
 
@@ -747,6 +901,8 @@ if hasattr(torch.library, "custom_op"):  # torch >= 2.4
         seed: torch.Tensor,
         bd_scale: float,
         scale: float,
+        left_context: int,
+        lookahead: int,
     ) -> Tuple[torch.Tensor, torch.Tensor]:
         # bd lives only inside this opaque op (computed here, RECOMPUTED in the bwd op):
         # it never becomes a graph intermediate,
@@ -757,13 +913,40 @@ if hasattr(torch.library, "custom_op"):  # torch >= 2.4
         q, k, v = q.contiguous(), k.contiguous(), v.contiguous()
         bd = _fused_bd(qv.contiguous(), pos_emb.contiguous(), bd_scale, q.dtype)
         out, lse = rel_pos_att_fwd(
-            q, k, v, bd, seq_starts, seq_lens, max_seq_len, dropout_p=dropout_p, seed=seed, scale=scale
+            q,
+            k,
+            v,
+            bd,
+            seq_starts,
+            seq_lens,
+            max_seq_len,
+            dropout_p=dropout_p,
+            seed=seed,
+            scale=scale,
+            left_context=left_context,
+            lookahead=lookahead,
         )
         return out.contiguous(), lse.contiguous()
 
     @_lib_fused_fwd.register_fake
-    def _lib_fused_fwd_fake(q, k, v, qv, pos_emb, seq_starts, seq_lens, max_seq_len, dropout_p, seed, bd_scale, scale):
+    def _lib_fused_fwd_fake(
+        q,
+        k,
+        v,
+        qv,
+        pos_emb,
+        seq_starts,
+        seq_lens,
+        max_seq_len,
+        dropout_p,
+        seed,
+        bd_scale,
+        scale,
+        left_context,
+        lookahead,
+    ):
         del k, v, qv, pos_emb, seq_starts, seq_lens, max_seq_len, dropout_p, seed, bd_scale, scale
+        del left_context, lookahead
         total, n_heads, d = q.shape
         # plain new_empty (NOT empty_like):
         # the fake must promise the real op's contiguous output layout,
@@ -787,6 +970,8 @@ if hasattr(torch.library, "custom_op"):  # torch >= 2.4
         seed: torch.Tensor,
         bd_scale: float,
         scale: float,
+        left_context: int,
+        lookahead: int,
     ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
         q, k, v = q.contiguous(), k.contiguous(), v.contiguous()
         qv, pos_emb = qv.contiguous(), pos_emb.contiguous()
@@ -805,6 +990,8 @@ if hasattr(torch.library, "custom_op"):  # torch >= 2.4
             dropout_p=dropout_p,
             seed=seed,
             scale=scale,
+            left_context=left_context,
+            lookahead=lookahead,
         )
         # chain rule through the fused position term,
         # einsums in the io dtype (matches the out-of-op matmul autograd of the non-fused path)
@@ -821,10 +1008,27 @@ if hasattr(torch.library, "custom_op"):  # torch >= 2.4
 
     @_lib_fused_bwd.register_fake
     def _lib_fused_bwd_fake(
-        q, k, v, qv, pos_emb, seq_starts, seq_lens, max_seq_len, out, lse, d_out, dropout_p, seed, bd_scale, scale
+        q,
+        k,
+        v,
+        qv,
+        pos_emb,
+        seq_starts,
+        seq_lens,
+        max_seq_len,
+        out,
+        lse,
+        d_out,
+        dropout_p,
+        seed,
+        bd_scale,
+        scale,
+        left_context,
+        lookahead,
     ):
         # plain new_empty (NOT empty_like), see _lib_fused_fwd_fake
         del seq_starts, seq_lens, max_seq_len, out, lse, d_out, dropout_p, seed, bd_scale, scale
+        del left_context, lookahead
         return (
             q.new_empty(tuple(q.shape)),
             k.new_empty(tuple(k.shape)),
@@ -834,10 +1038,26 @@ if hasattr(torch.library, "custom_op"):  # torch >= 2.4
         )
 
     def _lib_fused_setup_context(ctx, inputs, output):
-        q, k, v, qv, pos_emb, seq_starts, seq_lens, max_seq_len, dropout_p, seed, bd_scale, scale = inputs
+        (
+            q,
+            k,
+            v,
+            qv,
+            pos_emb,
+            seq_starts,
+            seq_lens,
+            max_seq_len,
+            dropout_p,
+            seed,
+            bd_scale,
+            scale,
+            left_context,
+            lookahead,
+        ) = inputs
         out, lse = output
         ctx.save_for_backward(q, k, v, qv, pos_emb, seq_starts, seq_lens, out, lse, seed)
         ctx.max_seq_len, ctx.dropout_p, ctx.bd_scale, ctx.scale = max_seq_len, dropout_p, bd_scale, scale
+        ctx.left_context, ctx.lookahead = left_context, lookahead
 
     def _lib_fused_backward(ctx, d_out, d_lse):
         d_lse  # noqa  # unused (lse non-differentiable)
@@ -858,8 +1078,10 @@ if hasattr(torch.library, "custom_op"):  # torch >= 2.4
             seed,
             ctx.bd_scale,
             ctx.scale,
+            ctx.left_context,
+            ctx.lookahead,
         )
-        return dq, dk, dv, d_qv, d_pos, None, None, None, None, None, None, None
+        return dq, dk, dv, d_qv, d_pos, *([None] * 9)
 
     torch.library.register_autograd(
         "returnn::rel_pos_att_fused_bd_fwd", _lib_fused_backward, setup_context=_lib_fused_setup_context
@@ -880,6 +1102,8 @@ def rel_pos_att_varlen(
     dropout_p: float = 0.0,
     seed: Optional[Union[int, torch.Tensor]] = None,
     scale: Optional[float] = None,
+    left_context: Optional[int] = None,
+    lookahead: Optional[int] = None,
 ) -> torch.Tensor:
     """
     See the module docstring for the layout.
@@ -897,20 +1121,26 @@ def rel_pos_att_varlen(
         (the CUDA philox generator is graph-managed,
         so a capture gets a fresh seed, thus fresh masks, on each replay)
     :param scale: applied to the q k^T term (default 1/sqrt(D))
+    :param left_context: row i attends only the rows j >= i - left_context of its seq,
+        None (or -1) for all of them
+    :param lookahead: row i attends only the rows j <= i + lookahead of its seq, 0 being causal,
+        None (or -1) for all of them. The blocks outside the band are never read.
     :return: attention output, (total, H, D), dtype of q
     """
     if scale is None:
         scale = 1.0 / math.sqrt(q.shape[-1])
     if seed is None:
         seed = torch.randint(0, 2**31 - 1, (1,), dtype=torch.int32, device=q.device) if dropout_p > 0 else 0
+    left = -1 if left_context is None else int(left_context)
+    right = -1 if lookahead is None else int(lookahead)
     q, k, v, bd = q.contiguous(), k.contiguous(), v.contiguous(), bd.contiguous()
     if _HAVE_LIB_OPS:
         seed_t = _seed_tensor(seed, q.device)
         out, _ = torch.ops.returnn.rel_pos_att_fwd(
-            q, k, v, bd, seq_starts, seq_lens, max_seq_len, dropout_p, seed_t, scale
+            q, k, v, bd, seq_starts, seq_lens, max_seq_len, dropout_p, seed_t, scale, left, right
         )
         return out
-    out, _ = _RelPosAttVarlen.apply(q, k, v, bd, seq_starts, seq_lens, max_seq_len, dropout_p, seed, scale)
+    out, _ = _RelPosAttVarlen.apply(q, k, v, bd, seq_starts, seq_lens, max_seq_len, dropout_p, seed, scale, left, right)
     return out
 
 
@@ -928,6 +1158,8 @@ def rel_pos_att_varlen_fused_bd(
     seed: Optional[Union[int, torch.Tensor]] = None,
     bd_scale: Optional[float] = None,
     scale: Optional[float] = None,
+    left_context: Optional[int] = None,
+    lookahead: Optional[int] = None,
 ) -> torch.Tensor:
     """
     Like :func:`rel_pos_att_varlen`,
@@ -951,6 +1183,8 @@ def rel_pos_att_varlen_fused_bd(
     :param seed: philox seed, like :func:`rel_pos_att_varlen`
     :param bd_scale: applied to the position term (default 1/sqrt(D))
     :param scale: applied to the q k^T term (default 1/sqrt(D))
+    :param left_context: see :func:`rel_pos_att_varlen`
+    :param lookahead: see :func:`rel_pos_att_varlen`
     :return: attention output, (total, H, D), dtype of q
     """
     assert _HAVE_LIB_OPS
@@ -960,11 +1194,13 @@ def rel_pos_att_varlen_fused_bd(
         bd_scale = 1.0 / math.sqrt(q.shape[-1])
     if seed is None:
         seed = torch.randint(0, 2**31 - 1, (1,), dtype=torch.int32, device=q.device) if dropout_p > 0 else 0
+    left = -1 if left_context is None else int(left_context)
+    right = -1 if lookahead is None else int(lookahead)
     q, k, v = q.contiguous(), k.contiguous(), v.contiguous()
     qv, pos_emb = qv.contiguous(), pos_emb.contiguous()
     seed_t = _seed_tensor(seed, q.device)
     out, _ = torch.ops.returnn.rel_pos_att_fused_bd_fwd(
-        q, k, v, qv, pos_emb, seq_starts, seq_lens, max_seq_len, dropout_p, seed_t, bd_scale, scale
+        q, k, v, qv, pos_emb, seq_starts, seq_lens, max_seq_len, dropout_p, seed_t, bd_scale, scale, left, right
     )
     return out
 

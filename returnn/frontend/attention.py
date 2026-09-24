@@ -813,7 +813,15 @@ class RelPosSelfAttention(SelfAttentionBase):
         separate_pos_emb_per_head: bool = True,
         pos_emb_dropout: float = 0.0,
         att_dropout: float = 0.1,
+        left_context: Optional[int] = None,
+        lookahead: Optional[int] = None,
     ):
+        """
+        :param left_context: if given, a query attends only the keys at most this far in the past
+        :param lookahead: if given, a query attends only the keys at most this far in the future,
+            0 being causal. Together with ``left_context`` this is the band of a streaming encoder,
+            see :func:`Backend.rel_pos_self_attention`.
+        """
         super().__init__(
             in_dim=in_dim,
             proj_dim=proj_dim,
@@ -851,6 +859,10 @@ class RelPosSelfAttention(SelfAttentionBase):
             self.pos_bias_u.initial = rf.init.Glorot()
             self.pos_bias_v.initial = rf.init.Glorot()
         self.pos_emb_dropout = pos_emb_dropout
+        assert lookahead is None or lookahead >= 0, f"invalid lookahead {lookahead}"
+        assert left_context is None or left_context >= 0, f"invalid left_context {left_context}"
+        self.left_context = left_context
+        self.lookahead = lookahead
 
     def __call__(self, source: Tensor, *, axis: Dim, **_kwargs) -> Tensor:
         """forward"""
@@ -886,6 +898,8 @@ class RelPosSelfAttention(SelfAttentionBase):
             kv_spatial_dim=hist_dim,
             query_spatial_dim=axis,
             pos_emb_spatial_dim=pos_emb_spatial_dim,
+            left_context=self.left_context,
+            lookahead=self.lookahead,
         )
         output, _ = rf.merge_dims(att, dims=(self.num_heads, self.value_dim_per_head), out_dim=self.value_dim_total)
         if self.proj:
@@ -913,6 +927,8 @@ def _rel_pos_self_attention(
     kv_spatial_dim: Dim,
     query_spatial_dim: Dim,
     pos_emb_spatial_dim: Dim,
+    left_context: Optional[int] = None,
+    lookahead: Optional[int] = None,
 ):
     """
     Self-attention with relative positional encoding (Transformer-XL style),
@@ -932,6 +948,8 @@ def _rel_pos_self_attention(
     :param kv_spatial_dim: Spatial axis of key/value to attend over
     :param query_spatial_dim: Spatial axis of query
     :param pos_emb_spatial_dim: Relative-position axis of pos_emb (usually 2*time1-1)
+    :param left_context: see :func:`Backend.rel_pos_self_attention`
+    :param lookahead: see :func:`Backend.rel_pos_self_attention`
     :return: attention output
     """
     from . import _utils
@@ -954,7 +972,41 @@ def _rel_pos_self_attention(
         kv_spatial_dim=kv_spatial_dim,
         query_spatial_dim=query_spatial_dim,
         pos_emb_spatial_dim=pos_emb_spatial_dim,
+        left_context=left_context,
+        lookahead=lookahead,
     )
+
+
+def _rel_pos_band_mask(
+    *,
+    query_spatial_dim: Dim,
+    kv_spatial_dim: Dim,
+    left_context: Optional[int],
+    lookahead: Optional[int],
+    device: Optional[str] = None,
+) -> Optional[Tensor]:
+    """
+    Which keys a query attends in a band, i.e. the mask of a streaming encoder.
+
+    :param query_spatial_dim: T
+    :param kv_spatial_dim: T'
+    :param left_context: see :func:`Backend.rel_pos_self_attention`
+    :param lookahead: see :func:`Backend.rel_pos_self_attention`
+    :param device: of the mask
+    :return: bool [T,T'], True where query i attends key j, None without a band
+    """
+    if left_context is None and lookahead is None:
+        return None
+    rel = rf.combine_bc(
+        rf.range_over_dim(kv_spatial_dim, device=device), "-", rf.range_over_dim(query_spatial_dim, device=device)
+    )
+    valid = None
+    if lookahead is not None:
+        valid = rel <= lookahead
+    if left_context is not None:
+        left = rel >= -left_context
+        valid = left if valid is None else rf.logical_and(valid, left)
+    return valid
 
 
 def _rel_pos_enc_shift(x: Tensor, axis: Dim, pos_emb_spatial_dim: Dim, hist_dim: Dim) -> Tensor:
