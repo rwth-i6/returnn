@@ -1247,6 +1247,60 @@ def test_torch_engine_profile_continue_distributed():
             _check_torch_profile_checkpoints(tmp_dir, num_epochs=2)
 
 
+def _torch_distributed_cpu_worker(rank: int, world_size: int, port: int, tmp_dir: str):
+    os.environ.update(
+        MASTER_ADDR="127.0.0.1",
+        MASTER_PORT=str(port),
+        RANK=str(rank),
+        WORLD_SIZE=str(world_size),
+        LOCAL_RANK=str(rank),
+        LOCAL_WORLD_SIZE=str(world_size),
+    )
+    config = Config(
+        dict(
+            task="train",
+            device="cpu",
+            extern_data={"data": {"dim": 9}, "classes": {"dim": 2, "sparse": True}},
+            get_model=TrainTestModel,
+            train_step=TrainTestModel.train_step,
+            batch_size=500,
+            optimizer={"class": "adam"},
+            learning_rate=0.01,
+            num_epochs=1,
+            torch_dataloader_opts={"num_workers": 0},
+            torch_distributed={"backend": "gloo"},
+        )
+    )
+    with global_config_ctx(config):
+        dataset = init_dataset({"class": "Task12AXDataset", "num_seqs": 20})
+        dataset.init_seq_order(epoch=1)
+        engine = Engine(config=config)
+        engine.init_train_from_config(train_data=dataset)
+        engine.train()
+        param_sum = float(sum(param.detach().double().sum() for param in engine._pt_model.parameters()))
+    with open(f"{tmp_dir}/rank{rank}.txt", "w") as f:
+        f.write(repr(param_sum))
+    torch.distributed.destroy_process_group()
+
+
+def test_torch_engine_distributed_cpu():
+    # DistributedDataParallel on the CPU with gloo. The averaged grads keep the params of both ranks identical.
+    import socket
+    import torch.multiprocessing
+
+    world_size = 2
+    with socket.socket() as s:
+        s.bind(("127.0.0.1", 0))
+        port = s.getsockname()[1]
+    with tempfile.TemporaryDirectory(prefix="returnn_test_torch_distributed_cpu") as tmp_dir:
+        torch.multiprocessing.spawn(_torch_distributed_cpu_worker, args=(world_size, port, tmp_dir), nprocs=world_size)
+        param_sums = []
+        for rank in range(world_size):
+            with open(f"{tmp_dir}/rank{rank}.txt") as f:
+                param_sums.append(float(f.read()))
+    assert param_sums[0] == param_sums[1], param_sums
+
+
 def test_dynamic_learning_rate():
     num_epochs = 3
     last_global_train_step: Optional[float] = None
