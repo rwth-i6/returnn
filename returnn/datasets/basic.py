@@ -271,26 +271,29 @@ class Dataset:
         """
         from returnn.config import get_global_config
 
-        if self._uses_custom_distributed_sharding():
-            return 0
+        env_val = os.environ.get(RANDOM_SEED_OFFSET_ENV_VAR)  # set by outer proc
+        if env_val is not None:
+            # Set by outer proc, supposed to behave like setting random_seed_offset explicitly of the dataset,
+            # i.e. no per-rank seed logic here.
+            return int(env_val)
         config = get_global_config(raise_exception=False)
         if not config:
             return 0
-        env_val = os.environ.get(RANDOM_SEED_OFFSET_ENV_VAR)
-        if env_val is not None:
-            return int(env_val)
+        base = config.int("dataset_random_seed_offset", 0)
+        if self._uses_custom_distributed_sharding() or not config:
+            return base
         elif config.typed_value("torch_distributed") is not None:
             import returnn.torch.distributed
 
-            return returnn.torch.distributed.get_ctx(config=config).rank() * 16127
+            return returnn.torch.distributed.get_ctx(config=config).rank() * 16127 + base
         elif config.is_true("use_horovod"):
             assert config.bool("use_tensorflow", False) or config.value("backend", "").startswith("tensorflow")
 
             import returnn.tf.horovod
 
             if returnn.tf.horovod.get_ctx(config=config).is_dataset_distribution_random_seed_offset():
-                return returnn.tf.horovod.get_ctx(config=config).rank() * 16127
-        return 0
+                return returnn.tf.horovod.get_ctx(config=config).rank() * 16127 + base
+        return base
 
     def set_file_cache(self, cache: file_cache.FileCache):
         """

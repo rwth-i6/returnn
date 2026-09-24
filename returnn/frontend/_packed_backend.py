@@ -6365,19 +6365,14 @@ def pack(
             # which every later regap target depends on.
             starts, _ = _seq_starts_math(dims, gap, align, device=source.device)
             lens_flat, _ = _seq_footprints(dims, 0, 1, device=source.device)  # gap 0 align 1 = content lens
-            # noinspection PyProtectedMember
-            if starts is not None and lens_flat is not None and starts._raw_backend.name == "torch":
-                # torch-only: assert_ is the torch device-side assert,
-                # and torch must not be imported under other backends
-                from returnn.torch.util.assert_ import assert_
-
+            if starts is not None and lens_flat is not None:
                 ends = starts + rf.cast(lens_flat, starts.dtype)
                 ends_max = rf.reduce_max(ends, axis=list(ends.dims))
-                cond = ends_max.raw_tensor <= out_dim.dimension
+                cond = ends_max <= out_dim.dimension
                 if content_bound is not None:
                     total_len = rf.reduce_sum(lens_flat, axis=list(lens_flat.dims))
-                    cond = cond & (total_len.raw_tensor <= content_bound)
-                assert_(
+                    cond = cond & (total_len <= content_bound)
+                rf.assert_(
                     cond,
                     f"pack: content overflows the declared total_bound {out_dim.dimension}"
                     f" (dims {list(dims)}, gap {gap}, align {align},"
@@ -6412,6 +6407,7 @@ def regap(
     align: Optional[int] = None,
     layout_lens: Optional[Tensor] = None,
     total_bound: Optional[int] = None,
+    content_bound: Optional[int] = None,
 ) -> Tensor:
     """
     :param source: packed tensor
@@ -6421,6 +6417,12 @@ def regap(
         e.g. to restore an exact strided-out layout
     :param total_bound: if given, allocate a fixed (upper-bound) buffer of this many frames
         for the re-layout, so the packed dim is static (see :func:`pack`).
+    :param content_bound: if given, the result carries this as its content bound
+        (static upper bound of the content total, see :class:`PackedRawTensor`)
+        instead of the source's, and ``total_bound`` defaults to the buffer that holds it
+        (``content_bound + capacity * (gap + align - 1)``).
+        For a tighter bound than the derived one, e.g. a concat whose sources never fill up together;
+        every later derived buffer follows it. Checked device-side (async) like :func:`pack`.
     :return: same content, packed with the given gap:
         a cheap packed -> packed re-layout (one scatter over the frames, no padded intermediate).
         Used e.g. by the packed conv when the tensor's gap is too small.
@@ -6429,8 +6431,20 @@ def regap(
     if align is None:
         align = raw.align
     others = raw.orig_dims[:-1]
+    if content_bound is not None and total_bound is None:
+        n_cap = _capacity_n(raw.orig_dims)
+        if n_cap is not None:
+            total_bound = content_bound + n_cap * (gap + align - 1)
+        else:
+            # no static batch bound (e.g. an eval step at exact sizes): the exact total buffer,
+            # the declared content bound is only carried
+            assert not rf.is_static_traceable(), (
+                f"regap: content_bound under static tracing needs a static size or capacity on {raw.orig_dims[:-1]}"
+            )
     if raw.gap == gap and raw.align == align and raw.layout_lens is layout_lens:
-        if total_bound is None or raw.packed_dim.dimension == total_bound:
+        if (total_bound is None or raw.packed_dim.dimension == total_bound) and (
+            content_bound is None or raw.content_bound == content_bound
+        ):
             return source
     elif not others:
         return source
@@ -6482,6 +6496,16 @@ def regap(
     if mask is not None:
         # route old gap frames to the dump slot (== the new total), dropped in the re-layout
         pos = rf.where(mask, pos, total_dev if isinstance(total_dev, int) else rf.cast(total_dev, pos.dtype))
+    if content_bound is not None:
+        # a declared (tighter) content bound: verify it against the actual content total
+        lens_flat, _ = _seq_footprints(raw.orig_dims, 0, 1, device=dev)  # gap 0 align 1 = content lens
+        if lens_flat is not None:
+            total_len = rf.reduce_sum(lens_flat, axis=list(lens_flat.dims))
+            rf.assert_(
+                total_len <= content_bound,
+                f"regap: the content total overflows the declared content_bound {content_bound}"
+                f" (dims {list(raw.orig_dims)}); raise content_bound",
+            )
     inner_new = _torch_relayout_frames(raw.inner, pos, packed_dim=raw.packed_dim, out_dim=new_dim)
     if raw.inner.feature_dim is not None and inner_new.feature_dim is None:
         inner_new.feature_dim = raw.inner.feature_dim
@@ -6492,7 +6516,8 @@ def regap(
         gap=gap,
         align=align,
         layout_lens=layout_lens,
-        content_bound=raw.content_bound,  # a re-layout never changes the content
+        # a re-layout never changes the content; a declared bound replaces the carried one
+        content_bound=content_bound if content_bound is not None else raw.content_bound,
     )
     out = helper.rewrap(inner_new, name="regap")
     if source.feature_dim is not None and out.feature_dim is None:
