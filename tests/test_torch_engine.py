@@ -1251,6 +1251,37 @@ def test_graph_capture_bounds_from_config():
     assert opts["packed_total_bound"] == {"data": 100, "text_codes": 1000, "labels": 1000}
 
 
+def test_graph_capture_boundary_cuts_to_the_longest_sequence():
+    """
+    The captured first segment of a segmented step returns buffers padded to the capacity,
+    and the eager segment must see them as an eager step would: cut along every dynamic dim
+    to the batch's longest sequence, a dim returned next to a tensor being that tensor's dim,
+    sparse and feature dims and plain values kept.
+    """
+    from returnn.torch.util.graph_capture import _flatten_boundary, _unflatten_boundary
+
+    batch = Dim(3, name="batch-boundary")
+    lens = torch.tensor([4, 2, 0], dtype=torch.int32)
+    time = Dim(Tensor("time:size", dims=[batch], dtype="int32", raw_tensor=lens), name="time-boundary")
+    feat = Dim(2, name="feat-boundary")
+    vocab = Dim(5, name="vocab-boundary")
+    x = Tensor("x", dims=[batch, time, feat], dtype="float32", feature_dim=feat, raw_tensor=torch.randn(3, 7, 2))
+    labels = Tensor(
+        "labels",
+        dims=[batch, time],
+        dtype="int32",
+        sparse_dim=vocab,
+        raw_tensor=torch.randint(0, 5, (3, 7), dtype=torch.int32),
+    )
+    spec, tensors = _flatten_boundary({"x": x, "time": time, "labels": labels, "scale": 0.5}, batch_dim=batch)
+    values = _unflatten_boundary(spec, tensors, batch_dim=batch)
+    assert values["x"].dims[1] is values["time"] and values["labels"].dims[1] is values["time"]
+    assert values["x"].feature_dim == feat and values["labels"].sparse_dim == vocab and values["scale"] == 0.5
+    assert values["time"].dyn_size_ext.raw_tensor.tolist() == [4, 2, 0]
+    assert torch.equal(values["x"].raw_tensor, x.raw_tensor[:, :4])
+    assert torch.equal(values["labels"].raw_tensor, labels.raw_tensor[:, :4])
+
+
 def test_graph_capture_optimizer_state_materialization():
     """the lazy optimizer state is only created for the captured optimizer, and only where zero-init is right"""
     from returnn.torch.util.graph_capture import GraphCapturedTrainStep, _optimizer_state_zero_init
@@ -1659,6 +1690,134 @@ def test_torch_engine_cuda_graph_packed_decoder_parity():
         (ctc_a, ce_a), (ctc_b, ce_b) = losses["packed_eager"][s], losses["packed_graphc"][s]
         assert abs(ctc_a - ctc_b) / max(abs(ctc_a), 1e-6) < 2e-2, f"step {s} ctc: {ctc_a} vs {ctc_b}"
         assert abs(ce_a - ce_b) / max(abs(ce_a), 1e-6) < 2e-2, f"step {s} ce: {ce_a} vs {ce_b}"
+
+
+def _cuda_graph_segmented_setup(mode: str, *, compile_: bool):
+    """config+dataset for the segmented capture parity test, see below"""
+    from returnn.datasets import init_dataset
+    from returnn.tensor import Dim, batch_dim
+    import numpy
+
+    time_dim = Dim(None, name=f"time-segmented-{mode}-{compile_}")
+    feat_dim = Dim(8, name="feat")
+    classes_dim = Dim(5, name="classes")
+    hidden = Dim(16, name="hidden")
+
+    class _Model(rf.Module):
+        def __init__(self):
+            super().__init__()
+            self.layer = rf.Linear(feat_dim, hidden)
+            self.out = rf.Linear(hidden, classes_dim)
+
+    def _get_model(*, epoch, step, **_kwargs):
+        return _Model()
+
+    def _encode(*, model: _Model, extern_data: TensorDict, **_kwargs):
+        """the first segment, static shapes: the hidden layer and a loss on it"""
+        x = rf.relu(model.layer(extern_data["data"]))
+        rf.reduce_mean(x * x, axis=hidden).mark_as_loss("aux", scale=0.1)
+        return {"x": x, "classes": extern_data["classes"], "time": time_dim}
+
+    def _classify(*, model: _Model, x, classes, time, **_kwargs):
+        """the second segment, eager: the real frames selected at their exact count, then the output layer"""
+        mask = rf.sequence_mask([batch_dim, time], device=x.device)
+        flat_x, flat_dim = rf.masked_select(x, mask=mask, dims=[batch_dim, time])
+        flat_classes, _ = rf.masked_select(classes, mask=mask, dims=[batch_dim, time], out_dim=flat_dim)
+        logits = model.out(flat_x)
+        ce = rf.cross_entropy(estimated=logits, target=flat_classes, axis=classes_dim, estimated_type="logits")
+        ce.mark_as_loss("ce")
+        fer = rf.cast(rf.reduce_argmax(logits, axis=classes_dim) != flat_classes, "float32")
+        fer.mark_as_loss("fer", as_error=True)
+
+    def _train_step(*, model: _Model, extern_data: TensorDict, **_kwargs):
+        _classify(model=model, **_encode(model=model, extern_data=extern_data))
+
+    _train_step.graph_segments = (_encode, _classify)
+
+    rnd = numpy.random.RandomState(7)
+    seqs = []
+    for _i in range(80):
+        t = int(rnd.randint(15, 99))
+        seqs.append({"data": rnd.randn(t, 8).astype("float32"), "classes": rnd.randint(0, 5, (t,)).astype("int32")})
+    cfg = dict(
+        task="train",
+        device="gpu",
+        random_seed=42,
+        extern_data={
+            "data": {"dims": [batch_dim, time_dim, feat_dim], "dtype": "float32"},
+            "classes": {"dims": [batch_dim, time_dim], "dtype": "int32", "sparse_dim": classes_dim},
+        },
+        get_model=_get_model,
+        train_step=_train_step,
+        batch_size=600,
+        max_seqs=10,
+        num_epochs=1,
+        # the losses of every step depend on the gradients of all steps before it
+        learning_rate=0.5,
+        optimizer={"class": "sgd"},
+        torch_dataloader_opts={"num_workers": 0},
+    )
+    if mode == "segmented":
+        cfg["torch_cuda_graph"] = dict(
+            batch_size_bound=10, dim_capacity={"data": 100, "classes": 100}, warmup_steps=2, segmented=True
+        )
+        if compile_:
+            cfg["torch_cuda_graph"]["compile"] = True
+    config = Config(cfg)
+    dataset = init_dataset({"class": "StaticDataset", "data": seqs, "input_dim": 8, "output_dim": 5})
+    dataset.init_seq_order(epoch=1)
+    return config, dataset
+
+
+def _cuda_graph_segmented_run(mode: str, *, compile_: bool):
+    """one epoch in-process, the per-step losses parsed from the log"""
+    import os
+    import re
+    import tempfile
+    from returnn.log import log as returnn_log
+
+    torch.backends.cuda.matmul.allow_tf32 = False
+    torch.backends.cudnn.allow_tf32 = False
+    config, dataset = _cuda_graph_segmented_setup(mode, compile_=compile_)
+    log_file = tempfile.NamedTemporaryFile(mode="wt", suffix=f"-{mode}.log", delete=False)
+    log_file.close()
+    returnn_log.initialize(logs=[log_file.name], verbosity=[5])
+    try:
+        with global_config_ctx(config):
+            engine = Engine(config=config)
+            engine.init_train_from_config(train_data=dataset)
+            engine.train()
+            if mode == "segmented":
+                assert engine._graph_capture._graph is not None and engine._graph_capture._graph_bw is not None
+            engine.finalize()
+    finally:
+        returnn_log.initialize()
+    with open(log_file.name, "rt", encoding="utf-8") as f:
+        txt = f.read()
+    os.remove(log_file.name)
+    number = r"([-+0-9.e]+)"
+    steps = re.findall(rf"train, step (\d+), aux {number}, ce {number}, fer {number}", txt)
+    assert len(steps) >= 8, (mode, compile_, re.findall(r"train, step .*", txt)[:2])
+    return {int(s): (float(a), float(c), float(e)) for s, a, c, e in steps}
+
+
+def test_torch_engine_cuda_graph_segmented_parity():
+    """
+    Opts "segmented": the first segment replays as a forward and a backward graph, the second runs eagerly
+    in between at its own shapes (here a masked_select at the exact frame count), plain and compiled.
+    The per-step losses must follow the eager run on identical batches. The model trains, so from the
+    first captured step on they only do if every gradient does, the first segment's own and the one
+    it gets through the boundary.
+    """
+    if not torch.cuda.is_available():
+        raise unittest.SkipTest("CUDA not available")
+    eager = _cuda_graph_segmented_run("eager", compile_=False)
+    for compile_ in (False, True):
+        segmented = _cuda_graph_segmented_run("segmented", compile_=compile_)
+        assert set(segmented) == set(eager)
+        for s in sorted(eager):
+            for name, a, b in zip(("aux", "ce", "fer"), eager[s], segmented[s]):
+                assert abs(a - b) <= 2e-3 * max(1.0, abs(a)), f"compile {compile_} step {s} {name}: {a} vs {b}"
 
 
 class _FakeGraphCapture:
