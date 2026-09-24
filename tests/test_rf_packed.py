@@ -2050,6 +2050,32 @@ def test_cu_seqlens_with_host_lens_and_a_device_total():
     assert cu.raw_tensor.tolist() == [0, 5, 8]
 
 
+def test_regap_under_cuda_graph_capture():
+    if not torch.cuda.is_available():
+        raise unittest.SkipTest("cuda only: real graph capture")
+    rf.select_backend_torch()
+    batch_dim = Dim(2, name="batch")
+    lens = Tensor(
+        "lens", dims=[batch_dim], dtype="int32", raw_tensor=torch.tensor([5, 3], dtype=torch.int32, device="cuda")
+    )
+    time_dim = Dim(lens, name="time", capacity=6)
+    packed_dim = Dim(16, name="packed")
+    inner = Tensor("inner", dims=[packed_dim], dtype="float32", raw_tensor=torch.arange(16.0, device="cuda"))
+    x = packed.pack_import(inner, batch_dim=batch_dim, spatial_dim=time_dim, packed_dim=packed_dim)
+    side = torch.cuda.Stream()
+    side.wait_stream(torch.cuda.current_stream())
+    with torch.cuda.stream(side), rf.set_static_traceable_ctx():
+        packed.regap(x, 2, align=1, total_bound=20)
+    torch.cuda.current_stream().wait_stream(side)
+    graph = torch.cuda.CUDAGraph()
+    with torch.cuda.graph(graph), rf.set_static_traceable_ctx():
+        out = packed.regap(x, 2, align=1, total_bound=20)
+    graph.replay()
+    torch.cuda.synchronize()
+    values = out.raw_tensor.inner.raw_tensor.tolist()
+    assert values[:5] == [0.0, 1.0, 2.0, 3.0, 4.0] and values[7:10] == [5.0, 6.0, 7.0], values
+
+
 def test_gather_with_a_static_extra_index_dim_keeps_the_packing():
     rf.select_backend_torch()
     x, batch_dim, time_dim, feat_dim = _make_input(batch_size=3, seq_lens=(7, 5, 4))
@@ -2191,6 +2217,16 @@ def test_batch_norm_packed_dense_bound_with_a_static_axis():
         )
 
 
+def test_regap_of_entirely_empty_sequences():
+    """a packing whose sequences are all empty can still be re-laid out"""
+    rf.select_backend_torch()
+    x, batch_dim, time_dim, feat_dim = _make_input(seq_lens=(0, 0), feat=1)
+    x.raw_tensor = torch.empty(2, 0, 1)
+    out = packed.regap(packed.pack(x), 2)
+    assert packed.is_packed(out) and out.raw_tensor.gap == 2
+    assert tuple(packed.unpack(out).copy_transpose([batch_dim, time_dim, feat_dim]).raw_tensor.shape) == (2, 0, 1)
+
+
 def test_pack_dense_total_bound_static_buffer():
     """a dense pack with total_bound allocates the bound-sized static buffer, content first"""
     rf.select_backend_torch()
@@ -2222,6 +2258,40 @@ def test_shift_and_pad_with_a_per_seq_pad_value():
     out_p, _ = rf.pad(xp, axes=[time_dim], padding=[(1, 0)], out_dims=[padded_time], value=pad)
     assert packed.is_packed(out_p)
     _assert_equal_non_padded(out_p, ref, batch_dim, padded_time)
+
+
+def test_regap_restoring_a_layout_lens_layout_needs_a_bound():
+    """restoring an exact layout under static tracing takes its bound from the caller, not derived"""
+    rf.select_backend_torch()
+    x, batch_dim, time_dim, feat_dim = _make_input(seq_lens=(6, 4))
+    time_dim.capacity = 6
+    layout_lens = Tensor(
+        "layout_lens", dims=[batch_dim], dtype="int32", raw_tensor=torch.tensor([6, 4], dtype=torch.int32)
+    )
+
+    src = packed.pack(x, dims=[batch_dim, time_dim], gap=2, align=2, total_bound=32)
+    orig_total = src.raw_tensor.packed_dim.dimension
+    assert orig_total == 32, src.raw_tensor
+
+    # the kernel paths strip the gaps, run, then restore. regap derives a bound itself only when
+    # layout_lens is None, so the restoring call has to pass the layout's own size.
+    with rf.set_static_traceable_ctx(True):
+        dense = packed.regap(src, 0, align=1)
+        assert dense.raw_tensor.packed_dim.dimension is not None, dense.raw_tensor
+
+        try:
+            out = packed.regap(dense, 2, align=2, layout_lens=layout_lens)
+            out.raw_tensor.packed_dim.get_dim_value_tensor()
+        except Exception as exc:
+            assert "no (derivable) capacity" in str(exc), exc
+        else:
+            raise Exception("regap without a bound should have no capacity for the restored dim")
+
+        out = packed.regap(dense, 2, align=2, layout_lens=layout_lens, total_bound=orig_total)
+        assert out.raw_tensor.packed_dim.dimension == orig_total, out.raw_tensor
+        out.raw_tensor.packed_dim.get_dim_value_tensor()
+
+    _assert_equal_non_padded(out, x, batch_dim, time_dim)
 
 
 if __name__ == "__main__":

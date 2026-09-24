@@ -1714,6 +1714,10 @@ def _torch_sdpa_varlen_attention(
     # nested jagged needs the dense layout for the offsets; regap is cheap
     orig_layout = (q_raw.gap, q_raw.align)
     orig_layout_lens = q_raw.layout_lens
+    # the regap at the end restores exactly this layout, so its bound is this dim's own static size.
+    # regap only derives a bound itself when layout_lens is None (see there), and a strided-out
+    # layout carries one, so without this the restored dim has no capacity under static tracing.
+    orig_total = q_raw.packed_dim.dimension
     if q_raw.has_gap_frames:
         query = regap(query, 0, align=1)
         q_raw = query.raw_tensor
@@ -1862,7 +1866,7 @@ def _torch_sdpa_varlen_attention(
     out_inner.raw_tensor = out_t
     out = q_raw.rewrap(out_inner, name="sdpa_varlen")
     if orig_layout != (0, 1) or orig_layout_lens is not None:
-        out = regap(out, orig_layout[0], align=orig_layout[1], layout_lens=orig_layout_lens)
+        out = regap(out, orig_layout[0], align=orig_layout[1], layout_lens=orig_layout_lens, total_bound=orig_total)
     return out
 
 
@@ -2721,6 +2725,8 @@ def _rel_pos_attention_per_seq(
         return None
     orig_layout = (q_raw.gap, q_raw.align)
     orig_layout_lens = q_raw.layout_lens
+    # see the same capture in _torch_sdpa_varlen_attention
+    orig_total = q_raw.packed_dim.dimension
     if q_raw.has_gap_frames:
         query, key, value = regap(query, 0, align=1), regap(key, 0, align=1), regap(value, 0, align=1)
         q_raw = query.raw_tensor
@@ -2769,7 +2775,7 @@ def _rel_pos_attention_per_seq(
     out = helper.rewrap(inner_new, name="rel_pos_att_per_seq")
     _count_attention_path("rel_pos_per_seq")
     if orig_layout != (0, 1) or orig_layout_lens is not None:
-        out = regap(out, orig_layout[0], align=orig_layout[1], layout_lens=orig_layout_lens)
+        out = regap(out, orig_layout[0], align=orig_layout[1], layout_lens=orig_layout_lens, total_bound=orig_total)
     return out
 
 
@@ -5486,17 +5492,22 @@ def _torch_relayout_frames(inner: Tensor, pos: Tensor, *, packed_dim: Dim, out_d
     # away as an unrelated "illegal memory access". The usual cause is a declared
     # packed_total_bound / regap total_bound that does not cover the per-seq gap+align slack
     # of the TARGET layout.
-    assert_(
-        pos_raw.max() <= n_out,
-        f"packed relayout: target position beyond the buffer ({out_dim}, {n_out} frames + dump slot)."
-        f" The target total is too small for this layout (per-seq gap/align slack not covered?).",
-    )
-    # small int scatters only (1-D, no feature dims involved)
-    inv = torch.zeros((n_out + 1,), dtype=torch.int64, device=values.device)
-    slot_valid = torch.zeros((n_out + 1,), dtype=torch.bool, device=values.device)
-    inv[pos_raw] = torch.arange(n_in, dtype=torch.int64, device=values.device)
-    slot_valid[pos_raw] = True
-    out_raw = gather_relayout(values, inv=inv[:n_out], pos=pos_raw, slot_valid=slot_valid[:n_out])
+    if n_in == 0:
+        out_raw = values.new_zeros((n_out,) + tuple(values.shape[1:]))
+    else:
+        assert_(
+            pos_raw.max() <= n_out,
+            f"packed relayout: target position beyond the buffer ({out_dim}, {n_out} frames + dump slot)."
+            f" The target total is too small for this layout (per-seq gap/align slack not covered?).",
+        )
+        # small int scatters only (1-D, no feature dims involved)
+        inv = torch.zeros((n_out + 1,), dtype=torch.int64, device=values.device)
+        slot_valid = torch.zeros((n_out + 1,), dtype=torch.bool, device=values.device)
+        inv[pos_raw] = torch.arange(n_in, dtype=torch.int64, device=values.device)
+        # a scalar fill, not an index_put of a python bool: that would stage the bool through an
+        # unpinned host tensor, which CUDA-graph capture rejects
+        slot_valid.index_fill_(0, pos_raw, True)
+        out_raw = gather_relayout(values, inv=inv[:n_out], pos=pos_raw, slot_valid=slot_valid[:n_out])
     out = Tensor("regap", dims=(out_dim,) + inner.dims[1:], dtype=inner.dtype, raw_tensor=out_raw)
     if inner.sparse_dim is not None:
         out.sparse_dim = inner.sparse_dim
