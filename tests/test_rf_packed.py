@@ -1527,6 +1527,108 @@ def test_chunked_rel_pos_att_triton_kernel_grad():
         torch.testing.assert_close(g, g_ref)
 
 
+def test_key_range_att_triton_kernel_grad():
+    # The kernel where every query row attends one range of key rows: fwd + all grads vs masked energies,
+    # at dropout 0 and at dropout > 0 with the kernel's own extracted mask, in f32, bf16 and f16.
+    # The ranges overlap, repeat, come in any order, cross block borders, cover all attended keys or nothing,
+    # and the head dims are no powers of 2.
+    # The rows which take no part (keys nobody attends, queries without keys and their gradient) hold NaN,
+    # as gap rows or the tail of a bound-sized packed buffer may: nothing of them may reach the other rows.
+    rf.select_backend_torch()
+    if not torch.cuda.is_available():
+        raise unittest.SkipTest("needs CUDA")
+    try:
+        from returnn.torch.util import key_range_att_triton as m
+    except ImportError as exc:
+        raise unittest.SkipTest(f"triton not available ({exc})")
+
+    dev = "cuda"
+    n_q, n_k, n_attended, n_heads = 150, 170, 150, 2
+    gen = torch.Generator(device="cpu").manual_seed(21)
+    lo = torch.randint(0, n_attended, (n_q,), generator=gen)
+    hi = torch.clamp(lo + torch.randint(0, 90, (n_q,), generator=gen), max=n_attended)
+    lo[:5], hi[:5] = 0, n_attended
+    lo[5:10], hi[5:10] = 30, 30
+    lo, hi = lo.to(dev), hi.to(dev)
+    cols = torch.arange(n_k, device=dev)
+    allowed = (cols[None, :] >= lo[:, None]) & (cols[None, :] < hi[:, None])
+    empty_queries, unused_keys = ~allowed.any(1), ~allowed.any(0)
+    tolerances = {  # rtol, atol of the output, atol of the grads
+        torch.float32: (1e-4, 1e-5, 1e-4),
+        torch.bfloat16: (5e-2, 5e-2, 5e-2),
+        torch.float16: (5e-3, 5e-3, 5e-3),
+    }
+
+    def _reference(q, k, v, keep_mask, dropout_p, scale):
+        s = torch.einsum("ihd,jhd->hij", q, k) * scale
+        s = torch.where(allowed[None], s, float("-inf"))
+        s = torch.where(allowed.any(-1)[None, :, None], s, 0.0)
+        w = torch.where(allowed[None], torch.softmax(s, dim=-1), 0.0)
+        if keep_mask is not None:
+            w = w * keep_mask.permute(1, 0, 2).float() / (1.0 - dropout_p)
+        return torch.einsum("hij,jhd->ihd", w, v)
+
+    f32, bf16, f16 = torch.float32, torch.bfloat16, torch.float16
+    for d, d_v, dropout_p, seed, dtype in [
+        (32, 32, 0.0, 0, f32),
+        (32, 32, 0.3, 999, f32),
+        (24, 40, 0.0, 0, f32),
+        (128, 128, 0.2, 7, f32),
+        (32, 32, 0.2, 5, bf16),
+        (128, 128, 0.0, 0, f16),
+    ]:
+        rtol, atol_out, atol_grad = tolerances[dtype]
+        scale = d**-0.5
+        clean = [
+            torch.randn(n, n_heads, dim, generator=gen).to(dev, dtype) for n, dim in ((n_q, d), (n_k, d), (n_k, d_v))
+        ]
+        leaves = [
+            torch.where(rows[:, None, None], float("nan"), x).requires_grad_(True)
+            for x, rows in zip(clean, (empty_queries, unused_keys, unused_keys))
+        ]
+        out = m.key_range_att(*leaves, lo, hi, dropout_p=dropout_p, seed=seed, scale=scale)
+        d_out = torch.randn(n_q, n_heads, d_v, generator=gen).to(dev, dtype)
+        out.backward(torch.where(empty_queries[:, None, None], float("nan"), d_out))
+        refs = [x.float().requires_grad_(True) for x in clean]
+        keep = None
+        if dropout_p:
+            keep = m.dump_keep_mask(n_q, n_heads, n_k, dropout_p=dropout_p, seed=seed, device=dev)
+        ref = _reference(*refs, keep, dropout_p, scale)
+        where = f"d {d} d_v {d_v} dropout {dropout_p} {dtype}"
+        numpy.testing.assert_allclose(
+            out.detach().float().cpu().numpy(), ref.detach().cpu().numpy(), rtol=rtol, atol=atol_out, err_msg=where
+        )
+        ref.backward(d_out.float())
+        for t, t_ref in zip(leaves, refs):
+            numpy.testing.assert_allclose(
+                t.grad.float().cpu().numpy(), t_ref.grad.cpu().numpy(), rtol=rtol, atol=atol_grad, err_msg=where
+            )
+
+    # The op traces under AOT autograd (fake tensors), as the compiled step of torch_cuda_graph does it.
+    from functorch.compile import aot_function, nop
+
+    def _loss(q_, k_, v_, lo_, hi_):
+        return m.key_range_att(q_, k_, v_, lo_, hi_).square().sum()
+
+    leaves = [torch.randn(n, n_heads, 32, generator=gen).to(dev).requires_grad_(True) for n in (n_q, n_k, n_k)]
+    traced = aot_function(_loss, fw_compiler=nop, bw_compiler=nop)
+    grads = torch.autograd.grad(traced(*leaves, lo, hi), leaves)
+    for g, g_ref in zip(grads, torch.autograd.grad(_loss(*leaves, lo, hi), leaves)):
+        torch.testing.assert_close(g, g_ref)
+
+    # Under CUDA-graph capture, the default seed is drawn inside the graph, so every replay drops other weights.
+    q, k, v = (torch.randn(n, n_heads, 32, generator=gen).to(dev) for n in (n_q, n_k, n_k))
+    m.key_range_att(q, k, v, lo, hi, dropout_p=0.3)  # compiles the kernel, which a capture cannot
+    graph = torch.cuda.CUDAGraph()
+    with torch.cuda.graph(graph):
+        out = m.key_range_att(q, k, v, lo, hi, dropout_p=0.3)
+    replays = []
+    for _ in range(2):
+        graph.replay()
+        replays.append(out.clone())
+    assert not torch.equal(replays[0], replays[1])
+
+
 def test_cast_packed():
     # rf.cast on packed data runs elementwise on the packed buffer (PackedBackend.cast_raw),
     # e.g. from the behavior_version>=27 keep-dtype path of LayerNorm/RMSNorm.
@@ -2492,11 +2594,74 @@ def test_dot_attention_over_own_group_stays_packed():
     _assert_equal_non_padded(out, ref, batch_dim, q_time)
 
 
+def test_dot_attention_group_ranges_stay_packed():
+    """
+    "less_equal", and "equal" without a group size, give every query one range of keys (the key groups are sorted),
+    which the packed backend hands to the Triton kernel of key_range_att_triton on cuda,
+    so packed keys are never unpacked, packed or plain queries and groups alike
+    """
+    if not torch.cuda.is_available():
+        raise unittest.SkipTest("needs CUDA")
+    from test_rf_attention import _grouped_attention_inputs
+
+    rf.select_backend_torch()
+    query, keys, values, query_group, key_group, dims = _grouped_attention_inputs("cuda")
+    batch_dim, q_time, kv_time, heads, feat, v_feat = dims
+    keys.raw_tensor.requires_grad_(True)
+    weight = torch.randn(2, 4, 2, 6, generator=torch.Generator().manual_seed(6)).cuda()
+    valid = (torch.arange(4)[None, :] < q_time.dyn_size_ext.raw_tensor[:, None])[:, :, None, None].cuda()
+    order = [batch_dim, q_time, heads, v_feat]
+    for mode in ("equal", "less_equal"):
+        opts = dict(key_dim=feat, axis=kv_time, key_group=key_group, group_mode=mode)
+        ref = rf.dot_attention(query, keys, values, query_group=query_group, **opts)
+        ref_raw = ref.copy_transpose(order).raw_tensor
+        (ref_grad,) = torch.autograd.grad((ref_raw * weight * valid).sum(), keys.raw_tensor)
+        for gap in (0, 2):
+            for q, q_group in ((query, query_group), (packed.pack(query, gap=gap), packed.pack(query_group, gap=gap))):
+                packed._warned_fallback_ops.clear()
+                packed.attention_path_counts.clear()
+                out = rf.dot_attention(
+                    q, packed.pack(keys, gap=gap), packed.pack(values, gap=gap), query_group=q_group, **opts
+                )
+                where = (mode, gap, packed.is_packed(q))
+                assert not packed._warned_fallback_ops, (where, packed._warned_fallback_ops)
+                assert packed.attention_path_counts == {"key_range_triton": 1}, (where, packed.attention_path_counts)
+                assert packed.is_packed(out) and out.raw_tensor.orig_dims == (batch_dim, q_time), (where, out)
+                _assert_equal_non_padded(out, ref, batch_dim, q_time)
+                out_raw = packed.unpack(out).copy_transpose(order).raw_tensor
+                (grad,) = torch.autograd.grad((out_raw * weight * valid).sum(), keys.raw_tensor)
+                numpy.testing.assert_allclose(grad.cpu().numpy(), ref_grad.cpu().numpy(), rtol=1e-5, atol=1e-6)
+
+
+def test_dot_attention_group_ranges_without_the_kernel():
+    """
+    where the kernel does not run (cpu), group ranges over packed operands take the attention fallback,
+    once allowed, with the result of plain tensors
+    """
+    from test_rf_attention import _grouped_attention_inputs
+
+    rf.select_backend_torch()
+    query, keys, values, query_group, key_group, dims = _grouped_attention_inputs()
+    batch_dim, q_time, kv_time, heads, feat, v_feat = dims
+    packed.set_allowed_fallbacks(["scaled_dot_product_attention"])
+    try:
+        for mode in ("equal", "less_equal"):
+            opts = dict(key_dim=feat, axis=kv_time, key_group=key_group, group_mode=mode)
+            ref = rf.dot_attention(query, keys, values, query_group=query_group, **opts)
+            q, k, v, q_group = (packed.pack(x) for x in (query, keys, values, query_group))
+            out = rf.dot_attention(q, k, v, query_group=q_group, **opts)
+            _assert_equal_non_padded(out, ref, batch_dim, q_time)
+    finally:
+        packed.set_allowed_fallbacks(None)
+
+
 def test_dot_attention_over_own_group_with_device_lens():
     """
     the regime of a captured train step: static buffers, the lengths live on the device,
     and one graph over forward and backward has to serve every batch, an empty sequence included.
     Packed keys, the queries once plain (a padded decoder stream) and once packed.
+    With a group size every query reads its own run of keys, without one (or with "less_equal")
+    every query gets a range of keys, which only the cuda kernel serves packed.
     Without cuda the traced step runs per batch instead of being replayed.
     """
     rf.select_backend_torch()
@@ -2534,7 +2699,7 @@ def test_dot_attention_over_own_group_with_device_lens():
         in_seq = torch.arange(rows.shape[0], device=dev) < n_rows
         return (rows * weight * in_seq[:, None, None]).sum()
 
-    def _step():
+    def _step(mode, max_group_size):
         # as the engine before every step, see returnn.torch.util.graph_capture
         for dim, lens_buf in ((q_time, q_lens_buf), (kv_time, kv_lens_buf)):
             dim.reset_eager()
@@ -2558,7 +2723,8 @@ def test_dot_attention_over_own_group_with_device_lens():
                     axis=kv_time,
                     query_group=group,
                     key_group=key_group,
-                    max_group_size=group_size,
+                    group_mode=mode,
+                    max_group_size=max_group_size,
                 )
                 assert packed.is_packed(out) and out.raw_tensor.packed_dim.dimension is not None, out.raw_tensor
                 totals.append(_total(out))
@@ -2588,7 +2754,7 @@ def test_dot_attention_over_own_group_with_device_lens():
             kv_lens_buf.copy_(torch.tensor(kv_lens, dtype=torch.int32))
         return q_pad, k_pad, v_pad, groups
 
-    def _reference(q_pad, k_pad, v_pad, groups, q_lens, kv_lens):
+    def _reference(q_pad, k_pad, v_pad, groups, q_lens, kv_lens, mode):
         """the same attention through masked energies, on plain padded tensors"""
 
         def _time(name, lens):
@@ -2607,8 +2773,9 @@ def test_dot_attention_over_own_group_with_device_lens():
             )
         )
         query_group = Tensor("q_group", dims=[batch_dim, q_t], dtype="int32", raw_tensor=groups[:, :n_q].clone())
+        key_group = rf.range_over_dim(kv_t) // group_size
         out = rf.dot_attention(
-            q, k, v, key_dim=feat, axis=kv_t, query_group=query_group, key_group=rf.range_over_dim(kv_t) // group_size
+            q, k, v, key_dim=feat, axis=kv_t, query_group=query_group, key_group=key_group, group_mode=mode
         )
         out_raw = out.copy_transpose([batch_dim, q_t, heads, v_feat]).raw_tensor
         valid = (torch.arange(n_q)[None, :] < torch.tensor(q_lens)[:, None])[:, :, None, None]
@@ -2628,41 +2795,44 @@ def test_dot_attention_over_own_group_with_device_lens():
         ((3, 2, 0), (4, 1, 0), 4),
         ((5, 5, 5), (7, 7, 7), 5),
     ]
-    _load(*batches[0])
-    if dev == "cuda":
-        side = torch.cuda.Stream()
-        side.wait_stream(torch.cuda.current_stream())
-        with torch.cuda.stream(side):
-            _step()
-        torch.cuda.current_stream().wait_stream(side)
-        for leaf in leaves:
-            leaf.grad = None
-        graph = torch.cuda.CUDAGraph()
-        with torch.cuda.graph(graph):
-            totals_static = _step()
-
-    for q_lens, kv_lens, seed in batches:
-        q_pad, k_pad, v_pad, groups = _load(q_lens, kv_lens, seed)
+    settings = [("equal", group_size)] + ([("equal", None), ("less_equal", None)] if dev == "cuda" else [])
+    for mode, max_group_size in settings:
+        _load(*batches[0])
         if dev == "cuda":
-            graph.replay()
-            torch.cuda.synchronize()
-            totals = totals_static
-        else:
+            side = torch.cuda.Stream()
+            side.wait_stream(torch.cuda.current_stream())
+            with torch.cuda.stream(side):
+                _step(mode, max_group_size)
+            torch.cuda.current_stream().wait_stream(side)
             for leaf in leaves:
                 leaf.grad = None
-            totals = _step()
-        ref_total, ref_q_pad, ref_q, ref_k, ref_v = _reference(q_pad, k_pad, v_pad, groups, q_lens, kv_lens)
-        where = f"lens {q_lens} {kv_lens}"
-        for total in totals:
-            numpy.testing.assert_allclose(total.detach().cpu(), ref_total, rtol=1e-5, err_msg=where)
-        n_q, n_kv = sum(q_lens), sum(kv_lens)
-        width = ref_q_pad.shape[1]
-        numpy.testing.assert_allclose(q_pad_buf.grad[:, :width].cpu(), ref_q_pad, rtol=1e-5, atol=1e-6, err_msg=where)
-        numpy.testing.assert_allclose(q_buf.grad[:n_q].cpu(), 2.0 * ref_q, rtol=1e-5, atol=1e-6, err_msg=where)
-        numpy.testing.assert_allclose(k_buf.grad[:n_kv].cpu(), 3.0 * ref_k, rtol=1e-5, atol=1e-6, err_msg=where)
-        numpy.testing.assert_allclose(v_buf.grad[:n_kv].cpu(), 3.0 * ref_v, rtol=1e-5, atol=1e-6, err_msg=where)
-        for leaf in leaves:
-            assert torch.isfinite(leaf.grad).all(), where
+            graph = torch.cuda.CUDAGraph()
+            with torch.cuda.graph(graph):
+                totals_static = _step(mode, max_group_size)
+
+        for q_lens, kv_lens, seed in batches:
+            q_pad, k_pad, v_pad, groups = _load(q_lens, kv_lens, seed)
+            if dev == "cuda":
+                graph.replay()
+                torch.cuda.synchronize()
+                totals = totals_static
+            else:
+                for leaf in leaves:
+                    leaf.grad = None
+                totals = _step(mode, max_group_size)
+            ref_total, ref_q_pad, ref_q, ref_k, ref_v = _reference(q_pad, k_pad, v_pad, groups, q_lens, kv_lens, mode)
+            where = f"{mode} {max_group_size} lens {q_lens} {kv_lens}"
+            for total in totals:
+                numpy.testing.assert_allclose(total.detach().cpu(), ref_total, rtol=1e-5, err_msg=where)
+            n_q, n_kv = sum(q_lens), sum(kv_lens)
+            width = ref_q_pad.shape[1]
+            q_pad_grad = q_pad_buf.grad[:, :width].cpu()
+            numpy.testing.assert_allclose(q_pad_grad, ref_q_pad, rtol=1e-5, atol=1e-6, err_msg=where)
+            numpy.testing.assert_allclose(q_buf.grad[:n_q].cpu(), 2.0 * ref_q, rtol=1e-5, atol=1e-6, err_msg=where)
+            numpy.testing.assert_allclose(k_buf.grad[:n_kv].cpu(), 3.0 * ref_k, rtol=1e-5, atol=1e-6, err_msg=where)
+            numpy.testing.assert_allclose(v_buf.grad[:n_kv].cpu(), 3.0 * ref_v, rtol=1e-5, atol=1e-6, err_msg=where)
+            for leaf in leaves:
+                assert torch.isfinite(leaf.grad).all(), where
 
 
 def test_masked_select_static_buffer_follows_a_declared_capacity():

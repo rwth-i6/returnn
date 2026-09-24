@@ -942,7 +942,7 @@ def test_dot_attention_self_att_axis_in_query():
     )
 
 
-def _grouped_attention_inputs():
+def _grouped_attention_inputs(device: str = "cpu"):
     """queries and keys of two sequences, the keys in groups of three frames with a partial last group"""
     import torch
 
@@ -953,20 +953,17 @@ def _grouped_attention_inputs():
         lens = torch.tensor(lens, dtype=torch.int32)
         return Dim(Tensor(f"{name}_lens", dims=[batch], dtype="int32", raw_tensor=lens), name=name)
 
+    def _randn(*shape):
+        return torch.randn(*shape, generator=gen).to(device)
+
     q_time, kv_time = _time("q_time", [4, 3]), _time("kv_time", [7, 5])
     gen = torch.Generator().manual_seed(44)
-    query = Tensor(
-        "q", dims=(batch, q_time, heads, feat), dtype="float32", raw_tensor=torch.randn(2, 4, 2, 4, generator=gen)
-    )
-    keys = Tensor(
-        "k", dims=(batch, kv_time, heads, feat), dtype="float32", raw_tensor=torch.randn(2, 7, 2, 4, generator=gen)
-    )
-    values = Tensor(
-        "v", dims=(batch, kv_time, heads, v_feat), dtype="float32", raw_tensor=torch.randn(2, 7, 2, 6, generator=gen)
-    )
+    query = Tensor("q", dims=(batch, q_time, heads, feat), dtype="float32", raw_tensor=_randn(2, 4, 2, 4))
+    keys = Tensor("k", dims=(batch, kv_time, heads, feat), dtype="float32", raw_tensor=_randn(2, 7, 2, 4))
+    values = Tensor("v", dims=(batch, kv_time, heads, v_feat), dtype="float32", raw_tensor=_randn(2, 7, 2, 6))
     query_group = Tensor("q_group", dims=(batch, q_time), dtype="int32")
-    query_group.raw_tensor = torch.tensor([[0, 1, 2, 2], [0, 1, 1, 0]], dtype=torch.int32)
-    key_group = rf.range_over_dim(kv_time) // 3
+    query_group.raw_tensor = torch.tensor([[0, 1, 2, 2], [0, 1, 1, 0]], dtype=torch.int32, device=device)
+    key_group = rf.range_over_dim(kv_time, device=device) // 3
     return query, keys, values, query_group, key_group, (batch, q_time, kv_time, heads, feat, v_feat)
 
 

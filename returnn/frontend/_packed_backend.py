@@ -1535,6 +1535,26 @@ def _sdpa_no(reason: str) -> None:
     return None
 
 
+def _sdpa_dropout_p(att_dropout: float, att_dropout_broadcast: bool) -> Optional[float]:
+    """
+    :param att_dropout: dropout on the attention weights
+    :param att_dropout_broadcast: whether that dropout broadcasts over all but the kv spatial dim
+    :return: the dropout probability a fused kernel applies elementwise to the attention weights
+        (as rf.dropout does it, 1/(1-p) scaling, modulo the RNG realization), 0.0 when inactive,
+        None when no such kernel can express it:
+        legacy broadcast dropout (behavior <= 18, another mask shape)
+        or a dynamic train flag (no static dropout probability).
+    """
+    if not att_dropout:
+        return 0.0
+    if att_dropout_broadcast:
+        return None
+    train_flag = rf.get_run_ctx().is_train_flag_enabled(func=rf.dropout)
+    if not isinstance(train_flag, bool):
+        return None
+    return att_dropout if train_flag else 0.0
+
+
 def _harmonize_qkv_dtypes(q_t, k_t, v_t):
     """
     Mixed q/k/v dtypes occur under autocast:
@@ -2459,6 +2479,152 @@ def _torch_triton_rel_pos_attention(
     out_inner.raw_tensor = out_t
     _count_attention_path("rel_pos_triton")
     return qu_raw.rewrap(out_inner, name="rel_pos_att_triton")
+
+
+def _torch_triton_key_range_attention(
+    query: Tensor,
+    key: Tensor,
+    value: Tensor,
+    *,
+    key_start: Optional[Tensor],
+    key_end: Tensor,
+    dropout_p: float,
+    v_feat_dim: Dim,
+    qk_feat_dim: Dim,
+    kv_spatial_dim: Dim,
+    query_spatial_dim: Dim,
+    scale: Optional[float],
+) -> Optional[Tensor]:
+    """
+    Attention where every query attends one range of key positions,
+    via :mod:`returnn.torch.util.key_range_att_triton` over the packed key buffer:
+    only the keys of each range are read, with post-softmax weight dropout.
+    Keys and values packed over (batch, kv_spatial_dim), any layout as-is.
+    The query packed over (batch, query_spatial_dim), or plain, then it gets packed first
+    (e.g. a padded decoder stream over the packed encoder frames).
+    Rows of the query buffer outside the sequences attend nothing,
+    so bound-sized buffers work (CUDA-graph capture).
+    CUDA only. None if not applicable.
+
+    :param query:
+    :param key:
+    :param value:
+    :param key_start: see :func:`Backend.scaled_dot_product_attention_key_ranges`
+    :param key_end: see :func:`Backend.scaled_dot_product_attention_key_ranges`
+    :param dropout_p: resolved dropout probability, see :func:`_sdpa_dropout_p`
+    :param v_feat_dim:
+    :param qk_feat_dim:
+    :param kv_spatial_dim:
+    :param query_spatial_dim:
+    :param scale:
+    :return: the attention output, packed like the query
+    """
+    if not (is_packed(key) and is_packed(value)):
+        return None
+    k_raw = _raw(key)
+    if k_raw.inner_backend.name != "torch" or key.device is None or not str(key.device).startswith("cuda"):
+        return None
+    try:
+        from returnn.torch.util import key_range_att_triton
+    except ImportError:
+        return None
+    if not key_range_att_triton.is_available():
+        return None
+    if len(k_raw.orig_dims) != 2 or k_raw.orig_dims[-1] != kv_spatial_dim:
+        return None
+    batch_dim = k_raw.orig_dims[0]
+    head_dims = [d for d in query.dims if d not in (batch_dim, query_spatial_dim, qk_feat_dim)]
+    if len(head_dims) != 1 or head_dims[0].dimension is None:
+        return None
+    heads_dim = head_dims[0]
+    if key.dims_set != {batch_dim, kv_spatial_dim, heads_dim, qk_feat_dim}:
+        return None
+    if value.dims_set != {batch_dim, kv_spatial_dim, heads_dim, v_feat_dim}:
+        return None
+    value = _conform_packing(value, k_raw)
+    v_raw = _raw(value)
+    if not k_raw.same_packing(v_raw):
+        return None
+    if not is_packed(query):
+        lens = query_spatial_dim.dyn_size_ext
+        if batch_dim not in query.dims_set or lens is None or lens.dims != (batch_dim,):
+            return None
+        total_bound = None
+        if rf.is_static_traceable():
+            # a plain query holds every sequence at the capacity already, so this bound costs nothing extra
+            n_seqs = _capacity_n([batch_dim, query_spatial_dim])
+            if n_seqs is None or query_spatial_dim.capacity is None:
+                return None
+            total_bound = n_seqs * query_spatial_dim.capacity
+        query = pack(query, dims=[batch_dim, query_spatial_dim], total_bound=total_bound)
+    q_raw = _raw(query)
+    if q_raw.orig_dims != (batch_dim, query_spatial_dim):
+        return None
+    ranges = []
+    for x in (key_start, key_end):
+        if x is not None:
+            x = _pack_plain_like(_conform_packing(x, q_raw), q_raw)
+            if not is_packed(x) or not q_raw.same_packing(_raw(x)) or _raw(x).inner.dims != (q_raw.packed_dim,):
+                return None
+            x = rf.cast(_raw(x).inner, "int32")
+        ranges.append(x)
+    start, end = ranges
+    dev = q_raw.inner.device
+    # key positions are within the sequence, the kernel takes rows of the key buffer
+    seq = _frame_coords(q_raw, batch_dim)
+    kv_starts, _ = _seq_starts_math(k_raw.orig_dims, k_raw.gap, k_raw.align, layout_lens=k_raw.layout_lens, device=dev)
+    first_row = rf.gather(rf.cast(kv_starts, "int32"), indices=seq, axis=batch_dim)
+    n_keys = rf.gather(rf.cast(kv_spatial_dim.get_dyn_size_ext_for_device(dev), "int32"), indices=seq, axis=batch_dim)
+    hi = first_row + rf.minimum(rf.maximum(end, 0), n_keys)
+    lo = first_row if start is None else first_row + rf.minimum(rf.maximum(start, 0), n_keys)
+    mask = _frame_mask(q_raw)
+    if mask is not None:
+        # gap rows and the tail of a bound-sized buffer get an empty range: no work, zero output, no gradient
+        lo, hi = rf.where(mask, lo, 0), rf.where(mask, hi, 0)
+    q_t = q_raw.inner.copy_transpose([q_raw.packed_dim, heads_dim, qk_feat_dim]).raw_tensor
+    k_t = k_raw.inner.copy_transpose([k_raw.packed_dim, heads_dim, qk_feat_dim]).raw_tensor
+    v_t = v_raw.inner.copy_transpose([v_raw.packed_dim, heads_dim, v_feat_dim]).raw_tensor
+    q_t, k_t, v_t = _harmonize_qkv_dtypes(q_t, k_t, v_t)
+    import torch
+
+    # noinspection PyArgumentList
+    if (
+        q_t.dtype not in (torch.float16, torch.bfloat16)
+        and hasattr(torch, "get_autocast_dtype")  # torch >= 2.4
+        and torch.is_autocast_enabled("cuda")
+    ):
+        # like the rel-pos kernel: run in the autocast dtype (the RF raws are often still f32)
+        amp_dtype = torch.get_autocast_dtype("cuda")
+        if amp_dtype in (torch.float16, torch.bfloat16):
+            q_t, k_t, v_t = q_t.to(amp_dtype), k_t.to(amp_dtype), v_t.to(amp_dtype)
+    if q_t.dtype not in (torch.float16, torch.bfloat16, torch.float32):
+        return None
+    try:
+        out_t = key_range_att_triton.key_range_att(
+            q_t,
+            k_t,
+            v_t,
+            lo.raw_tensor,
+            hi.raw_tensor,
+            dropout_p=dropout_p,
+            scale=qk_feat_dim.dimension**-0.5 if scale is None else scale,
+        )
+    except (RuntimeError, NotImplementedError) as exc:
+        _warn_fallback_once(
+            "scaled_dot_product_attention",
+            f"Triton key range kernel failed here ({type(exc).__name__}: {exc})",
+            action="using the mask and the unpack -> op -> repack fallback",
+        )
+        return None
+    out_inner = Tensor(
+        "key_range_att_triton",
+        dims=[q_raw.packed_dim, heads_dim, v_feat_dim],
+        dtype=q_raw.inner_backend.get_dtype_name_raw(out_t),
+        feature_dim=v_feat_dim,
+    )
+    out_inner.raw_tensor = out_t
+    _count_attention_path("key_range_triton")
+    return q_raw.rewrap(out_inner, name="key_range_att_triton")
 
 
 def _jax_triton_rel_pos_attention(
@@ -3464,20 +3630,7 @@ class PackedBackend(Backend[PackedRawTensor]):
         see :func:`_torch_sdpa_varlen_attention`.
         Generic fallback otherwise (which then uses the packed matmul/softmax handling).
         """
-        dropout_p = 0.0
-        if att_dropout:
-            if att_dropout_broadcast:
-                # Legacy broadcast dropout (behavior <=18):
-                # a different mask shape than elementwise SDPA dropout_p.
-                dropout_p = None
-            else:
-                train_flag = rf.get_run_ctx().is_train_flag_enabled(func=rf.dropout)
-                if isinstance(train_flag, bool):
-                    # rf.dropout here == SDPA dropout_p
-                    # (elementwise on att weights, 1/(1-p) scaling, modulo the RNG realization).
-                    dropout_p = att_dropout if train_flag else 0.0
-                else:
-                    dropout_p = None  # dynamic train flag, cannot resolve to a static dropout_p
+        dropout_p = _sdpa_dropout_p(att_dropout, att_dropout_broadcast)
         if is_packed(key) and is_packed(value) and not is_packed(query):
             # Keys which have a row per query, e.g. every query with the run of keys of its own group
             # (rf.dot_attention with max_group_size): a plain query follows their packing,
@@ -3652,6 +3805,64 @@ class PackedBackend(Backend[PackedRawTensor]):
             kv_spatial_dim=kv_spatial_dim,
             query_spatial_dim=query_spatial_dim,
             is_causal=is_causal,
+            scale=scale,
+        )
+
+    @classmethod
+    def scaled_dot_product_attention_key_ranges(
+        cls,
+        query: Tensor,
+        key: Tensor,
+        value: Tensor,
+        *,
+        key_start: Optional[Tensor],
+        key_end: Tensor,
+        att_dropout: float = 0.0,
+        att_dropout_broadcast: bool,
+        v_feat_dim: Dim,
+        qk_feat_dim: Dim,
+        kv_spatial_dim: Dim,
+        query_spatial_dim: Dim,
+        scale: Optional[float] = None,
+    ):
+        """
+        Attention where every query attends one range of key positions.
+        Packed specialization: the Triton kernel over the packed key buffer
+        (:func:`_torch_triton_key_range_attention`), which reads only the keys of each range,
+        has dropout and runs on bound-sized buffers (CUDA-graph capture).
+        Otherwise the generic mask path, i.e. the attention with a mask,
+        which has no packed fast path (see :func:`scaled_dot_product_attention`).
+        """
+        dropout_p = _sdpa_dropout_p(att_dropout, att_dropout_broadcast)
+        if _att_fast_paths_enabled("scaled_dot_product_attention") and dropout_p is not None:
+            out = _torch_triton_key_range_attention(
+                query,
+                key,
+                value,
+                key_start=key_start,
+                key_end=key_end,
+                dropout_p=dropout_p,
+                v_feat_dim=v_feat_dim,
+                qk_feat_dim=qk_feat_dim,
+                kv_spatial_dim=kv_spatial_dim,
+                query_spatial_dim=query_spatial_dim,
+                scale=scale,
+            )
+            if out is not None:
+                return out
+        return super().scaled_dot_product_attention_key_ranges(
+            query,
+            key,
+            value,
+            # a plain mask over (queries, keys), the queries unpacked later if they are
+            key_start=_unpack_if_packed(key_start),
+            key_end=_unpack_if_packed(key_end),
+            att_dropout=att_dropout,
+            att_dropout_broadcast=att_dropout_broadcast,
+            v_feat_dim=v_feat_dim,
+            qk_feat_dim=qk_feat_dim,
+            kv_spatial_dim=kv_spatial_dim,
+            query_spatial_dim=query_spatial_dim,
             scale=scale,
         )
 
