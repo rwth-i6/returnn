@@ -3478,6 +3478,16 @@ class PackedBackend(Backend[PackedRawTensor]):
                     dropout_p = att_dropout if train_flag else 0.0
                 else:
                     dropout_p = None  # dynamic train flag, cannot resolve to a static dropout_p
+        if is_packed(key) and is_packed(value) and not is_packed(query):
+            # Keys which have a row per query, e.g. every query with the run of keys of its own group
+            # (rf.dot_attention with max_group_size): a plain query follows their packing,
+            # then this is the chunk-local case below.
+            k_raw = _raw(key)
+            att_dims = [kv_spatial_dim, query_spatial_dim, qk_feat_dim, v_feat_dim]
+            if set(k_raw.orig_dims) <= query.dims_set and not any(
+                _dim_refs_packed(d, k_raw) for d in att_dims if d is not None
+            ):
+                query = _pack_plain_like(query, k_raw)
         if is_packed(query) and is_packed(key) and is_packed(value):
             # Chunk-local attention: every attention axis (kv, query spatial, feat) is a plain dim,
             # the packed dims are pure batch dims (e.g. (batch, chunked time) with per-chunk axes).
@@ -3490,9 +3500,9 @@ class PackedBackend(Backend[PackedRawTensor]):
             if not any(_dim_refs_packed(d, q_raw) for d in att_dims if d is not None):
                 key = _conform_packing(key, q_raw)
                 value = _conform_packing(value, q_raw)
-                mask_ = (
-                    _conform_packing(attention_mask, q_raw) if isinstance(attention_mask, Tensor) else attention_mask
-                )
+                mask_ = attention_mask
+                if isinstance(mask_, Tensor):
+                    mask_ = _pack_plain_like(_conform_packing(mask_, q_raw), q_raw)
                 k_raw, v_raw = _raw(key), _raw(value)
                 if q_raw.same_packing(k_raw) and q_raw.same_packing(v_raw):
                     if isinstance(mask_, Tensor) and is_packed(mask_):
