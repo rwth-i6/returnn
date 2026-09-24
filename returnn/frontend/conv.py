@@ -188,7 +188,7 @@ def conv(
     out_spatial_dims: Optional[Sequence[Dim]] = None,
     filter: Tensor,
     filter_size: Sequence[Dim],
-    padding: Union[str, int, Sequence[int]],
+    padding: Union[str, int, Sequence[Union[str, int, Tuple[int, int]]]],
     strides: Optional[Union[int, Sequence[int]]] = None,
     dilation_rate: Optional[Union[int, Sequence[int]]] = None,
     groups: Optional[int] = None,
@@ -215,6 +215,8 @@ def conv(
         (or global config option ``rf_use_consistent_same_padding``)
         and is now consistent independent of dimension size.
         See :func:`_consistent_same_padding` for more details.
+        Or a sequence with one entry per spatial dim, each of the above or a (left, right) pair of ints,
+        which pads the two sides by their own amount, e.g. ``[(0, 16)]``.
     :param strides: the default (if it is None) is 1
     :param dilation_rate:
     :param groups:
@@ -235,6 +237,8 @@ def conv(
     for in_spatial_dim in in_spatial_dims:
         if in_spatial_dim not in source.dims:
             raise ValueError(f"conv: source {source} does not have spatial dim {in_spatial_dim}")
+    if isinstance(padding, (list, tuple)) and len(padding) != len(in_spatial_dims):
+        raise ValueError(f"conv: padding {padding!r} needs one entry per spatial dim {in_spatial_dims}")
     if padding == "same" and _any_is_non_default(strides, default=1) and _should_use_consistent_same_padding():
         source, in_spatial_dims, padding = _consistent_same_padding(
             source, in_spatial_dims=in_spatial_dims, filter_size=filter_size, dilation_rate=dilation_rate, pad_value=0
@@ -743,12 +747,12 @@ def make_conv_out_spatial_dims(
     in_spatial_dims: Sequence[Dim],
     *,
     filter_size: Union[Sequence[Union[int, Dim]], int, Dim],
-    padding: Union[str, int, Sequence[int]],
+    padding: Union[str, int, Sequence[Union[str, int, Tuple[int, int]]]],
     strides: Union[Sequence[int], int] = 1,
     dilation_rate: Union[Sequence[int], int] = 1,
     description_prefix: Optional[str] = None,
 ) -> List[Dim]:
-    """create out spatial dims from in spatial dims"""
+    """create out spatial dims from in spatial dims, for the padding see :func:`conv`"""
     nd = len(in_spatial_dims)
     if isinstance(filter_size, (int, Dim)):
         filter_size = [filter_size] * nd
@@ -761,7 +765,7 @@ def make_conv_out_spatial_dims(
     if isinstance(padding, (int, str)):
         padding = [padding] * nd
     assert nd == len(in_spatial_dims) == len(filter_size) == len(strides) == len(dilation_rate) == len(padding)
-    padding = [p.lower() if isinstance(p, str) else p for p in padding]
+    padding = [p.lower() if isinstance(p, str) else tuple(p) if isinstance(p, list) else p for p in padding]
     out_spatial_dims = []
     for i in range(nd):
         out_spatial_dims.append(
@@ -785,7 +789,7 @@ def calc_conv_out_length(
     *,
     filter_size: Union[T, int, Dim, Tensor],
     stride: int,
-    padding: Union[str, int],
+    padding: Union[str, int, Tuple[int, int]],
     dilation_rate: int = 1,
     name: Optional[str] = None,
 ) -> T:
@@ -796,7 +800,7 @@ def calc_conv_out_length(
     :param filter_size: e.g. 2, for the corresponding axis
     :param stride: e.g. 1, for the corresponding axis
     :param dilation_rate: e.g. 1
-    :param padding: "valid" or "same" or int
+    :param padding: "valid" or "same" or int, or a (left, right) pair of ints
     :param name:
     :return: the output dimension
     """
@@ -818,10 +822,17 @@ def calc_conv_out_length(
             out_length = in_length.ceildiv_right(stride)
         else:
             out_length = _ceildiv(in_length, stride)
-    elif padding == "valid" or isinstance(padding, int):
+    elif padding == "valid" or isinstance(padding, (int, tuple)):
         if isinstance(padding, int) and padding != 0:
             assert padding > 0
             in_length = padding + in_length + padding
+        elif isinstance(padding, tuple):
+            pad_left, pad_right = padding
+            assert pad_left >= 0 and pad_right >= 0, f"invalid padding {padding!r}"
+            if pad_left:
+                in_length = pad_left + in_length
+            if pad_right:
+                in_length = in_length + pad_right
 
         if filter_size_int == 1:
             valid_part = in_length
