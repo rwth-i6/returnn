@@ -74,6 +74,8 @@ class DistributedContext:
         else:
             raise ValueError(f"invalid reduce_type {self._reduce_type!r}")
 
+        self._eval_on_all_ranks = bool(self._opts.get("eval_on_all_ranks", True))
+
         self._check_no_unknown_opts()
 
     def __repr__(self):
@@ -114,6 +116,14 @@ class DistributedContext:
         """param sync step"""
         return self._param_sync_step
 
+    def eval_on_all_ranks(self) -> bool:
+        """
+        :return: whether an eval dataset is split over all ranks, each rank evaluating its share,
+            instead of being evaluated on rank 0 alone while the other ranks wait.
+            Only datasets which can report their seq order are split, see the torch engine.
+        """
+        return self._eval_on_all_ranks
+
     def maybe_make_distributed_module(self, module: torch.nn.Module) -> Optional[DistributedDataParallel]:
         """
         Maybe make a wrapped distributed module.
@@ -128,9 +138,13 @@ class DistributedContext:
         if cls is not DistributedDataParallel:
             _logger.warning(f"Using custom class {cls} instead of DistributedDataParallel, might be unsupported.")
         kwargs = self._opts.get("options", {})
+        device_ids = [self.local_rank()]
+        param = next(module.parameters(), None)
+        if param is not None and param.device.type == "cpu":
+            device_ids = None  # DistributedDataParallel takes no device ids for a CPU module (e.g. gloo)
         return cls(
             module=module,
-            device_ids=[self.local_rank()],
+            device_ids=device_ids,
             **kwargs,
         )
 

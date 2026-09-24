@@ -15,6 +15,7 @@ from returnn.datasets.util.strings import str_to_numpy_array
 from returnn.util.better_exchook import better_exchook
 
 if TYPE_CHECKING:
+    import multiprocessing.managers
     import multiprocessing.sharedctypes
 
 ResetCallbackT = Callable[[], None]
@@ -56,6 +57,30 @@ class ReturnnDatasetResetMpSharedEpochCallback:
         # Use epoch_mp_shared to get the current epoch correctly in worked processes
         epoch = self.epoch_mp_shared.value or None
         self.dataset.init_seq_order(epoch=epoch)
+
+
+class ReturnnDatasetResetMpSharedSeqOrderCallback(ReturnnDatasetResetMpSharedEpochCallback):
+    """
+    Can be used as reset_callback.
+    Like :class:`ReturnnDatasetResetMpSharedEpochCallback`,
+    but inits the dataset with a predefined seq order (list of corpus seq indices),
+    which the main process puts into ``seq_order_mp_shared`` before it creates the iterator.
+    E.g. the torch engine gives each rank its share of an eval dataset this way.
+    The dataset must support ``init_seq_order(seq_order=...)``.
+    """
+
+    def __init__(
+        self,
+        dataset: ReturnnDataset,
+        epoch_mp_shared: multiprocessing.sharedctypes.Synchronized,
+        seq_order_mp_shared: multiprocessing.managers.ListProxy,
+    ):
+        super().__init__(dataset=dataset, epoch_mp_shared=epoch_mp_shared)
+        self.seq_order_mp_shared = seq_order_mp_shared
+
+    def __call__(self):
+        epoch = self.epoch_mp_shared.value or None
+        self.dataset.init_seq_order(epoch=epoch, seq_order=list(self.seq_order_mp_shared))
 
 
 class ReturnnDatasetResetNoOpCallback:
