@@ -117,8 +117,11 @@ class Engine(EngineBase):
             self._torch_distributed_ctx = dist_get_ctx(config=config)
             local_rank = self._torch_distributed_ctx.local_rank()
             print(f"Start running torch distributed training on local rank {local_rank}.", file=log.v2)
-            assert self._device == "cuda", f"torch distributed: unexpected device {self._device!r}"
-            self._device = f"cuda:{local_rank}"
+            if self._device == "cpu" and config.value("device", None) == "cpu":
+                pass  # explicitly requested, e.g. the gloo backend for tests
+            else:
+                assert self._device == "cuda", f"torch distributed: unexpected device {self._device!r}"
+                self._device = f"cuda:{local_rank}"
 
         if self._device == "cuda" or self._device.startswith("cuda:"):
             # Theano and TensorFlow print sth like: Using gpu device 2: GeForce GTX 980 (...)
