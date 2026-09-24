@@ -1345,7 +1345,7 @@ def _build_cuda_graph_train_config_and_dataset(*, compile_: bool, torch_model: b
     def _train_step(*, model, extern_data: TensorDict, **_kwargs):
         data = extern_data["data"]
         classes = extern_data["classes"]
-        if not torch_model:
+        if not torch_model and rf.get_run_ctx().train_flag:  # the eval between the epochs is no train step
             model.steps_seen.assign_add(1)
         if torch_model:
             logits = model.logits(data)
@@ -1399,7 +1399,10 @@ def _build_cuda_graph_train_config_and_dataset(*, compile_: bool, torch_model: b
     )
     dataset = init_dataset({"class": "Task12AXDataset", "num_seqs": 100, "name": "train", "fixed_random_seed": 1})
     dataset.init_seq_order(epoch=1)
-    return config, dataset
+    # the eval at the epoch end rebinds the dyn sizes the train losses are normalized by
+    dev_dataset = init_dataset({"class": "Task12AXDataset", "num_seqs": 5, "name": "dev", "fixed_random_seed": 3})
+    dev_dataset.init_seq_order(epoch=1)
+    return config, dataset, dev_dataset
 
 
 def _run_cuda_graph_train(*, compile_: bool, torch_model: bool = False):
@@ -1410,17 +1413,25 @@ def _run_cuda_graph_train(*, compile_: bool, torch_model: bool = False):
     import tempfile
     from returnn.log import log as returnn_log
 
-    config, dataset = _build_cuda_graph_train_config_and_dataset(compile_=compile_, torch_model=torch_model)
+    config, dataset, dev_dataset = _build_cuda_graph_train_config_and_dataset(
+        compile_=compile_, torch_model=torch_model
+    )
     log_file = tempfile.NamedTemporaryFile(mode="wt", suffix=f"-cudagraph-{compile_}.log", delete=False)
     log_file.close()
     returnn_log.initialize(logs=[log_file.name], verbosity=[5])
     try:
         with global_config_ctx(config):
             engine = Engine(config=config)
-            engine.init_train_from_config(train_data=dataset)
+            engine.init_train_from_config(train_data=dataset, dev_data=dev_dataset)
             engine.train()
             assert engine._graph_capture is not None
             assert engine._graph_capture._graph is not None, "graph never captured"
+            # the loss denominators must follow the static length buffers, not the dyn sizes
+            # the eval left behind (it rebinds the very size tensors they are reduced from)
+            n_frames = int(engine._graph_capture._lens_bufs["data"].sum())
+            assert n_frames > 0
+            for name, loss in engine._graph_capture._ctx.losses.items():
+                assert int(loss.get_inv_norm_factor().raw_tensor) == n_frames, name
             assert engine._graph_capture.captures_optimizer
             for param_group in engine._updater.optimizer.param_groups:
                 lr = param_group["lr"]  # device-tensor LR input of the captured optimizer
