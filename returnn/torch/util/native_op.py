@@ -672,9 +672,7 @@ def get_ctc_fsa_fast_bw(
 
     if edges_bound is not None:
         seq_lens_i32 = seq_lens.to(torch.int32)
-        n_e_per_seq = seq_lens_i32 * 5 + 5  # exact valid count per seq (len 0 uses 2 of its 5 slots)
-        edge_offsets = torch.zeros((n_batch + 1,), dtype=torch.int32, device=targets.device)
-        edge_offsets[1:] = torch.cumsum(n_e_per_seq, dim=0)
+        edge_offsets = _ctc_fsa_edge_offsets(seq_lens_i32, n_time=n_time, edges_bound=edges_bound)
         # a too-small bound would silently DROP edges of the tail seqs -> must trip loudly
         assert_(edge_offsets[-1] <= edges_bound, "get_ctc_fsa_fast_bw edges_bound too small")
         weights = torch.zeros((edges_bound,), device=targets.device)
@@ -693,6 +691,23 @@ def get_ctc_fsa_fast_bw(
         # an FSA built inside the capture lives in the graph's private pool, it must not serve any eager step
         _ctc_fsa_cache_set(targets_arg, seq_lens_arg, blank_idx, label_loop, edges_bound, res)
     return res
+
+
+def _ctc_fsa_edge_offsets(seq_lens: torch.Tensor, *, n_time: int, edges_bound: Optional[int]) -> torch.Tensor:
+    """
+    :param seq_lens: (batch,), the target lengths
+    :param n_time: the width of the targets buffer
+    :param edges_bound: see :func:`get_ctc_fsa_fast_bw`, None for the rectangular edge layout
+    :return: (batch+1,), int32, ascending: seq b owns the edges [offsets[b], offsets[b+1]) of the CTC automaton
+        of :func:`get_ctc_fsa_fast_bw`, 5*len+5 of them in the packed layout (len 0 uses 2 of its 5),
+        5*(n_time-1)+10 in the rectangular one
+    """
+    n_batch = seq_lens.shape[0]
+    if edges_bound is None:
+        return torch.arange(n_batch + 1, dtype=torch.int32, device=seq_lens.device) * (5 * (n_time - 1) + 10)
+    edge_offsets = torch.zeros((n_batch + 1,), dtype=torch.int32, device=seq_lens.device)
+    edge_offsets[1:] = torch.cumsum(seq_lens.to(torch.int32) * 5 + 5, dim=0)
+    return edge_offsets
 
 
 # The aux CTC heads (e.g. aux_loss_layers [4, 10, 16]) all score the SAME targets,
@@ -877,20 +892,21 @@ def ctc_loss_packed(
         edges_bound=edges_bound,
     )
     seq_mask = sequence_mask_time_major(logits_seq_lens, maxlen=max_seq_len)  # (time,batch), bool
-    # static state count, see the construct_kernel state numbering: (2*n_time+3) states per seq.
-    # (the default in fast_baum_welch_packed sizes by start_end_states.max(),
-    # a data-dependent device read -- a sync, and illegal under CUDA-graph capture)
-    n_batch, n_tgt_time = targets.shape
-    if edges_bound is not None:
-        # packed FSA: the states are numbered by content too (see construct_kernel),
-        # so the count follows the targets TOTAL bound implied by edges_bound
-        # (edges_bound == 5 * targets_total_bound + 5 * batch),
-        # not batch * buffer capacity. Floor division stays an upper bound.
-        n_states = 2 * (edges_bound // 5) + n_batch
-    else:
-        n_states = n_batch * (2 * n_tgt_time + 3)
+    # every seq owns a contiguous slice of the automaton (see construct_kernel), the op runs one seq per block.
+    # Its state count is static, (2*len+3) at most (2*n_tgt_time+3), as a data-dependent max over the lens
+    # would be a device read, a sync, and illegal under CUDA-graph capture.
+    n_tgt_time = targets.shape[1]
+    edge_offsets = _ctc_fsa_edge_offsets(targets_seq_lens, n_time=n_tgt_time, edges_bound=edges_bound)
     loss = _FastBaumWelchScoresPackedAutogradFunc.apply(
-        logits, logits_normalize, seq_starts, seq_mask, edges, weights, start_end_states, n_states
+        logits,
+        logits_normalize,
+        seq_starts,
+        seq_mask,
+        edges,
+        weights,
+        start_end_states,
+        edge_offsets,
+        2 * n_tgt_time + 3,
     )
     return loss
 
@@ -911,7 +927,8 @@ class _FastBaumWelchScoresPackedAutogradFunc(torch.autograd.Function):
         edges: torch.Tensor,
         weights: torch.Tensor,
         start_end_states: torch.Tensor,
-        n_states: Optional[int] = None,
+        edge_offsets: torch.Tensor,
+        max_seq_states: int,
     ) -> torch.Tensor:
         """
         :return: full-sum loss per seq (batch,)
@@ -927,7 +944,8 @@ class _FastBaumWelchScoresPackedAutogradFunc(torch.autograd.Function):
             edges=edges,
             weights=weights,
             start_end_states=start_end_states,
-            n_states=n_states,
+            edge_offsets=edge_offsets,
+            max_seq_states=max_seq_states,
         )
         loss = obs_scores[0]  # (batch,)
         # map every frame of the (possibly gapped) packed buffer to its seq, to scale grads by the
@@ -968,7 +986,7 @@ class _FastBaumWelchScoresPackedAutogradFunc(torch.autograd.Function):
         # gap frames have no valid fwdbwd -> select 0 (not multiply, to avoid nan*0 on uninit frames)
         grad_x = torch.where(valid_mask[:, None], grad_x, 0.0)
         grad_x *= grad_output[frame_seq_idx][:, None]
-        return grad_x, None, None, None, None, None, None, None
+        return grad_x, None, None, None, None, None, None, None, None
 
 
 def fast_baum_welch_packed(
@@ -979,10 +997,13 @@ def fast_baum_welch_packed(
     edges: torch.Tensor,
     weights: torch.Tensor,
     start_end_states: torch.Tensor,
-    n_states: Optional[int] = None,
+    edge_offsets: torch.Tensor,
+    max_seq_states: int,
 ) -> Tuple[torch.Tensor, torch.Tensor]:
     """
     Packed variant of :func:`fast_baum_welch`, see :class:`NativeOp.FastBaumWelchPackedOp`.
+    Every seq owns a contiguous slice of the automaton, its states from its start to its end state
+    and its edges from ``edge_offsets``, as the CTC automata of :func:`get_ctc_fsa_fast_bw` do.
 
     :param am_scores: (total_time, dim), in -log space. the seqs concatenated along time
     :param seq_starts: (batch,), int32. start offset of each seq in the total_time axis
@@ -991,19 +1012,17 @@ def fast_baum_welch_packed(
     :param weights: (num_edges,), weights of the edges
     :param start_end_states: (2, batch), (start,end) state idx in automaton.
         there is only one single automaton.
-    :param n_states: state count of the automaton. derived from start_end_states by default
-        (a data-dependent device read, i.e. a sync, and illegal under CUDA-graph capture --
-        pass it if you know it statically, as :func:`ctc_loss_packed` does).
+    :param edge_offsets: (batch+1,), ascending, seq b owns the edges [edge_offsets[b], edge_offsets[b+1])
+    :param max_seq_states: the maximum state count of one seq, static (a max over the device data would be a sync)
     :return: (fwdbwd, obs_scores), fwdbwd is (total_time, dim), obs_scores is (max_time, batch), in -log space
     """
     op = make_fast_baum_welch_packed_op()
     float_idx = seq_mask.float()
-    if n_states is None:
-        last_state_idx = int(start_end_states[1].max())  # see get_automata_for_batch
-        assert last_state_idx >= 0, f"fast_baum_welch_packed last_state_idx must be >= 0, got {last_state_idx}"
-        n_states = last_state_idx + 1
     seq_starts = seq_starts.to(torch.int32)
-    fwdbwd, obs_scores = op(am_scores, edges, weights, start_end_states, float_idx, seq_starts, n_states)  # noqa
+    edge_offsets = edge_offsets.to(torch.int32)
+    fwdbwd, obs_scores = op(  # noqa
+        am_scores, edges, weights, start_end_states, float_idx, seq_starts, edge_offsets, max_seq_states
+    )
     return fwdbwd, obs_scores
 
 

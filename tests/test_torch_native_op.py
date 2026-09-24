@@ -528,6 +528,82 @@ def test_ctc_loss_packed_edge_buffer_beyond_32_bit():
     torch.testing.assert_close(grads[1], grads[0])
 
 
+def test_ctc_loss_packed_kernels_independent_of_frame_bound():
+    """
+    Under CUDA-graph capture the frame bound is the capacity, far above most sequences,
+    and every kernel launch costs time in every replay.
+    The packed CTC runs each sequence over its own frames, so its launches must not grow with the bound.
+    """
+    if not torch.cuda.is_available():
+        raise SkipTest("CUDA not available")
+    from torch.profiler import profile, ProfilerActivity
+
+    torch.manual_seed(3)
+    lens = torch.tensor([9, 7, 4], dtype=torch.int32, device="cuda")
+    logits = torch.randn(int(lens.sum()), 6, device="cuda")
+    opts = dict(
+        logits=logits,
+        seq_starts=torch.tensor([0, 9, 16], dtype=torch.int32, device="cuda"),
+        logits_seq_lens=lens,
+        targets=torch.tensor([[1, 2, 3, 1], [2, 0, 1, 0], [3, 3, 0, 0]], dtype=torch.int32, device="cuda"),
+        targets_seq_lens=torch.tensor([4, 3, 2], dtype=torch.int32, device="cuda"),
+        blank_index=5,
+        edges_bound=5 * 9 + 5 * 3,
+    )
+    counts = []
+    for frame_bound in (9, 90):
+        ctc_loss_packed(max_seq_len=frame_bound, **opts)
+        torch.cuda.synchronize()
+        with profile(activities=[ProfilerActivity.CUDA]) as prof:
+            ctc_loss_packed(max_seq_len=frame_bound, **opts)
+            torch.cuda.synchronize()
+        counts.append(sum(1 for event in prof.events() if event.device_type == torch.autograd.DeviceType.CUDA))
+    assert counts[0] == counts[1], counts
+
+
+def test_ctc_loss_packed_matches_padded_cuda():
+    """
+    Packed against padded CTC on the GPU, where a whole block runs each sequence: label sequences with more
+    states and edges than the block has threads, a zero-length filler sequence, and a frame bound and an
+    edge list over-allocated as under CUDA-graph capture. Same losses and gradients, up to the float32 noise
+    of the atomic log-space adds, which makes two runs of the same op differ by up to 3e-4 in the gradients here.
+    """
+    if not torch.cuda.is_available():
+        raise SkipTest("CUDA not available")
+    torch.manual_seed(5)
+    lens = [400, 260, 90, 0]
+    tgt_lens = [130, 60, 20, 0]
+    n_batch, dim, blank = len(lens), 20, 19
+    logits_padded = torch.randn(n_batch, max(lens), dim, device="cuda")
+    targets = torch.randint(0, blank, (n_batch, 140), dtype=torch.int32, device="cuda")
+    lens_t = torch.tensor(lens, dtype=torch.int32, device="cuda")
+    tgt_lens_t = torch.tensor(tgt_lens, dtype=torch.int32, device="cuda")
+
+    leaf_pad = logits_padded.clone().requires_grad_(True)
+    loss_pad = ctc_loss(
+        logits=leaf_pad, logits_seq_lens=lens_t, targets=targets, targets_seq_lens=tgt_lens_t, blank_index=blank
+    )
+    loss_pad.sum().backward()
+
+    leaf_packed = logits_padded.clone().requires_grad_(True)
+    flat = torch.cat([leaf_packed[b, : lens[b]] for b in range(n_batch)], dim=0)
+    loss_packed = ctc_loss_packed(
+        logits=flat,
+        seq_starts=torch.tensor(numpy.cumsum([0] + lens[:-1]), dtype=torch.int32, device="cuda"),
+        logits_seq_lens=lens_t,
+        max_seq_len=max(lens) + 100,
+        targets=targets,
+        targets_seq_lens=tgt_lens_t,
+        blank_index=blank,
+        edges_bound=5 * (sum(tgt_lens) + 50) + 5 * n_batch,
+    )
+    loss_packed.sum().backward()
+
+    torch.testing.assert_close(loss_packed, loss_pad, rtol=1e-4, atol=1e-4)
+    mask = torch.arange(max(lens), device="cuda")[None, :] < lens_t[:, None]
+    torch.testing.assert_close(leaf_packed.grad[mask], leaf_pad.grad[mask], rtol=1e-3, atol=1e-3)
+
+
 def test_ctc_fsa_batch3_len6_c8():
     """
     This (:func:`Fsa.get_ctc_fsa_fast_bw`) is used by :func:`ctc_loss`.
