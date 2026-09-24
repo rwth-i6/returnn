@@ -3020,7 +3020,7 @@ def _fused_causal_attention(
         v_raw,
         dropout_p=att_dropout if train_flag else 0.0,
         is_causal=True,
-        scale=qk_feat_dim.dimension**-0.5 if scale is None else scale,
+        **({} if scale is None else {"scale": scale}),
     )
     out = Tensor(
         "dot_attention",
