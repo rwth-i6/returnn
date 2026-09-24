@@ -2303,14 +2303,14 @@ def test_random_mask_equals_the_per_mask_comparison_without_its_size():
     """
     from unittest import mock
     from torch.utils._python_dispatch import TorchDispatchMode
-    from torch.utils._pytree import tree_leaves
+    from torch.utils._pytree import tree_flatten
 
     class _MaxNumel(TorchDispatchMode):
         value = 0
 
         def __torch_dispatch__(self, func, types, args=(), kwargs=None):
             out = func(*args, **(kwargs or {}))
-            for leaf in tree_leaves(out):
+            for leaf in tree_flatten(out)[0]:
                 if isinstance(leaf, torch.Tensor):
                     self.value = max(self.value, leaf.numel())
             return out
