@@ -265,6 +265,27 @@ def test_SimpleHDFWriter():
     assert isinstance(reader.seq_tags[0], str)
 
 
+def test_HDFDataset_cached_get_current_seq_order():
+    # With a byte cache, the current seq order is not known.
+    # That must read as not implemented, so that callers can fall back,
+    # e.g. the torch engine then evaluates the dataset on rank 0 only.
+    fn = get_test_tmp_file(suffix=".hdf")
+    os.remove(fn)  # SimpleHDFWriter expects that the file does not exist
+    writer = SimpleHDFWriter(filename=fn, dim=3, labels=None)
+    writer.insert_batch(inputs=np.zeros((2, 4, 3), dtype="float32"), seq_len=[4, 2], seq_tag=["seq-0", "seq-1"])
+    writer.close()
+
+    assert HDFDataset(files=[fn]).get_current_seq_order() is not None
+    dataset = HDFDataset(files=[fn], cache_byte_size=1024)
+    dataset.init_seq_order(epoch=1)
+    try:
+        dataset.get_current_seq_order()
+    except util.OptionalNotImplementedError:
+        pass
+    else:
+        raise AssertionError("expected OptionalNotImplementedError")
+
+
 def test_SimpleHDFWriter_small():
     fn = get_test_tmp_file(suffix=".hdf")
     os.remove(fn)  # SimpleHDFWriter expects that the file does not exist

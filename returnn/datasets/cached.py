@@ -13,6 +13,7 @@ import typing
 from .basic import Dataset
 from returnn.log import log
 from returnn.util import NumbersDict
+from returnn.util.basic import OptionalNotImplementedError
 
 
 class CachedDataset(Dataset):
@@ -144,7 +145,9 @@ class CachedDataset(Dataset):
         return True
 
     def get_current_seq_order(self):
-        assert self.cache_byte_size_limit_at_start == 0  # not implemented otherwise, we ignore _index_map
+        if self.cache_byte_size_limit_at_start != 0:
+            # not implemented with a byte cache, we ignore _index_map
+            raise OptionalNotImplementedError(f"{self}: get_current_seq_order with cache_byte_size")
         return self._seq_index
 
     def _get_tag_by_real_idx(self, real_idx):
