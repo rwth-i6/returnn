@@ -24,6 +24,20 @@ see :class:`DistributeFilesDataset`.
 This dataset is one of the exceptions
 which also supports sharding.
 
+Evaluation is split over the ranks:
+every eval dataset which reports its seq order (:func:`Dataset.get_current_seq_order`)
+is evaluated in shares.
+Rank 0 takes the dataset's seq order of the epoch, every rank evaluates every n-th seq of it,
+and the loss sums are gathered at the end, so every rank gets the same scores.
+All ranks evaluate rank 0's parameters and buffers for this,
+so the scores belong to the model which rank 0 saves,
+and every rank gets its own values back afterwards.
+Other eval datasets are evaluated on rank 0 alone, while the other ranks wait.
+The eval steps must not communicate between the ranks,
+as the ranks run different numbers of steps.
+(E.g. a distributed :class:`BatchNorm` is fine, as it uses its running statistics in eval.)
+Set ``torch_distributed = {..., "eval_on_all_ranks": False}`` to evaluate every eval dataset on rank 0 alone.
+
 Also see `our wiki on distributed PyTorch <https://github.com/rwth-i6/returnn/wiki/Distributed-PyTorch>`__.
 
 
