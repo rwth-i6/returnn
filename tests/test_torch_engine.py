@@ -1178,6 +1178,98 @@ def _torch_engine_sub_proc_cleanup_test_main(conn):
         conn.close()
 
 
+def test_graph_capture_bounds_from_config():
+    # the bounds a config already implies must not have to be repeated by hand:
+    # max_seqs is the batch bound, max_seq_length the capacity, batch_size plus the per-seq
+    # gap and align slack the packed total bound
+    from returnn.tensor import batch_dim
+    from returnn.torch.util.graph_capture import bounds_from_config
+
+    time_dim = Dim(None, name="time-bounds")
+    text_dim = Dim(None, name="text-bounds")
+    labels_dim = Dim(None, name="labels-bounds")
+    classes_dim = Dim(7, name="classes")
+    template = TensorDict()
+    template.update(
+        {
+            "data": {"dims": [batch_dim, time_dim], "dtype": "float32"},
+            "text_codes": {"dims": [batch_dim, text_dim], "dtype": "int32", "sparse_dim": classes_dim},
+            "labels": {"dims": [batch_dim, labels_dim], "dtype": "int32", "sparse_dim": classes_dim},
+        },
+        auto_convert=True,
+    )
+    config = Config(
+        dict(
+            max_seqs=48,
+            max_seq_length={"data": 680000, "labels": 720},
+            batch_size=4_000_000,
+            packed_tensors={
+                "gap": 8640,
+                "align": 960,
+                "per_key": {"text_codes": {"packed": False}, "labels": {"packed": False}},
+            },
+        )
+    )
+    with global_config_ctx(config):
+        opts = bounds_from_config(
+            {"warmup_steps": 2, "dim_capacity": {"text_codes": 720}}, config=config, extern_data_template=template
+        )
+    assert opts["batch_size_bound"] == 48
+    assert opts["dim_capacity"] == {"data": 680000, "text_codes": 720, "labels": 720}
+    assert opts["packed_total_bound"] == {"data": 4_000_000 + 48 * (8640 + 959)}
+    assert opts["warmup_steps"] == 2
+    with global_config_ctx(config):
+        explicit = bounds_from_config(
+            {
+                "batch_size_bound": 32,
+                "dim_capacity": {"data": 1, "text_codes": 1, "labels": 1},
+                "packed_total_bound": {"data": 5},
+            },
+            config=config,
+            extern_data_template=template,
+        )
+    assert explicit["batch_size_bound"] == 32
+    assert explicit["dim_capacity"] == {"data": 1, "text_codes": 1, "labels": 1}
+    assert explicit["packed_total_bound"] == {"data": 5}
+    config = Config(dict(max_seqs=4, batch_size=1000, packed_batch_size={"data": 100}, packed_tensors=True))
+    with global_config_ctx(config):
+        opts = bounds_from_config({}, config=config, extern_data_template=template)
+    assert opts["packed_total_bound"] == {"data": 100, "text_codes": 1000, "labels": 1000}
+
+
+def test_graph_capture_optimizer_state_materialization():
+    """the lazy optimizer state is only created for the captured optimizer, and only where zero-init is right"""
+    from returnn.torch.util.graph_capture import GraphCapturedTrainStep, _optimizer_state_zero_init
+
+    def _stub(opt, *, captured: bool):
+        obj = GraphCapturedTrainStep.__new__(GraphCapturedTrainStep)
+        obj._get_optimizer = lambda: opt
+        obj._grad_params = list(opt.param_groups[0]["params"])
+        obj._post_step = (lambda: None) if captured else None
+        return obj
+
+    p = torch.nn.Parameter(torch.tensor(1.0))
+    opt = torch.optim.Rprop([p], lr=0.1)
+    assert not _optimizer_state_zero_init(opt)
+    assert _optimizer_state_zero_init(torch.optim.AdamW([p], lr=0.1))
+    try:
+        _stub(opt, captured=True)._materialize_optimizer_state()
+    except NotImplementedError:
+        pass
+    else:
+        raise AssertionError("a captured Rprop must be rejected")
+    _stub(opt, captured=False)._materialize_optimizer_state()
+    assert not opt.state
+    for _ in range(3):
+        p.grad = torch.tensor(1.0)
+        opt.step()
+    torch.testing.assert_close(p.detach(), torch.tensor(0.636))
+    q = torch.nn.Parameter(torch.tensor(1.0))
+    adamw = torch.optim.AdamW([q], lr=0.1)
+    _stub(adamw, captured=True)._materialize_optimizer_state()
+    assert adamw.state and all(float(v) == 0 for v in adamw.state[q].values() if v.dim() == 0)
+
+
 def _build_cuda_graph_train_config_and_dataset(*, compile_: bool):
     """small RF model + Task12AXDataset config with torch_cuda_graph, see the tests below"""
     from returnn.datasets import init_dataset
@@ -1194,6 +1286,8 @@ def _build_cuda_graph_train_config_and_dataset(*, compile_: bool):
             hidden = Dim(64, name="hidden")
             self.layer = rf.Linear(feat_dim, hidden)
             self.out = rf.Linear(hidden, classes_dim)
+            self.steps_seen = rf.Parameter([], dtype="int64", auxiliary=True)
+            self.steps_seen.initial = 0
 
     def _get_model(*, epoch, step, **_kwargs):
         return _Model()
@@ -1201,10 +1295,14 @@ def _build_cuda_graph_train_config_and_dataset(*, compile_: bool):
     def _train_step(*, model: _Model, extern_data: TensorDict, **_kwargs):
         data = extern_data["data"]
         classes = extern_data["classes"]
+        if not compile_:
+            model.steps_seen.assign_add(1)
         x = rf.relu(model.layer(data))
         logits = model.out(x)
         loss = rf.cross_entropy(target=classes, estimated=logits, estimated_type="logits", axis=model.out_dim)
         loss.mark_as_loss("ce")
+        frame_err = rf.cast(rf.reduce_argmax(logits, axis=model.out_dim) != classes, "float32")
+        frame_err.mark_as_loss("fer", as_error=True)
 
     def _dyn_lr(*, global_train_step: int, learning_rate: float, **_kwargs) -> float:
         # per-step LR schedule: under capture_optimizer this exercises the device-tensor LR input
@@ -1216,7 +1314,13 @@ def _build_cuda_graph_train_config_and_dataset(*, compile_: bool):
             device="gpu",
             extern_data={
                 "data": {"dims": [batch_dim, time_dim, feat_dim], "dtype": "float32"},
-                "classes": {"dims": [batch_dim, time_dim], "dtype": "int32", "sparse_dim": classes_dim},
+                # targets are declared like this in real configs; the eager warmup step must keep them
+                "classes": {
+                    "dims": [batch_dim, time_dim],
+                    "dtype": "int32",
+                    "sparse_dim": classes_dim,
+                    "available_for_inference": False,
+                },
             },
             get_model=_get_model,
             train_step=_train_step,
@@ -1248,20 +1352,46 @@ def _build_cuda_graph_train_config_and_dataset(*, compile_: bool):
 def _run_cuda_graph_train(*, compile_: bool):
     if not torch.cuda.is_available():
         raise unittest.SkipTest("CUDA not available")
+    import os
+    import re
+    import tempfile
+    from returnn.log import log as returnn_log
+
     config, dataset = _build_cuda_graph_train_config_and_dataset(compile_=compile_)
-    with global_config_ctx(config):
-        engine = Engine(config=config)
-        engine.init_train_from_config(train_data=dataset)
-        engine.train()
-        assert engine._graph_capture is not None
-        assert engine._graph_capture._graph is not None, "graph never captured"
-        assert engine._graph_capture.captures_optimizer
-        for param_group in engine._updater.optimizer.param_groups:
-            lr = param_group["lr"]  # device-tensor LR input of the captured optimizer
-            assert isinstance(lr, torch.Tensor) and lr.is_cuda
-            assert lr.item() > 1e-3  # the per-step schedule advanced it
-        for name, p in engine._pt_model.named_parameters():
-            assert torch.isfinite(p).all(), f"non-finite param {name}"
+    log_file = tempfile.NamedTemporaryFile(mode="wt", suffix=f"-cudagraph-{compile_}.log", delete=False)
+    log_file.close()
+    returnn_log.initialize(logs=[log_file.name], verbosity=[5])
+    try:
+        with global_config_ctx(config):
+            engine = Engine(config=config)
+            engine.init_train_from_config(train_data=dataset)
+            engine.train()
+            assert engine._graph_capture is not None
+            assert engine._graph_capture._graph is not None, "graph never captured"
+            assert engine._graph_capture.captures_optimizer
+            for param_group in engine._updater.optimizer.param_groups:
+                lr = param_group["lr"]  # device-tensor LR input of the captured optimizer
+                assert isinstance(lr, torch.Tensor) and lr.is_cuda
+                assert lr.item() > 1e-3  # the per-step schedule advanced it
+            for name, p in engine._pt_model.named_parameters():
+                assert torch.isfinite(p).all(), f"non-finite param {name}"
+            if not compile_:
+                seen = int(engine._orig_model.steps_seen.raw_tensor)
+                assert seen == engine.global_train_step, (seen, engine.global_train_step)
+            # the run end must destroy the graph, else a NCCL comm it captured never shuts down
+            engine.finalize()
+            assert engine._graph_capture is None
+    finally:
+        returnn_log.initialize()
+    with open(log_file.name, "rt", encoding="utf-8") as f:
+        txt = f.read()
+    os.remove(log_file.name)
+    # the error measure is not part of the total loss, so its reduction must still be recorded
+    # in the graph: a value reduced once at the first readout would repeat on every replay
+    fer = [float(v) for _, v in re.findall(r"train, step (\d+), ce [0-9.]+, fer ([0-9.]+)", txt)]
+    assert len(fer) >= 10, f"only {len(fer)} steps with the error measure parsed from the log"
+    warmup = config.typed_value("torch_cuda_graph")["warmup_steps"]
+    assert len(set(fer[warmup + 1 :])) > 1, f"the error measure is frozen under replay: {fer}"
 
 
 def _cuda_graph_packed_decoder_setup(mode: str):
@@ -1470,6 +1600,106 @@ def test_torch_engine_cuda_graph_packed_decoder_parity():
         (ctc_a, ce_a), (ctc_b, ce_b) = losses["packed_eager"][s], losses["packed_graphc"][s]
         assert abs(ctc_a - ctc_b) / max(abs(ctc_a), 1e-6) < 2e-2, f"step {s} ctc: {ctc_a} vs {ctc_b}"
         assert abs(ce_a - ce_b) / max(abs(ce_a), 1e-6) < 2e-2, f"step {s} ce: {ce_a} vs {ce_b}"
+
+
+class _FakeGraphCapture:
+    """Stands in for GraphCapturedTrainStep in the engine on CPU, eager steps with the first ones flagged as dummy."""
+
+    captures_optimizer = False
+
+    def __init__(self, engine: Engine, *, num_dummy_steps: int):
+        self.engine = engine
+        self.num_dummy_steps = num_dummy_steps
+        self.num_steps = 0
+        self.last_step_dummy = False
+        self.params_after_dummy_steps = None
+
+    def set_bound_shapes_enabled(self, enabled: bool):
+        """no bound shapes here"""
+
+    def data_bound_sizes(self):
+        """wide enough for any batch"""
+        return {"data": 10**6, "classes": 10**6}
+
+    def run_train_step(self, extern_data_raw, *, global_train_step):
+        """an eager step, flagged as dummy for the first num_dummy_steps calls"""
+        from returnn.torch.data import extern_data as extern_data_util
+
+        engine = self.engine
+        if self.num_steps == self.num_dummy_steps:
+            self.params_after_dummy_steps = [p.detach().clone() for p in engine.get_pt_model().parameters()]
+        self.last_step_dummy = self.num_steps < self.num_dummy_steps
+        self.num_steps += 1
+        extern_data = extern_data_util.raw_dict_to_extern_data(
+            extern_data_raw, extern_data_template=engine.extern_data, device=engine._device, with_eval_targets=True
+        )
+        engine._run_step(extern_data, train_flag=True, train_func=True)
+        ctx = rf.get_run_ctx()
+        ctx.total_loss().raw_tensor.backward()
+        return ctx
+
+
+def test_engine_skips_optimizer_step_on_dummy_warmup_steps():
+    """the grads of a dummy warmup batch never update the params through the engine's optimizer step"""
+    config = Config(
+        dict(
+            task="train",
+            device="cpu",
+            num_epochs=1,
+            extern_data={"data": {"dim": 9}, "classes": {"dim": 2, "sparse": True}},
+            get_model=TrainTestModel,
+            train_step=TrainTestModel.train_step,
+            batch_size=500,
+            learning_rate=0.1,
+            log_grad_norm=True,
+            gradient_clip_global_norm=5.0,
+            torch_dataloader_opts={"num_workers": 0},
+            optimizer={"class": "sgd", "momentum": 0.9},
+        )
+    )
+    dataset = init_dataset({"class": "Task12AXDataset", "num_seqs": 100, "name": "train"})
+    dataset.init_seq_order(epoch=1)
+
+    with global_config_ctx(config):
+        engine = Engine(config=config)
+        engine.init_train_from_config(train_data=dataset)
+        params_before = [p.detach().clone() for p in engine.get_pt_model().parameters()]
+        fake = _FakeGraphCapture(engine, num_dummy_steps=2)
+        engine._graph_capture = fake
+        optimizer_steps_on_dummy = []
+        updater_step = engine._updater.step
+
+        def _step(**kwargs):
+            optimizer_steps_on_dummy.append(fake.last_step_dummy)
+            updater_step(**kwargs)
+
+        engine._updater.step = _step
+        engine.train()
+    assert fake.num_steps > 2 and fake.params_after_dummy_steps is not None
+    assert len(optimizer_steps_on_dummy) == fake.num_steps - 2 and not any(optimizer_steps_on_dummy)
+    for param, param_before in zip(fake.params_after_dummy_steps, params_before):
+        assert torch.equal(param, param_before)
+
+
+def test_graph_capture_optimizer_state_snapshot_roundtrip():
+    """a resumed optimizer state survives the dummy warmup through the snapshot, the lr object stays"""
+    from returnn.torch.util.graph_capture import _snapshot_optimizer_state, _restore_optimizer_state
+
+    torch.manual_seed(3)
+    model = torch.nn.Linear(4, 3)
+    opt = torch.optim.Adam(model.parameters(), lr=torch.tensor(0.1))
+    for p in model.parameters():
+        p.grad = torch.randn_like(p)
+    opt.step()
+    before = {k: v.clone() for k, v in opt.state[model.weight].items()}
+    lr = opt.param_groups[0]["lr"]
+    snapshot = _snapshot_optimizer_state(opt)
+    opt.step()
+    assert not torch.equal(opt.state[model.weight]["exp_avg"], before["exp_avg"])
+    _restore_optimizer_state(opt, snapshot)
+    for k, v in before.items():
+        assert torch.equal(opt.state[model.weight][k], v), k
+    assert opt.param_groups[0]["lr"] is lr
 
 
 def test_torch_engine_cuda_graph_train():
