@@ -1026,6 +1026,118 @@ def test_convert_parameter_to_buffer():
     assert type(mod_pt.weight) is torch.Tensor
 
 
+def test_causal_dot_attention_fused_is_opt_in():
+    from returnn.config import Config, global_config_ctx
+
+    if not hasattr(torch.nn.functional, "scaled_dot_product_attention"):
+        raise unittest.SkipTest("torch without scaled_dot_product_attention")
+    torch.manual_seed(42)
+    batch = Dim(2, name="batch")
+    time_dim = Dim(4, name="time")
+    feat, v_feat = Dim(8, name="feat"), Dim(6, name="v_feat")
+    tensors = {
+        name: Tensor(name, dims=[batch, time_dim, v_feat if name == "v" else feat], dtype="float32")
+        for name in ("q", "k", "v")
+    }
+    for name, t in tensors.items():
+        t.raw_tensor = torch.randn(2, 4, 6 if name == "v" else 8)
+
+    matmul, calls = rf.matmul, []
+
+    def _counting_matmul(*args, **kwargs):
+        calls.append(kwargs.get("reduce"))
+        return matmul(*args, **kwargs)
+
+    # the fused kernel never materializes the energies, so a matmul means the generic path ran
+    for flag, want_generic in ((None, True), (True, False), (False, True)):
+        calls.clear()
+        rf.matmul = _counting_matmul
+        try:
+            with global_config_ctx(Config({} if flag is None else {"rf_fused_causal_attention": flag})):
+                rf.dot_attention(
+                    tensors["q"],
+                    tensors["k"],
+                    tensors["v"],
+                    key_dim=feat,
+                    axis=time_dim,
+                    causal_query_spatial_dim=time_dim,
+                )
+        finally:
+            rf.matmul = matmul
+        assert bool(calls) == want_generic, (flag, calls)
+
+
+def test_causal_dot_attention_fused_matches_generic():
+    from returnn.frontend._backend import Backend
+
+    if not hasattr(torch.nn.functional, "scaled_dot_product_attention"):
+        raise unittest.SkipTest("torch without scaled_dot_product_attention")
+    torch.manual_seed(42)
+    batch, heads = Dim(3, name="batch"), Dim(2, name="heads")
+    lens = Tensor("time", [batch], dtype="int32", raw_tensor=torch.tensor([5, 4, 2], dtype=torch.int32))
+    time_dim = Dim(lens, name="time", capacity=5)
+    feat, v_feat = Dim(8, name="feat"), Dim(6, name="v_feat")
+    base = {name: torch.randn(3, 2, 5, 8 if name != "v" else 6) for name in ("q", "k", "v")}
+    grad_out = torch.randn(3, 2, 5, 6)
+    mask = rf.sequence_mask([batch, time_dim]).copy_transpose((batch, time_dim)).raw_tensor[:, None, :, None]
+
+    def _inputs(dtype):
+        raws = {name: raw.to(getattr(torch, dtype)).detach().requires_grad_() for name, raw in base.items()}
+        tensors = {
+            name: Tensor(
+                name, dims=[batch, heads, time_dim, v_feat if name == "v" else feat], dtype=dtype, raw_tensor=raw
+            )
+            for name, raw in raws.items()
+        }
+        return raws, tensors
+
+    def _fused(x):
+        from returnn.config import Config, global_config_ctx
+
+        with global_config_ctx(Config({"rf_fused_causal_attention": True})):
+            return rf.dot_attention(
+                x["q"], x["k"], x["v"], key_dim=feat, axis=time_dim, causal_query_spatial_dim=time_dim
+            )
+
+    def _generic(x):
+        return Backend.scaled_dot_product_attention(
+            x["q"],
+            x["k"],
+            x["v"],
+            att_dropout=0.0,
+            att_dropout_broadcast=False,
+            v_feat_dim=v_feat,
+            qk_feat_dim=feat,
+            kv_spatial_dim=time_dim,
+            query_spatial_dim=time_dim,
+            is_causal=True,
+        )
+
+    matmul, calls = rf.matmul, []
+
+    def _counting_matmul(*args, **kwargs):
+        calls.append(kwargs.get("reduce"))
+        return matmul(*args, **kwargs)
+
+    for dtype, tolerance in (("float32", 1e-5), ("bfloat16", 2e-2)):
+        results = []
+        for func in (_fused, _generic):
+            raws, tensors = _inputs(dtype)
+            rf.matmul = _counting_matmul if func is _fused else matmul
+            try:
+                out = func(tensors)
+            finally:
+                rf.matmul = matmul
+            out_raw = out.copy_transpose((batch, heads, time_dim, v_feat)).raw_tensor
+            out_raw.backward(grad_out.to(out_raw.dtype))
+            results.append(
+                [torch.where(mask, t.detach().float(), 0.0) for t in (out_raw, *(raws[n].grad for n in "qkv"))]
+            )
+        assert not calls, calls
+        for fused_raw, generic_raw in zip(*results):
+            torch.testing.assert_close(fused_raw, generic_raw, atol=tolerance, rtol=tolerance)
+
+
 if __name__ == "__main__":
     better_exchook.install()
     if len(sys.argv) <= 1:
