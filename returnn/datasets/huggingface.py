@@ -150,7 +150,7 @@ class HuggingFaceDataset(CachedDataset2):
             assert self.seq_tag_column in self.hf_dataset.features, (
                 f"{self}: seq_tag_column {self.seq_tag_column} not in dataset features {self.hf_dataset.features}"
             )
-            assert self.hf_dataset.features[self.seq_tag_column].dtype in _string_dtypes + ("int64",), (
+            assert self.hf_dataset.features[self.seq_tag_column].dtype in _StringDtypes + ("int64",), (
                 f"{self}: seq_tag_column {self.seq_tag_column} must be of dtype string or int64,"
                 f" got {self.hf_dataset.features[self.seq_tag_column].dtype}"
             )
@@ -379,7 +379,7 @@ def get_arrow_shard_files_from_hf_dataset_dir(hf_data_dir: Union[str, os.PathLik
 
 
 # HF datasets dtypes which are all just strings (Arrow string types, differing only in the offset width)
-_string_dtypes = ("string", "large_string")
+_StringDtypes = ("string", "large_string")
 
 
 def _infer_data_format_for_feature(
@@ -425,7 +425,7 @@ def _infer_data_format_for_feature(
     else:
         assert False, f"{exc_prefix}unsupported feature type {type(feature)} {feature}"
 
-    if dtype in _string_dtypes:
+    if dtype in _StringDtypes:
         dtype = "string"  # "large_string" only differs in the offset width
 
     d = {"dim": num_classes, "ndim": num_dims, "dtype": dtype}
