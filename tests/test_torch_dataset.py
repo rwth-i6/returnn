@@ -251,24 +251,59 @@ def test_batching_packed_batch_cost_bounds_a_product_of_lengths():
 
     seqs = [_seq(30, 9), _seq(30, 9), _seq(30, 9), _seq(30, 9), _seq(6, 1), _seq(6, 1)]
     cells = lambda lengths: lengths["text_codes"] * (lengths["labels"] + 1)  # noqa: E731
-    budget = 700  # two 300-cell sequences fit, a third would not, both 12-cell ones join the second batch
+    limit = 700  # two 300-cell sequences fit, a third would not, both 12-cell ones join the second batch
 
     batches = list(
         data_pipeline.BatchingIterDataPipe(
             seqs,
             batch_size=None,
             max_seqs=100,
-            packed_batch_size={"lattice": budget},
+            packed_batch_size={"lattice": limit},
             packed_batch_cost={"lattice": cells},
         )
     )
     for batch in batches:
         used = sum(len(s["text_codes"]) * (len(s["labels"]) + 1) for s in batch)
-        assert used <= budget, (used, [len(s["text_codes"]) for s in batch])
+        assert used <= limit, (used, [len(s["text_codes"]) for s in batch])
     assert [len(b) for b in batches] == [2, 4], [len(b) for b in batches]
 
     without = list(data_pipeline.BatchingIterDataPipe(seqs, batch_size=None, max_seqs=100))
     assert len(without) == 1, "the length budgets alone must not bound the product"
+
+
+def test_batching_packed_batch_cost_meets_only_its_own_limit():
+    """
+    A cost is bounded by the packed_batch_size entry of its name and nothing else. The padded batch_size
+    check must not see it (the largest cost times the batch size against the frame limit would cut
+    batches early), and a packed_batch_size without an entry for the cost is refused instead of
+    leaving the cost unbounded.
+    """
+    import numpy
+    import pytest
+
+    def _seq(frames: int, labels: int):
+        return {"text_codes": numpy.zeros((frames,), dtype="int32"), "labels": numpy.zeros((labels,), dtype="int32")}
+
+    seqs = [_seq(30, 9), _seq(30, 9), _seq(30, 9), _seq(30, 9), _seq(6, 1), _seq(6, 1)]
+    cells = lambda lengths: lengths["text_codes"] * (lengths["labels"] + 1)  # noqa: E731
+
+    batches = list(
+        data_pipeline.BatchingIterDataPipe(
+            seqs,
+            batch_size=1000,
+            max_seqs=100,
+            packed_batch_size={"lattice": 700},
+            packed_batch_cost={"lattice": cells},
+        )
+    )
+    assert [len(b) for b in batches] == [2, 4], [len(b) for b in batches]
+
+    with pytest.raises(AssertionError, match="packed_batch_size"):
+        list(
+            data_pipeline.BatchingIterDataPipe(
+                seqs, batch_size=None, max_seqs=100, packed_batch_size=700, packed_batch_cost={"lattice": cells}
+            )
+        )
 
 
 if __name__ == "__main__":
