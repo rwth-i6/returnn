@@ -5,6 +5,7 @@ Tests for PyTorch engine.
 from __future__ import annotations
 import _setup_test_env  # noqa
 from typing import Optional
+import copy
 import sys
 import unittest
 import tempfile
@@ -1199,13 +1200,18 @@ def _torch_engine_sub_proc_cleanup_test_main(conn):
         conn.close()
 
 
-def _build_cuda_graph_train_config_and_dataset(*, compile_: bool, warmup_steps: Optional[int] = 2):
-    """small RF model + Task12AXDataset config with torch_cuda_graph, see the tests below"""
+def _build_cuda_graph_train_config_and_dataset(
+    *, compile_: bool, warmup_steps: Optional[int] = 2, cuda_graph: bool = True, optimizer_step: bool = False
+):
+    """
+    small RF model + Task12AXDataset config with torch_cuda_graph, see the tests below.
+    With optimizer_step: the optimizer step not in the model graph but separately (torch_optimizer_step).
+    """
     from returnn.datasets import init_dataset
     from returnn.tensor import Dim, batch_dim
 
     # fresh dims per test: capacities get set on them
-    time_dim = Dim(None, name=f"time-cudagraph-{compile_}-{warmup_steps}")
+    time_dim = Dim(None, name=f"time-cudagraph-{compile_}-{warmup_steps}-{cuda_graph}-{optimizer_step}")
     feat_dim = Dim(9, name="feat")
     classes_dim = Dim(2, name="classes")
 
@@ -1252,38 +1258,49 @@ def _build_cuda_graph_train_config_and_dataset(*, compile_: bool, warmup_steps: 
             log_grad_norm=True,
             gradient_clip_global_norm=5.0,
             optimizer={"class": "adamw", "capturable": True},
-            torch_cuda_graph=dict(
-                batch_size_bound=10,
-                dim_capacity={"data": 100, "classes": 100},
-                capture_optimizer=True,
-                **({"warmup_steps": warmup_steps} if warmup_steps is not None else {}),
-                **({"compile": True} if compile_ else {}),
-            ),
             torch_dataloader_opts={"num_workers": 0},
         )
     )
+    if cuda_graph:
+        config.typed_dict["torch_cuda_graph"] = dict(
+            batch_size_bound=10,
+            dim_capacity={"data": 100, "classes": 100},
+            capture_optimizer=not optimizer_step,
+            **({"warmup_steps": warmup_steps} if warmup_steps is not None else {}),
+            **({"compile": True} if compile_ else {}),
+        )
+    if optimizer_step:
+        config.typed_dict["torch_optimizer_step"] = {}
     dataset = init_dataset({"class": "Task12AXDataset", "num_seqs": 100, "name": "train", "fixed_random_seed": 1})
     dataset.init_seq_order(epoch=1)
     return config, dataset
 
 
-def _run_cuda_graph_train(*, compile_: bool, warmup_steps: Optional[int] = 2):
+def _run_cuda_graph_train(
+    *, compile_: bool, warmup_steps: Optional[int] = 2, cuda_graph: bool = True, optimizer_step: bool = False
+) -> Engine:
     if not torch.cuda.is_available():
         raise unittest.SkipTest("CUDA not available")
-    config, dataset = _build_cuda_graph_train_config_and_dataset(compile_=compile_, warmup_steps=warmup_steps)
+    config, dataset = _build_cuda_graph_train_config_and_dataset(
+        compile_=compile_, warmup_steps=warmup_steps, cuda_graph=cuda_graph, optimizer_step=optimizer_step
+    )
     with global_config_ctx(config):
         engine = Engine(config=config)
         engine.init_train_from_config(train_data=dataset)
         engine.train()
-        assert engine._graph_capture is not None
-        assert engine._graph_capture._graph is not None, "graph never captured"
-        assert engine._graph_capture.captures_optimizer
+        if cuda_graph:
+            assert engine._graph_capture is not None
+            assert engine._graph_capture._graph is not None, "graph never captured"
+            assert engine._graph_capture.captures_optimizer == (not optimizer_step)
+        if optimizer_step:
+            assert engine._updater._optimizer_step._graph is not None, "optimizer step never captured"
         for param_group in engine._updater.optimizer.param_groups:
             lr = param_group["lr"]  # device-tensor LR input of the captured optimizer
             assert isinstance(lr, torch.Tensor) and lr.is_cuda
             assert lr.item() > 1e-3  # the per-step schedule advanced it
         for name, p in engine._pt_model.named_parameters():
             assert torch.isfinite(p).all(), f"non-finite param {name}"
+    return engine
 
 
 def _cuda_graph_packed_decoder_setup(mode: str):
@@ -1510,6 +1527,250 @@ def test_torch_engine_cuda_graph_compile_train_default_warmup():
     """as :func:`test_torch_engine_cuda_graph_compile_train` with the default warmup_steps (0):
     no eager step, the lazy optimizer state is created directly before the capture"""
     _run_cuda_graph_train(compile_=True, warmup_steps=None)
+
+
+def test_torch_engine_optimizer_step_train():
+    """
+    torch_optimizer_step: eager model step, the optimizer step compiled + captured separately,
+    2 epochs with the per-step LR schedule; then the optimizer checkpoint save + load
+    """
+    import os
+
+    engine = _run_cuda_graph_train(compile_=False, cuda_graph=False, optimizer_step=True)
+    updater = engine._updater
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        filename = os.path.join(tmp_dir, "opt.pt")
+        updater.save_optimizer(filename)
+        state = torch.load(filename)
+        for group in state["optimizer"]["param_groups"]:
+            assert isinstance(group["lr"], float)  # the checkpoint keeps the ordinary Python scalar
+        updater.load_optimizer(filename)
+    assert updater._optimizer_step._graph is None  # new state tensors: invalidated
+
+
+def test_torch_engine_cuda_graph_compile_optimizer_step_train():
+    """
+    Compiled + captured model step (torch_cuda_graph, without capture_optimizer),
+    the optimizer step compiled + captured separately (torch_optimizer_step).
+    The model graph capture rebinds the grads once: the optimizer step recaptures on the new addresses.
+    """
+    _run_cuda_graph_train(compile_=True, optimizer_step=True)
+
+
+class _MuonLike(torch.optim.Optimizer):
+    """
+    Written like the i6 Muon (i6_experiments exp2024_04_23_baselines optim_ext/muon.py), small:
+    Muon (bf16 Newton-Schulz) on 2D params, Adam on the rest, with a Python-float lr
+    (``alpha=`` / ``value=`` arguments) and a Python-int step counter.
+    """
+
+    def __init__(self, params, lr=2e-2, momentum=0.95, weight_decay=0.01, betas=(0.9, 0.95), eps=1e-8):
+        super().__init__(params, dict(lr=lr, momentum=momentum, weight_decay=weight_decay, betas=betas, eps=eps))
+
+    @torch.no_grad()
+    def step(self, closure=None):
+        """step"""
+        assert closure is None
+        for group in self.param_groups:
+            lr, wd = group["lr"], group["weight_decay"]
+            b1, b2 = group["betas"]
+            for p in group["params"]:
+                if p.grad is None:
+                    continue
+                state = self.state[p]
+                if p.ndim == 2:
+                    if "momentum_buffer" not in state:
+                        state["momentum_buffer"] = torch.zeros_like(p)
+                    buf = state["momentum_buffer"]
+                    buf.mul_(group["momentum"]).add_(p.grad)
+                    x = p.grad.add(buf, alpha=group["momentum"]).bfloat16()
+                    x = x / (x.norm() + 1e-7)
+                    for _ in range(3):
+                        a = x @ x.T
+                        x = 3.4445 * x + (-4.7750 * a + 2.0315 * (a @ a)) @ x
+                    p.mul_(1 - lr * wd)
+                    p.add_(x.to(p.dtype), alpha=-lr)
+                else:
+                    if "exp_avg" not in state:
+                        state["step"] = 0
+                        state["exp_avg"] = torch.zeros_like(p)
+                        state["exp_avg_sq"] = torch.zeros_like(p)
+                    state["step"] += 1
+                    t = state["step"]
+                    state["exp_avg"].mul_(b1).add_(p.grad, alpha=1 - b1)
+                    state["exp_avg_sq"].mul_(b2).addcmul_(p.grad, p.grad, value=1 - b2)
+                    denom = (state["exp_avg_sq"].sqrt() / ((1 - b2**t) ** 0.5)).add_(group["eps"])
+                    p.addcdiv_(state["exp_avg"], denom, value=-lr / (1 - b1**t))
+
+
+def _optimizer_step_device() -> str:
+    """the non-capture optimizer step tests also run on CPU"""
+    return "cuda" if torch.cuda.is_available() else "cpu"
+
+
+def _adamw(params):
+    # capturable: the device-tensor lr and step counters are CUDA only
+    return torch.optim.AdamW(params, lr=1e-2, weight_decay=0.01, capturable=params[0].is_cuda)
+
+
+def _run_optimizer_step(opt_factory, *, opts=None, num_steps=8, replace_grads_at=None, reload_at=None):
+    """
+    :return: params after num_steps updates with a per-step LR schedule and random grads,
+        via the plain ``optimizer.step()`` if opts is None, otherwise via :class:`OptimizerStep`;
+        the optimizer; and the OptimizerStep
+    """
+    from returnn.torch.util.optimizer_step import OptimizerStep
+
+    device = _optimizer_step_device()
+    gen = torch.Generator().manual_seed(0)
+    shapes = [(32, 16), (16,), (64, 32), (32,), (8, 1, 3)]
+    params = [torch.nn.Parameter(torch.randn(s, generator=gen).to(device)) for s in shapes]
+    opt = opt_factory(params)
+    opt_step = OptimizerStep(optimizer=opt, opts=opts) if opts is not None else None
+    gen = torch.Generator(device=device).manual_seed(1)
+    for p in params:
+        p.grad = torch.zeros_like(p)
+    for i in range(num_steps):
+        for group in opt.param_groups:
+            lr = 1e-2 * (i + 1) / num_steps
+            if isinstance(group["lr"], torch.Tensor):
+                group["lr"].fill_(lr)
+            else:
+                group["lr"] = lr
+        if i == replace_grads_at:
+            for p in params:
+                p.grad = torch.zeros_like(p)
+        for p in params:
+            p.grad.copy_(torch.randn(p.shape, device=device, generator=gen))
+        if i == reload_at:
+            state_dict = opt.state_dict()
+            if opt_step:
+                state_dict = opt_step.state_dict_to_host_scalars(state_dict)
+                for group in state_dict["param_groups"]:
+                    assert isinstance(group["lr"], float)
+            opt.load_state_dict(copy.deepcopy(state_dict))
+            if opt_step:
+                opt_step.invalidate()
+        if opt_step:
+            opt_step.step()
+        else:
+            opt.step()
+    return params, opt, opt_step
+
+
+def _check_optimizer_step_same_as_eager(opt_factory, opts, **kwargs):
+    """params and optimizer state (incl. the checkpoint scalars) as the plain eager optimizer.step()"""
+    ref_params, ref_opt, _ = _run_optimizer_step(opt_factory, **kwargs)
+    params, opt, opt_step = _run_optimizer_step(opt_factory, opts=opts, **kwargs)
+    for p_ref, p in zip(ref_params, params):
+        torch.testing.assert_close(p, p_ref, rtol=1e-5, atol=1e-6)
+    ref_state = ref_opt.state_dict()["state"]
+    state = opt_step.state_dict_to_host_scalars(opt.state_dict())["state"]
+    assert set(state) == set(ref_state)
+    for i, s_ref in ref_state.items():
+        assert set(state[i]) == set(s_ref)
+        for k, v_ref in s_ref.items():
+            v = state[i][k]
+            if isinstance(v_ref, torch.Tensor):
+                torch.testing.assert_close(v, v_ref, rtol=1e-5, atol=1e-6)
+            else:  # Python scalar, e.g. the step counter of _MuonLike
+                assert type(v) is type(v_ref) and v == v_ref, f"state {i} {k}: {v!r} vs {v_ref!r}"
+    return opt_step
+
+
+def test_torch_optimizer_step_eager():
+    opt_step = _check_optimizer_step_same_as_eager(_adamw, {"compile": False, "capture": False}, reload_at=5)
+    assert opt_step._graph is None
+
+
+def test_torch_optimizer_step_dynamic_state_keys():
+    """
+    Python-float lr and Python-int step counter as device tensors (incl. alpha= / value= args),
+    back to Python scalars in the checkpoint
+    """
+    opts = {"dynamic_state_keys": ["step"]}
+    if not torch.cuda.is_available():
+        opts.update({"compile": False, "capture": False})
+    opt_step = _check_optimizer_step_same_as_eager(_MuonLike, opts, reload_at=5)
+    state_dict = opt_step.state_dict_to_host_scalars(opt_step._optimizer.state_dict())
+    for state in state_dict["state"].values():
+        if "step" in state:
+            assert state["step"] == 8 and isinstance(state["step"], int)
+    for group in state_dict["param_groups"]:
+        assert isinstance(group["lr"], float)
+
+
+def test_torch_optimizer_step_python_scalar_state_not_selected():
+    try:
+        _run_optimizer_step(_MuonLike, opts={"compile": False, "capture": False})
+    except ValueError as exc:
+        assert "dynamic_state_keys" in str(exc)
+    else:
+        raise AssertionError("expected ValueError")
+
+
+def test_torch_optimizer_step_capture():
+    if not torch.cuda.is_available():
+        raise unittest.SkipTest("CUDA not available")
+    opt_step = _check_optimizer_step_same_as_eager(_adamw, {"compile": False})
+    assert opt_step._graph is not None and opt_step._num_captures == 1
+
+
+def test_torch_optimizer_step_compile_capture():
+    if not torch.cuda.is_available():
+        raise unittest.SkipTest("CUDA not available")
+    opt_step = _check_optimizer_step_same_as_eager(_adamw, {})
+    assert opt_step._graph is not None and (opt_step._num_traces, opt_step._num_captures) == (1, 1)
+
+
+def test_torch_optimizer_step_compile_capture_muon_like():
+    if not torch.cuda.is_available():
+        raise unittest.SkipTest("CUDA not available")
+    opt_step = _check_optimizer_step_same_as_eager(_MuonLike, {"dynamic_state_keys": ["step"]})
+    assert (opt_step._num_traces, opt_step._num_captures) == (1, 1)
+
+
+def test_torch_optimizer_step_replaced_grads():
+    """new grad buffers: recapture on the new addresses, no retrace"""
+    if not torch.cuda.is_available():
+        raise unittest.SkipTest("CUDA not available")
+    opt_step = _check_optimizer_step_same_as_eager(_adamw, {}, replace_grads_at=5)
+    assert (opt_step._num_traces, opt_step._num_captures) == (1, 2)
+
+
+def test_torch_optimizer_step_reload():
+    """checkpoint round trip: new state tensors and lr, recapture, no retrace"""
+    if not torch.cuda.is_available():
+        raise unittest.SkipTest("CUDA not available")
+    opt_step = _check_optimizer_step_same_as_eager(_MuonLike, {"dynamic_state_keys": ["step"]}, reload_at=5)
+    assert (opt_step._num_traces, opt_step._num_captures) == (1, 2)
+
+
+def test_torch_optimizer_step_updater_invalid_grad_skipped():
+    """Updater: an update with a non-finite grad norm is skipped, also under the captured optimizer step"""
+    if not torch.cuda.is_available():
+        raise unittest.SkipTest("CUDA not available")
+    config = Config(
+        dict(
+            optimizer={"class": "adamw", "capturable": True},
+            torch_optimizer_step={},
+            num_allowed_consec_invalid_gradient_steps=1,
+        )
+    )
+    model = torch.nn.Linear(4, 3).cuda()
+    updater = Updater(config=config, network=model, device="cuda", initial_learning_rate=1e-2)
+    updater.create_optimizer()
+    x = torch.randn(5, 4, device="cuda")
+    for i in range(6):
+        updater.zero_grad()
+        model(x).square().sum().backward()
+        if i == 4:  # after the capture (step 3)
+            model.weight.grad[0, 0] = float("nan")
+        before = [p.detach().clone() for p in model.parameters()]
+        updater.step()
+        changed = any(not torch.equal(b, p) for b, p in zip(before, model.parameters()))
+        assert changed == (i != 4), f"step {i}: params changed {changed}"
+    assert updater._optimizer_step._num_captures == 1
 
 
 if __name__ == "__main__":

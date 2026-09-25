@@ -60,7 +60,7 @@ from returnn.frontend.run_ctx import RunCtx, Loss
 # noinspection PyProtectedMember
 from ..data.extern_data import get_batch_dim_from_extern_data, _get_dyn_dims_from_extern_data
 
-__all__ = ["GraphCapturedTrainStep", "graph_pools_reserved"]
+__all__ = ["GraphCapturedTrainStep", "graph_pools_reserved", "inductor_fw_compiler"]
 
 # bytes reserved by the current CUDA-graph private pool, set after capture,
 # for the engine memory log (single active graph per engine; a recapture overwrites)
@@ -290,6 +290,40 @@ def _apply_inductor_workarounds():
     _register_smoothed_ce_bwd_pattern()
 
     _inductor_workarounds_applied = True
+
+
+def _torch_version_ge_2_12() -> bool:
+    return tuple(int(v) for v in torch.__version__.split("+")[0].split(".")[:2]) >= (2, 12)
+
+
+def inductor_fw_compiler(backend: Optional[Callable] = None) -> Callable:
+    """
+    :param backend: the fw compiler for ``aot_function``, default Inductor's ``compile_fx``
+    :return: the fw compiler, for an inference-style graph (no fw/bwd partitioning)
+
+    torch >= 2.12: compile_fx's compat wrapper declares _boxed_call=True
+    but re-wraps an already-boxed args list, so the generated runner sees [[args]];
+    call it star-unpacked instead, while the shim stays boxed towards aot_function.
+    """
+    if backend is None:
+        # noinspection PyProtectedMember
+        from torch._inductor.compile_fx import compile_fx
+
+        backend = compile_fx
+    if not _torch_version_ge_2_12():
+        return backend
+
+    def _compile_fx_call_unboxed(gm, example_inputs):
+        """compile via compile_fx, call the result star-unpacked"""
+        compiled = backend(gm, example_inputs)
+
+        def _call(args):
+            return compiled(*args)
+
+        _call._boxed_call = True
+        return _call
+
+    return _compile_fx_call_unboxed
 
 
 def _register_smoothed_ce_bwd_pattern() -> None:
@@ -1094,23 +1128,8 @@ class GraphCapturedTrainStep:
         # default mode: step_core computes the grads itself, one inference-style graph,
         # never fw/bwd-partitioned (partition_fn / activation_memory_budget do not apply;
         # for that see opts "partitioned")
-        if tuple(int(v) for v in torch.__version__.split("+")[0].split(".")[:2]) >= (2, 12):
-            # torch >= 2.12: compile_fx's compat wrapper declares _boxed_call=True
-            # but re-wraps an already-boxed args list, so the generated runner sees [[args]];
-            # call it star-unpacked instead, while the shim stays boxed towards aot_function.
-            _compile_fx_raw = backend
-
-            def _compile_fx_call_unboxed(gm, example_inputs):
-                """compile via compile_fx, call the result star-unpacked"""
-                compiled = _compile_fx_raw(gm, example_inputs)
-
-                def _call(args):
-                    return compiled(*args)
-
-                _call._boxed_call = True
-                return _call
-
-            backend = _compile_fx_call_unboxed
+        if _torch_version_ge_2_12():
+            backend = inductor_fw_compiler(backend)
             # torch >= 2.12 also lifts closed-over tensors into runtime args of the generated code
             # instead of baking them as graph constants, and raw aot_function does not supply them;
             # pass the buffers as explicit trace inputs, like the partitioned mode above.
