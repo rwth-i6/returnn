@@ -261,6 +261,13 @@ class Engine(EngineBase):
         self._train_step_func = self.config.typed_value("train_step")
         assert self._train_step_func, "train_step not defined"
 
+        if self.config.typed_value("torch_optimizer_step", None) is not None:
+            # separately compiled + captured optimizer step, see returnn.torch.util.optimizer_step
+            assert self._grad_scaler is None, "torch_optimizer_step: grad scaler not supported"
+            assert not (self._graph_capture_opts or {}).get("capture_optimizer", False), (
+                "torch_optimizer_step: exclusive with torch_cuda_graph capture_optimizer"
+            )
+
         if self._graph_capture_opts is not None:
             # whole-train-step CUDA-graph capture/replay, incl backward
             # (see returnn.torch.util.graph_capture)
@@ -281,6 +288,7 @@ class Engine(EngineBase):
                 assert not self._graph_capture_opts.get("capture_optimizer", False), (
                     "torch_cuda_graph: capture_optimizer with reduce_type 'grad_explicit' is not supported,"
                     " the grad reduce must run between the step and the optimizer"
+                    " (torch_optimizer_step captures the optimizer step separately)"
                 )
             self._graph_capture = graph_capture.GraphCapturedTrainStep(
                 opts=self._graph_capture_opts,
@@ -578,7 +586,7 @@ class Engine(EngineBase):
                 if zero_grad_next_step:
                     if self._graph_capture_opts is None:
                         # under graph capture, the grads are static buffers zeroed in-graph
-                        self._updater.get_optimizer().zero_grad()
+                        self._updater.zero_grad()
                     cur_count_grad_accum = 0
 
                 if self._graph_capture is not None:
