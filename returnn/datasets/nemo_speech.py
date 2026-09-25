@@ -179,6 +179,7 @@ class NemoSpeechDataset(CachedDataset2):
         self.preload_next_epoch = preload_next_epoch
         self.use_worker_procs = use_worker_procs
         if _rank_and_size is None:
+            # noinspection PyProtectedMember
             from .distrib_files import _get_rank_and_size
 
             _rank_and_size = _get_rank_and_size()
@@ -196,8 +197,11 @@ class NemoSpeechDataset(CachedDataset2):
             self._audio_feature_dim = ExtractAudioFeatures(**audio).get_feature_dimension()
 
         self.num_inputs = self._audio_feature_dim
-        self.num_outputs = {"data": [self._audio_feature_dim, 2], "raw": {"dtype": "string", "shape": ()}}
-        self.num_outputs["orth"] = [256, 1]
+        self.num_outputs = {
+            "data": [self._audio_feature_dim, 2],
+            "raw": {"dtype": "string", "shape": ()},
+            "orth": [256, 1],
+        }
         self.labels["orth"] = [chr(i) for i in range(256)]
         if self.targets is not None:
             self.num_outputs["classes"] = [self.targets.num_labels, 1]
@@ -900,6 +904,7 @@ def _load_nemo_config(nemo_config, *, structured: bool = True) -> DictConfig:
     from omegaconf import OmegaConf
 
     if callable(nemo_config):
+        # noinspection PyCallingNonCallable
         nemo_config = nemo_config()
     if isinstance(nemo_config, (str, os.PathLike)):
         config = OmegaConf.load(os.fspath(nemo_config))
@@ -1124,8 +1129,8 @@ def _get_partition(node: Any, *, shard_id: int, num_shards: int, process_seed: i
 
     kwargs = dict(shard_id=shard_id, num_shards=num_shards)
 
-    def _resolve_seed(seed: Union[int, str]) -> int:
-        return _resolve_nemo_seed(seed, process_seed=process_seed)
+    def _resolve_seed(value: Union[int, str]) -> int:
+        return _resolve_nemo_seed(value, process_seed=process_seed)
 
     if isinstance(node, (LazyNeMoIterator, LazyNeMoTarredIterator, LazyParquetIterator)) and not node.indexed:
         raise NotImplementedError(f"NemoSpeechDataset: needs indexed sources (NeMo option indexed=true), got {node}")
