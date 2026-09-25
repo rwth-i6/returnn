@@ -561,10 +561,11 @@ class Engine(EngineBase):
                 if self._stall_heartbeat is not None:
                     self._stall_heartbeat.value = time.time()
 
-                # convert values from torch int32 to Python ints to prevent overflow
+                # convert values to Python ints to prevent overflow.
+                # The native reduction promotes int32 to int64 and is one op instead of one per seq.
                 keys_w_seq_len = [k for k in extern_data_raw if f"{k}:seq_len" in extern_data_raw]
                 total_data_size_packed += NumbersDict(
-                    {k: int(sum(extern_data_raw[f"{k}:seq_len"])) for k in keys_w_seq_len},
+                    {k: int(extern_data_raw[f"{k}:seq_len"].sum()) for k in keys_w_seq_len},
                 )
                 total_data_size_padded += NumbersDict(
                     {k: int(util.prod(extern_data_raw[k].shape[:2])) for k in keys_w_seq_len},
@@ -1905,8 +1906,8 @@ def _get_batch_size_info_raw(extern_data_raw: Dict[str, Any]) -> Dict[str, int]:
             continue
         if "num_seqs" not in info:
             info["num_seqs"] = int(len(seq_lens))
-        info[f"max_size:{k}"] = int(max(seq_lens)) if len(seq_lens) else 0
-        info[f"sum_size:{k}"] = int(sum(seq_lens))
+        info[f"max_size:{k}"] = int(seq_lens.max()) if len(seq_lens) else 0
+        info[f"sum_size:{k}"] = int(seq_lens.sum())
     return info
 
 

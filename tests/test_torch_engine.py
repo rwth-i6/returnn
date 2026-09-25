@@ -188,6 +188,27 @@ def test_raw_dict_split_batch_packed():
     torch.testing.assert_close(torch.cat([parts[0]["data"], parts[1]["data"]], dim=0), raw["data"])
 
 
+def test_get_batch_size_info_raw():
+    from returnn.torch.engine import _get_batch_size_info_raw
+
+    raw = {
+        "data": torch.zeros(3, 4, 5),
+        "data:seq_len": torch.tensor([4, 2, 3], dtype=torch.int32),
+        "classes": numpy.zeros((3, 2), dtype="int32"),
+        "classes:seq_len": numpy.array([2, 1, 2], dtype="int32"),
+    }
+    info = _get_batch_size_info_raw(raw)
+    assert info == {"num_seqs": 3, "max_size:data": 4, "sum_size:data": 9, "max_size:classes": 2, "sum_size:classes": 5}
+    assert all(type(v) is int for v in info.values())
+
+    empty = {"data": torch.zeros(0, 0, 5), "data:seq_len": torch.zeros(0, dtype=torch.int32)}
+    assert _get_batch_size_info_raw(empty) == {"num_seqs": 0, "max_size:data": 0, "sum_size:data": 0}
+
+    # int32 total beyond 2**31 must not overflow
+    large = {"data": torch.zeros(3, 1), "data:seq_len": torch.full((3,), 2**30, dtype=torch.int32)}
+    assert _get_batch_size_info_raw(large)["sum_size:data"] == 3 * 2**30
+
+
 def test_torch_engine_forward_simple():
     def _get_model(**_kwargs):
         return torch.nn.Module()
