@@ -373,6 +373,70 @@ def test_smoothed_ce_bwd_inductor_pattern():
     assert graph_capture._smoothed_ce_bwd_match_count > count_before, "CE bwd pattern did not fire"
 
 
+def test_all_reduce_sum_traces():
+    """
+    the differentiable all-reduce (the synchronized BatchNorm statistics go through it) traces under AOT autograd:
+    the compiled step of torch_cuda_graph runs on fake tensors, which a direct collective call cannot take
+    """
+    import torch.distributed as dist
+    from functorch.compile import aot_function, nop
+    from returnn.torch.util.distributed import all_reduce_sum
+
+    own_group = not dist.is_initialized()
+    if own_group:
+        dist.init_process_group("gloo", store=dist.HashStore(), rank=0, world_size=1)
+    try:
+
+        def _loss(x_):
+            return all_reduce_sum(x_ * 2.0).square().sum()
+
+        x = torch.randn(5, requires_grad=True)
+        (ref,) = torch.autograd.grad(_loss(x), x)
+        traced = aot_function(_loss, fw_compiler=nop, bw_compiler=nop)
+        (grad,) = torch.autograd.grad(traced(x), x)
+        torch.testing.assert_close(grad, ref)
+    finally:
+        if own_group:
+            dist.destroy_process_group()
+
+
+def test_all_reduce_sum_eager_takes_the_custom_op():
+    """
+    on the default group an eager call goes through the same custom op as a traced step,
+    forward and backward, so the tensor type does not decide between two implementations
+    """
+    import torch.distributed as dist
+    from torch.utils._python_dispatch import TorchDispatchMode
+    from returnn.torch.util.distributed import all_reduce_sum
+
+    if not hasattr(torch.library, "custom_op"):
+        raise unittest.SkipTest("torch without torch.library.custom_op")
+
+    class _OpNames(TorchDispatchMode):
+        def __init__(self):
+            super().__init__()
+            self.names = []
+
+        def __torch_dispatch__(self, func, types, args=(), kwargs=None):
+            self.names.append(str(func))
+            return func(*args, **(kwargs or {}))
+
+    own_group = not dist.is_initialized()
+    if own_group:
+        dist.init_process_group("gloo", store=dist.HashStore(), rank=0, world_size=1)
+    try:
+        x = torch.randn(5, requires_grad=True)
+        with _OpNames() as ops:
+            out = all_reduce_sum(x)
+            (grad,) = torch.autograd.grad(out, x, grad_outputs=torch.ones(5))
+        assert ops.names.count("returnn.all_reduce_sum.default") == 2, ops.names
+        torch.testing.assert_close(out, x)
+        torch.testing.assert_close(grad, torch.ones(5))
+    finally:
+        if own_group:
+            dist.destroy_process_group()
+
+
 def test_masked_select_bound():
     from returnn.torch.util.array_ import masked_select_bound
 
