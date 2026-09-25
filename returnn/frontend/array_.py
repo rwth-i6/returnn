@@ -967,7 +967,8 @@ def scatter(
     :param indices_dim:
     :param mode: "sum", "max", "min", "mean", "logsumexp", "logmeanexp", "argmax".
         (Note: If you ever need another mode, please open an issue/PR.)
-    :param fill_value:
+    :param fill_value: value of the output entries no index writes to. With mode="argmax", -1 when not given,
+        as in :func:`scatter_argmax`.
     :param out_dim: The indices target dim.
         If not given, will be automatically determined as the sparse_dim from indices.
         If multiple out dims, use indices into the merged out dims,
@@ -986,7 +987,13 @@ def scatter(
             source, indices=indices, indices_dim=indices_dim, fill_value=fill_value, out_dim=out_dim
         )
     if mode == "argmax":
-        return scatter_argmax(source, indices=indices, indices_dim=indices_dim, invalid_idx=fill_value, out_dim=out_dim)
+        return scatter_argmax(
+            source,
+            indices=indices,
+            indices_dim=indices_dim,
+            invalid_idx=-1 if fill_value is None else fill_value,
+            out_dim=out_dim,
+        )
     if not out_dim:
         assert isinstance(indices, Tensor) and indices.sparse_dim
         out_dim = indices.sparse_dim

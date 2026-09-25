@@ -1031,6 +1031,30 @@ def test_scatter_argmax():
         np.testing.assert_array_equal(out_ref, out_comp)
 
 
+def test_scatter_argmax_via_scatter_mode_without_fill_value():
+    time_dim = Dim(Tensor("time", [batch_dim], dtype="int32"))
+    extern_data = TensorDict(
+        {
+            "data": Tensor("data", [batch_dim, time_dim], dtype="float32"),
+            "mask": Tensor("mask", [batch_dim, time_dim], dtype="bool"),
+        }
+    )
+
+    def _forward_step(*, extern_data: TensorDict, **_kwargs):
+        data = extern_data["data"]
+        mask = extern_data["mask"]
+        indices = rf.cumsum(rf.cast(mask, "int32"), spatial_dim=time_dim)
+        out_seq_lens = rf.reduce_max(indices, axis=time_dim) + 1
+        out_spatial_dim = Dim(out_seq_lens)
+        direct = rf.scatter_argmax(data, indices=indices, indices_dim=time_dim, out_dim=out_spatial_dim)
+        direct.mark_as_output("direct", shape=(batch_dim, out_spatial_dim))
+        out = rf.scatter(data, indices=indices, indices_dim=time_dim, mode="argmax", out_dim=out_spatial_dim)
+        out.mark_as_default_output(shape=(batch_dim, out_spatial_dim))
+
+    res = run_model(extern_data, lambda **_: rf.Module(), _forward_step, test_tensorflow=False)
+    np.testing.assert_array_equal(res["direct"].raw_tensor, res["output"].raw_tensor)
+
+
 def test_slice():
     time_dim = Dim(Tensor("time", [batch_dim], dtype="int32"))
     in_dim = Dim(7, name="in")
