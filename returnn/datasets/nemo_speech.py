@@ -76,7 +76,10 @@ class NemoSpeechDataset(CachedDataset2):
     except SentencePiece sampling, which only has a global RNG.
     Workers prefetch up to ``buffer_size`` seqs, also into the next epoch, tagged by epoch.
 
-    Metadata access (tags, bounds checks, raw audio lengths) does not load the audio.
+    Metadata access (tags, raw audio lengths) does not load the audio,
+    the bounds check (``is_less_than_num_seqs(n)``) only the audio of seq n.
+    Seqs whose audio fails to load (``fault_tolerant_audio_loading``) are dropped,
+    so tags obtained before loading can shift then.
     The valid records (without ``_skipme``) are determined once per shard at startup,
     from the index pack routes, or otherwise by decoding the manifest records.
 
@@ -341,39 +344,54 @@ class NemoSpeechDataset(CachedDataset2):
             self._merge_seq_idx += 1
         return self._pending.get(seq_idx)
 
+    def _get_loaded_item(self, seq_idx: int) -> Optional[_ShardItem]:
+        """
+        :return: merged item for seq_idx with audio, or None at the end of the epoch.
+            Seqs whose audio fails to load (fault tolerant audio loading) are dropped here,
+            and the later seqs shift down.
+        """
+        while True:
+            item = self._get_merged_item(seq_idx, load=True)
+            if item is None or "data" in item.features:
+                return item
+            # Was merged for metadata access only.
+            data = self._shards[item.shard_idx].load(item.epoch, item.draw_idx)
+            if data is not None:
+                item.features["data"] = data
+                return item
+            del self._pending[seq_idx]
+            self._pending = {(idx - 1 if idx > seq_idx else idx): v for idx, v in self._pending.items()}
+            self._merge_seq_idx -= 1
+            if self._num_seqs is not None:
+                self._num_seqs -= 1
+
     def _collect_single_seq(self, seq_idx: int) -> Optional[DatasetSeq]:
         if self.epoch is None:
             return None
         for idx in [idx for idx in self._pending if idx < seq_idx]:
             del self._pending[idx]
         assert seq_idx >= self._merge_seq_idx or seq_idx in self._pending, f"{self}: cannot go back to {seq_idx}"
-        item = self._get_merged_item(seq_idx, load=True)
+        item = self._get_loaded_item(seq_idx)
         if item is None:
             return None
-        if "data" not in item.features:  # was merged for metadata access only
-            data = self._shards[item.shard_idx].load(item.epoch, item.draw_idx)
-            if data is None:  # fault tolerant audio loading: drop it, and shift the later seqs
-                del self._pending[seq_idx]
-                self._pending = {(idx - 1 if idx > seq_idx else idx): v for idx, v in self._pending.items()}
-                self._merge_seq_idx -= 1
-                if self._num_seqs is not None:
-                    self._num_seqs -= 1
-                return self._collect_single_seq(seq_idx)
-            item.features["data"] = data
         del self._pending[seq_idx]
         return DatasetSeq(
             seq_idx=seq_idx, seq_tag=item.seq_tag, features=item.features, complete_frac=item.complete_frac
         )
 
     def is_less_than_num_seqs(self, n: int) -> bool:
-        """:return: whether n < num_seqs, without loading the audio"""
+        """
+        :return: whether n < num_seqs.
+            Only the audio of seq n itself is loaded (not of the seqs before),
+            as only loading tells whether the seq is there (fault tolerant audio loading).
+        """
         if self._num_seqs is not None:
             return n < self._num_seqs
         if self.epoch is None:
             return False
-        if n < self.expected_load_seq_start or self._get_seq(n) is not None or n in self._pending:
+        if n < self.expected_load_seq_start or self._get_seq(n) is not None:
             return True
-        if self._get_merged_item(n, load=False) is not None:
+        if self._get_loaded_item(n) is not None:
             return True
         self._num_seqs = self._merge_seq_idx
         self.reached_final_seq = True

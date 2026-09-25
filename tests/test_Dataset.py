@@ -1721,12 +1721,15 @@ def _get_nemo_speech_data() -> Dict[str, Any]:
     words = "alpha beta gamma delta epsilon zeta eta theta iota kappa lambda mu".split()
     rnd = numpy.random.RandomState(1)
     texts = []
-    for name, num_shards, utts_per_shard, skip, too_long in [
-        ("srcA", 3, 10, [5], [3, 17]),
-        ("srcB", 2, 7, [0], []),
-        ("srcC", 1, 5, [], []),
-        ("srcD", 1, 10, list(range(9)), []),  # only one valid record
-        ("srcE", 1, 10, [], []),
+    for name, num_shards, utts_per_shard, skip, too_long, corrupt in [
+        ("srcA", 3, 10, [5], [3, 17], []),
+        ("srcB", 2, 7, [0], [], []),
+        ("srcC", 1, 5, [], [], []),
+        ("srcD", 1, 10, list(range(9)), [], []),  # only one valid record
+        ("srcE", 1, 10, [], [], []),
+        ("srcF", 1, 10, [], [], [9]),  # corrupt audio at the end
+        ("srcG", 1, 10, [], [], [7, 8, 9]),
+        ("srcH", 1, 3, [], [], [0, 1, 2]),
     ]:
         os.makedirs(f"{root}/{name}")
         utt_idx = 0
@@ -1740,6 +1743,8 @@ def _get_nemo_speech_data() -> Dict[str, Any]:
                     audio = rnd.uniform(-0.5, 0.5, num_samples).astype("float32")
                     soundfile.write(buf, audio, _NemoSampleRate, format="WAV", subtype="PCM_16")
                     payload = buf.getvalue()  # not buf.tell(), the writer seeks back to finalize the header
+                    if utt_idx in corrupt:
+                        payload = b"not audio" * 10
                     info = tarfile.TarInfo(f"{name}-{utt_idx}.wav")
                     info.size = len(payload)
                     tar.addfile(info, io.BytesIO(payload))
@@ -1779,7 +1784,8 @@ def _get_nemo_speech_data() -> Dict[str, Any]:
     _nemo_speech_data["bpe_vocab"] = f"{root}/bpe.vocab"
     _nemo_speech_data["root"] = root
     _nemo_speech_data["spm"] = f"{root}/spm.model"
-    _nemo_speech_data["sizes"] = {"srcA": 30, "srcB": 14, "srcC": 5, "srcD": 10, "srcE": 10}
+    _nemo_speech_data["sizes"] = {"srcA": 30, "srcB": 14, "srcC": 5, "srcD": 10, "srcE": 10, "srcF": 10}
+    _nemo_speech_data["sizes"].update({"srcG": 10, "srcH": 3})
     _nemo_speech_data["valid_sizes"] = {"srcA": 29, "srcB": 13, "srcC": 5, "srcD": 1, "srcE": 10}
     return _nemo_speech_data
 
@@ -1939,6 +1945,36 @@ def test_NemoSpeechDataset_skipped_records():
     assert [s.seq_tag for s in direct] == [s.seq_tag for s in epochs[4]]
 
 
+def test_NemoSpeechDataset_failed_audio():
+    # Records whose audio fails to load (fault_tolerant_audio_loading) are dropped,
+    # and the bounds check agrees with the loading, also at the end of the epoch.
+    data = _get_nemo_speech_data()  # first, skips if NeMo Speech is not available
+    from returnn.datasets.nemo_speech import NemoSpeechDataset
+
+    for name, num_ok, worker_procs_opts in [("srcF", 9, [False]), ("srcG", 7, [False, True]), ("srcH", 0, [True])]:
+        config = _get_nemo_speech_config(weights=[], max_duration=None, fault_tolerant_audio_loading=True)
+        config["input_cfg"] = [{**data[name], "weight": 1.0}]
+        size = data["sizes"][name]  # one epoch = one pass, in record order
+        for use_worker_procs in worker_procs_opts:
+            dataset = NemoSpeechDataset(nemo_config=config, draws_per_epoch=size, use_worker_procs=use_worker_procs)
+            # Look ahead: merges the seqs for metadata only, their audio is loaded on demand.
+            # In-process, nothing is loaded yet, so the failing records are only noticed when loading.
+            lookahead = (size - 1) if not use_worker_procs else (num_ok - 1)
+            for epoch, lookahead_ in [(1, None), (2, lookahead)]:
+                dataset.init_seq_order(epoch=epoch)
+                if lookahead_ is not None and lookahead_ >= 0:
+                    dataset.get_tag(lookahead_)
+                tags, seq_idx = [], 0
+                while dataset.is_less_than_num_seqs(seq_idx):  # as ReturnnDatasetIterDataPipe
+                    dataset.load_seqs(seq_idx, seq_idx + 1)
+                    assert dataset.get_data(seq_idx, "data").shape[0] > 0
+                    tags.append(dataset.get_tag(seq_idx))
+                    seq_idx += 1
+                assert tags == [f"{name}-{i}.wav" for i in range(num_ok)], (name, use_worker_procs, epoch)
+                assert dataset.num_seqs == num_ok
+            dataset.finish_epoch(free_resources=True)
+
+
 def _nemo_speech_random_gain(*, audio, sample_rate, random_state):
     return audio * random_state.uniform(0.5, 1.5)
 
@@ -1993,7 +2029,7 @@ def test_NemoSpeechDataset_metadata_no_audio():
         assert num_loads == 1
         _nemo_speech_assert_same_seqs([dataset.added_data[-1]], [ref[7]])
         assert dataset.is_less_than_num_seqs(len(ref) - 1) and not dataset.is_less_than_num_seqs(len(ref))
-        assert dataset.num_seqs == len(ref) and num_loads == 1
+        assert dataset.num_seqs == len(ref) and num_loads == 2  # bounds check loads only the checked seq
     finally:
         MonoCut.load_audio = orig_load_audio
 
