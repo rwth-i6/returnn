@@ -46,6 +46,7 @@ if hasattr(torch.library, "custom_op"):  # torch >= 2.4
     # An opaque op with a fake implementation and a registered backward:
     # AOT tracing (the compiled step of torch_cuda_graph, no Dynamo) runs on fake tensors,
     # which the direct collective of the autograd.Function above cannot take.
+    # Also used outside of tracing, so traced and normal steps run the same op.
     # Only for the default group, a process group is no op argument.
 
     @torch.library.custom_op("returnn::all_reduce_sum", mutates_args=())
@@ -86,7 +87,6 @@ def all_reduce_sum(x: torch.Tensor, *, group=None) -> torch.Tensor:
     :param group: process group, or None for the default group
     :return: the sum of ``x`` across all workers, same shape, differentiable
     """
-    if _HAVE_LIB_OPS and group is None and type(x) not in (torch.Tensor, torch.nn.Parameter):
-        # a traced call (fake or functional tensors)
+    if _HAVE_LIB_OPS and group is None:
         return torch.ops.returnn.all_reduce_sum(x)
     return _AllReduceSum.apply(x, group)
