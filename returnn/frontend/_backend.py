@@ -1179,6 +1179,34 @@ class Backend(Generic[T]):
         raise NotImplementedError
 
     @staticmethod
+    def shift_right(source: Tensor, *, axis: Dim, pad_value: Union[Tensor, rf.RawTensorTypes], amount: int) -> Tensor:
+        """
+        :param source:
+        :param axis:
+        :param pad_value: fills the first ``amount`` positions
+        :param amount:
+        :return: source shifted right by amount along axis, same dims
+        """
+        padded, (padded_dim,) = rf.pad(source, axes=[axis], padding=[(amount, 0)], mode="constant", value=pad_value)
+        padded_slice, _ = rf.slice(padded, axis=padded_dim, size=axis)
+        return padded_slice
+
+    @staticmethod
+    def shift_left(source: Tensor, *, axis: Dim, pad_value: Union[Tensor, rf.RawTensorTypes], amount: int) -> Tensor:
+        """
+        :param source:
+        :param axis:
+        :param pad_value: fills the last ``amount`` positions of every sequence
+        :param amount:
+        :return: source shifted left by amount along axis, same dims
+        """
+        padded, (padded_dim,) = rf.pad(
+            source, axes=[axis], padding=[(0, amount)], mode="constant", value=pad_value, handle_dynamic_dims=True
+        )
+        padded_slice, _ = rf.slice(padded, axis=padded_dim, start=amount, size=axis)
+        return padded_slice
+
+    @staticmethod
     def flip_no_mask(source: Tensor, *, axis: Dim) -> Tensor:
         """flip, ignoring masking"""
         raise NotImplementedError
