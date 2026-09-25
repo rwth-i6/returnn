@@ -45,68 +45,45 @@ class NemoSpeechDataset(CachedDataset2):
     e.g. a data mixture defined via nested ``input_cfg``.
     Requires ``nemo`` (NeMo Speech) and ``lhotse`` with indexed data access.
 
-    Reading, filtering and audio loading are done by NeMo Speech itself:
+    NeMo Speech does the reading, filtering and audio loading:
     :func:`read_cutset_from_config` builds the sources (manifest readers, tarred audio, index packs),
-    and the same filters as in :func:`get_lhotse_sampler_from_config` are applied.
-    Only the example selection differs from NeMo's infinite stream, see below.
-    Batching is done by RETURNN, i.e. any NeMo batching or bucketing options are ignored.
+    with the same maps and filters as :func:`get_lhotse_sampler_from_config`.
+    Only the selection of the records differs from NeMo's infinite stream, see epochs below.
+    RETURNN does the batching, i.e. NeMo batching and bucketing options are ignored.
 
-    Sharding follows NeMo:
-    every (rank, NeMo dataloader worker) pair is one shard,
-    ``shard_id = rank * num_workers + worker_id``,
+    Sharding as in NeMo:
+    one shard per (rank, NeMo dataloader worker), ``shard_id = rank * num_workers + worker_id``,
     with ``num_workers`` from the NeMo config,
-    and each shard reads exactly the records of every source which NeMo assigns to it
-    (:class:`lhotse.dataset.dataloading.PartitionedIndexedIterator` and friends).
+    reading exactly the records which NeMo assigns to it.
     Every shard runs in its own worker process, like a NeMo dataloader worker.
-    Seeds follow NeMo as well: ``shard_seed`` (int, or ``"randomized"``: per-worker ``seed`` as in lhotse),
-    ``"trng"`` is not reproducible and thus not supported.
-    RETURNN dataset sharding (``_num_shards``) must not be used on top.
+    Seeds as in NeMo: ``shard_seed`` int or ``"randomized"`` (``"trng"`` is not reproducible, not supported).
+    RETURNN dataset sharding must not be used on top.
 
     Epochs:
-    The progress unit is a *draw*:
-    one record taken from one source (leaf of the ``input_cfg`` tree),
-    counted before filtering, like one step of NeMo's weighted source multiplexer.
-    Each epoch has a budget of ``draws_per_epoch`` draws (sum over all shards).
-    Draws are distributed over the sources proportional to the effective source weights,
-    via cumulative quotas which stay within one draw of the exact weight at every epoch boundary.
-    Every source continues where the previous epoch stopped
-    and runs through complete passes over its shard records,
-    so every record is visited once per pass, across epoch boundaries.
-    Records which are rejected by the filters consume their draw, as in NeMo.
-    Records which the NeMo source skips (e.g. ``_skipme``) are not drawn at all, as in NeMo:
-    each shard determines the valid records of its partition once, at startup,
-    from the index pack routes if available, otherwise by decoding the manifest records.
-    For sources which reshuffle per pass (``shuffle_shards`` of non-tarred sources),
-    skipped records are not supported (raises).
-    The start position of every source in epoch N is computed arithmetically
-    from the quotas of epochs 1 to N-1, i.e. without reading any earlier data.
-    Within an epoch, the order is random (from ``shard_seed`` and the epoch),
-    in windows of ``shuffle_window`` draws, like NeMo's shuffle buffer.
-    The accepted number of seqs of an epoch is only known at its end (``num_seqs`` is unknown),
-    the ``complete_frac`` is the exact fraction of the draw budget.
-    Random transformations (``audio`` features, sampling ``targets``) are seeded per seq occurrence
-    (shard seed, epoch, draw),
-    so they do not depend on prefetching, skipping or earlier epochs.
-    Except for SentencePiece sampling, which only has a global RNG.
-    ``get_tag`` and ``get_seq_length`` (for raw audio) do not load the audio.
+    One epoch is ``draws_per_epoch`` draws (sum over all shards).
+    A draw is one record from one source (leaf of the ``input_cfg`` tree), like one step of NeMo's multiplexer:
+    records which NeMo's source skips (e.g. ``_skipme``) are not drawn,
+    records rejected by the filters are.
+    Draws are distributed over the sources by their weights,
+    within one draw of the exact weight at every epoch boundary.
+    Every source continues where the previous epoch stopped, in complete passes over its records.
+    So epoch N is determined by the epoch number alone (arithmetic over the quotas of earlier epochs),
+    and starting directly at epoch N gives the same data as running epochs 1 to N
+    (assuming the same world size and ``num_workers``).
+    Within an epoch, the order is random (``shard_seed``, epoch), shuffled in windows of ``shuffle_window`` draws.
+    ``num_seqs`` is only known at the end of an epoch, ``complete_frac`` is the fraction of the draws.
+    Random transformations (``audio`` features, sampling ``targets``) are seeded per seq occurrence,
+    except SentencePiece sampling, which only has a global RNG.
+    Workers prefetch up to ``buffer_size`` seqs, also into the next epoch, tagged by epoch.
 
-    Buffers:
-    Workers prefetch up to ``buffer_size`` seqs, and continue into the next epoch when the current one is done.
-    Every buffered seq is tagged with its epoch,
-    so it can never leak into another epoch.
-    Starting directly at some epoch reconstructs the same selection and refills the buffers.
+    Metadata access (tags, bounds checks, raw audio lengths) does not load the audio.
+    The valid records (without ``_skipme``) are determined once per shard at startup,
+    from the index pack routes, or otherwise by decoding the manifest records.
 
-    Resuming at seq index K within an epoch (``load_seqs`` starting at K) is supported:
-    the plan is recomputed (arithmetic only),
-    and the manifest records of the skipped draws are decoded and filtered to find the accepted seqs,
-    without loading any audio.
-    The cost is thus about K / acceptance_rate manifest record reads, spread over the workers.
-    Seq indices are exact unless some audio before K failed to load (``fault_tolerant_audio_loading``),
-    which is only noticed when the audio is loaded.
-    Direct epoch init and resuming assume unchanged world size and NeMo ``num_workers``.
-
-    Not supported (raises): NeMo map-style dataset mode (non-tarred data, ``force_map_dataset``),
+    Not supported (raises):
+    NeMo map-style dataset mode (non-tarred data, ``force_map_dataset``),
     non-indexed sources (``indexed: false``),
+    skipped records in sources which reshuffle per pass (``shuffle_shards`` of non-tarred sources),
     ``max_open_streams``, multi-config, multimodal sampling, and NeMo data augmentations.
 
     Example::
@@ -353,7 +330,7 @@ class NemoSpeechDataset(CachedDataset2):
                 shard.init_epoch(self.epoch)
             self._shards_epoch = self.epoch
         while self._merge_seq_idx <= seq_idx:
-            # Seqs before seq_idx are not loaded (e.g. resume), but only decoded and filtered.
+            # Seqs before seq_idx (if skipped) only get decoded and filtered, their audio is not loaded.
             item = self._merge_next(load=load and self._merge_seq_idx == seq_idx)
             if item is None:
                 return None

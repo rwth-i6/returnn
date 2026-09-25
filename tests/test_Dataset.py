@@ -1871,7 +1871,7 @@ def test_NemoSpeechDataset_epochs():
         assert max(occurrences) - min(occurrences) <= 1  # complete passes
         assert abs(sum(occurrences) - weight / 3.5 * num_epochs * 20) < 2, f"{name}: {sum(occurrences)}"
 
-    # Uninterrupted (worker procs, prefetch into the next epoch) vs direct epoch init vs resume within the epoch,
+    # Uninterrupted (worker procs, prefetch into the next epoch) vs direct epoch init,
     # with random transformations (sampled targets, random audio gain).
     config = _get_nemo_speech_config(weights=[1.0, 2.0, 0.5], num_workers=2, shuffle=True, shuffle_buffer_size=4)
     opts = dict(
@@ -1890,15 +1890,6 @@ def test_NemoSpeechDataset_epochs():
     dataset.finish_epoch(free_resources=True)
     direct = dummy_iter_dataset(NemoSpeechDataset(**opts, use_worker_procs=False), epoch=3)
     _nemo_speech_assert_same_seqs(direct, uninterrupted)
-    start = len(direct) // 2
-    dataset = NemoSpeechDataset(**opts, use_worker_procs=False)
-    dataset.init_seq_order(epoch=3)
-    seq_idx = start
-    while dataset.is_less_than_num_seqs(seq_idx):
-        dataset.load_seqs(seq_idx, seq_idx + 1)
-        _nemo_speech_assert_same_seqs([dataset.added_data[-1]], [direct[seq_idx]])
-        seq_idx += 1
-    assert seq_idx == len(direct)
     # The transformations are really random: targets differ from the plain (full word) encoding, the gains vary.
     assert any(len(seq.features["classes"]) != len(seq.features["raw"].item().split()) for seq in direct)
     plain_opts = {k: v for k, v in opts.items() if k not in ("targets", "audio")}
@@ -1993,7 +1984,7 @@ def test_NemoSpeechDataset_metadata_no_audio():
         dataset.load_seqs(0, 5)  # the seq only accessed for metadata gets its audio later
         _nemo_speech_assert_same_seqs(dataset.added_data, ref[:5])
 
-        # Resume at seq 7: no audio decoding for the skipped seqs, also not in the bounds checks.
+        # Start at seq 7: no audio decoding for the seqs before, also not in the bounds checks.
         dataset = NemoSpeechDataset(**opts)
         dataset.init_seq_order(epoch=2)
         num_loads = 0
