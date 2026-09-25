@@ -1725,6 +1725,8 @@ def _get_nemo_speech_data() -> Dict[str, Any]:
         ("srcA", 3, 10, [5], [3, 17]),
         ("srcB", 2, 7, [0], []),
         ("srcC", 1, 5, [], []),
+        ("srcD", 1, 10, list(range(9)), []),  # only one valid record
+        ("srcE", 1, 10, [], []),
     ]:
         os.makedirs(f"{root}/{name}")
         utt_idx = 0
@@ -1777,7 +1779,8 @@ def _get_nemo_speech_data() -> Dict[str, Any]:
     _nemo_speech_data["bpe_vocab"] = f"{root}/bpe.vocab"
     _nemo_speech_data["root"] = root
     _nemo_speech_data["spm"] = f"{root}/spm.model"
-    _nemo_speech_data["sizes"] = {"srcA": 30, "srcB": 14, "srcC": 5}
+    _nemo_speech_data["sizes"] = {"srcA": 30, "srcB": 14, "srcC": 5, "srcD": 10, "srcE": 10}
+    _nemo_speech_data["valid_sizes"] = {"srcA": 29, "srcB": 13, "srcC": 5, "srcD": 1, "srcE": 10}
     return _nemo_speech_data
 
 
@@ -1810,8 +1813,8 @@ def test_NemoSpeechDataset_vs_nemo():
     # noinspection PyUnresolvedReferences,PyPackageRequirements
     from nemo.collections.common.tokenizers.sentencepiece_tokenizer import SentencePieceTokenizer
 
-    sizes = [data["sizes"][name] for name in ["srcA", "srcB", "srcC"]]
-    # Weights = sizes, one epoch = all records: exactly one pass over every source, as NeMo with force_finite.
+    sizes = [data["valid_sizes"][name] for name in ["srcA", "srcB", "srcC"]]
+    # Weights = valid sizes, one epoch = all valid records: one pass over every source, as NeMo with force_finite.
     config = _get_nemo_speech_config(weights=sizes)
     tokenizer = SentencePieceTokenizer(data["spm"])
 
@@ -1840,8 +1843,8 @@ def test_NemoSpeechDataset_vs_nemo():
     for opts in [{"targets": {"class": "SentencePieces", "model_file": data["spm"]}}, {"tokenizer": tokenizer}]:
         dataset = NemoSpeechDataset(nemo_config=config, draws_per_epoch=sum(sizes), use_worker_procs=False, **opts)
         seqs = {seq.seq_tag: seq for seq in dummy_iter_dataset(dataset, epoch=1)}
-        # 2 skipped (_skipme), 2 filtered (max_duration).
-        assert len(seqs) == sum(sizes) - 4
+        # 2 filtered (max_duration). The skipped (_skipme) are not drawn.
+        assert len(seqs) == sum(sizes) - 2
         assert set(seqs) == set(nemo_seqs)
         for tag, (audio, tokens) in nemo_seqs.items():
             numpy.testing.assert_array_equal(seqs[tag].features["data"][:, 0], audio)
@@ -1853,7 +1856,7 @@ def test_NemoSpeechDataset_epochs():
 
     data = _get_nemo_speech_data()
 
-    # Weights and coverage over epochs, in draws (skipped records consume a draw).
+    # Weights and coverage over epochs, in draws over the valid (not skipped) records.
     config = _get_nemo_speech_config(weights=[1.0, 2.0, 0.5], max_duration=None)
     dataset = NemoSpeechDataset(nemo_config=config, draws_per_epoch=20, use_worker_procs=False)
     counts = {name: {} for name in data["sizes"]}
@@ -1862,16 +1865,11 @@ def test_NemoSpeechDataset_epochs():
         for seq in dummy_iter_dataset(dataset, epoch=epoch):
             name = seq.seq_tag.split("-")[0]
             counts[name][seq.seq_tag] = counts[name].get(seq.seq_tag, 0) + 1
-    for name, weight, skipped_pos in [("srcA", 1.0, [5]), ("srcB", 2.0, [0]), ("srcC", 0.5, [])]:
-        size = data["sizes"][name]
+    for name, weight in [("srcA", 1.0), ("srcB", 2.0), ("srcC", 0.5)]:
         occurrences = list(counts[name].values())
-        assert len(occurrences) == size - len(skipped_pos), f"{name}: not all records covered"
+        assert len(occurrences) == data["valid_sizes"][name], f"{name}: not all records covered"
         assert max(occurrences) - min(occurrences) <= 1  # complete passes
-        expected_draws = weight / 3.5 * num_epochs * 20
-        possible = set()  # single shard: source position == record index
-        for draws in range(int(expected_draws) - 1, int(expected_draws) + 3):
-            possible.add(draws - sum(len(range(pos, draws, size)) for pos in skipped_pos))
-        assert sum(occurrences) in possible, f"{name}: {sum(occurrences)} not in {possible}"
+        assert abs(sum(occurrences) - weight / 3.5 * num_epochs * 20) < 2, f"{name}: {sum(occurrences)}"
 
     # Uninterrupted (worker procs, prefetch into the next epoch) vs direct epoch init vs resume within the epoch,
     # with random transformations (sampled targets, random audio gain).
@@ -1911,6 +1909,43 @@ def test_NemoSpeechDataset_epochs():
         for s, p in zip(direct, plain)
     }
     assert len(gains) > 1, f"gains {gains}"
+
+
+def test_NemoSpeechDataset_skipped_records():
+    # Skipped records (_skipme) are not drawn, as in NeMo, where the source iterator skips them before the mux.
+    data = _get_nemo_speech_data()  # first, skips if NeMo Speech is not available
+    from returnn.datasets.nemo_speech import NemoSpeechDataset
+
+    # noinspection PyUnresolvedReferences,PyPackageRequirements
+    from nemo.collections.common.data.lhotse.cutset import read_cutset_from_config
+
+    config = _get_nemo_speech_config(weights=[], max_duration=None)
+    config["input_cfg"] = [{**data["srcD"], "weight": 1.0}, {**data["srcE"], "weight": 1.0}]  # srcD: 9/10 skipped
+    # The NeMo source iterators, i.e. the valid records in NeMo traversal order.
+    nemo_order = {}
+    for entry in config["input_cfg"]:
+        cuts, _ = read_cutset_from_config({**config, "input_cfg": [entry], "force_finite": True})
+        tags = [cut.id for cut in cuts]
+        nemo_order[tags[0].split("-")[0]] = tags
+    assert len(nemo_order["srcD"]) == 1 and len(nemo_order["srcE"]) == 10
+
+    opts = dict(nemo_config=config, draws_per_epoch=20, use_worker_procs=False)
+    dataset = NemoSpeechDataset(**opts)
+    per_source = {"srcD": [], "srcE": []}
+    epochs = {}
+    for epoch in range(1, 7):
+        epochs[epoch] = dummy_iter_dataset(dataset, epoch=epoch)
+        tags = [seq.seq_tag for seq in epochs[epoch]]
+        for name in per_source:
+            src_tags = [tag for tag in tags if tag.startswith(name + "-")]
+            assert len(src_tags) == 10, f"epoch {epoch}: {name}: {len(src_tags)} of 20, equal weights expected"
+            per_source[name].extend(src_tags)
+    for name, tags in per_source.items():
+        # Complete passes over the valid records, in NeMo traversal order, continued across epochs.
+        order = nemo_order[name]
+        assert tags == [order[i % len(order)] for i in range(len(tags))], name
+    direct = dummy_iter_dataset(NemoSpeechDataset(**opts), epoch=4)
+    assert [s.seq_tag for s in direct] == [s.seq_tag for s in epochs[4]]
 
 
 def _nemo_speech_random_gain(*, audio, sample_rate, random_state):
@@ -1957,6 +1992,17 @@ def test_NemoSpeechDataset_metadata_no_audio():
         assert dataset.get_tag(3) == ref[3].seq_tag
         dataset.load_seqs(0, 5)  # the seq only accessed for metadata gets its audio later
         _nemo_speech_assert_same_seqs(dataset.added_data, ref[:5])
+
+        # Resume at seq 7: no audio decoding for the skipped seqs, also not in the bounds checks.
+        dataset = NemoSpeechDataset(**opts)
+        dataset.init_seq_order(epoch=2)
+        num_loads = 0
+        assert dataset.is_less_than_num_seqs(7)
+        dataset.load_seqs(7, 8)
+        assert num_loads == 1
+        _nemo_speech_assert_same_seqs([dataset.added_data[-1]], [ref[7]])
+        assert dataset.is_less_than_num_seqs(len(ref) - 1) and not dataset.is_less_than_num_seqs(len(ref))
+        assert dataset.num_seqs == len(ref) and num_loads == 1
     finally:
         MonoCut.load_audio = orig_load_audio
 

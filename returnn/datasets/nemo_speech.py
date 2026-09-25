@@ -10,6 +10,7 @@ from collections import deque
 import functools
 import os
 import sys
+import time
 import types
 import numpy
 
@@ -72,9 +73,11 @@ class NemoSpeechDataset(CachedDataset2):
     and runs through complete passes over its shard records,
     so every record is visited once per pass, across epoch boundaries.
     Records which are rejected by the filters consume their draw, as in NeMo.
-    Records which are skipped (e.g. ``_skipme``) also consume their draw,
-    unlike in NeMo, where the source iterator skips them before the multiplexer,
-    so a source with many skipped records gets less than its weight here.
+    Records which the NeMo source skips (e.g. ``_skipme``) are not drawn at all, as in NeMo:
+    each shard determines the valid records of its partition once, at startup,
+    from the index pack routes if available, otherwise by decoding the manifest records.
+    For sources which reshuffle per pass (``shuffle_shards`` of non-tarred sources),
+    skipped records are not supported (raises).
     The start position of every source in epoch N is computed arithmetically
     from the quotas of epochs 1 to N-1, i.e. without reading any earlier data.
     Within an epoch, the order is random (from ``shard_seed`` and the epoch),
@@ -376,12 +379,28 @@ class NemoSpeechDataset(CachedDataset2):
                 del self._pending[seq_idx]
                 self._pending = {(idx - 1 if idx > seq_idx else idx): v for idx, v in self._pending.items()}
                 self._merge_seq_idx -= 1
+                if self._num_seqs is not None:
+                    self._num_seqs -= 1
                 return self._collect_single_seq(seq_idx)
             item.features["data"] = data
         del self._pending[seq_idx]
         return DatasetSeq(
             seq_idx=seq_idx, seq_tag=item.seq_tag, features=item.features, complete_frac=item.complete_frac
         )
+
+    def is_less_than_num_seqs(self, n: int) -> bool:
+        """:return: whether n < num_seqs, without loading the audio"""
+        if self._num_seqs is not None:
+            return n < self._num_seqs
+        if self.epoch is None:
+            return False
+        if n < self.expected_load_seq_start or self._get_seq(n) is not None or n in self._pending:
+            return True
+        if self._get_merged_item(n, load=False) is not None:
+            return True
+        self._num_seqs = self._merge_seq_idx
+        self.reached_final_seq = True
+        return False
 
     def get_tag(self, sorted_seq_idx: int) -> str:
         """:return: seq tag, without loading the audio"""
@@ -540,9 +559,17 @@ class _ShardStream:
             )
             for source in self.sources.sources
         ]
+        # Draws are over the valid records only, see _get_valid_partition_indices.
+        self.valid_indices = [
+            _get_valid_partition_indices(source.node, partition)
+            for source, partition in zip(self.sources.sources, self.partitions)
+        ]
         self.planner = _DrawPlanner(
             weights=[source.weight for source in self.sources.sources],
-            partition_lens=[len(partition) for partition in self.partitions],
+            partition_lens=[
+                len(partition) if valid is None else len(valid)
+                for partition, valid in zip(self.partitions, self.valid_indices)
+            ],
             draws_per_epoch=draws,
             seed=self.mux_seed,
             shuffle_window=shuffle_window,
@@ -589,10 +616,22 @@ class _ShardStream:
         return int(numpy.random.SeedSequence(entropy).generate_state(1)[0])
 
     def _decode_draw(self, plan: _EpochPlan, draw_idx: int) -> Optional[Cut]:
+        """:return: cut, or None if rejected by a filter"""
         source_idx, pos = plan.get_draw(draw_idx)
-        partition = self.partitions[source_idx]
-        pass_idx, i = divmod(pos, len(partition))
-        return self.sources.decode(source_idx, partition.get_token(pass_idx, i))
+        partition, valid = self.partitions[source_idx], self.valid_indices[source_idx]
+        pass_idx, i = divmod(pos, len(partition) if valid is None else len(valid))
+        if valid is not None:
+            i = int(valid[i])
+        token = partition.get_token(pass_idx, i)
+        try:
+            return self.sources.decode(source_idx, token)
+        except IndexError as exc:  # record skipped by the NeMo source
+            if not partition.pass_invariant:
+                raise NotImplementedError(
+                    f"NemoSpeechDataset: skipped record {token!r} in {self.sources.sources[source_idx].node},"
+                    " skipped records are not supported for sources which reshuffle per pass"
+                ) from exc
+            return None  # e.g. skip_missing_manifest_entries, not known before decoding
 
     def init_epoch(self, epoch: int):
         """
@@ -840,14 +879,12 @@ class _NemoSources:
     def decode(self, source_idx: int, token: Any) -> Optional[Cut]:
         """
         :return: the cut for the given record, with all NeMo maps applied,
-            or None if the record is skipped or rejected by a NeMo filter.
+            or None if the record is rejected by a NeMo filter.
             No audio is loaded.
+            Raises IndexError for records which the NeMo source skips (e.g. ``_skipme``).
         """
         source = self.sources[source_idx]
-        try:
-            item = source.node[token]
-        except IndexError:  # explicitly skipped records, e.g. _skipme, or skip_missing_manifest_entries
-            return None
+        item = source.node[token]
         for kind, func, apply_func in source.ops:
             if kind == "map":
                 if apply_func is None or apply_func(item):
@@ -1035,6 +1072,9 @@ class _Partition:
     Same as in the NeMo/lhotse iterators with worker partition.
     """
 
+    # Whether every pass has the same tokens in the same order.
+    pass_invariant = True
+
     def __len__(self) -> int:
         raise NotImplementedError
 
@@ -1066,9 +1106,18 @@ class _StridedPartition(_Partition):
 class _ShuffledPartition(_Partition):
     """:class:`LazyShuffledRange`, with a seed per pass"""
 
-    def __init__(self, n: int, *, seed_for_pass: Callable[[int], int], shard_id: int, num_shards: int):
+    def __init__(
+        self,
+        n: int,
+        *,
+        seed_for_pass: Callable[[int], int],
+        pass_invariant: bool,
+        shard_id: int,
+        num_shards: int,
+    ):
         self.n = n
         self.seed_for_pass = seed_for_pass
+        self.pass_invariant = pass_invariant
         self.shard_id = shard_id
         self.num_shards = num_shards
         self._range_pass_idx: Optional[int] = None
@@ -1095,6 +1144,7 @@ class _ConcatPartition(_Partition):
 
     def __init__(self, parts: Sequence[Tuple[_Partition, Callable[[Any], Any]]]):
         self.parts = parts
+        self.pass_invariant = all(part.pass_invariant for part, _ in parts)
         self._offsets = numpy.cumsum([0] + [len(part) for part, _ in parts]).tolist()
 
     def __len__(self) -> int:
@@ -1143,12 +1193,14 @@ def _get_partition(node: Any, *, shard_id: int, num_shards: int, process_seed: i
         if iter_state._shuffle:
             # noinspection PyProtectedMember
             seed = iter_state._seed
-            return _ShuffledPartition(len(node), seed_for_pass=lambda _: seed, **kwargs)
+            return _ShuffledPartition(len(node), seed_for_pass=lambda _: seed, pass_invariant=True, **kwargs)
         return _StridedPartition(len(node), **kwargs)
     if isinstance(node, LazyPackedManifestIterator):
         if node.shuffle_shards:
             seed = _resolve_seed(node.seed)
-            return _ShuffledPartition(len(node), seed_for_pass=lambda pass_idx: seed + pass_idx, **kwargs)
+            return _ShuffledPartition(
+                len(node), seed_for_pass=lambda pass_idx: seed + pass_idx, pass_invariant=False, **kwargs
+            )
         collection = node.collection
         return _ConcatPartition(
             [
@@ -1161,7 +1213,9 @@ def _get_partition(node: Any, *, shard_id: int, num_shards: int, process_seed: i
             if not node.is_indexed:
                 raise NotImplementedError(f"NemoSpeechDataset: needs indexed sources, got {node}")
             seed = _resolve_seed(node.seed)
-            return _ShuffledPartition(len(node), seed_for_pass=lambda pass_idx: seed + pass_idx, **kwargs)
+            return _ShuffledPartition(
+                len(node), seed_for_pass=lambda pass_idx: seed + pass_idx, pass_invariant=False, **kwargs
+            )
         return _ConcatPartition(
             [
                 (_get_partition(sub_node, **kwargs, process_seed=process_seed), lambda token, i_=i: (i_, token))
@@ -1169,6 +1223,67 @@ def _get_partition(node: Any, *, shard_id: int, num_shards: int, process_seed: i
             ]
         )
     raise NotImplementedError(f"NemoSpeechDataset: source type {type(node).__name__} not supported: {node}")
+
+
+def _get_valid_partition_indices(node: Any, partition: _Partition) -> Optional[numpy.ndarray]:
+    """
+    The records of the partition which the NeMo source iterator yields,
+    i.e. without explicitly skipped records (``_skipme``),
+    as NeMo skips them before the multiplexer, so they do not count as draw.
+
+    :return: partition indices of the valid records, in partition order, or None if all are valid.
+        Also None for partitions which differ per pass (skipped records then raise at decoding).
+    """
+    if not partition.pass_invariant:
+        return None
+    # noinspection PyUnresolvedReferences,PyPackageRequirements
+    from nemo.collections.common.data.lhotse.nemo_adapters import LazyNeMoTarredIterator
+
+    # noinspection PyUnresolvedReferences,PyPackageRequirements
+    from nemo.collections.common.data.lhotse.nemo_tar_routing import NEMO_TAR_SKIP_ORDINAL
+
+    # noinspection PyProtectedMember
+    if (
+        isinstance(node, LazyNeMoTarredIterator)
+        and getattr(node, "_packed_indexed", False)
+        and node._packed_tar_ordinal_map is not None
+    ):
+        # Fast path: the index pack routes mark the skipped records, see LazyNeMoTarredIterator._decode_packed_cut_at.
+        # noinspection PyProtectedMember
+        manifests, ordinal_map, shard_map = (
+            node._packed_manifest_collection,
+            node._packed_tar_ordinal_map,
+            node._packed_tar_shard_map,
+        )
+
+        def _is_valid(token: Any) -> bool:
+            loc = manifests.locate(int(token))
+            if (
+                shard_map is not None
+                and shard_map.value_in_shard(loc.shard_index, loc.local_index) == NEMO_TAR_SKIP_ORDINAL
+            ):
+                return False
+            return ordinal_map.value_in_shard(loc.shard_index, loc.local_index) != NEMO_TAR_SKIP_ORDINAL
+
+    else:
+        # The source itself raises IndexError for records its iterator skips. Decodes the manifest record.
+
+        def _is_valid(token: Any) -> bool:
+            try:
+                node[token]
+            except IndexError:
+                return False
+            return True
+
+    start_time = time.monotonic()
+    num = len(partition)
+    mask = numpy.fromiter((_is_valid(partition.get_token(0, i)) for i in range(num)), dtype=bool, count=num)
+    print(
+        f"NemoSpeechDataset: {type(node).__name__}: {int(mask.sum())} of {num} records valid,"
+        f" checked in {time.monotonic() - start_time:.1f}s",
+        file=log.v4,
+    )
+    return None if mask.all() else numpy.nonzero(mask)[0]
 
 
 class _EpochPlan:
