@@ -384,10 +384,11 @@ class NemoSpeechDataset(CachedDataset2):
         :return: whether n < num_seqs.
             Only the audio of seq n itself is loaded (not of the seqs before),
             as only loading tells whether the seq is there (fault tolerant audio loading).
+            A known num_seqs might come from metadata only, so it is only an upper bound here.
         """
-        if self._num_seqs is not None:
-            return n < self._num_seqs
         if self.epoch is None:
+            return False
+        if self._num_seqs is not None and n >= self._num_seqs:
             return False
         if n < self.expected_load_seq_start or self._get_seq(n) is not None:
             return True

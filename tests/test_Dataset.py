@@ -1959,10 +1959,13 @@ def test_NemoSpeechDataset_failed_audio():
             dataset = NemoSpeechDataset(nemo_config=config, draws_per_epoch=size, use_worker_procs=use_worker_procs)
             # Look ahead: merges the seqs for metadata only, their audio is loaded on demand.
             # In-process, nothing is loaded yet, so the failing records are only noticed when loading.
+            # Or a bounds check beyond the end first, which gives a count from metadata only.
             lookahead = (size - 1) if not use_worker_procs else (num_ok - 1)
-            for epoch, lookahead_ in [(1, None), (2, lookahead)]:
+            for epoch, lookahead_ in [(1, None), (2, lookahead), (3, "end")]:
                 dataset.init_seq_order(epoch=epoch)
-                if lookahead_ is not None and lookahead_ >= 0:
+                if lookahead_ == "end":
+                    assert not dataset.is_less_than_num_seqs(size)
+                elif lookahead_ is not None and lookahead_ >= 0:
                     dataset.get_tag(lookahead_)
                 tags, seq_idx = [], 0
                 while dataset.is_less_than_num_seqs(seq_idx):  # as ReturnnDatasetIterDataPipe
