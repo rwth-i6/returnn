@@ -1199,12 +1199,13 @@ def _torch_engine_sub_proc_cleanup_test_main(conn):
         conn.close()
 
 
-def _build_cuda_graph_train_config_and_dataset(*, compile_: bool):
+def _build_cuda_graph_train_config_and_dataset(*, compile_: bool, warmup_steps: Optional[int] = 2):
     """small RF model + Task12AXDataset config with torch_cuda_graph, see the tests below"""
     from returnn.datasets import init_dataset
     from returnn.tensor import Dim, batch_dim
 
-    time_dim = Dim(None, name=f"time-cudagraph-{compile_}")  # fresh dims per test: capacities get set on them
+    # fresh dims per test: capacities get set on them
+    time_dim = Dim(None, name=f"time-cudagraph-{compile_}-{warmup_steps}")
     feat_dim = Dim(9, name="feat")
     classes_dim = Dim(2, name="classes")
 
@@ -1254,8 +1255,8 @@ def _build_cuda_graph_train_config_and_dataset(*, compile_: bool):
             torch_cuda_graph=dict(
                 batch_size_bound=10,
                 dim_capacity={"data": 100, "classes": 100},
-                warmup_steps=2,
                 capture_optimizer=True,
+                **({"warmup_steps": warmup_steps} if warmup_steps is not None else {}),
                 **({"compile": True} if compile_ else {}),
             ),
             torch_dataloader_opts={"num_workers": 0},
@@ -1266,10 +1267,10 @@ def _build_cuda_graph_train_config_and_dataset(*, compile_: bool):
     return config, dataset
 
 
-def _run_cuda_graph_train(*, compile_: bool):
+def _run_cuda_graph_train(*, compile_: bool, warmup_steps: Optional[int] = 2):
     if not torch.cuda.is_available():
         raise unittest.SkipTest("CUDA not available")
-    config, dataset = _build_cuda_graph_train_config_and_dataset(compile_=compile_)
+    config, dataset = _build_cuda_graph_train_config_and_dataset(compile_=compile_, warmup_steps=warmup_steps)
     with global_config_ctx(config):
         engine = Engine(config=config)
         engine.init_train_from_config(train_data=dataset)
@@ -1503,6 +1504,12 @@ def test_torch_engine_cuda_graph_compile_train():
     """torch_cuda_graph "compile": the whole step Inductor-compiled (aot_function + compile_fx,
     no Dynamo), then captured; otherwise as :func:`test_torch_engine_cuda_graph_train`"""
     _run_cuda_graph_train(compile_=True)
+
+
+def test_torch_engine_cuda_graph_compile_train_default_warmup():
+    """as :func:`test_torch_engine_cuda_graph_compile_train` with the default warmup_steps (0):
+    no eager step, the lazy optimizer state is created directly before the capture"""
+    _run_cuda_graph_train(compile_=True, warmup_steps=None)
 
 
 if __name__ == "__main__":

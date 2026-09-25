@@ -17,7 +17,7 @@ Config, e.g.::
         "packed_total_bound": {"data": 500_000},  # optional: tighter bound of the packed (gapped) total per key
         "partitioned": True,  # optional: fw/bwd-partitioned compile (min-cut remat) instead of one whole-step graph
         "activation_memory_budget": 0.9,  # optional, with "partitioned": save-vs-recompute knob (1.0 = save all)
-        "warmup_steps": 2,              # eager steps before capture; 0 works too (see below)
+        "warmup_steps": 0,              # eager steps before capture (default 0: lazy state created directly)
         "capture_optimizer": True,      # grad clip + optimizer step in-graph (needs capturable optimizer)
         "compile": True,                # Inductor-codegen the whole step first, then capture that
         "capture": True,                # False (with compile): run the compiled step eagerly, no graph
@@ -385,7 +385,6 @@ class GraphCapturedTrainStep:
         run_step: Callable[..., None],
         post_step: Optional[Callable[[], None]] = None,
         get_optimizer: Optional[Callable[[], torch.optim.Optimizer]] = None,
-        get_buffers: Optional[Callable[[], List[torch.Tensor]]] = None,
         rf_params: Optional[List[rf.Parameter]] = None,
         packed_batch_size: Optional[Dict[str, int]] = None,
     ):
@@ -413,21 +412,8 @@ class GraphCapturedTrainStep:
         self.packed_total_bound: Dict[str, int] = dict(opts.get("packed_total_bound", {}))
         # only for inferring a missing packed_total_bound entry, see _get_data_buf
         self._packed_batch_size: Dict[str, int] = dict(packed_batch_size) if isinstance(packed_batch_size, dict) else {}
-        self.warmup_steps = int(opts.get("warmup_steps", 2))
-        # eager warmup on a minimal dummy batch (params/buffers/opt state restored after);
-        # True = seq len 1, deliberately extreme:
-        # a front end that cannot take it must fail loudly,
-        # not warm up a branch the traced graph never takes;
-        # then set an int or per-key dict just above what the front end needs
-        dummy_warmup_opt = opts.get("dummy_warmup", False)
-        self.dummy_warmup = bool(dummy_warmup_opt)
-        self._dummy_warmup_seq_len: Union[int, Dict[str, int]] = (
-            1 if isinstance(dummy_warmup_opt, bool) else dummy_warmup_opt
-        )
+        self.warmup_steps = int(opts.get("warmup_steps", 0))
         self._get_optimizer = get_optimizer
-        self._get_buffers = get_buffers
-        self._pre_dummy_warmup_params: Optional[List[torch.Tensor]] = None
-        self._pre_dummy_warmup_buffers: Optional[List[torch.Tensor]] = None
         self._device = torch.device(device)
         self._float_dtype = float_dtype
         self._extern_data_template = extern_data_template
@@ -790,55 +776,6 @@ class GraphCapturedTrainStep:
             self._post_step()  # in-graph: grad clip + optimizer step
         return ctx
 
-    def _make_dummy_extern_data_raw(
-        self, extern_data_raw: Dict[str, Union[torch.Tensor, numpy.ndarray]]
-    ) -> Dict[str, Union[torch.Tensor, numpy.ndarray]]:
-        """
-        :param extern_data_raw: a real batch, as template for keys/dtypes/devices
-        :return: the same keys with a single minimal seq, for the dummy warmup
-        """
-
-        def _dummy_len(key: str) -> int:
-            n = self._dummy_warmup_seq_len
-            if isinstance(n, dict):
-                assert key in n, f"dummy_warmup: no seq len for data key {key!r} in {n}"
-                n = n[key]
-            assert isinstance(n, int) and n >= 1, f"dummy_warmup: invalid seq len {n!r} for data key {key!r}"
-            return n
-
-        res = {}
-        seq_lens = {}
-        for k, v in extern_data_raw.items():
-            if k.endswith(":seq_len"):
-                v = v[:1] * 0 + _dummy_len(k[: -len(":seq_len")])
-                seq_lens[k[: -len(":seq_len")]] = v
-            res[k] = v
-        for k, v in extern_data_raw.items():
-            if k.endswith(":seq_len") or not isinstance(v, torch.Tensor):
-                continue
-            if k in seq_lens:  # data with a seq dim: one seq of the configured dummy len
-                if k in self._packed_opts:  # packed collate: flat [total, ...]
-                    shape = (_dummy_len(k),) + tuple(v.shape[1:])
-                else:
-                    shape = (1, _dummy_len(k)) + tuple(v.shape[2:])
-                res[k] = torch.zeros(shape, dtype=v.dtype, device=v.device)
-            elif v.ndim >= 1 and v.shape[0] == self._last_batch_n_seqs(extern_data_raw):
-                res[k] = v[:1]
-        if "num_seqs" in res:
-            res["num_seqs"] = (
-                type(res["num_seqs"])(1)
-                if not isinstance(res["num_seqs"], torch.Tensor)
-                else torch.ones_like(res["num_seqs"])
-            )
-        return res
-
-    @staticmethod
-    def _last_batch_n_seqs(extern_data_raw: Dict[str, Union[torch.Tensor, numpy.ndarray]]) -> int:
-        for k, v in extern_data_raw.items():
-            if k.endswith(":seq_len") and hasattr(v, "shape"):
-                return int(v.shape[0])
-        return 1
-
     def _materialize_optimizer_state(self) -> None:
         """
         Create the optimizer's lazy state and the param grads without any model step
@@ -876,37 +813,6 @@ class GraphCapturedTrainStep:
                 for v in state.values():
                     if isinstance(v, torch.Tensor):
                         v.zero_()
-
-    def _restore_after_dummy_warmup(self):
-        """
-        Undo the dummy warmup:
-        restore module buffers (running stats update in the forward pass,
-        so lr 0 cannot protect them),
-        restore params unless lr 0 provably froze them (see the dispatch site),
-        zero the optimizer state keeping only its existence.
-        """
-        with torch.no_grad():
-            if self._pre_dummy_warmup_params is not None:
-                for p, p_orig in zip(self._params, self._pre_dummy_warmup_params):
-                    p.copy_(p_orig)
-            for p in self._params:
-                if p.grad is not None:
-                    p.grad.zero_()
-            if self._pre_dummy_warmup_buffers is not None:
-                for b, b_orig in zip(self._get_buffers(), self._pre_dummy_warmup_buffers):
-                    b.copy_(b_orig)
-        self._pre_dummy_warmup_params = None
-        self._pre_dummy_warmup_buffers = None
-        opt = self._get_optimizer() if self._get_optimizer is not None else None
-        if opt is not None:
-            for state in opt.state.values():
-                for v in state.values():
-                    if isinstance(v, torch.Tensor) and v.is_floating_point():
-                        v.zero_()
-                    elif isinstance(v, torch.Tensor):  # step counters
-                        v.zero_()
-        torch.cuda.synchronize()
-        torch.cuda.empty_cache()
 
     def _warmup_step_dynamic(
         self, extern_data_raw: Dict[str, Union[torch.Tensor, numpy.ndarray]], *, global_train_step: int
@@ -1405,50 +1311,11 @@ class GraphCapturedTrainStep:
             return self._run_compiled_eager()
         if self._n_eager < self.warmup_steps:
             self._n_eager += 1
-            warmup_raw = extern_data_raw
-            dummy_saved_lrs = None
-            dummy_lr_opt = None
-            if self.dummy_warmup:
-                # the warmup only materializes lazy state;
-                # at real shapes it peaks far above the captured step (61.6 vs 9.0 GB)
-                # and sizes the job;
-                # params/state restored afterwards, see _restore_after_dummy_warmup
-                warmup_raw = self._make_dummy_extern_data_raw(extern_data_raw)
-                if self._pre_dummy_warmup_buffers is None and self._get_buffers is not None:
-                    # running stats (batch norm etc.) update in the forward pass,
-                    # so lr 0 cannot protect them: snapshot + restore (small, stats only)
-                    self._pre_dummy_warmup_buffers = [b.detach().clone() for b in self._get_buffers()]
-                opt = self._get_optimizer() if self._get_optimizer is not None else None
-                if opt is not None and type(opt).__name__ in ("SGD", "Adam", "AdamW"):
-                    # lr 0 makes the update exactly zero for these optimizers
-                    # (every term scales with lr, incl. decoupled weight decay),
-                    # so no param snapshot, which would be real memory at the peak
-                    dummy_lr_opt = opt
-                    dummy_saved_lrs = []
-                    for g in opt.param_groups:
-                        lr = g["lr"]
-                        if isinstance(lr, torch.Tensor):  # capturable: device-tensor lr
-                            dummy_saved_lrs.append(lr.clone())
-                            lr.fill_(0)
-                        else:
-                            dummy_saved_lrs.append(lr)
-                            g["lr"] = 0.0
-                elif self._pre_dummy_warmup_params is None:
-                    # unknown optimizer: its update may not scale with lr -> full param snapshot
-                    self._pre_dummy_warmup_params = [p.detach().clone() for p in self._params]
             # eager warmup on a non-default stream, see the module docstring
             self._eager_stream.wait_stream(torch.cuda.current_stream())
             with torch.cuda.stream(self._eager_stream):
-                self._ctx = self._warmup_step_dynamic(warmup_raw, global_train_step=global_train_step)
+                self._ctx = self._warmup_step_dynamic(extern_data_raw, global_train_step=global_train_step)
             torch.cuda.current_stream().wait_stream(self._eager_stream)
-            if dummy_saved_lrs is not None:
-                for g, lr in zip(dummy_lr_opt.param_groups, dummy_saved_lrs):
-                    if isinstance(g["lr"], torch.Tensor):
-                        g["lr"].copy_(lr)
-                    else:
-                        g["lr"] = lr
-            if self.dummy_warmup and self._n_eager >= self.warmup_steps:
-                self._restore_after_dummy_warmup()
             return self._ctx
         if not self._compile:
             # side-stream warmup (kernel/cudnn warmup; each _step call is cold w.r.t. dim/layout caches)
