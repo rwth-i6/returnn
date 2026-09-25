@@ -1218,3 +1218,49 @@ def test_packed_fallback_gate():
         assert time_dim not in out.dims_set
     finally:
         packed.set_allowed_fallbacks(None)
+
+
+def test_ctc_loss_under_cuda_graph_capture():
+    import torch
+    import unittest
+
+    if not torch.cuda.is_available():
+        raise unittest.SkipTest("cuda only: real graph capture")
+    rf.select_backend_torch()
+    batch = Dim(3, name="batch")
+    lens = Tensor("time", [batch], dtype="int32", raw_tensor=torch.tensor([11, 8, 5], dtype=torch.int32, device="cuda"))
+    time_dim = Dim(lens, name="time", capacity=11)
+    target_lens = Tensor(
+        "target_time", [batch], dtype="int32", raw_tensor=torch.tensor([4, 3, 2], dtype=torch.int32, device="cuda")
+    )
+    target_time_dim = Dim(target_lens, name="target_time", capacity=4)
+    out_dim = Dim(11, name="classes")
+    out_wb_dim = out_dim + 1
+    gen = torch.Generator().manual_seed(45)
+    logits = Tensor("logits", [batch, time_dim, out_wb_dim], dtype="float32", feature_dim=out_wb_dim)
+    logits.raw_tensor = torch.randn(3, 11, 12, generator=gen).cuda()
+    targets = Tensor("targets", [batch, target_time_dim], dtype="int32", sparse_dim=out_dim)
+    targets.raw_tensor = torch.randint(0, 11, (3, 4), generator=gen, dtype=torch.int32).cuda()
+
+    def _loss():
+        return rf.ctc_loss(
+            logits=logits,
+            targets=targets,
+            input_spatial_dim=time_dim,
+            targets_spatial_dim=target_time_dim,
+            blank_index=out_wb_dim.dimension - 1,
+        )
+
+    with rf.set_default_device_ctx("cuda"):
+        ref = _loss().copy_compatible_to_dims_raw([batch]).clone()
+        side = torch.cuda.Stream()
+        side.wait_stream(torch.cuda.current_stream())
+        with torch.cuda.stream(side), rf.set_static_traceable_ctx():
+            _loss()
+        torch.cuda.current_stream().wait_stream(side)
+        graph = torch.cuda.CUDAGraph()
+        with torch.cuda.graph(graph), rf.set_static_traceable_ctx():
+            out = _loss()
+        graph.replay()
+        torch.cuda.synchronize()
+        torch.testing.assert_close(out.copy_compatible_to_dims_raw([batch]), ref, rtol=1e-5, atol=1e-5)

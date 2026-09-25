@@ -827,6 +827,10 @@ class TorchBackend(Backend[torch.Tensor]):
         if use_native_op is None:
             if max_approx or not label_loop:
                 use_native_op = True
+            elif rf.is_static_traceable():
+                # torch's ctc_loss reads the lengths on the host (a sync), which CUDA-graph capture
+                # rejects; the native op keeps everything on the device
+                use_native_op = True
             else:
                 # This was the current default.
                 # We might change the default in the future, maybe via new behavior version.

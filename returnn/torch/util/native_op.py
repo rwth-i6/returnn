@@ -522,7 +522,13 @@ def ctc_loss(
         targets=targets, seq_lens=targets_seq_lens, blank_idx=blank_index, label_loop=label_loop
     )
 
-    seq_mask = sequence_mask_time_major(logits_seq_lens)  # (time,batch), bool
+    # the mask extent from the logits, and the state count from the targets shape
+    # (see the construct_kernel state numbering: (2*n_time+3) states per seq), like ctc_loss_packed:
+    # the max over the lens / states would be a data-dependent device read, a sync,
+    # illegal under CUDA-graph capture
+    seq_mask = sequence_mask_time_major(logits_seq_lens, maxlen=logits.shape[0])  # (time,batch), bool
+    n_batch, n_tgt_time = targets.shape
+    n_states = n_batch * (2 * n_tgt_time + 3)
 
     if max_approx:
         log_probs = torch.log_softmax(logits, dim=-1) if logits_normalize else logits  # (time,batch,dim)
@@ -541,7 +547,9 @@ def ctc_loss(
         loss = -torch.sum(log_probs_, dim=0)  # (batch,)
         return loss
 
-    loss = _FastBaumWelchScoresAutogradFunc.apply(logits, logits_normalize, seq_mask, edges, weights, start_end_states)
+    loss = _FastBaumWelchScoresAutogradFunc.apply(
+        logits, logits_normalize, seq_mask, edges, weights, start_end_states, n_states
+    )
     return loss
 
 
@@ -639,12 +647,15 @@ def get_ctc_fsa_fast_bw(
         start_end_states is (2,batch), int32, (start,end) state idx in FSA.
     """
     assert targets.ndim == 2
-    cached = _ctc_fsa_cache_get(targets, seq_lens, blank_idx, label_loop, edges_bound)
+    # Under tracing and under CUDA-graph capture the cache is bypassed on purpose: a cached FSA would
+    # be baked into the graph as a constant, so every replay would score against the FIRST step's
+    # targets. Capture reruns the step on the very buffers of the preceding warm run, so identity
+    # and version of the targets do not change and the key alone cannot tell the capture apart.
+    # (Within one traced or captured step the aux heads then rebuild it; the construction op is cheap.)
+    capturing = _cuda_stream_capturing()
+    cached = None if capturing else _ctc_fsa_cache_get(targets, seq_lens, blank_idx, label_loop, edges_bound)
     if cached is not None and not _is_tracing_tensor(targets):
         return cached
-    # Under tracing the cache is bypassed on purpose: a cached FSA would be baked into the
-    # graph as a constant, so every replay would score against the FIRST step's targets.
-    # (Within one traced step the aux heads then rebuild it; the construction op is cheap.)
     targets_arg, seq_lens_arg = targets, seq_lens
     targets = targets.to(torch.int32)
     n_batch, n_time = targets.shape
@@ -678,7 +689,9 @@ def get_ctc_fsa_fast_bw(
         edges, start_end_states, weights = op(targets, seq_lens, blank_idx, weights, label_loop)
 
     res = (edges, weights, start_end_states)
-    _ctc_fsa_cache_set(targets_arg, seq_lens_arg, blank_idx, label_loop, edges_bound, res)
+    if not capturing:
+        # an FSA built inside the capture lives in the graph's private pool, it must not serve any eager step
+        _ctc_fsa_cache_set(targets_arg, seq_lens_arg, blank_idx, label_loop, edges_bound, res)
     return res
 
 
@@ -698,6 +711,16 @@ _CtcFsa = Tuple[torch.Tensor, torch.Tensor, torch.Tensor]  # edges, weights, sta
 # targets, seq_lens, blank_idx, label_loop, edges_bound, targets._version, seq_lens._version, fsa
 _CtcFsaCacheEntry = Tuple[torch.Tensor, torch.Tensor, int, bool, Optional[int], int, int, _CtcFsa]
 _ctc_fsa_cache: Optional[_CtcFsaCacheEntry] = None
+
+
+def _cuda_stream_capturing() -> bool:
+    """
+    :return: whether the current CUDA stream is being captured into a graph (False without CUDA)
+    """
+    try:
+        return bool(torch.cuda.is_current_stream_capturing())
+    except (RuntimeError, AttributeError):  # CPU-only torch, or no CUDA context yet
+        return False
 
 
 def _is_tracing_tensor(x: torch.Tensor) -> bool:
@@ -918,7 +941,8 @@ class _FastBaumWelchScoresPackedAutogradFunc(torch.autograd.Function):
         rows = torch.arange(total_time, device=logits.device)
         starts64 = seq_starts.to(torch.int64).contiguous()
         frame_seq_idx = (torch.searchsorted(starts64, rows, right=True) - 1).clamp(min=0)
-        valid_mask = (rows - starts64[frame_seq_idx]) < seq_lens[frame_seq_idx]
+        offsets = rows - starts64[frame_seq_idx]
+        valid_mask = (offsets >= 0) & (offsets < seq_lens[frame_seq_idx])
         ctx.grad_wrt_softmax_in = logits_normalize
         if logits_normalize:
             ctx.save_for_backward(log_sm, frame_seq_idx, valid_mask, fwdbwd)
