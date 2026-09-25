@@ -387,6 +387,7 @@ class GraphCapturedTrainStep:
         get_optimizer: Optional[Callable[[], torch.optim.Optimizer]] = None,
         rf_params: Optional[List[rf.Parameter]] = None,
         packed_batch_size: Optional[Dict[str, int]] = None,
+        background_pinning: bool = False,
     ):
         """
         :param opts: the ``torch_cuda_graph`` config dict, see the module docstring
@@ -401,6 +402,8 @@ class GraphCapturedTrainStep:
         :param rf_params: RF-level model params, required for opts "compile"
         :param packed_batch_size: the config option, when statically known;
             only to infer a missing "packed_total_bound", see :func:`_get_data_buf`
+        :param background_pinning: whether another thread pins host memory meanwhile
+            (DataLoader pin_memory with workers), see :func:`_capture_compiled`
         """
         assert str(device).startswith("cuda"), f"torch_cuda_graph requires a cuda device, got {device!r}"
         opts = CollectionReadCheckCovered(opts)  # catch unknown (e.g. typo'd) option keys, see below
@@ -437,6 +440,7 @@ class GraphCapturedTrainStep:
         self._partitioned_buf_keys: Optional[Tuple[List[str], List[str]]] = None
         if self._partitioned:
             assert self._compile, 'torch_cuda_graph: "partitioned" requires "compile"'
+        self._background_pinning = background_pinning
         # debug: Inductor generates a nan-assert after every kernel,
         # pinpointing the first kernel producing nan/inf inside the compiled program
         self._inductor_nan_asserts = bool(opts.get("inductor_nan_asserts", False))
@@ -1206,7 +1210,12 @@ class GraphCapturedTrainStep:
         # without this release, capture needs the step footprint twice
         del outs
         torch.cuda.empty_cache()
-        with torch.cuda.graph(graph):
+        # A background pin memory thread pins host memory at any time,
+        # which invalidates a "global" (and also a "thread_local") mode capture.
+        # "relaxed" does not check for such calls. The compiled non-partitioned step
+        # has no other thread launching work into the capture (no autograd worker), so it is safe there.
+        capture_error_mode = "relaxed" if (self._background_pinning and not self._partitioned) else "global"
+        with torch.cuda.graph(graph, capture_error_mode=capture_error_mode):
             if self._partitioned:
                 # in-graph: backward accumulates into the static grads -> zero first
                 for p in self._grad_params:

@@ -5,6 +5,7 @@ Tests for PyTorch engine.
 from __future__ import annotations
 import _setup_test_env  # noqa
 from typing import Optional
+import contextlib
 import sys
 import unittest
 import tempfile
@@ -1199,13 +1200,18 @@ def _torch_engine_sub_proc_cleanup_test_main(conn):
         conn.close()
 
 
-def _build_cuda_graph_train_config_and_dataset(*, compile_: bool, warmup_steps: Optional[int] = 2):
-    """small RF model + Task12AXDataset config with torch_cuda_graph, see the tests below"""
+def _build_cuda_graph_train_config_and_dataset(
+    *, compile_: bool, warmup_steps: Optional[int] = 2, pin_memory: bool = False
+):
+    """
+    small RF model + Task12AXDataset config with torch_cuda_graph, see the tests below.
+    With pin_memory: the DataLoader pins in a background thread (with one worker).
+    """
     from returnn.datasets import init_dataset
     from returnn.tensor import Dim, batch_dim
 
     # fresh dims per test: capacities get set on them
-    time_dim = Dim(None, name=f"time-cudagraph-{compile_}-{warmup_steps}")
+    time_dim = Dim(None, name=f"time-cudagraph-{compile_}-{warmup_steps}-{pin_memory}")
     feat_dim = Dim(9, name="feat")
     classes_dim = Dim(2, name="classes")
 
@@ -1259,7 +1265,7 @@ def _build_cuda_graph_train_config_and_dataset(*, compile_: bool, warmup_steps: 
                 **({"warmup_steps": warmup_steps} if warmup_steps is not None else {}),
                 **({"compile": True} if compile_ else {}),
             ),
-            torch_dataloader_opts={"num_workers": 0},
+            torch_dataloader_opts={"num_workers": 1, "pin_memory": True} if pin_memory else {"num_workers": 0},
         )
     )
     dataset = init_dataset({"class": "Task12AXDataset", "num_seqs": 100, "name": "train", "fixed_random_seed": 1})
@@ -1267,10 +1273,12 @@ def _build_cuda_graph_train_config_and_dataset(*, compile_: bool, warmup_steps: 
     return config, dataset
 
 
-def _run_cuda_graph_train(*, compile_: bool, warmup_steps: Optional[int] = 2):
+def _run_cuda_graph_train(*, compile_: bool, warmup_steps: Optional[int] = 2, pin_memory: bool = False):
     if not torch.cuda.is_available():
         raise unittest.SkipTest("CUDA not available")
-    config, dataset = _build_cuda_graph_train_config_and_dataset(compile_=compile_, warmup_steps=warmup_steps)
+    config, dataset = _build_cuda_graph_train_config_and_dataset(
+        compile_=compile_, warmup_steps=warmup_steps, pin_memory=pin_memory
+    )
     with global_config_ctx(config):
         engine = Engine(config=config)
         engine.init_train_from_config(train_data=dataset)
@@ -1510,6 +1518,41 @@ def test_torch_engine_cuda_graph_compile_train_default_warmup():
     """as :func:`test_torch_engine_cuda_graph_compile_train` with the default warmup_steps (0):
     no eager step, the lazy optimizer state is created directly before the capture"""
     _run_cuda_graph_train(compile_=True, warmup_steps=None)
+
+
+@contextlib.contextmanager
+def _pin_memory_during_captures():
+    """
+    Right after each capture begins, another thread pins host memory (joined, i.e. inside the capture),
+    like the DataLoader pin memory thread, but guaranteed to overlap with every capture.
+    """
+    import threading
+
+    orig_capture_begin = torch.cuda.CUDAGraph.capture_begin
+
+    def _capture_begin(self, *args, **kwargs):
+        orig_capture_begin(self, *args, **kwargs)
+        thread = threading.Thread(target=lambda: torch.zeros(64, 1024).pin_memory())
+        thread.start()
+        thread.join()
+
+    torch.cuda.CUDAGraph.capture_begin = _capture_begin
+    try:
+        yield
+    finally:
+        torch.cuda.CUDAGraph.capture_begin = orig_capture_begin
+
+
+def test_torch_engine_cuda_graph_compile_train_pin_memory():
+    """
+    as :func:`test_torch_engine_cuda_graph_compile_train` with background DataLoader pinning,
+    plus forced pinning of another thread inside the capture:
+    that fails a "global" mode capture, see GraphCapturedTrainStep._capture_compiled
+    """
+    if not torch.cuda.is_available():
+        raise unittest.SkipTest("CUDA not available")
+    with _pin_memory_during_captures():
+        _run_cuda_graph_train(compile_=True, pin_memory=True)
 
 
 if __name__ == "__main__":

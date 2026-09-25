@@ -299,6 +299,7 @@ class Engine(EngineBase):
                 rf_params=(list(self._orig_model.parameters()) if isinstance(self._orig_model, rf.Module) else None),
                 # lets the capture infer a missing packed_total_bound from the content budget
                 packed_batch_size=self.config.typed_value("packed_batch_size", None),
+                background_pinning=_uses_background_pinning(self._train_dataloader),
             )
             if self._graph_capture.captures_optimizer:
                 # LR as a device tensor = a graph input: the per-step LR schedule
@@ -1908,6 +1909,14 @@ def _get_batch_size_info_raw(extern_data_raw: Dict[str, Any]) -> Dict[str, int]:
         info[f"max_size:{k}"] = int(seq_lens.max()) if len(seq_lens) else 0
         info[f"sum_size:{k}"] = int(seq_lens.sum())
     return info
+
+
+def _uses_background_pinning(data_loader: Optional[torch.utils.data.DataLoader]) -> bool:
+    """
+    :return: whether the DataLoader pins memory in a background thread of this process
+        (with workers, the pin memory thread; without, the pinning is in the main thread)
+    """
+    return data_loader is not None and bool(data_loader.pin_memory) and data_loader.num_workers > 0
 
 
 def get_device_from_config_opt(device: Optional[str]) -> ResultWithReason[str]:
