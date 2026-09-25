@@ -15,7 +15,7 @@ import numpy
 
 from returnn.log import log
 from returnn.util import better_exchook
-from returnn.util.basic import try_run
+from returnn.util.basic import try_run, NumbersDict
 from returnn.util.multi_proc_non_daemonic_spawn import NonDaemonicSpawnContext
 from returnn.config import SubProcCopyGlobalConfigPreInitFunc
 from .basic import DatasetSeq
@@ -71,13 +71,21 @@ class NemoSpeechDataset(CachedDataset2):
     Every source continues where the previous epoch stopped
     and runs through complete passes over its shard records,
     so every record is visited once per pass, across epoch boundaries.
-    Records which are skipped (e.g. ``_skipme``) or rejected by the filters consume their draw.
+    Records which are rejected by the filters consume their draw, as in NeMo.
+    Records which are skipped (e.g. ``_skipme``) also consume their draw,
+    unlike in NeMo, where the source iterator skips them before the multiplexer,
+    so a source with many skipped records gets less than its weight here.
     The start position of every source in epoch N is computed arithmetically
     from the quotas of epochs 1 to N-1, i.e. without reading any earlier data.
     Within an epoch, the order is random (from ``shard_seed`` and the epoch),
     in windows of ``shuffle_window`` draws, like NeMo's shuffle buffer.
     The accepted number of seqs of an epoch is only known at its end (``num_seqs`` is unknown),
     the ``complete_frac`` is the exact fraction of the draw budget.
+    Random transformations (``audio`` features, sampling ``targets``) are seeded per seq occurrence
+    (shard seed, epoch, draw),
+    so they do not depend on prefetching, skipping or earlier epochs.
+    Except for SentencePiece sampling, which only has a global RNG.
+    ``get_tag`` and ``get_seq_length`` (for raw audio) do not load the audio.
 
     Buffers:
     Workers prefetch up to ``buffer_size`` seqs, and continue into the next epoch when the current one is done.
@@ -90,11 +98,12 @@ class NemoSpeechDataset(CachedDataset2):
     and the manifest records of the skipped draws are decoded and filtered to find the accepted seqs,
     without loading any audio.
     The cost is thus about K / acceptance_rate manifest record reads, spread over the workers.
-    This is exact unless some audio before K failed to load (``fault_tolerant_audio_loading``),
+    Seq indices are exact unless some audio before K failed to load (``fault_tolerant_audio_loading``),
     which is only noticed when the audio is loaded.
     Direct epoch init and resuming assume unchanged world size and NeMo ``num_workers``.
 
-    Not supported (raises): non-indexed sources (``indexed: false``),
+    Not supported (raises): NeMo map-style dataset mode (non-tarred data, ``force_map_dataset``),
+    non-indexed sources (``indexed: false``),
     ``max_open_streams``, multi-config, multimodal sampling, and NeMo data augmentations.
 
     Example::
@@ -206,6 +215,7 @@ class NemoSpeechDataset(CachedDataset2):
         self._merge_local_next: List[int] = []
         self._merge_exhausted: List[bool] = []
         self._merge_draws_done: List[int] = []
+        self._pending: Dict[int, _ShardItem] = {}  # seq idx -> merged, not yet collected item
 
     def __del__(self):
         if getattr(self, "_shards", None):
@@ -288,6 +298,7 @@ class NemoSpeechDataset(CachedDataset2):
         self._merge_local_next = [0] * num_shards
         self._merge_exhausted = [False] * num_shards
         self._merge_draws_done = [0] * num_shards
+        self._pending.clear()
         self._estimated_num_seqs = sum(self._shard_draws)  # upper bound
         return True
 
@@ -318,31 +329,74 @@ class NemoSpeechDataset(CachedDataset2):
                 self._merge_draws_done[shard_idx] = self._shard_draws[shard_idx]
                 continue
             self._merge_draws_done[shard_idx] = item.draw_idx + 1
+            item.shard_idx = shard_idx
+            item.complete_frac = sum(self._merge_draws_done) / sum(self._shard_draws)
             return item
         return None
 
-    def _collect_single_seq(self, seq_idx: int) -> Optional[DatasetSeq]:
-        if self.epoch is None:
-            return None
+    def _get_merged_item(self, seq_idx: int, *, load: bool) -> Optional[_ShardItem]:
+        """
+        :return: merged item for seq_idx, maybe without audio (then ``"data" not in item.features``),
+            or None at the end of the epoch
+        """
         if self._shards_epoch != self.epoch:
             assert self._merge_seq_idx == 0
             self._lazy_init_shards()
             for shard in self._shards:
                 shard.init_epoch(self.epoch)
             self._shards_epoch = self.epoch
-        assert seq_idx >= self._merge_seq_idx, f"{self}: cannot go back from {self._merge_seq_idx} to {seq_idx}"
-        while True:
-            item = self._merge_next(load=self._merge_seq_idx == seq_idx)
+        while self._merge_seq_idx <= seq_idx:
+            # Seqs before seq_idx are not loaded (e.g. resume), but only decoded and filtered.
+            item = self._merge_next(load=load and self._merge_seq_idx == seq_idx)
             if item is None:
                 return None
             if item.audio_failed:
                 continue  # fault tolerant audio loading: dropped, does not take a seq idx
-            idx = self._merge_seq_idx
+            if self._merge_seq_idx >= self.expected_load_seq_start:
+                self._pending[self._merge_seq_idx] = item
             self._merge_seq_idx += 1
-            if idx < seq_idx:
-                continue  # skipped, see resume in class docstring
-            complete_frac = sum(self._merge_draws_done) / sum(self._shard_draws)
-            return DatasetSeq(seq_idx=idx, seq_tag=item.seq_tag, features=item.features, complete_frac=complete_frac)
+        return self._pending.get(seq_idx)
+
+    def _collect_single_seq(self, seq_idx: int) -> Optional[DatasetSeq]:
+        if self.epoch is None:
+            return None
+        for idx in [idx for idx in self._pending if idx < seq_idx]:
+            del self._pending[idx]
+        assert seq_idx >= self._merge_seq_idx or seq_idx in self._pending, f"{self}: cannot go back to {seq_idx}"
+        item = self._get_merged_item(seq_idx, load=True)
+        if item is None:
+            return None
+        if "data" not in item.features:  # was merged for metadata access only
+            data = self._shards[item.shard_idx].load(item.epoch, item.draw_idx)
+            if data is None:  # fault tolerant audio loading: drop it, and shift the later seqs
+                del self._pending[seq_idx]
+                self._pending = {(idx - 1 if idx > seq_idx else idx): v for idx, v in self._pending.items()}
+                self._merge_seq_idx -= 1
+                return self._collect_single_seq(seq_idx)
+            item.features["data"] = data
+        del self._pending[seq_idx]
+        return DatasetSeq(
+            seq_idx=seq_idx, seq_tag=item.seq_tag, features=item.features, complete_frac=item.complete_frac
+        )
+
+    def get_tag(self, sorted_seq_idx: int) -> str:
+        """:return: seq tag, without loading the audio"""
+        if self.epoch is None or self._get_seq(sorted_seq_idx) or sorted_seq_idx < self.expected_load_seq_start:
+            return super().get_tag(sorted_seq_idx)
+        item = self._get_merged_item(sorted_seq_idx, load=False)
+        assert item is not None, f"{self}: seq {sorted_seq_idx} out of range"
+        return item.seq_tag
+
+    def get_seq_length(self, sorted_seq_idx: int) -> NumbersDict:
+        """:return: seq lengths, without loading the audio if not needed"""
+        if self.epoch is None or self._get_seq(sorted_seq_idx) or sorted_seq_idx < self.expected_load_seq_start:
+            return super().get_seq_length(sorted_seq_idx)
+        item = self._get_merged_item(sorted_seq_idx, load=False)
+        assert item is not None, f"{self}: seq {sorted_seq_idx} out of range"
+        if item.data_len is None:  # audio features, length only known after the feature extraction
+            return super().get_seq_length(sorted_seq_idx)
+        lens = {key: (v.shape[0] if v.ndim >= 1 else 1) for key, v in item.features.items()}
+        return NumbersDict({**lens, "data": item.data_len})
 
     def get_data_keys(self) -> List[str]:
         """:return: available data keys"""
@@ -381,7 +435,17 @@ class _ShardItem:
     One accepted seq of a shard, or the end of an epoch (``seq_tag is None``).
     """
 
-    __slots__ = ("epoch", "local_idx", "draw_idx", "seq_tag", "features", "audio_failed")
+    __slots__ = (
+        "epoch",
+        "local_idx",
+        "draw_idx",
+        "seq_tag",
+        "features",
+        "data_len",
+        "audio_failed",
+        "shard_idx",
+        "complete_frac",
+    )
 
     def __init__(
         self,
@@ -391,14 +455,23 @@ class _ShardItem:
         draw_idx: int,
         seq_tag: Optional[str],
         features: Optional[Dict[str, numpy.ndarray]] = None,
+        data_len: Optional[int] = None,
         audio_failed: bool = False,
     ):
+        """
+        :param features: the text features, and "data" if the audio was loaded
+        :param data_len: length of "data", if known without loading the audio
+        :param audio_failed: loading the audio failed (fault tolerant audio loading)
+        """
         self.epoch = epoch
         self.local_idx = local_idx
         self.draw_idx = draw_idx
         self.seq_tag = seq_tag
         self.features = features
+        self.data_len = data_len
         self.audio_failed = audio_failed
+        self.shard_idx: Optional[int] = None  # set by the merge in the dataset
+        self.complete_frac: Optional[float] = None  # set by the merge in the dataset
 
     def __getstate__(self):
         return {k: getattr(self, k) for k in self.__slots__}
@@ -476,6 +549,8 @@ class _ShardStream:
 
         self._requested_epoch: Optional[int] = None
         self._buffer: deque[_ShardItem] = deque()
+        self._plans: Dict[int, _EpochPlan] = {}  # epoch -> plan, for the requested and production epoch
+        self._load_plan: Optional[_EpochPlan] = None  # see load
         # Production state.
         self._prod_epoch: Optional[int] = None
         self._prod_plan: Optional[_EpochPlan] = None
@@ -486,12 +561,34 @@ class _ShardStream:
     def exit(self, *, join: bool = True):
         """no resources to free"""
 
+    def _get_plan(self, epoch: int) -> _EpochPlan:
+        if epoch not in self._plans:
+            for epoch_ in list(self._plans):
+                if epoch_ not in (self._requested_epoch, self._prod_epoch):
+                    del self._plans[epoch_]
+            self._plans[epoch] = self.planner.get_epoch_plan(epoch - 1)
+        return self._plans[epoch]
+
     def _reset_production(self, epoch: int):
         self._prod_epoch = epoch
-        self._prod_plan = self.planner.get_epoch_plan(epoch - 1)
+        self._prod_plan = self._get_plan(epoch)
         self._prod_draw = 0
         self._prod_local = 0
         self._prod_done = False
+
+    def _get_seed(self, epoch: int, draw_idx: int) -> int:
+        """
+        Seed for the random transformations (audio features, target sampling) of one seq occurrence,
+        so the result does not depend on what was loaded or skipped before.
+        """
+        entropy = [self.mux_seed % (2**63), self.shard_id, epoch, draw_idx]
+        return int(numpy.random.SeedSequence(entropy).generate_state(1)[0])
+
+    def _decode_draw(self, plan: _EpochPlan, draw_idx: int) -> Optional[Cut]:
+        source_idx, pos = plan.get_draw(draw_idx)
+        partition = self.partitions[source_idx]
+        pass_idx, i = divmod(pos, len(partition))
+        return self.sources.decode(source_idx, partition.get_token(pass_idx, i))
 
     def init_epoch(self, epoch: int):
         """
@@ -513,22 +610,41 @@ class _ShardStream:
         while self._prod_draw < self.draws:
             draw_idx = self._prod_draw
             self._prod_draw += 1
-            source_idx, pos = plan.get_draw(draw_idx)
-            partition = self.partitions[source_idx]
-            pass_idx, i = divmod(pos, len(partition))
-            cut = self.sources.decode(source_idx, partition.get_token(pass_idx, i))
+            cut = self._decode_draw(plan, draw_idx)
             if cut is None:
                 continue  # skipped or rejected by a filter
-            item = _ShardItem(epoch=self._prod_epoch, local_idx=self._prod_local, draw_idx=draw_idx, seq_tag=cut.id)
+            seed = self._get_seed(self._prod_epoch, draw_idx)
+            item = _ShardItem(
+                epoch=self._prod_epoch,
+                local_idx=self._prod_local,
+                draw_idx=draw_idx,
+                seq_tag=cut.id,
+                features=self._get_text_features(cut, seed=seed),
+                data_len=cut.num_samples if self.feature_extractor is None else None,
+            )
             self._prod_local += 1
             if load:
-                item.features = self._load_features(cut)
-                item.audio_failed = item.features is None
+                data = self._load_audio_data(cut, seed=seed)
+                if data is None:
+                    item.audio_failed = True
+                else:
+                    item.features["data"] = data
             return item
         self._prod_done = True
         return _ShardItem(epoch=self._prod_epoch, local_idx=self._prod_local, draw_idx=self.draws, seq_tag=None)
 
-    def _load_features(self, cut: Cut) -> Optional[Dict[str, numpy.ndarray]]:
+    def load(self, epoch: int, draw_idx: int) -> Optional[numpy.ndarray]:
+        """
+        :return: "data" of an accepted draw, by random access, or None if loading the audio failed
+        """
+        # Own plan instance, to not disturb the chunk state of the production.
+        if self._load_plan is None or self._load_plan.epoch0 != epoch - 1:
+            self._load_plan = self.planner.get_epoch_plan(epoch - 1)
+        cut = self._decode_draw(self._load_plan, draw_idx)
+        assert cut is not None, f"shard {self.shard_id}: draw {draw_idx} of epoch {epoch} is not an accepted seq"
+        return self._load_audio_data(cut, seed=self._get_seed(epoch, draw_idx))
+
+    def _load_audio_data(self, cut: Cut, *, seed: int) -> Optional[numpy.ndarray]:
         # noinspection PyUnresolvedReferences,PyPackageRequirements
         from lhotse.audio.utils import suppress_audio_loading_errors
 
@@ -540,14 +656,18 @@ class _ShardStream:
         assert audio.ndim == 2 and audio.shape[0] == 1, f"expected mono audio, got shape {audio.shape}"
         audio = audio[0]
         if self.feature_extractor is not None:
-            data = self.feature_extractor.get_audio_features(audio=audio, sample_rate=self.sample_rate, seq_name=cut.id)
-        else:
-            data = audio.astype("float32")[:, None]
+            self.feature_extractor.random_state.seed(seed)
+            return self.feature_extractor.get_audio_features(audio=audio, sample_rate=self.sample_rate, seq_name=cut.id)
+        return audio.astype("float32")[:, None]
+
+    def _get_text_features(self, cut: Cut, *, seed: int) -> Dict[str, numpy.ndarray]:
         texts = [sup.text for sup in cut.supervisions if sup.text]
         text = " ".join(texts)
         orth = numpy.frombuffer(text.encode("utf8"), dtype="uint8").copy()
-        features = {"data": data, "raw": str_to_numpy_array(text), "orth": orth}
+        features = {"raw": str_to_numpy_array(text), "orth": orth}
         if self.targets is not None:
+            # Note: SentencePiece sampling uses a global RNG and ignores this.
+            self.targets.set_random_seed(seed)
             features["classes"] = numpy.array(self.targets.get_seq(text), dtype="int32")
         elif self.nemo_tokenizer is not None:
             # Same as NeMo LhotseSpeechToTextBpeDataset.
@@ -633,6 +753,13 @@ class _ShardWorkerProc:
         assert msg == "item"
         return item
 
+    def load(self, epoch: int, draw_idx: int) -> Optional[numpy.ndarray]:
+        """load data by draw"""
+        self.conn.send(("load", {"epoch": epoch, "draw_idx": draw_idx}))
+        msg, data = self.conn.recv()
+        assert msg == "data"
+        return data
+
     def exit(self, *, join: bool = True):
         """exit"""
         if self.proc is None:
@@ -672,6 +799,8 @@ def _shard_worker_proc_loop(shard_opts: Dict[str, Any], conn: mpConnection):
                 stream.init_epoch(**kwargs)
             elif msg == "get":
                 conn.send(("item", stream.get(**kwargs)))
+            elif msg == "load":
+                conn.send(("data", stream.load(**kwargs)))
             else:
                 raise Exception(f"unknown msg {msg!r}")
     except (KeyboardInterrupt, EOFError):  # when parent dies
@@ -835,7 +964,13 @@ def _make_nemo_cutset(config: DictConfig, *, tokenizer: Optional[Any]):
     # Finite: the passes over the sources are done here, not via lhotse repeat.
     config = config.copy()
     config.force_finite = True
-    cuts, _ = read_cutset_from_config(config)
+    cuts, is_tarred = read_cutset_from_config(config)
+    if not nemo_dl.determine_use_iterable_dataset(is_tarred, config):
+        # NeMo shards map-style datasets in its sampler (by batch), not by records.
+        raise NotImplementedError(
+            "NemoSpeechDataset: NeMo map-style dataset mode (non-tarred data, or force_map_dataset) not supported,"
+            " only iterable-style (e.g. tarred data, or force_iterable_dataset)"
+        )
     audio_token_estimator = AudioTokenEstimator.from_config(
         config.audio_token_estimator, sample_rate=config.sample_rate
     )
@@ -1048,7 +1183,9 @@ class _EpochPlan:
         self.num_draws = int(quota.sum())
         self.chunk_size = chunk_size
         self.window = window
-        self._chunk_counts_before = [numpy.zeros_like(quota)]  # per chunk, per source draws in earlier chunks
+        # Per source, draws in the chunks before _counts_before_chunk_idx.
+        self._counts_before_chunk_idx = 0
+        self._counts_before = numpy.zeros_like(quota)
         self._cur_chunk_idx: Optional[int] = None
         self._cur_chunk: Optional[Tuple[numpy.ndarray, numpy.ndarray]] = None
 
@@ -1056,14 +1193,15 @@ class _EpochPlan:
         return numpy.random.default_rng(numpy.random.SeedSequence([self.seed % (2**63), self.epoch0, chunk_idx]))
 
     def _chunk_counts(self, chunk_idx: int) -> Tuple[numpy.random.Generator, numpy.ndarray, numpy.ndarray]:
-        while len(self._chunk_counts_before) <= chunk_idx:
-            k = len(self._chunk_counts_before) - 1
-            before = self._chunk_counts_before[k]
-            _, counts = self._draw_chunk_counts(k, before)
-            self._chunk_counts_before.append(before + counts)
-        before = self._chunk_counts_before[chunk_idx]
-        rng, counts = self._draw_chunk_counts(chunk_idx, before)
-        return rng, before, counts
+        # Only one checkpoint is kept: sequential access continues from it, going back replays from the start.
+        if chunk_idx < self._counts_before_chunk_idx:
+            self._counts_before_chunk_idx, self._counts_before = 0, numpy.zeros_like(self.quota)
+        while self._counts_before_chunk_idx < chunk_idx:
+            _, counts = self._draw_chunk_counts(self._counts_before_chunk_idx, self._counts_before)
+            self._counts_before = self._counts_before + counts
+            self._counts_before_chunk_idx += 1
+        rng, counts = self._draw_chunk_counts(chunk_idx, self._counts_before)
+        return rng, self._counts_before, counts
 
     def _draw_chunk_counts(self, chunk_idx: int, before: numpy.ndarray) -> Tuple[numpy.random.Generator, numpy.ndarray]:
         rng = self._rng(chunk_idx)

@@ -1668,11 +1668,21 @@ def test_NemoSpeechDataset_draw_planner():
     # Direct init of some epoch gives the same plan.
     plan, plan_ = planner.get_epoch_plan(17), _DrawPlanner(**opts).get_epoch_plan(17)
     assert [plan.get_draw(i) for i in range(13)] == [plan_.get_draw(i) for i in range(13)]
-    # Memory is independent of the epoch size.
-    plan = _DrawPlanner(**{**opts, "draws_per_epoch": 10**8, "chunk_size": 2**16}).get_epoch_plan(3)
+    # Memory is independent of the epoch size: all retained plan state is O(chunk size + num sources).
+    num_sources, chunk_size = 128, 2**16
+    planner = _DrawPlanner(
+        weights=[1.0] * num_sources,
+        partition_lens=[10**7] * num_sources,
+        draws_per_epoch=10**8,
+        seed=1,
+        shuffle_window=1,
+        chunk_size=chunk_size,
+    )
+    plan = planner.get_epoch_plan(3)
     plan.get_draw(10**8 - 1)
-    # noinspection PyProtectedMember
-    assert len(plan._cur_chunk[0]) <= 2**16
+    arrays = [v for v in vars(plan).values() if isinstance(v, numpy.ndarray)]
+    arrays += [a for v in vars(plan).values() if isinstance(v, tuple) for a in v if isinstance(a, numpy.ndarray)]
+    assert sum(a.nbytes for a in arrays) <= chunk_size * (4 + 8) + num_sources * 8 * 3
 
 
 _nemo_speech_data: Dict[str, Any] = {}
@@ -1759,6 +1769,13 @@ def _get_nemo_speech_data() -> Dict[str, Any]:
     sentencepiece.SentencePieceTrainer.train(
         input=f"{root}/spm.txt", model_prefix=f"{root}/spm", vocab_size=30, model_type="unigram", minloglevel=2
     )
+    # Sampling BPE vocab: full words, or split into chars.
+    chars = sorted(set("".join(words)))
+    labels = words + [c + "@@" for c in chars] + chars
+    with open(f"{root}/bpe.vocab", "w") as f:
+        f.write(repr({label: i for i, label in enumerate(labels)}) + "\n")
+    _nemo_speech_data["bpe_vocab"] = f"{root}/bpe.vocab"
+    _nemo_speech_data["root"] = root
     _nemo_speech_data["spm"] = f"{root}/spm.model"
     _nemo_speech_data["sizes"] = {"srcA": 30, "srcB": 14, "srcC": 5}
     return _nemo_speech_data
@@ -1856,25 +1873,150 @@ def test_NemoSpeechDataset_epochs():
             possible.add(draws - sum(len(range(pos, draws, size)) for pos in skipped_pos))
         assert sum(occurrences) in possible, f"{name}: {sum(occurrences)} not in {possible}"
 
-    # Uninterrupted (worker procs, prefetch into the next epoch) vs direct epoch init vs resume within the epoch.
+    # Uninterrupted (worker procs, prefetch into the next epoch) vs direct epoch init vs resume within the epoch,
+    # with random transformations (sampled targets, random audio gain).
     config = _get_nemo_speech_config(weights=[1.0, 2.0, 0.5], num_workers=2, shuffle=True, shuffle_buffer_size=4)
-    opts = dict(nemo_config=config, draws_per_epoch=16)
+    opts = dict(
+        nemo_config=config,
+        draws_per_epoch=16,
+        targets={
+            "class": "SamplingBytePairEncoding",
+            "vocab_file": data["bpe_vocab"],
+            "breadth_prob": 0.5,
+            "unknown_label": None,
+        },
+        audio={"features": "raw", "peak_normalization": False, "pre_process": _nemo_speech_random_gain},
+    )
     dataset = NemoSpeechDataset(**opts, buffer_size=5)
     uninterrupted = [dummy_iter_dataset(dataset, epoch=epoch) for epoch in [1, 2, 3]][-1]
     dataset.finish_epoch(free_resources=True)
     direct = dummy_iter_dataset(NemoSpeechDataset(**opts, use_worker_procs=False), epoch=3)
-    assert [s.seq_tag for s in direct] == [s.seq_tag for s in uninterrupted]
-    for seq, seq_ in zip(direct, uninterrupted):
-        numpy.testing.assert_array_equal(seq.features["data"], seq_.features["data"])
+    _nemo_speech_assert_same_seqs(direct, uninterrupted)
     start = len(direct) // 2
     dataset = NemoSpeechDataset(**opts, use_worker_procs=False)
     dataset.init_seq_order(epoch=3)
     seq_idx = start
     while dataset.is_less_than_num_seqs(seq_idx):
         dataset.load_seqs(seq_idx, seq_idx + 1)
-        assert dataset.get_tag(seq_idx) == direct[seq_idx].seq_tag
+        _nemo_speech_assert_same_seqs([dataset.added_data[-1]], [direct[seq_idx]])
         seq_idx += 1
     assert seq_idx == len(direct)
+    # The transformations are really random: targets differ from the plain (full word) encoding, the gains vary.
+    assert any(len(seq.features["classes"]) != len(seq.features["raw"].item().split()) for seq in direct)
+    plain_opts = {k: v for k, v in opts.items() if k not in ("targets", "audio")}
+    plain = dummy_iter_dataset(NemoSpeechDataset(**plain_opts, use_worker_procs=False), epoch=3)
+    assert [s.seq_tag for s in plain] == [s.seq_tag for s in direct]
+    gains = {
+        round(float(numpy.abs(s.features["data"]).max() / numpy.abs(p.features["data"]).max()), 3)
+        for s, p in zip(direct, plain)
+    }
+    assert len(gains) > 1, f"gains {gains}"
+
+
+def _nemo_speech_random_gain(*, audio, sample_rate, random_state):
+    return audio * random_state.uniform(0.5, 1.5)
+
+
+def _nemo_speech_assert_same_seqs(seqs1: List[DatasetSeq], seqs2: List[DatasetSeq]):
+    assert [s.seq_tag for s in seqs1] == [s.seq_tag for s in seqs2]
+    for seq1, seq2 in zip(seqs1, seqs2):
+        assert seq1.features.keys() == seq2.features.keys()
+        for key in seq1.features.keys():
+            numpy.testing.assert_array_equal(seq1.features[key], seq2.features[key], err_msg=f"{seq1.seq_tag} {key}")
+
+
+def test_NemoSpeechDataset_metadata_no_audio():
+    _get_nemo_speech_data()  # first, skips if NeMo Speech is not available
+    from returnn.datasets.nemo_speech import NemoSpeechDataset
+
+    # noinspection PyUnresolvedReferences,PyPackageRequirements
+    from lhotse.cut import MonoCut
+
+    config = _get_nemo_speech_config(weights=[1.0, 2.0, 0.5])
+    opts = dict(nemo_config=config, draws_per_epoch=20, use_worker_procs=False)
+    ref = dummy_iter_dataset(NemoSpeechDataset(**opts), epoch=2)
+    num_loads = 0
+    orig_load_audio = MonoCut.load_audio
+
+    def _load_audio(*args, **kwargs):
+        nonlocal num_loads
+        num_loads += 1
+        return orig_load_audio(*args, **kwargs)
+
+    MonoCut.load_audio = _load_audio
+    try:
+        dataset = NemoSpeechDataset(**opts)
+        dataset.init_seq_order(epoch=2)
+        for seq_idx in [0, 3, 1]:
+            assert dataset.get_tag(seq_idx) == ref[seq_idx].seq_tag
+            assert dataset.get_seq_length(seq_idx).dict == ref[seq_idx].num_frames.dict
+        assert num_loads == 0
+        seqs = dummy_iter_dataset(dataset, epoch=2)  # re-inits the epoch
+        assert num_loads == len(seqs)
+        dataset.init_seq_order(epoch=2)
+        assert dataset.get_tag(3) == ref[3].seq_tag
+        dataset.load_seqs(0, 5)  # the seq only accessed for metadata gets its audio later
+        _nemo_speech_assert_same_seqs(dataset.added_data, ref[:5])
+    finally:
+        MonoCut.load_audio = orig_load_audio
+
+
+def test_NemoSpeechDataset_index_pack():
+    data = _get_nemo_speech_data()  # first, skips if NeMo Speech is not available
+    import json
+    import struct
+    from returnn.datasets.nemo_speech import NemoSpeechDataset
+
+    # noinspection PyUnresolvedReferences,PyPackageRequirements
+    from lhotse.index_pack import IndexPackArraySpec, IndexPackCollectionSpec, write_index_pack
+
+    # noinspection PyUnresolvedReferences,PyPackageRequirements
+    from nemo.collections.common.data.lhotse import nemo_tar_routing
+
+    # Pack for srcB (2 shards, with a skipped record), like Speech scripts/dataloading/convert_indexes_to_idxpack.py.
+    root, entry = data["root"], data["srcB"]
+    manifests = [f"{root}/srcB/manifest_{k}.jsonl" for k in range(2)]
+    tars = [f"{root}/srcB/audio_{k}.tar" for k in range(2)]
+    route_paths = []
+    for k, manifest in enumerate(manifests):
+        with open(manifest) as f:
+            rows = [json.loads(line) for line in f]
+        ordinals = [nemo_tar_routing.NEMO_TAR_SKIP_ORDINAL if row.get("_skipme") else i for i, row in enumerate(rows)]
+        route_paths.append(f"{root}/srcB/route_{k}.u32")
+        with open(route_paths[-1], "wb") as f:
+            f.write(struct.pack(f"<{len(ordinals)}I", *ordinals))
+    specs = [
+        IndexPackCollectionSpec(
+            role="manifest", kind="jsonl", source_spec=entry["manifest_filepath"], paths=tuple(manifests)
+        ),
+        IndexPackCollectionSpec(
+            role="tar", kind="nemo_tar", source_spec=entry["tarred_audio_filepaths"], paths=tuple(tars)
+        ),
+        IndexPackArraySpec(
+            role=nemo_tar_routing.NEMO_TAR_ORDINAL_MAP_ROLE,
+            kind=nemo_tar_routing.NEMO_TAR_ORDINAL_MAP_KIND,
+            source_spec=nemo_tar_routing.nemo_tar_ordinal_map_source_spec(
+                entry["manifest_filepath"], entry["tarred_audio_filepaths"]
+            ),
+            shard_paths=tuple(route_paths),
+        ),
+    ]
+    write_index_pack(f"{root}/srcB.idxpack", specs)
+
+    config = _get_nemo_speech_config(weights=[0.0, 1.0, 0.0])
+    config["input_cfg"] = [config["input_cfg"][1]]
+    config_packed = {**config, "index_pack_root": root}
+    config_packed["input_cfg"] = [{**config["input_cfg"][0], "index_pack": "srcB.idxpack"}]
+    dataset = NemoSpeechDataset(nemo_config=config_packed, draws_per_epoch=20, use_worker_procs=False)
+    for epoch in [1, 2]:
+        seqs = dummy_iter_dataset(dataset, epoch=epoch)
+        # noinspection PyProtectedMember
+        assert dataset._shards[0].sources.sources[0].node._packed_indexed
+        ref = dummy_iter_dataset(
+            NemoSpeechDataset(nemo_config=config, draws_per_epoch=20, use_worker_procs=False), epoch=epoch
+        )
+        assert len(seqs) > 0
+        _nemo_speech_assert_same_seqs(seqs, ref)
 
 
 def test_NemoSpeechDataset_nemo_sharding():
@@ -1925,6 +2067,18 @@ def test_NemoSpeechDataset_nemo_sharding():
             assert seen == expected
             seen_all.extend(seen)
     assert len(seen_all) == len(set(seen_all)), "shards not disjoint"
+
+    # NeMo map-style mode shards by sampler batches, not by records: not supported.
+    dataset = NemoSpeechDataset(
+        nemo_config={**config, "force_map_dataset": True}, draws_per_epoch=400, use_worker_procs=False
+    )
+    dataset.init_seq_order(epoch=1)
+    try:
+        dataset.load_seqs(0, 1)
+    except NotImplementedError as exc:
+        print("Expected exception:", exc)
+    else:
+        raise AssertionError("map-style mode should not be supported")
 
 
 if __name__ == "__main__":
