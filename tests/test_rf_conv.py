@@ -233,6 +233,132 @@ def test_conv1d_depthwise():
     run_model(extern_data, lambda *, epoch, step: _Net(), _forward_step, test_single_batch_entry=True)
 
 
+def test_conv1d_depthwise_cuda_triton_path():
+    """on CUDA the depthwise conv runs through the Triton kernel in the (batch, time, feat) layout, values as torch"""
+    import unittest
+    from unittest import mock
+    import torch
+
+    if not torch.cuda.is_available():
+        raise unittest.SkipTest("needs CUDA")
+    try:
+        import triton  # noqa
+    except ImportError as exc:
+        raise unittest.SkipTest(f"triton not available ({exc})")
+    rf.select_backend_torch()
+    batch, time, feat = Dim(2, name="batch"), Dim(23, name="time"), Dim(6, name="feat")
+    gen = torch.Generator().manual_seed(5)
+    for filter_size, padding in [(4, "same"), (5, "same"), (5, "valid")]:
+        with rf.set_default_device_ctx("cuda"):
+            rf.set_random_seed(3)
+            conv = rf.Conv1d(feat, feat, filter_size=filter_size, groups=feat.dimension, padding=padding)
+        x = Tensor("x", dims=[batch, time, feat], dtype="float32")
+        x.raw_tensor = torch.randn(2, 23, 6, generator=gen).cuda()
+        ref = torch.nn.functional.conv1d(
+            x.raw_tensor.transpose(1, 2), conv.filter.raw_tensor, conv.bias.raw_tensor, padding=padding, groups=6
+        ).transpose(1, 2)
+        with mock.patch.object(torch.nn.functional, "conv1d", side_effect=AssertionError("torch conv1d fallback")):
+            out, out_time = conv(x, in_spatial_dim=time)
+        assert out.dims == (batch, out_time, feat), (filter_size, padding, out.dims)
+        torch.testing.assert_close(out.raw_tensor, ref, rtol=1e-5, atol=1e-5)
+    with rf.set_default_device_ctx("cuda"):
+        conv = rf.Conv1d(feat, feat, filter_size=2, groups=feat.dimension, padding="same")
+    with torch.no_grad():
+        conv.filter.raw_tensor.copy_(torch.tensor([1.003, -1.0]).expand(6, 1, 2))
+        conv.bias.raw_tensor.zero_()
+    for dtype in ("float32", "bfloat16"):
+        x_amp = Tensor("x", dims=[batch, time, feat], dtype=dtype)
+        x_amp.raw_tensor = torch.ones(2, 23, 6).to("cuda", getattr(torch, dtype))
+        with torch.autocast("cuda", dtype=torch.bfloat16):
+            ref = torch.nn.functional.conv1d(
+                x_amp.raw_tensor.transpose(1, 2), conv.filter.raw_tensor, conv.bias.raw_tensor, padding="same", groups=6
+            ).transpose(1, 2)
+            with mock.patch.object(torch.nn.functional, "conv1d", side_effect=AssertionError("torch conv1d fallback")):
+                out, _ = conv(x_amp, in_spatial_dim=time)
+        assert out.raw_tensor.dtype == ref.dtype == torch.bfloat16, (dtype, out.raw_tensor.dtype)
+        assert float(out.raw_tensor[0, 0, 0]) == 0.0, "the autocast path rounds the filter to bfloat16"
+        torch.testing.assert_close(out.raw_tensor, ref, rtol=0, atol=0)
+    x_half = Tensor("x", dims=[batch, time, feat], dtype="bfloat16")
+    x_half.raw_tensor = torch.ones(2, 23, 6, dtype=torch.bfloat16, device="cuda")
+    x_float = Tensor("x", dims=[batch, time, feat], dtype="float32")
+    x_float.raw_tensor = torch.ones(2, 23, 6, device="cuda")
+    for mixed, amp, params_dtype in (
+        (x_half, False, "float32"),
+        (x_float, False, "float64"),
+        (x_float, True, "float64"),
+    ):
+        for param in (conv.filter, conv.bias):
+            param.raw_tensor.data = param.raw_tensor.data.to(getattr(torch, params_dtype))
+            param.dtype = params_dtype
+        try:
+            with torch.autocast("cuda", dtype=torch.bfloat16, enabled=amp):
+                conv(mixed, in_spatial_dim=time)
+        except RuntimeError:
+            pass
+        else:
+            raise AssertionError(f"{mixed.dtype} input with {params_dtype} params, amp {amp}, must raise like torch")
+    x_wide = Tensor("x", dims=[batch, time, feat], dtype="float64")
+    x_wide.raw_tensor = torch.full((2, 23, 6), 1e50, dtype=torch.float64, device="cuda")
+    for param in (conv.filter, conv.bias):
+        param.raw_tensor.data = param.raw_tensor.data.double()
+        param.dtype = "float64"
+    out, out_time = conv(x_wide, in_spatial_dim=time)
+    ref = torch.nn.functional.conv1d(
+        x_wide.raw_tensor.transpose(1, 2), conv.filter.raw_tensor, conv.bias.raw_tensor, padding="same", groups=6
+    ).transpose(1, 2)
+    out_raw = out.copy_transpose([batch, out_time, feat]).raw_tensor
+    assert out_raw.dtype == torch.float64
+    torch.testing.assert_close(out_raw, ref)
+
+
+def test_conv1d_depthwise_cuda_triton_path_traced():
+    """
+    a traced step keeps the Triton kernel as well (the compiled step of torch_cuda_graph traces on fake tensors,
+    which a raw Triton launch cannot take), with the gradients of the eager path
+    """
+    import unittest
+    from unittest import mock
+    import torch
+
+    if not torch.cuda.is_available():
+        raise unittest.SkipTest("needs CUDA")
+    try:
+        import triton  # noqa
+    except ImportError as exc:
+        raise unittest.SkipTest(f"triton not available ({exc})")
+    from functorch.compile import aot_function, nop
+
+    rf.select_backend_torch()
+    batch, time, feat, width = Dim(2, name="batch"), Dim(23, name="time"), Dim(6, name="feat"), Dim(5, name="width")
+    group_in = feat // feat.dimension
+    gen = torch.Generator().manual_seed(5)
+
+    def _loss(x_raw, filter_raw, bias_raw):
+        x = Tensor("x", dims=[batch, time, feat], dtype="float32", raw_tensor=x_raw)
+        filter_ = Tensor("filter", dims=[feat, group_in, width], dtype="float32", raw_tensor=filter_raw)
+        bias = Tensor("bias", dims=[feat], dtype="float32", raw_tensor=bias_raw)
+        out, _ = rf.conv(
+            x,
+            in_dim=feat,
+            out_dim=feat,
+            in_spatial_dims=[time],
+            filter=filter_,
+            filter_size=[width],
+            padding="same",
+            groups=feat.dimension,
+            bias=bias,
+        )
+        return out.raw_tensor.square().sum()
+
+    leaves = [torch.randn(shape, generator=gen).cuda().requires_grad_(True) for shape in ((2, 23, 6), (6, 1, 5), (6,))]
+    ref_grads = torch.autograd.grad(_loss(*leaves), leaves)
+    traced = aot_function(_loss, fw_compiler=nop, bw_compiler=nop)
+    with mock.patch.object(torch.nn.functional, "conv1d", side_effect=AssertionError("torch conv1d fallback")):
+        grads = torch.autograd.grad(traced(*leaves), leaves)
+    for g, g_ref in zip(grads, ref_grads):
+        torch.testing.assert_close(g, g_ref)
+
+
 def test_maxpool1d_padding_valid():
     time_dim = Dim(Tensor("time", [batch_dim], dtype="int32"))
     in_dim = Dim(7, name="in")

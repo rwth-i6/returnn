@@ -2367,6 +2367,33 @@ class TorchBackend(Backend[torch.Tensor]):
         filter_in_dim = in_dim if not groups or groups == 1 else in_dim // groups
         filter_dims = (out_dim, filter_in_dim) + tuple(filter_size)
         filter = filter.copy_transpose(filter_dims)
+        if (
+            len(filter_size) == 1
+            and groups
+            and groups == in_dim.dimension == out_dim.dimension
+            and _is_unit_conv_arg(strides)
+            and _is_unit_conv_arg(dilation_rate)
+            and (padding in ("same", "valid") or isinstance(padding, int))
+            and source.raw_tensor.is_cuda
+            and all(
+                operand.raw_tensor.dtype in (torch.float16, torch.bfloat16, torch.float32)
+                for operand in [source, filter] + ([bias] if bias is not None else [])
+            )
+            and (type(source.raw_tensor) in (torch.Tensor, torch.nn.Parameter) or _depthwise_conv_triton_traceable())
+            and not torch.onnx.is_in_onnx_export()
+        ):
+            out = _conv_depthwise_1d_triton(
+                source,
+                in_dim=in_dim,
+                out_dim=out_dim,
+                in_spatial_dim=in_spatial_dims[0],
+                out_spatial_dim=out_spatial_dims[0],
+                filter=filter,
+                padding=padding,
+                bias=bias,
+            )
+            if out is not None:
+                return out, out_spatial_dims
         batch_dims = [d for d in source.dims if d not in (in_dim,) + tuple(in_spatial_dims)]
         # Torch conv expects (N,C,<spatial dims>) as shape.
         source = source.copy_transpose(batch_dims + [in_dim] + list(in_spatial_dims))
@@ -2885,3 +2912,89 @@ class TorchBackend(Backend[torch.Tensor]):
         out_tensor_raw = torch.stack(tensor_array_raw, dim=0)
         out_tensor.raw_tensor = out_tensor_raw
         return out_tensor
+
+
+def _is_unit_conv_arg(value: Optional[Union[int, Sequence[int]]]) -> bool:
+    """
+    :param value: strides or dilation rate as given to conv, None or int or per-spatial-dim sequence
+    :return: whether it means 1 on every spatial dim
+    """
+    if value is None or value == 1:
+        return True
+    return isinstance(value, (list, tuple)) and all(v == 1 for v in value)
+
+
+def _depthwise_conv_triton_traceable() -> bool:
+    """
+    :return: whether the Triton depthwise conv also takes the tensors of a traced step
+        (fake or functional tensors, e.g. the compiled step of torch_cuda_graph), through its opaque ops
+    """
+    try:
+        from returnn.torch.util import depthwise_conv_triton
+    except ImportError:
+        return False
+    return depthwise_conv_triton.traceable()
+
+
+def _conv_depthwise_1d_triton(
+    source: Tensor,
+    *,
+    in_dim: Dim,
+    out_dim: Dim,
+    in_spatial_dim: Dim,
+    out_spatial_dim: Dim,
+    filter: Tensor,
+    padding: Union[str, int],
+    bias: Optional[Tensor],
+) -> Optional[Tensor]:
+    """
+    Depthwise 1-D conv (one filter per channel, stride 1, no dilation) on CUDA
+    through :mod:`returnn.torch.util.depthwise_conv_triton`,
+    computed in the (batch..., time, channel) layout, so nothing is transposed around the conv.
+    Under CUDA autocast the operands are cast to the autocast dtype first, as torch's conv would cast them.
+
+    :param source: with in_dim and in_spatial_dim
+    :param in_dim: channel dim, equal to out_dim and to the group count
+    :param out_dim:
+    :param in_spatial_dim:
+    :param out_spatial_dim: as made by :func:`rf.make_conv_out_spatial_dims`
+    :param filter: transposed to (out_dim, in_dim // groups, filter_size)
+    :param padding: "same", "valid" or the frames of zero padding on each side
+    :param bias: over out_dim, or None
+    :return: the output with dims batch dims + (out_spatial_dim, out_dim),
+        or None when Triton is unavailable or torch would reject the mixed dtypes
+    """
+    try:
+        from returnn.torch.util import depthwise_conv_triton
+    except ImportError:
+        return None
+    if not depthwise_conv_triton.is_available():
+        return None
+    if not torch.is_autocast_enabled("cuda") and any(
+        param.raw_tensor.dtype != source.raw_tensor.dtype for param in [filter] + ([bias] if bias is not None else [])
+    ):
+        return None
+    width = filter.dims[-1].dimension
+    if padding == "same":
+        pad_l, pad_r = (width - 1) // 2, width // 2
+    elif padding == "valid":
+        pad_l = pad_r = 0
+    else:
+        pad_l = pad_r = int(padding)
+    batch_dims = [d for d in source.dims if d not in (in_dim, in_spatial_dim)]
+    source = source.copy_transpose(batch_dims + [in_spatial_dim, in_dim])
+    src_shape = list(source.raw_tensor.shape)
+    n_time_in = src_shape[-2]
+    n_time_out = n_time_in + pad_l + pad_r - width + 1
+    x_raw = source.raw_tensor.reshape(-1, n_time_in, in_dim.dimension)
+    w_raw = filter.raw_tensor.reshape(out_dim.dimension, width)
+    bias_raw = bias.raw_tensor if bias is not None else None
+    if torch.is_autocast_enabled("cuda"):
+        amp_dtype = torch.get_autocast_dtype("cuda")
+        x_raw, w_raw = x_raw.to(amp_dtype), w_raw.to(amp_dtype)
+        bias_raw = bias_raw.to(amp_dtype) if bias_raw is not None else None
+    out_raw = depthwise_conv_triton.depthwise_conv1d(x_raw, w_raw, bias_raw, pad_l=pad_l, n_time_out=n_time_out)
+    out = Tensor("conv", dims=batch_dims + [out_spatial_dim, out_dim], dtype=TorchBackend.get_dtype_name_raw(out_raw))
+    out.raw_tensor = out_raw.reshape(src_shape[:-2] + [n_time_out, out_dim.dimension])
+    out.feature_dim = out_dim
+    return out
