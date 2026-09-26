@@ -305,8 +305,6 @@ class Engine(EngineBase):
                     )
                 ),
                 post_step=lambda: self._updater.step(grad_scaler=None),
-                # to create the lazy optimizer state before the capture, see _materialize_optimizer_state
-                get_optimizer=lambda: self._updater.get_optimizer(),
                 rf_params=(list(self._orig_model.parameters()) if isinstance(self._orig_model, rf.Module) else None),
                 # lets the capture infer a missing packed_total_bound from the content budget
                 packed_batch_size=self.config.typed_value("packed_batch_size", None),

@@ -787,6 +787,28 @@ def test_updater_weight_decay_blacklist():
     assert params_by_wd[1e-3] == {"2.weight"}
 
 
+def test_updater_grad_norm_updated_in_place():
+    """
+    The grad norm the updater reports lives in one tensor which every step updates in place,
+    so the norm of an eager update before a graph capture stays readable once the captured step
+    has recorded its own, and every replay refreshes the same tensor.
+    """
+    config = Config(dict(optimizer={"class": "sgd"}, log_grad_norm=True, gradient_clip_global_norm=5.0))
+    model = torch.nn.Linear(3, 2)
+    updater = Updater(config=config, network=model, device=torch.device("cpu"), initial_learning_rate=1e-2)
+    updater.create_optimizer()
+    updater.set_current_train_step(global_train_step=0, epoch=1)
+    num_params = sum(p.numel() for p in model.parameters())
+    norms = []
+    for scale in (1.0, 2.0):
+        for p in model.parameters():
+            p.grad = torch.full_like(p, scale)
+        updater.step()
+        norms.append(updater.last_grad_norm)
+        torch.testing.assert_close(updater.last_grad_norm.float(), torch.tensor(scale * num_params**0.5))
+    assert norms[0] is norms[1]
+
+
 def test_updater_lr_multipliers():
     from collections import defaultdict
     from fnmatch import fnmatchcase
@@ -1488,11 +1510,18 @@ def _torch_engine_sub_proc_cleanup_test_main(conn):
 
 
 def _build_cuda_graph_train_config_and_dataset(
-    *, compile_: bool, warmup_steps: Optional[int] = 2, cuda_graph: bool = True, optimizer_step: bool = False
+    *,
+    compile_: bool,
+    warmup_steps: Optional[int] = 2,
+    cuda_graph: bool = True,
+    optimizer_step: bool = False,
+    optimizer: Optional[Dict[str, Any]] = None,
+    graph_opts: Optional[Dict[str, Any]] = None,
 ):
     """
     small RF model + Task12AXDataset config with torch_cuda_graph, see the tests below.
     With optimizer_step: the optimizer step not in the model graph but separately (torch_optimizer_step).
+    optimizer: the config entry, capturable AdamW by default. graph_opts: further torch_cuda_graph entries.
     """
     from returnn.datasets import init_dataset
     from returnn.tensor import Dim, batch_dim
@@ -1544,7 +1573,7 @@ def _build_cuda_graph_train_config_and_dataset(
             # which under capture_optimizer runs in-graph (a static tensor updated per replay)
             log_grad_norm=True,
             gradient_clip_global_norm=5.0,
-            optimizer={"class": "adamw", "capturable": True},
+            optimizer=optimizer or {"class": "adamw", "capturable": True},
             torch_dataloader_opts={"num_workers": 0},
         )
     )
@@ -1555,6 +1584,7 @@ def _build_cuda_graph_train_config_and_dataset(
             capture_optimizer=not optimizer_step,
             **({"warmup_steps": warmup_steps} if warmup_steps is not None else {}),
             **({"compile": True} if compile_ else {}),
+            **(graph_opts or {}),
         )
     if optimizer_step:
         config.typed_dict["torch_optimizer_step"] = {}
@@ -1564,12 +1594,23 @@ def _build_cuda_graph_train_config_and_dataset(
 
 
 def _run_cuda_graph_train(
-    *, compile_: bool, warmup_steps: Optional[int] = 2, cuda_graph: bool = True, optimizer_step: bool = False
+    *,
+    compile_: bool,
+    warmup_steps: Optional[int] = 2,
+    cuda_graph: bool = True,
+    optimizer_step: bool = False,
+    optimizer: Optional[Dict[str, Any]] = None,
+    graph_opts: Optional[Dict[str, Any]] = None,
 ) -> Engine:
     if not torch.cuda.is_available():
         raise unittest.SkipTest("CUDA not available")
     config, dataset = _build_cuda_graph_train_config_and_dataset(
-        compile_=compile_, warmup_steps=warmup_steps, cuda_graph=cuda_graph, optimizer_step=optimizer_step
+        compile_=compile_,
+        warmup_steps=warmup_steps,
+        cuda_graph=cuda_graph,
+        optimizer_step=optimizer_step,
+        optimizer=optimizer,
+        graph_opts=graph_opts,
     )
     with global_config_ctx(config):
         engine = Engine(config=config)
@@ -1583,8 +1624,9 @@ def _run_cuda_graph_train(
             assert engine._updater._optimizer_step._graph is not None, "optimizer step never captured"
         for param_group in engine._updater.optimizer.param_groups:
             lr = param_group["lr"]  # device-tensor LR input of the captured optimizer
-            assert isinstance(lr, torch.Tensor) and lr.is_cuda
-            assert lr.item() > 1e-3  # the per-step schedule advanced it
+            if cuda_graph or optimizer_step:
+                assert isinstance(lr, torch.Tensor) and lr.is_cuda
+            assert float(lr) > 1e-3  # the per-step schedule advanced it
         for name, p in engine._pt_model.named_parameters():
             assert torch.isfinite(p).all(), f"non-finite param {name}"
     return engine
@@ -1842,6 +1884,50 @@ def test_torch_engine_cuda_graph_compile_optimizer_step_train():
     The model graph capture rebinds the grads once: the optimizer step recaptures on the new addresses.
     """
     _run_cuda_graph_train(compile_=True, optimizer_step=True)
+
+
+class _AnchoredSGD(torch.optim.Optimizer):
+    """
+    SGD from an anchor, the state starting as a copy of the param (like the z of a schedule-free optimizer):
+    a lazily created optimizer state which is not all zeros
+    """
+
+    def __init__(self, params, lr: float):
+        super().__init__(params, dict(lr=lr))
+
+    @torch.no_grad()
+    def step(self, closure=None):
+        """one update"""
+        assert closure is None
+        for group in self.param_groups:
+            for p in group["params"]:
+                if p.grad is None:
+                    continue
+                state = self.state[p]
+                if not state:
+                    state["anchor"] = p.detach().clone()
+                    state["grad_sum"] = torch.zeros_like(p)
+                state["grad_sum"].add_(p.grad)
+                p.copy_(state["anchor"] - group["lr"] * state["grad_sum"])
+
+
+def _cuda_graph_first_update_parity(*, compile_: bool, graph_opts: Optional[Dict[str, Any]] = None):
+    optimizer = {"class": _AnchoredSGD}
+    eager = _run_cuda_graph_train(compile_=False, cuda_graph=False, optimizer=optimizer)
+    captured = _run_cuda_graph_train(compile_=compile_, warmup_steps=None, optimizer=optimizer, graph_opts=graph_opts)
+    for (name, p), (_, q) in zip(eager._pt_model.named_parameters(), captured._pt_model.named_parameters()):
+        torch.testing.assert_close(q, p, rtol=1e-4, atol=1e-5, msg=lambda m: f"compile {compile_}, {name}: {m}")
+
+
+def test_torch_engine_cuda_graph_first_update_is_the_real_one():
+    """
+    With the in-graph optimizer step and no warmup step, the first update of the training is the eager one
+    on the first batch's grads, so it creates the lazy optimizer state as the optimizer defines it,
+    and the capture which follows applies that batch no second time.
+    The params then match the eager engine, for an optimizer whose fresh state is not all zeros.
+    """
+    _cuda_graph_first_update_parity(compile_=False)
+    _cuda_graph_first_update_parity(compile_=True)
 
 
 class _MuonLike(torch.optim.Optimizer):
