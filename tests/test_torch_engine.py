@@ -1773,6 +1773,384 @@ def test_torch_optimizer_step_updater_invalid_grad_skipped():
     assert updater._optimizer_step._num_captures == 1
 
 
+def _pin_memory_iter(src, **kwargs):
+    from returnn.torch.data.pin_memory import PinMemoryIter
+
+    return PinMemoryIter(iter(src), device=torch.device("cuda", torch.cuda.current_device()), **kwargs)
+
+
+def test_pin_memory_iter_batches_unchanged():
+    """same batches in the same order, all tensors pinned, other values as they are"""
+    if not torch.cuda.is_available():
+        raise unittest.SkipTest("CUDA not available")
+    gen = torch.Generator().manual_seed(0)
+    batches = [
+        {
+            "data": torch.randn(3, 5 + i, 2, generator=gen),
+            "data:seq_len": torch.tensor([5 + i, 4, 2], dtype=torch.int32),
+            "seq_tag": numpy.array([f"seq-{i}-{j}" for j in range(3)]),
+            "num_seqs": 100,
+            "list": [torch.full((2,), i)],
+        }
+        for i in range(10)
+    ]
+    out = list(_pin_memory_iter(batches))
+    assert len(out) == len(batches)
+    for ref, batch in zip(batches, out):
+        assert set(batch) == set(ref)
+        for k in ["data", "data:seq_len"]:
+            assert batch[k].is_pinned() and batch[k].dtype == ref[k].dtype and torch.equal(batch[k], ref[k])
+        assert batch["list"][0].is_pinned() and torch.equal(batch["list"][0], ref["list"][0])
+        assert batch["seq_tag"] is ref["seq_tag"] and batch["num_seqs"] == 100
+
+
+def test_pin_memory_iter_buffer_lifetime():
+    """
+    Each pinned batch stays valid while the consumer holds it, also while further batches get pinned,
+    and a batch dropped right after its async H2D copy is not reused before the copy is done.
+    """
+    if not torch.cuda.is_available():
+        raise unittest.SkipTest("CUDA not available")
+    n, shape = 30, (256, 1024)
+
+    def _src():
+        for i in range(n):
+            yield {"data": torch.full(shape, float(i))}
+
+    it = _pin_memory_iter(_src())
+    first = next(it)
+    first_ptr = first["data"].data_ptr()
+    stream = torch.cuda.Stream()
+    dev = []
+    with torch.cuda.stream(stream):
+        for batch in it:
+            # delays the stream: the H2D copy below is still pending when the batch is dropped,
+            # while the next batches get pinned
+            torch.cuda._sleep(1_000_000)
+            dev.append(batch["data"].to("cuda", non_blocking=True))
+            del batch
+    stream.synchronize()
+    assert first["data"].data_ptr() == first_ptr and bool((first["data"] == 0.0).all())
+    assert [float(d[0, 0]) for d in dev] == [float(i) for i in range(1, n)]
+    for i, d in enumerate(dev):
+        assert bool((d == float(i + 1)).all()), f"batch {i + 1} overwritten"
+
+
+def test_pin_memory_iter_exception():
+    """an exception of the source is re-raised in the consumer, after the batches before it"""
+    if not torch.cuda.is_available():
+        raise unittest.SkipTest("CUDA not available")
+
+    class _Error(Exception):
+        pass
+
+    def _src():
+        yield {"data": torch.zeros(2)}
+        yield {"data": torch.ones(2)}
+        raise _Error("source failed")
+
+    it = _pin_memory_iter(_src())
+    assert float(next(it)["data"][0]) == 0.0
+    assert float(next(it)["data"][0]) == 1.0
+    try:
+        next(it)
+    except _Error as exc:
+        assert str(exc) == "source failed"
+    else:
+        raise AssertionError("expected _Error")
+    assert not it._thread.is_alive()
+    try:
+        next(it)
+    except StopIteration:
+        pass
+    else:
+        raise AssertionError("expected StopIteration after the error")
+
+
+def test_pin_memory_iter_shutdown():
+    """
+    The thread stops: at the end, on close() of an unfinished iterator (thread blocked on the full queue),
+    when the consumer drops it, and for the previous iterator on the next iter() of the loader
+    """
+    import gc
+    from itertools import count
+    from returnn.torch.data.pin_memory import PinMemoryDataLoader
+
+    if not torch.cuda.is_available():
+        raise unittest.SkipTest("CUDA not available")
+
+    def _endless():
+        for i in count():
+            yield {"data": torch.full((4,), i)}
+
+    it = _pin_memory_iter([{"data": torch.zeros(2)}])
+    assert len(list(it)) == 1 and not it._thread.is_alive()
+
+    it = _pin_memory_iter(_endless(), queue_size=1)
+    assert float(next(it)["data"][0]) == 0.0
+    it.close()
+    assert not it._thread.is_alive()
+    assert list(it) == []
+
+    it = _pin_memory_iter(_endless())
+    next(it)
+    thread = it._thread
+    del it
+    gc.collect()
+    thread.join(timeout=10)
+    assert not thread.is_alive()
+
+    loader = PinMemoryDataLoader([{"data": torch.full((2,), i)} for i in range(5)], device="cuda")
+    it1 = iter(loader)
+    assert float(next(it1)["data"][0]) == 0.0
+    it2 = iter(loader)
+    assert not it1._thread.is_alive()
+    assert [float(b["data"][0]) for b in it2] == [0.0, 1.0, 2.0, 3.0, 4.0]
+
+
+class _PinCaptureOverlapForcer:
+    """
+    Forces the background pinning (:class:`returnn.torch.data.pin_memory.PinMemoryIter`)
+    to overlap each CUDA graph capture:
+    the pin thread holds back each batch until a capture has begun or the consumer waits for a batch,
+    and each capture, once begun, waits until the pin thread tries to pin, and then a bit longer
+    (an unguarded pin would now run inside the capture).
+    Records per capture whether a pin was attempted during it, and whether that pin finished during it.
+    """
+
+    def __init__(self):
+        import threading
+        from contextlib import ExitStack
+        from returnn.torch.data import pin_memory
+
+        self._pin_memory = pin_memory
+        self._cond = threading.Condition()
+        self._capturing = False
+        self._capture_released_pin = True  # the current capture released a held-back pin already
+        self._consumer_waiting = False
+        self.captures = []  # per capture: dict(pin_attempted=..., pin_finished_during=...)
+        self._exit_stack = ExitStack()
+
+    def __enter__(self):
+        import time
+        from unittest import mock
+
+        orig_pin_batch = self._pin_memory._pin_batch
+        orig_next = self._pin_memory.PinMemoryIter.__next__
+        orig_capture_begin = torch.cuda.CUDAGraph.capture_begin
+        orig_capture_end = torch.cuda.CUDAGraph.capture_end
+        forcer = self
+
+        def _pin_batch(batch):
+            with forcer._cond:
+                forcer._cond.wait_for(lambda: not forcer._capture_released_pin or forcer._consumer_waiting, timeout=60)
+                capture_idx = None
+                if forcer._capturing and not forcer._capture_released_pin:
+                    forcer._capture_released_pin = True
+                    capture_idx = len(forcer.captures) - 1
+                    forcer.captures[capture_idx]["pin_attempted"] = True
+                    forcer._cond.notify_all()
+            res = orig_pin_batch(batch)
+            if capture_idx is not None:
+                with forcer._cond:
+                    forcer.captures[capture_idx]["pin_finished_during"] = (
+                        forcer._capturing and len(forcer.captures) - 1 == capture_idx
+                    )
+            return res
+
+        def _next(it):
+            with forcer._cond:
+                forcer._consumer_waiting = True
+                forcer._cond.notify_all()
+            try:
+                return orig_next(it)
+            finally:
+                with forcer._cond:
+                    forcer._consumer_waiting = False
+
+        def _capture_begin(graph, *args, **kwargs):
+            orig_capture_begin(graph, *args, **kwargs)
+            with forcer._cond:
+                forcer._capturing = True
+                forcer._capture_released_pin = False
+                forcer.captures.append(dict(pin_attempted=False, pin_finished_during=False))
+                forcer._cond.notify_all()
+                forcer._cond.wait_for(lambda: forcer.captures[-1]["pin_attempted"], timeout=10)
+            time.sleep(0.2)
+
+        def _capture_end(graph, *args, **kwargs):
+            try:
+                return orig_capture_end(graph, *args, **kwargs)
+            finally:
+                with forcer._cond:
+                    forcer._capturing = False
+                    forcer._capture_released_pin = True
+                    forcer._cond.notify_all()
+
+        patch = mock.patch.object
+        self._exit_stack.enter_context(patch(self._pin_memory, "_pin_batch", _pin_batch))
+        self._exit_stack.enter_context(patch(self._pin_memory.PinMemoryIter, "__next__", _next))
+        self._exit_stack.enter_context(patch(torch.cuda.CUDAGraph, "capture_begin", _capture_begin))
+        self._exit_stack.enter_context(patch(torch.cuda.CUDAGraph, "capture_end", _capture_end))
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        self._exit_stack.close()
+
+
+def _run_pin_memory_capture_overlap(
+    *, cuda_graph: bool, compile_: bool, optimizer_step: bool, invalidate_optimizer_step_at: Optional[int] = None
+) -> int:
+    """
+    Train 2 epochs with DataLoader pin_memory (-> the RETURNN pinning thread), each capture forced to overlap
+    with a background pin (see :class:`_PinCaptureOverlapForcer`), then check the checkpoints.
+
+    :param invalidate_optimizer_step_at: before this optimizer update, drop the captured optimizer step
+        (as loading the optimizer state does), so the next update recaptures
+    :return: number of captures
+    """
+    from unittest import mock
+    from contextlib import ExitStack
+    import os
+    import glob
+    from returnn.torch.data.pin_memory import PinMemoryDataLoader
+
+    if not torch.cuda.is_available():
+        raise unittest.SkipTest("CUDA not available")
+    config, dataset = _build_cuda_graph_train_config_and_dataset(
+        compile_=compile_, warmup_steps=None, cuda_graph=cuda_graph, optimizer_step=optimizer_step
+    )
+    config.typed_dict["torch_dataloader_opts"] = {"num_workers": 1, "pin_memory": True}
+    with tempfile.TemporaryDirectory() as tmp_dir, global_config_ctx(config):
+        config.typed_dict["model"] = f"{tmp_dir}/model"
+        engine = Engine(config=config)
+        engine.init_train_from_config(train_data=dataset)
+        loader = engine._train_dataloader
+        assert isinstance(loader, PinMemoryDataLoader) and not loader.data_loader.pin_memory
+        # all read by now; the global config gets pickled to the DataLoader worker, local functions cannot
+        for key in ["get_model", "train_step", "dynamic_learning_rate"]:
+            config.typed_dict.pop(key)
+        with _PinCaptureOverlapForcer() as forcer, ExitStack() as stack:
+            opt_step = engine._updater._optimizer_step
+            if invalidate_optimizer_step_at is not None:
+                orig_opt_step = opt_step.step
+                num_opt_steps = 0
+
+                def _opt_step():
+                    nonlocal num_opt_steps
+                    if num_opt_steps == invalidate_optimizer_step_at:
+                        assert opt_step._graph is not None, "optimizer step not captured yet"
+                        opt_step.invalidate()
+                    num_opt_steps += 1
+                    orig_opt_step()
+
+                stack.enter_context(mock.patch.object(opt_step, "step", _opt_step))
+            engine.train()
+        print("captures:", forcer.captures)
+        if invalidate_optimizer_step_at is not None:
+            assert opt_step._num_captures == 2, "no recapture"
+        assert forcer.captures, "nothing captured"
+        for i, capture in enumerate(forcer.captures):
+            assert capture["pin_attempted"], f"capture {i}: no pin attempt during the capture, overlap not forced"
+            assert not capture["pin_finished_during"], f"capture {i}: pinned during the capture"
+        if cuda_graph:
+            assert engine._graph_capture._graph is not None, "graph never captured"
+        if optimizer_step:
+            assert engine._updater._optimizer_step._graph is not None, "optimizer step never captured"
+
+        params = {k: v.detach().cpu() for k, v in engine._pt_model.state_dict().items()}
+        model_files = sorted(glob.glob(f"{tmp_dir}/model.*.pt"))
+        model_files = [fn for fn in model_files if not fn.endswith(".opt.pt")]
+        assert [os.path.basename(fn) for fn in model_files] == ["model.001.pt", "model.002.pt"], model_files
+        for fn in model_files:
+            ckpt = torch.load(fn, map_location="cpu")
+            assert set(ckpt["model"]) == set(params)
+            for k, v in ckpt["model"].items():
+                assert torch.isfinite(v).all(), f"{fn}: non-finite {k}"
+        for k, v in torch.load(model_files[-1], map_location="cpu")["model"].items():
+            assert torch.equal(v, params[k]), f"last checkpoint {k} differs from the trained param"
+        opt_ckpt = torch.load(f"{tmp_dir}/model.002.opt.pt", map_location="cpu")
+        assert opt_ckpt["optimizer"]["state"]
+        if optimizer_step:  # the checkpoint keeps the ordinary Python scalar
+            for group in opt_ckpt["optimizer"]["param_groups"]:
+                assert isinstance(group["lr"], float)
+    return len(forcer.captures)
+
+
+def test_pin_memory_capture_overlap_model_step():
+    """background pinning forced to overlap the model step capture (incl. the optimizer, capture_optimizer)"""
+    n = _run_pin_memory_capture_overlap(cuda_graph=True, compile_=True, optimizer_step=False)
+    assert n == 1
+
+
+def test_pin_memory_capture_overlap_optimizer_step():
+    """
+    background pinning forced to overlap the separate optimizer step capture (torch_optimizer_step)
+    and its recapture
+    """
+    n = _run_pin_memory_capture_overlap(
+        cuda_graph=False, compile_=False, optimizer_step=True, invalidate_optimizer_step_at=6
+    )
+    assert n == 2
+
+
+def test_pin_memory_capture_overlap_model_and_optimizer_step():
+    """
+    background pinning forced to overlap the model step capture, the separate optimizer step capture,
+    and its recapture
+    """
+    n = _run_pin_memory_capture_overlap(
+        cuda_graph=True, compile_=True, optimizer_step=True, invalidate_optimizer_step_at=6
+    )
+    assert n == 3
+
+
+def test_pin_memory_engine_batches_unchanged():
+    """
+    Engine with pin_memory and a CUDA graph capture: the RETURNN pinning thread instead of the DataLoader one,
+    same batches (tensors, lengths, tags, order) as the unwrapped DataLoader
+    """
+    from returnn.torch.data.pin_memory import PinMemoryDataLoader
+
+    if not torch.cuda.is_available():
+        raise unittest.SkipTest("CUDA not available")
+    config = Config(
+        dict(
+            task="train",
+            device="gpu",
+            extern_data={"data": {"dim": 9}, "classes": {"dim": 2, "sparse": True}},
+            get_model=TrainTestModel,
+            train_step=TrainTestModel.train_step,
+            batch_size=100,
+            max_seqs=10,
+            optimizer={"class": "adamw", "capturable": True},
+            torch_optimizer_step={},
+            torch_dataloader_opts={"num_workers": 1, "pin_memory": True},
+        )
+    )
+    dataset = init_dataset({"class": "Task12AXDataset", "num_seqs": 100, "name": "train", "fixed_random_seed": 1})
+    dataset.init_seq_order(epoch=1)
+    with global_config_ctx(config):
+        engine = Engine(config=config)
+        engine.init_train_from_config(train_data=dataset)
+        loader = engine._train_dataloader
+        assert isinstance(loader, PinMemoryDataLoader) and not loader.data_loader.pin_memory
+        pinned = list(loader)
+        plain = list(loader.data_loader)
+    assert len(pinned) == len(plain) > 1
+    for batch, ref in zip(pinned, plain):
+        assert set(batch) == set(ref)
+        assert "seq_tag" in batch and "data:seq_len" in batch
+        for k, v_ref in ref.items():
+            v = batch[k]
+            if isinstance(v_ref, torch.Tensor):
+                assert v.is_pinned() and v.dtype == v_ref.dtype and torch.equal(v, v_ref), k
+            elif isinstance(v_ref, numpy.ndarray):
+                assert v.dtype == v_ref.dtype and numpy.array_equal(v, v_ref), k
+            else:
+                assert v == v_ref, k
+
+
 if __name__ == "__main__":
     better_exchook.install()
     if len(sys.argv) <= 1:

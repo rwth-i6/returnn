@@ -47,6 +47,7 @@ from .data import pipeline as data_pipeline
 from .data import returnn_dataset_wrapper
 from .data import extern_data as extern_data_util
 from .data.queued_data_iter import QueuedDataIter
+from .data.pin_memory import PinMemoryDataLoader
 from .frontend.bridge import rf_module_to_pt_module
 from .util import diagnose_gpu
 from .util import graph_capture
@@ -76,8 +77,8 @@ class Engine(EngineBase):
         self.train_dataset: Optional[Dataset] = None
         self.eval_datasets = {}
         self.extern_data: Optional[TensorDict] = None
-        self._train_dataloader: Optional[DataLoader] = None
-        self._eval_dataloaders: Dict[str, DataLoader] = {}
+        self._train_dataloader: Optional[Union[DataLoader, PinMemoryDataLoader]] = None
+        self._eval_dataloaders: Dict[str, Union[DataLoader, PinMemoryDataLoader]] = {}
         self._hot_reloader = ConfigHotReloader(config.typed_dict) if should_use_hot_reloading(config=config) else None
 
         self._start_epoch: Optional[int] = None
@@ -1008,13 +1009,14 @@ class Engine(EngineBase):
 
     def _create_data_loader(
         self, dataset: Dataset, *, train: bool = False, dataset_init_epoch: bool = True
-    ) -> DataLoader:
+    ) -> Union[DataLoader, PinMemoryDataLoader]:
         """
         :param dataset: RETURNN dataset
         :param train: Train might use a separate batch size in the config (batch_size_train vs batch_size_dev).
             Also online_shuffle_batches is only used in training.
         :param dataset_init_epoch: Whether to call dataset.init_seq_order(epoch=self.epoch) or not.
-        :return: PyTorch data loader created from given RETURNN dataset
+        :return: PyTorch data loader created from given RETURNN dataset,
+            maybe wrapped for the background pinning, see :class:`PinMemoryDataLoader`
         """
         # Make sure that _dataset_reset does not keep a ref to `self`,
         # otherwise it would trigger to pickle `self` and all its members.
@@ -1079,6 +1081,21 @@ class Engine(EngineBase):
             # (the serialization of the dataset state does not cover the current seq order).
             loader_opts["num_workers"] = 0
 
+        pin_in_background = False
+        if (
+            loader_opts.get("pin_memory")
+            and loader_opts.get("num_workers", 1) > 0
+            and str(self._device).startswith("cuda")
+            and (self._graph_capture_opts is not None or self.config.typed_value("torch_optimizer_step") is not None)
+        ):
+            # The DataLoader would pin in its own thread, also during a CUDA graph capture,
+            # which invalidates the capture. Pin in our own thread instead, which waits for the captures.
+            # (With num_workers 0, the DataLoader pins in the main thread, which is fine.)
+            loader_opts = loader_opts.copy()
+            loader_opts.pop("pin_memory")
+            loader_opts.pop("pin_memory_device", None)
+            pin_in_background = True
+
         data_loader = data_pipeline.create_data_loader_from_batches(batches_dataset, loader_opts)
 
         if data_loader.num_workers > 0:  # uses multi processing
@@ -1089,6 +1106,8 @@ class Engine(EngineBase):
             # it would still potentially have resources ready to use.
             dataset.finish_epoch(free_resources=True)
 
+        if pin_in_background:
+            return PinMemoryDataLoader(data_loader, device=self._device)
         return data_loader
 
     @contextmanager

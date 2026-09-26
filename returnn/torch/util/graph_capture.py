@@ -57,6 +57,8 @@ from returnn.tensor import Tensor, TensorDict, Dim
 import returnn.frontend as rf
 from returnn.frontend.run_ctx import RunCtx, Loss
 
+from .capture_lock import cuda_graph_capture
+
 # noinspection PyProtectedMember
 from ..data.extern_data import get_batch_dim_from_extern_data, _get_dyn_dims_from_extern_data
 
@@ -1225,7 +1227,7 @@ class GraphCapturedTrainStep:
         # without this release, capture needs the step footprint twice
         del outs
         torch.cuda.empty_cache()
-        with torch.cuda.graph(graph):
+        with cuda_graph_capture(graph):
             if self._partitioned:
                 # in-graph: backward accumulates into the static grads -> zero first
                 for p in self._grad_params:
@@ -1360,7 +1362,7 @@ class GraphCapturedTrainStep:
                 # the compiled step warms itself (trace + compile + autotune, pre-capture)
                 self._capture_compiled(graph)
             else:
-                with torch.cuda.graph(graph):
+                with cuda_graph_capture(graph):
                     # cold capture: this _step call recomputes every dim/layout cache IN-graph
                     self._ctx = self._step()
         except torch.OutOfMemoryError:
