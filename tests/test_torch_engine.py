@@ -4,10 +4,14 @@ Tests for PyTorch engine.
 
 from __future__ import annotations
 import _setup_test_env  # noqa
-from typing import Optional
+from typing import Optional, Any, Dict, Tuple
+import contextlib
 import copy
+import json
+import os
 import sys
 import unittest
+import unittest.mock
 import tempfile
 import numpy
 import torch
@@ -750,7 +754,7 @@ def test_updater_weight_decay_blacklist():
 def test_updater_lr_multipliers():
     from collections import defaultdict
     from fnmatch import fnmatchcase
-    from typing import Dict, List, Set, Any
+    from typing import List, Set
     from returnn.util.basic import DictRefKeys, FrozenDict
     from returnn.torch.updater import wrap_user_blacklist_wd_modules
     from returnn.torch.frontend.bridge import wrapped_pt_module_to_rf_module
@@ -958,6 +962,251 @@ def test_torch_engine_train_exception():
             assert "Module call stack:" in exc_lines and "(_TestTorchSubModelRaisingException.forward) sub" in exc_lines
         else:
             raise Exception("did not get expected exception")
+
+
+# Bounded profile window: stops and exports after 4 steps.
+_torch_profile_window = {
+    "schedule": dict(wait=1, warmup=1, active=2, repeat=1),
+    "profile_memory": False,  # the memory timeline HTML export needs matplotlib
+}
+_torch_profile_max_step = 4
+
+
+@contextlib.contextmanager
+def _cwd(path: str):
+    old_cwd = os.getcwd()
+    os.chdir(path)
+    try:
+        yield
+    finally:
+        os.chdir(old_cwd)
+
+
+def _torch_profile_train_config(tmp_dir: str, torch_profile: Dict[str, Any], **kwargs) -> Config:
+    opts = dict(
+        task="train",
+        device="cpu",
+        extern_data={"data": {"dim": 9}, "classes": {"dim": 2, "sparse": True}},
+        get_model=TrainTestModel,
+        train_step=TrainTestModel.train_step,
+        batch_size=500,
+        max_seqs=4,  # 25 steps per epoch, i.e. many steps after the profile window
+        optimizer={"class": "adam"},
+        num_epochs=2,
+        model=f"{tmp_dir}/model",
+        learning_rate_file=f"{tmp_dir}/learning_rates",
+        torch_profile=torch_profile,
+    )
+    opts.update(kwargs)
+    return Config(opts)
+
+
+def _torch_profile_train(config: Config) -> Engine:
+    dataset = init_dataset({"class": "Task12AXDataset", "num_seqs": 100, "name": "train", "fixed_random_seed": 1})
+    dataset.init_seq_order(epoch=1)
+    with global_config_ctx(config):
+        engine = Engine(config=config)
+        engine.init_train_from_config(train_data=dataset)
+        engine.train()
+    return engine
+
+
+def _check_torch_profile_trace(filename: str):
+    with open(filename) as f:
+        trace = json.load(f)
+    assert trace["traceEvents"], f"{filename}: no trace events"
+
+
+def _check_torch_profile_checkpoints(tmp_dir: str, *, num_epochs: int):
+    for epoch in range(1, num_epochs + 1):
+        model = torch.load(f"{tmp_dir}/model.{epoch:03d}.pt", map_location="cpu")
+        assert model["epoch"] == epoch and model["model"], f"epoch {epoch}: invalid model checkpoint"
+        opt = torch.load(f"{tmp_dir}/model.{epoch:03d}.opt.pt", map_location="cpu")
+        assert opt["optimizer"]["state"], f"epoch {epoch}: invalid optimizer checkpoint"
+
+
+def test_torch_engine_profile_exit_after_profile():
+    # default: exit after the profile, and nothing is written
+    from returnn.util.basic import should_write_to_disk
+
+    with tempfile.TemporaryDirectory(prefix="returnn_test_torch_profile_exit") as tmp_dir, _cwd(tmp_dir):
+        config = _torch_profile_train_config(tmp_dir, _torch_profile_window)
+        assert not should_write_to_disk(config)
+        try:
+            _torch_profile_train(config)
+        except SystemExit as exc:
+            assert exc.code == 0
+        else:
+            raise Exception("did not exit after profiling")
+        _check_torch_profile_trace(f"{tmp_dir}/torch_profile.json")
+        assert sorted(os.listdir(tmp_dir)) == ["torch_profile.json"]
+
+
+def test_torch_engine_profile_continue_training():
+    # bounded profile in epoch 1, then further updates, epoch 2 without profiling (once),
+    # and model, optimizer and scores are saved as in ordinary training
+    import returnn.torch.engine as engine_module
+    from returnn.util.basic import should_write_to_disk
+    from returnn.learning_rate_control import load_learning_rate_control_from_config
+
+    orig_opt_torch_profiler_from_opts = engine_module._opt_torch_profiler_from_opts
+    profilers = []  # per epoch
+
+    def _opt_torch_profiler_from_opts(**kwargs):
+        prof = orig_opt_torch_profiler_from_opts(**kwargs)
+        profilers.append(prof)
+        return prof
+
+    orig_export_chrome_trace = torch.profiler.profile.export_chrome_trace
+    with contextlib.ExitStack() as stack:
+        tmp_dir = stack.enter_context(tempfile.TemporaryDirectory(prefix="returnn_test_torch_profile_continue"))
+        stack.enter_context(_cwd(tmp_dir))
+        stack.enter_context(
+            unittest.mock.patch.object(engine_module, "_opt_torch_profiler_from_opts", _opt_torch_profiler_from_opts)
+        )
+        export_chrome_trace = stack.enter_context(
+            unittest.mock.patch.object(
+                torch.profiler.profile, "export_chrome_trace", autospec=True, side_effect=orig_export_chrome_trace
+            )
+        )
+        config = _torch_profile_train_config(
+            tmp_dir, {**_torch_profile_window, "exit_after_profile": False, "once": True}
+        )
+        engine = _torch_profile_train(config)
+
+        assert len(profilers) == 2 and profilers[0] is not None and profilers[1] is None, profilers
+        assert profilers[0].exported and not profilers[0].entered
+        assert export_chrome_trace.call_count == 1, export_chrome_trace.call_args_list
+        _check_torch_profile_trace(f"{tmp_dir}/torch_profile.json")
+        epoch1_num_steps = engine.learning_rate_control.epoch_data[1].meta["epoch_num_train_steps"]
+        assert epoch1_num_steps > _torch_profile_max_step + 1, "no updates after the profile window"
+        assert engine.epoch == 2 and engine.learning_rate_control.epoch_data[2].meta["epoch_num_train_steps"] > 0
+
+        _check_torch_profile_checkpoints(tmp_dir, num_epochs=2)
+        scores = load_learning_rate_control_from_config(config).epoch_data
+        for epoch in [1, 2]:
+            assert "train_loss_ce" in scores[epoch].error, f"epoch {epoch}: scores not saved"
+        assert should_write_to_disk(config)
+
+
+class _FakeTorchDistributedContext:
+    def __init__(self, *, rank: int, size: int, local_rank: int, local_size: int):
+        self._rank, self._size, self._local_rank, self._local_size = rank, size, local_rank, local_size
+
+    def rank(self) -> int:
+        """global rank"""
+        return self._rank
+
+    def size(self) -> int:
+        """global size"""
+        return self._size
+
+    def local_rank(self) -> int:
+        """local rank"""
+        return self._local_rank
+
+    def local_size(self) -> int:
+        """local size"""
+        return self._local_size
+
+
+def test_torch_profile_rank_selection():
+    from returnn.torch.engine import _opt_torch_profiler_from_opts
+
+    def _selected(*, num_nodes: int, local_size: int, **opts) -> Dict[int, Tuple[str, str]]:
+        size = num_nodes * local_size
+        res = {}
+        for rank in range(size):
+            ctx = _FakeTorchDistributedContext(
+                rank=rank, size=size, local_rank=rank % local_size, local_size=local_size
+            )
+            prof = _opt_torch_profiler_from_opts({**_torch_profile_window, **opts}, ctx)
+            if prof:
+                res[rank] = (prof.trace_filename, prof.memory_filename)
+        filenames = [fn for fns in res.values() for fn in fns]
+        assert len(set(filenames)) == len(filenames), f"filename collision: {res}"
+        return res
+
+    def _names(rank: Optional[int]) -> Tuple[str, str]:
+        suffix = f".rank{rank}" if rank is not None else ""
+        return f"torch_profile{suffix}.json", f"torch_memory_profile{suffix}.html"
+
+    # not distributed
+    prof = _opt_torch_profiler_from_opts(_torch_profile_window, None)
+    assert (prof.trace_filename, prof.memory_filename) == _names(None)
+    # default: local rank 0 of each node, unchanged filenames on a single node
+    assert _selected(num_nodes=1, local_size=4) == {0: _names(None)}
+    assert _selected(num_nodes=2, local_size=4) == {0: _names(0), 4: _names(4)}
+    # explicit global ranks
+    assert _selected(num_nodes=2, local_size=4, ranks=[0]) == {0: _names(0)}
+    assert _selected(num_nodes=2, local_size=4, ranks=[1, 5]) == {1: _names(1), 5: _names(5)}
+    assert _selected(num_nodes=2, local_size=2, ranks="all") == {r: _names(r) for r in range(4)}
+    # once
+    assert _opt_torch_profiler_from_opts({**_torch_profile_window, "once": True}, None, exported_before=True) is None
+    assert _opt_torch_profiler_from_opts(_torch_profile_window, None, exported_before=True) is not None
+    try:
+        _opt_torch_profiler_from_opts({**_torch_profile_window, "ranks": 0}, None)
+    except TypeError as exc:
+        print("got expected exception:", exc)
+    else:
+        raise Exception("did not get expected TypeError for invalid ranks")
+
+
+def _torch_profile_distributed_worker(rank: int, world_size: int, port: int, tmp_dir: str, torch_profile: Dict):
+    from returnn.util.basic import should_write_to_disk
+
+    # each rank as its own single-GPU node, i.e. local rank 0 everywhere.
+    # reduce_type param with sync_on_cpu only needs Gloo, so the ranks can share one GPU.
+    os.environ.update(
+        MASTER_ADDR="127.0.0.1",
+        MASTER_PORT=str(port),
+        RANK=str(rank),
+        WORLD_SIZE=str(world_size),
+        LOCAL_RANK="0",
+        LOCAL_WORLD_SIZE="1",
+    )
+    os.chdir(tmp_dir)
+    config = _torch_profile_train_config(
+        tmp_dir,
+        torch_profile,
+        backend="torch",
+        device="cuda",
+        torch_distributed={"reduce_type": "param", "param_sync_step": 1, "sync_on_cpu": True},
+    )
+    engine = _torch_profile_train(config)
+    assert engine.epoch == 2
+    with global_config_ctx(config):
+        assert should_write_to_disk(config) == (rank == 0)  # only rank 0 writes checkpoints
+    torch.distributed.destroy_process_group()
+
+
+def _run_torch_profile_distributed(tmp_dir: str, torch_profile: Dict[str, Any], *, world_size: int = 2):
+    import socket
+    import torch.multiprocessing
+
+    with socket.socket() as s:
+        s.bind(("127.0.0.1", 0))
+        port = s.getsockname()[1]
+    torch.multiprocessing.spawn(
+        _torch_profile_distributed_worker, args=(world_size, port, tmp_dir, torch_profile), nprocs=world_size
+    )
+
+
+def test_torch_engine_profile_continue_distributed():
+    # multi-node-like setup: two ranks with local rank 0, which previously wrote the same trace file
+    if not torch.cuda.is_available():
+        raise unittest.SkipTest("CUDA not available")  # torch_distributed in the engine requires CUDA
+    for ranks, expected_ranks in [(None, [0, 1]), ([1], [1]), ("all", [0, 1])]:
+        torch_profile = {**_torch_profile_window, "exit_after_profile": False, "once": True}
+        if ranks is not None:
+            torch_profile["ranks"] = ranks
+        with tempfile.TemporaryDirectory(prefix="returnn_test_torch_profile_distributed") as tmp_dir:
+            _run_torch_profile_distributed(tmp_dir, torch_profile)
+            traces = sorted(fn for fn in os.listdir(tmp_dir) if fn.startswith("torch_profile"))
+            assert traces == [f"torch_profile.rank{r}.json" for r in expected_ranks], (ranks, traces)
+            for fn in traces:
+                _check_torch_profile_trace(f"{tmp_dir}/{fn}")
+            _check_torch_profile_checkpoints(tmp_dir, num_epochs=2)
 
 
 def test_dynamic_learning_rate():

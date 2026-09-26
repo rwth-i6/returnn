@@ -144,6 +144,8 @@ class Engine(EngineBase):
         # opts parsed here, the instance is created lazily at the first train step.
         self._graph_capture_opts = config.typed_value("torch_cuda_graph", None)
         self._graph_capture: Optional[graph_capture.GraphCapturedTrainStep] = None
+        # for torch_profile once=True
+        self._torch_profile_exported = False
 
         # Dump stacks when a train step stops making progress, see returnn.util.watch_stall.
         self._stall_heartbeat = None
@@ -534,7 +536,9 @@ class Engine(EngineBase):
         total_data_size_padded = NumbersDict()
 
         prof = _opt_torch_profiler_from_opts(
-            opts=self.config.opt_typed_value("torch_profile"), torch_distributed_ctx=self._torch_distributed_ctx
+            opts=self.config.opt_typed_value("torch_profile"),
+            torch_distributed_ctx=self._torch_distributed_ctx,
+            exported_before=self._torch_profile_exported,
         )
         if prof:
             prof.__enter__()
@@ -769,6 +773,8 @@ class Engine(EngineBase):
 
         if prof:
             prof.__exit__(None, None, None)
+            if prof.exported:
+                self._torch_profile_exported = True
 
         elapsed = time.monotonic() - epoch_start_time
         elapsed_computation_percentage = elapsed_computation_time / elapsed
@@ -1998,10 +2004,21 @@ def _torch_load(filename: Union[str, os.PathLike], *, device: str) -> Dict[str, 
 
 
 class _TorchProfiler:
-    def __init__(self, profiler: torch.profiler.profile, max_step: Optional[int]):
+    def __init__(
+        self,
+        profiler: torch.profiler.profile,
+        max_step: Optional[int],
+        *,
+        exit_after_profile: bool = True,
+        filename_suffix: str = "",
+    ):
         self.profiler = profiler
         self.max_step = max_step
+        self.exit_after_profile = exit_after_profile
+        self.trace_filename = f"torch_profile{filename_suffix}.json"
+        self.memory_filename = f"torch_memory_profile{filename_suffix}.html"
         self.entered = False
+        self.exported = False
 
     def __enter__(self):
         self.profiler.__enter__()
@@ -2014,34 +2031,51 @@ class _TorchProfiler:
         self.profiler.__exit__(exc_type, exc_val, exc_tb)
 
         if exc_type is None:
-            print("Torch profiling finished, exporting Chrome trace to torch_profile.json...", file=log.v2)
-            self.profiler.export_chrome_trace("torch_profile.json")
+            print(f"Torch profiling finished, exporting Chrome trace to {self.trace_filename}...", file=log.v2)
+            self.profiler.export_chrome_trace(self.trace_filename)
             if self.profiler.profile_memory:
-                print("Exporting Torch memory profile to torch_memory_profile.html...", file=log.v2)
+                print(f"Exporting Torch memory profile to {self.memory_filename}...", file=log.v2)
                 # deprecated, but the named replacement (_record_memory_history/_export_memory_snapshot)
                 # is private API and emits a snapshot pickle instead of this HTML timeline
                 # noinspection PyDeprecation
-                self.profiler.export_memory_timeline("torch_memory_profile.html")
+                self.profiler.export_memory_timeline(self.memory_filename)
+            self.exported = True
 
-            print("Exiting program after Torch profiling.", file=log.v2)
-            sys.exit(0)
+            if self.exit_after_profile:
+                print("Exiting program after Torch profiling.", file=log.v2)
+                sys.exit(0)
+            print("Continuing training after Torch profiling.", file=log.v2)
 
     def step(self):
         """step"""
+        if not self.entered:  # already stopped and exported
+            return
         self.profiler.step()
         if self.max_step is not None and self.profiler.step_num > self.max_step:
             print(f"Reached max profiling step {self.max_step}, stopping Torch profiler.", file=log.v2)
-            self.profiler.stop()
             self.__exit__(None, None, None)
 
 
 def _opt_torch_profiler_from_opts(
-    opts: Union[None, int, bool, str, Dict[str, Any]], torch_distributed_ctx: Optional[DistributedContext]
+    opts: Union[None, int, bool, str, Dict[str, Any]],
+    torch_distributed_ctx: Optional[DistributedContext],
+    *,
+    exported_before: bool = False,
 ) -> Optional[_TorchProfiler]:
-    # Only profile worker #0: https://github.com/rwth-i6/returnn/issues/1821
-    if torch_distributed_ctx is not None and torch_distributed_ctx.local_rank() != 0:
-        return None
+    """
+    :param opts: ``torch_profile`` config option.
+        If a dict, these keys are handled here, all others are passed to :class:`torch.profiler.profile`:
 
+        - ``exit_after_profile`` (default True): exit the program after the profile was exported.
+          If False, training continues (incl. saving models etc.).
+        - ``once`` (default False): profile only one epoch per engine process.
+          Otherwise every epoch is profiled again and overwrites the files.
+        - ``ranks`` (distributed only): global ranks to profile, list of ints or "all".
+          Default (None): local rank 0 on each node (https://github.com/rwth-i6/returnn/issues/1821).
+          Filenames get a ``.rank{rank}`` suffix if multiple ranks can be profiled.
+    :param torch_distributed_ctx:
+    :param exported_before: whether a profile was already exported in this engine process
+    """
     if isinstance(opts, str):
         from returnn.util.basic import to_bool
 
@@ -2057,6 +2091,30 @@ def _opt_torch_profiler_from_opts(
         opts = opts.copy()
     else:
         raise TypeError(f"Invalid type for torch_profile {opts!r}: {type(opts)}")
+
+    exit_after_profile = opts.pop("exit_after_profile", True)
+    once = opts.pop("once", False)
+    ranks = opts.pop("ranks", None)
+    if ranks is not None and ranks != "all":
+        if not isinstance(ranks, (list, tuple)) or not all(isinstance(r, int) for r in ranks):
+            raise TypeError(f"torch_profile: invalid ranks {ranks!r}, expected list of ints or 'all'")
+    if once and exported_before:
+        return None
+
+    filename_suffix = ""
+    if torch_distributed_ctx is not None:
+        rank = torch_distributed_ctx.rank()
+        if ranks is None:
+            if torch_distributed_ctx.local_rank() != 0:
+                return None
+            # local rank 0 of multiple nodes would write the same files
+            multiple_ranks = torch_distributed_ctx.size() > torch_distributed_ctx.local_size()
+        else:
+            if ranks != "all" and rank not in ranks:
+                return None
+            multiple_ranks = torch_distributed_ctx.size() > 1
+        if multiple_ranks:
+            filename_suffix = f".rank{rank}"
 
     from torch.profiler import profile, ProfilerActivity, schedule
 
@@ -2097,4 +2155,4 @@ def _opt_torch_profiler_from_opts(
             print(f"Profiling will stop automatically after {prof_max_step} steps.", file=log.v3)
 
     prof = profile(**opts)
-    return _TorchProfiler(prof, prof_max_step)
+    return _TorchProfiler(prof, prof_max_step, exit_after_profile=exit_after_profile, filename_suffix=filename_suffix)
