@@ -2495,6 +2495,34 @@ def test_amuse_engine_train():
         assert engine._updater.get_optimizer().train_mode is False
 
 
+def test_amuse_engine_train_cuda_graph():
+    """
+    AMUSE under torch_cuda_graph without warmup steps, the optimizer stepped by the engine outside the graph
+    (its step reads the lr on the host, so it cannot be captured).
+    The first update creates z as the copy of the params which AMUSE defines,
+    so the params after two epochs match the eager engine.
+    """
+    if not torch.cuda.is_available():
+        raise unittest.SkipTest("CUDA not available")
+    optimizer = {"class": "amuse", "update_type": "adamw", "warmup_steps": 5}
+    engines = []
+    for cuda_graph in (False, True):
+        config, dataset = _build_cuda_graph_train_config_and_dataset(
+            compile_=False, warmup_steps=None, cuda_graph=cuda_graph, optimizer=optimizer
+        )
+        if cuda_graph:
+            config.typed_dict["torch_cuda_graph"]["capture_optimizer"] = False
+        with global_config_ctx(config):
+            engine = Engine(config=config)
+            engine.init_train_from_config(train_data=dataset)
+            engine.train()
+        engines.append(engine)
+    eager, captured = engines
+    assert captured._graph_capture is not None and captured._graph_capture._graph is not None
+    for (name, p), (_, q) in zip(eager._pt_model.named_parameters(), captured._pt_model.named_parameters()):
+        torch.testing.assert_close(q, p, rtol=1e-4, atol=1e-5, msg=lambda m: f"{name}: {m}")
+
+
 class TrainTestModelWithBatchNorm(TrainTestModel):
     def __init__(self, in_dim: int = 9, **_kwargs):
         super().__init__(in_dim=in_dim)
