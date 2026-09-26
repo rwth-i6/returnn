@@ -161,7 +161,7 @@ class Updater:
         self._grad_clip = self.config.float("gradient_clip", 0.0)
         self._grad_clip_global_norm = self.config.float("gradient_clip_global_norm", 0.0)
         self.log_grad_norm_p = _parse_log_grad_norm(self.config)
-        # the pre-clip grad norm of the last step(), when log_grad_norm_p is set.
+        # the pre-clip grad norm of the last step(), when log_grad_norm_p is set; one tensor updated in place
         self.last_grad_norm: Optional[torch.Tensor] = None
         self._num_allowed_consec_invalid_gradient_steps = self.config.typed_value(
             "num_allowed_consec_invalid_gradient_steps", None
@@ -315,7 +315,13 @@ class Updater:
         if self.log_grad_norm_p is not None:
             if pre_norm is None:
                 assert norm is not None
-            self.last_grad_norm = pre_norm if pre_norm is not None else norm
+            grad_norm = pre_norm if pre_norm is not None else norm
+            # in place: the norm of an eager step before a graph capture stays readable
+            # after the captured step recorded its own, and every replay refreshes it
+            if self.last_grad_norm is None:
+                self.last_grad_norm = grad_norm.detach().clone()
+            else:
+                self.last_grad_norm.copy_(grad_norm)
 
         has_invalid_gradient = False
         if self._num_allowed_consec_invalid_gradient_steps is not None:
