@@ -657,6 +657,42 @@ def test_max_seq_len():
     assert False, "Should have contained sequences"
 
 
+def _run_maybe_stop_for_resubmission(*, epoch: int, final_epoch: int, time_left: int):
+    """
+    :return: (number of SLURM time-left queries, signals sent via os.kill)
+    """
+    import os
+    from unittest import mock
+
+    config = Config({"stop_for_resubmission_when_low_time_left": True})
+    engine = Engine(config=config)
+    engine._final_epoch = final_epoch  # normally set by init_train_from_config
+    engine.set_epoch(epoch)
+    with mock.patch("returnn.util.basic.slurm_time_left_sec", return_value=time_left) as time_left_mock:
+        with mock.patch.object(os, "kill") as kill_mock:
+            engine._maybe_stop_for_resubmission(last_epoch_wall_sec=100.0)
+    return time_left_mock.call_count, [call.args[1] for call in kill_mock.call_args_list]
+
+
+def test_stop_for_resubmission_final_epoch():
+    # low wall-time left, but the training is complete: no scheduler query, no signal
+    assert _run_maybe_stop_for_resubmission(epoch=38, final_epoch=38, time_left=10) == (0, [])
+
+
+def test_stop_for_resubmission_beyond_final_epoch():
+    assert _run_maybe_stop_for_resubmission(epoch=39, final_epoch=38, time_left=10) == (0, [])
+
+
+def test_stop_for_resubmission_low_time_left():
+    import signal
+
+    assert _run_maybe_stop_for_resubmission(epoch=37, final_epoch=38, time_left=10) == (1, [signal.SIGINT])
+
+
+def test_stop_for_resubmission_enough_time_left():
+    assert _run_maybe_stop_for_resubmission(epoch=37, final_epoch=38, time_left=1000) == (1, [])
+
+
 def test_data_loader_oggzip():
     from test_Dataset import create_ogg_zip_txt_only_dataset_mult_seqs
 
