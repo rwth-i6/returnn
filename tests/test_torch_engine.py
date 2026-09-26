@@ -793,7 +793,7 @@ def test_updater_grad_norm_updated_in_place():
     so the norm of an eager update before a graph capture stays readable once the captured step
     has recorded its own, and every replay refreshes the same tensor.
     """
-    config = Config(dict(optimizer={"class": "sgd"}, log_grad_norm=True))
+    config = Config(dict(optimizer={"class": "sgd"}, log_grad_norm=True, gradient_clip_global_norm=5.0))
     model = torch.nn.Linear(3, 2)
     updater = Updater(config=config, network=model, device=torch.device("cpu"), initial_learning_rate=1e-2)
     updater.create_optimizer()
