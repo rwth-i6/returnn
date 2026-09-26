@@ -230,7 +230,14 @@ class BatchingIterDataPipe(torch.utils.data.IterDataPipe):
     Note, that batches are not yet merged into a single (padded) data array here, this happens in 'collate_batch()'.
     """
 
-    def __init__(self, dataset: torch.utils.data.IterableDataset, batch_size=1, max_seqs=None, packed_batch_size=None):
+    def __init__(
+        self,
+        dataset: torch.utils.data.IterableDataset,
+        batch_size=1,
+        max_seqs=None,
+        packed_batch_size=None,
+        packed_batch_cost=None,
+    ):
         """
         :param dataset: dataset to apply batching to
         :param int|dict[str,int]|None|function batch_size: Maximum number of time steps (e.g. audio frames / words)
@@ -248,12 +255,21 @@ class BatchingIterDataPipe(torch.utils.data.IterDataPipe):
             but a limit on sum(seq_len) (no padding),
             the natural budget for packed batches (see ``packed_tensors``).
             Both limits apply if both are set.
+        :param dict[str,(NumbersDict)->int|float]|None packed_batch_cost: per-sequence costs derived from
+            the sequence lengths, keyed by a name that is not a data key. Each function gets the
+            lengths of one sequence and returns its cost, whose sum over the batch is bounded by the
+            ``packed_batch_size`` entry of that name, which must exist. The costs stay out of the
+            padded ``batch_size`` check. This bounds quantities no single length can,
+            such as the frames times prefixes cells of a transducer lattice.
         """
         super().__init__()
         self._dataset = dataset
         self._max_batch_size = self._parse_batch_size(batch_size)
         self._max_seqs = self._parse_max_seqs(max_seqs)
         self._max_packed_batch_size = self._parse_packed_batch_size(packed_batch_size)
+        self._packed_batch_cost: Dict[str, Callable] = dict(packed_batch_cost or {})
+        for key, cost in self._packed_batch_cost.items():
+            assert callable(cost), f"packed_batch_cost[{key!r}] must be callable, got {cost!r}"
 
         if not callable(self._max_batch_size):
             assert isinstance(self._max_batch_size, NumbersDict) and self._max_batch_size.min_value() > 0
@@ -292,6 +308,19 @@ class BatchingIterDataPipe(torch.utils.data.IterDataPipe):
         if packed_batch_size is None:
             return None
         return BatchingIterDataPipe._parse_batch_size(packed_batch_size, data_dict=data_dict)
+
+    def _cost_limits(self, max_packed_batch_size: Optional[NumbersDict]) -> NumbersDict:
+        """
+        :param max_packed_batch_size: the packed limit in effect for the current sequence
+        :return: the explicit ``packed_batch_size`` entry of every cost key, the only limit a cost meets
+        """
+        limits = {}
+        for cost_key in self._packed_batch_cost:
+            assert max_packed_batch_size is not None and cost_key in max_packed_batch_size.keys(), (
+                f"packed_batch_cost[{cost_key!r}] needs an explicit packed_batch_size[{cost_key!r}] entry"
+            )
+            limits[cost_key] = max_packed_batch_size[cost_key]
+        return NumbersDict(limits)
 
     @staticmethod
     def _parse_max_seqs(
@@ -332,6 +361,7 @@ class BatchingIterDataPipe(torch.utils.data.IterDataPipe):
         current_batch = []
         current_max_sequence_lengths = NumbersDict(0)  # data_key -> length of longest sequence in current batch
         current_sum_sequence_lengths = NumbersDict(0)  # data_key -> summed sequence lengths in current batch
+        current_sum_sequence_costs = NumbersDict(0)  # cost_key -> summed sequence costs in current batch
 
         for data_dict in self._dataset:
             max_seqs = self._parse_max_seqs(self._max_seqs, data_dict=data_dict)
@@ -345,30 +375,41 @@ class BatchingIterDataPipe(torch.utils.data.IterDataPipe):
                 current_batch = []
                 current_max_sequence_lengths = NumbersDict(0)
                 current_sum_sequence_lengths = NumbersDict(0)
+                current_sum_sequence_costs = NumbersDict(0)
 
             # TODO: This assumes all data has time as first dimension. Currently we can't know better..
             sequence_lengths = NumbersDict(
                 {data_key: data.shape[0] for data_key, data in data_dict.items() if data.shape}
             )
+            sequence_costs = NumbersDict(
+                {cost_key: cost(sequence_lengths) for cost_key, cost in self._packed_batch_cost.items()}
+            )
 
             max_sequence_lengths_if_included = NumbersDict.max([current_max_sequence_lengths, sequence_lengths])
             batch_size_if_included = max_sequence_lengths_if_included * (len(current_batch) + 1)  # including padding
             sum_sequence_lengths_if_included = current_sum_sequence_lengths + sequence_lengths  # no padding
+            sum_sequence_costs_if_included = current_sum_sequence_costs + sequence_costs
 
             over_limit = batch_size_if_included.any_compare(max_batch_size, (lambda a, b: a > b))
             if max_packed_batch_size is not None:
                 over_limit = over_limit or sum_sequence_lengths_if_included.any_compare(
                     max_packed_batch_size, (lambda a, b: a > b)
                 )
+            if self._packed_batch_cost:
+                over_limit = over_limit or sum_sequence_costs_if_included.any_compare(
+                    self._cost_limits(max_packed_batch_size), (lambda a, b: a > b)
+                )
             if current_batch and over_limit:
                 yield current_batch
                 current_batch = [data_dict]
                 current_max_sequence_lengths = sequence_lengths
                 current_sum_sequence_lengths = sequence_lengths
+                current_sum_sequence_costs = sequence_costs
             else:
                 current_batch.append(data_dict)
                 current_max_sequence_lengths = max_sequence_lengths_if_included
                 current_sum_sequence_lengths = sum_sequence_lengths_if_included
+                current_sum_sequence_costs = sum_sequence_costs_if_included
 
         if current_batch:
             yield current_batch
@@ -488,8 +529,14 @@ def get_batching_iterable_dataset_from_config(
         max_seqs = config.typed_value("max_seqs", -1)
         packed_batch_size = config.typed_value("packed_batch_size", None)
         packed_batch_size = config.typed_value(f"packed_batch_size_{'train' if train else 'dev'}", packed_batch_size)
+        packed_batch_cost = config.typed_value("packed_batch_cost", None)
+        packed_batch_cost = config.typed_value(f"packed_batch_cost_{'train' if train else 'dev'}", packed_batch_cost)
         batches_dataset = BatchingIterDataPipe(
-            dataset, batch_size=batch_size, max_seqs=max_seqs, packed_batch_size=packed_batch_size
+            dataset,
+            batch_size=batch_size,
+            max_seqs=max_seqs,
+            packed_batch_size=packed_batch_size,
+            packed_batch_cost=packed_batch_cost,
         )
         return batches_dataset
 
