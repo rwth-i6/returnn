@@ -17,7 +17,13 @@ from returnn.util.basic import override_env_var, try_run, BehaviorVersion, Optio
 from returnn.util.literal_py_to_pickle import literal_eval
 from returnn.util.multi_proc_non_daemonic_spawn import NonDaemonicSpawnContext
 from returnn.config import SubProcCopyGlobalConfigPreInitFunc
-from .basic import init_dataset, extend_dataset_dict_from_parent_dataset, DatasetSeq, RANDOM_SEED_OFFSET_ENV_VAR
+from .basic import (
+    Dataset,
+    init_dataset,
+    extend_dataset_dict_from_parent_dataset,
+    DatasetSeq,
+    RANDOM_SEED_OFFSET_ENV_VAR,
+)
 from .cached2 import CachedDataset2
 
 # noinspection PyProtectedMember
@@ -130,6 +136,12 @@ class DistributeFilesDataset(CachedDataset2):
     In this case the file sizes for sub epoch distribution are summed up per list entry
     by iterating over the structure leaves.
 
+    By default, each sub epoch dataset runs in its own worker process.
+    When the sub epoch dataset already loads in parallel (e.g. via :class:`MultiProcDataset`),
+    and this dataset runs in a PyTorch DataLoader worker anyway,
+    this extra process only adds another serialization and transfer of every sequence.
+    Use ``use_worker_proc=False`` to run the sub epoch dataset in the current process instead.
+
     For some discussion, see https://github.com/rwth-i6/returnn/issues/1519 and
     https://github.com/rwth-i6/returnn/issues/1524.
     """
@@ -139,7 +151,8 @@ class DistributeFilesDataset(CachedDataset2):
         *,
         files: Union[List[FileTree], os.PathLike, Callable[[], List[FileTree]]],
         get_sub_epoch_dataset: Callable[[List[FileTree]], Dict[str, Any]],
-        preload_next_n_sub_epochs: int = 1,
+        use_worker_proc: bool = True,
+        preload_next_n_sub_epochs: Optional[int] = None,
         buffer_size: int = 1,
         distrib_shard_files: bool = False,
         sharding_fix: Optional[bool] = None,
@@ -156,8 +169,16 @@ class DistributeFilesDataset(CachedDataset2):
             or a JSON file containing a list of arbitarily nested (JSON) objects.
             It can also be a callable which returns such a list.
         :param get_sub_epoch_dataset: callable which returns a dataset dict for a given subset of files
-        :param preload_next_n_sub_epochs: how many sub epoch datasets to preload
-        :param buffer_size: buffer size for each worker, number of seqs to prefetch
+        :param use_worker_proc: whether to run each sub epoch dataset in its own worker process (default).
+            If False, the sub epoch dataset runs in the current process,
+            which avoids the extra transfer of every sequence between processes.
+            This makes sense when the sub epoch dataset already loads in parallel,
+            e.g. via :class:`MultiProcDataset`.
+        :param preload_next_n_sub_epochs: how many sub epoch datasets to preload.
+            Default (None): 1 with ``use_worker_proc``, else 0.
+            Without ``use_worker_proc``, preloading is synchronous, i.e. it blocks :func:`init_seq_order`.
+        :param buffer_size: buffer size for each worker, number of seqs to prefetch.
+            Only used with ``use_worker_proc``.
         :param distrib_shard_files: shard the data across worker processes in distributed training scenaria
         :param sharding_fix: whether the sub-epoch dataset must NOT shard its seq order again
             when this dataset is sharded (any _num_shards > 1, e.g. via distrib_shard_files).
@@ -177,6 +198,10 @@ class DistributeFilesDataset(CachedDataset2):
         super().__init__(**kwargs)
         self.files = files
         self.get_sub_epoch_dataset = get_sub_epoch_dataset
+        assert isinstance(use_worker_proc, bool), f"invalid use_worker_proc {use_worker_proc!r}"
+        self.use_worker_proc = use_worker_proc
+        if preload_next_n_sub_epochs is None:
+            preload_next_n_sub_epochs = 1 if use_worker_proc else 0
         assert preload_next_n_sub_epochs >= 0
         self.preload_next_n_sub_epochs = preload_next_n_sub_epochs
         self.buffer_size = buffer_size
@@ -185,7 +210,7 @@ class DistributeFilesDataset(CachedDataset2):
         self._num_seqs: Optional[int] = None
 
         self._files: Optional[List[FileTree]] = None  # files to use for this dataset
-        self._workers: Dict[int, _WorkerProcParent] = {}  # epoch -> worker
+        self._workers: Dict[int, Union[_WorkerProcParent, _WorkerInProc]] = {}  # epoch -> worker
         self._files_order_cache: Dict[int, List[List[FileTree]]] = {}  # full epoch (0-indexed) -> files order
 
         assert isinstance(distrib_shard_files, bool), f"invalid distrib_shard_files {distrib_shard_files!r}"
@@ -393,13 +418,16 @@ class DistributeFilesDataset(CachedDataset2):
             files_for_subep = files_order[(ep_ - 1) % self.partition_epoch]
             print(f"{self}: using files for epoch {ep_}: {files_for_subep}", file=log.v4)
             dataset_dict = self._get_sub_dataset_dict(files=files_for_subep)
-            worker = _WorkerProcParent(
-                name=f"{self.__class__.__name__} {self.name} ep {epoch}",
-                epoch=ep_,
-                full_epoch_0idx=full_epoch_0idx_,
-                dataset_dict=dataset_dict,
-                buffer_size=self.buffer_size,
-            )
+            if self.use_worker_proc:
+                worker = _WorkerProcParent(
+                    name=f"{self.__class__.__name__} {self.name} ep {epoch}",
+                    epoch=ep_,
+                    full_epoch_0idx=full_epoch_0idx_,
+                    dataset_dict=dataset_dict,
+                    buffer_size=self.buffer_size,
+                )
+            else:
+                worker = _WorkerInProc(epoch=ep_, full_epoch_0idx=full_epoch_0idx_, dataset_dict=dataset_dict)
             self._workers[ep_] = worker
 
         self._num_seqs = self._workers[epoch].get_num_seqs()
@@ -715,6 +743,71 @@ class _WorkerProcParent:
         try_run(self.worker_proc.join)
 
 
+class _WorkerInProc:
+    """
+    Same interface as :class:`_WorkerProcParent`, but the sub epoch dataset runs in the current process.
+    """
+
+    def __init__(self, *, epoch: int, full_epoch_0idx: int, dataset_dict: Dict[str, Any]):
+        # the dataset makes sure this is set
+        assert "random_seed_offset" in dataset_dict
+
+        self.epoch = epoch
+        self.full_epoch_0idx = full_epoch_0idx
+        self.dataset_dict = dataset_dict
+
+        with self._env():
+            self.dataset = init_dataset(dataset_dict)
+            # Same as in _WorkerProcParent: use the full epoch as the epoch here.
+            self.dataset.init_seq_order(epoch=self.full_epoch_0idx + 1)
+            try:
+                self._num_seqs: Optional[int] = self.dataset.num_seqs
+            except NotImplementedError:
+                self._num_seqs = None
+
+    def _env(self):
+        # The worker process sets this env var for everything it runs, e.g. nested sub procs.
+        return override_env_var(RANDOM_SEED_OFFSET_ENV_VAR, str(self.dataset_dict["random_seed_offset"]))
+
+    def get_num_seqs(self) -> Optional[int]:
+        """num seqs for this sub epoch"""
+        return self._num_seqs
+
+    def get_data_seq(self, seq_idx: int) -> Optional[DatasetSeq]:
+        """get data seq"""
+        with self._env():
+            if not self.dataset.is_less_than_num_seqs(seq_idx):
+                return None
+            return _get_data_seq(self.dataset, seq_idx)
+
+    def get_all_tags(self) -> List[str]:
+        """get all tags"""
+        with self._env():
+            return self.dataset.get_all_tags()
+
+    def get_total_num_seqs(self, **kwargs) -> int:
+        """get total num seqs"""
+        with self._env():
+            return self.dataset.get_total_num_seqs(**kwargs)
+
+    def exit(self, *, join: bool = True):
+        """exit"""
+        if self.dataset is None:
+            return
+        with self._env():
+            # Potentially release sub-procs / threads the wrapped dataset owns.
+            self.dataset.finish_epoch(free_resources=True)
+        self.dataset = None
+
+
+def _get_data_seq(dataset: Dataset, seq_idx: int) -> DatasetSeq:
+    dataset.load_seqs(seq_idx, seq_idx + 1)
+    seq_tag = dataset.get_tag(seq_idx)
+    features = {data_key: dataset.get_data(seq_idx, data_key) for data_key in dataset.get_data_keys()}
+    complete_frac = dataset.get_complete_frac(seq_idx, allow_only_lr_suitable=True)
+    return DatasetSeq(seq_idx=seq_idx, seq_tag=seq_tag, features=features, complete_frac=complete_frac)
+
+
 def _worker_proc_loop(
     epoch: int,
     buffer_size: int,
@@ -743,12 +836,7 @@ def _worker_proc_loop(
             return False
         if not dataset.is_less_than_num_seqs(next_seq_idx):
             return False
-        dataset.load_seqs(next_seq_idx, next_seq_idx + 1)
-        seq_tag = dataset.get_tag(next_seq_idx)
-        features = {data_key: dataset.get_data(next_seq_idx, data_key) for data_key in dataset.get_data_keys()}
-        complete_frac = dataset.get_complete_frac(next_seq_idx, allow_only_lr_suitable=True)
-        res = DatasetSeq(seq_idx=next_seq_idx, seq_tag=seq_tag, features=features, complete_frac=complete_frac)
-        cache.append(res)
+        cache.append(_get_data_seq(dataset, next_seq_idx))
         next_seq_idx += 1
         return True
 

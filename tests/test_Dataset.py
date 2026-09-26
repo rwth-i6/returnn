@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any, Iterator, TYPE_CHECKING, List, Dict, Optional
+from typing import Any, Iterator, TYPE_CHECKING, List, Tuple, Dict, Optional
 import multiprocessing
 import os
 import sys
@@ -1134,13 +1134,14 @@ def _dfd_get_sub_epoch_dataset_with_multi_proc_postprocessing(_files_subepoch: L
     }
 
 
-def _run_dfd_with_multi_proc_postprocessing_epoch_transition(files: List[str]):
+def _run_dfd_with_multi_proc_postprocessing_epoch_transition(files: List[str], use_worker_proc: bool = True):
     dataset = init_dataset(
         {
             "class": "DistributeFilesDataset",
             "files": files,
             "get_sub_epoch_dataset": _dfd_get_sub_epoch_dataset_with_multi_proc_postprocessing,
             "partition_epoch": 2,
+            "use_worker_proc": use_worker_proc,
             "preload_next_n_sub_epochs": 1,
         }
     )
@@ -1164,6 +1165,46 @@ def test_nested_PostprocessingDataset_finish_epoch_propagates():
         worker_dataset.finish_epoch(free_resources=True)
 
 
+def _make_slow_init_seq_order_hdf_dataset_class():
+    from returnn.datasets.hdf import HDFDataset
+
+    class _SlowInitSeqOrderHDFDataset(HDFDataset):
+        """init_seq_order takes a while, to expose races with threads calling it"""
+
+        def init_seq_order(self, epoch=None, seq_list=None, seq_order=None):
+            """init seq order"""
+            import time
+
+            time.sleep(0.5)
+            return super().init_seq_order(epoch=epoch, seq_list=seq_list, seq_order=seq_order)
+
+    return _SlowInitSeqOrderHDFDataset
+
+
+def test_PostprocessingDataset_multi_proc_num_seqs_after_init_seq_order():
+    # The feeder thread calls init_seq_order on the wrapped dataset,
+    # and num_seqs (0 for a fresh HDFDataset before init_seq_order) must only be read after that.
+    files = _dfd_make_hdf_files(num_hdf_files=2)
+    dataset = init_dataset(
+        {
+            "class": "PostprocessingDataset",
+            "dataset": {"class": _make_slow_init_seq_order_hdf_dataset_class(), "files": files},
+            "map_seq": map_identity,
+            "num_workers": 2,
+        }
+    )
+    try:
+        dataset.init_seq_order(epoch=1)
+        assert dataset.num_seqs == 10
+        seq_idx = 0
+        while dataset.is_less_than_num_seqs(seq_idx):
+            dataset.load_seqs(seq_idx, seq_idx + 1)
+            seq_idx += 1
+        assert seq_idx == 10
+    finally:
+        dataset.finish_epoch(free_resources=True)
+
+
 def test_DistributeFilesDataset_with_multi_proc_postprocessing_cleanup():
     # This matches the production nesting where workerless postprocessing wrappers surround the multiprocessing one.
     # Keep the timeout outside the actual test process so a lifecycle regression fails instead of hanging the test run.
@@ -1173,16 +1214,20 @@ def test_DistributeFilesDataset_with_multi_proc_postprocessing_cleanup():
             with open(filename, "wb") as f:
                 f.write(b"x")
 
-        proc = multiprocessing.get_context("spawn").Process(
-            target=_run_dfd_with_multi_proc_postprocessing_epoch_transition, args=(files,)
-        )
-        proc.start()
-        proc.join(timeout=30)
-        if proc.is_alive():
-            proc.kill()
-            proc.join()
-            raise AssertionError("DistributeFilesDataset worker did not release the wrapped PostprocessingDataset")
-        assert proc.exitcode == 0
+        for use_worker_proc in (True, False):
+            proc = multiprocessing.get_context("spawn").Process(
+                target=_run_dfd_with_multi_proc_postprocessing_epoch_transition, args=(files, use_worker_proc)
+            )
+            proc.start()
+            proc.join(timeout=30)
+            if proc.is_alive():
+                proc.kill()
+                proc.join()
+                raise AssertionError(
+                    f"DistributeFilesDataset (use_worker_proc={use_worker_proc})"
+                    " did not release the wrapped PostprocessingDataset"
+                )
+            assert proc.exitcode == 0
 
 
 def test_DistributeFilesDataset():
@@ -1405,6 +1450,176 @@ def test_DistributeFilesDataset_sharding():
                 local_seq_idx += 1
                 global_seq_idx += 1
         assert global_seq_idx == len(hdf_files) * num_seqs // distrib_size
+
+
+def _dfd_make_hdf_files(*, num_hdf_files: int, num_seqs: int = 5) -> List[str]:
+    """:return: HDF files, where every seq has unique data"""
+    from test_HDFDataset import generate_hdf_from_other
+
+    hdf_files = []
+    for hdf_idx in range(num_hdf_files):
+        hdf_files.append(
+            generate_hdf_from_other(
+                {
+                    "class": "StaticDataset",
+                    "data": [
+                        {"classes": numpy.arange(seq_idx + 1, dtype="int32") + (hdf_idx * num_seqs + seq_idx) * 10}
+                        for seq_idx in range(num_seqs)
+                    ],
+                    "output_dim": {"classes": [num_hdf_files * num_seqs * 10, 1]},
+                },
+                suffix=f"-{hdf_idx}.hdf",
+                use_cache=False,
+            )
+        )
+    return hdf_files
+
+
+_dfd_test_random_seed_offset = 42
+
+
+def _dfd_map_seq_check_random_seed_offset_env(tdict: TensorDict, **_kwargs) -> TensorDict:
+    from returnn.datasets.basic import RANDOM_SEED_OFFSET_ENV_VAR
+
+    # This runs in a sub proc of the sub epoch dataset, which must see the same env as with the DFD worker proc.
+    assert os.environ.get(RANDOM_SEED_OFFSET_ENV_VAR) == str(_dfd_test_random_seed_offset)
+    return tdict
+
+
+def _dfd_get_sub_epoch_dataset_multi_proc_random(files_subepoch: List[str]) -> Dict[str, Any]:
+    # The sub epoch dataset loads in parallel on its own, which is the use case for use_worker_proc=False.
+    return {
+        "class": "PostprocessingDataset",
+        "dataset": {"class": "HDFDataset", "files": files_subepoch, "seq_ordering": "random"},
+        "map_seq": _dfd_map_seq_check_random_seed_offset_env,
+        "num_workers": 2,
+    }
+
+
+def _dfd_collect_sub_epochs(
+    *, files: List[str], num_sub_epochs: int, partition_epoch: int, **kwargs
+) -> List[List[Tuple[str, List[int], float]]]:
+    """
+    Runs DistributeFilesDataset over num_sub_epochs, checks the worker lifecycle along the way.
+
+    :return: per sub epoch: list of (seq tag, data, complete frac)
+    """
+    import pickle
+    from returnn.datasets.distrib_files import DistributeFilesDataset, _WorkerProcParent, _WorkerInProc
+
+    dataset = init_dataset(
+        {
+            "class": "DistributeFilesDataset",
+            "files": files,
+            "get_sub_epoch_dataset": _dfd_get_sub_epoch_dataset_multi_proc_random,
+            "distrib_shard_files": True,
+            "partition_epoch": partition_epoch,
+            "seq_ordering": "random",
+            "random_seed_offset": _dfd_test_random_seed_offset,
+            **kwargs,
+        }
+    )
+    assert isinstance(dataset, DistributeFilesDataset)
+    dataset = pickle.loads(pickle.dumps(dataset))  # like for the PT DataLoader worker
+    assert isinstance(dataset, DistributeFilesDataset)
+    use_worker_proc = kwargs.get("use_worker_proc", True)
+    assert dataset.use_worker_proc == use_worker_proc
+    preload = kwargs.get("preload_next_n_sub_epochs", 1 if use_worker_proc else 0)
+    assert dataset.preload_next_n_sub_epochs == preload
+    res = []
+    for sub_epoch in range(1, num_sub_epochs + 1):
+        prev_workers = dict(dataset._workers)
+        dataset.init_seq_order(epoch=sub_epoch)
+        assert set(dataset._workers.keys()) == set(range(sub_epoch, sub_epoch + preload + 1))
+        for worker in dataset._workers.values():
+            assert isinstance(worker, _WorkerProcParent if use_worker_proc else _WorkerInProc)
+        for ep, worker in prev_workers.items():
+            if ep < sub_epoch:  # must be released
+                assert ep not in dataset._workers
+                if not use_worker_proc:
+                    assert worker.dataset is None
+            else:  # preloaded before, must be reused
+                assert dataset._workers[ep] is worker
+        seqs = []
+        seq_idx = 0
+        while dataset.is_less_than_num_seqs(seq_idx):
+            dataset.load_seqs(seq_idx, seq_idx + 1)
+            seqs.append(
+                (
+                    dataset.get_tag(seq_idx),
+                    dataset.get_data(seq_idx, "classes").tolist(),
+                    dataset.get_complete_frac(seq_idx),
+                )
+            )
+            seq_idx += 1
+        assert seqs
+        res.append(seqs)
+    workers = list(dataset._workers.values())
+    dataset.finish_epoch(free_resources=True)
+    assert not dataset._workers
+    for worker in workers:
+        if not use_worker_proc:
+            assert worker.dataset is None
+        else:
+            assert not worker.worker_proc.is_alive()
+    return res
+
+
+def test_DistributeFilesDataset_no_worker_proc():
+    from returnn.config import global_config_ctx, Config
+
+    num_hdf_files = 12
+    num_seqs = 5
+    files = _dfd_make_hdf_files(num_hdf_files=num_hdf_files, num_seqs=num_seqs)
+    partition_epoch = 3
+    opts = dict(files=files, partition_epoch=partition_epoch, num_sub_epochs=partition_epoch + 2)  # 2nd full epoch
+
+    distrib_size = 2
+    data_per_rank = []
+    for rank in range(distrib_size):
+        with global_config_ctx(Config({"__debug_dummy_distributed_rank_and_size": (rank, distrib_size)})):
+            ref = _dfd_collect_sub_epochs(**opts)
+            res = _dfd_collect_sub_epochs(use_worker_proc=False, **opts)
+            assert res == ref
+            res = _dfd_collect_sub_epochs(use_worker_proc=False, preload_next_n_sub_epochs=1, **opts)
+            assert res == ref
+        data_per_rank.append([data for seqs in res[:partition_epoch] for _, data, _ in seqs])
+
+    # The ranks together see every seq exactly once per full epoch.
+    all_data = sorted(data for rank_data in data_per_rank for data in rank_data)
+    assert all_data == sorted(
+        (numpy.arange(seq_idx + 1) + (hdf_idx * num_seqs + seq_idx) * 10).tolist()
+        for hdf_idx in range(num_hdf_files)
+        for seq_idx in range(num_seqs)
+    )
+
+
+def test_DistributeFilesDataset_no_worker_proc_meta_data():
+    files = _dfd_make_hdf_files(num_hdf_files=3)
+    res = []
+    for use_worker_proc in (True, False):
+        dataset = init_dataset(
+            {
+                "class": "DistributeFilesDataset",
+                "files": files,
+                "get_sub_epoch_dataset": _dfd_get_sub_epoch_dataset,
+                "use_worker_proc": use_worker_proc,
+            }
+        )
+        res.append(
+            (
+                dataset.get_data_keys(),
+                dataset.num_inputs,
+                dataset.num_outputs,
+                dataset.get_all_tags(),
+                dataset.get_total_num_seqs(),
+                dataset.get_total_num_seqs(fast=True),
+                dataset.num_seqs,
+            )
+        )
+        dataset.finish_epoch(free_resources=True)
+    assert res[1] == res[0]
+    assert res[0][4] == 3 * 5
 
 
 def test_PostprocessingDataset():
