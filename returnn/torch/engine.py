@@ -2126,7 +2126,7 @@ def _opt_torch_profiler_from_opts(
         activities = [ProfilerActivity.CPU]
         if torch.cuda.is_available():
             activities += [ProfilerActivity.CUDA]
-        elif torch.xpu.is_available():
+        elif hasattr(torch, "xpu") and torch.xpu.is_available():  # torch.xpu does not exist in older torch
             activities += [ProfilerActivity.XPU]
         opts["activities"] = activities
 
@@ -2142,7 +2142,9 @@ def _opt_torch_profiler_from_opts(
         schedule_opts = schedule_opts.copy()
         schedule_opts.setdefault("repeat", 0)
         schedule_opts.setdefault("skip_first", 0)
-        schedule_opts.setdefault("skip_first_wait", 0)
+        skip_first_wait = schedule_opts.pop("skip_first_wait", 0)
+        if skip_first_wait:  # only pass if set, older torch (e.g. 2.0) does not have it
+            schedule_opts["skip_first_wait"] = skip_first_wait
         opts["schedule"] = schedule(**schedule_opts)
 
         if schedule_opts["repeat"] > 0:
@@ -2150,7 +2152,7 @@ def _opt_torch_profiler_from_opts(
                 "repeat"
             ]
             prof_max_step += schedule_opts["skip_first"]
-            if schedule_opts["skip_first_wait"] != 0:
+            if skip_first_wait != 0:
                 prof_max_step -= schedule_opts["wait"]
             print(f"Profiling will stop automatically after {prof_max_step} steps.", file=log.v3)
 

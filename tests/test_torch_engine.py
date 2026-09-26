@@ -968,6 +968,8 @@ def test_torch_engine_train_exception():
 _torch_profile_window = {
     "schedule": dict(wait=1, warmup=1, active=2, repeat=1),
     "profile_memory": False,  # the memory timeline HTML export needs matplotlib
+    # torch 2.5 Python tracer: "Python replay stack is empty" internal assert when the window ends
+    "with_stack": False,
 }
 _torch_profile_max_step = 4
 
