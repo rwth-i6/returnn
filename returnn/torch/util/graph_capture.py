@@ -17,7 +17,7 @@ Config, e.g.::
         "packed_total_bound": {"data": 500_000},  # optional: tighter bound of the packed (gapped) total per key
         "partitioned": True,  # optional: fw/bwd-partitioned compile (min-cut remat) instead of one whole-step graph
         "activation_memory_budget": 0.9,  # optional, with "partitioned": save-vs-recompute knob (1.0 = save all)
-        "warmup_steps": 0,              # eager steps before capture (default 0: lazy state created directly)
+        "warmup_steps": 0,              # eager steps before capture (default 0: the first update runs eagerly)
         "capture_optimizer": True,      # grad clip + optimizer step in-graph (needs capturable optimizer)
         "compile": True,                # Inductor-codegen the whole step first, then capture that
         "capture": True,                # False (with compile): run the compiled step eagerly, no graph
@@ -40,7 +40,7 @@ per step the batch is copied in and the graph replayed.
 The extern data is rebuilt around these buffers with the template dims reset,
 so the whole layout chain computes in-graph from the lens buffers
 and one graph replays across varying batch sizes and lengths.
-Details at the code: warmup/lazy state (:func:`_materialize_optimizer_state`),
+Details at the code: warmup, the first optimizer update (:func:`_capture_compiled`),
 stream discipline and grad buffers (:func:`run_train_step`).
 """
 
@@ -420,7 +420,6 @@ class GraphCapturedTrainStep:
         params: List[torch.nn.Parameter],
         run_step: Callable[..., None],
         post_step: Optional[Callable[[], None]] = None,
-        get_optimizer: Optional[Callable[[], torch.optim.Optimizer]] = None,
         rf_params: Optional[List[rf.Parameter]] = None,
         packed_batch_size: Optional[Dict[str, int]] = None,
     ):
@@ -449,7 +448,6 @@ class GraphCapturedTrainStep:
         # only for inferring a missing packed_total_bound entry, see _get_data_buf
         self._packed_batch_size: Dict[str, int] = dict(packed_batch_size) if isinstance(packed_batch_size, dict) else {}
         self.warmup_steps = int(opts.get("warmup_steps", 0))
-        self._get_optimizer = get_optimizer
         self._device = torch.device(device)
         self._float_dtype = float_dtype
         self._extern_data_template = extern_data_template
@@ -799,7 +797,7 @@ class GraphCapturedTrainStep:
         """whether the optimizer step (incl grad clip) is captured in-graph (opts "capture_optimizer")"""
         return self._post_step is not None
 
-    def _step(self) -> RunCtx:
+    def _step(self, *, post_step: bool = True) -> RunCtx:
         for p in self._grad_params:
             p.grad.zero_()  # in-graph
         with rf.set_static_traceable_ctx():
@@ -808,47 +806,9 @@ class GraphCapturedTrainStep:
             ctx = rf.get_run_ctx()
             total_loss = ctx.total_loss()
         total_loss.raw_tensor.backward()
-        if self._post_step is not None:
+        if post_step and self._post_step is not None:
             self._post_step()  # in-graph: grad clip + optimizer step
         return ctx
-
-    def _materialize_optimizer_state(self) -> None:
-        """
-        Create the optimizer's lazy state and the param grads without any model step
-        (they are graph inputs, so they must exist before trace/capture);
-        enables ``warmup_steps: 0``.
-        One ``step()`` with zero grads at lr 0 is doubly neutral;
-        written values are zeroed afterwards, only the existence kept.
-        No-op when state exists.
-        """
-        opt = self._get_optimizer() if self._get_optimizer is not None else None
-        if opt is None or opt.state:
-            return
-        with torch.no_grad():
-            for p in self._grad_params:
-                if p.grad is None:
-                    # also needed pre-capture: the partitioned capture zeroes + accumulates
-                    # into pre-existing grads
-                    p.grad = torch.zeros_like(p)
-            saved_lrs = []
-            for g in opt.param_groups:
-                lr = g["lr"]
-                if isinstance(lr, torch.Tensor):  # capturable: device-tensor lr
-                    saved_lrs.append(lr.clone())
-                    lr.fill_(0)
-                else:
-                    saved_lrs.append(lr)
-                    g["lr"] = 0.0
-            opt.step()
-            for g, lr in zip(opt.param_groups, saved_lrs):
-                if isinstance(g["lr"], torch.Tensor):
-                    g["lr"].copy_(lr)
-                else:
-                    g["lr"] = lr
-            for state in opt.state.values():
-                for v in state.values():
-                    if isinstance(v, torch.Tensor):
-                        v.zero_()
 
     def _warmup_step_dynamic(
         self, extern_data_raw: Dict[str, Union[torch.Tensor, numpy.ndarray]], *, global_train_step: int
@@ -1206,11 +1166,14 @@ class GraphCapturedTrainStep:
         for r, g in zip(train_raws, grad_outs):
             r.grad = g
 
-    def _capture_compiled(self, graph: torch.cuda.CUDAGraph):
+    def _capture_compiled(self, graph: torch.cuda.CUDAGraph) -> Optional[RunCtx]:
         """
         Trace + compile + autotune on real inputs (outside capture), then capture.
         The compiled outputs are capture-pool allocations with stable addresses,
         refreshed in place by each replay.
+
+        :return: with the in-graph optimizer step, the run ctx of this batch's real step,
+            which ran eagerly on the warm run's grads before the capture, else None
         """
         compiled = self._ensure_compiled()
         raws = [p.raw_tensor for p in self._rf_params]
@@ -1221,6 +1184,19 @@ class GraphCapturedTrainStep:
             for p in self._grad_params:
                 p.grad.zero_()
             outs[0].backward()
+        first_ctx = None
+        if self._post_step is not None:
+            # the first optimizer update is this real one on the warm run's grads, eagerly:
+            # it creates the lazy optimizer state as the optimizer defines it
+            # (the state is a graph input of the captured step), no zeroed stand-in;
+            # the capture records this batch but its replay is skipped, see run_train_step
+            if not self._partitioned:
+                self._bind_grads(raws, outs)
+            self._post_step()
+            first_ctx = self._build_result_ctx(outs)
+            if not self._partitioned:
+                for r in raws:
+                    r.grad = None  # the warm run's grads; the capture rebinds to the graph outputs
         torch.cuda.synchronize()
         # release the warm runs' cached blocks: capture allocates from its own pool,
         # cannot reuse them, and cannot cudaFree during capture either;
@@ -1241,6 +1217,7 @@ class GraphCapturedTrainStep:
             if self._post_step is not None:
                 self._post_step()  # in-graph: grad clip + optimizer step
         self._ctx = self._build_result_ctx(outs)
+        return first_ctx
 
     def _build_result_ctx(self, outs: tuple) -> RunCtx:
         """
@@ -1319,7 +1296,8 @@ class GraphCapturedTrainStep:
         the optimizer step is the caller's job unless "capture_optimizer".
 
         :return: the run ctx holding the losses; under replay the capture-time ctx,
-            its loss tensors refreshed by the replay
+            its loss tensors refreshed by the replay;
+            at the capture step with the in-graph optimizer step, the ctx of the eager first step
         """
         if self._debug_nan_dump_inputs:
             self._last_extern_data_raw = extern_data_raw
@@ -1338,17 +1316,19 @@ class GraphCapturedTrainStep:
                 self._ctx = self._warmup_step_dynamic(extern_data_raw, global_train_step=global_train_step)
             torch.cuda.current_stream().wait_stream(self._eager_stream)
             return self._ctx
+        first_ctx: Optional[RunCtx] = None
         if not self._compile:
-            # side-stream warmup (kernel/cudnn warmup; each _step call is cold w.r.t. dim/layout caches)
+            # side-stream warmup (kernel/cudnn warmup; each _step call is cold w.r.t. dim/layout caches):
+            # the first call is this batch's real step incl. the optimizer step, eagerly
+            # (it creates the lazy optimizer state, see _capture_compiled), the others only warm the kernels
             s = torch.cuda.Stream()
             s.wait_stream(torch.cuda.current_stream())
             with torch.cuda.stream(s):
-                for _ in range(3):
-                    self._step()
+                for i in range(3):
+                    ctx = self._step(post_step=i == 0)
+                    if i == 0 and self._post_step is not None:
+                        first_ctx = ctx
             torch.cuda.current_stream().wait_stream(s)
-        # with warmup_steps 0 there was no real optimizer step yet: create the lazy state
-        # (and the param grads) explicitly -- no-op if a warmup step already did
-        self._materialize_optimizer_state()
         torch.cuda.synchronize()
         # release the warmup's cached blocks before the compiled program / capture
         # allocates its own (bound-sized, differently-shaped) pool -- see _warmup_step_dynamic
@@ -1360,7 +1340,7 @@ class GraphCapturedTrainStep:
             graph = torch.cuda.CUDAGraph()
             if self._compile:
                 # the compiled step warms itself (trace + compile + autotune, pre-capture)
-                self._capture_compiled(graph)
+                first_ctx = self._capture_compiled(graph)
             else:
                 with cuda_graph_capture(graph):
                     # cold capture: this _step call recomputes every dim/layout cache IN-graph
@@ -1374,6 +1354,9 @@ class GraphCapturedTrainStep:
         # freed-but-retained after (outside it); reset the peak so the reported usage
         # (allocated + pool, see the engine) counts the pool exactly once
         torch.cuda.reset_peak_memory_stats()
+        if first_ctx is not None:
+            # this batch was applied by the eager first step, a replay would apply it once more
+            return first_ctx
         # capture only records the kernels; replay now to actually compute this batch
         graph.replay()
         return self._ctx
