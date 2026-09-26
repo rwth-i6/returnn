@@ -1264,6 +1264,26 @@ def test_lru_cache_evict_with_reentrant_finalizer():
     assert not unraisable, f"finalizer raised inside the cache: {unraisable}"
 
 
+def test_lru_cache_keys_survive_module_teardown():
+    """
+    A weakref finalizer registered by returnn.frontend._cache pops its entry when the key's tensor dies,
+    which at interpreter shutdown happens after the module globals were set to None. The key builder then
+    saw ``'NoneType' object is not callable`` on every training job's exit.
+    """
+    from returnn.util import lru_cache as lru_cache_mod
+    from returnn.util.lru_cache import lru_cache
+
+    cache = lru_cache(4)(lambda *args: None)
+    cache.cache_set("a", 1, result="one")
+    saved = lru_cache_mod._HashedSeq
+    lru_cache_mod._HashedSeq = None
+    try:
+        assert cache.cache_pop("a", 1) == "one"
+        assert cache.cache_peek("a", 1, fallback="gone") == "gone"
+    finally:
+        lru_cache_mod._HashedSeq = saved
+
+
 if __name__ == "__main__":
     better_exchook.install()
     if len(sys.argv) <= 1:

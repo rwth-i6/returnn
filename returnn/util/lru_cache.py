@@ -283,7 +283,35 @@ def _lru_cache_wrapper(user_function, maxsize: int, typed: bool):
     return wrapper
 
 
-def _make_key(args, kwds, typed, *, _kwd_mark=(object(),), _fasttypes=(int, str), _tuple=tuple, _type=type, _len=len):
+class _HashedSeq(list):
+    """
+    This class guarantees that hash() will be called no more than once
+    per element.  This is important because the lru_cache() will hash
+    the key multiple times on a cache miss.
+    """
+
+    __slots__ = ("hashvalue",)
+
+    def __init__(self, tup, *, _hash=hash):
+        super().__init__(tup)
+        self.hashvalue = _hash(tup)
+
+    def __hash__(self):
+        return self.hashvalue
+
+
+def _make_key(
+    args,
+    kwds,
+    typed,
+    *,
+    _kwd_mark=(object(),),
+    _fasttypes=(int, str),
+    _tuple=tuple,
+    _type=type,
+    _len=len,
+    _hashed_seq=_HashedSeq,
+):
     """Make a cache key from optionally typed positional and keyword arguments
 
     The key is constructed in a way that is flat as possible rather than
@@ -293,6 +321,9 @@ def _make_key(args, kwds, typed, *, _kwd_mark=(object(),), _fasttypes=(int, str)
     its hash value, then that argument is returned without a wrapper.  This
     saves space and improves lookup speed.
 
+    Every name it needs is bound as a default, like in functools, so a weakref finalizer
+    (see returnn.frontend._cache.Cache.set) can still pop its entry at interpreter shutdown,
+    after the module globals were set to None.
     """
     # All of code below relies on kwds preserving the order input by the user.
     # Formerly, we sorted() the kwds before looping.  The new way is *much*
@@ -309,21 +340,4 @@ def _make_key(args, kwds, typed, *, _kwd_mark=(object(),), _fasttypes=(int, str)
             key += _tuple(_type(v) for v in kwds.values())  # noqa
     elif _len(key) == 1 and _type(key[0]) in _fasttypes:
         return key[0]
-    return _HashedSeq(key)
-
-
-class _HashedSeq(list):
-    """
-    This class guarantees that hash() will be called no more than once
-    per element.  This is important because the lru_cache() will hash
-    the key multiple times on a cache miss.
-    """
-
-    __slots__ = ("hashvalue",)
-
-    def __init__(self, tup, *, _hash=hash):
-        super().__init__(tup)
-        self.hashvalue = _hash(tup)
-
-    def __hash__(self):
-        return self.hashvalue
+    return _hashed_seq(key)

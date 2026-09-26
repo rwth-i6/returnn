@@ -4,10 +4,14 @@ Tests for PyTorch engine.
 
 from __future__ import annotations
 import _setup_test_env  # noqa
-from typing import Optional
+from typing import Optional, Any, Dict, Tuple
 import contextlib
+import copy
+import json
+import os
 import sys
 import unittest
+import unittest.mock
 import tempfile
 import numpy
 import torch
@@ -188,6 +192,27 @@ def test_raw_dict_split_batch_packed():
         assert list(part["seq_tag"]) == list(raw["seq_tag"][lo:hi])
         assert part["num_seqs"] == 3
     torch.testing.assert_close(torch.cat([parts[0]["data"], parts[1]["data"]], dim=0), raw["data"])
+
+
+def test_get_batch_size_info_raw():
+    from returnn.torch.engine import _get_batch_size_info_raw
+
+    raw = {
+        "data": torch.zeros(3, 4, 5),
+        "data:seq_len": torch.tensor([4, 2, 3], dtype=torch.int32),
+        "classes": numpy.zeros((3, 2), dtype="int32"),
+        "classes:seq_len": numpy.array([2, 1, 2], dtype="int32"),
+    }
+    info = _get_batch_size_info_raw(raw)
+    assert info == {"num_seqs": 3, "max_size:data": 4, "sum_size:data": 9, "max_size:classes": 2, "sum_size:classes": 5}
+    assert all(type(v) is int for v in info.values())
+
+    empty = {"data": torch.zeros(0, 0, 5), "data:seq_len": torch.zeros(0, dtype=torch.int32)}
+    assert _get_batch_size_info_raw(empty) == {"num_seqs": 0, "max_size:data": 0, "sum_size:data": 0}
+
+    # int32 total beyond 2**31 must not overflow
+    large = {"data": torch.zeros(3, 1), "data:seq_len": torch.full((3,), 2**30, dtype=torch.int32)}
+    assert _get_batch_size_info_raw(large)["sum_size:data"] == 3 * 2**30
 
 
 def test_torch_engine_forward_simple():
@@ -637,6 +662,42 @@ def test_max_seq_len():
     assert False, "Should have contained sequences"
 
 
+def _run_maybe_stop_for_resubmission(*, epoch: int, final_epoch: int, time_left: int):
+    """
+    :return: (number of SLURM time-left queries, signals sent via os.kill)
+    """
+    import os
+    from unittest import mock
+
+    config = Config({"stop_for_resubmission_when_low_time_left": True})
+    engine = Engine(config=config)
+    engine._final_epoch = final_epoch  # normally set by init_train_from_config
+    engine.set_epoch(epoch)
+    with mock.patch("returnn.util.basic.slurm_time_left_sec", return_value=time_left) as time_left_mock:
+        with mock.patch.object(os, "kill") as kill_mock:
+            engine._maybe_stop_for_resubmission(last_epoch_wall_sec=100.0)
+    return time_left_mock.call_count, [call.args[1] for call in kill_mock.call_args_list]
+
+
+def test_stop_for_resubmission_final_epoch():
+    # low wall-time left, but the training is complete: no scheduler query, no signal
+    assert _run_maybe_stop_for_resubmission(epoch=38, final_epoch=38, time_left=10) == (0, [])
+
+
+def test_stop_for_resubmission_beyond_final_epoch():
+    assert _run_maybe_stop_for_resubmission(epoch=39, final_epoch=38, time_left=10) == (0, [])
+
+
+def test_stop_for_resubmission_low_time_left():
+    import signal
+
+    assert _run_maybe_stop_for_resubmission(epoch=37, final_epoch=38, time_left=10) == (1, [signal.SIGINT])
+
+
+def test_stop_for_resubmission_enough_time_left():
+    assert _run_maybe_stop_for_resubmission(epoch=37, final_epoch=38, time_left=1000) == (1, [])
+
+
 def test_data_loader_oggzip():
     from test_Dataset import create_ogg_zip_txt_only_dataset_mult_seqs
 
@@ -1075,7 +1136,7 @@ def test_updater_weight_decay_blacklist_rf_modules():
 def test_updater_lr_multipliers():
     from collections import defaultdict
     from fnmatch import fnmatchcase
-    from typing import Dict, List, Set, Any
+    from typing import List, Set
     from returnn.util.basic import DictRefKeys, FrozenDict
     from returnn.torch.updater import wrap_user_blacklist_wd_modules
     from returnn.torch.frontend.bridge import wrapped_pt_module_to_rf_module
@@ -1283,6 +1344,253 @@ def test_torch_engine_train_exception():
             assert "Module call stack:" in exc_lines and "(_TestTorchSubModelRaisingException.forward) sub" in exc_lines
         else:
             raise Exception("did not get expected exception")
+
+
+# Bounded profile window: stops and exports after 4 steps.
+_torch_profile_window = {
+    "schedule": dict(wait=1, warmup=1, active=2, repeat=1),
+    "profile_memory": False,  # the memory timeline HTML export needs matplotlib
+    # torch 2.5 Python tracer: "Python replay stack is empty" internal assert when the window ends
+    "with_stack": False,
+}
+_torch_profile_max_step = 4
+
+
+@contextlib.contextmanager
+def _cwd(path: str):
+    old_cwd = os.getcwd()
+    os.chdir(path)
+    try:
+        yield
+    finally:
+        os.chdir(old_cwd)
+
+
+def _torch_profile_train_config(tmp_dir: str, torch_profile: Dict[str, Any], **kwargs) -> Config:
+    opts = dict(
+        task="train",
+        device="cpu",
+        extern_data={"data": {"dim": 9}, "classes": {"dim": 2, "sparse": True}},
+        get_model=TrainTestModel,
+        train_step=TrainTestModel.train_step,
+        batch_size=500,
+        max_seqs=4,  # 25 steps per epoch, i.e. many steps after the profile window
+        optimizer={"class": "adam"},
+        num_epochs=2,
+        model=f"{tmp_dir}/model",
+        learning_rate_file=f"{tmp_dir}/learning_rates",
+        torch_profile=torch_profile,
+    )
+    opts.update(kwargs)
+    return Config(opts)
+
+
+def _torch_profile_train(config: Config) -> Engine:
+    dataset = init_dataset({"class": "Task12AXDataset", "num_seqs": 100, "name": "train", "fixed_random_seed": 1})
+    dataset.init_seq_order(epoch=1)
+    with global_config_ctx(config):
+        engine = Engine(config=config)
+        engine.init_train_from_config(train_data=dataset)
+        engine.train()
+    return engine
+
+
+def _check_torch_profile_trace(filename: str):
+    with open(filename) as f:
+        trace = json.load(f)
+    assert trace["traceEvents"], f"{filename}: no trace events"
+
+
+def _check_torch_profile_checkpoints(tmp_dir: str, *, num_epochs: int):
+    for epoch in range(1, num_epochs + 1):
+        model = torch.load(f"{tmp_dir}/model.{epoch:03d}.pt", map_location="cpu")
+        assert model["epoch"] == epoch and model["model"], f"epoch {epoch}: invalid model checkpoint"
+        opt = torch.load(f"{tmp_dir}/model.{epoch:03d}.opt.pt", map_location="cpu")
+        assert opt["optimizer"]["state"], f"epoch {epoch}: invalid optimizer checkpoint"
+
+
+def test_torch_engine_profile_exit_after_profile():
+    # default: exit after the profile, and nothing is written
+    from returnn.util.basic import should_write_to_disk
+
+    with tempfile.TemporaryDirectory(prefix="returnn_test_torch_profile_exit") as tmp_dir, _cwd(tmp_dir):
+        config = _torch_profile_train_config(tmp_dir, _torch_profile_window)
+        assert not should_write_to_disk(config)
+        try:
+            _torch_profile_train(config)
+        except SystemExit as exc:
+            assert exc.code == 0
+        else:
+            raise Exception("did not exit after profiling")
+        _check_torch_profile_trace(f"{tmp_dir}/torch_profile.json")
+        assert sorted(os.listdir(tmp_dir)) == ["torch_profile.json"]
+
+
+def test_torch_engine_profile_continue_training():
+    # bounded profile in epoch 1, then further updates, epoch 2 without profiling (once),
+    # and model, optimizer and scores are saved as in ordinary training
+    import returnn.torch.engine as engine_module
+    from returnn.util.basic import should_write_to_disk
+    from returnn.learning_rate_control import load_learning_rate_control_from_config
+
+    orig_opt_torch_profiler_from_opts = engine_module._opt_torch_profiler_from_opts
+    profilers = []  # per epoch
+
+    def _opt_torch_profiler_from_opts(**kwargs):
+        prof = orig_opt_torch_profiler_from_opts(**kwargs)
+        profilers.append(prof)
+        return prof
+
+    orig_export_chrome_trace = torch.profiler.profile.export_chrome_trace
+    with contextlib.ExitStack() as stack:
+        tmp_dir = stack.enter_context(tempfile.TemporaryDirectory(prefix="returnn_test_torch_profile_continue"))
+        stack.enter_context(_cwd(tmp_dir))
+        stack.enter_context(
+            unittest.mock.patch.object(engine_module, "_opt_torch_profiler_from_opts", _opt_torch_profiler_from_opts)
+        )
+        export_chrome_trace = stack.enter_context(
+            unittest.mock.patch.object(
+                torch.profiler.profile, "export_chrome_trace", autospec=True, side_effect=orig_export_chrome_trace
+            )
+        )
+        config = _torch_profile_train_config(
+            tmp_dir, {**_torch_profile_window, "exit_after_profile": False, "once": True}
+        )
+        engine = _torch_profile_train(config)
+
+        assert len(profilers) == 2 and profilers[0] is not None and profilers[1] is None, profilers
+        assert profilers[0].exported and not profilers[0].entered
+        assert export_chrome_trace.call_count == 1, export_chrome_trace.call_args_list
+        _check_torch_profile_trace(f"{tmp_dir}/torch_profile.json")
+        epoch1_num_steps = engine.learning_rate_control.epoch_data[1].meta["epoch_num_train_steps"]
+        assert epoch1_num_steps > _torch_profile_max_step + 1, "no updates after the profile window"
+        assert engine.epoch == 2 and engine.learning_rate_control.epoch_data[2].meta["epoch_num_train_steps"] > 0
+
+        _check_torch_profile_checkpoints(tmp_dir, num_epochs=2)
+        scores = load_learning_rate_control_from_config(config).epoch_data
+        for epoch in [1, 2]:
+            assert "train_loss_ce" in scores[epoch].error, f"epoch {epoch}: scores not saved"
+        assert should_write_to_disk(config)
+
+
+class _FakeTorchDistributedContext:
+    def __init__(self, *, rank: int, size: int, local_rank: int, local_size: int):
+        self._rank, self._size, self._local_rank, self._local_size = rank, size, local_rank, local_size
+
+    def rank(self) -> int:
+        """global rank"""
+        return self._rank
+
+    def size(self) -> int:
+        """global size"""
+        return self._size
+
+    def local_rank(self) -> int:
+        """local rank"""
+        return self._local_rank
+
+    def local_size(self) -> int:
+        """local size"""
+        return self._local_size
+
+
+def test_torch_profile_rank_selection():
+    from returnn.torch.engine import _opt_torch_profiler_from_opts
+
+    def _selected(*, num_nodes: int, local_size: int, **opts) -> Dict[int, Tuple[str, str]]:
+        size = num_nodes * local_size
+        res = {}
+        for rank in range(size):
+            ctx = _FakeTorchDistributedContext(
+                rank=rank, size=size, local_rank=rank % local_size, local_size=local_size
+            )
+            prof = _opt_torch_profiler_from_opts({**_torch_profile_window, **opts}, ctx)
+            if prof:
+                res[rank] = (prof.trace_filename, prof.memory_filename)
+        filenames = [fn for fns in res.values() for fn in fns]
+        assert len(set(filenames)) == len(filenames), f"filename collision: {res}"
+        return res
+
+    def _names(rank: Optional[int]) -> Tuple[str, str]:
+        suffix = f".rank{rank}" if rank is not None else ""
+        return f"torch_profile{suffix}.json", f"torch_memory_profile{suffix}.html"
+
+    # not distributed
+    prof = _opt_torch_profiler_from_opts(_torch_profile_window, None)
+    assert (prof.trace_filename, prof.memory_filename) == _names(None)
+    # default: local rank 0 of each node, unchanged filenames on a single node
+    assert _selected(num_nodes=1, local_size=4) == {0: _names(None)}
+    assert _selected(num_nodes=2, local_size=4) == {0: _names(0), 4: _names(4)}
+    # explicit global ranks
+    assert _selected(num_nodes=2, local_size=4, ranks=[0]) == {0: _names(0)}
+    assert _selected(num_nodes=2, local_size=4, ranks=[1, 5]) == {1: _names(1), 5: _names(5)}
+    assert _selected(num_nodes=2, local_size=2, ranks="all") == {r: _names(r) for r in range(4)}
+    # once
+    assert _opt_torch_profiler_from_opts({**_torch_profile_window, "once": True}, None, exported_before=True) is None
+    assert _opt_torch_profiler_from_opts(_torch_profile_window, None, exported_before=True) is not None
+    try:
+        _opt_torch_profiler_from_opts({**_torch_profile_window, "ranks": 0}, None)
+    except TypeError as exc:
+        print("got expected exception:", exc)
+    else:
+        raise Exception("did not get expected TypeError for invalid ranks")
+
+
+def _torch_profile_distributed_worker(rank: int, world_size: int, port: int, tmp_dir: str, torch_profile: Dict):
+    from returnn.util.basic import should_write_to_disk
+
+    # each rank as its own single-GPU node, i.e. local rank 0 everywhere.
+    # reduce_type param with sync_on_cpu only needs Gloo, so the ranks can share one GPU.
+    os.environ.update(
+        MASTER_ADDR="127.0.0.1",
+        MASTER_PORT=str(port),
+        RANK=str(rank),
+        WORLD_SIZE=str(world_size),
+        LOCAL_RANK="0",
+        LOCAL_WORLD_SIZE="1",
+    )
+    os.chdir(tmp_dir)
+    config = _torch_profile_train_config(
+        tmp_dir,
+        torch_profile,
+        backend="torch",
+        device="cuda",
+        torch_distributed={"reduce_type": "param", "param_sync_step": 1, "sync_on_cpu": True},
+    )
+    engine = _torch_profile_train(config)
+    assert engine.epoch == 2
+    with global_config_ctx(config):
+        assert should_write_to_disk(config) == (rank == 0)  # only rank 0 writes checkpoints
+    torch.distributed.destroy_process_group()
+
+
+def _run_torch_profile_distributed(tmp_dir: str, torch_profile: Dict[str, Any], *, world_size: int = 2):
+    import socket
+    import torch.multiprocessing
+
+    with socket.socket() as s:
+        s.bind(("127.0.0.1", 0))
+        port = s.getsockname()[1]
+    torch.multiprocessing.spawn(
+        _torch_profile_distributed_worker, args=(world_size, port, tmp_dir, torch_profile), nprocs=world_size
+    )
+
+
+def test_torch_engine_profile_continue_distributed():
+    # multi-node-like setup: two ranks with local rank 0, which previously wrote the same trace file
+    if not torch.cuda.is_available():
+        raise unittest.SkipTest("CUDA not available")  # torch_distributed in the engine requires CUDA
+    for ranks, expected_ranks in [(None, [0, 1]), ([1], [1]), ("all", [0, 1])]:
+        torch_profile = {**_torch_profile_window, "exit_after_profile": False, "once": True}
+        if ranks is not None:
+            torch_profile["ranks"] = ranks
+        with tempfile.TemporaryDirectory(prefix="returnn_test_torch_profile_distributed") as tmp_dir:
+            _run_torch_profile_distributed(tmp_dir, torch_profile)
+            traces = sorted(fn for fn in os.listdir(tmp_dir) if fn.startswith("torch_profile"))
+            assert traces == [f"torch_profile.rank{r}.json" for r in expected_ranks], (ranks, traces)
+            for fn in traces:
+                _check_torch_profile_trace(f"{tmp_dir}/{fn}")
+            _check_torch_profile_checkpoints(tmp_dir, num_epochs=2)
 
 
 def test_dynamic_learning_rate():
@@ -1526,14 +1834,17 @@ def _torch_engine_sub_proc_cleanup_test_main(conn):
 
 
 def _build_cuda_graph_train_config_and_dataset(
-    *, compile_: bool, capture_optimizer: bool = True, dummy_warmup: bool = False
+    *, compile_: bool, warmup_steps: Optional[int] = 2, cuda_graph: bool = True, optimizer_step: bool = False
 ):
-    """small RF model + Task12AXDataset config with torch_cuda_graph, see the tests below"""
+    """
+    small RF model + Task12AXDataset config with torch_cuda_graph, see the tests below.
+    With optimizer_step: the optimizer step not in the model graph but separately (torch_optimizer_step).
+    """
     from returnn.datasets import init_dataset
     from returnn.tensor import Dim, batch_dim
 
     # fresh dims per test: capacities get set on them
-    time_dim = Dim(None, name=f"time-cudagraph-{compile_}-{capture_optimizer}-{dummy_warmup}")
+    time_dim = Dim(None, name=f"time-cudagraph-{compile_}-{warmup_steps}-{cuda_graph}-{optimizer_step}")
     feat_dim = Dim(9, name="feat")
     classes_dim = Dim(2, name="classes")
 
@@ -1580,48 +1891,49 @@ def _build_cuda_graph_train_config_and_dataset(
             log_grad_norm=True,
             gradient_clip_global_norm=5.0,
             optimizer={"class": "adamw", "capturable": True},
-            torch_cuda_graph=dict(
-                batch_size_bound=10,
-                dim_capacity={"data": 100, "classes": 100},
-                warmup_steps=2,
-                capture_optimizer=capture_optimizer,
-                dummy_warmup=dummy_warmup,
-                **({"compile": True} if compile_ else {}),
-            ),
             torch_dataloader_opts={"num_workers": 0},
         )
     )
+    if cuda_graph:
+        config.typed_dict["torch_cuda_graph"] = dict(
+            batch_size_bound=10,
+            dim_capacity={"data": 100, "classes": 100},
+            capture_optimizer=not optimizer_step,
+            **({"warmup_steps": warmup_steps} if warmup_steps is not None else {}),
+            **({"compile": True} if compile_ else {}),
+        )
+    if optimizer_step:
+        config.typed_dict["torch_optimizer_step"] = {}
     dataset = init_dataset({"class": "Task12AXDataset", "num_seqs": 100, "name": "train", "fixed_random_seed": 1})
     dataset.init_seq_order(epoch=1)
     return config, dataset
 
 
-def _reset_bound_shapes(engine: Engine):
-    """the capture staticizes the global batch dim, undo it also when a test fails midway (no cascade)"""
-    if engine._graph_capture is not None:
-        engine._graph_capture.set_bound_shapes_enabled(False)
-
-
-def _run_cuda_graph_train(*, compile_: bool):
+def _run_cuda_graph_train(
+    *, compile_: bool, warmup_steps: Optional[int] = 2, cuda_graph: bool = True, optimizer_step: bool = False
+) -> Engine:
     if not torch.cuda.is_available():
         raise unittest.SkipTest("CUDA not available")
-    config, dataset = _build_cuda_graph_train_config_and_dataset(compile_=compile_)
+    config, dataset = _build_cuda_graph_train_config_and_dataset(
+        compile_=compile_, warmup_steps=warmup_steps, cuda_graph=cuda_graph, optimizer_step=optimizer_step
+    )
     with global_config_ctx(config):
         engine = Engine(config=config)
         engine.init_train_from_config(train_data=dataset)
-        try:
-            engine.train()
-        finally:
-            _reset_bound_shapes(engine)
-        assert engine._graph_capture is not None
-        assert engine._graph_capture._graph is not None, "graph never captured"
-        assert engine._graph_capture.captures_optimizer
+        engine.train()
+        if cuda_graph:
+            assert engine._graph_capture is not None
+            assert engine._graph_capture._graph is not None, "graph never captured"
+            assert engine._graph_capture.captures_optimizer == (not optimizer_step)
+        if optimizer_step:
+            assert engine._updater._optimizer_step._graph is not None, "optimizer step never captured"
         for param_group in engine._updater.optimizer.param_groups:
             lr = param_group["lr"]  # device-tensor LR input of the captured optimizer
             assert isinstance(lr, torch.Tensor) and lr.is_cuda
             assert lr.item() > 1e-3  # the per-step schedule advanced it
         for name, p in engine._pt_model.named_parameters():
             assert torch.isfinite(p).all(), f"non-finite param {name}"
+    return engine
 
 
 def _cuda_graph_packed_decoder_setup(mode: str):
@@ -1791,15 +2103,12 @@ def _cuda_graph_packed_decoder_run(mode: str):
     # direct it to a file for this run, so the losses are parseable in-process
     # (stdout stays attached too, see Log.initialize)
     returnn_log.initialize(logs=[log_file.name], verbosity=[5])
-    engine = None
     try:
         with global_config_ctx(config):
             engine = Engine(config=config)
             engine.init_train_from_config(train_data=dataset)
             engine.train()
     finally:
-        if engine is not None:
-            _reset_bound_shapes(engine)
         returnn_log.initialize()  # back to the default (stdout only)
     with open(log_file.name, "rt", encoding="utf-8") as f:
         txt = f.read()
@@ -1845,61 +2154,6 @@ def test_torch_engine_cuda_graph_compile_train():
     """torch_cuda_graph "compile": the whole step Inductor-compiled (aot_function + compile_fx,
     no Dynamo), then captured; otherwise as :func:`test_torch_engine_cuda_graph_train`"""
     _run_cuda_graph_train(compile_=True)
-
-
-def _run_cuda_graph_dummy_warmup_train(*, capture_optimizer: bool):
-    """the dummy warmup steps must not change the params, with the optimizer step in-graph (at lr 0) or the engine's"""
-    if not torch.cuda.is_available():
-        raise unittest.SkipTest("CUDA not available")
-    config, dataset = _build_cuda_graph_train_config_and_dataset(
-        compile_=False, capture_optimizer=capture_optimizer, dummy_warmup=True
-    )
-    config.typed_dict["num_epochs"] = 1
-    with global_config_ctx(config):
-        engine = Engine(config=config)
-        engine.init_train_from_config(train_data=dataset)
-        capture = engine._graph_capture
-        assert capture is not None and capture.dummy_warmup
-        params_before = [p.detach().clone() for p in engine.get_pt_model().parameters()]
-        params_after_dummy_steps = []
-        run_train_step = capture.run_train_step
-
-        def _run_train_step(extern_data_raw, *, global_train_step):
-            if capture._n_eager == capture.warmup_steps and not params_after_dummy_steps:
-                params_after_dummy_steps.extend(p.detach().clone() for p in engine.get_pt_model().parameters())
-            return run_train_step(extern_data_raw, global_train_step=global_train_step)
-
-        capture.run_train_step = _run_train_step
-        optimizer_steps_on_dummy = []
-        updater_step = engine._updater.step
-
-        def _step(**kwargs):
-            optimizer_steps_on_dummy.append(capture.last_step_dummy)
-            updater_step(**kwargs)
-
-        engine._updater.step = _step
-        try:
-            engine.train()
-        finally:
-            _reset_bound_shapes(engine)
-        assert capture._graph is not None, "graph never captured"
-        for name, p in engine._pt_model.named_parameters():
-            assert torch.isfinite(p).all(), f"non-finite param {name}"
-    assert len(params_after_dummy_steps) == len(params_before) > 0
-    for param, param_before in zip(params_after_dummy_steps, params_before):
-        assert torch.equal(param, param_before)
-    if not capture_optimizer:
-        assert optimizer_steps_on_dummy and not any(optimizer_steps_on_dummy)
-
-
-def test_torch_engine_cuda_graph_dummy_warmup_train():
-    """dummy warmup with the engine's optimizer step"""
-    _run_cuda_graph_dummy_warmup_train(capture_optimizer=False)
-
-
-def test_torch_engine_cuda_graph_dummy_warmup_captured_optimizer_train():
-    """dummy warmup with the in-graph optimizer step (at lr 0 during the warmup)"""
-    _run_cuda_graph_dummy_warmup_train(capture_optimizer=True)
 
 
 # must be in the global scope due to pickling
@@ -2734,82 +2988,6 @@ def test_multi_optimizer_amuse():
     assert not muon_sub.train_mode and not adamw_sub.train_mode
 
 
-class _FakeGraphCapture:
-    """Stands in for GraphCapturedTrainStep in the engine on CPU, eager steps with the first ones flagged as dummy."""
-
-    captures_optimizer = False
-
-    def __init__(self, engine: Engine, *, num_dummy_steps: int):
-        self.engine = engine
-        self.num_dummy_steps = num_dummy_steps
-        self.num_steps = 0
-        self.last_step_dummy = False
-        self.params_after_dummy_steps = None
-
-    def set_bound_shapes_enabled(self, enabled: bool):
-        pass
-
-    def data_bound_sizes(self):
-        return {"data": 10**6, "classes": 10**6}
-
-    def run_train_step(self, extern_data_raw, *, global_train_step):
-        from returnn.torch.data import extern_data as extern_data_util
-
-        engine = self.engine
-        if self.num_steps == self.num_dummy_steps:
-            self.params_after_dummy_steps = [p.detach().clone() for p in engine.get_pt_model().parameters()]
-        self.last_step_dummy = self.num_steps < self.num_dummy_steps
-        self.num_steps += 1
-        extern_data = extern_data_util.raw_dict_to_extern_data(
-            extern_data_raw, extern_data_template=engine.extern_data, device=engine._device, with_eval_targets=True
-        )
-        engine._run_step(extern_data, train_flag=True, train_func=True)
-        ctx = rf.get_run_ctx()
-        ctx.total_loss().raw_tensor.backward()
-        return ctx
-
-
-def test_engine_skips_optimizer_step_on_dummy_warmup_steps():
-    config = Config(
-        dict(
-            task="train",
-            device="cpu",
-            num_epochs=1,
-            extern_data={"data": {"dim": 9}, "classes": {"dim": 2, "sparse": True}},
-            get_model=TrainTestModel,
-            train_step=TrainTestModel.train_step,
-            batch_size=500,
-            learning_rate=0.1,
-            log_grad_norm=True,
-            gradient_clip_global_norm=5.0,
-            torch_dataloader_opts={"num_workers": 0},
-            optimizer={"class": "sgd", "momentum": 0.9},
-        )
-    )
-    dataset = init_dataset({"class": "Task12AXDataset", "num_seqs": 100, "name": "train"})
-    dataset.init_seq_order(epoch=1)
-
-    with global_config_ctx(config):
-        engine = Engine(config=config)
-        engine.init_train_from_config(train_data=dataset)
-        params_before = [p.detach().clone() for p in engine.get_pt_model().parameters()]
-        fake = _FakeGraphCapture(engine, num_dummy_steps=2)
-        engine._graph_capture = fake
-        optimizer_steps_on_dummy = []
-        updater_step = engine._updater.step
-
-        def _step(**kwargs):
-            optimizer_steps_on_dummy.append(fake.last_step_dummy)
-            updater_step(**kwargs)
-
-        engine._updater.step = _step
-        engine.train()
-    assert fake.num_steps > 2 and fake.params_after_dummy_steps is not None
-    assert len(optimizer_steps_on_dummy) == fake.num_steps - 2 and not any(optimizer_steps_on_dummy)
-    for param, param_before in zip(fake.params_after_dummy_steps, params_before):
-        assert torch.equal(param, param_before)
-
-
 def test_amuse_pickle_keeps_attributes():
     import copy
     import pickle
@@ -3006,6 +3184,701 @@ def test_amuse_matches_reference_implementation():
                 p_ref.lerp_(end=states_ref[p_ref]["z"], weight=1.0 - 1.0 / group["beta1"])
     for p, p_ref in zip(params, params_ref):
         assert torch.allclose(p, p_ref, rtol=1e-10, atol=1e-10)
+
+
+def test_torch_engine_cuda_graph_compile_train_default_warmup():
+    """as :func:`test_torch_engine_cuda_graph_compile_train` with the default warmup_steps (0):
+    no eager step, the lazy optimizer state is created directly before the capture"""
+    _run_cuda_graph_train(compile_=True, warmup_steps=None)
+
+
+def test_torch_engine_optimizer_step_train():
+    """
+    torch_optimizer_step: eager model step, the optimizer step compiled + captured separately,
+    2 epochs with the per-step LR schedule; then the optimizer checkpoint save + load
+    """
+    import os
+
+    engine = _run_cuda_graph_train(compile_=False, cuda_graph=False, optimizer_step=True)
+    updater = engine._updater
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        filename = os.path.join(tmp_dir, "opt.pt")
+        updater.save_optimizer(filename)
+        state = torch.load(filename)
+        for group in state["optimizer"]["param_groups"]:
+            assert isinstance(group["lr"], float)  # the checkpoint keeps the ordinary Python scalar
+        updater.load_optimizer(filename)
+    assert updater._optimizer_step._graph is None  # new state tensors: invalidated
+
+
+def test_torch_engine_cuda_graph_compile_optimizer_step_train():
+    """
+    Compiled + captured model step (torch_cuda_graph, without capture_optimizer),
+    the optimizer step compiled + captured separately (torch_optimizer_step).
+    The model graph capture rebinds the grads once: the optimizer step recaptures on the new addresses.
+    """
+    _run_cuda_graph_train(compile_=True, optimizer_step=True)
+
+
+class _MuonLike(torch.optim.Optimizer):
+    """
+    Written like the i6 Muon (i6_experiments exp2024_04_23_baselines optim_ext/muon.py), small:
+    Muon (bf16 Newton-Schulz) on 2D params, Adam on the rest, with a Python-float lr
+    (``alpha=`` / ``value=`` arguments) and a Python-int step counter.
+    """
+
+    def __init__(self, params, lr=2e-2, momentum=0.95, weight_decay=0.01, betas=(0.9, 0.95), eps=1e-8):
+        super().__init__(params, dict(lr=lr, momentum=momentum, weight_decay=weight_decay, betas=betas, eps=eps))
+
+    @torch.no_grad()
+    def step(self, closure=None):
+        """step"""
+        assert closure is None
+        for group in self.param_groups:
+            lr, wd = group["lr"], group["weight_decay"]
+            b1, b2 = group["betas"]
+            for p in group["params"]:
+                if p.grad is None:
+                    continue
+                state = self.state[p]
+                if p.ndim == 2:
+                    if "momentum_buffer" not in state:
+                        state["momentum_buffer"] = torch.zeros_like(p)
+                    buf = state["momentum_buffer"]
+                    buf.mul_(group["momentum"]).add_(p.grad)
+                    x = p.grad.add(buf, alpha=group["momentum"]).bfloat16()
+                    x = x / (x.norm() + 1e-7)
+                    for _ in range(3):
+                        a = x @ x.T
+                        x = 3.4445 * x + (-4.7750 * a + 2.0315 * (a @ a)) @ x
+                    p.mul_(1 - lr * wd)
+                    p.add_(x.to(p.dtype), alpha=-lr)
+                else:
+                    if "exp_avg" not in state:
+                        state["step"] = 0
+                        state["exp_avg"] = torch.zeros_like(p)
+                        state["exp_avg_sq"] = torch.zeros_like(p)
+                    state["step"] += 1
+                    t = state["step"]
+                    state["exp_avg"].mul_(b1).add_(p.grad, alpha=1 - b1)
+                    state["exp_avg_sq"].mul_(b2).addcmul_(p.grad, p.grad, value=1 - b2)
+                    denom = (state["exp_avg_sq"].sqrt() / ((1 - b2**t) ** 0.5)).add_(group["eps"])
+                    p.addcdiv_(state["exp_avg"], denom, value=-lr / (1 - b1**t))
+
+
+def _optimizer_step_device() -> str:
+    """the non-capture optimizer step tests also run on CPU"""
+    return "cuda" if torch.cuda.is_available() else "cpu"
+
+
+def _adamw(params):
+    # capturable: the device-tensor lr and step counters are CUDA only
+    return torch.optim.AdamW(params, lr=1e-2, weight_decay=0.01, capturable=params[0].is_cuda)
+
+
+def _run_optimizer_step(opt_factory, *, opts=None, num_steps=8, replace_grads_at=None, reload_at=None):
+    """
+    :return: params after num_steps updates with a per-step LR schedule and random grads,
+        via the plain ``optimizer.step()`` if opts is None, otherwise via :class:`OptimizerStep`;
+        the optimizer; and the OptimizerStep
+    """
+    from returnn.torch.util.optimizer_step import OptimizerStep
+
+    device = _optimizer_step_device()
+    gen = torch.Generator().manual_seed(0)
+    shapes = [(32, 16), (16,), (64, 32), (32,), (8, 1, 3)]
+    params = [torch.nn.Parameter(torch.randn(s, generator=gen).to(device)) for s in shapes]
+    opt = opt_factory(params)
+    opt_step = OptimizerStep(optimizer=opt, opts=opts) if opts is not None else None
+    gen = torch.Generator(device=device).manual_seed(1)
+    for p in params:
+        p.grad = torch.zeros_like(p)
+    for i in range(num_steps):
+        for group in opt.param_groups:
+            lr = 1e-2 * (i + 1) / num_steps
+            if isinstance(group["lr"], torch.Tensor):
+                group["lr"].fill_(lr)
+            else:
+                group["lr"] = lr
+        if i == replace_grads_at:
+            for p in params:
+                p.grad = torch.zeros_like(p)
+        for p in params:
+            p.grad.copy_(torch.randn(p.shape, device=device, generator=gen))
+        if i == reload_at:
+            state_dict = opt.state_dict()
+            if opt_step:
+                state_dict = opt_step.state_dict_to_host_scalars(state_dict)
+                for group in state_dict["param_groups"]:
+                    assert isinstance(group["lr"], float)
+            opt.load_state_dict(copy.deepcopy(state_dict))
+            if opt_step:
+                opt_step.invalidate()
+        if opt_step:
+            opt_step.step()
+        else:
+            opt.step()
+    return params, opt, opt_step
+
+
+def _check_optimizer_step_same_as_eager(opt_factory, opts, **kwargs):
+    """params and optimizer state (incl. the checkpoint scalars) as the plain eager optimizer.step()"""
+    ref_params, ref_opt, _ = _run_optimizer_step(opt_factory, **kwargs)
+    params, opt, opt_step = _run_optimizer_step(opt_factory, opts=opts, **kwargs)
+    for p_ref, p in zip(ref_params, params):
+        torch.testing.assert_close(p, p_ref, rtol=1e-5, atol=1e-6)
+    ref_state = ref_opt.state_dict()["state"]
+    state = opt_step.state_dict_to_host_scalars(opt.state_dict())["state"]
+    assert set(state) == set(ref_state)
+    for i, s_ref in ref_state.items():
+        assert set(state[i]) == set(s_ref)
+        for k, v_ref in s_ref.items():
+            v = state[i][k]
+            if isinstance(v_ref, torch.Tensor):
+                torch.testing.assert_close(v, v_ref, rtol=1e-5, atol=1e-6)
+            else:  # Python scalar, e.g. the step counter of _MuonLike
+                assert type(v) is type(v_ref) and v == v_ref, f"state {i} {k}: {v!r} vs {v_ref!r}"
+    return opt_step
+
+
+def test_torch_optimizer_step_eager():
+    opt_step = _check_optimizer_step_same_as_eager(_adamw, {"compile": False, "capture": False}, reload_at=5)
+    assert opt_step._graph is None
+
+
+def test_torch_optimizer_step_dynamic_state_keys():
+    """
+    Python-float lr and Python-int step counter as device tensors (incl. alpha= / value= args),
+    back to Python scalars in the checkpoint
+    """
+    opts = {"dynamic_state_keys": ["step"]}
+    if not torch.cuda.is_available():
+        opts.update({"compile": False, "capture": False})
+    opt_step = _check_optimizer_step_same_as_eager(_MuonLike, opts, reload_at=5)
+    state_dict = opt_step.state_dict_to_host_scalars(opt_step._optimizer.state_dict())
+    for state in state_dict["state"].values():
+        if "step" in state:
+            assert state["step"] == 8 and isinstance(state["step"], int)
+    for group in state_dict["param_groups"]:
+        assert isinstance(group["lr"], float)
+
+
+def test_torch_optimizer_step_python_scalar_state_not_selected():
+    try:
+        _run_optimizer_step(_MuonLike, opts={"compile": False, "capture": False})
+    except ValueError as exc:
+        assert "dynamic_state_keys" in str(exc)
+    else:
+        raise AssertionError("expected ValueError")
+
+
+def test_torch_optimizer_step_capture():
+    if not torch.cuda.is_available():
+        raise unittest.SkipTest("CUDA not available")
+    opt_step = _check_optimizer_step_same_as_eager(_adamw, {"compile": False})
+    assert opt_step._graph is not None and opt_step._num_captures == 1
+
+
+def test_torch_optimizer_step_compile_capture():
+    if not torch.cuda.is_available():
+        raise unittest.SkipTest("CUDA not available")
+    opt_step = _check_optimizer_step_same_as_eager(_adamw, {})
+    assert opt_step._graph is not None and (opt_step._num_traces, opt_step._num_captures) == (1, 1)
+
+
+def test_torch_optimizer_step_compile_capture_muon_like():
+    if not torch.cuda.is_available():
+        raise unittest.SkipTest("CUDA not available")
+    opt_step = _check_optimizer_step_same_as_eager(_MuonLike, {"dynamic_state_keys": ["step"]})
+    assert (opt_step._num_traces, opt_step._num_captures) == (1, 1)
+
+
+def test_torch_optimizer_step_replaced_grads():
+    """new grad buffers: recapture on the new addresses, no retrace"""
+    if not torch.cuda.is_available():
+        raise unittest.SkipTest("CUDA not available")
+    opt_step = _check_optimizer_step_same_as_eager(_adamw, {}, replace_grads_at=5)
+    assert (opt_step._num_traces, opt_step._num_captures) == (1, 2)
+
+
+def test_torch_optimizer_step_reload():
+    """checkpoint round trip: new state tensors and lr, recapture, no retrace"""
+    if not torch.cuda.is_available():
+        raise unittest.SkipTest("CUDA not available")
+    opt_step = _check_optimizer_step_same_as_eager(_MuonLike, {"dynamic_state_keys": ["step"]}, reload_at=5)
+    assert (opt_step._num_traces, opt_step._num_captures) == (1, 2)
+
+
+def test_torch_optimizer_step_updater_invalid_grad_skipped():
+    """Updater: an update with a non-finite grad norm is skipped, also under the captured optimizer step"""
+    if not torch.cuda.is_available():
+        raise unittest.SkipTest("CUDA not available")
+    config = Config(
+        dict(
+            optimizer={"class": "adamw", "capturable": True},
+            torch_optimizer_step={},
+            num_allowed_consec_invalid_gradient_steps=1,
+        )
+    )
+    model = torch.nn.Linear(4, 3).cuda()
+    updater = Updater(config=config, network=model, device="cuda", initial_learning_rate=1e-2)
+    updater.create_optimizer()
+    x = torch.randn(5, 4, device="cuda")
+    for i in range(6):
+        updater.zero_grad()
+        model(x).square().sum().backward()
+        if i == 4:  # after the capture (step 3)
+            model.weight.grad[0, 0] = float("nan")
+        before = [p.detach().clone() for p in model.parameters()]
+        updater.step()
+        changed = any(not torch.equal(b, p) for b, p in zip(before, model.parameters()))
+        assert changed == (i != 4), f"step {i}: params changed {changed}"
+    assert updater._optimizer_step._num_captures == 1
+
+
+def _pin_memory_iter(src, **kwargs):
+    from returnn.torch.data.pin_memory import PinMemoryIter
+
+    return PinMemoryIter(iter(src), device=torch.device("cuda", torch.cuda.current_device()), **kwargs)
+
+
+def test_pin_memory_iter_batches_unchanged():
+    """same batches in the same order, all tensors pinned, other values as they are"""
+    if not torch.cuda.is_available():
+        raise unittest.SkipTest("CUDA not available")
+    gen = torch.Generator().manual_seed(0)
+    batches = [
+        {
+            "data": torch.randn(3, 5 + i, 2, generator=gen),
+            "data:seq_len": torch.tensor([5 + i, 4, 2], dtype=torch.int32),
+            "seq_tag": numpy.array([f"seq-{i}-{j}" for j in range(3)]),
+            "num_seqs": 100,
+            "list": [torch.full((2,), i)],
+        }
+        for i in range(10)
+    ]
+    out = list(_pin_memory_iter(batches))
+    assert len(out) == len(batches)
+    for ref, batch in zip(batches, out):
+        assert set(batch) == set(ref)
+        for k in ["data", "data:seq_len"]:
+            assert batch[k].is_pinned() and batch[k].dtype == ref[k].dtype and torch.equal(batch[k], ref[k])
+        assert batch["list"][0].is_pinned() and torch.equal(batch["list"][0], ref["list"][0])
+        assert batch["seq_tag"] is ref["seq_tag"] and batch["num_seqs"] == 100
+
+
+def test_pin_memory_iter_buffer_lifetime():
+    """
+    Each pinned batch stays valid while the consumer holds it, also while further batches get pinned,
+    and a batch dropped right after its async H2D copy is not reused before the copy is done.
+    """
+    if not torch.cuda.is_available():
+        raise unittest.SkipTest("CUDA not available")
+    n, shape = 30, (256, 1024)
+
+    def _src():
+        for i in range(n):
+            yield {"data": torch.full(shape, float(i))}
+
+    it = _pin_memory_iter(_src())
+    first = next(it)
+    first_ptr = first["data"].data_ptr()
+    stream = torch.cuda.Stream()
+    dev = []
+    with torch.cuda.stream(stream):
+        for batch in it:
+            # delays the stream: the H2D copy below is still pending when the batch is dropped,
+            # while the next batches get pinned
+            torch.cuda._sleep(1_000_000)
+            dev.append(batch["data"].to("cuda", non_blocking=True))
+            del batch
+    stream.synchronize()
+    assert first["data"].data_ptr() == first_ptr and bool((first["data"] == 0.0).all())
+    assert [float(d[0, 0]) for d in dev] == [float(i) for i in range(1, n)]
+    for i, d in enumerate(dev):
+        assert bool((d == float(i + 1)).all()), f"batch {i + 1} overwritten"
+
+
+def test_pin_memory_iter_release_after_handoff():
+    """
+    After handing a batch over, the pin thread may hold the last reference to it
+    (the consumer already copied from it and dropped it); that release must not run during a capture.
+    Forced: the pin thread pauses right after publishing the batch, the consumer copies and drops it,
+    starts a capture, and the pin thread resumes inside that capture.
+    """
+    import threading
+    import time
+    import weakref
+    from returnn.torch.util.capture_lock import cuda_graph_capture
+
+    if not torch.cuda.is_available():
+        raise unittest.SkipTest("CUDA not available")
+    src_gate = threading.Event()
+
+    def _src():
+        src_gate.wait(timeout=60)
+        yield {"data": torch.arange(1024, dtype=torch.float32)}
+
+    it = _pin_memory_iter(_src())
+    published, resume = threading.Event(), threading.Event()
+    orig_put = it._queue.put
+    num_puts = 0
+
+    def _put(item, *args, **kwargs):
+        nonlocal num_puts
+        orig_put(item, *args, **kwargs)
+        num_puts += 1
+        if num_puts == 1:  # the batch: pause before the pin thread drops its reference
+            published.set()
+            resume.wait(timeout=60)
+
+    it._queue.put = _put  # the pin thread uses the same queue object, and does not put before src_gate
+    src_gate.set()
+    assert published.wait(timeout=60)
+
+    state = {"capturing": False}
+    released = []  # per release: whether it ran during the capture
+    batch = next(it)
+    data = batch["data"]
+    assert data.is_pinned()
+    weakref.finalize(data, lambda: released.append(state["capturing"]))
+    dev = data.to("cuda", non_blocking=True)
+    del batch, data
+    assert not released  # the pin thread still holds a reference
+
+    x = torch.zeros(8, device="cuda")
+    graph = torch.cuda.CUDAGraph()
+    with cuda_graph_capture(graph):
+        state["capturing"] = True
+        resume.set()
+        time.sleep(0.3)  # an unguarded release would run now
+        x.add_(1)
+        state["capturing"] = False
+    for _ in range(200):
+        if released:
+            break
+        time.sleep(0.05)
+    assert released == [False], f"release during the capture: {released}"
+    graph.replay()
+    torch.cuda.synchronize()
+    assert torch.equal(dev.cpu(), torch.arange(1024, dtype=torch.float32))
+    assert torch.equal(x.cpu(), torch.ones(8))
+    assert list(it) == []
+
+
+def test_pin_memory_iter_exception():
+    """an exception of the source is re-raised in the consumer, after the batches before it"""
+    if not torch.cuda.is_available():
+        raise unittest.SkipTest("CUDA not available")
+
+    class _Error(Exception):
+        pass
+
+    def _src():
+        yield {"data": torch.zeros(2)}
+        yield {"data": torch.ones(2)}
+        raise _Error("source failed")
+
+    it = _pin_memory_iter(_src())
+    assert float(next(it)["data"][0]) == 0.0
+    assert float(next(it)["data"][0]) == 1.0
+    try:
+        next(it)
+    except _Error as exc:
+        assert str(exc) == "source failed"
+    else:
+        raise AssertionError("expected _Error")
+    assert not it._thread.is_alive()
+    try:
+        next(it)
+    except StopIteration:
+        pass
+    else:
+        raise AssertionError("expected StopIteration after the error")
+
+
+def test_pin_memory_iter_shutdown():
+    """
+    The thread stops: at the end, on close() of an unfinished iterator (thread blocked on the full queue),
+    when the consumer drops it, and for the previous iterator on the next iter() of the loader
+    """
+    import gc
+    from itertools import count
+    from returnn.torch.data.pin_memory import PinMemoryDataLoader
+
+    if not torch.cuda.is_available():
+        raise unittest.SkipTest("CUDA not available")
+
+    def _endless():
+        for i in count():
+            yield {"data": torch.full((4,), i)}
+
+    it = _pin_memory_iter([{"data": torch.zeros(2)}])
+    assert len(list(it)) == 1 and not it._thread.is_alive()
+
+    it = _pin_memory_iter(_endless(), queue_size=1)
+    assert float(next(it)["data"][0]) == 0.0
+    it.close()
+    assert not it._thread.is_alive()
+    assert list(it) == []
+
+    it = _pin_memory_iter(_endless())
+    next(it)
+    thread = it._thread
+    del it
+    gc.collect()
+    thread.join(timeout=10)
+    assert not thread.is_alive()
+
+    loader = PinMemoryDataLoader([{"data": torch.full((2,), i)} for i in range(5)], device="cuda")
+    it1 = iter(loader)
+    assert float(next(it1)["data"][0]) == 0.0
+    it2 = iter(loader)
+    assert not it1._thread.is_alive()
+    assert [float(b["data"][0]) for b in it2] == [0.0, 1.0, 2.0, 3.0, 4.0]
+
+
+class _PinCaptureOverlapForcer:
+    """
+    Forces the background pinning (:class:`returnn.torch.data.pin_memory.PinMemoryIter`)
+    to overlap each CUDA graph capture:
+    the pin thread holds back each batch until a capture has begun or the consumer waits for a batch,
+    and each capture, once begun, waits until the pin thread tries to pin, and then a bit longer
+    (an unguarded pin would now run inside the capture).
+    Records per capture whether a pin was attempted during it, and whether that pin finished during it.
+    """
+
+    def __init__(self):
+        import threading
+        from contextlib import ExitStack
+        from returnn.torch.data import pin_memory
+
+        self._pin_memory = pin_memory
+        self._cond = threading.Condition()
+        self._capturing = False
+        self._capture_released_pin = True  # the current capture released a held-back pin already
+        self._consumer_waiting = False
+        self.captures = []  # per capture: dict(pin_attempted=..., pin_finished_during=...)
+        self._exit_stack = ExitStack()
+
+    def __enter__(self):
+        import time
+        from unittest import mock
+
+        orig_pin_batch = self._pin_memory._pin_batch
+        orig_next = self._pin_memory.PinMemoryIter.__next__
+        orig_capture_begin = torch.cuda.CUDAGraph.capture_begin
+        orig_capture_end = torch.cuda.CUDAGraph.capture_end
+        forcer = self
+
+        def _pin_batch(batch):
+            with forcer._cond:
+                forcer._cond.wait_for(lambda: not forcer._capture_released_pin or forcer._consumer_waiting, timeout=60)
+                capture_idx = None
+                if forcer._capturing and not forcer._capture_released_pin:
+                    forcer._capture_released_pin = True
+                    capture_idx = len(forcer.captures) - 1
+                    forcer.captures[capture_idx]["pin_attempted"] = True
+                    forcer._cond.notify_all()
+            res = orig_pin_batch(batch)
+            if capture_idx is not None:
+                with forcer._cond:
+                    forcer.captures[capture_idx]["pin_finished_during"] = (
+                        forcer._capturing and len(forcer.captures) - 1 == capture_idx
+                    )
+            return res
+
+        def _next(it):
+            with forcer._cond:
+                forcer._consumer_waiting = True
+                forcer._cond.notify_all()
+            try:
+                return orig_next(it)
+            finally:
+                with forcer._cond:
+                    forcer._consumer_waiting = False
+
+        def _capture_begin(graph, *args, **kwargs):
+            orig_capture_begin(graph, *args, **kwargs)
+            with forcer._cond:
+                forcer._capturing = True
+                forcer._capture_released_pin = False
+                forcer.captures.append(dict(pin_attempted=False, pin_finished_during=False))
+                forcer._cond.notify_all()
+                forcer._cond.wait_for(lambda: forcer.captures[-1]["pin_attempted"], timeout=10)
+            time.sleep(0.2)
+
+        def _capture_end(graph, *args, **kwargs):
+            try:
+                return orig_capture_end(graph, *args, **kwargs)
+            finally:
+                with forcer._cond:
+                    forcer._capturing = False
+                    forcer._capture_released_pin = True
+                    forcer._cond.notify_all()
+
+        patch = mock.patch.object
+        self._exit_stack.enter_context(patch(self._pin_memory, "_pin_batch", _pin_batch))
+        self._exit_stack.enter_context(patch(self._pin_memory.PinMemoryIter, "__next__", _next))
+        self._exit_stack.enter_context(patch(torch.cuda.CUDAGraph, "capture_begin", _capture_begin))
+        self._exit_stack.enter_context(patch(torch.cuda.CUDAGraph, "capture_end", _capture_end))
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        self._exit_stack.close()
+
+
+def _run_pin_memory_capture_overlap(
+    *, cuda_graph: bool, compile_: bool, optimizer_step: bool, invalidate_optimizer_step_at: Optional[int] = None
+) -> int:
+    """
+    Train 2 epochs with DataLoader pin_memory (-> the RETURNN pinning thread), each capture forced to overlap
+    with a background pin (see :class:`_PinCaptureOverlapForcer`), then check the checkpoints.
+
+    :param invalidate_optimizer_step_at: before this optimizer update, drop the captured optimizer step
+        (as loading the optimizer state does), so the next update recaptures
+    :return: number of captures
+    """
+    from unittest import mock
+    from contextlib import ExitStack
+    import os
+    import glob
+    from returnn.torch.data.pin_memory import PinMemoryDataLoader
+
+    if not torch.cuda.is_available():
+        raise unittest.SkipTest("CUDA not available")
+    config, dataset = _build_cuda_graph_train_config_and_dataset(
+        compile_=compile_, warmup_steps=None, cuda_graph=cuda_graph, optimizer_step=optimizer_step
+    )
+    config.typed_dict["torch_dataloader_opts"] = {"num_workers": 1, "pin_memory": True}
+    with tempfile.TemporaryDirectory() as tmp_dir, global_config_ctx(config):
+        config.typed_dict["model"] = f"{tmp_dir}/model"
+        engine = Engine(config=config)
+        engine.init_train_from_config(train_data=dataset)
+        loader = engine._train_dataloader
+        assert isinstance(loader, PinMemoryDataLoader) and not loader.data_loader.pin_memory
+        # all read by now; the global config gets pickled to the DataLoader worker, local functions cannot
+        for key in ["get_model", "train_step", "dynamic_learning_rate"]:
+            config.typed_dict.pop(key)
+        with _PinCaptureOverlapForcer() as forcer, ExitStack() as stack:
+            opt_step = engine._updater._optimizer_step
+            if invalidate_optimizer_step_at is not None:
+                orig_opt_step = opt_step.step
+                num_opt_steps = 0
+
+                def _opt_step():
+                    nonlocal num_opt_steps
+                    if num_opt_steps == invalidate_optimizer_step_at:
+                        assert opt_step._graph is not None, "optimizer step not captured yet"
+                        opt_step.invalidate()
+                    num_opt_steps += 1
+                    orig_opt_step()
+
+                stack.enter_context(mock.patch.object(opt_step, "step", _opt_step))
+            engine.train()
+        print("captures:", forcer.captures)
+        if invalidate_optimizer_step_at is not None:
+            assert opt_step._num_captures == 2, "no recapture"
+        assert forcer.captures, "nothing captured"
+        for i, capture in enumerate(forcer.captures):
+            assert capture["pin_attempted"], f"capture {i}: no pin attempt during the capture, overlap not forced"
+            assert not capture["pin_finished_during"], f"capture {i}: pinned during the capture"
+        if cuda_graph:
+            assert engine._graph_capture._graph is not None, "graph never captured"
+        if optimizer_step:
+            assert engine._updater._optimizer_step._graph is not None, "optimizer step never captured"
+
+        params = {k: v.detach().cpu() for k, v in engine._pt_model.state_dict().items()}
+        model_files = sorted(glob.glob(f"{tmp_dir}/model.*.pt"))
+        model_files = [fn for fn in model_files if not fn.endswith(".opt.pt")]
+        assert [os.path.basename(fn) for fn in model_files] == ["model.001.pt", "model.002.pt"], model_files
+        for fn in model_files:
+            ckpt = torch.load(fn, map_location="cpu")
+            assert set(ckpt["model"]) == set(params)
+            for k, v in ckpt["model"].items():
+                assert torch.isfinite(v).all(), f"{fn}: non-finite {k}"
+        for k, v in torch.load(model_files[-1], map_location="cpu")["model"].items():
+            assert torch.equal(v, params[k]), f"last checkpoint {k} differs from the trained param"
+        opt_ckpt = torch.load(f"{tmp_dir}/model.002.opt.pt", map_location="cpu")
+        assert opt_ckpt["optimizer"]["state"]
+        if optimizer_step:  # the checkpoint keeps the ordinary Python scalar
+            for group in opt_ckpt["optimizer"]["param_groups"]:
+                assert isinstance(group["lr"], float)
+    return len(forcer.captures)
+
+
+def test_pin_memory_capture_overlap_model_step():
+    """background pinning forced to overlap the model step capture (incl. the optimizer, capture_optimizer)"""
+    n = _run_pin_memory_capture_overlap(cuda_graph=True, compile_=True, optimizer_step=False)
+    assert n == 1
+
+
+def test_pin_memory_capture_overlap_optimizer_step():
+    """
+    background pinning forced to overlap the separate optimizer step capture (torch_optimizer_step)
+    and its recapture
+    """
+    n = _run_pin_memory_capture_overlap(
+        cuda_graph=False, compile_=False, optimizer_step=True, invalidate_optimizer_step_at=6
+    )
+    assert n == 2
+
+
+def test_pin_memory_capture_overlap_model_and_optimizer_step():
+    """
+    background pinning forced to overlap the model step capture, the separate optimizer step capture,
+    and its recapture
+    """
+    n = _run_pin_memory_capture_overlap(
+        cuda_graph=True, compile_=True, optimizer_step=True, invalidate_optimizer_step_at=6
+    )
+    assert n == 3
+
+
+def test_pin_memory_engine_batches_unchanged():
+    """
+    Engine with pin_memory and a CUDA graph capture: the RETURNN pinning thread instead of the DataLoader one,
+    same batches (tensors, lengths, tags, order) as the unwrapped DataLoader
+    """
+    from returnn.torch.data.pin_memory import PinMemoryDataLoader
+
+    if not torch.cuda.is_available():
+        raise unittest.SkipTest("CUDA not available")
+    config = Config(
+        dict(
+            task="train",
+            device="gpu",
+            extern_data={"data": {"dim": 9}, "classes": {"dim": 2, "sparse": True}},
+            get_model=TrainTestModel,
+            train_step=TrainTestModel.train_step,
+            batch_size=100,
+            max_seqs=10,
+            optimizer={"class": "adamw", "capturable": True},
+            torch_optimizer_step={},
+            torch_dataloader_opts={"num_workers": 1, "pin_memory": True},
+        )
+    )
+    dataset = init_dataset({"class": "Task12AXDataset", "num_seqs": 100, "name": "train", "fixed_random_seed": 1})
+    dataset.init_seq_order(epoch=1)
+    with global_config_ctx(config):
+        engine = Engine(config=config)
+        engine.init_train_from_config(train_data=dataset)
+        loader = engine._train_dataloader
+        assert isinstance(loader, PinMemoryDataLoader) and not loader.data_loader.pin_memory
+        pinned = list(loader)
+        plain = list(loader.data_loader)
+    assert len(pinned) == len(plain) > 1
+    for batch, ref in zip(pinned, plain):
+        assert set(batch) == set(ref)
+        assert "seq_tag" in batch and "data:seq_len" in batch
+        for k, v_ref in ref.items():
+            v = batch[k]
+            if isinstance(v_ref, torch.Tensor):
+                assert v.is_pinned() and v.dtype == v_ref.dtype and torch.equal(v, v_ref), k
+            elif isinstance(v_ref, numpy.ndarray):
+                assert v.dtype == v_ref.dtype and numpy.array_equal(v, v_ref), k
+            else:
+                assert v == v_ref, k
 
 
 if __name__ == "__main__":

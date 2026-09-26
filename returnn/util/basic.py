@@ -3876,7 +3876,11 @@ def should_write_to_disk(config):
     if config.is_true("dry_run"):
         return False
     if config.is_true("torch_profile"):
-        return False
+        # By default, we exit after profiling, so nothing should be written.
+        # With exit_after_profile=False, it is ordinary training which continues, so write as usual.
+        torch_profile = config.typed_value("torch_profile")
+        if not (isinstance(torch_profile, dict) and not torch_profile.get("exit_after_profile", True)):
+            return False
     return True
 
 

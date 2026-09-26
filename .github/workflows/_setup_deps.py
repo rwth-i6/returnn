@@ -29,6 +29,7 @@ def main():
         "--espnet-no-deps", help="install ESPnet without its dependencies, for the code inspection (optional)"
     )
     arg_parser.add_argument("--hf-datasets", help="Whether to install HF datasets (optional)")
+    arg_parser.add_argument("--nemo-speech", help="Whether to install NeMo Speech, for NemoSpeechDataset (optional)")
     args = arg_parser.parse_args()
 
     print("Python:", sys.version, sys.executable)
@@ -153,6 +154,18 @@ def main():
             _run("sudo", "apt-get", "install", "-y", "ffmpeg")  # for torchcodec
             _run(*pip_install, "torchcodec==0.7")  # for HF datasets
             _run(*pip_install, "datasets")
+
+        if args.nemo_speech:
+            assert args.torch, "Need to specify --torch when specifying --nemo-speech"
+            assert args.nemo_speech.lower() in ["yes", "1", "true"], (
+                f"Invalid value for --nemo-speech: {args.nemo_speech}"
+            )
+            # Git main: needs Lhotse indexed data access (index packs etc), not in a NeMo release yet.
+            _run(
+                *pip_install,
+                "nemo-toolkit[asr] @ git+https://github.com/NVIDIA-NeMo/Speech.git",
+                f"torch=={args.torch}",
+            )
 
         if args.espnet and not args.espnet_no_deps and sys.version_info[:2] <= (3, 8):
             # https://github.com/rwth-i6/returnn/issues/1729

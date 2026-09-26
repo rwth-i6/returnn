@@ -1218,3 +1218,13 @@ def test_packed_fallback_gate():
         assert time_dim not in out.dims_set
     finally:
         packed.set_allowed_fallbacks(None)
+
+
+def test_combine_on_a_version_1_tensor_resolves_the_feature_axis():
+    import torch
+
+    x = Tensor("x", shape=(None, 3), dtype="float32", batch_dim_axis=0)
+    x.raw_tensor = torch.zeros(2, 4, 3)
+    y = x + 1
+    assert y.version == 2 and y._feature_dim_axis == x.feature_dim_axis == 2
+    y.copy_compatible_to_dims(y.dims)

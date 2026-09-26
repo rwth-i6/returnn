@@ -41,6 +41,38 @@ class _AllReduceSum(torch.autograd.Function):
         return grad, None
 
 
+_HAVE_LIB_OPS = False
+if hasattr(torch.library, "custom_op"):  # torch >= 2.4
+    # An opaque op with a fake implementation and a registered backward:
+    # AOT tracing (the compiled step of torch_cuda_graph, no Dynamo) runs on fake tensors,
+    # which the direct collective of the autograd.Function above cannot take.
+    # Also used outside of tracing, so traced and normal steps run the same op.
+    # Only for the default group, a process group is no op argument.
+
+    @torch.library.custom_op("returnn::all_reduce_sum", mutates_args=())
+    def _lib_all_reduce_sum(x: torch.Tensor) -> torch.Tensor:
+        import torch.distributed as dist
+
+        out = x.clone()
+        dist.all_reduce(out, op=dist.ReduceOp.SUM)
+        return out
+
+    @_lib_all_reduce_sum.register_fake
+    def _lib_all_reduce_sum_fake(x):
+        return torch.empty_like(x)
+
+    def _lib_setup_context(ctx, inputs, output):
+        del ctx, inputs, output
+
+    def _lib_backward(ctx, grad_output):
+        del ctx
+        return torch.ops.returnn.all_reduce_sum(grad_output.contiguous())
+
+    torch.library.register_autograd("returnn::all_reduce_sum", _lib_backward, setup_context=_lib_setup_context)
+
+    _HAVE_LIB_OPS = True
+
+
 def all_reduce_sum(x: torch.Tensor, *, group=None) -> torch.Tensor:
     """
     Differentiable all-reduce (sum) across the distributed worker group.
@@ -55,4 +87,6 @@ def all_reduce_sum(x: torch.Tensor, *, group=None) -> torch.Tensor:
     :param group: process group, or None for the default group
     :return: the sum of ``x`` across all workers, same shape, differentiable
     """
+    if _HAVE_LIB_OPS and group is None:
+        return torch.ops.returnn.all_reduce_sum(x)
     return _AllReduceSum.apply(x, group)

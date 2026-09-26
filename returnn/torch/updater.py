@@ -18,6 +18,7 @@ from returnn.log import log
 from returnn.util.basic import RefIdEq, get_fwd_compat_kwargs, BehaviorVersion
 import returnn.frontend as rf
 from returnn.torch.frontend.bridge import wrapped_pt_module_to_rf_module
+from returnn.torch.util.optimizer_step import OptimizerStep
 
 _OptimizerClassesDictInitialized = False
 _OptimizerClassesDict = {}
@@ -153,6 +154,9 @@ class Updater:
         self._optimizer_opts: Optional[Dict[str, Any]] = None
         self.optimizer: Optional[torch.optim.Optimizer] = None
         self._optimizer_param_groups_extra_opts: Optional[List[Dict[str, Any]]] = None
+        # separately compiled + CUDA-graph-captured optimizer step, see returnn.torch.util.optimizer_step
+        self._optimizer_step_opts: Optional[Dict[str, Any]] = self.config.typed_value("torch_optimizer_step", None)
+        self._optimizer_step: Optional[OptimizerStep] = None
 
         self._grad_clip = self.config.float("gradient_clip", 0.0)
         self._grad_clip_global_norm = self.config.float("gradient_clip_global_norm", 0.0)
@@ -267,6 +271,14 @@ class Updater:
         self._current_epoch_continuous = epoch_continuous
         self._update_effective_learning_rate()
 
+    def zero_grad(self):
+        """
+        Zero the grads before the next grad accumulation.
+        With the captured optimizer step (config ``torch_optimizer_step``), the grads are zeroed in place:
+        the captured graph reads them at fixed addresses.
+        """
+        self.optimizer.zero_grad(set_to_none=self._optimizer_step is None)
+
     def _grads(self) -> List[torch.Tensor]:
         """
         :return: the current gradients
@@ -278,6 +290,7 @@ class Updater:
         Perform one step, i.e. update the parameters using the optimizer given the current calculated gradients.
         """
         if grad_scaler is not None:
+            assert self._optimizer_step is None, "torch_optimizer_step: grad scaler not supported"
             grad_scaler.unscale_(self.optimizer)
 
         # last_grad_norm is the norm of the raw grads, before noise/clip touch them.
@@ -336,7 +349,10 @@ class Updater:
             # update needs to be called even if we discard the update due to an invalid gradient
             grad_scaler.update()
         elif not has_invalid_gradient:
-            self.optimizer.step()
+            if self._optimizer_step is not None:
+                self._optimizer_step.step()
+            else:
+                self.optimizer.step()
 
     def create_optimizer(self):
         """
@@ -347,6 +363,8 @@ class Updater:
             raise ValueError("config field 'optimizer' needs to be set explicitely for the Torch backend")
         self._optimizer_opts = optimizer_opts
         self.optimizer, self._optimizer_param_groups_extra_opts = self._create_optimizer(optimizer_opts)
+        if self._optimizer_step_opts is not None:
+            self._optimizer_step = OptimizerStep(optimizer=self.optimizer, opts=self._optimizer_step_opts)
 
     def load_optimizer(self, filename):
         """
@@ -447,6 +465,9 @@ class Updater:
                     if i in map_ckpt_param_idx_to_self_param_idx
                 }
         self.optimizer.load_state_dict(optimizer_state["optimizer"])
+        if self._optimizer_step is not None:
+            # new state tensors (and Python-scalar lr and counters again)
+            self._optimizer_step.invalidate()
         # https://github.com/rwth-i6/returnn/issues/1345
         del optimizer_state
         gc.collect()
@@ -555,9 +576,13 @@ class Updater:
         elif isinstance(optimizer_opts_to_save, torch.optim.Optimizer) or callable(optimizer_opts_to_save):
             optimizer_opts_to_save = None
 
+        optimizer_state_dict = self.optimizer.state_dict()
+        if self._optimizer_step is not None:
+            # keep the ordinary Python scalars (lr, counters) in the checkpoint
+            optimizer_state_dict = self._optimizer_step.state_dict_to_host_scalars(optimizer_state_dict)
         torch.save(
             {
-                "optimizer": self.optimizer.state_dict(),
+                "optimizer": optimizer_state_dict,
                 "optimizer_class_name": self.optimizer.__class__.__name__,
                 "optimizer_opts": optimizer_opts_to_save,
                 "param_names": param_names,

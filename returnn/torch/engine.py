@@ -47,6 +47,7 @@ from .data import pipeline as data_pipeline
 from .data import returnn_dataset_wrapper
 from .data import extern_data as extern_data_util
 from .data.queued_data_iter import QueuedDataIter
+from .data.pin_memory import PinMemoryDataLoader
 from .frontend.bridge import rf_module_to_pt_module, wrapped_pt_module_to_rf_module
 from .util import diagnose_gpu
 from .util import graph_capture
@@ -76,8 +77,8 @@ class Engine(EngineBase):
         self.train_dataset: Optional[Dataset] = None
         self.eval_datasets = {}
         self.extern_data: Optional[TensorDict] = None
-        self._train_dataloader: Optional[DataLoader] = None
-        self._eval_dataloaders: Dict[str, DataLoader] = {}
+        self._train_dataloader: Optional[Union[DataLoader, PinMemoryDataLoader]] = None
+        self._eval_dataloaders: Dict[str, Union[DataLoader, PinMemoryDataLoader]] = {}
         self._hot_reloader = ConfigHotReloader(config.typed_dict) if should_use_hot_reloading(config=config) else None
 
         self._start_epoch: Optional[int] = None
@@ -144,6 +145,8 @@ class Engine(EngineBase):
         # opts parsed here, the instance is created lazily at the first train step.
         self._graph_capture_opts = config.typed_value("torch_cuda_graph", None)
         self._graph_capture: Optional[graph_capture.GraphCapturedTrainStep] = None
+        # for torch_profile once=True
+        self._torch_profile_exported = False
 
         # Dump stacks when a train step stops making progress, see returnn.util.watch_stall.
         self._stall_heartbeat = None
@@ -261,6 +264,13 @@ class Engine(EngineBase):
         self._train_step_func = self.config.typed_value("train_step")
         assert self._train_step_func, "train_step not defined"
 
+        if self.config.typed_value("torch_optimizer_step", None) is not None:
+            # separately compiled + captured optimizer step, see returnn.torch.util.optimizer_step
+            assert self._grad_scaler is None, "torch_optimizer_step: grad scaler not supported"
+            assert not (self._graph_capture_opts or {}).get("capture_optimizer", False), (
+                "torch_optimizer_step: exclusive with torch_cuda_graph capture_optimizer"
+            )
+
         if self._graph_capture_opts is not None:
             # whole-train-step CUDA-graph capture/replay, incl backward
             # (see returnn.torch.util.graph_capture)
@@ -281,6 +291,7 @@ class Engine(EngineBase):
                 assert not self._graph_capture_opts.get("capture_optimizer", False), (
                     "torch_cuda_graph: capture_optimizer with reduce_type 'grad_explicit' is not supported,"
                     " the grad reduce must run between the step and the optimizer"
+                    " (torch_optimizer_step captures the optimizer step separately)"
                 )
             self._graph_capture = graph_capture.GraphCapturedTrainStep(
                 opts=self._graph_capture_opts,
@@ -294,9 +305,8 @@ class Engine(EngineBase):
                     )
                 ),
                 post_step=lambda: self._updater.step(grad_scaler=None),
-                # only for opts "dummy_warmup": to reset the state the dummy steps create
+                # to create the lazy optimizer state before the capture, see _materialize_optimizer_state
                 get_optimizer=lambda: self._updater.get_optimizer(),
-                get_buffers=lambda: list(self._pt_model.buffers()),
                 rf_params=(list(self._orig_model.parameters()) if isinstance(self._orig_model, rf.Module) else None),
                 # lets the capture infer a missing packed_total_bound from the content budget
                 packed_batch_size=self.config.typed_value("packed_batch_size", None),
@@ -362,6 +372,8 @@ class Engine(EngineBase):
 
         if not self.config.bool("stop_for_resubmission_when_low_time_left", False):
             return
+        if self._final_epoch is not None and self.epoch >= self._final_epoch:
+            return  # training is complete, a resubmission would only finalize the job
         time_left = slurm_time_left_sec()
         if time_left is None:
             return  # not in SLURM, or squeue query failed -- no-op.
@@ -618,7 +630,9 @@ class Engine(EngineBase):
         total_data_size_padded = NumbersDict()
 
         prof = _opt_torch_profiler_from_opts(
-            opts=self.config.opt_typed_value("torch_profile"), torch_distributed_ctx=self._torch_distributed_ctx
+            opts=self.config.opt_typed_value("torch_profile"),
+            torch_distributed_ctx=self._torch_distributed_ctx,
+            exported_before=self._torch_profile_exported,
         )
         if prof:
             prof.__enter__()
@@ -652,10 +666,11 @@ class Engine(EngineBase):
                 if self._stall_heartbeat is not None:
                     self._stall_heartbeat.value = time.time()
 
-                # convert values from torch int32 to Python ints to prevent overflow
+                # convert values to Python ints to prevent overflow.
+                # The native reduction promotes int32 to int64 and is one op instead of one per seq.
                 keys_w_seq_len = [k for k in extern_data_raw if f"{k}:seq_len" in extern_data_raw]
                 total_data_size_packed += NumbersDict(
-                    {k: int(sum(extern_data_raw[f"{k}:seq_len"])) for k in keys_w_seq_len},
+                    {k: int(extern_data_raw[f"{k}:seq_len"].sum()) for k in keys_w_seq_len},
                 )
                 total_data_size_padded += NumbersDict(
                     {k: int(util.prod(extern_data_raw[k].shape[:2])) for k in keys_w_seq_len},
@@ -669,7 +684,7 @@ class Engine(EngineBase):
                 if zero_grad_next_step:
                     if self._graph_capture_opts is None:
                         # under graph capture, the grads are static buffers zeroed in-graph
-                        self._updater.get_optimizer().zero_grad()
+                        self._updater.zero_grad()
                     cur_count_grad_accum = 0
 
                 if self._graph_capture is not None:
@@ -733,21 +748,14 @@ class Engine(EngineBase):
                     with record_function("reduce_grads"):
                         self._torch_distributed_ctx.maybe_reduce_grads(module=self._pt_model)
 
-                # A dummy warmup step of the graph capture computed on a dummy batch (see run_train_step),
-                # so its grads must not update the params and there is no grad norm worth logging.
-                dummy_step = self._graph_capture is not None and self._graph_capture.last_step_dummy
                 # only update the weights when every gradient accumulation loop ends
                 # (under graph capture with capture_optimizer, the update is inside the graph)
-                if (
-                    perform_update_step
-                    and not dummy_step
-                    and (self._graph_capture is None or not self._graph_capture.captures_optimizer)
-                ):
+                if perform_update_step and (self._graph_capture is None or not self._graph_capture.captures_optimizer):
                     with record_function("optimizer_step"):
                         self._updater.step(grad_scaler=self._grad_scaler)
                 zero_grad_next_step = perform_update_step
 
-                if self._updater.log_grad_norm_p is not None and perform_update_step and not dummy_step:
+                if self._updater.log_grad_norm_p is not None and perform_update_step:
                     key = f"grad_norm:p{simplify_and_format_number(self._updater.log_grad_norm_p)}"
                     assert key not in losses_dict
                     inv_norm_factors_dict[key] = 1.0  # once per update step
@@ -859,6 +867,8 @@ class Engine(EngineBase):
 
         if prof:
             prof.__exit__(None, None, None)
+            if prof.exported:
+                self._torch_profile_exported = True
 
         elapsed = time.monotonic() - epoch_start_time
         elapsed_computation_percentage = elapsed_computation_time / elapsed
@@ -1101,13 +1111,14 @@ class Engine(EngineBase):
 
     def _create_data_loader(
         self, dataset: Dataset, *, train: bool = False, dataset_init_epoch: bool = True
-    ) -> DataLoader:
+    ) -> Union[DataLoader, PinMemoryDataLoader]:
         """
         :param dataset: RETURNN dataset
         :param train: Train might use a separate batch size in the config (batch_size_train vs batch_size_dev).
             Also online_shuffle_batches is only used in training.
         :param dataset_init_epoch: Whether to call dataset.init_seq_order(epoch=self.epoch) or not.
-        :return: PyTorch data loader created from given RETURNN dataset
+        :return: PyTorch data loader created from given RETURNN dataset,
+            maybe wrapped for the background pinning, see :class:`PinMemoryDataLoader`
         """
         # Make sure that _dataset_reset does not keep a ref to `self`,
         # otherwise it would trigger to pickle `self` and all its members.
@@ -1172,6 +1183,21 @@ class Engine(EngineBase):
             # (the serialization of the dataset state does not cover the current seq order).
             loader_opts["num_workers"] = 0
 
+        pin_in_background = False
+        if (
+            loader_opts.get("pin_memory")
+            and loader_opts.get("num_workers", 1) > 0
+            and str(self._device).startswith("cuda")
+            and (self._graph_capture_opts is not None or self.config.typed_value("torch_optimizer_step") is not None)
+        ):
+            # The DataLoader would pin in its own thread, also during a CUDA graph capture,
+            # which invalidates the capture. Pin in our own thread instead, which waits for the captures.
+            # (With num_workers 0, the DataLoader pins in the main thread, which is fine.)
+            loader_opts = loader_opts.copy()
+            loader_opts.pop("pin_memory")
+            loader_opts.pop("pin_memory_device", None)
+            pin_in_background = True
+
         data_loader = data_pipeline.create_data_loader_from_batches(batches_dataset, loader_opts)
 
         if data_loader.num_workers > 0:  # uses multi processing
@@ -1182,6 +1208,8 @@ class Engine(EngineBase):
             # it would still potentially have resources ready to use.
             dataset.finish_epoch(free_resources=True)
 
+        if pin_in_background:
+            return PinMemoryDataLoader(data_loader, device=self._device)
         return data_loader
 
     @contextmanager
@@ -2006,8 +2034,8 @@ def _get_batch_size_info_raw(extern_data_raw: Dict[str, Any]) -> Dict[str, int]:
             continue
         if "num_seqs" not in info:
             info["num_seqs"] = int(len(seq_lens))
-        info[f"max_size:{k}"] = int(max(seq_lens)) if len(seq_lens) else 0
-        info[f"sum_size:{k}"] = int(sum(seq_lens))
+        info[f"max_size:{k}"] = int(seq_lens.max()) if len(seq_lens) else 0
+        info[f"sum_size:{k}"] = int(seq_lens.sum())
     return info
 
 
@@ -2091,10 +2119,21 @@ def _torch_load(filename: Union[str, os.PathLike], *, device: str) -> Dict[str, 
 
 
 class _TorchProfiler:
-    def __init__(self, profiler: torch.profiler.profile, max_step: Optional[int]):
+    def __init__(
+        self,
+        profiler: torch.profiler.profile,
+        max_step: Optional[int],
+        *,
+        exit_after_profile: bool = True,
+        filename_suffix: str = "",
+    ):
         self.profiler = profiler
         self.max_step = max_step
+        self.exit_after_profile = exit_after_profile
+        self.trace_filename = f"torch_profile{filename_suffix}.json"
+        self.memory_filename = f"torch_memory_profile{filename_suffix}.html"
         self.entered = False
+        self.exported = False
 
     def __enter__(self):
         self.profiler.__enter__()
@@ -2107,34 +2146,51 @@ class _TorchProfiler:
         self.profiler.__exit__(exc_type, exc_val, exc_tb)
 
         if exc_type is None:
-            print("Torch profiling finished, exporting Chrome trace to torch_profile.json...", file=log.v2)
-            self.profiler.export_chrome_trace("torch_profile.json")
+            print(f"Torch profiling finished, exporting Chrome trace to {self.trace_filename}...", file=log.v2)
+            self.profiler.export_chrome_trace(self.trace_filename)
             if self.profiler.profile_memory:
-                print("Exporting Torch memory profile to torch_memory_profile.html...", file=log.v2)
+                print(f"Exporting Torch memory profile to {self.memory_filename}...", file=log.v2)
                 # deprecated, but the named replacement (_record_memory_history/_export_memory_snapshot)
                 # is private API and emits a snapshot pickle instead of this HTML timeline
                 # noinspection PyDeprecation
-                self.profiler.export_memory_timeline("torch_memory_profile.html")
+                self.profiler.export_memory_timeline(self.memory_filename)
+            self.exported = True
 
-            print("Exiting program after Torch profiling.", file=log.v2)
-            sys.exit(0)
+            if self.exit_after_profile:
+                print("Exiting program after Torch profiling.", file=log.v2)
+                sys.exit(0)
+            print("Continuing training after Torch profiling.", file=log.v2)
 
     def step(self):
         """step"""
+        if not self.entered:  # already stopped and exported
+            return
         self.profiler.step()
         if self.max_step is not None and self.profiler.step_num > self.max_step:
             print(f"Reached max profiling step {self.max_step}, stopping Torch profiler.", file=log.v2)
-            self.profiler.stop()
             self.__exit__(None, None, None)
 
 
 def _opt_torch_profiler_from_opts(
-    opts: Union[None, int, bool, str, Dict[str, Any]], torch_distributed_ctx: Optional[DistributedContext]
+    opts: Union[None, int, bool, str, Dict[str, Any]],
+    torch_distributed_ctx: Optional[DistributedContext],
+    *,
+    exported_before: bool = False,
 ) -> Optional[_TorchProfiler]:
-    # Only profile worker #0: https://github.com/rwth-i6/returnn/issues/1821
-    if torch_distributed_ctx is not None and torch_distributed_ctx.local_rank() != 0:
-        return None
+    """
+    :param opts: ``torch_profile`` config option.
+        If a dict, these keys are handled here, all others are passed to :class:`torch.profiler.profile`:
 
+        - ``exit_after_profile`` (default True): exit the program after the profile was exported.
+          If False, training continues (incl. saving models etc.).
+        - ``once`` (default False): profile only one epoch per engine process.
+          Otherwise every epoch is profiled again and overwrites the files.
+        - ``ranks`` (distributed only): global ranks to profile, list of ints or "all".
+          Default (None): local rank 0 on each node (https://github.com/rwth-i6/returnn/issues/1821).
+          Filenames get a ``.rank{rank}`` suffix if multiple ranks can be profiled.
+    :param torch_distributed_ctx:
+    :param exported_before: whether a profile was already exported in this engine process
+    """
     if isinstance(opts, str):
         from returnn.util.basic import to_bool
 
@@ -2151,6 +2207,30 @@ def _opt_torch_profiler_from_opts(
     else:
         raise TypeError(f"Invalid type for torch_profile {opts!r}: {type(opts)}")
 
+    exit_after_profile = opts.pop("exit_after_profile", True)
+    once = opts.pop("once", False)
+    ranks = opts.pop("ranks", None)
+    if ranks is not None and ranks != "all":
+        if not isinstance(ranks, (list, tuple)) or not all(isinstance(r, int) for r in ranks):
+            raise TypeError(f"torch_profile: invalid ranks {ranks!r}, expected list of ints or 'all'")
+    if once and exported_before:
+        return None
+
+    filename_suffix = ""
+    if torch_distributed_ctx is not None:
+        rank = torch_distributed_ctx.rank()
+        if ranks is None:
+            if torch_distributed_ctx.local_rank() != 0:
+                return None
+            # local rank 0 of multiple nodes would write the same files
+            multiple_ranks = torch_distributed_ctx.size() > torch_distributed_ctx.local_size()
+        else:
+            if ranks != "all" and rank not in ranks:
+                return None
+            multiple_ranks = torch_distributed_ctx.size() > 1
+        if multiple_ranks:
+            filename_suffix = f".rank{rank}"
+
     from torch.profiler import profile, ProfilerActivity, schedule
 
     print("Using Torch profiler...", file=log.v2)
@@ -2161,7 +2241,7 @@ def _opt_torch_profiler_from_opts(
         activities = [ProfilerActivity.CPU]
         if torch.cuda.is_available():
             activities += [ProfilerActivity.CUDA]
-        elif torch.xpu.is_available():
+        elif hasattr(torch, "xpu") and torch.xpu.is_available():  # torch.xpu does not exist in older torch
             activities += [ProfilerActivity.XPU]
         opts["activities"] = activities
 
@@ -2177,7 +2257,9 @@ def _opt_torch_profiler_from_opts(
         schedule_opts = schedule_opts.copy()
         schedule_opts.setdefault("repeat", 0)
         schedule_opts.setdefault("skip_first", 0)
-        schedule_opts.setdefault("skip_first_wait", 0)
+        skip_first_wait = schedule_opts.pop("skip_first_wait", 0)
+        if skip_first_wait:  # only pass if set, older torch (e.g. 2.0) does not have it
+            schedule_opts["skip_first_wait"] = skip_first_wait
         opts["schedule"] = schedule(**schedule_opts)
 
         if schedule_opts["repeat"] > 0:
@@ -2185,9 +2267,9 @@ def _opt_torch_profiler_from_opts(
                 "repeat"
             ]
             prof_max_step += schedule_opts["skip_first"]
-            if schedule_opts["skip_first_wait"] != 0:
+            if skip_first_wait != 0:
                 prof_max_step -= schedule_opts["wait"]
             print(f"Profiling will stop automatically after {prof_max_step} steps.", file=log.v3)
 
     prof = profile(**opts)
-    return _TorchProfiler(prof, prof_max_step)
+    return _TorchProfiler(prof, prof_max_step, exit_after_profile=exit_after_profile, filename_suffix=filename_suffix)
