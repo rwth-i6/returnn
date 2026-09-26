@@ -12,7 +12,8 @@ The DataLoader pin thread cannot be paused (it only has a stop-forever event).
 
 :class:`PinMemoryDataLoader` wraps a DataLoader without ``pin_memory``
 and pins the batches in its own thread instead,
-holding :data:`returnn.torch.util.capture_lock.capture_lock` while pinning,
+holding :data:`returnn.torch.util.capture_lock.capture_lock` while pinning
+and while releasing its reference to a handed-over batch,
 which every capture holds for the whole capture.
 So pinning waits for a capture (and a capture waits for the current pinning),
 but runs concurrently with the ordinary steps (graph replays).
@@ -157,11 +158,11 @@ def _pin_loop(*, src_iter: Iterator[Any], device: torch.device, out_queue: queue
             except queue.Full:
                 continue
         kind = msg[0]
-        # Drop our reference now, not at the next assignment, after the next source batch:
-        # the consumer holds the last one and frees the pinned tensors in its thread,
-        # never concurrently with a capture.
-        # (Freeing a pinned block which was used by an async copy records CUDA events.)
-        del msg
+        # Once published, the consumer may have already copied from the batch and dropped it,
+        # so this can be the last reference: freeing a pinned block used by an async copy records CUDA events.
+        # So release it holding the capture lock (not held while blocking on the queue above).
+        with capture_lock:
+            del msg
         if kind != "batch":
             return
 

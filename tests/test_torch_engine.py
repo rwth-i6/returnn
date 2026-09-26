@@ -1836,6 +1836,73 @@ def test_pin_memory_iter_buffer_lifetime():
         assert bool((d == float(i + 1)).all()), f"batch {i + 1} overwritten"
 
 
+def test_pin_memory_iter_release_after_handoff():
+    """
+    After handing a batch over, the pin thread may hold the last reference to it
+    (the consumer already copied from it and dropped it); that release must not run during a capture.
+    Forced: the pin thread pauses right after publishing the batch, the consumer copies and drops it,
+    starts a capture, and the pin thread resumes inside that capture.
+    """
+    import threading
+    import time
+    import weakref
+    from returnn.torch.util.capture_lock import cuda_graph_capture
+
+    if not torch.cuda.is_available():
+        raise unittest.SkipTest("CUDA not available")
+    src_gate = threading.Event()
+
+    def _src():
+        src_gate.wait(timeout=60)
+        yield {"data": torch.arange(1024, dtype=torch.float32)}
+
+    it = _pin_memory_iter(_src())
+    published, resume = threading.Event(), threading.Event()
+    orig_put = it._queue.put
+    num_puts = 0
+
+    def _put(item, *args, **kwargs):
+        nonlocal num_puts
+        orig_put(item, *args, **kwargs)
+        num_puts += 1
+        if num_puts == 1:  # the batch: pause before the pin thread drops its reference
+            published.set()
+            resume.wait(timeout=60)
+
+    it._queue.put = _put  # the pin thread uses the same queue object, and does not put before src_gate
+    src_gate.set()
+    assert published.wait(timeout=60)
+
+    state = {"capturing": False}
+    released = []  # per release: whether it ran during the capture
+    batch = next(it)
+    data = batch["data"]
+    assert data.is_pinned()
+    weakref.finalize(data, lambda: released.append(state["capturing"]))
+    dev = data.to("cuda", non_blocking=True)
+    del batch, data
+    assert not released  # the pin thread still holds a reference
+
+    x = torch.zeros(8, device="cuda")
+    graph = torch.cuda.CUDAGraph()
+    with cuda_graph_capture(graph):
+        state["capturing"] = True
+        resume.set()
+        time.sleep(0.3)  # an unguarded release would run now
+        x.add_(1)
+        state["capturing"] = False
+    for _ in range(200):
+        if released:
+            break
+        time.sleep(0.05)
+    assert released == [False], f"release during the capture: {released}"
+    graph.replay()
+    torch.cuda.synchronize()
+    assert torch.equal(dev.cpu(), torch.arange(1024, dtype=torch.float32))
+    assert torch.equal(x.cpu(), torch.ones(8))
+    assert list(it) == []
+
+
 def test_pin_memory_iter_exception():
     """an exception of the source is re-raised in the consumer, after the batches before it"""
     if not torch.cuda.is_available():
