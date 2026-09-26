@@ -757,7 +757,7 @@ class _WorkerInProc:
         self.dataset_dict = dataset_dict
 
         with self._env():
-            self.dataset = init_dataset(dataset_dict)
+            self.dataset: Optional[Dataset] = init_dataset(dataset_dict)  # None after exit
             # Same as in _WorkerProcParent: use the full epoch as the epoch here.
             self.dataset.init_seq_order(epoch=self.full_epoch_0idx + 1)
             try:
@@ -791,7 +791,12 @@ class _WorkerInProc:
             return self.dataset.get_total_num_seqs(**kwargs)
 
     def exit(self, *, join: bool = True):
-        """exit"""
+        """
+        exit
+
+        :param join: only for the same interface as :class:`_WorkerProcParent`, there is no proc to join
+        """
+        del join
         if self.dataset is None:
             return
         with self._env():
