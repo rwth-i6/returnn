@@ -274,6 +274,10 @@ class PostprocessingDataset(CachedDataset2):
             data_iter = self._multi_proc_data_iter = self._init_multi_proc_data_iter(
                 epoch=epoch, feeder_to_worker_conns=parent_conns, seq_list=seq_list, seq_order=seq_order
             )
+            # The feeder thread calls init_seq_order on the wrapped dataset.
+            # Wait for it before we read its num_seqs below,
+            # otherwise we might get a stale value (e.g. 0 for a fresh dataset).
+            data_iter.wait_for_dataset_init_seq_order()
         else:
             self._dataset.init_seq_order(epoch=epoch, seq_list=seq_list, seq_order=seq_order)
             data_iter = _build_mapping_iter(
@@ -454,11 +458,13 @@ class PostprocessingDataset(CachedDataset2):
         assert len(feeder_to_worker_conns) == self._num_workers
 
         quit_event = threading.Event()
+        init_seq_order_done_event = threading.Event()
         dataset_thread = threading.Thread(
             target=self._init_seq_order_and_distribute_seqs_to_children,
             kwargs={
                 "epoch": epoch,
                 "quit_event": quit_event,
+                "init_seq_order_done_event": init_seq_order_done_event,
                 "seq_list": seq_list,
                 "seq_order": seq_order,
                 "worker_conns": feeder_to_worker_conns,
@@ -470,7 +476,10 @@ class PostprocessingDataset(CachedDataset2):
         # and so they must remain open.
         dataset_thread.start()
         data_iter = _MultiProcDataIter(
-            dataset_thread=dataset_thread, quit_event=quit_event, worker_procs=self._worker_procs
+            dataset_thread=dataset_thread,
+            quit_event=quit_event,
+            init_seq_order_done_event=init_seq_order_done_event,
+            worker_procs=self._worker_procs,
         )
         return data_iter
 
@@ -479,6 +488,7 @@ class PostprocessingDataset(CachedDataset2):
         *,
         epoch: int,
         quit_event: threading.Event,
+        init_seq_order_done_event: threading.Event,
         seq_list: Optional[List[str]] = None,
         seq_order: Optional[List[int]] = None,
         worker_conns: Sequence[mpConnection],
@@ -513,7 +523,11 @@ class PostprocessingDataset(CachedDataset2):
         # Lock ensures that only one thread at a time accesses the wrapped dataset.
         # This protects against issues while moving from one epoch to the next.
         with self._dataset_lock:
-            self._dataset.init_seq_order(epoch=epoch, seq_list=seq_list, seq_order=seq_order)
+            try:
+                self._dataset.init_seq_order(epoch=epoch, seq_list=seq_list, seq_order=seq_order)
+            finally:
+                # also on exception, the main thread must not wait forever
+                init_seq_order_done_event.set()
             data_iter = _iterate_dataset(self._dataset, in_tensor_dict_template=self._in_tensor_dict_template)
             data_iter = enumerate(data_iter)
 
@@ -684,10 +698,16 @@ class _MultiProcDataIter:
     """
 
     def __init__(
-        self, *, dataset_thread: threading.Thread, quit_event: threading.Event, worker_procs: List[_WorkerProcParent]
+        self,
+        *,
+        dataset_thread: threading.Thread,
+        quit_event: threading.Event,
+        init_seq_order_done_event: threading.Event,
+        worker_procs: List[_WorkerProcParent],
     ):
         self.dataset_thread = dataset_thread
         self.quit_event = quit_event
+        self.init_seq_order_done_event = init_seq_order_done_event
         assert len(worker_procs) > 0
         self.worker_procs = worker_procs
 
@@ -717,6 +737,13 @@ class _MultiProcDataIter:
         # when we reach this point, all workers are exhausted and we stop
         self.stop()
         raise StopIteration
+
+    def wait_for_dataset_init_seq_order(self):
+        """
+        Wait until the dataset thread has called init_seq_order on the wrapped dataset.
+        """
+        while not self.init_seq_order_done_event.wait(timeout=1.0):
+            assert self.dataset_thread.is_alive(), "dataset thread died before init_seq_order finished"
 
     def stop(self, *, join=True):
         """
