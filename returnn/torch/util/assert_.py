@@ -9,6 +9,8 @@ from textwrap import dedent
 from queue import Queue
 import torch
 
+from .capture_lock import capture_lock
+
 
 def assert_(cond: torch.Tensor, message: str, *, stop: bool = True):
     """
@@ -129,8 +131,9 @@ class _CudaAsyncWorker:
         while True:
             cond, message_str, stop, stream = self.queue.get()
 
-            # Use the actual Stream object context
-            with torch.cuda.stream(stream):
+            # Use the actual Stream object context.
+            # The pinned allocation must not overlap a CUDA graph capture (e.g. an assert from an eager warmup step).
+            with capture_lock, torch.cuda.stream(stream):
                 # Convert string to pinned tensor (Avoiding read-only NP view)
                 msg_bytes = list(message_str.encode("utf-8")) + [0]
                 msg_cpu = torch.tensor(msg_bytes, dtype=torch.uint8, pin_memory=True)

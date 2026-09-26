@@ -66,6 +66,7 @@ from torch.overrides import TorchFunctionMode
 
 from returnn.log import log
 from returnn.util.basic import CollectionReadCheckCovered
+from .capture_lock import cuda_graph_capture
 
 __all__ = ["OptimizerStep"]
 
@@ -321,7 +322,7 @@ class OptimizerStep:
 
     def _capture_graph(self, inputs: List[torch.Tensor]):
         graph = torch.cuda.CUDAGraph()
-        with torch.cuda.graph(graph):
+        with cuda_graph_capture(graph):
             if self._compile:
                 self._compiled_fn(inputs)
             else:
