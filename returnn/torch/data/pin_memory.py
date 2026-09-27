@@ -46,8 +46,11 @@ class PinMemoryDataLoader:
         self.data_loader = data_loader
         device = torch.device(device)
         assert device.type == "cuda", f"{self}: expected a CUDA device, got {device}"
-        with torch.cuda.device(device):  # a device without index means the current one
-            self.device = torch.device("cuda", torch.cuda.current_device())
+        if device.index is None:
+            # the torch stubs type the index as int, but it is None for e.g. torch.device("cuda")
+            # noinspection PyUnreachableCode
+            device = torch.device("cuda", torch.cuda.current_device())
+        self.device = device
         self.queue_size = queue_size
         self._cur_iter: Optional[weakref.ref[PinMemoryIter]] = None
 
