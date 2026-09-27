@@ -488,9 +488,19 @@ def get_instance(config: Optional[Config] = None) -> FileCache:
     Returns a file cache instance potentially initialized by the global config.
 
     Uses defaults if no global config is set.
+
+    The env var ``RETURNN_FILE_CACHE_OPTS`` (a JSON dict) overrides the config ``file_cache_opts``.
+    This allows to adapt the cache to the local disk of a machine
+    without touching the config (and thus its hash, e.g. in Sisyphus).
     """
     config = config or get_global_config(return_empty_if_none=True)
-    kwargs = config.typed_value("file_cache_opts") or {}
+    kwargs = dict(config.typed_value("file_cache_opts") or {})
+    env_opts = os.environ.get("RETURNN_FILE_CACHE_OPTS")
+    if env_opts:
+        env_kwargs = json.loads(env_opts)
+        assert isinstance(env_kwargs, dict), f"RETURNN_FILE_CACHE_OPTS must be a JSON dict, got {env_opts!r}"
+        print(f"FileCache: options from RETURNN_FILE_CACHE_OPTS: {env_kwargs}")
+        kwargs.update(env_kwargs)
     return FileCache(**kwargs)
 
 

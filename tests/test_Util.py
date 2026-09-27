@@ -1020,6 +1020,21 @@ def test_file_cache():
             break
 
 
+def test_file_cache_opts_from_env():
+    from returnn.config import Config
+    from returnn.util.file_cache import get_instance
+
+    cache_dir = _get_tmp_dir() + "/returnn/file_cache"
+    config = Config({"file_cache_opts": {"cache_directory": cache_dir, "cleanup_disk_usage_wanted_free_ratio": 0.1}})
+    os.environ["RETURNN_FILE_CACHE_OPTS"] = '{"cleanup_disk_usage_wanted_free_ratio": 0.4}'
+    try:
+        cache = get_instance(config)
+    finally:
+        del os.environ["RETURNN_FILE_CACHE_OPTS"]
+    assert cache.cache_directory == cache_dir
+    assert cache._cleanup_disk_usage_wanted_free_ratio == 0.4
+
+
 def test_py_baum_welch():
     from fsa_utils import py_baum_welch
     from returnn.util.fsa import FastBwFsaShared
