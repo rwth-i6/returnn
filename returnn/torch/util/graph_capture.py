@@ -46,7 +46,7 @@ stream discipline and grad buffers (:func:`run_train_step`).
 
 from __future__ import annotations
 from typing import Optional, Union, Any, Callable, Dict, List, Tuple
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
 import gc
 import os
 import numpy
@@ -1193,7 +1193,8 @@ class GraphCapturedTrainStep:
             gc.collect()
             torch.cuda.empty_cache()
             raws = [p.raw_tensor for p in self._rf_params]
-            with _allow_non_fake_inputs():
+            # the first call traces and compiles, its execution is thrown away and leaves no trace on the state
+            with self._training_state_preserved(), _allow_non_fake_inputs():
                 outs = self._compiled_fn(self._compiled_call_args(raws))
                 if self._partitioned:
                     # the bwd graph compiles on the first backward
@@ -1222,12 +1223,15 @@ class GraphCapturedTrainStep:
         compiled = self._ensure_compiled()
         raws = [p.raw_tensor for p in self._rf_params]
         self._log_misaligned_inputs(raws)
-        # plain warm run (in partitioned mode incl. backward: autotune + workspaces)
-        outs = compiled(self._compiled_call_args(raws))
-        if self._partitioned:
-            for p in self._grad_params:
-                p.grad.zero_()
-            outs[0].backward()
+        # plain warm run (in partitioned mode incl. backward: autotune + workspaces);
+        # with the optimizer outside the graph the replay after the capture is the real step,
+        # so this run leaves no trace on the model state either
+        with self._training_state_preserved() if self._post_step is None else nullcontext():
+            outs = compiled(self._compiled_call_args(raws))
+            if self._partitioned:
+                for p in self._grad_params:
+                    p.grad.zero_()
+                outs[0].backward()
         first_ctx = None
         if self._post_step is not None:
             # the first optimizer update is this real one on the warm run's grads, eagerly:

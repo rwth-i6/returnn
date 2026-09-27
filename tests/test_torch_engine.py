@@ -1597,14 +1597,15 @@ def _build_cuda_graph_train_config_and_dataset(
         )
     )
     if cuda_graph:
-        config.typed_dict["torch_cuda_graph"] = dict(
-            batch_size_bound=10,
-            dim_capacity={"data": 100, "classes": 100},
-            capture_optimizer=not optimizer_step,
-            **({"warmup_steps": warmup_steps} if warmup_steps is not None else {}),
-            **({"compile": True} if compile_ else {}),
-            **(graph_opts or {}),
+        opts = dict(
+            batch_size_bound=10, dim_capacity={"data": 100, "classes": 100}, capture_optimizer=not optimizer_step
         )
+        if warmup_steps is not None:
+            opts["warmup_steps"] = warmup_steps
+        if compile_:
+            opts["compile"] = True
+        opts.update(graph_opts or {})
+        config.typed_dict["torch_cuda_graph"] = opts
     if optimizer_step:
         config.typed_dict["torch_optimizer_step"] = {}
     dataset = init_dataset({"class": "Task12AXDataset", "num_seqs": 100, "name": "train", "fixed_random_seed": 1})
@@ -1633,6 +1634,7 @@ def _run_cuda_graph_train(
         graph_opts=graph_opts,
         count_steps=count_steps,
     )
+    captures_optimizer = cuda_graph and config.typed_dict["torch_cuda_graph"]["capture_optimizer"]
     with global_config_ctx(config):
         engine = Engine(config=config)
         engine.init_train_from_config(train_data=dataset)
@@ -1648,7 +1650,7 @@ def _run_cuda_graph_train(
         if cuda_graph:
             assert engine._graph_capture is not None
             assert engine._graph_capture._graph is not None, "graph never captured"
-            assert engine._graph_capture.captures_optimizer == (not optimizer_step)
+            assert engine._graph_capture.captures_optimizer == captures_optimizer
             # the cached reduction of the error measure must be a graph output, refreshed by every replay,
             # not an eager reduction from the first readout, which every later replay would repeat
             fer = engine._graph_capture._ctx.losses["fer"]
@@ -1658,7 +1660,7 @@ def _run_cuda_graph_train(
             assert engine._updater._optimizer_step._graph is not None, "optimizer step never captured"
         for param_group in engine._updater.optimizer.param_groups:
             lr = param_group["lr"]  # device-tensor LR input of the captured optimizer
-            if cuda_graph or optimizer_step:
+            if captures_optimizer or optimizer_step:
                 assert isinstance(lr, torch.Tensor) and lr.is_cuda
             assert float(lr) > 1e-3  # the per-step schedule advanced it
         for name, p in engine._pt_model.named_parameters():
@@ -1886,11 +1888,17 @@ def test_torch_engine_cuda_graph_train():
 
 def test_torch_engine_cuda_graph_warm_runs_keep_state():
     """
-    The warm runs before the capture only warm the kernels: the model's buffers and auxiliary parameters
-    (a step counter here, running statistics in a real model) are back afterwards,
-    so the model sees every batch exactly once.
+    The runs which only warm the kernels or trace the compiled step leave no trace on the model:
+    its buffers and auxiliary parameters (a step counter here, running statistics in a real model)
+    are back afterwards, so the model sees every batch exactly once,
+    with the optimizer in-graph (the first warm run is the real step) and outside it (the replay is).
     """
-    _run_cuda_graph_train(compile_=False, count_steps=True)
+    for compile_ in (False, True):
+        for capture_optimizer in (True, False):
+            graph_opts = {"capture_optimizer": capture_optimizer}
+            if compile_:
+                graph_opts["debug_aot_eager"] = True
+            _run_cuda_graph_train(compile_=compile_, count_steps=True, graph_opts=graph_opts)
 
 
 def test_torch_engine_cuda_graph_compile_train():
