@@ -1094,10 +1094,11 @@ class Engine(EngineBase):
             loader_opts.get("pin_memory")
             and loader_opts.get("num_workers", 1) > 0
             and str(self._device).startswith("cuda")
-            and (self._graph_capture_opts is not None or self.config.typed_value("torch_optimizer_step") is not None)
         ):
             # The DataLoader would pin in its own thread, also during a CUDA graph capture,
             # which invalidates the capture. Pin in our own thread instead, which waits for the captures.
+            # Always, not only with torch_cuda_graph / torch_optimizer_step configured:
+            # one code path, same speed as the DataLoader pinning.
             # (With num_workers 0, the DataLoader pins in the main thread, which is fine.)
             loader_opts = loader_opts.copy()
             loader_opts.pop("pin_memory")

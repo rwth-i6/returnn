@@ -2459,10 +2459,12 @@ def test_pin_memory_capture_overlap_model_and_optimizer_step():
     assert n == 3
 
 
-def test_pin_memory_engine_batches_unchanged():
+def _check_pin_memory_engine_batches_unchanged(*, optimizer_step: bool, num_workers: int = 1):
     """
-    Engine with pin_memory and a CUDA graph capture: the RETURNN pinning thread instead of the DataLoader one,
-    same batches (tensors, lengths, tags, order) as the unwrapped DataLoader
+    Engine with pin_memory: with num_workers > 0 the RETURNN pinning thread instead of the DataLoader one,
+    with or without a CUDA graph capture configured,
+    same batches (tensors, lengths, tags, order) as the unwrapped DataLoader;
+    then one training epoch
     """
     from returnn.torch.data.pin_memory import PinMemoryDataLoader
 
@@ -2477,20 +2479,26 @@ def test_pin_memory_engine_batches_unchanged():
             train_step=TrainTestModel.train_step,
             batch_size=100,
             max_seqs=10,
+            num_epochs=1,
             optimizer={"class": "adamw", "capturable": True},
-            torch_optimizer_step={},
-            torch_dataloader_opts={"num_workers": 1, "pin_memory": True},
+            torch_dataloader_opts={"num_workers": num_workers, "pin_memory": True},
         )
     )
+    if optimizer_step:
+        config.typed_dict["torch_optimizer_step"] = {}
     dataset = init_dataset({"class": "Task12AXDataset", "num_seqs": 100, "name": "train", "fixed_random_seed": 1})
     dataset.init_seq_order(epoch=1)
     with global_config_ctx(config):
         engine = Engine(config=config)
         engine.init_train_from_config(train_data=dataset)
         loader = engine._train_dataloader
+        if num_workers == 0:  # the DataLoader pins in the main thread, unchanged
+            assert isinstance(loader, torch.utils.data.DataLoader) and loader.pin_memory
+            return
         assert isinstance(loader, PinMemoryDataLoader) and not loader.data_loader.pin_memory
         pinned = list(loader)
         plain = list(loader.data_loader)
+        engine.train()
     assert len(pinned) == len(plain) > 1
     for batch, ref in zip(pinned, plain):
         assert set(batch) == set(ref)
@@ -2503,6 +2511,21 @@ def test_pin_memory_engine_batches_unchanged():
                 assert v.dtype == v_ref.dtype and numpy.array_equal(v, v_ref), k
             else:
                 assert v == v_ref, k
+
+
+def test_pin_memory_engine_batches_unchanged():
+    """no CUDA graph capture configured: also the RETURNN pinning thread"""
+    _check_pin_memory_engine_batches_unchanged(optimizer_step=False)
+
+
+def test_pin_memory_engine_batches_unchanged_optimizer_step():
+    """with the separately captured optimizer step"""
+    _check_pin_memory_engine_batches_unchanged(optimizer_step=True)
+
+
+def test_pin_memory_engine_no_workers():
+    """num_workers 0: the plain DataLoader, which pins in the main thread"""
+    _check_pin_memory_engine_batches_unchanged(optimizer_step=False, num_workers=0)
 
 
 if __name__ == "__main__":

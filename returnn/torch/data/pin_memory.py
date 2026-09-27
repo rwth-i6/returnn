@@ -17,6 +17,9 @@ and while releasing its reference to a handed-over batch,
 which every capture holds for the whole capture.
 So pinning waits for a capture (and a capture waits for the current pinning),
 but runs concurrently with the ordinary steps (graph replays).
+
+The torch engine uses this for every DataLoader with ``pin_memory=True`` and ``num_workers > 0``
+on a CUDA device, with or without captures.
 """
 
 from __future__ import annotations
