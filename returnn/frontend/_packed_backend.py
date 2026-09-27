@@ -3825,6 +3825,8 @@ class PackedBackend(Backend[PackedRawTensor]):
                         else None
                     ),
                 )
+                if isinstance(value, Tensor) and set(value.dims) & set(helper.orig_dims):
+                    value = _pack_like(value, helper)
                 if pad_l:
                     # global shift by pad_l (seq starts stay fixed, see the docstring),
                     # then everything that is not shifted content gets the pad value
