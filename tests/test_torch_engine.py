@@ -2190,6 +2190,22 @@ def test_pin_memory_iter_release_after_handoff():
     assert list(it) == []
 
 
+def test_pin_memory_iter_num_threads():
+    """the pin thread uses one intra-op thread, the consumer thread keeps its setting"""
+    if not torch.cuda.is_available():
+        raise unittest.SkipTest("CUDA not available")
+    num_threads_main = torch.get_num_threads()
+    num_threads_pin = []
+
+    def _src():
+        num_threads_pin.append(torch.get_num_threads())  # runs in the pin thread
+        yield {"data": torch.zeros(2)}
+
+    assert len(list(_pin_memory_iter(_src()))) == 1
+    assert num_threads_pin == [1]
+    assert torch.get_num_threads() == num_threads_main
+
+
 def test_pin_memory_iter_exception():
     """an exception of the source is re-raised in the consumer, after the batches before it"""
     if not torch.cuda.is_available():
