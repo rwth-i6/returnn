@@ -1549,6 +1549,9 @@ def _build_cuda_graph_train_config_and_dataset(
         logits = model.out(x)
         loss = rf.cross_entropy(target=classes, estimated=logits, estimated_type="logits", axis=model.out_dim)
         loss.mark_as_loss("ce")
+        # an error measure is not part of the total loss, its reduction must be recorded in the step as well
+        frame_err = rf.cast(rf.reduce_argmax(logits, axis=model.out_dim) != classes, "float32")
+        frame_err.mark_as_loss("fer", as_error=True)
 
     def _dyn_lr(*, global_train_step: int, learning_rate: float, **_kwargs) -> float:
         # per-step LR schedule: under capture_optimizer this exercises the device-tensor LR input
@@ -1620,6 +1623,11 @@ def _run_cuda_graph_train(
             assert engine._graph_capture is not None
             assert engine._graph_capture._graph is not None, "graph never captured"
             assert engine._graph_capture.captures_optimizer == (not optimizer_step)
+            # the cached reduction of the error measure must be a graph output, refreshed by every replay,
+            # not an eager reduction from the first readout, which every later replay would repeat
+            fer = engine._graph_capture._ctx.losses["fer"]
+            fresh = rf.reduce_sum(fer.loss, axis=fer.loss.dims) if fer.loss.dims else fer.loss
+            torch.testing.assert_close(fer.get_summed_loss().raw_tensor, fresh.raw_tensor)
         if optimizer_step:
             assert engine._updater._optimizer_step._graph is not None, "optimizer step never captured"
         for param_group in engine._updater.optimizer.param_groups:

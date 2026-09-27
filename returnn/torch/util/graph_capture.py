@@ -797,6 +797,19 @@ class GraphCapturedTrainStep:
         """whether the optimizer step (incl grad clip) is captured in-graph (opts "capture_optimizer")"""
         return self._post_step is not None
 
+    @staticmethod
+    def _reduce_all_losses(ctx: RunCtx) -> None:
+        """
+        Reduce every loss inside the step, incl. the error measures and zero-scaled losses
+        which the total loss leaves out. The engine reads the summed losses after the step,
+        and Loss caches its reduction on first use: computed there, it would be an eager op
+        outside the graph, stale on every replay, and after a dynamic warmup step it would run
+        after the dims went back to their bound sizes.
+        """
+        for loss in ctx.losses.values():
+            loss.get_summed_loss()
+            loss.get_inv_norm_factor()
+
     def _step(self, *, post_step: bool = True) -> RunCtx:
         for p in self._grad_params:
             p.grad.zero_()  # in-graph
@@ -805,6 +818,7 @@ class GraphCapturedTrainStep:
             self._run_step(extern_data, step=self._step_t)
             ctx = rf.get_run_ctx()
             total_loss = ctx.total_loss()
+            self._reduce_all_losses(ctx)
         total_loss.raw_tensor.backward()
         if post_step and self._post_step is not None:
             self._post_step()  # in-graph: grad clip + optimizer step
@@ -839,6 +853,7 @@ class GraphCapturedTrainStep:
             self._run_step(extern_data, step=global_train_step)
             ctx = rf.get_run_ctx()
             total_loss = ctx.total_loss()
+            self._reduce_all_losses(ctx)
             total_loss.raw_tensor.backward()
             if self._post_step is not None:
                 self._post_step()
