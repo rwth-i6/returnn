@@ -427,6 +427,17 @@ def test_loss_normalized():
     run_model_torch_train(extern_data, lambda *, epoch, step: rf.Module(), _train_step)
 
 
+def test_loss_inv_norm_factor_cached():
+    from returnn.frontend.run_ctx import Loss
+
+    batch = Dim(2, name="batch")
+    loss = Loss(loss=rf.ones([batch]), name="loss")
+    assert loss.get_inv_norm_factor() == 2
+    # like the bound sizes put back after a dynamic warmup step under graph capture
+    batch.size = 8
+    assert loss.get_inv_norm_factor() == 2
+
+
 def test_loss_normalization():
     time_dim = Dim(Tensor("time", [batch_dim], dtype="int32"))
     in_dim = Dim(7, name="in")

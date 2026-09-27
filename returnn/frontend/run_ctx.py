@@ -452,6 +452,7 @@ class Loss:
 
     _summed_loss_cached: Optional[Tensor] = None
     _mean_loss_cached: Optional[Tensor] = None
+    _inv_norm_factor_cached: Optional[Union[int, Tensor]] = None
 
     def get_summed_loss(self) -> Tensor:
         """
@@ -485,13 +486,20 @@ class Loss:
 
     def get_inv_norm_factor(self) -> Union[int, Tensor]:
         """
-        :return: inverse norm factor (scalar)
+        :return: inverse norm factor (scalar), cached like the summed loss,
+            so it stays the one computed while the loss dims had their sizes of this step
         """
+        if self._inv_norm_factor_cached is not None:
+            return self._inv_norm_factor_cached
         if self.custom_inv_norm_factor is not None:
             if self.custom_inv_norm_factor.dims:
-                return rf.reduce_sum(self.custom_inv_norm_factor, axis=self.custom_inv_norm_factor.dims)
-            return self.custom_inv_norm_factor
-        return rf.num_elements_of_shape(self.loss.dims, device=self.loss.device)
+                inv_norm = rf.reduce_sum(self.custom_inv_norm_factor, axis=self.custom_inv_norm_factor.dims)
+            else:
+                inv_norm = self.custom_inv_norm_factor
+        else:
+            inv_norm = rf.num_elements_of_shape(self.loss.dims, device=self.loss.device)
+        self._inv_norm_factor_cached = inv_norm
+        return inv_norm
 
     def get_scaled_reduced_loss(self) -> Tensor:
         """
