@@ -1656,6 +1656,10 @@ def _run_cuda_graph_train(
             assert float(lr) > 1e-3  # the per-step schedule advanced it
         for name, p in engine._pt_model.named_parameters():
             assert torch.isfinite(p).all(), f"non-finite param {name}"
+        if cuda_graph:
+            # the run end must destroy the graph, else a NCCL comm it captured never shuts down
+            engine.finalize()
+            assert engine._graph_capture is None
     return engine
 
 
