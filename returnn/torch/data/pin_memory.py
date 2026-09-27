@@ -37,11 +37,15 @@ class PinMemoryDataLoader:
     iterating gives the same batches, with all tensors pinned, see :class:`PinMemoryIter`.
     """
 
-    def __init__(self, data_loader: Iterable[Any], *, device: Union[str, torch.device], queue_size: int = 2):
+    def __init__(
+        self, data_loader: Iterable[Any], *, device: Union[str, torch.device], queue_size: Optional[int] = None
+    ):
         """
         :param data_loader: e.g. a DataLoader with ``pin_memory=False``
         :param device: CUDA device the batches are copied to
-        :param queue_size: number of pinned batches the thread prepares ahead of the consumer
+        :param queue_size: number of pinned batches the thread prepares ahead of the consumer.
+            Default: as many as the DataLoader has in flight (``prefetch_factor * num_workers``),
+            which is what its own pinning can prepare ahead, but at least 2
         """
         self.data_loader = data_loader
         device = torch.device(device)
@@ -51,6 +55,10 @@ class PinMemoryDataLoader:
         if device.index is None:
             device = torch.device("cuda", torch.cuda.current_device())
         self.device = device
+        if queue_size is None:
+            num_workers = getattr(data_loader, "num_workers", 0)
+            prefetch_factor = getattr(data_loader, "prefetch_factor", None)
+            queue_size = max(2, (prefetch_factor or 0) * num_workers)
         self.queue_size = queue_size
         self._cur_iter: Optional[weakref.ref[PinMemoryIter]] = None
 
