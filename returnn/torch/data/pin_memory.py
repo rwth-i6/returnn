@@ -24,6 +24,7 @@ from typing import Optional, Union, Any, Iterable, Iterator, Tuple
 import threading
 import queue
 import weakref
+import tree
 import torch
 
 from returnn.torch.util.capture_lock import capture_lock
@@ -173,16 +174,12 @@ def _pin_batch(batch: Any) -> Any:
         (a pinned host allocation during a CUDA graph capture invalidates the capture)
     """
     with capture_lock:
-        return _pin(batch)
+        return tree.map_structure(_pin, batch)
 
 
 def _pin(x: Any) -> Any:
     if isinstance(x, torch.Tensor):
         return x if x.is_pinned() else x.pin_memory()
-    if type(x) is dict:
-        return {k: _pin(v) for k, v in x.items()}
-    if type(x) in (list, tuple):
-        return type(x)(_pin(v) for v in x)
     return x  # e.g. numpy arrays (strings), Python scalars: as they are, as in the DataLoader pinning
 
 
