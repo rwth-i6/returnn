@@ -1531,7 +1531,13 @@ def _build_cuda_graph_train_config_and_dataset(
             device="gpu",
             extern_data={
                 "data": {"dims": [batch_dim, time_dim, feat_dim], "dtype": "float32"},
-                "classes": {"dims": [batch_dim, time_dim], "dtype": "int32", "sparse_dim": classes_dim},
+                # targets are declared like this in real configs, the eager warmup step must keep them
+                "classes": {
+                    "dims": [batch_dim, time_dim],
+                    "dtype": "int32",
+                    "sparse_dim": classes_dim,
+                    "available_for_inference": False,
+                },
             },
             get_model=_get_model,
             train_step=_train_step,
