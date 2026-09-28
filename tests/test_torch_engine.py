@@ -2067,9 +2067,12 @@ def _pin_memory_iter(src, **kwargs):
 
 
 def test_pin_memory_iter_batches_unchanged():
-    """same batches in the same order, all tensors pinned, other values as they are"""
+    """same batches in the same order, all tensors pinned (also nested), other values as they are"""
+    from collections import namedtuple
+
     if not torch.cuda.is_available():
         raise unittest.SkipTest("CUDA not available")
+    _Pair = namedtuple("_Pair", ["a", "b"])
     gen = torch.Generator().manual_seed(0)
     batches = [
         {
@@ -2078,16 +2081,20 @@ def test_pin_memory_iter_batches_unchanged():
             "seq_tag": numpy.array([f"seq-{i}-{j}" for j in range(3)]),
             "num_seqs": 100,
             "list": [torch.full((2,), i)],
+            "nested": {"pair": _Pair(torch.full((3,), i), "x")},
         }
         for i in range(10)
     ]
     out = list(_pin_memory_iter(batches))
     assert len(out) == len(batches)
     for ref, batch in zip(batches, out):
-        assert set(batch) == set(ref)
+        assert list(batch) == list(ref)  # same keys, same order
         for k in ["data", "data:seq_len"]:
             assert batch[k].is_pinned() and batch[k].dtype == ref[k].dtype and torch.equal(batch[k], ref[k])
         assert batch["list"][0].is_pinned() and torch.equal(batch["list"][0], ref["list"][0])
+        pair = batch["nested"]["pair"]
+        assert type(pair) is _Pair and pair.b == "x"
+        assert pair.a.is_pinned() and torch.equal(pair.a, ref["nested"]["pair"].a)
         assert batch["seq_tag"] is ref["seq_tag"] and batch["num_seqs"] == 100
 
 
