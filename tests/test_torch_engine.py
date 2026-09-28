@@ -2244,6 +2244,27 @@ def test_pin_memory_iter_exception():
         raise AssertionError("expected StopIteration after the error")
 
 
+def test_pin_memory_data_loader_queue_size():
+    """default queue size: as many batches as the DataLoader has in flight, at least 2"""
+    from returnn.torch.data.pin_memory import PinMemoryDataLoader
+
+    if not torch.cuda.is_available():
+        raise unittest.SkipTest("CUDA not available")
+    batches = [{"data": torch.full((2,), i)} for i in range(5)]
+
+    def _loader(**opts):
+        return torch.utils.data.DataLoader(batches, batch_size=None, **opts)
+
+    assert PinMemoryDataLoader(_loader(num_workers=3, prefetch_factor=4), device="cuda").queue_size == 12
+    assert PinMemoryDataLoader(_loader(num_workers=1), device="cuda").queue_size == 2  # default prefetch_factor 2
+    assert PinMemoryDataLoader(_loader(num_workers=0), device="cuda").queue_size == 2
+    assert PinMemoryDataLoader(_loader(num_workers=3), device="cuda", queue_size=1).queue_size == 1
+    loader = PinMemoryDataLoader(_loader(num_workers=0), device="cuda", queue_size=3)
+    it = iter(loader)
+    assert it._queue.maxsize == 3
+    assert [float(b["data"][0]) for b in it] == [0.0, 1.0, 2.0, 3.0, 4.0]
+
+
 def test_pin_memory_iter_shutdown():
     """
     The thread stops: at the end, on close() of an unfinished iterator (thread blocked on the full queue),
