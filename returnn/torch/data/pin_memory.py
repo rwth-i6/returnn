@@ -140,6 +140,9 @@ _PollInterval = 0.1  # seconds, for the stop checks of the blocking queue ops
 def _pin_loop(*, src_iter: Iterator[Any], device: torch.device, out_queue: queue.Queue, stop_event: threading.Event):
     # the thread's current device, else pinning would create a CUDA context on the default device
     torch.cuda.set_device(device)
+    # thread-local: the copies into pinned memory use one CPU thread, not all intra-op threads
+    # (which would compete with the main thread), as in the DataLoader pin thread
+    torch.set_num_threads(1)
     while not stop_event.is_set():
         try:
             batch = next(src_iter)
