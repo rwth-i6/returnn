@@ -46,6 +46,7 @@ class PinMemoryDataLoader:
         self.data_loader = data_loader
         device = torch.device(device)
         assert device.type == "cuda", f"{self}: expected a CUDA device, got {device}"
+        # noinspection PyUnreachableCode
         if device.index is None:
             device = torch.device("cuda", torch.cuda.current_device())
         self.device = device
