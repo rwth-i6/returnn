@@ -1185,14 +1185,15 @@ class GraphCapturedTrainStep:
                 p.grad.zero_()
             outs[0].backward()
         first_ctx = None
-        if self._post_step is not None:
+        post_step = self._post_step
+        if post_step is not None:
             # the first optimizer update is this real one on the warm run's grads, eagerly:
             # it creates the lazy optimizer state as the optimizer defines it
             # (the state is a graph input of the captured step), no zeroed stand-in;
             # the capture records this batch but its replay is skipped, see run_train_step
             if not self._partitioned:
                 self._bind_grads(raws, outs)
-            self._post_step()
+            post_step()
             first_ctx = self._build_result_ctx(outs)
             if not self._partitioned:
                 for r in raws:
@@ -1214,8 +1215,8 @@ class GraphCapturedTrainStep:
             else:
                 # host-side during capture: the grads are stable graph outputs
                 self._bind_grads(raws, outs)
-            if self._post_step is not None:
-                self._post_step()  # in-graph: grad clip + optimizer step
+            if post_step is not None:
+                post_step()  # in-graph: grad clip + optimizer step
         self._ctx = self._build_result_ctx(outs)
         return first_ctx
 
