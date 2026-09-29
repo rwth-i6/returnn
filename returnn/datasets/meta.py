@@ -481,6 +481,10 @@ class MetaDataset(CachedDataset2):
             else True
         )
 
+    def supports_predefined_seq_order(self) -> bool:
+        """:return: whether this dataset supports a predefined seq order, which it applies itself"""
+        return True
+
     def get_current_seq_order(self):
         """
         :return: current seq order for the current epoch, after self.init_seq_order was called.

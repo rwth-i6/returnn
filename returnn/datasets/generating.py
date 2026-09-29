@@ -1169,6 +1169,10 @@ class StaticDataset(CachedDataset2):
         """supports sorting"""
         return True
 
+    def supports_predefined_seq_order(self) -> bool:
+        """supports a predefined seq order"""
+        return True
+
     def _collect_single_seq(self, seq_idx: int) -> Optional[DatasetSeq]:
         if seq_idx >= len(self._seq_order):
             return None
