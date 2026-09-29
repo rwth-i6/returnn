@@ -30,6 +30,7 @@ except ImportError:  # pragma: no cover
 if triton is not None:
     _NEG_INF = tl.constexpr(-3.4028234663852886e38)
 
+    # noinspection PyPep8Naming
     @triton.jit
     def _cell_stats_kernel(
         logits_ptr,
@@ -65,6 +66,7 @@ if triton is not None:
         tl.store(blank_lp_ptr + cell, blank_logit - lse)
         tl.store(label_lp_ptr + cell, label_logit - lse)
 
+    # noinspection PyPep8Naming
     @triton.jit
     def _cell_grad_kernel(
         logits_ptr,
@@ -97,7 +99,7 @@ if triton is not None:
 
 
 if triton is not None:
-
+    # noinspection PyPep8Naming
     @triton.jit
     def _forward_scan_kernel(
         blank_lp_ptr,
@@ -148,6 +150,7 @@ if triton is not None:
         final = tl.load(row + max_frames * frame_stride, mask=in_block, other=0.0)
         tl.store(total_ptr + seq, tl.sum(tl.where(offs == label_len, final, 0.0), axis=0))
 
+    # noinspection PyPep8Naming
     @triton.jit
     def _backward_scan_kernel(
         blank_lp_ptr,
@@ -314,6 +317,7 @@ def cell_stats(logits: torch.Tensor, next_label: torch.Tensor, blank: int) -> Tu
     assert logits.is_contiguous(), "monotonic rnnt: the cell kernels address the logits row by row"
     cells, vocab = logits.shape
     out = [torch.empty(cells, dtype=torch.float32, device=logits.device) for _ in range(3)]
+    # noinspection PyArgumentList
     _cell_stats_kernel[(cells,)](logits, next_label, out[0], out[1], out[2], vocab, blank, BLOCK=1024, num_warps=8)
     return tuple(out)
 
@@ -338,6 +342,7 @@ def cell_grad(
     assert logits.is_cuda and triton is not None, "monotonic rnnt: the cell kernels need cuda and triton"
     cells, vocab = logits.shape
     out = torch.empty_like(logits, dtype=torch.float32)
+    # noinspection PyArgumentList
     _cell_grad_kernel[(cells,)](
         logits, next_label, lse, blank_grad, label_grad, out, vocab, blank, BLOCK=1024, num_warps=8
     )
