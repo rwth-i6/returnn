@@ -51,7 +51,7 @@ if triton is not None:
         for start in range(0, vocab, BLOCK):
             offs = start + tl.arange(0, BLOCK)
             mask = offs < vocab
-            x = tl.load(logits_ptr + base + offs, mask=mask, other=_NEG_INF)
+            x = tl.load(logits_ptr + base + offs, mask=mask, other=_NEG_INF).to(tl.float32)
             block_max = tl.max(x, axis=0)
             new_max = tl.maximum(running_max, block_max)
             running_sum = running_sum * tl.exp(running_max - new_max) + tl.sum(
@@ -61,8 +61,8 @@ if triton is not None:
         # a row of minus infinity has nothing to normalize, 0 keeps its log probabilities at minus infinity
         lse = tl.where(running_sum > 0.0, running_max + tl.log(running_sum), 0.0)
         label = tl.load(label_ptr + cell)
-        blank_logit = tl.load(logits_ptr + base + blank)
-        label_logit = tl.load(logits_ptr + base + label)
+        blank_logit = tl.load(logits_ptr + base + blank).to(tl.float32)
+        label_logit = tl.load(logits_ptr + base + label).to(tl.float32)
         tl.store(lse_ptr + cell, lse)
         tl.store(blank_lp_ptr + cell, blank_logit - lse)
         tl.store(label_lp_ptr + cell, label_logit - lse)
@@ -91,12 +91,12 @@ if triton is not None:
         for start in range(0, vocab, BLOCK):
             offs = start + tl.arange(0, BLOCK)
             mask = offs < vocab
-            x = tl.load(logits_ptr + base + offs, mask=mask, other=float("-inf"))
+            x = tl.load(logits_ptr + base + offs, mask=mask, other=float("-inf")).to(tl.float32)
             # a cell carrying no posterior contributes nothing, and its row may not even be normalizable
             grad = tl.where(total == 0.0, 0.0, total * tl.exp(x - lse))
             grad = tl.where(offs == blank, grad - blank_grad, grad)
             grad = tl.where(offs == label, grad - label_grad, grad)
-            tl.store(out_ptr + base + offs, grad, mask=mask)
+            tl.store(out_ptr + base + offs, grad.to(out_ptr.dtype.element_ty), mask=mask)
 
 
 if triton is not None:
@@ -342,7 +342,7 @@ def cell_grad(
     """
     assert logits.is_cuda and triton is not None, "monotonic rnnt: the cell kernels need cuda and triton"
     cells, vocab = logits.shape
-    out = torch.empty_like(logits, dtype=torch.float32)
+    out = torch.empty_like(logits)
     # noinspection PyArgumentList
     _cell_grad_kernel[(cells,)](
         logits, next_label, lse, blank_grad, label_grad, out, vocab, blank, BLOCK=1024, num_warps=8
