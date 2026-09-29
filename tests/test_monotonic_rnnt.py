@@ -167,7 +167,7 @@ def test_monotonic_rnnt_handles_degenerate_batches():
     torch.testing.assert_close(got.double(), want.double(), rtol=0, atol=1e-5)
 
 
-def test_cell_stats_normalizer_survives_a_block_of_minus_infinity():
+def test_cell_stats_normalizer_survives_minus_infinity():
     if not torch.cuda.is_available():
         import unittest
 
@@ -176,17 +176,21 @@ def test_cell_stats_normalizer_survives_a_block_of_minus_infinity():
 
     torch.manual_seed(2)
     vocab, blank = 1025, 0
-    logits = torch.randn(3, vocab, device="cuda")
+    logits = torch.randn(4, vocab, device="cuda")
     logits[1, :1024] = float("-inf")
-    next_label = torch.tensor([7, 1024, 3], dtype=torch.int64, device="cuda")
+    # A row without any finite logit has no probability mass, so its log probabilities are minus infinity, not nan.
+    logits[3] = float("-inf")
+    next_label = torch.tensor([7, 1024, 3, 5], dtype=torch.int64, device="cuda")
 
     lse, blank_lp, label_lp = cell_stats(logits, next_label, blank)
-    log_probs = torch.log_softmax(logits.double(), dim=-1)
-    want_lse = torch.logsumexp(logits.double(), dim=-1)
-    torch.testing.assert_close(lse.double(), want_lse, rtol=1e-5, atol=1e-5)
-    torch.testing.assert_close(blank_lp.double(), log_probs[:, blank], rtol=1e-5, atol=1e-5)
+    log_probs = torch.log_softmax(logits[:3].double(), dim=-1)
+    want_lse = torch.logsumexp(logits[:3].double(), dim=-1)
+    torch.testing.assert_close(lse[:3].double(), want_lse, rtol=1e-5, atol=1e-5)
+    torch.testing.assert_close(blank_lp[:3].double(), log_probs[:, blank], rtol=1e-5, atol=1e-5)
     rows = torch.arange(3, device="cuda")
-    torch.testing.assert_close(label_lp.double(), log_probs[rows, next_label], rtol=1e-5, atol=1e-5)
+    torch.testing.assert_close(label_lp[:3].double(), log_probs[rows, next_label[:3]], rtol=1e-5, atol=1e-5)
+    assert torch.isfinite(lse[3]), lse[3]
+    assert torch.isneginf(blank_lp[3]) and torch.isneginf(label_lp[3]), (blank_lp[3], label_lp[3])
 
 
 def test_monotonic_rnnt_traces_under_aot():
