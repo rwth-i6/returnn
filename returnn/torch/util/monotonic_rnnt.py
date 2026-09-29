@@ -132,7 +132,10 @@ def _forward_scores(
     for frame in range(max_frames):
         alpha_frames.append(alpha)
         emit = alpha + label_rows[frame]
-        updated = torch.logaddexp(alpha + blank_rows[frame], torch.cat([pad, emit[:, :-1]], dim=1))
+        # the floor keeps a dead edge finite, logaddexp of two minus infinities has a nan gradient
+        stay = (alpha + blank_rows[frame]).clamp(min=neg_inf)
+        move = torch.cat([pad, emit[:, :-1]], dim=1).clamp(min=neg_inf)
+        updated = torch.logaddexp(stay, move)
         updated = torch.where(valid, updated, torch.full_like(updated, neg_inf))
         alpha = torch.where((frame < frame_lens).unsqueeze(1), updated, alpha)
         total = torch.where((frame + 1) == frame_lens, torch.gather(alpha, 1, lens).squeeze(1), total)
@@ -256,7 +259,9 @@ def monotonic_rnnt_loss(
     else:
         offsets, _cells = _cell_offsets(frame_lens, label_lens)
         source = logits if logits.dtype in (torch.float32, torch.float64) else logits.float()
-        log_probs = torch.log_softmax(source, dim=-1)
+        # a row without any finite logit has no probability mass, its log probabilities are minus infinity, not nan
+        dead = torch.isneginf(source).all(dim=-1, keepdim=True)
+        log_probs = torch.log_softmax(source.masked_fill(dead, 0.0), dim=-1).masked_fill(dead, float("-inf"))
         blank_lp = log_probs[:, blank]
         label_lp = torch.gather(log_probs, 1, next_label.unsqueeze(1)).squeeze(1)
         index = _cell_index(offsets, label_lens, max_frames, max_prefix, logits.shape[0])
