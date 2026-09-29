@@ -191,21 +191,23 @@ def test_monotonic_rnnt_ignores_a_common_logit_offset():
     torch.testing.assert_close(results[1], results[0])
 
 
-def test_monotonic_rnnt_gradient_of_a_long_sequence():
+def test_monotonic_rnnt_gradient_with_a_large_log_likelihood():
     if not torch.cuda.is_available():
         import unittest
 
         raise unittest.SkipTest("no cuda")
-    frames, vocab = 512, 2048
-    x = torch.zeros(frames, vocab, device="cuda", requires_grad=True)
-    no_labels = torch.zeros((1, 0), dtype=torch.int32, device="cuda")
-    lens = (torch.tensor([frames], device="cuda"), torch.tensor([0], device="cuda"))
-    loss = monotonic_rnnt_loss(x, no_labels, *lens, blank=0, max_frames=frames)
-    loss.sum().backward()
-    # one alignment only, so every blank posterior is 1 and the gradient is the softmax minus the blank one hot
-    want = torch.full_like(x, 1 / vocab)
-    want[:, 0] -= 1
-    torch.testing.assert_close(x.grad, want, rtol=1e-4, atol=1e-5)
+    # a log likelihood far from zero, from a long sequence or from two alignments far below the best class
+    far = torch.tensor([-1e8, -1e8, 0.0]).repeat(4, 1)
+    for logits, labels, frames in ((torch.zeros(512, 2048), [], 512), (far, [1], 2)):
+        grads = []
+        for x in (logits.cuda(), logits.double()):
+            x = x.clone().requires_grad_()
+            targets = torch.tensor([labels], dtype=torch.int32, device=x.device)
+            lens = (torch.tensor([frames], device=x.device), torch.tensor([len(labels)], device=x.device))
+            loss = monotonic_rnnt_loss(x, targets, *lens, blank=0, max_frames=frames)
+            loss.sum().backward()
+            grads.append(x.grad.double().cpu())
+        torch.testing.assert_close(grads[0], grads[1], rtol=1e-4, atol=1e-5)
 
 
 def test_monotonic_rnnt_reads_strided_lengths():

@@ -229,10 +229,11 @@ if triton is not None:
             # every path leaves the frame by exactly one of its edges, so the edge scores sum to the total,
             # normalizing by their own sum cancels the drift between the separately accumulated alpha and beta
             top = tl.maximum(tl.max(tl.maximum(stay, move), axis=0), _NEG_INF)
-            mass = tl.sum(tl.exp(stay - top) + tl.exp(move - top), axis=0)
-            norm = tl.where(top > _NEG_INF, top + tl.log(mass), 0.0)
-            blank_post = tl.where(inside, tl.exp(stay - norm) * weight, 0.0)
-            label_post = tl.where(emits, tl.exp(move - norm) * weight, 0.0)
+            log_mass = tl.log(tl.sum(tl.exp(stay - top) + tl.exp(move - top), axis=0))
+            # the log mass stays apart from the shift, added to a large top it would round away
+            live = top > _NEG_INF
+            blank_post = tl.where(inside & live, tl.exp((stay - top) - log_mass) * weight, 0.0)
+            label_post = tl.where(emits & live, tl.exp((move - top) - log_mass) * weight, 0.0)
             tl.store(blank_grad_ptr + cell, blank_post, mask=inside)
             tl.store(label_grad_ptr + cell, label_post, mask=inside)
             updated = _log_add_exp(blank_lp + beta, label_lp + ahead, valid)
