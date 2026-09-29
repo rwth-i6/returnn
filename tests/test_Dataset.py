@@ -1799,6 +1799,31 @@ def test_PostprocessingDataset_pickle():
     compare_dataset_seqs(ds0_seqs, ds2_seqs)
 
 
+def test_Dataset_get_current_seq_order():
+    # Where the current seq order is known, get_current_seq_order reports it.
+    # Where it is not, it reads as OptionalNotImplementedError, so that callers can fall back.
+    from returnn.util.basic import OptionalNotImplementedError
+
+    static_opts = {
+        "class": "StaticDataset",
+        "data": [{"data": numpy.zeros((n, 3), dtype="float32")} for n in range(2, 7)],
+        "output_dim": {"data": (3, 2)},
+        "seq_ordering": "sorted_reverse",
+    }
+    static = init_dataset(static_opts)
+    static.init_seq_order(epoch=1)
+    assert list(static.get_current_seq_order()) == [4, 3, 2, 1, 0]
+
+    post = init_dataset({"class": "PostprocessingDataset", "dataset": static_opts, "map_seq_stream": _repeat2})
+    post.init_seq_order(epoch=1)
+    try:
+        post.get_current_seq_order()
+    except OptionalNotImplementedError:
+        pass
+    else:
+        raise AssertionError("expected OptionalNotImplementedError")
+
+
 def test_MultiEpochDataset():
     from returnn.datasets.meta import MultiEpochDataset
     from returnn.datasets.cached2 import CachedDataset2
