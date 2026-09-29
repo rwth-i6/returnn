@@ -227,6 +227,23 @@ def test_monotonic_rnnt_reads_strided_lengths():
     torch.testing.assert_close(results[0], results[1])
 
 
+def test_monotonic_rnnt_survives_a_dead_cell():
+    # the cell of frame 0 and prefix 1 lies on no alignment, so a row of minus infinity there changes nothing
+    logits = torch.zeros(3, 2, 3)
+    dead = logits.clone()
+    dead[0, 1] = float("-inf")
+    args = (torch.tensor([[1]]), torch.tensor([3]), torch.tensor([1]))
+    for device in ["cpu"] + (["cuda"] if torch.cuda.is_available() else []):
+        results = []
+        for x in (logits, dead):
+            x = x.reshape(-1, 3).to(device).requires_grad_()
+            loss = monotonic_rnnt_loss(x, *(a.to(device) for a in args), blank=0, max_frames=3)
+            loss.sum().backward()
+            results.append((loss.detach().cpu(), x.grad.cpu()))
+        torch.testing.assert_close(results[0][0], torch.tensor([9.0]).log())
+        torch.testing.assert_close(results[1], results[0])
+
+
 def test_monotonic_rnnt_handles_degenerate_batches():
     torch.manual_seed(3)
     vocab, blank = 6, 0
