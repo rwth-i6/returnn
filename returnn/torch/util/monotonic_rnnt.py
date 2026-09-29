@@ -21,7 +21,7 @@ different route it also checks the hand-written backward sweep.
 
 from __future__ import annotations
 
-from typing import Optional, Tuple
+from typing import Tuple
 
 import torch
 
@@ -274,7 +274,7 @@ def monotonic_rnnt_loss(
     label_lens: torch.Tensor,
     *,
     blank: int,
-    max_frames: Optional[int] = None,
+    max_frames: int,
 ) -> torch.Tensor:
     """
     Full-sum negative log likelihood of the monotonic transducer over a packed lattice.
@@ -284,17 +284,14 @@ def monotonic_rnnt_loss(
     :param frame_lens: [B] frames per sequence
     :param label_lens: [B] labels per sequence, at most the frame count
     :param blank: blank index
-    :param max_frames: frames the recursion runs over, the longest sequence of the batch by default.
-        A traced or captured step passes the declared capacity instead, since reading the batch's own
-        maximum is a host read.
+    :param max_frames: frames the recursion runs over, at least the longest sequence of the batch.
+        A static bound such as the declared capacity, since reading the batch's own maximum would be a host read.
     :return: [B] the negative log likelihood, zero where a sequence has no alignment
     """
     assert logits.dim() == 2, logits.shape
     if logits.shape[0] == 0:
         return logits.sum() * torch.zeros(frame_lens.shape[0], dtype=torch.float32, device=logits.device)
     logits = logits.contiguous()
-    if max_frames is None:
-        max_frames = int(frame_lens.max().item())
     max_prefix = int(labels.shape[1]) + 1
     next_label = next_label_per_cell(labels, frame_lens, label_lens, blank, logits.shape[0])
     if logits.is_cuda:
