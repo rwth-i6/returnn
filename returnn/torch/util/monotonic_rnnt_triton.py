@@ -194,7 +194,6 @@ if triton is not None:
         frame_lens_ptr,
         label_lens_ptr,
         alpha_ptr,
-        total_ptr,
         weight_ptr,
         beta_ptr,
         blank_grad_ptr,
@@ -209,7 +208,6 @@ if triton is not None:
         seq, offs, in_block, valid, label_len, frame_len, base, stride, lanes = _scan_preamble(
             offsets_ptr, frame_lens_ptr, label_lens_ptr, max_prefix, BLOCK
         )
-        norm = tl.load(total_ptr + seq)
         weight = tl.load(weight_ptr + seq)
         start = tl.where(offs == label_len, 0.0, _NEG_INF)
         row = beta_ptr + lanes
@@ -225,8 +223,16 @@ if triton is not None:
             label_lp = tl.load(label_lp_ptr + cell, mask=valid, other=_NEG_INF)
             alpha = tl.load(alpha_ptr + lanes + frame * frame_stride, mask=in_block, other=_NEG_INF)
             inside = valid & (frame < frame_len)
-            blank_post = tl.where(inside, tl.exp(alpha + blank_lp + beta - norm) * weight, 0.0)
-            label_post = tl.where(inside & (offs < label_len), tl.exp(alpha + label_lp + ahead - norm) * weight, 0.0)
+            emits = inside & (offs < label_len)
+            stay = tl.where(inside, alpha + blank_lp + beta, _NEG_INF)
+            move = tl.where(emits, alpha + label_lp + ahead, _NEG_INF)
+            # every path leaves the frame by exactly one of its edges, so the edge scores sum to the total,
+            # normalizing by their own sum cancels the drift between the separately accumulated alpha and beta
+            top = tl.maximum(tl.max(tl.maximum(stay, move), axis=0), _NEG_INF)
+            mass = tl.sum(tl.exp(stay - top) + tl.exp(move - top), axis=0)
+            norm = tl.where(top > _NEG_INF, top + tl.log(mass), 0.0)
+            blank_post = tl.where(inside, tl.exp(stay - norm) * weight, 0.0)
+            label_post = tl.where(emits, tl.exp(move - norm) * weight, 0.0)
             tl.store(blank_grad_ptr + cell, blank_post, mask=inside)
             tl.store(label_grad_ptr + cell, label_post, mask=inside)
             updated = _log_add_exp(blank_lp + beta, label_lp + ahead, valid)
@@ -292,7 +298,6 @@ def backward_scan(
     frame_lens: torch.Tensor,
     label_lens: torch.Tensor,
     alpha: torch.Tensor,
-    total: torch.Tensor,
     weight: torch.Tensor,
 ) -> Tuple[torch.Tensor, torch.Tensor]:
     """
@@ -302,7 +307,6 @@ def backward_scan(
     :param frame_lens: [B] frames per sequence
     :param label_lens: [B] labels per sequence
     :param alpha: [max_frames + 1, B, max_prefix] from :func:`forward_scan`
-    :param total: [B] log likelihood
     :param weight: [B] incoming gradient of the log likelihood
     :return: (blank gradient [cells], label gradient [cells]) wrt the two log probabilities
     """
@@ -318,7 +322,6 @@ def backward_scan(
         frame_lens,
         label_lens,
         alpha,
-        total,
         weight,
         beta,
         blank_grad,
