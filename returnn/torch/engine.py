@@ -1122,14 +1122,19 @@ class Engine(EngineBase):
 
     def _model_state_tensors(self) -> List[torch.Tensor]:
         """
-        :return: params and buffers of the model
+        :return: the params and buffers of the model which can differ between the ranks.
+            Averaged grads (reduce type grad or grad_explicit) keep the params identical, so then only the buffers.
         """
-        return list(self._pt_model.parameters()) + list(self._pt_model.buffers())
+        tensors = list(self._pt_model.buffers())
+        if self._torch_distributed_ctx.reduce_type() not in ("grad", "grad_explicit"):
+            tensors = list(self._pt_model.parameters()) + tensors
+        return tensors
 
     def _take_rank0_model_state(self) -> Optional[List[torch.Tensor]]:
         """
-        Every rank overwrites its params and buffers with rank 0's, in place (so captured CUDA graphs keep their
-        addresses), so that an eval which is split over the ranks scores the model which rank 0 saves.
+        Every rank overwrites the params and buffers of :func:`_model_state_tensors` with rank 0's, in place (so
+        captured CUDA graphs keep their addresses), so that an eval which is split over the ranks scores the model
+        which rank 0 saves.
         E.g. BatchNorm running statistics without distributed statistics,
         or parameter averaging between its syncs, leave the ranks with different values.
 
