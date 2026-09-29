@@ -1623,6 +1623,16 @@ def _eval_on_all_ranks_run(
         dev_dataset.init_seq_order(epoch=1)
         engine = Engine(config=config)
         engine.init_train_from_config(train_data=train_dataset, dev_data=dev_dataset)
+        # number of values this rank keeps aside for each split eval, see Engine._take_rank0_model_state
+        own_model_state_sizes = []
+        take_rank0_model_state = engine._take_rank0_model_state
+
+        def _take_rank0_model_state():
+            own = take_rank0_model_state()
+            own_model_state_sizes.append(sum(value.numel() for value in own or []))
+            return own
+
+        engine._take_rank0_model_state = _take_rank0_model_state
         del _eval_on_all_ranks_seq_lens[:]
         if eval_before_train:
             # like the eval of a loaded checkpoint before the training goes on: this process ran no step yet
@@ -1639,6 +1649,7 @@ def _eval_on_all_ranks_run(
             "evals": evals,
             "errors": {epoch: dict(data.error) for epoch, data in engine.learning_rate_control.epoch_data.items()},
             "param_sum": float(sum(param.detach().double().sum() for param in engine._pt_model.parameters())),
+            "own_model_state_sizes": own_model_state_sizes,
         }
 
 
@@ -1741,6 +1752,8 @@ def test_torch_engine_eval_on_all_ranks():
             else:
                 assert rank_seq_lens == [_EVAL_ON_ALL_RANKS_DEV_SEQ_LENS, []]
         _assert_eval_scores(results, reference, epochs=(1, 2), keys=("dev_loss_ce", "dev_loss_fer"))
+        # Averaged grads keep the params identical, so rank 1 keeps none aside (and this model has no buffers).
+        assert results[1]["own_model_state_sizes"] == ([0, 0] if split else [])
 
 
 def test_torch_engine_eval_on_all_ranks_rank0_model():
