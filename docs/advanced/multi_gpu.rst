@@ -26,7 +26,7 @@ which also supports sharding.
 
 By default, every eval dataset is evaluated on rank 0 alone, while the other ranks wait.
 Set ``torch_distributed = {..., "eval_on_all_ranks": True}`` to split the evaluation over the ranks.
-Every eval dataset which reports its seq order (:func:`Dataset.get_current_seq_order`)
+Every eval dataset which supports a predefined seq order (:func:`Dataset.supports_predefined_seq_order`)
 is then evaluated in shares.
 Rank 0 takes the dataset's seq order of the epoch and every rank evaluates every n-th seq of it.
 The loss sums are gathered at the end, so every rank gets the same scores.

@@ -257,9 +257,11 @@ class Engine(EngineBase):
                 and self._torch_distributed_ctx.size() > 1
                 and self._torch_distributed_ctx.eval_on_all_ranks()
             ):
-                reports_seq_order = [None] * self._torch_distributed_ctx.size()
-                torch.distributed.all_gather_object(reports_seq_order, _dataset_reports_seq_order(dataset))
-                if all(reports_seq_order):
+                supports_predefined_seq_order = [None] * self._torch_distributed_ctx.size()
+                torch.distributed.all_gather_object(
+                    supports_predefined_seq_order, dataset.supports_predefined_seq_order()
+                )
+                if all(supports_predefined_seq_order):
                     eval_seq_order_share = self._mp_manager.list()
                     self._eval_seq_order_shares[dataset_name] = eval_seq_order_share
                     print(
@@ -268,7 +270,8 @@ class Engine(EngineBase):
                     )
                 else:
                     print(
-                        f"Eval dataset {dataset_name!r} does not report its seq order, it is evaluated on rank 0 only.",
+                        f"Eval dataset {dataset_name!r} does not support a predefined seq order,"
+                        " it is evaluated on rank 0 only.",
                         file=log.v3,
                     )
             self._eval_dataloaders[dataset_name] = self._create_data_loader(
@@ -1967,19 +1970,6 @@ def _to_raw(n: Union[int, float, Tensor]):
             x = x.float()
         return x.numpy()
     raise TypeError(f"Unexpected {n} of type {type(n)}")
-
-
-def _dataset_reports_seq_order(dataset: Dataset) -> bool:
-    """
-    :param dataset: eval dataset
-    :return: whether the dataset reports its seq order via :func:`Dataset.get_current_seq_order`,
-        which is needed to split it over the ranks, see :func:`Engine._put_eval_seq_order_share`
-    """
-    try:
-        dataset.init_seq_order(epoch=1)
-        return dataset.get_current_seq_order() is not None
-    except NotImplementedError:
-        return False
 
 
 def _print_process(
