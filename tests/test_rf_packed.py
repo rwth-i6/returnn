@@ -1961,6 +1961,19 @@ def test_shift_and_pad_with_a_per_seq_pad_value():
     _assert_equal_non_padded(out_p, ref, batch_dim, padded_time)
 
 
+def test_pack_dense_total_bound_static_buffer():
+    """a dense pack with total_bound allocates the bound-sized static buffer, content first"""
+    rf.select_backend_torch()
+    x, batch_dim, time_dim, feat_dim = _make_input(seq_lens=(4, 2))
+    xp = packed.pack(x, total_bound=10)
+    raw = xp.raw_tensor
+    assert raw.packed_dim.dimension == 10 and raw.inner.raw_tensor.shape[0] == 10, raw
+    assert raw.content_bound == 10, raw
+    _assert_equal_non_padded(xp, x, batch_dim, time_dim)
+    content = torch.cat([x.raw_tensor[0, :4], x.raw_tensor[1, :2]])
+    numpy.testing.assert_allclose(raw.inner.raw_tensor[:6].detach().numpy(), content.numpy())
+
+
 if __name__ == "__main__":
     better_exchook.install()
     if len(sys.argv) <= 1:
