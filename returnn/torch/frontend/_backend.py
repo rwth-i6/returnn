@@ -2338,8 +2338,9 @@ class TorchBackend(Backend[torch.Tensor]):
         out.feature_dim = in_dim
         return out
 
-    @staticmethod
+    @classmethod
     def scaled_dot_product_attention(
+        cls,
         query: Tensor,
         key: Tensor,
         value: Tensor,
