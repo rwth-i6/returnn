@@ -140,6 +140,35 @@ def test_monotonic_rnnt_on_cuda_matches_the_reference():
     torch.testing.assert_close(results[1][1], results[0][1], rtol=1e-4, atol=1e-5)
 
 
+def test_monotonic_rnnt_keeps_the_input_dtype():
+    if not torch.cuda.is_available():
+        import unittest
+
+        raise unittest.SkipTest("no cuda")
+    torch.manual_seed(4)
+    vocab, blank, batch, frames, num_labels = 2048, 0, 4, 32, 7
+    frame_lens = torch.full((batch,), frames, dtype=torch.int32, device="cuda")
+    label_lens = torch.full((batch,), num_labels, dtype=torch.int32, device="cuda")
+    labels = torch.randint(1, vocab, (batch, num_labels), dtype=torch.int32, device="cuda")
+    packed = torch.randn(batch * frames * (num_labels + 1), vocab, device="cuda").bfloat16()
+
+    def run(dtype):
+        x = packed.to(dtype, copy=True).requires_grad_()
+        torch.cuda.reset_peak_memory_stats()
+        before = torch.cuda.memory_allocated()
+        loss = monotonic_rnnt_loss(x, labels, frame_lens, label_lens, blank=blank, max_frames=frames)
+        loss.sum().backward()
+        return loss.detach(), x.grad, torch.cuda.max_memory_allocated() - before
+
+    want_loss, want_grad, _ = run(torch.float32)
+    loss, grad, peak = run(torch.bfloat16)
+    assert grad.dtype == torch.bfloat16, grad.dtype
+    torch.testing.assert_close(loss, want_loss, rtol=1e-6, atol=1e-6)
+    torch.testing.assert_close(grad, want_grad.bfloat16())
+    # the bf16 gradient is the one [cells, vocab] allocation, no float32 copy of the logits or of the gradient
+    assert peak < 1.5 * packed.numel() * packed.element_size(), peak
+
+
 def test_monotonic_rnnt_handles_degenerate_batches():
     torch.manual_seed(3)
     vocab, blank = 6, 0

@@ -193,7 +193,7 @@ if hasattr(torch.library, "custom_op"):  # torch >= 2.4
         blank_grad, label_grad = backward_scan(
             blank_lp, label_lp, offsets, frame_lens, label_lens, alpha, total, -d_total
         )
-        return cell_grad(logits, next_label, lse, blank_grad, label_grad, blank).to(logits.dtype)
+        return cell_grad(logits, next_label, lse, blank_grad, label_grad, blank)
 
     @_lib_bwd.register_fake
     def _lib_bwd_fake(
@@ -250,7 +250,7 @@ def monotonic_rnnt_loss(
     if logits.is_cuda:
         assert _HAVE_LIB_OPS, "monotonic rnnt: the loss needs torch.library.custom_op, so torch >= 2.4"
         total = torch.ops.returnn.monotonic_rnnt_fwd(
-            logits.float(), next_label, frame_lens, label_lens, blank, max_frames, max_prefix
+            logits, next_label, frame_lens, label_lens, blank, max_frames, max_prefix
         )[0]
     else:
         offsets, _cells = _cell_offsets(frame_lens, label_lens)
