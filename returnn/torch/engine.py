@@ -4,7 +4,7 @@ Main engine for PyTorch
 
 from __future__ import annotations
 
-from typing import Optional, Any, Union, Callable, Dict, Set
+from typing import Optional, Any, Union, Callable, Dict, Set, List, Tuple
 from contextlib import nullcontext, ExitStack, contextmanager
 
 import sys
