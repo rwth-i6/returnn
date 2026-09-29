@@ -3104,6 +3104,8 @@ def _fused_causal_attention(
         or not isinstance(train_flag, bool)
         or (att_dropout > 0.0 and train_flag and att_dropout_broadcast)
         or torch.onnx.is_in_onnx_export()
+        # torch 2.0 added the kernel, torch 2.1 its scale argument
+        or torch.__version__ < ((2, 0) if scale is None else (2, 1))
     ):
         return None
 
