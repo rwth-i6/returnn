@@ -10,12 +10,7 @@ import sys
 import torch
 
 import _setup_test_env  # noqa
-from returnn.torch.util.monotonic_rnnt import (
-    lattice_operands,
-    monotonic_rnnt_loss,
-    reachable_cells,
-    total_cells,
-)
+from returnn.torch.util.monotonic_rnnt import monotonic_rnnt_loss
 
 
 def _brute_force(logits: torch.Tensor, labels, blank: int) -> float:
@@ -83,48 +78,6 @@ def test_monotonic_rnnt_matches_the_sum_over_alignments():
         max_frames=max(frame_lens),
     )
     torch.testing.assert_close(got.double(), torch.tensor(want, dtype=torch.float64), rtol=0, atol=1e-6)
-
-
-def test_reachable_cells_counts_the_states_on_some_alignment():
-    cases = [(4, 2), (5, 0), (3, 3), (6, 2), (5, 4), (1, 1), (2, 5), (7, 1)]
-    want = []
-    for num_frames, num_labels in cases:
-        seen = set()
-        for emits in itertools.combinations(range(num_frames), num_labels):
-            u = 0
-            for t in range(num_frames):
-                seen.add((t, u))
-                if t in emits:
-                    u += 1
-        want.append(len(seen))
-    got = reachable_cells(
-        torch.tensor([t for t, _u in cases], dtype=torch.int32),
-        torch.tensor([u for _t, u in cases], dtype=torch.int32),
-    )
-    torch.testing.assert_close(got, torch.tensor(want, dtype=torch.int64))
-
-
-def test_lattice_operands_match_the_per_sequence_loop():
-    torch.manual_seed(11)
-    cases = [(9, 4), (12, 0), (7, 7), (5, 2)]
-    max_frames, max_labels = max(t for t, _u in cases), max(u for _t, u in cases)
-    enc = torch.randn(len(cases), max_frames, 6)
-    pred = torch.randn(len(cases), max_labels + 1, 3)
-    frame_lens = torch.tensor([t for t, _u in cases], dtype=torch.int32)
-    label_lens = torch.tensor([u for _t, u in cases], dtype=torch.int32)
-
-    want_enc, want_pred = [], []
-    for i, (num_frames, num_labels) in enumerate(cases):
-        rows, cols = num_frames, num_labels + 1
-        want_enc.append(enc[i, :rows].unsqueeze(1).expand(rows, cols, 6).reshape(rows * cols, 6))
-        want_pred.append(pred[i, :cols].unsqueeze(0).expand(rows, cols, 3).reshape(rows * cols, 3))
-    want_enc, want_pred = torch.cat(want_enc), torch.cat(want_pred)
-
-    total = total_cells(frame_lens, label_lens)
-    assert total == want_enc.shape[0], (total, want_enc.shape)
-    got_enc, got_pred = lattice_operands(enc, pred, frame_lens, label_lens, total + 7)
-    torch.testing.assert_close(got_enc[:total], want_enc)
-    torch.testing.assert_close(got_pred[:total], want_pred)
 
 
 def test_monotonic_rnnt_gradient_matches_finite_differences():

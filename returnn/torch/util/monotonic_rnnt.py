@@ -26,7 +26,7 @@ from typing import Tuple
 import torch
 
 
-def cell_offsets(frame_lens: torch.Tensor, label_lens: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
+def _cell_offsets(frame_lens: torch.Tensor, label_lens: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
     """
     :param frame_lens: [B] frames per sequence
     :param label_lens: [B] labels per sequence
@@ -37,23 +37,7 @@ def cell_offsets(frame_lens: torch.Tensor, label_lens: torch.Tensor) -> Tuple[to
     return offsets, cells
 
 
-def reachable_cells(frame_lens: torch.Tensor, label_lens: torch.Tensor) -> torch.Tensor:
-    """
-    Cells that lie on at least one complete alignment, which is fewer than the full rectangle.
-
-    A state (t, u) is reachable from the start only while u <= t and reaches the end only while the
-    frames left cover the labels left, u >= U - T + t, so the lattice is a band and the cells outside
-    it contribute nothing. Dropping them is exact, it prunes no alignment.
-
-    :param frame_lens: [B] frames per sequence
-    :param label_lens: [B] labels per sequence
-    :return: [B] the number of cells inside the band
-    """
-    frames, labels = frame_lens.long(), label_lens.long()
-    return torch.clamp(frames * (labels + 1) - labels * labels, min=0)
-
-
-def lattice_index(
+def _lattice_index(
     frame_lens: torch.Tensor, label_lens: torch.Tensor, total: int
 ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
     """
@@ -68,7 +52,7 @@ def lattice_index(
     :param total: cells to lay out, the sum over the batch or a static capacity above it
     :return: (sequence [total], frame [total], prefix [total]) int64
     """
-    offsets, cells = cell_offsets(frame_lens, label_lens)
+    offsets, cells = _cell_offsets(frame_lens, label_lens)
     # the cells a capacity leaves over go to the last sequence, and repeat_interleave with a declared
     # output size stays static, unlike searchsorted, which Inductor only takes as an extern fallback
     spans = torch.cat([cells[:-1], (cells[-1] + total - cells.sum()).unsqueeze(0)])
@@ -78,38 +62,7 @@ def lattice_index(
     return seq, torch.div(within, stride, rounding_mode="floor"), within % stride
 
 
-def total_cells(frame_lens: torch.Tensor, label_lens: torch.Tensor) -> int:
-    """
-    :param frame_lens: [B] frames per sequence
-    :param label_lens: [B] labels per sequence
-    :return: the cells of the whole batch, a host read that a captured step replaces by its capacity
-    """
-    _offsets, cells = cell_offsets(frame_lens, label_lens)
-    return int(cells.sum().item())
-
-
-def lattice_operands(
-    enc: torch.Tensor, pred: torch.Tensor, frame_lens: torch.Tensor, label_lens: torch.Tensor, total: int
-) -> Tuple[torch.Tensor, torch.Tensor]:
-    """
-    Picks the encoder frame and the predictor state that meet in every packed lattice cell.
-
-    :param enc: [B, T, D_enc] padded encoder output
-    :param pred: [B, U_max + 1, D_pred] padded predictor output
-    :param frame_lens: [B] frames per sequence
-    :param label_lens: [B] labels per sequence
-    :param total: cells to lay out, see :func:`lattice_index`
-    :return: ([total, D_enc], [total, D_pred])
-    """
-    seq, frame, prefix = lattice_index(frame_lens, label_lens, total)
-    frame = torch.clamp(frame, max=enc.shape[1] - 1)
-    prefix = torch.clamp(prefix, max=pred.shape[1] - 1)
-    enc_cells = enc.reshape(-1, enc.shape[-1])[seq * enc.shape[1] + frame]
-    pred_cells = pred.reshape(-1, pred.shape[-1])[seq * pred.shape[1] + prefix]
-    return enc_cells, pred_cells
-
-
-def next_label_per_cell(
+def _next_label_per_cell(
     labels: torch.Tensor, frame_lens: torch.Tensor, label_lens: torch.Tensor, blank: int, total: int
 ) -> torch.Tensor:
     """
@@ -119,12 +72,12 @@ def next_label_per_cell(
     :param frame_lens: [B] frames per sequence
     :param label_lens: [B] labels per sequence
     :param blank: blank index, used where a cell has no emitting edge
-    :param total: cells to lay out, see :func:`lattice_index`
+    :param total: cells to lay out, see :func:`_lattice_index`
     :return: [total] int64
     """
     if labels.shape[1] == 0:
         return torch.full((total,), blank, dtype=torch.int64, device=frame_lens.device)
-    seq, _frame, prefix = lattice_index(frame_lens, label_lens, total)
+    seq, _frame, prefix = _lattice_index(frame_lens, label_lens, total)
     lens = label_lens.long()[seq]
     index = torch.clamp(prefix, max=torch.clamp(lens - 1, min=0))
     label = labels.long()[seq, index]
@@ -201,7 +154,7 @@ if hasattr(torch.library, "custom_op"):  # torch >= 2.4
     ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
         from .monotonic_rnnt_triton import cell_stats, forward_scan
 
-        offsets, _cells = cell_offsets(frame_lens, label_lens)
+        offsets, _cells = _cell_offsets(frame_lens, label_lens)
         lse, blank_lp, label_lp = cell_stats(logits, next_label, blank)
         total, alpha = forward_scan(blank_lp, label_lp, offsets, frame_lens, label_lens, max_frames, max_prefix)
         return total, lse, blank_lp, label_lp, alpha
@@ -235,7 +188,7 @@ if hasattr(torch.library, "custom_op"):  # torch >= 2.4
     ) -> torch.Tensor:
         from .monotonic_rnnt_triton import backward_scan, cell_grad
 
-        offsets, _cells = cell_offsets(frame_lens, label_lens)
+        offsets, _cells = _cell_offsets(frame_lens, label_lens)
         # the sweep gives the posteriors of the log likelihood, d_total carries the sign of the loss
         blank_grad, label_grad = backward_scan(
             blank_lp, label_lp, offsets, frame_lens, label_lens, alpha, total, -d_total
@@ -293,14 +246,14 @@ def monotonic_rnnt_loss(
         return logits.sum() * torch.zeros(frame_lens.shape[0], dtype=torch.float32, device=logits.device)
     logits = logits.contiguous()
     max_prefix = int(labels.shape[1]) + 1
-    next_label = next_label_per_cell(labels, frame_lens, label_lens, blank, logits.shape[0])
+    next_label = _next_label_per_cell(labels, frame_lens, label_lens, blank, logits.shape[0])
     if logits.is_cuda:
         assert _HAVE_LIB_OPS, "monotonic rnnt: the loss needs torch.library.custom_op, so torch >= 2.4"
         total = torch.ops.returnn.monotonic_rnnt_fwd(
             logits.float(), next_label, frame_lens, label_lens, blank, max_frames, max_prefix
         )[0]
     else:
-        offsets, _cells = cell_offsets(frame_lens, label_lens)
+        offsets, _cells = _cell_offsets(frame_lens, label_lens)
         source = logits if logits.dtype in (torch.float32, torch.float64) else logits.float()
         log_probs = torch.log_softmax(source, dim=-1)
         blank_lp = log_probs[:, blank]
