@@ -80,6 +80,7 @@ def test_monotonic_rnnt_matches_the_sum_over_alignments():
         torch.tensor(frame_lens, dtype=torch.int32),
         torch.tensor(label_lens, dtype=torch.int32),
         blank=blank,
+        max_frames=max(frame_lens),
     )
     torch.testing.assert_close(got.double(), torch.tensor(want, dtype=torch.float64), rtol=0, atol=1e-6)
 
@@ -138,7 +139,7 @@ def test_monotonic_rnnt_gradient_matches_finite_differences():
         torch.tensor([num_labels], dtype=torch.int32),
     )
     torch.autograd.gradcheck(
-        lambda x: monotonic_rnnt_loss(x.reshape(-1, vocab), *args, blank=blank),
+        lambda x: monotonic_rnnt_loss(x.reshape(-1, vocab), *args, blank=blank, max_frames=num_frames),
         (logits,),
         eps=1e-6,
         atol=1e-6,
@@ -173,7 +174,12 @@ def test_monotonic_rnnt_on_cuda_matches_the_reference():
     for device in ("cpu", "cuda"):
         logits = packed.to(device).clone().requires_grad_()
         loss = monotonic_rnnt_loss(
-            logits, labels_padded.to(device), frame_lens_t.to(device), label_lens_t.to(device), blank=blank
+            logits,
+            labels_padded.to(device),
+            frame_lens_t.to(device),
+            label_lens_t.to(device),
+            blank=blank,
+            max_frames=max(frame_lens),
         )
         loss.backward(grad_out.to(device))
         results.append((loss.detach().cpu(), logits.grad.detach().cpu()))
@@ -256,6 +262,22 @@ def test_monotonic_rnnt_traces_under_aot():
         want.append((loss.detach().clone(), x.grad.clone()))
     torch.testing.assert_close(want[1][0], want[0][0], rtol=1e-5, atol=1e-5)
     torch.testing.assert_close(want[1][1], want[0][1], rtol=1e-4, atol=1e-6)
+
+
+def test_monotonic_rnnt_needs_max_frames():
+    # The batch's own maximum would be a host read, so the caller passes a static bound.
+    args = (
+        torch.randn(8, 3),
+        torch.ones((1, 1), dtype=torch.int32),
+        torch.tensor([4], dtype=torch.int32),
+        torch.tensor([1], dtype=torch.int32),
+    )
+    try:
+        monotonic_rnnt_loss(*args, blank=0)
+    except TypeError:
+        pass
+    else:
+        raise AssertionError("expected max_frames to be required")
 
 
 if __name__ == "__main__":
