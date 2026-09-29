@@ -182,7 +182,6 @@ if hasattr(torch.library, "custom_op"):  # torch >= 2.4
         blank_lp: torch.Tensor,
         label_lp: torch.Tensor,
         alpha: torch.Tensor,
-        total: torch.Tensor,
         frame_lens: torch.Tensor,
         label_lens: torch.Tensor,
         d_total: torch.Tensor,
@@ -192,44 +191,27 @@ if hasattr(torch.library, "custom_op"):  # torch >= 2.4
 
         offsets, _cells = _cell_offsets(frame_lens, label_lens)
         # the sweep gives the posteriors of the log likelihood, d_total carries the sign of the loss
-        blank_grad, label_grad = backward_scan(
-            blank_lp, label_lp, offsets, frame_lens, label_lens, alpha, total, -d_total
-        )
+        blank_grad, label_grad = backward_scan(blank_lp, label_lp, offsets, frame_lens, label_lens, alpha, -d_total)
         return cell_grad(logits, next_label, row_max, log_sum, blank_grad, label_grad, blank)
 
     @_lib_bwd.register_fake
     def _lib_bwd_fake(
-        logits, next_label, row_max, log_sum, blank_lp, label_lp, alpha, total, frame_lens, label_lens, d_total, blank
+        logits, next_label, row_max, log_sum, blank_lp, label_lp, alpha, frame_lens, label_lens, d_total, blank
     ):
-        del next_label, row_max, log_sum, blank_lp, label_lp, alpha, total, frame_lens, label_lens, d_total, blank
+        del next_label, row_max, log_sum, blank_lp, label_lp, alpha, frame_lens, label_lens, d_total, blank
         return torch.empty_like(logits)
 
     def _lib_setup_context(ctx, inputs, output):
         logits, next_label, frame_lens, label_lens, blank, _max_frames, _max_prefix = inputs
-        total, row_max, log_sum, blank_lp, label_lp, alpha = output
-        ctx.save_for_backward(
-            logits, next_label, row_max, log_sum, blank_lp, label_lp, alpha, total, frame_lens, label_lens
-        )
+        _total, row_max, log_sum, blank_lp, label_lp, alpha = output
+        ctx.save_for_backward(logits, next_label, row_max, log_sum, blank_lp, label_lp, alpha, frame_lens, label_lens)
         ctx.blank = blank
 
     def _lib_backward(ctx, d_total, d_row_max, d_log_sum, d_blank_lp, d_label_lp, d_alpha):
         d_row_max, d_log_sum, d_blank_lp, d_label_lp, d_alpha  # noqa  # unused, only total feeds the loss
-        logits, next_label, row_max, log_sum, blank_lp, label_lp, alpha, total, frame_lens, label_lens = (
-            ctx.saved_tensors
-        )
+        logits, next_label, row_max, log_sum, blank_lp, label_lp, alpha, frame_lens, label_lens = ctx.saved_tensors
         grad_logits = torch.ops.returnn.monotonic_rnnt_bwd(
-            logits,
-            next_label,
-            row_max,
-            log_sum,
-            blank_lp,
-            label_lp,
-            alpha,
-            total,
-            frame_lens,
-            label_lens,
-            d_total,
-            ctx.blank,
+            logits, next_label, row_max, log_sum, blank_lp, label_lp, alpha, frame_lens, label_lens, d_total, ctx.blank
         )
         return grad_logits, None, None, None, None, None, None
 
