@@ -102,6 +102,44 @@ if triton is not None:
 if triton is not None:
     # noinspection PyPep8Naming
     @triton.jit
+    def _scan_preamble(offsets_ptr, frame_lens_ptr, label_lens_ptr, max_prefix, BLOCK: tl.constexpr):
+        """
+        The prefix lanes and lengths of the sequence this program sweeps.
+
+        :param offsets_ptr: [B] first cell of every sequence
+        :param frame_lens_ptr: [B] frames per sequence
+        :param label_lens_ptr: [B] labels per sequence
+        :param max_prefix: prefixes per lattice row, U_max + 1
+        :param BLOCK: prefix lanes of the program, at least max_prefix
+        :return: (sequence, lanes, lanes below max_prefix, lanes on a prefix of the sequence, label count,
+            frame count, first cell, cells per frame, offset of the lanes in a [B, max_prefix] row)
+        """
+        seq = tl.program_id(0)
+        offs = tl.arange(0, BLOCK)
+        in_block = offs < max_prefix
+        label_len = tl.load(label_lens_ptr + seq).to(tl.int64)
+        frame_len = tl.load(frame_lens_ptr + seq).to(tl.int64)
+        base = tl.load(offsets_ptr + seq).to(tl.int64)
+        valid = in_block & (offs <= label_len)
+        lanes = seq.to(tl.int64) * max_prefix + offs
+        return seq, offs, in_block, valid, label_len, frame_len, base, label_len + 1, lanes
+
+    @triton.jit
+    def _log_add_exp(stay, emit, valid):
+        """
+        Combines the blank edge that keeps the prefix and the label edge that extends it.
+
+        :param stay: log score over the blank edge
+        :param emit: log score over the label edge
+        :param valid: lanes on a prefix of the sequence
+        :return: the log of the summed scores, the sentinel outside the valid lanes
+        """
+        # the floor keeps two impossible edges at minus infinity instead of taking inf minus inf
+        top = tl.maximum(tl.maximum(stay, emit), _NEG_INF)
+        return tl.where(valid, top + tl.log(tl.exp(stay - top) + tl.exp(emit - top)), _NEG_INF)
+
+    # noinspection PyPep8Naming
+    @triton.jit
     def _forward_scan_kernel(
         blank_lp_ptr,
         label_lp_ptr,
@@ -117,15 +155,10 @@ if triton is not None:
         BLOCK: tl.constexpr,
     ):
         """one program per sequence, sweeps the frames forward and writes the score of every lattice position"""
-        seq = tl.program_id(0)
-        offs = tl.arange(0, BLOCK)
-        in_block = offs < max_prefix
-        label_len = tl.load(label_lens_ptr + seq).to(tl.int64)
-        frame_len = tl.load(frame_lens_ptr + seq).to(tl.int64)
-        base = tl.load(offsets_ptr + seq).to(tl.int64)
-        stride = label_len + 1
-        valid = in_block & (offs <= label_len)
-        row = alpha_ptr + seq.to(tl.int64) * max_prefix + offs
+        seq, offs, in_block, valid, label_len, frame_len, base, stride, lanes = _scan_preamble(
+            offsets_ptr, frame_lens_ptr, label_lens_ptr, max_prefix, BLOCK
+        )
+        row = alpha_ptr + lanes
 
         tl.store(row, tl.where(offs == 0, 0.0, _NEG_INF), mask=in_block)
         for frame in range(0, max_frames):
@@ -140,11 +173,7 @@ if triton is not None:
                 mask=valid & (offs >= 1),
                 other=_NEG_INF,
             )
-            stay = alpha + blank_lp
-            emit = alpha_prev + label_prev
-            # the floor keeps two impossible edges at minus infinity instead of taking inf minus inf
-            top = tl.maximum(tl.maximum(stay, emit), _NEG_INF)
-            updated = tl.where(valid, top + tl.log(tl.exp(stay - top) + tl.exp(emit - top)), _NEG_INF)
+            updated = _log_add_exp(alpha + blank_lp, alpha_prev + label_prev, valid)
             tl.store(here + frame_stride, tl.where(frame < frame_len, updated, alpha), mask=in_block)
 
         tl.debug_barrier()
@@ -172,19 +201,13 @@ if triton is not None:
         BLOCK: tl.constexpr,
     ):
         """one program per sequence, sweeps the frames backward and scatters both edge posteriors onto the cells"""
-        seq = tl.program_id(0)
-        offs = tl.arange(0, BLOCK)
-        in_block = offs < max_prefix
-        label_len = tl.load(label_lens_ptr + seq).to(tl.int64)
-        frame_len = tl.load(frame_lens_ptr + seq).to(tl.int64)
-        base = tl.load(offsets_ptr + seq).to(tl.int64)
+        seq, offs, in_block, valid, label_len, frame_len, base, stride, lanes = _scan_preamble(
+            offsets_ptr, frame_lens_ptr, label_lens_ptr, max_prefix, BLOCK
+        )
         norm = tl.load(total_ptr + seq)
         weight = tl.load(weight_ptr + seq)
-        stride = label_len + 1
-        valid = in_block & (offs <= label_len)
         start = tl.where(offs == label_len, 0.0, _NEG_INF)
-        seq_row = seq.to(tl.int64) * max_prefix + offs
-        row = beta_ptr + seq_row
+        row = beta_ptr + lanes
 
         tl.store(row, start, mask=in_block)
         for back in range(0, max_frames):
@@ -195,16 +218,13 @@ if triton is not None:
             cell = tl.minimum(base + frame * stride + offs, num_cells - 1)
             blank_lp = tl.load(blank_lp_ptr + cell, mask=valid, other=_NEG_INF)
             label_lp = tl.load(label_lp_ptr + cell, mask=valid, other=_NEG_INF)
-            alpha = tl.load(alpha_ptr + seq_row + frame * frame_stride, mask=in_block, other=_NEG_INF)
+            alpha = tl.load(alpha_ptr + lanes + frame * frame_stride, mask=in_block, other=_NEG_INF)
             inside = valid & (frame < frame_len)
             blank_post = tl.where(inside, tl.exp(alpha + blank_lp + beta - norm) * weight, 0.0)
             label_post = tl.where(inside & (offs < label_len), tl.exp(alpha + label_lp + ahead - norm) * weight, 0.0)
             tl.store(blank_grad_ptr + cell, blank_post, mask=inside)
             tl.store(label_grad_ptr + cell, label_post, mask=inside)
-            stay = blank_lp + beta
-            emit = label_lp + ahead
-            top = tl.maximum(tl.maximum(stay, emit), _NEG_INF)
-            updated = tl.where(valid, top + tl.log(tl.exp(stay - top) + tl.exp(emit - top)), _NEG_INF)
+            updated = _log_add_exp(blank_lp + beta, label_lp + ahead, valid)
             tl.debug_barrier()
             tl.store(row, tl.where(frame >= frame_len, start, updated), mask=in_block)
 
