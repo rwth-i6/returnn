@@ -169,6 +169,25 @@ def test_monotonic_rnnt_keeps_the_input_dtype():
     assert peak < 1.5 * packed.numel() * packed.element_size(), peak
 
 
+def test_monotonic_rnnt_reads_strided_lengths():
+    if not torch.cuda.is_available():
+        import unittest
+
+        raise unittest.SkipTest("no cuda")
+    torch.manual_seed(7)
+    logits = torch.randn(10, 3, device="cuda")
+    labels = torch.tensor([[1], [2]], device="cuda")
+    frame_lens = torch.tensor([2, 7, 3, 8], device="cuda")[::2]
+    label_lens = torch.tensor([1, 0, 1, 0], device="cuda")[::2]
+    results = []
+    for lens in ((frame_lens, label_lens), (frame_lens.contiguous(), label_lens.contiguous())):
+        x = logits.clone().requires_grad_()
+        loss = monotonic_rnnt_loss(x, labels, *lens, blank=0, max_frames=3)
+        loss.sum().backward()
+        results.append((loss.detach(), x.grad))
+    torch.testing.assert_close(results[0], results[1])
+
+
 def test_monotonic_rnnt_handles_degenerate_batches():
     torch.manual_seed(3)
     vocab, blank = 6, 0
