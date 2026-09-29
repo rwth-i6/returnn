@@ -1868,6 +1868,12 @@ def test_Dataset_supports_predefined_seq_order():
         )
         writer.close()
 
+        post_with_workers_opts = {
+            "class": "PostprocessingDataset",
+            "dataset": static_opts,
+            "map_seq": _post_process_map_seq_no_op,
+            "num_workers": 1,
+        }
         for dataset in [
             init_dataset(static_opts),
             HDFDataset(files=[hdf_fn]),
@@ -1883,33 +1889,33 @@ def test_Dataset_supports_predefined_seq_order():
             init_dataset(
                 {"class": "PostprocessingDataset", "dataset": static_opts, "map_seq": _post_process_map_seq_no_op}
             ),
-        ]:
-            check_predefined_seq_order(dataset)
-
-        # The byte cache ignores the seq order it keeps.
-        # A stream mapper can merge or drop seqs.
-        # Worker processes init the wrapped dataset in a feeder thread, so its reported order can lag behind.
-        # A MetaDataset reads its order from its seq order control dataset.
-        post_with_workers_opts = {
-            "class": "PostprocessingDataset",
-            "dataset": static_opts,
-            "map_seq": _post_process_map_seq_no_op,
-            "num_workers": 1,
-        }
-        for dataset in [
-            HDFDataset(files=[hdf_fn], cache_byte_size=1024),
-            init_dataset(
-                {
-                    "class": "PostprocessingDataset",
-                    "dataset": static_opts,
-                    "map_seq_stream": _post_process_map_seq_stream_no_op,
-                }
-            ),
             init_dataset(post_with_workers_opts),
             init_dataset(
                 {
                     "class": "MetaDataset",
                     "datasets": {"sub": post_with_workers_opts},
+                    "data_map": {"data": ("sub", "data")},
+                    "seq_order_control_dataset": "sub",
+                }
+            ),
+        ]:
+            check_predefined_seq_order(dataset)
+
+        # The byte cache ignores the seq order it keeps.
+        # A stream mapper can merge or drop seqs.
+        # A MetaDataset reads its order from its seq order control dataset.
+        post_stream_opts = {
+            "class": "PostprocessingDataset",
+            "dataset": static_opts,
+            "map_seq_stream": _post_process_map_seq_stream_no_op,
+        }
+        for dataset in [
+            HDFDataset(files=[hdf_fn], cache_byte_size=1024),
+            init_dataset(post_stream_opts),
+            init_dataset(
+                {
+                    "class": "MetaDataset",
+                    "datasets": {"sub": post_stream_opts},
                     "data_map": {"data": ("sub", "data")},
                     "seq_order_control_dataset": "sub",
                 }

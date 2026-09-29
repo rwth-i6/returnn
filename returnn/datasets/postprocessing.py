@@ -371,10 +371,8 @@ class PostprocessingDataset(CachedDataset2):
         """
         :return: whether the wrapped dataset supports a predefined seq order.
             Not with map_seq_stream, which can merge or drop seqs.
-            Not with worker processes, as their feeder thread inits the wrapped dataset,
-            so its reported seq order can lag behind :func:`init_seq_order`.
         """
-        if self._map_seq_stream is not None or self._num_workers > 0:
+        if self._map_seq_stream is not None:
             return False
         assert self._dataset is not None
         return self._dataset.supports_predefined_seq_order()
