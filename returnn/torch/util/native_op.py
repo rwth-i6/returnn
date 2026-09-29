@@ -6,6 +6,7 @@ from __future__ import annotations
 from typing import Optional, Any, Tuple, Dict
 import os
 import sys
+import warnings
 from textwrap import dedent
 from threading import RLock
 
@@ -947,6 +948,10 @@ class _FastBaumWelchScoresPackedAutogradFunc(torch.autograd.Function):
         return grad_x, None, None, None, None, None, None, None
 
 
+# fast_baum_welch_packed warns once its edge scratch (one float32 score per edge and frame) passes this size
+_FAST_BW_PACKED_SCRATCH_WARN_BYTES = 4 * 2**30
+
+
 def fast_baum_welch_packed(
     *,
     am_scores: torch.Tensor,
@@ -972,6 +977,16 @@ def fast_baum_welch_packed(
         pass it if you know it statically, as :func:`ctc_loss_packed` does).
     :return: (fwdbwd, obs_scores), fwdbwd is (total_time, dim), obs_scores is (max_time, batch), in -log space
     """
+    # static shapes only, so no device read: the scratch is sized by the bounds, not by the data
+    n_frames, n_edges = seq_mask.shape[0], edges.shape[1]
+    scratch_bytes = n_frames * n_edges * 4
+    if scratch_bytes > _FAST_BW_PACKED_SCRATCH_WARN_BYTES:
+        warnings.warn(
+            f"fast_baum_welch_packed: the edge scratch takes {scratch_bytes / 2**30:.1f} GiB"
+            f" ({n_edges} edges x {n_frames} frames, one float32 score each)."
+            f" This usually means a loose edges_bound, see ctc_loss_packed.",
+            stacklevel=2,
+        )
     op = make_fast_baum_welch_packed_op()
     float_idx = seq_mask.float()
     if n_states is None:
