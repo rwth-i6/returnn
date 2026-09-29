@@ -169,6 +169,28 @@ def test_monotonic_rnnt_keeps_the_input_dtype():
     assert peak < 1.5 * packed.numel() * packed.element_size(), peak
 
 
+def test_monotonic_rnnt_ignores_a_common_logit_offset():
+    if not torch.cuda.is_available():
+        import unittest
+
+        raise unittest.SkipTest("no cuda")
+    torch.manual_seed(6)
+    vocab, blank = 16, 0
+    cases = [(6, 2), (5, 0), (4, 3)]
+    # multiples of 1/16 stay exact next to an offset of 1e6 in float32, so both runs see the same logits
+    per_seq = [torch.round(torch.randn(t, u + 1, vocab) * 16) / 16 for t, u in cases]
+    labels = torch.randint(1, vocab, (len(cases), 3), dtype=torch.int32, device="cuda")
+    frame_lens = torch.tensor([t for t, _ in cases], dtype=torch.int32, device="cuda")
+    label_lens = torch.tensor([u for _, u in cases], dtype=torch.int32, device="cuda")
+    results = []
+    for offset in (0.0, 1e6):
+        x = (_pack(per_seq) + offset).cuda().requires_grad_()
+        loss = monotonic_rnnt_loss(x, labels, frame_lens, label_lens, blank=blank, max_frames=6)
+        loss.sum().backward()
+        results.append((loss.detach(), x.grad))
+    torch.testing.assert_close(results[1], results[0])
+
+
 def test_monotonic_rnnt_reads_strided_lengths():
     if not torch.cuda.is_available():
         import unittest
@@ -230,7 +252,8 @@ def test_cell_stats_normalizer_survives_minus_infinity():
     logits[3] = float("-inf")
     next_label = torch.tensor([7, 1024, 3, 5], dtype=torch.int64, device="cuda")
 
-    lse, blank_lp, label_lp = cell_stats(logits, next_label, blank)
+    row_max, log_sum, blank_lp, label_lp = cell_stats(logits, next_label, blank)
+    lse = row_max + log_sum
     log_probs = torch.log_softmax(logits[:3].double(), dim=-1)
     want_lse = torch.logsumexp(logits[:3].double(), dim=-1)
     torch.testing.assert_close(lse[:3].double(), want_lse, rtol=1e-5, atol=1e-5)
