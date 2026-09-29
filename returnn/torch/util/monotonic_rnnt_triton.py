@@ -35,7 +35,8 @@ if triton is not None:
     def _cell_stats_kernel(
         logits_ptr,
         label_ptr,
-        lse_ptr,
+        row_max_ptr,
+        log_sum_ptr,
         blank_lp_ptr,
         label_lp_ptr,
         vocab,
@@ -59,20 +60,23 @@ if triton is not None:
             )
             running_max = new_max
         # a row of minus infinity has nothing to normalize, 0 keeps its log probabilities at minus infinity
-        lse = tl.where(running_sum > 0.0, running_max + tl.log(running_sum), 0.0)
+        log_sum = tl.where(running_sum > 0.0, tl.log(running_sum), 0.0)
         label = tl.load(label_ptr + cell)
         blank_logit = tl.load(logits_ptr + base + blank).to(tl.float32)
         label_logit = tl.load(logits_ptr + base + label).to(tl.float32)
-        tl.store(lse_ptr + cell, lse)
-        tl.store(blank_lp_ptr + cell, blank_logit - lse)
-        tl.store(label_lp_ptr + cell, label_logit - lse)
+        tl.store(row_max_ptr + cell, running_max)
+        tl.store(log_sum_ptr + cell, log_sum)
+        # the maximum comes off first, added to it a large logit would swallow the log sum
+        tl.store(blank_lp_ptr + cell, (blank_logit - running_max) - log_sum)
+        tl.store(label_lp_ptr + cell, (label_logit - running_max) - log_sum)
 
     # noinspection PyPep8Naming
     @triton.jit
     def _cell_grad_kernel(
         logits_ptr,
         label_ptr,
-        lse_ptr,
+        row_max_ptr,
+        log_sum_ptr,
         blank_grad_ptr,
         label_grad_ptr,
         out_ptr,
@@ -83,7 +87,8 @@ if triton is not None:
         """one program per cell, writes the gradient of its row from the two edge posteriors"""
         cell = tl.program_id(0)
         base = cell.to(tl.int64) * vocab
-        lse = tl.load(lse_ptr + cell)
+        row_max = tl.load(row_max_ptr + cell)
+        log_sum = tl.load(log_sum_ptr + cell)
         blank_grad = tl.load(blank_grad_ptr + cell)
         label_grad = tl.load(label_grad_ptr + cell)
         label = tl.load(label_ptr + cell)
@@ -93,7 +98,7 @@ if triton is not None:
             mask = offs < vocab
             x = tl.load(logits_ptr + base + offs, mask=mask, other=float("-inf")).to(tl.float32)
             # a cell carrying no posterior contributes nothing, and its row may not even be normalizable
-            grad = tl.where(total == 0.0, 0.0, total * tl.exp(x - lse))
+            grad = tl.where(total == 0.0, 0.0, total * tl.exp((x - row_max) - log_sum))
             grad = tl.where(offs == blank, grad - blank_grad, grad)
             grad = tl.where(offs == label, grad - label_grad, grad)
             tl.store(out_ptr + base + offs, grad.to(out_ptr.dtype.element_ty), mask=mask)
@@ -332,21 +337,24 @@ def cell_stats(logits: torch.Tensor, next_label: torch.Tensor, blank: int) -> Tu
     :param logits: [cells, vocab] unnormalized
     :param next_label: [cells] the label the emitting edge of every cell carries
     :param blank: blank index
-    :return: (log normalizer, blank log prob, label log prob), each [cells]
+    :return: (row maximum, log sum of the exponentials past it, blank log prob, label log prob), each [cells]
     """
     assert logits.is_cuda and triton is not None, "monotonic rnnt: the cell kernels need cuda and triton"
     assert logits.is_contiguous(), "monotonic rnnt: the cell kernels address the logits row by row"
     cells, vocab = logits.shape
-    out = [torch.empty(cells, dtype=torch.float32, device=logits.device) for _ in range(3)]
+    out = [torch.empty(cells, dtype=torch.float32, device=logits.device) for _ in range(4)]
     # noinspection PyArgumentList
-    _cell_stats_kernel[(cells,)](logits, next_label, out[0], out[1], out[2], vocab, blank, BLOCK=1024, num_warps=8)
+    _cell_stats_kernel[(cells,)](
+        logits, next_label, out[0], out[1], out[2], out[3], vocab, blank, BLOCK=1024, num_warps=8
+    )
     return tuple(out)
 
 
 def cell_grad(
     logits: torch.Tensor,
     next_label: torch.Tensor,
-    lse: torch.Tensor,
+    row_max: torch.Tensor,
+    log_sum: torch.Tensor,
     blank_grad: torch.Tensor,
     label_grad: torch.Tensor,
     blank: int,
@@ -354,7 +362,8 @@ def cell_grad(
     """
     :param logits: [cells, vocab] unnormalized
     :param next_label: [cells] the label the emitting edge of every cell carries
-    :param lse: [cells] log normalizer from :func:`cell_stats`
+    :param row_max: [cells] row maximum from :func:`cell_stats`
+    :param log_sum: [cells] log sum of the exponentials past the row maximum from :func:`cell_stats`
     :param blank_grad: [cells] gradient of the loss wrt the blank log probability
     :param label_grad: [cells] gradient of the loss wrt the label log probability
     :param blank: blank index
@@ -365,6 +374,6 @@ def cell_grad(
     out = torch.empty_like(logits)
     # noinspection PyArgumentList
     _cell_grad_kernel[(cells,)](
-        logits, next_label, lse, blank_grad, label_grad, out, vocab, blank, BLOCK=1024, num_warps=8
+        logits, next_label, row_max, log_sum, blank_grad, label_grad, out, vocab, blank, BLOCK=1024, num_warps=8
     )
     return out
