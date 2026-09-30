@@ -1062,6 +1062,8 @@ def test_layer_norm_fused_matches_generic():
 def test_causal_dot_attention_fused_is_opt_in():
     from returnn.config import Config, global_config_ctx
 
+    if not hasattr(torch.nn.functional, "scaled_dot_product_attention"):
+        raise unittest.SkipTest("torch without scaled_dot_product_attention")
     torch.manual_seed(42)
     batch = Dim(2, name="batch")
     time_dim = Dim(4, name="time")
@@ -1120,15 +1122,15 @@ def test_causal_dot_attention_fused_matches_generic():
         }
         return raws, tensors
 
-    def _fused(x):
+    def _fused(x, scale):
         from returnn.config import Config, global_config_ctx
 
         with global_config_ctx(Config({"rf_fused_causal_attention": True})):
             return rf.dot_attention(
-                x["q"], x["k"], x["v"], key_dim=feat, axis=time_dim, causal_query_spatial_dim=time_dim
+                x["q"], x["k"], x["v"], key_dim=feat, axis=time_dim, causal_query_spatial_dim=time_dim, scale=scale
             )
 
-    def _generic(x):
+    def _generic(x, scale):
         return Backend.scaled_dot_product_attention(
             x["q"],
             x["k"],
@@ -1140,6 +1142,7 @@ def test_causal_dot_attention_fused_matches_generic():
             kv_spatial_dim=time_dim,
             query_spatial_dim=time_dim,
             is_causal=True,
+            scale=scale,
         )
 
     matmul, calls = rf.matmul, []
@@ -1148,13 +1151,14 @@ def test_causal_dot_attention_fused_matches_generic():
         calls.append(kwargs.get("reduce"))
         return matmul(*args, **kwargs)
 
-    for dtype, tolerance in (("float32", 1e-5), ("bfloat16", 2e-2)):
+    for dtype, tolerance, scale in (("float32", 1e-5, None), ("bfloat16", 2e-2, None), ("float32", 1e-5, 0.3)):
+        calls.clear()
         results = []
         for func in (_fused, _generic):
             raws, tensors = _inputs(dtype)
             rf.matmul = _counting_matmul if func is _fused else matmul
             try:
-                out = func(tensors)
+                out = func(tensors, scale)
             finally:
                 rf.matmul = matmul
             out_raw = out.copy_transpose((batch, heads, time_dim, v_feat)).raw_tensor
@@ -1162,7 +1166,8 @@ def test_causal_dot_attention_fused_matches_generic():
             results.append(
                 [torch.where(mask, t.detach().float(), 0.0) for t in (out_raw, *(raws[n].grad for n in "qkv"))]
             )
-        assert not calls, calls
+        # the generic path runs where torch lacks the kernel or its scale argument
+        assert bool(calls) == (torch.__version__ < ((2, 0) if scale is None else (2, 1))), (dtype, scale, calls)
         for fused_raw, generic_raw in zip(*results):
             torch.testing.assert_close(fused_raw, generic_raw, atol=tolerance, rtol=tolerance)
 

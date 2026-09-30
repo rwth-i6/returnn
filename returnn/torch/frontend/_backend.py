@@ -2390,8 +2390,9 @@ class TorchBackend(Backend[torch.Tensor]):
             return Backend.rms_norm(x, in_dim=in_dim, scale=scale, bias=bias, eps=eps)
         return out
 
-    @staticmethod
+    @classmethod
     def scaled_dot_product_attention(
+        cls,
         query: Tensor,
         key: Tensor,
         value: Tensor,
@@ -3263,6 +3264,8 @@ def _fused_causal_attention(
         or not isinstance(train_flag, bool)
         or (att_dropout > 0.0 and train_flag and att_dropout_broadcast)
         or torch.onnx.is_in_onnx_export()
+        # torch 2.0 added the kernel, torch 2.1 its scale argument
+        or torch.__version__ < ((2, 0) if scale is None else (2, 1))
     ):
         return None
 
@@ -3283,7 +3286,7 @@ def _fused_causal_attention(
         v_raw,
         dropout_p=att_dropout if train_flag else 0.0,
         is_causal=True,
-        scale=qk_feat_dim.dimension**-0.5 if scale is None else scale,
+        **({} if scale is None else {"scale": scale}),
     )
     out = Tensor(
         "dot_attention",
