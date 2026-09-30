@@ -161,7 +161,10 @@ def test_llama():
 
     print("Check...")
     assert out_rf.raw_tensor.shape == out_hf.logits.shape
-    torch.testing.assert_allclose(out_rf.raw_tensor, out_hf.logits)
+    # Only compare the non-padded frames:
+    # HF masks the padded keys via attention_mask, the RF causal self-att does not,
+    # so the padded frames differ (and are irrelevant).
+    torch.testing.assert_allclose(out_rf.raw_tensor[mask.raw_tensor], out_hf.logits[mask.raw_tensor])
     print("  all matched!")
 
 
