@@ -604,6 +604,38 @@ def test_ctc_loss_packed_matches_padded_cuda():
     torch.testing.assert_close(leaf_packed.grad[mask], leaf_pad.grad[mask], rtol=1e-3, atol=1e-3)
 
 
+def test_ctc_loss_packed_warns_about_a_large_edge_scratch():
+    """
+    The packed Baum-Welch op sizes its edge scratch (one score per edge and frame) by the bounds, not by the data.
+    A scratch far above what a batch needs usually comes from a loose edges_bound, so past a limit it warns.
+    """
+    import warnings
+    from returnn.torch.util import native_op as torch_native_op
+
+    opts = dict(
+        logits=torch.randn(5, 4),
+        seq_starts=torch.tensor([0], dtype=torch.int32),
+        logits_seq_lens=torch.tensor([5], dtype=torch.int32),
+        max_seq_len=5,
+        targets=torch.tensor([[1, 2]], dtype=torch.int32),
+        targets_seq_lens=torch.tensor([2], dtype=torch.int32),
+        blank_index=3,
+    )
+    default_limit = torch_native_op._FAST_BW_PACKED_SCRATCH_WARN_BYTES
+    caught = {}
+    for limit in (default_limit, 1):
+        torch_native_op._FAST_BW_PACKED_SCRATCH_WARN_BYTES = limit
+        try:
+            with warnings.catch_warnings(record=True) as records:
+                warnings.simplefilter("always")
+                ctc_loss_packed(**opts)
+        finally:
+            torch_native_op._FAST_BW_PACKED_SCRATCH_WARN_BYTES = default_limit
+        caught[limit] = [str(r.message) for r in records if "edge scratch" in str(r.message)]
+    assert not caught[default_limit], caught
+    assert caught[1], caught
+
+
 def test_ctc_fsa_batch3_len6_c8():
     """
     This (:func:`Fsa.get_ctc_fsa_fast_bw`) is used by :func:`ctc_loss`.
