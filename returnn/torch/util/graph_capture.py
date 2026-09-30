@@ -302,13 +302,14 @@ def inductor_fw_compiler(backend: Optional[Callable] = None) -> Callable:
     torch >= 2.12: compile_fx's compat wrapper declares _boxed_call=True
     but re-wraps an already-boxed args list, so the generated runner sees [[args]];
     call it star-unpacked instead, while the shim stays boxed towards aot_function.
+    Any other backend (e.g. the boxed ``nop`` of opts "debug_aot_eager") is returned as is.
     """
-    if backend is None:
-        # noinspection PyProtectedMember
-        from torch._inductor.compile_fx import compile_fx
+    # noinspection PyProtectedMember
+    from torch._inductor.compile_fx import compile_fx
 
+    if backend is None:
         backend = compile_fx
-    if torch.__version__ < (2, 12):
+    if torch.__version__ < (2, 12) or backend is not compile_fx:
         return backend
 
     def _compile_fx_call_unboxed(gm, example_inputs):

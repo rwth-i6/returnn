@@ -373,6 +373,26 @@ def test_smoothed_ce_bwd_inductor_pattern():
     assert graph_capture._smoothed_ce_bwd_match_count > count_before, "CE bwd pattern did not fire"
 
 
+@unittest.skipIf(torch.__version__ < (2,), "aot_function + Inductor need PyTorch >= 2.0")
+def test_inductor_fw_compiler_backends():
+    """
+    :func:`returnn.torch.util.graph_capture.inductor_fw_compiler` as the compiled train step uses it
+    (aot_function, one inference-style graph), CPU:
+    with Inductor's compile_fx, and with the eager ``nop`` of torch_cuda_graph opts "debug_aot_eager",
+    whose already boxed result must not get the torch >= 2.12 compile_fx call shim.
+    """
+    from functorch.compile import aot_function, nop
+    from returnn.torch.util.graph_capture import inductor_fw_compiler
+
+    def _f(x, y):
+        return torch.sin(x) * y + 1.0
+
+    x, y = torch.randn(5), torch.randn(5)
+    for backend in (None, nop):
+        f_compiled = aot_function(_f, fw_compiler=inductor_fw_compiler(backend))
+        torch.testing.assert_close(f_compiled(x, y), _f(x, y))
+
+
 def test_all_reduce_sum_traces():
     """
     the differentiable all-reduce (the synchronized BatchNorm statistics go through it) traces under AOT autograd:
