@@ -74,6 +74,58 @@ def get_optimizer_class(
         raise TypeError(f"Invalid optimizer class_name {class_name!r} type {type(class_name).__name__}")
 
 
+def init_optimizer_state(optimizer: torch.optim.Optimizer):
+    """
+    Create the lazy optimizer state of all params with a grad now, as the first ``step()`` would,
+    but without a step, i.e. without touching the params.
+    For the optimizer step captured in a CUDA graph (``torch_cuda_graph`` "capture_optimizer"):
+    the state tensors are graph inputs, so they must exist before the capture.
+
+    Supported:
+
+    - an optimizer with an ``init_state()`` method (e.g. a custom optimizer): called as is.
+    - SGD: a zero momentum buffer gives the same first update as the lazy ``clone(grad)`` (for dampening 0).
+    - the torch optimizers which create their state in ``_init_group``
+      (Adam, AdamW, Adamax, NAdam, RAdam, Adadelta, RMSprop, ASGD, Adagrad, Rprop, Adafactor, Muon, ...).
+
+    :param optimizer: its params with ``.grad`` set get the state
+    """
+    if callable(getattr(optimizer, "init_state", None)):
+        optimizer.init_state()
+        return
+    if isinstance(optimizer, torch.optim.SGD):
+        for group in optimizer.param_groups:
+            if group["momentum"] == 0:
+                continue  # no state
+            if group["dampening"] != 0:
+                raise NotImplementedError("init_optimizer_state: SGD with dampening, the first update differs")
+            for p in group["params"]:
+                if p.grad is not None and optimizer.state[p].get("momentum_buffer") is None:
+                    optimizer.state[p]["momentum_buffer"] = torch.zeros_like(p, memory_format=torch.preserve_format)
+        return
+    if not hasattr(optimizer, "_init_group"):
+        raise NotImplementedError(
+            f"init_optimizer_state: {type(optimizer).__name__} can only create its state by a step,"
+            " give it an init_state() method"
+        )
+    import inspect
+
+    # private torch API: _init_group(group, params_with_grad, grads, <state lists>...)
+    # creates the missing state of the group's params with grad, and fills the given lists
+    sig_params = inspect.signature(optimizer._init_group).parameters.values()
+    num_lists = sum(1 for param in sig_params if param.default is param.empty) - 1  # excluding group
+    with torch.no_grad():
+        for group in optimizer.param_groups:
+            optimizer._init_group(group, *[[] for _ in range(num_lists)])
+    for group in optimizer.param_groups:
+        for p in group["params"]:
+            if p.grad is not None and not optimizer.state.get(p):
+                raise NotImplementedError(
+                    f"init_optimizer_state: {type(optimizer).__name__}._init_group created no state,"
+                    " give it an init_state() method"
+                )
+
+
 def _get_class_init_kwargs(optim_class):
     """
     Obtains the keyword arguments of the class provided as parameter that the user can add to their optimizer.
