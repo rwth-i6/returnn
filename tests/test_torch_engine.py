@@ -2504,10 +2504,18 @@ def _run_cuda_graph_train(
                     assert int(loss.get_inv_norm_factor().raw_tensor) == n_frames, name
                 assert engine._graph_capture.captures_optimizer == (not optimizer_step)
                 # the cached reduction of the error measure must be a graph output, refreshed by every replay,
-                # not an eager reduction from the first readout, which every later replay would repeat
+                # not an eager reduction from the first readout, which every later replay would repeat.
+                # The eval rebound the dyn sizes as well, so the fresh sum masks by the static length buffer
                 fer = engine._graph_capture._ctx.losses["fer"]
-                fresh = rf.reduce_sum(fer.loss, axis=fer.loss.dims) if fer.loss.dims else fer.loss
-                torch.testing.assert_close(fer.get_summed_loss().raw_tensor, fresh.raw_tensor)
+                fresh = fer.loss.raw_tensor
+                if fer.loss.dims:
+                    batch_tag = fer.loss.get_batch_dim_tag()
+                    (time_tag,) = [d for d in fer.loss.dims if d != batch_tag]
+                    per_frame = fer.loss.copy_transpose([batch_tag, time_tag]).raw_tensor
+                    lens = engine._graph_capture._lens_bufs["data"]
+                    in_seq = torch.arange(per_frame.shape[1], device=lens.device)[None, :] < lens[:, None]
+                    fresh = (per_frame * in_seq).sum()
+                torch.testing.assert_close(fer.get_summed_loss().raw_tensor, fresh)
             else:
                 engine.train()
             # the dynamic warmup steps run at the batch's own size, every batch here is smaller than the bound,
