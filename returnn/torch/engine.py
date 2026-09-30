@@ -1358,6 +1358,7 @@ class Engine(EngineBase):
                             assert var_val.shape == var_shape
                             custom_missing_vars_map[var_name] = var_val
                     preload_model_state.update(custom_missing_vars_map)
+                    preload_model_state_keys.update(custom_missing_vars_map.keys())
                     missing_keys_preload, unexpected_keys_preload = self._pt_model.load_state_dict(
                         preload_model_state, strict=False
                     )
