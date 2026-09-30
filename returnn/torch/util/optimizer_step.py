@@ -279,8 +279,18 @@ class OptimizerStep:
         from functorch.compile import aot_function
         from .graph_capture import inductor_fw_compiler
 
+        # noinspection PyProtectedMember
+        from .graph_capture import _torch_version_ge_2_12
+
         self._num_traces += 1
         print(f"torch_optimizer_step: compiling the optimizer step (trace {self._num_traces})...", file=log.v3)
+        if self._num_traces == 1 and not _torch_version_ge_2_12():
+            print(
+                f"torch_optimizer_step WARNING: torch {torch.__version__} < 2.12 emulates the eager bf16/fp16 rounding"
+                " (emulate_precision_casts) only partially,"
+                " so with low-precision math (e.g. Muon) the compiled step can differ slightly from the eager one",
+                file=log.v2,
+            )
         opt = self._optimizer
         groups = opt.param_groups
         # the real params per group, and the state keys per param, in the order of _inputs
