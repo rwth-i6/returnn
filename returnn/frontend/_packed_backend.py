@@ -3098,6 +3098,33 @@ class PackedBackend(Backend[PackedRawTensor]):
         out = rf.combine(_unpack_if_packed(a), kind, _unpack_if_packed(b), **opts)
         return _repack_result(out, template)
 
+    @classmethod
+    def compare(
+        cls,
+        a: Union[Tensor, Any],
+        kind: str,
+        b: Union[Tensor, Any],
+        *,
+        allow_broadcast_all_sources: Optional[bool] = None,
+        dim_order: Optional[Sequence[Dim]] = None,
+    ) -> Tensor:
+        """
+        elementwise, so a plain operand over the packed dims is packed alike first (see :func:`_pack_like`).
+        The rest goes through the generic dim-aware wrapper.
+        """
+        packed_raws = [x.raw_tensor for x in (a, b) if isinstance(x, Tensor) and is_packed(x)]
+        if packed_raws:
+            raw = packed_raws[0]
+            a, b = [
+                raw.rewrap(_pack_like(x, raw), name=x.name)
+                if isinstance(x, Tensor) and not is_packed(x) and set(x.dims) & set(raw.orig_dims)
+                else x
+                for x in (a, b)
+            ]
+        return _dim_aware_call(
+            "compare", (a, kind, b), dict(allow_broadcast_all_sources=allow_broadcast_all_sources, dim_order=dim_order)
+        )
+
     @staticmethod
     def clip_by_value(
         x: Tensor,
@@ -4616,7 +4643,6 @@ class PackedBackend(Backend[PackedRawTensor]):
 # packed data directly if the call does not reference the packed dims, otherwise unpack fallback.
 for _name in [
     "batch_norm",
-    "compare",
     "expand_dim",
     "flip_no_mask",
     "masked_scatter",
