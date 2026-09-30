@@ -200,6 +200,34 @@ def test_rnnt_refuses_labels_outside_the_vocabulary():
             raise AssertionError(f"labels {labels} with blank {blank} were accepted")
 
 
+def test_rnnt_survives_impossible_edges():
+    """
+    Two edges have no probability, the label at frame 1 from the empty prefix and the blank at frame 0 after the
+    label, so one alignment remains and the cell of frame 1 and prefix 1 lies on none. The gradient stays finite
+    where the loss is, and a row of minus infinity at that dead cell changes nothing.
+    """
+    logits = torch.zeros(3, 2, 3)
+    logits[1, 0, 1] = float("-inf")
+    logits[0, 1, 0] = float("-inf")
+    dead = logits.clone()
+    dead[1, 1] = float("-inf")
+    args = (
+        torch.tensor([[1]], dtype=torch.int32),
+        torch.tensor([3], dtype=torch.int32),
+        torch.tensor([1], dtype=torch.int32),
+    )
+    for device in ["cpu"] + (["cuda"] if torch.cuda.is_available() else []):
+        results = []
+        for x in (logits, dead):
+            x = x.reshape(-1, 3).to(device).requires_grad_()
+            loss = rnnt_loss(x, *(a.to(device) for a in args), blank=0, max_frames=3)
+            loss.sum().backward()
+            results.append((loss.detach().cpu(), x.grad.cpu()))
+        torch.testing.assert_close(results[0][0], torch.tensor([54.0]).log())
+        assert torch.isfinite(results[0][1]).all(), results[0][1]
+        torch.testing.assert_close(results[1], results[0])
+
+
 def test_rf_rnnt_loss_scores_the_lattice_the_joint_builds():
     """
     The rows of the lattice need not be single frames. Here the joint gets the index of the row of every cell

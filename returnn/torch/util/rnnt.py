@@ -100,9 +100,10 @@ def _forward_scores(
     for diagonal in range(cell.shape[0]):
         if diagonal > 0:
             # both predecessors sit on the anti-diagonal before: the cell above at the same prefix, left through
-            # its blank, and the left neighbour at the prefix before, left through its label
-            above = alpha + blank_lp[cell[diagonal - 1]]
-            left = alpha + label_lp[cell[diagonal - 1]]
+            # its blank, and the left neighbour at the prefix before, left through its label.
+            # The floor keeps a dead edge finite, logaddexp of two minus infinities has a nan gradient
+            above = (alpha + blank_lp[cell[diagonal - 1]]).clamp(min=neg_inf)
+            left = (alpha + label_lp[cell[diagonal - 1]]).clamp(min=neg_inf)
             alpha = torch.logaddexp(above, torch.cat([pad, left[:, :-1]], dim=1))
         alpha = torch.where(inside[diagonal], alpha, torch.full_like(alpha, neg_inf))
         leaving = alpha + blank_lp[cell[diagonal]]
@@ -270,7 +271,9 @@ def rnnt_loss(
         total = outputs[0]
     else:
         source = logits if logits.dtype in (torch.float32, torch.float64) else logits.float()
-        log_probs = torch.log_softmax(source, dim=-1)
+        # a row without any finite logit has no probability mass, its log probabilities are minus infinity, not nan
+        dead = torch.isneginf(source).all(dim=-1, keepdim=True)
+        log_probs = torch.log_softmax(source.masked_fill(dead, 0.0), dim=-1).masked_fill(dead, float("-inf"))
         blank_lp = log_probs[:, blank]
         label_lp = torch.gather(log_probs, 1, next_label.unsqueeze(1)).squeeze(1)
         total = _forward_scores(blank_lp, label_lp, frame_lens, label_lens, max_frames, max_prefix)
