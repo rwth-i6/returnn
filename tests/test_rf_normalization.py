@@ -134,3 +134,38 @@ def test_moments_distributed_matches_local():
         torch.testing.assert_close(mean.raw_tensor, ref_mean.raw_tensor, rtol=1e-6, atol=1e-3)
         torch.testing.assert_close(variance.raw_tensor, ref_variance.raw_tensor, rtol=1e-2, atol=1e-4)
         assert float(variance.raw_tensor.min()) > 0.0, (time_dim, use_mask, variance.raw_tensor)
+
+
+def test_moments_and_batch_norm_keep_use_mask():
+    """
+    With ``rf_moments_use_fixed_masking``, the local mean takes use_mask like the variance,
+    and distributed BatchNorm normalizes over the same frames as the local one, masked or not.
+    """
+    import torch
+    from returnn.config import Config, global_config_ctx
+
+    rf.select_backend_torch()
+    batch = Dim(2, name="batch")
+    feat = Dim(3, name="feat")
+    time_sizes = Tensor("time_size", dims=[batch], dtype="int32", raw_tensor=torch.tensor([5, 3], dtype=torch.int32))
+    time_dim = Dim(time_sizes, name="time")
+    torch.manual_seed(3)
+    raw = torch.randn(2, 5, 3)
+    # padding of the shorter sequence, far off so that masked and unmasked statistics clearly differ
+    raw[1, 3:] = 50.0
+    x = Tensor("x", dims=[batch, time_dim, feat], dtype="float32", raw_tensor=raw)
+    with global_config_ctx(Config({"rf_moments_use_fixed_masking": True})):
+        for use_mask, rows in ((True, torch.cat([raw[0], raw[1, :3]])), (False, raw.reshape(-1, 3))):
+            mean, variance = rf.moments(x, axis=[batch, time_dim], use_mask=use_mask)
+            torch.testing.assert_close(mean.raw_tensor, rows.mean(dim=0))
+            torch.testing.assert_close(variance.raw_tensor, (rows - rows.mean(dim=0)).square().mean(dim=0))
+
+            rf.init_train_step_run_ctx(train_flag=True, step=0, epoch=1)
+            local = rf.BatchNorm(feat, use_mask=use_mask)
+            distributed = rf.BatchNorm(feat, use_mask=use_mask, distributed=True)
+            torch.testing.assert_close(
+                distributed(x).copy_compatible_to_dims_raw([batch, time_dim, feat]),
+                local(x).copy_compatible_to_dims_raw([batch, time_dim, feat]),
+                rtol=1e-5,
+                atol=1e-5,
+            )
