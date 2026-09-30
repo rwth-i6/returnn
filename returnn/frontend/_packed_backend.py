@@ -5626,6 +5626,8 @@ def monotonic_rnnt_lattice(
     the batch's worst case on both axes. This builds the packed form straight away, one entry per real
     cell, and never materializes the padded one.
 
+    The layout is the same for the RNN-T lattice (:func:`returnn.frontend.rnnt_loss`), only the paths through it differ.
+
     :param enc: [batch, enc_spatial_dim, D_enc], packed or padded.
         It can also come without a feature dim, [batch, enc_spatial_dim], e.g. the index of every frame,
         for a joint that finds what it reads per cell by that index
