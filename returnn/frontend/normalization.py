@@ -31,6 +31,9 @@ def moments(
     distributed: bool = False,
 ) -> Tuple[Tensor, Tensor]:
     """
+    With the global config option ``rf_moments_float32``,
+    float16 and bfloat16 input is reduced in float32 and the result cast back to its dtype.
+
     :param x: input
     :param axis: the axis (or axes) to be reduced, to calculate statistics over
     :param use_mask: whether to use a mask for dynamic spatial dims in the reduction
@@ -76,6 +79,9 @@ def moments(
         if isinstance(correction, Tensor) or correction != 0:
             variance *= count / (count - correction)
         return rf.cast(mean, compute_dtype), rf.cast(variance, compute_dtype)
+    if x.dtype in ("float16", "bfloat16") and _moments_float32():
+        mean, variance = moments(rf.cast(x, "float32"), axis, use_mask=use_mask, correction=correction)
+        return rf.cast(mean, x.dtype), rf.cast(variance, x.dtype)
     mean = rf.reduce_mean(x, axis=axis)
     # stop_gradient does not change the gradient here
     variance = rf.reduce_mean(rf.squared_difference(x, rf.stop_gradient(mean)), axis=axis, use_mask=use_mask)
@@ -83,6 +89,19 @@ def moments(
         n = rf.num_elements_of_shape(axis, use_mask=use_mask)
         variance *= n / (n - correction)
     return mean, variance
+
+
+def _moments_float32() -> bool:
+    """
+    :return: whether :func:`moments` reduces float16 and bfloat16 input in float32 and casts the result back,
+        from the global config option ``rf_moments_float32`` (default False)
+    """
+    from returnn.config import get_global_config
+
+    config = get_global_config(raise_exception=False)
+    if not config:
+        return False
+    return config.bool("rf_moments_float32", False)
 
 
 class LayerNorm(rf.Module):
