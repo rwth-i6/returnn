@@ -3,7 +3,7 @@ Attention
 """
 
 from __future__ import annotations
-from typing import Union, Optional, Sequence, Tuple, List
+from typing import Union, Optional, Any, Sequence, Tuple, List, Dict
 import logging
 from returnn.tensor import Tensor, Dim, single_step_dim
 import returnn.frontend as rf
@@ -18,6 +18,7 @@ __all__ = [
     "CausalSelfAttentionState",
     "RotaryPosSelfAttention",
     "RotaryPosCausalSelfAttention",
+    "RotaryPosGroupedQueryCausalSelfAttention",
     "RelPosSelfAttention",
     "RelPosCausalSelfAttention",
     "CrossAttention",
@@ -523,6 +524,190 @@ class RotaryPosCausalSelfAttention(CausalSelfAttention):
         )
         output = self.attention(q, k, v, kv_axis=hist_dim)
         return output, new_state
+
+
+class RotaryPosGroupedQueryCausalSelfAttention(rf.Module):
+    """
+    RoPE-based causal self attention with grouped-query attention (GQA),
+    as in Llama 3, Qwen2, Qwen3, Mistral.
+
+    Unlike :class:`RotaryPosCausalSelfAttention`, it has separate q, k, v projections
+    (k and v with ``num_kv_heads`` heads, each shared by ``num_heads / num_kv_heads`` query heads),
+    separate bias options for qkv and the final projection,
+    an optional per-head norm on q and k (qk-norm, as in Qwen3),
+    and optional LoRA on the projections.
+    The KV cache (:class:`CausalSelfAttentionState`) keeps the ``num_kv_heads`` keys and values.
+    """
+
+    def __init__(
+        self,
+        in_dim: Dim,
+        proj_dim: Optional[Dim],
+        *,
+        key_dim_total: Optional[Dim] = None,
+        value_dim_total: Optional[Dim] = None,
+        num_heads: Union[int, Dim],
+        num_kv_heads: Optional[Union[int, Dim]] = None,
+        head_dim: Optional[Union[int, Dim]] = None,
+        qkv_with_bias: bool = False,
+        proj_with_bias: bool = False,
+        qk_norm: Optional[Union[type, Dict[str, Any]]] = None,
+        rope_base: float = 10_000.0,
+        lora: Optional[Dict[str, Any]] = None,
+        lora_targets: Sequence[str] = ("q", "v"),
+        att_dropout: float = 0.1,
+        att_dropout_broadcast: Optional[bool] = None,
+    ):
+        """
+        :param in_dim: input dim
+        :param proj_dim: if given, will add a final linear projection to this dim.
+            otherwise no projection after the attention
+        :param key_dim_total: total key dim over all query heads. ignored if ``head_dim`` is given
+        :param value_dim_total: total value dim over all query heads. ignored if ``head_dim`` is given
+        :param num_heads: number of query heads
+        :param num_kv_heads: number of key/value heads. ``num_heads`` must be a multiple of it.
+            None (default) means ``num_heads``, i.e. standard multi-head attention.
+        :param head_dim: key and value dim per head. can differ from ``in_dim / num_heads`` (e.g. Qwen3).
+        :param qkv_with_bias: bias in the q, k, v projections (e.g. Qwen2: True)
+        :param proj_with_bias: bias in the final projection
+        :param qk_norm: norm (e.g. ``rf.RMSNorm``) over the head dim of q and k, applied before RoPE (Qwen3)
+        :param rope_base: RoPE base (theta), e.g. 10_000 (Llama 2), 500_000 (Llama 3), 1_000_000 (Qwen2)
+        :param lora: if given, options for :class:`rf.LoRALinear` (e.g. ``rank``, ``alpha``),
+            used for the projections in ``lora_targets``
+        :param lora_targets: subset of ``("q", "k", "v", "proj")``
+        :param att_dropout: dropout for attention weights
+        :param att_dropout_broadcast: whether to broadcast over all but ``axis``.
+            normally not wanted. disabled by default since behavior version 19.
+        """
+        super().__init__()
+        self.in_dim = in_dim
+        if isinstance(num_heads, int):
+            num_heads = Dim(num_heads, name="num_heads")
+        if num_kv_heads is None:
+            num_kv_heads = num_heads
+        elif isinstance(num_kv_heads, int):
+            num_kv_heads = num_heads if num_kv_heads == num_heads.dimension else Dim(num_kv_heads, name="num_kv_heads")
+        assert num_heads.dimension % num_kv_heads.dimension == 0, f"{self}: {num_heads=} vs {num_kv_heads=}"
+        self.num_heads = num_heads
+        self.num_kv_heads = num_kv_heads
+        self.kv_group_dim = (
+            Dim(num_heads.dimension // num_kv_heads.dimension, name="kv_group") if num_kv_heads != num_heads else None
+        )
+        if head_dim is not None:
+            if isinstance(head_dim, int):
+                head_dim = Dim(head_dim, name="head_dim")
+            self.key_dim_per_head = head_dim
+            self.value_dim_per_head = head_dim
+        else:
+            assert key_dim_total is not None and value_dim_total is not None
+            self.key_dim_per_head = key_dim_total.div_left(num_heads)
+            self.value_dim_per_head = value_dim_total.div_left(num_heads)
+        self.key_dim_total = num_heads * self.key_dim_per_head
+        self.value_dim_total = num_heads * self.value_dim_per_head
+        self.out_dim = proj_dim if proj_dim else self.value_dim_total
+
+        assert set(lora_targets).issubset({"q", "k", "v", "proj"}), f"{self}: invalid {lora_targets=}"
+
+        def _linear(name: str, in_dim_: Dim, out_dim_: Dim, with_bias: bool) -> rf.Linear:
+            if lora is not None and name in lora_targets:
+                return rf.LoRALinear(in_dim_, out_dim_, with_bias=with_bias, **lora)
+            return rf.Linear(in_dim_, out_dim_, with_bias=with_bias)
+
+        self.q = _linear("q", in_dim, self.key_dim_total, qkv_with_bias)
+        self.k = _linear("k", in_dim, num_kv_heads * self.key_dim_per_head, qkv_with_bias)
+        self.v = _linear("v", in_dim, num_kv_heads * self.value_dim_per_head, qkv_with_bias)
+        self.proj = _linear("proj", self.value_dim_total, proj_dim, proj_with_bias) if proj_dim else None
+
+        self.q_norm = self.k_norm = None
+        if qk_norm is not None:
+            from returnn.frontend.decoder.transformer import make_norm
+
+            self.q_norm = make_norm(qk_norm, self.key_dim_per_head)
+            self.k_norm = make_norm(qk_norm, self.key_dim_per_head)
+
+        self.rope_base = rope_base
+        self.att_dropout = att_dropout
+        if att_dropout_broadcast is None:
+            att_dropout_broadcast = _att_dropout_broadcast_default()
+        self.att_dropout_broadcast = att_dropout_broadcast
+
+    def forward_qkv(self, source: Tensor) -> Tuple[Tensor, Tensor, Tensor]:
+        """
+        :return: q [...,num_heads,D], k [...,num_kv_heads,D], v [...,num_kv_heads,Dv], before RoPE
+        """
+        q = rf.split_dims(self.q(source), axis=self.q.out_dim, dims=(self.num_heads, self.key_dim_per_head))
+        k = rf.split_dims(self.k(source), axis=self.k.out_dim, dims=(self.num_kv_heads, self.key_dim_per_head))
+        v = rf.split_dims(self.v(source), axis=self.v.out_dim, dims=(self.num_kv_heads, self.value_dim_per_head))
+        if self.q_norm is not None:
+            q = self.q_norm(q)
+            k = self.k_norm(k)
+        return q, k, v
+
+    def _expand_kv_heads(self, x: Tensor) -> Tensor:
+        """
+        :param x: [...,num_kv_heads,D]
+        :return: [...,num_heads,D], where query head ``i * group + j`` uses kv head ``i``
+        """
+        if self.kv_group_dim is None:
+            return x
+        x = rf.expand_dim(x, self.kv_group_dim)
+        x, _ = rf.merge_dims(x, dims=(self.num_kv_heads, self.kv_group_dim), out_dim=self.num_heads)
+        return x
+
+    def _attention(self, q: Tensor, k: Tensor, v: Tensor, *, kv_axis: Dim, causal: bool) -> Tensor:
+        att = dot_attention(
+            q,
+            self._expand_kv_heads(k),
+            self._expand_kv_heads(v),
+            key_dim=self.key_dim_per_head,
+            axis=kv_axis,
+            att_dropout=self.att_dropout,
+            att_dropout_broadcast=self.att_dropout_broadcast,
+            causal_query_spatial_dim=kv_axis if causal else None,
+        )
+        output, _ = rf.merge_dims(att, dims=(self.num_heads, self.value_dim_per_head), out_dim=self.value_dim_total)
+        if self.proj:
+            output = self.proj(output)
+        return output
+
+    def __call__(
+        self,
+        source: Tensor,
+        axis: Dim,
+        *,
+        state: Optional[CausalSelfAttentionState] = None,
+    ) -> Tuple[Tensor, CausalSelfAttentionState]:
+        """forward"""
+        q, k, v = self.forward_qkv(source)
+        if axis != single_step_dim and (not state or state.accum_axis.dimension == 0):
+            # full sequence from scratch: explicit is_causal, see CausalSelfAttention.__call__
+            new_state = CausalSelfAttentionState(k_accum=k, v_accum=v, accum_axis=axis)
+            pos_enc = _rope_pos_enc(axis, self.key_dim_per_head, self.rope_base)  # [T,D]
+            q = _apply_rope(q, pos_enc, self.key_dim_per_head)
+            k = _apply_rope(k, pos_enc, self.key_dim_per_head)
+            return self._attention(q, k, v, kv_axis=axis, causal=True), new_state
+        k, v, hist_dim, new_state = _causal_self_att_step(k, v, axis=axis, state=state, self=self)
+        q, k = _rope_causal_step(
+            q, k, axis=axis, hist_dim=hist_dim, state=state, feat_dim=self.key_dim_per_head, base=self.rope_base
+        )
+        return self._attention(q, k, v, kv_axis=hist_dim, causal=False), new_state
+
+    def default_initial_state(
+        self, *, batch_dims: Sequence[Dim], capacity: Optional[int] = None
+    ) -> CausalSelfAttentionState:
+        """
+        :param batch_dims:
+        :param capacity: max number of steps, see :func:`CausalSelfAttention.default_initial_state`
+        """
+        if capacity is not None:
+            hist_dim = Dim(rf.zeros((), dtype="int32"), name="self_att_hist", capacity=capacity)
+        else:
+            hist_dim = Dim(0, name="self_att_expand_dim_init")
+        return CausalSelfAttentionState(
+            k_accum=rf.zeros(list(batch_dims) + [hist_dim, self.num_kv_heads, self.key_dim_per_head]),
+            v_accum=rf.zeros(list(batch_dims) + [hist_dim, self.num_kv_heads, self.value_dim_per_head]),
+            accum_axis=hist_dim,
+        )
 
 
 def _rope_pos_enc(spatial_dim: Dim, feat_dim: Dim, base: float) -> Tensor:

@@ -388,7 +388,9 @@ class TransformerDecoderLayer(rf.Module):
         :param batch_dims:
         :param capacity: for the self-attention KV cache
         """
-        if capacity is not None and isinstance(self.self_att, rf.CausalSelfAttention):
+        if capacity is not None and isinstance(
+            self.self_att, (rf.CausalSelfAttention, rf.RotaryPosGroupedQueryCausalSelfAttention)
+        ):
             return rf.State(self_att=self.self_att.default_initial_state(batch_dims=batch_dims, capacity=capacity))
         return rf.State(self_att=self.self_att.default_initial_state(batch_dims=batch_dims))
 
