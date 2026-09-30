@@ -21,7 +21,7 @@ different route it also checks the hand-written backward sweep.
 
 from __future__ import annotations
 
-from typing import Optional, Tuple
+from typing import Tuple
 
 import torch
 
@@ -64,9 +64,7 @@ def lattice_index(
     # output size stays static, unlike searchsorted, which Inductor only takes as an extern fallback.
     # The clamp keeps the span from going negative, which repeat_interleave does not survive
     spans = torch.cat([cells[:-1], (cells[-1] + total - cells.sum()).clamp(min=0).unsqueeze(0)])
-    seq = torch.repeat_interleave(
-        torch.arange(frame_lens.shape[0], device=frame_lens.device), spans, output_size=total
-    )
+    seq = torch.repeat_interleave(torch.arange(frame_lens.shape[0], device=frame_lens.device), spans, output_size=total)
     stride = (label_lens.long() + 1)[seq]
     within = torch.arange(total, device=frame_lens.device) - offsets[seq]
     return seq, torch.div(within, stride, rounding_mode="floor"), within % stride
@@ -173,7 +171,10 @@ def _forward_scores(
     for frame in range(max_frames):
         alpha_frames.append(alpha)
         emit = alpha + label_rows[frame]
-        updated = torch.logaddexp(alpha + blank_rows[frame], torch.cat([pad, emit[:, :-1]], dim=1))
+        # the floor keeps a dead edge finite, logaddexp of two minus infinities has a nan gradient
+        stay = (alpha + blank_rows[frame]).clamp(min=neg_inf)
+        move = torch.cat([pad, emit[:, :-1]], dim=1).clamp(min=neg_inf)
+        updated = torch.logaddexp(stay, move)
         updated = torch.where(valid, updated, torch.full_like(updated, neg_inf))
         alpha = torch.where((frame < frame_lens).unsqueeze(1), updated, alpha)
         total = torch.where((frame + 1) == frame_lens, torch.gather(alpha, 1, lens).squeeze(1), total)
@@ -192,13 +193,13 @@ if hasattr(torch.library, "custom_op"):  # torch >= 2.4
         blank: int,
         max_frames: int,
         max_prefix: int,
-    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
         from .monotonic_rnnt_triton import cell_stats, forward_scan
 
         offsets, _cells = cell_offsets(frame_lens, label_lens)
-        lse, blank_lp, label_lp = cell_stats(logits, next_label, blank)
+        row_max, log_sum, blank_lp, label_lp = cell_stats(logits, next_label, blank)
         total, alpha = forward_scan(blank_lp, label_lp, offsets, frame_lens, label_lens, max_frames, max_prefix)
-        return total, lse, blank_lp, label_lp, alpha
+        return total, row_max, log_sum, blank_lp, label_lp, alpha
 
     @_lib_fwd.register_fake
     def _lib_fwd_fake(logits, next_label, frame_lens, label_lens, blank, max_frames, max_prefix):
@@ -210,6 +211,7 @@ if hasattr(torch.library, "custom_op"):  # torch >= 2.4
             cell_vec,
             torch.empty_like(cell_vec),
             torch.empty_like(cell_vec),
+            torch.empty_like(cell_vec),
             logits.new_empty((max_frames + 1, batch_size, max_prefix), dtype=torch.float32),
         )
 
@@ -217,11 +219,11 @@ if hasattr(torch.library, "custom_op"):  # torch >= 2.4
     def _lib_bwd(
         logits: torch.Tensor,
         next_label: torch.Tensor,
-        lse: torch.Tensor,
+        row_max: torch.Tensor,
+        log_sum: torch.Tensor,
         blank_lp: torch.Tensor,
         label_lp: torch.Tensor,
         alpha: torch.Tensor,
-        total: torch.Tensor,
         frame_lens: torch.Tensor,
         label_lens: torch.Tensor,
         d_total: torch.Tensor,
@@ -231,27 +233,27 @@ if hasattr(torch.library, "custom_op"):  # torch >= 2.4
 
         offsets, _cells = cell_offsets(frame_lens, label_lens)
         # the sweep gives the posteriors of the log likelihood, d_total carries the sign of the loss
-        blank_grad, label_grad = backward_scan(
-            blank_lp, label_lp, offsets, frame_lens, label_lens, alpha, total, -d_total
-        )
-        return cell_grad(logits, next_label, lse, blank_grad, label_grad, blank)
+        blank_grad, label_grad = backward_scan(blank_lp, label_lp, offsets, frame_lens, label_lens, alpha, -d_total)
+        return cell_grad(logits, next_label, row_max, log_sum, blank_grad, label_grad, blank)
 
     @_lib_bwd.register_fake
-    def _lib_bwd_fake(logits, next_label, lse, blank_lp, label_lp, alpha, total, frame_lens, label_lens, d_total, blank):
-        del next_label, lse, blank_lp, label_lp, alpha, total, frame_lens, label_lens, d_total, blank
+    def _lib_bwd_fake(
+        logits, next_label, row_max, log_sum, blank_lp, label_lp, alpha, frame_lens, label_lens, d_total, blank
+    ):
+        del next_label, row_max, log_sum, blank_lp, label_lp, alpha, frame_lens, label_lens, d_total, blank
         return torch.empty_like(logits)
 
     def _lib_setup_context(ctx, inputs, output):
         logits, next_label, frame_lens, label_lens, blank, _max_frames, _max_prefix = inputs
-        total, lse, blank_lp, label_lp, alpha = output
-        ctx.save_for_backward(logits, next_label, lse, blank_lp, label_lp, alpha, total, frame_lens, label_lens)
+        _total, row_max, log_sum, blank_lp, label_lp, alpha = output
+        ctx.save_for_backward(logits, next_label, row_max, log_sum, blank_lp, label_lp, alpha, frame_lens, label_lens)
         ctx.blank = blank
 
-    def _lib_backward(ctx, d_total, d_lse, d_blank_lp, d_label_lp, d_alpha):
-        d_lse, d_blank_lp, d_label_lp, d_alpha  # noqa  # unused, only total feeds the loss
-        logits, next_label, lse, blank_lp, label_lp, alpha, total, frame_lens, label_lens = ctx.saved_tensors
+    def _lib_backward(ctx, d_total, d_row_max, d_log_sum, d_blank_lp, d_label_lp, d_alpha):
+        d_row_max, d_log_sum, d_blank_lp, d_label_lp, d_alpha  # noqa  # unused, only total feeds the loss
+        logits, next_label, row_max, log_sum, blank_lp, label_lp, alpha, frame_lens, label_lens = ctx.saved_tensors
         grad_logits = torch.ops.returnn.monotonic_rnnt_bwd(
-            logits, next_label, lse, blank_lp, label_lp, alpha, total, frame_lens, label_lens, d_total, ctx.blank
+            logits, next_label, row_max, log_sum, blank_lp, label_lp, alpha, frame_lens, label_lens, d_total, ctx.blank
         )
         return grad_logits, None, None, None, None, None, None
 
@@ -266,7 +268,7 @@ def monotonic_rnnt_loss(
     label_lens: torch.Tensor,
     *,
     blank: int,
-    max_frames: Optional[int] = None,
+    max_frames: int,
 ) -> torch.Tensor:
     """
     Full-sum negative log likelihood of the monotonic transducer over a packed lattice.
@@ -276,17 +278,16 @@ def monotonic_rnnt_loss(
     :param frame_lens: [B] frames per sequence
     :param label_lens: [B] labels per sequence, at most the frame count
     :param blank: blank index
-    :param max_frames: frames the recursion runs over, the longest sequence of the batch by default.
-        A traced or captured step passes the declared capacity instead, since reading the batch's own
-        maximum is a host read.
+    :param max_frames: frames the recursion runs over, at least the longest sequence of the batch.
+        A static bound such as the declared capacity, since reading the batch's own maximum would be a host read.
     :return: [B] the negative log likelihood, zero where a sequence has no alignment
     """
     assert logits.dim() == 2, logits.shape
     if logits.shape[0] == 0:
         return logits.sum() * torch.zeros(frame_lens.shape[0], dtype=torch.float32, device=logits.device)
     logits = logits.contiguous()
-    if max_frames is None:
-        max_frames = int(frame_lens.max().item())
+    # the kernels index the lengths by sequence and ignore strides
+    frame_lens, label_lens = frame_lens.contiguous(), label_lens.contiguous()
     max_prefix = int(labels.shape[1]) + 1
     vocab = int(logits.shape[1])
     assert 0 <= blank < vocab, f"monotonic rnnt: blank {blank} outside the vocabulary of {vocab}"
@@ -309,7 +310,9 @@ def monotonic_rnnt_loss(
     else:
         offsets, _cells = cell_offsets(frame_lens, label_lens)
         source = logits if logits.dtype in (torch.float32, torch.float64) else logits.float()
-        log_probs = torch.log_softmax(source, dim=-1)
+        # a row without any finite logit has no probability mass, its log probabilities are minus infinity, not nan
+        dead = torch.isneginf(source).all(dim=-1, keepdim=True)
+        log_probs = torch.log_softmax(source.masked_fill(dead, 0.0), dim=-1).masked_fill(dead, float("-inf"))
         blank_lp = log_probs[:, blank]
         label_lp = torch.gather(log_probs, 1, next_label.unsqueeze(1)).squeeze(1)
         index = _cell_index(offsets, label_lens, max_frames, max_prefix, logits.shape[0])

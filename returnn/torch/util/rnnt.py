@@ -123,14 +123,14 @@ if hasattr(torch.library, "custom_op"):  # torch >= 2.4
         blank: int,
         max_frames: int,
         max_prefix: int,
-    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
         from .monotonic_rnnt_triton import cell_stats
         from .rnnt_triton import forward_scan
 
         offsets, _cells = cell_offsets(frame_lens, label_lens)
-        lse, blank_lp, label_lp = cell_stats(logits, next_label, blank)
+        row_max, log_sum, blank_lp, label_lp = cell_stats(logits, next_label, blank)
         total, alpha = forward_scan(blank_lp, label_lp, offsets, frame_lens, label_lens, max_frames, max_prefix)
-        return total, lse, blank_lp, label_lp, alpha
+        return total, row_max, log_sum, blank_lp, label_lp, alpha
 
     @_lib_fwd.register_fake
     def _lib_fwd_fake(logits, next_label, frame_lens, label_lens, blank, max_frames, max_prefix):
@@ -143,13 +143,15 @@ if hasattr(torch.library, "custom_op"):  # torch >= 2.4
             torch.empty_like(cell_vec),
             torch.empty_like(cell_vec),
             torch.empty_like(cell_vec),
+            torch.empty_like(cell_vec),
         )
 
     @torch.library.custom_op("returnn::rnnt_bwd", mutates_args=())
     def _lib_bwd(
         logits: torch.Tensor,
         next_label: torch.Tensor,
-        lse: torch.Tensor,
+        row_max: torch.Tensor,
+        log_sum: torch.Tensor,
         blank_lp: torch.Tensor,
         label_lp: torch.Tensor,
         alpha: torch.Tensor,
@@ -168,13 +170,14 @@ if hasattr(torch.library, "custom_op"):  # torch >= 2.4
         blank_grad, label_grad = backward_scan(
             blank_lp, label_lp, offsets, frame_lens, label_lens, alpha, -d_total, max_frames, max_prefix
         )
-        return cell_grad(logits, next_label, lse, blank_grad, label_grad, blank)
+        return cell_grad(logits, next_label, row_max, log_sum, blank_grad, label_grad, blank)
 
     @_lib_bwd.register_fake
     def _lib_bwd_fake(
         logits,
         next_label,
-        lse,
+        row_max,
+        log_sum,
         blank_lp,
         label_lp,
         alpha,
@@ -185,24 +188,26 @@ if hasattr(torch.library, "custom_op"):  # torch >= 2.4
         max_frames,
         max_prefix,
     ):
-        del next_label, lse, blank_lp, label_lp, alpha, frame_lens, label_lens, d_total, blank, max_frames, max_prefix
+        del next_label, row_max, log_sum, blank_lp, label_lp, alpha, frame_lens, label_lens, d_total, blank
+        del max_frames, max_prefix
         return torch.empty_like(logits)
 
     def _lib_setup_context(ctx, inputs, output):
         logits, next_label, frame_lens, label_lens, blank, max_frames, max_prefix = inputs
-        _total, lse, blank_lp, label_lp, alpha = output
-        ctx.save_for_backward(logits, next_label, lse, blank_lp, label_lp, alpha, frame_lens, label_lens)
+        _total, row_max, log_sum, blank_lp, label_lp, alpha = output
+        ctx.save_for_backward(logits, next_label, row_max, log_sum, blank_lp, label_lp, alpha, frame_lens, label_lens)
         ctx.blank = blank
         ctx.max_frames = max_frames
         ctx.max_prefix = max_prefix
 
-    def _lib_backward(ctx, d_total, d_lse, d_blank_lp, d_label_lp, d_alpha):
-        d_lse, d_blank_lp, d_label_lp, d_alpha  # noqa  # unused, only total feeds the loss
-        logits, next_label, lse, blank_lp, label_lp, alpha, frame_lens, label_lens = ctx.saved_tensors
+    def _lib_backward(ctx, d_total, d_row_max, d_log_sum, d_blank_lp, d_label_lp, d_alpha):
+        d_row_max, d_log_sum, d_blank_lp, d_label_lp, d_alpha  # noqa  # unused, only total feeds the loss
+        logits, next_label, row_max, log_sum, blank_lp, label_lp, alpha, frame_lens, label_lens = ctx.saved_tensors
         grad_logits = torch.ops.returnn.rnnt_bwd(
             logits,
             next_label,
-            lse,
+            row_max,
+            log_sum,
             blank_lp,
             label_lp,
             alpha,

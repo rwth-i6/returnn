@@ -81,6 +81,7 @@ def test_monotonic_rnnt_matches_the_sum_over_alignments():
         torch.tensor(frame_lens, dtype=torch.int32),
         torch.tensor(label_lens, dtype=torch.int32),
         blank=blank,
+        max_frames=max(frame_lens),
     )
     torch.testing.assert_close(got.double(), torch.tensor(want, dtype=torch.float64), rtol=0, atol=1e-6)
 
@@ -143,7 +144,7 @@ def test_monotonic_rnnt_gradient_matches_finite_differences():
         torch.tensor([num_labels], dtype=torch.int32),
     )
     torch.autograd.gradcheck(
-        lambda x: monotonic_rnnt_loss(x.reshape(-1, vocab), *args, blank=blank),
+        lambda x: monotonic_rnnt_loss(x.reshape(-1, vocab), *args, blank=blank, max_frames=num_frames),
         (logits,),
         eps=1e-6,
         atol=1e-6,
@@ -195,6 +196,112 @@ def test_monotonic_rnnt_on_cuda_matches_the_reference():
             assert float(results[1][0][-1]) == 0.0, results[1][0]
 
 
+def test_monotonic_rnnt_keeps_the_input_dtype():
+    if not torch.cuda.is_available():
+        import unittest
+
+        raise unittest.SkipTest("no cuda")
+    torch.manual_seed(4)
+    vocab, blank, batch, frames, num_labels = 2048, 0, 4, 32, 7
+    frame_lens = torch.full((batch,), frames, dtype=torch.int32, device="cuda")
+    label_lens = torch.full((batch,), num_labels, dtype=torch.int32, device="cuda")
+    labels = torch.randint(1, vocab, (batch, num_labels), dtype=torch.int32, device="cuda")
+    packed = torch.randn(batch * frames * (num_labels + 1), vocab, device="cuda").bfloat16()
+
+    def run(dtype):
+        x = packed.to(dtype, copy=True).requires_grad_()
+        torch.cuda.reset_peak_memory_stats()
+        before = torch.cuda.memory_allocated()
+        loss = monotonic_rnnt_loss(x, labels, frame_lens, label_lens, blank=blank, max_frames=frames)
+        loss.sum().backward()
+        return loss.detach(), x.grad, torch.cuda.max_memory_allocated() - before
+
+    want_loss, want_grad, _ = run(torch.float32)
+    loss, grad, peak = run(torch.bfloat16)
+    assert grad.dtype == torch.bfloat16, grad.dtype
+    torch.testing.assert_close(loss, want_loss, rtol=1e-6, atol=1e-6)
+    torch.testing.assert_close(grad, want_grad.bfloat16())
+    # the bf16 gradient is the one [cells, vocab] allocation, no float32 copy of the logits or of the gradient
+    assert peak < 1.5 * packed.numel() * packed.element_size(), peak
+
+
+def test_monotonic_rnnt_ignores_a_common_logit_offset():
+    if not torch.cuda.is_available():
+        import unittest
+
+        raise unittest.SkipTest("no cuda")
+    torch.manual_seed(6)
+    vocab, blank = 16, 0
+    cases = [(6, 2), (5, 0), (4, 3)]
+    # multiples of 1/16 stay exact next to an offset of 1e6 in float32, so both runs see the same logits
+    per_seq = [torch.round(torch.randn(t, u + 1, vocab) * 16) / 16 for t, u in cases]
+    labels = torch.randint(1, vocab, (len(cases), 3), dtype=torch.int32, device="cuda")
+    frame_lens = torch.tensor([t for t, _ in cases], dtype=torch.int32, device="cuda")
+    label_lens = torch.tensor([u for _, u in cases], dtype=torch.int32, device="cuda")
+    results = []
+    for offset in (0.0, 1e6):
+        x = (_pack(per_seq) + offset).cuda().requires_grad_()
+        loss = monotonic_rnnt_loss(x, labels, frame_lens, label_lens, blank=blank, max_frames=6)
+        loss.sum().backward()
+        results.append((loss.detach(), x.grad))
+    torch.testing.assert_close(results[1], results[0])
+
+
+def test_monotonic_rnnt_gradient_with_a_large_log_likelihood():
+    if not torch.cuda.is_available():
+        import unittest
+
+        raise unittest.SkipTest("no cuda")
+    # a log likelihood far from zero, from a long sequence or from two alignments far below the best class
+    far = torch.tensor([-1e8, -1e8, 0.0]).repeat(4, 1)
+    for logits, labels, frames in ((torch.zeros(512, 2048), [], 512), (far, [1], 2)):
+        grads = []
+        for x in (logits.cuda(), logits.double()):
+            x = x.clone().requires_grad_()
+            targets = torch.tensor([labels], dtype=torch.int32, device=x.device)
+            lens = (torch.tensor([frames], device=x.device), torch.tensor([len(labels)], device=x.device))
+            loss = monotonic_rnnt_loss(x, targets, *lens, blank=0, max_frames=frames)
+            loss.sum().backward()
+            grads.append(x.grad.double().cpu())
+        torch.testing.assert_close(grads[0], grads[1], rtol=1e-4, atol=1e-5)
+
+
+def test_monotonic_rnnt_reads_strided_lengths():
+    if not torch.cuda.is_available():
+        import unittest
+
+        raise unittest.SkipTest("no cuda")
+    torch.manual_seed(7)
+    logits = torch.randn(10, 3, device="cuda")
+    labels = torch.tensor([[1], [2]], device="cuda")
+    frame_lens = torch.tensor([2, 7, 3, 8], device="cuda")[::2]
+    label_lens = torch.tensor([1, 0, 1, 0], device="cuda")[::2]
+    results = []
+    for lens in ((frame_lens, label_lens), (frame_lens.contiguous(), label_lens.contiguous())):
+        x = logits.clone().requires_grad_()
+        loss = monotonic_rnnt_loss(x, labels, *lens, blank=0, max_frames=3)
+        loss.sum().backward()
+        results.append((loss.detach(), x.grad))
+    torch.testing.assert_close(results[0], results[1])
+
+
+def test_monotonic_rnnt_survives_a_dead_cell():
+    # the cell of frame 0 and prefix 1 lies on no alignment, so a row of minus infinity there changes nothing
+    logits = torch.zeros(3, 2, 3)
+    dead = logits.clone()
+    dead[0, 1] = float("-inf")
+    args = (torch.tensor([[1]]), torch.tensor([3]), torch.tensor([1]))
+    for device in ["cpu"] + (["cuda"] if torch.cuda.is_available() else []):
+        results = []
+        for x in (logits, dead):
+            x = x.reshape(-1, 3).to(device).requires_grad_()
+            loss = monotonic_rnnt_loss(x, *(a.to(device) for a in args), blank=0, max_frames=3)
+            loss.sum().backward()
+            results.append((loss.detach().cpu(), x.grad.cpu()))
+        torch.testing.assert_close(results[0][0], torch.tensor([9.0]).log())
+        torch.testing.assert_close(results[1], results[0])
+
+
 def test_monotonic_rnnt_handles_degenerate_batches():
     torch.manual_seed(3)
     vocab, blank = 6, 0
@@ -202,8 +309,12 @@ def test_monotonic_rnnt_handles_degenerate_batches():
     frame_lens = torch.tensor([0, 0], dtype=torch.int32)
     label_lens = torch.tensor([5, 7], dtype=torch.int32)
     got = monotonic_rnnt_loss(
-        torch.randn(0, vocab), torch.randint(1, vocab, (2, 7), dtype=torch.int32), frame_lens, label_lens,
-        blank=blank, max_frames=3,
+        torch.randn(0, vocab),
+        torch.randint(1, vocab, (2, 7), dtype=torch.int32),
+        frame_lens,
+        label_lens,
+        blank=blank,
+        max_frames=3,
     )
     torch.testing.assert_close(got, torch.zeros(2))
 
@@ -233,7 +344,8 @@ def test_cell_stats_normalizer_survives_minus_infinity():
     logits[3] = float("-inf")
     next_label = torch.tensor([7, 1024, 3, 5], dtype=torch.int64, device="cuda")
 
-    lse, blank_lp, label_lp = cell_stats(logits, next_label, blank)
+    row_max, log_sum, blank_lp, label_lp = cell_stats(logits, next_label, blank)
+    lse = row_max + log_sum
     log_probs = torch.log_softmax(logits[:3].double(), dim=-1)
     want_lse = torch.logsumexp(logits[:3].double(), dim=-1)
     torch.testing.assert_close(lse[:3].double(), want_lse, rtol=1e-5, atol=1e-5)
@@ -272,38 +384,20 @@ def test_monotonic_rnnt_traces_under_aot():
     torch.testing.assert_close(want[1][1], want[0][1], rtol=1e-4, atol=1e-6)
 
 
-def test_monotonic_rnnt_takes_the_logits_in_their_own_dtype():
-    """
-    The kernels read every logit anyway, so they convert on load and no float32 copy of the lattice is made.
-    Such a copy would double the traffic of the largest tensor in the step and, worse, make autograd carry
-    its gradient back through the cast, which is another pass over the whole lattice.
-    """
-    if not torch.cuda.is_available():
-        print("   (skipped, needs cuda)")
-        return
-    cells, vocab = 4096, 1024
-    frame_lens = torch.tensor([32, 32], dtype=torch.int32, device="cuda")
-    label_lens = torch.tensor([63, 63], dtype=torch.int32, device="cuda")
-    labels = torch.randint(0, vocab - 1, (2, 63), dtype=torch.int32, device="cuda")
-    logits = torch.randn(cells, vocab, dtype=torch.bfloat16, device="cuda", requires_grad=True)
-
-    torch.cuda.synchronize()
-    torch.cuda.reset_peak_memory_stats()
-    before = torch.cuda.memory_allocated()
-    loss = monotonic_rnnt_loss(logits, labels, frame_lens, label_lens, blank=vocab - 1, max_frames=32)
-    loss.sum().backward()
-    torch.cuda.synchronize()
-    peak = torch.cuda.max_memory_allocated() - before
-
-    assert logits.grad.dtype == torch.bfloat16, logits.grad.dtype
-    lattice_fp32 = cells * vocab * 4
-    assert peak < lattice_fp32, f"peak {peak} implies a float32 copy of the lattice ({lattice_fp32} bytes)"
-
-    reference = logits.detach().float().requires_grad_()
-    want = monotonic_rnnt_loss(reference, labels, frame_lens, label_lens, blank=vocab - 1, max_frames=32)
-    want.sum().backward()
-    torch.testing.assert_close(loss, want, rtol=1e-4, atol=1e-4)
-    torch.testing.assert_close(logits.grad.float(), reference.grad, rtol=2e-2, atol=2e-5)
+def test_monotonic_rnnt_needs_max_frames():
+    # The batch's own maximum would be a host read, so the caller passes a static bound.
+    args = (
+        torch.randn(8, 3),
+        torch.ones((1, 1), dtype=torch.int32),
+        torch.tensor([4], dtype=torch.int32),
+        torch.tensor([1], dtype=torch.int32),
+    )
+    try:
+        monotonic_rnnt_loss(*args, blank=0)
+    except TypeError:
+        pass
+    else:
+        raise AssertionError("expected max_frames to be required")
 
 
 def test_monotonic_rnnt_refuses_a_recursion_shorter_than_a_sequence():
@@ -352,8 +446,8 @@ def test_monotonic_rnnt_refuses_labels_outside_the_vocabulary():
 
 def test_backward_scan_leaves_an_unalignable_sequence_alone():
     """
-    A sequence with more labels than frames has no alignment, its normalizer sits at the sentinel and every
-    cell's posterior came out as exp(0), which only a caller's zero weight hid. The sweep gives zero itself.
+    A sequence with more labels than frames has no alignment, so no path crosses any of its cells and the
+    sweep gives them zero itself, not only through a caller's zero weight.
     """
     if not torch.cuda.is_available():
         import unittest
@@ -368,9 +462,9 @@ def test_backward_scan_leaves_an_unalignable_sequence_alone():
     log_probs = torch.log_softmax(torch.randn(int(cells.sum()), 3, device="cuda"), dim=-1)
     blank_lp, label_lp = log_probs[:, 0].contiguous(), log_probs[:, 1].contiguous()
 
-    total, alpha = forward_scan(blank_lp, label_lp, offsets, frame_lens, label_lens, 4, 6)
+    _total, alpha = forward_scan(blank_lp, label_lp, offsets, frame_lens, label_lens, 4, 6)
     blank_grad, label_grad = backward_scan(
-        blank_lp, label_lp, offsets, frame_lens, label_lens, alpha, total, torch.ones(2, device="cuda")
+        blank_lp, label_lp, offsets, frame_lens, label_lens, alpha, torch.ones(2, device="cuda")
     )
     first = int(cells[0])
     assert not blank_grad[:first].any() and not label_grad[:first].any(), (blank_grad[:first], label_grad[:first])
