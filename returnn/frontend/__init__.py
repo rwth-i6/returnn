@@ -38,6 +38,7 @@ from .graph import *
 from .label_smoothing import *
 from .linear import *
 from .loop import *
+from .lora import *
 from .loss import *
 from .math_ import *
 from .matmul import *
