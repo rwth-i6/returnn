@@ -1947,13 +1947,10 @@ def _run_optimizer_step(opt_factory, *, opts=None, num_steps=8, replace_grads_at
 
 def _check_optimizer_step_same_as_eager(opt_factory, opts, **kwargs):
     """params and optimizer state (incl. the checkpoint scalars) as the plain eager optimizer.step()"""
-    # noinspection PyProtectedMember
-    from returnn.torch.util.graph_capture import _torch_version_ge_2_12
-
     ref_params, ref_opt, _ = _run_optimizer_step(opt_factory, **kwargs)
     params, opt, opt_step = _run_optimizer_step(opt_factory, opts=opts, **kwargs)
     # torch < 2.12 emulates the eager bf16 rounding only partially (Muon-like: up to 4e-5 abs diff on 2.7)
-    tol = dict(rtol=1e-5, atol=1e-6 if _torch_version_ge_2_12() else 1e-4)
+    tol = dict(rtol=1e-5, atol=1e-4 if torch.__version__ < (2, 12) else 1e-6)
     for p_ref, p in zip(ref_params, params):
         torch.testing.assert_close(p, p_ref, **tol)
     ref_state = ref_opt.state_dict()["state"]
