@@ -41,13 +41,16 @@ except ImportError:  # optional dependency
     triton = tl = None
 
 
+# swept on an H100 in bf16 with 1024 channels and 32 taps, the forward plus input gradient at (1, 20401) and
+# (20, 1021) take 0.36 ms with 32x128 against 0.39 with 16x128 and 0.40 with 128x32
 BLOCK_R, BLOCK_C = 32, 128
 # the row loops, measured on an H100 for 2000 windows of 24 frames, 1024 channels, 32 taps,
 # take 0.13 and 0.30 ms for a forward to 9 or 24 rows against 0.23 and 0.56 of the tap loop,
 # and 0.13 and 0.30 against 0.40 and 0.52 for the input gradient
 BLOCK_R_ROWS, BLOCK_C_ROWS = 16, 128
-# measured on an H100 for (chunks, 24, 1024) with 32 taps, 0.43 ms against 1.19 ms of the per-tile reduction
-BLOCK_R_DW, BLOCK_C_DW = 2, 32
+# swept on the same shapes plus (2000, 24) over 1 to 8 rows, 16 to 128 channels and 64 to 512 splits,
+# 0.19 ms at the two long shapes and 0.39 at (2000, 24) against 0.24 and 0.47 with 2x32
+BLOCK_R_DW, BLOCK_C_DW = 1, 128
 DW_SPLITS = 128
 # f32 accumulator entries per thread the dw kernel is sized for, it picks its warps from it
 DW_ACC_PER_THREAD = 64
