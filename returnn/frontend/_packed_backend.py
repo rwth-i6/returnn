@@ -6269,7 +6269,9 @@ def monotonic_rnnt_lattice(
     the batch's worst case on both axes. This builds the packed form straight away, one entry per real
     cell, and never materializes the padded one.
 
-    :param enc: [batch, enc_spatial_dim, D_enc], packed or padded
+    :param enc: [batch, enc_spatial_dim, D_enc], packed or padded.
+        It can also come without a feature dim, [batch, enc_spatial_dim], e.g. the index of every frame,
+        for a joint that finds what it reads per cell by that index
     :param pred: [batch, prefix_dim, D_pred], packed or padded
     :param enc_spatial_dim: the encoder frames
     :param prefix_dim: the label prefixes of the predictor, one more than the labels
@@ -6306,7 +6308,10 @@ def monotonic_rnnt_lattice(
         flat_dim = [d for d in flat.dims if d != source.feature_dim][0]
         positions = starts.raw_tensor[seq] + coord
         raw = flat.raw_tensor[positions.clamp(max=flat.raw_tensor.shape[0] - 1)]
-        inner = Tensor(name, dims=[cells_dim, source.feature_dim], dtype=flat.dtype, raw_tensor=raw)
+        feature_dims = [source.feature_dim] if source.feature_dim is not None else []
+        inner = Tensor(
+            name, dims=[cells_dim] + feature_dims, dtype=flat.dtype, sparse_dim=source.sparse_dim, raw_tensor=raw
+        )
         del flat_dim
         out.append(
             pack_import(
