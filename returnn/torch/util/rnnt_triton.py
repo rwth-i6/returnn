@@ -167,6 +167,7 @@ def forward_scan(
     :return: (total [B] log likelihood, alpha [cells] the score of every cell)
     """
     assert blank_lp.is_cuda and triton is not None, "rnnt: the scan kernels need cuda and triton"
+    assert frame_lens.is_contiguous() and label_lens.is_contiguous(), "rnnt: the kernels index the lengths by sequence"
     batch_size = frame_lens.shape[0]
     alpha = torch.empty_like(blank_lp)
     total = torch.empty((batch_size,), dtype=torch.float32, device=blank_lp.device)
@@ -212,6 +213,7 @@ def backward_scan(
     :return: (blank gradient [cells], label gradient [cells]) wrt the two log probabilities
     """
     assert blank_lp.is_cuda and triton is not None, "rnnt: the scan kernels need cuda and triton"
+    assert frame_lens.is_contiguous() and label_lens.is_contiguous(), "rnnt: the kernels index the lengths by sequence"
     batch_size = frame_lens.shape[0]
     beta = torch.empty_like(blank_lp)
     blank_grad = torch.zeros_like(blank_lp)

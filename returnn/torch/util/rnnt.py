@@ -249,6 +249,8 @@ def rnnt_loss(
     if logits.shape[0] == 0:
         return logits.sum() * torch.zeros(frame_lens.shape[0], dtype=torch.float32, device=logits.device)
     logits = logits.contiguous()
+    # the kernels index the lengths by sequence and ignore strides
+    frame_lens, label_lens = frame_lens.contiguous(), label_lens.contiguous()
     if max_frames is None:
         max_frames = int(frame_lens.max().item())
     max_prefix = int(labels.shape[1]) + 1

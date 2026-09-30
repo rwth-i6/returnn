@@ -228,6 +228,23 @@ def test_rnnt_survives_impossible_edges():
         torch.testing.assert_close(results[1], results[0])
 
 
+def test_rnnt_reads_strided_lengths():
+    if not torch.cuda.is_available():
+        raise unittest.SkipTest("no cuda")
+    torch.manual_seed(7)
+    logits = torch.randn(10, 3, device="cuda")
+    labels = torch.tensor([[1], [2]], dtype=torch.int32, device="cuda")
+    frame_lens = torch.tensor([2, 7, 3, 8], dtype=torch.int32, device="cuda")[::2]
+    label_lens = torch.tensor([1, 0, 1, 0], dtype=torch.int32, device="cuda")[::2]
+    results = []
+    for lens in ((frame_lens, label_lens), (frame_lens.contiguous(), label_lens.contiguous())):
+        x = logits.clone().requires_grad_()
+        loss = rnnt_loss(x, labels, *lens, blank=0, max_frames=3)
+        loss.sum().backward()
+        results.append((loss.detach(), x.grad))
+    torch.testing.assert_close(results[0], results[1])
+
+
 def test_rf_rnnt_loss_scores_the_lattice_the_joint_builds():
     """
     The rows of the lattice need not be single frames. Here the joint gets the index of the row of every cell
