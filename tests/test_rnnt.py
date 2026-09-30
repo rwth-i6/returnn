@@ -273,6 +273,68 @@ def test_rnnt_gradient_of_a_long_sequence():
     torch.testing.assert_close(x.grad, want, rtol=1e-4, atol=1e-5)
 
 
+def test_rf_rnnt_loss_scores_the_lattice_the_joint_builds():
+    """
+    The rows of the lattice need not be single frames. Here the joint gets the index of the row of every cell
+    and looks its contribution up by it, as a joint attending over a chunk of frames would find its chunk.
+    """
+    import returnn.frontend as rf
+    from returnn.tensor import Dim, Tensor
+
+    rf.select_backend_torch()
+    torch.manual_seed(13)
+    vocab, blank = 5, 0
+    cases = [(4, 2), (3, 3), (2, 0), (1, 4)]
+    num_seqs, max_rows, max_labels = len(cases), max(t for t, _u in cases), max(u for _t, u in cases)
+    row_table = torch.randn(max_rows, vocab)
+    pred_raw = torch.randn(num_seqs, max_labels + 1, vocab)
+    labels_raw = torch.randint(1, vocab, (num_seqs, max_labels), dtype=torch.int32)
+    want = [
+        _brute_force(row_table[:t].unsqueeze(1) + pred_raw[i, : u + 1].unsqueeze(0), labels_raw[i, :u].tolist(), blank)
+        for i, (t, u) in enumerate(cases)
+    ]
+
+    batch = Dim(num_seqs, name="batch")
+    rows_time = Dim(
+        Tensor("row_lens", dims=[batch], dtype="int32", raw_tensor=torch.tensor([t for t, _u in cases]).int()),
+        name="rows",
+    )
+    labels_time = Dim(
+        Tensor("label_lens", dims=[batch], dtype="int32", raw_tensor=torch.tensor([u for _t, u in cases]).int()),
+        name="labels",
+    )
+    prefix_dim = labels_time + 1
+    row_index_dim, vocab_dim = Dim(max_rows, name="row_index"), Dim(vocab, name="vocab")
+    rows = Tensor(
+        "rows",
+        dims=[batch, rows_time],
+        dtype="int32",
+        raw_tensor=torch.arange(max_rows, dtype=torch.int32).expand(num_seqs, -1).contiguous(),
+        sparse_dim=row_index_dim,
+    )
+    pred = Tensor(
+        "pred", dims=[batch, prefix_dim, vocab_dim], dtype="float32", raw_tensor=pred_raw, feature_dim=vocab_dim
+    )
+    labels = Tensor("labels", dims=[batch, labels_time], dtype="int32", raw_tensor=labels_raw, sparse_dim=vocab_dim)
+    table = Tensor("table", dims=[row_index_dim, vocab_dim], dtype="float32", raw_tensor=row_table)
+
+    def _joint(row_cells: Tensor, pred_cells: Tensor) -> Tensor:
+        return rf.gather(table, indices=row_cells, axis=row_index_dim) + pred_cells
+
+    got = rf.rnnt_loss(
+        enc=rows,
+        pred=pred,
+        enc_spatial_dim=rows_time,
+        prefix_dim=prefix_dim,
+        labels=labels,
+        labels_spatial_dim=labels_time,
+        joint=_joint,
+        blank_index=blank,
+    )
+    assert got.dims == (batch,), got
+    torch.testing.assert_close(got.raw_tensor.double(), torch.tensor(want, dtype=torch.float64), rtol=0, atol=1e-5)
+
+
 def test_rnnt_on_cuda_matches_the_reference():
     """
     What the kernels see under capture, a buffer and a recursion above the batch's own cells and frames,
