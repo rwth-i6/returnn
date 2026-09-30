@@ -1303,10 +1303,13 @@ def _batch_norm_gapped(source: Tensor, kwargs) -> Optional[Tensor]:
         if n_dev is None:
             n_dev = rf.copy_to_device(n_t, inner.device)
             _layout_cache.set(n_key, n_dev)
-    n = rf.cast(n_dev, inner.dtype) * n_extra
-    x0 = rf.where(mask, inner, 0.0)
+    n = rf.cast(n_dev, "float32") * n_extra
+    # the unused rows (gap frames, the tail of a bound buffer) hold arbitrary values, a non-finite one would
+    # poison the gradients of the valid rows through the normalization below, so they are zeroed once here,
+    # and the statistics sum in float32, a half dtype overflows the count and the squared sums
+    x0 = rf.cast(rf.where(mask, inner, 0.0), "float32")
     mean = rf.reduce_sum(x0, axis=stat_axes, use_mask=False) / n
-    diff = rf.where(mask, inner - mean, 0.0)
+    diff = rf.where(mask, x0 - mean, 0.0)
     var = rf.reduce_sum(diff * diff, axis=stat_axes, use_mask=False) / n
     if running_mean is not None:
         import torch
@@ -1324,9 +1327,10 @@ def _batch_norm_gapped(source: Tensor, kwargs) -> Optional[Tensor]:
                 unbiased = n_f / max(n_f - 1.0, 1.0)
                 rm.mul_(1.0 - momentum).add_(mean.raw_tensor.detach().to(rm.dtype), alpha=momentum)
                 rv.mul_(1.0 - momentum).add_(var.raw_tensor.detach().to(rv.dtype) * unbiased, alpha=momentum)
-    out_inner = (inner - mean) / rf.sqrt(var + epsilon)
+    out_inner = (x0 - mean) / rf.sqrt(var + epsilon)
     if affine:
         out_inner = out_inner * gamma + beta
+    out_inner = rf.cast(out_inner, inner.dtype)
     out_inner.feature_dim = in_dim
     return raw.rewrap(out_inner, name="batch_norm")
 
