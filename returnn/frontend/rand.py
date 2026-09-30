@@ -244,8 +244,8 @@ def random_uniform(
     device: Optional[str] = None,
     sparse_dim: Optional[Dim] = None,
     feature_dim: Optional[Dim] = None,
-    minval: Union[int, float, Tensor] = 0,
-    maxval: Union[int, float, Tensor] = 1,
+    minval: Optional[Union[int, float, Tensor]] = None,
+    maxval: Optional[Union[int, float, Tensor]] = None,
     seed: Optional[Union[int, Sequence[int], numpy.ndarray]] = None,
     algorithm: Optional[str] = None,
     explicit_state: Optional[Tensor] = None,
@@ -255,8 +255,22 @@ def random_uniform(
 ):
     """
     See :func:`random`. :func:`random` with ``distribution="uniform"``.
-    ``maxval`` is exclusive.
+
+    :param minval: inclusive. default 0
+    :param maxval: exclusive.
+        Default is ``sparse_dim.dimension`` if ``sparse_dim`` is given and ``dtype`` is an integer type,
+        i.e. then it samples uniformly over all indices of ``sparse_dim``.
+        Otherwise, the default is 1.
     """
+    if dtype is None:
+        dtype = rf.get_default_array_index_dtype() if sparse_dim else rf.get_default_float_dtype()
+    if minval is None:
+        minval = 0
+    if maxval is None:
+        if sparse_dim is not None and dtype.startswith(("int", "uint")):
+            maxval = sparse_dim.dimension if sparse_dim.dimension is not None else sparse_dim.get_dim_value_tensor()
+        else:
+            maxval = 1
     return random(
         dims=dims,
         dtype=dtype,
