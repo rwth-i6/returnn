@@ -8,9 +8,10 @@ on all non-padded frames.
 from __future__ import annotations
 
 import _setup_test_env  # noqa
+import contextlib
 import sys
 import unittest
-from typing import Tuple
+from typing import Optional, Tuple
 
 import numpy
 import torch
@@ -928,6 +929,96 @@ def test_transformer_aed():
     assert packed.is_packed(logits_pg)
     _assert_equal_non_padded(logits_pg, logits_ref, batch_dim, dec_time, rtol=1e-4, atol=1e-5)
     packed.set_allowed_fallbacks(None)
+
+
+def _decoder_only_gqa_packed_vs_padded(
+    dev: str, *, amp: bool, rtol: float, atol: float, expected_att_paths: Optional[dict] = None
+):
+    """
+    Decoder-only LLM (Qwen2 style: GQA, qkv bias, RoPE theta, RMSNorm, SwiGLU, LoRA on q/v):
+    packed vs padded logits and LoRA grads.
+    """
+    rf.select_backend_torch()
+    from returnn.frontend.decoder.transformer import TransformerDecoder, FeedForwardGated
+
+    batch_dim = Dim(3, name="batch")
+    time_dim = Dim(
+        Tensor("time", dims=[batch_dim], dtype="int32", raw_tensor=torch.tensor([9, 4, 7], dtype=torch.int32))
+    )
+    vocab_dim = Dim(13, name="vocab")
+    gen = torch.Generator().manual_seed(5)
+    tgt = Tensor("tgt", dims=[batch_dim, time_dim], dtype="int32", sparse_dim=vocab_dim)
+    tgt.raw_tensor = torch.randint(0, 13, (3, 9), dtype=torch.int32, generator=gen).to(dev)
+
+    with rf.set_default_device_ctx(dev):
+        rf.set_random_seed(23)
+        decoder = TransformerDecoder(
+            None,
+            vocab_dim,
+            Dim(64, name="model"),
+            num_layers=2,
+            num_heads=4,
+            ff=FeedForwardGated,
+            ff_dim=Dim(48, name="ff"),
+            norm=rf.RMSNorm,
+            pos_enc=None,
+            input_embedding_scale=1.0,
+            share_embedding=True,
+            layer_opts=dict(
+                self_att=rf.RotaryPosGroupedQueryCausalSelfAttention,
+                self_att_opts=dict(
+                    num_kv_heads=2,
+                    qkv_with_bias=True,
+                    rope_base=1e6,
+                    lora=dict(rank=4, alpha=8.0, use_rslora=True),
+                ),
+            ),
+            dropout=0.0,
+            att_dropout=0.0,
+        )
+        for name, p in decoder.named_parameters():
+            if "lora_b" in name:
+                p.raw_tensor.data.normal_(0.0, 0.1)
+        lora_params = [p.raw_tensor for name, p in decoder.named_parameters() if "lora" in name]
+
+        def _fwd(tgt_t):
+            logits, _ = decoder(
+                tgt_t, spatial_dim=time_dim, state=decoder.default_initial_state(batch_dims=[batch_dim])
+            )
+            log_probs = rf.log_softmax(logits, axis=vocab_dim)
+            loss = rf.reduce_sum(rf.gather(log_probs, indices=tgt_t, axis=vocab_dim), axis=[batch_dim, time_dim])
+            grads = torch.autograd.grad(loss.raw_tensor, lora_params)
+            return logits, grads
+
+        amp_ctx = torch.autocast(device_type=dev, dtype=torch.bfloat16) if amp else contextlib.nullcontext()
+        with amp_ctx:
+            logits_ref, grads_ref = _fwd(tgt)
+        packed.attention_path_counts.clear()
+        with amp_ctx:
+            logits_p, grads_p = _fwd(packed.pack(tgt))
+        if expected_att_paths is not None:
+            assert dict(packed.attention_path_counts) == expected_att_paths, dict(packed.attention_path_counts)
+    assert packed.is_packed(logits_p)
+    logits_p, logits_ref = rf.cast(logits_p, "float32"), rf.cast(logits_ref, "float32")
+    _assert_equal_non_padded(logits_p, logits_ref, batch_dim, time_dim, rtol=rtol, atol=atol)
+    for g_p, g_ref in zip(grads_p, grads_ref):
+        torch.testing.assert_close(g_p.float(), g_ref.float(), rtol=rtol, atol=atol)
+
+
+def test_decoder_only_gqa_lora_packed_vs_padded():
+    # no packed sdpa fast path on cpu (see test_transformer_aed)
+    packed.set_allowed_fallbacks({"scaled_dot_product_attention"})
+    try:
+        _decoder_only_gqa_packed_vs_padded("cpu", amp=False, rtol=1e-4, atol=1e-5)
+    finally:
+        packed.set_allowed_fallbacks(None)
+
+
+def test_decoder_only_gqa_lora_packed_vs_padded_gpu_bf16():
+    # flash varlen fast path (cuda + bf16), no fallback allowed
+    if not torch.cuda.is_available():
+        raise unittest.SkipTest("needs CUDA")
+    _decoder_only_gqa_packed_vs_padded("cuda", amp=True, rtol=5e-2, atol=5e-2, expected_att_paths={"flash": 2})
 
 
 def test_batch_norm_packed_gapped_train():
