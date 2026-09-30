@@ -562,7 +562,7 @@ def test_depthwise_conv1d_triton_guards():
 
     x = torch.randn(2, 9, 8, device="cuda", requires_grad=True)
     w = torch.randn(8, 3, device="cuda")
-    with mock.patch.object(m, "_dw_bwd_dw") as dw_kernel:
+    with mock.patch.object(m.kernels, "dw_bwd_dw") as dw_kernel:
         m.depthwise_conv1d(x, w, None, pad_l=1, n_time_out=9).sum().backward()
     assert not dw_kernel.mock_calls and x.grad is not None, dw_kernel.mock_calls
     w.requires_grad_(True)
@@ -595,7 +595,7 @@ def test_depthwise_conv1d_triton_short_window_row_kernels():
 
     x = torch.randn(4, 24, 64, device="cuda", requires_grad=True)
     w = torch.randn(64, 32, device="cuda")
-    with mock.patch.object(m, "_dw_fwd") as fwd_taps, mock.patch.object(m, "_dw_bwd_dx") as dx_taps:
+    with mock.patch.object(m.kernels, "dw_fwd") as fwd_taps, mock.patch.object(m.kernels, "dw_bwd_dx") as dx_taps:
         m.depthwise_conv1d(x, w, None, pad_l=0, n_time_out=9).sum().backward()
     assert not fwd_taps.mock_calls and not dx_taps.mock_calls, (fwd_taps.mock_calls, dx_taps.mock_calls)
     assert x.grad is not None
@@ -610,7 +610,7 @@ def test_depthwise_conv1d_triton_weight_grad_scratch_independent_of_rows():
     except ImportError as exc:
         raise unittest.SkipTest(f"triton not available ({exc})")
 
-    blocks = (m._BLOCK_R, m._BLOCK_C, m._BLOCK_R_DW, m._BLOCK_C_DW)
+    blocks = (m.kernels.BLOCK_R, m.kernels.BLOCK_C, m.kernels.BLOCK_R_DW, m.kernels.BLOCK_C_DW)
     peaks = []
     for n_batch in (500, 2000):
         x = torch.randn(n_batch, 24, 256, device="cuda", dtype=torch.bfloat16)
