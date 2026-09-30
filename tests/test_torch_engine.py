@@ -2495,11 +2495,12 @@ def _run_cuda_graph_train(
                     assert n > 2 and kinds == "l" + "lr" * (n - 1) + "r", (epoch, kinds)
                 assert engine._graph_capture is not None
                 assert engine._graph_capture._graph is not None, "graph never captured"
-                # the loss denominators must follow the static length buffers, not the dyn sizes
+                # the frame loss denominators must follow the static length buffers, not the dyn sizes
                 # the eval left behind (it rebinds the very size tensors they are reduced from)
                 n_frames = int(engine._graph_capture._lens_bufs["data"].sum())
                 assert n_frames > 0
-                for name, loss in engine._graph_capture._ctx.losses.items():
+                for name in ("ce", "fer"):
+                    loss = engine._graph_capture._ctx.losses[name]
                     assert int(loss.get_inv_norm_factor().raw_tensor) == n_frames, name
                 assert engine._graph_capture.captures_optimizer == (not optimizer_step)
                 # the cached reduction of the error measure must be a graph output, refreshed by every replay,
@@ -2509,6 +2510,10 @@ def _run_cuda_graph_train(
                 torch.testing.assert_close(fer.get_summed_loss().raw_tensor, fresh.raw_tensor)
             else:
                 engine.train()
+            # the dynamic warmup steps run at the batch's own size, every batch here is smaller than the bound,
+            # and the mean of the per-sequence one must still be reported as one
+            seq_one = engine.learning_rate_control.epoch_data[1].error["train_loss_seq_one"]
+            assert abs(seq_one - 1.0) < 1e-6, seq_one
             if optimizer_step:
                 assert engine._updater._optimizer_step._graph is not None, "optimizer step never captured"
             for param_group in engine._updater.optimizer.param_groups:
