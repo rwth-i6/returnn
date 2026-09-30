@@ -255,12 +255,10 @@ def random_uniform(
 ):
     """
     See :func:`random`. :func:`random` with ``distribution="uniform"``.
-
-    :param minval: inclusive. default 0
-    :param maxval: exclusive.
-        Default is ``sparse_dim.dimension`` if ``sparse_dim`` is given and ``dtype`` is an integer type,
-        i.e. then it samples uniformly over all indices of ``sparse_dim``.
-        Otherwise, the default is 1.
+    ``minval`` is inclusive, default 0.
+    ``maxval`` is exclusive,
+    default ``sparse_dim.dimension`` if ``sparse_dim`` is given and ``dtype`` is an integer type
+    (i.e. uniformly over all indices of ``sparse_dim``), otherwise 1.
     """
     if dtype is None:
         dtype = rf.get_default_array_index_dtype() if sparse_dim else rf.get_default_float_dtype()
