@@ -476,6 +476,35 @@ def test_concat_packed_separate_packings():
     _assert_equal_non_padded(out_p, ref, batch_dim, out_dim)
 
 
+def test_gather_packed_into_index_packing():
+    # pick the second stream back out of a per-seq concat (e.g. the text frames of [audio | text]):
+    # the result takes the packing of the (packed) indices
+    rf.select_backend_torch()
+    a, batch_dim, a_dim, feat_dim = _make_input(batch_size=3, seq_lens=(5, 1, 4), seed=1)
+    b_dim = Dim(
+        Tensor("b_len", dims=[batch_dim], dtype="int32", raw_tensor=torch.tensor([2, 3, 1], dtype=torch.int32)),
+        name="b_time",
+    )
+    b = Tensor(
+        "b",
+        dims=[batch_dim, b_dim, feat_dim],
+        dtype="float32",
+        raw_tensor=torch.randn(3, 3, 4, generator=torch.Generator().manual_seed(7)),
+    )
+    ap, bp = packed.pack(a), packed.pack(b)
+    cat_p, cat_dim = rf.concat((ap, a_dim), (bp, b_dim), handle_dynamic_dims=True)
+    assert packed.is_packed(cat_p)
+    positions = rf.range_over_dim(b_dim) + a_dim.get_size_tensor()  # [B,T_b]
+    labels = packed.pack(
+        rf.cast(rf.range_over_dim(b_dim) + rf.range_over_dim(batch_dim), "int32"), out_dim=bp.raw_tensor.packed_dim
+    )
+    indices = rf.where(labels >= 0, positions, 0)  # packed like the labels
+    assert packed.is_packed(indices)
+    out = rf.gather(cat_p, indices=indices, axis=cat_dim)
+    assert packed.is_packed(out) and out.raw_tensor.same_packing(indices.raw_tensor)
+    _assert_equal_non_padded(out, b, batch_dim, b_dim)
+
+
 def test_concat_packed_empty_source():
     # eval feeds no text stream, so one source is empty and its packed buffer has zero rows.
     # such a buffer has no last row to clip indices to, and it contributes no frames at all.

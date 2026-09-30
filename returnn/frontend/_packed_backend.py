@@ -4145,6 +4145,13 @@ class PackedBackend(Backend[PackedRawTensor]):
                         out.sparse_dim = source.sparse_dim
                     return out
             return _dim_aware_call("gather", (source,), kwargs)
+        if (
+            is_packed(indices)
+            and len(_raw(indices).orig_dims) == 2
+            and _raw(indices).orig_dims[0] == raw.orig_dims[0]
+            and _raw(indices).orig_dims[-1] != axis
+        ):
+            return _gather_into_index_packing(source, raw, indices=indices, clip_to_valid=clip_to_valid)
         if is_packed(indices):
             idx = _raw(_conform_packing(indices, raw)).inner
         elif set(indices.dims).issubset(set(raw.orig_dims)):
@@ -4790,6 +4797,39 @@ def _gather_relayout(
     src = rf.clip_by_value(src, 0, _last_row(raw.packed_dim, src.dtype))
     out = helper.rewrap(rf.gather(raw.inner, indices=src, axis=raw.packed_dim), name="gather")
     # a sparse dim assigned on the virtual tensor never reached the inner buffer
+    if source.sparse_dim is not None:
+        out.sparse_dim = source.sparse_dim
+    return out
+
+
+def _gather_into_index_packing(source: Tensor, raw: PackedRawTensor, *, indices: Tensor, clip_to_valid: bool) -> Tensor:
+    """
+    Gather along the innermost packed dim with indices packed over (batch, other spatial),
+    e.g. picking the text frames out of a per-sequence concatenation.
+    The result takes the packing of the indices, including its buffer bound,
+    so no bound has to be derived for it.
+
+    :param source: packed over (batch, axis)
+    :param raw: its packing
+    :param indices: packed over (batch, out spatial), positions within the source sequence
+    :param clip_to_valid: clip the positions into each sequence
+    :return: packed like indices
+    """
+    idx_raw = _raw(indices)
+    batch = raw.orig_dims[0]
+    dev = raw.inner.device
+    seq = _frame_coords(idx_raw, batch)
+    idx = rf.cast(idx_raw.inner, seq.dtype)
+    if clip_to_valid:
+        lens = _device_lens(raw)
+        if lens is None:
+            lens = rf.copy_to_device(raw.seq_lens, dev)
+        last = rf.cast(rf.gather(lens, indices=seq, axis=batch), idx.dtype) - 1
+        idx = rf.clip_by_value(idx, rf.zeros_like(last), last)
+    starts, seqs_dim = raw.seq_starts(device=dev)
+    src = rf.cast(rf.gather(starts, indices=seq, axis=seqs_dim), idx.dtype) + idx
+    src = rf.clip_by_value(src, 0, _last_row(raw.packed_dim, src.dtype))
+    out = idx_raw.rewrap(rf.gather(raw.inner, indices=src, axis=raw.packed_dim), name="gather")
     if source.sparse_dim is not None:
         out.sparse_dim = source.sparse_dim
     return out
