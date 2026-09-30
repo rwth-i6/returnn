@@ -3431,6 +3431,7 @@ def _conv_padding_pair_1d(padding) -> Optional[Tuple[int, int]]:
     return None
 
 
+# noinspection PyShadowingBuiltins
 def _conv_depthwise_1d_triton(
     source: Tensor,
     *,
