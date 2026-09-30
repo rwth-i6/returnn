@@ -2002,6 +2002,9 @@ def _build_cuda_graph_train_config_and_dataset(
         # an error measure is not part of the total loss, its reduction must be recorded in the step as well
         frame_err = rf.cast(rf.reduce_argmax(logits, axis=model.out_dim) != classes, "float32")
         frame_err.mark_as_loss("fer", as_error=True)
+        # a per-sequence measure of exactly one, its reported mean must not depend on the batch bound
+        seq_one = rf.reduce_sum(loss, axis=time_dim) * 0.0 + 1.0
+        seq_one.mark_as_loss("seq_one", as_error=True)
 
     def _dyn_lr(*, global_train_step: int, learning_rate: float, **_kwargs) -> float:
         # per-step LR schedule: under capture_optimizer this exercises the device-tensor LR input
