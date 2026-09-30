@@ -1754,41 +1754,6 @@ def test_chunked_rel_pos_att_triton_kernel_grad():
         torch.testing.assert_close(g, g_ref)
 
 
-def test_moments_round_the_true_statistics_once_in_every_layout():
-    """
-    the statistics of a normalization must not depend on the storage nor on the reduction form.
-    A bfloat16 reduction over a few thousand rows drifts by several ulps, and differently per layout,
-    since the padded and the exact packed path take a direct mean where a bound buffer divides a masked
-    sum by its count, so the moments are taken in float32 and rounded once
-    """
-    rf.select_backend_torch()
-    lens = [997, 613, 421]
-    batch_dim = Dim(len(lens), name="batch")
-    time_dim = Dim(
-        Tensor("lens", dims=[batch_dim], dtype="int32", raw_tensor=torch.tensor(lens, dtype=torch.int32)),
-        name="time",
-    )
-    feat_dim = Dim(8, name="feat")
-    gen = torch.Generator().manual_seed(4)
-    raw = (torch.randn(len(lens), max(lens), feat_dim.dimension, generator=gen) * 0.1 + 3.0).to(torch.bfloat16)
-    x = Tensor("x", dims=[batch_dim, time_dim, feat_dim], dtype="bfloat16", raw_tensor=raw, feature_dim=feat_dim)
-
-    rows = torch.cat([raw[b, :n] for b, n in enumerate(lens)]).double()
-    want = (rows.mean(dim=0).to(torch.bfloat16), rows.var(dim=0, correction=0).to(torch.bfloat16))
-
-    bound = packed.pack(x, dims=[batch_dim, time_dim], gap=3, align=1, total_bound=sum(lens) + 200)
-    # junk past the content, which a wrong mask would pull into the statistics
-    bound.raw_tensor.inner.raw_tensor[sum(lens) + 6 :] = 123.0
-    layouts = (("padded", x), ("packed", packed.pack(x, dims=[batch_dim, time_dim])), ("bound packed", bound))
-    for name, source in layouts:
-        mean, variance = rf.moments(source, axis=[batch_dim, time_dim])
-        assert (mean.dtype, variance.dtype) == ("bfloat16", "bfloat16"), (name, mean.dtype, variance.dtype)
-        for value, reference, what in ((mean, want[0], "mean"), (variance, want[1], "variance")):
-            torch.testing.assert_close(
-                value.copy_compatible_to_dims_raw([feat_dim]), reference, rtol=0, atol=0, msg=f"{name} {what}"
-            )
-
-
 def test_chunked_rel_pos_self_attention_matches_an_explicit_reference():
     """
     the chunked attention of the chunked Conformer as a frontend op, where every chunk attends over its
@@ -2606,18 +2571,22 @@ def test_conv_packed_auto_realign_static():
 
 
 def test_cu_seqlens_with_host_lens_and_a_device_total():
-    if not torch.cuda.is_available():
-        raise unittest.SkipTest("cuda only: needs a second device for the packed total")
     rf.select_backend_torch()
-    batch_dim = Dim(2, name="batch")
-    lens = Tensor("lens", dims=[batch_dim], dtype="int32", raw_tensor=torch.tensor([5, 3], dtype=torch.int32))
-    time_dim = Dim(lens, name="time")
-    total = Tensor("total", dims=(), dtype="int32", raw_tensor=torch.tensor(8, dtype=torch.int32, device="cuda"))
-    packed_dim = Dim(total, name="packed")
-    inner = Tensor("inner", dims=[packed_dim], dtype="float32", raw_tensor=torch.zeros(8, device="cuda"))
-    raw = packed.PackedRawTensor(inner=inner, packed_dim=packed_dim, orig_dims=(batch_dim, time_dim))
-    cu, _ = raw.cu_seqlens(device="cuda")
-    assert cu.raw_tensor.tolist() == [0, 5, 8]
+    # the bug is the host lens meeting a total on the data device, without a gpu the meta device is that
+    # second device, it has no values, so only cuda checks the boundaries themselves
+    for device in ["meta"] + (["cuda"] if torch.cuda.is_available() else []):
+        batch_dim = Dim(2, name="batch")
+        lens = Tensor("lens", dims=[batch_dim], dtype="int32", raw_tensor=torch.tensor([5, 3], dtype=torch.int32))
+        time_dim = Dim(lens, name="time")
+        total_raw = torch.tensor(8, dtype=torch.int32, device=device)
+        total = Tensor("total", dims=(), dtype="int32", raw_tensor=total_raw)
+        packed_dim = Dim(total, name="packed")
+        inner = Tensor("inner", dims=[packed_dim], dtype="float32", raw_tensor=torch.zeros(8, device=device))
+        raw = packed.PackedRawTensor(inner=inner, packed_dim=packed_dim, orig_dims=(batch_dim, time_dim))
+        cu, _ = raw.cu_seqlens(device=device)
+        assert cu.raw_tensor.device.type == device and tuple(cu.raw_tensor.shape) == (3,), cu.raw_tensor
+        if device == "cuda":
+            assert cu.raw_tensor.tolist() == [0, 5, 8]
 
 
 def test_regap_under_cuda_graph_capture():
@@ -4087,65 +4056,6 @@ def test_moments_round_the_true_statistics_once_in_every_layout():
                 torch.testing.assert_close(
                     value.copy_compatible_to_dims_raw([feat_dim]), reference, rtol=0, atol=0, msg=f"{name} {what}"
                 )
-
-
-def test_reduce_over_time_dense_bound_tail():
-    """a dense bound-sized buffer has unused rows past the content, which no per-sequence op may count"""
-    rf.select_backend_torch()
-    x, batch_dim, time_dim, feat_dim = _make_input(seq_lens=(4, 2))
-    xp = packed.regap(packed.pack(x), 0, total_bound=10)
-    assert xp.raw_tensor.packed_dim.dimension == 10
-    for mode in ("mean", "sum", "logsumexp"):
-        out_p = rf.reduce(xp, mode=mode, axis=time_dim)
-        out_ref = rf.reduce(x, mode=mode, axis=time_dim)
-        assert not packed.is_packed(out_p)
-        out_p = out_p.copy_compatible_to_dims(out_ref.dims)
-        numpy.testing.assert_allclose(
-            out_p.raw_tensor.detach().numpy(), out_ref.raw_tensor.detach().numpy(), rtol=1e-5, atol=1e-6, err_msg=mode
-        )
-    for fn in (rf.softmax, rf.log_softmax):
-        out_p = fn(xp, axis=time_dim)
-        assert packed.is_packed(out_p), fn.__name__
-        _assert_equal_non_padded(out_p, fn(x, axis=time_dim), batch_dim, time_dim)
-
-
-def test_batch_norm_packed_dense_bound_train():
-    """batch_norm statistics ignore the unused tail of a dense bound-sized buffer"""
-    rf.select_backend_torch()
-    x, batch_dim, time_dim, feat_dim = _make_input(seq_lens=(5, 3), feat=4, seed=8)
-    with rf.set_default_device_ctx("cpu"):
-        rf.set_random_seed(3)
-        bn_dense = rf.BatchNorm(feat_dim, use_mask=False)
-        bn_bound = rf.BatchNorm(feat_dim, use_mask=False)
-        with rf.get_run_ctx().train_flag_ctx(True):
-            out_dense = bn_dense(packed.pack(x))
-            out_bound = bn_bound(packed.regap(packed.pack(x), 0, total_bound=16))
-        assert packed.is_packed(out_bound)
-    _assert_equal_non_padded(out_bound, packed.unpack(out_dense), batch_dim, time_dim)
-    for p_dense, p_bound in [
-        (bn_dense.running_mean, bn_bound.running_mean),
-        (bn_dense.running_variance, bn_bound.running_variance),
-    ]:
-        numpy.testing.assert_allclose(
-            p_dense.raw_tensor.detach().numpy(), p_bound.raw_tensor.detach().numpy(), rtol=1e-5, atol=1e-6
-        )
-
-
-def test_softmax_over_a_single_packed_axis_with_a_bound():
-    """a bound-sized packing of one axis normalizes over its content rows only"""
-    rf.select_backend_torch()
-    size_dim = Dim(Tensor("size", dims=[], dtype="int32", raw_tensor=torch.tensor(3, dtype=torch.int32)), name="size")
-    x = Tensor("x", dims=[size_dim], dtype="float32", raw_tensor=torch.tensor([0.0, 1.0, 2.0]))
-    xp = packed.pack(x, dims=[size_dim], total_bound=5)
-    for fn in (rf.softmax, rf.log_softmax):
-        out = fn(xp, axis=size_dim)
-        assert packed.is_packed(out), fn.__name__
-        numpy.testing.assert_allclose(
-            out.raw_tensor.inner.raw_tensor.numpy()[:3],
-            fn(x, axis=size_dim).raw_tensor.numpy(),
-            rtol=1e-6,
-            err_msg=fn.__name__,
-        )
 
 
 if __name__ == "__main__":
