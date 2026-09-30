@@ -1999,6 +1999,7 @@ def _build_cuda_graph_train_config_and_dataset(
             logits = model.out(x)
         loss = rf.cross_entropy(target=classes, estimated=logits, estimated_type="logits", axis=model.out_dim)
         loss.mark_as_loss("ce")
+        # an error measure is not part of the total loss, its reduction must be recorded in the step as well
         frame_err = rf.cast(rf.reduce_argmax(logits, axis=model.out_dim) != classes, "float32")
         frame_err.mark_as_loss("fer", as_error=True)
 
@@ -2113,6 +2114,11 @@ def _run_cuda_graph_train(
                 for name, loss in engine._graph_capture._ctx.losses.items():
                     assert int(loss.get_inv_norm_factor().raw_tensor) == n_frames, name
                 assert engine._graph_capture.captures_optimizer == (not optimizer_step)
+                # the cached reduction of the error measure must be a graph output, refreshed by every replay,
+                # not an eager reduction from the first readout, which every later replay would repeat
+                fer = engine._graph_capture._ctx.losses["fer"]
+                fresh = rf.reduce_sum(fer.loss, axis=fer.loss.dims) if fer.loss.dims else fer.loss
+                torch.testing.assert_close(fer.get_summed_loss().raw_tensor, fresh.raw_tensor)
             else:
                 engine.train()
             if optimizer_step:

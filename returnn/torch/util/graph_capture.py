@@ -1095,10 +1095,10 @@ class GraphCapturedTrainStep:
     def _reduce_all_losses(ctx: RunCtx) -> None:
         """
         Reduce every loss inside the step, incl. the error measures and zero-scaled losses
-        the total loss leaves out. The engine reads the summed losses after the step, and
-        Loss caches its reduction on first use: computed there it would be an eager op on the
-        result tensors, outside the graph (stale on every replay) and after the dims went back
-        to their bound sizes (a shape mismatch on a masked reduction of a dynamic warmup step).
+        which the total loss leaves out. The engine reads the summed losses after the step,
+        and Loss caches its reduction on first use: computed there, it would be an eager op
+        outside the graph, stale on every replay, and after a dynamic warmup step it would run
+        after the dims went back to their bound sizes.
         """
         for loss in ctx.losses.values():
             loss.get_summed_loss()
