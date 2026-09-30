@@ -294,10 +294,6 @@ def _apply_inductor_workarounds():
     _inductor_workarounds_applied = True
 
 
-def _torch_version_ge_2_12() -> bool:
-    return tuple(int(v) for v in torch.__version__.split("+")[0].split(".")[:2]) >= (2, 12)
-
-
 def inductor_fw_compiler(backend: Optional[Callable] = None) -> Callable:
     """
     :param backend: the fw compiler for ``aot_function``, default Inductor's ``compile_fx``
@@ -312,7 +308,7 @@ def inductor_fw_compiler(backend: Optional[Callable] = None) -> Callable:
         from torch._inductor.compile_fx import compile_fx
 
         backend = compile_fx
-    if not _torch_version_ge_2_12():
+    if torch.__version__ < (2, 12):
         return backend
 
     def _compile_fx_call_unboxed(gm, example_inputs):
@@ -1130,7 +1126,7 @@ class GraphCapturedTrainStep:
         # default mode: step_core computes the grads itself, one inference-style graph,
         # never fw/bwd-partitioned (partition_fn / activation_memory_budget do not apply;
         # for that see opts "partitioned")
-        if _torch_version_ge_2_12():
+        if torch.__version__ >= (2, 12):
             backend = inductor_fw_compiler(backend)
             # torch >= 2.12 also lifts closed-over tensors into runtime args of the generated code
             # instead of baking them as graph constants, and raw aot_function does not supply them;
