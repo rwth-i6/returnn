@@ -288,6 +288,10 @@ class HuggingFaceDataset(CachedDataset2):
         """:return: whether this dataset supports sharding"""
         return True
 
+    def supports_predefined_seq_order(self) -> bool:
+        """:return: whether this dataset supports a predefined seq order"""
+        return True
+
     def _collect_single_seq(self, seq_idx: int) -> DatasetSeq:
         # noinspection PyUnresolvedReferences,PyPackageRequirements
         import datasets

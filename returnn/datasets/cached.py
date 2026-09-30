@@ -150,6 +150,10 @@ class CachedDataset(Dataset):
             raise OptionalNotImplementedError(f"{self}: get_current_seq_order with cache_byte_size")
         return self._seq_index
 
+    def supports_predefined_seq_order(self) -> bool:
+        """supports a predefined seq order, except with a byte cache, see :func:`get_current_seq_order`"""
+        return self.cache_byte_size_limit_at_start == 0
+
     def _get_tag_by_real_idx(self, real_idx):
         raise NotImplementedError
 

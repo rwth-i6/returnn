@@ -24,6 +24,7 @@ from returnn.torch.updater import Updater
 import returnn.frontend as rf
 from returnn.forward_iface import ForwardCallbackIface
 from returnn.datasets import init_dataset
+from returnn.datasets.generating import StaticDataset
 
 
 # must be in the global scope due to pickling
@@ -1569,6 +1570,12 @@ def _eval_on_all_ranks_train_step(*, model: TrainTestModel, extern_data: TensorD
     TrainTestModel.train_step(model=model, extern_data=extern_data, **kwargs)
 
 
+class _StaticDatasetWithoutPredefinedSeqOrder(StaticDataset):
+    def supports_predefined_seq_order(self) -> bool:
+        """:return: False, so that it cannot be split over the ranks"""
+        return False
+
+
 def _eval_on_all_ranks_run(
     *,
     torch_distributed: Optional[dict] = None,
@@ -1578,6 +1585,7 @@ def _eval_on_all_ranks_run(
     num_dev_seqs: int = len(_EVAL_ON_ALL_RANKS_DEV_SEQ_LENS),
     dev_seq_ordering: str = "default",
     dev_meta: bool = False,
+    dev_predefined_seq_order: bool = True,
     calculate_exp_loss: bool = False,
     eval_before_train: bool = False,
     eval_again: bool = False,
@@ -1607,7 +1615,7 @@ def _eval_on_all_ranks_run(
         )
     )
     dev_opts = {
-        "class": "StaticDataset",
+        "class": "StaticDataset" if dev_predefined_seq_order else _StaticDatasetWithoutPredefinedSeqOrder,
         "data": seqs[:num_dev_seqs],
         "input_dim": 9,
         "output_dim": 2,
@@ -1636,7 +1644,26 @@ def _eval_on_all_ranks_run(
         dev_dataset = init_dataset(dev_opts)
         dev_dataset.init_seq_order(epoch=1)
         engine = Engine(config=config)
+        # init_seq_order calls on the dev dataset while the engine sets up
+        dev_init_seq_order, dev_inits_at_startup = dev_dataset.init_seq_order, []
+
+        def _dev_init_seq_order(*args, **kwargs):
+            dev_inits_at_startup.append(kwargs)
+            return dev_init_seq_order(*args, **kwargs)
+
+        dev_dataset.init_seq_order = _dev_init_seq_order
         engine.init_train_from_config(train_data=train_dataset, dev_data=dev_dataset)
+        del dev_dataset.init_seq_order
+        # number of values this rank keeps aside for each split eval, see Engine._take_rank0_model_state
+        own_model_state_sizes = []
+        take_rank0_model_state = engine._take_rank0_model_state
+
+        def _take_rank0_model_state():
+            own = take_rank0_model_state()
+            own_model_state_sizes.append(sum(value.numel() for value in own or []))
+            return own
+
+        engine._take_rank0_model_state = _take_rank0_model_state
         del _eval_on_all_ranks_seq_lens[:]
         if eval_before_train:
             # like the eval of a loaded checkpoint before the training goes on: this process ran no step yet
@@ -1653,6 +1680,8 @@ def _eval_on_all_ranks_run(
             "evals": evals,
             "errors": {epoch: dict(data.error) for epoch, data in engine.learning_rate_control.epoch_data.items()},
             "param_sum": float(sum(param.detach().double().sum() for param in engine._pt_model.parameters())),
+            "own_model_state_sizes": own_model_state_sizes,
+            "dev_inits_at_startup": len(dev_inits_at_startup),
         }
 
 
@@ -1732,28 +1761,32 @@ def _assert_eval_scores(results: List[Dict[str, Any]], reference: Dict[str, Any]
 
 
 def test_torch_engine_eval_on_all_ranks():
-    # With torch_distributed, the dev seqs are split over the ranks by default, in every epoch,
+    # With eval_on_all_ranks, the dev seqs are split over the ranks in every epoch,
     # also with a random seq order, which is seeded per rank (rank 0's order is split then),
     # also with DistributedDataParallel on CPU,
     # and every rank gets the score of one process over the whole dev set.
+    # Without it (the default), or for a dataset without a predefined seq order, rank 0 evaluates them alone.
     reference = _eval_on_all_ranks_run()
-    for opts, dev_seq_ordering, split in [
-        ({}, "default", True),
-        ({"eval_on_all_ranks": False}, "default", False),
-        ({}, "random", True),
-        ({"reduce_type": "grad"}, "default", True),
+    for opts, run_kwargs, split in [
+        ({"eval_on_all_ranks": True}, {}, True),
+        ({}, {}, False),
+        ({"eval_on_all_ranks": True}, {"dev_seq_ordering": "random"}, True),
+        ({"eval_on_all_ranks": True, "reduce_type": "grad"}, {}, True),
+        ({"eval_on_all_ranks": True}, {"dev_predefined_seq_order": False}, False),
     ]:
-        results = _eval_on_ranks(
-            torch_distributed={**_EVAL_ON_ALL_RANKS_DIST_OPTS, **opts}, dev_seq_ordering=dev_seq_ordering
-        )
+        results = _eval_on_ranks(torch_distributed={**_EVAL_ON_ALL_RANKS_DIST_OPTS, **opts}, **run_kwargs)
+        # The engine asks the dataset whether it can be split, without initializing it.
+        assert [result["dev_inits_at_startup"] for result in results] == [0, 0]
         for epoch in (1, 2):
             rank_seq_lens = _eval_on_all_ranks_seq_lens_per_rank(results, epoch=epoch)
-            print(f"{opts} {dev_seq_ordering} epoch {epoch}: dev seq lens per rank:", rank_seq_lens)
+            print(f"{opts} {run_kwargs} epoch {epoch}: dev seq lens per rank:", rank_seq_lens)
             if split:
                 _assert_eval_split(rank_seq_lens, _EVAL_ON_ALL_RANKS_DEV_SEQ_LENS)
             else:
                 assert rank_seq_lens == [_EVAL_ON_ALL_RANKS_DEV_SEQ_LENS, []]
         _assert_eval_scores(results, reference, epochs=(1, 2), keys=("dev_loss_ce", "dev_loss_fer"))
+        # Averaged grads keep the params identical, so rank 1 keeps none aside (and this model has no buffers).
+        assert results[1]["own_model_state_sizes"] == ([0, 0] if split else [])
 
 
 def test_torch_engine_eval_on_all_ranks_rank0_model():
@@ -1763,7 +1796,7 @@ def test_torch_engine_eval_on_all_ranks_rank0_model():
     opts = {**_EVAL_ON_ALL_RANKS_DIST_OPTS, "reduce_type": "param", "param_sync_step": 1000}
     run_kwargs = dict(learning_rate=0.01, train_seq_ordering="random")
     on_rank0 = _eval_on_ranks(torch_distributed={**opts, "eval_on_all_ranks": False}, **run_kwargs)
-    split = _eval_on_ranks(torch_distributed=opts, **run_kwargs)
+    split = _eval_on_ranks(torch_distributed={**opts, "eval_on_all_ranks": True}, **run_kwargs)
     assert split[0]["param_sum"] != split[1]["param_sum"], "the ranks must train apart for this test"
     _assert_eval_split(_eval_on_all_ranks_seq_lens_per_rank(split, epoch=1), _EVAL_ON_ALL_RANKS_DEV_SEQ_LENS)
     _assert_eval_scores(split, on_rank0[0], epochs=(1, 2), keys=("dev_loss_ce", "dev_loss_fer"))
@@ -1776,7 +1809,9 @@ def test_torch_engine_eval_on_all_ranks_empty_share():
     # rank 1 must still take part and extend the scores (calculate_exp_loss) like rank 0.
     run_kwargs = dict(num_dev_seqs=1, calculate_exp_loss=True, eval_before_train=True)
     reference = _eval_on_all_ranks_run(**run_kwargs)
-    results = _eval_on_ranks(torch_distributed=_EVAL_ON_ALL_RANKS_DIST_OPTS, **run_kwargs)
+    results = _eval_on_ranks(
+        torch_distributed={**_EVAL_ON_ALL_RANKS_DIST_OPTS, "eval_on_all_ranks": True}, **run_kwargs
+    )
     assert _eval_on_all_ranks_seq_lens_per_rank(results, epoch=1) == [[3], []]
     _assert_eval_scores(results, reference, epochs=(1,), keys=("dev_loss_ce", "dev_loss_ce:exp", "dev_loss_fer"))
 
@@ -1786,7 +1821,10 @@ def test_torch_engine_eval_on_all_ranks_repeated_eval():
     # MetaDataset keeps its current seq order when the epoch does not change
     # and it did not load beyond its first seq, as with one dev seq per rank here.
     results = _eval_on_ranks(
-        torch_distributed=_EVAL_ON_ALL_RANKS_DIST_OPTS, dev_meta=True, num_dev_seqs=2, eval_again=True
+        torch_distributed={**_EVAL_ON_ALL_RANKS_DIST_OPTS, "eval_on_all_ranks": True},
+        dev_meta=True,
+        num_dev_seqs=2,
+        eval_again=True,
     )
     for eval_idx in (0, 1):
         rank_seq_lens = _eval_on_all_ranks_seq_lens_per_rank(results, epoch=2, eval_idx=eval_idx)

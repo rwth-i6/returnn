@@ -1824,6 +1824,106 @@ def test_Dataset_get_current_seq_order():
         raise AssertionError("expected OptionalNotImplementedError")
 
 
+def check_predefined_seq_order(dataset: Dataset):
+    """
+    Checks :func:`Dataset.supports_predefined_seq_order`,
+    i.e. that the dataset reports its seq order and gives back exactly the seqs of an order passed to it.
+
+    :param dataset: with at least two seqs
+    """
+    assert dataset.supports_predefined_seq_order(), dataset
+    tags = [seq.seq_tag for seq in dummy_iter_dataset(dataset)]
+    seq_order = list(dataset.get_current_seq_order())
+    assert len(seq_order) == len(tags) >= 2
+    tag_by_corpus_seq_idx = dict(zip(seq_order, tags))
+    share = seq_order[::-2]
+    dataset.init_seq_order(epoch=1, seq_order=share)
+    share_tags = []
+    while dataset.is_less_than_num_seqs(len(share_tags)):
+        dataset.load_seqs(len(share_tags), len(share_tags) + 1)
+        share_tags.append(dataset.get_tag(len(share_tags)))
+    assert share_tags == [tag_by_corpus_seq_idx[idx] for idx in share], dataset
+
+
+def _post_process_map_seq_stream_no_op(input_iter: Iterator[TensorDict], **_other) -> Iterator[TensorDict]:
+    yield from input_iter
+
+
+def test_Dataset_supports_predefined_seq_order():
+    from returnn.datasets.hdf import HDFDataset, SimpleHDFWriter
+
+    rnd = numpy.random.RandomState(42)
+    static_opts = {
+        "class": "StaticDataset",
+        "data": [{"data": rnd.normal(size=(n, 3)).astype("float32")} for n in range(2, 7)],
+        "output_dim": {"data": (3, 2)},
+    }
+    with tempfile.TemporaryDirectory() as tmp_dir, create_ogg_zip_txt_only_dataset_mult_seqs(num_seqs=5) as ogg_zip:
+        hdf_fn = os.path.join(tmp_dir, "data.hdf")
+        writer = SimpleHDFWriter(filename=hdf_fn, dim=3, labels=None)
+        writer.insert_batch(
+            inputs=rnd.normal(size=(5, 6, 3)).astype("float32"),
+            seq_len=[2, 3, 4, 5, 6],
+            seq_tag=[f"seq-{i}" for i in range(5)],
+        )
+        writer.close()
+
+        post_with_workers_opts = {
+            "class": "PostprocessingDataset",
+            "dataset": static_opts,
+            "map_seq": _post_process_map_seq_no_op,
+            "num_workers": 1,
+        }
+        for dataset in [
+            init_dataset(static_opts),
+            HDFDataset(files=[hdf_fn]),
+            ogg_zip,
+            init_dataset(
+                {
+                    "class": "MetaDataset",
+                    "datasets": {"sub": static_opts},
+                    "data_map": {"data": ("sub", "data")},
+                    "seq_order_control_dataset": "sub",
+                }
+            ),
+            init_dataset(
+                {"class": "PostprocessingDataset", "dataset": static_opts, "map_seq": _post_process_map_seq_no_op}
+            ),
+            init_dataset(post_with_workers_opts),
+            init_dataset(
+                {
+                    "class": "MetaDataset",
+                    "datasets": {"sub": post_with_workers_opts},
+                    "data_map": {"data": ("sub", "data")},
+                    "seq_order_control_dataset": "sub",
+                }
+            ),
+        ]:
+            check_predefined_seq_order(dataset)
+
+        # The byte cache ignores the seq order it keeps.
+        # A stream mapper can merge or drop seqs.
+        # A MetaDataset reads its order from its seq order control dataset.
+        post_stream_opts = {
+            "class": "PostprocessingDataset",
+            "dataset": static_opts,
+            "map_seq_stream": _post_process_map_seq_stream_no_op,
+        }
+        for dataset in [
+            HDFDataset(files=[hdf_fn], cache_byte_size=1024),
+            init_dataset(post_stream_opts),
+            init_dataset(
+                {
+                    "class": "MetaDataset",
+                    "datasets": {"sub": post_stream_opts},
+                    "data_map": {"data": ("sub", "data")},
+                    "seq_order_control_dataset": "sub",
+                }
+            ),
+        ]:
+            assert not dataset.supports_predefined_seq_order(), dataset
+
+
 def test_MultiEpochDataset():
     from returnn.datasets.meta import MultiEpochDataset
     from returnn.datasets.cached2 import CachedDataset2

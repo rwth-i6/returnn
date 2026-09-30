@@ -4,7 +4,7 @@ Main engine for PyTorch
 
 from __future__ import annotations
 
-from typing import Optional, Any, Union, Callable, Dict, List, Set, Tuple
+from typing import Optional, Any, Union, Callable, Dict, Set, List, Tuple
 from contextlib import nullcontext, ExitStack, contextmanager
 
 import sys
@@ -257,9 +257,11 @@ class Engine(EngineBase):
                 and self._torch_distributed_ctx.size() > 1
                 and self._torch_distributed_ctx.eval_on_all_ranks()
             ):
-                reports_seq_order = [None] * self._torch_distributed_ctx.size()
-                torch.distributed.all_gather_object(reports_seq_order, _dataset_reports_seq_order(dataset))
-                if all(reports_seq_order):
+                supports_predefined_seq_order = [None] * self._torch_distributed_ctx.size()
+                torch.distributed.all_gather_object(
+                    supports_predefined_seq_order, dataset.supports_predefined_seq_order()
+                )
+                if all(supports_predefined_seq_order):
                     eval_seq_order_share = self._mp_manager.list()
                     self._eval_seq_order_shares[dataset_name] = eval_seq_order_share
                     print(
@@ -268,7 +270,8 @@ class Engine(EngineBase):
                     )
                 else:
                     print(
-                        f"Eval dataset {dataset_name!r} does not report its seq order, it is evaluated on rank 0 only.",
+                        f"Eval dataset {dataset_name!r} does not support a predefined seq order,"
+                        " it is evaluated on rank 0 only.",
                         file=log.v3,
                     )
             self._eval_dataloaders[dataset_name] = self._create_data_loader(
@@ -1137,7 +1140,10 @@ class Engine(EngineBase):
             if self._torch_distributed_ctx.rank() == 0:
                 dataset.init_seq_order(epoch=self.epoch)
                 seq_order = [int(idx) for idx in dataset.get_current_seq_order()]
-                if self._eval_dataloaders[dataset_name].num_workers > 0:
+                data_loader = self._eval_dataloaders[dataset_name]
+                if isinstance(data_loader, PinMemoryDataLoader):
+                    data_loader = data_loader.data_loader
+                if data_loader.num_workers > 0:
                     dataset.finish_epoch(free_resources=True)
             ls = [seq_order]
             torch.distributed.broadcast_object_list(ls, src=0, device=torch.device("cpu"))
@@ -1148,14 +1154,19 @@ class Engine(EngineBase):
 
     def _model_state_tensors(self) -> List[torch.Tensor]:
         """
-        :return: params and buffers of the model
+        :return: the params and buffers of the model which can differ between the ranks.
+            Averaged grads (reduce type grad or grad_explicit) keep the params identical, so then only the buffers.
         """
-        return list(self._pt_model.parameters()) + list(self._pt_model.buffers())
+        tensors = list(self._pt_model.buffers())
+        if self._torch_distributed_ctx.reduce_type() not in ("grad", "grad_explicit"):
+            tensors = list(self._pt_model.parameters()) + tensors
+        return tensors
 
     def _take_rank0_model_state(self) -> Optional[List[torch.Tensor]]:
         """
-        Every rank overwrites its params and buffers with rank 0's, in place (so captured CUDA graphs keep their
-        addresses), so that an eval which is split over the ranks scores the model which rank 0 saves.
+        Every rank overwrites the params and buffers of :func:`_model_state_tensors` with rank 0's, in place (so
+        captured CUDA graphs keep their addresses), so that an eval which is split over the ranks scores the model
+        which rank 0 saves.
         E.g. BatchNorm running statistics without distributed statistics,
         or parameter averaging between its syncs, leave the ranks with different values.
 
@@ -2023,19 +2034,6 @@ def _to_raw(n: Union[int, float, Tensor]):
             x = x.float()
         return x.numpy()
     raise TypeError(f"Unexpected {n} of type {type(n)}")
-
-
-def _dataset_reports_seq_order(dataset: Dataset) -> bool:
-    """
-    :param dataset: eval dataset
-    :return: whether the dataset reports its seq order via :func:`Dataset.get_current_seq_order`,
-        which is needed to split it over the ranks, see :func:`Engine._put_eval_seq_order_share`
-    """
-    try:
-        dataset.init_seq_order(epoch=1)
-        return dataset.get_current_seq_order() is not None
-    except NotImplementedError:
-        return False
 
 
 class _StepValues:

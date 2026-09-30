@@ -74,7 +74,7 @@ class DistributedContext:
         else:
             raise ValueError(f"invalid reduce_type {self._reduce_type!r}")
 
-        self._eval_on_all_ranks = bool(self._opts.get("eval_on_all_ranks", True))
+        self._eval_on_all_ranks = bool(self._opts.get("eval_on_all_ranks", False))
 
         self._check_no_unknown_opts()
 
