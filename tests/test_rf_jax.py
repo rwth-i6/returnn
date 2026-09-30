@@ -1924,6 +1924,32 @@ def test_engine_continue_from_checkpoint():
             numpy.testing.assert_allclose(numpy.asarray(param.raw_tensor), saved[name], rtol=0, atol=0)
 
 
+def test_engine_stop_for_resubmission_final_epoch():
+    """
+    With low wall-time left, stop for resubmission only before the final epoch:
+    after it, the training is complete, and a resubmission would only finalize the job.
+    """
+    import os
+    import signal
+    from unittest import mock
+    from returnn.config import Config
+    from returnn.jax.engine import Engine
+
+    def _run(*, epoch: int, time_left: int):
+        config = Config({"num_epochs": 38, "stop_for_resubmission_when_low_time_left": True})
+        engine = Engine(config=config)
+        engine.epoch = epoch
+        with mock.patch("returnn.util.basic.slurm_time_left_sec", return_value=time_left) as time_left_mock:
+            with mock.patch.object(os, "kill") as kill_mock:
+                engine._maybe_stop_for_resubmission(last_epoch_wall_sec=100.0)
+        return time_left_mock.call_count, [call.args[1] for call in kill_mock.call_args_list]
+
+    assert _run(epoch=38, time_left=10) == (0, [])
+    assert _run(epoch=39, time_left=10) == (0, [])
+    assert _run(epoch=37, time_left=10) == (1, [signal.SIGINT])
+    assert _run(epoch=37, time_left=1000) == (1, [])
+
+
 def test_engine_dynamic_learning_rate():
     """
     The config's ``dynamic_learning_rate`` decides the learning rate of each STEP

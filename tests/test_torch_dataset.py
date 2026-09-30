@@ -146,6 +146,46 @@ def test_correct_behavior_version():
         BehaviorVersion._reset(behavior_version_orig_state)
 
 
+def test_DistributeFilesDataset_no_worker_proc():
+    # The use case of use_worker_proc=False: the DFD itself runs in the DataLoader worker,
+    # and the sub epoch dataset has its own parallel worker procs.
+    from test_Dataset import (
+        _dfd_make_hdf_files,
+        _dfd_get_sub_epoch_dataset_multi_proc_random,
+        _dfd_test_random_seed_offset,
+    )
+
+    files = _dfd_make_hdf_files(num_hdf_files=4)
+    opts = {
+        "class": "DistributeFilesDataset",
+        "files": files,
+        "get_sub_epoch_dataset": _dfd_get_sub_epoch_dataset_multi_proc_random,
+        "partition_epoch": 2,
+        "seq_ordering": "random",
+        "random_seed_offset": _dfd_test_random_seed_offset,
+    }
+
+    ref_dataset = init_dataset(opts)
+    ref_dataset.init_seq_order(epoch=1)
+    ref = []
+    seq_idx = 0
+    while ref_dataset.is_less_than_num_seqs(seq_idx):
+        ref_dataset.load_seqs(seq_idx, seq_idx + 1)
+        ref.append(ref_dataset.get_data(seq_idx, "classes").tolist())
+        seq_idx += 1
+    ref_dataset.finish_epoch(free_resources=True)
+    assert ref
+
+    dataset = init_dataset({**opts, "use_worker_proc": False})
+    mp_manager = multi_proc_manager_with_watchdog.create_manager()
+    loader = get_loader_from_returnn_dataset(dataset, mp_manager, batch_size=100, max_seqs=3)
+    res = []
+    for batch in loader:
+        for b in range(batch["classes"].shape[0]):
+            res.append(batch["classes"][b, : batch["classes:seq_len"][b]].tolist())
+    assert res == ref
+
+
 def test_func_in_global_config():
     # Very similar to test_MultiProcDataset_via_config.
     # https://github.com/rwth-i6/returnn/issues/1495

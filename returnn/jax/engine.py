@@ -676,6 +676,8 @@ class Engine(EngineBase):
 
         if not self.config.bool("stop_for_resubmission_when_low_time_left", False):
             return
+        if self.epoch >= self._final_epoch:
+            return  # training is complete, a resubmission would only finalize the job
         time_left = slurm_time_left_sec()
         if time_left is None:
             return  # not under SLURM, or the query failed -- nothing to decide on

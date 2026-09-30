@@ -1132,6 +1132,39 @@ def test_random_uniform_int():
     run_model(TensorDict(), lambda **_kwargs: rf.Module(), _forward_step)
 
 
+def test_random_uniform_sparse_dim():
+    batch_dim = Dim(3, name="batch")
+    time_dim = Dim(50, name="time")
+    vocab_dim = Dim(7, name="vocab")
+
+    # noinspection PyShadowingNames
+    def _forward_step(**_kwargs):
+        out = rf.random_uniform([batch_dim, time_dim], sparse_dim=vocab_dim)
+        assert out.sparse_dim == vocab_dim and out.dtype == rf.get_default_array_index_dtype()
+        out.mark_as_default_output(shape=[batch_dim, time_dim])
+
+    res = run_model(TensorDict(), lambda **_kwargs: rf.Module(), _forward_step)
+    raw = res["output"].raw_tensor
+    assert raw.min() >= 0 and raw.max() < vocab_dim.dimension, raw
+    # With 150 samples over 7 classes, all-equal would be extremely unlikely.
+    assert len(numpy.unique(raw)) > 1, raw
+
+
+def test_random_uniform_default_range():
+    batch_dim = Dim(3, name="batch")
+    time_dim = Dim(50, name="time")
+
+    # noinspection PyShadowingNames
+    def _forward_step(**_kwargs):
+        out = rf.random_uniform([batch_dim, time_dim])
+        out.mark_as_default_output(shape=[batch_dim, time_dim])
+
+    res = run_model(TensorDict(), lambda **_kwargs: rf.Module(), _forward_step)
+    raw = res["output"].raw_tensor
+    assert raw.dtype == numpy.float32
+    assert raw.min() >= 0.0 and raw.max() < 1.0, raw
+
+
 def test_random_choice_with_replacement():
     batch_dim = Dim(3, name="batch")
     time_dim = Dim(7, name="time")
