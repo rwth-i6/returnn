@@ -1010,6 +1010,26 @@ def test_mixed_operand_order():
         _assert_equal_non_padded(out_p, out_ref, batch_dim, time_dim)
 
 
+def test_compare_packs_a_plain_operand_over_the_packed_dims():
+    rf.select_backend_torch()
+    x, batch_dim, time_dim, feat_dim = _make_input(batch_size=3, seq_lens=(7, 5, 4))
+    gen = torch.Generator().manual_seed(7)
+    targets = Tensor("targets", dims=[batch_dim, time_dim], dtype="int32", sparse_dim=feat_dim)
+    targets.raw_tensor = torch.randint(0, feat_dim.dimension, (3, 7), dtype=torch.int32, generator=gen)
+    per_seq = Tensor("per_seq", dims=[batch_dim], dtype="int32")
+    per_seq.raw_tensor = torch.randint(0, feat_dim.dimension, (3,), dtype=torch.int32, generator=gen)
+    argmax = rf.reduce_argmax(x, axis=feat_dim)
+    argmax_p = rf.reduce_argmax(packed.pack(x), axis=feat_dim)
+    packed._warned_fallback_ops.clear()
+    for out_p, out_ref in [
+        (argmax_p != targets, argmax != targets),
+        (per_seq < argmax_p, per_seq < argmax),
+    ]:
+        assert packed.is_packed(out_p)
+        _assert_equal_non_padded(out_p, out_ref, batch_dim, time_dim)
+    assert not packed._warned_fallback_ops
+
+
 def test_rel_pos_self_attention_packed():
     # Conformer-style rel-pos self-attention: on packed input this runs via the FlexAttention fast path
     # (document block mask + rel-pos score_mod over the flat packed buffer).
