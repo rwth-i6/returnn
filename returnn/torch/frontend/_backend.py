@@ -2936,6 +2936,7 @@ def _depthwise_conv_triton_traceable() -> bool:
     return depthwise_conv_triton.traceable()
 
 
+# noinspection PyShadowingBuiltins
 def _conv_depthwise_1d_triton(
     source: Tensor,
     *,

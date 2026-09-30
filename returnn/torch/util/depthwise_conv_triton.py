@@ -5,29 +5,9 @@ torch routes a depthwise conv1d on CUDA to its native depthwise-2d kernels,
 whose weight gradient parallelises over the (channel, tap) outputs
 and reduces the whole batch x time extent inside each of them,
 which for the Conformer conv block costs more than everything else in the layer.
-These kernels tile (row, channel) with the channels innermost,
-so the input is used in the (batch, time, channel) layout it already has
-(no transpose to (batch, channel, time) and back).
-The rows are the flattened (batch, time) pairs, so a tile spans batch entries,
-with the taps masked at the entry boundaries.
-
-    out[b,t,c] = bias[c] + sum_k w[c,k] * x[b,t+k-pad_l,c]
-    dx[b,t,c]  = sum_k w[c,k] * dout[b,t-k+pad_l,c]
-    dw[c,k]    = sum_{b,t} dout[b,t,c] * x[b,t+k-pad_l,c]
-    db[c]      = sum_{b,t} dout[b,t,c]
-
-dw and db reduce over all rows: each program walks a contiguous range of rows,
-keeps f32 sums per (tap, row, channel) of its tile in registers and reduces over the rows once at the end,
-into an f32 (row split, tap, channel) buffer of a fixed number of splits, summed afterwards,
-so the result is deterministic and the scratch does not grow with the rows.
-Reducing once per program instead of once per tile and tap is what makes this kernel cheap:
-per tile, the reductions and the (row block, tap, channel) stores cost more than the products.
-
-A window no longer than the filter (the chunked Conformer convolves 24 frames with 32 taps)
-leaves most taps of every row outside it, so there the forward and the input gradient loop over
-the rows of the window instead of the taps, with the filter read as (tap, channel) to keep the
-loads contiguous. They add the terms in the order the tap loop does, so the result is the same bit for bit.
-Guard the import at the caller (needs Triton; the jit decorators run at import time).
+The kernels are in :mod:`returnn.triton.depthwise_conv`, which describes them.
+This module launches them on the (batch, time, channel) input with the (channel, width) filter
+and adds the gradients, as an autograd.Function and, for a traced step, as opaque custom ops.
 """
 
 from __future__ import annotations
@@ -35,246 +15,14 @@ from __future__ import annotations
 from typing import Optional, Tuple
 
 import torch
-import triton
-import triton.language as tl
 from torch.autograd.function import once_differentiable
 
-
-_BLOCK_R, _BLOCK_C = 32, 128
-# the row loops, measured on an H100 for 2000 windows of 24 frames, 1024 channels, 32 taps, forward to 9 or
-# 24 rows: 0.13 and 0.30 ms against 0.23 and 0.56 of the tap loop, the input gradient 0.13 and 0.30 against 0.40 and 0.52
-_BLOCK_R_ROWS, _BLOCK_C_ROWS = 16, 128
-# measured on an H100 for (chunks, 24, 1024) with 32 taps: 0.43 ms against 1.19 ms of the per-tile reduction
-_BLOCK_R_DW, _BLOCK_C_DW = 2, 32
-_DW_SPLITS = 128
-# f32 accumulator entries per thread the dw kernel is sized for, it picks its warps from it
-_DW_ACC_PER_THREAD = 64
+from returnn.triton import depthwise_conv as kernels
 
 
 def is_available() -> bool:
-    """:return: whether the kernel can run (needs a CUDA device)"""
-    return torch.cuda.is_available()
-
-
-# noinspection PyPep8Naming,PyUnresolvedReferences
-@triton.jit
-def _dw_fwd(
-    X,
-    W,
-    Bias,
-    Out,
-    n_rows,
-    n_time_in,
-    n_time_out,
-    n_chan,
-    pad_l,
-    HAS_BIAS: tl.constexpr,
-    BLOCK_R: tl.constexpr,
-    BLOCK_C: tl.constexpr,
-    KW: tl.constexpr,
-):
-    """out[b,t,c] = bias[c] + sum_k w[c,k] * x[b,t+k-pad_l,c], one program per (row block, channel block)"""
-    pid_r, pid_c = tl.program_id(0), tl.program_id(1)
-    offs_r = pid_r * BLOCK_R + tl.arange(0, BLOCK_R)
-    offs_c = pid_c * BLOCK_C + tl.arange(0, BLOCK_C)
-    r_mask = offs_r < n_rows
-    c_mask = offs_c < n_chan
-    b = offs_r // n_time_out
-    t = offs_r % n_time_out
-    row_in = (b * n_time_in + t - pad_l).to(tl.int64)
-    acc = tl.zeros((BLOCK_R, BLOCK_C), dtype=tl.float32)
-    for k in tl.static_range(KW):
-        t_in = t + k - pad_l
-        m = (t_in >= 0)[:, None] & (t_in < n_time_in)[:, None] & r_mask[:, None] & c_mask[None, :]
-        x = tl.load(X + (row_in + k)[:, None] * n_chan + offs_c[None, :], mask=m, other=0.0).to(tl.float32)
-        wk = tl.load(W + offs_c * KW + k, mask=c_mask, other=0.0).to(tl.float32)
-        acc += x * wk[None, :]
-    if HAS_BIAS:
-        acc += tl.load(Bias + offs_c, mask=c_mask, other=0.0).to(tl.float32)[None, :]
-    o_mask = r_mask[:, None] & c_mask[None, :]
-    tl.store(Out + offs_r.to(tl.int64)[:, None] * n_chan + offs_c[None, :], acc.to(Out.dtype.element_ty), mask=o_mask)
-
-
-# noinspection PyPep8Naming,PyUnresolvedReferences
-@triton.jit
-def _dw_bwd_dx(
-    DO,
-    W,
-    DX,
-    n_rows,
-    n_time_in,
-    n_time_out,
-    n_chan,
-    pad_l,
-    BLOCK_R: tl.constexpr,
-    BLOCK_C: tl.constexpr,
-    KW: tl.constexpr,
-):
-    """dx[b,t,c] = sum_k w[c,k] * dout[b,t-k+pad_l,c], the correlation with the flipped filter, rows over the input"""
-    pid_r, pid_c = tl.program_id(0), tl.program_id(1)
-    offs_r = pid_r * BLOCK_R + tl.arange(0, BLOCK_R)
-    offs_c = pid_c * BLOCK_C + tl.arange(0, BLOCK_C)
-    r_mask = offs_r < n_rows
-    c_mask = offs_c < n_chan
-    b = offs_r // n_time_in
-    t = offs_r % n_time_in
-    row_out = (b * n_time_out + t + pad_l).to(tl.int64)
-    acc = tl.zeros((BLOCK_R, BLOCK_C), dtype=tl.float32)
-    for k in tl.static_range(KW):
-        t_out = t - k + pad_l
-        m = (t_out >= 0)[:, None] & (t_out < n_time_out)[:, None] & r_mask[:, None] & c_mask[None, :]
-        g = tl.load(DO + (row_out - k)[:, None] * n_chan + offs_c[None, :], mask=m, other=0.0).to(tl.float32)
-        wk = tl.load(W + offs_c * KW + k, mask=c_mask, other=0.0).to(tl.float32)
-        acc += g * wk[None, :]
-    o_mask = r_mask[:, None] & c_mask[None, :]
-    tl.store(DX + offs_r.to(tl.int64)[:, None] * n_chan + offs_c[None, :], acc.to(DX.dtype.element_ty), mask=o_mask)
-
-
-# noinspection PyPep8Naming,PyUnresolvedReferences
-@triton.jit
-def _dw_fwd_rows(
-    X,
-    WT,
-    Bias,
-    Out,
-    n_rows,
-    n_time_in,
-    n_time_out,
-    n_chan,
-    pad_l,
-    HAS_BIAS: tl.constexpr,
-    BLOCK_R: tl.constexpr,
-    BLOCK_C: tl.constexpr,
-    KW: tl.constexpr,
-):
-    """
-    out[b,t,c] = bias[c] + sum_s w[c,s-t+pad_l] * x[b,s,c], the forward of :func:`_dw_fwd` for a window no longer
-    than the filter: loops over the input rows s, which visits the taps in increasing order like the tap loop.
-    WT is the filter as (tap, channel).
-    """
-    pid_r, pid_c = tl.program_id(0), tl.program_id(1)
-    offs_r = pid_r * BLOCK_R + tl.arange(0, BLOCK_R)
-    offs_c = pid_c * BLOCK_C + tl.arange(0, BLOCK_C)
-    r_mask = offs_r < n_rows
-    c_mask = offs_c < n_chan
-    b = offs_r // n_time_out
-    t = offs_r % n_time_out
-    row_in0 = (b * n_time_in).to(tl.int64)
-    acc = tl.zeros((BLOCK_R, BLOCK_C), dtype=tl.float32)
-    for s in range(0, n_time_in):
-        k = s - t + pad_l
-        m = (k >= 0)[:, None] & (k < KW)[:, None] & r_mask[:, None] & c_mask[None, :]
-        x = tl.load(X + (row_in0 + s)[:, None] * n_chan + offs_c[None, :], mask=m, other=0.0).to(tl.float32)
-        wk = tl.load(WT + k[:, None] * n_chan + offs_c[None, :], mask=m, other=0.0).to(tl.float32)
-        acc += x * wk
-    if HAS_BIAS:
-        acc += tl.load(Bias + offs_c, mask=c_mask, other=0.0).to(tl.float32)[None, :]
-    o_mask = r_mask[:, None] & c_mask[None, :]
-    tl.store(Out + offs_r.to(tl.int64)[:, None] * n_chan + offs_c[None, :], acc.to(Out.dtype.element_ty), mask=o_mask)
-
-
-# noinspection PyPep8Naming,PyUnresolvedReferences
-@triton.jit
-def _dw_bwd_dx_rows(
-    DO,
-    WT,
-    DX,
-    n_rows,
-    n_time_in,
-    n_time_out,
-    n_chan,
-    pad_l,
-    BLOCK_R: tl.constexpr,
-    BLOCK_C: tl.constexpr,
-    KW: tl.constexpr,
-):
-    """
-    dx[b,s,c] = sum_t w[c,s-t+pad_l] * dout[b,t,c], the input gradient of :func:`_dw_bwd_dx` for an output no longer
-    than the filter: loops over the output rows t from the last one, which visits the taps in increasing order like
-    the tap loop. WT is the filter as (tap, channel).
-    """
-    pid_r, pid_c = tl.program_id(0), tl.program_id(1)
-    offs_r = pid_r * BLOCK_R + tl.arange(0, BLOCK_R)
-    offs_c = pid_c * BLOCK_C + tl.arange(0, BLOCK_C)
-    r_mask = offs_r < n_rows
-    c_mask = offs_c < n_chan
-    b = offs_r // n_time_in
-    s = offs_r % n_time_in
-    row_out0 = (b * n_time_out).to(tl.int64)
-    acc = tl.zeros((BLOCK_R, BLOCK_C), dtype=tl.float32)
-    for i in range(0, n_time_out):
-        t = n_time_out - 1 - i
-        k = s - t + pad_l
-        m = (k >= 0)[:, None] & (k < KW)[:, None] & r_mask[:, None] & c_mask[None, :]
-        g = tl.load(DO + (row_out0 + t)[:, None] * n_chan + offs_c[None, :], mask=m, other=0.0).to(tl.float32)
-        wk = tl.load(WT + k[:, None] * n_chan + offs_c[None, :], mask=m, other=0.0).to(tl.float32)
-        acc += g * wk
-    o_mask = r_mask[:, None] & c_mask[None, :]
-    tl.store(DX + offs_r.to(tl.int64)[:, None] * n_chan + offs_c[None, :], acc.to(DX.dtype.element_ty), mask=o_mask)
-
-
-# noinspection PyPep8Naming,PyUnresolvedReferences
-@triton.jit
-def _dw_bwd_dw(
-    X,
-    DO,
-    P,
-    n_rows,
-    n_time_in,
-    n_time_out,
-    n_chan,
-    pad_l,
-    rows_per_prog,
-    HAS_BIAS: tl.constexpr,
-    BLOCK_R: tl.constexpr,
-    BLOCK_C: tl.constexpr,
-    KW: tl.constexpr,
-    KW_P2: tl.constexpr,
-    KW_P: tl.constexpr,
-):
-    """
-    P[s,k,c] = sum_{rows of split s} dout[b,t,c] * x[b,t+k-pad_l,c], plus the dout row sum as tap KW for the bias.
-    One program per (row split, channel block), looping over the split in tiles of BLOCK_R rows.
-    """
-    pid_s, pid_c = tl.program_id(0), tl.program_id(1)
-    offs_c = pid_c * BLOCK_C + tl.arange(0, BLOCK_C)
-    c_mask = offs_c < n_chan
-    taps = tl.arange(0, KW_P2)
-    tap_mask = taps < KW
-    acc = tl.zeros((KW_P2, BLOCK_R, BLOCK_C), dtype=tl.float32)
-    g_acc = tl.zeros((BLOCK_R, BLOCK_C), dtype=tl.float32)
-    row_start = pid_s * rows_per_prog
-    row_end = tl.minimum(row_start + rows_per_prog, n_rows)
-    for r0 in range(row_start, row_end, BLOCK_R):
-        offs_r = r0 + tl.arange(0, BLOCK_R)
-        r_mask = offs_r < row_end
-        b = offs_r // n_time_out
-        t = offs_r % n_time_out
-        g = tl.load(
-            DO + offs_r.to(tl.int64)[:, None] * n_chan + offs_c[None, :],
-            mask=r_mask[:, None] & c_mask[None, :],
-            other=0.0,
-        ).to(tl.float32)
-        # (tap, row): the input frame of every tap, masked at the entry boundaries
-        t_in = t[None, :] + taps[:, None] - pad_l
-        valid = (t_in >= 0) & (t_in < n_time_in) & tap_mask[:, None] & r_mask[None, :]
-        row_in = (b * n_time_in)[None, :] + t_in
-        x = tl.load(
-            X + row_in.to(tl.int64)[:, :, None] * n_chan + offs_c[None, None, :],
-            mask=valid[:, :, None] & c_mask[None, None, :],
-            other=0.0,
-        ).to(tl.float32)
-        acc += g[None, :, :] * x
-        if HAS_BIAS:
-            g_acc += g
-    p_base = P + pid_s.to(tl.int64) * KW_P * n_chan
-    tl.store(
-        p_base + taps[:, None] * n_chan + offs_c[None, :],
-        tl.sum(acc, axis=1),
-        mask=tap_mask[:, None] & c_mask[None, :],
-    )
-    if HAS_BIAS:
-        tl.store(p_base + KW * n_chan + offs_c, tl.sum(g_acc, axis=0), mask=c_mask)
+    """:return: whether the kernel can run (needs Triton and a CUDA device)"""
+    return kernels.triton is not None and torch.cuda.is_available()
 
 
 def _launch_fwd(x, w, bias, pad_l: int, n_time_out: int, blocks) -> torch.Tensor:
@@ -285,41 +33,43 @@ def _launch_fwd(x, w, bias, pad_l: int, n_time_out: int, blocks) -> torch.Tensor
     n_rows = n_batch * n_time_out
     if n_time_in <= width:
         w_t = w.t().contiguous()
-        grid = (triton.cdiv(n_rows, _BLOCK_R_ROWS), triton.cdiv(n_chan, _BLOCK_C_ROWS))
-        _dw_fwd_rows[grid](
+        grid = (kernels.cdiv(n_rows, kernels.BLOCK_R_ROWS), kernels.cdiv(n_chan, kernels.BLOCK_C_ROWS))
+        kernels.dw_fwd_rows[grid](
             x,
             w_t,
             bias if bias is not None else w_t,
-            out,
             n_rows,
             n_time_in,
             n_time_out,
             n_chan,
             pad_l,
+            w_t.stride(1),
+            w_t.stride(0),
+            out,
             HAS_BIAS=bias is not None,
-            BLOCK_R=_BLOCK_R_ROWS,
-            BLOCK_C=_BLOCK_C_ROWS,
+            BLOCK_R=kernels.BLOCK_R_ROWS,
+            BLOCK_C=kernels.BLOCK_C_ROWS,
             KW=width,
-            num_warps=4,
         )
         return out
     block_r, block_c = blocks[0], blocks[1]
-    grid = (triton.cdiv(n_rows, block_r), triton.cdiv(n_chan, block_c))
-    _dw_fwd[grid](
+    grid = (kernels.cdiv(n_rows, block_r), kernels.cdiv(n_chan, block_c))
+    kernels.dw_fwd[grid](
         x,
         w,
         bias if bias is not None else w,
-        out,
         n_rows,
         n_time_in,
         n_time_out,
         n_chan,
         pad_l,
+        w.stride(0),
+        w.stride(1),
+        out,
         HAS_BIAS=bias is not None,
         BLOCK_R=block_r,
         BLOCK_C=block_c,
         KW=width,
-        num_warps=4,
     )
     return out
 
@@ -337,62 +87,64 @@ def _launch_bwd(x, w, d_out, *, has_bias: bool, pad_l: int, blocks, need_dx: boo
         dx = torch.empty_like(x)
         n_rows = n_batch * n_time_in
         if n_time_out <= width:
-            grid = (triton.cdiv(n_rows, _BLOCK_R_ROWS), triton.cdiv(n_chan, _BLOCK_C_ROWS))
-            _dw_bwd_dx_rows[grid](
+            w_t = w.t().contiguous()
+            grid = (kernels.cdiv(n_rows, kernels.BLOCK_R_ROWS), kernels.cdiv(n_chan, kernels.BLOCK_C_ROWS))
+            kernels.dw_bwd_dx_rows[grid](
                 d_out,
-                w.t().contiguous(),
-                dx,
+                w_t,
                 n_rows,
                 n_time_in,
                 n_time_out,
                 n_chan,
                 pad_l,
-                BLOCK_R=_BLOCK_R_ROWS,
-                BLOCK_C=_BLOCK_C_ROWS,
+                w_t.stride(1),
+                w_t.stride(0),
+                dx,
+                BLOCK_R=kernels.BLOCK_R_ROWS,
+                BLOCK_C=kernels.BLOCK_C_ROWS,
                 KW=width,
-                num_warps=4,
             )
         else:
-            grid = (triton.cdiv(n_rows, block_r), triton.cdiv(n_chan, block_c))
-            _dw_bwd_dx[grid](
+            grid = (kernels.cdiv(n_rows, block_r), kernels.cdiv(n_chan, block_c))
+            kernels.dw_bwd_dx[grid](
                 d_out,
                 w,
-                dx,
                 n_rows,
                 n_time_in,
                 n_time_out,
                 n_chan,
                 pad_l,
+                w.stride(0),
+                w.stride(1),
+                dx,
                 BLOCK_R=block_r,
                 BLOCK_C=block_c,
                 KW=width,
-                num_warps=4,
             )
     if need_dw_db:
         n_rows = n_batch * n_time_out
-        # a fixed number of splits, each a multiple of the row tile, so the scratch is independent of the rows
-        rows_per_prog = max(triton.cdiv(triton.cdiv(n_rows, _DW_SPLITS), block_r_dw), 1) * block_r_dw
-        n_splits = max(triton.cdiv(n_rows, rows_per_prog), 1)
-        width_p2 = triton.next_power_of_2(width)
-        num_warps = max(1, min(8, width_p2 * block_r_dw * block_c_dw // (32 * _DW_ACC_PER_THREAD)))
-        partial = torch.empty((n_splits, width + int(has_bias), n_chan), dtype=torch.float32, device=x.device)
-        grid = (n_splits, triton.cdiv(n_chan, block_c_dw))
-        _dw_bwd_dw[grid](
+        rows_per_prog, n_splits, width_p, width_p2, num_warps = kernels.dw_launch(
+            n_rows, width, has_bias=has_bias, block_r=block_r_dw, block_c=block_c_dw
+        )
+        partial = torch.empty((n_splits, width_p, n_chan), dtype=torch.float32, device=x.device)
+        grid = (n_splits, kernels.cdiv(n_chan, block_c_dw))
+        # noinspection PyArgumentList
+        kernels.dw_bwd_dw[grid](
             x,
             d_out,
-            partial,
             n_rows,
             n_time_in,
             n_time_out,
             n_chan,
             pad_l,
             rows_per_prog,
+            partial,
             HAS_BIAS=has_bias,
             BLOCK_R=block_r_dw,
             BLOCK_C=block_c_dw,
             KW=width,
             KW_P2=width_p2,
-            KW_P=width + int(has_bias),
+            KW_P=width_p,
             num_warps=num_warps,
         )
         summed = partial.sum(dim=0)
@@ -405,6 +157,7 @@ class _DepthwiseConv1d(torch.autograd.Function):
     @staticmethod
     def forward(ctx, x, w, bias, pad_l, n_time_out, blocks):
         """
+        :param ctx: keeps x and w and the launch parameters for the backward
         :param x: (batch, time_in, channel), contiguous
         :param w: (channel, width), contiguous
         :param bias: (channel,) or None
@@ -424,6 +177,7 @@ class _DepthwiseConv1d(torch.autograd.Function):
     @once_differentiable
     def backward(ctx, d_out):
         """
+        :param ctx: from :func:`forward`
         :param d_out: (batch, time_out, channel)
         :return: the gradients for x, w and bias, None for the other arguments
         """
@@ -508,6 +262,7 @@ if hasattr(torch.library, "custom_op"):  # torch >= 2.4
         return x.new_empty(tuple(x.shape)), x.new_empty((w.shape[1] + int(has_bias), w.shape[0]), dtype=torch.float32)
 
     def _lib_setup_context(ctx, inputs, output):
+        del output
         x, w, bias, pad_l, _, block_r, block_c, block_r_dw, block_c_dw = inputs
         ctx.save_for_backward(x, w)
         ctx.bias_dtype = bias.dtype if bias is not None else None
@@ -540,7 +295,7 @@ def depthwise_conv1d(
     *,
     pad_l: int,
     n_time_out: int,
-    blocks: Tuple[int, int, int, int] = (_BLOCK_R, _BLOCK_C, _BLOCK_R_DW, _BLOCK_C_DW),
+    blocks: Tuple[int, int, int, int] = (kernels.BLOCK_R, kernels.BLOCK_C, kernels.BLOCK_R_DW, kernels.BLOCK_C_DW),
 ) -> torch.Tensor:
     """
     :param x: (batch, time_in, channel)
