@@ -311,6 +311,51 @@ def test_conv1d_depthwise_cuda_triton_path():
     torch.testing.assert_close(out_raw, ref)
 
 
+def test_conv1d_padding_left_right():
+    """
+    a (left, right) pair pads the two sides by their own amount: on a 24-frame window a 32-tap filter
+    padded (0, 16) gives the last 9 rows of the "same" conv, on the CPU path and on the CUDA kernel
+    """
+    import torch
+    from unittest import mock
+
+    rf.select_backend_torch()
+    batch, time, feat = Dim(3, name="batch"), Dim(24, name="time"), Dim(6, name="feat")
+    kept = Dim(9, name="kept")
+    gen = torch.Generator().manual_seed(7)
+    devices = ["cpu"] + (["cuda"] if torch.cuda.is_available() else [])
+    for device in devices:
+        with rf.set_default_device_ctx(device):
+            rf.set_random_seed(2)
+            conv = rf.Conv1d(feat, feat, filter_size=32, groups=feat.dimension, padding="same")
+        x = Tensor("x", dims=[batch, time, feat], dtype="float32")
+        x.raw_tensor = torch.randn(3, 24, 6, generator=gen).to(device)
+        same, same_time = conv(x, in_spatial_dim=time)
+        ref = same.copy_transpose([batch, same_time, feat]).raw_tensor[:, 15:]
+        fallback = (
+            mock.patch.object(torch.nn.functional, "conv1d", side_effect=AssertionError("torch conv1d fallback"))
+            if device == "cuda"
+            else mock.MagicMock()
+        )
+        with fallback:
+            out, (out_time,) = rf.conv(
+                x,
+                in_dim=feat,
+                out_dim=feat,
+                in_spatial_dims=[time],
+                out_spatial_dims=[kept],
+                filter=conv.filter,
+                filter_size=conv.filter_size,
+                padding=[(0, 16)],
+                groups=feat.dimension,
+                bias=conv.bias,
+            )
+        assert out_time == kept and set(out.dims) == {batch, kept, feat}, (device, out.dims)
+        torch.testing.assert_close(out.copy_transpose([batch, kept, feat]).raw_tensor, ref, rtol=1e-5, atol=1e-5)
+        (derived_time,) = rf.make_conv_out_spatial_dims([time], filter_size=32, padding=[(0, 16)])
+        assert derived_time.dimension == 9, derived_time
+
+
 def test_conv1d_depthwise_cuda_triton_path_traced():
     """
     a traced step keeps the Triton kernel as well (the compiled step of torch_cuda_graph traces on fake tensors,
