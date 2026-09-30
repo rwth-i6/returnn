@@ -565,16 +565,19 @@ def test_depthwise_conv1d_triton_weight_grad_scratch_independent_of_rows():
     except ImportError as exc:
         raise unittest.SkipTest(f"triton not available ({exc})")
 
+    import gc
+
     blocks = (m.kernels.BLOCK_R, m.kernels.BLOCK_C, m.kernels.BLOCK_R_DW, m.kernels.BLOCK_C_DW)
     peaks = []
     for n_batch in (500, 2000):
         x = torch.randn(n_batch, 24, 256, device="cuda", dtype=torch.bfloat16)
         w = torch.randn(256, 32, device="cuda", dtype=torch.bfloat16)
         d_out = torch.randn(n_batch, 24, 256, device="cuda", dtype=torch.bfloat16)
+        gc.collect()
         torch.cuda.synchronize()
         torch.cuda.reset_peak_memory_stats()
-        base = torch.cuda.memory_allocated()
+        base = torch.cuda.memory_stats()["requested_bytes.all.current"]
         m._launch_bwd(x, w, d_out, has_bias=True, pad_l=15, blocks=blocks, need_dx=False, need_dw_db=True)
         torch.cuda.synchronize()
-        peaks.append(torch.cuda.max_memory_allocated() - base)
+        peaks.append(torch.cuda.memory_stats()["requested_bytes.all.peak"] - base)
     assert peaks[0] == peaks[1], peaks
