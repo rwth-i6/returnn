@@ -1949,8 +1949,10 @@ def _check_optimizer_step_same_as_eager(opt_factory, opts, **kwargs):
     """params and optimizer state (incl. the checkpoint scalars) as the plain eager optimizer.step()"""
     ref_params, ref_opt, _ = _run_optimizer_step(opt_factory, **kwargs)
     params, opt, opt_step = _run_optimizer_step(opt_factory, opts=opts, **kwargs)
+    # torch < 2.12 emulates the eager bf16 rounding only partially (Muon-like: up to 4e-5 abs diff on 2.7)
+    tol = dict(rtol=1e-5, atol=1e-4 if torch.__version__ < (2, 12) else 1e-6)
     for p_ref, p in zip(ref_params, params):
-        torch.testing.assert_close(p, p_ref, rtol=1e-5, atol=1e-6)
+        torch.testing.assert_close(p, p_ref, **tol)
     ref_state = ref_opt.state_dict()["state"]
     state = opt_step.state_dict_to_host_scalars(opt.state_dict())["state"]
     assert set(state) == set(ref_state)
@@ -1959,7 +1961,7 @@ def _check_optimizer_step_same_as_eager(opt_factory, opts, **kwargs):
         for k, v_ref in s_ref.items():
             v = state[i][k]
             if isinstance(v_ref, torch.Tensor):
-                torch.testing.assert_close(v, v_ref, rtol=1e-5, atol=1e-6)
+                torch.testing.assert_close(v, v_ref, **tol)
             else:  # Python scalar, e.g. the step counter of _MuonLike
                 assert type(v) is type(v_ref) and v == v_ref, f"state {i} {k}: {v!r} vs {v_ref!r}"
     return opt_step
