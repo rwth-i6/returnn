@@ -11,6 +11,10 @@ the anti-diagonals looped inside the kernel and the prefixes held as a block.
 
 The scores are kept per packed cell. A dense buffer over (anti-diagonals, sequences, prefixes) would,
 at the bounds of a captured step, be several hundred MB for a lattice of some ten thousand cells.
+
+The backward sweep normalizes the edge posteriors of every anti-diagonal by their own sum, since every
+path crosses an anti-diagonal exactly once, which cancels the drift between the separately accumulated
+alpha and beta over a long lattice.
 """
 
 from __future__ import annotations
@@ -94,7 +98,6 @@ if triton is not None:
         frame_lens_ptr,
         label_lens_ptr,
         alpha_ptr,
-        total_ptr,
         weight_ptr,
         beta_ptr,
         blank_grad_ptr,
@@ -110,7 +113,6 @@ if triton is not None:
         label_len = tl.load(label_lens_ptr + seq).to(tl.int64)
         frame_len = tl.load(frame_lens_ptr + seq).to(tl.int64)
         base = tl.load(offsets_ptr + seq).to(tl.int64)
-        norm = tl.load(total_ptr + seq)
         weight = tl.load(weight_ptr + seq)
         stride = label_len + 1
         in_lattice = (offs < max_prefix) & (offs <= label_len)
@@ -139,10 +141,17 @@ if triton is not None:
             top = tl.maximum(tl.maximum(stay, emit), _NEG_INF)
             remaining = top + tl.log(tl.exp(stay - top) + tl.exp(emit - top))
             tl.store(beta_ptr + cell, remaining, mask=inside)
-            # a slot without frames has its normalizer at the sentinel and no cell, so nothing is written for it
-            scored = inside & (norm > _NEG_INF)
-            blank_post = tl.where(scored & (to_below | ends), tl.exp(alpha + stay - norm) * weight, 0.0)
-            label_post = tl.where(scored & to_right, tl.exp(alpha + emit - norm) * weight, 0.0)
+            # every path crosses an anti-diagonal exactly once, so the edge scores of its cells sum to the total,
+            # and normalizing by their own sum cancels the drift between the separately accumulated alpha and beta
+            blank_edge = tl.where(to_below | ends, alpha + stay, _NEG_INF)
+            label_edge = tl.where(to_right, alpha + emit, _NEG_INF)
+            edge_top = tl.maximum(tl.max(tl.maximum(blank_edge, label_edge), axis=0), _NEG_INF)
+            # the log mass stays apart from the shift, added to a large top it would round away.
+            # A sequence without any alignment has no live edge on any anti-diagonal and gets no gradient
+            log_mass = tl.log(tl.sum(tl.exp(blank_edge - edge_top) + tl.exp(label_edge - edge_top), axis=0))
+            live = edge_top > _NEG_INF
+            blank_post = tl.where(inside & live, tl.exp((blank_edge - edge_top) - log_mass) * weight, 0.0)
+            label_post = tl.where(to_right & live, tl.exp((label_edge - edge_top) - log_mass) * weight, 0.0)
             tl.store(blank_grad_ptr + cell, blank_post, mask=inside)
             tl.store(label_grad_ptr + cell, label_post, mask=inside)
 
@@ -194,7 +203,6 @@ def backward_scan(
     frame_lens: torch.Tensor,
     label_lens: torch.Tensor,
     alpha: torch.Tensor,
-    total: torch.Tensor,
     weight: torch.Tensor,
     max_frames: int,
     max_prefix: int,
@@ -206,7 +214,6 @@ def backward_scan(
     :param frame_lens: [B] frames per sequence
     :param label_lens: [B] labels per sequence
     :param alpha: [cells] from :func:`forward_scan`
-    :param total: [B] log likelihood
     :param weight: [B] incoming gradient of the log likelihood
     :param max_frames: frames to sweep, the bound the forward sweep ran with
     :param max_prefix: prefixes to sweep, U_max + 1
@@ -225,7 +232,6 @@ def backward_scan(
         frame_lens,
         label_lens,
         alpha,
-        total,
         weight,
         beta,
         blank_grad,

@@ -245,6 +245,28 @@ def test_rnnt_reads_strided_lengths():
     torch.testing.assert_close(results[0], results[1])
 
 
+def test_rnnt_gradient_of_a_long_sequence():
+    """
+    Without labels there is one alignment, so every blank posterior is one and the gradient is the softmax minus
+    the blank one hot, which the sweeps only give when the drift between alpha and beta over two thousand
+    anti-diagonals cancels.
+    """
+    if not torch.cuda.is_available():
+        raise unittest.SkipTest("no cuda")
+    frames, vocab = 2048, 2048
+    x = torch.zeros(frames, vocab, device="cuda", requires_grad=True)
+    no_labels = torch.zeros((1, 0), dtype=torch.int32, device="cuda")
+    lens = (
+        torch.tensor([frames], dtype=torch.int32, device="cuda"),
+        torch.tensor([0], dtype=torch.int32, device="cuda"),
+    )
+    loss = rnnt_loss(x, no_labels, *lens, blank=0, max_frames=frames)
+    loss.sum().backward()
+    want = torch.full_like(x, 1 / vocab)
+    want[:, 0] -= 1
+    torch.testing.assert_close(x.grad, want, rtol=1e-4, atol=1e-5)
+
+
 def test_rf_rnnt_loss_scores_the_lattice_the_joint_builds():
     """
     The rows of the lattice need not be single frames. Here the joint gets the index of the row of every cell
@@ -356,9 +378,9 @@ def test_rnnt_scans_on_cuda_give_the_posteriors_of_every_edge():
     log_probs = torch.log_softmax(torch.randn(num_cells, 3, device="cuda"), dim=-1)
     blank_lp, label_lp = log_probs[:, 0].contiguous(), log_probs[:, 1].contiguous()
 
-    total, alpha = forward_scan(blank_lp, label_lp, offsets, frame_lens, label_lens, 6, 8)
+    _total, alpha = forward_scan(blank_lp, label_lp, offsets, frame_lens, label_lens, 6, 8)
     blank_post, label_post = backward_scan(
-        blank_lp, label_lp, offsets, frame_lens, label_lens, alpha, total, torch.ones(4, device="cuda"), 6, 8
+        blank_lp, label_lp, offsets, frame_lens, label_lens, alpha, torch.ones(4, device="cuda"), 6, 8
     )
     for seq in range(4):
         first, count = int(offsets[seq]), int(cells[seq])
