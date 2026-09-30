@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import _setup_test_env  # noqa
 from typing import Sequence, Tuple
+import re
 import sys
 import unittest
 import torch
@@ -166,6 +167,150 @@ def test_llama():
     # so the padded frames differ (and are irrelevant).
     torch.testing.assert_allclose(out_rf.raw_tensor[mask.raw_tensor], out_hf.logits[mask.raw_tensor])
     print("  all matched!")
+
+
+def _make_rf_decoder_for_hf_qwen(config, **self_att_opts):
+    from returnn.frontend.decoder.transformer import TransformerDecoder, FeedForwardGated
+
+    return TransformerDecoder(
+        encoder_dim=None,
+        vocab_dim=Dim(config.vocab_size, name="vocab"),
+        model_dim=Dim(config.hidden_size, name="model"),
+        num_layers=config.num_hidden_layers,
+        pos_enc=None,
+        norm={"class": "rf.RMSNorm", "eps": config.rms_norm_eps},
+        ff=FeedForwardGated,
+        ff_dim=config.intermediate_size,
+        share_embedding=config.tie_word_embeddings,
+        input_embedding_scale=1.0,
+        layer_opts=dict(
+            self_att=rf.RotaryPosGroupedQueryCausalSelfAttention,
+            self_att_opts=dict(
+                num_kv_heads=config.num_key_value_heads,
+                head_dim=getattr(config, "head_dim", None) or config.hidden_size // config.num_attention_heads,
+                rope_base=config.rope_parameters["rope_theta"],
+                **self_att_opts,
+            ),
+        ),
+        num_heads=config.num_attention_heads,
+        dropout=0,
+        att_dropout=0,
+    )
+
+
+def _check_rf_decoder_vs_hf(model_hf, model_rf):
+    """
+    Full sequence, and step-wise (prefix, then single steps with KV cache), vs HF logits.
+    """
+    from returnn.frontend.conversions.hf_qwen import import_params_hf_qwen_to_rf_transformer_decoder
+
+    with torch.no_grad():
+        for name, p in model_hf.named_parameters():
+            # sharp attention, otherwise RoPE (e.g. theta) hardly affects the output
+            if re.search(r"\.(q|k)_proj\.", name):
+                p.normal_(0.0, 0.5)
+    import_params_hf_qwen_to_rf_transformer_decoder(model_hf, model_rf)
+
+    batch_dim = Dim(3, name="batch")
+    seq_lens = torch.tensor([13, 7, 10], dtype=torch.int32)
+    seq_dim = Dim(rf.convert_to_tensor(seq_lens, dims=[batch_dim]), name="seq")
+    in_ = rf.random_uniform(
+        [batch_dim, seq_dim],
+        sparse_dim=model_rf.vocab_dim,
+        dtype="int32",
+        minval=0,
+        maxval=model_rf.vocab_dim.dimension,
+    )
+    mask = rf.sequence_mask([batch_dim, seq_dim])
+
+    out_hf = model_hf(in_.raw_tensor, attention_mask=mask.raw_tensor.long()).logits  # (B,T,V)
+    mask_ = mask.raw_tensor[:, :, None]
+
+    out_rf, _ = model_rf(in_, spatial_dim=seq_dim, state=model_rf.default_initial_state(batch_dims=[batch_dim]))
+    out_rf = out_rf.copy_transpose([batch_dim, seq_dim, model_rf.vocab_dim]).raw_tensor
+    torch.testing.assert_close(out_rf * mask_, out_hf * mask_, atol=1e-4, rtol=1e-4)
+
+    prefix_len = 4
+    prefix_dim = Dim(prefix_len, name="prefix")
+    prefix, _ = rf.slice(in_, axis=seq_dim, size=prefix_dim)
+    logits, state = model_rf(
+        prefix, spatial_dim=prefix_dim, state=model_rf.default_initial_state(batch_dims=[batch_dim])
+    )
+    step_logits = [logits.copy_transpose([batch_dim, prefix_dim, model_rf.vocab_dim]).raw_tensor]
+    for t in range(prefix_len, int(seq_lens.max())):
+        label = rf.gather(in_, axis=seq_dim, indices=rf.constant(t, dims=[batch_dim]), clip_to_valid=True)
+        logits, state = model_rf(label, spatial_dim=single_step_dim, state=state)
+        step_logits.append(logits.copy_transpose([batch_dim, model_rf.vocab_dim]).raw_tensor[:, None])
+    out_rf_steps = torch.cat(step_logits, dim=1)
+    torch.testing.assert_close(out_rf_steps * mask_, out_hf * mask_, atol=1e-4, rtol=1e-4)
+
+
+def test_qwen2():
+    """
+    Qwen2: GQA, qkv bias without o_proj bias, RoPE theta 1e6, tied embeddings.
+    """
+    from transformers import Qwen2Config, Qwen2ForCausalLM
+
+    torch.manual_seed(42)
+    config = Qwen2Config(
+        vocab_size=11,
+        hidden_size=64,
+        intermediate_size=96,
+        num_hidden_layers=2,
+        num_attention_heads=4,
+        num_key_value_heads=2,
+        rope_theta=1_000_000.0,
+        tie_word_embeddings=True,
+        attn_implementation="eager",
+    )
+    model_hf = Qwen2ForCausalLM(config)
+    rf.select_backend_torch()
+    model_rf = _make_rf_decoder_for_hf_qwen(config, qkv_with_bias=True, proj_with_bias=False)
+    _check_rf_decoder_vs_hf(model_hf, model_rf)
+
+
+def test_qwen3():
+    """
+    Qwen3: GQA, qk-norm, head dim != hidden / num heads, untied embeddings.
+    """
+    from transformers import Qwen3Config, Qwen3ForCausalLM
+
+    torch.manual_seed(42)
+    config = Qwen3Config(
+        vocab_size=11,
+        hidden_size=64,
+        intermediate_size=96,
+        num_hidden_layers=2,
+        num_attention_heads=4,
+        num_key_value_heads=1,
+        head_dim=32,
+        rope_theta=1_000_000.0,
+        tie_word_embeddings=False,
+        attn_implementation="eager",
+    )
+    model_hf = Qwen3ForCausalLM(config)
+    with torch.no_grad():
+        for name, p in model_hf.named_parameters():
+            if name.endswith("norm.weight"):
+                p.uniform_(0.5, 1.5)
+    rf.select_backend_torch()
+    model_rf = _make_rf_decoder_for_hf_qwen(config, qk_norm={"class": "rf.RMSNorm", "eps": config.rms_norm_eps})
+    _check_rf_decoder_vs_hf(model_hf, model_rf)
+
+
+def test_lora_linear():
+    """
+    Zero-init LoRA is the base linear, only the low-rank params are trainable.
+    """
+    rf.select_backend_torch()
+    in_dim, out_dim, batch_dim = Dim(8, name="in"), Dim(6, name="out"), Dim(5, name="batch")
+    lin = rf.LoRALinear(in_dim, out_dim, rank=3, alpha=16.0, use_rslora=True)
+    x = rf.random_normal([batch_dim, in_dim])
+    y = lin(x)
+    y_base = rf.matmul(x, lin.weight, reduce=in_dim) + lin.bias
+    torch.testing.assert_close(y.raw_tensor, y_base.copy_compatible_to(y).raw_tensor)
+    trainable = {name for name, p in lin.named_parameters() if p.raw_tensor.requires_grad}
+    assert trainable == {"lora_a", "lora_b"}, trainable
 
 
 def test_feed_forward_gated():
