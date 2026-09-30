@@ -58,7 +58,8 @@ if triton is not None:
                 tl.where(mask, tl.exp(x - new_max), 0.0), axis=0
             )
             running_max = new_max
-        lse = running_max + tl.log(running_sum)
+        # a row of minus infinity has nothing to normalize, 0 keeps its log probabilities at minus infinity
+        lse = tl.where(running_sum > 0.0, running_max + tl.log(running_sum), 0.0)
         label = tl.load(label_ptr + cell)
         blank_logit = tl.load(logits_ptr + base + blank)
         label_logit = tl.load(logits_ptr + base + label)
