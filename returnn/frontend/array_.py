@@ -486,8 +486,8 @@ def concat(
             # Just add the dim values.
             out_dim = Dim(sum(d.get_dim_value_tensor() for _, d in sources), name="concat")
     if handle_dynamic_dims:
-        # noinspection PyProtectedMember
-        out = sources[0][0]._raw_backend.concat_seq_wise(*sources, allow_broadcast=allow_broadcast, out_dim=out_dim)
+        backend = _utils.get_backend_from_tensors(*(src for src, _ in sources))
+        out = backend.concat_seq_wise(*sources, allow_broadcast=allow_broadcast, out_dim=out_dim)
     else:
         # noinspection PyProtectedMember
         out = sources[0][0]._raw_backend.concat(*sources, allow_broadcast=allow_broadcast, out_dim=out_dim)

@@ -505,6 +505,33 @@ def test_gather_packed_into_index_packing():
     _assert_equal_non_padded(out, b, batch_dim, b_dim)
 
 
+def test_concat_packed_with_plain_sources():
+    # prompt-LM layout [prefix | audio | suffix | text]:
+    # a fixed prefix embedding broadcast over the batch, a per-seq suffix, both plain, and two packed streams
+    rf.select_backend_torch()
+    a, batch_dim, a_dim, feat_dim = _make_input(batch_size=3, seq_lens=(5, 1, 4), seed=1)
+    b_dim = Dim(
+        Tensor("b_len", dims=[batch_dim], dtype="int32", raw_tensor=torch.tensor([2, 3, 1], dtype=torch.int32)),
+        name="b_time",
+    )
+    gen = torch.Generator().manual_seed(3)
+    b = Tensor("b", dims=[batch_dim, b_dim, feat_dim], dtype="float32", raw_tensor=torch.randn(3, 3, 4, generator=gen))
+    prefix_dim, suffix_dim = Dim(2, name="prefix"), Dim(3, name="suffix")
+    prefix = Tensor("prefix", dims=[prefix_dim, feat_dim], dtype="float32", raw_tensor=torch.randn(2, 4, generator=gen))
+    suffix = Tensor(
+        "suffix",
+        dims=[batch_dim, suffix_dim, feat_dim],
+        dtype="float32",
+        raw_tensor=torch.randn(3, 3, 4, generator=gen),
+    )
+    parts = [(prefix, prefix_dim), (a, a_dim), (suffix, suffix_dim), (b, b_dim)]
+    ref, out_dim = rf.concat(*parts, allow_broadcast=True, handle_dynamic_dims=True)
+    parts_p = [(prefix, prefix_dim), (packed.pack(a), a_dim), (suffix, suffix_dim), (packed.pack(b), b_dim)]
+    out_p, _ = rf.concat(*parts_p, allow_broadcast=True, handle_dynamic_dims=True, out_dim=out_dim)
+    assert packed.is_packed(out_p)
+    _assert_equal_non_padded(out_p, ref, batch_dim, out_dim)
+
+
 def test_concat_packed_empty_source():
     # eval feeds no text stream, so one source is empty and its packed buffer has zero rows.
     # such a buffer has no last row to clip indices to, and it contributes no frames at all.

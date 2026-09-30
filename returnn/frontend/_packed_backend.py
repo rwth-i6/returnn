@@ -4070,15 +4070,20 @@ class PackedBackend(Backend[PackedRawTensor]):
         so it reads that source's buffer at its own sequence start plus the offset within it.
         No padded intermediate, so no mask-and-compact afterwards.
 
+        Sources can also be plain (not packed) over their spatial dim, optionally with the batch dim,
+        e.g. a fixed prompt embedding [prompt, F] broadcast to every sequence:
+        those frames read the plain tensor at the offset within it.
+
         :return: the concatenated packed tensor
         """
         raws = [_raw(s) if is_packed(s) else None for s, _ in sources]
         if not _concat_seq_wise_applicable(sources, raws, out_dim):
             return Backend.concat_seq_wise(*sources, allow_broadcast=allow_broadcast, out_dim=out_dim)
-        batch = raws[0].orig_dims[0]
+        raw0 = next(r for r in raws if r is not None)
+        batch = raw0.orig_dims[0]
 
-        dev = raws[0].inner.device
-        out_packed_dim = _concat_out_packed_dim(raws, out_dim, batch, dev)
+        dev = raw0.inner.device
+        out_packed_dim = _concat_out_packed_dim(sources, raws, out_dim, batch, dev)
         helper = PackedRawTensor(
             inner=rf.zeros([out_packed_dim], dtype="int32", device=dev),
             packed_dim=out_packed_dim,
@@ -4090,19 +4095,32 @@ class PackedBackend(Backend[PackedRawTensor]):
 
         out = None
         offset = None  # where this source's frames begin within the output sequence
-        for (src, _), raw in zip(sources, raws):
-            lens = raw.orig_dims[-1].get_size_tensor(device=dev)
-            lens_at = rf.cast(rf.gather(lens, indices=seq, axis=batch), local.dtype)
+        for (src, src_dim), raw in zip(sources, raws):
+            if raw is None:
+                if src_dim.dyn_size_ext is None:
+                    lens_at = src_dim.dimension
+                else:
+                    lens = rf.copy_to_device(src_dim.get_size_tensor(device=dev), dev)
+                    lens_at = rf.cast(rf.gather(lens, indices=seq, axis=batch), local.dtype)
+            else:
+                lens = raw.orig_dims[-1].get_size_tensor(device=dev)
+                lens_at = rf.cast(rf.gather(lens, indices=seq, axis=batch), local.dtype)
             within = local if offset is None else local - offset
-            # an empty source has no last row to clip to, so the gather would read nothing;
-            # it contributes no frames either, so skip it and keep the running offset
-            if not rf.is_static_traceable() and int(raw.packed_dim.get_dim_value()) == 0:
-                offset = lens_at if offset is None else offset + lens_at
-                continue
-            starts, seqs_dim = raw.seq_starts(device=dev)
-            rows = rf.cast(rf.gather(starts, indices=seq, axis=seqs_dim), local.dtype) + within
-            rows = rf.clip_by_value(rows, 0, _last_row(raw.packed_dim, rows.dtype))
-            vals = rf.gather(raw.inner, indices=rows, axis=raw.packed_dim)
+            if raw is None:
+                if src_dim.dimension == 0:
+                    offset = lens_at if offset is None else offset + lens_at
+                    continue
+                vals = _concat_plain_source_frames(src, src_dim, batch=batch, seq=seq, within=within)
+            else:
+                # an empty source has no last row to clip to, so the gather would read nothing;
+                # it contributes no frames either, so skip it and keep the running offset
+                if not rf.is_static_traceable() and int(raw.packed_dim.get_dim_value()) == 0:
+                    offset = lens_at if offset is None else offset + lens_at
+                    continue
+                starts, seqs_dim = raw.seq_starts(device=dev)
+                rows = rf.cast(rf.gather(starts, indices=seq, axis=seqs_dim), local.dtype) + within
+                rows = rf.clip_by_value(rows, 0, _last_row(raw.packed_dim, rows.dtype))
+                vals = rf.gather(raw.inner, indices=rows, axis=raw.packed_dim)
             if out is None:
                 out, offset = vals, lens_at
             else:
@@ -4656,36 +4674,82 @@ def _concat_seq_wise_applicable(
     out_dim: Dim,
 ) -> bool:
     """
-    Whether the per-seq concat can serve these sources, i.e. every one of them is packed,
-    is concatenated along its own packed spatial dim over a shared batch,
+    Whether the per-seq concat can serve these sources, i.e. at least one packed,
+    the others plain, concatenating along their own packed spatial dim over a shared batch,
     and the output lens are known per seq.
     """
-    if len(sources) < 2 or any(r is None for r in raws):
+    packed_raws = [r for r in raws if r is not None]
+    if len(sources) < 2 or not packed_raws:
         return False
-    if any(len(r.orig_dims) != 2 for r in raws):
+    if any(len(r.orig_dims) != 2 for r in packed_raws):
         return False
-    batch = raws[0].orig_dims[0]
-    if any(r.orig_dims[0] != batch or d != r.orig_dims[-1] for (_, d), r in zip(sources, raws)):
-        return False
+    batch = packed_raws[0].orig_dims[0]
+    for (src, d), r in zip(sources, raws):
+        if r is not None:
+            if r.orig_dims[0] != batch or d != r.orig_dims[-1]:
+                return False
+            continue
+        # plain source: static over d, or with per-seq lengths over the batch
+        if d.dyn_size_ext is not None and (d.dyn_size_ext.dims != (batch,) or batch not in src.dims):
+            return False
+        if any(dim.need_masking() for dim in src.dims if dim not in (batch, d)):
+            return False
     return out_dim.dyn_size_ext is not None
 
 
-def _concat_out_packed_dim(raws: Sequence[PackedRawTensor], out_dim: Dim, batch: Dim, dev: str) -> Dim:
+def _concat_plain_source_frames(src: Tensor, src_dim: Dim, *, batch: Dim, seq: Tensor, within: Tensor) -> Tensor:
+    """
+    :param src: plain (not packed) concat source, over src_dim and maybe batch
+    :param src_dim: its concat dim
+    :param batch: the packed batch dim
+    :param seq: [out packed] sequence of every output frame
+    :param within: [out packed] position of every output frame within this source (out of range outside it)
+    :return: [out packed, ...] the source frame for every output frame (arbitrary outside the source range)
+    """
+    max_len = src_dim.get_dim_value_tensor()
+    last = max_len - 1 if isinstance(max_len, int) else rf.cast(max_len - 1, within.dtype)
+    pos = rf.clip_by_value(within, 0, last)
+    if batch not in src.dims:
+        return rf.gather(src, indices=pos, axis=src_dim)
+    flat, flat_dim = rf.merge_dims(src, dims=(batch, src_dim))
+    return rf.gather(flat, indices=seq * max_len + pos, axis=flat_dim)
+
+
+def _concat_out_packed_dim(
+    sources: Sequence[Tuple[Tensor, Dim]],
+    raws: Sequence[Optional[PackedRawTensor]],
+    out_dim: Dim,
+    batch: Dim,
+    dev: str,
+) -> Dim:
     """
     :return: the packed dim for a concat result: every source's content, end to end.
         Static when tracing, since a captured buffer size must not vary per batch.
+        A plain source adds its (max) length per sequence.
     """
     if not rf.is_static_traceable():
         total = None
-        for raw in raws:
-            lens = raw.orig_dims[-1].get_size_tensor(device=dev)
-            n = rf.reduce_sum(lens, axis=batch)
+        for (_, d), raw in zip(sources, raws):
+            if raw is None and d.dyn_size_ext is None:
+                n = batch.get_dim_value_tensor() * d.dimension
+            else:
+                lens = d.get_size_tensor(device=dev) if raw is None else raw.orig_dims[-1].get_size_tensor(device=dev)
+                n = rf.copy_to_device(rf.reduce_sum(lens, axis=batch), dev)
             total = n if total is None else total + n
         return Dim(total, name="packed_concat")
-    bounds = [r.content_bound for r in raws]
+    n_seqs = batch.get_dim_value_tensor()
+    bounds = []
+    for (_, d), raw in zip(sources, raws):
+        if raw is not None:
+            bounds.append(raw.content_bound)
+        else:
+            # noinspection PyProtectedMember
+            cap = d.dimension or d.capacity or d._derived_capacity()
+            bounds.append(n_seqs * cap if isinstance(n_seqs, int) and cap else None)
     assert all(b is not None for b in bounds), (
         f"packed concat: static traceable needs a content bound on every source, got {bounds}."
-        f" It comes from the packed buffer size (pack total_bound / packed_batch_size)."
+        f" It comes from the packed buffer size (pack total_bound / packed_batch_size),"
+        f" or for a plain source from the bounded batch dim times its spatial capacity."
     )
     del out_dim  # the bound is the sum of the sources', not derived from the concat dim
     return Dim(sum(bounds), name="packed_concat")
