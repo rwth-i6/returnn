@@ -96,3 +96,18 @@ def test_moments_distributed_matches_local():
         torch.testing.assert_close(mean.raw_tensor, ref_mean.raw_tensor, rtol=1e-6, atol=1e-3)
         torch.testing.assert_close(variance.raw_tensor, ref_variance.raw_tensor, rtol=1e-2, atol=1e-4)
         assert float(variance.raw_tensor.min()) > 0.0, (time_dim, use_mask, variance.raw_tensor)
+
+
+def test_moments_distributed_float16_variance_overflow():
+    """
+    The distributed statistics of float16 input stay float32,
+    as e.g. a variance of 90000 does not fit into float16.
+    """
+    import torch
+
+    rf.select_backend_torch()
+    dim = Dim(2, name="dim")
+    x = Tensor("x", dims=[dim], dtype="float16", raw_tensor=torch.tensor([-300.0, 300.0], dtype=torch.float16))
+    mean, variance = rf.moments(x, axis=dim, distributed=True)
+    assert (mean.dtype, variance.dtype) == ("float32", "float32")
+    assert (mean.raw_tensor.item(), variance.raw_tensor.item()) == (0.0, 90000.0)

@@ -61,7 +61,8 @@ def moments(
         # the variance, in float32 just as in bf16: the difference is then noise and can go negative,
         # which gives NaNs via rsqrt(variance + eps).
         # torch.nn.SyncBatchNorm instead combines per-worker Welford statistics, which does not cancel.
-        compute_dtype = x.dtype
+        # float16 and bfloat16 input gets float32 statistics, e.g. a variance above 65504 does not fit into float16.
+        out_dtype = "float32" if x.dtype in ("float16", "bfloat16") else x.dtype
         x = rf.cast(x, "float32")
         count = _global_num_elements(axis, use_mask=use_mask, device=x.device)
         mean = rf.reduce_sum(x, axis=axis, use_mask=use_mask, distributed=True) / count
@@ -70,7 +71,7 @@ def moments(
         variance = rf.reduce_sum(sq_dev, axis=axis, use_mask=use_mask, distributed=True) / count
         if isinstance(correction, Tensor) or correction != 0:
             variance *= count / (count - correction)
-        return rf.cast(mean, compute_dtype), rf.cast(variance, compute_dtype)
+        return rf.cast(mean, out_dtype), rf.cast(variance, out_dtype)
     mean = rf.reduce_mean(x, axis=axis)
     # stop_gradient does not change the gradient here
     variance = rf.reduce_mean(rf.squared_difference(x, rf.stop_gradient(mean)), axis=axis, use_mask=use_mask)
