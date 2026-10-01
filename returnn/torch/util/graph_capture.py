@@ -796,7 +796,7 @@ class GraphCapturedTrainStep:
         """whether the optimizer step (incl grad clip) is captured in-graph (opts "capture_optimizer")"""
         return self._post_step is not None
 
-    def _step(self) -> RunCtx:
+    def _step(self, *, post_step: bool = True) -> RunCtx:
         for p in self._grad_params:
             p.grad.zero_()  # in-graph
         with rf.set_static_traceable_ctx():
@@ -805,47 +805,26 @@ class GraphCapturedTrainStep:
             ctx = rf.get_run_ctx()
             total_loss = ctx.total_loss()
         total_loss.raw_tensor.backward()
-        if self._post_step is not None:
+        if post_step and self._post_step is not None:
             self._post_step()  # in-graph: grad clip + optimizer step
         return ctx
 
     def _materialize_optimizer_state(self) -> None:
         """
-        Create the optimizer's lazy state and the param grads without any model step
-        (they are graph inputs, so they must exist before trace/capture);
-        enables ``warmup_steps: 0``.
-        One ``step()`` with zero grads at lr 0 is doubly neutral;
-        written values are zeroed afterwards, only the existence kept.
-        No-op when state exists.
+        With the in-graph optimizer step ("capture_optimizer"):
+        create the optimizer's lazy state without any step, as its first step would
+        (the state tensors are graph inputs, so they must exist before trace/capture);
+        enables ``warmup_steps: 0``. See :func:`returnn.torch.updater.init_optimizer_state`.
+        The static param grads (created in ``__init__``) select the params which get state.
+        No-op when state exists (e.g. after warmup steps, or loaded from a checkpoint).
+        Without the in-graph optimizer step, the optimizer creates its state itself, in its first step.
         """
+        from returnn.torch.updater import init_optimizer_state
+
         opt = self._get_optimizer() if self._get_optimizer is not None else None
-        if opt is None or opt.state:
+        if opt is None or self._post_step is None or opt.state:
             return
-        with torch.no_grad():
-            for p in self._grad_params:
-                if p.grad is None:
-                    # also needed pre-capture: the partitioned capture zeroes + accumulates
-                    # into pre-existing grads
-                    p.grad = torch.zeros_like(p)
-            saved_lrs = []
-            for g in opt.param_groups:
-                lr = g["lr"]
-                if isinstance(lr, torch.Tensor):  # capturable: device-tensor lr
-                    saved_lrs.append(lr.clone())
-                    lr.fill_(0)
-                else:
-                    saved_lrs.append(lr)
-                    g["lr"] = 0.0
-            opt.step()
-            for g, lr in zip(opt.param_groups, saved_lrs):
-                if isinstance(g["lr"], torch.Tensor):
-                    g["lr"].copy_(lr)
-                else:
-                    g["lr"] = lr
-            for state in opt.state.values():
-                for v in state.values():
-                    if isinstance(v, torch.Tensor):
-                        v.zero_()
+        init_optimizer_state(opt)
 
     def _warmup_step_dynamic(
         self, extern_data_raw: Dict[str, Union[torch.Tensor, numpy.ndarray]], *, global_train_step: int
@@ -1336,15 +1315,16 @@ class GraphCapturedTrainStep:
             torch.cuda.current_stream().wait_stream(self._eager_stream)
             return self._ctx
         if not self._compile:
-            # side-stream warmup (kernel/cudnn warmup; each _step call is cold w.r.t. dim/layout caches)
+            # side-stream warmup (kernel/cudnn warmup; each _step call is cold w.r.t. dim/layout caches);
+            # without the optimizer step, these runs are thrown away, the replay below is this batch's step
             s = torch.cuda.Stream()
             s.wait_stream(torch.cuda.current_stream())
             with torch.cuda.stream(s):
                 for _ in range(3):
-                    self._step()
+                    self._step(post_step=False)
             torch.cuda.current_stream().wait_stream(s)
         # with warmup_steps 0 there was no real optimizer step yet: create the lazy state
-        # (and the param grads) explicitly -- no-op if a warmup step already did
+        # explicitly -- no-op if a warmup step already did
         self._materialize_optimizer_state()
         torch.cuda.synchronize()
         # release the warmup's cached blocks before the compiled program / capture

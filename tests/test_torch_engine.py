@@ -787,6 +787,116 @@ def test_updater_weight_decay_blacklist():
     assert params_by_wd[1e-3] == {"2.weight"}
 
 
+class _AnchoredSGD(torch.optim.Optimizer):
+    """
+    SGD from an anchor, the state starting as a copy of the param (like the z of a schedule-free optimizer):
+    a lazily created optimizer state which is not all zeros, and an init_state() to create it in advance
+    """
+
+    def __init__(self, params, lr: float):
+        super().__init__(params, dict(lr=lr))
+
+    @torch.no_grad()
+    def init_state(self):
+        """the state of the params with grad, as the first step creates it"""
+        for group in self.param_groups:
+            for p in group["params"]:
+                if p.grad is not None and not self.state[p]:
+                    self.state[p]["anchor"] = p.detach().clone()
+                    self.state[p]["grad_sum"] = torch.zeros_like(p)
+
+    @torch.no_grad()
+    def step(self, closure=None):
+        """one update"""
+        assert closure is None
+        self.init_state()
+        for group in self.param_groups:
+            for p in group["params"]:
+                if p.grad is None:
+                    continue
+                state = self.state[p]
+                state["grad_sum"].add_(p.grad)
+                p.copy_(state["anchor"] - group["lr"] * state["grad_sum"])
+
+
+def test_init_optimizer_state():
+    """
+    init_optimizer_state creates the state as the first step would:
+    the state created in advance, then some steps, equals the same steps without it
+    (params and state), for the torch optimizers and an optimizer with init_state().
+    """
+    from returnn.torch.updater import init_optimizer_state
+
+    cases = [
+        ("SGD", dict(lr=0.1, momentum=0.9)),
+        ("SGD", dict(lr=0.1, momentum=0.9, nesterov=True)),
+        ("SGD", dict(lr=0.1)),
+        ("Adam", dict(lr=0.1, amsgrad=True)),
+        ("AdamW", dict(lr=0.1)),
+        ("Adamax", dict(lr=0.1)),
+        ("NAdam", dict(lr=0.1)),
+        ("RAdam", dict(lr=0.1)),
+        ("Adadelta", dict(lr=0.1)),
+        ("RMSprop", dict(lr=0.1, momentum=0.9, centered=True)),
+        ("ASGD", dict(lr=0.1)),
+        ("Adagrad", dict(lr=0.1, initial_accumulator_value=0.1)),
+        ("Rprop", dict(lr=0.1)),
+        ("Adafactor", dict(lr=0.1)),
+        ("Muon", dict(lr=0.1)),
+        (_AnchoredSGD, dict(lr=0.1)),
+    ]
+    num_checked = 0
+    for name, kwargs in cases:
+        cls = getattr(torch.optim, name, None) if isinstance(name, str) else name
+        if cls is None or not (cls is torch.optim.SGD or hasattr(cls, "init_state") or hasattr(cls, "_init_group")):
+            print(f"{name}: not in this torch version, or no _init_group")
+            continue
+        print(f"{name} {kwargs}")
+        num_checked += 1
+        shapes = [(4, 3), (3, 2)] if name == "Muon" else [(4, 3), (3,)]  # Muon: matrix params only
+        gen = torch.Generator().manual_seed(42)
+        init_values = [torch.randn(shape, generator=gen) for shape in shapes]
+        grads_per_step = [[torch.randn(shape, generator=gen) for shape in shapes] for _ in range(3)]
+        results = []
+        for in_advance in (False, True):
+            params = [torch.nn.Parameter(v.clone()) for v in init_values]
+            opt = cls(params, **kwargs)
+            if in_advance:
+                for p in params:
+                    p.grad = torch.zeros_like(p)
+                init_optimizer_state(opt)
+                for p, v in zip(params, init_values):
+                    assert torch.equal(p, v), f"{name}: params changed without a step"
+                    if kwargs.get("momentum", 0) != 0 or cls is not torch.optim.SGD:  # plain SGD has no state
+                        assert opt.state[p], f"{name}: no state created in advance"
+            for grads in grads_per_step:
+                for p, g in zip(params, grads):
+                    p.grad = g.clone()
+                opt.step()
+            results.append((params, opt))
+        (params_ref, opt_ref), (params_, opt_) = results
+        for i, (p_ref, p) in enumerate(zip(params_ref, params_)):
+            torch.testing.assert_close(p, p_ref, msg=lambda m: f"{name} param {i}: {m}")
+            state_ref, state = opt_ref.state[p_ref], opt_.state[p]
+            assert set(state) == set(state_ref), f"{name} param {i}: state keys {set(state)} != {set(state_ref)}"
+            for k, v_ref in state_ref.items():
+                if isinstance(v_ref, torch.Tensor):
+                    torch.testing.assert_close(state[k], v_ref, msg=lambda m: f"{name} param {i} state {k}: {m}")
+                else:
+                    assert state[k] == v_ref, f"{name} param {i} state {k}: {state[k]} != {v_ref}"
+    assert num_checked >= 2
+
+    # no _init_group, no init_state: loud
+    p = torch.nn.Parameter(torch.zeros(3))
+    p.grad = torch.zeros(3)
+    try:
+        init_optimizer_state(torch.optim.LBFGS([p]))
+    except NotImplementedError as exc:
+        print("LBFGS:", exc)
+    else:
+        raise AssertionError("LBFGS: expected NotImplementedError")
+
+
 def test_updater_lr_multipliers():
     from collections import defaultdict
     from fnmatch import fnmatchcase
@@ -1488,11 +1598,17 @@ def _torch_engine_sub_proc_cleanup_test_main(conn):
 
 
 def _build_cuda_graph_train_config_and_dataset(
-    *, compile_: bool, warmup_steps: Optional[int] = 2, cuda_graph: bool = True, optimizer_step: bool = False
+    *,
+    compile_: bool,
+    warmup_steps: Optional[int] = 2,
+    cuda_graph: bool = True,
+    optimizer_step: bool = False,
+    optimizer: Optional[Dict[str, Any]] = None,
 ):
     """
     small RF model + Task12AXDataset config with torch_cuda_graph, see the tests below.
     With optimizer_step: the optimizer step not in the model graph but separately (torch_optimizer_step).
+    optimizer: the config entry, capturable AdamW by default.
     """
     from returnn.datasets import init_dataset
     from returnn.tensor import Dim, batch_dim
@@ -1544,7 +1660,7 @@ def _build_cuda_graph_train_config_and_dataset(
             # which under capture_optimizer runs in-graph (a static tensor updated per replay)
             log_grad_norm=True,
             gradient_clip_global_norm=5.0,
-            optimizer={"class": "adamw", "capturable": True},
+            optimizer=optimizer or {"class": "adamw", "capturable": True},
             torch_dataloader_opts={"num_workers": 0},
         )
     )
@@ -1564,12 +1680,21 @@ def _build_cuda_graph_train_config_and_dataset(
 
 
 def _run_cuda_graph_train(
-    *, compile_: bool, warmup_steps: Optional[int] = 2, cuda_graph: bool = True, optimizer_step: bool = False
+    *,
+    compile_: bool,
+    warmup_steps: Optional[int] = 2,
+    cuda_graph: bool = True,
+    optimizer_step: bool = False,
+    optimizer: Optional[Dict[str, Any]] = None,
 ) -> Engine:
     if not torch.cuda.is_available():
         raise unittest.SkipTest("CUDA not available")
     config, dataset = _build_cuda_graph_train_config_and_dataset(
-        compile_=compile_, warmup_steps=warmup_steps, cuda_graph=cuda_graph, optimizer_step=optimizer_step
+        compile_=compile_,
+        warmup_steps=warmup_steps,
+        cuda_graph=cuda_graph,
+        optimizer_step=optimizer_step,
+        optimizer=optimizer,
     )
     with global_config_ctx(config):
         engine = Engine(config=config)
@@ -1583,8 +1708,9 @@ def _run_cuda_graph_train(
             assert engine._updater._optimizer_step._graph is not None, "optimizer step never captured"
         for param_group in engine._updater.optimizer.param_groups:
             lr = param_group["lr"]  # device-tensor LR input of the captured optimizer
-            assert isinstance(lr, torch.Tensor) and lr.is_cuda
-            assert lr.item() > 1e-3  # the per-step schedule advanced it
+            if cuda_graph or optimizer_step:
+                assert isinstance(lr, torch.Tensor) and lr.is_cuda
+            assert float(lr) > 1e-3  # the per-step schedule advanced it
         for name, p in engine._pt_model.named_parameters():
             assert torch.isfinite(p).all(), f"non-finite param {name}"
     return engine
@@ -1842,6 +1968,22 @@ def test_torch_engine_cuda_graph_compile_optimizer_step_train():
     The model graph capture rebinds the grads once: the optimizer step recaptures on the new addresses.
     """
     _run_cuda_graph_train(compile_=True, optimizer_step=True)
+
+
+def test_torch_engine_cuda_graph_optimizer_state_in_advance():
+    """
+    With the in-graph optimizer step and no warmup step, the optimizer state is created in advance
+    as the first step would create it (init_optimizer_state), so the params after training match the eager engine,
+    also for optimizers whose fresh state is not all zeros (NAdam: mu_product 1; _AnchoredSGD: a copy of the param).
+    """
+    for optimizer in [{"class": "nadam", "capturable": True}, {"class": _AnchoredSGD}]:
+        eager = _run_cuda_graph_train(compile_=False, cuda_graph=False, optimizer=optimizer)
+        for compile_ in (False, True):
+            captured = _run_cuda_graph_train(compile_=compile_, warmup_steps=None, optimizer=optimizer)
+            for (name, p), (_, q) in zip(eager._pt_model.named_parameters(), captured._pt_model.named_parameters()):
+                torch.testing.assert_close(
+                    q, p, rtol=1e-4, atol=1e-5, msg=lambda m: f"{optimizer}, compile {compile_}, {name}: {m}"
+                )
 
 
 class _MuonLike(torch.optim.Optimizer):
