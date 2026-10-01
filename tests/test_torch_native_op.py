@@ -452,6 +452,78 @@ def test_ctc_loss_packed_over_allocated_bounds():
     assert_allclose(leaf_exact.grad.numpy(), leaf_tight.grad.numpy(), rtol=1e-5, atol=1e-6)
 
 
+def test_ctc_loss_packed_edge_buffer_beyond_32_bit():
+    """
+    The Baum-Welch kernels keep one score per edge and frame. An edge bound far above the labels
+    (e.g. from a label buffer which inherits the gaps of the audio, or from a loose bound)
+    takes that scratch past 2^32 entries: its size and offsets must not wrap around in 32 bit,
+    else the kernels write outside of it. Same loss and gradient as with the tight edge list.
+    """
+    if not torch.cuda.is_available():
+        raise SkipTest("CUDA not available")
+    n_frames = 1100
+    edges_bound = 2**32 // n_frames + 4096
+    free, _ = torch.cuda.mem_get_info()
+    if free < edges_bound * n_frames * 4 + 4 * 2**30:
+        raise SkipTest("needs about 22 GB of free GPU memory")
+    torch.manual_seed(13)
+    lens = torch.tensor([n_frames, 700], dtype=torch.int32)
+    logits = torch.randn(int(lens.sum()), 5)
+    opts = dict(
+        seq_starts=torch.tensor([0, n_frames], dtype=torch.int32),
+        logits_seq_lens=lens,
+        targets=torch.tensor([[1, 2, 3], [3, 1, 0]], dtype=torch.int32),
+        targets_seq_lens=torch.tensor([3, 2], dtype=torch.int32),
+    )
+    losses, grads = [], []
+    for bound in (None, edges_bound):
+        leaf = logits.cuda().requires_grad_(True)
+        loss = ctc_loss_packed(
+            logits=leaf,
+            max_seq_len=n_frames,
+            blank_index=4,
+            edges_bound=bound,
+            **{k: v.cuda() for k, v in opts.items()},
+        )
+        loss.sum().backward()
+        losses.append(loss.detach())
+        grads.append(leaf.grad)
+    torch.testing.assert_close(losses[1], losses[0])
+    torch.testing.assert_close(grads[1], grads[0])
+
+
+def test_ctc_loss_packed_warns_about_a_large_edge_scratch():
+    """
+    The packed Baum-Welch op sizes its edge scratch (one score per edge and frame) by the bounds, not by the data.
+    A scratch far above what a batch needs usually comes from a loose edges_bound, so past a limit it warns.
+    """
+    import warnings
+    from returnn.torch.util import native_op as torch_native_op
+
+    opts = dict(
+        logits=torch.randn(5, 4),
+        seq_starts=torch.tensor([0], dtype=torch.int32),
+        logits_seq_lens=torch.tensor([5], dtype=torch.int32),
+        max_seq_len=5,
+        targets=torch.tensor([[1, 2]], dtype=torch.int32),
+        targets_seq_lens=torch.tensor([2], dtype=torch.int32),
+        blank_index=3,
+    )
+    default_limit = torch_native_op._FAST_BW_PACKED_SCRATCH_WARN_BYTES
+    caught = {}
+    for limit in (default_limit, 1):
+        torch_native_op._FAST_BW_PACKED_SCRATCH_WARN_BYTES = limit
+        try:
+            with warnings.catch_warnings(record=True) as records:
+                warnings.simplefilter("always")
+                ctc_loss_packed(**opts)
+        finally:
+            torch_native_op._FAST_BW_PACKED_SCRATCH_WARN_BYTES = default_limit
+        caught[limit] = [str(r.message) for r in records if "edge scratch" in str(r.message)]
+    assert not caught[default_limit], caught
+    assert caught[1], caught
+
+
 def test_ctc_fsa_batch3_len6_c8():
     """
     This (:func:`Fsa.get_ctc_fsa_fast_bw`) is used by :func:`ctc_loss`.
