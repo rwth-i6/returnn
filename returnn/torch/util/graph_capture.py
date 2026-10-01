@@ -846,7 +846,13 @@ class GraphCapturedTrainStep:
             for dim in _get_dyn_dims_from_extern_data(self._extern_data_template):
                 dim.reset_eager()
             extern_data = extern_data_util.raw_dict_to_extern_data(
-                extern_data_raw, extern_data_template=self._extern_data_template, device=self._device
+                extern_data_raw,
+                extern_data_template=self._extern_data_template,
+                device=self._device,
+                float_dtype=self._float_dtype,
+                # like the engine's eager train path: the targets are usually
+                # declared available_for_inference=False, the train step needs them
+                with_eval_targets=True,
             )
             for p in self._grad_params:
                 p.grad.zero_()
