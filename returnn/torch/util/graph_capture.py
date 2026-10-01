@@ -302,13 +302,14 @@ def inductor_fw_compiler(backend: Optional[Callable] = None) -> Callable:
     torch >= 2.12: compile_fx's compat wrapper declares _boxed_call=True
     but re-wraps an already-boxed args list, so the generated runner sees [[args]];
     call it star-unpacked instead, while the shim stays boxed towards aot_function.
+    Any other backend (e.g. the boxed ``nop`` of opts "debug_aot_eager") is returned as is.
     """
-    if backend is None:
-        # noinspection PyProtectedMember
-        from torch._inductor.compile_fx import compile_fx
+    # noinspection PyProtectedMember
+    from torch._inductor.compile_fx import compile_fx
 
+    if backend is None:
         backend = compile_fx
-    if torch.__version__ < (2, 12):
+    if torch.__version__ < (2, 12) or backend is not compile_fx:
         return backend
 
     def _compile_fx_call_unboxed(gm, example_inputs):
@@ -808,7 +809,7 @@ class GraphCapturedTrainStep:
             loss.get_summed_loss()
             loss.get_inv_norm_factor()
 
-    def _step(self) -> RunCtx:
+    def _step(self, *, post_step: bool = True) -> RunCtx:
         for p in self._grad_params:
             p.grad.zero_()  # in-graph
         with rf.set_static_traceable_ctx():
@@ -818,47 +819,26 @@ class GraphCapturedTrainStep:
             total_loss = ctx.total_loss()
             self._reduce_all_losses(ctx)
         total_loss.raw_tensor.backward()
-        if self._post_step is not None:
+        if post_step and self._post_step is not None:
             self._post_step()  # in-graph: grad clip + optimizer step
         return ctx
 
     def _materialize_optimizer_state(self) -> None:
         """
-        Create the optimizer's lazy state and the param grads without any model step
-        (they are graph inputs, so they must exist before trace/capture);
-        enables ``warmup_steps: 0``.
-        One ``step()`` with zero grads at lr 0 is doubly neutral;
-        written values are zeroed afterwards, only the existence kept.
-        No-op when state exists.
+        With the in-graph optimizer step ("capture_optimizer"):
+        create the optimizer's lazy state without any step, as its first step would
+        (the state tensors are graph inputs, so they must exist before trace/capture);
+        enables ``warmup_steps: 0``. See :func:`returnn.torch.updater.init_optimizer_state`.
+        The static param grads (created in ``__init__``) select the params which get state.
+        No-op when state exists (e.g. after warmup steps, or loaded from a checkpoint).
+        Without the in-graph optimizer step, the optimizer creates its state itself, in its first step.
         """
+        from returnn.torch.updater import init_optimizer_state
+
         opt = self._get_optimizer() if self._get_optimizer is not None else None
-        if opt is None or opt.state:
+        if opt is None or self._post_step is None or opt.state:
             return
-        with torch.no_grad():
-            for p in self._grad_params:
-                if p.grad is None:
-                    # also needed pre-capture: the partitioned capture zeroes + accumulates
-                    # into pre-existing grads
-                    p.grad = torch.zeros_like(p)
-            saved_lrs = []
-            for g in opt.param_groups:
-                lr = g["lr"]
-                if isinstance(lr, torch.Tensor):  # capturable: device-tensor lr
-                    saved_lrs.append(lr.clone())
-                    lr.fill_(0)
-                else:
-                    saved_lrs.append(lr)
-                    g["lr"] = 0.0
-            opt.step()
-            for g, lr in zip(opt.param_groups, saved_lrs):
-                if isinstance(g["lr"], torch.Tensor):
-                    g["lr"].copy_(lr)
-                else:
-                    g["lr"] = lr
-            for state in opt.state.values():
-                for v in state.values():
-                    if isinstance(v, torch.Tensor):
-                        v.zero_()
+        init_optimizer_state(opt)
 
     def _warmup_step_dynamic(
         self, extern_data_raw: Dict[str, Union[torch.Tensor, numpy.ndarray]], *, global_train_step: int
@@ -880,7 +860,13 @@ class GraphCapturedTrainStep:
             for dim in _get_dyn_dims_from_extern_data(self._extern_data_template):
                 dim.reset_eager()
             extern_data = extern_data_util.raw_dict_to_extern_data(
-                extern_data_raw, extern_data_template=self._extern_data_template, device=self._device
+                extern_data_raw,
+                extern_data_template=self._extern_data_template,
+                device=self._device,
+                float_dtype=self._float_dtype,
+                # like the engine's eager train path: the targets are usually
+                # declared available_for_inference=False, the train step needs them
+                with_eval_targets=True,
             )
             for p in self._grad_params:
                 p.grad.zero_()
@@ -1350,15 +1336,16 @@ class GraphCapturedTrainStep:
             torch.cuda.current_stream().wait_stream(self._eager_stream)
             return self._ctx
         if not self._compile:
-            # side-stream warmup (kernel/cudnn warmup; each _step call is cold w.r.t. dim/layout caches)
+            # side-stream warmup (kernel/cudnn warmup; each _step call is cold w.r.t. dim/layout caches);
+            # without the optimizer step, these runs are thrown away, the replay below is this batch's step
             s = torch.cuda.Stream()
             s.wait_stream(torch.cuda.current_stream())
             with torch.cuda.stream(s):
                 for _ in range(3):
-                    self._step()
+                    self._step(post_step=False)
             torch.cuda.current_stream().wait_stream(s)
         # with warmup_steps 0 there was no real optimizer step yet: create the lazy state
-        # (and the param grads) explicitly -- no-op if a warmup step already did
+        # explicitly -- no-op if a warmup step already did
         self._materialize_optimizer_state()
         torch.cuda.synchronize()
         # release the warmup's cached blocks before the compiled program / capture
