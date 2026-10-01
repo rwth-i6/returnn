@@ -969,6 +969,49 @@ def test_compare_packs_a_plain_operand_over_the_packed_dims():
     assert not packed._warned_fallback_ops
 
 
+def test_plain_operand_over_the_packed_dims_is_packed_alike():
+    # a plain tensor arg over the packed dims is data over frames:
+    # it is packed alike, and the op runs on the packed data, without the unpack fallback
+    rf.select_backend_torch()
+    x, batch_dim, time_dim, feat_dim = _make_input(batch_size=3, seq_lens=(7, 5, 4))
+    gen = torch.Generator().manual_seed(7)
+    k_dim = Dim(2, name="k")
+    targets = Tensor("targets", dims=[batch_dim, time_dim], dtype="int32", sparse_dim=feat_dim)
+    targets.raw_tensor = torch.randint(0, feat_dim.dimension, (3, 7), dtype=torch.int32, generator=gen)
+    per_seq = Tensor("per_seq", dims=[batch_dim], dtype="int32")
+    per_seq.raw_tensor = torch.randint(0, feat_dim.dimension, (3,), dtype=torch.int32, generator=gen)
+    scale = Tensor("scale", dims=[batch_dim, time_dim], dtype="float32")
+    scale.raw_tensor = torch.rand(3, 7, generator=gen)
+    table = Tensor("table", dims=[batch_dim, feat_dim], dtype="float32")
+    table.raw_tensor = torch.randn(3, feat_dim.dimension, generator=gen)
+    block = Tensor("block", dims=[batch_dim, k_dim], dtype="float32")
+    block.raw_tensor = torch.randn(3, 2, generator=gen)
+
+    def _ops(x_: Tensor):
+        argmax = rf.reduce_argmax(x_, axis=feat_dim)
+        return {
+            "compare": argmax != targets,
+            "compare, plain first": targets != argmax,
+            "compare, per seq": per_seq < argmax,
+            "combine": x_ * scale,
+            "where": rf.where(scale > 0.5, x_, scale),
+            "cross_entropy": rf.cross_entropy(estimated=x_, target=targets, axis=feat_dim, estimated_type="logits"),
+            "concat": rf.concat((x_, feat_dim), (block, k_dim), allow_broadcast=True)[0],
+            "gather, per seq table": rf.gather(table, indices=argmax, axis=feat_dim, clip_to_valid=True),
+            "gather, plain source": rf.gather(x, indices=argmax, axis=feat_dim),
+            "stack": rf.stack([argmax, targets], out_dim=k_dim)[0],
+        }
+
+    refs = _ops(x)
+    for opts in [dict(), dict(gap=2, align=4), dict(total_bound=24)]:
+        packed._warned_fallback_ops.clear()
+        outs = _ops(packed.pack(x, **opts))
+        for name, out_ref in refs.items():
+            assert packed.is_packed(outs[name]), name
+            _assert_equal_non_padded(outs[name], out_ref, batch_dim, time_dim)
+        assert not packed._warned_fallback_ops
+
+
 def test_rel_pos_self_attention_packed():
     # Conformer-style rel-pos self-attention: on packed input this runs via the FlexAttention fast path
     # (document block mask + rel-pos score_mod over the flat packed buffer).
