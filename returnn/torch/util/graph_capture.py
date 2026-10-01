@@ -1361,6 +1361,26 @@ class GraphCapturedTrainStep:
         graph.replay()
         return self._ctx
 
+    def release(self) -> None:
+        """
+        Destroy the captured graph and give its private pool back.
+
+        Must happen before the NCCL process group is destroyed (see :func:`returnn.__main__.finalize`):
+        the communicator destruction waits until every CUDA graph referencing the communicator is gone,
+        so with an in-graph collective
+        (distributed batch norm, see ``rf_batch_norm_distributed``),
+        ``destroy_process_group`` blocks forever when the graph outlives it.
+        See https://github.com/pytorch/pytorch/issues/115388.
+        """
+        global _graph_pools_reserved
+        if self._graph is None:
+            return
+        # the ctx losses live in the pool, which is only freed once they are gone
+        self._ctx = None
+        self._graph.reset()
+        self._graph = None
+        _graph_pools_reserved = 0
+
     @staticmethod
     def _log_graph_pool_size(graph: torch.cuda.CUDAGraph) -> None:
         """

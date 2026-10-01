@@ -568,6 +568,9 @@ def finalize(error_occurred=False):
 
                 hvd.shutdown()
         elif BackendEngine.is_torch_selected():
+            # releases the captured CUDA graph, which must go before the process group:
+            # NCCL polls for live graphs in the communicator destruction (see Engine.finalize)
+            engine.finalize(error_occurred=error_occurred)
             if config.typed_value("torch_distributed") is not None:
                 from torch.distributed import destroy_process_group
 
