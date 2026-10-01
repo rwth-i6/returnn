@@ -266,24 +266,29 @@ def test_SimpleHDFWriter():
 
 
 def test_HDFDataset_cached_get_current_seq_order():
-    # With a byte cache, the current seq order is not known.
-    # That must read as not implemented, so that callers can fall back,
-    # e.g. the torch engine then evaluates the dataset on rank 0 only.
+    from returnn.datasets.basic import init_dataset
+
     fn = get_test_tmp_file(suffix=".hdf")
     os.remove(fn)  # SimpleHDFWriter expects that the file does not exist
     writer = SimpleHDFWriter(filename=fn, dim=3, labels=None)
-    writer.insert_batch(inputs=np.zeros((2, 4, 3), dtype="float32"), seq_len=[4, 2], seq_tag=["seq-0", "seq-1"])
+    seq_lens = [3, 5, 2, 7, 4, 6, 1]
+    writer.insert_batch(
+        inputs=np.zeros((len(seq_lens), max(seq_lens), 3), dtype="float32"),
+        seq_len=seq_lens,
+        seq_tag=[f"seq-{i}" for i in range(len(seq_lens))],
+    )
     writer.close()
 
-    assert HDFDataset(files=[fn]).get_current_seq_order() is not None
-    dataset = HDFDataset(files=[fn], cache_byte_size=1024)
-    dataset.init_seq_order(epoch=1)
-    try:
-        dataset.get_current_seq_order()
-    except util.OptionalNotImplementedError:
-        pass
-    else:
-        raise AssertionError("expected OptionalNotImplementedError")
+    # No cache, partly cached, fully cached.
+    # Fully cached, a new random order in a later epoch only remaps the cached seqs.
+    for cache_byte_size in [0, 64, 10**6]:
+        dataset = init_dataset(
+            {"class": "HDFDataset", "files": [fn], "cache_byte_size": cache_byte_size, "seq_ordering": "random"}
+        )
+        for epoch in [1, 2, 3]:
+            dataset.init_seq_order(epoch=epoch)
+            tags = [dataset.get_tag(i) for i in range(dataset.num_seqs)]
+            assert [f"seq-{i}" for i in dataset.get_current_seq_order()] == tags
 
 
 def test_SimpleHDFWriter_small():
