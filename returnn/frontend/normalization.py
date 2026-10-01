@@ -70,7 +70,8 @@ def moments(
         # torch.nn.SyncBatchNorm instead combines per-worker Welford statistics, which does not cancel.
         compute_dtype = x.dtype
         x = rf.cast(x, "float32")
-        count = _global_num_elements(axis, use_mask=use_mask, device=x.device)
+        # packed storage has no padded frames, so its sums below cover the sequence frames only
+        count = _global_num_elements(axis, use_mask=use_mask or rf.is_packed(x), device=x.device)
         mean = rf.reduce_sum(x, axis=axis, use_mask=use_mask, distributed=True) / count
         # stop_gradient does not change the gradient here: the deviations sum to zero over the global batch
         sq_dev = rf.squared_difference(x, rf.stop_gradient(mean))
