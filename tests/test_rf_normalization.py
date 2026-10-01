@@ -72,3 +72,20 @@ def test_batch_norm_masking():
         # Needed here because track_running_stats=False and thus use_current_batch_stats=True.
         test_single_batch_entry=False,
     )
+
+
+def test_moments_float32_float16_variance_overflow():
+    """
+    With ``rf_moments_float32``, the statistics of float16 input stay float32,
+    as e.g. a variance of 90000 does not fit into float16.
+    """
+    import torch
+    from returnn.config import Config, global_config_ctx
+
+    rf.select_backend_torch()
+    dim = Dim(2, name="dim")
+    x = Tensor("x", dims=[dim], dtype="float16", raw_tensor=torch.tensor([-300.0, 300.0], dtype=torch.float16))
+    with global_config_ctx(Config({"rf_moments_float32": True})):
+        mean, variance = rf.moments(x, axis=dim)
+    assert (mean.dtype, variance.dtype) == ("float32", "float32")
+    assert (mean.raw_tensor.item(), variance.raw_tensor.item()) == (0.0, 90000.0)

@@ -1974,12 +1974,12 @@ def test_pack_dense_total_bound_static_buffer():
     numpy.testing.assert_allclose(raw.inner.raw_tensor[:6].detach().numpy(), content.numpy())
 
 
-def test_moments_round_the_true_statistics_once_in_every_layout():
+def test_moments_float32_statistics_in_every_layout():
     """
     with ``rf_moments_float32``, the statistics of a normalization must not depend on the storage.
     A bfloat16 reduction over a few thousand rows drifts by several ulps, and differently per layout,
     since the padded and the exact packed path take a direct mean where a bound buffer divides a masked
-    sum by its count, so the moments are taken in float32 and rounded once
+    sum by its count, so the moments are taken and returned in float32
     """
     from returnn.config import Config, global_config_ctx
 
@@ -1996,7 +1996,7 @@ def test_moments_round_the_true_statistics_once_in_every_layout():
     x = Tensor("x", dims=[batch_dim, time_dim, feat_dim], dtype="bfloat16", raw_tensor=raw, feature_dim=feat_dim)
 
     rows = torch.cat([raw[b, :n] for b, n in enumerate(lens)]).double()
-    want = (rows.mean(dim=0).to(torch.bfloat16), rows.var(dim=0, correction=0).to(torch.bfloat16))
+    want = (rows.mean(dim=0).float(), rows.var(dim=0, correction=0).float())
 
     bound = packed.pack(x, dims=[batch_dim, time_dim], gap=3, align=1, total_bound=sum(lens) + 200)
     # junk past the content, which a wrong mask would pull into the statistics
@@ -2005,10 +2005,10 @@ def test_moments_round_the_true_statistics_once_in_every_layout():
     with global_config_ctx(Config({"rf_moments_float32": True})):
         for name, source in layouts:
             mean, variance = rf.moments(source, axis=[batch_dim, time_dim])
-            assert (mean.dtype, variance.dtype) == ("bfloat16", "bfloat16"), (name, mean.dtype, variance.dtype)
+            assert (mean.dtype, variance.dtype) == ("float32", "float32"), (name, mean.dtype, variance.dtype)
             for value, reference, what in ((mean, want[0], "mean"), (variance, want[1], "variance")):
                 torch.testing.assert_close(
-                    value.copy_compatible_to_dims_raw([feat_dim]), reference, rtol=0, atol=0, msg=f"{name} {what}"
+                    value.copy_compatible_to_dims_raw([feat_dim]), reference, rtol=1e-5, atol=0, msg=f"{name} {what}"
                 )
 
 
