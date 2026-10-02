@@ -241,6 +241,8 @@ def test_conv1d_depthwise_cuda_triton_path():
 
     if not torch.cuda.is_available():
         raise unittest.SkipTest("needs CUDA")
+    if torch.__version__ < (2, 7):
+        raise unittest.SkipTest("the Triton path needs torch >= 2.7")
     try:
         import triton  # noqa
     except ImportError as exc:
@@ -322,6 +324,8 @@ def test_conv1d_depthwise_cuda_triton_path_traced():
 
     if not torch.cuda.is_available():
         raise unittest.SkipTest("needs CUDA")
+    if torch.__version__ < (2, 7):
+        raise unittest.SkipTest("the Triton path needs torch >= 2.7")
     try:
         import triton  # noqa
     except ImportError as exc:

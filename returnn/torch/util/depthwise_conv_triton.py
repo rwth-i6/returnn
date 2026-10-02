@@ -204,7 +204,9 @@ class _DepthwiseConv1d(torch.autograd.Function):
 
 
 _HAVE_LIB_OPS = False
-if hasattr(torch.library, "custom_op"):  # torch >= 2.4
+# torch.library.custom_op came in torch 2.4, but only torch 2.7 resolves the string annotations
+# of `from __future__ import annotations` in this module's globals (before, `Tuple` fails at import)
+if torch.__version__ >= (2, 7):
     # Opaque ops with fake implementations and a registered backward, like in rel_pos_att_triton:
     # AOT tracing (the compiled step of torch_cuda_graph, no Dynamo) runs on fake tensors,
     # which the Triton launch of the autograd.Function above cannot take.
@@ -281,11 +283,6 @@ if hasattr(torch.library, "custom_op"):  # torch >= 2.4
     torch.library.register_autograd("returnn::depthwise_conv1d_fwd", _lib_backward, setup_context=_lib_setup_context)
 
     _HAVE_LIB_OPS = True
-
-
-def traceable() -> bool:
-    """:return: whether a traced step (fake tensors) can take the conv, through the opaque ops"""
-    return _HAVE_LIB_OPS
 
 
 def depthwise_conv1d(
