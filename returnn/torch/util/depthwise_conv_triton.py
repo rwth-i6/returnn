@@ -295,7 +295,12 @@ def depthwise_conv1d(
     *,
     pad_l: int,
     n_time_out: int,
-    blocks: Tuple[int, int, int, int] = (kernels.BLOCK_R, kernels.BLOCK_C, kernels.BLOCK_R_DW, kernels.BLOCK_C_DW),
+    blocks: Tuple[int, int, int, int] = (
+        kernels.BLOCK_R_CONV,
+        kernels.BLOCK_C_CONV,
+        kernels.BLOCK_R_DW,
+        kernels.BLOCK_C_DW,
+    ),
 ) -> torch.Tensor:
     """
     :param x: (batch, time_in, channel)

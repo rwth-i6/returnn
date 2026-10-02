@@ -612,7 +612,7 @@ def test_depthwise_conv1d_triton_weight_grad_scratch_independent_of_rows():
 
     import gc
 
-    blocks = (m.kernels.BLOCK_R, m.kernels.BLOCK_C, m.kernels.BLOCK_R_DW, m.kernels.BLOCK_C_DW)
+    blocks = (m.kernels.BLOCK_R_CONV, m.kernels.BLOCK_C_CONV, m.kernels.BLOCK_R_DW, m.kernels.BLOCK_C_DW)
     peaks = []
     for n_batch in (500, 2000):
         x = torch.randn(n_batch, 24, 256, device="cuda", dtype=torch.bfloat16)
