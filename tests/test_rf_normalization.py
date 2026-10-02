@@ -72,3 +72,27 @@ def test_batch_norm_masking():
         # Needed here because track_running_stats=False and thus use_current_batch_stats=True.
         test_single_batch_entry=False,
     )
+
+
+def test_moments_distributed_matches_local():
+    """
+    Without a process group the distributed moments must match the local ones, also when the mean dominates.
+    At mean 1e3 and stddev 0.1, E[x^2] - E[x]^2 cancels to noise in float32, the two-pass form does not.
+    """
+    import torch
+
+    rf.select_backend_torch()
+    batch = Dim(2, name="batch")
+    feat = Dim(3, name="feat")
+    time_sizes = Tensor("time_size", dims=[batch], dtype="int32", raw_tensor=torch.tensor([5, 3], dtype=torch.int32))
+    dyn_time = Dim(time_sizes, name="time")
+    static_time = Dim(5, name="static_time")
+    torch.manual_seed(42)
+    raw = 1.0e3 + torch.randn(2, 5, 3) * 0.1
+    for time_dim, use_mask in ((dyn_time, True), (static_time, True), (static_time, False)):
+        x = Tensor("x", dims=[batch, time_dim, feat], dtype="float32", raw_tensor=raw)
+        mean, variance = rf.moments(x, axis=[batch, time_dim], use_mask=use_mask, distributed=True)
+        ref_mean, ref_variance = rf.moments(x, axis=[batch, time_dim], use_mask=use_mask)
+        torch.testing.assert_close(mean.raw_tensor, ref_mean.raw_tensor, rtol=1e-6, atol=1e-3)
+        torch.testing.assert_close(variance.raw_tensor, ref_variance.raw_tensor, rtol=1e-2, atol=1e-4)
+        assert float(variance.raw_tensor.min()) > 0.0, (time_dim, use_mask, variance.raw_tensor)
