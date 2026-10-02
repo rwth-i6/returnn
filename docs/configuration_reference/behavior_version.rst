@@ -22,6 +22,23 @@ and not listing legacy/deprecated parameters.
 Version History
 ---------------
 
+Behavior version 32 (2026-10-02)
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+:func:`rf.moments` reduces float input of lower precision (float16, bfloat16, float8, ...) in float32
+and returns the statistics in float32.
+This affects all RF norms using it
+(:class:`rf.LayerNorm`, :class:`rf.GroupNorm`, :class:`rf.GroupNormSpatial`, :func:`rf.normalize`,
+and :class:`rf.BatchNorm` when it masks or is distributed).
+
+Before, a bfloat16 reduction over many frames drifted by several ulps, and differently per layout
+(padded, packed, bound packed), and a float16 variance above 65504 overflowed.
+
+There is also the global config option ``rf_moments_float32: bool`` to override in both directions,
+and the ``compute_dtype`` argument of :func:`rf.moments` per call.
+
+See PR `#1914 <https://github.com/rwth-i6/returnn/pull/1914>`__.
+
 Behavior version 31 (2026-08-26)
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 

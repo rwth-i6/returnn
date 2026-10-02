@@ -74,6 +74,44 @@ def test_batch_norm_masking():
     )
 
 
+def test_moments_float32_float16_variance_overflow():
+    """
+    With ``rf_moments_float32``, the statistics of float16 input stay float32,
+    as e.g. a variance of 90000 does not fit into float16.
+    """
+    import torch
+    from returnn.config import Config, global_config_ctx
+
+    rf.select_backend_torch()
+    dim = Dim(2, name="dim")
+    x = Tensor("x", dims=[dim], dtype="float16", raw_tensor=torch.tensor([-300.0, 300.0], dtype=torch.float16))
+    with global_config_ctx(Config({"rf_moments_float32": True})):
+        mean, variance = rf.moments(x, axis=dim)
+    assert (mean.dtype, variance.dtype) == ("float32", "float32")
+    assert (mean.raw_tensor.item(), variance.raw_tensor.item()) == (0.0, 90000.0)
+
+
+def test_moments_compute_dtype_overrides_config():
+    """
+    An explicit ``compute_dtype`` wins over ``rf_moments_float32`` in both directions.
+    """
+    import torch
+    from returnn.config import Config, global_config_ctx
+
+    rf.select_backend_torch()
+    dim = Dim(3, name="dim")
+    x = Tensor("x", dims=[dim], dtype="bfloat16", raw_tensor=torch.tensor([1.0, 2.0, 4.0], dtype=torch.bfloat16))
+    for flag, compute_dtype, want in [
+        (True, None, "float32"),
+        (False, None, "bfloat16"),
+        (True, "bfloat16", "bfloat16"),
+        (False, "float32", "float32"),
+    ]:
+        with global_config_ctx(Config({"rf_moments_float32": flag})):
+            mean, variance = rf.moments(x, axis=dim, compute_dtype=compute_dtype)
+        assert (mean.dtype, variance.dtype) == (want, want), (flag, compute_dtype, mean.dtype, variance.dtype)
+
+
 def test_moments_distributed_matches_local():
     """
     Without a process group the distributed moments must match the local ones, also when the mean dominates.

@@ -29,6 +29,7 @@ def moments(
     use_mask: bool = True,
     correction: Union[int, float, Tensor] = 0,
     distributed: bool = False,
+    compute_dtype: Optional[str] = None,
 ) -> Tuple[Tensor, Tensor]:
     """
     :param x: input
@@ -53,15 +54,25 @@ def moments(
         by all-reducing the per-worker sums and the count (differentiable),
         in two passes so that the variance cannot cancel.
         Default False keeps the per-worker (local) statistics.
+    :param compute_dtype: dtype the input is cast to before the reduction, and thus the dtype of the statistics.
+        None (default): float32 for float input of lower precision (float16, bfloat16, float8, ...)
+        if the global config option ``rf_moments_float32`` is set (default from behavior version 32 on),
+        as e.g. a variance above 65504 does not fit into float16,
+        else the input dtype.
     :return: tuple (mean, variance). it has the same shape as the input with the axis removed
     """
+    if compute_dtype is None:
+        if rf.is_float_dtype(x.dtype) and x.dtype not in ("float32", "float64") and _moments_float32():
+            compute_dtype = "float32"
+        else:
+            compute_dtype = x.dtype
+    x = rf.cast(x, compute_dtype)
     if distributed:
         # Two-pass statistics over the global batch, accumulated in float32.
         # The one-pass variance E[x^2] - E[x]^2 catastrophically cancels whenever the mean dominates
         # the variance, in float32 just as in bf16: the difference is then noise and can go negative,
         # which gives NaNs via rsqrt(variance + eps).
         # torch.nn.SyncBatchNorm instead combines per-worker Welford statistics, which does not cancel.
-        compute_dtype = x.dtype
         x = rf.cast(x, "float32")
         count = _global_num_elements(axis, use_mask=use_mask, device=x.device)
         mean = rf.reduce_sum(x, axis=axis, use_mask=use_mask, distributed=True) / count
@@ -78,6 +89,30 @@ def moments(
         n = rf.num_elements_of_shape(axis, use_mask=use_mask)
         variance *= n / (n - correction)
     return mean, variance
+
+
+def _moments_float32() -> bool:
+    """
+    :return: whether :func:`moments` by default reduces float input of lower precision in float32
+        and returns float32 statistics.
+        Config option ``rf_moments_float32: bool``, else behavior_version >= 32.
+    """
+    from returnn.config import get_global_config
+
+    config = get_global_config(raise_exception=False)
+    config_value = None
+    if config:
+        if "rf_moments_float32" in config.typed_dict:
+            config_value = config.typed_dict["rf_moments_float32"]
+            assert config_value is None or isinstance(config_value, bool)
+        elif "rf_moments_float32" in config.dict:
+            config_value = config.bool("rf_moments_float32", None)
+    if config_value is not None:
+        return config_value
+
+    from returnn.util.basic import BehaviorVersion
+
+    return BehaviorVersion.get() >= 32
 
 
 def _global_num_elements(axis: Union[Dim, Sequence[Dim]], *, use_mask: bool, device: Optional[str]) -> Tensor:
