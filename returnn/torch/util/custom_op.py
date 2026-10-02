@@ -10,7 +10,7 @@ import typing
 import torch
 
 
-def custom_op(name: str, *, mutates_args: Iterable[str]) -> Callable[[Callable], Callable]:
+def custom_op(name: str, *, mutates_args: Iterable[str]) -> Callable[[Callable], torch.library.CustomOpDef]:
     """
     Like :func:`torch.library.custom_op` as a decorator,
     but resolves the string annotations of ``from __future__ import annotations`` first,
@@ -23,7 +23,7 @@ def custom_op(name: str, *, mutates_args: Iterable[str]) -> Callable[[Callable],
     :return: decorator, which returns the custom op
     """
 
-    def _decorator(fn: Callable) -> Callable:
+    def _decorator(fn: Callable) -> torch.library.CustomOpDef:
         fn.__annotations__ = typing.get_type_hints(fn)
         return torch.library.custom_op(name, fn, mutates_args=mutates_args)
 
