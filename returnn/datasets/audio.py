@@ -374,6 +374,10 @@ class OggZipDataset(CachedDataset2):
         """supports sorting"""
         return True
 
+    def supports_predefined_seq_order(self) -> bool:
+        """supports a predefined seq order"""
+        return True
+
     def get_current_seq_order(self):
         """
         :rtype: list[int]

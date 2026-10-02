@@ -10,7 +10,7 @@ import numpy
 
 from returnn.datasets import init_dataset
 from returnn.datasets.huggingface import HuggingFaceDataset
-from test_Dataset import dummy_iter_dataset
+from test_Dataset import dummy_iter_dataset, check_predefined_seq_order
 
 
 def _setup_hf_env():
@@ -199,3 +199,13 @@ def test_HuggingFaceDataset_in_multi_proc():
     ds = init_dataset(ds_dict)
     ds.initialize()
     assert dummy_iter_dataset(ds)
+
+
+def test_HuggingFaceDataset_predefined_seq_order():
+    import datasets
+
+    datadir_path = _get_tmp_dir() + "/hf-dataset-predefined-seq-order"
+    datasets.Dataset.from_dict({"text": [f"text {i}" for i in range(5)]}).save_to_disk(datadir_path)
+    ds = HuggingFaceDataset(datadir_path, seq_tag_column=None, data_format={"text": {"dtype": "string", "shape": ()}})
+    ds.initialize()
+    check_predefined_seq_order(ds)
