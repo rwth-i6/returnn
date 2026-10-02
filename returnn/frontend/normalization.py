@@ -31,7 +31,7 @@ def moments(
     distributed: bool = False,
 ) -> Tuple[Tensor, Tensor]:
     """
-    With the global config option ``rf_moments_float32``,
+    With the global config option ``rf_moments_float32`` (default from behavior version 32 on),
     float16 and bfloat16 input is reduced in float32 and the statistics are returned in float32,
     as e.g. a variance above 65504 does not fit into float16.
 
@@ -93,15 +93,25 @@ def moments(
 
 def _moments_float32() -> bool:
     """
-    :return: whether :func:`moments` reduces float16 and bfloat16 input in float32 and returns float32 statistics,
-        from the global config option ``rf_moments_float32`` (default False)
+    :return: whether :func:`moments` reduces float16 and bfloat16 input in float32 and returns float32 statistics.
+        Config option ``rf_moments_float32: bool``, else behavior_version >= 32.
     """
     from returnn.config import get_global_config
 
     config = get_global_config(raise_exception=False)
-    if not config:
-        return False
-    return config.bool("rf_moments_float32", False)
+    config_value = None
+    if config:
+        if "rf_moments_float32" in config.typed_dict:
+            config_value = config.typed_dict["rf_moments_float32"]
+            assert config_value is None or isinstance(config_value, bool)
+        elif "rf_moments_float32" in config.dict:
+            config_value = config.bool("rf_moments_float32", None)
+    if config_value is not None:
+        return config_value
+
+    from returnn.util.basic import BehaviorVersion
+
+    return BehaviorVersion.get() >= 32
 
 
 class LayerNorm(rf.Module):
