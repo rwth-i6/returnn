@@ -1012,7 +1012,7 @@ def fast_baum_welch_packed(
     float_idx = seq_mask.float()
     seq_starts = seq_starts.to(torch.int32)
     edge_offsets = edge_offsets.to(torch.int32)
-    fwdbwd, obs_scores = op(  # noqa
+    fwdbwd, obs_scores = op(
         am_scores, edges, weights, start_end_states, float_idx, seq_starts, edge_offsets, max_seq_states
     )
     return fwdbwd, obs_scores
@@ -1021,7 +1021,7 @@ def fast_baum_welch_packed(
 def make_fast_baum_welch_packed_op(**kwargs):
     """
     :return: op
-    :rtype: (torch.Tensor) -> tuple[torch.Tensor]
+    :rtype: (torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, int) -> tuple[torch.Tensor, torch.Tensor]
     """
     maker = OpMaker(OpDescription.from_gen_base(native_op.FastBaumWelchPackedOp), **kwargs)
     return maker.make_op()
