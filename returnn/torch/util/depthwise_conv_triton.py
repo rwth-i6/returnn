@@ -17,6 +17,7 @@ from typing import Optional, Tuple
 import torch
 from torch.autograd.function import once_differentiable
 
+from returnn.torch.util.custom_op import custom_op
 from returnn.triton import depthwise_conv as kernels
 
 
@@ -204,15 +205,13 @@ class _DepthwiseConv1d(torch.autograd.Function):
 
 
 _HAVE_LIB_OPS = False
-# torch.library.custom_op came in torch 2.4, but only torch 2.7 resolves the string annotations
-# of `from __future__ import annotations` in this module's globals (before, `Tuple` fails at import)
-if torch.__version__ >= (2, 7):
+if hasattr(torch.library, "custom_op"):  # torch >= 2.4
     # Opaque ops with fake implementations and a registered backward, like in rel_pos_att_triton:
     # AOT tracing (the compiled step of torch_cuda_graph, no Dynamo) runs on fake tensors,
     # which the Triton launch of the autograd.Function above cannot take.
     # Only a traced call goes through them, the eager path stays the autograd.Function.
 
-    @torch.library.custom_op("returnn::depthwise_conv1d_fwd", mutates_args=())
+    @custom_op("returnn::depthwise_conv1d_fwd", mutates_args=())
     def _lib_fwd(
         x: torch.Tensor,
         w: torch.Tensor,
@@ -234,7 +233,7 @@ if torch.__version__ >= (2, 7):
         del w, bias, pad_l, block_r, block_c, block_r_dw, block_c_dw
         return x.new_empty((x.shape[0], n_time_out, x.shape[2]))
 
-    @torch.library.custom_op("returnn::depthwise_conv1d_bwd", mutates_args=())
+    @custom_op("returnn::depthwise_conv1d_bwd", mutates_args=())
     def _lib_bwd(
         x: torch.Tensor,
         w: torch.Tensor,

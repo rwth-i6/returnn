@@ -2379,9 +2379,8 @@ class TorchBackend(Backend[torch.Tensor]):
                 operand.raw_tensor.dtype in (torch.float16, torch.bfloat16, torch.float32)
                 for operand in [source, filter] + ([bias] if bias is not None else [])
             )
-            # the autocast queries by device type need torch 2.4,
-            # the custom ops that a traced step needs to take the kernel torch 2.7
-            and torch.__version__ >= (2, 7)
+            # torch 2.4: the autocast queries by device type, and the custom ops that a traced step needs
+            and torch.__version__ >= (2, 4)
             and not torch.onnx.is_in_onnx_export()
         ):
             out = _conv_depthwise_1d_triton(
