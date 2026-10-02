@@ -27,6 +27,8 @@ import torch
 import triton
 import triton.language as tl
 
+from returnn.torch.util.custom_op import custom_op
+
 
 def is_available() -> bool:
     """:return: whether the kernel can run (needs a CUDA device)"""
@@ -649,11 +651,9 @@ class _RelPosAttVarlen(torch.autograd.Function):
 
 
 _HAVE_LIB_OPS = False
-# torch.library.custom_op came in torch 2.4, but only torch 2.7 resolves the string annotations
-# of `from __future__ import annotations` in this module's globals (before, `Tuple` fails at import)
-if torch.__version__ >= (2, 7):
+if hasattr(torch.library, "custom_op"):  # torch >= 2.4
 
-    @torch.library.custom_op("returnn::rel_pos_att_fwd", mutates_args=())
+    @custom_op("returnn::rel_pos_att_fwd", mutates_args=())
     def _lib_fwd(
         q: torch.Tensor,
         k: torch.Tensor,
@@ -676,7 +676,7 @@ if torch.__version__ >= (2, 7):
         total, n_heads, _ = q.shape
         return torch.empty_like(q), q.new_empty((total, n_heads), dtype=torch.float32)
 
-    @torch.library.custom_op("returnn::rel_pos_att_bwd", mutates_args=())
+    @custom_op("returnn::rel_pos_att_bwd", mutates_args=())
     def _lib_bwd(
         q: torch.Tensor,
         k: torch.Tensor,
@@ -735,7 +735,7 @@ if torch.__version__ >= (2, 7):
         # pre-scaled per the kernel contract (the kernel scales only q k^T)
         return (torch.einsum("thd,rhd->thr", qv, pos_emb) * bd_scale).to(dtype)
 
-    @torch.library.custom_op("returnn::rel_pos_att_fused_bd_fwd", mutates_args=())
+    @custom_op("returnn::rel_pos_att_fused_bd_fwd", mutates_args=())
     def _lib_fused_fwd(
         q: torch.Tensor,
         k: torch.Tensor,
@@ -772,7 +772,7 @@ if torch.__version__ >= (2, 7):
         # regardless of the traced input layout
         return q.new_empty((total, n_heads, d)), q.new_empty((total, n_heads), dtype=torch.float32)
 
-    @torch.library.custom_op("returnn::rel_pos_att_fused_bd_bwd", mutates_args=())
+    @custom_op("returnn::rel_pos_att_fused_bd_bwd", mutates_args=())
     def _lib_fused_bwd(
         q: torch.Tensor,
         k: torch.Tensor,
@@ -939,7 +939,7 @@ def rel_pos_att_varlen_fused_bd(
     Memory: ``bd`` (total, H, R) is the largest per-layer attention activation;
     keeping it out of the autograd/AOT graph means nothing retains one per layer for the backward
     (recompute-from-qv, one extra einsum in the backward).
-    Requires torch >= 2.7 (:func:`torch.library.custom_op`); callers check ``have_lib_ops``.
+    Requires torch >= 2.4 (:func:`torch.library.custom_op`); callers check ``have_lib_ops``.
 
     :param q: (total, H, D), content query (query + pos_bias_u, projected)
     :param k: (total, H, D)
@@ -973,7 +973,7 @@ def rel_pos_att_varlen_fused_bd(
 
 def have_lib_ops() -> bool:
     """
-    :return: whether the torch.library custom ops are registered (torch >= 2.7),
+    :return: whether the torch.library custom ops are registered (torch >= 2.4),
         see :func:`rel_pos_att_varlen_fused_bd`
     """
     return _HAVE_LIB_OPS

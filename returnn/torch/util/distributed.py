@@ -8,6 +8,8 @@ this module holds low-level autograd-aware collective ops.
 from __future__ import annotations
 import torch
 
+from returnn.torch.util.custom_op import custom_op
+
 
 # noinspection PyMethodOverriding,PyAbstractClass
 class _AllReduceSum(torch.autograd.Function):
@@ -42,16 +44,14 @@ class _AllReduceSum(torch.autograd.Function):
 
 
 _HAVE_LIB_OPS = False
-# torch.library.custom_op came in torch 2.4, but only torch 2.5 reads
-# the string annotations of `from __future__ import annotations` (before, it fails at import)
-if torch.__version__ >= (2, 5):
+if hasattr(torch.library, "custom_op"):  # torch >= 2.4
     # An opaque op with a fake implementation and a registered backward:
     # AOT tracing (the compiled step of torch_cuda_graph, no Dynamo) runs on fake tensors,
     # which the direct collective of the autograd.Function above cannot take.
     # Also used outside of tracing, so traced and normal steps run the same op.
     # Only for the default group, a process group is no op argument.
 
-    @torch.library.custom_op("returnn::all_reduce_sum", mutates_args=())
+    @custom_op("returnn::all_reduce_sum", mutates_args=())
     def _lib_all_reduce_sum(x: torch.Tensor) -> torch.Tensor:
         import torch.distributed as dist
 
