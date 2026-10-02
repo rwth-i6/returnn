@@ -59,6 +59,8 @@ def moments(
         Default False keeps the per-worker (local) statistics.
     :return: tuple (mean, variance). it has the same shape as the input with the axis removed
     """
+    if x.dtype in ("float16", "bfloat16") and _moments_float32():
+        x = rf.cast(x, "float32")
     if distributed:
         # Accumulate the global statistics in float32 for numerical stability.
         # The one-pass variance E[x^2] - E[x]^2 below catastrophically cancels in low precision:
@@ -80,8 +82,6 @@ def moments(
         if isinstance(correction, Tensor) or correction != 0:
             variance *= count / (count - correction)
         return rf.cast(mean, compute_dtype), rf.cast(variance, compute_dtype)
-    if x.dtype in ("float16", "bfloat16") and _moments_float32():
-        return moments(rf.cast(x, "float32"), axis, use_mask=use_mask, correction=correction)
     mean = rf.reduce_mean(x, axis=axis)
     # stop_gradient does not change the gradient here
     variance = rf.reduce_mean(rf.squared_difference(x, rf.stop_gradient(mean)), axis=axis, use_mask=use_mask)
