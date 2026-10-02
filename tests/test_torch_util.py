@@ -429,8 +429,8 @@ def test_all_reduce_sum_eager_takes_the_custom_op():
     from torch.utils._python_dispatch import TorchDispatchMode
     from returnn.torch.util.distributed import all_reduce_sum
 
-    if not hasattr(torch.library, "custom_op"):
-        raise unittest.SkipTest("torch without torch.library.custom_op")
+    if torch.__version__ < (2, 5):
+        raise unittest.SkipTest("the custom op needs torch >= 2.5")
 
     class _OpNames(TorchDispatchMode):
         def __init__(self):

@@ -42,7 +42,9 @@ class _AllReduceSum(torch.autograd.Function):
 
 
 _HAVE_LIB_OPS = False
-if hasattr(torch.library, "custom_op"):  # torch >= 2.4
+# torch.library.custom_op came in torch 2.4, but only torch 2.5 reads
+# the string annotations of `from __future__ import annotations` (before, it fails at import)
+if torch.__version__ >= (2, 5):
     # An opaque op with a fake implementation and a registered backward:
     # AOT tracing (the compiled step of torch_cuda_graph, no Dynamo) runs on fake tensors,
     # which the direct collective of the autograd.Function above cannot take.

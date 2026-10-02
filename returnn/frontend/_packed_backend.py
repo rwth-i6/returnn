@@ -2298,7 +2298,7 @@ def _torch_triton_rel_pos_attention(
         bd_t = None
         r_size = pos_t.shape[0]
     else:
-        # torch < 2.4 (no torch.library.custom_op): the materialized position term, computed packed
+        # torch < 2.7 (no custom ops, see rel_pos_att_triton): the materialized position term, computed packed
         matrix_bd = rf.matmul(q_with_bias_v, pos_emb, reduce=qk_feat_dim)
         if not is_packed(matrix_bd):
             return None

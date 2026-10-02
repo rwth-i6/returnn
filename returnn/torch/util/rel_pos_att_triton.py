@@ -649,7 +649,9 @@ class _RelPosAttVarlen(torch.autograd.Function):
 
 
 _HAVE_LIB_OPS = False
-if hasattr(torch.library, "custom_op"):  # torch >= 2.4
+# torch.library.custom_op came in torch 2.4, but only torch 2.7 resolves the string annotations
+# of `from __future__ import annotations` in this module's globals (before, `Tuple` fails at import)
+if torch.__version__ >= (2, 7):
 
     @torch.library.custom_op("returnn::rel_pos_att_fwd", mutates_args=())
     def _lib_fwd(
@@ -937,7 +939,7 @@ def rel_pos_att_varlen_fused_bd(
     Memory: ``bd`` (total, H, R) is the largest per-layer attention activation;
     keeping it out of the autograd/AOT graph means nothing retains one per layer for the backward
     (recompute-from-qv, one extra einsum in the backward).
-    Requires torch >= 2.4 (:func:`torch.library.custom_op`); callers check ``have_lib_ops``.
+    Requires torch >= 2.7 (:func:`torch.library.custom_op`); callers check ``have_lib_ops``.
 
     :param q: (total, H, D), content query (query + pos_bias_u, projected)
     :param k: (total, H, D)
@@ -971,7 +973,7 @@ def rel_pos_att_varlen_fused_bd(
 
 def have_lib_ops() -> bool:
     """
-    :return: whether the torch.library custom ops are registered (torch >= 2.4),
+    :return: whether the torch.library custom ops are registered (torch >= 2.7),
         see :func:`rel_pos_att_varlen_fused_bd`
     """
     return _HAVE_LIB_OPS
