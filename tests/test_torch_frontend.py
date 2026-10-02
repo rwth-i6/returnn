@@ -1026,8 +1026,9 @@ def test_convert_parameter_to_buffer():
     assert type(mod_pt.weight) is torch.Tensor
 
 
-def test_causal_dot_attention_fused_is_opt_in():
+def test_causal_dot_attention_fused_by_behavior_version():
     from returnn.config import Config, global_config_ctx
+    from returnn.util.basic import BehaviorVersion
 
     if not hasattr(torch.nn.functional, "scaled_dot_product_attention"):
         raise unittest.SkipTest("torch without scaled_dot_product_attention")
@@ -1048,23 +1049,30 @@ def test_causal_dot_attention_fused_is_opt_in():
         calls.append(kwargs.get("reduce"))
         return matmul(*args, **kwargs)
 
-    # the fused kernel never materializes the energies, so a matmul means the generic path ran
-    for flag, want_generic in ((None, True), (True, False), (False, True)):
-        calls.clear()
-        rf.matmul = _counting_matmul
-        try:
-            with global_config_ctx(Config({} if flag is None else {"rf_fused_causal_attention": flag})):
-                rf.dot_attention(
-                    tensors["q"],
-                    tensors["k"],
-                    tensors["v"],
-                    key_dim=feat,
-                    axis=time_dim,
-                    causal_query_spatial_dim=time_dim,
-                )
-        finally:
-            rf.matmul = matmul
-        assert bool(calls) == want_generic, (flag, calls)
+    # the fused kernel never materializes the energies, so a matmul means the generic path ran.
+    # Behavior version 33 turns it on, the flag overrides that in both directions.
+    behavior_version_orig_state = BehaviorVersion._get_state()
+    try:
+        for version, flag, want_generic in ((32, None, True), (33, None, False), (33, False, True), (32, True, False)):
+            BehaviorVersion._reset()
+            BehaviorVersion.set(version)
+            calls.clear()
+            rf.matmul = _counting_matmul
+            try:
+                with global_config_ctx(Config({} if flag is None else {"rf_fused_causal_attention": flag})):
+                    rf.dot_attention(
+                        tensors["q"],
+                        tensors["k"],
+                        tensors["v"],
+                        key_dim=feat,
+                        axis=time_dim,
+                        causal_query_spatial_dim=time_dim,
+                    )
+            finally:
+                rf.matmul = matmul
+            assert bool(calls) == want_generic, (version, flag, calls)
+    finally:
+        BehaviorVersion._reset(behavior_version_orig_state)
 
 
 def test_causal_dot_attention_fused_matches_generic():
