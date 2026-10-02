@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import _setup_test_env  # noqa
 
+from typing import Optional, Tuple
 import os
 import sys
 import unittest
@@ -455,6 +456,30 @@ def test_all_reduce_sum_eager_takes_the_custom_op():
     finally:
         if own_group:
             dist.destroy_process_group()
+
+
+def test_custom_op_string_annotations():
+    """
+    this module has ``from __future__ import annotations``, so the op signature below has string annotations,
+    from which torch < 2.7 cannot infer the schema by itself
+    """
+    from returnn.torch.util.custom_op import custom_op
+
+    if not hasattr(torch.library, "custom_op"):
+        raise unittest.SkipTest("torch without torch.library.custom_op")
+
+    @custom_op("returnn_test::scaled_sum_and_diff", mutates_args=())
+    def _op(x: torch.Tensor, y: Optional[torch.Tensor], scale: float, n: int) -> Tuple[torch.Tensor, torch.Tensor]:
+        y_ = y if y is not None else torch.zeros_like(x)
+        return (x + y_) * scale * n, x - y_
+
+    x, y = torch.tensor([1.0, 2.0]), torch.tensor([0.5, -1.0])
+    out_sum, out_diff = _op(x, y, 2.0, 3)
+    torch.testing.assert_close(out_sum, torch.tensor([9.0, 6.0]))
+    torch.testing.assert_close(out_diff, torch.tensor([0.5, 3.0]))
+    out_sum, out_diff = torch.ops.returnn_test.scaled_sum_and_diff(x, None, 1.0, 1)
+    torch.testing.assert_close(out_sum, x)
+    torch.testing.assert_close(out_diff, x)
 
 
 def test_masked_select_bound():
