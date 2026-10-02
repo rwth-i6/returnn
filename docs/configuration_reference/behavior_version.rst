@@ -22,6 +22,25 @@ and not listing legacy/deprecated parameters.
 Version History
 ---------------
 
+Behavior version 33 (2026-10-02)
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+On the PyTorch backend, RF causal attention without an attention mask tensor
+(:func:`rf.dot_attention` with ``causal_query_spatial_dim``)
+now goes through the fused kernel ``torch.nn.functional.scaled_dot_product_attention``,
+which never materializes the attention energies and weights.
+This covers :class:`rf.CausalSelfAttention` and :class:`rf.RotaryPosCausalSelfAttention`
+on a full sequence.
+The kernel computes the same function but reassociates the reduction,
+so its values differ from the generic path within the float tolerance.
+Where the kernel does not apply (e.g. with broadcast attention dropout, before PyTorch 2.0,
+or with an explicit ``scale`` before PyTorch 2.1), the generic path runs as before.
+
+There is also the global config option ``rf_fused_causal_attention: bool``
+to override in both directions.
+
+See PR `#1850 <https://github.com/rwth-i6/returnn/pull/1850>`__.
+
 Behavior version 32 (2026-10-02)
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 

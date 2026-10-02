@@ -331,6 +331,33 @@ def should_module_output_keep_dtype() -> bool:
     return BehaviorVersion.get() >= 27
 
 
+def should_use_fused_causal_attention() -> bool:
+    """
+    :return: whether causal attention whose causality comes from the ``is_causal`` flag alone,
+        with no ``attention_mask`` tensor, may go through a backend's fused kernel,
+        which never materializes the energies, instead of the generic composition.
+        The fused kernel reassociates the reduction, so its values differ from the generic path
+        within the float tolerance.
+        Config option ``rf_fused_causal_attention: bool``, else behavior_version >= 33.
+    """
+    from returnn.config import get_global_config
+
+    config = get_global_config(raise_exception=False)
+    config_value = None
+    if config:
+        if "rf_fused_causal_attention" in config.typed_dict:
+            config_value = config.typed_dict["rf_fused_causal_attention"]
+            assert config_value is None or isinstance(config_value, bool)
+        elif "rf_fused_causal_attention" in config.dict:
+            config_value = config.bool("rf_fused_causal_attention", None)
+    if config_value is not None:
+        return config_value
+
+    from returnn.util.basic import BehaviorVersion
+
+    return BehaviorVersion.get() >= 33
+
+
 def keep_dtype(out: Tensor, dtype: str) -> Tensor:
     """
     :return: out cast to dtype if it was promoted away from it and
