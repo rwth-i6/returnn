@@ -4588,6 +4588,24 @@ class PackedBackend(Backend[PackedRawTensor]):
         return _repack_result(rf.reduce(unpack(source), mode=mode, axis=axes, use_mask=use_mask), raw)
 
     @staticmethod
+    def num_reduced_elements(source: Tensor, *, axis: Union[Dim, Sequence[Dim]], use_mask: bool) -> Union[int, Tensor]:
+        """
+        Counts by reducing ones laid out like the source through :func:`reduce` itself,
+        so the count covers exactly the elements which a reduction of the source covers:
+        no padding on the packed dims and no gap or unused bound frames,
+        while another dynamic axis can stay padded inside the buffer.
+        """
+        raw = _raw(source)
+        axes = [axis] if isinstance(axis, Dim) else list(axis)
+        keep = [d for d in raw.inner.dims if d == raw.packed_dim or d in axes or not d.is_static()]
+        # an unreduced static dim stays when the lengths of a kept dim are indexed by it, as its mask needs it.
+        # Every dynamic dim is kept, so the dims their lengths are indexed by are covered as well.
+        size_dims = {dep for d in keep if d.dyn_size_ext is not None for dep in d.dyn_size_ext.dims}
+        dims = [d for d in raw.inner.dims if d in keep or d in size_dims]
+        ones = rf.ones(dims=dims, dtype="float32", device=raw.inner.device)
+        return rf.reduce_sum(raw.rewrap(ones, name="ones"), axis=axes, use_mask=use_mask)
+
+    @staticmethod
     def ctc_loss(
         *,
         logits: Tensor,

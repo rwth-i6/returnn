@@ -134,3 +134,135 @@ def test_moments_distributed_matches_local():
         torch.testing.assert_close(mean.raw_tensor, ref_mean.raw_tensor, rtol=1e-6, atol=1e-3)
         torch.testing.assert_close(variance.raw_tensor, ref_variance.raw_tensor, rtol=1e-2, atol=1e-4)
         assert float(variance.raw_tensor.min()) > 0.0, (time_dim, use_mask, variance.raw_tensor)
+
+
+def test_moments_distributed_counts_the_summed_elements():
+    """
+    The distributed moments divide by as many elements as their sums cover, whatever the storage:
+    packed storage holds no padded frames on its packed dims, while another dynamic axis stays padded inside it,
+    with its lengths indexed by a dim which the reduction may keep.
+    """
+    import torch
+
+    rf.select_backend_torch()
+    batch = Dim(2, name="batch")
+    channel = Dim(2, name="channel")
+    feat = Dim(1, name="feat")
+    time_sizes = Tensor("time_size", dims=[batch], dtype="int32", raw_tensor=torch.tensor([3, 2], dtype=torch.int32))
+    time_dim = Dim(time_sizes, name="time")
+    extra_sizes = Tensor(
+        "extra_size", dims=[channel], dtype="int32", raw_tensor=torch.tensor([4, 2], dtype=torch.int32)
+    )
+    extra_dim = Dim(extra_sizes, name="extra")
+    raw = torch.arange(48, dtype=torch.float32).reshape(2, 3, 2, 4, 1)
+    x = Tensor("x", dims=[batch, time_dim, channel, extra_dim, feat], dtype="float32", raw_tensor=raw)
+    for pack_opts in ({}, {"gap": 2}, {"gap": 2, "total_bound": 14}):
+        source = rf.pack(x, dims=[batch, time_dim], **pack_opts)
+        # over all axes, and over time and the extra axis only, which keeps the channel its lengths are indexed by
+        for axes in ([batch, time_dim, channel, extra_dim], [time_dim, extra_dim]):
+            for use_mask in (True, False):
+                local = rf.moments(source, axis=axes, use_mask=use_mask)
+                distributed = rf.moments(source, axis=axes, use_mask=use_mask, distributed=True)
+                for got, want in zip(distributed, local):
+                    torch.testing.assert_close(
+                        got.copy_compatible_to_dims_raw(want.dims),
+                        want.raw_tensor,
+                        msg=f"{pack_opts} axes={axes} use_mask={use_mask}",
+                    )
+
+
+def test_moments_and_batch_norm_keep_use_mask():
+    """
+    With ``rf_moments_use_fixed_masking``, the local mean takes use_mask like the variance,
+    and distributed BatchNorm normalizes over the same frames as the local one, masked or not.
+    """
+    import torch
+    from returnn.config import Config, global_config_ctx
+
+    rf.select_backend_torch()
+    batch = Dim(2, name="batch")
+    feat = Dim(3, name="feat")
+    time_sizes = Tensor("time_size", dims=[batch], dtype="int32", raw_tensor=torch.tensor([5, 3], dtype=torch.int32))
+    time_dim = Dim(time_sizes, name="time")
+    torch.manual_seed(3)
+    raw = torch.randn(2, 5, 3)
+    # padding of the shorter sequence, far off so that masked and unmasked statistics clearly differ
+    raw[1, 3:] = 50.0
+    x = Tensor("x", dims=[batch, time_dim, feat], dtype="float32", raw_tensor=raw)
+    with global_config_ctx(Config({"rf_moments_use_fixed_masking": True})):
+        for use_mask, rows in ((True, torch.cat([raw[0], raw[1, :3]])), (False, raw.reshape(-1, 3))):
+            mean, variance = rf.moments(x, axis=[batch, time_dim], use_mask=use_mask)
+            torch.testing.assert_close(mean.raw_tensor, rows.mean(dim=0))
+            torch.testing.assert_close(variance.raw_tensor, (rows - rows.mean(dim=0)).square().mean(dim=0))
+
+            rf.init_train_step_run_ctx(train_flag=True, step=0, epoch=1)
+            local = rf.BatchNorm(feat, use_mask=use_mask)
+            distributed = rf.BatchNorm(feat, use_mask=use_mask, distributed=True)
+            torch.testing.assert_close(
+                distributed(x).copy_compatible_to_dims_raw([batch, time_dim, feat]),
+                local(x).copy_compatible_to_dims_raw([batch, time_dim, feat]),
+                rtol=1e-5,
+                atol=1e-5,
+            )
+
+
+def test_moments_use_fixed_masking_by_behavior_version():
+    """
+    Behavior version 33 turns ``rf_moments_use_fixed_masking`` on, the config option overrides that in both directions.
+    """
+    import torch
+    from returnn.config import Config, global_config_ctx
+    from returnn.util.basic import BehaviorVersion
+
+    rf.select_backend_torch()
+    batch = Dim(2, name="batch")
+    feat = Dim(3, name="feat")
+    time_sizes = Tensor("time_size", dims=[batch], dtype="int32", raw_tensor=torch.tensor([5, 3], dtype=torch.int32))
+    time_dim = Dim(time_sizes, name="time")
+    torch.manual_seed(3)
+    raw = torch.randn(2, 5, 3)
+    # padding of the shorter sequence, far off so that the masked and the unmasked mean clearly differ
+    raw[1, 3:] = 50.0
+    x = Tensor("x", dims=[batch, time_dim, feat], dtype="float32", raw_tensor=raw)
+    masked_mean, unmasked_mean = torch.cat([raw[0], raw[1, :3]]).mean(dim=0), raw.reshape(-1, 3).mean(dim=0)
+    behavior_version_orig_state = BehaviorVersion._get_state()
+    try:
+        for version, flag, want_masked in ((32, None, True), (33, None, False), (33, False, True), (32, True, False)):
+            BehaviorVersion._reset()
+            BehaviorVersion.set(version)
+            with global_config_ctx(Config({} if flag is None else {"rf_moments_use_fixed_masking": flag})):
+                mean, _ = rf.moments(x, axis=[batch, time_dim], use_mask=False)
+            want = masked_mean if want_masked else unmasked_mean
+            torch.testing.assert_close(mean.raw_tensor, want, msg=f"version {version}, flag {flag}")
+    finally:
+        BehaviorVersion._reset(behavior_version_orig_state)
+
+
+def test_batch_norm_distributed_like_local():
+    """
+    With ``rf_moments_use_fixed_masking``, distributed BatchNorm normalizes like the local one
+    also on packed storage, masked or not.
+    """
+    import torch
+    from returnn.config import Config, global_config_ctx
+
+    rf.select_backend_torch()
+    batch = Dim(2, name="batch")
+    feat = Dim(3, name="feat")
+    time_sizes = Tensor("time_size", dims=[batch], dtype="int32", raw_tensor=torch.tensor([5, 3], dtype=torch.int32))
+    time_dim = Dim(time_sizes, name="time")
+    torch.manual_seed(3)
+    raw = torch.randn(2, 5, 3)
+    inputs = {
+        "packed": rf.pack(Tensor("x", dims=[batch, time_dim, feat], dtype="float32", raw_tensor=raw), gap=2),
+    }
+    with global_config_ctx(Config({"rf_moments_use_fixed_masking": True})):
+        for name, x in inputs.items():
+            dims = [batch, x.dims[1], feat]
+            for use_mask in (True, False):
+                rf.init_train_step_run_ctx(train_flag=True, step=0, epoch=1)
+                outs = []
+                for distributed in (False, True):
+                    out = rf.BatchNorm(feat, use_mask=use_mask, distributed=distributed)(x)
+                    outs.append((rf.unpack(out) if rf.is_packed(out) else out).copy_compatible_to_dims_raw(dims))
+                torch.testing.assert_close(outs[1], outs[0], rtol=1e-5, atol=1e-5, msg=f"{name} use_mask={use_mask}")

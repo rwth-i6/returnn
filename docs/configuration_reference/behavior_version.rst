@@ -22,6 +22,23 @@ and not listing legacy/deprecated parameters.
 Version History
 ---------------
 
+Behavior version 33 (2026-10-02)
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+:func:`rf.moments` with ``use_mask=False`` takes its mean over all frames too, like the variance.
+Before, the mean was always masked while the variance was not,
+so the variance was taken around the mean of other frames.
+
+:class:`rf.BatchNorm` passes its ``use_mask`` on to :func:`rf.moments`.
+Before, the statistics of its generic path were always masked,
+so a distributed :class:`rf.BatchNorm` with ``use_mask=False`` normalized over other frames
+than the local one, which includes the padding.
+
+There is also the global config option ``rf_moments_use_fixed_masking: bool``
+to override in both directions.
+
+See PR `#1915 <https://github.com/rwth-i6/returnn/pull/1915>`__.
+
 Behavior version 32 (2026-10-02)
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
