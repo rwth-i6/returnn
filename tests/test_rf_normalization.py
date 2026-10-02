@@ -139,7 +139,8 @@ def test_moments_distributed_matches_local():
 def test_moments_distributed_counts_the_summed_elements():
     """
     The distributed moments divide by as many elements as their sums cover, whatever the storage:
-    packed storage holds no padded frames on its packed dims, while another dynamic axis stays padded inside it.
+    packed storage holds no padded frames on its packed dims, while another dynamic axis stays padded inside it,
+    with its lengths indexed by a dim which the reduction may keep.
     """
     import torch
 
@@ -155,14 +156,19 @@ def test_moments_distributed_counts_the_summed_elements():
     extra_dim = Dim(extra_sizes, name="extra")
     raw = torch.arange(48, dtype=torch.float32).reshape(2, 3, 2, 4, 1)
     x = Tensor("x", dims=[batch, time_dim, channel, extra_dim, feat], dtype="float32", raw_tensor=raw)
-    axes = [batch, time_dim, channel, extra_dim]
     for pack_opts in ({}, {"gap": 2}, {"gap": 2, "total_bound": 14}):
         source = rf.pack(x, dims=[batch, time_dim], **pack_opts)
-        for use_mask in (True, False):
-            local = rf.moments(source, axis=axes, use_mask=use_mask)
-            distributed = rf.moments(source, axis=axes, use_mask=use_mask, distributed=True)
-            for got, want in zip(distributed, local):
-                torch.testing.assert_close(got.raw_tensor, want.raw_tensor, msg=f"{pack_opts} use_mask={use_mask}")
+        # over all axes, and over time and the extra axis only, which keeps the channel its lengths are indexed by
+        for axes in ([batch, time_dim, channel, extra_dim], [time_dim, extra_dim]):
+            for use_mask in (True, False):
+                local = rf.moments(source, axis=axes, use_mask=use_mask)
+                distributed = rf.moments(source, axis=axes, use_mask=use_mask, distributed=True)
+                for got, want in zip(distributed, local):
+                    torch.testing.assert_close(
+                        got.copy_compatible_to_dims_raw(want.dims),
+                        want.raw_tensor,
+                        msg=f"{pack_opts} axes={axes} use_mask={use_mask}",
+                    )
 
 
 def test_moments_and_batch_norm_keep_use_mask():

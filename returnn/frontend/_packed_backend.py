@@ -4597,8 +4597,11 @@ class PackedBackend(Backend[PackedRawTensor]):
         """
         raw = _raw(source)
         axes = [axis] if isinstance(axis, Dim) else list(axis)
-        # a static dim which is not reduced cannot change the count
-        dims = [d for d in raw.inner.dims if d == raw.packed_dim or d in axes or not d.is_static()]
+        keep = [d for d in raw.inner.dims if d == raw.packed_dim or d in axes or not d.is_static()]
+        # an unreduced static dim stays when the lengths of a kept dim are indexed by it, as its mask needs it.
+        # Every dynamic dim is kept, so the dims their lengths are indexed by are covered as well.
+        size_dims = {dep for d in keep if d.dyn_size_ext is not None for dep in d.dyn_size_ext.dims}
+        dims = [d for d in raw.inner.dims if d in keep or d in size_dims]
         ones = rf.ones(dims=dims, dtype="float32", device=raw.inner.device)
         return rf.reduce_sum(raw.rewrap(ones, name="ones"), axis=axes, use_mask=use_mask)
 
