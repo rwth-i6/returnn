@@ -243,7 +243,8 @@ def monotonic_rnnt_loss(
         A static bound such as the declared capacity, since reading the batch's own maximum would be a host read.
     :return: [B] the negative log likelihood, zero where a sequence has no alignment
     """
-    assert logits.dim() == 2, logits.shape
+    if logits.dim() != 2:
+        raise ValueError(f"monotonic rnnt: logits must be [cells, V], got shape {tuple(logits.shape)}")
     if logits.shape[0] == 0:
         return logits.sum() * torch.zeros(frame_lens.shape[0], dtype=torch.float32, device=logits.device)
     logits = logits.contiguous()
