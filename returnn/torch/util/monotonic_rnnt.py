@@ -211,7 +211,7 @@ if hasattr(torch.library, "custom_op"):  # torch >= 2.4
         ctx.blank = blank
 
     def _lib_backward(ctx, d_total, d_row_max, d_log_sum, d_blank_lp, d_label_lp, d_alpha):
-        d_row_max, d_log_sum, d_blank_lp, d_label_lp, d_alpha  # noqa  # unused, only total feeds the loss
+        del d_row_max, d_log_sum, d_blank_lp, d_label_lp, d_alpha  # unused, only total feeds the loss
         logits, next_label, row_max, log_sum, blank_lp, label_lp, alpha, frame_lens, label_lens = ctx.saved_tensors
         grad_logits = torch.ops.returnn.monotonic_rnnt_bwd(
             logits, next_label, row_max, log_sum, blank_lp, label_lp, alpha, frame_lens, label_lens, d_total, ctx.blank
