@@ -640,12 +640,15 @@ def get_ctc_fsa_fast_bw(
         start_end_states is (2,batch), int32, (start,end) state idx in FSA.
     """
     assert targets.ndim == 2
-    cached = _ctc_fsa_cache_get(targets, seq_lens, blank_idx, label_loop, edges_bound)
+    # Under tracing and under CUDA-graph capture the cache is bypassed on purpose: a cached FSA would
+    # be baked into the graph as a constant, so every replay would score against the FIRST step's
+    # targets. Capture reruns the step on the very buffers of the preceding warm run, so identity
+    # and version of the targets do not change and the key alone cannot tell the capture apart.
+    # (Within one traced or captured step the aux heads then rebuild it; the construction op is cheap.)
+    capturing = _cuda_stream_capturing(targets)
+    cached = None if capturing else _ctc_fsa_cache_get(targets, seq_lens, blank_idx, label_loop, edges_bound)
     if cached is not None and not _is_tracing_tensor(targets):
         return cached
-    # Under tracing the cache is bypassed on purpose: a cached FSA would be baked into the
-    # graph as a constant, so every replay would score against the FIRST step's targets.
-    # (Within one traced step the aux heads then rebuild it; the construction op is cheap.)
     targets_arg, seq_lens_arg = targets, seq_lens
     targets = targets.to(torch.int32)
     n_batch, n_time = targets.shape
@@ -679,7 +682,9 @@ def get_ctc_fsa_fast_bw(
         edges, start_end_states, weights = op(targets, seq_lens, blank_idx, weights, label_loop)
 
     res = (edges, weights, start_end_states)
-    _ctc_fsa_cache_set(targets_arg, seq_lens_arg, blank_idx, label_loop, edges_bound, res)
+    if not capturing:
+        # an FSA built inside the capture lives in the graph's private pool, it must not serve any eager step
+        _ctc_fsa_cache_set(targets_arg, seq_lens_arg, blank_idx, label_loop, edges_bound, res)
     return res
 
 
@@ -699,6 +704,14 @@ _CtcFsa = Tuple[torch.Tensor, torch.Tensor, torch.Tensor]  # edges, weights, sta
 # targets, seq_lens, blank_idx, label_loop, edges_bound, targets._version, seq_lens._version, fsa
 _CtcFsaCacheEntry = Tuple[torch.Tensor, torch.Tensor, int, bool, Optional[int], int, int, _CtcFsa]
 _ctc_fsa_cache: Optional[_CtcFsaCacheEntry] = None
+
+
+def _cuda_stream_capturing(x: torch.Tensor) -> bool:
+    """
+    :param x: a tensor the op works on
+    :return: whether x is on a CUDA device whose current stream is being captured into a graph
+    """
+    return x.device.type == "cuda" and torch.cuda.is_current_stream_capturing()
 
 
 def _is_tracing_tensor(x: torch.Tensor) -> bool:

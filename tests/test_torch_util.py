@@ -626,3 +626,21 @@ def test_depthwise_conv1d_triton_weight_grad_scratch_independent_of_rows():
         torch.cuda.synchronize()
         peaks.append(torch.cuda.memory_stats()["requested_bytes.all.peak"] - base)
     assert peaks[0] == peaks[1], peaks
+
+
+def test_ctc_fsa_cache_bypassed_under_cuda_graph_capture():
+    """the FSA cache serves the aux heads in eager mode but never hands an FSA into a CUDA graph capture"""
+    from unittest import mock
+    from returnn.torch.util import native_op
+
+    targets = torch.tensor([[1, 2, 2, 3, 0], [2, 3, 0, 0, 0]], dtype=torch.int32)
+    seq_lens = torch.tensor([4, 2], dtype=torch.int32)
+    kwargs = dict(targets=targets, seq_lens=seq_lens, blank_idx=4)
+    first = native_op.get_ctc_fsa_fast_bw(**kwargs)
+    assert native_op.get_ctc_fsa_fast_bw(**kwargs)[0] is first[0]
+    with mock.patch.object(native_op, "_cuda_stream_capturing", return_value=True):
+        captured = native_op.get_ctc_fsa_fast_bw(**kwargs)
+        again = native_op.get_ctc_fsa_fast_bw(**kwargs)
+    assert captured[0] is not first[0], "an FSA built before the capture must not enter the graph"
+    assert again[0] is not captured[0], "inside the capture every head builds its own FSA"
+    assert native_op.get_ctc_fsa_fast_bw(**kwargs)[0] is not captured[0], "no graph-owned FSA leaks out"
