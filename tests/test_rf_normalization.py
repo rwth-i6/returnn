@@ -171,6 +171,38 @@ def test_moments_and_batch_norm_keep_use_mask():
             )
 
 
+def test_moments_use_fixed_masking_by_behavior_version():
+    """
+    Behavior version 33 turns ``rf_moments_use_fixed_masking`` on, the config option overrides that in both directions.
+    """
+    import torch
+    from returnn.config import Config, global_config_ctx
+    from returnn.util.basic import BehaviorVersion
+
+    rf.select_backend_torch()
+    batch = Dim(2, name="batch")
+    feat = Dim(3, name="feat")
+    time_sizes = Tensor("time_size", dims=[batch], dtype="int32", raw_tensor=torch.tensor([5, 3], dtype=torch.int32))
+    time_dim = Dim(time_sizes, name="time")
+    torch.manual_seed(3)
+    raw = torch.randn(2, 5, 3)
+    # padding of the shorter sequence, far off so that the masked and the unmasked mean clearly differ
+    raw[1, 3:] = 50.0
+    x = Tensor("x", dims=[batch, time_dim, feat], dtype="float32", raw_tensor=raw)
+    masked_mean, unmasked_mean = torch.cat([raw[0], raw[1, :3]]).mean(dim=0), raw.reshape(-1, 3).mean(dim=0)
+    behavior_version_orig_state = BehaviorVersion._get_state()
+    try:
+        for version, flag, want_masked in ((32, None, True), (33, None, False), (33, False, True), (32, True, False)):
+            BehaviorVersion._reset()
+            BehaviorVersion.set(version)
+            with global_config_ctx(Config({} if flag is None else {"rf_moments_use_fixed_masking": flag})):
+                mean, _ = rf.moments(x, axis=[batch, time_dim], use_mask=False)
+            want = masked_mean if want_masked else unmasked_mean
+            torch.testing.assert_close(mean.raw_tensor, want, msg=f"version {version}, flag {flag}")
+    finally:
+        BehaviorVersion._reset(behavior_version_orig_state)
+
+
 def test_batch_norm_distributed_like_local():
     """
     With ``rf_moments_use_fixed_masking``, distributed BatchNorm normalizes like the local one
