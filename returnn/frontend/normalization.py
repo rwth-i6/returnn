@@ -29,12 +29,9 @@ def moments(
     use_mask: bool = True,
     correction: Union[int, float, Tensor] = 0,
     distributed: bool = False,
+    compute_dtype: Optional[str] = None,
 ) -> Tuple[Tensor, Tensor]:
     """
-    With the global config option ``rf_moments_float32`` (default from behavior version 32 on),
-    float16 and bfloat16 input is reduced in float32 and the statistics are returned in float32,
-    as e.g. a variance above 65504 does not fit into float16.
-
     :param x: input
     :param axis: the axis (or axes) to be reduced, to calculate statistics over
     :param use_mask: whether to use a mask for dynamic spatial dims in the reduction
@@ -57,10 +54,19 @@ def moments(
         by all-reducing the per-worker sum / sum-of-squares (differentiable) and count.
         This matches torch.nn.SyncBatchNorm.
         Default False keeps the per-worker (local) statistics.
+    :param compute_dtype: dtype the input is cast to before the reduction, and thus the dtype of the statistics.
+        None (default): float32 for float input of lower precision (float16, bfloat16, float8, ...)
+        if the global config option ``rf_moments_float32`` is set (default from behavior version 32 on),
+        as e.g. a variance above 65504 does not fit into float16,
+        else the input dtype.
     :return: tuple (mean, variance). it has the same shape as the input with the axis removed
     """
-    if x.dtype in ("float16", "bfloat16") and _moments_float32():
-        x = rf.cast(x, "float32")
+    if compute_dtype is None:
+        if rf.is_float_dtype(x.dtype) and x.dtype not in ("float32", "float64") and _moments_float32():
+            compute_dtype = "float32"
+        else:
+            compute_dtype = x.dtype
+    x = rf.cast(x, compute_dtype)
     if distributed:
         # Accumulate the global statistics in float32 for numerical stability.
         # The one-pass variance E[x^2] - E[x]^2 below catastrophically cancels in low precision:
@@ -68,7 +74,6 @@ def moments(
         # so in bf16 their difference is garbage (can even go negative) -> NaNs.
         # torch.nn.SyncBatchNorm likewise keeps these stats in float32.
         # The local (non-distributed) branch below avoids this via the two-pass mean((x-mean)^2).
-        compute_dtype = x.dtype
         x = rf.cast(x, "float32")
         x_sum = rf.reduce_sum(x, axis=axis, use_mask=use_mask, distributed=True)
         x_sum_sq = rf.reduce_sum(x * x, axis=axis, use_mask=use_mask, distributed=True)
@@ -93,7 +98,8 @@ def moments(
 
 def _moments_float32() -> bool:
     """
-    :return: whether :func:`moments` reduces float16 and bfloat16 input in float32 and returns float32 statistics.
+    :return: whether :func:`moments` by default reduces float input of lower precision in float32
+        and returns float32 statistics.
         Config option ``rf_moments_float32: bool``, else behavior_version >= 32.
     """
     from returnn.config import get_global_config
