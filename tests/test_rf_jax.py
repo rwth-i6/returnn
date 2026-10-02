@@ -2775,3 +2775,50 @@ def test_causal_self_att_bounded_cache_in_while_loop():
     assert int(final["i"].raw_tensor) == n_steps
     assert set(final["out"].dims) == {batch, model_dim}
     assert int(final["att"].accum_axis.dyn_size_ext.raw_tensor) == n_steps
+
+
+def test_depthwise_conv1d_triton_matches_xla():
+    """
+    the Triton depthwise conv on the kernels shared with the torch backend, against XLA's grouped conv,
+    values and both gradients, for the tap loops, the row loops of a window shorter than the filter and bf16.
+    Needs a GPU and jax_triton, run with JAX_PLATFORMS=cuda
+    """
+    pytest.importorskip("jax_triton")
+    if jax.default_backend() != "gpu":
+        pytest.skip("needs a GPU")
+    from returnn.jax.util import depthwise_conv_triton
+
+    key = jax.random.PRNGKey(3)
+    n_chan = 70
+    for n_time, width, dtype in ((1021, 32, jnp.float32), (20, 32, jnp.float32), (3000, 5, jnp.bfloat16)):
+        key, kx, kw, kg = jax.random.split(key, 4)
+        x = jax.random.normal(kx, (n_time, n_chan)).astype(dtype)
+        w = (jax.random.normal(kw, (width, n_chan)) * 0.3).astype(dtype)
+        g = jax.random.normal(kg, (n_time, n_chan))
+        pad_l = (width - 1) // 2
+        assert depthwise_conv_triton.depthwise_conv1d_available(x, w)
+
+        def _triton_loss(x_, w_):
+            return jnp.sum(depthwise_conv_triton.depthwise_conv1d(x_, w_, pad_l).astype(jnp.float32) * g)
+
+        def _xla_loss(x_, w_):
+            out = jax.lax.conv_general_dilated(
+                x_[None].astype(jnp.float32),
+                w_[:, None, :].astype(jnp.float32),
+                window_strides=(1,),
+                padding=[(pad_l, width - 1 - pad_l)],
+                dimension_numbers=("NWC", "WIO", "NWC"),
+                feature_group_count=n_chan,
+                precision=jax.lax.Precision.HIGHEST,
+            )[0]
+            return jnp.sum(out * g)
+
+        tol = {"rtol": 1e-4, "atol": 1e-3} if dtype == jnp.float32 else {"rtol": 2e-2, "atol": 1.0}
+        loss, grads = jax.value_and_grad(_triton_loss, argnums=(0, 1))(x, w)
+        ref_loss, ref_grads = jax.value_and_grad(_xla_loss, argnums=(0, 1))(x, w)
+        numpy.testing.assert_allclose(float(loss), float(ref_loss), **tol)
+        for grad, ref_grad in zip(grads, ref_grads):
+            assert grad.dtype == dtype, (n_time, width, grad.dtype)
+            numpy.testing.assert_allclose(
+                numpy.asarray(grad, dtype=numpy.float32), numpy.asarray(ref_grad, dtype=numpy.float32), **tol
+            )
