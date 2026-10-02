@@ -949,6 +949,69 @@ def test_mixed_operand_order():
         _assert_equal_non_padded(out_p, out_ref, batch_dim, time_dim)
 
 
+def test_compare_packs_a_plain_operand_over_the_packed_dims():
+    rf.select_backend_torch()
+    x, batch_dim, time_dim, feat_dim = _make_input(batch_size=3, seq_lens=(7, 5, 4))
+    gen = torch.Generator().manual_seed(7)
+    targets = Tensor("targets", dims=[batch_dim, time_dim], dtype="int32", sparse_dim=feat_dim)
+    targets.raw_tensor = torch.randint(0, feat_dim.dimension, (3, 7), dtype=torch.int32, generator=gen)
+    per_seq = Tensor("per_seq", dims=[batch_dim], dtype="int32")
+    per_seq.raw_tensor = torch.randint(0, feat_dim.dimension, (3,), dtype=torch.int32, generator=gen)
+    argmax = rf.reduce_argmax(x, axis=feat_dim)
+    argmax_p = rf.reduce_argmax(packed.pack(x), axis=feat_dim)
+    packed._warned_fallback_ops.clear()
+    for out_p, out_ref in [
+        (argmax_p != targets, argmax != targets),
+        (per_seq < argmax_p, per_seq < argmax),
+    ]:
+        assert packed.is_packed(out_p)
+        _assert_equal_non_padded(out_p, out_ref, batch_dim, time_dim)
+    assert not packed._warned_fallback_ops
+
+
+def test_plain_operand_over_the_packed_dims_is_packed_alike():
+    # a plain tensor arg over the packed dims is data over frames:
+    # it is packed alike, and the op runs on the packed data, without the unpack fallback
+    rf.select_backend_torch()
+    x, batch_dim, time_dim, feat_dim = _make_input(batch_size=3, seq_lens=(7, 5, 4))
+    gen = torch.Generator().manual_seed(7)
+    k_dim = Dim(2, name="k")
+    targets = Tensor("targets", dims=[batch_dim, time_dim], dtype="int32", sparse_dim=feat_dim)
+    targets.raw_tensor = torch.randint(0, feat_dim.dimension, (3, 7), dtype=torch.int32, generator=gen)
+    per_seq = Tensor("per_seq", dims=[batch_dim], dtype="int32")
+    per_seq.raw_tensor = torch.randint(0, feat_dim.dimension, (3,), dtype=torch.int32, generator=gen)
+    scale = Tensor("scale", dims=[batch_dim, time_dim], dtype="float32")
+    scale.raw_tensor = torch.rand(3, 7, generator=gen)
+    table = Tensor("table", dims=[batch_dim, feat_dim], dtype="float32")
+    table.raw_tensor = torch.randn(3, feat_dim.dimension, generator=gen)
+    block = Tensor("block", dims=[batch_dim, k_dim], dtype="float32")
+    block.raw_tensor = torch.randn(3, 2, generator=gen)
+
+    def _ops(x_: Tensor):
+        argmax = rf.reduce_argmax(x_, axis=feat_dim)
+        return {
+            "compare": argmax != targets,
+            "compare, plain first": targets != argmax,
+            "compare, per seq": per_seq < argmax,
+            "combine": x_ * scale,
+            "where": rf.where(scale > 0.5, x_, scale),
+            "cross_entropy": rf.cross_entropy(estimated=x_, target=targets, axis=feat_dim, estimated_type="logits"),
+            "concat": rf.concat((x_, feat_dim), (block, k_dim), allow_broadcast=True)[0],
+            "gather, per seq table": rf.gather(table, indices=argmax, axis=feat_dim, clip_to_valid=True),
+            "gather, plain source": rf.gather(x, indices=argmax, axis=feat_dim),
+            "stack": rf.stack([argmax, targets], out_dim=k_dim)[0],
+        }
+
+    refs = _ops(x)
+    for opts in [dict(), dict(gap=2, align=4), dict(total_bound=24)]:
+        packed._warned_fallback_ops.clear()
+        outs = _ops(packed.pack(x, **opts))
+        for name, out_ref in refs.items():
+            assert packed.is_packed(outs[name]), name
+            _assert_equal_non_padded(outs[name], out_ref, batch_dim, time_dim)
+        assert not packed._warned_fallback_ops
+
+
 def test_rel_pos_self_attention_packed():
     # Conformer-style rel-pos self-attention: on packed input this runs via the FlexAttention fast path
     # (document block mask + rel-pos score_mod over the flat packed buffer).
@@ -2010,6 +2073,65 @@ def test_moments_float32_statistics_in_every_layout():
                 torch.testing.assert_close(
                     value.copy_compatible_to_dims_raw([feat_dim]), reference, rtol=1e-5, atol=0, msg=f"{name} {what}"
                 )
+
+
+def test_reduce_over_time_dense_bound_tail():
+    """a dense bound-sized buffer has unused rows past the content, which no per-sequence op may count"""
+    rf.select_backend_torch()
+    x, batch_dim, time_dim, feat_dim = _make_input(seq_lens=(4, 2))
+    xp = packed.regap(packed.pack(x), 0, total_bound=10)
+    assert xp.raw_tensor.packed_dim.dimension == 10
+    for mode in ("mean", "sum", "logsumexp"):
+        out_p = rf.reduce(xp, mode=mode, axis=time_dim)
+        out_ref = rf.reduce(x, mode=mode, axis=time_dim)
+        assert not packed.is_packed(out_p)
+        out_p = out_p.copy_compatible_to_dims(out_ref.dims)
+        numpy.testing.assert_allclose(
+            out_p.raw_tensor.detach().numpy(), out_ref.raw_tensor.detach().numpy(), rtol=1e-5, atol=1e-6, err_msg=mode
+        )
+    for fn in (rf.softmax, rf.log_softmax):
+        out_p = fn(xp, axis=time_dim)
+        assert packed.is_packed(out_p), fn.__name__
+        _assert_equal_non_padded(out_p, fn(x, axis=time_dim), batch_dim, time_dim)
+
+
+def test_batch_norm_packed_dense_bound_train():
+    """batch_norm statistics ignore the unused tail of a dense bound-sized buffer"""
+    rf.select_backend_torch()
+    x, batch_dim, time_dim, feat_dim = _make_input(seq_lens=(5, 3), feat=4, seed=8)
+    with rf.set_default_device_ctx("cpu"):
+        rf.set_random_seed(3)
+        bn_dense = rf.BatchNorm(feat_dim, use_mask=False)
+        bn_bound = rf.BatchNorm(feat_dim, use_mask=False)
+        with rf.get_run_ctx().train_flag_ctx(True):
+            out_dense = bn_dense(packed.pack(x))
+            out_bound = bn_bound(packed.regap(packed.pack(x), 0, total_bound=16))
+        assert packed.is_packed(out_bound)
+    _assert_equal_non_padded(out_bound, packed.unpack(out_dense), batch_dim, time_dim)
+    for p_dense, p_bound in [
+        (bn_dense.running_mean, bn_bound.running_mean),
+        (bn_dense.running_variance, bn_bound.running_variance),
+    ]:
+        numpy.testing.assert_allclose(
+            p_dense.raw_tensor.detach().numpy(), p_bound.raw_tensor.detach().numpy(), rtol=1e-5, atol=1e-6
+        )
+
+
+def test_softmax_over_a_single_packed_axis_with_a_bound():
+    """a bound-sized packing of one axis normalizes over its content rows only"""
+    rf.select_backend_torch()
+    size_dim = Dim(Tensor("size", dims=[], dtype="int32", raw_tensor=torch.tensor(3, dtype=torch.int32)), name="size")
+    x = Tensor("x", dims=[size_dim], dtype="float32", raw_tensor=torch.tensor([0.0, 1.0, 2.0]))
+    xp = packed.pack(x, dims=[size_dim], total_bound=5)
+    for fn in (rf.softmax, rf.log_softmax):
+        out = fn(xp, axis=size_dim)
+        assert packed.is_packed(out), fn.__name__
+        numpy.testing.assert_allclose(
+            out.raw_tensor.inner.raw_tensor.numpy()[:3],
+            fn(x, axis=size_dim).raw_tensor.numpy(),
+            rtol=1e-6,
+            err_msg=fn.__name__,
+        )
 
 
 if __name__ == "__main__":
