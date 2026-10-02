@@ -645,7 +645,7 @@ def get_ctc_fsa_fast_bw(
     # targets. Capture reruns the step on the very buffers of the preceding warm run, so identity
     # and version of the targets do not change and the key alone cannot tell the capture apart.
     # (Within one traced or captured step the aux heads then rebuild it; the construction op is cheap.)
-    capturing = _cuda_stream_capturing()
+    capturing = _cuda_stream_capturing(targets)
     cached = None if capturing else _ctc_fsa_cache_get(targets, seq_lens, blank_idx, label_loop, edges_bound)
     if cached is not None and not _is_tracing_tensor(targets):
         return cached
@@ -706,14 +706,12 @@ _CtcFsaCacheEntry = Tuple[torch.Tensor, torch.Tensor, int, bool, Optional[int], 
 _ctc_fsa_cache: Optional[_CtcFsaCacheEntry] = None
 
 
-def _cuda_stream_capturing() -> bool:
+def _cuda_stream_capturing(x: torch.Tensor) -> bool:
     """
-    :return: whether the current CUDA stream is being captured into a graph (False without CUDA)
+    :param x: a tensor the op works on
+    :return: whether x is on a CUDA device whose current stream is being captured into a graph
     """
-    try:
-        return bool(torch.cuda.is_current_stream_capturing())
-    except (RuntimeError, AttributeError):  # CPU-only torch, or no CUDA context yet
-        return False
+    return x.device.type == "cuda" and torch.cuda.is_current_stream_capturing()
 
 
 def _is_tracing_tensor(x: torch.Tensor) -> bool:

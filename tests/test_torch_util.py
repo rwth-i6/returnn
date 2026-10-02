@@ -638,7 +638,7 @@ def test_ctc_fsa_cache_bypassed_under_cuda_graph_capture():
     kwargs = dict(targets=targets, seq_lens=seq_lens, blank_idx=4)
     first = native_op.get_ctc_fsa_fast_bw(**kwargs)
     assert native_op.get_ctc_fsa_fast_bw(**kwargs)[0] is first[0]
-    with mock.patch.object(torch.cuda, "is_current_stream_capturing", return_value=True):
+    with mock.patch.object(native_op, "_cuda_stream_capturing", return_value=True):
         captured = native_op.get_ctc_fsa_fast_bw(**kwargs)
         again = native_op.get_ctc_fsa_fast_bw(**kwargs)
     assert captured[0] is not first[0], "an FSA built before the capture must not enter the graph"
