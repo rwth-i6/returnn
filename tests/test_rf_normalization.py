@@ -136,6 +136,35 @@ def test_moments_distributed_matches_local():
         assert float(variance.raw_tensor.min()) > 0.0, (time_dim, use_mask, variance.raw_tensor)
 
 
+def test_moments_distributed_counts_the_summed_elements():
+    """
+    The distributed moments divide by as many elements as their sums cover, whatever the storage:
+    packed storage holds no padded frames on its packed dims, while another dynamic axis stays padded inside it.
+    """
+    import torch
+
+    rf.select_backend_torch()
+    batch = Dim(2, name="batch")
+    channel = Dim(2, name="channel")
+    feat = Dim(1, name="feat")
+    time_sizes = Tensor("time_size", dims=[batch], dtype="int32", raw_tensor=torch.tensor([3, 2], dtype=torch.int32))
+    time_dim = Dim(time_sizes, name="time")
+    extra_sizes = Tensor(
+        "extra_size", dims=[channel], dtype="int32", raw_tensor=torch.tensor([4, 2], dtype=torch.int32)
+    )
+    extra_dim = Dim(extra_sizes, name="extra")
+    raw = torch.arange(48, dtype=torch.float32).reshape(2, 3, 2, 4, 1)
+    x = Tensor("x", dims=[batch, time_dim, channel, extra_dim, feat], dtype="float32", raw_tensor=raw)
+    axes = [batch, time_dim, channel, extra_dim]
+    for pack_opts in ({}, {"gap": 2}, {"gap": 2, "total_bound": 14}):
+        source = rf.pack(x, dims=[batch, time_dim], **pack_opts)
+        for use_mask in (True, False):
+            local = rf.moments(source, axis=axes, use_mask=use_mask)
+            distributed = rf.moments(source, axis=axes, use_mask=use_mask, distributed=True)
+            for got, want in zip(distributed, local):
+                torch.testing.assert_close(got.raw_tensor, want.raw_tensor, msg=f"{pack_opts} use_mask={use_mask}")
+
+
 def test_moments_and_batch_norm_keep_use_mask():
     """
     With ``rf_moments_use_fixed_masking``, the local mean takes use_mask like the variance,
