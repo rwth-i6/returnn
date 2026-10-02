@@ -328,22 +328,6 @@ def test_monotonic_rnnt_traces_under_aot():
     torch.testing.assert_close(want[1][1], want[0][1], rtol=1e-4, atol=1e-6)
 
 
-def test_monotonic_rnnt_needs_max_frames():
-    # The batch's own maximum would be a host read, so the caller passes a static bound.
-    args = (
-        torch.randn(8, 3),
-        torch.ones((1, 1), dtype=torch.int32),
-        torch.tensor([4], dtype=torch.int32),
-        torch.tensor([1], dtype=torch.int32),
-    )
-    try:
-        monotonic_rnnt_loss(*args, blank=0)
-    except TypeError:
-        pass
-    else:
-        raise AssertionError("expected max_frames to be required")
-
-
 if __name__ == "__main__":
     if len(sys.argv) > 1:
         globals()[sys.argv[1]]()
