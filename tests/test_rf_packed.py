@@ -2134,6 +2134,55 @@ def test_softmax_over_a_single_packed_axis_with_a_bound():
         )
 
 
+def test_batch_norm_packed_gapped_half_stats():
+    """the batch norm statistics of a half precision packed input sum in float32, like torch's reference"""
+    rf.select_backend_torch()
+    batch_dim = Dim(2, name="batch")
+    lens = torch.tensor([40960, 40960], dtype=torch.int32)
+    time_dim = Dim(Tensor("time", dims=[batch_dim], dtype="int32", raw_tensor=lens))
+    feat_dim = Dim(2, name="feat")
+    raw = torch.randn(2, 40960, 2, generator=torch.Generator().manual_seed(5)).to(torch.float16)
+    x = Tensor("x", dims=[batch_dim, time_dim, feat_dim], dtype="float16", raw_tensor=raw)
+    with rf.set_default_device_ctx("cpu"):
+        bn = rf.BatchNorm(feat_dim, use_mask=False)
+        with rf.get_run_ctx().train_flag_ctx(True):
+            out = bn(packed.pack(x, gap=2))
+    assert bool(torch.isfinite(bn.running_mean.raw_tensor).all()), bn.running_mean.raw_tensor
+    assert bool(torch.isfinite(bn.running_variance.raw_tensor).all()), bn.running_variance.raw_tensor
+    ref = torch.nn.functional.batch_norm(
+        raw.float().reshape(-1, 2), None, None, bn.gamma.raw_tensor, bn.beta.raw_tensor, training=True, eps=bn.eps
+    )
+    expected = Tensor("ref", dims=x.dims, dtype="float32", raw_tensor=ref.reshape(2, 40960, 2))
+    _assert_equal_non_padded(out, expected, batch_dim, time_dim, rtol=1e-2, atol=1e-2)
+    assert out.dtype == "float16"
+
+
+def test_batch_norm_packed_gapped_unused_rows():
+    """non-finite values in the gap frames reach neither the valid outputs nor the gradients"""
+    rf.select_backend_torch()
+    x, batch_dim, time_dim, feat_dim = _make_input(seq_lens=(5, 3), feat=4, seed=8)
+    valid = (torch.arange(5)[None, :] < torch.tensor([5, 3])[:, None]).to(torch.float32)[..., None]
+    weights = torch.randn(x.raw_tensor.shape, generator=torch.Generator().manual_seed(1)) * valid
+
+    def run(poison):
+        raw = x.raw_tensor.detach().clone().requires_grad_()
+        xp = packed.pack(Tensor("x", dims=x.dims, dtype="float32", raw_tensor=raw), gap=2)
+        if poison is not None:
+            xp = xp.raw_tensor.rewrap(rf.where(packed._frame_mask(xp.raw_tensor), xp.raw_tensor.inner, poison))
+        with rf.set_default_device_ctx("cpu"):
+            bn = rf.BatchNorm(feat_dim, use_mask=False)
+            with rf.get_run_ctx().train_flag_ctx(True):
+                out = packed.unpack(bn(xp)).copy_compatible_to_dims(x.dims).raw_tensor
+        (out * weights).sum().backward()
+        return (out * valid).detach(), raw.grad, bn.gamma.raw_tensor.grad
+
+    out_ref, grad_ref, gamma_ref = run(None)
+    for poison in (float("nan"), float("inf")):
+        out, grad, gamma_grad = run(poison)
+        for name, a, b in [("out", out, out_ref), ("grad", grad, grad_ref), ("gamma grad", gamma_grad, gamma_ref)]:
+            numpy.testing.assert_allclose(a.numpy(), b.numpy(), rtol=1e-5, atol=1e-6, err_msg=f"{name}, {poison}")
+
+
 if __name__ == "__main__":
     better_exchook.install()
     if len(sys.argv) <= 1:
