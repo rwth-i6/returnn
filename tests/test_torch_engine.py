@@ -2051,6 +2051,488 @@ def test_engine_schedule_free_batchnorm_refresh_fresh_dataset():
         assert counts["no_grad"] == 3, (config_opts, counts)
 
 
+def test_multi_optimizer_load_cross_update_type_error():
+    model = torch.nn.Sequential(torch.nn.Linear(4, 4), torch.nn.Linear(4, 4))
+
+    def _filter_first_weight(*, full_param_name, **_kwargs):
+        return full_param_name == "0.weight"
+
+    def _filter_second_weight(*, full_param_name, **_kwargs):
+        return full_param_name == "1.weight"
+
+    def _make_updater(params_filter):
+        config = Config(
+            dict(
+                optimizer={
+                    "class": "multi",
+                    "optimizers": [
+                        {"class": "amuse", "update_type": "muon", "params_filter": params_filter, "warmup_steps": 5},
+                        {"class": "amuse", "update_type": "adamw", "warmup_steps": 5},
+                    ],
+                }
+            )
+        )
+        updater = Updater(config=config, network=model, device=torch.device("cpu"))
+        updater.create_optimizer()
+        updater.set_current_train_step(global_train_step=0, epoch=1)
+        return updater
+
+    updater1 = _make_updater(_filter_first_weight)
+    updater1.set_optimizer_training_mode(train=True)
+    for param in model.parameters():
+        param.grad = torch.ones_like(param)
+    updater1.get_optimizer().step()
+    updater1.set_optimizer_training_mode(train=False)
+    updater2 = _make_updater(_filter_second_weight)
+
+    with tempfile.TemporaryDirectory(prefix="returnn_test_multi_load_cross_update_type") as tmp_dir:
+        updater1.save_optimizer(tmp_dir + "/model.opt.pt")
+        try:
+            updater2.load_optimizer(tmp_dir + "/model.opt.pt")
+        except ValueError as exc:
+            assert "moved" in str(exc) and "muon" in str(exc) and "adamw" in str(exc)
+        else:
+            raise AssertionError("expected ValueError for a param move between AMUSE update types")
+
+
+def test_amuse_optimizer():
+    from returnn.torch.optim.amuse import AMUSE
+
+    config = Config(dict(optimizer={"class": "amuse", "update_type": "adamw", "warmup_steps": 5}))
+    model = torch.nn.Linear(4, 3)
+    updater = Updater(config=config, network=model, device=torch.device("cpu"))
+    updater.create_optimizer()
+    updater.set_learning_rate(1e-3)
+    updater.set_current_train_step(global_train_step=0, epoch=1)
+
+    opt = updater.get_optimizer()
+    assert isinstance(opt, AMUSE)
+    assert opt.update_type == "adamw"
+    opt.train()
+    for param in model.parameters():
+        param.grad = torch.ones_like(param)
+    updater.step()
+    opt.eval()
+    assert all("z" in opt.state[p] for p in model.parameters())
+
+    with tempfile.TemporaryDirectory(prefix="returnn_test_amuse_optimizer") as tmp_dir:
+        updater.save_optimizer(tmp_dir + "/model.opt.pt")
+        updater.load_optimizer(tmp_dir + "/model.opt.pt")
+
+
+def test_amuse_engine_train():
+    # Also tests the engine schedule-free hooks: AMUSE raises in step() if not in train mode.
+    config = Config(
+        dict(
+            task="train",
+            device="cpu",
+            extern_data={"data": {"dim": 9}, "classes": {"dim": 2, "sparse": True}},
+            get_model=TrainTestModel,
+            train_step=TrainTestModel.train_step,
+            batch_size=500,
+            torch_dataloader_opts={"num_workers": 0},
+            optimizer={"class": "amuse", "update_type": "adamw", "warmup_steps": 5},
+        )
+    )
+    dataset = init_dataset({"class": "Task12AXDataset", "num_seqs": 100, "name": "train"})
+    dataset.init_seq_order(epoch=1)
+
+    with global_config_ctx(config):
+        engine = Engine(config=config)
+        engine.init_train_from_config(train_data=dataset)
+        engine.train()
+        # The engine must have switched to eval mode at the train epoch end,
+        # so params (and thus any saved checkpoint) hold the averaged weights.
+        assert engine._updater.get_optimizer().train_mode is False
+
+
+def test_amuse_legacy_group_keys_error():
+    from returnn.torch.optim.amuse import AMUSE
+
+    model = torch.nn.Linear(4, 3)
+    for legacy_group_opts in ({"use_muon": True}, {"update_type": "muon"}, {"aux_update_type": "sgd"}):
+        try:
+            AMUSE([{"params": list(model.parameters()), **legacy_group_opts}], warmup_steps=5)
+        except ValueError as exc:
+            assert "no longer supported" in str(exc) or "Per-group update types" in str(exc)
+        else:
+            raise AssertionError(f"expected ValueError for legacy group opts {legacy_group_opts}")
+
+
+def test_amuse_zero_lr():
+    from returnn.torch.optim.amuse import AMUSE
+
+    # With lr 0 throughout, all per-step averaging weights are zero, so ckp1 stays at its 1.0 fallback.
+    # Past warmup, the beta1 ramp must not divide by (1 - ckp1) == 0 then.
+    model = torch.nn.Linear(4, 3)
+    opt = AMUSE(list(model.parameters()), lr=0.0, warmup_steps=2)
+    opt.train()
+    for _ in range(4):
+        for param in model.parameters():
+            param.grad = torch.ones_like(param)
+        opt.step()
+    opt.eval()
+    for param in model.parameters():
+        assert torch.isfinite(param).all()
+
+
+def _exact_orthogonalization(grad: torch.Tensor) -> torch.Tensor:
+    """Float32 polar factor via the SVD, a deterministic stand-in for the bf16 Newton-Schulz in tests."""
+    u, _, vh = torch.linalg.svd(grad.float(), full_matrices=False)
+    return u @ vh
+
+
+def test_muon_update_higher_rank():
+    """3D params are orthogonalized per matrix over the last two dims, 4D params are flattened to (out, -1)."""
+    from unittest import mock
+    from returnn.torch.optim import amuse
+
+    with mock.patch.object(amuse, "zeropower_via_newtonschulz5", _exact_orthogonalization):
+        torch.manual_seed(0)
+        grad = torch.randn(8, 1, 5)
+        momentum = torch.zeros_like(grad)
+        batched = amuse.muon_update(grad.clone(), momentum.clone(), aux_update_type="adamw")
+        per_slice = torch.stack(
+            [amuse.muon_update(grad[i].clone(), momentum[i].clone(), aux_update_type="adamw") for i in range(len(grad))]
+        )
+        assert torch.allclose(batched, per_slice, atol=1e-6), (batched - per_slice).abs().max()
+
+        grad4 = torch.randn(8, 4, 3, 3)
+        ref = amuse.muon_update(grad4.clone(), torch.zeros_like(grad4), aux_update_type="adamw")
+        flat = amuse.muon_update(grad4.reshape(8, -1).clone(), torch.zeros(8, 36), aux_update_type="adamw")
+        assert torch.allclose(ref, flat, atol=1e-6), (ref - flat).abs().max()
+        out = amuse.muon_update(
+            grad4.clone().to(memory_format=torch.channels_last), torch.zeros_like(grad4), aux_update_type="adamw"
+        )
+        assert torch.allclose(out, ref, atol=1e-6), (out - ref).abs().max()
+
+
+def test_newton_schulz_orthogonalization():
+    """Newton-Schulz keeps the singular vectors and puts the singular values into the (0.5, 1.5) band Muon relies on."""
+    from returnn.torch.optim.amuse import zeropower_via_newtonschulz5
+
+    for rows, cols in [(8, 16), (16, 8), (4, 36), (1, 5), (5, 1)]:
+        for seed in range(5):
+            torch.manual_seed(seed)
+            rank = min(rows, cols)
+            u, _ = torch.linalg.qr(torch.randn(rows, rank))
+            v, _ = torch.linalg.qr(torch.randn(cols, rank))
+            grad = (u * torch.linspace(0.2, 1.0, rank)) @ v.T
+            polar = u @ v.T
+            out = zeropower_via_newtonschulz5(grad)
+            assert out.dtype == torch.bfloat16 and out.shape == grad.shape
+            assert torch.equal(zeropower_via_newtonschulz5(grad.T), out.T), (rows, cols, seed)
+            out = out.float()
+            singular_values = torch.linalg.svdvals(out)
+            assert torch.all(singular_values > 0.5) and torch.all(singular_values < 1.5), (rows, cols, singular_values)
+            u_out, _, vh_out = torch.linalg.svd(out, full_matrices=False)
+            direction_err = (u_out @ vh_out - polar).norm() / polar.norm()
+            assert direction_err < 0.1, (rows, cols, seed, direction_err)
+
+
+def test_amuse_zero_lr_at_warmup_boundary():
+    from returnn.torch.optim.amuse import AMUSE
+
+    # An externally scheduled lr of 0 exactly at the warmup boundary step records c_warmup 0.
+    # The next positive-lr step must re-anchor the beta1 ramp there,
+    # not crash and not ramp away from beta1_init.
+    model = torch.nn.Linear(4, 3)
+    opt = AMUSE(list(model.parameters()), lr=0.1, warmup_steps=3)
+    opt.train()
+    betas = []
+    for lr in (0.1, 0.1, 0.0, 0.1, 0.1):
+        for group in opt.param_groups:
+            group["lr"] = lr
+        for param in model.parameters():
+            param.grad = torch.ones_like(param)
+        opt.step()
+        betas.append(float(opt.param_groups[0]["beta1"]))
+    opt.eval()
+    assert all(opt.beta1_init <= beta < 1.0 for beta in betas), betas
+    assert betas[-1] > opt.beta1_init, betas
+
+
+def test_amuse_constructor_validation():
+    from returnn.torch.optim.amuse import AMUSE
+
+    model = torch.nn.Linear(4, 3)
+    params = list(model.parameters())
+    for bad_kwargs in (
+        {"warmup_steps": 0},
+        {"warmup_steps": 0.5},
+        {"warmup_steps": 5, "beta1": 0.0},
+        {"warmup_steps": 5, "beta1": 1.0},
+        {"warmup_steps": 5, "rho": 2.0},
+        {"warmup_steps": 5, "rho": -1.0},
+    ):
+        try:
+            AMUSE(params, **bad_kwargs)
+        except ValueError:
+            pass
+        else:
+            raise AssertionError(f"expected ValueError for {bad_kwargs}")
+
+    # rho 0 is the fixed-beta1 AMUSE variant from the paper, must be accepted.
+    AMUSE(params, warmup_steps=5, rho=0.0)
+
+    # Muon needs matrix params, so the 1D bias must be rejected at construction, not at step time.
+    try:
+        AMUSE(params, warmup_steps=5, update_type="muon")
+    except ValueError as exc:
+        assert "ndim" in str(exc)
+    else:
+        raise AssertionError("expected ValueError for a 1D param with update_type muon")
+    AMUSE([p for p in params if p.ndim >= 2], warmup_steps=5, update_type="muon")
+
+
+def test_multi_optimizer_amuse():
+    from returnn.torch.optim.amuse import AMUSE
+    from returnn.torch.optim.multi import MultiOptimizer
+
+    config = Config(
+        dict(
+            optimizer={
+                "class": "multi",
+                "optimizers": [
+                    {
+                        "class": "amuse",
+                        "update_type": "muon",
+                        "params_filter": _multi_test_hidden_matrix_filter,
+                        "momentum": 0.95,
+                        "weight_decay": 0.05,
+                        "warmup_steps": 5,
+                    },
+                    {
+                        "class": "amuse",
+                        "update_type": "adamw",
+                        "learning_rate_multiplier": 0.015,
+                        "weight_decay": 0.05,
+                        "warmup_steps": 5,
+                    },
+                ],
+            }
+        )
+    )
+    model = _make_multi_test_model()
+    updater = Updater(config=config, network=model, device=torch.device("cpu"))
+    updater.create_optimizer()
+    updater.set_learning_rate(0.02)
+    updater.set_current_train_step(global_train_step=0, epoch=1)
+
+    opt = updater.get_optimizer()
+    assert isinstance(opt, MultiOptimizer)
+    muon_sub, adamw_sub = opt.sub_optimizers
+    assert isinstance(muon_sub, AMUSE) and muon_sub.update_type == "muon"
+    assert isinstance(adamw_sub, AMUSE) and adamw_sub.update_type == "adamw"
+    assert all(pg["lr"] == 0.02 for pg in muon_sub.param_groups)
+    assert all(pg["lr"] == 0.02 * 0.015 for pg in adamw_sub.param_groups)
+
+    updater.set_optimizer_training_mode(train=True)
+    assert muon_sub.train_mode and adamw_sub.train_mode
+    for param in model.parameters():
+        param.grad = torch.ones_like(param)
+    updater.step()
+    updater.set_optimizer_training_mode(train=False)
+    assert not muon_sub.train_mode and not adamw_sub.train_mode
+
+
+def test_amuse_pickle_keeps_attributes():
+    import copy
+    import pickle
+
+    from returnn.torch.optim.amuse import AMUSE
+    from returnn.torch.optim.multi import MultiOptimizer
+
+    model = torch.nn.Linear(4, 3)
+    opt = MultiOptimizer(
+        sub_optimizers=[
+            AMUSE([model.weight], lr=0.1, update_type="muon", warmup_steps=5),
+            AMUSE([model.bias], lr=0.1, update_type="adamw", warmup_steps=5, rho=0.5),
+        ]
+    )
+    opt.train()
+    copied = copy.deepcopy(opt)
+    copied.eval()
+    copied.train()
+    muon, adamw = copied.sub_optimizers
+    assert muon.update_type == "muon" and adamw.update_type == "adamw"
+    assert adamw.rho == 0.5 and adamw.warmup_steps == 5 and adamw.train_mode
+    unpickled = pickle.loads(pickle.dumps(opt.sub_optimizers[1]))
+    assert unpickled.update_type == "adamw" and unpickled.train_mode
+
+
+def test_amuse_load_python_schedule_state():
+    # Checkpoints of the earlier AMUSE keep the schedule state of a param group as Python numbers.
+    # Loaded, the state continues as the device tensors, the steps afterwards match the run without the reload.
+    from returnn.torch.optim.amuse import AMUSE
+
+    torch.manual_seed(0)
+    model = torch.nn.Linear(4, 3)
+    opt = AMUSE(list(model.parameters()), lr=0.05, warmup_steps=2)
+    opt.train()
+    for step in range(3):
+        for param in model.parameters():
+            param.grad = torch.full_like(param, step + 1.0)
+        opt.step()
+    opt.eval()
+    state_dict = copy.deepcopy(opt.state_dict())
+    for group in state_dict["param_groups"]:
+        for key, value in group.items():
+            if isinstance(value, torch.Tensor):
+                group[key] = int(value) if key == "k" else float(value)
+    model2 = copy.deepcopy(model)
+    opt2 = AMUSE(list(model2.parameters()), lr=0.05, warmup_steps=2)
+    opt2.load_state_dict(state_dict)
+    for opt_, model_ in ((opt, model), (opt2, model2)):
+        opt_.train()
+        for param in model_.parameters():
+            param.grad = torch.full_like(param, 4.0)
+        opt_.step()
+        opt_.eval()
+    for p, p2 in zip(model.parameters(), model2.parameters()):
+        torch.testing.assert_close(p2, p, rtol=0.0, atol=0.0)
+
+
+def _reference_amuse_muon_update(grad, momentum, beta, aux_update_type):
+    """muon_update transcribed from kjeiun/amuse src/optim/AMUSE.py at commit 4892274"""
+    from returnn.torch.optim.amuse import zeropower_via_newtonschulz5
+
+    momentum.lerp_(grad, 1 - beta)
+    update = grad.lerp_(momentum, beta)
+    if update.ndim == 4:
+        update = update.view(len(update), -1)
+    update = zeropower_via_newtonschulz5(update)
+    if aux_update_type == "adamw":
+        update *= 0.2 * max(update.size(0), update.size(1)) ** 0.5
+    else:
+        update *= max(1, update.size(-2) / update.size(-1)) ** 0.5
+    return update
+
+
+@torch.no_grad()
+def _reference_amuse_step(groups, states, *, beta1_init, warmup_steps, rho, r, weight_lr_power):
+    """AMUSE.step transcribed from kjeiun/amuse src/optim/AMUSE.py at commit 4892274, group level state"""
+    for group in groups:
+        k = group["k"]
+        t = k + 1
+        lr = group["base_lr"] * min(1.0, t / warmup_steps)
+        weight = (t**r) * (lr**weight_lr_power)
+        future_weight_sum = group.get("weight_sum", 0.0) + weight
+        ckp1 = weight / future_weight_sum if future_weight_sum > 0 else 1.0
+        group["ckp1"] = ckp1
+        group["weight_sum"] = future_weight_sum
+        if t <= warmup_steps:
+            if t == warmup_steps:
+                group["c_warmup"] = ckp1
+            beta1 = beta1_init
+        else:
+            c_warmup = group.get("c_warmup", 1.0 / warmup_steps)
+            s_t = (ckp1 * (1.0 - c_warmup)) / (c_warmup * (1.0 - ckp1))
+            beta1 = 1.0 - (s_t**rho) * (1.0 - beta1_init)
+        group["beta1"] = beta1
+        wd = group.get("weight_decay", 0.0)
+        for p in group["params"]:
+            if p.grad is None:
+                continue
+            state = states[p]
+            z = state.get("z")
+            if z is None:
+                z = state["z"] = p.detach().clone()
+            p.lerp_(end=z, weight=1.0 - 1.0 / beta1)
+            if group["update_type"] == "muon":
+                if "momentum_buffer" not in state:
+                    state["momentum_buffer"] = torch.zeros_like(p)
+                update = _reference_amuse_muon_update(p.grad, state["momentum_buffer"], group["momentum"], "adamw")
+                if wd != 0.0:
+                    z.mul_(1.0 - lr * wd)
+                z.add_(update.reshape(p.shape), alpha=-lr)
+            else:
+                if "exp_avg_sq" not in state:
+                    state["exp_avg_sq"] = torch.zeros_like(p)
+                v = state["exp_avg_sq"]
+                grad = p.grad
+                v.mul_(group["beta2"]).addcmul_(grad, grad, value=1.0 - group["beta2"])
+                denom = v.div(1.0 - group["beta2"] ** t).sqrt_().add_(group["eps"])
+                update = grad / denom
+                if wd != 0.0:
+                    update = update.add(z, alpha=wd)
+                z.add_(update, alpha=-lr)
+            p.lerp_(end=z, weight=ckp1)
+            p.lerp_(end=z, weight=1.0 - beta1)
+        group["k"] = k + 1
+
+
+def test_amuse_matches_reference_implementation():
+    from returnn.torch.optim.amuse import AMUSE
+
+    # Muon on a matrix and a 4D kernel, AdamW-style on a matrix and a vector,
+    # the vector gets no gradient in some steps, run past the warmup so beta1 ramps.
+    torch.manual_seed(1)
+    shapes = [(6, 4), (3, 2, 3, 3), (5, 4), (6,)]
+    params = [torch.nn.Parameter(torch.randn(*shape, dtype=torch.float64)) for shape in shapes]
+    params_ref = [torch.nn.Parameter(p.detach().clone()) for p in params]
+    warmup, steps, base_lr, wd = 3, 10, 0.05, 0.01
+    schedule = dict(beta1=0.9, rho=1.0, r=0.0, weight_lr_power=2.0)
+    opt_muon = AMUSE(
+        params[:2], lr=base_lr, update_type="muon", momentum=0.95, weight_decay=wd, warmup_steps=warmup, **schedule
+    )
+    opt_adamw = AMUSE(
+        params[2:],
+        lr=base_lr * 0.5,
+        update_type="adamw",
+        beta2=0.999,
+        eps=1e-10,
+        weight_decay=wd,
+        warmup_steps=warmup,
+        **schedule,
+    )
+    groups_ref = [
+        {
+            "params": params_ref[:2],
+            "base_lr": base_lr,
+            "k": 0,
+            "weight_decay": wd,
+            "update_type": "muon",
+            "momentum": 0.95,
+        },
+        {
+            "params": params_ref[2:],
+            "base_lr": base_lr * 0.5,
+            "k": 0,
+            "weight_decay": wd,
+            "update_type": "adamw",
+            "beta2": 0.999,
+            "eps": 1e-10,
+        },
+    ]
+    states_ref = {p: {} for p in params_ref}
+    ref_schedule = dict(beta1_init=0.9, rho=1.0, r=0.0, weight_lr_power=2.0, warmup_steps=warmup)
+
+    opt_muon.train()
+    opt_adamw.train()
+    for step in range(steps):
+        for i, (p, p_ref) in enumerate(zip(params, params_ref)):
+            grad = None if (i == 3 and step % 4 == 1) else torch.randn_like(p)
+            p.grad = None if grad is None else grad.clone()
+            p_ref.grad = None if grad is None else grad.clone()
+        opt_muon.step()
+        opt_adamw.step()
+        _reference_amuse_step(groups_ref, states_ref, **ref_schedule)
+        for p, p_ref in zip(params, params_ref):
+            assert torch.allclose(p, p_ref, rtol=1e-10, atol=1e-10), step
+            opt = opt_muon if p in {params[0], params[1]} else opt_adamw
+            assert torch.allclose(opt.state[p]["z"], states_ref[p_ref]["z"], rtol=1e-10, atol=1e-10), step
+    assert opt_muon.param_groups[0]["beta1"] > 0.9
+    opt_muon.eval()
+    opt_adamw.eval()
+    with torch.no_grad():
+        for group in groups_ref:
+            for p_ref in group["params"]:
+                p_ref.lerp_(end=states_ref[p_ref]["z"], weight=1.0 - 1.0 / group["beta1"])
+    for p, p_ref in zip(params, params_ref):
+        assert torch.allclose(p, p_ref, rtol=1e-10, atol=1e-10)
+
+
 def test_updater_lr_multipliers():
     from collections import defaultdict
     from fnmatch import fnmatchcase
@@ -3409,6 +3891,63 @@ def test_torch_engine_cuda_graph_optimizer_state_in_advance():
             for (name, p), (_, q) in zip(eager._pt_model.named_parameters(), captured._pt_model.named_parameters()):
                 torch.testing.assert_close(
                     q, p, rtol=1e-4, atol=1e-5, msg=lambda m: f"{optimizer}, compile {compile_}, {name}: {m}"
+                )
+
+
+def test_torch_engine_cuda_graph_amuse():
+    """
+    AMUSE under torch_cuda_graph without warmup steps, alone and as Muon and AdamW sub-optimizers,
+    its step in the graph (capture_optimizer, compiled or not) or stepped by the engine outside of it,
+    and the eager model step with the separately compiled and captured optimizer step (torch_optimizer_step).
+    The schedule state lives on the device and the step reads nothing on the host,
+    so the params after training match the eager engine.
+    """
+    if not torch.cuda.is_available():
+        raise unittest.SkipTest("CUDA not available")
+    for optimizer in [
+        {"class": "amuse", "update_type": "adamw", "warmup_steps": 5},
+        {
+            "class": "multi",
+            "optimizers": [
+                {
+                    "class": "amuse",
+                    "update_type": "muon",
+                    "params_filter": _multi_test_hidden_matrix_filter,
+                    "warmup_steps": 5,
+                },
+                {"class": "amuse", "update_type": "adamw", "warmup_steps": 5},
+            ],
+        },
+    ]:
+        eager = _run_cuda_graph_train(compile_=False, cuda_graph=False, optimizer=optimizer)
+        captured_runs = [
+            (
+                f"capture_optimizer, compile {compile_}",
+                _run_cuda_graph_train(compile_=compile_, warmup_steps=None, optimizer=optimizer),
+            )
+            for compile_ in (False, True)
+        ]
+        config, dataset = _build_cuda_graph_train_config_and_dataset(
+            compile_=False, warmup_steps=None, optimizer=optimizer
+        )
+        config.typed_dict["torch_cuda_graph"]["capture_optimizer"] = False
+        with global_config_ctx(config):
+            engine = Engine(config=config)
+            engine.init_train_from_config(train_data=dataset)
+            engine.train()
+            assert engine._graph_capture is not None and engine._graph_capture._graph is not None
+            engine.finalize()
+        captured_runs.append(("engine optimizer step", engine))
+        captured_runs.append(
+            (
+                "torch_optimizer_step",
+                _run_cuda_graph_train(compile_=False, cuda_graph=False, optimizer_step=True, optimizer=optimizer),
+            )
+        )
+        for run_name, captured in captured_runs:
+            for (name, p), (_, q) in zip(eager._pt_model.named_parameters(), captured._pt_model.named_parameters()):
+                torch.testing.assert_close(
+                    q, p, rtol=1e-4, atol=1e-5, msg=lambda m: f"{optimizer['class']}, {run_name}, {name}: {m}"
                 )
 
 
