@@ -536,6 +536,16 @@ class Updater:
         tmp_filename = filename + ".tmp_write"
         if os.path.exists(tmp_filename):
             os.unlink(tmp_filename)
+        # optimizer_opts is saved as metadata only (load_optimizer ignores it).
+        # Drop callables like param_groups_custom or weight_decay_custom_include_check (also nested)
+        # so torch.load (weights_only=True since torch 2.6) can read it.
+        # An optimizer config given as a callable or an optimizer instance is dropped completely for the same reason.
+        optimizer_opts_to_save = self._optimizer_opts
+        if isinstance(optimizer_opts_to_save, dict):
+            optimizer_opts_to_save = _drop_callables_deep(optimizer_opts_to_save)
+        elif isinstance(optimizer_opts_to_save, torch.optim.Optimizer) or callable(optimizer_opts_to_save):
+            optimizer_opts_to_save = None
+
         optimizer_state_dict = self.optimizer.state_dict()
         if self._optimizer_step is not None:
             # keep the ordinary Python scalars (lr, counters) in the checkpoint
@@ -544,7 +554,7 @@ class Updater:
             {
                 "optimizer": optimizer_state_dict,
                 "optimizer_class_name": self.optimizer.__class__.__name__,
-                "optimizer_opts": self._optimizer_opts,
+                "optimizer_opts": optimizer_opts_to_save,
                 "param_names": param_names,
                 "epoch": self._current_epoch,
                 "step": self._current_train_step,
@@ -769,6 +779,18 @@ def wrap_user_blacklist_wd_modules(
         assert issubclass(mod, (rf.Module, torch.nn.Module)), f"invalid blacklist_weight_decay_modules {mods!r}"
         res.append(mod)
     return tuple(res)
+
+
+def _drop_callables_deep(obj: Any) -> Any:
+    """
+    :param obj: nested structure of dicts/lists/tuples
+    :return: copy with callable dict values and callable list/tuple entries dropped
+    """
+    if isinstance(obj, dict):
+        return {k: _drop_callables_deep(v) for k, v in obj.items() if not callable(v)}
+    if isinstance(obj, (list, tuple)):
+        return type(obj)(_drop_callables_deep(v) for v in obj if not callable(v))
+    return obj
 
 
 def gradient_noise_(params: Iterable[torch.nn.Parameter], std: float):
