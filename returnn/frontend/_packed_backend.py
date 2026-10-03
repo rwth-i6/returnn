@@ -1227,9 +1227,9 @@ def _batch_norm_gapped(source: Tensor, kwargs) -> Optional[Tensor]:
             n_dev = rf.copy_to_device(n_t, inner.device)
             _layout_cache.set(n_key, n_dev)
     n = rf.cast(n_dev, inner.dtype)
-    x0 = rf.where(mask, inner, 0.0)  # only x0 below: junk rows can be non-finite
-    mean = rf.reduce_sum(x0, axis=raw.packed_dim, use_mask=False) / n
-    diff = rf.where(mask, x0 - mean, 0.0)
+    inner = rf.where(mask, inner, 0.0)
+    mean = rf.reduce_sum(inner, axis=raw.packed_dim, use_mask=False) / n
+    diff = rf.where(mask, inner - mean, 0.0)
     var = rf.reduce_sum(diff * diff, axis=raw.packed_dim, use_mask=False) / n
     if running_mean is not None:
         import torch
@@ -1247,7 +1247,7 @@ def _batch_norm_gapped(source: Tensor, kwargs) -> Optional[Tensor]:
                 unbiased = n_f / max(n_f - 1.0, 1.0)
                 rm.mul_(1.0 - momentum).add_(mean.raw_tensor.detach().to(rm.dtype), alpha=momentum)
                 rv.mul_(1.0 - momentum).add_(var.raw_tensor.detach().to(rv.dtype) * unbiased, alpha=momentum)
-    out_inner = (x0 - mean) / rf.sqrt(var + epsilon)
+    out_inner = (inner - mean) / rf.sqrt(var + epsilon)
     if affine:
         out_inner = out_inner * gamma + beta
     out_inner.feature_dim = in_dim
