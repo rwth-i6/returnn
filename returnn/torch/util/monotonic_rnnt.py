@@ -9,7 +9,8 @@ The lattice is packed: the activations of all sequences sit in one axis, per seq
 outer and the prefix index inner, which is the layout ``i6_native_ops.monotonic_rnnt`` takes as well.
 Lengths stay on the device, nothing here reads them on the host, so the loss traces and captures.
 
-On cuda everything runs as Triton kernels (:mod:`returnn.torch.util.monotonic_rnnt_triton`), the per-cell
+On cuda everything runs as Triton kernels (:mod:`returnn.triton.monotonic_rnnt`, launched in
+:mod:`returnn.torch.util.monotonic_rnnt_triton`), the per-cell
 reductions over the vocabulary and both sweeps of the forward-backward recursion, and no normalized
 ``[cells, vocab]`` tensor is ever materialized. The whole loss sits behind one opaque custom op pair, so
 ``aot_function`` traces it and nothing unrolls the frame loop into the compiled graph.
