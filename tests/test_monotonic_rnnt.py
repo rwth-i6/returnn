@@ -308,24 +308,34 @@ def test_monotonic_rnnt_traces_under_aot():
     from functorch.compile import aot_function, nop
 
     torch.manual_seed(5)
-    vocab, blank, batch, frames, num_labels = 32, 0, 3, 8, 3
-    frame_lens = torch.full((batch,), frames, dtype=torch.int32, device="cuda")
-    label_lens = torch.full((batch,), num_labels, dtype=torch.int32, device="cuda")
-    labels = torch.randint(1, vocab, (batch, num_labels), dtype=torch.int32, device="cuda")
-    packed = torch.randn(batch * frames * (num_labels + 1), vocab, device="cuda")
-    grad_out = torch.ones(batch, device="cuda")
+    vocab, blank, max_frames = 32, 0, 11
+    # unequal lengths, a frame bound above the longest sequence and rows past the cell sum, as a capacity leaves them
+    frame_lens = torch.tensor([8, 5, 9], dtype=torch.int32)
+    label_lens = torch.tensor([3, 1, 0], dtype=torch.int32)
+    num_cells = int((frame_lens * (label_lens + 1)).sum())
+    labels = torch.randint(1, vocab, (3, 3), dtype=torch.int32)
+    packed = torch.randn(num_cells + 7, vocab)
+    grad_out = torch.randn(3)
 
     def loss_of(x, lab, flens, ulens):
-        return monotonic_rnnt_loss(x, lab, flens, ulens, blank=blank, max_frames=frames)
+        return monotonic_rnnt_loss(x, lab, flens, ulens, blank=blank, max_frames=max_frames)
 
-    want = []
-    for func in (loss_of, aot_function(loss_of, fw_compiler=nop, bw_compiler=nop)):
-        x = packed.clone().requires_grad_()
-        loss = func(x, labels, frame_lens, label_lens)
-        loss.backward(grad_out)
-        want.append((loss.detach().clone(), x.grad.clone()))
-    torch.testing.assert_close(want[1][0], want[0][0], rtol=1e-5, atol=1e-5)
-    torch.testing.assert_close(want[1][1], want[0][1], rtol=1e-4, atol=1e-6)
+    # the traced program against the eager one and both against the reference on cpu
+    results = []
+    for device, func in (
+        ("cpu", loss_of),
+        ("cuda", loss_of),
+        ("cuda", aot_function(loss_of, fw_compiler=nop, bw_compiler=nop)),
+    ):
+        x = packed.to(device).detach().clone().requires_grad_()
+        loss = func(x, labels.to(device), frame_lens.to(device), label_lens.to(device))
+        loss.backward(grad_out.to(device))
+        results.append((loss.detach().cpu(), x.grad.cpu()))
+    for loss, grad in results[1:]:
+        torch.testing.assert_close(loss, results[0][0], rtol=1e-5, atol=1e-5)
+        torch.testing.assert_close(grad, results[0][1], rtol=1e-4, atol=1e-6)
+    # the rows past the cell sum belong to no sequence
+    assert not results[2][1][num_cells:].any()
 
 
 if __name__ == "__main__":
