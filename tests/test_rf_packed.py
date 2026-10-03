@@ -2189,14 +2189,15 @@ def test_batch_norm_packed_gapped_with_a_static_axis():
     _, batch_dim, time_dim, feat_dim = _make_input(seq_lens=(3, 2), feat=2, seed=9)
     xk = Tensor("xk", dims=[batch_dim, time_dim, Dim(2, name="k"), feat_dim], dtype="float32")
     xk.raw_tensor = torch.arange(24, dtype=torch.float32).reshape(2, 3, 2, 2)
-    for total_bound in (None, 12):
+    # gapped, gapped bound, dense bound (unused tail only)
+    for gap, total_bound in [(2, None), (2, 12), (0, 8)]:
         with rf.set_default_device_ctx("cpu"):
             rf.set_random_seed(3)
             bn_dense = rf.BatchNorm(feat_dim, use_mask=False)
             bn_gapped = rf.BatchNorm(feat_dim, use_mask=False)
             with rf.get_run_ctx().train_flag_ctx(True):
                 out_dense = bn_dense(packed.pack(xk))
-                out_gapped = bn_gapped(packed.pack(xk, gap=2, total_bound=total_bound))
+                out_gapped = bn_gapped(packed.pack(xk, gap=gap, total_bound=total_bound))
         assert packed.is_packed(out_gapped)
         _assert_equal_non_padded(out_gapped, packed.unpack(out_dense), batch_dim, time_dim)
         for p_dense, p_gapped in [
