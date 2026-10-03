@@ -23,7 +23,8 @@ Config, e.g.::
     }
 
 The trace runs the unchanged ``optimizer.step()`` on explicit inputs:
-per param group the lr, per param (with grad) the param, its grad and its tensor state entries.
+per param group the lr and its other tensor entries,
+per param (with grad) the param, its grad and its tensor state entries.
 The in-place updates of params and state are input mutations of the traced function,
 kept in the compiled graph (Inductor writes them in place).
 Tensor-valued ``alpha`` / ``value`` arguments (e.g. ``p.add_(u, alpha=-lr)`` with a tensor lr)
@@ -227,15 +228,22 @@ class OptimizerStep:
         state = self._optimizer.state.get(p, {})
         return sorted(k for k, v in state.items() if isinstance(v, torch.Tensor))
 
+    @staticmethod
+    def _group_tensor_keys(group: Dict[str, Any]) -> List[str]:
+        """the tensor entries of a param group besides the lr (e.g. a schedule state), sorted"""
+        return sorted(k for k, v in group.items() if k != "lr" and isinstance(v, torch.Tensor))
+
     def _inputs(self) -> List[torch.Tensor]:
         """
         :return: the explicit inputs of the compiled step:
-            per group: lr, then per param with grad: param, grad, tensor state entries (sorted keys)
+            per group: lr, the other tensor entries of the group (sorted keys),
+            then per param with grad: param, grad, tensor state entries (sorted keys)
         """
         res = []
         state = self._optimizer.state
         for group in self._optimizer.param_groups:
             res.append(group["lr"])
+            res += [group[k] for k in self._group_tensor_keys(group)]
             for p in self._params_with_grad(group):
                 res += [p, p.grad]
                 res += [state[p][k] for k in self._state_tensor_keys(p)]
@@ -250,6 +258,7 @@ class OptimizerStep:
         state = self._optimizer.state
         for group in self._optimizer.param_groups:
             params = self._params_with_grad(group)
+            res.append(tuple(self._group_tensor_keys(group)))
             res.append(len(params))
             for p in params:
                 s = state.get(p, {})
@@ -280,17 +289,21 @@ class OptimizerStep:
         groups = opt.param_groups
         # the real params per group, and the state keys per param, in the order of _inputs
         structure = [[(p, self._state_tensor_keys(p)) for p in self._params_with_grad(group)] for group in groups]
+        group_tensor_keys = [self._group_tensor_keys(group) for group in groups]
 
         def step_core(inputs: List[torch.Tensor]) -> Tuple[torch.Tensor, ...]:
-            """optimizer.step() with lr, params, grads and state swapped for the given inputs"""
+            """optimizer.step() with lr, group tensors, params, grads and state swapped for the given inputs"""
             saved_lrs = [group["lr"] for group in groups]
+            saved_group_tensors = [{k: group[k] for k in keys} for group, keys in zip(groups, group_tensor_keys)]
             saved_params = [group["params"] for group in groups]
             saved_state = opt.state
             it = iter(inputs)
             new_state = defaultdict(dict)
             try:
-                for group, group_structure in zip(groups, structure):
+                for group, keys, group_structure in zip(groups, group_tensor_keys, structure):
                     group["lr"] = next(it)
+                    for k in keys:
+                        group[k] = next(it)
                     new_params = []
                     for p, keys in group_structure:
                         p_, grad = next(it), next(it)
@@ -305,8 +318,9 @@ class OptimizerStep:
                 with _TensorScalarArgsMode():
                     opt.step()
             finally:
-                for group, lr, params in zip(groups, saved_lrs, saved_params):
+                for group, lr, group_tensors, params in zip(groups, saved_lrs, saved_group_tensors, saved_params):
                     group["lr"] = lr
+                    group.update(group_tensors)
                     group["params"] = params
                 opt.state = saved_state
             return ()  # all effects are input mutations
