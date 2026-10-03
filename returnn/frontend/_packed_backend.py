@@ -1215,6 +1215,8 @@ def _batch_norm_gapped(source: Tensor, kwargs) -> Optional[Tensor]:
         or in_dim not in inner.dims
         or raw.packed_dim not in inner.dims
         or any(d.dimension is None for d in extra)
+        # an unpacked dim the seq lens depend on: the valid-frame count below would be per entry, not a scalar
+        or any(d in raw.orig_dims[-1].dyn_size_ext.dims for d in extra)
     ):
         return None  # unusual layout, keep the generic path
     if raw.inner_backend.name != "torch":

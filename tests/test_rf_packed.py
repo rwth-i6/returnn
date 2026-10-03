@@ -2209,6 +2209,16 @@ def test_batch_norm_packed_gapped_with_a_static_axis():
             )
 
 
+def test_batch_norm_packed_gapped_unpacked_dim_of_the_seq_lens():
+    """a static dim the seq lens depend on, left unpacked, is no extra stat axis: the masked path is not taken"""
+    rf.select_backend_torch()
+    x, batch_dim, time_dim, feat_dim = _make_input(seq_lens=(3, 2), feat=2)
+    for gap, total_bound in [(2, None), (2, 12), (0, 8)]:
+        xp = packed.pack(x, dims=[time_dim], gap=gap, total_bound=total_bound)
+        assert batch_dim in xp.raw_tensor.inner.dims
+        assert packed._batch_norm_gapped(xp, {"in_dim": feat_dim}) is None, (gap, total_bound)
+
+
 if __name__ == "__main__":
     better_exchook.install()
     if len(sys.argv) <= 1:
