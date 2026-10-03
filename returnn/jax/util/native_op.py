@@ -539,13 +539,14 @@ def _fast_bw_loss_packed_bwd(logits_normalize, n_states, res, grad_output):
     grad_x = (jnp.exp(log_sm) - bw) if logits_normalize else -bw
     # Each packed frame belongs to the last seq starting at or before it,
     # which is what makes the ascending seq_starts contract necessary.
-    # Frames beyond a seq's length (gap / alignment padding)
+    # Frames beyond a seq's length (gap / alignment padding) or before the first seq start
     # belong to no seq and get zero grad.
     total = grad_x.shape[0]
     frame = jnp.arange(total, dtype=seq_starts.dtype)
-    seq_idx = jnp.searchsorted(seq_starts, frame, side="right") - 1
+    seq_idx = jnp.maximum(jnp.searchsorted(seq_starts, frame, side="right") - 1, 0)
     lens = seq_mask.sum(axis=0).astype(seq_starts.dtype)  # (batch,)
-    within = (frame - seq_starts[seq_idx]) < lens[seq_idx]
+    offsets = frame - seq_starts[seq_idx]
+    within = (offsets >= 0) & (offsets < lens[seq_idx])
     grad_x = jnp.where(within[:, None], grad_x, 0.0)
     grad_x = grad_x * grad_output[seq_idx][:, None]
     return grad_x, None, None, None, None, None

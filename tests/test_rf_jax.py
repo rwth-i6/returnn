@@ -1628,6 +1628,40 @@ def test_ctc_loss_native_op_matches_optax():
     numpy.testing.assert_allclose(grad_native, grad_ref, rtol=1e-4, atol=1e-5)
 
 
+def test_ctc_loss_packed_leading_gap_grad():
+    """frames before the first sequence start belong to no sequence, so they get no gradient"""
+    import jax
+    from returnn.jax.util.native_op import ctc_loss_packed
+
+    _rf_jax()
+    logits = jnp.asarray(numpy.random.RandomState(7).randn(11, 5).astype("float32"))
+    lens = jnp.asarray(numpy.array([3, 2], dtype="int32"))
+    targets = jnp.asarray(numpy.array([[1], [2]], dtype="int32"))
+    tgt_lens = jnp.asarray(numpy.array([1, 1], dtype="int32"))
+
+    def _loss(x, starts):
+        return ctc_loss_packed(
+            logits=x,
+            seq_starts=jnp.asarray(numpy.array(starts, dtype="int32")),
+            logits_seq_lens=lens,
+            max_seq_len=3,
+            targets=targets,
+            targets_seq_lens=tgt_lens,
+            blank_index=4,
+        )
+
+    loss, vjp = jax.vjp(lambda x: _loss(x, [2, 7]), logits)
+    (grad,) = vjp(jnp.ones_like(loss))
+    logits_tight = jnp.concatenate([logits[2:5], logits[7:9]])
+    loss_tight, vjp_tight = jax.vjp(lambda x: _loss(x, [0, 3]), logits_tight)
+    (grad_tight,) = vjp_tight(jnp.ones_like(loss_tight))
+    grad, grad_tight = numpy.asarray(grad), numpy.asarray(grad_tight)
+    numpy.testing.assert_allclose(numpy.asarray(loss), numpy.asarray(loss_tight), rtol=1e-5, atol=1e-5)
+    numpy.testing.assert_allclose(numpy.concatenate([grad[2:5], grad[7:9]]), grad_tight, rtol=1e-5, atol=1e-5)
+    for rows in (grad[:2], grad[5:7], grad[9:]):
+        assert (rows == 0).all(), grad
+
+
 def test_checkpoint_is_ocdbt_and_compact():
     """
     Checkpoints must use OCDBT: 18 inodes vs 513 at 169 arrays, ~3.6k vs ~103k over 100 epochs.
