@@ -1227,8 +1227,8 @@ def _batch_norm_gapped(source: Tensor, kwargs) -> Optional[Tensor]:
             n_dev = rf.copy_to_device(n_t, inner.device)
             _layout_cache.set(n_key, n_dev)
     n = rf.cast(n_dev, inner.dtype)
-    x0 = rf.where(mask, inner, 0.0)
-    mean = rf.reduce_sum(x0, axis=raw.packed_dim, use_mask=False) / n
+    inner = rf.where(mask, inner, 0.0)
+    mean = rf.reduce_sum(inner, axis=raw.packed_dim, use_mask=False) / n
     diff = rf.where(mask, inner - mean, 0.0)
     var = rf.reduce_sum(diff * diff, axis=raw.packed_dim, use_mask=False) / n
     if running_mean is not None:
