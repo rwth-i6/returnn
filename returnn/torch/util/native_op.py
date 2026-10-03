@@ -3,7 +3,7 @@ Native ops for Torch, similar to :mod:`returnn.tf.native_op`.
 """
 
 from __future__ import annotations
-from typing import Optional, Any, Tuple, Dict
+from typing import Optional, Any, Callable, Tuple, Dict
 import os
 import sys
 import warnings
@@ -1018,10 +1018,14 @@ def fast_baum_welch_packed(
     return fwdbwd, obs_scores
 
 
-def make_fast_baum_welch_packed_op(**kwargs):
+def make_fast_baum_welch_packed_op(
+    **kwargs,
+) -> Callable[
+    [torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, int],
+    Tuple[torch.Tensor, torch.Tensor],
+]:
     """
     :return: op
-    :rtype: (torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, int) -> tuple[torch.Tensor, torch.Tensor]
     """
     maker = OpMaker(OpDescription.from_gen_base(native_op.FastBaumWelchPackedOp), **kwargs)
     return maker.make_op()
