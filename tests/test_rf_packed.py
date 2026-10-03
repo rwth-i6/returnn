@@ -2134,6 +2134,25 @@ def test_softmax_over_a_single_packed_axis_with_a_bound():
         )
 
 
+def test_cu_seqlens_with_host_lens_and_a_device_total():
+    rf.select_backend_torch()
+    # the bug is the host lens meeting a total on the data device, without a gpu the meta device is that
+    # second device, it has no values, so only cuda checks the boundaries themselves
+    for device in ["meta"] + (["cuda"] if torch.cuda.is_available() else []):
+        batch_dim = Dim(2, name="batch")
+        lens = Tensor("lens", dims=[batch_dim], dtype="int32", raw_tensor=torch.tensor([5, 3], dtype=torch.int32))
+        time_dim = Dim(lens, name="time")
+        total_raw = torch.tensor(8, dtype=torch.int32, device=device)
+        total = Tensor("total", dims=(), dtype="int32", raw_tensor=total_raw)
+        packed_dim = Dim(total, name="packed")
+        inner = Tensor("inner", dims=[packed_dim], dtype="float32", raw_tensor=torch.zeros(8, device=device))
+        raw = packed.PackedRawTensor(inner=inner, packed_dim=packed_dim, orig_dims=(batch_dim, time_dim))
+        cu, _ = raw.cu_seqlens(device=device)
+        assert cu.raw_tensor.device.type == device and tuple(cu.raw_tensor.shape) == (3,), cu.raw_tensor
+        if device == "cuda":
+            assert cu.raw_tensor.tolist() == [0, 5, 8]
+
+
 if __name__ == "__main__":
     better_exchook.install()
     if len(sys.argv) <= 1:
