@@ -32,7 +32,7 @@ class Cache:
       (and map the output to the Dim).
     - Tensor as keys: Use weakrefs. Also don't check by value but by identity of the raw tensor,
       so a new Tensor wrapping the same raw tensor matches (e.g. raw tensors wrapped only for the lookup).
-      Its dims (and sparse dim, feature axis) are part of the key, the dims like Dim keys
+      Its dims (and sparse dim, feature axis, version) are part of the key, the dims like Dim keys
       (and the output is mapped to them).
     """
 
@@ -176,7 +176,8 @@ class TensorWrapper:
     Using weakref for the ``raw_tensor`` only, not for the Tensor itself:
     the entry lives as long as the raw tensor, also when the Tensor was only created for the lookup.
     Equality is given if the identity of the raw_tensor is the same,
-    and the dims, the sparse dim and the feature axis are equal (dims via :class:`DimWrapper`).
+    and the dims, the sparse dim, the feature axis and the version are equal (dims via :class:`DimWrapper`).
+    (The dtype is given by the raw tensor.)
     No value of the tensor is checked.
     """
 
@@ -192,19 +193,18 @@ class TensorWrapper:
                 value.sparse_dim, finalize_callback=finalize_callback, collected_dim_map=collected_dim_map
             )
         self.feature_dim_axis = value.feature_dim_axis
+        self.version = value.version
+
+    def _key(self) -> Tuple[Any, ...]:
+        return self.raw_value_ref, self.dims, self.sparse_dim, self.feature_dim_axis, self.version
 
     def __eq__(self, other):
         if isinstance(other, TensorWrapper):
-            return (
-                self.raw_value_ref == other.raw_value_ref
-                and self.dims == other.dims
-                and self.sparse_dim == other.sparse_dim
-                and self.feature_dim_axis == other.feature_dim_axis
-            )
+            return self._key() == other._key()
         return False
 
     def __hash__(self):
-        return hash(self.raw_value_ref)
+        return hash(self._key())
 
     def get_dim_wrappers(self) -> Tuple[DimWrapper, ...]:
         """
