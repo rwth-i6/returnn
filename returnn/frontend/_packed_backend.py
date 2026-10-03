@@ -1227,9 +1227,7 @@ def _batch_norm_gapped(source: Tensor, kwargs) -> Optional[Tensor]:
             n_dev = rf.copy_to_device(n_t, inner.device)
             _layout_cache.set(n_key, n_dev)
     n = rf.cast(n_dev, inner.dtype)
-    # junk rows (gap frames, bound buffer tail) can hold anything; zeroed here once and only x0 used below,
-    # otherwise a non-finite junk value turns the gradients of the valid rows into NaN (0 * NaN in the backward)
-    x0 = rf.where(mask, inner, 0.0)
+    x0 = rf.where(mask, inner, 0.0)  # only x0 below: junk rows can be non-finite
     mean = rf.reduce_sum(x0, axis=raw.packed_dim, use_mask=False) / n
     diff = rf.where(mask, x0 - mean, 0.0)
     var = rf.reduce_sum(diff * diff, axis=raw.packed_dim, use_mask=False) / n
