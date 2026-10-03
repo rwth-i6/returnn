@@ -628,19 +628,29 @@ def test_depthwise_conv1d_triton_weight_grad_scratch_independent_of_rows():
     assert peaks[0] == peaks[1], peaks
 
 
-def test_ctc_fsa_cache_bypassed_under_cuda_graph_capture():
-    """the FSA cache serves the aux heads in eager mode but never hands an FSA into a CUDA graph capture"""
-    from unittest import mock
+def test_ctc_fsa_cache_scoped_to_static_traceable_step():
+    """
+    The FSA cache serves the aux heads within one step, but never across static traceable steps:
+    e.g. the warm run before the CUDA graph capture runs on the same targets buffer at the same version,
+    and its FSA must not enter the graph.
+    """
+    import returnn.frontend as rf
     from returnn.torch.util import native_op
 
     targets = torch.tensor([[1, 2, 2, 3, 0], [2, 3, 0, 0, 0]], dtype=torch.int32)
     seq_lens = torch.tensor([4, 2], dtype=torch.int32)
     kwargs = dict(targets=targets, seq_lens=seq_lens, blank_idx=4)
-    first = native_op.get_ctc_fsa_fast_bw(**kwargs)
-    assert native_op.get_ctc_fsa_fast_bw(**kwargs)[0] is first[0]
-    with mock.patch.object(native_op, "_cuda_stream_capturing", return_value=True):
-        captured = native_op.get_ctc_fsa_fast_bw(**kwargs)
-        again = native_op.get_ctc_fsa_fast_bw(**kwargs)
-    assert captured[0] is not first[0], "an FSA built before the capture must not enter the graph"
-    assert again[0] is not captured[0], "inside the capture every head builds its own FSA"
-    assert native_op.get_ctc_fsa_fast_bw(**kwargs)[0] is not captured[0], "no graph-owned FSA leaks out"
+    eager = native_op.get_ctc_fsa_fast_bw(**kwargs)
+    assert native_op.get_ctc_fsa_fast_bw(**kwargs)[0] is eager[0], "eager: the heads share the FSA"
+    steps = []
+    for _ in range(2):  # e.g. the warm run, then the capture
+        with rf.set_static_traceable_ctx():
+            fsa = native_op.get_ctc_fsa_fast_bw(**kwargs)
+            assert native_op.get_ctc_fsa_fast_bw(**kwargs)[0] is fsa[0], "within one step, the heads share the FSA"
+        steps.append(fsa)
+    assert steps[0][0] is not eager[0], "no eager FSA enters a step"
+    assert steps[1][0] is not steps[0][0], "no FSA crosses steps"
+    after = native_op.get_ctc_fsa_fast_bw(**kwargs)
+    assert after[0] is not steps[1][0], "no FSA leaks out of a step"
+    targets[1, 2] = 1  # in-place refill of the same buffer
+    assert native_op.get_ctc_fsa_fast_bw(**kwargs)[0] is not after[0], "no stale FSA after an in-place refill"

@@ -13,6 +13,8 @@ from threading import RLock
 import torch
 
 from returnn import native_op
+from returnn.tensor import Tensor, Dim
+from returnn.frontend._cache import Cache
 from .native_op_code_compiler import OpCodeCompiler
 
 
@@ -640,16 +642,24 @@ def get_ctc_fsa_fast_bw(
         start_end_states is (2,batch), int32, (start,end) state idx in FSA.
     """
     assert targets.ndim == 2
-    # Under tracing and under CUDA-graph capture the cache is bypassed on purpose: a cached FSA would
-    # be baked into the graph as a constant, so every replay would score against the FIRST step's
-    # targets. Capture reruns the step on the very buffers of the preceding warm run, so identity
-    # and version of the targets do not change and the key alone cannot tell the capture apart.
-    # (Within one traced or captured step the aux heads then rebuild it; the construction op is cheap.)
-    capturing = _cuda_stream_capturing(targets)
-    cached = None if capturing else _ctc_fsa_cache_get(targets, seq_lens, blank_idx, label_loop, edges_bound)
-    if cached is not None and not _is_tracing_tensor(targets):
-        return cached
-    targets_arg, seq_lens_arg = targets, seq_lens
+    # Under tracing the cache is bypassed on purpose:
+    # a trace-time (fake) FSA must never reach the compiled program, and vice versa.
+    # (Within one traced step the aux heads then rebuild it; the construction op is cheap.)
+    cache_key = None
+    if not _is_tracing_tensor(targets):
+        # _version: an in-place refill of the same buffer must not hit
+        # (under static traceable, the Cache key also has the step)
+        # noinspection PyProtectedMember
+        cache_key = (
+            (_wrap_raw_tensor(targets), targets._version),
+            (_wrap_raw_tensor(seq_lens), seq_lens._version),
+            blank_idx,
+            label_loop,
+            edges_bound,
+        )
+        cached = _ctc_fsa_cache.get(cache_key)
+        if cached is not None:
+            return cached[0].raw_tensor, cached[1].raw_tensor, cached[2].raw_tensor
     targets = targets.to(torch.int32)
     n_batch, n_time = targets.shape
 
@@ -681,37 +691,29 @@ def get_ctc_fsa_fast_bw(
         op = maker.make_op()
         edges, start_end_states, weights = op(targets, seq_lens, blank_idx, weights, label_loop)
 
-    res = (edges, weights, start_end_states)
-    if not capturing:
-        # an FSA built inside the capture lives in the graph's private pool, it must not serve any eager step
-        _ctc_fsa_cache_set(targets_arg, seq_lens_arg, blank_idx, label_loop, edges_bound, res)
-    return res
+    if cache_key is not None:
+        _ctc_fsa_cache.set(cache_key, tuple(_wrap_raw_tensor(x) for x in (edges, weights, start_end_states)))
+    return edges, weights, start_end_states
 
 
 # The aux CTC heads (e.g. aux_loss_layers [4, 10, 16]) all score the SAME targets,
 # so they build the same FSA; only the logits differ.
 # This is the chokepoint for every caller, packed and padded alike,
 # which is why the cache sits here and not in a backend.
-# It cannot use returnn.frontend._cache.Cache:
-# that keys on RF Tensors and Dims (_transform_key_item rejects anything else),
-# while these are raw torch tensors.
-# So the step scoping the Cache would give for free is done by hand,
-# keyed by tensor IDENTITY plus _version:
-# under CUDA-graph capture the targets live in a static buffer refilled in place every step,
-# so a data_ptr-only key would return a stale FSA.
+# The Cache keys on the identity of the raw targets and seq lens,
+# and under static traceable also on the step (rf.static_traceable_generation),
+# e.g. under CUDA-graph capture, where the targets live in a static buffer refilled in place every step.
 # One slot is enough: the heads are evaluated back to back.
-_CtcFsa = Tuple[torch.Tensor, torch.Tensor, torch.Tensor]  # edges, weights, start_end_states
-# targets, seq_lens, blank_idx, label_loop, edges_bound, targets._version, seq_lens._version, fsa
-_CtcFsaCacheEntry = Tuple[torch.Tensor, torch.Tensor, int, bool, Optional[int], int, int, _CtcFsa]
-_ctc_fsa_cache: Optional[_CtcFsaCacheEntry] = None
+_ctc_fsa_cache = Cache(1)
 
 
-def _cuda_stream_capturing(x: torch.Tensor) -> bool:
+def _wrap_raw_tensor(x: torch.Tensor) -> Tensor:
     """
-    :param x: a tensor the op works on
-    :return: whether x is on a CUDA device whose current stream is being captured into a graph
+    :param x: raw tensor
+    :return: x wrapped into a :class:`Tensor` with static dims, e.g. for :class:`Cache` keys and values
     """
-    return x.device.type == "cuda" and torch.cuda.is_current_stream_capturing()
+    dims = [Dim(d, name=f"dim{i}") for i, d in enumerate(x.shape)]
+    return Tensor("raw", dims=dims, dtype=str(x.dtype).replace("torch.", ""), raw_tensor=x)
 
 
 def _is_tracing_tensor(x: torch.Tensor) -> bool:
@@ -736,40 +738,6 @@ def _is_tracing_tensor(x: torch.Tensor) -> bool:
     if get_dispatch_mode is not None and mode_key is not None:
         return get_dispatch_mode(mode_key) is not None
     return False
-
-
-def _ctc_fsa_cache_get(
-    targets: torch.Tensor, seq_lens: torch.Tensor, blank_idx: int, label_loop: bool, edges_bound: Optional[int]
-) -> Optional[_CtcFsa]:
-    """the cached FSA if it was built for exactly these arguments, else None"""
-    if _ctc_fsa_cache is None:
-        return None
-    t, sl, bi, ll, eb, t_ver, sl_ver, res = _ctc_fsa_cache
-    # NEVER hand an FSA across the trace/runtime boundary:
-    # a trace-time (fake) FSA reaching the compiled program makes the fast-BW op dispatch to its
-    # Meta kernel -> storage-less outputs -> illegal memory access in the next kernel;
-    # a real FSA captured into a trace would bake the FIRST step's targets into every replay.
-    if _is_tracing_tensor(res[0]) != _is_tracing_tensor(targets):
-        return None
-    if t is targets and sl is seq_lens and bi == blank_idx and ll == label_loop and eb == edges_bound:
-        # noinspection PyProtectedMember
-        if t_ver == targets._version and sl_ver == seq_lens._version:
-            return res
-    return None
-
-
-# noinspection PyProtectedMember
-def _ctc_fsa_cache_set(
-    targets: torch.Tensor,
-    seq_lens: torch.Tensor,
-    blank_idx: int,
-    label_loop: bool,
-    edges_bound: Optional[int],
-    res: _CtcFsa,
-) -> None:
-    """remember the FSA, so the other heads on the same targets reuse it"""
-    global _ctc_fsa_cache
-    _ctc_fsa_cache = (targets, seq_lens, blank_idx, label_loop, edges_bound, targets._version, seq_lens._version, res)
 
 
 def fast_baum_welch(
