@@ -1206,7 +1206,7 @@ def test_cache_dim_remap_identity():
 
 def test_cache_tensor_key_by_raw_tensor():
     """
-    A Tensor key matches by its raw tensor plus its dims (like Dim keys),
+    A Tensor key matches by its raw tensor plus its dims (like Dim keys), sparse dim and feature axis,
     so a new Tensor wrapping the same raw tensor hits,
     and the entry lives as long as the raw tensor, not as long as the Tensor.
     """
@@ -1241,6 +1241,23 @@ def test_cache_tensor_key_by_raw_tensor():
     assert raw_ref() is None
     # noinspection PyProtectedMember
     assert cache._lru_cache.cache_info().currsize == 0
+
+    # sparse dim and feature axis are part of the key as well
+    labels_raw = torch.zeros(2, 3, dtype=torch.int32)
+
+    def _labels_key(sparse_dim: Dim) -> tuple:
+        labels = Tensor("labels", dims=[b_dim, t_dim], dtype="int32", sparse_dim=sparse_dim, raw_tensor=labels_raw)
+        return "test_cache_tensor_key_by_raw_tensor", labels
+
+    cache.set(_labels_key(Dim(5, name="vocab")), 1)
+    assert cache.get(_labels_key(Dim(5, name="vocab2"))) == 1
+    assert cache.get(_labels_key(Dim(7, name="vocab3"))) is None
+    feat_raw = torch.zeros(2, 3)
+    feat_dim = Dim(3, name="feat")
+    x = Tensor("x", [b_dim, feat_dim], "float32", raw_tensor=feat_raw)
+    cache.set(("test_cache_tensor_key_by_raw_tensor", x), 2)
+    x = Tensor("x", [b_dim, feat_dim], "float32", feature_dim=b_dim, raw_tensor=feat_raw)
+    assert cache.get(("test_cache_tensor_key_by_raw_tensor", x)) is None
 
 
 def test_dim_bounded_by_capacity():
