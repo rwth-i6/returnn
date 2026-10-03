@@ -30,7 +30,9 @@ class Cache:
     - Dims: Use only weakrefs. Some Dim should not stay alive just because of the cache.
     - Scalar dynamic Dims in eager mode, or static dims: Instead of the Dim, use the dim value for the key
       (and map the output to the Dim).
-    - Tensor as keys: Use weakrefs. Also don't check by value but by identity.
+    - Tensor as keys: Use weakrefs. Also don't check by value but by identity of the raw tensor,
+      so a new Tensor wrapping the same raw tensor matches (e.g. raw tensors wrapped only for the lookup).
+      Its dims go into the key like Dim keys (and the output is mapped to them).
     """
 
     def __init__(self, max_size: int):
@@ -120,10 +122,18 @@ def _transform_key(
         keys_flat.append(rf.static_traceable_generation())
     if collected_dim_map is None:
         collected_dim_map = {}
-    keys_flat += [
-        _transform_key_item(key, finalize_callback=finalize_callback, collected_dim_map=collected_dim_map)
-        for key in tree.flatten(key)
-    ]
+    for key_item in tree.flatten(key):
+        keys_flat.append(
+            _transform_key_item(key_item, finalize_callback=finalize_callback, collected_dim_map=collected_dim_map)
+        )
+        if isinstance(key_item, Tensor):
+            # TensorWrapper matches by the raw tensor only, so the dims must be part of the key as well
+            # (as separate items, such that Cache.get maps the output to the queried dims)
+            dims = key_item.dims + ((key_item.sparse_dim,) if key_item.sparse_dim is not None else ())
+            keys_flat += [
+                _transform_key_item(dim, finalize_callback=finalize_callback, collected_dim_map=collected_dim_map)
+                for dim in dims
+            ]
     return tuple(keys_flat)
 
 
@@ -154,23 +164,23 @@ def _get_backend(*args) -> Type[Backend]:
 class TensorWrapper:
     """
     Wraps :class:`Tensor`.
-    Using weakref for the tensor, including also ``raw_tensor``.
-    Equality is given if the identity is the same, for the Tensor itself and the raw_tensor.
+    Using weakref for the ``raw_tensor`` only, not for the Tensor itself:
+    the entry lives as long as the raw tensor, also when the Tensor was only created for the lookup.
+    Equality is given if the identity of the raw_tensor is the same.
+    The dims of the Tensor are separate key items, see :func:`_transform_key`.
     No value of the tensor is checked.
     """
 
     def __init__(self, value: Tensor, *, finalize_callback):
-        self.value_ref = ref(value, finalize_callback)
-        self.raw_value_ref = ref(value.raw_tensor, finalize_callback)
-        self._hash = id(value)
+        self.raw_value_ref = _WeakIdRef(value.raw_tensor, finalize_callback)
 
     def __eq__(self, other):
         if isinstance(other, TensorWrapper):
-            return self.value_ref() is other.value_ref() and self.raw_value_ref() is other.raw_value_ref()
+            return self.raw_value_ref == other.raw_value_ref
         return False
 
     def __hash__(self):
-        return self._hash
+        return hash(self.raw_value_ref)
 
 
 class _WeakIdRef:

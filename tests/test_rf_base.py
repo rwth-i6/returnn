@@ -1204,6 +1204,45 @@ def test_cache_dim_remap_identity():
     assert got_batch is batch_dim
 
 
+def test_cache_tensor_key_by_raw_tensor():
+    """
+    A Tensor key matches by its raw tensor plus its dims (like Dim keys),
+    so a new Tensor wrapping the same raw tensor hits,
+    and the entry lives as long as the raw tensor, not as long as the Tensor.
+    """
+    import gc
+    import weakref
+    import torch
+    from returnn.frontend._cache import Cache
+
+    b_dim = Dim(2, name="b")
+    t_dim = Dim(Tensor("t_lens", [b_dim], dtype="int32", raw_tensor=torch.tensor([3, 2], dtype=torch.int32)), name="t")
+    raw = torch.zeros(2, 3)
+    cache = Cache(max_size=4)
+
+    def _key(raw_: torch.Tensor, dims) -> tuple:
+        return "test_cache_tensor_key_by_raw_tensor", Tensor("x", dims=dims, dtype="float32", raw_tensor=raw_)
+
+    cache.set(_key(raw, [b_dim, t_dim]), t_dim)
+    gc.collect()  # the Tensor of the key is gone, the entry stays
+    assert cache.get(_key(raw, [b_dim, t_dim])) is t_dim
+    # other dim with the same sizes: hit, the output is mapped to the queried dim
+    t2_dim = Dim(Tensor("t2_lens", [b_dim], dtype="int32", raw_tensor=torch.tensor([3, 2], dtype=torch.int32)))
+    assert cache.get(_key(raw, [b_dim, t2_dim])) is t2_dim
+    # other dim with other sizes: miss
+    t3_dim = Dim(Tensor("t3_lens", [b_dim], dtype="int32", raw_tensor=torch.tensor([3, 1], dtype=torch.int32)))
+    assert cache.get(_key(raw, [b_dim, t3_dim])) is None
+    # other raw tensor, same values: miss
+    assert cache.get(_key(raw.clone(), [b_dim, t_dim])) is None
+    # the cache does not keep the raw tensor alive, and its entry goes with it
+    raw_ref = weakref.ref(raw)
+    del raw
+    gc.collect()
+    assert raw_ref() is None
+    # noinspection PyProtectedMember
+    assert cache._lru_cache.cache_info().currsize == 0
+
+
 def test_dim_bounded_by_capacity():
     from returnn.tensor import Dim, Tensor, batch_dim
 
