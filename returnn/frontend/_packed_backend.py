@@ -1209,7 +1209,15 @@ def _batch_norm_gapped(source: Tensor, kwargs) -> Optional[Tensor]:
     gamma, beta = kwargs.get("gamma"), kwargs.get("beta")
     epsilon, momentum, affine = kwargs.get("epsilon"), kwargs.get("momentum"), kwargs.get("affine")
     inner = raw.inner
-    if not isinstance(in_dim, Dim) or set(inner.dims) != {raw.packed_dim, in_dim}:
+    extra = [d for d in inner.dims if d not in (raw.packed_dim, in_dim)]
+    if (
+        not isinstance(in_dim, Dim)
+        or in_dim not in inner.dims
+        or raw.packed_dim not in inner.dims
+        or any(d.dimension is None for d in extra)
+        # an unpacked dim the seq lens depend on: the valid-frame count below would be per entry, not a scalar
+        or any(d in raw.orig_dims[-1].dyn_size_ext.dims for d in extra)
+    ):
         return None  # unusual layout, keep the generic path
     if raw.inner_backend.name != "torch":
         return None  # the in-place running-stat update below is raw torch
@@ -1226,14 +1234,17 @@ def _batch_norm_gapped(source: Tensor, kwargs) -> Optional[Tensor]:
         if n_dev is None:
             n_dev = rf.copy_to_device(n_t, inner.device)
             _layout_cache.set(n_key, n_dev)
-    n = rf.cast(n_dev, "float32")
+    # the statistics run over the valid frames and every static axis next to the packed one
+    n_extra = math.prod(d.dimension for d in extra)
+    stat_axes = [raw.packed_dim] + extra
+    n = rf.cast(n_dev, "float32") * n_extra
     # the unused rows (gap frames, the tail of a bound buffer) hold arbitrary values, a non-finite one would
     # poison the gradients of the valid rows through the normalization below, so they are zeroed once here,
     # and the statistics sum in float32, a half dtype overflows the count and the squared sums
     x0 = rf.cast(rf.where(mask, inner, 0.0), "float32")
-    mean = rf.reduce_sum(x0, axis=raw.packed_dim, use_mask=False) / n
+    mean = rf.reduce_sum(x0, axis=stat_axes, use_mask=False) / n
     diff = rf.where(mask, x0 - mean, 0.0)
-    var = rf.reduce_sum(diff * diff, axis=raw.packed_dim, use_mask=False) / n
+    var = rf.reduce_sum(diff * diff, axis=stat_axes, use_mask=False) / n
     if running_mean is not None:
         import torch
 
@@ -1241,12 +1252,12 @@ def _batch_norm_gapped(source: Tensor, kwargs) -> Optional[Tensor]:
             rm, rv = running_mean.raw_tensor, running_variance.raw_tensor
             if dev_lens is not None:
                 # fully on device (no float(n) host read -> no sync, capture-safe)
-                n_f_t = n_dev.raw_tensor.float()
+                n_f_t = n_dev.raw_tensor.float() * n_extra
                 unbiased_t = n_f_t / (n_f_t - 1.0).clamp(min=1.0)
                 rm.mul_(1.0 - momentum).add_(mean.raw_tensor.detach().to(rm.dtype) * momentum)
                 rv.mul_(1.0 - momentum).add_(var.raw_tensor.detach().to(rv.dtype) * unbiased_t.to(rv.dtype) * momentum)
             else:
-                n_f = float(n_t.raw_tensor)
+                n_f = float(n_t.raw_tensor) * n_extra
                 unbiased = n_f / max(n_f - 1.0, 1.0)
                 rm.mul_(1.0 - momentum).add_(mean.raw_tensor.detach().to(rm.dtype), alpha=momentum)
                 rv.mul_(1.0 - momentum).add_(var.raw_tensor.detach().to(rv.dtype) * unbiased, alpha=momentum)
