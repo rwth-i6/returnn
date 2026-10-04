@@ -300,6 +300,33 @@ def test_cell_stats_normalizer_survives_minus_infinity():
     assert torch.isneginf(blank_lp[3]) and torch.isneginf(label_lp[3]), (blank_lp[3], label_lp[3])
 
 
+def test_backward_scan_leaves_a_sequence_without_alignment_alone():
+    """
+    A sequence with more labels than frames has no alignment, so every edge score of its frames is at the
+    sentinel. The sweep gives it zero posteriors itself, whatever weight the caller passes.
+    """
+    if not torch.cuda.is_available():
+        import unittest
+
+        raise unittest.SkipTest("no cuda")
+    from returnn.torch.util.monotonic_rnnt_triton import backward_scan, forward_scan
+
+    torch.manual_seed(4)
+    frame_lens = torch.tensor([3, 4], dtype=torch.int32, device="cuda")
+    label_lens = torch.tensor([5, 2], dtype=torch.int32, device="cuda")
+    cells = frame_lens.long() * (label_lens.long() + 1)
+    offsets = torch.cumsum(cells, dim=0) - cells
+    log_probs = torch.log_softmax(torch.randn(int(cells.sum()), 3, device="cuda"), dim=-1)
+    blank_lp, label_lp = log_probs[:, 0].contiguous(), log_probs[:, 1].contiguous()
+
+    _total, alpha = forward_scan(blank_lp, label_lp, offsets, frame_lens, label_lens, 4, 6)
+    weight = torch.ones(2, device="cuda")
+    blank_grad, label_grad = backward_scan(blank_lp, label_lp, offsets, frame_lens, label_lens, alpha, weight)
+    first = int(cells[0])
+    assert not blank_grad[:first].any() and not label_grad[:first].any(), (blank_grad[:first], label_grad[:first])
+    assert torch.isfinite(blank_grad[first:]).all() and float(blank_grad[first:].abs().sum()) > 0.0
+
+
 def test_monotonic_rnnt_traces_under_aot():
     if not torch.cuda.is_available():
         import unittest
