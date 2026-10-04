@@ -162,6 +162,87 @@ def test_torch_engine_train_packed():
         numpy.testing.assert_allclose(losses_packed, losses_padded, rtol=1e-4, atol=1e-4, err_msg=repr(packed_tensors))
 
 
+_packed_hidden_dim = Dim(6, name="hidden")
+
+
+# must be in the global scope due to pickling
+class RFPackedSegmentedModel(rf.Module):
+    def __init__(self, **_kwargs):
+        super().__init__()
+        self.layer = rf.Linear(_packed_in_dim, _packed_hidden_dim)
+        self.out = rf.Linear(_packed_hidden_dim, _packed_classes_dim)
+
+
+def _segmented_encode(*, model: RFPackedSegmentedModel, extern_data: TensorDict, **_kwargs):
+    """the first segment of a segmented train step"""
+    return {"x": rf.relu(model.layer(extern_data["data"])), "classes": extern_data["classes"], "time": _packed_time_dim}
+
+
+def _segmented_classify(*, model: RFPackedSegmentedModel, x: Tensor, classes: Tensor, time: Dim, **_kwargs):
+    """the second segment, which records whether its tensors arrived packed"""
+    from returnn.frontend import _packed_backend
+
+    _packed_train_is_packed.append(_packed_backend.is_packed(x) or _packed_backend.is_packed(classes))
+    loss = rf.cross_entropy(estimated=model.out(x), target=classes, axis=_packed_classes_dim, estimated_type="logits")
+    rf.get_run_ctx().mark_as_loss(name="ce", loss=loss)
+    _packed_train_losses.append(float(rf.reduce_sum(loss, axis=loss.dims, use_mask=True).raw_tensor))
+
+
+def _segmented_train_step(*, model: RFPackedSegmentedModel, extern_data: TensorDict, **_kwargs):
+    """both segments in turn"""
+    _segmented_classify(model=model, **_segmented_encode(model=model, extern_data=extern_data))
+
+
+_segmented_train_step.graph_segments = (_segmented_encode, _segmented_classify)
+
+
+def test_torch_engine_train_packed_segmented_without_capture():
+    """
+    A segmented train step run without graph capture (warmup steps, eval, plain training) crosses the boundary a
+    replayed step has between its segments: the second segment gets the first one's tensors padded, and the
+    per-step losses follow the padded run, which they only do if the gradient reaches the first segment.
+    """
+    from returnn.tensor import batch_dim
+
+    _packed_train_losses.clear()
+    _packed_train_is_packed.clear()
+    losses = {}
+    for packed_tensors in (False, {"gap": 8, "align": 2}):
+        config = Config(
+            dict(
+                task="train",
+                device="cpu",
+                random_seed=42,
+                extern_data={
+                    "data": {"dims": [batch_dim, _packed_time_dim, _packed_in_dim], "dtype": "float32"},
+                    "classes": {
+                        "dims": [batch_dim, _packed_time_dim],
+                        "sparse_dim": _packed_classes_dim,
+                        "dtype": "int32",
+                    },
+                },
+                get_model=RFPackedSegmentedModel,
+                train_step=_segmented_train_step,
+                batch_size=500,
+                optimizer={"class": "adam"},
+                torch_dataloader_opts={"num_workers": 0},
+                packed_tensors=packed_tensors,
+            )
+        )
+        dataset = init_dataset({"class": "Task12AXDataset", "num_seqs": 20, "name": "train", "fixed_random_seed": 1})
+        dataset.init_seq_order(epoch=1)
+        with global_config_ctx(config):
+            engine = Engine(config=config)
+            engine.init_train_from_config(train_data=dataset)
+            engine.train()
+        assert _packed_train_is_packed and not any(_packed_train_is_packed), (packed_tensors, _packed_train_is_packed)
+        losses[bool(packed_tensors)] = list(_packed_train_losses)
+        _packed_train_losses.clear()
+        _packed_train_is_packed.clear()
+    assert len(losses[True]) == len(losses[False])
+    numpy.testing.assert_allclose(losses[True], losses[False], rtol=1e-4, atol=1e-4)
+
+
 def test_raw_dict_split_batch_packed():
     # packed OOM auto-split: split by sequences, each key sliced at its own frame boundaries.
     from returnn.torch.data.extern_data import raw_dict_can_split_batch, raw_dict_split_batch

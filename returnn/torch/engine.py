@@ -10,6 +10,7 @@ from contextlib import nullcontext, ExitStack, contextmanager
 import sys
 import gc
 import os
+import functools
 import time
 import socket
 import fnmatch
@@ -1195,6 +1196,9 @@ class Engine(EngineBase):
             )
         if func is not None:
             f = func
+        elif train_func and getattr(f, "graph_segments", None) is not None and not rf.is_static_traceable():
+            # a segmented train step crosses the boundary between its segments also where it is not replayed
+            f = functools.partial(graph_capture.run_segments, f.graph_segments)
 
         sentinel_kw = util.get_fwd_compat_kwargs()
         with self._run_ctx_mgr():
