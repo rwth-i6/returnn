@@ -660,6 +660,28 @@ def _unflatten_boundary(spec: list, tensors: List[torch.Tensor], *, batch_dim: D
     return values
 
 
+def run_segments(segments: Tuple[Callable, Callable], *, model: Any, extern_data: TensorDict, **kwargs) -> Any:
+    """
+    Run the two segments of a segmented train step without a graph, across the boundary a replayed step has
+    between them: the second segment gets what the first returned, packed tensors padded and every tensor cut
+    to the batch's longest sequence (see :func:`_flatten_boundary`), and its gradient flows back through it.
+    The engine runs a train step with ``graph_segments`` this way outside a static traceable step
+    (eager warmup steps, eval, training without ``torch_cuda_graph``).
+
+    :param segments: the ``graph_segments`` of the train step, (captured, eager)
+    :param model: the model
+    :param extern_data: the batch
+    :param kwargs: further keyword arguments for both segments
+    :return: what the second segment returns
+    """
+    values = segments[0](model=model, extern_data=extern_data, **kwargs)
+    batch_dim = get_batch_dim_from_extern_data(extern_data)
+    spec, tensors = _flatten_boundary(values, batch_dim=batch_dim)
+    return segments[1](
+        model=model, extern_data=None, **_unflatten_boundary(spec, tensors, batch_dim=batch_dim), **kwargs
+    )
+
+
 class GraphCapturedTrainStep:
     """
     Orchestrates eager warmup steps, the one-time capture, and per-step replay.
