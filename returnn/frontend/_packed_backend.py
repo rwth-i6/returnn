@@ -1226,6 +1226,8 @@ def _batch_norm_gapped(source: Tensor, kwargs) -> Optional[Tensor]:
         if n_dev is None:
             n_dev = rf.copy_to_device(n_t, inner.device)
             _layout_cache.set(n_key, n_dev)
+    # the statistics sum in float32, a half dtype overflows the count and the squared sums
+    inner = rf.cast(inner, "float32")
     n = rf.cast(n_dev, inner.dtype)
     x0 = rf.where(mask, inner, 0.0)
     mean = rf.reduce_sum(x0, axis=raw.packed_dim, use_mask=False) / n
@@ -1250,6 +1252,7 @@ def _batch_norm_gapped(source: Tensor, kwargs) -> Optional[Tensor]:
     out_inner = (inner - mean) / rf.sqrt(var + epsilon)
     if affine:
         out_inner = out_inner * gamma + beta
+    out_inner = rf.cast(out_inner, raw.inner.dtype)
     out_inner.feature_dim = in_dim
     return raw.rewrap(out_inner, name="batch_norm")
 

@@ -900,6 +900,29 @@ def test_batch_norm_packed_gapped_train():
         )
 
 
+def test_batch_norm_packed_gapped_half_stats():
+    """the batch norm statistics of a half precision packed input sum in float32, like torch's reference"""
+    rf.select_backend_torch()
+    batch_dim = Dim(2, name="batch")
+    lens = torch.tensor([40960, 40960], dtype=torch.int32)
+    time_dim = Dim(Tensor("time", dims=[batch_dim], dtype="int32", raw_tensor=lens))
+    feat_dim = Dim(2, name="feat")
+    raw = torch.randn(2, 40960, 2, generator=torch.Generator().manual_seed(5)).to(torch.float16)
+    x = Tensor("x", dims=[batch_dim, time_dim, feat_dim], dtype="float16", raw_tensor=raw)
+    with rf.set_default_device_ctx("cpu"):
+        bn = rf.BatchNorm(feat_dim, use_mask=False)
+        with rf.get_run_ctx().train_flag_ctx(True):
+            out = bn(packed.pack(x, gap=2))
+    assert bool(torch.isfinite(bn.running_mean.raw_tensor).all()), bn.running_mean.raw_tensor
+    assert bool(torch.isfinite(bn.running_variance.raw_tensor).all()), bn.running_variance.raw_tensor
+    ref = torch.nn.functional.batch_norm(
+        raw.float().reshape(-1, 2), None, None, bn.gamma.raw_tensor, bn.beta.raw_tensor, training=True, eps=bn.eps
+    )
+    expected = Tensor("ref", dims=x.dims, dtype="float32", raw_tensor=ref.reshape(2, 40960, 2))
+    _assert_equal_non_padded(out, expected, batch_dim, time_dim, rtol=1e-2, atol=1e-2)
+    assert out.dtype == "float16"
+
+
 def test_conformer_mixed_parity_lens():
     # Real-data case: seq lens NOT multiples of the total subsample factor.
     # The strided pool output layout is then not expressible in the (lens, gap, align) form;
