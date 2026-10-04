@@ -26,6 +26,8 @@ from typing import Tuple
 
 import torch
 
+from .assert_ import assert_
+
 
 def _cell_offsets(frame_lens: torch.Tensor, label_lens: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
     """
@@ -54,9 +56,16 @@ def lattice_index(
     :return: (sequence [total], frame [total], prefix [total]) int64
     """
     offsets, cells = _cell_offsets(frame_lens, label_lens)
+    # a capacity below the batch would cut the last sequence short in silence
+    assert_(
+        cells.sum() <= total,
+        f"lattice_index: the batch has more lattice cells than the capacity {total},"
+        " the batcher cost must bound the frames times the prefixes of every sequence",
+    )
     # the cells a capacity leaves over go to the last sequence, and repeat_interleave with a declared
-    # output size stays static, unlike searchsorted, which Inductor only takes as an extern fallback
-    spans = torch.cat([cells[:-1], (cells[-1] + total - cells.sum()).unsqueeze(0)])
+    # output size stays static, unlike searchsorted, which Inductor only takes as an extern fallback.
+    # The clamp keeps the span from going negative where the check does not stop the step (cuda, capture)
+    spans = torch.cat([cells[:-1], (cells[-1] + total - cells.sum()).clamp(min=0).unsqueeze(0)])
     seq = torch.repeat_interleave(torch.arange(frame_lens.shape[0], device=frame_lens.device), spans, output_size=total)
     stride = (label_lens.long() + 1)[seq]
     within = torch.arange(total, device=frame_lens.device) - offsets[seq]
@@ -247,6 +256,9 @@ def monotonic_rnnt_loss(
     """
     if logits.dim() != 2:
         raise ValueError(f"monotonic rnnt: logits must be [cells, V], got shape {tuple(logits.shape)}")
+    vocab = logits.shape[1]
+    if not 0 <= blank < vocab:
+        raise ValueError(f"monotonic rnnt: blank {blank} outside the vocabulary of {vocab}")
     if logits.shape[0] == 0:
         return logits.sum() * torch.zeros(frame_lens.shape[0], dtype=torch.float32, device=logits.device)
     logits = logits.contiguous()
@@ -254,6 +266,16 @@ def monotonic_rnnt_loss(
     frame_lens, label_lens = frame_lens.contiguous(), label_lens.contiguous()
     max_prefix = int(labels.shape[1]) + 1
     next_label = _next_label_per_cell(labels, frame_lens, label_lens, blank, logits.shape[0])
+    # the cell kernels index every row by these ids unchecked, and a recursion shorter than a sequence
+    # returns a partial score, so both are checked on the device, without a host read
+    assert_(
+        ((next_label >= 0) & (next_label < vocab)).all(),
+        f"monotonic rnnt: a label outside the vocabulary of {vocab}",
+    )
+    assert_(
+        (frame_lens <= max_frames).all(),
+        f"monotonic rnnt: a sequence longer than the {max_frames} frames of the recursion",
+    )
     if logits.is_cuda:
         assert _HAVE_LIB_OPS, "monotonic rnnt: the loss needs torch.library.custom_op, so torch >= 2.4"
         total = torch.ops.returnn.monotonic_rnnt_fwd(
