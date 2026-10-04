@@ -149,8 +149,10 @@ class OptimizerStep:
             import torch._inductor.config as inductor_config
 
             # Round low-precision intermediates as eager does: e.g. Muon's bf16 Newton-Schulz
-            # otherwise stays in fp32 inside the fused kernels (measured param diff vs eager 7e-4, with this 1.5e-8)
-            with inductor_config.patch(emulate_precision_casts=True):
+            # otherwise stays in fp32 inside the fused kernels.
+            # No pattern matcher: it rewrites e.g. the bf16 ``a * x + b @ x`` into one addmm,
+            # which skips the bf16 rounding of the product that eager does.
+            with inductor_config.patch(emulate_precision_casts=True, pattern_matcher=False):
                 self._compiled_fn(inputs)
             self._compiled_warm = True
             return

@@ -2121,7 +2121,15 @@ def _adamw(params):
     return torch.optim.AdamW(params, lr=1e-2, weight_decay=0.01, capturable=params[0].is_cuda)
 
 
-def _run_optimizer_step(opt_factory, *, opts=None, num_steps=8, replace_grads_at=None, reload_at=None):
+def _run_optimizer_step(
+    opt_factory,
+    *,
+    opts=None,
+    num_steps=8,
+    replace_grads_at=None,
+    reload_at=None,
+    shapes=((32, 16), (16,), (64, 32), (32,), (8, 1, 3)),
+):
     """
     :return: params after num_steps updates with a per-step LR schedule and random grads,
         via the plain ``optimizer.step()`` if opts is None, otherwise via :class:`OptimizerStep`;
@@ -2131,7 +2139,6 @@ def _run_optimizer_step(opt_factory, *, opts=None, num_steps=8, replace_grads_at
 
     device = _optimizer_step_device()
     gen = torch.Generator().manual_seed(0)
-    shapes = [(32, 16), (16,), (64, 32), (32,), (8, 1, 3)]
     params = [torch.nn.Parameter(torch.randn(s, generator=gen).to(device)) for s in shapes]
     opt = opt_factory(params)
     opt_step = OptimizerStep(optimizer=opt, opts=opts) if opts is not None else None
@@ -2238,6 +2245,16 @@ def test_torch_optimizer_step_compile_capture_muon_like():
         raise unittest.SkipTest("CUDA not available")
     opt_step = _check_optimizer_step_same_as_eager(_MuonLike, {"dynamic_state_keys": ["step"]})
     assert (opt_step._num_traces, opt_step._num_captures) == (1, 1)
+
+
+def test_torch_optimizer_step_compile_capture_muon_like_few_rows():
+    """
+    Matrices with few rows, where Inductor's pattern matcher would turn the bf16 ``a * x + b @ x``
+    of the Newton-Schulz step into one ``addmm`` without the bf16 rounding of the product
+    """
+    if not torch.cuda.is_available():
+        raise unittest.SkipTest("CUDA not available")
+    _check_optimizer_step_same_as_eager(_MuonLike, {"dynamic_state_keys": ["step"]}, shapes=((9, 64), (2, 64), (64,)))
 
 
 def test_torch_optimizer_step_replaced_grads():
