@@ -1651,6 +1651,185 @@ def _torch_engine_sub_proc_cleanup_test_main(conn):
         conn.close()
 
 
+class _TrainStepError(Exception):
+    pass
+
+
+def _data_loader_workers(data_loader) -> list:
+    from returnn.torch.data.pin_memory import PinMemoryDataLoader
+
+    if isinstance(data_loader, PinMemoryDataLoader):
+        data_loader = data_loader.data_loader
+    return list(data_loader._iterator._workers)
+
+
+def _wait_for_unread_batch(data_loader: torch.utils.data.DataLoader):
+    """until the worker started to send its next batch (and is not still preparing it)"""
+    assert data_loader._iterator._data_queue._reader.poll(timeout=60)
+
+
+def _build_finalize_data_loaders_config_and_datasets(
+    *, device: str = "cpu", nested: bool = False, pin_memory: bool = False
+) -> Tuple[Config, Dict[str, Any]]:
+    """
+    config and train + dev dataset, 2 batches each, where the seq tags of one batch are larger than a pipe buffer
+    (the tensors go via shared memory), so a worker cannot flush an unread batch
+    """
+    config = Config(
+        dict(
+            task="train",
+            device=device,
+            extern_data={"data": {"dim": 9}, "classes": {"dim": 2, "sparse": True}},
+            get_model=TrainTestModel,
+            train_step=TrainTestModel.train_step,
+            batch_size=1000000,
+            max_seqs=4000,
+            num_epochs=2,
+            optimizer={"class": "adam"},
+        )
+    )
+    if pin_memory:
+        config.typed_dict["torch_dataloader_opts"] = {"num_workers": 1, "pin_memory": True}
+    datasets = {}
+    for name in ["train", "dev"]:
+        opts = {"class": "Task12AXDataset", "num_seqs": 8000, "name": name}
+        if nested:  # the DataLoader worker gets its own sub proc
+            opts = {"class": "MultiProcDataset", "dataset": opts, "num_workers": 1, "buffer_size": 10, "name": name}
+        datasets[name] = init_dataset(opts)
+        datasets[name].init_seq_order(epoch=1)
+    return config, datasets
+
+
+def _check_torch_engine_finalize_data_loaders(*, device: str = "cpu", nested: bool = False, pin_memory: bool = False):
+    """
+    :func:`Engine.finalize` stops the DataLoader workers (and their sub procs, and the pinning threads):
+    after an early termination with unread batches, when repeated, after normal exhaustion
+    (with the workers reused across the epochs before), and after an exception in the training.
+    """
+    import threading
+    import time
+    import psutil
+
+    def _check_stopped(*, idle: bool = True):
+        assert workers
+        for worker in workers:
+            # no handler left which would signal it at interpreter exit
+            assert not worker.is_alive() and worker._at_exit_cleanup_handler is None
+            if idle:  # was not preparing or sending a batch: clean exit
+                assert worker.exitcode == 0
+        for loader_ in loaders:
+            assert (loader_.data_loader if pin_memory else loader_)._iterator is None
+        assert not [thread for thread in threading.enumerate() if thread.name == "RETURNN pin memory"]
+
+    config, datasets = _build_finalize_data_loaders_config_and_datasets(
+        device=device, nested=nested, pin_memory=pin_memory
+    )
+    with global_config_ctx(config):
+        engine = Engine(config=config)
+        engine.init_train_from_config(train_data=datasets["train"], dev_data=datasets["dev"])
+        train_loader = engine._train_dataloader
+        loaders = [train_loader, engine._eval_dataloaders["dev"]]
+
+        iters = [iter(loader) for loader in loaders]
+        for it in iters:
+            next(it)  # the workers prefetch the next batch, which stays unread
+        workers = [worker for loader in loaders for worker in _data_loader_workers(loader)]
+        sub_procs = [proc for worker in workers for proc in psutil.Process(worker.pid).children(recursive=True)]
+        assert all(worker.is_alive() for worker in workers) and bool(sub_procs) == nested
+        if pin_memory:  # here the pinning threads read (and hold) the further batches
+            assert all(it._thread.is_alive() for it in iters)
+        else:
+            for loader in loaders:
+                _wait_for_unread_batch(loader)
+        engine.finalize()
+        _check_stopped(idle=not pin_memory)
+        end_time = time.monotonic() + 30
+        while any(proc.is_running() and proc.status() != psutil.STATUS_ZOMBIE for proc in sub_procs):
+            assert time.monotonic() < end_time, f"sub procs of the workers still alive: {sub_procs}"
+            time.sleep(0.1)
+        engine.finalize()
+        _check_stopped(idle=not pin_memory)
+
+        num_batches = len(list(train_loader))
+        workers = _data_loader_workers(train_loader)
+        assert len(list(train_loader)) == num_batches > 1
+        engine.train()
+        assert _data_loader_workers(train_loader) == workers and all(worker.is_alive() for worker in workers)
+        workers += _data_loader_workers(loaders[1])
+        engine.finalize()
+        _check_stopped()
+
+        with unittest.mock.patch.object(engine, "_run_step", side_effect=_TrainStepError("train step failed")):
+            try:
+                engine.train()
+            except _TrainStepError:
+                pass
+            else:
+                raise AssertionError("expected _TrainStepError")
+        workers = _data_loader_workers(train_loader)
+        assert all(worker.is_alive() for worker in workers)
+        if not pin_memory:
+            _wait_for_unread_batch(train_loader)
+        engine.finalize(error_occurred=True)
+        _check_stopped(idle=not pin_memory)
+
+
+def test_torch_engine_finalize_data_loaders():
+    _check_torch_engine_finalize_data_loaders()
+
+
+def test_torch_engine_finalize_data_loaders_nested():
+    """the dataset in the DataLoader worker has its own sub proc"""
+    _check_torch_engine_finalize_data_loaders(nested=True)
+
+
+def test_torch_engine_finalize_data_loaders_pin_memory():
+    """with :class:`returnn.torch.data.pin_memory.PinMemoryDataLoader`"""
+    if not torch.cuda.is_available():
+        raise unittest.SkipTest("CUDA not available")
+    _check_torch_engine_finalize_data_loaders(device="gpu", pin_memory=True)
+
+
+def test_torch_engine_finalize_data_loaders_at_exit():
+    """
+    The engine with its data loaders stays alive until the interpreter exits, with unread batches:
+    after :func:`Engine.finalize`, the exit does not need to signal the workers anymore.
+    Without, the worker hangs on the unread batches after the first SIGINT, until the next one interrupts it.
+    """
+    import subprocess
+
+    res = subprocess.run(
+        [sys.executable, __file__, "_torch_engine_finalize_data_loaders_at_exit_test_main"],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        timeout=300,
+    )
+    out = res.stdout.decode("utf8")
+    print(out)
+    assert res.returncode == 0
+    assert "Finalized engine" in out
+    assert "Send signal" not in out and "KeyboardInterrupt" not in out
+
+
+_finalize_at_exit_test_engine: Optional[Engine] = None  # like returnn.__main__.engine
+
+
+def _torch_engine_finalize_data_loaders_at_exit_test_main():
+    global _finalize_at_exit_test_engine
+    config, datasets = _build_finalize_data_loaders_config_and_datasets()
+    with global_config_ctx(config):
+        engine = Engine(config=config)
+        engine.init_train_from_config(train_data=datasets["train"])
+        # to avoid pickling issues due to referencing __main__ here...
+        config.typed_dict.pop("get_model")
+        config.typed_dict.pop("train_step")
+        next(iter(engine._train_dataloader))
+        _wait_for_unread_batch(engine._train_dataloader)
+        engine.finalize()
+        print("Finalized engine")
+    _finalize_at_exit_test_engine = engine
+
+
 def _build_cuda_graph_train_config_and_dataset(
     *,
     compile_: bool,

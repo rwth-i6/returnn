@@ -781,6 +781,29 @@ def create_data_loader_from_batches(
     )
 
 
+def shutdown_data_loader(data_loader: torch.utils.data.DataLoader):
+    """
+    Stops the persistent workers of the DataLoader, which it otherwise keeps until it is freed.
+    Batches which the workers prefetched but which were not consumed are dropped.
+    Can be called multiple times. A later ``iter()`` starts new workers.
+
+    Without this, a DataLoader which is still alive at interpreter exit leaves its workers to the atexit cleanup
+    of :class:`returnn.util.multi_proc_non_daemonic_spawn.NonDaemonicSpawnProcess` (SIGINT):
+    the workers then do not cancel their result queue, and hang on the unread batches until the next signal.
+
+    :param data_loader: e.g. via :func:`create_data_loader_from_batches`.
+        Must not be iterated concurrently (e.g. by another thread).
+    """
+    # No public DataLoader API for this: it only keeps the iterator with persistent workers (else this is None).
+    # noinspection PyProtectedMember
+    data_iter = data_loader._iterator
+    if data_iter is None:
+        return
+    data_loader._iterator = None
+    # noinspection PyProtectedMember
+    data_iter._shutdown_workers()
+
+
 class _DataLoaderWorkerInitFunc:
     def __init__(self, *, other_worker_init_fn: Optional[Callable] = None):
         self.other_worker_init_fn = other_worker_init_fn

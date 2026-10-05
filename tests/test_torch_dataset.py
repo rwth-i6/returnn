@@ -279,6 +279,35 @@ def test_MultiProcDataset_HDFDataset():
         assert c == n
 
 
+def test_shutdown_data_loader():
+    """
+    stops the persistent workers, also with an unread batch (its seq tags are larger than a pipe buffer),
+    and repeatedly
+    """
+    dataset = Task12AXDataset(num_seqs=8000)
+    mp_manager = multi_proc_manager_with_watchdog.create_manager()
+    loader = get_loader_from_returnn_dataset(dataset, mp_manager, batch_size=1000000, max_seqs=4000)
+    assert loader.persistent_workers
+    data_pipeline.shutdown_data_loader(loader)  # nothing started yet
+
+    for num_read in [1, None]:
+        batches = []
+        for batch in loader:
+            batches.append(batch)
+            if len(batches) == num_read:
+                break
+        assert len(batches) == num_read if num_read else len(batches) > 1
+        workers = list(loader._iterator._workers)
+        assert len(workers) == 1 and workers[0].is_alive()
+        if num_read:  # wait until the worker started to send the next batch
+            assert loader._iterator._data_queue._reader.poll(timeout=60)
+        data_pipeline.shutdown_data_loader(loader)
+        # exit code 0: stopped on its own. no handler left which would signal it at interpreter exit.
+        assert not workers[0].is_alive() and workers[0].exitcode == 0 and workers[0]._at_exit_cleanup_handler is None
+        assert loader._iterator is None
+        data_pipeline.shutdown_data_loader(loader)
+
+
 def test_batching_packed_batch_cost_bounds_a_product_of_lengths():
     """
     A monotonic RNN-T lattice has frames times prefixes cells per sequence, a product no per-key length

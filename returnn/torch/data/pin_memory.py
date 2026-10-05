@@ -29,8 +29,10 @@ import queue
 import weakref
 import tree
 import torch
+import torch.utils.data
 
 from returnn.torch.util.capture_lock import capture_lock
+from .pipeline import shutdown_data_loader
 
 __all__ = ["PinMemoryDataLoader", "PinMemoryIter"]
 
@@ -68,12 +70,27 @@ class PinMemoryDataLoader:
     def __iter__(self) -> PinMemoryIter:
         # A DataLoader with persistent workers reuses its iterator for the next iter().
         # The previous thread must not use it concurrently anymore.
-        prev_iter = self._cur_iter() if self._cur_iter is not None else None
-        if prev_iter is not None:
-            prev_iter.close()
+        self._close_cur_iter()
         it = PinMemoryIter(iter(self.data_loader), device=self.device, queue_size=self.queue_size)
         self._cur_iter = weakref.ref(it)  # not keeping it alive: its thread stops when the consumer drops it
         return it
+
+    def shutdown(self):
+        """
+        Stops the pinning thread, then the persistent workers of the DataLoader,
+        see :func:`returnn.torch.data.pipeline.shutdown_data_loader`.
+        Batches which were not consumed are dropped.
+        Can be called multiple times. A later ``iter()`` starts them again.
+        """
+        self._close_cur_iter()  # first: the thread uses the DataLoader iterator
+        if isinstance(self.data_loader, torch.utils.data.DataLoader):
+            shutdown_data_loader(self.data_loader)
+
+    def _close_cur_iter(self):
+        cur_iter = self._cur_iter() if self._cur_iter is not None else None
+        if cur_iter is not None:
+            cur_iter.close()
+        self._cur_iter = None
 
 
 class PinMemoryIter:
