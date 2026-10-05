@@ -5332,7 +5332,8 @@ def _torch_relayout_frames(inner: Tensor, pos: Tensor, *, packed_dim: Dim, out_d
     inv = torch.zeros((n_out + 1,), dtype=torch.int64, device=values.device)
     slot_valid = torch.zeros((n_out + 1,), dtype=torch.bool, device=values.device)
     inv[pos_raw] = torch.arange(n_in, dtype=torch.int64, device=values.device)
-    slot_valid[pos_raw] = True
+    # not slot_valid[pos_raw] = True: the CPU scalar value fails under CUDA graph capture
+    slot_valid.index_fill_(0, pos_raw, True)
     out_raw = gather_relayout(values, inv=inv[:n_out], pos=pos_raw, slot_valid=slot_valid[:n_out])
     out = Tensor("regap", dims=(out_dim,) + inner.dims[1:], dtype=inner.dtype, raw_tensor=out_raw)
     if inner.sparse_dim is not None:
