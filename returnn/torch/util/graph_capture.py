@@ -423,6 +423,48 @@ def _remove_record_function_nodes(joint_module):
     joint_module.recompile()
 
 
+def _force_save_unsafe_recompute(joint_module):
+    """
+    Mark nodes MUST_SAVE whose recompute in the backward is not consistent with the forward.
+    The activation_memory_budget knapsack recomputes even ops the min-cut heuristics ban.
+
+    - RNG ops: the random-op ban only covers native_dropout/rand_like/randn_like,
+      but the decomposed dropout is aten.uniform etc.; a recompute draws a fresh mask.
+    - q/k/v of fused attention: the backward uses the saved forward lse,
+      a recompute with other fusions is not bitwise equal,
+      and with large attention logits exp(qk - lse) overflows (NaN grads).
+      The attention outputs are saved too: the op is RNG-tagged (dropout).
+    """
+    import operator
+
+    import torch
+    from torch.utils.checkpoint import CheckpointPolicy
+
+    aten = torch.ops.aten
+    lse_attention_ops = {
+        aten._flash_attention_forward.default,
+        aten._efficient_attention_forward.default,
+        aten._scaled_dot_product_flash_attention.default,
+        aten._scaled_dot_product_efficient_attention.default,
+        aten._scaled_dot_product_cudnn_attention.default,
+    }
+    for node in joint_module.graph.nodes:
+        if node.op != "call_function" or not isinstance(node.target, torch._ops.OpOverload):
+            continue
+        if node.target in lse_attention_ops:
+            for qkv in node.args[:3]:
+                qkv.meta["recompute"] = CheckpointPolicy.MUST_SAVE
+        elif torch.Tag.nondeterministic_seeded not in node.target.tags:
+            continue
+        if isinstance(node.meta.get("val"), torch.Tensor):
+            node.meta["recompute"] = CheckpointPolicy.MUST_SAVE
+        else:
+            # tuple nodes cannot be saved, mark their getitems
+            for user in node.users:
+                if user.target is operator.getitem:
+                    user.meta["recompute"] = CheckpointPolicy.MUST_SAVE
+
+
 class GraphCapturedTrainStep:
     """
     Orchestrates eager warmup steps, the one-time capture, and per-step replay.
@@ -1107,6 +1149,7 @@ class GraphCapturedTrainStep:
 
                 _remove_record_function_nodes(gm)
                 joint_graph_passes(gm)
+                _force_save_unsafe_recompute(gm)
                 fw_module, bw_module = min_cut_rematerialization_partition(gm, joint_inputs, **kwargs)
                 return fw_module, bw_module
 
