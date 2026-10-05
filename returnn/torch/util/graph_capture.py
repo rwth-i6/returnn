@@ -400,6 +400,29 @@ def _allow_non_fake_inputs():
         fake_tensor_mod.FakeTensorMode.__init__ = orig_init
 
 
+def _remove_record_function_nodes(joint_module):
+    """
+    Remove traced ``record_function`` enter/exit nodes, as Dynamo treats them as no-ops.
+    A graph replay does not run them anyway,
+    and the activation_memory_budget solver cannot size their ScriptObject handles.
+    """
+    import torch
+
+    profiler = torch.ops.profiler
+    enter_ops = {profiler._record_function_enter.default, profiler._record_function_enter_new.default}
+    exit_ops = {profiler._record_function_exit.default, profiler._record_function_exit._RecordFunction}
+    graph = joint_module.graph
+    for node in list(graph.nodes):
+        if node.op == "call_function" and node.target in exit_ops:
+            graph.erase_node(node)
+    for node in list(graph.nodes):
+        if node.op == "call_function" and node.target in enter_ops:
+            assert not node.users, f"record_function handle {node} still used by {list(node.users)}"
+            graph.erase_node(node)
+    graph.lint()
+    joint_module.recompile()
+
+
 class GraphCapturedTrainStep:
     """
     Orchestrates eager warmup steps, the one-time capture, and per-step replay.
@@ -1082,6 +1105,7 @@ class GraphCapturedTrainStep:
                 # noinspection PyProtectedMember
                 from torch._inductor.fx_passes.joint_graph import joint_graph_passes
 
+                _remove_record_function_nodes(gm)
                 joint_graph_passes(gm)
                 fw_module, bw_module = min_cut_rematerialization_partition(gm, joint_inputs, **kwargs)
                 return fw_module, bw_module
