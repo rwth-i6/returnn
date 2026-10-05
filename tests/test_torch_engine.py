@@ -1658,11 +1658,13 @@ def _build_cuda_graph_train_config_and_dataset(
     cuda_graph: bool = True,
     optimizer_step: bool = False,
     optimizer: Optional[Dict[str, Any]] = None,
+    count_steps: bool = False,
 ):
     """
     small RF model + Task12AXDataset config with torch_cuda_graph, see the tests below.
     With optimizer_step: the optimizer step not in the model graph but separately (torch_optimizer_step).
     optimizer: the config entry, capturable AdamW by default.
+    count_steps: the model counts its train step calls in an auxiliary parameter.
     """
     from returnn.datasets import init_dataset
     from returnn.tensor import Dim, batch_dim
@@ -1679,6 +1681,9 @@ def _build_cuda_graph_train_config_and_dataset(
             hidden = Dim(64, name="hidden")
             self.layer = rf.Linear(feat_dim, hidden)
             self.out = rf.Linear(hidden, classes_dim)
+            if count_steps:
+                self.steps_seen = rf.Parameter([], dtype="int64", auxiliary=True)
+                self.steps_seen.initial = 0
 
     def _get_model(*, epoch, step, **_kwargs):
         return _Model()
@@ -1686,6 +1691,8 @@ def _build_cuda_graph_train_config_and_dataset(
     def _train_step(*, model: _Model, extern_data: TensorDict, **_kwargs):
         data = extern_data["data"]
         classes = extern_data["classes"]
+        if count_steps:
+            model.steps_seen.assign_add(1)
         x = rf.relu(model.layer(data))
         logits = model.out(x)
         loss = rf.cross_entropy(target=classes, estimated=logits, estimated_type="logits", axis=model.out_dim)
@@ -1752,6 +1759,7 @@ def _run_cuda_graph_train(
     cuda_graph: bool = True,
     optimizer_step: bool = False,
     optimizer: Optional[Dict[str, Any]] = None,
+    count_steps: bool = False,
 ) -> Engine:
     if not torch.cuda.is_available():
         raise unittest.SkipTest("CUDA not available")
@@ -1761,11 +1769,16 @@ def _run_cuda_graph_train(
         cuda_graph=cuda_graph,
         optimizer_step=optimizer_step,
         optimizer=optimizer,
+        count_steps=count_steps,
     )
     with global_config_ctx(config):
         engine = Engine(config=config)
         engine.init_train_from_config(train_data=dataset)
         engine.train()
+        if count_steps:
+            # the warm runs before the capture leave no trace on the model state
+            seen = int(engine._orig_model.steps_seen.raw_tensor)
+            assert seen == engine.global_train_step, (seen, engine.global_train_step)
         # the dynamic warmup steps run at the batch's own size, every batch here is smaller than the bound,
         # and the mean of the per-sequence one must still be reported as one
         seq_one = engine.learning_rate_control.epoch_data[1].error["train_loss_seq_one"]
@@ -2007,6 +2020,15 @@ def test_torch_engine_cuda_graph_train():
     """whole-train-step CUDA-graph capture/replay (torch_cuda_graph), 2 epochs across an epoch boundary,
     in-graph optimizer + per-step LR schedule via the device-tensor LR input"""
     _run_cuda_graph_train(compile_=False)
+
+
+def test_torch_engine_cuda_graph_warm_runs_keep_state():
+    """
+    The runs which only warm the kernels leave no trace on the model:
+    its buffers and auxiliary parameters (a step counter here, running statistics in a real model)
+    are back afterwards, so the model sees every batch exactly once.
+    """
+    _run_cuda_graph_train(compile_=False, count_steps=True)
 
 
 def test_torch_engine_cuda_graph_compile_train():
