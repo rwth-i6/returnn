@@ -1209,7 +1209,8 @@ class GraphCapturedTrainStep:
             gc.collect()
             torch.cuda.empty_cache()
             raws = [p.raw_tensor for p in self._rf_params]
-            with _allow_non_fake_inputs():
+            # the first call traces and compiles, its execution is thrown away and leaves no trace on the state
+            with self._training_state_preserved(), _allow_non_fake_inputs():
                 outs = self._compiled_fn(self._compiled_call_args(raws))
                 if self._partitioned:
                     # the bwd graph compiles on the first backward
@@ -1235,12 +1236,14 @@ class GraphCapturedTrainStep:
         compiled = self._ensure_compiled()
         raws = [p.raw_tensor for p in self._rf_params]
         self._log_misaligned_inputs(raws)
-        # plain warm run (in partitioned mode incl. backward: autotune + workspaces)
-        outs = compiled(self._compiled_call_args(raws))
-        if self._partitioned:
-            for p in self._grad_params:
-                p.grad.zero_()
-            outs[0].backward()
+        # plain warm run (in partitioned mode incl. backward: autotune + workspaces);
+        # the replay after the capture is this batch's step, so this run leaves no trace on the state either
+        with self._training_state_preserved():
+            outs = compiled(self._compiled_call_args(raws))
+            if self._partitioned:
+                for p in self._grad_params:
+                    p.grad.zero_()
+                outs[0].backward()
         torch.cuda.synchronize()
         # release the warm runs' cached blocks: capture allocates from its own pool,
         # cannot reuse them, and cannot cudaFree during capture either;
