@@ -741,6 +741,119 @@ def test_regap_gap_roundtrip_keeps_bound():
         _assert_equal_non_padded(back, x, batch_dim, time_dim)
 
 
+def _relayout_frames_cuda_graph_replay(*, compiled: bool, deterministic: bool):
+    from functorch.compile import aot_function
+    from returnn.torch.util.graph_capture import inductor_fw_compiler
+
+    rf.select_backend_torch()
+    n_out = 5
+    # repeated slots, the dump slot (== n_out), unwritten slots; the first one is captured
+    pos_seqs = [[0, 3, 3, n_out, 1, n_out, 0], [4] * 7, [n_out] * 7, [2, n_out, 0, 1, 4, 3, n_out]]
+    in_dim = Dim(len(pos_seqs[0]), name="in")
+    out_dim = Dim(n_out, name="out")
+
+    def relayout(values_raw_, pos_raw_):
+        values = Tensor("values", dims=[in_dim], dtype="float32", raw_tensor=values_raw_)
+        pos = Tensor("pos", dims=[in_dim], dtype="int64", raw_tensor=pos_raw_)
+        return packed._torch_relayout_frames(values, pos, packed_dim=in_dim, out_dim=out_dim).raw_tensor
+
+    deterministic_prev = torch.are_deterministic_algorithms_enabled()
+    warn_only_prev = torch.is_deterministic_algorithms_warn_only_enabled()
+    torch.use_deterministic_algorithms(deterministic)
+    try:
+        func = aot_function(relayout, fw_compiler=inductor_fw_compiler()) if compiled else relayout
+        # all ones: the output is exactly the validity mask
+        values_raw = torch.ones(in_dim.dimension, device="cuda")
+        pos_raw = torch.tensor(pos_seqs[0], device="cuda")
+        func(values_raw, pos_raw)  # warmup
+        graph = torch.cuda.CUDAGraph()
+        with torch.cuda.graph(graph):
+            out_raw = func(values_raw, pos_raw)
+        for pos_seq in pos_seqs:
+            pos_raw.copy_(torch.tensor(pos_seq, device="cuda"))
+            graph.replay()
+            mask = [slot in pos_seq for slot in range(n_out)]
+            assert out_raw.tolist() == [float(v) for v in mask], f"pos {pos_seq}: got {out_raw.tolist()}"
+    finally:
+        torch.use_deterministic_algorithms(deterministic_prev, warn_only=warn_only_prev)
+
+
+def test_relayout_frames_cuda_graph_replay():
+    # CUDA graph capture of the relayout, replayed with other positions (same storage).
+    # Eager, the validity mask via slot_valid[pos] = True copies a CPU scalar to the device, which fails the capture
+    # ("Cannot copy between CPU and CUDA tensors during CUDA graph capture unless the CPU tensor is pinned").
+    if not torch.cuda.is_available():
+        raise unittest.SkipTest("needs CUDA")
+    for deterministic in [False, True]:
+        _relayout_frames_cuda_graph_replay(compiled=False, deterministic=deterministic)
+
+
+def test_relayout_frames_cuda_graph_replay_compiled():
+    # Inductor-compiled as in the torch_cuda_graph train step.
+    # With deterministic algorithms, Inductor can keep the aten index_put_ of the validity mask
+    # (seen with torch 2.12), with the CPU scalar as its value, which fails the capture in the same way.
+    if not torch.cuda.is_available():
+        raise unittest.SkipTest("needs CUDA")
+    for deterministic in [False, True]:
+        _relayout_frames_cuda_graph_replay(compiled=True, deterministic=deterministic)
+
+
+def test_regap_grad_cuda_graph_replay_compiled_deterministic():
+    # A packed forward/backward step through the regap relayout,
+    # Inductor-compiled and CUDA graph captured with deterministic algorithms,
+    # replayed on other lens and content, against the eager step.
+    if not torch.cuda.is_available():
+        raise unittest.SkipTest("needs CUDA")
+    if torch.__version__ < (2, 12):
+        # torch 2.7: Inductor keeps an aten scatter_reduce_ here with deterministic algorithms, not capturable
+        raise unittest.SkipTest("verified with torch 2.12, another op fails the capture with torch 2.7")
+    from functorch.compile import aot_function
+    from returnn.torch.util.graph_capture import inductor_fw_compiler
+
+    rf.select_backend_torch()
+    n_batch, t_cap = 3, 8
+    feat_dim = Dim(4, name="feat")
+
+    def step(x_raw_, lens_raw_, w_raw_):
+        batch_dim = Dim(n_batch, name="batch")
+        time_dim = Dim(Tensor("time", dims=[batch_dim], dtype="int32", raw_tensor=lens_raw_), capacity=t_cap)
+        x = Tensor("x", dims=[batch_dim, time_dim, feat_dim], dtype="float32", raw_tensor=x_raw_)
+        w = Tensor("w", dims=[feat_dim], dtype="float32", raw_tensor=w_raw_)
+        with rf.set_static_traceable_ctx():
+            xp = packed.pack(x, gap=1, total_bound=n_batch * (t_cap + 1))
+            y = packed.regap(xp, 3) * w
+            loss = rf.reduce_sum(y * y, axis=list(y.dims))
+        grads = torch.autograd.grad(loss.raw_tensor, [x_raw_, w_raw_])
+        return tuple(t.detach() for t in [loss.raw_tensor, *grads])
+
+    gen = torch.Generator().manual_seed(17)
+    x_raw = torch.randn(n_batch, t_cap, feat_dim.dimension, generator=gen).to("cuda").requires_grad_()
+    lens_raw = torch.tensor([8, 5, 3], dtype=torch.int32, device="cuda")
+    w_raw = torch.randn(feat_dim.dimension, generator=gen).to("cuda").requires_grad_()
+
+    deterministic_prev = torch.are_deterministic_algorithms_enabled()
+    warn_only_prev = torch.is_deterministic_algorithms_warn_only_enabled()
+    torch.use_deterministic_algorithms(True)
+    try:
+        compiled = aot_function(step, fw_compiler=inductor_fw_compiler())
+        compiled(x_raw, lens_raw, w_raw)  # warmup
+        graph = torch.cuda.CUDAGraph()
+        with torch.cuda.graph(graph):
+            actual = compiled(x_raw, lens_raw, w_raw)
+        for seq_lens in [[8, 5, 3], [2, 8, 6], [1, 1, 8]]:
+            with torch.no_grad():
+                x_raw.copy_(torch.randn(x_raw.shape, generator=gen))
+            lens_raw.copy_(torch.tensor(seq_lens, dtype=torch.int32))
+            graph.replay()
+            expected = step(x_raw, lens_raw, w_raw)
+            for name, e, a in zip(["loss", "grad x", "grad w"], expected, actual):
+                numpy.testing.assert_allclose(
+                    a.cpu().numpy(), e.cpu().numpy(), rtol=1e-5, atol=1e-6, err_msg=f"lens {seq_lens}, {name}"
+                )
+    finally:
+        torch.use_deterministic_algorithms(deterministic_prev, warn_only=warn_only_prev)
+
+
 def test_pack_static_traceable_requires_total_bound():
     # Without a declared bound there is nothing sound to derive a static buffer from,
     # so pack must say so instead of silently inventing the capacity product.
