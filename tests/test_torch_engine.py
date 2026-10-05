@@ -2795,6 +2795,105 @@ def test_pin_memory_engine_no_workers():
     _check_pin_memory_engine_batches_unchanged(optimizer_step=False, num_workers=0)
 
 
+def test_save_checkpoint_retryable_errors(tmp_path):
+    """Match the TF engine's errno set and retry only stream-writer RuntimeError."""
+    import errno
+    from returnn.torch.util.serialization import save_checkpoint
+
+    errors = [OSError(code, "transient write failure") for code in (errno.EBUSY, errno.EDQUOT, errno.EIO, errno.ENOSPC)]
+    errors.append(RuntimeError("PytorchStreamWriter failed writing file data/0: file write failed"))
+    filename = str(tmp_path / "model.pt")
+    torch.save({"old": True}, filename)
+    original_save = torch.save
+    attempts = []
+
+    def fail_then_save(obj, path):
+        assert not os.path.exists(path)
+        assert torch.load(filename) == {"old": True}
+        attempts.append(path)
+        if len(attempts) <= len(errors):
+            with open(path, "wb") as f:
+                f.write(b"partial checkpoint")
+            raise errors[len(attempts) - 1]
+        original_save(obj, path)
+
+    with unittest.mock.patch("torch.save", fail_then_save), unittest.mock.patch("time.sleep") as sleep:
+        save_checkpoint({"new": True}, filename)
+    assert len(attempts) == len(errors) + 1
+    assert sleep.call_args_list == [unittest.mock.call(10)] * len(errors)
+    assert torch.load(filename) == {"new": True}
+    assert not os.path.exists(filename + ".tmp_write")
+
+
+def test_save_checkpoint_non_retryable_errors(tmp_path):
+    """Unrelated filesystem and serialization errors propagate without waiting."""
+    import errno
+    from returnn.torch.util.serialization import save_checkpoint
+
+    for error in (
+        OSError(errno.EACCES, "permission denied"),
+        RuntimeError("invalid tensor"),
+        ValueError("invalid object"),
+    ):
+        with unittest.mock.patch("torch.save", side_effect=error) as save, unittest.mock.patch("time.sleep") as sleep:
+            with unittest.TestCase().assertRaises(type(error)) as caught:
+                save_checkpoint({}, str(tmp_path / "model.pt"))
+        assert caught.exception is error
+        assert save.call_count == 1
+        sleep.assert_not_called()
+
+
+def test_save_checkpoint_replaces_stale_temp_file(tmp_path):
+    """A leftover partial file is removed before writing."""
+    from returnn.torch.util.serialization import save_checkpoint
+
+    filename = str(tmp_path / "model.pt")
+    (tmp_path / "model.pt.tmp_write").write_bytes(b"stale partial checkpoint")
+    with unittest.mock.patch("time.sleep") as sleep:
+        save_checkpoint({"new": True}, filename)
+    assert torch.load(filename) == {"new": True}
+    assert not os.path.exists(filename + ".tmp_write")
+    sleep.assert_not_called()
+
+
+def test_checkpoint_callers_retry(tmp_path):
+    """Both model and optimizer saves use the atomic retry helper."""
+    import errno
+
+    for kind in ("model", "optimizer"):
+        model = torch.nn.Linear(2, 3)
+        config = Config({"device": "cpu", "optimizer": {"class": "adam"}})
+        filename = str(tmp_path / (kind + ".pt"))
+        if kind == "model":
+            engine = Engine(config=config)
+            engine._pt_model = model
+            engine.epoch = 1
+            engine.get_epoch_model_filename = lambda: filename[:-3]
+            engine._do_save = lambda: True
+            save = engine._save_model
+        else:
+            updater = Updater(config=config, network=model, device=torch.device("cpu"))
+            updater.create_optimizer()
+
+            def save():
+                updater.save_optimizer(filename)
+
+        original_save = torch.save
+        attempts = []
+
+        def fail_once(obj, path):
+            attempts.append(path)
+            if len(attempts) == 1:
+                raise OSError(errno.EIO, "transient write failure")
+            original_save(obj, path)
+
+        with unittest.mock.patch("torch.save", fail_once), unittest.mock.patch("time.sleep") as sleep:
+            save()
+        assert len(attempts) == 2
+        sleep.assert_called_once_with(10)
+        assert kind in torch.load(filename)
+
+
 if __name__ == "__main__":
     better_exchook.install()
     if len(sys.argv) <= 1:
