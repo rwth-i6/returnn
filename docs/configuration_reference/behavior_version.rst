@@ -22,6 +22,19 @@ and not listing legacy/deprecated parameters.
 Version History
 ---------------
 
+Behavior version 33 (2026-10-05)
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+With PyTorch distributed training (``torch_distributed``),
+every eval dataset which supports a predefined seq order (:func:`Dataset.supports_predefined_seq_order`)
+is evaluated in shares over all ranks, instead of on rank 0 alone while the other ranks wait.
+Every rank gets the same scores, see :ref:`multi_gpu`.
+
+There is also the option ``eval_on_all_ranks: bool`` in ``torch_distributed``
+to override in both directions.
+
+See PR `#1855 <https://github.com/rwth-i6/returnn/pull/1855>`__.
+
 Behavior version 32 (2026-10-02)
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
