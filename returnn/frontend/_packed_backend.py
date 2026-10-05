@@ -5146,19 +5146,20 @@ def _packed_total_bound(dim: Dim, in_raw: PackedRawTensor, n_seqs: int) -> Optio
     return min(bounds) if bounds else None
 
 
-_SEARCH_SPAN = 2**32  # room for every int32 behind a sequence index, in int64
-
-
 def _search_sorted_per_seq(
     sorted_seq: Tensor, values: Tensor, *, axis: Dim, side: str, out_dtype: str
 ) -> Optional[Tensor]:
     """
     search_sorted along a time dim with a length per sequence, where at least one operand is packed,
     e.g. the group of every key frame searched for the group of every query.
-    All sequences are searched at once: every number gets its sequence index in front (seq * 2^32 + number),
+    All sequences are searched at once: every number gets its sequence index in front (seq * span + number),
     which makes the whole buffer one sorted sequence, rows outside the sequences count as the largest of their block,
     and the position found is taken relative to the start of its sequence.
-    Integers up to 32 bit only, since that leaves no room for anything else.
+
+    The span is the range the numbers really cover, read from them, not the range their dtype could hold.
+    A span the size of the dtype would put a constant past the largest int32 into the encoding, and a backend
+    that writes such an expression as an index (Inductor does) cannot hold it. The span is also a tensor, so
+    no constant of that size reaches the generated code at all.
 
     :param sorted_seq: over (batch, axis) or only axis, packed over (batch, axis) or plain
     :param values: packed over (batch, some other time dim), or plain with the batch dim
@@ -5208,11 +5209,7 @@ def _search_sorted_per_seq(
     if not isinstance(n_rows, int):
         return None
     in_seq = rf.cast(row_local, "int64") < rf.gather(lens, indices=row_seq, axis=batch)
-    number = rf.where(in_seq, rf.cast(flat, "int64") + _SEARCH_SPAN // 2, _SEARCH_SPAN - 1)
-    flat_sorted = rf.cast(row_seq, "int64") * _SEARCH_SPAN + number
-    # searched over the raw width of the buffer, which is sorted throughout, so no length applies to it
-    rows_static = Dim(n_rows, name="search_sorted_rows")
-    flat_sorted = rf.replace_dim_v2(flat_sorted, in_dim=flat_dim, out_dim=rows_static)
+    keys_i64 = rf.cast(flat, "int64")
 
     # the values, each with the sequence it belongs to
     if is_packed(values):
@@ -5221,13 +5218,28 @@ def _search_sorted_per_seq(
             return None
         values_inner = values_raw.inner
         values_seq = _frame_coords(values_raw, batch)
+        values_valid = _frame_mask(values_raw)
     else:
         if batch not in values.dims or axis in values.dims:
             return None
-        values_raw, values_inner = None, values
+        values_raw, values_inner, values_valid = None, values, None
         values_seq = rf.range_over_dim(batch, device=dev)
     values_seq = rf.cast(values_seq, "int64")
-    wanted = rf.combine_bc(values_seq * _SEARCH_SPAN, "+", rf.cast(values_inner, "int64") + _SEARCH_SPAN // 2)
+    values_i64 = rf.cast(values_inner, "int64")
+
+    # the numbers a junk row holds are whatever its buffer held, so they must not widen the span
+    keys_seen = rf.where(in_seq, keys_i64, 0)
+    values_seen = rf.where(values_valid, values_i64, 0) if values_valid is not None else values_i64
+    lo = rf.minimum(rf.reduce_min(keys_seen, axis=keys_seen.dims), rf.reduce_min(values_seen, axis=values_seen.dims))
+    hi = rf.maximum(rf.reduce_max(keys_seen, axis=keys_seen.dims), rf.reduce_max(values_seen, axis=values_seen.dims))
+    span = hi - lo + 2  # one slot above the largest number, where the rows outside a sequence go
+
+    number = rf.where(in_seq, keys_i64 - lo, span - 1)
+    flat_sorted = rf.cast(row_seq, "int64") * span + number
+    # searched over the raw width of the buffer, which is sorted throughout, so no length applies to it
+    rows_static = Dim(n_rows, name="search_sorted_rows")
+    flat_sorted = rf.replace_dim_v2(flat_sorted, in_dim=flat_dim, out_dim=rows_static)
+    wanted = rf.combine_bc(values_seq * span, "+", values_i64 - lo)
 
     found = rf.search_sorted(flat_sorted, wanted, axis=rows_static, side=side, out_dtype="int64")
     seq_start = rf.gather(starts, indices=rf.cast(values_seq, "int32"), axis=batch)
