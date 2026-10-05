@@ -1804,6 +1804,8 @@ def _run_cuda_graph_train(
 ) -> Engine:
     if not torch.cuda.is_available():
         raise unittest.SkipTest("CUDA not available")
+    import returnn.torch.engine as engine_module
+
     config, dataset = _build_cuda_graph_train_config_and_dataset(
         compile_=compile_,
         warmup_steps=warmup_steps,
@@ -1817,7 +1819,31 @@ def _run_cuda_graph_train(
     with global_config_ctx(config):
         engine = Engine(config=config)
         engine.init_train_from_config(train_data=dataset)
-        engine.train()
+        if cuda_graph:
+            # record when each train step is launched and when it is reported
+            order = []
+            run_train_step = engine._graph_capture.run_train_step
+            print_process = engine_module._print_process
+
+            def _launch(*args, **kwargs):
+                order.append((engine.epoch, "l"))
+                return run_train_step(*args, **kwargs)
+
+            def _report(report_prefix, **kwargs):
+                if report_prefix.endswith(" train"):
+                    order.append((engine.epoch, "r"))
+                return print_process(report_prefix, **kwargs)
+
+            engine._graph_capture.run_train_step = _launch
+            with unittest.mock.patch.object(engine_module, "_print_process", _report):
+                engine.train()
+            # the host reports every step only after it launched the next one, so the GPU never waits for it
+            for epoch in sorted({e for e, _ in order}):
+                kinds = "".join(k for e, k in order if e == epoch)
+                n = kinds.count("l")
+                assert n > 2 and kinds == "l" + "lr" * (n - 1) + "r", (epoch, kinds)
+        else:
+            engine.train()
         if count_steps:
             # the warm runs before the capture leave no trace on the model state
             seen = int(engine._orig_model.steps_seen.raw_tensor)
