@@ -611,6 +611,130 @@ def test_torch_engine_forward_load_epoch():
         assert engine.epoch == load_epoch
 
 
+def test_get_train_start_epoch_with_load_epoch():
+    from returnn.util.basic import BackendEngine
+
+    with tempfile.TemporaryDirectory(prefix="returnn_test_start_epoch") as tmp_dir:
+        model = f"{tmp_dir}/model"
+        for epoch in [43, 44]:
+            for postfix in [".pt", ".opt.pt"]:
+                open(Engine.epoch_model_filename(model, epoch) + postfix, "w").close()
+
+        def _select(**opts) -> Tuple[Optional[int], Optional[str], int]:
+            config = Config(dict(backend="torch", task="train", model=model, num_epochs=45, **opts))
+            BackendEngine.select_engine(config=config, _select_rf_backend=False)
+            return (*Engine.get_epoch_model(config), Engine.get_train_start_epoch(config))
+
+        # continuation after epoch 44, however it is specified
+        assert _select() == (44, f"{model}.044", 45)
+        assert _select(start_epoch=45) == (44, f"{model}.044", 45)
+        assert _select(load_epoch=44) == (44, f"{model}.044", 45)
+        assert _select(start_epoch=45, load_epoch=44) == (44, f"{model}.044", 45)
+        # continuation after an earlier epoch
+        assert _select(start_epoch=44) == (43, f"{model}.043", 44)
+        assert _select(start_epoch=44, load_epoch=43) == (43, f"{model}.043", 44)
+        # contradiction
+        for start_epoch, load_epoch in [(45, 43), (44, 44), (2, 44)]:
+            try:
+                _select(start_epoch=start_epoch, load_epoch=load_epoch)
+            except ValueError as exc:
+                assert f"start_epoch {start_epoch} with load_epoch {load_epoch}" in str(exc)
+            else:
+                raise Exception(f"start_epoch {start_epoch} with load_epoch {load_epoch}: did not get ValueError")
+        # new training
+        assert _select(start_epoch=1) == (None, None, 1)
+        # new training with model import
+        assert _select(start_epoch=1, load_epoch=44) == (None, f"{model}.044", 1)
+        assert _select(start_epoch=1, load=f"{model}.044") == (None, f"{model}.044", 1)
+
+
+def test_torch_engine_train_start_epoch_with_load_epoch():
+    # State right before the first update, with real model and optimizer checkpoints of epoch 2.
+    class _StopBeforeFirstUpdate(Exception):
+        pass
+
+    def _state_before_first_update(tmp_dir: str, **opts) -> Dict[str, Any]:
+        state = {}
+
+        def _train_step(**_kwargs):
+            optimizer = engine.get_pt_optimizer()
+            state.update(
+                epoch=engine.epoch,
+                run_ctx_epoch=rf.get_run_ctx().epoch,
+                global_train_step=engine.global_train_step,
+                learning_rate=optimizer.param_groups[0]["lr"],
+                dataset_epoch=dataset.epoch,
+                model=copy.deepcopy(engine.get_pt_model().state_dict()),
+                optimizer=copy.deepcopy(optimizer.state_dict()["state"]),
+            )
+            raise _StopBeforeFirstUpdate()
+
+        config = _start_epoch_train_config(tmp_dir, num_epochs=3, train_step=_train_step, **opts)
+        dataset = init_dataset({"class": "Task12AXDataset", "num_seqs": 20, "name": "train", "fixed_random_seed": 1})
+        with global_config_ctx(config):
+            engine = Engine(config=config)
+            engine.init_train_from_config(train_data=dataset)
+            try:
+                engine.train()
+            except _StopBeforeFirstUpdate:
+                pass
+            else:
+                raise Exception("train step was not called")
+        return state
+
+    def _assert_tensors_equal(a: Dict[str, Any], b: Dict[str, Any]):
+        assert a.keys() == b.keys()
+        for key in a:
+            assert torch.equal(torch.as_tensor(a[key]), torch.as_tensor(b[key])), key
+
+    with tempfile.TemporaryDirectory(prefix="returnn_test_start_epoch") as tmp_dir:
+        config = _start_epoch_train_config(tmp_dir, num_epochs=2)
+        dataset = init_dataset({"class": "Task12AXDataset", "num_seqs": 20, "name": "train", "fixed_random_seed": 1})
+        with global_config_ctx(config):
+            engine = Engine(config=config)
+            engine.init_train_from_config(train_data=dataset)
+            engine.train()
+        model_ckpt = torch.load(f"{tmp_dir}/model.002.pt", map_location="cpu")
+        opt_ckpt = torch.load(f"{tmp_dir}/model.002.opt.pt", map_location="cpu")["optimizer"]["state"]
+        assert model_ckpt["step"] == engine.global_train_step > 0 and opt_ckpt
+
+        for opts in [dict(start_epoch=3, load_epoch=2), dict(start_epoch=3), dict(load_epoch=2), dict()]:
+            state = _state_before_first_update(tmp_dir, **opts)
+            assert state["epoch"] == state["run_ctx_epoch"] == state["dataset_epoch"] == 3, (opts, state)
+            assert state["global_train_step"] == model_ckpt["step"], (opts, state)
+            assert state["learning_rate"] == 0.03, (opts, state)
+            _assert_tensors_equal(state["model"], model_ckpt["model"])
+            assert state["optimizer"].keys() == opt_ckpt.keys()
+            for param_idx, param_state in state["optimizer"].items():
+                _assert_tensors_equal(param_state, opt_ckpt[param_idx])
+
+        # New training with model import: only the parameters are taken from the checkpoint.
+        state = _state_before_first_update(tmp_dir, start_epoch=1, load_epoch=2)
+        assert state["epoch"] == state["run_ctx_epoch"] == state["dataset_epoch"] == 1, state
+        assert state["learning_rate"] == 0.01, state
+        _assert_tensors_equal(state["model"], model_ckpt["model"])
+        assert not state["optimizer"], state
+
+
+def _start_epoch_train_config(tmp_dir: str, **kwargs) -> Config:
+    opts = dict(
+        task="train",
+        device="cpu",
+        extern_data={"data": {"dim": 9}, "classes": {"dim": 2, "sparse": True}},
+        get_model=TrainTestModel,
+        train_step=TrainTestModel.train_step,
+        batch_size=500,
+        max_seqs=4,
+        optimizer={"class": "adam"},
+        learning_rates=[0.01, 0.02, 0.03],
+        model=f"{tmp_dir}/model",
+        learning_rate_file=f"{tmp_dir}/learning_rates",
+        torch_dataloader_opts=dict(num_workers=0),  # the engine then uses our dataset instance
+    )
+    opts.update(kwargs)
+    return Config(opts)
+
+
 def test_min_seq_len():
     from returnn.datasets.generating import DummyDataset
 
