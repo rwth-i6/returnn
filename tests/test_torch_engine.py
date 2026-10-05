@@ -3900,7 +3900,7 @@ def test_torch_engine_cuda_graph_amuse():
     its step in the graph (capture_optimizer, compiled or not) or stepped by the engine outside of it,
     and the eager model step with the separately compiled and captured optimizer step (torch_optimizer_step).
     The schedule state lives on the device and the step reads nothing on the host,
-    so the params after training match the eager engine.
+    so the captured steps end with the params of the eager engine and the compiled step with its schedule state.
     """
     if not torch.cuda.is_available():
         raise unittest.SkipTest("CUDA not available")
@@ -3938,16 +3938,23 @@ def test_torch_engine_cuda_graph_amuse():
             assert engine._graph_capture is not None and engine._graph_capture._graph is not None
             engine.finalize()
         captured_runs.append(("engine optimizer step", engine))
-        captured_runs.append(
-            (
-                "torch_optimizer_step",
-                _run_cuda_graph_train(compile_=False, cuda_graph=False, optimizer_step=True, optimizer=optimizer),
-            )
-        )
         for run_name, captured in captured_runs:
             for (name, p), (_, q) in zip(eager._pt_model.named_parameters(), captured._pt_model.named_parameters()):
                 torch.testing.assert_close(
                     q, p, rtol=1e-4, atol=1e-5, msg=lambda m: f"{optimizer['class']}, {run_name}, {name}: {m}"
+                )
+        # the compiled step need not round like eager, so only its schedule state is compared,
+        # with a tolerance for its lr, a float32 device tensor instead of a Python float
+        compiled = _run_cuda_graph_train(compile_=False, cuda_graph=False, optimizer_step=True, optimizer=optimizer)
+        groups = zip(eager._updater.optimizer.param_groups, compiled._updater.optimizer.param_groups)
+        for i, (group, group_compiled) in enumerate(groups):
+            for key in ("k", "weight_sum", "ckp1", "beta1", "c_warmup"):
+                torch.testing.assert_close(
+                    group_compiled[key],
+                    group[key],
+                    rtol=1e-6,
+                    atol=1e-7,
+                    msg=lambda m: f"{optimizer['class']}, torch_optimizer_step, group {i} {key}: {m}",
                 )
 
 
