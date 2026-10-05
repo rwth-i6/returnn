@@ -14,7 +14,7 @@ import torch
 from torch.nn.parallel import DistributedDataParallel
 
 from returnn.config import Config
-from returnn.util.basic import CollectionReadCheckCovered
+from returnn.util.basic import BehaviorVersion, CollectionReadCheckCovered
 
 _logger = logging.getLogger("returnn.torch.distributed")
 
@@ -74,7 +74,8 @@ class DistributedContext:
         else:
             raise ValueError(f"invalid reduce_type {self._reduce_type!r}")
 
-        self._eval_on_all_ranks = bool(self._opts.get("eval_on_all_ranks", False))
+        self._eval_on_all_ranks: Optional[bool] = self._opts.get("eval_on_all_ranks", None)
+        assert self._eval_on_all_ranks is None or isinstance(self._eval_on_all_ranks, bool)
 
         self._check_no_unknown_opts()
 
@@ -121,8 +122,11 @@ class DistributedContext:
         :return: whether an eval dataset is split over all ranks, each rank evaluating its share,
             instead of being evaluated on rank 0 alone while the other ranks wait.
             Only datasets which can report their seq order are split, see the torch engine.
+            Option ``eval_on_all_ranks: bool``, else behavior_version >= 33.
         """
-        return self._eval_on_all_ranks
+        if self._eval_on_all_ranks is not None:
+            return self._eval_on_all_ranks
+        return BehaviorVersion.get() >= 33
 
     def maybe_make_distributed_module(self, module: torch.nn.Module) -> Optional[DistributedDataParallel]:
         """

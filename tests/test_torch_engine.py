@@ -1685,6 +1685,7 @@ def _eval_on_all_ranks_run(
     calculate_exp_loss: bool = False,
     eval_before_train: bool = False,
     eval_again: bool = False,
+    behavior_version: Optional[int] = None,
 ) -> Dict[str, Any]:
     rnd = numpy.random.RandomState(42)
     # Every seq has its own length, so the lengths a rank saw tell which dev seqs it evaluated.
@@ -1708,6 +1709,7 @@ def _eval_on_all_ranks_run(
             calculate_exp_loss=calculate_exp_loss,
             torch_dataloader_opts={"num_workers": 0},
             **({"torch_distributed": torch_distributed} if torch_distributed is not None else {}),
+            **({"behavior_version": behavior_version} if behavior_version is not None else {}),
         )
     )
     dev_opts = {
@@ -1783,7 +1785,11 @@ def _eval_on_all_ranks_run(
 
 def _eval_on_all_ranks_rank_main(rank: int, world_size: int, port: int, run_kwargs: Dict[str, Any], conn):
     import os
+    from returnn.util.basic import BehaviorVersion
 
+    if run_kwargs.get("behavior_version") is not None:
+        # the test env sets the latest behavior version as minimum, this rank's own process may go below it
+        BehaviorVersion._reset()
     os.environ.update(
         {
             "MASTER_ADDR": "127.0.0.1",
@@ -1861,11 +1867,11 @@ def test_torch_engine_eval_on_all_ranks():
     # also with a random seq order, which is seeded per rank (rank 0's order is split then),
     # also with DistributedDataParallel on CPU,
     # and every rank gets the score of one process over the whole dev set.
-    # Without it (the default), or for a dataset without a predefined seq order, rank 0 evaluates them alone.
+    # With it off, or for a dataset without a predefined seq order, rank 0 evaluates them alone.
     reference = _eval_on_all_ranks_run()
     for opts, run_kwargs, split in [
         ({"eval_on_all_ranks": True}, {}, True),
-        ({}, {}, False),
+        ({"eval_on_all_ranks": False}, {}, False),
         ({"eval_on_all_ranks": True}, {"dev_seq_ordering": "random"}, True),
         ({"eval_on_all_ranks": True, "reduce_type": "grad"}, {}, True),
         ({"eval_on_all_ranks": True}, {"dev_predefined_seq_order": False}, False),
@@ -1883,6 +1889,20 @@ def test_torch_engine_eval_on_all_ranks():
         _assert_eval_scores(results, reference, epochs=(1, 2), keys=("dev_loss_ce", "dev_loss_fer"))
         # Averaged grads keep the params identical, so rank 1 keeps none aside (and this model has no buffers).
         assert results[1]["own_model_state_sizes"] == ([0, 0] if split else [])
+
+
+def test_torch_engine_eval_on_all_ranks_by_behavior_version():
+    # Behavior version 33 splits the eval over the ranks, the option overrides that.
+    for version, opts, split in [(32, {}, False), (33, {}, True), (33, {"eval_on_all_ranks": False}, False)]:
+        results = _eval_on_ranks(
+            torch_distributed={**_EVAL_ON_ALL_RANKS_DIST_OPTS, **opts}, behavior_version=version, num_epochs=1
+        )
+        rank_seq_lens = _eval_on_all_ranks_seq_lens_per_rank(results, epoch=1)
+        print(f"behavior version {version} {opts}: dev seq lens per rank:", rank_seq_lens)
+        if split:
+            _assert_eval_split(rank_seq_lens, _EVAL_ON_ALL_RANKS_DEV_SEQ_LENS)
+        else:
+            assert rank_seq_lens == [_EVAL_ON_ALL_RANKS_DEV_SEQ_LENS, []]
 
 
 def test_torch_engine_eval_on_all_ranks_rank0_model():
