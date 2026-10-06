@@ -2312,6 +2312,19 @@ def test_reduce_logmeanexp_packed_no_mask():
             rtol=1e-5,
             err_msg=str(pack_opts),
         )
+    # as traced: static traceable, capacity-sized time dim, bound-sized buffer
+    lens = Tensor("lens", dims=[batch_dim], dtype="int32", raw_tensor=torch.tensor([5, 3], dtype=torch.int32))
+    cap_time_dim = Dim(lens, name="time", capacity=5)
+    x_cap = Tensor("x", dims=[batch_dim, cap_time_dim, feat_dim], dtype="float32", raw_tensor=x.raw_tensor)
+    with rf.set_static_traceable_ctx():
+        xp = packed.pack(x_cap, dims=[batch_dim, cap_time_dim], total_bound=10)
+        got = rf.reduce_logmeanexp(xp, axis=[batch_dim, cap_time_dim], use_mask=False)
+    numpy.testing.assert_allclose(
+        got.copy_compatible_to_dims_raw([feat_dim]).numpy(),
+        want.copy_compatible_to_dims_raw([feat_dim]).numpy(),
+        rtol=1e-5,
+        err_msg="static traceable",
+    )
 
 
 if __name__ == "__main__":
