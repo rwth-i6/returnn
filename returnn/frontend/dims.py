@@ -256,7 +256,8 @@ def num_elements_of_shape(
     :param use_mask: True: only the elements which are not padding.
         False: also the padding, as far as a reduction with ``use_mask=False`` covers it,
         which depends on how the reduced tensor is stored (see ``source``).
-    :param device: only for the case when we return a Tensor. by default, this is CPU (just as the size tensor).
+    :param device: only for the case when we return a Tensor. by default, this is CPU (just as the size tensor),
+        or with ``source``, the device of ``source``, where the count is needed to normalize the reduction.
     :param source: the tensor which is reduced over ``dims`` (e.g. by :func:`reduce` with the same ``use_mask``).
         The count then covers exactly the elements which that reduction covers,
         e.g. packed storage holds no padding on its packed dims.
@@ -270,7 +271,9 @@ def num_elements_of_shape(
             raise ValueError(f"num_elements_of_shape: dims {dims} not all in source {source}")
         # noinspection PyProtectedMember
         backend = source._raw_backend or global_backend
-        return backend.num_elements_of_shape(source, dims, use_mask=use_mask, device=device)
+        return backend.num_elements_of_shape(
+            source, dims, use_mask=use_mask, device=device if device is not None else source.device
+        )
     if not use_mask:
         n = 1
         for dim in dims:
