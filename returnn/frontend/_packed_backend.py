@@ -4588,6 +4588,27 @@ class PackedBackend(Backend[PackedRawTensor]):
         return _repack_result(rf.reduce(unpack(source), mode=mode, axis=axes, use_mask=use_mask), raw)
 
     @staticmethod
+    def num_elements_of_shape(
+        source: Tensor, dims: Sequence[Dim], *, use_mask: bool, device: Optional[str]
+    ) -> Union[int, Tensor]:
+        """
+        As :func:`reduce` covers it: no padding on the packed dims, whatever use_mask,
+        and no gap or unused bound frames.
+        """
+        if use_mask:
+            return rf.num_elements_of_shape(dims, use_mask=True, device=device)
+        raw = _raw(source)
+        # the unmasked count of the other dims is their full size, independent of the packed dims
+        n = rf.num_elements_of_shape([d for d in dims if d in raw.orig_dims], use_mask=True, device=device)
+        m = rf.num_elements_of_shape([d for d in dims if d not in raw.orig_dims], use_mask=False)
+        if isinstance(m, Tensor):
+            # use_mask=False ignores the device, so copy explicitly
+            m = rf.copy_to_device(m, device)
+            if isinstance(n, Tensor):
+                m = rf.cast(m, n.dtype)
+        return n * m
+
+    @staticmethod
     def ctc_loss(
         *,
         logits: Tensor,
