@@ -446,6 +446,43 @@ def test_batching_packed_batch_cost_meets_only_its_own_limit():
         )
 
 
+def test_bucket_ordering_monotonic_data_keys():
+    """
+    A partially filled bucket is emitted at the end, after batches of later seqs.
+    With monotonic_data_keys, complete_frac and seq_idx keep the input order,
+    while the payload and seq_tag stay with their seq.
+    """
+    import pickle
+    import numpy
+
+    lens = [8, 1, 20, 1, 1, 1]  # the seq of len 20 is too long for all buckets and dropped
+    seqs = [
+        {
+            "data": numpy.full((n,), i, dtype="int32"),
+            "seq_tag": numpy.array(f"seq-{i}"),
+            "seq_idx": numpy.array(i),
+            "complete_frac": numpy.array((i + 1) / len(lens)),
+        }
+        for i, n in enumerate(lens)
+    ]
+    seqs_orig = [dict(seq) for seq in seqs]
+
+    batches = list(data_pipeline.BucketOrderingIterDataPipe(seqs, buckets=[(2, 2), (8, 2)], length_key="data"))
+    assert [[int(s["seq_idx"]) for s in b] for b in batches] == [[1, 3], [4, 5], [0]]  # default: original values
+    assert [max(float(s["complete_frac"]) for s in b) for b in batches] == [4 / 6, 1.0, 1 / 6]
+
+    pipe = data_pipeline.BucketOrderingIterDataPipe(
+        seqs, buckets=[(2, 2), (8, 2)], length_key="data", monotonic_data_keys=("complete_frac", "seq_idx")
+    )
+    for pipe_ in [pipe, pipe, pickle.loads(pickle.dumps(pipe))]:  # repeated iteration, pickling
+        batches = list(pipe_)
+        assert [[str(s["seq_tag"]) for s in b] for b in batches] == [["seq-1", "seq-3"], ["seq-4", "seq-5"], ["seq-0"]]
+        assert [[int(s["data"][0]) for s in b] for b in batches] == [[1, 3], [4, 5], [0]]
+        assert [[int(s["seq_idx"]) for s in b] for b in batches] == [[0, 1], [3, 4], [5]]
+        assert [max(float(s["complete_frac"]) for s in b) for b in batches] == [2 / 6, 5 / 6, 1.0]
+    assert all(seq == seq_orig for seq, seq_orig in zip(seqs, seqs_orig)), "input dicts must not be modified"
+
+
 if __name__ == "__main__":
     better_exchook.install()
     if len(sys.argv) <= 1:

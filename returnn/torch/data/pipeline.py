@@ -21,9 +21,10 @@ other PyTorch datasets more directly, including also HuggingFace datasets.
 
 from __future__ import annotations
 import bisect
+import collections
 import functools
 import itertools
-from typing import Optional, Any, Sequence, Tuple, Union, List, Dict, Callable
+from typing import Optional, Any, Sequence, Tuple, Union, List, Dict, Deque, Callable
 import sys
 import threading
 from copy import deepcopy
@@ -438,6 +439,7 @@ class BucketOrderingIterDataPipe(torch.utils.data.IterDataPipe):
         length_key: str,
         random_bucket_prob: float = 0.0,
         seed: Optional[int] = None,
+        monotonic_data_keys: Sequence[str] = (),
     ):
         """
         :param dataset: dataset to apply bucket batching to
@@ -449,9 +451,14 @@ class BucketOrderingIterDataPipe(torch.utils.data.IterDataPipe):
             a randomly chosen still-fitting bucket.
             This increases seq length variation within the buckets at the cost of slighly more padding.
         :param seed: random seed
+        :param monotonic_data_keys: data keys whose values keep the input order across the emitted batches,
+            like in :class:`ShufflingDataPipe`.
+            E.g. ``("complete_frac", "seq_idx")``, such that the ``epoch_continuous`` progress
+            (e.g. for a learning rate schedule) does not go backwards when a bucket is emitted late.
         """
         self._dataset = dataset
         self._length_key = length_key
+        self._monotonic_data_keys = tuple(monotonic_data_keys)
         assert random_bucket_prob >= 0.0
         self._random_bucket_prob = random_bucket_prob
         self._rng = numpy.random.RandomState()
@@ -467,6 +474,7 @@ class BucketOrderingIterDataPipe(torch.utils.data.IterDataPipe):
         """:return: generator applying bucket ordering on the data"""
         buckets: List[List[Dict[str, numpy.ndarray]]] = [[] for _ in range(len(self._max_seq_lens))]
         buckets_full_counter = [0 for _ in range(len(buckets))]
+        monotonic_values: Deque[Dict[str, Any]] = collections.deque()  # in input order, of not yet emitted seqs
 
         for data_dict in self._dataset:
             data_dict: Dict[str, numpy.ndarray]
@@ -481,18 +489,30 @@ class BucketOrderingIterDataPipe(torch.utils.data.IterDataPipe):
                 and self._rng.rand() < self._random_bucket_prob
             ):
                 bucket_idx = self._rng.randint(bucket_idx, len(self._max_bucket_sizes))
+            if self._monotonic_data_keys:
+                monotonic_values.append({key: data_dict[key] for key in self._monotonic_data_keys})
             buckets[bucket_idx].append(data_dict)
             if len(buckets[bucket_idx]) >= self._max_bucket_sizes[bucket_idx]:
-                yield buckets[bucket_idx]
+                yield self._with_monotonic_values(buckets[bucket_idx], monotonic_values)
                 buckets[bucket_idx] = []
                 buckets_full_counter[bucket_idx] += 1
 
         non_empty_buckets = [b for b in buckets if b]
-        yield from non_empty_buckets
+        for bucket in non_empty_buckets:
+            yield self._with_monotonic_values(bucket, monotonic_values)
+        assert not monotonic_values
 
         # we do not count the buckets w/ leftover data as they were not completely filled
         description_str = ", ".join(f"{limit}: {cnt}" for limit, cnt in zip(self._max_seq_lens, buckets_full_counter))
         print(f"Batching buckets full: {description_str}", file=log.v4)
+
+    def _with_monotonic_values(
+        self, batch: List[Dict[str, numpy.ndarray]], monotonic_values: Deque[Dict[str, Any]]
+    ) -> List[Dict[str, numpy.ndarray]]:
+        if not self._monotonic_data_keys:
+            return batch
+        # new dicts, as the input dicts might be shared with the dataset
+        return [{**data_dict, **monotonic_values.popleft()} for data_dict in batch]
 
     def __getitem__(self, index):
         raise Exception(f"{self.__class__.__name__}.__getitem__ is not supported")
