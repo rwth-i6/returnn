@@ -342,9 +342,7 @@ class Engine(EngineBase):
             self._graph_capture.release()
             self._graph_capture = None
         for data_loader in [self._train_dataloader, *self._eval_dataloaders.values()]:
-            if isinstance(data_loader, PinMemoryDataLoader):
-                data_loader.shutdown()
-            elif data_loader is not None:
+            if data_loader is not None:
                 data_pipeline.shutdown_data_loader(data_loader)
 
     def train(self):
