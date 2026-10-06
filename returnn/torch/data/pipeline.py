@@ -799,6 +799,8 @@ def shutdown_data_loader(data_loader: torch.utils.data.DataLoader):
     data_iter = data_loader._iterator
     if data_iter is None:
         return
+    # noinspection PyProtectedMember
+    assert isinstance(data_iter, torch.utils.data.dataloader._MultiProcessingDataLoaderIter)  # persistent workers
     data_loader._iterator = None
     # noinspection PyProtectedMember
     data_iter._shutdown_workers()
