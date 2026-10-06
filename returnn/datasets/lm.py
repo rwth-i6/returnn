@@ -311,6 +311,7 @@ class LmDataset(CachedDataset2):
         self._orth_files: Optional[List[BinaryIO]] = None
         self._orth_mmaps = None
         self._orths_offsets_and_lens: Optional[List[Tuple[int, int]]] = None  # will be loaded in _lazy_init
+        self._orths_lens: Optional[numpy.ndarray] = None  # will be loaded in _lazy_init
         self._seq_list: Optional[List[str]] = None
         self._seq_index_by_tag: Optional[dict[str, int]] = None
 
@@ -462,6 +463,8 @@ class LmDataset(CachedDataset2):
             assert len(self._orths_offsets_and_lens) == len(seq_list)
             self._seq_list = seq_list
 
+        self._orths_lens = numpy.fromiter((len_ for _, _, len_ in orths), dtype=numpy.int64, count=len(orths))
+
         print(
             f"  done, loaded {len(self._orths_offsets_and_lens)} sequences,"
             f" {human_bytes_size(total_bytes_read)},"
@@ -556,7 +559,7 @@ class LmDataset(CachedDataset2):
             self.seq_order = self.get_seq_order_for_epoch(
                 epoch=epoch,
                 num_seqs=len(self._orths_offsets_and_lens),
-                get_seq_len=lambda i: self._orths_offsets_and_lens[i][2],
+                get_seq_len=self._orths_lens.__getitem__,
             )
         self._num_seqs = len(self.seq_order)
         self.next_orth_idx = 0
@@ -730,6 +733,7 @@ class LmDataset(CachedDataset2):
 
         if free_resources:
             self._orths_offsets_and_lens = None
+            self._orths_lens = None
             if self._orth_mmaps is not None:
                 for m in self._orth_mmaps:
                     if m is not None:

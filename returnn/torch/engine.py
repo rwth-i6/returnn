@@ -573,6 +573,7 @@ class Engine(EngineBase):
                 if step_idx == 0 and log.verbose[5]:
                     print("Time to get first batch data:", hms(step_begin_time - epoch_start_time), file=log.v5)
 
+                complete_frac = float(extern_data_raw["complete_frac"]) if extern_data_raw is not None else -1.0
                 _has_data = torch.tensor([extern_data_raw is not None], dtype=torch.int8)
                 # Sync only on first train step, when we have run out of data and every time we synchronize
                 # the model between workers.
@@ -584,7 +585,18 @@ class Engine(EngineBase):
                 ):
                     # use all reduce to check if all workers have data, if at least one worker does not have data,
                     # all workers finish this epoch
-                    torch.distributed.all_reduce(_has_data, op=torch.distributed.ReduceOp.MIN)
+                    if self._torch_distributed_ctx.sync_complete_frac():
+                        # mean over the ranks: a schedule on epoch_continuous must give the same LR on every rank
+                        _data_info = torch.tensor(
+                            [extern_data_raw is not None, complete_frac >= 0.0, max(complete_frac, 0.0)],
+                            dtype=torch.float64,
+                        )
+                        torch.distributed.all_reduce(_data_info, op=torch.distributed.ReduceOp.SUM)
+                        size = self._torch_distributed_ctx.size()
+                        _has_data[0] = _data_info[0] == size
+                        complete_frac = float(_data_info[2]) / size if _data_info[1] == size else -1.0
+                    else:
+                        torch.distributed.all_reduce(_has_data, op=torch.distributed.ReduceOp.MIN)
                 if not _has_data[0]:
                     break
 
@@ -601,7 +613,6 @@ class Engine(EngineBase):
                     {k: int(util.prod(extern_data_raw[k].shape[:2])) for k in keys_w_seq_len},
                 )
 
-                complete_frac = float(extern_data_raw["complete_frac"])
                 epoch_continuous = self.epoch - 1 + complete_frac if complete_frac >= 0.0 else None
                 num_seqs = int(extern_data_raw["num_seqs"])
 
