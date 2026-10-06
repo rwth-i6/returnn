@@ -68,14 +68,16 @@ def moments(
             compute_dtype = x.dtype
     x = rf.cast(x, compute_dtype)
     if distributed:
+        if not use_mask and rf.is_packed(x):
+            # the count would include the padding of the packed dims, which packed storage does not hold
+            raise NotImplementedError(f"moments: distributed with use_mask=False on packed {x}")
         # Two-pass statistics over the global batch, accumulated in float32.
         # The one-pass variance E[x^2] - E[x]^2 catastrophically cancels whenever the mean dominates
         # the variance, in float32 just as in bf16: the difference is then noise and can go negative,
         # which gives NaNs via rsqrt(variance + eps).
         # torch.nn.SyncBatchNorm instead combines per-worker Welford statistics, which does not cancel.
         x = rf.cast(x, "float32")
-        packed_dims = x.raw_tensor.orig_dims if rf.is_packed(x) else ()
-        count = _global_num_elements(axis, use_mask=use_mask, packed_dims=packed_dims, device=x.device)
+        count = _global_num_elements(axis, use_mask=use_mask, device=x.device)
         mean = rf.reduce_sum(x, axis=axis, use_mask=use_mask, distributed=True) / count
         # stop_gradient does not change the gradient here: the deviations sum to zero over the global batch
         sq_dev = rf.squared_difference(x, rf.stop_gradient(mean))
@@ -116,27 +118,20 @@ def _moments_float32() -> bool:
     return BehaviorVersion.get() >= 32
 
 
-def _global_num_elements(
-    axis: Union[Dim, Sequence[Dim]], *, use_mask: bool, packed_dims: Sequence[Dim], device: Optional[str]
-) -> Tensor:
+def _global_num_elements(axis: Union[Dim, Sequence[Dim]], *, use_mask: bool, device: Optional[str]) -> Tensor:
     """
     :param axis: the dim or dims which are reduced
     :param use_mask: whether padded frames are excluded, as in the reduction itself
-    :param packed_dims: the packed dims of the reduced tensor, if it is packed.
-        Packed storage holds no padding on them, so the reduction never covers it there, whatever use_mask.
     :param device: where the count is needed, so it does not force a host sync under graph capture
     :return: number of reduced elements, summed over the Torch DDP workers, as a float32 tensor
     """
-    axes = [axis] if isinstance(axis, Dim) else list(axis)
-    masked_axes = [d for d in axes if use_mask or d in packed_dims]
-    # static dims give plain ints, which are the same on every worker
-    count = rf.constant(1.0, dims=(), dtype="float32", device=device)
-    for dims, dims_use_mask in ((masked_axes, True), ([d for d in axes if d not in masked_axes], False)):
-        n = rf.num_elements_of_shape(dims, use_mask=dims_use_mask, device=device)
-        if isinstance(n, Tensor):
-            # use_mask=False ignores the device, so copy explicitly
-            n = rf.cast(rf.copy_to_device(n, device), "float32")
-        count = count * n
+    count = rf.num_elements_of_shape(axis, use_mask=use_mask, device=device)
+    if isinstance(count, Tensor):
+        # use_mask=False ignores the device, so copy explicitly
+        count = rf.cast(rf.copy_to_device(count, device), "float32")
+    else:
+        # static dims give a plain int, which is the same on every worker
+        count = rf.constant(count, dims=(), dtype="float32", device=device)
     # noinspection PyProtectedMember
     return count._raw_backend.reduce_distributed(count, mode="sum")
 

@@ -138,8 +138,8 @@ def test_moments_distributed_matches_local():
 
 def test_moments_distributed_packed():
     """
-    Packed storage holds no padding on its packed dims,
-    so the distributed moments count only the sequence frames there, also with use_mask=False.
+    The distributed moments count from the dims, which with use_mask=False includes the padding of the packed dims,
+    which packed storage does not hold. So that case raises, while use_mask=True matches the local moments.
     """
     import torch
 
@@ -153,12 +153,15 @@ def test_moments_distributed_packed():
     for pack_opts in ({}, {"gap": 2}, {"gap": 2, "total_bound": 14}):
         packed = rf.pack(x, dims=[batch, time_dim], **pack_opts)
         for axes in ([batch, time_dim], [time_dim]):
-            for use_mask in (True, False):
-                distributed = rf.moments(packed, axis=axes, use_mask=use_mask, distributed=True)
-                local = rf.moments(packed, axis=axes, use_mask=use_mask)
-                for got, want in zip(distributed, local):
-                    torch.testing.assert_close(
-                        got.copy_compatible_to_dims_raw(want.dims),
-                        want.raw_tensor,
-                        msg=f"{pack_opts} axes={axes} use_mask={use_mask}",
-                    )
+            distributed = rf.moments(packed, axis=axes, distributed=True)
+            local = rf.moments(packed, axis=axes)
+            for got, want in zip(distributed, local):
+                torch.testing.assert_close(
+                    got.copy_compatible_to_dims_raw(want.dims), want.raw_tensor, msg=f"{pack_opts} axes={axes}"
+                )
+            try:
+                rf.moments(packed, axis=axes, use_mask=False, distributed=True)
+            except NotImplementedError:
+                pass
+            else:
+                raise AssertionError(f"{pack_opts} axes={axes}: use_mask=False did not raise")
