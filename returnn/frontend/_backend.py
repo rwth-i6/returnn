@@ -1382,16 +1382,6 @@ class Backend(Generic[T]):
         """
         raise NotImplementedError
 
-    @staticmethod
-    def num_reduced_elements(source: Tensor, *, axis: Union[Dim, Sequence[Dim]], use_mask: bool) -> Union[int, Tensor]:
-        """
-        :param source: the tensor which :func:`reduce` is applied to
-        :param axis: the reduced dim or dims
-        :param use_mask: as for :func:`reduce`
-        :return: number of elements of source which that reduction covers
-        """
-        return rf.num_elements_of_shape(axis, use_mask=use_mask, device=source.device)
-
     # noinspection PyShadowingBuiltins
     @staticmethod
     def top_k(
