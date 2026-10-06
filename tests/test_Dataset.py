@@ -887,6 +887,41 @@ def test_LmDataset_sorted():
         assert not dataset.is_less_than_num_seqs(4)
 
 
+def test_LmDataset_seq_order_seq_lens():
+    from returnn.datasets.lm import LmDataset
+
+    num_seqs = 1013
+    rnd = numpy.random.RandomState(42)
+    lines = ["x" * rnd.randint(1, 50) for _ in range(num_seqs)]
+    with tempfile.NamedTemporaryFile("wt", suffix=".txt") as txt_file:
+        txt_file.write("".join(line + "\n" for line in lines))
+        txt_file.flush()
+
+        for seq_ordering in ["sorted", "sorted_reverse", "laplace:.17", "sort_bin_shuffle:.17", "random"]:
+            for shard_index in range(2):
+                dataset = init_dataset(
+                    {
+                        "class": "LmDataset",
+                        "corpus_file": txt_file.name,
+                        "orth_vocab": {"class": "Utf8ByteTargets"},
+                        "seq_ordering": seq_ordering,
+                        "partition_epoch": 3,
+                        "_num_shards": 2,
+                        "_shard_index": shard_index,
+                    }
+                )
+                assert isinstance(dataset, LmDataset)
+                for epoch in [1, 2, 4, 1]:
+                    dataset.init_seq_order(epoch=epoch)
+                    ref_seq_order = Dataset.get_seq_order_for_epoch(
+                        dataset, epoch=epoch, num_seqs=num_seqs, get_seq_len=lambda i: len(lines[i])
+                    )
+                    assert list(dataset.get_current_seq_order()) == list(ref_seq_order)
+                    if epoch == 2:
+                        dataset.finish_epoch(free_resources=True)
+                        assert dataset._orths_lens is None
+
+
 def test_MetaDataset():
     _demo_txt = "some utterance text"
 

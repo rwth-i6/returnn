@@ -22,7 +22,7 @@ and not listing legacy/deprecated parameters.
 Version History
 ---------------
 
-Behavior version 33 (2026-10-02)
+Behavior version 34 (2026-10-06)
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 :func:`rf.moments` with ``use_mask=False`` takes its mean over all frames too, like the variance.
@@ -38,6 +38,22 @@ There is also the global config option ``rf_moments_use_fixed_masking: bool``
 to override in both directions.
 
 See PR `#1915 <https://github.com/rwth-i6/returnn/pull/1915>`__.
+
+Behavior version 33 (2026-10-06)
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+PyTorch distributed training (``torch_distributed``):
+the train loop uses the mean of the ``complete_frac`` of all ranks,
+so ``epoch_continuous`` is the same on every rank.
+This affects ``dynamic_learning_rate`` and a callable ``accum_grad_multiple_step``.
+
+Before, each rank used its own ``complete_frac``, which differs between ranks
+as each rank consumes a different number of sequences per step.
+A schedule on ``epoch_continuous`` then applied a different learning rate on each rank,
+and the model replicas diverged although the gradients are averaged.
+
+There is also the option ``sync_complete_frac: bool`` in ``torch_distributed`` to override in both directions.
+With ``reduce_type`` ``"param"``, it applies in the steps where the parameters are synced.
 
 Behavior version 32 (2026-10-02)
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~

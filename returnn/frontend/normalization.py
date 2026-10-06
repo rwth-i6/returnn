@@ -36,7 +36,7 @@ def moments(
     :param axis: the axis (or axes) to be reduced, to calculate statistics over
     :param use_mask: whether to use a mask for dynamic spatial dims in the reduction.
         The local mean follows it only with the global config option ``rf_moments_use_fixed_masking``
-        (default from behavior version 33 on), otherwise the local mean is always masked.
+        (default from behavior version 34 on), otherwise the local mean is always masked.
     :param correction:
         The variance will be estimated by ``sum((x - mean)**2) / (n-correction)``
         where ``n`` is the number of elements in the axis (or the axes)
@@ -286,7 +286,7 @@ def _moments_use_fixed_masking() -> bool:
     """
     :return: whether :func:`moments` applies ``use_mask`` to its local mean too
         and :class:`BatchNorm` passes its ``use_mask`` on to :func:`moments`.
-        Config option ``rf_moments_use_fixed_masking: bool``, else behavior_version >= 33.
+        Config option ``rf_moments_use_fixed_masking: bool``, else behavior_version >= 34.
     """
     from returnn.config import get_global_config
 
@@ -303,7 +303,7 @@ def _moments_use_fixed_masking() -> bool:
 
     from returnn.util.basic import BehaviorVersion
 
-    return BehaviorVersion.get() >= 33
+    return BehaviorVersion.get() >= 34
 
 
 class BatchNorm(rf.Module):
@@ -367,7 +367,7 @@ class BatchNorm(rf.Module):
           False would be consistent to all other frameworks,
             and potentially allows for the use of an efficient fused op internally.
           The distributed statistics follow it only with the global config option
-            ``rf_moments_use_fixed_masking`` (default from behavior version 33 on), otherwise they are always masked.
+            ``rf_moments_use_fixed_masking`` (default from behavior version 34 on), otherwise they are always masked.
         :param distributed: compute batch statistics over the global batch across all DDP workers
           (SyncBatchNorm-style) instead of per-worker.
           None (default) reads the global config option ``rf_batch_norm_distributed`` (default False).

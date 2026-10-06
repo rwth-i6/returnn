@@ -208,7 +208,7 @@ def test_moments_and_batch_norm_keep_use_mask():
 
 def test_moments_use_fixed_masking_by_behavior_version():
     """
-    Behavior version 33 turns ``rf_moments_use_fixed_masking`` on, the config option overrides that in both directions.
+    Behavior version 34 turns ``rf_moments_use_fixed_masking`` on, the config option overrides that in both directions.
     """
     import torch
     from returnn.config import Config, global_config_ctx
@@ -227,7 +227,7 @@ def test_moments_use_fixed_masking_by_behavior_version():
     masked_mean, unmasked_mean = torch.cat([raw[0], raw[1, :3]]).mean(dim=0), raw.reshape(-1, 3).mean(dim=0)
     behavior_version_orig_state = BehaviorVersion._get_state()
     try:
-        for version, flag, want_masked in ((32, None, True), (33, None, False), (33, False, True), (32, True, False)):
+        for version, flag, want_masked in ((33, None, True), (34, None, False), (34, False, True), (33, True, False)):
             BehaviorVersion._reset()
             BehaviorVersion.set(version)
             with global_config_ctx(Config({} if flag is None else {"rf_moments_use_fixed_masking": flag})):
