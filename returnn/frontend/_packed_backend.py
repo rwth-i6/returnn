@@ -4601,11 +4601,11 @@ class PackedBackend(Backend[PackedRawTensor]):
         # the unmasked count of the other dims is their full size, independent of the packed dims
         n = rf.num_elements_of_shape([d for d in dims if d in raw.orig_dims], use_mask=True, device=device)
         m = rf.num_elements_of_shape([d for d in dims if d not in raw.orig_dims], use_mask=False)
-        if isinstance(m, Tensor):
-            # use_mask=False ignores the device, so copy explicitly
+        if isinstance(m, Tensor) and isinstance(n, Tensor):
+            # use_mask=False ignores the device, so bring it to n, which is on the requested device
+            m = rf.cast(rf.copy_to_device(m, n.device), n.dtype)
+        elif isinstance(m, Tensor) and device is not None:
             m = rf.copy_to_device(m, device)
-            if isinstance(n, Tensor):
-                m = rf.cast(m, n.dtype)
         return n * m
 
     @staticmethod
