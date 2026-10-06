@@ -134,3 +134,31 @@ def test_moments_distributed_matches_local():
         torch.testing.assert_close(mean.raw_tensor, ref_mean.raw_tensor, rtol=1e-6, atol=1e-3)
         torch.testing.assert_close(variance.raw_tensor, ref_variance.raw_tensor, rtol=1e-2, atol=1e-4)
         assert float(variance.raw_tensor.min()) > 0.0, (time_dim, use_mask, variance.raw_tensor)
+
+
+def test_moments_distributed_packed():
+    """
+    Packed storage holds no padding on its packed dims,
+    so the distributed moments count only the sequence frames there, also with use_mask=False.
+    """
+    import torch
+
+    rf.select_backend_torch()
+    batch = Dim(2, name="batch")
+    feat = Dim(3, name="feat")
+    time_sizes = Tensor("time_size", dims=[batch], dtype="int32", raw_tensor=torch.tensor([5, 3], dtype=torch.int32))
+    time_dim = Dim(time_sizes, name="time")
+    torch.manual_seed(42)
+    x = Tensor("x", dims=[batch, time_dim, feat], dtype="float32", raw_tensor=torch.randn(2, 5, 3))
+    for pack_opts in ({}, {"gap": 2}, {"gap": 2, "total_bound": 14}):
+        packed = rf.pack(x, dims=[batch, time_dim], **pack_opts)
+        for axes in ([batch, time_dim], [time_dim]):
+            for use_mask in (True, False):
+                distributed = rf.moments(packed, axis=axes, use_mask=use_mask, distributed=True)
+                local = rf.moments(packed, axis=axes, use_mask=use_mask)
+                for got, want in zip(distributed, local):
+                    torch.testing.assert_close(
+                        got.copy_compatible_to_dims_raw(want.dims),
+                        want.raw_tensor,
+                        msg=f"{pack_opts} axes={axes} use_mask={use_mask}",
+                    )
