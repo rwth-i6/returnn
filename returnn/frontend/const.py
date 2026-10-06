@@ -123,22 +123,12 @@ def ones(
 
 
 def zeros_like(other: Tensor) -> Tensor:
-    """zeros like other"""
-    return zeros(
-        dims=other.dims,
-        dtype=other.dtype,
-        device=other.device,
-        sparse_dim=other.sparse_dim,
-        feature_dim=other.feature_dim,
-    )
+    """zeros like other, also in the same storage (e.g. packed)"""
+    # noinspection PyProtectedMember
+    return (other._raw_backend or global_backend).full_like(other, 0, dtype=other.dtype)
 
 
 def ones_like(other: Tensor) -> Tensor:
-    """ones like other"""
-    return ones(
-        dims=other.dims,
-        dtype=other.dtype,
-        device=other.device,
-        sparse_dim=other.sparse_dim,
-        feature_dim=other.feature_dim,
-    )
+    """ones like other, also in the same storage (e.g. packed)"""
+    # noinspection PyProtectedMember
+    return (other._raw_backend or global_backend).full_like(other, 1, dtype=other.dtype)

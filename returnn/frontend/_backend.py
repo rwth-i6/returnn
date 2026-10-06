@@ -1043,6 +1043,23 @@ class Backend(Generic[T]):
         """
         raise NotImplementedError
 
+    @staticmethod
+    def full_like(other: Tensor, fill_value: Union[RawTensorTypes, Tensor], *, dtype: str) -> Tensor:
+        """
+        :param other: gives the dims, device, sparse_dim and feature_dim, and the storage (e.g. packed)
+        :param fill_value: scalar to fill the tensor
+        :param dtype:
+        :return: tensor like other, filled with fill_value
+        """
+        return rf.full(
+            dims=other.dims,
+            fill_value=fill_value,
+            dtype=dtype,
+            device=other.device,
+            sparse_dim=other.sparse_dim,
+            feature_dim=other.feature_dim,
+        )
+
     @classmethod
     def compare(
         cls,

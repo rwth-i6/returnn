@@ -2923,6 +2923,19 @@ class PackedBackend(Backend[PackedRawTensor]):
         )
 
     @staticmethod
+    def full_like(other: Tensor, fill_value: Union[rf.RawTensorTypes, Tensor], *, dtype: str) -> Tensor:
+        """
+        Same packing as other.
+        The whole buffer is filled, also gap and unused bound frames, which ops on packed data do not take as content.
+        """
+        raw = _raw(other)
+        # noinspection PyProtectedMember
+        inner = raw.inner._raw_backend.full_like(raw.inner, fill_value, dtype=dtype)
+        out = raw.rewrap(inner, name="full_like")
+        out.feature_dim = other.feature_dim
+        return out
+
+    @staticmethod
     def get_dtype_name_raw(raw_tensor: PackedRawTensor) -> str:
         """:return: dtype of the packed data"""
         return raw_tensor.inner.dtype

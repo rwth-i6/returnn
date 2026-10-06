@@ -2266,6 +2266,21 @@ def test_cu_seqlens_with_host_lens_and_a_device_total():
             assert cu.raw_tensor.tolist() == [0, 5, 8]
 
 
+def test_zeros_ones_like_keep_packing():
+    """zeros_like / ones_like of a packed tensor are packed alike, so a reduction over them covers the same frames"""
+    rf.select_backend_torch()
+    x, batch_dim, time_dim, feat_dim = _make_input(seq_lens=(5, 3))
+    for pack_opts in ({}, {"gap": 2}, {"gap": 2, "total_bound": 14}):
+        xp = packed.pack(x, dims=[batch_dim, time_dim], **pack_opts)
+        for like, value in ((rf.zeros_like, 0.0), (rf.ones_like, 1.0)):
+            out = like(xp)
+            assert packed.is_packed(out) and out.raw_tensor.same_packing(xp.raw_tensor), (pack_opts, like)
+            assert (out.dims, out.dtype, out.feature_dim) == (xp.dims, xp.dtype, xp.feature_dim), (pack_opts, like)
+            _assert_equal_non_padded(out, rf.full(dims=x.dims, fill_value=value, dtype=x.dtype), batch_dim, time_dim)
+        count = rf.reduce_sum(rf.ones_like(xp), axis=[batch_dim, time_dim], use_mask=False)
+        assert count.raw_tensor.tolist() == [8.0] * feat_dim.dimension, (pack_opts, count.raw_tensor)
+
+
 if __name__ == "__main__":
     better_exchook.install()
     if len(sys.argv) <= 1:
