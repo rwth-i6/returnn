@@ -37,8 +37,8 @@ def moments(
     :param use_mask: whether to use a mask for dynamic spatial dims in the reduction
     :param correction:
         The variance will be estimated by ``sum((x - mean)**2) / (n-correction)``
-        where ``n`` is the number of elements in the axis (or the axes)
-        (with ``use_mask=True``, taking masking into account, using :func:`num_elements_of_shape`).
+        where ``n`` is the number of elements in the axis (or the axes) which the reduction covers
+        (:func:`num_elements_of_shape` with ``source=x``, e.g. with ``use_mask=True`` taking masking into account).
         The default ``correction=0`` will return the biased variance estimation.
         ``correction=1`` is the `Bessel correction <https://en.wikipedia.org/wiki/Bessel%27s_correction>`__
         and will return the unbiased variance estimation.

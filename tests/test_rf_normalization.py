@@ -168,3 +168,15 @@ def test_moments_packed():
                                 msg=f"{pack_opts} axes={axes} correction={correction}"
                                 f" use_mask={use_mask} distributed={distributed}",
                             )
+    # as traced: static traceable, capacity-sized time dim, bound-sized buffer
+    cap_time_dim = Dim(time_sizes, name="time", capacity=5)
+    x_cap = Tensor("x", dims=[batch, cap_time_dim, feat], dtype="float32", raw_tensor=x.raw_tensor)
+    want = rf.moments(x, axis=[batch, time_dim], correction=1)
+    for distributed in (False, True):
+        with rf.set_static_traceable_ctx():
+            packed = rf.pack(x_cap, dims=[batch, cap_time_dim], total_bound=10)
+            got = rf.moments(packed, axis=[batch, cap_time_dim], use_mask=False, correction=1, distributed=distributed)
+        for g, w in zip(got, want):
+            torch.testing.assert_close(
+                g.copy_compatible_to_dims_raw(w.dims), w.raw_tensor, msg=f"static traceable distributed={distributed}"
+            )
