@@ -2137,6 +2137,16 @@ def test_shift_and_pad_with_a_per_seq_pad_value():
     _assert_equal_non_padded(out_p, ref, batch_dim, padded_time)
 
 
+def test_regap_of_entirely_empty_sequences():
+    """a packing whose sequences are all empty can still be re-laid out"""
+    rf.select_backend_torch()
+    x, batch_dim, time_dim, feat_dim = _make_input(seq_lens=(0, 0), feat=1)
+    out = packed.regap(packed.pack(x), 2)
+    assert packed.is_packed(out) and out.raw_tensor.gap == 2
+    assert torch.equal(out.raw_tensor.inner.raw_tensor, torch.zeros(4, 1))  # 2 seqs, gap 2 each
+    assert tuple(packed.unpack(out).copy_transpose([batch_dim, time_dim, feat_dim]).raw_tensor.shape) == (2, 0, 1)
+
+
 def test_pack_dense_total_bound_static_buffer():
     """a dense pack with total_bound allocates the bound-sized static buffer, content first"""
     rf.select_backend_torch()
@@ -2264,6 +2274,44 @@ def test_cu_seqlens_with_host_lens_and_a_device_total():
         assert cu.raw_tensor.device.type == device and tuple(cu.raw_tensor.shape) == (3,), cu.raw_tensor
         if device == "cuda":
             assert cu.raw_tensor.tolist() == [0, 5, 8]
+
+
+def test_num_elements_of_shape_source():
+    """
+    with source, the count covers what a reduction of it covers:
+    packed storage holds no padding on its packed dims, also with use_mask=False, padded storage does
+    """
+    rf.select_backend_torch()
+    x, batch_dim, time_dim, feat_dim = _make_input(seq_lens=(5, 3))
+
+    def _values(n):
+        return n.copy_compatible_to_dims_raw([batch_dim]).tolist() if batch_dim in n.dims else int(n.raw_tensor)
+
+    for use_mask in (True, False):
+        n = rf.num_elements_of_shape([batch_dim, time_dim, feat_dim], use_mask=use_mask, source=x)
+        assert _values(n) == (8 if use_mask else 10) * feat_dim.dimension, use_mask
+        for pack_opts in ({}, {"gap": 2}, {"gap": 2, "total_bound": 14}):
+            xp = packed.pack(x, dims=[batch_dim, time_dim], **pack_opts)
+            n = rf.num_elements_of_shape([batch_dim, time_dim, feat_dim], use_mask=use_mask, source=xp)
+            assert _values(n) == 8 * feat_dim.dimension, (pack_opts, use_mask)
+            n = rf.num_elements_of_shape(time_dim, use_mask=use_mask, source=xp)
+            assert _values(n) == [5, 3], (pack_opts, use_mask)
+
+
+def test_reduce_logmeanexp_packed_no_mask():
+    """packed storage has no padding, so with use_mask=False the mean is over the sequence frames, as when masked"""
+    rf.select_backend_torch()
+    x, batch_dim, time_dim, feat_dim = _make_input(seq_lens=(5, 3))
+    want = rf.reduce_logmeanexp(x, axis=[batch_dim, time_dim], use_mask=True)
+    for pack_opts in ({}, {"gap": 2}, {"gap": 2, "total_bound": 14}):
+        xp = packed.pack(x, dims=[batch_dim, time_dim], **pack_opts)
+        got = rf.reduce_logmeanexp(xp, axis=[batch_dim, time_dim], use_mask=False)
+        numpy.testing.assert_allclose(
+            got.copy_compatible_to_dims_raw([feat_dim]).numpy(),
+            want.copy_compatible_to_dims_raw([feat_dim]).numpy(),
+            rtol=1e-5,
+            err_msg=str(pack_opts),
+        )
 
 
 if __name__ == "__main__":
