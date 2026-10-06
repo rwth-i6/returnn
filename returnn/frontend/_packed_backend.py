@@ -5318,14 +5318,14 @@ def _torch_relayout_frames(inner: Tensor, pos: Tensor, *, packed_dim: Dim, out_d
         n_out = int(n_out)
     assert isinstance(n_out, int)
     n_in = values.shape[0]
-    # Loud, capture-safe bound check. Without it a too-small target buffer writes OUT OF BOUNDS
-    # here (index_put with pos > n_out), which corrupts the CUDA context and then surfaces far
-    # away as an unrelated "illegal memory access". The usual cause is a declared
-    # packed_total_bound / regap total_bound that does not cover the per-seq gap+align slack
-    # of the TARGET layout.
     if n_in == 0:
         out_raw = values.new_zeros((n_out,) + tuple(values.shape[1:]))
     else:
+        # Loud, capture-safe bound check. Without it a too-small target buffer writes OUT OF BOUNDS
+        # here (index_put with pos > n_out), which corrupts the CUDA context and then surfaces far
+        # away as an unrelated "illegal memory access". The usual cause is a declared
+        # packed_total_bound / regap total_bound that does not cover the per-seq gap+align slack
+        # of the TARGET layout.
         assert_(
             pos_raw.max() <= n_out,
             f"packed relayout: target position beyond the buffer ({out_dim}, {n_out} frames + dump slot)."
