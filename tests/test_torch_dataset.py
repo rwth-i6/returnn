@@ -288,7 +288,7 @@ class _BigTagBatches(torch.utils.data.IterableDataset):
             yield {"data": torch.full((2,), i), "tag": "x" * 100000}
 
 
-def test_shutdown_data_loader():
+def _check_shutdown_data_loader(*, pin_memory: bool):
     """
     Stops the persistent worker with an unread batch, also repeatedly,
     and also when the worker already left its loop on its own SIGINT (Ctrl+C goes to the whole process group):
@@ -303,13 +303,21 @@ def test_shutdown_data_loader():
         batch_size=None,
         num_workers=1,
         persistent_workers=True,
+        pin_memory=pin_memory,
         multiprocessing_context=NonDaemonicSpawnContext(),
     )
     data_pipeline.shutdown_data_loader(loader)  # nothing started yet
     for interrupted in [False, True]:
         next(iter(loader))
-        worker = loader._iterator._workers[0]
-        assert loader._iterator._worker_result_queue._reader.poll(timeout=60)  # the worker sends the next batch
+        data_iter = loader._iterator
+        worker = data_iter._workers[0]
+        if pin_memory:  # the Torch pin thread reads the pipe: wait until it has the next batch
+            end_time = time.monotonic() + 60
+            while data_iter._data_queue.qsize() == 0:
+                assert time.monotonic() < end_time
+                time.sleep(0.01)
+        else:  # the worker sends the next batch
+            assert data_iter._worker_result_queue._reader.poll(timeout=60)
         if interrupted:
             os.kill(worker.pid, signal.SIGINT)
             time.sleep(0.5)  # the worker leaves its loop
@@ -320,6 +328,17 @@ def test_shutdown_data_loader():
         assert not worker.is_alive() and worker.exitcode == 0 and worker._at_exit_cleanup_handler is None
         assert loader._iterator is None
         data_pipeline.shutdown_data_loader(loader)
+
+
+def test_shutdown_data_loader():
+    _check_shutdown_data_loader(pin_memory=False)
+
+
+def test_shutdown_data_loader_torch_pin_memory():
+    """with the Torch pin thread, which reads the worker results itself"""
+    if not torch.cuda.is_available():
+        raise unittest.SkipTest("CUDA not available")
+    _check_shutdown_data_loader(pin_memory=True)
 
 
 def test_batching_packed_batch_cost_bounds_a_product_of_lengths():

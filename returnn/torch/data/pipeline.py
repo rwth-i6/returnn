@@ -808,18 +808,23 @@ def shutdown_data_loader(data_loader: Union[torch.utils.data.DataLoader, PinMemo
     data_loader._iterator = None
     # A worker which already left its loop (e.g. it got the SIGINT of Ctrl+C) ignores the shutdown signal,
     # and at exit waits until its unread batches are written to the pipe. So drop them while it stops.
+    # Not with the Torch pin thread: it reads the pipe itself, and a second reader can leave it hanging.
     stop_drain = threading.Event()
-    # noinspection PyProtectedMember,PyUnresolvedReferences
-    drain_thread = threading.Thread(
-        target=_drain_conn, args=(data_iter._worker_result_queue._reader, stop_drain), daemon=True
-    )
-    drain_thread.start()
+    drain_thread = None
+    # noinspection PyProtectedMember
+    if not data_iter._pin_memory:
+        # noinspection PyProtectedMember,PyUnresolvedReferences
+        drain_thread = threading.Thread(
+            target=_drain_conn, args=(data_iter._worker_result_queue._reader, stop_drain), daemon=True
+        )
+        drain_thread.start()
     try:
         # noinspection PyProtectedMember,PyUnresolvedReferences
         data_iter._shutdown_workers()  # only the multiprocessing iterator has it, the one with persistent workers
     finally:
-        stop_drain.set()
-        drain_thread.join(timeout=1)  # blocks forever in recv_bytes on a partial message of a killed worker
+        if drain_thread is not None:
+            stop_drain.set()
+            drain_thread.join(timeout=1)  # blocks forever in recv_bytes on a partial message of a killed worker
 
 
 def _drain_conn(conn, stop_event: threading.Event):
