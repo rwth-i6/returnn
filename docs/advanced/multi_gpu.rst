@@ -15,6 +15,10 @@ This will by default use PyTorch ``DistributedDataParallel``.
 Or maybe use ``torch_distributed = {"reduce_type": "param", "param_sync_step": 100}``.
 This uses parameter averaging after every 100 steps.
 
+With ``"sync_complete_frac": True`` (default since behavior version 33),
+the epoch progress ``complete_frac`` is the mean over the ranks,
+so a ``dynamic_learning_rate`` on ``epoch_continuous`` gives the same learning rate on every rank.
+
 For the dataset, by default, we do not use sharding,
 but instead, every dataset uses a different random seed
 (see ``random_seed_offset`` in the code).

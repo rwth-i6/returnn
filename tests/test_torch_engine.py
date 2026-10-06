@@ -4,7 +4,7 @@ Tests for PyTorch engine.
 
 from __future__ import annotations
 import _setup_test_env  # noqa
-from typing import Optional, Any, Dict, Tuple
+from typing import Optional, Any, Dict, Tuple, List
 import contextlib
 import copy
 import json
@@ -1533,6 +1533,113 @@ def test_torch_engine_distributed_cpu():
             with open(f"{tmp_dir}/rank{rank}.txt") as f:
                 param_sums.append(float(f.read()))
     assert param_sums[0] == param_sums[1], param_sums
+
+
+def _torch_distributed_lr_worker(rank: int, world_size: int, port: int, tmp_dir: str, opts: Dict[str, Any]):
+    device = opts.get("device", "cpu")
+    os.environ.update(
+        MASTER_ADDR="127.0.0.1",
+        MASTER_PORT=str(port),
+        RANK=str(rank),
+        WORLD_SIZE=str(world_size),
+        # on CUDA: both ranks on one GPU, gloo also for the CUDA tensors
+        LOCAL_RANK=str(rank) if device == "cpu" else "0",
+        LOCAL_WORLD_SIZE=str(world_size) if device == "cpu" else "1",
+    )
+    applied_lrs = {}  # global train step -> LR of the update in that step
+
+    def _dyn_lr(*, global_train_step: int, epoch_continuous: float, learning_rate: float, **_kwargs) -> float:
+        lr = learning_rate * (1.0 + epoch_continuous)
+        applied_lrs[global_train_step] = lr  # a repeated call for the same step overwrites
+        return lr
+
+    def _train(num_epochs: int) -> Engine:
+        config = Config(
+            dict(
+                task="train",
+                device=device,
+                extern_data={"data": {"dim": 9}, "classes": {"dim": 2, "sparse": True}},
+                get_model=TrainTestModel,
+                train_step=TrainTestModel.train_step,
+                batch_size=300,
+                optimizer={"class": "adamw", "capturable": device != "cpu"},
+                learning_rate=0.01,
+                dynamic_learning_rate=_dyn_lr,
+                accum_grad_multiple_step=opts["accum_grad_multiple_step"],
+                num_epochs=num_epochs,
+                model=f"{tmp_dir}/model",
+                learning_rate_file=f"{tmp_dir}/learning_rates",
+                eval_datasets={"dev": {"class": "Task12AXDataset", "num_seqs": 10}},
+                torch_dataloader_opts={"num_workers": 0},
+                torch_distributed={
+                    "backend": "gloo",
+                    "reduce_type": opts["reduce_type"],
+                    "sync_complete_frac": opts["sync_complete_frac"],
+                },
+                **({"torch_optimizer_step": {}} if device != "cpu" else {}),
+            )
+        )
+        with global_config_ctx(config):
+            # no fixed seed: each rank its own seq order and seq lens, thus its own complete_frac per step
+            dataset = init_dataset({"class": "Task12AXDataset", "num_seqs": 50, "name": "train"})
+            dataset.init_seq_order(epoch=1)
+            engine = Engine(config=config)
+            engine.init_train_from_config(train_data=dataset)
+            engine.train()
+        return engine
+
+    _train(num_epochs=2)
+    torch.distributed.barrier()  # rank 0 wrote the checkpoint
+    engine = _train(num_epochs=3)  # continues from the epoch 2 checkpoint
+    assert engine.epoch == 3
+    params = [param.detach().cpu() for param in engine._pt_model.parameters()]
+    torch.save({"lrs": applied_lrs, "params": params}, f"{tmp_dir}/rank{rank}.pt")
+    torch.distributed.destroy_process_group()
+
+
+def _run_torch_distributed_lr(**opts) -> List[Dict[str, Any]]:
+    import socket
+    import torch.multiprocessing
+
+    world_size = 2
+    with socket.socket() as s:
+        s.bind(("127.0.0.1", 0))
+        port = s.getsockname()[1]
+    with tempfile.TemporaryDirectory(prefix="returnn_test_torch_distributed_lr") as tmp_dir:
+        torch.multiprocessing.spawn(
+            _torch_distributed_lr_worker, args=(world_size, port, tmp_dir, opts), nprocs=world_size
+        )
+        return [torch.load(f"{tmp_dir}/rank{rank}.pt") for rank in range(world_size)]
+
+
+def _check_torch_distributed_lr(**opts):
+    for sync_complete_frac in [False, True]:
+        res = _run_torch_distributed_lr(sync_complete_frac=sync_complete_frac, **opts)
+        lrs0, lrs1 = res[0]["lrs"], res[1]["lrs"]
+        assert sorted(lrs0) == sorted(lrs1), (opts, lrs0, lrs1)
+        params_equal = all(torch.equal(p0, p1) for p0, p1 in zip(res[0]["params"], res[1]["params"]))
+        print(f"{opts}, sync_complete_frac {sync_complete_frac}: LRs equal {lrs0 == lrs1}, params equal {params_equal}")
+        if sync_complete_frac:
+            assert lrs0 == lrs1, (opts, lrs0, lrs1)
+            assert params_equal, opts
+        else:  # rank-local progress: the setting really triggers the divergence
+            assert lrs0 != lrs1, opts
+            assert not params_equal, opts
+
+
+def test_torch_engine_distributed_cpu_sync_complete_frac_ddp():
+    _check_torch_distributed_lr(reduce_type="grad", accum_grad_multiple_step=1)
+
+
+def test_torch_engine_distributed_cpu_sync_complete_frac_grad_explicit_accum():
+    _check_torch_distributed_lr(reduce_type="grad_explicit", accum_grad_multiple_step=2)
+
+
+def test_torch_engine_distributed_sync_complete_frac_optimizer_step():
+    """captured optimizer step (torch_optimizer_step), its LR is a device tensor updated in place"""
+    if not torch.cuda.is_available():
+        raise unittest.SkipTest("CUDA not available")
+    _check_torch_distributed_lr(device="cuda", reduce_type="grad_explicit", accum_grad_multiple_step=1)
 
 
 def test_dynamic_learning_rate():
