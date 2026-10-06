@@ -14,6 +14,8 @@ import torch
 
 from returnn import native_op
 from returnn.tensor import Tensor, Dim
+
+# noinspection PyProtectedMember
 from returnn.frontend._cache import Cache
 from .native_op_code_compiler import OpCodeCompiler
 
