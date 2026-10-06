@@ -1882,6 +1882,57 @@ def _torch_engine_sub_proc_cleanup_test_main(conn):
         conn.close()
 
 
+def _check_torch_engine_finalize_data_loaders(*, pin_memory: bool = False):
+    """
+    :func:`Engine.finalize` stops the DataLoader workers of the train and dev data with unread batches,
+    and the pinning threads, also when repeated (the engine stays alive until the interpreter exits)
+    """
+    import threading
+
+    config = Config(
+        dict(
+            task="train",
+            device="gpu" if pin_memory else "cpu",
+            extern_data={"data": {"dim": 9}, "classes": {"dim": 2, "sparse": True}},
+            get_model=TrainTestModel,
+            train_step=TrainTestModel.train_step,
+            batch_size=100,
+            max_seqs=2,
+            optimizer={"class": "adam"},
+            torch_dataloader_opts={"num_workers": 1, "pin_memory": pin_memory},
+        )
+    )
+    datasets = {
+        name: init_dataset({"class": "Task12AXDataset", "num_seqs": 10, "name": name}) for name in ["train", "dev"]
+    }
+    for dataset in datasets.values():
+        dataset.init_seq_order(epoch=1)
+    with global_config_ctx(config):
+        engine = Engine(config=config)
+        engine.init_train_from_config(train_data=datasets["train"], dev_data=datasets["dev"])
+        workers = []
+        for loader in [engine._train_dataloader, engine._eval_dataloaders["dev"]]:
+            next(iter(loader))
+            workers += (loader.data_loader if pin_memory else loader)._iterator._workers
+        engine.finalize()
+        engine.finalize()
+    for worker in workers:
+        # no atexit handler left which would signal it at interpreter exit
+        assert not worker.is_alive() and worker.exitcode == 0 and worker._at_exit_cleanup_handler is None
+    assert not [thread for thread in threading.enumerate() if thread.name == "RETURNN pin memory"]
+
+
+def test_torch_engine_finalize_data_loaders():
+    _check_torch_engine_finalize_data_loaders()
+
+
+def test_torch_engine_finalize_data_loaders_pin_memory():
+    """with :class:`returnn.torch.data.pin_memory.PinMemoryDataLoader`"""
+    if not torch.cuda.is_available():
+        raise unittest.SkipTest("CUDA not available")
+    _check_torch_engine_finalize_data_loaders(pin_memory=True)
+
+
 def _build_cuda_graph_train_config_and_dataset(
     *,
     compile_: bool,
