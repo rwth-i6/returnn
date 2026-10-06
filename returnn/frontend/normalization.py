@@ -68,16 +68,13 @@ def moments(
             compute_dtype = x.dtype
     x = rf.cast(x, compute_dtype)
     if distributed:
-        if not use_mask and rf.is_packed(x):
-            # the count would include the padding of the packed dims, which packed storage does not hold
-            raise NotImplementedError(f"moments: distributed with use_mask=False on packed {x}")
         # Two-pass statistics over the global batch, accumulated in float32.
         # The one-pass variance E[x^2] - E[x]^2 catastrophically cancels whenever the mean dominates
         # the variance, in float32 just as in bf16: the difference is then noise and can go negative,
         # which gives NaNs via rsqrt(variance + eps).
         # torch.nn.SyncBatchNorm instead combines per-worker Welford statistics, which does not cancel.
         x = rf.cast(x, "float32")
-        count = _global_num_elements(axis, use_mask=use_mask, device=x.device)
+        count = _global_num_elements(rf.num_elements_of_shape(axis, use_mask=use_mask, source=x), device=x.device)
         mean = rf.reduce_sum(x, axis=axis, use_mask=use_mask, distributed=True) / count
         # stop_gradient does not change the gradient here: the deviations sum to zero over the global batch
         sq_dev = rf.squared_difference(x, rf.stop_gradient(mean))
@@ -89,7 +86,7 @@ def moments(
     # stop_gradient does not change the gradient here
     variance = rf.reduce_mean(rf.squared_difference(x, rf.stop_gradient(mean)), axis=axis, use_mask=use_mask)
     if isinstance(correction, Tensor) or correction != 0:
-        n = rf.num_elements_of_shape(axis, use_mask=use_mask)
+        n = rf.num_elements_of_shape(axis, use_mask=use_mask, source=x)
         variance *= n / (n - correction)
     return mean, variance
 
@@ -118,14 +115,12 @@ def _moments_float32() -> bool:
     return BehaviorVersion.get() >= 32
 
 
-def _global_num_elements(axis: Union[Dim, Sequence[Dim]], *, use_mask: bool, device: Optional[str]) -> Tensor:
+def _global_num_elements(count: Union[int, Tensor], *, device: Optional[str]) -> Tensor:
     """
-    :param axis: the dim or dims which are reduced
-    :param use_mask: whether padded frames are excluded, as in the reduction itself
+    :param count: number of reduced elements of this worker, from :func:`rf.num_elements_of_shape`
     :param device: where the count is needed, so it does not force a host sync under graph capture
     :return: number of reduced elements, summed over the Torch DDP workers, as a float32 tensor
     """
-    count = rf.num_elements_of_shape(axis, use_mask=use_mask, device=device)
     if isinstance(count, Tensor):
         # use_mask=False ignores the device, so copy explicitly
         count = rf.cast(rf.copy_to_device(count, device), "float32")
