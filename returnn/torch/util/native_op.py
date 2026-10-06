@@ -644,24 +644,11 @@ def get_ctc_fsa_fast_bw(
         start_end_states is (2,batch), int32, (start,end) state idx in FSA.
     """
     assert targets.ndim == 2
-    # Under tracing the cache is bypassed on purpose:
-    # a trace-time (fake) FSA must never reach the compiled program, and vice versa.
-    # (Within one traced step the aux heads then rebuild it; the construction op is cheap.)
-    cache_key = None
-    if not _is_tracing_tensor(targets):
-        # _version: an in-place refill of the same buffer must not hit
-        # (under static traceable, the Cache key also has the step)
-        # noinspection PyProtectedMember
-        cache_key = (
-            (_wrap_raw_tensor(targets), targets._version),
-            (_wrap_raw_tensor(seq_lens), seq_lens._version),
-            blank_idx,
-            label_loop,
-            edges_bound,
-        )
-        cached = _ctc_fsa_cache.get(cache_key)
-        if cached is not None:
-            return cached[0].raw_tensor, cached[1].raw_tensor, cached[2].raw_tensor
+    cache_key = (_wrap_raw_tensor(targets), _wrap_raw_tensor(seq_lens), blank_idx, label_loop, edges_bound)
+    cached = _ctc_fsa_cache.get(cache_key)
+    if cached is not None:
+        edges, weights, start_end_states = cached
+        return edges.raw_tensor, weights.raw_tensor, start_end_states.raw_tensor
     targets = targets.to(torch.int32)
     n_batch, n_time = targets.shape
 
@@ -693,8 +680,7 @@ def get_ctc_fsa_fast_bw(
         op = maker.make_op()
         edges, start_end_states, weights = op(targets, seq_lens, blank_idx, weights, label_loop)
 
-    if cache_key is not None:
-        _ctc_fsa_cache.set(cache_key, tuple(_wrap_raw_tensor(x) for x in (edges, weights, start_end_states)))
+    _ctc_fsa_cache.set(cache_key, tuple(_wrap_raw_tensor(x) for x in (edges, weights, start_end_states)))
     return edges, weights, start_end_states
 
 
@@ -702,9 +688,8 @@ def get_ctc_fsa_fast_bw(
 # so they build the same FSA; only the logits differ.
 # This is the chokepoint for every caller, packed and padded alike,
 # which is why the cache sits here and not in a backend.
-# The Cache keys on the identity of the raw targets and seq lens,
-# and under static traceable also on the step (rf.static_traceable_generation),
-# e.g. under CUDA-graph capture, where the targets live in a static buffer refilled in place every step.
+# Under static traceable, the Cache scopes the entries to the step (see rf.static_traceable_generation),
+# so no FSA crosses a trace or a CUDA graph capture (where the targets buffer is refilled in place every step).
 # One slot is enough: the heads are evaluated back to back.
 _ctc_fsa_cache = Cache(1)
 
@@ -716,30 +701,6 @@ def _wrap_raw_tensor(x: torch.Tensor) -> Tensor:
     """
     dims = [Dim(d, name=f"dim{i}") for i, d in enumerate(x.shape)]
     return Tensor("raw", dims=dims, dtype=str(x.dtype).replace("torch.", ""), raw_tensor=x)
-
-
-def _is_tracing_tensor(x: torch.Tensor) -> bool:
-    """
-    :param x:
-    :return: whether this is a trace-time tensor (fake/meta), i.e. one WITHOUT storage
-    """
-    if x.device.type == "meta":
-        return True
-    try:
-        # noinspection PyProtectedMember
-        from torch._subclasses.fake_tensor import FakeTensor
-    except ImportError:  # older torch: no fake tensors, thus nothing to detect
-        return False
-    if isinstance(x, FakeTensor):
-        return True
-    # an ACTIVE fake mode also fakes plain tensors on use (older torch lacks this API)
-    # noinspection PyProtectedMember
-    get_dispatch_mode = getattr(torch._C, "_get_dispatch_mode", None)
-    # noinspection PyProtectedMember
-    mode_key = getattr(getattr(torch._C, "_TorchDispatchModeKey", None), "FAKE", None)
-    if get_dispatch_mode is not None and mode_key is not None:
-        return get_dispatch_mode(mode_key) is not None
-    return False
 
 
 def fast_baum_welch(

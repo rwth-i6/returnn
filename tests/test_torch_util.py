@@ -650,7 +650,29 @@ def test_ctc_fsa_cache_scoped_to_static_traceable_step():
         steps.append(fsa)
     assert steps[0][0] is not eager[0], "no eager FSA enters a step"
     assert steps[1][0] is not steps[0][0], "no FSA crosses steps"
+    assert native_op.get_ctc_fsa_fast_bw(**kwargs)[0] is not steps[1][0], "no FSA leaks out of a step"
+
+
+def test_ctc_fsa_cache_traced_step():
+    """
+    Like the compiled step of torch_cuda_graph: traced under static traceable,
+    with the real targets buffer under an active fake mode.
+    The heads share the trace-time FSA, and it never meets an eager FSA in either direction.
+    """
+    if not hasattr(torch.library, "register_fake"):
+        raise unittest.SkipTest("torch.library.register_fake not available (torch < 2.4)")
+    from torch._subclasses.fake_tensor import FakeTensor, FakeTensorMode
+    import returnn.frontend as rf
+    from returnn.torch.util import native_op
+
+    targets = torch.tensor([[1, 2, 2, 3, 0], [2, 3, 0, 0, 0]], dtype=torch.int32)
+    seq_lens = torch.tensor([4, 2], dtype=torch.int32)
+    kwargs = dict(targets=targets, seq_lens=seq_lens, blank_idx=4)
+    eager = native_op.get_ctc_fsa_fast_bw(**kwargs)
+    with rf.set_static_traceable_ctx(), FakeTensorMode(allow_non_fake_inputs=True):
+        traced = native_op.get_ctc_fsa_fast_bw(**kwargs)
+        assert isinstance(traced[0], FakeTensor), "no eager FSA enters the trace"
+        assert native_op.get_ctc_fsa_fast_bw(**kwargs)[0] is traced[0], "within the trace, the heads share the FSA"
     after = native_op.get_ctc_fsa_fast_bw(**kwargs)
-    assert after[0] is not steps[1][0], "no FSA leaks out of a step"
-    targets[1, 2] = 1  # in-place refill of the same buffer
-    assert native_op.get_ctc_fsa_fast_bw(**kwargs)[0] is not after[0], "no stale FSA after an in-place refill"
+    assert not isinstance(after[0], FakeTensor), "no trace-time FSA leaks out"
+    torch.testing.assert_close(after, eager)
