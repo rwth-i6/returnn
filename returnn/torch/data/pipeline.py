@@ -25,6 +25,7 @@ import functools
 import itertools
 from typing import Optional, Any, Sequence, Tuple, Union, List, Dict, Callable
 import sys
+import threading
 from copy import deepcopy
 
 import numpy
@@ -802,8 +803,27 @@ def shutdown_data_loader(data_loader: torch.utils.data.DataLoader):
     # noinspection PyProtectedMember
     assert isinstance(data_iter, torch.utils.data.dataloader._MultiProcessingDataLoaderIter)  # persistent workers
     data_loader._iterator = None
+    # A worker which already left its loop (e.g. it got the SIGINT of Ctrl+C) ignores the shutdown signal,
+    # and at exit waits until its unread batches are written to the pipe. So drop them while it stops.
+    stop_drain = threading.Event()
     # noinspection PyProtectedMember
-    data_iter._shutdown_workers()
+    drain_thread = threading.Thread(
+        target=_drain_conn, args=(data_iter._worker_result_queue._reader, stop_drain), daemon=True
+    )
+    drain_thread.start()
+    try:
+        # noinspection PyProtectedMember
+        data_iter._shutdown_workers()
+    finally:
+        stop_drain.set()
+        drain_thread.join(timeout=1)  # blocks forever in recv_bytes on a partial message of a killed worker
+
+
+def _drain_conn(conn, stop_event: threading.Event):
+    # raw bytes, not unpickled: no shared memory tensors rebuilt from the stopping workers
+    while not stop_event.is_set():
+        if conn.poll(0.01):
+            conn.recv_bytes()
 
 
 class _DataLoaderWorkerInitFunc:

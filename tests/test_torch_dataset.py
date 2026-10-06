@@ -308,6 +308,29 @@ def test_shutdown_data_loader():
         data_pipeline.shutdown_data_loader(loader)
 
 
+def test_shutdown_data_loader_interrupted_worker():
+    """
+    The worker got SIGINT (Ctrl+C goes to the whole process group) and left its loop,
+    with an unread batch (its seq tags are larger than a pipe buffer): it must still stop cleanly and quickly
+    (not wait for the join timeout of the DataLoader shutdown and get terminated)
+    """
+    import signal
+    import time
+
+    dataset = Task12AXDataset(num_seqs=8000)
+    mp_manager = multi_proc_manager_with_watchdog.create_manager()
+    loader = get_loader_from_returnn_dataset(dataset, mp_manager, batch_size=1000000, max_seqs=4000)
+    next(iter(loader))
+    assert loader._iterator._data_queue._reader.poll(timeout=60)  # the worker started to send the next batch
+    worker = loader._iterator._workers[0]
+    os.kill(worker.pid, signal.SIGINT)
+    time.sleep(1)  # the worker leaves its loop
+    start_time = time.monotonic()
+    data_pipeline.shutdown_data_loader(loader)
+    assert time.monotonic() - start_time < 3
+    assert not worker.is_alive() and worker.exitcode == 0
+
+
 def test_batching_packed_batch_cost_bounds_a_product_of_lengths():
     """
     A monotonic RNN-T lattice has frames times prefixes cells per sequence, a product no per-key length
