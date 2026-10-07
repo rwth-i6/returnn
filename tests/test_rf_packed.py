@@ -2802,8 +2802,7 @@ def test_scatter_relayout_under_cuda_graph_capture():
         return packed.pack_import(flat, batch_dim=batch_dim, spatial_dim=frame_dim, packed_dim=frame_packed)
 
     def _step():
-        # as the engine before every step: a dim derived from the lens memoizes its sizes when it is built,
-        # so the lens dims forget what earlier calls derived, and the sum is built (and computed) in here
+        # as the engine before every step, since a dim derived from the lens memoizes its sizes when it is built
         for dim, lens_buf in ((frame_dim, frame_lens_buf), (rest_dim, rest_lens_buf)):
             dim.reset_eager()
             dim.dyn_size_ext.raw_tensor = lens_buf

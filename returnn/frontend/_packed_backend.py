@@ -4264,8 +4264,7 @@ class PackedBackend(Backend[PackedRawTensor]):
                     return out
             return _dim_aware_call("gather", (source,), kwargs)
         if is_packed(indices) and _raw(indices).orig_dims != raw.orig_dims:
-            # _conform_packing only converts between layouts of the same sequences and dims.
-            # Indices over another spatial dim have their own rows, which must not be read as rows of the source.
+            # indices over another spatial dim have their own rows, which must not be read as rows of the source
             out = _gather_into_indices_packing(source, raw, indices=indices, clip_to_valid=clip_to_valid)
             if out is not None:
                 return out
@@ -5017,8 +5016,7 @@ def _scatter_relayout(
     dump_dim = out_packed_dim + 1
     values = raw.inner
     if mode != "sum":
-        # The backward of a max or min divides by the number of sources equal to the result.
-        # A nan in a row which writes nothing equals nothing, so its gradient would be nan instead of zero.
+        # a nan in a row which writes nothing would get a nan gradient from the backward of a max or min
         values = rf.where(writes, values, 0)
     out_inner = raw.inner_backend.scatter(
         values, indices=dest, indices_dim=[raw.packed_dim], mode=mode, fill_value=fill_value, out_dim=dump_dim
