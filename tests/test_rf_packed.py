@@ -741,6 +741,38 @@ def test_regap_gap_roundtrip_keeps_bound():
         _assert_equal_non_padded(back, x, batch_dim, time_dim)
 
 
+def test_flat_content_shared_out_dim_other_bound():
+    # E.g. pack_padded of the logits, then of the targets with out_dim = the flat dim of the logits:
+    # the same content, but packed with another bound, so the buffer sizes differ under static tracing.
+    rf.select_backend_torch()
+    batch_dim = Dim(3, name="batch")
+    seq_lens = torch.tensor([3, 1, 0], dtype=torch.int32)
+    time_dim = Dim(Tensor("time", dims=[batch_dim], dtype="int32", raw_tensor=seq_lens), capacity=8)
+    feat_dim = Dim(5, name="feat")
+    mask = torch.arange(8)[None, :] < seq_lens[:, None]
+    num_frames = int(seq_lens.sum())
+    gen = torch.Generator().manual_seed(7)
+    for bound_a, bound_b in [(16, 24), (24, 16), (16, 16)]:
+        a_raw = torch.randn(3, 8, 5, generator=gen, requires_grad=True)
+        b_raw = torch.randn(3, 8, generator=gen, requires_grad=True)
+        a = Tensor("a", dims=[batch_dim, time_dim, feat_dim], dtype="float32", raw_tensor=a_raw)
+        b = Tensor("b", dims=[batch_dim, time_dim], dtype="float32", raw_tensor=b_raw)
+        with rf.set_default_device_ctx("cpu"), rf.set_static_traceable_ctx():
+            a_flat, flat_dim = rf.pack_padded(packed.pack(a, total_bound=bound_a), dims=[batch_dim, time_dim])
+            b_flat, _ = rf.pack_padded(
+                packed.pack(b, total_bound=bound_b), dims=[batch_dim, time_dim], out_dim=flat_dim
+            )
+        a_flat_raw = a_flat.copy_compatible_to_dims_raw([flat_dim, feat_dim])
+        b_flat_raw = b_flat.copy_compatible_to_dims_raw([flat_dim])
+        assert a_flat_raw.shape == (bound_a, 5) and b_flat_raw.shape == (bound_a,)
+        torch.testing.assert_close(a_flat_raw[:num_frames], a_raw[mask])
+        torch.testing.assert_close(b_flat_raw[:num_frames], b_raw[mask])
+        assert not a_flat_raw[num_frames:].any() and not b_flat_raw[num_frames:].any()
+        (a_flat_raw * b_flat_raw[:, None]).sum().backward()
+        torch.testing.assert_close(a_raw.grad, torch.where(mask[:, :, None], b_raw[:, :, None], 0.0).expand(3, 8, 5))
+        torch.testing.assert_close(b_raw.grad, torch.where(mask, a_raw.sum(dim=-1), 0.0))
+
+
 def _relayout_frames_cuda_graph_replay(*, compiled: bool, deterministic: bool):
     from functorch.compile import aot_function
     from returnn.torch.util.graph_capture import inductor_fw_compiler
