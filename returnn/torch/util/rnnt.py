@@ -31,6 +31,7 @@ from typing import Tuple
 
 import torch
 
+from .custom_op import custom_op
 from .monotonic_rnnt import cell_offsets, next_label_per_cell
 
 
@@ -114,7 +115,7 @@ def _forward_scores(
 _HAVE_LIB_OPS = False
 if hasattr(torch.library, "custom_op"):  # torch >= 2.4
 
-    @torch.library.custom_op("returnn::rnnt_fwd", mutates_args=())
+    @custom_op("returnn::rnnt_fwd", mutates_args=())
     def _lib_fwd(
         logits: torch.Tensor,
         next_label: torch.Tensor,
@@ -146,7 +147,7 @@ if hasattr(torch.library, "custom_op"):  # torch >= 2.4
             torch.empty_like(cell_vec),
         )
 
-    @torch.library.custom_op("returnn::rnnt_bwd", mutates_args=())
+    @custom_op("returnn::rnnt_bwd", mutates_args=())
     def _lib_bwd(
         logits: torch.Tensor,
         next_label: torch.Tensor,
