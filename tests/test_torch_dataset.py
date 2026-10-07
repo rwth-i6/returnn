@@ -379,6 +379,27 @@ def test_shutdown_data_loader_torch_pin_memory():
     _check_shutdown_data_loader(pin_memory=True)
 
 
+def test_shutdown_data_loader_drain_conn():
+    """the drain of the worker results stops on request also within a partial message, and at the end of the pipe"""
+    import multiprocessing
+    import struct
+    import threading
+    from test_MultiProcDataset import timeout
+
+    reader, writer = multiprocessing.Pipe(duplex=False)
+    writer.send_bytes(b"x" * 10)
+    os.write(writer.fileno(), struct.pack("!i", 8) + b"1234")  # e.g. a killed worker: 4 of 8 bytes sent
+    stop_event = threading.Event()
+    timer = threading.Timer(0.1, stop_event.set)
+    with timeout(10):
+        timer.start()
+        data_pipeline._drain_conn(reader, stop_event)
+        writer.close()
+        data_pipeline._drain_conn(reader, threading.Event())
+    timer.join()
+    reader.close()
+
+
 class _ReaderProcDataset(Task12AXDataset):
     """owns a reader proc, like :class:`NemoSpeechDataset`, and logs its start and how it is freed"""
 
