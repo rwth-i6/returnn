@@ -1013,6 +1013,52 @@ def test_batch_norm_packed_gapped_train():
         )
 
 
+def test_batch_norm_packed_gapped_half_stats():
+    """the batch norm statistics of a half precision packed input sum in float32, like torch's reference"""
+    rf.select_backend_torch()
+    batch_dim = Dim(2, name="batch")
+    lens = torch.tensor([40960, 40960], dtype=torch.int32)
+    time_dim = Dim(Tensor("time", dims=[batch_dim], dtype="int32", raw_tensor=lens))
+    feat_dim = Dim(2, name="feat")
+    raw = torch.randn(2, 40960, 2, generator=torch.Generator().manual_seed(5)).to(torch.float16)
+    x = Tensor("x", dims=[batch_dim, time_dim, feat_dim], dtype="float16", raw_tensor=raw)
+    with rf.set_default_device_ctx("cpu"):
+        bn = rf.BatchNorm(feat_dim, use_mask=False)
+        with rf.get_run_ctx().train_flag_ctx(True):
+            out = bn(packed.pack(x, gap=2))
+    assert bool(torch.isfinite(bn.running_mean.raw_tensor).all()), bn.running_mean.raw_tensor
+    assert bool(torch.isfinite(bn.running_variance.raw_tensor).all()), bn.running_variance.raw_tensor
+    ref = torch.nn.functional.batch_norm(
+        raw.float().reshape(-1, 2), None, None, bn.gamma.raw_tensor, bn.beta.raw_tensor, training=True, eps=bn.eps
+    )
+    expected = Tensor("ref", dims=x.dims, dtype="float32", raw_tensor=ref.reshape(2, 40960, 2))
+    _assert_equal_non_padded(out, expected, batch_dim, time_dim, rtol=1e-2, atol=1e-2)
+    assert out.dtype == "float16"
+
+
+def test_batch_norm_packed_gapped_float64():
+    """float64 input keeps float64 statistics, like torch's reference"""
+    rf.select_backend_torch()
+    batch_dim = Dim(2, name="batch")
+    lens = torch.tensor([300, 200], dtype=torch.int32)
+    time_dim = Dim(Tensor("time", dims=[batch_dim], dtype="int32", raw_tensor=lens))
+    feat_dim = Dim(3, name="feat")
+    # a small spread on a large offset, not resolvable in float32
+    raw = torch.randn(2, 300, 3, generator=torch.Generator().manual_seed(1), dtype=torch.float64) * 1e-3 + 1e4
+    x = Tensor("x", dims=[batch_dim, time_dim, feat_dim], dtype="float64", raw_tensor=raw)
+    with rf.set_default_device_ctx("cpu"):
+        bn = rf.BatchNorm(feat_dim, use_mask=False, affine=False)
+        with rf.get_run_ctx().train_flag_ctx(True):
+            out = bn(packed.pack(x, gap=2))
+    ref = torch.zeros_like(raw)
+    valid = torch.cat([raw[0, :300], raw[1, :200]])
+    ref_valid = torch.nn.functional.batch_norm(valid, None, None, training=True, eps=bn.eps)
+    ref[0, :300], ref[1, :200] = ref_valid[:300], ref_valid[300:]
+    expected = Tensor("ref", dims=x.dims, dtype="float64", raw_tensor=ref)
+    _assert_equal_non_padded(out, expected, batch_dim, time_dim, rtol=1e-6, atol=1e-6)
+    assert out.dtype == "float64"
+
+
 def test_conformer_mixed_parity_lens():
     # Real-data case: seq lens NOT multiples of the total subsample factor.
     # The strided pool output layout is then not expressible in the (lens, gap, align) form;
@@ -2137,6 +2183,16 @@ def test_shift_and_pad_with_a_per_seq_pad_value():
     _assert_equal_non_padded(out_p, ref, batch_dim, padded_time)
 
 
+def test_regap_of_entirely_empty_sequences():
+    """a packing whose sequences are all empty can still be re-laid out"""
+    rf.select_backend_torch()
+    x, batch_dim, time_dim, feat_dim = _make_input(seq_lens=(0, 0), feat=1)
+    out = packed.regap(packed.pack(x), 2)
+    assert packed.is_packed(out) and out.raw_tensor.gap == 2
+    assert torch.equal(out.raw_tensor.inner.raw_tensor, torch.zeros(4, 1))  # 2 seqs, gap 2 each
+    assert tuple(packed.unpack(out).copy_transpose([batch_dim, time_dim, feat_dim]).raw_tensor.shape) == (2, 0, 1)
+
+
 def test_pack_dense_total_bound_static_buffer():
     """a dense pack with total_bound allocates the bound-sized static buffer, content first"""
     rf.select_backend_torch()
@@ -2230,6 +2286,35 @@ def test_batch_norm_packed_dense_bound_train():
         )
 
 
+def test_batch_norm_packed_non_finite_junk_rows():
+    """non-finite values in the junk rows (gap frames, bound tail) reach neither the valid outputs nor any gradient"""
+    rf.select_backend_torch()
+    x, batch_dim, time_dim, feat_dim = _make_input(seq_lens=(5, 3), feat=4, seed=8)
+    valid = (torch.arange(5)[None, :] < torch.tensor([5, 3])[:, None]).to(torch.float32)[..., None]
+    weights = torch.randn(x.raw_tensor.shape, generator=torch.Generator().manual_seed(1)) * valid
+
+    def _run(layout: str, junk: float):
+        raw = x.raw_tensor.detach().clone().requires_grad_()
+        xr = Tensor("x", dims=x.dims, dtype="float32", raw_tensor=raw)
+        xp = packed.pack(xr, gap=2) if layout == "gapped" else packed.regap(packed.pack(xr), 0, total_bound=16)
+        xp = xp.raw_tensor.rewrap(rf.where(packed._frame_mask(xp.raw_tensor), xp.raw_tensor.inner, junk))
+        with rf.set_default_device_ctx("cpu"):
+            bn = rf.BatchNorm(feat_dim, use_mask=False)
+            with rf.get_run_ctx().train_flag_ctx(True):
+                out = packed.unpack(bn(xp)).copy_compatible_to_dims(x.dims).raw_tensor
+        (out * weights).sum().backward()
+        return {"out": (out * valid).detach(), "x grad": raw.grad, "gamma grad": bn.gamma.raw_tensor.grad}
+
+    for layout in ("gapped", "bound"):
+        ref = _run(layout, 0.0)
+        for junk in (float("nan"), float("inf")):
+            res = _run(layout, junk)
+            for key in ref:
+                numpy.testing.assert_allclose(
+                    res[key].numpy(), ref[key].numpy(), rtol=1e-6, atol=1e-6, err_msg=f"{layout}, {junk}, {key}"
+                )
+
+
 def test_softmax_over_a_single_packed_axis_with_a_bound():
     """a bound-sized packing of one axis normalizes over its content rows only"""
     rf.select_backend_torch()
@@ -2264,6 +2349,57 @@ def test_cu_seqlens_with_host_lens_and_a_device_total():
         assert cu.raw_tensor.device.type == device and tuple(cu.raw_tensor.shape) == (3,), cu.raw_tensor
         if device == "cuda":
             assert cu.raw_tensor.tolist() == [0, 5, 8]
+
+
+def test_num_elements_of_shape_source():
+    """
+    with source, the count covers what a reduction of it covers:
+    packed storage holds no padding on its packed dims, also with use_mask=False, padded storage does
+    """
+    rf.select_backend_torch()
+    x, batch_dim, time_dim, feat_dim = _make_input(seq_lens=(5, 3))
+
+    def _values(n):
+        return n.copy_compatible_to_dims_raw([batch_dim]).tolist() if batch_dim in n.dims else int(n.raw_tensor)
+
+    for use_mask in (True, False):
+        n = rf.num_elements_of_shape([batch_dim, time_dim, feat_dim], use_mask=use_mask, source=x)
+        assert _values(n) == (8 if use_mask else 10) * feat_dim.dimension, use_mask
+        for pack_opts in ({}, {"gap": 2}, {"gap": 2, "total_bound": 14}):
+            xp = packed.pack(x, dims=[batch_dim, time_dim], **pack_opts)
+            n = rf.num_elements_of_shape([batch_dim, time_dim, feat_dim], use_mask=use_mask, source=xp)
+            assert _values(n) == 8 * feat_dim.dimension, (pack_opts, use_mask)
+            n = rf.num_elements_of_shape(time_dim, use_mask=use_mask, source=xp)
+            assert _values(n) == [5, 3], (pack_opts, use_mask)
+
+
+def test_reduce_logmeanexp_packed_no_mask():
+    """packed storage has no padding, so with use_mask=False the mean is over the sequence frames, as when masked"""
+    rf.select_backend_torch()
+    x, batch_dim, time_dim, feat_dim = _make_input(seq_lens=(5, 3))
+    want = rf.reduce_logmeanexp(x, axis=[batch_dim, time_dim], use_mask=True)
+    for pack_opts in ({}, {"gap": 2}, {"gap": 2, "total_bound": 14}):
+        xp = packed.pack(x, dims=[batch_dim, time_dim], **pack_opts)
+        got = rf.reduce_logmeanexp(xp, axis=[batch_dim, time_dim], use_mask=False)
+        numpy.testing.assert_allclose(
+            got.copy_compatible_to_dims_raw([feat_dim]).numpy(),
+            want.copy_compatible_to_dims_raw([feat_dim]).numpy(),
+            rtol=1e-5,
+            err_msg=str(pack_opts),
+        )
+    # as traced: static traceable, capacity-sized time dim, bound-sized buffer
+    lens = Tensor("lens", dims=[batch_dim], dtype="int32", raw_tensor=torch.tensor([5, 3], dtype=torch.int32))
+    cap_time_dim = Dim(lens, name="time", capacity=5)
+    x_cap = Tensor("x", dims=[batch_dim, cap_time_dim, feat_dim], dtype="float32", raw_tensor=x.raw_tensor)
+    with rf.set_static_traceable_ctx():
+        xp = packed.pack(x_cap, dims=[batch_dim, cap_time_dim], total_bound=10)
+        got = rf.reduce_logmeanexp(xp, axis=[batch_dim, cap_time_dim], use_mask=False)
+    numpy.testing.assert_allclose(
+        got.copy_compatible_to_dims_raw([feat_dim]).numpy(),
+        want.copy_compatible_to_dims_raw([feat_dim]).numpy(),
+        rtol=1e-5,
+        err_msg="static traceable",
+    )
 
 
 if __name__ == "__main__":

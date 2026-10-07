@@ -25,6 +25,7 @@ import functools
 import itertools
 from typing import Optional, Any, Sequence, Tuple, Union, List, Dict, Callable
 import sys
+import threading
 from copy import deepcopy
 
 import numpy
@@ -36,6 +37,7 @@ from returnn.log import log
 from returnn.util.basic import NumbersDict, get_fwd_compat_kwargs
 from returnn.util.debug import install_subproc_faulthandler
 from returnn.datasets.packing import packed_batch_config, packed_batch_key_opts
+from .pin_memory import PinMemoryDataLoader
 
 
 def create_tensor(array: numpy.ndarray) -> Union[torch.Tensor, numpy.ndarray]:
@@ -779,6 +781,57 @@ def create_data_loader_from_batches(
         # User-defined
         **loader_opts,
     )
+
+
+def shutdown_data_loader(data_loader: Union[torch.utils.data.DataLoader, PinMemoryDataLoader]):
+    """
+    Stops the persistent workers of the DataLoader, which it otherwise keeps until it is freed,
+    and the pinning thread of a :class:`returnn.torch.data.pin_memory.PinMemoryDataLoader`.
+    Batches which the workers prefetched but which were not consumed are dropped.
+    Can be called multiple times. A later ``iter()`` starts new workers.
+
+    Without this, a DataLoader which is still alive at interpreter exit leaves its workers to the atexit cleanup
+    of :class:`returnn.util.multi_proc_non_daemonic_spawn.NonDaemonicSpawnProcess` (SIGINT):
+    the workers then do not cancel their result queue, and hang on the unread batches until the next signal.
+
+    :param data_loader: e.g. via :func:`create_data_loader_from_batches`.
+        Must not be iterated concurrently (e.g. by another thread).
+    """
+    if isinstance(data_loader, PinMemoryDataLoader):
+        data_loader.close()  # first: its thread uses the DataLoader iterator
+        data_loader = data_loader.data_loader
+    # No public DataLoader API for this: it only keeps the iterator with persistent workers (else this is None).
+    # noinspection PyProtectedMember
+    data_iter = data_loader._iterator
+    if data_iter is None:
+        return
+    data_loader._iterator = None
+    # A worker which already left its loop (e.g. it got the SIGINT of Ctrl+C) ignores the shutdown signal,
+    # and at exit waits until its unread batches are written to the pipe. So drop them while it stops.
+    # Not with the Torch pin thread: it reads the pipe itself, and a second reader can leave it hanging.
+    stop_drain = threading.Event()
+    drain_thread = None
+    # noinspection PyProtectedMember
+    if not data_iter._pin_memory:
+        # noinspection PyProtectedMember,PyUnresolvedReferences
+        drain_thread = threading.Thread(
+            target=_drain_conn, args=(data_iter._worker_result_queue._reader, stop_drain), daemon=True
+        )
+        drain_thread.start()
+    try:
+        # noinspection PyProtectedMember,PyUnresolvedReferences
+        data_iter._shutdown_workers()  # only the multiprocessing iterator has it, the one with persistent workers
+    finally:
+        if drain_thread is not None:
+            stop_drain.set()
+            drain_thread.join(timeout=1)  # blocks forever in recv_bytes on a partial message of a killed worker
+
+
+def _drain_conn(conn, stop_event: threading.Event):
+    # raw bytes, not unpickled: no shared memory tensors rebuilt from the stopping workers
+    while not stop_event.is_set():
+        if conn.poll(0.01):
+            conn.recv_bytes()
 
 
 class _DataLoaderWorkerInitFunc:

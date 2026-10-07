@@ -330,12 +330,20 @@ class Engine(EngineBase):
         before the process group is destroyed, which a live captured graph would block
         (see :func:`returnn.torch.util.graph_capture.GraphCapturedTrainStep.release`).
 
+        Also stops the workers and pinning threads of the data loaders
+        (see :func:`returnn.torch.data.pipeline.shutdown_data_loader`),
+        as the engine usually stays alive until the interpreter exits.
+        Can be called multiple times.
+
         :param error_occurred:
         """
-        del error_occurred  # the graph is released either way
+        del error_occurred  # all is released either way
         if self._graph_capture is not None:
             self._graph_capture.release()
             self._graph_capture = None
+        for data_loader in [self._train_dataloader, *self._eval_dataloaders.values()]:
+            if data_loader is not None:
+                data_pipeline.shutdown_data_loader(data_loader)
 
     def train(self):
         """

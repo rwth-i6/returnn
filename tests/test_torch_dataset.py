@@ -7,6 +7,7 @@ from typing import Optional, Any, Dict
 import sys
 import unittest
 from multiprocessing.managers import SyncManager
+import torch
 from torch.utils.data import DataLoader
 
 from returnn.config import Config, get_global_config, global_config_ctx
@@ -277,6 +278,67 @@ def test_MultiProcDataset_HDFDataset():
                 break
 
         assert c == n
+
+
+class _BigTagBatches(torch.utils.data.IterableDataset):
+    """the tag of each batch goes through the pipe of the worker (unlike tensors), and is larger than its buffer"""
+
+    def __iter__(self):
+        for i in range(10):
+            yield {"data": torch.full((2,), i), "tag": "x" * 100000}
+
+
+def _check_shutdown_data_loader(*, pin_memory: bool):
+    """
+    Stops the persistent worker with an unread batch, also repeatedly,
+    and also when the worker already left its loop on its own SIGINT (Ctrl+C goes to the whole process group):
+    then it does not get the shutdown signal, but must not wait on its unread batch until the join timeout (5 s)
+    """
+    import signal
+    import time
+    from returnn.util.multi_proc_non_daemonic_spawn import NonDaemonicSpawnContext
+
+    loader = DataLoader(
+        _BigTagBatches(),
+        batch_size=None,
+        num_workers=1,
+        persistent_workers=True,
+        pin_memory=pin_memory,
+        multiprocessing_context=NonDaemonicSpawnContext(),
+    )
+    data_pipeline.shutdown_data_loader(loader)  # nothing started yet
+    for interrupted in [False, True]:
+        next(iter(loader))
+        data_iter = loader._iterator
+        worker = data_iter._workers[0]
+        if pin_memory:  # the Torch pin thread reads the pipe: wait until it has the next batch
+            end_time = time.monotonic() + 60
+            while data_iter._data_queue.qsize() == 0:
+                assert time.monotonic() < end_time
+                time.sleep(0.01)
+        else:  # the worker sends the next batch
+            assert data_iter._worker_result_queue._reader.poll(timeout=60)
+        if interrupted:
+            os.kill(worker.pid, signal.SIGINT)
+            time.sleep(0.5)  # the worker leaves its loop
+        start_time = time.monotonic()
+        data_pipeline.shutdown_data_loader(loader)
+        assert time.monotonic() - start_time < 3
+        # no atexit handler left which would signal it at interpreter exit
+        assert not worker.is_alive() and worker.exitcode == 0 and worker._at_exit_cleanup_handler is None
+        assert loader._iterator is None
+        data_pipeline.shutdown_data_loader(loader)
+
+
+def test_shutdown_data_loader():
+    _check_shutdown_data_loader(pin_memory=False)
+
+
+def test_shutdown_data_loader_torch_pin_memory():
+    """with the Torch pin thread, which reads the worker results itself"""
+    if not torch.cuda.is_available():
+        raise unittest.SkipTest("CUDA not available")
+    _check_shutdown_data_loader(pin_memory=True)
 
 
 def test_batching_packed_batch_cost_bounds_a_product_of_lengths():

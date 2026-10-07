@@ -68,12 +68,20 @@ class PinMemoryDataLoader:
     def __iter__(self) -> PinMemoryIter:
         # A DataLoader with persistent workers reuses its iterator for the next iter().
         # The previous thread must not use it concurrently anymore.
-        prev_iter = self._cur_iter() if self._cur_iter is not None else None
-        if prev_iter is not None:
-            prev_iter.close()
+        self.close()
         it = PinMemoryIter(iter(self.data_loader), device=self.device, queue_size=self.queue_size)
         self._cur_iter = weakref.ref(it)  # not keeping it alive: its thread stops when the consumer drops it
         return it
+
+    def close(self):
+        """
+        Stops the thread of the current iterator, see :func:`PinMemoryIter.close`.
+        Can be called multiple times.
+        """
+        cur_iter = self._cur_iter() if self._cur_iter is not None else None
+        if cur_iter is not None:
+            cur_iter.close()
+        self._cur_iter = None
 
 
 class PinMemoryIter:

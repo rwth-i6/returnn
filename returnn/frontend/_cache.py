@@ -30,7 +30,10 @@ class Cache:
     - Dims: Use only weakrefs. Some Dim should not stay alive just because of the cache.
     - Scalar dynamic Dims in eager mode, or static dims: Instead of the Dim, use the dim value for the key
       (and map the output to the Dim).
-    - Tensor as keys: Use weakrefs. Also don't check by value but by identity.
+    - Tensor as keys: Use weakrefs. Also don't check by value but by identity of the raw tensor,
+      so a new Tensor wrapping the same raw tensor matches (e.g. raw tensors wrapped only for the lookup).
+      Its dims (and sparse dim, feature axis, version) are part of the key, the dims like Dim keys
+      (and the output is mapped to them).
     """
 
     def __init__(self, max_size: int):
@@ -56,7 +59,9 @@ class Cache:
 
         assert len(key_transformed_orig) == len(key_transformed)
         dim_map = {}  # orig -> new
-        for key_item_orig, key_item in zip(key_transformed_orig, key_transformed):
+        key_items_orig, key_items = _flat_dim_wrappers(key_transformed_orig), _flat_dim_wrappers(key_transformed)
+        assert len(key_items_orig) == len(key_items)
+        for key_item_orig, key_item in zip(key_items_orig, key_items):
             if isinstance(key_item_orig, DimWrapper):
                 assert isinstance(key_item, DimWrapper)
                 dim_orig = key_item_orig.dim_ref()
@@ -131,7 +136,7 @@ def _transform_key_item(
     key: Any, *, finalize_callback: Optional[Callable] = None, collected_dim_map: Dict[Dim, DimWrapper]
 ) -> _KeyItemType:
     if isinstance(key, Tensor):
-        return TensorWrapper(key, finalize_callback=finalize_callback)
+        return TensorWrapper(key, finalize_callback=finalize_callback, collected_dim_map=collected_dim_map)
     if isinstance(key, Dim):
         if key in collected_dim_map:
             return collected_dim_map[key]
@@ -141,6 +146,20 @@ def _transform_key_item(
     if not isinstance(key, _RawTypes):
         raise TypeError(f"unexpected type {type(key)}")
     return key
+
+
+def _flat_dim_wrappers(key_transformed: Tuple[Any, ...]) -> List[Any]:
+    """
+    :param key_transformed: from :func:`_transform_key`
+    :return: the key items, with each :class:`TensorWrapper` replaced by its dim wrappers
+    """
+    res = []
+    for key_item in key_transformed:
+        if isinstance(key_item, TensorWrapper):
+            res += key_item.get_dim_wrappers()
+        else:
+            res.append(key_item)
+    return res
 
 
 def _get_backend(*args) -> Type[Backend]:
@@ -154,23 +173,44 @@ def _get_backend(*args) -> Type[Backend]:
 class TensorWrapper:
     """
     Wraps :class:`Tensor`.
-    Using weakref for the tensor, including also ``raw_tensor``.
-    Equality is given if the identity is the same, for the Tensor itself and the raw_tensor.
+    Using weakref for the ``raw_tensor`` only, not for the Tensor itself:
+    the entry lives as long as the raw tensor, also when the Tensor was only created for the lookup.
+    Equality is given if the identity of the raw_tensor is the same,
+    and the dims, the sparse dim, the feature axis and the version are equal (dims via :class:`DimWrapper`).
+    (The dtype is given by the raw tensor.)
     No value of the tensor is checked.
     """
 
-    def __init__(self, value: Tensor, *, finalize_callback):
-        self.value_ref = ref(value, finalize_callback)
-        self.raw_value_ref = ref(value.raw_tensor, finalize_callback)
-        self._hash = id(value)
+    def __init__(self, value: Tensor, *, finalize_callback, collected_dim_map: Dict[Dim, DimWrapper]):
+        self.raw_value_ref = _WeakIdRef(value.raw_tensor, finalize_callback)
+        self.dims = tuple(
+            _transform_key_item(dim, finalize_callback=finalize_callback, collected_dim_map=collected_dim_map)
+            for dim in value.dims
+        )
+        self.sparse_dim = None
+        if value.sparse_dim is not None:
+            self.sparse_dim = _transform_key_item(
+                value.sparse_dim, finalize_callback=finalize_callback, collected_dim_map=collected_dim_map
+            )
+        self.feature_dim_axis = value.feature_dim_axis
+        self.version = value.version
+
+    def _key(self) -> Tuple[Any, ...]:
+        return self.raw_value_ref, self.dims, self.sparse_dim, self.feature_dim_axis, self.version
 
     def __eq__(self, other):
         if isinstance(other, TensorWrapper):
-            return self.value_ref() is other.value_ref() and self.raw_value_ref() is other.raw_value_ref()
+            return self._key() == other._key()
         return False
 
     def __hash__(self):
-        return self._hash
+        return hash(self._key())
+
+    def get_dim_wrappers(self) -> Tuple[DimWrapper, ...]:
+        """
+        :return: the dims and the sparse dim, e.g. to map the cached output to the dims of the query
+        """
+        return self.dims + ((self.sparse_dim,) if self.sparse_dim is not None else ())
 
 
 class _WeakIdRef:
