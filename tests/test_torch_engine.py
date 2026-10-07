@@ -7,6 +7,7 @@ import _setup_test_env  # noqa
 from typing import Optional, Any, Dict, Tuple
 import contextlib
 import copy
+import functools
 import json
 import os
 import sys
@@ -744,20 +745,44 @@ def test_data_loader_oggzip():
     assert batches == [[[12, 8, 9, 11], [16, 0, 0, 0]], [[6, 25, 18, 20, 5], [28, 10, 28, 14, 0]], [[17, 23]]]
 
 
-def test_save_optimizer_callable_config():
-    # The optimizer config can be a callable (e.g. the optimizer class itself) or contain callables.
-    # The saved checkpoint metadata must still be loadable under the torch >= 2.6 weights_only default.
-    for optimizer in [
-        torch.optim.AdamW,
-        {"class": "adamw", "weight_decay": 1e-3, "weight_decay_custom_include_check": lambda **_kwargs: None},
+def test_save_optimizer_opts_weights_only():
+    include_check_partial = functools.partial(lambda **_kwargs: None)
+    for optimizer, expected_saved_opts in [
+        (torch.optim.AdamW, "adamw"),
+        (
+            {
+                "class": torch.optim.AdamW,
+                "betas": (0.9, 0.98),
+                "weight_decay": 1e-3,
+                "weight_decay_modules_blacklist": [torch.nn.LayerNorm, "rf.Embedding"],
+                "weight_decay_custom_include_check": lambda **_kwargs: None,
+            },
+            {
+                "class": "adamw",
+                "betas": (0.9, 0.98),
+                "weight_decay": 1e-3,
+                "weight_decay_modules_blacklist": ["torch.nn.modules.normalization.LayerNorm", "rf.Embedding"],
+                "weight_decay_custom_include_check": f"{__name__}.<lambda>",
+            },
+        ),
+        (
+            {"class": "adamw", "weight_decay": 1e-3, "weight_decay_custom_include_check": include_check_partial},
+            {
+                "class": "adamw",
+                "weight_decay": 1e-3,
+                "weight_decay_custom_include_check": f"object:{include_check_partial!r}",
+            },
+        ),
     ]:
         config = Config(dict(optimizer=optimizer))
         model = torch.nn.Linear(7, 5)
         updater = Updater(config=config, network=model, device=torch.device("cpu"))
         updater.create_optimizer()
 
-        with tempfile.TemporaryDirectory(prefix="returnn_test_save_optimizer_callable_config") as tmp_dir:
+        with tempfile.TemporaryDirectory(prefix="returnn_test_save_optimizer_opts_weights_only") as tmp_dir:
             updater.save_optimizer(tmp_dir + "/model.opt.pt")
+            saved = torch.load(tmp_dir + "/model.opt.pt", weights_only=True)
+            assert saved["optimizer_opts"] == expected_saved_opts
             updater.load_optimizer(tmp_dir + "/model.opt.pt")
 
 

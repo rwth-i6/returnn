@@ -6,6 +6,7 @@ and model param update logic in general.
 from __future__ import annotations
 
 from typing import Optional, Union, Any, Type, Callable, Sequence, Iterable, Set, Dict, List, Tuple
+from types import FunctionType, BuiltinFunctionType
 import os
 import gc
 import torch
@@ -536,16 +537,6 @@ class Updater:
         tmp_filename = filename + ".tmp_write"
         if os.path.exists(tmp_filename):
             os.unlink(tmp_filename)
-        # optimizer_opts is saved as metadata only (load_optimizer ignores it).
-        # Drop callables like param_groups_custom or weight_decay_custom_include_check (also nested)
-        # so torch.load (weights_only=True since torch 2.6) can read it.
-        # An optimizer config given as a callable or an optimizer instance is dropped completely for the same reason.
-        optimizer_opts_to_save = self._optimizer_opts
-        if isinstance(optimizer_opts_to_save, dict):
-            optimizer_opts_to_save = _drop_callables_deep(optimizer_opts_to_save)
-        elif isinstance(optimizer_opts_to_save, torch.optim.Optimizer) or callable(optimizer_opts_to_save):
-            optimizer_opts_to_save = None
-
         optimizer_state_dict = self.optimizer.state_dict()
         if self._optimizer_step is not None:
             # keep the ordinary Python scalars (lr, counters) in the checkpoint
@@ -554,7 +545,7 @@ class Updater:
             {
                 "optimizer": optimizer_state_dict,
                 "optimizer_class_name": self.optimizer.__class__.__name__,
-                "optimizer_opts": optimizer_opts_to_save,
+                "optimizer_opts": _optimizer_opts_for_checkpoint(self._optimizer_opts),
                 "param_names": param_names,
                 "epoch": self._current_epoch,
                 "step": self._current_train_step,
@@ -781,16 +772,28 @@ def wrap_user_blacklist_wd_modules(
     return tuple(res)
 
 
-def _drop_callables_deep(obj: Any) -> Any:
+def _optimizer_opts_for_checkpoint(obj: Any) -> Any:
     """
-    :param obj: nested structure of dicts/lists/tuples
-    :return: copy with callable dict values and callable list/tuple entries dropped
+    :param obj: optimizer options, or a part of them
+    :return: same structure, with only types which ``torch.load(weights_only=True)`` accepts:
+        an optimizer class becomes its short name if it has one (e.g. ``"adamw"``),
+        other classes and functions their name as in :func:`rf.build_dict`, any other object ``"object:<repr>"``
     """
+    if obj is None or type(obj) in (bool, int, float, str):
+        return obj
     if isinstance(obj, dict):
-        return {k: _drop_callables_deep(v) for k, v in obj.items() if not callable(v)}
-    if isinstance(obj, (list, tuple)):
-        return type(obj)(_drop_callables_deep(v) for v in obj if not callable(v))
-    return obj
+        return {_optimizer_opts_for_checkpoint(k): _optimizer_opts_for_checkpoint(v) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [_optimizer_opts_for_checkpoint(v) for v in obj]
+    if isinstance(obj, tuple):
+        return tuple(_optimizer_opts_for_checkpoint(v) for v in obj)
+    if isinstance(obj, type) and issubclass(obj, torch.optim.Optimizer):
+        _init_optimizer_classes_dict()
+        if _OptimizerClassesDict.get(obj.__name__.lower()) is obj:
+            return obj.__name__.lower()
+    if isinstance(obj, (type, FunctionType, BuiltinFunctionType)):
+        return rf.build_dict(obj)["class"]
+    return f"object:{obj!r}"
 
 
 def gradient_noise_(params: Iterable[torch.nn.Parameter], std: float):
