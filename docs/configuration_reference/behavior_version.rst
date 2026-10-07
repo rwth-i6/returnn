@@ -22,6 +22,22 @@ and not listing legacy/deprecated parameters.
 Version History
 ---------------
 
+Behavior version 35 (2026-10-07)
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+PyTorch bucket batching (``torch_batching`` with ``BucketOrderingIterDataPipe``):
+``complete_frac`` and ``seq_idx`` keep the input order across the emitted batches,
+so ``epoch_continuous`` does not go backwards.
+This affects e.g. ``dynamic_learning_rate``.
+
+Before, each seq kept its own values,
+and the partially filled buckets emitted at the end of the epoch brought the progress back to an earlier point.
+
+There is also the option ``monotonic_data_keys`` of ``BucketOrderingIterDataPipe``
+to override in both directions.
+
+See PR `#1942 <https://github.com/rwth-i6/returnn/pull/1942>`__.
+
 Behavior version 34 (2026-10-06)
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
