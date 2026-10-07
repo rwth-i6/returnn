@@ -246,6 +246,33 @@ def test_monotonic_rnnt_survives_a_dead_cell():
         torch.testing.assert_close(results[1], results[0])
 
 
+def test_monotonic_rnnt_ignores_what_lies_past_the_batch():
+    """
+    A captured step hands over a buffer of the declared capacity and the declared frames, both above what the
+    batch holds. Whatever the rows past the batch hold, the loss and the gradient of the batch stay what they are
+    without them, and those rows get no gradient.
+    """
+    torch.manual_seed(9)
+    vocab, blank = 5, 0
+    cases = [(4, 2), (3, 3), (2, 0)]
+    exact = torch.randn(sum(t * (u + 1) for t, u in cases), vocab)
+    args = (
+        torch.randint(1, vocab, (len(cases), 5), dtype=torch.int32),
+        torch.tensor([t for t, _u in cases], dtype=torch.int32),
+        torch.tensor([u for _t, u in cases], dtype=torch.int32),
+    )
+    for device in ["cpu"] + (["cuda"] if torch.cuda.is_available() else []):
+        results = []
+        for packed, max_frames in ((exact, 4), (torch.cat([exact, torch.full((11, vocab), float("nan"))]), 9)):
+            x = packed.to(device).clone().requires_grad_()
+            loss = monotonic_rnnt_loss(x, *(a.to(device) for a in args), blank=blank, max_frames=max_frames)
+            loss.sum().backward()
+            results.append((loss.detach().cpu(), x.grad.cpu()))
+        torch.testing.assert_close(results[1][0], results[0][0])
+        torch.testing.assert_close(results[1][1][: len(exact)], results[0][1])
+        assert not results[1][1][len(exact) :].any(), results[1][1][len(exact) :]
+
+
 def test_monotonic_rnnt_handles_degenerate_batches():
     torch.manual_seed(3)
     vocab, blank = 6, 0

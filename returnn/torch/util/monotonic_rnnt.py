@@ -127,6 +127,11 @@ def _forward_scores(
     lens = label_lens.long().unsqueeze(1)
     valid = prefix <= lens
     pad = torch.full((batch_size, 1), neg_inf, dtype=dtype, device=device)
+    # outside the lattice of a sequence the index lands on cells that are not its own, so those are masked
+    frames = torch.arange(max_frames, device=device).view(-1, 1, 1)
+    outside = ~(valid.unsqueeze(0) & (frames < frame_lens.view(1, -1, 1)))
+    blank_rows = blank_rows.masked_fill(outside, neg_inf)
+    label_rows = label_rows.masked_fill(outside, neg_inf)
 
     alpha_frames = []
     alpha = torch.full((batch_size, max_prefix), neg_inf, dtype=dtype, device=device)
@@ -262,11 +267,13 @@ def monotonic_rnnt_loss(
             logits, next_label, frame_lens, label_lens, blank, max_frames, max_prefix
         )[0]
     else:
-        offsets, _cells = _cell_offsets(frame_lens, label_lens)
+        offsets, cells = _cell_offsets(frame_lens, label_lens)
         source = logits if logits.dtype in (torch.float32, torch.float64) else logits.float()
+        # the rows a capacity leaves past the cells of the batch belong to no sequence, whatever they hold
+        unused = (torch.arange(logits.shape[0], device=logits.device) >= cells.sum()).unsqueeze(1)
         # a row without any finite logit has no probability mass, its log probabilities are minus infinity, not nan
         dead = torch.isneginf(source).all(dim=-1, keepdim=True)
-        log_probs = torch.log_softmax(source.masked_fill(dead, 0.0), dim=-1).masked_fill(dead, float("-inf"))
+        log_probs = torch.log_softmax(source.masked_fill(dead | unused, 0.0), dim=-1).masked_fill(dead, float("-inf"))
         blank_lp = log_probs[:, blank]
         label_lp = torch.gather(log_probs, 1, next_label.unsqueeze(1)).squeeze(1)
         index = _cell_index(offsets, label_lens, max_frames, max_prefix, logits.shape[0])
