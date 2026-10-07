@@ -1983,6 +1983,36 @@ def test_PostprocessingDataset_map_seq_stream_processes_seqs_independently():
         raise AssertionError("expected ValueError")
 
 
+def _repeat2_per_seq(input_iter: Iterator[TensorDict], **kwargs) -> Iterator[TensorDict]:
+    for tdict in input_iter:
+        yield tdict
+        yield tdict
+
+
+_repeat2_per_seq.processes_seqs_independently = True
+
+
+def test_PostprocessingDataset_map_seq_stream_processes_seqs_independently_multi_proc():
+    # MultiProcDataset (sharding_method seq_order) takes num_seqs and the seq idx of every seq
+    # from get_current_seq_order, so it must be the order of this dataset, also when the stream drops or repeats seqs.
+    static_opts = {
+        "class": "StaticDataset",
+        "data": [{"data": numpy.full((n, 1), n, dtype="float32")} for n in range(1, 11)],
+        "output_dim": {"data": (1, 2)},
+        "seq_ordering": "sorted_reverse",
+    }
+
+    for stream in (_repeat2_per_seq, _drop_every_third_len):
+        post_opts = {"class": "PostprocessingDataset", "dataset": static_opts, "map_seq_stream": stream}
+        post_tags = sorted(seq.seq_tag for seq in dummy_iter_dataset(init_dataset(post_opts)))
+        multi_proc = init_dataset(
+            {"class": "MultiProcDataset", "dataset": post_opts, "num_workers": 2, "buffer_size": 3}
+        )
+        multi_proc_tags = sorted(seq.seq_tag for seq in dummy_iter_dataset(multi_proc))
+        multi_proc.finish_epoch(free_resources=True)
+        assert multi_proc_tags == post_tags, stream
+
+
 def test_MultiEpochDataset():
     from returnn.datasets.meta import MultiEpochDataset
     from returnn.datasets.cached2 import CachedDataset2
