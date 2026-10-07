@@ -19,6 +19,20 @@ from returnn.util.basic import BehaviorVersion, CollectionReadCheckCovered
 _logger = logging.getLogger("returnn.torch.distributed")
 
 
+class _LoggerFile:
+    """file-like for print(..., file=...), one info log record per line"""
+
+    @staticmethod
+    def write(s: str):
+        """write"""
+        if s.strip():
+            _logger.info(s.rstrip("\n"))
+
+    @staticmethod
+    def flush():
+        """flush"""
+
+
 class DistributedContext:
     """
     This class setups some helper functions for torch distributed training
@@ -78,12 +92,11 @@ class DistributedContext:
         if self._sync_complete_frac is None:
             self._sync_complete_frac = BehaviorVersion.get() >= 33
 
-        if self._opts.get("gpu_local_cpu_affinity", False):
+        if self._opts.get("gpu_local_cpu_affinity", True) and torch.cuda.is_available():
             # Before the dataset workers start, so they inherit it.
             from returnn.torch.util.gpu_cpu_affinity import set_gpu_local_cpu_affinity
 
-            cpus = set_gpu_local_cpu_affinity(self._local_rank)
-            _logger.info(f"gpu_local_cpu_affinity: local rank {self._local_rank} on CPUs {sorted(cpus)}")
+            set_gpu_local_cpu_affinity(self._local_rank, num_local_ranks=self._local_size, log_file=_LoggerFile())
 
         self._check_no_unknown_opts()
 

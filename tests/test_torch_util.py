@@ -539,8 +539,31 @@ def test_gpu_cpu_affinity_sysfs_and_proc_lookup():
             raise AssertionError("unknown UUID must raise")
 
 
+def test_gpu_cpu_affinity_select():
+    """NUMA node when it covers the rank's share, else the socket, else nothing (unaligned cpuset)"""
+    from returnn.torch.util.gpu_cpu_affinity import select_gpu_local_cpus
+
+    # 2 sockets of 48 CPUs, 4 NUMA nodes of 12 each (NPS4), GPU on node 0 (CPUs 0-11)
+    socket = {cpu: cpu // 48 for cpu in range(96)}.__getitem__
+    local, all_cpus = set(range(12)), set(range(96))
+    # one Grace per GPU: the node is the share
+    assert select_gpu_local_cpus(set(range(72)), set(range(288)), num_local_ranks=4, cpu_socket=socket) == set(
+        range(72)
+    )
+    # 4 ranks on 96 CPUs: share 24, node has 12 -> socket 0
+    assert select_gpu_local_cpus(local, all_cpus, num_local_ranks=4, cpu_socket=socket) == set(range(48))
+    # 8 ranks: share 12, the node is enough
+    assert select_gpu_local_cpus(local, all_cpus, num_local_ranks=8, cpu_socket=socket) == local
+    # a 24-CPU cpuset on the far socket: nothing local, nothing to pin
+    assert select_gpu_local_cpus(local, set(range(48, 72)), num_local_ranks=1, cpu_socket=socket) is None
+    # a 24-CPU cpuset half on each socket, 1 rank: share 24, socket 0 part has 12 -> none
+    assert select_gpu_local_cpus(local, set(range(36, 60)), num_local_ranks=1, cpu_socket=socket) is None
+    # same cpuset, 2 ranks: share 12, socket 0 part 36-47 is enough
+    assert select_gpu_local_cpus(local, set(range(36, 60)), num_local_ranks=2, cpu_socket=socket) == set(range(36, 48))
+
+
 def test_gpu_cpu_affinity_set():
-    """the real thing on a GPU node: the affinity shrinks to the CPUs local to the device, within the allowed set"""
+    """the real thing on a GPU node: the affinity shrinks to CPUs local to the device, within the allowed set"""
     if not torch.cuda.is_available():
         raise unittest.SkipTest("needs CUDA")
     from returnn.torch.util.gpu_cpu_affinity import set_gpu_local_cpu_affinity, get_gpu_pci_id
@@ -549,9 +572,16 @@ def test_gpu_cpu_affinity_set():
     try:
         pci_id = get_gpu_pci_id(0)
         assert os.path.isdir(f"/sys/bus/pci/devices/{pci_id}"), pci_id
-        cpus = set_gpu_local_cpu_affinity(0, log_file=sys.stdout)
+        # as many ranks as GPUs, like a full-node job
+        cpus = set_gpu_local_cpu_affinity(0, num_local_ranks=torch.cuda.device_count(), log_file=sys.stdout)
         assert cpus and cpus <= allowed
         assert os.sched_getaffinity(0) == cpus
+        # the whole node for one rank: nothing local can cover that, so nothing is pinned
+        for tid in os.listdir("/proc/self/task"):
+            os.sched_setaffinity(int(tid), allowed)
+        if cpus != allowed:
+            assert set_gpu_local_cpu_affinity(0, num_local_ranks=1, log_file=sys.stdout) is None
+            assert os.sched_getaffinity(0) == allowed
     finally:
         for tid in os.listdir("/proc/self/task"):
             os.sched_setaffinity(int(tid), allowed)
