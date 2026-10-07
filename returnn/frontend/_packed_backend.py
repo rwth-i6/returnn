@@ -5199,7 +5199,23 @@ def _gather_into_indices_packing(
     if frame_dim in raw.inner.dims and _plain_extents(raw, frame_dim) is None:
         # the source carries the spatial dim of the indices as a plain dim, see _read_rows_at_frames
         return None
-    dev = raw.inner.device
+    inner, dev = raw.inner, raw.inner.device
+    read_dims = [d for d in (raw.packed_dim, frame_dim) if d in inner.dims]
+    raw_shape = raw.inner_backend.get_shape_tuple_raw(inner.raw_tensor)
+    extents = [raw_shape[inner.dims.index(d)] for d in read_dims]
+    empty = any(isinstance(n, int) and n == 0 for n in extents)
+    lens = idx_raw.seq_lens
+    # the lens are read from the host only once the source is empty
+    if empty and not rf.is_static_traceable() and int(rf.reduce_sum(lens, axis=list(lens.dims)).raw_tensor) == 0:
+        # no frame reads, but the indices can still have junk rows, which a gather from nothing cannot serve
+        rest = [d for d in inner.dims if d not in read_dims and d not in idx_raw.inner.dims]
+        dims = list(idx_raw.inner.dims) + rest
+        feature_dim = inner.feature_dim if inner.feature_dim in dims else None
+        out = rf.zeros(dims, dtype=source.dtype, sparse_dim=source.sparse_dim, feature_dim=feature_dim, device=dev)
+        if rf.is_float_dtype(source.dtype):
+            out = out + rf.reduce_sum(inner, axis=read_dims, use_mask=False)  # zero, keeps the gradient path
+            out.feature_dim = feature_dim
+        return idx_raw.rewrap(out, name="gather")
     # the sequence of every frame of the indices; gap frames get an in-bounds one, their result is junk
     seq = rf.copy_to_device(_frame_coords(idx_raw, seqs_dim), dev)
     idx = rf.cast(rf.copy_to_device(idx_raw.inner, dev), seq.dtype)

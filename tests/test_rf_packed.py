@@ -2366,6 +2366,37 @@ def test_gather_with_indices_packed_over_another_time_dim():
     numpy.testing.assert_allclose(grad.numpy(), grad_ref.numpy(), rtol=1e-6)
 
 
+def test_gather_into_the_indices_packing_with_nothing_to_read():
+    """without any frame the indices can still have gap or bound rows, which an empty source buffer cannot serve"""
+    rf.select_backend_torch()
+    batch_dim = Dim(2, name="batch")
+    feat_dim = Dim(3, name="feat")
+    for label_lens in ([2, 1], [0, 0]):
+        _, label_dim = _seqs("labels", batch_dim, label_lens, [[0] * n for n in label_lens])
+        idx, frame_dim = _seqs("idx", batch_dim, [0, 0], [[], []], sparse_dim=label_dim)
+        for dims in ([batch_dim, label_dim, frame_dim, feat_dim], [batch_dim, label_dim, feat_dim]):
+            x = Tensor("x", dims=dims, dtype="float32", feature_dim=feat_dim)
+            x.raw_tensor = torch.zeros([d.get_dim_value() for d in dims], requires_grad=True)
+            ref = rf.gather(x, indices=idx, axis=label_dim)
+            for layout in (dict(gap=2), dict(total_bound=8)):
+                indices_p = packed.pack(idx, **layout)
+                out = rf.gather(packed.pack(x, dims=[batch_dim, label_dim]), indices=indices_p, axis=label_dim)
+                assert out.raw_tensor.packed_dim is indices_p.raw_tensor.packed_dim, (label_lens, dims, layout)
+                assert out.dims_set == ref.dims_set and out.feature_dim == ref.feature_dim, (out, ref)
+                out_raw = packed.unpack(out).copy_compatible_to_dims_raw(ref.dims)
+                assert out_raw.shape == ref.raw_tensor.shape, (label_lens, dims, layout, out_raw.shape)
+                (grad,) = torch.autograd.grad(out_raw.sum(), x.raw_tensor)
+                assert not grad.any(), (label_lens, dims, layout)
+
+    # a frame which does read from an empty source still fails, packed as padded
+    _, label_dim = _seqs("labels", batch_dim, [0, 0], [[], []])
+    idx, _ = _seqs("idx", batch_dim, [1, 0], [[0], []], sparse_dim=label_dim)
+    x = Tensor("x", dims=[batch_dim, label_dim, feat_dim], dtype="float32", raw_tensor=torch.zeros(2, 0, 3))
+    for source, indices in ((x, idx), (packed.pack(x), packed.pack(idx, gap=2))):
+        with pytest.raises((RuntimeError, IndexError)):
+            rf.gather(source, indices=indices, axis=label_dim)
+
+
 def test_gather_with_an_index_time_dim_which_the_source_carries_too():
     """
     a dim shared by source and indices is a batch dim of the gather: frame t reads column t, not every column.
