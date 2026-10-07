@@ -318,10 +318,6 @@ class PackedRawTensor:
         else:
             # a static packed dim (e.g. built by the data pipeline) yields a python int, not a tensor
             total = rf.convert_to_tensor(total, dims=(), dtype=starts.dtype, device=starts.device)
-        if seqs_dim.need_masking():
-            # one offset per seq slot of the buffer, padding seqs included, not a masked concat
-            seqs_static = Dim(int(starts.raw_tensor.shape[0]), name="seqs_static")
-            starts, seqs_dim = rf.replace_dim(starts, in_dim=seqs_dim, out_dim=seqs_static)
         end_dim = Dim(1, name="cu_seqlens_end")
         cu, cu_dim = rf.concat((starts, seqs_dim), (rf.expand_dim(total, dim=end_dim), end_dim))
         cu = rf.cast(cu, "int32")

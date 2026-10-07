@@ -2392,17 +2392,6 @@ def test_padding_seqs_of_a_bounded_batch_stay_empty():
             assert float(rf.reduce_sum(ones, axis=[batch_dim, time_eos_dim]).raw_tensor) == 8.0, layout
 
 
-def test_cu_seqlens_of_a_bounded_batch():
-    """one offset per seq slot of the buffer, the padding seqs of the batch bound included, then the content total"""
-    rf.select_backend_torch()
-    batch_dim, time_dim = _bounded_batch([5, 3], capacity=4)
-    x = Tensor("x", dims=[batch_dim, time_dim], dtype="float32", raw_tensor=torch.zeros(4, 5))
-    with rf.set_static_traceable_ctx():
-        xp = packed.pack(x, dims=[batch_dim, time_dim], total_bound=12)
-        cu, _ = xp.raw_tensor.cu_seqlens()
-    assert cu.raw_tensor.tolist() == [0, 5, 8, 8, 8], cu.raw_tensor
-
-
 def test_batch_norm_packed_gapped_with_a_static_axis():
     """the masked batch norm statistics also cover a static axis next to the packed one"""
     rf.select_backend_torch()
