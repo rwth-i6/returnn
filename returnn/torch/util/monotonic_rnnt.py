@@ -26,6 +26,8 @@ from typing import Tuple
 
 import torch
 
+from .custom_op import custom_op
+
 
 def _cell_offsets(frame_lens: torch.Tensor, label_lens: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
     """
@@ -146,7 +148,7 @@ def _forward_scores(
 _HAVE_LIB_OPS = False
 if hasattr(torch.library, "custom_op"):  # torch >= 2.4
 
-    @torch.library.custom_op("returnn::monotonic_rnnt_fwd", mutates_args=())
+    @custom_op("returnn::monotonic_rnnt_fwd", mutates_args=())
     def _lib_fwd(
         logits: torch.Tensor,
         next_label: torch.Tensor,
@@ -177,7 +179,7 @@ if hasattr(torch.library, "custom_op"):  # torch >= 2.4
             logits.new_empty((max_frames + 1, batch_size, max_prefix), dtype=torch.float32),
         )
 
-    @torch.library.custom_op("returnn::monotonic_rnnt_bwd", mutates_args=())
+    @custom_op("returnn::monotonic_rnnt_bwd", mutates_args=())
     def _lib_bwd(
         logits: torch.Tensor,
         next_label: torch.Tensor,
