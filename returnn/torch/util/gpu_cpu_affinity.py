@@ -16,17 +16,46 @@ import os
 
 import torch
 
+from returnn.config import Config
 from returnn.log import log
 
 __all__ = [
+    "set_gpu_local_cpu_affinity_from_config",
+    "set_gpu_local_cpu_affinity",
+    "select_gpu_local_cpus",
     "parse_cpulist",
     "get_gpu_pci_id",
     "find_pci_id_by_gpu_uuid",
     "read_pci_device_local_cpus",
     "read_cpu_socket",
-    "select_gpu_local_cpus",
-    "set_gpu_local_cpu_affinity",
 ]
+
+
+def set_gpu_local_cpu_affinity_from_config(config: Config) -> Optional[Set[int]]:
+    """
+    Config option ``gpu_local_cpu_affinity`` (default True): pin this process to the CPUs local to its GPU,
+    see :func:`set_gpu_local_cpu_affinity`.
+    To be called once at startup, after the distributed context exists (the local rank is the device)
+    and before the datasets are created, so their worker processes inherit the affinity.
+
+    :param config:
+    :return: the CPUs, or None when nothing was pinned (option off, no CUDA device, unknown topology)
+    """
+    if not config.bool("gpu_local_cpu_affinity", True):
+        return None
+    from returnn.torch.engine import get_device_from_config
+
+    device = torch.device(get_device_from_config(config).result)
+    if device.type != "cuda":
+        return None
+    num_local_ranks = 1
+    if config.typed_value("torch_distributed") is not None:
+        from returnn.torch.distributed import get_ctx
+
+        num_local_ranks = get_ctx(config=config).local_size()
+    # a bare "cuda" means the current (default) device, as in the engine
+    index = device.index if device.index is not None else torch.cuda.current_device()
+    return set_gpu_local_cpu_affinity(index, num_local_ranks=num_local_ranks)
 
 
 def parse_cpulist(cpulist: str) -> Set[int]:

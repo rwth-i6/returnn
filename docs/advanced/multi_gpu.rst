@@ -19,15 +19,10 @@ With ``"sync_complete_frac": True`` (default since behavior version 33),
 the epoch progress ``complete_frac`` is the mean over the ranks,
 so a ``dynamic_learning_rate`` on ``epoch_continuous`` gives the same learning rate on every rank.
 
-By default (``"gpu_local_cpu_affinity": True``), every rank restricts itself
-(and the dataset workers it starts) to the CPUs local to its GPU,
-i.e. the NUMA node or CPU socket the GPU is attached to, within the CPUs the job may use.
-Without it, the ranks float over all CPUs of the node,
-so the host side (batch handoff, copies to the device) also runs on the far socket.
-Measured on 4-GPU nodes: a few percent of the step time, and a tighter step-time distribution.
+Every rank restricts itself (and the dataset workers it starts) to the CPUs local to its GPU
+(the general option ``gpu_local_cpu_affinity``, on by default).
 Ranks whose GPUs share a NUMA node or socket get disjoint slices of its CPUs, so they do not compete for cores.
-The pinning is skipped (logged) when it would leave a rank with less than its share of the allowed CPUs,
-e.g. a cpuset not aligned to the GPU.
+Measured on 4-GPU nodes: a few percent of the step time, and a tighter step-time distribution.
 ``torchrun --numa-binding`` (torch >= 2.9, needs ``numactl``) does the same at the launcher level.
 
 For the dataset, by default, we do not use sharding,

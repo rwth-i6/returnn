@@ -574,6 +574,57 @@ def test_gpu_cpu_affinity_select():
     assert select_gpu_local_cpus([nodes[0], nodes[2]], 1, set(range(36, 60)), cpu_socket=socket) == set(range(48, 60))
 
 
+def test_gpu_cpu_affinity_from_config():
+    """
+    the startup glue: option off or a CPU device pins nothing;
+    a single GPU pins its device index; distributed pins the local rank with the local world size
+    """
+    import socket
+    from unittest import mock
+    from returnn.config import Config
+    import returnn.torch.distributed as dist_mod
+    from returnn.torch.util.gpu_cpu_affinity import set_gpu_local_cpu_affinity_from_config
+
+    assert "PT_DEVICE" not in os.environ
+    with mock.patch("torch.cuda.is_available", return_value=True), mock.patch(
+        "torch.cuda.current_device", return_value=0
+    ), mock.patch("returnn.torch.util.gpu_cpu_affinity.set_gpu_local_cpu_affinity", return_value={0}) as set_affinity:
+        set_gpu_local_cpu_affinity_from_config(Config({"device": "cuda", "gpu_local_cpu_affinity": False}))
+        set_gpu_local_cpu_affinity_from_config(Config({"device": "cpu"}))
+        set_affinity.assert_not_called()
+        set_gpu_local_cpu_affinity_from_config(Config({"device": "cuda:1"}))
+        set_affinity.assert_called_once_with(1, num_local_ranks=1)
+        set_affinity.reset_mock()
+        set_gpu_local_cpu_affinity_from_config(Config({"device": "gpu"}))  # bare cuda = the current device
+        set_affinity.assert_called_once_with(0, num_local_ranks=1)
+        set_affinity.reset_mock()
+
+        with socket.socket() as s:
+            s.bind(("127.0.0.1", 0))
+            port = s.getsockname()[1]
+        env = dict(
+            MASTER_ADDR="127.0.0.1",
+            MASTER_PORT=str(port),
+            RANK="0",
+            WORLD_SIZE="1",
+            LOCAL_RANK="1",
+            LOCAL_WORLD_SIZE="2",
+        )
+        init_info_key = "_RETURNN_TORCH_DISTRIBUTED_INIT_INFO"
+        assert init_info_key not in os.environ and not dist_mod._is_set_up
+        try:
+            with mock.patch.dict(os.environ, env):
+                set_gpu_local_cpu_affinity_from_config(
+                    Config({"device": "cuda", "torch_distributed": {"backend": "gloo"}})
+                )
+            set_affinity.assert_called_once_with(1, num_local_ranks=2)
+        finally:
+            os.environ.pop(init_info_key, None)
+            dist_mod._is_set_up, dist_mod._ctx = False, None
+            if torch.distributed.is_initialized():
+                torch.distributed.destroy_process_group()
+
+
 def test_gpu_cpu_affinity_set():
     """the real thing on a GPU node: the affinity shrinks to CPUs local to the device, within the allowed set"""
     if not torch.cuda.is_available():
@@ -584,17 +635,18 @@ def test_gpu_cpu_affinity_set():
     try:
         pci_id = get_gpu_pci_id(0)
         assert os.path.isdir(f"/sys/bus/pci/devices/{pci_id}"), pci_id
-        # as many ranks as GPUs, like a full-node job
+        # as many ranks as visible GPUs, like a full-node job.
+        # None only when even the socket is below the share (e.g. one visible GPU of a node, all CPUs allowed)
         n = torch.cuda.device_count()
         cpus = set_gpu_local_cpu_affinity(0, num_local_ranks=n)
-        assert cpus and cpus <= allowed
-        assert os.sched_getaffinity(0) == cpus
+        assert cpus is None or (cpus and cpus <= allowed)
+        assert os.sched_getaffinity(0) == (cpus if cpus is not None else allowed)
         # the other ranks' sets are disjoint from this one or identical to it (shared), never overlapping otherwise
         for tid in os.listdir("/proc/self/task"):
             os.sched_setaffinity(int(tid), allowed)
         for rank in range(1, n):
             other = set_gpu_local_cpu_affinity(rank, num_local_ranks=n)
-            assert other and (other == cpus or not (other & cpus)), (rank, sorted(cpus), sorted(other))
+            assert other and cpus and (other == cpus or not (other & cpus)), (rank, cpus, other)
             for tid in os.listdir("/proc/self/task"):
                 os.sched_setaffinity(int(tid), allowed)
         # the whole node for one rank: nothing local can cover that, so nothing is pinned
