@@ -2352,10 +2352,14 @@ class _MuonLike(torch.optim.Optimizer):
     Written like the i6 Muon (i6_experiments exp2024_04_23_baselines optim_ext/muon.py), small:
     Muon (bf16 Newton-Schulz) on 2D params, Adam on the rest, with a Python-float lr
     (``alpha=`` / ``value=`` arguments) and a Python-int step counter.
+    ``ns_dtype=torch.float64`` gives the reference.
     """
 
-    def __init__(self, params, lr=2e-2, momentum=0.95, weight_decay=0.01, betas=(0.9, 0.95), eps=1e-8):
+    def __init__(
+        self, params, lr=2e-2, momentum=0.95, weight_decay=0.01, betas=(0.9, 0.95), eps=1e-8, ns_dtype=torch.bfloat16
+    ):
         super().__init__(params, dict(lr=lr, momentum=momentum, weight_decay=weight_decay, betas=betas, eps=eps))
+        self.ns_dtype = ns_dtype
 
     @torch.no_grad()
     def step(self, closure=None):
@@ -2373,7 +2377,7 @@ class _MuonLike(torch.optim.Optimizer):
                         state["momentum_buffer"] = torch.zeros_like(p)
                     buf = state["momentum_buffer"]
                     buf.mul_(group["momentum"]).add_(p.grad)
-                    x = p.grad.add(buf, alpha=group["momentum"]).bfloat16()
+                    x = p.grad.add(buf, alpha=group["momentum"]).to(self.ns_dtype)
                     x = x / (x.norm() + 1e-7)
                     for _ in range(3):
                         a = x @ x.T
@@ -2403,7 +2407,9 @@ def _adamw(params):
     return torch.optim.AdamW(params, lr=1e-2, weight_decay=0.01, capturable=params[0].is_cuda)
 
 
-def _run_optimizer_step(opt_factory, *, opts=None, num_steps=8, replace_grads_at=None, reload_at=None):
+def _run_optimizer_step(
+    opt_factory, *, opts=None, num_steps=8, replace_grads_at=None, reload_at=None, dtype=torch.float32
+):
     """
     :return: params after num_steps updates with a per-step LR schedule and random grads,
         via the plain ``optimizer.step()`` if opts is None, otherwise via :class:`OptimizerStep`;
@@ -2414,7 +2420,7 @@ def _run_optimizer_step(opt_factory, *, opts=None, num_steps=8, replace_grads_at
     device = _optimizer_step_device()
     gen = torch.Generator().manual_seed(0)
     shapes = [(32, 16), (16,), (64, 32), (32,), (8, 1, 3)]
-    params = [torch.nn.Parameter(torch.randn(s, generator=gen).to(device)) for s in shapes]
+    params = [torch.nn.Parameter(torch.randn(s, generator=gen).to(device, dtype)) for s in shapes]
     opt = opt_factory(params)
     opt_step = OptimizerStep(optimizer=opt, opts=opts) if opts is not None else None
     gen = torch.Generator(device=device).manual_seed(1)
@@ -2448,30 +2454,43 @@ def _run_optimizer_step(opt_factory, *, opts=None, num_steps=8, replace_grads_at
     return params, opt, opt_step
 
 
-def _check_optimizer_step_same_as_eager(opt_factory, opts, **kwargs):
-    """params and optimizer state (incl. the checkpoint scalars) as the plain eager optimizer.step()"""
-    ref_params, ref_opt, _ = _run_optimizer_step(opt_factory, **kwargs)
+def _check_optimizer_step(opt_factory, opts, *, ref_opt_factory=None, **kwargs):
+    """
+    Params and optimizer state (incl. the checkpoint scalars) at least as accurate as the plain eager optimizer.step(),
+    both measured against a float64 run (with ``ref_opt_factory``, default ``opt_factory``).
+    Not bitwise eager: Inductor keeps low-precision intermediates in float32.
+    """
+    ref_params, ref_opt, _ = _run_optimizer_step(ref_opt_factory or opt_factory, dtype=torch.float64, **kwargs)
+    eager_params, eager_opt, _ = _run_optimizer_step(opt_factory, **kwargs)
     params, opt, opt_step = _run_optimizer_step(opt_factory, opts=opts, **kwargs)
-    # torch < 2.12 emulates the eager bf16 rounding only partially (Muon-like: up to 4e-5 abs diff on 2.7)
-    tol = dict(rtol=1e-5, atol=1e-4 if torch.__version__ < (2, 12) else 1e-6)
-    for p_ref, p in zip(ref_params, params):
-        torch.testing.assert_close(p, p_ref, **tol)
+
+    def _check(name: str, v: torch.Tensor, v_eager: torch.Tensor, v_ref: torch.Tensor):
+        err, err_eager = (v.double() - v_ref).norm().item(), (v_eager.double() - v_ref).norm().item()
+        assert err <= 1.1 * err_eager + 1e-6 * v_ref.norm().item(), f"{name}: error {err} vs eager {err_eager}"
+
+    for i, (p_ref, p_eager, p) in enumerate(zip(ref_params, eager_params, params)):
+        _check(f"param {i}", p, p_eager, p_ref)
     ref_state = ref_opt.state_dict()["state"]
+    eager_state = eager_opt.state_dict()["state"]
     state = opt_step.state_dict_to_host_scalars(opt.state_dict())["state"]
-    assert set(state) == set(ref_state)
-    for i, s_ref in ref_state.items():
-        assert set(state[i]) == set(s_ref)
-        for k, v_ref in s_ref.items():
+    assert set(state) == set(eager_state)
+    for i, s_eager in eager_state.items():
+        assert set(state[i]) == set(s_eager)
+        for k, v_eager in s_eager.items():
             v = state[i][k]
-            if isinstance(v_ref, torch.Tensor):
-                torch.testing.assert_close(v, v_ref, **tol)
+            if isinstance(v_eager, torch.Tensor):
+                _check(f"state {i} {k}", v, v_eager, ref_state[i][k])
             else:  # Python scalar, e.g. the step counter of _MuonLike
-                assert type(v) is type(v_ref) and v == v_ref, f"state {i} {k}: {v!r} vs {v_ref!r}"
+                assert type(v) is type(v_eager) and v == v_eager, f"state {i} {k}: {v!r} vs {v_eager!r}"
     return opt_step
 
 
+def _muon_like_float64(params):
+    return _MuonLike(params, ns_dtype=torch.float64)
+
+
 def test_torch_optimizer_step_eager():
-    opt_step = _check_optimizer_step_same_as_eager(_adamw, {"compile": False, "capture": False}, reload_at=5)
+    opt_step = _check_optimizer_step(_adamw, {"compile": False, "capture": False}, reload_at=5)
     assert opt_step._graph is None
 
 
@@ -2483,7 +2502,7 @@ def test_torch_optimizer_step_dynamic_state_keys():
     opts = {"dynamic_state_keys": ["step"]}
     if not torch.cuda.is_available():
         opts.update({"compile": False, "capture": False})
-    opt_step = _check_optimizer_step_same_as_eager(_MuonLike, opts, reload_at=5)
+    opt_step = _check_optimizer_step(_MuonLike, opts, ref_opt_factory=_muon_like_float64, reload_at=5)
     state_dict = opt_step.state_dict_to_host_scalars(opt_step._optimizer.state_dict())
     for state in state_dict["state"].values():
         if "step" in state:
@@ -2504,21 +2523,21 @@ def test_torch_optimizer_step_python_scalar_state_not_selected():
 def test_torch_optimizer_step_capture():
     if not torch.cuda.is_available():
         raise unittest.SkipTest("CUDA not available")
-    opt_step = _check_optimizer_step_same_as_eager(_adamw, {"compile": False})
+    opt_step = _check_optimizer_step(_adamw, {"compile": False})
     assert opt_step._graph is not None and opt_step._num_captures == 1
 
 
 def test_torch_optimizer_step_compile_capture():
     if not torch.cuda.is_available():
         raise unittest.SkipTest("CUDA not available")
-    opt_step = _check_optimizer_step_same_as_eager(_adamw, {})
+    opt_step = _check_optimizer_step(_adamw, {})
     assert opt_step._graph is not None and (opt_step._num_traces, opt_step._num_captures) == (1, 1)
 
 
 def test_torch_optimizer_step_compile_capture_muon_like():
     if not torch.cuda.is_available():
         raise unittest.SkipTest("CUDA not available")
-    opt_step = _check_optimizer_step_same_as_eager(_MuonLike, {"dynamic_state_keys": ["step"]})
+    opt_step = _check_optimizer_step(_MuonLike, {"dynamic_state_keys": ["step"]}, ref_opt_factory=_muon_like_float64)
     assert (opt_step._num_traces, opt_step._num_captures) == (1, 1)
 
 
@@ -2526,7 +2545,7 @@ def test_torch_optimizer_step_replaced_grads():
     """new grad buffers: recapture on the new addresses, no retrace"""
     if not torch.cuda.is_available():
         raise unittest.SkipTest("CUDA not available")
-    opt_step = _check_optimizer_step_same_as_eager(_adamw, {}, replace_grads_at=5)
+    opt_step = _check_optimizer_step(_adamw, {}, replace_grads_at=5)
     assert (opt_step._num_traces, opt_step._num_captures) == (1, 2)
 
 
@@ -2534,7 +2553,9 @@ def test_torch_optimizer_step_reload():
     """checkpoint round trip: new state tensors and lr, recapture, no retrace"""
     if not torch.cuda.is_available():
         raise unittest.SkipTest("CUDA not available")
-    opt_step = _check_optimizer_step_same_as_eager(_MuonLike, {"dynamic_state_keys": ["step"]}, reload_at=5)
+    opt_step = _check_optimizer_step(
+        _MuonLike, {"dynamic_state_keys": ["step"]}, ref_opt_factory=_muon_like_float64, reload_at=5
+    )
     assert (opt_step._num_traces, opt_step._num_captures) == (1, 2)
 
 

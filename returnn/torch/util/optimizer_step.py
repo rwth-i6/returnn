@@ -52,8 +52,9 @@ so it is only retraced when their shapes, dtypes or the state layout change.
 
 Requirements (asserted): one CUDA device for all params, no closure, no grad scaler.
 The set of params with grads must stay fixed.
-Inductor compiles with ``emulate_precision_casts``, so low-precision intermediates are rounded as in eager.
-Compiled arithmetic is still not guaranteed to be bitwise identical to the eager step.
+The compiled step is not bitwise identical to the eager one:
+Inductor keeps low-precision intermediates (e.g. Muon's bf16 Newton-Schulz) in float32 inside fused kernels,
+which is at least as accurate.
 """
 
 from __future__ import annotations
@@ -145,13 +146,7 @@ class OptimizerStep:
         if not self._compiled_warm:
             # the first call traces (fake tensors, no update), compiles and autotunes, then updates;
             # all outside of any capture
-            # noinspection PyProtectedMember
-            import torch._inductor.config as inductor_config
-
-            # Round low-precision intermediates as eager does: e.g. Muon's bf16 Newton-Schulz
-            # otherwise stays in fp32 inside the fused kernels (measured param diff vs eager 7e-4, with this 1.5e-8)
-            with inductor_config.patch(emulate_precision_casts=True):
-                self._compiled_fn(inputs)
+            self._compiled_fn(inputs)
             self._compiled_warm = True
             return
         if not self._capture:
@@ -281,13 +276,6 @@ class OptimizerStep:
 
         self._num_traces += 1
         print(f"torch_optimizer_step: compiling the optimizer step (trace {self._num_traces})...", file=log.v3)
-        if self._num_traces == 1 and torch.__version__ < (2, 12):
-            print(
-                f"torch_optimizer_step WARNING: torch {torch.__version__} < 2.12 emulates the eager bf16/fp16 rounding"
-                " (emulate_precision_casts) only partially,"
-                " so with low-precision math (e.g. Muon) the compiled step can differ slightly from the eager one",
-                file=log.v2,
-            )
         opt = self._optimizer
         groups = opt.param_groups
         # the real params per group, and the state keys per param, in the order of _inputs
