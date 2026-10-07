@@ -4874,7 +4874,57 @@ def _gather_relayout_out_dim(indices: Tensor, raw: PackedRawTensor) -> Optional[
         if out_spatial_dim is not None:
             return None  # two new spatial dims: same
         out_spatial_dim = dim
+    if out_spatial_dim is not None and out_spatial_dim in raw.inner.dims:
+        if _plain_extents(raw, out_spatial_dim) is None:
+            return None  # the source carries it as a plain dim, see _read_rows_at_frames
     return out_spatial_dim
+
+
+def _plain_extents(raw: PackedRawTensor, dim: Dim) -> Optional[Tuple[int, int]]:
+    """
+    :param raw: a packing
+    :param dim: a plain dim of its inner buffer
+    :return: (rows, width), the raw extents of the packed dim and of dim (no host read on torch),
+        or None if the backend does not know them as python ints
+    """
+    inner = raw.inner
+    # noinspection PyProtectedMember
+    shape = inner._raw_backend.get_shape_tuple_raw(inner.raw_tensor)
+    rows, width = shape[inner.dims.index(raw.packed_dim)], shape[inner.dims.index(dim)]
+    if not isinstance(rows, int) or not isinstance(width, int):
+        return None
+    return rows, width
+
+
+def _read_rows_at_frames(raw: PackedRawTensor, *, rows: Tensor, frame: Tensor, frame_dim: Dim) -> Tensor:
+    """
+    Reads one row of the packed source buffer per output frame of a re-laid-out gather.
+
+    A dim which the source shares with the indices is a batch dim of the gather.
+    The spatial dim of the indices (frame_dim) is folded into the packed dim of the result,
+    so when the source carries it as a plain dim (e.g. a label by frame lattice read along an alignment),
+    frame t must read column t of its row, not the whole row.
+    The buffer is then read through one flat index, row * width + frame, and never expanded per frame.
+
+    :param raw: packing of the source
+    :param rows: [result packed dim, ...], the row of the source buffer for every output frame
+    :param frame: [result packed dim], the position of every output frame within its sequence
+    :param frame_dim: the spatial dim of the indices
+    :return: [result packed dim, ...] + the remaining dims of the source buffer
+    """
+    inner = raw.inner
+    if frame_dim not in inner.dims:
+        return rf.gather(inner, indices=rows, axis=raw.packed_dim)
+    n_rows, width = _plain_extents(raw, frame_dim)
+    # static dims of the raw extents: merging the dynamic ones would derive sizes and masks for the flat dim
+    rows_dim = Dim(n_rows, name="packed_rows")
+    cols_dim = Dim(width, name=f"{frame_dim.name or 'frame'}_cols")
+    inner, _ = rf.replace_dim(inner, in_dim=raw.packed_dim, out_dim=rows_dim)
+    inner, _ = rf.replace_dim(inner, in_dim=frame_dim, out_dim=cols_dim)
+    flat, flat_dim = rf.merge_dims(inner, dims=[rows_dim, cols_dim])
+    flat_idx = rf.cast(rows, "int64") * width + rf.cast(frame, "int64")  # int64: exceeds int32 for a big lattice
+    flat_idx.sparse_dim = flat_dim
+    return rf.gather(flat, indices=flat_idx, axis=flat_dim)
 
 
 def _gather_relayout(
@@ -4926,7 +4976,7 @@ def _gather_relayout(
     starts, seqs_dim = raw.seq_starts(device=dev)
     src = rf.cast(rf.gather(starts, indices=seq, axis=seqs_dim), idx.dtype) + idx
     src = rf.clip_by_value(src, 0, _last_row(raw.packed_dim, src.dtype))
-    out = helper.rewrap(rf.gather(raw.inner, indices=src, axis=raw.packed_dim), name="gather")
+    out = helper.rewrap(_read_rows_at_frames(raw, rows=src, frame=local, frame_dim=out_spatial_dim), name="gather")
     # a sparse dim assigned on the virtual tensor never reached the inner buffer
     if source.sparse_dim is not None:
         out.sparse_dim = source.sparse_dim

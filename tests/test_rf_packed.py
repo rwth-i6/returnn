@@ -2438,6 +2438,56 @@ def test_reduce_logmeanexp_packed_no_mask():
     )
 
 
+def test_gather_with_an_index_time_dim_which_the_source_carries_too():
+    """
+    a dim shared by source and indices is a batch dim of the gather: frame t reads column t, not every column.
+    Here the indices bring this dim as their own time dim, while the packed source carries it as a plain dim
+    (e.g. a label by frame lattice read along an alignment), and the result is packed over the frames.
+    """
+    rf.select_backend_torch()
+    batch_dim = Dim(3, name="batch")
+    label_dim, frame_dim = (
+        Dim(Tensor(name, dims=[batch_dim], dtype="int32", raw_tensor=torch.tensor(lens, dtype=torch.int32)), name=name)
+        for name, lens in (("labels", [3, 2, 4]), ("frames", [4, 6, 3]))
+    )
+    feat_dim = Dim(2, name="feat")
+    x = Tensor("x", dims=[batch_dim, label_dim, frame_dim, feat_dim], dtype="float32")
+    x.raw_tensor = torch.randn(3, 4, 6, 2, generator=torch.Generator().manual_seed(1))
+    idx = Tensor("idx", dims=[batch_dim, frame_dim], dtype="int32", sparse_dim=label_dim)
+    idx.raw_tensor = torch.tensor([[0, 1, 2, 2, 0, 0], [0, 0, 1, 1, 1, 0], [3, 1, 0, 0, 0, 0]], dtype=torch.int32)
+    beyond = Tensor("idx_beyond", dims=[batch_dim, frame_dim], dtype="int32", sparse_dim=label_dim)
+    beyond.raw_tensor = idx.raw_tensor + 3
+    for gap in (0, 2):
+        xp = packed.pack(x, dims=[batch_dim, label_dim], gap=gap)
+        for indices, clip_to_valid in ((idx, False), (beyond, True)):
+            ref = rf.gather(x, indices=indices, axis=label_dim, clip_to_valid=clip_to_valid)
+            assert ref.dims_set == {batch_dim, frame_dim, feat_dim}
+            packed._warned_fallback_ops.clear()
+            out = rf.gather(xp, indices=indices, axis=label_dim, clip_to_valid=clip_to_valid)
+            assert not packed._warned_fallback_ops, packed._warned_fallback_ops
+            assert packed.is_packed(out) and out.raw_tensor.orig_dims == (batch_dim, frame_dim)
+            assert out.dims_set == ref.dims_set, (out.dims, ref.dims)
+            _assert_equal_non_padded(out, ref, batch_dim, frame_dim)
+
+    # as traced: bound-sized source buffer, the columns come from the declared capacity
+    label_dim.capacity, frame_dim.capacity = 4, 6
+    xp = packed.pack(x, dims=[batch_dim, label_dim], total_bound=12)
+    with rf.set_static_traceable_ctx():
+        out = rf.gather(xp, indices=idx, axis=label_dim)
+    _assert_equal_non_padded(out, rf.gather(x, indices=idx, axis=label_dim), batch_dim, frame_dim)
+
+    # the gradient reaches exactly the cells the valid frames read
+    x.raw_tensor.requires_grad_(True)
+    valid = (torch.arange(6)[None, :] < frame_dim.dyn_size_ext.raw_tensor[:, None])[:, :, None]
+    ref = rf.gather(x, indices=idx, axis=label_dim)
+    ref_raw = ref.copy_transpose([batch_dim, frame_dim, feat_dim]).raw_tensor
+    (grad_ref,) = torch.autograd.grad(((ref_raw * valid) ** 2).sum(), x.raw_tensor)
+    out = rf.gather(packed.pack(x, dims=[batch_dim, label_dim]), indices=idx, axis=label_dim)
+    out_raw = packed.unpack(out).copy_transpose([batch_dim, frame_dim, feat_dim]).raw_tensor
+    (grad,) = torch.autograd.grad(((out_raw * valid) ** 2).sum(), x.raw_tensor)
+    numpy.testing.assert_allclose(grad.numpy(), grad_ref.numpy(), rtol=1e-6)
+
+
 if __name__ == "__main__":
     better_exchook.install()
     if len(sys.argv) <= 1:
