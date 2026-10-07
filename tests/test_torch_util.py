@@ -501,6 +501,62 @@ def test_masked_select_bound():
     torch.testing.assert_close(out2, x[mask])
 
 
+def test_gpu_cpu_affinity_parse_cpulist():
+    from returnn.torch.util.gpu_cpu_affinity import parse_cpulist
+
+    assert parse_cpulist("0-11,24-35\n") == set(range(12)) | set(range(24, 36))
+    assert parse_cpulist("72-143") == set(range(72, 144))
+    assert parse_cpulist("3") == {3}
+    assert parse_cpulist("") == set()
+
+
+def test_gpu_cpu_affinity_sysfs_and_proc_lookup():
+    """the local CPUs of a PCI device from sysfs, and the PCI id of a GPU by its UUID from the driver's proc dir"""
+    import tempfile
+    from returnn.torch.util.gpu_cpu_affinity import read_pci_device_local_cpus, find_pci_id_by_gpu_uuid
+
+    with tempfile.TemporaryDirectory() as tmp:
+        gpus = {
+            "0000:1b:00.0": ("8ff8d0c7-8d30-8e55-0980-ac69fc03a6b8", "0-11"),
+            "0001:01:00.0": ("0911978f", "72-143"),
+        }
+        for pci_id, (uuid, cpulist) in gpus.items():
+            os.makedirs(os.path.join(tmp, "sys", pci_id))
+            with open(os.path.join(tmp, "sys", pci_id, "local_cpulist"), "wt") as f:
+                f.write(cpulist + "\n")
+            os.makedirs(os.path.join(tmp, "proc", pci_id))
+            with open(os.path.join(tmp, "proc", pci_id, "information"), "wt") as f:
+                f.write(f"Model: \t\t NVIDIA H100\nGPU UUID: \t GPU-{uuid}\nBus Location: \t {pci_id}\n")
+        assert read_pci_device_local_cpus("0001:01:00.0", sysfs_root=os.path.join(tmp, "sys")) == set(range(72, 144))
+        proc = os.path.join(tmp, "proc")
+        assert find_pci_id_by_gpu_uuid("8ff8d0c7-8d30-8e55-0980-ac69fc03a6b8", proc_root=proc) == "0000:1b:00.0"
+        assert find_pci_id_by_gpu_uuid("GPU-0911978f", proc_root=proc) == "0001:01:00.0"
+        try:
+            find_pci_id_by_gpu_uuid("unknown", proc_root=proc)
+        except RuntimeError as exc:
+            assert "not found" in str(exc)
+        else:
+            raise AssertionError("unknown UUID must raise")
+
+
+def test_gpu_cpu_affinity_set():
+    """the real thing on a GPU node: the affinity shrinks to the CPUs local to the device, within the allowed set"""
+    if not torch.cuda.is_available():
+        raise unittest.SkipTest("needs CUDA")
+    from returnn.torch.util.gpu_cpu_affinity import set_gpu_local_cpu_affinity, get_gpu_pci_id
+
+    allowed = os.sched_getaffinity(0)
+    try:
+        pci_id = get_gpu_pci_id(0)
+        assert os.path.isdir(f"/sys/bus/pci/devices/{pci_id}"), pci_id
+        cpus = set_gpu_local_cpu_affinity(0, log_file=sys.stdout)
+        assert cpus and cpus <= allowed
+        assert os.sched_getaffinity(0) == cpus
+    finally:
+        for tid in os.listdir("/proc/self/task"):
+            os.sched_setaffinity(int(tid), allowed)
+
+
 def test_depthwise_conv1d_triton_kernel_grad():
     """fwd and all grads of the Triton depthwise conv vs torch conv1d, small blocks force partial tiles"""
     if not torch.cuda.is_available():

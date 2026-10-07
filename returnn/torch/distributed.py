@@ -78,6 +78,13 @@ class DistributedContext:
         if self._sync_complete_frac is None:
             self._sync_complete_frac = BehaviorVersion.get() >= 33
 
+        if self._opts.get("gpu_local_cpu_affinity", False):
+            # Before the dataset workers start, so they inherit it.
+            from returnn.torch.util.gpu_cpu_affinity import set_gpu_local_cpu_affinity
+
+            cpus = set_gpu_local_cpu_affinity(self._local_rank)
+            _logger.info(f"gpu_local_cpu_affinity: local rank {self._local_rank} on CPUs {sorted(cpus)}")
+
         self._check_no_unknown_opts()
 
     def __repr__(self):
