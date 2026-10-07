@@ -2351,6 +2351,42 @@ def test_cu_seqlens_with_host_lens_and_a_device_total():
             assert cu.raw_tensor.tolist() == [0, 5, 8]
 
 
+def test_batch_norm_packed_gapped_with_a_static_axis():
+    """the masked batch norm statistics also cover a static axis next to the packed one"""
+    rf.select_backend_torch()
+    _, batch_dim, time_dim, feat_dim = _make_input(seq_lens=(3, 2), feat=2, seed=9)
+    xk = Tensor("xk", dims=[batch_dim, time_dim, Dim(2, name="k"), feat_dim], dtype="float32")
+    xk.raw_tensor = torch.arange(24, dtype=torch.float32).reshape(2, 3, 2, 2)
+    # gapped, gapped bound, dense bound (unused tail only)
+    for gap, total_bound in [(2, None), (2, 12), (0, 8)]:
+        with rf.set_default_device_ctx("cpu"):
+            rf.set_random_seed(3)
+            bn_dense = rf.BatchNorm(feat_dim, use_mask=False)
+            bn_gapped = rf.BatchNorm(feat_dim, use_mask=False)
+            with rf.get_run_ctx().train_flag_ctx(True):
+                out_dense = bn_dense(packed.pack(xk))
+                out_gapped = bn_gapped(packed.pack(xk, gap=gap, total_bound=total_bound))
+        assert packed.is_packed(out_gapped)
+        _assert_equal_non_padded(out_gapped, packed.unpack(out_dense), batch_dim, time_dim)
+        for p_dense, p_gapped in [
+            (bn_dense.running_mean, bn_gapped.running_mean),
+            (bn_dense.running_variance, bn_gapped.running_variance),
+        ]:
+            numpy.testing.assert_allclose(
+                p_dense.raw_tensor.detach().numpy(), p_gapped.raw_tensor.detach().numpy(), rtol=1e-5, atol=1e-6
+            )
+
+
+def test_batch_norm_packed_gapped_unpacked_dim_of_the_seq_lens():
+    """a static dim the seq lens depend on, left unpacked, is no extra stat axis: the masked path is not taken"""
+    rf.select_backend_torch()
+    x, batch_dim, time_dim, feat_dim = _make_input(seq_lens=(3, 2), feat=2)
+    for gap, total_bound in [(2, None), (2, 12), (0, 8)]:
+        xp = packed.pack(x, dims=[time_dim], gap=gap, total_bound=total_bound)
+        assert batch_dim in xp.raw_tensor.inner.dims
+        assert packed._batch_norm_gapped(xp, {"in_dim": feat_dim}) is None, (gap, total_bound)
+
+
 def test_num_elements_of_shape_source():
     """
     with source, the count covers what a reduction of it covers:
