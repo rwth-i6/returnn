@@ -4287,14 +4287,7 @@ class PackedBackend(Backend[PackedRawTensor]):
         local = _frame_coords(raw, axis)
         idx = rf.cast(idx, local.dtype)
         if clip_to_valid:
-            seq = _frame_coords(raw, raw.orig_dims[0])
-            # in the traced regime the lens already live on the data's device,
-            # where copying them would be a sync
-            lens = _device_lens(raw)
-            if lens is None:
-                lens = rf.copy_to_device(raw.seq_lens, dev)
-            last = rf.cast(rf.gather(lens, indices=seq, axis=raw.orig_dims[0]), idx.dtype) - 1
-            idx = rf.clip_by_value(idx, rf.zeros_like(last), last)
+            idx = _clip_into_seqs(raw, idx, seq=_frame_coords(raw, raw.orig_dims[0]))
         # the sequence starts at this frame's own row minus its position within the sequence
         src = rows - local + idx
         src = rf.clip_by_value(src, 0, _last_row(raw.packed_dim, src.dtype))
@@ -5236,16 +5229,9 @@ def _gather_at_positions(
     :param clip_to_valid: clip the positions into each sequence
     :return: packed like out_raw
     """
-    batch = raw.orig_dims[0]
-    dev = raw.inner.device
     if clip_to_valid:
-        # in the traced regime the lens already live on the data's device, where copying them would be a sync
-        lens = _device_lens(raw)
-        if lens is None:
-            lens = rf.copy_to_device(raw.seq_lens, dev)
-        last = rf.cast(rf.gather(lens, indices=seq, axis=batch), idx.dtype) - 1
-        idx = rf.clip_by_value(idx, rf.zeros_like(last), last)
-    starts, seqs_dim = raw.seq_starts(device=dev)
+        idx = _clip_into_seqs(raw, idx, seq=seq)
+    starts, seqs_dim = raw.seq_starts(device=raw.inner.device)
     src = rf.cast(rf.gather(starts, indices=seq, axis=seqs_dim), idx.dtype) + idx
     src = rf.clip_by_value(src, 0, _last_row(raw.packed_dim, src.dtype))
     frame_dim = out_raw.orig_dims[-1]
@@ -5254,6 +5240,21 @@ def _gather_at_positions(
     if source.sparse_dim is not None:
         out.sparse_dim = source.sparse_dim
     return out
+
+
+def _clip_into_seqs(raw: PackedRawTensor, idx: Tensor, *, seq: Tensor) -> Tensor:
+    """
+    :param raw: a packing
+    :param idx: positions within its sequences
+    :param seq: the sequence of every position
+    :return: idx clipped into its sequence
+    """
+    # in the traced regime the lens already live on the data's device, where copying them would be a sync
+    lens = _device_lens(raw)
+    if lens is None:
+        lens = rf.copy_to_device(raw.seq_lens, raw.inner.device)
+    last = rf.cast(rf.gather(lens, indices=seq, axis=raw.orig_dims[0]), idx.dtype) - 1
+    return rf.clip_by_value(idx, rf.zeros_like(last), last)
 
 
 def _gather_out_packed_dim(
