@@ -34,7 +34,9 @@ def moments(
     """
     :param x: input
     :param axis: the axis (or axes) to be reduced, to calculate statistics over
-    :param use_mask: whether to use a mask for dynamic spatial dims in the reduction
+    :param use_mask: whether to use a mask for dynamic spatial dims in the reduction.
+        The local mean follows it only with the global config option ``rf_moments_use_fixed_masking``
+        (default from behavior version 34 on), otherwise the local mean is always masked.
     :param correction:
         The variance will be estimated by ``sum((x - mean)**2) / (n-correction)``
         where ``n`` is the number of elements in the axis (or the axes) which the reduction covers
@@ -82,7 +84,7 @@ def moments(
         if isinstance(correction, Tensor) or correction != 0:
             variance *= count / (count - correction)
         return rf.cast(mean, compute_dtype), rf.cast(variance, compute_dtype)
-    mean = rf.reduce_mean(x, axis=axis)
+    mean = rf.reduce_mean(x, axis=axis, use_mask=use_mask if _moments_use_fixed_masking() else True)
     # stop_gradient does not change the gradient here
     variance = rf.reduce_mean(rf.squared_difference(x, rf.stop_gradient(mean)), axis=axis, use_mask=use_mask)
     if isinstance(correction, Tensor) or correction != 0:
@@ -260,6 +262,30 @@ def batch_norm_distributed_default() -> bool:
     return config.bool("rf_batch_norm_distributed", False)
 
 
+def _moments_use_fixed_masking() -> bool:
+    """
+    :return: whether :func:`moments` applies ``use_mask`` to its local mean too
+        and :class:`BatchNorm` passes its ``use_mask`` on to :func:`moments`.
+        Config option ``rf_moments_use_fixed_masking: bool``, else behavior_version >= 34.
+    """
+    from returnn.config import get_global_config
+
+    config = get_global_config(raise_exception=False)
+    config_value = None
+    if config:
+        if "rf_moments_use_fixed_masking" in config.typed_dict:
+            config_value = config.typed_dict["rf_moments_use_fixed_masking"]
+            assert config_value is None or isinstance(config_value, bool)
+        elif "rf_moments_use_fixed_masking" in config.dict:
+            config_value = config.bool("rf_moments_use_fixed_masking", None)
+    if config_value is not None:
+        return config_value
+
+    from returnn.util.basic import BehaviorVersion
+
+    return BehaviorVersion.get() >= 34
+
+
 class BatchNorm(rf.Module):
     """
     Batch normalization. https://arxiv.org/abs/1502.03167
@@ -320,6 +346,8 @@ class BatchNorm(rf.Module):
             which ignore the masking, and also slower, and the fused op would not be used.
           False would be consistent to all other frameworks,
             and potentially allows for the use of an efficient fused op internally.
+          The distributed statistics follow it only with the global config option
+            ``rf_moments_use_fixed_masking`` (default from behavior version 34 on), otherwise they are always masked.
         :param distributed: compute batch statistics over the global batch across all DDP workers
           (SyncBatchNorm-style) instead of per-worker.
           None (default) reads the global config option ``rf_batch_norm_distributed`` (default False).
@@ -370,7 +398,10 @@ class BatchNorm(rf.Module):
             mean_cur_batch, variance_cur_batch = rf.cond(
                 need_current_batch_stats,
                 lambda: rf.moments(
-                    source, axis=[d for d in source.dims if d != self.in_dim], distributed=self.distributed
+                    source,
+                    axis=[d for d in source.dims if d != self.in_dim],
+                    use_mask=use_mask if _moments_use_fixed_masking() else True,
+                    distributed=self.distributed,
                 ),
                 lambda: (self.running_mean, self.running_variance),
             )
