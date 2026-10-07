@@ -48,8 +48,10 @@ def get_gpu_pci_id(device_index: int) -> str:
         (torch >= 2.8), or from the NVIDIA driver by the device UUID.
     """
     props = torch.cuda.get_device_properties(device_index)
-    if hasattr(props, "pci_bus_id"):
-        return f"{props.pci_domain_id:04x}:{props.pci_bus_id:02x}:{props.pci_device_id:02x}.0"
+    # not in the torch type stubs (also missing in torch < 2.8), so by name
+    domain, bus, device = (getattr(props, name, None) for name in ("pci_domain_id", "pci_bus_id", "pci_device_id"))
+    if bus is not None:
+        return f"{domain:04x}:{bus:02x}:{device:02x}.0"
     return find_pci_id_by_gpu_uuid(str(props.uuid))
 
 
