@@ -2352,7 +2352,7 @@ def test_cu_seqlens_with_host_lens_and_a_device_total():
 
 
 def _bounded_batch(lens, *, capacity: int) -> Tuple[Dim, Dim]:
-    """batch dim with the real batch size as dyn size and the bound as capacity, padding seqs of len 0 after the real ones"""
+    """batch dim with the real batch size as dyn size and the bound as capacity, then padding seqs of len 0"""
     batch_size = Tensor("batch_size", dims=(), dtype="int32", raw_tensor=torch.tensor(len(lens), dtype=torch.int32))
     batch_dim = Dim(batch_size, name="batch", kind=Dim.Types.Batch, capacity=capacity)
     lens = list(lens) + [0] * (capacity - len(lens))
