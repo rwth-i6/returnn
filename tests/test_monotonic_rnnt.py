@@ -246,6 +246,34 @@ def test_monotonic_rnnt_survives_a_dead_cell():
         torch.testing.assert_close(results[1], results[0])
 
 
+def test_monotonic_rnnt_gives_no_gradient_without_an_alignment():
+    """
+    The label of the first sequence has no probability in either of its frames, so none of its alignments has any
+    and its loss is infinite. The second has more labels than frames. Neither gets a gradient, and the third keeps
+    the loss and the gradient it has alone.
+    """
+    torch.manual_seed(8)
+    vocab, blank = 3, 0
+    impossible = torch.randn(2, 2, vocab)
+    impossible[:, 0, 1] = float("-inf")
+    per_seq = [impossible, torch.randn(1, 3, vocab), torch.randn(3, 2, vocab)]
+    labels = torch.tensor([[1, 0], [1, 2], [2, 0]], dtype=torch.int32)
+    frame_lens = torch.tensor([2, 1, 3], dtype=torch.int32)
+    label_lens = torch.tensor([1, 2, 1], dtype=torch.int32)
+    results = []
+    for seqs in (slice(None), slice(2, None)):
+        x = _pack(per_seq[seqs]).requires_grad_()
+        loss = monotonic_rnnt_loss(x, labels[seqs], frame_lens[seqs], label_lens[seqs], blank=blank, max_frames=3)
+        loss.sum().backward()
+        results.append((loss.detach(), x.grad))
+    (loss, grad), (alone_loss, alone_grad) = results
+    others = grad.shape[0] - alone_grad.shape[0]
+    torch.testing.assert_close(loss[:2], torch.tensor([float("inf"), 0.0]))
+    assert not grad[:others].any(), grad[:others]
+    torch.testing.assert_close(loss[2:], alone_loss)
+    torch.testing.assert_close(grad[others:], alone_grad)
+
+
 def test_monotonic_rnnt_ignores_what_lies_past_the_batch():
     """
     A captured step hands over a buffer of the declared capacity and the declared frames, both above what the

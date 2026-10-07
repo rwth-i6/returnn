@@ -122,7 +122,7 @@ def _forward_scores(
     """
     max_frames, batch_size, max_prefix = blank_rows.shape
     device, dtype = blank_rows.device, blank_rows.dtype
-    neg_inf = torch.finfo(dtype).min
+    neg_inf = float("-inf")
     prefix = torch.arange(max_prefix, device=device).unsqueeze(0)
     lens = label_lens.long().unsqueeze(1)
     valid = prefix <= lens
@@ -140,11 +140,12 @@ def _forward_scores(
     for frame in range(max_frames):
         alpha_frames.append(alpha)
         emit = alpha + label_rows[frame]
-        # the floor keeps a dead edge finite, logaddexp of two minus infinities has a nan gradient
-        stay = (alpha + blank_rows[frame]).clamp(min=neg_inf)
-        move = torch.cat([pad, emit[:, :-1]], dim=1).clamp(min=neg_inf)
-        updated = torch.logaddexp(stay, move)
-        updated = torch.where(valid, updated, torch.full_like(updated, neg_inf))
+        stay = alpha + blank_rows[frame]
+        move = torch.cat([pad, emit[:, :-1]], dim=1)
+        # a position no edge reaches stays at minus infinity and takes no gradient, logaddexp has a nan one there
+        dead = torch.isneginf(stay) & torch.isneginf(move)
+        updated = torch.logaddexp(stay.masked_fill(dead, 0.0), move.masked_fill(dead, 0.0))
+        updated = torch.where(valid & ~dead, updated, torch.full_like(updated, neg_inf))
         alpha = torch.where((frame < frame_lens).unsqueeze(1), updated, alpha)
         total = torch.where((frame + 1) == frame_lens, torch.gather(alpha, 1, lens).squeeze(1), total)
     return total, torch.stack(alpha_frames)
