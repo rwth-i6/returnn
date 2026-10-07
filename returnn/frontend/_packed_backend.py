@@ -5002,7 +5002,9 @@ def flat_content(source: Tensor, *, out_dim: Optional[Dim] = None) -> Tuple[Tens
         out_dim.dyn_size_ext = total
     if rf.is_static_traceable():
         # out_dim can come from another packing with another bound; the content is a prefix of both buffers
-        delta = out_dim.get_dim_value_tensor() - raw.packed_dim.get_dim_value_tensor()
+        out_size, in_size = out_dim.get_dim_value_tensor(), raw.packed_dim.get_dim_value_tensor()
+        assert isinstance(out_size, int) and isinstance(in_size, int)  # static tracing: capacities
+        delta = out_size - in_size
     else:
         delta = 0
     if delta < 0:
