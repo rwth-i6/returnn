@@ -4411,10 +4411,10 @@ class PackedBackend(Backend[PackedRawTensor]):
             out_dim = Dim(lens, name="masked_select")
         elif out_dim.dyn_size_ext is None or out_dim.dyn_size_ext.raw_tensor is None:
             out_dim.dyn_size_ext = lens
-        # bound: a selection never exceeds its input content
+        # bound: a selection never exceeds its input content, nor a declared bound
         if rf.is_static_traceable():
             assert raw.content_bound, f"packed masked_select: static traceable needs a content bound on {raw}"
-            bound = raw.content_bound
+            bound = _min_bound(raw.content_bound, out_dim.packed_total_bound)
             if out_dim.capacity is None and raw.orig_dims[-1].capacity is not None:
                 out_dim.capacity = raw.orig_dims[-1].capacity
         else:
@@ -5074,18 +5074,28 @@ def _packed_total_bound(dim: Dim, in_raw: PackedRawTensor, n_seqs: int) -> Optio
         The innermost dim of in_raw is bounded by its content bound instead, which is what packing is about,
         and a sum of dims by the sum over its parts
         (e.g. a stream of frames and labels: the frames by their content, only the labels by their capacity).
+        A declared :attr:`Dim.packed_total_bound` caps the result.
     """
     if dim == in_raw.orig_dims[-1] and in_raw.content_bound is not None:
-        return in_raw.content_bound
+        return _min_bound(in_raw.content_bound, dim.packed_total_bound)
     # noinspection PyProtectedMember
     op = dim._extra.derived_from_op if dim._extra else None
     if op is not None and op.kind == "add" and op.inputs:
         parts = [_packed_total_bound(part, in_raw, n_seqs) for part in op.inputs]
         if all(part is not None for part in parts):
-            return sum(parts)
+            return _min_bound(sum(parts), dim.packed_total_bound)
     # noinspection PyProtectedMember
     capacity = dim.capacity or dim._derived_capacity()
-    return None if capacity is None else n_seqs * capacity
+    return _min_bound(None if capacity is None else n_seqs * capacity, dim.packed_total_bound)
+
+
+def _min_bound(a: Optional[int], b: Optional[int]) -> Optional[int]:
+    """
+    :return: the tighter of two optional bounds
+    """
+    if a is None:
+        return b
+    return a if b is None else min(a, b)
 
 
 def _plain_extents(raw: PackedRawTensor, dim: Dim) -> Optional[Tuple[int, int]]:

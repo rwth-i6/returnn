@@ -2516,6 +2516,50 @@ def test_scatter_relayout_static_buffer_holds_every_result():
     assert out.raw_tensor.packed_dim.dimension == 5 + 2 * 3, out.raw_tensor
 
 
+def test_scatter_relayout_static_buffer_takes_a_declared_total_bound():
+    """
+    a part of a sum dim which declares a bound on its summed lengths is sized by that bound,
+    not by the number of sequences times its capacity
+    """
+    rf.select_backend_torch()
+    batch_dim = Dim(2, name="batch")
+    x, time_dim = _seqs("x", batch_dim, [2, 1], [[10.0, 11.0], [20.0]])
+    time_dim.capacity = 2
+    rest_dim = Dim(
+        Tensor("rest_lens", dims=[batch_dim], dtype="int32", raw_tensor=torch.tensor([1, 1], dtype=torch.int32)),
+        name="rest",
+        capacity=3,
+        packed_total_bound=2,
+    )
+    idx = Tensor("idx", dims=[batch_dim, time_dim], dtype="int32")
+    idx.raw_tensor = torch.tensor([[1, 2], [1, 0]], dtype=torch.int32)
+    out_dim = time_dim + rest_dim
+    with rf.set_static_traceable_ctx():
+        out = rf.scatter(packed.pack(x, total_bound=3), indices=idx, indices_dim=time_dim, out_dim=out_dim)
+    assert out.raw_tensor.packed_dim.dimension == 3 + 2, out.raw_tensor
+    got = packed.unpack(out).copy_compatible_to_dims_raw([batch_dim, out_dim])
+    assert got[0, :3].tolist() == [0.0, 10.0, 11.0], got
+    assert got[1, :2].tolist() == [0.0, 20.0], got
+
+
+def test_masked_select_static_buffer_takes_a_declared_total_bound():
+    """
+    a declared bound on the summed lengths of the result dim sizes the buffer below the source content
+    """
+    rf.select_backend_torch()
+    batch_dim = Dim(2, name="batch")
+    x, time_dim = _seqs("x", batch_dim, [3, 2], [[1.0, 2.0, 3.0], [4.0, 5.0]])
+    time_dim.capacity = 3
+    out_dim = Dim(None, name="selected", capacity=3, packed_total_bound=2)
+    with rf.set_static_traceable_ctx():
+        x = packed.pack(x, total_bound=5)
+        mask = rf.logical_or(x == 2.0, x == 4.0)
+        out, out_dim = rf.masked_select(x, mask=mask, dims=[time_dim], out_dim=out_dim)
+    assert out.raw_tensor.packed_dim.dimension == 2, out.raw_tensor
+    got = packed.unpack(out).copy_compatible_to_dims_raw([batch_dim, out_dim])
+    assert got[0, :1].tolist() == [2.0] and got[1, :1].tolist() == [4.0], got
+
+
 def test_scatter_relayout_only_valid_frames_write_into_their_own_sequence():
     rf.select_backend_torch()
     batch_dim = Dim(2, name="batch")
