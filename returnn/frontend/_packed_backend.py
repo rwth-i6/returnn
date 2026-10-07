@@ -4223,20 +4223,26 @@ class PackedBackend(Backend[PackedRawTensor]):
                 # gather along a plain axis with per-frame indices (e.g. a position drawn per frame):
                 # elementwise on the inner buffer, the packing is untouched
                 if is_packed(indices):
-                    idx = _raw(_conform_packing(indices, raw)).inner
+                    idx_raw = _raw(_conform_packing(indices, raw))
+                    # indices packed over other dims have other rows
+                    idx = idx_raw.inner if raw.same_packing(idx_raw) else None
                 elif set(indices.dims) & set(raw.orig_dims):
                     idx = _pack_like(indices, raw)
                 else:
                     idx = indices  # no packed dims involved at all
-                out = raw.rewrap(
-                    rf.gather(raw.inner, indices=idx, axis=axis, clip_to_valid=clip_to_valid), name="gather"
-                )
-                if source.sparse_dim is not None and source.sparse_dim in out.dims:
-                    out.sparse_dim = source.sparse_dim
-                return out
+                if idx is not None:
+                    out = raw.rewrap(
+                        rf.gather(raw.inner, indices=idx, axis=axis, clip_to_valid=clip_to_valid), name="gather"
+                    )
+                    if source.sparse_dim is not None and source.sparse_dim in out.dims:
+                        out.sparse_dim = source.sparse_dim
+                    return out
             return _dim_aware_call("gather", (source,), kwargs)
         if is_packed(indices):
-            idx = _raw(_conform_packing(indices, raw)).inner
+            idx_raw = _raw(_conform_packing(indices, raw))
+            if not raw.same_packing(idx_raw):
+                return _dim_aware_call("gather", (source,), kwargs)
+            idx = idx_raw.inner
         elif set(indices.dims).issubset(set(raw.orig_dims)):
             idx = _pack_like(indices, raw)
         else:

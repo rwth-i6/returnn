@@ -2438,6 +2438,37 @@ def test_reduce_logmeanexp_packed_no_mask():
     )
 
 
+def test_gather_with_indices_of_another_packing():
+    """
+    indices packed over another time dim have other rows than the source:
+    along a plain axis this is the (time, labels) lattice, along the packed time dim frames read at label positions
+    """
+    rf.select_backend_torch()
+    scores, batch_dim, time_dim, vocab_dim = _make_input(batch_size=2, seq_lens=(4, 3), feat=5)
+    label_dim = Dim(
+        Tensor("labels", dims=[batch_dim], dtype="int32", raw_tensor=torch.tensor([3, 2], dtype=torch.int32)),
+        name="labels",
+    )
+    labels = Tensor("labels", dims=[batch_dim, label_dim], dtype="int32", sparse_dim=vocab_dim)
+    labels.raw_tensor = torch.tensor([[1, 2, 3], [4, 0, 0]], dtype=torch.int32)
+    positions = Tensor("positions", dims=[batch_dim, label_dim], dtype="int32", sparse_dim=time_dim)
+    positions.raw_tensor = torch.tensor([[3, 0, 2], [2, 1, 0]], dtype=torch.int32)
+    for indices, axis in ((labels, vocab_dim), (positions, time_dim)):
+        ref = rf.gather(scores, indices=indices, axis=axis)
+        packed.set_allowed_fallbacks(["gather"])
+        try:
+            out = rf.gather(packed.pack(scores), indices=packed.pack(indices), axis=axis)
+        finally:
+            packed.set_allowed_fallbacks(None)
+        out = packed.unpack(out) if packed.is_packed(out) else out
+        assert out.dims_set == ref.dims_set, (axis, out.dims, ref.dims)
+        out_raw = out.copy_compatible_to_dims_raw(ref.dims)
+        mask = rf.sequence_mask(ref.dims).copy_compatible_to_dims_raw(ref.dims)
+        numpy.testing.assert_allclose(
+            (out_raw * mask).numpy(), (ref.raw_tensor * mask).numpy(), rtol=1e-6, err_msg=str(axis)
+        )
+
+
 if __name__ == "__main__":
     better_exchook.install()
     if len(sys.argv) <= 1:
