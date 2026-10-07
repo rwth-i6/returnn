@@ -93,17 +93,30 @@ def test_rnnt_matches_the_sum_over_alignments():
 def test_rnnt_runs_over_a_buffer_and_a_recursion_above_the_batch():
     """
     A captured step hands over a buffer of the declared capacity and the declared frames, both above what
-    the batch holds, and the loss of the batch must not change with either.
+    the batch holds, and neither changes the loss or the gradient of the batch, whatever the rows past it hold.
     """
     torch.manual_seed(9)
     vocab, blank = 5, 0
     cases = [(4, 2), (3, 3), (2, 0)]
     per_seq, labels, labels_padded, frame_lens, label_lens = _batch(cases, vocab, extra_label_columns=2)
     want = [_brute_force(logits, seq_labels.tolist(), blank) for logits, seq_labels in zip(per_seq, labels)]
+    exact = _pack(per_seq)
 
-    packed = torch.cat([_pack(per_seq), torch.randn(11, vocab)])
+    packed = torch.cat([exact, torch.full((11, vocab), float("nan"))])
     got = rnnt_loss(packed, labels_padded, frame_lens, label_lens, blank=blank, max_frames=9)
     torch.testing.assert_close(got.double(), torch.tensor(want, dtype=torch.float64), rtol=0, atol=1e-5)
+
+    for device in ["cpu"] + (["cuda"] if torch.cuda.is_available() else []):
+        args = (labels_padded.to(device), frame_lens.to(device), label_lens.to(device))
+        results = []
+        for buffer, max_frames in ((exact, 4), (packed, 9)):
+            x = buffer.to(device).clone().requires_grad_()
+            loss = rnnt_loss(x, *args, blank=blank, max_frames=max_frames)
+            loss.sum().backward()
+            results.append((loss.detach().cpu(), x.grad.cpu()))
+        torch.testing.assert_close(results[1][0], results[0][0])
+        torch.testing.assert_close(results[1][1][: len(exact)], results[0][1])
+        assert not results[1][1][len(exact) :].any(), results[1][1][len(exact) :]
 
 
 def test_rnnt_gradient_matches_finite_differences():

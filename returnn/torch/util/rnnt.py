@@ -88,6 +88,9 @@ def _forward_scores(
     neg_inf = torch.finfo(dtype).min
     offsets, _cells = cell_offsets(frame_lens, label_lens)
     cell, inside = _diagonal_cells(offsets, frame_lens, label_lens, max_frames, max_prefix, blank_lp.shape[0])
+    # outside the lattice of a sequence the index lands on cells that are not its own, so those are masked
+    blank_rows = blank_lp[cell].masked_fill(~inside, neg_inf)
+    label_rows = label_lp[cell].masked_fill(~inside, neg_inf)
     lens = label_lens.long().unsqueeze(1)
     # the last cell of a sequence, its last frame and its whole prefix, sits on this anti-diagonal
     last = frame_lens.long() - 1 + label_lens.long()
@@ -103,11 +106,11 @@ def _forward_scores(
             # both predecessors sit on the anti-diagonal before, the cell above at the same prefix, left through
             # its blank, and the left neighbour at the prefix before, left through its label,
             # and the floor keeps a dead edge finite, logaddexp of two minus infinities has a nan gradient
-            above = (alpha + blank_lp[cell[diagonal - 1]]).clamp(min=neg_inf)
-            left = (alpha + label_lp[cell[diagonal - 1]]).clamp(min=neg_inf)
+            above = (alpha + blank_rows[diagonal - 1]).clamp(min=neg_inf)
+            left = (alpha + label_rows[diagonal - 1]).clamp(min=neg_inf)
             alpha = torch.logaddexp(above, torch.cat([pad, left[:, :-1]], dim=1))
         alpha = torch.where(inside[diagonal], alpha, torch.full_like(alpha, neg_inf))
-        leaving = alpha + blank_lp[cell[diagonal]]
+        leaving = alpha + blank_rows[diagonal]
         total = torch.where(has_frames & (last == diagonal), torch.gather(leaving, 1, lens).squeeze(1), total)
     return total
 
@@ -262,9 +265,12 @@ def rnnt_loss(
         total = torch.ops.returnn.rnnt_fwd(logits, next_label, frame_lens, label_lens, blank, max_frames, max_prefix)[0]
     else:
         source = logits if logits.dtype in (torch.float32, torch.float64) else logits.float()
+        # the rows a capacity leaves past the cells of the batch belong to no sequence, whatever they hold
+        _offsets, cells = cell_offsets(frame_lens, label_lens)
+        unused = (torch.arange(logits.shape[0], device=logits.device) >= cells.sum()).unsqueeze(1)
         # a row without any finite logit has no probability mass, its log probabilities are minus infinity, not nan
         dead = torch.isneginf(source).all(dim=-1, keepdim=True)
-        log_probs = torch.log_softmax(source.masked_fill(dead, 0.0), dim=-1).masked_fill(dead, float("-inf"))
+        log_probs = torch.log_softmax(source.masked_fill(dead | unused, 0.0), dim=-1).masked_fill(dead, float("-inf"))
         blank_lp = log_probs[:, blank]
         label_lp = torch.gather(log_probs, 1, next_label.unsqueeze(1)).squeeze(1)
         total = _forward_scores(blank_lp, label_lp, frame_lens, label_lens, max_frames, max_prefix)
