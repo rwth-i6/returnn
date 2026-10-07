@@ -250,8 +250,8 @@ def monotonic_rnnt_loss(
     :param blank: blank index
     :param max_frames: frames the recursion runs over, at least the longest sequence of the batch.
         A static bound such as the declared capacity, since reading the batch's own maximum would be a host read.
-    :return: [B] the negative log likelihood, zero (also in the gradient) where a sequence has no alignment,
-        as ``zero_infinity`` does in :func:`torch.nn.functional.ctc_loss`
+    :return: [B] the negative log likelihood, zero (also in the gradient) for a sequence without frames or with
+        more labels than frames, and infinite without a gradient where no alignment has any probability
     """
     if logits.dim() != 2:
         raise ValueError(f"monotonic rnnt: logits must be [cells, V], got shape {tuple(logits.shape)}")
@@ -267,6 +267,8 @@ def monotonic_rnnt_loss(
         total = torch.ops.returnn.monotonic_rnnt_fwd(
             logits, next_label, frame_lens, label_lens, blank, max_frames, max_prefix
         )[0]
+        # a total still at the sentinel of the kernels means that no alignment has any probability
+        total = total.masked_fill(total == torch.finfo(total.dtype).min, float("-inf"))
     else:
         offsets, cells = _cell_offsets(frame_lens, label_lens)
         source = logits if logits.dtype in (torch.float32, torch.float64) else logits.float()

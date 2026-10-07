@@ -260,18 +260,20 @@ def test_monotonic_rnnt_gives_no_gradient_without_an_alignment():
     labels = torch.tensor([[1, 0], [1, 2], [2, 0]], dtype=torch.int32)
     frame_lens = torch.tensor([2, 1, 3], dtype=torch.int32)
     label_lens = torch.tensor([1, 2, 1], dtype=torch.int32)
-    results = []
-    for seqs in (slice(None), slice(2, None)):
-        x = _pack(per_seq[seqs]).requires_grad_()
-        loss = monotonic_rnnt_loss(x, labels[seqs], frame_lens[seqs], label_lens[seqs], blank=blank, max_frames=3)
-        loss.sum().backward()
-        results.append((loss.detach(), x.grad))
-    (loss, grad), (alone_loss, alone_grad) = results
-    others = grad.shape[0] - alone_grad.shape[0]
-    torch.testing.assert_close(loss[:2], torch.tensor([float("inf"), 0.0]))
-    assert not grad[:others].any(), grad[:others]
-    torch.testing.assert_close(loss[2:], alone_loss)
-    torch.testing.assert_close(grad[others:], alone_grad)
+    for device in ["cpu"] + (["cuda"] if torch.cuda.is_available() else []):
+        results = []
+        for seqs in (slice(None), slice(2, None)):
+            x = _pack(per_seq[seqs]).to(device).requires_grad_()
+            args = (labels[seqs].to(device), frame_lens[seqs].to(device), label_lens[seqs].to(device))
+            loss = monotonic_rnnt_loss(x, *args, blank=blank, max_frames=3)
+            loss.sum().backward()
+            results.append((loss.detach().cpu(), x.grad.cpu()))
+        (loss, grad), (alone_loss, alone_grad) = results
+        others = grad.shape[0] - alone_grad.shape[0]
+        torch.testing.assert_close(loss[:2], torch.tensor([float("inf"), 0.0]))
+        assert not grad[:others].any(), grad[:others]
+        torch.testing.assert_close(loss[2:], alone_loss)
+        torch.testing.assert_close(grad[others:], alone_grad)
 
 
 def test_monotonic_rnnt_ignores_what_lies_past_the_batch():
