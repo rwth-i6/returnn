@@ -449,7 +449,7 @@ def test_batching_packed_batch_cost_meets_only_its_own_limit():
 def test_bucket_ordering_monotonic_data_keys():
     """
     A partially filled bucket is emitted at the end, after batches of later seqs.
-    With monotonic_data_keys, complete_frac and seq_idx keep the input order,
+    With monotonic_data_keys (default since behavior version 35), complete_frac and seq_idx keep the input order,
     while the payload and seq_tag stay with their seq.
     """
     import pickle
@@ -467,8 +467,12 @@ def test_bucket_ordering_monotonic_data_keys():
     ]
     seqs_orig = [dict(seq) for seq in seqs]
 
-    batches = list(data_pipeline.BucketOrderingIterDataPipe(seqs, buckets=[(2, 2), (8, 2)], length_key="data"))
-    assert [[int(s["seq_idx"]) for s in b] for b in batches] == [[1, 3], [4, 5], [0]]  # default: original values
+    batches = list(
+        data_pipeline.BucketOrderingIterDataPipe(
+            seqs, buckets=[(2, 2), (8, 2)], length_key="data", monotonic_data_keys=()
+        )
+    )
+    assert [[int(s["seq_idx"]) for s in b] for b in batches] == [[1, 3], [4, 5], [0]]  # original values
     assert [max(float(s["complete_frac"]) for s in b) for b in batches] == [4 / 6, 1.0, 1 / 6]
 
     pipe = data_pipeline.BucketOrderingIterDataPipe(

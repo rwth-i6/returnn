@@ -35,7 +35,7 @@ import torch.utils.data
 
 from returnn.config import Config
 from returnn.log import log
-from returnn.util.basic import NumbersDict, get_fwd_compat_kwargs
+from returnn.util.basic import BehaviorVersion, NumbersDict, get_fwd_compat_kwargs
 from returnn.util.debug import install_subproc_faulthandler
 from returnn.datasets.packing import packed_batch_config, packed_batch_key_opts
 from .pin_memory import PinMemoryDataLoader
@@ -439,7 +439,7 @@ class BucketOrderingIterDataPipe(torch.utils.data.IterDataPipe):
         length_key: str,
         random_bucket_prob: float = 0.0,
         seed: Optional[int] = None,
-        monotonic_data_keys: Sequence[str] = (),
+        monotonic_data_keys: Optional[Sequence[str]] = None,
     ):
         """
         :param dataset: dataset to apply bucket batching to
@@ -453,11 +453,14 @@ class BucketOrderingIterDataPipe(torch.utils.data.IterDataPipe):
         :param seed: random seed
         :param monotonic_data_keys: data keys whose values keep the input order across the emitted batches,
             like in :class:`ShufflingDataPipe`.
-            E.g. ``("complete_frac", "seq_idx")``, such that the ``epoch_continuous`` progress
+            With ``("complete_frac", "seq_idx")``, the ``epoch_continuous`` progress
             (e.g. for a learning rate schedule) does not go backwards when a bucket is emitted late.
+            None (default): ``("complete_frac", "seq_idx")`` since behavior version 35, else ``()``.
         """
         self._dataset = dataset
         self._length_key = length_key
+        if monotonic_data_keys is None:
+            monotonic_data_keys = ("complete_frac", "seq_idx") if BehaviorVersion.get() >= 35 else ()
         self._monotonic_data_keys = tuple(monotonic_data_keys)
         assert random_bucket_prob >= 0.0
         self._random_bucket_prob = random_bucket_prob
