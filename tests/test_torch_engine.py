@@ -1452,6 +1452,43 @@ def _torch_profile_distributed_worker(rank: int, world_size: int, port: int, tmp
     torch.distributed.destroy_process_group()
 
 
+def test_torch_distributed_ctx_gpu_cpu_affinity_main_proc_only():
+    """
+    the default CPU pinning runs once, in the main process, with the local rank and size;
+    a subprocess (dataset worker, which reads the rank from the env) inherits the affinity and must not init CUDA
+    """
+    import socket
+    from unittest import mock
+    from returnn.torch.distributed import DistributedContext
+
+    with socket.socket() as s:
+        s.bind(("127.0.0.1", 0))
+        port = s.getsockname()[1]
+    env = dict(
+        MASTER_ADDR="127.0.0.1", MASTER_PORT=str(port), RANK="0", WORLD_SIZE="1", LOCAL_RANK="0", LOCAL_WORLD_SIZE="1"
+    )
+    init_info_key = "_RETURNN_TORCH_DISTRIBUTED_INIT_INFO"
+    assert init_info_key not in os.environ
+    try:
+        with mock.patch.dict(os.environ, env), mock.patch("torch.cuda.is_available", return_value=True), mock.patch(
+            "returnn.torch.util.gpu_cpu_affinity.set_gpu_local_cpu_affinity", return_value={0}
+        ) as set_affinity:
+            DistributedContext({"backend": "gloo"})
+            set_affinity.assert_called_once_with(0, num_local_ranks=1)
+            assert init_info_key in os.environ  # as a subprocess would see it
+            DistributedContext({"backend": "gloo"})
+            set_affinity.assert_called_once()
+            # a fresh main process with the option off
+            os.environ.pop(init_info_key)
+            torch.distributed.destroy_process_group()
+            DistributedContext({"backend": "gloo", "gpu_local_cpu_affinity": False})
+            set_affinity.assert_called_once()
+    finally:
+        os.environ.pop(init_info_key, None)
+        if torch.distributed.is_initialized():
+            torch.distributed.destroy_process_group()
+
+
 def _run_torch_profile_distributed(tmp_dir: str, torch_profile: Dict[str, Any], *, world_size: int = 2):
     import socket
     import torch.multiprocessing

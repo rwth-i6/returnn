@@ -586,14 +586,14 @@ def test_gpu_cpu_affinity_set():
         assert os.path.isdir(f"/sys/bus/pci/devices/{pci_id}"), pci_id
         # as many ranks as GPUs, like a full-node job
         n = torch.cuda.device_count()
-        cpus = set_gpu_local_cpu_affinity(0, num_local_ranks=n, log_file=sys.stdout)
+        cpus = set_gpu_local_cpu_affinity(0, num_local_ranks=n)
         assert cpus and cpus <= allowed
         assert os.sched_getaffinity(0) == cpus
         # the other ranks' sets are disjoint from this one or identical to it (shared), never overlapping otherwise
         for tid in os.listdir("/proc/self/task"):
             os.sched_setaffinity(int(tid), allowed)
         for rank in range(1, n):
-            other = set_gpu_local_cpu_affinity(rank, num_local_ranks=n, log_file=sys.stdout)
+            other = set_gpu_local_cpu_affinity(rank, num_local_ranks=n)
             assert other and (other == cpus or not (other & cpus)), (rank, sorted(cpus), sorted(other))
             for tid in os.listdir("/proc/self/task"):
                 os.sched_setaffinity(int(tid), allowed)
@@ -601,8 +601,11 @@ def test_gpu_cpu_affinity_set():
         for tid in os.listdir("/proc/self/task"):
             os.sched_setaffinity(int(tid), allowed)
         if cpus != allowed:
-            assert set_gpu_local_cpu_affinity(0, num_local_ranks=1, log_file=sys.stdout) is None
+            assert set_gpu_local_cpu_affinity(0, num_local_ranks=1) is None
             assert os.sched_getaffinity(0) == allowed
+        # more ranks than devices: nothing is pinned, no error
+        assert set_gpu_local_cpu_affinity(0, num_local_ranks=n + 1) is None
+        assert os.sched_getaffinity(0) == allowed
     finally:
         for tid in os.listdir("/proc/self/task"):
             os.sched_setaffinity(int(tid), allowed)

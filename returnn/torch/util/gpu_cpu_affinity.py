@@ -11,16 +11,19 @@ Linux only: the kernel reports the local CPUs of a PCI device in sysfs.
 """
 
 from __future__ import annotations
-from typing import Callable, List, Optional, Sequence, Set, TextIO
+from typing import Callable, List, Optional, Sequence, Set
 import os
 
 import torch
+
+from returnn.log import log
 
 __all__ = [
     "parse_cpulist",
     "get_gpu_pci_id",
     "find_pci_id_by_gpu_uuid",
     "read_pci_device_local_cpus",
+    "read_cpu_socket",
     "select_gpu_local_cpus",
     "set_gpu_local_cpu_affinity",
 ]
@@ -79,7 +82,7 @@ def _strip_gpu_prefix(uuid: str) -> str:
 def read_pci_device_local_cpus(pci_id: str, *, sysfs_root: str = "/sys/bus/pci/devices") -> Set[int]:
     """
     :param pci_id: e.g. "0000:1b:00.0"
-    :param sysfs_root:
+    :param sysfs_root: the PCI devices dir of sysfs
     :return: the CPUs local to the device
     """
     with open(os.path.join(sysfs_root, pci_id, "local_cpulist"), "rt") as f:
@@ -88,8 +91,8 @@ def read_pci_device_local_cpus(pci_id: str, *, sysfs_root: str = "/sys/bus/pci/d
 
 def read_cpu_socket(cpu: int, *, sysfs_root: str = "/sys/devices/system/cpu") -> int:
     """
-    :param cpu:
-    :param sysfs_root:
+    :param cpu: logical CPU index
+    :param sysfs_root: the CPU dir of sysfs
     :return: the socket (physical package) of the CPU
     """
     with open(os.path.join(sysfs_root, f"cpu{cpu}", "topology", "physical_package_id"), "rt") as f:
@@ -115,13 +118,13 @@ def select_gpu_local_cpus(
     so pinning never leaves a rank with less than its share.
 
     :param local_cpus_per_rank: per local rank, the CPUs local to its GPU
-    :param local_rank:
+    :param local_rank: the rank to select for
     :param allowed_cpus: the process may use, e.g. the SLURM cpuset
     :param cpu_socket: socket of a CPU
     :return: the CPUs to pin to, or None for no pinning
     """
-    num_ranks = len(local_cpus_per_rank)
-    fair_share = len(allowed_cpus) // max(num_ranks, 1)
+    assert local_cpus_per_rank, "no ranks"
+    fair_share = len(allowed_cpus) // len(local_cpus_per_rank)
 
     def _socket_cpus(local_cpus: Set[int]) -> Set[int]:
         sockets = {cpu_socket(cpu) for cpu in local_cpus}
@@ -142,40 +145,47 @@ def select_gpu_local_cpus(
     return None
 
 
-def set_gpu_local_cpu_affinity(
-    local_rank: int, *, num_local_ranks: int = 1, log_file: Optional[TextIO] = None
-) -> Optional[Set[int]]:
+def set_gpu_local_cpu_affinity(local_rank: int, *, num_local_ranks: int = 1) -> Optional[Set[int]]:
     """
     Restrict all threads of this process to the CPUs local to the GPU,
     within the CPUs the process may use (e.g. the SLURM cpuset), see :func:`select_gpu_local_cpus`.
     Processes started afterwards (dataset workers) inherit it.
     Local rank ``i`` is assumed to use CUDA device ``i``, as the engine does.
+    When the topology cannot be read (no sysfs or NVIDIA driver files, fewer visible devices than ranks),
+    nothing is pinned, logged.
 
     :param local_rank: and CUDA device index
     :param num_local_ranks: ranks on this node, sharing the allowed CPUs
-    :param log_file:
     :return: the CPUs, or None when nothing was pinned
     """
-    pci_ids = [get_gpu_pci_id(i) for i in range(num_local_ranks)]
-    local_cpus_per_rank = [read_pci_device_local_cpus(pci_id) for pci_id in pci_ids]
-    allowed = os.sched_getaffinity(0)
-    cpus = select_gpu_local_cpus(local_cpus_per_rank, local_rank, allowed, cpu_socket=read_cpu_socket)
+    if num_local_ranks > torch.cuda.device_count():
+        print(
+            f"CPU affinity not set: {num_local_ranks} local ranks but {torch.cuda.device_count()} visible CUDA devices",
+            file=log.v3,
+        )
+        return None
+    try:
+        pci_ids = [get_gpu_pci_id(i) for i in range(num_local_ranks)]
+        local_cpus_per_rank = [read_pci_device_local_cpus(pci_id) for pci_id in pci_ids]
+        allowed = os.sched_getaffinity(0)
+        cpus = select_gpu_local_cpus(local_cpus_per_rank, local_rank, allowed, cpu_socket=read_cpu_socket)
+    except (FileNotFoundError, RuntimeError) as exc:
+        print(f"CPU affinity not set, GPU topology unknown: {type(exc).__name__}: {exc}", file=log.v3)
+        return None
     pci_id, local_cpus = pci_ids[local_rank], local_cpus_per_rank[local_rank]
     if cpus is None:
-        if log_file:
-            print(
-                f"CUDA device {local_rank} ({pci_id}): CPU affinity not set,"
-                f" the local CPUs {sorted(local_cpus)} and their socket cover less than the share"
-                f" of one of {num_local_ranks} ranks of the {len(allowed)} allowed CPUs",
-                file=log_file,
-            )
+        print(
+            f"CUDA device {local_rank} ({pci_id}): CPU affinity not set,"
+            f" the local CPUs {sorted(local_cpus)} and their socket cover less than the share"
+            f" of one of {num_local_ranks} ranks of the {len(allowed)} allowed CPUs",
+            file=log.v3,
+        )
         return None
     for tid in os.listdir("/proc/self/task"):
         os.sched_setaffinity(int(tid), cpus)
-    if log_file:
-        print(
-            f"CUDA device {local_rank} ({pci_id}): CPU affinity set to {len(cpus)} CPUs"
-            f" (of {len(allowed)} allowed, {len(local_cpus)} local): {sorted(cpus)}",
-            file=log_file,
-        )
+    print(
+        f"CUDA device {local_rank} ({pci_id}): CPU affinity set to {len(cpus)} CPUs"
+        f" (of {len(allowed)} allowed, {len(local_cpus)} local): {sorted(cpus)}",
+        file=log.v3,
+    )
     return cpus
