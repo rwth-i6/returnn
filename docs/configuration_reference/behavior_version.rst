@@ -30,9 +30,9 @@ Before, the mean was always masked while the variance was not,
 so the variance was taken around the mean of other frames.
 
 :class:`rf.BatchNorm` passes its ``use_mask`` on to :func:`rf.moments`.
-Before, the statistics of its generic path were always masked,
-so a distributed :class:`rf.BatchNorm` with ``use_mask=False`` normalized over other frames
-than the local one, which includes the padding.
+Before, the statistics of its generic path were always masked.
+So with ``use_mask=False``, the distributed :class:`rf.BatchNorm` took them without the padding,
+while the local one (the fused op) takes them over all frames, including the padding.
 
 There is also the global config option ``rf_moments_use_fixed_masking: bool``
 to override in both directions.
