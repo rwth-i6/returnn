@@ -145,6 +145,11 @@ class PostprocessingDataset(CachedDataset2):
             Example: `map_outputs={"data": {"dim": 42}}`
         :param map_seq_stream_preserves_num_seqs: whether the function in map_seq_stream preserves the number of
             sequences, i.e. for every input sequence there is exactly one output sequence.
+            A ``map_seq_stream`` function can also declare this via its attribute ``preserves_num_seqs``.
+            Via the attribute ``processes_seqs_independently`` it declares that its output for one input sequence
+            does not depend on the other sequences (it maps, filters or expands every sequence on its own).
+            Then a predefined ``seq_order`` is allowed, e.g. to split the sequences across workers or ranks,
+            as each share of the input gives the corresponding share of the output.
         :param buf_size: Buffer size for each worker, number of seqs to prefetch. Must be > 0.
         :param num_workers: If > 0, configures the number of worker processes to use for data postprocessing.
             Only the postprocessing is distributed across subprocesses,
@@ -175,6 +180,9 @@ class PostprocessingDataset(CachedDataset2):
             map_seq_stream_preserves_num_seqs = getattr(map_seq_stream, "preserves_num_seqs", None)
         assert map_seq_stream_preserves_num_seqs is None or isinstance(map_seq_stream_preserves_num_seqs, bool)
         self._map_seq_stream_preserves_num_seqs = map_seq_stream_preserves_num_seqs
+        self._takes_seq_order = map_seq_stream is None or bool(
+            getattr(map_seq_stream, "processes_seqs_independently", False)
+        )
         self._map_outputs = map_outputs
         self._seq_list_for_validation: Optional[List[str]] = None
 
@@ -245,7 +253,7 @@ class PostprocessingDataset(CachedDataset2):
         """
         super().init_seq_order(epoch=epoch, seq_list=seq_list, seq_order=seq_order)
 
-        if self._map_seq_stream is not None:
+        if not self._takes_seq_order:
             if seq_list is not None:
                 raise ValueError("map_seq_stream is set, cannot specify custom seq_list")
             if seq_order is not None:
@@ -319,8 +327,11 @@ class PostprocessingDataset(CachedDataset2):
             util.try_run(parent.worker_proc.join)
 
     def get_current_seq_order(self):
-        """:return: current seq order of wrapped dataset, if map_seq_stream is not used"""
-        if self._map_seq_stream is not None:
+        """
+        :return: current seq order of wrapped dataset,
+            if map_seq_stream is not used or processes every seq independently
+        """
+        if not self._takes_seq_order:
             raise util.OptionalNotImplementedError(
                 f"{self}: get_current_seq_order is not allowed when map_seq_stream is set."
             )
@@ -370,9 +381,9 @@ class PostprocessingDataset(CachedDataset2):
     def supports_predefined_seq_order(self) -> bool:
         """
         :return: whether the wrapped dataset supports a predefined seq order.
-            Not with map_seq_stream, which can merge or drop seqs.
+            Not with map_seq_stream, which can merge or drop seqs, unless it processes every seq independently.
         """
-        if self._map_seq_stream is not None:
+        if not self._takes_seq_order:
             return False
         assert self._dataset is not None
         return self._dataset.supports_predefined_seq_order()
@@ -1037,3 +1048,8 @@ class Sequential:
     def preserves_num_seqs(self):
         """:return: whether the composed functions all preserve the number of sequences"""
         return all(getattr(f, "preserves_num_seqs", False) for f in self.funcs)
+
+    @property
+    def processes_seqs_independently(self):
+        """:return: whether the composed functions all process every sequence independently of the others"""
+        return all(getattr(f, "processes_seqs_independently", False) for f in self.funcs)

@@ -1924,6 +1924,95 @@ def test_Dataset_supports_predefined_seq_order():
             assert not dataset.supports_predefined_seq_order(), dataset
 
 
+def _drop_every_third_len(input_iter: Iterator[TensorDict], **kwargs) -> Iterator[TensorDict]:
+    for tdict in input_iter:
+        if tdict.data["data"].raw_tensor.shape[0] % 3 != 0:
+            yield tdict
+
+
+_drop_every_third_len.processes_seqs_independently = True
+
+
+def test_PostprocessingDataset_map_seq_stream_processes_seqs_independently():
+    # A stream which handles every seq on its own declares it and then takes a predefined seq order,
+    # so that e.g. the eval seqs can be split across ranks. Each share then yields its part of the stream's output.
+    from returnn.datasets.postprocessing import Sequential
+
+    static_opts = {
+        "class": "StaticDataset",
+        "data": [{"data": numpy.full((n, 1), n, dtype="float32")} for n in range(1, 11)],
+        "output_dim": {"data": (1, 2)},
+        "seq_ordering": "sorted_reverse",
+    }
+
+    def _tags(dataset: Dataset) -> List[str]:
+        tags = []
+        while dataset.is_less_than_num_seqs(len(tags)):
+            dataset.load_seqs(len(tags), len(tags) + 1)
+            tags.append(dataset.get_tag(len(tags)))
+        return tags
+
+    for stream in (_drop_every_third_len, Sequential(_drop_every_third_len, _drop_every_third_len)):
+        post = init_dataset({"class": "PostprocessingDataset", "dataset": static_opts, "map_seq_stream": stream})
+        assert post.supports_predefined_seq_order()
+        post.init_seq_order(epoch=1)
+        assert _tags(post) == [f"seq-{i}" for i in (9, 7, 6, 4, 3, 1, 0)]
+        seq_order = list(post.get_current_seq_order())
+        assert seq_order == [9, 8, 7, 6, 5, 4, 3, 2, 1, 0]
+
+        shares = []
+        for rank in range(2):
+            post.init_seq_order(epoch=1, seq_order=seq_order[rank::2])
+            shares.append(_tags(post))
+        assert shares == [["seq-9", "seq-7", "seq-3", "seq-1"], ["seq-6", "seq-4", "seq-0"]]
+
+    # a composition with a stream which does not declare it still refuses
+    post = init_dataset(
+        {
+            "class": "PostprocessingDataset",
+            "dataset": static_opts,
+            "map_seq_stream": Sequential(_drop_every_third_len, _repeat2),
+        }
+    )
+    assert not post.supports_predefined_seq_order()
+    try:
+        post.init_seq_order(epoch=1, seq_order=[0, 1])
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("expected ValueError")
+
+
+def _repeat2_per_seq(input_iter: Iterator[TensorDict], **kwargs) -> Iterator[TensorDict]:
+    for tdict in input_iter:
+        yield tdict
+        yield tdict
+
+
+_repeat2_per_seq.processes_seqs_independently = True
+
+
+def test_PostprocessingDataset_map_seq_stream_processes_seqs_independently_multi_proc():
+    # MultiProcDataset (sharding_method seq_order) takes num_seqs and the seq idx of every seq
+    # from get_current_seq_order, so it must be the order of this dataset, also when the stream drops or repeats seqs.
+    static_opts = {
+        "class": "StaticDataset",
+        "data": [{"data": numpy.full((n, 1), n, dtype="float32")} for n in range(1, 11)],
+        "output_dim": {"data": (1, 2)},
+        "seq_ordering": "sorted_reverse",
+    }
+
+    for stream in (_repeat2_per_seq, _drop_every_third_len):
+        post_opts = {"class": "PostprocessingDataset", "dataset": static_opts, "map_seq_stream": stream}
+        post_tags = sorted(seq.seq_tag for seq in dummy_iter_dataset(init_dataset(post_opts)))
+        multi_proc = init_dataset(
+            {"class": "MultiProcDataset", "dataset": post_opts, "num_workers": 2, "buffer_size": 3}
+        )
+        multi_proc_tags = sorted(seq.seq_tag for seq in dummy_iter_dataset(multi_proc))
+        multi_proc.finish_epoch(free_resources=True)
+        assert multi_proc_tags == post_tags, stream
+
+
 def test_MultiEpochDataset():
     from returnn.datasets.meta import MultiEpochDataset
     from returnn.datasets.cached2 import CachedDataset2
