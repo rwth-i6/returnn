@@ -1241,8 +1241,8 @@ def _batch_norm_gapped(source: Tensor, kwargs) -> Optional[Tensor]:
     n_extra = math.prod(d.dimension for d in extra)
     stat_axes = [raw.packed_dim] + extra
     n = rf.cast(n_dev, inner.dtype) * n_extra
-    x0 = rf.where(mask, inner, 0.0)
-    mean = rf.reduce_sum(x0, axis=stat_axes, use_mask=False) / n
+    inner = rf.where(mask, inner, 0.0)
+    mean = rf.reduce_sum(inner, axis=stat_axes, use_mask=False) / n
     diff = rf.where(mask, inner - mean, 0.0)
     var = rf.reduce_sum(diff * diff, axis=stat_axes, use_mask=False) / n
     if running_mean is not None:
@@ -4603,6 +4603,27 @@ class PackedBackend(Backend[PackedRawTensor]):
         return _repack_result(rf.reduce(unpack(source), mode=mode, axis=axes, use_mask=use_mask), raw)
 
     @staticmethod
+    def num_elements_of_shape(
+        source: Tensor, dims: Sequence[Dim], *, use_mask: bool, device: Optional[str]
+    ) -> Union[int, Tensor]:
+        """
+        As :func:`reduce` covers it: no padding on the packed dims, whatever use_mask,
+        and no gap or unused bound frames.
+        """
+        if use_mask:
+            return rf.num_elements_of_shape(dims, use_mask=True, device=device)
+        raw = _raw(source)
+        # the unmasked count of the other dims is their full size, independent of the packed dims
+        n = rf.num_elements_of_shape([d for d in dims if d in raw.orig_dims], use_mask=True, device=device)
+        m = rf.num_elements_of_shape([d for d in dims if d not in raw.orig_dims], use_mask=False)
+        if isinstance(m, Tensor) and isinstance(n, Tensor):
+            # use_mask=False ignores the device, so bring it to n, which is on the requested device
+            m = rf.cast(rf.copy_to_device(m, n.device), n.dtype)
+        elif isinstance(m, Tensor) and device is not None:
+            m = rf.copy_to_device(m, device)
+        return n * m
+
+    @staticmethod
     def ctc_loss(
         *,
         logits: Tensor,
@@ -5333,22 +5354,26 @@ def _torch_relayout_frames(inner: Tensor, pos: Tensor, *, packed_dim: Dim, out_d
         n_out = int(n_out)
     assert isinstance(n_out, int)
     n_in = values.shape[0]
-    # Loud, capture-safe bound check. Without it a too-small target buffer writes OUT OF BOUNDS
-    # here (index_put with pos > n_out), which corrupts the CUDA context and then surfaces far
-    # away as an unrelated "illegal memory access". The usual cause is a declared
-    # packed_total_bound / regap total_bound that does not cover the per-seq gap+align slack
-    # of the TARGET layout.
-    assert_(
-        pos_raw.max() <= n_out,
-        f"packed relayout: target position beyond the buffer ({out_dim}, {n_out} frames + dump slot)."
-        f" The target total is too small for this layout (per-seq gap/align slack not covered?).",
-    )
-    # small int scatters only (1-D, no feature dims involved)
-    inv = torch.zeros((n_out + 1,), dtype=torch.int64, device=values.device)
-    slot_valid = torch.zeros((n_out + 1,), dtype=torch.bool, device=values.device)
-    inv[pos_raw] = torch.arange(n_in, dtype=torch.int64, device=values.device)
-    slot_valid[pos_raw] = True
-    out_raw = gather_relayout(values, inv=inv[:n_out], pos=pos_raw, slot_valid=slot_valid[:n_out])
+    if n_in == 0:
+        out_raw = values.new_zeros((n_out,) + tuple(values.shape[1:]))
+    else:
+        # Loud, capture-safe bound check. Without it a too-small target buffer writes OUT OF BOUNDS
+        # here (index_put with pos > n_out), which corrupts the CUDA context and then surfaces far
+        # away as an unrelated "illegal memory access". The usual cause is a declared
+        # packed_total_bound / regap total_bound that does not cover the per-seq gap+align slack
+        # of the TARGET layout.
+        assert_(
+            pos_raw.max() <= n_out,
+            f"packed relayout: target position beyond the buffer ({out_dim}, {n_out} frames + dump slot)."
+            f" The target total is too small for this layout (per-seq gap/align slack not covered?).",
+        )
+        # small int scatters only (1-D, no feature dims involved)
+        inv = torch.zeros((n_out + 1,), dtype=torch.int64, device=values.device)
+        slot_valid = torch.zeros((n_out + 1,), dtype=torch.bool, device=values.device)
+        inv[pos_raw] = torch.arange(n_in, dtype=torch.int64, device=values.device)
+        # not slot_valid[pos_raw] = True: the CPU scalar value fails under CUDA graph capture
+        slot_valid.index_fill_(0, pos_raw, True)
+        out_raw = gather_relayout(values, inv=inv[:n_out], pos=pos_raw, slot_valid=slot_valid[:n_out])
     out = Tensor("regap", dims=(out_dim,) + inner.dims[1:], dtype=inner.dtype, raw_tensor=out_raw)
     if inner.sparse_dim is not None:
         out.sparse_dim = inner.sparse_dim
