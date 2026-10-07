@@ -540,26 +540,38 @@ def test_gpu_cpu_affinity_sysfs_and_proc_lookup():
 
 
 def test_gpu_cpu_affinity_select():
-    """NUMA node when it covers the rank's share, else the socket, else nothing (unaligned cpuset)"""
+    """
+    NUMA node when it covers the rank's share, else the socket, else nothing (unaligned cpuset);
+    ranks sharing the set get disjoint slices when those still cover the share
+    """
     from returnn.torch.util.gpu_cpu_affinity import select_gpu_local_cpus
 
-    # 2 sockets of 48 CPUs, 4 NUMA nodes of 12 each (NPS4), GPU on node 0 (CPUs 0-11)
+    # GH200: 4 Grace CPUs of 72, one per GPU
+    gh200 = [set(range(72 * i, 72 * (i + 1))) for i in range(4)]
+    gh200_socket = {cpu: cpu // 72 for cpu in range(288)}.__getitem__
+    for rank in range(4):
+        assert select_gpu_local_cpus(gh200, rank, set(range(288)), cpu_socket=gh200_socket) == gh200[rank]
+
+    # 2 sockets of 48 CPUs, 4 NUMA nodes of 12 each (NPS4), 2 GPUs per socket on nodes 0, 2, 4, 6
     socket = {cpu: cpu // 48 for cpu in range(96)}.__getitem__
-    local, all_cpus = set(range(12)), set(range(96))
-    # one Grace per GPU: the node is the share
-    assert select_gpu_local_cpus(set(range(72)), set(range(288)), num_local_ranks=4, cpu_socket=socket) == set(
-        range(72)
-    )
-    # 4 ranks on 96 CPUs: share 24, node has 12 -> socket 0
-    assert select_gpu_local_cpus(local, all_cpus, num_local_ranks=4, cpu_socket=socket) == set(range(48))
-    # 8 ranks: share 12, the node is enough
-    assert select_gpu_local_cpus(local, all_cpus, num_local_ranks=8, cpu_socket=socket) == local
+    nodes = [set(range(12 * i, 12 * (i + 1))) for i in (0, 2, 4, 6)]
+    all_cpus = set(range(96))
+    # 4 ranks: share 24, a node has 12 -> socket (48), shared by 2 ranks -> slices of 24
+    assert select_gpu_local_cpus(nodes, 0, all_cpus, cpu_socket=socket) == set(range(24))
+    assert select_gpu_local_cpus(nodes, 1, all_cpus, cpu_socket=socket) == set(range(24, 48))
+    assert select_gpu_local_cpus(nodes, 3, all_cpus, cpu_socket=socket) == set(range(72, 96))
+    # 2 ranks on the same socket, whole node allowed: share 48, socket 0 is exactly that -> shared, no slices
+    assert select_gpu_local_cpus(nodes[:2], 1, all_cpus, cpu_socket=socket) == set(range(48))
+    # 8 ranks (2 per node): share 12, the node covers it, shared by 2 -> not sliceable (6 < 12), shared
+    nodes8 = [n for n in nodes for _ in range(2)]
+    assert select_gpu_local_cpus(nodes8, 3, all_cpus, cpu_socket=socket) == nodes[1]
     # a 24-CPU cpuset on the far socket: nothing local, nothing to pin
-    assert select_gpu_local_cpus(local, set(range(48, 72)), num_local_ranks=1, cpu_socket=socket) is None
-    # a 24-CPU cpuset half on each socket, 1 rank: share 24, socket 0 part has 12 -> none
-    assert select_gpu_local_cpus(local, set(range(36, 60)), num_local_ranks=1, cpu_socket=socket) is None
-    # same cpuset, 2 ranks: share 12, socket 0 part 36-47 is enough
-    assert select_gpu_local_cpus(local, set(range(36, 60)), num_local_ranks=2, cpu_socket=socket) == set(range(36, 48))
+    assert select_gpu_local_cpus(nodes[:1], 0, set(range(48, 72)), cpu_socket=socket) is None
+    # a 24-CPU cpuset half on each socket, 1 rank: share 24, the socket 0 part has 12 -> none
+    assert select_gpu_local_cpus(nodes[:1], 0, set(range(36, 60)), cpu_socket=socket) is None
+    # same cpuset, 2 ranks on different sockets: share 12, each socket part is exactly that
+    assert select_gpu_local_cpus([nodes[0], nodes[2]], 0, set(range(36, 60)), cpu_socket=socket) == set(range(36, 48))
+    assert select_gpu_local_cpus([nodes[0], nodes[2]], 1, set(range(36, 60)), cpu_socket=socket) == set(range(48, 60))
 
 
 def test_gpu_cpu_affinity_set():
@@ -573,9 +585,18 @@ def test_gpu_cpu_affinity_set():
         pci_id = get_gpu_pci_id(0)
         assert os.path.isdir(f"/sys/bus/pci/devices/{pci_id}"), pci_id
         # as many ranks as GPUs, like a full-node job
-        cpus = set_gpu_local_cpu_affinity(0, num_local_ranks=torch.cuda.device_count(), log_file=sys.stdout)
+        n = torch.cuda.device_count()
+        cpus = set_gpu_local_cpu_affinity(0, num_local_ranks=n, log_file=sys.stdout)
         assert cpus and cpus <= allowed
         assert os.sched_getaffinity(0) == cpus
+        # the other ranks' sets are disjoint from this one or identical to it (shared), never overlapping otherwise
+        for tid in os.listdir("/proc/self/task"):
+            os.sched_setaffinity(int(tid), allowed)
+        for rank in range(1, n):
+            other = set_gpu_local_cpu_affinity(rank, num_local_ranks=n, log_file=sys.stdout)
+            assert other and (other == cpus or not (other & cpus)), (rank, sorted(cpus), sorted(other))
+            for tid in os.listdir("/proc/self/task"):
+                os.sched_setaffinity(int(tid), allowed)
         # the whole node for one rank: nothing local can cover that, so nothing is pinned
         for tid in os.listdir("/proc/self/task"):
             os.sched_setaffinity(int(tid), allowed)

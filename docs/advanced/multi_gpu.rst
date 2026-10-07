@@ -25,6 +25,7 @@ i.e. the NUMA node or CPU socket the GPU is attached to, within the CPUs the job
 Without it, the ranks float over all CPUs of the node,
 so the host side (batch handoff, copies to the device) also runs on the far socket.
 Measured on 4-GPU nodes: a few percent of the step time, and a tighter step-time distribution.
+Ranks whose GPUs share a NUMA node or socket get disjoint slices of its CPUs, so they do not compete for cores.
 The pinning is skipped (logged) when it would leave a rank with less than its share of the allowed CPUs,
 e.g. a cpuset not aligned to the GPU.
 ``torchrun --numa-binding`` (torch >= 2.9, needs ``numactl``) does the same at the launcher level.
