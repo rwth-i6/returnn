@@ -2420,6 +2420,47 @@ def test_cu_seqlens_with_host_lens_and_a_device_total():
             assert cu.raw_tensor.tolist() == [0, 5, 8]
 
 
+def _bounded_batch(lens, *, capacity: int) -> Tuple[Dim, Dim]:
+    """batch dim with the real batch size as dyn size and the bound as capacity, then padding seqs of len 0"""
+    batch_size = Tensor("batch_size", dims=(), dtype="int32", raw_tensor=torch.tensor(len(lens), dtype=torch.int32))
+    batch_dim = Dim(batch_size, name="batch", kind=Dim.Types.Batch, capacity=capacity)
+    lens = list(lens) + [0] * (capacity - len(lens))
+    time_dim = Dim(
+        Tensor("lens", dims=[batch_dim], dtype="int32", raw_tensor=torch.tensor(lens, dtype=torch.int32)),
+        name="time",
+        capacity=max(lens),
+    )
+    return batch_dim, time_dim
+
+
+def test_padding_seqs_of_a_bounded_batch_stay_empty():
+    """
+    appending EOS gives every real seq one more frame, the empty real seq included,
+    while the padding seqs of the batch bound stay empty, dense and packed
+    """
+    rf.select_backend_torch()
+    vocab_dim = Dim(6, name="vocab")
+    for layout in ("dense", "packed"):
+        batch_dim, time_dim = _bounded_batch([2, 0, 3], capacity=5)
+        labels = Tensor(
+            "labels",
+            dims=[batch_dim, time_dim],
+            sparse_dim=vocab_dim,
+            dtype="int64",
+            raw_tensor=torch.ones(5, 3, dtype=torch.int64),
+        )
+        with rf.set_static_traceable_ctx():
+            if layout == "packed":
+                labels = packed.pack(labels, dims=[batch_dim, time_dim], gap=1, total_bound=16)
+            labels_eos, (time_eos_dim,) = rf.pad(labels, axes=[time_dim], padding=[(0, 1)], value=0)
+            assert time_eos_dim.dyn_size_ext.raw_tensor.tolist() == [3, 1, 4, 0, 0], layout
+            _, flat_dim = rf.pack_padded(labels_eos, dims=[batch_dim, time_eos_dim], enforce_sorted=False)
+            assert int(flat_dim.get_size_tensor().raw_tensor) == 8, layout
+            ones = rf.cast(rf.ones_like(labels_eos), "float32")
+            ones.sparse_dim = None
+            assert float(rf.reduce_sum(ones, axis=[batch_dim, time_eos_dim]).raw_tensor) == 8.0, layout
+
+
 def test_batch_norm_packed_gapped_with_a_static_axis():
     """the masked batch norm statistics also cover a static axis next to the packed one"""
     rf.select_backend_torch()
