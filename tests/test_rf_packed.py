@@ -2240,6 +2240,35 @@ def test_batch_norm_packed_dense_bound_train():
         )
 
 
+def test_batch_norm_packed_non_finite_junk_rows():
+    """non-finite values in the junk rows (gap frames, bound tail) reach neither the valid outputs nor any gradient"""
+    rf.select_backend_torch()
+    x, batch_dim, time_dim, feat_dim = _make_input(seq_lens=(5, 3), feat=4, seed=8)
+    valid = (torch.arange(5)[None, :] < torch.tensor([5, 3])[:, None]).to(torch.float32)[..., None]
+    weights = torch.randn(x.raw_tensor.shape, generator=torch.Generator().manual_seed(1)) * valid
+
+    def _run(layout: str, junk: float):
+        raw = x.raw_tensor.detach().clone().requires_grad_()
+        xr = Tensor("x", dims=x.dims, dtype="float32", raw_tensor=raw)
+        xp = packed.pack(xr, gap=2) if layout == "gapped" else packed.regap(packed.pack(xr), 0, total_bound=16)
+        xp = xp.raw_tensor.rewrap(rf.where(packed._frame_mask(xp.raw_tensor), xp.raw_tensor.inner, junk))
+        with rf.set_default_device_ctx("cpu"):
+            bn = rf.BatchNorm(feat_dim, use_mask=False)
+            with rf.get_run_ctx().train_flag_ctx(True):
+                out = packed.unpack(bn(xp)).copy_compatible_to_dims(x.dims).raw_tensor
+        (out * weights).sum().backward()
+        return {"out": (out * valid).detach(), "x grad": raw.grad, "gamma grad": bn.gamma.raw_tensor.grad}
+
+    for layout in ("gapped", "bound"):
+        ref = _run(layout, 0.0)
+        for junk in (float("nan"), float("inf")):
+            res = _run(layout, junk)
+            for key in ref:
+                numpy.testing.assert_allclose(
+                    res[key].numpy(), ref[key].numpy(), rtol=1e-6, atol=1e-6, err_msg=f"{layout}, {junk}, {key}"
+                )
+
+
 def test_softmax_over_a_single_packed_axis_with_a_bound():
     """a bound-sized packing of one axis normalizes over its content rows only"""
     rf.select_backend_torch()
