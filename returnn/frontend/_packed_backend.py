@@ -5104,7 +5104,7 @@ def _plain_extents(raw: PackedRawTensor, dim: Dim) -> Optional[Tuple[int, int]]:
     return rows, width
 
 
-def _read_rows_at_frames(raw: PackedRawTensor, *, rows: Tensor, frame: Optional[Tensor], frame_dim: Dim) -> Tensor:
+def _read_rows_at_frames(raw: PackedRawTensor, *, rows: Tensor, frame: Tensor, frame_dim: Dim) -> Tensor:
     """
     Reads one row of the packed source buffer per output frame, for a gather along the innermost packed dim
     whose indices bring their own spatial dim (frame_dim).
@@ -5118,8 +5118,7 @@ def _read_rows_at_frames(raw: PackedRawTensor, *, rows: Tensor, frame: Optional[
 
     :param raw: packing of the source
     :param rows: [result packed dim, ...], the row of the source buffer for every output frame
-    :param frame: [result packed dim], the position of every output frame within its sequence.
-        Only needed when the source carries frame_dim.
+    :param frame: [result packed dim], the position of every output frame within its sequence
     :param frame_dim: the spatial dim of the indices
     :return: [result packed dim, ...] + the remaining dims of the source buffer
     """
@@ -5178,22 +5177,7 @@ def _gather_relayout(
     if batch in idx.dims:
         idx = rf.gather(idx, indices=seq, axis=batch)
     idx = rf.cast(idx, local.dtype)
-    if clip_to_valid:
-        # in the traced regime the lens already live on the data's device,
-        # where copying them would be a sync
-        lens = _device_lens(raw)
-        if lens is None:
-            lens = rf.copy_to_device(raw.seq_lens, dev)
-        last = rf.cast(rf.gather(lens, indices=seq, axis=batch), idx.dtype) - 1
-        idx = rf.clip_by_value(idx, rf.zeros_like(last), last)
-    starts, seqs_dim = raw.seq_starts(device=dev)
-    src = rf.cast(rf.gather(starts, indices=seq, axis=seqs_dim), idx.dtype) + idx
-    src = rf.clip_by_value(src, 0, _last_row(raw.packed_dim, src.dtype))
-    out = helper.rewrap(_read_rows_at_frames(raw, rows=src, frame=local, frame_dim=out_spatial_dim), name="gather")
-    # a sparse dim assigned on the virtual tensor never reached the inner buffer
-    if source.sparse_dim is not None:
-        out.sparse_dim = source.sparse_dim
-    return out
+    return _gather_at_positions(source, raw, helper, seq=seq, idx=idx, frame=local, clip_to_valid=clip_to_valid)
 
 
 def _gather_into_indices_packing(
@@ -5226,20 +5210,46 @@ def _gather_into_indices_packing(
     # the sequence of every frame of the indices; gap frames get an in-bounds one, their result is junk
     seq = rf.copy_to_device(_frame_coords(idx_raw, seqs_dim), dev)
     idx = rf.cast(rf.copy_to_device(idx_raw.inner, dev), seq.dtype)
+    frame = rf.copy_to_device(_frame_coords(idx_raw, frame_dim), dev)
+    return _gather_at_positions(source, raw, idx_raw, seq=seq, idx=idx, frame=frame, clip_to_valid=clip_to_valid)
+
+
+def _gather_at_positions(
+    source: Tensor,
+    raw: PackedRawTensor,
+    out_raw: PackedRawTensor,
+    *,
+    seq: Tensor,
+    idx: Tensor,
+    frame: Tensor,
+    clip_to_valid: bool,
+) -> Tensor:
+    """
+    Every frame of the result reads the start of its own sequence in the source plus the position it holds.
+
+    :param source: packed
+    :param raw: its packing
+    :param out_raw: packing of the result
+    :param seq: [result packed dim], the sequence of every frame of the result
+    :param idx: [result packed dim, ...], the position within the source sequence which it reads
+    :param frame: [result packed dim], the position of every frame of the result within its sequence
+    :param clip_to_valid: clip the positions into each sequence
+    :return: packed like out_raw
+    """
+    batch = raw.orig_dims[0]
+    dev = raw.inner.device
     if clip_to_valid:
-        # in the traced regime the lens already live on the data's device,
-        # where copying them would be a sync
+        # in the traced regime the lens already live on the data's device, where copying them would be a sync
         lens = _device_lens(raw)
         if lens is None:
             lens = rf.copy_to_device(raw.seq_lens, dev)
-        last = rf.cast(rf.gather(lens, indices=seq, axis=seqs_dim), idx.dtype) - 1
+        last = rf.cast(rf.gather(lens, indices=seq, axis=batch), idx.dtype) - 1
         idx = rf.clip_by_value(idx, rf.zeros_like(last), last)
-    starts, starts_dim = raw.seq_starts(device=dev)
-    src = rf.cast(rf.gather(starts, indices=seq, axis=starts_dim), idx.dtype) + idx
+    starts, seqs_dim = raw.seq_starts(device=dev)
+    src = rf.cast(rf.gather(starts, indices=seq, axis=seqs_dim), idx.dtype) + idx
     src = rf.clip_by_value(src, 0, _last_row(raw.packed_dim, src.dtype))
-    # the position within the sequence is only needed when the source has a column per frame
-    frame = rf.copy_to_device(_frame_coords(idx_raw, frame_dim), dev) if frame_dim in raw.inner.dims else None
-    out = idx_raw.rewrap(_read_rows_at_frames(raw, rows=src, frame=frame, frame_dim=frame_dim), name="gather")
+    frame_dim = out_raw.orig_dims[-1]
+    out = out_raw.rewrap(_read_rows_at_frames(raw, rows=src, frame=frame, frame_dim=frame_dim), name="gather")
     # a sparse dim assigned on the virtual tensor never reached the inner buffer
     if source.sparse_dim is not None:
         out.sparse_dim = source.sparse_dim
