@@ -299,7 +299,7 @@ def inductor_fw_compiler(backend: Optional[Callable] = None) -> Callable:
     :param backend: the fw compiler for ``aot_function``, default Inductor's ``compile_fx``
     :return: the fw compiler, for an inference-style graph (no fw/bwd partitioning)
 
-    torch >= 2.12: compile_fx's compat wrapper declares _boxed_call=True
+    torch >= 2.11: compile_fx's compat wrapper declares _boxed_call=True
     but re-wraps an already-boxed args list, so the generated runner sees [[args]];
     call it star-unpacked instead, while the shim stays boxed towards aot_function.
     Any other backend (e.g. the boxed ``nop`` of opts "debug_aot_eager") is returned as is.
@@ -309,7 +309,7 @@ def inductor_fw_compiler(backend: Optional[Callable] = None) -> Callable:
 
     if backend is None:
         backend = compile_fx
-    if torch.__version__ < (2, 12) or backend is not compile_fx:
+    if torch.__version__ < (2, 11) or backend is not compile_fx:
         return backend
 
     def _compile_fx_call_unboxed(gm, example_inputs):
@@ -1150,8 +1150,8 @@ class GraphCapturedTrainStep:
         # default mode: step_core computes the grads itself, one inference-style graph,
         # never fw/bwd-partitioned (partition_fn / activation_memory_budget do not apply;
         # for that see opts "partitioned")
+        backend = inductor_fw_compiler(backend)
         if torch.__version__ >= (2, 12):
-            backend = inductor_fw_compiler(backend)
             # torch >= 2.12 also lifts closed-over tensors into runtime args of the generated code
             # instead of baking them as graph constants, and raw aot_function does not supply them;
             # pass the buffers as explicit trace inputs, like the partitioned mode above.
