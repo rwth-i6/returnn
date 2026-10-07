@@ -379,6 +379,13 @@ def test_shutdown_data_loader_torch_pin_memory():
     _check_shutdown_data_loader(pin_memory=True)
 
 
+def test_shutdown_data_loader_pin_memory_wrapped_iterable():
+    """:class:`PinMemoryDataLoader` can wrap any iterable, not only a DataLoader"""
+    from returnn.torch.data.pin_memory import PinMemoryDataLoader
+
+    data_pipeline.shutdown_data_loader(PinMemoryDataLoader([], device="cuda:0"))  # no CUDA needed before iter()
+
+
 def test_batching_packed_batch_cost_bounds_a_product_of_lengths():
     """
     A monotonic RNN-T lattice has frames times prefixes cells per sequence, a product no per-key length
