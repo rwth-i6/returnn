@@ -153,6 +153,17 @@ def _device_lens(raw: PackedRawTensor) -> Optional[Tensor]:
     return lens
 
 
+def _seqs_over_raw_width(starts: Tensor, seqs_dim: Dim) -> Tuple[Tensor, Dim]:
+    """
+    :param starts: [seqs_dim], per-seq values of the buffer
+    :param seqs_dim: the seqs dim, maybe dynamic, e.g. a batch dim with padding seqs up to its capacity
+    :return: starts over a static dim of the raw width, i.e. one entry for every seq slot of the buffer
+    """
+    seqs_static = Dim(int(starts.raw_tensor.shape[0]), name="seqs_static")
+    starts, _ = rf.replace_dim(starts, in_dim=seqs_dim, out_dim=seqs_static)
+    return starts, seqs_static
+
+
 def _dev_seq_local(template: PackedRawTensor) -> Tuple[Tensor, Tensor]:
     """
     Device-lens regime (see :func:`_device_lens`): for every buffer frame,
@@ -178,9 +189,8 @@ def _dev_seq_local(template: PackedRawTensor) -> Tuple[Tensor, Tensor]:
         seq.sparse_dim = seqs_dim
         return seq, rows
     # search_sorted refuses a dynamic axis; here the buffer is sorted over its full raw width
-    # (junk slots repeat the cumsum total), so re-tag it as a static dim of that width
-    seqs_static = Dim(int(starts_rf.raw_tensor.shape[0]), name="seqs_static")
-    starts_static, _ = rf.replace_dim(starts_rf, in_dim=seqs_dim, out_dim=seqs_static)
+    # (junk slots repeat the cumsum total)
+    starts_static, seqs_static = _seqs_over_raw_width(starts_rf, seqs_dim)
     seq = rf.search_sorted(starts_static, rows, axis=seqs_static, side="right") - 1
     seq.sparse_dim = seqs_dim
     local = rows - rf.gather(starts_rf, indices=seq, axis=seqs_dim)
@@ -318,6 +328,8 @@ class PackedRawTensor:
         else:
             # a static packed dim (e.g. built by the data pipeline) yields a python int, not a tensor
             total = rf.convert_to_tensor(total, dims=(), dtype=starts.dtype, device=starts.device)
+        # one offset per seq slot of the buffer: a concat along a dynamic seqs dim would put the total after its size
+        starts, seqs_dim = _seqs_over_raw_width(starts, seqs_dim)
         end_dim = Dim(1, name="cu_seqlens_end")
         cu, cu_dim = rf.concat((starts, seqs_dim), (rf.expand_dim(total, dim=end_dim), end_dim))
         cu = rf.cast(cu, "int32")
