@@ -74,7 +74,7 @@ def moments(
         # which gives NaNs via rsqrt(variance + eps).
         # torch.nn.SyncBatchNorm instead combines per-worker Welford statistics, which does not cancel.
         x = rf.cast(x, "float32")
-        count = _global_num_elements(rf.num_elements_of_shape(axis, use_mask=use_mask, source=x), device=x.device)
+        count = rf.cast(rf.num_elements_of_shape(axis, use_mask=use_mask, source=x, distributed=True), "float32")
         mean = rf.reduce_sum(x, axis=axis, use_mask=use_mask, distributed=True) / count
         # stop_gradient does not change the gradient here: the deviations sum to zero over the global batch
         sq_dev = rf.squared_difference(x, rf.stop_gradient(mean))
@@ -113,22 +113,6 @@ def _moments_float32() -> bool:
     from returnn.util.basic import BehaviorVersion
 
     return BehaviorVersion.get() >= 32
-
-
-def _global_num_elements(count: Union[int, Tensor], *, device: Optional[str]) -> Tensor:
-    """
-    :param count: number of reduced elements of this worker, from :func:`rf.num_elements_of_shape`
-    :param device: where the count is needed, so it does not force a host sync under graph capture
-    :return: number of reduced elements, summed over the Torch DDP workers, as a float32 tensor
-    """
-    if isinstance(count, Tensor):
-        # use_mask=False ignores the device, so copy explicitly
-        count = rf.cast(rf.copy_to_device(count, device), "float32")
-    else:
-        # static dims give a plain int, which is the same on every worker
-        count = rf.constant(count, dims=(), dtype="float32", device=device)
-    # noinspection PyProtectedMember
-    return count._raw_backend.reduce_distributed(count, mode="sum")
 
 
 class LayerNorm(rf.Module):

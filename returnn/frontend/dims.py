@@ -250,6 +250,7 @@ def num_elements_of_shape(
     use_mask: bool = True,
     device: Optional[str] = None,
     source: Optional[Tensor] = None,
+    distributed: bool = False,
 ) -> Union[int, Tensor]:
     """
     :param dims:
@@ -262,10 +263,25 @@ def num_elements_of_shape(
         The count then covers exactly the elements which that reduction covers,
         e.g. packed storage holds no padding on its packed dims.
         Without it, ``use_mask=False`` counts the padded layout.
+    :param distributed: if True, the count summed over the distributed workers (Torch DDP),
+        as for :func:`reduce` with ``distributed=True``.
+        The result is then always an int64 Tensor, on ``device``. No effect on the value without a process group.
     :return: num elements of a tensor of shape dims, properly considering masking
     """
     if isinstance(dims, Dim):
         dims = [dims]
+    if distributed:
+        if device is None and source is not None:
+            device = source.device
+        n = num_elements_of_shape(dims, use_mask=use_mask, device=device, source=source)
+        if isinstance(n, Tensor):
+            # use_mask=False ignores the device, so copy explicitly
+            n = rf.cast(rf.copy_to_device(n, device), "int64")
+        else:
+            # static dims give a plain int, which is the same on every worker
+            n = rf.constant(n, dims=(), dtype="int64", device=device)
+        # noinspection PyProtectedMember
+        return n._raw_backend.reduce_distributed(n, mode="sum")
     if source is not None:
         if any(dim not in source.dims for dim in dims):
             raise ValueError(f"num_elements_of_shape: dims {dims} not all in source {source}")
