@@ -4,7 +4,7 @@ or just rarely used attribs, such that we can save memory for the common case.
 """
 
 from __future__ import annotations
-from typing import TYPE_CHECKING, Optional, Union, Any, Tuple, Sequence, MutableMapping, Dict, List, Set, Callable
+from typing import TYPE_CHECKING, Optional, Union, Any, Tuple, Sequence, Dict, List, Set, Callable
 import operator
 import weakref
 
@@ -141,7 +141,9 @@ class _DimExtra:
         # They each have same_as = self. The same_base should have the base (global) batch info.
         self.same_for_batch_ctx: Dict[Tuple[BatchInfo, Optional[ControlFlowContext]], Dim] = {}
         self.cache_dyn_size_ext_dev: Dict[str, _t.Tensor] = {}  # device -> dyn_size_ext
-        self.cache_seq_mask: Dict[Tuple[str, Optional[Tuple[Dim, ...]]], _t.Tensor] = {}  # (dev,dim_order) -> seq_mask
+        # (dev, dim_order with self as None) -> (dtype, mask dims with self as None, raw tensor, wrapper weakref)
+        # self-free entries avoid the dim -> mask -> dim cycle, the weakref keeps get_mask identity while alive
+        self.cache_seq_mask: Dict[Tuple[str, Optional[Tuple[Optional[Dim], ...]]], Tuple[str, Any, Any, Any]] = {}
         self.cache_dim_math = _CacheDimMath()  # op (add,sub,...), operand -> Dim
 
     @property
@@ -920,9 +922,17 @@ class _DimMixin:
             dim_order = tuple([d for d in dim_order if d in dim_order_default])  # filter
         else:
             dim_order = dim_order_default
-        cache_key = (device, dim_order)
-        if cache_key in self._extra.cache_seq_mask:
-            return self._extra.cache_seq_mask[cache_key]
+        cache_key = (device, tuple(None if d is self else d for d in dim_order))
+        cached = self._extra.cache_seq_mask.get(cache_key)
+        if cached is not None:
+            cached_dtype, cached_dims, cached_raw, cached_wrapper_ref = cached
+            cached_wrapper = cached_wrapper_ref()
+            if cached_wrapper is not None:
+                return cached_wrapper
+            mask_dims = tuple(self if d is None else d for d in cached_dims)
+            seq_mask = _t.Tensor("seq_mask", dims=mask_dims, dtype=cached_dtype, raw_tensor=cached_raw)
+            self._extra.cache_seq_mask[cache_key] = (cached_dtype, cached_dims, cached_raw, weakref.ref(seq_mask))
+            return seq_mask
 
         if self._extra.copy_same_as:
             if dim_order:
@@ -952,7 +962,12 @@ class _DimMixin:
         size_ext = size_ext.copy_masked(max_idx)
         idx_range = backend.range_over_dim(self, device=device)
         seq_mask = rf.compare(idx_range, "<", size_ext, allow_broadcast_all_sources=True, dim_order=dim_order)
-        self._extra.cache_seq_mask[cache_key] = seq_mask
+        self._extra.cache_seq_mask[cache_key] = (
+            seq_mask.dtype,
+            tuple(None if d is self else d for d in seq_mask.dims),
+            seq_mask.raw_tensor,
+            weakref.ref(seq_mask),
+        )
         return seq_mask
 
     def is_batch_dim(self):
@@ -2836,8 +2851,29 @@ class Op:
         """
         self.kind = kind
         self.inputs = inputs
-        self.output = None  # type: Optional[_d.Dim]
+        # weakref, a strong back reference would make every derived dim uncollectable by refcount
+        self._output_ref = None  # type: Optional[weakref.ref]
         self.attribs = attribs
+
+    @property
+    def output(self) -> Optional[_d.Dim]:
+        """the derived output dim, or None if never set or already collected"""
+        return self._output_ref() if self._output_ref is not None else None
+
+    @output.setter
+    def output(self, dim: Optional[_d.Dim]):
+        self._output_ref = weakref.ref(dim) if dim is not None else None
+
+    def __getstate__(self):
+        d = dict(self.__dict__)
+        del d["_output_ref"]
+        d["output"] = self.output  # weakrefs are not picklable, stored strong, restored via the setter
+        return d
+
+    def __setstate__(self, state):
+        output = state.pop("output", None)
+        self.__dict__.update(state)
+        self.output = output
 
     def __repr__(self):
         attribs = (" %r" % self.attribs) if self.attribs else ""
@@ -2928,13 +2964,122 @@ def dim_cmp_value(obj):
     return obj
 
 
+class _StrongRef:
+    """callable holder, so strong and weak cache entries are dereferenced the same way"""
+
+    __slots__ = ("_obj",)
+
+    def __init__(self, obj):
+        self._obj = obj
+
+    def __call__(self):
+        return self._obj
+
+
+class _DimMathCacheDict:
+    """dim math cache map: weak keys (strong for ints), weak or strong values, linear lookup (Dim hashes can change)"""
+
+    def __init__(self, *, weak_keys: bool = True):
+        self._weak_keys = weak_keys
+        self._entries: List[Tuple[Any, Any]] = []  # (ref to key, ref to value), both callables
+
+    def _key_ref(self, key):
+        return weakref.ref(key) if self._weak_keys else _StrongRef(key)
+
+    def _find_all(self, key):
+        found = []
+        for i, (key_ref, value_ref) in enumerate(self._entries):
+            entry_key = key_ref()
+            entry_value = value_ref()
+            if entry_key is not None and entry_value is not None and entry_key == key:
+                found.append((i, entry_value))
+        return found
+
+    def _find(self, key):
+        found = self._find_all(key)
+        return found[0] if found else (-1, None)
+
+    def __getitem__(self, key):
+        i, value = self._find(key)
+        if i < 0:
+            raise KeyError(key)
+        return value
+
+    def set(self, key, value, *, weak_value: bool):
+        """set, holding the value weakly or strongly"""
+        self._entries[:] = [(kr, vr) for (kr, vr) in self._entries if kr() is not None and vr() is not None]
+        # also drops keys that became equal via declare_same_as
+        for i, _ in reversed(self._find_all(key)):
+            del self._entries[i]
+        self._entries.append((self._key_ref(key), weakref.ref(value) if weak_value else _StrongRef(value)))
+
+    def __setitem__(self, key, value):
+        self.set(key, value, weak_value=True)
+
+    def __delitem__(self, key):
+        found = self._find_all(key)
+        if not found:
+            raise KeyError(key)
+        for i, _ in reversed(found):
+            del self._entries[i]
+
+    def __contains__(self, key):
+        return self._find(key)[0] >= 0
+
+    def __len__(self):
+        return sum(1 for _ in self.items())
+
+    def get(self, key, default=None):
+        """get"""
+        i, value = self._find(key)
+        return value if i >= 0 else default
+
+    def items(self):
+        """items, skipping entries whose key or value already died"""
+        for key_ref, value_ref in list(self._entries):
+            key = key_ref()
+            value = value_ref()
+            if key is not None and value is not None:
+                yield key, value
+
+    def remove_value_matches(self, predicate):
+        """drop entries whose value is alive and matches, without touching equal keys with other values"""
+        kept = []
+        for key_ref, value_ref in self._entries:
+            value = value_ref()
+            if value is not None and predicate(value):
+                continue
+            kept.append((key_ref, value_ref))
+        self._entries[:] = kept
+
+    def clear(self):
+        """clear"""
+        self._entries.clear()
+
+
+def _dim_math_cache_hold_weak(dim: Dim) -> bool:
+    """weak only for eager dynamic dims (per-batch webs must die by refcount), else keep the canonical derived dim"""
+    op = dim.derived_from_op
+    for d in (dim,) + (tuple(op.inputs) if op else ()):
+        if not isinstance(d, _d.Dim):
+            continue
+        size_ext = d.dyn_size_ext
+        if size_ext is None or size_ext.raw_tensor is None:
+            continue
+        # noinspection PyProtectedMember
+        backend = size_ext._raw_backend
+        if backend is not None and backend.executing_eagerly():
+            return True
+    return False
+
+
 class _CacheDimMath:
     """op (add,sub,...), operand -> Dim"""
 
     class _OperandCache:
         def __init__(self):
-            self.dims: MutableMapping[Dim, Dim] = weakref.WeakKeyDictionary()
-            self.statics: Dict[int, Dim] = {}
+            self.dims = _DimMathCacheDict()
+            self.statics = _DimMathCacheDict(weak_keys=False)
 
     def __init__(self):
         self._ops: Dict[str, _CacheDimMath._OperandCache] = {}
@@ -2956,13 +3101,14 @@ class _CacheDimMath:
             value_dict = op_dict.statics
         else:
             value_dict = op_dict.dims
+        weak_value = _dim_math_cache_hold_weak(__value)
         if __key[1] in value_dict:
-            value_dict[__key[1]] = __value
+            value_dict.set(__key[1], __value, weak_value=weak_value)
             return
         if len(value_dict) >= 5:
             # Just to avoid memory leaks.
             value_dict.clear()
-        value_dict[__key[1]] = __value
+        value_dict.set(__key[1], __value, weak_value=weak_value)
 
     def __delitem__(self, __key: Tuple[str, Union[Dim, int]]):
         op_dict = self._ops[__key[0]]
@@ -3012,9 +3158,7 @@ class _CacheDimMath:
     def clear_dynamic(self):
         """clear dynamic part"""
         for op_dict in self._ops.values():
-            for k, v in list(op_dict.dims.items()):
-                if v.dyn_size_ext is not None or v.dimension is None:
-                    del op_dict.dims[k]
+            op_dict.dims.remove_value_matches(lambda v: v.dyn_size_ext is not None or v.dimension is None)
 
     def __len__(self):
         count = 0
