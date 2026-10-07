@@ -2438,6 +2438,21 @@ def test_reduce_logmeanexp_packed_no_mask():
     )
 
 
+def test_pack_like_with_all_sequences_empty():
+    """a plain operand without any sequence frame into a packing which still has rows (gap frames, bound tail)"""
+    rf.select_backend_torch()
+    x, batch_dim, time_dim, feat_dim = _make_input(seq_lens=(0, 0))
+    for layout in (dict(gap=2), dict(total_bound=4)):
+        xp = packed.pack(x, **layout)
+        for dims in ([batch_dim, time_dim], [time_dim, feat_dim]):
+            raw = torch.zeros([d.get_dim_value() for d in dims], requires_grad=True)
+            plain = Tensor("plain", dims=dims, dtype="float32", raw_tensor=raw)
+            out = xp + plain
+            assert packed.is_packed(out) and out.dims_set == x.dims_set, (layout, dims, out)
+            (grad,) = torch.autograd.grad(out.raw_tensor.inner.raw_tensor.sum(), raw)
+            assert grad.shape == raw.shape, (layout, dims, grad)
+
+
 if __name__ == "__main__":
     better_exchook.install()
     if len(sys.argv) <= 1:
