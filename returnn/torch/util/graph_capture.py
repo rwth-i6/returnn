@@ -418,6 +418,7 @@ class GraphCapturedTrainStep:
         run_step: Callable[..., None],
         post_step: Optional[Callable[[], None]] = None,
         get_optimizer: Optional[Callable[[], torch.optim.Optimizer]] = None,
+        get_buffers: Optional[Callable[[], List[torch.Tensor]]] = None,
         rf_params: Optional[List[rf.Parameter]] = None,
         packed_batch_size: Optional[Dict[str, int]] = None,
     ):
@@ -431,6 +432,8 @@ class GraphCapturedTrainStep:
             runs the user train step function under a train run ctx
         :param post_step: grad clip + optimizer step, captured in-graph
             with opts "capture_optimizer"; must be capture-safe
+        :param get_buffers: the model's buffers (running statistics etc.),
+            put back after the warm runs, see :func:`_training_state_preserved`
         :param rf_params: RF-level model params, required for opts "compile"
         :param packed_batch_size: the config option, when statically known;
             only to infer a missing "packed_total_bound", see :func:`_get_data_buf`
@@ -447,6 +450,7 @@ class GraphCapturedTrainStep:
         self._packed_batch_size: Dict[str, int] = dict(packed_batch_size) if isinstance(packed_batch_size, dict) else {}
         self.warmup_steps = int(opts.get("warmup_steps", 0))
         self._get_optimizer = get_optimizer
+        self._get_buffers = get_buffers
         self._device = torch.device(device)
         self._float_dtype = float_dtype
         self._extern_data_template = extern_data_template
@@ -808,6 +812,25 @@ class GraphCapturedTrainStep:
         for loss in ctx.losses.values():
             loss.get_summed_loss()
             loss.get_inv_norm_factor()
+
+    @contextmanager
+    def _training_state_preserved(self):
+        """
+        Puts the training state back after the enclosed runs, which only warm the kernels:
+        the module buffers and the parameters without gradient (running statistics, counters),
+        and the CUDA RNG state. The copies live on the CPU, so they add nothing to the GPU memory.
+        """
+        tensors = list(self._get_buffers()) if self._get_buffers is not None else []
+        tensors += [p for p in self._params if not p.requires_grad]
+        saved = [t.detach().to("cpu", copy=True) for t in tensors]
+        rng_state = torch.cuda.get_rng_state(self._device)
+        try:
+            yield
+        finally:
+            with torch.no_grad():
+                for t, t0 in zip(tensors, saved):
+                    t.copy_(t0)
+            torch.cuda.set_rng_state(rng_state, self._device)
 
     def _step(self, *, post_step: bool = True) -> RunCtx:
         for p in self._grad_params:
@@ -1337,10 +1360,11 @@ class GraphCapturedTrainStep:
             return self._ctx
         if not self._compile:
             # side-stream warmup (kernel/cudnn warmup; each _step call is cold w.r.t. dim/layout caches);
-            # without the optimizer step, these runs are thrown away, the replay below is this batch's step
+            # without the optimizer step, these runs are thrown away, the replay below is this batch's step,
+            # so they leave no trace on the training state either
             s = torch.cuda.Stream()
             s.wait_stream(torch.cuda.current_stream())
-            with torch.cuda.stream(s):
+            with torch.cuda.stream(s), self._training_state_preserved():
                 for _ in range(3):
                     self._step(post_step=False)
             torch.cuda.current_stream().wait_stream(s)
