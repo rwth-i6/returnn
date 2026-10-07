@@ -81,11 +81,11 @@ def _forward_scores(
     :param label_lens: [B] labels per sequence
     :param max_frames: frames to run over
     :param max_prefix: prefixes to run over, U_max + 1
-    :return: total [B] log likelihood, the sentinel for a sequence without frames
+    :return: total [B] log likelihood, minus infinity for a sequence without frames or without a possible alignment
     """
     batch_size = frame_lens.shape[0]
     device, dtype = blank_lp.device, blank_lp.dtype
-    neg_inf = torch.finfo(dtype).min
+    neg_inf = float("-inf")
     offsets, _cells = cell_offsets(frame_lens, label_lens)
     cell, inside = _diagonal_cells(offsets, frame_lens, label_lens, max_frames, max_prefix, blank_lp.shape[0])
     # outside the lattice of a sequence the index lands on cells that are not its own, so those are masked
@@ -102,16 +102,20 @@ def _forward_scores(
     total = torch.full((batch_size,), neg_inf, dtype=dtype, device=device)
     alpha = start
     for diagonal in range(cell.shape[0]):
+        reached = inside[diagonal]
         if diagonal > 0:
             # both predecessors sit on the anti-diagonal before, the cell above at the same prefix, left through
-            # its blank, and the left neighbour at the prefix before, left through its label,
-            # and the floor keeps a dead edge finite, logaddexp of two minus infinities has a nan gradient
-            above = (alpha + blank_rows[diagonal - 1]).clamp(min=neg_inf)
-            left = (alpha + label_rows[diagonal - 1]).clamp(min=neg_inf)
-            alpha = torch.logaddexp(above, torch.cat([pad, left[:, :-1]], dim=1))
-        alpha = torch.where(inside[diagonal], alpha, torch.full_like(alpha, neg_inf))
-        leaving = alpha + blank_rows[diagonal]
-        total = torch.where(has_frames & (last == diagonal), torch.gather(leaving, 1, lens).squeeze(1), total)
+            # its blank, and the left neighbour at the prefix before, left through its label
+            above = alpha + blank_rows[diagonal - 1]
+            left = torch.cat([pad, (alpha + label_rows[diagonal - 1])[:, :-1]], dim=1)
+            # a cell no edge reaches stays at minus infinity and takes no gradient, logaddexp has a nan one there
+            dead = torch.isneginf(above) & torch.isneginf(left)
+            alpha = torch.logaddexp(above.masked_fill(dead, 0.0), left.masked_fill(dead, 0.0))
+            reached = reached & ~dead
+        alpha = torch.where(reached, alpha, torch.full_like(alpha, neg_inf))
+        leaving = torch.gather(alpha + blank_rows[diagonal], 1, lens).squeeze(1)
+        # without a possible alignment the total stays the constant and the sequence takes no gradient
+        total = torch.where(has_frames & (last == diagonal) & ~torch.isneginf(leaving), leaving, total)
     return total
 
 
