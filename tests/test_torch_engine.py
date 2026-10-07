@@ -746,6 +746,7 @@ def test_data_loader_oggzip():
     assert batches == [[[12, 8, 9, 11], [16, 0, 0, 0]], [[6, 25, 18, 20, 5], [28, 10, 28, 14, 0]], [[17, 23]]]
 
 
+@unittest.skipIf(torch.__version__ < (2,), "torch.load weights_only cannot load floats before PyTorch 2.0")
 def test_save_optimizer_opts_weights_only():
     include_check_partial = functools.partial(lambda **_kwargs: None)
     for optimizer, expected_saved_opts in [
