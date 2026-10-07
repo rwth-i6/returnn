@@ -78,8 +78,9 @@ class DistributedContext:
         if self._sync_complete_frac is None:
             self._sync_complete_frac = BehaviorVersion.get() >= 33
 
-        # Only in the main process (not in a subprocess, which inherits the affinity, and must not init CUDA),
-        # before the dataset workers start.
+        # Only on the first init, i.e. in the main process before the dataset workers start;
+        # a subprocess (prev_init_info set) inherits the affinity and must not touch CUDA,
+        # so the CUDA check comes after that condition.
         if self._opts.get("gpu_local_cpu_affinity", True) and not prev_init_info and torch.cuda.is_available():
             from returnn.torch.util.gpu_cpu_affinity import set_gpu_local_cpu_affinity
 
