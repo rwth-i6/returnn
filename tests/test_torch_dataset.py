@@ -187,6 +187,44 @@ def test_DistributeFilesDataset_no_worker_proc():
     assert res == ref
 
 
+def test_LmDataset_SentencePieces_add_eos():
+    # The dataset with its vocab is pickled into the spawned worker proc.
+    import tempfile
+    from test_GeneratingDataset import generate_sentencepiece_model
+
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        with open(f"{tmp_dir}/corpus.txt", "w") as f:
+            f.write("HELLO WORLD\nGOOD MORNING\nHELLO\n")
+        opts = {
+            "class": "LmDataset",
+            "corpus_file": f"{tmp_dir}/corpus.txt",
+            "orth_vocab": {
+                "class": "SentencePieces",
+                "model_file": generate_sentencepiece_model(tmp_dir),
+                "add_eos": True,
+            },
+        }
+
+        ref_dataset = init_dataset(opts)
+        ref_dataset.init_seq_order(epoch=1)
+        ref = []
+        seq_idx = 0
+        while ref_dataset.is_less_than_num_seqs(seq_idx):
+            ref_dataset.load_seqs(seq_idx, seq_idx + 1)
+            ref.append(ref_dataset.get_data(seq_idx, "data").tolist())
+            seq_idx += 1
+        assert len(ref) == 3 and all(seq[-1] == ref_dataset.orth_vocab.eos_label_id for seq in ref)
+
+        dataset = init_dataset(opts)
+        mp_manager = multi_proc_manager_with_watchdog.create_manager()
+        loader = get_loader_from_returnn_dataset(dataset, mp_manager, batch_size=100, max_seqs=3)
+        res = []
+        for batch in loader:
+            for b in range(batch["data"].shape[0]):
+                res.append(batch["data"][b, : batch["data:seq_len"][b]].tolist())
+        assert res == ref
+
+
 def test_func_in_global_config():
     # Very similar to test_MultiProcDataset_via_config.
     # https://github.com/rwth-i6/returnn/issues/1495
