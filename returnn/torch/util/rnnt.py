@@ -31,6 +31,7 @@ from typing import Tuple
 
 import torch
 
+from .assert_ import assert_
 from .custom_op import custom_op
 from .monotonic_rnnt import cell_offsets, next_label_per_cell
 
@@ -264,6 +265,16 @@ def rnnt_loss(
     frame_lens, label_lens = frame_lens.contiguous(), label_lens.contiguous()
     max_prefix = int(labels.shape[1]) + 1
     next_label = next_label_per_cell(labels, frame_lens, label_lens, blank, logits.shape[0])
+    # the cell kernels index every row by these ids unchecked, and a recursion shorter than a sequence
+    # never reaches its last cell, so both are checked on the device, without a host read
+    assert_(
+        ((next_label >= 0) & (next_label < logits.shape[1])).all(),
+        f"rnnt: a label outside the vocabulary of {logits.shape[1]}",
+    )
+    assert_(
+        (frame_lens <= max_frames).all(),
+        f"rnnt: a sequence longer than the {max_frames} frames of the recursion",
+    )
     if logits.is_cuda:
         assert _HAVE_LIB_OPS, "rnnt: the loss needs torch.library.custom_op, so torch >= 2.4"
         total = torch.ops.returnn.rnnt_fwd(logits, next_label, frame_lens, label_lens, blank, max_frames, max_prefix)[0]

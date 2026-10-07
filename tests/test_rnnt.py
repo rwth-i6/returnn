@@ -234,6 +234,50 @@ def test_rnnt_gives_no_gradient_without_a_possible_alignment():
         torch.testing.assert_close(grad[others:], alone_grad)
 
 
+def test_rnnt_refuses_a_recursion_shorter_than_a_sequence():
+    """
+    A recursion cut short never reaches the last cell of the sequence and its score is not the loss,
+    so the frames a caller declares have to cover every sequence.
+    """
+    torch.manual_seed(1)
+    logits = torch.randn(12, 5)
+    labels = torch.tensor([[1, 2]], dtype=torch.int32)
+    frame_lens, label_lens = torch.tensor([4], dtype=torch.int32), torch.tensor([2], dtype=torch.int32)
+    fine = rnnt_loss(logits, labels, frame_lens, label_lens, blank=0, max_frames=4)
+    assert torch.isfinite(fine).all(), fine
+
+    try:
+        rnnt_loss(logits, labels, frame_lens, label_lens, blank=0, max_frames=3)
+    except AssertionError as exc:
+        assert "frames" in str(exc), exc
+    else:
+        raise AssertionError("a recursion shorter than the sequence was accepted")
+
+
+def test_rnnt_refuses_labels_outside_the_vocabulary():
+    """
+    The cell kernels index the row by blank and by label unchecked, so a stray id reads and writes out of
+    bounds on cuda, and both ids are checked before any kernel runs.
+    """
+    torch.manual_seed(1)
+    vocab = 5
+    logits = torch.randn(12, vocab)
+    frame_lens, label_lens = torch.tensor([4], dtype=torch.int32), torch.tensor([2], dtype=torch.int32)
+    for labels, blank, error in (
+        ([[1, 2]], vocab, ValueError),
+        ([[1, vocab]], 0, AssertionError),
+        ([[-1, 2]], 0, AssertionError),
+    ):
+        try:
+            rnnt_loss(
+                logits, torch.tensor(labels, dtype=torch.int32), frame_lens, label_lens, blank=blank, max_frames=4
+            )
+        except error as exc:
+            assert "vocabulary" in str(exc), exc
+        else:
+            raise AssertionError(f"labels {labels} with blank {blank} were accepted")
+
+
 def test_rnnt_reads_strided_lengths():
     if not torch.cuda.is_available():
         raise unittest.SkipTest("no cuda")
