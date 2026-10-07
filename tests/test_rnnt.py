@@ -204,6 +204,36 @@ def test_rnnt_survives_impossible_edges():
         torch.testing.assert_close(results[1], results[0])
 
 
+def test_rnnt_gives_no_gradient_without_a_possible_alignment():
+    """
+    The label of the first sequence has no probability in either of its frames, so none of its alignments has any
+    and its loss is infinite. Its cells get no gradient, and the second sequence keeps the loss and the gradient
+    it has alone.
+    """
+    torch.manual_seed(8)
+    vocab, blank = 3, 0
+    impossible = torch.randn(2, 2, vocab)
+    impossible[:, 0, 1] = float("-inf")
+    per_seq = [impossible, torch.randn(3, 2, vocab)]
+    labels = torch.tensor([[1], [2]], dtype=torch.int32)
+    frame_lens = torch.tensor([2, 3], dtype=torch.int32)
+    label_lens = torch.tensor([1, 1], dtype=torch.int32)
+    for device in ["cpu"] + (["cuda"] if torch.cuda.is_available() else []):
+        results = []
+        for seqs in (slice(None), slice(1, None)):
+            x = _pack(per_seq[seqs]).to(device).requires_grad_()
+            args = (labels[seqs].to(device), frame_lens[seqs].to(device), label_lens[seqs].to(device))
+            loss = rnnt_loss(x, *args, blank=blank, max_frames=3)
+            loss.sum().backward()
+            results.append((loss.detach().cpu(), x.grad.cpu()))
+        (loss, grad), (alone_loss, alone_grad) = results
+        others = grad.shape[0] - alone_grad.shape[0]
+        assert torch.isposinf(loss[0]), loss
+        assert not grad[:others].any(), grad[:others]
+        torch.testing.assert_close(loss[1:], alone_loss)
+        torch.testing.assert_close(grad[others:], alone_grad)
+
+
 def test_rnnt_reads_strided_lengths():
     if not torch.cuda.is_available():
         raise unittest.SkipTest("no cuda")
