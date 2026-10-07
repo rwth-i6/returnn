@@ -1385,8 +1385,9 @@ class _DimMixin:
                 return
             y = _bin_op(y, x_size)
         assert y is not None, f"op {op}?"
-        if not tf and not template_only and y.raw_tensor is not None and any(d.need_masking() for d in y.dims):
-            y = y.copy_masked(0)  # padded entries of its own dims (e.g. padding seqs of the batch) stay empty
+        if not template_only and y.raw_tensor is not None and any(d.need_masking() for d in y.dims):
+            with _ctx_for_inputs(y):
+                y = y.copy_masked(0)  # padded entries of its own dims (e.g. padding seqs of the batch) stay empty
         if self.dyn_size_ext is not None:
             assert self.dyn_size_ext.dim_tags == y.dim_tags
         if y.batch:

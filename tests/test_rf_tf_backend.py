@@ -1912,6 +1912,38 @@ def test_cum_concat_step_dyn_dim_static_raw_size():
     numpy.testing.assert_allclose(res, numpy.ones((4, 2, 1, 2, 3), "float32"), rtol=1e-6)
 
 
+def test_padding_seqs_of_a_bounded_batch_stay_empty():
+    """as in test_rf_packed: appending EOS gives every real seq one more frame, the padding seqs stay empty"""
+    import returnn.tf.compat as tf_compat
+
+    # noinspection PyProtectedMember
+    from returnn.frontend import _backend
+
+    _backend.select_backend_tf()
+    try:
+        with tf_compat.v1.Graph().as_default(), tf_compat.v1.Session().as_default() as session:
+            import tensorflow as tf
+
+            batch_size = Tensor("batch_size", dims=(), dtype="int32", raw_tensor=tf.constant(3))
+            bounded_batch_dim = Dim(batch_size, name="batch", kind=Dim.Types.Batch, capacity=5)
+            lens = Tensor("lens", dims=[bounded_batch_dim], dtype="int32", raw_tensor=tf.constant([2, 0, 3, 0, 0]))
+            time_dim = Dim(lens, name="time", capacity=3)
+            vocab_dim = Dim(6, name="vocab")
+            labels = Tensor(
+                "labels",
+                dims=[bounded_batch_dim, time_dim],
+                sparse_dim=vocab_dim,
+                dtype="int32",
+                raw_tensor=tf.ones((5, 3), dtype=tf.int32),
+            )
+            _, (time_eos_dim,) = rf.pad(labels, axes=[time_dim], padding=[(0, 1)], value=0)
+            res = session.run(time_eos_dim.dyn_size_ext.raw_tensor)
+    finally:
+        rf.select_backend_torch()
+
+    assert res.tolist() == [3, 1, 4, 0, 0], res
+
+
 def test_engine_weight_decay_modules_blacklist():
     # The production config passes optimizer.weight_decay_modules_blacklist.
     # The optimizer class does not know that option ("Argument(s) not recognized"),
