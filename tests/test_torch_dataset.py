@@ -400,6 +400,76 @@ def test_shutdown_data_loader_drain_conn():
     reader.close()
 
 
+class _ReaderProcDataset(Task12AXDataset):
+    """owns a reader proc, like :class:`NemoSpeechDataset`, and logs its start and how it is freed"""
+
+    def __init__(self, *, log_file: str, **kwargs):
+        super().__init__(**kwargs)
+        self.log_file = log_file
+        self._reader_proc = None
+        self._reader_conn = None
+
+    def _log(self, line: str):
+        with open(self.log_file, "a") as f:
+            f.write(line + "\n")
+
+    def init_seq_order(self, epoch=None, seq_list=None, seq_order=None):
+        """init seq order, start the reader proc"""
+        if epoch is not None and self._reader_proc is None:
+            from returnn.util.multi_proc_non_daemonic_spawn import NonDaemonicSpawnContext
+
+            ctx = NonDaemonicSpawnContext()
+            self._reader_conn, child_conn = ctx.Pipe()
+            self._reader_proc = ctx.Process(target=_reader_proc_loop, args=(child_conn,))
+            self._reader_proc.start()
+            child_conn.close()
+            self._log(f"start {self._reader_proc.pid}")
+        return super().init_seq_order(epoch=epoch, seq_list=seq_list, seq_order=seq_order)
+
+    def finish_epoch(self, *, free_resources: bool = False):
+        """finish epoch, stop the reader proc"""
+        import multiprocessing.util
+
+        super().finish_epoch(free_resources=free_resources)
+        if free_resources and self._reader_proc is not None:
+            is_exiting = multiprocessing.util.is_exiting()
+            self._reader_conn.send("exit")
+            self._reader_proc.join()
+            self._log(f"free {is_exiting} {self._reader_proc.exitcode}")
+            self._reader_proc = None
+
+    def __del__(self):
+        if self._reader_proc is not None:
+            self._reader_conn.send("exit")  # without join, like NemoSpeechDataset
+
+
+def _reader_proc_loop(conn):
+    conn.recv()
+
+
+def test_data_loader_worker_exit_frees_dataset():
+    """
+    The DataLoader worker frees its dataset copy (e.g. reader procs) when it ends,
+    before the multiprocessing exit cleanup (which would signal the reader), and not between epochs
+    """
+    import tempfile
+
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        log_file = f"{tmp_dir}/log.txt"
+        dataset = _ReaderProcDataset(log_file=log_file, num_seqs=10)
+        wrapped_dataset = returnn_dataset_wrapper.ReturnnDatasetIterDataPipe(dataset)
+        batches_dataset = data_pipeline.BatchingIterDataPipe(wrapped_dataset, batch_size=5, max_seqs=2)
+        loader = data_pipeline.create_data_loader_from_batches(batches_dataset, {"num_workers": 1})
+        for _ in range(2):  # the persistent worker reuses the dataset copy
+            next(iter(loader))  # leaves unread batches
+        worker = loader._iterator._workers[0]
+        data_pipeline.shutdown_data_loader(loader)
+        assert worker.exitcode == 0
+        with open(log_file) as f:
+            lines = f.read().splitlines()
+    assert len(lines) == 2 and lines[0].startswith("start ") and lines[1] == "free False 0", lines
+
+
 def test_batching_packed_batch_cost_bounds_a_product_of_lengths():
     """
     A monotonic RNN-T lattice has frames times prefixes cells per sequence, a product no per-key length
