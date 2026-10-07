@@ -782,12 +782,8 @@ class GraphCapturedTrainStep:
                     inner, batch_dim=batch_dim, spatial_dim=spatial, packed_dim=packed_dim, feature_dim=data.feature_dim
                 )
                 if gap or align > 1:
-                    # a declared packed_total_bound is usually much tighter than the
-                    # worst case (every seq at full capacity), and activations scale with it
-                    regap_bound = self.packed_total_bound.get(k)
-                    if regap_bound is None:
-                        regap_bound = self.batch_size_bound * (-(-(self.dim_capacity[k] + gap) // align) * align)
-                    packed_t = rf.packed_regap(packed_t, gap, align=align, total_bound=regap_bound)
+                    # the copy-in content check makes the gapped layout fit the buffer, see _copy_in
+                    packed_t = rf.packed_regap(packed_t, gap, align=align, total_bound=buf.shape[0])
                 data.raw_tensor = packed_t.raw_tensor
             else:
                 data.dtype = str(buf.dtype).split(".")[-1]

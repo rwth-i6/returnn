@@ -2298,6 +2298,71 @@ def test_torch_engine_cuda_graph_packed_decoder_parity():
         assert abs(ce_a - ce_b) / max(abs(ce_a), 1e-6) < 2e-2, f"step {s} ce: {ce_a} vs {ce_b}"
 
 
+def test_torch_engine_cuda_graph_packed_total_bound():
+    """
+    The gapped packed tensor which the captured step sees has the extent of the input buffer:
+    the declared packed_total_bound, else the one inferred from packed_batch_size,
+    which is far below batch_size_bound * dim_capacity.
+    """
+    from returnn.datasets import init_dataset
+    from returnn.tensor import Dim, batch_dim
+    import numpy
+
+    if not torch.cuda.is_available():
+        raise unittest.SkipTest("CUDA not available")
+    rnd = numpy.random.RandomState(3)
+    seqs = [{"data": rnd.randn(int(rnd.randint(1, 9)), 5).astype("float32")} for _ in range(20)]
+    # (gap, align, declared packed_total_bound) -> expected extent;
+    # batch_size_bound 4, dim_capacity 8, packed_batch_size 12
+    for gap, align, declared, expected in [(1, 1, None, 16), (2, 2, None, 24), (0, 1, None, 12), (1, 1, 24, 24)]:
+        time_dim = Dim(None, name=f"time-bound-{gap}-{align}-{declared}")
+        feat_dim = Dim(5, name="feat")
+        seen = []
+
+        def _get_model(**_kwargs):
+            return rf.Linear(feat_dim, Dim(3, name="out"))
+
+        def _train_step(*, model: rf.Linear, extern_data: TensorDict, **_kwargs):
+            data = extern_data["data"]
+            seen.append(data.raw_tensor.packed_dim.dimension)
+            loss = rf.reduce_sum(model(data) ** 2, axis=model.out_dim)
+            loss.mark_as_loss("l2")
+
+        config = Config(
+            dict(
+                task="train",
+                device="gpu",
+                extern_data={"data": {"dims": [batch_dim, time_dim, feat_dim], "dtype": "float32"}},
+                get_model=_get_model,
+                train_step=_train_step,
+                batch_size=None,
+                packed_batch_size={"data": 12},
+                max_seqs=4,
+                num_epochs=1,
+                learning_rate=1e-3,
+                optimizer={"class": "adamw", "capturable": True},
+                torch_dataloader_opts={"num_workers": 0},
+                packed_tensors={"per_key": {"data": {"gap": gap, "align": align}}},
+                torch_cuda_graph=dict(
+                    batch_size_bound=4,
+                    dim_capacity={"data": 8},
+                    **({"packed_total_bound": {"data": declared}} if declared is not None else {}),
+                    capture_optimizer=True,
+                ),
+            )
+        )
+        dataset = init_dataset({"class": "StaticDataset", "data": seqs, "input_dim": 5})
+        dataset.init_seq_order(epoch=1)
+        with global_config_ctx(config):
+            engine = Engine(config=config)
+            engine.init_train_from_config(train_data=dataset)
+            engine.train()
+            assert engine._graph_capture._graph is not None, "graph never captured"
+            assert engine._graph_capture.data_bound_sizes() == {"data": expected}
+            assert seen and set(seen) == {expected}, (gap, align, declared, seen)
+            engine.finalize()
+
+
 def test_torch_engine_cuda_graph_train():
     """whole-train-step CUDA-graph capture/replay (torch_cuda_graph), 2 epochs across an epoch boundary,
     in-graph optimizer + per-step LR schedule via the device-tensor LR input"""
