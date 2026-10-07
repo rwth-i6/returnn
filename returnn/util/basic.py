@@ -2308,8 +2308,7 @@ class NumbersDict:
 
 def collect_class_init_kwargs(cls, only_with_default=False):
     """
-    :param type cls: class, where it assumes that kwargs are passed on to base classes.
-        Keyword-only arguments (after ``*``) are included as well.
+    :param type cls: class, where it assumes that kwargs are passed on to base classes
     :param bool only_with_default: if given will only return the kwargs with default values
     :return: set if not with_default, otherwise the dict to the default values
     :rtype: list[str] | dict[str]
@@ -2333,9 +2332,7 @@ def collect_class_init_kwargs(cls, only_with_default=False):
                 assert len(arg_spec.defaults) == len(args), arg_spec
                 for arg, default in zip(args, arg_spec.defaults):
                     kwargs[arg] = default
-            if arg_spec.kwonlydefaults:
-                for arg, default in arg_spec.kwonlydefaults.items():
-                    kwargs[arg] = default
+            kwargs.update(arg_spec.kwonlydefaults or {})
         else:
             for arg in args + list(arg_spec.kwonlyargs):
                 if arg not in kwargs:
