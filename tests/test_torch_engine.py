@@ -1946,12 +1946,14 @@ def _build_cuda_graph_train_config_and_dataset(
     optimizer_step: bool = False,
     optimizer: Optional[Dict[str, Any]] = None,
     count_steps: bool = False,
+    graph_opts: Optional[Dict[str, Any]] = None,
 ):
     """
     small RF model + Task12AXDataset config with torch_cuda_graph, see the tests below.
     With optimizer_step: the optimizer step not in the model graph but separately (torch_optimizer_step).
     optimizer: the config entry, capturable AdamW by default.
     count_steps: the model counts its train step calls in an auxiliary parameter.
+    graph_opts: further torch_cuda_graph entries.
     """
     from returnn.datasets import init_dataset
     from returnn.tensor import Dim, batch_dim
@@ -2031,6 +2033,7 @@ def _build_cuda_graph_train_config_and_dataset(
             capture_optimizer=not optimizer_step,
             **({"warmup_steps": warmup_steps} if warmup_steps is not None else {}),
             **({"compile": True} if compile_ else {}),
+            **(graph_opts or {}),
         )
     if optimizer_step:
         config.typed_dict["torch_optimizer_step"] = {}
@@ -2047,6 +2050,7 @@ def _run_cuda_graph_train(
     optimizer_step: bool = False,
     optimizer: Optional[Dict[str, Any]] = None,
     count_steps: bool = False,
+    graph_opts: Optional[Dict[str, Any]] = None,
 ) -> Engine:
     if not torch.cuda.is_available():
         raise unittest.SkipTest("CUDA not available")
@@ -2057,6 +2061,7 @@ def _run_cuda_graph_train(
         optimizer_step=optimizer_step,
         optimizer=optimizer,
         count_steps=count_steps,
+        graph_opts=graph_opts,
     )
     with global_config_ctx(config):
         engine = Engine(config=config)
@@ -2311,11 +2316,14 @@ def test_torch_engine_cuda_graph_train():
 
 def test_torch_engine_cuda_graph_warm_runs_keep_state():
     """
-    The runs which only warm the kernels leave no trace on the model:
+    The runs which only warm the kernels or trace the compiled step leave no trace on the model:
     its buffers and auxiliary parameters (a step counter here, running statistics in a real model)
     are back afterwards, so the model sees every batch exactly once.
     """
-    _run_cuda_graph_train(compile_=False, count_steps=True)
+    for compile_ in (False, True):
+        # the traced step with eager kernels, Inductor would only add compile time here
+        graph_opts = {"debug_aot_eager": True} if compile_ else None
+        _run_cuda_graph_train(compile_=compile_, count_steps=True, graph_opts=graph_opts)
 
 
 def test_torch_engine_cuda_graph_compile_train():
