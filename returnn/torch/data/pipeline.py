@@ -24,6 +24,7 @@ import bisect
 import functools
 import itertools
 from typing import Optional, Any, Sequence, Tuple, Union, List, Dict, Callable
+import os
 import sys
 import threading
 from copy import deepcopy
@@ -824,14 +825,16 @@ def shutdown_data_loader(data_loader: Union[torch.utils.data.DataLoader, PinMemo
     finally:
         if drain_thread is not None:
             stop_drain.set()
-            drain_thread.join(timeout=1)  # blocks forever in recv_bytes on a partial message of a killed worker
+            drain_thread.join()
 
 
 def _drain_conn(conn, stop_event: threading.Event):
-    # raw bytes, not unpickled: no shared memory tensors rebuilt from the stopping workers
+    # Raw bytes, not unpickled: no shared memory tensors rebuilt from the stopping workers.
+    # Not per message (recv_bytes): that blocks on the partial message of a killed worker.
+    fd = conn.fileno()
     while not stop_event.is_set():
-        if conn.poll(0.01):
-            conn.recv_bytes()
+        if conn.poll(0.01) and not os.read(fd, 65536):
+            return  # end of the pipe, no writer left
 
 
 class _DataLoaderWorkerInitFunc:
