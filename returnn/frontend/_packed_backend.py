@@ -4982,7 +4982,7 @@ def flat_content(source: Tensor, *, out_dim: Optional[Dim] = None) -> Tuple[Tens
     :param source: packed tensor
     :param out_dim: the flat dim; created if not given
         (dyn size = total content, capacity bounded by the physical packed dim).
-        Under static tracing, the flat tensor is sized to its capacity.
+        The flat tensor is sized to it (to its capacity under static tracing).
     :return: (flat tensor, out_dim)
     """
     raw = source.raw_tensor
@@ -5000,11 +5000,8 @@ def flat_content(source: Tensor, *, out_dim: Optional[Dim] = None) -> Tuple[Tens
         out_dim = Dim(total, name="packed", bounded_by=raw.packed_dim)
     elif out_dim.dyn_size_ext is None or out_dim.dyn_size_ext.raw_tensor is None:
         out_dim.dyn_size_ext = total
-    if rf.is_static_traceable():
-        # out_dim can come from another packing with another bound; the content is a prefix of both buffers
-        out = rf.replace_dim_v2(inner, in_dim=raw.packed_dim, out_dim=out_dim)
-    else:
-        out, _ = rf.replace_dim(inner, in_dim=raw.packed_dim, out_dim=out_dim)
+    # a bound buffer (pack total_bound) differs from out_dim in general; the content is a prefix of it
+    out = rf.replace_dim_v2(inner, in_dim=raw.packed_dim, out_dim=out_dim)
     # the tail beyond the content is junk (stale buffer values) under bound shapes;
     # zero it: e.g. sparse (index) tensors would otherwise index out of bounds downstream,
     # independent of any masked reduction later
