@@ -9,6 +9,7 @@ from typing import Optional, Union, Any, Type, Callable, Sequence, Iterable, Set
 from types import FunctionType, BuiltinFunctionType
 import os
 import gc
+import numpy
 import torch
 
 import returnn
@@ -776,11 +777,14 @@ def _optimizer_opts_for_checkpoint(obj: Any) -> Any:
     """
     :param obj: optimizer options, or a part of them
     :return: same structure, with only types which ``torch.load(weights_only=True)`` accepts:
+        numpy scalars and arrays become Python numbers and (nested) lists,
         an optimizer class becomes its short name if it has one (e.g. ``"adamw"``),
         other classes and functions their name as in :func:`rf.build_dict`, any other object ``"object:<repr>"``
     """
     if obj is None or type(obj) in (bool, int, float, str):
         return obj
+    if isinstance(obj, (numpy.generic, numpy.ndarray)):
+        return _optimizer_opts_for_checkpoint(obj.tolist())
     if isinstance(obj, dict):
         return {_optimizer_opts_for_checkpoint(k): _optimizer_opts_for_checkpoint(v) for k, v in obj.items()}
     if isinstance(obj, list):

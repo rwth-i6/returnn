@@ -8,6 +8,7 @@ from typing import Optional, Any, Dict, Tuple
 import contextlib
 import copy
 import functools
+import io
 import json
 import os
 import sys
@@ -784,6 +785,14 @@ def test_save_optimizer_opts_weights_only():
             saved = torch.load(tmp_dir + "/model.opt.pt", weights_only=True)
             assert saved["optimizer_opts"] == expected_saved_opts
             updater.load_optimizer(tmp_dir + "/model.opt.pt")
+
+    # numpy values given to the optimizer itself would break its own state dict, so check the conversion directly
+    from returnn.torch.updater import _optimizer_opts_for_checkpoint
+
+    buffer = io.BytesIO()
+    torch.save(_optimizer_opts_for_checkpoint({"a": numpy.float32(0.5), "b": numpy.arange(4).reshape(2, 2)}), buffer)
+    buffer.seek(0)
+    assert torch.load(buffer, weights_only=True) == {"a": 0.5, "b": [[0, 1], [2, 3]]}
 
 
 def test_load_optimizer_old_format():
