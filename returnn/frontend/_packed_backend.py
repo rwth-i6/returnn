@@ -4996,8 +4996,6 @@ def _scatter_relayout(
         idx = idx_raw.inner
     elif set(indices.dims) <= set(raw.orig_dims):
         idx = _pack_like(indices, raw)
-        if idx is None:
-            return None
     else:
         return None
 
