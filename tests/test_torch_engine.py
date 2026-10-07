@@ -1911,9 +1911,14 @@ def _check_torch_engine_finalize_data_loaders(*, pin_memory: bool = False):
         engine = Engine(config=config)
         engine.init_train_from_config(train_data=datasets["train"], dev_data=datasets["dev"])
         workers = []
+        data_iters = []  # kept alive: the pinning thread of a dropped iterator stops on its own
         for loader in [engine._train_dataloader, engine._eval_dataloaders["dev"]]:
-            next(iter(loader))
+            data_iter = iter(loader)
+            next(data_iter)
+            data_iters.append(data_iter)
             workers += (loader.data_loader if pin_memory else loader)._iterator._workers
+        if pin_memory:
+            assert all(data_iter._thread.is_alive() for data_iter in data_iters)
         engine.finalize()
         engine.finalize()
     for worker in workers:
