@@ -34,11 +34,13 @@ def moments(
     """
     :param x: input
     :param axis: the axis (or axes) to be reduced, to calculate statistics over
-    :param use_mask: whether to use a mask for dynamic spatial dims in the reduction
+    :param use_mask: whether to use a mask for dynamic spatial dims in the reduction.
+        The local mean follows it only with the global config option ``rf_moments_use_fixed_masking``
+        (default from behavior version 34 on), otherwise the local mean is always masked.
     :param correction:
         The variance will be estimated by ``sum((x - mean)**2) / (n-correction)``
-        where ``n`` is the number of elements in the axis (or the axes)
-        (with ``use_mask=True``, taking masking into account, using :func:`num_elements_of_shape`).
+        where ``n`` is the number of elements in the axis (or the axes) which the reduction covers
+        (:func:`num_elements_of_shape` with ``source=x``, e.g. with ``use_mask=True`` taking masking into account).
         The default ``correction=0`` will return the biased variance estimation.
         ``correction=1`` is the `Bessel correction <https://en.wikipedia.org/wiki/Bessel%27s_correction>`__
         and will return the unbiased variance estimation.
@@ -74,7 +76,7 @@ def moments(
         # which gives NaNs via rsqrt(variance + eps).
         # torch.nn.SyncBatchNorm instead combines per-worker Welford statistics, which does not cancel.
         x = rf.cast(x, "float32")
-        count = _global_num_elements(axis, use_mask=use_mask, device=x.device)
+        count = rf.cast(rf.num_elements_of_shape(axis, use_mask=use_mask, source=x, distributed=True), "float32")
         mean = rf.reduce_sum(x, axis=axis, use_mask=use_mask, distributed=True) / count
         # stop_gradient does not change the gradient here: the deviations sum to zero over the global batch
         sq_dev = rf.squared_difference(x, rf.stop_gradient(mean))
@@ -82,11 +84,11 @@ def moments(
         if isinstance(correction, Tensor) or correction != 0:
             variance *= count / (count - correction)
         return rf.cast(mean, compute_dtype), rf.cast(variance, compute_dtype)
-    mean = rf.reduce_mean(x, axis=axis)
+    mean = rf.reduce_mean(x, axis=axis, use_mask=use_mask if _moments_use_fixed_masking() else True)
     # stop_gradient does not change the gradient here
     variance = rf.reduce_mean(rf.squared_difference(x, rf.stop_gradient(mean)), axis=axis, use_mask=use_mask)
     if isinstance(correction, Tensor) or correction != 0:
-        n = rf.num_elements_of_shape(axis, use_mask=use_mask)
+        n = rf.num_elements_of_shape(axis, use_mask=use_mask, source=x)
         variance *= n / (n - correction)
     return mean, variance
 
@@ -113,24 +115,6 @@ def _moments_float32() -> bool:
     from returnn.util.basic import BehaviorVersion
 
     return BehaviorVersion.get() >= 32
-
-
-def _global_num_elements(axis: Union[Dim, Sequence[Dim]], *, use_mask: bool, device: Optional[str]) -> Tensor:
-    """
-    :param axis: the dim or dims which are reduced
-    :param use_mask: whether padded frames are excluded, as in the reduction itself
-    :param device: where the count is needed, so it does not force a host sync under graph capture
-    :return: number of reduced elements, summed over the Torch DDP workers, as a float32 tensor
-    """
-    count = rf.num_elements_of_shape(axis, use_mask=use_mask, device=device)
-    if isinstance(count, Tensor):
-        # use_mask=False ignores the device, so copy explicitly
-        count = rf.cast(rf.copy_to_device(count, device), "float32")
-    else:
-        # static dims give a plain int, which is the same on every worker
-        count = rf.constant(count, dims=(), dtype="float32", device=device)
-    # noinspection PyProtectedMember
-    return count._raw_backend.reduce_distributed(count, mode="sum")
 
 
 class LayerNorm(rf.Module):
@@ -278,6 +262,30 @@ def batch_norm_distributed_default() -> bool:
     return config.bool("rf_batch_norm_distributed", False)
 
 
+def _moments_use_fixed_masking() -> bool:
+    """
+    :return: whether :func:`moments` applies ``use_mask`` to its local mean too
+        and :class:`BatchNorm` passes its ``use_mask`` on to :func:`moments`.
+        Config option ``rf_moments_use_fixed_masking: bool``, else behavior_version >= 34.
+    """
+    from returnn.config import get_global_config
+
+    config = get_global_config(raise_exception=False)
+    config_value = None
+    if config:
+        if "rf_moments_use_fixed_masking" in config.typed_dict:
+            config_value = config.typed_dict["rf_moments_use_fixed_masking"]
+            assert config_value is None or isinstance(config_value, bool)
+        elif "rf_moments_use_fixed_masking" in config.dict:
+            config_value = config.bool("rf_moments_use_fixed_masking", None)
+    if config_value is not None:
+        return config_value
+
+    from returnn.util.basic import BehaviorVersion
+
+    return BehaviorVersion.get() >= 34
+
+
 class BatchNorm(rf.Module):
     """
     Batch normalization. https://arxiv.org/abs/1502.03167
@@ -338,6 +346,8 @@ class BatchNorm(rf.Module):
             which ignore the masking, and also slower, and the fused op would not be used.
           False would be consistent to all other frameworks,
             and potentially allows for the use of an efficient fused op internally.
+          The distributed statistics follow it only with the global config option
+            ``rf_moments_use_fixed_masking`` (default from behavior version 34 on), otherwise they are always masked.
         :param distributed: compute batch statistics over the global batch across all DDP workers
           (SyncBatchNorm-style) instead of per-worker.
           None (default) reads the global config option ``rf_batch_norm_distributed`` (default False).
@@ -388,7 +398,10 @@ class BatchNorm(rf.Module):
             mean_cur_batch, variance_cur_batch = rf.cond(
                 need_current_batch_stats,
                 lambda: rf.moments(
-                    source, axis=[d for d in source.dims if d != self.in_dim], distributed=self.distributed
+                    source,
+                    axis=[d for d in source.dims if d != self.in_dim],
+                    use_mask=use_mask if _moments_use_fixed_masking() else True,
+                    distributed=self.distributed,
                 ),
                 lambda: (self.running_mean, self.running_variance),
             )

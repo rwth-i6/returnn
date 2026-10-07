@@ -4,7 +4,7 @@ Tests for PyTorch engine.
 
 from __future__ import annotations
 import _setup_test_env  # noqa
-from typing import Optional, Any, Dict, Tuple
+from typing import Optional, Any, Dict, Tuple, List
 import contextlib
 import copy
 import json
@@ -609,6 +609,130 @@ def test_torch_engine_forward_load_epoch():
         engine.init_network_from_config()
         # We expect that even though we loaded the checkpoint, we now have the load_epoch.
         assert engine.epoch == load_epoch
+
+
+def test_get_train_start_epoch_with_load_epoch():
+    from returnn.util.basic import BackendEngine
+
+    with tempfile.TemporaryDirectory(prefix="returnn_test_start_epoch") as tmp_dir:
+        model = f"{tmp_dir}/model"
+        for epoch in [43, 44]:
+            for postfix in [".pt", ".opt.pt"]:
+                open(Engine.epoch_model_filename(model, epoch) + postfix, "w").close()
+
+        def _select(**opts) -> Tuple[Optional[int], Optional[str], int]:
+            config = Config(dict(backend="torch", task="train", model=model, num_epochs=45, **opts))
+            BackendEngine.select_engine(config=config, _select_rf_backend=False)
+            return (*Engine.get_epoch_model(config), Engine.get_train_start_epoch(config))
+
+        # continuation after epoch 44, however it is specified
+        assert _select() == (44, f"{model}.044", 45)
+        assert _select(start_epoch=45) == (44, f"{model}.044", 45)
+        assert _select(load_epoch=44) == (44, f"{model}.044", 45)
+        assert _select(start_epoch=45, load_epoch=44) == (44, f"{model}.044", 45)
+        # continuation after an earlier epoch
+        assert _select(start_epoch=44) == (43, f"{model}.043", 44)
+        assert _select(start_epoch=44, load_epoch=43) == (43, f"{model}.043", 44)
+        # contradiction
+        for start_epoch, load_epoch in [(45, 43), (44, 44), (2, 44)]:
+            try:
+                _select(start_epoch=start_epoch, load_epoch=load_epoch)
+            except ValueError as exc:
+                assert f"start_epoch {start_epoch} with load_epoch {load_epoch}" in str(exc)
+            else:
+                raise Exception(f"start_epoch {start_epoch} with load_epoch {load_epoch}: did not get ValueError")
+        # new training
+        assert _select(start_epoch=1) == (None, None, 1)
+        # new training with model import
+        assert _select(start_epoch=1, load_epoch=44) == (None, f"{model}.044", 1)
+        assert _select(start_epoch=1, load=f"{model}.044") == (None, f"{model}.044", 1)
+
+
+def test_torch_engine_train_start_epoch_with_load_epoch():
+    # State right before the first update, with real model and optimizer checkpoints of epoch 2.
+    class _StopBeforeFirstUpdate(Exception):
+        pass
+
+    def _state_before_first_update(tmp_dir: str, **opts) -> Dict[str, Any]:
+        state = {}
+
+        def _train_step(**_kwargs):
+            optimizer = engine.get_pt_optimizer()
+            state.update(
+                epoch=engine.epoch,
+                run_ctx_epoch=rf.get_run_ctx().epoch,
+                global_train_step=engine.global_train_step,
+                learning_rate=optimizer.param_groups[0]["lr"],
+                dataset_epoch=dataset.epoch,
+                model=copy.deepcopy(engine.get_pt_model().state_dict()),
+                optimizer=copy.deepcopy(optimizer.state_dict()["state"]),
+            )
+            raise _StopBeforeFirstUpdate()
+
+        config = _start_epoch_train_config(tmp_dir, num_epochs=3, train_step=_train_step, **opts)
+        dataset = init_dataset({"class": "Task12AXDataset", "num_seqs": 20, "name": "train", "fixed_random_seed": 1})
+        with global_config_ctx(config):
+            engine = Engine(config=config)
+            engine.init_train_from_config(train_data=dataset)
+            try:
+                engine.train()
+            except _StopBeforeFirstUpdate:
+                pass
+            else:
+                raise Exception("train step was not called")
+        return state
+
+    def _assert_tensors_equal(a: Dict[str, Any], b: Dict[str, Any]):
+        assert a.keys() == b.keys()
+        for key in a:
+            assert torch.equal(torch.as_tensor(a[key]), torch.as_tensor(b[key])), key
+
+    with tempfile.TemporaryDirectory(prefix="returnn_test_start_epoch") as tmp_dir:
+        config = _start_epoch_train_config(tmp_dir, num_epochs=2)
+        dataset = init_dataset({"class": "Task12AXDataset", "num_seqs": 20, "name": "train", "fixed_random_seed": 1})
+        with global_config_ctx(config):
+            engine = Engine(config=config)
+            engine.init_train_from_config(train_data=dataset)
+            engine.train()
+        model_ckpt = torch.load(f"{tmp_dir}/model.002.pt", map_location="cpu")
+        opt_ckpt = torch.load(f"{tmp_dir}/model.002.opt.pt", map_location="cpu")["optimizer"]["state"]
+        assert model_ckpt["step"] == engine.global_train_step > 0 and opt_ckpt
+
+        for opts in [dict(start_epoch=3, load_epoch=2), dict(start_epoch=3), dict(load_epoch=2), dict()]:
+            state = _state_before_first_update(tmp_dir, **opts)
+            assert state["epoch"] == state["run_ctx_epoch"] == state["dataset_epoch"] == 3, (opts, state)
+            assert state["global_train_step"] == model_ckpt["step"], (opts, state)
+            assert state["learning_rate"] == 0.03, (opts, state)
+            _assert_tensors_equal(state["model"], model_ckpt["model"])
+            assert state["optimizer"].keys() == opt_ckpt.keys()
+            for param_idx, param_state in state["optimizer"].items():
+                _assert_tensors_equal(param_state, opt_ckpt[param_idx])
+
+        # New training with model import: only the parameters are taken from the checkpoint.
+        state = _state_before_first_update(tmp_dir, start_epoch=1, load_epoch=2)
+        assert state["epoch"] == state["run_ctx_epoch"] == state["dataset_epoch"] == 1, state
+        assert state["learning_rate"] == 0.01, state
+        _assert_tensors_equal(state["model"], model_ckpt["model"])
+        assert not state["optimizer"], state
+
+
+def _start_epoch_train_config(tmp_dir: str, **kwargs) -> Config:
+    opts = dict(
+        task="train",
+        device="cpu",
+        extern_data={"data": {"dim": 9}, "classes": {"dim": 2, "sparse": True}},
+        get_model=TrainTestModel,
+        train_step=TrainTestModel.train_step,
+        batch_size=500,
+        max_seqs=4,
+        optimizer={"class": "adam"},
+        learning_rates=[0.01, 0.02, 0.03],
+        model=f"{tmp_dir}/model",
+        learning_rate_file=f"{tmp_dir}/learning_rates",
+        torch_dataloader_opts=dict(num_workers=0),  # the engine then uses our dataset instance
+    )
+    opts.update(kwargs)
+    return Config(opts)
 
 
 def test_min_seq_len():
@@ -1411,6 +1535,113 @@ def test_torch_engine_distributed_cpu():
     assert param_sums[0] == param_sums[1], param_sums
 
 
+def _torch_distributed_lr_worker(rank: int, world_size: int, port: int, tmp_dir: str, opts: Dict[str, Any]):
+    device = opts.get("device", "cpu")
+    os.environ.update(
+        MASTER_ADDR="127.0.0.1",
+        MASTER_PORT=str(port),
+        RANK=str(rank),
+        WORLD_SIZE=str(world_size),
+        # on CUDA: both ranks on one GPU, gloo also for the CUDA tensors
+        LOCAL_RANK=str(rank) if device == "cpu" else "0",
+        LOCAL_WORLD_SIZE=str(world_size) if device == "cpu" else "1",
+    )
+    applied_lrs = {}  # global train step -> LR of the update in that step
+
+    def _dyn_lr(*, global_train_step: int, epoch_continuous: float, learning_rate: float, **_kwargs) -> float:
+        lr = learning_rate * (1.0 + epoch_continuous)
+        applied_lrs[global_train_step] = lr  # a repeated call for the same step overwrites
+        return lr
+
+    def _train(num_epochs: int) -> Engine:
+        config = Config(
+            dict(
+                task="train",
+                device=device,
+                extern_data={"data": {"dim": 9}, "classes": {"dim": 2, "sparse": True}},
+                get_model=TrainTestModel,
+                train_step=TrainTestModel.train_step,
+                batch_size=300,
+                optimizer={"class": "adamw", "capturable": device != "cpu"},
+                learning_rate=0.01,
+                dynamic_learning_rate=_dyn_lr,
+                accum_grad_multiple_step=opts["accum_grad_multiple_step"],
+                num_epochs=num_epochs,
+                model=f"{tmp_dir}/model",
+                learning_rate_file=f"{tmp_dir}/learning_rates",
+                eval_datasets={"dev": {"class": "Task12AXDataset", "num_seqs": 10}},
+                torch_dataloader_opts={"num_workers": 0},
+                torch_distributed={
+                    "backend": "gloo",
+                    "reduce_type": opts["reduce_type"],
+                    "sync_complete_frac": opts["sync_complete_frac"],
+                },
+                **({"torch_optimizer_step": {}} if device != "cpu" else {}),
+            )
+        )
+        with global_config_ctx(config):
+            # no fixed seed: each rank its own seq order and seq lens, thus its own complete_frac per step
+            dataset = init_dataset({"class": "Task12AXDataset", "num_seqs": 50, "name": "train"})
+            dataset.init_seq_order(epoch=1)
+            engine = Engine(config=config)
+            engine.init_train_from_config(train_data=dataset)
+            engine.train()
+        return engine
+
+    _train(num_epochs=2)
+    torch.distributed.barrier()  # rank 0 wrote the checkpoint
+    engine = _train(num_epochs=3)  # continues from the epoch 2 checkpoint
+    assert engine.epoch == 3
+    params = [param.detach().cpu() for param in engine._pt_model.parameters()]
+    torch.save({"lrs": applied_lrs, "params": params}, f"{tmp_dir}/rank{rank}.pt")
+    torch.distributed.destroy_process_group()
+
+
+def _run_torch_distributed_lr(**opts) -> List[Dict[str, Any]]:
+    import socket
+    import torch.multiprocessing
+
+    world_size = 2
+    with socket.socket() as s:
+        s.bind(("127.0.0.1", 0))
+        port = s.getsockname()[1]
+    with tempfile.TemporaryDirectory(prefix="returnn_test_torch_distributed_lr") as tmp_dir:
+        torch.multiprocessing.spawn(
+            _torch_distributed_lr_worker, args=(world_size, port, tmp_dir, opts), nprocs=world_size
+        )
+        return [torch.load(f"{tmp_dir}/rank{rank}.pt") for rank in range(world_size)]
+
+
+def _check_torch_distributed_lr(**opts):
+    for sync_complete_frac in [False, True]:
+        res = _run_torch_distributed_lr(sync_complete_frac=sync_complete_frac, **opts)
+        lrs0, lrs1 = res[0]["lrs"], res[1]["lrs"]
+        assert sorted(lrs0) == sorted(lrs1), (opts, lrs0, lrs1)
+        params_equal = all(torch.equal(p0, p1) for p0, p1 in zip(res[0]["params"], res[1]["params"]))
+        print(f"{opts}, sync_complete_frac {sync_complete_frac}: LRs equal {lrs0 == lrs1}, params equal {params_equal}")
+        if sync_complete_frac:
+            assert lrs0 == lrs1, (opts, lrs0, lrs1)
+            assert params_equal, opts
+        else:  # rank-local progress: the setting really triggers the divergence
+            assert lrs0 != lrs1, opts
+            assert not params_equal, opts
+
+
+def test_torch_engine_distributed_cpu_sync_complete_frac_ddp():
+    _check_torch_distributed_lr(reduce_type="grad", accum_grad_multiple_step=1)
+
+
+def test_torch_engine_distributed_cpu_sync_complete_frac_grad_explicit_accum():
+    _check_torch_distributed_lr(reduce_type="grad_explicit", accum_grad_multiple_step=2)
+
+
+def test_torch_engine_distributed_sync_complete_frac_optimizer_step():
+    """captured optimizer step (torch_optimizer_step), its LR is a device tensor updated in place"""
+    if not torch.cuda.is_available():
+        raise unittest.SkipTest("CUDA not available")
+    _check_torch_distributed_lr(device="cuda", reduce_type="grad_explicit", accum_grad_multiple_step=1)
+
+
 def test_dynamic_learning_rate():
     num_epochs = 3
     last_global_train_step: Optional[float] = None
@@ -1649,6 +1880,57 @@ def _torch_engine_sub_proc_cleanup_test_main(conn):
 
     finally:
         conn.close()
+
+
+def _check_torch_engine_finalize_data_loaders(*, pin_memory: bool = False):
+    """
+    :func:`Engine.finalize` stops the DataLoader workers of the train and dev data with unread batches,
+    and the pinning threads, also when repeated (the engine stays alive until the interpreter exits)
+    """
+    import threading
+
+    config = Config(
+        dict(
+            task="train",
+            device="gpu" if pin_memory else "cpu",
+            extern_data={"data": {"dim": 9}, "classes": {"dim": 2, "sparse": True}},
+            get_model=TrainTestModel,
+            train_step=TrainTestModel.train_step,
+            batch_size=100,
+            max_seqs=2,
+            optimizer={"class": "adam"},
+            torch_dataloader_opts={"num_workers": 1, "pin_memory": pin_memory},
+        )
+    )
+    datasets = {
+        name: init_dataset({"class": "Task12AXDataset", "num_seqs": 10, "name": name}) for name in ["train", "dev"]
+    }
+    for dataset in datasets.values():
+        dataset.init_seq_order(epoch=1)
+    with global_config_ctx(config):
+        engine = Engine(config=config)
+        engine.init_train_from_config(train_data=datasets["train"], dev_data=datasets["dev"])
+        workers = []
+        for loader in [engine._train_dataloader, engine._eval_dataloaders["dev"]]:
+            next(iter(loader))
+            workers += (loader.data_loader if pin_memory else loader)._iterator._workers
+        engine.finalize()
+        engine.finalize()
+    for worker in workers:
+        # no atexit handler left which would signal it at interpreter exit
+        assert not worker.is_alive() and worker.exitcode == 0 and worker._at_exit_cleanup_handler is None
+    assert not [thread for thread in threading.enumerate() if thread.name == "RETURNN pin memory"]
+
+
+def test_torch_engine_finalize_data_loaders():
+    _check_torch_engine_finalize_data_loaders()
+
+
+def test_torch_engine_finalize_data_loaders_pin_memory():
+    """with :class:`returnn.torch.data.pin_memory.PinMemoryDataLoader`"""
+    if not torch.cuda.is_available():
+        raise unittest.SkipTest("CUDA not available")
+    _check_torch_engine_finalize_data_loaders(pin_memory=True)
 
 
 def _build_cuda_graph_train_config_and_dataset(
@@ -2100,10 +2382,14 @@ class _MuonLike(torch.optim.Optimizer):
     Written like the i6 Muon (i6_experiments exp2024_04_23_baselines optim_ext/muon.py), small:
     Muon (bf16 Newton-Schulz) on 2D params, Adam on the rest, with a Python-float lr
     (``alpha=`` / ``value=`` arguments) and a Python-int step counter.
+    ``ns_dtype=torch.float64`` gives the reference.
     """
 
-    def __init__(self, params, lr=2e-2, momentum=0.95, weight_decay=0.01, betas=(0.9, 0.95), eps=1e-8):
+    def __init__(
+        self, params, lr=2e-2, momentum=0.95, weight_decay=0.01, betas=(0.9, 0.95), eps=1e-8, ns_dtype=torch.bfloat16
+    ):
         super().__init__(params, dict(lr=lr, momentum=momentum, weight_decay=weight_decay, betas=betas, eps=eps))
+        self.ns_dtype = ns_dtype
 
     @torch.no_grad()
     def step(self, closure=None):
@@ -2121,7 +2407,7 @@ class _MuonLike(torch.optim.Optimizer):
                         state["momentum_buffer"] = torch.zeros_like(p)
                     buf = state["momentum_buffer"]
                     buf.mul_(group["momentum"]).add_(p.grad)
-                    x = p.grad.add(buf, alpha=group["momentum"]).bfloat16()
+                    x = p.grad.add(buf, alpha=group["momentum"]).to(self.ns_dtype)
                     x = x / (x.norm() + 1e-7)
                     for _ in range(3):
                         a = x @ x.T
@@ -2151,7 +2437,9 @@ def _adamw(params):
     return torch.optim.AdamW(params, lr=1e-2, weight_decay=0.01, capturable=params[0].is_cuda)
 
 
-def _run_optimizer_step(opt_factory, *, opts=None, num_steps=8, replace_grads_at=None, reload_at=None):
+def _run_optimizer_step(
+    opt_factory, *, opts=None, num_steps=8, replace_grads_at=None, reload_at=None, dtype=torch.float32
+):
     """
     :return: params after num_steps updates with a per-step LR schedule and random grads,
         via the plain ``optimizer.step()`` if opts is None, otherwise via :class:`OptimizerStep`;
@@ -2162,7 +2450,7 @@ def _run_optimizer_step(opt_factory, *, opts=None, num_steps=8, replace_grads_at
     device = _optimizer_step_device()
     gen = torch.Generator().manual_seed(0)
     shapes = [(32, 16), (16,), (64, 32), (32,), (8, 1, 3)]
-    params = [torch.nn.Parameter(torch.randn(s, generator=gen).to(device)) for s in shapes]
+    params = [torch.nn.Parameter(torch.randn(s, generator=gen).to(device, dtype)) for s in shapes]
     opt = opt_factory(params)
     opt_step = OptimizerStep(optimizer=opt, opts=opts) if opts is not None else None
     gen = torch.Generator(device=device).manual_seed(1)
@@ -2196,30 +2484,43 @@ def _run_optimizer_step(opt_factory, *, opts=None, num_steps=8, replace_grads_at
     return params, opt, opt_step
 
 
-def _check_optimizer_step_same_as_eager(opt_factory, opts, **kwargs):
-    """params and optimizer state (incl. the checkpoint scalars) as the plain eager optimizer.step()"""
-    ref_params, ref_opt, _ = _run_optimizer_step(opt_factory, **kwargs)
+def _check_optimizer_step(opt_factory, opts, *, ref_opt_factory=None, **kwargs):
+    """
+    Params and optimizer state (incl. the checkpoint scalars) at least as accurate as the plain eager optimizer.step(),
+    both measured against a float64 run (with ``ref_opt_factory``, default ``opt_factory``).
+    Not bitwise eager: Inductor keeps low-precision intermediates in float32.
+    """
+    ref_params, ref_opt, _ = _run_optimizer_step(ref_opt_factory or opt_factory, dtype=torch.float64, **kwargs)
+    eager_params, eager_opt, _ = _run_optimizer_step(opt_factory, **kwargs)
     params, opt, opt_step = _run_optimizer_step(opt_factory, opts=opts, **kwargs)
-    # torch < 2.12 emulates the eager bf16 rounding only partially (Muon-like: up to 4e-5 abs diff on 2.7)
-    tol = dict(rtol=1e-5, atol=1e-4 if torch.__version__ < (2, 12) else 1e-6)
-    for p_ref, p in zip(ref_params, params):
-        torch.testing.assert_close(p, p_ref, **tol)
+
+    def _check(name: str, v: torch.Tensor, v_eager: torch.Tensor, v_ref: torch.Tensor):
+        err, err_eager = (v.double() - v_ref).norm().item(), (v_eager.double() - v_ref).norm().item()
+        assert err <= 1.1 * err_eager + 1e-6 * v_ref.norm().item(), f"{name}: error {err} vs eager {err_eager}"
+
+    for i, (p_ref, p_eager, p) in enumerate(zip(ref_params, eager_params, params)):
+        _check(f"param {i}", p, p_eager, p_ref)
     ref_state = ref_opt.state_dict()["state"]
+    eager_state = eager_opt.state_dict()["state"]
     state = opt_step.state_dict_to_host_scalars(opt.state_dict())["state"]
-    assert set(state) == set(ref_state)
-    for i, s_ref in ref_state.items():
-        assert set(state[i]) == set(s_ref)
-        for k, v_ref in s_ref.items():
+    assert set(state) == set(eager_state)
+    for i, s_eager in eager_state.items():
+        assert set(state[i]) == set(s_eager)
+        for k, v_eager in s_eager.items():
             v = state[i][k]
-            if isinstance(v_ref, torch.Tensor):
-                torch.testing.assert_close(v, v_ref, **tol)
+            if isinstance(v_eager, torch.Tensor):
+                _check(f"state {i} {k}", v, v_eager, ref_state[i][k])
             else:  # Python scalar, e.g. the step counter of _MuonLike
-                assert type(v) is type(v_ref) and v == v_ref, f"state {i} {k}: {v!r} vs {v_ref!r}"
+                assert type(v) is type(v_eager) and v == v_eager, f"state {i} {k}: {v!r} vs {v_eager!r}"
     return opt_step
 
 
+def _muon_like_float64(params):
+    return _MuonLike(params, ns_dtype=torch.float64)
+
+
 def test_torch_optimizer_step_eager():
-    opt_step = _check_optimizer_step_same_as_eager(_adamw, {"compile": False, "capture": False}, reload_at=5)
+    opt_step = _check_optimizer_step(_adamw, {"compile": False, "capture": False}, reload_at=5)
     assert opt_step._graph is None
 
 
@@ -2231,7 +2532,7 @@ def test_torch_optimizer_step_dynamic_state_keys():
     opts = {"dynamic_state_keys": ["step"]}
     if not torch.cuda.is_available():
         opts.update({"compile": False, "capture": False})
-    opt_step = _check_optimizer_step_same_as_eager(_MuonLike, opts, reload_at=5)
+    opt_step = _check_optimizer_step(_MuonLike, opts, ref_opt_factory=_muon_like_float64, reload_at=5)
     state_dict = opt_step.state_dict_to_host_scalars(opt_step._optimizer.state_dict())
     for state in state_dict["state"].values():
         if "step" in state:
@@ -2252,21 +2553,21 @@ def test_torch_optimizer_step_python_scalar_state_not_selected():
 def test_torch_optimizer_step_capture():
     if not torch.cuda.is_available():
         raise unittest.SkipTest("CUDA not available")
-    opt_step = _check_optimizer_step_same_as_eager(_adamw, {"compile": False})
+    opt_step = _check_optimizer_step(_adamw, {"compile": False})
     assert opt_step._graph is not None and opt_step._num_captures == 1
 
 
 def test_torch_optimizer_step_compile_capture():
     if not torch.cuda.is_available():
         raise unittest.SkipTest("CUDA not available")
-    opt_step = _check_optimizer_step_same_as_eager(_adamw, {})
+    opt_step = _check_optimizer_step(_adamw, {})
     assert opt_step._graph is not None and (opt_step._num_traces, opt_step._num_captures) == (1, 1)
 
 
 def test_torch_optimizer_step_compile_capture_muon_like():
     if not torch.cuda.is_available():
         raise unittest.SkipTest("CUDA not available")
-    opt_step = _check_optimizer_step_same_as_eager(_MuonLike, {"dynamic_state_keys": ["step"]})
+    opt_step = _check_optimizer_step(_MuonLike, {"dynamic_state_keys": ["step"]}, ref_opt_factory=_muon_like_float64)
     assert (opt_step._num_traces, opt_step._num_captures) == (1, 1)
 
 
@@ -2274,7 +2575,7 @@ def test_torch_optimizer_step_replaced_grads():
     """new grad buffers: recapture on the new addresses, no retrace"""
     if not torch.cuda.is_available():
         raise unittest.SkipTest("CUDA not available")
-    opt_step = _check_optimizer_step_same_as_eager(_adamw, {}, replace_grads_at=5)
+    opt_step = _check_optimizer_step(_adamw, {}, replace_grads_at=5)
     assert (opt_step._num_traces, opt_step._num_captures) == (1, 2)
 
 
@@ -2282,7 +2583,9 @@ def test_torch_optimizer_step_reload():
     """checkpoint round trip: new state tensors and lr, recapture, no retrace"""
     if not torch.cuda.is_available():
         raise unittest.SkipTest("CUDA not available")
-    opt_step = _check_optimizer_step_same_as_eager(_MuonLike, {"dynamic_state_keys": ["step"]}, reload_at=5)
+    opt_step = _check_optimizer_step(
+        _MuonLike, {"dynamic_state_keys": ["step"]}, ref_opt_factory=_muon_like_float64, reload_at=5
+    )
     assert (opt_step._num_traces, opt_step._num_captures) == (1, 2)
 
 

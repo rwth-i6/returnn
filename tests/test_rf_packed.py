@@ -741,6 +741,119 @@ def test_regap_gap_roundtrip_keeps_bound():
         _assert_equal_non_padded(back, x, batch_dim, time_dim)
 
 
+def _relayout_frames_cuda_graph_replay(*, compiled: bool, deterministic: bool):
+    from functorch.compile import aot_function
+    from returnn.torch.util.graph_capture import inductor_fw_compiler
+
+    rf.select_backend_torch()
+    n_out = 5
+    # repeated slots, the dump slot (== n_out), unwritten slots; the first one is captured
+    pos_seqs = [[0, 3, 3, n_out, 1, n_out, 0], [4] * 7, [n_out] * 7, [2, n_out, 0, 1, 4, 3, n_out]]
+    in_dim = Dim(len(pos_seqs[0]), name="in")
+    out_dim = Dim(n_out, name="out")
+
+    def relayout(values_raw_, pos_raw_):
+        values = Tensor("values", dims=[in_dim], dtype="float32", raw_tensor=values_raw_)
+        pos = Tensor("pos", dims=[in_dim], dtype="int64", raw_tensor=pos_raw_)
+        return packed._torch_relayout_frames(values, pos, packed_dim=in_dim, out_dim=out_dim).raw_tensor
+
+    deterministic_prev = torch.are_deterministic_algorithms_enabled()
+    warn_only_prev = torch.is_deterministic_algorithms_warn_only_enabled()
+    torch.use_deterministic_algorithms(deterministic)
+    try:
+        func = aot_function(relayout, fw_compiler=inductor_fw_compiler()) if compiled else relayout
+        # all ones: the output is exactly the validity mask
+        values_raw = torch.ones(in_dim.dimension, device="cuda")
+        pos_raw = torch.tensor(pos_seqs[0], device="cuda")
+        func(values_raw, pos_raw)  # warmup
+        graph = torch.cuda.CUDAGraph()
+        with torch.cuda.graph(graph):
+            out_raw = func(values_raw, pos_raw)
+        for pos_seq in pos_seqs:
+            pos_raw.copy_(torch.tensor(pos_seq, device="cuda"))
+            graph.replay()
+            mask = [slot in pos_seq for slot in range(n_out)]
+            assert out_raw.tolist() == [float(v) for v in mask], f"pos {pos_seq}: got {out_raw.tolist()}"
+    finally:
+        torch.use_deterministic_algorithms(deterministic_prev, warn_only=warn_only_prev)
+
+
+def test_relayout_frames_cuda_graph_replay():
+    # CUDA graph capture of the relayout, replayed with other positions (same storage).
+    # Eager, the validity mask via slot_valid[pos] = True copies a CPU scalar to the device, which fails the capture
+    # ("Cannot copy between CPU and CUDA tensors during CUDA graph capture unless the CPU tensor is pinned").
+    if not torch.cuda.is_available():
+        raise unittest.SkipTest("needs CUDA")
+    for deterministic in [False, True]:
+        _relayout_frames_cuda_graph_replay(compiled=False, deterministic=deterministic)
+
+
+def test_relayout_frames_cuda_graph_replay_compiled():
+    # Inductor-compiled as in the torch_cuda_graph train step.
+    # With deterministic algorithms, Inductor can keep the aten index_put_ of the validity mask
+    # (seen with torch 2.12), with the CPU scalar as its value, which fails the capture in the same way.
+    if not torch.cuda.is_available():
+        raise unittest.SkipTest("needs CUDA")
+    for deterministic in [False, True]:
+        _relayout_frames_cuda_graph_replay(compiled=True, deterministic=deterministic)
+
+
+def test_regap_grad_cuda_graph_replay_compiled_deterministic():
+    # A packed forward/backward step through the regap relayout,
+    # Inductor-compiled and CUDA graph captured with deterministic algorithms,
+    # replayed on other lens and content, against the eager step.
+    if not torch.cuda.is_available():
+        raise unittest.SkipTest("needs CUDA")
+    if torch.__version__ < (2, 12):
+        # torch 2.7: Inductor keeps an aten scatter_reduce_ here with deterministic algorithms, not capturable
+        raise unittest.SkipTest("verified with torch 2.12, another op fails the capture with torch 2.7")
+    from functorch.compile import aot_function
+    from returnn.torch.util.graph_capture import inductor_fw_compiler
+
+    rf.select_backend_torch()
+    n_batch, t_cap = 3, 8
+    feat_dim = Dim(4, name="feat")
+
+    def step(x_raw_, lens_raw_, w_raw_):
+        batch_dim = Dim(n_batch, name="batch")
+        time_dim = Dim(Tensor("time", dims=[batch_dim], dtype="int32", raw_tensor=lens_raw_), capacity=t_cap)
+        x = Tensor("x", dims=[batch_dim, time_dim, feat_dim], dtype="float32", raw_tensor=x_raw_)
+        w = Tensor("w", dims=[feat_dim], dtype="float32", raw_tensor=w_raw_)
+        with rf.set_static_traceable_ctx():
+            xp = packed.pack(x, gap=1, total_bound=n_batch * (t_cap + 1))
+            y = packed.regap(xp, 3) * w
+            loss = rf.reduce_sum(y * y, axis=list(y.dims))
+        grads = torch.autograd.grad(loss.raw_tensor, [x_raw_, w_raw_])
+        return tuple(t.detach() for t in [loss.raw_tensor, *grads])
+
+    gen = torch.Generator().manual_seed(17)
+    x_raw = torch.randn(n_batch, t_cap, feat_dim.dimension, generator=gen).to("cuda").requires_grad_()
+    lens_raw = torch.tensor([8, 5, 3], dtype=torch.int32, device="cuda")
+    w_raw = torch.randn(feat_dim.dimension, generator=gen).to("cuda").requires_grad_()
+
+    deterministic_prev = torch.are_deterministic_algorithms_enabled()
+    warn_only_prev = torch.is_deterministic_algorithms_warn_only_enabled()
+    torch.use_deterministic_algorithms(True)
+    try:
+        compiled = aot_function(step, fw_compiler=inductor_fw_compiler())
+        compiled(x_raw, lens_raw, w_raw)  # warmup
+        graph = torch.cuda.CUDAGraph()
+        with torch.cuda.graph(graph):
+            actual = compiled(x_raw, lens_raw, w_raw)
+        for seq_lens in [[8, 5, 3], [2, 8, 6], [1, 1, 8]]:
+            with torch.no_grad():
+                x_raw.copy_(torch.randn(x_raw.shape, generator=gen))
+            lens_raw.copy_(torch.tensor(seq_lens, dtype=torch.int32))
+            graph.replay()
+            expected = step(x_raw, lens_raw, w_raw)
+            for name, e, a in zip(["loss", "grad x", "grad w"], expected, actual):
+                numpy.testing.assert_allclose(
+                    a.cpu().numpy(), e.cpu().numpy(), rtol=1e-5, atol=1e-6, err_msg=f"lens {seq_lens}, {name}"
+                )
+    finally:
+        torch.use_deterministic_algorithms(deterministic_prev, warn_only=warn_only_prev)
+
+
 def test_pack_static_traceable_requires_total_bound():
     # Without a declared bound there is nothing sound to derive a static buffer from,
     # so pack must say so instead of silently inventing the capacity product.
@@ -898,6 +1011,52 @@ def test_batch_norm_packed_gapped_train():
         numpy.testing.assert_allclose(
             p_dense.raw_tensor.detach().numpy(), p_gapped.raw_tensor.detach().numpy(), rtol=1e-5, atol=1e-6
         )
+
+
+def test_batch_norm_packed_gapped_half_stats():
+    """the batch norm statistics of a half precision packed input sum in float32, like torch's reference"""
+    rf.select_backend_torch()
+    batch_dim = Dim(2, name="batch")
+    lens = torch.tensor([40960, 40960], dtype=torch.int32)
+    time_dim = Dim(Tensor("time", dims=[batch_dim], dtype="int32", raw_tensor=lens))
+    feat_dim = Dim(2, name="feat")
+    raw = torch.randn(2, 40960, 2, generator=torch.Generator().manual_seed(5)).to(torch.float16)
+    x = Tensor("x", dims=[batch_dim, time_dim, feat_dim], dtype="float16", raw_tensor=raw)
+    with rf.set_default_device_ctx("cpu"):
+        bn = rf.BatchNorm(feat_dim, use_mask=False)
+        with rf.get_run_ctx().train_flag_ctx(True):
+            out = bn(packed.pack(x, gap=2))
+    assert bool(torch.isfinite(bn.running_mean.raw_tensor).all()), bn.running_mean.raw_tensor
+    assert bool(torch.isfinite(bn.running_variance.raw_tensor).all()), bn.running_variance.raw_tensor
+    ref = torch.nn.functional.batch_norm(
+        raw.float().reshape(-1, 2), None, None, bn.gamma.raw_tensor, bn.beta.raw_tensor, training=True, eps=bn.eps
+    )
+    expected = Tensor("ref", dims=x.dims, dtype="float32", raw_tensor=ref.reshape(2, 40960, 2))
+    _assert_equal_non_padded(out, expected, batch_dim, time_dim, rtol=1e-2, atol=1e-2)
+    assert out.dtype == "float16"
+
+
+def test_batch_norm_packed_gapped_float64():
+    """float64 input keeps float64 statistics, like torch's reference"""
+    rf.select_backend_torch()
+    batch_dim = Dim(2, name="batch")
+    lens = torch.tensor([300, 200], dtype=torch.int32)
+    time_dim = Dim(Tensor("time", dims=[batch_dim], dtype="int32", raw_tensor=lens))
+    feat_dim = Dim(3, name="feat")
+    # a small spread on a large offset, not resolvable in float32
+    raw = torch.randn(2, 300, 3, generator=torch.Generator().manual_seed(1), dtype=torch.float64) * 1e-3 + 1e4
+    x = Tensor("x", dims=[batch_dim, time_dim, feat_dim], dtype="float64", raw_tensor=raw)
+    with rf.set_default_device_ctx("cpu"):
+        bn = rf.BatchNorm(feat_dim, use_mask=False, affine=False)
+        with rf.get_run_ctx().train_flag_ctx(True):
+            out = bn(packed.pack(x, gap=2))
+    ref = torch.zeros_like(raw)
+    valid = torch.cat([raw[0, :300], raw[1, :200]])
+    ref_valid = torch.nn.functional.batch_norm(valid, None, None, training=True, eps=bn.eps)
+    ref[0, :300], ref[1, :200] = ref_valid[:300], ref_valid[300:]
+    expected = Tensor("ref", dims=x.dims, dtype="float64", raw_tensor=ref)
+    _assert_equal_non_padded(out, expected, batch_dim, time_dim, rtol=1e-6, atol=1e-6)
+    assert out.dtype == "float64"
 
 
 def test_conformer_mixed_parity_lens():
@@ -2024,6 +2183,16 @@ def test_shift_and_pad_with_a_per_seq_pad_value():
     _assert_equal_non_padded(out_p, ref, batch_dim, padded_time)
 
 
+def test_regap_of_entirely_empty_sequences():
+    """a packing whose sequences are all empty can still be re-laid out"""
+    rf.select_backend_torch()
+    x, batch_dim, time_dim, feat_dim = _make_input(seq_lens=(0, 0), feat=1)
+    out = packed.regap(packed.pack(x), 2)
+    assert packed.is_packed(out) and out.raw_tensor.gap == 2
+    assert torch.equal(out.raw_tensor.inner.raw_tensor, torch.zeros(4, 1))  # 2 seqs, gap 2 each
+    assert tuple(packed.unpack(out).copy_transpose([batch_dim, time_dim, feat_dim]).raw_tensor.shape) == (2, 0, 1)
+
+
 def test_pack_dense_total_bound_static_buffer():
     """a dense pack with total_bound allocates the bound-sized static buffer, content first"""
     rf.select_backend_torch()
@@ -2117,6 +2286,35 @@ def test_batch_norm_packed_dense_bound_train():
         )
 
 
+def test_batch_norm_packed_non_finite_junk_rows():
+    """non-finite values in the junk rows (gap frames, bound tail) reach neither the valid outputs nor any gradient"""
+    rf.select_backend_torch()
+    x, batch_dim, time_dim, feat_dim = _make_input(seq_lens=(5, 3), feat=4, seed=8)
+    valid = (torch.arange(5)[None, :] < torch.tensor([5, 3])[:, None]).to(torch.float32)[..., None]
+    weights = torch.randn(x.raw_tensor.shape, generator=torch.Generator().manual_seed(1)) * valid
+
+    def _run(layout: str, junk: float):
+        raw = x.raw_tensor.detach().clone().requires_grad_()
+        xr = Tensor("x", dims=x.dims, dtype="float32", raw_tensor=raw)
+        xp = packed.pack(xr, gap=2) if layout == "gapped" else packed.regap(packed.pack(xr), 0, total_bound=16)
+        xp = xp.raw_tensor.rewrap(rf.where(packed._frame_mask(xp.raw_tensor), xp.raw_tensor.inner, junk))
+        with rf.set_default_device_ctx("cpu"):
+            bn = rf.BatchNorm(feat_dim, use_mask=False)
+            with rf.get_run_ctx().train_flag_ctx(True):
+                out = packed.unpack(bn(xp)).copy_compatible_to_dims(x.dims).raw_tensor
+        (out * weights).sum().backward()
+        return {"out": (out * valid).detach(), "x grad": raw.grad, "gamma grad": bn.gamma.raw_tensor.grad}
+
+    for layout in ("gapped", "bound"):
+        ref = _run(layout, 0.0)
+        for junk in (float("nan"), float("inf")):
+            res = _run(layout, junk)
+            for key in ref:
+                numpy.testing.assert_allclose(
+                    res[key].numpy(), ref[key].numpy(), rtol=1e-6, atol=1e-6, err_msg=f"{layout}, {junk}, {key}"
+                )
+
+
 def test_softmax_over_a_single_packed_axis_with_a_bound():
     """a bound-sized packing of one axis normalizes over its content rows only"""
     rf.select_backend_torch()
@@ -2151,6 +2349,93 @@ def test_cu_seqlens_with_host_lens_and_a_device_total():
         assert cu.raw_tensor.device.type == device and tuple(cu.raw_tensor.shape) == (3,), cu.raw_tensor
         if device == "cuda":
             assert cu.raw_tensor.tolist() == [0, 5, 8]
+
+
+def test_batch_norm_packed_gapped_with_a_static_axis():
+    """the masked batch norm statistics also cover a static axis next to the packed one"""
+    rf.select_backend_torch()
+    _, batch_dim, time_dim, feat_dim = _make_input(seq_lens=(3, 2), feat=2, seed=9)
+    xk = Tensor("xk", dims=[batch_dim, time_dim, Dim(2, name="k"), feat_dim], dtype="float32")
+    xk.raw_tensor = torch.arange(24, dtype=torch.float32).reshape(2, 3, 2, 2)
+    # gapped, gapped bound, dense bound (unused tail only)
+    for gap, total_bound in [(2, None), (2, 12), (0, 8)]:
+        with rf.set_default_device_ctx("cpu"):
+            rf.set_random_seed(3)
+            bn_dense = rf.BatchNorm(feat_dim, use_mask=False)
+            bn_gapped = rf.BatchNorm(feat_dim, use_mask=False)
+            with rf.get_run_ctx().train_flag_ctx(True):
+                out_dense = bn_dense(packed.pack(xk))
+                out_gapped = bn_gapped(packed.pack(xk, gap=gap, total_bound=total_bound))
+        assert packed.is_packed(out_gapped)
+        _assert_equal_non_padded(out_gapped, packed.unpack(out_dense), batch_dim, time_dim)
+        for p_dense, p_gapped in [
+            (bn_dense.running_mean, bn_gapped.running_mean),
+            (bn_dense.running_variance, bn_gapped.running_variance),
+        ]:
+            numpy.testing.assert_allclose(
+                p_dense.raw_tensor.detach().numpy(), p_gapped.raw_tensor.detach().numpy(), rtol=1e-5, atol=1e-6
+            )
+
+
+def test_batch_norm_packed_gapped_unpacked_dim_of_the_seq_lens():
+    """a static dim the seq lens depend on, left unpacked, is no extra stat axis: the masked path is not taken"""
+    rf.select_backend_torch()
+    x, batch_dim, time_dim, feat_dim = _make_input(seq_lens=(3, 2), feat=2)
+    for gap, total_bound in [(2, None), (2, 12), (0, 8)]:
+        xp = packed.pack(x, dims=[time_dim], gap=gap, total_bound=total_bound)
+        assert batch_dim in xp.raw_tensor.inner.dims
+        assert packed._batch_norm_gapped(xp, {"in_dim": feat_dim}) is None, (gap, total_bound)
+
+
+def test_num_elements_of_shape_source():
+    """
+    with source, the count covers what a reduction of it covers:
+    packed storage holds no padding on its packed dims, also with use_mask=False, padded storage does
+    """
+    rf.select_backend_torch()
+    x, batch_dim, time_dim, feat_dim = _make_input(seq_lens=(5, 3))
+
+    def _values(n):
+        return n.copy_compatible_to_dims_raw([batch_dim]).tolist() if batch_dim in n.dims else int(n.raw_tensor)
+
+    for use_mask in (True, False):
+        n = rf.num_elements_of_shape([batch_dim, time_dim, feat_dim], use_mask=use_mask, source=x)
+        assert _values(n) == (8 if use_mask else 10) * feat_dim.dimension, use_mask
+        for pack_opts in ({}, {"gap": 2}, {"gap": 2, "total_bound": 14}):
+            xp = packed.pack(x, dims=[batch_dim, time_dim], **pack_opts)
+            n = rf.num_elements_of_shape([batch_dim, time_dim, feat_dim], use_mask=use_mask, source=xp)
+            assert _values(n) == 8 * feat_dim.dimension, (pack_opts, use_mask)
+            n = rf.num_elements_of_shape(time_dim, use_mask=use_mask, source=xp)
+            assert _values(n) == [5, 3], (pack_opts, use_mask)
+
+
+def test_reduce_logmeanexp_packed_no_mask():
+    """packed storage has no padding, so with use_mask=False the mean is over the sequence frames, as when masked"""
+    rf.select_backend_torch()
+    x, batch_dim, time_dim, feat_dim = _make_input(seq_lens=(5, 3))
+    want = rf.reduce_logmeanexp(x, axis=[batch_dim, time_dim], use_mask=True)
+    for pack_opts in ({}, {"gap": 2}, {"gap": 2, "total_bound": 14}):
+        xp = packed.pack(x, dims=[batch_dim, time_dim], **pack_opts)
+        got = rf.reduce_logmeanexp(xp, axis=[batch_dim, time_dim], use_mask=False)
+        numpy.testing.assert_allclose(
+            got.copy_compatible_to_dims_raw([feat_dim]).numpy(),
+            want.copy_compatible_to_dims_raw([feat_dim]).numpy(),
+            rtol=1e-5,
+            err_msg=str(pack_opts),
+        )
+    # as traced: static traceable, capacity-sized time dim, bound-sized buffer
+    lens = Tensor("lens", dims=[batch_dim], dtype="int32", raw_tensor=torch.tensor([5, 3], dtype=torch.int32))
+    cap_time_dim = Dim(lens, name="time", capacity=5)
+    x_cap = Tensor("x", dims=[batch_dim, cap_time_dim, feat_dim], dtype="float32", raw_tensor=x.raw_tensor)
+    with rf.set_static_traceable_ctx():
+        xp = packed.pack(x_cap, dims=[batch_dim, cap_time_dim], total_bound=10)
+        got = rf.reduce_logmeanexp(xp, axis=[batch_dim, cap_time_dim], use_mask=False)
+    numpy.testing.assert_allclose(
+        got.copy_compatible_to_dims_raw([feat_dim]).numpy(),
+        want.copy_compatible_to_dims_raw([feat_dim]).numpy(),
+        rtol=1e-5,
+        err_msg="static traceable",
+    )
 
 
 if __name__ == "__main__":

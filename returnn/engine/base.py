@@ -174,8 +174,18 @@ class EngineBase:
         # In all other cases, we use the model specified by 'load'.
         if load_model_epoch_filename and (config.value("task", "train") != "train" or start_epoch is not None):
             if config.value("task", "train") == "train" and start_epoch is not None:
-                # Ignore the epoch. To keep it consistent with the case below.
-                epoch = None
+                if start_epoch > 1 and not config.value("load", ""):
+                    # load_epoch selects a checkpoint of this training, so this continues it.
+                    if load_epoch != start_epoch - 1:
+                        raise ValueError(
+                            f"start_epoch {start_epoch} with load_epoch {load_epoch} is inconsistent:"
+                            f" continuing the training at start_epoch loads epoch {start_epoch - 1}."
+                            " To import a model for a new training, use 'load' or 'import_model_train_epoch1'."
+                        )
+                    epoch = load_epoch
+                else:
+                    # Model import for a new training: ignore the epoch of the model.
+                    epoch = None
             else:
                 epoch = load_epoch
             epoch_model = (epoch, load_model_epoch_filename)
