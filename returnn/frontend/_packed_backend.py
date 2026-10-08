@@ -4669,9 +4669,11 @@ class PackedBackend(Backend[PackedRawTensor]):
             targets_raw = rf.copy_to_device(targets_, device).copy_compatible_to_dims_raw(
                 [batch_dim, targets_spatial_dim]
             )
-            tgt_lens = rf.copy_to_device(targets_spatial_dim.dyn_size_ext, device).copy_compatible_to_dims_raw(
-                [batch_dim]
-            )
+            tgt_lens = rf.copy_to_device(targets_spatial_dim.dyn_size_ext, device)
+            if batch_dim not in tgt_lens.dims:
+                # a length shared by all sequences comes without the batch dim, the op reads one per sequence
+                tgt_lens = rf.expand_dim(tgt_lens, batch_dim)
+            tgt_lens = tgt_lens.copy_compatible_to_dims_raw([batch_dim])
             # Packed targets get the content-sized (packed) FSA edge layout, padded ones the
             # rectangular batch x capacity layout. Both are correct; the packed one is just
             # narrower. This is NOT a fallback (no unpack/re-layout happens), so it must not go

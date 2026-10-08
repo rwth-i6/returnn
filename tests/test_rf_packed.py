@@ -1432,16 +1432,16 @@ def test_ctc_loss_packed_native():
     targets.raw_tensor = torch.randint(0, 5, (3, 4), dtype=torch.int32, generator=torch.Generator().manual_seed(3))
     logits_raw = torch.randn(3, 9, 6, generator=torch.Generator().manual_seed(12))
 
-    def _loss(raw_leaf, pack_gap=None):
+    def _loss(raw_leaf, pack_gap=None, targets_=targets, targets_spatial_dim=tgt_time):
         logits = Tensor("logits", dims=[batch_dim, time_dim, vocab_dim], dtype="float32", feature_dim_axis=2)
         logits.raw_tensor = raw_leaf
         if pack_gap is not None:
             logits = packed.pack(logits, gap=pack_gap)
         return rf.ctc_loss(
             logits=logits,
-            targets=targets,
+            targets=targets_,
             input_spatial_dim=time_dim,
-            targets_spatial_dim=tgt_time,
+            targets_spatial_dim=targets_spatial_dim,
             blank_index=blank_index,
         )
 
@@ -1480,6 +1480,17 @@ def test_ctc_loss_packed_native():
     loss_g = _loss(logits_raw.clone(), pack_gap=3)
     numpy.testing.assert_allclose(
         loss_g.raw_tensor.detach().numpy(), loss_ref.raw_tensor.detach().numpy(), rtol=1e-4, atol=1e-5
+    )
+
+    # a target length shared by all sequences has no batch dim, it holds for every sequence all the same
+    tgt_shared = Dim(Tensor("tgt_shared", dims=[], dtype="int32", raw_tensor=torch.tensor(2, dtype=torch.int32)))
+    targets_shared = Tensor("targets", dims=[batch_dim, tgt_shared], dtype="int32", sparse_dim=vocab_dim)
+    targets_shared.raw_tensor = targets.raw_tensor[:, :2]
+    shared = dict(targets_=targets_shared, targets_spatial_dim=tgt_shared)
+    loss_ref = _loss(logits_raw.clone(), **shared)
+    loss_s = _loss(logits_raw.clone(), pack_gap=0, **shared)
+    numpy.testing.assert_allclose(
+        loss_s.raw_tensor.detach().numpy(), loss_ref.raw_tensor.detach().numpy(), rtol=1e-4, atol=1e-5
     )
 
 
