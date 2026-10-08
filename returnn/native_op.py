@@ -5373,6 +5373,317 @@ class FastViterbiOp(NativeOpGenBase):
     c_bw_code = None
 
 
+class FastViterbiPackedOp(NativeOpGenBase):
+    # noinspection PyUnresolvedReferences
+    """
+    Packed variant of :class:`FastViterbiOp`:
+    the am scores come as one flat buffer over all sequences (no padding),
+    with per-sequence start offsets, like :class:`FastBaumWelchPackedOp`.
+
+    inputs:
+      :param am_scores: scores in +log space. 2d (total_time,dim), the seqs concatenated along time
+      :param am_seq_len: (batch,)
+      :param seq_starts: (batch,), int32. start offset of each seq in the total_time axis
+      :param edges: edges of the graph (from,to,emission_idx,sequence_idx), i.e. (4, n_edges)
+      :param weights: weights of the edges (n_edges,), in -log space, see :class:`FastViterbiOp`
+      :param start_end_states: (2, batch)
+      :param n_time: scalar, int32. frames the recursion runs over, at least the longest sequence,
+        which the packed am_scores shape does not give
+      :param n_states: scalar, int32
+      :param mask_idx: scalar, int32. written to every frame outside the sequences
+    outputs:
+      :param output: Viterbi (hard) alignment. 1d (total_time,), like am_scores
+      :param scores: (batch,), in +log space
+    """
+
+    in_info = (
+        {
+            "name": "am_scores",
+            "ndim": 2,
+            "shape": (None, None),
+            "need_contiguous": True,
+            "gradient": "disconnected",
+        },
+        {
+            "name": "am_seq_len",
+            "ndim": 1,
+            "shape": (None,),
+            "dtype": "int32",
+            "need_contiguous": True,
+            "gradient": "disconnected",
+        },
+        {
+            "name": "seq_starts",
+            "ndim": 1,
+            "shape": (None,),
+            "dtype": "int32",
+            "need_contiguous": True,
+            "gradient": "disconnected",
+        },
+        {
+            "name": "edges",
+            "ndim": 2,
+            "shape": (4, None),
+            "dtype": "int32",
+            "need_contiguous": True,
+            "gradient": "disconnected",
+        },
+        {"name": "weights", "ndim": 1, "shape": ((3, 1),), "need_contiguous": True, "gradient": "disconnected"},
+        {
+            "name": "start_end_states",
+            "ndim": 2,
+            "shape": (2, (1, 0)),
+            "dtype": "int32",
+            "need_contiguous": True,
+            "gradient": "disconnected",
+        },
+        {
+            "name": "n_time",
+            "ndim": 0,
+            "shape": (),
+            "dtype": "int32",
+            "need_contiguous": True,
+            "gradient": "disconnected",
+            "host_memory": True,
+        },
+        {
+            "name": "n_states",
+            "ndim": 0,
+            "shape": (),
+            "dtype": "int32",
+            "need_contiguous": True,
+            "gradient": "disconnected",
+            "host_memory": True,
+        },
+        {
+            "name": "mask_idx",
+            "ndim": 0,
+            "shape": (),
+            "dtype": "int32",
+            "need_contiguous": True,
+            "gradient": "disconnected",
+            "host_memory": True,
+        },
+    )
+    out_info = (
+        {"name": "output", "ndim": 1, "shape": ((0, 0),), "dtype": "int32", "need_contiguous": True},
+        {"name": "scores", "ndim": 1, "shape": ((1, 0),), "need_contiguous": True},
+    )
+
+    c_extra_support_code = {
+        "01_IdxAndVal": FastViterbiOp.c_extra_support_code["01_IdxAndVal"],
+        "04_select_max": FastViterbiOp.c_extra_support_code["04_select_max"],
+        "05_init_buffer": FastViterbiOp.c_extra_support_code["05_init_buffer"],
+        "06_init_first_frame": FastViterbiOp.c_extra_support_code["06_init_first_frame"],
+        "08_next_frame_packed": """
+      DEF_KERNEL
+      void next_frame_packed
+      (
+        int n_edges,
+        int n_classes,
+        int t,
+        const float* d_am_scores, // (total_time, n_classes)
+        const int32_t* d_am_seq_len,
+        const int32_t* d_seq_starts,
+        const IdxAndVal* prev_frame,
+        IdxAndVal* frame,
+        const int32_t* d_edge_from,
+        const int32_t* d_edge_to,
+        const int32_t* d_edge_emission_idx,
+        const int32_t* d_edge_seq_idx,
+        const float* d_edge_weights
+      )
+      {
+        for(int idx = threadIdx.x + blockDim.x * blockIdx.x; idx < n_edges; idx += gridDim.x * blockDim.x) {
+          int seq_idx = d_edge_seq_idx[idx];
+          if(t >= d_am_seq_len[seq_idx])
+            continue;
+          // weights are -log like fast_baum_welch, while the scores here are +log
+          float edge_weight = -d_edge_weights[idx];
+          if(isinf(edge_weight))
+            continue;
+          int from_idx = d_edge_from[idx];
+          float prev_val = prev_frame[from_idx].val;
+          if(isinf(prev_val))
+            continue;
+          int emission_idx = d_edge_emission_idx[idx];
+          int to_idx = d_edge_to[idx];
+          IdxAndVal candidate;
+          // frame t of the sequence sits at its start offset in the packed buffer
+          candidate.val = prev_val + edge_weight
+            + d_am_scores[(size_t) (d_seq_starts[seq_idx] + t) * n_classes + emission_idx];
+          candidate.idx = idx;
+          select_max(&frame[to_idx], candidate);
+        }
+      }
+    """,
+        "11_select_scores": FastViterbiOp.c_extra_support_code["11_select_scores"],
+        "12_init_output": """
+      DEF_KERNEL
+      void init_output
+      (
+        int n_total,
+        int32_t* output, // (total_time,)
+        int32_t mask_idx
+      )
+      {
+        int idx = threadIdx.x + blockDim.x * blockIdx.x;
+        while(idx < n_total) {
+          output[idx] = mask_idx;
+          idx += gridDim.x * blockDim.x;
+        }
+      }
+    """,
+        "13_select_best_path_packed": """
+      DEF_KERNEL
+      void select_best_path_packed
+      (
+        int n_batch,
+        int t,
+        int32_t* cur_state, // (n_batch,)
+        const IdxAndVal* frame,
+        const int32_t* d_am_seq_len,
+        const int32_t* d_seq_starts,
+        const int32_t* d_edge_from,
+        const int32_t* d_edge_emission_idx,
+        int32_t* output, // (total_time,)
+        int32_t mask_idx
+      )
+      {
+        int idx = threadIdx.x + blockDim.x * blockIdx.x;
+        while(idx < n_batch) {
+          // a frame past the sequence has no slot in the packed buffer, init_output filled the rest
+          if(t < d_am_seq_len[idx]) {
+            int state_idx = cur_state[idx];
+            int edge_idx = frame[state_idx].idx;
+            int32_t* out = output + d_seq_starts[idx] + t;
+            if(edge_idx >= 0) {
+              cur_state[idx] = d_edge_from[edge_idx];
+              *out = d_edge_emission_idx[edge_idx];
+            }
+            else  // no path found
+              *out = mask_idx;
+          }
+          idx += gridDim.x * blockDim.x;
+        }
+      }
+    """,
+    }
+
+    c_fw_code = """
+    using namespace std;
+    // am_scores, am_seq_len, seq_starts, edges, weights, start_end_states, n_time, n_states, mask_idx = input_names
+    // output, scores = output_names
+    assert(n_inputs == 9);
+    assert(n_outputs == 2);
+    Ndarray* am_scores = inputs[0];
+    Ndarray* am_seq_len = inputs[1];
+    Ndarray* seq_starts = inputs[2];
+    Ndarray* edges = inputs[3];
+    Ndarray* weights = inputs[4];
+    Ndarray* start_end_states = inputs[5];
+    int32_t n_time = Ndarray_DEV_DATA_int32_scalar(inputs[6]);
+    int32_t n_states = Ndarray_DEV_DATA_int32_scalar(inputs[7]);
+    int32_t mask_idx = Ndarray_DEV_DATA_int32_scalar(inputs[8]);
+    Ndarray* output = *outputs[0];
+    Ndarray* score = *outputs[1];
+
+    assert_cmp(Ndarray_NDIM(am_scores), ==, 2);
+    assert_cmp(Ndarray_NDIM(am_seq_len), ==, 1);
+    assert_cmp(Ndarray_NDIM(seq_starts), ==, 1);
+    assert_cmp(Ndarray_NDIM(edges), ==, 2);
+    assert_cmp(Ndarray_NDIM(weights), ==, 1);
+    assert_cmp(Ndarray_NDIM(start_end_states), ==, 2);
+    assert_cmp(Ndarray_NDIM(output), ==, 1);
+    assert_cmp(Ndarray_NDIM(score), ==, 1);
+    int n_total = Ndarray_DIMS(am_scores)[0];
+    int n_classes = Ndarray_DIMS(am_scores)[1];
+    int n_batch = Ndarray_DIMS(am_seq_len)[0];
+    int n_edges = Ndarray_DIMS(edges)[1];
+    assert_cmp(n_time, >=, 0);
+    assert_cmp(Ndarray_DIMS(seq_starts)[0], ==, n_batch);
+    assert_cmp(Ndarray_DIMS(edges)[0], ==, 4);
+    assert_cmp(Ndarray_DIMS(weights)[0], ==, n_edges);
+    assert_cmp(Ndarray_DIMS(start_end_states)[0], ==, 2);
+    assert_cmp(Ndarray_DIMS(start_end_states)[1], ==, n_batch);
+    assert_cmp(Ndarray_DIMS(output)[0], ==, n_total);
+    assert_cmp(Ndarray_DIMS(score)[0], ==, n_batch);
+
+    int32_t* d_edge_from = Ndarray_DEV_DATA_int32(edges) + 0 * Ndarray_STRIDE(edges, 0);
+    int32_t* d_edge_to = Ndarray_DEV_DATA_int32(edges) + 1 * Ndarray_STRIDE(edges, 0);
+    int32_t* d_edge_emission_idx = Ndarray_DEV_DATA_int32(edges) + 2 * Ndarray_STRIDE(edges, 0);
+    int32_t* d_edge_seq_idx = Ndarray_DEV_DATA_int32(edges) + 3 * Ndarray_STRIDE(edges, 0);
+    float* d_edge_weights = Ndarray_DEV_DATA(weights);
+    float* d_am_scores = Ndarray_DEV_DATA(am_scores);
+    int32_t* d_am_seq_len = Ndarray_DEV_DATA_int32(am_seq_len);
+    int32_t* d_seq_starts = Ndarray_DEV_DATA_int32(seq_starts);
+    int32_t* d_start_states = Ndarray_DEV_DATA_int32(start_end_states) + 0 * Ndarray_STRIDE(start_end_states, 0);
+    int32_t* d_end_states = Ndarray_DEV_DATA_int32(start_end_states) + 1 * Ndarray_STRIDE(start_end_states, 0);
+    int32_t* d_output = Ndarray_DEV_DATA_int32(output);
+    float* d_score = Ndarray_DEV_DATA(score);
+
+    IdxAndVal* d_buffer = (IdxAndVal*) device_malloc((n_time + 1) * n_states * sizeof(IdxAndVal));
+    int buffer_stride = n_states;
+    start_dev_kernel(init_buffer, (n_time, n_states, d_buffer));
+    start_dev_kernel(init_first_frame, (n_batch, n_states, d_buffer, d_start_states));
+    HANDLE_LAST_ERROR();
+
+    for(int t = 0; t < n_time; ++t) {
+      start_dev_kernel(next_frame_packed, (
+        n_edges,
+        n_classes,
+        t,
+        d_am_scores,
+        d_am_seq_len,
+        d_seq_starts,
+        d_buffer + t * buffer_stride,
+        d_buffer + (t + 1) * buffer_stride,
+        d_edge_from,
+        d_edge_to,
+        d_edge_emission_idx,
+        d_edge_seq_idx,
+        d_edge_weights
+      ));
+    }
+    HANDLE_LAST_ERROR();
+
+    start_dev_kernel(select_scores, (
+      n_batch,
+      n_states,
+      buffer_stride,
+      d_buffer,
+      d_am_seq_len,
+      d_end_states,
+      d_score // out
+    ));
+
+    int32_t* d_cur_state = (int32_t*) device_malloc(n_batch * sizeof(int32_t));
+    Ndarray_memcpy(d_cur_state, d_end_states, n_batch * sizeof(int32_t));
+
+    start_dev_kernel(init_output, (n_total, d_output, mask_idx));
+    for(int t = n_time - 1; t >= 0; --t) {
+      start_dev_kernel(select_best_path_packed, (
+        n_batch,
+        t,
+        d_cur_state,
+        d_buffer + (t + 1) * buffer_stride,
+        d_am_seq_len,
+        d_seq_starts,
+        d_edge_from,
+        d_edge_emission_idx,
+        d_output, // out
+        mask_idx
+      ));
+    }
+    HANDLE_LAST_ERROR();
+
+    device_free(d_cur_state);
+    device_free(d_buffer);
+  """
+
+    c_bw_code = None
+
+
 class GetCtcFsaFastBwOp(NativeOpGenBase):
     # noinspection PyUnresolvedReferences
     """
