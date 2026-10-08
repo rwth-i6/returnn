@@ -4208,11 +4208,15 @@ class PackedBackend(Backend[PackedRawTensor]):
         Along the innermost packed dim the index is a position inside a sequence,
         so it only needs its sequence's start added to become a row in the flat buffer
         (this is what shifts like a successor or predecessor lookup do).
+        A plain source with packed indices gives a result in the packing of the indices.
         Anything else takes the generic dim-aware route.
         """
         kwargs = dict(indices=indices, axis=axis, clip_to_valid=clip_to_valid)
         if not is_packed(source) and isinstance(indices, Tensor) and is_packed(indices):
             out = _gather_plain_by_packed_indices(source, indices=indices, axis=axis, clip_to_valid=clip_to_valid)
+            if out is not None:
+                return out
+            out = _gather_plain_into_indices_packing(source, indices=indices, axis=axis, clip_to_valid=clip_to_valid)
             if out is not None:
                 return out
         if not is_packed(source) or not isinstance(indices, Tensor):
@@ -4848,6 +4852,70 @@ def _gather_plain_by_packed_indices(
     idx = idx * shape[source.dims.index(axis)] + pos
     source_flat, flat_dim = rf.merge_dims(source, dims=in_dims + [axis])
     return raw.rewrap(rf.gather(source_flat, indices=idx, axis=flat_dim), name="gather")
+
+
+def _gather_plain_into_indices_packing(
+    source: Tensor, *, indices: Tensor, axis: Dim, clip_to_valid: bool
+) -> Optional[Tensor]:
+    """
+    Gather from a plain (padded) source with indices which are packed over a spatial dim of the same sequences,
+    e.g. padded keys read at the positions the cells of a packed lattice attend.
+
+    Every frame of the indices reads the row of its own sequence in the source at the position it holds,
+    through one flat index over (seqs, axis), so the indices are not unpacked.
+    The result takes the packing of the indices as it is.
+
+    :param source: plain, over the seqs dim of the packing of the indices and over axis
+    :param indices: packed over (seqs, some spatial), positions along axis
+    :param axis: the dim gathered along
+    :param clip_to_valid: clip the positions into each sequence
+    :return: packed like the indices, or None if the call has another shape and has to take the generic route
+    """
+    idx_raw = _raw(indices)
+    if len(idx_raw.orig_dims) != 2:
+        return None
+    seqs_dim, frame_dim = idx_raw.orig_dims
+    if axis == seqs_dim or seqs_dim not in source.dims or axis not in source.dims:
+        return None
+    if any(d in source.dims for d in idx_raw.inner.dims) or frame_dim in source.dims:
+        # a dim shared with the indices is a batch dim of the gather, which the flat index does not express
+        return None
+    # noinspection PyProtectedMember
+    shape = source._raw_backend.get_shape_tuple_raw(source.raw_tensor)
+    n_seqs, width = shape[source.dims.index(seqs_dim)], shape[source.dims.index(axis)]
+    if not isinstance(n_seqs, int) or not isinstance(width, int):
+        return None
+    lens = axis.dyn_size_ext
+    if lens is not None and lens.dims not in ((), (seqs_dim,)):
+        return None
+
+    dev = source.device
+    # the sequence of every frame of the indices, gap frames get an in-bounds one and their result is junk
+    seq = rf.cast(rf.copy_to_device(_frame_coords(idx_raw, seqs_dim), dev), "int64")
+    idx = rf.cast(rf.copy_to_device(idx_raw.inner, dev), "int64")
+    if clip_to_valid:
+        if lens is None:
+            last = width - 1
+        else:
+            last = rf.cast(axis.get_size_tensor(device=dev), "int64") - 1
+            if last.dims:
+                last = rf.gather(last, indices=rf.cast(seq, "int32"), axis=seqs_dim)
+        idx = rf.clip_by_value(idx, 0, rf.maximum(last, 0) if isinstance(last, Tensor) else last)
+    # re-tag both dims static with their raw extents: merging the dynamic ones would derive dynamic sizes
+    # and masks for the flat dim, while only the memory layout matters here
+    rows_dim = Dim(n_seqs, name="plain_rows")
+    cols_dim = Dim(width, name=f"{axis.name or 'axis'}_cols")
+    flat, _ = rf.replace_dim(source, in_dim=seqs_dim, out_dim=rows_dim)
+    flat, _ = rf.replace_dim(flat, in_dim=axis, out_dim=cols_dim)
+    flat, flat_dim = rf.merge_dims(flat, dims=[rows_dim, cols_dim])
+    flat_idx = rf.clip_by_value(rf.combine_bc(seq * width, "+", idx), 0, n_seqs * width - 1)
+    flat_idx.sparse_dim = flat_dim
+    out = idx_raw.rewrap(rf.gather(flat, indices=flat_idx, axis=flat_dim), name="gather")
+    if source.sparse_dim is not None:
+        out.sparse_dim = source.sparse_dim
+    if source.feature_dim is not None and source.feature_dim in out.dims:
+        out.feature_dim = source.feature_dim
+    return out
 
 
 def _gather_relayout_out_dim(indices: Tensor, raw: PackedRawTensor) -> Optional[Dim]:
