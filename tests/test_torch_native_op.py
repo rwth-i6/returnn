@@ -17,6 +17,7 @@ from returnn.torch.util.native_op import (
     get_ctc_fsa_fast_bw,
     ctc_loss,
     ctc_loss_packed,
+    ctc_best_path,
     edit_distance,
     optimal_completion_edit_distance,
     optimal_completion_edit_distance_per_successor,
@@ -1703,3 +1704,31 @@ def test_fast_baum_welch_fake_tensor_mode():
     for fake, real in [(fwdbwd_fake, fwdbwd_real), (obs_scores_fake, obs_scores_real)]:
         assert isinstance(fake, FakeTensor)
         assert fake.shape == real.shape and fake.dtype == real.dtype
+
+
+def test_ctc_best_path_fake_tensor_mode():
+    """
+    :func:`ctc_best_path` under FakeTensor tracing (see :func:`test_fast_baum_welch_fake_tensor_mode`):
+    the state count of the automaton has to come from the shape of the targets,
+    a max over the end states would be a data-dependent host read.
+    """
+    if not hasattr(torch.library, "register_fake"):
+        raise SkipTest("torch.library.register_fake not available (torch < 2.4)")
+    from torch._subclasses.fake_tensor import FakeTensor, FakeTensorMode
+
+    n_batch, seq_len, n_tgt, n_classes = 3, 8, 3, 6
+    torch.manual_seed(1)
+    args = dict(
+        logits=torch.randn(seq_len, n_batch, n_classes),
+        logits_seq_lens=torch.tensor([8, 6, 5], dtype=torch.int32),
+        targets=torch.randint(0, n_classes - 1, (n_batch, n_tgt), dtype=torch.int32),
+        targets_seq_lens=torch.tensor([3, 2, 0], dtype=torch.int32),
+    )
+    opts = dict(logits_time_major=True, blank_index=n_classes - 1)
+    real = ctc_best_path(**args, **opts)
+
+    mode = FakeTensorMode()
+    with mode:
+        fake = ctc_best_path(**{k: mode.from_tensor(v) for k, v in args.items()}, **opts)
+    assert isinstance(fake, FakeTensor)
+    assert fake.shape == real.shape and fake.dtype == real.dtype
