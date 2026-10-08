@@ -26,13 +26,14 @@ from returnn.torch.updater import Updater
 import returnn.frontend as rf
 from returnn.forward_iface import ForwardCallbackIface
 from returnn.datasets import init_dataset
+from returnn.datasets.generating import Task12AXDataset
 
 
 # must be in the global scope due to pickling
 class TrainTestModel(torch.nn.Module):
-    def __init__(self, **_kwargs):
+    def __init__(self, in_dim: int = 9, **_kwargs):
         super().__init__()
-        self.lin = torch.nn.Linear(9, 2)
+        self.lin = torch.nn.Linear(in_dim, 2)
 
     def __call__(self, x: torch.Tensor) -> torch.Tensor:
         """
@@ -1829,6 +1830,311 @@ def test_multi_optimizer_non_param_state_error():
         assert "999" in str(exc)
     else:
         raise AssertionError("expected NotImplementedError for non-parameter state key on load")
+
+
+# must be in the global scope due to pickling
+class _RecordingScheduleFreeSGD(torch.optim.SGD):
+    """SGD with recording schedule-free train()/eval() methods, for testing the engine hooks."""
+
+    calls = []
+
+    def train(self):
+        """record train mode switch"""
+        type(self).calls.append("train")
+
+    def eval(self):
+        """record eval mode switch"""
+        type(self).calls.append("eval")
+
+
+def test_engine_schedule_free_optimizer_hooks():
+    _RecordingScheduleFreeSGD.calls = []
+    config = Config(
+        dict(
+            task="train",
+            device="cpu",
+            extern_data={"data": {"dim": 9}, "classes": {"dim": 2, "sparse": True}},
+            get_model=TrainTestModel,
+            train_step=TrainTestModel.train_step,
+            batch_size=500,
+            torch_dataloader_opts={"num_workers": 0},
+            optimizer={"class": _RecordingScheduleFreeSGD},
+        )
+    )
+    dataset = init_dataset({"class": "Task12AXDataset", "num_seqs": 100, "name": "train"})
+    dataset.init_seq_order(epoch=1)
+
+    with global_config_ctx(config):
+        engine = Engine(config=config)
+        engine.init_train_from_config(train_data=dataset)
+        engine.train()
+
+    calls = _RecordingScheduleFreeSGD.calls
+    assert calls, "engine did not call the schedule-free optimizer train()/eval() hooks"
+    assert calls[0] == "train" and calls[-1] == "eval", f"unexpected hook call sequence {calls}"
+
+
+def test_multi_optimizer_schedule_free_forwarding():
+    from returnn.torch.optim.multi import MultiOptimizer
+
+    _RecordingScheduleFreeSGD.calls = []
+    model = torch.nn.Linear(4, 3)
+    sub1 = _RecordingScheduleFreeSGD([model.weight], lr=0.1)
+    sub2 = torch.optim.AdamW([model.bias], lr=0.1)
+    opt = MultiOptimizer(sub_optimizers=[sub1, sub2])
+    opt.train()
+    opt.eval()
+    assert _RecordingScheduleFreeSGD.calls == ["train", "eval"]
+
+
+def test_schedule_free_check_asks_sub_optimizers():
+    model = _make_multi_test_model()
+
+    def _updater(optimizer_opts):
+        updater = Updater(config=Config(dict(optimizer=optimizer_opts)), network=model, device=torch.device("cpu"))
+        updater.create_optimizer()
+        return updater
+
+    plain = {
+        "class": "multi",
+        "optimizers": [
+            {"class": "sgd", "params_filter": _multi_test_layer2_weight_filter, "momentum": 0.9},
+            {"class": "adamw", "weight_decay": 1e-3},
+        ],
+    }
+    assert not _updater(plain).is_schedule_free_optimizer()
+    assert not _updater({"class": "adamw"}).is_schedule_free_optimizer()
+    with_schedule_free = {
+        "class": "multi",
+        "optimizers": [
+            {"class": _RecordingScheduleFreeSGD, "params_filter": _multi_test_layer2_weight_filter},
+            {"class": "sgd", "momentum": 0.9},
+        ],
+    }
+    assert _updater(with_schedule_free).is_schedule_free_optimizer()
+    assert _updater({"class": _RecordingScheduleFreeSGD}).is_schedule_free_optimizer()
+
+
+class TrainTestModelWithBatchNorm(TrainTestModel):
+    def __init__(self, in_dim: int = 9, **_kwargs):
+        super().__init__(in_dim=in_dim)
+        self.bn = torch.nn.BatchNorm1d(in_dim)
+
+    def __call__(self, x: torch.Tensor) -> torch.Tensor:
+        x = self.bn(x.transpose(1, 2)).transpose(1, 2)
+        return super().__call__(x)
+
+
+def test_engine_schedule_free_batchnorm_refresh():
+    # With a schedule-free optimizer, the engine must refresh the BatchNorm running stats
+    # with some train batches (forwarded without gradient) after switching to the averaged weights.
+    counts = {"grad": 0, "no_grad": 0}
+    running_mean_at_last_update = []
+
+    def _train_step(*, model: TrainTestModelWithBatchNorm, extern_data: TensorDict, **kwargs):
+        TrainTestModel.train_step(model=model, extern_data=extern_data, **kwargs)
+        if torch.is_grad_enabled():
+            counts["grad"] += 1
+            running_mean_at_last_update[:] = [model.bn.running_mean.detach().clone()]
+        else:
+            counts["no_grad"] += 1
+
+    config = Config(
+        dict(
+            task="train",
+            device="cpu",
+            num_epochs=1,
+            extern_data={"data": {"dim": 9}, "classes": {"dim": 2, "sparse": True}},
+            get_model=TrainTestModelWithBatchNorm,
+            train_step=_train_step,
+            batch_size=500,
+            torch_dataloader_opts={"num_workers": 0},
+            optimizer={"class": _RecordingScheduleFreeSGD},
+            learning_rate=0.01,
+            schedule_free_batchnorm_refresh_batches=3,
+        )
+    )
+    dataset = init_dataset({"class": "Task12AXDataset", "num_seqs": 100, "name": "train"})
+    dataset.init_seq_order(epoch=1)
+
+    with global_config_ctx(config):
+        engine = Engine(config=config)
+        engine.init_train_from_config(train_data=dataset)
+        engine.train()
+        model = engine._orig_model
+    assert counts["grad"] > 0
+    assert counts["no_grad"] == 3, counts
+    assert isinstance(model, TrainTestModelWithBatchNorm)
+    assert not torch.allclose(model.bn.running_mean, running_mean_at_last_update[0])
+
+
+def _schedule_free_refresh_distributed_worker(rank: int, world_size: int, port: int, tmp_dir: str):
+    os.environ.update(
+        MASTER_ADDR="127.0.0.1",
+        MASTER_PORT=str(port),
+        RANK=str(rank),
+        WORLD_SIZE=str(world_size),
+        LOCAL_RANK=str(rank),
+        LOCAL_WORLD_SIZE=str(world_size),
+    )
+    counts = {"no_grad": 0}
+
+    def _train_step(*, model: TrainTestModelWithBatchNorm, extern_data: TensorDict, **kwargs):
+        TrainTestModel.train_step(model=model, extern_data=extern_data, **kwargs)
+        if not torch.is_grad_enabled():
+            counts["no_grad"] += 1
+
+    config = Config(
+        dict(
+            task="train",
+            device="cpu",
+            num_epochs=1,
+            extern_data={"data": {"dim": 9}, "classes": {"dim": 2, "sparse": True}},
+            get_model=TrainTestModelWithBatchNorm,
+            train_step=_train_step,
+            batch_size=100_000,
+            max_seqs=10,
+            torch_dataloader_opts={"num_workers": 0},
+            optimizer={"class": _RecordingScheduleFreeSGD},
+            learning_rate=0.01,
+            torch_distributed={"backend": "gloo"},
+        )
+    )
+    with global_config_ctx(config):
+        # 2 batches on rank 0, 3 on rank 1
+        dataset = init_dataset({"class": "Task12AXDataset", "num_seqs": 20 + 10 * rank})
+        dataset.init_seq_order(epoch=1)
+        engine = Engine(config=config)
+        engine.init_train_from_config(train_data=dataset)
+        engine.train()
+    with open(f"{tmp_dir}/rank{rank}.txt", "w") as f:
+        f.write(str(counts["no_grad"]))
+    torch.distributed.destroy_process_group()
+
+
+def test_engine_schedule_free_batchnorm_refresh_distributed():
+    # All ranks must refresh with the same number of batches, also when one runs out of data first,
+    # since the forward can run collectives (e.g. rf.BatchNorm with distributed stats).
+    import socket
+    import torch.multiprocessing
+
+    world_size = 2
+    with socket.socket() as s:
+        s.bind(("127.0.0.1", 0))
+        port = s.getsockname()[1]
+    with tempfile.TemporaryDirectory(prefix="returnn_test_schedule_free_refresh_distributed") as tmp_dir:
+        torch.multiprocessing.spawn(
+            _schedule_free_refresh_distributed_worker, args=(world_size, port, tmp_dir), nprocs=world_size
+        )
+        counts = []
+        for rank in range(world_size):
+            with open(f"{tmp_dir}/rank{rank}.txt") as f:
+                counts.append(int(f.read()))
+    assert counts == [2, 2], counts
+
+
+def test_torch_engine_cuda_graph_schedule_free_batchnorm_refresh():
+    # Under torch_cuda_graph, the refresh runs eagerly with dynamic shapes, as the eval does,
+    # and the captured graph replays in the next epoch.
+    if not torch.cuda.is_available():
+        raise unittest.SkipTest("CUDA not available")
+    config, dataset = _build_cuda_graph_train_config_and_dataset(
+        compile_=False, optimizer={"class": _RecordingScheduleFreeSGD}
+    )
+    config.typed_dict["torch_cuda_graph"]["capture_optimizer"] = False
+    _, _, feat_dim = config.typed_dict["extern_data"]["data"]["dims"]
+    classes_dim = config.typed_dict["extern_data"]["classes"]["sparse_dim"]
+    counts = {"no_grad": 0}
+
+    class _Model(rf.Module):
+        def __init__(self):
+            super().__init__()
+            self.norm = rf.BatchNorm(feat_dim, use_mask=False)
+            self.out = rf.Linear(feat_dim, classes_dim)
+
+    def _train_step(*, model: _Model, extern_data: TensorDict, **_kwargs):
+        logits = model.out(model.norm(extern_data["data"]))
+        loss = rf.cross_entropy(
+            target=extern_data["classes"], estimated=logits, estimated_type="logits", axis=classes_dim
+        )
+        loss.mark_as_loss("ce")
+        if not torch.is_grad_enabled():
+            counts["no_grad"] += 1
+
+    config.typed_dict.update(
+        get_model=lambda **_kwargs: _Model(), train_step=_train_step, schedule_free_batchnorm_refresh_batches=3
+    )
+    with global_config_ctx(config):
+        engine = Engine(config=config)
+        engine.init_train_from_config(train_data=dataset)
+        engine.train()
+        assert engine._graph_capture is not None and engine._graph_capture._graph is not None
+        engine.finalize()
+    assert counts["no_grad"] == 3 * config.int("num_epochs", 1), counts
+
+
+class _NoRewindDataset(Task12AXDataset):
+    """Refuses to restart an epoch it already served, like the epoch worker of DistributeFilesDataset."""
+
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        self._served_epoch = None
+
+    def init_seq_order(self, epoch=None, seq_list=None, seq_order=None):
+        if epoch is not None and epoch == self._served_epoch:
+            raise Exception(f"{self}: cannot go backwards in epoch {epoch}")
+        return super().init_seq_order(epoch=epoch, seq_list=seq_list, seq_order=seq_order)
+
+    def _load_seqs(self, start, end):
+        self._served_epoch = self.epoch
+        super()._load_seqs(start, end)
+
+
+def test_engine_schedule_free_batchnorm_refresh_fresh_dataset():
+    # The refresh must not iterate the epoch's train dataset object a second time,
+    # some datasets cannot rewind within an epoch. It has to use a fresh instance from the config,
+    # built like returnn.__main__.load_data builds the train dataset (the dataset options from the
+    # global config such as window, and a callable config giving a fresh instance too).
+    import functools
+    from returnn.__main__ import load_data
+
+    train_opts = {"class": _NoRewindDataset, "num_seqs": 100}
+    for train_config_value, in_dim, config_opts in [
+        (train_opts, 9, {}),
+        (train_opts, 27, {"window": 3}),
+        (lambda: dict(train_opts), 9, {}),
+    ]:
+        counts = {"no_grad": 0}
+
+        def _train_step(*, model: TrainTestModelWithBatchNorm, extern_data: TensorDict, **kwargs):
+            TrainTestModel.train_step(model=model, extern_data=extern_data, **kwargs)
+            if not torch.is_grad_enabled():
+                counts["no_grad"] += 1
+
+        config = Config(
+            dict(
+                task="train",
+                device="cpu",
+                num_epochs=1,
+                extern_data={"data": {"dim": in_dim}, "classes": {"dim": 2, "sparse": True}},
+                get_model=functools.partial(TrainTestModelWithBatchNorm, in_dim=in_dim),
+                train_step=_train_step,
+                batch_size=500,
+                torch_dataloader_opts={"num_workers": 0},
+                optimizer={"class": _RecordingScheduleFreeSGD},
+                learning_rate=0.01,
+                schedule_free_batchnorm_refresh_batches=3,
+                train=train_config_value,
+                **config_opts,
+            )
+        )
+        with global_config_ctx(config):
+            dataset, _ = load_data(config, 0, "train")
+            dataset.init_seq_order(epoch=1)
+            engine = Engine(config=config)
+            engine.init_train_from_config(train_data=dataset)
+            engine.train()
+        assert counts["no_grad"] == 3, (config_opts, counts)
 
 
 def test_updater_lr_multipliers():

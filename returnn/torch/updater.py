@@ -679,6 +679,40 @@ class Updater:
         """
         return self.optimizer
 
+    def is_schedule_free_optimizer(self) -> bool:
+        """
+        :return: whether the optimizer follows the schedule-free ``train()``/``eval()`` convention,
+            see :func:`set_optimizer_training_mode`
+        """
+        if self.optimizer is None:
+            return False
+        return _is_schedule_free_optimizer(self.optimizer)
+
+    def set_optimizer_training_mode(self, *, train: bool):
+        """
+        For optimizers following the schedule-free convention with ``train()``/``eval()`` methods
+        (or a :class:`returnn.torch.optim.multi.MultiOptimizer` wrapping such),
+        switch between train mode (params hold the training iterate)
+        and eval mode (params hold the averaged weights, used for evaluation and checkpoints).
+        No-op for optimizers without these methods.
+
+        The engine switches to train mode at the start of each train epoch,
+        and back to eval mode at the train epoch end,
+        before the checkpoint is saved and before any evaluation runs,
+        so saved checkpoints always hold the averaged weights.
+        The ``epoch_start``/``epoch_end`` config callbacks run before the respective switch,
+        so ``epoch_start`` sees the averaged weights and ``epoch_end`` sees the training weights.
+        Standalone evaluation outside training (e.g. task "eval") needs no switch,
+        as the checkpoints already hold the averaged weights.
+
+        :param train: whether to switch to train mode (True) or eval mode (False)
+        """
+        if self.optimizer is None:
+            return
+        func = getattr(self.optimizer, "train" if train else "eval", None)
+        if callable(func):
+            func()
+
     def _create_optimizer(self, optimizer_opts) -> Tuple[torch.optim.Optimizer, Optional[List[Dict[str, Any]]]]:
         """
         Returns a valid optimizer considering the dictionary given by the user in the config.
@@ -1059,6 +1093,18 @@ def wrap_user_blacklist_wd_modules(
         assert issubclass(mod, (rf.Module, torch.nn.Module)), f"invalid blacklist_weight_decay_modules {mods!r}"
         res.append(mod)
     return tuple(res)
+
+
+def _is_schedule_free_optimizer(optimizer: torch.optim.Optimizer) -> bool:
+    """
+    :return: whether the optimizer follows the schedule-free ``train()``/``eval()`` convention.
+        A composite optimizer (:class:`returnn.torch.optim.multi.MultiOptimizer`) forwards these methods
+        unconditionally, so it counts as schedule-free only if one of its sub-optimizers is.
+    """
+    sub_optimizers = getattr(optimizer, "sub_optimizers", None)
+    if sub_optimizers is not None:
+        return any(_is_schedule_free_optimizer(sub) for sub in sub_optimizers)
+    return callable(getattr(optimizer, "train", None)) and callable(getattr(optimizer, "eval", None))
 
 
 def _param_group_hyper_param_keys(group: Dict[str, Any]) -> Set[str]:
