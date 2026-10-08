@@ -1019,8 +1019,8 @@ def scatter(
                 post_fix_fill_value = True
     else:
         use_mask = False
-    # noinspection PyProtectedMember
-    out = source._raw_backend.scatter(
+    # The indices can need another backend than the source, e.g. packed indices with plain ones as source.
+    out = _utils.get_backend_from_tensors(source, indices).scatter(
         source,
         indices=indices,
         indices_dim=indices_dim,
