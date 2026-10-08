@@ -14,7 +14,7 @@ import torch
 
 import returnn
 from returnn.log import log
-from returnn.util.basic import RefIdEq, get_fwd_compat_kwargs
+from returnn.util.basic import RefIdEq, get_fwd_compat_kwargs, BehaviorVersion
 import returnn.frontend as rf
 from returnn.torch.frontend.bridge import wrapped_pt_module_to_rf_module
 from returnn.torch.util.optimizer_step import OptimizerStep
@@ -429,10 +429,14 @@ class Updater:
                     "loaded state dict has a different number of parameter groups: ckpt %i vs. self %i"
                     % (len(optimizer_state["optimizer"]["param_groups"]), len(self.optimizer.param_groups))
                 )
-            # Check if we have the same parameters in the same order.
+            # Check if we have the same parameters in the same order and in the same param groups.
             self_param_names, param_id_to_name = self._get_opt_param_names()
             ckpt_param_names = optimizer_state["param_names"]
-            if self_param_names != ckpt_param_names:
+            self_group_names = [[param_id_to_name[id(p)] for p in g["params"]] for g in self.optimizer.param_groups]
+            ckpt_group_names = [
+                [ckpt_param_names[i] for i in g["params"]] for g in optimizer_state["optimizer"]["param_groups"]
+            ]
+            if self_group_names != ckpt_group_names:
                 self_param_names_dict = {name: i for i, name in enumerate(self_param_names)}
                 self_param_names_critical_set = set()
                 ckpt_param_names_dict = {name: i for i, name in enumerate(ckpt_param_names)}
@@ -472,7 +476,7 @@ class Updater:
                             file=log.v3,
                         )
                 else:
-                    print("load_optimizer: Params in different order.", file=log.v3)
+                    print("load_optimizer: Params in different order or param groups.", file=log.v3)
                 print("load_optimizer: Will remap the state dict.", file=log.v3)
                 for ckpt_group, self_group in zip(
                     optimizer_state["optimizer"]["param_groups"], self.optimizer.param_groups
@@ -483,12 +487,27 @@ class Updater:
                     self_group_param_names.intersection_update(self_param_names_critical_set)
                     ckpt_group_param_names.intersection_update(self_param_names_critical_set)
                     if ckpt_group_param_names != self_group_param_names:
-                        raise ValueError(
-                            "load_optimizer: params in group not in ckpt: %s\n  ckpt params not existing: %s"
-                            % (
-                                ", ".join(ckpt_group_param_names - self_group_param_names) or "(None)",
-                                ", ".join(self_group_param_names - ckpt_group_param_names) or "(None)",
+                        # The group options are loaded by position, so both groups must be of the same algorithm.
+                        ckpt_keys = _param_group_hyper_param_keys(ckpt_group)
+                        self_keys = _param_group_hyper_param_keys(self_group)
+                        if ckpt_keys - self_keys and self_keys - ckpt_keys:
+                            raise ValueError(
+                                "load_optimizer: params moved between param groups of different optimizer algorithms,"
+                                f" the checkpoint group has the hyper-parameters {sorted(ckpt_keys - self_keys)}"
+                                f" instead of {sorted(self_keys - ckpt_keys)}"
                             )
+                        print(
+                            "load_optimizer: params moved between param groups"
+                            " (e.g. due to a changed weight-decay split):\n"
+                            "  params newly in this group: %s\n"
+                            "  params no longer in this group: %s\n"
+                            "  Their per-param state is remapped by name and kept."
+                            " Their group hyperparameters (e.g. weight_decay) now follow the current groups."
+                            % (
+                                ", ".join(sorted(self_group_param_names - ckpt_group_param_names)) or "(None)",
+                                ", ".join(sorted(ckpt_group_param_names - self_group_param_names)) or "(None)",
+                            ),
+                            file=log.v3,
                         )
                     ckpt_group["params"] = [
                         self_param_names_dict[param_id_to_name[id(p)]] for p in self_group["params"]
@@ -655,7 +674,15 @@ class Updater:
           or None to use the default logic.
         - ``weight_decay_modules_blacklist``: list of modules types which should not get weight decay.
           Those can be RF modules or pure PyTorch modules.
-          The types can be specified as string (e.g. ``"torch.nn.LayerNorm"``) or as the type itself.
+          The types can be specified as string (e.g. ``"torch.nn.LayerNorm"``, ``"rf.LayerNorm"``)
+          or as the type itself.
+          The default (when not specified) is ``(torch.nn.LayerNorm, torch.nn.Embedding)``,
+          which covers only the native torch modules, not the RF equivalents,
+          so the params of :class:`rf.LayerNorm` / :class:`rf.Embedding` (e.g. the LayerNorm ``scale``)
+          do get weight decay by default.
+          To exclude them as well, pass the blacklist explicitly, e.g.
+          ``["torch.nn.LayerNorm", "torch.nn.Embedding", "rf.LayerNorm", "rf.Embedding"]``.
+          Since behavior version 36, the default also includes the RF modules.
 
         :param optim_class: Optimizer class.
         :param optimizer_opts: Optimizer configuration specified by the user. Might be modified inplace here.
@@ -756,11 +783,16 @@ def wrap_user_blacklist_wd_modules(
     mods: Optional[Sequence[Union[str, Type[rf.Module], Type[torch.nn.Module]]]],
 ) -> Tuple[type, ...]:
     """
-    Wraps the user-provided blacklist_weight_decay_modules into a tuple of types.
+    Wraps the user-provided ``weight_decay_modules_blacklist`` into a tuple of types.
     This supports both pure PyTorch modules (e.g. "torch.nn.LayerNorm")
     and RF modules (e.g. "rf.LayerNorm"), which can be specified as strings or types.
+    If ``mods`` is None, returns the default ``(torch.nn.LayerNorm, torch.nn.Embedding)``,
+    which covers only the native torch modules.
+    Since behavior version 36, the default also includes :class:`rf.LayerNorm` and :class:`rf.Embedding`.
     """
     if mods is None:
+        if BehaviorVersion.get() >= 36:
+            return torch.nn.LayerNorm, torch.nn.Embedding, rf.LayerNorm, rf.Embedding
         return torch.nn.LayerNorm, torch.nn.Embedding
     assert isinstance(mods, (list, tuple)), f"invalid blacklist_weight_decay_modules {mods!r}"
     res = []
@@ -771,6 +803,14 @@ def wrap_user_blacklist_wd_modules(
         assert issubclass(mod, (rf.Module, torch.nn.Module)), f"invalid blacklist_weight_decay_modules {mods!r}"
         res.append(mod)
     return tuple(res)
+
+
+def _param_group_hyper_param_keys(group: Dict[str, Any]) -> Set[str]:
+    """
+    :return: the keys of a param group which identify its optimizer algorithm
+        (e.g. AdamW ``betas`` vs SGD ``momentum``), i.e. all but the params and the learning rate
+    """
+    return set(group) - {"params", "lr"}
 
 
 def _optimizer_opts_for_checkpoint(obj: Any) -> Any:

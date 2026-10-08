@@ -934,6 +934,58 @@ def test_load_optimizer_old_format():
         updater.load_optimizer(tmp_dir + "/model.opt.new_format.pt")
 
 
+def test_load_optimizer_changed_weight_decay_split():
+    # A changed weight-decay split moves params between the two param groups.
+    # load_optimizer must not fail on that (it warns and remaps the per-param state by name),
+    # and the state must survive the move.
+    model = torch.nn.Sequential(torch.nn.Linear(7, 5), torch.nn.LayerNorm(5))
+
+    config1 = Config(dict(optimizer={"class": "adamw", "weight_decay": 1e-3}))
+    updater1 = Updater(config=config1, network=model, device=torch.device("cpu"))
+    updater1.create_optimizer()
+    updater1.set_current_train_step(global_train_step=0, epoch=1)
+    for param in model.parameters():
+        param.grad = torch.ones_like(param)
+    updater1.get_optimizer().step()
+
+    ln_weight = model[1].weight
+    state1 = updater1.get_optimizer().state[ln_weight]
+    assert "exp_avg" in state1
+    exp_avg1 = state1["exp_avg"].clone()
+
+    def _include_check(*, module, **_kwargs):
+        if isinstance(module, torch.nn.LayerNorm):
+            return True
+        return None
+
+    config2 = Config(
+        dict(optimizer={"class": "adamw", "weight_decay": 1e-3, "weight_decay_custom_include_check": _include_check})
+    )
+    updater2 = Updater(config=config2, network=model, device=torch.device("cpu"))
+    updater2.create_optimizer()
+    updater2.set_current_train_step(global_train_step=0, epoch=1)
+
+    with tempfile.TemporaryDirectory(prefix="returnn_test_load_opt_changed_wd_split") as tmp_dir:
+        updater1.save_optimizer(tmp_dir + "/model.opt.pt")
+        updater2.load_optimizer(tmp_dir + "/model.opt.pt")
+
+        # The moved params must not take the group options of another optimizer algorithm.
+        config3 = Config(dict(optimizer={**config2.typed_dict["optimizer"], "class": "sgd", "momentum": 0.9}))
+        updater3 = Updater(config=config3, network=model, device=torch.device("cpu"))
+        updater3.create_optimizer()
+        try:
+            updater3.load_optimizer(tmp_dir + "/model.opt.pt")
+        except ValueError as exc:
+            assert "moved" in str(exc), exc
+        else:
+            raise AssertionError("expected ValueError, the AdamW group options would go to SGD")
+
+    opt2 = updater2.get_optimizer()
+    groups_by_wd = {group["weight_decay"]: group for group in opt2.param_groups}
+    assert any(p is ln_weight for p in groups_by_wd[1e-3]["params"])
+    assert torch.equal(opt2.state[ln_weight]["exp_avg"], exp_avg1)
+
+
 def test_updater_weight_decay_blacklist():
     from returnn.util.basic import DictRefKeys
 
@@ -961,6 +1013,103 @@ def test_updater_weight_decay_blacklist():
     print("params by wd:", params_by_wd)
     assert params_by_wd[0.0] == {"0.weight", "1.weight", "1.bias", "2.bias"}
     assert params_by_wd[1e-3] == {"2.weight"}
+
+
+@contextlib.contextmanager
+def set_behavior_version(version: int):
+    """
+    This is a context manager which sets the behavior version to the given value.
+    """
+    from returnn.util.basic import BehaviorVersion
+
+    # noinspection PyProtectedMember
+    old = BehaviorVersion._get_state()
+    try:
+        # noinspection PyProtectedMember
+        BehaviorVersion._reset()
+        BehaviorVersion.set(version)
+        yield
+    finally:
+        # noinspection PyProtectedMember
+        BehaviorVersion._reset(old)
+
+
+def test_updater_weight_decay_blacklist_rf_modules():
+    # Since behavior version 36, the default weight-decay blacklist also covers
+    # rf.LayerNorm and rf.Embedding, matching torch.nn.LayerNorm / torch.nn.Embedding.
+    from returnn.torch.frontend.bridge import rf_module_to_pt_module
+    from returnn.util.basic import DictRefKeys
+
+    rf.select_backend_torch()
+
+    class _Model(rf.Module):
+        def __init__(self):
+            super().__init__()
+            in_dim, embed_dim, out_dim = rf.Dim(11), rf.Dim(5), rf.Dim(7)
+            self.embed = rf.Embedding(in_dim, embed_dim)
+            self.layer_norm = rf.LayerNorm(embed_dim)
+            self.linear = rf.Linear(embed_dim, out_dim)
+
+    config = Config(dict(optimizer={"class": "adamw", "weight_decay": 1e-3}))
+
+    def _params_by_wd():
+        pt_model = rf_module_to_pt_module(_Model())
+        updater = Updater(config=config, network=pt_model, device=torch.device("cpu"))
+        updater.create_optimizer()
+        opt = updater.get_optimizer()
+        assert len(opt.param_groups) == 2
+        param_to_name = DictRefKeys((param, name) for name, param in pt_model.named_parameters())
+        return {pg["weight_decay"]: {param_to_name[p] for p in pg["params"]} for pg in opt.param_groups}
+
+    with set_behavior_version(35):
+        params_by_wd = _params_by_wd()
+        assert params_by_wd[1e-3] == {"embed.weight", "layer_norm.scale", "linear.weight"}
+        assert params_by_wd[0.0] == {"layer_norm.bias", "linear.bias"}
+
+    with set_behavior_version(36):
+        params_by_wd = _params_by_wd()
+        assert params_by_wd[1e-3] == {"linear.weight"}
+        assert params_by_wd[0.0] == {"embed.weight", "layer_norm.scale", "layer_norm.bias", "linear.bias"}
+
+
+def test_load_optimizer_weight_decay_split_same_order():
+    # The checkpoint of behavior version 35 loaded under 36: the rf.LayerNorm scale moves into the group
+    # without weight decay while the flattened param order stays the same.
+    from returnn.torch.frontend.bridge import rf_module_to_pt_module
+
+    rf.select_backend_torch()
+
+    class _Model(rf.Module):
+        def __init__(self):
+            super().__init__()
+            in_dim, out_dim = rf.Dim(7, name="in"), rf.Dim(5, name="out")
+            self.linear = rf.Linear(in_dim, out_dim, with_bias=False)
+            self.norm = rf.LayerNorm(out_dim, with_bias=False)
+
+    model = rf_module_to_pt_module(_Model())
+    config = Config(dict(optimizer={"class": "adamw", "weight_decay": 1e-3}))
+
+    def _updater():
+        updater = Updater(config=config, network=model, device=torch.device("cpu"))
+        updater.create_optimizer()
+        updater.set_current_train_step(global_train_step=0, epoch=1)
+        return updater
+
+    with tempfile.TemporaryDirectory(prefix="returnn_test_load_opt_wd_split_same_order") as tmp_dir:
+        with set_behavior_version(35):
+            updater1 = _updater()
+            for param in model.parameters():
+                param.grad = torch.ones_like(param)
+            updater1.get_optimizer().step()
+            exp_avg = updater1.get_optimizer().state[model.norm.scale]["exp_avg"].clone()
+            updater1.save_optimizer(tmp_dir + "/model.opt.pt")
+        with set_behavior_version(36):
+            updater2 = _updater()
+            updater2.load_optimizer(tmp_dir + "/model.opt.pt")
+
+    opt2 = updater2.get_optimizer()
+    assert [len(group["params"]) for group in opt2.param_groups] == [1, 1]
+    assert torch.equal(opt2.state[model.norm.scale]["exp_avg"], exp_avg)
 
 
 class _AnchoredSGD(torch.optim.Optimizer):
