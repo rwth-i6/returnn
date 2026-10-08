@@ -4539,6 +4539,66 @@ class PackedBackend(Backend[PackedRawTensor]):
         return raw.rewrap(out, name="cumsum")
 
     @staticmethod
+    def lstm(
+        source: Tensor,
+        *,
+        state_h: Tensor,
+        state_c: Tensor,
+        ff_weight: Tensor,
+        rec_weight: Tensor,
+        bias: Optional[Tensor],
+        spatial_dim: Dim,
+        in_dim: Dim,
+        out_dim: Dim,
+    ) -> Tuple[Tensor, Tuple[Tensor, Tensor]]:
+        """
+        lstm. Over the innermost packed dim:
+        the sequences are gathered into the padded grid (capture-safe, see :func:`unpack`),
+        the inner (e.g. cuDNN) LSTM runs there, and the output is gathered back into the packing.
+        A segmented scan over the flat buffer would need one sequential step per packed frame.
+        Under static tracing the LSTM runs over the full padded grid (:func:`Backend.lstm_unmasked`),
+        since stopping per sequence needs the seq lens on the host.
+        The LSTM is causal, so the right padding never reaches the sequence frames,
+        but the final state then includes the padding: it is NaN there, so that any use is loud.
+        """
+        raw = _raw(source)
+        kwargs = dict(
+            state_h=state_h,
+            state_c=state_c,
+            ff_weight=ff_weight,
+            rec_weight=rec_weight,
+            bias=bias,
+            spatial_dim=spatial_dim,
+            in_dim=in_dim,
+            out_dim=out_dim,
+        )
+        if (
+            spatial_dim != raw.orig_dims[-1]
+            or len(raw.orig_dims) != 2
+            or any(isinstance(x, Tensor) and is_packed(x) for x in (state_h, state_c))
+        ):
+            return _dim_aware_call("lstm", (source,), kwargs)
+        padded = unpack(source)
+        if rf.is_static_traceable():
+            out = raw.inner_backend.lstm_unmasked(padded, **kwargs)
+            batch_dims = source.remaining_dims((spatial_dim, in_dim))
+            new_state_h, new_state_c = (
+                rf.full(
+                    dims=batch_dims + [out_dim],
+                    fill_value=float("nan"),
+                    dtype=out.dtype,
+                    device=out.device,
+                    feature_dim=out_dim,
+                )
+                for _ in range(2)
+            )
+        else:
+            out, (new_state_h, new_state_c) = raw.inner_backend.lstm(padded, **kwargs)
+        inner = _pack_like(out, raw)
+        inner.feature_dim = out_dim
+        return raw.rewrap(inner, name="lstm"), (new_state_h, new_state_c)
+
+    @staticmethod
     def reduce(source: Tensor, *, mode: str, axis: Union[Dim, Sequence[Dim]], use_mask: bool = True) -> Tensor:
         """
         reduce. fast paths:

@@ -2856,6 +2856,60 @@ class TorchBackend(Backend[torch.Tensor]):
 
         return out, (new_state_h, new_state_c)
 
+    @staticmethod
+    def lstm_unmasked(
+        source: Tensor,
+        *,
+        state_h: Tensor,
+        state_c: Tensor,
+        ff_weight: Tensor,
+        rec_weight: Tensor,
+        bias: Optional[Tensor],
+        spatial_dim: Dim,
+        in_dim: Dim,
+        out_dim: Dim,
+    ) -> Tensor:
+        """LSTM over the full padded spatial dim, see :func:`Backend.lstm_unmasked`"""
+        if bias is None:
+            lstm_params = (ff_weight.raw_tensor, rec_weight.raw_tensor)
+        else:
+            # same bias split as in lstm
+            bias_raw = bias.raw_tensor * 0.5
+            lstm_params = (ff_weight.raw_tensor, rec_weight.raw_tensor, bias_raw, bias_raw)
+
+        batch_dims = source.remaining_dims((spatial_dim, in_dim))
+        source_raw = source.copy_transpose([spatial_dim] + batch_dims + [in_dim]).raw_tensor
+        num_frames, batch_shape = source_raw.shape[0], source_raw.shape[1:-1]
+        source_raw = source_raw.reshape(num_frames, -1, source_raw.shape[-1])  # (T, N, F)
+        # initial state may be broadcast over batch dims
+        state_h_raw, state_c_raw = (
+            s.copy_compatible_to_dims_raw(batch_dims + [out_dim])
+            .expand(*batch_shape, -1)
+            .reshape(1, source_raw.shape[1], -1)
+            .to(source_raw.dtype)
+            for s in (state_h, state_c)
+        )  # (1, N, H)
+
+        out_raw, _, _ = torch.lstm(
+            source_raw,
+            (state_h_raw, state_c_raw),
+            lstm_params,
+            has_biases=bias is not None,
+            num_layers=1,
+            dropout=0.0,
+            train=rf.get_run_ctx().is_train_flag_enabled(func=rf.LSTM.__call__),
+            bidirectional=False,
+            batch_first=False,
+        )
+        out_raw = out_raw.reshape(num_frames, *batch_shape, out_raw.shape[-1])
+        return Tensor(
+            "lstm",
+            dims=[spatial_dim] + batch_dims + [out_dim],
+            dtype=TorchBackend.get_dtype_name_raw(out_raw),  # maybe due to AMP
+            raw_tensor=out_raw,
+            feature_dim=out_dim,
+        )
+
     TensorArrayType = List[Tensor]
 
     @staticmethod

@@ -1590,6 +1590,38 @@ class Backend(Generic[T]):
         raise NotImplementedError
 
     @staticmethod
+    def lstm_unmasked(
+        source: Tensor,
+        *,
+        state_h: Tensor,
+        state_c: Tensor,
+        ff_weight: Tensor,
+        rec_weight: Tensor,
+        bias: Optional[Tensor],
+        spatial_dim: Dim,
+        in_dim: Dim,
+        out_dim: Dim,
+    ) -> Tensor:
+        """
+        Functional LSTM over the full (padded) extent of spatial_dim, ignoring the seq lens.
+        No host read of the seq lens, so it is CUDA-graph capturable.
+        The outputs on the sequence frames equal those of :func:`lstm` (causal),
+        the final state would not (it includes the padding frames), so it is not returned.
+
+        :param source: [..., spatial_dim, in_dim]
+        :param state_h: initial hidden state [..., out_dim]
+        :param state_c: initial cell state [..., out_dim]
+        :param ff_weight:
+        :param rec_weight:
+        :param bias:
+        :param spatial_dim:
+        :param in_dim:
+        :param out_dim:
+        :return: output [..., spatial_dim, out_dim]
+        """
+        raise NotImplementedError
+
+    @staticmethod
     def real_as_complex(x: Tensor, *, pair_dim: Dim) -> Tensor:
         """
         Interpret a real tensor with a size-2 pair_dim as a complex tensor.

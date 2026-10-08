@@ -357,6 +357,183 @@ def test_cumsum_over_non_packed_dim():
     _assert_equal_non_padded(out_p, rf.cumsum(x, spatial_dim=feat_dim), batch_dim, time_dim)
 
 
+@contextlib.contextmanager
+def _train_step_run_ctx(*, train_flag: bool):
+    # later tests expect no run ctx
+    rf.init_train_step_run_ctx(train_flag=train_flag)
+    try:
+        yield
+    finally:
+        from returnn.frontend import run_ctx
+
+        run_ctx.reset_run_ctx()
+
+
+def _make_lstm(feat_dim: Dim, out_dim: Dim, *, device: str = "cpu") -> Tuple[rf.LSTM, torch.nn.LSTM]:
+    """:return: RF LSTM and a torch LSTM with the same weights (RF bias = b_ih + b_hh)"""
+    rf.set_random_seed(1)
+    with rf.set_default_device_ctx(device):
+        lstm = rf.LSTM(feat_dim, out_dim)
+    for p in lstm.parameters():
+        p.raw_tensor.data.normal_(generator=torch.Generator(device).manual_seed(7))
+    ref = torch.nn.LSTM(feat_dim.dimension, out_dim.dimension).to(device)
+    with torch.no_grad():
+        ref.weight_ih_l0.copy_(lstm.ff_weight.raw_tensor)
+        ref.weight_hh_l0.copy_(lstm.rec_weight.raw_tensor)
+        ref.bias_ih_l0.copy_(lstm.bias.raw_tensor)
+        ref.bias_hh_l0.zero_()
+    return lstm, ref
+
+
+def _torch_lstm_per_seq(ref: torch.nn.LSTM, x_raw: torch.Tensor, lens) -> Tuple[list, list, list]:
+    """:return: per seq: output (T, H), final h (H,), final c (H,)"""
+    outs, hs, cs = [], [], []
+    for b, n in enumerate(lens):
+        out, (h, c) = ref(x_raw[b, :n][:, None])
+        outs.append(out[:, 0])
+        hs.append(h[0, 0])
+        cs.append(c[0, 0])
+    return outs, hs, cs
+
+
+def test_lstm_packed():
+    # packed vs padded vs torch.nn.LSTM: outputs, final states and grads
+    rf.select_backend_torch()
+    with _train_step_run_ctx(train_flag=False):
+        x, batch_dim, time_dim, feat_dim = _make_input(batch_size=3, seq_lens=(5, 1, 4))
+        out_dim = Dim(6, name="lstm")
+        lstm, ref = _make_lstm(feat_dim, out_dim)
+        x.raw_tensor.requires_grad_(True)
+        state = lstm.default_initial_state(batch_dims=[batch_dim])
+
+        out_pad, state_pad = lstm(x, state=state, spatial_dim=time_dim)
+        out_p, state_p = lstm(packed.pack(x), state=state, spatial_dim=time_dim)
+        assert packed.is_packed(out_p) and out_p.feature_dim == out_dim
+        _assert_equal_non_padded(out_p, out_pad, batch_dim, time_dim)
+        for s_p, s_pad in [(state_p.h, state_pad.h), (state_p.c, state_pad.c)]:
+            numpy.testing.assert_allclose(
+                s_p.copy_transpose([batch_dim, out_dim]).raw_tensor.detach().numpy(),
+                s_pad.copy_transpose([batch_dim, out_dim]).raw_tensor.detach().numpy(),
+                rtol=1e-5,
+                atol=1e-6,
+            )
+
+        lens = [5, 1, 4]
+        outs, hs, _ = _torch_lstm_per_seq(ref, x.raw_tensor, lens)
+        out_p_raw = packed.unpack(out_p).copy_transpose([batch_dim, time_dim, out_dim]).raw_tensor
+        h_p_raw = state_p.h.copy_transpose([batch_dim, out_dim]).raw_tensor
+        for b, n in enumerate(lens):
+            torch.testing.assert_close(out_p_raw[b, :n], outs[b], msg=f"seq {b}")
+            torch.testing.assert_close(h_p_raw[b], hs[b], msg=f"seq {b}")
+
+        weights = rf.cast(rf.range_over_dim(out_dim), "float32") + 1.0
+        grads = []
+        for out in (out_pad, out_p):
+            loss = rf.reduce_sum(out * weights, axis=[batch_dim, time_dim, out_dim])
+            params = [lstm.ff_weight.raw_tensor, lstm.rec_weight.raw_tensor, lstm.bias.raw_tensor, x.raw_tensor]
+            grads.append(torch.autograd.grad(loss.raw_tensor, params))
+        for g_pad, g_p in zip(*grads):
+            torch.testing.assert_close(g_p, g_pad)
+
+
+def _lstm_static_traceable_case(device: str):
+    """
+    the captured regime: static batch dim with zero-length padding seqs, a static bound buffer,
+    padded grid at the time capacity
+    :return: (run, check): run() does fwd + bwd, check() compares against torch.nn.LSTM
+    """
+    n_seq_cap, buf, cap = 6, 40, 9
+    live = [7, 1, 9, 4]
+    lens = live + [0] * (n_seq_cap - len(live))
+    b_dim = Dim(n_seq_cap, name="batch")
+    sd = Dim(
+        Tensor("len", dims=[b_dim], dtype="int32", raw_tensor=torch.tensor(lens, dtype=torch.int32, device=device)),
+        name="time",
+    )
+    sd.capacity = cap
+    packed_dim = Dim(buf, name="packed")
+    feat_dim, out_dim = Dim(5, name="feat"), Dim(6, name="lstm")
+    lstm, ref = _make_lstm(feat_dim, out_dim, device=device)
+    flat_raw = torch.randn(buf, feat_dim.dimension, generator=torch.Generator().manual_seed(3)).to(device)
+    flat_raw.requires_grad_(True)
+    flat = Tensor("flat", dims=[packed_dim, feat_dim], dtype="float32", raw_tensor=flat_raw, feature_dim=feat_dim)
+    x = packed.pack_import(flat, batch_dim=b_dim, spatial_dim=sd, packed_dim=packed_dim)
+    weights = rf.cast(rf.range_over_dim(out_dim, device=device), "float32") + 1.0
+    params = [lstm.ff_weight.raw_tensor, lstm.rec_weight.raw_tensor, lstm.bias.raw_tensor, flat_raw]
+    result = {}
+
+    def _run():
+        with rf.set_static_traceable_ctx(), rf.set_default_device_ctx(device):
+            out, state = lstm(
+                x, state=lstm.default_initial_state(batch_dims=[b_dim]), spatial_dim=sd
+            )  # (B, T, F) -> (B, T, H)
+            assert packed.is_packed(out) and out.raw_tensor.packed_dim == packed_dim
+            out_flat = out.raw_tensor.inner.copy_transpose([packed_dim, out_dim]).raw_tensor
+            # junk tail of the bound buffer excluded
+            num_frames = sum(live)
+            loss = (out_flat[:num_frames] * weights.raw_tensor).sum()
+            result["out"] = out_flat
+            result["h"] = state.h.raw_tensor
+            result["grads"] = torch.autograd.grad(loss, params)
+
+    def _check():
+        starts = numpy.cumsum([0] + live[:-1])
+        x_seqs = torch.zeros(len(live), max(live), feat_dim.dimension, device=device)
+        for b, (s, n) in enumerate(zip(starts, live)):
+            x_seqs[b, :n] = flat_raw.detach()[s : s + n]
+        x_seqs.requires_grad_(True)
+        outs, _, _ = _torch_lstm_per_seq(ref, x_seqs, live)
+        for b, (s, n) in enumerate(zip(starts, live)):
+            torch.testing.assert_close(result["out"][s : s + n], outs[b], msg=f"seq {b}")
+        assert bool(torch.isnan(result["h"]).all()), "final state under static tracing must be NaN"
+        loss_ref = sum((o * weights.raw_tensor).sum() for o in outs)
+        ref_params = [ref.weight_ih_l0, ref.weight_hh_l0, ref.bias_ih_l0, x_seqs]
+        g_ff, g_rec, g_bias, g_x = torch.autograd.grad(loss_ref, ref_params)
+        grads = result["grads"]
+        # cuDNN sums weight grads in another order
+        tol = dict(atol=1e-4, rtol=1e-4)
+        torch.testing.assert_close(grads[0], g_ff, **tol)
+        torch.testing.assert_close(grads[1], g_rec, **tol)
+        torch.testing.assert_close(grads[2], g_bias, **tol)
+        for b, (s, n) in enumerate(zip(starts, live)):
+            torch.testing.assert_close(grads[3][s : s + n], g_x[b, :n], msg=f"seq {b}", **tol)
+
+    return _run, _check
+
+
+def test_lstm_packed_static_traceable():
+    rf.select_backend_torch()
+    with _train_step_run_ctx(train_flag=False):
+        run, check = _lstm_static_traceable_case("cpu")
+        run()
+        check()
+
+
+def test_lstm_packed_cuda_graph_capture():
+    # fwd + bwd captured into one CUDA graph: no host sync
+    if not torch.cuda.is_available():
+        raise unittest.SkipTest("no CUDA")
+    rf.select_backend_torch()
+    with _train_step_run_ctx(train_flag=True):
+        run, check = _lstm_static_traceable_case("cuda")
+        tf32 = torch.backends.cuda.matmul.allow_tf32, torch.backends.cudnn.allow_tf32
+        torch.backends.cuda.matmul.allow_tf32 = torch.backends.cudnn.allow_tf32 = False
+        try:
+            stream = torch.cuda.Stream()
+            stream.wait_stream(torch.cuda.current_stream())
+            with torch.cuda.stream(stream):
+                run()  # warmup
+            torch.cuda.current_stream().wait_stream(stream)
+            graph = torch.cuda.CUDAGraph()
+            with torch.cuda.graph(graph):
+                run()
+            graph.replay()
+            torch.cuda.synchronize()
+            check()
+        finally:
+            torch.backends.cuda.matmul.allow_tf32, torch.backends.cudnn.allow_tf32 = tf32
+
+
 def _repeat_case(seq_lens, dur_rows, **repeat_kwargs):
     """padded vs packed repeat on the same durations, compared on the real frames"""
     x, batch_dim, time_dim, feat_dim = _make_input(batch_size=len(seq_lens), seq_lens=seq_lens)
