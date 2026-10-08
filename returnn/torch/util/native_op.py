@@ -1012,6 +1012,52 @@ def fast_viterbi(
     return alignment, scores
 
 
+def fast_viterbi_packed(
+    *,
+    am_scores: torch.Tensor,
+    am_seq_len: torch.Tensor,
+    seq_starts: torch.Tensor,
+    max_seq_len: int,
+    edges: torch.Tensor,
+    weights: torch.Tensor,
+    start_end_states: torch.Tensor,
+    n_states: Optional[int] = None,
+    mask_idx: int = 0,
+) -> Tuple[torch.Tensor, torch.Tensor]:
+    """
+    Packed variant of :func:`fast_viterbi`, see :class:`NativeOp.FastViterbiPackedOp`.
+
+    :param am_scores: (total_time, dim), in +log space, the seqs concatenated along time
+    :param am_seq_len: (batch,)
+    :param seq_starts: (batch,), start offset of each seq in the total_time axis
+    :param max_seq_len: frames the recursion runs over, at least the max of am_seq_len.
+        A host int, the packed shape does not give it and reading the lens would be a sync
+    :param edges: (4,num_edges), edges of the graph (from,to,emission_idx,sequence_idx)
+    :param weights: (num_edges,), weights of the edges (-log space, same as for fast_baum_welch)
+    :param start_end_states: (2, batch), (start,end) state idx in automaton
+    :param n_states: state count of the automaton, derived from start_end_states by default,
+        which is a device read, so a traced or captured step passes it
+    :param mask_idx: vocab index written to the frames outside the sequences, and where no path was found
+    :return: (alignment, scores), alignment is (total_time,), scores is (batch,), in +log space
+    """
+    if n_states is None:
+        n_states = int(start_end_states[1].max()) + 1
+    maker = OpMaker(OpDescription.from_gen_base(native_op.FastViterbiPackedOp))
+    op = maker.make_op()
+    alignment, scores = op(
+        am_scores,
+        am_seq_len.to(torch.int32),
+        seq_starts.to(torch.int32),
+        edges,
+        weights,
+        start_end_states,
+        max_seq_len,
+        n_states,
+        mask_idx,
+    )
+    return alignment, scores
+
+
 def ctc_best_path(
     *,
     logits: torch.Tensor,
@@ -1061,6 +1107,70 @@ def ctc_best_path(
         start_end_states=start_end_states,
         mask_idx=blank_index,
         n_states=n_batch * (2 * n_tgt_time + 3),
+    )
+    return alignment
+
+
+def ctc_best_path_packed(
+    *,
+    logits: torch.Tensor,
+    seq_starts: torch.Tensor,
+    logits_seq_lens: torch.Tensor,
+    max_seq_len: Optional[int] = None,
+    targets: torch.Tensor,
+    targets_seq_lens: torch.Tensor,
+    label_loop: bool = True,
+    logits_normalize: bool = True,
+    blank_index: int = -1,
+    edges_bound: Optional[int] = None,
+) -> torch.Tensor:
+    """
+    Packed variant of :func:`ctc_best_path`, the logits laid out as for :func:`ctc_loss_packed`.
+
+    :param logits: (total_time, dim), the seqs concatenated along time. unnormalized (before softmax)
+    :param seq_starts: (batch,), start offset of each seq in the total_time axis
+    :param logits_seq_lens: shape (batch,) of int32|int64
+    :param max_seq_len: max of logits_seq_lens, or a static bound above it. pass it if known, to avoid a device sync
+    :param targets: batch-major, [batch,target_time]
+    :param targets_seq_lens: (batch,)
+    :param label_loop: (ctc_merge_repeated in tf.nn.ctc_loss)
+    :param logits_normalize: apply log_softmax on logits (default)
+    :param blank_index: vocab index of the blank symbol
+    :param edges_bound: packed FSA edge layout, see :func:`ctc_loss_packed`
+    :return: alignment, (total_time,), blank on every frame outside the sequences
+    """
+    from .assert_ import assert_
+
+    assert logits.ndim == 2
+    dim = logits.shape[-1]
+    if blank_index < 0:
+        blank_index += dim
+    assert 0 <= blank_index < dim
+    if max_seq_len is None:
+        max_seq_len = int(logits_seq_lens.max())
+    # a longer sequence would read the recursion buffer past its end
+    assert_(logits_seq_lens.max() <= max_seq_len, "ctc_best_path_packed: a sequence longer than max_seq_len")
+    log_sm = torch.log_softmax(logits, dim=-1) if logits_normalize else logits
+    edges, weights, start_end_states = get_ctc_fsa_fast_bw(
+        targets=targets,
+        seq_lens=targets_seq_lens,
+        blank_idx=blank_index,
+        label_loop=label_loop,
+        edges_bound=edges_bound,
+    )
+    # the state count from the shapes, see ctc_loss_packed, reading it off start_end_states would be a sync
+    n_batch, n_tgt_time = targets.shape
+    n_states = 2 * (edges_bound // 5) + n_batch if edges_bound is not None else n_batch * (2 * n_tgt_time + 3)
+    alignment, _ = fast_viterbi_packed(
+        am_scores=log_sm,
+        am_seq_len=logits_seq_lens,
+        seq_starts=seq_starts,
+        max_seq_len=max_seq_len,
+        edges=edges,
+        weights=weights,
+        start_end_states=start_end_states,
+        n_states=n_states,
+        mask_idx=blank_index,
     )
     return alignment
 
