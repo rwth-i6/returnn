@@ -5042,7 +5042,7 @@ class FastViterbiOp(NativeOpGenBase):
         // Maybe we could use double compare-and-swap (https://stackoverflow.com/questions/55941382/).
         // But not sure how.
         // So instead, we use double-wide compare-and-swap.
-        // The cell is also read as one 64 bit word: a read through the packed struct
+        // The cell is also read atomically, as one 64 bit word: a read through the packed struct
         // can see a torn update of another thread, i.e. a score which never existed.
         union U {
           IdxAndVal s;
@@ -5051,7 +5051,7 @@ class FastViterbiOp(NativeOpGenBase):
         U updated;
         updated.s = b;
         U prev;
-        prev.v64 = *((volatile unsigned long long int*) a);
+        prev.v64 = elem_atomic_cas((unsigned long long int*) a, 0ULL, 0ULL);
         while(true) {
           if(b.val < prev.s.val)
             return;
