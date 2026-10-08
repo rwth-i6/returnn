@@ -19,7 +19,8 @@ gpu_local_cpu_affinity
     (batch handoff, copies to the device) also runs on the far socket.
     In distributed training, ranks whose GPUs share a NUMA node or socket get disjoint slices of its CPUs.
     Skipped (logged) when it would leave the process with less than its share of the allowed CPUs,
-    e.g. a cpuset not aligned to the GPU, or when the topology cannot be read.
+    e.g. a cpuset not aligned to the GPU, when the topology cannot be read,
+    or when the launcher already bound the ranks to different CPUs (``srun`` per-task binding, ``mpirun``).
 
 extern_data (former num_outputs)
     Defines the source/target dimensions of the data as a dictionary of dictionaries describing data streams.

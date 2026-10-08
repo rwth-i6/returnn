@@ -11,8 +11,9 @@ Linux only: the kernel reports the local CPUs of a PCI device in sysfs.
 """
 
 from __future__ import annotations
-from typing import Callable, List, Optional, Sequence, Set
+from typing import Callable, List, Optional, Sequence, Set, Tuple
 import os
+import sys
 
 import torch
 
@@ -37,11 +38,14 @@ def set_gpu_local_cpu_affinity_from_config(config: Config) -> Optional[Set[int]]
     see :func:`set_gpu_local_cpu_affinity`.
     To be called once at startup, after the distributed context exists (the local rank is the device)
     and before the datasets are created, so their worker processes inherit the affinity.
+    In distributed training, the ranks on a host share their allowed CPUs (one cpuset, e.g. ``torchrun`` in a SLURM job).
+    When the launcher already bound them to different CPUs (``srun`` per-task binding, ``mpirun``),
+    that binding is kept, nothing is pinned.
 
     :param config:
-    :return: the CPUs, or None when nothing was pinned (option off, no CUDA device, unknown topology)
+    :return: the CPUs, or None when nothing was pinned (option off, no CUDA device, unknown topology, already bound)
     """
-    if not config.bool("gpu_local_cpu_affinity", True):
+    if not config.bool("gpu_local_cpu_affinity", True) or sys.platform != "linux":
         return None
     from returnn.torch.engine import get_device_from_config
 
@@ -52,10 +56,37 @@ def set_gpu_local_cpu_affinity_from_config(config: Config) -> Optional[Set[int]]
     if config.typed_value("torch_distributed") is not None:
         from returnn.torch.distributed import get_ctx
 
-        num_local_ranks = get_ctx(config=config).local_size()
+        get_ctx(config=config)
+        allowed_per_local_rank = _gather_allowed_cpus_of_local_ranks()
+        if any(allowed != allowed_per_local_rank[0] for allowed in allowed_per_local_rank):
+            print(
+                "CPU affinity not set, the launcher already bound the ranks on this host to different CPUs:"
+                f" {[sorted(allowed) for allowed in allowed_per_local_rank]}",
+                file=log.v3,
+            )
+            return None
+        num_local_ranks = len(allowed_per_local_rank)
     # a bare "cuda" means the current (default) device, as in the engine
     index = device.index if device.index is not None else torch.cuda.current_device()
     return set_gpu_local_cpu_affinity(index, num_local_ranks=num_local_ranks)
+
+
+def _gather_allowed_cpus_of_local_ranks() -> List[Set[int]]:
+    """
+    :return: the allowed CPUs (:func:`os.sched_getaffinity`) of every rank on this host, in rank order,
+        via a gloo group, so no CUDA device is touched
+    """
+    import socket
+    import torch.distributed as dist
+
+    group = dist.new_group(backend="gloo")
+    try:
+        hostname = socket.gethostname()
+        gathered: List[Optional[Tuple[str, List[int]]]] = [None] * dist.get_world_size()
+        dist.all_gather_object(gathered, (hostname, sorted(os.sched_getaffinity(0))), group=group)
+    finally:
+        dist.destroy_process_group(group)
+    return [set(allowed) for host, allowed in gathered if host == hostname]
 
 
 def parse_cpulist(cpulist: str) -> Set[int]:
@@ -153,7 +184,7 @@ def select_gpu_local_cpus(
     :return: the CPUs to pin to, or None for no pinning
     """
     assert local_cpus_per_rank, "no ranks"
-    fair_share = len(allowed_cpus) // len(local_cpus_per_rank)
+    fair_share = max(1, len(allowed_cpus) // len(local_cpus_per_rank))
 
     def _socket_cpus(local_cpus: Set[int]) -> Set[int]:
         sockets = {cpu_socket(cpu) for cpu in local_cpus}

@@ -569,6 +569,9 @@ def test_gpu_cpu_affinity_select():
     assert select_gpu_local_cpus(nodes[:1], 0, set(range(48, 72)), cpu_socket=socket) is None
     # a 24-CPU cpuset half on each socket, 1 rank: share 24, the socket 0 part has 12 -> none
     assert select_gpu_local_cpus(nodes[:1], 0, set(range(36, 60)), cpu_socket=socket) is None
+    # fewer allowed CPUs than ranks: the share is still one CPU, so never an empty set
+    assert select_gpu_local_cpus(nodes, 0, {50, 51}, cpu_socket=socket) is None
+    assert select_gpu_local_cpus(nodes, 2, {50, 51}, cpu_socket=socket) == {50, 51}
     # same cpuset, 2 ranks on different sockets: share 12, each socket part is exactly that
     assert select_gpu_local_cpus([nodes[0], nodes[2]], 0, set(range(36, 60)), cpu_socket=socket) == set(range(36, 48))
     assert select_gpu_local_cpus([nodes[0], nodes[2]], 1, set(range(36, 60)), cpu_socket=socket) == set(range(48, 60))
@@ -577,7 +580,7 @@ def test_gpu_cpu_affinity_select():
 def test_gpu_cpu_affinity_from_config():
     """
     the startup glue: option off or a CPU device pins nothing;
-    a single GPU pins its device index; distributed pins the local rank with the local world size
+    a single GPU pins its device index; distributed pins the local rank, sharing with the ranks on this host (here 1)
     """
     import socket
     from unittest import mock
@@ -617,7 +620,7 @@ def test_gpu_cpu_affinity_from_config():
                 set_gpu_local_cpu_affinity_from_config(
                     Config({"device": "cuda", "torch_distributed": {"backend": "gloo"}})
                 )
-            set_affinity.assert_called_once_with(1, num_local_ranks=2)
+            set_affinity.assert_called_once_with(1, num_local_ranks=1)
         finally:
             os.environ.pop(init_info_key, None)
             dist_mod._is_set_up, dist_mod._ctx = False, None
