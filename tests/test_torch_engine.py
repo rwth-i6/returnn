@@ -7,6 +7,8 @@ import _setup_test_env  # noqa
 from typing import Optional, Any, Dict, Tuple, List
 import contextlib
 import copy
+import functools
+import io
 import json
 import os
 import sys
@@ -866,6 +868,56 @@ def test_data_loader_oggzip():
     # The following depends on the random data generation in create_ogg_zip_txt_only_dataset_mult_seqs,
     # but we fixed the seed and the random number generator, so this should stay the same, unless we change the code.
     assert batches == [[[12, 8, 9, 11], [16, 0, 0, 0]], [[6, 25, 18, 20, 5], [28, 10, 28, 14, 0]], [[17, 23]]]
+
+
+@unittest.skipIf(torch.__version__ < (2,), "torch.load weights_only cannot load floats before PyTorch 2.0")
+def test_save_optimizer_opts_weights_only():
+    include_check_partial = functools.partial(lambda **_kwargs: None)
+    for optimizer, expected_saved_opts in [
+        (torch.optim.AdamW, "adamw"),
+        (
+            {
+                "class": torch.optim.AdamW,
+                "betas": (0.9, 0.98),
+                "weight_decay": 1e-3,
+                "weight_decay_modules_blacklist": [torch.nn.LayerNorm, "rf.Embedding"],
+                "weight_decay_custom_include_check": lambda **_kwargs: None,
+            },
+            {
+                "class": "adamw",
+                "betas": (0.9, 0.98),
+                "weight_decay": 1e-3,
+                "weight_decay_modules_blacklist": ["torch.nn.modules.normalization.LayerNorm", "rf.Embedding"],
+                "weight_decay_custom_include_check": f"{__name__}.<lambda>",
+            },
+        ),
+        (
+            {"class": "adamw", "weight_decay": 1e-3, "weight_decay_custom_include_check": include_check_partial},
+            {
+                "class": "adamw",
+                "weight_decay": 1e-3,
+                "weight_decay_custom_include_check": f"object:{include_check_partial!r}",
+            },
+        ),
+    ]:
+        config = Config(dict(optimizer=optimizer))
+        model = torch.nn.Linear(7, 5)
+        updater = Updater(config=config, network=model, device=torch.device("cpu"))
+        updater.create_optimizer()
+
+        with tempfile.TemporaryDirectory(prefix="returnn_test_save_optimizer_opts_weights_only") as tmp_dir:
+            updater.save_optimizer(tmp_dir + "/model.opt.pt")
+            saved = torch.load(tmp_dir + "/model.opt.pt", weights_only=True)
+            assert saved["optimizer_opts"] == expected_saved_opts
+            updater.load_optimizer(tmp_dir + "/model.opt.pt")
+
+    # numpy values given to the optimizer itself would break its own state dict, so check the conversion directly
+    from returnn.torch.updater import _optimizer_opts_for_checkpoint
+
+    buffer = io.BytesIO()
+    torch.save(_optimizer_opts_for_checkpoint({"a": numpy.float32(0.5), "b": numpy.arange(4).reshape(2, 2)}), buffer)
+    buffer.seek(0)
+    assert torch.load(buffer, weights_only=True) == {"a": 0.5, "b": [[0, 1], [2, 3]]}
 
 
 def test_load_optimizer_old_format():

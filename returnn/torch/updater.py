@@ -6,8 +6,10 @@ and model param update logic in general.
 from __future__ import annotations
 
 from typing import Optional, Union, Any, Type, Callable, Sequence, Iterable, Set, Dict, List, Tuple
+from types import FunctionType, BuiltinFunctionType
 import os
 import gc
+import numpy
 import torch
 
 import returnn
@@ -544,7 +546,7 @@ class Updater:
             {
                 "optimizer": optimizer_state_dict,
                 "optimizer_class_name": self.optimizer.__class__.__name__,
-                "optimizer_opts": self._optimizer_opts,
+                "optimizer_opts": _optimizer_opts_for_checkpoint(self._optimizer_opts),
                 "param_names": param_names,
                 "epoch": self._current_epoch,
                 "step": self._current_train_step,
@@ -769,6 +771,33 @@ def wrap_user_blacklist_wd_modules(
         assert issubclass(mod, (rf.Module, torch.nn.Module)), f"invalid blacklist_weight_decay_modules {mods!r}"
         res.append(mod)
     return tuple(res)
+
+
+def _optimizer_opts_for_checkpoint(obj: Any) -> Any:
+    """
+    :param obj: optimizer options, or a part of them
+    :return: same structure, with only types which ``torch.load(weights_only=True)`` accepts:
+        numpy scalars and arrays become Python numbers and (nested) lists,
+        an optimizer class becomes its short name if it has one (e.g. ``"adamw"``),
+        other classes and functions their name as in :func:`rf.build_dict`, any other object ``"object:<repr>"``
+    """
+    if obj is None or type(obj) in (bool, int, float, str):
+        return obj
+    if isinstance(obj, (numpy.generic, numpy.ndarray)):
+        return _optimizer_opts_for_checkpoint(obj.tolist())
+    if isinstance(obj, dict):
+        return {_optimizer_opts_for_checkpoint(k): _optimizer_opts_for_checkpoint(v) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [_optimizer_opts_for_checkpoint(v) for v in obj]
+    if isinstance(obj, tuple):
+        return tuple(_optimizer_opts_for_checkpoint(v) for v in obj)
+    if isinstance(obj, type) and issubclass(obj, torch.optim.Optimizer):
+        _init_optimizer_classes_dict()
+        if _OptimizerClassesDict.get(obj.__name__.lower()) is obj:
+            return obj.__name__.lower()
+    if isinstance(obj, (type, FunctionType, BuiltinFunctionType)):
+        return rf.build_dict(obj)["class"]
+    return f"object:{obj!r}"
 
 
 def gradient_noise_(params: Iterable[torch.nn.Parameter], std: float):
