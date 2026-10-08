@@ -29,6 +29,7 @@ _OptimizerClassesDict = {}
 # torch.optim names take precedence (see :func:`get_optimizer_class`).
 _ReturnnOptimizerClassPathsByName = {
     "lion": "returnn.torch.optim.lion.Lion",
+    "amuse": "returnn.torch.optim.amuse.AMUSE",
     "multi": "returnn.torch.optim.multi.MultiOptimizer",
 }
 
@@ -56,7 +57,7 @@ def get_optimizer_class(
     """
     :param class_name: Optimizer class, either as str (e.g. "adam"), as type (torch.optim.Adam) or callable.
         If str, we support all torch.optim optimizers (ignoring case) (e.g. "adam"),
-        the custom optimizers shipped with RETURNN (e.g. "multi", "lion"),
+        the custom optimizers shipped with RETURNN (e.g. "multi", "lion", "amuse"),
         or class names with full module path (e.g. "returnn.torch.optim.lion.Lion").
     :return: Optimizer class, e.g. torch.optim.Adam
     """
@@ -1116,9 +1117,14 @@ def _param_group_hyper_param_keys(group: Dict[str, Any]) -> Set[str]:
 
 
 def _optimizer_owner_name(optimizer: torch.optim.Optimizer) -> str:
-    """qualified class name of the optimizer algorithm, as stored in optimizer checkpoints"""
+    """
+    :return: qualified class name of the optimizer algorithm, as stored in optimizer checkpoints,
+        plus its state-relevant mode if it has one (e.g. the AMUSE ``update_type``)
+    """
     cls = type(optimizer)
-    return f"{cls.__module__}.{cls.__qualname__}"
+    name = f"{cls.__module__}.{cls.__qualname__}"
+    mode = getattr(optimizer, "update_type", None)
+    return f"{name}({mode})" if mode is not None else name
 
 
 def _optimizer_group_owner_names(optimizer: torch.optim.Optimizer) -> List[str]:
