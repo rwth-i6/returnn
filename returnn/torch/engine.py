@@ -114,7 +114,7 @@ class Engine(EngineBase):
         self._autocast_dtype: Optional[str] = None
         self._grad_scaler: Optional[amp.GradScaler] = None
 
-        dev_ = get_device_from_config_opt(config.value("device", None))
+        dev_ = get_device_from_config(config)
         self._device = dev_.result
         print("Using device:", self._device, f"({dev_.reason or '?'})", file=log.v2)
 
@@ -125,11 +125,6 @@ class Engine(EngineBase):
             self._torch_distributed_ctx = dist_get_ctx(config=config)
             local_rank = self._torch_distributed_ctx.local_rank()
             print(f"Start running torch distributed training on local rank {local_rank}.", file=log.v2)
-            if self._device == "cpu" and config.value("device", None) == "cpu":
-                pass  # explicitly requested, e.g. the gloo backend for tests
-            else:
-                assert self._device == "cuda", f"torch distributed: unexpected device {self._device!r}"
-                self._device = f"cuda:{local_rank}"
 
         if self._device == "cuda" or self._device.startswith("cuda:"):
             # Theano and TensorFlow print sth like: Using gpu device 2: GeForce GTX 980 (...)
@@ -2041,6 +2036,23 @@ def _get_batch_size_info_raw(extern_data_raw: Dict[str, Any]) -> Dict[str, int]:
         info[f"max_size:{k}"] = int(seq_lens.max()) if len(seq_lens) else 0
         info[f"sum_size:{k}"] = int(seq_lens.sum())
     return info
+
+
+def get_device_from_config(config: Config) -> ResultWithReason[str]:
+    """
+    :param config:
+    :return: the device the engine runs on: the resolved ``device`` option (:func:`get_device_from_config_opt`),
+        in distributed training (``torch_distributed``) the CUDA device of the local rank
+    """
+    dev_ = get_device_from_config_opt(config.value("device", None))
+    if config.typed_value("torch_distributed") is not None:
+        if dev_.result == "cpu" and config.value("device", None) == "cpu":
+            pass  # explicitly requested, e.g. the gloo backend for tests
+        else:
+            assert dev_.result == "cuda", f"torch distributed: unexpected device {dev_.result!r}"
+            local_rank = dist_get_ctx(config=config).local_rank()
+            dev_ = ResultWithReason(f"cuda:{local_rank}", f"torch distributed local rank {local_rank}")
+    return dev_
 
 
 def get_device_from_config_opt(device: Optional[str]) -> ResultWithReason[str]:

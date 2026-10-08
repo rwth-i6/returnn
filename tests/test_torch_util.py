@@ -501,6 +501,171 @@ def test_masked_select_bound():
     torch.testing.assert_close(out2, x[mask])
 
 
+def test_gpu_cpu_affinity_parse_cpulist():
+    from returnn.torch.util.gpu_cpu_affinity import parse_cpulist
+
+    assert parse_cpulist("0-11,24-35\n") == set(range(12)) | set(range(24, 36))
+    assert parse_cpulist("72-143") == set(range(72, 144))
+    assert parse_cpulist("3") == {3}
+    assert parse_cpulist("") == set()
+
+
+def test_gpu_cpu_affinity_sysfs_and_proc_lookup():
+    """the local CPUs of a PCI device from sysfs, and the PCI id of a GPU by its UUID from the driver's proc dir"""
+    import tempfile
+    from returnn.torch.util.gpu_cpu_affinity import read_pci_device_local_cpus, find_pci_id_by_gpu_uuid
+
+    with tempfile.TemporaryDirectory() as tmp:
+        gpus = {
+            "0000:1b:00.0": ("8ff8d0c7-8d30-8e55-0980-ac69fc03a6b8", "0-11"),
+            "0001:01:00.0": ("0911978f", "72-143"),
+        }
+        for pci_id, (uuid, cpulist) in gpus.items():
+            os.makedirs(os.path.join(tmp, "sys", pci_id))
+            with open(os.path.join(tmp, "sys", pci_id, "local_cpulist"), "wt") as f:
+                f.write(cpulist + "\n")
+            os.makedirs(os.path.join(tmp, "proc", pci_id))
+            with open(os.path.join(tmp, "proc", pci_id, "information"), "wt") as f:
+                f.write(f"Model: \t\t NVIDIA H100\nGPU UUID: \t GPU-{uuid}\nBus Location: \t {pci_id}\n")
+        assert read_pci_device_local_cpus("0001:01:00.0", sysfs_root=os.path.join(tmp, "sys")) == set(range(72, 144))
+        proc = os.path.join(tmp, "proc")
+        assert find_pci_id_by_gpu_uuid("8ff8d0c7-8d30-8e55-0980-ac69fc03a6b8", proc_root=proc) == "0000:1b:00.0"
+        assert find_pci_id_by_gpu_uuid("GPU-0911978f", proc_root=proc) == "0001:01:00.0"
+        try:
+            find_pci_id_by_gpu_uuid("unknown", proc_root=proc)
+        except RuntimeError as exc:
+            assert "not found" in str(exc)
+        else:
+            raise AssertionError("unknown UUID must raise")
+
+
+def test_gpu_cpu_affinity_select():
+    """
+    NUMA node when it covers the rank's share, else the socket, else nothing (unaligned cpuset);
+    ranks sharing the set get disjoint slices when those still cover the share
+    """
+    from returnn.torch.util.gpu_cpu_affinity import select_gpu_local_cpus
+
+    # GH200: 4 Grace CPUs of 72, one per GPU
+    gh200 = [set(range(72 * i, 72 * (i + 1))) for i in range(4)]
+    gh200_socket = {cpu: cpu // 72 for cpu in range(288)}.__getitem__
+    for rank in range(4):
+        assert select_gpu_local_cpus(gh200, rank, set(range(288)), cpu_socket=gh200_socket) == gh200[rank]
+
+    # 2 sockets of 48 CPUs, 4 NUMA nodes of 12 each (NPS4), 2 GPUs per socket on nodes 0, 2, 4, 6
+    socket = {cpu: cpu // 48 for cpu in range(96)}.__getitem__
+    nodes = [set(range(12 * i, 12 * (i + 1))) for i in (0, 2, 4, 6)]
+    all_cpus = set(range(96))
+    # 4 ranks: share 24, a node has 12 -> socket (48), shared by 2 ranks -> slices of 24
+    assert select_gpu_local_cpus(nodes, 0, all_cpus, cpu_socket=socket) == set(range(24))
+    assert select_gpu_local_cpus(nodes, 1, all_cpus, cpu_socket=socket) == set(range(24, 48))
+    assert select_gpu_local_cpus(nodes, 3, all_cpus, cpu_socket=socket) == set(range(72, 96))
+    # 2 ranks on the same socket, whole node allowed: share 48, socket 0 is exactly that -> shared, no slices
+    assert select_gpu_local_cpus(nodes[:2], 1, all_cpus, cpu_socket=socket) == set(range(48))
+    # 8 ranks (2 per node): share 12, the node covers it, shared by 2 -> not sliceable (6 < 12), shared
+    nodes8 = [n for n in nodes for _ in range(2)]
+    assert select_gpu_local_cpus(nodes8, 3, all_cpus, cpu_socket=socket) == nodes[1]
+    # a 24-CPU cpuset on the far socket: nothing local, nothing to pin
+    assert select_gpu_local_cpus(nodes[:1], 0, set(range(48, 72)), cpu_socket=socket) is None
+    # a 24-CPU cpuset half on each socket, 1 rank: share 24, the socket 0 part has 12 -> none
+    assert select_gpu_local_cpus(nodes[:1], 0, set(range(36, 60)), cpu_socket=socket) is None
+    # fewer allowed CPUs than ranks: the share is still one CPU, so never an empty set
+    assert select_gpu_local_cpus(nodes, 0, {50, 51}, cpu_socket=socket) is None
+    assert select_gpu_local_cpus(nodes, 2, {50, 51}, cpu_socket=socket) == {50, 51}
+    # same cpuset, 2 ranks on different sockets: share 12, each socket part is exactly that
+    assert select_gpu_local_cpus([nodes[0], nodes[2]], 0, set(range(36, 60)), cpu_socket=socket) == set(range(36, 48))
+    assert select_gpu_local_cpus([nodes[0], nodes[2]], 1, set(range(36, 60)), cpu_socket=socket) == set(range(48, 60))
+
+
+def test_gpu_cpu_affinity_from_config():
+    """
+    the startup glue: option off or a CPU device pins nothing;
+    a single GPU pins its device index; distributed pins the local rank, sharing with the ranks on this host (here 1)
+    """
+    import socket
+    from unittest import mock
+    from returnn.config import Config
+    import returnn.torch.distributed as dist_mod
+    from returnn.torch.util.gpu_cpu_affinity import set_gpu_local_cpu_affinity_from_config
+
+    assert "PT_DEVICE" not in os.environ
+    with mock.patch("torch.cuda.is_available", return_value=True), mock.patch(
+        "torch.cuda.current_device", return_value=0
+    ), mock.patch("returnn.torch.util.gpu_cpu_affinity.set_gpu_local_cpu_affinity", return_value={0}) as set_affinity:
+        set_gpu_local_cpu_affinity_from_config(Config({"device": "cuda", "gpu_local_cpu_affinity": False}))
+        set_gpu_local_cpu_affinity_from_config(Config({"device": "cpu"}))
+        set_affinity.assert_not_called()
+        set_gpu_local_cpu_affinity_from_config(Config({"device": "cuda:1"}))
+        set_affinity.assert_called_once_with(1, num_local_ranks=1)
+        set_affinity.reset_mock()
+        set_gpu_local_cpu_affinity_from_config(Config({"device": "gpu"}))  # bare cuda = the current device
+        set_affinity.assert_called_once_with(0, num_local_ranks=1)
+        set_affinity.reset_mock()
+
+        with socket.socket() as s:
+            s.bind(("127.0.0.1", 0))
+            port = s.getsockname()[1]
+        env = dict(
+            MASTER_ADDR="127.0.0.1",
+            MASTER_PORT=str(port),
+            RANK="0",
+            WORLD_SIZE="1",
+            LOCAL_RANK="1",
+            LOCAL_WORLD_SIZE="2",
+        )
+        init_info_key = "_RETURNN_TORCH_DISTRIBUTED_INIT_INFO"
+        assert init_info_key not in os.environ and not dist_mod._is_set_up
+        try:
+            with mock.patch.dict(os.environ, env):
+                set_gpu_local_cpu_affinity_from_config(
+                    Config({"device": "cuda", "torch_distributed": {"backend": "gloo"}})
+                )
+            set_affinity.assert_called_once_with(1, num_local_ranks=1)
+        finally:
+            os.environ.pop(init_info_key, None)
+            dist_mod._is_set_up, dist_mod._ctx = False, None
+            if torch.distributed.is_initialized():
+                torch.distributed.destroy_process_group()
+
+
+def test_gpu_cpu_affinity_set():
+    """the real thing on a GPU node: the affinity shrinks to CPUs local to the device, within the allowed set"""
+    if not torch.cuda.is_available():
+        raise unittest.SkipTest("needs CUDA")
+    from returnn.torch.util.gpu_cpu_affinity import set_gpu_local_cpu_affinity, get_gpu_pci_id
+
+    allowed = os.sched_getaffinity(0)
+    try:
+        pci_id = get_gpu_pci_id(0)
+        assert os.path.isdir(f"/sys/bus/pci/devices/{pci_id}"), pci_id
+        # as many ranks as visible GPUs, like a full-node job.
+        # None only when even the socket is below the share (e.g. one visible GPU of a node, all CPUs allowed)
+        n = torch.cuda.device_count()
+        cpus = set_gpu_local_cpu_affinity(0, num_local_ranks=n)
+        assert cpus is None or (cpus and cpus <= allowed)
+        assert os.sched_getaffinity(0) == (cpus if cpus is not None else allowed)
+        # the other ranks' sets are disjoint from this one or identical to it (shared), never overlapping otherwise
+        for tid in os.listdir("/proc/self/task"):
+            os.sched_setaffinity(int(tid), allowed)
+        for rank in range(1, n):
+            other = set_gpu_local_cpu_affinity(rank, num_local_ranks=n)
+            assert other and cpus and (other == cpus or not (other & cpus)), (rank, cpus, other)
+            for tid in os.listdir("/proc/self/task"):
+                os.sched_setaffinity(int(tid), allowed)
+        # the whole node for one rank: nothing local can cover that, so nothing is pinned
+        for tid in os.listdir("/proc/self/task"):
+            os.sched_setaffinity(int(tid), allowed)
+        if cpus != allowed:
+            assert set_gpu_local_cpu_affinity(0, num_local_ranks=1) is None
+            assert os.sched_getaffinity(0) == allowed
+        # more ranks than devices: nothing is pinned, no error
+        assert set_gpu_local_cpu_affinity(0, num_local_ranks=n + 1) is None
+        assert os.sched_getaffinity(0) == allowed
+    finally:
+        for tid in os.listdir("/proc/self/task"):
+            os.sched_setaffinity(int(tid), allowed)
+
+
 def test_depthwise_conv1d_triton_kernel_grad():
     """fwd and all grads of the Triton depthwise conv vs torch conv1d, small blocks force partial tiles"""
     if not torch.cuda.is_available():
