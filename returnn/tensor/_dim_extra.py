@@ -61,6 +61,7 @@ class _DimExtra:
         control_flow_ctx: Optional[ControlFlowContext] = None,
         src_data: Optional[_t.Tensor] = None,
         src_axis: Optional[int] = None,
+        packed_total_bound: Optional[int] = None,
     ):
         """
         :param dim:
@@ -90,6 +91,9 @@ class _DimExtra:
         :param control_flow_ctx:
         :param src_data:
         :param src_axis:
+        :param packed_total_bound: static upper bound on the sum of the sizes over all sequences,
+            for a packed buffer over this dim under static tracing (see :mod:`returnn.frontend._packed_backend`).
+            Tighter than the number of sequences times the capacity when the sizes cannot all be at capacity.
         """
         self._dim_ref = weakref.ref(dim)
         assert kind is None or (isinstance(kind, Entity) and kind in DimTypes.Types)
@@ -131,6 +135,7 @@ class _DimExtra:
         self.control_flow_ctx = control_flow_ctx
         self.src_data = src_data
         self.src_axis = src_axis
+        self.packed_total_bound = packed_total_bound
         self.dyn_size_same = set()  # set of RefIdEq (earlier TensorRef)
         self.undefined = undefined
         self.special = special
@@ -243,6 +248,19 @@ class _DimMixin:
         if not self._extra:
             return 0
         return self._extra.match_priority
+
+    @property
+    def packed_total_bound(self) -> Optional[int]:
+        """
+        :return: static upper bound on the sum of the sizes over all sequences, see :class:`_DimExtra`
+        """
+        if not self._extra:
+            return None
+        return getattr(self._extra, "packed_total_bound", None)
+
+    @packed_total_bound.setter
+    def packed_total_bound(self: Dim, value: Optional[int]):
+        self._make_extra().packed_total_bound = value
 
     @property
     def batch(self) -> Optional[BatchInfo]:
