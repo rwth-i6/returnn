@@ -498,6 +498,10 @@ class Loss:
                 inv_norm = self.custom_inv_norm_factor
         else:
             inv_norm = rf.num_elements_of_shape(self.loss.dims, device=self.loss.device)
+        if isinstance(inv_norm, Tensor):
+            # own wrapper around the same raw tensor: it can be the size tensor of a dim,
+            # which gets another raw tensor when the dim is reset
+            inv_norm = inv_norm.copy()
         self._inv_norm_factor_cached = inv_norm
         return inv_norm
 

@@ -470,6 +470,31 @@ def test_loss_inv_norm_factor_cached():
     assert loss.get_inv_norm_factor() == 2
 
 
+def test_loss_inv_norm_factor_own_wrapper():
+    """
+    The factor of a loss over one dim with a scalar size, and such a size tensor as custom factor,
+    is the size tensor of the dim itself. Resetting the dim later (the next batch under graph capture)
+    must not change the factor, while a write into its raw tensor (a graph replay) still counts.
+    """
+    import torch
+    from returnn.frontend.run_ctx import Loss
+
+    count = Tensor("count", dims=(), dtype="int32", raw_tensor=torch.tensor(8, dtype=torch.int32))
+    flat_dim = Dim(count)  # the size is scalar already, like the one of a packed dim
+    loss_raw = Tensor("ce", dims=[flat_dim], dtype="float32", raw_tensor=torch.ones(8))
+    losses = [
+        Loss(loss=loss_raw, name="ce", custom_inv_norm_factor=flat_dim.get_size_tensor()),
+        Loss(loss=loss_raw, name="fer", as_error=True),
+    ]
+    assert [int(loss.get_inv_norm_factor().raw_tensor) for loss in losses] == [8, 8]
+    flat_dim.reset_eager()
+    flat_dim.dyn_size_ext.raw_tensor = torch.tensor(2, dtype=torch.int32)
+    assert [int(loss.get_inv_norm_factor().raw_tensor) for loss in losses] == [8, 8]
+    for loss in losses:
+        loss.get_inv_norm_factor().raw_tensor.fill_(3)
+    assert [int(loss.get_inv_norm_factor().raw_tensor) for loss in losses] == [3, 3]
+
+
 def test_loss_normalization():
     time_dim = Dim(Tensor("time", [batch_dim], dtype="int32"))
     in_dim = Dim(7, name="in")
