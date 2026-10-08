@@ -4885,10 +4885,9 @@ def _gather_per_seq(source: Tensor, raw: PackedRawTensor, *, indices: Tensor, cl
     out = rf.gather(raw.inner, indices=rows, axis=raw.packed_dim)
     # the start of a sequence without frames is a row of another sequence or a gap frame
     out = rf.where(rf.compare_bc(lens, ">", 0), out, 0)
-    if source.sparse_dim is not None:
-        out.sparse_dim = source.sparse_dim
-    if source.feature_dim is not None and source.feature_dim in out.dims:
-        out.feature_dim = source.feature_dim
+    # the metadata of the virtual tensor, not of the inner buffer, which keeps what it had at the packing
+    out.sparse_dim = source.sparse_dim
+    out.feature_dim = source.feature_dim if source.feature_dim in out.dims else None
     return out
 
 

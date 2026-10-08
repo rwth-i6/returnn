@@ -432,12 +432,15 @@ def test_gather_packed_per_seq_index_drops_the_time_dim():
             numpy.testing.assert_allclose(out[has_frames].numpy(), ref.raw_tensor[has_frames].numpy(), rtol=1e-6)
             assert not out[~has_frames].any(), (gap, idx.dims, out[~has_frames])
 
-    # a sparse dim assigned on the virtual tensor stays
+    # the sparse dim of the virtual tensor counts, assigned or cleared after the packing
     vocab = Dim(9, name="vocab")
     codes = Tensor("codes", dims=[batch_dim, time_dim], dtype="int32")
     codes.raw_tensor = torch.arange(28, dtype=torch.int32).reshape(4, 7) % 9
     out = rf.gather(rf.set_sparse_dim(packed.pack(codes, gap=2), vocab), indices=idx_b, axis=time_dim)
     assert out.sparse_dim == vocab, out
+    codes.sparse_dim = vocab
+    out = rf.gather(rf.set_sparse_dim(packed.pack(codes, gap=2), None), indices=idx_b, axis=time_dim)
+    assert out.sparse_dim is None, out
 
 
 def test_gather_packed_keeps_sparse_dim():
