@@ -31,6 +31,8 @@ class CachedDataset2(Dataset):
         self.reached_final_seq = False
         self.added_data: List[DatasetSeq] = []
         self.expected_load_seq_start = 0
+        # The seq idx after the last loaded seq of the epoch. That seq might be cleaned up from added_data already.
+        self._loaded_seq_idx_end = 0
         self._num_timesteps_accumulated = NumbersDict(0)
 
     def init_seq_order(self, epoch=None, seq_list=None, seq_order=None):
@@ -49,6 +51,7 @@ class CachedDataset2(Dataset):
         self.expected_load_seq_start = 0
         self.reached_final_seq = False
         self.added_data = []
+        self._loaded_seq_idx_end = 0
         self._num_timesteps_accumulated = NumbersDict(0)
         self._num_seqs = None
         self.epoch = epoch
@@ -116,6 +119,8 @@ class CachedDataset2(Dataset):
         seqs = list(filter(None, seqs))  # We might not know the num seqs in advance.
         self._num_timesteps_accumulated += sum([seq.num_frames for seq in seqs])
         self.added_data += seqs
+        if seqs:
+            self._loaded_seq_idx_end = seqs[-1].seq_idx + 1
 
     def is_less_than_num_seqs(self, n):
         """
@@ -134,9 +139,8 @@ class CachedDataset2(Dataset):
             self._load_seqs(self.expected_load_seq_start, n + 1)
             if self._get_seq(n) is not None:
                 return True
-            # We reached the end.
-            assert self.added_data, "Not a single seq was loaded?"
-            self._num_seqs = self.added_data[-1].seq_idx + 1
+            # We reached the end. The epoch can also have no seqs at all, e.g. when the dataset filters seqs.
+            self._num_seqs = self._loaded_seq_idx_end
             assert n >= self._num_seqs
             self.reached_final_seq = True
             return False
