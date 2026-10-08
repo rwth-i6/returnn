@@ -1806,6 +1806,26 @@ def test_PostprocessingDataset_map_seq_stream_num_seqs_after_cleanup():
     assert dataset.num_seqs == 1
 
 
+def test_PostprocessingDataset_map_seq_stream_num_seqs_after_skip():
+    # Seqs which were skipped were never loaded, so behind them, it is not known where the epoch ends.
+    import pytest
+
+    def _identity_stream(input_iter: Iterator[TensorDict], **_kwargs) -> Iterator[TensorDict]:
+        yield from input_iter
+
+    dataset = init_dataset(
+        {
+            "class": "PostprocessingDataset",
+            "dataset": {"class": "DummyDataset", "input_dim": 13, "output_dim": 7, "num_seqs": 5},
+            "map_seq_stream": _identity_stream,
+        }
+    )
+    dataset.init_seq_order(epoch=1)
+    dataset.load_seqs(5, 6)
+    with pytest.raises(AssertionError, match="skipped"):
+        dataset.is_less_than_num_seqs(5)
+
+
 def _repeat2(input_iter: Iterator[TensorDict], **kwargs) -> Iterator[TensorDict]:
     for tdict in input_iter:
         yield tdict
