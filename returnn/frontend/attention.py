@@ -39,6 +39,10 @@ def dot_attention(
     att_dropout_broadcast: Optional[bool] = None,
     causal_query_spatial_dim: Optional[Dim] = None,
     scale: Optional[float] = None,
+    query_group: Optional[Tensor] = None,
+    key_group: Optional[Tensor] = None,
+    group_mode: str = "equal",
+    max_group_size: Optional[int] = None,
 ) -> Tensor:
     """
     Calculates attention over the given axis, for given key dim.
@@ -68,12 +72,141 @@ def dot_attention(
         and extra query dims must never change behavior.
         Backends use this to select fused causal implementations.
     :param scale: scaling factor applied prior to softmax. default: ``key_dim ** -0.5``
+    :param query_group: int, over (some of) the query dims: the group every query belongs to.
+        Together with ``key_group`` this restricts which keys a query attends,
+        e.g. a label to the encoder frames of its chunk.
+        It states the structure with one number per query and per key,
+        where a boolean mask over (queries, keys) is the full lattice,
+        which no backend can do anything with but compute all of it.
+        A query without any key it may attend has no defined result.
+        With ``max_group_size`` that result is finite (so padded rows are harmless), otherwise it is not.
+    :param key_group: int, over ``axis`` (and maybe batch dims): the group of every key
+    :param group_mode: "equal": a query attends the keys of its own group.
+        "less_equal": the keys of all groups up to its own (``key_group <= query_group``).
+    :param max_group_size: for "equal": promises that no group has more keys than this
+        and that ``key_group`` is sorted along ``axis``, so that every group is one run of consecutive keys.
+        Then only those keys are read (a gather of that static size per query)
+        and the energies of all other keys are never computed.
     :return: like values but with axis removed, and maybe any additional axes from query
+    """
+    if att_dropout_broadcast is None:
+        att_dropout_broadcast = _att_dropout_broadcast_default()
+    attention_mask = None
+    if query_group is not None or key_group is not None:
+        assert query_group is not None and key_group is not None, "dot_attention: query_group and key_group go together"
+        assert causal_query_spatial_dim is None, "dot_attention: groups together with causal are not supported"
+        assert group_mode in ("equal", "less_equal"), f"dot_attention: invalid group_mode {group_mode!r}"
+        assert axis in key_group.dims_set, f"dot_attention: key_group {key_group} needs axis {axis}"
+        if axis in query.dims_set:
+            # Self-attention: query and keys share the time dim, and so do their groups.
+            # The kv side gets its own dim first (as _dot_attention does it for the keys and values),
+            # otherwise the groups are compared position by position, which allows everything.
+            kv_dim = Dim(None, name=f"{axis.description}:kv")
+            keys, _ = rf.replace_dim(keys, in_dim=axis, out_dim=kv_dim)
+            values, _ = rf.replace_dim(values, in_dim=axis, out_dim=kv_dim)
+            key_group, _ = rf.replace_dim(key_group, in_dim=axis, out_dim=kv_dim)
+            axis = kv_dim
+        if group_mode == "equal" and max_group_size is not None:
+            return _dot_attention_over_own_group(
+                query,
+                keys,
+                values,
+                key_dim=key_dim,
+                axis=axis,
+                att_dropout=att_dropout,
+                att_dropout_broadcast=att_dropout_broadcast,
+                scale=scale,
+                query_group=query_group,
+                key_group=key_group,
+                max_group_size=max_group_size,
+            )
+        attention_mask = rf.compare_bc(key_group, "==" if group_mode == "equal" else "<=", query_group)
+    return _dot_attention(
+        query,
+        keys,
+        values,
+        key_dim=key_dim,
+        axis=axis,
+        att_dropout=att_dropout,
+        att_dropout_broadcast=att_dropout_broadcast,
+        causal_query_spatial_dim=causal_query_spatial_dim,
+        scale=scale,
+        attention_mask=attention_mask,
+    )
+
+
+def _dot_attention_over_own_group(
+    query: Tensor,
+    keys: Tensor,
+    values: Tensor,
+    *,
+    key_dim: Dim,
+    axis: Dim,
+    att_dropout: float,
+    att_dropout_broadcast: bool,
+    scale: Optional[float],
+    query_group: Tensor,
+    key_group: Tensor,
+    max_group_size: int,
+) -> Tensor:
+    """
+    :func:`dot_attention` with ``group_mode="equal"`` and ``max_group_size``:
+    every query reads the run of keys of its own group and attends over that static axis.
+    The run is found by a search in the sorted ``key_group`` (which stops at the end of a sequence),
+    and slots beyond the end of the run are masked.
+
+    :return: see :func:`dot_attention`
+    """
+    device = keys.device
+    group_dim = Dim(max_group_size, name="att_group")
+    for dim in key_group.dims:
+        if dim != axis and dim not in query_group.dims_set:
+            # e.g. queries without the batch dim of the keys: every sequence of keys is searched for them
+            query_group = rf.expand_dim(query_group, dim=dim)
+    start = rf.search_sorted(key_group, query_group, axis=axis, side="left")
+    end = rf.search_sorted(key_group, query_group, axis=axis, side="right")
+    first = rf.range_over_dim(group_dim, dtype=start.dtype, device=device)
+    slots = rf.combine_bc(start, "+", first)
+    # A query without any key attends its first slot: what the clipped read gives there is finite,
+    # where a softmax over nothing is not, and its gradient would reach every parameter.
+    # Such queries exist in every padded or bound-sized tensor, e.g. the rows of an empty sequence.
+    in_group = rf.logical_or(rf.compare_bc(slots, "<", end), rf.combine_bc(end <= start, "logical_and", first == 0))
+    slots.sparse_dim = axis
+    return _dot_attention(
+        query,
+        rf.gather(keys, indices=slots, axis=axis, clip_to_valid=True),
+        rf.gather(values, indices=slots, axis=axis, clip_to_valid=True),
+        key_dim=key_dim,
+        axis=group_dim,
+        att_dropout=att_dropout,
+        att_dropout_broadcast=att_dropout_broadcast,
+        causal_query_spatial_dim=None,
+        scale=scale,
+        attention_mask=in_group,
+    )
+
+
+def _dot_attention(
+    query: Tensor,
+    keys: Tensor,
+    values: Tensor,
+    *,
+    key_dim: Dim,
+    axis: Dim,
+    att_dropout: float,
+    att_dropout_broadcast: bool,
+    causal_query_spatial_dim: Optional[Dim],
+    scale: Optional[float],
+    attention_mask: Optional[Tensor],
+) -> Tensor:
+    """
+    :func:`dot_attention` with all defaults resolved.
+
+    :param attention_mask: bool, over ``axis`` and (some of) the query dims, which keys a query attends
+    :return: see :func:`dot_attention`
     """
     from . import _utils
 
-    if att_dropout_broadcast is None:
-        att_dropout_broadcast = _att_dropout_broadcast_default()
     if causal_query_spatial_dim is None:
         if axis in query.dims_set:
             # the axis in the query can only mean (full) self-attention:
@@ -100,13 +233,17 @@ def dot_attention(
         v_feat_dim = _infer_v_feat_dim(values, keys, key_dim)
         added_dummy_spat_dim_to_query = False
         merged_query_dims = None
+    assert attention_mask is None or merged_query_dims is None, (
+        f"dot_attention: a mask together with several query dims {merged_query_dims} is not supported"
+    )
     # Dispatch over all args (not just query), so that e.g. a packed key/value also selects
     # the specialized backend (deviation from PR #1798 which uses query._raw_backend).
-    backend = _utils.get_backend_from_tensors(query, keys, values)
+    backend = _utils.get_backend_from_tensors(query, keys, values, attention_mask)
     att = backend.scaled_dot_product_attention(
         query,
         keys,
         values,
+        attention_mask=attention_mask,
         att_dropout=att_dropout,
         att_dropout_broadcast=att_dropout_broadcast,
         v_feat_dim=v_feat_dim,
