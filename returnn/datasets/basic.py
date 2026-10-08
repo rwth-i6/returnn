@@ -777,6 +777,15 @@ class Dataset:
         """
         return False
 
+    def supports_predefined_seq_order(self) -> bool:
+        """
+        :return: whether :func:`get_current_seq_order` reports the seq order of the current epoch
+            and :func:`init_seq_order` takes such an order back via ``seq_order``,
+            e.g. to split the dataset over several processes.
+            This must not have side effects, e.g. it must not load any data.
+        """
+        return False
+
     def _base_init(self):
         self.zpad = None
         # We expect that the following attributes are already set elsewhere, by a derived class.

@@ -367,6 +367,16 @@ class PostprocessingDataset(CachedDataset2):
         assert self._dataset is not None
         return self._dataset.supports_sharding()
 
+    def supports_predefined_seq_order(self) -> bool:
+        """
+        :return: whether the wrapped dataset supports a predefined seq order.
+            Not with map_seq_stream, which can merge or drop seqs.
+        """
+        if self._map_seq_stream is not None:
+            return False
+        assert self._dataset is not None
+        return self._dataset.supports_predefined_seq_order()
+
     def finish_epoch(self, *, free_resources=False):
         """finish_epoch"""
         super().finish_epoch(free_resources=free_resources)

@@ -77,6 +77,8 @@ class DistributedContext:
         self._sync_complete_frac: Optional[bool] = self._opts.get("sync_complete_frac", None)
         if self._sync_complete_frac is None:
             self._sync_complete_frac = BehaviorVersion.get() >= 33
+        self._eval_on_all_ranks: Optional[bool] = self._opts.get("eval_on_all_ranks", None)
+        assert self._eval_on_all_ranks is None or isinstance(self._eval_on_all_ranks, bool)
 
         self._check_no_unknown_opts()
 
@@ -117,6 +119,17 @@ class DistributedContext:
     def get_param_sync_step(self) -> Optional[int]:
         """param sync step"""
         return self._param_sync_step
+
+    def eval_on_all_ranks(self) -> bool:
+        """
+        :return: whether an eval dataset is split over all ranks, each rank evaluating its share,
+            instead of being evaluated on rank 0 alone while the other ranks wait.
+            Only datasets which can report their seq order are split, see the torch engine.
+            Option ``eval_on_all_ranks: bool``, else behavior_version >= 37.
+        """
+        if self._eval_on_all_ranks is not None:
+            return self._eval_on_all_ranks
+        return BehaviorVersion.get() >= 37
 
     def maybe_make_distributed_module(self, module: torch.nn.Module) -> Optional[DistributedDataParallel]:
         """

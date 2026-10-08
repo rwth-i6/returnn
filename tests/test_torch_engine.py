@@ -26,7 +26,7 @@ from returnn.torch.updater import Updater
 import returnn.frontend as rf
 from returnn.forward_iface import ForwardCallbackIface
 from returnn.datasets import init_dataset
-from returnn.datasets.generating import Task12AXDataset
+from returnn.datasets.generating import StaticDataset, Task12AXDataset
 
 
 # must be in the global scope due to pickling
@@ -3632,6 +3632,302 @@ def test_torch_engine_preload_next_train_epoch_no_workers():
             assert "num_workers" in str(exc)
         else:
             raise AssertionError("expected ValueError")
+
+
+# (epoch, seq len) of every dev seq evaluated in this process
+_eval_on_all_ranks_seq_lens = []
+_EVAL_ON_ALL_RANKS_DIST_OPTS = {"backend": "gloo", "reduce_type": "grad_explicit", "timeout_sec": 60}
+_EVAL_ON_ALL_RANKS_DEV_SEQ_LENS = list(range(3, 26))
+
+
+def _eval_on_all_ranks_train_step(*, model: TrainTestModel, extern_data: TensorDict, **kwargs):
+    run_ctx = rf.get_run_ctx()
+    if not run_ctx.train_flag:
+        seq_lens = extern_data["data"].dims[1].dyn_size_ext.raw_tensor.tolist()
+        _eval_on_all_ranks_seq_lens.extend((run_ctx.epoch, seq_len) for seq_len in seq_lens)
+    TrainTestModel.train_step(model=model, extern_data=extern_data, **kwargs)
+
+
+class _StaticDatasetWithoutPredefinedSeqOrder(StaticDataset):
+    def supports_predefined_seq_order(self) -> bool:
+        """:return: False, so that it cannot be split over the ranks"""
+        return False
+
+
+def _eval_on_all_ranks_run(
+    *,
+    torch_distributed: Optional[dict] = None,
+    num_epochs: int = 2,
+    learning_rate: float = 0.0,
+    train_seq_ordering: str = "default",
+    num_dev_seqs: int = len(_EVAL_ON_ALL_RANKS_DEV_SEQ_LENS),
+    dev_seq_ordering: str = "default",
+    dev_meta: bool = False,
+    dev_predefined_seq_order: bool = True,
+    calculate_exp_loss: bool = False,
+    eval_before_train: bool = False,
+    eval_again: bool = False,
+    behavior_version: Optional[int] = None,
+) -> Dict[str, Any]:
+    rnd = numpy.random.RandomState(42)
+    # Every seq has its own length, so the lengths a rank saw tell which dev seqs it evaluated.
+    seqs = [
+        {"data": rnd.normal(size=(n, 9)).astype("float32"), "classes": rnd.randint(0, 2, size=(n,)).astype("int32")}
+        for n in _EVAL_ON_ALL_RANKS_DEV_SEQ_LENS
+    ]
+    config = Config(
+        dict(
+            task="train",
+            device="cpu",
+            extern_data={"data": {"dim": 9}, "classes": {"dim": 2, "sparse": True}},
+            get_model=TrainTestModel,
+            train_step=_eval_on_all_ranks_train_step,
+            batch_size=60,
+            batch_size_train=20,
+            optimizer={"class": "adam"},
+            # 0 (the default here) keeps the initial model, so every run evaluates the same model
+            learning_rate=learning_rate,
+            num_epochs=num_epochs,
+            calculate_exp_loss=calculate_exp_loss,
+            torch_dataloader_opts={"num_workers": 0},
+            **({"torch_distributed": torch_distributed} if torch_distributed is not None else {}),
+            **({"behavior_version": behavior_version} if behavior_version is not None else {}),
+        )
+    )
+    dev_opts = {
+        "class": "StaticDataset" if dev_predefined_seq_order else _StaticDatasetWithoutPredefinedSeqOrder,
+        "data": seqs[:num_dev_seqs],
+        "input_dim": 9,
+        "output_dim": 2,
+        "seq_ordering": dev_seq_ordering,
+    }
+    if dev_meta:
+        dev_opts = {
+            "class": "MetaDataset",
+            "datasets": {"static": dev_opts},
+            "data_map": {"data": ("static", "data"), "classes": ("static", "classes")},
+            "seq_order_control_dataset": "static",
+        }
+    # The datasets are created under the config, as in a real run,
+    # where each rank's datasets get their own random seed offset.
+    with global_config_ctx(config):
+        train_dataset = init_dataset(
+            {
+                "class": "StaticDataset",
+                "data": seqs[:12],
+                "input_dim": 9,
+                "output_dim": 2,
+                "seq_ordering": train_seq_ordering,
+            }
+        )
+        train_dataset.init_seq_order(epoch=1)
+        dev_dataset = init_dataset(dev_opts)
+        dev_dataset.init_seq_order(epoch=1)
+        engine = Engine(config=config)
+        # init_seq_order calls on the dev dataset while the engine sets up
+        dev_init_seq_order, dev_inits_at_startup = dev_dataset.init_seq_order, []
+
+        def _dev_init_seq_order(*args, **kwargs):
+            dev_inits_at_startup.append(kwargs)
+            return dev_init_seq_order(*args, **kwargs)
+
+        dev_dataset.init_seq_order = _dev_init_seq_order
+        engine.init_train_from_config(train_data=train_dataset, dev_data=dev_dataset)
+        del dev_dataset.init_seq_order
+        # number of values this rank keeps aside for each split eval, see Engine._take_rank0_model_state
+        own_model_state_sizes = []
+        take_rank0_model_state = engine._take_rank0_model_state
+
+        def _take_rank0_model_state():
+            own = take_rank0_model_state()
+            own_model_state_sizes.append(sum(value.numel() for value in own or []))
+            return own
+
+        engine._take_rank0_model_state = _take_rank0_model_state
+        del _eval_on_all_ranks_seq_lens[:]
+        if eval_before_train:
+            # like the eval of a loaded checkpoint before the training goes on: this process ran no step yet
+            engine.set_epoch(1)
+            engine.eval_model()
+        else:
+            engine.train()
+        evals = [list(_eval_on_all_ranks_seq_lens)]
+        if eval_again:
+            del _eval_on_all_ranks_seq_lens[:]
+            engine.eval_model()
+            evals.append(list(_eval_on_all_ranks_seq_lens))
+        return {
+            "evals": evals,
+            "errors": {epoch: dict(data.error) for epoch, data in engine.learning_rate_control.epoch_data.items()},
+            "param_sum": float(sum(param.detach().double().sum() for param in engine._pt_model.parameters())),
+            "own_model_state_sizes": own_model_state_sizes,
+            "dev_inits_at_startup": len(dev_inits_at_startup),
+        }
+
+
+def _eval_on_all_ranks_rank_main(rank: int, world_size: int, port: int, run_kwargs: Dict[str, Any], conn):
+    import os
+    from returnn.util.basic import BehaviorVersion
+
+    if run_kwargs.get("behavior_version") is not None:
+        # the test env sets the latest behavior version as minimum, this rank's own process may go below it
+        BehaviorVersion._reset()
+    os.environ.update(
+        {
+            "MASTER_ADDR": "127.0.0.1",
+            "MASTER_PORT": str(port),
+            "RANK": str(rank),
+            "WORLD_SIZE": str(world_size),
+            "LOCAL_RANK": str(rank),
+            "LOCAL_WORLD_SIZE": str(world_size),
+        }
+    )
+    try:
+        conn.send(_eval_on_all_ranks_run(**run_kwargs))
+    except Exception as exc:
+        conn.send({"exception": repr(exc)})
+        raise
+    finally:
+        conn.close()
+
+
+def _eval_on_ranks(*, world_size: int = 2, **run_kwargs) -> List[Dict[str, Any]]:
+    import multiprocessing
+    import socket
+
+    with socket.socket() as sock:
+        sock.bind(("127.0.0.1", 0))
+        port = sock.getsockname()[1]
+    ctx = multiprocessing.get_context("spawn")
+    conns, procs = [], []
+    for rank in range(world_size):
+        parent_conn, child_conn = ctx.Pipe()
+        proc = ctx.Process(target=_eval_on_all_ranks_rank_main, args=(rank, world_size, port, run_kwargs, child_conn))
+        proc.start()
+        conns.append(parent_conn)
+        procs.append(proc)
+    results = []
+    try:
+        for rank, conn in enumerate(conns):
+            assert conn.poll(300), f"rank {rank} did not report back"
+            results.append(conn.recv())
+    finally:
+        for proc in procs:
+            proc.join(timeout=60)
+            if proc.is_alive():
+                proc.kill()
+    for rank, result in enumerate(results):
+        assert "exception" not in result, f"rank {rank} failed: {result['exception']}"
+    return results
+
+
+def _eval_on_all_ranks_seq_lens_per_rank(
+    results: List[Dict[str, Any]], *, epoch: int, eval_idx: int = 0
+) -> List[List[int]]:
+    return [sorted(seq_len for e, seq_len in result["evals"][eval_idx] if e == epoch) for result in results]
+
+
+def _assert_eval_split(rank_seq_lens: List[List[int]], all_seq_lens: List[int]):
+    assert all(rank_seq_lens), f"every rank must evaluate a share of the dev seqs, got {rank_seq_lens}"
+    assert sorted(sum(rank_seq_lens, [])) == all_seq_lens, f"the shares must cover every dev seq once: {rank_seq_lens}"
+
+
+def _assert_eval_scores(results: List[Dict[str, Any]], reference: Dict[str, Any], *, epochs, keys):
+    for rank, result in enumerate(results):
+        for epoch in epochs:
+            for key in keys:
+                numpy.testing.assert_allclose(
+                    result["errors"][epoch][key],
+                    reference["errors"][epoch][key],
+                    rtol=1e-6,
+                    err_msg=f"rank {rank} epoch {epoch} {key}",
+                )
+
+
+def test_torch_engine_eval_on_all_ranks():
+    # With eval_on_all_ranks, the dev seqs are split over the ranks in every epoch,
+    # also with a random seq order, which is seeded per rank (rank 0's order is split then),
+    # also with DistributedDataParallel on CPU,
+    # and every rank gets the score of one process over the whole dev set.
+    # With it off, or for a dataset without a predefined seq order, rank 0 evaluates them alone.
+    reference = _eval_on_all_ranks_run()
+    for opts, run_kwargs, split in [
+        ({"eval_on_all_ranks": True}, {}, True),
+        ({"eval_on_all_ranks": False}, {}, False),
+        ({"eval_on_all_ranks": True}, {"dev_seq_ordering": "random"}, True),
+        ({"eval_on_all_ranks": True, "reduce_type": "grad"}, {}, True),
+        ({"eval_on_all_ranks": True}, {"dev_predefined_seq_order": False}, False),
+    ]:
+        results = _eval_on_ranks(torch_distributed={**_EVAL_ON_ALL_RANKS_DIST_OPTS, **opts}, **run_kwargs)
+        # The engine asks the dataset whether it can be split, without initializing it.
+        assert [result["dev_inits_at_startup"] for result in results] == [0, 0]
+        for epoch in (1, 2):
+            rank_seq_lens = _eval_on_all_ranks_seq_lens_per_rank(results, epoch=epoch)
+            print(f"{opts} {run_kwargs} epoch {epoch}: dev seq lens per rank:", rank_seq_lens)
+            if split:
+                _assert_eval_split(rank_seq_lens, _EVAL_ON_ALL_RANKS_DEV_SEQ_LENS)
+            else:
+                assert rank_seq_lens == [_EVAL_ON_ALL_RANKS_DEV_SEQ_LENS, []]
+        _assert_eval_scores(results, reference, epochs=(1, 2), keys=("dev_loss_ce", "dev_loss_fer"))
+        # Averaged grads keep the params identical, so rank 1 keeps none aside (and this model has no buffers).
+        assert results[1]["own_model_state_sizes"] == ([0, 0] if split else [])
+
+
+def test_torch_engine_eval_on_all_ranks_by_behavior_version():
+    # Behavior version 37 splits the eval over the ranks, the option overrides that.
+    for version, opts, split in [(36, {}, False), (37, {}, True), (37, {"eval_on_all_ranks": False}, False)]:
+        results = _eval_on_ranks(
+            torch_distributed={**_EVAL_ON_ALL_RANKS_DIST_OPTS, **opts}, behavior_version=version, num_epochs=1
+        )
+        rank_seq_lens = _eval_on_all_ranks_seq_lens_per_rank(results, epoch=1)
+        print(f"behavior version {version} {opts}: dev seq lens per rank:", rank_seq_lens)
+        if split:
+            _assert_eval_split(rank_seq_lens, _EVAL_ON_ALL_RANKS_DEV_SEQ_LENS)
+        else:
+            assert rank_seq_lens == [_EVAL_ON_ALL_RANKS_DEV_SEQ_LENS, []]
+
+
+def test_torch_engine_eval_on_all_ranks_rank0_model():
+    # With parameter averaging, the ranks train apart between the syncs.
+    # A split eval must still score rank 0's model, like an eval on rank 0 alone,
+    # and leave every rank's own training state as it was.
+    opts = {**_EVAL_ON_ALL_RANKS_DIST_OPTS, "reduce_type": "param", "param_sync_step": 1000}
+    run_kwargs = dict(learning_rate=0.01, train_seq_ordering="random")
+    on_rank0 = _eval_on_ranks(torch_distributed={**opts, "eval_on_all_ranks": False}, **run_kwargs)
+    split = _eval_on_ranks(torch_distributed={**opts, "eval_on_all_ranks": True}, **run_kwargs)
+    assert split[0]["param_sum"] != split[1]["param_sum"], "the ranks must train apart for this test"
+    _assert_eval_split(_eval_on_all_ranks_seq_lens_per_rank(split, epoch=1), _EVAL_ON_ALL_RANKS_DEV_SEQ_LENS)
+    _assert_eval_scores(split, on_rank0[0], epochs=(1, 2), keys=("dev_loss_ce", "dev_loss_fer"))
+    assert [result["param_sum"] for result in split] == [result["param_sum"] for result in on_rank0]
+
+
+def test_torch_engine_eval_on_all_ranks_empty_share():
+    # One dev seq on two ranks leaves rank 1 without any.
+    # When the eval comes before any step of this process (e.g. the eval of a loaded checkpoint),
+    # rank 1 must still take part and extend the scores (calculate_exp_loss) like rank 0.
+    run_kwargs = dict(num_dev_seqs=1, calculate_exp_loss=True, eval_before_train=True)
+    reference = _eval_on_all_ranks_run(**run_kwargs)
+    results = _eval_on_ranks(
+        torch_distributed={**_EVAL_ON_ALL_RANKS_DIST_OPTS, "eval_on_all_ranks": True}, **run_kwargs
+    )
+    assert _eval_on_all_ranks_seq_lens_per_rank(results, epoch=1) == [[3], []]
+    _assert_eval_scores(results, reference, epochs=(1,), keys=("dev_loss_ce", "dev_loss_ce:exp", "dev_loss_fer"))
+
+
+def test_torch_engine_eval_on_all_ranks_repeated_eval():
+    # A second eval in the same epoch must split the same full seq order again.
+    # MetaDataset keeps its current seq order when the epoch does not change
+    # and it did not load beyond its first seq, as with one dev seq per rank here.
+    results = _eval_on_ranks(
+        torch_distributed={**_EVAL_ON_ALL_RANKS_DIST_OPTS, "eval_on_all_ranks": True},
+        dev_meta=True,
+        num_dev_seqs=2,
+        eval_again=True,
+    )
+    for eval_idx in (0, 1):
+        rank_seq_lens = _eval_on_all_ranks_seq_lens_per_rank(results, epoch=2, eval_idx=eval_idx)
+        print(f"eval {eval_idx}: dev seq lens per rank:", rank_seq_lens)
+        _assert_eval_split(rank_seq_lens, _EVAL_ON_ALL_RANKS_DEV_SEQ_LENS[:2])
 
 
 def _build_cuda_graph_train_config_and_dataset(
