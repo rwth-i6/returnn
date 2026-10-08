@@ -112,16 +112,17 @@ def test_MultiProcDataset_sharding_unequal_num_seqs():
 
     for stream in (_drop_every_third_len, _repeat_by_len):
         post_dataset_dict = {"class": "PostprocessingDataset", "dataset": hdf_dataset_dict, "map_seq_stream": stream}
-        post_dataset_seqs = dummy_iter_dataset(init_dataset(post_dataset_dict))
+        post_dataset_tags = sorted(seq.seq_tag for seq in dummy_iter_dataset(init_dataset(post_dataset_dict)))
 
         with timeout():
             mp_dataset = MultiProcDataset(
                 dataset=post_dataset_dict, num_workers=2, buffer_size=5, sharding_method="dedicated"
             )
             mp_dataset.initialize()
-            mp_dataset_seqs = dummy_iter_dataset(mp_dataset)
-
-            assert sorted(seq.seq_tag for seq in mp_dataset_seqs) == sorted(seq.seq_tag for seq in post_dataset_seqs)
+            # In the second epoch, every worker must start again from its first seq.
+            for epoch in [1, 2]:
+                mp_dataset_seqs = dummy_iter_dataset(mp_dataset, epoch=epoch)
+                assert sorted(seq.seq_tag for seq in mp_dataset_seqs) == post_dataset_tags
 
 
 def test_MultiProcDataset_meta():
