@@ -4860,7 +4860,7 @@ def _gather_per_seq(source: Tensor, raw: PackedRawTensor, *, indices: Tensor, cl
     (one frame per sequence, or a static number of them):
     every sequence selects among its own frames and the packing is left behind,
     so the result is a plain tensor over the dims of the indices and the other dims of the source,
-    as the padded gather produces.
+    as the padded gather produces. A sequence without frames has no row to read, its result is zero.
 
     :param source: packed over (seqs, frames)
     :param raw: its packing
@@ -4875,14 +4875,16 @@ def _gather_per_seq(source: Tensor, raw: PackedRawTensor, *, indices: Tensor, cl
     starts, starts_dim = raw.seq_starts(device=dev)
     assert starts_dim == seqs_dim, (starts_dim, seqs_dim)
     idx = rf.cast(rf.copy_to_device(indices, dev), starts.dtype)
+    lens = _device_lens(raw)
+    if lens is None:
+        lens = rf.copy_to_device(raw.seq_lens, dev)
     if clip_to_valid:
-        lens = _device_lens(raw)
-        if lens is None:
-            lens = rf.copy_to_device(raw.seq_lens, dev)
         idx = rf.clip_by_value(idx, 0, rf.maximum(rf.cast(lens, idx.dtype) - 1, 0))
     rows = rf.combine_bc(starts, "+", idx)
     rows = rf.clip_by_value(rows, 0, _last_row(raw.packed_dim, rows.dtype))
     out = rf.gather(raw.inner, indices=rows, axis=raw.packed_dim)
+    # the start of a sequence without frames is a row of another sequence or a gap frame
+    out = rf.where(rf.compare_bc(lens, ">", 0), out, 0)
     if source.sparse_dim is not None:
         out.sparse_dim = source.sparse_dim
     if source.feature_dim is not None and source.feature_dim in out.dims:

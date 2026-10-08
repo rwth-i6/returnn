@@ -412,12 +412,14 @@ def test_gather_packed_shift_within_seq():
 def test_gather_packed_per_seq_index_drops_the_time_dim():
     """indices without the gathered time dim select frames per sequence, so the result has no time dim"""
     rf.select_backend_torch()
-    x, batch_dim, time_dim, feat_dim = _make_input(batch_size=3, seq_lens=(7, 5, 4))
+    x, batch_dim, time_dim, feat_dim = _make_input(batch_size=4, seq_lens=(7, 5, 0, 4))
     k_dim = Dim(2, name="k")
-    idx_b = Tensor("idx", dims=[batch_dim], dtype="int32", raw_tensor=torch.tensor([6, 0, 3], dtype=torch.int32))
+    idx_b = Tensor("idx", dims=[batch_dim], dtype="int32", raw_tensor=torch.tensor([6, 0, 0, 3], dtype=torch.int32))
     idx_bk = Tensor("idx", dims=[batch_dim, k_dim], dtype="int32")
-    idx_bk.raw_tensor = torch.tensor([[6, 1], [0, 4], [3, 2]], dtype=torch.int32)
-    beyond = Tensor("idx", dims=[batch_dim], dtype="int32", raw_tensor=torch.tensor([9, 5, -1], dtype=torch.int32))
+    idx_bk.raw_tensor = torch.tensor([[6, 1], [0, 4], [0, 0], [3, 2]], dtype=torch.int32)
+    beyond = Tensor("idx", dims=[batch_dim], dtype="int32", raw_tensor=torch.tensor([9, 5, 2, -1], dtype=torch.int32))
+    # the sequence without frames has no row to read, its result is zero, where the padded gather reads padding
+    has_frames = torch.tensor([True, True, False, True])
     for gap in (0, 2):
         xp = packed.pack(x, gap=gap)
         for idx, clip_to_valid in ((idx_b, False), (idx_bk, False), (beyond, True)):
@@ -426,13 +428,14 @@ def test_gather_packed_per_seq_index_drops_the_time_dim():
             out = rf.gather(xp, indices=idx, axis=time_dim, clip_to_valid=clip_to_valid)
             assert not packed._warned_fallback_ops, packed._warned_fallback_ops
             assert out.dims_set == ref.dims_set, (gap, idx.dims, out.dims)
-            out = out.copy_compatible_to_dims(ref.dims)
-            numpy.testing.assert_allclose(out.raw_tensor.numpy(), ref.raw_tensor.numpy(), rtol=1e-6)
+            out = out.copy_compatible_to_dims(ref.dims).raw_tensor
+            numpy.testing.assert_allclose(out[has_frames].numpy(), ref.raw_tensor[has_frames].numpy(), rtol=1e-6)
+            assert not out[~has_frames].any(), (gap, idx.dims, out[~has_frames])
 
     # a sparse dim assigned on the virtual tensor stays
     vocab = Dim(9, name="vocab")
     codes = Tensor("codes", dims=[batch_dim, time_dim], dtype="int32")
-    codes.raw_tensor = torch.arange(21, dtype=torch.int32).reshape(3, 7) % 9
+    codes.raw_tensor = torch.arange(28, dtype=torch.int32).reshape(4, 7) % 9
     out = rf.gather(rf.set_sparse_dim(packed.pack(codes, gap=2), vocab), indices=idx_b, axis=time_dim)
     assert out.sparse_dim == vocab, out
 
