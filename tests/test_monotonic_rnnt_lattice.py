@@ -92,6 +92,32 @@ def test_monotonic_rnnt_lattice_keeps_the_real_cells_under_a_capacity():
     torch.testing.assert_close(pred_cells.raw_tensor.inner.raw_tensor[:cells], want_pred)
 
 
+def test_monotonic_rnnt_lattice_takes_an_operand_without_a_feature_dim():
+    """
+    A joint that reads more than one frame per cell, a whole chunk of them say, needs to know which row of
+    the lattice a cell is in rather than one frame, so the operand is the index of the row itself.
+    """
+    _enc, pred, enc_time, prefix_dim, frame_lens, label_lens = _batch()
+    batch = pred.dims[0]
+    rows_dim = Dim(int(frame_lens.max()), name="rows")
+    rows = Tensor(
+        "rows",
+        dims=[batch, enc_time],
+        dtype="int32",
+        raw_tensor=torch.arange(int(frame_lens.max()), dtype=torch.int32).expand(len(_CASES), -1).contiguous(),
+        sparse_dim=rows_dim,
+    )
+    cells = int((frame_lens.long() * (label_lens.long() + 1)).sum())
+    want = torch.cat([torch.arange(t, dtype=torch.int32).repeat_interleave(u + 1) for t, u in _CASES])
+
+    row_cells, pred_cells, _lattice_time = monotonic_rnnt_lattice(
+        rows, pred, enc_spatial_dim=enc_time, prefix_dim=prefix_dim, cells_bound=cells
+    )
+    assert row_cells.dims == pred_cells.dims[:-1], (row_cells, pred_cells)
+    assert row_cells.sparse_dim == rows_dim, row_cells
+    torch.testing.assert_close(row_cells.raw_tensor.inner.raw_tensor, want)
+
+
 def test_monotonic_rnnt_lattice_refuses_a_batch_above_the_capacity():
     """
     A batch whose cells exceed the capacity would silently lose the tail of its last sequence.
