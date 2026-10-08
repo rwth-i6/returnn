@@ -2418,6 +2418,35 @@ def test_torch_engine_cuda_graph_compile_optimizer_step_train():
     _run_cuda_graph_train(compile_=True, optimizer_step=True)
 
 
+def test_graph_capture_bounds_from_config():
+    """max_seqs is the batch bound and max_seq_length the capacity of a dynamic key, explicit options win"""
+    from returnn.tensor import batch_dim
+    from returnn.torch.util.graph_capture import bounds_from_config
+
+    classes_dim = Dim(7, name="classes")
+    template = TensorDict()
+    template.update(
+        {
+            "data": {"dims": [batch_dim, Dim(None, name="time")], "dtype": "float32"},
+            "classes": {"dims": [batch_dim, Dim(None, name="labels")], "dtype": "int32", "sparse_dim": classes_dim},
+            "speaker": {"dims": [batch_dim], "dtype": "int32", "sparse_dim": classes_dim},
+        },
+        auto_convert=True,
+    )
+
+    config = Config(dict(max_seqs=48, max_seq_length={"data": 3000}))
+    opts = bounds_from_config(
+        {"warmup_steps": 2, "dim_capacity": {"classes": 300}}, config=config, extern_data_template=template
+    )
+    assert opts == {"warmup_steps": 2, "batch_size_bound": 48, "dim_capacity": {"data": 3000, "classes": 300}}
+    explicit = {"batch_size_bound": 32, "dim_capacity": {"data": 5, "classes": 7}}
+    assert bounds_from_config(explicit, config=config, extern_data_template=template) == explicit
+
+    # one length for all keys
+    opts = bounds_from_config({}, config=Config(dict(max_seq_length=40)), extern_data_template=template)
+    assert opts == {"dim_capacity": {"data": 40, "classes": 40}}
+
+
 def test_torch_engine_cuda_graph_optimizer_state_in_advance():
     """
     With the in-graph optimizer step and no warmup step, the optimizer state is created in advance
