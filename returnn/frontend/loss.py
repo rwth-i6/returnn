@@ -11,6 +11,7 @@ import returnn.frontend as rf
 __all__ = [
     "cross_entropy",
     "ctc_loss",
+    "monotonic_rnnt_loss",
     "ctc_best_path",
     "ctc_greedy_decode",
     "ctc_durations_from_path",
@@ -106,6 +107,67 @@ def ctc_loss(
         use_native_op=use_native_op,
         label_loop=label_loop,
     )
+
+
+def monotonic_rnnt_loss(
+    *,
+    enc: Tensor,
+    pred: Tensor,
+    enc_spatial_dim: Dim,
+    prefix_dim: Dim,
+    labels: Tensor,
+    labels_spatial_dim: Dim,
+    joint,
+    blank_index: int,
+    cells_bound: Optional[int] = None,
+    max_frames: Optional[int] = None,
+) -> Tensor:
+    """
+    Full-sum negative log likelihood of the monotonic transducer over the packed lattice.
+
+    Every alignment spends one frame per lattice step, so a path either stays on its prefix or advances
+    it, and the lattice of a sequence is its frames times its prefixes. That is built packed, one entry
+    per real cell, so the joint runs on the cells a batch really has rather than on the batch's worst
+    case in both axes. The joint stays with the caller since it is model code, it only ever sees the two
+    gathered operands.
+
+    :param enc: [batch, enc_spatial_dim, D_enc], packed or padded
+    :param pred: [batch, prefix_dim, D_pred], the predictor states, one more than the labels
+    :param enc_spatial_dim: the encoder frames
+    :param prefix_dim: the label prefixes of the predictor
+    :param labels: [batch, labels_spatial_dim] sparse, the reference labels
+    :param labels_spatial_dim: the labels
+    :param joint: maps the two gathered operands to the logits over the vocabulary plus blank
+    :param blank_index: index of the blank
+    :param cells_bound: cells the lattice buffer holds, the batch's own sum by default, a static capacity
+        under CUDA graph capture
+    :param max_frames: frames the recursion runs over, the longest sequence of the batch by default,
+        the declared capacity under capture, since reading the batch's own maximum is a host read
+    :return: [batch] the negative log likelihood, zero where a sequence has no alignment
+    """
+    from returnn.frontend._packed_backend import monotonic_rnnt_lattice, is_packed, unpack, _raw
+    from returnn.torch.util.monotonic_rnnt import monotonic_rnnt_loss as _raw_loss
+
+    enc_cells, pred_cells, _lattice_dim = monotonic_rnnt_lattice(
+        enc, pred, enc_spatial_dim=enc_spatial_dim, prefix_dim=prefix_dim, cells_bound=cells_bound
+    )
+    logits = joint(enc_cells, pred_cells)
+    assert is_packed(logits), f"monotonic_rnnt_loss: the joint must keep the lattice packed, got {logits}"
+    flat = _raw(logits).inner
+    device = flat.device
+    if max_frames is None:
+        max_frames = int(enc_spatial_dim.get_dim_value())
+    # the recursion indexes the labels by prefix, which wants them padded, and they are small
+    padded_labels = unpack(labels).copy_transpose([labels.dims[0], labels_spatial_dim])
+    losses = _raw_loss(
+        flat.raw_tensor,
+        padded_labels.raw_tensor,
+        enc_spatial_dim.get_dyn_size_ext_for_device(device).raw_tensor,
+        labels_spatial_dim.get_dyn_size_ext_for_device(device).raw_tensor,
+        blank=blank_index,
+        max_frames=max_frames,
+    )
+    return Tensor("monotonic_rnnt", dims=[labels.dims[0]], dtype="float32", raw_tensor=losses)
 
 
 def ctc_best_path(

@@ -10,7 +10,7 @@ import sys
 import torch
 
 import _setup_test_env  # noqa
-from returnn.torch.util.monotonic_rnnt import monotonic_rnnt_loss
+from returnn.torch.util.monotonic_rnnt import lattice_index, monotonic_rnnt_loss
 
 
 def _brute_force(logits: torch.Tensor, labels, blank: int) -> float:
@@ -420,6 +420,73 @@ def test_monotonic_rnnt_traces_under_aot():
         torch.testing.assert_close(grad, results[0][1], rtol=1e-4, atol=1e-6)
     # the rows past the cell sum belong to no sequence
     assert not results[2][1][num_cells:].any()
+
+
+def test_lattice_index_refuses_a_batch_above_the_capacity():
+    """
+    A capacity below the batch would put the cells past it onto the last sequence, cut short in silence, and
+    below the sum of the other sequences the last span turned negative, which crashed the process. Cells past
+    the batch's own sum still land on the last sequence beyond its end, where the loss masks them.
+    """
+    frame_lens = torch.tensor([4, 3, 5], dtype=torch.int32)
+    label_lens = torch.tensor([2, 1, 0], dtype=torch.int32)
+    total = int((frame_lens.long() * (label_lens.long() + 1)).sum())
+
+    for capacity in (total - 1, total - 6):
+        try:
+            lattice_index(frame_lens, label_lens, capacity)
+        except AssertionError as exc:
+            assert "cells" in str(exc), exc
+        else:
+            raise AssertionError(f"a capacity of {capacity} below {total} cells was accepted")
+
+    seq, frame, _prefix = lattice_index(frame_lens, label_lens, total + 4)
+    assert seq[total:].tolist() == [2] * 4, seq
+    assert bool((frame[total:] >= 5).all()), frame
+
+
+def test_monotonic_rnnt_refuses_a_recursion_shorter_than_a_sequence():
+    """
+    A recursion cut short scored the sequence at the sentinel on cpu and gave a partial score on cuda that
+    looked like any other loss, so the frames a caller declares have to cover every sequence.
+    """
+    torch.manual_seed(1)
+    logits = torch.randn(12, 5)
+    labels = torch.tensor([[1, 2]], dtype=torch.int32)
+    frame_lens, label_lens = torch.tensor([4], dtype=torch.int32), torch.tensor([2], dtype=torch.int32)
+    fine = monotonic_rnnt_loss(logits, labels, frame_lens, label_lens, blank=0, max_frames=4)
+    assert torch.isfinite(fine).all(), fine
+
+    try:
+        monotonic_rnnt_loss(logits, labels, frame_lens, label_lens, blank=0, max_frames=3)
+    except AssertionError as exc:
+        assert "frames" in str(exc), exc
+    else:
+        raise AssertionError("a recursion shorter than the sequence was accepted")
+
+
+def test_monotonic_rnnt_refuses_labels_outside_the_vocabulary():
+    """
+    The cell kernels index the row by blank and by label unchecked, so a stray id reads and writes out of
+    bounds on cuda, and both ids are checked before any kernel runs.
+    """
+    torch.manual_seed(1)
+    vocab = 5
+    logits = torch.randn(12, vocab)
+    frame_lens, label_lens = torch.tensor([4], dtype=torch.int32), torch.tensor([2], dtype=torch.int32)
+    for labels, blank, error in (
+        ([[1, 2]], vocab, ValueError),
+        ([[1, vocab]], 0, AssertionError),
+        ([[-1, 2]], 0, AssertionError),
+    ):
+        try:
+            monotonic_rnnt_loss(
+                logits, torch.tensor(labels, dtype=torch.int32), frame_lens, label_lens, blank=blank, max_frames=4
+            )
+        except error as exc:
+            assert "vocabulary" in str(exc), exc
+        else:
+            raise AssertionError(f"labels {labels} with blank {blank} were accepted")
 
 
 if __name__ == "__main__":
