@@ -19,6 +19,13 @@ With ``"sync_complete_frac": True`` (default since behavior version 33),
 the epoch progress ``complete_frac`` is the mean over the ranks,
 so a ``dynamic_learning_rate`` on ``epoch_continuous`` gives the same learning rate on every rank.
 
+Every rank restricts itself (and the dataset workers it starts) to the CPUs local to its GPU
+(the general option ``gpu_local_cpu_affinity``, on by default).
+Ranks whose GPUs share a NUMA node or socket get disjoint slices of its CPUs, so they do not compete for cores.
+Ranks the launcher already bound to different CPUs (``srun`` per-task binding, ``mpirun``) are left as they are.
+Measured on 4-GPU nodes: a few percent of the step time, and a tighter step-time distribution.
+``torchrun --numa-binding`` (torch >= 2.9, needs ``numactl``) does the same at the launcher level.
+
 For the dataset, by default, we do not use sharding,
 but instead, every dataset uses a different random seed
 (see ``random_seed_offset`` in the code).
