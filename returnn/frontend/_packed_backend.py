@@ -2958,6 +2958,24 @@ class PackedBackend(Backend[PackedRawTensor]):
         return raw.rewrap(rf.stop_gradient(raw.inner), name="stop_gradient")
 
     @staticmethod
+    def is_finite(x: Tensor) -> Tensor:
+        """is finite -- elementwise, on the packed data"""
+        raw = _raw(x)
+        return raw.rewrap(rf.is_finite(raw.inner), name="is_finite")
+
+    @staticmethod
+    def is_infinite(x: Tensor) -> Tensor:
+        """is positive or negative infinite -- elementwise, on the packed data"""
+        raw = _raw(x)
+        return raw.rewrap(rf.is_infinite(raw.inner), name="is_infinite")
+
+    @staticmethod
+    def is_neg_infinite(x: Tensor) -> Tensor:
+        """is negative infinite -- elementwise, on the packed data"""
+        raw = _raw(x)
+        return raw.rewrap(rf.is_neg_infinite(raw.inner), name="is_neg_infinite")
+
+    @staticmethod
     def activation_raw(raw_tensor: PackedRawTensor, func: str) -> PackedRawTensor:
         """elementwise -- applied directly on the packed data"""
         inner_out = raw_tensor.inner.copy_template(name=func)
