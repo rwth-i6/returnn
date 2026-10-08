@@ -3051,6 +3051,24 @@ class PackedBackend(Backend[PackedRawTensor]):
         return raw.rewrap(rf.stop_gradient(raw.inner), name="stop_gradient")
 
     @staticmethod
+    def is_finite(x: Tensor) -> Tensor:
+        """is finite -- elementwise, on the packed data"""
+        raw = _raw(x)
+        return raw.rewrap(rf.is_finite(raw.inner), name="is_finite")
+
+    @staticmethod
+    def is_infinite(x: Tensor) -> Tensor:
+        """is positive or negative infinite -- elementwise, on the packed data"""
+        raw = _raw(x)
+        return raw.rewrap(rf.is_infinite(raw.inner), name="is_infinite")
+
+    @staticmethod
+    def is_neg_infinite(x: Tensor) -> Tensor:
+        """is negative infinite -- elementwise, on the packed data"""
+        raw = _raw(x)
+        return raw.rewrap(rf.is_neg_infinite(raw.inner), name="is_neg_infinite")
+
+    @staticmethod
     def activation_raw(raw_tensor: PackedRawTensor, func: str) -> PackedRawTensor:
         """elementwise -- applied directly on the packed data"""
         inner_out = raw_tensor.inner.copy_template(name=func)
@@ -4229,6 +4247,9 @@ class PackedBackend(Backend[PackedRawTensor]):
         (this is what shifts like a successor or predecessor lookup do).
         Indices over the sequences but not over that dim select frames per sequence, and the result is plain.
         A plain source with packed indices gives a result in the packing of the indices.
+        Packed indices either share the packing of the source, and the result keeps it,
+        or they are packed over another spatial dim of the same sequences, and the result takes theirs
+        (see :func:`_gather_into_indices_packing`).
         Anything else takes the generic dim-aware route.
         """
         kwargs = dict(indices=indices, axis=axis, clip_to_valid=clip_to_valid)
@@ -4262,6 +4283,12 @@ class PackedBackend(Backend[PackedRawTensor]):
                         out.sparse_dim = source.sparse_dim
                     return out
             return _dim_aware_call("gather", (source,), kwargs)
+        if is_packed(indices) and _raw(indices).orig_dims != raw.orig_dims:
+            # indices over another spatial dim have their own rows, which must not be read as rows of the source
+            out = _gather_into_indices_packing(source, raw, indices=indices, clip_to_valid=clip_to_valid)
+            if out is not None:
+                return out
+            return _dim_aware_call("gather", (source,), kwargs)
         if is_packed(indices):
             idx_raw = _raw(_conform_packing(indices, raw))
             if not raw.same_packing(idx_raw):
@@ -4285,14 +4312,7 @@ class PackedBackend(Backend[PackedRawTensor]):
         local = _frame_coords(raw, axis)
         idx = rf.cast(idx, local.dtype)
         if clip_to_valid:
-            seq = _frame_coords(raw, raw.orig_dims[0])
-            # in the traced regime the lens already live on the data's device,
-            # where copying them would be a sync
-            lens = _device_lens(raw)
-            if lens is None:
-                lens = rf.copy_to_device(raw.seq_lens, dev)
-            last = rf.cast(rf.gather(lens, indices=seq, axis=raw.orig_dims[0]), idx.dtype) - 1
-            idx = rf.clip_by_value(idx, rf.zeros_like(last), last)
+            idx = _clip_into_seqs(raw, idx, seq=_frame_coords(raw, raw.orig_dims[0]))
         # the sequence starts at this frame's own row minus its position within the sequence
         src = rows - local + idx
         src = rf.clip_by_value(src, 0, _last_row(raw.packed_dim, src.dtype))
@@ -4303,11 +4323,47 @@ class PackedBackend(Backend[PackedRawTensor]):
         return out
 
     @staticmethod
+    def scatter(
+        source: Tensor,
+        *,
+        indices: Tensor,
+        indices_dim: Union[Dim, Sequence[Dim]],
+        mode: str,
+        fill_value: Union[int, float],
+        out_dim: Union[Dim, Sequence[Dim]],
+    ) -> Tensor:
+        """
+        scatter.
+        Along the innermost packed dim into a new spatial dim with per-sequence lengths,
+        every frame writes to the start of its own sequence in the result plus the position it holds,
+        so the result is a fresh packing over that dim and nothing is unpacked
+        (the inverse of the re-laid-out gather, see :func:`_scatter_relayout`).
+        Anything else takes the generic dim-aware route.
+        """
+        kwargs = dict(indices=indices, indices_dim=indices_dim, mode=mode, fill_value=fill_value, out_dim=out_dim)
+        if not is_packed(source) and is_packed(indices):
+            # e.g. the ones which count the writes per position: a plain source follows the packing of the indices
+            idx_raw = _raw(indices)
+            if any(d in source.dims for d in idx_raw.orig_dims):
+                source = idx_raw.rewrap(_pack_like(source, idx_raw), name=source.name)
+        out = _scatter_relayout(source, **kwargs) if is_packed(source) else None
+        if out is not None:
+            return out
+        return _dim_aware_call("scatter", (source,), kwargs)
+
+    @staticmethod
     def scaled_gradient(tensor: Tensor, scale: Union[float, Tensor]) -> Tensor:
         """scaled_gradient: identity forward, gradient scaled; elementwise, runs on the inner buffer"""
         raw = _raw(tensor)
         if isinstance(scale, Tensor) and is_packed(scale):
-            scale = _raw(_conform_packing(scale, raw)).inner
+            scale_raw = _raw(_conform_packing(scale, raw))
+            # a per-frame scale over other dims has no meaning for the gradient of this tensor,
+            # and its rows would silently scale other frames
+            assert raw.same_packing(scale_raw), (
+                f"scaled_gradient: the scale is packed over {list(scale_raw.orig_dims)},"
+                f" the tensor over {list(raw.orig_dims)}"
+            )
+            scale = scale_raw.inner
         return raw.rewrap(raw.inner_backend.scaled_gradient(raw.inner, scale), name="scaled_gradient")
 
     @staticmethod
@@ -4760,7 +4816,6 @@ for _name in [
     "flip_no_mask",
     "masked_scatter",
     "reshape",
-    "scatter",
     "search_sorted",
     "sort",
     "split",
@@ -5014,6 +5069,142 @@ def _gather_relayout_out_dim(indices: Tensor, raw: PackedRawTensor) -> Optional[
     return out_spatial_dim
 
 
+def _scatter_relayout(
+    source: Tensor,
+    *,
+    indices: Tensor,
+    indices_dim: Union[Dim, Sequence[Dim]],
+    mode: str,
+    fill_value: Union[int, float],
+    out_dim: Union[Dim, Sequence[Dim]],
+) -> Optional[Tensor]:
+    """
+    Scatter along the innermost packed dim into a new spatial dim which has a length per sequence,
+    e.g. frames written to their places in a longer stream.
+    The inverse of :func:`_gather_relayout`:
+    every source frame writes to the start of its own sequence in the result plus the position it holds.
+    The result is a fresh dense packed buffer over (batch, out dim), and the source is never unpacked.
+    A frame writes only if it is a sequence frame and its position lies inside its own result sequence.
+    Everything else (gap and junk frames, positions in the padding of the result) goes to one extra row
+    behind the buffer, which is cut off again.
+    A neutral value would not do instead: the reduction drops the fill value of a position once anything is
+    written there.
+
+    :param source: packed over (batch, indices dim)
+    :param indices: positions within the result sequence, plain over the packed dims or packed like the source
+    :param indices_dim: see :func:`rf.scatter`
+    :param mode: see :func:`rf.scatter`
+    :param fill_value: see :func:`rf.scatter`
+    :param out_dim: see :func:`rf.scatter`
+    :return: packed over (batch, out dim), or None if the call has another shape and has to take the generic route
+    """
+    raw = _raw(source)
+    indices_dims = [indices_dim] if isinstance(indices_dim, Dim) else list(indices_dim)
+    out_dims = [out_dim] if isinstance(out_dim, Dim) else list(out_dim)
+    if len(raw.orig_dims) != 2 or indices_dims != [raw.orig_dims[-1]] or len(out_dims) != 1:
+        return None
+    batch, out_spatial_dim = raw.orig_dims[0], out_dims[0]
+    out_size = out_spatial_dim.dyn_size_ext
+    if out_size is None or out_size.dims != (batch,) or out_spatial_dim in raw.inner.dims:
+        return None  # no packing over (batch, out dim) describes the result
+    if is_packed(indices):
+        idx_raw = _raw(_conform_packing(indices, raw))
+        if not raw.same_packing(idx_raw):
+            return None
+        idx = idx_raw.inner
+    elif set(indices.dims) <= set(raw.orig_dims):
+        idx = _pack_like(indices, raw)
+    else:
+        return None
+
+    dev = raw.inner.device
+    out_lens = out_spatial_dim.get_size_tensor(device=dev)
+    out_packed_dim = _scatter_out_packed_dim(raw, out_spatial_dim, out_lens, batch, dev)
+    helper = PackedRawTensor(
+        inner=rf.zeros([out_packed_dim], dtype="int32", device=dev),
+        packed_dim=out_packed_dim,
+        orig_dims=(batch, out_spatial_dim),
+        content_bound=out_packed_dim.dimension,
+    )
+    seq = _frame_coords(raw, batch)
+    starts, seqs_dim = helper.seq_starts(device=dev)
+    idx = rf.cast(idx, seq.dtype)
+    out_len_at = rf.cast(rf.gather(out_lens, indices=seq, axis=batch), idx.dtype)
+    writes = rf.logical_and(idx >= 0, idx < out_len_at)
+    frames = _frame_mask(raw)
+    if frames is not None:
+        writes = rf.logical_and(writes, frames)
+    dest = rf.cast(rf.gather(starts, indices=seq, axis=seqs_dim), idx.dtype) + idx
+    n_rows = out_packed_dim.get_dim_value_tensor()
+    if isinstance(n_rows, Tensor):
+        n_rows = rf.cast(rf.copy_to_device(n_rows, dev), dest.dtype)
+    dest = rf.where(writes, dest, n_rows)
+    dump_dim = out_packed_dim + 1
+    values = raw.inner
+    if mode != "sum":
+        # a nan in a row which writes nothing would get a nan gradient from the backward of a max or min
+        values = rf.where(writes, values, 0)
+    out_inner = raw.inner_backend.scatter(
+        values, indices=dest, indices_dim=[raw.packed_dim], mode=mode, fill_value=fill_value, out_dim=dump_dim
+    )
+    out_inner, _ = rf.slice(out_inner, axis=dump_dim, size=out_packed_dim, out_dim=out_packed_dim)
+    out = helper.rewrap(out_inner, name="scatter")
+    # a sparse dim assigned on the virtual tensor never reached the inner buffer
+    if source.sparse_dim is not None:
+        out.sparse_dim = source.sparse_dim
+    return out
+
+
+def _scatter_out_packed_dim(
+    in_raw: PackedRawTensor, out_spatial_dim: Dim, out_lens: Tensor, batch: Dim, dev: str
+) -> Dim:
+    """
+    :param in_raw: the packing scattered from
+    :param out_spatial_dim: the innermost packed dim of the result
+    :param out_lens: its per-sequence lengths, on the data device
+    :param batch: the outer packed dim
+    :param dev: the data device
+    :return: the packed dim for a re-laid-out scatter.
+        The exact total normally.
+        Static when tracing, and then a proven bound (see :func:`_packed_total_bound`):
+        unlike for a re-laid-out gather of windows or strides,
+        the lengths of the result are independent of those of the source,
+        so the capacity ratio bounds nothing here.
+    """
+    if not rf.is_static_traceable():
+        return Dim(rf.copy_to_device(rf.reduce_sum(out_lens, axis=batch), dev), name="scatter_packed")
+    # under tracing this resolves to the batch capacity (e.g. torch_cuda_graph batch_size_bound)
+    n_seqs = batch.get_dim_value_tensor()
+    assert isinstance(n_seqs, int), f"packed scatter: static traceable needs a bounded batch dim, got {batch}"
+    bound = _packed_total_bound(out_spatial_dim, in_raw, n_seqs)
+    assert bound is not None, f"packed scatter: static traceable needs a capacity on {out_spatial_dim}"
+    return Dim(bound, name="scatter_packed")
+
+
+def _packed_total_bound(dim: Dim, in_raw: PackedRawTensor, n_seqs: int) -> Optional[int]:
+    """
+    :param dim: a spatial dim with a length per sequence
+    :param in_raw: a packing whose innermost dim has a known content bound
+    :param n_seqs: the (bounded) number of sequences
+    :return: a proven upper bound on the sum of the lengths of dim over all sequences, or None if there is none.
+        In general that is the number of sequences times the capacity, the size of the padded tensor.
+        The innermost dim of in_raw is bounded by its content bound instead, which is what packing is about,
+        and a sum of dims by the sum over its parts
+        (e.g. a stream of frames and labels: the frames by their content, only the labels by their capacity).
+    """
+    if dim == in_raw.orig_dims[-1] and in_raw.content_bound is not None:
+        return in_raw.content_bound
+    # noinspection PyProtectedMember
+    op = dim._extra.derived_from_op if dim._extra else None
+    if op is not None and op.kind == "add" and op.inputs:
+        parts = [_packed_total_bound(part, in_raw, n_seqs) for part in op.inputs]
+        if all(part is not None for part in parts):
+            return sum(parts)
+    # noinspection PyProtectedMember
+    capacity = dim.capacity or dim._derived_capacity()
+    return None if capacity is None else n_seqs * capacity
+
+
 def _plain_extents(raw: PackedRawTensor, dim: Dim) -> Optional[Tuple[int, int]]:
     """
     :param raw: a packing
@@ -5099,22 +5290,107 @@ def _gather_relayout(
     if batch in idx.dims:
         idx = rf.gather(idx, indices=seq, axis=batch)
     idx = rf.cast(idx, local.dtype)
+    return _gather_at_positions(source, raw, helper, seq=seq, idx=idx, frame=local, clip_to_valid=clip_to_valid)
+
+
+def _gather_into_indices_packing(
+    source: Tensor, raw: PackedRawTensor, *, indices: Tensor, clip_to_valid: bool
+) -> Optional[Tensor]:
+    """
+    Gather along the innermost packed dim with indices which are packed over another spatial dim
+    of the same sequences, e.g. label states read at the label position every frame of an alignment holds.
+
+    Every frame of the indices reads the start of its own sequence in the source plus the position it holds,
+    so neither side is unpacked.
+    The result takes the packing of the indices as it is (gap, align, layout lens and bound),
+    thus no new buffer bound is needed under static tracing.
+
+    :param source: packed over (seqs, source spatial)
+    :param raw: its packing
+    :param indices: packed over (seqs, another spatial), positions within the source sequence
+    :param clip_to_valid: clip the positions into each sequence
+    :return: packed like the indices, or None if the two packings do not share the seqs dim
+    """
+    idx_raw = _raw(indices)
+    seqs_dim = raw.orig_dims[0]
+    if len(idx_raw.orig_dims) != 2 or idx_raw.orig_dims[0] != seqs_dim:
+        return None
+    frame_dim = idx_raw.orig_dims[-1]
+    if frame_dim in raw.inner.dims and _plain_extents(raw, frame_dim) is None:
+        # the source carries the spatial dim of the indices as a plain dim, see _read_rows_at_frames
+        return None
+    inner, dev = raw.inner, raw.inner.device
+    read_dims = [d for d in (raw.packed_dim, frame_dim) if d in inner.dims]
+    raw_shape = raw.inner_backend.get_shape_tuple_raw(inner.raw_tensor)
+    extents = [raw_shape[inner.dims.index(d)] for d in read_dims]
+    empty = any(isinstance(n, int) and n == 0 for n in extents)
+    lens = idx_raw.seq_lens
+    # the lens are read from the host only once the source is empty
+    if empty and not rf.is_static_traceable() and int(rf.reduce_sum(lens, axis=list(lens.dims)).raw_tensor) == 0:
+        # no frame reads, but the indices can still have junk rows, which a gather from nothing cannot serve
+        rest = [d for d in inner.dims if d not in read_dims and d not in idx_raw.inner.dims]
+        dims = list(idx_raw.inner.dims) + rest
+        feature_dim = inner.feature_dim if inner.feature_dim in dims else None
+        out = rf.zeros(dims, dtype=source.dtype, sparse_dim=source.sparse_dim, feature_dim=feature_dim, device=dev)
+        if rf.is_float_dtype(source.dtype):
+            out = out + rf.reduce_sum(inner, axis=read_dims, use_mask=False)  # zero, keeps the gradient path
+            out.feature_dim = feature_dim
+        return idx_raw.rewrap(out, name="gather")
+    # the sequence of every frame of the indices; gap frames get an in-bounds one, their result is junk
+    seq = rf.copy_to_device(_frame_coords(idx_raw, seqs_dim), dev)
+    idx = rf.cast(rf.copy_to_device(idx_raw.inner, dev), seq.dtype)
+    frame = rf.copy_to_device(_frame_coords(idx_raw, frame_dim), dev)
+    return _gather_at_positions(source, raw, idx_raw, seq=seq, idx=idx, frame=frame, clip_to_valid=clip_to_valid)
+
+
+def _gather_at_positions(
+    source: Tensor,
+    raw: PackedRawTensor,
+    out_raw: PackedRawTensor,
+    *,
+    seq: Tensor,
+    idx: Tensor,
+    frame: Tensor,
+    clip_to_valid: bool,
+) -> Tensor:
+    """
+    Every frame of the result reads the start of its own sequence in the source plus the position it holds.
+
+    :param source: packed
+    :param raw: its packing
+    :param out_raw: packing of the result
+    :param seq: [result packed dim], the sequence of every frame of the result
+    :param idx: [result packed dim, ...], the position within the source sequence which it reads
+    :param frame: [result packed dim], the position of every frame of the result within its sequence
+    :param clip_to_valid: clip the positions into each sequence
+    :return: packed like out_raw
+    """
     if clip_to_valid:
-        # in the traced regime the lens already live on the data's device,
-        # where copying them would be a sync
-        lens = _device_lens(raw)
-        if lens is None:
-            lens = rf.copy_to_device(raw.seq_lens, dev)
-        last = rf.cast(rf.gather(lens, indices=seq, axis=batch), idx.dtype) - 1
-        idx = rf.clip_by_value(idx, rf.zeros_like(last), last)
-    starts, seqs_dim = raw.seq_starts(device=dev)
+        idx = _clip_into_seqs(raw, idx, seq=seq)
+    starts, seqs_dim = raw.seq_starts(device=raw.inner.device)
     src = rf.cast(rf.gather(starts, indices=seq, axis=seqs_dim), idx.dtype) + idx
     src = rf.clip_by_value(src, 0, _last_row(raw.packed_dim, src.dtype))
-    out = helper.rewrap(_read_rows_at_frames(raw, rows=src, frame=local, frame_dim=out_spatial_dim), name="gather")
+    frame_dim = out_raw.orig_dims[-1]
+    out = out_raw.rewrap(_read_rows_at_frames(raw, rows=src, frame=frame, frame_dim=frame_dim), name="gather")
     # a sparse dim assigned on the virtual tensor never reached the inner buffer
     if source.sparse_dim is not None:
         out.sparse_dim = source.sparse_dim
     return out
+
+
+def _clip_into_seqs(raw: PackedRawTensor, idx: Tensor, *, seq: Tensor) -> Tensor:
+    """
+    :param raw: a packing
+    :param idx: positions within its sequences
+    :param seq: the sequence of every position
+    :return: idx clipped into its sequence
+    """
+    # in the traced regime the lens already live on the data's device, where copying them would be a sync
+    lens = _device_lens(raw)
+    if lens is None:
+        lens = rf.copy_to_device(raw.seq_lens, raw.inner.device)
+    last = rf.cast(rf.gather(lens, indices=seq, axis=raw.orig_dims[0]), idx.dtype) - 1
+    return rf.clip_by_value(idx, rf.zeros_like(last), last)
 
 
 def _gather_out_packed_dim(
