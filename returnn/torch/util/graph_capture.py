@@ -23,6 +23,9 @@ Config, e.g.::
         "capture": True,                # False (with compile): run the compiled step eagerly, no graph
     }
 
+``batch_size_bound`` and ``dim_capacity`` default to the config options ``max_seqs`` and ``max_seq_length``
+where those are set, see :func:`bounds_from_config`.
+
 Requirements (asserted):
 
 - ``accum_grad_multiple_step == 1``, no grad scaler, no DDP, no hot reloading.
@@ -62,7 +65,38 @@ from .capture_lock import cuda_graph_capture
 # noinspection PyProtectedMember
 from ..data.extern_data import get_batch_dim_from_extern_data, _get_dyn_dims_from_extern_data
 
-__all__ = ["GraphCapturedTrainStep", "graph_pools_reserved", "inductor_fw_compiler"]
+__all__ = ["GraphCapturedTrainStep", "graph_pools_reserved", "bounds_from_config", "inductor_fw_compiler"]
+
+
+def bounds_from_config(opts: Dict[str, Any], *, config, extern_data_template: TensorDict) -> Dict[str, Any]:
+    """
+    Completes the bounds of the capture with what the batching options of the config already imply:
+    ``max_seqs`` is the batch bound, ``max_seq_length`` (per key or one value for all)
+    the capacity of every dynamic dim it covers. Explicit options win.
+
+    :param opts: the ``torch_cuda_graph`` config dict
+    :param config: the RETURNN config
+    :param extern_data_template:
+    :return: a completed copy of opts
+    """
+    opts = dict(opts)
+    if "batch_size_bound" not in opts and config.int("max_seqs", -1) > 0:
+        opts["batch_size_bound"] = config.int("max_seqs", -1)
+
+    max_seq_length = config.typed_value("max_seq_length", None) or config.int("max_seq_length", None)
+    dim_capacity = dict(opts.get("dim_capacity", {}))
+    for k, data in extern_data_template.data.items():
+        if k in dim_capacity or len(data.dims) < 2 or data.dims[1].dimension is not None:
+            continue
+        if isinstance(max_seq_length, dict):
+            if k in max_seq_length:
+                dim_capacity[k] = int(max_seq_length[k])
+        elif isinstance(max_seq_length, (int, float)) and max_seq_length > 0:
+            dim_capacity[k] = int(max_seq_length)
+    if dim_capacity:
+        opts["dim_capacity"] = dim_capacity
+    return opts
+
 
 # bytes reserved by the current CUDA-graph private pool, set after capture,
 # for the engine memory log (single active graph per engine; a recapture overwrites)
