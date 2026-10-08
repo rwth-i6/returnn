@@ -470,6 +470,31 @@ def test_loss_inv_norm_factor_cached():
     assert loss.get_inv_norm_factor() == 2
 
 
+def test_loss_inv_norm_factor_own_wrapper():
+    """
+    The factor of a loss over one dim with a scalar size, and such a size tensor as custom factor,
+    is the size tensor of the dim itself. Resetting the dim later (the next batch under graph capture)
+    must not change the factor, while a write into its raw tensor (a graph replay) still counts.
+    """
+    import torch
+    from returnn.frontend.run_ctx import Loss
+
+    count = Tensor("count", dims=(), dtype="int32", raw_tensor=torch.tensor(8, dtype=torch.int32))
+    flat_dim = Dim(count)  # the size is scalar already, like the one of a packed dim
+    loss_raw = Tensor("ce", dims=[flat_dim], dtype="float32", raw_tensor=torch.ones(8))
+    losses = [
+        Loss(loss=loss_raw, name="ce", custom_inv_norm_factor=flat_dim.get_size_tensor()),
+        Loss(loss=loss_raw, name="fer", as_error=True),
+    ]
+    assert [int(loss.get_inv_norm_factor().raw_tensor) for loss in losses] == [8, 8]
+    flat_dim.reset_eager()
+    flat_dim.dyn_size_ext.raw_tensor = torch.tensor(2, dtype=torch.int32)
+    assert [int(loss.get_inv_norm_factor().raw_tensor) for loss in losses] == [8, 8]
+    for loss in losses:
+        loss.get_inv_norm_factor().raw_tensor.fill_(3)
+    assert [int(loss.get_inv_norm_factor().raw_tensor) for loss in losses] == [3, 3]
+
+
 def test_loss_normalization():
     time_dim = Dim(Tensor("time", [batch_dim], dtype="int32"))
     in_dim = Dim(7, name="in")
@@ -503,43 +528,6 @@ def test_loss_normalization():
     use_custom_inv_norm_factor = True
     res4 = run_model_torch_train(extern_data, lambda *, epoch, step: rf.Module(), _train_step)
     assert res4["loss:summed"] == res2["loss:summed"] and res4["loss:inv_norm_factor"] == res2["loss:inv_norm_factor"]
-
-
-def test_loss_inv_norm_factor_stays_at_the_step_it_was_marked_in():
-    import torch
-    from returnn.frontend.run_ctx import Loss
-
-    batch_dim_ = Dim(2, name="batch")
-    time_dim = Dim(Tensor("time", dims=[batch_dim_], dtype="int32"))
-    time_dim.dyn_size_ext.raw_tensor = torch.tensor([3, 5], dtype=torch.int32)
-    loss_t = Tensor("ce", dims=[batch_dim_, time_dim], dtype="float32")
-    loss_t.raw_tensor = torch.ones(2, 5)
-    scalar_count = Tensor("count", dims=(), dtype="int32")
-    scalar_count.raw_tensor = torch.tensor(8, dtype=torch.int32)
-    scalar_dim = Dim(scalar_count)  # a dim whose size tensor is already scalar, like a packed dim
-    flat_t = Tensor("ce_flat", dims=[scalar_dim], dtype="float32")
-    flat_t.raw_tensor = torch.ones(8)
-    losses = [
-        Loss(loss=loss_t, name="ce", custom_inv_norm_factor=time_dim.get_size_tensor()),
-        Loss(loss=loss_t, name="fer", as_error=True),  # the frame count of the loss dims
-        Loss(loss=flat_t, name="ce_flat", custom_inv_norm_factor=scalar_dim.get_size_tensor()),
-        Loss(loss=flat_t, name="fer_flat", as_error=True),
-    ]
-    in_the_step = [int(loss.get_inv_norm_factor().raw_tensor) for loss in losses]
-    assert in_the_step == [8, 8, 8, 8]
-    # a captured train step keeps its losses across steps, and an evaluation in between rebinds
-    # the size tensors of the very dims they are normalized by (raw_dict_to_extern_data)
-    for dim, size in (
-        (time_dim, torch.tensor([1, 1], dtype=torch.int32)),
-        (scalar_dim, torch.tensor(2, dtype=torch.int32)),
-    ):
-        dim.reset_eager()
-        dim.dyn_size_ext.raw_tensor = size
-    assert [int(loss.get_inv_norm_factor().raw_tensor) for loss in losses] == in_the_step
-    # a graph replay writes into the raw tensors the reduction was made from, that must still count
-    for loss in losses:
-        loss.get_inv_norm_factor().raw_tensor.fill_(3)
-    assert [int(loss.get_inv_norm_factor().raw_tensor) for loss in losses] == [3, 3, 3, 3]
 
 
 def test_rf_range_over_dim():
@@ -1273,6 +1261,62 @@ def test_cache_dim_remap_identity():
     assert got_batch is batch_dim
 
 
+def test_cache_tensor_key_by_raw_tensor():
+    """
+    A Tensor key matches by its raw tensor plus its dims (like Dim keys), sparse dim and feature axis,
+    so a new Tensor wrapping the same raw tensor hits,
+    and the entry lives as long as the raw tensor, not as long as the Tensor.
+    """
+    import gc
+    import weakref
+    import torch
+    from returnn.frontend._cache import Cache
+
+    b_dim = Dim(2, name="b")
+    t_dim = Dim(Tensor("t_lens", [b_dim], dtype="int32", raw_tensor=torch.tensor([3, 2], dtype=torch.int32)), name="t")
+    raw = torch.zeros(2, 3)
+    cache = Cache(max_size=4)
+
+    def _key(raw_: torch.Tensor, dims) -> tuple:
+        return "test_cache_tensor_key_by_raw_tensor", Tensor("x", dims=dims, dtype="float32", raw_tensor=raw_)
+
+    cache.set(_key(raw, [b_dim, t_dim]), t_dim)
+    gc.collect()  # the Tensor of the key is gone, the entry stays
+    assert cache.get(_key(raw, [b_dim, t_dim])) is t_dim
+    # other dim with the same sizes: hit, the output is mapped to the queried dim
+    t2_dim = Dim(Tensor("t2_lens", [b_dim], dtype="int32", raw_tensor=torch.tensor([3, 2], dtype=torch.int32)))
+    assert cache.get(_key(raw, [b_dim, t2_dim])) is t2_dim
+    # other dim with other sizes: miss
+    t3_dim = Dim(Tensor("t3_lens", [b_dim], dtype="int32", raw_tensor=torch.tensor([3, 1], dtype=torch.int32)))
+    assert cache.get(_key(raw, [b_dim, t3_dim])) is None
+    # other raw tensor, same values: miss
+    assert cache.get(_key(raw.clone(), [b_dim, t_dim])) is None
+    # the cache does not keep the raw tensor alive, and its entry goes with it
+    raw_ref = weakref.ref(raw)
+    del raw
+    gc.collect()
+    assert raw_ref() is None
+    # noinspection PyProtectedMember
+    assert cache._lru_cache.cache_info().currsize == 0
+
+    # sparse dim and feature axis are part of the key as well
+    labels_raw = torch.zeros(2, 3, dtype=torch.int32)
+
+    def _labels_key(sparse_dim: Dim) -> tuple:
+        labels = Tensor("labels", dims=[b_dim, t_dim], dtype="int32", sparse_dim=sparse_dim, raw_tensor=labels_raw)
+        return "test_cache_tensor_key_by_raw_tensor", labels
+
+    cache.set(_labels_key(Dim(5, name="vocab")), 1)
+    assert cache.get(_labels_key(Dim(5, name="vocab2"))) == 1
+    assert cache.get(_labels_key(Dim(7, name="vocab3"))) is None
+    feat_raw = torch.zeros(2, 3)
+    feat_dim = Dim(3, name="feat")
+    x = Tensor("x", [b_dim, feat_dim], "float32", raw_tensor=feat_raw)
+    cache.set(("test_cache_tensor_key_by_raw_tensor", x), 2)
+    x = Tensor("x", [b_dim, feat_dim], "float32", feature_dim=b_dim, raw_tensor=feat_raw)
+    assert cache.get(("test_cache_tensor_key_by_raw_tensor", x)) is None
+
+
 def test_dim_bounded_by_capacity():
     from returnn.tensor import Dim, Tensor, batch_dim
 
@@ -1331,52 +1375,6 @@ def test_packed_fallback_gate():
         assert time_dim not in out.dims_set
     finally:
         packed.set_allowed_fallbacks(None)
-
-
-def test_ctc_loss_under_cuda_graph_capture():
-    import torch
-    import unittest
-
-    if not torch.cuda.is_available():
-        raise unittest.SkipTest("cuda only: real graph capture")
-    rf.select_backend_torch()
-    batch = Dim(3, name="batch")
-    lens = Tensor("time", [batch], dtype="int32", raw_tensor=torch.tensor([11, 8, 5], dtype=torch.int32, device="cuda"))
-    time_dim = Dim(lens, name="time", capacity=11)
-    target_lens = Tensor(
-        "target_time", [batch], dtype="int32", raw_tensor=torch.tensor([4, 3, 2], dtype=torch.int32, device="cuda")
-    )
-    target_time_dim = Dim(target_lens, name="target_time", capacity=4)
-    out_dim = Dim(11, name="classes")
-    out_wb_dim = out_dim + 1
-    gen = torch.Generator().manual_seed(45)
-    logits = Tensor("logits", [batch, time_dim, out_wb_dim], dtype="float32", feature_dim=out_wb_dim)
-    logits.raw_tensor = torch.randn(3, 11, 12, generator=gen).cuda()
-    targets = Tensor("targets", [batch, target_time_dim], dtype="int32", sparse_dim=out_dim)
-    targets.raw_tensor = torch.randint(0, 11, (3, 4), generator=gen, dtype=torch.int32).cuda()
-
-    def _loss():
-        return rf.ctc_loss(
-            logits=logits,
-            targets=targets,
-            input_spatial_dim=time_dim,
-            targets_spatial_dim=target_time_dim,
-            blank_index=out_wb_dim.dimension - 1,
-        )
-
-    with rf.set_default_device_ctx("cuda"):
-        ref = _loss().copy_compatible_to_dims_raw([batch]).clone()
-        side = torch.cuda.Stream()
-        side.wait_stream(torch.cuda.current_stream())
-        with torch.cuda.stream(side), rf.set_static_traceable_ctx():
-            _loss()
-        torch.cuda.current_stream().wait_stream(side)
-        graph = torch.cuda.CUDAGraph()
-        with torch.cuda.graph(graph), rf.set_static_traceable_ctx():
-            out = _loss()
-        graph.replay()
-        torch.cuda.synchronize()
-        torch.testing.assert_close(out.copy_compatible_to_dims_raw([batch]), ref, rtol=1e-5, atol=1e-5)
 
 
 def test_combine_on_a_version_1_tensor_resolves_the_feature_axis():

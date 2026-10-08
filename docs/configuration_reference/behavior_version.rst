@@ -22,10 +22,42 @@ and not listing legacy/deprecated parameters.
 Version History
 ---------------
 
-Behavior version 32 (2026-09-03)
+Behavior version 38 (2026-10-07)
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-PyTorch backend optimizer weight-decay split:
+On the PyTorch backend, RF causal attention without an attention mask tensor
+(:func:`rf.dot_attention` with ``causal_query_spatial_dim``)
+now goes through the fused kernel ``torch.nn.functional.scaled_dot_product_attention``,
+which never materializes the attention energies and weights.
+This covers :class:`rf.CausalSelfAttention` and :class:`rf.RotaryPosCausalSelfAttention`
+on a full sequence.
+The kernel computes the same function but reassociates the reduction,
+so its values differ from the generic path within the float tolerance.
+Where the kernel does not apply (e.g. with broadcast attention dropout, before PyTorch 2.0,
+or with an explicit ``scale`` before PyTorch 2.1), the generic path runs as before.
+
+There is also the global config option ``rf_fused_causal_attention: bool``
+to override in both directions.
+
+See PR `#1850 <https://github.com/rwth-i6/returnn/pull/1850>`__.
+
+Behavior version 37 (2026-10-07)
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+With PyTorch distributed training (``torch_distributed``),
+every eval dataset which supports a predefined seq order (:func:`Dataset.supports_predefined_seq_order`)
+is evaluated in shares over all ranks, instead of on rank 0 alone while the other ranks wait.
+Every rank gets the same scores, see :ref:`multi_gpu`.
+
+There is also the option ``eval_on_all_ranks: bool`` in ``torch_distributed``
+to override in both directions.
+
+See PR `#1855 <https://github.com/rwth-i6/returnn/pull/1855>`__.
+
+Behavior version 36 (2026-10-07)
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+In the weight-decay split of the PyTorch backend optimizer,
 the default weight-decay module blacklist
 (the module types whose parameters do not get weight decay)
 now also covers the RF modules :class:`rf.LayerNorm` and :class:`rf.Embedding`,
@@ -37,13 +69,79 @@ There is also the optimizer option ``weight_decay_modules_blacklist``
 to override this explicitly in both directions
 (e.g. ``["torch.nn.LayerNorm", "torch.nn.Embedding"]`` to keep the old behavior).
 
-Do not switch the behavior version on a running training:
-the changed split moves parameters between optimizer param groups.
+Do not switch the behavior version on a running training,
+as the changed split moves parameters between optimizer param groups.
 If you do, loading the optimizer checkpoint warns about the moved parameters
 and remaps their per-parameter state by name
 (their group hyperparameters then follow the new groups).
 
-See PR `#1830 <https://github.com/rwth-i6/returnn/pull/1830>`__.
+See PR `#1923 <https://github.com/rwth-i6/returnn/pull/1923>`__.
+
+Behavior version 35 (2026-10-07)
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+PyTorch bucket batching (``torch_batching`` with ``BucketOrderingIterDataPipe``):
+``complete_frac`` and ``seq_idx`` keep the input order across the emitted batches,
+so ``epoch_continuous`` does not go backwards.
+This affects e.g. ``dynamic_learning_rate``.
+
+Before, each seq kept its own values,
+and the partially filled buckets emitted at the end of the epoch brought the progress back to an earlier point.
+
+There is also the option ``monotonic_data_keys`` of ``BucketOrderingIterDataPipe``
+to override in both directions.
+
+See PR `#1942 <https://github.com/rwth-i6/returnn/pull/1942>`__.
+
+Behavior version 34 (2026-10-06)
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+:func:`rf.moments` with ``use_mask=False`` takes its mean over all frames too, like the variance.
+Before, the mean was always masked while the variance was not,
+so the variance was taken around the mean of other frames.
+
+:class:`rf.BatchNorm` passes its ``use_mask`` on to :func:`rf.moments`.
+Before, the statistics of its generic path were always masked.
+So with ``use_mask=False``, the distributed :class:`rf.BatchNorm` took them without the padding,
+while the local one (the fused op) takes them over all frames, including the padding.
+
+There is also the global config option ``rf_moments_use_fixed_masking: bool``
+to override in both directions.
+
+See PR `#1915 <https://github.com/rwth-i6/returnn/pull/1915>`__.
+
+Behavior version 33 (2026-10-06)
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+PyTorch distributed training (``torch_distributed``):
+the train loop uses the mean of the ``complete_frac`` of all ranks,
+so ``epoch_continuous`` is the same on every rank.
+This affects ``dynamic_learning_rate`` and a callable ``accum_grad_multiple_step``.
+
+Before, each rank used its own ``complete_frac``, which differs between ranks
+as each rank consumes a different number of sequences per step.
+A schedule on ``epoch_continuous`` then applied a different learning rate on each rank,
+and the model replicas diverged although the gradients are averaged.
+
+There is also the option ``sync_complete_frac: bool`` in ``torch_distributed`` to override in both directions.
+With ``reduce_type`` ``"param"``, it applies in the steps where the parameters are synced.
+
+Behavior version 32 (2026-10-02)
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+:func:`rf.moments` reduces float input of lower precision (float16, bfloat16, float8, ...) in float32
+and returns the statistics in float32.
+This affects all RF norms using it
+(:class:`rf.LayerNorm`, :class:`rf.GroupNorm`, :class:`rf.GroupNormSpatial`, :func:`rf.normalize`,
+and :class:`rf.BatchNorm` when it masks or is distributed).
+
+Before, a bfloat16 reduction over many frames drifted by several ulps, and differently per layout
+(padded, packed, bound packed), and a float16 variance above 65504 overflowed.
+
+There is also the global config option ``rf_moments_float32: bool`` to override in both directions,
+and the ``compute_dtype`` argument of :func:`rf.moments` per call.
+
+See PR `#1914 <https://github.com/rwth-i6/returnn/pull/1914>`__.
 
 Behavior version 31 (2026-08-26)
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~

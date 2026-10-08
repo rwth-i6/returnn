@@ -3,7 +3,7 @@ Native ops for Torch, similar to :mod:`returnn.tf.native_op`.
 """
 
 from __future__ import annotations
-from typing import Optional, Any, Tuple, Dict
+from typing import Optional, Any, Callable, Tuple, Dict
 import os
 import sys
 import warnings
@@ -13,6 +13,10 @@ from threading import RLock
 import torch
 
 from returnn import native_op
+from returnn.tensor import Tensor, Dim
+
+# noinspection PyProtectedMember
+from returnn.frontend._cache import Cache
 from .native_op_code_compiler import OpCodeCompiler
 
 
@@ -523,13 +527,8 @@ def ctc_loss(
         targets=targets, seq_lens=targets_seq_lens, blank_idx=blank_index, label_loop=label_loop
     )
 
-    # the mask extent from the logits, and the state count from the targets shape
-    # (see the construct_kernel state numbering: (2*n_time+3) states per seq), like ctc_loss_packed:
-    # the max over the lens / states would be a data-dependent device read, a sync,
-    # illegal under CUDA-graph capture
+    # the mask over the frames of the logits, a max over the lens would be a device read
     seq_mask = sequence_mask_time_major(logits_seq_lens, maxlen=logits.shape[0])  # (time,batch), bool
-    n_batch, n_tgt_time = targets.shape
-    n_states = n_batch * (2 * n_tgt_time + 3)
 
     if max_approx:
         log_probs = torch.log_softmax(logits, dim=-1) if logits_normalize else logits  # (time,batch,dim)
@@ -551,9 +550,7 @@ def ctc_loss(
         loss = -torch.sum(log_probs_, dim=0)  # (batch,)
         return loss
 
-    loss = _FastBaumWelchScoresAutogradFunc.apply(
-        logits, logits_normalize, seq_mask, edges, weights, start_end_states, n_states
-    )
+    loss = _FastBaumWelchScoresAutogradFunc.apply(logits, logits_normalize, seq_mask, edges, weights, start_end_states)
     return loss
 
 
@@ -651,16 +648,11 @@ def get_ctc_fsa_fast_bw(
         start_end_states is (2,batch), int32, (start,end) state idx in FSA.
     """
     assert targets.ndim == 2
-    # Under tracing and under CUDA-graph capture the cache is bypassed on purpose: a cached FSA would
-    # be baked into the graph as a constant, so every replay would score against the FIRST step's
-    # targets. Capture reruns the step on the very buffers of the preceding warm run, so identity
-    # and version of the targets do not change and the key alone cannot tell the capture apart.
-    # (Within one traced or captured step the aux heads then rebuild it; the construction op is cheap.)
-    capturing = _cuda_stream_capturing()
-    cached = None if capturing else _ctc_fsa_cache_get(targets, seq_lens, blank_idx, label_loop, edges_bound)
-    if cached is not None and not _is_tracing_tensor(targets):
-        return cached
-    targets_arg, seq_lens_arg = targets, seq_lens
+    cache_key = (_wrap_raw_tensor(targets), _wrap_raw_tensor(seq_lens), blank_idx, label_loop, edges_bound)
+    cached = _ctc_fsa_cache.get(cache_key)
+    if cached is not None:
+        edges, weights, start_end_states = cached
+        return edges.raw_tensor, weights.raw_tensor, start_end_states.raw_tensor
     targets = targets.to(torch.int32)
     n_batch, n_time = targets.shape
 
@@ -690,11 +682,8 @@ def get_ctc_fsa_fast_bw(
         op = maker.make_op()
         edges, start_end_states, weights = op(targets, seq_lens, blank_idx, weights, label_loop)
 
-    res = (edges, weights, start_end_states)
-    if not capturing:
-        # an FSA built inside the capture lives in the graph's private pool, it must not serve any eager step
-        _ctc_fsa_cache_set(targets_arg, seq_lens_arg, blank_idx, label_loop, edges_bound, res)
-    return res
+    _ctc_fsa_cache.set(cache_key, tuple(_wrap_raw_tensor(x) for x in (edges, weights, start_end_states)))
+    return edges, weights, start_end_states
 
 
 def _ctc_fsa_edge_offsets(seq_lens: torch.Tensor, *, n_time: int, edges_bound: Optional[int]) -> torch.Tensor:
@@ -718,86 +707,19 @@ def _ctc_fsa_edge_offsets(seq_lens: torch.Tensor, *, n_time: int, edges_bound: O
 # so they build the same FSA; only the logits differ.
 # This is the chokepoint for every caller, packed and padded alike,
 # which is why the cache sits here and not in a backend.
-# It cannot use returnn.frontend._cache.Cache:
-# that keys on RF Tensors and Dims (_transform_key_item rejects anything else),
-# while these are raw torch tensors.
-# So the step scoping the Cache would give for free is done by hand,
-# keyed by tensor IDENTITY plus _version:
-# under CUDA-graph capture the targets live in a static buffer refilled in place every step,
-# so a data_ptr-only key would return a stale FSA.
+# Under static traceable, the Cache scopes the entries to the step (see rf.static_traceable_generation),
+# so no FSA crosses a trace or a CUDA graph capture (where the targets buffer is refilled in place every step).
 # One slot is enough: the heads are evaluated back to back.
-_CtcFsa = Tuple[torch.Tensor, torch.Tensor, torch.Tensor]  # edges, weights, start_end_states
-# targets, seq_lens, blank_idx, label_loop, edges_bound, targets._version, seq_lens._version, fsa
-_CtcFsaCacheEntry = Tuple[torch.Tensor, torch.Tensor, int, bool, Optional[int], int, int, _CtcFsa]
-_ctc_fsa_cache: Optional[_CtcFsaCacheEntry] = None
+_ctc_fsa_cache = Cache(1)
 
 
-def _cuda_stream_capturing() -> bool:
+def _wrap_raw_tensor(x: torch.Tensor) -> Tensor:
     """
-    :return: whether the current CUDA stream is being captured into a graph (False without CUDA)
+    :param x: raw tensor
+    :return: x wrapped into a :class:`Tensor` with static dims, e.g. for :class:`Cache` keys and values
     """
-    try:
-        return bool(torch.cuda.is_current_stream_capturing())
-    except (RuntimeError, AttributeError):  # CPU-only torch, or no CUDA context yet
-        return False
-
-
-def _is_tracing_tensor(x: torch.Tensor) -> bool:
-    """
-    :param x:
-    :return: whether this is a trace-time tensor (fake/meta), i.e. one WITHOUT storage
-    """
-    if x.device.type == "meta":
-        return True
-    try:
-        # noinspection PyProtectedMember
-        from torch._subclasses.fake_tensor import FakeTensor
-    except ImportError:  # older torch: no fake tensors, thus nothing to detect
-        return False
-    if isinstance(x, FakeTensor):
-        return True
-    # an ACTIVE fake mode also fakes plain tensors on use (older torch lacks this API)
-    # noinspection PyProtectedMember
-    get_dispatch_mode = getattr(torch._C, "_get_dispatch_mode", None)
-    # noinspection PyProtectedMember
-    mode_key = getattr(getattr(torch._C, "_TorchDispatchModeKey", None), "FAKE", None)
-    if get_dispatch_mode is not None and mode_key is not None:
-        return get_dispatch_mode(mode_key) is not None
-    return False
-
-
-def _ctc_fsa_cache_get(
-    targets: torch.Tensor, seq_lens: torch.Tensor, blank_idx: int, label_loop: bool, edges_bound: Optional[int]
-) -> Optional[_CtcFsa]:
-    """the cached FSA if it was built for exactly these arguments, else None"""
-    if _ctc_fsa_cache is None:
-        return None
-    t, sl, bi, ll, eb, t_ver, sl_ver, res = _ctc_fsa_cache
-    # NEVER hand an FSA across the trace/runtime boundary:
-    # a trace-time (fake) FSA reaching the compiled program makes the fast-BW op dispatch to its
-    # Meta kernel -> storage-less outputs -> illegal memory access in the next kernel;
-    # a real FSA captured into a trace would bake the FIRST step's targets into every replay.
-    if _is_tracing_tensor(res[0]) != _is_tracing_tensor(targets):
-        return None
-    if t is targets and sl is seq_lens and bi == blank_idx and ll == label_loop and eb == edges_bound:
-        # noinspection PyProtectedMember
-        if t_ver == targets._version and sl_ver == seq_lens._version:
-            return res
-    return None
-
-
-# noinspection PyProtectedMember
-def _ctc_fsa_cache_set(
-    targets: torch.Tensor,
-    seq_lens: torch.Tensor,
-    blank_idx: int,
-    label_loop: bool,
-    edges_bound: Optional[int],
-    res: _CtcFsa,
-) -> None:
-    """remember the FSA, so the other heads on the same targets reuse it"""
-    global _ctc_fsa_cache
-    _ctc_fsa_cache = (targets, seq_lens, blank_idx, label_loop, edges_bound, targets._version, seq_lens._version, res)
+    dims = [Dim(d, name=f"dim{i}") for i, d in enumerate(x.shape)]
+    return Tensor("raw", dims=dims, dtype=str(x.dtype).replace("torch.", ""), raw_tensor=x)
 
 
 def fast_baum_welch(
@@ -1038,16 +960,20 @@ def fast_baum_welch_packed(
     float_idx = seq_mask.float()
     seq_starts = seq_starts.to(torch.int32)
     edge_offsets = edge_offsets.to(torch.int32)
-    fwdbwd, obs_scores = op(  # noqa
+    fwdbwd, obs_scores = op(
         am_scores, edges, weights, start_end_states, float_idx, seq_starts, edge_offsets, max_seq_states
     )
     return fwdbwd, obs_scores
 
 
-def make_fast_baum_welch_packed_op(**kwargs):
+def make_fast_baum_welch_packed_op(
+    **kwargs,
+) -> Callable[
+    [torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, int],
+    Tuple[torch.Tensor, torch.Tensor],
+]:
     """
     :return: op
-    :rtype: (torch.Tensor) -> tuple[torch.Tensor]
     """
     maker = OpMaker(OpDescription.from_gen_base(native_op.FastBaumWelchPackedOp), **kwargs)
     return maker.make_op()

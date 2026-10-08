@@ -15,6 +15,17 @@ This will by default use PyTorch ``DistributedDataParallel``.
 Or maybe use ``torch_distributed = {"reduce_type": "param", "param_sync_step": 100}``.
 This uses parameter averaging after every 100 steps.
 
+With ``"sync_complete_frac": True`` (default since behavior version 33),
+the epoch progress ``complete_frac`` is the mean over the ranks,
+so a ``dynamic_learning_rate`` on ``epoch_continuous`` gives the same learning rate on every rank.
+
+Every rank restricts itself (and the dataset workers it starts) to the CPUs local to its GPU
+(the general option ``gpu_local_cpu_affinity``, on by default).
+Ranks whose GPUs share a NUMA node or socket get disjoint slices of its CPUs, so they do not compete for cores.
+Ranks the launcher already bound to different CPUs (``srun`` per-task binding, ``mpirun``) are left as they are.
+Measured on 4-GPU nodes: a few percent of the step time, and a tighter step-time distribution.
+``torchrun --numa-binding`` (torch >= 2.9, needs ``numactl``) does the same at the launcher level.
+
 For the dataset, by default, we do not use sharding,
 but instead, every dataset uses a different random seed
 (see ``random_seed_offset`` in the code).
@@ -24,8 +35,9 @@ see :class:`DistributeFilesDataset`.
 This dataset is one of the exceptions
 which also supports sharding.
 
-By default, every eval dataset is evaluated on rank 0 alone, while the other ranks wait.
-Set ``torch_distributed = {..., "eval_on_all_ranks": True}`` to split the evaluation over the ranks.
+Since behavior version 37, the evaluation is split over the ranks.
+Before, every eval dataset was evaluated on rank 0 alone, while the other ranks waited.
+``torch_distributed = {..., "eval_on_all_ranks": False}`` (or ``True``) overrides the behavior version.
 Every eval dataset which supports a predefined seq order (:func:`Dataset.supports_predefined_seq_order`)
 is then evaluated in shares.
 Rank 0 takes the dataset's seq order of the epoch and every rank evaluates every n-th seq of it.

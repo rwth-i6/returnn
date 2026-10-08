@@ -4,9 +4,11 @@ Tests for PyTorch engine.
 
 from __future__ import annotations
 import _setup_test_env  # noqa
-from typing import Optional, Any, Dict, List, Tuple
+from typing import Optional, Any, Dict, Tuple, List
 import contextlib
 import copy
+import functools
+import io
 import json
 import os
 import sys
@@ -693,6 +695,130 @@ def test_torch_engine_forward_load_epoch():
         assert engine.epoch == load_epoch
 
 
+def test_get_train_start_epoch_with_load_epoch():
+    from returnn.util.basic import BackendEngine
+
+    with tempfile.TemporaryDirectory(prefix="returnn_test_start_epoch") as tmp_dir:
+        model = f"{tmp_dir}/model"
+        for epoch in [43, 44]:
+            for postfix in [".pt", ".opt.pt"]:
+                open(Engine.epoch_model_filename(model, epoch) + postfix, "w").close()
+
+        def _select(**opts) -> Tuple[Optional[int], Optional[str], int]:
+            config = Config(dict(backend="torch", task="train", model=model, num_epochs=45, **opts))
+            BackendEngine.select_engine(config=config, _select_rf_backend=False)
+            return (*Engine.get_epoch_model(config), Engine.get_train_start_epoch(config))
+
+        # continuation after epoch 44, however it is specified
+        assert _select() == (44, f"{model}.044", 45)
+        assert _select(start_epoch=45) == (44, f"{model}.044", 45)
+        assert _select(load_epoch=44) == (44, f"{model}.044", 45)
+        assert _select(start_epoch=45, load_epoch=44) == (44, f"{model}.044", 45)
+        # continuation after an earlier epoch
+        assert _select(start_epoch=44) == (43, f"{model}.043", 44)
+        assert _select(start_epoch=44, load_epoch=43) == (43, f"{model}.043", 44)
+        # contradiction
+        for start_epoch, load_epoch in [(45, 43), (44, 44), (2, 44)]:
+            try:
+                _select(start_epoch=start_epoch, load_epoch=load_epoch)
+            except ValueError as exc:
+                assert f"start_epoch {start_epoch} with load_epoch {load_epoch}" in str(exc)
+            else:
+                raise Exception(f"start_epoch {start_epoch} with load_epoch {load_epoch}: did not get ValueError")
+        # new training
+        assert _select(start_epoch=1) == (None, None, 1)
+        # new training with model import
+        assert _select(start_epoch=1, load_epoch=44) == (None, f"{model}.044", 1)
+        assert _select(start_epoch=1, load=f"{model}.044") == (None, f"{model}.044", 1)
+
+
+def test_torch_engine_train_start_epoch_with_load_epoch():
+    # State right before the first update, with real model and optimizer checkpoints of epoch 2.
+    class _StopBeforeFirstUpdate(Exception):
+        pass
+
+    def _state_before_first_update(tmp_dir: str, **opts) -> Dict[str, Any]:
+        state = {}
+
+        def _train_step(**_kwargs):
+            optimizer = engine.get_pt_optimizer()
+            state.update(
+                epoch=engine.epoch,
+                run_ctx_epoch=rf.get_run_ctx().epoch,
+                global_train_step=engine.global_train_step,
+                learning_rate=optimizer.param_groups[0]["lr"],
+                dataset_epoch=dataset.epoch,
+                model=copy.deepcopy(engine.get_pt_model().state_dict()),
+                optimizer=copy.deepcopy(optimizer.state_dict()["state"]),
+            )
+            raise _StopBeforeFirstUpdate()
+
+        config = _start_epoch_train_config(tmp_dir, num_epochs=3, train_step=_train_step, **opts)
+        dataset = init_dataset({"class": "Task12AXDataset", "num_seqs": 20, "name": "train", "fixed_random_seed": 1})
+        with global_config_ctx(config):
+            engine = Engine(config=config)
+            engine.init_train_from_config(train_data=dataset)
+            try:
+                engine.train()
+            except _StopBeforeFirstUpdate:
+                pass
+            else:
+                raise Exception("train step was not called")
+        return state
+
+    def _assert_tensors_equal(a: Dict[str, Any], b: Dict[str, Any]):
+        assert a.keys() == b.keys()
+        for key in a:
+            assert torch.equal(torch.as_tensor(a[key]), torch.as_tensor(b[key])), key
+
+    with tempfile.TemporaryDirectory(prefix="returnn_test_start_epoch") as tmp_dir:
+        config = _start_epoch_train_config(tmp_dir, num_epochs=2)
+        dataset = init_dataset({"class": "Task12AXDataset", "num_seqs": 20, "name": "train", "fixed_random_seed": 1})
+        with global_config_ctx(config):
+            engine = Engine(config=config)
+            engine.init_train_from_config(train_data=dataset)
+            engine.train()
+        model_ckpt = torch.load(f"{tmp_dir}/model.002.pt", map_location="cpu")
+        opt_ckpt = torch.load(f"{tmp_dir}/model.002.opt.pt", map_location="cpu")["optimizer"]["state"]
+        assert model_ckpt["step"] == engine.global_train_step > 0 and opt_ckpt
+
+        for opts in [dict(start_epoch=3, load_epoch=2), dict(start_epoch=3), dict(load_epoch=2), dict()]:
+            state = _state_before_first_update(tmp_dir, **opts)
+            assert state["epoch"] == state["run_ctx_epoch"] == state["dataset_epoch"] == 3, (opts, state)
+            assert state["global_train_step"] == model_ckpt["step"], (opts, state)
+            assert state["learning_rate"] == 0.03, (opts, state)
+            _assert_tensors_equal(state["model"], model_ckpt["model"])
+            assert state["optimizer"].keys() == opt_ckpt.keys()
+            for param_idx, param_state in state["optimizer"].items():
+                _assert_tensors_equal(param_state, opt_ckpt[param_idx])
+
+        # New training with model import: only the parameters are taken from the checkpoint.
+        state = _state_before_first_update(tmp_dir, start_epoch=1, load_epoch=2)
+        assert state["epoch"] == state["run_ctx_epoch"] == state["dataset_epoch"] == 1, state
+        assert state["learning_rate"] == 0.01, state
+        _assert_tensors_equal(state["model"], model_ckpt["model"])
+        assert not state["optimizer"], state
+
+
+def _start_epoch_train_config(tmp_dir: str, **kwargs) -> Config:
+    opts = dict(
+        task="train",
+        device="cpu",
+        extern_data={"data": {"dim": 9}, "classes": {"dim": 2, "sparse": True}},
+        get_model=TrainTestModel,
+        train_step=TrainTestModel.train_step,
+        batch_size=500,
+        max_seqs=4,
+        optimizer={"class": "adam"},
+        learning_rates=[0.01, 0.02, 0.03],
+        model=f"{tmp_dir}/model",
+        learning_rate_file=f"{tmp_dir}/learning_rates",
+        torch_dataloader_opts=dict(num_workers=0),  # the engine then uses our dataset instance
+    )
+    opts.update(kwargs)
+    return Config(opts)
+
+
 def test_min_seq_len():
     from returnn.datasets.generating import DummyDataset
 
@@ -826,17 +952,54 @@ def test_data_loader_oggzip():
     assert batches == [[[12, 8, 9, 11], [16, 0, 0, 0]], [[6, 25, 18, 20, 5], [28, 10, 28, 14, 0]], [[17, 23]]]
 
 
-def test_save_optimizer_callable_config():
-    # The optimizer config can be a callable (e.g. the optimizer class itself).
-    # The saved checkpoint metadata must still be loadable under the torch >= 2.6 weights_only default.
-    config = Config(dict(optimizer=torch.optim.AdamW))
-    model = torch.nn.Linear(7, 5)
-    updater = Updater(config=config, network=model, device=torch.device("cpu"))
-    updater.create_optimizer()
+@unittest.skipIf(torch.__version__ < (2,), "torch.load weights_only cannot load floats before PyTorch 2.0")
+def test_save_optimizer_opts_weights_only():
+    include_check_partial = functools.partial(lambda **_kwargs: None)
+    for optimizer, expected_saved_opts in [
+        (torch.optim.AdamW, "adamw"),
+        (
+            {
+                "class": torch.optim.AdamW,
+                "betas": (0.9, 0.98),
+                "weight_decay": 1e-3,
+                "weight_decay_modules_blacklist": [torch.nn.LayerNorm, "rf.Embedding"],
+                "weight_decay_custom_include_check": lambda **_kwargs: None,
+            },
+            {
+                "class": "adamw",
+                "betas": (0.9, 0.98),
+                "weight_decay": 1e-3,
+                "weight_decay_modules_blacklist": ["torch.nn.modules.normalization.LayerNorm", "rf.Embedding"],
+                "weight_decay_custom_include_check": f"{__name__}.<lambda>",
+            },
+        ),
+        (
+            {"class": "adamw", "weight_decay": 1e-3, "weight_decay_custom_include_check": include_check_partial},
+            {
+                "class": "adamw",
+                "weight_decay": 1e-3,
+                "weight_decay_custom_include_check": f"object:{include_check_partial!r}",
+            },
+        ),
+    ]:
+        config = Config(dict(optimizer=optimizer))
+        model = torch.nn.Linear(7, 5)
+        updater = Updater(config=config, network=model, device=torch.device("cpu"))
+        updater.create_optimizer()
 
-    with tempfile.TemporaryDirectory(prefix="returnn_test_save_optimizer_callable_config") as tmp_dir:
-        updater.save_optimizer(tmp_dir + "/model.opt.pt")
-        updater.load_optimizer(tmp_dir + "/model.opt.pt")
+        with tempfile.TemporaryDirectory(prefix="returnn_test_save_optimizer_opts_weights_only") as tmp_dir:
+            updater.save_optimizer(tmp_dir + "/model.opt.pt")
+            saved = torch.load(tmp_dir + "/model.opt.pt", weights_only=True)
+            assert saved["optimizer_opts"] == expected_saved_opts
+            updater.load_optimizer(tmp_dir + "/model.opt.pt")
+
+    # numpy values given to the optimizer itself would break its own state dict, so check the conversion directly
+    from returnn.torch.updater import _optimizer_opts_for_checkpoint
+
+    buffer = io.BytesIO()
+    torch.save(_optimizer_opts_for_checkpoint({"a": numpy.float32(0.5), "b": numpy.arange(4).reshape(2, 2)}), buffer)
+    buffer.seek(0)
+    assert torch.load(buffer, weights_only=True) == {"a": 0.5, "b": [[0, 1], [2, 3]]}
 
 
 def test_load_optimizer_old_format():
@@ -888,6 +1051,17 @@ def test_load_optimizer_changed_weight_decay_split():
         updater1.save_optimizer(tmp_dir + "/model.opt.pt")
         updater2.load_optimizer(tmp_dir + "/model.opt.pt")
 
+        # The moved params must not take the group options of another optimizer algorithm.
+        config3 = Config(dict(optimizer={**config2.typed_dict["optimizer"], "class": "sgd", "momentum": 0.9}))
+        updater3 = Updater(config=config3, network=model, device=torch.device("cpu"))
+        updater3.create_optimizer()
+        try:
+            updater3.load_optimizer(tmp_dir + "/model.opt.pt")
+        except ValueError as exc:
+            assert "moved" in str(exc), exc
+        else:
+            raise AssertionError("expected ValueError, the AdamW group options would go to SGD")
+
     opt2 = updater2.get_optimizer()
     groups_by_wd = {group["weight_decay"]: group for group in opt2.param_groups}
     assert any(p is ln_weight for p in groups_by_wd[1e-3]["params"])
@@ -903,90 +1077,39 @@ def test_multi_optimizer_load_cross_algorithm_error():
     def _filter_second(*, full_param_name, **_kwargs):
         return full_param_name.startswith("1.")
 
-    def _make_updater(params_filter):
-        config = Config(
-            dict(
-                optimizer={
-                    "class": "multi",
-                    "optimizers": [
-                        {"class": "adamw", "params_filter": params_filter, "weight_decay": 1e-3},
-                        {"class": "sgd", "momentum": 0.9},
-                    ],
-                }
-            )
-        )
+    def _make_updater(sub_optimizers):
+        config = Config(dict(optimizer={"class": "multi", "optimizers": sub_optimizers}))
         updater = Updater(config=config, network=model, device=torch.device("cpu"))
         updater.create_optimizer()
         updater.set_current_train_step(global_train_step=0, epoch=1)
         return updater
 
-    updater1 = _make_updater(_filter_first)
+    adamw, sgd = {"class": "adamw", "weight_decay": 1e-3}, {"class": "sgd", "momentum": 0.9}
+    updater1 = _make_updater([{**adamw, "params_filter": _filter_first}, sgd])
     for param in model.parameters():
         param.grad = torch.ones_like(param)
     updater1.get_optimizer().step()
-    updater2 = _make_updater(_filter_second)
 
     with tempfile.TemporaryDirectory(prefix="returnn_test_multi_load_cross_algo") as tmp_dir:
         updater1.save_optimizer(tmp_dir + "/model.opt.pt")
-        try:
-            updater2.load_optimizer(tmp_dir + "/model.opt.pt")
-        except ValueError as exc:
-            assert "moved" in str(exc) and "AdamW" in str(exc) and "SGD" in str(exc)
-        else:
-            raise AssertionError("expected ValueError for a cross-optimizer param move")
-
-
-def test_multi_optimizer_load_cross_update_type_error():
-    model = torch.nn.Sequential(torch.nn.Linear(4, 4), torch.nn.Linear(4, 4))
-
-    def _filter_first_weight(*, full_param_name, **_kwargs):
-        return full_param_name == "0.weight"
-
-    def _filter_second_weight(*, full_param_name, **_kwargs):
-        return full_param_name == "1.weight"
-
-    def _make_updater(params_filter):
-        config = Config(
-            dict(
-                optimizer={
-                    "class": "multi",
-                    "optimizers": [
-                        {"class": "amuse", "update_type": "muon", "params_filter": params_filter, "warmup_steps": 5},
-                        {"class": "amuse", "update_type": "adamw", "warmup_steps": 5},
-                    ],
-                }
-            )
-        )
-        updater = Updater(config=config, network=model, device=torch.device("cpu"))
-        updater.create_optimizer()
-        updater.set_current_train_step(global_train_step=0, epoch=1)
-        return updater
-
-    updater1 = _make_updater(_filter_first_weight)
-    updater1.set_optimizer_training_mode(train=True)
-    for param in model.parameters():
-        param.grad = torch.ones_like(param)
-    updater1.get_optimizer().step()
-    updater1.set_optimizer_training_mode(train=False)
-    updater2 = _make_updater(_filter_second_weight)
-
-    with tempfile.TemporaryDirectory(prefix="returnn_test_multi_load_cross_update_type") as tmp_dir:
-        updater1.save_optimizer(tmp_dir + "/model.opt.pt")
-        try:
-            updater2.load_optimizer(tmp_dir + "/model.opt.pt")
-        except ValueError as exc:
-            assert "moved" in str(exc) and "muon" in str(exc) and "adamw" in str(exc)
-        else:
-            raise AssertionError("expected ValueError for a param move between AMUSE update types")
+        # The params of the first layer move to SGD, or the same assignment with the sub-optimizers reordered,
+        # where the group options (loaded by position) would go to the other algorithm.
+        for sub_optimizers in [
+            [{**adamw, "params_filter": _filter_second}, sgd],
+            [{**sgd, "params_filter": _filter_second}, adamw],
+        ]:
+            try:
+                _make_updater(sub_optimizers).load_optimizer(tmp_dir + "/model.opt.pt")
+            except ValueError as exc:
+                assert "AdamW" in str(exc) and "SGD" in str(exc), exc
+            else:
+                raise AssertionError(f"expected ValueError loading into {sub_optimizers}")
 
 
 def test_optimizer_load_cross_class_error():
-    # The owner check does not depend on a multi optimizer on either side.
-    # Two AMUSE adamw children loaded into one AMUSE sgd and plain AdamW into plain SGD (equal group counts).
+    # The owner check does not depend on a multi optimizer on either side,
+    # plain AdamW state loaded into plain SGD (equal group counts).
     model = torch.nn.Sequential(torch.nn.Linear(4, 4), torch.nn.Linear(4, 4))
-
-    def _filter_first_layer(*, full_param_name, **_kwargs):
-        return full_param_name.startswith("0.")
 
     def _make_updater(optimizer_opts):
         updater = Updater(config=Config(dict(optimizer=optimizer_opts)), network=model, device=torch.device("cpu"))
@@ -994,38 +1117,20 @@ def test_optimizer_load_cross_class_error():
         updater.set_current_train_step(global_train_step=0, epoch=1)
         return updater
 
-    amuse_adamw_twice = {
-        "class": "multi",
-        "optimizers": [
-            {"class": "amuse", "update_type": "adamw", "params_filter": _filter_first_layer, "warmup_steps": 5},
-            {"class": "amuse", "update_type": "adamw", "warmup_steps": 5},
-        ],
-    }
-    amuse_sgd = {"class": "amuse", "update_type": "sgd", "weight_decay": 1e-3, "warmup_steps": 5}
-    adamw = {"class": "adamw", "weight_decay": 1e-3}
-    sgd = {"class": "sgd", "momentum": 0.9, "weight_decay": 1e-3}
-    for save_opts, load_opts, names in [
-        (amuse_adamw_twice, amuse_sgd, ("adamw", "sgd")),
-        (adamw, sgd, ("AdamW", "SGD")),
-    ]:
-        updater1 = _make_updater(save_opts)
-        updater1.set_optimizer_training_mode(train=True)
-        for param in model.parameters():
-            param.grad = torch.ones_like(param)
-        updater1.get_optimizer().step()
-        updater1.set_optimizer_training_mode(train=False)
-        updater2 = _make_updater(load_opts)
-        assert len(updater1.get_optimizer().param_groups) == len(updater2.get_optimizer().param_groups)
-        with tempfile.TemporaryDirectory(prefix="returnn_test_load_cross_class") as tmp_dir:
-            updater1.save_optimizer(tmp_dir + "/model.opt.pt")
-            try:
-                updater2.load_optimizer(tmp_dir + "/model.opt.pt")
-            except ValueError as exc:
-                assert "moved" in str(exc) and all(name in str(exc) for name in names), exc
-            else:
-                raise AssertionError(
-                    f"expected ValueError loading {save_opts['class']} state into {load_opts['class']}"
-                )
+    updater1 = _make_updater({"class": "adamw", "weight_decay": 1e-3})
+    for param in model.parameters():
+        param.grad = torch.ones_like(param)
+    updater1.get_optimizer().step()
+    updater2 = _make_updater({"class": "sgd", "momentum": 0.9, "weight_decay": 1e-3})
+    assert len(updater1.get_optimizer().param_groups) == len(updater2.get_optimizer().param_groups)
+    with tempfile.TemporaryDirectory(prefix="returnn_test_load_cross_class") as tmp_dir:
+        updater1.save_optimizer(tmp_dir + "/model.opt.pt")
+        try:
+            updater2.load_optimizer(tmp_dir + "/model.opt.pt")
+        except ValueError as exc:
+            assert "moved" in str(exc) and "AdamW" in str(exc) and "SGD" in str(exc), exc
+        else:
+            raise AssertionError("expected ValueError loading AdamW state into SGD")
 
 
 def test_load_optimizer_legacy_checkpoint_same_algorithm():
@@ -1076,27 +1181,19 @@ def test_load_optimizer_legacy_checkpoint_same_algorithm():
 
 def test_optimizer_load_legacy_checkpoint_cross_algorithm_error():
     # For checkpoints from before "param_owners" the param group hyper-parameters identify the algorithm.
-    # Swapped AMUSE update types over the same params keep the param order and the group sizes,
+    # Swapped sub-optimizer classes over the same params keep the param order and the group sizes,
     # so nothing else would notice.
     model = torch.nn.Sequential(*(torch.nn.Linear(4, 4, bias=False) for _ in range(3)))
 
     def _filter_first_weight(*, full_param_name, **_kwargs):
         return full_param_name == "0.weight"
 
-    def _make_updater(first_update_type, second_update_type):
+    def _make_updater(first_opts, second_opts):
         config = Config(
             dict(
                 optimizer={
                     "class": "multi",
-                    "optimizers": [
-                        {
-                            "class": "amuse",
-                            "update_type": first_update_type,
-                            "params_filter": _filter_first_weight,
-                            "warmup_steps": 5,
-                        },
-                        {"class": "amuse", "update_type": second_update_type, "warmup_steps": 5},
-                    ],
+                    "optimizers": [{**first_opts, "params_filter": _filter_first_weight}, second_opts],
                 }
             )
         )
@@ -1105,13 +1202,12 @@ def test_optimizer_load_legacy_checkpoint_cross_algorithm_error():
         updater.set_current_train_step(global_train_step=0, epoch=1)
         return updater
 
-    updater1 = _make_updater("muon", "adamw")
-    updater1.set_optimizer_training_mode(train=True)
+    sgd, adamw = {"class": "sgd", "momentum": 0.9}, {"class": "adamw"}
+    updater1 = _make_updater(sgd, adamw)
     for param in model.parameters():
         param.grad = torch.ones_like(param)
     updater1.get_optimizer().step()
-    updater1.set_optimizer_training_mode(train=False)
-    updater2 = _make_updater("adamw", "muon")
+    updater2 = _make_updater(adamw, sgd)
     assert updater1._get_opt_param_names()[0] == updater2._get_opt_param_names()[0]
 
     with tempfile.TemporaryDirectory(prefix="returnn_test_load_legacy_cross_algo") as tmp_dir:
@@ -1125,7 +1221,7 @@ def test_optimizer_load_legacy_checkpoint_cross_algorithm_error():
             message = str(exc)
             assert "moved" in message and "0.weight" in message and "adamw" in message and "momentum" in message, exc
         else:
-            raise AssertionError("expected ValueError, the muon state of 0.weight would enter the adamw update")
+            raise AssertionError("expected ValueError, the SGD state of 0.weight would enter the AdamW update")
 
 
 def test_updater_weight_decay_blacklist():
@@ -1157,20 +1253,6 @@ def test_updater_weight_decay_blacklist():
     assert params_by_wd[1e-3] == {"2.weight"}
 
 
-def test_updater_step_does_not_walk_the_modules():
-    """the grad clip and norm take the parameters of the optimizer creation, walking the modules costs every step"""
-    from unittest import mock
-
-    config = Config(dict(optimizer={"class": "adamw"}, gradient_clip_global_norm=1.0, log_grad_norm=True))
-    model = torch.nn.Sequential(torch.nn.Linear(5, 5), torch.nn.Linear(5, 2))
-    updater = Updater(config=config, network=model, device=torch.device("cpu"))
-    updater.create_optimizer()
-    model(torch.randn(3, 5)).sum().backward()
-    with mock.patch.object(torch.nn.Module, "named_modules", side_effect=AssertionError("walked the modules")):
-        updater.step()
-    assert updater.last_grad_norm is not None
-
-
 @contextlib.contextmanager
 def set_behavior_version(version: int):
     """
@@ -1191,7 +1273,7 @@ def set_behavior_version(version: int):
 
 
 def test_updater_weight_decay_blacklist_rf_modules():
-    # Since behavior version 32, the default weight-decay blacklist also covers
+    # Since behavior version 36, the default weight-decay blacklist also covers
     # rf.LayerNorm and rf.Embedding, matching torch.nn.LayerNorm / torch.nn.Embedding.
     from returnn.torch.frontend.bridge import rf_module_to_pt_module
     from returnn.util.basic import DictRefKeys
@@ -1217,15 +1299,1405 @@ def test_updater_weight_decay_blacklist_rf_modules():
         param_to_name = DictRefKeys((param, name) for name, param in pt_model.named_parameters())
         return {pg["weight_decay"]: {param_to_name[p] for p in pg["params"]} for pg in opt.param_groups}
 
-    with set_behavior_version(31):
+    with set_behavior_version(35):
         params_by_wd = _params_by_wd()
         assert params_by_wd[1e-3] == {"embed.weight", "layer_norm.scale", "linear.weight"}
         assert params_by_wd[0.0] == {"layer_norm.bias", "linear.bias"}
 
-    with set_behavior_version(32):
+    with set_behavior_version(36):
         params_by_wd = _params_by_wd()
         assert params_by_wd[1e-3] == {"linear.weight"}
         assert params_by_wd[0.0] == {"embed.weight", "layer_norm.scale", "layer_norm.bias", "linear.bias"}
+
+
+def test_load_optimizer_weight_decay_split_same_order():
+    # The checkpoint of behavior version 35 loaded under 36: the rf.LayerNorm scale moves into the group
+    # without weight decay while the flattened param order stays the same.
+    from returnn.torch.frontend.bridge import rf_module_to_pt_module
+
+    rf.select_backend_torch()
+
+    class _Model(rf.Module):
+        def __init__(self):
+            super().__init__()
+            in_dim, out_dim = rf.Dim(7, name="in"), rf.Dim(5, name="out")
+            self.linear = rf.Linear(in_dim, out_dim, with_bias=False)
+            self.norm = rf.LayerNorm(out_dim, with_bias=False)
+
+    model = rf_module_to_pt_module(_Model())
+    config = Config(dict(optimizer={"class": "adamw", "weight_decay": 1e-3}))
+
+    def _updater():
+        updater = Updater(config=config, network=model, device=torch.device("cpu"))
+        updater.create_optimizer()
+        updater.set_current_train_step(global_train_step=0, epoch=1)
+        return updater
+
+    with tempfile.TemporaryDirectory(prefix="returnn_test_load_opt_wd_split_same_order") as tmp_dir:
+        with set_behavior_version(35):
+            updater1 = _updater()
+            for param in model.parameters():
+                param.grad = torch.ones_like(param)
+            updater1.get_optimizer().step()
+            exp_avg = updater1.get_optimizer().state[model.norm.scale]["exp_avg"].clone()
+            updater1.save_optimizer(tmp_dir + "/model.opt.pt")
+        with set_behavior_version(36):
+            updater2 = _updater()
+            updater2.load_optimizer(tmp_dir + "/model.opt.pt")
+
+    opt2 = updater2.get_optimizer()
+    assert [len(group["params"]) for group in opt2.param_groups] == [1, 1]
+    assert torch.equal(opt2.state[model.norm.scale]["exp_avg"], exp_avg)
+
+
+class _AnchoredSGD(torch.optim.Optimizer):
+    """
+    SGD from an anchor, the state starting as a copy of the param (like the z of a schedule-free optimizer):
+    a lazily created optimizer state which is not all zeros, and an init_state() to create it in advance
+    """
+
+    def __init__(self, params, lr: float):
+        super().__init__(params, dict(lr=lr))
+
+    @torch.no_grad()
+    def init_state(self):
+        """the state of the params with grad, as the first step creates it"""
+        for group in self.param_groups:
+            for p in group["params"]:
+                if p.grad is not None and not self.state[p]:
+                    self.state[p]["anchor"] = p.detach().clone()
+                    self.state[p]["grad_sum"] = torch.zeros_like(p)
+
+    @torch.no_grad()
+    def step(self, closure=None):
+        """one update"""
+        assert closure is None
+        self.init_state()
+        for group in self.param_groups:
+            for p in group["params"]:
+                if p.grad is None:
+                    continue
+                state = self.state[p]
+                state["grad_sum"].add_(p.grad)
+                p.copy_(state["anchor"] - group["lr"] * state["grad_sum"])
+
+
+def test_init_optimizer_state():
+    """
+    init_optimizer_state creates the state as the first step would:
+    the state created in advance, then some steps, equals the same steps without it
+    (params and state), for the torch optimizers and an optimizer with init_state().
+    """
+    from returnn.torch.updater import init_optimizer_state
+
+    cases = [
+        ("SGD", dict(lr=0.1, momentum=0.9)),
+        ("SGD", dict(lr=0.1, momentum=0.9, nesterov=True)),
+        ("SGD", dict(lr=0.1)),
+        ("Adam", dict(lr=0.1, amsgrad=True)),
+        ("AdamW", dict(lr=0.1)),
+        ("Adamax", dict(lr=0.1)),
+        ("NAdam", dict(lr=0.1)),
+        ("RAdam", dict(lr=0.1)),
+        ("Adadelta", dict(lr=0.1)),
+        ("RMSprop", dict(lr=0.1, momentum=0.9, centered=True)),
+        ("ASGD", dict(lr=0.1)),
+        ("Adagrad", dict(lr=0.1, initial_accumulator_value=0.1)),
+        ("Rprop", dict(lr=0.1)),
+        ("Adafactor", dict(lr=0.1)),
+        ("Muon", dict(lr=0.1)),
+        (_AnchoredSGD, dict(lr=0.1)),
+    ]
+    num_checked = 0
+    for name, kwargs in cases:
+        cls = getattr(torch.optim, name, None) if isinstance(name, str) else name
+        if cls is None or not (cls is torch.optim.SGD or hasattr(cls, "init_state") or hasattr(cls, "_init_group")):
+            print(f"{name}: not in this torch version, or no _init_group")
+            continue
+        print(f"{name} {kwargs}")
+        num_checked += 1
+        shapes = [(4, 3), (3, 2)] if name == "Muon" else [(4, 3), (3,)]  # Muon: matrix params only
+        gen = torch.Generator().manual_seed(42)
+        init_values = [torch.randn(shape, generator=gen) for shape in shapes]
+        grads_per_step = [[torch.randn(shape, generator=gen) for shape in shapes] for _ in range(3)]
+        results = []
+        for in_advance in (False, True):
+            params = [torch.nn.Parameter(v.clone()) for v in init_values]
+            opt = cls(params, **kwargs)
+            if in_advance:
+                for p in params:
+                    p.grad = torch.zeros_like(p)
+                init_optimizer_state(opt)
+                for p, v in zip(params, init_values):
+                    assert torch.equal(p, v), f"{name}: params changed without a step"
+                    if kwargs.get("momentum", 0) != 0 or cls is not torch.optim.SGD:  # plain SGD has no state
+                        assert opt.state[p], f"{name}: no state created in advance"
+            for grads in grads_per_step:
+                for p, g in zip(params, grads):
+                    p.grad = g.clone()
+                opt.step()
+            results.append((params, opt))
+        (params_ref, opt_ref), (params_, opt_) = results
+        for i, (p_ref, p) in enumerate(zip(params_ref, params_)):
+            torch.testing.assert_close(p, p_ref, msg=lambda m: f"{name} param {i}: {m}")
+            state_ref, state = opt_ref.state[p_ref], opt_.state[p]
+            assert set(state) == set(state_ref), f"{name} param {i}: state keys {set(state)} != {set(state_ref)}"
+            for k, v_ref in state_ref.items():
+                if isinstance(v_ref, torch.Tensor):
+                    torch.testing.assert_close(state[k], v_ref, msg=lambda m: f"{name} param {i} state {k}: {m}")
+                else:
+                    assert state[k] == v_ref, f"{name} param {i} state {k}: {state[k]} != {v_ref}"
+    assert num_checked >= 2
+
+    # no _init_group, no init_state: loud
+    p = torch.nn.Parameter(torch.zeros(3))
+    p.grad = torch.zeros(3)
+    try:
+        init_optimizer_state(torch.optim.LBFGS([p]))
+    except NotImplementedError as exc:
+        print("LBFGS:", exc)
+    else:
+        raise AssertionError("LBFGS: expected NotImplementedError")
+
+
+# must be in the global scope due to pickling
+def _multi_test_hidden_matrix_filter(*, full_param_name: str, param: torch.nn.Parameter, module, **_kwargs) -> bool:
+    return param.dim() >= 2 and not isinstance(module, torch.nn.Embedding)
+
+
+def _make_multi_test_model() -> torch.nn.Module:
+    return torch.nn.Sequential(
+        torch.nn.Embedding(10, 5),
+        torch.nn.LayerNorm(5),
+        torch.nn.Linear(5, 5),
+        torch.nn.ReLU(),
+        torch.nn.Linear(5, 5),
+    )
+
+
+def _multi_test_layer2_weight_filter(*, full_param_name: str, param: torch.nn.Parameter, **_kwargs) -> bool:
+    return full_param_name.startswith("2.") and param.dim() >= 2
+
+
+def test_multi_optimizer():
+    from returnn.util.basic import DictRefKeys
+    from returnn.torch.optim.multi import MultiOptimizer
+
+    config = Config(
+        dict(
+            optimizer={
+                "class": "multi",
+                "optimizers": [
+                    {
+                        "class": "sgd",
+                        "params_filter": _multi_test_layer2_weight_filter,
+                        "learning_rate_multiplier": 2.0,
+                        "momentum": 0.9,
+                    },
+                    {"class": "adamw", "weight_decay": 1e-3, "epsilon": 1e-8},
+                ],
+            }
+        )
+    )
+    model = _make_multi_test_model()
+    updater = Updater(config=config, network=model, device=torch.device("cpu"))
+    updater.create_optimizer()
+    updater.set_current_train_step(global_train_step=0, epoch=1)
+
+    opt = updater.get_optimizer()
+    assert isinstance(opt, MultiOptimizer)
+    assert len(opt.sub_optimizers) == 2
+    sgd_sub, adamw_sub = opt.sub_optimizers
+    assert isinstance(sgd_sub, torch.optim.SGD) and isinstance(adamw_sub, torch.optim.AdamW)
+
+    param_to_name = DictRefKeys((param, name) for name, param in model.named_parameters())
+    assert len(sgd_sub.param_groups) == 1
+    assert {param_to_name[p] for p in sgd_sub.param_groups[0]["params"]} == {"2.weight"}
+    assert sgd_sub.param_groups[0]["momentum"] == 0.9
+    # AdamW sub: default weight-decay split, embedding/LayerNorm/biases without decay.
+    assert len(adamw_sub.param_groups) == 2
+    adamw_groups_by_wd = {pg["weight_decay"]: pg for pg in adamw_sub.param_groups}
+    assert set(adamw_groups_by_wd.keys()) == {0.0, 1e-3}
+    assert {param_to_name[p] for p in adamw_groups_by_wd[1e-3]["params"]} == {"4.weight"}
+    assert {param_to_name[p] for p in adamw_groups_by_wd[0.0]["params"]} == {
+        "0.weight",
+        "1.weight",
+        "1.bias",
+        "2.bias",
+        "4.bias",
+    }
+    assert adamw_sub.param_groups[0]["eps"] == 1e-8
+
+    # The concatenated param_groups view covers all params exactly once.
+    assert len(opt.param_groups) == 3
+    param_names, _ = updater._get_opt_param_names()
+    assert sorted(param_names) == sorted(name for name, _ in model.named_parameters())
+
+    # LR schedule propagates into the sub-optimizers, with the multiplier.
+    updater.set_learning_rate(0.5)
+    assert sgd_sub.param_groups[0]["lr"] == 0.5 * 2.0
+    assert all(pg["lr"] == 0.5 for pg in adamw_sub.param_groups)
+
+
+def test_multi_optimizer_save_load():
+    def _make_updater():
+        config = Config(
+            dict(
+                optimizer={
+                    "class": "multi",
+                    "optimizers": [
+                        {
+                            "class": "sgd",
+                            "params_filter": _multi_test_layer2_weight_filter,
+                            "learning_rate_multiplier": 2.0,
+                            "momentum": 0.9,
+                        },
+                        {"class": "adamw", "weight_decay": 1e-3},
+                    ],
+                }
+            )
+        )
+        model_ = _make_multi_test_model()
+        updater_ = Updater(config=config, network=model_, device=torch.device("cpu"))
+        updater_.create_optimizer()
+        updater_.set_current_train_step(global_train_step=0, epoch=1)
+        return updater_, model_
+
+    updater, model = _make_updater()
+    for param in model.parameters():
+        param.grad = torch.ones_like(param)
+    updater.get_optimizer().step()
+
+    with tempfile.TemporaryDirectory(prefix="returnn_test_multi_optimizer_save_load") as tmp_dir:
+        updater.save_optimizer(tmp_dir + "/model.opt.pt")
+
+        updater2, model2 = _make_updater()
+        updater2.load_optimizer(tmp_dir + "/model.opt.pt")
+
+        state_dict1 = updater.get_optimizer().state_dict()
+        state_dict2 = updater2.get_optimizer().state_dict()
+        assert set(state_dict1["state"].keys()) == set(state_dict2["state"].keys())
+        for param_idx, param_state1 in state_dict1["state"].items():
+            param_state2 = state_dict2["state"][param_idx]
+            assert set(param_state1.keys()) == set(param_state2.keys())
+            for key, value1 in param_state1.items():
+                value2 = param_state2[key]
+                if isinstance(value1, torch.Tensor):
+                    assert torch.equal(value1, value2), f"state {param_idx} {key} differs"
+                else:
+                    assert value1 == value2, f"state {param_idx} {key} differs"
+        assert len(state_dict1["param_groups"]) == len(state_dict2["param_groups"])
+        for group1, group2 in zip(state_dict1["param_groups"], state_dict2["param_groups"]):
+            assert group1["params"] == group2["params"]
+
+        # After loading, the composite's param_groups must alias the sub-optimizers' rebuilt
+        # group dicts, so that the LR schedule keeps reaching the sub-optimizers.
+        opt2 = updater2.get_optimizer()
+        flat_sub_groups = [group for sub in opt2.sub_optimizers for group in sub.param_groups]
+        assert len(opt2.param_groups) == len(flat_sub_groups)
+        assert all(a is b for a, b in zip(opt2.param_groups, flat_sub_groups))
+        updater2.set_learning_rate(0.125)
+        sgd_sub2, adamw_sub2 = opt2.sub_optimizers
+        assert all(pg["lr"] == 0.125 * 2.0 for pg in sgd_sub2.param_groups)
+        assert all(pg["lr"] == 0.125 for pg in adamw_sub2.param_groups)
+
+
+def test_multi_optimizer_leftover_params_error():
+    config = Config(
+        dict(
+            optimizer={
+                "class": "multi",
+                "optimizers": [
+                    {"class": "sgd", "params_filter": _multi_test_layer2_weight_filter, "momentum": 0.9},
+                ],
+            }
+        )
+    )
+    model = _make_multi_test_model()
+    updater = Updater(config=config, network=model, device=torch.device("cpu"))
+    try:
+        updater.create_optimizer()
+    except ValueError as exc:
+        assert "params matched by no sub-optimizer" in str(exc)
+    else:
+        raise AssertionError("expected ValueError for params not covered by any params_filter")
+
+
+def test_multi_optimizer_engine_train():
+    config = Config(
+        dict(
+            task="train",
+            device="cpu",
+            extern_data={"data": {"dim": 9}, "classes": {"dim": 2, "sparse": True}},
+            get_model=TrainTestModel,
+            train_step=TrainTestModel.train_step,
+            batch_size=500,
+            torch_dataloader_opts={"num_workers": 0},
+            optimizer={
+                "class": "multi",
+                "optimizers": [
+                    {"class": "sgd", "params_filter": _multi_test_hidden_matrix_filter, "momentum": 0.9},
+                    {"class": "adamw", "weight_decay": 1e-3},
+                ],
+            },
+        )
+    )
+    dataset = init_dataset({"class": "Task12AXDataset", "num_seqs": 100, "name": "train"})
+    dataset.init_seq_order(epoch=1)
+
+    with global_config_ctx(config):
+        engine = Engine(config=config)
+        engine.init_train_from_config(train_data=dataset)
+        engine.train()
+
+
+def test_multi_optimizer_contract():
+    import copy
+    import io
+
+    from returnn.torch.optim.multi import MultiOptimizer
+
+    model = torch.nn.Linear(4, 3)
+    sub1 = torch.optim.SGD([model.weight], lr=0.1, momentum=0.9)
+    sub2 = torch.optim.AdamW([model.bias], lr=0.1)
+    opt = MultiOptimizer(sub_optimizers=[sub1, sub2])
+
+    # Membership tests and get() must not mutate the state (unlike the MutableMapping defaults).
+    assert model.weight not in opt.state
+    assert opt.state.get(model.weight) is None
+    assert len(opt.state) == 0
+
+    # State view: auto-creates empty entries like the base class defaultdict,
+    # mutations reach the owning sub-optimizer.
+    assert opt.state[model.weight] == {}
+    opt.state[model.weight]["marker"] = 1
+    assert sub1.state[model.weight]["marker"] == 1
+    for param in model.parameters():
+        param.grad = torch.ones_like(param)
+    opt.step()
+    assert "momentum_buffer" in opt.state[model.weight]
+    assert "exp_avg" in opt.state[model.bias]
+    assert len(opt.state) == 2
+    opt.state.clear()
+    assert len(sub1.state) == 0 and len(sub2.state) == 0 and len(opt.state) == 0
+
+    # Hook registration via the base class machinery.
+    if hasattr(opt, "register_step_pre_hook"):
+        hook_calls = []
+        handle = opt.register_step_pre_hook(lambda _opt, _args, _kwargs: hook_calls.append("pre"))
+        opt.step()
+        handle.remove()
+        assert hook_calls == ["pre"]
+    if hasattr(opt, "register_state_dict_pre_hook"):
+        sd_hook_calls = []
+        handles = [
+            opt.register_state_dict_pre_hook(lambda _opt: sd_hook_calls.append("sd_pre")),
+            opt.register_state_dict_post_hook(lambda _opt, _sd: sd_hook_calls.append("sd_post")),
+            opt.register_load_state_dict_pre_hook(lambda _opt, _sd: sd_hook_calls.append("load_pre")),
+            opt.register_load_state_dict_post_hook(lambda _opt: sd_hook_calls.append("load_post")),
+        ]
+        opt.load_state_dict(opt.state_dict())
+        for handle in handles:
+            handle.remove()
+        assert sd_hook_calls == ["sd_pre", "sd_post", "load_pre", "load_post"]
+
+    # deepcopy and pickle produce consistent objects.
+    opt2 = copy.deepcopy(opt)
+    assert len(opt2.sub_optimizers) == 2 and len(opt2.param_groups) == len(opt.param_groups)
+    assert opt2.param_groups[0] is opt2.sub_optimizers[0].param_groups[0]
+    buf = io.BytesIO()
+    torch.save(opt, buf)
+    buf.seek(0)
+    opt3 = torch.load(buf, weights_only=False)
+    assert len(opt3.sub_optimizers) == 2
+    assert opt3.param_groups[0] is opt3.sub_optimizers[0].param_groups[0]
+
+    try:
+        opt.add_param_group({"params": [torch.nn.Parameter(torch.zeros(2))]})
+    except NotImplementedError:
+        pass
+    else:
+        raise AssertionError("expected NotImplementedError from add_param_group")
+
+
+def test_multi_optimizer_init_state():
+    # init_optimizer_state (the captured optimizer step creates the state in advance) reaches every sub-optimizer,
+    # the steps afterwards match the lazily created state (_AnchoredSGD starts from a copy of the param)
+    from returnn.torch.optim.multi import MultiOptimizer
+    from returnn.torch.updater import init_optimizer_state
+
+    results = []
+    for in_advance in (False, True):
+        torch.manual_seed(0)
+        model = torch.nn.Linear(4, 3)
+        opt = MultiOptimizer(
+            sub_optimizers=[
+                torch.optim.SGD([model.weight], lr=0.1, momentum=0.9),
+                _AnchoredSGD([model.bias], lr=0.1),
+            ]
+        )
+        if in_advance:
+            for param in model.parameters():
+                param.grad = torch.zeros_like(param)
+            init_optimizer_state(opt)
+            assert opt.state[model.weight] and opt.state[model.bias]
+        for step in range(3):
+            for param in model.parameters():
+                param.grad = torch.full_like(param, step + 1.0)
+            opt.step()
+        results.append([param.detach().clone() for param in model.parameters()])
+    for p_lazy, p_in_advance in zip(*results):
+        torch.testing.assert_close(p_in_advance, p_lazy)
+
+
+def test_multi_optimizer_duplicate_params_error():
+    from returnn.torch.optim.multi import MultiOptimizer
+
+    model = torch.nn.Linear(4, 3)
+    sub1 = torch.optim.SGD([model.weight], lr=0.1)
+    sub2 = torch.optim.SGD([model.weight, model.bias], lr=0.2)
+    try:
+        MultiOptimizer(sub_optimizers=[sub1, sub2])
+    except ValueError as exc:
+        assert "disjoint" in str(exc)
+    else:
+        raise AssertionError("expected ValueError for overlapping sub-optimizer params")
+
+
+def test_multi_optimizer_config_errors():
+    config = Config(
+        dict(
+            decouple_constraints=False,
+            optimizer={
+                "class": "multi",
+                "optimizers": [
+                    {"class": "sgd", "params_filter": _multi_test_layer2_weight_filter, "momentum": 0.9},
+                    {"class": "adamw", "weight_decay": 1e-3},
+                ],
+            },
+        )
+    )
+    updater = Updater(config=config, network=_make_multi_test_model(), device=torch.device("cpu"))
+    try:
+        updater.create_optimizer()
+    except AssertionError as exc:
+        assert "decouple_constraints" in str(exc)
+    else:
+        raise AssertionError("expected AssertionError for decouple_constraints=False under multi")
+
+    config = Config(
+        dict(
+            optimizer={
+                "class": "multi",
+                "optimizers": [
+                    {
+                        "class": "adamw",
+                        "weight_decay": 1e-3,
+                        "param_groups_custom": lambda **_kwargs: [],
+                    },
+                ],
+            }
+        )
+    )
+    updater = Updater(config=config, network=_make_multi_test_model(), device=torch.device("cpu"))
+    try:
+        updater.create_optimizer()
+    except ValueError as exc:
+        assert "param_groups_custom" in str(exc) and "params_filter" in str(exc)
+    else:
+        raise AssertionError("expected ValueError for param_groups_custom in sub-optimizer opts")
+
+
+# must be in the global scope due to pickling
+class _SubclassMultiOptimizer:
+    """placeholder, replaced below (needs the import)"""
+
+
+def _init_subclass_multi_optimizer():
+    global _SubclassMultiOptimizer
+    from returnn.torch.optim.multi import MultiOptimizer
+
+    class _SubclassMultiOptimizerImpl(MultiOptimizer):
+        """MultiOptimizer subclass for testing that the updater instantiates the resolved class."""
+
+    _SubclassMultiOptimizerImpl.__name__ = "_SubclassMultiOptimizer"
+    _SubclassMultiOptimizer = _SubclassMultiOptimizerImpl
+    return _SubclassMultiOptimizerImpl
+
+
+def test_multi_optimizer_subclass():
+    import copy
+
+    subclass = _init_subclass_multi_optimizer()
+    config = Config(
+        dict(
+            optimizer={
+                "class": subclass,
+                "optimizers": [
+                    {"class": "sgd", "params_filter": _multi_test_layer2_weight_filter, "momentum": 0.9},
+                    {"class": "adamw", "weight_decay": 1e-3},
+                ],
+            }
+        )
+    )
+    updater = Updater(config=config, network=_make_multi_test_model(), device=torch.device("cpu"))
+    updater.create_optimizer()
+    opt = updater.get_optimizer()
+    assert type(opt) is subclass
+    assert type(copy.deepcopy(opt)) is subclass
+
+
+def test_updater_weight_decay_custom_include_check_local_name():
+    # For backward compatibility, the callback receives the module-local param name
+    # as full_param_name (despite the name), both in the single-optimizer and the multi case.
+    seen_names = []
+
+    def _include_check(*, full_param_name, **_kwargs):
+        seen_names.append(full_param_name)
+        return None
+
+    config = Config(
+        dict(
+            optimizer={
+                "class": "adamw",
+                "weight_decay": 1e-3,
+                "weight_decay_custom_include_check": _include_check,
+            }
+        )
+    )
+    updater = Updater(config=config, network=_make_multi_test_model(), device=torch.device("cpu"))
+    updater.create_optimizer()
+    assert seen_names and all("." not in name for name in seen_names), seen_names
+
+    seen_names = []
+    config = Config(
+        dict(
+            optimizer={
+                "class": "multi",
+                "optimizers": [
+                    {"class": "sgd", "params_filter": _multi_test_layer2_weight_filter, "momentum": 0.9},
+                    {
+                        "class": "adamw",
+                        "weight_decay": 1e-3,
+                        "weight_decay_custom_include_check": _include_check,
+                    },
+                ],
+            }
+        )
+    )
+    updater = Updater(config=config, network=_make_multi_test_model(), device=torch.device("cpu"))
+    updater.create_optimizer()
+    assert seen_names and all("." not in name for name in seen_names), seen_names
+
+
+def test_multi_optimizer_non_param_state_error():
+    from returnn.torch.optim.multi import MultiOptimizer
+
+    model = torch.nn.Linear(4, 3)
+    opt = MultiOptimizer(
+        sub_optimizers=[
+            torch.optim.SGD([model.weight], lr=0.1, momentum=0.9),
+            torch.optim.AdamW([model.bias], lr=0.1),
+        ]
+    )
+    for param in model.parameters():
+        param.grad = torch.ones_like(param)
+    opt.step()
+    state_dict = opt.state_dict()
+    state_dict["state"][999] = {"foo": 1}
+    try:
+        opt.load_state_dict(state_dict)
+    except NotImplementedError as exc:
+        assert "999" in str(exc)
+    else:
+        raise AssertionError("expected NotImplementedError for non-parameter state key on load")
+
+
+# must be in the global scope due to pickling
+class _RecordingScheduleFreeSGD(torch.optim.SGD):
+    """SGD with recording schedule-free train()/eval() methods, for testing the engine hooks."""
+
+    calls = []
+
+    def train(self):
+        """record train mode switch"""
+        type(self).calls.append("train")
+
+    def eval(self):
+        """record eval mode switch"""
+        type(self).calls.append("eval")
+
+
+def test_engine_schedule_free_optimizer_hooks():
+    _RecordingScheduleFreeSGD.calls = []
+    config = Config(
+        dict(
+            task="train",
+            device="cpu",
+            extern_data={"data": {"dim": 9}, "classes": {"dim": 2, "sparse": True}},
+            get_model=TrainTestModel,
+            train_step=TrainTestModel.train_step,
+            batch_size=500,
+            torch_dataloader_opts={"num_workers": 0},
+            optimizer={"class": _RecordingScheduleFreeSGD},
+        )
+    )
+    dataset = init_dataset({"class": "Task12AXDataset", "num_seqs": 100, "name": "train"})
+    dataset.init_seq_order(epoch=1)
+
+    with global_config_ctx(config):
+        engine = Engine(config=config)
+        engine.init_train_from_config(train_data=dataset)
+        engine.train()
+
+    calls = _RecordingScheduleFreeSGD.calls
+    assert calls, "engine did not call the schedule-free optimizer train()/eval() hooks"
+    assert calls[0] == "train" and calls[-1] == "eval", f"unexpected hook call sequence {calls}"
+
+
+def test_multi_optimizer_schedule_free_forwarding():
+    from returnn.torch.optim.multi import MultiOptimizer
+
+    _RecordingScheduleFreeSGD.calls = []
+    model = torch.nn.Linear(4, 3)
+    sub1 = _RecordingScheduleFreeSGD([model.weight], lr=0.1)
+    sub2 = torch.optim.AdamW([model.bias], lr=0.1)
+    opt = MultiOptimizer(sub_optimizers=[sub1, sub2])
+    opt.train()
+    opt.eval()
+    assert _RecordingScheduleFreeSGD.calls == ["train", "eval"]
+
+
+def test_schedule_free_check_asks_sub_optimizers():
+    model = _make_multi_test_model()
+
+    def _updater(optimizer_opts):
+        updater = Updater(config=Config(dict(optimizer=optimizer_opts)), network=model, device=torch.device("cpu"))
+        updater.create_optimizer()
+        return updater
+
+    plain = {
+        "class": "multi",
+        "optimizers": [
+            {"class": "sgd", "params_filter": _multi_test_layer2_weight_filter, "momentum": 0.9},
+            {"class": "adamw", "weight_decay": 1e-3},
+        ],
+    }
+    assert not _updater(plain).is_schedule_free_optimizer()
+    assert not _updater({"class": "adamw"}).is_schedule_free_optimizer()
+    with_schedule_free = {
+        "class": "multi",
+        "optimizers": [
+            {"class": _RecordingScheduleFreeSGD, "params_filter": _multi_test_layer2_weight_filter},
+            {"class": "sgd", "momentum": 0.9},
+        ],
+    }
+    assert _updater(with_schedule_free).is_schedule_free_optimizer()
+    assert _updater({"class": _RecordingScheduleFreeSGD}).is_schedule_free_optimizer()
+
+
+class TrainTestModelWithBatchNorm(TrainTestModel):
+    def __init__(self, in_dim: int = 9, **_kwargs):
+        super().__init__(in_dim=in_dim)
+        self.bn = torch.nn.BatchNorm1d(in_dim)
+
+    def __call__(self, x: torch.Tensor) -> torch.Tensor:
+        x = self.bn(x.transpose(1, 2)).transpose(1, 2)
+        return super().__call__(x)
+
+
+def test_engine_schedule_free_batchnorm_refresh():
+    # With a schedule-free optimizer, the engine must refresh the BatchNorm running stats
+    # with some train batches (forwarded without gradient) after switching to the averaged weights.
+    counts = {"grad": 0, "no_grad": 0}
+    running_mean_at_last_update = []
+
+    def _train_step(*, model: TrainTestModelWithBatchNorm, extern_data: TensorDict, **kwargs):
+        TrainTestModel.train_step(model=model, extern_data=extern_data, **kwargs)
+        if torch.is_grad_enabled():
+            counts["grad"] += 1
+            running_mean_at_last_update[:] = [model.bn.running_mean.detach().clone()]
+        else:
+            counts["no_grad"] += 1
+
+    config = Config(
+        dict(
+            task="train",
+            device="cpu",
+            num_epochs=1,
+            extern_data={"data": {"dim": 9}, "classes": {"dim": 2, "sparse": True}},
+            get_model=TrainTestModelWithBatchNorm,
+            train_step=_train_step,
+            batch_size=500,
+            torch_dataloader_opts={"num_workers": 0},
+            optimizer={"class": _RecordingScheduleFreeSGD},
+            learning_rate=0.01,
+            schedule_free_batchnorm_refresh_batches=3,
+        )
+    )
+    dataset = init_dataset({"class": "Task12AXDataset", "num_seqs": 100, "name": "train"})
+    dataset.init_seq_order(epoch=1)
+
+    with global_config_ctx(config):
+        engine = Engine(config=config)
+        engine.init_train_from_config(train_data=dataset)
+        engine.train()
+        model = engine._orig_model
+    assert counts["grad"] > 0
+    assert counts["no_grad"] == 3, counts
+    assert isinstance(model, TrainTestModelWithBatchNorm)
+    assert not torch.allclose(model.bn.running_mean, running_mean_at_last_update[0])
+
+
+def _schedule_free_refresh_distributed_worker(rank: int, world_size: int, port: int, tmp_dir: str):
+    os.environ.update(
+        MASTER_ADDR="127.0.0.1",
+        MASTER_PORT=str(port),
+        RANK=str(rank),
+        WORLD_SIZE=str(world_size),
+        LOCAL_RANK=str(rank),
+        LOCAL_WORLD_SIZE=str(world_size),
+    )
+    counts = {"no_grad": 0}
+
+    def _train_step(*, model: TrainTestModelWithBatchNorm, extern_data: TensorDict, **kwargs):
+        TrainTestModel.train_step(model=model, extern_data=extern_data, **kwargs)
+        if not torch.is_grad_enabled():
+            counts["no_grad"] += 1
+
+    config = Config(
+        dict(
+            task="train",
+            device="cpu",
+            num_epochs=1,
+            extern_data={"data": {"dim": 9}, "classes": {"dim": 2, "sparse": True}},
+            get_model=TrainTestModelWithBatchNorm,
+            train_step=_train_step,
+            batch_size=100_000,
+            max_seqs=10,
+            torch_dataloader_opts={"num_workers": 0},
+            optimizer={"class": _RecordingScheduleFreeSGD},
+            learning_rate=0.01,
+            torch_distributed={"backend": "gloo"},
+        )
+    )
+    with global_config_ctx(config):
+        # 2 batches on rank 0, 3 on rank 1
+        dataset = init_dataset({"class": "Task12AXDataset", "num_seqs": 20 + 10 * rank})
+        dataset.init_seq_order(epoch=1)
+        engine = Engine(config=config)
+        engine.init_train_from_config(train_data=dataset)
+        engine.train()
+    with open(f"{tmp_dir}/rank{rank}.txt", "w") as f:
+        f.write(str(counts["no_grad"]))
+    torch.distributed.destroy_process_group()
+
+
+def test_engine_schedule_free_batchnorm_refresh_distributed():
+    # All ranks must refresh with the same number of batches, also when one runs out of data first,
+    # since the forward can run collectives (e.g. rf.BatchNorm with distributed stats).
+    import socket
+    import torch.multiprocessing
+
+    world_size = 2
+    with socket.socket() as s:
+        s.bind(("127.0.0.1", 0))
+        port = s.getsockname()[1]
+    with tempfile.TemporaryDirectory(prefix="returnn_test_schedule_free_refresh_distributed") as tmp_dir:
+        torch.multiprocessing.spawn(
+            _schedule_free_refresh_distributed_worker, args=(world_size, port, tmp_dir), nprocs=world_size
+        )
+        counts = []
+        for rank in range(world_size):
+            with open(f"{tmp_dir}/rank{rank}.txt") as f:
+                counts.append(int(f.read()))
+    assert counts == [2, 2], counts
+
+
+def test_torch_engine_cuda_graph_schedule_free_batchnorm_refresh():
+    # Under torch_cuda_graph, the refresh runs eagerly with dynamic shapes, as the eval does,
+    # and the captured graph replays in the next epoch.
+    if not torch.cuda.is_available():
+        raise unittest.SkipTest("CUDA not available")
+    config, dataset = _build_cuda_graph_train_config_and_dataset(
+        compile_=False, optimizer={"class": _RecordingScheduleFreeSGD}
+    )
+    config.typed_dict["torch_cuda_graph"]["capture_optimizer"] = False
+    _, _, feat_dim = config.typed_dict["extern_data"]["data"]["dims"]
+    classes_dim = config.typed_dict["extern_data"]["classes"]["sparse_dim"]
+    counts = {"no_grad": 0}
+
+    class _Model(rf.Module):
+        def __init__(self):
+            super().__init__()
+            self.norm = rf.BatchNorm(feat_dim, use_mask=False)
+            self.out = rf.Linear(feat_dim, classes_dim)
+
+    def _train_step(*, model: _Model, extern_data: TensorDict, **_kwargs):
+        logits = model.out(model.norm(extern_data["data"]))
+        loss = rf.cross_entropy(
+            target=extern_data["classes"], estimated=logits, estimated_type="logits", axis=classes_dim
+        )
+        loss.mark_as_loss("ce")
+        if not torch.is_grad_enabled():
+            counts["no_grad"] += 1
+
+    config.typed_dict.update(
+        get_model=lambda **_kwargs: _Model(), train_step=_train_step, schedule_free_batchnorm_refresh_batches=3
+    )
+    with global_config_ctx(config):
+        engine = Engine(config=config)
+        engine.init_train_from_config(train_data=dataset)
+        engine.train()
+        assert engine._graph_capture is not None and engine._graph_capture._graph is not None
+        engine.finalize()
+    assert counts["no_grad"] == 3 * config.int("num_epochs", 1), counts
+
+
+class _NoRewindDataset(Task12AXDataset):
+    """Refuses to restart an epoch it already served, like the epoch worker of DistributeFilesDataset."""
+
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        self._served_epoch = None
+
+    def init_seq_order(self, epoch=None, seq_list=None, seq_order=None):
+        if epoch is not None and epoch == self._served_epoch:
+            raise Exception(f"{self}: cannot go backwards in epoch {epoch}")
+        return super().init_seq_order(epoch=epoch, seq_list=seq_list, seq_order=seq_order)
+
+    def _load_seqs(self, start, end):
+        self._served_epoch = self.epoch
+        super()._load_seqs(start, end)
+
+
+def test_engine_schedule_free_batchnorm_refresh_fresh_dataset():
+    # The refresh must not iterate the epoch's train dataset object a second time,
+    # some datasets cannot rewind within an epoch. It has to use a fresh instance from the config,
+    # built like returnn.__main__.load_data builds the train dataset (the dataset options from the
+    # global config such as window, and a callable config giving a fresh instance too).
+    import functools
+    from returnn.__main__ import load_data
+
+    train_opts = {"class": _NoRewindDataset, "num_seqs": 100}
+    for train_config_value, in_dim, config_opts in [
+        (train_opts, 9, {}),
+        (train_opts, 27, {"window": 3}),
+        (lambda: dict(train_opts), 9, {}),
+    ]:
+        counts = {"no_grad": 0}
+
+        def _train_step(*, model: TrainTestModelWithBatchNorm, extern_data: TensorDict, **kwargs):
+            TrainTestModel.train_step(model=model, extern_data=extern_data, **kwargs)
+            if not torch.is_grad_enabled():
+                counts["no_grad"] += 1
+
+        config = Config(
+            dict(
+                task="train",
+                device="cpu",
+                num_epochs=1,
+                extern_data={"data": {"dim": in_dim}, "classes": {"dim": 2, "sparse": True}},
+                get_model=functools.partial(TrainTestModelWithBatchNorm, in_dim=in_dim),
+                train_step=_train_step,
+                batch_size=500,
+                torch_dataloader_opts={"num_workers": 0},
+                optimizer={"class": _RecordingScheduleFreeSGD},
+                learning_rate=0.01,
+                schedule_free_batchnorm_refresh_batches=3,
+                train=train_config_value,
+                **config_opts,
+            )
+        )
+        with global_config_ctx(config):
+            dataset, _ = load_data(config, 0, "train")
+            dataset.init_seq_order(epoch=1)
+            engine = Engine(config=config)
+            engine.init_train_from_config(train_data=dataset)
+            engine.train()
+        assert counts["no_grad"] == 3, (config_opts, counts)
+
+
+def test_multi_optimizer_load_cross_update_type_error():
+    model = torch.nn.Sequential(torch.nn.Linear(4, 4), torch.nn.Linear(4, 4))
+
+    def _filter_first_weight(*, full_param_name, **_kwargs):
+        return full_param_name == "0.weight"
+
+    def _filter_second_weight(*, full_param_name, **_kwargs):
+        return full_param_name == "1.weight"
+
+    def _make_updater(params_filter):
+        config = Config(
+            dict(
+                optimizer={
+                    "class": "multi",
+                    "optimizers": [
+                        {"class": "amuse", "update_type": "muon", "params_filter": params_filter, "warmup_steps": 5},
+                        {"class": "amuse", "update_type": "adamw", "warmup_steps": 5},
+                    ],
+                }
+            )
+        )
+        updater = Updater(config=config, network=model, device=torch.device("cpu"))
+        updater.create_optimizer()
+        updater.set_current_train_step(global_train_step=0, epoch=1)
+        return updater
+
+    updater1 = _make_updater(_filter_first_weight)
+    updater1.set_optimizer_training_mode(train=True)
+    for param in model.parameters():
+        param.grad = torch.ones_like(param)
+    updater1.get_optimizer().step()
+    updater1.set_optimizer_training_mode(train=False)
+    updater2 = _make_updater(_filter_second_weight)
+
+    with tempfile.TemporaryDirectory(prefix="returnn_test_multi_load_cross_update_type") as tmp_dir:
+        updater1.save_optimizer(tmp_dir + "/model.opt.pt")
+        try:
+            updater2.load_optimizer(tmp_dir + "/model.opt.pt")
+        except ValueError as exc:
+            assert "moved" in str(exc) and "muon" in str(exc) and "adamw" in str(exc)
+        else:
+            raise AssertionError("expected ValueError for a param move between AMUSE update types")
+
+
+def test_amuse_optimizer():
+    from returnn.torch.optim.amuse import AMUSE
+
+    config = Config(dict(optimizer={"class": "amuse", "update_type": "adamw", "warmup_steps": 5}))
+    model = torch.nn.Linear(4, 3)
+    updater = Updater(config=config, network=model, device=torch.device("cpu"))
+    updater.create_optimizer()
+    updater.set_learning_rate(1e-3)
+    updater.set_current_train_step(global_train_step=0, epoch=1)
+
+    opt = updater.get_optimizer()
+    assert isinstance(opt, AMUSE)
+    assert opt.update_type == "adamw"
+    opt.train()
+    for param in model.parameters():
+        param.grad = torch.ones_like(param)
+    updater.step()
+    opt.eval()
+    assert all("z" in opt.state[p] for p in model.parameters())
+
+    with tempfile.TemporaryDirectory(prefix="returnn_test_amuse_optimizer") as tmp_dir:
+        updater.save_optimizer(tmp_dir + "/model.opt.pt")
+        updater.load_optimizer(tmp_dir + "/model.opt.pt")
+
+
+def test_amuse_engine_train():
+    # Also tests the engine schedule-free hooks: AMUSE raises in step() if not in train mode.
+    config = Config(
+        dict(
+            task="train",
+            device="cpu",
+            extern_data={"data": {"dim": 9}, "classes": {"dim": 2, "sparse": True}},
+            get_model=TrainTestModel,
+            train_step=TrainTestModel.train_step,
+            batch_size=500,
+            torch_dataloader_opts={"num_workers": 0},
+            optimizer={"class": "amuse", "update_type": "adamw", "warmup_steps": 5},
+        )
+    )
+    dataset = init_dataset({"class": "Task12AXDataset", "num_seqs": 100, "name": "train"})
+    dataset.init_seq_order(epoch=1)
+
+    with global_config_ctx(config):
+        engine = Engine(config=config)
+        engine.init_train_from_config(train_data=dataset)
+        engine.train()
+        # The engine must have switched to eval mode at the train epoch end,
+        # so params (and thus any saved checkpoint) hold the averaged weights.
+        assert engine._updater.get_optimizer().train_mode is False
+
+
+def test_amuse_legacy_group_keys_error():
+    from returnn.torch.optim.amuse import AMUSE
+
+    model = torch.nn.Linear(4, 3)
+    for legacy_group_opts in ({"use_muon": True}, {"update_type": "muon"}, {"aux_update_type": "sgd"}):
+        try:
+            AMUSE([{"params": list(model.parameters()), **legacy_group_opts}], warmup_steps=5)
+        except ValueError as exc:
+            assert "no longer supported" in str(exc) or "Per-group update types" in str(exc)
+        else:
+            raise AssertionError(f"expected ValueError for legacy group opts {legacy_group_opts}")
+
+
+def test_amuse_zero_lr():
+    from returnn.torch.optim.amuse import AMUSE
+
+    # With lr 0 throughout, all per-step averaging weights are zero, so ckp1 stays at its 1.0 fallback.
+    # Past warmup, the beta1 ramp must not divide by (1 - ckp1) == 0 then.
+    model = torch.nn.Linear(4, 3)
+    opt = AMUSE(list(model.parameters()), lr=0.0, warmup_steps=2)
+    opt.train()
+    for _ in range(4):
+        for param in model.parameters():
+            param.grad = torch.ones_like(param)
+        opt.step()
+    opt.eval()
+    for param in model.parameters():
+        assert torch.isfinite(param).all()
+
+
+def _exact_orthogonalization(grad: torch.Tensor) -> torch.Tensor:
+    """Float32 polar factor via the SVD, a deterministic stand-in for the bf16 Newton-Schulz in tests."""
+    u, _, vh = torch.linalg.svd(grad.float(), full_matrices=False)
+    return u @ vh
+
+
+def test_muon_update_higher_rank():
+    """3D params are orthogonalized per matrix over the last two dims, 4D params are flattened to (out, -1)."""
+    from unittest import mock
+    from returnn.torch.optim import amuse
+
+    with mock.patch.object(amuse, "zeropower_via_newtonschulz5", _exact_orthogonalization):
+        torch.manual_seed(0)
+        grad = torch.randn(8, 1, 5)
+        momentum = torch.zeros_like(grad)
+        batched = amuse.muon_update(grad.clone(), momentum.clone(), aux_update_type="adamw")
+        per_slice = torch.stack(
+            [amuse.muon_update(grad[i].clone(), momentum[i].clone(), aux_update_type="adamw") for i in range(len(grad))]
+        )
+        assert torch.allclose(batched, per_slice, atol=1e-6), (batched - per_slice).abs().max()
+
+        grad4 = torch.randn(8, 4, 3, 3)
+        ref = amuse.muon_update(grad4.clone(), torch.zeros_like(grad4), aux_update_type="adamw")
+        flat = amuse.muon_update(grad4.reshape(8, -1).clone(), torch.zeros(8, 36), aux_update_type="adamw")
+        assert torch.allclose(ref, flat, atol=1e-6), (ref - flat).abs().max()
+        out = amuse.muon_update(
+            grad4.clone().to(memory_format=torch.channels_last), torch.zeros_like(grad4), aux_update_type="adamw"
+        )
+        assert torch.allclose(out, ref, atol=1e-6), (out - ref).abs().max()
+
+
+def test_newton_schulz_orthogonalization():
+    """Newton-Schulz keeps the singular vectors and puts the singular values into the (0.5, 1.5) band Muon relies on."""
+    from returnn.torch.optim.amuse import zeropower_via_newtonschulz5
+
+    for rows, cols in [(8, 16), (16, 8), (4, 36), (1, 5), (5, 1)]:
+        for seed in range(5):
+            torch.manual_seed(seed)
+            rank = min(rows, cols)
+            u, _ = torch.linalg.qr(torch.randn(rows, rank))
+            v, _ = torch.linalg.qr(torch.randn(cols, rank))
+            grad = (u * torch.linspace(0.2, 1.0, rank)) @ v.T
+            polar = u @ v.T
+            out = zeropower_via_newtonschulz5(grad)
+            assert out.dtype == torch.bfloat16 and out.shape == grad.shape
+            assert torch.equal(zeropower_via_newtonschulz5(grad.T), out.T), (rows, cols, seed)
+            out = out.float()
+            singular_values = torch.linalg.svdvals(out)
+            assert torch.all(singular_values > 0.5) and torch.all(singular_values < 1.5), (rows, cols, singular_values)
+            u_out, _, vh_out = torch.linalg.svd(out, full_matrices=False)
+            direction_err = (u_out @ vh_out - polar).norm() / polar.norm()
+            assert direction_err < 0.1, (rows, cols, seed, direction_err)
+
+
+def test_amuse_zero_lr_at_warmup_boundary():
+    from returnn.torch.optim.amuse import AMUSE
+
+    # An externally scheduled lr of 0 exactly at the warmup boundary step records c_warmup 0.
+    # The next positive-lr step must re-anchor the beta1 ramp there,
+    # not crash and not ramp away from beta1_init.
+    model = torch.nn.Linear(4, 3)
+    opt = AMUSE(list(model.parameters()), lr=0.1, warmup_steps=3)
+    opt.train()
+    betas = []
+    for lr in (0.1, 0.1, 0.0, 0.1, 0.1):
+        for group in opt.param_groups:
+            group["lr"] = lr
+        for param in model.parameters():
+            param.grad = torch.ones_like(param)
+        opt.step()
+        betas.append(float(opt.param_groups[0]["beta1"]))
+    opt.eval()
+    assert all(opt.beta1_init <= beta < 1.0 for beta in betas), betas
+    assert betas[-1] > opt.beta1_init, betas
+
+
+def test_amuse_constructor_validation():
+    from returnn.torch.optim.amuse import AMUSE
+
+    model = torch.nn.Linear(4, 3)
+    params = list(model.parameters())
+    for bad_kwargs in (
+        {"warmup_steps": 0},
+        {"warmup_steps": 0.5},
+        {"warmup_steps": 5, "beta1": 0.0},
+        {"warmup_steps": 5, "beta1": 1.0},
+        {"warmup_steps": 5, "rho": 2.0},
+        {"warmup_steps": 5, "rho": -1.0},
+    ):
+        try:
+            AMUSE(params, **bad_kwargs)
+        except ValueError:
+            pass
+        else:
+            raise AssertionError(f"expected ValueError for {bad_kwargs}")
+
+    # rho 0 is the fixed-beta1 AMUSE variant from the paper, must be accepted.
+    AMUSE(params, warmup_steps=5, rho=0.0)
+
+    # Muon needs matrix params, so the 1D bias must be rejected at construction, not at step time.
+    try:
+        AMUSE(params, warmup_steps=5, update_type="muon")
+    except ValueError as exc:
+        assert "ndim" in str(exc)
+    else:
+        raise AssertionError("expected ValueError for a 1D param with update_type muon")
+    AMUSE([p for p in params if p.ndim >= 2], warmup_steps=5, update_type="muon")
+
+
+def test_multi_optimizer_amuse():
+    from returnn.torch.optim.amuse import AMUSE
+    from returnn.torch.optim.multi import MultiOptimizer
+
+    config = Config(
+        dict(
+            optimizer={
+                "class": "multi",
+                "optimizers": [
+                    {
+                        "class": "amuse",
+                        "update_type": "muon",
+                        "params_filter": _multi_test_hidden_matrix_filter,
+                        "momentum": 0.95,
+                        "weight_decay": 0.05,
+                        "warmup_steps": 5,
+                    },
+                    {
+                        "class": "amuse",
+                        "update_type": "adamw",
+                        "learning_rate_multiplier": 0.015,
+                        "weight_decay": 0.05,
+                        "warmup_steps": 5,
+                    },
+                ],
+            }
+        )
+    )
+    model = _make_multi_test_model()
+    updater = Updater(config=config, network=model, device=torch.device("cpu"))
+    updater.create_optimizer()
+    updater.set_learning_rate(0.02)
+    updater.set_current_train_step(global_train_step=0, epoch=1)
+
+    opt = updater.get_optimizer()
+    assert isinstance(opt, MultiOptimizer)
+    muon_sub, adamw_sub = opt.sub_optimizers
+    assert isinstance(muon_sub, AMUSE) and muon_sub.update_type == "muon"
+    assert isinstance(adamw_sub, AMUSE) and adamw_sub.update_type == "adamw"
+    assert all(pg["lr"] == 0.02 for pg in muon_sub.param_groups)
+    assert all(pg["lr"] == 0.02 * 0.015 for pg in adamw_sub.param_groups)
+
+    updater.set_optimizer_training_mode(train=True)
+    assert muon_sub.train_mode and adamw_sub.train_mode
+    for param in model.parameters():
+        param.grad = torch.ones_like(param)
+    updater.step()
+    updater.set_optimizer_training_mode(train=False)
+    assert not muon_sub.train_mode and not adamw_sub.train_mode
+
+
+def test_amuse_pickle_keeps_attributes():
+    import copy
+    import pickle
+
+    from returnn.torch.optim.amuse import AMUSE
+    from returnn.torch.optim.multi import MultiOptimizer
+
+    model = torch.nn.Linear(4, 3)
+    opt = MultiOptimizer(
+        sub_optimizers=[
+            AMUSE([model.weight], lr=0.1, update_type="muon", warmup_steps=5),
+            AMUSE([model.bias], lr=0.1, update_type="adamw", warmup_steps=5, rho=0.5),
+        ]
+    )
+    opt.train()
+    copied = copy.deepcopy(opt)
+    copied.eval()
+    copied.train()
+    muon, adamw = copied.sub_optimizers
+    assert muon.update_type == "muon" and adamw.update_type == "adamw"
+    assert adamw.rho == 0.5 and adamw.warmup_steps == 5 and adamw.train_mode
+    unpickled = pickle.loads(pickle.dumps(opt.sub_optimizers[1]))
+    assert unpickled.update_type == "adamw" and unpickled.train_mode
+
+
+def test_amuse_load_python_schedule_state():
+    # Checkpoints of the earlier AMUSE keep the schedule state of a param group as Python numbers.
+    # Loaded, the state continues as the device tensors, the steps afterwards match the run without the reload.
+    from returnn.torch.optim.amuse import AMUSE
+
+    torch.manual_seed(0)
+    model = torch.nn.Linear(4, 3)
+    opt = AMUSE(list(model.parameters()), lr=0.05, warmup_steps=2)
+    opt.train()
+    for step in range(3):
+        for param in model.parameters():
+            param.grad = torch.full_like(param, step + 1.0)
+        opt.step()
+    opt.eval()
+    state_dict = copy.deepcopy(opt.state_dict())
+    for group in state_dict["param_groups"]:
+        for key, value in group.items():
+            if isinstance(value, torch.Tensor):
+                group[key] = int(value) if key == "k" else float(value)
+    model2 = copy.deepcopy(model)
+    opt2 = AMUSE(list(model2.parameters()), lr=0.05, warmup_steps=2)
+    opt2.load_state_dict(state_dict)
+    for opt_, model_ in ((opt, model), (opt2, model2)):
+        opt_.train()
+        for param in model_.parameters():
+            param.grad = torch.full_like(param, 4.0)
+        opt_.step()
+        opt_.eval()
+    for p, p2 in zip(model.parameters(), model2.parameters()):
+        torch.testing.assert_close(p2, p, rtol=0.0, atol=0.0)
+
+
+def _reference_amuse_muon_update(grad, momentum, beta, aux_update_type):
+    """muon_update transcribed from kjeiun/amuse src/optim/AMUSE.py at commit 4892274"""
+    from returnn.torch.optim.amuse import zeropower_via_newtonschulz5
+
+    momentum.lerp_(grad, 1 - beta)
+    update = grad.lerp_(momentum, beta)
+    if update.ndim == 4:
+        update = update.view(len(update), -1)
+    update = zeropower_via_newtonschulz5(update)
+    if aux_update_type == "adamw":
+        update *= 0.2 * max(update.size(0), update.size(1)) ** 0.5
+    else:
+        update *= max(1, update.size(-2) / update.size(-1)) ** 0.5
+    return update
+
+
+@torch.no_grad()
+def _reference_amuse_step(groups, states, *, beta1_init, warmup_steps, rho, r, weight_lr_power):
+    """AMUSE.step transcribed from kjeiun/amuse src/optim/AMUSE.py at commit 4892274, group level state"""
+    for group in groups:
+        k = group["k"]
+        t = k + 1
+        lr = group["base_lr"] * min(1.0, t / warmup_steps)
+        weight = (t**r) * (lr**weight_lr_power)
+        future_weight_sum = group.get("weight_sum", 0.0) + weight
+        ckp1 = weight / future_weight_sum if future_weight_sum > 0 else 1.0
+        group["ckp1"] = ckp1
+        group["weight_sum"] = future_weight_sum
+        if t <= warmup_steps:
+            if t == warmup_steps:
+                group["c_warmup"] = ckp1
+            beta1 = beta1_init
+        else:
+            c_warmup = group.get("c_warmup", 1.0 / warmup_steps)
+            s_t = (ckp1 * (1.0 - c_warmup)) / (c_warmup * (1.0 - ckp1))
+            beta1 = 1.0 - (s_t**rho) * (1.0 - beta1_init)
+        group["beta1"] = beta1
+        wd = group.get("weight_decay", 0.0)
+        for p in group["params"]:
+            if p.grad is None:
+                continue
+            state = states[p]
+            z = state.get("z")
+            if z is None:
+                z = state["z"] = p.detach().clone()
+            p.lerp_(end=z, weight=1.0 - 1.0 / beta1)
+            if group["update_type"] == "muon":
+                if "momentum_buffer" not in state:
+                    state["momentum_buffer"] = torch.zeros_like(p)
+                update = _reference_amuse_muon_update(p.grad, state["momentum_buffer"], group["momentum"], "adamw")
+                if wd != 0.0:
+                    z.mul_(1.0 - lr * wd)
+                z.add_(update.reshape(p.shape), alpha=-lr)
+            else:
+                if "exp_avg_sq" not in state:
+                    state["exp_avg_sq"] = torch.zeros_like(p)
+                v = state["exp_avg_sq"]
+                grad = p.grad
+                v.mul_(group["beta2"]).addcmul_(grad, grad, value=1.0 - group["beta2"])
+                denom = v.div(1.0 - group["beta2"] ** t).sqrt_().add_(group["eps"])
+                update = grad / denom
+                if wd != 0.0:
+                    update = update.add(z, alpha=wd)
+                z.add_(update, alpha=-lr)
+            p.lerp_(end=z, weight=ckp1)
+            p.lerp_(end=z, weight=1.0 - beta1)
+        group["k"] = k + 1
+
+
+def test_amuse_matches_reference_implementation():
+    from returnn.torch.optim.amuse import AMUSE
+
+    # Muon on a matrix and a 4D kernel, AdamW-style on a matrix and a vector,
+    # the vector gets no gradient in some steps, run past the warmup so beta1 ramps.
+    torch.manual_seed(1)
+    shapes = [(6, 4), (3, 2, 3, 3), (5, 4), (6,)]
+    params = [torch.nn.Parameter(torch.randn(*shape, dtype=torch.float64)) for shape in shapes]
+    params_ref = [torch.nn.Parameter(p.detach().clone()) for p in params]
+    warmup, steps, base_lr, wd = 3, 10, 0.05, 0.01
+    schedule = dict(beta1=0.9, rho=1.0, r=0.0, weight_lr_power=2.0)
+    opt_muon = AMUSE(
+        params[:2], lr=base_lr, update_type="muon", momentum=0.95, weight_decay=wd, warmup_steps=warmup, **schedule
+    )
+    opt_adamw = AMUSE(
+        params[2:],
+        lr=base_lr * 0.5,
+        update_type="adamw",
+        beta2=0.999,
+        eps=1e-10,
+        weight_decay=wd,
+        warmup_steps=warmup,
+        **schedule,
+    )
+    groups_ref = [
+        {
+            "params": params_ref[:2],
+            "base_lr": base_lr,
+            "k": 0,
+            "weight_decay": wd,
+            "update_type": "muon",
+            "momentum": 0.95,
+        },
+        {
+            "params": params_ref[2:],
+            "base_lr": base_lr * 0.5,
+            "k": 0,
+            "weight_decay": wd,
+            "update_type": "adamw",
+            "beta2": 0.999,
+            "eps": 1e-10,
+        },
+    ]
+    states_ref = {p: {} for p in params_ref}
+    ref_schedule = dict(beta1_init=0.9, rho=1.0, r=0.0, weight_lr_power=2.0, warmup_steps=warmup)
+
+    opt_muon.train()
+    opt_adamw.train()
+    for step in range(steps):
+        for i, (p, p_ref) in enumerate(zip(params, params_ref)):
+            grad = None if (i == 3 and step % 4 == 1) else torch.randn_like(p)
+            p.grad = None if grad is None else grad.clone()
+            p_ref.grad = None if grad is None else grad.clone()
+        opt_muon.step()
+        opt_adamw.step()
+        _reference_amuse_step(groups_ref, states_ref, **ref_schedule)
+        for p, p_ref in zip(params, params_ref):
+            assert torch.allclose(p, p_ref, rtol=1e-10, atol=1e-10), step
+            opt = opt_muon if p in {params[0], params[1]} else opt_adamw
+            assert torch.allclose(opt.state[p]["z"], states_ref[p_ref]["z"], rtol=1e-10, atol=1e-10), step
+    assert opt_muon.param_groups[0]["beta1"] > 0.9
+    opt_muon.eval()
+    opt_adamw.eval()
+    with torch.no_grad():
+        for group in groups_ref:
+            for p_ref in group["params"]:
+                p_ref.lerp_(end=states_ref[p_ref]["z"], weight=1.0 - 1.0 / group["beta1"])
+    for p, p_ref in zip(params, params_ref):
+        assert torch.allclose(p, p_ref, rtol=1e-10, atol=1e-10)
 
 
 def test_updater_lr_multipliers():
@@ -1742,6 +3214,113 @@ def test_torch_engine_distributed_cpu():
     assert param_sums[0] == param_sums[1], param_sums
 
 
+def _torch_distributed_lr_worker(rank: int, world_size: int, port: int, tmp_dir: str, opts: Dict[str, Any]):
+    device = opts.get("device", "cpu")
+    os.environ.update(
+        MASTER_ADDR="127.0.0.1",
+        MASTER_PORT=str(port),
+        RANK=str(rank),
+        WORLD_SIZE=str(world_size),
+        # on CUDA: both ranks on one GPU, gloo also for the CUDA tensors
+        LOCAL_RANK=str(rank) if device == "cpu" else "0",
+        LOCAL_WORLD_SIZE=str(world_size) if device == "cpu" else "1",
+    )
+    applied_lrs = {}  # global train step -> LR of the update in that step
+
+    def _dyn_lr(*, global_train_step: int, epoch_continuous: float, learning_rate: float, **_kwargs) -> float:
+        lr = learning_rate * (1.0 + epoch_continuous)
+        applied_lrs[global_train_step] = lr  # a repeated call for the same step overwrites
+        return lr
+
+    def _train(num_epochs: int) -> Engine:
+        config = Config(
+            dict(
+                task="train",
+                device=device,
+                extern_data={"data": {"dim": 9}, "classes": {"dim": 2, "sparse": True}},
+                get_model=TrainTestModel,
+                train_step=TrainTestModel.train_step,
+                batch_size=300,
+                optimizer={"class": "adamw", "capturable": device != "cpu"},
+                learning_rate=0.01,
+                dynamic_learning_rate=_dyn_lr,
+                accum_grad_multiple_step=opts["accum_grad_multiple_step"],
+                num_epochs=num_epochs,
+                model=f"{tmp_dir}/model",
+                learning_rate_file=f"{tmp_dir}/learning_rates",
+                eval_datasets={"dev": {"class": "Task12AXDataset", "num_seqs": 10}},
+                torch_dataloader_opts={"num_workers": 0},
+                torch_distributed={
+                    "backend": "gloo",
+                    "reduce_type": opts["reduce_type"],
+                    "sync_complete_frac": opts["sync_complete_frac"],
+                },
+                **({"torch_optimizer_step": {}} if device != "cpu" else {}),
+            )
+        )
+        with global_config_ctx(config):
+            # no fixed seed: each rank its own seq order and seq lens, thus its own complete_frac per step
+            dataset = init_dataset({"class": "Task12AXDataset", "num_seqs": 50, "name": "train"})
+            dataset.init_seq_order(epoch=1)
+            engine = Engine(config=config)
+            engine.init_train_from_config(train_data=dataset)
+            engine.train()
+        return engine
+
+    _train(num_epochs=2)
+    torch.distributed.barrier()  # rank 0 wrote the checkpoint
+    engine = _train(num_epochs=3)  # continues from the epoch 2 checkpoint
+    assert engine.epoch == 3
+    params = [param.detach().cpu() for param in engine._pt_model.parameters()]
+    torch.save({"lrs": applied_lrs, "params": params}, f"{tmp_dir}/rank{rank}.pt")
+    torch.distributed.destroy_process_group()
+
+
+def _run_torch_distributed_lr(**opts) -> List[Dict[str, Any]]:
+    import socket
+    import torch.multiprocessing
+
+    world_size = 2
+    with socket.socket() as s:
+        s.bind(("127.0.0.1", 0))
+        port = s.getsockname()[1]
+    with tempfile.TemporaryDirectory(prefix="returnn_test_torch_distributed_lr") as tmp_dir:
+        torch.multiprocessing.spawn(
+            _torch_distributed_lr_worker, args=(world_size, port, tmp_dir, opts), nprocs=world_size
+        )
+        return [torch.load(f"{tmp_dir}/rank{rank}.pt") for rank in range(world_size)]
+
+
+def _check_torch_distributed_lr(**opts):
+    for sync_complete_frac in [False, True]:
+        res = _run_torch_distributed_lr(sync_complete_frac=sync_complete_frac, **opts)
+        lrs0, lrs1 = res[0]["lrs"], res[1]["lrs"]
+        assert sorted(lrs0) == sorted(lrs1), (opts, lrs0, lrs1)
+        params_equal = all(torch.equal(p0, p1) for p0, p1 in zip(res[0]["params"], res[1]["params"]))
+        print(f"{opts}, sync_complete_frac {sync_complete_frac}: LRs equal {lrs0 == lrs1}, params equal {params_equal}")
+        if sync_complete_frac:
+            assert lrs0 == lrs1, (opts, lrs0, lrs1)
+            assert params_equal, opts
+        else:  # rank-local progress: the setting really triggers the divergence
+            assert lrs0 != lrs1, opts
+            assert not params_equal, opts
+
+
+def test_torch_engine_distributed_cpu_sync_complete_frac_ddp():
+    _check_torch_distributed_lr(reduce_type="grad", accum_grad_multiple_step=1)
+
+
+def test_torch_engine_distributed_cpu_sync_complete_frac_grad_explicit_accum():
+    _check_torch_distributed_lr(reduce_type="grad_explicit", accum_grad_multiple_step=2)
+
+
+def test_torch_engine_distributed_sync_complete_frac_optimizer_step():
+    """captured optimizer step (torch_optimizer_step), its LR is a device tensor updated in place"""
+    if not torch.cuda.is_available():
+        raise unittest.SkipTest("CUDA not available")
+    _check_torch_distributed_lr(device="cuda", reduce_type="grad_explicit", accum_grad_multiple_step=1)
+
+
 def test_dynamic_learning_rate():
     num_epochs = 3
     last_global_train_step: Optional[float] = None
@@ -1982,6 +3561,160 @@ def _torch_engine_sub_proc_cleanup_test_main(conn):
         conn.close()
 
 
+def _check_torch_engine_finalize_data_loaders(*, pin_memory: bool = False):
+    """
+    :func:`Engine.finalize` stops the DataLoader workers of the train and dev data with unread batches,
+    and the pinning threads, also when repeated (the engine stays alive until the interpreter exits)
+    """
+    import threading
+
+    config = Config(
+        dict(
+            task="train",
+            device="gpu" if pin_memory else "cpu",
+            extern_data={"data": {"dim": 9}, "classes": {"dim": 2, "sparse": True}},
+            get_model=TrainTestModel,
+            train_step=TrainTestModel.train_step,
+            batch_size=100,
+            max_seqs=2,
+            optimizer={"class": "adam"},
+            torch_dataloader_opts={"num_workers": 1, "pin_memory": pin_memory},
+        )
+    )
+    datasets = {
+        name: init_dataset({"class": "Task12AXDataset", "num_seqs": 10, "name": name}) for name in ["train", "dev"]
+    }
+    for dataset in datasets.values():
+        dataset.init_seq_order(epoch=1)
+    with global_config_ctx(config):
+        engine = Engine(config=config)
+        engine.init_train_from_config(train_data=datasets["train"], dev_data=datasets["dev"])
+        workers = []
+        data_iters = []  # kept alive: the pinning thread of a dropped iterator stops on its own
+        for loader in [engine._train_dataloader, engine._eval_dataloaders["dev"]]:
+            data_iter = iter(loader)
+            next(data_iter)
+            data_iters.append(data_iter)
+            workers += (loader.data_loader if pin_memory else loader)._iterator._workers
+        if pin_memory:
+            assert all(data_iter._thread.is_alive() for data_iter in data_iters)
+        engine.finalize()
+        engine.finalize()
+    for worker in workers:
+        # no atexit handler left which would signal it at interpreter exit
+        assert not worker.is_alive() and worker.exitcode == 0 and worker._at_exit_cleanup_handler is None
+    assert not [thread for thread in threading.enumerate() if thread.name == "RETURNN pin memory"]
+
+
+def test_torch_engine_finalize_data_loaders():
+    _check_torch_engine_finalize_data_loaders()
+
+
+def test_torch_engine_finalize_data_loaders_pin_memory():
+    """with :class:`returnn.torch.data.pin_memory.PinMemoryDataLoader`"""
+    if not torch.cuda.is_available():
+        raise unittest.SkipTest("CUDA not available")
+    _check_torch_engine_finalize_data_loaders(pin_memory=True)
+
+
+# must be in the global scope due to pickling
+class DropoutTrainTestModel(TrainTestModel):
+    def __call__(self, x: torch.Tensor) -> torch.Tensor:
+        """
+        :param x: [B,T,D]
+        :return: [B,T,D']
+        """
+        return super().__call__(torch.nn.functional.dropout(x, p=0.5, training=self.training))
+
+
+_epoch_start_rng_states = []
+
+
+def _epoch_start_record_rng_state(*, epoch: int, dataset_name: str, **_kwargs):
+    _epoch_start_rng_states.append((epoch, dataset_name, torch.get_rng_state()))
+
+
+def _run_train_preload_next_epoch(*, preload: bool) -> Dict[str, Any]:
+    _epoch_start_rng_states.clear()
+    config = Config(
+        dict(
+            task="train",
+            device="cpu",
+            extern_data={"data": {"dim": 9}, "classes": {"dim": 2, "sparse": True}},
+            get_model=DropoutTrainTestModel,
+            train_step=DropoutTrainTestModel.train_step,
+            batch_size=50,
+            optimizer={"class": "adam"},
+            num_epochs=3,
+            online_shuffle_batches=5,  # draws from the seed of the DataLoader iterator
+            torch_dataloader_opts={"num_workers": 1},
+            torch_preload_next_train_epoch=preload,
+            epoch_start=_epoch_start_record_rng_state,
+        )
+    )
+    datasets = {
+        name: init_dataset({"class": "Task12AXDataset", "num_seqs": 23, "name": name, "seq_ordering": "random"})
+        for name in ["train", "dev"]
+    }
+    for dataset in datasets.values():
+        dataset.init_seq_order(epoch=1)
+    with global_config_ctx(config), unittest.mock.patch.object(
+        Engine, "_preload_train_epoch", autospec=True, side_effect=Engine._preload_train_epoch
+    ) as preload_mock:
+        engine = Engine(config=config)
+        engine.init_train_from_config(train_data=datasets["train"], dev_data=datasets["dev"])
+        engine.train()
+        assert engine._preloaded_train_data_iter is None
+        engine.finalize()
+    assert [call.args[1] for call in preload_mock.call_args_list] == ([2, 3] if preload else [])
+    return {
+        "params": {k: v.clone() for k, v in engine.get_pt_model().state_dict().items()},
+        "optimizer": copy.deepcopy(engine.get_pt_optimizer().state_dict()),
+        "scores": {ep: data.error for ep, data in engine.learning_rate_control.epoch_data.items()},
+        "rng": list(_epoch_start_rng_states) + [(None, None, torch.get_rng_state())],
+    }
+
+
+def test_torch_engine_preload_next_train_epoch():
+    """same data order, dropout masks and eval scores as without preloading"""
+    ref = _run_train_preload_next_epoch(preload=False)
+    res = _run_train_preload_next_epoch(preload=True)
+    for k, v in ref["params"].items():
+        torch.testing.assert_close(res["params"][k], v, rtol=0, atol=0)
+    torch.testing.assert_close(res["optimizer"], ref["optimizer"], rtol=0, atol=0)
+    assert res["scores"] == ref["scores"] and len(ref["scores"]) == 3
+    assert [(ep, name) for ep, name, _ in res["rng"]] == [(ep, name) for ep, name, _ in ref["rng"]]
+    assert len(ref["rng"]) == 7  # train and dev start per epoch, end
+    for (ep, name, state), (_, _, ref_state) in zip(res["rng"], ref["rng"]):
+        assert torch.equal(state, ref_state), f"RNG state differs at epoch {ep} {name} start"
+
+
+def test_torch_engine_preload_next_train_epoch_no_workers():
+    config = Config(
+        dict(
+            task="train",
+            device="cpu",
+            extern_data={"data": {"dim": 9}, "classes": {"dim": 2, "sparse": True}},
+            get_model=TrainTestModel,
+            train_step=TrainTestModel.train_step,
+            batch_size=50,
+            optimizer={"class": "adam"},
+            torch_dataloader_opts={"num_workers": 0},
+            torch_preload_next_train_epoch=True,
+        )
+    )
+    dataset = init_dataset({"class": "Task12AXDataset", "num_seqs": 5, "name": "train"})
+    dataset.init_seq_order(epoch=1)
+    with global_config_ctx(config):
+        engine = Engine(config=config)
+        try:
+            engine.init_train_from_config(train_data=dataset)
+        except ValueError as exc:
+            assert "num_workers" in str(exc)
+        else:
+            raise AssertionError("expected ValueError")
+
+
 # (epoch, seq len) of every dev seq evaluated in this process
 _eval_on_all_ranks_seq_lens = []
 _EVAL_ON_ALL_RANKS_DIST_OPTS = {"backend": "gloo", "reduce_type": "grad_explicit", "timeout_sec": 60}
@@ -2015,6 +3748,7 @@ def _eval_on_all_ranks_run(
     calculate_exp_loss: bool = False,
     eval_before_train: bool = False,
     eval_again: bool = False,
+    behavior_version: Optional[int] = None,
 ) -> Dict[str, Any]:
     rnd = numpy.random.RandomState(42)
     # Every seq has its own length, so the lengths a rank saw tell which dev seqs it evaluated.
@@ -2038,6 +3772,7 @@ def _eval_on_all_ranks_run(
             calculate_exp_loss=calculate_exp_loss,
             torch_dataloader_opts={"num_workers": 0},
             **({"torch_distributed": torch_distributed} if torch_distributed is not None else {}),
+            **({"behavior_version": behavior_version} if behavior_version is not None else {}),
         )
     )
     dev_opts = {
@@ -2113,7 +3848,11 @@ def _eval_on_all_ranks_run(
 
 def _eval_on_all_ranks_rank_main(rank: int, world_size: int, port: int, run_kwargs: Dict[str, Any], conn):
     import os
+    from returnn.util.basic import BehaviorVersion
 
+    if run_kwargs.get("behavior_version") is not None:
+        # the test env sets the latest behavior version as minimum, this rank's own process may go below it
+        BehaviorVersion._reset()
     os.environ.update(
         {
             "MASTER_ADDR": "127.0.0.1",
@@ -2191,11 +3930,11 @@ def test_torch_engine_eval_on_all_ranks():
     # also with a random seq order, which is seeded per rank (rank 0's order is split then),
     # also with DistributedDataParallel on CPU,
     # and every rank gets the score of one process over the whole dev set.
-    # Without it (the default), or for a dataset without a predefined seq order, rank 0 evaluates them alone.
+    # With it off, or for a dataset without a predefined seq order, rank 0 evaluates them alone.
     reference = _eval_on_all_ranks_run()
     for opts, run_kwargs, split in [
         ({"eval_on_all_ranks": True}, {}, True),
-        ({}, {}, False),
+        ({"eval_on_all_ranks": False}, {}, False),
         ({"eval_on_all_ranks": True}, {"dev_seq_ordering": "random"}, True),
         ({"eval_on_all_ranks": True, "reduce_type": "grad"}, {}, True),
         ({"eval_on_all_ranks": True}, {"dev_predefined_seq_order": False}, False),
@@ -2213,6 +3952,20 @@ def test_torch_engine_eval_on_all_ranks():
         _assert_eval_scores(results, reference, epochs=(1, 2), keys=("dev_loss_ce", "dev_loss_fer"))
         # Averaged grads keep the params identical, so rank 1 keeps none aside (and this model has no buffers).
         assert results[1]["own_model_state_sizes"] == ([0, 0] if split else [])
+
+
+def test_torch_engine_eval_on_all_ranks_by_behavior_version():
+    # Behavior version 37 splits the eval over the ranks, the option overrides that.
+    for version, opts, split in [(36, {}, False), (37, {}, True), (37, {"eval_on_all_ranks": False}, False)]:
+        results = _eval_on_ranks(
+            torch_distributed={**_EVAL_ON_ALL_RANKS_DIST_OPTS, **opts}, behavior_version=version, num_epochs=1
+        )
+        rank_seq_lens = _eval_on_all_ranks_seq_lens_per_rank(results, epoch=1)
+        print(f"behavior version {version} {opts}: dev seq lens per rank:", rank_seq_lens)
+        if split:
+            _assert_eval_split(rank_seq_lens, _EVAL_ON_ALL_RANKS_DEV_SEQ_LENS)
+        else:
+            assert rank_seq_lens == [_EVAL_ON_ALL_RANKS_DEV_SEQ_LENS, []]
 
 
 def test_torch_engine_eval_on_all_ranks_rank0_model():
@@ -2258,157 +4011,33 @@ def test_torch_engine_eval_on_all_ranks_repeated_eval():
         _assert_eval_split(rank_seq_lens, _EVAL_ON_ALL_RANKS_DEV_SEQ_LENS[:2])
 
 
-def test_graph_capture_bounds_from_config():
-    # the bounds a config already implies must not have to be repeated by hand:
-    # max_seqs is the batch bound, max_seq_length the capacity, batch_size plus the per-seq
-    # gap and align slack the packed total bound
-    from returnn.tensor import batch_dim
-    from returnn.torch.util.graph_capture import bounds_from_config
-
-    time_dim = Dim(None, name="time-bounds")
-    text_dim = Dim(None, name="text-bounds")
-    labels_dim = Dim(None, name="labels-bounds")
-    classes_dim = Dim(7, name="classes")
-    template = TensorDict()
-    template.update(
-        {
-            "data": {"dims": [batch_dim, time_dim], "dtype": "float32"},
-            "text_codes": {"dims": [batch_dim, text_dim], "dtype": "int32", "sparse_dim": classes_dim},
-            "labels": {"dims": [batch_dim, labels_dim], "dtype": "int32", "sparse_dim": classes_dim},
-        },
-        auto_convert=True,
-    )
-    config = Config(
-        dict(
-            max_seqs=48,
-            max_seq_length={"data": 680000, "labels": 720},
-            batch_size=4_000_000,
-            packed_tensors={
-                "gap": 8640,
-                "align": 960,
-                "per_key": {"text_codes": {"packed": False}, "labels": {"packed": False}},
-            },
-        )
-    )
-    with global_config_ctx(config):
-        opts = bounds_from_config(
-            {"warmup_steps": 2, "dim_capacity": {"text_codes": 720}}, config=config, extern_data_template=template
-        )
-    assert opts["batch_size_bound"] == 48
-    assert opts["dim_capacity"] == {"data": 680000, "text_codes": 720, "labels": 720}
-    assert opts["packed_total_bound"] == {"data": 4_000_000 + 48 * (8640 + 959)}
-    assert opts["warmup_steps"] == 2
-    with global_config_ctx(config):
-        explicit = bounds_from_config(
-            {
-                "batch_size_bound": 32,
-                "dim_capacity": {"data": 1, "text_codes": 1, "labels": 1},
-                "packed_total_bound": {"data": 5},
-            },
-            config=config,
-            extern_data_template=template,
-        )
-    assert explicit["batch_size_bound"] == 32
-    assert explicit["dim_capacity"] == {"data": 1, "text_codes": 1, "labels": 1}
-    assert explicit["packed_total_bound"] == {"data": 5}
-    config = Config(dict(max_seqs=4, batch_size=1000, packed_batch_size={"data": 100}, packed_tensors=True))
-    with global_config_ctx(config):
-        opts = bounds_from_config({}, config=config, extern_data_template=template)
-    assert opts["packed_total_bound"] == {"data": 100, "text_codes": 1000, "labels": 1000}
-
-
-def test_graph_capture_boundary_cuts_to_the_longest_sequence():
-    """
-    The captured first segment of a segmented step returns buffers padded to the capacity,
-    and the eager segment must see them as an eager step would: cut along every dynamic dim
-    to the batch's longest sequence, a dim returned next to a tensor being that tensor's dim,
-    sparse and feature dims and plain values kept.
-    """
-    from returnn.torch.util.graph_capture import _flatten_boundary, _unflatten_boundary
-
-    batch = Dim(3, name="batch-boundary")
-    lens = torch.tensor([4, 2, 0], dtype=torch.int32)
-    time = Dim(Tensor("time:size", dims=[batch], dtype="int32", raw_tensor=lens), name="time-boundary")
-    feat = Dim(2, name="feat-boundary")
-    vocab = Dim(5, name="vocab-boundary")
-    x = Tensor("x", dims=[batch, time, feat], dtype="float32", feature_dim=feat, raw_tensor=torch.randn(3, 7, 2))
-    labels = Tensor(
-        "labels",
-        dims=[batch, time],
-        dtype="int32",
-        sparse_dim=vocab,
-        raw_tensor=torch.randint(0, 5, (3, 7), dtype=torch.int32),
-    )
-    spec, tensors = _flatten_boundary({"x": x, "time": time, "labels": labels, "scale": 0.5}, batch_dim=batch)
-    values = _unflatten_boundary(spec, tensors, batch_dim=batch)
-    assert values["x"].dims[1] is values["time"] and values["labels"].dims[1] is values["time"]
-    assert values["x"].feature_dim == feat and values["labels"].sparse_dim == vocab and values["scale"] == 0.5
-    assert values["time"].dyn_size_ext.raw_tensor.tolist() == [4, 2, 0]
-    assert torch.equal(values["x"].raw_tensor, x.raw_tensor[:, :4])
-    assert torch.equal(values["labels"].raw_tensor, labels.raw_tensor[:, :4])
-
-
-def test_graph_capture_optimizer_state_materialization():
-    """the lazy optimizer state is only created for the captured optimizer, and only where zero-init is right"""
-    from returnn.torch.util.graph_capture import GraphCapturedTrainStep, _optimizer_state_zero_init
-
-    def _stub(opt, *, captured: bool):
-        obj = GraphCapturedTrainStep.__new__(GraphCapturedTrainStep)
-        obj._get_optimizer = lambda: opt
-        obj._grad_params = list(opt.param_groups[0]["params"])
-        obj._post_step = (lambda: None) if captured else None
-        return obj
-
-    p = torch.nn.Parameter(torch.tensor(1.0))
-    opt = torch.optim.Rprop([p], lr=0.1)
-    assert not _optimizer_state_zero_init(opt)
-    assert _optimizer_state_zero_init(torch.optim.AdamW([p], lr=0.1))
-    try:
-        _stub(opt, captured=True)._materialize_optimizer_state()
-    except NotImplementedError:
-        pass
-    else:
-        raise AssertionError("a captured Rprop must be rejected")
-    _stub(opt, captured=False)._materialize_optimizer_state()
-    assert not opt.state
-    for _ in range(3):
-        p.grad = torch.tensor(1.0)
-        opt.step()
-    torch.testing.assert_close(p.detach(), torch.tensor(0.636))
-    q = torch.nn.Parameter(torch.tensor(1.0))
-    adamw = torch.optim.AdamW([q], lr=0.1)
-    _stub(adamw, captured=True)._materialize_optimizer_state()
-    assert adamw.state and all(float(v) == 0 for v in adamw.state[q].values() if v.dim() == 0)
-
-
 def _build_cuda_graph_train_config_and_dataset(
     *,
     compile_: bool,
-    torch_model: bool = False,
     warmup_steps: Optional[int] = 2,
     cuda_graph: bool = True,
     optimizer_step: bool = False,
     optimizer: Optional[Dict[str, Any]] = None,
+    count_steps: bool = False,
+    graph_opts: Optional[Dict[str, Any]] = None,
+    torch_model: bool = False,
 ):
     """
-    small model + Task12AXDataset config with torch_cuda_graph, see the tests below.
+    small RF model + Task12AXDataset config with torch_cuda_graph, see the tests below.
     With optimizer_step: the optimizer step not in the model graph but separately (torch_optimizer_step).
-
-    :param compile_: the step goes through Inductor before the capture
-    :param torch_model: the model is a torch module around an RF part, with parameters torch owns itself
-        (one of them tied, read from two modules, and a conv weight whose grad cuDNN computes channels-last),
-        instead of an RF module
-    :param warmup_steps: eager steps before the capture, None for the default
-    :param cuda_graph: whether the model step is captured at all
-    :param optimizer_step: whether the optimizer step is compiled and captured separately
-    :param optimizer: the config entry, capturable AdamW by default
+    optimizer: the config entry, capturable AdamW by default.
+    count_steps: the model counts its train step calls in an auxiliary parameter.
+    graph_opts: further torch_cuda_graph entries.
+    torch_model: the model is a torch module around an RF part, with parameters torch owns itself
+    (one of them tied, read from two modules, and a conv weight whose grad cuDNN computes channels-last),
+    instead of an RF module.
     """
     from returnn.datasets import init_dataset
     from returnn.tensor import Dim, batch_dim
     from returnn.torch.frontend.bridge import rf_module_to_pt_module
 
     # fresh dims per test: capacities get set on them
-    time_dim = Dim(None, name=f"time-cudagraph-{compile_}-{torch_model}-{warmup_steps}-{cuda_graph}-{optimizer_step}")
+    time_dim = Dim(None, name=f"time-cudagraph-{compile_}-{warmup_steps}-{cuda_graph}-{optimizer_step}")
     feat_dim = Dim(9, name="feat")
     classes_dim = Dim(2, name="classes")
     hidden = Dim(64, name="hidden")
@@ -2419,8 +4048,9 @@ def _build_cuda_graph_train_config_and_dataset(
             self.out_dim = classes_dim
             self.layer = rf.Linear(feat_dim, hidden)
             self.out = rf.Linear(hidden, classes_dim)
-            self.steps_seen = rf.Parameter([], dtype="int64", auxiliary=True)
-            self.steps_seen.initial = 0
+            if count_steps:
+                self.steps_seen = rf.Parameter([], dtype="int64", auxiliary=True)
+                self.steps_seen.initial = 0
 
     class _TorchModel(torch.nn.Module):
         def __init__(self):
@@ -2456,7 +4086,7 @@ def _build_cuda_graph_train_config_and_dataset(
     def _train_step(*, model, extern_data: TensorDict, **_kwargs):
         data = extern_data["data"]
         classes = extern_data["classes"]
-        if not torch_model and rf.get_run_ctx().train_flag:  # the eval between the epochs is no train step
+        if count_steps:
             model.steps_seen.assign_add(1)
         if torch_model:
             logits = model.logits(data)
@@ -2512,129 +4142,102 @@ def _build_cuda_graph_train_config_and_dataset(
             capture_optimizer=not optimizer_step,
             **({"warmup_steps": warmup_steps} if warmup_steps is not None else {}),
             **({"compile": True} if compile_ else {}),
+            **(graph_opts or {}),
         )
     if optimizer_step:
         config.typed_dict["torch_optimizer_step"] = {}
     dataset = init_dataset({"class": "Task12AXDataset", "num_seqs": 100, "name": "train", "fixed_random_seed": 1})
     dataset.init_seq_order(epoch=1)
-    # the eval at the epoch end rebinds the dyn sizes the train losses are normalized by
-    dev_dataset = init_dataset({"class": "Task12AXDataset", "num_seqs": 5, "name": "dev", "fixed_random_seed": 3})
-    dev_dataset.init_seq_order(epoch=1)
-    return config, dataset, dev_dataset
+    return config, dataset
 
 
 def _run_cuda_graph_train(
     *,
     compile_: bool,
-    torch_model: bool = False,
     warmup_steps: Optional[int] = 2,
     cuda_graph: bool = True,
     optimizer_step: bool = False,
+    optimizer: Optional[Dict[str, Any]] = None,
+    count_steps: bool = False,
+    graph_opts: Optional[Dict[str, Any]] = None,
+    torch_model: bool = False,
 ) -> Engine:
     if not torch.cuda.is_available():
         raise unittest.SkipTest("CUDA not available")
-    import re
-    from unittest import mock
-    from returnn.log import log as returnn_log
-    import returnn.torch.engine as torch_engine_module
+    import returnn.torch.engine as engine_module
 
-    config, dataset, dev_dataset = _build_cuda_graph_train_config_and_dataset(
+    config, dataset = _build_cuda_graph_train_config_and_dataset(
         compile_=compile_,
-        torch_model=torch_model,
         warmup_steps=warmup_steps,
         cuda_graph=cuda_graph,
         optimizer_step=optimizer_step,
+        optimizer=optimizer,
+        count_steps=count_steps,
+        graph_opts=graph_opts,
+        torch_model=torch_model,
     )
-    log_file = tempfile.NamedTemporaryFile(mode="wt", suffix=f"-cudagraph-{compile_}.log", delete=False)
-    log_file.close()
-    returnn_log.initialize(logs=[log_file.name], verbosity=[5])
-    try:
-        with global_config_ctx(config):
-            engine = Engine(config=config)
-            engine.init_train_from_config(train_data=dataset, dev_data=dev_dataset)
-            if cuda_graph:
-                order = []
-                run_train_step = engine._graph_capture.run_train_step
-                print_process = torch_engine_module._print_process
+    with global_config_ctx(config):
+        engine = Engine(config=config)
+        engine.init_train_from_config(train_data=dataset)
+        if cuda_graph:
+            # record when each train step is launched and when it is reported
+            order = []
+            run_train_step = engine._graph_capture.run_train_step
+            print_process = engine_module._print_process
 
-                def _launch(*args, **kwargs):
-                    order.append((engine.epoch, "l"))
-                    return run_train_step(*args, **kwargs)
+            def _launch(*args, **kwargs):
+                order.append((engine.epoch, "l"))
+                return run_train_step(*args, **kwargs)
 
-                def _report(report_prefix, **kwargs):
-                    if report_prefix.endswith(" train"):
-                        order.append((engine.epoch, "r"))
-                    return print_process(report_prefix, **kwargs)
+            def _report(report_prefix, **kwargs):
+                if report_prefix.endswith(" train"):
+                    order.append((engine.epoch, "r"))
+                return print_process(report_prefix, **kwargs)
 
-                engine._graph_capture.run_train_step = _launch
-                with mock.patch.object(torch_engine_module, "_print_process", _report):
-                    engine.train()
-                # the host reports every step only after it launched the next one, so the GPU never waits for it
-                for epoch in sorted({e for e, _ in order}):
-                    kinds = "".join(k for e, k in order if e == epoch)
-                    n = kinds.count("l")
-                    assert n > 2 and kinds == "l" + "lr" * (n - 1) + "r", (epoch, kinds)
-                assert engine._graph_capture is not None
-                assert engine._graph_capture._graph is not None, "graph never captured"
-                # the frame loss denominators must follow the static length buffers, not the dyn sizes
-                # the eval left behind (it rebinds the very size tensors they are reduced from)
-                n_frames = int(engine._graph_capture._lens_bufs["data"].sum())
-                assert n_frames > 0
-                for name in ("ce", "fer"):
-                    loss = engine._graph_capture._ctx.losses[name]
-                    assert int(loss.get_inv_norm_factor().raw_tensor) == n_frames, name
-                assert engine._graph_capture.captures_optimizer == (not optimizer_step)
-                # the cached reduction of the error measure must be a graph output, refreshed by every replay,
-                # not an eager reduction from the first readout, which every later replay would repeat.
-                # The eval rebound the dyn sizes as well, so the fresh sum masks by the static length buffer
-                fer = engine._graph_capture._ctx.losses["fer"]
-                fresh = fer.loss.raw_tensor
-                if fer.loss.dims:
-                    batch_tag = fer.loss.get_batch_dim_tag()
-                    (time_tag,) = [d for d in fer.loss.dims if d != batch_tag]
-                    per_frame = fer.loss.copy_transpose([batch_tag, time_tag]).raw_tensor
-                    lens = engine._graph_capture._lens_bufs["data"]
-                    in_seq = torch.arange(per_frame.shape[1], device=lens.device)[None, :] < lens[:, None]
-                    fresh = (per_frame * in_seq).sum()
-                torch.testing.assert_close(fer.get_summed_loss().raw_tensor, fresh)
-            else:
+            engine._graph_capture.run_train_step = _launch
+            with unittest.mock.patch.object(engine_module, "_print_process", _report):
                 engine.train()
-            # the dynamic warmup steps run at the batch's own size, every batch here is smaller than the bound,
-            # and the mean of the per-sequence one must still be reported as one
-            seq_one = engine.learning_rate_control.epoch_data[1].error["train_loss_seq_one"]
-            assert abs(seq_one - 1.0) < 1e-6, seq_one
-            if optimizer_step:
-                assert engine._updater._optimizer_step._graph is not None, "optimizer step never captured"
-            for param_group in engine._updater.optimizer.param_groups:
-                lr = param_group["lr"]  # device-tensor LR input of the captured optimizer
+            # the host reports every step only after it launched the next one, so the GPU never waits for it
+            for epoch in sorted({e for e, _ in order}):
+                kinds = "".join(k for e, k in order if e == epoch)
+                n = kinds.count("l")
+                assert n > 2 and kinds == "l" + "lr" * (n - 1) + "r", (epoch, kinds)
+        else:
+            engine.train()
+        if count_steps:
+            # the warm runs before the capture leave no trace on the model state
+            seen = int(engine._orig_model.steps_seen.raw_tensor)
+            assert seen == engine.global_train_step, (seen, engine.global_train_step)
+        # the dynamic warmup steps run at the batch's own size, every batch here is smaller than the bound,
+        # and the mean of the per-sequence one must still be reported as one
+        seq_one = engine.learning_rate_control.epoch_data[1].error["train_loss_seq_one"]
+        assert abs(seq_one - 1.0) < 1e-6, seq_one
+        if cuda_graph:
+            assert engine._graph_capture is not None
+            assert engine._graph_capture._graph is not None, "graph never captured"
+            assert engine._graph_capture.captures_optimizer == (not optimizer_step)
+            # the cached reduction of the error measure must be a graph output, refreshed by every replay,
+            # not an eager reduction from the first readout, which every later replay would repeat
+            fer = engine._graph_capture._ctx.losses["fer"]
+            fresh = rf.reduce_sum(fer.loss, axis=fer.loss.dims) if fer.loss.dims else fer.loss
+            torch.testing.assert_close(fer.get_summed_loss().raw_tensor, fresh.raw_tensor)
+        if optimizer_step:
+            assert engine._updater._optimizer_step._graph is not None, "optimizer step never captured"
+        for param_group in engine._updater.optimizer.param_groups:
+            lr = param_group["lr"]  # device-tensor LR input of the captured optimizer
+            if cuda_graph or optimizer_step:
                 assert isinstance(lr, torch.Tensor) and lr.is_cuda
-                assert lr.item() > 1e-3  # the per-step schedule advanced it
-            for name, p in engine._pt_model.named_parameters():
-                assert torch.isfinite(p).all(), f"non-finite param {name}"
-                # the foreach and fused optimizer kernels need every grad in the layout of its parameter
-                assert p.grad is None or p.grad.stride() == p.stride(), (name, p.grad.stride(), p.stride())
-                if torch_model:
-                    assert not torch.equal(p.detach().cpu(), engine._pt_model.initial[name]), f"{name} never trained"
-            if not torch_model:
-                # every train step counts once: the runs which only warm the kernels
-                # or trace and compile the step must leave the training state alone
-                seen = int(engine._orig_model.steps_seen.raw_tensor)
-                assert seen == engine.global_train_step, (seen, engine.global_train_step)
-            if cuda_graph:
-                # the run end must destroy the graph, else a NCCL comm it captured never shuts down
-                engine.finalize()
-                assert engine._graph_capture is None
-    finally:
-        returnn_log.initialize()
-    with open(log_file.name, "rt", encoding="utf-8") as f:
-        txt = f.read()
-    os.remove(log_file.name)
-    # the error measure is not part of the total loss, so its reduction must still be recorded
-    # in the graph: a value reduced once at the first readout would repeat on every replay
-    fer = [float(v) for _, v in re.findall(r"train, step (\d+), ce [0-9.]+, fer ([0-9.]+)", txt)]
-    assert len(fer) >= 10, f"only {len(fer)} steps with the error measure parsed from the log"
-    warmup = (config.typed_value("torch_cuda_graph") or {}).get("warmup_steps", 0)
-    assert len(set(fer[warmup + 1 :])) > 1, f"the error measure is frozen under replay: {fer}"
+            assert float(lr) > 1e-3  # the per-step schedule advanced it
+        for name, p in engine._pt_model.named_parameters():
+            assert torch.isfinite(p).all(), f"non-finite param {name}"
+            # the foreach and fused optimizer kernels need every grad in the layout of its parameter
+            assert p.grad is None or p.grad.stride() == p.stride(), (name, p.grad.stride(), p.stride())
+            if torch_model:
+                assert not torch.equal(p.detach().cpu(), engine._pt_model.initial[name]), f"{name} never trained"
+        if cuda_graph:
+            # the run end must destroy the graph, else a NCCL comm it captured never shuts down
+            engine.finalize()
+            assert engine._graph_capture is None
     return engine
 
 
@@ -2846,6 +4449,102 @@ def test_torch_engine_cuda_graph_packed_decoder_parity():
         assert abs(ce_a - ce_b) / max(abs(ce_a), 1e-6) < 2e-2, f"step {s} ce: {ce_a} vs {ce_b}"
 
 
+def test_torch_engine_cuda_graph_packed_total_bound():
+    """
+    The gapped packed tensor which the captured step sees has the extent of the input buffer:
+    the declared packed_total_bound, else the one inferred from packed_batch_size,
+    which is far below batch_size_bound * dim_capacity.
+    """
+    from returnn.datasets import init_dataset
+    from returnn.tensor import Dim, batch_dim
+    import numpy
+
+    if not torch.cuda.is_available():
+        raise unittest.SkipTest("CUDA not available")
+    rnd = numpy.random.RandomState(3)
+    seqs = [{"data": rnd.randn(int(rnd.randint(1, 9)), 5).astype("float32")} for _ in range(20)]
+    # (gap, align, declared packed_total_bound) -> expected extent;
+    # batch_size_bound 4, dim_capacity 8, packed_batch_size 12
+    for gap, align, declared, expected in [(1, 1, None, 16), (2, 2, None, 24), (0, 1, None, 12), (1, 1, 24, 24)]:
+        time_dim = Dim(None, name=f"time-bound-{gap}-{align}-{declared}")
+        feat_dim = Dim(5, name="feat")
+        seen = []
+
+        def _get_model(**_kwargs):
+            return rf.Linear(feat_dim, Dim(3, name="out"))
+
+        def _train_step(*, model: rf.Linear, extern_data: TensorDict, **_kwargs):
+            data = extern_data["data"]
+            seen.append(data.raw_tensor.packed_dim.dimension)
+            loss = rf.reduce_sum(model(data) ** 2, axis=model.out_dim)
+            loss.mark_as_loss("l2")
+
+        config = Config(
+            dict(
+                task="train",
+                device="gpu",
+                extern_data={"data": {"dims": [batch_dim, time_dim, feat_dim], "dtype": "float32"}},
+                get_model=_get_model,
+                train_step=_train_step,
+                batch_size=None,
+                packed_batch_size={"data": 12},
+                max_seqs=4,
+                num_epochs=1,
+                learning_rate=1e-3,
+                optimizer={"class": "adamw", "capturable": True},
+                torch_dataloader_opts={"num_workers": 0},
+                packed_tensors={"per_key": {"data": {"gap": gap, "align": align}}},
+                torch_cuda_graph=dict(
+                    batch_size_bound=4,
+                    dim_capacity={"data": 8},
+                    **({"packed_total_bound": {"data": declared}} if declared is not None else {}),
+                    capture_optimizer=True,
+                ),
+            )
+        )
+        dataset = init_dataset({"class": "StaticDataset", "data": seqs, "input_dim": 5})
+        dataset.init_seq_order(epoch=1)
+        with global_config_ctx(config):
+            engine = Engine(config=config)
+            engine.init_train_from_config(train_data=dataset)
+            engine.train()
+            assert engine._graph_capture._graph is not None, "graph never captured"
+            assert engine._graph_capture.data_bound_sizes() == {"data": expected}
+            assert seen and set(seen) == {expected}, (gap, align, declared, seen)
+            engine.finalize()
+
+
+def test_graph_capture_boundary_cuts_to_the_longest_sequence():
+    """
+    The captured first segment of a segmented step returns buffers padded to the capacity,
+    and the eager segment must see them as an eager step would: cut along every dynamic dim
+    to the batch's longest sequence, a dim returned next to a tensor being that tensor's dim,
+    sparse and feature dims and plain values kept.
+    """
+    from returnn.torch.util.graph_capture import _flatten_boundary, _unflatten_boundary
+
+    batch = Dim(3, name="batch-boundary")
+    lens = torch.tensor([4, 2, 0], dtype=torch.int32)
+    time = Dim(Tensor("time:size", dims=[batch], dtype="int32", raw_tensor=lens), name="time-boundary")
+    feat = Dim(2, name="feat-boundary")
+    vocab = Dim(5, name="vocab-boundary")
+    x = Tensor("x", dims=[batch, time, feat], dtype="float32", feature_dim=feat, raw_tensor=torch.randn(3, 7, 2))
+    labels = Tensor(
+        "labels",
+        dims=[batch, time],
+        dtype="int32",
+        sparse_dim=vocab,
+        raw_tensor=torch.randint(0, 5, (3, 7), dtype=torch.int32),
+    )
+    spec, tensors = _flatten_boundary({"x": x, "time": time, "labels": labels, "scale": 0.5}, batch_dim=batch)
+    values = _unflatten_boundary(spec, tensors, batch_dim=batch)
+    assert values["x"].dims[1] is values["time"] and values["labels"].dims[1] is values["time"]
+    assert values["x"].feature_dim == feat and values["labels"].sparse_dim == vocab and values["scale"] == 0.5
+    assert values["time"].dyn_size_ext.raw_tensor.tolist() == [4, 2, 0]
+    assert torch.equal(values["x"].raw_tensor, x.raw_tensor[:, :4])
+    assert torch.equal(values["labels"].raw_tensor, labels.raw_tensor[:, :4])
+
+
 def _cuda_graph_segmented_setup(mode: str, *, compile_: bool):
     """config+dataset for the segmented capture parity test, see below"""
     from returnn.datasets import init_dataset
@@ -2974,31 +4673,22 @@ def test_torch_engine_cuda_graph_segmented_parity():
                 assert abs(a - b) <= 2e-3 * max(1.0, abs(a)), f"compile {compile_} step {s} {name}: {a} vs {b}"
 
 
-def test_graph_capture_optimizer_state_snapshot_roundtrip():
-    """a resumed optimizer state survives the kernel warmup runs through the snapshot, the lr object stays"""
-    from returnn.torch.util.graph_capture import _snapshot_optimizer_state, _restore_optimizer_state
-
-    torch.manual_seed(3)
-    model = torch.nn.Linear(4, 3)
-    opt = torch.optim.Adam(model.parameters(), lr=torch.tensor(0.1))
-    for p in model.parameters():
-        p.grad = torch.randn_like(p)
-    opt.step()
-    before = {k: v.clone() for k, v in opt.state[model.weight].items()}
-    lr = opt.param_groups[0]["lr"]
-    snapshot = _snapshot_optimizer_state(opt)
-    opt.step()
-    assert not torch.equal(opt.state[model.weight]["exp_avg"], before["exp_avg"])
-    _restore_optimizer_state(opt, snapshot)
-    for k, v in before.items():
-        assert torch.equal(opt.state[model.weight][k], v), k
-    assert opt.param_groups[0]["lr"] is lr
-
-
 def test_torch_engine_cuda_graph_train():
     """whole-train-step CUDA-graph capture/replay (torch_cuda_graph), 2 epochs across an epoch boundary,
     in-graph optimizer + per-step LR schedule via the device-tensor LR input"""
     _run_cuda_graph_train(compile_=False)
+
+
+def test_torch_engine_cuda_graph_warm_runs_keep_state():
+    """
+    The runs which only warm the kernels or trace the compiled step leave no trace on the model:
+    its buffers and auxiliary parameters (a step counter here, running statistics in a real model)
+    are back afterwards, so the model sees every batch exactly once.
+    """
+    for compile_ in (False, True):
+        # the traced step with eager kernels, Inductor would only add compile time here
+        graph_opts = {"debug_aot_eager": True} if compile_ else None
+        _run_cuda_graph_train(compile_=compile_, count_steps=True, graph_opts=graph_opts)
 
 
 def test_torch_engine_cuda_graph_compile_train_torch_module():
@@ -3014,1064 +4704,6 @@ def test_torch_engine_cuda_graph_compile_train():
     """torch_cuda_graph "compile": the whole step Inductor-compiled (aot_function + compile_fx,
     no Dynamo), then captured; otherwise as :func:`test_torch_engine_cuda_graph_train`"""
     _run_cuda_graph_train(compile_=True)
-
-
-# must be in the global scope due to pickling
-def _multi_test_hidden_matrix_filter(*, full_param_name: str, param: torch.nn.Parameter, module, **_kwargs) -> bool:
-    return param.dim() >= 2 and not isinstance(module, torch.nn.Embedding)
-
-
-# must be in the global scope due to pickling
-class _RecordingScheduleFreeSGD(torch.optim.SGD):
-    """SGD with recording schedule-free train()/eval() methods, for testing the engine hooks."""
-
-    calls = []
-
-    def train(self):
-        """record train mode switch"""
-        type(self).calls.append("train")
-
-    def eval(self):
-        """record eval mode switch"""
-        type(self).calls.append("eval")
-
-
-def _make_multi_test_model() -> torch.nn.Module:
-    return torch.nn.Sequential(
-        torch.nn.Embedding(10, 5),
-        torch.nn.LayerNorm(5),
-        torch.nn.Linear(5, 5),
-        torch.nn.ReLU(),
-        torch.nn.Linear(5, 5),
-    )
-
-
-def _multi_test_layer2_weight_filter(*, full_param_name: str, param: torch.nn.Parameter, **_kwargs) -> bool:
-    return full_param_name.startswith("2.") and param.dim() >= 2
-
-
-def test_multi_optimizer():
-    from returnn.util.basic import DictRefKeys
-    from returnn.torch.optim.multi import MultiOptimizer
-
-    config = Config(
-        dict(
-            optimizer={
-                "class": "multi",
-                "optimizers": [
-                    {
-                        "class": "sgd",
-                        "params_filter": _multi_test_layer2_weight_filter,
-                        "learning_rate_multiplier": 2.0,
-                        "momentum": 0.9,
-                    },
-                    {"class": "adamw", "weight_decay": 1e-3, "epsilon": 1e-8},
-                ],
-            }
-        )
-    )
-    model = _make_multi_test_model()
-    updater = Updater(config=config, network=model, device=torch.device("cpu"))
-    updater.create_optimizer()
-    updater.set_current_train_step(global_train_step=0, epoch=1)
-
-    opt = updater.get_optimizer()
-    assert isinstance(opt, MultiOptimizer)
-    assert len(opt.sub_optimizers) == 2
-    sgd_sub, adamw_sub = opt.sub_optimizers
-    assert isinstance(sgd_sub, torch.optim.SGD) and isinstance(adamw_sub, torch.optim.AdamW)
-
-    param_to_name = DictRefKeys((param, name) for name, param in model.named_parameters())
-    assert len(sgd_sub.param_groups) == 1
-    assert {param_to_name[p] for p in sgd_sub.param_groups[0]["params"]} == {"2.weight"}
-    assert sgd_sub.param_groups[0]["momentum"] == 0.9
-    # AdamW sub: default weight-decay split, embedding/LayerNorm/biases without decay.
-    assert len(adamw_sub.param_groups) == 2
-    adamw_groups_by_wd = {pg["weight_decay"]: pg for pg in adamw_sub.param_groups}
-    assert set(adamw_groups_by_wd.keys()) == {0.0, 1e-3}
-    assert {param_to_name[p] for p in adamw_groups_by_wd[1e-3]["params"]} == {"4.weight"}
-    assert {param_to_name[p] for p in adamw_groups_by_wd[0.0]["params"]} == {
-        "0.weight",
-        "1.weight",
-        "1.bias",
-        "2.bias",
-        "4.bias",
-    }
-    assert adamw_sub.param_groups[0]["eps"] == 1e-8
-
-    # The concatenated param_groups view covers all params exactly once.
-    assert len(opt.param_groups) == 3
-    param_names, _ = updater._get_opt_param_names()
-    assert sorted(param_names) == sorted(name for name, _ in model.named_parameters())
-
-    # LR schedule propagates into the sub-optimizers, with the multiplier.
-    updater.set_learning_rate(0.5)
-    assert sgd_sub.param_groups[0]["lr"] == 0.5 * 2.0
-    assert all(pg["lr"] == 0.5 for pg in adamw_sub.param_groups)
-
-
-def test_multi_optimizer_save_load():
-    def _make_updater():
-        config = Config(
-            dict(
-                optimizer={
-                    "class": "multi",
-                    "optimizers": [
-                        {
-                            "class": "sgd",
-                            "params_filter": _multi_test_layer2_weight_filter,
-                            "learning_rate_multiplier": 2.0,
-                            "momentum": 0.9,
-                        },
-                        {"class": "adamw", "weight_decay": 1e-3},
-                    ],
-                }
-            )
-        )
-        model_ = _make_multi_test_model()
-        updater_ = Updater(config=config, network=model_, device=torch.device("cpu"))
-        updater_.create_optimizer()
-        updater_.set_current_train_step(global_train_step=0, epoch=1)
-        return updater_, model_
-
-    updater, model = _make_updater()
-    for param in model.parameters():
-        param.grad = torch.ones_like(param)
-    updater.get_optimizer().step()
-
-    with tempfile.TemporaryDirectory(prefix="returnn_test_multi_optimizer_save_load") as tmp_dir:
-        updater.save_optimizer(tmp_dir + "/model.opt.pt")
-
-        updater2, model2 = _make_updater()
-        updater2.load_optimizer(tmp_dir + "/model.opt.pt")
-
-        state_dict1 = updater.get_optimizer().state_dict()
-        state_dict2 = updater2.get_optimizer().state_dict()
-        assert set(state_dict1["state"].keys()) == set(state_dict2["state"].keys())
-        for param_idx, param_state1 in state_dict1["state"].items():
-            param_state2 = state_dict2["state"][param_idx]
-            assert set(param_state1.keys()) == set(param_state2.keys())
-            for key, value1 in param_state1.items():
-                value2 = param_state2[key]
-                if isinstance(value1, torch.Tensor):
-                    assert torch.equal(value1, value2), f"state {param_idx} {key} differs"
-                else:
-                    assert value1 == value2, f"state {param_idx} {key} differs"
-        assert len(state_dict1["param_groups"]) == len(state_dict2["param_groups"])
-        for group1, group2 in zip(state_dict1["param_groups"], state_dict2["param_groups"]):
-            assert group1["params"] == group2["params"]
-
-        # After loading, the composite's param_groups must alias the sub-optimizers' rebuilt
-        # group dicts, so that the LR schedule keeps reaching the sub-optimizers.
-        opt2 = updater2.get_optimizer()
-        flat_sub_groups = [group for sub in opt2.sub_optimizers for group in sub.param_groups]
-        assert len(opt2.param_groups) == len(flat_sub_groups)
-        assert all(a is b for a, b in zip(opt2.param_groups, flat_sub_groups))
-        updater2.set_learning_rate(0.125)
-        sgd_sub2, adamw_sub2 = opt2.sub_optimizers
-        assert all(pg["lr"] == 0.125 * 2.0 for pg in sgd_sub2.param_groups)
-        assert all(pg["lr"] == 0.125 for pg in adamw_sub2.param_groups)
-
-
-def test_multi_optimizer_leftover_params_error():
-    config = Config(
-        dict(
-            optimizer={
-                "class": "multi",
-                "optimizers": [
-                    {"class": "sgd", "params_filter": _multi_test_layer2_weight_filter, "momentum": 0.9},
-                ],
-            }
-        )
-    )
-    model = _make_multi_test_model()
-    updater = Updater(config=config, network=model, device=torch.device("cpu"))
-    try:
-        updater.create_optimizer()
-    except ValueError as exc:
-        assert "params matched by no sub-optimizer" in str(exc)
-    else:
-        raise AssertionError("expected ValueError for params not covered by any params_filter")
-
-
-def test_multi_optimizer_engine_train():
-    config = Config(
-        dict(
-            task="train",
-            device="cpu",
-            extern_data={"data": {"dim": 9}, "classes": {"dim": 2, "sparse": True}},
-            get_model=TrainTestModel,
-            train_step=TrainTestModel.train_step,
-            batch_size=500,
-            torch_dataloader_opts={"num_workers": 0},
-            optimizer={
-                "class": "multi",
-                "optimizers": [
-                    {"class": "sgd", "params_filter": _multi_test_hidden_matrix_filter, "momentum": 0.9},
-                    {"class": "adamw", "weight_decay": 1e-3},
-                ],
-            },
-        )
-    )
-    dataset = init_dataset({"class": "Task12AXDataset", "num_seqs": 100, "name": "train"})
-    dataset.init_seq_order(epoch=1)
-
-    with global_config_ctx(config):
-        engine = Engine(config=config)
-        engine.init_train_from_config(train_data=dataset)
-        engine.train()
-
-
-def test_engine_schedule_free_optimizer_hooks():
-    _RecordingScheduleFreeSGD.calls = []
-    config = Config(
-        dict(
-            task="train",
-            device="cpu",
-            extern_data={"data": {"dim": 9}, "classes": {"dim": 2, "sparse": True}},
-            get_model=TrainTestModel,
-            train_step=TrainTestModel.train_step,
-            batch_size=500,
-            torch_dataloader_opts={"num_workers": 0},
-            optimizer={"class": _RecordingScheduleFreeSGD},
-        )
-    )
-    dataset = init_dataset({"class": "Task12AXDataset", "num_seqs": 100, "name": "train"})
-    dataset.init_seq_order(epoch=1)
-
-    with global_config_ctx(config):
-        engine = Engine(config=config)
-        engine.init_train_from_config(train_data=dataset)
-        engine.train()
-
-    calls = _RecordingScheduleFreeSGD.calls
-    assert calls, "engine did not call the schedule-free optimizer train()/eval() hooks"
-    assert calls[0] == "train" and calls[-1] == "eval", f"unexpected hook call sequence {calls}"
-
-
-def test_multi_optimizer_schedule_free_forwarding():
-    from returnn.torch.optim.multi import MultiOptimizer
-
-    _RecordingScheduleFreeSGD.calls = []
-    model = torch.nn.Linear(4, 3)
-    sub1 = _RecordingScheduleFreeSGD([model.weight], lr=0.1)
-    sub2 = torch.optim.AdamW([model.bias], lr=0.1)
-    opt = MultiOptimizer(sub_optimizers=[sub1, sub2])
-    opt.train()
-    opt.eval()
-    assert _RecordingScheduleFreeSGD.calls == ["train", "eval"]
-
-
-def test_amuse_optimizer():
-    from returnn.torch.optim.amuse import AMUSE
-
-    config = Config(dict(optimizer={"class": "amuse", "update_type": "adamw", "warmup_steps": 5}))
-    model = torch.nn.Linear(4, 3)
-    updater = Updater(config=config, network=model, device=torch.device("cpu"))
-    updater.create_optimizer()
-    updater.set_learning_rate(1e-3)
-    updater.set_current_train_step(global_train_step=0, epoch=1)
-
-    opt = updater.get_optimizer()
-    assert isinstance(opt, AMUSE)
-    assert opt.update_type == "adamw"
-    opt.train()
-    for param in model.parameters():
-        param.grad = torch.ones_like(param)
-    updater.step()
-    opt.eval()
-    assert all("z" in opt.state[p] for p in model.parameters())
-
-    with tempfile.TemporaryDirectory(prefix="returnn_test_amuse_optimizer") as tmp_dir:
-        updater.save_optimizer(tmp_dir + "/model.opt.pt")
-        updater.load_optimizer(tmp_dir + "/model.opt.pt")
-
-
-def test_amuse_engine_train():
-    # Also tests the engine schedule-free hooks: AMUSE raises in step() if not in train mode.
-    config = Config(
-        dict(
-            task="train",
-            device="cpu",
-            extern_data={"data": {"dim": 9}, "classes": {"dim": 2, "sparse": True}},
-            get_model=TrainTestModel,
-            train_step=TrainTestModel.train_step,
-            batch_size=500,
-            torch_dataloader_opts={"num_workers": 0},
-            optimizer={"class": "amuse", "update_type": "adamw", "warmup_steps": 5},
-        )
-    )
-    dataset = init_dataset({"class": "Task12AXDataset", "num_seqs": 100, "name": "train"})
-    dataset.init_seq_order(epoch=1)
-
-    with global_config_ctx(config):
-        engine = Engine(config=config)
-        engine.init_train_from_config(train_data=dataset)
-        engine.train()
-        # The engine must have switched to eval mode at the train epoch end,
-        # so params (and thus any saved checkpoint) hold the averaged weights.
-        assert engine._updater.get_optimizer().train_mode is False
-
-
-def test_amuse_engine_train_cuda_graph():
-    """
-    AMUSE under torch_cuda_graph without warmup steps, the optimizer stepped by the engine outside the graph
-    (its step reads the lr on the host, so it cannot be captured).
-    The first update creates z as the copy of the params which AMUSE defines,
-    so the params after two epochs match the eager engine.
-    """
-    if not torch.cuda.is_available():
-        raise unittest.SkipTest("CUDA not available")
-    optimizer = {"class": "amuse", "update_type": "adamw", "warmup_steps": 5}
-    engines = []
-    for cuda_graph in (False, True):
-        config, dataset, _dev_dataset = _build_cuda_graph_train_config_and_dataset(
-            compile_=False, warmup_steps=None, cuda_graph=cuda_graph, optimizer=optimizer
-        )
-        if cuda_graph:
-            config.typed_dict["torch_cuda_graph"]["capture_optimizer"] = False
-        with global_config_ctx(config):
-            engine = Engine(config=config)
-            engine.init_train_from_config(train_data=dataset)
-            engine.train()
-        engines.append(engine)
-    eager, captured = engines
-    assert captured._graph_capture is not None and captured._graph_capture._graph is not None
-    for (name, p), (_, q) in zip(eager._pt_model.named_parameters(), captured._pt_model.named_parameters()):
-        torch.testing.assert_close(q, p, rtol=1e-4, atol=1e-5, msg=lambda m: f"{name}: {m}")
-
-
-class TrainTestModelWithBatchNorm(TrainTestModel):
-    def __init__(self, in_dim: int = 9, **_kwargs):
-        super().__init__(in_dim=in_dim)
-        self.bn = torch.nn.BatchNorm1d(in_dim)
-
-    def __call__(self, x: torch.Tensor) -> torch.Tensor:
-        x = self.bn(x.transpose(1, 2)).transpose(1, 2)
-        return super().__call__(x)
-
-
-def test_amuse_engine_train_batchnorm_refresh():
-    # With a schedule-free optimizer, the engine must refresh the BatchNorm running stats
-    # with some train batches (forwarded without gradient) after switching to the averaged weights.
-    counts = {"grad": 0, "no_grad": 0}
-    running_mean_at_last_update = []
-
-    def _train_step(*, model: TrainTestModelWithBatchNorm, extern_data: TensorDict, **kwargs):
-        TrainTestModel.train_step(model=model, extern_data=extern_data, **kwargs)
-        if torch.is_grad_enabled():
-            counts["grad"] += 1
-            running_mean_at_last_update[:] = [model.bn.running_mean.detach().clone()]
-        else:
-            counts["no_grad"] += 1
-
-    config = Config(
-        dict(
-            task="train",
-            device="cpu",
-            num_epochs=1,
-            extern_data={"data": {"dim": 9}, "classes": {"dim": 2, "sparse": True}},
-            get_model=TrainTestModelWithBatchNorm,
-            train_step=_train_step,
-            batch_size=500,
-            torch_dataloader_opts={"num_workers": 0},
-            optimizer={"class": "amuse", "update_type": "adamw", "warmup_steps": 5},
-            schedule_free_batchnorm_refresh_batches=3,
-        )
-    )
-    dataset = init_dataset({"class": "Task12AXDataset", "num_seqs": 100, "name": "train"})
-    dataset.init_seq_order(epoch=1)
-
-    with global_config_ctx(config):
-        engine = Engine(config=config)
-        engine.init_train_from_config(train_data=dataset)
-        engine.train()
-        model = engine._orig_model
-    assert counts["grad"] > 0
-    assert counts["no_grad"] == 3, counts
-    assert isinstance(model, TrainTestModelWithBatchNorm)
-    assert not torch.allclose(model.bn.running_mean, running_mean_at_last_update[0])
-
-
-class _NoRewindDataset(Task12AXDataset):
-    """Refuses to restart an epoch it already served, like the epoch worker of DistributeFilesDataset."""
-
-    def __init__(self, **kwargs):
-        super().__init__(**kwargs)
-        self._served_epoch = None
-
-    def init_seq_order(self, epoch=None, seq_list=None, seq_order=None):
-        if epoch is not None and epoch == self._served_epoch:
-            raise Exception(f"{self}: cannot go backwards in epoch {epoch}")
-        return super().init_seq_order(epoch=epoch, seq_list=seq_list, seq_order=seq_order)
-
-    def _load_seqs(self, start, end):
-        self._served_epoch = self.epoch
-        super()._load_seqs(start, end)
-
-
-def test_amuse_engine_train_batchnorm_refresh_fresh_dataset():
-    # The refresh must not iterate the epoch's train dataset object a second time,
-    # some datasets cannot rewind within an epoch. It has to use a fresh instance from the config,
-    # built like returnn.__main__.load_data builds the train dataset (the dataset options from the
-    # global config such as window, and a callable config giving a fresh instance too).
-    import functools
-    from returnn.__main__ import load_data
-
-    train_opts = {"class": _NoRewindDataset, "num_seqs": 100}
-    for train_config_value, in_dim, config_opts in [
-        (train_opts, 9, {}),
-        (train_opts, 27, {"window": 3}),
-        (lambda: dict(train_opts), 9, {}),
-    ]:
-        counts = {"no_grad": 0}
-
-        def _train_step(*, model: TrainTestModelWithBatchNorm, extern_data: TensorDict, **kwargs):
-            TrainTestModel.train_step(model=model, extern_data=extern_data, **kwargs)
-            if not torch.is_grad_enabled():
-                counts["no_grad"] += 1
-
-        config = Config(
-            dict(
-                task="train",
-                device="cpu",
-                num_epochs=1,
-                extern_data={"data": {"dim": in_dim}, "classes": {"dim": 2, "sparse": True}},
-                get_model=functools.partial(TrainTestModelWithBatchNorm, in_dim=in_dim),
-                train_step=_train_step,
-                batch_size=500,
-                torch_dataloader_opts={"num_workers": 0},
-                optimizer={"class": "amuse", "update_type": "adamw", "warmup_steps": 5},
-                schedule_free_batchnorm_refresh_batches=3,
-                train=train_config_value,
-                **config_opts,
-            )
-        )
-        with global_config_ctx(config):
-            dataset, _ = load_data(config, 0, "train")
-            dataset.init_seq_order(epoch=1)
-            engine = Engine(config=config)
-            engine.init_train_from_config(train_data=dataset)
-            engine.train()
-        assert counts["no_grad"] == 3, (config_opts, counts)
-
-
-def test_multi_optimizer_contract():
-    import copy
-    import io
-
-    from returnn.torch.optim.multi import MultiOptimizer
-
-    model = torch.nn.Linear(4, 3)
-    sub1 = torch.optim.SGD([model.weight], lr=0.1, momentum=0.9)
-    sub2 = torch.optim.AdamW([model.bias], lr=0.1)
-    opt = MultiOptimizer(sub_optimizers=[sub1, sub2])
-
-    # Membership tests and get() must not mutate the state (unlike the MutableMapping defaults).
-    assert model.weight not in opt.state
-    assert opt.state.get(model.weight) is None
-    assert len(opt.state) == 0
-
-    # State view: auto-creates empty entries like the base class defaultdict,
-    # mutations reach the owning sub-optimizer.
-    assert opt.state[model.weight] == {}
-    opt.state[model.weight]["marker"] = 1
-    assert sub1.state[model.weight]["marker"] == 1
-    for param in model.parameters():
-        param.grad = torch.ones_like(param)
-    opt.step()
-    assert "momentum_buffer" in opt.state[model.weight]
-    assert "exp_avg" in opt.state[model.bias]
-    assert len(opt.state) == 2
-    opt.state.clear()
-    assert len(sub1.state) == 0 and len(sub2.state) == 0 and len(opt.state) == 0
-
-    # Hook registration via the base class machinery.
-    if hasattr(opt, "register_step_pre_hook"):
-        hook_calls = []
-        handle = opt.register_step_pre_hook(lambda _opt, _args, _kwargs: hook_calls.append("pre"))
-        opt.step()
-        handle.remove()
-        assert hook_calls == ["pre"]
-    if hasattr(opt, "register_state_dict_pre_hook"):
-        sd_hook_calls = []
-        handles = [
-            opt.register_state_dict_pre_hook(lambda _opt: sd_hook_calls.append("sd_pre")),
-            opt.register_state_dict_post_hook(lambda _opt, _sd: sd_hook_calls.append("sd_post")),
-            opt.register_load_state_dict_pre_hook(lambda _opt, _sd: sd_hook_calls.append("load_pre")),
-            opt.register_load_state_dict_post_hook(lambda _opt: sd_hook_calls.append("load_post")),
-        ]
-        opt.load_state_dict(opt.state_dict())
-        for handle in handles:
-            handle.remove()
-        assert sd_hook_calls == ["sd_pre", "sd_post", "load_pre", "load_post"]
-
-    # deepcopy and pickle produce consistent objects.
-    opt2 = copy.deepcopy(opt)
-    assert len(opt2.sub_optimizers) == 2 and len(opt2.param_groups) == len(opt.param_groups)
-    assert opt2.param_groups[0] is opt2.sub_optimizers[0].param_groups[0]
-    buf = io.BytesIO()
-    torch.save(opt, buf)
-    buf.seek(0)
-    opt3 = torch.load(buf, weights_only=False)
-    assert len(opt3.sub_optimizers) == 2
-    assert opt3.param_groups[0] is opt3.sub_optimizers[0].param_groups[0]
-
-    try:
-        opt.add_param_group({"params": [torch.nn.Parameter(torch.zeros(2))]})
-    except NotImplementedError:
-        pass
-    else:
-        raise AssertionError("expected NotImplementedError from add_param_group")
-
-
-def test_multi_optimizer_duplicate_params_error():
-    from returnn.torch.optim.multi import MultiOptimizer
-
-    model = torch.nn.Linear(4, 3)
-    sub1 = torch.optim.SGD([model.weight], lr=0.1)
-    sub2 = torch.optim.SGD([model.weight, model.bias], lr=0.2)
-    try:
-        MultiOptimizer(sub_optimizers=[sub1, sub2])
-    except ValueError as exc:
-        assert "disjoint" in str(exc)
-    else:
-        raise AssertionError("expected ValueError for overlapping sub-optimizer params")
-
-
-def test_multi_optimizer_config_errors():
-    config = Config(
-        dict(
-            decouple_constraints=False,
-            optimizer={
-                "class": "multi",
-                "optimizers": [
-                    {"class": "sgd", "params_filter": _multi_test_layer2_weight_filter, "momentum": 0.9},
-                    {"class": "adamw", "weight_decay": 1e-3},
-                ],
-            },
-        )
-    )
-    updater = Updater(config=config, network=_make_multi_test_model(), device=torch.device("cpu"))
-    try:
-        updater.create_optimizer()
-    except AssertionError as exc:
-        assert "decouple_constraints" in str(exc)
-    else:
-        raise AssertionError("expected AssertionError for decouple_constraints=False under multi")
-
-    config = Config(
-        dict(
-            optimizer={
-                "class": "multi",
-                "optimizers": [
-                    {
-                        "class": "adamw",
-                        "weight_decay": 1e-3,
-                        "param_groups_custom": lambda **_kwargs: [],
-                    },
-                ],
-            }
-        )
-    )
-    updater = Updater(config=config, network=_make_multi_test_model(), device=torch.device("cpu"))
-    try:
-        updater.create_optimizer()
-    except ValueError as exc:
-        assert "param_groups_custom" in str(exc) and "params_filter" in str(exc)
-    else:
-        raise AssertionError("expected ValueError for param_groups_custom in sub-optimizer opts")
-
-
-# must be in the global scope due to pickling
-class _SubclassMultiOptimizer:
-    """placeholder, replaced below (needs the import)"""
-
-
-def _init_subclass_multi_optimizer():
-    global _SubclassMultiOptimizer
-    from returnn.torch.optim.multi import MultiOptimizer
-
-    class _SubclassMultiOptimizerImpl(MultiOptimizer):
-        """MultiOptimizer subclass for testing that the updater instantiates the resolved class."""
-
-    _SubclassMultiOptimizerImpl.__name__ = "_SubclassMultiOptimizer"
-    _SubclassMultiOptimizer = _SubclassMultiOptimizerImpl
-    return _SubclassMultiOptimizerImpl
-
-
-def test_multi_optimizer_subclass():
-    import copy
-
-    subclass = _init_subclass_multi_optimizer()
-    config = Config(
-        dict(
-            optimizer={
-                "class": subclass,
-                "optimizers": [
-                    {"class": "sgd", "params_filter": _multi_test_layer2_weight_filter, "momentum": 0.9},
-                    {"class": "adamw", "weight_decay": 1e-3},
-                ],
-            }
-        )
-    )
-    updater = Updater(config=config, network=_make_multi_test_model(), device=torch.device("cpu"))
-    updater.create_optimizer()
-    opt = updater.get_optimizer()
-    assert type(opt) is subclass
-    assert type(copy.deepcopy(opt)) is subclass
-
-
-def test_updater_weight_decay_custom_include_check_local_name():
-    # For backward compatibility, the callback receives the module-local param name
-    # as full_param_name (despite the name), both in the single-optimizer and the multi case.
-    seen_names = []
-
-    def _include_check(*, full_param_name, **_kwargs):
-        seen_names.append(full_param_name)
-        return None
-
-    config = Config(
-        dict(
-            optimizer={
-                "class": "adamw",
-                "weight_decay": 1e-3,
-                "weight_decay_custom_include_check": _include_check,
-            }
-        )
-    )
-    updater = Updater(config=config, network=_make_multi_test_model(), device=torch.device("cpu"))
-    updater.create_optimizer()
-    assert seen_names and all("." not in name for name in seen_names), seen_names
-
-    seen_names = []
-    config = Config(
-        dict(
-            optimizer={
-                "class": "multi",
-                "optimizers": [
-                    {"class": "sgd", "params_filter": _multi_test_layer2_weight_filter, "momentum": 0.9},
-                    {
-                        "class": "adamw",
-                        "weight_decay": 1e-3,
-                        "weight_decay_custom_include_check": _include_check,
-                    },
-                ],
-            }
-        )
-    )
-    updater = Updater(config=config, network=_make_multi_test_model(), device=torch.device("cpu"))
-    updater.create_optimizer()
-    assert seen_names and all("." not in name for name in seen_names), seen_names
-
-
-def test_multi_optimizer_non_param_state_error():
-    from returnn.torch.optim.multi import MultiOptimizer
-
-    model = torch.nn.Linear(4, 3)
-    opt = MultiOptimizer(
-        sub_optimizers=[
-            torch.optim.SGD([model.weight], lr=0.1, momentum=0.9),
-            torch.optim.AdamW([model.bias], lr=0.1),
-        ]
-    )
-    for param in model.parameters():
-        param.grad = torch.ones_like(param)
-    opt.step()
-    state_dict = opt.state_dict()
-    state_dict["state"][999] = {"foo": 1}
-    try:
-        opt.load_state_dict(state_dict)
-    except NotImplementedError as exc:
-        assert "999" in str(exc)
-    else:
-        raise AssertionError("expected NotImplementedError for non-parameter state key on load")
-
-
-def test_amuse_legacy_group_keys_error():
-    from returnn.torch.optim.amuse import AMUSE
-
-    model = torch.nn.Linear(4, 3)
-    for legacy_group_opts in ({"use_muon": True}, {"update_type": "muon"}, {"aux_update_type": "sgd"}):
-        try:
-            AMUSE([{"params": list(model.parameters()), **legacy_group_opts}], warmup_steps=5)
-        except ValueError as exc:
-            assert "no longer supported" in str(exc) or "Per-group update types" in str(exc)
-        else:
-            raise AssertionError(f"expected ValueError for legacy group opts {legacy_group_opts}")
-
-
-def test_amuse_zero_lr():
-    from returnn.torch.optim.amuse import AMUSE
-
-    # With lr 0 throughout, all per-step averaging weights are zero, so ckp1 stays at its 1.0 fallback.
-    # Past warmup, the beta1 ramp must not divide by (1 - ckp1) == 0 then.
-    model = torch.nn.Linear(4, 3)
-    opt = AMUSE(list(model.parameters()), lr=0.0, warmup_steps=2)
-    opt.train()
-    for _ in range(4):
-        for param in model.parameters():
-            param.grad = torch.ones_like(param)
-        opt.step()
-    opt.eval()
-
-
-def _exact_orthogonalization(grad: torch.Tensor) -> torch.Tensor:
-    """Float32 polar factor via the SVD, a deterministic stand-in for the bf16 Newton-Schulz in tests."""
-    u, _, vh = torch.linalg.svd(grad.float(), full_matrices=False)
-    return u @ vh
-
-
-def test_muon_update_higher_rank():
-    """3D params are orthogonalized per matrix over the last two dims, 4D params are flattened to (out, -1)."""
-    from unittest import mock
-    from returnn.torch.optim import amuse
-
-    with mock.patch.object(amuse, "zeropower_via_newtonschulz5", _exact_orthogonalization):
-        torch.manual_seed(0)
-        grad = torch.randn(8, 1, 5)
-        momentum = torch.zeros_like(grad)
-        batched = amuse.muon_update(grad.clone(), momentum.clone(), aux_update_type="adamw")
-        per_slice = torch.stack(
-            [amuse.muon_update(grad[i].clone(), momentum[i].clone(), aux_update_type="adamw") for i in range(len(grad))]
-        )
-        assert torch.allclose(batched, per_slice, atol=1e-6), (batched - per_slice).abs().max()
-
-        grad4 = torch.randn(8, 4, 3, 3)
-        ref = amuse.muon_update(grad4.clone(), torch.zeros_like(grad4), aux_update_type="adamw")
-        flat = amuse.muon_update(grad4.reshape(8, -1).clone(), torch.zeros(8, 36), aux_update_type="adamw")
-        assert torch.allclose(ref, flat, atol=1e-6), (ref - flat).abs().max()
-        out = amuse.muon_update(
-            grad4.clone().to(memory_format=torch.channels_last), torch.zeros_like(grad4), aux_update_type="adamw"
-        )
-        assert torch.allclose(out, ref, atol=1e-6), (out - ref).abs().max()
-
-
-def test_newton_schulz_orthogonalization():
-    """Newton-Schulz keeps the singular vectors and puts the singular values into the (0.5, 1.5) band Muon relies on."""
-    from returnn.torch.optim.amuse import zeropower_via_newtonschulz5
-
-    for rows, cols in [(8, 16), (16, 8), (4, 36), (1, 5), (5, 1)]:
-        for seed in range(5):
-            torch.manual_seed(seed)
-            rank = min(rows, cols)
-            u, _ = torch.linalg.qr(torch.randn(rows, rank))
-            v, _ = torch.linalg.qr(torch.randn(cols, rank))
-            grad = (u * torch.linspace(0.2, 1.0, rank)) @ v.T
-            polar = u @ v.T
-            out = zeropower_via_newtonschulz5(grad)
-            assert out.dtype == torch.bfloat16 and out.shape == grad.shape
-            assert torch.equal(zeropower_via_newtonschulz5(grad.T), out.T), (rows, cols, seed)
-            out = out.float()
-            singular_values = torch.linalg.svdvals(out)
-            assert torch.all(singular_values > 0.5) and torch.all(singular_values < 1.5), (rows, cols, singular_values)
-            u_out, _, vh_out = torch.linalg.svd(out, full_matrices=False)
-            direction_err = (u_out @ vh_out - polar).norm() / polar.norm()
-            assert direction_err < 0.1, (rows, cols, seed, direction_err)
-
-
-def test_amuse_zero_lr_at_warmup_boundary():
-    from returnn.torch.optim.amuse import AMUSE
-
-    # An externally scheduled lr of 0 exactly at the warmup boundary step records c_warmup 0.
-    # The next positive-lr step must re-anchor the beta1 ramp there,
-    # not crash and not ramp away from beta1_init.
-    model = torch.nn.Linear(4, 3)
-    opt = AMUSE(list(model.parameters()), lr=0.1, warmup_steps=3)
-    opt.train()
-    betas = []
-    for lr in (0.1, 0.1, 0.0, 0.1, 0.1):
-        for group in opt.param_groups:
-            group["lr"] = lr
-        for param in model.parameters():
-            param.grad = torch.ones_like(param)
-        opt.step()
-        betas.append(opt.param_groups[0]["beta1"])
-    opt.eval()
-    assert all(opt.beta1_init <= beta < 1.0 for beta in betas), betas
-    assert betas[-1] > opt.beta1_init, betas
-
-
-def test_amuse_constructor_validation():
-    from returnn.torch.optim.amuse import AMUSE
-
-    model = torch.nn.Linear(4, 3)
-    params = list(model.parameters())
-    for bad_kwargs in (
-        {"warmup_steps": 0},
-        {"warmup_steps": 0.5},
-        {"warmup_steps": 5, "beta1": 0.0},
-        {"warmup_steps": 5, "beta1": 1.0},
-        {"warmup_steps": 5, "rho": 2.0},
-        {"warmup_steps": 5, "rho": -1.0},
-    ):
-        try:
-            AMUSE(params, **bad_kwargs)
-        except ValueError:
-            pass
-        else:
-            raise AssertionError(f"expected ValueError for {bad_kwargs}")
-
-    # rho 0 is the fixed-beta1 AMUSE variant from the paper, must be accepted.
-    AMUSE(params, warmup_steps=5, rho=0.0)
-
-    # Muon needs matrix params, so the 1D bias must be rejected at construction, not at step time.
-    try:
-        AMUSE(params, warmup_steps=5, update_type="muon")
-    except ValueError as exc:
-        assert "ndim" in str(exc)
-    else:
-        raise AssertionError("expected ValueError for a 1D param with update_type muon")
-    AMUSE([p for p in params if p.ndim >= 2], warmup_steps=5, update_type="muon")
-
-
-def test_multi_optimizer_amuse():
-    from returnn.torch.optim.amuse import AMUSE
-    from returnn.torch.optim.multi import MultiOptimizer
-
-    config = Config(
-        dict(
-            optimizer={
-                "class": "multi",
-                "optimizers": [
-                    {
-                        "class": "amuse",
-                        "update_type": "muon",
-                        "params_filter": _multi_test_hidden_matrix_filter,
-                        "momentum": 0.95,
-                        "weight_decay": 0.05,
-                        "warmup_steps": 5,
-                    },
-                    {
-                        "class": "amuse",
-                        "update_type": "adamw",
-                        "learning_rate_multiplier": 0.015,
-                        "weight_decay": 0.05,
-                        "warmup_steps": 5,
-                    },
-                ],
-            }
-        )
-    )
-    model = _make_multi_test_model()
-    updater = Updater(config=config, network=model, device=torch.device("cpu"))
-    updater.create_optimizer()
-    updater.set_learning_rate(0.02)
-    updater.set_current_train_step(global_train_step=0, epoch=1)
-
-    opt = updater.get_optimizer()
-    assert isinstance(opt, MultiOptimizer)
-    muon_sub, adamw_sub = opt.sub_optimizers
-    assert isinstance(muon_sub, AMUSE) and muon_sub.update_type == "muon"
-    assert isinstance(adamw_sub, AMUSE) and adamw_sub.update_type == "adamw"
-    assert all(pg["lr"] == 0.02 for pg in muon_sub.param_groups)
-    assert all(pg["lr"] == 0.02 * 0.015 for pg in adamw_sub.param_groups)
-
-    updater.set_optimizer_training_mode(train=True)
-    assert muon_sub.train_mode and adamw_sub.train_mode
-    for param in model.parameters():
-        param.grad = torch.ones_like(param)
-    updater.step()
-    updater.set_optimizer_training_mode(train=False)
-    assert not muon_sub.train_mode and not adamw_sub.train_mode
-
-
-def test_amuse_pickle_keeps_attributes():
-    import copy
-    import pickle
-
-    from returnn.torch.optim.amuse import AMUSE
-    from returnn.torch.optim.multi import MultiOptimizer
-
-    model = torch.nn.Linear(4, 3)
-    opt = MultiOptimizer(
-        sub_optimizers=[
-            AMUSE([model.weight], lr=0.1, update_type="muon", warmup_steps=5),
-            AMUSE([model.bias], lr=0.1, update_type="adamw", warmup_steps=5, rho=0.5),
-        ]
-    )
-    opt.train()
-    copied = copy.deepcopy(opt)
-    copied.eval()
-    copied.train()
-    muon, adamw = copied.sub_optimizers
-    assert muon.update_type == "muon" and adamw.update_type == "adamw"
-    assert adamw.rho == 0.5 and adamw.warmup_steps == 5 and adamw.train_mode
-    unpickled = pickle.loads(pickle.dumps(opt.sub_optimizers[1]))
-    assert unpickled.update_type == "adamw" and unpickled.train_mode
-
-
-def test_schedule_free_check_asks_sub_optimizers():
-    model = _make_multi_test_model()
-
-    def _updater(optimizer_opts):
-        updater = Updater(config=Config(dict(optimizer=optimizer_opts)), network=model, device=torch.device("cpu"))
-        updater.create_optimizer()
-        return updater
-
-    plain = {
-        "class": "multi",
-        "optimizers": [
-            {"class": "sgd", "params_filter": _multi_test_layer2_weight_filter, "momentum": 0.9},
-            {"class": "adamw", "weight_decay": 1e-3},
-        ],
-    }
-    assert not _updater(plain).is_schedule_free_optimizer()
-    assert not _updater({"class": "adamw"}).is_schedule_free_optimizer()
-    with_amuse = {
-        "class": "multi",
-        "optimizers": [
-            {
-                "class": "amuse",
-                "update_type": "adamw",
-                "params_filter": _multi_test_layer2_weight_filter,
-                "warmup_steps": 5,
-            },
-            {"class": "sgd", "momentum": 0.9},
-        ],
-    }
-    assert _updater(with_amuse).is_schedule_free_optimizer()
-    assert _updater({"class": "amuse", "update_type": "adamw", "warmup_steps": 5}).is_schedule_free_optimizer()
-
-
-def _reference_amuse_muon_update(grad, momentum, beta, aux_update_type):
-    """muon_update transcribed from kjeiun/amuse src/optim/AMUSE.py at commit 4892274"""
-    from returnn.torch.optim.amuse import zeropower_via_newtonschulz5
-
-    momentum.lerp_(grad, 1 - beta)
-    update = grad.lerp_(momentum, beta)
-    if update.ndim == 4:
-        update = update.view(len(update), -1)
-    update = zeropower_via_newtonschulz5(update)
-    if aux_update_type == "adamw":
-        update *= 0.2 * max(update.size(0), update.size(1)) ** 0.5
-    else:
-        update *= max(1, update.size(-2) / update.size(-1)) ** 0.5
-    return update
-
-
-@torch.no_grad()
-def _reference_amuse_step(groups, states, *, beta1_init, warmup_steps, rho, r, weight_lr_power):
-    """AMUSE.step transcribed from kjeiun/amuse src/optim/AMUSE.py at commit 4892274, group level state"""
-    for group in groups:
-        k = group["k"]
-        t = k + 1
-        lr = group["base_lr"] * min(1.0, t / warmup_steps)
-        weight = (t**r) * (lr**weight_lr_power)
-        future_weight_sum = group.get("weight_sum", 0.0) + weight
-        ckp1 = weight / future_weight_sum if future_weight_sum > 0 else 1.0
-        group["ckp1"] = ckp1
-        group["weight_sum"] = future_weight_sum
-        if t <= warmup_steps:
-            if t == warmup_steps:
-                group["c_warmup"] = ckp1
-            beta1 = beta1_init
-        else:
-            c_warmup = group.get("c_warmup", 1.0 / warmup_steps)
-            s_t = (ckp1 * (1.0 - c_warmup)) / (c_warmup * (1.0 - ckp1))
-            beta1 = 1.0 - (s_t**rho) * (1.0 - beta1_init)
-        group["beta1"] = beta1
-        wd = group.get("weight_decay", 0.0)
-        for p in group["params"]:
-            if p.grad is None:
-                continue
-            state = states[p]
-            z = state.get("z")
-            if z is None:
-                z = state["z"] = p.detach().clone()
-            p.lerp_(end=z, weight=1.0 - 1.0 / beta1)
-            if group["update_type"] == "muon":
-                if "momentum_buffer" not in state:
-                    state["momentum_buffer"] = torch.zeros_like(p)
-                update = _reference_amuse_muon_update(p.grad, state["momentum_buffer"], group["momentum"], "adamw")
-                if wd != 0.0:
-                    z.mul_(1.0 - lr * wd)
-                z.add_(update.reshape(p.shape), alpha=-lr)
-            else:
-                if "exp_avg_sq" not in state:
-                    state["exp_avg_sq"] = torch.zeros_like(p)
-                v = state["exp_avg_sq"]
-                grad = p.grad
-                v.mul_(group["beta2"]).addcmul_(grad, grad, value=1.0 - group["beta2"])
-                denom = v.div(1.0 - group["beta2"] ** t).sqrt_().add_(group["eps"])
-                update = grad / denom
-                if wd != 0.0:
-                    update = update.add(z, alpha=wd)
-                z.add_(update, alpha=-lr)
-            p.lerp_(end=z, weight=ckp1)
-            p.lerp_(end=z, weight=1.0 - beta1)
-        group["k"] = k + 1
-
-
-def test_amuse_matches_reference_implementation():
-    from returnn.torch.optim.amuse import AMUSE
-
-    # Muon on a matrix and a 4D kernel, AdamW-style on a matrix and a vector,
-    # the vector gets no gradient in some steps, run past the warmup so beta1 ramps.
-    torch.manual_seed(1)
-    shapes = [(6, 4), (3, 2, 3, 3), (5, 4), (6,)]
-    params = [torch.nn.Parameter(torch.randn(*shape, dtype=torch.float64)) for shape in shapes]
-    params_ref = [torch.nn.Parameter(p.detach().clone()) for p in params]
-    warmup, steps, base_lr, wd = 3, 10, 0.05, 0.01
-    schedule = dict(beta1=0.9, rho=1.0, r=0.0, weight_lr_power=2.0)
-    opt_muon = AMUSE(
-        params[:2], lr=base_lr, update_type="muon", momentum=0.95, weight_decay=wd, warmup_steps=warmup, **schedule
-    )
-    opt_adamw = AMUSE(
-        params[2:],
-        lr=base_lr * 0.5,
-        update_type="adamw",
-        beta2=0.999,
-        eps=1e-10,
-        weight_decay=wd,
-        warmup_steps=warmup,
-        **schedule,
-    )
-    groups_ref = [
-        {
-            "params": params_ref[:2],
-            "base_lr": base_lr,
-            "k": 0,
-            "weight_decay": wd,
-            "update_type": "muon",
-            "momentum": 0.95,
-        },
-        {
-            "params": params_ref[2:],
-            "base_lr": base_lr * 0.5,
-            "k": 0,
-            "weight_decay": wd,
-            "update_type": "adamw",
-            "beta2": 0.999,
-            "eps": 1e-10,
-        },
-    ]
-    states_ref = {p: {} for p in params_ref}
-    ref_schedule = dict(beta1_init=0.9, rho=1.0, r=0.0, weight_lr_power=2.0, warmup_steps=warmup)
-
-    opt_muon.train()
-    opt_adamw.train()
-    for step in range(steps):
-        for i, (p, p_ref) in enumerate(zip(params, params_ref)):
-            grad = None if (i == 3 and step % 4 == 1) else torch.randn_like(p)
-            p.grad = None if grad is None else grad.clone()
-            p_ref.grad = None if grad is None else grad.clone()
-        opt_muon.step()
-        opt_adamw.step()
-        _reference_amuse_step(groups_ref, states_ref, **ref_schedule)
-        for p, p_ref in zip(params, params_ref):
-            assert torch.allclose(p, p_ref, rtol=1e-10, atol=1e-10), step
-            opt = opt_muon if p in {params[0], params[1]} else opt_adamw
-            assert torch.allclose(opt.state[p]["z"], states_ref[p_ref]["z"], rtol=1e-10, atol=1e-10), step
-    assert opt_muon.param_groups[0]["beta1"] > 0.9
-    opt_muon.eval()
-    opt_adamw.eval()
-    with torch.no_grad():
-        for group in groups_ref:
-            for p_ref in group["params"]:
-                p_ref.lerp_(end=states_ref[p_ref]["z"], weight=1.0 - 1.0 / group["beta1"])
-    for p, p_ref in zip(params, params_ref):
-        assert torch.allclose(p, p_ref, rtol=1e-10, atol=1e-10)
 
 
 def test_torch_engine_cuda_graph_compile_train_default_warmup():
@@ -4108,15 +4740,99 @@ def test_torch_engine_cuda_graph_compile_optimizer_step_train():
     _run_cuda_graph_train(compile_=True, optimizer_step=True)
 
 
+def test_torch_engine_cuda_graph_optimizer_state_in_advance():
+    """
+    With the in-graph optimizer step and no warmup step, the optimizer state is created in advance
+    as the first step would create it (init_optimizer_state), so the params after training match the eager engine,
+    also for optimizers whose fresh state is not all zeros (NAdam: mu_product 1; _AnchoredSGD: a copy of the param).
+    """
+    for optimizer in [{"class": "nadam", "capturable": True}, {"class": _AnchoredSGD}]:
+        eager = _run_cuda_graph_train(compile_=False, cuda_graph=False, optimizer=optimizer)
+        for compile_ in (False, True):
+            captured = _run_cuda_graph_train(compile_=compile_, warmup_steps=None, optimizer=optimizer)
+            for (name, p), (_, q) in zip(eager._pt_model.named_parameters(), captured._pt_model.named_parameters()):
+                torch.testing.assert_close(
+                    q, p, rtol=1e-4, atol=1e-5, msg=lambda m: f"{optimizer}, compile {compile_}, {name}: {m}"
+                )
+
+
+def test_torch_engine_cuda_graph_amuse():
+    """
+    AMUSE under torch_cuda_graph without warmup steps, alone and as Muon and AdamW sub-optimizers,
+    its step in the graph (capture_optimizer, compiled or not) or stepped by the engine outside of it,
+    and the eager model step with the separately compiled and captured optimizer step (torch_optimizer_step).
+    The schedule state lives on the device and the step reads nothing on the host,
+    so the captured steps end with the params of the eager engine and the compiled step with its schedule state.
+    """
+    if not torch.cuda.is_available():
+        raise unittest.SkipTest("CUDA not available")
+    for optimizer in [
+        {"class": "amuse", "update_type": "adamw", "warmup_steps": 5},
+        {
+            "class": "multi",
+            "optimizers": [
+                {
+                    "class": "amuse",
+                    "update_type": "muon",
+                    "params_filter": _multi_test_hidden_matrix_filter,
+                    "warmup_steps": 5,
+                },
+                {"class": "amuse", "update_type": "adamw", "warmup_steps": 5},
+            ],
+        },
+    ]:
+        eager = _run_cuda_graph_train(compile_=False, cuda_graph=False, optimizer=optimizer)
+        captured_runs = [
+            (
+                f"capture_optimizer, compile {compile_}",
+                _run_cuda_graph_train(compile_=compile_, warmup_steps=None, optimizer=optimizer),
+            )
+            for compile_ in (False, True)
+        ]
+        config, dataset = _build_cuda_graph_train_config_and_dataset(
+            compile_=False, warmup_steps=None, optimizer=optimizer
+        )
+        config.typed_dict["torch_cuda_graph"]["capture_optimizer"] = False
+        with global_config_ctx(config):
+            engine = Engine(config=config)
+            engine.init_train_from_config(train_data=dataset)
+            engine.train()
+            assert engine._graph_capture is not None and engine._graph_capture._graph is not None
+            engine.finalize()
+        captured_runs.append(("engine optimizer step", engine))
+        for run_name, captured in captured_runs:
+            for (name, p), (_, q) in zip(eager._pt_model.named_parameters(), captured._pt_model.named_parameters()):
+                torch.testing.assert_close(
+                    q, p, rtol=1e-4, atol=1e-5, msg=lambda m: f"{optimizer['class']}, {run_name}, {name}: {m}"
+                )
+        # the compiled step need not round like eager, so only its schedule state is compared,
+        # with a tolerance for its lr, a float32 device tensor instead of a Python float
+        compiled = _run_cuda_graph_train(compile_=False, cuda_graph=False, optimizer_step=True, optimizer=optimizer)
+        groups = zip(eager._updater.optimizer.param_groups, compiled._updater.optimizer.param_groups)
+        for i, (group, group_compiled) in enumerate(groups):
+            for key in ("k", "weight_sum", "ckp1", "beta1", "c_warmup"):
+                torch.testing.assert_close(
+                    group_compiled[key],
+                    group[key],
+                    rtol=1e-6,
+                    atol=1e-7,
+                    msg=lambda m: f"{optimizer['class']}, torch_optimizer_step, group {i} {key}: {m}",
+                )
+
+
 class _MuonLike(torch.optim.Optimizer):
     """
     Written like the i6 Muon (i6_experiments exp2024_04_23_baselines optim_ext/muon.py), small:
     Muon (bf16 Newton-Schulz) on 2D params, Adam on the rest, with a Python-float lr
     (``alpha=`` / ``value=`` arguments) and a Python-int step counter.
+    ``ns_dtype=torch.float64`` gives the reference.
     """
 
-    def __init__(self, params, lr=2e-2, momentum=0.95, weight_decay=0.01, betas=(0.9, 0.95), eps=1e-8):
+    def __init__(
+        self, params, lr=2e-2, momentum=0.95, weight_decay=0.01, betas=(0.9, 0.95), eps=1e-8, ns_dtype=torch.bfloat16
+    ):
         super().__init__(params, dict(lr=lr, momentum=momentum, weight_decay=weight_decay, betas=betas, eps=eps))
+        self.ns_dtype = ns_dtype
 
     @torch.no_grad()
     def step(self, closure=None):
@@ -4134,7 +4850,7 @@ class _MuonLike(torch.optim.Optimizer):
                         state["momentum_buffer"] = torch.zeros_like(p)
                     buf = state["momentum_buffer"]
                     buf.mul_(group["momentum"]).add_(p.grad)
-                    x = p.grad.add(buf, alpha=group["momentum"]).bfloat16()
+                    x = p.grad.add(buf, alpha=group["momentum"]).to(self.ns_dtype)
                     x = x / (x.norm() + 1e-7)
                     for _ in range(3):
                         a = x @ x.T
@@ -4164,7 +4880,9 @@ def _adamw(params):
     return torch.optim.AdamW(params, lr=1e-2, weight_decay=0.01, capturable=params[0].is_cuda)
 
 
-def _run_optimizer_step(opt_factory, *, opts=None, num_steps=8, replace_grads_at=None, reload_at=None):
+def _run_optimizer_step(
+    opt_factory, *, opts=None, num_steps=8, replace_grads_at=None, reload_at=None, dtype=torch.float32
+):
     """
     :return: params after num_steps updates with a per-step LR schedule and random grads,
         via the plain ``optimizer.step()`` if opts is None, otherwise via :class:`OptimizerStep`;
@@ -4175,7 +4893,7 @@ def _run_optimizer_step(opt_factory, *, opts=None, num_steps=8, replace_grads_at
     device = _optimizer_step_device()
     gen = torch.Generator().manual_seed(0)
     shapes = [(32, 16), (16,), (64, 32), (32,), (8, 1, 3)]
-    params = [torch.nn.Parameter(torch.randn(s, generator=gen).to(device)) for s in shapes]
+    params = [torch.nn.Parameter(torch.randn(s, generator=gen).to(device, dtype)) for s in shapes]
     opt = opt_factory(params)
     opt_step = OptimizerStep(optimizer=opt, opts=opts) if opts is not None else None
     gen = torch.Generator(device=device).manual_seed(1)
@@ -4209,30 +4927,43 @@ def _run_optimizer_step(opt_factory, *, opts=None, num_steps=8, replace_grads_at
     return params, opt, opt_step
 
 
-def _check_optimizer_step_same_as_eager(opt_factory, opts, **kwargs):
-    """params and optimizer state (incl. the checkpoint scalars) as the plain eager optimizer.step()"""
-    ref_params, ref_opt, _ = _run_optimizer_step(opt_factory, **kwargs)
+def _check_optimizer_step(opt_factory, opts, *, ref_opt_factory=None, **kwargs):
+    """
+    Params and optimizer state (incl. the checkpoint scalars) at least as accurate as the plain eager optimizer.step(),
+    both measured against a float64 run (with ``ref_opt_factory``, default ``opt_factory``).
+    Not bitwise eager: Inductor keeps low-precision intermediates in float32.
+    """
+    ref_params, ref_opt, _ = _run_optimizer_step(ref_opt_factory or opt_factory, dtype=torch.float64, **kwargs)
+    eager_params, eager_opt, _ = _run_optimizer_step(opt_factory, **kwargs)
     params, opt, opt_step = _run_optimizer_step(opt_factory, opts=opts, **kwargs)
-    # torch < 2.12 emulates the eager bf16 rounding only partially (Muon-like: up to 4e-5 abs diff on 2.7)
-    tol = dict(rtol=1e-5, atol=1e-4 if torch.__version__ < (2, 12) else 1e-6)
-    for p_ref, p in zip(ref_params, params):
-        torch.testing.assert_close(p, p_ref, **tol)
+
+    def _check(name: str, v: torch.Tensor, v_eager: torch.Tensor, v_ref: torch.Tensor):
+        err, err_eager = (v.double() - v_ref).norm().item(), (v_eager.double() - v_ref).norm().item()
+        assert err <= 1.1 * err_eager + 1e-6 * v_ref.norm().item(), f"{name}: error {err} vs eager {err_eager}"
+
+    for i, (p_ref, p_eager, p) in enumerate(zip(ref_params, eager_params, params)):
+        _check(f"param {i}", p, p_eager, p_ref)
     ref_state = ref_opt.state_dict()["state"]
+    eager_state = eager_opt.state_dict()["state"]
     state = opt_step.state_dict_to_host_scalars(opt.state_dict())["state"]
-    assert set(state) == set(ref_state)
-    for i, s_ref in ref_state.items():
-        assert set(state[i]) == set(s_ref)
-        for k, v_ref in s_ref.items():
+    assert set(state) == set(eager_state)
+    for i, s_eager in eager_state.items():
+        assert set(state[i]) == set(s_eager)
+        for k, v_eager in s_eager.items():
             v = state[i][k]
-            if isinstance(v_ref, torch.Tensor):
-                torch.testing.assert_close(v, v_ref, **tol)
+            if isinstance(v_eager, torch.Tensor):
+                _check(f"state {i} {k}", v, v_eager, ref_state[i][k])
             else:  # Python scalar, e.g. the step counter of _MuonLike
-                assert type(v) is type(v_ref) and v == v_ref, f"state {i} {k}: {v!r} vs {v_ref!r}"
+                assert type(v) is type(v_eager) and v == v_eager, f"state {i} {k}: {v!r} vs {v_eager!r}"
     return opt_step
 
 
+def _muon_like_float64(params):
+    return _MuonLike(params, ns_dtype=torch.float64)
+
+
 def test_torch_optimizer_step_eager():
-    opt_step = _check_optimizer_step_same_as_eager(_adamw, {"compile": False, "capture": False}, reload_at=5)
+    opt_step = _check_optimizer_step(_adamw, {"compile": False, "capture": False}, reload_at=5)
     assert opt_step._graph is None
 
 
@@ -4244,7 +4975,7 @@ def test_torch_optimizer_step_dynamic_state_keys():
     opts = {"dynamic_state_keys": ["step"]}
     if not torch.cuda.is_available():
         opts.update({"compile": False, "capture": False})
-    opt_step = _check_optimizer_step_same_as_eager(_MuonLike, opts, reload_at=5)
+    opt_step = _check_optimizer_step(_MuonLike, opts, ref_opt_factory=_muon_like_float64, reload_at=5)
     state_dict = opt_step.state_dict_to_host_scalars(opt_step._optimizer.state_dict())
     for state in state_dict["state"].values():
         if "step" in state:
@@ -4265,21 +4996,21 @@ def test_torch_optimizer_step_python_scalar_state_not_selected():
 def test_torch_optimizer_step_capture():
     if not torch.cuda.is_available():
         raise unittest.SkipTest("CUDA not available")
-    opt_step = _check_optimizer_step_same_as_eager(_adamw, {"compile": False})
+    opt_step = _check_optimizer_step(_adamw, {"compile": False})
     assert opt_step._graph is not None and opt_step._num_captures == 1
 
 
 def test_torch_optimizer_step_compile_capture():
     if not torch.cuda.is_available():
         raise unittest.SkipTest("CUDA not available")
-    opt_step = _check_optimizer_step_same_as_eager(_adamw, {})
+    opt_step = _check_optimizer_step(_adamw, {})
     assert opt_step._graph is not None and (opt_step._num_traces, opt_step._num_captures) == (1, 1)
 
 
 def test_torch_optimizer_step_compile_capture_muon_like():
     if not torch.cuda.is_available():
         raise unittest.SkipTest("CUDA not available")
-    opt_step = _check_optimizer_step_same_as_eager(_MuonLike, {"dynamic_state_keys": ["step"]})
+    opt_step = _check_optimizer_step(_MuonLike, {"dynamic_state_keys": ["step"]}, ref_opt_factory=_muon_like_float64)
     assert (opt_step._num_traces, opt_step._num_captures) == (1, 1)
 
 
@@ -4287,7 +5018,7 @@ def test_torch_optimizer_step_replaced_grads():
     """new grad buffers: recapture on the new addresses, no retrace"""
     if not torch.cuda.is_available():
         raise unittest.SkipTest("CUDA not available")
-    opt_step = _check_optimizer_step_same_as_eager(_adamw, {}, replace_grads_at=5)
+    opt_step = _check_optimizer_step(_adamw, {}, replace_grads_at=5)
     assert (opt_step._num_traces, opt_step._num_captures) == (1, 2)
 
 
@@ -4295,8 +5026,37 @@ def test_torch_optimizer_step_reload():
     """checkpoint round trip: new state tensors and lr, recapture, no retrace"""
     if not torch.cuda.is_available():
         raise unittest.SkipTest("CUDA not available")
-    opt_step = _check_optimizer_step_same_as_eager(_MuonLike, {"dynamic_state_keys": ["step"]}, reload_at=5)
+    opt_step = _check_optimizer_step(
+        _MuonLike, {"dynamic_state_keys": ["step"]}, ref_opt_factory=_muon_like_float64, reload_at=5
+    )
     assert (opt_step._num_traces, opt_step._num_captures) == (1, 2)
+
+
+def test_torch_optimizer_step_multi_optimizer():
+    """
+    MultiOptimizer: the traced step of each sub-optimizer runs on the state of its params,
+    also for a step hook which reads the state during the trace
+    """
+    if not torch.cuda.is_available():
+        raise unittest.SkipTest("CUDA not available")
+    from returnn.torch.optim.multi import MultiOptimizer
+
+    def _clamp_momentum(optimizer, _args, _kwargs):
+        for state in optimizer.state.values():
+            if "momentum_buffer" in state:
+                state["momentum_buffer"].clamp_(-1e3, 1e3)
+
+    def _multi(params, muon_like=_MuonLike):
+        opt = MultiOptimizer(sub_optimizers=[muon_like(params[:2]), _adamw(params[2:])])
+        opt.register_step_post_hook(_clamp_momentum)
+        return opt
+
+    opt_step = _check_optimizer_step(
+        _multi,
+        {"dynamic_state_keys": ["step"]},
+        ref_opt_factory=functools.partial(_multi, muon_like=_muon_like_float64),
+    )
+    assert (opt_step._num_traces, opt_step._num_captures) == (1, 1)
 
 
 def test_torch_optimizer_step_updater_invalid_grad_skipped():
@@ -4681,7 +5441,7 @@ def _run_pin_memory_capture_overlap(
 
     if not torch.cuda.is_available():
         raise unittest.SkipTest("CUDA not available")
-    config, dataset, _dev_dataset = _build_cuda_graph_train_config_and_dataset(
+    config, dataset = _build_cuda_graph_train_config_and_dataset(
         compile_=compile_, warmup_steps=None, cuda_graph=cuda_graph, optimizer_step=optimizer_step
     )
     config.typed_dict["torch_dataloader_opts"] = {"num_workers": 1, "pin_memory": True}

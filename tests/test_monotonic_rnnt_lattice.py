@@ -12,7 +12,6 @@ import _setup_test_env  # noqa
 import returnn.frontend as rf
 from returnn.frontend._packed_backend import monotonic_rnnt_lattice
 from returnn.tensor import Dim, Tensor
-from returnn.torch.util.monotonic_rnnt import lattice_operands, total_cells
 
 
 _CASES = [(9, 4), (12, 0), (7, 7), (5, 2)]
@@ -28,12 +27,8 @@ def _batch():
     prefixes = torch.tensor([u + 1 for _t, u in _CASES], dtype=torch.int32)
     num_seqs = len(_CASES)
     batch = Dim(num_seqs, name="batch")
-    enc_time = Dim(
-        Tensor("enc_lens", dims=[batch], dtype="int32", raw_tensor=frames), name="enc_time"
-    )
-    prefix_dim = Dim(
-        Tensor("prefix_lens", dims=[batch], dtype="int32", raw_tensor=prefixes), name="prefixes"
-    )
+    enc_time = Dim(Tensor("enc_lens", dims=[batch], dtype="int32", raw_tensor=frames), name="enc_time")
+    prefix_dim = Dim(Tensor("prefix_lens", dims=[batch], dtype="int32", raw_tensor=prefixes), name="prefixes")
     enc_feat, pred_feat = Dim(6, name="enc_feat"), Dim(3, name="pred_feat")
     enc = Tensor(
         "enc",
@@ -52,10 +47,23 @@ def _batch():
     return enc, pred, enc_time, prefix_dim, frames, prefixes - 1
 
 
+def _cell_operands(enc: torch.Tensor, pred: torch.Tensor, frame_lens: torch.Tensor, label_lens: torch.Tensor):
+    """
+    :return: the encoder frame and the predictor state of every lattice cell, by a loop over the sequences
+    """
+    enc_cells, pred_cells = [], []
+    for b, (num_frames, num_labels) in enumerate(zip(frame_lens.tolist(), label_lens.tolist())):
+        for t in range(num_frames):
+            for u in range(num_labels + 1):
+                enc_cells.append(enc[b, t])
+                pred_cells.append(pred[b, u])
+    return torch.stack(enc_cells), torch.stack(pred_cells)
+
+
 def test_monotonic_rnnt_lattice_matches_the_padded_gather():
     enc, pred, enc_time, prefix_dim, frame_lens, label_lens = _batch()
-    cells = total_cells(frame_lens, label_lens)
-    want_enc, want_pred = lattice_operands(enc.raw_tensor, pred.raw_tensor, frame_lens, label_lens, cells)
+    want_enc, want_pred = _cell_operands(enc.raw_tensor, pred.raw_tensor, frame_lens, label_lens)
+    cells = want_enc.shape[0]
 
     for packed in (False, True):
         enc_in = rf.pack(enc, dims=[enc.dims[0], enc_time]) if packed else enc
@@ -74,8 +82,8 @@ def test_monotonic_rnnt_lattice_matches_the_padded_gather():
 
 def test_monotonic_rnnt_lattice_keeps_the_real_cells_under_a_capacity():
     enc, pred, enc_time, prefix_dim, frame_lens, label_lens = _batch()
-    cells = total_cells(frame_lens, label_lens)
-    want_enc, want_pred = lattice_operands(enc.raw_tensor, pred.raw_tensor, frame_lens, label_lens, cells)
+    want_enc, want_pred = _cell_operands(enc.raw_tensor, pred.raw_tensor, frame_lens, label_lens)
+    cells = want_enc.shape[0]
 
     enc_cells, pred_cells, _lattice_time = monotonic_rnnt_lattice(
         enc, pred, enc_spatial_dim=enc_time, prefix_dim=prefix_dim, cells_bound=cells + 13
@@ -99,7 +107,7 @@ def test_monotonic_rnnt_lattice_takes_an_operand_without_a_feature_dim():
         raw_tensor=torch.arange(int(frame_lens.max()), dtype=torch.int32).expand(len(_CASES), -1).contiguous(),
         sparse_dim=rows_dim,
     )
-    cells = total_cells(frame_lens, label_lens)
+    cells = int((frame_lens.long() * (label_lens.long() + 1)).sum())
     want = torch.cat([torch.arange(t, dtype=torch.int32).repeat_interleave(u + 1) for t, u in _CASES])
 
     row_cells, pred_cells, _lattice_time = monotonic_rnnt_lattice(
@@ -112,16 +120,15 @@ def test_monotonic_rnnt_lattice_takes_an_operand_without_a_feature_dim():
 
 def test_monotonic_rnnt_lattice_refuses_a_batch_above_the_capacity():
     """
-    A batch whose cells exceed the capacity would silently lose the tail of its last sequence,
-    the lattice index clamps the cells past the buffer onto its last cell. That is a wrong batcher
-    cost, and it has to fail loudly rather than train on a truncated lattice.
+    A batch whose cells exceed the capacity would silently lose the tail of its last sequence.
+    That is a wrong batcher cost, and it has to fail loudly rather than train on a truncated lattice.
     """
     enc, pred, enc_time, prefix_dim, frame_lens, label_lens = _batch()
-    cells = total_cells(frame_lens, label_lens)
+    cells = int((frame_lens.long() * (label_lens.long() + 1)).sum())
 
     try:
         monotonic_rnnt_lattice(enc, pred, enc_spatial_dim=enc_time, prefix_dim=prefix_dim, cells_bound=cells - 1)
-    except RuntimeError as exc:
+    except AssertionError as exc:
         assert "cells" in str(exc), exc
     else:
         raise AssertionError("a lattice above its capacity was built without an error")

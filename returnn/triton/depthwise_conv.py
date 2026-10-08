@@ -43,7 +43,7 @@ except ImportError:  # optional dependency
 
 # swept on an H100 in bf16 with 1024 channels and 32 taps, the forward plus input gradient at (1, 20401) and
 # (20, 1021) take 0.36 ms with 32x128 against 0.39 with 16x128 and 0.40 with 128x32
-BLOCK_R, BLOCK_C = 32, 128
+BLOCK_R_CONV, BLOCK_C_CONV = 32, 128
 # the row loops, measured on an H100 for 2000 windows of 24 frames, 1024 channels, 32 taps,
 # take 0.13 and 0.30 ms for a forward to 9 or 24 rows against 0.23 and 0.56 of the tap loop,
 # and 0.13 and 0.30 against 0.40 and 0.52 for the input gradient

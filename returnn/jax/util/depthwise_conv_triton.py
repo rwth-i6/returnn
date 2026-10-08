@@ -35,7 +35,7 @@ def depthwise_conv1d_available(x, w) -> bool:
 
 @partial(jax.custom_vjp, nondiff_argnums=(2, 3))
 def depthwise_conv1d(
-    x, w, pad_l: int, blocks=(kernels.BLOCK_R, kernels.BLOCK_C, kernels.BLOCK_R_DW, kernels.BLOCK_C_DW)
+    x, w, pad_l: int, blocks=(kernels.BLOCK_R_CONV, kernels.BLOCK_C_CONV, kernels.BLOCK_R_DW, kernels.BLOCK_C_DW)
 ):
     """
     :param x: (time, channel), the contiguous packed layout

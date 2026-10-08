@@ -6,8 +6,10 @@ and model param update logic in general.
 from __future__ import annotations
 
 from typing import TYPE_CHECKING, Optional, Union, Any, Type, Callable, Sequence, Iterable, Set, Dict, List, Tuple
+from types import FunctionType, BuiltinFunctionType
 import os
 import gc
+import numpy
 import torch
 
 if TYPE_CHECKING:
@@ -93,6 +95,68 @@ def get_optimizer_class(
         raise TypeError(f"Invalid optimizer class_name {class_name!r} type {type(class_name).__name__}")
 
 
+def init_optimizer_state(optimizer: torch.optim.Optimizer):
+    """
+    Create the lazy optimizer state of all params with a grad now, as the first ``step()`` would,
+    but without a step, i.e. without touching the params.
+    For the optimizer step captured in a CUDA graph (``torch_cuda_graph`` "capture_optimizer"):
+    the state tensors are graph inputs, so they must exist before the capture.
+
+    Supported:
+
+    - an optimizer with an ``init_state()`` method (e.g. a custom optimizer): called as is.
+    - SGD: a zero momentum buffer gives the same first update as the lazy ``clone(grad)`` (for dampening 0).
+    - the torch optimizers which create their state in ``_init_group``
+      (Adam, AdamW, Adamax, NAdam, RAdam, Adadelta, RMSprop, ASGD, Adagrad, Rprop, Adafactor, Muon, ...).
+
+    :param optimizer: its params with ``.grad`` set get the state
+    """
+    init_state = getattr(optimizer, "init_state", None)
+    if callable(init_state):
+        init_state()
+        return
+    if isinstance(optimizer, torch.optim.SGD):
+        for group in optimizer.param_groups:
+            if group["momentum"] == 0:
+                continue  # no state
+            if group["dampening"] != 0:
+                raise NotImplementedError("init_optimizer_state: SGD with dampening, the first update differs")
+            for p in group["params"]:
+                if p.grad is not None and optimizer.state[p].get("momentum_buffer") is None:
+                    optimizer.state[p]["momentum_buffer"] = torch.zeros_like(p, memory_format=torch.preserve_format)
+        return
+    # private torch API: _init_group(group, params_with_grad, grads, <state lists>...)
+    # creates the missing state of the group's params with grad, and fills the given lists
+    init_group = getattr(optimizer, "_init_group", None)
+    if init_group is None:
+        raise NotImplementedError(
+            f"init_optimizer_state: {type(optimizer).__name__} can only create its state by a step,"
+            " give it an init_state() method"
+        )
+    import inspect
+
+    sig_params = inspect.signature(init_group).parameters.values()
+    num_lists = sum(1 for param in sig_params if param.default is param.empty) - 1  # excluding group
+    new_params = [p for group in optimizer.param_groups for p in group["params"] if not optimizer.state.get(p)]
+    with torch.no_grad():
+        for group in optimizer.param_groups:
+            init_group(group, *[[] for _ in range(num_lists)])
+        for p in new_params:
+            state = optimizer.state.get(p)
+            if p.grad is not None and not state:
+                raise NotImplementedError(
+                    f"init_optimizer_state: {type(optimizer).__name__}._init_group created no state,"
+                    " give it an init_state() method"
+                )
+            # the fresh step count is 0 in all torch optimizers;
+            # before torch 2.4, _init_group of Adadelta, RMSprop, Rprop also counts the step
+            if state and "step" in state:
+                if isinstance(state["step"], torch.Tensor):
+                    state["step"].zero_()
+                else:
+                    state["step"] = type(state["step"])(0)
+
+
 def _get_class_init_kwargs(optim_class):
     """
     Obtains the keyword arguments of the class provided as parameter that the user can add to their optimizer.
@@ -154,9 +218,6 @@ class Updater:
         self._optimizer_opts: Optional[Dict[str, Any]] = None
         self.optimizer: Optional[torch.optim.Optimizer] = None
         self._optimizer_param_groups_extra_opts: Optional[List[Dict[str, Any]]] = None
-        # The network parameters, collected once with the optimizer, which holds the same objects.
-        # Walking the modules for them in every step costs milliseconds of host time on a large model.
-        self._params: List[torch.nn.Parameter] = []
         # separately compiled + CUDA-graph-captured optimizer step, see returnn.torch.util.optimizer_step
         self._optimizer_step_opts: Optional[Dict[str, Any]] = self.config.typed_value("torch_optimizer_step", None)
         self._optimizer_step: Optional[OptimizerStep] = None
@@ -286,7 +347,7 @@ class Updater:
         """
         :return: the current gradients
         """
-        return [p.grad for p in self._params if p.grad is not None]
+        return [p.grad for p in self.network.parameters() if p.grad is not None]
 
     def step(self, *, grad_scaler: Optional[torch.cuda.amp.GradScaler] = None):
         """
@@ -307,11 +368,11 @@ class Updater:
             pre_norm = torch.nn.utils.get_total_norm(self._grads(), norm_type=self.log_grad_norm_p)
 
         if self._grad_noise:
-            gradient_noise_(self._params, self._grad_noise)
+            gradient_noise_(self.network.parameters(), self._grad_noise)
         if self._grad_clip:
-            torch.nn.utils.clip_grad_value_(self._params, self._grad_clip)
+            torch.nn.utils.clip_grad_value_(self.network.parameters(), self._grad_clip)
         if self._grad_clip_global_norm:
-            norm = torch.nn.utils.clip_grad_norm_(self._params, self._grad_clip_global_norm)
+            norm = torch.nn.utils.clip_grad_norm_(self.network.parameters(), self._grad_clip_global_norm)
         else:
             norm = None
 
@@ -366,7 +427,6 @@ class Updater:
             raise ValueError("config field 'optimizer' needs to be set explicitely for the Torch backend")
         self._optimizer_opts = optimizer_opts
         self.optimizer, self._optimizer_param_groups_extra_opts = self._create_optimizer(optimizer_opts)
-        self._params = list(self.network.parameters())
         if self._optimizer_step_opts is not None:
             self._optimizer_step = OptimizerStep(optimizer=self.optimizer, opts=self._optimizer_step_opts)
 
@@ -388,7 +448,7 @@ class Updater:
                     "loaded state dict has a different number of parameter groups: ckpt %i vs. self %i"
                     % (len(optimizer_state["optimizer"]["param_groups"]), len(self.optimizer.param_groups))
                 )
-            # Check if we have the same parameters in the same order.
+            # Check if we have the same parameters in the same order and in the same param groups.
             self_param_names, param_id_to_name = self._get_opt_param_names()
             ckpt_param_names = optimizer_state["param_names"]
             self_param_names_critical_set = set(
@@ -400,7 +460,11 @@ class Updater:
                 critical_param_names=self_param_names_critical_set,
                 param_id_to_name=param_id_to_name,
             )
-            if self_param_names != ckpt_param_names:
+            self_group_names = [[param_id_to_name[id(p)] for p in g["params"]] for g in self.optimizer.param_groups]
+            ckpt_group_names = [
+                [ckpt_param_names[i] for i in g["params"]] for g in optimizer_state["optimizer"]["param_groups"]
+            ]
+            if self_group_names != ckpt_group_names:
                 self_param_names_dict = {name: i for i, name in enumerate(self_param_names)}
                 ckpt_param_names_dict = {name: i for i, name in enumerate(ckpt_param_names)}
                 map_ckpt_param_idx_to_self_param_idx = {}
@@ -436,7 +500,7 @@ class Updater:
                             file=log.v3,
                         )
                 else:
-                    print("load_optimizer: Params in different order.", file=log.v3)
+                    print("load_optimizer: Params in different order or param groups.", file=log.v3)
                 print("load_optimizer: Will remap the state dict.", file=log.v3)
                 for ckpt_group, self_group in zip(
                     optimizer_state["optimizer"]["param_groups"], self.optimizer.param_groups
@@ -447,6 +511,15 @@ class Updater:
                     self_group_param_names.intersection_update(self_param_names_critical_set)
                     ckpt_group_param_names.intersection_update(self_param_names_critical_set)
                     if ckpt_group_param_names != self_group_param_names:
+                        # The group options are loaded by position, so both groups must be of the same algorithm.
+                        ckpt_keys = _param_group_hyper_param_keys(ckpt_group)
+                        self_keys = _param_group_hyper_param_keys(self_group)
+                        if ckpt_keys - self_keys and self_keys - ckpt_keys:
+                            raise ValueError(
+                                "load_optimizer: params moved between param groups of different optimizer algorithms,"
+                                f" the checkpoint group has the hyper-parameters {sorted(ckpt_keys - self_keys)}"
+                                f" instead of {sorted(self_keys - ckpt_keys)}"
+                            )
                         print(
                             "load_optimizer: params moved between param groups"
                             " (e.g. due to a changed weight-decay split):\n"
@@ -505,7 +578,8 @@ class Updater:
         param_id_to_name: Dict[int, str],
     ):
         """
-        Raise if a param would get the optimizer state of another optimizer algorithm.
+        Raise if a param would get the optimizer state of another optimizer algorithm,
+        or a param group the options of another one (the groups are loaded by position).
         Checkpoints with "param_owners" (see :func:`_get_opt_param_owners`) name the algorithm per param.
         Older checkpoints only have the param groups, whose hyper-parameter keys identify the algorithm
         (e.g. AdamW ``betas`` vs SGD ``momentum``), compared per param.
@@ -547,6 +621,15 @@ class Updater:
                         f" instead of {sorted(self_keys - ckpt_keys)} (checkpoint without param_owners)."
                         " Optimizer state cannot be transferred across optimizer algorithms."
                     )
+        if ckpt_param_owners is not None:
+            for group_idx, ckpt_group in enumerate(ckpt_groups):
+                ckpt_group_owners = {ckpt_param_owners[param_idx] for param_idx in ckpt_group["params"]}
+                if ckpt_group_owners and ckpt_group_owners != {group_owners[group_idx]}:
+                    raise ValueError(
+                        f"load_optimizer: param group {group_idx} is of {group_owners[group_idx]},"
+                        f" but of {', '.join(sorted(ckpt_group_owners))} in the checkpoint."
+                        " The param groups are loaded by position, so the sub-optimizers must keep their order."
+                    )
 
     def save_optimizer(self, filename):
         """
@@ -570,16 +653,6 @@ class Updater:
         tmp_filename = filename + ".tmp_write"
         if os.path.exists(tmp_filename):
             os.unlink(tmp_filename)
-        # optimizer_opts is saved as metadata only (load_optimizer ignores it)
-        # Drop callables like param_groups_custom or params_filter (also nested, e.g. in the "optimizers" list
-        # of the multi optimizer) so torch.load (weights_only=True since torch 2.6) can read it.
-        # An optimizer config given as a callable or an optimizer instance is dropped completely for the same reason.
-        optimizer_opts_to_save = self._optimizer_opts
-        if isinstance(optimizer_opts_to_save, dict):
-            optimizer_opts_to_save = _drop_callables_deep(optimizer_opts_to_save)
-        elif isinstance(optimizer_opts_to_save, torch.optim.Optimizer) or callable(optimizer_opts_to_save):
-            optimizer_opts_to_save = None
-
         optimizer_state_dict = self.optimizer.state_dict()
         if self._optimizer_step is not None:
             # keep the ordinary Python scalars (lr, counters) in the checkpoint
@@ -588,7 +661,7 @@ class Updater:
             {
                 "optimizer": optimizer_state_dict,
                 "optimizer_class_name": self.optimizer.__class__.__name__,
-                "optimizer_opts": optimizer_opts_to_save,
+                "optimizer_opts": _optimizer_opts_for_checkpoint(self._optimizer_opts),
                 "param_names": param_names,
                 "param_owners": self._get_opt_param_owners(),
                 "epoch": self._current_epoch,
@@ -619,8 +692,7 @@ class Updater:
     def set_optimizer_training_mode(self, *, train: bool):
         """
         For optimizers following the schedule-free convention with ``train()``/``eval()`` methods
-        (e.g. :class:`returnn.torch.optim.amuse.AMUSE`,
-        or :class:`returnn.torch.optim.multi.MultiOptimizer` wrapping such),
+        (or a :class:`returnn.torch.optim.multi.MultiOptimizer` wrapping such),
         switch between train mode (params hold the training iterate)
         and eval mode (params hold the averaged weights, used for evaluation and checkpoints).
         No-op for optimizers without these methods.
@@ -630,8 +702,7 @@ class Updater:
         before the checkpoint is saved and before any evaluation runs,
         so saved checkpoints always hold the averaged weights.
         The ``epoch_start``/``epoch_end`` config callbacks run before the respective switch,
-        so ``epoch_start`` sees the averaged weights and ``epoch_end`` sees the training weights
-        (matching the earlier AMUSE config-callback wiring).
+        so ``epoch_start`` sees the averaged weights and ``epoch_end`` sees the training weights.
         Standalone evaluation outside training (e.g. task "eval") needs no switch,
         as the checkpoints already hold the averaged weights.
 
@@ -703,16 +774,6 @@ class Updater:
         assert isinstance(optimizer, torch.optim.Optimizer)
 
         return optimizer, optimizer_param_groups_extra_opts
-
-    def _create_default_optimizer(self):
-        """
-        :return: SGD optimizer.
-        :rtype: torch.optim.SGD
-        """
-        print("Create SGD optimizer (default).", file=log.v2)
-        optimizer = torch.optim.SGD(self.network.parameters(), lr=self.learning_rate)
-
-        return optimizer
 
     def _create_multi_optimizer(
         self, optim_class: Type[MultiOptimizer], optimizer_opts
@@ -852,6 +913,16 @@ class Updater:
                 entries.append((full_param_name, param, module, rf_module))
         return entries
 
+    def _create_default_optimizer(self):
+        """
+        :return: SGD optimizer.
+        :rtype: torch.optim.SGD
+        """
+        print("Create SGD optimizer (default).", file=log.v2)
+        optimizer = torch.optim.SGD(self.network.parameters(), lr=self.learning_rate)
+
+        return optimizer
+
     def _get_optimizer_param_groups(
         self,
         optim_class: Type[torch.optim.Optimizer],
@@ -883,12 +954,12 @@ class Updater:
           The types can be specified as string (e.g. ``"torch.nn.LayerNorm"``, ``"rf.LayerNorm"``)
           or as the type itself.
           The default (when not specified) is ``(torch.nn.LayerNorm, torch.nn.Embedding)``,
-          which covers only the native torch modules, not the RF equivalents:
-          params of :class:`rf.LayerNorm` / :class:`rf.Embedding` (e.g. the LayerNorm ``scale``)
+          which covers only the native torch modules, not the RF equivalents,
+          so the params of :class:`rf.LayerNorm` / :class:`rf.Embedding` (e.g. the LayerNorm ``scale``)
           do get weight decay by default.
           To exclude them as well, pass the blacklist explicitly, e.g.
           ``["torch.nn.LayerNorm", "torch.nn.Embedding", "rf.LayerNorm", "rf.Embedding"]``.
-          Since behavior version 32, the default also includes the RF modules.
+          Since behavior version 36, the default also includes the RF modules.
 
         :param optim_class: Optimizer class.
         :param optimizer_opts: Optimizer configuration specified by the user. Might be modified inplace here.
@@ -958,8 +1029,8 @@ class Updater:
             named_params = self._named_params_with_modules()
 
         # Distinguish between parameters with and without weight_decay/L2 regularization.
-        # Parameters without weight decay: biases + params of modules in the blacklist.
-        # Note that before behavior version 32, the default blacklist covers only the native
+        # Biases and the params of modules in the blacklist get no weight decay.
+        # Before behavior version 36, the default blacklist covers only the native
         # torch.nn.LayerNorm/torch.nn.Embedding, not the RF equivalents (see wrap_user_blacklist_wd_modules).
         wd_named = []
         no_wd_named = []
@@ -1008,10 +1079,10 @@ def wrap_user_blacklist_wd_modules(
     and RF modules (e.g. "rf.LayerNorm"), which can be specified as strings or types.
     If ``mods`` is None, returns the default ``(torch.nn.LayerNorm, torch.nn.Embedding)``,
     which covers only the native torch modules.
-    Since behavior version 32, the default also includes :class:`rf.LayerNorm` and :class:`rf.Embedding`.
+    Since behavior version 36, the default also includes :class:`rf.LayerNorm` and :class:`rf.Embedding`.
     """
     if mods is None:
-        if BehaviorVersion.get() >= 32:
+        if BehaviorVersion.get() >= 36:
             return torch.nn.LayerNorm, torch.nn.Embedding, rf.LayerNorm, rf.Embedding
         return torch.nn.LayerNorm, torch.nn.Embedding
     assert isinstance(mods, (list, tuple)), f"invalid blacklist_weight_decay_modules {mods!r}"
@@ -1037,11 +1108,6 @@ def _is_schedule_free_optimizer(optimizer: torch.optim.Optimizer) -> bool:
     return callable(getattr(optimizer, "train", None)) and callable(getattr(optimizer, "eval", None))
 
 
-def _optimizer_algorithm_key(optimizer: torch.optim.Optimizer) -> Tuple[type, Any]:
-    """class plus its state-relevant mode (e.g. the AMUSE update_type), identifying the optimizer algorithm"""
-    return type(optimizer), getattr(optimizer, "update_type", None)
-
-
 def _param_group_hyper_param_keys(group: Dict[str, Any]) -> Set[str]:
     """
     :return: the keys of a param group which identify its optimizer algorithm
@@ -1051,9 +1117,13 @@ def _param_group_hyper_param_keys(group: Dict[str, Any]) -> Set[str]:
 
 
 def _optimizer_owner_name(optimizer: torch.optim.Optimizer) -> str:
-    """qualified class name plus mode (see :func:`_optimizer_algorithm_key`), as stored in optimizer checkpoints"""
-    cls, mode = _optimizer_algorithm_key(optimizer)
+    """
+    :return: qualified class name of the optimizer algorithm, as stored in optimizer checkpoints,
+        plus its state-relevant mode if it has one (e.g. the AMUSE ``update_type``)
+    """
+    cls = type(optimizer)
     name = f"{cls.__module__}.{cls.__qualname__}"
+    mode = getattr(optimizer, "update_type", None)
     return f"{name}({mode})" if mode is not None else name
 
 
@@ -1071,16 +1141,31 @@ def _optimizer_group_owner_names(optimizer: torch.optim.Optimizer) -> List[str]:
     return names
 
 
-def _drop_callables_deep(obj: Any) -> Any:
+def _optimizer_opts_for_checkpoint(obj: Any) -> Any:
     """
-    :param obj: nested structure of dicts/lists/tuples
-    :return: copy with callable dict values and callable list/tuple entries dropped
+    :param obj: optimizer options, or a part of them
+    :return: same structure, with only types which ``torch.load(weights_only=True)`` accepts:
+        numpy scalars and arrays become Python numbers and (nested) lists,
+        an optimizer class becomes its short name if it has one (e.g. ``"adamw"``),
+        other classes and functions their name as in :func:`rf.build_dict`, any other object ``"object:<repr>"``
     """
+    if obj is None or type(obj) in (bool, int, float, str):
+        return obj
+    if isinstance(obj, (numpy.generic, numpy.ndarray)):
+        return _optimizer_opts_for_checkpoint(obj.tolist())
     if isinstance(obj, dict):
-        return {k: _drop_callables_deep(v) for k, v in obj.items() if not callable(v)}
-    if isinstance(obj, (list, tuple)):
-        return type(obj)(_drop_callables_deep(v) for v in obj if not callable(v))
-    return obj
+        return {_optimizer_opts_for_checkpoint(k): _optimizer_opts_for_checkpoint(v) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [_optimizer_opts_for_checkpoint(v) for v in obj]
+    if isinstance(obj, tuple):
+        return tuple(_optimizer_opts_for_checkpoint(v) for v in obj)
+    if isinstance(obj, type) and issubclass(obj, torch.optim.Optimizer):
+        _init_optimizer_classes_dict()
+        if _OptimizerClassesDict.get(obj.__name__.lower()) is obj:
+            return obj.__name__.lower()
+    if isinstance(obj, (type, FunctionType, BuiltinFunctionType)):
+        return rf.build_dict(obj)["class"]
+    return f"object:{obj!r}"
 
 
 def gradient_noise_(params: Iterable[torch.nn.Parameter], std: float):

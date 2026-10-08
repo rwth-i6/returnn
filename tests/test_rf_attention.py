@@ -394,6 +394,7 @@ def test_rope_causal_self_att():
 
     from returnn.config import Config, global_config_ctx
 
+    # the trace compares the energies of the generic path, which the fused kernel never computes
     with PyTracer(
         [
             rf.RotaryPosCausalSelfAttention.__call__,
@@ -727,7 +728,9 @@ def test_rel_pos_self_attention_band():
 
     def _ref(left, ahead):
         energy = torch.einsum("ihd,jhd->hij", q.raw_tensor + bias_u.raw_tensor, k.raw_tensor)
-        energy = energy + torch.einsum("ihd,ijd->hij", q.raw_tensor + bias_v.raw_tensor, pos_emb.raw_tensor[rel + n - 1])
+        energy = energy + torch.einsum(
+            "ihd,ijd->hij", q.raw_tensor + bias_v.raw_tensor, pos_emb.raw_tensor[rel + n - 1]
+        )
         allowed = torch.ones(n, n, dtype=torch.bool) if ahead is None else rel <= ahead
         if left is not None:
             allowed = allowed & (rel >= -left)
@@ -1001,6 +1004,47 @@ def test_dot_attention_self_att_axis_in_query():
     )
 
 
+def test_causal_dot_attention_under_cuda_graph_capture():
+    import torch
+    import unittest
+
+    if not torch.cuda.is_available():
+        raise unittest.SkipTest("cuda only: real graph capture")
+    rf.select_backend_torch()
+    batch = Dim(3, name="batch")
+    lens = Tensor("time", [batch], dtype="int32", raw_tensor=torch.tensor([5, 4, 2], dtype=torch.int32, device="cuda"))
+    time_dim = Dim(lens, name="time", capacity=5)
+    feat = Dim(8, name="feat")
+    gen = torch.Generator().manual_seed(44)
+    x = {}
+    for name in ("q", "k", "v"):
+        t = Tensor(name, dims=(batch, time_dim, feat), dtype="float32")
+        t.raw_tensor = torch.randn(3, 5, 8, generator=gen).cuda()
+        x[name] = t
+
+    def _att():
+        return rf.dot_attention(x["q"], x["k"], x["v"], key_dim=feat, axis=time_dim, causal_query_spatial_dim=time_dim)
+
+    with rf.set_default_device_ctx("cuda"):
+        ref = _att().copy_transpose((batch, time_dim, feat)).raw_tensor.clone()
+        side = torch.cuda.Stream()
+        side.wait_stream(torch.cuda.current_stream())
+        with torch.cuda.stream(side), rf.set_static_traceable_ctx():
+            _att()
+        torch.cuda.current_stream().wait_stream(side)
+        graph = torch.cuda.CUDAGraph()
+        with torch.cuda.graph(graph), rf.set_static_traceable_ctx():
+            out = _att()
+        graph.replay()
+        torch.cuda.synchronize()
+        mask = rf.sequence_mask([batch, time_dim], device="cuda").copy_transpose((batch, time_dim)).raw_tensor
+        got = out.copy_transpose((batch, time_dim, feat)).raw_tensor
+        torch.testing.assert_close(
+            torch.where(mask.unsqueeze(-1), got, torch.zeros_like(got)),
+            torch.where(mask.unsqueeze(-1), ref, torch.zeros_like(ref)),
+        )
+
+
 def _grouped_attention_inputs(device: str = "cpu"):
     """queries and keys of two sequences, the keys in groups of three frames with a partial last group"""
     import torch
@@ -1104,53 +1148,12 @@ def test_dot_attention_groups_broadcast_over_the_key_batch():
     q_flat = Dim(3, name="q_flat")
     gen = torch.Generator().manual_seed(45)
     query = Tensor("q", dims=(q_flat, heads, feat), dtype="float32", raw_tensor=torch.randn(3, 2, 4, generator=gen))
-    query_group = Tensor("q_group", dims=(q_flat,), dtype="int32", raw_tensor=torch.tensor([0, 1, 0], dtype=torch.int32))
+    query_group = Tensor(
+        "q_group", dims=(q_flat,), dtype="int32", raw_tensor=torch.tensor([0, 1, 0], dtype=torch.int32)
+    )
     key_group = rf.expand_dim(rf.range_over_dim(kv_time) // 3, dim=batch)
     opts = dict(key_dim=feat, axis=kv_time, query_group=query_group, key_group=key_group)
     order = (batch, q_flat, heads, v_feat)
     ref = rf.dot_attention(query, keys, values, **opts).copy_transpose(order).raw_tensor
     got = rf.dot_attention(query, keys, values, max_group_size=3, **opts).copy_transpose(order).raw_tensor
     torch.testing.assert_close(got, ref)
-
-
-def test_causal_dot_attention_under_cuda_graph_capture():
-    import torch
-    import unittest
-
-    if not torch.cuda.is_available():
-        raise unittest.SkipTest("cuda only: real graph capture")
-    rf.select_backend_torch()
-    batch = Dim(3, name="batch")
-    lens = Tensor("time", [batch], dtype="int32", raw_tensor=torch.tensor([5, 4, 2], dtype=torch.int32, device="cuda"))
-    time_dim = Dim(lens, name="time", capacity=5)
-    feat = Dim(8, name="feat")
-    gen = torch.Generator().manual_seed(44)
-    x = {}
-    for name in ("q", "k", "v"):
-        t = Tensor(name, dims=(batch, time_dim, feat), dtype="float32")
-        t.raw_tensor = torch.randn(3, 5, 8, generator=gen).cuda()
-        x[name] = t
-
-    def _att():
-        return rf.dot_attention(
-            x["q"], x["k"], x["v"], key_dim=feat, axis=time_dim, causal_query_spatial_dim=time_dim
-        )
-
-    with rf.set_default_device_ctx("cuda"):
-        ref = _att().copy_transpose((batch, time_dim, feat)).raw_tensor.clone()
-        side = torch.cuda.Stream()
-        side.wait_stream(torch.cuda.current_stream())
-        with torch.cuda.stream(side), rf.set_static_traceable_ctx():
-            _att()
-        torch.cuda.current_stream().wait_stream(side)
-        graph = torch.cuda.CUDAGraph()
-        with torch.cuda.graph(graph), rf.set_static_traceable_ctx():
-            out = _att()
-        graph.replay()
-        torch.cuda.synchronize()
-        mask = rf.sequence_mask([batch, time_dim], device="cuda").copy_transpose((batch, time_dim)).raw_tensor
-        got = out.copy_transpose((batch, time_dim, feat)).raw_tensor
-        torch.testing.assert_close(
-            torch.where(mask.unsqueeze(-1), got, torch.zeros_like(got)),
-            torch.where(mask.unsqueeze(-1), ref, torch.zeros_like(ref)),
-        )

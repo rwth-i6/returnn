@@ -80,7 +80,8 @@ def dot_attention(
         where a boolean mask over (queries, keys) is the full lattice,
         which no backend can do anything with but compute all of it.
         A query without any key it may attend has no defined result.
-        With ``max_group_size`` that result is finite (so padded rows are harmless), otherwise it depends on the backend.
+        With ``max_group_size`` that result is finite (so padded rows are harmless),
+        otherwise it depends on the backend.
     :param key_group: int, over ``axis`` (and maybe batch dims): the group of every key.
         It must be sorted along ``axis``, so that the keys a query attends are one run of consecutive keys,
         which backends can attend directly (see :func:`Backend.scaled_dot_product_attention_key_ranges`).
@@ -192,9 +193,7 @@ def _dot_attention_over_own_group(
     # A query without any key attends its first slot: what the clipped read gives there is finite,
     # where a softmax over nothing is not, and its gradient would reach every parameter.
     # Such queries exist in every padded or bound-sized tensor, e.g. the rows of an empty sequence.
-    in_group = rf.logical_or(
-        rf.compare_bc(slots, "<", end), rf.combine_bc(end <= start, "logical_and", first == 0)
-    )
+    in_group = rf.logical_or(rf.compare_bc(slots, "<", end), rf.combine_bc(end <= start, "logical_and", first == 0))
     slots.sparse_dim = axis
     return _dot_attention(
         query,
@@ -1139,10 +1138,12 @@ def _chunked_att_history(
     :return: {..., chunked_time_dim, out_dim, feature}
     """
     center, _ = rf.slice(source, axis=chunk_dim, size=end_chunk_size_dim)
-    parts = [
-        (rf.shift_right(center, axis=chunked_time_dim, pad_value=0.0, amount=shift), end_chunk_size_dim)
-        for shift in range(chunk_history, 0, -1)
-    ]
+    # chunk c reads the center of chunk c - shift (a gather, so packed storage needs no re-layout)
+    chunks = rf.range_over_dim(chunked_time_dim, device=source.device)
+    parts = []
+    for shift in range(chunk_history, 0, -1):
+        prev = rf.gather(center, indices=chunks - shift, axis=chunked_time_dim, clip_to_valid=True)
+        parts.append((rf.where(chunks >= shift, prev, 0.0), end_chunk_size_dim))
     parts.append((source, chunk_dim))
     out, _ = rf.concat(*parts, out_dim=out_dim)
     return out

@@ -150,12 +150,13 @@ optimizer
 
     With ``weight_decay`` set (PyTorch backend), RETURNN splits the parameters
     into two param groups, one with weight decay and one without.
-    Parameters without weight decay: all biases (parameter name ends with "bias"),
-    and all parameters of modules whose type is in the weight-decay module blacklist (by default ``torch.nn.LayerNorm`` and ``torch.nn.Embedding``).
+    All biases (parameter name ends with "bias") get no weight decay,
+    and neither do the parameters of modules whose type is in the weight-decay module blacklist
+    (by default ``torch.nn.LayerNorm`` and ``torch.nn.Embedding``).
     Note that this default covers only the native torch modules,
     whereas parameters of the RF modules :class:`rf.LayerNorm` and :class:`rf.Embedding`
     (e.g. the LayerNorm ``scale``) do get weight decay by default.
-    Since behavior version 32, the default also includes the RF modules
+    Since behavior version 36, the default also includes the RF modules
     (see :ref:`behavior_version`).
 
     ``weight_decay_modules_blacklist`` in the optimizer dict overrides the blacklist.

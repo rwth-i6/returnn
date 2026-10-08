@@ -16,9 +16,9 @@ Here the cells that are independent of each other are those of one anti-diagonal
 so both sweeps run over the anti-diagonals.
 
 On cuda everything runs as Triton kernels, the per-cell reductions over the vocabulary of the monotonic loss
-(:mod:`returnn.torch.util.monotonic_rnnt_triton`) and the two sweeps (:mod:`returnn.torch.util.rnnt_triton`),
-behind one opaque custom op pair, so ``aot_function`` traces it and nothing unrolls the loop over the
-anti-diagonals into the compiled graph.
+(:mod:`returnn.torch.util.monotonic_rnnt_triton`) and the two sweeps (:mod:`returnn.triton.rnnt`, launched in
+:mod:`returnn.torch.util.rnnt_triton`), behind one opaque custom op pair, so ``aot_function`` traces it and
+nothing unrolls the loop over the anti-diagonals into the compiled graph.
 
 Elsewhere the forward recursion runs as torch ops on a normalized tensor and autograd differentiates it.
 That path is the reference the kernels are tested against, and since it reaches the gradient by a
@@ -27,10 +27,12 @@ different route it also checks the hand-written backward sweep.
 
 from __future__ import annotations
 
-from typing import Optional, Tuple
+from typing import Tuple
 
 import torch
 
+from .assert_ import assert_
+from .custom_op import custom_op
 from .monotonic_rnnt import cell_offsets, next_label_per_cell
 
 
@@ -80,13 +82,16 @@ def _forward_scores(
     :param label_lens: [B] labels per sequence
     :param max_frames: frames to run over
     :param max_prefix: prefixes to run over, U_max + 1
-    :return: total [B] log likelihood, the sentinel for a sequence without frames
+    :return: total [B] log likelihood, minus infinity for a sequence without frames or without a possible alignment
     """
     batch_size = frame_lens.shape[0]
     device, dtype = blank_lp.device, blank_lp.dtype
-    neg_inf = torch.finfo(dtype).min
+    neg_inf = float("-inf")
     offsets, _cells = cell_offsets(frame_lens, label_lens)
     cell, inside = _diagonal_cells(offsets, frame_lens, label_lens, max_frames, max_prefix, blank_lp.shape[0])
+    # outside the lattice of a sequence the index lands on cells that are not its own, so those are masked
+    blank_rows = blank_lp[cell].masked_fill(~inside, neg_inf)
+    label_rows = label_lp[cell].masked_fill(~inside, neg_inf)
     lens = label_lens.long().unsqueeze(1)
     # the last cell of a sequence, its last frame and its whole prefix, sits on this anti-diagonal
     last = frame_lens.long() - 1 + label_lens.long()
@@ -98,23 +103,27 @@ def _forward_scores(
     total = torch.full((batch_size,), neg_inf, dtype=dtype, device=device)
     alpha = start
     for diagonal in range(cell.shape[0]):
+        reached = inside[diagonal]
         if diagonal > 0:
-            # both predecessors sit on the anti-diagonal before: the cell above at the same prefix, left through
-            # its blank, and the left neighbour at the prefix before, left through its label.
-            # The floor keeps a dead edge finite, logaddexp of two minus infinities has a nan gradient
-            above = (alpha + blank_lp[cell[diagonal - 1]]).clamp(min=neg_inf)
-            left = (alpha + label_lp[cell[diagonal - 1]]).clamp(min=neg_inf)
-            alpha = torch.logaddexp(above, torch.cat([pad, left[:, :-1]], dim=1))
-        alpha = torch.where(inside[diagonal], alpha, torch.full_like(alpha, neg_inf))
-        leaving = alpha + blank_lp[cell[diagonal]]
-        total = torch.where(has_frames & (last == diagonal), torch.gather(leaving, 1, lens).squeeze(1), total)
+            # both predecessors sit on the anti-diagonal before, the cell above at the same prefix, left through
+            # its blank, and the left neighbour at the prefix before, left through its label
+            above = alpha + blank_rows[diagonal - 1]
+            left = torch.cat([pad, (alpha + label_rows[diagonal - 1])[:, :-1]], dim=1)
+            # a cell no edge reaches stays at minus infinity and takes no gradient, logaddexp has a nan one there
+            dead = torch.isneginf(above) & torch.isneginf(left)
+            alpha = torch.logaddexp(above.masked_fill(dead, 0.0), left.masked_fill(dead, 0.0))
+            reached = reached & ~dead
+        alpha = torch.where(reached, alpha, torch.full_like(alpha, neg_inf))
+        leaving = torch.gather(alpha + blank_rows[diagonal], 1, lens).squeeze(1)
+        # without a possible alignment the total stays the constant and the sequence takes no gradient
+        total = torch.where(has_frames & (last == diagonal) & ~torch.isneginf(leaving), leaving, total)
     return total
 
 
 _HAVE_LIB_OPS = False
 if hasattr(torch.library, "custom_op"):  # torch >= 2.4
 
-    @torch.library.custom_op("returnn::rnnt_fwd", mutates_args=())
+    @custom_op("returnn::rnnt_fwd", mutates_args=())
     def _lib_fwd(
         logits: torch.Tensor,
         next_label: torch.Tensor,
@@ -146,7 +155,7 @@ if hasattr(torch.library, "custom_op"):  # torch >= 2.4
             torch.empty_like(cell_vec),
         )
 
-    @torch.library.custom_op("returnn::rnnt_bwd", mutates_args=())
+    @custom_op("returnn::rnnt_bwd", mutates_args=())
     def _lib_bwd(
         logits: torch.Tensor,
         next_label: torch.Tensor,
@@ -201,7 +210,7 @@ if hasattr(torch.library, "custom_op"):  # torch >= 2.4
         ctx.max_prefix = max_prefix
 
     def _lib_backward(ctx, d_total, d_row_max, d_log_sum, d_blank_lp, d_label_lp, d_alpha):
-        d_row_max, d_log_sum, d_blank_lp, d_label_lp, d_alpha  # noqa  # unused, only total feeds the loss
+        del d_row_max, d_log_sum, d_blank_lp, d_label_lp, d_alpha  # unused, only total feeds the loss
         logits, next_label, row_max, log_sum, blank_lp, label_lp, alpha, frame_lens, label_lens = ctx.saved_tensors
         grad_logits = torch.ops.returnn.rnnt_bwd(
             logits,
@@ -231,7 +240,7 @@ def rnnt_loss(
     label_lens: torch.Tensor,
     *,
     blank: int,
-    max_frames: Optional[int] = None,
+    max_frames: int,
 ) -> torch.Tensor:
     """
     Full-sum negative log likelihood of the transducer over a packed lattice.
@@ -241,42 +250,42 @@ def rnnt_loss(
     :param frame_lens: [B] frames per sequence
     :param label_lens: [B] labels per sequence, any number of them for a sequence with a frame
     :param blank: blank index
-    :param max_frames: frames the recursion runs over, the longest sequence of the batch by default.
-        A traced or captured step passes the declared capacity instead, since reading the batch's own
-        maximum is a host read.
+    :param max_frames: frames the recursion runs over, at least the longest sequence of the batch.
+        A static bound such as the declared capacity, since reading the batch's own maximum would be a host read.
     :return: [B] the negative log likelihood, zero where a sequence has no frame
     """
-    assert logits.dim() == 2, logits.shape
+    if logits.dim() != 2:
+        raise ValueError(f"rnnt: logits must be [cells, V], got shape {tuple(logits.shape)}")
+    if not 0 <= blank < logits.shape[1]:
+        raise ValueError(f"rnnt: blank {blank} outside the vocabulary of {logits.shape[1]}")
     if logits.shape[0] == 0:
         return logits.sum() * torch.zeros(frame_lens.shape[0], dtype=torch.float32, device=logits.device)
     logits = logits.contiguous()
     # the kernels index the lengths by sequence and ignore strides
     frame_lens, label_lens = frame_lens.contiguous(), label_lens.contiguous()
-    if max_frames is None:
-        max_frames = int(frame_lens.max().item())
     max_prefix = int(labels.shape[1]) + 1
-    vocab = int(logits.shape[1])
-    assert 0 <= blank < vocab, f"rnnt: blank {blank} outside the vocabulary of {vocab}"
     next_label = next_label_per_cell(labels, frame_lens, label_lens, blank, logits.shape[0])
-    # the cell kernels index every row by these ids unchecked, and a recursion shorter than a sequence would
-    # never reach its last cell, so both are checked on the device, which a captured step can afford
-    torch._assert_async(
-        ((next_label >= 0) & (next_label < vocab)).all(),
-        f"rnnt: a label outside the vocabulary of {vocab}",
+    # the cell kernels index every row by these ids unchecked, and a recursion shorter than a sequence
+    # never reaches its last cell, so both are checked on the device, without a host read
+    assert_(
+        ((next_label >= 0) & (next_label < logits.shape[1])).all(),
+        f"rnnt: a label outside the vocabulary of {logits.shape[1]}",
     )
-    torch._assert_async(
+    assert_(
         (frame_lens <= max_frames).all(),
         f"rnnt: a sequence longer than the {max_frames} frames of the recursion",
     )
     if logits.is_cuda:
         assert _HAVE_LIB_OPS, "rnnt: the loss needs torch.library.custom_op, so torch >= 2.4"
-        outputs = torch.ops.returnn.rnnt_fwd(logits, next_label, frame_lens, label_lens, blank, max_frames, max_prefix)
-        total = outputs[0]
+        total = torch.ops.returnn.rnnt_fwd(logits, next_label, frame_lens, label_lens, blank, max_frames, max_prefix)[0]
     else:
         source = logits if logits.dtype in (torch.float32, torch.float64) else logits.float()
+        # the rows a capacity leaves past the cells of the batch belong to no sequence, whatever they hold
+        _offsets, cells = cell_offsets(frame_lens, label_lens)
+        unused = (torch.arange(logits.shape[0], device=logits.device) >= cells.sum()).unsqueeze(1)
         # a row without any finite logit has no probability mass, its log probabilities are minus infinity, not nan
         dead = torch.isneginf(source).all(dim=-1, keepdim=True)
-        log_probs = torch.log_softmax(source.masked_fill(dead, 0.0), dim=-1).masked_fill(dead, float("-inf"))
+        log_probs = torch.log_softmax(source.masked_fill(dead | unused, 0.0), dim=-1).masked_fill(dead, float("-inf"))
         blank_lp = log_probs[:, blank]
         label_lp = torch.gather(log_probs, 1, next_label.unsqueeze(1)).squeeze(1)
         total = _forward_scores(blank_lp, label_lp, frame_lens, label_lens, max_frames, max_prefix)

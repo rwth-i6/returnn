@@ -453,42 +453,6 @@ def test_ctc_loss_packed_over_allocated_bounds():
     assert_allclose(leaf_exact.grad.numpy(), leaf_tight.grad.numpy(), rtol=1e-5, atol=1e-6)
 
 
-def test_ctc_loss_packed_leading_gap_grad():
-    """frames before the first sequence start belong to no sequence, so they get no gradient"""
-    torch.manual_seed(7)
-    logits = torch.randn(11, 5)
-    starts = torch.tensor([2, 7], dtype=torch.int32)
-    lens = torch.tensor([3, 2], dtype=torch.int32)
-    targets = torch.tensor([[1], [2]], dtype=torch.int32)
-    tgt_lens = torch.tensor([1, 1], dtype=torch.int32)
-    leaf = logits.clone().requires_grad_(True)
-    loss = ctc_loss_packed(
-        logits=leaf,
-        seq_starts=starts,
-        logits_seq_lens=lens,
-        max_seq_len=3,
-        targets=targets,
-        targets_seq_lens=tgt_lens,
-        blank_index=4,
-    )
-    loss.sum().backward()
-    leaf_tight = torch.cat([logits[2:5], logits[7:9]]).requires_grad_(True)
-    loss_tight = ctc_loss_packed(
-        logits=leaf_tight,
-        seq_starts=torch.tensor([0, 3], dtype=torch.int32),
-        logits_seq_lens=lens,
-        max_seq_len=3,
-        targets=targets,
-        targets_seq_lens=tgt_lens,
-        blank_index=4,
-    )
-    loss_tight.sum().backward()
-    torch.testing.assert_close(loss, loss_tight)
-    torch.testing.assert_close(torch.cat([leaf.grad[2:5], leaf.grad[7:9]]), leaf_tight.grad)
-    for rows in (leaf.grad[:2], leaf.grad[5:7], leaf.grad[9:]):
-        assert (rows == 0).all(), leaf.grad
-
-
 def test_ctc_loss_packed_edge_buffer_beyond_32_bit():
     """
     The Baum-Welch kernels keep one score per edge and frame. An edge bound far above the labels
@@ -527,6 +491,74 @@ def test_ctc_loss_packed_edge_buffer_beyond_32_bit():
         grads.append(leaf.grad)
     torch.testing.assert_close(losses[1], losses[0])
     torch.testing.assert_close(grads[1], grads[0])
+
+
+def test_ctc_loss_packed_warns_about_a_large_edge_scratch():
+    """
+    The packed Baum-Welch op sizes its edge scratch (one score per edge and frame) by the bounds, not by the data.
+    A scratch far above what a batch needs usually comes from a loose edges_bound, so past a limit it warns.
+    """
+    import warnings
+    from returnn.torch.util import native_op as torch_native_op
+
+    opts = dict(
+        logits=torch.randn(5, 4),
+        seq_starts=torch.tensor([0], dtype=torch.int32),
+        logits_seq_lens=torch.tensor([5], dtype=torch.int32),
+        max_seq_len=5,
+        targets=torch.tensor([[1, 2]], dtype=torch.int32),
+        targets_seq_lens=torch.tensor([2], dtype=torch.int32),
+        blank_index=3,
+    )
+    default_limit = torch_native_op._FAST_BW_PACKED_SCRATCH_WARN_BYTES
+    caught = {}
+    for limit in (default_limit, 1):
+        torch_native_op._FAST_BW_PACKED_SCRATCH_WARN_BYTES = limit
+        try:
+            with warnings.catch_warnings(record=True) as records:
+                warnings.simplefilter("always")
+                ctc_loss_packed(**opts)
+        finally:
+            torch_native_op._FAST_BW_PACKED_SCRATCH_WARN_BYTES = default_limit
+        caught[limit] = [str(r.message) for r in records if "edge scratch" in str(r.message)]
+    assert not caught[default_limit], caught
+    assert caught[1], caught
+
+
+def test_ctc_loss_packed_leading_gap_grad():
+    """frames before the first sequence start belong to no sequence, so they get no gradient"""
+    torch.manual_seed(7)
+    logits = torch.randn(11, 5)
+    starts = torch.tensor([2, 7], dtype=torch.int32)
+    lens = torch.tensor([3, 2], dtype=torch.int32)
+    targets = torch.tensor([[1], [2]], dtype=torch.int32)
+    tgt_lens = torch.tensor([1, 1], dtype=torch.int32)
+    leaf = logits.clone().requires_grad_(True)
+    loss = ctc_loss_packed(
+        logits=leaf,
+        seq_starts=starts,
+        logits_seq_lens=lens,
+        max_seq_len=3,
+        targets=targets,
+        targets_seq_lens=tgt_lens,
+        blank_index=4,
+    )
+    loss.sum().backward()
+    leaf_tight = torch.cat([logits[2:5], logits[7:9]]).requires_grad_(True)
+    loss_tight = ctc_loss_packed(
+        logits=leaf_tight,
+        seq_starts=torch.tensor([0, 3], dtype=torch.int32),
+        logits_seq_lens=lens,
+        max_seq_len=3,
+        targets=targets,
+        targets_seq_lens=tgt_lens,
+        blank_index=4,
+    )
+    loss_tight.sum().backward()
+    torch.testing.assert_close(loss, loss_tight)
+    torch.testing.assert_close(torch.cat([leaf.grad[2:5], leaf.grad[7:9]]), leaf_tight.grad)
+    for rows in (leaf.grad[:2], leaf.grad[5:7], leaf.grad[9:]):
+        assert (rows == 0).all(), leaf.grad
 
 
 def test_ctc_loss_packed_kernels_independent_of_frame_bound():
@@ -603,38 +635,6 @@ def test_ctc_loss_packed_matches_padded_cuda():
     torch.testing.assert_close(loss_packed, loss_pad, rtol=1e-4, atol=1e-4)
     mask = torch.arange(max(lens), device="cuda")[None, :] < lens_t[:, None]
     torch.testing.assert_close(leaf_packed.grad[mask], leaf_pad.grad[mask], rtol=1e-3, atol=1e-3)
-
-
-def test_ctc_loss_packed_warns_about_a_large_edge_scratch():
-    """
-    The packed Baum-Welch op sizes its edge scratch (one score per edge and frame) by the bounds, not by the data.
-    A scratch far above what a batch needs usually comes from a loose edges_bound, so past a limit it warns.
-    """
-    import warnings
-    from returnn.torch.util import native_op as torch_native_op
-
-    opts = dict(
-        logits=torch.randn(5, 4),
-        seq_starts=torch.tensor([0], dtype=torch.int32),
-        logits_seq_lens=torch.tensor([5], dtype=torch.int32),
-        max_seq_len=5,
-        targets=torch.tensor([[1, 2]], dtype=torch.int32),
-        targets_seq_lens=torch.tensor([2], dtype=torch.int32),
-        blank_index=3,
-    )
-    default_limit = torch_native_op._FAST_BW_PACKED_SCRATCH_WARN_BYTES
-    caught = {}
-    for limit in (default_limit, 1):
-        torch_native_op._FAST_BW_PACKED_SCRATCH_WARN_BYTES = limit
-        try:
-            with warnings.catch_warnings(record=True) as records:
-                warnings.simplefilter("always")
-                ctc_loss_packed(**opts)
-        finally:
-            torch_native_op._FAST_BW_PACKED_SCRATCH_WARN_BYTES = default_limit
-        caught[limit] = [str(r.message) for r in records if "edge scratch" in str(r.message)]
-    assert not caught[default_limit], caught
-    assert caught[1], caught
 
 
 def test_ctc_best_path_packed(device: torch.device = torch.device("cpu")):

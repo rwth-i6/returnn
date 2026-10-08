@@ -61,14 +61,17 @@ The warmup is required by the schedule-free averaging (the z/x averaging weights
 are a function of the per-step learning rate), so do not disable it.
 If an external schedule already contains a warmup, the two warmups multiply.
 
-AMUSE reads the learning rate from the param group on the host in each step
-(including ``.item()`` on device lr tensors),
-so captured optimizer steps (``torch_cuda_graph`` with ``"capture_optimizer"``) are not supported.
+The schedule state of each param group (``k``, ``weight_sum``, ``ckp1``, ``beta1``, ``c_warmup``)
+is kept as float64 scalar tensors on the device of the params, updated in place,
+and the learning rate may be a device tensor as well.
+So the step reads nothing on the host and can be captured in a CUDA graph
+(``torch_cuda_graph`` with ``"capture_optimizer"``),
+with :func:`AMUSE.init_state` creating the per-param state before the capture.
 """
 
 from __future__ import annotations
 
-from typing import Optional
+from typing import Any, Dict, Optional
 
 import torch
 from torch.optim.optimizer import Optimizer
@@ -270,9 +273,7 @@ class AMUSE(Optimizer):
                             " and train the rest with another update type"
                             " via returnn.torch.optim.multi.MultiOptimizer."
                         )
-            group.setdefault("k", 0)
-            group.setdefault("weight_sum", 0.0)
-            group.setdefault("beta1", self.beta1_init)
+            self._init_schedule_state(group)
 
     _pickle_attrs = (
         "update_type",
@@ -292,33 +293,90 @@ class AMUSE(Optimizer):
         state.update({name: getattr(self, name) for name in self._pickle_attrs})
         return state
 
-    def _compute_beta1(self, group, t, ckp1):
-        if t <= self.warmup_steps:
-            if t == self.warmup_steps:
-                group["c_warmup"] = ckp1
-            return self.beta1_init
+    def _init_schedule_state(self, group: Dict[str, Any]):
+        """
+        Put the schedule state of the param group as float64 scalar tensors on the device of its params.
+        Values already in the group are kept (e.g. Python numbers from a checkpoint of an earlier version).
 
-        if ckp1 >= 1.0:
-            return self.beta1_init
-        c_warmup = group.get("c_warmup", 1.0 / self.warmup_steps)
-        if not 0.0 < c_warmup < 1.0:
-            group["c_warmup"] = ckp1
-            return self.beta1_init
-        s_t = (ckp1 * (1.0 - c_warmup)) / (c_warmup * (1.0 - ckp1))
-        return 1.0 - (s_t**self.rho) * (1.0 - self.beta1_init)
+        :param group: param group, modified in place
+        """
+        device = group["params"][0].device if group["params"] else None
+        defaults = {
+            "k": 0.0,
+            "weight_sum": 0.0,
+            "ckp1": 1.0,
+            "beta1": self.beta1_init,
+            "c_warmup": 1.0 / self.warmup_steps,
+        }
+        for key, default in defaults.items():
+            value = group.get(key, default)
+            if isinstance(value, torch.Tensor):
+                group[key] = value.to(device=device, dtype=torch.float64)
+            else:
+                group[key] = torch.tensor(float(value), dtype=torch.float64, device=device)
 
-    def _get_z(self, p):
+    def load_state_dict(self, state_dict: Dict[str, Any]) -> None:
+        """
+        Load the state, see :class:`torch.optim.Optimizer`.
+        The schedule state of each param group then is on the device of its params again,
+        also when the checkpoint holds it as Python numbers.
+        """
+        super().load_state_dict(state_dict)
+        for group in self.param_groups:
+            self._init_schedule_state(group)
+
+    def _init_param_state(self, p: torch.Tensor) -> Dict[str, torch.Tensor]:
+        """
+        :param p: param with grad
+        :return: its state, created if not there yet (the anchor z as a copy of the param, and the moments)
+        """
         state = self.state[p]
-        z = state.get("z")
-        if z is None:
-            z = state["z"] = torch.clone(p, memory_format=torch.preserve_format)
-        return z
+        if "z" not in state:
+            state["z"] = torch.clone(p, memory_format=torch.preserve_format)
+        if self.update_type == "muon" and "momentum_buffer" not in state:
+            state["momentum_buffer"] = torch.zeros_like(p)
+        elif self.update_type == "adamw" and "exp_avg_sq" not in state:
+            state["exp_avg_sq"] = torch.zeros_like(p)
+        return state
 
-    def _apply_weight_decay_at_y(self, p, z, lr, beta1):
-        if self.weight_decay_at_y == 0.0:
-            return
-        z.sub_(p, alpha=lr * self.weight_decay_at_y)
-        p.sub_(p, alpha=lr * self.weight_decay_at_y * (1.0 - beta1))
+    @torch.no_grad()
+    def init_state(self):
+        """
+        Create the state of all params with grad as the first :func:`step` would, without a step,
+        for the optimizer step captured in a CUDA graph,
+        see :func:`returnn.torch.updater.init_optimizer_state`.
+        """
+        for group in self.param_groups:
+            self._init_schedule_state(group)
+            for p in group["params"]:
+                if p.grad is not None:
+                    self._init_param_state(p)
+
+    def _beta1_and_c_warmup(self, group: Dict[str, Any], t: torch.Tensor, ckp1: torch.Tensor):
+        """
+        The beta1 of this step and the new anchor of its ramp, as tensor ops on the schedule state
+        (no Python branch on their values).
+        c_warmup is the ckp1 of the warmup boundary step,
+        or the first later ckp1 below 1 if that one is degenerate (e.g. an lr of 0 at the boundary).
+
+        :param group: param group with the schedule state
+        :param t: step number, starting at 1
+        :param ckp1: z-to-x averaging weight of this step
+        :return: (beta1, c_warmup)
+        """
+        c_warmup = group["c_warmup"]
+        c_valid = (c_warmup > 0.0) & (c_warmup < 1.0)
+        after_warmup = (t > self.warmup_steps) & (ckp1 < 1.0)
+        new_c_warmup = torch.where((t == self.warmup_steps) | (after_warmup & ~c_valid), ckp1, c_warmup)
+        ramp = after_warmup & c_valid
+        # placeholders where there is no ramp, so the unused lanes stay finite
+        half = torch.full_like(ckp1, 0.5)
+        ckp1_ = torch.where(ramp, ckp1, half)
+        c_warmup_ = torch.where(ramp, c_warmup, half)
+        s_t = (ckp1_ * (1.0 - c_warmup_)) / (c_warmup_ * (1.0 - ckp1_))
+        beta1_ramp = 1.0 - (s_t**self.rho) * (1.0 - self.beta1_init)
+        beta1 = torch.where(ramp, beta1_ramp, torch.full_like(ckp1, self.beta1_init))
+        return beta1, new_c_warmup
 
     @torch.no_grad()
     def eval(self):
@@ -328,11 +386,11 @@ class AMUSE(Optimizer):
         """
         if self.train_mode:
             for group in self.param_groups:
-                beta1 = group.get("beta1", self.beta1_init)
+                weight = 1.0 - 1.0 / group["beta1"]
                 for p in group["params"]:
-                    state = self.state[p]
-                    if "z" in state:
-                        p.lerp_(end=state["z"], weight=1.0 - 1.0 / beta1)
+                    state = self.state.get(p)
+                    if state and "z" in state:
+                        p.lerp_(end=state["z"], weight=weight.to(p.dtype))
         self.train_mode = False
 
     @torch.no_grad()
@@ -343,11 +401,11 @@ class AMUSE(Optimizer):
         """
         if not self.train_mode:
             for group in self.param_groups:
-                beta1 = group.get("beta1", self.beta1_init)
+                weight = 1.0 - group["beta1"]
                 for p in group["params"]:
-                    state = self.state[p]
-                    if "z" in state:
-                        p.lerp_(end=state["z"], weight=1.0 - beta1)
+                    state = self.state.get(p)
+                    if state and "z" in state:
+                        p.lerp_(end=state["z"], weight=weight.to(p.dtype))
         self.train_mode = True
 
     @torch.no_grad()
@@ -368,70 +426,56 @@ class AMUSE(Optimizer):
                 loss = closure()
 
         for group in self.param_groups:
-            base_lr = group["lr"]
-            if isinstance(base_lr, torch.Tensor):
-                base_lr = base_lr.item()
-            k = group["k"]
+            # schedule of this step, tensor ops on the device state (lr as a Python number or a device tensor)
+            t = group["k"] + 1
+            lr = group["lr"] * torch.clamp(t / self.warmup_steps, max=1.0)
 
-            t = k + 1
-            sched = min(1.0, t / self.warmup_steps)
-            lr = base_lr * sched
-
-            # ckp1 is the new z-to-x averaging weight c_t.
+            # ckp1 is the new z-to-x averaging weight c_t
             weight = (t**self.r) * (lr**self.weight_lr_power)
-            future_weight_sum = group.get("weight_sum", 0.0) + weight
-            ckp1 = weight / future_weight_sum if future_weight_sum > 0 else 1.0
-            group["ckp1"] = ckp1
-            group["weight_sum"] = future_weight_sum
+            weight_sum = group["weight_sum"] + weight
+            ckp1 = torch.where(weight_sum > 0, weight / weight_sum, torch.ones_like(weight_sum))
+            beta1, c_warmup = self._beta1_and_c_warmup(group, t, ckp1)
+            group["k"].copy_(t)
+            group["weight_sum"].copy_(weight_sum)
+            group["ckp1"].copy_(ckp1)
+            group["beta1"].copy_(beta1)
+            group["c_warmup"].copy_(c_warmup)
 
-            beta1 = self._compute_beta1(group, t, ckp1)
-            group["beta1"] = beta1
             wd = group.get("weight_decay", 0.0)
+            if self.update_type == "adamw":
+                beta2 = group.get("beta2", 0.999)
+                eps = group.get("eps", 1e-10)
+                bias_correction2 = 1.0 - beta2**t
 
-            if self.update_type == "muon":
-                beta_m = group.get("momentum", 0.95)
-                for p in group["params"]:
-                    if p.grad is None:
-                        continue
-                    state = self.state[p]
-                    if "momentum_buffer" not in state:
-                        state["momentum_buffer"] = torch.zeros_like(p)
+            # lerp weights in the param dtype, older torch versions take no other in lerp_
+            lerp_weights_by_dtype = {}
+            for p in group["params"]:
+                if p.grad is None:
+                    continue
+                state = self._init_param_state(p)
+                z = state["z"]
+                if p.dtype not in lerp_weights_by_dtype:
+                    lerp_weights_by_dtype[p.dtype] = [w.to(p.dtype) for w in (1.0 - 1.0 / beta1, ckp1, 1.0 - beta1)]
+                to_x, to_ckp1, to_y = lerp_weights_by_dtype[p.dtype]
 
-                    z = self._get_z(p)
-                    self._apply_weight_decay_at_y(p, z, lr, beta1)
+                if self.weight_decay_at_y != 0.0:
+                    z.addcmul_(p, lr * self.weight_decay_at_y, value=-1)
+                    p.addcmul_(p, lr * self.weight_decay_at_y * (1.0 - beta1), value=-1)
 
-                    # y_t -> x_t, then update z, then rebuild y_{t+1}.
-                    p.lerp_(end=z, weight=1.0 - 1.0 / beta1)
+                # y_t -> x_t, then update z, then rebuild y_{t+1}.
+                p.lerp_(end=z, weight=to_x)
+                if self.update_type == "muon":
                     update = muon_update(
                         p.grad,
                         state["momentum_buffer"],
-                        beta=beta_m,
+                        beta=group.get("momentum", 0.95),
                         aux_update_type=self.aux_update_type,
                         nesterov=True,
                     )
                     if wd != 0.0:
                         z.mul_(1.0 - lr * wd)
-                    z.add_(update.reshape(p.shape), alpha=-lr)
-                    p.lerp_(end=z, weight=ckp1)
-                    p.lerp_(end=z, weight=1.0 - beta1)
-
-            elif self.update_type == "adamw":
-                beta2 = group.get("beta2", 0.999)
-                eps = group.get("eps", 1e-10)
-                bias_correction2 = 1.0 - beta2**t
-                for p in group["params"]:
-                    if p.grad is None:
-                        continue
-
-                    state = self.state[p]
-                    if "exp_avg_sq" not in state:
-                        state["exp_avg_sq"] = torch.zeros_like(p)
-
-                    z = self._get_z(p)
-                    self._apply_weight_decay_at_y(p, z, lr, beta1)
-
-                    # y_t -> x_t, then update z, then rebuild y_{t+1}.
-                    p.lerp_(end=z, weight=1.0 - 1.0 / beta1)
+                    z.addcmul_(update.reshape(p.shape), lr, value=-1)
+                elif self.update_type == "adamw":
                     v = state["exp_avg_sq"]
                     grad = p.grad
                     v.mul_(beta2).addcmul_(grad, grad, value=1.0 - beta2)
@@ -439,29 +483,14 @@ class AMUSE(Optimizer):
                     update = grad / denom
                     if wd != 0.0:
                         update = update.add(z, alpha=wd)
-                    z.add_(update, alpha=-lr)
-                    p.lerp_(end=z, weight=ckp1)
-                    p.lerp_(end=z, weight=1.0 - beta1)
-
-            elif self.update_type == "sgd":
-                for p in group["params"]:
-                    if p.grad is None:
-                        continue
-
-                    z = self._get_z(p)
-                    self._apply_weight_decay_at_y(p, z, lr, beta1)
-
-                    # y_t -> x_t, then update z, then rebuild y_{t+1}.
-                    p.lerp_(end=z, weight=1.0 - 1.0 / beta1)
+                    z.addcmul_(update, lr, value=-1)
+                elif self.update_type == "sgd":
                     if wd != 0.0:
                         z.mul_(1.0 - lr * wd)
-                    z.add_(p.grad, alpha=-lr)
-                    p.lerp_(end=z, weight=ckp1)
-                    p.lerp_(end=z, weight=1.0 - beta1)
-
-            else:
-                raise ValueError(f"Invalid AMUSE update_type: {self.update_type}")
-
-            group["k"] = k + 1
+                    z.addcmul_(p.grad, lr, value=-1)
+                else:
+                    raise ValueError(f"Invalid AMUSE update_type: {self.update_type}")
+                p.lerp_(end=z, weight=to_ckp1)
+                p.lerp_(end=z, weight=to_y)
 
         return loss

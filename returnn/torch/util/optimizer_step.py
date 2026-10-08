@@ -23,7 +23,8 @@ Config, e.g.::
     }
 
 The trace runs the unchanged ``optimizer.step()`` on explicit inputs:
-per param group the lr, per param (with grad) the param, its grad and its tensor state entries.
+per param group the lr and its other tensor entries,
+per param (with grad) the param, its grad and its tensor state entries.
 The in-place updates of params and state are input mutations of the traced function,
 kept in the compiled graph (Inductor writes them in place).
 Tensor-valued ``alpha`` / ``value`` arguments (e.g. ``p.add_(u, alpha=-lr)`` with a tensor lr)
@@ -52,8 +53,9 @@ so it is only retraced when their shapes, dtypes or the state layout change.
 
 Requirements (asserted): one CUDA device for all params, no closure, no grad scaler.
 The set of params with grads must stay fixed.
-Inductor compiles with ``emulate_precision_casts``, so low-precision intermediates are rounded as in eager.
-Compiled arithmetic is still not guaranteed to be bitwise identical to the eager step.
+The compiled step is not bitwise identical to the eager one:
+Inductor keeps low-precision intermediates (e.g. Muon's bf16 Newton-Schulz) in float32 inside fused kernels,
+which is at least as accurate.
 """
 
 from __future__ import annotations
@@ -145,13 +147,7 @@ class OptimizerStep:
         if not self._compiled_warm:
             # the first call traces (fake tensors, no update), compiles and autotunes, then updates;
             # all outside of any capture
-            # noinspection PyProtectedMember
-            import torch._inductor.config as inductor_config
-
-            # Round low-precision intermediates as eager does: e.g. Muon's bf16 Newton-Schulz
-            # otherwise stays in fp32 inside the fused kernels (measured param diff vs eager 7e-4, with this 1.5e-8)
-            with inductor_config.patch(emulate_precision_casts=True):
-                self._compiled_fn(inputs)
+            self._compiled_fn(inputs)
             self._compiled_warm = True
             return
         if not self._capture:
@@ -232,15 +228,22 @@ class OptimizerStep:
         state = self._optimizer.state.get(p, {})
         return sorted(k for k, v in state.items() if isinstance(v, torch.Tensor))
 
+    @staticmethod
+    def _group_tensor_keys(group: Dict[str, Any]) -> List[str]:
+        """the tensor entries of a param group besides the lr (e.g. a schedule state), sorted"""
+        return sorted(k for k, v in group.items() if k != "lr" and isinstance(v, torch.Tensor))
+
     def _inputs(self) -> List[torch.Tensor]:
         """
         :return: the explicit inputs of the compiled step:
-            per group: lr, then per param with grad: param, grad, tensor state entries (sorted keys)
+            per group: lr, the other tensor entries of the group (sorted keys),
+            then per param with grad: param, grad, tensor state entries (sorted keys)
         """
         res = []
         state = self._optimizer.state
         for group in self._optimizer.param_groups:
             res.append(group["lr"])
+            res += [group[k] for k in self._group_tensor_keys(group)]
             for p in self._params_with_grad(group):
                 res += [p, p.grad]
                 res += [state[p][k] for k in self._state_tensor_keys(p)]
@@ -255,6 +258,7 @@ class OptimizerStep:
         state = self._optimizer.state
         for group in self._optimizer.param_groups:
             params = self._params_with_grad(group)
+            res.append(tuple(self._group_tensor_keys(group)))
             res.append(len(params))
             for p in params:
                 s = state.get(p, {})
@@ -281,28 +285,25 @@ class OptimizerStep:
 
         self._num_traces += 1
         print(f"torch_optimizer_step: compiling the optimizer step (trace {self._num_traces})...", file=log.v3)
-        if self._num_traces == 1 and torch.__version__ < (2, 12):
-            print(
-                f"torch_optimizer_step WARNING: torch {torch.__version__} < 2.12 emulates the eager bf16/fp16 rounding"
-                " (emulate_precision_casts) only partially,"
-                " so with low-precision math (e.g. Muon) the compiled step can differ slightly from the eager one",
-                file=log.v2,
-            )
         opt = self._optimizer
         groups = opt.param_groups
         # the real params per group, and the state keys per param, in the order of _inputs
         structure = [[(p, self._state_tensor_keys(p)) for p in self._params_with_grad(group)] for group in groups]
+        group_tensor_keys = [self._group_tensor_keys(group) for group in groups]
 
         def step_core(inputs: List[torch.Tensor]) -> Tuple[torch.Tensor, ...]:
-            """optimizer.step() with lr, params, grads and state swapped for the given inputs"""
+            """optimizer.step() with lr, group tensors, params, grads and state swapped for the given inputs"""
             saved_lrs = [group["lr"] for group in groups]
+            saved_group_tensors = [{k: group[k] for k in keys} for group, keys in zip(groups, group_tensor_keys)]
             saved_params = [group["params"] for group in groups]
             saved_state = opt.state
             it = iter(inputs)
             new_state = defaultdict(dict)
             try:
-                for group, group_structure in zip(groups, structure):
+                for group, keys, group_structure in zip(groups, group_tensor_keys, structure):
                     group["lr"] = next(it)
+                    for k in keys:
+                        group[k] = next(it)
                     new_params = []
                     for p, keys in group_structure:
                         p_, grad = next(it), next(it)
@@ -317,8 +318,9 @@ class OptimizerStep:
                 with _TensorScalarArgsMode():
                     opt.step()
             finally:
-                for group, lr, params in zip(groups, saved_lrs, saved_params):
+                for group, lr, group_tensors, params in zip(groups, saved_lrs, saved_group_tensors, saved_params):
                     group["lr"] = lr
+                    group.update(group_tensors)
                     group["params"] = params
                 opt.state = saved_state
             return ()  # all effects are input mutations

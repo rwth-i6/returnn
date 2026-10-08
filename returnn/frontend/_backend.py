@@ -1202,34 +1202,6 @@ class Backend(Generic[T]):
         raise NotImplementedError
 
     @staticmethod
-    def shift_right(source: Tensor, *, axis: Dim, pad_value: Union[Tensor, rf.RawTensorTypes], amount: int) -> Tensor:
-        """
-        :param source:
-        :param axis:
-        :param pad_value: fills the first ``amount`` positions
-        :param amount:
-        :return: source shifted right by amount along axis, same dims
-        """
-        padded, (padded_dim,) = rf.pad(source, axes=[axis], padding=[(amount, 0)], mode="constant", value=pad_value)
-        padded_slice, _ = rf.slice(padded, axis=padded_dim, size=axis)
-        return padded_slice
-
-    @staticmethod
-    def shift_left(source: Tensor, *, axis: Dim, pad_value: Union[Tensor, rf.RawTensorTypes], amount: int) -> Tensor:
-        """
-        :param source:
-        :param axis:
-        :param pad_value: fills the last ``amount`` positions of every sequence
-        :param amount:
-        :return: source shifted left by amount along axis, same dims
-        """
-        padded, (padded_dim,) = rf.pad(
-            source, axes=[axis], padding=[(0, amount)], mode="constant", value=pad_value, handle_dynamic_dims=True
-        )
-        padded_slice, _ = rf.slice(padded, axis=padded_dim, start=amount, size=axis)
-        return padded_slice
-
-    @staticmethod
     def flip_no_mask(source: Tensor, *, axis: Dim) -> Tensor:
         """flip, ignoring masking"""
         raise NotImplementedError
@@ -1433,6 +1405,22 @@ class Backend(Generic[T]):
         """
         raise NotImplementedError
 
+    @staticmethod
+    def num_elements_of_shape(
+        source: Tensor, dims: Sequence[Dim], *, use_mask: bool, device: Optional[str]
+    ) -> Union[int, Tensor]:
+        """
+        See :func:`returnn.frontend.num_elements_of_shape` with ``source``.
+
+        :param source: the tensor which is reduced over dims
+        :param dims: the reduced dims, all in source
+        :param use_mask: as for the reduction
+        :param device: where the count is needed
+        :return: number of elements which a reduction of source over dims covers
+        """
+        del source  # the storage holds the padded layout
+        return rf.num_elements_of_shape(dims, use_mask=use_mask, device=device)
+
     # noinspection PyShadowingBuiltins
     @staticmethod
     def top_k(
@@ -1538,52 +1526,6 @@ class Backend(Generic[T]):
         :return:
         """
         raise NotImplementedError
-
-    @staticmethod
-    def layer_norm(
-        x: Tensor, *, in_dim: Union[Dim, Sequence[Dim]], scale: Tensor, bias: Optional[Tensor], eps: float
-    ) -> Tensor:
-        """
-        Layer norm as a composition of generic ops, see :func:`rf.layer_norm`.
-
-        :param x: input
-        :param in_dim: the dim or dims to normalize over
-        :param scale: over in_dim
-        :param bias: over in_dim, or None
-        :param eps: added to the variance
-        :return: the normalized x
-        """
-        from . import _utils
-
-        mean, variance = rf.moments(x, axis=in_dim)
-        norm_x = (x - mean) * rf.rsqrt(variance + eps)
-        out = norm_x * scale
-        if bias is not None:
-            out += bias
-        return _utils.keep_dtype(out, x.dtype)
-
-    @staticmethod
-    def rms_norm(
-        x: Tensor, *, in_dim: Union[Dim, Sequence[Dim]], scale: Tensor, bias: Optional[Tensor], eps: float
-    ) -> Tensor:
-        """
-        RMS norm as a composition of generic ops, see :func:`rf.rms_norm`.
-
-        :param x: input
-        :param in_dim: the dim or dims to normalize over
-        :param scale: over in_dim
-        :param bias: over in_dim, or None
-        :param eps: added to the mean square
-        :return: the normalized x
-        """
-        from . import _utils
-
-        variance = rf.reduce_mean(rf.square(x), axis=in_dim)
-        norm_x = x * rf.rsqrt(variance + eps)
-        out = norm_x * scale
-        if bias is not None:
-            out += bias
-        return _utils.keep_dtype(out, x.dtype)
 
     # noinspection PyShadowingBuiltins
     @staticmethod

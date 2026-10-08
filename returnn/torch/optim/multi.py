@@ -52,6 +52,9 @@ Each entry of ``optimizers`` describes one sub-optimizer:
   as in the single-optimizer case, applied per sub-optimizer.
   ``param_groups_custom`` is not supported inside sub-optimizer entries.
 
+Optimizer checkpoints load the param groups by position,
+so keep the order of the entries when continuing a training.
+
 The composite is constructed by the RETURNN updater
 (see :func:`returnn.torch.updater.Updater._create_optimizer`),
 which evaluates the filters (it has access to the parameter names and modules)
@@ -61,8 +64,9 @@ and creates the sub-optimizers.
 from __future__ import annotations
 
 import functools
+from collections import defaultdict
 from collections.abc import MutableMapping
-from typing import Any, Callable, Dict, Iterator, Optional, Sequence
+from typing import Any, Callable, Dict, Iterator, List, Optional, Sequence
 
 import torch
 
@@ -86,8 +90,7 @@ class MultiOptimizer(torch.optim.Optimizer):
     ``add_param_group`` after construction is not supported,
     the parameter assignment is fixed at creation time.
 
-    ``train()``/``eval()`` are forwarded to sub-optimizers which define them
-    (schedule-free optimizers such as :class:`returnn.torch.optim.amuse.AMUSE`).
+    ``train()``/``eval()`` are forwarded to sub-optimizers which define them (schedule-free optimizers).
 
     This class is not constructed via the generic ``optim_class(param_groups, **opts)`` path,
     the RETURNN updater constructs the sub-optimizers and passes them here.
@@ -115,6 +118,9 @@ class MultiOptimizer(torch.optim.Optimizer):
                         )
                     param_owner_by_id[id(param)] = sub_idx
         self.sub_optimizers = sub_optimizers
+        # The state is a live view over the sub-optimizers, see the state property.
+        self._state_view = _MultiOptimizerStateView(sub_optimizers)
+        self._swapped_out_sub_states: Optional[List[Any]] = None
         self._in_init = True
         # The base class appends the given group dicts as-is (no copy),
         # so self.param_groups shares the group dicts with the sub-optimizers,
@@ -122,8 +128,37 @@ class MultiOptimizer(torch.optim.Optimizer):
         # This also sets up the standard base-class machinery (hook containers etc.).
         super().__init__([group for sub in sub_optimizers for group in sub.param_groups], defaults={})
         self._in_init = False
-        # Replace the (empty) base-class state container by a live view over the sub-optimizers.
-        self.state = _MultiOptimizerStateView(sub_optimizers)
+
+    @property
+    def state(self) -> _MultiOptimizerStateView:
+        """
+        Live view over the per-param state of the sub-optimizers.
+        Assigning another container hands each sub-optimizer the entries of the params in its groups
+        (e.g. :class:`returnn.torch.util.optimizer_step.OptimizerStep` swaps in the state of the traced params),
+        assigning the view back restores the containers of the sub-optimizers.
+        """
+        return self._state_view
+
+    @state.setter
+    def state(self, state: MutableMapping):
+        # The base class constructor assigns its own empty container, the view stays.
+        if self._in_init:
+            return
+        if state is self._state_view:
+            if self._swapped_out_sub_states is not None:
+                for sub, sub_state in zip(self.sub_optimizers, self._swapped_out_sub_states):
+                    sub.state = sub_state
+                self._state_view.restore_owners()
+                self._swapped_out_sub_states = None
+            return
+        if self._swapped_out_sub_states is None:
+            self._swapped_out_sub_states = [sub.state for sub in self.sub_optimizers]
+            # the swapped in state belongs to the params now in the groups, e.g. the traced ones
+            self._state_view.set_owners_from_groups()
+        for sub in self.sub_optimizers:
+            sub.state = defaultdict(
+                dict, {p: state[p] for group in sub.param_groups for p in group["params"] if p in state}
+            )
 
     def __repr__(self):
         return "%s(\n%s\n)" % (
@@ -158,6 +193,16 @@ class MultiOptimizer(torch.optim.Optimizer):
                 sub.zero_grad()
             else:
                 sub.zero_grad(set_to_none=set_to_none)
+
+    def init_state(self):
+        """
+        Create the lazy state of all sub-optimizers without a step,
+        see :func:`returnn.torch.updater.init_optimizer_state`.
+        """
+        from returnn.torch.updater import init_optimizer_state
+
+        for sub in self.sub_optimizers:
+            init_optimizer_state(sub)
 
     def add_param_group(self, param_group: Dict[str, Any]):
         """
@@ -292,10 +337,27 @@ class _MultiOptimizerStateView(MutableMapping):
     def __init__(self, sub_optimizers: Sequence[torch.optim.Optimizer]):
         self._sub_optimizers = list(sub_optimizers)
         self._sub_by_param_id: Dict[int, torch.optim.Optimizer] = {}
-        for sub in self._sub_optimizers:
-            for group in sub.param_groups:
-                for param in group["params"]:
-                    self._sub_by_param_id[id(param)] = sub
+        self._saved_sub_by_param_id: Optional[Dict[int, torch.optim.Optimizer]] = None
+        self.set_owners_from_groups()
+
+    def set_owners_from_groups(self):
+        """
+        Map the params currently in the param groups to their sub-optimizers,
+        keeping the previous map for :func:`restore_owners` (only the first one while swapped).
+        """
+        if self._sub_by_param_id and self._saved_sub_by_param_id is None:
+            self._saved_sub_by_param_id = self._sub_by_param_id
+        self._sub_by_param_id = {
+            id(param): sub for sub in self._sub_optimizers for group in sub.param_groups for param in group["params"]
+        }
+
+    def restore_owners(self):
+        """
+        Go back to the map before :func:`set_owners_from_groups`.
+        """
+        if self._saved_sub_by_param_id is not None:
+            self._sub_by_param_id = self._saved_sub_by_param_id
+            self._saved_sub_by_param_id = None
 
     def _owning_sub(self, param: torch.nn.Parameter) -> Optional[torch.optim.Optimizer]:
         return self._sub_by_param_id.get(id(param))

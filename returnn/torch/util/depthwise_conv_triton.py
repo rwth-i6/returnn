@@ -17,6 +17,7 @@ from typing import Optional, Tuple
 import torch
 from torch.autograd.function import once_differentiable
 
+from returnn.torch.util.custom_op import custom_op
 from returnn.triton import depthwise_conv as kernels
 
 
@@ -210,7 +211,7 @@ if hasattr(torch.library, "custom_op"):  # torch >= 2.4
     # which the Triton launch of the autograd.Function above cannot take.
     # Only a traced call goes through them, the eager path stays the autograd.Function.
 
-    @torch.library.custom_op("returnn::depthwise_conv1d_fwd", mutates_args=())
+    @custom_op("returnn::depthwise_conv1d_fwd", mutates_args=())
     def _lib_fwd(
         x: torch.Tensor,
         w: torch.Tensor,
@@ -232,7 +233,7 @@ if hasattr(torch.library, "custom_op"):  # torch >= 2.4
         del w, bias, pad_l, block_r, block_c, block_r_dw, block_c_dw
         return x.new_empty((x.shape[0], n_time_out, x.shape[2]))
 
-    @torch.library.custom_op("returnn::depthwise_conv1d_bwd", mutates_args=())
+    @custom_op("returnn::depthwise_conv1d_bwd", mutates_args=())
     def _lib_bwd(
         x: torch.Tensor,
         w: torch.Tensor,
@@ -283,11 +284,6 @@ if hasattr(torch.library, "custom_op"):  # torch >= 2.4
     _HAVE_LIB_OPS = True
 
 
-def traceable() -> bool:
-    """:return: whether a traced step (fake tensors) can take the conv, through the opaque ops"""
-    return _HAVE_LIB_OPS
-
-
 def depthwise_conv1d(
     x: torch.Tensor,
     w: torch.Tensor,
@@ -295,7 +291,12 @@ def depthwise_conv1d(
     *,
     pad_l: int,
     n_time_out: int,
-    blocks: Tuple[int, int, int, int] = (kernels.BLOCK_R, kernels.BLOCK_C, kernels.BLOCK_R_DW, kernels.BLOCK_C_DW),
+    blocks: Tuple[int, int, int, int] = (
+        kernels.BLOCK_R_CONV,
+        kernels.BLOCK_C_CONV,
+        kernels.BLOCK_R_DW,
+        kernels.BLOCK_C_DW,
+    ),
 ) -> torch.Tensor:
     """
     :param x: (batch, time_in, channel)

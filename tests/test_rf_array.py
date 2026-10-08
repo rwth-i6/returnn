@@ -1048,11 +1048,16 @@ def test_scatter_argmax_via_scatter_mode_without_fill_value():
         out_spatial_dim = Dim(out_seq_lens)
         direct = rf.scatter_argmax(data, indices=indices, indices_dim=time_dim, out_dim=out_spatial_dim)
         direct.mark_as_output("direct", shape=(batch_dim, out_spatial_dim))
+        direct_none = rf.scatter_argmax(
+            data, indices=indices, indices_dim=time_dim, invalid_idx=None, out_dim=out_spatial_dim
+        )
+        direct_none.mark_as_output("direct_none", shape=(batch_dim, out_spatial_dim))
         out = rf.scatter(data, indices=indices, indices_dim=time_dim, mode="argmax", out_dim=out_spatial_dim)
         out.mark_as_default_output(shape=(batch_dim, out_spatial_dim))
 
     res = run_model(extern_data, lambda **_: rf.Module(), _forward_step, test_tensorflow=False)
     np.testing.assert_array_equal(res["direct"].raw_tensor, res["output"].raw_tensor)
+    np.testing.assert_array_equal(res["direct"].raw_tensor, res["direct_none"].raw_tensor)
 
 
 def test_slice():

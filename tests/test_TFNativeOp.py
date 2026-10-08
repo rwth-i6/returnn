@@ -2030,6 +2030,37 @@ def test_ctc_viterbi_loss():
     assert loss_vals[-1] < loss_vals[0]
 
 
+def test_ctc_loss_packed_leading_gap_grad():
+    """frames before the first sequence start belong to no sequence, so they get no gradient"""
+    logits_np = numpy.random.RandomState(7).randn(11, 5).astype("float32")
+    logits = tf.constant(logits_np)
+    logits_tight = tf.constant(numpy.concatenate([logits_np[2:5], logits_np[7:9]]))
+    lens = tf.constant([3, 2])
+    targets = tf.constant([[1], [2]])
+    tgt_lens = tf.constant([1, 1])
+
+    def _loss(x, starts):
+        return ctc_loss_packed(
+            logits=x,
+            seq_starts=tf.constant(starts),
+            logits_seq_lens=lens,
+            max_seq_len=3,
+            targets=targets,
+            targets_seq_lens=tgt_lens,
+            blank_index=4,
+        )
+
+    loss = _loss(logits, [2, 7])
+    (grad,) = tf.gradients(tf.reduce_sum(loss), [logits])
+    loss_tight = _loss(logits_tight, [0, 3])
+    (grad_tight,) = tf.gradients(tf.reduce_sum(loss_tight), [logits_tight])
+    loss, grad, loss_tight, grad_tight = session.run((loss, grad, loss_tight, grad_tight))
+    assert_allclose(loss, loss_tight, rtol=1e-5, atol=1e-5)
+    assert_allclose(numpy.concatenate([grad[2:5], grad[7:9]]), grad_tight, rtol=1e-5, atol=1e-5)
+    for rows in (grad[:2], grad[5:7], grad[9:]):
+        assert (rows == 0).all(), grad
+
+
 def test_edit_distance():
     rnd = numpy.random.RandomState(42)
     n_batch = 15

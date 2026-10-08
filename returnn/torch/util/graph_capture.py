@@ -50,7 +50,6 @@ stream discipline and grad buffers (:func:`run_train_step`).
 from __future__ import annotations
 from typing import Optional, Union, Any, Callable, Dict, List, Tuple
 from contextlib import contextmanager
-import copy
 import gc
 import os
 import numpy
@@ -61,64 +60,12 @@ from returnn.tensor import Tensor, TensorDict, Dim
 import returnn.frontend as rf
 from returnn.frontend.run_ctx import RunCtx, Loss
 
-from .capture_lock import cuda_graph_capture
+from .capture_lock import capture_lock, cuda_graph_capture
 
 # noinspection PyProtectedMember
 from ..data.extern_data import get_batch_dim_from_extern_data, _get_dyn_dims_from_extern_data
 
-__all__ = ["GraphCapturedTrainStep", "graph_pools_reserved", "bounds_from_config", "inductor_fw_compiler"]
-
-
-def bounds_from_config(opts: Dict[str, Any], *, config, extern_data_template: TensorDict) -> Dict[str, Any]:
-    """
-    Complete the bound options with what the config already implies, explicit values win:
-    ``max_seqs`` is the batch bound, ``max_seq_length`` (per key or one value for all)
-    the capacity of every dynamic dim it covers, and the batch budget (``packed_batch_size``
-    where set, else ``batch_size``, padded frames, thus at least the content) plus the per-seq
-    gap and align slack the packed total bound.
-
-    :param opts: the ``torch_cuda_graph`` config dict
-    :param config: the RETURNN config
-    :param extern_data_template:
-    :return: a completed copy of opts
-    """
-    from returnn.datasets.packing import packed_batch_config, packed_batch_key_opts
-
-    opts = dict(opts)
-    if "batch_size_bound" not in opts and config.int("max_seqs", -1) > 0:
-        opts["batch_size_bound"] = config.int("max_seqs", -1)
-
-    max_seq_length = config.typed_value("max_seq_length", None)
-    dim_capacity = dict(opts.get("dim_capacity", {}))
-    for k, data in extern_data_template.data.items():
-        if k in dim_capacity or len(data.dims) < 2 or data.dims[1].dimension is not None:
-            continue
-        if isinstance(max_seq_length, dict):
-            if k in max_seq_length:
-                dim_capacity[k] = int(max_seq_length[k])
-        elif isinstance(max_seq_length, (int, float)) and max_seq_length > 0:
-            dim_capacity[k] = int(max_seq_length)
-    opts["dim_capacity"] = dim_capacity
-
-    packing = packed_batch_config()
-    budgets = [config.typed_value("packed_batch_size", None), config.typed_value("batch_size", None)]
-    if packing is not None and "batch_size_bound" in opts:
-        total = dict(opts.get("packed_total_bound", {}))
-        for k in extern_data_template.data:
-            if k in total:
-                continue
-            key_opts = packed_batch_key_opts(packing, k)
-            budget = None
-            for source in budgets:
-                budget = source.get(k) if isinstance(source, dict) else source
-                if budget is not None:
-                    break
-            if key_opts is None or not isinstance(budget, (int, float)) or budget <= 0:
-                continue
-            total[k] = int(budget) + int(opts["batch_size_bound"]) * (key_opts["gap"] + key_opts["align"] - 1)
-        opts["packed_total_bound"] = total
-    return opts
-
+__all__ = ["GraphCapturedTrainStep", "graph_pools_reserved", "inductor_fw_compiler"]
 
 # bytes reserved by the current CUDA-graph private pool, set after capture,
 # for the engine memory log (single active graph per engine; a recapture overwrites)
@@ -131,43 +78,6 @@ def graph_pools_reserved() -> int:
         replay working memory, freed as tensors, thus invisible in (max_)memory_allocated
     """
     return _graph_pools_reserved
-
-
-_ZERO_INIT_STATE_OPTIMIZERS = (torch.optim.SGD, torch.optim.Adam, torch.optim.AdamW)
-
-
-def _optimizer_state_zero_init(opt: torch.optim.Optimizer) -> bool:
-    """
-    :param opt: the optimizer, or a composite with sub_optimizers
-    :return: whether zeroing its state after a step at lr 0 equals a fresh start, true for the momentum
-        and moment buffers and the step counters of SGD, Adam and AdamW, not e.g. for Rprop's step sizes
-    """
-    sub_optimizers = getattr(opt, "sub_optimizers", None)
-    if sub_optimizers is not None:
-        return all(_optimizer_state_zero_init(sub) for sub in sub_optimizers)
-    return type(opt) in _ZERO_INIT_STATE_OPTIMIZERS
-
-
-def _snapshot_optimizer_state(opt: torch.optim.Optimizer) -> Dict[str, Any]:
-    """
-    :param opt: the optimizer
-    :return: a deep copy of its state dict, the per-param state and the param group entries
-    """
-    return copy.deepcopy(opt.state_dict())
-
-
-def _restore_optimizer_state(opt: torch.optim.Optimizer, snapshot: Dict[str, Any]) -> None:
-    """
-    Puts back a snapshot from :func:`_snapshot_optimizer_state`,
-    keeping the current learning rate objects, since a device lr tensor is updated in place by the LR schedule.
-
-    :param opt: the optimizer
-    :param snapshot: its earlier state dict
-    """
-    lrs = [group["lr"] for group in opt.param_groups]
-    opt.load_state_dict(copy.deepcopy(snapshot))
-    for group, lr in zip(opt.param_groups, lrs):
-        group["lr"] = lr
 
 
 _inductor_workarounds_applied = False
@@ -392,16 +302,17 @@ def inductor_fw_compiler(backend: Optional[Callable] = None) -> Callable:
     :param backend: the fw compiler for ``aot_function``, default Inductor's ``compile_fx``
     :return: the fw compiler, for an inference-style graph (no fw/bwd partitioning)
 
-    torch >= 2.11 (seen on 2.11.0 and 2.12): compile_fx's compat wrapper declares _boxed_call=True
+    torch >= 2.11: compile_fx's compat wrapper declares _boxed_call=True
     but re-wraps an already-boxed args list, so the generated runner sees [[args]];
     call it star-unpacked instead, while the shim stays boxed towards aot_function.
+    Any other backend (e.g. the boxed ``nop`` of opts "debug_aot_eager") is returned as is.
     """
-    if backend is None:
-        # noinspection PyProtectedMember
-        from torch._inductor.compile_fx import compile_fx
+    # noinspection PyProtectedMember
+    from torch._inductor.compile_fx import compile_fx
 
+    if backend is None:
         backend = compile_fx
-    if torch.__version__ < (2, 11):
+    if torch.__version__ < (2, 11) or backend is not compile_fx:
         return backend
 
     def _compile_fx_call_unboxed(gm, example_inputs):
@@ -528,10 +439,10 @@ def _model_param_slots(
 
     slots: Dict[int, _ParamSlot] = {}
 
-    def _slot(raw: torch.Tensor) -> _ParamSlot:
-        if id(raw) not in slots:
-            slots[id(raw)] = _ParamSlot(raw)
-        return slots[id(raw)]
+    def _slot(tensor: torch.Tensor) -> _ParamSlot:
+        if id(tensor) not in slots:
+            slots[id(tensor)] = _ParamSlot(tensor)
+        return slots[id(tensor)]
 
     if rf_params is not None:
         for param in rf_params:
@@ -628,17 +539,17 @@ def _unflatten_boundary(spec: list, tensors: List[torch.Tensor], *, batch_dim: D
         max_lens = dict(zip(dyn_indices, torch.stack([tensors[i].max() for i in dyn_indices]).tolist()))
     dims: Dict[int, Dim] = {}
 
-    def _dim(entry: tuple) -> Dim:
-        if entry[0] == "batch":
+    def _dim(dim_spec: tuple) -> Dim:
+        if dim_spec[0] == "batch":
             return batch_dim
-        if entry[0] == "dim":
-            return entry[1]
-        _, index, name = entry
-        if index not in dims:
-            size_dtype = str(tensors[index].dtype).split(".")[-1]
-            size = Tensor(name + ":size", dims=[batch_dim], dtype=size_dtype, raw_tensor=tensors[index])
-            dims[index] = Dim(size, name=name)
-        return dims[index]
+        if dim_spec[0] == "dim":
+            return dim_spec[1]
+        _, size_index, name = dim_spec
+        if size_index not in dims:
+            size_dtype = str(tensors[size_index].dtype).split(".")[-1]
+            size = Tensor(name + ":size", dims=[batch_dim], dtype=size_dtype, raw_tensor=tensors[size_index])
+            dims[size_index] = Dim(size, name=name)
+        return dims[size_index]
 
     values = {}
     for entry in spec:
@@ -716,8 +627,8 @@ class GraphCapturedTrainStep:
             under a train run ctx and returns what it returns
         :param post_step: grad clip + optimizer step, captured in-graph
             with opts "capture_optimizer"; must be capture-safe
-        :param get_optimizer: the optimizer, to create its lazy state before the capture
-        :param get_buffers: the module buffers (running statistics), put back after the kernel warmup runs
+        :param get_buffers: the model's buffers (running statistics etc.),
+            put back after the warm runs, see :func:`_training_state_preserved`
         :param rf_params: RF-level model params of an RF model, for opts "compile"
         :param pt_model: the model as torch module, for opts "compile" with a model which is no RF module
             (a torch module, possibly around RF parts), see :func:`_model_param_slots`
@@ -1095,12 +1006,8 @@ class GraphCapturedTrainStep:
                     inner, batch_dim=batch_dim, spatial_dim=spatial, packed_dim=packed_dim, feature_dim=data.feature_dim
                 )
                 if gap or align > 1:
-                    # a declared packed_total_bound is usually much tighter than the
-                    # worst case (every seq at full capacity), and activations scale with it
-                    regap_bound = self.packed_total_bound.get(k)
-                    if regap_bound is None:
-                        regap_bound = self.batch_size_bound * (-(-(self.dim_capacity[k] + gap) // align) * align)
-                    packed_t = rf.packed_regap(packed_t, gap, align=align, total_bound=regap_bound)
+                    # the copy-in content check makes the gapped layout fit the buffer, see _copy_in
+                    packed_t = rf.packed_regap(packed_t, gap, align=align, total_bound=buf.shape[0])
                 data.raw_tensor = packed_t.raw_tensor
             else:
                 data.dtype = str(buf.dtype).split(".")[-1]
@@ -1126,7 +1033,26 @@ class GraphCapturedTrainStep:
             loss.get_summed_loss()
             loss.get_inv_norm_factor()
 
-    def _step(self) -> RunCtx:
+    @contextmanager
+    def _training_state_preserved(self):
+        """
+        Puts the training state back after the enclosed runs, which only warm the kernels:
+        the module buffers and the parameters without gradient (running statistics, counters),
+        and the CUDA RNG state. The copies live on the CPU, so they add nothing to the GPU memory.
+        """
+        tensors = list(self._get_buffers()) if self._get_buffers is not None else []
+        tensors += [p for p in self._params if not p.requires_grad]
+        saved = [t.detach().to("cpu", copy=True) for t in tensors]
+        rng_state = torch.cuda.get_rng_state(self._device)
+        try:
+            yield
+        finally:
+            with torch.no_grad():
+                for t, t0 in zip(tensors, saved):
+                    t.copy_(t0)
+            torch.cuda.set_rng_state(rng_state, self._device)
+
+    def _step(self, *, post_step: bool = True) -> RunCtx:
         for p in self._grad_params:
             p.grad.zero_()  # in-graph
         with rf.set_static_traceable_ctx():
@@ -1136,80 +1062,26 @@ class GraphCapturedTrainStep:
             total_loss = ctx.total_loss()
             self._reduce_all_losses(ctx)
         total_loss.raw_tensor.backward()
-        if self._post_step is not None:
+        if post_step and self._post_step is not None:
             self._post_step()  # in-graph: grad clip + optimizer step
         return ctx
 
-    @contextmanager
-    def _training_state_preserved(self):
-        """
-        Puts the training state back after the enclosed warmup steps, which exist only to warm the kernels:
-        the module buffers and the parameters without gradient (running statistics, counters),
-        the CUDA RNG state, and with the optimizer step in-graph also the trained parameters
-        and the optimizer state, a full copy of both, the price of warming the optimizer kernels in place.
-        """
-        buffers = list(self._get_buffers()) if self._get_buffers is not None else []
-        params = [p for p in self._params if not p.requires_grad]
-        opt = None
-        if self._post_step is not None:
-            params = list(self._params)
-            opt = self._get_optimizer() if self._get_optimizer is not None else None
-        tensors = buffers + params
-        saved = [t.detach().clone() for t in tensors]
-        opt_state = _snapshot_optimizer_state(opt) if opt is not None else None
-        rng_state = torch.cuda.get_rng_state(self._device)
-        try:
-            yield
-        finally:
-            with torch.no_grad():
-                for t, t0 in zip(tensors, saved):
-                    t.copy_(t0)
-            if opt_state is not None:
-                _restore_optimizer_state(opt, opt_state)
-            torch.cuda.set_rng_state(rng_state, self._device)
-
     def _materialize_optimizer_state(self) -> None:
         """
-        Create the optimizer's lazy state and the param grads without any model step
-        (they are graph inputs, so they must exist before trace/capture);
-        enables ``warmup_steps: 0``.
-        One ``step()`` with zero grads at lr 0 is doubly neutral;
-        written values are zeroed afterwards, only the existence kept.
-        No-op when state exists.
+        With the in-graph optimizer step ("capture_optimizer"):
+        create the optimizer's lazy state without any step, as its first step would
+        (the state tensors are graph inputs, so they must exist before trace/capture);
+        enables ``warmup_steps: 0``. See :func:`returnn.torch.updater.init_optimizer_state`.
+        The static param grads (created in ``__init__``) select the params which get state.
+        No-op when state exists (e.g. after warmup steps, or loaded from a checkpoint).
+        Without the in-graph optimizer step, the optimizer creates its state itself, in its first step.
         """
-        opt = self._get_optimizer() if (self._get_optimizer is not None and self._post_step is not None) else None
-        if opt is None or opt.state:
+        from returnn.torch.updater import init_optimizer_state
+
+        opt = self._get_optimizer() if self._get_optimizer is not None else None
+        if opt is None or self._post_step is None or opt.state:
             return
-        if not _optimizer_state_zero_init(opt):
-            raise NotImplementedError(
-                f"torch_cuda_graph: capture_optimizer creates the optimizer state through a step at lr 0 and"
-                f" zeroes it, which equals a fresh start only for SGD, Adam and AdamW, got {type(opt).__name__}"
-            )
-        with torch.no_grad():
-            for p in self._grad_params:
-                if p.grad is None:
-                    # also needed pre-capture: the partitioned capture zeroes + accumulates
-                    # into pre-existing grads
-                    p.grad = torch.zeros_like(p)
-            saved_lrs = []
-            for g in opt.param_groups:
-                lr = g["lr"]
-                if isinstance(lr, torch.Tensor):  # capturable: device-tensor lr
-                    saved_lrs.append(lr.clone())
-                    lr.fill_(0)
-                else:
-                    saved_lrs.append(lr)
-                    g["lr"] = 0.0
-            opt.step()
-            for g, lr in zip(opt.param_groups, saved_lrs):
-                if isinstance(g["lr"], torch.Tensor):
-                    g["lr"].copy_(lr)
-                else:
-                    g["lr"] = lr
-            for state in opt.state.values():
-                for v in state.values():
-                    if isinstance(v, torch.Tensor):
-                        v.zero_()
+        init_optimizer_state(opt)
 
     def _warmup_step_dynamic(
         self, extern_data_raw: Dict[str, Union[torch.Tensor, numpy.ndarray]], *, global_train_step: int
@@ -1388,9 +1260,8 @@ class GraphCapturedTrainStep:
         # default mode: step_core computes the grads itself, one inference-style graph,
         # never fw/bwd-partitioned (partition_fn / activation_memory_budget do not apply;
         # for that see opts "partitioned")
-        if torch.__version__ >= (2, 11):
-            if backend is compile_fx:  # not the eager kernels of debug_aot_eager, which take the boxed list
-                backend = inductor_fw_compiler(backend)
+        backend = inductor_fw_compiler(backend)
+        if torch.__version__ >= (2, 12):
             # torch >= 2.12 also lifts closed-over tensors into runtime args of the generated code
             # instead of baking them as graph constants, and raw aot_function does not supply them;
             # pass the buffers as explicit trace inputs, like the partitioned mode above.
@@ -1636,9 +1507,8 @@ class GraphCapturedTrainStep:
             gc.collect()
             torch.cuda.empty_cache()
             raws = [slot.raw for slot in self._get_param_slots()]
-            # this run only traces and compiles: like the kernel warmup of the plain capture,
-            # it must not count as a train step (running statistics, counters, RNG)
-            with _allow_non_fake_inputs(), self._training_state_preserved():
+            # the first call traces and compiles, its execution is thrown away and leaves no trace on the state
+            with self._training_state_preserved(), _allow_non_fake_inputs():
                 outs = self._compiled_fn(self._compiled_call_args(raws))
                 if self._partitioned or self._segmented:
                     # the bwd graph compiles on the first backward
@@ -1677,15 +1547,15 @@ class GraphCapturedTrainStep:
         compiled = self._ensure_compiled()
         raws = [slot.raw for slot in self._get_param_slots()]
         self._log_misaligned_inputs(raws)
-        # plain warm run (in partitioned mode incl. backward: autotune + workspaces),
-        # which leaves the training state alone like the run in _ensure_compiled
+        # plain warm run (in partitioned mode incl. backward: autotune + workspaces);
+        # the replay after the capture is this batch's step, so this run leaves no trace on the state either
         with self._training_state_preserved():
             outs = compiled(self._compiled_call_args(raws))
             if self._partitioned:
                 for p in self._grad_params:
                     p.grad.zero_()
                 outs[0].backward()
-            torch.cuda.synchronize()
+        torch.cuda.synchronize()
         # release the warm runs' cached blocks: capture allocates from its own pool,
         # cannot reuse them, and cannot cudaFree during capture either;
         # without this release, capture needs the step footprint twice
@@ -1874,11 +1744,11 @@ class GraphCapturedTrainStep:
         return ctx
 
     def _run_segmented_uncaptured(self) -> RunCtx:
-        """one whole segmented step without a graph, plain, for the kernel warmup"""
+        """one whole segmented step without a graph and without the optimizer step, plain, for the kernel warmup"""
         self._segment_forward()
         self._ctx = self._static_ctx
         eager_ctx = self._segment_eager()
-        self._segment_backward(post_step=True)
+        self._segment_backward(post_step=False)
         return self._merged_ctx(eager_ctx)
 
     def _capture_segmented(self) -> RunCtx:
@@ -1904,7 +1774,7 @@ class GraphCapturedTrainStep:
                 torch.cuda.synchronize()
             self._drop_segment_refs()
             torch.cuda.empty_cache()
-            with torch.cuda.graph(graph):
+            with cuda_graph_capture(graph):
                 for p in self._grad_params:
                     p.grad.zero_()
                 outs = compiled(self._compiled_call_args(raws))
@@ -1913,7 +1783,7 @@ class GraphCapturedTrainStep:
             del outs
         else:
             self._drop_segment_refs()
-            with torch.cuda.graph(graph):
+            with cuda_graph_capture(graph):
                 self._segment_forward()
             self._ctx = self._static_ctx
         self._graph = graph
@@ -1921,7 +1791,8 @@ class GraphCapturedTrainStep:
         graph.replay()
         eager_ctx = self._segment_eager()
         graph_bw = torch.cuda.CUDAGraph()
-        with torch.cuda.graph(graph_bw, pool=graph.pool()):
+        # on the pool of the forward graph, which cuda_graph_capture does not take, so the lock directly
+        with capture_lock, torch.cuda.graph(graph_bw, pool=graph.pool()):
             self._segment_backward(post_step=True)
         self._graph_bw = graph_bw
         torch.cuda.reset_peak_memory_stats()
@@ -1962,19 +1833,20 @@ class GraphCapturedTrainStep:
             torch.cuda.current_stream().wait_stream(self._eager_stream)
             return self._ctx
         if not self._compile:
-            # side-stream warmup (kernel/cudnn warmup; each _step call is cold w.r.t. dim/layout caches)
-            with self._training_state_preserved():
-                s = torch.cuda.Stream()
-                s.wait_stream(torch.cuda.current_stream())
-                with torch.cuda.stream(s):
-                    for _ in range(3):
-                        if self._segmented:
-                            self._run_segmented_uncaptured()
-                        else:
-                            self._step()
-                torch.cuda.current_stream().wait_stream(s)
+            # side-stream warmup (kernel/cudnn warmup; each _step call is cold w.r.t. dim/layout caches);
+            # without the optimizer step, these runs are thrown away, the replay below is this batch's step,
+            # so they leave no trace on the training state either
+            s = torch.cuda.Stream()
+            s.wait_stream(torch.cuda.current_stream())
+            with torch.cuda.stream(s), self._training_state_preserved():
+                for _ in range(3):
+                    if self._segmented:
+                        self._run_segmented_uncaptured()
+                    else:
+                        self._step(post_step=False)
+            torch.cuda.current_stream().wait_stream(s)
         # with warmup_steps 0 there was no real optimizer step yet: create the lazy state
-        # (and the param grads) explicitly -- no-op if a warmup step already did
+        # explicitly -- no-op if a warmup step already did
         self._materialize_optimizer_state()
         torch.cuda.synchronize()
         # release the warmup's cached blocks before the compiled program / capture
@@ -2013,16 +1885,16 @@ class GraphCapturedTrainStep:
         Destroy the captured graph and give its private pool back.
 
         Must happen before the NCCL process group is destroyed (see :func:`returnn.__main__.finalize`):
-        since NCCL 2.26 the communicator destruction polls until every CUDA graph referencing the
-        communicator is gone, so a step with an in-graph collective
-        (distributed batch norm, see ``rf_batch_norm_distributed``) makes ``destroy_process_group``
-        block forever when the graph outlives it.
+        the communicator destruction waits until every CUDA graph referencing the communicator is gone,
+        so with an in-graph collective
+        (distributed batch norm, see ``rf_batch_norm_distributed``),
+        ``destroy_process_group`` blocks forever when the graph outlives it.
         See https://github.com/pytorch/pytorch/issues/115388.
         """
         global _graph_pools_reserved
         if self._graph is None:
             return
-        # the ctx losses wrap capture-pool tensors, which the pool release invalidates
+        # the ctx losses live in the pool, which is only freed once they are gone
         self._ctx = None
         self._static_ctx = None
         self._boundary_outs = []

@@ -63,6 +63,7 @@ def main():
             numpy_req = "numpy<2"
         _run(*pip_install, numpy_req)
         _run(*pip_install, "--upgrade", "scipy")  # for some tests
+        _run(*pip_install, "--upgrade", "sentencepiece")  # for some tests
 
         if sys.version_info[:2] == (3, 10):
             # https://github.com/rwth-i6/returnn/issues/1803, https://github.com/AnswerDotAI/fastcore/issues/751

@@ -247,7 +247,16 @@ jobs:
           - TEST=torch_util
           - TEST=torch_native_op
           - TEST=monotonic_rnnt
+          - TEST=rnnt
           - TEST=threading
+        include:
+          # the torch >= 2.11 and >= 2.12 code paths (e.g. the inductor_fw_compiler shim) run nowhere else
+          - action: TEST=torch_util
+            python-version: "3.12"
+            torch-version: 2.11.0
+          - action: TEST=torch_util
+            python-version: "3.12"
+            torch-version: 2.12.0
 
     steps:
       - uses: actions/checkout@v4
