@@ -5297,6 +5297,8 @@ def flat_content(source: Tensor, *, out_dim: Optional[Dim] = None) -> Tuple[Tens
     # independent of any masked reduction later
     mask = rf.sequence_mask([out_dim], device=out.device)
     out = rf.where(mask, out, 0)
+    # a sparse dim set on the virtual tensor need not be on the inner buffer
+    out.sparse_dim = source.sparse_dim
     return out, out_dim
 
 
