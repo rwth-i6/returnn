@@ -38,7 +38,8 @@ def set_gpu_local_cpu_affinity_from_config(config: Config) -> Optional[Set[int]]
     see :func:`set_gpu_local_cpu_affinity`.
     To be called once at startup, after the distributed context exists (the local rank is the device)
     and before the datasets are created, so their worker processes inherit the affinity.
-    In distributed training, the ranks on a host share their allowed CPUs (one cpuset, e.g. ``torchrun`` in a SLURM job).
+    In distributed training, the ranks on a host share their allowed CPUs
+    (one cpuset, e.g. ``torchrun`` in a SLURM job).
     When the launcher already bound them to different CPUs (``srun`` per-task binding, ``mpirun``),
     that binding is kept, nothing is pinned.
 
