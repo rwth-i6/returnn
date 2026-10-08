@@ -140,6 +140,11 @@ class CachedDataset2(Dataset):
             if self._get_seq(n) is not None:
                 return True
             # We reached the end. The epoch can also have no seqs at all, e.g. when the dataset filters seqs.
+            # The last loaded seq must be right before the end, otherwise seqs were skipped, and the end is not known.
+            assert self._loaded_seq_idx_end >= self.expected_load_seq_start, (
+                f"{self}: num_seqs is not known, the seqs {self._loaded_seq_idx_end}.."
+                f"{self.expected_load_seq_start - 1} were skipped and never loaded"
+            )
             self._num_seqs = self._loaded_seq_idx_end
             assert n >= self._num_seqs
             self.reached_final_seq = True
