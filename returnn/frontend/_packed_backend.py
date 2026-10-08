@@ -4759,6 +4759,8 @@ class PackedBackend(Backend[PackedRawTensor]):
             tgt_lens = rf.copy_to_device(targets_spatial_dim.dyn_size_ext, device).copy_compatible_to_dims_raw(
                 [batch_dim]
             )
+            # a length shared by all sequences comes without the batch dim, the op reads one per sequence
+            tgt_lens = tgt_lens.expand(targets_raw.shape[0])
             # packed targets get the content-sized edge layout, see ctc_loss
             edges_bound = None
             if is_packed(targets):

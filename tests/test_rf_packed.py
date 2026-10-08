@@ -1499,12 +1499,12 @@ def test_ctc_best_path_packed_native():
     logits = Tensor("logits", dims=[batch_dim, time_dim, vocab_dim], dtype="float32", feature_dim_axis=2)
     logits.raw_tensor = torch.randn(3, 9, 6, generator=torch.Generator().manual_seed(12))
 
-    def _path(logits_, targets_):
+    def _path(logits_, targets_, targets_spatial_dim=tgt_time):
         return rf.ctc_best_path(
             logits=logits_,
             targets=targets_,
             input_spatial_dim=time_dim,
-            targets_spatial_dim=tgt_time,
+            targets_spatial_dim=targets_spatial_dim,
             blank_index=blank_index,
         )
 
@@ -1528,6 +1528,14 @@ def test_ctc_best_path_packed_native():
             content[starts[b] : starts[b] + lens[b]] = True
         assert (buffer[~content] == blank_index).all(), buffer
     packed._warned_fallback_ops.update(warned_before)
+
+    # a target length shared by all sequences has no batch dim, it holds for every sequence all the same
+    tgt_shared = Dim(Tensor("tgt_shared", dims=[], dtype="int32", raw_tensor=torch.tensor(2, dtype=torch.int32)))
+    targets_shared = Tensor("targets", dims=[batch_dim, tgt_shared], dtype="int32", sparse_dim=vocab_dim)
+    targets_shared.raw_tensor = targets.raw_tensor[:, :2]
+    ref = _path(logits, targets_shared, tgt_shared).copy_compatible_to_dims_raw([batch_dim, time_dim])
+    out = packed.unpack(_path(packed.pack(logits), targets_shared, tgt_shared))
+    torch.testing.assert_close(out.copy_compatible_to_dims_raw([batch_dim, time_dim])[mask], ref[mask])
 
 
 def test_rel_pos_self_attention_per_seq_grad():
