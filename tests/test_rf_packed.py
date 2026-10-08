@@ -409,6 +409,60 @@ def test_gather_packed_shift_within_seq():
     _assert_equal_non_padded(out_p, out_ref, batch_dim, time_dim)
 
 
+def test_gather_from_a_plain_source_with_packed_indices():
+    """
+    indices packed over their own time dim read a plain (padded) source of the same sequences,
+    e.g. padded keys at the positions the cells of a packed lattice attend:
+    the indices are not unpacked, and the result takes their packing
+    """
+    rf.select_backend_torch()
+    x, batch_dim, label_dim, feat_dim = _make_input(batch_size=3, seq_lens=(4, 2, 3))
+    frame_dim = Dim(
+        Tensor("frames", dims=[batch_dim], dtype="int32", raw_tensor=torch.tensor([6, 7, 3], dtype=torch.int32)),
+        name="frames",
+    )
+    idx = Tensor("idx", dims=[batch_dim, frame_dim], dtype="int32", sparse_dim=label_dim)
+    idx.raw_tensor = torch.tensor(
+        [[0, 0, 1, 2, 3, 3, 0], [0, 0, 0, 1, 1, 1, 1], [2, 1, 0, 0, 0, 0, 0]], dtype=torch.int32
+    )
+    beyond = Tensor("idx_beyond", dims=[batch_dim, frame_dim], dtype="int32", sparse_dim=label_dim)
+    beyond.raw_tensor = idx.raw_tensor + 2
+    # a static number of positions per frame, e.g. the keys of the group a query attends
+    group_dim = Dim(2, name="group")
+    runs = rf.combine_bc(idx, "+", rf.range_over_dim(group_dim))
+    runs.sparse_dim = label_dim
+    for index_gap in (0, 3):
+        for indices, clip_to_valid in ((idx, False), (beyond, True), (runs, True)):
+            indices_p = packed.pack(indices, dims=[batch_dim, frame_dim], gap=index_gap)
+            ref = rf.gather(x, indices=indices, axis=label_dim, clip_to_valid=clip_to_valid)
+            packed._warned_fallback_ops.clear()
+            out = rf.gather(x, indices=indices_p, axis=label_dim, clip_to_valid=clip_to_valid)
+            assert not packed._warned_fallback_ops, packed._warned_fallback_ops
+            assert packed.is_packed(out), out
+            assert out.raw_tensor.packed_dim is indices_p.raw_tensor.packed_dim
+            assert out.dims_set == ref.dims_set, (out.dims, ref.dims)
+            _assert_equal_non_padded(out, ref, batch_dim, frame_dim)
+
+    # the captured regime: bound-sized indices, the result keeps their bound
+    label_dim.capacity, frame_dim.capacity = 4, 7
+    indices_p = packed.pack(beyond, total_bound=24)
+    with rf.set_static_traceable_ctx():
+        out = rf.gather(x, indices=indices_p, axis=label_dim, clip_to_valid=True)
+    assert out.raw_tensor.packed_dim.dimension == 24, out.raw_tensor
+    ref = rf.gather(x, indices=beyond, axis=label_dim, clip_to_valid=True)
+    _assert_equal_non_padded(out, ref, batch_dim, frame_dim)
+
+    # the gradient reaches the source rows the valid frames read, the padded frames of the reference are masked out
+    x.raw_tensor.requires_grad_(True)
+    valid = (torch.arange(7)[None, :] < frame_dim.dyn_size_ext.raw_tensor[:, None])[:, :, None]
+    ref = rf.gather(x, indices=idx, axis=label_dim)
+    (grad_ref,) = torch.autograd.grad(((ref.raw_tensor * valid) ** 2).sum(), x.raw_tensor)
+    out = packed.unpack(rf.gather(x, indices=packed.pack(idx), axis=label_dim))
+    out_raw = out.copy_compatible_to_dims(ref.dims).raw_tensor
+    (grad,) = torch.autograd.grad(((out_raw * valid) ** 2).sum(), x.raw_tensor)
+    numpy.testing.assert_allclose(grad.numpy(), grad_ref.numpy(), rtol=1e-6)
+
+
 def test_gather_packed_keeps_sparse_dim():
     # a sparse dim assigned on the virtual tensor does not reach the inner buffer,
     # so an op rewrapping from the inner must not restore the old one
