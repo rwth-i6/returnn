@@ -527,10 +527,13 @@ def ctc_loss(
         targets=targets, seq_lens=targets_seq_lens, blank_idx=blank_index, label_loop=label_loop
     )
 
-    seq_mask = sequence_mask_time_major(logits_seq_lens)  # (time,batch), bool
+    # the mask over the frames of the logits, a max over the lens would be a device read
+    seq_mask = sequence_mask_time_major(logits_seq_lens, maxlen=logits.shape[0])  # (time,batch), bool
 
     if max_approx:
         log_probs = torch.log_softmax(logits, dim=-1) if logits_normalize else logits  # (time,batch,dim)
+        # the state count from the targets shape, a max over the end states would be a device read
+        n_batch, n_tgt_time = targets.shape
         alignment, _ = fast_viterbi(
             am_scores=log_probs,
             am_seq_len=logits_seq_lens,
@@ -538,6 +541,7 @@ def ctc_loss(
             weights=weights,
             start_end_states=start_end_states,
             mask_idx=blank_index,
+            n_states=n_batch * (2 * n_tgt_time + 3),
         )
         # alignment is (time,batch)
         log_probs_ = torch.gather(log_probs, 2, alignment.unsqueeze(-1))  # (time,batch,1)
@@ -960,6 +964,7 @@ def fast_viterbi(
     weights: torch.Tensor,
     start_end_states: torch.Tensor,
     mask_idx: int = 0,
+    n_states: Optional[int] = None,
 ) -> Tuple[torch.Tensor, torch.Tensor]:
     """
     :param am_scores: (time, batch, dim), in +log space, already normalized / just used as-is
@@ -969,12 +974,15 @@ def fast_viterbi(
     :param start_end_states: (2, batch), (start,end) state idx in automaton.
         there is only one single automaton.
     :param mask_idx: vocab index used for masking (e.g. padding, or if not path was found)
+    :param n_states: state count of the automaton. derived from start_end_states by default,
+        which is a data-dependent device read, i.e. a sync, so pass it if you know it statically.
     :return: (alignment, scores), alignment is (time, batch), scores is (batch,), in +log space.
         note: scores are not differentiable here.
         do gather+sum on the am_scores by the alignment to get it differentiable.
     """
-    last_state_idx = start_end_states[1].max()
-    n_states = last_state_idx + 1
+    if n_states is None:
+        last_state_idx = start_end_states[1].max()
+        n_states = last_state_idx + 1
     maker = OpMaker(OpDescription.from_gen_base(native_op.FastViterbiOp))
     op = maker.make_op()
     alignment, scores = op(am_scores, am_seq_len, edges, weights, start_end_states, n_states, mask_idx)
@@ -1020,6 +1028,8 @@ def ctc_best_path(
         targets=targets, seq_lens=targets_seq_lens, blank_idx=blank_index, label_loop=label_loop
     )
 
+    # the state count from the targets shape like in ctc_loss, a max over the end states would be a device read
+    n_batch, n_tgt_time = targets.shape
     alignment, _ = fast_viterbi(
         am_scores=log_sm,
         am_seq_len=logits_seq_lens,
@@ -1027,6 +1037,7 @@ def ctc_best_path(
         weights=weights,
         start_end_states=start_end_states,
         mask_idx=blank_index,
+        n_states=n_batch * (2 * n_tgt_time + 3),
     )
     return alignment
 
