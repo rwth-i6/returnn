@@ -1340,6 +1340,13 @@ class _DimMixin:
                 with _ctx_for_inputs([a, b]):
                     res.raw_tensor = _bin_op_tf(a.raw_tensor, b.raw_tensor if isinstance(b, _t.Tensor) else b)
                 return res
+            if isinstance(b, _t.Tensor) and a.device != b.device:
+                # e.g. host seq lens with device seq lens of a packed op:
+                # move to the device, a host read would sync (and break CUDA graph capture)
+                if a.device in (None, "cpu"):
+                    a = rf.copy_to_device(a, b.device)
+                elif b.device in (None, "cpu"):
+                    b = rf.copy_to_device(b, a.device)
             if kind == "add":
                 return _relu(rf.combine_bc(a, "add", b))
             elif kind == "sub":

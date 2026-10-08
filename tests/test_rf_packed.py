@@ -2179,6 +2179,53 @@ if __name__ == "__main__":
                 eval(arg)  # assume Python code and execute
 
 
+def test_masked_select_static_buffer_follows_a_declared_capacity():
+    """
+    under static tracing a selection along the packed dim gets a static buffer.
+    The content of the source bounds it, and so does a capacity declared on the result dim:
+    it promises how much one sequence can select (the padded buffer relies on the same promise),
+    e.g. the few labels among many frames
+    """
+    rf.select_backend_torch()
+    batch_dim = Dim(2, name="batch")
+    x, time_dim = _seqs("x", batch_dim, [5, 3], [[1.0, 2.0, 3.0, 4.0, 5.0], [6.0, 7.0, 8.0]])
+    keep, _ = _seqs("keep", batch_dim, [5, 3], [[1, 0, 0, 1, 0], [0, 1, 0]])
+    keep, _ = rf.replace_dim(keep, in_dim=keep.dims[1], out_dim=time_dim)
+    time_dim.capacity = 5
+    # without a capacity of its own the result takes the one of the source dim
+    for capacity, rows in ((None, 2 * 5), (2, 2 * 2)):
+        for mask in (packed.pack(keep > 0, total_bound=12),):
+            out_dim = Dim(None, name="selected", capacity=capacity)
+            with rf.set_static_traceable_ctx():
+                out, _ = rf.masked_select(packed.pack(x, total_bound=12), mask=mask, dims=[time_dim], out_dim=out_dim)
+            assert out.raw_tensor.packed_dim.dimension == out.raw_tensor.content_bound == rows, out.raw_tensor
+            got = packed.unpack(out).copy_compatible_to_dims_raw([batch_dim, out_dim])
+            assert got[0, :2].tolist() == [1.0, 4.0] and got[1, :1].tolist() == [7.0], got
+
+
+def test_masked_select_eager_result_dim_adds_to_a_host_dim():
+    """
+    outside static tracing the sizes of a dim live on the host, those of the extern data do.
+    The dim of a selection from a packed tensor on the GPU has to follow,
+    else adding it to the dim it was selected from mixes devices
+    (the stream of an interleaved step is such a sum, the frames plus the targets selected from them)
+    """
+    if not torch.cuda.is_available():
+        raise unittest.SkipTest("needs CUDA")
+    rf.select_backend_torch()
+    batch_dim = Dim(2, name="batch")
+    x, time_dim = _seqs("x", batch_dim, [5, 3], [[1.0, 2.0, 3.0, 4.0, 5.0], [6.0, 7.0, 8.0]])
+    keep, _ = _seqs("keep", batch_dim, [5, 3], [[1, 0, 0, 1, 0], [0, 1, 0]])
+    keep, _ = rf.replace_dim(keep, in_dim=keep.dims[1], out_dim=time_dim)
+    x, keep = rf.copy_to_device(x, "cuda"), rf.copy_to_device(keep, "cuda")
+    for mask in (keep > 0, packed.pack(keep > 0)):
+        out, out_dim = rf.masked_select(packed.pack(x), mask=mask, dims=[time_dim])
+        stream_dim = time_dim + out_dim
+        assert stream_dim.dyn_size_ext.raw_tensor.tolist() == [5 + 2, 3 + 1], stream_dim.dyn_size_ext.raw_tensor
+        got = packed.unpack(out).copy_compatible_to_dims_raw([batch_dim, out_dim])
+        assert got[0, :2].tolist() == [1.0, 4.0] and got[1, :1].tolist() == [7.0], got
+
+
 def test_gather_relayout_static_buffer_takes_the_proven_bound_of_the_result_dim():
     """
     under static tracing a gather along the packed dim into another time dim gets a static buffer.

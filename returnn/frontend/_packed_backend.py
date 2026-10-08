@@ -4280,16 +4280,25 @@ class PackedBackend(Backend[PackedRawTensor]):
         lens = rf.scatter(
             rf.cast(mask_inner, "int32"), indices=seq, indices_dim=raw.packed_dim, out_dim=batch, mode="sum"
         )
+        if not rf.is_static_traceable():
+            # outside tracing the sizes of a dim live on the host, like those of the extern data,
+            # else dim math with such a dim (e.g. frames + selected) mixes devices
+            lens = rf.copy_to_device(lens, "cpu")
         if out_dim is None:
             out_dim = Dim(lens, name="masked_select")
         elif out_dim.dyn_size_ext is None or out_dim.dyn_size_ext.raw_tensor is None:
             out_dim.dyn_size_ext = lens
-        # bound: a selection never exceeds its input content
+        # bound: a selection never exceeds its input content, nor a declared bound
         if rf.is_static_traceable():
             assert raw.content_bound, f"packed masked_select: static traceable needs a content bound on {raw}"
-            bound = raw.content_bound
+            bound = _min_bound(raw.content_bound, out_dim.packed_total_bound)
             if out_dim.capacity is None and raw.orig_dims[-1].capacity is not None:
                 out_dim.capacity = raw.orig_dims[-1].capacity
+            # A capacity on the result dim promises how much one sequence selects, e.g. the few labels among
+            # many frames. The padded buffer (seqs, capacity) relies on the same promise, so no more rows are needed.
+            n_seqs = batch.get_dim_value_tensor()
+            if out_dim.capacity is not None and isinstance(n_seqs, int):
+                bound = min(bound, n_seqs * out_dim.capacity)
         else:
             bound = None
         if bound is not None:
