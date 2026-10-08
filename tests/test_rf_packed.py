@@ -1273,6 +1273,53 @@ def test_ctc_loss_packed_native():
     )
 
 
+def test_ctc_best_path_packed_native():
+    """the path of packed logits comes back in their packing, with blank on the frames outside the sequences"""
+    rf.select_backend_torch()
+    batch_dim = Dim(3, name="batch")
+    lens = torch.tensor([9, 7, 4], dtype=torch.int32)
+    time_dim = Dim(Tensor("time", dims=[batch_dim], dtype="int32", raw_tensor=lens))
+    vocab_dim = Dim(6, name="vocab")
+    blank_index = 5
+    tgt_time = Dim(
+        Tensor("tgt_time", dims=[batch_dim], dtype="int32", raw_tensor=torch.tensor([4, 3, 2], dtype=torch.int32))
+    )
+    targets = Tensor("targets", dims=[batch_dim, tgt_time], dtype="int32", sparse_dim=vocab_dim)
+    targets.raw_tensor = torch.randint(0, 5, (3, 4), dtype=torch.int32, generator=torch.Generator().manual_seed(3))
+    logits = Tensor("logits", dims=[batch_dim, time_dim, vocab_dim], dtype="float32", feature_dim_axis=2)
+    logits.raw_tensor = torch.randn(3, 9, 6, generator=torch.Generator().manual_seed(12))
+
+    def _path(logits_, targets_):
+        return rf.ctc_best_path(
+            logits=logits_,
+            targets=targets_,
+            input_spatial_dim=time_dim,
+            targets_spatial_dim=tgt_time,
+            blank_index=blank_index,
+        )
+
+    ref = _path(logits, targets).copy_compatible_to_dims_raw([batch_dim, time_dim])
+    mask = rf.sequence_mask([batch_dim, time_dim]).copy_compatible_to_dims_raw([batch_dim, time_dim])
+    warned_before = set(packed._warned_fallback_ops)
+    for gap, pack_targets in ((0, False), (3, True)):
+        packed._warned_fallback_ops.clear()
+        logits_p = packed.pack(logits, gap=gap)
+        path = _path(logits_p, packed.pack(targets, gap=1) if pack_targets else targets)
+        assert "ctc_best_path" not in packed._warned_fallback_ops
+        assert packed.is_packed(path) and path.raw_tensor.packed_dim is logits_p.raw_tensor.packed_dim, path
+        assert path.dims_set == {batch_dim, time_dim} and path.sparse_dim == vocab_dim, path
+        out = packed.unpack(path).copy_compatible_to_dims_raw([batch_dim, time_dim])
+        torch.testing.assert_close(out[mask], ref[mask])
+        # the gap frames hold blank
+        buffer = path.raw_tensor.inner.raw_tensor
+        starts = path.raw_tensor.seq_starts()[0].raw_tensor
+        content = torch.zeros(buffer.shape[0], dtype=torch.bool)
+        for b in range(3):
+            content[starts[b] : starts[b] + lens[b]] = True
+        assert (buffer[~content] == blank_index).all(), buffer
+    packed._warned_fallback_ops.update(warned_before)
+
+
 def test_rel_pos_self_attention_per_seq_grad():
     # The per-seq CPU path (the train-mode dropout case, where flex bails):
     # called directly with att_dropout=0 for determinism, it must match the padded

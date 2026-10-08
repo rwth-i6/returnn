@@ -944,6 +944,13 @@ class TorchBackend(Backend[torch.Tensor]):
         return alignment
 
     @staticmethod
+    def ctc_best_path_packed_raw(**kwargs):
+        """CTC best path on a packed logits buffer, see :func:`Backend.ctc_best_path_packed_raw`"""
+        from returnn.torch.util import native_op
+
+        return native_op.ctc_best_path_packed(**kwargs)
+
+    @staticmethod
     def have_edit_distance() -> bool:
         """whether edit distance is available"""
         return True

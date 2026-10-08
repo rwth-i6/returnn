@@ -5372,6 +5372,82 @@ class PackedBackend(Backend[PackedRawTensor]):
             ),
         )
 
+    @staticmethod
+    def ctc_best_path(
+        *,
+        logits: Tensor,
+        logits_normalized: bool = False,
+        targets: Tensor,
+        input_spatial_dim: Dim,
+        targets_spatial_dim: Dim,
+        blank_index: int,
+        label_loop: bool = True,
+    ) -> Tensor:
+        """
+        CTC best path on packed logits, via the packed native Viterbi op
+        (see :class:`returnn.native_op.FastViterbiPackedOp`), the operands as for :func:`ctc_loss`.
+        The path comes back in the packing of the logits, blank on their gap and bound frames.
+        Falls back to the generic (unpack) handling if not applicable.
+        """
+        targets_ = unpack(targets) if is_packed(targets) else targets
+        raw = logits.raw_tensor if is_packed(logits) else None
+        if (
+            raw is not None
+            and raw.inner_backend.name == "torch"
+            and len(raw.orig_dims) == 2
+            and raw.orig_dims[-1] == input_spatial_dim
+            and logits.feature_dim is not None
+            and set(raw.inner.dims) == {raw.packed_dim, logits.feature_dim}
+            and targets_.dims_set == {raw.orig_dims[0], targets_spatial_dim}
+        ):
+            batch_dim = raw.orig_dims[0]
+            device = logits.device
+            # the native op is float32-only
+            logits_t = rf.cast(raw.inner.copy_transpose([raw.packed_dim, logits.feature_dim]), "float32").raw_tensor
+            starts_rf, _ = raw.seq_starts()
+            seq_starts = rf.cast(rf.copy_to_device(starts_rf, device), "int32").copy_compatible_to_dims_raw([batch_dim])
+            in_lens = rf.copy_to_device(input_spatial_dim.dyn_size_ext, device).copy_compatible_to_dims_raw([batch_dim])
+            targets_raw = rf.copy_to_device(targets_, device).copy_compatible_to_dims_raw(
+                [batch_dim, targets_spatial_dim]
+            )
+            tgt_lens = rf.copy_to_device(targets_spatial_dim.dyn_size_ext, device).copy_compatible_to_dims_raw(
+                [batch_dim]
+            )
+            # packed targets get the content-sized edge layout, see ctc_loss
+            edges_bound = None
+            if is_packed(targets):
+                edges_bound = 5 * int(targets.raw_tensor.packed_dim.get_dim_value()) + 5 * int(
+                    batch_dim.get_dim_value()
+                )
+            path_raw = raw.inner_backend.ctc_best_path_packed_raw(
+                logits=logits_t,
+                seq_starts=seq_starts,
+                logits_seq_lens=in_lens,
+                max_seq_len=int(input_spatial_dim.get_dim_value()),
+                targets=targets_raw,
+                targets_seq_lens=tgt_lens,
+                label_loop=label_loop,
+                logits_normalize=not logits_normalized,
+                blank_index=blank_index,
+                edges_bound=edges_bound,
+            )
+            path = Tensor("ctc_best_path", dims=[raw.packed_dim], dtype="int32", sparse_dim=logits.feature_dim)
+            path.raw_tensor = path_raw
+            return raw.rewrap(path, name="ctc_best_path")
+        return _dim_aware_call(
+            "ctc_best_path",
+            (),
+            dict(
+                logits=logits,
+                logits_normalized=logits_normalized,
+                targets=targets,
+                input_spatial_dim=input_spatial_dim,
+                targets_spatial_dim=targets_spatial_dim,
+                blank_index=blank_index,
+                label_loop=label_loop,
+            ),
+        )
+
 
 # All other structural ops go through the generic dim-aware wrapper:
 # packed data directly if the call does not reference the packed dims, otherwise unpack fallback.
