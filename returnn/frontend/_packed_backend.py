@@ -89,6 +89,11 @@ __all__ = ["PackedRawTensor", "PackedBackend", "pack", "pack_import", "unpack", 
 # and it maps dims in cached outputs back to the queried dims.
 _layout_cache = Cache(128)  # trace-boundary-safe, see rf._cache
 
+# What a packing over a spatial dim proves about the total of its lengths (dim -> int),
+# see :func:`_record_total_bound`. Keyed like every other layout entry, so what one traced step
+# declares never reaches another one.
+_total_bounds = Cache(128)
+
 
 def _packing_cache_key(kind: str, raw: PackedRawTensor, device) -> Tuple[Any, ...]:
     """
@@ -244,6 +249,8 @@ class PackedRawTensor:
         # (never-shrink). Unchanged by regap; divided by strides; grows with pad.
         # None = unknown (dynamic packings; regap bounds then fall back to conservative).
         self.content_bound = content_bound
+        if content_bound is not None and self.orig_dims and rf.is_static_traceable():
+            _record_total_bound(self.orig_dims[-1], content_bound)
 
     def __repr__(self) -> str:
         # the asserts in pack()/regap() interpolate the raw tensor, and the layout is exactly
@@ -4810,6 +4817,67 @@ def _gather_relayout_out_dim(indices: Tensor, raw: PackedRawTensor) -> Optional[
     return out_spatial_dim
 
 
+def _record_total_bound(dim: Dim, bound: int) -> None:
+    """
+    Remembers what a packing over ``dim`` proves about the total of its lengths, so that a later op
+    over that dim sees it even when it starts from another tensor
+    (e.g. the two parts of one stream, each scattered from its own packing).
+
+    Only under static tracing, where every buffer is bound-sized and its content bound therefore holds
+    for every batch the traced program serves. Eager buffers hold one batch and prove nothing,
+    and what one traced step declares says nothing about the next (the cache keys the step, see rf._cache).
+
+    :param dim: the packed spatial dim
+    :param bound: an upper bound on the sum of its lengths over all sequences
+    """
+    have = _total_bounds.get(dim)
+    if have is None or bound < have:
+        _total_bounds.set(dim, bound)
+
+
+def _packed_total_bound(dim: Dim, in_raw: PackedRawTensor, n_seqs: int) -> Optional[int]:
+    """
+    :param dim: a spatial dim with a length per sequence
+    :param in_raw: a packing whose innermost dim may have a known content bound
+    :param n_seqs: the (bounded) number of sequences
+    :return: a proven upper bound on the sum of the lengths of dim over all sequences, or None if there is none.
+        Every source of one is an upper bound, so the tightest of them is taken:
+        the number of sequences times the capacity (the size of the padded tensor),
+        what a packing over the dim holds (which is what packing is about, see :func:`_record_total_bound`),
+        for a sum of dims the sum over its parts
+        (e.g. a stream of frames and labels, each part by whatever is known about it),
+        and a declared :attr:`Dim.packed_total_bound`.
+    """
+    bounds = []
+    if dim == in_raw.orig_dims[-1] and in_raw.content_bound is not None:
+        bounds.append(in_raw.content_bound)
+    have = _total_bounds.get(dim)
+    if have is not None:
+        bounds.append(have)
+    # noinspection PyProtectedMember
+    op = dim._extra.derived_from_op if dim._extra else None
+    if op is not None and op.kind == "add" and op.inputs:
+        parts = [_packed_total_bound(part, in_raw, n_seqs) for part in op.inputs]
+        if all(part is not None for part in parts):
+            bounds.append(sum(parts))
+    # noinspection PyProtectedMember
+    capacity = dim.capacity or dim._derived_capacity()
+    if capacity is not None:
+        bounds.append(n_seqs * capacity)
+    if dim.packed_total_bound is not None:
+        bounds.append(dim.packed_total_bound)
+    return min(bounds) if bounds else None
+
+
+def _min_bound(a: Optional[int], b: Optional[int]) -> Optional[int]:
+    """
+    :return: the tighter of two optional bounds
+    """
+    if a is None:
+        return b
+    return a if b is None else min(a, b)
+
+
 def _gather_relayout(
     source: Tensor, raw: PackedRawTensor, *, indices: Tensor, clip_to_valid: bool, out_spatial_dim: Dim
 ) -> Tensor:
@@ -4911,11 +4979,19 @@ def _gather_out_packed_dim(
     :return: the packed dim for a re-laid-out gather.
         Static when tracing, since a captured buffer size must not vary per batch;
         the exact total otherwise.
-        The static size is the input content bound scaled by the capacity ratio,
+        The static size is what a packing over the result dim already proves about its total
+        (see :func:`_record_total_bound`), e.g. for text codes read at the encoder frames.
+        Without one (a fresh dim of a stride or a window, whose lengths follow those of the source)
+        it is the input content bound scaled by the capacity ratio,
         plus one frame per sequence for the per-sequence rounding up a stride can cost.
     """
     if not rf.is_static_traceable():
         return Dim(rf.copy_to_device(rf.reduce_sum(out_lens, axis=batch), dev), name="gather_packed")
+    proven = _total_bounds.get(out_spatial_dim)
+    if proven is not None:
+        # the ratio below holds only where the result lengths follow the source lengths,
+        # which a dim with a packing of its own does not promise
+        return Dim(proven, name="gather_packed")
     in_spatial_dim = in_raw.orig_dims[-1]
     # noinspection PyProtectedMember
     in_cap = in_spatial_dim.capacity or in_spatial_dim._derived_capacity()
