@@ -2035,6 +2035,8 @@ def _get_nemo_speech_data() -> Dict[str, Any]:
                     }
                     if utt_idx in skip:
                         row["_skipme"] = True
+                    if name == "srcE" and utt_idx % 3 < 2:  # quality flag: true, false, missing
+                        row["high_quality"] = utt_idx % 3 == 0
                     rows.append(row)
                     utt_idx += 1
             with open(f"{root}/{name}/manifest_{shard}.jsonl", "w") as f:
@@ -2310,6 +2312,59 @@ def test_NemoSpeechDataset_metadata_no_audio():
         assert dataset.num_seqs == len(ref) and num_loads == 2  # bounds check loads only the checked seq
     finally:
         MonoCut.load_audio = orig_load_audio
+
+
+def _nemo_speech_high_quality(cut, **_kwargs) -> bool:
+    return cut.custom.get("high_quality", True)  # missing: kept
+
+
+def test_NemoSpeechDataset_cut_filter():
+    # Rejected records count as draws, like the NeMo filters: the accepted seqs are the same as without the filter.
+    data = _get_nemo_speech_data()  # first, skips if NeMo Speech is not available
+    from returnn.datasets.nemo_speech import NemoSpeechDataset
+
+    # noinspection PyUnresolvedReferences,PyPackageRequirements
+    from lhotse.cut import MonoCut
+
+    # One shard: with several, the round-robin merge over the shards depends on the accepted counts.
+    config = _get_nemo_speech_config(weights=[], max_duration=None, shuffle=True, shuffle_buffer_size=4)
+    config["input_cfg"] = [{**data["srcE"], "weight": 1.0}, {**data["srcC"], "weight": 1.0}]
+    opts = dict(
+        nemo_config=config,
+        draws_per_epoch=30,
+        targets={
+            "class": "SamplingBytePairEncoding",
+            "vocab_file": data["bpe_vocab"],
+            "breadth_prob": 0.5,
+            "unknown_label": None,
+        },
+    )
+    unfiltered = dummy_iter_dataset(NemoSpeechDataset(**opts, use_worker_procs=False), epoch=3)
+    assert {s.seq_tag for s in unfiltered if s.seq_tag.startswith("srcE-")} == {f"srcE-{i}.wav" for i in range(10)}
+    rejected = {f"srcE-{i}.wav" for i in range(1, 10, 3)}  # high_quality false
+    expected = [s for s in unfiltered if s.seq_tag not in rejected]
+    assert len(expected) < len(unfiltered)
+
+    opts["cut_filter"] = _nemo_speech_high_quality
+    num_loads = 0
+    orig_load_audio = MonoCut.load_audio
+
+    def _load_audio(*args, **kwargs):
+        nonlocal num_loads
+        num_loads += 1
+        return orig_load_audio(*args, **kwargs)
+
+    MonoCut.load_audio = _load_audio
+    try:
+        direct = dummy_iter_dataset(NemoSpeechDataset(**opts, use_worker_procs=False), epoch=3)
+    finally:
+        MonoCut.load_audio = orig_load_audio
+    assert num_loads == len(direct)  # no audio for the rejected records
+    _nemo_speech_assert_same_seqs(direct, expected)
+
+    dataset = NemoSpeechDataset(**opts, use_worker_procs=False)
+    uninterrupted = [dummy_iter_dataset(dataset, epoch=epoch) for epoch in [1, 2, 3]][-1]
+    _nemo_speech_assert_same_seqs(uninterrupted, direct)
 
 
 def test_NemoSpeechDataset_index_pack():
