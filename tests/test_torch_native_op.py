@@ -363,16 +363,17 @@ def test_ctc_loss_over_allocated_time():
         logits_time_major=True,
         blank_index=n_classes - 1,
     )
-    leaf = logits.clone().requires_grad_(True)
-    leaf_trimmed = logits[:max_len].clone().requires_grad_(True)
-    loss = ctc_loss(logits=leaf, **args)
-    loss_trimmed = ctc_loss(logits=leaf_trimmed, **args)
-    torch.testing.assert_close(loss, loss_trimmed)
+    for max_approx in [False, True]:
+        leaf = logits.clone().requires_grad_(True)
+        leaf_trimmed = logits[:max_len].clone().requires_grad_(True)
+        loss = ctc_loss(logits=leaf, max_approx=max_approx, **args)
+        loss_trimmed = ctc_loss(logits=leaf_trimmed, max_approx=max_approx, **args)
+        torch.testing.assert_close(loss, loss_trimmed)
 
-    loss.sum().backward()
-    loss_trimmed.sum().backward()
-    torch.testing.assert_close(leaf.grad[:max_len], leaf_trimmed.grad)
-    assert leaf.grad[max_len:].abs().max().item() == 0.0
+        loss.sum().backward()
+        loss_trimmed.sum().backward()
+        torch.testing.assert_close(leaf.grad[:max_len], leaf_trimmed.grad)
+        assert leaf.grad[max_len:].abs().max().item() == 0.0
 
 
 def test_ctc_loss_packed_over_allocated_bounds():

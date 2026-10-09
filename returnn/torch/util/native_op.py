@@ -540,7 +540,7 @@ def ctc_loss(
             mask_idx=blank_index,
         )
         # alignment is (time,batch)
-        log_probs_ = torch.gather(log_probs, 2, alignment.unsqueeze(-1))  # (time,batch,1)
+        log_probs_ = torch.gather(log_probs, 2, alignment.unsqueeze(-1).long())  # (time,batch,1)
         log_probs_ = log_probs_.squeeze(-1)  # (time,batch)
         log_probs_ = torch.where(seq_mask, log_probs_, 0.0)
         loss = -torch.sum(log_probs_, dim=0)  # (batch,)
