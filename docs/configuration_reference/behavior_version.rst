@@ -34,6 +34,8 @@ The behavior version of the tool is set with ``--behavior-version``.
 There is also the option ``--grid-keep-best`` / ``--no-grid-keep-best``
 to override in both directions.
 
+See PR `#1978 <https://github.com/rwth-i6/returnn/pull/1978>`__.
+
 Behavior version 35 (2026-10-07)
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
