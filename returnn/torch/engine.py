@@ -281,13 +281,15 @@ class Engine(EngineBase):
             # The compiled step returns the grads instead, so those hooks never fire.
             # The reduce types without a DDP wrap are fine.
             assert self._ddp_pt_model is None, (
-                "torch_cuda_graph: DistributedDataParallel not supported, use reduce_type 'grad_explicit' or 'param'"
+                "torch_cuda_graph: DistributedDataParallel not supported,"
+                " use reduce_type 'grad_explicit' or 'param', or sync levels"
             )
             # "param" syncs after the optimizer step, outside the compiled region, so it needs nothing.
-            # "grad_explicit" reduces between step and optimizer, so the optimizer cannot be in-graph.
-            if self._torch_distributed_ctx and self._torch_distributed_ctx.reduce_type() == "grad_explicit":
+            # "grad" reduces between step and optimizer, so the optimizer cannot be in-graph.
+            if self._torch_distributed_ctx and self._torch_distributed_ctx.has_grad_sync():
                 assert not self._graph_capture_opts.get("capture_optimizer", False), (
-                    "torch_cuda_graph: capture_optimizer with reduce_type 'grad_explicit' is not supported,"
+                    "torch_cuda_graph: capture_optimizer with grad sync"
+                    " (reduce_type 'grad_explicit' or a 'grad' sync level) is not supported,"
                     " the grad reduce must run between the step and the optimizer"
                     " (torch_optimizer_step captures the optimizer step separately)"
                 )

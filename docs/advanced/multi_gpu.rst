@@ -15,6 +15,24 @@ This will by default use PyTorch ``DistributedDataParallel``.
 Or maybe use ``torch_distributed = {"reduce_type": "param", "param_sync_step": 100}``.
 This uses parameter averaging after every 100 steps.
 
+``"reduce_type": "grad_explicit"`` averages the grads once per step before the optimizer step,
+without ``DistributedDataParallel``, which is what ``torch_cuda_graph`` needs.
+
+``"sync"`` generalizes these to nested levels, inner to outer, e.g. grads averaged within each node every step,
+params averaged across all nodes every 100 steps::
+
+    torch_distributed = {
+        "sync": [
+            {"group": "node", "type": "grad"},
+            {"group": "world", "type": "param", "every": 100},
+        ]
+    }
+
+``group`` is ``"world"``, ``"node"`` (the ranks on one host), an int (contiguous blocks of that many ranks),
+or a list of rank lists. ``type`` is ``"grad"`` (every step, must be the first level) or ``"param"``,
+``every`` is the period in steps. The groups of a level must be unions of the groups of the inner level,
+and the periods multiples of the inner period. Of the param levels firing in a step, only the outermost runs.
+
 With ``"sync_complete_frac": True`` (default since behavior version 33),
 the epoch progress ``complete_frac`` is the mean over the ranks,
 so a ``dynamic_learning_rate`` on ``epoch_continuous`` gives the same learning rate on every rank.
