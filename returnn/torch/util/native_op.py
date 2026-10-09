@@ -527,7 +527,6 @@ def ctc_loss(
         targets=targets, seq_lens=targets_seq_lens, blank_idx=blank_index, label_loop=label_loop
     )
 
-    # the mask over the frames of the logits, a max over the lens would be a device read
     seq_mask = sequence_mask_time_major(logits_seq_lens, maxlen=logits.shape[0])  # (time,batch), bool
 
     if max_approx:

@@ -349,6 +349,33 @@ def test_ctc_loss_grad_padded_vs_packed():
     assert leaf_packed.grad[~mask].abs().max().item() == 0.0
 
 
+def test_ctc_loss_over_allocated_time():
+    """
+    Compares loss and grads of :func:`ctc_loss` on logits with more frames than the longest sequence
+    against the logits trimmed to the longest sequence.
+    """
+    n_batch, n_time, max_len, n_tgt, n_classes = 3, 12, 8, 3, 6
+    torch.manual_seed(1)
+    logits = torch.randn(n_time, n_batch, n_classes)
+    args = dict(
+        logits_seq_lens=torch.tensor([max_len, 6, 5], dtype=torch.int32),
+        targets=torch.randint(0, n_classes - 1, (n_batch, n_tgt), dtype=torch.int32),
+        targets_seq_lens=torch.tensor([3, 2, 0], dtype=torch.int32),
+        logits_time_major=True,
+        blank_index=n_classes - 1,
+    )
+    leaf = logits.clone().requires_grad_(True)
+    leaf_trimmed = logits[:max_len].clone().requires_grad_(True)
+    loss = ctc_loss(logits=leaf, **args)
+    loss_trimmed = ctc_loss(logits=leaf_trimmed, **args)
+    torch.testing.assert_close(loss, loss_trimmed)
+
+    loss.sum().backward()
+    loss_trimmed.sum().backward()
+    torch.testing.assert_close(leaf.grad[:max_len], leaf_trimmed.grad)
+    assert leaf.grad[max_len:].abs().max().item() == 0.0
+
+
 def test_ctc_loss_packed_over_allocated_bounds():
     """
     Bound regime (CUDA-graph capture):
@@ -1829,32 +1856,3 @@ def test_ctc_best_path_fake_tensor_mode():
         fake = ctc_best_path(**{k: mode.from_tensor(v) for k, v in args.items()}, **opts)
     assert isinstance(fake, FakeTensor)
     assert fake.shape == real.shape and fake.dtype == real.dtype
-
-
-def test_ctc_loss_max_approx_over_allocated_time():
-    """
-    The max approximation on logits wider than the longest sequence (a static buffer):
-    the mask follows the logits, not the lengths, so it needs no data read and matches the frames.
-    """
-    if not hasattr(torch.library, "register_fake"):
-        raise SkipTest("torch.library.register_fake not available (torch < 2.4)")
-    from torch._subclasses.fake_tensor import FakeTensor, FakeTensorMode
-
-    n_batch, seq_len, n_tgt, n_classes = 3, 10, 3, 6
-    torch.manual_seed(1)
-    args = dict(
-        logits=torch.randn(seq_len, n_batch, n_classes),
-        logits_seq_lens=torch.tensor([8, 6, 5], dtype=torch.int32),
-        targets=torch.randint(0, n_classes - 1, (n_batch, n_tgt), dtype=torch.int32),
-        targets_seq_lens=torch.tensor([3, 2, 0], dtype=torch.int32),
-    )
-    opts = dict(logits_time_major=True, blank_index=n_classes - 1, max_approx=True)
-    loss = ctc_loss(**args, **opts)
-    trimmed = ctc_loss(**dict(args, logits=args["logits"][:8]), **opts)
-    torch.testing.assert_close(loss, trimmed)
-
-    mode = FakeTensorMode()
-    with mode:
-        fake = ctc_loss(**{k: mode.from_tensor(v) for k, v in args.items()}, **opts)
-    assert isinstance(fake, FakeTensor)
-    assert fake.shape == loss.shape and fake.dtype == loss.dtype
