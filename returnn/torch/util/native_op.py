@@ -526,13 +526,12 @@ def ctc_loss(
     edges, weights, start_end_states = get_ctc_fsa_fast_bw(
         targets=targets, seq_lens=targets_seq_lens, blank_idx=blank_index, label_loop=label_loop
     )
+    n_states = _get_ctc_fsa_fast_bw_num_states(targets)
 
     seq_mask = sequence_mask_time_major(logits_seq_lens, maxlen=logits.shape[0])  # (time,batch), bool
 
     if max_approx:
         log_probs = torch.log_softmax(logits, dim=-1) if logits_normalize else logits  # (time,batch,dim)
-        # the state count from the targets shape, a max over the end states would be a device read
-        n_batch, n_tgt_time = targets.shape
         alignment, _ = fast_viterbi(
             am_scores=log_probs,
             am_seq_len=logits_seq_lens,
@@ -540,7 +539,7 @@ def ctc_loss(
             weights=weights,
             start_end_states=start_end_states,
             mask_idx=blank_index,
-            n_states=n_batch * (2 * n_tgt_time + 3),
+            n_states=n_states,
         )
         # alignment is (time,batch)
         log_probs_ = torch.gather(log_probs, 2, alignment.unsqueeze(-1))  # (time,batch,1)
@@ -549,7 +548,9 @@ def ctc_loss(
         loss = -torch.sum(log_probs_, dim=0)  # (batch,)
         return loss
 
-    loss = _FastBaumWelchScoresAutogradFunc.apply(logits, logits_normalize, seq_mask, edges, weights, start_end_states)
+    loss = _FastBaumWelchScoresAutogradFunc.apply(
+        logits, logits_normalize, seq_mask, edges, weights, start_end_states, n_states
+    )
     return loss
 
 
@@ -683,6 +684,20 @@ def get_ctc_fsa_fast_bw(
 
     _ctc_fsa_cache.set(cache_key, tuple(_wrap_raw_tensor(x) for x in (edges, weights, start_end_states)))
     return edges, weights, start_end_states
+
+
+def _get_ctc_fsa_fast_bw_num_states(targets: torch.Tensor, *, edges_bound: Optional[int] = None) -> int:
+    """
+    :param targets: shape (batch,target_time)
+    :param edges_bound: as in :func:`get_ctc_fsa_fast_bw`
+    :return: upper bound of the state count of the FSA from :func:`get_ctc_fsa_fast_bw`, from the shapes only
+    """
+    n_batch, n_time = targets.shape
+    if edges_bound is not None:
+        # packed layout: 2 * targets_total + 3 * n_batch, where edges_bound == 5 * targets_total + 5 * n_batch
+        return 2 * (edges_bound // 5) + n_batch
+    # rectangular layout: (2 * n_time + 3) states per seq
+    return n_batch * (2 * n_time + 3)
 
 
 def _ctc_fsa_edge_offsets(seq_lens: torch.Tensor, *, n_time: int, edges_bound: Optional[int]) -> torch.Tensor:
@@ -996,8 +1011,7 @@ def fast_viterbi(
     :param start_end_states: (2, batch), (start,end) state idx in automaton.
         there is only one single automaton.
     :param mask_idx: vocab index used for masking (e.g. padding, or if not path was found)
-    :param n_states: state count of the automaton. derived from start_end_states by default,
-        which is a data-dependent device read, i.e. a sync, so pass it if you know it statically.
+    :param n_states: state count of the automaton. derived from start_end_states by default
     :return: (alignment, scores), alignment is (time, batch), scores is (batch,), in +log space.
         note: scores are not differentiable here.
         do gather+sum on the am_scores by the alignment to get it differentiable.
@@ -1096,8 +1110,6 @@ def ctc_best_path(
         targets=targets, seq_lens=targets_seq_lens, blank_idx=blank_index, label_loop=label_loop
     )
 
-    # the state count from the targets shape like in ctc_loss, a max over the end states would be a device read
-    n_batch, n_tgt_time = targets.shape
     alignment, _ = fast_viterbi(
         am_scores=log_sm,
         am_seq_len=logits_seq_lens,
@@ -1105,7 +1117,7 @@ def ctc_best_path(
         weights=weights,
         start_end_states=start_end_states,
         mask_idx=blank_index,
-        n_states=n_batch * (2 * n_tgt_time + 3),
+        n_states=_get_ctc_fsa_fast_bw_num_states(targets),
     )
     return alignment
 

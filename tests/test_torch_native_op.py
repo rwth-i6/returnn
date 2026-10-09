@@ -1830,11 +1830,10 @@ def test_fast_baum_welch_fake_tensor_mode():
         assert fake.shape == real.shape and fake.dtype == real.dtype
 
 
-def test_ctc_best_path_fake_tensor_mode():
+def test_ctc_loss_and_best_path_fake_tensor_mode():
     """
-    :func:`ctc_best_path` under FakeTensor tracing (see :func:`test_fast_baum_welch_fake_tensor_mode`):
-    the state count of the automaton has to come from the shape of the targets,
-    a max over the end states would be a data-dependent host read.
+    Runs :func:`ctc_loss` (full-sum and max approximation) and :func:`ctc_best_path` under FakeTensor tracing,
+    see :func:`test_fast_baum_welch_fake_tensor_mode`.
     """
     if not hasattr(torch.library, "register_fake"):
         raise SkipTest("torch.library.register_fake not available (torch < 2.4)")
@@ -1849,10 +1848,10 @@ def test_ctc_best_path_fake_tensor_mode():
         targets_seq_lens=torch.tensor([3, 2, 0], dtype=torch.int32),
     )
     opts = dict(logits_time_major=True, blank_index=n_classes - 1)
-    real = ctc_best_path(**args, **opts)
-
-    mode = FakeTensorMode()
-    with mode:
-        fake = ctc_best_path(**{k: mode.from_tensor(v) for k, v in args.items()}, **opts)
-    assert isinstance(fake, FakeTensor)
-    assert fake.shape == real.shape and fake.dtype == real.dtype
+    for func, func_opts in [(ctc_loss, {}), (ctc_loss, dict(max_approx=True)), (ctc_best_path, {})]:
+        real = func(**args, **opts, **func_opts)
+        mode = FakeTensorMode()
+        with mode:
+            fake = func(**{k: mode.from_tensor(v) for k, v in args.items()}, **opts, **func_opts)
+        assert isinstance(fake, FakeTensor)
+        assert fake.shape == real.shape and fake.dtype == real.dtype
