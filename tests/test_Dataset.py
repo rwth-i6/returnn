@@ -2366,6 +2366,14 @@ def test_NemoSpeechDataset_cut_filter():
     uninterrupted = [dummy_iter_dataset(dataset, epoch=epoch) for epoch in [1, 2, 3]][-1]
     _nemo_speech_assert_same_seqs(uninterrupted, direct)
 
+    # Several shards: the same seqs, only the merge order differs.
+    opts["nemo_config"] = {**config, "num_workers": 2}
+    filtered = dummy_iter_dataset(NemoSpeechDataset(**opts, use_worker_procs=False), epoch=3)
+    opts["cut_filter"] = None
+    unfiltered = dummy_iter_dataset(NemoSpeechDataset(**opts, use_worker_procs=False), epoch=3)
+    assert any(s.seq_tag in rejected for s in unfiltered)
+    assert sorted(s.seq_tag for s in filtered) == sorted(s.seq_tag for s in unfiltered if s.seq_tag not in rejected)
+
 
 def test_NemoSpeechDataset_index_pack():
     data = _get_nemo_speech_data()  # first, skips if NeMo Speech is not available
