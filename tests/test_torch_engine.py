@@ -1694,6 +1694,186 @@ def test_torch_engine_distributed_sync_complete_frac_optimizer_step():
     _check_torch_distributed_lr(device="cuda", reduce_type="grad_explicit", accum_grad_multiple_step=1)
 
 
+def test_torch_distributed_sync_levels_spec():
+    from returnn.torch.distributed import _make_group_ranks, _parse_sync_levels, _check_sync_levels_nested
+
+    assert _make_group_ranks("world", size=4, hostnames=None) == [[0, 1, 2, 3]]
+    assert _make_group_ranks(2, size=4, hostnames=None) == [[0, 1], [2, 3]]
+    assert _make_group_ranks([[3, 0], [1, 2]], size=4, hostnames=None) == [[0, 3], [1, 2]]
+    assert _make_group_ranks("node", size=4, hostnames=["a", "b", "a", "b"]) == [[0, 2], [1, 3]]
+    for bad in [3, [[0, 1], [2]], [[0, 1], [1, 2, 3]], "foo", 2.0]:
+        try:
+            _make_group_ranks(bad, size=4, hostnames=None)
+        except (AssertionError, TypeError) as exc:
+            print("got expected exception:", exc)
+        else:
+            raise Exception(f"did not get expected exception for group {bad!r}")
+
+    levels = _parse_sync_levels(
+        [
+            {"group": 2, "type": "grad"},
+            {"group": 4, "type": "param", "every": 10},
+            {"group": "world", "type": "param", "every": 20},
+        ],
+        size=8,
+    )
+    assert [(level.sync_type, level.every, level.group_ranks) for level in levels] == [
+        ("grad", 1, [[0, 1], [2, 3], [4, 5], [6, 7]]),
+        ("param", 10, [[0, 1, 2, 3], [4, 5, 6, 7]]),
+        ("param", 20, [[0, 1, 2, 3, 4, 5, 6, 7]]),
+    ]
+    assert [level.fires(epoch_step_idx=step) for level in levels for step in [0, 9, 10, 19]] == [
+        True, True, True, True,  # grad
+        False, True, False, True,  # param every 10
+        False, False, False, True,  # param every 20
+    ]  # fmt: skip
+    _check_sync_levels_nested(levels)
+    for bad in [
+        [{"group": "world", "type": "param", "every": 10}, {"group": "world", "type": "grad"}],  # grad not first
+        [{"group": "world", "type": "grad", "every": 2}],
+        [{"group": "world", "type": "param", "every": 3}, {"group": "world", "type": "param", "every": 4}],
+        [{"group": "world", "type": "param", "every": 0}],
+        [{"group": "world", "type": "foo"}],
+        [{"group": "world", "type": "param", "foo": 1}],
+        [{"group": "world"}],
+        {"group": "world", "type": "param"},
+    ]:
+        try:
+            _parse_sync_levels(bad, size=8)
+        except (AssertionError, KeyError) as exc:
+            print("got expected exception:", exc)
+        else:
+            raise Exception(f"did not get expected exception for sync {bad!r}")
+    try:
+        _check_sync_levels_nested(
+            _parse_sync_levels(
+                [{"group": [[0, 1], [2, 3]], "type": "param"}, {"group": [[0, 2], [1, 3]], "type": "param"}], size=4
+            )
+        )
+    except AssertionError as exc:
+        print("got expected exception:", exc)
+    else:
+        raise Exception("did not get expected exception for non-nested groups")
+
+
+def _torch_distributed_sync_levels_worker(rank: int, world_size: int, port: int, tmp_dir: str, variant: str):
+    from returnn.torch.distributed import DistributedContext
+
+    os.environ.update(
+        MASTER_ADDR="127.0.0.1",
+        MASTER_PORT=str(port),
+        RANK=str(rank),
+        WORLD_SIZE=str(world_size),
+        LOCAL_RANK=str(rank),
+        LOCAL_WORLD_SIZE=str(world_size),
+    )
+    module = torch.nn.Linear(3, 2)
+    with torch.no_grad():
+        for i, param in enumerate(module.parameters()):
+            param.fill_(float(rank + 10 * i))  # rank-specific, so every average is distinguishable
+            param.grad = torch.full_like(param, float(100 * rank + i))
+
+    def _values() -> List[List[float]]:
+        return [[float(param.detach().flatten()[0]), float(param.grad.flatten()[0])] for param in module.parameters()]
+
+    results = {}
+    if variant == "grad_pairs":
+        # grads in pairs every step, params over all ranks every 2 steps
+        ctx = DistributedContext(
+            {"backend": "gloo", "sync": [{"group": 2, "type": "grad"}, {"group": "world", "type": "param", "every": 2}]}
+        )
+        assert ctx.has_grad_sync() and ctx.maybe_make_distributed_module(torch.nn.Linear(1, 1)) is None
+        assert ctx.should_sync_now(epoch_step_idx=0)
+        ctx.maybe_reduce_grads(module=module)
+        results["step0_grads"] = _values()
+        ctx.step_after_param_update(module=module, epoch_step_idx=0)
+        results["step0"] = _values()
+        ctx.step_after_param_update(module=module, epoch_step_idx=1)
+        results["step1"] = _values()
+    elif variant == "hier":
+        # params in pairs every 2 steps, params over the node (= all ranks here) every 4 steps;
+        # the pairs are given in a different rank order, which must not matter
+        ctx = DistributedContext(
+            {
+                "backend": "gloo",
+                "sync": [
+                    {"group": [[2, 0], [1, 3]], "type": "param", "every": 2, "sync_on_cpu": True},
+                    {"group": "node", "type": "param", "every": 4},
+                ],
+            }
+        )
+        assert not ctx.has_grad_sync()
+        assert [ctx.should_sync_now(epoch_step_idx=step) for step in range(4)] == [False, True, False, True]
+        ctx.maybe_reduce_grads(module=module)  # no-op
+        ctx.step_after_param_update(module=module, epoch_step_idx=0)
+        results["step0"] = _values()
+        ctx.step_after_param_update(module=module, epoch_step_idx=1)
+        results["step1"] = _values()
+        ctx.step_after_param_update(module=module, epoch_step_idx=3)
+        results["step3"] = _values()
+    else:
+        raise ValueError(f"invalid variant {variant!r}")
+
+    torch.save(results, f"{tmp_dir}/rank{rank}.pt")
+    torch.distributed.destroy_process_group()
+
+
+def _run_torch_distributed_sync_levels(variant: str) -> List[Dict[str, List[List[float]]]]:
+    import socket
+    import torch.multiprocessing
+
+    world_size = 4
+    with socket.socket() as s:
+        s.bind(("127.0.0.1", 0))
+        port = s.getsockname()[1]
+    with tempfile.TemporaryDirectory(prefix="returnn_test_torch_distributed_sync_levels") as tmp_dir:
+        torch.multiprocessing.spawn(
+            _torch_distributed_sync_levels_worker, args=(world_size, port, tmp_dir, variant), nprocs=world_size
+        )
+        return [torch.load(f"{tmp_dir}/rank{rank}.pt") for rank in range(world_size)]
+
+
+def _check_torch_distributed_sync_levels(variant: str, expected: Dict[str, List[List[List[float]]]]):
+    res = _run_torch_distributed_sync_levels(variant)
+    for key, expected_values in expected.items():
+        got = [res[rank][key] for rank in range(len(res))]
+        assert got == expected_values, (key, got, expected_values)
+
+
+def test_torch_distributed_sync_levels_cpu_grad_pairs():
+    # per rank: [param, grad] of (weight, bias). Params start at rank + 10 * i, grads at 100 * rank + i.
+    unsynced = [[[0, 50], [10, 51]], [[1, 50], [11, 51]], [[2, 250], [12, 251]], [[3, 250], [13, 251]]]
+    _check_torch_distributed_sync_levels(
+        "grad_pairs",
+        {
+            "step0_grads": unsynced,
+            "step0": unsynced,
+            "step1": [
+                [[1.5, 50], [11.5, 51]],
+                [[1.5, 50], [11.5, 51]],
+                [[1.5, 250], [11.5, 251]],
+                [[1.5, 250], [11.5, 251]],
+            ],
+        },
+    )
+
+
+def test_torch_distributed_sync_levels_cpu_hier():
+    _check_torch_distributed_sync_levels(
+        "hier",
+        {
+            "step0": [[[0, 0], [10, 1]], [[1, 100], [11, 101]], [[2, 200], [12, 201]], [[3, 300], [13, 301]]],
+            "step1": [[[1, 0], [11, 1]], [[2, 100], [12, 101]], [[1, 200], [11, 201]], [[2, 300], [12, 301]]],
+            "step3": [
+                [[1.5, 0], [11.5, 1]],
+                [[1.5, 100], [11.5, 101]],
+                [[1.5, 200], [11.5, 201]],
+                [[1.5, 300], [11.5, 301]],
+            ],
+        },
+    )
+
+
 def test_dynamic_learning_rate():
     num_epochs = 3
     last_global_train_step: Optional[float] = None
