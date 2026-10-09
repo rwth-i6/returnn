@@ -39,6 +39,15 @@ def main():
     arg_parser.add_argument("--num-iterations", type=int, default=10)
     arg_parser.add_argument("--num-steps", type=int, default=21)
     arg_parser.add_argument("--search-mode", default="auto", help="'auto', 'grid', 'single'")
+    arg_parser.add_argument(
+        "--grid-keep-best",
+        action="store_true",
+        default=None,
+        help="grid search: final scales are the best over all iterations, not only of the last grid."
+        " Default since behavior version 36",
+    )
+    arg_parser.add_argument("--no-grid-keep-best", dest="grid_keep_best", action="store_false", default=None)
+    arg_parser.add_argument("--behavior-version", type=int, help="RETURNN behavior version")
     arg_parser.add_argument("--device", default="cpu", help="auto, cpu, cuda, ...")
     arg_parser.add_argument("--batch-size", type=int, default=1024)
     arg_parser.add_argument("--output-scales", help="file to write (relative) scales into")
@@ -53,6 +62,8 @@ def main():
 
     log.initialize(verbosity=[5])
     BehaviorVersion.set_min_behavior_version(22)
+    if args.behavior_version is not None:
+        BehaviorVersion.set(args.behavior_version)
     better_exchook.install()
     rf.select_backend_torch()
 
@@ -115,6 +126,8 @@ def main():
         else:
             search_mode = "single"
     print("Search mode:", search_mode)
+    if args.grid_keep_best is not None and search_mode != "grid":
+        raise ValueError(f"--grid-keep-best / --no-grid-keep-best need search mode grid, got {search_mode!r}")
 
     # Load data
     vocab: Dict[str, int] = {}
@@ -342,6 +355,7 @@ def main():
             num_steps=args.num_steps,
             evaluation=args.evaluation,
             output_grid_plot=args.output_grid_plot,
+            keep_best=args.grid_keep_best if args.grid_keep_best is not None else BehaviorVersion.get() >= 36,
         )
     else:
         raise ValueError(f"unknown search mode {search_mode!r}")
@@ -386,8 +400,10 @@ def _grid_search(
     num_steps: int,
     evaluation: str,
     output_grid_plot: Optional[str],
+    keep_best: bool,
 ) -> List[float]:
     print("Search mode grid, all dimensions/scales optimized together")
+    best: Optional[Tuple[float, List[float]]] = None  # (eval, scales)
     for iter_idx in range(num_iterations):
         print("*** Iter", iter_idx)
         has_change = False
@@ -442,7 +458,8 @@ def _grid_search(
             else:
                 print(f"No change for scale {names[scale_idx]}")
         # Select current best.
-        scales = min(evals)[1]
+        best = min(best, min(evals)) if keep_best and best is not None else min(evals)
+        scales = best[1]
         if not has_change:
             print(f"No change in this iteration {iter_idx}, stop")
             break

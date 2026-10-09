@@ -22,6 +22,18 @@ and not listing legacy/deprecated parameters.
 Version History
 ---------------
 
+Behavior version 36 (2026-10-09)
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+``tools/torch_scale_tuning.py`` with grid search:
+the final scales are the best evaluated ones over all iterations.
+Before, they were the best of the last grid only,
+which does not necessarily contain the best point of an earlier grid.
+
+The behavior version of the tool is set with ``--behavior-version``.
+There is also the option ``--grid-keep-best`` / ``--no-grid-keep-best``
+to override in both directions.
+
 Behavior version 35 (2026-10-07)
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
