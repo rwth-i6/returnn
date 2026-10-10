@@ -14,7 +14,7 @@ import torch
 
 import returnn
 from returnn.log import log
-from returnn.util.basic import RefIdEq, get_fwd_compat_kwargs
+from returnn.util.basic import RefIdEq, get_fwd_compat_kwargs, BehaviorVersion
 import returnn.frontend as rf
 from returnn.torch.frontend.bridge import wrapped_pt_module_to_rf_module
 from returnn.torch.util.optimizer_step import OptimizerStep
@@ -661,6 +661,8 @@ class Updater:
         - ``weight_decay_modules_blacklist``: list of modules types which should not get weight decay.
           Those can be RF modules or pure PyTorch modules.
           The types can be specified as string (e.g. ``"torch.nn.LayerNorm"``) or as the type itself.
+          Default: ``(torch.nn.LayerNorm, torch.nn.Embedding)``,
+          since behavior version 36 all normalization layers and embeddings of RF and PyTorch.
 
         :param optim_class: Optimizer class.
         :param optimizer_opts: Optimizer configuration specified by the user. Might be modified inplace here.
@@ -764,8 +766,12 @@ def wrap_user_blacklist_wd_modules(
     Wraps the user-provided blacklist_weight_decay_modules into a tuple of types.
     This supports both pure PyTorch modules (e.g. "torch.nn.LayerNorm")
     and RF modules (e.g. "rf.LayerNorm"), which can be specified as strings or types.
+    Default: ``(torch.nn.LayerNorm, torch.nn.Embedding)``,
+    since behavior version 36 all normalization layers and embeddings of RF and PyTorch.
     """
     if mods is None:
+        if BehaviorVersion.get() >= 36:
+            return _norm_and_embedding_modules()
         return torch.nn.LayerNorm, torch.nn.Embedding
     assert isinstance(mods, (list, tuple)), f"invalid blacklist_weight_decay_modules {mods!r}"
     res = []
@@ -776,6 +782,34 @@ def wrap_user_blacklist_wd_modules(
         assert issubclass(mod, (rf.Module, torch.nn.Module)), f"invalid blacklist_weight_decay_modules {mods!r}"
         res.append(mod)
     return tuple(res)
+
+
+def _norm_and_embedding_modules() -> Tuple[type, ...]:
+    """
+    :return: the normalization and embedding module types of RF and PyTorch
+    """
+    mods = [
+        rf.LayerNorm,
+        rf.RMSNorm,
+        rf.GroupNorm,
+        rf.GroupNormSpatial,
+        rf.BatchNorm,
+        rf.Normalize,
+        rf.Embedding,
+        torch.nn.LayerNorm,
+        torch.nn.GroupNorm,
+        torch.nn.BatchNorm1d,
+        torch.nn.BatchNorm2d,
+        torch.nn.BatchNorm3d,
+        torch.nn.SyncBatchNorm,
+        torch.nn.InstanceNorm1d,
+        torch.nn.InstanceNorm2d,
+        torch.nn.InstanceNorm3d,
+        torch.nn.Embedding,
+    ]
+    if hasattr(torch.nn, "RMSNorm"):  # PyTorch >= 2.4
+        mods.append(torch.nn.RMSNorm)
+    return tuple(mods)
 
 
 def _optimizer_opts_for_checkpoint(obj: Any) -> Any:

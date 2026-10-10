@@ -1037,6 +1037,53 @@ def test_updater_weight_decay_blacklist():
     assert params_by_wd[1e-3] == {"2.weight"}
 
 
+def test_updater_weight_decay_blacklist_norm_modules():
+    from returnn.torch.frontend.bridge import rf_module_to_pt_module
+    from returnn.util.basic import BehaviorVersion, DictRefKeys
+
+    rf.select_backend_torch()
+
+    class _Model(rf.Module):
+        def __init__(self):
+            super().__init__()
+            in_dim, embed_dim, out_dim = rf.Dim(11), rf.Dim(5), rf.Dim(7)
+            self.embed = rf.Embedding(in_dim, embed_dim)
+            self.layer_norm = rf.LayerNorm(embed_dim)
+            self.batch_norm = rf.BatchNorm(embed_dim, use_mask=False, track_running_stats=False)
+            self.linear = rf.Linear(embed_dim, out_dim)
+
+    config = Config(dict(optimizer={"class": "adamw", "weight_decay": 1e-3}))
+
+    def _params_with_wd(model: torch.nn.Module):
+        updater = Updater(config=config, network=model, device=torch.device("cpu"))
+        updater.create_optimizer()
+        param_to_name = DictRefKeys((param, name) for name, param in model.named_parameters())
+        (wd_group,) = [group for group in updater.get_optimizer().param_groups if group["weight_decay"]]
+        return {param_to_name[p] for p in wd_group["params"]}
+
+    def _torch_model():
+        return torch.nn.Sequential(torch.nn.Linear(5, 4), torch.nn.BatchNorm1d(4), torch.nn.GroupNorm(2, 4))
+
+    behavior_version_orig_state = BehaviorVersion._get_state()
+    try:
+        BehaviorVersion._reset()
+        BehaviorVersion.set(35)
+        assert _params_with_wd(rf_module_to_pt_module(_Model())) == {
+            "embed.weight",
+            "layer_norm.scale",
+            "batch_norm.gamma",
+            "batch_norm.beta",
+            "linear.weight",
+        }
+        assert _params_with_wd(_torch_model()) == {"0.weight", "1.weight", "2.weight"}
+        BehaviorVersion._reset()
+        BehaviorVersion.set(36)
+        assert _params_with_wd(rf_module_to_pt_module(_Model())) == {"linear.weight"}
+        assert _params_with_wd(_torch_model()) == {"0.weight"}
+    finally:
+        BehaviorVersion._reset(behavior_version_orig_state)
+
+
 class _AnchoredSGD(torch.optim.Optimizer):
     """
     SGD from an anchor, the state starting as a copy of the param (like the z of a schedule-free optimizer):
