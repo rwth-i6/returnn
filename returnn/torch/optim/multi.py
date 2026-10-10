@@ -90,6 +90,8 @@ class MultiOptimizer(torch.optim.Optimizer):
     ``add_param_group`` after construction is not supported,
     the parameter assignment is fixed at creation time.
 
+    ``train()``/``eval()`` are forwarded to sub-optimizers which define them (schedule-free optimizers).
+
     This class is not constructed via the generic ``optim_class(param_groups, **opts)`` path,
     the RETURNN updater constructs the sub-optimizers and passes them here.
     Subclasses must keep the keyword-only ``sub_optimizers`` constructor argument.
@@ -210,6 +212,24 @@ class MultiOptimizer(torch.optim.Optimizer):
             super().add_param_group(param_group)
             return
         raise NotImplementedError("MultiOptimizer: add_param_group not supported")
+
+    def train(self):
+        """
+        Set train mode on all sub-optimizers which support it (schedule-free optimizers).
+        """
+        for sub in self.sub_optimizers:
+            func = getattr(sub, "train", None)
+            if callable(func):
+                func()
+
+    def eval(self):
+        """
+        Set eval mode on all sub-optimizers which support it (schedule-free optimizers).
+        """
+        for sub in self.sub_optimizers:
+            func = getattr(sub, "eval", None)
+            if callable(func):
+                func()
 
     def state_dict(self) -> Dict[str, Any]:
         """
