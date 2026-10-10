@@ -429,10 +429,14 @@ class Updater:
                     "loaded state dict has a different number of parameter groups: ckpt %i vs. self %i"
                     % (len(optimizer_state["optimizer"]["param_groups"]), len(self.optimizer.param_groups))
                 )
-            # Check if we have the same parameters in the same order.
+            # Check if we have the same parameters in the same order and in the same param groups.
             self_param_names, param_id_to_name = self._get_opt_param_names()
             ckpt_param_names = optimizer_state["param_names"]
-            if self_param_names != ckpt_param_names:
+            self_group_names = [[param_id_to_name[id(p)] for p in g["params"]] for g in self.optimizer.param_groups]
+            ckpt_group_names = [
+                [ckpt_param_names[i] for i in g["params"]] for g in optimizer_state["optimizer"]["param_groups"]
+            ]
+            if self_group_names != ckpt_group_names:
                 self_param_names_dict = {name: i for i, name in enumerate(self_param_names)}
                 self_param_names_critical_set = set()
                 ckpt_param_names_dict = {name: i for i, name in enumerate(ckpt_param_names)}
@@ -472,24 +476,25 @@ class Updater:
                             file=log.v3,
                         )
                 else:
-                    print("load_optimizer: Params in different order.", file=log.v3)
+                    print("load_optimizer: Params in different order or param groups.", file=log.v3)
+                # Params which moved between param groups (e.g. due to a changed weight-decay split).
+                ckpt_group_idx = {name: i for i, names in enumerate(ckpt_group_names) for name in names}
+                moved_params = [
+                    f"{name} ({ckpt_group_idx[name]} -> {i})"
+                    for i, names in enumerate(self_group_names)
+                    for name in names
+                    if name in self_param_names_critical_set and ckpt_group_idx.get(name, i) != i
+                ]
+                if moved_params:
+                    print(
+                        "load_optimizer: Params moved between param groups (ckpt group -> group): %s\n"
+                        "    Their per-param state is kept." % ", ".join(moved_params),
+                        file=log.v3,
+                    )
                 print("load_optimizer: Will remap the state dict.", file=log.v3)
                 for ckpt_group, self_group in zip(
                     optimizer_state["optimizer"]["param_groups"], self.optimizer.param_groups
                 ):
-                    # Check whether it is matching for the critical params.
-                    self_group_param_names = set(param_id_to_name[id(p)] for p in self_group["params"])
-                    ckpt_group_param_names = set(ckpt_param_names[p] for p in ckpt_group["params"])
-                    self_group_param_names.intersection_update(self_param_names_critical_set)
-                    ckpt_group_param_names.intersection_update(self_param_names_critical_set)
-                    if ckpt_group_param_names != self_group_param_names:
-                        raise ValueError(
-                            "load_optimizer: params in group not in ckpt: %s\n  ckpt params not existing: %s"
-                            % (
-                                ", ".join(ckpt_group_param_names - self_group_param_names) or "(None)",
-                                ", ".join(self_group_param_names - ckpt_group_param_names) or "(None)",
-                            )
-                        )
                     ckpt_group["params"] = [
                         self_param_names_dict[param_id_to_name[id(p)]] for p in self_group["params"]
                     ]
