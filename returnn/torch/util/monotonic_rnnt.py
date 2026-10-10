@@ -22,7 +22,7 @@ different route it also checks the hand-written backward sweep.
 
 from __future__ import annotations
 
-from typing import Tuple
+from typing import Tuple, Union
 
 import torch
 
@@ -110,6 +110,37 @@ def _cell_index(
     prefix = torch.arange(max_prefix, device=device).view(1, 1, -1)
     stride = (label_lens.long() + 1).view(1, -1, 1)
     return torch.clamp(offsets.view(1, -1, 1) + frame * stride + prefix, max=num_cells - 1)
+
+
+def _lattice_log_probs(
+    blank_lp: torch.Tensor,
+    label_lp: torch.Tensor,
+    frame_lens: torch.Tensor,
+    label_lens: torch.Tensor,
+    max_frames: int,
+    max_prefix: int,
+) -> Tuple[torch.Tensor, torch.Tensor]:
+    """
+    Lays the two log probabilities of every packed cell out over the positions of a padded lattice.
+
+    :param blank_lp: [cells] blank log probability
+    :param label_lp: [cells] next label log probability
+    :param frame_lens: [B] frames per sequence
+    :param label_lens: [B] labels per sequence
+    :param max_frames: frames of the padded lattice
+    :param max_prefix: prefixes of the padded lattice, U_max + 1
+    :return: (blank, label) [B, max_frames, max_prefix] each, without gradient, minus infinity outside the lattice
+        of a sequence, the label one also where the prefix is complete
+    """
+    offsets, _cells = _cell_offsets(frame_lens, label_lens)
+    index = _cell_index(offsets, label_lens, max_frames, max_prefix, blank_lp.shape[0])
+    frame = torch.arange(max_frames, device=index.device).view(-1, 1, 1)
+    prefix = torch.arange(max_prefix, device=index.device).view(1, 1, -1)
+    inside = (frame < frame_lens.view(1, -1, 1)) & (prefix <= label_lens.view(1, -1, 1))
+    emits = inside & (prefix < label_lens.view(1, -1, 1))
+    blank = blank_lp.detach()[index].masked_fill(~inside, float("-inf"))
+    label = label_lp.detach()[index].masked_fill(~emits, float("-inf"))
+    return blank.transpose(0, 1).contiguous(), label.transpose(0, 1).contiguous()
 
 
 def _forward_scores(
@@ -240,7 +271,8 @@ def monotonic_rnnt_loss(
     *,
     blank: int,
     max_frames: int,
-) -> torch.Tensor:
+    return_log_probs: bool = False,
+) -> Union[torch.Tensor, Tuple[torch.Tensor, torch.Tensor, torch.Tensor]]:
     """
     Full-sum negative log likelihood of the monotonic transducer over a packed lattice.
 
@@ -251,8 +283,11 @@ def monotonic_rnnt_loss(
     :param blank: blank index
     :param max_frames: frames the recursion runs over, at least the longest sequence of the batch.
         A static bound such as the declared capacity, since reading the batch's own maximum would be a host read.
+    :param return_log_probs: whether to also return the blank and the next label log probability the recursion
+        reads at every lattice position
     :return: [B] the negative log likelihood, zero (also in the gradient) where a sequence has no alignment,
-        as ``zero_infinity`` does in :func:`torch.nn.functional.ctc_loss`
+        as ``zero_infinity`` does in :func:`torch.nn.functional.ctc_loss`.
+        With return_log_probs also the blank and the next label log probabilities, see :func:`_lattice_log_probs`
     """
     if logits.dim() != 2:
         raise ValueError(f"monotonic rnnt: logits must be [cells, V], got shape {tuple(logits.shape)}")
@@ -260,7 +295,13 @@ def monotonic_rnnt_loss(
     if not 0 <= blank < vocab:
         raise ValueError(f"monotonic rnnt: blank {blank} outside the vocabulary of {vocab}")
     if logits.shape[0] == 0:
-        return logits.sum() * torch.zeros(frame_lens.shape[0], dtype=torch.float32, device=logits.device)
+        losses = logits.sum() * torch.zeros(frame_lens.shape[0], dtype=torch.float32, device=logits.device)
+        if not return_log_probs:
+            return losses
+        nothing = torch.full(
+            (frame_lens.shape[0], max_frames, int(labels.shape[1]) + 1), float("-inf"), device=logits.device
+        )
+        return losses, nothing, nothing.clone()
     logits = logits.contiguous()
     # the kernels index the lengths by sequence and ignore strides
     frame_lens, label_lens = frame_lens.contiguous(), label_lens.contiguous()
@@ -278,9 +319,9 @@ def monotonic_rnnt_loss(
     )
     if logits.is_cuda:
         assert _HAVE_LIB_OPS, "monotonic rnnt: the loss needs torch.library.custom_op, so torch >= 2.4"
-        total = torch.ops.returnn.monotonic_rnnt_fwd(
+        total, _row_max, _log_sum, blank_lp, label_lp, _alpha = torch.ops.returnn.monotonic_rnnt_fwd(
             logits, next_label, frame_lens, label_lens, blank, max_frames, max_prefix
-        )[0]
+        )
     else:
         offsets, _cells = _cell_offsets(frame_lens, label_lens)
         source = logits if logits.dtype in (torch.float32, torch.float64) else logits.float()
@@ -292,4 +333,7 @@ def monotonic_rnnt_loss(
         index = _cell_index(offsets, label_lens, max_frames, max_prefix, logits.shape[0])
         total, _alpha = _forward_scores(blank_lp[index], label_lp[index], frame_lens, label_lens)
     alignable = (label_lens <= frame_lens) & (frame_lens > 0)
-    return torch.where(alignable, -total, torch.zeros_like(total))
+    losses = torch.where(alignable, -total, torch.zeros_like(total))
+    if not return_log_probs:
+        return losses
+    return (losses, *_lattice_log_probs(blank_lp, label_lp, frame_lens, label_lens, max_frames, max_prefix))

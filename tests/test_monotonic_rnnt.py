@@ -99,6 +99,33 @@ def test_monotonic_rnnt_gradient_matches_finite_differences():
     )
 
 
+def test_monotonic_rnnt_returns_the_log_probs_of_the_lattice():
+    torch.manual_seed(9)
+    vocab, blank, max_frames = 7, 0, 6
+    cases = [(5, 2), (3, 0), (4, 4)]
+    per_seq = [torch.randn(t, u + 1, vocab) for t, u in cases]
+    labels = torch.randint(1, vocab, (len(cases), 4), dtype=torch.int32)
+    frame_lens = torch.tensor([t for t, _ in cases], dtype=torch.int32)
+    label_lens = torch.tensor([u for _, u in cases], dtype=torch.int32)
+
+    # every position of a sequence's lattice by a loop, no label edge where the prefix is complete
+    want_blank = torch.full((len(cases), max_frames, labels.shape[1] + 1), float("-inf"))
+    want_label = want_blank.clone()
+    for b, (t, u) in enumerate(cases):
+        log_probs = torch.log_softmax(per_seq[b], dim=-1)
+        want_blank[b, :t, : u + 1] = log_probs[..., blank]
+        want_label[b, :t, :u] = log_probs[:, :u].gather(-1, labels[b, :u].long().view(1, u, 1).expand(t, u, 1))[..., 0]
+
+    for device in ["cpu"] + (["cuda"] if torch.cuda.is_available() else []):
+        logits = _pack(per_seq).to(device).requires_grad_()
+        args = (logits, labels.to(device), frame_lens.to(device), label_lens.to(device))
+        loss, blank_lp, label_lp = monotonic_rnnt_loss(*args, blank=blank, max_frames=max_frames, return_log_probs=True)
+        torch.testing.assert_close(loss, monotonic_rnnt_loss(*args, blank=blank, max_frames=max_frames))
+        assert not blank_lp.requires_grad and not label_lp.requires_grad
+        torch.testing.assert_close(blank_lp.cpu(), want_blank, msg=f"blank log probs on {device}")
+        torch.testing.assert_close(label_lp.cpu(), want_label, msg=f"label log probs on {device}")
+
+
 def test_monotonic_rnnt_on_cuda_matches_the_reference():
     if not torch.cuda.is_available():
         import unittest
