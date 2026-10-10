@@ -16,7 +16,7 @@ import numpy
 
 from returnn.log import log
 from returnn.util import better_exchook
-from returnn.util.basic import try_run, NumbersDict
+from returnn.util.basic import get_fwd_compat_kwargs, try_run, NumbersDict
 from returnn.util.multi_proc_non_daemonic_spawn import NonDaemonicSpawnContext
 from returnn.config import SubProcCopyGlobalConfigPreInitFunc
 from .basic import DatasetSeq
@@ -63,7 +63,7 @@ class NemoSpeechDataset(CachedDataset2):
     One epoch is ``draws_per_epoch`` draws (sum over all shards).
     A draw is one record from one source (leaf of the ``input_cfg`` tree), like one step of NeMo's multiplexer:
     records which NeMo's source skips (e.g. ``_skipme``) are not drawn,
-    records rejected by the filters are.
+    records rejected by the filters (NeMo's and ``cut_filter``) are.
     Draws are distributed over the sources by their weights,
     within one draw of the exact weight at every epoch boundary.
     Every source continues where the previous epoch stopped, in complete passes over its records.
@@ -115,6 +115,7 @@ class NemoSpeechDataset(CachedDataset2):
         targets: Union[Vocabulary, Dict[str, Any], None] = None,
         tokenizer: Optional[Any] = None,
         audio: Optional[Dict[str, Any]] = None,
+        cut_filter: Optional[Callable[..., bool]] = None,
         shuffle_window: Optional[int] = None,
         buffer_size: int = 32,
         preload_next_epoch: bool = True,
@@ -135,6 +136,11 @@ class NemoSpeechDataset(CachedDataset2):
             As in NeMo, it also enables the token-per-second filters (with ``pretokenize``).
         :param audio: options for :class:`ExtractAudioFeatures`.
             None (default): the raw samples as loaded by NeMo, shape (time, 1).
+        :param cut_filter: ``cut_filter(cut, **kwargs) -> bool``, whether to keep the record,
+            e.g. by a field of the manifest (in ``cut.custom``).
+            Applied after the NeMo filters, to the cut without audio.
+            Like the NeMo filters, a rejected record counts as draw.
+            Must be deterministic and picklable (e.g. a module-level function), as it runs in the worker procs.
         :param shuffle_window: number of draws which are shuffled together.
             None: NeMo ``shuffle_buffer_size`` if NeMo ``shuffle`` is set, else 1.
         :param buffer_size: number of seqs each worker prefetches
@@ -173,6 +179,7 @@ class NemoSpeechDataset(CachedDataset2):
         self.targets: Optional[Vocabulary] = targets
         self.tokenizer = tokenizer
         self.audio = audio
+        self.cut_filter = cut_filter
         self._audio_feature_dim = 1
         if audio is not None:
             from .util.feature_extraction import ExtractAudioFeatures
@@ -240,6 +247,7 @@ class NemoSpeechDataset(CachedDataset2):
             targets=self.targets,
             tokenizer=self.tokenizer,
             audio=self.audio,
+            cut_filter=self.cut_filter,
             shuffle_window=self.shuffle_window,
             buffer_size=self.buffer_size,
             preload_next_epoch=self.preload_next_epoch,
@@ -513,6 +521,7 @@ class _ShardStream:
         targets: Optional[Vocabulary],
         tokenizer: Optional[Any],
         audio: Optional[Dict[str, Any]],
+        cut_filter: Optional[Callable[..., bool]],
         shuffle_window: Optional[int],
         buffer_size: int,
         preload_next_epoch: bool,
@@ -548,7 +557,7 @@ class _ShardStream:
 
             self.feature_extractor = ExtractAudioFeatures(random_state=numpy.random.RandomState(1), **audio)
 
-        self.sources = _NemoSources(config, tokenizer=self.nemo_tokenizer)
+        self.sources = _NemoSources(config, tokenizer=self.nemo_tokenizer, cut_filter=cut_filter)
         self.partitions = [
             _get_partition(
                 source.node, shard_id=self.shard_id, num_shards=self.num_shards, process_seed=self.process_seed
@@ -867,8 +876,10 @@ class _NemoSources:
     The NeMo data pipeline (sources, maps, filters) as a list of sources with random access.
     """
 
-    def __init__(self, config: DictConfig, *, tokenizer: Optional[Any]):
+    def __init__(self, config: DictConfig, *, tokenizer: Optional[Any], cut_filter: Optional[Callable[..., bool]]):
         cuts = _make_nemo_cutset(config, tokenizer=tokenizer)
+        if cut_filter is not None:
+            cuts = cuts.filter(functools.partial(_apply_cut_filter, cut_filter))
         self.sources: List[_NemoSource] = []
         _collect_sources(cuts, weight=1.0, ops=[], out=self.sources)
 
@@ -1042,6 +1053,10 @@ def _make_nemo_cutset(config: DictConfig, *, tokenizer: Optional[Any]):
         cuts, nemo_dl.determine_bucket_duration_bins(config), config, audio_token_estimator=audio_token_estimator
     )
     return cuts
+
+
+def _apply_cut_filter(cut_filter: Callable[..., bool], cut: Cut) -> bool:
+    return cut_filter(cut, **get_fwd_compat_kwargs())
 
 
 def _create_nemo_tokenizer(tokenizer: Any):
