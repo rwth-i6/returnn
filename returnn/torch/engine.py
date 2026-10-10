@@ -1535,9 +1535,8 @@ class Engine(EngineBase):
         print("Save model under %s" % (filename,), file=log.v4)
         # First write to a temp-file, to be sure that writing happens without errors,
         # and only afterward rename to the target file.
-        tmp_filename = filename + ".tmp_write"
-        if os.path.exists(tmp_filename):
-            os.unlink(tmp_filename)
+        from returnn.torch.util.serialization import save_checkpoint
+
         state_dict = self._pt_model.state_dict()
         if self._ignore_param_set:
             # Do some extra check that we don't save the ignored parameters.
@@ -1545,7 +1544,7 @@ class Engine(EngineBase):
             # via util_module.convert_parameters_to_buffers before.
             remaining = set(state_dict.keys()).intersection(self._ignore_param_set)
             assert not remaining, f"_save_model: found remaining params in state_dict to ignore: {remaining}"
-        torch.save(
+        save_checkpoint(
             {
                 "model": state_dict,
                 "epoch": self.epoch,
@@ -1553,9 +1552,8 @@ class Engine(EngineBase):
                 "effective_learning_rate": self._updater.get_effective_learning_rate() if self._updater else None,
                 "returnn_version": returnn.__long_version__,
             },
-            tmp_filename,
+            filename,
         )
-        os.rename(tmp_filename, filename)
 
     def get_pt_optimizer(self) -> Optional[torch.optim.Optimizer]:
         """
