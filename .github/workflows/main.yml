@@ -246,6 +246,7 @@ jobs:
           - TEST=torch_internal_frontend
           - TEST=torch_util
           - TEST=torch_native_op
+          - TEST=monotonic_rnnt
           - TEST=threading
         include:
           # the torch >= 2.12 code paths (e.g. the inductor_fw_compiler shim) run nowhere else
