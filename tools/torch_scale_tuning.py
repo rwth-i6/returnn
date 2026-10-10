@@ -9,7 +9,7 @@ import argparse
 import os
 import numpy as np
 from dataclasses import dataclass
-from typing import Optional, Union, Dict, List, Tuple, Set
+from typing import Optional, Union, Callable, Dict, List, Tuple, Set
 
 import _setup_returnn_env  # noqa
 
@@ -39,6 +39,15 @@ def main():
     arg_parser.add_argument("--num-iterations", type=int, default=10)
     arg_parser.add_argument("--num-steps", type=int, default=21)
     arg_parser.add_argument("--search-mode", default="auto", help="'auto', 'grid', 'single'")
+    arg_parser.add_argument(
+        "--grid-keep-best",
+        action="store_true",
+        default=None,
+        help="grid search: final scales are the best over all iterations, not only of the last grid."
+        " Default since behavior version 36",
+    )
+    arg_parser.add_argument("--no-grid-keep-best", dest="grid_keep_best", action="store_false", default=None)
+    arg_parser.add_argument("--behavior-version", type=int, help="RETURNN behavior version")
     arg_parser.add_argument("--device", default="cpu", help="auto, cpu, cuda, ...")
     arg_parser.add_argument("--batch-size", type=int, default=1024)
     arg_parser.add_argument("--output-scales", help="file to write (relative) scales into")
@@ -53,6 +62,8 @@ def main():
 
     log.initialize(verbosity=[5])
     BehaviorVersion.set_min_behavior_version(22)
+    if args.behavior_version is not None:
+        BehaviorVersion.set(args.behavior_version)
     better_exchook.install()
     rf.select_backend_torch()
 
@@ -115,6 +126,8 @@ def main():
         else:
             search_mode = "single"
     print("Search mode:", search_mode)
+    if args.grid_keep_best is not None and search_mode != "grid":
+        raise ValueError(f"--grid-keep-best / --no-grid-keep-best need search mode grid, got {search_mode!r}")
 
     # Load data
     vocab: Dict[str, int] = {}
@@ -331,65 +344,19 @@ def main():
                 print(f"No change in this iteration {iter_idx}, stop")
                 break
     elif search_mode == "grid":
-        print("Search mode grid, all dimensions/scales optimized together")
-        for iter_idx in range(args.num_iterations):
-            print("*** Iter", iter_idx)
-            has_change = False
-            scale_indices = []
-            spaces = []
-            for scale_idx in range(len(names)):
-                if scale_idx in fixed_scales:
-                    continue
-                scale_indices.append(scale_idx)
-                spaces.append(np.linspace(scales_min[scale_idx], scales_max[scale_idx], num=args.num_steps))
-            evals: List[Tuple[float, List[float]]] = []  # (eval, scales)
-            best_eval_so_far = np.inf
-            spaces = np.meshgrid(*spaces)
-            it = np.nditer(spaces)
-            with it:
-                for scale_values in it:
-                    assert len(scale_values) == len(scale_indices)
-                    scales = [0.0] * len(names)
-                    for scale_idx, scale in fixed_scales.items():
-                        scales[scale_idx] = scale
-                    for scale_idx, scale in zip(scale_indices, scale_values):
-                        scales[scale_idx] = float(scale)
-                    eval_ = _eval_for_scales(scales)
-                    if eval_ < best_eval_so_far:
-                        best_eval_so_far = eval_
-                        print(f"New best {args.evaluation}: {eval_}, scales: {scales}")
-                    evals.append((eval_, scales))
-            if args.output_grid_plot:
-                assert len(scale_indices) == 2, "only implemented for 2 scales"
-                _plot_grid(
-                    evals,
-                    scale_indices=scale_indices,
-                    title="",
-                    cbar_label=args.evaluation,
-                    x_axis_name=names[scale_indices[0]],
-                    y_axis_name=names[scale_indices[1]],
-                    out_plot_filename=f"{args.output_grid_plot}.{iter_idx}.pdf",
-                )
-            eval_p = np.percentile([eval_ for eval_, _ in evals], 5)
-            print(
-                f"Evaluated grid size {len(evals)}, eval p5: {eval_p},",
-                f"best: {min(eval_ for eval_, _ in evals)},",
-                f"worst: {max(eval_ for eval_, _ in evals)}",
-            )
-            for scale_idx in scale_indices:
-                prev_min, prev_max = scales_min[scale_idx], scales_max[scale_idx]
-                scales_min[scale_idx] = min(scale[scale_idx] for eval_, scale in evals if eval_ <= eval_p * 1.0001)
-                scales_max[scale_idx] = max(scale[scale_idx] for eval_, scale in evals if eval_ <= eval_p * 1.0001)
-                print(f"New {names[scale_idx]} scales min/max:", scales_min[scale_idx], scales_max[scale_idx])
-                if prev_min != scales_min[scale_idx] or prev_max != scales_max[scale_idx]:
-                    has_change = True
-                else:
-                    print(f"No change for scale {names[scale_idx]}")
-            # Select current best.
-            scales = min(evals)[1]
-            if not has_change:
-                print(f"No change in this iteration {iter_idx}, stop")
-                break
+        scales = _grid_search(
+            _eval_for_scales,
+            scales=scales,
+            names=names,
+            fixed_scales=fixed_scales,
+            scales_min=scales_min,
+            scales_max=scales_max,
+            num_iterations=args.num_iterations,
+            num_steps=args.num_steps,
+            evaluation=args.evaluation,
+            output_grid_plot=args.output_grid_plot,
+            keep_best=args.grid_keep_best if args.grid_keep_best is not None else BehaviorVersion.get() >= 36,
+        )
     else:
         raise ValueError(f"unknown search mode {search_mode!r}")
 
@@ -419,6 +386,84 @@ class Batch:
     hyps_eval: Tensor  # [Batch,Beam], float64
     names_dim: Dim  # scalar, int32
     scores: Tensor  # [Names,Batch,Beam], float32
+
+
+def _grid_search(
+    eval_for_scales: Callable[[List[float]], float],
+    *,
+    scales: List[float],
+    names: List[str],
+    fixed_scales: Dict[int, float],
+    scales_min: List[float],
+    scales_max: List[float],
+    num_iterations: int,
+    num_steps: int,
+    evaluation: str,
+    output_grid_plot: Optional[str],
+    keep_best: bool,
+) -> List[float]:
+    print("Search mode grid, all dimensions/scales optimized together")
+    best: Optional[Tuple[float, List[float]]] = None  # (eval, scales)
+    for iter_idx in range(num_iterations):
+        print("*** Iter", iter_idx)
+        has_change = False
+        scale_indices = []
+        spaces = []
+        for scale_idx in range(len(names)):
+            if scale_idx in fixed_scales:
+                continue
+            scale_indices.append(scale_idx)
+            spaces.append(np.linspace(scales_min[scale_idx], scales_max[scale_idx], num=num_steps))
+        evals: List[Tuple[float, List[float]]] = []  # (eval, scales)
+        best_eval_so_far = np.inf
+        spaces = np.meshgrid(*spaces)
+        it = np.nditer(spaces)
+        with it:
+            for scale_values in it:
+                assert len(scale_values) == len(scale_indices)
+                scales = [0.0] * len(names)
+                for scale_idx, scale in fixed_scales.items():
+                    scales[scale_idx] = scale
+                for scale_idx, scale in zip(scale_indices, scale_values):
+                    scales[scale_idx] = float(scale)
+                eval_ = eval_for_scales(scales)
+                if eval_ < best_eval_so_far:
+                    best_eval_so_far = eval_
+                    print(f"New best {evaluation}: {eval_}, scales: {scales}")
+                evals.append((eval_, scales))
+        if output_grid_plot:
+            assert len(scale_indices) == 2, "only implemented for 2 scales"
+            _plot_grid(
+                evals,
+                scale_indices=scale_indices,
+                title="",
+                cbar_label=evaluation,
+                x_axis_name=names[scale_indices[0]],
+                y_axis_name=names[scale_indices[1]],
+                out_plot_filename=f"{output_grid_plot}.{iter_idx}.pdf",
+            )
+        eval_p = np.percentile([eval_ for eval_, _ in evals], 5)
+        print(
+            f"Evaluated grid size {len(evals)}, eval p5: {eval_p},",
+            f"best: {min(eval_ for eval_, _ in evals)},",
+            f"worst: {max(eval_ for eval_, _ in evals)}",
+        )
+        for scale_idx in scale_indices:
+            prev_min, prev_max = scales_min[scale_idx], scales_max[scale_idx]
+            scales_min[scale_idx] = min(scale[scale_idx] for eval_, scale in evals if eval_ <= eval_p * 1.0001)
+            scales_max[scale_idx] = max(scale[scale_idx] for eval_, scale in evals if eval_ <= eval_p * 1.0001)
+            print(f"New {names[scale_idx]} scales min/max:", scales_min[scale_idx], scales_max[scale_idx])
+            if prev_min != scales_min[scale_idx] or prev_max != scales_max[scale_idx]:
+                has_change = True
+            else:
+                print(f"No change for scale {names[scale_idx]}")
+        # Select current best.
+        best = min(best, min(evals)) if keep_best and best is not None else min(evals)
+        scales = best[1]
+        if not has_change:
+            print(f"No change in this iteration {iter_idx}, stop")
+            break
+    return scales
 
 
 def _make_padded_tensor_2d(
