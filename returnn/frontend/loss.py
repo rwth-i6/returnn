@@ -3,7 +3,7 @@ Loss functions
 """
 
 from __future__ import annotations
-from typing import Optional, Tuple
+from typing import Optional, Tuple, Union
 from returnn.tensor import Tensor, Dim
 import returnn.frontend as rf
 
@@ -121,7 +121,8 @@ def monotonic_rnnt_loss(
     blank_index: int,
     cells_bound: Optional[int] = None,
     max_frames: Optional[int] = None,
-) -> Tensor:
+    return_log_probs: bool = False,
+) -> Union[Tensor, Tuple[Tensor, Tensor, Tensor]]:
     """
     Full-sum negative log likelihood of the monotonic transducer over the packed lattice.
 
@@ -143,7 +144,12 @@ def monotonic_rnnt_loss(
         under CUDA graph capture
     :param max_frames: frames the recursion runs over, the longest sequence of the batch by default,
         the declared capacity under capture, since reading the batch's own maximum is a host read
-    :return: [batch] the negative log likelihood, zero where a sequence has no alignment
+    :param return_log_probs: whether to also return the blank and the next label log probability of every lattice
+        position, e.g. to draw alignments from the posterior
+    :return: [batch] the negative log likelihood, zero where a sequence has no alignment.
+        With return_log_probs also the blank and the next label log probability, [batch, enc_spatial_dim, prefix_dim]
+        each, padded, without gradient, minus infinity outside the lattice of a sequence, the label one also where
+        the prefix is complete
     """
     from returnn.frontend._packed_backend import PackedRawTensor, monotonic_rnnt_lattice, unpack
     from returnn.torch.util.monotonic_rnnt import monotonic_rnnt_loss as _raw_loss
@@ -162,15 +168,26 @@ def monotonic_rnnt_loss(
         max_frames = int(enc_spatial_dim.get_dim_value())
     # the recursion indexes the labels by prefix, which wants them padded, and they are small
     padded_labels = unpack(labels).copy_transpose([labels.dims[0], labels_spatial_dim])
-    losses = _raw_loss(
+    out = _raw_loss(
         flat.raw_tensor,
         padded_labels.raw_tensor,
         enc_spatial_dim.get_dyn_size_ext_for_device(device).raw_tensor,
         labels_spatial_dim.get_dyn_size_ext_for_device(device).raw_tensor,
         blank=blank_index,
         max_frames=max_frames,
+        return_log_probs=return_log_probs,
     )
-    return Tensor("monotonic_rnnt", dims=[labels.dims[0]], dtype="float32", raw_tensor=losses)
+    if not return_log_probs:
+        return Tensor("monotonic_rnnt", dims=[labels.dims[0]], dtype="float32", raw_tensor=out)
+    losses, blank_lp, label_lp = out
+    # a max_frames above the frames of the batch leaves positions past them
+    frames = int(enc_spatial_dim.get_dim_value())
+    dims = [labels.dims[0], enc_spatial_dim, prefix_dim]
+    return (
+        Tensor("monotonic_rnnt", dims=[labels.dims[0]], dtype="float32", raw_tensor=losses),
+        Tensor("monotonic_rnnt_blank_log_probs", dims=dims, dtype="float32", raw_tensor=blank_lp[:, :frames]),
+        Tensor("monotonic_rnnt_label_log_probs", dims=dims, dtype="float32", raw_tensor=label_lp[:, :frames]),
+    )
 
 
 def ctc_best_path(
