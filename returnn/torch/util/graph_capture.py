@@ -11,8 +11,11 @@ or in-graph with "capture_optimizer".
 Config, e.g.::
 
     torch_cuda_graph = {
-        "batch_size_bound": 200,        # max seqs per batch; smaller batches get zero-length padding seqs.
-                                        # the batch dim is made static (= this bound): always filled up to it
+        "batch_size_bound": 200,        # max seqs per batch; smaller batches get zero-length padding seqs:
+                                        # always filled up to it
+        "mask_padding_seqs": True,      # the batch dim keeps the real batch size as dyn size (capacity = the bound),
+                                        # so the padding seqs stay masked, also after e.g. appending EOS to targets
+                                        # (default from behavior version 36 on)
         "dim_capacity": {"data": 3000, "classes": 300},  # bound of the dynamic (time) dim per data key
         "packed_total_bound": {"data": 500_000},  # optional: tighter bound of the packed (gapped) total per key
         "partitioned": True,  # optional: fw/bwd-partitioned compile (min-cut remat) instead of one whole-step graph
@@ -26,7 +29,11 @@ Config, e.g.::
 Requirements (asserted):
 
 - ``accum_grad_multiple_step == 1``, no grad scaler, no DDP, no hot reloading.
-- The batch dim is static (= ``batch_size_bound``), filled with zero-length padding seqs;
+- The batch is filled up to ``batch_size_bound`` with zero-length padding seqs.
+  With ``mask_padding_seqs``, the batch dim has the bound as capacity and the real batch size as dyn size,
+  so the padding seqs are masked.
+  Without, the batch dim is static (= ``batch_size_bound``),
+  and the padding seqs are not distinguishable from real empty seqs:
   normalize by lengths, not by the batch-axis size (which counts the padding).
 - No eval epochs in the same process yet
   (the declared capacities live on the global template dims).
@@ -52,7 +59,7 @@ import os
 import numpy
 import torch
 
-from returnn.util.basic import CollectionReadCheckCovered
+from returnn.util.basic import CollectionReadCheckCovered, BehaviorVersion
 from returnn.tensor import Tensor, TensorDict, Dim
 import returnn.frontend as rf
 from returnn.frontend.run_ctx import RunCtx, Loss
@@ -441,6 +448,9 @@ class GraphCapturedTrainStep:
         assert str(device).startswith("cuda"), f"torch_cuda_graph requires a cuda device, got {device!r}"
         opts = CollectionReadCheckCovered(opts)  # catch unknown (e.g. typo'd) option keys, see below
         self.batch_size_bound = int(opts["batch_size_bound"])
+        self._mask_padding_seqs: Optional[bool] = opts.get("mask_padding_seqs", None)
+        if self._mask_padding_seqs is None:
+            self._mask_padding_seqs = BehaviorVersion.get() >= 36
         self.dim_capacity: Dict[str, int] = dict(opts["dim_capacity"])
         # optional tighter bound of the packed (gapped) total per packed-collate key
         # (e.g. batch size + per-seq gap slack); the default -- every seq at full capacity --
@@ -521,15 +531,18 @@ class GraphCapturedTrainStep:
             p.grad = torch.zeros_like(p)  # static, never freed (the captured graph writes into these)
 
         self._batch_dim = get_batch_dim_from_extern_data(extern_data_template)
-        self._batch_dim_staticized = self._batch_dim.dimension is None  # standard case: True
-        if self._batch_dim_staticized:
-            # the copy-in always fills the batch up to the bound (zero-length padding seqs),
-            # so the batch dim is static here; process-wide template-dim mutation,
+        self._batch_dim_bounded = self._batch_dim.dimension is None  # standard case: True
+        if self._batch_dim_bounded:
+            # process-wide template-dim mutation,
             # toggled off around the dynamic-shape paths (see set_bound_shapes_enabled)
-            self._batch_dim.size = self.batch_size_bound
-            self._batch_dim.capacity = self.batch_size_bound
-            self._batch_dim.dyn_size_ext = None
-        assert self._batch_dim.dimension == self.batch_size_bound
+            self._set_batch_dim_bound()
+        else:
+            assert self._batch_dim.dimension == self.batch_size_bound
+        self._batch_size_buf: Optional[torch.Tensor] = None
+        self._batch_size_pin: Optional[torch.Tensor] = None
+        if self._mask_padding_seqs:
+            self._batch_size_buf = torch.zeros((), dtype=torch.int32, device=self._device)
+            self._batch_size_pin = torch.zeros((), dtype=torch.int32, pin_memory=True)
         self._data_bufs: Dict[str, torch.Tensor] = {}
         self._pinned_bufs: Dict[str, torch.Tensor] = {}  # host staging, see _copy_in
         # guards the pinned staging: the next host write must wait for the previous async H2D
@@ -583,14 +596,12 @@ class GraphCapturedTrainStep:
         from returnn.tensor import _dim_extra
 
         if enabled:
-            if self._batch_dim_staticized:
-                self._batch_dim.size = self.batch_size_bound
-                self._batch_dim.capacity = self.batch_size_bound
-                self._batch_dim.dyn_size_ext = None
+            if self._batch_dim_bounded:
+                self._set_batch_dim_bound()
             for dim, cap in self._cap_dims:
                 dim.capacity = cap
         else:
-            if self._batch_dim_staticized:
+            if self._batch_dim_bounded:
                 self._batch_dim.size = None
                 self._batch_dim.capacity = None
                 self._batch_dim.dyn_size_ext = None
@@ -601,6 +612,15 @@ class GraphCapturedTrainStep:
             for dim in list(_dim_extra.derived_capacity_memoized_dims):
                 dim.capacity = None
             _dim_extra.derived_capacity_memoized_dims.clear()
+
+    def _set_batch_dim_bound(self):
+        # the copy-in fills the batch up to the bound with zero-length padding seqs
+        self._batch_dim.capacity = self.batch_size_bound
+        if self._mask_padding_seqs:
+            self._batch_dim.size = None  # dyn size = the real batch size, set per step in _build_extern_data
+        else:
+            self._batch_dim.size = self.batch_size_bound
+            self._batch_dim.dyn_size_ext = None
 
     def _get_data_buf(self, k: str, raw: torch.Tensor, packed: Optional[Dict[str, int]]) -> torch.Tensor:
         buf = self._data_bufs.get(k)
@@ -655,8 +675,11 @@ class GraphCapturedTrainStep:
             # do not overwrite them while the previous step's async H2D is still in flight
             # (normally hidden by the per-step loss host-read, but not guaranteed)
             self._copy_in_event.synchronize()
+        batch_size: Optional[int] = None
         for k, data in self._extern_data_template.data.items():
             raw = extern_data_raw[k]
+            size = extern_data_raw.get(k + ":seq_len")
+            batch_size = int(size.shape[0]) if size is not None else int(raw.shape[0])
             if data.dtype == "string" or (isinstance(raw, numpy.ndarray) and raw.dtype.kind in "USO"):
                 # strings (e.g. seq_tag) cannot be graph inputs; passed through host-side.
                 # Under replay the captured step never re-reads them:
@@ -716,7 +739,6 @@ class GraphCapturedTrainStep:
                 pin_slice = pin[tuple(slice(0, s) for s in raw.shape)]
                 pin_slice.copy_(raw)
                 buf[tuple(slice(0, s) for s in raw.shape)].copy_(pin_slice, non_blocking=True)
-            size = extern_data_raw.get(k + ":seq_len")
             if size is not None:
                 lens_buf = self._lens_bufs.get(k)
                 lens_pin = self._pinned_bufs.get(k + ":seq_len")
@@ -741,6 +763,9 @@ class GraphCapturedTrainStep:
                 lens_pin[:n].copy_(size.to(dtype=torch.int32))
                 lens_pin[n:].zero_()  # zero-length padding seqs
                 lens_buf.copy_(lens_pin, non_blocking=True)
+        if self._mask_padding_seqs:
+            self._batch_size_pin.fill_(batch_size)
+            self._batch_size_buf.copy_(self._batch_size_pin, non_blocking=True)
         if self._copy_in_event is None:
             self._copy_in_event = torch.cuda.Event()
         self._copy_in_event.record()
@@ -754,6 +779,10 @@ class GraphCapturedTrainStep:
         batch_dim = self._batch_dim
         for dim in _get_dyn_dims_from_extern_data(self._extern_data_template):
             dim.reset_eager()
+        if self._batch_dim_bounded and self._mask_padding_seqs:
+            if batch_dim.dyn_size_ext is None:
+                batch_dim.dyn_size_ext = Tensor(batch_dim.name or "batch", dims=[], dtype="int32")
+            batch_dim.dyn_size_ext.raw_tensor = self._batch_size_buf  # device-resident
         extern_data = TensorDict()
         for k, data in self._extern_data_template.data.items():
             data = data.copy_template()
