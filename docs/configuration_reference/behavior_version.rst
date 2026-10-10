@@ -54,26 +54,22 @@ to override in both directions.
 
 See PR `#1855 <https://github.com/rwth-i6/returnn/pull/1855>`__.
 
-Behavior version 36 (2026-10-07)
+Behavior version 36 (2026-10-10)
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-In the weight-decay split of the PyTorch backend optimizer,
-the default weight-decay module blacklist
+The default weight-decay module blacklist of the PyTorch backend optimizer
 (the module types whose parameters do not get weight decay)
-now also covers the RF modules :class:`rf.LayerNorm` and :class:`rf.Embedding`,
-in addition to :class:`torch.nn.LayerNorm` and :class:`torch.nn.Embedding`.
-Before, RF models got weight decay on the LayerNorm ``scale`` and the Embedding ``weight``,
-contrary to what the documentation suggested.
+covers all normalization layers and embeddings of RF and PyTorch:
+:class:`rf.LayerNorm`, :class:`rf.RMSNorm`, :class:`rf.GroupNorm`, :class:`rf.GroupNormSpatial`,
+:class:`rf.BatchNorm`, :class:`rf.Normalize`, :class:`rf.Embedding`,
+``torch.nn.LayerNorm``, ``torch.nn.RMSNorm``, ``torch.nn.GroupNorm``, ``torch.nn.BatchNorm1d/2d/3d``,
+``torch.nn.SyncBatchNorm``, ``torch.nn.InstanceNorm1d/2d/3d``, ``torch.nn.Embedding``.
+Before, it only covered ``torch.nn.LayerNorm`` and ``torch.nn.Embedding``,
+so e.g. the ``scale`` of :class:`rf.LayerNorm` and both ``gamma`` and ``beta`` of :class:`rf.BatchNorm` got weight decay.
 
 There is also the optimizer option ``weight_decay_modules_blacklist``
 to override this explicitly in both directions
 (e.g. ``["torch.nn.LayerNorm", "torch.nn.Embedding"]`` to keep the old behavior).
-
-Do not switch the behavior version on a running training,
-as the changed split moves parameters between optimizer param groups.
-If you do, loading the optimizer checkpoint warns about the moved parameters
-and remaps their per-parameter state by name
-(their group hyperparameters then follow the new groups).
 
 See PR `#1923 <https://github.com/rwth-i6/returnn/pull/1923>`__.
 

@@ -148,29 +148,10 @@ optimizer
     See the module docstring of :mod:`returnn.torch.optim.multi` for the config interface
     (PyTorch backend only).
 
-    With ``weight_decay`` set (PyTorch backend), RETURNN splits the parameters
-    into two param groups, one with weight decay and one without.
-    All biases (parameter name ends with "bias") get no weight decay,
-    and neither do the parameters of modules whose type is in the weight-decay module blacklist
-    (by default ``torch.nn.LayerNorm`` and ``torch.nn.Embedding``).
-    Note that this default covers only the native torch modules,
-    whereas parameters of the RF modules :class:`rf.LayerNorm` and :class:`rf.Embedding`
-    (e.g. the LayerNorm ``scale``) do get weight decay by default.
-    Since behavior version 36, the default also includes the RF modules
-    (see :ref:`behavior_version`).
-
-    ``weight_decay_modules_blacklist`` in the optimizer dict overrides the blacklist.
-    It is a list of module types, given as types or as strings, e.g.
-    ``["torch.nn.LayerNorm", "torch.nn.Embedding", "rf.LayerNorm", "rf.Embedding"]``.
-
-    ``weight_decay_custom_include_check`` in the optimizer dict is a callable
-    ``(*, module, rf_module, full_param_name, param, **kwargs) -> Optional[bool]``,
-    called per parameter, returning True/False to force the parameter into/out of
-    the weight-decay group, or None to apply the default logic.
-    Note that ``full_param_name`` carries the module-local parameter name
-    (e.g. just ``"weight"``), for backward compatibility.
-    For full control over the param groups, see ``param_groups_custom``
-    (see :meth:`returnn.torch.updater.Updater._get_optimizer_param_groups`).
+    With ``weight_decay`` set (PyTorch backend), the biases and the parameters of the module types
+    in ``weight_decay_modules_blacklist`` get no weight decay.
+    Default: ``["torch.nn.LayerNorm", "torch.nn.Embedding"]``,
+    since behavior version 36 all normalization layers and embeddings of RF and PyTorch.
 
     Do not change the weight-decay split (e.g. ``weight_decay_modules_blacklist``) on a running training,
     as it moves parameters between optimizer param groups.

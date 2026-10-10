@@ -1237,63 +1237,6 @@ def test_updater_weight_decay_blacklist():
     assert params_by_wd[1e-3] == {"2.weight"}
 
 
-@contextlib.contextmanager
-def set_behavior_version(version: int):
-    """
-    This is a context manager which sets the behavior version to the given value.
-    """
-    from returnn.util.basic import BehaviorVersion
-
-    # noinspection PyProtectedMember
-    old = BehaviorVersion._get_state()
-    try:
-        # noinspection PyProtectedMember
-        BehaviorVersion._reset()
-        BehaviorVersion.set(version)
-        yield
-    finally:
-        # noinspection PyProtectedMember
-        BehaviorVersion._reset(old)
-
-
-def test_updater_weight_decay_blacklist_rf_modules():
-    # Since behavior version 36, the default weight-decay blacklist also covers
-    # rf.LayerNorm and rf.Embedding, matching torch.nn.LayerNorm / torch.nn.Embedding.
-    from returnn.torch.frontend.bridge import rf_module_to_pt_module
-    from returnn.util.basic import DictRefKeys
-
-    rf.select_backend_torch()
-
-    class _Model(rf.Module):
-        def __init__(self):
-            super().__init__()
-            in_dim, embed_dim, out_dim = rf.Dim(11), rf.Dim(5), rf.Dim(7)
-            self.embed = rf.Embedding(in_dim, embed_dim)
-            self.layer_norm = rf.LayerNorm(embed_dim)
-            self.linear = rf.Linear(embed_dim, out_dim)
-
-    config = Config(dict(optimizer={"class": "adamw", "weight_decay": 1e-3}))
-
-    def _params_by_wd():
-        pt_model = rf_module_to_pt_module(_Model())
-        updater = Updater(config=config, network=pt_model, device=torch.device("cpu"))
-        updater.create_optimizer()
-        opt = updater.get_optimizer()
-        assert len(opt.param_groups) == 2
-        param_to_name = DictRefKeys((param, name) for name, param in pt_model.named_parameters())
-        return {pg["weight_decay"]: {param_to_name[p] for p in pg["params"]} for pg in opt.param_groups}
-
-    with set_behavior_version(35):
-        params_by_wd = _params_by_wd()
-        assert params_by_wd[1e-3] == {"embed.weight", "layer_norm.scale", "linear.weight"}
-        assert params_by_wd[0.0] == {"layer_norm.bias", "linear.bias"}
-
-    with set_behavior_version(36):
-        params_by_wd = _params_by_wd()
-        assert params_by_wd[1e-3] == {"linear.weight"}
-        assert params_by_wd[0.0] == {"embed.weight", "layer_norm.scale", "layer_norm.bias", "linear.bias"}
-
-
 def test_load_optimizer_weight_decay_split_same_order():
     from returnn.torch.frontend.bridge import rf_module_to_pt_module
 
@@ -1330,6 +1273,53 @@ def test_load_optimizer_weight_decay_split_same_order():
     opt2 = updater2.get_optimizer()
     assert [len(group["params"]) for group in opt2.param_groups] == [1, 1]
     assert torch.equal(opt2.state[model.norm.scale]["exp_avg"], exp_avg)
+
+
+def test_updater_weight_decay_blacklist_norm_modules():
+    from returnn.torch.frontend.bridge import rf_module_to_pt_module
+    from returnn.util.basic import BehaviorVersion, DictRefKeys
+
+    rf.select_backend_torch()
+
+    class _Model(rf.Module):
+        def __init__(self):
+            super().__init__()
+            in_dim, embed_dim, out_dim = rf.Dim(11), rf.Dim(5), rf.Dim(7)
+            self.embed = rf.Embedding(in_dim, embed_dim)
+            self.layer_norm = rf.LayerNorm(embed_dim)
+            self.batch_norm = rf.BatchNorm(embed_dim, use_mask=False, track_running_stats=False)
+            self.linear = rf.Linear(embed_dim, out_dim)
+
+    config = Config(dict(optimizer={"class": "adamw", "weight_decay": 1e-3}))
+
+    def _params_with_wd(model: torch.nn.Module):
+        updater = Updater(config=config, network=model, device=torch.device("cpu"))
+        updater.create_optimizer()
+        param_to_name = DictRefKeys((param, name) for name, param in model.named_parameters())
+        (wd_group,) = [group for group in updater.get_optimizer().param_groups if group["weight_decay"]]
+        return {param_to_name[p] for p in wd_group["params"]}
+
+    def _torch_model():
+        return torch.nn.Sequential(torch.nn.Linear(5, 4), torch.nn.BatchNorm1d(4), torch.nn.GroupNorm(2, 4))
+
+    behavior_version_orig_state = BehaviorVersion._get_state()
+    try:
+        BehaviorVersion._reset()
+        BehaviorVersion.set(35)
+        assert _params_with_wd(rf_module_to_pt_module(_Model())) == {
+            "embed.weight",
+            "layer_norm.scale",
+            "batch_norm.gamma",
+            "batch_norm.beta",
+            "linear.weight",
+        }
+        assert _params_with_wd(_torch_model()) == {"0.weight", "1.weight", "2.weight"}
+        BehaviorVersion._reset()
+        BehaviorVersion.set(36)
+        assert _params_with_wd(rf_module_to_pt_module(_Model())) == {"linear.weight"}
+        assert _params_with_wd(_torch_model()) == {"0.weight"}
+    finally:
+        BehaviorVersion._reset(behavior_version_orig_state)
 
 
 class _AnchoredSGD(torch.optim.Optimizer):
