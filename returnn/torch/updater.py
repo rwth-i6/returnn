@@ -501,38 +501,24 @@ class Updater:
                         )
                 else:
                     print("load_optimizer: Params in different order or param groups.", file=log.v3)
+                # Params which moved between param groups (e.g. due to a changed weight-decay split).
+                ckpt_group_idx = {name: i for i, names in enumerate(ckpt_group_names) for name in names}
+                moved_params = [
+                    f"{name} ({ckpt_group_idx[name]} -> {i})"
+                    for i, names in enumerate(self_group_names)
+                    for name in names
+                    if name in self_param_names_critical_set and ckpt_group_idx.get(name, i) != i
+                ]
+                if moved_params:
+                    print(
+                        "load_optimizer: Params moved between param groups (ckpt group -> group): %s\n"
+                        "    Their per-param state is kept." % ", ".join(moved_params),
+                        file=log.v3,
+                    )
                 print("load_optimizer: Will remap the state dict.", file=log.v3)
                 for ckpt_group, self_group in zip(
                     optimizer_state["optimizer"]["param_groups"], self.optimizer.param_groups
                 ):
-                    # Check whether it is matching for the critical params.
-                    self_group_param_names = set(param_id_to_name[id(p)] for p in self_group["params"])
-                    ckpt_group_param_names = set(ckpt_param_names[p] for p in ckpt_group["params"])
-                    self_group_param_names.intersection_update(self_param_names_critical_set)
-                    ckpt_group_param_names.intersection_update(self_param_names_critical_set)
-                    if ckpt_group_param_names != self_group_param_names:
-                        # The group options are loaded by position, so both groups must be of the same algorithm.
-                        ckpt_keys = _param_group_hyper_param_keys(ckpt_group)
-                        self_keys = _param_group_hyper_param_keys(self_group)
-                        if ckpt_keys - self_keys and self_keys - ckpt_keys:
-                            raise ValueError(
-                                "load_optimizer: params moved between param groups of different optimizer algorithms,"
-                                f" the checkpoint group has the hyper-parameters {sorted(ckpt_keys - self_keys)}"
-                                f" instead of {sorted(self_keys - ckpt_keys)}"
-                            )
-                        print(
-                            "load_optimizer: params moved between param groups"
-                            " (e.g. due to a changed weight-decay split):\n"
-                            "  params newly in this group: %s\n"
-                            "  params no longer in this group: %s\n"
-                            "  Their per-param state is remapped by name and kept."
-                            " Their group hyperparameters (e.g. weight_decay) now follow the current groups."
-                            % (
-                                ", ".join(sorted(self_group_param_names - ckpt_group_param_names)) or "(None)",
-                                ", ".join(sorted(ckpt_group_param_names - self_group_param_names)) or "(None)",
-                            ),
-                            file=log.v3,
-                        )
                     ckpt_group["params"] = [
                         self_param_names_dict[param_id_to_name[id(p)]] for p in self_group["params"]
                     ]

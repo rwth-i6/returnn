@@ -1017,9 +1017,6 @@ def test_load_optimizer_old_format():
 
 
 def test_load_optimizer_changed_weight_decay_split():
-    # A changed weight-decay split moves params between the two param groups.
-    # load_optimizer must not fail on that (it warns and remaps the per-param state by name),
-    # and the state must survive the move.
     model = torch.nn.Sequential(torch.nn.Linear(7, 5), torch.nn.LayerNorm(5))
 
     config1 = Config(dict(optimizer={"class": "adamw", "weight_decay": 1e-3}))
@@ -1031,9 +1028,7 @@ def test_load_optimizer_changed_weight_decay_split():
     updater1.get_optimizer().step()
 
     ln_weight = model[1].weight
-    state1 = updater1.get_optimizer().state[ln_weight]
-    assert "exp_avg" in state1
-    exp_avg1 = state1["exp_avg"].clone()
+    exp_avg1 = updater1.get_optimizer().state[ln_weight]["exp_avg"].clone()
 
     def _include_check(*, module, **_kwargs):
         if isinstance(module, torch.nn.LayerNorm):
@@ -1050,17 +1045,6 @@ def test_load_optimizer_changed_weight_decay_split():
     with tempfile.TemporaryDirectory(prefix="returnn_test_load_opt_changed_wd_split") as tmp_dir:
         updater1.save_optimizer(tmp_dir + "/model.opt.pt")
         updater2.load_optimizer(tmp_dir + "/model.opt.pt")
-
-        # The moved params must not take the group options of another optimizer algorithm.
-        config3 = Config(dict(optimizer={**config2.typed_dict["optimizer"], "class": "sgd", "momentum": 0.9}))
-        updater3 = Updater(config=config3, network=model, device=torch.device("cpu"))
-        updater3.create_optimizer()
-        try:
-            updater3.load_optimizer(tmp_dir + "/model.opt.pt")
-        except ValueError as exc:
-            assert "moved" in str(exc), exc
-        else:
-            raise AssertionError("expected ValueError, the AdamW group options would go to SGD")
 
     opt2 = updater2.get_optimizer()
     groups_by_wd = {group["weight_decay"]: group for group in opt2.param_groups}
@@ -1311,8 +1295,6 @@ def test_updater_weight_decay_blacklist_rf_modules():
 
 
 def test_load_optimizer_weight_decay_split_same_order():
-    # The checkpoint of behavior version 35 loaded under 36: the rf.LayerNorm scale moves into the group
-    # without weight decay while the flattened param order stays the same.
     from returnn.torch.frontend.bridge import rf_module_to_pt_module
 
     rf.select_backend_torch()
@@ -1325,25 +1307,25 @@ def test_load_optimizer_weight_decay_split_same_order():
             self.norm = rf.LayerNorm(out_dim, with_bias=False)
 
     model = rf_module_to_pt_module(_Model())
-    config = Config(dict(optimizer={"class": "adamw", "weight_decay": 1e-3}))
 
-    def _updater():
+    def _updater(blacklist):
+        config = Config(
+            dict(optimizer={"class": "adamw", "weight_decay": 1e-3, "weight_decay_modules_blacklist": blacklist})
+        )
         updater = Updater(config=config, network=model, device=torch.device("cpu"))
         updater.create_optimizer()
         updater.set_current_train_step(global_train_step=0, epoch=1)
         return updater
 
     with tempfile.TemporaryDirectory(prefix="returnn_test_load_opt_wd_split_same_order") as tmp_dir:
-        with set_behavior_version(35):
-            updater1 = _updater()
-            for param in model.parameters():
-                param.grad = torch.ones_like(param)
-            updater1.get_optimizer().step()
-            exp_avg = updater1.get_optimizer().state[model.norm.scale]["exp_avg"].clone()
-            updater1.save_optimizer(tmp_dir + "/model.opt.pt")
-        with set_behavior_version(36):
-            updater2 = _updater()
-            updater2.load_optimizer(tmp_dir + "/model.opt.pt")
+        updater1 = _updater([])
+        for param in model.parameters():
+            param.grad = torch.ones_like(param)
+        updater1.get_optimizer().step()
+        exp_avg = updater1.get_optimizer().state[model.norm.scale]["exp_avg"].clone()
+        updater1.save_optimizer(tmp_dir + "/model.opt.pt")
+        updater2 = _updater(["rf.LayerNorm"])
+        updater2.load_optimizer(tmp_dir + "/model.opt.pt")
 
     opt2 = updater2.get_optimizer()
     assert [len(group["params"]) for group in opt2.param_groups] == [1, 1]
