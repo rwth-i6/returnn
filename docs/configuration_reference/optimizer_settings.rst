@@ -142,6 +142,11 @@ optimizer
     A dictionary with a ``class`` entry for the optimizer.
     Other keys are passed as parameters to the constructor of the optimizer class.
 
+    With ``weight_decay`` set (PyTorch backend), the biases and the parameters of the module types
+    in ``weight_decay_modules_blacklist`` get no weight decay.
+    Default: ``["torch.nn.LayerNorm", "torch.nn.Embedding"]``,
+    since behavior version 36 all normalization layers and embeddings of RF and PyTorch.
+
     Do not change the weight-decay split (e.g. ``weight_decay_modules_blacklist``) on a running training,
     as it moves parameters between optimizer param groups.
     If you do, loading the optimizer checkpoint warns about the moved parameters and keeps their per-parameter state.
