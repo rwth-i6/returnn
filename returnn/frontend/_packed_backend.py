@@ -76,7 +76,17 @@ import returnn.frontend as rf
 from ._backend import Backend, register_backend_by_tensor_type, global_backend
 from ._cache import Cache
 
-__all__ = ["PackedRawTensor", "PackedBackend", "pack", "pack_import", "unpack", "regap", "is_packed", "flat_content"]
+__all__ = [
+    "PackedRawTensor",
+    "PackedBackend",
+    "pack",
+    "pack_import",
+    "unpack",
+    "regap",
+    "is_packed",
+    "flat_content",
+    "monotonic_rnnt_lattice",
+]
 
 
 # Layout metadata (cu_seqlens, flex document mask, frame coords/masks, ...)
