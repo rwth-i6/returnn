@@ -231,15 +231,16 @@ def rnnt_loss(
         the declared capacity under capture, since reading the batch's own maximum is a host read
     :return: [batch] the negative log likelihood, zero where a sequence has no frame
     """
-    from returnn.frontend._packed_backend import monotonic_rnnt_lattice, is_packed, unpack, _raw
+    from returnn.frontend._packed_backend import PackedRawTensor, monotonic_rnnt_lattice, unpack
     from returnn.torch.util.rnnt import rnnt_loss as _raw_loss
 
     enc_cells, pred_cells, _lattice_dim = monotonic_rnnt_lattice(
         enc, pred, enc_spatial_dim=enc_spatial_dim, prefix_dim=prefix_dim, cells_bound=cells_bound
     )
     logits = joint(enc_cells, pred_cells)
-    assert is_packed(logits), f"rnnt_loss: the joint must keep the lattice packed, got {logits}"
-    flat = _raw(logits).inner
+    raw = logits.raw_tensor
+    assert isinstance(raw, PackedRawTensor), f"rnnt_loss: the joint must keep the lattice packed, got {logits}"
+    flat = raw.inner
     device = flat.device
     if max_frames is None:
         max_frames = int(enc_spatial_dim.get_dim_value())
