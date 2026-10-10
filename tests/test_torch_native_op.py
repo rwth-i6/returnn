@@ -587,6 +587,73 @@ def test_ctc_loss_packed_leading_gap_grad():
         assert (rows == 0).all(), leaf.grad
 
 
+def test_ctc_best_path_packed(device: torch.device = torch.device("cpu")):
+    """the packed op reads every seq at its start offset and writes its path there, every other frame gets blank"""
+    from returnn.torch.util.native_op import ctc_best_path, ctc_best_path_packed
+
+    n_batch, dim, blank = 3, 6, 5
+    lens = torch.tensor([9, 7, 4], dtype=torch.int32, device=device)
+    tgt_lens = torch.tensor([4, 3, 2], dtype=torch.int32, device=device)
+    gen = torch.Generator().manual_seed(7)
+    logits_padded = torch.randn(n_batch, 9, dim, generator=gen).to(device)
+    targets = torch.randint(0, blank, (n_batch, 4), generator=gen).to(device)
+    ref = ctc_best_path(
+        logits=logits_padded, logits_seq_lens=lens, targets=targets, targets_seq_lens=tgt_lens, blank_index=blank
+    )
+
+    # a gapped layout with unused frames between the seqs and a bound past the content, seqs 2 frames apart
+    total = 30
+    starts = torch.tensor([0, 11, 20], dtype=torch.int32, device=device)
+    logits = torch.zeros(total, dim, device=device)
+    expected = torch.full((total,), blank, dtype=torch.int32, device=device)
+    for b in range(n_batch):
+        logits[starts[b] : starts[b] + lens[b]] = logits_padded[b, : lens[b]]
+        expected[starts[b] : starts[b] + lens[b]] = ref[: lens[b], b]
+    for edges_bound in (None, 5 * int(tgt_lens.sum()) + 5 * n_batch):
+        path = ctc_best_path_packed(
+            logits=logits,
+            seq_starts=starts,
+            logits_seq_lens=lens,
+            max_seq_len=12,
+            targets=targets,
+            targets_seq_lens=tgt_lens,
+            blank_index=blank,
+            edges_bound=edges_bound,
+        )
+        assert path.shape == (total,) and path.dtype == torch.int32, path
+        torch.testing.assert_close(path, expected)
+
+
+def test_ctc_best_path_packed_cuda():
+    if not torch.cuda.is_available():
+        raise SkipTest("CUDA not available")
+    test_ctc_best_path_packed(device=torch.device("cuda"))
+
+
+def test_ctc_best_path_packed_fake_tensor_mode():
+    """the compiled step traces the op with fake tensors, so its shapes must follow from the description alone"""
+    if not hasattr(torch.library, "register_fake"):
+        raise SkipTest("torch.library.register_fake not available (torch < 2.4)")
+    from torch._subclasses.fake_tensor import FakeTensor, FakeTensorMode
+    from returnn.torch.util.native_op import ctc_best_path_packed
+
+    tensors = dict(
+        logits=torch.randn(30, 6, generator=torch.Generator().manual_seed(7)),
+        seq_starts=torch.tensor([0, 11, 20], dtype=torch.int32),
+        logits_seq_lens=torch.tensor([9, 7, 4], dtype=torch.int32),
+        targets=torch.randint(0, 5, (3, 4), generator=torch.Generator().manual_seed(7)),
+        targets_seq_lens=torch.tensor([4, 3, 2], dtype=torch.int32),
+    )
+    real = ctc_best_path_packed(**tensors, max_seq_len=12, blank_index=5)
+
+    mode = FakeTensorMode()
+    with mode:
+        fake = ctc_best_path_packed(
+            **{k: mode.from_tensor(v) for k, v in tensors.items()}, max_seq_len=12, blank_index=5
+        )
+    assert isinstance(fake, FakeTensor) and fake.shape == real.shape and fake.dtype == real.dtype
+
+
 def test_ctc_fsa_batch3_len6_c8():
     """
     This (:func:`Fsa.get_ctc_fsa_fast_bw`) is used by :func:`ctc_loss`.
