@@ -17,6 +17,7 @@ from returnn.torch.util.native_op import (
     get_ctc_fsa_fast_bw,
     ctc_loss,
     ctc_loss_packed,
+    ctc_best_path,
     edit_distance,
     optimal_completion_edit_distance,
     optimal_completion_edit_distance_per_successor,
@@ -826,6 +827,36 @@ def test_fast_viterbi_cuda():
     if not torch.cuda.is_available():
         raise SkipTest("CUDA not available")
     test_fast_viterbi(device=torch.device("cuda"))
+
+
+def test_ctc_best_path_cuda_gives_the_cpu_path():
+    """
+    Every CUDA call of :func:`ctc_best_path` gives the path of the CPU op.
+    The kernel keeps the best edge of a state in one cell which it swaps atomically,
+    so the read of that cell has to be atomic too, else a reader sees a torn score and drops the better edge.
+    Only batches of a realistic size show it.
+    """
+    if not torch.cuda.is_available():
+        raise SkipTest("CUDA not available")
+    n_batch, seq_len, n_tgt, n_classes = 8, 507, 110, 10241
+    gen = torch.Generator().manual_seed(5)
+    for _ in range(2):
+        seq_lens = torch.randint(1, seq_len + 1, (n_batch,), generator=gen, dtype=torch.int32)
+        tgt_lens = torch.randint(0, n_tgt + 1, (n_batch,), generator=gen, dtype=torch.int32)
+        tgt_lens = torch.minimum(tgt_lens, seq_lens // 2)
+        args = dict(
+            logits=torch.log_softmax(torch.randn(seq_len, n_batch, n_classes, generator=gen), dim=-1),
+            logits_seq_lens=seq_lens,
+            targets=torch.randint(0, n_classes - 1, (n_batch, n_tgt), generator=gen, dtype=torch.int32),
+            targets_seq_lens=tgt_lens,
+        )
+        opts = dict(logits_time_major=True, logits_normalize=False, blank_index=n_classes - 1)
+        ref = ctc_best_path(**args, **opts)
+        valid = torch.arange(seq_len)[:, None] < seq_lens[None, :]
+        cuda_args = {k: v.cuda() for k, v in args.items()}
+        for call in range(30):
+            out = ctc_best_path(**cuda_args, **opts).cpu()
+            assert torch.equal(out[valid], ref[valid]), f"call {call} differs from the cpu path"
 
 
 def test_fast_viterbi_rnd():
