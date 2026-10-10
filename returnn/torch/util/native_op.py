@@ -526,6 +526,7 @@ def ctc_loss(
     edges, weights, start_end_states = get_ctc_fsa_fast_bw(
         targets=targets, seq_lens=targets_seq_lens, blank_idx=blank_index, label_loop=label_loop
     )
+    n_states = _get_ctc_fsa_fast_bw_num_states(targets)
 
     seq_mask = sequence_mask_time_major(logits_seq_lens, maxlen=logits.shape[0])  # (time,batch), bool
 
@@ -538,6 +539,7 @@ def ctc_loss(
             weights=weights,
             start_end_states=start_end_states,
             mask_idx=blank_index,
+            n_states=n_states,
         )
         # alignment is (time,batch)
         log_probs_ = torch.gather(log_probs, 2, alignment.unsqueeze(-1))  # (time,batch,1)
@@ -546,7 +548,9 @@ def ctc_loss(
         loss = -torch.sum(log_probs_, dim=0)  # (batch,)
         return loss
 
-    loss = _FastBaumWelchScoresAutogradFunc.apply(logits, logits_normalize, seq_mask, edges, weights, start_end_states)
+    loss = _FastBaumWelchScoresAutogradFunc.apply(
+        logits, logits_normalize, seq_mask, edges, weights, start_end_states, n_states
+    )
     return loss
 
 
@@ -684,6 +688,20 @@ def get_ctc_fsa_fast_bw(
     return edges, weights, start_end_states
 
 
+def _get_ctc_fsa_fast_bw_num_states(targets: torch.Tensor, *, edges_bound: Optional[int] = None) -> int:
+    """
+    :param targets: shape (batch,target_time)
+    :param edges_bound: as in :func:`get_ctc_fsa_fast_bw`
+    :return: upper bound of the state count of the FSA from :func:`get_ctc_fsa_fast_bw`, from the shapes only
+    """
+    n_batch, n_time = targets.shape
+    if edges_bound is not None:
+        # packed layout: 2 * targets_total + 3 * n_batch, where edges_bound == 5 * targets_total + 5 * n_batch
+        return 2 * (edges_bound // 5) + n_batch
+    # rectangular layout: (2 * n_time + 3) states per seq
+    return n_batch * (2 * n_time + 3)
+
+
 # The aux CTC heads (e.g. aux_loss_layers [4, 10, 16]) all score the SAME targets,
 # so they build the same FSA; only the logits differ.
 # This is the chokepoint for every caller, packed and padded alike,
@@ -799,18 +817,7 @@ def ctc_loss_packed(
         edges_bound=edges_bound,
     )
     seq_mask = sequence_mask_time_major(logits_seq_lens, maxlen=max_seq_len)  # (time,batch), bool
-    # static state count, see the construct_kernel state numbering: (2*n_time+3) states per seq.
-    # (the default in fast_baum_welch_packed sizes by start_end_states.max(),
-    # a data-dependent device read -- a sync, and illegal under CUDA-graph capture)
-    n_batch, n_tgt_time = targets.shape
-    if edges_bound is not None:
-        # packed FSA: the states are numbered by content too (see construct_kernel),
-        # so the count follows the targets TOTAL bound implied by edges_bound
-        # (edges_bound == 5 * targets_total_bound + 5 * batch),
-        # not batch * buffer capacity. Floor division stays an upper bound.
-        n_states = 2 * (edges_bound // 5) + n_batch
-    else:
-        n_states = n_batch * (2 * n_tgt_time + 3)
+    n_states = _get_ctc_fsa_fast_bw_num_states(targets, edges_bound=edges_bound)
     loss = _FastBaumWelchScoresPackedAutogradFunc.apply(
         logits, logits_normalize, seq_starts, seq_mask, edges, weights, start_end_states, n_states
     )
@@ -960,6 +967,7 @@ def fast_viterbi(
     weights: torch.Tensor,
     start_end_states: torch.Tensor,
     mask_idx: int = 0,
+    n_states: Optional[int] = None,
 ) -> Tuple[torch.Tensor, torch.Tensor]:
     """
     :param am_scores: (time, batch, dim), in +log space, already normalized / just used as-is
@@ -969,12 +977,14 @@ def fast_viterbi(
     :param start_end_states: (2, batch), (start,end) state idx in automaton.
         there is only one single automaton.
     :param mask_idx: vocab index used for masking (e.g. padding, or if not path was found)
+    :param n_states: state count of the automaton. derived from start_end_states by default
     :return: (alignment, scores), alignment is (time, batch), scores is (batch,), in +log space.
         note: scores are not differentiable here.
         do gather+sum on the am_scores by the alignment to get it differentiable.
     """
-    last_state_idx = start_end_states[1].max()
-    n_states = last_state_idx + 1
+    if n_states is None:
+        last_state_idx = start_end_states[1].max()
+        n_states = last_state_idx + 1
     maker = OpMaker(OpDescription.from_gen_base(native_op.FastViterbiOp))
     op = maker.make_op()
     alignment, scores = op(am_scores, am_seq_len, edges, weights, start_end_states, n_states, mask_idx)
@@ -1027,6 +1037,7 @@ def ctc_best_path(
         weights=weights,
         start_end_states=start_end_states,
         mask_idx=blank_index,
+        n_states=_get_ctc_fsa_fast_bw_num_states(targets),
     )
     return alignment
 
