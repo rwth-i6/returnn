@@ -336,4 +336,4 @@ def monotonic_rnnt_loss(
     losses = torch.where(alignable, -total, torch.zeros_like(total))
     if not return_log_probs:
         return losses
-    return (losses, *_lattice_log_probs(blank_lp, label_lp, frame_lens, label_lens, max_frames, max_prefix))
+    return losses, *_lattice_log_probs(blank_lp, label_lp, frame_lens, label_lens, max_frames, max_prefix)
