@@ -36,6 +36,8 @@ which entered the loss, the gradients and the normalization.
 
 There is also the option ``mask_padding_seqs: bool`` in ``torch_cuda_graph`` to override in both directions.
 
+See PR `#1980 <https://github.com/rwth-i6/returnn/pull/1980>`__.
+
 Behavior version 35 (2026-10-07)
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
