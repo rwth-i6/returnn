@@ -22,6 +22,20 @@ and not listing legacy/deprecated parameters.
 Version History
 ---------------
 
+Behavior version 36 (2026-10-10)
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+PyTorch whole-step CUDA graph training (``torch_cuda_graph``):
+the batch dim keeps the real batch size as its dyn size, with ``batch_size_bound`` as its capacity,
+so the zero-length padding seqs which fill each batch up to the bound are masked.
+
+Before, the batch dim was static (the bound),
+and the padding seqs were not distinguishable from real empty seqs.
+E.g. appending EOS to the targets via ``rf.pad`` gave each padding seq an artificial EOS target,
+which entered the loss, the gradients and the normalization.
+
+There is also the option ``mask_padding_seqs: bool`` in ``torch_cuda_graph`` to override in both directions.
+
 Behavior version 35 (2026-10-07)
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
