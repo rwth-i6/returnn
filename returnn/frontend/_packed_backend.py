@@ -4345,6 +4345,21 @@ class PackedBackend(Backend[PackedRawTensor]):
         return _dim_aware_call("scatter", (source,), kwargs)
 
     @staticmethod
+    def search_sorted(
+        sorted_seq: Tensor, values: Tensor, *, axis: Dim, side: str = "left", out_dtype: str = "int32"
+    ) -> Tensor:
+        """
+        search_sorted.
+        Along a time dim with a length per sequence all sequences are searched at once in the packed (or padded)
+        buffer, see :func:`_search_sorted_per_seq`, and the result is stored like the values.
+        Anything else takes the generic dim-aware route.
+        """
+        out = _search_sorted_per_seq(sorted_seq, values, axis=axis, side=side, out_dtype=out_dtype)
+        if out is not None:
+            return out
+        return _dim_aware_call("search_sorted", (sorted_seq, values), dict(axis=axis, side=side, out_dtype=out_dtype))
+
+    @staticmethod
     def scaled_gradient(tensor: Tensor, scale: Union[float, Tensor]) -> Tensor:
         """scaled_gradient: identity forward, gradient scaled; elementwise, runs on the inner buffer"""
         raw = _raw(tensor)
@@ -4818,7 +4833,6 @@ for _name in [
     "flip_no_mask",
     "masked_scatter",
     "reshape",
-    "search_sorted",
     "sort",
     "split",
     "split_dims",
@@ -5130,6 +5144,114 @@ def _packed_total_bound(dim: Dim, in_raw: PackedRawTensor, n_seqs: int) -> Optio
     if capacity is not None:
         bounds.append(n_seqs * capacity)
     return min(bounds) if bounds else None
+
+
+def _search_sorted_per_seq(
+    sorted_seq: Tensor, values: Tensor, *, axis: Dim, side: str, out_dtype: str
+) -> Optional[Tensor]:
+    """
+    search_sorted along a time dim with a length per sequence, where at least one operand is packed,
+    e.g. the group of every key frame searched for the group of every query.
+    All sequences are searched at once: every number gets its sequence index in front (seq * span + number),
+    which makes the whole buffer one sorted sequence, rows outside the sequences count as the largest of their block,
+    and the position found is taken relative to the start of its sequence.
+
+    The span is the range the numbers really cover, read from them, not the range their dtype could hold.
+    A span the size of the dtype would put a constant past the largest int32 into the encoding, and a backend
+    that writes such an expression as an index (Inductor does) cannot hold it. The span is also a tensor, so
+    no constant of that size reaches the generated code at all.
+
+    :param sorted_seq: over (batch, axis) or only axis, packed over (batch, axis) or plain
+    :param values: packed over (batch, some other time dim), or plain with the batch dim
+    :param axis: the time dim searched along
+    :param side: see :func:`rf.search_sorted`
+    :param out_dtype: see :func:`rf.search_sorted`
+    :return: the positions within every sequence, stored like values, or None if this does not apply
+    """
+    narrow_ints = ("int8", "uint8", "int16", "int32")
+    if sorted_seq.dtype not in narrow_ints or values.dtype not in narrow_ints:
+        return None
+    packings = [_raw(x) for x in (sorted_seq, values) if is_packed(x)]
+    if any(len(raw.orig_dims) != 2 for raw in packings):
+        return None
+    batch = packings[0].orig_dims[0]
+    if any(raw.orig_dims[0] != batch for raw in packings) or axis.dyn_size_ext is None:
+        return None
+    if axis.dyn_size_ext.dims != (batch,):
+        return None
+    dev = packings[0].inner.device
+    lens = rf.cast(axis.get_size_tensor(device=dev), "int64")
+
+    # the sorted side as one flat buffer: for every row its number, its sequence and whether it belongs to one
+    if is_packed(sorted_seq):
+        sorted_raw = _raw(sorted_seq)
+        if sorted_raw.orig_dims != (batch, axis) or sorted_raw.inner.dims != (sorted_raw.packed_dim,):
+            return None
+        flat, flat_dim = sorted_raw.inner, sorted_raw.packed_dim
+        row_seq, row_local = _dev_seq_local(sorted_raw)
+        starts, seqs_dim = sorted_raw.seq_starts(device=dev)
+        if seqs_dim != batch:
+            starts = rf.replace_dim_v2(starts, in_dim=seqs_dim, out_dim=batch)
+        starts = rf.cast(starts, "int64")
+    else:
+        if not set(sorted_seq.dims) <= {batch, axis}:
+            return None
+        grid = sorted_seq if batch in sorted_seq.dims else rf.expand_dim(sorted_seq, dim=batch)
+        flat, flat_dim = rf.merge_dims(grid.copy_transpose([batch, axis]), dims=[batch, axis])
+        # noinspection PyProtectedMember
+        width = grid._raw_backend.get_shape_tuple_raw(grid.raw_tensor)[grid.dims.index(axis)]
+        rows = rf.range_over_dim(flat_dim, device=dev)
+        row_seq, row_local = rows // width, rows % width
+        row_seq.sparse_dim = batch
+        starts = rf.cast(rf.range_over_dim(batch, device=dev), "int64") * width
+    # noinspection PyProtectedMember
+    n_rows = flat._raw_backend.get_shape_tuple_raw(flat.raw_tensor)[flat.dims.index(flat_dim)]
+    if not isinstance(n_rows, int):
+        return None
+    in_seq = rf.cast(row_local, "int64") < rf.gather(lens, indices=row_seq, axis=batch)
+    keys_i64 = rf.cast(flat, "int64")
+
+    # the values, each with the sequence it belongs to
+    if is_packed(values):
+        values_raw = _raw(values)
+        if axis in values_raw.orig_dims:
+            return None
+        values_inner = values_raw.inner
+        values_seq = _frame_coords(values_raw, batch)
+        values_valid = _frame_mask(values_raw)
+    else:
+        if batch not in values.dims or axis in values.dims:
+            return None
+        values_raw, values_inner, values_valid = None, values, None
+        values_seq = rf.range_over_dim(batch, device=dev)
+    values_seq = rf.cast(values_seq, "int64")
+    values_i64 = rf.cast(values_inner, "int64")
+
+    # the numbers a junk row holds are whatever its buffer held, so they must not widen the span
+    keys_seen = rf.where(in_seq, keys_i64, 0)
+    values_seen = rf.where(values_valid, values_i64, 0) if values_valid is not None else values_i64
+    lo = rf.minimum(rf.reduce_min(keys_seen, axis=keys_seen.dims), rf.reduce_min(values_seen, axis=values_seen.dims))
+    hi = rf.maximum(rf.reduce_max(keys_seen, axis=keys_seen.dims), rf.reduce_max(values_seen, axis=values_seen.dims))
+    span = hi - lo + 2  # one slot above the largest number, where the rows outside a sequence go
+
+    number = rf.where(in_seq, keys_i64 - lo, span - 1)
+    flat_sorted = rf.cast(row_seq, "int64") * span + number
+    # searched over the raw width of the buffer, which is sorted throughout, so no length applies to it
+    rows_static = Dim(n_rows, name="search_sorted_rows")
+    flat_sorted = rf.replace_dim_v2(flat_sorted, in_dim=flat_dim, out_dim=rows_static)
+    wanted = rf.combine_bc(values_seq * span, "+", values_i64 - lo)
+
+    found = rf.search_sorted(flat_sorted, wanted, axis=rows_static, side=side, out_dtype="int64")
+    seq_start = rf.gather(starts, indices=rf.cast(values_seq, "int32"), axis=batch)
+    seq_len = rf.gather(lens, indices=rf.cast(values_seq, "int32"), axis=batch)
+    local = rf.minimum(rf.relu(rf.combine_bc(found, "-", seq_start)), seq_len)
+    local = rf.cast(local, out_dtype)
+    local.sparse_dim = axis
+    if values_raw is None:
+        return local
+    out = values_raw.rewrap(local, name="search_sorted")
+    out.sparse_dim = axis
+    return out
 
 
 def _plain_extents(raw: PackedRawTensor, dim: Dim) -> Optional[Tuple[int, int]]:
