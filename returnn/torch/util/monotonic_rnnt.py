@@ -29,7 +29,7 @@ import torch
 from .assert_ import assert_
 
 
-def _cell_offsets(frame_lens: torch.Tensor, label_lens: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
+def cell_offsets(frame_lens: torch.Tensor, label_lens: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
     """
     :param frame_lens: [B] frames per sequence
     :param label_lens: [B] labels per sequence
@@ -55,7 +55,7 @@ def lattice_index(
     :param total: cells to lay out, the sum over the batch or a static capacity above it
     :return: (sequence [total], frame [total], prefix [total]) int64
     """
-    offsets, cells = _cell_offsets(frame_lens, label_lens)
+    offsets, cells = cell_offsets(frame_lens, label_lens)
     # a capacity below the batch would cut the last sequence short in silence
     assert_(
         cells.sum() <= total,
@@ -72,7 +72,7 @@ def lattice_index(
     return seq, torch.div(within, stride, rounding_mode="floor"), within % stride
 
 
-def _next_label_per_cell(
+def next_label_per_cell(
     labels: torch.Tensor, frame_lens: torch.Tensor, label_lens: torch.Tensor, blank: int, total: int
 ) -> torch.Tensor:
     """
@@ -167,7 +167,7 @@ if hasattr(torch.library, "custom_op"):  # torch >= 2.4
     ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
         from .monotonic_rnnt_triton import cell_stats, forward_scan
 
-        offsets, _cells = _cell_offsets(frame_lens, label_lens)
+        offsets, _cells = cell_offsets(frame_lens, label_lens)
         row_max, log_sum, blank_lp, label_lp = cell_stats(logits, next_label, blank)
         total, alpha = forward_scan(blank_lp, label_lp, offsets, frame_lens, label_lens, max_frames, max_prefix)
         return total, row_max, log_sum, blank_lp, label_lp, alpha
@@ -202,7 +202,7 @@ if hasattr(torch.library, "custom_op"):  # torch >= 2.4
     ) -> torch.Tensor:
         from .monotonic_rnnt_triton import backward_scan, cell_grad
 
-        offsets, _cells = _cell_offsets(frame_lens, label_lens)
+        offsets, _cells = cell_offsets(frame_lens, label_lens)
         # the sweep gives the posteriors of the log likelihood, d_total carries the sign of the loss
         blank_grad, label_grad = backward_scan(blank_lp, label_lp, offsets, frame_lens, label_lens, alpha, -d_total)
         return cell_grad(logits, next_label, row_max, log_sum, blank_grad, label_grad, blank)
@@ -265,7 +265,7 @@ def monotonic_rnnt_loss(
     # the kernels index the lengths by sequence and ignore strides
     frame_lens, label_lens = frame_lens.contiguous(), label_lens.contiguous()
     max_prefix = int(labels.shape[1]) + 1
-    next_label = _next_label_per_cell(labels, frame_lens, label_lens, blank, logits.shape[0])
+    next_label = next_label_per_cell(labels, frame_lens, label_lens, blank, logits.shape[0])
     # the cell kernels index every row by these ids unchecked, and a recursion shorter than a sequence
     # returns a partial score, so both are checked on the device, without a host read
     assert_(
@@ -282,7 +282,7 @@ def monotonic_rnnt_loss(
             logits, next_label, frame_lens, label_lens, blank, max_frames, max_prefix
         )[0]
     else:
-        offsets, _cells = _cell_offsets(frame_lens, label_lens)
+        offsets, _cells = cell_offsets(frame_lens, label_lens)
         source = logits if logits.dtype in (torch.float32, torch.float64) else logits.float()
         # a row without any finite logit has no probability mass, its log probabilities are minus infinity, not nan
         dead = torch.isneginf(source).all(dim=-1, keepdim=True)

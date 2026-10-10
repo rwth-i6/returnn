@@ -12,6 +12,7 @@ __all__ = [
     "cross_entropy",
     "ctc_loss",
     "monotonic_rnnt_loss",
+    "rnnt_loss",
     "ctc_best_path",
     "ctc_greedy_decode",
     "ctc_durations_from_path",
@@ -171,6 +172,72 @@ def monotonic_rnnt_loss(
         max_frames=max_frames,
     )
     return Tensor("monotonic_rnnt", dims=[labels.dims[0]], dtype="float32", raw_tensor=losses)
+
+
+def rnnt_loss(
+    *,
+    enc: Tensor,
+    pred: Tensor,
+    enc_spatial_dim: Dim,
+    prefix_dim: Dim,
+    labels: Tensor,
+    labels_spatial_dim: Dim,
+    joint,
+    blank_index: int,
+    cells_bound: Optional[int] = None,
+    max_frames: Optional[int] = None,
+) -> Tensor:
+    """
+    Full-sum negative log likelihood of the transducer (RNN-T) over the packed lattice.
+
+    A blank moves on to the next frame and a label stays in its frame, so several labels can share a frame
+    and every sequence with a frame is alignable, unlike in :func:`monotonic_rnnt_loss`.
+    The lattice of a sequence is again its frames times its prefixes, built packed, one entry per real cell,
+    and the joint stays with the caller, it only ever sees the two gathered operands.
+
+    The frames are whatever the lattice has as rows.
+    For a joint that reads a whole chunk of encoder frames per cell, they are the chunks:
+    ``enc_spatial_dim`` is the chunk dim then, and ``enc`` e.g. the index of every chunk,
+    by which the joint finds the frames of the chunk of every cell.
+
+    :param enc: [batch, enc_spatial_dim, D_enc] or [batch, enc_spatial_dim], packed or padded
+    :param pred: [batch, prefix_dim, D_pred], the predictor states, one more than the labels
+    :param enc_spatial_dim: the rows of the lattice, the encoder frames or chunks of them
+    :param prefix_dim: the label prefixes of the predictor
+    :param labels: [batch, labels_spatial_dim] sparse, the reference labels
+    :param labels_spatial_dim: the labels
+    :param joint: maps the two gathered operands to the logits over the vocabulary plus blank
+    :param blank_index: index of the blank
+    :param cells_bound: cells the lattice buffer holds, the batch's own sum by default, a static capacity
+        under CUDA graph capture
+    :param max_frames: rows the recursion runs over, the longest sequence of the batch by default,
+        the declared capacity under capture, since reading the batch's own maximum is a host read
+    :return: [batch] the negative log likelihood, zero where a sequence has no frame
+    """
+    from returnn.frontend._packed_backend import PackedRawTensor, monotonic_rnnt_lattice, unpack
+    from returnn.torch.util.rnnt import rnnt_loss as _raw_loss
+
+    enc_cells, pred_cells, _lattice_dim = monotonic_rnnt_lattice(
+        enc, pred, enc_spatial_dim=enc_spatial_dim, prefix_dim=prefix_dim, cells_bound=cells_bound
+    )
+    logits = joint(enc_cells, pred_cells)
+    raw = logits.raw_tensor
+    assert isinstance(raw, PackedRawTensor), f"rnnt_loss: the joint must keep the lattice packed, got {logits}"
+    flat = raw.inner
+    device = flat.device
+    if max_frames is None:
+        max_frames = int(enc_spatial_dim.get_dim_value())
+    # the recursion indexes the labels by prefix, which wants them padded, and they are small
+    padded_labels = unpack(labels).copy_transpose([labels.dims[0], labels_spatial_dim])
+    losses = _raw_loss(
+        flat.raw_tensor,
+        padded_labels.raw_tensor,
+        enc_spatial_dim.get_dyn_size_ext_for_device(device).raw_tensor,
+        labels_spatial_dim.get_dyn_size_ext_for_device(device).raw_tensor,
+        blank=blank_index,
+        max_frames=max_frames,
+    )
+    return Tensor("rnnt", dims=[labels.dims[0]], dtype="float32", raw_tensor=losses)
 
 
 def ctc_best_path(
