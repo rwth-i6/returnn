@@ -3018,6 +3018,25 @@ def test_shift_and_pad_with_a_per_seq_pad_value():
     _assert_equal_non_padded(out_p, ref, batch_dim, padded_time)
 
 
+def test_shift_keeps_the_packing():
+    """
+    a packed shift (pad, then slice back to the same spatial dim) comes back in the packing it started from,
+    dense, with a gap smaller and with one larger than the shift, and in a bound buffer under static tracing
+    """
+    rf.select_backend_torch()
+    x, batch_dim, time_dim, feat_dim = _make_input(batch_size=3, seq_lens=(7, 5, 4))
+    for gap, traced in ((0, False), (1, False), (3, False), (0, True)):
+        with rf.set_static_traceable_ctx() if traced else rf.set_default_device_ctx("cpu"):
+            time_dim.capacity = 7 if traced else None
+            xp = packed.pack(x, gap=gap, total_bound=24 if traced else None)
+            for shift, amount in ((rf.shift_right, 2), (rf.shift_left, 1)):
+                out_p = shift(xp, axis=time_dim, pad_value=0.0, amount=amount)
+                assert out_p.raw_tensor.same_packing(xp.raw_tensor), (gap, traced, shift.__name__, out_p.raw_tensor)
+                ref = shift(x, axis=time_dim, pad_value=0.0, amount=amount)
+                _assert_equal_non_padded(out_p, ref, batch_dim, time_dim)
+    time_dim.capacity = None
+
+
 def test_regap_of_entirely_empty_sequences():
     """a packing whose sequences are all empty can still be re-laid out"""
     rf.select_backend_torch()

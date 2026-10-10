@@ -223,6 +223,7 @@ class PackedRawTensor:
         align: int = 1,
         layout_lens: Optional[Tensor] = None,
         content_bound: Optional[int] = None,
+        unpadded: Optional[PackedRawTensor] = None,
     ):
         self.inner = inner
         self.packed_dim = packed_dim
@@ -261,6 +262,11 @@ class PackedRawTensor:
         self.content_bound = content_bound
         if content_bound is not None and self.orig_dims and rf.is_static_traceable():
             _record_total_bound(self.orig_dims[-1], content_bound)
+        # unpadded = the packing a pad along the innermost packed dim started from:
+        # a slice back to its spatial dim (the pad-then-slice of a shift) returns to that packing,
+        # so the result shares the packed dim with the tensors before the pad.
+        # None = not the result of such a pad.
+        self.unpadded = unpadded
 
     def __repr__(self) -> str:
         # the asserts in pack()/regap() interpolate the raw tensor, and the layout is exactly
@@ -400,6 +406,7 @@ class PackedRawTensor:
             align=self.align,
             layout_lens=self.layout_lens,
             content_bound=self.content_bound,
+            unpadded=self.unpadded,
         )
         return out
 
@@ -4379,6 +4386,7 @@ class PackedBackend(Backend[PackedRawTensor]):
                 and not any(_dim_refs_packed(d, raw) for j, d in enumerate(axes) if j != i)
             ):
                 total_pad = pad_l + pad_r
+                unpadded = raw
                 if raw.gap < total_pad:
                     target_gap = total_pad if raw.align == 1 else -(-total_pad // raw.align) * raw.align
                     _warn_fallback_once(
@@ -4417,6 +4425,7 @@ class PackedBackend(Backend[PackedRawTensor]):
                         if raw.content_bound is not None and _capacity_n(raw.orig_dims) is not None
                         else None
                     ),
+                    unpadded=unpadded,
                 )
                 if isinstance(value, Tensor) and set(value.dims) & set(helper.orig_dims):
                     value = _pack_like(value, helper)
@@ -4999,6 +5008,8 @@ class PackedBackend(Backend[PackedRawTensor]):
         Along the innermost packed dim a plain truncation/shift is a re-layout gather:
         output frame i of a sequence reads input frame start + i of the same sequence
         (e.g. the pad-then-slice pattern that builds chunk history).
+        A slice back to the spatial dim a pad started from (a shift) gathers into that pad's source packing,
+        so the result shares the packed dim with the tensors before the shift.
         Anything else takes the generic dim-aware route.
         """
         kwargs = dict(axis=axis, start=start, end=end, step=step, size=size, out_dim=out_dim)
@@ -5012,6 +5023,13 @@ class PackedBackend(Backend[PackedRawTensor]):
             and out_dim.dyn_size_ext is not None
         ):
             raw = _raw(source)
+            unpadded = raw.unpadded
+            if (
+                unpadded is not None
+                and unpadded.orig_dims[-1] == out_dim
+                and unpadded.orig_dims[:-1] == raw.orig_dims[:-1]
+            ):
+                return _gather_into_packing(source, raw, unpadded, start=start or 0)
             indices = rf.range_over_dim(out_dim, device=raw.inner.device) + (start or 0)
             return _gather_relayout(source, raw, indices=indices, clip_to_valid=False, out_spatial_dim=out_dim)
         return _dim_aware_call("slice", (source,), kwargs)
@@ -6081,6 +6099,42 @@ def _clip_into_seqs(raw: PackedRawTensor, idx: Tensor, *, seq: Tensor) -> Tensor
         lens = rf.copy_to_device(raw.seq_lens, raw.inner.device)
     last = rf.cast(rf.gather(lens, indices=seq, axis=raw.orig_dims[0]), idx.dtype) - 1
     return rf.clip_by_value(idx, rf.zeros_like(last), last)
+
+
+def _gather_into_packing(source: Tensor, raw: PackedRawTensor, target: PackedRawTensor, *, start: int) -> Tensor:
+    """
+    Slice along the innermost packed dim into an existing packing over the same sequences,
+    e.g. back into the packing a pad started from, so the result shares its packed dim.
+    Every frame of the target reads the source frame ``start`` positions further into its own sequence.
+
+    :param source: packed
+    :param raw: its packing
+    :param target: the packing of the result, over the outer packed dims of the source and the sliced spatial dim
+    :param start: where the slice starts within each sequence
+    :return: packed like target
+    """
+    batch = raw.orig_dims[0]
+    dev = raw.inner.device
+    helper = PackedRawTensor(
+        inner=rf.zeros([target.packed_dim], dtype="int32", device=dev),
+        packed_dim=target.packed_dim,
+        orig_dims=target.orig_dims,
+        gap=target.gap,
+        align=target.align,
+        layout_lens=target.layout_lens,
+        content_bound=target.content_bound,
+        unpadded=target.unpadded,
+    )
+    seq = _frame_coords(helper, batch)
+    local = _frame_coords(helper, target.orig_dims[-1])
+    starts, seqs_dim = raw.seq_starts(device=dev)
+    src = rf.cast(rf.gather(starts, indices=seq, axis=seqs_dim), local.dtype) + local + start
+    src = rf.clip_by_value(src, 0, _last_row(raw.packed_dim, src.dtype))
+    out = helper.rewrap(rf.gather(raw.inner, indices=src, axis=raw.packed_dim), name="gather")
+    # a sparse dim assigned on the virtual tensor never reached the inner buffer
+    if source.sparse_dim is not None:
+        out.sparse_dim = source.sparse_dim
+    return out
 
 
 def _gather_out_packed_dim(
