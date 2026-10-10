@@ -587,6 +587,32 @@ class TorchBackend(Backend[torch.Tensor]):
         return out
 
     @staticmethod
+    def slice_update(target: Tensor, value: Tensor, *, axis: Dim, start: Tensor) -> Tensor:
+        """
+        :param target: with ``axis``
+        :param value: without ``axis``
+        :param axis:
+        :param start: index in ``axis``, scalar
+        :return: ``target`` with ``value`` at ``start`` along ``axis``
+
+        ``index_copy_`` into the target's buffer, so the target itself is updated.
+        Where autograd records the write, ``index_copy`` writes into a copy instead.
+        """
+        axis_int = target.dims.index(axis)
+        value_raw = value.copy_compatible_to_dims_raw(target.dims[:axis_int] + (axis,) + target.dims[axis_int + 1 :])
+        shape = list(target.raw_tensor.shape)
+        shape[axis_int] = 1
+        value_raw = value_raw.expand(shape)
+        index = start.raw_tensor.to(device=target.raw_tensor.device, dtype=torch.int64).reshape(1)
+        if torch.is_grad_enabled() and (target.raw_tensor.requires_grad or value_raw.requires_grad):
+            out_raw = torch.index_copy(target.raw_tensor, axis_int, index, value_raw)
+        else:
+            out_raw = target.raw_tensor.index_copy_(axis_int, index, value_raw)
+        out = target.copy_template()
+        out.raw_tensor = out_raw
+        return out
+
+    @staticmethod
     def stack(sources: Sequence[Tensor], *, out_dim: Dim) -> Tensor:
         """stack"""
         out_dims = (out_dim,) + sources[0].dims
