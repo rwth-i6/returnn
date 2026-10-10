@@ -567,55 +567,37 @@ class Updater:
         Raise if a param would get the optimizer state of another optimizer algorithm,
         or a param group the options of another one (the groups are loaded by position).
         Checkpoints with "param_owners" (see :func:`_get_opt_param_owners`) name the algorithm per param.
-        Older checkpoints only have the param groups, whose hyper-parameter keys identify the algorithm
-        (e.g. AdamW ``betas`` vs SGD ``momentum``), compared per param.
+        Older checkpoints are not checked.
 
         :param optimizer_state: the loaded optimizer checkpoint
         :param ckpt_param_names: param_idx -> name, as saved
         :param critical_param_names: names of the params which need their state (requires_grad)
         :param param_id_to_name:
         """
-        ckpt_groups = optimizer_state["optimizer"]["param_groups"]
-        ckpt_group_idx_by_name = {}
-        for group_idx, ckpt_group in enumerate(ckpt_groups):
-            ckpt_group_param_indices: List[int] = ckpt_group["params"]
-            for param_idx in ckpt_group_param_indices:
-                ckpt_group_idx_by_name[ckpt_param_names[param_idx]] = group_idx
         ckpt_param_owners = optimizer_state.get("param_owners")
-        ckpt_owner_by_name = dict(zip(ckpt_param_names, ckpt_param_owners)) if ckpt_param_owners is not None else None
+        if ckpt_param_owners is None:
+            return
+        ckpt_owner_by_name = dict(zip(ckpt_param_names, ckpt_param_owners))
         group_owners = _optimizer_group_owner_names(self.optimizer)
         for group_idx, self_group in enumerate(self.optimizer.param_groups):
             for param in self_group["params"]:
                 param_name = param_id_to_name[id(param)]
-                ckpt_group_idx = ckpt_group_idx_by_name.get(param_name)
-                if param_name not in critical_param_names or ckpt_group_idx is None:
+                if param_name not in critical_param_names or param_name not in ckpt_owner_by_name:
                     continue
-                if ckpt_owner_by_name is not None:
-                    if ckpt_owner_by_name[param_name] != group_owners[group_idx]:
-                        raise ValueError(
-                            f"load_optimizer: param {param_name!r} moved from {ckpt_owner_by_name[param_name]}"
-                            f" to {group_owners[group_idx]}."
-                            " Optimizer state cannot be transferred across optimizer algorithms."
-                        )
-                    continue
-                ckpt_keys = _param_group_hyper_param_keys(ckpt_groups[ckpt_group_idx])
-                self_keys = _param_group_hyper_param_keys(self_group)
-                if ckpt_keys - self_keys and self_keys - ckpt_keys:
+                if ckpt_owner_by_name[param_name] != group_owners[group_idx]:
                     raise ValueError(
-                        f"load_optimizer: param {param_name!r} moved to {group_owners[group_idx]}"
-                        f" from a param group with the hyper-parameters {sorted(ckpt_keys - self_keys)}"
-                        f" instead of {sorted(self_keys - ckpt_keys)} (checkpoint without param_owners)."
+                        f"load_optimizer: param {param_name!r} moved from {ckpt_owner_by_name[param_name]}"
+                        f" to {group_owners[group_idx]}."
                         " Optimizer state cannot be transferred across optimizer algorithms."
                     )
-        if ckpt_param_owners is not None:
-            for group_idx, ckpt_group in enumerate(ckpt_groups):
-                ckpt_group_owners = {ckpt_param_owners[param_idx] for param_idx in ckpt_group["params"]}
-                if ckpt_group_owners and ckpt_group_owners != {group_owners[group_idx]}:
-                    raise ValueError(
-                        f"load_optimizer: param group {group_idx} is of {group_owners[group_idx]},"
-                        f" but of {', '.join(sorted(ckpt_group_owners))} in the checkpoint."
-                        " The param groups are loaded by position, so the sub-optimizers must keep their order."
-                    )
+        for group_idx, ckpt_group in enumerate(optimizer_state["optimizer"]["param_groups"]):
+            ckpt_group_owners = {ckpt_param_owners[param_idx] for param_idx in ckpt_group["params"]}
+            if ckpt_group_owners and ckpt_group_owners != {group_owners[group_idx]}:
+                raise ValueError(
+                    f"load_optimizer: param group {group_idx} is of {group_owners[group_idx]},"
+                    f" but of {', '.join(sorted(ckpt_group_owners))} in the checkpoint."
+                    " The param groups are loaded by position, so the sub-optimizers must keep their order."
+                )
 
     def save_optimizer(self, filename):
         """
@@ -1113,14 +1095,6 @@ def _is_schedule_free_optimizer(optimizer: torch.optim.Optimizer) -> bool:
     if sub_optimizers is not None:
         return any(_is_schedule_free_optimizer(sub) for sub in sub_optimizers)
     return callable(getattr(optimizer, "train", None)) and callable(getattr(optimizer, "eval", None))
-
-
-def _param_group_hyper_param_keys(group: Dict[str, Any]) -> Set[str]:
-    """
-    :return: the keys of a param group which identify its optimizer algorithm
-        (e.g. AdamW ``betas`` vs SGD ``momentum``), i.e. all but the params and the learning rate
-    """
-    return set(group) - {"params", "lr"}
 
 
 def _optimizer_owner_name(optimizer: torch.optim.Optimizer) -> str:

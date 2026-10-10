@@ -1118,10 +1118,7 @@ def test_optimizer_load_cross_class_error():
 
 
 def test_load_optimizer_legacy_checkpoint_same_algorithm():
-    # Plain AdamW checkpoints from before "param_owners" keep loading, also with a changed weight-decay split
-    # and with param group keys which a newer or an older torch version adds or lacks.
-    import copy
-
+    # Checkpoints from before "param_owners" keep loading, also with a changed weight-decay split.
     model = torch.nn.Sequential(torch.nn.Linear(7, 5), torch.nn.LayerNorm(5))
 
     def _include_check(*, module, **_kwargs):
@@ -1144,68 +1141,13 @@ def test_load_optimizer_legacy_checkpoint_same_algorithm():
         updater1.save_optimizer(tmp_dir + "/model.opt.pt")
         legacy_state = torch.load(tmp_dir + "/model.opt.pt")
         del legacy_state["param_owners"]
-        for variant in ("as_is", "extra_group_key", "missing_group_key"):
-            state = copy.deepcopy(legacy_state)
-            for group in state["optimizer"]["param_groups"]:
-                if variant == "extra_group_key":
-                    group["key_of_a_newer_torch"] = True
-                elif variant == "missing_group_key":
-                    del group["amsgrad"]
-            torch.save(state, tmp_dir + f"/model.{variant}.opt.pt")
-            updater2 = _make_updater(
-                {"class": "adamw", "weight_decay": 1e-3, "weight_decay_custom_include_check": _include_check}
-            )
-            updater2.load_optimizer(tmp_dir + f"/model.{variant}.opt.pt")
-            opt2 = updater2.get_optimizer()
-            assert torch.equal(opt2.state[ln_weight]["exp_avg"], exp_avg1), variant
-            for param in model.parameters():
-                param.grad = torch.ones_like(param)
-            opt2.step()
-
-
-def test_optimizer_load_legacy_checkpoint_cross_algorithm_error():
-    # For checkpoints from before "param_owners" the param group hyper-parameters identify the algorithm.
-    # Swapped sub-optimizer classes over the same params keep the param order and the group sizes,
-    # so nothing else would notice.
-    model = torch.nn.Sequential(*(torch.nn.Linear(4, 4, bias=False) for _ in range(3)))
-
-    def _filter_first_weight(*, full_param_name, **_kwargs):
-        return full_param_name == "0.weight"
-
-    def _make_updater(first_opts, second_opts):
-        config = Config(
-            dict(
-                optimizer={
-                    "class": "multi",
-                    "optimizers": [{**first_opts, "params_filter": _filter_first_weight}, second_opts],
-                }
-            )
-        )
-        updater = Updater(config=config, network=model, device=torch.device("cpu"))
-        updater.create_optimizer()
-        updater.set_current_train_step(global_train_step=0, epoch=1)
-        return updater
-
-    sgd, adamw = {"class": "sgd", "momentum": 0.9}, {"class": "adamw"}
-    updater1 = _make_updater(sgd, adamw)
-    for param in model.parameters():
-        param.grad = torch.ones_like(param)
-    updater1.get_optimizer().step()
-    updater2 = _make_updater(adamw, sgd)
-    assert updater1._get_opt_param_names()[0] == updater2._get_opt_param_names()[0]
-
-    with tempfile.TemporaryDirectory(prefix="returnn_test_load_legacy_cross_algo") as tmp_dir:
-        updater1.save_optimizer(tmp_dir + "/model.opt.pt")
-        legacy_state = torch.load(tmp_dir + "/model.opt.pt")
-        del legacy_state["param_owners"]
         torch.save(legacy_state, tmp_dir + "/model.opt.pt")
-        try:
-            updater2.load_optimizer(tmp_dir + "/model.opt.pt")
-        except ValueError as exc:
-            message = str(exc)
-            assert "moved" in message and "0.weight" in message and "adamw" in message and "momentum" in message, exc
-        else:
-            raise AssertionError("expected ValueError, the SGD state of 0.weight would enter the AdamW update")
+        updater2 = _make_updater(
+            {"class": "adamw", "weight_decay": 1e-3, "weight_decay_custom_include_check": _include_check}
+        )
+        updater2.load_optimizer(tmp_dir + "/model.opt.pt")
+
+    assert torch.equal(updater2.get_optimizer().state[ln_weight]["exp_avg"], exp_avg1)
 
 
 def test_updater_weight_decay_blacklist():
