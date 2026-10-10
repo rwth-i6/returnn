@@ -1990,6 +1990,104 @@ def test_torch_engine_finalize_data_loaders_pin_memory():
     _check_torch_engine_finalize_data_loaders(pin_memory=True)
 
 
+# must be in the global scope due to pickling
+class DropoutTrainTestModel(TrainTestModel):
+    def __call__(self, x: torch.Tensor) -> torch.Tensor:
+        """
+        :param x: [B,T,D]
+        :return: [B,T,D']
+        """
+        return super().__call__(torch.nn.functional.dropout(x, p=0.5, training=self.training))
+
+
+_epoch_start_rng_states = []
+
+
+def _epoch_start_record_rng_state(*, epoch: int, dataset_name: str, **_kwargs):
+    _epoch_start_rng_states.append((epoch, dataset_name, torch.get_rng_state()))
+
+
+def _run_train_preload_next_epoch(*, preload: bool) -> Dict[str, Any]:
+    _epoch_start_rng_states.clear()
+    config = Config(
+        dict(
+            task="train",
+            device="cpu",
+            extern_data={"data": {"dim": 9}, "classes": {"dim": 2, "sparse": True}},
+            get_model=DropoutTrainTestModel,
+            train_step=DropoutTrainTestModel.train_step,
+            batch_size=50,
+            optimizer={"class": "adam"},
+            num_epochs=3,
+            online_shuffle_batches=5,  # draws from the seed of the DataLoader iterator
+            torch_dataloader_opts={"num_workers": 1},
+            torch_preload_next_train_epoch=preload,
+            epoch_start=_epoch_start_record_rng_state,
+        )
+    )
+    datasets = {
+        name: init_dataset({"class": "Task12AXDataset", "num_seqs": 23, "name": name, "seq_ordering": "random"})
+        for name in ["train", "dev"]
+    }
+    for dataset in datasets.values():
+        dataset.init_seq_order(epoch=1)
+    with global_config_ctx(config), unittest.mock.patch.object(
+        Engine, "_preload_train_epoch", autospec=True, side_effect=Engine._preload_train_epoch
+    ) as preload_mock:
+        engine = Engine(config=config)
+        engine.init_train_from_config(train_data=datasets["train"], dev_data=datasets["dev"])
+        engine.train()
+        assert engine._preloaded_train_data_iter is None
+        engine.finalize()
+    assert [call.args[1] for call in preload_mock.call_args_list] == ([2, 3] if preload else [])
+    return {
+        "params": {k: v.clone() for k, v in engine.get_pt_model().state_dict().items()},
+        "optimizer": copy.deepcopy(engine.get_pt_optimizer().state_dict()),
+        "scores": {ep: data.error for ep, data in engine.learning_rate_control.epoch_data.items()},
+        "rng": list(_epoch_start_rng_states) + [(None, None, torch.get_rng_state())],
+    }
+
+
+def test_torch_engine_preload_next_train_epoch():
+    """same data order, dropout masks and eval scores as without preloading"""
+    ref = _run_train_preload_next_epoch(preload=False)
+    res = _run_train_preload_next_epoch(preload=True)
+    for k, v in ref["params"].items():
+        torch.testing.assert_close(res["params"][k], v, rtol=0, atol=0)
+    torch.testing.assert_close(res["optimizer"], ref["optimizer"], rtol=0, atol=0)
+    assert res["scores"] == ref["scores"] and len(ref["scores"]) == 3
+    assert [(ep, name) for ep, name, _ in res["rng"]] == [(ep, name) for ep, name, _ in ref["rng"]]
+    assert len(ref["rng"]) == 7  # train and dev start per epoch, end
+    for (ep, name, state), (_, _, ref_state) in zip(res["rng"], ref["rng"]):
+        assert torch.equal(state, ref_state), f"RNG state differs at epoch {ep} {name} start"
+
+
+def test_torch_engine_preload_next_train_epoch_no_workers():
+    config = Config(
+        dict(
+            task="train",
+            device="cpu",
+            extern_data={"data": {"dim": 9}, "classes": {"dim": 2, "sparse": True}},
+            get_model=TrainTestModel,
+            train_step=TrainTestModel.train_step,
+            batch_size=50,
+            optimizer={"class": "adam"},
+            torch_dataloader_opts={"num_workers": 0},
+            torch_preload_next_train_epoch=True,
+        )
+    )
+    dataset = init_dataset({"class": "Task12AXDataset", "num_seqs": 5, "name": "train"})
+    dataset.init_seq_order(epoch=1)
+    with global_config_ctx(config):
+        engine = Engine(config=config)
+        try:
+            engine.init_train_from_config(train_data=dataset)
+        except ValueError as exc:
+            assert "num_workers" in str(exc)
+        else:
+            raise AssertionError("expected ValueError")
+
+
 def _build_cuda_graph_train_config_and_dataset(
     *,
     compile_: bool,

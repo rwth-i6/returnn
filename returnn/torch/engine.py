@@ -4,7 +4,7 @@ Main engine for PyTorch
 
 from __future__ import annotations
 
-from typing import Optional, Any, Union, Callable, Dict, Set
+from typing import Optional, Any, Union, Callable, Iterator, Dict, Set
 from contextlib import nullcontext, ExitStack, contextmanager
 
 import sys
@@ -74,11 +74,18 @@ class Engine(EngineBase):
         self.model_filename = self.config.value("model", None)
         self._mp_manager = multi_proc_manager_with_watchdog.create_manager()
         self._epoch_mp_shared = self._mp_manager.Value("i", 0)
+        # separate from _epoch_mp_shared: the next train epoch can be prepared during the eval of the current one
+        self._train_epoch_mp_shared = self._mp_manager.Value("i", 0)
         self.train_dataset: Optional[Dataset] = None
         self.eval_datasets = {}
         self.extern_data: Optional[TensorDict] = None
         self._train_dataloader: Optional[Union[DataLoader, PinMemoryDataLoader]] = None
         self._eval_dataloaders: Dict[str, Union[DataLoader, PinMemoryDataLoader]] = {}
+        # torch_preload_next_train_epoch, see _preload_train_epoch
+        self._preload_next_train_epoch = config.bool("torch_preload_next_train_epoch", False)
+        self._preloaded_train_data_iter: Optional[Iterator[Any]] = None
+        self._preloaded_train_random_seed: Optional[int] = None
+        self._preloaded_train_rng_state: Optional[torch.Tensor] = None
         self._hot_reloader = ConfigHotReloader(config.typed_dict) if should_use_hot_reloading(config=config) else None
 
         self._start_epoch: Optional[int] = None
@@ -238,6 +245,16 @@ class Engine(EngineBase):
                 self.eval_datasets[dataset_name] = init_dataset(dataset_opts, default_kwargs={"name": dataset_name})
 
         self._train_dataloader = self._create_data_loader(train_data, train=True) if train_data else None
+        if self._preload_next_train_epoch and self._train_dataloader is not None:
+            loader = self._train_dataloader
+            if isinstance(loader, PinMemoryDataLoader):
+                loader = loader.data_loader
+            if loader.num_workers == 0:
+                # the reset of the dataset would run in the main proc, on the dataset object of the main proc
+                raise ValueError(f"{self}: torch_preload_next_train_epoch needs torch_dataloader_opts num_workers > 0")
+            if loader.generator is not None:
+                # the eval DataLoaders draw from the same generator, so the draw order would change
+                raise ValueError(f"{self}: torch_preload_next_train_epoch does not support a DataLoader generator")
         for dataset_name, dataset in self.eval_datasets.items():
             self._eval_dataloaders[dataset_name] = self._create_data_loader(dataset, train=False)
 
@@ -320,6 +337,7 @@ class Engine(EngineBase):
         """set epoch"""
         super().set_epoch(epoch)
         self._epoch_mp_shared.value = epoch
+        self._train_epoch_mp_shared.value = epoch
 
     def finalize(self, error_occurred: bool = False):
         """
@@ -341,6 +359,8 @@ class Engine(EngineBase):
         for data_loader in [self._train_dataloader, *self._eval_dataloaders.values()]:
             if data_loader is not None:
                 data_pipeline.shutdown_data_loader(data_loader)
+        # Its pinning thread and persistent workers were stopped above, non-persistent workers stop when it is freed.
+        self._drop_preloaded_train_data()
 
     def train(self):
         """
@@ -452,12 +472,14 @@ class Engine(EngineBase):
         # such as dropout and other random operations inside the model,
         # but also some potential shuffling in the dataset iterator.
         # Also see Dataset._get_default_random_seed_offset() and Dataset._get_random_seed_for_epoch().
+        rf.set_random_seed(self._get_train_epoch_random_seed(self.epoch))
+
+    def _get_train_epoch_random_seed(self, epoch: int) -> int:
         random_seed = self.config.int("random_seed", 42)
-        seed_data = [self.epoch, self.global_train_step, random_seed]
+        seed_data = [epoch, self.global_train_step, random_seed]
         if self._torch_distributed_ctx:
             seed_data.append(self._torch_distributed_ctx.rank())
-        random_seed = merge_random_seeds(seed_data)  # Join all seeds into one int.
-        rf.set_random_seed(random_seed)
+        return merge_random_seeds(seed_data)  # Join all seeds into one int.
 
     def _maybe_reset_dev_memory_caches(self, *, force: bool = False):
         if not force and not self._reset_dev_memory_caches:
@@ -527,7 +549,14 @@ class Engine(EngineBase):
         step_idx = 0
         epoch_start_time = time.monotonic()
 
-        data_iter = iter(self._train_dataloader)
+        if self._preloaded_train_data_iter is not None:
+            assert self._preloaded_train_random_seed == self._get_train_epoch_random_seed(self.epoch)
+            data_iter = self._preloaded_train_data_iter
+            # as if iter() had drawn from it now, after the seed was set in init_train_epoch
+            torch.default_generator.set_state(self._preloaded_train_rng_state)
+            self._drop_preloaded_train_data()
+        else:
+            data_iter = iter(self._train_dataloader)
         elapsed_computation_time = 0
 
         self._pt_model.train()
@@ -881,9 +910,40 @@ class Engine(EngineBase):
             else:
                 print("Not saving model, `model` not specified.", file=log.v3)
 
+        if self._preload_next_train_epoch and self.epoch < self._final_epoch:
+            del data_iter  # frees its pinning thread and non-persistent workers before the next iter()
+            self._preload_train_epoch(self.epoch + 1)
+
         self.eval_model()
         if self.config.bool_or_other("cleanup_old_models", None):
             self.cleanup_old_models()
+
+    def _preload_train_epoch(self, epoch: int):
+        """
+        Creates the train data iterator for the next epoch already now, before the eval,
+        so the DataLoader workers init the dataset and prefetch the first batches while the eval runs
+        (config option ``torch_preload_next_train_epoch``).
+        :func:`train_epoch` of that epoch then uses it, with the same result as creating it there:
+        the train dataset gets the same epoch, and iter() the same random state.
+
+        :param epoch: the next train epoch
+        """
+        print(f"Preloading train data for epoch {epoch}", file=log.v4)
+        random_seed = self._get_train_epoch_random_seed(epoch)
+        rng_state = torch.default_generator.get_state()
+        # iter() draws the DataLoader seeds from this generator, see _BaseDataLoaderIter.
+        # init_train_epoch seeds it like this for the epoch.
+        torch.default_generator.manual_seed(random_seed)
+        self._train_epoch_mp_shared.value = epoch  # read by the dataset reset in the workers
+        self._preloaded_train_data_iter = iter(self._train_dataloader)
+        self._preloaded_train_random_seed = random_seed
+        self._preloaded_train_rng_state = torch.default_generator.get_state()
+        torch.default_generator.set_state(rng_state)  # the eval gets the same random state as without preloading
+
+    def _drop_preloaded_train_data(self):
+        self._preloaded_train_data_iter = None
+        self._preloaded_train_random_seed = None
+        self._preloaded_train_rng_state = None
 
     def _do_save(self):
         if self._device == "meta":
@@ -1062,7 +1122,7 @@ class Engine(EngineBase):
         # otherwise it would trigger to pickle `self` and all its members.
         if dataset_init_epoch:
             dataset_reset = returnn_dataset_wrapper.ReturnnDatasetResetMpSharedEpochCallback(
-                dataset=dataset, epoch_mp_shared=self._epoch_mp_shared
+                dataset=dataset, epoch_mp_shared=self._train_epoch_mp_shared if train else self._epoch_mp_shared
             )
         else:
             dataset_reset = returnn_dataset_wrapper.ReturnnDatasetResetNoOpCallback()
