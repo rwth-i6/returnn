@@ -131,6 +131,7 @@ def cell_grad(
     blank_grad: torch.Tensor,
     label_grad: torch.Tensor,
     blank: int,
+    label_smoothing: float = 0.0,
 ) -> torch.Tensor:
     """
     :param logits: [cells, vocab] unnormalized
@@ -140,6 +141,7 @@ def cell_grad(
     :param blank_grad: [cells] gradient of the loss wrt the blank log probability
     :param label_grad: [cells] gradient of the loss wrt the label log probability
     :param blank: blank index
+    :param label_smoothing: weight of the uniform target over the vocabulary
     :return: [cells, vocab] gradient wrt the logits
     """
     assert logits.is_cuda and kernels.triton is not None, "monotonic rnnt: the cell kernels need cuda and triton"
@@ -155,6 +157,7 @@ def cell_grad(
         label_grad,
         vocab,
         blank,
+        label_smoothing,
         out,
         BLOCK=kernels.CELL_BLOCK,
         num_warps=kernels.CELL_NUM_WARPS,

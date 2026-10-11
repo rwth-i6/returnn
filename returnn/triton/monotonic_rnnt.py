@@ -97,10 +97,11 @@ if triton is not None:
         label_grad_ptr,
         vocab,
         blank,
+        label_smoothing,
         out_ptr,
         BLOCK: tl.constexpr,
     ):
-        """one program per cell, writes the gradient of its row from the two edge posteriors"""
+        """one program per cell, writes the gradient of its row from the two edge posteriors, the targets smoothed"""
         cell = tl.program_id(0)
         base = cell.to(tl.int64) * vocab
         row_max = tl.load(row_max_ptr + cell)
@@ -109,14 +110,17 @@ if triton is not None:
         label_grad = tl.load(label_grad_ptr + cell)
         label = tl.load(label_ptr + cell)
         total = blank_grad + label_grad
+        # the smoothing gives every class its share of both posteriors and the two targets the rest
+        share = label_smoothing * total / vocab
+        keep = 1.0 - label_smoothing
         for start in range(0, vocab, BLOCK):
             offs = start + tl.arange(0, BLOCK)
             mask = offs < vocab
             x = tl.load(logits_ptr + base + offs, mask=mask, other=float("-inf")).to(tl.float32)
             # a cell carrying no posterior contributes nothing, and its row may not even be normalizable
-            grad = tl.where(total == 0.0, 0.0, total * tl.exp((x - row_max) - log_sum))
-            grad = tl.where(offs == blank, grad - blank_grad, grad)
-            grad = tl.where(offs == label, grad - label_grad, grad)
+            grad = tl.where(total == 0.0, 0.0, total * tl.exp((x - row_max) - log_sum) - share)
+            grad = tl.where(offs == blank, grad - keep * blank_grad, grad)
+            grad = tl.where(offs == label, grad - keep * label_grad, grad)
             tl.store(out_ptr + base + offs, grad.to(out_ptr.dtype.element_ty), mask=mask)
 
     # noinspection PyPep8Naming
