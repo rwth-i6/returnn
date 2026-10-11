@@ -495,6 +495,11 @@ class Engine(EngineBase):
         for key in self._data_keys:
             value = self.extern_data.data[key]
             value.raw_tensor = TFBackend.create_placeholder_raw(value)
+            if self._static_shapes_opts:
+                # the feed pads the batch axis to the bound: a known static extent, which e.g. the packed layout needs
+                value.raw_tensor.set_shape(
+                    [self._static_shapes_opts["batch_size_bound"]] + [None] * (len(value.dims) - 1)
+                )
             for dim in value.dims:
                 if dim == batch_dim or not dim.is_dynamic():
                     continue
@@ -508,6 +513,8 @@ class Engine(EngineBase):
                     dim.dyn_size_ext = Tensor(dim.name or "size", dims=[batch_dim], dtype="int32")
                 if dim.dyn_size_ext.raw_tensor is None:
                     dim.dyn_size_ext.raw_tensor = TFBackend.create_placeholder_raw(dim.dyn_size_ext)
+                    if self._static_shapes_opts:
+                        dim.dyn_size_ext.raw_tensor.set_shape([self._static_shapes_opts["batch_size_bound"]])
                     self._fed_dims.append((key, dim))
         if not self._static_shapes_opts:
             # The batch dim gets its size from the data itself. The net-dict path derives this from
