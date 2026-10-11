@@ -1118,11 +1118,8 @@ def test_optimizer_load_cross_class_error():
 
 
 def test_load_optimizer_legacy_checkpoint_same_algorithm():
-    # Checkpoints from before "param_owners" keep loading, also with a changed weight-decay split.
+    # Checkpoints from before "param_owners" keep loading.
     model = torch.nn.Sequential(torch.nn.Linear(7, 5), torch.nn.LayerNorm(5))
-
-    def _include_check(*, module, **_kwargs):
-        return True if isinstance(module, torch.nn.LayerNorm) else None
 
     def _make_updater(optimizer_opts):
         updater = Updater(config=Config(dict(optimizer=optimizer_opts)), network=model, device=torch.device("cpu"))
@@ -1142,9 +1139,7 @@ def test_load_optimizer_legacy_checkpoint_same_algorithm():
         legacy_state = torch.load(tmp_dir + "/model.opt.pt")
         del legacy_state["param_owners"]
         torch.save(legacy_state, tmp_dir + "/model.opt.pt")
-        updater2 = _make_updater(
-            {"class": "adamw", "weight_decay": 1e-3, "weight_decay_custom_include_check": _include_check}
-        )
+        updater2 = _make_updater({"class": "adamw", "weight_decay": 1e-3})
         updater2.load_optimizer(tmp_dir + "/model.opt.pt")
 
     assert torch.equal(updater2.get_optimizer().state[ln_weight]["exp_avg"], exp_avg1)
@@ -1217,7 +1212,7 @@ def test_load_optimizer_weight_decay_split_same_order():
     assert torch.equal(opt2.state[model.norm.scale]["exp_avg"], exp_avg)
 
 
-def test_updater_weight_decay_blacklist_norm_modules():
+def test_updater_weight_decay_param_dims():
     from returnn.torch.frontend.bridge import rf_module_to_pt_module
     from returnn.util.basic import BehaviorVersion, DictRefKeys
 
@@ -1229,6 +1224,7 @@ def test_updater_weight_decay_blacklist_norm_modules():
             in_dim, embed_dim, out_dim = rf.Dim(11), rf.Dim(5), rf.Dim(7)
             self.embed = rf.Embedding(in_dim, embed_dim)
             self.layer_norm = rf.LayerNorm(embed_dim)
+            self.rms_norm = rf.RMSNorm(embed_dim)
             self.batch_norm = rf.BatchNorm(embed_dim, use_mask=False, track_running_stats=False)
             self.linear = rf.Linear(embed_dim, out_dim)
 
@@ -1242,7 +1238,9 @@ def test_updater_weight_decay_blacklist_norm_modules():
         return {param_to_name[p] for p in wd_group["params"]}
 
     def _torch_model():
-        return torch.nn.Sequential(torch.nn.Linear(5, 4), torch.nn.BatchNorm1d(4), torch.nn.GroupNorm(2, 4))
+        return torch.nn.Sequential(
+            torch.nn.Linear(5, 4), torch.nn.BatchNorm1d(4), torch.nn.GroupNorm(2, 4), torch.nn.PReLU(4)
+        )
 
     behavior_version_orig_state = BehaviorVersion._get_state()
     try:
@@ -1251,11 +1249,12 @@ def test_updater_weight_decay_blacklist_norm_modules():
         assert _params_with_wd(rf_module_to_pt_module(_Model())) == {
             "embed.weight",
             "layer_norm.scale",
+            "rms_norm.scale",
             "batch_norm.gamma",
             "batch_norm.beta",
             "linear.weight",
         }
-        assert _params_with_wd(_torch_model()) == {"0.weight", "1.weight", "2.weight"}
+        assert _params_with_wd(_torch_model()) == {"0.weight", "1.weight", "2.weight", "3.weight"}
         BehaviorVersion._reset()
         BehaviorVersion.set(37)
         assert _params_with_wd(rf_module_to_pt_module(_Model())) == {"linear.weight"}
@@ -2650,6 +2649,7 @@ def test_updater_lr_multipliers():
                 opts = {}
                 if (
                     param_name.endswith("bias")
+                    or param.ndim <= 1
                     or isinstance(module, blacklist_wd_modules)
                     or isinstance(rf_module, blacklist_wd_modules)
                 ):

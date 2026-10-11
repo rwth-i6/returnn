@@ -148,10 +148,11 @@ optimizer
     See the module docstring of :mod:`returnn.torch.optim.multi` for the config interface
     (PyTorch backend only).
 
-    With ``weight_decay`` set (PyTorch backend), the biases and the parameters of the module types
-    in ``weight_decay_modules_blacklist`` get no weight decay.
-    Default: ``["torch.nn.LayerNorm", "torch.nn.Embedding"]``,
-    since behavior version 37 all normalization layers and embeddings of RF and PyTorch.
+    With ``weight_decay`` set (PyTorch backend), biases and the params of the module types
+    in ``weight_decay_modules_blacklist`` get no weight decay,
+    since behavior version 37 also all params with at most one dim.
+    The default blacklist is ``["torch.nn.LayerNorm", "torch.nn.Embedding"]``,
+    since behavior version 37 ``["torch.nn.Embedding", "rf.Embedding"]``.
 
     Do not change the weight-decay split (e.g. ``weight_decay_modules_blacklist``) on a running training,
     as it moves parameters between optimizer param groups.

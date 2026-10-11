@@ -901,6 +901,7 @@ class Updater:
         The weight_decay parameter from AdamW affects the weights of layers such as LayerNorm and Embedding.
         This function creates a blacklist of network modules and splits the optimizer groups in two:
         those who will receive weight decay, and those who won't receive it.
+        By default, biases get no weight decay, since behavior version 37 also all params with at most one dim.
         The weight_decay parameter of the rest of the optimizers is L2 regularization.
 
         For further reading, see https://github.com/karpathy/minGPT/pull/24#issuecomment-679316025 and
@@ -921,7 +922,7 @@ class Updater:
           Those can be RF modules or pure PyTorch modules.
           The types can be specified as string (e.g. ``"torch.nn.LayerNorm"``) or as the type itself.
           Default: ``(torch.nn.LayerNorm, torch.nn.Embedding)``,
-          since behavior version 37 all normalization layers and embeddings of RF and PyTorch.
+          since behavior version 37 ``(torch.nn.Embedding, rf.Embedding)``.
 
         :param optim_class: Optimizer class.
         :param optimizer_opts: Optimizer configuration specified by the user. Might be modified inplace here.
@@ -977,6 +978,7 @@ class Updater:
         blacklist_wd_modules = wrap_user_blacklist_wd_modules(
             optimizer_opts.pop("weight_decay_modules_blacklist", None)
         )
+        no_wd_up_to_1d = BehaviorVersion.get() >= 37
         custom_include_check = optimizer_opts.pop("weight_decay_custom_include_check", None)
         if custom_include_check:
             assert callable(custom_include_check), f"invalid weight_decay_custom_include_check {custom_include_check!r}"
@@ -991,9 +993,7 @@ class Updater:
             named_params = self._named_params_with_modules()
 
         # Distinguish between parameters with and without weight_decay/L2 regularization.
-        # Biases and the params of modules in the blacklist get no weight decay.
-        # Before behavior version 37, the default blacklist covers only the native
-        # torch.nn.LayerNorm/torch.nn.Embedding, not the RF equivalents (see wrap_user_blacklist_wd_modules).
+        # No weight decay for biases, blacklisted modules and since behavior version 37 all params with ndim <= 1.
         wd_named = []
         no_wd_named = []
         for full_param_name, param, module, rf_module in named_params:
@@ -1010,6 +1010,7 @@ class Updater:
                 include_wd = custom_include
             elif (
                 full_param_name.endswith("bias")
+                or (no_wd_up_to_1d and param.ndim <= 1)
                 or isinstance(module, blacklist_wd_modules)
                 or isinstance(rf_module, blacklist_wd_modules)
             ):
@@ -1040,11 +1041,11 @@ def wrap_user_blacklist_wd_modules(
     This supports both pure PyTorch modules (e.g. "torch.nn.LayerNorm")
     and RF modules (e.g. "rf.LayerNorm"), which can be specified as strings or types.
     Default: ``(torch.nn.LayerNorm, torch.nn.Embedding)``,
-    since behavior version 37 all normalization layers and embeddings of RF and PyTorch.
+    since behavior version 37 ``(torch.nn.Embedding, rf.Embedding)``.
     """
     if mods is None:
         if BehaviorVersion.get() >= 37:
-            return _norm_and_embedding_modules()
+            return torch.nn.Embedding, rf.Embedding
         return torch.nn.LayerNorm, torch.nn.Embedding
     assert isinstance(mods, (list, tuple)), f"invalid blacklist_weight_decay_modules {mods!r}"
     res = []
@@ -1055,34 +1056,6 @@ def wrap_user_blacklist_wd_modules(
         assert issubclass(mod, (rf.Module, torch.nn.Module)), f"invalid blacklist_weight_decay_modules {mods!r}"
         res.append(mod)
     return tuple(res)
-
-
-def _norm_and_embedding_modules() -> Tuple[type, ...]:
-    """
-    :return: the normalization and embedding module types of RF and PyTorch
-    """
-    mods = [
-        rf.LayerNorm,
-        rf.RMSNorm,
-        rf.GroupNorm,
-        rf.GroupNormSpatial,
-        rf.BatchNorm,
-        rf.Normalize,
-        rf.Embedding,
-        torch.nn.LayerNorm,
-        torch.nn.GroupNorm,
-        torch.nn.BatchNorm1d,
-        torch.nn.BatchNorm2d,
-        torch.nn.BatchNorm3d,
-        torch.nn.SyncBatchNorm,
-        torch.nn.InstanceNorm1d,
-        torch.nn.InstanceNorm2d,
-        torch.nn.InstanceNorm3d,
-        torch.nn.Embedding,
-    ]
-    if hasattr(torch.nn, "RMSNorm"):  # PyTorch >= 2.4
-        mods.append(torch.nn.RMSNorm)
-    return tuple(mods)
 
 
 def _is_schedule_free_optimizer(optimizer: torch.optim.Optimizer) -> bool:

@@ -54,22 +54,21 @@ to override in both directions.
 
 See PR `#1855 <https://github.com/rwth-i6/returnn/pull/1855>`__.
 
-Behavior version 37 (2026-10-10)
+Behavior version 37 (2026-10-11)
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-The default weight-decay module blacklist of the PyTorch backend optimizer
-(the module types whose parameters do not get weight decay)
-covers all normalization layers and embeddings of RF and PyTorch:
-:class:`rf.LayerNorm`, :class:`rf.RMSNorm`, :class:`rf.GroupNorm`, :class:`rf.GroupNormSpatial`,
-:class:`rf.BatchNorm`, :class:`rf.Normalize`, :class:`rf.Embedding`,
-``torch.nn.LayerNorm``, ``torch.nn.RMSNorm``, ``torch.nn.GroupNorm``, ``torch.nn.BatchNorm1d/2d/3d``,
-``torch.nn.SyncBatchNorm``, ``torch.nn.InstanceNorm1d/2d/3d``, ``torch.nn.Embedding``.
-Before, it only covered ``torch.nn.LayerNorm`` and ``torch.nn.Embedding``,
-so e.g. the ``scale`` of :class:`rf.LayerNorm` and both ``gamma`` and ``beta`` of :class:`rf.BatchNorm` got weight decay.
+With ``weight_decay`` in the PyTorch backend optimizer,
+params with at most one dim get no weight decay,
+which covers the biases and the scale and shift of all normalization layers.
+The default ``weight_decay_modules_blacklist`` is ``(torch.nn.Embedding, rf.Embedding)``.
 
-There is also the optimizer option ``weight_decay_modules_blacklist``
-to override this explicitly in both directions
-(e.g. ``["torch.nn.LayerNorm", "torch.nn.Embedding"]`` to keep the old behavior).
+Before, only params named ``bias`` and the params of ``torch.nn.LayerNorm`` and ``torch.nn.Embedding``
+got no weight decay,
+so e.g. the ``scale`` of :class:`rf.LayerNorm` and :class:`rf.RMSNorm`,
+``gamma`` and ``beta`` of :class:`rf.BatchNorm` and the ``weight`` of :class:`rf.Embedding` were decayed.
+
+The option ``weight_decay_modules_blacklist`` still sets the blacklist,
+and ``weight_decay_custom_include_check`` decides per param.
 
 See PR `#1923 <https://github.com/rwth-i6/returnn/pull/1923>`__.
 
