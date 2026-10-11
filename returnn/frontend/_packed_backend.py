@@ -5273,12 +5273,9 @@ def _clip_into_seqs(raw: PackedRawTensor, idx: Tensor, *, seq: Tensor) -> Tensor
     :param seq: the sequence of every position
     :return: idx clipped into its sequence
     """
-    # in the traced regime the lens already live on the data's device, where copying them would be a sync
-    lens = _device_lens(raw)
-    if lens is None:
-        lens = rf.copy_to_device(raw.seq_lens, raw.inner.device)
+    lens = raw.orig_dims[-1].get_size_tensor(device=raw.inner.device)
     last = rf.cast(rf.gather(lens, indices=seq, axis=raw.orig_dims[0]), idx.dtype) - 1
-    return rf.clip_by_value(idx, rf.zeros_like(last), last)
+    return rf.clip_by_value(idx, 0, last)
 
 
 def _gather_out_packed_dim(
