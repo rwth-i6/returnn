@@ -94,6 +94,32 @@ def test_reduce_mean_dyn_batch_time():
     run_model(extern_data, lambda *, epoch, step: _Net(), _forward_step)
 
 
+def test_reduce_bounded_batch_padding_seqs():
+    """
+    a batch dim with the real batch size as dyn size and a capacity (a batch filled up to a bound with padding seqs):
+    the padding seqs have no frames, in the seq mask and in every reduction
+    """
+    rf.select_backend_torch()
+    batch_size = rf.convert_to_tensor(3, dims=(), dtype="int32")
+    bounded_batch_dim = Dim(batch_size, name="batch", kind=Dim.Types.Batch, capacity=5)
+    lens = rf.convert_to_tensor([7, 4, 2, 0, 0], dims=[bounded_batch_dim], dtype="int32")
+    time_dim = Dim(lens, name="time", capacity=7)
+    valid = rf.compare_bc(rf.range_over_dim(time_dim), "<", lens)  # padding frames, also those of the padding seqs
+    x = rf.where(valid, 1.0, 100.0)
+    assert (
+        time_dim.get_mask().copy_compatible_to_dims_raw([bounded_batch_dim, time_dim]).tolist()
+        == valid.copy_compatible_to_dims_raw([bounded_batch_dim, time_dim]).tolist()
+    )
+    assert rf.reduce_sum(x, axis=[bounded_batch_dim, time_dim]).raw_tensor.tolist() == 13.0
+    assert rf.reduce_mean(x, axis=[bounded_batch_dim, time_dim]).raw_tensor.tolist() == 1.0
+    assert rf.reduce_max(x, axis=[bounded_batch_dim, time_dim]).raw_tensor.tolist() == 1.0
+    per_seq = rf.reduce_sum(x, axis=time_dim)
+    assert per_seq.raw_tensor.tolist() == [7.0, 4.0, 2.0, 0.0, 0.0]
+    assert abs(rf.reduce_mean(per_seq, axis=bounded_batch_dim).raw_tensor.tolist() - 13 / 3) < 1e-6
+    # not the padding seqs' 0 - 10
+    assert rf.reduce_max(per_seq - 10.0, axis=bounded_batch_dim).raw_tensor.tolist() == -3.0
+
+
 def test_top_k():
     time_dim = Dim(Tensor("time", [batch_dim], dtype="int32"))
     in_dim = Dim(7, name="in")
