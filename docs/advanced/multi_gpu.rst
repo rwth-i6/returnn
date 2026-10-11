@@ -50,9 +50,9 @@ before, every worker yielded all the data).
 As an efficient dataset for large scale training,
 see :class:`DistributeFilesDataset`.
 
-Since behavior version 39, the evaluation is split over the ranks.
-Before, every eval dataset was evaluated on rank 0 alone, while the other ranks waited.
-``torch_distributed = {..., "eval_on_all_ranks": False}`` (or ``True``) overrides the behavior version.
+With ``"eval_on_all_ranks": True`` (default since behavior version 39),
+the evaluation is split over the ranks.
+Otherwise, every eval dataset is evaluated on rank 0 alone, while the other ranks wait.
 Every eval dataset which supports a predefined seq order (:func:`Dataset.supports_predefined_seq_order`)
 is then evaluated in shares.
 Rank 0 takes the dataset's seq order of the epoch and every rank evaluates every n-th seq of it.
