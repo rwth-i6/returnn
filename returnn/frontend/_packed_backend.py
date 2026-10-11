@@ -4339,9 +4339,7 @@ class PackedBackend(Backend[PackedRawTensor]):
         kwargs = dict(indices=indices, indices_dim=indices_dim, mode=mode, fill_value=fill_value, out_dim=out_dim)
         if not is_packed(source) and is_packed(indices):
             # e.g. the ones which count the writes per position: a plain source follows the packing of the indices
-            idx_raw = _raw(indices)
-            if any(d in source.dims for d in idx_raw.orig_dims):
-                source = idx_raw.rewrap(_pack_like(source, idx_raw), name=source.name)
+            source = _pack_plain_like(source, _raw(indices))
         out = _scatter_relayout(source, **kwargs) if is_packed(source) else None
         if out is not None:
             return out
@@ -5082,8 +5080,7 @@ def _packed_total_bound(dim: Dim, in_raw: PackedRawTensor, n_seqs: int) -> Optio
     """
     if dim == in_raw.orig_dims[-1] and in_raw.content_bound is not None:
         return in_raw.content_bound
-    # noinspection PyProtectedMember
-    op = dim._extra.derived_from_op if dim._extra else None
+    op = dim.derived_from_op
     if op is not None and op.kind == "add" and op.inputs:
         parts = [_packed_total_bound(part, in_raw, n_seqs) for part in op.inputs]
         if all(part is not None for part in parts):
