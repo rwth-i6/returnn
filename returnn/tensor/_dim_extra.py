@@ -932,24 +932,8 @@ class _DimMixin:
             return mask
 
         size_ext = self.get_dyn_size_ext_for_device(device)
-
-        max_idx = rf.reduce(
-            size_ext,
-            axis=size_ext.dims,
-            mode="max",
-            # Masking here is not always possible, e.g. if we have
-            # tag = Dim{'self-att-keys'['time:var:extern_data:classes'[B]]}
-            use_mask=False,
-        )
-        # We use the assumption that self.placeholder.shape[axis] == max_idx.
-        # size_ext might have invalid (zero) sizes
-        # when it itself has some padding, e.g. when its own shape is dynamic.
-        # A zero size can lead to problems in some cases, e.g. in SoftmaxOverSpatialLayer,
-        # when everything is masked to -inf, it results in nan,
-        # and this likely produces nan in backprop or elsewhere.
-        # Thus, mask size_ext itself, and set the padded values to max_idx.
-        # This assumes that max_idx >= 1.
-        size_ext = size_ext.copy_masked(max_idx)
+        # padded entries of the sizes (e.g. padding seqs of a batch filled up to a bound) are empty seqs
+        size_ext = size_ext.copy_masked(0)
         idx_range = backend.range_over_dim(self, device=device)
         seq_mask = rf.compare(idx_range, "<", size_ext, allow_broadcast_all_sources=True, dim_order=dim_order)
         self._extra.cache_seq_mask[cache_key] = seq_mask
@@ -1385,6 +1369,9 @@ class _DimMixin:
                 return
             y = _bin_op(y, x_size)
         assert y is not None, f"op {op}?"
+        if not template_only and y.raw_tensor is not None and any(d.need_masking() for d in y.dims):
+            with _ctx_for_inputs(y):
+                y = y.copy_masked(0)  # padded entries of its own dims (e.g. padding seqs of the batch) stay empty
         if self.dyn_size_ext is not None:
             assert self.dyn_size_ext.dim_tags == y.dim_tags
         if y.batch:

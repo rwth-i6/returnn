@@ -112,7 +112,7 @@ class Engine(EngineBase):
         self._autocast_dtype: Optional[str] = None
         self._grad_scaler: Optional[amp.GradScaler] = None
 
-        dev_ = get_device_from_config_opt(config.value("device", None))
+        dev_ = get_device_from_config(config)
         self._device = dev_.result
         print("Using device:", self._device, f"({dev_.reason or '?'})", file=log.v2)
 
@@ -123,11 +123,6 @@ class Engine(EngineBase):
             self._torch_distributed_ctx = dist_get_ctx(config=config)
             local_rank = self._torch_distributed_ctx.local_rank()
             print(f"Start running torch distributed training on local rank {local_rank}.", file=log.v2)
-            if self._device == "cpu" and config.value("device", None) == "cpu":
-                pass  # explicitly requested, e.g. the gloo backend for tests
-            else:
-                assert self._device == "cuda", f"torch distributed: unexpected device {self._device!r}"
-                self._device = f"cuda:{local_rank}"
 
         if self._device == "cuda" or self._device.startswith("cuda:"):
             # Theano and TensorFlow print sth like: Using gpu device 2: GeForce GTX 980 (...)
@@ -342,6 +337,8 @@ class Engine(EngineBase):
                 post_step=lambda: self._updater.step(grad_scaler=None),
                 # to create the lazy optimizer state before the capture, see _materialize_optimizer_state
                 get_optimizer=lambda: self._updater.get_optimizer(),
+                # to put the running statistics back after the warm runs, see _training_state_preserved
+                get_buffers=lambda: list(self._pt_model.buffers()),
                 rf_params=(list(self._orig_model.parameters()) if isinstance(self._orig_model, rf.Module) else None),
                 # lets the capture infer a missing packed_total_bound from the content budget
                 packed_batch_size=self.config.typed_value("packed_batch_size", None),
@@ -362,12 +359,20 @@ class Engine(EngineBase):
         before the process group is destroyed, which a live captured graph would block
         (see :func:`returnn.torch.util.graph_capture.GraphCapturedTrainStep.release`).
 
+        Also stops the workers and pinning threads of the data loaders
+        (see :func:`returnn.torch.data.pipeline.shutdown_data_loader`),
+        as the engine usually stays alive until the interpreter exits.
+        Can be called multiple times.
+
         :param error_occurred:
         """
-        del error_occurred  # the graph is released either way
+        del error_occurred  # all is released either way
         if self._graph_capture is not None:
             self._graph_capture.release()
             self._graph_capture = None
+        for data_loader in [self._train_dataloader, *self._eval_dataloaders.values()]:
+            if data_loader is not None:
+                data_pipeline.shutdown_data_loader(data_loader)
 
     def train(self):
         """
@@ -605,6 +610,7 @@ class Engine(EngineBase):
                 if step_idx == 0 and log.verbose[5]:
                     print("Time to get first batch data:", hms(step_begin_time - epoch_start_time), file=log.v5)
 
+                complete_frac = float(extern_data_raw["complete_frac"]) if extern_data_raw is not None else -1.0
                 _has_data = torch.tensor([extern_data_raw is not None], dtype=torch.int8)
                 # Sync only on first train step, when we have run out of data and every time we synchronize
                 # the model between workers.
@@ -616,7 +622,18 @@ class Engine(EngineBase):
                 ):
                     # use all reduce to check if all workers have data, if at least one worker does not have data,
                     # all workers finish this epoch
-                    torch.distributed.all_reduce(_has_data, op=torch.distributed.ReduceOp.MIN)
+                    if self._torch_distributed_ctx.sync_complete_frac():
+                        # mean over the ranks: a schedule on epoch_continuous must give the same LR on every rank
+                        _data_info = torch.tensor(
+                            [extern_data_raw is not None, complete_frac >= 0.0, max(complete_frac, 0.0)],
+                            dtype=torch.float64,
+                        )
+                        torch.distributed.all_reduce(_data_info, op=torch.distributed.ReduceOp.SUM)
+                        size = self._torch_distributed_ctx.size()
+                        _has_data[0] = _data_info[0] == size
+                        complete_frac = float(_data_info[2]) / size if _data_info[1] == size else -1.0
+                    else:
+                        torch.distributed.all_reduce(_has_data, op=torch.distributed.ReduceOp.MIN)
                 if not _has_data[0]:
                     break
 
@@ -633,7 +650,6 @@ class Engine(EngineBase):
                     {k: int(util.prod(extern_data_raw[k].shape[:2])) for k in keys_w_seq_len},
                 )
 
-                complete_frac = float(extern_data_raw["complete_frac"])
                 epoch_continuous = self.epoch - 1 + complete_frac if complete_frac >= 0.0 else None
                 num_seqs = int(extern_data_raw["num_seqs"])
 
@@ -2124,6 +2140,23 @@ def _get_batch_size_info_raw(extern_data_raw: Dict[str, Any]) -> Dict[str, int]:
         info[f"max_size:{k}"] = int(seq_lens.max()) if len(seq_lens) else 0
         info[f"sum_size:{k}"] = int(seq_lens.sum())
     return info
+
+
+def get_device_from_config(config: Config) -> ResultWithReason[str]:
+    """
+    :param config:
+    :return: the device the engine runs on: the resolved ``device`` option (:func:`get_device_from_config_opt`),
+        in distributed training (``torch_distributed``) the CUDA device of the local rank
+    """
+    dev_ = get_device_from_config_opt(config.value("device", None))
+    if config.typed_value("torch_distributed") is not None:
+        if dev_.result == "cpu" and config.value("device", None) == "cpu":
+            pass  # explicitly requested, e.g. the gloo backend for tests
+        else:
+            assert dev_.result == "cuda", f"torch distributed: unexpected device {dev_.result!r}"
+            local_rank = dist_get_ctx(config=config).local_rank()
+            dev_ = ResultWithReason(f"cuda:{local_rank}", f"torch distributed local rank {local_rank}")
+    return dev_
 
 
 def get_device_from_config_opt(device: Optional[str]) -> ResultWithReason[str]:

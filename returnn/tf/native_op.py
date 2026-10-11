@@ -1672,7 +1672,9 @@ def ctc_loss_packed(
         seq_of_frame = tf.searchsorted(seq_starts, frame_idx, side="right") - 1  # (total,)
         seq_of_frame = tf.maximum(seq_of_frame, 0)
         offset_in_seq = frame_idx - tf.gather(seq_starts, seq_of_frame)
-        is_content = offset_in_seq < tf.gather(logits_seq_lens_i32, seq_of_frame)  # (total,)
+        is_content = tf.logical_and(
+            offset_in_seq >= 0, offset_in_seq < tf.gather(logits_seq_lens_i32, seq_of_frame)
+        )  # (total,)
 
         def grad(d_loss):
             """

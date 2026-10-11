@@ -2581,8 +2581,7 @@ class Enwik8Corpus(CachedDataset2):
     def _download_zip(self):
         url = "https://mattmahoney.net/dc/enwik8.zip"
         print("%s: download %s" % (self, url), file=log.v2)
-        # noinspection PyPackageRequirements
-        from six.moves.urllib.request import urlretrieve
+        from urllib.request import urlretrieve
 
         urlretrieve(url, self._zip_filename)
 

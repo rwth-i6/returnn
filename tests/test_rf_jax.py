@@ -1628,6 +1628,40 @@ def test_ctc_loss_native_op_matches_optax():
     numpy.testing.assert_allclose(grad_native, grad_ref, rtol=1e-4, atol=1e-5)
 
 
+def test_ctc_loss_packed_leading_gap_grad():
+    """frames before the first sequence start belong to no sequence, so they get no gradient"""
+    import jax
+    from returnn.jax.util.native_op import ctc_loss_packed
+
+    _rf_jax()
+    logits = jnp.asarray(numpy.random.RandomState(7).randn(11, 5).astype("float32"))
+    lens = jnp.asarray(numpy.array([3, 2], dtype="int32"))
+    targets = jnp.asarray(numpy.array([[1], [2]], dtype="int32"))
+    tgt_lens = jnp.asarray(numpy.array([1, 1], dtype="int32"))
+
+    def _loss(x, starts):
+        return ctc_loss_packed(
+            logits=x,
+            seq_starts=jnp.asarray(numpy.array(starts, dtype="int32")),
+            logits_seq_lens=lens,
+            max_seq_len=3,
+            targets=targets,
+            targets_seq_lens=tgt_lens,
+            blank_index=4,
+        )
+
+    loss, vjp = jax.vjp(lambda x: _loss(x, [2, 7]), logits)
+    (grad,) = vjp(jnp.ones_like(loss))
+    logits_tight = jnp.concatenate([logits[2:5], logits[7:9]])
+    loss_tight, vjp_tight = jax.vjp(lambda x: _loss(x, [0, 3]), logits_tight)
+    (grad_tight,) = vjp_tight(jnp.ones_like(loss_tight))
+    grad, grad_tight = numpy.asarray(grad), numpy.asarray(grad_tight)
+    numpy.testing.assert_allclose(numpy.asarray(loss), numpy.asarray(loss_tight), rtol=1e-5, atol=1e-5)
+    numpy.testing.assert_allclose(numpy.concatenate([grad[2:5], grad[7:9]]), grad_tight, rtol=1e-5, atol=1e-5)
+    for rows in (grad[:2], grad[5:7], grad[9:]):
+        assert (rows == 0).all(), grad
+
+
 def test_checkpoint_is_ocdbt_and_compact():
     """
     Checkpoints must use OCDBT: 18 inodes vs 513 at 169 arrays, ~3.6k vs ~103k over 100 epochs.
@@ -2143,6 +2177,57 @@ def test_engine_packed_tensors():
 
     for name in padded:
         numpy.testing.assert_allclose(packed[name], padded[name], rtol=1e-5, atol=1e-6, err_msg=name)
+
+
+def test_engine_static_shapes_padding_seqs():
+    """
+    ``jax_static_shapes`` fills each batch up to ``batch_size_bound`` with zero-length padding seqs.
+    A step appending EOS (one more frame per seq) must not give them one, padded and packed:
+    the same batches give the same epoch loss and parameters as without static shapes.
+    Without ``mask_padding_seqs``, the packed padding seqs count as real empty seqs, each with an EOS frame.
+    (This file pins behavior version 29, so the option is passed explicitly.)
+    """
+    import tempfile
+    from returnn.jax.engine import Engine
+
+    def _train_step(*, model, extern_data, **_kwargs):
+        """train step with an EOS frame appended to the targets"""
+        data = extern_data["data"]
+        time_dim = data.dims[1]
+        logits = model.linear(data)
+        targets_eos, (time_eos_dim,) = rf.pad(extern_data["classes"], axes=[time_dim], padding=[(0, 1)], value=0)
+        logits_eos, _ = rf.pad(logits, axes=[time_dim], padding=[(0, 1)], value=0.0, out_dims=[time_eos_dim])
+        loss = rf.cross_entropy(estimated=logits_eos, target=targets_eos, axis=model.out_dim, estimated_type="logits")
+        loss.mark_as_loss("ce")
+
+    def _run(**opts):
+        """:return: the epoch loss, and the parameters after one epoch as NumPy"""
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            config, make_dataset = _simple_train_setup(
+                tmp_dir, num_epochs=1, train_step=_train_step, jax_jit=True, **opts
+            )
+            engine = Engine(config=config)
+            engine.init_train_from_config(train_data=make_dataset())
+            engine.train()
+            loss = engine.learning_rate_control.epoch_data[1].error["train_loss_ce"]
+            return loss, {name: numpy.asarray(p.raw_tensor) for name, p in engine.get_model().named_parameters()}
+
+    # batch bound above max_seqs: every batch has padding seqs
+    static = {"batch_size_bound": 5, "dim_capacity": {"data": 11, "classes": 11}, "mask_padding_seqs": True}
+    static_packed = dict(static, packed_total_bound={"data": 33, "classes": 33})
+    loss_dynamic, params_dynamic = _run()
+    for name, opts in [
+        ("padded", {"jax_static_shapes": static}),
+        ("packed", {"jax_static_shapes": static_packed, "packed_tensors": True}),
+    ]:
+        loss, params = _run(**opts)
+        numpy.testing.assert_allclose(loss, loss_dynamic, rtol=1e-5, err_msg=name)
+        for key in params_dynamic:
+            numpy.testing.assert_allclose(
+                params[key], params_dynamic[key], rtol=1e-5, atol=1e-6, err_msg=f"{name} {key}"
+            )
+    loss_unmasked, _ = _run(jax_static_shapes=dict(static_packed, mask_padding_seqs=False), packed_tensors=True)
+    assert abs(loss_unmasked - loss_dynamic) > 1e-2 * loss_dynamic, (loss_unmasked, loss_dynamic)
 
 
 def test_engine_accum_grad_multiple_step():

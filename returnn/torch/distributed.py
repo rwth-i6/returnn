@@ -74,6 +74,10 @@ class DistributedContext:
         else:
             raise ValueError(f"invalid reduce_type {self._reduce_type!r}")
 
+        self._sync_complete_frac: Optional[bool] = self._opts.get("sync_complete_frac", None)
+        if self._sync_complete_frac is None:
+            self._sync_complete_frac = BehaviorVersion.get() >= 33
+
         self._eval_on_all_ranks: Optional[bool] = self._opts.get("eval_on_all_ranks", None)
         assert self._eval_on_all_ranks is None or isinstance(self._eval_on_all_ranks, bool)
 
@@ -122,11 +126,11 @@ class DistributedContext:
         :return: whether an eval dataset is split over all ranks, each rank evaluating its share,
             instead of being evaluated on rank 0 alone while the other ranks wait.
             Only datasets which can report their seq order are split, see the torch engine.
-            Option ``eval_on_all_ranks: bool``, else behavior_version >= 33.
+            Option ``eval_on_all_ranks: bool``, else behavior_version >= 37.
         """
         if self._eval_on_all_ranks is not None:
             return self._eval_on_all_ranks
-        return BehaviorVersion.get() >= 33
+        return BehaviorVersion.get() >= 37
 
     def maybe_make_distributed_module(self, module: torch.nn.Module) -> Optional[DistributedDataParallel]:
         """
@@ -179,6 +183,14 @@ class DistributedContext:
         # noinspection protected-member
         for grad, reduced in zip(grads, torch._utils._unflatten_dense_tensors(flat, grads)):
             grad.copy_(reduced)
+
+    def sync_complete_frac(self) -> bool:
+        """
+        :return: whether the train loop replaces the rank-local ``complete_frac`` by its mean over the ranks
+            in each step where it syncs (:func:`should_sync_now`),
+            so that ``epoch_continuous`` (e.g. for ``dynamic_learning_rate``) is the same on every rank
+        """
+        return self._sync_complete_frac
 
     def should_sync_now(self, *, epoch_step_idx: int) -> bool:
         """

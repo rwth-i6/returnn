@@ -36,6 +36,7 @@ load_epoch
     Specifies the epoch index, and selects the checkpoint based on the prefix given in ``model``.
     If not set, RETURNN will determine the epoch from the filename or use the latest epoch in case
     of providing only ``model``.
+    In training, see ``start_epoch`` for the combination of both.
 
 preload_from_files
     A dictionary that contains a ``filename`` entry and optional parameters to define specific model loading.

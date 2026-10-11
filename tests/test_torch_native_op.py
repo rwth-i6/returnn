@@ -348,6 +348,34 @@ def test_ctc_loss_grad_padded_vs_packed():
     assert leaf_packed.grad[~mask].abs().max().item() == 0.0
 
 
+def test_ctc_loss_over_allocated_time():
+    """
+    Compares loss and grads of :func:`ctc_loss` on logits with more frames than the longest sequence
+    against the logits trimmed to the longest sequence.
+    """
+    n_batch, n_time, max_len, n_tgt, n_classes = 3, 12, 8, 3, 6
+    torch.manual_seed(1)
+    logits = torch.randn(n_time, n_batch, n_classes)
+    args = dict(
+        logits_seq_lens=torch.tensor([max_len, 6, 5], dtype=torch.int32),
+        targets=torch.randint(0, n_classes - 1, (n_batch, n_tgt), dtype=torch.int32),
+        targets_seq_lens=torch.tensor([3, 2, 0], dtype=torch.int32),
+        logits_time_major=True,
+        blank_index=n_classes - 1,
+    )
+    for max_approx in [False, True]:
+        leaf = logits.clone().requires_grad_(True)
+        leaf_trimmed = logits[:max_len].clone().requires_grad_(True)
+        loss = ctc_loss(logits=leaf, max_approx=max_approx, **args)
+        loss_trimmed = ctc_loss(logits=leaf_trimmed, max_approx=max_approx, **args)
+        torch.testing.assert_close(loss, loss_trimmed)
+
+        loss.sum().backward()
+        loss_trimmed.sum().backward()
+        torch.testing.assert_close(leaf.grad[:max_len], leaf_trimmed.grad)
+        assert leaf.grad[max_len:].abs().max().item() == 0.0
+
+
 def test_ctc_loss_packed_over_allocated_bounds():
     """
     Bound regime (CUDA-graph capture):
@@ -522,6 +550,42 @@ def test_ctc_loss_packed_warns_about_a_large_edge_scratch():
         caught[limit] = [str(r.message) for r in records if "edge scratch" in str(r.message)]
     assert not caught[default_limit], caught
     assert caught[1], caught
+
+
+def test_ctc_loss_packed_leading_gap_grad():
+    """frames before the first sequence start belong to no sequence, so they get no gradient"""
+    torch.manual_seed(7)
+    logits = torch.randn(11, 5)
+    starts = torch.tensor([2, 7], dtype=torch.int32)
+    lens = torch.tensor([3, 2], dtype=torch.int32)
+    targets = torch.tensor([[1], [2]], dtype=torch.int32)
+    tgt_lens = torch.tensor([1, 1], dtype=torch.int32)
+    leaf = logits.clone().requires_grad_(True)
+    loss = ctc_loss_packed(
+        logits=leaf,
+        seq_starts=starts,
+        logits_seq_lens=lens,
+        max_seq_len=3,
+        targets=targets,
+        targets_seq_lens=tgt_lens,
+        blank_index=4,
+    )
+    loss.sum().backward()
+    leaf_tight = torch.cat([logits[2:5], logits[7:9]]).requires_grad_(True)
+    loss_tight = ctc_loss_packed(
+        logits=leaf_tight,
+        seq_starts=torch.tensor([0, 3], dtype=torch.int32),
+        logits_seq_lens=lens,
+        max_seq_len=3,
+        targets=targets,
+        targets_seq_lens=tgt_lens,
+        blank_index=4,
+    )
+    loss_tight.sum().backward()
+    torch.testing.assert_close(loss, loss_tight)
+    torch.testing.assert_close(torch.cat([leaf.grad[2:5], leaf.grad[7:9]]), leaf_tight.grad)
+    for rows in (leaf.grad[:2], leaf.grad[5:7], leaf.grad[9:]):
+        assert (rows == 0).all(), leaf.grad
 
 
 def test_ctc_fsa_batch3_len6_c8():

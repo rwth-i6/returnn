@@ -196,6 +196,82 @@ def test_BytePairEncoding_unicode():
     )
 
 
+def generate_sentencepiece_model(directory: str) -> str:
+    """
+    :param directory: where to write the model
+    :return: model file of a tiny SentencePiece unigram model
+    """
+    import sentencepiece as spm
+
+    with open(f"{directory}/spm.txt", "w") as f:
+        f.write("\n".join(["HELLO WORLD", "HELLO THERE", "GOOD MORNING WORLD"] * 20) + "\n")
+    spm.SentencePieceTrainer.train(
+        input=f"{directory}/spm.txt",
+        model_prefix=f"{directory}/spm",
+        model_type="unigram",
+        vocab_size=32,
+        hard_vocab_limit=False,
+        minloglevel=2,
+    )
+    return f"{directory}/spm.model"
+
+
+def test_SentencePieces_pickle():
+    import pickle
+    import tempfile
+    from returnn.datasets.util.vocabulary import SentencePieces
+
+    texts = ["HELLO WORLD", "GOOD MORNING", ""]
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        model_file = generate_sentencepiece_model(tmp_dir)
+        plain = SentencePieces(model_file=model_file)
+        plain_seqs = [plain.get_seq(text) for text in texts]
+        assert all(plain_seqs[:-1]) and plain_seqs[-1] == []
+        cases = []
+        for opts in [
+            {},
+            {"add_eos": True},
+            {"add_bos": True},
+            {"reverse": True},
+            {"add_bos": True, "add_eos": True, "reverse": True},
+        ]:
+            vocab = SentencePieces(model_file=model_file, **opts)
+            expected = []
+            for seq in plain_seqs:
+                seq = seq[::-1] if opts.get("reverse") else seq
+                seq = [vocab.bos_label_id] * opts.get("add_bos", False) + seq
+                seq = seq + [vocab.eos_label_id] * opts.get("add_eos", False)
+                expected.append(seq)
+            assert [vocab.get_seq(text) for text in texts] == expected
+            cases.append((opts, pickle.dumps(vocab), expected))
+        os.remove(model_file)  # the pickled vocab has the model itself
+    for opts, pickled, expected in cases:
+        vocab = pickle.loads(pickled)
+        assert vocab._opts == {"model_file": model_file, **opts}
+        seqs = [vocab.get_seq(text) for text in texts]
+        print(opts, seqs)
+        assert seqs == expected
+
+
+def test_SentencePieces_pickle_sampling():
+    import pickle
+    import tempfile
+    from returnn.datasets.util.vocabulary import SentencePieces
+
+    text = "GOOD MORNING WORLD"
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        model_file = generate_sentencepiece_model(tmp_dir)
+        for sampling in [True, False]:
+            opts = {"enable_sampling": True, "nbest_size": -1, "alpha": 0.1, "add_eos": True} if sampling else {}
+            vocab = pickle.loads(pickle.dumps(SentencePieces(model_file=model_file, **opts)))
+            seqs = {tuple(vocab.get_seq(text)) for _ in range(50)}
+            print(f"sampling {sampling}: {len(seqs)} distinct seqs")
+            assert (len(seqs) > 1) == sampling
+            for seq in seqs:
+                assert (seq[-1] == vocab.eos_label_id) == sampling
+                assert vocab.sp.decode([label for label in seq if label != vocab.eos_label_id]) == text
+
+
 if __name__ == "__main__":
     better_exchook.install()
     if len(sys.argv) <= 1:
