@@ -1020,7 +1020,6 @@ def scatter(
                 post_fix_fill_value = True
     else:
         use_mask = False
-    # The indices can need another backend than the source, e.g. packed indices with plain ones as source.
     out = _utils.get_backend_from_tensors(source, indices).scatter(
         source,
         indices=indices,
