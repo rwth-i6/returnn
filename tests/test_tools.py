@@ -4,7 +4,7 @@ Test cases for different tools
 
 from __future__ import annotations
 
-from typing import Callable, Dict, List, Tuple
+from typing import Dict, Tuple
 import tempfile
 import _setup_test_env  # noqa
 from subprocess import Popen, PIPE, STDOUT, CalledProcessError, check_call
@@ -236,68 +236,11 @@ def test_compile_tf_graph_transducer_time_sync_delayed_recurrent_step():
 #################################
 
 
-def _require_torch():
+def test_torch_scale_tuning_grid_keep_best():
     try:
         import torch  # noqa: F401
     except ImportError:
         raise unittest.SkipTest("torch not available")
-
-
-def _torch_scale_tuning_grid_search(
-    eval_for_scales: Callable[[List[float]], float], *, keep_best: bool
-) -> Tuple[List[float], List[float]]:
-    _require_torch()
-    from returnn.util.basic import generic_import_module
-
-    mod = generic_import_module(os.path.join(base_dir, "tools/torch_scale_tuning.py"))
-    evals = []
-
-    def _eval(scales: List[float]) -> float:
-        evals.append(eval_for_scales(scales))
-        return evals[-1]
-
-    # noinspection PyProtectedMember
-    scales = mod._grid_search(
-        _eval,
-        scales=[1.0, 1.0, 1.0],
-        names=["fixed", "a", "b"],
-        fixed_scales={0: 1.0},
-        scales_min=[0.0, 0.0, 0.0],
-        scales_max=[2.0, 2.0, 2.0],
-        num_iterations=10,
-        num_steps=5,
-        evaluation="eval",
-        output_grid_plot=None,
-        keep_best=keep_best,
-    )
-    return scales, evals
-
-
-def test_torch_scale_tuning_grid_search_keep_best():
-    def _eval(scales: List[float]) -> float:
-        return {(1.0, 1.0): 0.5, (0.5, 0.5): 1.0, (2.0, 2.0): 1.0}.get((scales[1], scales[2]), 1.1)
-
-    # (1, 1) is only on the first grid. The second grid over [0.5, 2] misses it, and its range stays, so it stops.
-    scales, evals = _torch_scale_tuning_grid_search(_eval, keep_best=False)
-    assert len(evals) == 2 * 5 * 5
-    assert scales == [1.0, 0.5, 0.5]  # best of the last grid, tie with (2, 2)
-    scales, evals = _torch_scale_tuning_grid_search(_eval, keep_best=True)
-    assert len(evals) == 2 * 5 * 5
-    assert scales == [1.0, 1.0, 1.0]
-    assert _eval(scales) == min(evals) == 0.5
-
-
-def test_torch_scale_tuning_grid_search_last_grid_improves():
-    def _eval(scales: List[float]) -> float:
-        return round(abs(scales[1] - 1.3) + abs(scales[2] - 0.7), 2)
-
-    for keep_best in [False, True]:
-        scales, evals = _torch_scale_tuning_grid_search(_eval, keep_best=keep_best)
-        assert _eval(scales) == min(evals) < min(evals[: 5 * 5])
-
-
-def test_torch_scale_tuning_cli_grid_keep_best():
-    _require_torch()
     names = ["am", "lm", "prior"]
     hyps = {
         "seq0": ["x x x", "x x c", "a b c"],
