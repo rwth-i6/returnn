@@ -1757,6 +1757,11 @@ class GraphCapturedTrainStep:
         :return: the run ctx with the eager losses
         """
         leaves = [t.detach().requires_grad_(t.requires_grad) for t in self._boundary_outs]
+        if self._batch_dim_bounded and self._mask_padding_seqs:
+            # the batch dim drops what the first segment cached on it (traced tensors when compiled),
+            # its size is the real batch size buffer again
+            self._batch_dim.reset_eager()
+            self._batch_dim.dyn_size_ext.raw_tensor = self._batch_size_buf
         values = _unflatten_boundary(self._boundary_spec, leaves, batch_dim=self._batch_dim)
         self._run_step(None, step=self._global_train_step, func=self._segments[1], **values)
         ctx = rf.get_run_ctx()
