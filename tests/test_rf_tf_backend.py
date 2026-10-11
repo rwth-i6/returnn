@@ -1944,6 +1944,43 @@ def test_padding_seqs_of_a_bounded_batch_stay_empty():
     assert res.tolist() == [3, 1, 4, 0, 0], res
 
 
+def test_reduce_bounded_batch_padding_seqs():
+    """as in test_rf_reduce: the padding seqs of a bounded batch dim have no frames, in the seq mask and in every reduction"""
+    import returnn.tf.compat as tf_compat
+
+    # noinspection PyProtectedMember
+    from returnn.frontend import _backend
+
+    _backend.select_backend_tf()
+    try:
+        with tf_compat.v1.Graph().as_default(), tf_compat.v1.Session().as_default() as session:
+            import tensorflow as tf
+
+            batch_size = Tensor("batch_size", dims=(), dtype="int32", raw_tensor=tf.constant(3))
+            bounded_batch_dim = Dim(batch_size, name="batch", kind=Dim.Types.Batch, capacity=5)
+            lens = Tensor("lens", dims=[bounded_batch_dim], dtype="int32", raw_tensor=tf.constant([7, 4, 2, 0, 0]))
+            time_dim = Dim(lens, name="time", capacity=7)
+            valid = rf.compare_bc(rf.range_over_dim(time_dim), "<", lens)
+            x = rf.where(valid, 1.0, 100.0)
+            per_seq = rf.reduce_sum(x, axis=time_dim)
+            res = session.run(
+                {
+                    "mask": time_dim.get_mask().copy_compatible_to_dims_raw([bounded_batch_dim, time_dim]),
+                    "valid": valid.copy_compatible_to_dims_raw([bounded_batch_dim, time_dim]),
+                    "sum": rf.reduce_sum(x, axis=[bounded_batch_dim, time_dim]).raw_tensor,
+                    "mean": rf.reduce_mean(x, axis=[bounded_batch_dim, time_dim]).raw_tensor,
+                    "max": rf.reduce_max(x, axis=[bounded_batch_dim, time_dim]).raw_tensor,
+                    "per_seq": per_seq.raw_tensor,
+                }
+            )
+    finally:
+        rf.select_backend_torch()
+
+    assert res["mask"].tolist() == res["valid"].tolist()
+    assert (res["sum"], res["mean"], res["max"]) == (13.0, 1.0, 1.0), res
+    assert res["per_seq"].tolist() == [7.0, 4.0, 2.0, 0.0, 0.0], res
+
+
 def test_engine_weight_decay_modules_blacklist():
     # The production config passes optimizer.weight_decay_modules_blacklist.
     # The optimizer class does not know that option ("Argument(s) not recognized"),
