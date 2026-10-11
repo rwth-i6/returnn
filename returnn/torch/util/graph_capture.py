@@ -632,10 +632,11 @@ class GraphCapturedTrainStep:
                 assert total >= one_seq, (
                     f"torch_cuda_graph: packed_total_bound[{k!r}] = {total} cannot hold one seq at"
                     f" dim_capacity {self.dim_capacity[k]} with gap {gap} align {align}"
-                    f" (needs >= {one_seq}); raise packed_total_bound or lower dim_capacity"
+                    f" (needs >= {one_seq}); raise packed_total_bound / packed_batch_size or lower dim_capacity"
                 )
-            # every seq at full capacity always fits (_copy_in checks the seq lens against the capacity)
-            worst_case = self.batch_size_bound * one_seq
+            # every seq at full capacity always fits (_copy_in checks the seq lens against the capacity),
+            # with the same per-seq slack as the inference above and the _copy_in content check
+            worst_case = self.batch_size_bound * (self.dim_capacity[k] + gap + align - 1)
             total = worst_case if total is None else min(total, worst_case)
             shape = [total] + list(raw.shape[1:])
         else:

@@ -2311,9 +2311,11 @@ def test_torch_engine_cuda_graph_packed_total_bound():
     if not torch.cuda.is_available():
         raise unittest.SkipTest("CUDA not available")
     rnd = numpy.random.RandomState(3)
-    seqs = [{"data": rnd.randn(int(rnd.randint(1, 9)), 5).astype("float32")} for _ in range(20)]
+    # first a batch of every seq at full capacity, then random lens
+    seqs = [{"data": rnd.randn(8, 5).astype("float32")} for _ in range(4)]
+    seqs += [{"data": rnd.randn(int(rnd.randint(1, 9)), 5).astype("float32")} for _ in range(20)]
     # (gap, align, packed_batch_size, declared packed_total_bound) -> expected extent;
-    # batch_size_bound 4, dim_capacity 8: every seq at full capacity is 36 frames at gap 1
+    # batch_size_bound 4, dim_capacity 8: every seq at full capacity is 4 * (8 + gap + align - 1) frames
     for gap, align, budget, declared, expected in [
         (1, 1, 12, None, 16),
         (2, 2, 12, None, 24),
@@ -2321,6 +2323,7 @@ def test_torch_engine_cuda_graph_packed_total_bound():
         (1, 1, 12, 24, 24),
         (1, 1, 40, None, 36),
         (1, 1, 12, 100, 36),
+        (2, 2, 40, None, 44),
     ]:
         time_dim = Dim(None, name=f"time-bound-{gap}-{align}-{budget}-{declared}")
         feat_dim = Dim(5, name="feat")
