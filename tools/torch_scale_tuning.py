@@ -44,7 +44,7 @@ def main():
         action="store_true",
         default=None,
         help="grid search: final scales are the best over all iterations, not only of the last grid."
-        " Default since behavior version 36",
+        " Default since behavior version 37",
     )
     arg_parser.add_argument("--no-grid-keep-best", dest="grid_keep_best", action="store_false", default=None)
     arg_parser.add_argument("--behavior-version", type=int, help="RETURNN behavior version")
@@ -355,7 +355,7 @@ def main():
             num_steps=args.num_steps,
             evaluation=args.evaluation,
             output_grid_plot=args.output_grid_plot,
-            keep_best=args.grid_keep_best if args.grid_keep_best is not None else BehaviorVersion.get() >= 36,
+            keep_best=args.grid_keep_best if args.grid_keep_best is not None else BehaviorVersion.get() >= 37,
         )
     else:
         raise ValueError(f"unknown search mode {search_mode!r}")

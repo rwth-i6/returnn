@@ -596,6 +596,22 @@ def test_seq_starts_cu_seqlens():
     assert cu_dim.get_dim_value() == 3
 
 
+def test_cu_seqlens_with_padding_seqs():
+    """
+    a batch dim with the real batch size as dyn size and a capacity, filled up with empty padding seqs:
+    one offset per seq slot of the buffer, then the content total
+    """
+    rf.select_backend_torch()
+    batch_size = Tensor("batch_size", dims=(), dtype="int32", raw_tensor=torch.tensor(2, dtype=torch.int32))
+    batch_dim = Dim(batch_size, name="batch", kind=Dim.Types.Batch, capacity=4)
+    lens = Tensor("lens", dims=[batch_dim], dtype="int32", raw_tensor=torch.tensor([5, 3, 0, 0], dtype=torch.int32))
+    time_dim = Dim(lens, name="time", capacity=5)
+    x = Tensor("x", dims=[batch_dim, time_dim], dtype="float32", raw_tensor=torch.zeros(4, 5))
+    with rf.set_static_traceable_ctx():
+        cu, _ = packed.pack(x, dims=[batch_dim, time_dim], total_bound=12).raw_tensor.cu_seqlens()
+    assert cu.raw_tensor.tolist() == [0, 5, 8, 8, 8], cu.raw_tensor
+
+
 def test_pack_gap_roundtrip():
     # gapped layout: gap zero-frames between the sequences in the packed buffer
     rf.select_backend_torch()

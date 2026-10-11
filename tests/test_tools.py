@@ -336,8 +336,8 @@ def test_torch_scale_tuning_cli_grid_keep_best():
     best = {"am": 1.0, "lm": 5 / 3, "prior": 1 / 3}  # edit distance 1/9, evaluated in an earlier grid
     for extra_args, expected in [
         ((), last_grid),
-        (("--behavior-version", "36"), best),
-        (("--behavior-version", "36", "--no-grid-keep-best"), last_grid),
+        (("--behavior-version", "37"), best),
+        (("--behavior-version", "37", "--no-grid-keep-best"), last_grid),
         (("--grid-keep-best",), best),
     ]:
         scales, real_scales = _run(*extra_args)
