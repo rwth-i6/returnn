@@ -696,9 +696,7 @@ class TFBackend(Backend[tf.Tensor]):
 
                         x_ = tf_util.where_bc(mask, x_, replacement_value, name="x_masked_axis_%i" % axis)
                     if f == tf.reduce_mean:
-                        # the plain mean divides by the raw extent of the reduced axes:
-                        # correct it to the number of elements the reduction covers
-                        # (once for all reduced axes: a seq len already counts the seqs of its batch dim)
+                        # mean over the raw extent -> over the covered elements, one count for all reduced axes
                         size_all = 1
                         for axis in axes:
                             size_all *= tf.shape(x.placeholder)[axis]
