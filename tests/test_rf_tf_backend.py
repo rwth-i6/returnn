@@ -1981,6 +1981,39 @@ def test_reduce_bounded_batch_padding_seqs():
     assert res["per_seq"].tolist() == [7.0, 4.0, 2.0, 0.0, 0.0], res
 
 
+def test_reduce_over_bounded_batch_axis():
+    """reductions over the batch axis alone, with a bounded batch dim: the padding seqs are not counted"""
+    import returnn.tf.compat as tf_compat
+
+    # noinspection PyProtectedMember
+    from returnn.frontend import _backend
+
+    _backend.select_backend_tf()
+    try:
+        with tf_compat.v1.Graph().as_default(), tf_compat.v1.Session().as_default() as session:
+            import tensorflow as tf
+
+            batch_size = Tensor("batch_size", dims=(), dtype="int32", raw_tensor=tf.constant(3))
+            bounded_batch_dim = Dim(batch_size, name="batch", kind=Dim.Types.Batch, capacity=5)
+            feat_dim = Dim(2, name="feat")
+            x = Tensor("x", dims=[bounded_batch_dim, feat_dim], dtype="float32")
+            x.raw_tensor = tf.constant([[7.0, 1.0], [4.0, 1.0], [2.0, 1.0], [0.0, 0.0], [0.0, 0.0]])
+            res = session.run(
+                {
+                    "mean": rf.reduce_mean(x, axis=bounded_batch_dim).raw_tensor,
+                    "max": rf.reduce_max(x - 10.0, axis=bounded_batch_dim).raw_tensor,
+                    "min": rf.reduce_min(x, axis=bounded_batch_dim).raw_tensor,
+                    "logsumexp": rf.reduce_logsumexp(x, axis=bounded_batch_dim).raw_tensor,
+                }
+            )
+    finally:
+        rf.select_backend_torch()
+
+    numpy.testing.assert_allclose(res["mean"], [13 / 3, 1.0], rtol=1e-6)
+    assert res["max"].tolist() == [-3.0, -9.0] and res["min"].tolist() == [2.0, 1.0], res
+    numpy.testing.assert_allclose(res["logsumexp"], numpy.log([numpy.exp([7, 4, 2]).sum(), 3 * numpy.e]), rtol=1e-6)
+
+
 def test_engine_weight_decay_modules_blacklist():
     # The production config passes optimizer.weight_decay_modules_blacklist.
     # The optimizer class does not know that option ("Argument(s) not recognized"),

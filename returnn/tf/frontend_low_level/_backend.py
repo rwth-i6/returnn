@@ -667,10 +667,10 @@ class TFBackend(Backend[tf.Tensor]):
                 else:
                     # Fhe fastest and simplest way is masking.
                     for axis in axes:
-                        if axis == x.batch_dim_axis:
-                            continue
                         if not x.has_dynamic_size(axis):
                             continue
+                        if not x.dim_tags[axis].need_masking():
+                            continue  # e.g. the batch dim, unless it is filled up to a bound with padding seqs
                         mask = _seq_mask_raw(x, axis)
 
                         zeros = tf.zeros((), dtype=x.placeholder.dtype)
@@ -695,34 +695,20 @@ class TFBackend(Backend[tf.Tensor]):
                             raise TypeError("reduce: unexpected input type %r from input %s" % (x.placeholder.dtype, x))
 
                         x_ = tf_util.where_bc(mask, x_, replacement_value, name="x_masked_axis_%i" % axis)
-                        if f == tf.reduce_mean:
-                            tag = x.dim_tags[axis]
-                            assert tag.dyn_size_ext is not None  # checked above
-                            size_all = tf.shape(x.placeholder)[axis]
-                            size_actual = tag.dyn_size_ext
-                            while any(d not in out_data.dim_tags for d in size_actual.dim_tags):
-                                # We have some axis (e.g. B) which is not in the output.
-                                # We need to remove this.
-                                # https://github.com/rwth-i6/returnn/issues/1242
-                                i, d = [
-                                    (i, d) for i, d in enumerate(size_actual.dim_tags) if d not in out_data.dim_tags
-                                ][0]
-                                if d.need_masking():
-                                    # zero the entries beyond d's content, then the plain sum below is exact.
-                                    # (Under the static-traceable bound regime this triggers for the batch
-                                    # dim too; there the buffer is always full -- padded with length-0 seqs
-                                    # -- so the mask is all-True and this is a no-op.)
-                                    size_actual = size_actual.copy_masked(0)
-                                size_all *= d.get_dim_value()
-                                s = tf.reduce_sum(size_actual.placeholder, axis=i)
-                                size_actual = size_actual.copy_template_excluding_axis(i)
-                                size_actual.placeholder = s
-                            seq_len_bc = size_actual.copy_compatible_to(
-                                out_data, check_sparse=False, check_dtype=False
-                            ).placeholder
-                            seq_len_bc = tf.maximum(seq_len_bc, 1)  # avoid nan
-                            correction_factor_ = tf.cast(size_all, tf.float32) / tf.cast(seq_len_bc, tf.float32)
-                            correction_factor = tf_util.optional_mul(correction_factor, correction_factor_)
+                    if f == tf.reduce_mean:
+                        # the plain mean divides by the raw extent of the reduced axes:
+                        # correct it to the number of elements the reduction covers
+                        # (once for all reduced axes: a seq len already counts the seqs of its batch dim)
+                        size_all = 1
+                        for axis in axes:
+                            size_all *= tf.shape(x.placeholder)[axis]
+                        size_actual = rf.num_elements_of_shape([x.dim_tags[axis] for axis in axes], use_mask=True)
+                        assert isinstance(size_actual, Tensor)  # some reduced axis is dynamic, checked above
+                        seq_len_bc = size_actual.copy_compatible_to(
+                            out_data, check_sparse=False, check_dtype=False
+                        ).placeholder
+                        seq_len_bc = tf.maximum(seq_len_bc, 1)  # avoid nan
+                        correction_factor = tf.cast(size_all, tf.float32) / tf.cast(seq_len_bc, tf.float32)
             if mode in arg_funcs:
                 assert len(axes) == 1, "For argmax/argmin, only one reduction axis is supported"
                 y = f(x_, axis=axes[0], output_type=tf.int32)
