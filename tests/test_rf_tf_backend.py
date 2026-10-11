@@ -779,9 +779,12 @@ def test_engine_train_packed():
         logits_eos, _ = rf.pad(logits, axes=[time_dim], padding=[(0, 1)], value=0.0, out_dims=[time_eos_dim])
         loss_eos = rf.cross_entropy(estimated=logits_eos, target=targets_eos, axis=out_dim, estimated_type="logits")
         loss_eos.mark_as_loss("ce_eos", scale=0.0)
+        # per seq: a padding seq counted as a real seq changes the mean over seqs a lot
+        rf.reduce_sum(loss_eos, axis=time_eos_dim).mark_as_loss("seq_ce_eos", scale=0.0)
 
     scores = {}
     scores_eos = {}
+    scores_seq_eos = {}
     _backend.select_backend_tf()
     prev_batch_dyn_size_ext = batch_dim.dyn_size_ext
     try:
@@ -848,6 +851,7 @@ def test_engine_train_packed():
                     engine.train()
                     scores[name] = engine.learning_rate_control.get_epoch_error_dict(2)["train_loss:ce"]
                     scores_eos[name] = engine.learning_rate_control.get_epoch_error_dict(2)["train_loss:ce_eos"]
+                    scores_seq_eos[name] = engine.learning_rate_control.get_epoch_error_dict(2)["train_loss:seq_ce_eos"]
             finally:
                 shutil.rmtree(model_dir, ignore_errors=True)
         print("train_loss:ce ep 2 per variant:", scores)
@@ -859,8 +863,9 @@ def test_engine_train_packed():
         for name in ("packed", "static_padded", "packed_static", "static_padded_bound5"):
             numpy.testing.assert_allclose(scores["padded"], scores[name], rtol=1e-4, err_msg=name)
             numpy.testing.assert_allclose(scores_eos["padded"], scores_eos[name], rtol=1e-4, err_msg=name)
-        # the padding seqs got an EOS frame each, and more of them per batch than with bound 3
-        assert abs(scores_eos["static_padded_bound5_unmasked"] - scores_eos["padded"]) > 1e-2, scores_eos
+            numpy.testing.assert_allclose(scores_seq_eos["padded"], scores_seq_eos[name], rtol=1e-4, err_msg=name)
+        # the padding seqs count as seqs with an EOS frame each
+        assert abs(scores_seq_eos["static_padded_bound5_unmasked"] / scores_seq_eos["padded"] - 1) > 0.1, scores_seq_eos
     finally:
         batch_dim.dyn_size_ext = prev_batch_dyn_size_ext
         batch_dim.size = None  # the static variants staticize the GLOBAL batch dim
