@@ -612,29 +612,31 @@ class GraphCapturedTrainStep:
             dtype = self._float_dtype
         if packed is not None:
             # packed collate: flat contiguous [total, ...feature];
-            # bound = declared packed_total_bound, else batch bound * capacity
+            # total = the bound of the gapped layout, also used by _build_extern_data:
+            # declared packed_total_bound, else inferred from packed_batch_size,
+            # capped by every seq at full capacity
             self._packed_opts[k] = dict(packed)
             gap = int(packed.get("gap", 0))
             align = int(packed.get("align", 1))
+            one_seq = -(-(self.dim_capacity[k] + gap) // align) * align
             total = self.packed_total_bound.get(k)
             if total is None and k in self._packed_batch_size:
                 # packed_batch_size budgets content; the layout additionally needs the per-seq
                 # gap/align rounding (each seq occupies at most len + gap + align - 1 frames,
                 # as in _regap_total_bound); at gap 0 / align 1 this equals packed_batch_size
                 total = self._packed_batch_size[k] + self.batch_size_bound * (gap + align - 1)
-            if total is None:
-                # no content budget known (no packed_batch_size, or a callable one):
-                # fall back to every seq at full capacity, which is correct but far larger
-                total = self.batch_size_bound * self.dim_capacity[k]
-            # startup sanity check of the declared bound:
-            # one seq at full dim_capacity with the configured gap/align must fit
-            # (the per-batch content check happens in pack())
-            one_seq = -(-(self.dim_capacity[k] + gap) // align) * align
-            assert total >= one_seq, (
-                f"torch_cuda_graph: packed_total_bound[{k!r}] = {total} cannot hold one seq at"
-                f" dim_capacity {self.dim_capacity[k]} with gap {gap} align {align}"
-                f" (needs >= {one_seq}); raise packed_total_bound or lower dim_capacity"
-            )
+            if total is not None:
+                # startup sanity check of the declared bound:
+                # one seq at full dim_capacity with the configured gap/align must fit
+                # (the per-batch content check happens in pack())
+                assert total >= one_seq, (
+                    f"torch_cuda_graph: packed_total_bound[{k!r}] = {total} cannot hold one seq at"
+                    f" dim_capacity {self.dim_capacity[k]} with gap {gap} align {align}"
+                    f" (needs >= {one_seq}); raise packed_total_bound or lower dim_capacity"
+                )
+            # every seq at full capacity always fits (_copy_in checks the seq lens against the capacity)
+            worst_case = self.batch_size_bound * one_seq
+            total = worst_case if total is None else min(total, worst_case)
             shape = [total] + list(raw.shape[1:])
         else:
             assert all(d.dimension is not None for d in data.dims[2:]), (
@@ -782,7 +784,7 @@ class GraphCapturedTrainStep:
                     inner, batch_dim=batch_dim, spatial_dim=spatial, packed_dim=packed_dim, feature_dim=data.feature_dim
                 )
                 if gap or align > 1:
-                    # the copy-in content check makes the gapped layout fit the buffer, see _copy_in
+                    # the buffer size is the bound of the gapped layout, see _get_data_buf
                     packed_t = rf.packed_regap(packed_t, gap, align=align, total_bound=buf.shape[0])
                 data.raw_tensor = packed_t.raw_tensor
             else:

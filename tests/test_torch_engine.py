@@ -2302,7 +2302,7 @@ def test_torch_engine_cuda_graph_packed_total_bound():
     """
     The gapped packed tensor which the captured step sees has the extent of the input buffer:
     the declared packed_total_bound, else the one inferred from packed_batch_size,
-    which is far below batch_size_bound * dim_capacity.
+    capped by every seq at full capacity.
     """
     from returnn.datasets import init_dataset
     from returnn.tensor import Dim, batch_dim
@@ -2312,10 +2312,17 @@ def test_torch_engine_cuda_graph_packed_total_bound():
         raise unittest.SkipTest("CUDA not available")
     rnd = numpy.random.RandomState(3)
     seqs = [{"data": rnd.randn(int(rnd.randint(1, 9)), 5).astype("float32")} for _ in range(20)]
-    # (gap, align, declared packed_total_bound) -> expected extent;
-    # batch_size_bound 4, dim_capacity 8, packed_batch_size 12
-    for gap, align, declared, expected in [(1, 1, None, 16), (2, 2, None, 24), (0, 1, None, 12), (1, 1, 24, 24)]:
-        time_dim = Dim(None, name=f"time-bound-{gap}-{align}-{declared}")
+    # (gap, align, packed_batch_size, declared packed_total_bound) -> expected extent;
+    # batch_size_bound 4, dim_capacity 8: every seq at full capacity is 36 frames at gap 1
+    for gap, align, budget, declared, expected in [
+        (1, 1, 12, None, 16),
+        (2, 2, 12, None, 24),
+        (0, 1, 12, None, 12),
+        (1, 1, 12, 24, 24),
+        (1, 1, 40, None, 36),
+        (1, 1, 12, 100, 36),
+    ]:
+        time_dim = Dim(None, name=f"time-bound-{gap}-{align}-{budget}-{declared}")
         feat_dim = Dim(5, name="feat")
         seen = []
 
@@ -2336,7 +2343,7 @@ def test_torch_engine_cuda_graph_packed_total_bound():
                 get_model=_get_model,
                 train_step=_train_step,
                 batch_size=None,
-                packed_batch_size={"data": 12},
+                packed_batch_size={"data": budget},
                 max_seqs=4,
                 num_epochs=1,
                 learning_rate=1e-3,
@@ -2359,7 +2366,7 @@ def test_torch_engine_cuda_graph_packed_total_bound():
             engine.train()
             assert engine._graph_capture._graph is not None, "graph never captured"
             assert engine._graph_capture.data_bound_sizes() == {"data": expected}
-            assert seen and set(seen) == {expected}, (gap, align, declared, seen)
+            assert seen and set(seen) == {expected}, (gap, align, budget, declared, seen)
             engine.finalize()
 
 
