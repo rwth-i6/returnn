@@ -240,11 +240,7 @@ class TorchBackend(Backend[torch.Tensor]):
     @staticmethod
     def scaled_gradient(tensor: Tensor, scale: Union[float, Tensor]) -> Tensor:
         """scaled gradient"""
-        from returnn.torch.util.scaled_gradient import scaled_gradient
-
-        out = tensor.copy()
-        out.raw_tensor = scaled_gradient(out.raw_tensor, scale=scale)
-        return out
+        return TorchBackend.scaled_gradient_ext(tensor, scale=scale)
 
     @staticmethod
     def scaled_gradient_ext(
@@ -260,8 +256,8 @@ class TorchBackend(Backend[torch.Tensor]):
         out = x.copy()
         out.raw_tensor = scaled_gradient_ext(
             out.raw_tensor,
-            scale=scale.raw_tensor if isinstance(scale, Tensor) else scale,
-            shift=shift.raw_tensor if isinstance(shift, Tensor) else shift,
+            scale=scale.copy_compatible_to_dims_raw(x.dims) if isinstance(scale, Tensor) else scale,
+            shift=shift.copy_compatible_to_dims_raw(x.dims) if isinstance(shift, Tensor) else shift,
             scale_shift_by_sum_over_axis=(
                 x.get_axis_from_description(scale_shift_by_sum_over_axis, allow_int=False)
                 if scale_shift_by_sum_over_axis is not None

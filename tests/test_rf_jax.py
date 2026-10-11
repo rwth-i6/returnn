@@ -2179,6 +2179,57 @@ def test_engine_packed_tensors():
         numpy.testing.assert_allclose(packed[name], padded[name], rtol=1e-5, atol=1e-6, err_msg=name)
 
 
+def test_engine_static_shapes_padding_seqs():
+    """
+    ``jax_static_shapes`` fills each batch up to ``batch_size_bound`` with zero-length padding seqs.
+    A step appending EOS (one more frame per seq) must not give them one, padded and packed:
+    the same batches give the same epoch loss and parameters as without static shapes.
+    Without ``mask_padding_seqs``, the packed padding seqs count as real empty seqs, each with an EOS frame.
+    (This file pins behavior version 29, so the option is passed explicitly.)
+    """
+    import tempfile
+    from returnn.jax.engine import Engine
+
+    def _train_step(*, model, extern_data, **_kwargs):
+        """train step with an EOS frame appended to the targets"""
+        data = extern_data["data"]
+        time_dim = data.dims[1]
+        logits = model.linear(data)
+        targets_eos, (time_eos_dim,) = rf.pad(extern_data["classes"], axes=[time_dim], padding=[(0, 1)], value=0)
+        logits_eos, _ = rf.pad(logits, axes=[time_dim], padding=[(0, 1)], value=0.0, out_dims=[time_eos_dim])
+        loss = rf.cross_entropy(estimated=logits_eos, target=targets_eos, axis=model.out_dim, estimated_type="logits")
+        loss.mark_as_loss("ce")
+
+    def _run(**opts):
+        """:return: the epoch loss, and the parameters after one epoch as NumPy"""
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            config, make_dataset = _simple_train_setup(
+                tmp_dir, num_epochs=1, train_step=_train_step, jax_jit=True, **opts
+            )
+            engine = Engine(config=config)
+            engine.init_train_from_config(train_data=make_dataset())
+            engine.train()
+            loss = engine.learning_rate_control.epoch_data[1].error["train_loss_ce"]
+            return loss, {name: numpy.asarray(p.raw_tensor) for name, p in engine.get_model().named_parameters()}
+
+    # batch bound above max_seqs: every batch has padding seqs
+    static = {"batch_size_bound": 5, "dim_capacity": {"data": 11, "classes": 11}, "mask_padding_seqs": True}
+    static_packed = dict(static, packed_total_bound={"data": 33, "classes": 33})
+    loss_dynamic, params_dynamic = _run()
+    for name, opts in [
+        ("padded", {"jax_static_shapes": static}),
+        ("packed", {"jax_static_shapes": static_packed, "packed_tensors": True}),
+    ]:
+        loss, params = _run(**opts)
+        numpy.testing.assert_allclose(loss, loss_dynamic, rtol=1e-5, err_msg=name)
+        for key in params_dynamic:
+            numpy.testing.assert_allclose(
+                params[key], params_dynamic[key], rtol=1e-5, atol=1e-6, err_msg=f"{name} {key}"
+            )
+    loss_unmasked, _ = _run(jax_static_shapes=dict(static_packed, mask_padding_seqs=False), packed_tensors=True)
+    assert abs(loss_unmasked - loss_dynamic) > 1e-2 * loss_dynamic, (loss_unmasked, loss_dynamic)
+
+
 def test_engine_accum_grad_multiple_step():
     """
     ``accum_grad_multiple_step``: the update is applied every k-th step, not every step.

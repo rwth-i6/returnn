@@ -7,6 +7,8 @@ import _setup_test_env  # noqa
 from typing import Optional, Any, Dict, Tuple, List
 import contextlib
 import copy
+import functools
+import io
 import json
 import os
 import sys
@@ -866,6 +868,56 @@ def test_data_loader_oggzip():
     # The following depends on the random data generation in create_ogg_zip_txt_only_dataset_mult_seqs,
     # but we fixed the seed and the random number generator, so this should stay the same, unless we change the code.
     assert batches == [[[12, 8, 9, 11], [16, 0, 0, 0]], [[6, 25, 18, 20, 5], [28, 10, 28, 14, 0]], [[17, 23]]]
+
+
+@unittest.skipIf(torch.__version__ < (2,), "torch.load weights_only cannot load floats before PyTorch 2.0")
+def test_save_optimizer_opts_weights_only():
+    include_check_partial = functools.partial(lambda **_kwargs: None)
+    for optimizer, expected_saved_opts in [
+        (torch.optim.AdamW, "adamw"),
+        (
+            {
+                "class": torch.optim.AdamW,
+                "betas": (0.9, 0.98),
+                "weight_decay": 1e-3,
+                "weight_decay_modules_blacklist": [torch.nn.LayerNorm, "rf.Embedding"],
+                "weight_decay_custom_include_check": lambda **_kwargs: None,
+            },
+            {
+                "class": "adamw",
+                "betas": (0.9, 0.98),
+                "weight_decay": 1e-3,
+                "weight_decay_modules_blacklist": ["torch.nn.modules.normalization.LayerNorm", "rf.Embedding"],
+                "weight_decay_custom_include_check": f"{__name__}.<lambda>",
+            },
+        ),
+        (
+            {"class": "adamw", "weight_decay": 1e-3, "weight_decay_custom_include_check": include_check_partial},
+            {
+                "class": "adamw",
+                "weight_decay": 1e-3,
+                "weight_decay_custom_include_check": f"object:{include_check_partial!r}",
+            },
+        ),
+    ]:
+        config = Config(dict(optimizer=optimizer))
+        model = torch.nn.Linear(7, 5)
+        updater = Updater(config=config, network=model, device=torch.device("cpu"))
+        updater.create_optimizer()
+
+        with tempfile.TemporaryDirectory(prefix="returnn_test_save_optimizer_opts_weights_only") as tmp_dir:
+            updater.save_optimizer(tmp_dir + "/model.opt.pt")
+            saved = torch.load(tmp_dir + "/model.opt.pt", weights_only=True)
+            assert saved["optimizer_opts"] == expected_saved_opts
+            updater.load_optimizer(tmp_dir + "/model.opt.pt")
+
+    # numpy values given to the optimizer itself would break its own state dict, so check the conversion directly
+    from returnn.torch.updater import _optimizer_opts_for_checkpoint
+
+    buffer = io.BytesIO()
+    torch.save(_optimizer_opts_for_checkpoint({"a": numpy.float32(0.5), "b": numpy.arange(4).reshape(2, 2)}), buffer)
+    buffer.seek(0)
+    assert torch.load(buffer, weights_only=True) == {"a": 0.5, "b": [[0, 1], [2, 3]]}
 
 
 def test_load_optimizer_old_format():
@@ -1911,9 +1963,14 @@ def _check_torch_engine_finalize_data_loaders(*, pin_memory: bool = False):
         engine = Engine(config=config)
         engine.init_train_from_config(train_data=datasets["train"], dev_data=datasets["dev"])
         workers = []
+        data_iters = []  # kept alive: the pinning thread of a dropped iterator stops on its own
         for loader in [engine._train_dataloader, engine._eval_dataloaders["dev"]]:
-            next(iter(loader))
+            data_iter = iter(loader)
+            next(data_iter)
+            data_iters.append(data_iter)
             workers += (loader.data_loader if pin_memory else loader)._iterator._workers
+        if pin_memory:
+            assert all(data_iter._thread.is_alive() for data_iter in data_iters)
         engine.finalize()
         engine.finalize()
     for worker in workers:
@@ -1940,11 +1997,15 @@ def _build_cuda_graph_train_config_and_dataset(
     cuda_graph: bool = True,
     optimizer_step: bool = False,
     optimizer: Optional[Dict[str, Any]] = None,
+    count_steps: bool = False,
+    graph_opts: Optional[Dict[str, Any]] = None,
 ):
     """
     small RF model + Task12AXDataset config with torch_cuda_graph, see the tests below.
     With optimizer_step: the optimizer step not in the model graph but separately (torch_optimizer_step).
     optimizer: the config entry, capturable AdamW by default.
+    count_steps: the model counts its train step calls in an auxiliary parameter.
+    graph_opts: further torch_cuda_graph entries.
     """
     from returnn.datasets import init_dataset
     from returnn.tensor import Dim, batch_dim
@@ -1961,6 +2022,9 @@ def _build_cuda_graph_train_config_and_dataset(
             hidden = Dim(64, name="hidden")
             self.layer = rf.Linear(feat_dim, hidden)
             self.out = rf.Linear(hidden, classes_dim)
+            if count_steps:
+                self.steps_seen = rf.Parameter([], dtype="int64", auxiliary=True)
+                self.steps_seen.initial = 0
 
     def _get_model(*, epoch, step, **_kwargs):
         return _Model()
@@ -1968,6 +2032,8 @@ def _build_cuda_graph_train_config_and_dataset(
     def _train_step(*, model: _Model, extern_data: TensorDict, **_kwargs):
         data = extern_data["data"]
         classes = extern_data["classes"]
+        if count_steps:
+            model.steps_seen.assign_add(1)
         x = rf.relu(model.layer(data))
         logits = model.out(x)
         loss = rf.cross_entropy(target=classes, estimated=logits, estimated_type="logits", axis=model.out_dim)
@@ -2019,6 +2085,7 @@ def _build_cuda_graph_train_config_and_dataset(
             capture_optimizer=not optimizer_step,
             **({"warmup_steps": warmup_steps} if warmup_steps is not None else {}),
             **({"compile": True} if compile_ else {}),
+            **(graph_opts or {}),
         )
     if optimizer_step:
         config.typed_dict["torch_optimizer_step"] = {}
@@ -2034,6 +2101,8 @@ def _run_cuda_graph_train(
     cuda_graph: bool = True,
     optimizer_step: bool = False,
     optimizer: Optional[Dict[str, Any]] = None,
+    count_steps: bool = False,
+    graph_opts: Optional[Dict[str, Any]] = None,
 ) -> Engine:
     if not torch.cuda.is_available():
         raise unittest.SkipTest("CUDA not available")
@@ -2043,11 +2112,17 @@ def _run_cuda_graph_train(
         cuda_graph=cuda_graph,
         optimizer_step=optimizer_step,
         optimizer=optimizer,
+        count_steps=count_steps,
+        graph_opts=graph_opts,
     )
     with global_config_ctx(config):
         engine = Engine(config=config)
         engine.init_train_from_config(train_data=dataset)
         engine.train()
+        if count_steps:
+            # the warm runs before the capture leave no trace on the model state
+            seen = int(engine._orig_model.steps_seen.raw_tensor)
+            assert seen == engine.global_train_step, (seen, engine.global_train_step)
         # the dynamic warmup steps run at the batch's own size, every batch here is smaller than the bound,
         # and the mean of the per-sequence one must still be reported as one
         seq_one = engine.learning_rate_control.epoch_data[1].error["train_loss_seq_one"]
@@ -2157,12 +2232,7 @@ def _cuda_graph_packed_decoder_setup(mode: str):
             targets_spatial_dim=tgt_time_dim,
             blank_index=11,
         )
-        # constant inv norm: under bound shapes the default norm counts the FILLER seqs
-        # (static batch dim = the bound), eager counts real seqs -- the reported values
-        # then differ by that ratio while the sums are identical.
-        # Raw sums are what this parity test must compare.
-        one = rf.constant(1.0, dims=[])
-        ctc.mark_as_loss("ctc", custom_inv_norm_factor=one)
+        ctc.mark_as_loss("ctc")
         enc_state = model.decoder.transform_encoder(enc, axis=enc_sp)
         logits, _ = model.decoder(
             targets,
@@ -2171,7 +2241,7 @@ def _cuda_graph_packed_decoder_setup(mode: str):
             encoder=enc_state,
         )
         ce = rf.cross_entropy(estimated=logits, target=targets, axis=vocab_dim, estimated_type="logits")
-        ce.mark_as_loss("ce", custom_inv_norm_factor=one)
+        ce.mark_as_loss("ce")
 
     # varying lens AND varying seq counts per batch (frame-budget batching):
     # under capture this varies the filler-seq count and every packed extent per replay
@@ -2230,6 +2300,20 @@ def _cuda_graph_packed_decoder_setup(mode: str):
 
 def _cuda_graph_packed_decoder_run(mode: str):
     """run one epoch in-process; per-step losses parsed from the RETURNN log file"""
+    losses, _ = _cuda_graph_run_step_losses(
+        *_cuda_graph_packed_decoder_setup(mode), mode=mode, loss_names=["ctc", "ce"]
+    )
+    return losses
+
+
+def _cuda_graph_run_step_losses(
+    config: Config, dataset, *, mode: str, loss_names: List[str]
+) -> Tuple[Dict[Tuple[int, int], Tuple[float, ...]], Engine]:
+    """
+    train in-process
+
+    :return: per (epoch, step) the losses parsed from the RETURNN log file, and the engine
+    """
     import os
     import re
     import tempfile
@@ -2237,7 +2321,6 @@ def _cuda_graph_packed_decoder_run(mode: str):
 
     torch.backends.cuda.matmul.allow_tf32 = False
     torch.backends.cudnn.allow_tf32 = False
-    config, dataset = _cuda_graph_packed_decoder_setup(mode)
     log_file = tempfile.NamedTemporaryFile(mode="wt", suffix=f"-{mode}.log", delete=False)
     log_file.close()
     # the engine logs the per-step losses via the RETURNN log module (bound at init):
@@ -2254,9 +2337,9 @@ def _cuda_graph_packed_decoder_run(mode: str):
     with open(log_file.name, "rt", encoding="utf-8") as f:
         txt = f.read()
     os.remove(log_file.name)
-    steps = re.findall(r"train, step (\d+), ctc ([0-9.]+), ce ([0-9.]+)", txt)
+    steps = re.findall(r"ep (\d+) train, step (\d+), " + ", ".join(f"{name} ([0-9.]+)" for name in loss_names), txt)
     assert len(steps) >= 5, f"{mode}: only {len(steps)} steps parsed from the log"
-    return {int(s): (float(a), float(b)) for s, a, b in steps}
+    return {(int(ep), int(s)): tuple(float(v) for v in values) for ep, s, *values in steps}, engine
 
 
 def test_torch_engine_cuda_graph_packed_decoder_parity():
@@ -2285,10 +2368,196 @@ def test_torch_engine_cuda_graph_packed_decoder_parity():
         assert abs(ce_a - ce_b) / max(abs(ce_a), 1e-6) < 2e-2, f"step {s} ce: {ce_a} vs {ce_b}"
 
 
+def test_torch_engine_cuda_graph_packed_total_bound():
+    """
+    The gapped packed tensor which the captured step sees has the extent of the input buffer:
+    the declared packed_total_bound, else the one inferred from packed_batch_size,
+    capped by every seq at full capacity.
+    """
+    from returnn.datasets import init_dataset
+    from returnn.tensor import Dim, batch_dim
+    import numpy
+
+    if not torch.cuda.is_available():
+        raise unittest.SkipTest("CUDA not available")
+    rnd = numpy.random.RandomState(3)
+    # first a batch of every seq at full capacity, then random lens
+    seqs = [{"data": rnd.randn(8, 5).astype("float32")} for _ in range(4)]
+    seqs += [{"data": rnd.randn(int(rnd.randint(1, 9)), 5).astype("float32")} for _ in range(20)]
+    # (gap, align, packed_batch_size, declared packed_total_bound) -> expected extent;
+    # batch_size_bound 4, dim_capacity 8: every seq at full capacity is 4 * (8 + gap + align - 1) frames
+    for gap, align, budget, declared, expected in [
+        (1, 1, 12, None, 16),
+        (2, 2, 12, None, 24),
+        (0, 1, 12, None, 12),
+        (1, 1, 12, 24, 24),
+        (1, 1, 40, None, 36),
+        (1, 1, 12, 100, 36),
+        (2, 2, 40, None, 44),
+    ]:
+        time_dim = Dim(None, name=f"time-bound-{gap}-{align}-{budget}-{declared}")
+        feat_dim = Dim(5, name="feat")
+        seen = []
+
+        def _get_model(**_kwargs):
+            return rf.Linear(feat_dim, Dim(3, name="out"))
+
+        def _train_step(*, model: rf.Linear, extern_data: TensorDict, **_kwargs):
+            data = extern_data["data"]
+            seen.append(data.raw_tensor.packed_dim.dimension)
+            loss = rf.reduce_sum(model(data) ** 2, axis=model.out_dim)
+            loss.mark_as_loss("l2")
+
+        config = Config(
+            dict(
+                task="train",
+                device="gpu",
+                extern_data={"data": {"dims": [batch_dim, time_dim, feat_dim], "dtype": "float32"}},
+                get_model=_get_model,
+                train_step=_train_step,
+                batch_size=None,
+                packed_batch_size={"data": budget},
+                max_seqs=4,
+                num_epochs=1,
+                learning_rate=1e-3,
+                optimizer={"class": "adamw", "capturable": True},
+                torch_dataloader_opts={"num_workers": 0},
+                packed_tensors={"per_key": {"data": {"gap": gap, "align": align}}},
+                torch_cuda_graph=dict(
+                    batch_size_bound=4,
+                    dim_capacity={"data": 8},
+                    **({"packed_total_bound": {"data": declared}} if declared is not None else {}),
+                    capture_optimizer=True,
+                ),
+            )
+        )
+        dataset = init_dataset({"class": "StaticDataset", "data": seqs, "input_dim": 5})
+        dataset.init_seq_order(epoch=1)
+        with global_config_ctx(config):
+            engine = Engine(config=config)
+            engine.init_train_from_config(train_data=dataset)
+            engine.train()
+            assert engine._graph_capture._graph is not None, "graph never captured"
+            assert engine._graph_capture.data_bound_sizes() == {"data": expected}
+            assert seen and set(seen) == {expected}, (gap, align, budget, declared, seen)
+            engine.finalize()
+
+
+def _cuda_graph_lm_eos_setup(storage: str, *, graphc: bool):
+    """config+dataset for the padding seqs test, see below"""
+    from returnn.datasets import init_dataset
+    from returnn.tensor import Dim, batch_dim
+    from returnn.frontend.decoder.transformer import TransformerDecoder
+    import numpy
+
+    time_dim = Dim(None, name=f"time-lm-{storage}-{graphc}")
+    tgt_time_dim = Dim(None, name=f"tgt-time-lm-{storage}-{graphc}")
+    feat_dim = Dim(8, name="feat")
+    vocab_dim = Dim(11, name="vocab")
+
+    def _get_model(**_kwargs):
+        return TransformerDecoder(
+            None, vocab_dim, Dim(32, name="dec"), num_layers=1, num_heads=2, dropout=0.0, att_dropout=0.0
+        )
+
+    def _train_step(*, model: TransformerDecoder, extern_data: TensorDict, **_kwargs):
+        # as an LM or AED train step: BOS prepended to the input, EOS appended to the targets
+        targets = extern_data["classes"]
+        inputs, (targets_w_eos_dim,) = rf.pad(targets, axes=[tgt_time_dim], padding=[(1, 0)], value=0)
+        targets_w_eos, _ = rf.pad(targets, axes=[tgt_time_dim], padding=[(0, 1)], value=0, out_dims=[targets_w_eos_dim])
+        logits, _ = model(
+            inputs, spatial_dim=targets_w_eos_dim, state=model.default_initial_state(batch_dims=[batch_dim])
+        )
+        ce = rf.cross_entropy(estimated=logits, target=targets_w_eos, axis=vocab_dim, estimated_type="logits")
+        ce.mark_as_loss("ce")
+        rf.reduce_sum(ce, axis=targets_w_eos_dim).mark_as_loss("seq_ce", as_error=True)
+
+    rnd = numpy.random.RandomState(7)
+    seqs = []
+    for i in range(30):
+        t = int(rnd.randint(15, 99))
+        n = 0 if i % 7 == 3 else 2 + t // 12  # some real empty seqs: they keep their EOS target
+        seqs.append({"data": rnd.randn(t, 8).astype("float32"), "classes": rnd.randint(1, 11, (n,)).astype("int32")})
+    cfg = dict(
+        task="train",
+        device="gpu",
+        random_seed=42,
+        extern_data={
+            "data": {"dims": [batch_dim, time_dim, feat_dim], "dtype": "float32"},
+            "classes": {"dims": [batch_dim, tgt_time_dim], "dtype": "int32", "sparse_dim": vocab_dim},
+        },
+        get_model=_get_model,
+        train_step=_train_step,
+        batch_size=400,
+        max_seqs=10,
+        # the dev eval between the epochs runs the dynamic-shape path, then the captured steps resume
+        num_epochs=2,
+        eval_datasets={"dev": {"class": "StaticDataset", "data": seqs, "input_dim": 8, "output_dim": 11}},
+        learning_rate=0.0,  # frozen params: each step's losses depend only on its batch
+        optimizer={"class": "adamw", "capturable": True},
+        log_grad_norm=True,
+        torch_dataloader_opts={"num_workers": 0},
+        torch_amp="bfloat16",
+        grad_scaler=None,
+    )
+    if storage == "packed":
+        cfg["packed_tensors"] = {"per_key": {"data": {"gap": 8, "align": 1}, "classes": {"gap": 2, "align": 1}}}
+    if graphc:
+        cfg["torch_cuda_graph"] = dict(
+            batch_size_bound=16,  # above max_seqs: every batch has padding seqs
+            dim_capacity={"data": 100, "classes": 16},
+            **({"packed_total_bound": {"data": 400 + 16 * 9, "classes": 16 * 18}} if storage == "packed" else {}),
+            capture_optimizer=True,
+            compile=True,
+            mask_padding_seqs=True,
+        )
+    dataset = init_dataset({"class": "StaticDataset", "data": seqs, "input_dim": 8, "output_dim": 11})
+    dataset.init_seq_order(epoch=1)
+    return Config(cfg), dataset
+
+
+def test_torch_engine_cuda_graph_mask_padding_seqs():
+    """
+    With mask_padding_seqs, the padding seqs which fill each batch up to batch_size_bound get no EOS target:
+    the per-step losses of an LM step (default normalization, also per seq) and the gradient norm
+    match the eager run, padded and packed, also after the dev eval, which matches as well
+    """
+    if not torch.cuda.is_available():
+        raise unittest.SkipTest("CUDA not available")
+    names = ["ce", "seq_ce", "grad_norm:p2"]
+    for storage in ["padded", "packed"]:
+        (losses_a, engine_a), (losses_b, engine_b) = [
+            _cuda_graph_run_step_losses(
+                *_cuda_graph_lm_eos_setup(storage, graphc=graphc), mode=storage, loss_names=names
+            )
+            for graphc in [False, True]
+        ]
+        common = sorted(set(losses_a) & set(losses_b))
+        assert {ep for ep, _ in common} == {1, 2}, common
+        for s in common:
+            for name, a, b in zip(names, losses_a[s], losses_b[s]):
+                assert abs(a - b) / max(abs(a), 1e-6) < 2e-2, f"{storage} step {s} {name}: {a} vs {b}"
+        for key in ["dev_loss_ce", "dev_loss_seq_ce"]:
+            a, b = (engine.learning_rate_control.epoch_data[1].error[key] for engine in (engine_a, engine_b))
+            assert abs(a - b) / max(abs(a), 1e-6) < 2e-2, f"{storage} {key}: {a} vs {b}"
+
+
 def test_torch_engine_cuda_graph_train():
     """whole-train-step CUDA-graph capture/replay (torch_cuda_graph), 2 epochs across an epoch boundary,
     in-graph optimizer + per-step LR schedule via the device-tensor LR input"""
     _run_cuda_graph_train(compile_=False)
+
+
+def test_torch_engine_cuda_graph_warm_runs_keep_state():
+    """
+    The runs which only warm the kernels or trace the compiled step leave no trace on the model:
+    its buffers and auxiliary parameters (a step counter here, running statistics in a real model)
+    are back afterwards, so the model sees every batch exactly once.
+    """
+    for compile_ in (False, True):
+        # the traced step with eager kernels, Inductor would only add compile time here
+        graph_opts = {"debug_aot_eager": True} if compile_ else None
+        _run_cuda_graph_train(compile_=compile_, count_steps=True, graph_opts=graph_opts)
 
 
 def test_torch_engine_cuda_graph_compile_train():
@@ -2352,10 +2621,14 @@ class _MuonLike(torch.optim.Optimizer):
     Written like the i6 Muon (i6_experiments exp2024_04_23_baselines optim_ext/muon.py), small:
     Muon (bf16 Newton-Schulz) on 2D params, Adam on the rest, with a Python-float lr
     (``alpha=`` / ``value=`` arguments) and a Python-int step counter.
+    ``ns_dtype=torch.float64`` gives the reference.
     """
 
-    def __init__(self, params, lr=2e-2, momentum=0.95, weight_decay=0.01, betas=(0.9, 0.95), eps=1e-8):
+    def __init__(
+        self, params, lr=2e-2, momentum=0.95, weight_decay=0.01, betas=(0.9, 0.95), eps=1e-8, ns_dtype=torch.bfloat16
+    ):
         super().__init__(params, dict(lr=lr, momentum=momentum, weight_decay=weight_decay, betas=betas, eps=eps))
+        self.ns_dtype = ns_dtype
 
     @torch.no_grad()
     def step(self, closure=None):
@@ -2373,7 +2646,7 @@ class _MuonLike(torch.optim.Optimizer):
                         state["momentum_buffer"] = torch.zeros_like(p)
                     buf = state["momentum_buffer"]
                     buf.mul_(group["momentum"]).add_(p.grad)
-                    x = p.grad.add(buf, alpha=group["momentum"]).bfloat16()
+                    x = p.grad.add(buf, alpha=group["momentum"]).to(self.ns_dtype)
                     x = x / (x.norm() + 1e-7)
                     for _ in range(3):
                         a = x @ x.T
@@ -2403,7 +2676,9 @@ def _adamw(params):
     return torch.optim.AdamW(params, lr=1e-2, weight_decay=0.01, capturable=params[0].is_cuda)
 
 
-def _run_optimizer_step(opt_factory, *, opts=None, num_steps=8, replace_grads_at=None, reload_at=None):
+def _run_optimizer_step(
+    opt_factory, *, opts=None, num_steps=8, replace_grads_at=None, reload_at=None, dtype=torch.float32
+):
     """
     :return: params after num_steps updates with a per-step LR schedule and random grads,
         via the plain ``optimizer.step()`` if opts is None, otherwise via :class:`OptimizerStep`;
@@ -2414,7 +2689,7 @@ def _run_optimizer_step(opt_factory, *, opts=None, num_steps=8, replace_grads_at
     device = _optimizer_step_device()
     gen = torch.Generator().manual_seed(0)
     shapes = [(32, 16), (16,), (64, 32), (32,), (8, 1, 3)]
-    params = [torch.nn.Parameter(torch.randn(s, generator=gen).to(device)) for s in shapes]
+    params = [torch.nn.Parameter(torch.randn(s, generator=gen).to(device, dtype)) for s in shapes]
     opt = opt_factory(params)
     opt_step = OptimizerStep(optimizer=opt, opts=opts) if opts is not None else None
     gen = torch.Generator(device=device).manual_seed(1)
@@ -2448,30 +2723,43 @@ def _run_optimizer_step(opt_factory, *, opts=None, num_steps=8, replace_grads_at
     return params, opt, opt_step
 
 
-def _check_optimizer_step_same_as_eager(opt_factory, opts, **kwargs):
-    """params and optimizer state (incl. the checkpoint scalars) as the plain eager optimizer.step()"""
-    ref_params, ref_opt, _ = _run_optimizer_step(opt_factory, **kwargs)
+def _check_optimizer_step(opt_factory, opts, *, ref_opt_factory=None, **kwargs):
+    """
+    Params and optimizer state (incl. the checkpoint scalars) at least as accurate as the plain eager optimizer.step(),
+    both measured against a float64 run (with ``ref_opt_factory``, default ``opt_factory``).
+    Not bitwise eager: Inductor keeps low-precision intermediates in float32.
+    """
+    ref_params, ref_opt, _ = _run_optimizer_step(ref_opt_factory or opt_factory, dtype=torch.float64, **kwargs)
+    eager_params, eager_opt, _ = _run_optimizer_step(opt_factory, **kwargs)
     params, opt, opt_step = _run_optimizer_step(opt_factory, opts=opts, **kwargs)
-    # torch < 2.12 emulates the eager bf16 rounding only partially (Muon-like: up to 4e-5 abs diff on 2.7)
-    tol = dict(rtol=1e-5, atol=1e-4 if torch.__version__ < (2, 12) else 1e-6)
-    for p_ref, p in zip(ref_params, params):
-        torch.testing.assert_close(p, p_ref, **tol)
+
+    def _check(name: str, v: torch.Tensor, v_eager: torch.Tensor, v_ref: torch.Tensor):
+        err, err_eager = (v.double() - v_ref).norm().item(), (v_eager.double() - v_ref).norm().item()
+        assert err <= 1.1 * err_eager + 1e-6 * v_ref.norm().item(), f"{name}: error {err} vs eager {err_eager}"
+
+    for i, (p_ref, p_eager, p) in enumerate(zip(ref_params, eager_params, params)):
+        _check(f"param {i}", p, p_eager, p_ref)
     ref_state = ref_opt.state_dict()["state"]
+    eager_state = eager_opt.state_dict()["state"]
     state = opt_step.state_dict_to_host_scalars(opt.state_dict())["state"]
-    assert set(state) == set(ref_state)
-    for i, s_ref in ref_state.items():
-        assert set(state[i]) == set(s_ref)
-        for k, v_ref in s_ref.items():
+    assert set(state) == set(eager_state)
+    for i, s_eager in eager_state.items():
+        assert set(state[i]) == set(s_eager)
+        for k, v_eager in s_eager.items():
             v = state[i][k]
-            if isinstance(v_ref, torch.Tensor):
-                torch.testing.assert_close(v, v_ref, **tol)
+            if isinstance(v_eager, torch.Tensor):
+                _check(f"state {i} {k}", v, v_eager, ref_state[i][k])
             else:  # Python scalar, e.g. the step counter of _MuonLike
-                assert type(v) is type(v_ref) and v == v_ref, f"state {i} {k}: {v!r} vs {v_ref!r}"
+                assert type(v) is type(v_eager) and v == v_eager, f"state {i} {k}: {v!r} vs {v_eager!r}"
     return opt_step
 
 
+def _muon_like_float64(params):
+    return _MuonLike(params, ns_dtype=torch.float64)
+
+
 def test_torch_optimizer_step_eager():
-    opt_step = _check_optimizer_step_same_as_eager(_adamw, {"compile": False, "capture": False}, reload_at=5)
+    opt_step = _check_optimizer_step(_adamw, {"compile": False, "capture": False}, reload_at=5)
     assert opt_step._graph is None
 
 
@@ -2483,7 +2771,7 @@ def test_torch_optimizer_step_dynamic_state_keys():
     opts = {"dynamic_state_keys": ["step"]}
     if not torch.cuda.is_available():
         opts.update({"compile": False, "capture": False})
-    opt_step = _check_optimizer_step_same_as_eager(_MuonLike, opts, reload_at=5)
+    opt_step = _check_optimizer_step(_MuonLike, opts, ref_opt_factory=_muon_like_float64, reload_at=5)
     state_dict = opt_step.state_dict_to_host_scalars(opt_step._optimizer.state_dict())
     for state in state_dict["state"].values():
         if "step" in state:
@@ -2504,21 +2792,21 @@ def test_torch_optimizer_step_python_scalar_state_not_selected():
 def test_torch_optimizer_step_capture():
     if not torch.cuda.is_available():
         raise unittest.SkipTest("CUDA not available")
-    opt_step = _check_optimizer_step_same_as_eager(_adamw, {"compile": False})
+    opt_step = _check_optimizer_step(_adamw, {"compile": False})
     assert opt_step._graph is not None and opt_step._num_captures == 1
 
 
 def test_torch_optimizer_step_compile_capture():
     if not torch.cuda.is_available():
         raise unittest.SkipTest("CUDA not available")
-    opt_step = _check_optimizer_step_same_as_eager(_adamw, {})
+    opt_step = _check_optimizer_step(_adamw, {})
     assert opt_step._graph is not None and (opt_step._num_traces, opt_step._num_captures) == (1, 1)
 
 
 def test_torch_optimizer_step_compile_capture_muon_like():
     if not torch.cuda.is_available():
         raise unittest.SkipTest("CUDA not available")
-    opt_step = _check_optimizer_step_same_as_eager(_MuonLike, {"dynamic_state_keys": ["step"]})
+    opt_step = _check_optimizer_step(_MuonLike, {"dynamic_state_keys": ["step"]}, ref_opt_factory=_muon_like_float64)
     assert (opt_step._num_traces, opt_step._num_captures) == (1, 1)
 
 
@@ -2526,7 +2814,7 @@ def test_torch_optimizer_step_replaced_grads():
     """new grad buffers: recapture on the new addresses, no retrace"""
     if not torch.cuda.is_available():
         raise unittest.SkipTest("CUDA not available")
-    opt_step = _check_optimizer_step_same_as_eager(_adamw, {}, replace_grads_at=5)
+    opt_step = _check_optimizer_step(_adamw, {}, replace_grads_at=5)
     assert (opt_step._num_traces, opt_step._num_captures) == (1, 2)
 
 
@@ -2534,7 +2822,9 @@ def test_torch_optimizer_step_reload():
     """checkpoint round trip: new state tensors and lr, recapture, no retrace"""
     if not torch.cuda.is_available():
         raise unittest.SkipTest("CUDA not available")
-    opt_step = _check_optimizer_step_same_as_eager(_MuonLike, {"dynamic_state_keys": ["step"]}, reload_at=5)
+    opt_step = _check_optimizer_step(
+        _MuonLike, {"dynamic_state_keys": ["step"]}, ref_opt_factory=_muon_like_float64, reload_at=5
+    )
     assert (opt_step._num_traces, opt_step._num_captures) == (1, 2)
 
 

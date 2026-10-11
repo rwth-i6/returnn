@@ -7,12 +7,15 @@ We make use of torch.utils.data.IterDataPipe.
 from __future__ import annotations
 
 from typing import TYPE_CHECKING, Callable, Optional, Iterator, Dict
+import functools
+import multiprocessing
 import sys
 import numpy
 import torch.utils.data
 from returnn.datasets.basic import Dataset as ReturnnDataset
 from returnn.datasets.util.strings import str_to_numpy_array
 from returnn.util.better_exchook import better_exchook
+from returnn.util.multi_proc_non_daemonic_spawn import NonDaemonicSpawnProcess, register_exit_hook
 
 if TYPE_CHECKING:
     import multiprocessing.sharedctypes
@@ -82,6 +85,7 @@ class ReturnnDatasetIterDataPipe(torch.utils.data.IterDataPipe):
         if not reset_callback:
             reset_callback = ReturnnDatasetResetDefaultEpochCounterCallback(returnn_dataset)
         self._reset_callback = reset_callback
+        self._worker_exit_hook_registered = False
 
     def reset(self):
         """
@@ -100,6 +104,14 @@ class ReturnnDatasetIterDataPipe(torch.utils.data.IterDataPipe):
         """
         :return: generator providing data samples in the form of a dict data_key -> data
         """
+        if (
+            not self._worker_exit_hook_registered
+            and torch.utils.data.get_worker_info() is not None
+            and isinstance(multiprocessing.current_process(), NonDaemonicSpawnProcess)
+        ):
+            # the worker owns this copy (e.g. reader procs): free it before the exit cleanup signals them
+            register_exit_hook(functools.partial(self._dataset.finish_epoch, free_resources=True))
+            self._worker_exit_hook_registered = True
         # noinspection PyBroadException
         try:
             num_seqs = self._dataset.num_seqs
