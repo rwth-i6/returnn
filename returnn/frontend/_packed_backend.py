@@ -153,6 +153,17 @@ def _device_lens(raw: PackedRawTensor) -> Optional[Tensor]:
     return lens
 
 
+def _seqs_over_raw_width(starts: Tensor, seqs_dim: Dim) -> Tuple[Tensor, Dim]:
+    """
+    :param starts: [seqs_dim], per-seq values of the buffer
+    :param seqs_dim: the seqs dim, maybe dynamic, e.g. a batch dim with padding seqs up to its capacity
+    :return: starts over a static dim of the raw width, i.e. one entry for every seq slot of the buffer
+    """
+    seqs_static = Dim(int(starts.raw_tensor.shape[0]), name="seqs_static")
+    starts, _ = rf.replace_dim(starts, in_dim=seqs_dim, out_dim=seqs_static)
+    return starts, seqs_static
+
+
 def _dev_seq_local(template: PackedRawTensor) -> Tuple[Tensor, Tensor]:
     """
     Device-lens regime (see :func:`_device_lens`): for every buffer frame,
@@ -178,9 +189,8 @@ def _dev_seq_local(template: PackedRawTensor) -> Tuple[Tensor, Tensor]:
         seq.sparse_dim = seqs_dim
         return seq, rows
     # search_sorted refuses a dynamic axis; here the buffer is sorted over its full raw width
-    # (junk slots repeat the cumsum total), so re-tag it as a static dim of that width
-    seqs_static = Dim(int(starts_rf.raw_tensor.shape[0]), name="seqs_static")
-    starts_static, _ = rf.replace_dim(starts_rf, in_dim=seqs_dim, out_dim=seqs_static)
+    # (junk slots repeat the cumsum total)
+    starts_static, seqs_static = _seqs_over_raw_width(starts_rf, seqs_dim)
     seq = rf.search_sorted(starts_static, rows, axis=seqs_static, side="right") - 1
     seq.sparse_dim = seqs_dim
     local = rows - rf.gather(starts_rf, indices=seq, axis=seqs_dim)
@@ -318,6 +328,8 @@ class PackedRawTensor:
         else:
             # a static packed dim (e.g. built by the data pipeline) yields a python int, not a tensor
             total = rf.convert_to_tensor(total, dims=(), dtype=starts.dtype, device=starts.device)
+        # one offset per seq slot of the buffer: a concat along a dynamic seqs dim would put the total after its size
+        starts, seqs_dim = _seqs_over_raw_width(starts, seqs_dim)
         end_dim = Dim(1, name="cu_seqlens_end")
         cu, cu_dim = rf.concat((starts, seqs_dim), (rf.expand_dim(total, dim=end_dim), end_dim))
         cu = rf.cast(cu, "int32")
@@ -4223,20 +4235,26 @@ class PackedBackend(Backend[PackedRawTensor]):
                 # gather along a plain axis with per-frame indices (e.g. a position drawn per frame):
                 # elementwise on the inner buffer, the packing is untouched
                 if is_packed(indices):
-                    idx = _raw(_conform_packing(indices, raw)).inner
+                    idx_raw = _raw(_conform_packing(indices, raw))
+                    # indices packed over other dims have other rows
+                    idx = idx_raw.inner if raw.same_packing(idx_raw) else None
                 elif set(indices.dims) & set(raw.orig_dims):
                     idx = _pack_like(indices, raw)
                 else:
                     idx = indices  # no packed dims involved at all
-                out = raw.rewrap(
-                    rf.gather(raw.inner, indices=idx, axis=axis, clip_to_valid=clip_to_valid), name="gather"
-                )
-                if source.sparse_dim is not None and source.sparse_dim in out.dims:
-                    out.sparse_dim = source.sparse_dim
-                return out
+                if idx is not None:
+                    out = raw.rewrap(
+                        rf.gather(raw.inner, indices=idx, axis=axis, clip_to_valid=clip_to_valid), name="gather"
+                    )
+                    if source.sparse_dim is not None and source.sparse_dim in out.dims:
+                        out.sparse_dim = source.sparse_dim
+                    return out
             return _dim_aware_call("gather", (source,), kwargs)
         if is_packed(indices):
-            idx = _raw(_conform_packing(indices, raw)).inner
+            idx_raw = _raw(_conform_packing(indices, raw))
+            if not raw.same_packing(idx_raw):
+                return _dim_aware_call("gather", (source,), kwargs)
+            idx = idx_raw.inner
         elif set(indices.dims).issubset(set(raw.orig_dims)):
             idx = _pack_like(indices, raw)
         else:
@@ -5031,7 +5049,8 @@ def flat_content(source: Tensor, *, out_dim: Optional[Dim] = None) -> Tuple[Tens
 
     :param source: packed tensor
     :param out_dim: the flat dim; created if not given
-        (dyn size = total content, capacity bounded by the physical packed dim)
+        (dyn size = total content, capacity bounded by the physical packed dim).
+        The flat tensor is sized to it (to its capacity under static tracing).
     :return: (flat tensor, out_dim)
     """
     raw = source.raw_tensor
@@ -5049,7 +5068,8 @@ def flat_content(source: Tensor, *, out_dim: Optional[Dim] = None) -> Tuple[Tens
         out_dim = Dim(total, name="packed", bounded_by=raw.packed_dim)
     elif out_dim.dyn_size_ext is None or out_dim.dyn_size_ext.raw_tensor is None:
         out_dim.dyn_size_ext = total
-    out, _ = rf.replace_dim(inner, in_dim=raw.packed_dim, out_dim=out_dim)
+    # a bound buffer (pack total_bound) differs from out_dim in general; the content is a prefix of it
+    out = rf.replace_dim_v2(inner, in_dim=raw.packed_dim, out_dim=out_dim)
     # the tail beyond the content is junk (stale buffer values) under bound shapes;
     # zero it: e.g. sparse (index) tensors would otherwise index out of bounds downstream,
     # independent of any masked reduction later

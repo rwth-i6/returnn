@@ -774,8 +774,17 @@ def test_engine_train_packed():
         logits = model.out(extern_data["data"])
         loss = rf.cross_entropy(estimated=logits, target=extern_data["classes"], axis=out_dim, estimated_type="logits")
         loss.mark_as_loss("ce")
+        # one more frame per seq, as appending EOS does: the padding seqs of tf_static_shapes must not get one
+        targets_eos, (time_eos_dim,) = rf.pad(extern_data["classes"], axes=[time_dim], padding=[(0, 1)], value=0)
+        logits_eos, _ = rf.pad(logits, axes=[time_dim], padding=[(0, 1)], value=0.0, out_dims=[time_eos_dim])
+        loss_eos = rf.cross_entropy(estimated=logits_eos, target=targets_eos, axis=out_dim, estimated_type="logits")
+        loss_eos.mark_as_loss("ce_eos", scale=0.0)
+        # per seq: a padding seq counted as a real seq changes the mean over seqs a lot
+        rf.reduce_sum(loss_eos, axis=time_eos_dim).mark_as_loss("seq_ce_eos", scale=0.0)
 
     scores = {}
+    scores_eos = {}
+    scores_seq_eos = {}
     _backend.select_backend_tf()
     prev_batch_dyn_size_ext = batch_dim.dyn_size_ext
     try:
@@ -790,6 +799,18 @@ def test_engine_train_packed():
             # static flag, but keep the plain variants unpolluted anyway
             "static_padded": {
                 "tf_static_shapes": {"batch_size_bound": 3, "dim_capacity": {"data": 100, "classes": 100}},
+            },
+            # batch bound above max_seqs: every batch has padding seqs
+            "static_padded_bound5": {
+                "tf_static_shapes": {"batch_size_bound": 5, "dim_capacity": {"data": 100, "classes": 100}},
+            },
+            # negative control: without mask_padding_seqs, the padding seqs count as real empty seqs
+            "static_padded_bound5_unmasked": {
+                "tf_static_shapes": {
+                    "batch_size_bound": 5,
+                    "dim_capacity": {"data": 100, "classes": 100},
+                    "mask_padding_seqs": False,
+                },
             },
             # packed + static: the feed itself is packed (flat total-bound buffer, _make_packed_feed);
             # max_seqs 3 seqs of len <= 100 make 300 a valid total bound
@@ -829,15 +850,22 @@ def test_engine_train_packed():
                     engine.init_train_from_config(config=config, train_data=train_data)
                     engine.train()
                     scores[name] = engine.learning_rate_control.get_epoch_error_dict(2)["train_loss:ce"]
+                    scores_eos[name] = engine.learning_rate_control.get_epoch_error_dict(2)["train_loss:ce_eos"]
+                    scores_seq_eos[name] = engine.learning_rate_control.get_epoch_error_dict(2)["train_loss:seq_ce_eos"]
             finally:
                 shutil.rmtree(model_dir, ignore_errors=True)
         print("train_loss:ce ep 2 per variant:", scores)
+        print("train_loss:ce_eos ep 2 per variant:", scores_eos)
         # ce starts around ln(2)=0.69 and the task is learnable, so anything near/above 1 is broken
         assert all(s < 1.0 for s in scores.values()), scores
         # identical batching in these variants, so identical losses up to reduce order
         # (packed_budget differs by construction: other batch composition)
-        for name in ("packed", "static_padded", "packed_static"):
+        for name in ("packed", "static_padded", "packed_static", "static_padded_bound5"):
             numpy.testing.assert_allclose(scores["padded"], scores[name], rtol=1e-4, err_msg=name)
+            numpy.testing.assert_allclose(scores_eos["padded"], scores_eos[name], rtol=1e-4, err_msg=name)
+            numpy.testing.assert_allclose(scores_seq_eos["padded"], scores_seq_eos[name], rtol=1e-4, err_msg=name)
+        # the padding seqs count as seqs with an EOS frame each
+        assert abs(scores_seq_eos["static_padded_bound5_unmasked"] / scores_seq_eos["padded"] - 1) > 0.1, scores_seq_eos
     finally:
         batch_dim.dyn_size_ext = prev_batch_dyn_size_ext
         batch_dim.size = None  # the static variants staticize the GLOBAL batch dim
@@ -1910,6 +1938,108 @@ def test_cum_concat_step_dyn_dim_static_raw_size():
 
     assert res.shape == (4, 2, 1, 2, 3), res.shape
     numpy.testing.assert_allclose(res, numpy.ones((4, 2, 1, 2, 3), "float32"), rtol=1e-6)
+
+
+def test_padding_seqs_of_a_bounded_batch_stay_empty():
+    """as in test_rf_packed: appending EOS gives every real seq one more frame, the padding seqs stay empty"""
+    import returnn.tf.compat as tf_compat
+
+    # noinspection PyProtectedMember
+    from returnn.frontend import _backend
+
+    _backend.select_backend_tf()
+    try:
+        with tf_compat.v1.Graph().as_default(), tf_compat.v1.Session().as_default() as session:
+            import tensorflow as tf
+
+            batch_size = Tensor("batch_size", dims=(), dtype="int32", raw_tensor=tf.constant(3))
+            bounded_batch_dim = Dim(batch_size, name="batch", kind=Dim.Types.Batch, capacity=5)
+            lens = Tensor("lens", dims=[bounded_batch_dim], dtype="int32", raw_tensor=tf.constant([2, 0, 3, 0, 0]))
+            time_dim = Dim(lens, name="time", capacity=3)
+            vocab_dim = Dim(6, name="vocab")
+            labels = Tensor(
+                "labels",
+                dims=[bounded_batch_dim, time_dim],
+                sparse_dim=vocab_dim,
+                dtype="int32",
+                raw_tensor=tf.ones((5, 3), dtype=tf.int32),
+            )
+            _, (time_eos_dim,) = rf.pad(labels, axes=[time_dim], padding=[(0, 1)], value=0)
+            res = session.run(time_eos_dim.dyn_size_ext.raw_tensor)
+    finally:
+        rf.select_backend_torch()
+
+    assert res.tolist() == [3, 1, 4, 0, 0], res
+
+
+def test_reduce_bounded_batch_padding_seqs():
+    """as in test_rf_reduce: the padding seqs of a bounded batch dim have no frames, in the seq mask and in every reduction"""
+    import returnn.tf.compat as tf_compat
+
+    # noinspection PyProtectedMember
+    from returnn.frontend import _backend
+
+    _backend.select_backend_tf()
+    try:
+        with tf_compat.v1.Graph().as_default(), tf_compat.v1.Session().as_default() as session:
+            import tensorflow as tf
+
+            batch_size = Tensor("batch_size", dims=(), dtype="int32", raw_tensor=tf.constant(3))
+            bounded_batch_dim = Dim(batch_size, name="batch", kind=Dim.Types.Batch, capacity=5)
+            lens = Tensor("lens", dims=[bounded_batch_dim], dtype="int32", raw_tensor=tf.constant([7, 4, 2, 0, 0]))
+            time_dim = Dim(lens, name="time", capacity=7)
+            valid = rf.compare_bc(rf.range_over_dim(time_dim), "<", lens)
+            x = rf.where(valid, 1.0, 100.0)
+            per_seq = rf.reduce_sum(x, axis=time_dim)
+            res = session.run(
+                {
+                    "mask": time_dim.get_mask().copy_compatible_to_dims_raw([bounded_batch_dim, time_dim]),
+                    "valid": valid.copy_compatible_to_dims_raw([bounded_batch_dim, time_dim]),
+                    "sum": rf.reduce_sum(x, axis=[bounded_batch_dim, time_dim]).raw_tensor,
+                    "mean": rf.reduce_mean(x, axis=[bounded_batch_dim, time_dim]).raw_tensor,
+                    "max": rf.reduce_max(x, axis=[bounded_batch_dim, time_dim]).raw_tensor,
+                    "per_seq": per_seq.raw_tensor,
+                }
+            )
+    finally:
+        rf.select_backend_torch()
+
+    assert res["mask"].tolist() == res["valid"].tolist()
+    assert (res["sum"], res["mean"], res["max"]) == (13.0, 1.0, 1.0), res
+    assert res["per_seq"].tolist() == [7.0, 4.0, 2.0, 0.0, 0.0], res
+
+
+def test_reduce_over_bounded_batch_axis():
+    """reductions over the batch axis alone, with a bounded batch dim: the padding seqs are not counted"""
+    import returnn.tf.compat as tf_compat
+
+    # noinspection PyProtectedMember
+    from returnn.frontend import _backend
+
+    _backend.select_backend_tf()
+    try:
+        with tf_compat.v1.Graph().as_default(), tf_compat.v1.Session().as_default() as session:
+            import tensorflow as tf
+
+            batch_size = Tensor("batch_size", dims=(), dtype="int32", raw_tensor=tf.constant(3))
+            bounded_batch_dim = Dim(batch_size, name="batch", kind=Dim.Types.Batch, capacity=5)
+            feat_dim = Dim(2, name="feat")
+            x = Tensor("x", dims=[bounded_batch_dim, feat_dim], dtype="float32")
+            x.raw_tensor = tf.constant([[7.0, 1.0], [4.0, 1.0], [2.0, 1.0], [0.0, 0.0], [0.0, 0.0]])
+            res = session.run(
+                {
+                    "mean": rf.reduce_mean(x, axis=bounded_batch_dim).raw_tensor,
+                    "max": rf.reduce_max(x - 10.0, axis=bounded_batch_dim).raw_tensor,
+                    "min": rf.reduce_min(x, axis=bounded_batch_dim).raw_tensor,
+                    "logsumexp": rf.reduce_logsumexp(x, axis=bounded_batch_dim).raw_tensor,
+                }
+            )
+    finally:
+        rf.select_backend_torch()
+
+    numpy.testing.assert_allclose(res["mean"], [13 / 3, 1.0], rtol=1e-6)
+    assert res["max"].tolist() == [-3.0, -9.0] and res["min"].tolist() == [2.0, 1.0], res
+    numpy.testing.assert_allclose(res["logsumexp"], numpy.log([numpy.exp([7, 4, 2]).sum(), 3 * numpy.e]), rtol=1e-6)
 
 
 def test_engine_weight_decay_modules_blacklist():

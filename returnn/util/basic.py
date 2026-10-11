@@ -244,7 +244,7 @@ class BehaviorVersion:
     See :ref:`behavior_version`.
     """
 
-    _latest_behavior_version = 34
+    _latest_behavior_version = 36
     _behavior_version = None  # type: typing.Optional[int]
     _min_behavior_version = 0  # type: int
 
@@ -2332,8 +2332,9 @@ def collect_class_init_kwargs(cls, only_with_default=False):
                 assert len(arg_spec.defaults) == len(args), arg_spec
                 for arg, default in zip(args, arg_spec.defaults):
                     kwargs[arg] = default
+            kwargs.update(arg_spec.kwonlydefaults or {})
         else:
-            for arg in args:
+            for arg in args + list(arg_spec.kwonlyargs):
                 if arg not in kwargs:
                     kwargs.append(arg)
     return kwargs
