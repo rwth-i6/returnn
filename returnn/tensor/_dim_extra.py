@@ -950,6 +950,10 @@ class _DimMixin:
         # Thus, mask size_ext itself, and set the padded values to max_idx.
         # This assumes that max_idx >= 1.
         size_ext = size_ext.copy_masked(max_idx)
+        # except along a batch dim: its padded entries are padding seqs (e.g. a batch filled up to a bound), i.e. empty
+        batch_dims = [d for d in size_ext.dims if d.is_batch_dim() and d.need_masking()]
+        if batch_dims:
+            size_ext = size_ext.copy_masked(0, dims=batch_dims)
         idx_range = backend.range_over_dim(self, device=device)
         seq_mask = rf.compare(idx_range, "<", size_ext, allow_broadcast_all_sources=True, dim_order=dim_order)
         self._extra.cache_seq_mask[cache_key] = seq_mask
