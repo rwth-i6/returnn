@@ -22,6 +22,24 @@ and not listing legacy/deprecated parameters.
 Version History
 ---------------
 
+Behavior version 37 (2026-10-11)
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+With ``weight_decay`` in the PyTorch backend optimizer,
+params with at most one dim get no weight decay,
+which covers the biases and the scale and shift of all normalization layers.
+The default ``weight_decay_modules_blacklist`` is ``(torch.nn.Embedding, rf.Embedding)``.
+
+Before, only params named ``bias`` and the params of ``torch.nn.LayerNorm`` and ``torch.nn.Embedding``
+got no weight decay,
+so e.g. the ``scale`` of :class:`rf.LayerNorm` and :class:`rf.RMSNorm`,
+``gamma`` and ``beta`` of :class:`rf.BatchNorm` and the ``weight`` of :class:`rf.Embedding` were decayed.
+
+The option ``weight_decay_modules_blacklist`` still sets the blacklist,
+and ``weight_decay_custom_include_check`` decides per param.
+
+See PR `#1923 <https://github.com/rwth-i6/returnn/pull/1923>`__.
+
 Behavior version 36 (2026-10-10)
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
