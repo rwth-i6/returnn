@@ -1060,6 +1060,17 @@ def _pack_like(x: Tensor, template: PackedRawTensor) -> Tensor:
     """
     in_dims = [d for d in template.orig_dims if d in x.dims]
     assert in_dims
+    # noinspection PyProtectedMember
+    raw_shape = x._raw_backend.get_shape_tuple_raw(x.raw_tensor)
+    if any(isinstance(raw_shape[x.dims.index(d)], int) and raw_shape[x.dims.index(d)] == 0 for d in in_dims):
+        # no sequence frames, but the template can still have junk rows, which a gather from nothing cannot serve
+        out_dims = [template.packed_dim if d == in_dims[0] else d for d in x.dims if d not in in_dims[1:]]
+        feature_dim = x.feature_dim if x.feature_dim in out_dims else None
+        out = rf.zeros(out_dims, dtype=x.dtype, sparse_dim=x.sparse_dim, feature_dim=feature_dim, device=x.device)
+        if rf.is_float_dtype(x.dtype):
+            out = out + rf.reduce_sum(x, axis=in_dims, use_mask=False)  # zero, keeps the gradient path to x
+            out.feature_dim = feature_dim
+        return out
     # Gather via per-frame coordinates instead of broadcast + pack:
     # avoids materializing the full broadcast tensor
     # (e.g. a pos enc [time, feat] would blow up to [batch, time, feat] first).
