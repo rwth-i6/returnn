@@ -774,8 +774,14 @@ def test_engine_train_packed():
         logits = model.out(extern_data["data"])
         loss = rf.cross_entropy(estimated=logits, target=extern_data["classes"], axis=out_dim, estimated_type="logits")
         loss.mark_as_loss("ce")
+        # one more frame per seq, as appending EOS does: the padding seqs of tf_static_shapes must not get one
+        targets_eos, (time_eos_dim,) = rf.pad(extern_data["classes"], axes=[time_dim], padding=[(0, 1)], value=0)
+        logits_eos, _ = rf.pad(logits, axes=[time_dim], padding=[(0, 1)], value=0.0, out_dims=[time_eos_dim])
+        loss_eos = rf.cross_entropy(estimated=logits_eos, target=targets_eos, axis=out_dim, estimated_type="logits")
+        loss_eos.mark_as_loss("ce_eos", scale=0.0)
 
     scores = {}
+    scores_eos = {}
     _backend.select_backend_tf()
     prev_batch_dyn_size_ext = batch_dim.dyn_size_ext
     try:
@@ -790,6 +796,18 @@ def test_engine_train_packed():
             # static flag, but keep the plain variants unpolluted anyway
             "static_padded": {
                 "tf_static_shapes": {"batch_size_bound": 3, "dim_capacity": {"data": 100, "classes": 100}},
+            },
+            # batch bound above max_seqs: every batch has padding seqs
+            "static_padded_bound5": {
+                "tf_static_shapes": {"batch_size_bound": 5, "dim_capacity": {"data": 100, "classes": 100}},
+            },
+            # negative control: without mask_padding_seqs, the padding seqs count as real empty seqs
+            "static_padded_bound5_unmasked": {
+                "tf_static_shapes": {
+                    "batch_size_bound": 5,
+                    "dim_capacity": {"data": 100, "classes": 100},
+                    "mask_padding_seqs": False,
+                },
             },
             # packed + static: the feed itself is packed (flat total-bound buffer, _make_packed_feed);
             # max_seqs 3 seqs of len <= 100 make 300 a valid total bound
@@ -829,15 +847,20 @@ def test_engine_train_packed():
                     engine.init_train_from_config(config=config, train_data=train_data)
                     engine.train()
                     scores[name] = engine.learning_rate_control.get_epoch_error_dict(2)["train_loss:ce"]
+                    scores_eos[name] = engine.learning_rate_control.get_epoch_error_dict(2)["train_loss:ce_eos"]
             finally:
                 shutil.rmtree(model_dir, ignore_errors=True)
         print("train_loss:ce ep 2 per variant:", scores)
+        print("train_loss:ce_eos ep 2 per variant:", scores_eos)
         # ce starts around ln(2)=0.69 and the task is learnable, so anything near/above 1 is broken
         assert all(s < 1.0 for s in scores.values()), scores
         # identical batching in these variants, so identical losses up to reduce order
         # (packed_budget differs by construction: other batch composition)
-        for name in ("packed", "static_padded", "packed_static"):
+        for name in ("packed", "static_padded", "packed_static", "static_padded_bound5"):
             numpy.testing.assert_allclose(scores["padded"], scores[name], rtol=1e-4, err_msg=name)
+            numpy.testing.assert_allclose(scores_eos["padded"], scores_eos[name], rtol=1e-4, err_msg=name)
+        # the padding seqs got an EOS frame each, and more of them per batch than with bound 3
+        assert abs(scores_eos["static_padded_bound5_unmasked"] - scores_eos["padded"]) > 1e-2, scores_eos
     finally:
         batch_dim.dyn_size_ext = prev_batch_dyn_size_ext
         batch_dim.size = None  # the static variants staticize the GLOBAL batch dim
