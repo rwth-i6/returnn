@@ -1341,18 +1341,21 @@ class GraphCapturedTrainStep:
                 bufs = all_raws[n_params:]
                 data_ph = bufs[: len(data_keys)]
                 lens_ph = bufs[len(data_keys) : len(data_keys) + len(lens_keys)]
-                saved = (dict(self._data_bufs), dict(self._lens_bufs), self._step_t.raw_tensor)
+                saved = (dict(self._data_bufs), dict(self._lens_bufs), self._step_t.raw_tensor, self._batch_size_buf)
                 try:
                     for k, t in zip(data_keys, data_ph):
                         self._data_bufs[k] = t
                     for k, t in zip(lens_keys, lens_ph):
                         self._lens_bufs[k] = t
-                    self._step_t.raw_tensor = bufs[-1]
+                    self._step_t.raw_tensor = bufs[len(data_keys) + len(lens_keys)]
+                    if self._batch_size_buf is not None:
+                        self._batch_size_buf = bufs[-1]
                     return step_core(all_raws[:n_params])
                 finally:
                     self._data_bufs.update(saved[0])
                     self._lens_bufs.update(saved[1])
                     self._step_t.raw_tensor = saved[2]
+                    self._batch_size_buf = saved[3]
 
             return aot_function(step_core_buf_inputs_v212, fw_compiler=backend)
         return aot_function(step_core, fw_compiler=backend)
@@ -1466,18 +1469,21 @@ class GraphCapturedTrainStep:
             bufs = all_raws[n_params:]
             data_ph = bufs[: len(data_keys)]
             lens_ph = bufs[len(data_keys) : len(data_keys) + len(lens_keys)]
-            saved = (dict(self._data_bufs), dict(self._lens_bufs), self._step_t.raw_tensor)
+            saved = (dict(self._data_bufs), dict(self._lens_bufs), self._step_t.raw_tensor, self._batch_size_buf)
             try:
                 for k, t in zip(data_keys, data_ph):
                     self._data_bufs[k] = t
                 for k, t in zip(lens_keys, lens_ph):
                     self._lens_bufs[k] = t
-                self._step_t.raw_tensor = bufs[-1]
+                self._step_t.raw_tensor = bufs[len(data_keys) + len(lens_keys)]
+                if self._batch_size_buf is not None:
+                    self._batch_size_buf = bufs[-1]
                 return core(all_raws[:n_params])
             finally:
                 self._data_bufs.update(saved[0])
                 self._lens_bufs.update(saved[1])
                 self._step_t.raw_tensor = saved[2]
+                self._batch_size_buf = saved[3]
 
         return aot_function(
             core_buf_inputs,
@@ -1548,7 +1554,7 @@ class GraphCapturedTrainStep:
     def _compiled_call_args(self, raws: List[torch.Tensor]) -> List[torch.Tensor]:
         """
         The compiled step's runtime inputs: the param raws, plus (partitioned mode,
-        or torch >= 2.12) the data/lens buffers and the step tensor.
+        or torch >= 2.12) the data/lens buffers, the step tensor and the batch size buffer (mask_padding_seqs).
         Those are closure state of step_core,
         which would otherwise be baked and constant-folded
         (seq lens frozen at trace-time values -> wrong losses).
@@ -1561,6 +1567,7 @@ class GraphCapturedTrainStep:
             + [self._data_bufs[k] for k in data_keys]
             + [self._lens_bufs[k] for k in lens_keys]
             + [self._step_buf]
+            + ([self._batch_size_buf] if self._batch_size_buf is not None else [])
         )
 
     def _ensure_compiled(self) -> Callable[[List[torch.Tensor]], tuple]:
