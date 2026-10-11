@@ -4546,6 +4546,19 @@ def test_random_mask_equals_the_per_mask_comparison_without_its_size():
         assert max_numel.value < len(lens) * pos.shape[1] * rows, (layout, max_numel.value, pos.shape)
 
 
+def test_is_finite_infinite_neg_infinite():
+    rf.select_backend_torch()
+    x, batch_dim, time_dim, feat_dim = _make_input(batch_size=2, seq_lens=(4, 3), feat=3)
+    x.raw_tensor[0, 1, 0] = float("inf")
+    x.raw_tensor[1, 2, 1] = float("-inf")
+    x.raw_tensor[0, 3, 2] = float("nan")
+    for fn in (rf.is_finite, rf.is_infinite, rf.is_neg_infinite):
+        for layout in (dict(), dict(gap=2), dict(total_bound=12)):
+            out = fn(packed.pack(x, **layout))
+            assert packed.is_packed(out) and out.dtype == "bool", (fn.__name__, layout, out)
+            _assert_equal_non_padded(rf.cast(out, "float32"), rf.cast(fn(x), "float32"), batch_dim, time_dim)
+
+
 if __name__ == "__main__":
     better_exchook.install()
     if len(sys.argv) <= 1:

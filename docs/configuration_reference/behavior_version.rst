@@ -22,7 +22,7 @@ and not listing legacy/deprecated parameters.
 Version History
 ---------------
 
-Behavior version 38 (2026-10-07)
+Behavior version 39 (2026-10-07)
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 On the PyTorch backend, RF causal attention without an attention mask tensor
@@ -41,7 +41,7 @@ to override in both directions.
 
 See PR `#1850 <https://github.com/rwth-i6/returnn/pull/1850>`__.
 
-Behavior version 37 (2026-10-07)
+Behavior version 38 (2026-10-07)
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 With PyTorch distributed training (``torch_distributed``),
@@ -54,7 +54,7 @@ to override in both directions.
 
 See PR `#1855 <https://github.com/rwth-i6/returnn/pull/1855>`__.
 
-Behavior version 36 (2026-10-10)
+Behavior version 37 (2026-10-10)
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 The default weight-decay module blacklist of the PyTorch backend optimizer
@@ -72,6 +72,24 @@ to override this explicitly in both directions
 (e.g. ``["torch.nn.LayerNorm", "torch.nn.Embedding"]`` to keep the old behavior).
 
 See PR `#1923 <https://github.com/rwth-i6/returnn/pull/1923>`__.
+
+Behavior version 36 (2026-10-10)
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Static shapes, where each batch is filled up to ``batch_size_bound`` with zero-length padding seqs
+(PyTorch ``torch_cuda_graph``, TF ``tf_static_shapes``, JAX ``jax_static_shapes`` with packed keys):
+the batch dim keeps the real batch size as its dyn size, with ``batch_size_bound`` as its capacity,
+so the padding seqs are masked.
+
+Before, the batch dim was static (the bound), or its size was the bound,
+and the padding seqs were not distinguishable from real empty seqs.
+E.g. appending EOS to the targets via ``rf.pad`` gave each padding seq an artificial EOS target,
+which entered the loss, the gradients and the normalization.
+(JAX padded keys always kept the real batch size.)
+
+There is also the option ``mask_padding_seqs: bool`` in each of these to override in both directions.
+
+See PR `#1980 <https://github.com/rwth-i6/returnn/pull/1980>`__.
 
 Behavior version 35 (2026-10-07)
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~

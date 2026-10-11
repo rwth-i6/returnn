@@ -35,7 +35,7 @@ see :class:`DistributeFilesDataset`.
 This dataset is one of the exceptions
 which also supports sharding.
 
-Since behavior version 37, the evaluation is split over the ranks.
+Since behavior version 38, the evaluation is split over the ranks.
 Before, every eval dataset was evaluated on rank 0 alone, while the other ranks waited.
 ``torch_distributed = {..., "eval_on_all_ranks": False}`` (or ``True``) overrides the behavior version.
 Every eval dataset which supports a predefined seq order (:func:`Dataset.supports_predefined_seq_order`)

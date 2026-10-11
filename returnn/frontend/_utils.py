@@ -338,7 +338,7 @@ def should_use_fused_causal_attention() -> bool:
         which never materializes the energies, instead of the generic composition.
         The fused kernel reassociates the reduction, so its values differ from the generic path
         within the float tolerance.
-        Config option ``rf_fused_causal_attention: bool``, else behavior_version >= 38.
+        Config option ``rf_fused_causal_attention: bool``, else behavior_version >= 39.
     """
     from returnn.config import get_global_config
 
@@ -355,7 +355,7 @@ def should_use_fused_causal_attention() -> bool:
 
     from returnn.util.basic import BehaviorVersion
 
-    return BehaviorVersion.get() >= 38
+    return BehaviorVersion.get() >= 39
 
 
 def keep_dtype(out: Tensor, dtype: str) -> Tensor:

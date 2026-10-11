@@ -921,7 +921,7 @@ class Updater:
           Those can be RF modules or pure PyTorch modules.
           The types can be specified as string (e.g. ``"torch.nn.LayerNorm"``) or as the type itself.
           Default: ``(torch.nn.LayerNorm, torch.nn.Embedding)``,
-          since behavior version 36 all normalization layers and embeddings of RF and PyTorch.
+          since behavior version 37 all normalization layers and embeddings of RF and PyTorch.
 
         :param optim_class: Optimizer class.
         :param optimizer_opts: Optimizer configuration specified by the user. Might be modified inplace here.
@@ -992,7 +992,7 @@ class Updater:
 
         # Distinguish between parameters with and without weight_decay/L2 regularization.
         # Biases and the params of modules in the blacklist get no weight decay.
-        # Before behavior version 36, the default blacklist covers only the native
+        # Before behavior version 37, the default blacklist covers only the native
         # torch.nn.LayerNorm/torch.nn.Embedding, not the RF equivalents (see wrap_user_blacklist_wd_modules).
         wd_named = []
         no_wd_named = []
@@ -1040,10 +1040,10 @@ def wrap_user_blacklist_wd_modules(
     This supports both pure PyTorch modules (e.g. "torch.nn.LayerNorm")
     and RF modules (e.g. "rf.LayerNorm"), which can be specified as strings or types.
     Default: ``(torch.nn.LayerNorm, torch.nn.Embedding)``,
-    since behavior version 36 all normalization layers and embeddings of RF and PyTorch.
+    since behavior version 37 all normalization layers and embeddings of RF and PyTorch.
     """
     if mods is None:
-        if BehaviorVersion.get() >= 36:
+        if BehaviorVersion.get() >= 37:
             return _norm_and_embedding_modules()
         return torch.nn.LayerNorm, torch.nn.Embedding
     assert isinstance(mods, (list, tuple)), f"invalid blacklist_weight_decay_modules {mods!r}"
