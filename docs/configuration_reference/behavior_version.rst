@@ -22,6 +22,73 @@ and not listing legacy/deprecated parameters.
 Version History
 ---------------
 
+Behavior version 36 (2026-10-10)
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Static shapes, where each batch is filled up to ``batch_size_bound`` with zero-length padding seqs
+(PyTorch ``torch_cuda_graph``, TF ``tf_static_shapes``, JAX ``jax_static_shapes`` with packed keys):
+the batch dim keeps the real batch size as its dyn size, with ``batch_size_bound`` as its capacity,
+so the padding seqs are masked.
+
+Before, the batch dim was static (the bound), or its size was the bound,
+and the padding seqs were not distinguishable from real empty seqs.
+E.g. appending EOS to the targets via ``rf.pad`` gave each padding seq an artificial EOS target,
+which entered the loss, the gradients and the normalization.
+(JAX padded keys always kept the real batch size.)
+
+There is also the option ``mask_padding_seqs: bool`` in each of these to override in both directions.
+
+See PR `#1980 <https://github.com/rwth-i6/returnn/pull/1980>`__.
+
+Behavior version 35 (2026-10-07)
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+PyTorch bucket batching (``torch_batching`` with ``BucketOrderingIterDataPipe``):
+``complete_frac`` and ``seq_idx`` keep the input order across the emitted batches,
+so ``epoch_continuous`` does not go backwards.
+This affects e.g. ``dynamic_learning_rate``.
+
+Before, each seq kept its own values,
+and the partially filled buckets emitted at the end of the epoch brought the progress back to an earlier point.
+
+There is also the option ``monotonic_data_keys`` of ``BucketOrderingIterDataPipe``
+to override in both directions.
+
+See PR `#1942 <https://github.com/rwth-i6/returnn/pull/1942>`__.
+
+Behavior version 34 (2026-10-06)
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+:func:`rf.moments` with ``use_mask=False`` takes its mean over all frames too, like the variance.
+Before, the mean was always masked while the variance was not,
+so the variance was taken around the mean of other frames.
+
+:class:`rf.BatchNorm` passes its ``use_mask`` on to :func:`rf.moments`.
+Before, the statistics of its generic path were always masked.
+So with ``use_mask=False``, the distributed :class:`rf.BatchNorm` took them without the padding,
+while the local one (the fused op) takes them over all frames, including the padding.
+
+There is also the global config option ``rf_moments_use_fixed_masking: bool``
+to override in both directions.
+
+See PR `#1915 <https://github.com/rwth-i6/returnn/pull/1915>`__.
+
+Behavior version 33 (2026-10-06)
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+PyTorch distributed training (``torch_distributed``):
+the train loop uses the mean of the ``complete_frac`` of all ranks,
+so ``epoch_continuous`` is the same on every rank.
+This affects ``dynamic_learning_rate`` and a callable ``accum_grad_multiple_step``.
+
+Before, each rank used its own ``complete_frac``, which differs between ranks
+as each rank consumes a different number of sequences per step.
+A schedule on ``epoch_continuous`` then applied a different learning rate on each rank,
+and the model replicas diverged although the gradients are averaged.
+
+There is also the option ``sync_complete_frac: bool`` in ``torch_distributed`` to override in both directions.
+With ``reduce_type`` ``"param"``, it applies in the steps where the parameters are synced.
+
 Behavior version 32 (2026-10-02)
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 

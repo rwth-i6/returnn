@@ -551,6 +551,21 @@ class SentencePieces(Vocabulary):
     def __repr__(self):
         return "%s(%r)" % (self.__class__.__name__, self._opts)
 
+    def __getstate__(self):
+        state = self.__dict__.copy()
+        # Pickling SentencePieceProcessor keeps only the model and resets the encode options (add_eos etc.).
+        state["sp"] = self.sp.serialized_model_proto()
+        return state
+
+    def __setstate__(self, state):
+        import sentencepiece as spm  # noqa
+
+        self.__dict__.update(state)
+        opts = self._opts.copy()
+        for k in ["model_file", "model_proto", "control_symbols", "user_defined_symbols"]:
+            opts.pop(k, None)
+        self.sp = spm.SentencePieceProcessor(model_proto=state["sp"], **opts)  # noqa
+
     def _parse_vocab(self):
         self.num_labels = self.sp.vocab_size()
         # Do not load labels/vocab here. This is not really needed.

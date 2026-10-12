@@ -449,6 +449,11 @@ def init_backend_engine(*, config_opts: Optional[Dict[str, Any]] = None):
                 file=log.v3,
             )
 
+        # Before the datasets exist, so their worker processes inherit the affinity.
+        from returnn.torch.util.gpu_cpu_affinity import set_gpu_local_cpu_affinity_from_config
+
+        set_gpu_local_cpu_affinity_from_config(config)
+
         diagnose_gpu.print_relevant_env_vars(file=log.v2)
         diagnose_gpu.print_available_devices(file=log.v2)
 

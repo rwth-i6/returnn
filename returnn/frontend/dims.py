@@ -245,16 +245,51 @@ def dim_match_priority_when_needed(dim: Dim, *other_dims: Dim) -> Dim:
 
 
 def num_elements_of_shape(
-    dims: Union[Dim, Sequence[Dim]], *, use_mask: bool = True, device: Optional[str] = None
+    dims: Union[Dim, Sequence[Dim]],
+    *,
+    use_mask: bool = True,
+    device: Optional[str] = None,
+    source: Optional[Tensor] = None,
+    distributed: bool = False,
 ) -> Union[int, Tensor]:
     """
     :param dims:
-    :param use_mask:
-    :param device: only for the case when we return a Tensor. by default, this is CPU (just as the size tensor).
+    :param use_mask: True: only the elements which are not padding.
+        False: also the padding, as far as a reduction with ``use_mask=False`` covers it,
+        which depends on how the reduced tensor is stored (see ``source``).
+    :param device: only for the case when we return a Tensor. by default, this is CPU (just as the size tensor),
+        or with ``source``, the device of ``source``, where the count is needed to normalize the reduction.
+    :param source: the tensor which is reduced over ``dims`` (e.g. by :func:`reduce` with the same ``use_mask``).
+        The count then covers exactly the elements which that reduction covers,
+        e.g. packed storage holds no padding on its packed dims.
+        Without it, ``use_mask=False`` counts the padded layout.
+    :param distributed: if True, the count summed over the distributed workers (Torch DDP),
+        as for :func:`reduce` with ``distributed=True``.
+        The result is then always an int64 Tensor, on ``device``. No effect on the value without a process group.
     :return: num elements of a tensor of shape dims, properly considering masking
     """
     if isinstance(dims, Dim):
         dims = [dims]
+    if distributed:
+        if device is None and source is not None:
+            device = source.device
+        n = num_elements_of_shape(dims, use_mask=use_mask, device=device, source=source)
+        if isinstance(n, Tensor):
+            # use_mask=False ignores the device, so copy explicitly
+            n = rf.cast(rf.copy_to_device(n, device), "int64")
+        else:
+            # static dims give a plain int, which is the same on every worker
+            n = rf.constant(n, dims=(), dtype="int64", device=device)
+        # noinspection PyProtectedMember
+        return n._raw_backend.reduce_distributed(n, mode="sum")
+    if source is not None:
+        if any(dim not in source.dims for dim in dims):
+            raise ValueError(f"num_elements_of_shape: dims {dims} not all in source {source}")
+        # noinspection PyProtectedMember
+        backend = source._raw_backend or global_backend
+        return backend.num_elements_of_shape(
+            source, dims, use_mask=use_mask, device=device if device is not None else source.device
+        )
     if not use_mask:
         n = 1
         for dim in dims:

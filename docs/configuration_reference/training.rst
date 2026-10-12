@@ -66,6 +66,15 @@ save_interval
 
 start_epoch
     An integer or string specifying the epoch to start the training at. The default is 'auto'.
+    With 'auto', the training continues after the last existing checkpoint of ``model``,
+    or starts at epoch 1 if there is none.
+    With ``start_epoch = N`` for ``N > 1``, the training continues from the checkpoint of epoch ``N - 1``,
+    including the optimizer state, the global train step, the learning rate schedule and the dataset epoch.
+    ``load_epoch`` can be set in addition but must then be ``N - 1``; anything else is an error.
+    ``start_epoch = 1`` starts a new training and ignores existing checkpoints of ``model``.
+    A model given by ``load`` (or by ``load_epoch`` together with ``start_epoch = 1``) is then only imported:
+    the parameters are loaded, but the training starts at epoch 1 without the optimizer state.
+    See also :ref:`model_loading`.
 
 stop_on_nonfinite_train_score
     If set to ``False``, the training will not be interrupted if a single update step has a loss with NaN of Inf

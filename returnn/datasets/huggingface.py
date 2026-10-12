@@ -273,8 +273,13 @@ class HuggingFaceDataset(CachedDataset2):
         if seq_order is not None:
             self._seq_order = seq_order
         elif seq_list is not None:
-            all_tags = self.get_all_tags()
-            self._seq_order = [all_tags.index(tag) for tag in seq_list]
+            tag_to_idx = {}
+            for corpus_seq_idx, tag in enumerate(self.get_all_tags()):
+                tag_to_idx.setdefault(tag, corpus_seq_idx)  # first occurrence, for duplicate tags
+            try:
+                self._seq_order = [tag_to_idx[tag] for tag in seq_list]
+            except KeyError as exc:
+                raise ValueError(f"{self}: seq_list tag {exc.args[0]!r} not in dataset") from exc
         elif epoch is None:
             self._seq_order = ()
         else:

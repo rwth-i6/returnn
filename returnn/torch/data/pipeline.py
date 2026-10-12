@@ -21,10 +21,13 @@ other PyTorch datasets more directly, including also HuggingFace datasets.
 
 from __future__ import annotations
 import bisect
+import collections
 import functools
 import itertools
-from typing import Optional, Any, Sequence, Tuple, Union, List, Dict, Callable
+from typing import Optional, Any, Sequence, Tuple, Union, List, Dict, Deque, Callable
+import os
 import sys
+import threading
 from copy import deepcopy
 
 import numpy
@@ -33,9 +36,10 @@ import torch.utils.data
 
 from returnn.config import Config
 from returnn.log import log
-from returnn.util.basic import NumbersDict, get_fwd_compat_kwargs
+from returnn.util.basic import BehaviorVersion, NumbersDict, get_fwd_compat_kwargs
 from returnn.util.debug import install_subproc_faulthandler
 from returnn.datasets.packing import packed_batch_config, packed_batch_key_opts
+from .pin_memory import PinMemoryDataLoader
 
 
 def create_tensor(array: numpy.ndarray) -> Union[torch.Tensor, numpy.ndarray]:
@@ -436,6 +440,7 @@ class BucketOrderingIterDataPipe(torch.utils.data.IterDataPipe):
         length_key: str,
         random_bucket_prob: float = 0.0,
         seed: Optional[int] = None,
+        monotonic_data_keys: Optional[Sequence[str]] = None,
     ):
         """
         :param dataset: dataset to apply bucket batching to
@@ -447,9 +452,17 @@ class BucketOrderingIterDataPipe(torch.utils.data.IterDataPipe):
             a randomly chosen still-fitting bucket.
             This increases seq length variation within the buckets at the cost of slighly more padding.
         :param seed: random seed
+        :param monotonic_data_keys: data keys whose values keep the input order across the emitted batches,
+            like in :class:`ShufflingDataPipe`.
+            With ``("complete_frac", "seq_idx")``, the ``epoch_continuous`` progress
+            (e.g. for a learning rate schedule) does not go backwards when a bucket is emitted late.
+            None (default): ``("complete_frac", "seq_idx")`` since behavior version 35, else ``()``.
         """
         self._dataset = dataset
         self._length_key = length_key
+        if monotonic_data_keys is None:
+            monotonic_data_keys = ("complete_frac", "seq_idx") if BehaviorVersion.get() >= 35 else ()
+        self._monotonic_data_keys = tuple(monotonic_data_keys)
         assert random_bucket_prob >= 0.0
         self._random_bucket_prob = random_bucket_prob
         self._rng = numpy.random.RandomState()
@@ -465,6 +478,7 @@ class BucketOrderingIterDataPipe(torch.utils.data.IterDataPipe):
         """:return: generator applying bucket ordering on the data"""
         buckets: List[List[Dict[str, numpy.ndarray]]] = [[] for _ in range(len(self._max_seq_lens))]
         buckets_full_counter = [0 for _ in range(len(buckets))]
+        monotonic_values: Deque[Dict[str, Any]] = collections.deque()  # in input order, of not yet emitted seqs
 
         for data_dict in self._dataset:
             data_dict: Dict[str, numpy.ndarray]
@@ -479,18 +493,30 @@ class BucketOrderingIterDataPipe(torch.utils.data.IterDataPipe):
                 and self._rng.rand() < self._random_bucket_prob
             ):
                 bucket_idx = self._rng.randint(bucket_idx, len(self._max_bucket_sizes))
+            if self._monotonic_data_keys:
+                monotonic_values.append({key: data_dict[key] for key in self._monotonic_data_keys})
             buckets[bucket_idx].append(data_dict)
             if len(buckets[bucket_idx]) >= self._max_bucket_sizes[bucket_idx]:
-                yield buckets[bucket_idx]
+                yield self._with_monotonic_values(buckets[bucket_idx], monotonic_values)
                 buckets[bucket_idx] = []
                 buckets_full_counter[bucket_idx] += 1
 
         non_empty_buckets = [b for b in buckets if b]
-        yield from non_empty_buckets
+        for bucket in non_empty_buckets:
+            yield self._with_monotonic_values(bucket, monotonic_values)
+        assert not monotonic_values
 
         # we do not count the buckets w/ leftover data as they were not completely filled
         description_str = ", ".join(f"{limit}: {cnt}" for limit, cnt in zip(self._max_seq_lens, buckets_full_counter))
         print(f"Batching buckets full: {description_str}", file=log.v4)
+
+    def _with_monotonic_values(
+        self, batch: List[Dict[str, numpy.ndarray]], monotonic_values: Deque[Dict[str, Any]]
+    ) -> List[Dict[str, numpy.ndarray]]:
+        if not self._monotonic_data_keys:
+            return batch
+        # new dicts, as the input dicts might be shared with the dataset
+        return [{**data_dict, **monotonic_values.popleft()} for data_dict in batch]
 
     def __getitem__(self, index):
         raise Exception(f"{self.__class__.__name__}.__getitem__ is not supported")
@@ -779,6 +805,62 @@ def create_data_loader_from_batches(
         # User-defined
         **loader_opts,
     )
+
+
+def shutdown_data_loader(data_loader: Union[torch.utils.data.DataLoader, PinMemoryDataLoader]):
+    """
+    Stops the persistent workers of the DataLoader, which it otherwise keeps until it is freed,
+    and the pinning thread of a :class:`returnn.torch.data.pin_memory.PinMemoryDataLoader`.
+    Batches which the workers prefetched but which were not consumed are dropped.
+    Can be called multiple times. A later ``iter()`` starts new workers.
+
+    Without this, a DataLoader which is still alive at interpreter exit leaves its workers to the atexit cleanup
+    of :class:`returnn.util.multi_proc_non_daemonic_spawn.NonDaemonicSpawnProcess` (SIGINT):
+    the workers then do not cancel their result queue, and hang on the unread batches until the next signal.
+
+    :param data_loader: e.g. via :func:`create_data_loader_from_batches`.
+        Must not be iterated concurrently (e.g. by another thread).
+    """
+    if isinstance(data_loader, PinMemoryDataLoader):
+        data_loader.close()  # first: its thread uses the DataLoader iterator
+        data_loader = data_loader.data_loader
+        if not isinstance(data_loader, torch.utils.data.DataLoader):
+            return  # any other iterable, no workers
+    assert isinstance(data_loader, torch.utils.data.DataLoader), f"shutdown_data_loader: got {data_loader!r}"
+    # No public DataLoader API for this: it only keeps the iterator with persistent workers (else this is None).
+    # noinspection PyProtectedMember
+    data_iter = data_loader._iterator
+    if data_iter is None:
+        return
+    data_loader._iterator = None
+    # A worker which already left its loop (e.g. it got the SIGINT of Ctrl+C) ignores the shutdown signal,
+    # and at exit waits until its unread batches are written to the pipe. So drop them while it stops.
+    # Not with the Torch pin thread: it reads the pipe itself, and a second reader can leave it hanging.
+    stop_drain = threading.Event()
+    drain_thread = None
+    # noinspection PyProtectedMember
+    if not data_iter._pin_memory:
+        # noinspection PyProtectedMember,PyUnresolvedReferences
+        drain_thread = threading.Thread(
+            target=_drain_conn, args=(data_iter._worker_result_queue._reader, stop_drain), daemon=True
+        )
+        drain_thread.start()
+    try:
+        # noinspection PyProtectedMember,PyUnresolvedReferences
+        data_iter._shutdown_workers()  # only the multiprocessing iterator has it, the one with persistent workers
+    finally:
+        if drain_thread is not None:
+            stop_drain.set()
+            drain_thread.join()
+
+
+def _drain_conn(conn, stop_event: threading.Event):
+    # Raw bytes, not unpickled: no shared memory tensors rebuilt from the stopping workers.
+    # Not per message (recv_bytes): that blocks on the partial message of a killed worker.
+    fd = conn.fileno()
+    while not stop_event.is_set():
+        if conn.poll(0.01) and not os.read(fd, 65536):
+            return  # end of the pipe, no writer left
 
 
 class _DataLoaderWorkerInitFunc:

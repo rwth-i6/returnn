@@ -132,7 +132,8 @@ def reduce_logmeanexp(source: Tensor[T], *, axis: Union[Dim, Sequence[Dim]], use
     :return: tensor with axis removed
     """
     s = reduce_logsumexp(source, axis=axis, use_mask=use_mask)
-    return s - rf.safe_log(rf.cast(rf.num_elements_of_shape(axis, use_mask=use_mask, device=s.device), s.dtype))
+    n = rf.num_elements_of_shape(axis, use_mask=use_mask, device=s.device, source=source)
+    return s - rf.safe_log(rf.cast(n, s.dtype))
 
 
 def reduce_any(source: Tensor[T], *, axis: Union[Dim, Sequence[Dim]], use_mask: bool = True) -> Tensor[T]:

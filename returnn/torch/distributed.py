@@ -14,7 +14,7 @@ import torch
 from torch.nn.parallel import DistributedDataParallel
 
 from returnn.config import Config
-from returnn.util.basic import CollectionReadCheckCovered
+from returnn.util.basic import BehaviorVersion, CollectionReadCheckCovered
 
 _logger = logging.getLogger("returnn.torch.distributed")
 
@@ -73,6 +73,10 @@ class DistributedContext:
             _logger.info("reduce_type grad_explicit")
         else:
             raise ValueError(f"invalid reduce_type {self._reduce_type!r}")
+
+        self._sync_complete_frac: Optional[bool] = self._opts.get("sync_complete_frac", None)
+        if self._sync_complete_frac is None:
+            self._sync_complete_frac = BehaviorVersion.get() >= 33
 
         self._check_no_unknown_opts()
 
@@ -165,6 +169,14 @@ class DistributedContext:
         # noinspection protected-member
         for grad, reduced in zip(grads, torch._utils._unflatten_dense_tensors(flat, grads)):
             grad.copy_(reduced)
+
+    def sync_complete_frac(self) -> bool:
+        """
+        :return: whether the train loop replaces the rank-local ``complete_frac`` by its mean over the ranks
+            in each step where it syncs (:func:`should_sync_now`),
+            so that ``epoch_continuous`` (e.g. for ``dynamic_learning_rate``) is the same on every rank
+        """
+        return self._sync_complete_frac
 
     def should_sync_now(self, *, epoch_step_idx: int) -> bool:
         """

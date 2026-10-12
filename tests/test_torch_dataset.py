@@ -7,6 +7,7 @@ from typing import Optional, Any, Dict
 import sys
 import unittest
 from multiprocessing.managers import SyncManager
+import torch
 from torch.utils.data import DataLoader
 
 from returnn.config import Config, get_global_config, global_config_ctx
@@ -186,6 +187,44 @@ def test_DistributeFilesDataset_no_worker_proc():
     assert res == ref
 
 
+def test_LmDataset_SentencePieces_add_eos():
+    # The dataset with its vocab is pickled into the spawned worker proc.
+    import tempfile
+    from test_GeneratingDataset import generate_sentencepiece_model
+
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        with open(f"{tmp_dir}/corpus.txt", "w") as f:
+            f.write("HELLO WORLD\nGOOD MORNING\nHELLO\n")
+        opts = {
+            "class": "LmDataset",
+            "corpus_file": f"{tmp_dir}/corpus.txt",
+            "orth_vocab": {
+                "class": "SentencePieces",
+                "model_file": generate_sentencepiece_model(tmp_dir),
+                "add_eos": True,
+            },
+        }
+
+        ref_dataset = init_dataset(opts)
+        ref_dataset.init_seq_order(epoch=1)
+        ref = []
+        seq_idx = 0
+        while ref_dataset.is_less_than_num_seqs(seq_idx):
+            ref_dataset.load_seqs(seq_idx, seq_idx + 1)
+            ref.append(ref_dataset.get_data(seq_idx, "data").tolist())
+            seq_idx += 1
+        assert len(ref) == 3 and all(seq[-1] == ref_dataset.orth_vocab.eos_label_id for seq in ref)
+
+        dataset = init_dataset(opts)
+        mp_manager = multi_proc_manager_with_watchdog.create_manager()
+        loader = get_loader_from_returnn_dataset(dataset, mp_manager, batch_size=100, max_seqs=3)
+        res = []
+        for batch in loader:
+            for b in range(batch["data"].shape[0]):
+                res.append(batch["data"][b, : batch["data:seq_len"][b]].tolist())
+        assert res == ref
+
+
 def test_func_in_global_config():
     # Very similar to test_MultiProcDataset_via_config.
     # https://github.com/rwth-i6/returnn/issues/1495
@@ -279,6 +318,165 @@ def test_MultiProcDataset_HDFDataset():
         assert c == n
 
 
+class _BigTagBatches(torch.utils.data.IterableDataset):
+    """the tag of each batch goes through the pipe of the worker (unlike tensors), and is larger than its buffer"""
+
+    def __iter__(self):
+        for i in range(10):
+            yield {"data": torch.full((2,), i), "tag": "x" * 100000}
+
+
+def _check_shutdown_data_loader(*, pin_memory: bool):
+    """
+    Stops the persistent worker with an unread batch, also repeatedly,
+    and also when the worker already left its loop on its own SIGINT (Ctrl+C goes to the whole process group):
+    then it does not get the shutdown signal, but must not wait on its unread batch until the join timeout (5 s)
+    """
+    import signal
+    import time
+    from returnn.util.multi_proc_non_daemonic_spawn import NonDaemonicSpawnContext
+
+    loader = DataLoader(
+        _BigTagBatches(),
+        batch_size=None,
+        num_workers=1,
+        persistent_workers=True,
+        pin_memory=pin_memory,
+        multiprocessing_context=NonDaemonicSpawnContext(),
+    )
+    data_pipeline.shutdown_data_loader(loader)  # nothing started yet
+    for interrupted in [False, True]:
+        next(iter(loader))
+        data_iter = loader._iterator
+        worker = data_iter._workers[0]
+        if pin_memory:  # the Torch pin thread reads the pipe: wait until it has the next batch
+            end_time = time.monotonic() + 60
+            while data_iter._data_queue.qsize() == 0:
+                assert time.monotonic() < end_time
+                time.sleep(0.01)
+        else:  # the worker sends the next batch
+            assert data_iter._worker_result_queue._reader.poll(timeout=60)
+        if interrupted:
+            os.kill(worker.pid, signal.SIGINT)
+            time.sleep(0.5)  # the worker leaves its loop
+        start_time = time.monotonic()
+        data_pipeline.shutdown_data_loader(loader)
+        assert time.monotonic() - start_time < 3
+        # no atexit handler left which would signal it at interpreter exit
+        assert not worker.is_alive() and worker.exitcode == 0 and worker._at_exit_cleanup_handler is None
+        assert loader._iterator is None
+        data_pipeline.shutdown_data_loader(loader)
+
+
+def test_shutdown_data_loader():
+    _check_shutdown_data_loader(pin_memory=False)
+
+
+def test_shutdown_data_loader_torch_pin_memory():
+    """with the Torch pin thread, which reads the worker results itself"""
+    if not torch.cuda.is_available():
+        raise unittest.SkipTest("CUDA not available")
+    _check_shutdown_data_loader(pin_memory=True)
+
+
+def test_shutdown_data_loader_drain_conn():
+    """the drain of the worker results stops on request also within a partial message, and at the end of the pipe"""
+    import multiprocessing
+    import struct
+    import threading
+    from test_MultiProcDataset import timeout
+
+    reader, writer = multiprocessing.Pipe(duplex=False)
+    writer.send_bytes(b"x" * 10)
+    os.write(writer.fileno(), struct.pack("!i", 8) + b"1234")  # e.g. a killed worker: 4 of 8 bytes sent
+    stop_event = threading.Event()
+    timer = threading.Timer(0.1, stop_event.set)
+    with timeout(10):
+        timer.start()
+        data_pipeline._drain_conn(reader, stop_event)
+        writer.close()
+        data_pipeline._drain_conn(reader, threading.Event())
+    timer.join()
+    reader.close()
+
+
+def test_shutdown_data_loader_pin_memory_wrapped_iterable():
+    """:class:`PinMemoryDataLoader` can wrap any iterable, not only a DataLoader"""
+    from returnn.torch.data.pin_memory import PinMemoryDataLoader
+
+    data_pipeline.shutdown_data_loader(PinMemoryDataLoader([], device="cuda:0"))  # no CUDA needed before iter()
+
+
+class _ReaderProcDataset(Task12AXDataset):
+    """owns a reader proc, like :class:`NemoSpeechDataset`, and logs its start and how it is freed"""
+
+    def __init__(self, *, log_file: str, **kwargs):
+        super().__init__(**kwargs)
+        self.log_file = log_file
+        self._reader_proc = None
+        self._reader_conn = None
+
+    def _log(self, line: str):
+        with open(self.log_file, "a") as f:
+            f.write(line + "\n")
+
+    def init_seq_order(self, epoch=None, seq_list=None, seq_order=None):
+        """init seq order, start the reader proc"""
+        if epoch is not None and self._reader_proc is None:
+            from returnn.util.multi_proc_non_daemonic_spawn import NonDaemonicSpawnContext
+
+            ctx = NonDaemonicSpawnContext()
+            self._reader_conn, child_conn = ctx.Pipe()
+            self._reader_proc = ctx.Process(target=_reader_proc_loop, args=(child_conn,))
+            self._reader_proc.start()
+            child_conn.close()
+            self._log(f"start {self._reader_proc.pid}")
+        return super().init_seq_order(epoch=epoch, seq_list=seq_list, seq_order=seq_order)
+
+    def finish_epoch(self, *, free_resources: bool = False):
+        """finish epoch, stop the reader proc"""
+        import multiprocessing.util
+
+        super().finish_epoch(free_resources=free_resources)
+        if free_resources and self._reader_proc is not None:
+            is_exiting = multiprocessing.util.is_exiting()
+            self._reader_conn.send("exit")
+            self._reader_proc.join()
+            self._log(f"free {is_exiting} {self._reader_proc.exitcode}")
+            self._reader_proc = None
+
+    def __del__(self):
+        if self._reader_proc is not None:
+            self._reader_conn.send("exit")  # without join, like NemoSpeechDataset
+
+
+def _reader_proc_loop(conn):
+    conn.recv()
+
+
+def test_data_loader_worker_exit_frees_dataset():
+    """
+    The DataLoader worker frees its dataset copy (e.g. reader procs) when it ends,
+    before the multiprocessing exit cleanup (which would signal the reader), and not between epochs
+    """
+    import tempfile
+
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        log_file = f"{tmp_dir}/log.txt"
+        dataset = _ReaderProcDataset(log_file=log_file, num_seqs=10)
+        wrapped_dataset = returnn_dataset_wrapper.ReturnnDatasetIterDataPipe(dataset)
+        batches_dataset = data_pipeline.BatchingIterDataPipe(wrapped_dataset, batch_size=5, max_seqs=2)
+        loader = data_pipeline.create_data_loader_from_batches(batches_dataset, {"num_workers": 1})
+        for _ in range(2):  # the persistent worker reuses the dataset copy
+            next(iter(loader))  # leaves unread batches
+        worker = loader._iterator._workers[0]
+        data_pipeline.shutdown_data_loader(loader)
+        assert worker.exitcode == 0
+        with open(log_file) as f:
+            lines = f.read().splitlines()
+    assert len(lines) == 2 and lines[0].startswith("start ") and lines[1] == "free False 0", lines
+
+
 def test_batching_packed_batch_cost_bounds_a_product_of_lengths():
     """
     A monotonic RNN-T lattice has frames times prefixes cells per sequence, a product no per-key length
@@ -344,6 +542,47 @@ def test_batching_packed_batch_cost_meets_only_its_own_limit():
                 seqs, batch_size=None, max_seqs=100, packed_batch_size=700, packed_batch_cost={"lattice": cells}
             )
         )
+
+
+def test_bucket_ordering_monotonic_data_keys():
+    """
+    A partially filled bucket is emitted at the end, after batches of later seqs.
+    With monotonic_data_keys (default since behavior version 35), complete_frac and seq_idx keep the input order,
+    while the payload and seq_tag stay with their seq.
+    """
+    import pickle
+    import numpy
+
+    lens = [8, 1, 20, 1, 1, 1]  # the seq of len 20 is too long for all buckets and dropped
+    seqs = [
+        {
+            "data": numpy.full((n,), i, dtype="int32"),
+            "seq_tag": numpy.array(f"seq-{i}"),
+            "seq_idx": numpy.array(i),
+            "complete_frac": numpy.array((i + 1) / len(lens)),
+        }
+        for i, n in enumerate(lens)
+    ]
+    seqs_orig = [dict(seq) for seq in seqs]
+
+    batches = list(
+        data_pipeline.BucketOrderingIterDataPipe(
+            seqs, buckets=[(2, 2), (8, 2)], length_key="data", monotonic_data_keys=()
+        )
+    )
+    assert [[int(s["seq_idx"]) for s in b] for b in batches] == [[1, 3], [4, 5], [0]]  # original values
+    assert [max(float(s["complete_frac"]) for s in b) for b in batches] == [4 / 6, 1.0, 1 / 6]
+
+    pipe = data_pipeline.BucketOrderingIterDataPipe(
+        seqs, buckets=[(2, 2), (8, 2)], length_key="data", monotonic_data_keys=("complete_frac", "seq_idx")
+    )
+    for pipe_ in [pipe, pipe, pickle.loads(pickle.dumps(pipe))]:  # repeated iteration, pickling
+        batches = list(pipe_)
+        assert [[str(s["seq_tag"]) for s in b] for b in batches] == [["seq-1", "seq-3"], ["seq-4", "seq-5"], ["seq-0"]]
+        assert [[int(s["data"][0]) for s in b] for b in batches] == [[1, 3], [4, 5], [0]]
+        assert [[int(s["seq_idx"]) for s in b] for b in batches] == [[0, 1], [3, 4], [5]]
+        assert [max(float(s["complete_frac"]) for s in b) for b in batches] == [2 / 6, 5 / 6, 1.0]
+    assert all(seq == seq_orig for seq, seq_orig in zip(seqs, seqs_orig)), "input dicts must not be modified"
 
 
 if __name__ == "__main__":
