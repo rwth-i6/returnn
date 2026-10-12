@@ -901,7 +901,7 @@ class _ShardProducer(threading.Thread):
         self._call: Optional[Tuple[Callable, Dict[str, Any]]] = None
         self._result: Any = None
         self._exc: Optional[BaseException] = None
-        self._stop = False
+        self._stop_requested = False
 
     def run(self):
         """thread main"""
@@ -909,9 +909,9 @@ class _ShardProducer(threading.Thread):
         try:
             while True:
                 with stream.cond:
-                    while not self._stop and self._call is None and not stream.prefetch_possible():
+                    while not self._stop_requested and self._call is None and not stream.prefetch_possible():
                         stream.cond.wait()
-                    if self._stop:
+                    if self._stop_requested:
                         return
                     call = self._call
                 if call is None:
@@ -949,7 +949,7 @@ class _ShardProducer(threading.Thread):
     def stop(self):
         """stop after the current prefetch step"""
         with self.stream.cond:
-            self._stop = True
+            self._stop_requested = True
             self.stream.cond.notify_all()
 
 
