@@ -829,6 +829,29 @@ class Backend(Generic[T]):
         raise NotImplementedError
 
     @staticmethod
+    def ctc_best_path_packed_raw(
+        *,
+        logits: T,
+        seq_starts: T,
+        logits_seq_lens: T,
+        max_seq_len: int,
+        targets: T,
+        targets_seq_lens: T,
+        label_loop: bool,
+        logits_normalize: bool,
+        blank_index: int,
+        edges_bound: Optional[int],
+    ) -> T:
+        """
+        CTC best path over a PACKED (total,dim) logits buffer, on raw tensors,
+        via the backend's packed Viterbi native op (see :class:`returnn.native_op.FastViterbiPackedOp`),
+        the operands as for :func:`ctc_loss_packed_raw`.
+
+        :return: alignment, (total_time,), int32, blank_index on every frame outside the sequences
+        """
+        raise NotImplementedError
+
+    @staticmethod
     def have_edit_distance() -> bool:
         """
         :return: whether we have an edit_distance implementation
