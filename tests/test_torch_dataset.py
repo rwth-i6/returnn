@@ -400,6 +400,13 @@ def test_shutdown_data_loader_drain_conn():
     reader.close()
 
 
+def test_shutdown_data_loader_pin_memory_wrapped_iterable():
+    """:class:`PinMemoryDataLoader` can wrap any iterable, not only a DataLoader"""
+    from returnn.torch.data.pin_memory import PinMemoryDataLoader
+
+    data_pipeline.shutdown_data_loader(PinMemoryDataLoader([], device="cuda:0"))  # no CUDA needed before iter()
+
+
 class _ReaderProcDataset(Task12AXDataset):
     """owns a reader proc, like :class:`NemoSpeechDataset`, and logs its start and how it is freed"""
 

@@ -12,6 +12,16 @@ device
     Although RETURNN will automatically detect and use a GPU if available,
     a specific device can be enforced by setting this parameter.
 
+gpu_local_cpu_affinity
+    Default ``True`` (PyTorch backend, Linux). The process (and the dataset worker processes it starts)
+    is restricted to the CPUs local to its GPU, i.e. the NUMA node or CPU socket the GPU is attached to,
+    within the CPUs the job may use. Otherwise the host side of a step
+    (batch handoff, copies to the device) also runs on the far socket.
+    In distributed training, ranks whose GPUs share a NUMA node or socket get disjoint slices of its CPUs.
+    Skipped (logged) when it would leave the process with less than its share of the allowed CPUs,
+    e.g. a cpuset not aligned to the GPU, when the topology cannot be read,
+    or when the launcher already bound the ranks to different CPUs (``srun`` per-task binding, ``mpirun``).
+
 extern_data (former num_outputs)
     Defines the source/target dimensions of the data as a dictionary of dictionaries describing data streams.
     The standard source data is called ``data`` by default,

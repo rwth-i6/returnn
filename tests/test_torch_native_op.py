@@ -17,6 +17,7 @@ from returnn.torch.util.native_op import (
     get_ctc_fsa_fast_bw,
     ctc_loss,
     ctc_loss_packed,
+    ctc_best_path,
     edit_distance,
     optimal_completion_edit_distance,
     optimal_completion_edit_distance_per_successor,
@@ -346,6 +347,34 @@ def test_ctc_loss_grad_padded_vs_packed():
     # the packed path never even sees the padded frames; the padded path must zero them
     assert leaf_pad.grad[~mask].abs().max().item() == 0.0
     assert leaf_packed.grad[~mask].abs().max().item() == 0.0
+
+
+def test_ctc_loss_over_allocated_time():
+    """
+    Compares loss and grads of :func:`ctc_loss` on logits with more frames than the longest sequence
+    against the logits trimmed to the longest sequence.
+    """
+    n_batch, n_time, max_len, n_tgt, n_classes = 3, 12, 8, 3, 6
+    torch.manual_seed(1)
+    logits = torch.randn(n_time, n_batch, n_classes)
+    args = dict(
+        logits_seq_lens=torch.tensor([max_len, 6, 5], dtype=torch.int32),
+        targets=torch.randint(0, n_classes - 1, (n_batch, n_tgt), dtype=torch.int32),
+        targets_seq_lens=torch.tensor([3, 2, 0], dtype=torch.int32),
+        logits_time_major=True,
+        blank_index=n_classes - 1,
+    )
+    for max_approx in [False, True]:
+        leaf = logits.clone().requires_grad_(True)
+        leaf_trimmed = logits[:max_len].clone().requires_grad_(True)
+        loss = ctc_loss(logits=leaf, max_approx=max_approx, **args)
+        loss_trimmed = ctc_loss(logits=leaf_trimmed, max_approx=max_approx, **args)
+        torch.testing.assert_close(loss, loss_trimmed)
+
+        loss.sum().backward()
+        loss_trimmed.sum().backward()
+        torch.testing.assert_close(leaf.grad[:max_len], leaf_trimmed.grad)
+        assert leaf.grad[max_len:].abs().max().item() == 0.0
 
 
 def test_ctc_loss_packed_over_allocated_bounds():
@@ -826,6 +855,36 @@ def test_fast_viterbi_cuda():
     if not torch.cuda.is_available():
         raise SkipTest("CUDA not available")
     test_fast_viterbi(device=torch.device("cuda"))
+
+
+def test_ctc_best_path_cuda_gives_the_cpu_path():
+    """
+    Every CUDA call of :func:`ctc_best_path` gives the path of the CPU op.
+    The kernel keeps the best edge of a state in one cell which it swaps atomically,
+    so the read of that cell has to be atomic too, else a reader sees a torn score and drops the better edge.
+    Only batches of a realistic size show it.
+    """
+    if not torch.cuda.is_available():
+        raise SkipTest("CUDA not available")
+    n_batch, seq_len, n_tgt, n_classes = 8, 507, 110, 10241
+    gen = torch.Generator().manual_seed(5)
+    for _ in range(2):
+        seq_lens = torch.randint(1, seq_len + 1, (n_batch,), generator=gen, dtype=torch.int32)
+        tgt_lens = torch.randint(0, n_tgt + 1, (n_batch,), generator=gen, dtype=torch.int32)
+        tgt_lens = torch.minimum(tgt_lens, seq_lens // 2)
+        args = dict(
+            logits=torch.log_softmax(torch.randn(seq_len, n_batch, n_classes, generator=gen), dim=-1),
+            logits_seq_lens=seq_lens,
+            targets=torch.randint(0, n_classes - 1, (n_batch, n_tgt), generator=gen, dtype=torch.int32),
+            targets_seq_lens=tgt_lens,
+        )
+        opts = dict(logits_time_major=True, logits_normalize=False, blank_index=n_classes - 1)
+        ref = ctc_best_path(**args, **opts)
+        valid = torch.arange(seq_len)[:, None] < seq_lens[None, :]
+        cuda_args = {k: v.cuda() for k, v in args.items()}
+        for call in range(30):
+            out = ctc_best_path(**cuda_args, **opts).cpu()
+            assert torch.equal(out[valid], ref[valid]), f"call {call} differs from the cpu path"
 
 
 def test_fast_viterbi_rnd():
@@ -1625,5 +1684,32 @@ def test_fast_baum_welch_fake_tensor_mode():
     with mode:
         fwdbwd_fake, obs_scores_fake = op(*fake_args, n_states)
     for fake, real in [(fwdbwd_fake, fwdbwd_real), (obs_scores_fake, obs_scores_real)]:
+        assert isinstance(fake, FakeTensor)
+        assert fake.shape == real.shape and fake.dtype == real.dtype
+
+
+def test_ctc_loss_and_best_path_fake_tensor_mode():
+    """
+    Runs :func:`ctc_loss` (full-sum and max approximation) and :func:`ctc_best_path` under FakeTensor tracing,
+    see :func:`test_fast_baum_welch_fake_tensor_mode`.
+    """
+    if not hasattr(torch.library, "register_fake"):
+        raise SkipTest("torch.library.register_fake not available (torch < 2.4)")
+    from torch._subclasses.fake_tensor import FakeTensor, FakeTensorMode
+
+    n_batch, seq_len, n_tgt, n_classes = 3, 8, 3, 6
+    torch.manual_seed(1)
+    args = dict(
+        logits=torch.randn(seq_len, n_batch, n_classes),
+        logits_seq_lens=torch.tensor([8, 6, 5], dtype=torch.int32),
+        targets=torch.randint(0, n_classes - 1, (n_batch, n_tgt), dtype=torch.int32),
+        targets_seq_lens=torch.tensor([3, 2, 0], dtype=torch.int32),
+    )
+    opts = dict(logits_time_major=True, blank_index=n_classes - 1)
+    for func, func_opts in [(ctc_loss, {}), (ctc_loss, dict(max_approx=True)), (ctc_best_path, {})]:
+        real = func(**args, **opts, **func_opts)
+        mode = FakeTensorMode()
+        with mode:
+            fake = func(**{k: mode.from_tensor(v) for k, v in args.items()}, **opts, **func_opts)
         assert isinstance(fake, FakeTensor)
         assert fake.shape == real.shape and fake.dtype == real.dtype

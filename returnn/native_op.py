@@ -5039,31 +5039,30 @@ class FastViterbiOp(NativeOpGenBase):
         "04_select_max": """
       DEV_FUNC
       void select_max(IdxAndVal* a, IdxAndVal b) {
-        // fast path
-        if(b.val < a->val)
-          return;
         // Maybe we could use double compare-and-swap (https://stackoverflow.com/questions/55941382/).
         // But not sure how.
         // So instead, we use double-wide compare-and-swap.
+        // The cell is also read atomically, as one 64 bit word: a read through the packed struct
+        // can see a torn update of another thread, i.e. a score which never existed.
         union U {
           IdxAndVal s;
           unsigned long long int v64;
         };
+        U updated;
+        updated.s = b;
+        U prev;
+        prev.v64 = elem_atomic_cas((unsigned long long int*) a, 0ULL, 0ULL);
         while(true) {
-          U prev;
-          prev.s = *a;
           if(b.val < prev.s.val)
             return;
           if(b.val == prev.s.val && b.idx >= prev.s.idx)
             return;
-          U updated;
-          updated.s = b;
-
           U old;
           old.v64 = elem_atomic_cas((unsigned long long int*) a, prev.v64, updated.v64);
           if(old.v64 == prev.v64)
             return;
-          // Not the same, so repeat.
+          // Not the same, so repeat with what is there now.
+          prev = old;
         }
       }
     """,

@@ -824,6 +824,9 @@ def shutdown_data_loader(data_loader: Union[torch.utils.data.DataLoader, PinMemo
     if isinstance(data_loader, PinMemoryDataLoader):
         data_loader.close()  # first: its thread uses the DataLoader iterator
         data_loader = data_loader.data_loader
+        if not isinstance(data_loader, torch.utils.data.DataLoader):
+            return  # any other iterable, no workers
+    assert isinstance(data_loader, torch.utils.data.DataLoader), f"shutdown_data_loader: got {data_loader!r}"
     # No public DataLoader API for this: it only keeps the iterator with persistent workers (else this is None).
     # noinspection PyProtectedMember
     data_iter = data_loader._iterator
