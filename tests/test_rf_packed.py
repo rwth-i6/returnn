@@ -3270,6 +3270,19 @@ def test_operand_of_the_same_sequences_in_another_layout():
         valid = (torch.arange(4)[None, :] < torch.tensor([4, 3])[:, None])[:, :, None]
         torch.testing.assert_close(grad, torch.where(valid, scale.raw_tensor, 0.0))
 
+    # as traced: bound-sized buffers in different layouts on both sides, the operand is regapped into the source's
+    time_dim.capacity = 4
+    with rf.set_static_traceable_ctx():
+        xp = packed.pack(x, gap=1, total_bound=12)
+        packed._warned_fallback_ops.clear()
+        out_gather = rf.gather(xp, indices=packed.pack(idx, gap=3, align=2, total_bound=20), axis=feat_dim)
+        out_where = rf.where(packed.pack(scale, total_bound=10) > 0.5, xp, 0.0)
+        assert not packed._warned_fallback_ops, packed._warned_fallback_ops
+    for out in (out_gather, out_where):
+        assert out.raw_tensor.same_packing(xp.raw_tensor), out.raw_tensor
+    _assert_equal_non_padded(out_gather, rf.gather(x, indices=idx, axis=feat_dim), batch_dim, time_dim)
+    _assert_equal_non_padded(out_where, rf.where(scale > 0.5, x, 0.0), batch_dim, time_dim)
+
     # other sequences: the scale of a per-frame gradient has no meaning there
     label_dim = Dim(
         Tensor("labels", dims=[batch_dim], dtype="int32", raw_tensor=torch.tensor([3, 2], dtype=torch.int32)),
