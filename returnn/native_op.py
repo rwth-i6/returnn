@@ -3872,7 +3872,7 @@ class FastBaumWelchPackedOp(NativeOpGenBase):
                               unsigned* from_buffer, unsigned* to_buffer, unsigned* emission_idxs,
                               float* weight_buffer, float* am_scores, float* edge_buffer, float* state_scratch) {
         // Block seq runs the recursion of sequence seq over its own frames:
-        // its states in shared memory (in state_scratch when they do not fit there), its edges strided over the threads.
+        // its states in shared memory (in state_scratch if they do not fit), its edges strided over the threads.
         // The forward pass keeps the score of every edge per frame, the backward pass adds the score from the end,
         // normalize_packed_seq then sums and writes them out, all frames in parallel.
         // Three state buffers rotate, so one sync per frame suffices: a frame reads one, adds into the next,
