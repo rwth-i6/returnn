@@ -586,9 +586,7 @@ class _ShardStream:
 
         self._requested_epoch: Optional[int] = None
         self._buffer: deque[_ShardItem] = deque()
-        # Guards the buffer and the requested epoch, shared with the command thread of the worker proc,
-        # see get_buffered and _ShardProducer. All other state is only used by the producer.
-        self.cond = threading.Condition()
+        self.cond = threading.Condition()  # guards the buffer and requested epoch, see _ShardProducer
         self._plans: Dict[int, _EpochPlan] = {}  # epoch -> plan, for the requested and production epoch
         self._load_plan: Optional[_EpochPlan] = None  # see load
         # Production state.
