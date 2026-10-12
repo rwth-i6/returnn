@@ -5535,11 +5535,9 @@ def _gather_per_seq(source: Tensor, raw: PackedRawTensor, *, indices: Tensor, cl
     starts, starts_dim = raw.seq_starts(device=dev)
     assert starts_dim == seqs_dim, (starts_dim, seqs_dim)
     idx = rf.cast(rf.copy_to_device(indices, dev), starts.dtype)
-    lens = _device_lens(raw)
-    if lens is None:
-        lens = rf.copy_to_device(raw.seq_lens, dev)
+    lens = raw.orig_dims[-1].get_size_tensor(device=dev)
     if clip_to_valid:
-        idx = rf.clip_by_value(idx, 0, rf.maximum(rf.cast(lens, idx.dtype) - 1, 0))
+        idx = _clip_into_seqs(raw, idx, seq=rf.range_over_dim(seqs_dim, device=dev))
     rows = rf.combine_bc(starts, "+", idx)
     rows = rf.clip_by_value(rows, 0, _last_row(raw.packed_dim, rows.dtype))
     out = rf.gather(raw.inner, indices=rows, axis=raw.packed_dim)
