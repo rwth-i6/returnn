@@ -3,6 +3,7 @@ tests for MultiProcDataset
 """
 
 from __future__ import annotations
+from typing import Iterator, TYPE_CHECKING
 import _setup_test_env  # noqa
 import sys
 import numpy
@@ -15,6 +16,9 @@ from returnn.datasets.multi_proc import MultiProcDataset
 from returnn.datasets.map import MapDatasetBase
 from test_HDFDataset import generate_hdf_from_other
 from test_Dataset import dummy_iter_dataset, compare_dataset_seqs
+
+if TYPE_CHECKING:
+    from returnn.tensor import TensorDict
 
 
 def _sig_alarm_handler(signum, frame):
@@ -80,6 +84,45 @@ def test_MultiProcDataset_n3_b5_shuffle_sharding():
         assert len(hdf_dataset_seqs) == len(mp_dataset_seqs)
         assert set(seq.seq_idx for seq in hdf_dataset_seqs) == set(seq.seq_idx for seq in mp_dataset_seqs)
         assert set(seq.seq_tag for seq in hdf_dataset_seqs) == set(seq.seq_tag for seq in mp_dataset_seqs)
+
+
+def _drop_every_third_len(input_iter: Iterator[TensorDict], **kwargs) -> Iterator[TensorDict]:
+    for tdict in input_iter:
+        if tdict.data["data"].raw_tensor.shape[0] % 3 != 0:
+            yield tdict
+
+
+def _repeat_by_len(input_iter: Iterator[TensorDict], **kwargs) -> Iterator[TensorDict]:
+    for tdict in input_iter:
+        for _ in range(tdict.data["data"].raw_tensor.shape[0] // 4 + 1):
+            yield tdict
+
+
+def test_MultiProcDataset_sharding_unequal_num_seqs():
+    # A dataset which filters or repeats seqs gives every worker another number of seqs.
+    hdf_fn = generate_hdf_from_other(
+        {
+            "class": "StaticDataset",
+            "data": [{"data": numpy.full((n, 1), n, dtype="float32")} for n in range(1, 11)],
+            "output_dim": {"data": (1, 2)},
+        },
+        use_cache=False,
+    )
+    hdf_dataset_dict = {"class": "HDFDataset", "files": [hdf_fn], "seq_ordering": "sorted_reverse"}
+
+    for stream in (_drop_every_third_len, _repeat_by_len):
+        post_dataset_dict = {"class": "PostprocessingDataset", "dataset": hdf_dataset_dict, "map_seq_stream": stream}
+        post_dataset_tags = sorted(seq.seq_tag for seq in dummy_iter_dataset(init_dataset(post_dataset_dict)))
+
+        with timeout():
+            mp_dataset = MultiProcDataset(
+                dataset=post_dataset_dict, num_workers=2, buffer_size=5, sharding_method="dedicated"
+            )
+            mp_dataset.initialize()
+            # In the second epoch, every worker must start again from its first seq.
+            for epoch in [1, 2]:
+                mp_dataset_seqs = dummy_iter_dataset(mp_dataset, epoch=epoch)
+                assert sorted(seq.seq_tag for seq in mp_dataset_seqs) == post_dataset_tags
 
 
 def test_MultiProcDataset_meta():

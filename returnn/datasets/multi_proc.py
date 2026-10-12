@@ -77,6 +77,10 @@ class MultiProcDataset(CachedDataset2):
         self._seq_order_proc = None  # type: Optional[mp.Process]
         self._worker_procs = None  # type: Optional[List[mp.Process]]
         self._cur_max_complete_frac: Optional[float] = None
+        # For sharding_method "dedicated", see _get_data_seq_dedicated.
+        self._next_seq_idx = 0
+        self._worker_next_seq_idx: List[int] = []
+        self._workers_with_seqs: deque[int] = deque()
 
         if _meta_info_cache:
             # This allows to skip the lazy init in self.initialize().
@@ -407,6 +411,9 @@ class MultiProcDataset(CachedDataset2):
 
         self._lazy_init()
         self._cur_max_complete_frac = 0.0
+        self._next_seq_idx = 0
+        self._worker_next_seq_idx = [0] * self.num_workers
+        self._workers_with_seqs = deque(range(self.num_workers))
 
         if self._sharding_method == "dedicated":
             for worker_conn in self._worker_parent_conns:
@@ -436,12 +443,39 @@ class MultiProcDataset(CachedDataset2):
 
         return True
 
+    def _get_data_seq_dedicated(self, seq_idx: int) -> Optional[DatasetSeq]:
+        """
+        With dedicated sharding, the workers can have different numbers of seqs,
+        e.g. when the dataset filters seqs.
+        So the seqs are taken round-robin from the workers which have seqs left, until no worker has any.
+
+        :param seq_idx: must not go backwards
+        :return: the seq as the worker sent it, or None if seq_idx >= num_seqs
+        """
+        assert seq_idx >= self._next_seq_idx, f"{self}: _collect_single_seq must be done monotonically"
+        data = None
+        while self._next_seq_idx <= seq_idx and self._workers_with_seqs:
+            worker_idx = self._workers_with_seqs.popleft()
+            worker = self._worker_parent_conns[worker_idx]
+            worker.send(("get_data_seq", {"seq_idx": self._worker_next_seq_idx[worker_idx]}))
+            msg, data = worker.recv()
+            assert msg == "data_seq"
+            if data is None:
+                continue
+            self._worker_next_seq_idx[worker_idx] += 1
+            self._workers_with_seqs.append(worker_idx)
+            self._next_seq_idx += 1
+        return data
+
     def _collect_single_seq(self, seq_idx: int) -> Optional[DatasetSeq]:
-        worker_idx = seq_idx % self.num_workers
-        worker = self._worker_parent_conns[worker_idx]
-        worker.send(("get_data_seq", {"seq_idx": seq_idx // self.num_workers}))
-        msg, data = worker.recv()
-        assert msg == "data_seq"
+        if self._sharding_method == "dedicated":
+            data = self._get_data_seq_dedicated(seq_idx)
+        else:
+            worker_idx = seq_idx % self.num_workers
+            worker = self._worker_parent_conns[worker_idx]
+            worker.send(("get_data_seq", {"seq_idx": seq_idx // self.num_workers}))
+            msg, data = worker.recv()
+            assert msg == "data_seq"
         if data is None:
             return None
         assert isinstance(data, DatasetSeq)
