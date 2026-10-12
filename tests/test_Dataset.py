@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 from typing import Any, Iterator, TYPE_CHECKING, List, Tuple, Dict, Optional
+import functools
 import multiprocessing
 import os
 import sys
+import threading
 import _setup_test_env  # noqa
 import unittest
 import numpy
@@ -2312,6 +2314,71 @@ def test_NemoSpeechDataset_metadata_no_audio():
         assert dataset.num_seqs == len(ref) and num_loads == 2  # bounds check loads only the checked seq
     finally:
         MonoCut.load_audio = orig_load_audio
+
+
+def _nemo_speech_blocking_worker_loop(shard_opts, conn, *, started, release, block_at: int, fail_at: int):
+    # The worker proc loop, where audio load number block_at waits for release, and load number fail_at raises.
+    # noinspection PyUnresolvedReferences,PyPackageRequirements
+    from lhotse.cut import MonoCut
+    from returnn.datasets import nemo_speech
+
+    orig_load_audio = MonoCut.load_audio
+    num_loads = 0
+
+    def _load_audio(*args, **kwargs):
+        nonlocal num_loads
+        num_loads += 1
+        if num_loads == block_at:
+            started.set()
+            assert release.wait(timeout=60)
+        if num_loads == fail_at:
+            raise ValueError("test: audio load failed")
+        return orig_load_audio(*args, **kwargs)
+
+    MonoCut.load_audio = _load_audio
+    nemo_speech._shard_worker_proc_loop(shard_opts, conn)
+
+
+def test_NemoSpeechDataset_worker_serves_buffered():
+    # The worker proc serves a buffered seq while it loads the audio of a later seq,
+    # and an error in that load reaches the parent.
+    _get_nemo_speech_data()  # first, skips if NeMo Speech is not available
+    from returnn.datasets import nemo_speech
+    from returnn.datasets.nemo_speech import NemoSpeechDataset
+
+    config = _get_nemo_speech_config(weights=[1.0, 2.0, 0.5])
+    opts = dict(nemo_config=config, draws_per_epoch=20)
+    ref = dummy_iter_dataset(NemoSpeechDataset(**opts, use_worker_procs=False), epoch=1)
+    started, release = nemo_speech._mp.Event(), nemo_speech._mp.Event()
+    orig_loop = nemo_speech._shard_worker_proc_loop
+    # Audio loads in the worker: seq 0 (requested), seq 1 (prefetch), seq 2 (prefetch, blocked), seq 3 (fails).
+    nemo_speech._shard_worker_proc_loop = functools.partial(
+        _nemo_speech_blocking_worker_loop, started=started, release=release, block_at=3, fail_at=4
+    )
+    dataset = None
+    try:
+        dataset = NemoSpeechDataset(**opts)
+        dataset.init_seq_order(epoch=1)
+        dataset.load_seqs(0, 1)
+        _nemo_speech_assert_same_seqs(dataset.added_data, ref[:1])
+        assert started.wait(timeout=60)
+        thread = threading.Thread(target=dataset.load_seqs, args=(1, 2))
+        thread.start()
+        thread.join(timeout=30)
+        assert not thread.is_alive(), "seq 1 not served while the worker loads seq 2"
+        _nemo_speech_assert_same_seqs(dataset.added_data, ref[1:2])
+        release.set()
+        try:
+            dataset.load_seqs(2, 4)
+        except EOFError:
+            pass  # worker proc died
+        else:
+            raise AssertionError("worker error not propagated")
+    finally:
+        nemo_speech._shard_worker_proc_loop = orig_loop
+        release.set()
+        if dataset is not None:
+            dataset.finish_epoch(free_resources=True)
 
 
 def _nemo_speech_high_quality(cut, **_kwargs) -> bool:
