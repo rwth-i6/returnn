@@ -87,8 +87,8 @@ class ReturnnDatasetIterDataPipe(torch.utils.data.IterDataPipe):
         :param returnn_dataset: dataset to be wrapped
         :param reset_callback: callback function to be called when the dataset is reset, e.g. to init the epoch.
             ReturnnDatasetResetDefaultEpochCounterCallback(returnn_dataset) is the default.
-        :param shard_workers: with DataLoader ``num_workers > 1``, whether every worker yields its own shard of the data,
-            so the workers together yield every seq once.
+        :param shard_workers: with DataLoader ``num_workers > 1``,
+            whether every worker yields its own shard of the data, so the workers together yield every seq once.
             Otherwise every worker yields all the data, so every seq comes ``num_workers`` times.
             None (default): since behavior version 37.
         """
