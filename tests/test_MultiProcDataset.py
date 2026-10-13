@@ -18,7 +18,7 @@ from test_Dataset import dummy_iter_dataset, compare_dataset_seqs
 
 
 def _sig_alarm_handler(signum, frame):
-    raise Exception(f"Alarm (timeout) signal handler")
+    raise Exception("Alarm (timeout) signal handler")
 
 
 signal.signal(signal.SIGALRM, _sig_alarm_handler)

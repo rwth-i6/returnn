@@ -18,7 +18,9 @@ from .module import *
 from .state import *
 
 # Now the rest, in alphabetical order.
+from .amp import *
 from .array_ import *
+from .assert_ import *
 from .attention import *
 from .backend import *
 from .build_from_dict import *
@@ -40,6 +42,7 @@ from .loss import *
 from .math_ import *
 from .matmul import *
 from .normalization import *
+from .packed import *
 from .parameter import *
 from .parametrizations import *
 from .parametrize import *
@@ -49,6 +52,7 @@ from .rec import *
 from .reduce import *
 from .run_ctx import *
 from .signal import *
+from .static_traceable import *
 from .stepwise_scheduler import *
 from .types import *
 

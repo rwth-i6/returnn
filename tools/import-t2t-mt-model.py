@@ -8,7 +8,6 @@ It currently assumes a specific Returnn network topology with specific layer nam
 from __future__ import annotations
 
 import os
-import sys
 from pprint import pprint
 import tensorflow as tf
 
@@ -16,16 +15,13 @@ import numpy
 
 # from numpy.testing import assert_almost_equal
 
-my_dir = os.path.dirname(os.path.abspath(__file__))
-returnn_dir = os.path.dirname(my_dir)
-sys.path.insert(0, returnn_dir)
+import _setup_returnn_env  # noqa
 
 import returnn.util.basic as util
 from returnn.util import better_exchook
 import returnn.__main__ as rnn
 import returnn.tf.compat as tf_compat
 from returnn.tf.network import TFNetwork
-from returnn.tf.layers.basic import SourceLayer, LayerBase, LinearLayer
 
 
 import tensor2tensor

@@ -7,7 +7,7 @@ Welcome to RETURNN
 `RETURNN paper 2018 <https://arxiv.org/abs/1805.05225>`_.
 
 RETURNN - RWTH extensible training framework for universal recurrent neural networks,
-is a Theano/TensorFlow-based implementation of modern recurrent neural network architectures.
+is a PyTorch/TensorFlow-based implementation of modern recurrent neural network architectures.
 It is optimized for fast and reliable training of recurrent neural networks in a multi-GPU environment.
 
 The high-level features and goals of RETURNN are:

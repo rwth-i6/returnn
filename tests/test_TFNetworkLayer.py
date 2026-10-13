@@ -8783,9 +8783,21 @@ def test_ConvLayer_empty_out():
         out_ = net.layers["output"].output.copy_as_batch_spatial_major()
         print(out_)
         net.initialize_params(session)
-        out, seq_lens = session.run(
-            [out_.placeholder, out_.size_placeholder[0]], feed_dict=make_feed_dict(net.extern_data, n_time=1, n_batch=1)
-        )
+        try:
+            out, seq_lens = session.run(
+                [out_.placeholder, out_.size_placeholder[0]],
+                feed_dict=make_feed_dict(net.extern_data, n_time=1, n_batch=1),
+            )
+        except tf.errors.InvalidArgumentError as exc:
+            if "Incompatible shapes" in exc.message:
+                # Known TF oneDNN bug (https://github.com/rwth-i6/returnn/issues/1775):
+                # the oneDNN grappler remapper fuses the conv + bias-add pattern,
+                # and the fused kernel mishandles the empty (zero-size) conv output,
+                # leaking the conv input shape into the bias-add shape check.
+                # Only triggers on CPUs where that kernel is selected (AVX-512/AMX),
+                # thus only on some CI runners.
+                raise unittest.SkipTest("known TF oneDNN bug with empty conv output (#1775): %s" % exc)
+            raise
         print(out)
         print(seq_lens)
         assert isinstance(out, numpy.ndarray)

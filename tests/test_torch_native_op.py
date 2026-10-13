@@ -1,0 +1,1826 @@
+"""
+Test torch native ops.
+"""
+
+import _setup_test_env  # noqa
+import os
+from unittest import SkipTest
+from typing import Optional, Union, Sequence, List
+import numpy
+from numpy.testing import assert_almost_equal, assert_allclose
+import scipy.ndimage
+import torch
+from returnn.torch.util.native_op import (
+    make_fast_baum_welch_op,
+    fast_baum_welch,
+    fast_viterbi,
+    get_ctc_fsa_fast_bw,
+    ctc_loss,
+    ctc_loss_packed,
+    ctc_best_path,
+    edit_distance,
+    optimal_completion_edit_distance,
+    optimal_completion_edit_distance_per_successor,
+    optimal_completion_edit_distance_per_successor_via_next_edit_distance,
+    edit_distance_via_next_edit_distance_row,
+)
+from returnn.util.fsa import FastBwFsaShared, get_ctc_fsa_fast_bw as get_ctc_fsa_fast_bw_np
+from fsa_utils import py_baum_welch, py_viterbi
+from numpy_ref_edit_distance import edit_distance_ref_np, edit_distance_ref_np_b1
+
+
+os.environ["RETURNN_NATIVE_CODE_COMPILER_VERBOSE"] = "1"
+
+
+def test_compile():
+    # In case CUDA is available, it will use nvcc to compile, and compiles the op with both CPU and CUDA support.
+    make_fast_baum_welch_op(compiler_opts=dict(verbose=True))
+
+
+def test_compile_cpu_only():
+    # This forces CPU-only compilation, using c++, even if CUDA is available.
+    make_fast_baum_welch_op(compiler_opts=dict(verbose=True), with_cuda=False)
+
+
+def test_compile_with_cuda():
+    if not torch.cuda.is_available():
+        raise SkipTest("CUDA not available")
+    # Explicitly compile with CUDA support.
+    make_fast_baum_welch_op(compiler_opts=dict(verbose=True), with_cuda=True)
+
+
+def test_FastBaumWelch():
+    print("Make op...")
+    op = make_fast_baum_welch_op(
+        compiler_opts=dict(verbose=True)
+    )  # will be cached, used inside :func:`fast_baum_welch`
+    print("Op:", op)
+    n_batch = 3
+    seq_len = 5
+    n_classes = 10
+
+    fsa = FastBwFsaShared()
+    fsa.add_inf_loop(state_idx=0, num_emission_labels=n_classes)
+    fast_bw_fsa = fsa.get_fast_bw_fsa(n_batch=n_batch)
+    edges = torch.tensor(fast_bw_fsa.edges, dtype=torch.int32)
+    weights = torch.tensor(fast_bw_fsa.weights, dtype=torch.float32)
+    start_end_states = torch.tensor(fast_bw_fsa.start_end_states, dtype=torch.int32)
+    am_scores_np = numpy.random.RandomState(42).normal(size=(seq_len, n_batch, n_classes)).astype("float32")
+    am_scores = torch.tensor(am_scores_np, dtype=torch.float32)  # in -log space
+    float_idx_np = numpy.ones((seq_len, n_batch), dtype="float32")
+    float_idx = torch.ones((seq_len, n_batch), dtype=torch.float32)
+    print("Construct call...")
+    fwdbwd, obs_scores = fast_baum_welch(
+        am_scores=am_scores, seq_mask=float_idx, edges=edges, weights=weights, start_end_states=start_end_states
+    )
+    print("Done.")
+    print("Eval:")
+    fwdbwd_np, score = fwdbwd.numpy(), obs_scores.numpy()
+    print("score:", score)
+    print("Baum-Welch soft alignment:")
+    print(repr(fwdbwd_np))
+    fwdbwd_np2, score2 = py_baum_welch(
+        am_scores=am_scores_np,
+        float_idx=float_idx_np,
+        edges=fast_bw_fsa.edges,
+        weights=fast_bw_fsa.weights,
+        start_end_states=fast_bw_fsa.start_end_states,
+    )
+    print("ref score:", score2)
+    print("ref Baum-Welch soft alignment:")
+    print(repr(fwdbwd_np2))
+    numpy.testing.assert_allclose(score, score2, rtol=1e-5)
+    numpy.testing.assert_allclose(fwdbwd_np, fwdbwd_np2, rtol=1e-5)
+
+
+def test_fast_bw_uniform():
+    print("Make op...")
+    op = make_fast_baum_welch_op(
+        compiler_opts=dict(verbose=True)
+    )  # will be cached, used inside :func:`fast_baum_welch`
+    # args: (am_scores, edges, weights, start_end_states, float_idx, n_states)
+    print("Op:", op)
+    n_batch = 3
+    seq_len = 7
+    n_classes = 5
+
+    fsa = FastBwFsaShared()
+    for i in range(n_classes):
+        fsa.add_edge(i, i + 1, emission_idx=i)  # fwd
+        fsa.add_edge(i + 1, i + 1, emission_idx=i)  # loop
+    assert n_classes <= seq_len
+    fast_bw_fsa = fsa.get_fast_bw_fsa(n_batch=n_batch)
+    edges = torch.tensor(fast_bw_fsa.edges, dtype=torch.int32)
+    weights = torch.tensor(fast_bw_fsa.weights, dtype=torch.float32)
+    start_end_states = torch.tensor(fast_bw_fsa.start_end_states, dtype=torch.int32)
+    am_scores = numpy.ones((seq_len, n_batch, n_classes), dtype="float32") * numpy.float32(1.0 / n_classes)
+    am_scores = -numpy.log(am_scores)  # in -log space
+    am_scores = torch.tensor(am_scores, dtype=torch.float32)
+    float_idx = torch.ones((seq_len, n_batch), dtype=torch.float32)
+    print("Construct call...")
+    fwdbwd, obs_scores = fast_baum_welch(
+        am_scores=am_scores, seq_mask=float_idx, edges=edges, weights=weights, start_end_states=start_end_states
+    )
+    print("Done.")
+    print("Eval:")
+    fwdbwd, score = fwdbwd.numpy(), obs_scores.numpy()
+    print("score:")
+    print(repr(score))
+    assert score.shape == (seq_len, n_batch)
+    bw = numpy.exp(-fwdbwd)
+    print("Baum-Welch soft alignment:")
+    print(repr(bw))
+    assert bw.shape == (seq_len, n_batch, n_classes)
+
+    if seq_len == n_classes:
+        print("Extra check identity...")
+        for i in range(n_batch):
+            assert_almost_equal(numpy.identity(n_classes), bw[:, i])
+    if seq_len == 7 and n_classes == 5:
+        print("Extra check ref_align (7,5)...")
+        assert_allclose(score, 8.55801582, rtol=1e-5)  # should be the same everywhere
+        ref_align = numpy.array(
+            [
+                [[1.0, 0.0, 0.0, 0.0, 0.0]],
+                [[0.33333316, 0.66666663, 0.0, 0.0, 0.0]],
+                [[0.06666669, 0.53333354, 0.40000018, 0.0, 0.0]],
+                [[0.0, 0.20000014, 0.60000014, 0.19999999, 0.0]],
+                [[0.0, 0.0, 0.39999962, 0.53333312, 0.06666663]],
+                [[0.0, 0.0, 0.0, 0.66666633, 0.33333316]],
+                [[0.0, 0.0, 0.0, 0.0, 0.99999982]],
+            ],
+            dtype=numpy.float32,
+        )
+        assert ref_align.shape == (seq_len, 1, n_classes)
+        ref_align = numpy.tile(ref_align, (1, n_batch, 1))
+        assert ref_align.shape == bw.shape
+        # print("Reference alignment:")
+        # print(repr(ref_align))
+        print("mean square diff:", numpy.mean(numpy.square(ref_align - bw)))
+        print("max square diff:", numpy.max(numpy.square(ref_align - bw)))
+        assert_allclose(ref_align, bw, rtol=1e-5)
+    print("Done.")
+
+
+def _log_softmax(x, axis=-1):
+    assert isinstance(x, numpy.ndarray)
+    xdev = x - x.max(axis=axis, keepdims=True)
+    lsm = xdev - numpy.log(numpy.sum(numpy.exp(xdev), axis=axis, keepdims=True))
+    return lsm
+
+
+def check_ctc_fsa(targets, target_seq_lens, n_classes, with_native_fsa=False, label_loop=True):
+    """
+    :param numpy.ndarray targets:
+    :param numpy.ndarray target_seq_lens:
+    :param int n_classes:
+    :param bool with_native_fsa:
+    :param bool label_loop: ctc_merge_repeated in tf.nn.ctc_loss
+    :return: nothing, just checks
+    """
+    n_batch, n_target_time = targets.shape
+    assert n_batch == len(target_seq_lens) and n_target_time == max(target_seq_lens)
+    n_time = n_target_time * 3
+    # am_scores are logits, unnormalized, i.e. the values before softmax.
+    am_scores = numpy.random.RandomState(42).normal(size=(n_time, n_batch, n_classes)).astype("float32")
+    # am_scores = numpy.zeros((n_time, n_batch, n_classes), dtype="float32")
+    int_idx = numpy.zeros((n_time, n_batch), dtype="int32")
+    seq_lens = numpy.array(
+        [
+            n_time,
+            max(n_time - 4, (target_seq_lens[1] if (len(target_seq_lens) >= 2) else 0) + 1, 1),
+            max(n_time - 5, 1),
+            max(n_time - 5, 1),
+        ],
+        dtype="int32",
+    )[:n_batch]
+    for t in range(n_time):
+        int_idx[t] = t < seq_lens
+    float_idx = int_idx.astype("float32")
+    blank_idx = n_classes - 1
+
+    targets_th = torch.tensor(targets)
+    targets_seq_lens_th = torch.tensor(target_seq_lens)
+
+    if label_loop:
+        fsa = get_ctc_fsa_fast_bw_np(targets=targets, seq_lens=target_seq_lens, blank_idx=blank_idx)
+        assert fsa.start_end_states.shape == (2, len(target_seq_lens))
+        edges = fsa.edges.astype("int32")
+        weights = fsa.weights.astype("float32")
+        start_end_states = fsa.start_end_states.astype("int32")
+        if with_native_fsa:
+            print("python edges:")
+            print(edges)
+            print("python start_end_states:")
+            print(start_end_states)
+    else:
+        native_edges_th, native_weights_th, native_start_end_states_th = get_ctc_fsa_fast_bw(
+            targets=targets_th, seq_lens=targets_seq_lens_th, blank_idx=blank_idx, label_loop=label_loop
+        )
+        edges, weights, start_end_states = (
+            native_edges_th.numpy(),
+            native_weights_th.numpy(),
+            native_start_end_states_th.numpy(),
+        )
+
+    fwdbwd, obs_scores = py_baum_welch(
+        am_scores=-_log_softmax(am_scores),
+        float_idx=float_idx,
+        edges=edges,
+        weights=weights,
+        start_end_states=start_end_states,
+    )
+    fwdbwd = numpy.exp(-fwdbwd)  # -log space -> prob space
+    print(fwdbwd)
+    print(obs_scores)
+
+    if with_native_fsa:
+        native_edges_th, native_weights_th, native_start_end_states_th = get_ctc_fsa_fast_bw(
+            targets=targets_th, seq_lens=targets_seq_lens_th, blank_idx=blank_idx
+        )
+        native_edges, native_weights, native_start_end_states = (
+            native_edges_th.numpy(),
+            native_weights_th.numpy(),
+            native_start_end_states_th.numpy(),
+        )
+        # Note: The native FSA vs the Python FSA are not exactly identical
+        # (they just should be equivalent; although almost identical).
+        # We introduce a dummy state (last before end state), and some dummy edges.
+        print("native edges:")
+        print(native_edges)
+        print("native_start_end_states:")
+        print(native_start_end_states)
+
+        native_fwdbwd, native_obs_scores = py_baum_welch(
+            am_scores=-_log_softmax(am_scores),
+            float_idx=float_idx,
+            edges=native_edges,
+            weights=native_weights,
+            start_end_states=native_start_end_states,
+        )
+        native_fwdbwd = numpy.exp(-native_fwdbwd)  # -log space -> prob space
+        print(native_fwdbwd)
+        print(native_obs_scores)
+        for b in range(n_batch):
+            for t in range(seq_lens[b]):
+                numpy.testing.assert_almost_equal(fwdbwd[t, b], native_fwdbwd[t, b], decimal=5)
+        for b in range(n_batch):
+            numpy.testing.assert_almost_equal(obs_scores[b], native_obs_scores[b], decimal=5)
+        fwdbwd = native_fwdbwd
+        obs_scores = native_obs_scores
+
+    if not label_loop:
+        raise SkipTest("skip ref ctc_loss for label_loop=False")
+
+    am_scores_th = torch.tensor(am_scores)
+    seq_lens_th = torch.tensor(seq_lens)
+    am_scores_th.requires_grad_()
+    log_probs_th = torch.log_softmax(am_scores_th, dim=-1)
+    ref_ctc_loss_th = torch.nn.functional.ctc_loss(
+        log_probs=log_probs_th,
+        input_lengths=seq_lens_th,
+        targets=targets_th,
+        target_lengths=targets_seq_lens_th,
+        blank=blank_idx,
+        reduction="none",
+    )
+    ref_ctc_loss_th.sum().backward()
+    # See grad definition of CTCLoss.
+    # The op will calculate the gradient w.r.t. the logits (log softmax).
+    # I.e. with y = softmax(z), this is \partial loss / \partial z = y - soft_align.
+    # Also see CtcLoss.get_soft_alignment.
+    ref_ctc_loss_grad_th = am_scores_th.grad  # time major, i.e. (time, batch, dim)
+    y_th = torch.softmax(am_scores_th, dim=-1)  # (time, batch, dim)
+    soft_align_th = y_th - ref_ctc_loss_grad_th
+    ref_fwdbwd, ref_obs_score = (soft_align_th.detach().numpy(), ref_ctc_loss_th.detach().numpy())
+    print(ref_fwdbwd)
+    print(ref_obs_score)
+
+    for b in range(n_batch):
+        for t in range(seq_lens[b]):
+            numpy.testing.assert_almost_equal(fwdbwd[t, b], ref_fwdbwd[t, b], decimal=5)
+    for b in range(n_batch):
+        numpy.testing.assert_almost_equal(obs_scores[0, b], ref_obs_score[b], decimal=5)
+
+
+def test_ctc_loss_grad_padded_vs_packed():
+    """
+    Backward through both the padded :func:`ctc_loss` and :func:`ctc_loss_packed` wrappers:
+    losses and logits grads must match between the two
+    (both go through the same fwd-bwd math, just different layouts).
+    Note that the forward of the padded wrapper is validated against the reference CTC
+    in :func:`test_fast_bw_uniform`; here we cover the autograd wrappers.
+    """
+    torch.manual_seed(7)
+    lens = [9, 7, 4]
+    tgt_lens = [4, 3, 2]
+    n_batch, n_time, dim = len(lens), max(lens), 6
+    blank = 5
+    logits_padded = torch.randn(n_batch, n_time, dim)
+    targets = torch.randint(0, 5, (n_batch, max(tgt_lens)), dtype=torch.int32)
+    lens_t = torch.tensor(lens, dtype=torch.int32)
+    tgt_lens_t = torch.tensor(tgt_lens, dtype=torch.int32)
+
+    leaf_pad = logits_padded.clone().requires_grad_(True)
+    loss_pad = ctc_loss(
+        logits=leaf_pad, logits_seq_lens=lens_t, targets=targets, targets_seq_lens=tgt_lens_t, blank_index=blank
+    )
+    loss_pad.sum().backward()
+
+    leaf_packed = logits_padded.clone().requires_grad_(True)
+    flat = torch.cat([leaf_packed[b, : lens[b]] for b in range(n_batch)], dim=0)  # (total, dim)
+    starts = torch.tensor([0, lens[0], lens[0] + lens[1]], dtype=torch.int32)
+    loss_packed = ctc_loss_packed(
+        logits=flat,
+        seq_starts=starts,
+        logits_seq_lens=lens_t,
+        max_seq_len=n_time,
+        targets=targets,
+        targets_seq_lens=tgt_lens_t,
+        blank_index=blank,
+    )
+    loss_packed.sum().backward()
+
+    assert_allclose(loss_packed.detach().numpy(), loss_pad.detach().numpy(), rtol=1e-5, atol=1e-6)
+    mask = torch.arange(n_time)[None, :] < lens_t[:, None]
+    assert_allclose(leaf_packed.grad[mask].numpy(), leaf_pad.grad[mask].numpy(), rtol=1e-5, atol=1e-6)
+    # the packed path never even sees the padded frames; the padded path must zero them
+    assert leaf_pad.grad[~mask].abs().max().item() == 0.0
+    assert leaf_packed.grad[~mask].abs().max().item() == 0.0
+
+
+def test_ctc_loss_over_allocated_time():
+    """
+    Compares loss and grads of :func:`ctc_loss` on logits with more frames than the longest sequence
+    against the logits trimmed to the longest sequence.
+    """
+    n_batch, n_time, max_len, n_tgt, n_classes = 3, 12, 8, 3, 6
+    torch.manual_seed(1)
+    logits = torch.randn(n_time, n_batch, n_classes)
+    args = dict(
+        logits_seq_lens=torch.tensor([max_len, 6, 5], dtype=torch.int32),
+        targets=torch.randint(0, n_classes - 1, (n_batch, n_tgt), dtype=torch.int32),
+        targets_seq_lens=torch.tensor([3, 2, 0], dtype=torch.int32),
+        logits_time_major=True,
+        blank_index=n_classes - 1,
+    )
+    for max_approx in [False, True]:
+        leaf = logits.clone().requires_grad_(True)
+        leaf_trimmed = logits[:max_len].clone().requires_grad_(True)
+        loss = ctc_loss(logits=leaf, max_approx=max_approx, **args)
+        loss_trimmed = ctc_loss(logits=leaf_trimmed, max_approx=max_approx, **args)
+        torch.testing.assert_close(loss, loss_trimmed)
+
+        loss.sum().backward()
+        loss_trimmed.sum().backward()
+        torch.testing.assert_close(leaf.grad[:max_len], leaf_trimmed.grad)
+        assert leaf.grad[max_len:].abs().max().item() == 0.0
+
+
+def test_ctc_loss_packed_over_allocated_bounds():
+    """
+    Bound regime (CUDA-graph capture):
+    the targets buffer, the frame bound and the batch size are STATIC
+    and much wider than the batch needs,
+    and the unused batch slots are zero-length seqs.
+    Neither the loss nor the grads may depend on that over-allocation,
+    even though the FSA is built over the whole buffer width
+    (``n_edges = n_batch * (5 * (n_time - 1) + 10)``)
+    and the junk beyond each target length is arbitrary.
+    """
+    torch.manual_seed(11)
+    lens = [9, 7, 4]
+    tgt_lens = [4, 3, 2]
+    n_batch, dim, blank = len(lens), 6, 5
+    tgt_cap, frame_bound, batch_bound = 32, 24, 5  # all >> what the batch needs
+
+    logits = torch.randn(sum(lens), dim)
+    starts = torch.tensor([0, lens[0], lens[0] + lens[1]], dtype=torch.int32)
+    targets_tight = torch.randint(0, blank, (n_batch, max(tgt_lens)), dtype=torch.int32)
+    lens_t = torch.tensor(lens, dtype=torch.int32)
+    tgt_lens_t = torch.tensor(tgt_lens, dtype=torch.int32)
+
+    leaf_tight = logits.clone().requires_grad_(True)
+    loss_tight = ctc_loss_packed(
+        logits=leaf_tight,
+        seq_starts=starts,
+        logits_seq_lens=lens_t,
+        max_seq_len=max(lens),
+        targets=targets_tight,
+        targets_seq_lens=tgt_lens_t,
+        blank_index=blank,
+    )
+    loss_tight.sum().backward()
+
+    # over-allocated: targets padded to tgt_cap with JUNK beyond each length,
+    # extra zero-length seqs up to batch_bound,
+    # frame bound well above max(lens)
+    targets_wide = torch.randint(0, blank, (batch_bound, tgt_cap), dtype=torch.int32)
+    for b in range(n_batch):
+        targets_wide[b, : tgt_lens[b]] = targets_tight[b, : tgt_lens[b]]
+    lens_wide = torch.zeros(batch_bound, dtype=torch.int32)
+    lens_wide[:n_batch] = lens_t
+    tgt_lens_wide = torch.zeros(batch_bound, dtype=torch.int32)
+    tgt_lens_wide[:n_batch] = tgt_lens_t
+    # the filler seqs go PAST the content, keeping seq_starts ascending
+    # (ctc_loss_packed maps frames to seqs by searchsorted); that is what the packed collate emits
+    starts_wide = torch.full((batch_bound,), sum(lens), dtype=torch.int32)
+    starts_wide[:n_batch] = starts
+
+    leaf_wide = logits.clone().requires_grad_(True)
+    loss_wide = ctc_loss_packed(
+        logits=leaf_wide,
+        seq_starts=starts_wide,
+        logits_seq_lens=lens_wide,
+        max_seq_len=frame_bound,
+        targets=targets_wide,
+        targets_seq_lens=tgt_lens_wide,
+        blank_index=blank,
+    )
+    loss_wide.sum().backward()
+
+    assert_allclose(loss_wide[:n_batch].detach().numpy(), loss_tight.detach().numpy(), rtol=1e-5, atol=1e-6)
+    assert loss_wide[n_batch:].abs().max().item() == 0.0  # zero-length seqs contribute nothing
+    assert_allclose(leaf_wide.grad.numpy(), leaf_tight.grad.numpy(), rtol=1e-5, atol=1e-6)
+
+    # PACKED FSA edge layout (GetCtcFsaFastBwPackedOp): same over-allocated buffers,
+    # but the edge list is content-sized (5*len+5 per seq) under a total-edge bound
+    # instead of batch_bound * (5*(tgt_cap-1)+10). Same loss, same grads.
+    edges_bound = 5 * (sum(tgt_lens) + 40) + 5 * batch_bound  # some slack over the exact total
+    leaf_packed = logits.clone().requires_grad_(True)
+    loss_packed = ctc_loss_packed(
+        logits=leaf_packed,
+        seq_starts=starts_wide,
+        logits_seq_lens=lens_wide,
+        max_seq_len=frame_bound,
+        targets=targets_wide,
+        targets_seq_lens=tgt_lens_wide,
+        blank_index=blank,
+        edges_bound=edges_bound,
+    )
+    loss_packed.sum().backward()
+    assert_allclose(loss_packed[:n_batch].detach().numpy(), loss_tight.detach().numpy(), rtol=1e-5, atol=1e-6)
+    assert loss_packed[n_batch:].abs().max().item() == 0.0
+    assert_allclose(leaf_packed.grad.numpy(), leaf_tight.grad.numpy(), rtol=1e-5, atol=1e-6)
+
+    # ... and with the EXACT edge total (no tail filler at all)
+    exact_bound = int(5 * tgt_lens_wide.sum().item() + 5 * batch_bound)
+    leaf_exact = logits.clone().requires_grad_(True)
+    loss_exact = ctc_loss_packed(
+        logits=leaf_exact,
+        seq_starts=starts_wide,
+        logits_seq_lens=lens_wide,
+        max_seq_len=frame_bound,
+        targets=targets_wide,
+        targets_seq_lens=tgt_lens_wide,
+        blank_index=blank,
+        edges_bound=exact_bound,
+    )
+    loss_exact.sum().backward()
+    assert_allclose(loss_exact[:n_batch].detach().numpy(), loss_tight.detach().numpy(), rtol=1e-5, atol=1e-6)
+    assert_allclose(leaf_exact.grad.numpy(), leaf_tight.grad.numpy(), rtol=1e-5, atol=1e-6)
+
+
+def test_ctc_loss_packed_edge_buffer_beyond_32_bit():
+    """
+    The Baum-Welch kernels keep one score per edge and frame. An edge bound far above the labels
+    (e.g. from a label buffer which inherits the gaps of the audio, or from a loose bound)
+    takes that scratch past 2^32 entries: its size and offsets must not wrap around in 32 bit,
+    else the kernels write outside of it. Same loss and gradient as with the tight edge list.
+    """
+    if not torch.cuda.is_available():
+        raise SkipTest("CUDA not available")
+    n_frames = 1100
+    edges_bound = 2**32 // n_frames + 4096
+    free, _ = torch.cuda.mem_get_info()
+    if free < edges_bound * n_frames * 4 + 4 * 2**30:
+        raise SkipTest("needs about 22 GB of free GPU memory")
+    torch.manual_seed(13)
+    lens = torch.tensor([n_frames, 700], dtype=torch.int32)
+    logits = torch.randn(int(lens.sum()), 5)
+    opts = dict(
+        seq_starts=torch.tensor([0, n_frames], dtype=torch.int32),
+        logits_seq_lens=lens,
+        targets=torch.tensor([[1, 2, 3], [3, 1, 0]], dtype=torch.int32),
+        targets_seq_lens=torch.tensor([3, 2], dtype=torch.int32),
+    )
+    losses, grads = [], []
+    for bound in (None, edges_bound):
+        leaf = logits.cuda().requires_grad_(True)
+        loss = ctc_loss_packed(
+            logits=leaf,
+            max_seq_len=n_frames,
+            blank_index=4,
+            edges_bound=bound,
+            **{k: v.cuda() for k, v in opts.items()},
+        )
+        loss.sum().backward()
+        losses.append(loss.detach())
+        grads.append(leaf.grad)
+    torch.testing.assert_close(losses[1], losses[0])
+    torch.testing.assert_close(grads[1], grads[0])
+
+
+def test_ctc_loss_packed_warns_about_a_large_edge_scratch():
+    """
+    The packed Baum-Welch op sizes its edge scratch (one score per edge and frame) by the bounds, not by the data.
+    A scratch far above what a batch needs usually comes from a loose edges_bound, so past a limit it warns.
+    """
+    import warnings
+    from returnn.torch.util import native_op as torch_native_op
+
+    opts = dict(
+        logits=torch.randn(5, 4),
+        seq_starts=torch.tensor([0], dtype=torch.int32),
+        logits_seq_lens=torch.tensor([5], dtype=torch.int32),
+        max_seq_len=5,
+        targets=torch.tensor([[1, 2]], dtype=torch.int32),
+        targets_seq_lens=torch.tensor([2], dtype=torch.int32),
+        blank_index=3,
+    )
+    default_limit = torch_native_op._FAST_BW_PACKED_SCRATCH_WARN_BYTES
+    caught = {}
+    for limit in (default_limit, 1):
+        torch_native_op._FAST_BW_PACKED_SCRATCH_WARN_BYTES = limit
+        try:
+            with warnings.catch_warnings(record=True) as records:
+                warnings.simplefilter("always")
+                ctc_loss_packed(**opts)
+        finally:
+            torch_native_op._FAST_BW_PACKED_SCRATCH_WARN_BYTES = default_limit
+        caught[limit] = [str(r.message) for r in records if "edge scratch" in str(r.message)]
+    assert not caught[default_limit], caught
+    assert caught[1], caught
+
+
+def test_ctc_loss_packed_leading_gap_grad():
+    """frames before the first sequence start belong to no sequence, so they get no gradient"""
+    torch.manual_seed(7)
+    logits = torch.randn(11, 5)
+    starts = torch.tensor([2, 7], dtype=torch.int32)
+    lens = torch.tensor([3, 2], dtype=torch.int32)
+    targets = torch.tensor([[1], [2]], dtype=torch.int32)
+    tgt_lens = torch.tensor([1, 1], dtype=torch.int32)
+    leaf = logits.clone().requires_grad_(True)
+    loss = ctc_loss_packed(
+        logits=leaf,
+        seq_starts=starts,
+        logits_seq_lens=lens,
+        max_seq_len=3,
+        targets=targets,
+        targets_seq_lens=tgt_lens,
+        blank_index=4,
+    )
+    loss.sum().backward()
+    leaf_tight = torch.cat([logits[2:5], logits[7:9]]).requires_grad_(True)
+    loss_tight = ctc_loss_packed(
+        logits=leaf_tight,
+        seq_starts=torch.tensor([0, 3], dtype=torch.int32),
+        logits_seq_lens=lens,
+        max_seq_len=3,
+        targets=targets,
+        targets_seq_lens=tgt_lens,
+        blank_index=4,
+    )
+    loss_tight.sum().backward()
+    torch.testing.assert_close(loss, loss_tight)
+    torch.testing.assert_close(torch.cat([leaf.grad[2:5], leaf.grad[7:9]]), leaf_tight.grad)
+    for rows in (leaf.grad[:2], leaf.grad[5:7], leaf.grad[9:]):
+        assert (rows == 0).all(), leaf.grad
+
+
+def test_ctc_loss_packed_kernels_independent_of_frame_bound():
+    """
+    Under CUDA-graph capture the frame bound is the capacity, far above most sequences,
+    and every kernel launch costs time in every replay.
+    The packed CTC runs each sequence over its own frames, so its launches must not grow with the bound.
+    """
+    if not torch.cuda.is_available():
+        raise SkipTest("CUDA not available")
+    from torch.profiler import profile, ProfilerActivity
+
+    torch.manual_seed(3)
+    lens = torch.tensor([9, 7, 4], dtype=torch.int32, device="cuda")
+    logits = torch.randn(int(lens.sum()), 6, device="cuda")
+    opts = dict(
+        logits=logits,
+        seq_starts=torch.tensor([0, 9, 16], dtype=torch.int32, device="cuda"),
+        logits_seq_lens=lens,
+        targets=torch.tensor([[1, 2, 3, 1], [2, 0, 1, 0], [3, 3, 0, 0]], dtype=torch.int32, device="cuda"),
+        targets_seq_lens=torch.tensor([4, 3, 2], dtype=torch.int32, device="cuda"),
+        blank_index=5,
+        edges_bound=5 * 9 + 5 * 3,
+    )
+    counts = []
+    for frame_bound in (9, 90):
+        ctc_loss_packed(max_seq_len=frame_bound, **opts)
+        torch.cuda.synchronize()
+        with profile(activities=[ProfilerActivity.CUDA]) as prof:
+            ctc_loss_packed(max_seq_len=frame_bound, **opts)
+            torch.cuda.synchronize()
+        counts.append(sum(1 for event in prof.events() if event.device_type == torch.autograd.DeviceType.CUDA))
+    assert counts[0] == counts[1], counts
+
+
+def test_ctc_loss_packed_matches_padded_cuda():
+    """
+    Packed against padded CTC on the GPU, where a whole block runs each sequence: label sequences with more
+    states and edges than the block has threads, a zero-length filler sequence, and a frame bound and an
+    edge list over-allocated as under CUDA-graph capture. Same losses and gradients, up to the float32 noise
+    of the atomic log-space adds, which makes two runs of the same op differ by up to 3e-4 in the gradients here.
+    """
+    if not torch.cuda.is_available():
+        raise SkipTest("CUDA not available")
+    torch.manual_seed(5)
+    lens = [400, 260, 90, 0]
+    tgt_lens = [130, 60, 20, 0]
+    n_batch, dim, blank = len(lens), 20, 19
+    logits_padded = torch.randn(n_batch, max(lens), dim, device="cuda")
+    targets = torch.randint(0, blank, (n_batch, 140), dtype=torch.int32, device="cuda")
+    lens_t = torch.tensor(lens, dtype=torch.int32, device="cuda")
+    tgt_lens_t = torch.tensor(tgt_lens, dtype=torch.int32, device="cuda")
+
+    leaf_pad = logits_padded.clone().requires_grad_(True)
+    loss_pad = ctc_loss(
+        logits=leaf_pad, logits_seq_lens=lens_t, targets=targets, targets_seq_lens=tgt_lens_t, blank_index=blank
+    )
+    loss_pad.sum().backward()
+
+    leaf_packed = logits_padded.clone().requires_grad_(True)
+    flat = torch.cat([leaf_packed[b, : lens[b]] for b in range(n_batch)], dim=0)
+    loss_packed = ctc_loss_packed(
+        logits=flat,
+        seq_starts=torch.tensor(numpy.cumsum([0] + lens[:-1]), dtype=torch.int32, device="cuda"),
+        logits_seq_lens=lens_t,
+        max_seq_len=max(lens) + 100,
+        targets=targets,
+        targets_seq_lens=tgt_lens_t,
+        blank_index=blank,
+        edges_bound=5 * (sum(tgt_lens) + 50) + 5 * n_batch,
+    )
+    loss_packed.sum().backward()
+
+    torch.testing.assert_close(loss_packed, loss_pad, rtol=1e-4, atol=1e-4)
+    mask = torch.arange(max(lens), device="cuda")[None, :] < lens_t[:, None]
+    torch.testing.assert_close(leaf_packed.grad[mask], leaf_pad.grad[mask], rtol=1e-3, atol=1e-3)
+
+
+def test_ctc_loss_packed_states_in_global_memory_cuda():
+    """
+    The per-seq recursion keeps the states of a seq in shared memory, 3 * (2 * n_tgt_time + 3) floats,
+    which fits into the 48 KB of a block up to a targets buffer width of about 2000.
+    A wider buffer, with the same targets in it, must give the same loss and grads (states in global memory).
+    """
+    if not torch.cuda.is_available():
+        raise SkipTest("CUDA not available")
+    torch.manual_seed(7)
+    lens = [50, 30, 0]
+    tgt_lens = [12, 7, 0]
+    n_batch, dim, blank = len(lens), 10, 9
+    logits = torch.randn(sum(lens), dim, device="cuda")
+    targets_content = torch.randint(0, blank, (n_batch, max(tgt_lens)), dtype=torch.int32, device="cuda")
+    res = []
+    for tgt_width in (max(tgt_lens), 2100):
+        targets = torch.zeros((n_batch, tgt_width), dtype=torch.int32, device="cuda")
+        targets[:, : max(tgt_lens)] = targets_content
+        leaf = logits.clone().requires_grad_(True)
+        loss = ctc_loss_packed(
+            logits=leaf,
+            seq_starts=torch.tensor(numpy.cumsum([0] + lens[:-1]), dtype=torch.int32, device="cuda"),
+            logits_seq_lens=torch.tensor(lens, dtype=torch.int32, device="cuda"),
+            max_seq_len=max(lens),
+            targets=targets,
+            targets_seq_lens=torch.tensor(tgt_lens, dtype=torch.int32, device="cuda"),
+            blank_index=blank,
+            edges_bound=5 * sum(tgt_lens) + 5 * n_batch,
+        )
+        loss.sum().backward()
+        res.append((loss.detach(), leaf.grad))
+    torch.testing.assert_close(res[1][0], res[0][0], rtol=1e-4, atol=1e-4)
+    torch.testing.assert_close(res[1][1], res[0][1], rtol=1e-4, atol=1e-4)
+
+
+def test_ctc_fsa_batch3_len6_c8():
+    """
+    This (:func:`Fsa.get_ctc_fsa_fast_bw`) is used by :func:`ctc_loss`.
+    """
+    targets = numpy.array([[1, 3, 4, 2, 1, 0], [2, 6, 3, 4, 0, 0], [0, 3, 2, 0, 0, 0]], dtype="int32")
+    target_seq_lens = numpy.array([6, 4, 3], dtype="int32")
+    n_classes = 8  # +1 because of blank
+    check_ctc_fsa(targets=targets, target_seq_lens=target_seq_lens, n_classes=n_classes)
+
+
+def test_ctc_fsa_batch1_len2():
+    """
+    This (:func:`Fsa.get_ctc_fsa_fast_bw`) is used by :func:`ctc_loss`.
+    """
+    targets = numpy.array([[0, 1]], dtype="int32")
+    target_seq_lens = numpy.array([2], dtype="int32")
+    n_classes = 3  # +1 because of blank
+    check_ctc_fsa(targets=targets, target_seq_lens=target_seq_lens, n_classes=n_classes)
+
+
+def test_ctc_fsa_batch1_len1():
+    """
+    This (:func:`Fsa.get_ctc_fsa_fast_bw`) is used by :func:`ctc_loss`.
+    """
+    targets = numpy.array([[0]], dtype="int32")
+    target_seq_lens = numpy.array([1], dtype="int32")
+    n_classes = 2  # +1 because of blank
+
+    check_ctc_fsa(targets=targets, target_seq_lens=target_seq_lens, n_classes=n_classes)
+
+
+def test_ctc_fsa_batch3_len6_c8_native():
+    """
+    This (:func:`Fsa.get_ctc_fsa_fast_bw`) is used by :func:`ctc_loss`.
+    """
+    targets = numpy.array([[1, 3, 4, 2, 1, 0], [2, 6, 3, 4, 0, 0], [0, 3, 2, 0, 0, 0]], dtype="int32")
+    target_seq_lens = numpy.array([6, 4, 3], dtype="int32")
+    n_classes = 8  # +1 because of blank
+    check_ctc_fsa(targets=targets, target_seq_lens=target_seq_lens, n_classes=n_classes, with_native_fsa=True)
+
+
+def test_ctc_fsa_batch4_len6_c8_native():
+    """
+    This (:func:`Fsa.get_ctc_fsa_fast_bw`) is used by :func:`ctc_loss`.
+    """
+    targets = numpy.array(
+        [[1, 2, 4, 4, 1, 0], [2, 6, 3, 4, 0, 0], [3, 3, 0, 0, 0, 0], [5, 0, 0, 0, 0, 0]], dtype="int32"
+    )
+    target_seq_lens = numpy.array([6, 4, 2, 1], dtype="int32")
+    n_classes = 8  # +1 because of blank
+    check_ctc_fsa(targets=targets, target_seq_lens=target_seq_lens, n_classes=n_classes, with_native_fsa=True)
+
+
+def test_ctc_fsa_batch4_len6_c8_native_no_loop():
+    """
+    This (:func:`Fsa.get_ctc_fsa_fast_bw`) is used by :func:`ctc_loss`.
+    No label loop (ctc_merge_repeated False) is equivalent to the Recurrent Neural Aligner (RNA) topology.
+    """
+    targets = numpy.array(
+        [[1, 2, 4, 4, 1, 0], [2, 6, 3, 4, 0, 0], [3, 3, 0, 0, 0, 0], [5, 0, 0, 0, 0, 0]], dtype="int32"
+    )
+    target_seq_lens = numpy.array([6, 4, 2, 1], dtype="int32")
+    n_classes = 8  # +1 because of blank
+    check_ctc_fsa(targets=targets, target_seq_lens=target_seq_lens, n_classes=n_classes, label_loop=False)
+
+
+def test_ctc_fsa_batch2_len2a():
+    """
+    This (:func:`Fsa.get_ctc_fsa_fast_bw`) is used by :func:`ctc_loss`.
+    """
+    targets = numpy.array([[0, 1], [1, 0]], dtype="int32")
+    target_seq_lens = numpy.array([2, 1], dtype="int32")
+    n_classes = 3  # +1 because of blank
+    check_ctc_fsa(targets=targets, target_seq_lens=target_seq_lens, n_classes=n_classes, with_native_fsa=True)
+
+
+def test_ctc_fsa_batch2_len2():
+    """
+    This (:func:`Fsa.get_ctc_fsa_fast_bw`) is used by :func:`ctc_loss`.
+    """
+    targets = numpy.array([[0, 1], [0, 0]], dtype="int32")
+    target_seq_lens = numpy.array([2, 2], dtype="int32")
+    n_classes = 3  # +1 because of blank
+    check_ctc_fsa(targets=targets, target_seq_lens=target_seq_lens, n_classes=n_classes, with_native_fsa=True)
+
+
+def test_ctc_fsa_batch2_len1():
+    """
+    This (:func:`Fsa.get_ctc_fsa_fast_bw`) is used by :func:`ctc_loss`.
+    """
+    targets = numpy.array([[0], [1]], dtype="int32")
+    target_seq_lens = numpy.array([1, 1], dtype="int32")
+    n_classes = 3  # +1 because of blank
+    check_ctc_fsa(targets=targets, target_seq_lens=target_seq_lens, n_classes=n_classes, with_native_fsa=True)
+
+
+def test_ctc_fsa_batch1_len2rep_native():
+    """
+    This (:func:`Fsa.get_ctc_fsa_fast_bw`) is used by :func:`ctc_loss`.
+    """
+    targets = numpy.array([[0, 0]], dtype="int32")
+    target_seq_lens = numpy.array([2], dtype="int32")
+    n_classes = 2  # +1 because of blank
+    check_ctc_fsa(targets=targets, target_seq_lens=target_seq_lens, n_classes=n_classes, with_native_fsa=True)
+
+
+def test_ctc_fsa_batch1_len2_native():
+    """
+    This (:func:`Fsa.get_ctc_fsa_fast_bw`) is used by :func:`ctc_loss`.
+    """
+    targets = numpy.array([[0, 1]], dtype="int32")
+    target_seq_lens = numpy.array([2], dtype="int32")
+    n_classes = 3  # +1 because of blank
+    check_ctc_fsa(targets=targets, target_seq_lens=target_seq_lens, n_classes=n_classes, with_native_fsa=True)
+
+
+def test_ctc_fsa_batch1_len1_native():
+    """
+    This (:func:`Fsa.get_ctc_fsa_fast_bw`) is used by :func:`ctc_loss`.
+    """
+    targets = numpy.array([[0]], dtype="int32")
+    target_seq_lens = numpy.array([1], dtype="int32")
+    n_classes = 2  # +1 because of blank
+
+    check_ctc_fsa(targets=targets, target_seq_lens=target_seq_lens, n_classes=n_classes, with_native_fsa=True)
+
+
+def test_fast_viterbi(device: torch.device = torch.device("cpu")):
+    n_batch = 3
+    seq_len = 7
+    n_classes = 5
+
+    fsa = FastBwFsaShared()
+    for i in range(n_classes):
+        fsa.add_edge(i, i + 1, emission_idx=i)  # fwd
+        fsa.add_edge(i + 1, i + 1, emission_idx=i)  # loop
+    assert n_classes <= seq_len
+    fast_bw_fsa = fsa.get_fast_bw_fsa(n_batch=n_batch)
+    edges = fast_bw_fsa.edges
+    weights = fast_bw_fsa.weights
+    start_end_states = fast_bw_fsa.start_end_states
+    am_scores = numpy.eye(n_classes, n_classes, dtype="float32")  # (dim,dim)
+
+    am_scores = scipy.ndimage.zoom(am_scores, zoom=(float(seq_len) / n_classes, 1), order=1, prefilter=False)
+    assert am_scores.shape == (seq_len, n_classes)
+    am_scores = am_scores[:, None]
+    am_scores = am_scores + numpy.zeros((seq_len, n_batch, n_classes), dtype="float32")
+    print(am_scores[:, 0])
+    # am_scores = numpy.ones((seq_len, n_batch, n_classes), dtype="float32") * numpy.float32(1.0 / n_classes)
+    am_scores = numpy.log(am_scores)  # in +log space
+    print("Construct call...")
+    alignment, obs_scores = fast_viterbi(
+        am_scores=torch.tensor(am_scores, device=device),
+        am_seq_len=torch.tensor(numpy.array([seq_len] * n_batch, dtype="int32"), device=device),
+        edges=torch.tensor(edges, device=device),
+        weights=torch.tensor(weights, device=device),
+        start_end_states=torch.tensor(start_end_states, device=device),
+    )
+    alignment, obs_scores = alignment.cpu().numpy(), obs_scores.cpu().numpy()
+    print("Done.")
+    print("score:")
+    print(repr(obs_scores))
+    assert obs_scores.shape == (n_batch,)
+    print("Hard alignment:")
+    print(repr(alignment))
+    assert alignment.shape == (seq_len, n_batch)
+    if seq_len == n_classes:
+        print("Extra check identity...")
+        for i in range(n_batch):
+            for t in range(seq_len):
+                assert alignment[t, i] == t
+    if seq_len == 7 and n_classes == 5:
+        print("Extra check ref_align (7,5)...")
+        assert_allclose(obs_scores, -1.6218603, rtol=1e-5)  # should be the same everywhere
+        for i in range(n_batch):
+            assert alignment[:, i].tolist() == [0, 1, 1, 2, 3, 3, 4]
+    print("Done.")
+
+
+def test_fast_viterbi_weight_sign(device: torch.device = torch.device("cpu")):
+    # Weights are -log, like fast_baum_welch takes them, so the cheaper edge must win
+    # even though am_scores here are +log. With the all-zero weights of the other tests
+    # the sign is unobservable, so this is what pins the convention.
+    n_batch, seq_len, n_classes = 1, 4, 2
+
+    def align(cost_of_second: float):
+        fsa = FastBwFsaShared()
+        # two ways to leave state 0, differing only in cost, each looping to the end
+        fsa.add_edge(0, 1, emission_idx=0, weight=0.0)
+        fsa.add_edge(0, 1, emission_idx=1, weight=cost_of_second)
+        fsa.add_edge(1, 1, emission_idx=0, weight=0.0)
+        fast_bw_fsa = fsa.get_fast_bw_fsa(n_batch=n_batch)
+        am = numpy.zeros((seq_len, n_batch, n_classes), dtype="float32")
+        alignment, scores = fast_viterbi(
+            am_scores=torch.tensor(am, device=device),
+            am_seq_len=torch.tensor(numpy.array([seq_len] * n_batch, dtype="int32"), device=device),
+            edges=torch.tensor(fast_bw_fsa.edges, device=device),
+            weights=torch.tensor(fast_bw_fsa.weights, device=device),
+            start_end_states=torch.tensor(fast_bw_fsa.start_end_states, device=device),
+        )
+        return alignment.cpu().numpy()[0, 0], float(scores.cpu().numpy()[0])
+
+    # a positive cost on the second edge makes it the worse one, so emission 0 is taken
+    emission, score = align(2.0)
+    assert emission == 0, f"expected the cheap edge, got emission {emission}"
+    # a negative cost makes it the better one
+    emission_neg, score_neg = align(-2.0)
+    assert emission_neg == 1, f"expected the cheap edge, got emission {emission_neg}"
+    assert score_neg > score, f"cheaper path should score higher: {score_neg} vs {score}"
+
+
+def test_fast_viterbi_weight_sign_cuda():
+    if not torch.cuda.is_available():
+        raise SkipTest("CUDA not available")
+    test_fast_viterbi_weight_sign(device=torch.device("cuda"))
+
+
+def test_fast_viterbi_ctc_fsa_dead_edges(device: torch.device = torch.device("cpu")):
+    # The CTC FSA marks unused edges with +INF_F, in the BaumWelch cost convention,
+    # and ForcedAlignmentLayer feeds those weights to fast_viterbi unnegated.
+    # Viterbi maximizes, so such an edge must be skipped rather than win.
+    # Widening the targets buffer adds dead edges without changing the data.
+    from returnn.torch.util.native_op import get_ctc_fsa_fast_bw
+
+    n_batch, n_time, n_classes, blank_idx = 2, 9, 4, 0
+    rnd = numpy.random.RandomState(42)
+    seq_lens = numpy.array([3, 2], dtype="int32")
+    am = numpy.log(rnd.uniform(0.01, 1.0, (n_time, n_batch, n_classes)).astype("float32"))
+
+    # same targets in both buffers, so the only difference is the dead edges
+    tgt_vals = [rnd.randint(1, n_classes, seq_lens[b]).astype("int32") for b in range(n_batch)]
+
+    aligns = []
+    for width in (int(seq_lens.max()), int(seq_lens.max()) + 5):
+        targets = numpy.zeros((n_batch, width), dtype="int32")
+        for b in range(n_batch):
+            targets[b, : seq_lens[b]] = tgt_vals[b]
+        edges, weights, start_end_states = get_ctc_fsa_fast_bw(
+            targets=torch.tensor(targets, device=device),
+            seq_lens=torch.tensor(seq_lens, device=device),
+            blank_idx=blank_idx,
+        )
+        assert torch.isinf(weights).any(), f"width {width}: expected dead edges"
+        alignment, scores = fast_viterbi(
+            am_scores=torch.tensor(am, device=device),
+            am_seq_len=torch.tensor(numpy.array([n_time] * n_batch, dtype="int32"), device=device),
+            edges=edges,
+            weights=weights,
+            start_end_states=start_end_states,
+        )
+        assert torch.isfinite(scores).all(), f"width {width}: scores {scores}"
+        aligns.append(alignment.cpu().numpy())
+
+    numpy.testing.assert_array_equal(aligns[0], aligns[1])
+
+
+def test_fast_viterbi_ctc_fsa_dead_edges_cuda():
+    if not torch.cuda.is_available():
+        raise SkipTest("CUDA not available")
+    test_fast_viterbi_ctc_fsa_dead_edges(device=torch.device("cuda"))
+
+
+def test_fast_viterbi_cuda():
+    if not torch.cuda.is_available():
+        raise SkipTest("CUDA not available")
+    test_fast_viterbi(device=torch.device("cuda"))
+
+
+def test_ctc_best_path_cuda_gives_the_cpu_path():
+    """
+    Every CUDA call of :func:`ctc_best_path` gives the path of the CPU op.
+    The kernel keeps the best edge of a state in one cell which it swaps atomically,
+    so the read of that cell has to be atomic too, else a reader sees a torn score and drops the better edge.
+    Only batches of a realistic size show it.
+    """
+    if not torch.cuda.is_available():
+        raise SkipTest("CUDA not available")
+    n_batch, seq_len, n_tgt, n_classes = 8, 507, 110, 10241
+    gen = torch.Generator().manual_seed(5)
+    for _ in range(2):
+        seq_lens = torch.randint(1, seq_len + 1, (n_batch,), generator=gen, dtype=torch.int32)
+        tgt_lens = torch.randint(0, n_tgt + 1, (n_batch,), generator=gen, dtype=torch.int32)
+        tgt_lens = torch.minimum(tgt_lens, seq_lens // 2)
+        args = dict(
+            logits=torch.log_softmax(torch.randn(seq_len, n_batch, n_classes, generator=gen), dim=-1),
+            logits_seq_lens=seq_lens,
+            targets=torch.randint(0, n_classes - 1, (n_batch, n_tgt), generator=gen, dtype=torch.int32),
+            targets_seq_lens=tgt_lens,
+        )
+        opts = dict(logits_time_major=True, logits_normalize=False, blank_index=n_classes - 1)
+        ref = ctc_best_path(**args, **opts)
+        valid = torch.arange(seq_len)[:, None] < seq_lens[None, :]
+        cuda_args = {k: v.cuda() for k, v in args.items()}
+        for call in range(30):
+            out = ctc_best_path(**cuda_args, **opts).cpu()
+            assert torch.equal(out[valid], ref[valid]), f"call {call} differs from the cpu path"
+
+
+def test_fast_viterbi_rnd():
+    n_batch = 4
+    seq_len = 23
+    n_classes = 5
+
+    fsa = FastBwFsaShared()
+    for i in range(n_classes):
+        fsa.add_edge(i, i + 1, emission_idx=i)  # fwd
+        fsa.add_edge(i + 1, i + 1, emission_idx=i)  # loop
+    assert n_classes <= seq_len
+    fast_bw_fsa = fsa.get_fast_bw_fsa(n_batch=n_batch)
+    edges = fast_bw_fsa.edges
+    weights = fast_bw_fsa.weights
+    start_end_states = fast_bw_fsa.start_end_states
+    am_scores = numpy.random.RandomState(42).normal(size=(seq_len, n_batch, n_classes)).astype("float32")
+    am_seq_len = numpy.array([seq_len] * n_batch, dtype="int32")
+    am_seq_len[1] -= 1
+    am_seq_len[-1] -= 2
+    am_seq_len[-2] = max(n_classes - 1, 1)  # no path possible
+    ref_alignment, ref_scores = py_viterbi(
+        am_scores=am_scores, am_seq_len=am_seq_len, edges=edges, weights=weights, start_end_states=start_end_states
+    )
+    print("ref score:")
+    print(repr(ref_scores))
+    assert ref_scores.shape == (n_batch,)
+    print("ref hard alignment:")
+    print(repr(ref_alignment))
+    assert ref_alignment.shape == (seq_len, n_batch)
+    print("Construct fast_viterbi call...")
+    alignment, scores = fast_viterbi(
+        am_scores=torch.tensor(am_scores),
+        am_seq_len=torch.tensor(am_seq_len),
+        edges=torch.tensor(edges),
+        weights=torch.tensor(weights),
+        start_end_states=torch.tensor(start_end_states),
+    )
+    alignment, scores = alignment.numpy(), scores.numpy()
+    print("Done.")
+    print("score:")
+    print(repr(scores))
+    assert scores.shape == (n_batch,)
+    print("Hard alignment:")
+    print(repr(alignment))
+    assert alignment.shape == (seq_len, n_batch)
+    assert_allclose(scores, ref_scores, rtol=1e-5)
+    assert_allclose(alignment, ref_alignment, rtol=1e-5)
+    print("Done.")
+
+
+def test_edit_distance():
+    rnd = numpy.random.RandomState(42)
+    n_batch = 15
+    n_a_max_len = 13
+    n_b_max_len = 11
+    num_classes = 10
+    a_np = rnd.randint(0, num_classes, size=(n_batch, n_a_max_len), dtype="int32")
+    b_np = rnd.randint(0, num_classes, size=(n_batch, n_b_max_len), dtype="int32")
+    a_len_np = rnd.randint(1, n_a_max_len + 1, size=(n_batch,), dtype="int32")
+    b_len_np = rnd.randint(1, n_b_max_len + 1, size=(n_batch,), dtype="int32")
+    # Likely some high error. So make some explicit examples.
+    expected_results: List[Optional[int]] = [None] * n_batch
+    i = 0
+    # One insertion/deletion.
+    a_np[i, :1] = [1]
+    a_len_np[i] = 1
+    b_len_np[i] = 0
+    expected_results[i] = 1
+    i += 1
+    # One deletion.
+    a_np[i, :2] = [1, 2]
+    b_np[i, :1] = [1]
+    a_len_np[i] = 2
+    b_len_np[i] = 1
+    expected_results[i] = 1
+    i += 1
+    # One substitution + deletion.
+    a_np[i, :2] = [1, 2]
+    b_np[i, :1] = [3]
+    a_len_np[i] = 2
+    b_len_np[i] = 1
+    expected_results[i] = 2
+    i += 1
+    # One substitution error.
+    a_np[i, :4] = [1, 2, 3, 4]
+    b_np[i, :4] = [1, 2, 4, 4]
+    a_len_np[i] = 4
+    b_len_np[i] = 4
+    expected_results[i] = 1
+    i += 1
+    # One deletion error.
+    a_np[i, :6] = [1, 2, 3, 3, 4, 5]
+    b_np[i, :5] = [1, 2, 3, 4, 5]
+    a_len_np[i] = 6
+    b_len_np[i] = 5
+    expected_results[i] = 1
+    i += 1
+    # One insertion error.
+    a_np[i, :6] = [1, 2, 3, 4, 5, 6]
+    b_np[i, :7] = [1, 2, 3, 4, 4, 5, 6]
+    a_len_np[i] = 6
+    b_len_np[i] = 7
+    expected_results[i] = 1
+    i += 1
+    # Same.
+    a_np[i, :11] = [2, 2, 4, 4, 6, 6, 8, 8, 9, 10, 11]
+    b_np[i, :11] = [2, 2, 4, 4, 6, 6, 8, 8, 9, 10, 11]
+    a_len_np[i] = 11
+    b_len_np[i] = 11
+    expected_results[i] = 0
+    i += 1
+    # Both full length. Error should be 2.
+    a_np[i] = [2, 2, 4, 4, 6, 6, 8, 8, 9, 10, 0, 0, 0]
+    b_np[i] = [2, 2, 4, 4, 6, 6, 8, 8, 9, 10, 0]
+    a_len_np[i] = n_a_max_len
+    b_len_np[i] = n_b_max_len
+    expected_results[i] = 2
+    i += 1
+    assert n_batch - i >= 5  # still some random left
+    a = torch.tensor(a_np)
+    b = torch.tensor(b_np)
+    a_len = torch.tensor(a_len_np)
+    b_len = torch.tensor(b_len_np)
+
+    for i in range(n_batch):
+        print("testing batch", i, "/", n_batch)
+        _a = a[i : i + 1, : a_len_np[i]]
+        _a_len = a_len[i : i + 1]
+        _b = b[i : i + 1, : b_len_np[i]]
+        _b_len = b_len[i : i + 1]
+        print("seq a:", a_np[i, : a_len_np[i]])
+        print("seq b:", b_np[i, : b_len_np[i]])
+        ref_edit_dist_np = edit_distance_ref_np(_a.numpy(), _a_len.numpy(), _b.numpy(), _b_len.numpy())
+        native_edit_dist_np = edit_distance(_a, _a_len, _b, _b_len).numpy()
+        assert isinstance(ref_edit_dist_np, numpy.ndarray)
+        assert isinstance(native_edit_dist_np, numpy.ndarray)
+        print("Ref edit dist:", ref_edit_dist_np)
+        print("Native edit dist:", native_edit_dist_np)
+        print("Expected edit dist:", expected_results[i])
+        assert ref_edit_dist_np.shape == native_edit_dist_np.shape == (1,)
+        if expected_results[i] is not None:
+            assert expected_results[i] == ref_edit_dist_np[0] == native_edit_dist_np[0]
+        else:
+            assert ref_edit_dist_np[0] == native_edit_dist_np[0]
+        print("swapped:")
+        ref_edit_dist_np = edit_distance_ref_np(_b.numpy(), _b_len.numpy(), _a.numpy(), _a_len.numpy())
+        native_edit_dist_np = edit_distance(_b, _b_len, _a, _a_len).numpy()
+        assert isinstance(ref_edit_dist_np, numpy.ndarray)
+        assert isinstance(native_edit_dist_np, numpy.ndarray)
+        print("Ref edit dist:", ref_edit_dist_np)
+        print("Native edit dist:", native_edit_dist_np)
+        print("Expected edit dist:", expected_results[i])
+        assert ref_edit_dist_np.shape == native_edit_dist_np.shape == (1,)
+        if expected_results[i] is not None:
+            assert expected_results[i] == ref_edit_dist_np[0] == native_edit_dist_np[0]
+        else:
+            assert ref_edit_dist_np[0] == native_edit_dist_np[0]
+        print()
+
+    print("Now the whole batch.")
+    ref_edit_dist_np = edit_distance_ref_np(a.numpy(), a_len.numpy(), b.numpy(), b_len.numpy())
+    native_edit_dist_np = edit_distance(a, a_len, b, b_len).numpy()
+    assert isinstance(ref_edit_dist_np, numpy.ndarray)
+    assert isinstance(native_edit_dist_np, numpy.ndarray)
+    print("Ref edit dist:", ref_edit_dist_np)
+    print("Native edit dist:", native_edit_dist_np)
+    print("Expected edit dist:", expected_results)
+    assert ref_edit_dist_np.shape == native_edit_dist_np.shape == (n_batch,)
+    for i in range(n_batch):
+        if expected_results[i] is not None:
+            assert expected_results[i] == ref_edit_dist_np[i] == native_edit_dist_np[i]
+        else:
+            assert ref_edit_dist_np[i] == native_edit_dist_np[i]
+    print()
+
+    print("Now the whole batch, flipped.")
+    ref_edit_dist_np = edit_distance_ref_np(b.numpy(), b_len.numpy(), a.numpy(), a_len.numpy())
+    native_edit_dist_np = edit_distance(b, b_len, a, a_len).numpy()
+    assert isinstance(ref_edit_dist_np, numpy.ndarray)
+    assert isinstance(native_edit_dist_np, numpy.ndarray)
+    print("Ref edit dist:", ref_edit_dist_np)
+    print("Native edit dist:", native_edit_dist_np)
+    print("Expected edit dist:", expected_results)
+    assert ref_edit_dist_np.shape == native_edit_dist_np.shape == (n_batch,)
+    for i in range(n_batch):
+        if expected_results[i] is not None:
+            assert expected_results[i] == ref_edit_dist_np[i] == native_edit_dist_np[i]
+        else:
+            assert ref_edit_dist_np[i] == native_edit_dist_np[i]
+
+
+def test_edit_distance_2():
+    from returnn.tensor import Tensor, Dim
+    import numpy
+    import torch
+    from collections import namedtuple
+    import itertools
+    from numpy_ref_edit_distance import edit_distance_ref
+
+    # noinspection PyShadowingNames
+    def _check_edit_distance(a: Tensor, a_spatial_dim: Dim, b: Tensor, b_spatial_dim: Dim):
+        ref = edit_distance_ref(a, a_spatial_dim, b, b_spatial_dim).raw_tensor
+        res = edit_distance(a.raw_tensor, a_spatial_dim.dyn_size, b.raw_tensor, b_spatial_dim.dyn_size)
+        assert res.shape == ref.shape == a_spatial_dim.dyn_size.shape == b_spatial_dim.dyn_size.shape
+        assert len(ref.shape) == 1
+        print("ref:", ref, "res:", res)
+        batch_size = ref.shape[0]
+        for i in range(batch_size):
+            assert res[i] == ref[i], (
+                f"batch idx i={i}, a[i]={a.raw_tensor[i]} len {a_spatial_dim.dyn_size[i]},"
+                f" b[i]={b.raw_tensor[i]} len {b_spatial_dim.dyn_size[i]},"
+                f" ref[i]={ref[i]}, res[i]={res[i]};\n"
+                f" a={a.raw_tensor} lens {a_spatial_dim.dyn_size},"
+                f" b={b.raw_tensor} lens {b_spatial_dim.dyn_size}"
+            )
+        assert (res.numpy() == ref).all()
+
+    SizedTensor = namedtuple("SizedTensor", ["tensor", "seq_lens"])
+
+    _SeqsB1 = [
+        SizedTensor(torch.tensor([[1, 2, 3, 4]]), torch.tensor([4])),
+        SizedTensor(torch.tensor([[1, 2, 3]]), torch.tensor([3])),
+        SizedTensor(torch.tensor([[1, 2, 4]]), torch.tensor([3])),
+        SizedTensor(torch.tensor([[1, 4]]), torch.tensor([2])),
+        SizedTensor(torch.tensor([[5, 2, 4]]), torch.tensor([3])),
+        SizedTensor(torch.tensor([[]], dtype=torch.int64), torch.tensor([0])),
+    ]
+
+    for a, b in itertools.product(_SeqsB1, _SeqsB1):
+        a: SizedTensor
+        b: SizedTensor
+        # noinspection PyShadowingNames
+        batch_dim = Dim(1, name="batch")
+        a_spatial_dim = Dim(Tensor("a_sizes", [batch_dim], dtype="int64", raw_tensor=a.seq_lens))
+        b_spatial_dim = Dim(Tensor("b_sizes", [batch_dim], dtype="int64", raw_tensor=b.seq_lens))
+        a_ = Tensor("a", [batch_dim, a_spatial_dim], dtype="int64", raw_tensor=a.tensor)
+        b_ = Tensor("b", [batch_dim, b_spatial_dim], dtype="int64", raw_tensor=b.tensor)
+        _check_edit_distance(a_, a_spatial_dim, b_, b_spatial_dim)
+
+    rnd = numpy.random.RandomState(42)
+    for a, b in itertools.product(_SeqsB1, _SeqsB1):
+        batch_size = rnd.randint(2, 11)
+        a_max_len = rnd.randint(a.seq_lens[0], a.seq_lens[0] + 5)
+        b_max_len = rnd.randint(b.seq_lens[0], b.seq_lens[0] + 5)
+        a_sizes = rnd.randint(0, a_max_len + 1, size=(batch_size,))
+        b_sizes = rnd.randint(0, b_max_len + 1, size=(batch_size,))
+        a_sizes[0] = a.seq_lens[0]
+        b_sizes[0] = b.seq_lens[0]
+        a_max_len = max(a_sizes)
+        b_max_len = max(b_sizes)
+        a_values = rnd.randint(0, 10, (batch_size, a_max_len))
+        b_values = rnd.randint(0, 10, (batch_size, b_max_len))
+        a_values[0, : a.seq_lens[0]] = a.tensor[0, : a.seq_lens[0]]
+        b_values[0, : b.seq_lens[0]] = b.tensor[0, : b.seq_lens[0]]
+        a_sizes = torch.tensor(a_sizes, dtype=torch.int32)
+        b_sizes = torch.tensor(b_sizes, dtype=torch.int32)
+
+        # noinspection PyShadowingNames
+        batch_dim = Dim(batch_size, name="batch")
+        a_spatial_dim = Dim(Tensor("a_sizes", [batch_dim], dtype="int32", raw_tensor=a_sizes))
+        b_spatial_dim = Dim(Tensor("b_sizes", [batch_dim], dtype="int32", raw_tensor=b_sizes))
+        a_ = Tensor("a", [batch_dim, a_spatial_dim], dtype="int64", raw_tensor=torch.tensor(a_values))
+        b_ = Tensor("b", [batch_dim, b_spatial_dim], dtype="int64", raw_tensor=torch.tensor(b_values))
+        _check_edit_distance(a_, a_spatial_dim, b_, b_spatial_dim)
+
+
+def test_edit_distance_ref_np_b1():
+    assert edit_distance_ref_np_b1([1], []) == 1
+    assert edit_distance_ref_np_b1([1, 2], [1]) == 1
+    assert edit_distance_ref_np_b1([2, 2], [1]) == 2
+    assert edit_distance_ref_np_b1([2, 1], [1]) == 1
+    assert edit_distance_ref_np_b1([2, 1], [1, 1]) == 1
+    assert edit_distance_ref_np_b1([2, 1], [1, 1, 1]) == 2
+    assert edit_distance_ref_np_b1([2, 1], [2, 1, 1]) == 1
+
+
+def _naive_optimal_completion_edit_distance(
+    a: Union[Sequence[int], numpy.ndarray], b: Union[Sequence[int], numpy.ndarray]
+) -> int:
+    distances = [edit_distance_ref_np_b1(a, b[:n]) for n in range(len(b) + 1)]
+    return min(distances)
+
+
+def test_optimal_completion_edit_distance():
+    rnd = numpy.random.RandomState(42)
+    n_batch = 15
+    n_a_max_len = 11
+    n_b_max_len = 13
+    num_classes = 10
+    a_np = rnd.randint(0, num_classes, size=(n_batch, n_a_max_len), dtype="int32")
+    b_np = rnd.randint(0, num_classes, size=(n_batch, n_b_max_len), dtype="int32")
+    a_len_np = rnd.randint(1, n_a_max_len + 1, size=(n_batch,), dtype="int32")
+    b_len_np = rnd.randint(1, n_b_max_len + 1, size=(n_batch,), dtype="int32")
+    # Likely some high error. So make some explicit examples.
+    expected_results = [None] * n_batch
+    i = 0
+    # One deletion.
+    a_np[i, :1] = [1]
+    a_len_np[i] = 1
+    b_len_np[i] = 0
+    expected_results[i] = 1
+    i += 1
+    # One optional insertion.
+    a_np[i, :1] = [1]
+    b_np[i, :2] = [1, 2]
+    a_len_np[i] = 1
+    b_len_np[i] = 2
+    expected_results[i] = 0
+    i += 1
+    # One substitution or deletion.
+    a_np[i, :1] = [1]
+    b_np[i, :2] = [3, 1]
+    a_len_np[i] = 1
+    b_len_np[i] = 2
+    expected_results[i] = 1
+    i += 1
+    # One substitution error.
+    a_np[i, :4] = [1, 2, 3, 4]
+    b_np[i, :4] = [1, 2, 4, 4]
+    a_len_np[i] = 4
+    b_len_np[i] = 4
+    expected_results[i] = 1
+    i += 1
+    # One insertion error.
+    a_np[i, :5] = [1, 2, 3, 4, 5]
+    b_np[i, :6] = [1, 2, 3, 3, 4, 5]
+    a_len_np[i] = 5
+    b_len_np[i] = 6
+    expected_results[i] = 1
+    i += 1
+    # Same.
+    a_np[i, :11] = [2, 2, 4, 4, 6, 6, 8, 8, 9, 10, 11]
+    b_np[i, :11] = [2, 2, 4, 4, 6, 6, 8, 8, 9, 10, 11]
+    a_len_np[i] = 11
+    b_len_np[i] = 11
+    expected_results[i] = 0
+    i += 1
+    # Both full length.
+    a_np[i] = [2, 2, 4, 4, 6, 6, 8, 8, 9, 10, 0]
+    b_np[i] = [2, 2, 4, 4, 6, 6, 8, 8, 9, 10, 0, 0, 0]
+    a_len_np[i] = n_a_max_len
+    b_len_np[i] = n_b_max_len
+    expected_results[i] = 0
+    i += 1
+    assert n_batch - i >= 5  # still some random left
+    a = torch.tensor(a_np)
+    b = torch.tensor(b_np)
+    a_len = torch.tensor(a_len_np)
+    b_len = torch.tensor(b_len_np)
+    for i in range(n_batch):
+        print("testing batch", i, "/", n_batch)
+        _a = a[i : i + 1, : a_len_np[i]]
+        _a_len = a_len[i : i + 1]
+        _b = b[i : i + 1, : b_len_np[i]]
+        _b_len = b_len[i : i + 1]
+        print("seq a:", a_np[i, : a_len_np[i]])
+        print("seq b:", b_np[i, : b_len_np[i]])
+        _native_edit_dist = optimal_completion_edit_distance(_a, _a_len, _b, _b_len)
+        native_edit_dist_np = _native_edit_dist.numpy()
+        ref_edit_dist_np = numpy.array(
+            [_naive_optimal_completion_edit_distance(a_np[i, : a_len_np[i]], b_np[i, : b_len_np[i]])]
+        )
+        assert isinstance(ref_edit_dist_np, numpy.ndarray)
+        assert isinstance(native_edit_dist_np, numpy.ndarray)
+        print("Ref edit dist:", ref_edit_dist_np)
+        print("Native edit dist:", native_edit_dist_np)
+        print("Expected edit dist:", expected_results[i])
+        assert ref_edit_dist_np.shape == native_edit_dist_np.shape == (1,)
+        if expected_results[i] is not None:
+            assert expected_results[i] == ref_edit_dist_np[0] == native_edit_dist_np[0]
+        else:
+            assert ref_edit_dist_np[0] == native_edit_dist_np[0]
+        print()
+
+    print("Now the whole batch.")
+    native_edit_dist = optimal_completion_edit_distance(a, a_len, b, b_len)
+    native_edit_dist_np = native_edit_dist.numpy()
+    ref_edit_dist_np = numpy.array(
+        [
+            _naive_optimal_completion_edit_distance(a_np[i, : a_len_np[i]], b_np[i, : b_len_np[i]])
+            for i in range(n_batch)
+        ]
+    )
+    assert isinstance(ref_edit_dist_np, numpy.ndarray)
+    assert isinstance(native_edit_dist_np, numpy.ndarray)
+    print("Ref edit dist:", ref_edit_dist_np)
+    print("Native edit dist:", native_edit_dist_np)
+    print("Expected edit dist:", expected_results)
+    assert ref_edit_dist_np.shape == native_edit_dist_np.shape == (n_batch,)
+    for i in range(n_batch):
+        if expected_results[i] is not None:
+            assert expected_results[i] == ref_edit_dist_np[i] == native_edit_dist_np[i]
+        else:
+            assert ref_edit_dist_np[i] == native_edit_dist_np[i]
+    print()
+
+
+def test_optimal_completion_edit_distance_per_successor():
+    rnd = numpy.random.RandomState(42)
+    n_batch = 15
+    n_a_max_len = 11
+    n_b_max_len = 13
+    num_classes = 10
+    a_np = rnd.randint(0, num_classes, size=(n_batch, n_a_max_len), dtype="int32")
+    b_np = rnd.randint(0, num_classes, size=(n_batch, n_b_max_len), dtype="int32")
+    a_len_np = rnd.randint(1, n_a_max_len + 1, size=(n_batch,), dtype="int32")
+    b_len_np = rnd.randint(1, n_b_max_len + 1, size=(n_batch,), dtype="int32")
+    # Likely some high error. So make some explicit examples.
+    expected_results = [None] * n_batch
+    i = 0
+    # One deletion.
+    a_np[i, :1] = [1]
+    a_len_np[i] = 1
+    b_len_np[i] = 0
+    expected_results[i] = 1
+    i += 1
+    # One optional insertion.
+    a_np[i, :1] = [1]
+    b_np[i, :2] = [1, 2]
+    a_len_np[i] = 1
+    b_len_np[i] = 2
+    expected_results[i] = 0
+    i += 1
+    # One substitution or deletion.
+    a_np[i, :1] = [1]
+    b_np[i, :2] = [3, 1]
+    a_len_np[i] = 1
+    b_len_np[i] = 2
+    expected_results[i] = 1
+    i += 1
+    # One substitution error.
+    a_np[i, :4] = [1, 2, 3, 4]
+    b_np[i, :4] = [1, 2, 4, 4]
+    a_len_np[i] = 4
+    b_len_np[i] = 4
+    expected_results[i] = 1
+    i += 1
+    # One insertion error.
+    a_np[i, :5] = [1, 2, 3, 4, 5]
+    b_np[i, :6] = [1, 2, 3, 3, 4, 5]
+    a_len_np[i] = 5
+    b_len_np[i] = 6
+    expected_results[i] = 1
+    i += 1
+    # Same.
+    a_np[i, :11] = [2, 2, 4, 4, 6, 6, 8, 8, 9, 1, 3]
+    b_np[i, :11] = [2, 2, 4, 4, 6, 6, 8, 8, 9, 1, 3]
+    a_len_np[i] = 11
+    b_len_np[i] = 11
+    expected_results[i] = 0
+    i += 1
+    # Both full length.
+    a_np[i] = [2, 2, 4, 4, 6, 6, 8, 8, 9, 10, 0]
+    b_np[i] = [2, 2, 4, 4, 6, 6, 8, 8, 9, 10, 0, 0, 0]
+    a_len_np[i] = n_a_max_len
+    b_len_np[i] = n_b_max_len
+    expected_results[i] = 0
+    i += 1
+    assert n_batch - i >= 5  # still some random left
+    a = torch.tensor(a_np)
+    b = torch.tensor(b_np)
+    assert all(a_len_np > 0)
+    a_len = torch.tensor(a_len_np)
+    b_len = torch.tensor(b_len_np)
+    print("Now the whole batch.")
+    # a_len - 1 such that we can do the check below.
+    native_edit_dist = optimal_completion_edit_distance_per_successor(a, a_len - 1, b, b_len, num_classes)
+    native_edit_dist_np = native_edit_dist.numpy()
+    ref_edit_dist_np = numpy.array(
+        [
+            _naive_optimal_completion_edit_distance(a_np[i, : a_len_np[i]], b_np[i, : b_len_np[i]])
+            for i in range(n_batch)
+        ]
+    )
+    assert isinstance(ref_edit_dist_np, numpy.ndarray)
+    assert isinstance(native_edit_dist_np, numpy.ndarray)
+    print("Ref edit dist:", ref_edit_dist_np)
+    print("Native edit dist:", native_edit_dist_np)
+    print("Expected edit dist:", expected_results)
+    assert ref_edit_dist_np.shape == (n_batch,)
+    assert native_edit_dist_np.shape == (n_batch, num_classes)
+    for i in range(n_batch):
+        a_last = a_np[i, a_len_np[i] - 1]
+        assert 0 <= a_last < num_classes
+        native_res = native_edit_dist_np[i, a_last]
+        if expected_results[i] is not None:
+            assert expected_results[i] == ref_edit_dist_np[i] == native_res
+        else:
+            assert ref_edit_dist_np[i] == native_res
+        for j in range(num_classes):
+            ref_res = _naive_optimal_completion_edit_distance(
+                list(a_np[i, : a_len_np[i] - 1]) + [j], list(b_np[i, : b_len_np[i]])
+            )
+            native_res = native_edit_dist_np[i, j]
+            assert ref_res == native_res
+    print()
+
+
+def test_next_edit_distance_row():
+    rnd = numpy.random.RandomState(42)
+    n_batch = 15
+    n_a_max_len = 13
+    n_b_max_len = 11
+    num_classes = 10
+    a_np = rnd.randint(0, num_classes, size=(n_batch, n_a_max_len), dtype="int32")
+    b_np = rnd.randint(0, num_classes, size=(n_batch, n_b_max_len), dtype="int32")
+    a_len_np = rnd.randint(1, n_a_max_len + 1, size=(n_batch,), dtype="int32")
+    b_len_np = rnd.randint(1, n_b_max_len + 1, size=(n_batch,), dtype="int32")
+    # Likely some high error. So make some explicit examples.
+    expected_results = [None] * n_batch
+    i = 0
+    # One insertion/deletion.
+    a_np[i, :1] = [1]
+    a_len_np[i] = 1
+    b_len_np[i] = 0
+    expected_results[i] = 1
+    i += 1
+    # One deletion.
+    a_np[i, :2] = [1, 2]
+    b_np[i, :1] = [1]
+    a_len_np[i] = 2
+    b_len_np[i] = 1
+    expected_results[i] = 1
+    i += 1
+    # One substitution + deletion.
+    a_np[i, :2] = [1, 2]
+    b_np[i, :1] = [3]
+    a_len_np[i] = 2
+    b_len_np[i] = 1
+    expected_results[i] = 2
+    i += 1
+    # One substitution error.
+    a_np[i, :4] = [1, 2, 3, 4]
+    b_np[i, :4] = [1, 2, 4, 4]
+    a_len_np[i] = 4
+    b_len_np[i] = 4
+    expected_results[i] = 1
+    i += 1
+    # One deletion error.
+    a_np[i, :6] = [1, 2, 3, 3, 4, 5]
+    b_np[i, :5] = [1, 2, 3, 4, 5]
+    a_len_np[i] = 6
+    b_len_np[i] = 5
+    expected_results[i] = 1
+    i += 1
+    # One insertion error.
+    a_np[i, :6] = [1, 2, 3, 4, 5, 6]
+    b_np[i, :7] = [1, 2, 3, 4, 4, 5, 6]
+    a_len_np[i] = 6
+    b_len_np[i] = 7
+    expected_results[i] = 1
+    i += 1
+    # Same.
+    a_np[i, :11] = [2, 2, 4, 4, 6, 6, 8, 8, 9, 10, 11]
+    b_np[i, :11] = [2, 2, 4, 4, 6, 6, 8, 8, 9, 10, 11]
+    a_len_np[i] = 11
+    b_len_np[i] = 11
+    expected_results[i] = 0
+    i += 1
+    # Both full length. Error should be 2.
+    a_np[i] = [2, 2, 4, 4, 6, 6, 8, 8, 9, 10, 0, 0, 0]
+    b_np[i] = [2, 2, 4, 4, 6, 6, 8, 8, 9, 10, 0]
+    a_len_np[i] = n_a_max_len
+    b_len_np[i] = n_b_max_len
+    expected_results[i] = 2
+    i += 1
+    assert n_batch - i >= 5  # still some random left
+    a = torch.tensor(a_np)
+    b = torch.tensor(b_np)
+    a_len = torch.tensor(a_len_np)
+    b_len = torch.tensor(b_len_np)
+
+    for i in range(n_batch):
+        print("testing batch", i, "/", n_batch)
+        _a = a[i : i + 1, : a_len_np[i]]
+        _a_len = a_len[i : i + 1]
+        _b = b[i : i + 1, : b_len_np[i]]
+        _b_len = b_len[i : i + 1]
+        print("seq a:", a_np[i, : a_len_np[i]])
+        print("seq b:", b_np[i, : b_len_np[i]])
+        ref_edit_dist_np = edit_distance_ref_np(_a.numpy(), _a_len.numpy(), _b.numpy(), _b_len.numpy())
+        native_edit_dist_np = edit_distance_via_next_edit_distance_row(_a, _a_len, _b, _b_len).numpy()
+        assert isinstance(ref_edit_dist_np, numpy.ndarray)
+        assert isinstance(native_edit_dist_np, numpy.ndarray)
+        print("Ref edit dist:", ref_edit_dist_np)
+        print("Native edit dist:", native_edit_dist_np)
+        print("Expected edit dist:", expected_results[i])
+        assert ref_edit_dist_np.shape == native_edit_dist_np.shape == (1,)
+        if expected_results[i] is not None:
+            assert expected_results[i] == ref_edit_dist_np[0] == native_edit_dist_np[0]
+        else:
+            assert ref_edit_dist_np[0] == native_edit_dist_np[0]
+        print("swapped:")
+        ref_edit_dist_np = edit_distance_ref_np(_b.numpy(), _b_len.numpy(), _a.numpy(), _a_len.numpy())
+        native_edit_dist_np = edit_distance_via_next_edit_distance_row(_b, _b_len, _a, _a_len).numpy()
+        assert isinstance(ref_edit_dist_np, numpy.ndarray)
+        assert isinstance(native_edit_dist_np, numpy.ndarray)
+        print("Ref edit dist:", ref_edit_dist_np)
+        print("Native edit dist:", native_edit_dist_np)
+        print("Expected edit dist:", expected_results[i])
+        assert ref_edit_dist_np.shape == native_edit_dist_np.shape == (1,)
+        if expected_results[i] is not None:
+            assert expected_results[i] == ref_edit_dist_np[0] == native_edit_dist_np[0]
+        else:
+            assert ref_edit_dist_np[0] == native_edit_dist_np[0]
+        print()
+
+    print("Now the whole batch.")
+    ref_edit_dist_np = edit_distance_ref_np(a.numpy(), a_len.numpy(), b.numpy(), b_len.numpy())
+    native_edit_dist_np = edit_distance_via_next_edit_distance_row(a, a_len, b, b_len).numpy()
+    assert isinstance(ref_edit_dist_np, numpy.ndarray)
+    assert isinstance(native_edit_dist_np, numpy.ndarray)
+    print("Ref edit dist:", ref_edit_dist_np)
+    print("Native edit dist:", native_edit_dist_np)
+    print("Expected edit dist:", expected_results)
+    assert ref_edit_dist_np.shape == native_edit_dist_np.shape == (n_batch,)
+    for i in range(n_batch):
+        if expected_results[i] is not None:
+            assert expected_results[i] == ref_edit_dist_np[i] == native_edit_dist_np[i]
+        else:
+            assert ref_edit_dist_np[i] == native_edit_dist_np[i]
+    print()
+
+    print("Now the whole batch, flipped.")
+    ref_edit_dist_np = edit_distance_ref_np(b.numpy(), b_len.numpy(), a.numpy(), a_len.numpy())
+    native_edit_dist_np = edit_distance_via_next_edit_distance_row(b, b_len, a, a_len).numpy()
+    assert isinstance(ref_edit_dist_np, numpy.ndarray)
+    assert isinstance(native_edit_dist_np, numpy.ndarray)
+    print("Ref edit dist:", ref_edit_dist_np)
+    print("Native edit dist:", native_edit_dist_np)
+    print("Expected edit dist:", expected_results)
+    assert ref_edit_dist_np.shape == native_edit_dist_np.shape == (n_batch,)
+    for i in range(n_batch):
+        if expected_results[i] is not None:
+            assert expected_results[i] == ref_edit_dist_np[i] == native_edit_dist_np[i]
+        else:
+            assert ref_edit_dist_np[i] == native_edit_dist_np[i]
+
+
+def test_next_edit_distance_row_optimal_completion():
+    rnd = numpy.random.RandomState(42)
+    n_batch = 15
+    n_a_max_len = 11
+    n_b_max_len = 13
+    num_classes = 10
+    a_np = rnd.randint(0, num_classes, size=(n_batch, n_a_max_len), dtype="int32")
+    b_np = rnd.randint(0, num_classes, size=(n_batch, n_b_max_len), dtype="int32")
+    a_len_np = rnd.randint(1, n_a_max_len + 1, size=(n_batch,), dtype="int32")
+    b_len_np = rnd.randint(1, n_b_max_len + 1, size=(n_batch,), dtype="int32")
+    # Likely some high error. So make some explicit examples.
+    expected_results = [None] * n_batch
+    i = 0
+    # One deletion.
+    a_np[i, :1] = [1]
+    a_len_np[i] = 1
+    b_len_np[i] = 0
+    expected_results[i] = 1
+    i += 1
+    # One optional insertion.
+    a_np[i, :1] = [1]
+    b_np[i, :2] = [1, 2]
+    a_len_np[i] = 1
+    b_len_np[i] = 2
+    expected_results[i] = 0
+    i += 1
+    # One substitution or deletion.
+    a_np[i, :1] = [1]
+    b_np[i, :2] = [3, 1]
+    a_len_np[i] = 1
+    b_len_np[i] = 2
+    expected_results[i] = 1
+    i += 1
+    # One substitution error.
+    a_np[i, :4] = [1, 2, 3, 4]
+    b_np[i, :4] = [1, 2, 4, 4]
+    a_len_np[i] = 4
+    b_len_np[i] = 4
+    expected_results[i] = 1
+    i += 1
+    # One insertion error.
+    a_np[i, :5] = [1, 2, 3, 4, 5]
+    b_np[i, :6] = [1, 2, 3, 3, 4, 5]
+    a_len_np[i] = 5
+    b_len_np[i] = 6
+    expected_results[i] = 1
+    i += 1
+    # Same.
+    a_np[i, :11] = [2, 2, 4, 4, 6, 6, 8, 8, 9, 10, 11]
+    b_np[i, :11] = [2, 2, 4, 4, 6, 6, 8, 8, 9, 10, 11]
+    a_len_np[i] = 11
+    b_len_np[i] = 11
+    expected_results[i] = 0
+    i += 1
+    # Both full length.
+    a_np[i] = [2, 2, 4, 4, 6, 6, 8, 8, 9, 10, 0]
+    b_np[i] = [2, 2, 4, 4, 6, 6, 8, 8, 9, 10, 0, 0, 0]
+    a_len_np[i] = n_a_max_len
+    b_len_np[i] = n_b_max_len
+    expected_results[i] = 0
+    i += 1
+    assert n_batch - i >= 5  # still some random left
+    a = torch.tensor(a_np)
+    b = torch.tensor(b_np)
+    a_len = torch.tensor(a_len_np)
+    b_len = torch.tensor(b_len_np)
+    print("Now the whole batch.")
+    native_edit_dist = edit_distance_via_next_edit_distance_row(a, a_len, b, b_len, optimal_completion=True)
+    native_edit_dist_np = native_edit_dist.numpy()
+    ref_edit_dist_np = numpy.array(
+        [
+            _naive_optimal_completion_edit_distance(a_np[i, : a_len_np[i]], b_np[i, : b_len_np[i]])
+            for i in range(n_batch)
+        ]
+    )
+    assert isinstance(ref_edit_dist_np, numpy.ndarray)
+    assert isinstance(native_edit_dist_np, numpy.ndarray)
+    print("Ref edit dist:", ref_edit_dist_np)
+    print("Native edit dist:", native_edit_dist_np)
+    print("Expected edit dist:", expected_results)
+    assert ref_edit_dist_np.shape == native_edit_dist_np.shape == (n_batch,)
+    for i in range(n_batch):
+        if expected_results[i] is not None:
+            assert expected_results[i] == ref_edit_dist_np[i] == native_edit_dist_np[i]
+        else:
+            assert ref_edit_dist_np[i] == native_edit_dist_np[i]
+    print()
+
+
+def test_next_edit_distance_reduce_optimal_completion():
+    rnd = numpy.random.RandomState(42)
+    n_batch = 15
+    n_a_max_len = 7
+    n_b_max_len = 13
+    num_classes = 10
+    a_np = rnd.randint(0, num_classes, size=(n_batch, n_a_max_len), dtype="int32")
+    b_np = rnd.randint(0, num_classes, size=(n_batch, n_b_max_len), dtype="int32")
+    # Test only for full length seqs in a.
+    a_len_np = numpy.array([n_a_max_len] * n_batch, dtype="int32")
+    b_len_np = rnd.randint(1, n_b_max_len + 1, size=(n_batch,), dtype="int32")
+    a = torch.tensor(a_np)
+    b = torch.tensor(b_np)
+    assert all(a_len_np > 0)
+    a_len = torch.tensor(a_len_np)
+    b_len = torch.tensor(b_len_np)
+    print("Now the whole batch.")
+    # a_len - 1 such that we can do the check below.
+    native_edit_dist = optimal_completion_edit_distance_per_successor_via_next_edit_distance(
+        a, a_len, b, b_len, num_classes
+    )
+    native_edit_dist_np = native_edit_dist.numpy()
+    assert isinstance(native_edit_dist_np, numpy.ndarray)
+    print("Native edit dist:", native_edit_dist_np)
+    assert native_edit_dist_np.shape == (n_batch, num_classes)
+    for i in range(n_batch):
+        for j in range(num_classes):
+            ref_res = _naive_optimal_completion_edit_distance(
+                list(a_np[i, : a_len_np[i]]) + [j], b_np[i, : b_len_np[i]]
+            )
+            native_res = native_edit_dist_np[i, j]
+            assert ref_res == native_res
+    print()
+
+
+def test_fast_baum_welch_fake_tensor_mode():
+    """
+    OpMaker-made ops register a generic fake (meta) impl (:func:`OpMaker._register_fake_impl`):
+    output shapes closed-form from the op description.
+    Needed whenever the op is hit by FakeTensor tracing
+    (the make_fx/AOT -> Inductor whole-step compile, ``torch_cuda_graph`` ``"compile"``);
+    plain eager or CUDA-graph capture never dispatch to it.
+    """
+    if not hasattr(torch.library, "register_fake"):
+        raise SkipTest("torch.library.register_fake not available (torch < 2.4)")
+    from torch._subclasses.fake_tensor import FakeTensor, FakeTensorMode
+
+    op = make_fast_baum_welch_op(compiler_opts=dict(verbose=True))
+    # args: (am_scores, edges, weights, start_end_states, float_idx, n_states)
+    n_batch, seq_len, n_classes = 3, 7, 5
+    fsa = FastBwFsaShared()
+    for i in range(n_classes):
+        fsa.add_edge(i, i + 1, emission_idx=i)
+        fsa.add_edge(i + 1, i + 1, emission_idx=i)
+    fast_bw_fsa = fsa.get_fast_bw_fsa(n_batch=n_batch)
+    edges = torch.tensor(fast_bw_fsa.edges, dtype=torch.int32)
+    weights = torch.tensor(fast_bw_fsa.weights, dtype=torch.float32)
+    start_end_states = torch.tensor(fast_bw_fsa.start_end_states, dtype=torch.int32)
+    am_scores = torch.full((seq_len, n_batch, n_classes), float(numpy.log(n_classes)))  # -log space, uniform
+    float_idx = torch.ones((seq_len, n_batch), dtype=torch.float32)
+    n_states = int(start_end_states.max()) + 1
+
+    tensor_args = (am_scores, edges, weights, start_end_states, float_idx)
+    fwdbwd_real, obs_scores_real = op(*tensor_args, n_states)
+
+    mode = FakeTensorMode()
+    fake_args = [mode.from_tensor(t) for t in tensor_args]
+    with mode:
+        fwdbwd_fake, obs_scores_fake = op(*fake_args, n_states)
+    for fake, real in [(fwdbwd_fake, fwdbwd_real), (obs_scores_fake, obs_scores_real)]:
+        assert isinstance(fake, FakeTensor)
+        assert fake.shape == real.shape and fake.dtype == real.dtype
+
+
+def test_ctc_loss_and_best_path_fake_tensor_mode():
+    """
+    Runs :func:`ctc_loss` (full-sum and max approximation) and :func:`ctc_best_path` under FakeTensor tracing,
+    see :func:`test_fast_baum_welch_fake_tensor_mode`.
+    """
+    if not hasattr(torch.library, "register_fake"):
+        raise SkipTest("torch.library.register_fake not available (torch < 2.4)")
+    from torch._subclasses.fake_tensor import FakeTensor, FakeTensorMode
+
+    n_batch, seq_len, n_tgt, n_classes = 3, 8, 3, 6
+    torch.manual_seed(1)
+    args = dict(
+        logits=torch.randn(seq_len, n_batch, n_classes),
+        logits_seq_lens=torch.tensor([8, 6, 5], dtype=torch.int32),
+        targets=torch.randint(0, n_classes - 1, (n_batch, n_tgt), dtype=torch.int32),
+        targets_seq_lens=torch.tensor([3, 2, 0], dtype=torch.int32),
+    )
+    opts = dict(logits_time_major=True, blank_index=n_classes - 1)
+    for func, func_opts in [(ctc_loss, {}), (ctc_loss, dict(max_approx=True)), (ctc_best_path, {})]:
+        real = func(**args, **opts, **func_opts)
+        mode = FakeTensorMode()
+        with mode:
+            fake = func(**{k: mode.from_tensor(v) for k, v in args.items()}, **opts, **func_opts)
+        assert isinstance(fake, FakeTensor)
+        assert fake.shape == real.shape and fake.dtype == real.dtype

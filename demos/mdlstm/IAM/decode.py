@@ -1,11 +1,15 @@
 #!/usr/bin/env python
 
+"""
+Decode with the IAM MDLSTM demo model and print the recognized text.
+"""
+
 from __future__ import annotations
 import h5py
 import numpy
 
 with open("chars.txt") as f:
-    chars = [l.strip() for l in f.readlines()] + ["_blank"]
+    chars = [line.strip() for line in f.readlines()] + ["_blank"]
 
 with h5py.File("mdlstm_real_valid.h5", "r") as f:
     x = f["inputs"][...]

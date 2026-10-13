@@ -6,13 +6,19 @@ We make use of torch.utils.data.IterDataPipe.
 
 from __future__ import annotations
 
-from typing import Callable, Optional, Iterable, Dict
+from typing import TYPE_CHECKING, Callable, Optional, Iterator, Dict
+import functools
+import multiprocessing
 import sys
 import numpy
 import torch.utils.data
 from returnn.datasets.basic import Dataset as ReturnnDataset
 from returnn.datasets.util.strings import str_to_numpy_array
 from returnn.util.better_exchook import better_exchook
+from returnn.util.multi_proc_non_daemonic_spawn import NonDaemonicSpawnProcess, register_exit_hook
+
+if TYPE_CHECKING:
+    import multiprocessing.sharedctypes
 
 ResetCallbackT = Callable[[], None]
 
@@ -20,12 +26,18 @@ ResetCallbackT = Callable[[], None]
 class ReturnnDatasetResetDefaultEpochCounterCallback:
     """
     Default for reset_callback.
-    Has an internal counter for the epoch, starting at epoch 1 (RETURNN convention).
+    Has an internal counter for the epoch, starting by default at epoch 1 (RETURNN convention).
     """
 
-    def __init__(self, dataset: ReturnnDataset):
+    def __init__(self, dataset: ReturnnDataset, *, epoch0: int = 0):
+        """
+        :param dataset: RETURNN dataset.
+        :param epoch0: Epoch from which the dataset sequence ordering should start.
+            It will actually be epoch0+1 for the first epoch, since :func:`__call__` will increment it.
+            By default 0 since next :func:`__call__` will increment, thus we start at epoch 1.
+        """
         self.dataset = dataset
-        self.epoch = 0  # next __call__ will increment, thus we start at epoch 1
+        self.epoch = epoch0
 
     def __call__(self):
         # dataset is likely a copy of the original dataset, either in the main process or in a worker process
@@ -38,25 +50,11 @@ class ReturnnDatasetResetMpSharedEpochCallback:
     Can be used as reset_callback.
     """
 
-    def __init__(self, dataset: ReturnnDataset, epoch_mp_shared: torch.multiprocessing.Value):
+    def __init__(self, dataset: ReturnnDataset, epoch_mp_shared: multiprocessing.sharedctypes.Synchronized):
         self.dataset = dataset
         self.epoch_mp_shared = epoch_mp_shared
-        self._sharding_config_set = False
 
     def __call__(self):
-        # Include local worker rank in the dataset sharding config
-        if not self._sharding_config_set:
-            worker_info = torch.utils.data.get_worker_info()
-            if worker_info is not None:
-                assert self.dataset.supports_sharding() or worker_info.num_workers == 1, (
-                    f"Using {worker_info.num_workers} torch data loading workers "
-                    "but dataset does not support sharding. This will result in repeated training data."
-                )
-                self.dataset.set_shard_idx_and_num_shards(
-                    self.dataset.shard_index + worker_info.id, self.dataset.num_shards * worker_info.num_workers
-                )
-            self._sharding_config_set = True
-
         # dataset is likely a copy of the original dataset, either in the main process or in a worker process
         # Use epoch_mp_shared to get the current epoch correctly in worked processes
         epoch = self.epoch_mp_shared.value or None
@@ -87,6 +85,7 @@ class ReturnnDatasetIterDataPipe(torch.utils.data.IterDataPipe):
         if not reset_callback:
             reset_callback = ReturnnDatasetResetDefaultEpochCounterCallback(returnn_dataset)
         self._reset_callback = reset_callback
+        self._worker_exit_hook_registered = False
 
     def reset(self):
         """
@@ -101,10 +100,18 @@ class ReturnnDatasetIterDataPipe(torch.utils.data.IterDataPipe):
         """
         self._reset_callback()
 
-    def __iter__(self) -> Iterable[Dict[str, numpy.ndarray]]:
+    def __iter__(self) -> Iterator[Dict[str, numpy.ndarray]]:
         """
         :return: generator providing data samples in the form of a dict data_key -> data
         """
+        if (
+            not self._worker_exit_hook_registered
+            and torch.utils.data.get_worker_info() is not None
+            and isinstance(multiprocessing.current_process(), NonDaemonicSpawnProcess)
+        ):
+            # the worker owns this copy (e.g. reader procs): free it before the exit cleanup signals them
+            register_exit_hook(functools.partial(self._dataset.finish_epoch, free_resources=True))
+            self._worker_exit_hook_registered = True
         # noinspection PyBroadException
         try:
             num_seqs = self._dataset.num_seqs

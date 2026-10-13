@@ -298,7 +298,7 @@ def test_zoneout_lstm_tf_layers_vs_rf_pt():
     print("out shape:", tf_out.shape)
     assert tf_out.shape == pt_out.shape
 
-    size_v = old_model_outputs_fetch[f"layer:output:size0"]
+    size_v = old_model_outputs_fetch["layer:output:size0"]
     print("* sizes:", size_v)
     for b in range(tf_out.shape[1]):
         tf_out[size_v[b] :] = 0
@@ -345,7 +345,7 @@ def test_zoneout_lstm_tf_layers_vs_rf_pt():
             rtol=1e-5,
             atol=1e-5,
             equal_nan=False,
-            err_msg=f"TF-layers vs RF-PT mismatch",
+            err_msg="TF-layers vs RF-PT mismatch",
         )
         raise Exception(f"should not get here, mismatches: {remarks}")
 

@@ -3,7 +3,7 @@ Provide basic Byte-Pair-Encoding (BPE) utilities.
 """
 
 from __future__ import annotations
-from typing import Optional, List, Dict, Callable
+from typing import Optional, List, Dict, Callable, Tuple
 from dataclasses import dataclass
 import re
 import numpy
@@ -39,6 +39,11 @@ class StandardBytePairEncoder:
 
     _file_cache = {}  # filename -> bpe_file_version, bpe_codes, bpe_codes_reverse
 
+    # set by _load (directly or from _file_cache)
+    _bpe_file_version: Tuple[int, ...]
+    _bpe_codes: Dict[Tuple[str, ...], int]
+    _bpe_codes_reverse: Dict[str, Tuple[str, ...]]
+
     def _load(self, bpe_codes_file):
         """
         Load BPE codes from file
@@ -56,11 +61,9 @@ class StandardBytePairEncoder:
             )
         else:
             self._bpe_file_version = (0, 1)
-        self._bpe_codes = [
-            tuple(item.split()) for item in open(bpe_codes_file, "rb").read().decode("utf8").splitlines()
-        ]
+        bpe_codes = [tuple(item.split()) for item in open(bpe_codes_file, "rb").read().decode("utf8").splitlines()]
         # some hacking to deal with duplicates (only consider first instance)
-        self._bpe_codes = dict([(code, i) for (i, code) in reversed(list(enumerate(self._bpe_codes)))])
+        self._bpe_codes = dict([(code, i) for (i, code) in reversed(list(enumerate(bpe_codes)))])
         self._bpe_codes_reverse = dict([(pair[0] + pair[1], pair) for pair, i in self._bpe_codes.items()])
         self._file_cache[bpe_codes_file] = (self._bpe_file_version, self._bpe_codes, self._bpe_codes_reverse)
 

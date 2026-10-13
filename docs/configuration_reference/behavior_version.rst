@@ -22,6 +22,216 @@ and not listing legacy/deprecated parameters.
 Version History
 ---------------
 
+Behavior version 36 (2026-10-10)
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Static shapes, where each batch is filled up to ``batch_size_bound`` with zero-length padding seqs
+(PyTorch ``torch_cuda_graph``, TF ``tf_static_shapes``, JAX ``jax_static_shapes`` with packed keys):
+the batch dim keeps the real batch size as its dyn size, with ``batch_size_bound`` as its capacity,
+so the padding seqs are masked.
+
+Before, the batch dim was static (the bound), or its size was the bound,
+and the padding seqs were not distinguishable from real empty seqs.
+E.g. appending EOS to the targets via ``rf.pad`` gave each padding seq an artificial EOS target,
+which entered the loss, the gradients and the normalization.
+(JAX padded keys always kept the real batch size.)
+
+There is also the option ``mask_padding_seqs: bool`` in each of these to override in both directions.
+
+See PR `#1980 <https://github.com/rwth-i6/returnn/pull/1980>`__.
+
+Behavior version 35 (2026-10-07)
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+PyTorch bucket batching (``torch_batching`` with ``BucketOrderingIterDataPipe``):
+``complete_frac`` and ``seq_idx`` keep the input order across the emitted batches,
+so ``epoch_continuous`` does not go backwards.
+This affects e.g. ``dynamic_learning_rate``.
+
+Before, each seq kept its own values,
+and the partially filled buckets emitted at the end of the epoch brought the progress back to an earlier point.
+
+There is also the option ``monotonic_data_keys`` of ``BucketOrderingIterDataPipe``
+to override in both directions.
+
+See PR `#1942 <https://github.com/rwth-i6/returnn/pull/1942>`__.
+
+Behavior version 34 (2026-10-06)
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+:func:`rf.moments` with ``use_mask=False`` takes its mean over all frames too, like the variance.
+Before, the mean was always masked while the variance was not,
+so the variance was taken around the mean of other frames.
+
+:class:`rf.BatchNorm` passes its ``use_mask`` on to :func:`rf.moments`.
+Before, the statistics of its generic path were always masked.
+So with ``use_mask=False``, the distributed :class:`rf.BatchNorm` took them without the padding,
+while the local one (the fused op) takes them over all frames, including the padding.
+
+There is also the global config option ``rf_moments_use_fixed_masking: bool``
+to override in both directions.
+
+See PR `#1915 <https://github.com/rwth-i6/returnn/pull/1915>`__.
+
+Behavior version 33 (2026-10-06)
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+PyTorch distributed training (``torch_distributed``):
+the train loop uses the mean of the ``complete_frac`` of all ranks,
+so ``epoch_continuous`` is the same on every rank.
+This affects ``dynamic_learning_rate`` and a callable ``accum_grad_multiple_step``.
+
+Before, each rank used its own ``complete_frac``, which differs between ranks
+as each rank consumes a different number of sequences per step.
+A schedule on ``epoch_continuous`` then applied a different learning rate on each rank,
+and the model replicas diverged although the gradients are averaged.
+
+There is also the option ``sync_complete_frac: bool`` in ``torch_distributed`` to override in both directions.
+With ``reduce_type`` ``"param"``, it applies in the steps where the parameters are synced.
+
+Behavior version 32 (2026-10-02)
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+:func:`rf.moments` reduces float input of lower precision (float16, bfloat16, float8, ...) in float32
+and returns the statistics in float32.
+This affects all RF norms using it
+(:class:`rf.LayerNorm`, :class:`rf.GroupNorm`, :class:`rf.GroupNormSpatial`, :func:`rf.normalize`,
+and :class:`rf.BatchNorm` when it masks or is distributed).
+
+Before, a bfloat16 reduction over many frames drifted by several ulps, and differently per layout
+(padded, packed, bound packed), and a float16 variance above 65504 overflowed.
+
+There is also the global config option ``rf_moments_float32: bool`` to override in both directions,
+and the ``compute_dtype`` argument of :func:`rf.moments` per call.
+
+See PR `#1914 <https://github.com/rwth-i6/returnn/pull/1914>`__.
+
+Behavior version 31 (2026-08-26)
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+The behavior version is now propagated to spawned dataset worker subprocesses:
+the PyTorch dataloader workers, :class:`MultiProcDataset`, :class:`PostprocessingDataset`
+and the :class:`DistributeFilesDataset` sub-epoch workers.
+
+Before, only the config was copied there, and ``BehaviorVersion.get()`` fell back to the minimum
+(normally 0), so version-gated behavior silently differed between main process and dataset worker.
+Note that the dataset lives in such a worker by default,
+since the dataloader defaults to ``num_workers = 1``.
+
+The visible case is :class:`DistributeFilesDataset` sharding:
+its ``behavior_version >= 26`` gate is evaluated in the worker,
+so a config with ``behavior_version = 26`` still got the legacy double sharding,
+where every rank consumes only 1/N^2 of the data.
+
+There is also the global config option ``propagate_behavior_version_to_subprocs: bool``
+to override in both directions.
+
+See issue `#1837 <https://github.com/rwth-i6/returnn/issues/1837>`__.
+
+Behavior version 30 (2026-08-09)
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+:func:`returnn.tf.native_op.ctc_loss` and :func:`returnn.tf.native_op.ctc_loss_viterbi`:
+a sequence with no valid alignment
+(targets longer than the input, or repeated labels with too few frames for the blanks between them)
+now contributes 0 loss AND 0 gradient, as PyTorch ``ctc_loss(zero_infinity=True)`` does.
+
+Before, the two failed differently, both silently wrong:
+
+``ctc_loss`` gave loss 0 but an error signal of ``softmax(logits)``.
+:func:`fast_baum_welch` finds no path, so the Baum-Welch term is 0 and only ``exp(log_sm)`` remains,
+i.e. a full-magnitude gradient pushing the distribution toward uniform
+on exactly the frames that carry no supervision.
+
+``ctc_loss_viterbi`` gave loss ``inf``, which poisons the batch loss,
+and :func:`fast_viterbi` fills the alignment of such a sequence with its mask index,
+so the cross entropy trained toward that filler label at full strength.
+
+There is also the global config option ``tf_native_ctc_zero_infinity: bool``
+and the explicit ``zero_infinity`` argument to override in both directions.
+The RF TF backend always passes ``zero_infinity=True``, independent of the behavior version,
+so it matches the PyTorch backend.
+
+Behavior version 29 (2026-08-03)
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+:class:`ConformerEncoderLayer` conv-block :class:`rf.BatchNorm`:
+``conv_norm_opts`` no longer forces ``use_mask=False``.
+It now leaves the choice to :class:`rf.BatchNorm` itself (via :func:`rf.use_mask_default`),
+which masks by default, so the batch statistics run over the real frames.
+
+Unmasked, the statistics run over the raw storage rather than over the real frames,
+so they depend on how the batch is stored:
+a padded batch includes its padding frames, a packed batch includes its gap frames.
+The same model then normalizes differently depending on the storage layout,
+and packed and padded training cannot agree.
+
+There is also the global config option ``rf_conformer_conv_norm_use_mask: bool``
+to override in both directions.
+
+Behavior version 28 (2026-07-29)
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+:func:`rf.audio.specaugment`: the number of spatial (time) masks is now drawn
+per sequence from a range following that sequence's OWN length,
+instead of one range from the longest sequence in the batch.
+The augmentation of a sequence thus no longer depends on the batch composition.
+
+There is also the global config option ``rf_specaugment_num_masks_per_seq: bool``
+and the explicit ``num_masks_per_seq`` argument to override in both directions.
+
+Behavior version 27 (2026-07-20)
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+RF ``Linear`` (with bias), ``LayerNorm``, ``RMSNorm``, ``GroupNorm``:
+the module output now keeps the input dtype under autocast,
+instead of being promoted to float32 by the final bias add / scale mul.
+The internal statistics (norm mean/variance) stay float32.
+
+There is also the global config option ``rf_module_output_keep_dtype: bool``
+to explicitly enable the new behavior.
+
+See issue `#1828 <https://github.com/rwth-i6/returnn/issues/1828>`__.
+
+Behavior version 26 (2026-06-11)
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+:class:`DistributeFilesDataset` with sharding
+(any ``_num_shards > 1``: via ``distrib_shard_files=True``
+or via the ``_num_shards``/``_shard_index`` properties):
+the sub-epoch dataset no longer inherits the sharding info
+(``_num_shards``/``_shard_index``) from the parent dataset.
+Before, the sub-epoch dataset sharded its seq order a second time,
+on top of the file-level sharding,
+so every rank consumed only ``1/num_shards`` of its own file shard
+(``1/num_shards^2`` of the data, union ``1/num_shards`` across ranks) --
+silent data loss.
+The fixed behavior is also available independent of the behavior version
+via the new ``sharding_fix=True`` dataset option
+(a new option, so an older RETURNN rejects it loudly,
+rather than silently doing the wrong thing as a special flag value would);
+``sharding_fix=False`` keeps the legacy behavior.
+
+See issue `#1738 <https://github.com/rwth-i6/returnn/issues/1738>`__.
+
+**Important/warning**:
+there is a high chance that behavior version 26 is still not enough,
+because of issue `#1837 <https://github.com/rwth-i6/returnn/issues/1837>`__,
+and you actually need at least behavior version 31.
+
+Behavior version 25 (2026-03-01)
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+RF ``scatter`` with custom ``fill_value``,
+and related also ``scatter_mean`` and ``scatter_logsumexp``:
+Indices of padded area could incorrectly influence the result.
+This is fixed.
+
+There is also the global config option ``rf_scatter_use_fixed_masking: bool``
+to explicitly enable the new behavior.
+
+See issue `#1815 <https://github.com/rwth-i6/returnn/issues/1815>`__.
+
 Behavior version 24 (2025-03-02)
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 

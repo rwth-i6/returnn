@@ -15,6 +15,7 @@ from returnn.log import log
 from returnn.config import Config
 from returnn.datasets import Dataset
 import argparse
+import functools
 from returnn.util.basic import hms, human_size, parse_orthography, parse_orthography_into_symbols, unicode
 import gzip
 from xml.etree import ElementTree
@@ -37,9 +38,11 @@ def found_sub_seq(sub_seq, seq):
 
 def iter_dataset(dataset: Dataset, options, callback):
     """
-    :param dataset:
+    :param dataset: dataset to iterate over
+    :param options: unused
+    :param callback: called per seq as callback(frame_len=..., orth=...)
     """
-    options  # unused  # noqa
+    del options  # unused
     dataset.init_seq_order(epoch=1)
     assert "orth" in dataset.get_target_list()
 
@@ -67,6 +70,13 @@ def get_wav_time_len(filename):
 
 
 def iter_bliss(filename, options, callback):
+    """
+    Iterate over the segments of a Bliss XML corpus (optionally gzipped), calling back per orth.
+
+    :param str filename:
+    :param options: command line options
+    :param callback: called with the orth of each segment
+    """
     corpus_file = open(filename, "rb")
     if filename.endswith(".gz"):
         corpus_file = gzip.GzipFile(fileobj=corpus_file)
@@ -117,6 +127,11 @@ def iter_bliss(filename, options, callback):
 
 
 def iter_txt(filename, options, callback):
+    """
+    :param filename: text file, gzip-decompressed if it ends in .gz
+    :param options: argparse.Namespace; collect_time is switched off here, txt has no time info
+    :param callback: called per non-empty line as callback(frame_len=0, orth=...)
+    """
     f = open(filename, "rb")
     if filename.endswith(".gz"):
         f = gzip.GzipFile(fileobj=f)
@@ -136,12 +151,15 @@ def iter_txt(filename, options, callback):
 def collect_stats(options, iter_corpus):
     """
     :param options: argparse.Namespace
+    :param iter_corpus: called with a per-seq callback, see e.g. :func:`iter_txt`
     """
     orth_symbols_filename = options.output
     if orth_symbols_filename:
         assert not os.path.exists(orth_symbols_filename)
 
     class Stats:
+        """accumulated over the corpus by :func:`cb` below"""
+
         count = 0
         process_last_time = time.time()
         total_frame_len = 0
@@ -156,6 +174,7 @@ def collect_stats(options, iter_corpus):
         Stats.orth_syms_set.update(map(chr, list(range(ord("A"), ord("Z") + 1))))
 
     def cb(frame_len, orth):
+        """per-seq callback for iter_corpus: filters by length, then accumulates into Stats"""
         if frame_len >= options.max_seq_frame_len:
             return
         orth_syms = parse_orthography(orth)
@@ -189,7 +208,7 @@ def collect_stats(options, iter_corpus):
             else:
                 print("Collect process, total orth len so far:", human_size(Stats.total_orth_len), file=log.v3)
 
-    iter_corpus(cb)
+    iter_corpus(callback=cb)
 
     if options.remove_symbols:
         filter_syms = parse_orthography_into_symbols(options.remove_symbols)
@@ -301,11 +320,11 @@ def main(argv):
     init(config_filename=crnn_config_filename)
 
     if bliss_filename:
-        iter_corpus = lambda cb: iter_bliss(bliss_filename, options=args, callback=cb)
+        iter_corpus = functools.partial(iter_bliss, bliss_filename, options=args)
     elif txt_filename:
-        iter_corpus = lambda cb: iter_txt(txt_filename, options=args, callback=cb)
+        iter_corpus = functools.partial(iter_txt, txt_filename, options=args)
     else:
-        iter_corpus = lambda cb: iter_dataset(rnn.train_data, options=args, callback=cb)
+        iter_corpus = functools.partial(iter_dataset, rnn.train_data, options=args)
     collect_stats(args, iter_corpus)
 
     if crnn_config_filename:

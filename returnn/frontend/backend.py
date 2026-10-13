@@ -10,16 +10,20 @@ from . import _backend
 from ._backend import (
     select_backend,
     get_selected_backend,
-    select_backend_torch,
+    select_backend_numpy,
+    select_backend_tf,
     select_backend_returnn_layers_tf,
+    select_backend_torch,
     is_executing_eagerly,
 )
 
 __all__ = [
     "select_backend",
     "get_selected_backend",
-    "select_backend_torch",
+    "select_backend_numpy",
+    "select_backend_tf",
     "select_backend_returnn_layers_tf",
+    "select_backend_torch",
     "is_executing_eagerly",
     "is_backend_raw_tensor_dim_tag_independent",
 ]

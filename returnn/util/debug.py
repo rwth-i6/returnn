@@ -8,6 +8,7 @@ from types import FunctionType, CodeType, FrameType
 import os
 import sys
 import signal
+import time
 
 try:
     import thread
@@ -22,7 +23,7 @@ if TYPE_CHECKING:
 
 
 signum_to_signame = {
-    k: v for v, k in reversed(sorted(signal.__dict__.items())) if v.startswith("SIG") and not v.startswith("SIG_")
+    k: v for v, k in reversed(sorted(vars(signal).items())) if v.startswith("SIG") and not v.startswith("SIG_")
 }
 
 
@@ -210,7 +211,6 @@ def format_signum(signum):
     return "%s (%s)" % (signum, signum_to_signame.get(signum, "unknown"))
 
 
-# noinspection PyUnusedLocal
 def signal_handler(signum, frame):
     """
     Prints a message on stdout and dump all thread stacks.
@@ -218,8 +218,34 @@ def signal_handler(signum, frame):
     :param int signum: e.g. signal.SIGUSR1
     :param frame: ignored, will dump all threads
     """
+    del frame  # signal handler signature
     print("Signal handler: got signal %s" % format_signum(signum))
     dump_all_thread_tracebacks()
+
+
+def _fatal_signal_handler(signum, frame):
+    """
+    Like :func:`signal_handler`, but also broadcasts SIGUSR1 to descendant processes
+    (so they dump via their inherited SIGUSR1 handler before our stdout/stderr pipes close)
+    and then exits via :func:`sys.exit` so Python finalizers and atexit handlers run.
+
+    Use for signals where the expectation is termination,
+    e.g. SIGTERM from job schedulers / torchelastic.
+    """
+    del frame  # signal handler signature
+    import psutil
+
+    print("Signal handler: got signal %s, dumping threads and children." % format_signum(signum))
+    dump_all_thread_tracebacks()
+    for child in psutil.Process().children(recursive=True):
+        try:
+            child.send_signal(signal.SIGUSR1)
+        except (psutil.NoSuchProcess, ProcessLookupError):
+            pass
+    time.sleep(3)  # give descendants time to write their dumps before we close stdout/stderr
+    sys.stdout.flush()
+    sys.stderr.flush()
+    sys.exit(128 + signum)
 
 
 def install_signal_handler_if_default(signum, exceptions_are_fatal=False):
@@ -309,6 +335,7 @@ def _get_native_signal_handler_lib_filename() -> str:
               old_signal_handler[SIGILL] = signal(SIGILL, signal_handler);
               old_signal_handler[SIGABRT] = signal(SIGABRT, signal_handler);
               old_signal_handler[SIGFPE] = signal(SIGFPE, signal_handler);
+              old_signal_handler[SIGUSR1] = signal(SIGUSR1, signal_handler);
             }
             """
         ),
@@ -327,7 +354,7 @@ def install_native_signal_handler(*, reraise_exceptions: bool = False):
 
         # C code: https://github.com/albertz/playground/blob/master/signal_handler.c
         lib = ctypes.CDLL(_get_native_signal_handler_lib_filename())
-        lib.install_signal_handler.return_type = None
+        lib.install_signal_handler.restype = None  # void
         lib.install_signal_handler()
         print("Installed native_signal_handler.so.")
 
@@ -378,6 +405,13 @@ def init_faulthandler(sigusr1_chain=False):
             sigusr1_chain = True
         # Why not also SIGUSR2... SGE can also send this signal.
         install_signal_handler_if_default(signal.SIGUSR2)
+        # SIGTERM: typically sent by job schedulers (SLURM scancel/walltime, k8s eviction),
+        # torchelastic terminating siblings after one rank fails,
+        # Docker stop, parent-process teardown, or `kill <pid>`.
+        # Install dump+exit handler if no app code has its own SIGTERM handler yet,
+        # so we get a stack trace of where the process was before going down.
+        if signal.getsignal(signal.SIGTERM) == signal.SIG_DFL:
+            signal.signal(signal.SIGTERM, _fatal_signal_handler)
     try:
         import faulthandler
     except ImportError as e:
@@ -388,6 +422,81 @@ def init_faulthandler(sigusr1_chain=False):
             faulthandler.enable()
             if sys.platform != "win32":
                 faulthandler.register(signal.SIGUSR1, all_threads=True, chain=sigusr1_chain)
+                faulthandler.register(signal.SIGTERM, all_threads=True, chain=True)
+        # Subprocs' per-pid faulthandler_dump.<pid>.log self-clean if empty,
+        # but not on hard kill (SIGKILL / unhandled SIGTERM);
+        # sweep the leftover empties here at normal exit.
+        _register_empty_faulthandler_dump_cleanup()
+
+
+def _register_empty_faulthandler_dump_cleanup():
+    """Remove leftover empty ``faulthandler_dump.<pid>.log`` files from the cwd at normal exit."""
+    import atexit
+    import glob
+
+    def _cleanup():
+        for filename in glob.glob(os.path.join(os.getcwd(), "faulthandler_dump.*.log")):
+            try:
+                if os.path.getsize(filename) == 0:
+                    os.remove(filename)
+            except OSError:
+                pass
+
+    atexit.register(_cleanup)
+
+
+def install_subproc_faulthandler():
+    """
+    Install faulthandler in a spawned subprocess, dumping to a per-pid file.
+
+    Spawned children start with a fresh interpreter
+    and do not inherit the main proc's faulthandler setup (forked children would),
+    so each spawn target must call this itself to be diagnosable.
+    Both handlers point at <cwd>/faulthandler_dump.<pid>.log --
+    a per-pid file, not stderr, so dumps from many procs don't interleave into unreadable output:
+
+    - faulthandler.enable(): dump on a fatal fault (SIGSEGV / SIGABRT / SIGFPE / SIGBUS).
+    - faulthandler.register(SIGUSR1): on-demand all-thread dump, e.g. to inspect a hang.
+      chain=False so we don't fall through to SIG_DFL (= terminate) when no prior handler is set up,
+      which would kill the very process we want to inspect.
+
+    No dump_traceback_later: an earlier iteration's timer thread broke SyncManager bootstrap.
+    """
+    if sys.platform == "win32":
+        return
+    import faulthandler
+
+    dump_fh = None  # None -> faulthandler defaults to stderr
+    try:
+        dump_fh = open(os.path.join(os.getcwd(), f"faulthandler_dump.{os.getpid()}.log"), "w")
+    except OSError:
+        pass
+    if not faulthandler.is_enabled():
+        faulthandler.enable(file=dump_fh)
+    faulthandler.register(signal.SIGUSR1, all_threads=True, chain=False, file=dump_fh)
+
+    if dump_fh is not None:
+        # The file must exist (open fd) from install time on -- faulthandler dumps from signal context,
+        # so it cannot be opened lazily. To avoid littering the cwd with empty per-pid files,
+        # remove it at normal process exit if nothing was ever dumped into it.
+        # (Procs killed hard (SIGKILL / unhandled SIGTERM) skip atexit and may leave an empty file --
+        # acceptable, since after such a death the leftovers are debugging hints anyway.)
+        import atexit
+
+        def _remove_dump_file_if_empty(fh=dump_fh):
+            try:
+                fh.flush()
+                if os.fstat(fh.fileno()).st_size > 0:
+                    return  # sth was dumped -- keep it
+                if faulthandler.is_enabled():
+                    faulthandler.disable()
+                faulthandler.unregister(signal.SIGUSR1)
+                fh.close()
+                os.remove(fh.name)
+            except OSError:
+                pass
+
+        atexit.register(_remove_dump_file_if_empty)
 
 
 @auto_exclude_all_new_threads
@@ -610,9 +719,7 @@ class PyTracer:
     In Python >=3.13, you likely get a few more locals than before.
     """
 
-    def __init__(
-        self, funcs_to_trace_list: Sequence[Union[Callable, FunctionType]], capture_type: Union[type, Tuple[type, ...]]
-    ):
+    def __init__(self, funcs_to_trace_list: Sequence[FunctionType], capture_type: Union[type, Tuple[type, ...]]):
         """
         :param funcs_to_trace_list: list of functions to trace the locals. only those functions will be traced.
         :param capture_type: only capture variables of this type, e.g. torch.Tensor.
@@ -620,6 +727,7 @@ class PyTracer:
 
         def _get_func_code(func: FunctionType) -> CodeType:
             while getattr(func, "__wrapped__", None) is not None:
+                # noinspection unresolved-references
                 func = func.__wrapped__
             return func.__code__
 
@@ -627,7 +735,7 @@ class PyTracer:
         self._code_obj_to_func = {_get_func_code(func): func for func in self.funcs_to_trace_list}
         self.capture_type = capture_type
 
-        self._prev_trace_func = None
+        self._prev_trace_func: Optional[Callable] = None
         self.captured_locals = {}  # func -> (list of calls) -> tensor local name -> (list of versions) -> tensor
 
     def __enter__(self) -> PyTracer:
@@ -646,12 +754,13 @@ class PyTracer:
         sys.settrace(self._prev_trace_func)
         self._prev_trace_func = None
 
-    def __call__(self, frame: FrameType, event, arg) -> Optional[PyTracer]:
+    def __call__(self, frame: FrameType, event, arg) -> Optional[Union[PyTracer, Callable]]:
         """
         Trace func to get intermediate outputs.
         """
-        prev_trace_func_res = None
+        prev_trace_func_res: Optional[Callable] = None
         if self._prev_trace_func:
+            assert callable(self._prev_trace_func)
             prev_trace_func_res = self._prev_trace_func(frame, event, arg)
         func = self._code_obj_to_func.get(frame.f_code)
         if func:
@@ -682,7 +791,7 @@ def check_py_traces_rf_to_pt_equal(
         Tuple[
             Tuple[Callable, int, str, int],
             Tuple[Callable, int, str, int],
-            Union[Tuple[Union[Dim, str], ...], Callable[[torch.Tensor], Tensor]],
+            Union[Tuple[Union[Dim, str], ...], Callable[..., Tensor]],
         ],
     ],
 ):
@@ -699,12 +808,14 @@ def check_py_traces_rf_to_pt_equal(
             Instead of Dim, you can also use a string, which will be resolved from the RF trace
             (then you also need ``Dim`` in ``capture_type`` of the :class:`PyTracer`).
             If callable, it gets the PyTorch tensor and should return the RETURNN tensor.
+            It is called as ``f(tensor, name=..., resolve_dim=..., **kwargs)``,
+            so it must accept ``**kwargs`` -- we pass a dummy one to check for that.
             Sometimes you might want to perform some reshaping, slicing, or similar,
             and then use rf.convert_to_tensor.
     """
     import random
     import torch
-    from returnn.tensor import Tensor, Dim
+    from returnn.tensor import Dim
     import returnn.frontend as rf
 
     # noinspection PyProtectedMember
@@ -715,8 +826,17 @@ def check_py_traces_rf_to_pt_equal(
     def _get_entry(trace, func, i, name, j):
         return trace[func][i][name][j]
 
+    def _get_entry_attr(trace, func, i, name, j):
+        name, attr = name.split(".", 1)
+        obj = trace[func][i][name][j]
+        return eval(f"{name}.{attr}", {name: obj})
+
     def _resolve_dim(dim: Union[Dim, str]) -> Dim:
         if isinstance(dim, Dim):
+            return dim
+        elif isinstance(dim, str) and "." in dim:
+            dim = _get_entry_attr(trace_rf, *check_rf[:2], dim, -1)
+            assert isinstance(dim, Dim)
             return dim
         elif isinstance(dim, str):
             dim = _get_entry(trace_rf, *check_rf[:2], dim, -1)
@@ -763,7 +883,7 @@ def check_py_traces_rf_to_pt_equal(
             if len(indices) > 5:
                 msgs.append("  non-matching ...")
             non_matching.append("\n".join(msgs_prefix + msgs))
-            print(f"  mismatch!")
+            print("  mismatch!")
             for msg in msgs:
                 print(msg)
 

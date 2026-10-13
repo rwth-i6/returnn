@@ -1,17 +1,25 @@
 #!/usr/bin/env python
 # coding=utf-8
+
+"""
+Build an HDF dataset from the IAM handwriting corpus for the MDLSTM demo.
+"""
+
 import h5py
 import numpy
-from scipy.ndimage import imread
-from scipy.misc import imsave, imresize
+from PIL import Image
 import os
 import glob
-import sys
 import errno
 import re
 
 
 def mkdir_p(path):
+    """
+    Create the directory and any missing parents; do nothing if it already exists.
+
+    :param str path:
+    """
     try:
         os.makedirs(path)
     except OSError as exc:
@@ -22,9 +30,16 @@ def mkdir_p(path):
 
 
 def hdf5_strings(handle, name, data):
+    """
+    Write a list of strings as an HDF5 dataset.
+
+    :param h5py.File handle:
+    :param str name: dataset name
+    :param list[str] data:
+    """
     try:
-        S = max([len(d) for d in data])
-        dset = handle.create_dataset(name, (len(data),), dtype="S" + str(S))
+        s = max([len(d) for d in data])
+        dset = handle.create_dataset(name, (len(data),), dtype="S" + str(s))
         dset[...] = data
     except Exception:
         dt = h5py.special_dtype(vlen=str)
@@ -34,37 +49,52 @@ def hdf5_strings(handle, name, data):
 
 
 def load_char_list(char_list_path):
+    """
+    :param str char_list_path: file with one character per line
+    :return: the characters, in file order
+    :rtype: list[str]
+    """
     charlist = []
     with open(char_list_path) as f:
-        for l in f:
-            charlist.append(l.strip())
+        for line in f:
+            charlist.append(line.strip())
     return charlist
 
 
 def load_file_list_and_transcriptions_and_sizes_and_n_labels(file_list_path, char_list_path, pad_whitespace, base_path):
+    """
+    Read the IAM file list and turn each line into an image path, a label-index
+    transcription and the image size.
+
+    :param str file_list_path: IAM-format list (lines starting with '#' are comments)
+    :param str char_list_path: passed to :func:`load_char_list`
+    :param bool pad_whitespace: surround each transcription with the '|' label
+    :param str base_path: prefix for the image files
+    :return: file list, transcriptions, sizes, number of labels
+    :rtype: (list[str], list[list[int]], list[(int,int)], int)
+    """
     charlist = load_char_list(char_list_path)
     file_list = []
     transcription_list = []
     size_list = []
     with open(file_list_path) as f:
-        for l in f:
+        for line in f:
             # IAM format
-            if l.startswith("#"):
+            if line.startswith("#"):
                 continue
-            sp = l.split()
+            sp = line.split()
             status = sp[1]
             assert status in ("ok", "err"), status
-            assert len(sp) >= 9, l
+            assert len(sp) >= 9, line
             name = sp[0]
             text = "".join(sp[8:])
             # add space before '
-            text = re.sub("([^|])'", "\g<1>|'", text)
+            text = re.sub("([^|])'", r"\g<1>|'", text)
             width = int(sp[6])
             height = int(sp[7])
             if height < 1 or width < 1:
                 continue
             size_list.append((height, width))
-            s = name.split("-")
             name = base_path + name + ".png"
             text = [charlist.index(c) for c in text]
             if pad_whitespace:
@@ -77,6 +107,21 @@ def load_file_list_and_transcriptions_and_sizes_and_n_labels(file_list_path, cha
 def write_to_hdf(
     file_list, transcription_list, charlist, n_labels, out_file_name, dataset_prefix, pad_y=15, pad_x=15, compress=True
 ):
+    """
+    Write the images and their transcriptions to an HDF dataset, padding each image
+    by pad_y/pad_x.
+
+    :param list[str] file_list: image paths
+    :param list[list[int]] transcription_list: label indices
+    :param list[str] charlist:
+    :param int n_labels:
+    :param str out_file_name:
+    :param str dataset_prefix:
+    :param int pad_y:
+    :param int pad_x:
+    :param bool compress:
+    """
+    del n_labels  # derived from charlist instead
     with h5py.File(out_file_name, "w") as f:
         f.attrs["inputPattSize"] = 1
         f.attrs["numDims"] = 1
@@ -89,7 +134,7 @@ def write_to_hdf(
         targets = []
         for i, (img_name, transcription) in enumerate(zip(file_list, transcription_list)):
             targets += transcription
-            img = imread(img_name)
+            img = numpy.array(Image.open(img_name))
             img = 255 - img
             img = numpy.pad(img, ((pad_y, pad_y), (pad_x, pad_x)), "constant")
             sizes.append(img.shape)

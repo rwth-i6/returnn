@@ -11,6 +11,17 @@ from returnn.tensor import Tensor, Dim, TensorDict, batch_dim
 from rf_utils import run_model
 
 
+def test_zeros_bool():
+    extern_data = TensorDict({"data": Tensor("data", [batch_dim], dtype="bool")})
+
+    # noinspection PyShadowingNames
+    def _forward_step(*, extern_data: TensorDict, **_kwargs):
+        out = rf.zeros(extern_data.data["data"].dims, dtype="bool")
+        out.mark_as_default_output(shape=[batch_dim])
+
+    run_model(extern_data, lambda **_kwargs: rf.Module(), _forward_step)
+
+
 def test_pack_padded():
     time_dim = Dim(Tensor("time", [batch_dim], dtype="int32"))
     in_dim = Dim(7, name="in")
@@ -91,6 +102,25 @@ def test_masked_select():
         mask = extern_data["mask"]
         out, pack_dim = rf.masked_select(x, mask=mask, dims=[batch_dim, time_dim])
         out.mark_as_default_output(shape=(pack_dim, in_dim))
+
+    run_model(extern_data, lambda *, epoch, step: rf.Module(), _forward_step)
+
+
+def test_masked_select_broadcast():
+    time_dim = Dim(Tensor("time", [batch_dim], dtype="int32"))
+    extern_data = TensorDict(
+        {
+            "data": Tensor("data", [time_dim], dtype="float32"),
+            "mask": Tensor("mask", [batch_dim, time_dim], dtype="bool"),
+        }
+    )
+
+    def _forward_step(*, extern_data: TensorDict, **_kwargs):
+        x = extern_data["data"]  # [T]
+        mask = rf.sequence_mask([batch_dim, time_dim], device=x.device)
+        indices = rf.range_over_dim(time_dim, device=x.device)  # [T]->T
+        out, num_states_dim = rf.masked_select(indices, mask=mask, dims=mask.dims)  # [T_]->T
+        out.mark_as_default_output(shape=(num_states_dim,))
 
     run_model(extern_data, lambda *, epoch, step: rf.Module(), _forward_step)
 
@@ -411,6 +441,60 @@ def test_concat():
     run_model(extern_data, lambda *, epoch, step: _Net(), _forward_step)
 
 
+def test_concat_partly_dyn_dim():
+    time_static_dim = Dim(5, name="time_static")
+    time_dim = Dim(Tensor("time", [batch_dim], dtype="int32"))
+    in_dim = Dim(7, name="in")
+    extern_data = TensorDict(
+        {
+            "left": Tensor("left", [batch_dim, time_static_dim, in_dim], dtype="float32"),
+            "right": Tensor("right", [batch_dim, time_dim, in_dim], dtype="float32"),
+        }
+    )
+
+    # noinspection PyShadowingNames
+    def _forward_step(*, extern_data: TensorDict, **_kwargs):
+        left, right = extern_data["left"], extern_data["right"]
+        out, out_time_dim = rf.concat((left, time_static_dim), (right, time_dim))
+        out.mark_as_default_output(shape=(batch_dim, out_time_dim, in_dim))
+
+    run_model(extern_data, lambda **_: rf.Module(), _forward_step)
+
+
+def test_concat_dyn_time():
+    time1_dim = Dim(Tensor("time1", [batch_dim], dtype="int32"))
+    time2_dim = Dim(Tensor("time2", [batch_dim], dtype="int32"))
+    extern_data = TensorDict(
+        {
+            "left": Tensor("left", [batch_dim, time1_dim], dtype="float32"),
+            "right": Tensor("right", [batch_dim, time2_dim], dtype="float32"),
+        }
+    )
+
+    # noinspection PyShadowingNames
+    def _forward_step(*, extern_data: TensorDict, **_kwargs):
+        left, right = extern_data["left"], extern_data["right"]
+        out, out_time_dim = rf.concat((left, time1_dim), (right, time2_dim))
+        out.mark_as_default_output(shape=(batch_dim, out_time_dim))
+
+    # test_single_batch_entry should test the interesting case.
+    run_model(extern_data, lambda **_: rf.Module(), _forward_step, test_tensorflow=False)
+
+
+def test_concat_empty():
+    extern_data = TensorDict({"data": Tensor("data", [batch_dim], dtype="float32")})
+
+    # noinspection PyShadowingNames
+    def _forward_step(**_kwargs):
+        empty_dim = Dim(rf.zeros([batch_dim], dtype="int32"), name="empty")
+        x = rf.random_uniform((batch_dim, empty_dim))
+        out, out_time_dim = rf.concat((x, empty_dim), (x, empty_dim))
+        out.mark_as_default_output(shape=(batch_dim, out_time_dim))
+
+    # test_single_batch_entry should test the interesting case.
+    run_model(extern_data, lambda **_: rf.Module(), _forward_step, test_tensorflow=False)
+
+
 def test_pad():
     time_dim = Dim(Tensor("time", [batch_dim], dtype="int32"))
     in_dim = Dim(7, name="in")
@@ -497,6 +581,42 @@ def test_pad_time_right():
         assert all(out_.raw_tensor[b, seq_len] == 1.0)
 
 
+def test_pad_time_right_bool():
+    time_dim = Dim(Tensor("time", [batch_dim], dtype="int32"))
+    extern_data = TensorDict(
+        {
+            "data": Tensor("data", [batch_dim, time_dim], dtype="bool"),
+        }
+    )
+
+    # noinspection PyShadowingNames
+    def _forward_step(*, extern_data: TensorDict, **_kwargs):
+        data = extern_data["data"]
+        data.mark_as_output("data", shape=(batch_dim, time_dim))
+        out, (new_time,) = rf.pad(data, axes=[time_dim], padding=[(0, 1)], value=rf.zeros((), dtype="bool"))
+        out.mark_as_default_output(shape=(batch_dim, new_time))
+
+    res = run_model(extern_data, lambda **_kwargs: rf.Module(), _forward_step)
+    data_: Tensor = res["data"]
+    out_: Tensor = res["output"]
+    assert data_.dims == (batch_dim, time_dim)
+    new_time_dim = out_.dims[1]
+    assert out_.dims == (batch_dim, new_time_dim) and new_time_dim != time_dim
+    # assert new_time_dim == time_dim + 1  # math dim... not really necessary check here...
+    assert time_dim.dyn_size_ext.dims == new_time_dim.dyn_size_ext.dims == (batch_dim,)
+    batch_size = batch_dim.get_dim_value()
+    assert batch_size > 1
+    assert len(set(time_dim.dyn_size_ext.raw_tensor)) > 1  # not all the same
+    for b in range(batch_size):
+        seq_len = time_dim.dyn_size_ext.raw_tensor[b]
+        new_seq_len = new_time_dim.dyn_size_ext.raw_tensor[b]
+        print(f"batch {b}, seq_len {seq_len}, new_seq_len {new_seq_len}")
+        assert new_seq_len == seq_len + 1
+        np.testing.assert_allclose(data_.raw_tensor[b, :seq_len], out_.raw_tensor[b, :seq_len])
+        print(out_.raw_tensor[b])
+        assert out_.raw_tensor[b, seq_len] == False
+
+
 def test_pad_time_right_non_scalar():
     time_dim = Dim(Tensor("time", [batch_dim], dtype="int32"))
     in_dim = Dim(7, name="in")
@@ -537,12 +657,54 @@ def test_pad_time_right_non_scalar():
         assert all(out_.raw_tensor[b, seq_len] == value_.raw_tensor[b])
 
 
+def test_pad_time_left_non_scalar():
+    time_dim = Dim(Tensor("time", [batch_dim], dtype="int32"))
+    in_dim = Dim(7, name="in")
+    extern_data = TensorDict(
+        {
+            "data": Tensor("data", [batch_dim, time_dim, in_dim], dtype="float32"),
+            "value": Tensor("value", [batch_dim, in_dim], dtype="float32"),
+        }
+    )
+
+    # noinspection PyShadowingNames
+    def _forward_step(*, extern_data: TensorDict, **_kwargs):
+        data, value = extern_data["data"], extern_data["value"]
+        data.mark_as_output("data", shape=(batch_dim, time_dim, in_dim))
+        value.mark_as_output("value", shape=(batch_dim, in_dim))
+        out, (new_time,) = rf.pad(data, axes=[time_dim], padding=[(2, 0)], value=value)
+        out.mark_as_default_output(shape=(batch_dim, new_time, in_dim))
+
+    # TF-layers currently does not support this.
+    res = run_model(extern_data, lambda **_kwargs: rf.Module(), _forward_step, test_tensorflow=False)
+    data_: Tensor = res["data"]
+    value_: Tensor = res["value"]
+    out_: Tensor = res["output"]
+    assert data_.dims == (batch_dim, time_dim, in_dim)
+    new_time_dim = out_.dims[1]
+    assert out_.dims == (batch_dim, new_time_dim, in_dim) and new_time_dim != time_dim
+    assert time_dim.dyn_size_ext.dims == new_time_dim.dyn_size_ext.dims == (batch_dim,)
+    batch_size = batch_dim.get_dim_value()
+    assert batch_size > 1
+    assert len(set(time_dim.dyn_size_ext.raw_tensor)) > 1  # not all the same
+    for b in range(batch_size):
+        seq_len = time_dim.dyn_size_ext.raw_tensor[b]
+        new_seq_len = new_time_dim.dyn_size_ext.raw_tensor[b]
+        print(f"batch {b}, seq_len {seq_len}, new_seq_len {new_seq_len}")
+        assert new_seq_len == seq_len + 2
+        np.testing.assert_equal(data_.raw_tensor[b, :seq_len], out_.raw_tensor[b, 2 : seq_len + 2])
+        print(out_.raw_tensor[b])
+        np.testing.assert_equal(out_.raw_tensor[b, 0], value_.raw_tensor[b])
+        np.testing.assert_equal(out_.raw_tensor[b, 1], value_.raw_tensor[b])
+
+
 def test_stack():
     batch_dim_ = Dim(3, name="batch")
     time_dim = Dim(5, name="time")
 
-    # noinspection PyShadowingNames,PyUnusedLocal
+    # noinspection PyShadowingNames
     def _forward_step(*, model: rf.Module, extern_data: TensorDict):
+        del model, extern_data  # fixed forward_step signature
         seq = rf.range_over_dim(time_dim)  # [T]
         out, _ = rf.stack([seq, seq, seq], out_dim=batch_dim_)  # [B,T]
         out.mark_as_default_output(shape=(batch_dim_, time_dim))
@@ -551,6 +713,27 @@ def test_stack():
     out = out["output"]
     assert out.dims == (batch_dim_, time_dim)
     assert out.raw_tensor.tolist() == [[0, 1, 2, 3, 4], [0, 1, 2, 3, 4], [0, 1, 2, 3, 4]]
+
+
+def test_unstack():
+    batch_dim_ = Dim(3, name="batch")
+    time_dim = Dim(5, name="time")
+
+    # noinspection PyShadowingNames
+    def _forward_step(*, model: rf.Module, extern_data: TensorDict):
+        del model, extern_data  # fixed forward_step signature
+        seq = rf.range_over_dim(time_dim)  # [T]
+        stacked, out_dim = rf.stack([seq, seq, seq], out_dim=batch_dim_)  # [B,T]
+        parts = rf.unstack(stacked, axis=out_dim)  # 3 x [T]
+        assert len(parts) == 3
+        for part in parts:
+            assert part.dims == (time_dim,)
+        parts[0].mark_as_default_output(shape=(time_dim,))
+
+    out = run_model(TensorDict(), lambda *, epoch, step: rf.Module(), _forward_step, test_tensorflow=False)
+    out = out["output"]
+    assert out.dims == (time_dim,)
+    assert out.raw_tensor.tolist() == [0, 1, 2, 3, 4]
 
 
 def test_gather():
@@ -694,6 +877,189 @@ def test_scatter_fill_inf():
             assert res["output"].raw_tensor[i] == float("-inf")
 
 
+def test_scatter():
+    time_dim = Dim(Tensor("time", [batch_dim], dtype="int32"))
+    extern_data = TensorDict(
+        {
+            "data": Tensor("data", [batch_dim, time_dim], dtype="int32"),
+            "mask": Tensor("mask", [batch_dim, time_dim], dtype="bool"),
+        }
+    )
+
+    def _forward_step(*, extern_data: TensorDict, **_kwargs):
+        data = extern_data["data"]
+        mask = extern_data["mask"]
+        data.mark_as_output("data", shape=(batch_dim, time_dim))
+        indices = rf.cumsum(rf.cast(mask, "int32"), spatial_dim=time_dim)
+        indices.mark_as_output("indices", shape=(batch_dim, time_dim))
+        out_seq_lens = rf.reduce_max(indices, axis=time_dim) + 1
+        out_spatial_dim = Dim(out_seq_lens)
+        out = rf.scatter(data, indices=indices, indices_dim=time_dim, out_dim=out_spatial_dim)
+        out.mark_as_default_output(shape=(batch_dim, out_spatial_dim))
+
+    res = run_model(extern_data, lambda **_: rf.Module(), _forward_step, test_tensorflow=False)
+    for b in range(batch_dim.get_dim_value()):
+        seq_len = time_dim.dyn_size_ext.raw_tensor[b]
+        out_seq_len = res["output"].dims[1].dyn_size_ext.raw_tensor[b]
+        print(f"batch {b}, seq_len {seq_len}, out_seq_len {out_seq_len}", end=" ")
+        out_ref = np.full((out_seq_len,), fill_value=0, dtype=np.int32)
+        for t in range(seq_len):
+            i = res["indices"].raw_tensor[b, t]
+            out_ref[i] += res["data"].raw_tensor[b, t]
+        print("out_ref:", out_ref, end=" ")
+        out_comp = res["output"].raw_tensor[b, :out_seq_len]
+        print("out_comp:", out_comp)
+        np.testing.assert_array_equal(out_ref, out_comp)
+
+
+def test_scatter_mean():
+    time_dim = Dim(Tensor("time", [batch_dim], dtype="int32"))
+    extern_data = TensorDict(
+        {
+            "data": Tensor("data", [batch_dim, time_dim], dtype="float32"),
+            "mask": Tensor("mask", [batch_dim, time_dim], dtype="bool"),
+        }
+    )
+
+    def _forward_step(*, extern_data: TensorDict, **_kwargs):
+        data = extern_data["data"]
+        mask = extern_data["mask"]
+        data.mark_as_output("data", shape=(batch_dim, time_dim))
+        indices = rf.cumsum(rf.cast(mask, "int32"), spatial_dim=time_dim)
+        indices.mark_as_output("indices", shape=(batch_dim, time_dim))
+        out_seq_lens = rf.reduce_max(indices, axis=time_dim) + 1
+        out_spatial_dim = Dim(out_seq_lens)
+        out = rf.scatter_mean(data, indices=indices, indices_dim=time_dim, out_dim=out_spatial_dim)
+        out.mark_as_default_output(shape=(batch_dim, out_spatial_dim))
+
+    res = run_model(extern_data, lambda **_: rf.Module(), _forward_step, test_tensorflow=False)
+    for b in range(batch_dim.get_dim_value()):
+        seq_len = time_dim.dyn_size_ext.raw_tensor[b]
+        out_seq_len = res["output"].dims[1].dyn_size_ext.raw_tensor[b]
+        print(f"batch {b}, seq_len {seq_len}, out_seq_len {out_seq_len}", end=" ")
+        out_ref = np.full((out_seq_len,), fill_value=0, dtype=np.float32)
+        counts = np.full((out_seq_len,), fill_value=0, dtype=np.int32)
+        for t in range(seq_len):
+            i = res["indices"].raw_tensor[b, t]
+            out_ref[i] += res["data"].raw_tensor[b, t]
+            counts[i] += 1
+        out_ref /= np.maximum(counts, 1)
+        print("out_ref:", out_ref, end=" ")
+        out_comp = res["output"].raw_tensor[b, :out_seq_len]
+        print("out_comp:", out_comp)
+        np.testing.assert_almost_equal(out_ref, out_comp)
+
+
+def test_scatter_logmeanexp():
+    time_dim = Dim(Tensor("time", [batch_dim], dtype="int32"))
+    extern_data = TensorDict(
+        {
+            "data": Tensor("data", [batch_dim, time_dim], dtype="float32"),
+            "mask": Tensor("mask", [batch_dim, time_dim], dtype="bool"),
+        }
+    )
+
+    def _forward_step(*, extern_data: TensorDict, **_kwargs):
+        data = extern_data["data"]
+        mask = extern_data["mask"]
+        data.mark_as_output("data", shape=(batch_dim, time_dim))
+        indices = rf.cumsum(rf.cast(mask, "int32"), spatial_dim=time_dim)
+        indices.mark_as_output("indices", shape=(batch_dim, time_dim))
+        out_seq_lens = rf.reduce_max(indices, axis=time_dim) + 1
+        out_spatial_dim = Dim(out_seq_lens)
+        out = rf.scatter_logmeanexp(data, indices=indices, indices_dim=time_dim, out_dim=out_spatial_dim)
+        out.mark_as_default_output(shape=(batch_dim, out_spatial_dim))
+
+    res = run_model(
+        extern_data, lambda **_: rf.Module(), _forward_step, test_tensorflow=False, allow_inf_nan_in_output=True
+    )
+    for b in range(batch_dim.get_dim_value()):
+        seq_len = time_dim.dyn_size_ext.raw_tensor[b]
+        out_seq_len = res["output"].dims[1].dyn_size_ext.raw_tensor[b]
+        print(f"batch {b}, seq_len {seq_len}, out_seq_len {out_seq_len}", end=" ")
+        out_ref = np.full((out_seq_len,), fill_value=0, dtype=np.float32)
+        counts = np.full((out_seq_len,), fill_value=0, dtype=np.int32)
+        for t in range(seq_len):
+            i = res["indices"].raw_tensor[b, t]
+            out_ref[i] += np.exp(res["data"].raw_tensor[b, t])
+            counts[i] += 1
+        out_ref /= np.maximum(counts, 1)
+        out_ref = np.log(out_ref)
+        print("out_ref:", out_ref, end=" ")
+        out_comp = res["output"].raw_tensor[b, :out_seq_len]
+        print("out_comp:", out_comp)
+        np.testing.assert_almost_equal(out_ref, out_comp)
+
+
+def test_scatter_argmax():
+    time_dim = Dim(Tensor("time", [batch_dim], dtype="int32"))
+    extern_data = TensorDict(
+        {
+            "data": Tensor("data", [batch_dim, time_dim], dtype="float32"),
+            "mask": Tensor("mask", [batch_dim, time_dim], dtype="bool"),
+        }
+    )
+
+    def _forward_step(*, extern_data: TensorDict, **_kwargs):
+        data = extern_data["data"]
+        mask = extern_data["mask"]
+        data.mark_as_output("data", shape=(batch_dim, time_dim))
+        indices = rf.cumsum(rf.cast(mask, "int32"), spatial_dim=time_dim)
+        indices.mark_as_output("indices", shape=(batch_dim, time_dim))
+        out_seq_lens = rf.reduce_max(indices, axis=time_dim) + 1
+        out_spatial_dim = Dim(out_seq_lens)
+        out = rf.scatter_argmax(data, indices=indices, indices_dim=time_dim, out_dim=out_spatial_dim)
+        assert out.sparse_dim == time_dim
+        out.mark_as_default_output(shape=(batch_dim, out_spatial_dim))
+
+    res = run_model(extern_data, lambda **_: rf.Module(), _forward_step, test_tensorflow=False)
+    for b in range(batch_dim.get_dim_value()):
+        seq_len = time_dim.dyn_size_ext.raw_tensor[b]
+        out_seq_len = res["output"].dims[1].dyn_size_ext.raw_tensor[b]
+        print(f"batch {b}, seq_len {seq_len}, out_seq_len {out_seq_len}", end=" ")
+        out_ref = np.full((out_seq_len,), fill_value=-1, dtype=np.int32)
+        prev_max = np.full((out_seq_len,), fill_value=float("-inf"), dtype=np.float32)
+        for t in range(seq_len):
+            i = res["indices"].raw_tensor[b, t]
+            v = res["data"].raw_tensor[b, t]
+            if v > prev_max[i]:
+                prev_max[i] = v
+                out_ref[i] = t
+        print("out_ref:", out_ref, end=" ")
+        out_comp = res["output"].raw_tensor[b, :out_seq_len]
+        print("out_comp:", out_comp)
+        np.testing.assert_array_equal(out_ref, out_comp)
+
+
+def test_scatter_argmax_via_scatter_mode_without_fill_value():
+    time_dim = Dim(Tensor("time", [batch_dim], dtype="int32"))
+    extern_data = TensorDict(
+        {
+            "data": Tensor("data", [batch_dim, time_dim], dtype="float32"),
+            "mask": Tensor("mask", [batch_dim, time_dim], dtype="bool"),
+        }
+    )
+
+    def _forward_step(*, extern_data: TensorDict, **_kwargs):
+        data = extern_data["data"]
+        mask = extern_data["mask"]
+        indices = rf.cumsum(rf.cast(mask, "int32"), spatial_dim=time_dim)
+        out_seq_lens = rf.reduce_max(indices, axis=time_dim) + 1
+        out_spatial_dim = Dim(out_seq_lens)
+        direct = rf.scatter_argmax(data, indices=indices, indices_dim=time_dim, out_dim=out_spatial_dim)
+        direct.mark_as_output("direct", shape=(batch_dim, out_spatial_dim))
+        direct_none = rf.scatter_argmax(
+            data, indices=indices, indices_dim=time_dim, invalid_idx=None, out_dim=out_spatial_dim
+        )
+        direct_none.mark_as_output("direct_none", shape=(batch_dim, out_spatial_dim))
+        out = rf.scatter(data, indices=indices, indices_dim=time_dim, mode="argmax", out_dim=out_spatial_dim)
+        out.mark_as_default_output(shape=(batch_dim, out_spatial_dim))
+
+    res = run_model(extern_data, lambda **_: rf.Module(), _forward_step, test_tensorflow=False)
+    np.testing.assert_array_equal(res["direct"].raw_tensor, res["output"].raw_tensor)
+    np.testing.assert_array_equal(res["direct"].raw_tensor, res["direct_none"].raw_tensor)
+
+
 def test_slice():
     time_dim = Dim(Tensor("time", [batch_dim], dtype="int32"))
     in_dim = Dim(7, name="in")
@@ -734,6 +1100,93 @@ def test_slice_dyn_size():
         pack.mark_as_default_output(shape=(batch_dim, new_time, in_dim))
 
     run_model(extern_data, lambda **_kwargs: rf.Module(), _forward_step)
+
+
+def test_slice_batched_start_size():
+    time_dim = Dim(Tensor("time", [batch_dim], dtype="int32"))
+    in_dim = Dim(7, name="in")
+    extern_data = TensorDict(
+        {
+            "data": Tensor("data", [batch_dim, time_dim, in_dim], dtype="float32"),
+            "start_factor": Tensor("start_factor", [batch_dim], dtype="float32"),
+            "size_factor": Tensor("size_factor", [batch_dim], dtype="float32"),
+        }
+    )
+
+    # noinspection PyShadowingNames
+    def _forward_step(*, extern_data: TensorDict, **_kwargs):
+        x = extern_data["data"]
+        x.mark_as_output("data", shape=(batch_dim, time_dim, in_dim))
+        start_factor = rf.sigmoid(extern_data["start_factor"])
+        size_factor = rf.sigmoid(extern_data["size_factor"])
+        start = start_factor * rf.cast(rf.clip_by_value(time_dim.get_size_tensor() - 2, 0), "float32")
+        start = rf.cast(start, dtype="int32")
+        start.mark_as_output("start", shape=(batch_dim,))
+        size = size_factor * rf.cast(time_dim.get_size_tensor() - start, "float32")
+        size = rf.cast(size, dtype="int32")
+        size.mark_as_output("size", shape=(batch_dim,))
+        pack, new_time = rf.slice(x, axis=time_dim, start=start, size=size)
+        pack.mark_as_default_output(shape=(batch_dim, new_time, in_dim))
+
+    res = run_model(extern_data, lambda **_kwargs: rf.Module(), _forward_step)
+    data_: Tensor = res["data"]
+    start_: Tensor = res["start"]
+    size_: Tensor = res["size"]
+    out_: Tensor = res["output"]
+    assert data_.dims == (batch_dim, time_dim, in_dim)
+    new_time_dim = out_.dims[1]
+    assert out_.dims == (batch_dim, new_time_dim, in_dim) and new_time_dim != time_dim
+    assert time_dim.dyn_size_ext.dims == new_time_dim.dyn_size_ext.dims == (batch_dim,)
+    batch_size = batch_dim.get_dim_value()
+    for b in range(batch_size):
+        seq_len = time_dim.dyn_size_ext.raw_tensor[b]
+        start = start_.raw_tensor[b]
+        size = size_.raw_tensor[b]
+        new_seq_len = new_time_dim.dyn_size_ext.raw_tensor[b]
+        print(f"batch {b}, seq_len {seq_len}, start {start}, size {size}, new_seq_len {new_seq_len}")
+        assert new_seq_len == size
+        np.testing.assert_array_equal(data_.raw_tensor[b, start : start + size], out_.raw_tensor[b, :new_seq_len])
+
+
+def test_slice_neg_end():
+    time_dim = Dim(Tensor("time", [batch_dim], dtype="int32"))
+    extern_data = TensorDict(
+        {
+            "data": Tensor("data", [batch_dim, time_dim], dtype="float32"),
+        }
+    )
+
+    # noinspection PyShadowingNames
+    def _forward_step(*, extern_data: TensorDict, **_kwargs):
+        x = extern_data["data"]
+        pack, new_time = rf.slice(x, axis=time_dim, end=-1)
+        pack.mark_as_default_output(shape=(batch_dim, new_time))
+
+    run_model(extern_data, lambda **_kwargs: rf.Module(), _forward_step)
+    run_model(extern_data, lambda **_kwargs: rf.Module(), _forward_step, dyn_dim_max_sizes={time_dim: 1})
+
+
+def test_slice_start_zero_tensor():
+    time_dim = Dim(Tensor("time", [batch_dim], dtype="int32"))
+    extern_data = TensorDict(
+        {
+            "data": Tensor("data", [batch_dim, time_dim], dtype="int32"),
+        }
+    )
+
+    # noinspection PyShadowingNames
+    def _forward_step(*, extern_data: TensorDict, **_kwargs):
+        x = extern_data["data"]
+        start = rf.zeros([batch_dim], dtype="int32")
+        y, time_dim_ = rf.slice(x, axis=time_dim, start=start)
+        assert time_dim_ != time_dim  # diff dim tag, even though the size is expected to be the same
+        x.mark_as_output("data", shape=[batch_dim, time_dim])
+        y.mark_as_default_output(shape=[batch_dim, time_dim_])
+
+    res = run_model(extern_data, lambda **_kwargs: rf.Module(), _forward_step)
+    data_: Tensor = res["data"]
+    out_: Tensor = res["output"]
+    np.testing.assert_array_equal(data_.raw_tensor, out_.raw_tensor)
 
 
 def test_shift_right():
@@ -806,8 +1259,9 @@ def test_where():
         }
     )
 
-    # noinspection PyShadowingNames,PyUnusedLocal
+    # noinspection PyShadowingNames
     def _forward_step(*, model: rf.Module, extern_data: TensorDict):
+        del model  # fixed forward_step signature
         out = rf.where(extern_data["cond"], extern_data["true"], extern_data["false"])
         out.mark_as_default_output(shape=(batch_dim, time_dim, in_dim))
 
@@ -818,8 +1272,9 @@ def test_search_sorted():
     batch_dim_ = Dim(3, name="batch")
     time_dim = Dim(13, name="time")
 
-    # noinspection PyShadowingNames,PyUnusedLocal
+    # noinspection PyShadowingNames
     def _forward_step(*, model: rf.Module, extern_data: TensorDict):
+        del model, extern_data  # fixed forward_step signature
         sorted_seq = rf.range_over_dim(time_dim, dtype="float32")  # [T]
         index1 = rf.search_sorted(sorted_seq, rf.constant(4.5, dims=()), axis=time_dim)  # [] -> T
         assert index1.dims == () and index1.sparse_dim == time_dim and index1.dtype == "int32"
@@ -853,8 +1308,9 @@ def test_where_int():
         }
     )
 
-    # noinspection PyShadowingNames,PyUnusedLocal
+    # noinspection PyShadowingNames
     def _forward_step(*, model: rf.Module, extern_data: TensorDict):
+        del model  # fixed forward_step signature
         out = rf.where(extern_data["cond"], extern_data["true"], 0)
         out.mark_as_default_output(shape=(batch_dim, time_dim, in_dim))
 
@@ -870,8 +1326,9 @@ def test_copy_masked():
         }
     )
 
-    # noinspection PyShadowingNames,PyUnusedLocal
+    # noinspection PyShadowingNames
     def _forward_step(*, model: rf.Conv1d, extern_data: TensorDict):
+        del model  # fixed forward_step signature
         x = extern_data["data"]
         x = x.copy_masked(1)
         # Do some pooling to make sure the copy_masked has an effect on the output.
@@ -890,11 +1347,318 @@ def test_cast_sparse():
         }
     )
 
-    # noinspection PyShadowingNames,PyUnusedLocal
+    # noinspection PyShadowingNames
     def _forward_step(*, model: rf.Conv1d, extern_data: TensorDict):
+        del model  # fixed forward_step signature
         x = rf.reduce_argmax(extern_data["data"], axis=in_dim)
         assert x.sparse_dim == in_dim
         x.mark_as_output("argmax", shape=[batch_dim, time_dim])
         rf.cast(x, "float32").mark_as_output("float", shape=[batch_dim, time_dim])
 
     run_model(extern_data, lambda *, epoch, step: rf.Module(), _forward_step)
+
+
+def test_repeat():
+    time_dim = Dim(Tensor("time", [batch_dim], dtype="int32"))
+    in_dim = Dim(3, name="in")
+    extern_data = TensorDict(
+        {
+            "data": Tensor("data", [batch_dim, time_dim, in_dim], dtype="float32"),
+            "repeats": Tensor("repeats", [batch_dim, time_dim], dtype="int32"),
+        }
+    )
+
+    # noinspection PyShadowingNames
+    def _forward_step(*, extern_data: TensorDict, **_other):
+        x = extern_data["data"]
+        repeats = rf.abs(extern_data["repeats"]) % 4
+        x.mark_as_output("data", shape=(batch_dim, time_dim, in_dim))
+        repeats.mark_as_output("repeats", shape=(batch_dim, time_dim))
+        out, out_spatial_dim = rf.repeat(x, repeats=repeats, in_spatial_dim=time_dim)
+        out.mark_as_default_output(shape=(batch_dim, out_spatial_dim, in_dim))
+
+    run_model(extern_data, lambda **_any: rf.Module(), _forward_step, test_tensorflow=False)
+
+    # Again but with 2D data.
+    extern_data = TensorDict(
+        {
+            "data": Tensor("data", [batch_dim, time_dim], dtype="int32"),
+            "repeats": Tensor("repeats", [batch_dim, time_dim], dtype="int32"),
+        }
+    )
+
+    # noinspection PyShadowingNames
+    def _forward_step(*, extern_data: TensorDict, **_other):
+        x = extern_data["data"]
+        repeats = rf.abs(extern_data["repeats"]) % 4
+        x.mark_as_output("data", shape=(batch_dim, time_dim))
+        repeats.mark_as_output("repeats", shape=(batch_dim, time_dim))
+        out, out_spatial_dim = rf.repeat(x, repeats=repeats, in_spatial_dim=time_dim)
+        out.mark_as_default_output(shape=(batch_dim, out_spatial_dim))
+
+    # Iterate over a few random seeds.
+    # Make sure we covered some relevant cases.
+    have_intermediate_zero = False
+    have_leading_zero = False
+    have_trailing_zero = False
+    for seed in range(42, 45):
+        res = run_model(
+            extern_data, lambda **_any: rf.Module(), _forward_step, data_rnd_seed=seed, test_tensorflow=False
+        )
+        num_batch = res["data"].raw_tensor.shape[0]
+        print(f"Seed {seed}, num_batch {num_batch}")
+        for b in range(num_batch):
+            in_seq_len = res["data"].dims[1].dyn_size_ext.raw_tensor[b]
+            out_seq_len = res["output"].dims[1].dyn_size_ext.raw_tensor[b]
+            data_b = res["data"].raw_tensor[b, :in_seq_len]
+            repeats_b = res["repeats"].raw_tensor[b, :in_seq_len]
+            if len(repeats_b) > 0 and repeats_b[0] == 0:
+                have_leading_zero = True
+            if len(repeats_b) > 0 and repeats_b[-1] == 0:
+                have_trailing_zero = True
+            if len(repeats_b) > 2 and any(
+                repeats_b[i] == 0 and repeats_b[i - 1] != 0 and repeats_b[i + 1] != 0
+                for i in range(1, len(repeats_b) - 2)
+            ):
+                have_intermediate_zero = True
+            out_b = res["output"].raw_tensor[b, :out_seq_len]
+            print(f" Batch {b}: data {data_b}, repeats {repeats_b}, out {out_b}")
+            out_idx = 0
+            for t in range(data_b.shape[0]):
+                repeat_count = repeats_b[t]
+                for _ in range(repeat_count):
+                    assert out_b[out_idx] == data_b[t]
+                    out_idx += 1
+            assert out_idx == out_b.shape[0]
+    assert have_intermediate_zero and have_leading_zero and have_trailing_zero
+
+
+def test_repeat_empty_seqs():
+    # A CV set can carry a fully empty seq; the padded repeat used to gather
+    # the last cumsum element for the out sizes, which is index -1 on a size-0 axis.
+    # Direct construction (not run_model): the empty rows must be deterministic.
+    import torch
+
+    rf.select_backend_torch()
+    for seq_lens, dur_rows in (((0, 0), [[], []]), ((3, 0), [[1, 2, 0], [0, 0, 0]])):
+        batch_dim_ = Dim(len(seq_lens), name="batch")
+        time_dim = Dim(
+            Tensor("time", dims=[batch_dim_], dtype="int32", raw_tensor=torch.tensor(list(seq_lens), dtype=torch.int32))
+        )
+        width = max(seq_lens)
+        x = Tensor("x", dims=[batch_dim_, time_dim], dtype="float32")
+        x.raw_tensor = torch.arange(len(seq_lens) * width, dtype=torch.float32).reshape(len(seq_lens), width)
+        dur = Tensor(
+            "dur", dims=[batch_dim_, time_dim], dtype="int32", raw_tensor=torch.tensor(dur_rows, dtype=torch.int32)
+        )
+        out, out_dim = rf.repeat(x, in_spatial_dim=time_dim, repeats=dur)
+        lens = out_dim.dyn_size_ext.copy_compatible_to_dims([batch_dim_]).raw_tensor
+        expect = [sum(r[: seq_lens[b]]) for b, r in enumerate(dur_rows)]
+        assert lens.tolist() == expect, f"{lens.tolist()} vs {expect} for seq_lens {seq_lens}"
+
+
+def test_replace_dim_v2_bool():
+    time_dim = Dim(Tensor("time", [batch_dim], dtype="int32"))
+    extern_data = TensorDict({"cond": Tensor("cond", [batch_dim, time_dim], dtype="bool")})
+
+    # noinspection PyShadowingNames
+    def _forward_step(*, model: rf.Module, extern_data: TensorDict):
+        del model  # fixed forward_step signature
+        cond = extern_data["cond"]
+        time_dim_ext = time_dim + 1
+        cond_ext = rf.replace_dim_v2(cond, in_dim=time_dim, out_dim=time_dim_ext)
+        cond_ext.mark_as_default_output(shape=(batch_dim, time_dim_ext))
+
+    run_model(extern_data, lambda *, epoch, step: rf.Module(), _forward_step, test_tensorflow=False)
+
+
+def test_masked_select_scatter_nested_roundtrip():
+    time_dim = Dim(Tensor("time", [batch_dim], dtype="int32"))
+    in_dim = Dim(5, name="in")
+    extern_data = TensorDict({"data": Tensor("data", [batch_dim, time_dim, in_dim], dtype="float32")})
+
+    # noinspection PyShadowingNames
+    def _forward_step(*, extern_data: TensorDict, **_kwargs):
+        data = extern_data["data"]
+        # Every other batch entry, so the selection is never empty and never everything.
+        mask = rf.range_over_dim(batch_dim) % 2 == 0
+        (sel, sel_time_dim), sel_batch_dim, sel_dim_map = rf.nested.masked_select_nested(
+            (data, time_dim), mask=mask, mask_cpu=mask, dims=[batch_dim]
+        )
+        out, out_time_dim = rf.nested.masked_scatter_nested(
+            (sel, sel_time_dim),
+            (data, time_dim),
+            mask=mask,
+            mask_cpu=mask,
+            dims=[batch_dim],
+            in_dim=sel_batch_dim,
+            masked_select_dim_map=sel_dim_map,
+        )
+        assert out_time_dim == time_dim, f"roundtrip changed the spatial dim: {out_time_dim} vs {time_dim}"
+        out.mark_as_default_output(shape=[batch_dim, time_dim, in_dim])
+        data.mark_as_output("data_ref", shape=[batch_dim, time_dim, in_dim])
+
+    outputs = run_model(
+        extern_data, lambda **_kwargs: rf.Module(), _forward_step, test_single_batch_entry=False, test_tensorflow=False
+    )
+    assert np.allclose(outputs["output"].raw_tensor, outputs["data_ref"].raw_tensor)
+
+
+def test_mask_nested_dim_value_is_true_size():
+    # The merged dim of mask_nested must report the true per-entry sizes, not an upper bound:
+    # anything that pads or slices by it (rf.pad, rf.slice) sizes its buffer from get_dim_value.
+    time_dim = Dim(Tensor("time", [batch_dim], dtype="int32"))
+    in_dim = Dim(5, name="in")
+    extern_data = TensorDict({"data": Tensor("data", [batch_dim, time_dim, in_dim], dtype="float32")})
+
+    # noinspection PyShadowingNames
+    def _forward_step(*, extern_data: TensorDict, **_kwargs):
+        data = extern_data["data"]
+        # one branch a step longer than the other, so bound and true size differ
+        longer, longer_dim = rf.pad(
+            data, axes=[time_dim], padding=[(0, 1)], value=rf.zeros((), dtype=data.dtype, device=data.device)
+        )
+        (merged, merged_dim) = rf.nested.mask_nested(
+            (longer, longer_dim[0]),
+            mask=rf.range_over_dim(batch_dim) % 2 == 0,
+            mask_value=(data, time_dim),
+        )
+        # the padded extent the raw tensor actually has, vs what the dim claims
+        assert merged.raw_tensor.shape[merged.dims.index(merged_dim)] == merged_dim.get_dim_value(), (
+            f"raw extent {merged.raw_tensor.shape} does not match {merged_dim} value {merged_dim.get_dim_value()}"
+        )
+        merged.mark_as_default_output(shape=[batch_dim, merged_dim, in_dim])
+        merged_dim.dyn_size_ext.mark_as_output("merged_size", shape=[batch_dim])
+        time_dim.dyn_size_ext.mark_as_output("in_size", shape=[batch_dim])
+
+    outputs = run_model(
+        extern_data, lambda **_kwargs: rf.Module(), _forward_step, test_single_batch_entry=False, test_tensorflow=False
+    )
+    in_size = outputs["in_size"].raw_tensor
+    merged_size = outputs["merged_size"].raw_tensor
+    for b in range(in_size.shape[0]):
+        # masked entries took the longer branch (+1), the others the original size
+        expected = in_size[b] + 1 if b % 2 == 0 else in_size[b]
+        assert merged_size[b] == expected, f"batch {b}: merged {merged_size[b]}, expected {expected}"
+
+
+def test_masked_select_out_dim_value_is_true_count():
+    # The packed dim of masked_select must report the true count, not the input extent.
+    # A static select axis is the case that bites: static dims always carry a capacity,
+    # so the packed dim can inherit one and then claim the full extent.
+    static_dim = Dim(6, name="static_time")
+    in_dim = Dim(5, name="in")
+    extern_data = TensorDict({"data": Tensor("data", [batch_dim, static_dim, in_dim], dtype="float32")})
+
+    # noinspection PyShadowingNames
+    def _forward_step(*, extern_data: TensorDict, **_kwargs):
+        data = extern_data["data"]
+        # 3 or 4 of the 6 positions per batch entry, so the count is deterministic and below the extent.
+        # Two mask dims but one select dim, so this takes the generic (non-backend) path.
+        mask = rf.compare_bc(rf.range_over_dim(static_dim), "<", rf.range_over_dim(batch_dim) % 2 + 3)
+        packed, packed_dim = rf.masked_select(data, mask=mask, dims=[static_dim])
+        assert packed.raw_tensor.shape[packed.dims.index(packed_dim)] == packed_dim.get_dim_value(), (
+            f"raw extent {packed.raw_tensor.shape} does not match {packed_dim} value {packed_dim.get_dim_value()}"
+        )
+        packed.mark_as_default_output(shape=[batch_dim, packed_dim, in_dim])
+        packed_dim.dyn_size_ext.mark_as_output("packed_size", shape=[batch_dim])
+
+    outputs = run_model(
+        extern_data, lambda **_kwargs: rf.Module(), _forward_step, test_single_batch_entry=False, test_tensorflow=False
+    )
+    packed_size = outputs["packed_size"].raw_tensor
+    for b in range(packed_size.shape[0]):
+        assert packed_size[b] == b % 2 + 3, f"batch {b}: packed {packed_size[b]}, expected {b % 2 + 3}"
+
+
+def test_masked_scatter_nested_select_dim_passthrough_other_backup_dim():
+    time_dim = Dim(Tensor("time", [batch_dim], dtype="int32"))
+    other_dim = Dim(Tensor("other", [batch_dim], dtype="int32"))
+    in_dim = Dim(5, name="in")
+    extern_data = TensorDict(
+        {
+            "data": Tensor("data", [batch_dim, time_dim, in_dim], dtype="float32"),
+            "backup": Tensor("backup", [batch_dim, other_dim, in_dim], dtype="float32"),
+        }
+    )
+
+    # noinspection PyShadowingNames
+    def _forward_step(*, extern_data: TensorDict, **_kwargs):
+        data = extern_data["data"]
+        backup = extern_data["backup"]
+        mask = rf.range_over_dim(batch_dim) % 2 == 0
+        (sel, sel_time_dim), sel_batch_dim, sel_dim_map = rf.nested.masked_select_nested(
+            (data, time_dim), mask=mask, mask_cpu=mask, dims=[batch_dim]
+        )
+        out, out_dim = rf.nested.masked_scatter_nested(
+            (sel, sel_time_dim),
+            (backup, other_dim),
+            mask=mask,
+            mask_cpu=mask,
+            dims=[batch_dim],
+            in_dim=sel_batch_dim,
+            masked_select_dim_map=sel_dim_map,
+        )
+        out.mark_as_default_output(shape=[batch_dim, out_dim, in_dim])
+        # each row keeps its own branch's length
+        expected = rf.where(mask, time_dim.get_size_tensor(), other_dim.get_size_tensor())
+        rf.cast(out_dim.get_size_tensor() - expected, "int32").mark_as_output("size_diff", shape=[batch_dim])
+
+    outputs = run_model(
+        extern_data, lambda **_kwargs: rf.Module(), _forward_step, test_single_batch_entry=False, test_tensorflow=False
+    )
+    assert not outputs["size_diff"].raw_tensor.any(), f"merged sizes wrong: {outputs['size_diff'].raw_tensor}"
+
+
+def test_masked_scatter_nested_two_branch_merge_via_stub():
+    time_a_dim = Dim(Tensor("time_a", [batch_dim], dtype="int32"))
+    time_b_dim = Dim(Tensor("time_b", [batch_dim], dtype="int32"))
+    in_dim = Dim(3, name="in")
+    extern_data = TensorDict(
+        {
+            "a": Tensor("a", [batch_dim, time_a_dim, in_dim], dtype="float32"),
+            "b": Tensor("b", [batch_dim, time_b_dim, in_dim], dtype="float32"),
+        }
+    )
+
+    # noinspection PyShadowingNames
+    def _forward_step(*, extern_data: TensorDict, **_kwargs):
+        a = extern_data["a"]
+        b = extern_data["b"]
+        mask_a = rf.range_over_dim(batch_dim) % 2 == 0
+        mask_b = rf.logical_not(mask_a)
+        (sel_a, sel_a_dim), a_bdim, sel_map_a = rf.nested.masked_select_nested(
+            (a, time_a_dim), mask=mask_a, mask_cpu=mask_a, dims=[batch_dim]
+        )
+        (sel_b, sel_b_dim), b_bdim, sel_map_b = rf.nested.masked_select_nested(
+            (b, time_b_dim), mask=mask_b, mask_cpu=mask_b, dims=[batch_dim]
+        )
+        stub_dim = Dim(rf.zeros([batch_dim], dtype="int32", device="cpu"), name="merge_stub")
+        stub = rf.zeros([batch_dim, stub_dim, in_dim], dtype=a.dtype)
+        half, half_dim = rf.nested.masked_scatter_nested(
+            (sel_a, sel_a_dim),
+            (stub, stub_dim),
+            mask=mask_a,
+            mask_cpu=mask_a,
+            dims=[batch_dim],
+            in_dim=a_bdim,
+            masked_select_dim_map=sel_map_a,
+        )
+        out, out_dim = rf.nested.masked_scatter_nested(
+            (sel_b, sel_b_dim),
+            (half, half_dim),
+            mask=mask_b,
+            mask_cpu=mask_b,
+            dims=[batch_dim],
+            in_dim=b_bdim,
+            masked_select_dim_map=sel_map_b,
+        )
+        out.mark_as_default_output(shape=[batch_dim, out_dim, in_dim])
+        # each row takes the length of whichever branch it came from
+        expected = rf.where(mask_a, time_a_dim.get_size_tensor(), time_b_dim.get_size_tensor())
+        rf.cast(out_dim.get_size_tensor() - expected, "int32").mark_as_output("size_diff", shape=[batch_dim])
+
+    outputs = run_model(
+        extern_data, lambda **_kwargs: rf.Module(), _forward_step, test_single_batch_entry=False, test_tensorflow=False
+    )
+    assert not outputs["size_diff"].raw_tensor.any(), f"merged sizes wrong: {outputs['size_diff'].raw_tensor}"

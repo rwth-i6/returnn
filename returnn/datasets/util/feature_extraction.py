@@ -37,7 +37,7 @@ class ExtractAudioFeatures:
         """
         :param float window_len: in seconds
         :param float step_len: in seconds
-        :param int num_feature_filters:
+        :param int|None num_feature_filters: derived from the feature type by default
         :param bool|int with_delta:
         :param numpy.ndarray|str|int|float|None norm_mean: if str, will interpret as filename, or "per_seq"
         :param numpy.ndarray|str|int|float|None norm_std_dev: if str, will interpret as filename, or "per_seq"
@@ -271,7 +271,7 @@ class ExtractAudioFeatures:
                 new_shape = (new_len // self.join_frames, self.num_channels, feature_data.shape[-1] * self.join_frames)
                 pad_width = ((0, pad_len), (0, 0), (0, 0))
             feature_data = numpy.pad(feature_data, pad_width=pad_width, mode="edge")
-            feature_data = numpy.reshape(feature_data, newshape=new_shape, order="C")
+            feature_data = numpy.reshape(feature_data, new_shape, order="C")
 
         assert feature_data.shape[-1] == self.get_feature_dimension()
         if self.post_process:

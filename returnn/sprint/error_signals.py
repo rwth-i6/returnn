@@ -153,6 +153,8 @@ class SprintSubprocessInstance:
             finally:
                 # noinspection PyUnresolvedReferences,PyProtectedMember
                 os._exit(1)
+                # defensive: _exit should never return (but e.g. a monkey-patched _exit might)
+                # noinspection PyUnreachableCode
                 return  # Not reached.
 
         # parent
@@ -380,6 +382,7 @@ class SprintInstancePool:
             if sprint_opts in cls.global_instances:
                 return cls.global_instances[sprint_opts]
             instance = SprintInstancePool(sprint_opts=sprint_opts)
+            # noinspection PyUnhashable
             cls.global_instances[sprint_opts] = instance
             return instance
 

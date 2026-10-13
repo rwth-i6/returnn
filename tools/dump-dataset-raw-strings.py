@@ -12,11 +12,13 @@ import sys
 import time
 import numpy
 import argparse
-import typing
+from typing import Optional
 
 import _setup_returnn_env  # noqa
+
 import returnn.__main__ as rnn
 from returnn.log import log
+from returnn.config import Config
 from returnn.util.basic import Stats, hms
 from returnn.datasets import Dataset, init_dataset
 import returnn.util.basic as util
@@ -82,7 +84,7 @@ def get_raw_strings(dataset, options):
     return refs
 
 
-config = None  # type: typing.Optional["returnn.config.Config"]
+config: Optional[Config] = None
 
 
 def init(config_filename, log_verbosity):

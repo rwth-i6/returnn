@@ -1,5 +1,5 @@
 """
-Here are all subprocess, threading etc related utilities,
+Here are all subprocess, threading etc. related utilities,
 most of them quite low level.
 """
 
@@ -11,7 +11,6 @@ import os
 import io
 import pickle
 import types
-import struct
 import marshal
 from importlib import import_module
 import numpy
@@ -21,11 +20,15 @@ _abs_mod_file = os.path.abspath(__file__)
 
 
 class SharedMem:
+    """
+    POSIX shared memory (shm_open/mmap via ctypes), used to share data between processes.
+    """
+
     class ShmException(Exception):
-        pass
+        """any shared-memory error"""
 
     class CCallException(ShmException):
-        pass
+        """a libc call failed"""
 
     if sys.platform != "win32":
         import ctypes
@@ -572,7 +575,7 @@ class Pickler(_BasePickler):
     """
 
     def __init__(self, *args, **kwargs):
-        if not "protocol" in kwargs:
+        if "protocol" not in kwargs:
             kwargs["protocol"] = pickle.HIGHEST_PROTOCOL
         _BasePickler.__init__(self, *args, **kwargs)
 
@@ -602,6 +605,8 @@ class Pickler(_BasePickler):
             return
         except pickle.PicklingError:
             pass
+        # Note: it's not so critical to recreate them.
+        # That is actually standard behavior, that bounded methods are always recreated on-the-fly.
         assert type(obj) is types.MethodType
         self.save(types.MethodType)
         self.save((obj.__func__, obj.__self__))
@@ -671,7 +676,7 @@ class Pickler(_BasePickler):
                 return
         # For some reason, Numpy fromstring/tostring is faster than Numpy loads/dumps.
         self.save(make_numpy_ndarray_fromstring)
-        self.save((obj.tostring(), str(obj.dtype), obj.shape))
+        self.save((obj.tobytes(), str(obj.dtype), obj.shape))
         self.write(pickle.REDUCE)
 
     dispatch[numpy.ndarray] = save_ndarray
@@ -690,18 +695,52 @@ class Pickler(_BasePickler):
         assert obj
         assert id(obj) not in self.memo
         if name is None:
-            name = obj.__name__
+            name = obj.__qualname__
 
         module = getattr(obj, "__module__", None)
+
         if module == "__main__" and globals().get(name, None) is obj:
             # Can happen if this is directly executed.
             module = __name__  # should be correct now
-        if (module is None or module == "__main__") and self.use_whichmodule:
+        if (module is None or module == "__main__") and self.use_whichmodule and "." not in name:
             module = pickle.whichmodule(obj, name)
         if module is None or module == "__main__":
             raise pickle.PicklingError("Can't pickle %r: module not found: %s" % (obj, module))
         if module in self.module_name_black_list:
             raise pickle.PicklingError("Can't pickle %r: module blacklisted: %s" % (obj, module))
+
+        if "." in name:
+            name_parts = name.split(".")
+            mod = sys.modules.get(module, None)
+            obj_ = mod
+            obj_chain = []
+            for attr in name_parts:
+                obj_ = getattr(obj_, attr, None)
+                obj_chain.append(obj_)
+            # e.g. we pickle Class.classmethod.__func__, so Class.classmethod.__func__.__name__ == "Class.classmethod"
+            if (
+                obj_ is not obj
+                and isinstance(obj, types.FunctionType)
+                and isinstance(obj_, types.MethodType)
+                and obj_.__func__ is obj
+            ):
+                self.save(getattr)
+                self.save((obj_, "__func__"))
+                self.write(pickle.REDUCE)
+                return
+            # Class.Subclass or so should already match.
+            # Class.classmethod will not match as that is rebound on-the-fly, so special check for that.
+            if obj_ is obj or (
+                isinstance(obj, types.MethodType)
+                and isinstance(obj_, types.MethodType)
+                and obj_.__self__ is obj.__self__
+                and obj_.__func__ is obj.__func__
+            ):
+                self.save(getattr)
+                self.save((obj_chain[-2], name_parts[-1]))
+                self.write(pickle.REDUCE)
+                return
+            raise pickle.PicklingError("Can't pickle %r: not found as %s.%s" % (obj, module, name))
 
         try:
             __import__(module)
@@ -728,6 +767,7 @@ class Pickler(_BasePickler):
         # such as types.FunctionType. This is fixed here.
         for modname in ["types"]:
             moddict = sys.modules[modname].__dict__
+            # Must check all objects, because the name is different, e.g. "function" vs "FunctionType".
             for modobjname, modobj in moddict.items():
                 if modobj is obj:
                     self.write(pickle.GLOBAL + bytes(modname + "\n" + modobjname + "\n", "utf8"))

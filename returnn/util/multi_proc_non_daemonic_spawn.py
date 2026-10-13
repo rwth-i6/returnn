@@ -1,7 +1,16 @@
 """
-A multiprocessing context where ``proc.daemon`` is always False,
+A multiprocessing context (:class:`NonDaemonicSpawnContext`)
+where ``proc.daemon`` is always False,
 and setting it to True is ignored.
-All processes will still be cleaned up though.
+
+(When Python exits, it attempts to terminate (not join) all of its daemonic child processes.)
+
+A daemonic process is not allowed to create child processes,
+however, some of or sub processes need to create child processes themselves.
+That is why we need this.
+
+All processes created within :class:`NonDaemonicSpawnContext`
+will still be cleaned up though.
 For cleaning up, we use SIGINT (instead of the standard SIGTERM)
 such that the processes can do proper cleanup themselves.
 
@@ -19,14 +28,16 @@ References:
 from __future__ import annotations
 
 import io
+import multiprocessing
 import pickle
 import time
-from typing import Optional, Callable
+from typing import Optional, Callable, List
 import os
 import signal
 import atexit
 from .basic import serialize_object, deserialize_object
 from . import better_exchook
+from .debug import install_subproc_faulthandler
 
 # noinspection PyProtectedMember
 from multiprocessing.context import BaseContext, SpawnProcess
@@ -51,7 +62,15 @@ class NonDaemonicSpawnProcess(SpawnProcess):
     Note, if SIGINT does nothing on the subproc, this will hang.
     """
 
-    daemon = property(lambda self: False, lambda self, v: None)  # always False
+    @property
+    def daemon(self) -> bool:
+        """always False: this proc type is deliberately non-daemonic, see the class docstring"""
+        return False
+
+    @daemon.setter
+    def daemon(self, value: bool):
+        """ignored: multiprocessing sets this, but we always stay non-daemonic"""
+        del value  # see above
 
     pre_init_func: Optional[Callable[[], None]] = None
 
@@ -72,6 +91,14 @@ class NonDaemonicSpawnProcess(SpawnProcess):
         """kill"""
         super().kill()
         self._close_cleanup()
+
+    def run(self):
+        """run the target, then the hooks of :func:`register_exit_hook`"""
+        try:
+            super().run()
+        finally:
+            while _exit_hooks:
+                _exit_hooks.pop()()
 
     def join(self, timeout=None):
         """join"""
@@ -149,6 +176,7 @@ class NonDaemonicSpawnProcess(SpawnProcess):
         reconstruct_func_and_args_and_state_serialized: bytes,
     ):
         better_exchook.install()
+        install_subproc_faulthandler()
         try:
             pre_init_func: Callable[[], None] = deserialize_object(pre_init_func_serialized)
             pre_init_func()
@@ -190,10 +218,28 @@ class NonDaemonicSpawnContext(BaseContext):
         return proc
 
 
+def register_exit_hook(func: Callable[[], None]):
+    """
+    Registers a function to be called when the target of the current :class:`NonDaemonicSpawnProcess` has finished
+    (returned or raised), before the multiprocessing exit cleanup,
+    which signals all child procs still alive (see :func:`NonDaemonicSpawnProcess.join`).
+    So this is the place to stop and join own child procs in an orderly way.
+    The hooks are called in reverse order of registration.
+
+    :param func: called without arguments
+    """
+    proc = multiprocessing.current_process()
+    assert isinstance(proc, NonDaemonicSpawnProcess), f"register_exit_hook: not in a NonDaemonicSpawnProcess: {proc}"
+    _exit_hooks.append(func)
+
+
+_exit_hooks: List[Callable[[], None]] = []
+
+
 class _AtExitCleanupProcess:
-    def __init__(self, proc_pid: int):
+    def __init__(self, proc_pid: Optional[int]):
         self.cur_pid = os.getpid()
-        self.proc_pid = proc_pid
+        self.proc_pid = proc_pid  # None = already cleaned
 
     def __call__(self):
         try:

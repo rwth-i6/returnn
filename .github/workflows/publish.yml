@@ -2,8 +2,8 @@ name: Publish
 
 on:
   workflow_run:
-    workflows: ["CI"]
-    branches: [master]
+    workflows: [ "CI" ]
+    branches: [ master ]
     types:
       - completed
 
@@ -17,30 +17,30 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-    - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-    - name: Checkout submodules
-      run: |
-        git submodule sync
-        git submodule update --init --recursive
+      - name: Checkout submodules
+        run: |
+          git submodule sync
+          git submodule update --init --recursive
 
-    - uses: actions/setup-python@v5
-      with:
-        python-version: 3.8
+      - uses: actions/setup-python@v5
+        with:
+          python-version: 3.8
 
-    - name: Install Python deps
-      run: |
-        echo "PATH=$PATH:$HOME/.local/bin" >> $GITHUB_ENV
-        pip3 install --user --upgrade pip build twine
-        pip3 install --user typing  # needed for Python 2 in some cases
-        pip3 install --user -r requirements.txt
+      - name: Install Python deps
+        run: |
+          echo "PATH=$PATH:$HOME/.local/bin" >> $GITHUB_ENV
+          pip3 install --user --upgrade pip build twine
+          pip3 install --user typing  # needed for Python 2 in some cases
+          pip3 install --user -r requirements.txt
 
-    - run: python3 -m build
+      - run: python3 -m build
 
-    # https://github.com/marketplace/actions/pypi-publish
-    - name: Publish to PyPI
-      # https://github.com/pypa/gh-action-pypi-publish/issues/112
-      uses: pypa/gh-action-pypi-publish@release/v1.4
-      with:
-        user: __token__
-        password: ${{ secrets.pypi_password }}
+      # https://github.com/marketplace/actions/pypi-publish
+      - name: Publish to PyPI
+        # https://github.com/pypa/gh-action-pypi-publish/issues/112
+        uses: pypa/gh-action-pypi-publish@release/v1.4
+        with:
+          user: __token__
+          password: ${{ secrets.pypi_password }}

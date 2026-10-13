@@ -71,7 +71,7 @@ def stft(
     """
     if in_spatial_dim.need_masking():
         if use_mask is None:
-            use_mask = rf.use_mask_default(default=True, default_false_for_behavior_version_up_to=22)
+            use_mask = rf.use_mask_default(default=True, default_false_for_behavior_version_up_to=22, func_name="stft")
         if use_mask:
             x = x.copy_masked(0, dims=[in_spatial_dim])
     fft_length = fft_length or frame_length

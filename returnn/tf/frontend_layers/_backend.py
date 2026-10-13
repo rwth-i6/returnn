@@ -46,6 +46,13 @@ class ReturnnLayersBackend(Backend[Layer]):
         return False
 
     @staticmethod
+    def should_pickle_tensor(raw_tensor: Layer) -> bool:
+        """
+        :return: whether the tensor should be included in a pickle or set to `None`.
+        """
+        return False
+
+    @staticmethod
     def get_tensor_dependencies(x: Tensor[Layer]) -> Sequence[Tensor]:
         """get tensor inputs"""
         deps: List[Tensor] = []
@@ -369,7 +376,6 @@ class ReturnnLayersBackend(Backend[Layer]):
         value: Union[rf.RawTensorTypes, Tensor] = None,
     ) -> Tensor:
         """pad"""
-        assert isinstance(value, (int, float, type(None)))  # not implemented otherwise
         return rfl.make_layer(
             {
                 "class": "pad",
@@ -458,6 +464,8 @@ class ReturnnLayersBackend(Backend[Layer]):
         targets_spatial_dim: Dim,
         blank_index: int,
         max_approx: bool = False,
+        use_native_op: Optional[bool] = None,
+        label_loop: bool = True,
     ) -> Tensor:
         """CTC"""
         assert targets.sparse_dim and targets.sparse_dim.dimension <= logits.feature_dim.dimension
@@ -475,6 +483,7 @@ class ReturnnLayersBackend(Backend[Layer]):
                 "targets": targets,
                 "blank_index": blank_index,
                 "max_approx": max_approx,
+                "label_loop": label_loop,
             },
             name="ctc_loss",
         )
@@ -657,10 +666,9 @@ class ReturnnLayersBackend(Backend[Layer]):
         out_dim: Dim,
     ) -> Tensor:
         """slice"""
-        if size is not None:
+        if size is not None or isinstance(start, Tensor):
             assert end is None  # not implemented
             assert step is None  # not implemented
-            assert size is not None  # not implemented
             return rfl.make_layer(
                 {
                     "class": "slice_nd",
@@ -936,8 +944,12 @@ class ReturnnLayersBackend(Backend[Layer]):
             if mask==True for all elements, the returned tensor would be simply the flattened input tensor.
         """
         assert mask.dtype == "bool"
-        assert set(mask.dims) == set(dims)
-        assert set(mask.dims).issubset(set(tensor.dims))
+        if set(dims) != set(mask.dims):
+            assert len(dims) == 1  # the frontend pre-merges multiple dims
+            # noinspection PyProtectedMember
+            from returnn.frontend.array_ import _masked_select_subset
+
+            return _masked_select_subset(tensor, mask=mask, dim=dims[0], out_dim=out_dim)
         if not out_dim:
             out_dim = Dim(None, name="mask")
         return (
@@ -1060,14 +1072,16 @@ class ReturnnLayersBackend(Backend[Layer]):
                 s = filter_size[i].dimension if not strides else strides[i]
                 if filter_size[i].dimension == s == 1 or (s == 1 and padding.lower() == "same"):
                     out_spatial_dims[i] = in_spatial_dims[i]
-        layer_dict = {
+        assert all(size.is_static() for size in filter_size)
+        layer_dict: Dict[str, Any] = {
             "class": "transposed_conv",
             "from": source,
             "in_dim": in_dim,
             "in_spatial_dims": in_spatial_dims,
             "out_dim": out_dim,
             "out_spatial_dims": out_spatial_dims,
-            "filter_size": filter_size,
+            "filter_size": [size.dimension for size in filter_size],
+            "filter_perm": list(filter_size) + [out_dim, in_dim],
             "padding": padding,
         }
         if remove_padding:

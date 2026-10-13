@@ -4,7 +4,7 @@ This module contains the layer base class :class:`LayerBase`.
 
 from __future__ import annotations
 
-from typing import Optional, Dict, List, Union
+from typing import Optional, Dict, List, Union, Any, TypeVar
 import typing
 from typing import TYPE_CHECKING
 import contextlib
@@ -20,6 +20,11 @@ from returnn.log import log
 
 if TYPE_CHECKING:
     from tensorflow.python.training.saver import BaseSaverBuilder
+
+
+# what translate_to_this_search_beam gets and gives back:
+# a layer, a nested dict/list/tuple of them, or an unrelated value passed through
+_SourcesT = TypeVar("_SourcesT")
 
 
 class LayerBase:
@@ -192,7 +197,7 @@ class LayerBase:
         self.name = name
         self.network = network
         self._register_layer()
-        self.kwargs: Optional[Dict[str]] = None  # set via self.post_init
+        self.kwargs: Optional[Dict[str, Any]] = None  # set via self.post_init
         self.target = None
         self.targets = None
         if target:
@@ -355,7 +360,7 @@ class LayerBase:
     @classmethod
     def get_out_data_from_opts(cls, **kwargs):
         """
-        Gets a Data template (i.e. shape etc is set but not the placeholder) for our __init__ args.
+        Gets a Data template (i.e. shape etc. is set but not the placeholder) for our __init__ args.
         The purpose of having this as a separate classmethod is to be able to infer the shape information
         without having to construct the layer.
         This function should not create any nodes in the computation graph.
@@ -415,7 +420,7 @@ class LayerBase:
             )
         # Any template construction should be aware of that, and eventually resolve it.
         if out_type is None:
-            out_type = {}  # type: typing.Dict[str]
+            out_type: Dict[str, Any] = {}
         else:
             out_type = out_type.copy()
         out_type.setdefault("name", "%s_output" % name)
@@ -538,7 +543,6 @@ class LayerBase:
         )
         return output
 
-    # noinspection PyUnusedLocal
     @classmethod
     def _post_init_output(
         cls,
@@ -549,7 +553,7 @@ class LayerBase:
         _target_layers=None,
         sources=(),
         _src_common_search_choices=None,
-        **kwargs,
+        **_kwargs,
     ):
         """
         :param Data output:
@@ -823,7 +827,7 @@ class LayerBase:
                 if cls.layer_class in {"linear", "softmax"}:
                     d["out_dim"] = guessed_out_dim
                 else:
-                    # Many layers don't introduce a new out_dim (e.g. activation, copy, etc),
+                    # Many layers don't introduce a new out_dim (e.g. activation, copy, etc.),
                     # and setting out_dim would break many old configs.
                     d["n_out"] = guessed_out_dim.dimension
         if "out_shape" in d:
@@ -1055,7 +1059,6 @@ class LayerBase:
             layers += [layer for _, layer in sorted(self._target_layers.items())]
         return layers
 
-    # noinspection PyUnusedLocal
     @classmethod
     def cls_get_sub_network(cls, name, network, layer_desc):
         """
@@ -1073,6 +1076,7 @@ class LayerBase:
         :param dict[str] layer_desc:
         :rtype: returnn.tf.network.Subnetwork|None
         """
+        del name, network, layer_desc  # fixed signature
         return None
 
     def get_sub_layer(self, layer_name):
@@ -1410,10 +1414,16 @@ class LayerBase:
         if not saveable:
             self.saveable_param_replace[param] = None
         if getattr(param, "RETURNN_layer", None) is None:
+            # RETURNN plants this attr on tf.Variable
+            # noinspection PyUnresolvedReferences
             param.RETURNN_layer = self
         if getattr(param, "RETURNN_updater_opts", None) is None and self.updater_opts.truth_value:
+            # RETURNN plants this attr on tf.Variable
+            # noinspection PyUnresolvedReferences
             param.RETURNN_updater_opts = self.updater_opts
         if non_critical_for_restore:
+            # RETURNN plants this attr on tf.Variable
+            # noinspection PyUnresolvedReferences
             param.RETURNN_non_critical_for_restore = True
         # Note that any further postprocessing on the parameter should not be done here,
         # as we cannot guarantee that the result from this method is really used,
@@ -1710,7 +1720,7 @@ class LayerBase:
             c += self.spatial_smoothing * self.get_output_spatial_smoothing_energy()
         if self.darc1:
             c += self.darc1 * self.get_darc1()
-        if c is 0:
+        if isinstance(c, int) and c == 0:  # int 0 means no constraints; a tf.Tensor is never 0 here
             return None
         return c
 
@@ -2776,11 +2786,10 @@ class SearchChoices:
     def __gt__(self, other):
         return self.__cmp__(other) > 0
 
-    def translate_to_this_search_beam(self, sources):
+    def translate_to_this_search_beam(self, sources: _SourcesT) -> _SourcesT:
         """
-        :param LayerBase|list[LayerBase]|dict[str,LayerBase|object]|tuple[LayerBase|object]|T sources:
-        :return: sources but all layers transformed when needed
-        :rtype: T
+        :param sources: a layer, or a dict / list / tuple of them, or anything else (returned as-is)
+        :return: sources but all layers transformed when needed, same structure as given
         """
         from .basic import SelectSearchSourcesLayer
 
@@ -2941,7 +2950,7 @@ class Loss:
         Also, some code overwrites this function externally,
         e.g. with returnn.tf.util.basic.identity, to not do reducing.
 
-        :param tf.Tensor loss: e.g. (batch*time,), or (time_flat,), or (batch*time,dim), etc
+        :param tf.Tensor loss: e.g. (batch*time,), or (time_flat,), or (batch*time,dim), etc.
         :return: by default just a scalar. but this can be overwritten, to not reduce
         :rtype: tf.Tensor
         """
@@ -2952,7 +2961,7 @@ class Loss:
 
     def reduce_to_batch(self, loss, normalize):
         """
-        :param tf.Tensor loss: e.g. (batch*time,), or (time_flat,), or (batch*time,dim), etc
+        :param tf.Tensor loss: e.g. (batch*time,), or (time_flat,), or (batch*time,dim), etc.
         :param bool normalize: reduce mean instead of reduce sum
         :return: (batch,)
         :rtype: tf.Tensor

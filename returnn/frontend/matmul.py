@@ -35,8 +35,12 @@ def matmul(a: Tensor[T], b: Tensor[T], *, reduce: Union[Dim, Sequence[Dim]], use
     :return: result of dot product, Dim order: common axes as sorted in a, unique axes of a (in order),
         unique axes of b (in order)
     """
-    # noinspection PyProtectedMember
-    return a._raw_backend.matmul(a=a, b=b, reduce=reduce, use_mask=use_mask)
+    from . import _utils
+
+    # Dispatch over both args (dispatch_priority-aware):
+    # e.g. a plain a with a packed b must go to the packed backend (see _packed_backend).
+    backend = _utils.get_backend_from_tensors(a, b)
+    return backend.matmul(a=a, b=b, reduce=reduce, use_mask=use_mask)
 
 
 # alias for some older code

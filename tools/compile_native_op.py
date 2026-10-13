@@ -2,7 +2,7 @@
 
 """
 This explicitly compiles some of the native ops, and will tell you the so-filenames.
-Normally all native ops (e.g. NativeLstm2 etc) are compiled on-the-fly within RETURNN.
+Normally all native ops (e.g. NativeLstm2 etc.) are compiled on-the-fly within RETURNN.
 When you export the computation graph (e.g. via ``compile_tf_graph.py``),
 you explicitly must load these native ops.
 """
@@ -11,16 +11,18 @@ from __future__ import annotations
 
 import os
 import sys
-import typing
+from typing import Optional
 
 import _setup_returnn_env  # noqa
+
 from returnn import __main__ as rnn
 from returnn.log import log
+from returnn.config import Config
 import argparse
 import returnn.util.basic as util
 
 
-config = None  # type: typing.Optional["returnn.config.Config"]
+config: Optional[Config] = None
 
 
 def init(config_filename, log_verbosity):

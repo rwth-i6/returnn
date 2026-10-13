@@ -7,14 +7,13 @@ from __future__ import annotations
 from typing import Optional, Union, Any, Sequence, List, Tuple, Dict
 import numpy
 import sys
-import typing
 
 from returnn.util.basic import class_idx_seq_to_1_of_k, CollectionReadCheckCovered
 from returnn.log import log
 from returnn.tensor import Tensor, Dim, TensorDict
 
 from .util.feature_extraction import ExtractAudioFeatures
-from .util.vocabulary import *
+from .util.vocabulary import Vocabulary, BytePairEncoding, CharacterTargets
 from .audio import OggZipDataset  # noqa # for API compatibility
 from .basic import Dataset, DatasetSeq, convert_data_dims
 from .cached2 import CachedDataset2
@@ -25,8 +24,8 @@ class GeneratingDataset(Dataset):
     Some base class for datasets with artificially generated data.
     """
 
-    _input_classes = None
-    _output_classes = None
+    _input_classes: Optional[str] = None  # label chars, set by subclasses
+    _output_classes: Optional[str] = None  # label chars, set by subclasses
     _getnewargs_remap = dict(num_seqs="_total_num_seqs", **Dataset._getnewargs_remap)
 
     def __init__(self, input_dim, output_dim, num_seqs=float("inf"), **kwargs):
@@ -819,7 +818,7 @@ class DummyDatasetMultipleSequenceLength(DummyDataset):
         :param int input_dim:
         :param int output_dim:
         :param int|float num_seqs:
-        :param int|dict[str,int] seq_len:
+        :param int|dict[str,int]|None seq_len:
         :param float input_max_value:
         :param float|None input_shift:
         :param float|None input_scale:
@@ -1082,7 +1081,7 @@ class StaticDataset(CachedDataset2):
         :param list[dict[str,numpy.ndarray]] data: list of seqs, each provide the data for each data-key
         :param target_list:
         :param int|None input_dim:
-        :param int|dict[str,(int,int)|list[int]] output_dim:
+        :param int|dict[str,(int,int)|list[int]]|None output_dim:
         """
         super(StaticDataset, self).__init__(**kwargs)
 
@@ -1161,15 +1160,18 @@ class StaticDataset(CachedDataset2):
         self._num_seqs = len(self._seq_order)
         return True
 
+    def get_current_seq_order(self) -> Sequence[int]:
+        """:return: list of corpus seq idx of the current epoch"""
+        assert self._seq_order is not None
+        return self._seq_order
+
     def supports_seq_order_sorting(self) -> bool:
         """supports sorting"""
         return True
 
-    def _collect_single_seq(self, seq_idx):
-        """
-        :param int seq_idx:
-        :rtype: DatasetSeq
-        """
+    def _collect_single_seq(self, seq_idx: int) -> Optional[DatasetSeq]:
+        if seq_idx >= len(self._seq_order):
+            return None
         corpus_seq_idx = self._seq_order[seq_idx]
         data = self.data[corpus_seq_idx]
         return DatasetSeq(
@@ -1278,12 +1280,6 @@ class CopyTaskDataset(GeneratingDataset):
         seq = [self.random.randint(0, self.nsymbols) for _ in range(seq_len)]
         seq_np = numpy.array(seq, dtype="int8")
         return DatasetSeq(seq_idx=seq_idx, features=seq_np, targets={"classes": seq_np})
-
-
-# Multiple external sources where we could write automatic wrappers:
-# * https://github.com/tensorflow/datasets
-# * tf.contrib.keras.datasets, https://www.tensorflow.org/api_docs/python/tf/keras/datasets
-# * nltk.corpus
 
 
 class TimitDataset(CachedDataset2):
@@ -1541,8 +1537,9 @@ class TimitDataset(CachedDataset2):
         self._norm_std_dev = self._load_feature_vec(norm_std_dev)
         assert num_phones in {61, 48, 39}
         self._phone_map = {61: self.PhoneMapTo61, 48: self.PhoneMapTo48, 39: self.PhoneMapTo39}[num_phones]
-        self.labels = self._get_labels_by_phone_map(self._phone_map)
-        self.num_outputs = {"data": (self.num_inputs, 2), "classes": (len(self.labels), 1)}
+        self._phone_labels = self._get_labels_by_phone_map(self._phone_map)
+        self.labels = {"classes": self._phone_labels}
+        self.num_outputs = {"data": (self.num_inputs, 2), "classes": (len(self._phone_labels), 1)}
         self._timit_dir = timit_dir
         self._is_train = train
         self._demo_play_audio = demo_play_audio
@@ -1553,7 +1550,7 @@ class TimitDataset(CachedDataset2):
 
         self._random_permute_audio = CollectionReadCheckCovered.from_bool_or_dict(random_permute_audio)
 
-        self._seq_order = None  # type: typing.Optional[typing.Sequence[int]]
+        self._seq_order: Optional[Sequence[int]] = None
         self._init_timit()
 
         self._audio_data = {}  # seq_tag -> (audio, sample_rate). loaded by self._reader_thread_main
@@ -1788,7 +1785,7 @@ class TimitDataset(CachedDataset2):
         phone_seq = self._get_phone_seq(seq_tag)
         phone_seq = [self._phone_map[p] for p in phone_seq]
         phone_seq = [p for p in phone_seq if p]
-        phone_id_seq = numpy.array([self.labels.index(p) for p in phone_seq], dtype="int32")
+        phone_id_seq = numpy.array([self._phone_labels.index(p) for p in phone_seq], dtype="int32")
         # see: https://github.com/rdadolf/fathom/blob/master/fathom/speech/preproc.py
         # and: https://groups.google.com/forum/#!topic/librosa/V4Z1HpTKn8Q
         audio, sample_rate = self._get_audio(seq_tag)
@@ -1927,8 +1924,8 @@ class BlissDataset(CachedDataset2):
         self._with_delta = with_delta
         self.num_inputs *= 1 + with_delta
         self._bpe_file = open(bpe_file, "r")
-        self._seqs = []  # type: typing.List[BlissDataset.SeqInfo]
-        self._vocab = {}  # type: typing.Dict[str,int]  # set in self._parse_vocab
+        self._seqs: List[BlissDataset.SeqInfo] = []
+        self._vocab: Dict[str, int] = {}  # set in self._parse_vocab
         self._parse_bliss_xml(filename=path)
         # TODO: loading audio like in TimitDataset, and in parallel
         self._bpe = BytePairEncoding(vocab_file=vocab_file, bpe_file=bpe_file)
@@ -2100,7 +2097,7 @@ class LibriSpeechCorpus(CachedDataset2):
             self.targets = CharacterTargets(**chars)
         elif targets is None:
             assert bpe is None and chars is None
-            self.targets = None  # type: typing.Optional[Vocabulary]
+            self.targets: Optional[Vocabulary] = None
         else:
             raise Exception("invalid targets %r. provide bpe or chars" % targets)
         if self.targets:
@@ -2128,7 +2125,7 @@ class LibriSpeechCorpus(CachedDataset2):
             self._reference_seq_order = seqs
             self.transs = {s: self.transs[s] for s in seqs}
         self.epoch_wise_filter = epoch_wise_filter
-        self._seq_order = None  # type: typing.Optional[typing.Sequence[int]]
+        self._seq_order: Optional[Sequence[int]] = None
         self.init_seq_order()
 
     def _collect_trans(self):
@@ -2294,9 +2291,9 @@ class LibriSpeechCorpus(CachedDataset2):
         """:return: whether this dataset supports sharding"""
         return True
 
-    def get_current_seq_order(self):
+    def get_current_seq_order(self) -> Sequence[int]:
         """
-        :rtype: typing.Sequence[int]
+        :return: seq order of current epoch
         """
         assert self._seq_order is not None
         return self._seq_order
@@ -2412,7 +2409,7 @@ class Enwik8Corpus(CachedDataset2):
     """
 
     # Use a single HDF file, and cache it across all instances.
-    _hdf_file = None
+    _hdf_file: Optional[Any] = None  # h5py.File, opened lazily
 
     def __init__(self, path, subset, seq_len, batch_num_seqs=None, subsubset=None, **kwargs):
         """
@@ -2446,7 +2443,7 @@ class Enwik8Corpus(CachedDataset2):
         self._batch_num_seqs = batch_num_seqs
         self._random = numpy.random.RandomState(1)  # seed will be set in init_seq_order
         self._seq_starts = numpy.arange(0, len(self._data) - 1, seq_len)
-        self._seq_order = None  # type: typing.Optional[typing.Sequence[int]]
+        self._seq_order: Optional[Sequence[int]] = None
 
     def get_data_dtype(self, key):
         """
@@ -2580,8 +2577,7 @@ class Enwik8Corpus(CachedDataset2):
     def _download_zip(self):
         url = "https://mattmahoney.net/dc/enwik8.zip"
         print("%s: download %s" % (self, url), file=log.v2)
-        # noinspection PyPackageRequirements
-        from six.moves.urllib.request import urlretrieve
+        from urllib.request import urlretrieve
 
         urlretrieve(url, self._zip_filename)
 

@@ -11,7 +11,7 @@ from returnn.tensor import Tensor, Dim
 import returnn.frontend as rf
 
 
-__all__ = ["mask_nested", "gather_nested", "masked_select_nested", "masked_scatter_nested"]
+__all__ = ["mask_nested", "gather_nested", "masked_select_nested", "masked_scatter_nested", "where_nested"]
 
 
 T = TypeVar("T")
@@ -82,7 +82,15 @@ def _mask_prepare_dims(
             dim_map=dim_map,
             allow_dim_extension=allow_dim_extension,
         )
-        new_dim = Dim(new_dyn_size, name=_extend_dim_name(s.name))
+        capacity = None
+        if rf.is_static_traceable():
+            # the masked size is where(mask, s, mask_value), so the larger of the two bounds it.
+            # Only here: a capacity is the padded extent everywhere it is read,
+            # so in eager it would replace the true size.
+            # noinspection PyProtectedMember
+            caps = [d._derived_capacity() for d in (s, mask_value)]
+            capacity = max(caps) if all(c is not None for c in caps) else None
+        new_dim = Dim(new_dyn_size, name=_extend_dim_name(s.name), capacity=capacity)
         dim_map[s] = dim_map[mask_value] = new_dim
         return new_dim
     return s
@@ -115,7 +123,7 @@ def _mask(
                 return s
         if not allow_dim_extension or mask_value is None or (isinstance(mask_value, (int, float)) and mask_value == 0):
             if mask.dims_set.issubset(s.dims_set):
-                return rf.where(mask, s, mask_value)
+                return rf.where(mask, s, rf.cast(mask_value, s.dtype))
             assert not mask.dims_set.intersection(s.dims_set)  # not sure...
             return s
         assert isinstance(mask_value, (int, float, Tensor))
@@ -155,7 +163,7 @@ def _gather_prepare_dims(s: T, *, indices: Tensor, dim_map: Dict[Dim, Dim]) -> T
             return dim_map[s]
         if indices.sparse_dim in s.dyn_size_ext.dims:
             new_dyn_size = _gather(s.dyn_size_ext, indices=indices, dim_map=dim_map)
-            new_dim = Dim(new_dyn_size, name=_extend_dim_name(s.name))
+            new_dim = Dim(new_dyn_size, name=_extend_dim_name(s.name), bounded_by=s)
             dim_map[s] = new_dim
             return new_dim
         return s
@@ -165,19 +173,22 @@ def _gather_prepare_dims(s: T, *, indices: Tensor, dim_map: Dict[Dim, Dim]) -> T
 
 def _gather(s: T, *, indices: Tensor, dim_map: Optional[Dict[Dim, Dim]] = None) -> T:
     if isinstance(s, Tensor):
+        if indices.sparse_dim in s.dims:
+            # really the default case, otherwise e.g. scalar or so, independent of beam
+            s = rf.gather(s, indices=indices)
         if dim_map and any(d in dim_map for d in s.dims):
             for d in s.dims:
                 if d in dim_map:
                     s = rf.replace_dim_v2(s, in_dim=d, out_dim=dim_map[d])
-        if indices.sparse_dim in s.dims:
-            # really the default case, otherwise e.g. scalar or so, independent of beam
-            s = rf.gather(s, indices=indices)
         return s
     if isinstance(s, Dim):
         if s.dimension is not None:  # static
             return s
         if dim_map and s in dim_map:
             return dim_map[s]
+        if indices.sparse_dim == s:
+            assert len(indices.dims) == 1
+            return indices.dims[0]
         assert indices.sparse_dim not in s.dyn_size_ext.dims  # not expected, should be in dim_map
         return s
     raise TypeError(f"_gather: unexpected type ({type(s)})")
@@ -240,7 +251,7 @@ def _masked_select_prepare_dims(s, *, mask: Tensor, dims: Sequence[Dim], out_dim
         if s in dim_map:
             return dim_map[s]
         new_dyn_size = _masked_select(s.dyn_size_ext, mask=mask, dims=dims, out_dim=out_dim, dim_map=dim_map)
-        new_dim = Dim(new_dyn_size, name=_extend_dim_name(s.name))
+        new_dim = Dim(new_dyn_size, name=_extend_dim_name(s.name), bounded_by=s)
         dim_map[s] = new_dim
         return new_dim
     # everything else ignored at this stage
@@ -275,6 +286,8 @@ def _masked_select(
             return s
         assert s in dim_map
         return dim_map[s]
+    if s is None:
+        return None
     raise TypeError(f"_masked_select: unexpected type ({type(s)})")
 
 
@@ -346,17 +359,22 @@ def _masked_scatter_merge_dims(
     merged_dim_map: Dict[Dim, Dim],
 ) -> T:
     if isinstance(s, Dim):
+        assert isinstance(backup, Dim)
         # This is slightly more complex than in the _masked_select case:
         # We need to merge the s and backup depending on the mask.
+        s_packed = s
         if s in reverse_dim_map:
             s = reverse_dim_map[s]
         if s == backup:
             return s
         if s in merged_dim_map:
+            # If this assert fails, see e.g. https://github.com/rwth-i6/returnn/pull/1759 for an example.
+            assert backup in merged_dim_map, f"nested masked_scatter: mismatch of s {s} vs backup {backup}"
             return merged_dim_map[s]
+        assert backup not in merged_dim_map, f"nested masked_scatter: mismatch of s {s} vs backup {backup}"
         # Note: s/backup might even be static dims.
         new_size = _masked_scatter(
-            s.get_size_tensor(),
+            s_packed.get_size_tensor(),
             backup.get_size_tensor(),
             mask=mask,
             dims=dims,
@@ -365,10 +383,11 @@ def _masked_scatter_merge_dims(
             merged_dim_map=merged_dim_map,
         )
         assert new_size.dims_set == (
-            (s.get_size_tensor().dims_set | backup.get_size_tensor().dims_set) - {in_dim}
+            (s_packed.get_size_tensor().dims_set | backup.get_size_tensor().dims_set) - {in_dim}
         ) | set(dims)
         new_dim = Dim(new_size, name=backup.name)
         merged_dim_map[s] = new_dim
+        merged_dim_map[s_packed] = new_dim
         merged_dim_map[backup] = new_dim
         return new_dim
     # everything else ignored at this stage
@@ -393,15 +412,14 @@ def _masked_scatter(
         if in_dim not in s.dims:
             s = rf.expand_dim(s, in_dim)
         # Do the reverse of _masked_select above.
-        # First replace the dims back.
-        if any(d in reverse_dim_map for d in s.dims):
-            for d in s.dims:
-                if d in reverse_dim_map:
-                    s = rf.replace_dim_v2(s, in_dim=d, out_dim=reverse_dim_map[d], allow_shrink=False)
-        # We also might need to replace newly merged dims, both in s and backup.
+        # Replace the dims back, preferring a merged dim when the dim is in both maps:
+        # reverse_dim_map would map it to the unpacked dim, which does not fit the still-packed s.
         for d in s.dims:
             if d in merged_dim_map:
                 s = rf.replace_dim_v2(s, in_dim=d, out_dim=merged_dim_map[d])
+            elif d in reverse_dim_map:
+                s = rf.replace_dim_v2(s, in_dim=d, out_dim=reverse_dim_map[d], allow_shrink=False)
+        # The backup might also carry newly merged dims.
         for d in backup.dims:
             if d in merged_dim_map:
                 backup = rf.replace_dim_v2(backup, in_dim=d, out_dim=merged_dim_map[d])
@@ -416,7 +434,99 @@ def _masked_scatter(
         if s in merged_dim_map:
             return merged_dim_map[s]
         return s
+    if s is None:
+        assert backup is None
+        return None
     raise TypeError(f"_masked_scatter: unexpected type ({type(s)})")
+
+
+def where_nested(x: T, y: T, *, condition: Tensor, condition_cpu: Optional[Tensor] = None) -> T:
+    """
+    This is like :func:`where`, but for nested structures.
+
+    :param x: nested structure of tensors, same structure as condition
+    :param y: nested structure of tensors, same structure as condition
+    :param condition: tensor with boolean dtype. this is broadcasted to the shape of x and y. see :func:`where`
+    :param condition_cpu: condition tensor for CPU. this is used e.g. for dyn dim sizes
+    :return: nested structure with where(condition, x, y) applied to all tensors
+    """
+    tree.assert_same_structure(x, y)
+
+    condition_cpu = condition_cpu if condition_cpu is not None else rf.copy_to_device(condition)
+    merged_dim_map = {}
+
+    tree.map_structure(
+        functools.partial(_where_merge_dims, condition=condition_cpu, merged_dim_map=merged_dim_map), x, y
+    )
+    s = tree.map_structure(
+        functools.partial(_where, condition=condition, condition_cpu=condition_cpu, merged_dim_map=merged_dim_map), x, y
+    )
+    return s
+
+
+def _where_merge_dims(
+    x: T,
+    y: T,
+    *,
+    condition: Tensor,
+    merged_dim_map: Dict[Dim, Dim],
+) -> T:
+    if isinstance(x, Dim):
+        assert isinstance(y, Dim)
+        # This is slightly more complex than in the _masked_select case:
+        # We need to merge the s and backup depending on the mask.
+        if x == y:
+            return x
+        if x in merged_dim_map:
+            # If this assert fails, see e.g. https://github.com/rwth-i6/returnn/pull/1759 for an example.
+            assert y in merged_dim_map, f"nested where: mismatch of {x=} vs {y=}"
+            return merged_dim_map[x]
+        assert y not in merged_dim_map, f"nested where: mismatch of {x=} vs {y=}"
+        # Note: x/y might even be static dims.
+        new_size = _where(
+            x.get_size_tensor(),
+            y.get_size_tensor(),
+            condition=condition,
+            merged_dim_map=merged_dim_map,
+        )
+        new_dim = Dim(new_size, name=y.name)
+        merged_dim_map[x] = new_dim
+        merged_dim_map[y] = new_dim
+        return new_dim
+    # everything else ignored at this stage
+    return x
+
+
+def _where(
+    x: T,
+    y: T,
+    *,
+    condition: Tensor,
+    condition_cpu: Optional[Tensor] = None,
+    merged_dim_map: Dict[Dim, Dim],
+) -> T:
+    if isinstance(x, Tensor):
+        assert isinstance(y, Tensor)
+        if x.device == "cpu" and condition_cpu is not None:
+            condition = condition_cpu
+        # We also might need to replace newly merged dims, both in s and backup.
+        for d in x.dims:
+            if d in merged_dim_map:
+                x = rf.replace_dim_v2(x, in_dim=d, out_dim=merged_dim_map[d])
+        for d in y.dims:
+            if d in merged_dim_map:
+                y = rf.replace_dim_v2(y, in_dim=d, out_dim=merged_dim_map[d])
+        # The unpacking itself (reversing the masked_select, i.e. masked_scatter).
+        s = rf.where(condition, x, y)
+        return s
+    if isinstance(x, Dim):
+        if x in merged_dim_map:
+            return merged_dim_map[x]
+        return x
+    if x is None:
+        assert y is None
+        return None
+    raise TypeError(f"_where: unexpected type ({type(x)})")
 
 
 def _extend_dim_name(name: str) -> str:

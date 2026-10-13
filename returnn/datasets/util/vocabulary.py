@@ -11,14 +11,19 @@ __all__ = [
     "SentencePieces",
     "CharacterTargets",
     "Utf8ByteTargets",
+    "HuggingFaceTokenizer",
 ]
 
-from typing import Optional, Union, Type, Callable, List, Dict
+from typing import TYPE_CHECKING, Optional, Union, Any, Type, Callable, List, Dict
+import os
 import sys
 import re
 import numpy
 
 from returnn.util.basic import NotSpecified
+
+if TYPE_CHECKING:
+    import transformers
 
 
 class Vocabulary:
@@ -546,6 +551,21 @@ class SentencePieces(Vocabulary):
     def __repr__(self):
         return "%s(%r)" % (self.__class__.__name__, self._opts)
 
+    def __getstate__(self):
+        state = self.__dict__.copy()
+        # Pickling SentencePieceProcessor keeps only the model and resets the encode options (add_eos etc.).
+        state["sp"] = self.sp.serialized_model_proto()
+        return state
+
+    def __setstate__(self, state):
+        import sentencepiece as spm  # noqa
+
+        self.__dict__.update(state)
+        opts = self._opts.copy()
+        for k in ["model_file", "model_proto", "control_symbols", "user_defined_symbols"]:
+            opts.pop(k, None)
+        self.sp = spm.SentencePieceProcessor(model_proto=state["sp"], **opts)  # noqa
+
     def _parse_vocab(self):
         self.num_labels = self.sp.vocab_size()
         # Do not load labels/vocab here. This is not really needed.
@@ -691,3 +711,129 @@ class Utf8ByteTargets(Vocabulary):
             assert ((seq >= 0) & (seq < 256)).all(), f"invalid byte value, must be within 0-255: {seq}"
             seq = seq.astype(numpy.uint8)
         return bytearray(seq).decode(encoding="utf8")
+
+
+class HuggingFaceTokenizer(Vocabulary):
+    """
+    Uses the `AutoTokenizer` class from the `transformers` package.
+    """
+
+    def __init__(
+        self,
+        *,
+        huggingface_repo_dir: Optional[str] = None,
+        tokenizer: Optional[transformers.PreTrainedTokenizerBase] = None,
+        map_bos_to_eos: bool = False,
+        text_preprocessing: Optional[Callable[[str], str]] = None,
+        bpe_dropout: float = 0.0,
+        add_special_tokens: Optional[List[str]] = None,
+    ):
+        """
+        :param huggingface_repo_dir: the directory containing the `tokenizer_config.json` file.
+        :param tokenizer: if given, will use this tokenizer directly.
+            Otherwise, will load it from `huggingface_repo_dir`.
+        :param map_bos_to_eos:
+        :param text_preprocessing: applied in :func:`get_seq` (sentence -> ids)
+        """
+        import transformers  # noqa
+
+        self._opts: Dict[str, Any] = {}
+        if tokenizer:
+            assert not huggingface_repo_dir, f"{self}: cannot specify both tokenizer and huggingface_repo_dir"
+            self._opts["tokenizer"] = tokenizer
+            self.tokenizer = tokenizer
+        elif huggingface_repo_dir:
+            # Make sure it is a string. (Could be e.g. Sis Path.)
+            huggingface_repo_dir = os.fspath(huggingface_repo_dir)
+            self._opts["huggingface_repo_dir"] = huggingface_repo_dir
+            self.tokenizer = transformers.AutoTokenizer.from_pretrained(huggingface_repo_dir, trust_remote_code=True)
+        else:
+            raise ValueError(f"{self}: either tokenizer or huggingface_repo_dir must be specified")
+        self._cache_key = tokenizer or huggingface_repo_dir
+        if map_bos_to_eos:
+            self._opts["map_bos_to_eos"] = map_bos_to_eos
+        if text_preprocessing:
+            self._opts["text_preprocessing"] = text_preprocessing
+        if bpe_dropout:
+            self._opts["bpe_dropout"] = bpe_dropout
+        super().__init__(
+            vocab_file=None,
+            seq_postfix=None,
+            unknown_label=self.tokenizer.unk_token_id,
+            eos_label=self.tokenizer.eos_token_id,
+            bos_label=self.tokenizer.eos_token_id if map_bos_to_eos else self.tokenizer.bos_token_id,
+            pad_label=self.tokenizer.pad_token_id,
+        )
+        self.text_preprocessing = text_preprocessing
+        if bpe_dropout:
+            assert hasattr(self.tokenizer, "backend_tokenizer"), (
+                f"{self}: tokenizer {self.tokenizer} {type(self.tokenizer)} does not have backend_tokenizer. "
+                f"Maybe the tokenizers package is not installed? pip3 install --user tokenizers"
+            )
+            assert hasattr(self.tokenizer.backend_tokenizer.model, "dropout"), (
+                f"{self}: tokenizer model"
+                f" {self.tokenizer.backend_tokenizer.model} {type(self.tokenizer.backend_tokenizer.model)}"
+                f" does not support bpe_dropout"
+            )
+            self.tokenizer.backend_tokenizer.model.dropout = bpe_dropout
+
+        if add_special_tokens:
+            self.tokenizer.add_special_tokens({"additional_special_tokens": add_special_tokens})
+
+    def __repr__(self):
+        return "%s(%r)" % (self.__class__.__name__, self._opts)
+
+    def _parse_vocab(self):
+        self.num_labels = len(self.tokenizer)
+        # Do not load labels/vocab here. This is not really needed.
+
+    @property
+    def labels(self) -> List[str]:
+        """list of labels"""
+        if self._cache_key and self._cache_key in self._cache:
+            self._vocab, self._labels = self._cache[self._cache_key]
+            assert self.num_labels == len(self._vocab) == len(self._labels)
+        else:
+            self._labels = [self.tokenizer._convert_id_to_token(i) for i in range(self.num_labels)]  # noqa
+            self._vocab = {label: i for (i, label) in enumerate(self._labels)}
+            if self._cache_key:
+                self._cache[self._cache_key] = (self._vocab, self._labels)
+        return self._labels
+
+    def is_id_valid(self, idx: int) -> bool:
+        """
+        :param idx:
+        """
+        return 0 <= idx < len(self.tokenizer)
+
+    def id_to_label(self, idx: int, default: Union[str, Type[KeyError], None] = KeyError) -> Optional[str]:
+        """
+        :param idx:
+        :param default:
+        """
+        if default is not KeyError and not self.is_id_valid(idx):
+            return default
+        return self.tokenizer.convert_ids_to_tokens([idx])[0]
+
+    def label_to_id(self, label: str, default: Union[int, Type[KeyError], None] = KeyError) -> Optional[int]:
+        """
+        :param label:
+        :param default:
+        """
+        res = self.tokenizer.convert_tokens_to_ids(label)
+        return res
+
+    def get_seq(self, sentence: str) -> List[int]:
+        """
+        :param sentence: assumed to be seq of vocab entries separated by whitespace
+        """
+        if self.text_preprocessing:
+            sentence = self.text_preprocessing(sentence)
+        return self.tokenizer(sentence)["input_ids"]
+
+    def get_seq_labels(self, seq):
+        """
+        :param list[int]|numpy.ndarray seq: 1D sequence
+        :rtype: str
+        """
+        return self.tokenizer.decode(seq, skip_special_tokens=True)

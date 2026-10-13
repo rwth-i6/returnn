@@ -30,6 +30,7 @@ class StereoDataset(CachedDataset2):
         self._partition_epoch = partition_epoch
         self._current_partition = 0
         self._seqs_per_epoch = None
+        self._seq_overhead = None  # set in initialize()
 
     def initialize(self):
         self._seq_overhead = self._get_total_number_of_sequences() % self._partition_epoch
@@ -50,6 +51,10 @@ class StereoDataset(CachedDataset2):
 
     @property
     def seqs_per_epoch(self):
+        """
+        :return: number of sequences per (partitioned) epoch, computed once and cached
+        :rtype: int
+        """
         if self._seqs_per_epoch is None:
             self._seqs_per_epoch = self._get_total_number_of_sequences() // self._partition_epoch
         return self._seqs_per_epoch
@@ -113,6 +118,11 @@ class StereoHdfDataset(StereoDataset):
     dataset and the respective 'output' dataset need to be the same.
     """
 
+    # These are dataset kwargs, i.e. they are written by name in user CONFIGS
+    # ({"class": "StereoHdfDataset", "hdfFile": ...}), which live outside any repo we can grep.
+    # Renaming them would silently break those configs. Same reasoning (and same wording) as
+    # RawWavDataset.__init__ in raw_wav.py.
+    # noinspection PyPep8Naming
     def __init__(
         self,
         hdfFile,
@@ -186,7 +196,7 @@ class StereoHdfDataset(StereoDataset):
         self._fileHandlers = []
         if hdfFile.endswith(".bundle"):  # a bundle file containing a list of hdf files is given
             bundle = BundleFile(hdfFile)
-            for hdfFilePath in bundle.datasetFilePaths:
+            for hdfFilePath in bundle.dataset_file_paths:
                 self._filePaths.append(hdfFilePath)
                 self._fileHandlers.append(h5py.File(hdfFilePath, "r"))
         else:  # only a single hdf file is given

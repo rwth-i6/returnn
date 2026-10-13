@@ -12,16 +12,14 @@ https://github.com/tensorflow/lingvo/blob/master/lingvo/compat.py
 import tensorflow as tf
 import os as _os
 
-if not getattr(tf, "compat", None) or not getattr(tf.compat, "v2", None):
-    v1 = tf
-    v2 = None
-else:
-    # PyCharm type-inference will take the latest reference,
-    # so this `else` branch should lead us to a valid reference for "modern" TF versions (TF >=1.14, or TF 2).
-    v1 = tf.compat.v1
-    v2 = tf.compat.v2
+# TF >= 1.14 required (tf.compat.v1/v2 exist; we run graph-mode via the v1 API).
+# The old fallback ``v1 = tf`` for ancient TF made ``v1`` a union type under modern
+# type inference, turning every downstream ``v1.`` member into a false warning.
+assert getattr(tf, "compat", None) and getattr(tf.compat, "v2", None), f"TF >= 1.14 required, got {tf.__version__}"
+v1 = tf.compat.v1
+v2 = tf.compat.v2
 
-if v2 and tf.__version__.startswith("2."):
+if tf.__version__.startswith("2."):
     tf.compat.v1.disable_eager_execution()
     tf.compat.v1.disable_v2_tensorshape()
     # There are still issues with control flow v2,

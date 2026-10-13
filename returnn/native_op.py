@@ -5,38 +5,40 @@ Generic interface which automatically creates:
 * inplace and not inplace
 * grad variants
 
-See :mod:`returnn.tf.native_op` and :mod:`returnn.theano.native_op`
-for usage in TensorFlow and Theano.
+See :mod:`returnn.tf.native_op` and :mod:`returnn.torch.utils.native_op`
+for usage in TensorFlow and PyTorch.
 
 See :ref:`native_ops` for more background.
 """
 
+from __future__ import annotations
+from typing import Optional, Union, Any, Callable, Dict, Sequence, Tuple
 import copy
 import numpy
-import typing
+
 from returnn.util.basic import make_hashable, unicode
 
 
 class NativeOpBaseMixin:
     """
-    The purpose of having this as a separate base class is to make this independent of any Theano specific
-    functionality so that we can also use this base for example for TensorFlow.
+    The purpose of having this as a separate base class
+    is to make this independent of any TensorFlow or PyTorch-specific functionality.
     """
 
     def __init__(
         self,
-        in_info,
-        out_info,
-        c_fw_code,
-        c_bw_code=None,
-        c_extra_support_code=None,
-        code_version=None,
-        cpu_support=True,
-        grad_input_map=None,
-        name=None,
+        in_info: Sequence[Dict[str, Any]],
+        out_info: Sequence[Dict[str, Any]],
+        c_fw_code: str,
+        c_bw_code: Optional[str] = None,
+        c_extra_support_code: Union[None, str, Dict[str, str]] = None,
+        code_version: Optional[Tuple[int, ...]] = None,
+        cpu_support: bool = True,
+        grad_input_map: Union[None, Tuple[int, ...], Callable] = None,
+        name: Optional[str] = None,
     ):
         """
-        :param list[dict(str)] in_info: each dict describes one input var.
+        :param in_info: each dict describes one input var.
           attribs in the dict:
             int ndim: the ndim.
             tuple shape: tuple and can contain None for specific dimensions.
@@ -49,18 +51,18 @@ class NativeOpBaseMixin:
             str gradient: can be "disconnected". see grad().
             bool bw_input: True by default. add this param to the bw input.
           other attribs are just ignored.
-        :param list[dict(str)] out_info: like in_info.
+        :param out_info: like in_info.
           slightly different behavior for:
             shape: we also allow refs to the in_info in the form (in-idx,dim). see infer_shape().
             need_contiguous/want_inplace: used for bw, in case for bw_input == True.
-        :param str c_fw_code: C code for forward pass
-        :param str|dict[str] c_extra_support_code: C support code (for c_support_code)
-        :param str|None c_bw_code: C code for backward pass (for gradient)
-        :param tuple[int] code_version: will be returned by c_code_cache_version.
-        :param bool cpu_support:
-        :param tuple[int]|callable grad_input_map: selection of grad inputs.
+        :param c_fw_code: C code for forward pass
+        :param c_extra_support_code: C support code (for c_support_code)
+        :param c_bw_code: C code for backward pass (for gradient)
+        :param code_version: will be returned by c_code_cache_version.
+        :param cpu_support:
+        :param grad_input_map: selection of grad inputs.
           by default, we get all inputs + all outputs + all grad outputs.
-        :param str name: name
+        :param name: name
         """
         assert isinstance(in_info, (list, tuple))
         assert isinstance(out_info, (list, tuple))
@@ -117,6 +119,7 @@ class NativeOpBaseMixin:
         if gi_map is None:
             gi_map = tuple(range(num_params))
         if callable(gi_map):
+            # noinspection PyCallingNonCallable
             gi_map = gi_map(*range(num_params))
         if isinstance(gi_map, list):
             gi_map = tuple(gi_map)
@@ -132,13 +135,14 @@ class NativeOpBaseMixin:
         assert len(inputs) == len(self.in_info) + len(self.out_info) * 2
         return [inputs[i] for i in self.grad_input_map]
 
-    # noinspection PyUnusedLocal
     def infer_shape(self, node, input_shapes):
         """
         :param node:
         :param input_shapes:
         :rtype: list[tuple[int]]
         """
+        # the Theano-era Op.infer_shape signature; shapes come from the input shapes only
+        del node  # shape comes from the input shapes
         assert len(input_shapes) == len(self.in_info)
         out_shapes = []
         for info in self.out_info:
@@ -186,7 +190,7 @@ class NativeOpBaseMixin:
 
     def kwargs_for_grad_op(self):
         """
-        :returns: the kwargs for creating a NativeOp for the gradient op. e.g. includes in_info, out_info, etc
+        :returns: the kwargs for creating a NativeOp for the gradient op. e.g. includes in_info, out_info, etc.
         :rtype: dict[str]
 
         Note: The inputs of the gradient are by default: fwd_op.inputs + fwd_op.outputs + output_grads.
@@ -230,12 +234,14 @@ class NativeOpBaseMixin:
         if disconnected_type is None:
 
             def disconnected_type():
-                """Dummy"""
+                """Dummy: no disconnected type given, so the gradient entry is just None."""
+                return None
 
         grad_op_outputs = list(grad_op_outputs)
         results = []
         for info in self.in_info:
             if info.get("gradient", "") == "disconnected":
+                # noinspection PyNoneFunctionAssignment
                 results += [disconnected_type()]
             else:
                 results += grad_op_outputs[:1]
@@ -245,18 +251,64 @@ class NativeOpBaseMixin:
         return results
 
 
+class OpDescription(NativeOpBaseMixin):
+    """
+    Meta-info about an op, used by the per-backend ``OpMaker``s.
+
+    Backend-neutral: it only carries the op's declaration (in/out info, the C code, the grad map),
+    which is why it lives here rather than in one of the backends.
+    """
+
+    @classmethod
+    def from_gen_base(cls, gen_base):
+        """
+        :param NativeOpGenBase|type[NativeOpGenBase] gen_base:
+        :rtype: OpDescription
+        """
+        name = gen_base.__name__
+        assert gen_base.in_info is not None
+        assert gen_base.out_info is not None
+        assert gen_base.c_fw_code is not None
+        return OpDescription(
+            in_info=gen_base.in_info,
+            out_info=gen_base.out_info,
+            c_fw_code=gen_base.c_fw_code,
+            c_bw_code=gen_base.c_bw_code,
+            c_extra_support_code=gen_base.c_extra_support_code,
+            cpu_support=gen_base.cpu_support,
+            grad_input_map=gen_base.grad_input_map,
+            name=name,
+        )
+
+    @property
+    def is_grad_defined(self) -> bool:
+        """
+        :return: whether the gradient is defined
+        """
+        return bool(self.c_bw_code)
+
+    def grad(self):
+        """
+        :rtype: OpDescription|None
+        """
+        if not self.is_grad_defined:
+            return None
+        kwargs = self.kwargs_for_grad_op()
+        return OpDescription(**kwargs)
+
+
 class NativeOpGenBase:
     """
     Base interface for op generation.
     See NativeOp.__init__() for attribs.
     """
 
-    in_info = None  # type: typing.Tuple[typing.Dict[str]]
-    out_info = None  # type: typing.Tuple[typing.Dict[str]]
-    c_fw_code = None  # type: str
-    c_bw_code = None  # type: str
-    c_extra_support_code = None  # type: typing.Dict[str,str]
-    code_version = None  # type: typing.Union[typing.Tuple[int], int]
+    in_info: Optional[Tuple[Dict[str, Any], ...]] = None
+    out_info: Optional[Tuple[Dict[str, Any], ...]] = None
+    c_fw_code: Optional[str] = None
+    c_bw_code: Optional[str] = None
+    c_extra_support_code: Optional[Dict[str, str]] = None
+    code_version: Union[None, Tuple[int, ...], int] = None
     grad_input_map = None
     theano_custom_grad = None
     cpu_support = True
@@ -323,12 +375,13 @@ class LstmGenericBase(NativeOpGenBase):
         {"name": "d", "ndim": 2, "shape": ((2, 0), (2, 1)), "need_contiguous": True},
     )
 
-    # noinspection PyPep8Naming,PyUnusedLocal
+    # noinspection PyPep8Naming
     @classmethod
     def grad_input_map(cls, Z, V_h, c, i, Y, H, d, DY, DH, Dd):
         """
         Map grads.
         """
+        del Z, d, DH  # not needed by the bwd kernel
         return V_h, c, i, Y, H, DY, Dd
 
     c_extra_support_code = {
@@ -560,12 +613,13 @@ class LstmLowMem(NativeOpGenBase):
         {"name": "d", "ndim": 2, "shape": ((0, 1), (4, 1)), "need_contiguous": True},
     )
 
-    # noinspection PyPep8Naming,PyUnusedLocal
+    # noinspection PyPep8Naming
     @classmethod
     def grad_input_map(cls, X, W, b, y0, c0, i, start, step, Y, C, d, DY, DC, Dd):
         """
         Map args.
         """
+        del d, DC  # not needed by the bwd kernel
         return X, W, b, y0, c0, i, start, step, Y, C, DY, Dd
 
     c_extra_support_code = {
@@ -912,7 +966,7 @@ class LstmLowMem(NativeOpGenBase):
     for(; (step > 0) ? (t >= start) : (t <= start); t -= step) {
       bool right = (step > 0) ? (t - step >= start) : (t - step <= start);
 
-      // TODO: correct handling of mask in grad, fwd, initial cell,hidden, etc
+      // TODO: correct handling of mask in grad, fwd, initial cell,hidden, etc.
       // x_h = X[t], Y[t-1]
       start_dev_kernel(copy_x_h_kernel,
         (n_batch, n_in, n_cells,
@@ -1013,11 +1067,14 @@ class NativeLstm2(NativeOpGenBase):
         {"name": "d", "ndim": 2, "shape": ((0, 1), (1, 0)), "need_contiguous": True},
     )
 
-    # noinspection PyMissingOrEmptyDocstring,PyUnusedLocal,PyPep8Naming
+    # noinspection PyPep8Naming
     @classmethod
     def grad_input_map(cls, X, W, y0, c0, i, start, step, Y, C, H, d, DY, DC, DH, Dd):
-        # noinspection PyRedundantParentheses
-        return (X, W, y0, c0, i, start, step, Y, C, H, DY, Dd)
+        """
+        Map grads.
+        """
+        del d, DC, DH  # not needed by the bwd kernel
+        return X, W, y0, c0, i, start, step, Y, C, H, DY, Dd
 
     c_extra_support_code = {
         # language=C++
@@ -1496,7 +1553,7 @@ class TwoDLSTM(NativeOpGenBase):
         },  # "bw_in_var": {"want_inplace": "dummy_out"}},
     )
 
-    # noinspection PyMissingOrEmptyDocstring,PyPep8Naming
+    # noinspection PyPep8Naming
     @classmethod
     def grad_input_map(
         cls,
@@ -1520,6 +1577,9 @@ class TwoDLSTM(NativeOpGenBase):
         DCompleteY,
         DH,
     ):
+        """
+        Map grads.
+        """
         return (
             X,
             V_h,
@@ -1542,9 +1602,12 @@ class TwoDLSTM(NativeOpGenBase):
             DH,
         )
 
-    # noinspection PyMissingOrEmptyDocstring,PyPep8Naming
+    # noinspection PyPep8Naming
     @classmethod
     def map_layer_inputs_to_op(cls, Zs, Zt, V_h, V_v, W, b, ptr_storage):
+        """
+        Map layer inputs to op inputs. Theano only, unsupported.
+        """
         assert False  # no support for Theano
 
     c_extra_support_code = {
@@ -2604,12 +2667,13 @@ class SubtensorBatchedIndex(NativeOpGenBase):
     )
     out_info = ({"name": "y", "ndim": 2, "shape": ((0, 0), (0, 1))},)
 
-    # noinspection PyUnusedLocal,PyPep8Naming
+    # noinspection PyPep8Naming
     @classmethod
     def grad_input_map(cls, x, idx, y, DY):
         """
         Map.
         """
+        del y  # not needed by the bwd kernel
         return x, idx, DY
 
     c_extra_support_code = {
@@ -3100,8 +3164,9 @@ common_fast_bw_kernels = {
   """,
     "010_fill_array": """
     DEF_KERNEL
-    void fill_array(float* array, float value, unsigned size) {
-      unsigned idx = blockIdx.x * blockDim.x + threadIdx.x;
+    void fill_array(float* array, float value, size_t size) {
+      // 64 bit: the (frames, edges) scratch of the Baum-Welch ops can exceed 2^32 entries
+      size_t idx = (size_t) blockIdx.x * blockDim.x + threadIdx.x;
       if (idx < size) {
         array[idx] = value;
       }
@@ -3109,8 +3174,8 @@ common_fast_bw_kernels = {
   """,
     "011_remove_inf": """
   DEF_KERNEL
-  void remove_inf(float* array, unsigned size) {
-    unsigned idx = blockIdx.x * blockDim.x + threadIdx.x;
+  void remove_inf(float* array, size_t size) {
+    size_t idx = (size_t) blockIdx.x * blockDim.x + threadIdx.x;
     if (idx < size) {
       array[idx] = fminf(array[idx], 1e32);
     }
@@ -3229,7 +3294,15 @@ class FastBaumWelchOp(NativeOpGenBase):
             "gradient": "disconnected",
         },
         {"name": "index", "ndim": 2, "shape": ((0, 0), (0, 1)), "need_contiguous": True, "gradient": "disconnected"},
-        {"name": "state_buffer", "ndim": 2, "shape": (2, None), "need_contiguous": True, "gradient": "disconnected"},
+        {
+            "name": "n_states",
+            "ndim": 0,
+            "shape": (),
+            "dtype": "int32",
+            "need_contiguous": True,
+            "gradient": "disconnected",
+            "host_memory": True,
+        },
     )
     out_info = (
         {"name": "output", "ndim": 3, "shape": ((0, 0), (0, 1), (0, 2)), "need_contiguous": True},
@@ -3261,6 +3334,16 @@ class FastBaumWelchOp(NativeOpGenBase):
           return;
         }
 
+        // A zero-probability edge (INF weight, i.e. -log space) can never contribute:
+        // prob_add(x, INF) == x.
+        // Testing it FIRST costs one coalesced load and skips the RANDOM prev_frame read,
+        // which is what an over-allocated FSA otherwise pays for every one of its dead edges.
+        float    edge_weight  = weight_buffer[idx];
+        if (isinf(edge_weight)) {
+          edge_buffer[idx] = INF_F;
+          return;
+        }
+
         unsigned from     = from_buffer  [idx];
         float    prev_val = prev_frame[from];
         if (isinf(prev_val)) {
@@ -3270,7 +3353,6 @@ class FastBaumWelchOp(NativeOpGenBase):
 
         unsigned to           = to_buffer    [idx];
         unsigned emission_idx = emission_idxs[idx];
-        float    edge_weight  = weight_buffer[idx];
         unsigned sequence_idx = sequence_idxs[idx];
 
         float val = prev_val + edge_weight + am_scores[sequence_idx * num_emissions + emission_idx];
@@ -3289,18 +3371,46 @@ class FastBaumWelchOp(NativeOpGenBase):
       void normalize(float* buffer, unsigned* sequence_idxs, unsigned num_edges, unsigned num_seqs, float* sum_output) {
         DEF_SHARED(float, sum);
 
-        buffer += blockIdx.x * num_edges;
+        buffer += (size_t) blockIdx.x * num_edges;  // 64 bit, see fill_array
 
-        for (unsigned s = 0u; s < num_seqs; s++) {
+        // Block-parallel strided loops + shared-mem log-space atomic adds
+        // (the old single-thread-per-block serial loops were the dominant cost of the whole op).
+        // With blockDim 1 (the CPU kernel emulation runs threads sequentially),
+        // this degenerates to exactly the old sequential behavior;
+        // the syncs only exist on device.
+        for (unsigned s = threadIdx.x; s < num_seqs; s += blockDim.x) {
           sum[s] = INF_F;
         }
+      #ifdef __CUDA_ARCH__
+        __syncthreads();
+      #endif
 
-        for (unsigned e = 0u; e < num_edges; e++) {
+        for (unsigned e = threadIdx.x; e < num_edges; e += blockDim.x) {
+          float v = buffer[e];
+          if (isinf(v)) {
+            // zero-probability edge: prob_add(x, INF) == x, so it cannot contribute.
+            // Most edges are of this kind
+            // whenever the targets buffer is wider than the actual target lengths:
+            // the FSA is built over the buffer width
+            // and routes the unused edges through a dummy state.
+            // Skipping them saves the contended log-space CAS.
+            continue;
+          }
+          if (isnan(v)) {
+            // junk edges (e.g. masked frames): no contribution.
+            // (prob_add(x, NaN) returns INF, i.e. RESETS the accumulator
+            // -- the old serial fold was thus order-dependent on NaNs;
+            // skipping is the order-independent semantics.)
+            continue;
+          }
           unsigned s = sequence_idxs[e];
-          sum[s] = prob_add(sum[s], buffer[e]);
+          atomic_prob_add(&sum[s], v);
         }
+      #ifdef __CUDA_ARCH__
+        __syncthreads();
+      #endif
 
-        for (unsigned s = 0ul; s < num_seqs; s++) {
+        for (unsigned s = threadIdx.x; s < num_seqs; s += blockDim.x) {
           if (isinf(sum[s])) {
             // if the frame is empty (happens due to batching of seqs with unequal length), set it to 0
             sum_output[blockIdx.x * num_seqs + s] = 0.0;
@@ -3309,10 +3419,20 @@ class FastBaumWelchOp(NativeOpGenBase):
             sum_output[blockIdx.x * num_seqs + s] = sum[s];
           }
         }
+      #ifdef __CUDA_ARCH__
+        __syncthreads();
+      #endif
 
-        for (unsigned e = 0u; e < num_edges; e++) {
+        for (unsigned e = threadIdx.x; e < num_edges; e += blockDim.x) {
+          float v = buffer[e];
+          if (isinf(v) || isnan(v)) {
+            // unused/masked edges: v - sum stays inf/nan anyway -- skip the write
+            // (and the sequence_idxs load). With a bound-shaped buffer most edges are
+            // of this kind, so this halves the normalize traffic. Bit-identical.
+            continue;
+          }
           unsigned s = sequence_idxs[e];
-          buffer[e] -= sum[s];
+          buffer[e] = v - sum[s];
         }
       }
     """,
@@ -3321,8 +3441,9 @@ class FastBaumWelchOp(NativeOpGenBase):
       void compute_result(float* edge_buffer, float* out, unsigned* emission_idxs, unsigned* sequence_idxs,
                           unsigned frame_stride, unsigned seq_stride,
                           unsigned num_frames, unsigned num_seqs, unsigned num_edges) {
-        unsigned idx = blockIdx.x * blockDim.x + threadIdx.x;
-        if (idx >= num_frames * num_edges) {
+        // 64 bit, see fill_array
+        size_t idx = (size_t) blockIdx.x * blockDim.x + threadIdx.x;
+        if (idx >= (size_t) num_frames * num_edges) {
           return;
         }
 
@@ -3332,7 +3453,7 @@ class FastBaumWelchOp(NativeOpGenBase):
         unsigned seq_idx      = sequence_idxs[e_idx];
         float    score        = edge_buffer[idx];
 
-        atomic_prob_add(out + frame * frame_stride + seq_idx * seq_stride + emission_idx, score);
+        atomic_prob_add(out + (size_t) frame * frame_stride + (size_t) seq_idx * seq_stride + emission_idx, score);
       }
     """,
             "110_write_alignment_to_file": """
@@ -3412,7 +3533,7 @@ class FastBaumWelchOp(NativeOpGenBase):
     )
 
     c_fw_code = """
-    // am_scores, edges, weights, start_end_states, index, state_buffer* = input_names (*: inplace)
+    // am_scores, edges, weights, start_end_states, index, n_states = input_names
     // output = output_names
     assert(n_inputs  == 6);
     assert(n_outputs == 2);
@@ -3421,7 +3542,6 @@ class FastBaumWelchOp(NativeOpGenBase):
     Ndarray* weights          = inputs[2];
     Ndarray* start_end_states = inputs[3];
     Ndarray* index            = inputs[4];
-    Ndarray* state_buffer     = inputs[5];
     Ndarray* out              = *outputs[0];
     Ndarray* sum_output       = *outputs[1];
 
@@ -3431,7 +3551,6 @@ class FastBaumWelchOp(NativeOpGenBase):
     debug_print(context, weights, "weights");
     debug_print(context, start_end_states, "start_end_states");
     debug_print(context, index, "index");
-    debug_print(context, state_buffer, "state_buffer");
     */
 
     assert_cmp(Ndarray_DIMS(am_scores)[0], ==, Ndarray_DIMS(out)[0]);
@@ -3463,15 +3582,13 @@ class FastBaumWelchOp(NativeOpGenBase):
     unsigned* d_end_states = reinterpret_cast<unsigned*>(Ndarray_DEV_DATA_int32(start_end_states)
       + 1 * Ndarray_STRIDE(start_end_states, 0));
     float*    d_index             = Ndarray_DEV_DATA(index);
-    float*    d_state_buffer_prev = Ndarray_DEV_DATA(state_buffer) + 0 * Ndarray_STRIDE(state_buffer, 0);
-    float*    d_state_buffer_next = Ndarray_DEV_DATA(state_buffer) + 1 * Ndarray_STRIDE(state_buffer, 0);
     float*    d_out               = Ndarray_DEV_DATA(out);
     float*    d_sum_output        = Ndarray_DEV_DATA(sum_output);
 
     unsigned n_frames    = Ndarray_DIMS(am_scores)[0];
     unsigned n_seqs      = Ndarray_DIMS(am_scores)[1];
     unsigned n_emissions = Ndarray_DIMS(am_scores)[2];
-    unsigned n_states    = Ndarray_DIMS(state_buffer)[1];
+    unsigned n_states    = (unsigned) Ndarray_DEV_DATA_int32_scalar(inputs[5]);
     unsigned n_edges     = Ndarray_DIMS(edges)[1];
     unsigned n_threads   = 1024u;
     unsigned n_blocks    = (n_edges + n_threads - 1) / n_threads;
@@ -3482,6 +3599,14 @@ class FastBaumWelchOp(NativeOpGenBase):
 
     assert_cmp(n_frames, >, 0);
     assert_cmp(n_states, >, 0);
+    // Kernel-owned fwd/bwd state scratch, sized by the n_states host scalar input
+    // (like FastViterbiOp). An earlier version took a (2, n_states) state_buffer tensor
+    // as op input, which the kernel wrote into -- unsound: a shared/CSE-merged input
+    // corrupted concurrent op instances.
+    float* d_state_buffer_base = reinterpret_cast<float*>(device_malloc(2u * n_states * sizeof(float)));
+    if(!d_state_buffer_base) { HANDLE_LAST_ERROR(); abort(); }  // error should have been set in device_malloc
+    float* d_state_buffer_prev = d_state_buffer_base;
+    float* d_state_buffer_next = d_state_buffer_base + n_states;
     //std::cerr << "n_frames: "    << n_frames    << std::endl;
     //std::cerr << "n_seqs: "      << n_seqs      << std::endl;
     //std::cerr << "n_emissions: " << n_emissions << std::endl;
@@ -3494,11 +3619,14 @@ class FastBaumWelchOp(NativeOpGenBase):
     //std::cerr << "sequnence_stride: " << sequence_stride << std::endl;
     //std::cerr << "index_stride: "     << index_stride    << std::endl;
 
-    // initialize edge buffer
-    float* d_edge_buffer = reinterpret_cast<float*>(device_malloc(n_edges * n_frames * sizeof(float)));
+    // initialize edge buffer, one score per (frame, edge).
+    // Its size and all offsets into it are 64 bit: n_edges * n_frames can exceed 2^32
+    // (e.g. a large edge bound over many frames), and a wrapped size under-allocates it.
+    size_t n_edge_frames = (size_t) n_edges * n_frames;
+    float* d_edge_buffer = reinterpret_cast<float*>(device_malloc(n_edge_frames * sizeof(float)));
     if(!d_edge_buffer) { HANDLE_LAST_ERROR(); abort(); }  // error should have been set in device_malloc
-    unsigned n_fill_blocks = (n_edges * n_frames + n_threads - 1u) / n_threads;
-    start_dev_kernel2(fill_array, n_fill_blocks, n_threads, 0, (d_edge_buffer, 0.0, n_edges * n_frames));
+    unsigned n_fill_blocks = (n_edge_frames + n_threads - 1u) / n_threads;
+    start_dev_kernel2(fill_array, n_fill_blocks, n_threads, 0, (d_edge_buffer, 0.0, n_edge_frames));
     HANDLE_LAST_ERROR();
 
     // initialize the state buffer
@@ -3528,7 +3656,8 @@ class FastBaumWelchOp(NativeOpGenBase):
       start_dev_kernel2(next_frame, n_blocks, n_threads, 0,
         (true, n_edges, sequence_stride,
          d_sequence_idxs, d_from, d_to, d_weights, d_emission_idxs,
-         d_state_buffer_prev, d_state_buffer_next, d_am_scores + t * frame_stride, d_edge_buffer + t * n_edges));
+         d_state_buffer_prev, d_state_buffer_next, d_am_scores + (size_t) t * frame_stride,
+         d_edge_buffer + (size_t) t * n_edges));
       HANDLE_LAST_ERROR();
       if (dump_alignment && batch_idx %% dump_every == 0) {
         Ndarray_memcpy(d_state_buffer_all + (t + 1u) * n_states, d_state_buffer_next, n_states * sizeof(float));
@@ -3558,8 +3687,8 @@ class FastBaumWelchOp(NativeOpGenBase):
       start_dev_kernel2(next_frame, n_blocks, n_threads, 0,
         (false, n_edges, sequence_stride,
          d_sequence_idxs, d_to, d_from, d_weights, d_emission_idxs,
-         d_state_buffer_prev, d_state_buffer_next, d_am_scores + (t - 1) * frame_stride,
-         d_edge_buffer + (t - 1) * n_edges));
+         d_state_buffer_prev, d_state_buffer_next, d_am_scores + (size_t) (t - 1) * frame_stride,
+         d_edge_buffer + (size_t) (t - 1) * n_edges));
       HANDLE_LAST_ERROR();
       std::swap(d_state_buffer_prev, d_state_buffer_next);
     }
@@ -3569,7 +3698,19 @@ class FastBaumWelchOp(NativeOpGenBase):
     }
 
     // normalize at each time frame
-    start_dev_kernel2(normalize, n_frames, 1, n_seqs * sizeof(float),
+    // (block-parallel on CUDA; the CPU kernel emulation runs threads sequentially,
+    // so block=1 there keeps the old exact sequential behavior)
+    // RETURNN_CUDA, NOT CUDA: the torch build UNDEFINES CUDA before this code
+    // (name collision), which silently selected block dim 1 = a fully SERIAL kernel.
+    #ifndef RETURNN_CUDA
+    #define RETURNN_CUDA CUDA
+    #endif
+    #if RETURNN_CUDA
+    const unsigned norm_block_dim = 512;
+    #else
+    const unsigned norm_block_dim = 1;
+    #endif
+    start_dev_kernel2(normalize, n_frames, norm_block_dim, n_seqs * sizeof(float),
       (d_edge_buffer, d_sequence_idxs, n_edges, n_seqs, d_sum_output));
     HANDLE_LAST_ERROR();
 
@@ -3579,15 +3720,16 @@ class FastBaumWelchOp(NativeOpGenBase):
                               pruning, n_frames, n_seqs, n_states, batch_idx);
     }
 
-    n_fill_blocks = (n_frames * n_seqs * n_emissions + n_threads - 1u) / n_threads;
+    size_t n_out = (size_t) n_frames * n_seqs * n_emissions;
+    n_fill_blocks = (n_out + n_threads - 1u) / n_threads;
     start_dev_kernel2(
       fill_array, n_fill_blocks, n_threads, 0,
-      (d_out, std::numeric_limits<float>::infinity(), n_frames * n_seqs * n_emissions));
+      (d_out, std::numeric_limits<float>::infinity(), n_out));
     HANDLE_LAST_ERROR();
 
     frame_stride    = Ndarray_STRIDE(out, 0);
     sequence_stride = Ndarray_STRIDE(out, 1);
-    n_blocks        = (n_frames * n_edges + n_threads - 1u) / n_threads;
+    n_blocks        = (n_edge_frames + n_threads - 1u) / n_threads;
     start_dev_kernel2(compute_result, n_blocks, n_threads, 0,
       (d_edge_buffer, d_out, d_emission_idxs, d_sequence_idxs,
        frame_stride, sequence_stride, n_frames, n_seqs, n_edges));
@@ -3597,8 +3739,8 @@ class FastBaumWelchOp(NativeOpGenBase):
     // Certain TensorFlow code doesn't like inf, even if it is just the CheckNumerics,
     // which is helpful for debugging.
     // We replace it by a very high number, so that tf.exp(-out) will still result in 0.0.
-    n_blocks = (n_frames * n_seqs * n_emissions + n_threads - 1u) / n_threads;
-    start_dev_kernel2(remove_inf, n_blocks, n_threads, 0, (d_out, n_frames * n_seqs * n_emissions));
+    n_blocks = (n_out + n_threads - 1u) / n_threads;
+    start_dev_kernel2(remove_inf, n_blocks, n_threads, 0, (d_out, n_out));
     //debug_print(context, out, "out");
     #endif
     if (dump_output && batch_idx %% dump_every == 0) {
@@ -3606,10 +3748,397 @@ class FastBaumWelchOp(NativeOpGenBase):
     }
 
     device_free(d_edge_buffer);
+    device_free(d_state_buffer_base);
     if (d_state_buffer_all != NULL) {
       device_free(d_state_buffer_all);
     }
     batch_idx++;
+  """
+
+    c_bw_code = None
+
+
+class FastBaumWelchPackedOp(NativeOpGenBase):
+    # noinspection PyUnresolvedReferences
+    """
+    Packed variant of :class:`FastBaumWelchOp`:
+    the am scores come as one flat buffer over all sequences (no padding),
+    with per-sequence start offsets, like the flash-attention varlen layout.
+
+    Two kernels. In the first, one CUDA block runs the forward and backward recursion of one sequence,
+    over its own frames only: its states sit in shared memory (in global memory when they do not fit,
+    above about 2000 labels), its edges are strided over the threads, and it keeps the score of every edge per frame.
+    The second has one block per frame and sequence, sums the edge scores of that frame
+    and writes the normalized scores to the output, all frames in parallel.
+    So the op is a few launches, whatever the frame bound,
+    where a loop over the frames would launch several kernels per frame up to the bound
+    (under CUDA-graph capture the capacity, far above most sequences).
+    This needs the automaton of every sequence as a contiguous slice:
+    its states from its start to its end state, its edges as given by ``edge_offsets``
+    (as the CTC automata of :class:`GetCtcFsaFastBwOp` and :class:`GetCtcFsaFastBwPackedOp` are).
+
+    inputs:
+      :param am_scores: scores in -log space. 2d (total_time,dim), the seqs concatenated along time
+      :param edges: edges of the graph (from,to,emission_idx,sequence_idx)
+      :param weights: weights of the edges
+      :param start_end_states: (2, batch), (start,end) state idx in the automaton
+      :param index: (max_time, batch) -> 0 or 1 (index mask, via seq lens), a prefix per seq.
+        also provides max_time (the rows of the sums),
+        which cannot be derived from the packed am_scores shape
+      :param seq_starts: (batch,), int32. start offset of each seq in the total_time axis
+      :param edge_offsets: (batch+1,), int32, ascending. seq b owns the edges [edge_offsets[b], edge_offsets[b+1])
+      :param max_seq_states: scalar, int32. the maximum state count of one seq, it sizes the shared memory
+    outputs:
+      :param output: Baum-Welch alignment, scores in -log space. 2d (total_time,dim), like am_scores
+      :param sums: (max_time, batch), the frame-wise normalization sums (obs scores)
+    """
+
+    in_info = (
+        {
+            "name": "am_scores",
+            "ndim": 2,
+            "shape": (None, None),
+            "need_contiguous": True,
+            "gradient": "disconnected",
+        },
+        {
+            "name": "edges",
+            "ndim": 2,
+            "shape": (None, None),
+            "dtype": "int32",
+            "need_contiguous": True,
+            "gradient": "disconnected",
+        },
+        {"name": "weights", "ndim": 1, "shape": (None,), "need_contiguous": True, "gradient": "disconnected"},
+        {
+            "name": "start_end_states",
+            "ndim": 2,
+            "shape": (2, None),
+            "dtype": "int32",
+            "need_contiguous": True,
+            "gradient": "disconnected",
+        },
+        {"name": "index", "ndim": 2, "shape": (None, None), "need_contiguous": True, "gradient": "disconnected"},
+        {
+            "name": "seq_starts",
+            "ndim": 1,
+            "shape": (None,),
+            "dtype": "int32",
+            "need_contiguous": True,
+            "gradient": "disconnected",
+        },
+        {
+            "name": "edge_offsets",
+            "ndim": 1,
+            "shape": (None,),
+            "dtype": "int32",
+            "need_contiguous": True,
+            "gradient": "disconnected",
+        },
+        {
+            "name": "max_seq_states",
+            "ndim": 0,
+            "shape": (),
+            "dtype": "int32",
+            "need_contiguous": True,
+            "gradient": "disconnected",
+            "host_memory": True,
+        },
+    )
+    out_info = (
+        {"name": "output", "ndim": 2, "shape": ((0, 0), (0, 1)), "need_contiguous": True},
+        {"name": "sums", "ndim": 2, "shape": ((4, 0), (4, 1)), "need_contiguous": True},
+    )
+
+    c_extra_support_code = copy.copy(common_fast_bw_kernels)
+    c_extra_support_code.update(
+        {
+            "100_packed_seq_sync": """
+      DEV_FUNC
+      void packed_seq_sync() {
+        // the CPU build runs a block as one thread, which needs no sync
+      #ifdef __CUDA_ARCH__
+        __syncthreads();
+      #endif
+      }
+    """,
+            "101_fwd_bwd_packed_seq": """
+      template<bool states_in_shared>
+      DEF_KERNEL
+      void fwd_bwd_packed_seq(unsigned max_seq_states, unsigned num_edges, unsigned num_emissions,
+                              unsigned num_frames, float* index, unsigned index_stride,
+                              unsigned* seq_starts, unsigned* edge_offsets,
+                              unsigned* start_states, unsigned* end_states,
+                              unsigned* from_buffer, unsigned* to_buffer, unsigned* emission_idxs,
+                              float* weight_buffer, float* am_scores, float* edge_buffer, float* state_scratch) {
+        // Block seq runs the recursion of sequence seq over its own frames:
+        // its states in shared memory (in state_scratch if they do not fit), its edges strided over the threads.
+        // The forward pass keeps the score of every edge per frame, the backward pass adds the score from the end,
+        // normalize_packed_seq then sums and writes them out, all frames in parallel.
+        // Three state buffers rotate, so one sync per frame suffices: a frame reads one, adds into the next,
+        // and resets the third for the frame after, which no thread touches in this frame.
+        DEF_SHARED(float, shared);
+        unsigned seq = blockIdx.x;
+        float* states = states_in_shared ? &shared[0] : state_scratch + (size_t) seq * 3 * max_seq_states;
+        unsigned tid = threadIdx.x;
+        unsigned n_threads = blockDim.x;
+        unsigned state_lo = start_states[seq];
+        unsigned n_seq_states = end_states[seq] - state_lo + 1;
+        unsigned edge_lo = edge_offsets[seq];
+        unsigned edge_hi = edge_offsets[seq + 1];
+        size_t seq_start = seq_starts[seq];
+
+        // the index is a prefix mask per sequence
+        unsigned lo = 0, hi = num_frames;
+        while (lo < hi) {
+          unsigned mid = (lo + hi) / 2;
+          if (index[mid * index_stride + seq] != 0.0) lo = mid + 1;
+          else hi = mid;
+        }
+        unsigned seq_len = lo;
+
+        for (unsigned pass = 0; pass < 2; pass++) {
+          bool fwd = pass == 0;
+          unsigned init_state = fwd ? 0 : end_states[seq] - state_lo;
+          for (unsigned s = tid; s < n_seq_states; s += n_threads) {
+            states[s] = s == init_state ? 0.0 : INF_F;
+            states[max_seq_states + s] = INF_F;
+          }
+          packed_seq_sync();
+          for (unsigned i = 0; i < seq_len; i++) {
+            unsigned frame = fwd ? i : seq_len - 1 - i;
+            float* prev = &states[(i % 3) * max_seq_states];
+            float* next = &states[((i + 1) % 3) * max_seq_states];
+            float* reset = &states[((i + 2) % 3) * max_seq_states];
+            for (unsigned s = tid; s < n_seq_states; s += n_threads) {
+              reset[s] = INF_F;
+            }
+            float* scores = am_scores + (seq_start + frame) * num_emissions;
+            float* edge_scores = edge_buffer + (size_t) frame * num_edges;  // 64 bit, see fill_array
+            for (unsigned e = edge_lo + tid; e < edge_hi; e += n_threads) {
+              // a zero-probability edge is tested first, it skips the state read
+              float weight = weight_buffer[e];
+              if (fwd) {
+                float prev_val = isinf(weight) ? INF_F : prev[from_buffer[e] - state_lo];
+                if (isinf(prev_val)) {
+                  edge_scores[e] = INF_F;
+                  continue;
+                }
+                float val = prev_val + weight + scores[emission_idxs[e]];
+                edge_scores[e] = val;
+                atomic_prob_add(&next[to_buffer[e] - state_lo], val);
+              }
+              else {
+                if (isinf(weight)) {
+                  continue;  // its forward score is inf already
+                }
+                float prev_val = prev[to_buffer[e] - state_lo];
+                if (isinf(prev_val)) {
+                  edge_scores[e] = INF_F;
+                  continue;
+                }
+                edge_scores[e] += prev_val;
+                atomic_prob_add(&next[from_buffer[e] - state_lo], prev_val + weight + scores[emission_idxs[e]]);
+              }
+            }
+            packed_seq_sync();
+          }
+        }
+      }
+    """,
+            "102_normalize_packed_seq": """
+      DEF_KERNEL
+      void normalize_packed_seq(unsigned num_edges, unsigned num_emissions, unsigned num_seqs,
+                                float* index, unsigned index_stride,
+                                unsigned* seq_starts, unsigned* edge_offsets, unsigned* emission_idxs,
+                                float* edge_buffer, float* sum_output, float* out) {
+        // Block (frame, seq) sums the edge scores of sequence seq in that frame (the obs score)
+        // and adds the normalized edge scores to the output row of that frame.
+        // All frames run in parallel: many edges of a frame add to one emission (the blank),
+        // and inside the recursion those atomic adds would wait for each other every frame.
+        DEF_SHARED(float, partial);
+        unsigned seq = blockIdx.x % num_seqs;
+        unsigned frame = blockIdx.x / num_seqs;
+        if (index[frame * index_stride + seq] == 0.0) {
+          return;  // past the end of the sequence, its sum stays 0
+        }
+        unsigned tid = threadIdx.x;
+        unsigned n_threads = blockDim.x;
+        unsigned edge_lo = edge_offsets[seq];
+        unsigned edge_hi = edge_offsets[seq + 1];
+        float* edge_scores = edge_buffer + (size_t) frame * num_edges;  // 64 bit, see fill_array
+        float frame_sum = INF_F;
+        for (unsigned e = edge_lo + tid; e < edge_hi; e += n_threads) {
+          float v = edge_scores[e];
+          if (!isinf(v) && !isnan(v)) {
+            frame_sum = prob_add(frame_sum, v);
+          }
+        }
+        // a tree over the threads, a power of two
+        partial[tid] = frame_sum;
+        packed_seq_sync();
+        for (unsigned stride = n_threads / 2; stride > 0; stride /= 2) {
+          if (tid < stride) {
+            partial[tid] = prob_add(partial[tid], partial[tid + stride]);
+          }
+          packed_seq_sync();
+        }
+        float sum = partial[0];
+        if (tid == 0) {
+          // a frame no path reaches sums to 0, like the empty frames past the end
+          sum_output[frame * num_seqs + seq] = isinf(sum) ? 0.0 : sum;
+        }
+        if (isinf(sum)) {
+          return;
+        }
+        float* out_row = out + ((size_t) seq_starts[seq] + frame) * num_emissions;
+        for (unsigned e = edge_lo + tid; e < edge_hi; e += n_threads) {
+          float v = edge_scores[e];
+          if (isinf(v) || isnan(v)) {
+            continue;
+          }
+          atomic_prob_add(&out_row[emission_idxs[e]], v - sum);
+        }
+      }
+    """,
+        }
+    )
+
+    # language=C++
+    c_fw_code = """
+    // am_scores, edges, weights, start_end_states, index, seq_starts, edge_offsets, max_seq_states = input_names
+    // output, sums = output_names
+    assert(n_inputs  == 8);
+    assert(n_outputs == 2);
+    Ndarray* am_scores        = inputs[0];
+    Ndarray* edges            = inputs[1];
+    Ndarray* weights          = inputs[2];
+    Ndarray* start_end_states = inputs[3];
+    Ndarray* index            = inputs[4];
+    Ndarray* seq_starts       = inputs[5];
+    Ndarray* edge_offsets     = inputs[6];
+    Ndarray* out              = *outputs[0];
+    Ndarray* sum_output       = *outputs[1];
+
+    assert_cmp(Ndarray_DIMS(am_scores)[0], ==, Ndarray_DIMS(out)[0]);
+    assert_cmp(Ndarray_DIMS(am_scores)[1], ==, Ndarray_DIMS(out)[1]);
+    assert_cmp(Ndarray_DIMS(index)[1], ==, Ndarray_DIMS(start_end_states)[1]);
+    assert_cmp(Ndarray_DIMS(index)[1], ==, Ndarray_DIMS(seq_starts)[0]);
+    assert_cmp(Ndarray_DIMS(index)[1] + 1, ==, Ndarray_DIMS(edge_offsets)[0]);
+    assert_cmp(Ndarray_DIMS(sum_output)[0], ==, Ndarray_DIMS(index)[0]);
+    assert_cmp(Ndarray_DIMS(sum_output)[1], ==, Ndarray_DIMS(index)[1]);
+
+    unsigned* d_from = reinterpret_cast<unsigned*>(Ndarray_DEV_DATA_int32(edges)
+      + 0 * Ndarray_STRIDE(edges, 0));
+    unsigned* d_to = reinterpret_cast<unsigned*>(Ndarray_DEV_DATA_int32(edges)
+      + 1 * Ndarray_STRIDE(edges, 0));
+    unsigned* d_emission_idxs = reinterpret_cast<unsigned*>(Ndarray_DEV_DATA_int32(edges)
+      + 2 * Ndarray_STRIDE(edges, 0));
+    float*    d_weights = Ndarray_DEV_DATA(weights);
+    float*    d_am_scores = Ndarray_DEV_DATA(am_scores);
+    unsigned* d_start_states = reinterpret_cast<unsigned*>(Ndarray_DEV_DATA_int32(start_end_states)
+      + 0 * Ndarray_STRIDE(start_end_states, 0));
+    unsigned* d_end_states = reinterpret_cast<unsigned*>(Ndarray_DEV_DATA_int32(start_end_states)
+      + 1 * Ndarray_STRIDE(start_end_states, 0));
+    float*    d_index             = Ndarray_DEV_DATA(index);
+    unsigned* d_seq_starts        = reinterpret_cast<unsigned*>(Ndarray_DEV_DATA_int32(seq_starts));
+    unsigned* d_edge_offsets      = reinterpret_cast<unsigned*>(Ndarray_DEV_DATA_int32(edge_offsets));
+    float*    d_out               = Ndarray_DEV_DATA(out);
+    float*    d_sum_output        = Ndarray_DEV_DATA(sum_output);
+
+    unsigned n_frames       = Ndarray_DIMS(index)[0];
+    unsigned n_seqs         = Ndarray_DIMS(index)[1];
+    unsigned n_total        = Ndarray_DIMS(am_scores)[0];
+    unsigned n_emissions    = Ndarray_DIMS(am_scores)[1];
+    unsigned max_seq_states = (unsigned) Ndarray_DEV_DATA_int32_scalar(inputs[7]);
+    unsigned n_edges        = Ndarray_DIMS(edges)[1];
+    unsigned n_threads      = 1024u;
+    unsigned index_stride   = Ndarray_STRIDE(index, 0);
+
+    assert_cmp(n_frames, >, 0);
+    assert_cmp(max_seq_states, >, 0);
+
+    // the frames past the end of a seq sum to 0, and the output is -log 0 wherever no edge adds to it
+    size_t n_sums = (size_t) n_frames * n_seqs;
+    unsigned n_fill_blocks = (n_sums + n_threads - 1u) / n_threads;
+    start_dev_kernel2(fill_array, n_fill_blocks, n_threads, 0, (d_sum_output, 0.0, n_sums));
+    HANDLE_LAST_ERROR();
+    size_t n_out = (size_t) n_total * n_emissions;
+    n_fill_blocks = (n_out + n_threads - 1u) / n_threads;
+    start_dev_kernel2(
+      fill_array, n_fill_blocks, n_threads, 0,
+      (d_out, std::numeric_limits<float>::infinity(), n_out));
+    HANDLE_LAST_ERROR();
+
+    // one score per (frame, edge), 64 bit sizes and offsets (see FastBaumWelchOp).
+    // A seq writes and reads only the rows of its own frames, so it needs no fill.
+    size_t n_edge_frames = (size_t) n_edges * n_frames;
+    float* d_edge_buffer = reinterpret_cast<float*>(device_malloc(n_edge_frames * sizeof(float)));
+    if(!d_edge_buffer) { HANDLE_LAST_ERROR(); abort(); }  // error should have been set in device_malloc
+
+    // RETURNN_CUDA, NOT CUDA: the torch build UNDEFINES CUDA before this code (see FastBaumWelchOp).
+    // The CPU kernel emulation runs the threads of a block one after the other, so one thread per block there.
+    // The recursion waits for its loads every frame, so its block takes the edges of a sequence in one round
+    // where it can (up to 1024 edges, about 200 labels of CTC).
+    #ifndef RETURNN_CUDA
+    #define RETURNN_CUDA CUDA
+    #endif
+    // The states of a seq in shared memory: 48 KB per block is the limit on every GPU
+    // (the opt-in above it exists only from Volta on), about 2000 labels of CTC.
+    // Above it, the recursion runs on global memory, slower but with no limit.
+    #if RETURNN_CUDA
+    const unsigned seq_block_dim = 1024;
+    const unsigned frame_block_dim = 256;
+    const size_t max_shared_bytes = 48u * 1024u;
+    #else
+    const unsigned seq_block_dim = 1;
+    const unsigned frame_block_dim = 1;
+    const size_t max_shared_bytes = std::numeric_limits<size_t>::max();  // a std::vector, no limit
+    #endif
+    size_t states_bytes = 3 * (size_t) max_seq_states * sizeof(float);
+    float* d_state_scratch = NULL;
+    if (states_bytes <= max_shared_bytes) {
+      start_dev_kernel2(
+        fwd_bwd_packed_seq<true>, n_seqs, seq_block_dim, states_bytes,
+        (max_seq_states, n_edges, n_emissions, n_frames, d_index, index_stride,
+         d_seq_starts, d_edge_offsets, d_start_states, d_end_states, d_from, d_to, d_emission_idxs,
+         d_weights, d_am_scores, d_edge_buffer, d_state_scratch));
+    } else {
+      static bool warned = false;
+      if (!warned) {
+        warned = true;
+        fprintf(stderr,
+          "FastBaumWelchPackedOp: %%u states per seq take %%zu bytes, above the %%zu bytes of shared memory per block,"
+          " so the recursion runs on global memory (slower).\\n",
+          max_seq_states, states_bytes, max_shared_bytes);
+      }
+      d_state_scratch = reinterpret_cast<float*>(device_malloc(n_seqs * states_bytes));
+      if(!d_state_scratch) { HANDLE_LAST_ERROR(); abort(); }  // error should have been set in device_malloc
+      start_dev_kernel2(
+        fwd_bwd_packed_seq<false>, n_seqs, seq_block_dim, 0,
+        (max_seq_states, n_edges, n_emissions, n_frames, d_index, index_stride,
+         d_seq_starts, d_edge_offsets, d_start_states, d_end_states, d_from, d_to, d_emission_idxs,
+         d_weights, d_am_scores, d_edge_buffer, d_state_scratch));
+    }
+    HANDLE_LAST_ERROR();
+    start_dev_kernel2(
+      normalize_packed_seq, (unsigned) n_sums, frame_block_dim, frame_block_dim * sizeof(float),
+      (n_edges, n_emissions, n_seqs, d_index, index_stride, d_seq_starts, d_edge_offsets, d_emission_idxs,
+       d_edge_buffer, d_sum_output, d_out));
+    HANDLE_LAST_ERROR();
+
+    #if TENSORFLOW
+    // Certain TensorFlow code doesn't like inf, even if it is just the CheckNumerics,
+    // which is helpful for debugging.
+    // We replace it by a very high number, so that tf.exp(-out) will still result in 0.0.
+    unsigned n_blocks = (n_out + n_threads - 1u) / n_threads;
+    start_dev_kernel2(remove_inf, n_blocks, n_threads, 0, (d_out, n_out));
+    #endif
+
+    device_free(d_edge_buffer);
+    if (d_state_scratch) {
+      device_free(d_state_scratch);
+    }
   """
 
     c_bw_code = None
@@ -3667,7 +4196,15 @@ class MultiEndFastBaumWelchOp(NativeOpGenBase):
             "gradient": "disconnected",
         },
         {"name": "index", "ndim": 2, "shape": ((0, 0), (0, 1)), "need_contiguous": True, "gradient": "disconnected"},
-        {"name": "state_buffer", "ndim": 2, "shape": (2, None), "need_contiguous": True, "gradient": "disconnected"},
+        {
+            "name": "n_states",
+            "ndim": 0,
+            "shape": (),
+            "dtype": "int32",
+            "need_contiguous": True,
+            "gradient": "disconnected",
+            "host_memory": True,
+        },
     )
     out_info = (
         {"name": "output", "ndim": 3, "shape": ((0, 0), (0, 1), (0, 2)), "need_contiguous": True},
@@ -3701,7 +4238,7 @@ class MultiEndFastBaumWelchOp(NativeOpGenBase):
 
     c_fw_code = """
     // am_scores, edges, weights, start_states, end_states, end_state_weights,
-    //   index, state_buffer* = input_names (*: inplace)
+    //   index, n_states = input_names
     // output = output_names
     assert(n_inputs  == 8);
     assert(n_outputs == 2);
@@ -3712,7 +4249,6 @@ class MultiEndFastBaumWelchOp(NativeOpGenBase):
     Ndarray* end_states        = inputs[4];
     Ndarray* end_state_weights = inputs[5];
     Ndarray* index             = inputs[6];
-    Ndarray* state_buffer      = inputs[7];
     Ndarray* out               = *outputs[0];
     Ndarray* sum_output        = *outputs[1];
 
@@ -3744,15 +4280,13 @@ class MultiEndFastBaumWelchOp(NativeOpGenBase):
     unsigned* d_end_states        = reinterpret_cast<unsigned*>(Ndarray_DEV_DATA_int32(end_states));
     float*    d_end_state_weights = Ndarray_DEV_DATA(end_state_weights);
     float*    d_index             = Ndarray_DEV_DATA(index);
-    float*    d_state_buffer_prev = Ndarray_DEV_DATA(state_buffer) + 0 * Ndarray_STRIDE(state_buffer, 0);
-    float*    d_state_buffer_next = Ndarray_DEV_DATA(state_buffer) + 1 * Ndarray_STRIDE(state_buffer, 0);
     float*    d_out               = Ndarray_DEV_DATA(out);
     float*    d_sum_output        = Ndarray_DEV_DATA(sum_output);
 
     unsigned n_frames       = Ndarray_DIMS(am_scores)[0];
     unsigned n_seqs         = Ndarray_DIMS(am_scores)[1];
     unsigned n_emissions    = Ndarray_DIMS(am_scores)[2];
-    unsigned n_states       = Ndarray_DIMS(state_buffer)[1];
+    unsigned n_states       = (unsigned) Ndarray_DEV_DATA_int32_scalar(inputs[7]);
     unsigned n_edges        = Ndarray_DIMS(edges)[1];
     unsigned n_start_states = Ndarray_DIMS(start_states)[0];
     unsigned n_end_states   = Ndarray_DIMS(end_states)[0];
@@ -3764,6 +4298,10 @@ class MultiEndFastBaumWelchOp(NativeOpGenBase):
     unsigned index_stride    = Ndarray_STRIDE(index, 0);
 
     assert(n_frames > 0);
+    // Kernel-owned fwd/bwd state scratch, like FastBaumWelchOp / FastViterbiOp
+    float* d_state_buffer_base = reinterpret_cast<float*>(device_malloc(2u * n_states * sizeof(float)));
+    float* d_state_buffer_prev = d_state_buffer_base;
+    float* d_state_buffer_next = d_state_buffer_base + n_states;
 
 //    std::cerr << "n_frames: "       << n_frames       << std::endl;
 //    std::cerr << "n_seqs: "         << n_seqs         << std::endl;
@@ -3899,6 +4437,7 @@ class MultiEndFastBaumWelchOp(NativeOpGenBase):
     }
 
     device_free(d_edge_buffer);
+    device_free(d_state_buffer_base);
     if (d_state_buffer_all != NULL) {
       device_free(d_state_buffer_all);
     }
@@ -4496,7 +5035,9 @@ class FastViterbiOp(NativeOpGenBase):
       :param am_scores: scores in +log space. 3d (time,batch,dim)
       :param am_seq_len: (batch,)
       :param edges: edges of the graph (from,to,emission_idx,sequence_idx), i.e. (4, n_edges)
-      :param weights: weights of the edges (n_edges,)
+      :param weights: weights of the edges (n_edges,), in -log space,
+        i.e. the same FSA format as :class:`FastBaumWelchOp`,
+        even though am_scores here are in +log space
       :param start_end_states: (2, batch)
       :param n_states: scalar, int32
     outputs:
@@ -4546,6 +5087,15 @@ class FastViterbiOp(NativeOpGenBase):
             "gradient": "disconnected",
             "host_memory": True,
         },
+        {
+            "name": "mask_idx",
+            "ndim": 0,
+            "shape": (),
+            "dtype": "int32",
+            "need_contiguous": True,
+            "gradient": "disconnected",
+            "host_memory": True,
+        },
     )
     out_info = (
         {"name": "output", "ndim": 2, "shape": ((0, 0), (0, 1)), "dtype": "int32", "need_contiguous": True},
@@ -4562,31 +5112,30 @@ class FastViterbiOp(NativeOpGenBase):
         "04_select_max": """
       DEV_FUNC
       void select_max(IdxAndVal* a, IdxAndVal b) {
-        // fast path
-        if(b.val < a->val)
-          return;
         // Maybe we could use double compare-and-swap (https://stackoverflow.com/questions/55941382/).
         // But not sure how.
         // So instead, we use double-wide compare-and-swap.
+        // The cell is also read atomically, as one 64 bit word: a read through the packed struct
+        // can see a torn update of another thread, i.e. a score which never existed.
         union U {
           IdxAndVal s;
           unsigned long long int v64;
         };
+        U updated;
+        updated.s = b;
+        U prev;
+        prev.v64 = elem_atomic_cas((unsigned long long int*) a, 0ULL, 0ULL);
         while(true) {
-          U prev;
-          prev.s = *a;
           if(b.val < prev.s.val)
             return;
           if(b.val == prev.s.val && b.idx >= prev.s.idx)
             return;
-          U updated;
-          updated.s = b;
-
           U old;
           old.v64 = elem_atomic_cas((unsigned long long int*) a, prev.v64, updated.v64);
           if(old.v64 == prev.v64)
             return;
-          // Not the same, so repeat.
+          // Not the same, so repeat with what is there now.
+          prev = old;
         }
       }
     """,
@@ -4646,25 +5195,27 @@ class FastViterbiOp(NativeOpGenBase):
         const int32_t* d_end_states // (n_batch,)
       )
       {
-        int idx = threadIdx.x + blockDim.x * blockIdx.x;
-        while(idx < n_edges) {
+        for(int idx = threadIdx.x + blockDim.x * blockIdx.x; idx < n_edges; idx += gridDim.x * blockDim.x) {
+          int seq_idx = d_edge_seq_idx[idx];
+          if(t >= d_am_seq_len[seq_idx])
+            continue;
+          // weights are -log like fast_baum_welch, while the scores here are +log
+          float edge_weight = -d_edge_weights[idx];
+          if(isinf(edge_weight))
+            continue;
           int from_idx = d_edge_from[idx];
           //assert_cmp(0, <=, from_idx); assert_cmp(from_idx, <, n_states);
-
-          int seq_idx = d_edge_seq_idx[idx];
-          if(t < d_am_seq_len[seq_idx]) {
-            float prev_val = prev_frame[from_idx].val;
-            int emission_idx = d_edge_emission_idx[idx];
-            //assert_cmp(0, <=, emission_idx); assert_cmp(emission_idx, <, n_classes);
-            int to_idx = d_edge_to[idx];
-            //assert_cmp(0, <=, to_idx); assert_cmp(to_idx, <, n_states);
-            IdxAndVal candidate;
-            candidate.val = prev_val + d_edge_weights[idx] + d_am_scores[seq_idx * n_classes + emission_idx];
-            candidate.idx = idx;
-            select_max(&frame[to_idx], candidate);
-          }
-
-          idx += gridDim.x * blockDim.x;
+          float prev_val = prev_frame[from_idx].val;
+          if(isinf(prev_val))
+            continue;
+          int emission_idx = d_edge_emission_idx[idx];
+          //assert_cmp(0, <=, emission_idx); assert_cmp(emission_idx, <, n_classes);
+          int to_idx = d_edge_to[idx];
+          //assert_cmp(0, <=, to_idx); assert_cmp(to_idx, <, n_states);
+          IdxAndVal candidate;
+          candidate.val = prev_val + edge_weight + d_am_scores[seq_idx * n_classes + emission_idx];
+          candidate.idx = idx;
+          select_max(&frame[to_idx], candidate);
         }
       }
     """,
@@ -4699,13 +5250,14 @@ class FastViterbiOp(NativeOpGenBase):
         int n_states,
         int n_edges,
         int t,
-        int32* cur_state, // (n_batch,)
+        int32_t* cur_state, // (n_batch,)
         const IdxAndVal* frame,
         const int32_t* d_am_seq_len,
         const int32_t* d_edge_from,
         const int32_t* d_edge_to,
         const int32_t* d_edge_emission_idx,
-        int32_t* output
+        int32_t* output,
+        int32_t mask_idx
       )
       {
         int idx = threadIdx.x + blockDim.x * blockIdx.x;
@@ -4721,10 +5273,10 @@ class FastViterbiOp(NativeOpGenBase):
               output[idx] = d_edge_emission_idx[edge_idx];
             }
             else  // no path found
-              output[idx] = 0;
+              output[idx] = mask_idx;
           }
           else {
-            output[idx] = 0;
+            output[idx] = mask_idx;
           }
           idx += gridDim.x * blockDim.x;
         }
@@ -4734,16 +5286,17 @@ class FastViterbiOp(NativeOpGenBase):
 
     c_fw_code = """
     using namespace std;
-    // am_scores, am_seq_len, edges, weights, start_end_states, n_states = input_names
+    // am_scores, am_seq_len, edges, weights, start_end_states, n_states, mask_idx = input_names
     // output, scores = output_names
-    assert(n_inputs == 6);
+    assert(n_inputs == 7);
     assert(n_outputs == 2);
     Ndarray* am_scores = inputs[0];
     Ndarray* am_seq_len = inputs[1];
     Ndarray* edges = inputs[2];
     Ndarray* weights = inputs[3];
     Ndarray* start_end_states = inputs[4];
-    Ndarray* n_states_ref = inputs[5];
+    int32_t n_states = Ndarray_DEV_DATA_int32_scalar(inputs[5]);
+    int32_t mask_idx = Ndarray_DEV_DATA_int32_scalar(inputs[6]);
     Ndarray* output = *outputs[0];
     Ndarray* score = *outputs[1];
 
@@ -4752,7 +5305,6 @@ class FastViterbiOp(NativeOpGenBase):
     assert_cmp(Ndarray_NDIM(edges), ==, 2);
     assert_cmp(Ndarray_NDIM(weights), ==, 1);
     assert_cmp(Ndarray_NDIM(start_end_states), ==, 2);
-    assert_cmp(Ndarray_NDIM(n_states_ref), ==, 0);
     assert_cmp(Ndarray_NDIM(output), ==, 2);
     assert_cmp(Ndarray_NDIM(score), ==, 1);
     int n_time = Ndarray_DIMS(am_scores)[0];
@@ -4768,7 +5320,6 @@ class FastViterbiOp(NativeOpGenBase):
     assert_cmp(Ndarray_DIMS(weights)[0], ==, n_edges);
     assert_cmp(Ndarray_DIMS(start_end_states)[0], ==, 2);
     assert_cmp(Ndarray_DIMS(start_end_states)[1], ==, n_batch);
-    int n_states = Ndarray_DEV_DATA_int32_scalar(n_states_ref);
     assert_cmp(Ndarray_DIMS(output)[0], ==, n_time);
     assert_cmp(Ndarray_DIMS(output)[1], ==, n_batch);
     assert_cmp(Ndarray_DIMS(score)[0], ==, n_batch);
@@ -4839,7 +5390,8 @@ class FastViterbiOp(NativeOpGenBase):
         d_edge_from,
         d_edge_to,
         d_edge_emission_idx,
-        d_output + t * output_stride // out
+        d_output + t * output_stride, // out
+        mask_idx
       ));
     }
     HANDLE_LAST_ERROR();
@@ -4862,13 +5414,15 @@ class GetCtcFsaFastBwOp(NativeOpGenBase):
       :param targets: shape (batch,time), int32
       :param seq_lens: shape (batch), int32
       :param blank_idx: scalar, int32
-      :param weights: shape (num_edges,), float32 (not used, except for target shape)
+      :param weights: shape (num_edges,), float32. Only the shape is used, to size the outputs.
       :param label_loop: scalar, int32 (casted from bool). True -> normal CTC; False -> RNA-like
     outputs:
       :param edges: (4,num_edges), int32, edges of the graph (from,to,emission_idx,sequence_idx)
       :param start_end_states: (2,batch), int32, (start,end) state idx in FSA
+      :param weights: (num_edges,), float32, 0.0 valid, INF_F dead
 
-    To construct `weights` (for FastBaumWelch), `weights` should be just `tf.zeros((num_edges,))`.
+    The passed `weights` is only a shape template, e.g. `tf.zeros((num_edges,))`;
+    the returned one is what goes into FastBaumWelch.
     `num_edges` should be `n_batch * (5 * (n_time - 1) + 10)`
       (see construction in kernel why that number).
     """
@@ -4920,6 +5474,7 @@ class GetCtcFsaFastBwOp(NativeOpGenBase):
     out_info = (
         {"name": "edges", "ndim": 2, "shape": (4, (3, 0)), "dtype": "int32", "need_contiguous": True},
         {"name": "start_end_states", "ndim": 2, "shape": (2, (1, 0)), "dtype": "int32", "need_contiguous": True},
+        {"name": "weights", "ndim": 1, "shape": ((3, 0),), "dtype": "float32", "need_contiguous": True},
     )
 
     c_extra_support_code = {
@@ -4930,20 +5485,57 @@ class GetCtcFsaFastBwOp(NativeOpGenBase):
         (
         int n_batch, int n_time, int n_edges,
         const int32_t* targets, const int32_t* seq_lens,
+        const int32_t* edge_offsets,
         int32_t blank_idx,
-        int32_t* edges, int32_t* start_end_states
+        int32_t* edges, int32_t* start_end_states, float* weights
         )
       {
         int idx = threadIdx.x + blockDim.x * blockIdx.x;
-        // n_edges should be n_batch * (5 * (n_time - 1) + 10).
-        assert(n_edges % n_batch == 0);
+        // edge_offsets == NULL: rectangular layout, n_edges == n_batch * (5 * (n_time - 1) + 10),
+        //   seq b owns the slice [b * n_edges/n_batch, (b+1) * n_edges/n_batch)
+        //   and its unused tail (targets buffer wider than the actual len) becomes INF edges.
+        // edge_offsets != NULL (packed layout, (n_batch+1,) ascending): seq b owns
+        //   [edge_offsets[b], edge_offsets[b+1]), sized 5*len+5 = EXACTLY its valid edge count
+        //   (the valid edges are the contiguous rel prefix, see the construction below);
+        //   slots past edge_offsets[n_batch] are global filler (INF weight, from/to 0),
+        //   skipped by all FastBaumWelch kernels on one coalesced load.
         while(idx < n_edges) {
-          int batch_idx = idx / (n_edges / n_batch);
-          int rel_edge_idx = idx % (n_edges / n_batch);
+          int batch_idx, rel_edge_idx;
+          if(edge_offsets) {
+            if(idx >= edge_offsets[n_batch]) {
+              edges[0 * n_edges + idx] = 0; // from
+              edges[1 * n_edges + idx] = 0; // to
+              edges[2 * n_edges + idx] = 0; // emission
+              edges[3 * n_edges + idx] = 0; // batch
+              weights[idx] = INF_F;
+              idx += gridDim.x * blockDim.x;
+              continue;
+            }
+            int lo = 0, hi = n_batch; // find b with edge_offsets[b] <= idx < edge_offsets[b+1]
+            while(lo + 1 < hi) {
+              int mid = (lo + hi) / 2;
+              if(idx >= edge_offsets[mid]) lo = mid; else hi = mid;
+            }
+            batch_idx = lo;
+            rel_edge_idx = idx - edge_offsets[batch_idx];
+          } else {
+            assert(n_edges % n_batch == 0);
+            batch_idx = idx / (n_edges / n_batch);
+            rel_edge_idx = idx % (n_edges / n_batch);
+          }
           int32_t seq_len = seq_lens[batch_idx];
           // state_idx: 0 b, 1 l, 2 b, 3 l, ..., (T-1)*2 b, T*2-1 l, T*2 b, T*2+1 dummy, T*2+2 end
           // i.e. T*2+3 states per seq.
-          int state_idx_offset = (n_time * 2 + 3) * batch_idx;
+          // Packed layout: number the STATES by content as well, not by buffer capacity.
+          // edge_offsets[b] == 5 * sum(len_0..len_(b-1)) + 5 * b,
+          // so the content state offset 2 * sum(...) + 3 * b
+          // is exactly 2 * edge_offsets[b] / 5 + b, and that division is exact.
+          // Each seq then owns exactly its 2*len+3 states (dummy and end are its last two),
+          // so n_states follows the targets total instead of batch * capacity.
+          // Rectangular layout keeps the capacity stride.
+          int state_idx_offset = edge_offsets
+            ? (edge_offsets[batch_idx] / 5) * 2 + batch_idx
+            : (n_time * 2 + 3) * batch_idx;
           int t = -1; // pos in targets
           int srel_edge_idx = -1; // state relative edge
           // (seq_len * 2) - 1 is last label state idx. seq_len * 2 is last blank state idx.
@@ -5152,6 +5744,13 @@ class GetCtcFsaFastBwOp(NativeOpGenBase):
           edges[1 * n_edges + idx] = state_idx_offset + to_state_idx; // to
           edges[2 * n_edges + idx] = emission_idx; // emission
           edges[3 * n_edges + idx] = batch_idx; // batch
+          // srel_edge_idx stays -1 exactly for the edges routed into the dummy state,
+          // i.e. the ones this seq does not use
+          // (the FSA spans the targets BUFFER width).
+          // INF weight = zero probability,
+          // so fast_baum_welch can skip them on one coalesced load,
+          // without knowing anything about this topology.
+          weights[idx] = (srel_edge_idx < 0) ? INF_F : 0.0f;
 
           idx += gridDim.x * blockDim.x;
         }
@@ -5161,7 +5760,7 @@ class GetCtcFsaFastBwOp(NativeOpGenBase):
 
     c_fw_code = """
     assert(n_inputs == 5);
-    assert(n_outputs == 2);
+    assert(n_outputs == 3);
     Ndarray* targets = inputs[0];
     Ndarray* seq_lens = inputs[1];
     Ndarray* blank_idx_ref = inputs[2];
@@ -5169,6 +5768,7 @@ class GetCtcFsaFastBwOp(NativeOpGenBase):
     bool label_loop = (bool) Ndarray_DEV_DATA_int32_scalar(inputs[4]);
     Ndarray* edges = *outputs[0];
     Ndarray* start_end_states = *outputs[1];
+    Ndarray* weights_out = *outputs[2];
     assert_cmp(Ndarray_NDIM(targets), ==, 2);
     assert_cmp(Ndarray_NDIM(seq_lens), ==, 1);
     assert_cmp(Ndarray_NDIM(blank_idx_ref), ==, 0);
@@ -5189,21 +5789,170 @@ class GetCtcFsaFastBwOp(NativeOpGenBase):
 
     Ndarray_memset(Ndarray_DEV_DATA_int32(edges), 255, 4 * n_edges * sizeof(int32_t));
     Ndarray_memset(Ndarray_DEV_DATA_int32(start_end_states), 255, 2 * n_batch * sizeof(int32_t));
+    Ndarray_memset(Ndarray_DEV_DATA(weights_out), 255, n_edges * sizeof(float));
     int32_t blank_idx = Ndarray_DEV_DATA_int32_scalar(blank_idx_ref);
 
     if(label_loop) {
       start_dev_kernel(construct_kernel<true>, (
         n_batch, n_time, n_edges,
         Ndarray_DEV_DATA_int32(targets), Ndarray_DEV_DATA_int32(seq_lens),
+        (const int32_t*) NULL,
         blank_idx,
-        Ndarray_DEV_DATA_int32(edges), Ndarray_DEV_DATA_int32(start_end_states)
+        Ndarray_DEV_DATA_int32(edges), Ndarray_DEV_DATA_int32(start_end_states), Ndarray_DEV_DATA(weights_out)
       ));
     } else {
       start_dev_kernel(construct_kernel<false>, (
         n_batch, n_time, n_edges,
         Ndarray_DEV_DATA_int32(targets), Ndarray_DEV_DATA_int32(seq_lens),
+        (const int32_t*) NULL,
         blank_idx,
-        Ndarray_DEV_DATA_int32(edges), Ndarray_DEV_DATA_int32(start_end_states)
+        Ndarray_DEV_DATA_int32(edges), Ndarray_DEV_DATA_int32(start_end_states), Ndarray_DEV_DATA(weights_out)
+      ));
+    }
+    HANDLE_LAST_ERROR();
+  """
+
+
+class GetCtcFsaFastBwPackedOp(NativeOpGenBase):
+    # noinspection PyUnresolvedReferences
+    """
+    Like :class:`GetCtcFsaFastBwOp`, but emits the edges PACKED:
+    seq b owns the edge slice ``[edge_offsets[b], edge_offsets[b+1])``,
+    sized ``5 * seq_len + 5`` = exactly its valid edge count
+    (the rectangular op instead sizes every seq by the targets BUFFER width,
+    so with a static over-allocated buffer -- the CUDA-graph regime -- most edges
+    are INF padding that every FastBaumWelch kernel still has to visit each frame).
+    Slots past ``edge_offsets[n_batch]`` (up to the bound ``num_edges``) are INF filler.
+    The FastBaumWelch ops take the edge list as-is, so they iterate only
+    ``num_edges = bound`` edges, with the bound tied to the packed targets total
+    instead of ``n_batch * capacity``.
+
+    inputs:
+      :param targets: shape (batch,time), int32
+      :param seq_lens: shape (batch), int32
+      :param edge_offsets: shape (batch+1,), int32, ascending; cumsum of ``5 * seq_len + 5``
+      :param blank_idx: scalar, int32
+      :param weights: shape (num_edges,), float32;
+        ``num_edges`` >= ``edge_offsets[batch]``, the excess is filler.
+        Only the shape is used, to size the outputs.
+      :param label_loop: scalar, int32 (casted from bool). True -> normal CTC; False -> RNA-like
+    outputs:
+      :param edges: (4,num_edges), int32, edges of the graph (from,to,emission_idx,sequence_idx)
+      :param start_end_states: (2,batch), int32, (start,end) state idx in FSA
+      :param weights: (num_edges,), float32, 0.0 valid, INF_F filler
+    """
+
+    in_info = (
+        {
+            "name": "targets",
+            "ndim": 2,
+            "shape": (None, None),
+            "dtype": "int32",
+            "need_contiguous": True,
+            "gradient": "disconnected",
+        },
+        {
+            "name": "seq_lens",
+            "ndim": 1,
+            "shape": (None,),
+            "dtype": "int32",
+            "need_contiguous": True,
+            "gradient": "disconnected",
+        },
+        {
+            "name": "edge_offsets",
+            "ndim": 1,
+            "shape": (None,),
+            "dtype": "int32",
+            "need_contiguous": True,
+            "gradient": "disconnected",
+        },
+        {
+            "name": "blank_idx",
+            "ndim": 0,
+            "shape": (),
+            "dtype": "int32",
+            "need_contiguous": True,
+            "gradient": "disconnected",
+            "host_memory": True,
+        },
+        {
+            "name": "weights",
+            "ndim": 1,
+            "shape": (None,),
+            "dtype": "float32",
+            "need_contiguous": True,
+            "gradient": "disconnected",
+        },
+        {
+            "name": "label_loop",
+            "ndim": 0,
+            "shape": (),
+            "dtype": "int32",
+            "need_contiguous": True,
+            "gradient": "disconnected",
+            "host_memory": True,
+        },
+    )
+    out_info = (
+        {"name": "edges", "ndim": 2, "shape": (4, (4, 0)), "dtype": "int32", "need_contiguous": True},
+        {"name": "start_end_states", "ndim": 2, "shape": (2, (1, 0)), "dtype": "int32", "need_contiguous": True},
+        {"name": "weights", "ndim": 1, "shape": ((4, 0),), "dtype": "float32", "need_contiguous": True},
+    )
+
+    c_extra_support_code = {
+        "01_kernel": GetCtcFsaFastBwOp.c_extra_support_code["01_kernel"],
+    }
+
+    c_fw_code = """
+    assert(n_inputs == 6);
+    assert(n_outputs == 3);
+    Ndarray* targets = inputs[0];
+    Ndarray* seq_lens = inputs[1];
+    Ndarray* edge_offsets = inputs[2];
+    Ndarray* blank_idx_ref = inputs[3];
+    Ndarray* weights = inputs[4];
+    bool label_loop = (bool) Ndarray_DEV_DATA_int32_scalar(inputs[5]);
+    Ndarray* edges = *outputs[0];
+    Ndarray* start_end_states = *outputs[1];
+    Ndarray* weights_out = *outputs[2];
+    assert_cmp(Ndarray_NDIM(targets), ==, 2);
+    assert_cmp(Ndarray_NDIM(seq_lens), ==, 1);
+    assert_cmp(Ndarray_NDIM(edge_offsets), ==, 1);
+    assert_cmp(Ndarray_NDIM(blank_idx_ref), ==, 0);
+    assert_cmp(Ndarray_NDIM(weights), ==, 1);
+    assert_cmp(Ndarray_NDIM(edges), ==, 2);
+    assert_cmp(Ndarray_NDIM(start_end_states), ==, 2);
+    int n_batch = Ndarray_DIMS(seq_lens)[0];
+    assert_cmp(Ndarray_DIMS(targets)[0], ==, n_batch);
+    assert_cmp(Ndarray_DIMS(edge_offsets)[0], ==, n_batch + 1);
+    assert_cmp(Ndarray_DIMS(start_end_states)[1], ==, n_batch);
+    int n_time = Ndarray_DIMS(targets)[1];
+    int n_edges = Ndarray_DIMS(weights)[0];
+    assert_cmp(Ndarray_DIMS(start_end_states)[0], ==, 2);
+    assert_cmp(Ndarray_DIMS(edges)[0], ==, 4);
+    assert_cmp(Ndarray_DIMS(edges)[1], ==, n_edges);
+
+    Ndarray_memset(Ndarray_DEV_DATA_int32(edges), 255, 4 * n_edges * sizeof(int32_t));
+    Ndarray_memset(Ndarray_DEV_DATA_int32(start_end_states), 255, 2 * n_batch * sizeof(int32_t));
+    Ndarray_memset(Ndarray_DEV_DATA(weights_out), 255, n_edges * sizeof(float));
+    int32_t blank_idx = Ndarray_DEV_DATA_int32_scalar(blank_idx_ref);
+
+    if(label_loop) {
+      start_dev_kernel(construct_kernel<true>, (
+        n_batch, n_time, n_edges,
+        Ndarray_DEV_DATA_int32(targets), Ndarray_DEV_DATA_int32(seq_lens),
+        Ndarray_DEV_DATA_int32(edge_offsets),
+        blank_idx,
+        Ndarray_DEV_DATA_int32(edges), Ndarray_DEV_DATA_int32(start_end_states), Ndarray_DEV_DATA(weights_out)
+      ));
+    } else {
+      start_dev_kernel(construct_kernel<false>, (
+        n_batch, n_time, n_edges,
+        Ndarray_DEV_DATA_int32(targets), Ndarray_DEV_DATA_int32(seq_lens),
+        Ndarray_DEV_DATA_int32(edge_offsets),
+        blank_idx,
+        Ndarray_DEV_DATA_int32(edges), Ndarray_DEV_DATA_int32(start_end_states), Ndarray_DEV_DATA(weights_out)
       ));
     }
     HANDLE_LAST_ERROR();
@@ -5339,7 +6088,10 @@ class EditDistanceOp(NativeOpGenBase):
             sub_cost = last1_dist[last1_idx];
             if(a[batch_idx * n_a_max_len + t_a - 1] != b[batch_idx * n_b_max_len + t_b - 1])
               ++sub_cost;
-            //printf("t_a %i, t_b %i, del %i, ins %i, sub %i\\n", t_a, t_b, del_cost, ins_cost, sub_cost);
+            /*printf("t_a %i, t_b %i, a %d, b %d, del %i, ins %i, sub %i\\n",
+                t_a, t_b,
+                a[batch_idx * n_a_max_len + t_a - 1], b[batch_idx * n_b_max_len + t_b - 1],
+                del_cost, ins_cost, sub_cost);*/
             int min_cost = del_cost;
             if(min_cost > ins_cost) min_cost = ins_cost;
             if(min_cost > sub_cost) min_cost = sub_cost;

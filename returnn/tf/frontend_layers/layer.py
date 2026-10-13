@@ -755,9 +755,11 @@ class Layer:
                 dep_name_set.add(x)
                 return
             if isinstance(x, Tensor):
-                return _maybe_add_dep(x.raw_tensor)
+                _maybe_add_dep(x.raw_tensor)
+                return
             if isinstance(x, Net):
-                return _maybe_add_dep(x.name_ctx.children["output"].tensor)
+                _maybe_add_dep(x.name_ctx.children["output"].tensor)
+                return
 
         if _extra_layer_dict:
             nest.map_structure(_maybe_add_dep, _extra_layer_dict)
@@ -1009,6 +1011,8 @@ class _ReturnnConfigSerializer:
             imports[f"import {obj.__module__}"] = None
             return cls._CodeWrapper(f"{obj.__module__}.{obj.__qualname__}", obj)
         if isinstance(obj, dict):
+            # the transformed keys stay hashable (str/int/tuple, or a _CodeWrapper)
+            # noinspection PyUnhashable
             return {
                 cls._post_process_transform(key, imports=imports): cls._post_process_transform(value, imports=imports)
                 for key, value in obj.items()
@@ -1020,6 +1024,9 @@ class _ReturnnConfigSerializer:
         if isinstance(obj, tuple) and type(obj) is not tuple:
             # noinspection PyProtectedMember,PyUnresolvedReferences,PyArgumentList
             return type(obj)(*(cls._post_process_transform(getattr(obj, key), imports=imports) for key in obj._fields))
+        # Pass anything else through unchanged.
+        # (This runs while trainings serialize their net dict, so keep it non-fatal for now.)
+        return obj
 
     class _CodeWrapper:
         def __init__(self, code: str, obj: Any):
@@ -1485,6 +1492,8 @@ class ReturnnDimTagsProxy:
                 self.reserved_names.add(name)
                 return ref
             if isinstance(value, dict):
+                # the mapped keys stay hashable (str/int/tuple, or a DimRefProxy)
+                # noinspection PyUnhashable
                 return {
                     _map(path + (key, "key"), key): _map(path + (key, "value"), value_) for key, value_ in value.items()
                 }

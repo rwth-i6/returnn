@@ -6,9 +6,10 @@ One use case example is :func:`sinusoidal_positional_encoding` and :func:`relati
 """
 
 from __future__ import annotations
-from typing import Optional, Union, Any, Type, Callable, Tuple, Dict
+from typing import Optional, Union, Any, Type, Callable, Tuple, Dict, List
 from weakref import ref
 import tree
+from returnn.util.basic import make_hashable
 from returnn.util.lru_cache import lru_cache
 from returnn.tensor import Tensor, Dim
 import returnn.frontend as rf
@@ -29,7 +30,10 @@ class Cache:
     - Dims: Use only weakrefs. Some Dim should not stay alive just because of the cache.
     - Scalar dynamic Dims in eager mode, or static dims: Instead of the Dim, use the dim value for the key
       (and map the output to the Dim).
-    - Tensor as keys: Use weakrefs. Also don't check by value but by identity.
+    - Tensor as keys: Use weakrefs. Also don't check by value but by identity of the raw tensor,
+      so a new Tensor wrapping the same raw tensor matches (e.g. raw tensors wrapped only for the lookup).
+      Its dims (and sparse dim, feature axis, version) are part of the key, the dims like Dim keys
+      (and the output is mapped to them).
     """
 
     def __init__(self, max_size: int):
@@ -55,10 +59,14 @@ class Cache:
 
         assert len(key_transformed_orig) == len(key_transformed)
         dim_map = {}  # orig -> new
-        for key_item_orig, key_item in zip(key_transformed_orig, key_transformed):
+        key_items_orig, key_items = _flat_dim_wrappers(key_transformed_orig), _flat_dim_wrappers(key_transformed)
+        assert len(key_items_orig) == len(key_items)
+        for key_item_orig, key_item in zip(key_items_orig, key_items):
             if isinstance(key_item_orig, DimWrapper):
                 assert isinstance(key_item, DimWrapper)
                 dim_orig = key_item_orig.dim_ref()
+                if dim_orig is None:  # orig dim could be dead. but then it would not be used anyway
+                    continue
                 dim = key_item.dim_ref()
                 assert isinstance(dim_orig, Dim) and isinstance(dim, Dim)
                 dim_map[dim_orig] = dim
@@ -103,11 +111,18 @@ def _transform_key(
     key: Any, *, finalize_callback: Optional[Callable] = None, collected_dim_map: Optional[Dict[Dim, DimWrapper]] = None
 ) -> Tuple[Union[Type[Backend], ref[rf.RunCtx], _KeyItemType], ...]:
     backend = _get_backend(key)
-    keys_flat = [backend]
+    keys_flat: List[Any] = [backend]
     if not backend.executing_eagerly():
         # See comment above: If graph-mode, the cached value becomes invalid
         # when the current run ctx goes out of scope.
         keys_flat.append(ref(rf.get_run_ctx(), finalize_callback))
+    if rf.is_static_traceable():
+        # Results computed under static traceable are only valid within the current step
+        # (e.g. under CUDA-graph capture they live in the captured graph region,
+        # and the regime's static buffers change in place across steps).
+        # The generation identifies the step (the ctx is enabled once per step):
+        # entries from earlier steps never match again and age out of the LRU.
+        keys_flat.append(rf.static_traceable_generation())
     if collected_dim_map is None:
         collected_dim_map = {}
     keys_flat += [
@@ -121,7 +136,7 @@ def _transform_key_item(
     key: Any, *, finalize_callback: Optional[Callable] = None, collected_dim_map: Dict[Dim, DimWrapper]
 ) -> _KeyItemType:
     if isinstance(key, Tensor):
-        return TensorWrapper(key, finalize_callback=finalize_callback)
+        return TensorWrapper(key, finalize_callback=finalize_callback, collected_dim_map=collected_dim_map)
     if isinstance(key, Dim):
         if key in collected_dim_map:
             return collected_dim_map[key]
@@ -131,6 +146,20 @@ def _transform_key_item(
     if not isinstance(key, _RawTypes):
         raise TypeError(f"unexpected type {type(key)}")
     return key
+
+
+def _flat_dim_wrappers(key_transformed: Tuple[Any, ...]) -> List[Any]:
+    """
+    :param key_transformed: from :func:`_transform_key`
+    :return: the key items, with each :class:`TensorWrapper` replaced by its dim wrappers
+    """
+    res = []
+    for key_item in key_transformed:
+        if isinstance(key_item, TensorWrapper):
+            res += key_item.get_dim_wrappers()
+        else:
+            res.append(key_item)
+    return res
 
 
 def _get_backend(*args) -> Type[Backend]:
@@ -144,66 +173,144 @@ def _get_backend(*args) -> Type[Backend]:
 class TensorWrapper:
     """
     Wraps :class:`Tensor`.
-    Using weakref for the tensor, including also ``raw_tensor``.
-    Equality is given if the identity is the same, for the Tensor itself and the raw_tensor.
+    Using weakref for the ``raw_tensor`` only, not for the Tensor itself:
+    the entry lives as long as the raw tensor, also when the Tensor was only created for the lookup.
+    Equality is given if the identity of the raw_tensor is the same,
+    and the dims, the sparse dim, the feature axis and the version are equal (dims via :class:`DimWrapper`).
+    (The dtype is given by the raw tensor.)
     No value of the tensor is checked.
     """
 
-    def __init__(self, value: Tensor, *, finalize_callback):
-        self.value_ref = ref(value, finalize_callback)
-        self.raw_value_ref = ref(value.raw_tensor, finalize_callback)
-        self._hash = id(value)
+    def __init__(self, value: Tensor, *, finalize_callback, collected_dim_map: Dict[Dim, DimWrapper]):
+        self.raw_value_ref = _WeakIdRef(value.raw_tensor, finalize_callback)
+        self.dims = tuple(
+            _transform_key_item(dim, finalize_callback=finalize_callback, collected_dim_map=collected_dim_map)
+            for dim in value.dims
+        )
+        self.sparse_dim = None
+        if value.sparse_dim is not None:
+            self.sparse_dim = _transform_key_item(
+                value.sparse_dim, finalize_callback=finalize_callback, collected_dim_map=collected_dim_map
+            )
+        self.feature_dim_axis = value.feature_dim_axis
+        self.version = value.version
+
+    def _key(self) -> Tuple[Any, ...]:
+        return self.raw_value_ref, self.dims, self.sparse_dim, self.feature_dim_axis, self.version
 
     def __eq__(self, other):
         if isinstance(other, TensorWrapper):
-            return self.value_ref() is other.value_ref() and self.raw_value_ref() is other.raw_value_ref()
+            return self._key() == other._key()
         return False
 
     def __hash__(self):
-        return self._hash
+        return hash(self._key())
+
+    def get_dim_wrappers(self) -> Tuple[DimWrapper, ...]:
+        """
+        :return: the dims and the sparse dim, e.g. to map the cached output to the dims of the query
+        """
+        return self.dims + ((self.sparse_dim,) if self.sparse_dim is not None else ())
+
+
+class _WeakIdRef:
+    """
+    Weakref with identity-based eq/hash.
+    Dead refs never compare equal -- also makes id() reuse after GC safe
+    (a new object at the same address hits the old hash but fails the eq check).
+    """
+
+    __slots__ = ("_ref", "_id")
+
+    def __init__(self, obj, callback=None):
+        self._ref = ref(obj, callback)
+        self._id = id(obj)
+
+    def __eq__(self, other):
+        if not isinstance(other, _WeakIdRef):
+            return False
+        if self._id != other._id:
+            return False
+        obj = self._ref()
+        return obj is not None and obj is other._ref()
+
+    def __hash__(self):
+        return self._id
 
 
 class DimWrapper:
     """
     Wraps :class:`Dim`.
     Using weakref for the dim.
-    If the size is scalar and known, equality is given when the size is equal (and dim tag is ignored)
+    If the size is known (static, or eager scalar, or eager seq lens),
+    equality is given when the size values are equal (and the dim tag is ignored);
+    :func:`Cache.get` then maps the cached output back to the queried dim.
     """
 
     def __init__(self, dim: Dim, *, finalize_callback):
-        self.dim_value = _dim_value_for_key(dim)
-        # finalize_callback only needed when we don't use the dim value.
+        self.dim_value = _dim_value_for_key(dim, finalize_callback=finalize_callback)
+        # dim_value covers every dim with a dyn size (value key or size_ref identity key),
+        # incl. finalization via the raw size tensor.
+        # The dim ref fallback remains only for dims without any size info
+        # (e.g. a batch dim without dyn_size_ext);
+        # finalize via the dim itself then.
         self.dim_ref = ref(dim, finalize_callback if self.dim_value is None else None)
-        self.dyn_size_ref = (
-            # E.g. consider the batch dim or data spatial dim which would be reset each step.
-            # We need some ref to the dyn size, and finalize this key when it goes out of scope.
-            # This is only needed when there is no info on the static size (or eager scalar dyn size).
-            ref(dim.dyn_size_ext.raw_tensor, finalize_callback)
-            if self.dim_value is None and dim.dyn_size_ext is not None and dim.dyn_size_ext.raw_tensor is not None
-            else None
-        )
         self._hash = hash(dim) if self.dim_value is None else hash(self.dim_value)
 
     def __eq__(self, other):
-        if isinstance(other, DimWrapper):
-            if self.dim_value is not None:
-                return self.dim_value == other.dim_value
-            return self.dim_ref() == other.dim_ref() and self.dyn_size_ref() is other.dyn_size_ref()
-        return False
+        if not isinstance(other, DimWrapper):
+            return False
+        if self.dim_value is not None or other.dim_value is not None:
+            # value key or size_ref identity key.
+            # None on one side compares unequal to any key, as it must.
+            return self.dim_value == other.dim_value
+        # No size info at all on both sides: dim identity is all there is.
+        return self.dim_ref() == other.dim_ref()
 
     def __hash__(self):
         return self._hash
 
 
-def _dim_value_for_key(dim: Dim) -> Optional[int]:
+def _dim_value_for_key(dim: Dim, *, finalize_callback=None) -> Optional[Tuple[Any, ...]]:
+    # Every key includes the capacity:
+    # cached artifacts can be capacity-shaped (e.g. bound-regime range/mask tensors),
+    # so dims with equal sizes but different capacities must not share an entry.
     if dim.size is not None:
-        return dim.size
-    if dim.dyn_size_ext is not None and not dim.dyn_size_ext.dims:
-        if dim.dyn_size_ext.raw_tensor is not None:
-            # noinspection PyProtectedMember
-            if dim.dyn_size_ext._raw_backend.executing_eagerly():
-                return int(dim.get_dim_value())
-    return None
+        return dim.size, dim.capacity
+    if dim.dyn_size_ext is None or dim.dyn_size_ext.raw_tensor is None:
+        return None
+    # noinspection PyProtectedMember
+    if (
+        not dim.dyn_size_ext._raw_backend.executing_eagerly()
+        or dim.dyn_size_ext.device not in (None, "cpu")
+        or rf.is_static_traceable()
+    ):
+        # No value-keying possible here:
+        # - non-eager (graph-based) backends: symbolic size tensors have no values at trace time;
+        # - device-resident dyn sizes: reading the values means a device-to-host copy
+        #   (a sync, illegal under CUDA-graph capture; also, the values change in place there).
+        # - static tracing: the size tensors are trace inputs even when on cpu --
+        #   values read at trace time would be baked into the key and the cached graph artifact.
+        #   Identity-keying within one trace is just common-subexpression reuse, value-free, correct.
+        # Key by the IDENTITY of the raw size tensor instead (value-free, so still correct):
+        # dims sharing the same size tensor (e.g. fresh kv dims from replace_dim)
+        # then share the cache entry, as with value-keying in the eager cpu case.
+        return "size_ref", _WeakIdRef(dim.dyn_size_ext.raw_tensor, finalize_callback), dim.capacity
+    if not dim.dyn_size_ext.dims:
+        return int(dim.get_dim_value()), dim.capacity
+    # Non-scalar eager dyn sizes (e.g. seq lens [batch]): key by the size values,
+    # so dims with equal lens share the cache entry
+    # (e.g. the fresh kv dim which attention creates per layer via replace_dim).
+    # The cached output is mapped back to the queried dim in Cache.get (dim_map).
+    # get_dyn_size_ext_for_device caches the cpu copy on the dim,
+    # so a potential device transfer happens only once per dim.
+    size_ext = dim.get_dyn_size_ext_for_device("cpu")
+    if size_ext.raw_tensor is None:
+        # No cpu values available: identity of the raw size tensor, as above.
+        return "size_ref", _WeakIdRef(dim.dyn_size_ext.raw_tensor, finalize_callback), dim.capacity
+    # noinspection PyProtectedMember
+    values = size_ext._raw_backend.raw_to_numpy(size_ext.raw_tensor)
+    return make_hashable(values.tolist()), dim.capacity
 
 
 # For now... we might extend it by some more types.

@@ -21,7 +21,7 @@ https://github.com/rwth-i6/returnn/issues/1165
 """
 
 from __future__ import annotations
-from typing import Optional, Union, Sequence, Tuple, Generic, TypeVar, Set
+from typing import Optional, Union, Sequence, Tuple, Generic, Set
 
 from returnn.util.basic import NotSpecified
 from .dim import Dim
@@ -33,7 +33,7 @@ import returnn.tensor._tensor_extra as _tensor_extra
 __all__ = ["Tensor"]
 
 
-RawTensorType = TypeVar("RawTensorType")  # e.g. torch.Tensor, tf.Tensor, numpy.ndarray, ...
+from ._tensor_mixin_base import RawTensorType
 
 
 class Tensor(_TensorMixin, _TensorOpOverloadsMixin, Generic[RawTensorType]):
@@ -43,7 +43,17 @@ class Tensor(_TensorMixin, _TensorOpOverloadsMixin, Generic[RawTensorType]):
 
     size_dtype = "int32"
 
-    __slots__ = ("name", "_dims", "dtype", "sparse_dim", "_raw_tensor", "_feature_dim_axis", "version", "_extra")
+    __slots__ = (
+        "name",
+        "_dims",
+        "dtype",
+        "sparse_dim",
+        "_raw_tensor",
+        "_feature_dim_axis",
+        "version",
+        "_extra",
+        "__weakref__",
+    )
 
     name: str
     _dims: Tuple[Dim, ...]

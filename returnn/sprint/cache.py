@@ -7,10 +7,9 @@ This module is about reading (maybe later also writing) the Sprint archive forma
 """
 
 from __future__ import annotations
-from typing import List, Optional, Tuple
+from typing import Optional, List, Tuple, Dict
 import sys
 import os
-import typing
 import array
 from struct import pack, unpack
 import numpy
@@ -210,9 +209,10 @@ class FileArchive:
     end_recovery_tag = 0x55AA55AA
 
     def __init__(self, filename, must_exists=True, encoding="ascii"):
+        self.filename = filename
         self.encoding = encoding
 
-        self.ft = {}  # type: typing.Dict[str,FileInfo]
+        self.ft: Dict[str, FileInfo] = {}
         if os.path.exists(filename):
             self.allophones = []
             self.f = open(filename, "rb")
@@ -235,6 +235,9 @@ class FileArchive:
         if len(self._short_seg_names) < len(self.ft):
             # We don't have a unique mapping, so we cannot use this.
             self._short_seg_names.clear()
+
+    def __repr__(self):
+        return f"<{self.__class__.__name__} {self.filename!r} {len(self.ft)} entries>"
 
     def file_list(self):
         """
@@ -334,8 +337,8 @@ class FileArchive:
             # print(typ)
             assert type_ == "vector-f32"
             count = self.read_U32()
-            data = [None] * count  # type: typing.List[typing.Optional[numpy.ndarray]]
-            time_ = [None] * count  # type: typing.List[typing.Optional[numpy.ndarray]]
+            data: List[Optional[numpy.ndarray]] = [None] * count
+            time_: List[Optional[numpy.ndarray]] = [None] * count
             for i in range(count):
                 size = self.read_U32()
                 data[i] = self.read_v("f", size)  # size x f32
@@ -413,6 +416,9 @@ class FileArchive:
             else:
                 raise Exception("No valid alignment header found (found: %r). Wrong cache?" % alignment_header)
 
+        else:
+            raise ValueError(f"{self}: unknown typ {typ!r}")
+
     def has_entry(self, filename):
         """
         :param str filename: argument for self.read()
@@ -450,7 +456,7 @@ class FileArchive:
             a = array.array("b")
             a.fromfile(self.f, comp)
             # unpack
-            b = zlib.decompress(a.tostring(), 15 + 32)
+            b = zlib.decompress(a.tobytes(), 15 + 32)
             # substitute self.f by an anonymous memmap file object
             # restore original file handle after we're done
             backup_f = self.f
@@ -575,17 +581,17 @@ class FileArchiveBundle:
         :param str encoding: encoding used in the files
         """
         # filename -> FileArchive
-        self.archives = {}  # type: typing.Dict[str,FileArchive]
+        self.archives: Dict[str, FileArchive] = {}
         # archive content file -> FileArchive
-        self.files = {}  # type: typing.Dict[str,FileArchive]
+        self.files: Dict[str, FileArchive] = {}
         self._short_seg_names = {}
         if filename is not None:
             self.add_bundle(filename=filename, encoding=encoding)
 
-    def add_bundle(self, filename, encoding="ascii"):
+    def add_bundle(self, filename: str, encoding: str = "ascii"):
         """
-        :param str filename: bundle
-        :param str encoding:
+        :param filename: bundle
+        :param encoding:
         """
         file_dir = os.path.dirname(filename) or "."
         for line in open(filename).read().splitlines():
@@ -837,7 +843,7 @@ class MixtureSet:
         """
         a = array.array("b")
         a.fromfile(self.f, length)
-        return a.tostring().decode(encoding)
+        return a.tobytes().decode(encoding)
 
     def read_f32(self):
         """
@@ -1003,7 +1009,7 @@ class WordBoundaries:
         """
         a = array.array("b")
         a.fromfile(self.f, length)
-        return a.tostring().decode(encoding)
+        return a.tobytes().decode(encoding)
 
     def __init__(self, filename):
         """

@@ -19,6 +19,7 @@ import os
 import math
 import numpy
 import functools
+import types
 from typing import TYPE_CHECKING, Optional, Any, Set, Tuple, Union, Type, Dict, Sequence, List, Callable
 
 from returnn.log import log
@@ -67,12 +68,6 @@ class Dataset:
         set_or_remove("min_chunk_size", config.opt_typed_value("min_chunk_size", 0) or None)
         set_or_remove("chunking_variance", config.float("chunking_variance", 0))
 
-        dd_cfg = config.typed_value("dataset_distribution", "random_seed_offset")
-        assert dd_cfg in ["random_seed_offset", "shard"]
-        shard_index, num_shards = Dataset._get_sharding_rank_and_size(config) if dd_cfg == "shard" else 0, 1
-        set_or_remove("num_shards", num_shards)
-        set_or_remove("shard_index", shard_index)
-
     @staticmethod
     def get_default_kwargs_eval(config: Config) -> Dict[str, Any]:
         """
@@ -117,8 +112,8 @@ class Dataset:
         min_chunk_size=0,
         chunking_variance=0,
         estimated_num_seqs=None,
-        num_shards: int = 1,
-        shard_index: int = 0,
+        _num_shards=1,
+        _shard_index=0,
     ):
         """
         :param str name: e.g. "train" or "eval"
@@ -142,8 +137,8 @@ class Dataset:
         :param str|None seq_order_seq_lens_file: for seq order, use the seq length given by this file
         :param int shuffle_frames_of_nseqs: shuffles the frames. not always supported
         :param None|int estimated_num_seqs: for progress reporting in case the real num_seqs is unknown
-        :param num_shards: number of shards the data is split into
-        :param shard_index: local shard index, when sharding is enabled
+        :param int _num_shards: number of shards the data is split into
+        :param int _shard_index: local shard index, when sharding is enabled
         """
         self.name = name or ("dataset_id%s" % id(self))
         self.lock: Optional[RLock] = None  # Used when manipulating our data potentially from multiple threads.
@@ -160,7 +155,7 @@ class Dataset:
         self.seq_tags_filter = set(self._load_seq_list_file(seq_list_filter_file)) if seq_list_filter_file else None
         self.unique_seq_tags = unique_seq_tags
         self._seq_order_seq_lens_file = seq_order_seq_lens_file
-        self._seq_order_seq_lens_by_idx = None
+        self._seq_order_seq_lens_by_idx: Optional[Sequence[Union[int, float]]] = None
         # There is probably no use case for combining the two, so avoid potential misconfiguration.
         assert self.partition_epoch == 1 or self.repeat_epoch == 1, (
             "Combining partition_epoch and repeat_epoch is prohibited."
@@ -168,16 +163,18 @@ class Dataset:
         self.labels: Dict[str, List[str]] = {}
         self.weights = {}
         self._num_timesteps = 0
-        self._num_seqs = 0
+        # None where the count is not known in advance (e.g. CachedDataset2 subclasses that
+        # discover it while loading); the is_less_than_num_seqs logic depends on that distinction
+        self._num_seqs: Optional[int] = 0
         self._estimated_num_seqs = estimated_num_seqs
         self.min_chunk_size = NumbersDict(min_chunk_size)
         self.chunking_variance = chunking_variance
         self._chunking = chunking
         self.chunk_size, self.chunk_step, self.custom_chunking_func = self._parse_chunking(chunking)
         self._context_window = context_window
-        assert 0 <= shard_index < num_shards
-        self.num_shards = num_shards
-        self.shard_index = shard_index
+        assert 0 <= _shard_index < _num_shards
+        self._num_shards = _num_shards
+        self._shard_index = _shard_index
         if isinstance(context_window, (tuple, list)):
             assert len(context_window) == 2
             for elem in context_window:
@@ -253,37 +250,6 @@ class Dataset:
         state = {attr: getattr(self, attr) for attr in ["epoch", "zpad"]}
         return Dataset._create_from_reduce, (self.__class__, kwargs, state)
 
-    def set_shard_idx_and_num_shards(self, shard_index: int, num_shards: int):
-        """set sharding config for the dataset"""
-        assert 0 <= shard_index < num_shards
-        assert num_shards == 1 or self.supports_sharding()
-        self.num_shards = num_shards
-        self.shard_index = shard_index
-
-    @staticmethod
-    def _get_sharding_rank_and_size(config: Optional[Config] = None) -> Tuple[int, int]:
-        """
-        :return: tuple (rank, size): the global rank and size for distributed trainings
-        """
-        if config is None:
-            from returnn.config import get_global_config
-
-            config = get_global_config(return_empty_if_none=True)
-        if config.typed_value("torch_distributed") is not None:
-            import returnn.torch.distributed
-
-            ctx = returnn.torch.distributed.get_ctx(config=config)
-            return ctx.rank(), ctx.size()
-        elif config.is_true("use_horovod"):
-            assert config.bool("use_tensorflow", False) or config.value("backend", "").startswith("tensorflow")
-
-            import returnn.tf.horovod
-
-            ctx = returnn.tf.horovod.get_ctx(config=config)
-            return ctx.rank(), ctx.size()
-        else:
-            return 0, 1
-
     @property
     def random_seed_offset(self) -> int:
         """:return: random seed offset for shuffling"""
@@ -293,10 +259,10 @@ class Dataset:
 
     def _uses_custom_distributed_sharding(self) -> bool:
         """
-        :return: if the dataset has its own data sharding logic independent of TF/PT.
+        :return: if dataset has its own data sharding logic independent of TF/PT.
             Leads to a fixed random_seed_offset independent of the workers local rank.
         """
-        return self.num_shards > 1
+        return False
 
     def _get_default_random_seed_offset(self):
         """
@@ -305,26 +271,29 @@ class Dataset:
         """
         from returnn.config import get_global_config
 
-        if self._uses_custom_distributed_sharding():
-            return 0
+        env_val = os.environ.get(RANDOM_SEED_OFFSET_ENV_VAR)  # set by outer proc
+        if env_val is not None:
+            # Set by outer proc, supposed to behave like setting random_seed_offset explicitly of the dataset,
+            # i.e. no per-rank seed logic here.
+            return int(env_val)
         config = get_global_config(raise_exception=False)
         if not config:
             return 0
-        env_val = os.environ.get(RANDOM_SEED_OFFSET_ENV_VAR)
-        if env_val is not None:
-            return int(env_val)
+        base = config.int("dataset_random_seed_offset", 0)
+        if self._uses_custom_distributed_sharding() or not config:
+            return base
         elif config.typed_value("torch_distributed") is not None:
             import returnn.torch.distributed
 
-            return returnn.torch.distributed.get_ctx(config=config).rank() * 16127
+            return returnn.torch.distributed.get_ctx(config=config).rank() * 16127 + base
         elif config.is_true("use_horovod"):
             assert config.bool("use_tensorflow", False) or config.value("backend", "").startswith("tensorflow")
 
             import returnn.tf.horovod
 
             if returnn.tf.horovod.get_ctx(config=config).is_dataset_distribution_random_seed_offset():
-                return returnn.tf.horovod.get_ctx(config=config).rank() * 16127
-        return 0
+                return returnn.tf.horovod.get_ctx(config=config).rank() * 16127 + base
+        return base
 
     def set_file_cache(self, cache: file_cache.FileCache):
         """
@@ -464,9 +433,9 @@ class Dataset:
         """
         raise OptionalNotImplementedError
 
-    def get_num_timesteps(self):
+    def get_num_timesteps(self) -> Union[int, NumbersDict]:
         """
-        :rtype: int
+        :return: how much frames we have in total.
         """
         assert self._num_timesteps > 0
         return self._num_timesteps
@@ -523,12 +492,8 @@ class Dataset:
         """
         raise NotImplementedError
 
-    def _get_seq_order_seq_lens_by_idx(self, seq_idx):
-        """
-        :param int seq_idx:
-        :rtype: int
-        """
-        if not self._seq_order_seq_lens_by_idx:
+    def _get_seq_order_seq_lens_by_idx(self, seq_idx: int) -> Union[int, float]:
+        if self._seq_order_seq_lens_by_idx is None:
             assert self._seq_order_seq_lens_file
             if self._seq_order_seq_lens_file.endswith(".gz"):
                 import gzip
@@ -539,11 +504,12 @@ class Dataset:
             seq_lens = eval(raw)
             assert isinstance(seq_lens, dict)
             all_tags = self.get_all_tags()
-            self._seq_order_seq_lens_by_idx = [seq_lens[tag] for tag in all_tags]
+            self._seq_order_seq_lens_by_idx = numpy.array([seq_lens[tag] for tag in all_tags])
+        self._get_seq_order_seq_lens_by_idx = self._seq_order_seq_lens_by_idx.__getitem__  # faster
         return self._seq_order_seq_lens_by_idx[seq_idx]
 
     def get_seq_order_for_epoch(
-        self, epoch: Optional[int], num_seqs: int, get_seq_len: Optional[Callable[[int], int]] = None
+        self, epoch: Optional[int], num_seqs: int, get_seq_len: Optional[Callable[[int], Union[int, float]]] = None
     ) -> Sequence[int]:
         """
         Returns the order of the given epoch.
@@ -552,7 +518,7 @@ class Dataset:
 
         :param epoch: for 'random', this determines the random seed
         :param num_seqs:
-        :param get_seq_len: function (originalSeqIdx: int) -> int
+        :param get_seq_len: function (originalSeqIdx: int) -> int|float
         :return: the order for the given epoch. such that seq_idx -> underlying idx
         """
         if epoch is None:
@@ -595,20 +561,33 @@ class Dataset:
             for i in range(1, num):
                 seq_index[i::num] += i * (num_seqs // num)
         elif seq_ordering_method == "reverse":
-            seq_index: Union[range, Sequence[int]] = range(num_seqs - 1, -1, -1)
+            seq_index = range(num_seqs - 1, -1, -1)  # type: Union[range, Sequence[int]]
         elif seq_ordering_method in ["sorted", "sorted_reverse"]:
             assert get_seq_len
-            reverse = -1 if seq_ordering_method == "sorted_reverse" else 1
-            seq_lens = [reverse * get_seq_len(i) for i in range(num_seqs)]
+            seq_lens = _get_seq_len_as_array(get_seq_len, num_seqs)
+            if seq_ordering_method == "sorted_reverse":
+                seq_lens = -seq_lens
             seq_index = numpy.argsort(seq_lens, kind="stable")
-        elif seq_ordering_method.startswith("random"):
-            tmp = seq_ordering_method.split(":")
+        elif seq_ordering_method == "random" or seq_ordering_method.startswith("random:"):
+            tmp = seq_ordering_method.split(":", 1)
             nth = int(tmp[1]) if len(tmp) > 1 else 1
             # Keep this deterministic! Use fixed seed.
             rnd_seed = self._get_random_seed_for_epoch(epoch=epoch, num_epochs_fixed=nth)
             random_generator = numpy.random.RandomState(rnd_seed)
             seq_index = random_generator.permutation(num_seqs)
-        elif seq_ordering_method.startswith("sort_bin_shuffle"):
+        elif seq_ordering_method == "random_sample" or seq_ordering_method.startswith("random_sample:"):
+            tmp = seq_ordering_method.split(":", 1)
+            nth = int(tmp[1]) if len(tmp) > 1 else 1
+            # Keep this deterministic! Use fixed seed.
+            rnd_seed = self._get_random_seed_for_epoch(epoch=epoch, num_epochs_fixed=nth)
+            random_generator = numpy.random.RandomState(rnd_seed)
+            seq_index = random_generator.randint(0, num_seqs, size=num_seqs)
+        elif (
+            seq_ordering_method == "sort_bin_shuffle"
+            or seq_ordering_method.startswith("sort_bin_shuffle:")
+            or seq_ordering_method == "sort_bin_shuffle_x2"
+            or seq_ordering_method.startswith("sort_bin_shuffle_x2:")
+        ):
             # Shuffle seqs, sort by length, and shuffle bins (then shuffle seqs within each bin if sort_bin_shuffle_x2).
             assert get_seq_len
             tmp = seq_ordering_method.split(":")[1:]
@@ -639,7 +618,7 @@ class Dataset:
                     random_generator.shuffle(part)  # Shuffle within the bin.
                 out_index.append(part)
             seq_index = numpy.concatenate(out_index)
-        elif seq_ordering_method.startswith("laplace"):
+        elif seq_ordering_method == "laplace" or seq_ordering_method.startswith("laplace:"):
             assert get_seq_len
             tmp = seq_ordering_method.split(":")[1:]
             if len(tmp) == 0:
@@ -653,7 +632,7 @@ class Dataset:
                 nth = 1
             else:
                 nth = int(tmp[1])
-            seq_lens = numpy.array([get_seq_len(i) for i in range(num_seqs)])
+            seq_lens = _get_seq_len_as_array(get_seq_len, num_seqs)
             rnd_seed = self._get_random_seed_for_epoch(epoch=epoch, num_epochs_fixed=nth)
             random_generator = numpy.random.RandomState(rnd_seed)
             seq_index = random_generator.permutation(num_seqs)  # type: Union[numpy.ndarray, List[int]]
@@ -677,9 +656,9 @@ class Dataset:
             seq_index = [
                 i for i in seq_index if (all_seq_tags[i] not in used_seq_tags, used_seq_tags.add(all_seq_tags[i]))[0]
             ]
-        if partition_epoch > 1 or self.num_shards > 1:
+        if partition_epoch > 1 or self._num_shards > 1:
             seq_index = self._apply_partition_epoch_and_sharding(
-                seq_index, partition_epoch, epoch, self.num_shards, self.shard_index
+                seq_index, partition_epoch, epoch, self._num_shards, self._shard_index
             )
         if repeat_epoch > 1:
             seq_index = list(seq_index) * repeat_epoch
@@ -771,8 +750,8 @@ class Dataset:
         """
         self.epoch = epoch
         self.rnd_seq_drop = Random(self._get_random_seed_for_epoch(epoch=epoch))
-        assert self.num_shards == 1 or self.supports_sharding(), (
-            f"{self}: does not support sharding, but got num_shards == {self.num_shards}"
+        assert self._num_shards == 1 or self.supports_sharding(), (
+            f"{self}: does not support sharding, but got num_shards == {self._num_shards}"
         )
         return False
 
@@ -784,12 +763,11 @@ class Dataset:
         """
         self.epoch = None
 
-    def get_current_seq_order(self):
+    def get_current_seq_order(self) -> Sequence[int]:
         """
         :return: many datasets use self.get_seq_order_for_epoch. this function would return the current seq order
           for the current epoch, after self.init_seq_order was called.
           Not all datasets implement this.
-        :rtype: typing.Sequence[int]
         """
         raise OptionalNotImplementedError
 
@@ -1090,9 +1068,10 @@ class Dataset:
             return False
         return True
 
-    def get_data_shape(self, key: str) -> List[int]:
+    def get_data_shape(self, key: str) -> List[Optional[int]]:
         """
-        :returns get_data(*, key).shape[1:], i.e. num-frames excluded
+        :returns get_data(*, key).shape[1:], i.e. num-frames excluded.
+            None entries are dynamic (only the last axis is known for dense data).
         """
         if key in self.num_outputs:
             if self.num_outputs[key][1] <= 1:
@@ -1299,6 +1278,7 @@ class Dataset:
         seq_drop=0.0,
         max_total_num_seqs=-1,
         used_data_keys=None,
+        packed_batch_size=None,
     ):
         """
         :param bool recurrent_net: If True, the batch might have a batch seq dimension > 1.
@@ -1307,9 +1287,19 @@ class Dataset:
         :param int|dict[str,int]|NumbersDict max_pad_size: Max number of zero-padded frames in one batch.
         :param int max_seqs: Max number of seqs per batch.
         :param int max_total_num_seqs:
-        :param int|dict[str,int]|NumbersDict max_seq_length:
+        :param int|dict[str,int]|NumbersDict|None max_seq_length: None/0 = no limit (sys.maxsize)
         :param set(str)|None used_data_keys:
+        :param int|dict[str,int]|NumbersDict|None packed_batch_size: max total number of frames in one batch,
+          counting the ACTUAL seq lens (sum), not the padded ``max_len * n_seqs`` that ``batch_size`` counts.
+          The right budget when the consumer stores batches packed (``packed_tensors``),
+          where padding costs nothing. ``batch_size`` may then be None (no padded-frames limit).
         """
+        if packed_batch_size is not None:
+            assert recurrent_net, "packed_batch_size: requires recurrent_net batching (whole seqs per slice)"
+            packed_batch_size = NumbersDict(packed_batch_size)
+            assert packed_batch_size.min_value() > 0
+            if not batch_size:
+                batch_size = sys.maxsize  # only the packed budget limits the batch then
         if not batch_size:
             raise Exception("batch_size must be set and be greater than 0")
         batch_size = NumbersDict(batch_size)
@@ -1353,7 +1343,12 @@ class Dataset:
                     continue
                 dt, ds = batch.try_sequence_as_slice(length)
                 if batch.num_slices >= 1:
-                    if (dt * ds).any_compare(batch_size, (lambda a, b: a > b)):
+                    if packed_batch_size is not None and (batch.get_total_num_frames() + length).any_compare(
+                        packed_batch_size, (lambda a, b: a > b)
+                    ):
+                        yield batch
+                        batch = Batch()
+                    elif (dt * ds).any_compare(batch_size, (lambda a, b: a > b)):
                         yield batch
                         batch = Batch()
                     elif ds > max_seqs:
@@ -1527,6 +1522,8 @@ def get_dataset_class(name: Union[str, Type[Dataset]]) -> Optional[Type[Dataset]
         "distrib_files",
         "postprocessing",
         "text_dict",
+        "huggingface",
+        "nemo_speech",
     ]
     for mod_name in mod_names:
         mod = import_module("returnn.datasets.%s" % mod_name)
@@ -1623,9 +1620,9 @@ def _dataset_extend_default_kwargs_from_parent_dataset(
     default_kwargs = default_kwargs.copy() if default_kwargs else {}
     default_kwargs.setdefault("random_seed_offset", parent_dataset.random_seed_offset)
     # noinspection PyProtectedMember
-    default_kwargs.setdefault("num_shards", parent_dataset.num_shards)
+    default_kwargs.setdefault("_num_shards", parent_dataset._num_shards)
     # noinspection PyProtectedMember
-    default_kwargs.setdefault("shard_index", parent_dataset.shard_index)
+    default_kwargs.setdefault("_shard_index", parent_dataset._shard_index)
     return default_kwargs
 
 
@@ -1783,3 +1780,19 @@ def set_config_extern_data_from_dataset(config, dataset):
         "extern_data",
         {key: _data_kwargs_from_dataset_key(dataset=dataset, key=key) for key in dataset.get_data_keys()},
     )
+
+
+def _get_seq_len_as_array(get_seq_len: Callable[[int], Union[int, float]], num_seqs: int) -> numpy.ndarray:
+    if num_seqs == 0:
+        return numpy.zeros((0,), dtype=numpy.int32)
+    if isinstance(get_seq_len, (types.BuiltinMethodType, types.MethodWrapperType, types.MethodType)):
+        # Call it once. This might trigger some caching.
+        get_seq_len(0)
+        # Get it again. This might now get us a different (cached) function, e.g. array.__getitem__.
+        get_seq_len = getattr(get_seq_len.__self__, get_seq_len.__name__)
+        assert isinstance(get_seq_len, (types.BuiltinMethodType, types.MethodWrapperType, types.MethodType))
+        obj = get_seq_len.__self__
+        if isinstance(obj, numpy.ndarray) and get_seq_len.__name__ == "__getitem__":
+            assert obj.shape == (num_seqs,)
+            return obj
+    return numpy.array([get_seq_len(i) for i in range(num_seqs)])

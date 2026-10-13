@@ -4,7 +4,7 @@ Many canonical basic layers.
 
 from __future__ import annotations
 
-from typing import Callable, Optional, Union, Sequence, List, Tuple, Dict
+from typing import Callable, Optional, Union, Sequence, List, Tuple, Dict, TypeVar
 import typing
 import tensorflow as tf
 import contextlib
@@ -16,6 +16,8 @@ from returnn.tf.util.data import Data, SearchBeam, FeatureDim, SpatialDim
 from returnn.tf.util.basic import OutputWithActivation, dimshuffle, swapaxes
 from returnn.log import log
 from .base import LayerBase, Loss, InternalLayer, SearchChoices
+
+T = TypeVar("T")
 
 
 class SourceLayer(LayerBase):
@@ -129,7 +131,7 @@ def concat_sources(src_layers, out_dim=None, allow_broadcast_all_sources=NotSpec
         axes_split_info: List[Optional[List[int]]] = [None] * data.batch_ndim
         axes_split_info[data.feature_dim_axis] = [layer_data.dim for layer_data in layers_data]
         tf_util.set_param_axes_split_info(data.placeholder, axes_split_info)
-        # Note: We will loose this info for any further op (e.g. dropout, activation, etc). Should be better...
+        # Note: We will loose this info for any further op (e.g. dropout, activation, etc.). Should be better...
         # Maybe instead in Data class?
         # Also note, even for tf.Variable, e.g. with weight noise, we might loose this?
     network.concat_sources_dropout_cache[cache_key] = data.copy()
@@ -868,7 +870,7 @@ class ActivationLayer(_ConcatInputLayer):
 
     def __init__(self, activation, opts=None, **kwargs):
         """
-        :param str activation: e.g. "relu", "tanh", etc
+        :param str activation: e.g. "relu", "tanh", etc.
         :param dict[str]|None opts: for activation function, e.g. eps for safe_log
         """
         super(ActivationLayer, self).__init__(**kwargs)
@@ -1003,7 +1005,7 @@ class LayerNormLayer(_ConcatInputLayer):
         else:
             axis = self.input_data.feature_dim_axis
         dim = self.input_data.batch_shape[axis]
-        assert dim is not None, "%s: in_dim %i must be static in input %s" % (self, in_dim or axis, self.input_data)
+        assert dim is not None, "%s: in_dim %s must be static in input %s" % (self, in_dim or axis, self.input_data)
         with self.var_creation_scope():
             scale = self.add_param(tf_compat.v1.get_variable("scale", [dim], initializer=tf.ones_initializer()))
             bias = self.add_param(tf_compat.v1.get_variable("bias", [dim], initializer=tf.zeros_initializer()))
@@ -1086,15 +1088,14 @@ class NormLayer(_ConcatInputLayer):
         assert not self.input_data.sparse
         x = self.input_data.placeholder
         if scale or bias:
-            if param_shape is NotSpecified:
-                param_shape = "F"
-            if isinstance(param_shape, (list, tuple)):
-                param_axes = [self.input_data.get_axis_from_description(a, allow_int=False) for a in param_shape]
+            param_shape_ = "F" if param_shape is NotSpecified else param_shape
+            if isinstance(param_shape_, (list, tuple)):
+                param_axes = [self.input_data.get_axis_from_description(a, allow_int=False) for a in param_shape_]
             else:
-                param_axes = [self.input_data.get_axis_from_description(param_shape, allow_int=False)]
+                param_axes = [self.input_data.get_axis_from_description(param_shape_, allow_int=False)]
             assert sorted(set(param_axes)) == sorted(param_axes), "%s: param_shape %r should be unique" % (
                 self,
-                param_shape,
+                param_shape_,
             )
             param_shape = [self.input_data.batch_shape[axis] for axis in param_axes]
             assert all(isinstance(dim, int) for dim in param_shape), "%s: only static param shape allowed" % self
@@ -2277,7 +2278,6 @@ class LengthLayer(LayerBase):
 
     layer_class = "length"
 
-    # noinspection PyUnusedLocal
     def __init__(self, axis="T", add_time_axis=False, dtype="int32", sparse=False, **kwargs):
         """
         :param str|Dim axis:
@@ -2285,6 +2285,7 @@ class LengthLayer(LayerBase):
         :param str dtype:
         :param bool sparse:
         """
+        del sparse  # only used in get_out_data_from_opts
         super(LengthLayer, self).__init__(**kwargs)
         if isinstance(axis, Dim):
             dim = self.fixup_dim(axis, self.sources)
@@ -2441,8 +2442,8 @@ class SoftmaxOverSpatialLayer(_ConcatInputLayer):
           the window start.
         :param LayerBase|int|None window_size: Layer with output of shape (B,) or (constant) int value indicating
           the window size.
-        :param bool use_time_mask: if True, assumes dyn seq len, and use it for masking.
-          By default, if dyn seq len exists, it uses it.
+        :param bool|None use_time_mask: if True, assumes dyn seq len, and use it for masking.
+          By default (None), if dyn seq len exists, it uses it.
         :param bool log_space: if True, returns in log space (i.e. uses log_softmax)
         """
         from returnn.tf.util.basic import where_bc, set_padding_info
@@ -2620,7 +2621,7 @@ class SeqLenMaskLayer(_ConcatInputLayer):
           In that case, explicitly set this to True.
         :param Data|None seq_len_source:
         :param Data|None start:
-        :param Data|None window_start:
+        :param Data|int|None window_start:
         :param Data|int|None window_size:
         :return: mask which is broadcastable to energy_data,
             thus you can e.g. use :func:`returnn.tf.util.basic.where_bc`
@@ -2741,7 +2742,7 @@ class BooleanMaskLayer(LayerBase):
         tensor = self.sources[0].output
         remaining_dims = [d for d in tensor.dims if d not in dims]
         tensor_templ = tensor.copy_template_new_dim_tags(tuple(dims) + tuple(remaining_dims))
-        tensor = tensor.copy_compatible_to(tensor_templ, add_dims=False)
+        tensor = tensor.copy_compatible_to(tensor_templ, unbroadcast=True)
         mask_templ = mask.output.copy_template_new_dim_tags(new_dim_tags=tuple(dims))
         mask_ = mask.output.copy_compatible_to(mask_templ, add_dims=False)
         self.output.raw_tensor = tf.boolean_mask(tensor.raw_tensor, mask=mask_.raw_tensor)
@@ -3049,6 +3050,8 @@ class RandomLayer(LayerBase):
             assert static is None or static is False, "%s: state is given, thus it is not static" % self
             assert seed is None, "%s: explicit state and seed are mutually exclusive" % self
             state_ = explicit_state.output.placeholder
+            # auto_update_state is tri-state: None means "not specified"
+            # noinspection PySimplifyBooleanCheck
             if auto_update_state is True:
                 state_ = tf_util.get_variable_from_tensor(state_)
                 if not isinstance(state_, tf.Variable):
@@ -3209,7 +3212,6 @@ class RandIntLayer(LayerBase):
 
     layer_class = "rand_int"
 
-    # noinspection PyUnusedLocal
     def __init__(self, shape, maxval, minval=0, dtype="int32", sparse_dim=None, seed=None, **kwargs):
         """
         :param tuple[Dim|int]|list[Dim|int] shape: desired shape of output tensor
@@ -3219,6 +3221,7 @@ class RandIntLayer(LayerBase):
         :param Dim|None sparse_dim:
         :param int|None seed: random seed
         """
+        del shape, sparse_dim  # only used in get_out_data_from_opts
         super(RandIntLayer, self).__init__(**kwargs)
         seed = seed if seed is not None else self.network.random.randint(2**31)
         batch = self.output.batch or self.get_batch_info()
@@ -3317,7 +3320,6 @@ class RangeLayer(LayerBase):
 
     layer_class = "range"
 
-    # noinspection PyUnusedLocal
     def __init__(self, limit, start=0, delta=1, dtype=None, sparse=False, out_spatial_dim=None, **kwargs):
         """
         :param int|float limit:
@@ -3327,6 +3329,7 @@ class RangeLayer(LayerBase):
         :param bool sparse:
         :param Dim|None out_spatial_dim:
         """
+        del sparse, dtype  # only used in get_out_data_from_opts
         out_spatial_dim  # noqa  # used in get_out_data_from_opts
         super(RangeLayer, self).__init__(**kwargs)
         self.output.placeholder = tf.range(start=start, limit=limit, delta=delta, dtype=self.output.dtype)
@@ -3380,7 +3383,6 @@ class RangeInAxisLayer(LayerBase):
     layer_class = "range_in_axis"
     recurrent = True  # if axis=="T", the time-dim order matters
 
-    # noinspection PyUnusedLocal
     def __init__(self, axis, dtype="int32", unbroadcast=False, keepdims=False, sparse=False, **kwargs):
         """
         :param str|Dim axis:
@@ -3389,6 +3391,7 @@ class RangeInAxisLayer(LayerBase):
         :param bool keepdims: DEPRECATED, unsupported, and not needed
         :param bool sparse:
         """
+        del sparse  # only used in get_out_data_from_opts
         super(RangeInAxisLayer, self).__init__(**kwargs)
         source = self.sources[0].output if self.sources else None
         if isinstance(axis, Dim):
@@ -3456,7 +3459,6 @@ class RangeFromLengthLayer(LayerBase):
     layer_class = "range_from_length"
     recurrent = True
 
-    # noinspection PyUnusedLocal
     def __init__(self, dtype="int32", sparse=False, out_spatial_dim=None, **kwargs):
         """
         :param str axis:
@@ -3464,6 +3466,7 @@ class RangeFromLengthLayer(LayerBase):
         :param bool sparse:
         :param Dim|None out_spatial_dim:
         """
+        del sparse  # only used in get_out_data_from_opts
         out_spatial_dim  # noqa  # used in get_out_data_from_opts
         super(RangeFromLengthLayer, self).__init__(**kwargs)
         source = self.sources[0].output
@@ -3551,7 +3554,6 @@ class ConstantLayer(LayerBase):
 
     layer_class = "constant"
 
-    # noinspection PyUnusedLocal
     def __init__(
         self,
         sources,
@@ -3574,12 +3576,15 @@ class ConstantLayer(LayerBase):
         :param Dim|None feature_dim:
         :param list[LayerBase] shape_deps: for dyn dim tags in shape
         """
+        del sparse_dim, feature_dim, shape, dtype  # only used in get_out_data_from_opts
         import numpy
 
         assert not sources, "constant layer cannot have sources"
         super(ConstantLayer, self).__init__(**kwargs)
         self.shape_deps = shape_deps
         shape_ = value.shape if isinstance(value, numpy.ndarray) else ()
+        if isinstance(value, int) and self.output.dtype == "bool":
+            value = bool(value)
         value = tf.constant(value, dtype=self.output.dtype)
         if len(shape_) == 0 and self.output.batch_ndim > 0:
             value = tf.fill([d.get_dim_value() for d in self.output.dim_tags], value)
@@ -4181,7 +4186,7 @@ class PadLayer(_ConcatInputLayer):
         ],
         out_dims: Optional[Union[Dim, Sequence[Dim]]] = None,
         handle_dynamic_dims: Optional[bool] = None,
-        value: Union[int, float] = 0,
+        value: Union[int, float, LayerBase] = 0,
         mode: str = "constant",
         **kwargs,
     ):
@@ -4198,7 +4203,10 @@ class PadLayer(_ConcatInputLayer):
         :param mode: "constant", "reflect", "symmetric" and "replication"
         """
         out_dims  # noqa  # handled in get_out_data_from_opts
-        super(PadLayer, self).__init__(**kwargs)
+        super().__init__(**kwargs)
+        if isinstance(value, LayerBase):
+            assert value.output.dims == ()  # not implemented otherwise
+            value = value.output.raw_tensor
         axes_ = self.input_data.get_axes_from_description(axes)
         assert axes_, "%s: invalid axes %r in input %s" % (self, axes, self.input_data)
         axes = axes_
@@ -4345,6 +4353,17 @@ class PadLayer(_ConcatInputLayer):
                 out_dim.declare_same_as(out_dims[i])
             dim_tags[a] = out_dim
         return data.copy_template_new_dim_tags(dim_tags, keep_special_axes=True)
+
+    @classmethod
+    def transform_config_dict(cls, d, network, get_layer):
+        """
+        :param dict[str] d:
+        :param returnn.tf.network.TFNetwork network:
+        :param get_layer:
+        """
+        super().transform_config_dict(d, network=network, get_layer=get_layer)
+        if isinstance(d.get("value"), str):
+            d["value"] = get_layer(d["value"])
 
 
 class MergeDimsLayer(_ConcatInputLayer):
@@ -4503,21 +4522,37 @@ class MergeDimsLayer(_ConcatInputLayer):
             return  # should be handled already
         if target_tag.dimension is not None:  # static
             return  # should be handled already
+        merged_batch = any(self.input_data.dim_tags[a].is_batch_dim() for a in merge_axes)
         if target_tag.dyn_size_ext is not None:
-            return  # handled already
+            if target_tag.dyn_size_ext.placeholder is not None:
+                return  # handled already
+            if not merged_batch:
+                return  # completed on demand via Dim.complete_dyn_size, as before
+            # A dim merged from the batch dim is not batch-kind anymore,
+            # so its size template needs the actual value computed here.
 
         out_size = None
         for in_axis in merge_axes:
             in_tag = self.input_data.dim_tags[in_axis]
-            assert not in_tag.is_batch_dim()
-            if in_tag.dimension is not None:
+            if in_tag.is_batch_dim():
+                # contributes the scalar batch size (product convention, same as Dim.complete_dyn_size);
+                # from the placeholder shape, which works also without global batch info
+                from returnn.tf.util.basic import get_shape_dim
+
+                batch_dim_value = get_shape_dim(self.input_data.placeholder, self.input_data.batch_dim_axis)
+                if isinstance(batch_dim_value, int):
+                    batch_dim_value = tf.constant(batch_dim_value, dtype=tf.int32)
+                if batch_dim_value.dtype != tf.int32:
+                    batch_dim_value = tf.cast(batch_dim_value, tf.int32)
+                in_size = Data.from_tensor(batch_dim_value)
+            elif in_tag.dimension is not None:
                 if in_tag.dimension == 1:
                     continue
                 in_size = Data.from_tensor(tf.constant(in_tag.dimension, dtype=tf.int32))
             else:
                 assert in_tag.dyn_size_ext is not None
                 in_size = in_tag.dyn_size_ext
-            if not out_size:
+            if out_size is None:
                 out_size = in_size
             else:
                 new_data = Data.get_common_data([out_size, in_size], name="%s_output" % self.name)
@@ -4525,7 +4560,7 @@ class MergeDimsLayer(_ConcatInputLayer):
                     out_size.copy_compatible_to(new_data).placeholder * in_size.copy_compatible_to(new_data).placeholder
                 )
                 out_size = new_data
-        if not out_size:
+        if out_size is None:
             out_size = Data.from_tensor(tf.constant(1, dtype=tf.int32))
         target_tag.dyn_size_ext = out_size
 
@@ -4561,8 +4596,26 @@ class MergeDimsLayer(_ConcatInputLayer):
             res_dim = int(prod([data.batch_shape[i] for i in axes]))
         merge_dim_tags = [data.dim_tags[axis] for axis in axes]
         merge_target_axis = cls._get_target_axis(input_data=data, merge_axes=axes)
-        out_dim_ = prod(merge_dim_tags)
-        assert isinstance(out_dim_, Dim)
+        if input_data.batch_dim_axis in axes:
+            # Keep the old TF net-dict semantics: the dim merged from the batch dim is batch-kind
+            # (identifies the batch axis, excluded from shape, virtual-batch bookkeeping below).
+            # Generic dim math gives a spatial dim (see Dim._get_merged_dim_kind),
+            # so construct the same structure directly with kind=Batch.
+            # A plain Dim() construction does not register in the dim-math cache,
+            # so the generic (spatial) dim math stays unaffected.
+            # noinspection PyProtectedMember
+            from returnn.tensor._dim_extra import Op as _DimOp, _representative_tag, _get_description
+
+            out_dim_ = Dim(
+                kind=Dim.Types.Batch,
+                description="*".join(_get_description(d) for d in merge_dim_tags),
+                dimension=res_dim,
+                derived_from_op=_DimOp(kind="mul", inputs=list(merge_dim_tags)),
+                derived_from_tag=_representative_tag(merge_dim_tags),
+            )
+        else:
+            out_dim_ = prod(merge_dim_tags)
+            assert isinstance(out_dim_, Dim)
         assert out_dim_.dimension == res_dim
         out_dim_.complete_dyn_size(template_only=True)
         if out_dim:
@@ -4804,7 +4857,7 @@ class SplitDimsLayer(_ConcatInputLayer):
 
     def __init__(self, axis, dims, pad_to_multiples=None, pad_value=0, **kwargs):
         """
-        :param Dim|str axis: e.g. "F"
+        :param Dim|str|int axis: e.g. "F"
         :param tuple[Dim|int]|list[Dim|int] dims: what the axis should be split into. e.g. (window, -1)
         :param bool|None pad_to_multiples: If true, input will be padded to the next multiple of the product of the
           static dims, such that splitting is actually possible.
@@ -4853,7 +4906,16 @@ class SplitDimsLayer(_ConcatInputLayer):
         if len(new_pos_dims) == len(dims) - 1:
             rem_const_size = util.prod(new_pos_dims)
         assert old_dim.is_static() or pad_to_multiples or rem_const_size == 1
-        if pad_to_multiples and (not isinstance(rem_const_size, int) or rem_const_size != 1):
+        # When the dynamic split dim already has a known dyn size,
+        # its max size (a tf.Tensor) is in dims and there is no -1 entry.
+        # Then the target shape is fully determined and no padding is needed
+        # (e.g. splitting a merged 'beam*time' back into (beam, time)).
+        have_known_dyn_size = any(not isinstance(d, int) for d in dims)
+        if (
+            pad_to_multiples
+            and not have_known_dyn_size
+            and (not isinstance(rem_const_size, int) or rem_const_size != 1)
+        ):
             indices = [i for i, d in enumerate(dims) if isinstance(d, int) and d == -1]
             assert len(indices) == 1, "%s: exactly one -1 dim in %r expected" % (self, dims)
             if rem_const_size is None:
@@ -4944,7 +5006,7 @@ class SplitDimsLayer(_ConcatInputLayer):
     def get_out_data_from_opts(cls, name, axis, dims, pad_to_multiples=None, sources=(), **kwargs):
         """
         :param str name:
-        :param Dim|str axis:
+        :param Dim|str|int axis:
         :param list[Dim|int]|tuple[Dim|int] dims:
         :param bool|None pad_to_multiples:
         :param list[LayerBase] sources:
@@ -5941,7 +6003,6 @@ class ReinterpretDataLayer(_ConcatInputLayer):
 
     layer_class = "reinterpret_data"
 
-    # noinspection PyUnusedLocal
     def __init__(
         self,
         switch_axes=None,
@@ -5960,7 +6021,7 @@ class ReinterpretDataLayer(_ConcatInputLayer):
         :param str|list[str] switch_axes: e.g. "bt" to switch batch and time axes
         :param LayerBase|None size_base: copy the size_placeholder from the given layer
         :param LayerBase|None batch_dim_base: copy the batch dim from this layer
-        :param dict[str,Dim|str|None] set_axes:
+        :param dict[str,Dim|str|int|None] set_axes:
           This can be used to overwrite the special axes like time_dim_axis or feature_dim_axis.
           For that, use keys "B","T" or "F", and a value via :func:`Data.get_axis_from_description`.
         :param dict[str|Dim,Dim]|Sequence[Tuple[Dim,Dim]]|None set_dim_tags: axis -> new dim tag. assigns new dim tags.
@@ -5973,6 +6034,7 @@ class ReinterpretDataLayer(_ConcatInputLayer):
         :param Dim|int|None|NotSpecified set_sparse_dim: set sparse dim to this. assumes that it is sparse
         :param int|None increase_sparse_dim: add this to the dim. assumes that it is sparse
         """
+        del switch_axes, batch_dim_base, set_axes, set_sparse, set_sparse_dim, increase_sparse_dim
         from returnn.tf.util.basic import get_valid_scope_name_from_str
 
         super(ReinterpretDataLayer, self).__init__(**kwargs)
@@ -6068,7 +6130,7 @@ class ReinterpretDataLayer(_ConcatInputLayer):
         :param str|list[str] switch_axes: e.g. "bt" to switch batch and time axes
         :param LayerBase|None size_base: similar as size_target
         :param LayerBase|None batch_dim_base:
-        :param dict[str,Dim|str|None] set_axes:
+        :param dict[str,Dim|str|int|None] set_axes:
         :param dict[str|Dim,Dim]|Sequence[Tuple[Dim,Dim]]|None set_dim_tags:
         :param bool enforce_batch_major:
         :param bool enforce_time_major:
@@ -6189,7 +6251,7 @@ class ConvLayer(_ConcatInputLayer):
     layer_class = "conv"
     recurrent = True  # we must not allow any shuffling in the time-dim or so
 
-    # noinspection PyUnusedLocal,PyShadowingBuiltins
+    # noinspection PyShadowingBuiltins
     def __init__(
         self,
         filter_size,
@@ -6214,7 +6276,7 @@ class ConvLayer(_ConcatInputLayer):
         filter_perm=None,
         bias=None,
         use_time_mask=False,
-        pad_seq_len_to_power=None,
+        pad_seq_len_to_power: Optional[float] = None,
         **kwargs,
     ):
         """
@@ -6258,6 +6320,7 @@ class ConvLayer(_ConcatInputLayer):
             See https://github.com/rwth-i6/returnn/issues/1450 and
             https://github.com/tensorflow/tensorflow/issues/62441.
         """
+        del out_spatial_dims, auto_use_channel_first  # only used in get_out_data_from_opts
         from returnn.util import BehaviorVersion
 
         padding = padding.upper() if isinstance(padding, str) else padding
@@ -6370,6 +6433,7 @@ class ConvLayer(_ConcatInputLayer):
         filter_shape = list(filter_size) + [filter_in_dim, out_dim]
         from returnn.tf.util.basic import get_initializer
 
+        filters = None
         if filter_data is not None:
             if filter_perm:
                 filter_data = TransposeLayer.transpose(filter_data, perm=filter_perm, name="filter_transposed")
@@ -6456,8 +6520,6 @@ class ConvLayer(_ConcatInputLayer):
             )
             if len(filter_size) == 1:
                 y = tf.squeeze(y, axis=-1 if out_batch_feature_major else -2)
-                strides = strides[:-1]
-                dilation_rate = dilation_rate[:-1]
         elif max(strides) > 1 and max(dilation_rate) > 1:
             # tf.nn.convolution does not support this, therefore resort to tf.nn.conv2d which requires some adaptations
             squeeze_axis = None
@@ -7050,7 +7112,6 @@ class PoolLayer(_ConcatInputLayer):
     layer_class = "pool"
     recurrent = True  # we should not shuffle in the time-dimension
 
-    # noinspection PyUnusedLocal
     def __init__(
         self,
         mode,
@@ -7087,6 +7148,7 @@ class PoolLayer(_ConcatInputLayer):
         :param bool|NotSpecified use_channel_first: if set, will transform input to NCHW format
         :param bool use_time_mask:
         """
+        del out_spatial_dims, use_channel_first  # only used in get_out_data_from_opts
         assert "n_out" not in kwargs
         assert "out_type" not in kwargs
         mode = mode.upper()
@@ -7117,12 +7179,12 @@ class PoolLayer(_ConcatInputLayer):
         if in_dim and out_dim:
             assert in_dim == out_dim
         elif in_dim:
-            out_dim = in_dim
+            pass  # out_dim is not needed below, only in_dim is
         elif out_dim:
             in_dim = out_dim
         else:
             assert self.input_data.have_feature_axis()
-            out_dim = in_dim = self.input_data.feature_dim_or_sparse_dim
+            in_dim = self.input_data.feature_dim_or_sparse_dim
         input_data, num_batch_dims = ConvLayer.transform_input(
             self.input_data,
             network=self.network,
@@ -7224,7 +7286,7 @@ class PoolLayer(_ConcatInputLayer):
         :param list[LayerBase] sources:
         :param returnn.tf.network.TFNetwork network:
         :param Sequence[int] pool_size:
-        :param Sequence[int]|int strides:
+        :param Sequence[int]|int|None strides: pool_size by default
         :param int|Sequence[int] dilation_rate:
         :param str|int|Sequence[int] padding:
         :param Dim|None in_dim:
@@ -7371,7 +7433,7 @@ class TransposedConvLayer(_ConcatInputLayer):
         """
         from returnn.tf.util.basic import get_initializer, get_activation_function, get_shape
 
-        super(TransposedConvLayer, self).__init__(**kwargs)
+        super(TransposedConvLayer, self).__init__(in_dim=in_dim, **kwargs)
         out_dim  # noqa  # via get_out_data_from_opts
         assert not self.input_data.sparse
         assert self.input_data.have_batch_axis()
@@ -7425,6 +7487,7 @@ class TransposedConvLayer(_ConcatInputLayer):
             output_padding = list(output_padding) + [0]
         filter_shape = list(filter_size) + [self.output.dim, input_data.dim]  # transposed
         self.filter_layer = None
+        filters = None
         if filter:
             self.filter_layer = filter
             filter_data = filter.output
@@ -7516,7 +7579,10 @@ class TransposedConvLayer(_ConcatInputLayer):
     ):
         """
         Determines output length of a transposed convolution given input length.
-        Copied from conv_utils.deconv_output_length, adapted with simplification.
+
+        Copied from TF/Keras conv_utils.deconv_output_length
+        (https://github.com/tensorflow/tensorflow/blob/5912f51d580551e5cee2cfde4cb882594b4d3e60/tensorflow/python/keras/utils/conv_utils.py#L140),
+        adapted with simplification.
 
         Also see :func:`ConvLayer.calc_out_dim`.
 
@@ -7533,44 +7599,17 @@ class TransposedConvLayer(_ConcatInputLayer):
         """
         if out_dim and out_dim.is_dim_known():
             return out_dim.get_dim_value()
-        assert padding in {"same", "valid", "full"}
 
-        # Get the dilated kernel size
-        filter_size = filter_size + (filter_size - 1) * (dilation - 1)
+        import returnn.frontend as rf
 
-        if stride != 1:
-            input_length = input_length * stride
-
-        # Infer length if output padding is None, else compute the exact length
-        if output_padding is None:
-            if padding == "valid":
-                if isinstance(input_length, Dim):
-                    length = input_length + max(filter_size - stride, 0)
-                else:
-                    length = tf_util.simplify_add(input_length, max(filter_size - stride, 0))
-            elif padding == "full":
-                if isinstance(input_length, Dim):
-                    length = input_length - (stride + filter_size - 2)
-                else:
-                    length = tf_util.simplify_add(input_length, -(stride + filter_size - 2))
-            elif padding == "same":
-                length = input_length
-            else:
-                raise Exception("invalid padding %r" % (padding,))
-        else:  # output_padding
-            if padding == "same":
-                pad = filter_size // 2
-            elif padding == "valid":
-                pad = 0
-            elif padding == "full":
-                pad = filter_size - 1
-            else:
-                raise Exception("invalid padding %r" % (padding,))
-            if isinstance(input_length, Dim):
-                length = input_length + (-stride + filter_size - 2 * pad + output_padding)
-            else:
-                length = tf_util.simplify_add(input_length, -stride + filter_size - 2 * pad + output_padding)
-        return length
+        return rf.calc_transposed_conv_out_length(
+            input_length,
+            filter_size=filter_size,
+            padding=padding,
+            output_padding=output_padding,
+            stride=stride,
+            dilation_rate=dilation,
+        )
 
     @classmethod
     def get_out_data_from_opts(
@@ -7628,12 +7667,17 @@ class TransposedConvLayer(_ConcatInputLayer):
             assert len(out_spatial_dims) == len(filter_size)
         # Be relaxed about incorrect input data. Throw errors later. This can also work during template construction.
         for i in range(len(filter_size)):
-            old_tag = old_spatial_dim_tags[i] if i < len(old_spatial_dim_tags) else None
             if out_spatial_dims and out_spatial_dims[i].is_dim_known():
                 new_tag = out_spatial_dims[i]  # reuse
             else:
+                if i >= len(old_spatial_dim_tags):
+                    # without an input spatial dim, the out length is only defined via known out_spatial_dims
+                    raise ValueError(
+                        "%s %r: missing spatial dim %i in input %r, and out_spatial_dims[%i] is not known"
+                        % (cls.__name__, name, i, input_data, i)
+                    )
                 new_tag = cls.deconv_output_length(
-                    old_tag,
+                    old_spatial_dim_tags[i],
                     filter_size=filter_size[i],
                     stride=strides[i],
                     padding=padding,
@@ -7693,17 +7737,17 @@ class ReduceLayer(_ConcatInputLayer):
     ):
         """
         :param str mode: "sum" or "max", "argmin", "min", "argmax", "mean", "logsumexp"
-        :param typing.Sequence[Dim|str] axes: One axis or multiple axis to reduce.
+        :param typing.Sequence[Dim|str]|None axes: One axis or multiple axis to reduce.
           It accepts the special tokens "B"|"batch", "spatial", "spatial_except_time", or "F"|"feature",
           and it is strongly recommended to use some of these symbolic names.
           See :func:`Data.get_axes_from_description`.
-        :param Dim|str axis: for compatibility, can be used instead of ``axes``
+        :param Dim|str|None axis: for compatibility, can be used instead of ``axes``
         :param bool keep_dims: if dimensions should be kept (will be 1)
         :param int|None enforce_batch_dim_axis: will swap the batch-dim-axis of the input with the given axis.
           e.g. 0: will convert the input into batch-major format if not already like that.
           Note that this is still not enough in some cases, e.g. when the other axes are also not as expected.
           The strong recommendation is to use a symbolic axis description.
-        :param bool use_time_mask: if we reduce over the time-dim axis, use the seq len info.
+        :param bool|None use_time_mask: if we reduce over the time-dim axis, use the seq len info.
           By default, in that case, it will be True.
         """
         super(ReduceLayer, self).__init__(**kwargs)
@@ -7724,17 +7768,17 @@ class ReduceLayer(_ConcatInputLayer):
         """
         :param Data input_data:
         :param str mode: "sum" or "max", "argmin", "min", "argmax", "mean", "logsumexp"
-        :param int|list[int]|str axes: One axis or multiple axis to reduce.
+        :param int|list[int]|str|None axes: One axis or multiple axis to reduce.
           It accepts the special tokens "B"|"batch", "spatial", "spatial_except_time", or "F"|"feature",
           and it is strongly recommended to use some of these symbolic names.
           See :func:`Data.get_axes_from_description`.
         :param bool keep_dims: if dimensions should be kept (will be 1)
-        :param int enforce_batch_dim_axis: will swap the batch-dim-axis of the input with the given axis.
+        :param int|None enforce_batch_dim_axis: will swap the batch-dim-axis of the input with the given axis.
           e.g. 0: will convert the input into batch-major format if not already like that.
           Note that this is still not enough in some cases, e.g. when the other axes are also not as expected.
           The strong recommendation is to use a symbolic axis description.
-        :param bool use_time_mask: if we reduce over the time-dim axis, use the seq len info.
-          By default, in that case, it will be True.
+        :param bool|None use_time_mask: if we reduce over the time-dim axis, use the seq len info.
+          By default (None), in that case, it will be True.
         :rtype: tf.Tensor
         """
         from returnn.tf.util.basic import expand_multiple_dims
@@ -7994,7 +8038,6 @@ class SqueezeLayer(_ConcatInputLayer):
 
     layer_class = "squeeze"
 
-    # noinspection PyUnusedLocal
     def __init__(self, axis, enforce_batch_dim_axis=None, allow_no_op=False, **kwargs):
         """
         :param Dim|int|list[int]|str axis: one axis or multiple axis to squeeze.
@@ -8003,6 +8046,7 @@ class SqueezeLayer(_ConcatInputLayer):
         :param int|None enforce_batch_dim_axis:
         :param bool allow_no_op:
         """
+        del allow_no_op  # only used in get_out_data_from_opts
         super(SqueezeLayer, self).__init__(**kwargs)
         input_data = self.input_data
         if enforce_batch_dim_axis is not None and input_data.batch_dim_axis != enforce_batch_dim_axis:
@@ -8271,7 +8315,7 @@ class ElemwiseProdLayer(_ConcatInputLayer):
     def __init__(self, axes, size=None, **kwargs):
         """
         :param str|list[str] axes: e.g. "spatial", but all those axes must be of fixed dimension
-        :param tuple[int] size: for double-checking, you can explicitly provide the size
+        :param tuple[int]|None size: for double-checking, you can explicitly provide the size
         """
         super(ElemwiseProdLayer, self).__init__(**kwargs)
         axes = self.input_data.get_axes_from_description(axes)
@@ -8814,7 +8858,7 @@ class DotLayer(LayerBase):
         # For A, if transpose_a, we must reorder the axes as: a_rem_axes + a_reduce_axes + a_var_axes.
         # For B, if not transpose_b, we must reorder the axes as: b_rem_axes + b_reduce_axes + b_var_axes.
         # For B, if transpose_b, we must reorder the axes as: b_rem_axes + b_var_axes + b_reduce_axes.
-        # For matmul, all the first dims must match (batch dim etc), and for the remaining 2 dims,
+        # For matmul, all the first dims must match (batch dim etc.), and for the remaining 2 dims,
         # we get (I, J) * (J, K) -> (I, K).
         # So we reshape such that we collapse all reduce-axes and var-axes into each a single axis.
         a_shape = get_shape(a_out.placeholder)
@@ -9794,6 +9838,7 @@ class CombineLayer(LayerBase):
         vs.update({"source": source, "self": self})
         vs.update(eval_locals or {})
         if callable(eval_str):
+            # noinspection PyCallingNonCallable
             x = eval_str(**vs)
         else:
             x = eval(eval_str, vs)
@@ -10271,13 +10316,14 @@ class CondLayer(LayerBase):
         :param str key: e.g. "true_layer"
         :param returnn.tf.network.TFNetwork network:
         :param (str)->LayerBase get_layer:
-        :return: will replace inplace in ``d``; returns the sublayer class and desc
-        :rtype: (type[LayerBase], dict[str])
+        :return: will replace inplace in ``d``; the sublayer class and desc,
+            or None when the entry was a layer NAME (resolved in ``d``, nothing to report)
+        :rtype: (type[LayerBase], dict[str])|None
         """
         layer_desc = d[key]
         if isinstance(layer_desc, str):
             d[key] = get_layer(layer_desc)
-            return
+            return None  # replaced in d, no sublayer class/desc to report
         assert isinstance(layer_desc, dict)
         name = d["_name"]
         extra_net = network.make_extra_net(
@@ -10488,6 +10534,7 @@ class TopKLayer(LayerBase):
         self._sub_layers = {}
         for key, (v, a) in sub_outputs.items():
             sub_out_data = self.output.copy_template(name="%s/%s" % (self.name, key))
+            sub_out_data.feature_dim = None
             sub_out_data.dtype = "int32"
             sub_out_data.sparse_dim = a
             sub_out_data.placeholder = v
@@ -10527,6 +10574,7 @@ class TopKLayer(LayerBase):
         axis = [in_data.get_dim_tag_from_description(a) for a in axis]
         out_dims = [dim for dim in in_data.dim_tags if dim not in axis] + [k_dim]
         out_data = in_data.copy_template(name=name).copy_template_new_dim_tags(out_dims)
+        out_data.feature_dim = None
         if for_indices is not None:
             assert 0 <= for_indices < len(axis)
             out_data.dtype = "int32"
@@ -10836,6 +10884,7 @@ class SubnetworkLayer(LayerBase):
         load_on_init = self.load_on_init
         if load_on_init:
             if callable(load_on_init):
+                # noinspection PyCallingNonCallable
                 load_on_init = load_on_init()
             print("loading initial weights from", load_on_init, file=log.v2)
             self_prefix = self.get_absolute_name_scope_prefix()  # with "/" at end
@@ -11146,7 +11195,7 @@ class AccumulateMeanLayer(ReduceLayer):
         """
         :param float exp_average: momentum in exponential average calculation
         :param int|list[str]|str axes: the axes to reduce. must contain batch and time.
-        :param float initial_value: how to initialize the variable which accumulates the mean
+        :param float|None initial_value: how to initialize the variable which accumulates the mean
         :param bool is_prob_distribution: if provided, better default for initial_value
         """
         super(AccumulateMeanLayer, self).__init__(mode="mean", keep_dims=False, axes=axes, **kwargs)
@@ -11560,13 +11609,23 @@ class CtcLossLayer(LayerBase):
     layer_class = "ctc_loss"
     recurrent = True  # order matters
 
-    def __init__(self, logits, targets, logits_normalized=False, blank_index=-1, max_approx=False, **kwargs):
+    def __init__(
+        self,
+        logits,
+        targets,
+        logits_normalized=False,
+        blank_index=-1,
+        max_approx=False,
+        label_loop: bool = True,
+        **kwargs,
+    ):
         """
         :param LayerBase logits: (before softmax). shape [B,T,D]
         :param LayerBase targets: sparse. shape [B,T]
         :param bool logits_normalized: whether the logits are already normalized (e.g. via log-softmax)
         :param int blank_index: vocab index of the blank symbol
         :param bool max_approx: if True, use max instead of sum over alignments (max approx, Viterbi)
+        :param label_loop:
         """
         from returnn.tf.native_op import ctc_loss, ctc_loss_viterbi
 
@@ -11589,6 +11648,7 @@ class CtcLossLayer(LayerBase):
             targets=targets.output.copy_as_batch_major().placeholder,
             targets_seq_lens=targets.output.get_sequence_lengths(),
             blank_index=blank_index,
+            label_loop=label_loop,
         )
 
     def get_dep_layers(self):
@@ -11642,7 +11702,7 @@ class FastBaumWelchLayer(_ConcatInputLayer):
         """
         :param str align_target: e.g. "sprint", "ctc" or "staircase"
         :param str|None align_target_key: e.g. "classes", used for e.g. align_target "ctc"
-        :param dict[str] ctc_opts: used for align_target "ctc"
+        :param dict[str]|None ctc_opts: used for align_target "ctc"
         :param dict[str] sprint_opts: used for Sprint (RASR) for align_target "sprint"
         :param str input_type: "log_prob" or "prob"
         :param float tdp_scale:
@@ -11853,7 +11913,7 @@ class TikhonovRegularizationLayer(CopyLayer):
 
 class FramewiseStatisticsLayer(LayerBase):
     """
-    Collects various statistics (such as FER, etc) on the sources.
+    Collects various statistics (such as FER, etc.) on the sources.
     The tensors will get stored in self.stats which will be collected by TFEngine.
     """
 
@@ -12496,7 +12556,6 @@ class GenericCELoss(Loss):
     def __init__(self, **kwargs):
         super(GenericCELoss, self).__init__(**kwargs)
 
-        # noinspection PyUnusedLocal
         def loss(z, y, grad_f, target):
             """
             :param tf.Tensor z:
@@ -12505,6 +12564,8 @@ class GenericCELoss(Loss):
             :param tf.Tensor target:
             :rtype: tf.Tensor
             """
+            # the GenericCELoss signature; this branch needs only the target and weights
+            del z, grad_f  # fixed GenericCELoss signature
             nlog_scores = -tf_compat.v1.log(tf.clip_by_value(y, 1.0e-20, 1.0e20))  # (time,dim)
             # target is shape (time,) -> index.
             target_exp = tf.stack([tf.range(tf.shape(target)[0], dtype=tf.int32), target], axis=1)  # (time,2)
@@ -12512,13 +12573,14 @@ class GenericCELoss(Loss):
             gathered = tf.gather_nd(nlog_scores, target_exp)  # (time,)
             return self.reduce_func(gathered)
 
-        # noinspection PyUnusedLocal
         def loss_grad(op, grad):
             """
             :param tf.Operation op:
             :param tf.Tensor grad: grad for loss
             :return: grad for op.outputs
             """
+            # the GenericCELoss grad signature; the error signal is computed from the forward values
+            del grad  # fixed GenericCELoss signature
             z, y, grad_f, target = op.inputs
             num_classes = tf.shape(z)[-1]
             bw = tf.one_hot(target, depth=num_classes)
@@ -13147,7 +13209,7 @@ class DeepClusteringLoss(Loss):
         with tf.name_scope("loss_deep_clustering"):
             # iterate through all chunks and compute affinity cost function for every chunk separately
 
-            # noinspection PyUnusedLocal,PyShadowingNames
+            # noinspection PyShadowingNames
             def iterate_sequences(s, start, c):
                 """
                 :param tf.Tensor s:
@@ -13155,6 +13217,8 @@ class DeepClusteringLoss(Loss):
                 :param c:
                 :rtype: tf.Tensor
                 """
+                # the loop signature is fixed by tf.while_loop
+                del start, c  # fixed tf.while_loop signature
                 return tf.less(s, tf.shape(self.output_seq_lens)[0])
 
             # noinspection PyShadowingNames
@@ -13662,7 +13726,7 @@ class SamplingBasedLoss(Loss):
             If not specified (None), the value is determined based on the choosen objective.
             For sampled softmax this should be set to True; for NCE the default is False.
             Set this to True in case of NCE training and the objective is equal to sampled logistic loss.
-        :param dict[str] sampler_args: additional arguments for the candidate sampler.
+        :param dict[str]|None sampler_args: additional arguments for the candidate sampler.
             This is most relevant to the fixed_unigram sampler.
             See https://www.tensorflow.org/api_docs/python/tf/random/fixed_unigram_candidate_sampler for details.
         :param float nce_log_norm_term: The logarithm of the constant normalization term for NCE.
@@ -13922,8 +13986,7 @@ class TripletLoss(Loss):
                 aembeds_anchor = sources[0]
                 aembeds_pair = sources[1]
                 aembeds_diff = sources[2]
-                # noinspection PyUnusedLocal
-                cembeds_anchor = sources[3]
+                _cembeds_anchor = sources[3]  # unused, kept to document the source order
                 cembeds_pair = sources[4]
                 cembeds_diff = sources[5]
                 embeds_1 = tf.concat(values=[aembeds_anchor, cembeds_pair, cembeds_diff], axis=0)

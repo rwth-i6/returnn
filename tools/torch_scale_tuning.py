@@ -461,7 +461,7 @@ def _load_text_dict_hyps_file(
         txt = gzip.GzipFile(filename, "rb").read()
     else:
         txt = open(filename, "rb").read()
-    data: Dict[str, List[Tuple[float, str]]] = eval(txt)
+    data: Dict[str, List[Tuple[float, str]]] = eval(txt, {"inf": float("inf"), "nan": float("nan")})
     assert isinstance(data, dict)
     res_scores = {}
     res_hyps = {}

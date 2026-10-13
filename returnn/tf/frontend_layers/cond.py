@@ -5,7 +5,7 @@ https://github.com/rwth-i6/returnn_common/issues/24
 """
 
 from __future__ import annotations
-from typing import Any, List, TypeVar, Generic, Callable
+from typing import Any, List, Optional, TypeVar, Generic, Callable
 from tensorflow.python.util import nest
 from returnn.tensor import Tensor, ControlFlowContext
 import returnn.frontend as rf
@@ -136,7 +136,7 @@ class Cond(Generic[T]):
         if isinstance(true_value, Tensor):
             true_value = _utils.copy(true_value, name=self.true_branch_name_ctx.get_child("output"))
         else:
-            values_flat = nest.flatten(true_value)  # type: List[Tensor]
+            values_flat: List[Optional[Tensor]] = nest.flatten(true_value)
             assert values_flat
             for i, v in enumerate(values_flat):
                 if v is None:

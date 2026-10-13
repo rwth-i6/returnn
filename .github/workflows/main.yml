@@ -14,76 +14,60 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
+        # The inspection should see the versions we develop against, so this job runs modern packages,
+        # unlike the test jobs, which deliberately also cover old ones.
+        # ESPnet is the odd one out: it pins numpy<1.24, which no modern TF or JAX accepts,
+        # so it is installed without its dependencies here (--espnet-no-deps).
         python-version:
-          - "3.10"
+          - "3.12"
         torch-version:
           # Some code uses newer features.
-          - 2.0.0
+          - 2.8.0
         tf-version:
-          - 2.10.0
+          - 2.21.0
+        jax-version:
+          - 0.11.0
 
     steps:
-    - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-    - uses: actions/setup-python@v5
-      with:
-        python-version: ${{ matrix.python-version }}
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
 
-    - name: Cache dependencies
-      uses: actions/cache@v4
-      with:
-        path: |
-          ~/.cache
-          ~/.local
-        key: cache-${{ runner.os }}-py${{ matrix.python-version }}-torch${{ matrix.torch-version }}-tf${{ matrix.tf-version }}
-        restore-keys: |
-          cache-${{ runner.os }}-py${{ matrix.python-version }}-
+      - name: Cache dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache
+            ~/.local
+          key: cache-${{ runner.os }}-py${{ matrix.python-version }}-torch${{ matrix.torch-version }}-tf${{ matrix.tf-version }}-jax${{ matrix.jax-version }}
+          restore-keys: |
+            cache-${{ runner.os }}-py${{ matrix.python-version }}-
 
-    - name: Setup dependencies
-      run: |
-        echo "PATH=$PATH:~/.local/bin" >> $GITHUB_ENV
-        echo "Python ${{matrix.python-version}}"
-        echo "pip: $(type pip)"
+      - name: Setup dependencies
+        run: |
+          echo "PATH=$PATH:~/.local/bin" >> $GITHUB_ENV
+          echo "Python ${{matrix.python-version}}"
+          python .github/workflows/_setup_deps.py \
+            --python ${{matrix.python-version}} \
+            --torch ${{ matrix.torch-version }} \
+            --tf ${{ matrix.tf-version }} \
+            --jax ${{ matrix.jax-version }} \
+            --espnet 1 \
+            --espnet-no-deps 1 \
+            --hf-datasets 1
 
-        pip install --user --progress-bar=off --upgrade pip setuptools wheel
+      - name: Cache PyCharm
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/JetBrains
+          key: cache-pycharm-${{ runner.os }}-py${{ matrix.python-version }}-torch${{ matrix.torch-version }}-tf${{ matrix.tf-version }}
 
-        pip install --user --progress-bar=off pytest
-
-        pip install --user --progress-bar=off dm-tree h5py
-        pip install --user --progress-bar=off "numpy<2"
-        pip install --user --progress-bar=off scipy  # for some tests
-
-        pip install --user --progress-bar=off --upgrade torch==${{ matrix.torch-version }}
-
-        # Retry several times in case download breaks. https://github.com/pypa/pip/issues/4796
-        for ((i=0; i<3; i++)); do
-          if pip install --user --upgrade --progress-bar=off tensorflow==${{ matrix.tf-version }}; then break; fi
-        done
-
-        # Used in some tests.
-        pip install --user --progress-bar=off transformers
-        pip install --user --progress-bar=off espnet
-
-    - name: Test Python/Numpy/TF versions.
-      run: |
-        echo "Python env: $(type python) $(python --version)"
-        python -c "import numpy; print('NumPy:', numpy.version.full_version)"
-        python -c "import torch; print('PyTorch:', torch.__version__, torch.__file__)"
-        # torch.__version__ is for example "1.13.1+cu117"
-        python -c "import torch; assert (torch.__version__ + '+').startswith('${{ matrix.torch-version }}+')"
-        python -c "import tensorflow as tf; print('TensorFlow:', tf.__git_version__, tf.__version__, tf.__file__)"
-        python -c "import tensorflow as tf; assert tf.__version__ == '${{ matrix.tf-version }}'"
-
-    - name: Cache PyCharm
-      uses: actions/cache@v4
-      with:
-        path: |
-          ~/.cache/JetBrains
-        key: cache-pycharm-${{ runner.os }}-py${{ matrix.python-version }}-torch${{ matrix.torch-version }}-tf${{ matrix.tf-version }}
-
-    - name: Run PyCharm inspect
-      run: |
-        tests/pycharm-inspect.py
+      - name: Run PyCharm inspect
+        run: |
+          tests/pycharm-inspect.py --install_py_deps
 
   base-tests:
     runs-on: ubuntu-latest
@@ -109,46 +93,80 @@ jobs:
           - TEST=Util
 
     steps:
-    - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-    - uses: actions/setup-python@v5
-      with:
-        python-version: ${{ matrix.python-version }}
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
 
-    - name: Cache dependencies
-      uses: actions/cache@v4
-      with:
-        path: |
-          ~/.cache
-          ~/.local
-        key: cache-${{ runner.os }}-py${{ matrix.python-version }}-no-tf
-        restore-keys: |
-          cache-${{ runner.os }}-py${{ matrix.python-version }}-
+      - name: Cache dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache
+            ~/.local
+          key: cache-${{ runner.os }}-py${{ matrix.python-version }}-no-tf
+          restore-keys: |
+            cache-${{ runner.os }}-py${{ matrix.python-version }}-no-tf
 
-    - name: Setup dependencies
-      run: |
-        echo "PATH=$PATH:~/.local/bin" >> $GITHUB_ENV
-        echo "Python ${{matrix.python-version}}"
-        echo "pip: $(type pip)"
+      - name: Setup dependencies
+        run: |
+          echo "PATH=$PATH:~/.local/bin" >> $GITHUB_ENV
+          echo "Python ${{matrix.python-version}}"
 
-        pip install --user --upgrade pip setuptools wheel
+          python .github/workflows/_setup_deps.py \
+            --python ${{matrix.python-version}}
 
-        pip install --user pytest
+      - name: Run test
+        run: |
+          export ${{ matrix.action }}
+          python -m pytest tests/test_$TEST.py
 
-        pip install --user --progress-bar=off -r requirements.txt
+  # Datasets with optional extra dependencies (HF datasets, NeMo Speech), only installed here. Needs newer Python.
+  extra-datasets-test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version:
+          - "3.10"
+        torch-version:
+          - 2.8.0
+        action:
+          - TEST=datasets_huggingface
+          - TEST=Dataset PYTEST_ARGS=-kNemoSpeech
 
-    - name: Test Python/Numpy/TF versions.
-      run: |
-        echo "Python env: $(type python) $(python --version)"
-        python -c "import numpy; print('NumPy:', numpy.version.full_version)"
+    steps:
+      - uses: actions/checkout@v4
 
-        echo "Pytest env:"
-        python -m pytest -V
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
 
-    - name: Run test
-      run: |
-        export ${{ matrix.action }}
-        python -m pytest tests/test_$TEST.py
+      - name: Cache dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache
+            ~/.local
+          key: cache-${{ runner.os }}-py${{ matrix.python-version }}-torch${{ matrix.torch-version }}-extra-datasets
+          restore-keys: |
+            cache-${{ runner.os }}-py${{ matrix.python-version }}-torch${{ matrix.torch-version }}-extra-datasets
+
+      - name: Setup dependencies
+        run: |
+          echo "PATH=$PATH:~/.local/bin" >> $GITHUB_ENV
+          echo "Python ${{matrix.python-version}}"
+          python .github/workflows/_setup_deps.py \
+            --python ${{matrix.python-version}} \
+            --torch ${{ matrix.torch-version }} \
+            --hf-datasets 1 \
+            --nemo-speech 1
+
+      - name: Run test
+        run: |
+          export ${{ matrix.action }}
+          python -m pytest tests/test_$TEST.py $PYTEST_ARGS
 
   tf-tests:
     runs-on: ubuntu-latest
@@ -180,68 +198,35 @@ jobs:
             tf-version: 2.3.0
 
     steps:
-    - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-    - uses: actions/setup-python@v5
-      with:
-        python-version: ${{ matrix.python-version }}
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
 
-    - name: Cache dependencies
-      uses: actions/cache@v4
-      with:
-        path: |
-          ~/.cache
-          ~/.local
-        key: cache-${{ runner.os }}-py${{ matrix.python-version }}-tf${{ matrix.tf-version }}
-        restore-keys: |
-          cache-${{ runner.os }}-py${{ matrix.python-version }}-
+      - name: Cache dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache
+            ~/.local
+          key: cache-${{ runner.os }}-py${{ matrix.python-version }}-tf${{ matrix.tf-version }}
+          restore-keys: |
+            cache-${{ runner.os }}-py${{ matrix.python-version }}-
 
-    - name: Setup dependencies
-      run: |
-        echo "PATH=$PATH:~/.local/bin" >> $GITHUB_ENV
-        echo "Python ${{matrix.python-version}}"
-        echo "pip: $(type pip)"
+      - name: Setup dependencies
+        run: |
+          echo "PATH=$PATH:~/.local/bin" >> $GITHUB_ENV
+          echo "Python ${{matrix.python-version}}"
 
-        pip install --user --progress-bar=off --upgrade pip setuptools wheel
+          python .github/workflows/_setup_deps.py \
+            --python ${{matrix.python-version}} \
+            --tf ${{ matrix.tf-version }}
 
-        pip install --user --progress-bar=off pytest
-
-        pip install --user --progress-bar=off --upgrade dm-tree h5py
-
-        if [[ "${{matrix.tf-version}}" == 2.[0123].* ]]; then
-          # Older TF needs older NumPy version.
-          # https://github.com/rwth-i6/returnn/pull/1160#issuecomment-1284537803
-          pip install --user numpy==1.19.5
-          # Older TF needs also older protobuf version.
-          # https://github.com/rwth-i6/returnn/issues/1209
-          pip install --user "protobuf<=3.20.1"
-        fi
-
-        if [[ "${{matrix.tf-version}}" == 2.10.* ]]; then
-          # TF 2.10 requires gast<=0.4.0,>=0.2.1. But for example, with gast 0.2.2, we get some AutoGraph error:
-          # Cause: module 'gast' has no attribute 'Constant'
-          # Similar like: https://github.com/tensorflow/tensorflow/issues/47802
-          pip install --user --upgrade "gast<=0.4.0"
-        fi
-
-        pip install --user --progress-bar=off -r requirements.txt
-        pip install --user --progress-bar=off --upgrade scipy  # for some tests
-        pip install --user --progress-bar=off --upgrade tensorflow==${{ matrix.tf-version }}
-
-    - name: Test Python/Numpy/TF versions.
-      run: |
-        echo "Python env: $(type python) $(python --version)"
-        python -c "import numpy; print('NumPy:', numpy.version.full_version)"
-        python -c "import tensorflow as tf; print('TensorFlow:', tf.__git_version__, tf.__version__, tf.__file__)"
-        python -c "import tensorflow as tf; assert tf.__version__ == '${{ matrix.tf-version }}'"
-
-        echo "Pytest env:"
-        python -m pytest -V
-
-    - name: Run test
-      run: |
-        export ${{ matrix.action }}
-        python -m pytest tests/test_$TEST.py
+      - name: Run test
+        run: |
+          export ${{ matrix.action }}
+          python -m pytest tests/test_$TEST.py
 
   torch-tests:
     runs-on: ubuntu-latest
@@ -260,57 +245,93 @@ jobs:
           - TEST=torch_frontend
           - TEST=torch_internal_frontend
           - TEST=torch_util
+          - TEST=torch_native_op
           - TEST=threading
+        include:
+          # the torch >= 2.12 code paths (e.g. the inductor_fw_compiler shim) run nowhere else
+          - action: TEST=torch_util
+            python-version: "3.12"
+            torch-version: 2.12.0
 
     steps:
-    - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-    - uses: actions/setup-python@v5
-      with:
-        python-version: ${{ matrix.python-version }}
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
 
-    - name: Cache dependencies
-      uses: actions/cache@v4
-      with:
-        path: |
-          ~/.cache
-          ~/.local
-        key: cache-${{ runner.os }}-py${{ matrix.python-version }}-torch${{ matrix.torch-version }}
-        restore-keys: |
-          cache-${{ runner.os }}-py${{ matrix.python-version }}-
+      - name: Cache dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache
+            ~/.local
+          key: cache-${{ runner.os }}-py${{ matrix.python-version }}-torch${{ matrix.torch-version }}
+          restore-keys: |
+            cache-${{ runner.os }}-py${{ matrix.python-version }}-
 
-    - name: Setup dependencies
-      run: |
-        echo "PATH=$PATH:~/.local/bin" >> $GITHUB_ENV
-        echo "Python ${{matrix.python-version}}"
-        echo "pip: $(type pip)"
+      - name: Setup dependencies
+        run: |
+          echo "PATH=$PATH:~/.local/bin" >> $GITHUB_ENV
+          echo "Python ${{matrix.python-version}}"
 
-        pip install --user --progress-bar=off --upgrade pip setuptools wheel
+          python .github/workflows/_setup_deps.py \
+            --python ${{matrix.python-version}} \
+            --torch ${{ matrix.torch-version }}
 
-        pip install --user --progress-bar=off pytest
+      - name: Run test
+        run: |
+          export ${{ matrix.action }}
+          python -m pytest tests/test_$TEST.py
 
-        pip install --user --progress-bar=off dm-tree h5py
-        pip install --user --progress-bar=off "numpy<2"
-        pip install --user --progress-bar=off scipy  # for some tests
-        pip install --user --progress-bar=off --upgrade torch==${{ matrix.torch-version }}
-        pip install --user --progress-bar=off onnx onnxruntime
-        pip install --user --progress-bar=off lovely_tensors
+  # Own job, not part of rf-tests: JAX needs Python >=3.12 and NumPy >=2.1,
+  # while rf-tests runs Python 3.10 and pins NumPy <2 (1.23.5 with ESPnet).
+  # Torch is installed because the tests compare the JAX backend against it in the same process.
+  rf-jax-tests:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version:
+          - "3.12"
+        torch-version:
+          - 2.7.1
+        jax-version:
+          - 0.11.0
+        action:
+          - TEST=rf_jax
 
-    - name: Test Python/Numpy/PyTorch versions.
-      run: |
-        echo "Python env: $(type python) $(python --version)"
-        python -c "import numpy; print('NumPy:', numpy.version.full_version)"
-        python -c "import torch; print('PyTorch:', torch.__version__, torch.__file__)"
-        # torch.__version__ is for example "1.13.1+cu117"
-        python -c "import torch; assert (torch.__version__ + '+').startswith('${{ matrix.torch-version }}+')"
+    steps:
+      - uses: actions/checkout@v4
 
-        echo "Pytest env:"
-        python -m pytest -V
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
 
-    - name: Run test
-      run: |
-        export ${{ matrix.action }}
-        python -m pytest tests/test_$TEST.py
+      - name: Cache dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache
+            ~/.local
+          key: cache-${{ runner.os }}-py${{ matrix.python-version }}-torch${{ matrix.torch-version }}-jax${{ matrix.jax-version }}
+          restore-keys: |
+            cache-${{ runner.os }}-py${{ matrix.python-version }}-
+
+      - name: Setup dependencies
+        run: |
+          echo "PATH=$PATH:~/.local/bin" >> $GITHUB_ENV
+          echo "Python ${{matrix.python-version}}"
+
+          python .github/workflows/_setup_deps.py \
+            --python ${{matrix.python-version}} \
+            --torch ${{ matrix.torch-version }} \
+            --jax ${{ matrix.jax-version }}
+
+      - name: Run test
+        run: |
+          export ${{ matrix.action }}
+          python -m pytest tests/test_$TEST.py
 
   rf-tests:
     runs-on: ubuntu-latest
@@ -338,101 +359,53 @@ jobs:
           - TEST=rf_loop
           - TEST=rf_math
           - TEST=rf_normalization
+          - TEST=rf_packed
           - TEST=rf_piecewise_linear
           - TEST=rf_rec
           - TEST=rf_reduce
           - TEST=rf_signal
+          - TEST=rf_tf_backend
         include:
           # Some selected tests (but not all) with some other versions.
           - action: TEST=rf_base
             python-version: 3.8
             torch-version: 1.13.1
             tf-version: 2.10.0
+          # rf_packed: the flex fast paths and the traced-replay test need a recent torch
+          - action: TEST=rf_packed
+            python-version: "3.10"
+            torch-version: 2.7.1
+            tf-version: 2.10.0
 
     steps:
-    - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-    - uses: actions/setup-python@v5
-      with:
-        python-version: ${{ matrix.python-version }}
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
 
-    - name: Cache dependencies
-      uses: actions/cache@v4
-      with:
-        path: |
-          ~/.cache
-          ~/.local
-        key: cache-${{ runner.os }}-py${{ matrix.python-version }}-torch${{ matrix.torch-version }}-tf${{ matrix.tf-version }}
-        restore-keys: |
-          cache-${{ runner.os }}-py${{ matrix.python-version }}-
+      - name: Cache dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache
+            ~/.local
+          key: cache-${{ runner.os }}-py${{ matrix.python-version }}-torch${{ matrix.torch-version }}-tf${{ matrix.tf-version }}
+          restore-keys: |
+            cache-${{ runner.os }}-py${{ matrix.python-version }}-
 
-    - name: Setup dependencies
-      run: |
-        echo "PATH=$PATH:~/.local/bin" >> $GITHUB_ENV
-        echo "Python ${{matrix.python-version}}"
-        echo "pip: $(type pip)"
+      - name: Setup dependencies
+        run: |
+          echo "PATH=$PATH:~/.local/bin" >> $GITHUB_ENV
+          echo "Python ${{matrix.python-version}}"
 
-        pip install --user --progress-bar=off --upgrade pip setuptools wheel
+          python .github/workflows/_setup_deps.py \
+            --python ${{matrix.python-version}} \
+            --torch ${{ matrix.torch-version }} \
+            --tf ${{ matrix.tf-version }} \
+            --espnet 1
 
-        pip install --user --progress-bar=off pytest
-
-        pip install --user --progress-bar=off dm-tree h5py
-        pip install --user --progress-bar=off numpy==1.23.5  # for ESPnet, ctc-segmentation, etc
-        pip install --user --progress-bar=off scipy  # for some tests
-
-        pip install --user --progress-bar=off --upgrade torch==${{ matrix.torch-version }}
-        pip install --user --progress-bar=off lovely_tensors
-
-        if [[ "${{matrix.tf-version}}" == 2.10.* ]]; then
-          # TF 2.10 requires gast<=0.4.0,>=0.2.1. But for example, with gast 0.2.2, we get some AutoGraph error:
-          # Cause: module 'gast' has no attribute 'Constant'
-          # Similar like: https://github.com/tensorflow/tensorflow/issues/47802
-          pip install --user --upgrade "gast<=0.4.0"
-        fi
-
-        # Retry several times in case download breaks. https://github.com/pypa/pip/issues/4796
-        for ((i=0; i<3; i++)); do
-          if pip install --user --upgrade --progress-bar=off tensorflow==${{ matrix.tf-version }}; then break; fi
-        done
-
-        # Needed for some tests.
-        # transformers 4.50 requires PyTorch >2.0, so stick to transformers 4.49 for now.
-        # (https://github.com/rwth-i6/returnn/issues/1706)
-        if [[ "${{matrix.python-version}}" == 3.8 ]]; then
-          # Need older version for Python 3.8. Install whatever is available.
-          pip install --user --progress-bar=off transformers
-        else
-          pip install --user --progress-bar=off transformers==4.49.0
-        fi
-        if [[ "${{matrix.python-version}}" == 3.8 ]]; then
-          # https://github.com/rwth-i6/returnn/issues/1729
-          pip install --user --progress-bar=off ctc-segmentation==1.6.6 pyworld==0.3.4
-        fi
-        pip install --user --progress-bar=off espnet
-        # TorchAudio needed by ESPnet.
-        # https://pytorch.org/audio/stable/installation.html#compatibility-matrix
-        if [[ "${{matrix.torch-version}}" == 2.0.0 ]]; then
-          pip install --user --progress-bar=off torchaudio==2.0.1
-        elif [[ "${{matrix.torch-version}}" == 1.13.1 ]]; then
-          pip install --user --progress-bar=off torchaudio==0.13.1
-        else
-          pip install --user --progress-bar=off torchaudio==${{matrix.torch-version}}
-        fi
-
-    - name: Test Python/Numpy/PyTorch versions.
-      run: |
-        echo "Python env: $(type python) $(python --version)"
-        python -c "import numpy; print('NumPy:', numpy.version.full_version)"
-        python -c "import torch; print('PyTorch:', torch.__version__, torch.__file__)"
-        # torch.__version__ is for example "1.13.1+cu117"
-        python -c "import torch; assert (torch.__version__ + '+').startswith('${{ matrix.torch-version }}+')"
-        python -c "import tensorflow as tf; print('TensorFlow:', tf.__git_version__, tf.__version__, tf.__file__)"
-        python -c "import tensorflow as tf; assert tf.__version__ == '${{ matrix.tf-version }}'"
-
-        echo "Pytest env:"
-        python -m pytest -V
-
-    - name: Run test
-      run: |
-        export ${{ matrix.action }}
-        python -m pytest tests/test_$TEST.py
+      - name: Run test
+        run: |
+          export ${{ matrix.action }}
+          python -m pytest tests/test_$TEST.py

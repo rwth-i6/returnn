@@ -33,16 +33,25 @@ class TensorArray:
         self,
         tensor_template: Tensor,
         *,
+        capacity: Optional[int] = None,
         _backend_tensor_array: Optional[Any] = None,
         _backend: Optional[Type[Backend]] = None,
         _enable_delayed_check: bool = False,
     ):
+        """
+        :param tensor_template: shape and dtype of one entry
+        :param capacity: max number of entries, if known.
+            Needed by a backend whose graph loop carries a fixed-size buffer,
+            i.e. JAX, where ``lax.while_loop`` cannot grow the carry.
+            The eager and TF paths grow on demand and ignore it.
+        """
         assert isinstance(tensor_template, Tensor)
         self.tensor_template = tensor_template
+        self.capacity = capacity
         if _backend is None:
             _backend = global_backend
         if _backend_tensor_array is None:
-            _backend_tensor_array = _backend.tensor_array_create()
+            _backend_tensor_array = _backend.tensor_array_create(capacity=capacity)
         self._backend = _backend
         self._backend_tensor_array = _backend_tensor_array  # type is specific by the backend
         self._enable_delayed_check = _enable_delayed_check
@@ -56,6 +65,7 @@ class TensorArray:
         tensor_template = tensor.copy_template().copy_template_excluding_axis(axis_int)
         return TensorArray(
             tensor_template=tensor_template,
+            capacity=axis.dimension,
             _backend_tensor_array=backend.tensor_array_unstack(tensor, axis=axis),
             _backend=backend,
         )
@@ -70,6 +80,7 @@ class TensorArray:
         backend_tensor_array = self._backend.tensor_array_push_back(self._backend_tensor_array, tensor)
         return TensorArray(
             tensor_template=self.tensor_template,
+            capacity=self.capacity,
             _backend_tensor_array=backend_tensor_array,
             _backend=self._backend,
             _enable_delayed_check=self._enable_delayed_check,

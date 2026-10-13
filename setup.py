@@ -74,7 +74,8 @@ def main():
             f.write("long_version = %r\n" % long_version)
         package_data = ["MANIFEST", "_setup_info_generated.py"]
 
-    from distutils.core import setup
+    # Since Python 3.12 distutils is out of the stdlib, so use setuptools directly.
+    from setuptools import setup
 
     setup(
         name="returnn",

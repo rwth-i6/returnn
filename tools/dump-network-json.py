@@ -9,16 +9,18 @@ from __future__ import annotations
 import sys
 import argparse
 import json
-import typing
+from typing import Optional
 
 import _setup_returnn_env  # noqa
+
 import returnn.__main__ as rnn
 from returnn.log import log
+from returnn.config import Config
 from returnn.pretrain import pretrain_from_config
 from returnn.config import network_json_from_config
 
 
-config = None  # type: typing.Optional["returnn.config.Config"]
+config: Optional[Config] = None
 
 
 def init(config_filename, command_line_options):

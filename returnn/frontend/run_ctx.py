@@ -293,7 +293,7 @@ class RunCtx:
         This has the effect that RETURNN will in any case construct the corresponding layer.
         Also see :func:`mark_as_default_output`.
 
-        This is intended mostly for forwarding, or exporting the model (TF graph, TFLite, ONNX, etc).
+        This is intended mostly for forwarding, or exporting the model (TF graph, TFLite, ONNX, etc.).
         You must specify a shape to have the output shape (order of dims) well-defined
         (if not specified, we check if some defaults are possible, like BTF, or BF).
 
@@ -410,7 +410,7 @@ class RunCtx:
                 f"check_outputs_complete: expected outputs {self.expected_outputs} do not match"
                 f" actual outputs {self.outputs}"
             )
-            # We don't need to check the dims, dtype, etc, as this is already done in mark_as_output.
+            # We don't need to check the dims, dtype, etc., as this is already done in mark_as_output.
 
     def total_loss(self) -> Union[Tensor, float]:
         """
@@ -452,6 +452,7 @@ class Loss:
 
     _summed_loss_cached: Optional[Tensor] = None
     _mean_loss_cached: Optional[Tensor] = None
+    _inv_norm_factor_cached: Optional[Union[int, Tensor]] = None
 
     def get_summed_loss(self) -> Tensor:
         """
@@ -485,13 +486,20 @@ class Loss:
 
     def get_inv_norm_factor(self) -> Union[int, Tensor]:
         """
-        :return: inverse norm factor (scalar)
+        :return: inverse norm factor (scalar), cached like the summed loss,
+            so it stays the one computed while the loss dims had their sizes of this step
         """
+        if self._inv_norm_factor_cached is not None:
+            return self._inv_norm_factor_cached
         if self.custom_inv_norm_factor is not None:
             if self.custom_inv_norm_factor.dims:
-                return rf.reduce_sum(self.custom_inv_norm_factor, axis=self.custom_inv_norm_factor.dims)
-            return self.custom_inv_norm_factor
-        return self.loss.num_elements()
+                inv_norm = rf.reduce_sum(self.custom_inv_norm_factor, axis=self.custom_inv_norm_factor.dims)
+            else:
+                inv_norm = self.custom_inv_norm_factor
+        else:
+            inv_norm = rf.num_elements_of_shape(self.loss.dims, device=self.loss.device)
+        self._inv_norm_factor_cached = inv_norm
+        return inv_norm
 
     def get_scaled_reduced_loss(self) -> Tensor:
         """

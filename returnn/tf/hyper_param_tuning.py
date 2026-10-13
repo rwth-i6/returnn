@@ -25,6 +25,7 @@ from __future__ import annotations
 import sys
 import time
 import typing
+from typing import TypeVar
 import numpy
 import returnn.tf.compat as tf_compat
 from returnn.config import Config
@@ -33,6 +34,8 @@ from returnn.datasets import Dataset
 from returnn.datasets.generating import StaticDataset
 from returnn.tf.engine import Engine, Runner, CancelTrainingException
 from returnn.util.basic import CollectionReadCheckCovered, hms_fraction, guess_requested_max_num_threads
+
+T = TypeVar("T")
 
 
 Eps = 1e-16
@@ -74,7 +77,7 @@ class HyperParam:
         if classes is not None:
             assert isinstance(classes, (list, tuple)), "should be with a defined order"
             assert len(classes) > 0
-        self.dtype = dtype
+        self.dtype: typing.Optional[typing.Type[typing.Union[float, int, bool]]] = dtype
         self.bounds = bounds
         self.classes = classes
         self.log_space = log
@@ -355,8 +358,8 @@ class Optimization:
 
     def _find_hyper_params(self, base=None, visited=None):
         """
-        :param _AttrChain base:
-        :param set[int] visited: set of ids
+        :param _AttrChain|None base:
+        :param set[int]|None visited: set of ids
         """
         from inspect import ismodule
 
@@ -694,6 +697,7 @@ class _IndividualTrainer:
             file=self.optim.log,
         )
         self.individual.cost = cost
+        return cost
 
 
 class _AttribOrKey:

@@ -779,7 +779,9 @@ def test_RecLayer_get_cudnn_params_size():
 @unittest.skipIf(not is_gpu_available(), "no gpu on this system")
 def test_cudnn_save_restore():
     from pprint import pprint
-    import tempfile, shutil, os
+    import tempfile
+    import shutil
+    import os
     from tensorflow.python.training.saver import BaseSaverBuilder
 
     model_tmp_dir = tempfile.mkdtemp("tmp-checkpoint")

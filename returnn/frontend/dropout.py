@@ -50,7 +50,7 @@ def dropout(
         raise ValueError(f"dropout axis {axis} not in source {source}")
 
     if isinstance(keep_prob, (float, int)) and not 0 < keep_prob <= 1:
-        raise ValueError("keep_prob must be a scalar tensor or a float in the range (0, 1], got %g" % keep_prob)
+        raise ValueError(f"keep_prob must be a scalar tensor or a float in the range (0, 1], got {keep_prob}")
 
     # Do nothing if we know keep_prob == 1
     if isinstance(keep_prob, (float, int)) and keep_prob == 1:
@@ -87,7 +87,9 @@ def _dropout(
     :param bool apply_correction_factor:
     """
     # uniform [keep_prob, 1.0 + keep_prob)
-    random_tensor = keep_prob + rf.random_uniform(dims=noise_dims, seed=seed, dtype=x.dtype, minval=0.0, maxval=1.0)
+    random_tensor = keep_prob + rf.random_uniform(
+        dims=noise_dims, seed=seed, dtype=x.dtype, device=x.device, minval=0.0, maxval=1.0
+    )
     # 0. if [keep_prob, 1.0) and 1. if [1.0, 1.0 + keep_prob)
     binary_tensor = rf.floor(random_tensor)
     if apply_correction_factor:

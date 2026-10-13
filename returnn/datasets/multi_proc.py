@@ -3,6 +3,7 @@ Multi-processing dataset
 """
 
 from __future__ import annotations
+from collections import deque
 from typing import Optional, Any, Dict, List
 import sys
 import gc
@@ -41,7 +42,7 @@ class MultiProcDataset(CachedDataset2):
         """
         :param dataset: the dataset to use
         :param num_workers: number of workers to use
-        :param buffer_size: buffer size for each worker, amount of seqs to prefetch
+        :param buffer_size: buffer size for each worker, number of seqs to prefetch
         :param sharding_method: which method to use for sharding the data across the worker procs.
             The default is ``seq_order``, which fetches the full list of seq indices,
             and then distributes shards of that to the other workers.
@@ -94,10 +95,6 @@ class MultiProcDataset(CachedDataset2):
             self._lazy_init()
         super().initialize()
 
-    def supports_sharding(self):
-        """this dataset supports sharding on the ``dedicated`` sharding method"""
-        return self._sharding_method == "dedicated"
-
     @property
     def _meta_info_cache(self):
         if not self.num_outputs:
@@ -148,11 +145,7 @@ class MultiProcDataset(CachedDataset2):
                     self._sharding_method,
                 )
             elif self._sharding_method == "dedicated":
-                sub_dataset = {
-                    **self.dataset,
-                    "num_shards": self.num_workers * self.num_shards,
-                    "shard_index": (self.shard_index * self.num_workers) + i,
-                }
+                sub_dataset = {**self.dataset, "_num_shards": self.num_workers, "_shard_index": i}
                 args = (
                     i,
                     sub_dataset,
@@ -242,7 +235,7 @@ class MultiProcDataset(CachedDataset2):
         dataset: Optional[Dataset] = None
 
         got_init_seq_order = False
-        cache = []  # type: List[DatasetSeq]
+        cache: deque[DatasetSeq] = deque()
         next_seq_idx = 0
 
         # noinspection PyShadowingNames
@@ -307,7 +300,7 @@ class MultiProcDataset(CachedDataset2):
                 elif msg == "get_data_seq":
                     seq_idx = kwargs["seq_idx"]
                     while cache and cache[0].seq_idx < seq_idx:
-                        cache.pop(0)
+                        cache.popleft()
                     res = _get(seq_idx)
                     parent_conn.send(("data_seq", res))
                 elif msg == "init":
@@ -380,11 +373,11 @@ class MultiProcDataset(CachedDataset2):
                         raise ValueError(f"{MultiProcDataset.__name__}: unknown sharding_method: {sharding_method}")
                     got_init_seq_order = True
                     next_seq_idx = 0
-                    cache[:] = []
+                    cache.clear()
                 elif msg == "finish_epoch":
                     got_init_seq_order = False
                     next_seq_idx = 0
-                    cache[:] = []
+                    cache.clear()
                     if dataset:
                         dataset.finish_epoch(**kwargs)
                     if kwargs["free_resources"]:

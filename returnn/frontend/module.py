@@ -274,10 +274,17 @@ class Functional(Module):
     (This is often not necessary, but sometimes useful.)
     """
 
-    def __init__(self, func):
+    def __init__(self, func, *, attribs: Optional[Dict[str, Any]] = None):
+        """
+        :param func: callable. you might want to use functools.partial if you want to fix some arguments.
+        :param attribs: optional dict of attributes to set on this module. e.g. ``out_dim``.
+        """
         super().__init__()
         assert callable(func)
         self.func = func
+        if attribs:
+            for k, v in attribs.items():
+                setattr(self, k, v)
 
     def __repr__(self):
         return f"{self.__class__.__name__}({self.func.__qualname__})"

@@ -16,7 +16,6 @@
 
 from __future__ import annotations
 
-from copy import deepcopy
 from functools import partial
 from six import iteritems
 from six import string_types

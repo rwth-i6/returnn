@@ -134,6 +134,7 @@ class _TraceOps(TorchDispatchMode):
         self.stop_reporting_after_first_inf_nan = stop_reporting_after_first_inf_nan
 
     def __torch_dispatch__(self, func, types, args=(), kwargs=None):
+        del types  # required by __torch_dispatch__
         if kwargs is None:
             kwargs = {}
         if not self.enabled or func.name() in _TraceFuncNameBlacklist:

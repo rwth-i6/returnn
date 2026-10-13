@@ -65,6 +65,7 @@ __all__ = [
     "random_normal",
     "random_truncated_normal",
     "random_choice_without_replacement",
+    "random_choice_with_replacement",
 ]
 
 
@@ -243,8 +244,8 @@ def random_uniform(
     device: Optional[str] = None,
     sparse_dim: Optional[Dim] = None,
     feature_dim: Optional[Dim] = None,
-    minval: Union[int, float, Tensor] = 0,
-    maxval: Union[int, float, Tensor] = 1,
+    minval: Optional[Union[int, float, Tensor]] = None,
+    maxval: Optional[Union[int, float, Tensor]] = None,
     seed: Optional[Union[int, Sequence[int], numpy.ndarray]] = None,
     algorithm: Optional[str] = None,
     explicit_state: Optional[Tensor] = None,
@@ -254,8 +255,20 @@ def random_uniform(
 ):
     """
     See :func:`random`. :func:`random` with ``distribution="uniform"``.
-    ``maxval`` is exclusive.
+    ``minval`` is inclusive, default 0.
+    ``maxval`` is exclusive,
+    default ``sparse_dim.dimension`` if ``sparse_dim`` is given and ``dtype`` is an integer type
+    (i.e. uniformly over all indices of ``sparse_dim``), otherwise 1.
     """
+    if dtype is None:
+        dtype = rf.get_default_array_index_dtype() if sparse_dim else rf.get_default_float_dtype()
+    if minval is None:
+        minval = 0
+    if maxval is None:
+        if sparse_dim is not None and dtype.startswith(("int", "uint")):
+            maxval = sparse_dim.dimension if sparse_dim.dimension is not None else sparse_dim.get_dim_value_tensor()
+        else:
+            maxval = 1
     return random(
         dims=dims,
         dtype=dtype,
@@ -379,3 +392,16 @@ def random_choice_without_replacement(
     scores = log_probs + scores_random_sample
     _, indices, _ = rf.top_k(scores, k_dim=num_samples_dim, axis=axis)
     return indices
+
+
+def random_choice_with_replacement(dims: Sequence[Dim], *, probs: Tensor, axis: Dim) -> Tensor:
+    """
+    Randomly sample with replacement.
+
+    :param dims: {common_dims..., new_dims...}. Defines how many samples to draw. Defines the output shape.
+    :param probs: {common_dims..., axis}
+    :param axis: feature axis, where to sample from
+    :return: random indices shape dims -> axis.
+    """
+    # noinspection PyProtectedMember
+    return probs._raw_backend.random_choice_with_replacement(dims=dims, probs=probs, axis=axis)

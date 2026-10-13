@@ -7,13 +7,14 @@ import ast
 import logging
 import os
 import socket
+from datetime import timedelta
 from typing import Optional, Any, Dict
 
 import torch
 from torch.nn.parallel import DistributedDataParallel
 
 from returnn.config import Config
-from returnn.util.basic import CollectionReadCheckCovered
+from returnn.util.basic import BehaviorVersion, CollectionReadCheckCovered
 
 _logger = logging.getLogger("returnn.torch.distributed")
 
@@ -39,10 +40,13 @@ class DistributedContext:
         else:
             import torch.distributed as dist
 
-            # when no backend is specified, both gloo and nccl backends will be created
-            # the gloo backend will be used for collectives with CPU tensors and
-            # the nccl backend will be used for collectives with CUDA tensors
-            dist.init_process_group(backend=self._opts.get("backend", None))
+            # When no backend is specified, we set gloo for CPU tensors and nccl for CUDA tensors as backend.
+            # torch 2.6.0 and onwards require explicitly setting the backends.
+            # See https://github.com/rwth-i6/returnn/issues/1724 for discussion.
+            dist.init_process_group(
+                backend=self._opts.get("backend", "cpu:gloo,cuda:nccl"),
+                timeout=timedelta(seconds=self._opts.get("timeout_sec", 1800)),
+            )
             self._rank = dist.get_rank()
             self._size = dist.get_world_size()
             os.environ[env_var_name] = repr({"rank": self._rank, "size": self._size})
@@ -65,8 +69,14 @@ class DistributedContext:
             _logger.info(f"reduce_type param: param_sync_step {self._param_sync_step}")
         elif self._reduce_type == "grad":
             _logger.info("reduce_type grad")
+        elif self._reduce_type == "grad_explicit":
+            _logger.info("reduce_type grad_explicit")
         else:
             raise ValueError(f"invalid reduce_type {self._reduce_type!r}")
+
+        self._sync_complete_frac: Optional[bool] = self._opts.get("sync_complete_frac", None)
+        if self._sync_complete_frac is None:
+            self._sync_complete_frac = BehaviorVersion.get() >= 33
 
         self._check_no_unknown_opts()
 
@@ -78,6 +88,8 @@ class DistributedContext:
         # This function here is called at the end in __init__,
         # and not all opts are used yet, so read them now,
         # such that the check in the end works.
+        self._opts.get("backend")
+        self._opts.get("timeout_sec")
         if self._reduce_type == "grad":
             self._opts.get("class")
             self._opts.get("options")
@@ -113,25 +125,65 @@ class DistributedContext:
         :param module: original module
         :return: potentially wrapped module
         """
-        if self._reduce_type == "param":
+        if self._reduce_type in ("param", "grad_explicit"):
             return None
         assert self._reduce_type == "grad"
         cls = self._opts.get("class", DistributedDataParallel)
         if cls is not DistributedDataParallel:
             _logger.warning(f"Using custom class {cls} instead of DistributedDataParallel, might be unsupported.")
         kwargs = self._opts.get("options", {})
+        device_ids = [self.local_rank()]
+        param = next(module.parameters(), None)
+        if param is not None and param.device.type == "cpu":
+            device_ids = None  # DistributedDataParallel takes no device ids for a CPU module (e.g. gloo)
         return cls(
             module=module,
-            device_ids=[self.local_rank()],
+            device_ids=device_ids,
             **kwargs,
         )
+
+    def reduce_type(self) -> str:
+        """reduce type"""
+        return self._reduce_type
+
+    def maybe_reduce_grads(self, *, module: torch.nn.Module):
+        """
+        Average the grads over all ranks, for reduce_type "grad_explicit". No-op otherwise.
+
+        DistributedDataParallel does this via autograd hooks during backward.
+        A compiled or captured step returns the grads instead, so those hooks never fire.
+        Call this once the grads are complete, before the optimizer step.
+
+        :param module: to take the params (and their grads) from
+        """
+        if self._reduce_type != "grad_explicit":
+            return
+        grads = [p.grad for p in module.parameters() if p.grad is not None]
+        if not grads:
+            return
+        # One flat buffer: thousands of small allreduces would be latency-bound.
+        # noinspection protected-member
+        flat = torch._utils._flatten_dense_tensors(grads)
+        torch.distributed.all_reduce(flat, op=torch.distributed.ReduceOp.SUM)
+        flat /= self._size
+        # noinspection protected-member
+        for grad, reduced in zip(grads, torch._utils._unflatten_dense_tensors(flat, grads)):
+            grad.copy_(reduced)
+
+    def sync_complete_frac(self) -> bool:
+        """
+        :return: whether the train loop replaces the rank-local ``complete_frac`` by its mean over the ranks
+            in each step where it syncs (:func:`should_sync_now`),
+            so that ``epoch_continuous`` (e.g. for ``dynamic_learning_rate``) is the same on every rank
+        """
+        return self._sync_complete_frac
 
     def should_sync_now(self, *, epoch_step_idx: int) -> bool:
         """
         :param epoch_step_idx: current step index
         :return: whether to sync the training processes in this step
         """
-        if self._reduce_type == "grad":
+        if self._reduce_type in ("grad", "grad_explicit"):
             return True
         elif self._reduce_type == "param":
             return (epoch_step_idx % self._param_sync_step) == (self._param_sync_step - 1)

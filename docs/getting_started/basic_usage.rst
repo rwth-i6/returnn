@@ -15,14 +15,14 @@ See `here for an example <https://github.com/rwth-i6/returnn/blob/master/demos/d
 and `many more examples from the demos <https://github.com/rwth-i6/returnn/blob/master/demos/>`_.
 The configuration syntax can be in three different forms:
 
-- a simple line-based file with ``key value`` pairs
+- executable Python code (determined by a "``#!``" at the beginning of the file)
 - a JSON file (determined by a "``{``" at the beginning of the file)
-- executable python code (determined by a "``#!``" at the beginning of the file)
+- a simple line-based file with ``key value`` pairs
 
-Config files using the python code syntax are the de-facto standard for all current examples and setups.
-The parameters can be set by defining global variables, but it is possible to use any form of python code such
+Config files using the Python code syntax are the de-facto standard for all current examples and setups.
+The parameters can be set by defining global variables, but it is possible to use any form of Python code such
 as functions and classes to construct your network or fill in global variables based on more complex decisions.
-The python syntax config files may also contain additional code such as layer or dataset definitions.
+The Python syntax config files may also contain additional code such as layer or dataset definitions.
 
 When calling ``rnn.py`` will execute some ``task``, such as ``train``, ``forward`` or ``search``.
 
@@ -31,16 +31,20 @@ After training each epoch on provided `training data, the current parameters wil
 Besides the training data, a development dataset is used to evaluate the current model, and store the evaluation
 results in a separate file.
 
-The task ``forward`` will run a forward pass of the network, given an evaluation dataset, and store the results in
+The task ``forward`` will load a model and a dataset and can do arbitrary computations and then process it and/or store it in arbitrary ways.
+E.g. run a forward pass of the network, given an evaluation dataset, and store the results in
 an HDF file.
+Or calculate and store the log-likelihoods of the target labels.
+Or perform beam search decoding and store the results.
+Or accumulate statistics, e.g. computing the priors of the target labels over the dataset.
 
-The task ``search`` is used to run the network with the beam-search algorithm.
-The results are serialized into text form and stored in a plain text file python dictionary format file.
+The task ``search`` (TF specific) is used to run the network with the beam-search algorithm.
+The results are serialized into text form and stored in a plain text file Python dictionary format file.
 
 The following parameters are very common, and are used in most RETURNN config files:
 
 task
-    The task, such as ``train``, ``forward`` or ``search``.
+    The task, such as ``train`` or ``forward``.
 
 device
     E.g. ``gpu`` or ``cpu``.
@@ -53,7 +57,7 @@ use_tensorflow
     If both backends are installed (TensorFlow and Theano), RETURNN will use Theano as default for legacy reasons.
 
 train / dev / eval
-    The datasets parameters are set to a python dict with a mandatory entry ``class``.
+    The datasets parameters are set to a Python dict with a mandatory entry ``class``.
     The ``class`` attribute needs to be set to the class name of the dataset that should be used.
     An overview over available datasets can be found :ref:`here <dataset_reference>`.
     ``train`` and ``dev`` are used during training, while ``eval`` is usually used to define the dataset for the
@@ -100,13 +104,99 @@ extern_data
     The parameters ``dim`` and ``shape`` should always be used, the other parameters are optional.
     Note that only for ``data`` the parameter ``available_for_inference`` is per default `True``.
 
+model_outputs
+    Like ``extern_data``, but defines the model outputs, for the ``forward`` task.
+
+get_model
+    Function:
+
+    .. code-block:: python
+
+        def get_model(*, epoch: int, step: int, **_other_kwargs) -> torch.nn.Module | rf.Module:
+            ...
+
+            return model
+
+    This must return a model, randomly initialized.
+    Potential loading of existing parameters will be done afterwards.
+
+train_step
+    Function:
+
+    .. code-block:: python
+
+        def train_step(*, model: Model, extern_data: TensorDict, **_kwargs) -> None:
+            import returnn.frontend as rf
+
+            ...
+
+            rf.get_run_ctx().mark_as_loss(...)
+
+    This function is called for every batch, and calculates losses, and registers them via ``rf.get_run_ctx().mark_as_loss(...)``.
+    The RETURNN training loop will then take care of optimization, backpropagation, etc.
+
+forward_step
+    Function:
+
+    .. code-block:: python
+
+        def forward_step(*, model: Model, extern_data: TensorDict, **_kwargs) -> Dict[str, Tensor]:
+            import returnn.frontend as rf
+
+            ...
+
+            rf.get_run_ctx().mark_as_output(...)
+
+    This function is called for every batch during the ``forward`` task.
+    It can calculate arbitrary outputs, and register them via ``rf.get_run_ctx().mark_as_output(...)``.
+
+forward_callback
+    Instance of :class:`ForwardCallbackIface`, or function which returns such an instance:
+
+    .. code-block:: python
+
+        def forward_callback() -> ForwardCallbackIface:
+            from returnn.forward_iface import ForwardCallbackIface
+
+            class MyForwardCallback(ForwardCallbackIface):
+                def init(self, *, model):
+                    """
+                    Run at the beginning.
+                    """
+                    ...
+
+                def process_seq(self, *, seq_tag: str, outputs: TensorDict):
+                    """
+                    Called for each sequence, or entry in the dataset.
+                    This does not have the batch dim anymore.
+                    The values in `outputs` are Numpy arrays.
+
+                    :param seq_tag:
+                    :param outputs:
+                    """
+                    ...
+
+                def finish(self):
+                    """
+                    Run at the end.
+                    """
+                    ...
+
+            return MyForwardCallback()
+
+    This instance will be called during the ``forward`` task.
+    You can do arbitrary processing of the outputs of the network,
+    e.g. storing them in a custom way, such as writing to a HDF file, to a text file, etc.,
+    or accumulating statistics, etc.
 
 network
+    (TF specific. See ``get_model`` for a more general approach.)
     This is a dict which defines the network topology
     for the TF layers backend.
     Note that the TF layers backend is only one possibility to define a network
     and loss function,
-    but you can also use the :ref:`returnn_frontend` or pure PyTorch code directly.
+    but you can also use the :ref:`returnn_frontend` or pure PyTorch code directly
+    (via ``get_model``, ``train_step``, ``forward_step``).
 
     It consists of layer-names as strings, mapped on dicts, which defines the layers.
     The layer dict consists of keys as strings and the value type depends on the key.
@@ -139,7 +229,7 @@ network
     See :ref:`api` or the code itself for documentation of the arguments for each layer class type.
     The ``rec`` layer class in particular supports a wide range of arguments, and several units which can be used,
     e.g. you can choose between different LSTM implementations, or GRU, or standard RNN, etc.
-    See :class:`returnn.tf.layers.rec.RecLayer` or :class:`returnn.theano.layers.rec.RecurrentUnitLayer`.
+    See :class:`returnn.tf.layers.rec.RecLayer`.
     See also :ref:`tf_lstm_benchmark`.
 
     See :ref:`network` for more on how to define the network, and losses.
@@ -148,7 +238,7 @@ batch_size
     The total number of frames. A mini-batch has at least a time-dimension
     and a batch-dimension (or sequence-dimension), and depending on dense or sparse,
     also a feature-dimension.
-    ``batch_size`` is the upper limit for ``time * sequences`` during creation of the mini-batches.
+    ``batch_size`` is the upper limit for ``max(seq_lens) * num_seqs`` during creation of the mini-batches.
 
 max_seqs
     The maximum number of sequences in one mini-batch.
@@ -156,15 +246,15 @@ max_seqs
 learning_rate
     The learning rate during training, e.g. ``0.01``.
 
-adam / nadam / ...
-    E.g. set :code:`adam = True` to enable the Adam optimization during training.
-    See in `Updater.py` for many more.
+optimizer
+    The optimizer to use during training, e.g. ``adam`` or ``sgd``.
+    Can also be a dict to provide additional parameters.
 
 model
     Defines the model file where RETURNN will save all model params after an epoch of training.
     For each epoch, it will suffix the filename by the epoch number.
     When running ``forward`` or ``search``, the specified model will be loaded.
-    The epoch can then be selected with the paramter ``load_epoch``.
+    The epoch can then be selected with the parameter ``load_epoch``.
 
 num_epochs
     The number of epochs to train.

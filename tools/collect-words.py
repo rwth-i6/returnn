@@ -216,17 +216,17 @@ def main(argv):
     if bliss_filename:
 
         def _iter_corpus(cb):
-            return iter_bliss(bliss_filename, callback=cb)
+            iter_bliss(bliss_filename, callback=cb)
 
     elif txt_filename:
 
         def _iter_corpus(cb):
-            return iter_txt(txt_filename, callback=cb)
+            iter_txt(txt_filename, callback=cb)
 
     else:
 
         def _iter_corpus(cb):
-            return iter_dataset(rnn.train_data, callback=cb)
+            iter_dataset(rnn.train_data, callback=cb)
 
     corpus_stats = CollectCorpusStats(args, _iter_corpus)
 

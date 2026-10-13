@@ -13,6 +13,8 @@ from collections import defaultdict
 import multiprocessing
 import psutil  # noqa
 
+from returnn.util.debug import install_subproc_faulthandler
+
 
 def watch_memory():
     """
@@ -33,7 +35,9 @@ _watch_memory_proc = None
 def _watch_memory_main(pid: int):
     if sys.platform == "linux":
         with open("/proc/self/comm", "w") as f:
-            f.write(f"watch memory")
+            f.write("watch memory")
+
+    install_subproc_faulthandler()
 
     def _print(*args):
         print("MEMORY:", *args)
@@ -41,11 +45,17 @@ def _watch_memory_main(pid: int):
 
     cur_proc = psutil.Process(pid)
     procs = []
-    mem_per_pid = {}
+    mem_per_pid: Dict[int, Dict[str, int]] = {}
 
     while True:
         change = False
-        procs_ = [cur_proc] + cur_proc.children(recursive=True)
+        try:
+            procs_ = [cur_proc] + cur_proc.children(recursive=True)
+        except psutil.NoSuchProcess as exc:
+            if exc.pid == pid:
+                _print(f"main process {pid} exited, exiting watcher")
+                return
+            raise
         for p in procs:
             if p not in procs_:
                 _print(f"proc {_format_proc(p)} exited, old:", _format_mem_info(mem_per_pid[p.pid]))

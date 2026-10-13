@@ -3,7 +3,7 @@ Backends for the frontend API
 """
 
 from __future__ import annotations
-from typing import Optional, Any, Union, TypeVar, Generic, Type, Callable, Sequence, Dict, Tuple, List
+from typing import Optional, Any, Union, TypeVar, Generic, Type, Callable, Sequence, Dict, Tuple
 import contextlib
 import numpy
 import returnn.frontend as rf
@@ -29,6 +29,10 @@ class Backend(Generic[T]):
     RawTensorType: Type[T]
     is_tensorflow: bool = False  # whether this framework uses TensorFlow
     is_backend_raw_tensor_dim_tag_independent: bool = True  # whether raw tensors of backend are independent of Dim
+    # For mixed-backend args (see get_backend_from_tensors): higher priority wins.
+    # Wrapper backends (e.g. packed tensors) set this higher,
+    # as they can handle plain tensors of their inner backend, but not vice versa.
+    dispatch_priority: int = 0
 
     def __init__(self):
         raise Exception("do not instantiate this class")
@@ -40,6 +44,11 @@ class Backend(Generic[T]):
         """
         :return: whether we are in eager execution mode
         """
+        raise NotImplementedError
+
+    @staticmethod
+    def assert_(condition: Tensor, message: str, *, stop: bool = True):
+        """assert"""
         raise NotImplementedError
 
     @staticmethod
@@ -65,6 +74,13 @@ class Backend(Generic[T]):
             as they should know the consumers.
         """
         raise NotImplementedError
+
+    @staticmethod
+    def should_pickle_tensor(raw_tensor: T) -> bool:
+        """
+        :return: whether the tensor should be included in a pickle or set to `None`.
+        """
+        return True
 
     @staticmethod
     def cond(pred: Tensor, true_fn: Callable, false_fn: Callable):
@@ -126,6 +142,14 @@ class Backend(Generic[T]):
         :return: dtype object
         """
         raise NotImplementedError
+
+    @staticmethod
+    def raw_to_numpy(raw_tensor: T) -> numpy.ndarray:
+        """
+        :param raw_tensor: raw tensor of this backend. must be eager
+        :return: numpy array with the same content
+        """
+        return numpy.asarray(raw_tensor)
 
     @staticmethod
     def get_ndim_raw(raw_tensor: T) -> int:
@@ -480,6 +504,74 @@ class Backend(Generic[T]):
         raise NotImplementedError
 
     @staticmethod
+    def concat_seq_wise(
+        *sources: Tuple[Tensor, Dim],
+        allow_broadcast: bool = False,
+        out_dim: Dim,
+    ) -> Tensor:
+        """
+        Concat along dims that need masking, i.e. dropping each source's padding
+        so that sequence n of the output holds the sequences n of all sources back to back.
+
+        This generic implementation concatenates the padded rectangles and compacts afterwards.
+        A backend whose storage is already per-sequence can override it and concat directly.
+        """
+        out_non_masked_dim = Dim(sum(d.get_dim_value_tensor() for _, d in sources))
+        # noinspection PyProtectedMember
+        backend = sources[0][0]._raw_backend
+        out = backend.concat(*sources, allow_broadcast=allow_broadcast, out_dim=out_non_masked_dim)
+        masks = []
+        for _, dim in sources:
+            masks.append(
+                dim.get_mask(dim_order=(dim,) + dim.dyn_size_ext.dims, device=out.device)
+                if dim.need_masking()
+                else rf.constant(True, dims=[dim], device=out.device)
+            )
+        mask_concat = backend.concat(
+            *[(mask, dim) for (_, dim), mask in zip(sources, masks)], allow_broadcast=True, out_dim=out_non_masked_dim
+        )
+        out, _ = rf.masked_select(out, mask=mask_concat, dims=[out_non_masked_dim], out_dim=out_dim)
+        return out
+
+    @staticmethod
+    def repeat(
+        values: Tensor,
+        *,
+        in_spatial_dim: Dim,
+        repeats: Tensor,
+        out_spatial_dim: Dim,
+    ) -> Tuple[Tensor, Dim]:
+        """
+        Repeat each element along in_spatial_dim as often as repeats says.
+
+        This generic implementation scans and gathers along in_spatial_dim.
+        A backend whose storage cannot be indexed along that dim brings its own.
+        """
+        idxs = rf.cumsum(repeats, spatial_dim=in_spatial_dim)  # [batch...,in_spatial_dim] -> idx in out_spatial_dim + 1
+        # sum, not gather-of-last-cumsum: a fully empty in_spatial_dim has no last element to gather
+        # (empty text seqs in a CV set crashed here with index -1), and the reduce also masks padding
+        # instead of relying on the caller having zeroed it.
+        new_size = rf.reduce_sum(repeats, axis=in_spatial_dim)  # [batch...]
+        dim_dev = rf.get_default_dim_size_device()
+        if out_spatial_dim.dyn_size_ext is None:
+            out_spatial_dim.dyn_size_ext = rf.copy_to_device(new_size, dim_dev)
+        elif out_spatial_dim.dyn_size_ext.raw_tensor is None:
+            out_spatial_dim.dyn_size_ext.raw_tensor = rf.copy_to_device(new_size, dim_dev).raw_tensor
+        out_spatial_dim_ext = out_spatial_dim + 1
+        rel_idx_counts = rf.scatter(
+            rf.expand_dims(rf.ones((), device=idxs.device, dtype="int32"), dims=idxs.dims),
+            indices=idxs,
+            indices_dim=in_spatial_dim,
+            out_dim=out_spatial_dim_ext,
+        )
+        # rel_idx_counts: [batch...,out_spatial_dim+1] -> count of how many times each index was selected
+        idxs_ = rf.cumsum(rel_idx_counts, spatial_dim=out_spatial_dim_ext)
+        # idxs_: [batch...,out_spatial_dim+1] -> idx in in_spatial_dim
+        idxs_, _ = rf.slice(idxs_, axis=out_spatial_dim_ext, size=out_spatial_dim)  # remove last element
+        # idxs_: [batch...,out_spatial_dim] -> idx in in_spatial_dim (potentially invalid in the padded area)
+        return rf.gather(values, indices=idxs_, axis=in_spatial_dim, clip_to_valid=True), out_spatial_dim
+
+    @staticmethod
     def pad(
         source: Tensor,
         *,
@@ -510,6 +602,23 @@ class Backend(Generic[T]):
         :return: stacked tensor
         """
         raise NotImplementedError
+
+    @staticmethod
+    def unstack(source: Tensor, *, axis: Dim) -> Tuple[Tensor, ...]:
+        """
+        Unstack the source along the given axis.
+        Inverse of :func:`stack`.
+
+        Default: implemented via :func:`gather` with scalar int indices.
+        Backends should override with a more efficient implementation
+        (e.g. :func:`torch.unbind`) whose backward is a simple concatenation
+        rather than scatter_add.
+
+        :param source: tensor containing *axis*
+        :param axis: static axis to unstack
+        :return: tuple of ``axis.dimension`` tensors, each without *axis*
+        """
+        return tuple(rf.gather(source, indices=i, axis=axis) for i in range(axis.dimension))
 
     # Restrict the possible activation function names,
     # to not get unexpected behavior,
@@ -617,9 +726,123 @@ class Backend(Generic[T]):
         targets_spatial_dim: Dim,
         blank_index: int,
         max_approx: bool = False,
+        use_native_op: Optional[bool] = None,
+        label_loop: bool = True,
     ) -> Tensor:
         """
         Calculates the CTC loss.
+        """
+        raise NotImplementedError
+
+    @staticmethod
+    def sdpa_varlen_raw(
+        *,
+        query: T,
+        key: T,
+        value: T,
+        seq_starts_q: T,
+        seq_lens_q: T,
+        seq_starts_kv: T,
+        seq_lens_kv: T,
+        max_len_q: int,
+        max_len_kv: int,
+        is_causal: bool,
+        dropout_p: float,
+        scale: float,
+    ) -> Optional[T]:
+        """
+        Attention over PACKED (total,heads,dim) buffers, on raw tensors, no padded intermediate.
+        Query and key/value may carry different packings (cross-attention).
+
+        Raw rather than :class:`Tensor`:
+        the packed layout has no Tensor representation on this side,
+        so the packed backend does the Tensor-level work around it.
+
+        :param query: (total_q,heads,dim)
+        :param key: (total_kv,heads,dim)
+        :param value: (total_kv,heads,dim)
+        :param seq_starts_q: (batch,) int32, ascending
+        :param seq_lens_q: (batch,) int32
+        :param seq_starts_kv: (batch,) int32, ascending
+        :param seq_lens_kv: (batch,) int32
+        :param max_len_q: static bound on the per-seq query length
+        :param max_len_kv: static bound on the per-seq kv length
+        :param is_causal: only valid when query and key/value share the packing
+        :param dropout_p: attention dropout
+        :param scale: qk scale
+        :return: out, shape (total_q,heads,dim), packed like the query.
+            None if this backend has no such kernel,
+            or has one but not for these inputs (device, dtype),
+            so the caller can pick another path.
+        """
+        return None
+
+    @staticmethod
+    def ctc_loss_packed_raw(
+        *,
+        logits: T,
+        seq_starts: T,
+        logits_seq_lens: T,
+        max_seq_len: int,
+        targets: T,
+        targets_seq_lens: T,
+        label_loop: bool,
+        logits_normalize: bool,
+        blank_index: int,
+        edges_bound: Optional[int],
+    ) -> T:
+        """
+        CTC loss over a PACKED (total,dim) logits buffer, on raw tensors,
+        via the backend's packed fast-baum-welch native op
+        (see :class:`returnn.native_op.FastBaumWelchPackedOp`).
+        Raw rather than :class:`Tensor`:
+        the packed layout has no Tensor representation on this side.
+
+        :param logits: (total_time,dim), float32, unnormalized unless logits_normalize is False
+        :param seq_starts: (batch,), int32, ascending start offset of each seq
+        :param logits_seq_lens: (batch,)
+        :param max_seq_len: max of logits_seq_lens as a host int (the mask width must be static)
+        :param targets: (batch,target_time)
+        :param targets_seq_lens: (batch,)
+        :param label_loop: True = CTC, False = RNA-like
+        :param logits_normalize: apply log_softmax on the logits
+        :param blank_index: vocab index of blank
+        :param edges_bound: packed FSA edge layout, see the packed native op
+        :return: loss, (batch,)
+        """
+        raise NotImplementedError
+
+    @staticmethod
+    def ctc_best_path(
+        *,
+        logits: Tensor,
+        logits_normalized: bool = False,
+        targets: Tensor,
+        input_spatial_dim: Dim,
+        targets_spatial_dim: Dim,
+        blank_index: int,
+        label_loop: bool = True,
+    ) -> Tensor:
+        """
+        Calculates the CTC best path.
+        """
+        raise NotImplementedError
+
+    @staticmethod
+    def have_edit_distance() -> bool:
+        """
+        :return: whether we have an edit_distance implementation
+        """
+        return False
+
+    @staticmethod
+    def edit_distance(a: Tensor, a_spatial_dim: Dim, b: Tensor, b_spatial_dim: Dim) -> Tensor:
+        """
+        :param a: [B,Ta]
+        :param a_spatial_dim: Ta
+        :param b: [B,Tb]
+        :param b_spatial_dim: Tb
+        :return: [B]
         """
         raise NotImplementedError
 
@@ -833,6 +1056,14 @@ class Backend(Generic[T]):
         """compare, default implementation using compare_raw"""
         from . import _utils
 
+        # noinspection PyProtectedMember
+        if isinstance(b, Tensor) and b._raw_backend.dispatch_priority > cls.dispatch_priority:
+            # e.g. plain-first mixed op with a packed b (see _packed_backend):
+            # dispatch on the higher-priority backend, which can handle both
+            # noinspection PyProtectedMember
+            return b._raw_backend.compare(
+                a, kind, b, allow_broadcast_all_sources=allow_broadcast_all_sources, dim_order=dim_order
+            )
         out, a_raw, b_raw = _utils.bin_op_out_template(
             cls,
             a,
@@ -860,6 +1091,14 @@ class Backend(Generic[T]):
         """combine, default implementation using combine_raw"""
         from . import _utils
 
+        # noinspection PyProtectedMember
+        if isinstance(b, Tensor) and b._raw_backend.dispatch_priority > cls.dispatch_priority:
+            # e.g. plain-first mixed op with a packed b (see _packed_backend):
+            # dispatch on the higher-priority backend, which can handle both
+            # noinspection PyProtectedMember
+            return b._raw_backend.combine(
+                a, kind, b, allow_broadcast_all_sources=allow_broadcast_all_sources, dim_order=dim_order
+            )
         out, a_raw, b_raw = _utils.bin_op_out_template(
             cls,
             a,
@@ -1003,6 +1242,22 @@ class Backend(Generic[T]):
         raise NotImplementedError
 
     @staticmethod
+    def slice_update(target: Tensor, value: Tensor, *, axis: Dim, start: Tensor) -> Tensor:
+        """
+        :param target: with ``axis``
+        :param value: without ``axis``, the frame to write
+        :param axis: the axis to write into
+        :param start: index in ``axis``, scalar
+        :return: ``target`` with ``value`` at ``start`` along ``axis``
+
+        Generic fallback: a select over the whole axis.
+        A backend that can update in place should override this, which matters inside a loop,
+        where the target is a carry and the write is otherwise a full buffer copy per step.
+        """
+        idx = rf.range_over_dim(axis, device=target.device)
+        return rf.where(idx == start, value, target)
+
+    @staticmethod
     def lerp(
         start: Tensor, end: Tensor, weight: Union[float, Tensor], *, allow_broadcast_all_sources: bool = False
     ) -> Tensor:
@@ -1114,6 +1369,35 @@ class Backend(Generic[T]):
         """
         raise NotImplementedError
 
+    @staticmethod
+    def reduce_distributed(source: Tensor[T], *, mode: str) -> Tensor[T]:
+        """
+        All-reduce the (already locally reduced) tensor across the distributed worker dimension.
+        See :func:`returnn.frontend.reduce` with ``distributed=True``.
+        A backend must implement this to support distributed reduce.
+
+        :param source:
+        :param mode: reduce mode, as in :func:`reduce`. Only sum-like modes are supported.
+        :return: tensor all-reduced across workers (same shape as source)
+        """
+        raise NotImplementedError
+
+    @staticmethod
+    def num_elements_of_shape(
+        source: Tensor, dims: Sequence[Dim], *, use_mask: bool, device: Optional[str]
+    ) -> Union[int, Tensor]:
+        """
+        See :func:`returnn.frontend.num_elements_of_shape` with ``source``.
+
+        :param source: the tensor which is reduced over dims
+        :param dims: the reduced dims, all in source
+        :param use_mask: as for the reduction
+        :param device: where the count is needed
+        :return: number of elements which a reduction of source over dims covers
+        """
+        del source  # the storage holds the padded layout
+        return rf.num_elements_of_shape(dims, use_mask=use_mask, device=device)
+
     # noinspection PyShadowingBuiltins
     @staticmethod
     def top_k(
@@ -1150,6 +1434,13 @@ class Backend(Generic[T]):
     ) -> Tensor:
         """
         random. See `rf.random` for details.
+        """
+        raise NotImplementedError
+
+    @staticmethod
+    def random_choice_with_replacement(dims: Sequence[Dim], *, probs: Tensor, axis: Dim) -> Tensor:
+        """
+        random choice with replacement. See `rf.random_choice_with_replacement` for details.
         """
         raise NotImplementedError
 
@@ -1314,12 +1605,228 @@ class Backend(Generic[T]):
         """
         raise NotImplementedError
 
-    # For eager-based backends, this is a reasonable default implementation and type.
-    TensorArrayType = List[Tensor]
+    @staticmethod
+    def real_as_complex(x: Tensor, *, pair_dim: Dim) -> Tensor:
+        """
+        Interpret a real tensor with a size-2 pair_dim as a complex tensor.
+
+        pair_dim must have static size 2 (index 0 = real part, index 1 = imaginary part).
+        The dimension is removed from the output and the dtype changes:
+        ``float32`` -> ``complex64``, ``float64`` -> ``complex128``.
+
+        The inverse is :func:`complex_as_real`.
+
+        :param x: input real tensor with *pair_dim* as one of its axes
+        :param pair_dim: the size-2 dimension holding (real, imag) pairs
+        :return: complex tensor with the same dims as *x* minus *pair_dim*
+        """
+        raise NotImplementedError
+
+    @staticmethod
+    def complex_as_real(x: Tensor, *, out_dim: Optional[Dim] = None) -> Tuple[Tensor, Dim]:
+        """
+        Interpret a complex tensor as a real tensor with an appended size-2 dimension.
+
+        Inverse of :func:`real_as_complex`.
+
+        :param x: complex tensor (dtype ``complex64`` or ``complex128``)
+        :param out_dim: optional Dim to use for the new size-2 (real/imag) dimension.
+            If ``None``, a fresh ``Dim(2, name="real_imag")`` is created.
+        :return: (real_tensor, pair_dim). real tensor with *pair_dim* as the last axis
+        """
+        raise NotImplementedError
+
+    @staticmethod
+    def make_complex(real: Tensor, imag: Tensor) -> Tensor:
+        """
+        Construct a complex tensor from separate real and imaginary tensors.
+
+        :param real: real part; dtype must be ``float32`` or ``float64``
+        :param imag: imaginary part; same shape and dtype as *real*
+        :return: complex tensor; dtype ``complex64`` (float32 inputs) or ``complex128`` (float64)
+        """
+        raise NotImplementedError
+
+    @staticmethod
+    def apply_rope(x: Tensor, pos_enc: Tensor, feat_dim: Dim) -> Tensor:
+        """
+        Apply Rotary Position Embedding (RoPE) to *x* using *pos_enc*.
+
+        The default implementation uses the plain RF reference implementation
+        :func:`returnn.frontend.attention._apply_rope_real`, which works for any backend.
+
+        Backends can override this to provide a more efficient implementation.
+        For example the PyTorch backend wraps the same algorithm with
+        ``torch.compile`` to fuse kernel launches, and a custom CUDA kernel could
+        be dropped in as another override.
+
+        :param x: input tensor [..., feat_dim]; any dtype
+        :param pos_enc: positional encoding [..., feat_dim];
+            first half contains sin values, second half cos values
+        :param feat_dim: the feature dimension RoPE is applied along
+        :return: tensor with the same dims and dtype as *x*
+        """
+        # noinspection PyProtectedMember
+        from returnn.frontend.attention import _apply_rope_real
+
+        return _apply_rope_real(x, pos_enc, feat_dim)
 
     @classmethod
-    def tensor_array_create(cls) -> TensorArrayType:
+    def scaled_dot_product_attention(
+        cls,
+        query: Tensor,
+        key: Tensor,
+        value: Tensor,
+        *,
+        attention_mask: Optional[Tensor] = None,
+        att_dropout: float = 0.0,
+        att_dropout_broadcast: bool,
+        v_feat_dim: Dim,
+        qk_feat_dim: Dim,
+        kv_spatial_dim: Dim,
+        query_spatial_dim: Dim,
+        is_causal: bool = False,
+        scale: Optional[float] = None,
+    ):
         """
+        Scaled dot-product attention.
+
+        :param query:
+        :param key:
+        :param value:
+        :param attention_mask:
+        :param att_dropout: dropout for attention weights
+        :param att_dropout_broadcast: whether to broadcast over all but ``axis``.
+            normally not wanted. disabled by default since behavior version 19.
+        :param v_feat_dim: Embedding dimension of value
+        :param qk_feat_dim: Embedding dimension of key and query
+        :param kv_spatial_dim: Spatial axis of key/value to attend over
+        :param query_spatial_dim: Spatial axis of query
+        :param is_causal: Special case when the attention mask should be causal (e.g. for auto-regressive decoding).
+            Allows for more efficient implementation in some backends.
+        :param scale: Scaling factor applied prior to softmax
+        :return: attention output
+        """
+        query *= qk_feat_dim.dimension**-0.5 if scale is None else scale
+
+        if is_causal:
+            if attention_mask is not None:
+                raise NotImplementedError("causal attention with attention_mask is not supported")
+            if query_spatial_dim not in query.dims_set:
+                raise ValueError("query must have the query spatial dim for causal attention")
+            # hist lens over the query positions: query position i attends kv positions <= i.
+            # query_spatial_dim can be kv_spatial_dim itself (full-sequence self-attention, both roles):
+            # rewriting the kv side to the separate masked hist dim resolves the double use.
+            # bounded_by: the hist lens are 1..axis-size, so the axis bounds them
+            # (under the bound-shape regime the axis capacity then bounds hist_dim too).
+            # dim sizes live on the host by convention, but the softmax mask needs them on the
+            # data device, and under tracing that copy is a sync, which capture does not allow
+            hist_dim = Dim(
+                rf.range_over_dim(query_spatial_dim, device=query.device if rf.is_static_traceable() else "cpu") + 1,
+                name=f"{kv_spatial_dim.description}:kv",
+                bounded_by=kv_spatial_dim,
+            )
+            key, _ = rf.replace_dim(key, in_dim=kv_spatial_dim, out_dim=hist_dim)
+            value, _ = rf.replace_dim(value, in_dim=kv_spatial_dim, out_dim=hist_dim)
+            kv_spatial_dim = hist_dim
+
+        attn_bias = None
+        if attention_mask is not None:
+            if attention_mask.dtype == "bool":
+                attn_bias = rf.where(attention_mask, 0.0, float("-inf"))
+            else:
+                attn_bias = attention_mask  # assume float-like
+
+        energy = rf.matmul(query, key, reduce=qk_feat_dim)  # [.., Q_spatial, K_spatial]
+        if attn_bias is not None:
+            energy = energy + attn_bias
+        att_weights = rf.softmax(energy, axis=kv_spatial_dim)  # [.., Q_spatial, K_spatial]
+        att_weights = rf.dropout(att_weights, att_dropout, axis=att_dropout_broadcast and kv_spatial_dim)
+        # no need for mask because softmax already sets those weights to zero
+        att = rf.matmul(att_weights, value, reduce=kv_spatial_dim, use_mask=False)
+        if value.feature_dim in att.dims:
+            att.feature_dim = value.feature_dim
+        return att
+
+    @classmethod
+    def rel_pos_self_attention(
+        cls,
+        query: Tensor,
+        key: Tensor,
+        value: Tensor,
+        pos_emb: Tensor,
+        *,
+        pos_bias_u: Optional[Tensor],
+        pos_bias_v: Optional[Tensor],
+        att_dropout: float = 0.0,
+        att_dropout_broadcast: bool,
+        v_feat_dim: Dim,
+        qk_feat_dim: Dim,
+        kv_spatial_dim: Dim,
+        query_spatial_dim: Dim,
+        pos_emb_spatial_dim: Dim,
+    ):
+        """
+        Self-attention with relative positional encoding (Transformer-XL style),
+        as used by :class:`returnn.frontend.RelPosSelfAttention`.
+        In this generic implementation, the scores are computed as matrix (a+c) + matrix (b+d)
+        as described in https://arxiv.org/abs/1901.02860 Section 3.3.
+        Backends can override this with more efficient implementations.
+
+        :param query: {..., query_spatial_dim, qk_feat_dim}. not yet scaled.
+        :param key: {..., kv_spatial_dim, qk_feat_dim}
+        :param value: {..., kv_spatial_dim, v_feat_dim}
+        :param pos_emb: {..., pos_emb_spatial_dim, qk_feat_dim}, relative positional encoding
+        :param pos_bias_u: {..., qk_feat_dim}, added to query for the content-based term (matrix a+c)
+        :param pos_bias_v: {..., qk_feat_dim}, added to query for the position-based term (matrix b+d)
+        :param att_dropout: dropout for attention weights
+        :param att_dropout_broadcast: whether to broadcast over all but ``kv_spatial_dim``.
+            normally not wanted. disabled by default since behavior version 19.
+        :param v_feat_dim: Embedding dimension of value
+        :param qk_feat_dim: Embedding dimension of key and query
+        :param kv_spatial_dim: Spatial axis of key/value to attend over
+        :param query_spatial_dim: Spatial axis of query
+        :param pos_emb_spatial_dim: Relative-position axis of pos_emb (usually 2*time1-1)
+        :return: attention output
+        """
+        # noinspection PyProtectedMember
+        from returnn.frontend.attention import _rel_pos_enc_shift
+
+        q_with_bias_u = (query + pos_bias_u) if pos_bias_u is not None else query  # (batch, head, time1, d_k)
+        q_with_bias_v = (query + pos_bias_v) if pos_bias_v is not None else query  # (batch, head, time1, d_k)
+
+        # compute attention score
+        # first compute matrix a and matrix c
+        # as described in https://arxiv.org/abs/1901.02860 Section 3.3
+        # (batch, head, time1, time2)
+        matrix_ac = rf.matmul(q_with_bias_u, key, reduce=qk_feat_dim)
+
+        # compute matrix b and matrix d
+        # (batch, head, time1, 2*time1-1)
+        matrix_bd = rf.matmul(q_with_bias_v, pos_emb, reduce=qk_feat_dim)
+        matrix_bd = _rel_pos_enc_shift(matrix_bd, query_spatial_dim, pos_emb_spatial_dim, kv_spatial_dim)
+
+        scores = matrix_ac + matrix_bd  # (batch, head, time1, time2)
+        del matrix_ac, matrix_bd
+        scores *= qk_feat_dim.dimension**-0.5
+        att_weights = rf.softmax(scores, axis=kv_spatial_dim)
+        att_weights = rf.dropout(att_weights, att_dropout, axis=att_dropout_broadcast and kv_spatial_dim)
+        # Masking not needed because softmax should already have masked,
+        # so we have 0.0 att weights for padded frames.
+        att = rf.matmul(att_weights, value, reduce=kv_spatial_dim, use_mask=False)
+        if v_feat_dim in att.dims:
+            att.feature_dim = v_feat_dim
+        return att
+
+    # For eager-based backends, List[Tensor] is a reasonable default implementation and type.
+    TensorArrayType = Any
+
+    @classmethod
+    def tensor_array_create(cls, *, capacity: Optional[int] = None) -> TensorArrayType:
+        """
+        :param capacity: max number of entries, if known.
+            A backend whose graph loop needs a fixed-size carry (JAX: ``lax.while_loop``)
+            cannot grow the array and requires it; the eager and TF paths ignore it.
         :return: empty TensorArray
         """
         if cls.executing_eagerly():
@@ -1374,9 +1881,8 @@ class Backend(Generic[T]):
 
 # We use a global instance, and we modify __class__ inplace,
 # such that any reference to this can be updated.
-# This is exposed to the user as `returnn.frontend`.
 # The __class__ assignment is done in `select_engine`.
-# Use object.__new__ because we disallow creating instances of Frontend.
+# Use object.__new__ because we disallow creating instances of Backend.
 global_backend = object.__new__(Backend)
 
 _backend_tensor_type_dispatch_table = {}  # type: Dict[Type, Type[Backend]]
@@ -1386,7 +1892,7 @@ def select_backend(name: str):
     """
     Select backend by name.
 
-    :param name: "torch", "tf", "returnn_layers_tf", "numpy"
+    :param name: "torch", "tf", "returnn_layers_tf", "jax", "numpy"
     """
     if name == "tf":
         select_backend_tf()
@@ -1394,10 +1900,10 @@ def select_backend(name: str):
         select_backend_returnn_layers_tf()
     elif name == "torch":
         select_backend_torch()
+    elif name == "jax":
+        select_backend_jax()
     elif name == "numpy":
-        from ._numpy_backend import NumpyBackend
-
-        global_backend.__class__ = NumpyBackend
+        select_backend_numpy()
     else:
         raise ValueError(f"unknown backend {name!r}")
 
@@ -1416,9 +1922,18 @@ def is_executing_eagerly() -> bool:
     return global_backend.executing_eagerly()
 
 
+def select_backend_numpy():
+    """
+    Selects the Numpy backend.
+    """
+    from ._numpy_backend import NumpyBackend
+
+    global_backend.__class__ = NumpyBackend
+
+
 def select_backend_tf():
     """
-    Selects the RETURNN layers backend (based on TF).
+    Selects the pure TF (low-level) backend.
     """
     import tensorflow as tf
 
@@ -1451,6 +1966,22 @@ def select_backend_torch():
 
     _native.setup()
     _native.setup_torch()
+
+
+def select_backend_jax():
+    """
+    Selects the JAX backend.
+    """
+    import jax
+
+    # RF asks for dtypes explicitly (int64 seq lens, float64 where requested),
+    # and JAX silently downcasts those to 32 bit unless x64 is on,
+    # which would make the raw dtype disagree with Tensor.dtype.
+    jax.config.update("jax_enable_x64", True)
+
+    backend = get_backend_by_raw_tensor_type(jax.Array)  # side-effect: register it
+    global_backend.__class__ = backend
+    BehaviorVersion.set_min_behavior_version(29)
 
 
 def get_backend_by_tensor(tensor: Tensor, *, fallback: Optional[T2] = None) -> Union[Type[Backend[T]], T2]:
@@ -1502,6 +2033,17 @@ def get_backend_by_raw_tensor_type(tensor_type: Type[T]) -> Union[Type[Backend[T
 
             backend_type = ReturnnLayersBackend
             tensor_types = (Layer,)
+        elif base_type.__module__.split(".")[0] in ("jax", "jaxlib"):
+            import jax
+            from returnn.jax.frontend import JaxBackend
+
+            # jax.Array is a virtual base:
+            # isinstance(tracer, jax.Array) is True but issubclass(type(tracer), jax.Array) is not,
+            # so neither the MRO walk above nor the issubclass assert below can cover tracers.
+            # Register the concrete type (ArrayImpl, or the tracer class of whatever transform is active).
+            register_backend_by_tensor_type(jax.Array, JaxBackend)
+            register_backend_by_tensor_type(tensor_type, JaxBackend)
+            return JaxBackend
         elif issubclass(base_type, numpy.ndarray):
             from ._numpy_backend import NumpyBackend
 

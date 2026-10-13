@@ -3,7 +3,6 @@ Math ops
 """
 
 from __future__ import annotations
-import typing
 from typing import Optional, Sequence, Union, Tuple, overload
 import numpy
 from returnn.tensor import Tensor, Dim
@@ -77,7 +76,7 @@ __all__ = [
 ]
 
 
-@typing.overload
+@overload
 def compare(
     a: Tensor,
     kind: str,
@@ -86,7 +85,19 @@ def compare(
     allow_broadcast_all_sources: Optional[bool] = None,
     dim_order: Optional[Sequence[Dim]] = None,
 ) -> Tensor:
-    """compare with two tensors"""
+    """compare"""
+
+
+@overload
+def compare(
+    a: Union[Tensor, _RawTensorTypes],
+    kind: str,
+    b: Union[Tensor, _RawTensorTypes],
+    *,
+    allow_broadcast_all_sources: Optional[bool] = None,
+    dim_order: Optional[Sequence[Dim]] = None,
+) -> Tensor:
+    """compare"""
 
 
 _CompareMap = {
@@ -138,7 +149,7 @@ def compare_bc(
     return compare(a, kind, b, allow_broadcast_all_sources=True, dim_order=dim_order)
 
 
-@typing.overload
+@overload
 def combine(
     a: Tensor,
     kind: str,
@@ -147,7 +158,19 @@ def combine(
     allow_broadcast_all_sources: Optional[bool] = None,
     dim_order: Optional[Sequence[Dim]] = None,
 ) -> Tensor:
-    """combine with two tensors"""
+    """combine"""
+
+
+@overload
+def combine(
+    a: Union[Tensor, _RawTensorTypes],
+    kind: str,
+    b: Union[Tensor, _RawTensorTypes],
+    *,
+    allow_broadcast_all_sources: Optional[bool] = None,
+    dim_order: Optional[Sequence[Dim]] = None,
+) -> Union[Tensor, _RawTensorTypes]:
+    """combine"""
 
 
 _CombineMap = {
@@ -205,12 +228,6 @@ def combine(
             return b
         if a and kind in {"logical_and", "logical_or"}:
             return b
-    # Truediv checks for int/int division
-    if kind in {"truediv", "/"}:
-        if _utils.is_int(a) and _utils.is_int(b):
-            raise ValueError(
-                "Dividing a Tensor of type int by an integer is disallowed. Please convert the Tensor to float."
-            )
     backend = _utils.get_backend_from_tensors(a, b)
     return backend.combine(a, kind, b, allow_broadcast_all_sources=allow_broadcast_all_sources, dim_order=dim_order)
 
@@ -332,7 +349,12 @@ def logical_not(a: Tensor) -> Tensor:
 
 @overload
 def opt_logical_or(a: bool, b: bool) -> bool:
-    """logical or"""
+    """opt logical or"""
+
+
+@overload
+def opt_logical_or(a: Union[Tensor, bool], b: Union[Tensor, bool]) -> Union[Tensor, bool]:
+    """opt logical or"""
 
 
 def opt_logical_or(a: Union[Tensor, bool], b: Union[Tensor, bool]) -> Union[Tensor, bool]:
@@ -350,7 +372,12 @@ def opt_logical_or(a: Union[Tensor, bool], b: Union[Tensor, bool]) -> Union[Tens
 
 @overload
 def opt_logical_and(a: bool, b: bool) -> bool:
-    """logical and"""
+    """opt logical and"""
+
+
+@overload
+def opt_logical_and(a: Union[Tensor, bool], b: Union[Tensor, bool]) -> Union[Tensor, bool]:
+    """opt logical and"""
 
 
 def opt_logical_and(a: Union[Tensor, bool], b: Union[Tensor, bool]) -> Union[Tensor, bool]:
@@ -394,38 +421,59 @@ def is_neg_infinite(a: Tensor) -> Tensor:
     return a._raw_backend.is_neg_infinite(a)
 
 
-def maximum(a: Tensor, b: Union[Tensor, _RawTensorTypes], *other_tensors) -> Tensor:
-    """maximum"""
-    if not other_tensors:
-        return combine(a, "maximum", b)
-    res = combine(a, "maximum", b)
-    for t in other_tensors:
-        res = combine(res, "maximum", t)
+def maximum(
+    a: Union[Tensor, _RawTensorTypes], b: Union[Tensor, _RawTensorTypes], *other_tensors
+) -> Union[Tensor, _RawTensorTypes]:
+    """maximum. all-scalar (non-Tensor) args fall back to the builtin :func:`max`"""
+    values = [a, b, *other_tensors]
+    if not any(isinstance(v, Tensor) for v in values):
+        return max(values)
+    # a Tensor first (commutative): the backend combine expects the Tensor as the first arg
+    first_tensor_idx = next(i for i, v in enumerate(values) if isinstance(v, Tensor))
+    if first_tensor_idx != 0:
+        values[0], values[first_tensor_idx] = values[first_tensor_idx], values[0]
+    res = values[0]
+    for v in values[1:]:
+        res = combine(res, "maximum", v)
     return res
 
 
-def minimum(a: Tensor, b: Union[Tensor, _RawTensorTypes], *other_tensors) -> Tensor:
-    """minimum"""
-    if not other_tensors:
-        return combine(a, "minimum", b)
-    res = combine(a, "minimum", b)
-    for t in other_tensors:
-        res = combine(res, "minimum", t)
+def minimum(
+    a: Union[Tensor, _RawTensorTypes], b: Union[Tensor, _RawTensorTypes], *other_tensors
+) -> Union[Tensor, _RawTensorTypes]:
+    """minimum. all-scalar (non-Tensor) args fall back to the builtin :func:`min`"""
+    values = [a, b, *other_tensors]
+    if not any(isinstance(v, Tensor) for v in values):
+        return min(values)
+    # a Tensor first (commutative): the backend combine expects the Tensor as the first arg
+    first_tensor_idx = next(i for i, v in enumerate(values) if isinstance(v, Tensor))
+    if first_tensor_idx != 0:
+        values[0], values[first_tensor_idx] = values[first_tensor_idx], values[0]
+    res = values[0]
+    for v in values[1:]:
+        res = combine(res, "minimum", v)
     return res
 
 
 def clip_by_value(
     x: Tensor,
-    clip_value_min: Union[Tensor, _RawTensorTypes],
-    clip_value_max: Union[Tensor, _RawTensorTypes],
+    clip_value_min: Union[None, Tensor, _RawTensorTypes] = None,
+    clip_value_max: Union[None, Tensor, _RawTensorTypes] = None,
     *,
     allow_broadcast_all_sources: bool = False,
 ) -> Tensor:
     """clip by value"""
-    # noinspection PyProtectedMember
-    return x._raw_backend.clip_by_value(
-        x, clip_value_min, clip_value_max, allow_broadcast_all_sources=allow_broadcast_all_sources
-    )
+    if clip_value_min is not None and clip_value_max is not None:
+        # noinspection PyProtectedMember
+        return x._raw_backend.clip_by_value(
+            x, clip_value_min, clip_value_max, allow_broadcast_all_sources=allow_broadcast_all_sources
+        )
+    elif clip_value_min is not None and clip_value_max is None:
+        return maximum(x, clip_value_min)
+    elif clip_value_min is None and clip_value_max is not None:
+        return minimum(x, clip_value_max)
+    else:
+        return x
 
 
 def identity(x: Tensor) -> Tensor:
@@ -541,7 +589,7 @@ def floor(a: Tensor) -> Tensor:
 
 # noinspection PyShadowingBuiltins
 def round(a: Tensor) -> Tensor:
-    """round"""
+    """round. the result dtype is same as input dtype, still float"""
     # noinspection PyProtectedMember
     return a._raw_backend.activation(a, "round")
 

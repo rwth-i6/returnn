@@ -76,7 +76,7 @@ class ModuleList(rf.Module, Generic[__ModT]):
         else:
             raise TypeError(f"{self} __getitem__ Invalid idx type {type(idx).__name__}")
 
-    def __setitem__(self, idx: Union[slice, int], module: Union[__ModT, Iterable[__ModT]]) -> None:
+    def __setitem__(self, idx: Union[slice, int, str], module: Union[__ModT, Iterable[__ModT]]) -> None:
         if isinstance(idx, slice):
             assert not idx.step or idx.step == 1  # not supported
             mod_items = list(self._get_modules().items())
@@ -213,7 +213,7 @@ class ParameterList(rf.Module):
 
     def __setitem__(self, idx: int, parameter: rf.Parameter) -> None:
         key = list(self._get_parameters().keys())[idx]
-        return setattr(self, key, rf.Parameter)
+        setattr(self, key, parameter)
 
     __call__ = rf.Module.__call__  # stays abstract
 

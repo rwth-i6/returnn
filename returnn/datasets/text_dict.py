@@ -100,7 +100,7 @@ class TextDictDataset(CachedDataset2):
             print(f"{self}: Warning: literal_py_to_pickle.literal_eval failed:", file=log.v3)
             print(f"  {type(exc).__name__}: {exc}", file=log.v3)
             print("  Fallback to eval...", file=log.v3)
-            data: Dict[str, Any] = eval(txt)
+            data: Dict[str, Any] = eval(txt, {"nan": float("nan"), "inf": float("inf")})
         assert data is not None
         assert isinstance(data, dict)
         assert len(data) > 0
@@ -157,6 +157,7 @@ class TextDictDataset(CachedDataset2):
             num_seqs = len(self._data_values)
             self._seq_order = self.get_seq_order_for_epoch(epoch=epoch, num_seqs=num_seqs, get_seq_len=_get_seq_len)
         self._num_seqs = len(self._seq_order)
+        return True  # like the early return above: init_seq_order reports success
 
     def _collect_single_seq(self, seq_idx: int) -> Optional[DatasetSeq]:
         orig_seq_idx = self._seq_order[seq_idx]
@@ -248,7 +249,7 @@ class TextDictDataset(CachedDataset2):
         """:return: available data keys"""
         return list(self.num_outputs.keys())
 
-    def get_data_shape(self, key: str) -> List[str]:
+    def get_data_shape(self, key: str) -> List[Optional[int]]:
         """
         :returns get_data(*, key).shape[1:], i.e. num-frames excluded
         """

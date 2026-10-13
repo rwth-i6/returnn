@@ -71,7 +71,13 @@ def help_on_torch_exception(
     if not count_frames:
         exc_ext.append("(No module call frames.)")
 
-    if len(exc.args) == 1 and isinstance(exc.args[0], str) and not always_direct_print:
+    if (
+        # KeyError formatting would be wrong, showing `KeyError: "enc_spatial_dim\n\nStep idx: 0\..."`
+        not isinstance(exc, KeyError)
+        and len(exc.args) == 1
+        and isinstance(exc.args[0], str)
+        and not always_direct_print
+    ):
         exc.args = ("\n".join([exc.args[0], ""] + exc_ext),)
     else:
         for msg in exc_ext:

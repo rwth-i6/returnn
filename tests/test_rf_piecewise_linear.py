@@ -33,8 +33,9 @@ def test_piecewise_linear():
         dtype="float32",
     )
 
-    # noinspection PyShadowingNames,PyUnusedLocal
+    # noinspection PyShadowingNames
     def _forward_step(*, model: rf.PiecewiseLinear, extern_data: TensorDict):
+        del extern_data  # fixed forward_step signature
         values = rf.convert_to_tensor(tests[:, 0], dims=[batch_dim_])
         out = model(values)
         out.mark_as_default_output(shape=(batch_dim_,))

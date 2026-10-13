@@ -3,7 +3,7 @@ Utilities for dimension tags, dimensions, axes.
 """
 
 from __future__ import annotations
-from typing import Optional, Union, TypeVar, Sequence, Tuple
+from typing import TYPE_CHECKING, Optional, Union, TypeVar, Sequence, Tuple
 from returnn.tensor import Tensor, Dim
 import returnn.frontend as rf
 from ._backend import get_backend_by_tensor, global_backend
@@ -24,6 +24,9 @@ __all__ = [
     "last_frame_position_of_dim",
     "use_mask_default",
 ]
+
+if TYPE_CHECKING:
+    from returnn.config import Config
 
 
 def range_over_dim(dim: Dim, *, dtype: Optional[str] = None, device: Optional[str] = None) -> Tensor[T]:
@@ -50,14 +53,24 @@ def range_over_dim_strided(
 ) -> Tuple[Tensor[T], Dim]:
     """
     :param dim:
-    :param stride:
+    :param stride: int, or a scalar Tensor for a stride that is only known on the device
     :param out_dim:
     :param dtype:
     :param device,
     :return: tensor with shape [dim], out_dim
     """
     if out_dim is None:
-        out_dim = dim.ceildiv_right(stride)
+        if isinstance(stride, Tensor):
+            # Dim math takes ints and Dims only, so derive the out dim from the sizes instead:
+            # ceildiv per sequence, on the device the sizes are already on.
+            # The capacity carries over: a stride only ever shortens, so it stays an upper bound,
+            # and a static graph needs one that does not depend on the drawn stride.
+            sizes = dim.get_size_tensor(device=stride.device)
+            out_dim = Dim(rf.ceil_divide(sizes, rf.cast(stride, sizes.dtype)), name=f"{dim.name}:strided")
+            # noinspection PyProtectedMember
+            out_dim.capacity = dim.capacity or dim._derived_capacity()
+        else:
+            out_dim = dim.ceildiv_right(stride)
     return rf.range_over_dim(out_dim, dtype=dtype, device=device) * stride, out_dim
 
 
@@ -148,14 +161,26 @@ def replace_dim_v2(
     :param allow_shrink: if True, allow to shrink the dim, i.e. if ``out_dim.size < in_dim.size``.
     :return: ``source`` with ``in_dim`` replaced by ``out_dim``.
     """
-    if not rf.is_executing_eagerly():
-        raise NotImplementedError  # just not implemented yet. we can do via :func:`cond`
     if in_dim not in source.dims:
         raise ValueError(f"replace_dim_v2: dim {in_dim} not in {source}")
     if out_dim in source.dims:
         raise ValueError(f"replace_dim_v2: dim {out_dim} already in {source}")
     old_size = in_dim.get_dim_value()
     new_size = out_dim.get_dim_value()
+    if not rf.is_executing_eagerly() and not (isinstance(old_size, int) and isinstance(new_size, int)):
+        old_ext = rf.copy_to_device(in_dim.get_dim_value_tensor(), source.device)
+        padded, (padded_dim,) = rf.pad(
+            source,
+            axes=[in_dim],
+            padding=[(0, 1)],
+            value=rf.zeros((), dtype=source.dtype, device=source.device),
+            handle_dynamic_dims=False,
+        )
+        idx = rf.range_over_dim(out_dim, device=source.device)
+        return rf.gather(padded, axis=padded_dim, indices=rf.minimum(idx, old_ext), clip_to_valid=False)
+    # Eager from here, so the sizes are concrete.
+    old_size = int(old_size)
+    new_size = int(new_size)
     if new_size == old_size:
         res, _ = rf.replace_dim(source, in_dim=in_dim, out_dim=out_dim)
     elif new_size > old_size:
@@ -169,7 +194,7 @@ def replace_dim_v2(
             axes=[in_dim],
             padding=[(0, out_dim.get_dim_value_tensor() - in_dim.get_dim_value_tensor())],
             out_dims=[out_dim],
-            value=0,
+            value=rf.zeros((), dtype=source.dtype, device=source.device),
         )
     else:
         if not allow_shrink:
@@ -220,16 +245,51 @@ def dim_match_priority_when_needed(dim: Dim, *other_dims: Dim) -> Dim:
 
 
 def num_elements_of_shape(
-    dims: Union[Dim, Sequence[Dim]], *, use_mask: bool = True, device: Optional[str] = None
+    dims: Union[Dim, Sequence[Dim]],
+    *,
+    use_mask: bool = True,
+    device: Optional[str] = None,
+    source: Optional[Tensor] = None,
+    distributed: bool = False,
 ) -> Union[int, Tensor]:
     """
     :param dims:
-    :param use_mask:
-    :param device: only for the case when we return a Tensor. by default, this is CPU (just as the size tensor).
+    :param use_mask: True: only the elements which are not padding.
+        False: also the padding, as far as a reduction with ``use_mask=False`` covers it,
+        which depends on how the reduced tensor is stored (see ``source``).
+    :param device: only for the case when we return a Tensor. by default, this is CPU (just as the size tensor),
+        or with ``source``, the device of ``source``, where the count is needed to normalize the reduction.
+    :param source: the tensor which is reduced over ``dims`` (e.g. by :func:`reduce` with the same ``use_mask``).
+        The count then covers exactly the elements which that reduction covers,
+        e.g. packed storage holds no padding on its packed dims.
+        Without it, ``use_mask=False`` counts the padded layout.
+    :param distributed: if True, the count summed over the distributed workers (Torch DDP),
+        as for :func:`reduce` with ``distributed=True``.
+        The result is then always an int64 Tensor, on ``device``. No effect on the value without a process group.
     :return: num elements of a tensor of shape dims, properly considering masking
     """
     if isinstance(dims, Dim):
         dims = [dims]
+    if distributed:
+        if device is None and source is not None:
+            device = source.device
+        n = num_elements_of_shape(dims, use_mask=use_mask, device=device, source=source)
+        if isinstance(n, Tensor):
+            # use_mask=False ignores the device, so copy explicitly
+            n = rf.cast(rf.copy_to_device(n, device), "int64")
+        else:
+            # static dims give a plain int, which is the same on every worker
+            n = rf.constant(n, dims=(), dtype="int64", device=device)
+        # noinspection PyProtectedMember
+        return n._raw_backend.reduce_distributed(n, mode="sum")
+    if source is not None:
+        if any(dim not in source.dims for dim in dims):
+            raise ValueError(f"num_elements_of_shape: dims {dims} not all in source {source}")
+        # noinspection PyProtectedMember
+        backend = source._raw_backend or global_backend
+        return backend.num_elements_of_shape(
+            source, dims, use_mask=use_mask, device=device if device is not None else source.device
+        )
     if not use_mask:
         n = 1
         for dim in dims:
@@ -266,17 +326,20 @@ def num_elements_of_shape(
     return n
 
 
-def masked_fraction_of_shape(dims: Union[Dim, Sequence[Dim]], *, inverse: bool = False) -> Union[int, float, Tensor]:
+def masked_fraction_of_shape(
+    dims: Union[Dim, Sequence[Dim]], *, inverse: bool = False, device: Optional[str] = None
+) -> Union[int, float, Tensor]:
     """
     :param dims:
     :param inverse: if True, return the inverse of the fraction
+    :param device: only for the case when we return a Tensor. by default, this is CPU (just as the size tensor).
     :return: :func:`num_elements_of_shape`(dims) / prod(dims) if not inverse else prod(dims) / num_elements
     """
     if isinstance(dims, Dim):
         dims = [dims]
     if not any(dim.need_masking() for dim in dims):
         return 1
-    num_elems_masked = num_elements_of_shape(dims)
+    num_elems_masked = num_elements_of_shape(dims, device=device)
     num_elems_total = 1
     for dim in dims:
         num_elems_total *= dim.get_dim_value_tensor()
@@ -309,7 +372,10 @@ def last_frame_position_of_dim(
 
 
 def use_mask_default(
-    *, default: Optional[bool] = None, default_false_for_behavior_version_up_to: Optional[int] = None
+    *,
+    default: Optional[bool] = None,
+    default_false_for_behavior_version_up_to: Optional[int] = None,
+    func_name: Optional[str] = None,
 ) -> Optional[bool]:
     """
     Check the global RETURNN config for the ``rf_use_mask``
@@ -324,20 +390,20 @@ def use_mask_default(
         and if this is set, and the behavior version is less or equal,
         then return False by default, i.e. do not use the mask by default, if it is not defined in the config.
         This takes precedence over `default`.
+    :param func_name: if specified, also check
     :return: what to use for the ``use_mask`` argument by default
     """
     from returnn.config import get_global_config
 
     config = get_global_config(raise_exception=False)
-    config_value = None
     if config:
-        if "rf_use_mask" in config.typed_dict:
-            config_value = config.typed_dict["rf_use_mask"]
-            assert config_value is None or isinstance(config_value, bool)
-        elif "rf_use_mask" in config.dict:
-            config_value = config.bool("rf_use_mask", None)
-    if config_value is not None:
-        return config_value
+        config_value = _get_opt_bool_from_config(config, "rf_use_mask")
+        if config_value is not None:
+            return config_value
+        if func_name:
+            config_value = _get_opt_bool_from_config(config, f"rf_use_mask_{func_name}")
+            if config_value is not None:
+                return config_value
 
     if default_false_for_behavior_version_up_to is not None:
         from returnn.util.basic import BehaviorVersion
@@ -345,3 +411,13 @@ def use_mask_default(
         if BehaviorVersion.get() <= default_false_for_behavior_version_up_to:
             return False
     return default
+
+
+def _get_opt_bool_from_config(config: Config, key: str) -> Optional[bool]:
+    if key in config.typed_dict:
+        config_value = config.typed_dict[key]
+        assert config_value is None or isinstance(config_value, bool)
+        return config_value
+    elif key in config.dict:
+        return config.bool(key, None)
+    return None

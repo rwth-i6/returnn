@@ -105,7 +105,11 @@ def main(_):
                 tensor = numpy.array(tensor)
             assert isinstance(tensor, numpy.ndarray)
             var_dtypes[name] = tensor.dtype
-            if isinstance(tensor.dtype, numpy.integer):
+            # issubdtype, not isinstance:
+            # tensor.dtype is a numpy.dtype instance, never a numpy.integer (a scalar type),
+            # so the isinstance check here was always False,
+            # and integer tensors got averaged instead of taken from the last checkpoint.
+            if numpy.issubdtype(tensor.dtype, numpy.integer):
                 var_values[name] = tensor  # just take last
             else:
                 var_values[name] += tensor

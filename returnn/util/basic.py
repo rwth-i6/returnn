@@ -5,7 +5,21 @@ Various generic utilities, which are shared across different backend engines.
 """
 
 from __future__ import annotations
-from typing import Optional, Union, Any, Generic, TypeVar, Iterable, Tuple, Dict, List, Set, Callable
+from typing import (
+    Optional,
+    Union,
+    Any,
+    Generic,
+    TypeVar,
+    Iterable,
+    Tuple,
+    Dict,
+    List,
+    Set,
+    Callable,
+    Hashable,
+    overload,
+)
 
 import subprocess
 from subprocess import CalledProcessError
@@ -139,14 +153,15 @@ class BackendEngine:
     TensorFlowNetDict = 1
     TensorFlow = 2
     Torch = 3  # PyTorch
+    Jax = 4
     selected_engine = None  # type: typing.Optional[int]  # One of the possible engines.
 
     @classmethod
     def select_engine(cls, *, engine=None, default_fallback_engine=None, config=None, _select_rf_backend: bool = True):
         """
-        :param int engine: see the global class attribs for possible values
+        :param int|None engine: see the global class attribs for possible values. From the config by default.
         :param int|None default_fallback_engine: if engine is None and not defined in config, use this
-        :param returnn.config.Config config:
+        :param returnn.config.Config|None config: the global config by default
         :param _select_rf_backend: internal. avoids that Torch/TF/anything further gets imported at this point
         """
         if engine is None:
@@ -160,6 +175,7 @@ class BackendEngine:
                     "tensorflow-net-dict": cls.TensorFlowNetDict,
                     "tensorflow": cls.TensorFlow,
                     "torch": cls.Torch,
+                    "jax": cls.Jax,
                 }[backend]
             elif config.bool("use_tensorflow", False):
                 engine = cls.TensorFlowNetDict
@@ -183,6 +199,8 @@ class BackendEngine:
                 _backend.select_backend_returnn_layers_tf()
             elif engine == cls.Torch:
                 _backend.select_backend_torch()
+            elif engine == cls.Jax:
+                _backend.select_backend_jax()
         cls.selected_engine = engine
 
     @classmethod
@@ -209,6 +227,13 @@ class BackendEngine:
         """
         return cls.get_selected_engine() == cls.Torch
 
+    @classmethod
+    def is_jax_selected(cls):
+        """
+        :rtype: bool
+        """
+        return cls.get_selected_engine() == cls.Jax
+
 
 class BehaviorVersion:
     """
@@ -219,7 +244,7 @@ class BehaviorVersion:
     See :ref:`behavior_version`.
     """
 
-    _latest_behavior_version = 24
+    _latest_behavior_version = 36
     _behavior_version = None  # type: typing.Optional[int]
     _min_behavior_version = 0  # type: int
 
@@ -331,6 +356,8 @@ class BehaviorVersion:
         # Reset things we did in _handle_new_min_version.
         for cb in cls.reset_callbacks:
             cb()
+        # Then apply them again for the version we just restored.
+        cls._handle_new_min_version()
 
     @classmethod
     def _handle_new_min_version(cls):
@@ -354,6 +381,10 @@ def get_model_filename_postfix():
         return ".meta"
     if BackendEngine.is_torch_selected():
         return ".pt"
+    if BackendEngine.is_jax_selected():
+        # Orbax with OCDBT storage; the checkpoint is a directory, not a file
+        # (see returnn.jax.checkpoint)
+        return ".orbax"
     return ""
 
 
@@ -365,12 +396,9 @@ def get_checkpoint_filepattern(filepath):
     :return: CheckpointLoader compatible filepattern
     :rtype: str
     """
-    if filepath.endswith(".meta"):
-        return filepath[: -len(".meta")]
-    elif filepath.endswith(".index"):
-        return filepath[: -len(".index")]
-    elif filepath.endswith(".pt"):
-        return filepath[: -len(".pt")]
+    for ext in [".meta", ".index", ".pt"]:
+        if filepath.endswith(ext):
+            return filepath[: -len(ext)]
     return filepath
 
 
@@ -434,7 +462,7 @@ def sys_exec_ret_code(*args, **kwargs):
 
 def git_commit_rev(commit="HEAD", git_dir=".", length=None):
     """
-    :param str commit:
+    :param str|None commit: None is treated like "HEAD"
     :param str git_dir:
     :param int|None length:
     :rtype: str
@@ -557,7 +585,9 @@ def get_tensorflow_version_tuple() -> Tuple[int, ...]:
     import tensorflow as tf  # noqa
     import re
 
-    return tuple([int(re.sub("(-rc[0-9]|-dev[0-9]*)", "", s)) for s in tf.__version__.split(".")])
+    # Remove unwanted suffixes from the TF version string (e.g. "2.20.0-dev0+selfbuilt")
+    filtered_version = [re.sub("(-rc[0-9]|-dev[0-9]*)(\\+selfbuilt)?", "", s) for s in tf.__version__.split(".")]
+    return tuple(int(v) for v in filtered_version)
 
 
 class ReportImportedDevModules:
@@ -600,6 +630,8 @@ class ReportImportedDevModules:
                     elif os.path.exists(mod_dir + "/../.git"):
                         # Use realpath because the mod dir might be a symlink.
                         git_dir = os.path.dirname(os.path.realpath(mod_dir))
+                    elif os.path.exists(mod_dir + "/../../.git"):
+                        git_dir = os.path.realpath(mod_dir + "/../..")
                     else:
                         git_dir = None
                     if git_dir:
@@ -847,7 +879,7 @@ def terminal_size(file=sys.stdout):
     def ioctl_gwinsz(fd):
         """
         :param int fd: file descriptor
-        :rtype: tuple[int]
+        :rtype: tuple[int]|None
         """
         # noinspection PyBroadException
         try:
@@ -857,7 +889,7 @@ def terminal_size(file=sys.stdout):
 
             cr_ = struct.unpack("hh", fcntl.ioctl(fd, termios.TIOCGWINSZ, "1234"))  # noqa
         except Exception:
-            return
+            return None
         return cr_
 
     cr = ioctl_gwinsz(file.fileno) or ioctl_gwinsz(0) or ioctl_gwinsz(1) or ioctl_gwinsz(2)
@@ -1011,7 +1043,8 @@ def set_pretty_print_as_bytes(as_bytes):
 def pretty_print(obj, limit=None):
     """
     :param object obj:
-    :param int|float limit: use float("inf") to disable. None will use the default, via set_pretty_print_default_limit
+    :param int|float|None limit: use float("inf") to disable.
+        None will use the default, via set_pretty_print_default_limit
     :return: repr(obj), or some shorted version of that, maybe with extra info
     :rtype: str
     """
@@ -1657,7 +1690,7 @@ def random_orthogonal(shape, gain=1.0, seed=None):
 
     :param tuple[int] shape:
     :param float gain:
-    :param int seed: for Numpy random generator
+    :param int|None seed: for Numpy random generator; None uses the global Numpy random state
     :return: random orthogonal matrix
     :rtype: numpy.ndarray
     """
@@ -1678,7 +1711,6 @@ def random_orthogonal(shape, gain=1.0, seed=None):
     return gain * q[: shape[0], : shape[1]]
 
 
-# noinspection PyUnusedLocal
 def inplace_increment(x: numpy.ndarray, idx: numpy.ndarray, y: Union[numpy.ndarray, float, int]) -> numpy.ndarray:
     """
     This basically does `x[idx] += y`.
@@ -1690,18 +1722,23 @@ def inplace_increment(x: numpy.ndarray, idx: numpy.ndarray, y: Union[numpy.ndarr
     :param idx:
     :param y:
     """
+    # the body only raises: the feature went away with Theano support,
+    # the signature is kept so callers still type-check
+    del x, idx, y  # body only raises (Theano dropped)
     raise NotImplementedError("This feature was removed with dropped Theano support")
 
 
-def prod(ls):
+def prod(ls: Union[Iterable[T], numpy.ndarray]) -> Union[int, T, float]:
     """
-    :param list[T]|tuple[T]|numpy.ndarray ls:
-    :rtype: T|int|float
+    :param ls:
+    :return: ls[0] * ls[1] * ...
     """
-    if len(ls) == 0:
+    it = iter(ls)
+    try:
+        x = next(it)
+    except StopIteration:
         return 1
-    x = ls[0]
-    for y in ls[1:]:
+    for y in it:
         x = x * y  # *= doesn't work because x might be a tensor, and for e.g. torch.Tensor this op is in-place
     return x
 
@@ -1871,11 +1908,15 @@ class NumbersDict:
     It implements the standard math bin ops in a straight-forward way.
     """
 
+    # assigned at the end of __init__, i.e. below the reads of OTHER instances
+    dict: typing.Dict[str, typing.Any]
+    value: typing.Optional[typing.Any]
+
     def __init__(self, auto_convert=None, numbers_dict=None, broadcast_value=None):
         """
-        :param dict|NumbersDict|T auto_convert: first argument, so that we can automatically convert/copy
-        :param dict numbers_dict:
-        :param T broadcast_value:
+        :param dict|NumbersDict|T|None auto_convert: first argument, so that we can automatically convert/copy
+        :param dict|None numbers_dict:
+        :param T|None broadcast_value:
         """
         if auto_convert is not None:
             assert broadcast_value is None
@@ -2291,8 +2332,9 @@ def collect_class_init_kwargs(cls, only_with_default=False):
                 assert len(arg_spec.defaults) == len(args), arg_spec
                 for arg, default in zip(args, arg_spec.defaults):
                     kwargs[arg] = default
+            kwargs.update(arg_spec.kwonlydefaults or {})
         else:
-            for arg in args:
+            for arg in args + list(arg_spec.kwonlyargs):
                 if arg not in kwargs:
                     kwargs.append(arg)
     return kwargs
@@ -2393,13 +2435,26 @@ class FrozenDict(dict):
         return hash(tuple(sorted(self.items())))
 
 
+@overload
+def make_hashable(obj: dict) -> FrozenDict:
+    """dict -> FrozenDict (hashable)"""
+
+
+@overload
+def make_hashable(obj: Union[list, tuple]) -> tuple:
+    """list/tuple -> tuple (hashable)"""
+
+
+@overload
+def make_hashable(obj: Hashable) -> Hashable:
+    """anything else must already be hashable"""
+
+
 def make_hashable(obj):
     """
     Theano needs hashable objects in some cases, e.g. the properties of Ops.
     This converts all objects as such, i.e. into immutable frozen types.
-
-    :param T|dict|list|tuple obj:
-    :rtype: T|FrozenDict|tuple
+    The return is always hashable; anything not convertible raises a TypeError.
     """
     if isinstance(obj, dict):
         return FrozenDict([make_hashable(item) for item in obj.items()])
@@ -2416,7 +2471,8 @@ def make_hashable(obj):
             return RefIdEq(obj)
     # Try if this is already hashable.
     try:
-        hash(obj)
+        # noinspection PyUnhashable
+        hash(obj)  # failing is the point of the check, hence the suppression
     except Exception:
         raise TypeError("don't know how to make hashable: %r (%r)" % (obj, type(obj)))
     return obj
@@ -2459,8 +2515,12 @@ class DictRefKeys(Generic[K, V]):
     Like `dict`, but hash and equality of the keys
     """
 
-    def __init__(self):
+    def __init__(self, items: Union[None, Iterable[Tuple[K, V]], Dict[K, V]] = None, /, **kwargs):
         self._d = {}  # type: Dict[RefIdEq[K], V]
+        if items is not None:
+            self.update(items)
+        if kwargs:
+            self.update(kwargs)
 
     def __repr__(self):
         return "DictRefKeys(%s)" % ", ".join(["%r: %r" % (k, v) for (k, v) in self.items()])
@@ -2488,6 +2548,15 @@ class DictRefKeys(Generic[K, V]):
 
     def __contains__(self, item: K):
         return RefIdEq(item) in self._d
+
+    def update(self, other: Union[Dict[K, V], Iterable[Tuple[K, V]]], /):
+        """
+        :param other: dict or iterable of (key, value) tuples
+        """
+        if isinstance(other, dict):
+            other = other.items()
+        for k, v in other:
+            self[k] = v
 
 
 def make_dll_name(basename):
@@ -2888,13 +2957,14 @@ def overwrite_os_exec(prefix_args):
         # noinspection PyProtectedMember,PyUnresolvedReferences
         _original_execvpe = os._execvpe
 
-    # noinspection PyUnusedLocal
     def wrapped_execvpe(file, args, env=None):
         """
         :param file:
         :param list[str]|tuple[str] args:
         :param dict[str] env:
         """
+        # mirrors os._execvpe; the executable is deliberately replaced by prefix_args[0] below
+        del file  # replaced by prefix_args[0] below
         new_args = prefix_args + [which(args[0])] + args[1:]
         sys.stderr.write("$ %s\n" % " ".join(new_args))
         sys.stderr.flush()
@@ -3802,6 +3872,12 @@ def should_write_to_disk(config):
             return False
     if config.is_true("dry_run"):
         return False
+    if config.is_true("torch_profile"):
+        # By default, we exit after profiling, so nothing should be written.
+        # With exit_after_profile=False, it is ordinary training which continues, so write as usual.
+        torch_profile = config.typed_value("torch_profile")
+        if not (isinstance(torch_profile, dict) and not torch_profile.get("exit_after_profile", True)):
+            return False
     return True
 
 
@@ -3891,6 +3967,8 @@ def restart_returnn():
     # https://stackoverflow.com/questions/72335904/simple-way-to-restart-application
     close_all_fds_except({0, 1, 2})
     os.execv(sys.executable, [sys.executable] + sys.argv)
+    # defensive: execv should never return (but e.g. a monkey-patched execv might)
+    # noinspection PyUnreachableCode
     raise Exception("restart_returnn: execv failed")
 
 
@@ -3926,6 +4004,8 @@ def maybe_restart_returnn_with_atfork_patch():
     print("Restarting Returnn with atfork patch...", sys.executable, sys.argv)
     sys.stdout.flush()
     os.execvpe(sys.executable, [sys.executable] + sys.argv, env)
+    # defensive: execvpe should never return (but e.g. a monkey-patched execvpe might)
+    # noinspection PyUnreachableCode
     print("execvpe did not work?")
 
 
@@ -4063,7 +4143,7 @@ class Stats:
         """
         :param str|None output_file_prefix: if given, will numpy.savetxt mean|std_dev to disk
         :param str stream_prefix:
-        :param io.TextIOBase stream: sys.stdout by default
+        :param io.TextIOBase|None stream: sys.stdout by default
         """
         if stream is None:
             stream = sys.stdout
@@ -4301,12 +4381,39 @@ def cf(filename):
     try:
         cached_fn = check_output(["cf", filename]).strip().decode("utf8")
     except (CalledProcessError, OSError):
-        if not _cf_msg_printed:
-            print("Cache manager: Error occurred, using local file")
-            _cf_msg_printed = True
-        return filename
+        # No cache manager tool here (other clusters): our own FileCache gives the same,
+        # a node-local copy of the file.
+        cached_fn = _cf_via_file_cache(filename)
+        if cached_fn is None:
+            if not _cf_msg_printed:
+                print("Cache manager: Error occurred, using local file")
+                _cf_msg_printed = True
+            return filename
     assert os.path.exists(cached_fn)
     _cf_cache[filename] = cached_fn
+    return cached_fn
+
+
+_cf_file_cache = None
+
+
+def _cf_via_file_cache(filename: str) -> Optional[str]:
+    global _cf_file_cache, _cf_msg_printed
+    from returnn.util import file_cache
+
+    if _cf_file_cache is None:
+        _cf_file_cache = file_cache.get_instance()
+    try:
+        cached_fn = _cf_file_cache.get_file(filename)
+    except OSError as exc:  # e.g. no space left in the cache directory
+        print("Cache manager: FileCache failed (%s), using local file" % exc)
+        return None
+    if not _cf_msg_printed:
+        print(
+            "Cache manager: no cf tool, using RETURNN FileCache: %s -> %s (discard further messages)"
+            % (filename, cached_fn)
+        )
+        _cf_msg_printed = True
     return cached_fn
 
 
@@ -4488,7 +4595,7 @@ _find_libcudart_from_runtime_cached = None
 def find_libcudart_from_runtime():
     """
     Looks through all libs via :func:`collect_proc_maps_exec_files`,
-    and searches for all which have the ``sgemm`` symbol.
+    and searches for libcudart.
     Currently only works on Linux (because collect_proc_maps_exec_files).
 
     :return: list of libs (their path)
@@ -4537,3 +4644,57 @@ def get_fwd_compat_kwargs() -> Dict[str, Any]:
     """
     i = fwd_compatibility_rng.integers(0, 100)
     return {f"__fwd_compat_random_arg_{i:03}": None}
+
+
+def slurm_time_left_sec() -> Optional[int]:
+    """
+    Query the remaining wallclock budget of the current SLURM job allocation.
+
+    :return: remaining seconds, or ``None`` if not running under SLURM
+        (``SLURM_JOB_ID`` env var missing) or if the ``squeue`` query fails for any reason.
+    """
+    import os
+    import subprocess
+
+    job_id = os.environ.get("SLURM_JOB_ID")
+    if not job_id:
+        return None
+    try:
+        out = subprocess.run(
+            ["squeue", "-h", "-j", job_id, "-O", "TimeLeft"],
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=10,
+        ).stdout.strip()
+    except (subprocess.SubprocessError, FileNotFoundError, OSError):
+        return None
+    if not out:
+        return None
+    return _parse_slurm_time_str(out)
+
+
+def _parse_slurm_time_str(s: str) -> Optional[int]:
+    """
+    Parse a SLURM duration string (``[D-]HH:MM:SS`` or ``MM:SS``) into seconds.
+
+    :return: seconds, or ``None`` if the input cannot be parsed.
+    """
+    days = 0
+    if "-" in s:
+        d_str, s = s.split("-", 1)
+        try:
+            days = int(d_str)
+        except ValueError:
+            return None
+    parts = s.split(":")
+    try:
+        if len(parts) == 3:
+            h, m, sec = int(parts[0]), int(parts[1]), int(parts[2])
+        elif len(parts) == 2:
+            h, m, sec = 0, int(parts[0]), int(parts[1])
+        else:
+            return None
+    except ValueError:
+        return None
+    return days * 86400 + h * 3600 + m * 60 + sec

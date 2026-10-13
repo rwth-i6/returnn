@@ -7,10 +7,10 @@ This can also be used to collect statistics over the data like mean/variance.
 
 from __future__ import annotations
 
+from typing import Optional
 import os
 import sys
 import time
-import typing
 
 import _setup_returnn_env  # noqa
 from returnn import __main__ as rnn
@@ -23,7 +23,7 @@ from returnn.util.basic import Stats, hms, hms_fraction, pretty_print, NumbersDi
 from returnn.util import basic as util
 
 
-dataset = None  # type: typing.Optional[Dataset]
+dataset: Optional[Dataset] = None
 
 
 def plot(m):
@@ -332,6 +332,8 @@ def main():
     argparser.add_argument("--max_seq_length", help="'config' or dict or int")
     argparser.add_argument("--min_seq_length", help="'config' or dict or int")
     args = argparser.parse_args()
+    # argparse: type=int with default=None, so the attr IS Optional despite the inferred int
+    # noinspection PyUnreachableCode
     if args.endseq is None:
         args.endseq = 10 if not args.seqtags else -1
     init(args)

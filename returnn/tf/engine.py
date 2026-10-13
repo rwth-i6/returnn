@@ -12,8 +12,7 @@ See :ref:`tech_overview` for an overview how it fits all together.
 
 from __future__ import annotations
 
-from typing import Callable, Dict, List, Optional, Union
-import typing
+from typing import Callable, Dict, List, Optional, Union, TypeVar, Tuple, Any
 import os
 import sys
 import time
@@ -38,6 +37,8 @@ import returnn.util.basic as util
 from returnn.util.basic import hms, NumbersDict, BackendEngine
 from returnn.forward_iface import ForwardCallbackIface
 from pprint import pprint
+
+T = TypeVar("T")
 
 
 class CancelTrainingException(Exception):
@@ -73,7 +74,7 @@ class Runner:
         :param bool|None train_flag: normally just as train.
             but e.g. maybe you want to have the train_flag but not train
         :param bool eval: whether to evaluate (i.e. calculate loss/error)
-        :param dict[str,tf.Tensor|Data|LayerBase|(()->tf.Tensor)]|None extra_fetches:
+        :param dict[str,tf.Tensor|Data|LayerBase|(()->tf.Tensor)|None]|None extra_fetches:
             additional fetches per step.
             `extra_fetches_callback` will be called with these.
             In case of Data/LayerBase, it will return a list,
@@ -131,7 +132,7 @@ class Runner:
             self._horovod_finish_all = True
         # With Horovod, during the main session.run, if reduce_type != grad or not training,
         # the following tensors are enough to ensure that we are in sync.
-        self._horovod_collected_reduce_inputs: Dict[str, (tf.Tensor, tf.Tensor)] = {}  # name -> (input,output)
+        self._horovod_collected_reduce_inputs: Dict[str, Tuple[tf.Tensor, tf.Tensor]] = {}  # name -> (input,output)
 
         from returnn.util.basic import terminal_size
 
@@ -187,6 +188,7 @@ class Runner:
                 if isinstance(v, LayerBase):
                     v = v.output
                 if callable(v):
+                    # noinspection PyCallingNonCallable
                     v = v()
                     assert isinstance(v, tf.Tensor)
                     d["extra:%s" % k] = v
@@ -733,6 +735,7 @@ class Runner:
                         )
                         elapsed_time_tf += time.time() - session_run_start_time
                         writer.add_summary(fetches_results["summary"], step + step_offset)
+                        # noinspection PyStringFormat
                         writer.add_run_metadata(run_metadata, "step_{:04d}".format(step + step_offset))
                         tl = timeline.Timeline(run_metadata.step_stats)
                         timeline_path = os.path.join(logdir, "timeline.trace")
@@ -856,7 +859,8 @@ class Runner:
         assert not self.finalized
         if self.run_exception:
             # If this is run inside a debugger, reraise the exception.
-            get_trace = getattr(sys, "gettrace", None)
+            get_trace: Optional[Callable] = getattr(sys, "gettrace", None)
+            # noinspection PyCallingNonCallable
             if get_trace and get_trace() is not None:
                 raise self.run_exception
             # We do not handle the exception otherwise anymore as this was already handled in Runner.run().
@@ -906,7 +910,7 @@ class Engine(EngineBase):
         self.use_search_flag = self.config.value("task", None) == "search"
         self.use_eval_flag = self.config.value("task", None) != "forward"
         self._const_cache: Dict[str, tf.Tensor] = {}
-        self.preload_from_files: Optional[Dict[str, Dict[str]]] = None
+        self.preload_from_files: Optional[Dict[str, Dict[str, Any]]] = None
         self.max_seqs: Optional[int] = None
 
     def finalize(self, error_occurred=False):
@@ -1281,22 +1285,19 @@ class Engine(EngineBase):
                 print("%s:" % type(exc).__name__, exc, file=log.v1)
                 sys.exit(1)
 
-    def _maybe_update_config(self, net_desc, epoch):
+    def _maybe_update_config(self, net_desc: Dict[str, Dict[str, Any]], epoch: int):
         """
         This is a slightly hacky way to overwrite entries in the config, via the network description.
         This can e.g. be used in pretraining to overwrite certain settings such as batch_size.
 
-        :param dict[str,dict[str]] net_desc:
-        :param int epoch:
+        :param net_desc:
+        :param epoch:
         """
-        updated_datasets = {}  # type: typing.Dict[str,Dataset]
+        updated_datasets: Dict[str, Dataset] = {}
 
         # noinspection PyShadowingNames
-        def set_value(key, value):
-            """
-            :param str key:
-            :param value:
-            """
+        def set_value(key: str, value: Any):
+            """set value"""
             assert key in self.config.typed_dict
             self.config.typed_dict[key] = value
             # Some entries need specific handling, e.g. to update our attribs.
@@ -2266,7 +2267,6 @@ class Engine(EngineBase):
         assert output_value.shape[1] == 1  # batch-dim
         return output_value[:, 0]  # remove batch-dim
 
-    # noinspection PyUnusedLocal
     def forward_to_hdf(self, data, output_file, combine_labels="", batch_size=0, output_layer=None):
         """
         Is aiming at recreating the same interface and output as :func:`Engine.forward_to_hdf`.
@@ -2278,6 +2278,7 @@ class Engine(EngineBase):
         :param int batch_size:
         :param LayerBase output_layer:
         """
+        del combine_labels  # not used by this implementation
         from returnn.datasets.hdf import SimpleHDFWriter
 
         if not output_layer:
@@ -2354,7 +2355,6 @@ class Engine(EngineBase):
         # https://github.com/rwth-i6/returnn/issues/1336
         raise NotImplementedError("TF engine does not support the generic forward func yet...")
 
-    # noinspection PyUnusedLocal
     def analyze(self, data, statistics):
         """
         :param Dataset.Dataset data:
@@ -2362,6 +2362,7 @@ class Engine(EngineBase):
         :return: print everything to log.v1, and return the Runner instance to get access to all the stats
         :rtype: Runner
         """
+        del statistics  # not used by this implementation
         print("Analyze with network on %r." % data, file=log.v1)
 
         if "analyze" not in self.network.layers:
@@ -2467,10 +2468,10 @@ class Engine(EngineBase):
         num_output_layers = len(output_layer_names)
 
         # Create lists with information about the output layers. All of length num_output_layers.
-        output_layers = []  # type: typing.List[LayerBase]
-        out_beam_sizes = []  # type: typing.List[typing.Optional[int]]
-        output_layer_beam_scores = []  # type: typing.List[typing.Optional[tf.Tensor]]
-        target_keys = []  # type: typing.List[typing.Optional[str]]
+        output_layers: List[LayerBase] = []
+        out_beam_sizes: List[Optional[int]] = []
+        output_layer_beam_scores: List[Optional[tf.Tensor]] = []
+        target_keys: List[Optional[str]] = []
 
         for output_layer_name in output_layer_names:
             output_layer = self.network.layers[output_layer_name]
@@ -2741,7 +2742,7 @@ class Engine(EngineBase):
         output_layer = self.network.layers[output_layer_name]
         output_t = output_layer.output.get_placeholder_as_batch_major()
         output_seq_lens_t = output_layer.output.get_sequence_lengths()
-        out_beam_size = output_layer.output.beam.beam_size
+        out_beam_size = output_layer.output.beam.beam_size if output_layer.output.beam else None
         output_layer_beam_scores_t = None
         if out_beam_size is None:
             print("Given output %r is after decision (no beam)." % output_layer, file=log.v4)
@@ -2956,7 +2957,7 @@ class Engine(EngineBase):
         output_layer = self.network.layers[output_layer_name]
         output_t = output_layer.output.get_placeholder_as_batch_major()
         output_seq_lens_t = output_layer.output.get_sequence_lengths()
-        out_beam_size = output_layer.output.beam.beam_size
+        out_beam_size = output_layer.output.beam.beam_size if output_layer.output.beam else None
         output_layer_beam_scores_t = None
         if out_beam_size is None:
             print("Given output %r is after decision (no beam)." % output_layer, file=log.v1)

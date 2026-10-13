@@ -8,7 +8,8 @@ import numpy as np
 import numpy.testing
 import _setup_test_env  # noqa
 import returnn.frontend as rf
-from returnn.tensor import Tensor, Dim, TensorDict, batch_dim
+from returnn.tensor import Tensor, Dim, TensorDict, batch_dim, single_step_dim
+from returnn.frontend._backend import Backend
 from rf_utils import run_model, tf_scope
 
 
@@ -38,7 +39,7 @@ def test_dot_attention():
 
     class _Net(rf.Module):
         def __call__(self, q: Tensor, k: Tensor, v: Tensor) -> Tensor:
-            kv_axis = Dim(None, name=f"kv-axis")
+            kv_axis = Dim(None, name="kv-axis")
             k, _ = rf.replace_dim(k, in_dim=time_dim, out_dim=kv_axis)
             v, _ = rf.replace_dim(v, in_dim=time_dim, out_dim=kv_axis)
             return rf.dot_attention(q, k, v, axis=kv_axis, key_dim=key_dim)
@@ -47,6 +48,38 @@ def test_dot_attention():
     def _forward_step(*, model: _Net, extern_data: TensorDict):
         out = model(q=extern_data["q"], k=extern_data["k"], v=extern_data["v"])
         out.mark_as_default_output(shape=(batch_dim, time_dim, value_dim))
+
+    run_model(extern_data, lambda *, epoch, step: _Net(), _forward_step)
+
+
+def test_dot_attention_multi_query_dims():
+    # Query with MULTIPLE dims beyond the keys' dims (here: beam + time),
+    # as in beam rescoring: the query attends per (beam, time) position over the same keys.
+    # Covers the dot_attention contract:
+    # "The query can have other dimensions or not. Any other unrelated axes do not matter."
+    time_dim = Dim(Tensor("time", [batch_dim], dtype="int32"))
+    beam_dim = Dim(3, name="beam")
+    key_dim = Dim(7, name="key")
+    value_dim = Dim(13, name="value")
+    extern_data = TensorDict(
+        {
+            "q": Tensor("q", [batch_dim, beam_dim, time_dim, key_dim], dtype="float32"),
+            "k": Tensor("k", [batch_dim, time_dim, key_dim], dtype="float32"),
+            "v": Tensor("v", [batch_dim, time_dim, value_dim], dtype="float32", feature_dim_axis=2),
+        }
+    )
+
+    class _Net(rf.Module):
+        def __call__(self, q: Tensor, k: Tensor, v: Tensor) -> Tensor:
+            kv_axis = Dim(None, name="kv-axis")
+            k, _ = rf.replace_dim(k, in_dim=time_dim, out_dim=kv_axis)
+            v, _ = rf.replace_dim(v, in_dim=time_dim, out_dim=kv_axis)
+            return rf.dot_attention(q, k, v, axis=kv_axis, key_dim=key_dim)
+
+    # noinspection PyShadowingNames
+    def _forward_step(*, model: _Net, extern_data: TensorDict):
+        out = model(q=extern_data["q"], k=extern_data["k"], v=extern_data["v"])
+        out.mark_as_default_output(shape=(batch_dim, beam_dim, time_dim, value_dim))
 
     run_model(extern_data, lambda *, epoch, step: _Net(), _forward_step)
 
@@ -266,6 +299,45 @@ def test_rotary_embedding():
     torch.testing.assert_allclose(out_rf_cos.raw_tensor, out_hf_cos)
 
 
+def test_apply_rope():
+    """Check that the torch backend's apply_rope matches the reference :func:`_apply_rope_real`."""
+    import torch
+
+    # noinspection PyProtectedMember
+    from returnn.frontend.attention import _apply_rope, _apply_rope_real
+
+    rf.select_backend_torch()
+    rf.set_random_seed(42)
+
+    batch_dim_ = Dim(3, name="batch")
+    time_dim = Dim(14, name="time")
+    heads_dim = Dim(4, name="heads")
+    feat_dim = Dim(64, name="feat")
+    canonical_dims = (batch_dim_, time_dim, heads_dim, feat_dim)
+
+    # Standard layout: feat_dim is last.
+    x = rf.random_uniform([batch_dim_, time_dim, heads_dim, feat_dim])
+    pos_enc = rf.sinusoidal_positional_encoding(spatial_dim=time_dim, feat_dim=feat_dim)
+
+    out_torch = _apply_rope(x, pos_enc, feat_dim)
+    out_ref = _apply_rope_real(x, pos_enc, feat_dim)
+
+    torch.testing.assert_close(
+        out_torch.copy_compatible_to_dims_raw(canonical_dims),
+        out_ref.copy_compatible_to_dims_raw(canonical_dims),
+    )
+
+    # Non-standard layout: feat_dim is not last.
+    x_t = x.copy_transpose([batch_dim_, feat_dim, time_dim, heads_dim])
+    out_torch_t = _apply_rope(x_t, pos_enc, feat_dim)
+    out_ref_t = _apply_rope_real(x_t, pos_enc, feat_dim)
+
+    torch.testing.assert_close(
+        out_torch_t.copy_compatible_to_dims_raw(canonical_dims),
+        out_ref_t.copy_compatible_to_dims_raw(canonical_dims),
+    )
+
+
 def test_rope_causal_self_att():
     import torch
     from returnn.util.pprint import pprint
@@ -313,8 +385,20 @@ def test_rope_causal_self_att():
     in_ = rf.random_uniform([batch_dim, seq_dim, model_dim])
     in_.name = "input"
 
+    # noinspection PyProtectedMember
+    from returnn.frontend.attention import _sinusoidal_positional_encoding_cache
+
+    # Make sure sinusoidal_encoding really runs inside the trace:
+    # the cache also hits across equal-valued dims (from earlier tests in this process).
+    _sinusoidal_positional_encoding_cache._lru_cache.cache_clear()
+
     with PyTracer(
-        [rf.RotaryPosCausalSelfAttention.__call__, rf.sinusoidal_positional_encoding, rf.dot_attention, rf_apply_rope],
+        [
+            rf.RotaryPosCausalSelfAttention.__call__,
+            rf.sinusoidal_encoding,
+            Backend.scaled_dot_product_attention,
+            rf_apply_rope,
+        ],
         (Tensor, Dim),
     ) as trace_rf:
         out_rf, _ = model_rf(in_, axis=seq_dim, state=model_rf.default_initial_state(batch_dims=[batch_dim]))
@@ -377,41 +461,18 @@ def test_rope_causal_self_att():
                 ),
             ),
             (
-                (rf.sinusoidal_positional_encoding, 0, "div_term", 0),
+                (rf.sinusoidal_encoding, 0, "div_term", 0),
                 (LlamaRotaryEmbedding.forward, 0, "inv_freq_expanded", 0),
                 lambda x, *, name, **_: rf.convert_to_tensor(
                     x[0, :, 0], dims=[model_rf.key_dim_per_head.div_left(2)], name=name
                 ),
             ),
             (
-                (rf.sinusoidal_positional_encoding, 0, "arg_sin", 0),
+                (rf.sinusoidal_encoding, 0, "arg_sin", 0),
                 (LlamaRotaryEmbedding.forward, 0, "freqs", 0),
                 lambda x, *, name, resolve_dim, **_: rf.convert_to_tensor(
                     x[0],
-                    dims=(resolve_dim("spatial_dim"), model_rf.key_dim_per_head.div_left(2)),
-                    name=name,
-                ),
-            ),
-            (
-                (rf_apply_rope, 0, "pe_imag", 0),
-                (apply_rotary_pos_emb, 0, "sin", 0),
-                lambda x, *, name, **_: rf.convert_to_tensor(
-                    x[0, :, : x.shape[2] // 2], dims=(seq_dim, model_rf.key_dim_per_head.div_left(2)), name=name
-                ),
-            ),
-            (
-                (rf_apply_rope, 0, "pe_imag", 0),
-                (apply_rotary_pos_emb, 0, "sin", 0),
-                lambda x, *, name, **_: rf.convert_to_tensor(
-                    x[-1, :, x.shape[2] // 2 :], dims=(seq_dim, model_rf.key_dim_per_head.div_left(2)), name=name
-                ),
-            ),
-            (
-                (rf_apply_rope, 0, "pe_real", 0),
-                (apply_rotary_pos_emb, 0, "cos", 0),
-                lambda x, *, name, **_: rf.convert_to_tensor(
-                    x[0, :, : x.shape[2] // 2],
-                    dims=(seq_dim, model_rf.key_dim_per_head.div_left(2)),
+                    dims=(resolve_dim("arg_sin.dims[0]"), model_rf.key_dim_per_head.div_left(2)),
                     name=name,
                 ),
             ),
@@ -425,17 +486,17 @@ def test_rope_causal_self_att():
                 ),
             ),
             (
-                (rf.dot_attention, 0, "energy", 0),
+                (Backend.scaled_dot_product_attention, 0, "energy", 0),
                 (eager_attention_forward, 0, "attn_weights", 0),
-                (batch_dim, model_rf.num_heads, seq_dim, "axis"),
+                (batch_dim, model_rf.num_heads, seq_dim, "kv_spatial_dim"),
             ),
             (
-                (rf.dot_attention, 0, "att_weights", 0),
+                (Backend.scaled_dot_product_attention, 0, "att_weights", 0),
                 (LlamaAttention.forward, 0, "attn_weights", -1),
-                (batch_dim, model_rf.num_heads, seq_dim, "axis"),
+                (batch_dim, model_rf.num_heads, seq_dim, "kv_spatial_dim"),
             ),
             (
-                (rf.dot_attention, 0, "att", 0),
+                (Backend.scaled_dot_product_attention, 0, "att", 0),
                 (LlamaAttention.forward, 0, "attn_output", 0),
                 (batch_dim, seq_dim, model_rf.num_heads, model_rf.value_dim_per_head),
             ),
@@ -538,7 +599,7 @@ def test_relative_positional_encoding():
     class _Net(rf.Module):
         def __call__(self, x: Tensor, *, axis: Dim) -> Tuple[Tensor, Dim]:
             x, dim = rf.relative_positional_encoding(
-                key_value_spatial_dim=axis, query_spatial_dim=axis, feat_dim=in_dim
+                key_value_spatial_dim=axis, query_spatial_dim=axis, feat_dim=in_dim, device=x.device
             )
             return x, dim
 
@@ -604,7 +665,7 @@ def test_rel_pos_self_attention():
                     x_b = rf.gather(x, axis=batch_dim, indices=b)
                     assert batch_dim in axis.dyn_size_ext.dims  # current assumption...
                     seq_len = rf.gather(axis.dyn_size_ext, axis=batch_dim, indices=b)
-                    axis_b = Dim(seq_len)
+                    axis_b = Dim(seq_len, name=f"time_b{b}")
                     # Note: The current order (replace_dim and then slice) is somewhat dependent
                     # on the current internal behavior of gather and replace_dim,
                     # which might change at some point...
@@ -736,3 +797,187 @@ def test_CausalSelfAttention():
             },
         )
         numpy.testing.assert_almost_equal(res.data["output"].raw_tensor, out_tf_v, decimal=5)
+
+
+def test_causal_self_att_after_concat_state():
+    """compare single step vs full seq vs half concat half"""
+    time1_dim = Dim(Tensor("time1", [batch_dim], dtype="int32"))
+    time2_dim = Dim(Tensor("time2", [batch_dim], dtype="int32"))
+    feat_dim = Dim(8, name="feat")
+    key_dim = Dim(6, name="key")
+    value_dim = Dim(10, name="value")
+    extern_data = TensorDict(
+        {
+            "data1": Tensor("data1", [batch_dim, time1_dim, feat_dim], dtype="float32"),
+            "data2": Tensor("data2", [batch_dim, time2_dim, feat_dim], dtype="float32"),
+        }
+    )
+
+    def _forward_step(*, model: rf.CausalSelfAttention, extern_data: TensorDict):
+        data1, data2 = extern_data["data1"], extern_data["data2"]
+        data, time_dim = rf.concat((data1, time1_dim), (data2, time2_dim))
+
+        # First on the whole sequence
+        out, _ = model(data, axis=time_dim)
+        out.mark_as_default_output(shape=(batch_dim, time_dim, value_dim))
+
+        # Now step-by-step
+        state = model.default_initial_state(batch_dims=[batch_dim])
+        res = []
+        for t in range(time_dim.get_dim_value()):
+            x_t = rf.gather(data, axis=time_dim, indices=t)
+            res_t, state = model(x_t, axis=single_step_dim, state=state)
+            res.append(res_t)
+        res_, _ = rf.stack(res, out_dim=time_dim)
+        res_.mark_as_output("out_single_steps", shape=(batch_dim, time_dim, value_dim))
+
+        # Now concat the two halves
+        res1, state = model(data1, axis=time1_dim)
+        res2, _ = model(data2, axis=time2_dim, state=state)
+        res_, _ = rf.concat((res1, time1_dim), (res2, time2_dim), out_dim=time_dim)
+        res_.mark_as_output("out_concat_two", shape=(batch_dim, time_dim, value_dim))
+
+    res = run_model(
+        extern_data,
+        lambda **_kwargs: rf.CausalSelfAttention(
+            in_dim=feat_dim,
+            proj_dim=None,
+            key_dim_total=key_dim,
+            value_dim_total=value_dim,
+            num_heads=2,
+            with_bias=False,
+        ),
+        _forward_step,
+        test_tensorflow=False,
+    )
+    out_whole = res["output"].raw_tensor
+    out_single_steps = res["out_single_steps"].raw_tensor
+    out_concat_two = res["out_concat_two"].raw_tensor
+    np.testing.assert_allclose(out_whole, out_single_steps, atol=1e-5, rtol=1e-5)
+    np.testing.assert_allclose(out_whole, out_concat_two, atol=1e-5, rtol=1e-5)
+
+
+def test_causal_self_attention_static_traceable_bound():
+    """
+    Bound-shape regime (static traceable): the causal hist kv dim gets its capacity
+    from the axis capacity, so the seq mask stays static-shaped
+    (no data-dependent size read -- illegal under tracing / CUDA-graph capture).
+    Same numbers as the eager run on the valid frames.
+    """
+    import torch
+
+    rf.select_backend_torch()
+    batch = Dim(3, name="batch")
+    time_dim = Dim(Tensor("time", [batch], dtype="int32", raw_tensor=torch.tensor([5, 4, 2], dtype=torch.int32)))
+    time_dim.capacity = 5  # == the padded size below, so both runs see the same shapes
+    in_dim = Dim(8, name="in")
+    with rf.set_default_device_ctx("cpu"):
+        rf.set_random_seed(42)
+        att = rf.CausalSelfAttention(
+            in_dim,
+            proj_dim=Dim(8, name="proj"),
+            key_dim_total=Dim(8, name="key"),
+            value_dim_total=Dim(8, name="value"),
+            num_heads=2,
+            att_dropout=0.0,
+        )
+        x = Tensor("x", [batch, time_dim, in_dim], dtype="float32")
+        x.raw_tensor = torch.randn(3, 5, 8, generator=torch.Generator().manual_seed(1))
+        out_eager, _ = att(x, axis=time_dim)
+        with rf.set_static_traceable_ctx():
+            out_bound, _ = att(x, axis=time_dim)
+        mask = rf.sequence_mask([batch, time_dim], device="cpu")
+        zero = rf.zeros((), dtype="float32")
+        a = rf.where(mask, out_eager, zero).copy_transpose(out_bound.dims).raw_tensor
+        b = rf.where(mask, out_bound, zero).copy_transpose(out_bound.dims).raw_tensor
+        torch.testing.assert_close(a, b)
+
+
+def test_dot_attention_keys_dims_not_in_query():
+    # Keys have a dim (here: batch) which the query does not have,
+    # e.g. a flat query (implicit batch) attending to batched keys.
+    # The query-spatial inference must only remove dims actually present in the query;
+    # it crashed in remaining_dims (ValueError list.remove) on the keys-only dim before.
+    import torch
+
+    batch = Dim(2, name="batch_keys_only")
+    kv_time = Dim(5, name="kv_time")
+    feat = Dim(8, name="feat")
+    q_flat = Dim(4, name="q_flat")
+    gen = torch.Generator().manual_seed(42)
+    query = Tensor("q", dims=(q_flat, feat), dtype="float32")
+    query.raw_tensor = torch.randn(4, 8, generator=gen)
+    keys = Tensor("k", dims=(batch, kv_time, feat), dtype="float32")
+    keys.raw_tensor = torch.randn(2, 5, 8, generator=gen)
+    values = Tensor("v", dims=(batch, kv_time, feat), dtype="float32")
+    values.raw_tensor = torch.randn(2, 5, 8, generator=gen)
+    att = rf.dot_attention(query, keys, values, key_dim=feat, axis=kv_time)
+    assert att.dims_set == {q_flat, batch, feat}
+    assert torch.isfinite(att.raw_tensor).all()
+
+
+def test_dot_attention_self_att_axis_in_query():
+    # axis in the query = (full) self-attention: each query position attends over all kv positions.
+    # Must match the explicit replace_dim formulation.
+    import torch
+
+    batch = Dim(2, name="batch")
+    time = Dim(5, name="time")
+    feat = Dim(8, name="feat")
+    gen = torch.Generator().manual_seed(43)
+    x = {}
+    for name in ("q", "k", "v"):
+        t = Tensor(name, dims=(batch, time, feat), dtype="float32")
+        t.raw_tensor = torch.randn(2, 5, 8, generator=gen)
+        x[name] = t
+    att = rf.dot_attention(x["q"], x["k"], x["v"], key_dim=feat, axis=time)
+    assert att.dims_set == {batch, time, feat}
+    kv_time = Dim(None, name="kv_time")
+    k2, _ = rf.replace_dim(x["k"], in_dim=time, out_dim=kv_time)
+    v2, _ = rf.replace_dim(x["v"], in_dim=time, out_dim=kv_time)
+    att_ref = rf.dot_attention(x["q"], k2, v2, key_dim=feat, axis=kv_time)
+    torch.testing.assert_close(
+        att.copy_transpose((batch, time, feat)).raw_tensor,
+        att_ref.copy_transpose((batch, time, feat)).raw_tensor,
+    )
+
+
+def test_causal_dot_attention_under_cuda_graph_capture():
+    import torch
+    import unittest
+
+    if not torch.cuda.is_available():
+        raise unittest.SkipTest("cuda only: real graph capture")
+    rf.select_backend_torch()
+    batch = Dim(3, name="batch")
+    lens = Tensor("time", [batch], dtype="int32", raw_tensor=torch.tensor([5, 4, 2], dtype=torch.int32, device="cuda"))
+    time_dim = Dim(lens, name="time", capacity=5)
+    feat = Dim(8, name="feat")
+    gen = torch.Generator().manual_seed(44)
+    x = {}
+    for name in ("q", "k", "v"):
+        t = Tensor(name, dims=(batch, time_dim, feat), dtype="float32")
+        t.raw_tensor = torch.randn(3, 5, 8, generator=gen).cuda()
+        x[name] = t
+
+    def _att():
+        return rf.dot_attention(x["q"], x["k"], x["v"], key_dim=feat, axis=time_dim, causal_query_spatial_dim=time_dim)
+
+    with rf.set_default_device_ctx("cuda"):
+        ref = _att().copy_transpose((batch, time_dim, feat)).raw_tensor.clone()
+        side = torch.cuda.Stream()
+        side.wait_stream(torch.cuda.current_stream())
+        with torch.cuda.stream(side), rf.set_static_traceable_ctx():
+            _att()
+        torch.cuda.current_stream().wait_stream(side)
+        graph = torch.cuda.CUDAGraph()
+        with torch.cuda.graph(graph), rf.set_static_traceable_ctx():
+            out = _att()
+        graph.replay()
+        torch.cuda.synchronize()
+        mask = rf.sequence_mask([batch, time_dim], device="cuda").copy_transpose((batch, time_dim)).raw_tensor
+        got = out.copy_transpose((batch, time_dim, feat)).raw_tensor
+        torch.testing.assert_close(
+            torch.where(mask.unsqueeze(-1), got, torch.zeros_like(got)),
+            torch.where(mask.unsqueeze(-1), ref, torch.zeros_like(ref)),
+        )

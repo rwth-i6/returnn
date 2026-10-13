@@ -127,6 +127,14 @@ def _lru_cache_wrapper(user_function, maxsize: int, typed: bool):
                 # still adjusting the links.
                 root = oldroot[NEXT]
                 oldkey = root[KEY]
+                # oldresult is deliberately unused:
+                # it only keeps the evicted value alive across the mutation below.
+                # Dropping it here frees the value mid-update,
+                # and a weakref finalizer (returnn.frontend._cache.Cache.set)
+                # re-enters cache_pop through the RLock,
+                # finds this link with KEY already None -- the root sentinel -- and clears it,
+                # so the next insert hits `oldroot[KEY] = key` on an empty list.
+                oldresult = root[RESULT]  # noqa: F841
                 root[KEY] = root[RESULT] = None
                 # Now update the cache dictionary.
                 del cache[oldkey]
@@ -152,9 +160,14 @@ def _lru_cache_wrapper(user_function, maxsize: int, typed: bool):
         """Clear the cache and cache statistics"""
         nonlocal hits, misses, full
         with lock:
-            for link in cache.values():
-                link.clear()  # make GC happy
+            # Unmap first, then clear the links (see cache_pop):
+            # link.clear() can drop the last reference to a cached value,
+            # whose finalizer may re-enter through the reentrant lock.
+            # With the dict already empty, such a re-entry just misses.
+            links = list(cache.values())
             cache.clear()
+            for link in links:
+                link.clear()  # make GC happy
             root[:] = [root, root, None, None]
             hits = misses = 0
             full = False
@@ -201,13 +214,19 @@ def _lru_cache_wrapper(user_function, maxsize: int, typed: bool):
         with lock:
             link = cache_get(key)
             if link is not None:
-                # Take out link.
-                link[PREV][NEXT] = link[NEXT]
-                link[NEXT][PREV] = link[PREV]
                 oldkey = link[KEY]
                 oldvalue = link[RESULT]
-                link.clear()
+                # Unmap FIRST, then take the link out.
+                # Dropping references below can run a weakref finalizer,
+                # which may re-enter cache_pop through the reentrant lock
+                # (returnn.frontend._cache.Cache.set registers exactly such a finalizer).
+                # While the dict still mapped to this link,
+                # that re-entry would mutate a half-updated or already-cleared link.
+                # Unmapped, it simply misses.
                 del cache[oldkey]
+                link[PREV][NEXT] = link[NEXT]
+                link[NEXT][PREV] = link[PREV]
+                link.clear()
                 full = cache_len() >= maxsize
                 return oldvalue
             if fallback is not_specified:
@@ -227,12 +246,12 @@ def _lru_cache_wrapper(user_function, maxsize: int, typed: bool):
             assert cache
             # Take out oldest link.
             link: list = root[NEXT]
-            link[NEXT][PREV] = root
-            root[NEXT] = link[NEXT]
             oldkey = link[KEY]
             oldvalue = link[RESULT]
+            del cache[oldkey]  # unmap first, see cache_pop
+            link[NEXT][PREV] = root
+            root[NEXT] = link[NEXT]
             link.clear()
-            del cache[oldkey]
             full = cache_len() >= maxsize
             return oldvalue
 
@@ -264,7 +283,35 @@ def _lru_cache_wrapper(user_function, maxsize: int, typed: bool):
     return wrapper
 
 
-def _make_key(args, kwds, typed, *, _kwd_mark=(object(),), _fasttypes=(int, str), _tuple=tuple, _type=type, _len=len):
+class _HashedSeq(list):
+    """
+    This class guarantees that hash() will be called no more than once
+    per element.  This is important because the lru_cache() will hash
+    the key multiple times on a cache miss.
+    """
+
+    __slots__ = ("hashvalue",)
+
+    def __init__(self, tup, *, _hash=hash):
+        super().__init__(tup)
+        self.hashvalue = _hash(tup)
+
+    def __hash__(self):
+        return self.hashvalue
+
+
+def _make_key(
+    args,
+    kwds,
+    typed,
+    *,
+    _kwd_mark=(object(),),
+    _fasttypes=(int, str),
+    _tuple=tuple,
+    _type=type,
+    _len=len,
+    _hashed_seq=_HashedSeq,
+):
     """Make a cache key from optionally typed positional and keyword arguments
 
     The key is constructed in a way that is flat as possible rather than
@@ -274,6 +321,9 @@ def _make_key(args, kwds, typed, *, _kwd_mark=(object(),), _fasttypes=(int, str)
     its hash value, then that argument is returned without a wrapper.  This
     saves space and improves lookup speed.
 
+    Every name it needs is bound as a default, like in functools, so a weakref finalizer
+    (see returnn.frontend._cache.Cache.set) can still pop its entry at interpreter shutdown,
+    after the module globals were set to None.
     """
     # All of code below relies on kwds preserving the order input by the user.
     # Formerly, we sorted() the kwds before looping.  The new way is *much*
@@ -290,21 +340,4 @@ def _make_key(args, kwds, typed, *, _kwd_mark=(object(),), _fasttypes=(int, str)
             key += _tuple(_type(v) for v in kwds.values())  # noqa
     elif _len(key) == 1 and _type(key[0]) in _fasttypes:
         return key[0]
-    return _HashedSeq(key)
-
-
-class _HashedSeq(list):
-    """
-    This class guarantees that hash() will be called no more than once
-    per element.  This is important because the lru_cache() will hash
-    the key multiple times on a cache miss.
-    """
-
-    __slots__ = ("hashvalue",)
-
-    def __init__(self, tup, *, _hash=hash):
-        super().__init__(tup)
-        self.hashvalue = _hash(tup)
-
-    def __hash__(self):
-        return self.hashvalue
+    return _hashed_seq(key)

@@ -59,6 +59,9 @@ import keyword
 import inspect
 import contextlib
 import types
+import linecache
+import traceback
+import itertools
 from weakref import WeakKeyDictionary
 
 try:
@@ -66,20 +69,24 @@ try:
 except ImportError:
     typing = None
 
-try:
+if sys.version_info >= (3, 5):
     from traceback import StackSummary, FrameSummary
-except ImportError:  # StackSummary, FrameSummary were added in Python 3.5
 
-    class _Dummy:
-        pass
+else:
 
-    StackSummary = FrameSummary = _Dummy
+    class StackSummary(list):
+        """dummy stub stack summary"""
+
+    class FrameSummary:
+        """dummy stub frame summary"""
+
 
 # noinspection PySetFunctionToLiteral,SpellCheckingInspection
 py_keywords = set(keyword.kwlist) | set(["None", "True", "False"])
 
 _cur_pwd = os.getcwd()
 _threading_main_thread = threading.main_thread() if hasattr(threading, "main_thread") else None
+_format_tb_active = threading.local()
 
 try:
     # noinspection PyUnresolvedReferences,PyUnboundLocalVariable
@@ -150,7 +157,11 @@ def parse_py_statement(line):
                 state = 1
                 str_prefix = None
                 str_is_f_string = False
-                str_quote = c
+                if line[i - 1 : i + 2] == c * 3:
+                    str_quote = c * 3
+                    i += 2
+                else:
+                    str_quote = c
                 cur_token = ""
             else:
                 cur_token = c
@@ -159,7 +170,8 @@ def parse_py_statement(line):
             if c == "\\":
                 cur_token += _escape_char(line[i : i + 1])
                 i += 1
-            elif c == str_quote:
+            elif c == str_quote[0] and line[i - 1 : i - 1 + len(str_quote)] == str_quote:
+                i += len(str_quote) - 1
                 yield "str" if not str_prefix else "%s-str" % str_prefix, cur_token
                 cur_token = ""
                 state = 0
@@ -188,7 +200,11 @@ def parse_py_statement(line):
                 state = 1
                 str_prefix = cur_token
                 str_is_f_string = "f" in str_prefix or "F" in str_prefix
-                str_quote = c
+                if line[i - 1 : i + 2] == c * 3:
+                    str_quote = c * 3
+                    i += 2
+                else:
+                    str_quote = c
                 cur_token = ""
             else:
                 cur_token += c
@@ -219,11 +235,20 @@ def parse_py_statement(line):
             else:
                 cur_token += c
         elif state == 6:  # comment
-            cur_token += c
+            if c == "\n":
+                yield "comment", cur_token
+                cur_token = ""
+                state = 0
+            else:
+                cur_token += c
     if state == 3:
         yield "id", cur_token
+        state = 0
     elif state == 6:
         yield "comment", cur_token
+        state = 0
+    if state != 0:
+        yield "incomplete", state
 
 
 def parse_py_statements(source_code):
@@ -232,9 +257,7 @@ def parse_py_statements(source_code):
     :return: via :func:`parse_py_statement`
     :rtype: typing.Iterator[typing.Tuple[str,str]]
     """
-    for line in source_code.splitlines():
-        for t in parse_py_statement(line):
-            yield t
+    return parse_py_statement(source_code)
 
 
 def grep_full_py_identifiers(tokens):
@@ -272,8 +295,6 @@ def set_linecache(filename, source):
     :param str source:
     :return: nothing
     """
-    import linecache
-
     # noinspection PyTypeChecker
     linecache.cache[filename] = None, None, [line + "\n" for line in source.splitlines()], filename
 
@@ -324,7 +345,7 @@ def simple_debug_shell(globals, locals):
 
 
 # keep non-PEP8 argument name for compatibility
-# noinspection PyPep8Naming
+# noinspection PyPep8Naming,PyShadowingNames
 def debug_shell(user_ns, user_global_ns, traceback=None, execWrapper=None):
     """
     Spawns some interactive shell. Tries to use IPython if available.
@@ -336,77 +357,86 @@ def debug_shell(user_ns, user_global_ns, traceback=None, execWrapper=None):
     :param execWrapper:
     :return: nothing
     """
-    ipshell = None
+    orig_excepthook = sys.excepthook
     try:
-        # noinspection PyPackageRequirements
-        import IPython
-
-        have_ipython = True
-    except ImportError:
-        have_ipython = False
-
-    if not ipshell and traceback and have_ipython:
-        # noinspection PyBroadException
+        ipshell = None
         try:
-            # noinspection PyPackageRequirements,PyUnresolvedReferences
-            from IPython.terminal.debugger import TerminalPdb
-
-            # noinspection PyPackageRequirements,PyUnresolvedReferences
-            from IPython.terminal.ipapp import TerminalIPythonApp
-
-            ipapp = TerminalIPythonApp.instance()
-            ipapp.interact = False  # Avoid output (banner, prints)
-            ipapp.initialize(argv=[])
-            def_colors = ipapp.shell.colors
-            pdb_obj = TerminalPdb(def_colors)
-            pdb_obj.botframe = None  # not sure. exception otherwise at quit
-
-            def ipshell():
-                """
-                Run the IPython shell.
-                """
-                pdb_obj.interaction(None, traceback)
-
-        except Exception:
-            print("IPython Pdb exception:")
-            better_exchook(*sys.exc_info(), autodebugshell=False, file=sys.stdout)
-
-    if not ipshell and have_ipython:
-        # noinspection PyBroadException
-        try:
-            # noinspection PyPackageRequirements,PyUnresolvedReferences
+            # noinspection PyPackageRequirements
             import IPython
 
-            # noinspection PyPackageRequirements,PyUnresolvedReferences
-            import IPython.terminal.embed
+            have_ipython = True
+        except ImportError:
+            have_ipython = False
 
-            class DummyMod:
-                """Dummy module"""
+        if not ipshell and traceback and have_ipython:
+            # noinspection PyBroadException
+            try:
+                # noinspection PyPackageRequirements,PyUnresolvedReferences
+                from IPython.terminal.debugger import TerminalPdb
 
-            module = DummyMod()
-            module.__dict__ = user_global_ns
-            module.__name__ = "_DummyMod"
-            if "__name__" not in user_ns:
-                user_ns = user_ns.copy()
-                user_ns["__name__"] = "_DummyUserNsMod"
-            ipshell = IPython.terminal.embed.InteractiveShellEmbed.instance(user_ns=user_ns, user_module=module)
-        except Exception:
-            print("IPython not available:")
-            better_exchook(*sys.exc_info(), autodebugshell=False, file=sys.stdout)
+                # noinspection PyPackageRequirements,PyUnresolvedReferences
+                from IPython.terminal.ipapp import TerminalIPythonApp
+
+                ipapp = TerminalIPythonApp.instance()
+                ipapp.interact = False  # Avoid output (banner, prints)
+                ipapp.initialize(argv=[])
+                def_colors = ipapp.shell.colors
+                pdb_obj = TerminalPdb(def_colors)
+                pdb_obj.botframe = None  # not sure. exception otherwise at quit
+
+                def ipshell():
+                    """
+                    Run the IPython shell.
+                    """
+                    pdb_obj.interaction(None, traceback)
+
+            except Exception:
+                print("IPython Pdb exception:")
+                better_exchook(*sys.exc_info(), autodebugshell=False, file=sys.stdout)
+
+        if not ipshell and have_ipython:
+            # noinspection PyBroadException
+            try:
+                # noinspection PyPackageRequirements,PyUnresolvedReferences
+                import IPython
+
+                # noinspection PyPackageRequirements,PyUnresolvedReferences
+                import IPython.terminal.embed
+
+                class DummyMod:
+                    """Dummy module"""
+
+                    __name__: str
+                    __dict__: dict
+
+                module = DummyMod()
+                module.__dict__ = user_global_ns
+                module.__name__ = "_DummyMod"
+                if "__name__" not in user_ns:
+                    user_ns = user_ns.copy()
+                    user_ns["__name__"] = "_DummyUserNsMod"
+                ipshell = IPython.terminal.embed.InteractiveShellEmbed(user_ns=user_ns, user_module=module)
+            except Exception:
+                print("IPython not available:")
+                better_exchook(*sys.exc_info(), autodebugshell=False, file=sys.stdout)
+            else:
+                if execWrapper:
+                    old = ipshell.run_code
+                    ipshell.run_code = lambda code: execWrapper(lambda: old(code))
+        if ipshell:
+            ipshell()
         else:
-            if execWrapper:
-                old = ipshell.run_code
-                ipshell.run_code = lambda code: execWrapper(lambda: old(code))
-    if ipshell:
-        ipshell()
-    else:
-        print("Use simple pdb debug shell:")
-        if traceback:
-            import pdb
+            print("Use simple pdb debug shell:")
+            if traceback:
+                import pdb
 
-            pdb.post_mortem(traceback)
-        else:
-            simple_debug_shell(user_global_ns, user_ns)
+                pdb.post_mortem(traceback)
+            else:
+                simple_debug_shell(user_global_ns, user_ns)
+
+    finally:
+        # Restore original sys.excepthook. IPython might have replaced it, and we don't want that.
+        sys.excepthook = orig_excepthook
 
 
 def output_limit():
@@ -420,7 +450,7 @@ def output_limit():
 def fallback_findfile(filename):
     """
     :param str filename:
-    :return: try to find the full filename, e.g. in modules, etc
+    :return: try to find the full filename, e.g. in modules, etc.
     :rtype: str|None
     """
     mods = [m for m in list(sys.modules.values()) if m and getattr(m, "__file__", None) and filename in m.__file__]
@@ -460,6 +490,8 @@ def is_source_code_missing_brackets(source_code, prioritize_missing_open=False):
     counters = [0] * len(open_brackets)
     missing_open = False
     for t_type, t_content in list(parse_py_statements(source_code)):
+        if t_type == "incomplete":
+            return 0  # stop expanding
         if t_type != "op":
             continue  # we are from now on only interested in ops (including brackets)
         if t_content in open_brackets:
@@ -495,17 +527,19 @@ def is_source_code_missing_open_brackets(source_code):
     return is_source_code_missing_brackets(source_code, prioritize_missing_open=True) < 0
 
 
-def get_source_code(filename, lineno, module_globals=None):
+def get_source_code(filename, lineno, module_globals=None, end_lineno=None):
     """
     :param str filename:
-    :param int lineno:
+    :param int lineno: 1-indexed
     :param dict[str,typing.Any]|None module_globals:
+    :param int|None end_lineno: 1-indexed. inclusive
     :return: source code of that line (including newline)
     :rtype: str
     """
-    import linecache
-
     linecache.checkcache(filename)
+    if end_lineno is not None:
+        lines = linecache.getlines(filename, module_globals)
+        return "".join(lines[lineno - 1 : end_lineno])  # 1-indexed
     source_code = linecache.getline(filename, lineno, module_globals)
     # In case of a multi-line statement, lineno is usually the last line.
     # We are checking for missing open brackets and add earlier code lines.
@@ -797,12 +831,8 @@ class Color:
                 pass
         if state == 3:
             finish_identifier()
-        out = ""
-        i = 0
-        while i < len(s):
-            j = min([k for k in color_args.keys() if k > i])
-            out += self.color(s[i:j], **color_args[i])
-            i = j
+        keys = sorted(color_args)
+        out = "".join(self.color(s[i:j], **color_args[i]) for i, j in zip(keys, keys[1:]))
         return out
 
 
@@ -876,7 +906,7 @@ class DomTerm:
         """
         :param str prefix: always visible
         :param str postfix: always visible, right after.
-        :param io.TextIOBase|io.StringIO hidden_stream: sys.stdout by default.
+        :param io.TextIOBase|io.StringIO|None hidden_stream: sys.stdout by default.
             If this is sys.stdout, it will replace that stream,
             and collect the data during the context (in the `with` block).
         """
@@ -898,7 +928,7 @@ class DomTerm:
             If this is sys.stdout, it will replace that stream,
             and collect the data during the context (in the `with` block).
         :param str postfix: always visible, right after. "" by default.
-        :param io.TextIOBase|io.StringIO file: sys.stdout by default.
+        :param io.TextIOBase|io.StringIO|None file: sys.stdout by default.
         :param int align: remove this number of initial chars from hidden
         """
         if file is None:
@@ -1064,7 +1094,16 @@ class _OutputLinesCollector:
         elif isinstance(obj, type) and hasattr(obj, "__module__") and hasattr(obj, "__qualname__"):
             s = "<class %s.%s>" % (obj.__module__, obj.__qualname__)
         else:
-            s = repr(obj)
+            try:
+                s = repr(obj)
+            except Exception as exc:
+                t = type(obj)
+                s = "<%s.%s: repr-error %s: %s>" % (
+                    getattr(t, "__module__", "?"),
+                    getattr(t, "__qualname__", "?"),
+                    exc.__class__.__name__,
+                    str(exc),
+                )
         limit = output_limit()
         if len(s) > limit:
             if self.dom_term:
@@ -1093,28 +1132,37 @@ def format_tb(
     with_color=None,
     with_vars=None,
     clear_frames=True,
+    colorize=None,
 ):
     """
     Formats a traceback into a list of strings, each corresponding to one frame.
 
     Replacement for traceback.format_tb.
 
-    :param types.TracebackType|types.FrameType|StackSummary tb: traceback. If None, will use sys._getframe
+    :param types.TracebackType|types.FrameType|StackSummary|None tb: traceback. If None, will use sys._getframe
     :param int|None limit: limit the traceback to this number of frames. by default, will look at sys.tracebacklimit
     :param dict[str,typing.Any]|None allLocals: if set, will update it with all locals from all frames
     :param dict[str,typing.Any]|None allGlobals: if set, will update it with all globals from all frames
     :param bool withTitle:
     :param bool|None with_color: output with ANSI escape codes for color
-    :param bool with_vars: will print var contents that are referenced in the source code line. by default enabled.
+    :param bool|None with_vars: will print var contents that are referenced in the source code line.
+        by default enabled (unless at exit or on a GC stack).
     :param bool clear_frames: whether to call frame.clear() after processing it.
         That will potentially fix some mem leaks regarding locals, so it can be important.
         Also see https://github.com/python/cpython/issues/113939.
         However, any further access to frame locals will not work (e.g., if you want to use a debugger afterward).
+    :param colorize: for compat with Python >=3.13, currently ignored
     :return: list of strings, each corresponding to one frame in the traceback.
         Each string contains the file name, line number, function name, source code line, maybe relevant variables,
         etc., and a final newline.
     :rtype: list[str]
     """
+    if getattr(_format_tb_active, "active", False):
+        # Recursive call (e.g. repr() of a local variable triggered another traceback).
+        # Return a placeholder to avoid infinite recursion.
+        return ["  <traceback formatting suppressed: recursive format_tb call>\n"]
+    if colorize is not None and with_color is None:
+        with_color = colorize
     color = Color(enable=with_color)
     output = _OutputLinesCollector(color=color)
 
@@ -1140,16 +1188,8 @@ def format_tb(
             output(color("format_tb: tb is None and sys._getframe() failed", color.fg_colors[1], bold=True))
             return output.lines
 
-    def is_stack_summary(_tb):
-        """
-        :param StackSummary|object _tb:
-        :rtype: bool
-        """
-        return isinstance(_tb, StackSummary)
-
-    isframe = inspect.isframe
     if withTitle:
-        if isframe(tb) or is_stack_summary(tb):
+        if isinstance(tb, (types.FrameType, StackSummary)):
             output(color("Traceback (most recent call first):", color.fg_colors[0]))
         else:  # expect traceback-object (or compatible)
             output(color("Traceback (most recent call last):", color.fg_colors[0]))
@@ -1176,6 +1216,7 @@ def format_tb(
 
     # noinspection PyBroadException
     try:
+        _format_tb_active.active = True
         if limit is None:
             if hasattr(sys, "tracebacklimit"):
                 limit = sys.tracebacklimit
@@ -1183,26 +1224,33 @@ def format_tb(
         _tb = tb
 
         while _tb is not None and (limit is None or n < limit):
-            if isframe(_tb):
+            if isinstance(_tb, types.FrameType):
                 f = _tb
-            elif is_stack_summary(_tb):
+                lasti = f.f_lasti
+                lineno, end_lineno, colno, end_colno = _get_code_position(f.f_code, lasti)
+            elif isinstance(_tb, StackSummary):
                 _tb0 = _tb[0]
                 if isinstance(_tb0, ExtendedFrameSummary):
                     f = _tb0.tb_frame
                 else:
                     f = DummyFrame.from_frame_summary(_tb0)
+                lineno = _tb0.lineno
+                end_lineno = getattr(_tb0, "end_lineno", None)
             else:
                 f = _tb.tb_frame
+                lasti = _tb.tb_lasti
+                lineno, end_lineno, colno, end_colno = _get_code_position(f.f_code, lasti)
             if allLocals is not None:
                 allLocals.update(f.f_locals)
             if allGlobals is not None:
                 allGlobals.update(f.f_globals)
-            if hasattr(_tb, "tb_lineno"):
-                lineno = _tb.tb_lineno
-            elif is_stack_summary(_tb):
-                lineno = _tb[0].lineno
-            else:
-                lineno = f.f_lineno
+            if lineno is None:
+                if hasattr(_tb, "tb_lineno"):
+                    lineno = _tb.tb_lineno
+                elif isinstance(_tb, StackSummary):
+                    lineno = _tb[0].lineno
+                else:
+                    lineno = f.f_lineno
             co = f.f_code
             filename = co.co_filename
             if not os.path.isfile(filename):
@@ -1224,7 +1272,7 @@ def format_tb(
                 ]
             )
             with output.fold_text_ctx(file_descr, merge_into_prev=False):
-                source_code = get_source_code(filename, lineno, f.f_globals)
+                source_code = get_source_code(filename, lineno, f.f_globals, end_lineno=end_lineno)
                 if source_code:
                     source_code = remove_indent_lines(replace_tab_indents(source_code)).rstrip()
                     output("    line: ", color.py_syntax_highlight(source_code), color=color.fg_colors[0])
@@ -1335,9 +1383,9 @@ def format_tb(
                     # https://github.com/python/cpython/issues/113939
                     f.f_locals  # noqa
 
-            if isframe(_tb):
+            if isinstance(_tb, types.FrameType):
                 _tb = _tb.f_back
-            elif is_stack_summary(_tb):
+            elif isinstance(_tb, StackSummary):
                 _tb = StackSummary.from_list(_tb[1:])
                 if not _tb:
                     _tb = None
@@ -1347,10 +1395,11 @@ def format_tb(
 
     except Exception:
         output(color("ERROR: cannot get more detailed exception info because:", color.fg_colors[1], bold=True))
-        import traceback
 
         for line in traceback.format_exc().split("\n"):
             output("   " + line)
+    finally:
+        _format_tb_active.active = False
 
     return output.lines
 
@@ -1645,10 +1694,10 @@ _func_from_code_object_cache = WeakKeyDictionary()  # code object -> function
 
 def get_func_from_code_object(co, frame=None):
     """
-    :param types.CodeType co:
+    :param types.CodeType|DummyFrame co:
     :param types.FrameType|DummyFrame|None frame: if given, might provide a faster way to get the function name
     :return: function, such that ``func.__code__ is co``, or None
-    :rtype: types.FunctionType
+    :rtype: types.FunctionType|None
 
     This is CPython specific (to some degree; it uses the `gc` module to find references).
     Inspired from:
@@ -1737,16 +1786,9 @@ def iter_traceback(tb=None, enforce_most_recent_call_first=False):
     if tb is None:
         tb = get_current_frame()
 
-    def is_stack_summary(_tb):
-        """
-        :param StackSummary|object _tb:
-        :rtype: bool
-        """
-        return isinstance(_tb, StackSummary)
-
     is_frame = inspect.isframe
     is_traceback = inspect.istraceback
-    assert is_traceback(tb) or is_frame(tb) or is_stack_summary(tb)
+    assert is_traceback(tb) or is_frame(tb) or isinstance(tb, StackSummary)
     # Frame or stack summery: most recent call first
     # Traceback: most recent call last
     if is_traceback(tb) and enforce_most_recent_call_first:
@@ -1759,7 +1801,7 @@ def iter_traceback(tb=None, enforce_most_recent_call_first=False):
     while _tb is not None:
         if is_frame(_tb):
             frame = _tb
-        elif is_stack_summary(_tb):
+        elif isinstance(_tb, StackSummary):
             _tb0 = _tb[0]
             if isinstance(_tb0, ExtendedFrameSummary):
                 frame = _tb0.tb_frame
@@ -1770,7 +1812,7 @@ def iter_traceback(tb=None, enforce_most_recent_call_first=False):
         yield frame
         if is_frame(_tb):
             _tb = _tb.f_back
-        elif is_stack_summary(_tb):
+        elif isinstance(_tb, StackSummary):
             _tb = StackSummary.from_list(_tb[1:])
             if not _tb:
                 _tb = None
@@ -1808,9 +1850,28 @@ class DummyFrame:
         :param FrameSummary f:
         :rtype: DummyFrame
         """
-        return cls(filename=f.filename, lineno=f.lineno, name=f.name, f_locals=f.locals)
+        return cls(
+            filename=f.filename,
+            lineno=f.lineno,
+            name=f.name,
+            f_locals=f.locals,
+            end_lineno=getattr(f, "end_lineno", None),
+            colno=getattr(f, "colno", None),
+            end_colno=getattr(f, "end_colno", None),
+        )
 
-    def __init__(self, filename, lineno, name, f_locals=None, f_globals=None, f_builtins=None):
+    def __init__(
+        self,
+        filename,
+        lineno,
+        name,
+        f_locals=None,
+        f_globals=None,
+        f_builtins=None,
+        end_lineno=None,
+        colno=None,
+        end_colno=None,
+    ):
         self.lineno = lineno
         self.tb_lineno = lineno
         self.f_lineno = lineno
@@ -1819,6 +1880,9 @@ class DummyFrame:
         self.co_filename = filename
         self.name = name
         self.co_name = name
+        self.end_lineno = end_lineno
+        self.colno = colno
+        self.end_colno = end_colno
         self.f_locals = f_locals or {}
         self.f_globals = f_globals or {}
         self.f_builtins = f_builtins or {}
@@ -1830,7 +1894,7 @@ class DummyFrame:
         self.f_locals = None
 
 
-# noinspection PyPep8Naming,PyUnusedLocal
+# noinspection PyPep8Naming
 def _StackSummary_extract(frame_gen, limit=None, lookup_lines=True, capture_locals=False):
     """
     Replacement for :func:`StackSummary.extract`.
@@ -1850,6 +1914,7 @@ def _StackSummary_extract(frame_gen, limit=None, lookup_lines=True, capture_loca
     :param capture_locals: If True, the local variables from each frame will
         be captured as object representations into the FrameSummary.
     """
+    del limit, lookup_lines, capture_locals  # part of the StackSummary.extract signature, not honoured here
     result = StackSummary()
     for f, lineno in frame_gen:
         co = f.f_code
@@ -1902,6 +1967,24 @@ def _is_module_class(obj, attr_name, obj_is_dict=False):
     return isinstance(cls, type)
 
 
+def _get_code_position(code, instruction_byte_offset):
+    """
+    :param code:
+    :param instruction_byte_offset:
+    :return: (lineno, end_lineno, colno, end_colno)
+    """
+    # code from Python >=3.11
+    if instruction_byte_offset is None or instruction_byte_offset < 0:
+        return None, None, None, None
+    if not hasattr(code, "co_positions"):  # Python <3.11
+        return None, None, None, None
+    positions_gen = code.co_positions()
+    # instruction_byte_offset (tb_lasti) is the byte offset,
+    # and each instruction is exactly 2 bytes (wordcode),
+    # so need to divide by 2 to get the actual instruction index.
+    return next(itertools.islice(positions_gen, instruction_byte_offset // 2, None))
+
+
 def install():
     """
     Replaces sys.excepthook by our better_exchook.
@@ -1920,8 +2003,6 @@ def replace_traceback_format_tb():
     Note that this kind of monkey patching might not be safe under all circumstances
     and is not officially supported by Python.
     """
-    import traceback
-
     traceback.format_tb = format_tb
     if hasattr(traceback, "StackSummary"):
         traceback.StackSummary.format = format_tb
@@ -1939,8 +2020,6 @@ def replace_traceback_print_tb():
     Note that this kind of monkey patching might not be safe under all circumstances
     and is not officially supported by Python.
     """
-    import traceback
-
     traceback.print_tb = print_tb
     traceback.print_exception = print_exception
     traceback.print_exc = print_exc

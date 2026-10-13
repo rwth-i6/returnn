@@ -1,21 +1,23 @@
 """
-This module covers the optimizer (SGD, Adam, etc) logic,
+This module covers the optimizer (SGD, Adam, etc.) logic,
 and model param update logic in general.
 """
 
 from __future__ import annotations
 
-from typing import Optional, Union, Any, Type, Callable, Sequence, Iterable, Iterator, Set, Dict, List, Tuple
+from typing import Optional, Union, Any, Type, Callable, Sequence, Iterable, Set, Dict, List, Tuple
+from types import FunctionType, BuiltinFunctionType
 import os
 import gc
+import numpy
 import torch
-import typing
 
 import returnn
 from returnn.log import log
 from returnn.util.basic import RefIdEq, get_fwd_compat_kwargs
 import returnn.frontend as rf
 from returnn.torch.frontend.bridge import wrapped_pt_module_to_rf_module
+from returnn.torch.util.optimizer_step import OptimizerStep
 
 _OptimizerClassesDictInitialized = False
 _OptimizerClassesDict = {}
@@ -74,6 +76,68 @@ def get_optimizer_class(
         raise TypeError(f"Invalid optimizer class_name {class_name!r} type {type(class_name).__name__}")
 
 
+def init_optimizer_state(optimizer: torch.optim.Optimizer):
+    """
+    Create the lazy optimizer state of all params with a grad now, as the first ``step()`` would,
+    but without a step, i.e. without touching the params.
+    For the optimizer step captured in a CUDA graph (``torch_cuda_graph`` "capture_optimizer"):
+    the state tensors are graph inputs, so they must exist before the capture.
+
+    Supported:
+
+    - an optimizer with an ``init_state()`` method (e.g. a custom optimizer): called as is.
+    - SGD: a zero momentum buffer gives the same first update as the lazy ``clone(grad)`` (for dampening 0).
+    - the torch optimizers which create their state in ``_init_group``
+      (Adam, AdamW, Adamax, NAdam, RAdam, Adadelta, RMSprop, ASGD, Adagrad, Rprop, Adafactor, Muon, ...).
+
+    :param optimizer: its params with ``.grad`` set get the state
+    """
+    init_state = getattr(optimizer, "init_state", None)
+    if callable(init_state):
+        init_state()
+        return
+    if isinstance(optimizer, torch.optim.SGD):
+        for group in optimizer.param_groups:
+            if group["momentum"] == 0:
+                continue  # no state
+            if group["dampening"] != 0:
+                raise NotImplementedError("init_optimizer_state: SGD with dampening, the first update differs")
+            for p in group["params"]:
+                if p.grad is not None and optimizer.state[p].get("momentum_buffer") is None:
+                    optimizer.state[p]["momentum_buffer"] = torch.zeros_like(p, memory_format=torch.preserve_format)
+        return
+    # private torch API: _init_group(group, params_with_grad, grads, <state lists>...)
+    # creates the missing state of the group's params with grad, and fills the given lists
+    init_group = getattr(optimizer, "_init_group", None)
+    if init_group is None:
+        raise NotImplementedError(
+            f"init_optimizer_state: {type(optimizer).__name__} can only create its state by a step,"
+            " give it an init_state() method"
+        )
+    import inspect
+
+    sig_params = inspect.signature(init_group).parameters.values()
+    num_lists = sum(1 for param in sig_params if param.default is param.empty) - 1  # excluding group
+    new_params = [p for group in optimizer.param_groups for p in group["params"] if not optimizer.state.get(p)]
+    with torch.no_grad():
+        for group in optimizer.param_groups:
+            init_group(group, *[[] for _ in range(num_lists)])
+        for p in new_params:
+            state = optimizer.state.get(p)
+            if p.grad is not None and not state:
+                raise NotImplementedError(
+                    f"init_optimizer_state: {type(optimizer).__name__}._init_group created no state,"
+                    " give it an init_state() method"
+                )
+            # the fresh step count is 0 in all torch optimizers;
+            # before torch 2.4, _init_group of Adadelta, RMSprop, Rprop also counts the step
+            if state and "step" in state:
+                if isinstance(state["step"], torch.Tensor):
+                    state["step"].zero_()
+                else:
+                    state["step"] = type(state["step"])(0)
+
+
 def _get_class_init_kwargs(optim_class):
     """
     Obtains the keyword arguments of the class provided as parameter that the user can add to their optimizer.
@@ -96,6 +160,8 @@ class Updater:
     Wraps a torch.optim.Optimizer, and extends it by some further functionality.
     """
 
+    _OptimizerParamGroupsExtraOpts = ("learning_rate_multiplier",)
+
     def __init__(self, *, config, network, device, initial_learning_rate=1.0):
         """
         :param returnn.config.Config config: config defining the training conditions.
@@ -113,6 +179,7 @@ class Updater:
         self._current_train_step = 0
         self._current_epoch = 1
         self._current_epoch_continuous = 0.0
+        self._num_consec_invalid_gradients_steps = 0
 
         self.learning_rate_function = self.config.typed_value("dynamic_learning_rate", None)
         if self.learning_rate_function is not None:
@@ -129,11 +196,21 @@ class Updater:
             else:
                 raise NotImplementedError("not implemented for not callable dynamic_learning_rate")
 
-        self._optimizer_opts = None
-        self.optimizer = None  # type: typing.Optional[torch.optim.Optimizer]
+        self._optimizer_opts: Optional[Dict[str, Any]] = None
+        self.optimizer: Optional[torch.optim.Optimizer] = None
+        self._optimizer_param_groups_extra_opts: Optional[List[Dict[str, Any]]] = None
+        # separately compiled + CUDA-graph-captured optimizer step, see returnn.torch.util.optimizer_step
+        self._optimizer_step_opts: Optional[Dict[str, Any]] = self.config.typed_value("torch_optimizer_step", None)
+        self._optimizer_step: Optional[OptimizerStep] = None
 
         self._grad_clip = self.config.float("gradient_clip", 0.0)
         self._grad_clip_global_norm = self.config.float("gradient_clip_global_norm", 0.0)
+        self.log_grad_norm_p = _parse_log_grad_norm(self.config)
+        # the pre-clip grad norm of the last step(), when log_grad_norm_p is set.
+        self.last_grad_norm: Optional[torch.Tensor] = None
+        self._num_allowed_consec_invalid_gradient_steps = self.config.typed_value(
+            "num_allowed_consec_invalid_gradient_steps", None
+        )
         self._grad_noise = self.config.float("gradient_noise", 0.0)
 
         # Check other options we have in TF updater, which we might support here later as well,
@@ -186,8 +263,33 @@ class Updater:
             )
             self._effective_learning_rate = float(lr)
         if self.optimizer:
-            for param_group in self.optimizer.param_groups:
-                param_group["lr"] = self._effective_learning_rate
+            if self._optimizer_param_groups_extra_opts:
+                assert len(self.optimizer.param_groups) == len(self._optimizer_param_groups_extra_opts)
+                lr_multiplies = [
+                    opts.get("learning_rate_multiplier", 1.0) for opts in self._optimizer_param_groups_extra_opts
+                ]
+            else:
+                lr_multiplies = [1.0] * len(self.optimizer.param_groups)
+            for i, param_group in enumerate(self.optimizer.param_groups):
+                lr = self._effective_learning_rate * lr_multiplies[i]
+                if isinstance(param_group["lr"], torch.Tensor):  # see :func:`use_device_lr_tensors`
+                    param_group["lr"].fill_(lr)
+                else:
+                    param_group["lr"] = lr
+
+    def use_device_lr_tensors(self, device: Union[str, torch.device]):
+        """
+        Convert each param group's lr to a scalar device tensor, from then on updated IN PLACE
+        by the LR schedule (:func:`set_learning_rate` / :func:`set_current_train_step`).
+        For the captured optimizer step (``torch_cuda_graph`` "capture_optimizer"):
+        the capture records the tensor's storage as a graph input,
+        so the per-step host-side updates are visible to every replay.
+        Requires the capturable optimizer (which accepts tensor lr).
+        """
+        for param_group in self.optimizer.param_groups:
+            lr = param_group["lr"]
+            if not isinstance(lr, torch.Tensor):
+                param_group["lr"] = torch.tensor(float(lr), dtype=torch.float32, device=device)
 
     def set_current_train_step(self, *, global_train_step: int, epoch: int, epoch_continuous: Optional[float] = None):
         """
@@ -208,29 +310,94 @@ class Updater:
             if the number of steps per epoch is known in advance.
         """
         self._current_train_step = global_train_step
+        if self._current_epoch != epoch:
+            self._num_consec_invalid_gradients_steps = 0
         self._current_epoch = epoch
         self._current_epoch_continuous = epoch_continuous
         self._update_effective_learning_rate()
+
+    def zero_grad(self):
+        """
+        Zero the grads before the next grad accumulation.
+        With the captured optimizer step (config ``torch_optimizer_step``), the grads are zeroed in place:
+        the captured graph reads them at fixed addresses.
+        """
+        self.optimizer.zero_grad(set_to_none=self._optimizer_step is None)
+
+    def _grads(self) -> List[torch.Tensor]:
+        """
+        :return: the current gradients
+        """
+        return [p.grad for p in self.network.parameters() if p.grad is not None]
 
     def step(self, *, grad_scaler: Optional[torch.cuda.amp.GradScaler] = None):
         """
         Perform one step, i.e. update the parameters using the optimizer given the current calculated gradients.
         """
         if grad_scaler is not None:
+            assert self._optimizer_step is None, "torch_optimizer_step: grad scaler not supported"
             grad_scaler.unscale_(self.optimizer)
+
+        # last_grad_norm is the norm of the raw grads, before noise/clip touch them.
+        # clip_grad_norm_ returns exactly that when nothing modified the grads before it,
+        # so in that common case (p=2, only global-norm clipping) it is reused below
+        # instead of walking the grads twice.
+        pre_norm = None
+        if self.log_grad_norm_p is not None and not (
+            self.log_grad_norm_p == 2 and self._grad_clip_global_norm and not self._grad_noise and not self._grad_clip
+        ):
+            pre_norm = torch.nn.utils.get_total_norm(self._grads(), norm_type=self.log_grad_norm_p)
 
         if self._grad_noise:
             gradient_noise_(self.network.parameters(), self._grad_noise)
         if self._grad_clip:
             torch.nn.utils.clip_grad_value_(self.network.parameters(), self._grad_clip)
         if self._grad_clip_global_norm:
-            torch.nn.utils.clip_grad_norm_(self.network.parameters(), self._grad_clip_global_norm)
+            norm = torch.nn.utils.clip_grad_norm_(self.network.parameters(), self._grad_clip_global_norm)
+        else:
+            norm = None
+
+        if self.log_grad_norm_p is not None:
+            if pre_norm is None:
+                assert norm is not None
+            self.last_grad_norm = pre_norm if pre_norm is not None else norm
+
+        has_invalid_gradient = False
+        if self._num_allowed_consec_invalid_gradient_steps is not None:
+            if norm is None:
+                # only reached when no global-norm clip is configured,
+                # so the grads here are in the same state clip_grad_norm_ would have measured
+                norm = torch.nn.utils.get_total_norm(self._grads())
+            has_invalid_gradient = torch.isnan(norm) or torch.isinf(norm)
+            if has_invalid_gradient:
+                self._num_consec_invalid_gradients_steps += 1
+                if self._num_consec_invalid_gradients_steps > self._num_allowed_consec_invalid_gradient_steps:
+                    raise RuntimeError(
+                        f"Got {self._num_consec_invalid_gradients_steps} invalid gradients in succession, "
+                        f"abort training"
+                    )
+                else:
+                    invalid_grads_left = (
+                        self._num_allowed_consec_invalid_gradient_steps - self._num_consec_invalid_gradients_steps
+                    )
+                    print(
+                        f"Invalid gradient in step {self._current_train_step}, skipping. "
+                        f"{invalid_grads_left} subsequent broken steps left until training is aborted.",
+                        file=log.v2,
+                    )
+            else:
+                self._num_consec_invalid_gradients_steps = 0
 
         if grad_scaler is not None:
-            grad_scaler.step(self.optimizer)
+            if not has_invalid_gradient:
+                grad_scaler.step(self.optimizer)
+            # update needs to be called even if we discard the update due to an invalid gradient
             grad_scaler.update()
-        else:
-            self.optimizer.step()
+        elif not has_invalid_gradient:
+            if self._optimizer_step is not None:
+                self._optimizer_step.step()
+            else:
+                self.optimizer.step()
 
     def create_optimizer(self):
         """
@@ -240,7 +407,9 @@ class Updater:
         if optimizer_opts is None:
             raise ValueError("config field 'optimizer' needs to be set explicitely for the Torch backend")
         self._optimizer_opts = optimizer_opts
-        self.optimizer = self._create_optimizer(optimizer_opts)
+        self.optimizer, self._optimizer_param_groups_extra_opts = self._create_optimizer(optimizer_opts)
+        if self._optimizer_step_opts is not None:
+            self._optimizer_step = OptimizerStep(optimizer=self.optimizer, opts=self._optimizer_step_opts)
 
     def load_optimizer(self, filename):
         """
@@ -330,6 +499,9 @@ class Updater:
                     if i in map_ckpt_param_idx_to_self_param_idx
                 }
         self.optimizer.load_state_dict(optimizer_state["optimizer"])
+        if self._optimizer_step is not None:
+            # new state tensors (and Python-scalar lr and counters again)
+            self._optimizer_step.invalidate()
         # https://github.com/rwth-i6/returnn/issues/1345
         del optimizer_state
         gc.collect()
@@ -366,11 +538,15 @@ class Updater:
         tmp_filename = filename + ".tmp_write"
         if os.path.exists(tmp_filename):
             os.unlink(tmp_filename)
+        optimizer_state_dict = self.optimizer.state_dict()
+        if self._optimizer_step is not None:
+            # keep the ordinary Python scalars (lr, counters) in the checkpoint
+            optimizer_state_dict = self._optimizer_step.state_dict_to_host_scalars(optimizer_state_dict)
         torch.save(
             {
-                "optimizer": self.optimizer.state_dict(),
+                "optimizer": optimizer_state_dict,
                 "optimizer_class_name": self.optimizer.__class__.__name__,
-                "optimizer_opts": self._optimizer_opts,
+                "optimizer_opts": _optimizer_opts_for_checkpoint(self._optimizer_opts),
                 "param_names": param_names,
                 "epoch": self._current_epoch,
                 "step": self._current_train_step,
@@ -388,21 +564,18 @@ class Updater:
         """
         return self.optimizer
 
-    def _create_optimizer(self, optimizer_opts):
+    def _create_optimizer(self, optimizer_opts) -> Tuple[torch.optim.Optimizer, Optional[List[Dict[str, Any]]]]:
         """
         Returns a valid optimizer considering the dictionary given by the user in the config.
 
         :param dict[str]|str optimizer_opts: Optimizer configuration specified by the user.
             If it's a dict, it must contain "class" with the optimizer name or callable.
             If it's a str, it must be the optimizer name.
-        :return: A valid optimizer.
-        :rtype: torch.optim.Optimizer
+        :return: tuple (optimizer, optional optimizer_param_groups_extra_opts).
         """
-        lr = self.learning_rate
-
         # If the parameter is already a valid optimizer, return it without further processing
         if isinstance(optimizer_opts, torch.optim.Optimizer):
-            return optimizer_opts
+            return optimizer_opts, None
         elif callable(optimizer_opts):
             optimizer_opts: Dict[str, Any] = {"class": optimizer_opts}
         else:
@@ -425,15 +598,27 @@ class Updater:
             opt_kwargs["eps"] = opt_kwargs.pop("epsilon")
         if "learning_rate" in opt_kwargs or "lr" in opt_kwargs:
             raise ValueError("'learning_rate' should be set outside of the 'optimizer' dict.")
-        lr = lr * opt_kwargs.pop("learning_rate_multiplier", 1.0)
-        opt_kwargs["lr"] = lr
+        # lr will anyway be updated in set_current_train_step / _update_effective_learning_rate,
+        # so this value doesn't really matter here
+        opt_kwargs["lr"] = self.learning_rate
 
-        params_or_param_groups = self._get_optimizer_param_groups(optim_class, opt_kwargs)
-        optimizer = optim_class(params_or_param_groups, **opt_kwargs)
+        param_groups = self._get_optimizer_param_groups(optim_class, opt_kwargs)
+        param_groups = list(param_groups)
+        assert len(param_groups) > 0, "got an empty parameter list?"
+        if not isinstance(param_groups[0], dict):
+            param_groups = [{"params": param_groups}]
+        optimizer_param_groups_extra_opts: Optional[List[Dict[str, Any]]] = None
+        if any(any(key in group for key in self._OptimizerParamGroupsExtraOpts) for group in param_groups):
+            param_groups = [dict(group) for group in param_groups]  # copy to make sure we can modify it
+            optimizer_param_groups_extra_opts = [
+                {key: group.pop(key) for key in self._OptimizerParamGroupsExtraOpts if key in group}
+                for group in param_groups
+            ]
+        optimizer = optim_class(param_groups, **opt_kwargs)
         print("Optimizer: %s" % optimizer, file=log.v1)
         assert isinstance(optimizer, torch.optim.Optimizer)
 
-        return optimizer
+        return optimizer, optimizer_param_groups_extra_opts
 
     def _create_default_optimizer(self):
         """
@@ -447,7 +632,7 @@ class Updater:
 
     def _get_optimizer_param_groups(
         self, optim_class: Type[torch.optim.Optimizer], optimizer_opts: Dict[str, Any]
-    ) -> Union[List[Dict[str, Any]], Iterator[torch.nn.Parameter]]:
+    ) -> Union[Iterable[Dict[str, Any]], Iterable[torch.nn.Parameter]]:
         """
         The weight_decay parameter from AdamW affects the weights of layers such as LayerNorm and Embedding.
         This function creates a blacklist of network modules and splits the optimizer groups in two:
@@ -480,10 +665,17 @@ class Updater:
         if custom_param_groups is not None:
             assert callable(custom_param_groups), f"invalid param_groups_custom {custom_param_groups!r}"
             rf_model = wrapped_pt_module_to_rf_module(self.network)
-            custom_param_groups = custom_param_groups(
-                model=self.network, rf_model=rf_model, optimizer_class=optim_class, optimizer_opts=optimizer_opts
+            custom_param_groups_ = custom_param_groups(
+                model=self.network,
+                rf_model=rf_model,
+                optimizer_class=optim_class,
+                optimizer_opts=optimizer_opts,
+                **get_fwd_compat_kwargs(),
             )
-            return custom_param_groups
+            assert isinstance(custom_param_groups_, Iterable) and all(
+                isinstance(group, dict) for group in custom_param_groups_
+            ), f"invalid param_groups_custom {custom_param_groups!r} result {custom_param_groups_!r} type"
+            return custom_param_groups_
 
         network_params = self.network.parameters()
 
@@ -511,11 +703,9 @@ class Updater:
         # Parameters without weight decay: biases + LayerNorm/Embedding layers.
         wd_params = set()
         no_wd_params = set()
-        blacklist_wd_modules = optimizer_opts.pop("weight_decay_modules_blacklist", None)
-        if blacklist_wd_modules is None:
-            blacklist_wd_modules = (torch.nn.LayerNorm, torch.nn.Embedding)
-        else:
-            blacklist_wd_modules = _wrap_user_blacklist_wd_modules(blacklist_wd_modules)
+        blacklist_wd_modules = wrap_user_blacklist_wd_modules(
+            optimizer_opts.pop("weight_decay_modules_blacklist", None)
+        )
         custom_include_check = optimizer_opts.pop("weight_decay_custom_include_check", None)
         if custom_include_check:
             assert callable(custom_include_check), f"invalid weight_decay_custom_include_check {custom_include_check!r}"
@@ -562,9 +752,16 @@ class Updater:
         return optim_groups
 
 
-def _wrap_user_blacklist_wd_modules(
-    mods: Sequence[Union[str, Type[rf.Module], Type[torch.nn.Module]]],
+def wrap_user_blacklist_wd_modules(
+    mods: Optional[Sequence[Union[str, Type[rf.Module], Type[torch.nn.Module]]]],
 ) -> Tuple[type, ...]:
+    """
+    Wraps the user-provided blacklist_weight_decay_modules into a tuple of types.
+    This supports both pure PyTorch modules (e.g. "torch.nn.LayerNorm")
+    and RF modules (e.g. "rf.LayerNorm"), which can be specified as strings or types.
+    """
+    if mods is None:
+        return torch.nn.LayerNorm, torch.nn.Embedding
     assert isinstance(mods, (list, tuple)), f"invalid blacklist_weight_decay_modules {mods!r}"
     res = []
     for mod in mods:
@@ -574,6 +771,33 @@ def _wrap_user_blacklist_wd_modules(
         assert issubclass(mod, (rf.Module, torch.nn.Module)), f"invalid blacklist_weight_decay_modules {mods!r}"
         res.append(mod)
     return tuple(res)
+
+
+def _optimizer_opts_for_checkpoint(obj: Any) -> Any:
+    """
+    :param obj: optimizer options, or a part of them
+    :return: same structure, with only types which ``torch.load(weights_only=True)`` accepts:
+        numpy scalars and arrays become Python numbers and (nested) lists,
+        an optimizer class becomes its short name if it has one (e.g. ``"adamw"``),
+        other classes and functions their name as in :func:`rf.build_dict`, any other object ``"object:<repr>"``
+    """
+    if obj is None or type(obj) in (bool, int, float, str):
+        return obj
+    if isinstance(obj, (numpy.generic, numpy.ndarray)):
+        return _optimizer_opts_for_checkpoint(obj.tolist())
+    if isinstance(obj, dict):
+        return {_optimizer_opts_for_checkpoint(k): _optimizer_opts_for_checkpoint(v) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [_optimizer_opts_for_checkpoint(v) for v in obj]
+    if isinstance(obj, tuple):
+        return tuple(_optimizer_opts_for_checkpoint(v) for v in obj)
+    if isinstance(obj, type) and issubclass(obj, torch.optim.Optimizer):
+        _init_optimizer_classes_dict()
+        if _OptimizerClassesDict.get(obj.__name__.lower()) is obj:
+            return obj.__name__.lower()
+    if isinstance(obj, (type, FunctionType, BuiltinFunctionType)):
+        return rf.build_dict(obj)["class"]
+    return f"object:{obj!r}"
 
 
 def gradient_noise_(params: Iterable[torch.nn.Parameter], std: float):
@@ -586,3 +810,26 @@ def gradient_noise_(params: Iterable[torch.nn.Parameter], std: float):
             noise = torch.empty_like(param.grad)
             torch.nn.init.trunc_normal_(noise, std=std, a=a, b=b)
             param.grad += noise
+
+
+def _parse_log_grad_norm(config) -> Optional[Union[int, float]]:
+    """
+    :param returnn.config.Config config:
+    :return: the norm order p to record per step, or None if disabled.
+        Config "log_grad_norm": True means p=2, or give p directly.
+    """
+    log_grad_norm = config.opt_typed_value("log_grad_norm", False)
+    if isinstance(log_grad_norm, str):
+        if log_grad_norm.lower() in ["true", "false", "none"]:
+            log_grad_norm = {"true": True, "false": False, "none": None}[log_grad_norm.lower()]
+        else:
+            raise ValueError(f"Invalid value for log_grad_norm: {log_grad_norm!r}")
+    if log_grad_norm is None:
+        pass
+    elif isinstance(log_grad_norm, bool):
+        log_grad_norm = 2 if log_grad_norm else None
+    elif isinstance(log_grad_norm, (int, float)):
+        assert log_grad_norm > 0, f"log_grad_norm {log_grad_norm} > 0 expected"
+    else:
+        raise TypeError(f"Invalid type for log_grad_norm: {log_grad_norm!r} type {type(log_grad_norm)}")
+    return log_grad_norm

@@ -5,6 +5,7 @@ RETURNN frontend (returnn.frontend) tests
 from __future__ import annotations
 from typing import Tuple
 import _setup_test_env  # noqa
+from returnn.util import math as util_math
 import returnn.frontend as rf
 from returnn.tensor import Tensor, Dim, TensorDict, batch_dim
 from rf_utils import run_model
@@ -30,6 +31,88 @@ def test_stft():
         out.mark_as_output("normal", shape=(batch_dim, out_spatial_dim, out_dim))
 
     run_model(extern_data, lambda *, epoch, step: rf.Module(), _forward_step)
+
+
+def test_stft_after_padding():
+    time_dim = Dim(Tensor("time", [batch_dim], dtype="int32"))
+    pad_left_dim = Dim(Tensor("pad_left", [batch_dim], dtype="int32"))
+    pad_right_dim = Dim(Tensor("pad_right", [batch_dim], dtype="int32"))
+    extern_data = TensorDict(
+        {
+            "data": Tensor("data", [batch_dim, time_dim], dtype="float32"),
+            "left": Tensor("left", [batch_dim, pad_left_dim], dtype="float32"),
+            "right": Tensor("right", [batch_dim, pad_right_dim], dtype="float32"),
+        }
+    )
+
+    # noinspection PyShadowingNames
+    def _forward_step(*, extern_data: TensorDict, **_):
+        x, left, right = extern_data["data"], extern_data["left"], extern_data["right"]
+        x, spatial_dim = rf.concat((left, pad_left_dim), (x, time_dim), (right, pad_right_dim))
+        assert x.raw_tensor.shape[x.get_axis_from_description(spatial_dim)] == spatial_dim.get_dim_value()
+        out, out_spatial_dim, out_dim = rf.stft(
+            x, in_spatial_dim=spatial_dim, frame_step=3, frame_length=17, fft_length=32
+        )
+        assert out.raw_tensor.shape[out.get_axis_from_description(out_spatial_dim)] == out_spatial_dim.get_dim_value()
+        out.mark_as_default_output(shape=(batch_dim, out_spatial_dim, out_dim))
+
+    run_model(
+        extern_data,
+        lambda **_: rf.Module(),
+        _forward_step,
+        dyn_dim_min_sizes={time_dim: 50},
+        dyn_dim_max_sizes={time_dim: 100, pad_left_dim: 4, pad_right_dim: 4},
+        test_tensorflow=False,
+        test_single_batch_entry=False,
+    )
+
+
+def test_stft_len():
+    time_dim = Dim(Tensor("time", [batch_dim], dtype="int32"))
+    extern_data = TensorDict(
+        {
+            "data": Tensor("data", [batch_dim, time_dim], dtype="float32"),
+        }
+    )
+
+    def _shape(x: Tensor):
+        if hasattr(x.raw_tensor, "shape"):
+            return x.raw_tensor.shape
+        return "(unk)"
+
+    def _lens(dim: Dim):
+        raw_lens = dim.get_dyn_size_ext_for_device("cpu").raw_tensor
+        if hasattr(raw_lens, "numpy"):
+            return raw_lens.numpy()
+        return "(unk)"
+
+    # noinspection PyShadowingNames
+    def _forward_step(*, model: rf.Module, extern_data: TensorDict):
+        model  # unused # noqa
+        x = extern_data["data"]
+
+        sampling_rate: int = 16_000
+        window_len: float = 0.025
+        step_len: float = 0.010
+        window_num_frames = int(window_len * sampling_rate)
+        step_num_frames = int(step_len * sampling_rate)
+        n_fft = util_math.next_power_of_two(window_num_frames)
+        print(
+            f"stft on {x} {_shape(x)} lens={_lens(time_dim)}"
+            f" frame_step={step_num_frames}, frame_length={window_num_frames}, fft_length={n_fft}"
+        )
+        out, out_spatial_dim, out_dim = rf.stft(
+            x, in_spatial_dim=time_dim, frame_step=step_num_frames, frame_length=window_num_frames, fft_length=n_fft
+        )
+        print(f"out: {out} {_shape(out)} lens={_lens(out_spatial_dim)}")
+        axis = out.get_axis_from_description(out_spatial_dim)
+        if hasattr(out.raw_tensor, "shape") and out.raw_tensor.shape[axis] is not None:
+            assert out.raw_tensor.shape[axis] == out_spatial_dim.get_dim_value()
+
+        out.mark_as_output("stft", shape=(batch_dim, out_spatial_dim, out_dim))
+
+    for s in [100, 398, 399, 400, 511, 512, 1024, 160 + 398, 160 + 399, 160 + 400]:
+        run_model(extern_data, lambda **_kw: rf.Module(), _forward_step, dyn_dim_max_sizes={time_dim: s})
 
 
 def test_mel_filterbank():
@@ -77,4 +160,44 @@ def test_audio_specaugment():
         out = rf.audio.specaugment(data, spatial_dim=time_dim, feature_dim=in_dim, only_on_train=False)
         out.mark_as_default_output(shape=(batch_dim, time_dim, in_dim))
 
-    run_model(extern_data, lambda *, epoch, step: rf.Module(), _forward_step)
+    # test_single_batch_entry=False: that phase re-runs with the same seed but different shapes,
+    # so the random mask draws differ between the batched and the single run
+    # (earlier code versions passed only by coincidence of the fixed seed).
+    # test_tensorflow=False: the mask widths are drawn over the top-k dim,
+    # which is dynamic (k = max over the per-seq num draws),
+    # and the TF random-journal replay cannot reconstruct draws over data-dependent dims.
+    run_model(
+        extern_data,
+        lambda *, epoch, step: rf.Module(),
+        _forward_step,
+        test_single_batch_entry=False,
+        test_tensorflow=False,
+    )
+
+
+def test_audio_specaugment_num_masks_per_seq():
+    time_dim = Dim(Tensor("time", [batch_dim], dtype="int32"))
+    in_dim = Dim(7, name="in")
+    extern_data = TensorDict(
+        {
+            "data": Tensor("data", [batch_dim, time_dim, in_dim], dtype="float32", feature_dim=in_dim),
+        }
+    )
+
+    # noinspection PyShadowingNames
+    def _forward_step(*, model: rf.Module, extern_data: TensorDict):
+        model  # noqa  # unused
+        data = extern_data["data"]
+        out = rf.audio.specaugment(
+            data, spatial_dim=time_dim, feature_dim=in_dim, only_on_train=False, num_masks_per_seq=True
+        )
+        out.mark_as_default_output(shape=(batch_dim, time_dim, in_dim))
+
+    # see test_audio_specaugment on the flags
+    run_model(
+        extern_data,
+        lambda *, epoch, step: rf.Module(),
+        _forward_step,
+        test_single_batch_entry=False,
+        test_tensorflow=False,
+    )

@@ -180,6 +180,7 @@ def prepare_gradient_checkpointing():
             return orig_grad_func(_wrapped_op, *out_grads)
 
         op._gradient_function = _wrapped_grad_func
+        # noinspection PyUnresolvedReferences,PyProtectedMember
         op._RETURNN_gradient_checkpoint_wrapped_grad_func = _wrapped_grad_func
 
     for graph, ls in _grad_checkpoints.items():

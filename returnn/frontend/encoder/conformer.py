@@ -8,6 +8,9 @@ https://github.com/rwth-i6/returnn_common/issues/233
 
 from __future__ import annotations
 from typing import Optional, Union, Any, Tuple, List, Dict, Callable
+from types import FunctionType
+import functools
+import inspect
 import copy as _copy
 from returnn.tensor import Tensor, Dim
 import returnn.frontend as rf
@@ -64,14 +67,20 @@ class ConformerConvBlock(rf.Module):
         self.positionwise_conv2 = rf.Linear(out_dim, out_dim)
         if not callable(norm):
             raise TypeError(f"{self}: unexpected norm type {norm!r}")
-        self.norm = norm
+        # Callable[...]: the norms differ in their kwargs, see _norm_wants_spatial_dim below.
+        self.norm: Callable[..., Tensor] = norm
+        # Some norms (e.g. GroupNormSpatial) need the spatial dim to pool the statistics over time.
+        # Detect that once here and pass it through in __call__,
+        # instead of forcing a no-op spatial_dim arg onto BatchNorm/LayerNorm.
+        self._norm_wants_spatial_dim = "spatial_dim" in inspect.signature(norm).parameters
 
     def __call__(self, inp: Tensor, *, spatial_dim: Dim) -> Tensor:
         """forward"""
         x_conv1 = self.positionwise_conv1(inp)
         x_act, _ = rf.gating(x_conv1)
         x_depthwise_conv, _ = self.depthwise_conv(x_act, in_spatial_dim=spatial_dim)
-        x_normed = self.norm(x_depthwise_conv)
+        # noinspection PyArgumentList
+        x_normed = self.norm(x_depthwise_conv, **({"spatial_dim": spatial_dim} if self._norm_wants_spatial_dim else {}))
         x_swish = rf.swish(x_normed)
         x_conv2 = self.positionwise_conv2(x_swish)
         return x_conv2
@@ -147,6 +156,14 @@ class ConformerConvSubsample(ISeqDownsamplingEncoder):
         self._final_second_spatial_dim = second_spatial_dim
         self.out_dim = second_spatial_dim * prev_out_dim
 
+        # Downsampling factor along the first (time) spatial dimension.
+        # Product of all temporal strides and temporal pool sizes.
+        self.downsample_factor = 1
+        for i, conv_layer in enumerate(self.conv_layers):
+            self.downsample_factor *= conv_layer.strides[0] if conv_layer.strides is not None else 1
+            if self.pool_sizes and i < len(self.pool_sizes):
+                self.downsample_factor *= self.pool_sizes[i][0]
+
     def __call__(self, source: Tensor, *, in_spatial_dim: Dim) -> Tuple[Tensor, Dim]:
         """forward"""
         assert self.in_dim in source.dims
@@ -164,6 +181,25 @@ class ConformerConvSubsample(ISeqDownsamplingEncoder):
         x, in_spatial_dims[-1] = rf.replace_dim(x, out_dim=self._final_second_spatial_dim, in_dim=in_spatial_dims[-1])
         out, _ = rf.merge_dims(x, dims=[self._final_second_spatial_dim, in_dim])
         return out, in_spatial_dims[0]
+
+    def get_out_spatial_dim(self, in_spatial_dim: Dim) -> Dim:
+        """Get output spatial dimension given input spatial dimension."""
+        out_spatial_dim = in_spatial_dim
+        for i, conv_layer in enumerate(self.conv_layers):
+            (out_spatial_dim,) = rf.make_conv_out_spatial_dims(
+                [out_spatial_dim],
+                filter_size=conv_layer.filter_size[0],
+                strides=conv_layer.strides[0],
+                padding=conv_layer.padding,
+            )
+            if self.pool_sizes and i < len(self.pool_sizes):
+                (out_spatial_dim,) = rf.make_conv_out_spatial_dims(
+                    [out_spatial_dim],
+                    filter_size=self.pool_sizes[i][0],
+                    strides=self.pool_sizes[i][0],
+                    padding="same",
+                )
+        return out_spatial_dim
 
 
 class ConformerEncoderLayer(rf.Module):
@@ -220,7 +256,7 @@ class ConformerEncoderLayer(rf.Module):
 
         if conv_norm is NotSpecified or conv_norm is rf.BatchNorm:
             conv_norm_opts = conv_norm_opts.copy() if conv_norm_opts else {}
-            conv_norm_opts.setdefault("use_mask", False)
+            conv_norm_opts.setdefault("use_mask", conv_norm_use_mask_default())
             conv_norm = rf.BatchNorm(out_dim, **conv_norm_opts)
         elif isinstance(conv_norm, type):
             conv_norm = conv_norm(out_dim, **(conv_norm_opts or {}))
@@ -271,6 +307,7 @@ class ConformerEncoderLayer(rf.Module):
         x_mhsa = self.self_att(x_mhsa_ln, axis=spatial_dim)
         x_mhsa = rf.dropout(x_mhsa, self.dropout, axis=self.dropout_broadcast and self.out_dim)
         x_mhsa_out = x_mhsa + x_ffn1_out
+        del x_mhsa
 
         # Conv
         x_conv_ln = self.conv_layer_norm(x_mhsa_out)
@@ -298,7 +335,8 @@ class ConformerEncoder(ISeqDownsamplingEncoder):
         *,
         num_layers: int,
         input_layer: Optional[Union[ConformerConvSubsample, ISeqDownsamplingEncoder, rf.Module, Any]],
-        input_embedding_scale: float = 1.0,
+        input_embedding_scale: Optional[float] = None,
+        pos_enc: Union[None, Callable, Dict[str, Any], rf.Module] = None,
         input_dropout: float = 0.1,
         ff_dim: Dim = NotSpecified,
         ff_activation: Union[Callable[[Tensor], Tensor], Dict[str, Any], rf.Module] = NotSpecified,
@@ -317,8 +355,17 @@ class ConformerEncoder(ISeqDownsamplingEncoder):
         :param num_layers: the number of encoder layers
         :param input_layer: input/frontend/prenet with potential subsampling.
             (x, in_spatial_dim) -> (y, out_spatial_dim)
-        :param input_embedding_scale: applied after input_layer. 1.0 by default for historic reasons.
-            In std Transformer, also ESPnet E-Branchformer and Conformer, this is sqrt(out_dim).
+        :param input_embedding_scale: applied after input_layer.
+            1.0 by default for historic reasons if pos_enc is None,
+            else sqrt(out_dim) by default.
+            In std Transformer, also ESPnet E-Branchformer and Conformer, this is sqrt(out_dim),
+            which is relevant when you add positional encoding.
+        :param pos_enc: positional encoding, applied after input_embedding_scale.
+            None (no positional encoding) by default, unlike standard Transformer.
+            E.g. :func:`rf.sinusoidal_positional_encoding` for absolute pos enc.
+            Note, relative positional encoding is usually part of the attention layer,
+            e.g. :class:`rf.RelPosSelfAttention`,
+            and nothing needs to be set here.
         :param input_dropout: applied after input_projection(input_layer(x))
         :param ff_dim: the dimension of feed-forward layers. 2048 originally, or 4 times out_dim
         :param ff_activation: activation function for feed-forward network
@@ -352,12 +399,22 @@ class ConformerEncoder(ISeqDownsamplingEncoder):
         else:
             raise TypeError(f"unexpected input_layer {input_layer!r}")
         self.input_layer = input_layer
-        self.input_projection = (
-            rf.Linear(self.input_layer.out_dim if self.input_layer else self.in_dim, self.out_dim, with_bias=False)
-            if input_layer
-            else None
-        )
+        in_dim = self.input_layer.out_dim if self.input_layer else self.in_dim
+        self.input_projection = rf.Linear(in_dim, self.out_dim, with_bias=False) if in_dim != self.out_dim else None
+        if input_embedding_scale is None:
+            input_embedding_scale = (self.out_dim.dimension**0.5) if pos_enc is not None else 1.0
         self.input_embedding_scale = input_embedding_scale
+        if pos_enc is None:
+            pass
+        elif isinstance(pos_enc, dict):
+            pos_enc = rf.build_from_dict(pos_enc, feat_dim=self.out_dim)
+        elif isinstance(pos_enc, rf.Module):
+            pass
+        elif isinstance(pos_enc, FunctionType):
+            pos_enc = functools.partial(pos_enc, feat_dim=self.out_dim)
+        else:
+            raise TypeError(f"unexpected pos_enc type {pos_enc!r}")
+        self.pos_enc = pos_enc
         self.input_dropout = input_dropout
 
         if not encoder_layer or isinstance(encoder_layer, (dict, type)):
@@ -404,13 +461,17 @@ class ConformerEncoder(ISeqDownsamplingEncoder):
         collected_outputs: Optional[Dict[str, Tensor]] = None,
     ) -> Tuple[Tensor, Dim]:
         """forward"""
-        if self.input_layer:
-            x_subsample, out_spatial_dim = self.input_layer(source, in_spatial_dim=in_spatial_dim)
+        if self.input_layer and self.input_layer.in_dim in source.dims:
+            x, out_spatial_dim = self.input_layer(source, in_spatial_dim=in_spatial_dim)
         else:
-            x_subsample, out_spatial_dim = source, in_spatial_dim
-        x = self.input_projection(x_subsample) if self.input_projection else x_subsample
+            x, out_spatial_dim = source, in_spatial_dim
+        if self.input_projection and self.input_projection.in_dim in x.dims:
+            x = self.input_projection(x)
+        assert self.out_dim in x.dims
         if self.input_embedding_scale != 1.0:
             x = x * self.input_embedding_scale
+        if self.pos_enc is not None:
+            x = x + self.pos_enc(spatial_dim=out_spatial_dim)
         x = rf.dropout(x, self.input_dropout, axis=self.dropout_broadcast and self.out_dim)
         x = self.layers(x, spatial_dim=out_spatial_dim, collected_outputs=collected_outputs)
         return x, out_spatial_dim
@@ -442,3 +503,35 @@ def make_ff(
             raise TypeError(f"unexpected ff type {ff!r}")
     assert isinstance(ff, rf.Module)
     return ff
+
+
+def conv_norm_use_mask_default() -> Optional[bool]:
+    """
+    :return: default for ``use_mask`` of the conv-block :class:`rf.BatchNorm`,
+        see :class:`ConformerEncoderLayer` ``conv_norm_opts``.
+        None means :class:`rf.BatchNorm` decides itself, via :func:`rf.use_mask_default`,
+        which keeps the masking policy in one place and honors the global ``rf_use_mask``.
+
+    Check the global RETURNN config for the ``rf_conformer_conv_norm_use_mask`` option.
+    If that is not specified, with behavior version >= 29 this defers to :class:`rf.BatchNorm`,
+    with behavior version <= 28 the statistics stay unmasked, as they always were here.
+
+    Unmasked, the statistics run over the raw storage, so they depend on the storage layout:
+    a padded batch includes its padding frames, a packed batch includes its gap frames.
+    The same model therefore normalizes differently depending on how the batch is stored,
+    and packed and padded training cannot agree.
+    """
+    from returnn.config import get_global_config
+    from returnn.util.basic import BehaviorVersion
+
+    config = get_global_config(raise_exception=False)
+    config_value = None
+    if config:
+        if "rf_conformer_conv_norm_use_mask" in config.typed_dict:
+            config_value = config.typed_dict["rf_conformer_conv_norm_use_mask"]
+            assert config_value is None or isinstance(config_value, bool)
+        elif "rf_conformer_conv_norm_use_mask" in config.dict:
+            config_value = config.bool("rf_conformer_conv_norm_use_mask", None)
+    if config_value is not None:
+        return config_value
+    return None if BehaviorVersion.get() >= 29 else False

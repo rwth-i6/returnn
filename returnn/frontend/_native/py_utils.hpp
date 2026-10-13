@@ -60,7 +60,7 @@ public:
     }
 
     int size() const { return _size; }
-    PyObject* getItem(int i) const {
+    PyObject* getItem(int i) const { // borrowed reference. No bound checks in release mode.
 #ifdef DEBUG
         assert(i >= 0 && i < _size);
 #endif

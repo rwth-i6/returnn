@@ -110,13 +110,22 @@ try:
 
     # noinspection PyPackageRequirements
     import triton.language as tl
-except ImportError as e:
+except ImportError:
     triton = None
     tl = None
 
 
-# restore_value is not available in older versions of triton
-if triton and "restore_value" in inspect.signature(triton.autotune).parameters:
+_triton_usable = False
+if triton:
+    # restore_value is not available in older versions of triton
+    _triton_usable = "restore_value" in inspect.signature(triton.autotune).parameters
+    # The kernel is only ever used on CUDA tensors (see the p.is_cuda gate in the step).
+    # Without a GPU, triton's lazy driver init inside the kernel decorators below
+    # would crash AT MODULE IMPORT ("0 active drivers"),
+    # e.g. in a CPU-only env that has a CUDA triton installed.
+    _triton_usable = _triton_usable and torch.cuda.is_available()
+
+if _triton_usable:
     # triton cuda kernel
 
     # noinspection PyPep8Naming,PyArgumentList
@@ -199,6 +208,8 @@ if triton and "restore_value" in inspect.signature(triton.autotune).parameters:
         def _grid(meta):
             return tuple((triton.cdiv(n_elements, meta["BLOCK_SIZE"]),))
 
+        # BLOCK_SIZE comes from the Triton launcher metadata, it is not passed by the caller
+        # noinspection PyArgumentList
         _triton_update_fn_kernel[_grid](p, grad, exp_avg, lr, wd, beta1, beta2, n_elements)
 
 else:

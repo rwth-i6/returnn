@@ -367,7 +367,8 @@ class SprintDatasetBase(Dataset):
         This is called via the Sprint main thread.
 
         :param numpy.ndarray features: format (input-feature,time) (via Sprint)
-        :param dict[str,numpy.ndarray|str] targets: format (time) (idx of output-feature)
+        :param dict[str,numpy.ndarray|str]|numpy.ndarray|None targets: format (time) (idx of output-feature).
+            A non-dict is wrapped as {"classes": targets}.
         :param str|None segment_name:
         :returns the sorted seq index
         :rtype: int
@@ -738,6 +739,8 @@ class ExternSprintDataset(SprintDatasetBase):
         """
         if self.child_pid:
             expected_exit_status = 0 if wait_thread and not self.python_exit else None
+            # _join_child is tri-state: None means "unknown", so `is False` is not `not`
+            # noinspection PySimplifyBooleanCheck
             if self._join_child(wait=False, expected_exit_status=expected_exit_status) is False:  # Not yet terminated.
                 interrupt = not self.reached_final_seq_seen_all or not wait_thread
                 if interrupt:
@@ -804,6 +807,8 @@ class ExternSprintDataset(SprintDatasetBase):
                 print("%s child: exit" % self)
                 # noinspection PyProtectedMember,PyUnresolvedReferences
                 os._exit(1)
+                # defensive: _exit should never return (but e.g. a monkey-patched _exit might)
+                # noinspection PyUnreachableCode
                 return  # Not reached.
 
         # parent
@@ -891,8 +896,8 @@ class ExternSprintDataset(SprintDatasetBase):
         if self.predefined_seq_list_order:
             import tempfile
 
-            self.seq_list_file = tempfile.mktemp(prefix="returnn-sprint-predefined-seq-list")
-            with open(self.seq_list_file, "w") as f:
+            fd, self.seq_list_file = tempfile.mkstemp(prefix="returnn-sprint-predefined-seq-list")
+            with os.fdopen(fd, "w") as f:
                 for tag in self.predefined_seq_list_order:
                     f.write(tag)
                     f.write("\n")
@@ -906,8 +911,8 @@ class ExternSprintDataset(SprintDatasetBase):
             assert not self.predefined_seq_list_order
             import tempfile
 
-            self.seq_list_file = tempfile.mktemp(prefix="returnn-sprint-predefined-seq-filter")
-            with open(self.seq_list_file, "w") as f:
+            fd, self.seq_list_file = tempfile.mkstemp(prefix="returnn-sprint-predefined-seq-filter")
+            with os.fdopen(fd, "w") as f:
                 for tag in self.seq_tags_filter:
                     f.write(tag)
                     f.write("\n")
@@ -1024,7 +1029,7 @@ class ExternSprintDataset(SprintDatasetBase):
 
     def init_seq_order(self, epoch=None, seq_list=None, seq_order=None):
         """
-        :param int epoch:
+        :param int|None epoch:
         :param list[str]|None seq_list:
         :param list[int]|None seq_order:
         :rtype: bool
@@ -1041,7 +1046,8 @@ class ExternSprintDataset(SprintDatasetBase):
                 and self.expected_load_seq_start == 0
                 and seq_list == self.predefined_seq_list_order
             ):
-                return
+                # nothing changed: same epoch, nothing consumed yet, same seq list.
+                return False
             # Reset epoch such that exiting the child will go smoothly.
             super(ExternSprintDataset, self).init_seq_order(epoch=None, seq_list=None, seq_order=None)
         # Exit child, before we overwrite anything, such as new epoch or seq_list.

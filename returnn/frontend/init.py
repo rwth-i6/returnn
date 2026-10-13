@@ -40,7 +40,7 @@ class Normal(ParamInit):
     See :class:`VarianceScaling` and derivatives for variants which depend on fan in/out.
     """
 
-    def __init__(self, stddev: float, *, truncated: bool = True, dtype: str = None):
+    def __init__(self, stddev: float, *, truncated: bool = True, dtype: Optional[str] = None):
         self.stddev = stddev
         self.truncated = truncated
         if dtype is None:
@@ -52,7 +52,7 @@ class Normal(ParamInit):
     def __call__(
         self,
         dims: Sequence[Dim],
-        dtype: str,
+        dtype: Optional[str],
         *,
         sparse_dim: Optional[Dim] = None,
         device: Optional[str] = None,
@@ -114,7 +114,7 @@ class VarianceScaling(ParamInit):
     def __call__(
         self,
         dims: Sequence[Dim],
-        dtype: str,
+        dtype: Optional[str],
         *,
         sparse_dim: Optional[Dim] = None,
         device: Optional[str] = None,
@@ -188,7 +188,7 @@ class VarianceScaling(ParamInit):
 
 class Glorot(VarianceScaling):
     """
-    Xavier Glorot (http://proceedings.mlr.press/v9/glorot10a/glorot10a.pdf).
+    Xavier Glorot (https://proceedings.mlr.press/v9/glorot10a/glorot10a.pdf).
     scale 1, fan_avg, uniform
     """
 

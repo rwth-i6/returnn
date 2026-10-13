@@ -2,4 +2,4 @@
 TensorFlow frontend.
 """
 
-from ._backend import TFBackend
+from ._backend import TFBackend, DeferredVariable

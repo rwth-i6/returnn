@@ -6,6 +6,7 @@ or just rarely used attribs, such that we can save memory for the common case.
 from __future__ import annotations
 from typing import TYPE_CHECKING, Optional, Union, Type, Sequence, Tuple, List, Dict, Set
 import os
+import weakref
 
 if TYPE_CHECKING:
     # Those are only used for TensorFlow, or they are deprecated.
@@ -22,7 +23,7 @@ from .dim import Dim, batch_dim, VerifyOutShapeException
 import returnn.tensor.tensor as _t
 import returnn.tensor.marked_dim as _m
 
-from ._tensor_mixin_base import _TensorMixinBase
+from ._tensor_mixin_base import _TensorMixinBase, RawTensorType
 
 
 class _TensorExtra:
@@ -32,8 +33,8 @@ class _TensorExtra:
         tensor: Tensor,
         time_dim_axis=NotSpecified,
         available_for_inference=True,
-        batch=None,
-        beam=None,
+        batch: Optional[BatchInfo] = None,
+        beam: Optional[SearchBeam] = None,
         control_flow_ctx=None,
     ):
         """
@@ -41,12 +42,12 @@ class _TensorExtra:
         :param int|None|NotSpecified time_dim_axis: where we have the time dim axis, after we added the batch-dim.
             this is often 1. however, can be None if there is no time-dim.
         :param bool available_for_inference: e.g. the extern data "classes" is usually not available for inference
-        :param BatchInfo|None batch:
-        :param SearchBeam|None beam: the batch-dim could be extended by a beam-size,
+        :param batch:
+        :param beam: the batch-dim could be extended by a beam-size,
             such that it represents the merged dims [batch, beam_size].
         :param ControlFlowContext|None control_flow_ctx:
         """
-        self.tensor = tensor
+        self._tensor_ref = weakref.ref(tensor)
         if beam and batch:
             assert batch.beam == beam
         self.batch = batch
@@ -69,13 +70,43 @@ class _TensorExtra:
             raise TypeError(f"unexpected time_dim_axis type {type(time_dim_axis)}")
         self.time_dim_axis = time_dim_axis
 
+    @property
+    def tensor(self) -> Optional[Tensor]:
+        """
+        :return: the parent :class:`Tensor` this ``_extra`` belongs to, or None if it was already collected.
+            In normal operation the parent is always alive (the ``_extra`` is only reachable via
+            ``Tensor._extra``), so this returns a valid tensor. It can be None only on an ``_extra``
+            instance that was just unpickled/deepcopied and not yet re-linked to its parent.
+        """
+        ref = self._tensor_ref
+        return ref() if ref is not None else None
+
+    @tensor.setter
+    def tensor(self, tensor: Optional[Tensor]):
+        self._tensor_ref = weakref.ref(tensor) if tensor is not None else None
+
     def __getstate__(self):
-        d = vars(self)
-        d["batch"] = None  # BatchInfo pickling not supported
+        d = vars(self).copy()
+        d["batch"] = None
+        d.pop("_tensor_ref", None)
         return d
 
+    def __setstate__(self, state):
+        self.__dict__.update(state)
+        # Backwards compat: older pickles had a strong "tensor" attribute.
+        tensor = self.__dict__.pop("tensor", None)
+        if tensor is not None:
+            self._tensor_ref = weakref.ref(tensor)
+        elif "_tensor_ref" not in self.__dict__:
+            self._tensor_ref = None
 
-class _TensorMixin(_TensorMixinBase):
+    def _relink_tensor(self, tensor: Tensor):
+        self._tensor_ref = weakref.ref(tensor)
+
+
+class _TensorMixin(_TensorMixinBase[RawTensorType]):
+    __slots__ = ()
+
     @staticmethod
     def from_tensor(x) -> Tensor:
         """
@@ -587,13 +618,22 @@ class _TensorMixin(_TensorMixinBase):
         return sis_hash_helper(self.get_kwargs())
 
     def __getstate__(self):
-        d = {k: getattr(self, k) for k in self.__slots__}
-        d["_raw_tensor"] = None  # do not store the TF tensors
+        d = {k: getattr(self, k) for k in self.__slots__ if k != "__weakref__"}
+        if (
+            self._raw_tensor is not None
+            and self._raw_backend is not None
+            and not self._raw_backend.should_pickle_tensor(self._raw_tensor)
+        ):
+            d["_raw_tensor"] = None
         return d
 
     def __setstate__(self, state):
         for k, v in state.items():
             setattr(self, k, v)
+
+        if self._extra is not None:
+            # noinspection PyProtectedMember
+            self._extra._relink_tensor(self)
 
     def reset(self: Tensor):
         """
@@ -663,11 +703,11 @@ class _TensorMixin(_TensorMixinBase):
         if not perm:
             return self.copy()
         if allow_int and isinstance(perm[0], int):
-            assert all(isinstance(a, int) for a in perm), f"{self}: invalid perm {perm!r} types"
+            assert all([isinstance(a, int) for a in perm]), f"{self}: invalid perm {perm!r} types"
             assert set(perm) == set(range(len(perm))), f"{self}: invalid perm {perm!r}"
             return self._copy_compatible_to_dims_with_perm([self._dims[i] for i in perm], perm)
         else:
-            assert all(isinstance(a, Dim) for a in perm), f"{self}: invalid perm {perm!r} types"
+            assert all([isinstance(a, Dim) for a in perm]), f"{self}: invalid perm {perm!r} types"
             return self.copy_compatible_to_dims(perm)
 
     def copy_move_axis(self, old_axis, new_axis) -> _t.Tensor:
@@ -1074,23 +1114,23 @@ class _TensorMixin(_TensorMixinBase):
     def copy_compatible_to(
         self: Tensor,
         data: Tensor,
-        add_dims=True,
-        unbroadcast=False,
-        except_feature=False,
-        except_axis=None,
-        check_sparse=True,
-        check_dtype=True,
+        add_dims: bool = True,
+        unbroadcast: bool = False,
+        except_feature: bool = False,
+        except_axis: Union[Dim, int, None] = None,
+        check_sparse: bool = True,
+        check_dtype: bool = True,
     ) -> Tensor:
         """
         :param data: other data which the returned tensor should be compatible to
           It would add any missing axes with a dim 1 axis for automatic broadcasting (with add_dims=True).
           It currently does not check whether existing dims match.
-        :param bool add_dims: whether to add (broadcast, or unbroadcasted) dims. throws error if missing dim
-        :param bool unbroadcast: if True, all added broadcast axes (axes with dim 1) will be tiled such that they match
-        :param bool except_feature: if unbroadcast, do not unbroadcast the feature dim
-        :param Dim|int|None except_axis: if unbroadcast, do not unbroadcast this axis
-        :param bool check_sparse:
-        :param bool check_dtype:
+        :param add_dims: whether to add (broadcast, or unbroadcasted) dims. throws error if missing dim
+        :param unbroadcast: if True, all added broadcast axes (axes with dim 1) will be tiled such that they match
+        :param except_feature: if unbroadcast, do not unbroadcast the feature dim
+        :param except_axis: if unbroadcast, do not unbroadcast this axis
+        :param check_sparse:
+        :param check_dtype:
         :returns: Tensor, might add broadcast dimensions
         """
         assert not check_sparse or self.sparse == data.sparse
@@ -1150,7 +1190,7 @@ class _TensorMixin(_TensorMixinBase):
                     )
 
         assert v.batch_ndim == data.batch_ndim
-        assert all(mapped_axes[ax] == ax for ax in range(v.batch_ndim))
+        assert all([mapped_axes[ax] == ax for ax in range(v.batch_ndim)])
 
         if self.version == 1:
             # Ensure time_dim_axis and feature_dim_axis is same as in data
@@ -1180,7 +1220,8 @@ class _TensorMixin(_TensorMixinBase):
     def get_out_permutation_to_dims(self, dims: Sequence[Dim]) -> List[int]:
         """
         :param dims: superset of our dims
-        :return: out_permutation list of len dims, where -1 means no match, and otherwise the axis in self.
+        :return: out_permutation list of len ``len(dims)``, where -1 means no match, and otherwise the axis in self.
+            I.e. a mapping: index in ``dims`` -> axis in self or -1.
             Thus, sorted(p for p in out_permutation if p >= 0) == range(len(self._dims)).
         """
         out_permutation: List[int] = []
@@ -1230,39 +1271,64 @@ class _TensorMixin(_TensorMixinBase):
         return out_permutation
 
     # This function has a native implementation (_native tensor_copy_compatible_to_dims).
-    def copy_compatible_to_dims(self: _t.Tensor, dims: Sequence[Dim]) -> _t.Tensor:
+    def copy_compatible_to_dims(
+        self: _t.Tensor, dims: Sequence[Dim], *, add_dims: bool = True, unbroadcast: bool = False
+    ) -> _t.Tensor:
         """
         Simpler variant of :func:`copy_compatible_to` which just takes a list of dims,
         and uses simple Dim equality.
 
         :param dims:
+        :param add_dims: whether to add missing dims
+        :param unbroadcast: if True, any added dims will be unbroadcasted, otherwise they will be broadcast dims (dim 1)
         :return: self with dims permuted and broadcast dims added
         """
         out_permutation = self.get_out_permutation_to_dims(dims)
         if out_permutation == list(range(len(self._dims))):
             return self.copy()
-        return self._copy_compatible_to_dims_with_perm(dims, out_permutation)
+        if not add_dims:
+            for i, p in enumerate(out_permutation):
+                if p == -1:
+                    raise ValueError(f"{self}._copy_compatible_to_dims_with_perm: missing dim {dims[i]} from {dims}")
+        return self._copy_compatible_to_dims_with_perm(dims, out_permutation, unbroadcast=unbroadcast)
 
-    def _copy_compatible_to_dims_with_perm(self, dims: Sequence[Dim], out_permutation: Sequence[int]):
+    def _copy_compatible_to_dims_with_perm(
+        self, dims: Sequence[Dim], out_permutation: Sequence[int], *, unbroadcast: bool = False
+    ):
+        """
+        Given permutation from :func:`get_out_permutation_to_dims`, do the actual copy.
+        If raw_tensor is available, it will be permuted and reshaped accordingly.
+        This will automatically add dims.
+        """
         raw_tensor = self._raw_tensor
         if raw_tensor is not None:
             backend = self._raw_backend
             raw_shape = backend.get_shape_tuple_raw(raw_tensor)
             raw_tensor = backend.transpose_raw(raw_tensor, [p for p in out_permutation if p >= 0])
             raw_tensor = backend.reshape_raw(raw_tensor, [raw_shape[p] if p >= 0 else 1 for p in out_permutation])
-        out_dims = [
-            (
-                dims[i]
-                if p >= 0
-                else Dim(
-                    kind=dims[i].kind,
-                    description="%s_bc_dim1" % (dims[i].description or "unnamed"),
-                    dimension=1,
-                    auto_generated=True,
+            if unbroadcast:
+                # Unbroadcast the newly added axes.
+                for i, p in enumerate(out_permutation):
+                    if p == -1:
+                        dim = dims[i]
+                        dim_value = dim.get_dim_value()
+                        raw_tensor = backend.expand_raw(raw_tensor, i, dim_value)
+        if unbroadcast:
+            out_dims = dims
+        else:
+            out_dims = [
+                (
+                    dims[i]
+                    if p >= 0
+                    else Dim(
+                        kind=dims[i].kind,
+                        description="%s_bc_dim1" % (dims[i].description or "unnamed"),
+                        dimension=1,
+                        auto_generated=True,
+                    )
                 )
-            )
-            for i, p in enumerate(out_permutation)
-        ]
+                for i, p in enumerate(out_permutation)
+            ]
         kwargs = self.get_kwargs(include_special_axes=False)
         kwargs["dims"] = out_dims
         kwargs["raw_tensor"] = raw_tensor
@@ -1287,13 +1353,17 @@ class _TensorMixin(_TensorMixinBase):
         return res
 
     # This function has a native implementation (_native tensor_copy_compatible_to_dims_raw).
-    def copy_compatible_to_dims_raw(self: _t.Tensor, dims: Sequence[Dim]) -> _t.RawTensorType:
+    def copy_compatible_to_dims_raw(
+        self: _t.Tensor, dims: Sequence[Dim], *, add_dims: bool = True, unbroadcast: bool = False
+    ) -> _t.RawTensorType:
         """
         Simpler variant of :func:`copy_compatible_to` which just takes a list of dims,
         and uses simple Dim equality.
         This adds broadcast dims for any missing dims.
 
         :param dims:
+        :param add_dims: whether to add missing dims
+        :param unbroadcast: if True, any added dims will be unbroadcasted, otherwise they will be broadcast dims (dim 1)
         :return: raw tensor from self with dims permuted and broadcast dims added
         """
         raw_tensor = self._raw_tensor
@@ -1301,10 +1371,21 @@ class _TensorMixin(_TensorMixinBase):
         out_permutation = self.get_out_permutation_to_dims(dims)
         if out_permutation == list(range(len(self._dims))):
             return raw_tensor
+        if not add_dims:
+            for i, p in enumerate(out_permutation):
+                if p == -1:
+                    raise ValueError(f"{self}._copy_compatible_to_dims_with_perm: missing dim {dims[i]} from {dims}")
         backend = self._raw_backend
         raw_shape = backend.get_shape_tuple_raw(raw_tensor)
         raw_tensor = backend.transpose_raw(raw_tensor, [p for p in out_permutation if p >= 0])
         raw_tensor = backend.reshape_raw(raw_tensor, [raw_shape[p] if p >= 0 else 1 for p in out_permutation])
+        if unbroadcast:
+            # Unbroadcast the newly added axes.
+            for i, p in enumerate(out_permutation):
+                if p == -1:
+                    dim = dims[i]
+                    dim_value = dim.get_dim_value()
+                    raw_tensor = backend.expand_raw(raw_tensor, i, dim_value)
         return raw_tensor
 
     def copy_time_flattened(self) -> _t.Tensor:
@@ -1697,7 +1778,7 @@ class _TensorMixin(_TensorMixinBase):
         """
         :return: shape with added batch-dim. e.g. (batch,time,feat) = (None,None,128)
         """
-        return tuple(tag.dimension for tag in self.dim_tags)
+        return tuple([tag.dimension for tag in self.dim_tags])
 
     # noinspection PyShadowingNames
     def get_batch_shape(self, batch_dim):
@@ -2009,11 +2090,9 @@ class _TensorMixin(_TensorMixinBase):
         return self.get_batch_axis_excluding_batch(self.time_dim_axis)
 
     @property
-    def placeholder(self):
+    def placeholder(self: _t.Tensor) -> Optional[_t.RawTensorType]:
         """
         (Old alias for raw_tensor.)
-
-        :rtype: T
         """
         return self._raw_tensor
 
@@ -2845,7 +2924,9 @@ class _TensorMixin(_TensorMixinBase):
             assert axis + self.batch_ndim > 0
             axis += self.batch_ndim
         assert 0 <= axis < self.batch_ndim
-        assert axis != self.batch_dim_axis
+        # The batch axis is allowed: a batch dim with a static capacity (as tracing requires)
+        # and a dynamic size is padded like any other axis, and its mask is the same comparison.
+        # Its size is a scalar, so it does not take the [B]-size fast path below.
         tag: Dim = self.dim_tags[axis]
         assert tag.dyn_size_ext is not None and tag.dyn_size_ext.raw_tensor is not None
         backend = tag.dyn_size_ext._raw_backend
@@ -2879,8 +2960,7 @@ class _TensorMixin(_TensorMixinBase):
             assert axis + self.batch_ndim > 0
             axis += self.batch_ndim
         assert 0 <= axis < self.batch_ndim
-        assert axis != self.batch_dim_axis
-        tag: Dim = self.dim_tags[axis]
+        tag: Dim = self.dim_tags[axis]  # the batch axis included, see :func:`get_sequence_mask_broadcast`
         return tag.get_mask(dim_order=self.dims, device=self.device)
 
     def get_sequence_lengths_broadcast(self, axis=None):
@@ -3209,7 +3289,7 @@ class _TensorMixin(_TensorMixinBase):
         if len(sources) == 1:
             return sources[0].copy_template()
         max_ndim = max([s.batch_ndim for s in sources])
-        if any(src.batch for src in sources):
+        if any([src.batch for src in sources]):
             from returnn.tf.util.data import BatchInfo
 
             common_batch = BatchInfo.get_common_batch_info([src.batch for src in sources if src.batch])
@@ -3249,7 +3329,7 @@ class _TensorMixin(_TensorMixinBase):
             else:
                 axis = common.get_default_new_axis_for_dim_tag(dim_tag)
                 common = common.copy_add_dim_by_tag(dim_tag, unbroadcast=True, axis=axis)
-        if all(s.batch_ndim < common.batch_ndim for s in sources):
+        if all([s.batch_ndim < common.batch_ndim for s in sources]):
             from returnn.util.basic import validate_broadcast_all_sources
 
             validate_broadcast_all_sources(

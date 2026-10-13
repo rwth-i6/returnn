@@ -3,9 +3,11 @@ Main engine for PyTorch
 """
 
 from __future__ import annotations
+
 from typing import Optional, Any, Union, Callable, Dict, Set
 from contextlib import nullcontext, ExitStack, contextmanager
 
+import sys
 import gc
 import os
 import time
@@ -20,6 +22,7 @@ from torch.nn.parallel import DistributedDataParallel
 from torch.utils.data import DataLoader
 from torch import autocast
 from torch.cuda import amp
+from torch.profiler import record_function
 import numpy as np
 
 import returnn
@@ -32,9 +35,11 @@ from returnn.datasets.basic import init_dataset, Dataset
 from returnn.util import basic as util
 from returnn.util import NumbersDict
 from returnn.util.basic import hms, NotSpecified
+from returnn.util import multi_proc_manager_with_watchdog
 from returnn.util.result_with_reason import ResultWithReason
 from returnn.util.debug import debug_shell
 from returnn.util.math import simplify_and_format_number, merge_random_seeds
+from returnn.util.hot_reload import should_use_hot_reloading, ConfigHotReloader
 from returnn.forward_iface import ForwardCallbackIface
 
 from .updater import Updater
@@ -42,11 +47,14 @@ from .data import pipeline as data_pipeline
 from .data import returnn_dataset_wrapper
 from .data import extern_data as extern_data_util
 from .data.queued_data_iter import QueuedDataIter
+from .data.pin_memory import PinMemoryDataLoader
 from .frontend.bridge import rf_module_to_pt_module
 from .util import diagnose_gpu
+from .util import graph_capture
 from .util import module as util_module
 from .util.exception_helper import help_on_torch_exception
 from .util.debug_inf_nan import debug_inf_nan
+from .util.graph_capture import graph_pools_reserved
 from .distributed import DistributedContext, get_ctx as dist_get_ctx
 
 
@@ -59,18 +67,19 @@ class Engine(EngineBase):
         """
         :param config:
         """
-        super(Engine, self).__init__(config=config)
+        super().__init__(config=config)
         rf.select_backend_torch()
         if util.BackendEngine.selected_engine is None:
             util.BackendEngine.select_engine(default_fallback_engine=util.BackendEngine.Torch, config=self.config)
         self.model_filename = self.config.value("model", None)
-        self._mp_manager = torch.multiprocessing.Manager()
+        self._mp_manager = multi_proc_manager_with_watchdog.create_manager()
         self._epoch_mp_shared = self._mp_manager.Value("i", 0)
         self.train_dataset: Optional[Dataset] = None
         self.eval_datasets = {}
         self.extern_data: Optional[TensorDict] = None
-        self._train_dataloader: Optional[DataLoader] = None
-        self._eval_dataloaders: Dict[str, DataLoader] = {}
+        self._train_dataloader: Optional[Union[DataLoader, PinMemoryDataLoader]] = None
+        self._eval_dataloaders: Dict[str, Union[DataLoader, PinMemoryDataLoader]] = {}
+        self._hot_reloader = ConfigHotReloader(config.typed_dict) if should_use_hot_reloading(config=config) else None
 
         self._start_epoch: Optional[int] = None
         self._final_epoch: Optional[int] = None
@@ -98,7 +107,7 @@ class Engine(EngineBase):
         self._autocast_dtype: Optional[str] = None
         self._grad_scaler: Optional[amp.GradScaler] = None
 
-        dev_ = get_device_from_config_opt(config.value("device", None))
+        dev_ = get_device_from_config(config)
         self._device = dev_.result
         print("Using device:", self._device, f"({dev_.reason or '?'})", file=log.v2)
 
@@ -109,8 +118,6 @@ class Engine(EngineBase):
             self._torch_distributed_ctx = dist_get_ctx(config=config)
             local_rank = self._torch_distributed_ctx.local_rank()
             print(f"Start running torch distributed training on local rank {local_rank}.", file=log.v2)
-            assert self._device == "cuda", f"torch distributed: unexpected device {self._device!r}"
-            self._device = f"cuda:{local_rank}"
 
         if self._device == "cuda" or self._device.startswith("cuda:"):
             # Theano and TensorFlow print sth like: Using gpu device 2: GeForce GTX 980 (...)
@@ -129,10 +136,35 @@ class Engine(EngineBase):
         self._log_memory_usage = config.bool("torch_log_memory_usage", False)
         self._log_batch_size = config.bool("log_batch_size", False) and log.verbose[5]
         self._calculate_exp_loss = config.bool("calculate_exp_loss", False)
-        self._log_grad_norm = _parse_log_grad_norm(config)
         self._reset_dev_memory_caches = config.bool("reset_dev_memory_caches", False)
         self._forward_auto_split_batch_on_oom = config.bool("forward_auto_split_batch_on_oom", False)
         self._stop_on_nonfinite_train_score = config.bool("stop_on_nonfinite_train_score", True)
+        # whole-train-step CUDA-graph capture, see returnn.torch.util.graph_capture.
+        # opts parsed here, the instance is created lazily at the first train step.
+        self._graph_capture_opts = config.typed_value("torch_cuda_graph", None)
+        self._graph_capture: Optional[graph_capture.GraphCapturedTrainStep] = None
+        # for torch_profile once=True
+        self._torch_profile_exported = False
+
+        # Dump stacks when a train step stops making progress, see returnn.util.watch_stall.
+        self._stall_heartbeat = None
+        _stall_opts = config.typed_value("torch_watch_stall", None)
+        if isinstance(_stall_opts, (int, float)):
+            _stall_opts = {"timeout": float(_stall_opts)}
+        if not _stall_opts and os.environ.get("RETURNN_WATCH_STALL"):
+            _stall_opts = {"timeout": float(os.environ["RETURNN_WATCH_STALL"])}
+        if _stall_opts:
+            from returnn.util.watch_stall import watch_stall
+
+            self._stall_heartbeat = watch_stall(**_stall_opts)
+
+        if config.bool("use_tensorboard", False):
+            from torch.utils.tensorboard import SummaryWriter
+
+            self._tensorboard_writer = SummaryWriter()
+            self._tensorboard_opts = config.typed_value("tensorboard_opts", {})
+        else:
+            self._tensorboard_writer = None
 
         default_float_dtype = config.value("default_float_dtype", None)
         if default_float_dtype is not None:
@@ -230,10 +262,85 @@ class Engine(EngineBase):
         self._train_step_func = self.config.typed_value("train_step")
         assert self._train_step_func, "train_step not defined"
 
+        if self.config.typed_value("torch_optimizer_step", None) is not None:
+            # separately compiled + captured optimizer step, see returnn.torch.util.optimizer_step
+            assert self._grad_scaler is None, "torch_optimizer_step: grad scaler not supported"
+            assert not (self._graph_capture_opts or {}).get("capture_optimizer", False), (
+                "torch_optimizer_step: exclusive with torch_cuda_graph capture_optimizer"
+            )
+
+        if self._graph_capture_opts is not None:
+            # whole-train-step CUDA-graph capture/replay, incl backward
+            # (see returnn.torch.util.graph_capture)
+            accum = self.config.typed_dict.get("accum_grad_multiple_step")
+            assert (accum is None or accum == 1) and self.config.int("accum_grad_multiple_step", 1) == 1, (
+                "torch_cuda_graph: grad accumulation not supported"
+            )
+            assert self._grad_scaler is None, "torch_cuda_graph: grad scaler not supported"
+            # DDP reduces grads via autograd hooks during backward.
+            # The compiled step returns the grads instead, so those hooks never fire.
+            # The reduce types without a DDP wrap are fine.
+            assert self._ddp_pt_model is None, (
+                "torch_cuda_graph: DistributedDataParallel not supported, use reduce_type 'grad_explicit' or 'param'"
+            )
+            # "param" syncs after the optimizer step, outside the compiled region, so it needs nothing.
+            # "grad_explicit" reduces between step and optimizer, so the optimizer cannot be in-graph.
+            if self._torch_distributed_ctx and self._torch_distributed_ctx.reduce_type() == "grad_explicit":
+                assert not self._graph_capture_opts.get("capture_optimizer", False), (
+                    "torch_cuda_graph: capture_optimizer with reduce_type 'grad_explicit' is not supported,"
+                    " the grad reduce must run between the step and the optimizer"
+                    " (torch_optimizer_step captures the optimizer step separately)"
+                )
+            self._graph_capture = graph_capture.GraphCapturedTrainStep(
+                opts=self._graph_capture_opts,
+                extern_data_template=self.extern_data,
+                device=self._device,
+                float_dtype=self._default_float_dtype,
+                params=list(self._pt_model.parameters()),
+                run_step=(
+                    lambda extern_data_, *, step: self._run_step(
+                        extern_data_, train_flag=True, train_func=True, step=step
+                    )
+                ),
+                post_step=lambda: self._updater.step(grad_scaler=None),
+                # to create the lazy optimizer state before the capture, see _materialize_optimizer_state
+                get_optimizer=lambda: self._updater.get_optimizer(),
+                # to put the running statistics back after the warm runs, see _training_state_preserved
+                get_buffers=lambda: list(self._pt_model.buffers()),
+                rf_params=(list(self._orig_model.parameters()) if isinstance(self._orig_model, rf.Module) else None),
+                # lets the capture infer a missing packed_total_bound from the content budget
+                packed_batch_size=self.config.typed_value("packed_batch_size", None),
+            )
+            if self._graph_capture.captures_optimizer:
+                # LR as a device tensor = a graph input: the per-step LR schedule
+                # stays functional under the captured optimizer
+                self._updater.use_device_lr_tensors(self._device)
+
     def set_epoch(self, epoch: int):
         """set epoch"""
         super().set_epoch(epoch)
         self._epoch_mp_shared.value = epoch
+
+    def finalize(self, error_occurred: bool = False):
+        """
+        Called at the very end of a RETURNN run (:func:`returnn.__main__.finalize`),
+        before the process group is destroyed, which a live captured graph would block
+        (see :func:`returnn.torch.util.graph_capture.GraphCapturedTrainStep.release`).
+
+        Also stops the workers and pinning threads of the data loaders
+        (see :func:`returnn.torch.data.pipeline.shutdown_data_loader`),
+        as the engine usually stays alive until the interpreter exits.
+        Can be called multiple times.
+
+        :param error_occurred:
+        """
+        del error_occurred  # all is released either way
+        if self._graph_capture is not None:
+            self._graph_capture.release()
+            self._graph_capture = None
+        for data_loader in [self._train_dataloader, *self._eval_dataloaders.values()]:
+            if data_loader is not None:
+                data_pipeline.shutdown_data_loader(data_loader)
 
     def train(self):
         """
@@ -255,9 +362,65 @@ class Engine(EngineBase):
         while self.epoch + 1 <= self._final_epoch:
             self.set_epoch(self.epoch + 1)
             self.init_train_epoch()
+            epoch_start_time = time.monotonic()
             self.train_epoch()
+            self._maybe_stop_for_resubmission(time.monotonic() - epoch_start_time)
+
+        if self._tensorboard_writer:
+            self._tensorboard_writer.close()
 
         print(f"Finished training at epoch {self.epoch}, global train step {self.global_train_step}", file=log.v3)
+
+    def _maybe_stop_for_resubmission(self, last_epoch_wall_sec: float):
+        """
+        If the remaining SLURM wall-time is less than the (safety-scaled) last epoch's wall-time,
+        stop the training now by sending SIGINT to the Sisyphus task worker's process group.
+        Sisyphus then re-submits the job, and we avoid wasting time on a half-finished epoch.
+
+        Why SIGINT:
+            This is like pressing Ctrl+C in a shell, i.e. sending SIGINT to the foreground PG.
+            The Sisyphus task worker gets it as ``KeyboardInterrupt``.
+            That is a ``BaseException``, not caught by ``sisyphus.task.Task.run()``'s ``except`` clauses,
+            so it propagates without setting ``self.error()``, ``self.finished()``, or ``out_of_memory``.
+            Sisyphus thus sees the job as cleanly interrupted and resubmits.
+            See the SIGINT block below for the torchelastic (torchrun) subtlety.
+
+        See https://github.com/rwth-i6/returnn/issues/1818.
+        """
+        from returnn.util.basic import slurm_time_left_sec
+        import os
+        import signal
+
+        if not self.config.bool("stop_for_resubmission_when_low_time_left", False):
+            return
+        if self._final_epoch is not None and self.epoch >= self._final_epoch:
+            return  # training is complete, a resubmission would only finalize the job
+        time_left = slurm_time_left_sec()
+        if time_left is None:
+            return  # not in SLURM, or squeue query failed -- no-op.
+        safety = self.config.float("stop_for_resubmission_safety_factor", 1.2)
+        needed = last_epoch_wall_sec * safety
+        if time_left >= needed:
+            return
+        print(
+            f"stop_for_resubmission_when_low_time_left:"
+            f" SLURM time_left={time_left}s, last epoch wall={last_epoch_wall_sec:.1f}s,"
+            f" needed (x{safety})={needed:.1f}s -- stopping early so sisyphus can resubmit.",
+            file=log.v1,
+        )
+        # Send SIGINT to the process group that contains the Sisyphus task worker.
+        # Under torchelastic, each rank is its own session (Popen start_new_session=True),
+        # separate from torchrun and the Sisyphus worker, which share one PG.
+        # Signalling our own PG would hit only the ranks,
+        # which exit nonzero -> torchrun ChildFailedError -> Sisyphus error, not a clean resubmit.
+        # So in that case signal the parent PG (torchrun's, which is also the Sisyphus worker's).
+        import torch.distributed
+
+        if torch.distributed.is_torchelastic_launched():
+            pgid = os.getpgid(os.getppid())
+        else:
+            pgid = os.getpgrp()
+        os.kill(-pgid, signal.SIGINT)
 
     def init_train_epoch(self):
         """
@@ -345,6 +508,9 @@ class Engine(EngineBase):
         """
         train one (sub)epoch
         """
+        if self._graph_capture is not None:
+            # eval_model disables the bound-shape dim state; the train steps need it back on
+            self._graph_capture.set_bound_shapes_enabled(True)
         print(
             "start",
             self.get_epoch_str(),
@@ -393,10 +559,18 @@ class Engine(EngineBase):
         total_data_size_packed = NumbersDict()
         total_data_size_padded = NumbersDict()
 
+        prof = _opt_torch_profiler_from_opts(
+            opts=self.config.opt_typed_value("torch_profile"),
+            torch_distributed_ctx=self._torch_distributed_ctx,
+            exported_before=self._torch_profile_exported,
+        )
+        if prof:
+            prof.__enter__()
+
         report_prefix = f"ep {self.epoch} train"
         try:
             while True:
-                with torch.no_grad():
+                with torch.no_grad(), record_function("data_loading"):
                     extern_data_raw = next(data_iter, None)
 
                 step_begin_time = time.monotonic()
@@ -404,6 +578,7 @@ class Engine(EngineBase):
                 if step_idx == 0 and log.verbose[5]:
                     print("Time to get first batch data:", hms(step_begin_time - epoch_start_time), file=log.v5)
 
+                complete_frac = float(extern_data_raw["complete_frac"]) if extern_data_raw is not None else -1.0
                 _has_data = torch.tensor([extern_data_raw is not None], dtype=torch.int8)
                 # Sync only on first train step, when we have run out of data and every time we synchronize
                 # the model between workers.
@@ -415,39 +590,64 @@ class Engine(EngineBase):
                 ):
                     # use all reduce to check if all workers have data, if at least one worker does not have data,
                     # all workers finish this epoch
-                    torch.distributed.all_reduce(_has_data, op=torch.distributed.ReduceOp.MIN)
+                    if self._torch_distributed_ctx.sync_complete_frac():
+                        # mean over the ranks: a schedule on epoch_continuous must give the same LR on every rank
+                        _data_info = torch.tensor(
+                            [extern_data_raw is not None, complete_frac >= 0.0, max(complete_frac, 0.0)],
+                            dtype=torch.float64,
+                        )
+                        torch.distributed.all_reduce(_data_info, op=torch.distributed.ReduceOp.SUM)
+                        size = self._torch_distributed_ctx.size()
+                        _has_data[0] = _data_info[0] == size
+                        complete_frac = float(_data_info[2]) / size if _data_info[1] == size else -1.0
+                    else:
+                        torch.distributed.all_reduce(_has_data, op=torch.distributed.ReduceOp.MIN)
                 if not _has_data[0]:
                     break
 
-                # convert values from torch int32 to Python ints to prevent overflow
+                if self._stall_heartbeat is not None:
+                    self._stall_heartbeat.value = time.time()
+
+                # convert values to Python ints to prevent overflow.
+                # The native reduction promotes int32 to int64 and is one op instead of one per seq.
                 keys_w_seq_len = [k for k in extern_data_raw if f"{k}:seq_len" in extern_data_raw]
                 total_data_size_packed += NumbersDict(
-                    {k: int(sum(extern_data_raw[f"{k}:seq_len"])) for k in keys_w_seq_len},
+                    {k: int(extern_data_raw[f"{k}:seq_len"].sum()) for k in keys_w_seq_len},
                 )
                 total_data_size_padded += NumbersDict(
                     {k: int(util.prod(extern_data_raw[k].shape[:2])) for k in keys_w_seq_len},
                 )
 
-                complete_frac = float(extern_data_raw["complete_frac"])
                 epoch_continuous = self.epoch - 1 + complete_frac if complete_frac >= 0.0 else None
                 num_seqs = int(extern_data_raw["num_seqs"])
 
                 # clear the gradients when every gradient accumulation loop starts
                 if zero_grad_next_step:
-                    self._updater.get_optimizer().zero_grad()
+                    if self._graph_capture_opts is None:
+                        # under graph capture, the grads are static buffers zeroed in-graph
+                        self._updater.zero_grad()
                     cur_count_grad_accum = 0
 
-                extern_data = extern_data_util.raw_dict_to_extern_data(
-                    extern_data_raw,
-                    extern_data_template=self.extern_data,
-                    device=self._device,
-                    float_dtype=self._default_float_dtype,
-                    with_eval_targets=True,
-                )
-                self._run_step(extern_data, train_flag=True, train_func=True)
+                if self._graph_capture is not None:
+                    # whole-train-step CUDA-graph capture/replay, incl backward
+                    # (see returnn.torch.util.graph_capture; created in init_train_from_config)
+                    extern_data = None
+                    train_ctx = self._graph_capture.run_train_step(
+                        extern_data_raw, global_train_step=self.global_train_step
+                    )
+                    total_loss = None
+                else:
+                    extern_data = extern_data_util.raw_dict_to_extern_data(
+                        extern_data_raw,
+                        extern_data_template=self.extern_data,
+                        device=self._device,
+                        float_dtype=self._default_float_dtype,
+                        with_eval_targets=True,
+                    )
+                    self._run_step(extern_data, train_flag=True, train_func=True)
+                    train_ctx = rf.get_run_ctx()
+                    total_loss = train_ctx.total_loss()
 
-                train_ctx = rf.get_run_ctx()
-                total_loss = train_ctx.total_loss()
                 losses_dict = NumbersDict(
                     {
                         name: (
@@ -471,26 +671,39 @@ class Engine(EngineBase):
                     )
                 cur_count_grad_accum += 1
                 perform_update_step = cur_count_grad_accum >= accum_grad_multiple_step
-                with (
-                    self._ddp_pt_model.no_sync()
-                    if (self._ddp_pt_model is not None and not perform_update_step)
-                    else nullcontext()
-                ):
-                    if self._grad_scaler is not None:
-                        self._grad_scaler.scale(total_loss.raw_tensor).backward()
-                    else:
-                        total_loss.raw_tensor.backward()
+                if self._graph_capture is None:  # under graph capture, backward is inside the graph
+                    no_sync_ctx = (
+                        self._ddp_pt_model.no_sync()
+                        if (self._ddp_pt_model is not None and not perform_update_step)
+                        else nullcontext()
+                    )
+                    with no_sync_ctx, record_function("backward"):
+                        if self._grad_scaler is not None:
+                            self._grad_scaler.scale(total_loss.raw_tensor).backward()
+                        else:
+                            total_loss.raw_tensor.backward()
 
-                if self._log_grad_norm and perform_update_step:
-                    key = f"grad_norm:p{simplify_and_format_number(self._log_grad_norm)}"
-                    assert key not in losses_dict
-                    inv_norm_factors_dict[key] = 1.0  # once per update step
-                    losses_dict[key] = _get_total_grad_norm(self._pt_model, p=self._log_grad_norm)
+                # The grads are complete here, and the optimizer step follows,
+                # so this is where they get averaged over the ranks.
+                if perform_update_step and self._torch_distributed_ctx:
+                    with record_function("reduce_grads"):
+                        self._torch_distributed_ctx.maybe_reduce_grads(module=self._pt_model)
 
                 # only update the weights when every gradient accumulation loop ends
-                if perform_update_step:
-                    self._updater.step(grad_scaler=self._grad_scaler)
+                # (under graph capture with capture_optimizer, the update is inside the graph)
+                if perform_update_step and (self._graph_capture is None or not self._graph_capture.captures_optimizer):
+                    with record_function("optimizer_step"):
+                        self._updater.step(grad_scaler=self._grad_scaler)
                 zero_grad_next_step = perform_update_step
+
+                if self._updater.log_grad_norm_p is not None and perform_update_step:
+                    key = f"grad_norm:p{simplify_and_format_number(self._updater.log_grad_norm_p)}"
+                    assert key not in losses_dict
+                    inv_norm_factors_dict[key] = 1.0  # once per update step
+                    # recorded pre-clip inside updater.step (in-graph static tensor under capture)
+                    grad_norm = self._updater.last_grad_norm
+                    assert grad_norm is not None
+                    losses_dict[key] = float(grad_norm)  # device sync, as before
 
                 if self._torch_distributed_ctx:
                     self._torch_distributed_ctx.step_after_param_update(module=self._pt_model, epoch_step_idx=step_idx)
@@ -510,9 +723,30 @@ class Engine(EngineBase):
                     start_elapsed=step_end_time - epoch_start_time,
                     complete_frac=complete_frac,
                     num_seqs=num_seqs,
-                    batch_size_info=_get_batch_size_info(extern_data) if self._log_batch_size else None,
+                    batch_size_info=(
+                        (
+                            _get_batch_size_info(extern_data)
+                            if extern_data is not None
+                            # graph capture: no TensorDict is built, use the raw batch
+                            else _get_batch_size_info_raw(extern_data_raw)
+                        )
+                        if self._log_batch_size
+                        else None
+                    ),
                     log_memory_usage_device=self._device if self._log_memory_usage else None,
                 )
+                if (
+                    self._tensorboard_writer
+                    and self.global_train_step % self._tensorboard_opts.get("log_every_n_train_steps", 100) == 0
+                ):
+                    # write losses/errors to tensorboard
+                    for key, val in eval_info.items():
+                        self._tensorboard_writer.add_scalar(f"train/{key}", val, global_step=self.global_train_step)
+                    self._tensorboard_writer.add_scalar(
+                        "train/learning_rate",
+                        self._updater.get_effective_learning_rate(),
+                        global_step=self.global_train_step,
+                    )
 
                 if self._stop_on_nonfinite_train_score:
                     if any(np.isinf(v) or np.isnan(v) for v in accumulated_losses_dict.values()):
@@ -542,8 +776,11 @@ class Engine(EngineBase):
                             assert isinstance(loss, Tensor)
                             return loss.raw_tensor
 
-                        print("Running debug_inf_nan...", file=log.v1)
-                        debug_inf_nan(_debug_func, with_grad=True)
+                        if extern_data is not None:
+                            print("Running debug_inf_nan...", file=log.v1)
+                            debug_inf_nan(_debug_func, with_grad=True)
+                        else:
+                            print("(debug_inf_nan not supported under torch_cuda_graph.)", file=log.v1)
                         if count_nan_inf_params > 0 and self.global_train_step == 1:
                             print(
                                 "This was the second step, so likely the first step grad was broken."
@@ -559,20 +796,49 @@ class Engine(EngineBase):
                 self._updater.set_current_train_step(
                     global_train_step=self.global_train_step, epoch=self.epoch, epoch_continuous=epoch_continuous
                 )
+
+                if prof:
+                    prof.step()
+
         except Exception as exc:
+            if prof:
+                prof.__exit__(type(exc), exc, exc.__traceback__)
             help_on_torch_exception(exc, step_idx=step_idx, model=self._orig_model, extern_data=extern_data)
             raise
 
+        if prof:
+            prof.__exit__(None, None, None)
+            if prof.exported:
+                self._torch_profile_exported = True
+
         elapsed = time.monotonic() - epoch_start_time
         elapsed_computation_percentage = elapsed_computation_time / elapsed
-        total_padding_ratio = NumbersDict.constant_like(1.0, total_data_size_packed) - (
-            total_data_size_packed / total_data_size_padded
+        # Frames the computation ran over but which carry no content.
+        # Padded: the padding of each batch. Packed: zero by construction -- EXCEPT under
+        # bound shapes (graph capture), where every step computes over the full static buffer,
+        # so the unused part of that bound is exactly the same waste as padding, just elsewhere.
+        # Hence "bound slack" (bound - content) there and "padding" (padded - content) otherwise;
+        # both are 1 - content/computed, so the numbers stay comparable across the modes.
+        bound_shapes = self._graph_capture is not None
+        if bound_shapes:
+            bound_sizes = NumbersDict(self._graph_capture.data_bound_sizes())
+            # a key the captured graph never gets has no bound, so no slack to report;
+            # keeping it would divide by a missing key, which yields the numerator
+            total_data_size_packed = NumbersDict(
+                {k: v for k, v in total_data_size_packed.items() if k in bound_sizes.dict}
+            )
+            total_data_size_computed = bound_sizes * step_idx
+        else:
+            total_data_size_computed = total_data_size_padded
+        total_slack_ratio = NumbersDict.constant_like(1.0, total_data_size_packed) - (
+            total_data_size_packed / total_data_size_computed
         )
-        assert 0.0 <= total_padding_ratio.min_value() <= total_padding_ratio.max_value() <= 1.0
-        pad_str = ", ".join(f"{k}: {v:.1%}" for k, v in total_padding_ratio.items())
+        assert 0.0 <= total_slack_ratio.min_value() <= total_slack_ratio.max_value() <= 1.0
+        slack_str = ", ".join(f"{k}: {v:.1%}" for k, v in total_slack_ratio.items())
         print(
             f"Epoch {self.epoch}: Trained {step_idx} steps, {hms(elapsed)} elapsed "
-            f"({elapsed_computation_percentage:.1%} computing time, {pad_str} padding)",
+            f"({elapsed_computation_percentage:.1%} computing time, "
+            f"{slack_str} {'bound slack' if bound_shapes else 'padding'})",
             file=log.v3,
         )
 
@@ -583,6 +849,16 @@ class Engine(EngineBase):
                 "global_train_step_end": self.global_train_step,
             }
         )
+        if self._device == "cuda" and torch.cuda.is_initialized():
+            # peak over the epoch, since the counters are reset below.
+            # A later OOM is then attributable to growth versus a single spike.
+            self.learning_rate_control.epoch_data[self.epoch].meta.update(
+                {
+                    "epoch_peak_mem_alloc_gb": round(torch.cuda.max_memory_allocated() / (1024**3), 2),
+                    "epoch_peak_mem_reserved_gb": round(torch.cuda.max_memory_reserved() / (1024**3), 2),
+                }
+            )
+            torch.cuda.reset_peak_memory_stats()
 
         accumulated_losses_dict = accumulated_losses_dict / accumulated_inv_norm_factors_dict
         accumulated_losses_dict = self._maybe_extend_losses_info(accumulated_losses_dict)
@@ -620,6 +896,9 @@ class Engine(EngineBase):
         """
         Runs model on all eval datasets and calculates the loss.
         """
+        if self._graph_capture is not None:
+            # eval runs the plain dynamic-shape path; train_epoch re-enables
+            self._graph_capture.set_bound_shapes_enabled(False)
         self._pt_model.eval()
         self._maybe_reset_dev_memory_caches()
         self._reset_dev_memory_stats()
@@ -702,11 +981,19 @@ class Engine(EngineBase):
                         start_elapsed=step_end_time - eval_start_time,
                         log_memory_usage_device=self._device if self._log_memory_usage else None,
                     )
+
                     step_idx += 1
 
             assert step_idx > 0, f"No data in dataset {dataset_name!r}."
             accumulated_losses_dict = accumulated_losses_dict / accumulated_inv_norm_factors_dict
             accumulated_losses_dict = self._maybe_extend_losses_info(accumulated_losses_dict)
+
+            if self._tensorboard_writer:
+                # write losses/errors to tensorboard
+                for key, val in accumulated_losses_dict.items():
+                    self._tensorboard_writer.add_scalar(
+                        f"{dataset_name}/{key}", val, global_step=self.global_train_step
+                    )
 
             self.learning_rate_control.set_epoch_error(
                 self.epoch, {f"{dataset_name}_loss_{k}": v for k, v in accumulated_losses_dict.items()}
@@ -762,13 +1049,14 @@ class Engine(EngineBase):
 
     def _create_data_loader(
         self, dataset: Dataset, *, train: bool = False, dataset_init_epoch: bool = True
-    ) -> DataLoader:
+    ) -> Union[DataLoader, PinMemoryDataLoader]:
         """
         :param dataset: RETURNN dataset
         :param train: Train might use a separate batch size in the config (batch_size_train vs batch_size_dev).
             Also online_shuffle_batches is only used in training.
         :param dataset_init_epoch: Whether to call dataset.init_seq_order(epoch=self.epoch) or not.
-        :return: PyTorch data loader created from given RETURNN dataset
+        :return: PyTorch data loader created from given RETURNN dataset,
+            maybe wrapped for the background pinning, see :class:`PinMemoryDataLoader`
         """
         # Make sure that _dataset_reset does not keep a ref to `self`,
         # otherwise it would trigger to pickle `self` and all its members.
@@ -833,6 +1121,22 @@ class Engine(EngineBase):
             # (the serialization of the dataset state does not cover the current seq order).
             loader_opts["num_workers"] = 0
 
+        pin_in_background = False
+        if (
+            loader_opts.get("pin_memory")
+            and loader_opts.get("num_workers", 1) > 0
+            and str(self._device).startswith("cuda")
+        ):
+            # The DataLoader would pin in its own thread, also during a CUDA graph capture,
+            # which invalidates the capture. Pin in our own thread instead, which waits for the captures.
+            # Always, not only with torch_cuda_graph / torch_optimizer_step configured:
+            # one code path, same speed as the DataLoader pinning.
+            # (With num_workers 0, the DataLoader pins in the main thread, which is fine.)
+            loader_opts = loader_opts.copy()
+            loader_opts.pop("pin_memory")
+            loader_opts.pop("pin_memory_device", None)
+            pin_in_background = True
+
         data_loader = data_pipeline.create_data_loader_from_batches(batches_dataset, loader_opts)
 
         if data_loader.num_workers > 0:  # uses multi processing
@@ -843,6 +1147,8 @@ class Engine(EngineBase):
             # it would still potentially have resources ready to use.
             dataset.finish_epoch(free_resources=True)
 
+        if pin_in_background:
+            return PinMemoryDataLoader(data_loader, device=self._device)
         return data_loader
 
     @contextmanager
@@ -854,34 +1160,70 @@ class Engine(EngineBase):
             if self._default_float_dtype:
                 stack.enter_context(rf.set_default_float_dtype_ctx(str(self._default_float_dtype).split(".")[-1]))
                 stack.enter_context(_set_torch_default_dtype_ctx_mgr(self._default_float_dtype))
+            stack.enter_context(record_function("model_step"))
             yield
 
     def _run_step(
-        self, extern_data: TensorDict, *, train_flag: bool = False, train_func: bool, _inside_wrapped: bool = False
+        self,
+        extern_data: TensorDict,
+        *,
+        train_flag: bool = False,
+        train_func: bool,
+        step: Optional[Union[int, Tensor]] = None,
+        _inside_wrapped: bool = False,
     ):
         """
         :param extern_data: model inputs for the step
+        :param train_flag: whether the model is in train mode (e.g. dropout enabled)
+        :param train_func: whether to run the train step func (losses) or the forward step func (outputs)
+        :param step: override for the run-ctx global train step
+            (e.g. a device tensor under CUDA-graph capture, see :mod:`returnn.torch.util.graph_capture`)
+        :param _inside_wrapped: internal, for the DDP-wrapped module call
         :return: Nothing, all outputs are written to the run context (:func:`rf.get_run_ctx`).
         """
         if self._ddp_pt_model is not None and not _inside_wrapped:
             self._ddp_pt_model(extern_data=extern_data, train_flag=train_flag, train_func=train_func)
             return
 
+        if step is None:
+            step = self.global_train_step
         if train_func:
             assert self._train_step_func is not None
-            rf.init_train_step_run_ctx(train_flag=train_flag, step=self.global_train_step, epoch=self.epoch)
+            f = self._train_step_func
+            rf.init_train_step_run_ctx(train_flag=train_flag, step=step, epoch=self.epoch)
         else:
             assert self._forward_step_func is not None, "define forward_step in the config"
+            f = self._forward_step_func
             rf.init_forward_step_run_ctx(
-                expected_outputs=self._forward_step_expected_outputs, step=self.global_train_step, epoch=self.epoch
+                expected_outputs=self._forward_step_expected_outputs, step=step, epoch=self.epoch
             )
 
+        sentinel_kw = util.get_fwd_compat_kwargs()
         with self._run_ctx_mgr():
-            sentinel_kw = util.get_fwd_compat_kwargs()
-            if train_func:
-                self._train_step_func(model=self._orig_model, extern_data=extern_data, **sentinel_kw)
-            else:
-                self._forward_step_func(model=self._orig_model, extern_data=extern_data, **sentinel_kw)
+            if not self._hot_reloader:  # common path
+                f(model=self._orig_model, extern_data=extern_data, **sentinel_kw)
+                return
+
+            while True:
+                # We are maybe trying again. Clear outputs/losses.
+                rf.get_run_ctx().outputs.data.clear()
+                rf.get_run_ctx().losses.clear()
+
+                try:
+                    f(model=self._orig_model, extern_data=extern_data, **sentinel_kw)
+                    r = self._hot_reloader.user_interaction(return_actions={"t": "try again", "c": "continue"})
+                    if r == "t":
+                        continue
+                    elif r == "c":
+                        break
+                    else:
+                        raise ValueError(f"Invalid hot reloader action {r!r}")
+
+                except (Exception, KeyboardInterrupt) as exc:
+                    print("Exception in model step function with hot reloading enabled:", file=log.v1)
+                    help_on_torch_exception(exc, model=self._orig_model)
+                    sys.excepthook(type(exc), exc, exc.__traceback__)
+                    self._hot_reloader.user_interaction()
 
     def _load_model(self):
         """
@@ -899,7 +1241,7 @@ class Engine(EngineBase):
             if not os.path.exists(filename) and os.path.exists(model_epoch_filename):
                 filename = model_epoch_filename
             print("Load model %s" % (filename,), file=log.v4)
-            checkpoint_state = torch.load(filename, map_location=self._device)
+            checkpoint_state = _torch_load(filename, device=self._device)
             if epoch is None:
                 epoch = checkpoint_state.get("epoch", self._start_epoch or 1)
             step = checkpoint_state.get("step", 1)
@@ -960,7 +1302,7 @@ class Engine(EngineBase):
             # In order to get consistent behavior, we use the reversed order.
             for preload_key, opts in reversed(sorted(preload_from_files.items())):
                 assert isinstance(opts, dict) and "filename" in opts
-                init_for_train = opts.get("init_for_train", False)
+                init_for_train: Union[bool, str] = opts.get("init_for_train", False)
                 if init_for_train:
                     if isinstance(init_for_train, str) and init_for_train == "always":
                         # No matter if this is the first train epoch
@@ -999,7 +1341,7 @@ class Engine(EngineBase):
                         print("(No relevant parameters matching.)", file=log.v3)
                     continue
                 print(f"Pre-load weights for key '{preload_key}' from {opts['filename']}", file=log.v3)
-                preload_model_state = torch.load(opts["filename"], map_location=self._device)
+                preload_model_state = _torch_load(opts["filename"], device=self._device)
                 if opts.get("checkpoint_key", "model") is not None:
                     # This can be used if an external checkpoint saves a checkpoint a different structure that just the
                     # model state dict. E.g., if a checkpoint is created using
@@ -1032,6 +1374,28 @@ class Engine(EngineBase):
                 preload_model_state_keys = set(preload_model_state.keys())
                 loaded_state_keys.update(preload_model_state.keys())
                 missing_keys.difference_update(preload_model_state.keys())
+
+                custom_missing_load_func = opts.get("custom_missing_load_func")
+                if custom_missing_load_func:
+                    custom_missing_vars_map = {}
+                    for var_name in missing_keys_preload:
+                        var_shape = self._pt_model.state_dict()[var_name].shape
+                        var_val = custom_missing_load_func(
+                            name=var_name,
+                            shape=var_shape,
+                            preload_model_state=preload_model_state,
+                            **util.get_fwd_compat_kwargs(),
+                        )
+                        if var_val is not None:
+                            assert var_val.shape == var_shape
+                            custom_missing_vars_map[var_name] = var_val
+                    preload_model_state.update(custom_missing_vars_map)
+                    missing_keys_preload, unexpected_keys_preload = self._pt_model.load_state_dict(
+                        preload_model_state, strict=False
+                    )
+                    loaded_state_keys.update(preload_model_state.keys())
+                    missing_keys.difference_update(preload_model_state.keys())
+
                 del preload_model_state
                 gc.collect()
 
@@ -1358,13 +1722,19 @@ class Engine(EngineBase):
                         and self._forward_auto_split_batch_on_oom
                         and extern_data_util.raw_dict_can_split_batch(extern_data_raw)
                     ):
-                        help_on_torch_exception(exc, model=self._orig_model, always_direct_print=True)
+                        help_on_torch_exception(
+                            exc,
+                            step_idx=step_idx,
+                            model=self._orig_model,
+                            extern_data=extern_data,
+                            always_direct_print=True,
+                        )
                         util.traceback_clear_frames(exc.__traceback__)
                         diagnose_gpu.garbage_collect()
                         print(f"{report_prefix}, split step {step_idx} batch and try again...", file=log.v3)
                         data_loader.extend(extern_data_util.raw_dict_split_batch(extern_data_raw, splits=2))
                         continue
-                    help_on_torch_exception(exc, model=self._orig_model)
+                    help_on_torch_exception(exc, step_idx=step_idx, model=self._orig_model, extern_data=extern_data)
                     raise
                 ctx = rf.get_run_ctx()
                 ctx.check_outputs_complete()
@@ -1504,9 +1874,19 @@ def _print_process(
         if log_memory_usage_device:
             dev = torch.device(log_memory_usage_device)
             if dev.type == "cuda":
-                info += [
-                    f"mem_usage:{log_memory_usage_device} {util.human_bytes_size(torch.cuda.max_memory_allocated(dev))}"
-                ]
+                pool = graph_pools_reserved()
+                # The reported usage is the real GPU need: the tracked peak PLUS the
+                # CUDA-graph private pool (replay working memory, freed as tensors but
+                # retained for replay -- INVISIBLE in the allocated stats; measured loq
+                # graphc: 9GB allocated peak, 46GB resident). No double counting: the peak
+                # stats are reset right after the capture, where the pool was still live
+                # (see GraphCapturedTrainStep). With no pool this is max_memory_allocated,
+                # exactly as before. Deliberately NOT memory_reserved: that also counts
+                # unrelated allocator cache.
+                usage = torch.cuda.max_memory_allocated(dev) + pool
+                info += [f"mem_usage:{log_memory_usage_device} {util.human_bytes_size(usage)}"]
+                if pool:
+                    info += [f"mem_graph_pool:{log_memory_usage_device} {util.human_bytes_size(pool)}"]
         if step_duration is not None:
             info += ["%.3f sec/step" % step_duration]
         if start_elapsed is not None:
@@ -1565,7 +1945,54 @@ def _get_batch_size_info(extern_data: TensorDict) -> Dict[str, int]:
             if dim.is_dynamic() and dim not in covered_dims:
                 covered_dims.add(dim)
                 info[f"max_size:{dim.name}"] = int(dim.get_dim_value())
+                size = dim.dyn_size_ext
+                if size is not None and size.dims and size.raw_tensor is not None:
+                    # summed seq lens = the CONTENT along this dim. The padded step computes on
+                    # num_seqs * max_size instead, so the two together say how much of the batch
+                    # was padding -- and it is the number comparable to a packed step's content.
+                    info[f"sum_size:{dim.name}"] = int(size.raw_tensor.sum())
     return info
+
+
+def _get_batch_size_info_raw(extern_data_raw: Dict[str, Any]) -> Dict[str, int]:
+    """
+    Same purpose as :func:`_get_batch_size_info`, but from the raw data-loader batch:
+    under graph capture the engine never builds a :class:`TensorDict`
+    (the raw dict goes straight into the captured step's copy-in),
+    so that variant would report nothing there.
+
+    :param extern_data_raw: raw batch dict from the data loader
+    :return: num seqs, and per data key the max seq len and the summed (content) seq len.
+        The sum is what a packed step actually computes on, so it is the meaningful
+        throughput measure -- for a padded step it differs from num_seqs * max_size.
+    """
+    info = {}
+    for k in extern_data_raw:
+        seq_lens = extern_data_raw.get(f"{k}:seq_len")
+        if seq_lens is None:
+            continue
+        if "num_seqs" not in info:
+            info["num_seqs"] = int(len(seq_lens))
+        info[f"max_size:{k}"] = int(seq_lens.max()) if len(seq_lens) else 0
+        info[f"sum_size:{k}"] = int(seq_lens.sum())
+    return info
+
+
+def get_device_from_config(config: Config) -> ResultWithReason[str]:
+    """
+    :param config:
+    :return: the device the engine runs on: the resolved ``device`` option (:func:`get_device_from_config_opt`),
+        in distributed training (``torch_distributed``) the CUDA device of the local rank
+    """
+    dev_ = get_device_from_config_opt(config.value("device", None))
+    if config.typed_value("torch_distributed") is not None:
+        if dev_.result == "cpu" and config.value("device", None) == "cpu":
+            pass  # explicitly requested, e.g. the gloo backend for tests
+        else:
+            assert dev_.result == "cuda", f"torch distributed: unexpected device {dev_.result!r}"
+            local_rank = dist_get_ctx(config=config).local_rank()
+            dev_ = ResultWithReason(f"cuda:{local_rank}", f"torch distributed local rank {local_rank}")
+    return dev_
 
 
 def get_device_from_config_opt(device: Optional[str]) -> ResultWithReason[str]:
@@ -1635,37 +2062,170 @@ def _set_torch_default_dtype_ctx_mgr(dtype: torch.dtype):
         torch.set_default_dtype(old_dtype)
 
 
-def _parse_log_grad_norm(config: Config) -> Optional[Union[int, float]]:
-    log_grad_norm = config.opt_typed_value("log_grad_norm", False)
-    if isinstance(log_grad_norm, str):
-        if log_grad_norm.lower() in ["true", "false", "none"]:
-            log_grad_norm = {"true": True, "false": False, "none": None}[log_grad_norm.lower()]
-        else:
-            raise ValueError(f"Invalid value for log_grad_norm: {log_grad_norm!r}")
-    if log_grad_norm is None:
-        pass
-    elif isinstance(log_grad_norm, bool):
-        if log_grad_norm:
-            log_grad_norm = 2
-        else:
-            log_grad_norm = None
-    elif isinstance(log_grad_norm, (int, float)):
-        assert log_grad_norm > 0, f"log_grad_norm {log_grad_norm} > 0 expected"  # otherwise fine...
+def _torch_load(filename: Union[str, os.PathLike], *, device: str) -> Dict[str, Any]:
+    # Might resolve PtCheckpoint or Sisyphus Path objects or so.
+    filename = os.fspath(filename)
+
+    if filename.endswith(".safetensors"):
+        from safetensors.torch import load_file as safetensors_load
+
+        return safetensors_load(filename, device=device)
+
+    return torch.load(filename, map_location=device)
+
+
+class _TorchProfiler:
+    def __init__(
+        self,
+        profiler: torch.profiler.profile,
+        max_step: Optional[int],
+        *,
+        exit_after_profile: bool = True,
+        filename_suffix: str = "",
+    ):
+        self.profiler = profiler
+        self.max_step = max_step
+        self.exit_after_profile = exit_after_profile
+        self.trace_filename = f"torch_profile{filename_suffix}.json"
+        self.memory_filename = f"torch_memory_profile{filename_suffix}.html"
+        self.entered = False
+        self.exported = False
+
+    def __enter__(self):
+        self.profiler.__enter__()
+        self.entered = True
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        if not self.entered:
+            return
+        self.entered = False
+        self.profiler.__exit__(exc_type, exc_val, exc_tb)
+
+        if exc_type is None:
+            print(f"Torch profiling finished, exporting Chrome trace to {self.trace_filename}...", file=log.v2)
+            self.profiler.export_chrome_trace(self.trace_filename)
+            if self.profiler.profile_memory:
+                print(f"Exporting Torch memory profile to {self.memory_filename}...", file=log.v2)
+                # deprecated, but the named replacement (_record_memory_history/_export_memory_snapshot)
+                # is private API and emits a snapshot pickle instead of this HTML timeline
+                # noinspection PyDeprecation
+                self.profiler.export_memory_timeline(self.memory_filename)
+            self.exported = True
+
+            if self.exit_after_profile:
+                print("Exiting program after Torch profiling.", file=log.v2)
+                sys.exit(0)
+            print("Continuing training after Torch profiling.", file=log.v2)
+
+    def step(self):
+        """step"""
+        if not self.entered:  # already stopped and exported
+            return
+        self.profiler.step()
+        if self.max_step is not None and self.profiler.step_num > self.max_step:
+            print(f"Reached max profiling step {self.max_step}, stopping Torch profiler.", file=log.v2)
+            self.__exit__(None, None, None)
+
+
+def _opt_torch_profiler_from_opts(
+    opts: Union[None, int, bool, str, Dict[str, Any]],
+    torch_distributed_ctx: Optional[DistributedContext],
+    *,
+    exported_before: bool = False,
+) -> Optional[_TorchProfiler]:
+    """
+    :param opts: ``torch_profile`` config option.
+        If a dict, these keys are handled here, all others are passed to :class:`torch.profiler.profile`:
+
+        - ``exit_after_profile`` (default True): exit the program after the profile was exported.
+          If False, training continues (incl. saving models etc.).
+        - ``once`` (default False): profile only one epoch per engine process.
+          Otherwise every epoch is profiled again and overwrites the files.
+        - ``ranks`` (distributed only): global ranks to profile, list of ints or "all".
+          Default (None): local rank 0 on each node (https://github.com/rwth-i6/returnn/issues/1821).
+          Filenames get a ``.rank{rank}`` suffix if multiple ranks can be profiled.
+    :param torch_distributed_ctx:
+    :param exported_before: whether a profile was already exported in this engine process
+    """
+    if isinstance(opts, str):
+        from returnn.util.basic import to_bool
+
+        opts = to_bool(opts)
+
+    if opts is None:
+        return None
+    elif isinstance(opts, (bool, int)):
+        if not opts:
+            return None
+        opts = {}
+    elif isinstance(opts, dict):
+        opts = opts.copy()
     else:
-        raise TypeError(f"Invalid type for log_grad_norm: {log_grad_norm!r} type {type(log_grad_norm)}")
-    return log_grad_norm
+        raise TypeError(f"Invalid type for torch_profile {opts!r}: {type(opts)}")
 
+    exit_after_profile = opts.pop("exit_after_profile", True)
+    once = opts.pop("once", False)
+    ranks = opts.pop("ranks", None)
+    if ranks is not None and ranks != "all":
+        if not isinstance(ranks, (list, tuple)) or not all(isinstance(r, int) for r in ranks):
+            raise TypeError(f"torch_profile: invalid ranks {ranks!r}, expected list of ints or 'all'")
+    if once and exported_before:
+        return None
 
-def _get_total_grad_norm(model: torch.nn.Module, p: float) -> float:
-    return float(
-        torch.norm(
-            torch.stack(
-                [
-                    param.grad.norm(p=p).detach().cpu()
-                    for param in model.parameters()
-                    if param.requires_grad and param.grad is not None
-                ]
-            ),
-            p=p,
-        ).item()
-    )
+    filename_suffix = ""
+    if torch_distributed_ctx is not None:
+        rank = torch_distributed_ctx.rank()
+        if ranks is None:
+            if torch_distributed_ctx.local_rank() != 0:
+                return None
+            # local rank 0 of multiple nodes would write the same files
+            multiple_ranks = torch_distributed_ctx.size() > torch_distributed_ctx.local_size()
+        else:
+            if ranks != "all" and rank not in ranks:
+                return None
+            multiple_ranks = torch_distributed_ctx.size() > 1
+        if multiple_ranks:
+            filename_suffix = f".rank{rank}"
+
+    from torch.profiler import profile, ProfilerActivity, schedule
+
+    print("Using Torch profiler...", file=log.v2)
+
+    prof_max_step = None
+
+    if "activities" not in opts:
+        activities = [ProfilerActivity.CPU]
+        if torch.cuda.is_available():
+            activities += [ProfilerActivity.CUDA]
+        elif hasattr(torch, "xpu") and torch.xpu.is_available():  # torch.xpu does not exist in older torch
+            activities += [ProfilerActivity.XPU]
+        opts["activities"] = activities
+
+    opts.setdefault("profile_memory", True)
+    opts.setdefault("record_shapes", True)
+    opts.setdefault("with_stack", True)
+    opts.setdefault("with_flops", True)
+    # Note: active*repeat are the steps we actually profile.
+    opts.setdefault("schedule", dict(skip_first=10, wait=5, warmup=3, active=3, repeat=1))
+
+    if isinstance(opts["schedule"], dict):
+        schedule_opts: Dict[str, Any] = opts["schedule"]
+        schedule_opts = schedule_opts.copy()
+        schedule_opts.setdefault("repeat", 0)
+        schedule_opts.setdefault("skip_first", 0)
+        skip_first_wait = schedule_opts.pop("skip_first_wait", 0)
+        if skip_first_wait:  # only pass if set, older torch (e.g. 2.0) does not have it
+            schedule_opts["skip_first_wait"] = skip_first_wait
+        opts["schedule"] = schedule(**schedule_opts)
+
+        if schedule_opts["repeat"] > 0:
+            prof_max_step = (schedule_opts["wait"] + schedule_opts["warmup"] + schedule_opts["active"]) * schedule_opts[
+                "repeat"
+            ]
+            prof_max_step += schedule_opts["skip_first"]
+            if skip_first_wait != 0:
+                prof_max_step -= schedule_opts["wait"]
+            print(f"Profiling will stop automatically after {prof_max_step} steps.", file=log.v3)
+
+    prof = profile(**opts)
+    return _TorchProfiler(prof, prof_max_step, exit_after_profile=exit_after_profile, filename_suffix=filename_suffix)

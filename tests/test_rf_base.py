@@ -5,9 +5,12 @@ RETURNN frontend (returnn.frontend) tests
 from __future__ import annotations
 from typing import Tuple
 from unittest import SkipTest
+import numpy
+import numpy.testing
 import _setup_test_env  # noqa
 import returnn.frontend as rf
 from returnn.tensor import Tensor, Dim, TensorDict, batch_dim
+from returnn.tensor.utils import tensor_dict_fill_random_numpy_
 from rf_utils import run_model, run_model_torch_train
 
 
@@ -424,6 +427,17 @@ def test_loss_normalized():
     run_model_torch_train(extern_data, lambda *, epoch, step: rf.Module(), _train_step)
 
 
+def test_loss_inv_norm_factor_cached():
+    from returnn.frontend.run_ctx import Loss
+
+    batch = Dim(2, name="batch")
+    loss = Loss(loss=rf.ones([batch]), name="loss")
+    assert loss.get_inv_norm_factor() == 2
+    # like the bound sizes put back after a dynamic warmup step under graph capture
+    batch.size = 8
+    assert loss.get_inv_norm_factor() == 2
+
+
 def test_loss_normalization():
     time_dim = Dim(Tensor("time", [batch_dim], dtype="int32"))
     in_dim = Dim(7, name="in")
@@ -634,6 +648,55 @@ def test_ctc_loss():
     )
 
 
+def test_ctc_loss_native_vs_std():
+    time_dim = Dim(Tensor("time", [batch_dim], dtype="int32"))
+    target_time_dim = Dim(Tensor("target_time", [batch_dim], dtype="int32"))
+    out_dim = Dim(11, name="classes")
+    out_wb_dim = out_dim + 1
+    extern_data = TensorDict(
+        {
+            "data": Tensor("data", [batch_dim, time_dim, out_wb_dim], dtype="float32", feature_dim=out_wb_dim),
+            "classes": Tensor("classes", [batch_dim, target_time_dim], dtype="int32", sparse_dim=out_dim),
+        }
+    )
+
+    def _forward_step(*, extern_data: TensorDict, **_kwargs):
+        logits = extern_data["data"]
+        targets = extern_data["classes"]
+        loss_native = rf.ctc_loss(
+            logits=logits,
+            targets=targets,
+            input_spatial_dim=time_dim,
+            targets_spatial_dim=target_time_dim,
+            blank_index=out_wb_dim.dimension - 1,
+            use_native_op=True,
+        )
+        loss_native.mark_as_output("native", shape=[batch_dim])
+        loss_std = rf.ctc_loss(
+            logits=logits,
+            targets=targets,
+            input_spatial_dim=time_dim,
+            targets_spatial_dim=target_time_dim,
+            blank_index=out_wb_dim.dimension - 1,
+            use_native_op=False,
+        )
+        loss_std.mark_as_output("std", shape=[batch_dim])
+
+    res = run_model(
+        extern_data,
+        lambda **_kwargs: rf.Module(),
+        _forward_step,
+        dyn_dim_min_sizes={time_dim: 4, target_time_dim: 2},
+        dyn_dim_max_sizes={time_dim: 11, target_time_dim: 5},
+        test_tensorflow=False,
+    )
+    # test equality
+    res_native = res["native"].raw_tensor
+    res_std = res["std"].raw_tensor
+    assert res_native.shape == res_std.shape
+    numpy.testing.assert_allclose(res_native, res_std, rtol=1e-5, atol=1e-6)
+
+
 def test_ctc_loss_broadcast():
     branch_dim = Dim(3, name="branch")
     time_dim = Dim(Tensor("time", [batch_dim], dtype="int32"))
@@ -671,57 +734,193 @@ def test_ctc_loss_broadcast():
     )
 
 
+def test_ctc_best_path(*, label_loop: bool = True):
+    time_dim = Dim(Tensor("time", [batch_dim], dtype="int32"))
+    target_time_dim = Dim(Tensor("target_time", [batch_dim], dtype="int32"))
+    out_dim = Dim(11, name="classes")
+    out_wb_dim = out_dim + 1
+    extern_data = TensorDict(
+        {
+            "data": Tensor("data", [batch_dim, time_dim, out_wb_dim], dtype="float32", feature_dim=out_wb_dim),
+            "classes": Tensor("classes", [batch_dim, target_time_dim], dtype="int32", sparse_dim=out_dim),
+        }
+    )
+
+    def _forward_step(*, extern_data: TensorDict, **_kwargs):
+        logits = extern_data["data"]
+        targets = extern_data["classes"]
+        log_probs = rf.log_softmax(logits, axis=out_wb_dim)
+        log_probs.mark_as_output("log_probs", shape=[time_dim, batch_dim, out_wb_dim])
+        targets.mark_as_output("targets", shape=[batch_dim, target_time_dim])
+        alignment = rf.ctc_best_path(
+            logits=log_probs,
+            logits_normalized=True,
+            targets=targets,
+            input_spatial_dim=time_dim,
+            targets_spatial_dim=target_time_dim,
+            blank_index=out_wb_dim.dimension - 1,
+            label_loop=label_loop,
+        )
+        alignment.mark_as_default_output(shape=[time_dim, batch_dim])
+
+    res = run_model(
+        extern_data,
+        lambda **_kwargs: rf.Module(),
+        _forward_step,
+        dyn_dim_min_sizes={time_dim: 4, target_time_dim: 2},
+        dyn_dim_max_sizes={time_dim: 11, target_time_dim: 5},
+        test_tensorflow=False,
+    )
+
+    from fsa_utils import py_viterbi
+    from returnn.util.fsa import get_ctc_fsa_fast_bw as get_ctc_fsa_fast_bw_np
+
+    # test equality
+    targets = res["targets"].raw_tensor.astype("int32")
+    target_seq_lens = res["targets"].dims[1].dyn_size.astype("int32")
+    blank_idx = out_wb_dim.dimension - 1
+    fsa = get_ctc_fsa_fast_bw_np(targets=targets, seq_lens=target_seq_lens, blank_idx=blank_idx, label_loop=label_loop)
+    assert fsa.start_end_states.shape == (2, len(target_seq_lens))
+    edges = fsa.edges.astype("int32")
+    weights = fsa.weights.astype("float32")
+    start_end_states = fsa.start_end_states.astype("int32")
+    log_probs = res["log_probs"].raw_tensor.astype("float32")
+    time_seq_lens = res["log_probs"].dims[0].dyn_size.astype("int32")
+    ref_alignment, _ = py_viterbi(
+        am_scores=log_probs, am_seq_len=time_seq_lens, edges=edges, weights=weights, start_end_states=start_end_states
+    )
+    res_alignment = res["output"].raw_tensor
+    assert ref_alignment.shape == res_alignment.shape
+    numpy.testing.assert_equal(ref_alignment, res_alignment)
+
+
+def test_ctc_best_path_rna():
+    test_ctc_best_path(label_loop=False)
+
+
+def test_ctc_durations_from_path():
+    time_dim = Dim(Tensor("time", [batch_dim], dtype="int32"))
+    out_dim = Dim(11, name="classes")
+    out_wb_dim = out_dim + 1
+    b = out_wb_dim.dimension - 1
+    extern_data = TensorDict(
+        {
+            "data": Tensor("data", [batch_dim, time_dim], dtype="int32", sparse_dim=out_wb_dim),
+            "blanks": Tensor("blanks", [batch_dim, time_dim], dtype="bool"),  # more blanks
+        }
+    )
+
+    def _forward_step(*, extern_data: TensorDict, **_kwargs):
+        path = extern_data["data"]
+        path = rf.where(extern_data["blanks"], b, path)
+        durations, dur_spatial_dim = rf.ctc_durations_from_path(path=path, path_spatial_dim=time_dim, blank_index=b)
+        durations.mark_as_default_output(shape=[batch_dim, dur_spatial_dim])
+
+    # Now reset the extern_data manually
+    extern_data.reset_content()
+    tensor_dict_fill_random_numpy_(
+        extern_data,
+        dyn_dim_min_sizes={batch_dim: 10, time_dim: 15},
+        dyn_dim_max_sizes={batch_dim: 10, time_dim: 20},
+        rnd=42,
+    )
+    examples = [
+        ([b, b, 1, 1, 2, b, b, 3, 3, 3, b], [2, 2, 0, 1, 2, 3, 1]),  # [_ _ a a b _ _ c c c _]
+        ([b, b, 1, 1, b, 2, b, b, b, b], [2, 2, 1, 1, 4]),
+        ([1, 1, 1, b, b, b, b], [0, 3, 4]),
+        ([b, b, b, b, b, 1, 2, 3], [5, 1, 0, 1, 0, 1, 0]),
+        ([5], [0, 1, 0]),
+    ]
+    for i, (example, _) in enumerate(examples):
+        extern_data["data"].raw_tensor[i, : len(example)] = numpy.array(example, dtype="int32")
+        time_dim.dyn_size_ext.raw_tensor[i] = len(example)
+        extern_data["blanks"].raw_tensor[i] = False  # keep our example as is
+    # Make sure at least one of the dyn sizes matches the max size.
+    time_dim.dyn_size_ext.raw_tensor[len(examples)] = time_dim.get_dim_value()
+
+    res = run_model(
+        extern_data,
+        lambda **_kwargs: rf.Module(),
+        _forward_step,
+        data_fill_random=False,
+        test_tensorflow=False,  # no scatter
+    )
+
+    output = res["output"]
+    out_spatial_dim = output.dims[1]
+    for i, (_, exp) in enumerate(examples):
+        assert out_spatial_dim.dyn_size_ext.raw_tensor[i] == len(exp)
+        dur = res["output"].raw_tensor[i, : len(exp)]
+        numpy.testing.assert_array_equal(dur, numpy.array(exp, dtype="int32"))
+
+
+def test_ctc_no_label_loop_blank_durations_from_path():
+    time_dim = Dim(Tensor("time", [batch_dim], dtype="int32"))
+    out_dim = Dim(11, name="classes")
+    out_wb_dim = out_dim + 1
+    b = out_wb_dim.dimension - 1
+    extern_data = TensorDict(
+        {
+            "data": Tensor("data", [batch_dim, time_dim], dtype="int32", sparse_dim=out_wb_dim),
+            "blanks": Tensor("blanks", [batch_dim, time_dim], dtype="bool"),  # more blanks
+        }
+    )
+
+    def _forward_step(*, extern_data: TensorDict, **_kwargs):
+        path = extern_data["data"]
+        path = rf.where(extern_data["blanks"], b, path)
+        durations, dur_spatial_dim = rf.ctc_no_label_loop_blank_durations_from_path(
+            path=path, path_spatial_dim=time_dim, blank_index=b
+        )
+        durations.mark_as_default_output(shape=[batch_dim, dur_spatial_dim])
+
+    # Now reset the extern_data manually
+    extern_data.reset_content()
+    tensor_dict_fill_random_numpy_(
+        extern_data,
+        dyn_dim_min_sizes={batch_dim: 10, time_dim: 15},
+        dyn_dim_max_sizes={batch_dim: 10, time_dim: 20},
+        rnd=42,
+    )
+    examples = [
+        ([b, b, b, 1, 2, b, b, 3, b], [3, 0, 2, 1]),  # [_ _ _ a b _ _ c _]
+        ([b, b, 1, 1, 2, b, b, 3, b], [2, 0, 0, 2, 1]),
+        ([1], [0, 0]),
+        ([b, b, 1], [2, 0]),
+    ]
+    for i, (example, _) in enumerate(examples):
+        extern_data["data"].raw_tensor[i, : len(example)] = numpy.array(example, dtype="int32")
+        time_dim.dyn_size_ext.raw_tensor[i] = len(example)
+        extern_data["blanks"].raw_tensor[i] = False  # keep our example as is
+    # Make sure at least one of the dyn sizes matches the max size.
+    time_dim.dyn_size_ext.raw_tensor[len(examples)] = time_dim.get_dim_value()
+
+    res = run_model(
+        extern_data,
+        lambda **_kwargs: rf.Module(),
+        _forward_step,
+        data_fill_random=False,
+        test_tensorflow=False,  # no scatter
+    )
+
+    output = res["output"]
+    out_spatial_dim = output.dims[1]
+    for i, (_, exp) in enumerate(examples):
+        assert out_spatial_dim.dyn_size_ext.raw_tensor[i] == len(exp)
+        dur = res["output"].raw_tensor[i, : len(exp)]
+        numpy.testing.assert_array_equal(dur, numpy.array(exp, dtype="int32"))
+
+
 def test_edit_distance():
     import numpy
     import torch
-    from typing import Sequence
     from collections import namedtuple
     import itertools
-
-    def _edit_distance_ref_b1(a: Sequence[int], b: Sequence[int]) -> int:
-        """
-        Reference implementation for edit distance.
-        """
-        n = len(a) + 1
-        m = len(b) + 1
-        d = torch.zeros((n, m), dtype=torch.int32)
-        for i in range(n):
-            d[i, 0] = i
-        for j in range(m):
-            d[0, j] = j
-        for j in range(1, m):
-            for i in range(1, n):
-                if a[i - 1] == b[j - 1]:
-                    d[i, j] = d[i - 1, j - 1]
-                else:
-                    d[i, j] = min(
-                        d[i - 1, j] + 1,  # deletion
-                        d[i, j - 1] + 1,  # insertion
-                        d[i - 1, j - 1] + 1,  # substitution
-                    )
-        return int(d[n - 1, m - 1])
-
-    # noinspection PyShadowingNames
-    def _edit_distance_ref(a: Tensor, a_spatial_dim: Dim, b: Tensor, b_spatial_dim: Dim) -> torch.Tensor:
-        """
-        Reference implementation for edit distance.
-        """
-        batch_dim = a.dims[0]
-        assert a.dims == (batch_dim, a_spatial_dim) and b.dims == (batch_dim, b_spatial_dim)
-        res = []
-        for i in range(batch_dim.dimension):
-            assert a_spatial_dim.dyn_size[i] <= a.raw_tensor.size(1)
-            assert b_spatial_dim.dyn_size[i] <= b.raw_tensor.size(1)
-            res.append(
-                _edit_distance_ref_b1(
-                    a.raw_tensor[i, : a_spatial_dim.dyn_size[i]], b.raw_tensor[i, : b_spatial_dim.dyn_size[i]]
-                )
-            )
-        return torch.tensor(res, dtype=torch.int32)
+    from numpy_ref_edit_distance import edit_distance_ref
 
     # noinspection PyShadowingNames
     def _check_edit_distance(a: Tensor, a_spatial_dim: Dim, b: Tensor, b_spatial_dim: Dim):
-        ref = _edit_distance_ref(a, a_spatial_dim, b, b_spatial_dim)
+        ref = edit_distance_ref(a, a_spatial_dim, b, b_spatial_dim).raw_tensor
         res = rf.edit_distance(a, a_spatial_dim, b, b_spatial_dim)
         assert res.raw_tensor.shape == ref.shape == a_spatial_dim.dyn_size.shape == b_spatial_dim.dyn_size.shape
         assert len(ref.shape) == 1
@@ -735,7 +934,7 @@ def test_edit_distance():
                 f" a={a.raw_tensor} lens {a_spatial_dim.dyn_size},"
                 f" b={b.raw_tensor} lens {b_spatial_dim.dyn_size}"
             )
-        assert (res.raw_tensor == ref).all()
+        assert (res.raw_tensor.numpy() == ref).all()
 
     SizedTensor = namedtuple("SizedTensor", ["tensor", "seq_lens"])
 
@@ -861,3 +1060,271 @@ def test_copy_compatible_to_empty():
             torch.testing.assert_close(out_raw, out.raw_tensor)
 
     run_model(extern_data, lambda **_kwargs: rf.Module(), _forward_step, test_tensorflow=False)
+
+
+def test_random_uniform_int():
+    batch_dim = Dim(3, name="batch")
+    feat_dim = Dim(5, name="feat")
+
+    # noinspection PyShadowingNames
+    def _forward_step(**_kwargs):
+        out = rf.random_uniform([batch_dim, feat_dim], dtype="int32", minval=-10, maxval=10)
+        out.mark_as_default_output(shape=[batch_dim, feat_dim])
+
+    run_model(TensorDict(), lambda **_kwargs: rf.Module(), _forward_step)
+
+
+def test_random_uniform_sparse_dim():
+    batch_dim = Dim(3, name="batch")
+    time_dim = Dim(50, name="time")
+    vocab_dim = Dim(7, name="vocab")
+
+    # noinspection PyShadowingNames
+    def _forward_step(**_kwargs):
+        out = rf.random_uniform([batch_dim, time_dim], sparse_dim=vocab_dim)
+        assert out.sparse_dim == vocab_dim and out.dtype == rf.get_default_array_index_dtype()
+        out.mark_as_default_output(shape=[batch_dim, time_dim])
+
+    res = run_model(TensorDict(), lambda **_kwargs: rf.Module(), _forward_step)
+    raw = res["output"].raw_tensor
+    assert raw.min() >= 0 and raw.max() < vocab_dim.dimension, raw
+    # With 150 samples over 7 classes, all-equal would be extremely unlikely.
+    assert len(numpy.unique(raw)) > 1, raw
+
+
+def test_random_uniform_default_range():
+    batch_dim = Dim(3, name="batch")
+    time_dim = Dim(50, name="time")
+
+    # noinspection PyShadowingNames
+    def _forward_step(**_kwargs):
+        out = rf.random_uniform([batch_dim, time_dim])
+        out.mark_as_default_output(shape=[batch_dim, time_dim])
+
+    res = run_model(TensorDict(), lambda **_kwargs: rf.Module(), _forward_step)
+    raw = res["output"].raw_tensor
+    assert raw.dtype == numpy.float32
+    assert raw.min() >= 0.0 and raw.max() < 1.0, raw
+
+
+def test_random_choice_with_replacement():
+    batch_dim = Dim(3, name="batch")
+    time_dim = Dim(7, name="time")
+    feat_dim = Dim(5, name="feat")
+
+    # noinspection PyShadowingNames
+    def _forward_step(**_kwargs):
+        probs = rf.softmax(rf.random_uniform([feat_dim], dtype="float32", minval=-1.0, maxval=1.0), axis=feat_dim)
+        out = rf.random_choice_with_replacement([batch_dim], probs=probs, axis=feat_dim)
+        assert out.dims == (batch_dim,) and out.sparse_dim == feat_dim
+        out.mark_as_default_output(shape=[batch_dim])
+
+        probs = rf.softmax(
+            rf.random_uniform([batch_dim, feat_dim], dtype="float32", minval=-1.0, maxval=1.0), axis=feat_dim
+        )
+        out = rf.random_choice_with_replacement([batch_dim], probs=probs, axis=feat_dim)
+        assert out.dims == (batch_dim,) and out.sparse_dim == feat_dim
+        out.mark_as_output("batched_no_new", shape=[batch_dim])
+
+        out = rf.random_choice_with_replacement([batch_dim, time_dim], probs=probs, axis=feat_dim)
+        assert out.dims == (batch_dim, time_dim) and out.sparse_dim == feat_dim
+        out.mark_as_output("batched_time", shape=[batch_dim, time_dim])
+
+        probs = rf.softmax(
+            rf.random_uniform([batch_dim, time_dim, feat_dim], dtype="float32", minval=-1.0, maxval=1.0), axis=feat_dim
+        )
+        out = rf.random_choice_with_replacement([batch_dim, time_dim], probs=probs, axis=feat_dim)
+        assert out.dims == (batch_dim, time_dim) and out.sparse_dim == feat_dim
+        out.mark_as_output("mult_common", shape=[batch_dim, time_dim])
+
+    run_model(TensorDict(), lambda **_kwargs: rf.Module(), _forward_step, test_tensorflow=False)
+
+
+def test_module_output_keep_dtype():
+    # rf_module_output_keep_dtype (behavior_version >= 27): Linear (with bias), LayerNorm,
+    # RMSNorm, GroupNorm keep the input dtype under autocast instead of promoting the output
+    # to float32 by the final bias add / scale mul. The statistics stay float32 either way,
+    # so the values are bit-identical to the float32 output cast to the input dtype.
+    import torch
+    from returnn.config import Config, global_config_ctx
+
+    rf.select_backend_torch()
+    batch = Dim(3, name="batch")
+    time = Dim(Tensor("time", [batch], dtype="int32", raw_tensor=torch.tensor([5, 4, 2], dtype=torch.int32)))
+    in_dim = Dim(8, name="in")
+    with rf.set_default_device_ctx("cpu"):
+        rf.set_random_seed(3)
+        mods = {
+            "Linear": rf.Linear(in_dim, Dim(6, name="out"), with_bias=True),
+            "LayerNorm": rf.LayerNorm(in_dim),
+            "RMSNorm": rf.RMSNorm(in_dim),
+            "GroupNorm": rf.GroupNorm(in_dim, num_groups=Dim(4, name="grp")),
+        }
+
+        def _run(mod, keep):
+            x = Tensor("x", [batch, time, in_dim], dtype="bfloat16")
+            x.raw_tensor = torch.randn(3, 5, 8, generator=torch.Generator().manual_seed(1)).to(torch.bfloat16)
+            with global_config_ctx(Config({"rf_module_output_keep_dtype": keep})):
+                with torch.autocast(device_type="cpu", dtype=torch.bfloat16):
+                    return mod(x)
+
+        for name, mod in mods.items():
+            out_off = _run(mod, False)
+            out_on = _run(mod, True)
+            assert out_off.dtype == "float32", f"{name} flag-off: {out_off.dtype}"
+            assert out_on.dtype == "bfloat16", f"{name} flag-on: {out_on.dtype}"
+            a = out_off.copy_transpose(out_on.dims).raw_tensor.detach().to(torch.bfloat16).float().numpy()
+            b = out_on.raw_tensor.detach().float().numpy()
+            numpy.testing.assert_allclose(a, b, rtol=0, atol=0, err_msg=name)
+
+
+def test_cache_dim_remap_identity():
+    """
+    Dim.__eq__ is looser than identity: any two batch dims compare equal
+    while their static sizes are unknown, incl. derived ones like batch_dim + 1.
+    The Cache value dim remap must go by identity:
+    a cached value containing batch_dim + 1 must come back unchanged
+    for a key containing batch_dim
+    (it used to be remapped to batch_dim, e.g. breaking the packed segment softmax
+    under the bound-shape regime: scatter dim B+1 with dump slot became B).
+    """
+    from returnn.tensor import batch_dim
+    from returnn.frontend._cache import Cache
+
+    derived_dim = batch_dim + 1
+    # the loose batch-kind Dim equality (any two batch dims equal) used to make these equal;
+    # both that and the identity-based cache remap are covered here
+    assert derived_dim != batch_dim
+    cache = Cache(max_size=2)
+    cache.set(("test_cache_dim_remap_identity", batch_dim), (derived_dim, batch_dim))
+    hit = cache.get(("test_cache_dim_remap_identity", batch_dim))
+    assert hit is not None
+    got_derived, got_batch = hit
+    assert got_derived is derived_dim
+    assert got_batch is batch_dim
+
+
+def test_cache_tensor_key_by_raw_tensor():
+    """
+    A Tensor key matches by its raw tensor plus its dims (like Dim keys), sparse dim and feature axis,
+    so a new Tensor wrapping the same raw tensor hits,
+    and the entry lives as long as the raw tensor, not as long as the Tensor.
+    """
+    import gc
+    import weakref
+    import torch
+    from returnn.frontend._cache import Cache
+
+    b_dim = Dim(2, name="b")
+    t_dim = Dim(Tensor("t_lens", [b_dim], dtype="int32", raw_tensor=torch.tensor([3, 2], dtype=torch.int32)), name="t")
+    raw = torch.zeros(2, 3)
+    cache = Cache(max_size=4)
+
+    def _key(raw_: torch.Tensor, dims) -> tuple:
+        return "test_cache_tensor_key_by_raw_tensor", Tensor("x", dims=dims, dtype="float32", raw_tensor=raw_)
+
+    cache.set(_key(raw, [b_dim, t_dim]), t_dim)
+    gc.collect()  # the Tensor of the key is gone, the entry stays
+    assert cache.get(_key(raw, [b_dim, t_dim])) is t_dim
+    # other dim with the same sizes: hit, the output is mapped to the queried dim
+    t2_dim = Dim(Tensor("t2_lens", [b_dim], dtype="int32", raw_tensor=torch.tensor([3, 2], dtype=torch.int32)))
+    assert cache.get(_key(raw, [b_dim, t2_dim])) is t2_dim
+    # other dim with other sizes: miss
+    t3_dim = Dim(Tensor("t3_lens", [b_dim], dtype="int32", raw_tensor=torch.tensor([3, 1], dtype=torch.int32)))
+    assert cache.get(_key(raw, [b_dim, t3_dim])) is None
+    # other raw tensor, same values: miss
+    assert cache.get(_key(raw.clone(), [b_dim, t_dim])) is None
+    # the cache does not keep the raw tensor alive, and its entry goes with it
+    raw_ref = weakref.ref(raw)
+    del raw
+    gc.collect()
+    assert raw_ref() is None
+    # noinspection PyProtectedMember
+    assert cache._lru_cache.cache_info().currsize == 0
+
+    # sparse dim and feature axis are part of the key as well
+    labels_raw = torch.zeros(2, 3, dtype=torch.int32)
+
+    def _labels_key(sparse_dim: Dim) -> tuple:
+        labels = Tensor("labels", dims=[b_dim, t_dim], dtype="int32", sparse_dim=sparse_dim, raw_tensor=labels_raw)
+        return "test_cache_tensor_key_by_raw_tensor", labels
+
+    cache.set(_labels_key(Dim(5, name="vocab")), 1)
+    assert cache.get(_labels_key(Dim(5, name="vocab2"))) == 1
+    assert cache.get(_labels_key(Dim(7, name="vocab3"))) is None
+    feat_raw = torch.zeros(2, 3)
+    feat_dim = Dim(3, name="feat")
+    x = Tensor("x", [b_dim, feat_dim], "float32", raw_tensor=feat_raw)
+    cache.set(("test_cache_tensor_key_by_raw_tensor", x), 2)
+    x = Tensor("x", [b_dim, feat_dim], "float32", feature_dim=b_dim, raw_tensor=feat_raw)
+    assert cache.get(("test_cache_tensor_key_by_raw_tensor", x)) is None
+
+
+def test_dim_bounded_by_capacity():
+    from returnn.tensor import Dim, Tensor, batch_dim
+
+    time_dim = Dim(Tensor("lens", [batch_dim], dtype="int32"), name="time")
+    bounded = Dim(Tensor("lens2", [batch_dim], dtype="int32"), name="bounded", bounded_by=time_dim)
+    # capacity declared AFTER the bounded dim was created: must still resolve (lazy)
+    time_dim.capacity = 100
+    with rf.set_static_traceable_ctx():
+        assert bounded.get_dim_value() == 100
+
+
+def test_dim_host_value_guard_static_traceable():
+    import torch
+    from returnn.tensor import Dim, Tensor, batch_dim
+
+    time_dim = Dim(Tensor("lens", [batch_dim], dtype="int32"), name="time")
+    time_dim.dyn_size_ext.raw_tensor = torch.tensor([3, 5, 2], dtype=torch.int32)  # cpu
+    # no (derivable) capacity: must raise, on any device --
+    # the value is not static across steps, a read here would bake a stale constant
+    with rf.set_static_traceable_ctx():
+        try:
+            time_dim.get_dim_value_tensor()
+        except Exception as exc:
+            assert "no (derivable) capacity" in str(exc)
+        else:
+            raise AssertionError("expected exception: no capacity under static tracing")
+    # with a declared capacity, the dim value IS the capacity (static across steps)
+    time_dim.capacity = 100
+    with rf.set_static_traceable_ctx():
+        assert time_dim.get_dim_value() == 100
+
+
+def test_packed_fallback_gate():
+    import torch
+    from returnn.frontend import _packed_backend as packed
+    from returnn.tensor import Dim, Tensor, batch_dim
+
+    time_dim = Dim(Tensor("lens", [batch_dim], dtype="int32"), name="time")
+    time_dim.dyn_size_ext.raw_tensor = torch.tensor([3, 5, 2], dtype=torch.int32)
+    batch_dim.dyn_size_ext = Tensor("batch", [], dtype="int32", raw_tensor=torch.tensor(3, dtype=torch.int32))
+    x = Tensor("x", [batch_dim, time_dim], dtype="float32")
+    x.raw_tensor = torch.randn(3, 5)
+    src = packed.pack(x, dims=[batch_dim, time_dim])
+    # arg-reduce over the packed dims has no packed fast path -> unpack fallback -> hard error
+    try:
+        rf.reduce(src, mode="argmax", axis=time_dim)
+    except Exception as exc:
+        assert "NOT allowed by default" in str(exc)
+    else:
+        raise AssertionError("expected exception: hard fallback not allowed by default")
+    # explicitly allowed: works via the fallback
+    # (the result re-pack is its own gated op name)
+    packed.set_allowed_fallbacks({"reduce", "repack:time"})
+    try:
+        out = rf.reduce(src, mode="argmax", axis=time_dim)
+        assert time_dim not in out.dims_set
+    finally:
+        packed.set_allowed_fallbacks(None)
+
+
+def test_combine_on_a_version_1_tensor_resolves_the_feature_axis():
+    import torch
+
+    x = Tensor("x", shape=(None, 3), dtype="float32", batch_dim_axis=0)
+    x.raw_tensor = torch.zeros(2, 4, 3)
+    y = x + 1
+    assert y.version == 2 and y._feature_dim_axis == x.feature_dim_axis == 2
+    y.copy_compatible_to_dims(y.dims)

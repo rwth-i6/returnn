@@ -142,9 +142,8 @@ def _get_sub_layer(layer: Tensor[rfl.Layer], name: str, *, data: Tensor) -> Tens
 
         assert isinstance(layer.raw_tensor.debug_layer, returnn.tf.layers.base.LayerBase)
         sub_layer = layer.raw_tensor.debug_layer.get_sub_layer(name)
-        assert sub_layer and sub_layer.output.dim_tags == out.data.dim_tags
+        assert sub_layer and sub_layer.output.dims == out.dims
         out.raw_tensor.debug_layer = sub_layer
-        out.data = sub_layer.output
     return out
 
 
@@ -169,7 +168,7 @@ def _tensor_from_layer_dict(layer_dict: rfl.LayerDictRaw, *, layer: rfl.Layer) -
     )
     net.extern_data.set_batch_info(_init_global_batch(), init_batch_info=False)
 
-    ref_to_layer_name = {}  # type: Dict[rfl.Layer, str]
+    ref_to_layer_name: Dict[rfl.Layer, str] = {}
 
     def _get_unique_name(name) -> str:
         name = name.replace("/", "_")
@@ -304,6 +303,8 @@ def register_extern_data(data: Tensor[rfl.Layer]):
         root_scope = rfl.Layer.top().root  # must exist
         _get_raw_layer_by_name(f"data:{data.name}", scope=root_scope, data=data)
     for i, (tag, orig_tag) in enumerate(zip(data.dim_tags, orig_dim_tags)):
+        tag: Dim
+        orig_tag: Dim
         if not tag.is_batch_dim() and tag.is_dynamic() and tag.dyn_size_ext is None:
             # Undefined dynamic dim tag. Set default data template.
             orig_tag.dyn_size_ext = tag.dyn_size_ext = Tensor(
@@ -315,7 +316,7 @@ def register_extern_data(data: Tensor[rfl.Layer]):
         if tag.is_batch_dim() and tag.dyn_size_ext is None and tag.dimension is None:
             # Undefined batch dim tag. Set default data template.
             batch_dim.dyn_size_ext = orig_tag.dyn_size_ext = tag.dyn_size_ext = Tensor(
-                name=f"batch_dim_default_dyn_size_ext",
+                name="batch_dim_default_dyn_size_ext",
                 dims=[],
                 dtype=data.size_dtype,
                 batch=data.batch,

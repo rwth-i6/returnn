@@ -22,6 +22,7 @@ import copy as _copy
 from returnn.util.basic import NotSpecified, BehaviorVersion
 from returnn.util.math import ceil_div
 import returnn.frontend as rf
+from returnn.frontend.attention import CrossAttention
 from returnn.tensor import Tensor, Dim, single_step_dim
 
 
@@ -49,6 +50,7 @@ class TransformerDecoder(rf.Module):
         layer_opts: Optional[Dict[str, Any]] = None,
         embed_dim: Optional[Dim] = None,
         share_embedding: bool = None,
+        input_embedding: bool = True,
         input_embedding_scale: float = None,
         input_dropout: float = None,
         logits_with_bias: bool = False,
@@ -72,6 +74,7 @@ class TransformerDecoder(rf.Module):
         :param layer_opts: options for the decoder layer
         :param embed_dim: if given, will first have an embedding [vocab,embed] and then a linear [embed,model].
         :param share_embedding:
+        :param input_embedding: whether to use input embedding. If False, you must provide input of dimension model_dim.
         :param input_embedding_scale:
         :param input_dropout:
         :param logits_with_bias:
@@ -103,7 +106,7 @@ class TransformerDecoder(rf.Module):
 
         # We could make this optional or configurable if we ever need to.
         # Or maybe you would just have another separate implementation of this module then...
-        self.input_embedding = rf.Embedding(vocab_dim, embed_dim or model_dim)
+        self.input_embedding = rf.Embedding(vocab_dim, embed_dim or model_dim) if input_embedding else None
 
         self.input_embedding_proj = None
         if embed_dim:
@@ -121,21 +124,31 @@ class TransformerDecoder(rf.Module):
             raise TypeError(f"unexpected pos_enc type {pos_enc!r}")
         self.pos_enc = pos_enc
         if share_embedding is None:
-            if BehaviorVersion.get() < 20:
-                logging.getLogger("returnn.frontend").warning(
-                    "TransformerDecoder share_embedding default is False"
-                    f" with your behavior version {BehaviorVersion.get()}."
-                    " Explicitly set share_embedding or switch to a new behavior version >= 20."
-                )
-            share_embedding = True if BehaviorVersion.get() >= 20 else False
+            if embed_dim and embed_dim != model_dim:
+                share_embedding = False
+            elif input_embedding:
+                if BehaviorVersion.get() < 20:
+                    logging.getLogger("returnn.frontend").warning(
+                        "TransformerDecoder share_embedding default is False"
+                        f" with your behavior version {BehaviorVersion.get()}."
+                        " Explicitly set share_embedding or switch to a new behavior version >= 20."
+                    )
+                share_embedding = True if BehaviorVersion.get() >= 20 else False
+            else:  # not input_embedding
+                share_embedding = False
         if input_embedding_scale is None:
-            if BehaviorVersion.get() < 20:
-                logging.getLogger("returnn.frontend").warning(
-                    "TransformerDecoder input_embedding_scale default is suboptimal"
-                    f" with your behavior version {BehaviorVersion.get()}."
-                    " Explicitly set input_embedding_scale or switch to a new behavior version >= 20."
-                )
-            input_embedding_scale = model_dim.dimension**0.5 if BehaviorVersion.get() >= 20 else 1.0
+            if input_embedding:
+                if BehaviorVersion.get() < 20:
+                    logging.getLogger("returnn.frontend").warning(
+                        "TransformerDecoder input_embedding_scale default is suboptimal"
+                        f" with your behavior version {BehaviorVersion.get()}."
+                        " Explicitly set input_embedding_scale or switch to a new behavior version >= 20."
+                    )
+                input_embedding_scale = model_dim.dimension**0.5 if BehaviorVersion.get() >= 20 else 1.0
+            elif pos_enc:
+                input_embedding_scale = model_dim.dimension**0.5
+            else:
+                input_embedding_scale = 1.0
         self.input_embedding_scale = input_embedding_scale
         if input_dropout is None:
             if dropout > 0 and BehaviorVersion.get() < 20:
@@ -179,13 +192,20 @@ class TransformerDecoder(rf.Module):
         self.logits = rf.Linear(model_dim, vocab_dim, with_bias=logits_with_bias)
 
         if share_embedding:
-            assert not embed_dim and not logits_with_bias, "not supported together with share_embedding"
+            assert input_embedding, "input_embedding=True required for share_embedding"
+            assert not embed_dim or embed_dim == model_dim, f"{embed_dim=} not supported with share_embedding"
+            assert not logits_with_bias, "logits_with_bias=True expected with share_embedding"
             self.logits.weight = self.input_embedding.weight
 
-    def default_initial_state(self, *, batch_dims: Sequence[Dim]) -> rf.State:
-        """default initial state"""
-        state = rf.State({k: v.default_initial_state(batch_dims=batch_dims) for k, v in self.layers.items()})
-        state.pos = rf.zeros((), dtype="int32", device="cpu")
+    def default_initial_state(self, *, batch_dims: Sequence[Dim], capacity: Optional[int] = None) -> rf.State:
+        """
+        :param batch_dims:
+        :param capacity: max number of steps, passed on to the self-attention KV cache
+        """
+        state = rf.State(
+            {k: v.default_initial_state(batch_dims=batch_dims, capacity=capacity) for k, v in self.layers.items()}
+        )
+        state.pos = rf.zeros((), dtype="int32")  # on the default device, like the updates (see below)
         return state
 
     def transform_encoder(self, encoder: Tensor, *, axis: Dim) -> rf.State:
@@ -219,14 +239,23 @@ class TransformerDecoder(rf.Module):
         """
         new_state = rf.State()
 
-        decoded = self.input_embedding(source) * self.input_embedding_scale
+        if self.input_embedding is not None:
+            decoded = self.input_embedding(source)
+        else:
+            decoded = source
+        if self.input_embedding_scale != 1:
+            decoded = decoded * self.input_embedding_scale
         if self.pos_enc is not None:
             decoded = decoded + self.pos_enc(spatial_dim=spatial_dim, offset=state.pos)
         decoded = rf.dropout(decoded, self.input_dropout)
         if self.input_embedding_proj is not None:
             decoded = self.input_embedding_proj(decoded)
 
-        new_state.pos = state.pos + (1 if spatial_dim == single_step_dim else spatial_dim.get_size_tensor())
+        new_state.pos = state.pos + (
+            # on the data device: device-resident dyn sizes must not be pulled to host
+            # (illegal under CUDA-graph capture / tracing)
+            1 if spatial_dim == single_step_dim else spatial_dim.get_size_tensor(device=source.device)
+        )
 
         for layer_name, layer in self.layers.items():
             layer: TransformerDecoderLayer  # or similar
@@ -268,6 +297,7 @@ class TransformerDecoderLayer(rf.Module):
         ] = None,
         self_att_opts: Optional[Dict[str, Any]] = None,
         att_dropout: float = 0.1,
+        cross_att: Optional[Dict[str, Any]] = None,
         norm: Union[type, Dict[str, Any], rf.Module, Callable] = rf.LayerNorm,
     ):
         """
@@ -333,10 +363,10 @@ class TransformerDecoderLayer(rf.Module):
             raise TypeError(f"unexpected self_att type {self_att!r}")
         self.self_att_layer_norm = make_norm(norm, out_dim)
 
-        self.cross_att = None
+        self.cross_att: Optional[CrossAttention] = None  # type might be inaccurate, but we expect this interface
         self.cross_att_layer_norm = None
         if encoder_dim is not None:
-            self.cross_att = rf.CrossAttention(
+            cross_att_opts = dict(
                 encoder_dim=self.encoder_dim,
                 query_in_dim=out_dim,
                 proj_dim=out_dim,
@@ -345,10 +375,21 @@ class TransformerDecoderLayer(rf.Module):
                 num_heads=num_heads,
                 att_dropout=att_dropout,
             )
+            if cross_att is None:
+                self.cross_att = rf.CrossAttention(**cross_att_opts)
+            elif isinstance(cross_att, dict):
+                self.cross_att = rf.build_from_dict(cross_att, **cross_att_opts)
+            else:
+                raise TypeError(f"unexpected cross_att type {cross_att!r}")
             self.cross_att_layer_norm = make_norm(norm, out_dim)
 
-    def default_initial_state(self, *, batch_dims: Sequence[Dim]) -> rf.State:
-        """default initial state"""
+    def default_initial_state(self, *, batch_dims: Sequence[Dim], capacity: Optional[int] = None) -> rf.State:
+        """
+        :param batch_dims:
+        :param capacity: for the self-attention KV cache
+        """
+        if capacity is not None and isinstance(self.self_att, rf.CausalSelfAttention):
+            return rf.State(self_att=self.self_att.default_initial_state(batch_dims=batch_dims, capacity=capacity))
         return rf.State(self_att=self.self_att.default_initial_state(batch_dims=batch_dims))
 
     def transform_encoder(self, encoder: Tensor, *, axis: Dim) -> rf.State:
@@ -370,6 +411,7 @@ class TransformerDecoderLayer(rf.Module):
         # (multi-head) cross-attention (CA)
         if self.cross_att is not None:
             x_ca_ln = self.cross_att_layer_norm(x)
+            # noinspection PyCallingNonCallable
             x_ca = self.cross_att(x_ca_ln, encoder.cross_att)
             x_ca = rf.dropout(x_ca, self.dropout, axis=self.dropout_broadcast and self.out_dim)
             x = x_ca + x

@@ -25,6 +25,10 @@ from returnn.frontend._random_journal import RandomJournal
 
 disable_tf = "RETURNN_DISABLE_TF" in os.environ and int(os.environ["RETURNN_DISABLE_TF"]) == 1
 
+# Run the TF side of every comparison on the pure (low-level) TF backend instead of the net-dict one.
+# Set this to run the whole existing RF test suite against that backend.
+tf_low_level_env = os.environ.get("RETURNN_TEST_RF_TF_LOW_LEVEL", "") == "1"
+
 if disable_tf:
     tf = None
 else:
@@ -48,6 +52,26 @@ def tf_scope():
         yield session
 
 
+class RunModelException(Exception):
+    """run model exception"""
+
+
+class NonFiniteValuesException(RunModelException):
+    """non-finite values exception"""
+
+
+class CompareResultsMismatchException(RunModelException):
+    """compare results exception"""
+
+
+class CompareResultsMismatchTfVsPtException(CompareResultsMismatchException):
+    """compare results TF vs PT exception"""
+
+
+class CompareResultsMismatchSingleVsMultiBatchException(CompareResultsMismatchException):
+    """compare results single vs multi batch exception"""
+
+
 def run_model(
     extern_data: TensorDict,
     get_model: rf.GetModelFunc,
@@ -56,16 +80,36 @@ def run_model(
     dyn_dim_max_sizes: Optional[Dict[Dim, int]] = None,
     dyn_dim_min_sizes: Optional[Dict[Dim, int]] = None,
     test_tensorflow: bool = True,
+    tf_low_level: bool = False,
     allow_inf_nan_in_output: bool = False,
     test_single_batch_entry: bool = True,
+    data_rnd_seed: int = 42,
+    data_fill_random: bool = True,
 ) -> TensorDict:
-    """run"""
+    """
+    Runs the model with the PyTorch backend and with one of the TF backends, and compares the outputs.
+
+    :param extern_data: model inputs, filled with random data unless data_fill_random is disabled
+    :param get_model:
+    :param forward_step:
+    :param dyn_dim_max_sizes: max sizes for the dynamic dims when filling the data
+    :param dyn_dim_min_sizes: min sizes for the dynamic dims when filling the data
+    :param test_tensorflow: whether to run the TF side at all
+    :param tf_low_level: use the pure (low-level) TF backend for the TF side
+        instead of the net-dict one (also settable for all tests via RETURNN_TEST_RF_TF_LOW_LEVEL=1)
+    :param allow_inf_nan_in_output:
+    :param test_single_batch_entry: also run one smaller sequence alone, and compare it to its batched result
+    :param data_rnd_seed: seed for filling the data
+    :param data_fill_random: whether to fill extern_data with random data
+    :return: outputs of the PyTorch run
+    """
     print(f"* run_model with dyn_dim_max_sizes={dyn_dim_max_sizes!r}")
     extern_data_dims = extern_data.all_dims()
-    extern_data.reset_content()
-    tensor_dict_fill_random_numpy_(
-        extern_data, dyn_dim_max_sizes=dyn_dim_max_sizes, dyn_dim_min_sizes=dyn_dim_min_sizes
-    )
+    if data_fill_random:
+        extern_data.reset_content()
+        tensor_dict_fill_random_numpy_(
+            extern_data, dyn_dim_max_sizes=dyn_dim_max_sizes, dyn_dim_min_sizes=dyn_dim_min_sizes, rnd=data_rnd_seed
+        )
 
     print("** run with PyTorch backend")
     with rft.TorchBackend.random_journal_record() as random_journal:
@@ -85,7 +129,7 @@ def run_model(
                 lambda: (_run_model_torch(extern_data, get_model, forward_step), None)[-1],
                 stop_reporting_after_first_inf_nan=False,
             )
-            raise Exception(f"Non-finite values in output: {non_finite_outputs}. See log above.")
+            raise NonFiniteValuesException(f"Non-finite values in output: {non_finite_outputs}. See log above.")
 
     if test_single_batch_entry and batch_dim in extern_data_dims:
         dyn_dims = [
@@ -108,12 +152,21 @@ def run_model(
         print("** TensorFlow disabled (RETURNN_DISABLE_TF)")
         return out_pt
 
-    assert tf, "TensorFlow not available"
-    print("** run with TensorFlow-net-dict backend")
-    with rfl.ReturnnLayersBackend.random_journal_replay(random_journal):
-        out_tf = _run_model_net_dict_tf(extern_data, get_model, forward_step)
-        _pad_mask_zeros(out_tf)
-        out_tf_raw = out_tf.as_raw_tensor_dict(include_const_sizes=True)
+    assert tf, "TensorFlow not available. (set RETURNN_DISABLE_TF=1 if you want to test PyTorch only)"
+    if tf_low_level or tf_low_level_env:
+        from returnn.tf.frontend_low_level import TFBackend
+
+        print("** run with TensorFlow low-level backend")
+        with TFBackend.random_journal_replay(random_journal):
+            out_tf = _run_model_tf(extern_data, get_model, forward_step)
+            _pad_mask_zeros(out_tf)
+            out_tf_raw = out_tf.as_raw_tensor_dict(include_const_sizes=True)
+    else:
+        print("** run with TensorFlow-net-dict backend")
+        with rfl.ReturnnLayersBackend.random_journal_replay(random_journal):
+            out_tf = _run_model_net_dict_tf(extern_data, get_model, forward_step)
+            _pad_mask_zeros(out_tf)
+            out_tf_raw = out_tf.as_raw_tensor_dict(include_const_sizes=True)
 
     random_journal: RandomJournal
     assert random_journal.reached_end()
@@ -128,10 +181,13 @@ def run_model(
         # because the model code often creates new dims, which are different in each call.
         # However, via mark_as_output, the order of dims is well-defined.
         # So we can check the values.
-        assert len(v_pt.dims) == len(v_tf.dims)
+        assert len(v_pt.dims) == len(v_tf.dims) == v_pt.raw_tensor.ndim == v_tf.raw_tensor.ndim
         assert v_pt.feature_dim_axis == v_tf.feature_dim_axis
-        for d_pt, d_tf in zip(v_pt.dims, v_tf.dims):
+        for d_pt, d_tf, s_pt, s_tf in zip(v_pt.dims, v_tf.dims, v_pt.raw_tensor.shape, v_tf.raw_tensor.shape):
             _check_dim(d_pt, d_tf)
+            assert d_pt.get_dim_value() == s_pt == s_tf, (
+                f"dim size mismatch for dim {d_pt} vs {d_tf}: {s_pt} vs {s_tf} in output {k!r}"
+            )
         if v_pt.dtype.startswith("int"):
             assert v_tf.dtype.startswith("int")  # allow maybe different bit depth
         else:
@@ -143,10 +199,30 @@ def run_model(
     for k, v_pt in out_pt_raw.items():
         v_tf = out_tf_raw[k]
         print(f"  comparing {k!r} {_array_repr(v_pt)} PT vs TF")
-        if not numpy.allclose(v_pt, v_tf, atol=1e-5, rtol=1e-5):
+        # Tolerance relative to the tensor MAGNITUDE, not just per element:
+        # different backends use different op implementations (e.g. the FFT in stft),
+        # so the error scales with the values in the tensor, and a fixed atol either
+        # fails on large-magnitude outputs or hides real errors on small ones.
+        rtol = 1e-5
+        a_pt, a_tf = numpy.asarray(v_pt), numpy.asarray(v_tf)  # scalars (e.g. static dim sizes) too
+        scale = float(numpy.max(numpy.abs(a_pt))) if a_pt.size else 0.0
+        atol = 1e-5 + rtol * scale
+        if not numpy.allclose(a_pt, a_tf, atol=atol, rtol=rtol):
+            # report WHAT differs and by how much (numpy elides the arrays themselves,
+            # so a bare dump does not tell whether this is noise or a real mismatch)
+            d_pt, d_tf = a_pt.astype("complex128"), a_tf.astype("complex128")
+            diff = numpy.abs(d_pt - d_tf)
+            bad = diff > (atol + rtol * numpy.abs(d_tf))
+            i_max = numpy.unravel_index(int(numpy.argmax(diff)), diff.shape)
+            print(
+                f"  MISMATCH {k!r}: {int(bad.sum())} of {a_pt.size} elements,"
+                f" max abs diff {float(diff.max()):.3e} at {i_max}"
+                f" (PT {a_pt[i_max]!r} vs TF {a_tf[i_max]!r}),"
+                f" tensor max abs {scale:.3e}, tolerance atol {atol:.3e} rtol {rtol:.0e}"
+            )
             print(f"  PT:\n{v_pt}")
             print(f"  TF:\n{v_tf}")
-            raise Exception(f"output {k!r} differs")
+            raise CompareResultsMismatchTfVsPtException(f"output {k!r} differs")
     return out_pt
 
 
@@ -300,13 +376,108 @@ def _run_model_torch_single_batch(
         # Slice the raw ref output to be able to match it to the raw single output.
         ref_output_raw = ref_output_.raw_tensor[_get_slices(output_)]
         single_output_raw = output_.raw_tensor
-        numpy.testing.assert_allclose(
-            ref_output_raw, single_output_raw, atol=1e-5, rtol=1e-5, err_msg=f"output {key!r} differs"
-        )
+        if not numpy.allclose(ref_output_raw, single_output_raw, atol=1e-5, rtol=1e-5):
+            print(f"  Batched:\n{ref_output_raw}")
+            print(f"  Single:\n{single_output_raw}")
+            raise CompareResultsMismatchSingleVsMultiBatchException(f"output {key!r} differs")
 
     # Recover original data.
     extern_data.reset_content()
     extern_data.assign_from_raw_tensor_dict_(extern_data_raw)
+
+
+def _run_model_tf(extern_data: TensorDict, get_model: rf.GetModelFunc, forward_step: rf.StepFunc) -> TensorDict:
+    """
+    Run the model on the pure (low-level) TF backend:
+    build the TF graph directly from the RF code (no net dict), then run it once in a session.
+
+    The extern data goes in as constants, not placeholders:
+    every run builds its own graph, so there is nothing to feed,
+    and the placeholder path only becomes relevant with the engine.
+    """
+    # noinspection PyProtectedMember
+    from returnn.frontend import _backend
+
+    extern_data_raw = extern_data.as_raw_tensor_dict(expected_value_type=numpy.ndarray)
+    extern_data.reset_content()
+    prev_backend = rf.get_selected_backend()
+    _backend.select_backend_tf()
+
+    # Restore even when the run raises:
+    # the dims (incl. the global batch_dim) are converted in place below,
+    # and the selected backend is global state that later tests inherit.
+    try:
+        return _run_model_tf_impl(extern_data, extern_data_raw, get_model, forward_step)
+    finally:
+        extern_data.reset_content()
+        extern_data.assign_from_raw_tensor_dict_(extern_data_raw)
+        rf.select_backend(prev_backend)
+
+
+def _run_model_tf_impl(
+    extern_data: TensorDict,
+    extern_data_raw: Dict[str, numpy.ndarray],
+    get_model: rf.GetModelFunc,
+    forward_step: rf.StepFunc,
+) -> TensorDict:
+    """see :func:`_run_model_tf`"""
+    from returnn.tf.frontend_low_level import TFBackend
+
+    with tf_scope() as session:
+        rf.set_random_seed(42)
+        extern_data.assign_from_raw_tensor_dict_(extern_data_raw)
+        _tensor_dict_numpy_to_tf_(extern_data)
+
+        # the variables are created after the model, so that they can be named by module hierarchy
+        with TFBackend.deferred_parameter_creation():
+            model = get_model(epoch=1, step=0)
+        TFBackend.create_parameters(model)
+
+        rf.init_forward_step_run_ctx(epoch=1, step=0)
+        forward_step(model=model, extern_data=extern_data)
+        outputs_tf = rf.get_run_ctx().outputs
+        assert outputs_tf.data
+
+        if "loss" in outputs_tf.data:
+            data_ = {name: data for name, data in extern_data.data.items() if data.dtype.startswith("float")}
+            loss = outputs_tf.data["loss"]
+            assert isinstance(loss, Tensor) and loss.dtype.startswith("float")
+            loss = rf.reduce_sum(loss, axis=loss.dims)
+            d_grads = tf.gradients(loss.raw_tensor, [d.raw_tensor for d in data_.values()])
+            for (name, data), d_grad_tf in zip(data_.items(), d_grads):
+                assert d_grad_tf is not None, f"no grad for {name}"
+                if isinstance(d_grad_tf, tf.IndexedSlices):
+                    d_grad_tf = tf.convert_to_tensor(d_grad_tf)  # e.g. gather produces a sparse grad
+                d_grad = data.copy_template()
+                d_grad.raw_tensor = d_grad_tf
+                outputs_tf.data[f"{name}_grad"] = d_grad
+
+        session.run(tf_compat.v1.global_variables_initializer())
+
+        fetches = outputs_tf.as_raw_tensor_dict(expected_value_type=tf.Tensor)
+        outputs_numpy_raw = {k: numpy.asarray(v) for k, v in session.run(fetches).items()}
+        outputs_numpy = outputs_tf.copy_template()
+        outputs_numpy.reset_content()
+        outputs_numpy.assign_from_raw_tensor_dict_(outputs_numpy_raw)
+    return outputs_numpy
+
+
+def _tensor_dict_numpy_to_tf_(x: TensorDict):
+    """
+    :func:`_tensor_numpy_to_tf_` on all values
+    """
+    for v in x.data.values():
+        _tensor_numpy_to_tf_(v)
+
+
+def _tensor_numpy_to_tf_(x: Tensor):
+    """
+    tf.constant() on Tensor, including its dims
+    """
+    if isinstance(x.raw_tensor, numpy.ndarray):
+        x.raw_tensor = tf.constant(x.raw_tensor)
+    for dim in x.dims:
+        dim.transform_tensors(_tensor_numpy_to_tf_)
 
 
 def _run_model_net_dict_tf(

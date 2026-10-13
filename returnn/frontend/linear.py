@@ -5,6 +5,7 @@ Provides the :class:`Linear` module.
 from __future__ import annotations
 import returnn.frontend as rf
 from returnn.tensor import Tensor, Dim
+from . import _utils
 
 
 __all__ = ["Linear", "Embedding"]
@@ -36,7 +37,9 @@ class Linear(rf.Module):
         out = rf.matmul(source, self.weight, reduce=self.in_dim)
         out.feature_dim = self.out_dim
         if self.with_bias:
+            in_dtype = out.dtype  # matmul output dtype, before the bias promotes it
             out += self.bias
+            out = _utils.keep_dtype(out, in_dtype)
         return out
 
 

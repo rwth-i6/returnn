@@ -1,0 +1,64 @@
+"""
+Manager with watchdog
+"""
+
+from __future__ import annotations
+from typing import Optional
+import os
+import signal
+import time
+import threading
+import multiprocessing
+
+# noinspection PyProtectedMember
+from multiprocessing.context import BaseContext
+from multiprocessing.managers import SyncManager
+
+from returnn.util.debug import install_subproc_faulthandler
+
+
+def create_manager(*, ctx: Optional[BaseContext] = None) -> SyncManager:
+    """
+    Basically the same as :func:`multiprocessing.Manager` or :func:`ctx.Manager`,
+    but with a watch dog thread that will kill the manager process if the parent process dies.
+    """
+    print(f"main (parent) pid is {os.getpid()}")
+    if ctx is None:
+        # "spawn" context so the manager does not inherit our SIGTERM handler (_fatal_signal_handler):
+        # the watchdog below terminates it via SIGTERM as the normal shutdown path,
+        # and the inherited dump-and-exit handler would prevent a prompt clean exit.
+        ctx = multiprocessing.get_context("spawn")
+    m = SyncManager(ctx=ctx)
+    m.start(initializer=_manager_init_watch_dog, initargs=(os.getpid(),))
+    return m
+
+
+def _manager_init_watch_dog(parent_pid: int) -> None:
+    """
+    This is the initializer for the manager. It is called when the manager process starts.
+    """
+    install_subproc_faulthandler()
+    thread = threading.Thread(target=_manager_die_if_parent_dies, args=(parent_pid,), name="manager_watch_dog_thread")
+    thread.daemon = True
+    thread.start()
+
+
+def _manager_die_if_parent_dies(parent_pid: int) -> None:
+    """
+    This is the function that is called when the manager process starts.
+    It checks if the parent process is still alive.
+    If the parent process dies, it will kill the manager process.
+    """
+    while True:
+        new_parent_pid = os.getppid()
+        if new_parent_pid != parent_pid:
+            print(
+                f"multi_proc_manager_with_watchdog"
+                f" process ({os.getpid()}:"
+                f" parent process {parent_pid} is dead,"
+                f" new parent pid is {new_parent_pid},"
+                f" killing myself)"
+            )
+            os.kill(os.getpid(), signal.SIGTERM)
+            return
+        time.sleep(0.1)

@@ -285,3 +285,97 @@ class BatchSetGenerator:
         :rtype: int
         """
         return self.current_batch_idx
+
+
+def batch_to_raw_dict(
+    batch,
+    *,
+    dataset,
+    extern_data,
+    data_keys,
+    enforce_min_len1: bool = False,
+    exclude_data_key=None,
+):
+    """
+    Read the data of one :class:`Batch` out of the dataset into padded NumPy arrays.
+
+    This is backend independent on purpose: every engine needs the same padding and chunk-slicing
+    logic, and only the step of putting the arrays onto a device differs.
+
+    :param Batch batch:
+    :param returnn.datasets.basic.Dataset dataset:
+    :param returnn.tensor.TensorDict extern_data: templates, defining dtypes and which axes are dynamic
+    :param typing.Sequence[str] data_keys: which entries of extern_data to fill
+    :param bool enforce_min_len1: pad up to length 1 even for empty seqs
+    :param exclude_data_key: optional callable, to skip individual keys
+    :return: dict with one entry per data key, plus "<key>_seq_lens" per dynamic key,
+        plus "seq_idx", "seq_tag" and "batch_dim"
+    :rtype: dict[str, numpy.ndarray]
+    """
+    import contextlib
+    import numpy
+    from returnn.datasets.basic import shapes_for_batches
+    from returnn.util.basic import slice_pad_zeros
+
+    # Shape convention is (batch, time, feature), matching what the engines' extern_data declares.
+    shapes = shapes_for_batches(
+        [batch], data_keys=data_keys, extern_data=extern_data, enforce_min_len1=enforce_min_len1
+    )
+    data = {
+        k: numpy.zeros(shape=shapes[k], dtype=extern_data.data[k].dtype)
+        for k in data_keys
+        if extern_data.data[k].dtype != "string"
+    }
+    # NumPy cannot handle the "string" dtype, so those become list[str].
+    data.update({k: [""] * batch.num_slices for k in data_keys if extern_data.data[k].dtype == "string"})
+    data.update({"seq_idx": [-1] * batch.num_slices, "seq_tag": [""] * batch.num_slices})
+    seq_lens = {
+        k: numpy.zeros(shape=(shapes[k][0],), dtype=extern_data.data[k].size_dtype)
+        for k in data_keys
+        if extern_data.data[k].get_dynamic_axes()
+    }
+    dataset.load_seqs(batch.start_seq, batch.end_seq)
+
+    with dataset.lock or contextlib.nullcontext():
+        for seq in batch.seqs:
+            o = seq.batch_frame_offset
+            q = seq.batch_slice
+            length = seq.frame_length
+            for k in data_keys:
+                if k in ["seq_idx", "seq_tag"]:
+                    continue  # handled below, always added
+                if exclude_data_key is not None and exclude_data_key(k):
+                    continue
+                data_ = extern_data.data[k]
+                # Do not rely on time_dim_axis but check for any dynamic axes.
+                dyn_axes = data_.get_dynamic_axes()
+                assert len(dyn_axes) <= 1, f"unexpected dynamic axes in data {k!r} {data_}"
+                if dyn_axes:
+                    if length.get(k) in [0, None]:
+                        continue
+                v = dataset.get_data(seq.seq_idx, k)
+                if dyn_axes:
+                    v = slice_pad_zeros(v, begin=seq.seq_start_frame[k], end=seq.seq_end_frame[k])
+                    ls = v.shape[0]
+                    if ls != length[k]:
+                        raise Exception(
+                            "got shape[0]: %i, expected: %i, start/end: %r/%r, seq_idx: %i, seq len: %r"
+                            % (
+                                ls,
+                                length[k],
+                                seq.seq_start_frame,
+                                seq.seq_end_frame,
+                                seq.seq_idx,
+                                dataset.get_seq_length(seq.seq_idx),
+                            )
+                        )
+                    data[k][q, o[k] : o[k] + ls] = v
+                    seq_lens[k][q] = max(seq_lens[k][q], o[k] + ls)
+                else:  # no time-axis
+                    data[k][q] = v
+            data["seq_idx"][q] = seq.seq_idx
+            data["seq_tag"][q] = dataset.get_tag(seq.seq_idx)
+    for k in seq_lens.keys():
+        data["%s_seq_lens" % k] = seq_lens[k]
+    data["batch_dim"] = batch.num_slices
+    return data

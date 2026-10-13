@@ -21,7 +21,7 @@ my_dir = os.path.dirname(os.path.realpath(__file__))
 
 
 def _sig_alarm_handler(signum, frame):
-    raise Exception(f"Alarm (timeout) signal handler")
+    raise Exception("Alarm (timeout) signal handler")
 
 
 signal.signal(signal.SIGALRM, _sig_alarm_handler)
@@ -200,6 +200,22 @@ def test_NumbersDict_eq_2():
     assert a != 5
 
 
+def test_NumbersDict_add0():
+    a = NumbersDict(numbers_dict={"data": 3, "classes": 2}, broadcast_value=1)
+    b = NumbersDict() + a
+    assert isinstance(b, NumbersDict)
+    assert b.value == 1
+    assert b.dict == {"data": 3, "classes": 2}
+
+
+def test_NumbersDict_add0a():
+    a = NumbersDict(numbers_dict={"data": 3, "classes": 2})
+    b = NumbersDict() + a
+    assert isinstance(b, NumbersDict)
+    assert b.value is None
+    assert b.dict == {"data": 3, "classes": 2}
+
+
 def test_NumbersDict_mul():
     a = NumbersDict(numbers_dict={"data": 3, "classes": 2}, broadcast_value=1)
     b = a * 2
@@ -254,6 +270,13 @@ def test_collect_class_init_kwargs():
     kwargs = collect_class_init_kwargs(C)
     print(kwargs)
     assert sorted(kwargs) == ["a", "b", "c"]
+
+    class D(C):
+        def __init__(self, d=1, *, e, f=2, **kwargs):
+            super(D, self).__init__(**kwargs)
+
+    assert sorted(collect_class_init_kwargs(D)) == ["a", "b", "c", "d", "e", "f"]
+    assert dict(collect_class_init_kwargs(D, only_with_default=True)) == {"d": 1, "f": 2}
 
 
 def test_terminal_size():
@@ -599,11 +622,11 @@ def test_import_wrong_pkg_py_import():
     del sys.modules[mod_name]
 
     try:
-        import returnn_import.github_com.rwth_i6.returnn_experiments.v20210302153450_10beb9d1c57e
+        import returnn_import.github_com.rwth_i6.returnn_experiments.v20210302153450_10beb9d1c57e as _mod
     except MissingExplicitImport as exc:  # but *not* a normal ImportError
         print("Got expected exception:", exc)
     else:
-        raise Exception("We expected an import error exception but got nothing.")
+        raise Exception(f"We expected an import error exception but got nothing and module {_mod}")
 
 
 def test_literal_py_to_pickle():
@@ -646,6 +669,37 @@ def test_native_signal_handler():
     from returnn.util.debug import install_native_signal_handler
 
     install_native_signal_handler(reraise_exceptions=True)
+
+
+def test_serialize_object_function_type():
+    import types
+
+    b = serialize_object(types.FunctionType)
+    c = deserialize_object(b)
+    assert c is types.FunctionType
+
+
+def test_serialize_object_class():
+    b = serialize_object(NumbersDict)
+    c = deserialize_object(b)
+    assert c is NumbersDict
+
+
+def test_serialize_object_classmethod_function():
+    # use some dummy class not from here but from some other module,
+    # otherwise we have additional problems with the pickling which can fail due to __main__ module.
+    b = serialize_object(NumbersDict.constant_like.__func__)
+    f = deserialize_object(b)
+    assert f is NumbersDict.constant_like.__func__, b
+
+
+def test_serialize_object_classmethod():
+    # use some dummy class not from here but from some other module,
+    # otherwise we have additional problems with the pickling which can fail due to __main__ module.
+    b = serialize_object(NumbersDict.constant_like)
+    m = deserialize_object(b)
+    assert m.__self__ is NumbersDict.constant_like.__self__
+    assert m.__func__ is NumbersDict.constant_like.__func__, b
 
 
 class _PreInitUnpicklingRaiseException:
@@ -763,9 +817,9 @@ def test_bpe_DepthFirstSearch():
     dfs = DepthFirstSearch(tree, "hello")
     assert dfs.search() == ["he@@", "llo"]
     dfs = DepthFirstSearch(tree, "helo")
-    assert dfs.search() == None
+    assert dfs.search() is None
     dfs = DepthFirstSearch(tree, "x")
-    assert dfs.search() == None
+    assert dfs.search() is None
     dfs = DepthFirstSearch(tree, "llo")
     assert dfs.search() == ["llo"]
 
@@ -971,6 +1025,307 @@ def test_file_cache():
         prev_count_dirs = count_dirs
         if count_dirs == 0:
             break
+
+
+def test_file_cache_opts_from_env():
+    from returnn.config import Config
+    from returnn.util.file_cache import get_instance
+
+    cache_dir = _get_tmp_dir() + "/returnn/file_cache"
+    config = Config({"file_cache_opts": {"cache_directory": cache_dir, "cleanup_disk_usage_wanted_free_ratio": 0.1}})
+    os.environ["RETURNN_FILE_CACHE_OPTS"] = '{"cleanup_disk_usage_wanted_free_ratio": 0.4}'
+    try:
+        cache = get_instance(config)
+    finally:
+        del os.environ["RETURNN_FILE_CACHE_OPTS"]
+    assert cache.cache_directory == cache_dir
+    assert cache._cleanup_disk_usage_wanted_free_ratio == 0.4
+
+
+def test_file_cache_cleanup_wanted_space_keeps_files_in_use():
+    from returnn.util.file_cache import FileCache
+
+    src_dir = _get_tmp_dir()
+    for name in ["old.txt", "used.txt"]:
+        with open(f"{src_dir}/{name}", "w") as f:
+            f.write(name)
+    cache = FileCache(
+        cache_directory=_get_tmp_dir() + "/returnn/file_cache",
+        cleanup_files_wanted_older_than_days=0,
+        cleanup_disk_usage_wanted_free_ratio=1.0,
+    )
+    old = cache.get_file(f"{src_dir}/old.txt")
+    used = cache.get_file(f"{src_dir}/used.txt")
+    cache.release_files(old)
+    stale = time.time() - 60
+    os.utime(old, (stale, stale))
+    cache.cleanup()
+    assert not os.path.exists(old)
+    assert os.path.exists(used)
+
+
+def test_py_baum_welch():
+    from fsa_utils import py_baum_welch
+    from returnn.util.fsa import FastBwFsaShared
+    from numpy.testing import assert_almost_equal, assert_allclose
+
+    n_batch = 3
+    seq_len = 7
+    n_classes = 5
+
+    fsa = FastBwFsaShared()
+    for i in range(n_classes):
+        fsa.add_edge(i, i + 1, emission_idx=i)  # fwd
+        fsa.add_edge(i + 1, i + 1, emission_idx=i)  # loop
+    assert n_classes <= seq_len
+    fast_bw_fsa = fsa.get_fast_bw_fsa(n_batch=n_batch)
+    edges = fast_bw_fsa.edges
+    weights = fast_bw_fsa.weights
+    start_end_states = fast_bw_fsa.start_end_states
+    am_scores = numpy.ones((seq_len, n_batch, n_classes), dtype="float32") * numpy.float32(1.0 / n_classes)
+    am_scores = -numpy.log(am_scores)  # in -log space
+    float_idx = numpy.ones((seq_len, n_batch), dtype="float32")
+    print("Construct call...")
+    fwdbwd, obs_scores = py_baum_welch(
+        am_scores=am_scores, float_idx=float_idx, edges=edges, weights=weights, start_end_states=start_end_states
+    )
+    print("Done.")
+    print("score:")
+    print(repr(obs_scores))
+    assert obs_scores.shape == (seq_len, n_batch)
+    bw = numpy.exp(-fwdbwd)
+    print("Baum-Welch soft alignment:")
+    print(repr(bw))
+    assert bw.shape == (seq_len, n_batch, n_classes)
+    from numpy import array, float32
+
+    if seq_len == n_classes:
+        print("Extra check identity...")
+        for i in range(n_batch):
+            assert_almost_equal(numpy.identity(n_classes), bw[:, i])
+    if seq_len == 7 and n_classes == 5:
+        print("Extra check ref_align (7,5)...")
+        assert_allclose(obs_scores, 8.55801582, rtol=1e-5)  # should be the same everywhere
+        ref_align = array(
+            [
+                [[1.0, 0.0, 0.0, 0.0, 0.0]],
+                [[0.33333316, 0.66666663, 0.0, 0.0, 0.0]],
+                [[0.06666669, 0.53333354, 0.40000018, 0.0, 0.0]],
+                [[0.0, 0.20000014, 0.60000014, 0.19999999, 0.0]],
+                [[0.0, 0.0, 0.39999962, 0.53333312, 0.06666663]],
+                [[0.0, 0.0, 0.0, 0.66666633, 0.33333316]],
+                [[0.0, 0.0, 0.0, 0.0, 0.99999982]],
+            ],
+            dtype=float32,
+        )
+        assert ref_align.shape == (seq_len, 1, n_classes)
+        ref_align = numpy.tile(ref_align, (1, n_batch, 1))
+        assert ref_align.shape == bw.shape
+        # print("Reference alignment:")
+        # print(repr(ref_align))
+        print("mean square diff:", numpy.mean(numpy.square(ref_align - bw)))
+        print("max square diff:", numpy.max(numpy.square(ref_align - bw)))
+        assert_allclose(ref_align, bw, rtol=1e-5)
+    print("Done.")
+
+
+def test_py_viterbi():
+    from fsa_utils import py_viterbi
+    from returnn.util.fsa import FastBwFsaShared
+    from numpy.testing import assert_allclose
+
+    n_batch = 3
+    seq_len = 7
+    n_classes = 5
+
+    fsa = FastBwFsaShared()
+    for i in range(n_classes):
+        fsa.add_edge(i, i + 1, emission_idx=i)  # fwd
+        fsa.add_edge(i + 1, i + 1, emission_idx=i)  # loop
+    assert n_classes <= seq_len
+    fast_bw_fsa = fsa.get_fast_bw_fsa(n_batch=n_batch)
+    edges = fast_bw_fsa.edges
+    weights = fast_bw_fsa.weights
+    start_end_states = fast_bw_fsa.start_end_states
+    am_scores = numpy.eye(n_classes, n_classes, dtype="float32")  # (dim,dim)
+    import scipy.ndimage
+
+    am_scores = scipy.ndimage.zoom(am_scores, zoom=(float(seq_len) / n_classes, 1), order=1, prefilter=False)
+    assert am_scores.shape == (seq_len, n_classes)
+    am_scores = am_scores[:, None]
+    am_scores = am_scores + numpy.zeros((seq_len, n_batch, n_classes), dtype="float32")
+    print(am_scores[:, 0])
+    # am_scores = numpy.ones((seq_len, n_batch, n_classes), dtype="float32") * numpy.float32(1.0 / n_classes)
+    am_scores = numpy.log(am_scores)  # in +log space
+    print("Construct call...")
+    alignment, obs_scores = py_viterbi(
+        am_scores=am_scores,
+        am_seq_len=numpy.array([seq_len] * n_batch),
+        edges=edges,
+        weights=weights,
+        start_end_states=start_end_states,
+    )
+    print("Done.")
+    print("score:")
+    print(repr(obs_scores))
+    assert obs_scores.shape == (n_batch,)
+    print("Hard alignment:")
+    print(repr(alignment))
+    assert alignment.shape == (seq_len, n_batch)
+    if seq_len == n_classes:
+        print("Extra check identity...")
+        for i in range(n_batch):
+            for t in range(seq_len):
+                assert alignment[t, i] == t
+    if seq_len == 7 and n_classes == 5:
+        print("Extra check ref_align (7,5)...")
+        assert_allclose(obs_scores, -1.6218603, rtol=1e-5)  # should be the same everywhere
+        for i in range(n_batch):
+            assert alignment[:, i].tolist() == [0, 1, 1, 2, 3, 3, 4]
+    print("Done.")
+
+
+def test_hot_reload():
+    from multiprocessing import Process
+
+    # start in subproc so that we can modify the env
+    p = Process(target=_hot_reload_test_main)
+    p.start()
+    p.join()
+
+
+def _hot_reload_test_main():
+    import functools
+    import importlib
+    from returnn.util.hot_reload import ConfigHotReloader
+
+    new_py_dir = _get_tmp_dir()
+    print("New py dir:", new_py_dir)
+    sys.path.append(new_py_dir)
+
+    mod_name = "hot_reload_test_code_mod"
+    with open(f"{new_py_dir}/{mod_name}.py", "w") as f:
+        f.write(_HotReloadTestCodeMod)
+
+    mod = importlib.import_module(mod_name)
+    assert mod.__name__ == mod_name
+    assert mod.__file__ == f"{new_py_dir}/{mod_name}.py"
+
+    config = {"func": functools.partial(mod.main, 42, f=mod.other)}
+    hot_reloader = ConfigHotReloader(config)
+    assert hot_reloader.modules == [mod_name]
+    assert not hot_reloader.any_module_changed()
+
+    res = config["func"]()
+    assert res == 43
+
+    with open(f"{new_py_dir}/{mod_name}.py", "w") as f:
+        f.write(_HotReloadTestCodeModUpdated)
+
+    assert hot_reloader.any_module_changed()
+    hot_reloader.reload_changed_modules()
+
+    res = config["func"]()
+    assert res == 20
+
+
+# language=Python
+_HotReloadTestCodeMod = """
+
+def main(x, *, f):
+    return f(x)
+
+
+def other(x):
+    return x + 1
+
+"""
+
+
+# language=Python
+_HotReloadTestCodeModUpdated = """
+
+def main(x, *, f):
+    x = x // 2
+    return f(x)
+
+def other(x):
+    return x - 1
+
+"""
+
+
+def test_lru_cache_evict_with_reentrant_finalizer():
+    """
+    Evicting an entry drops the cached VALUE's last reference.
+    If that value owns an object with a weakref finalizer that re-enters the cache
+    -- which is exactly what the RF cache does
+    (returnn.frontend._cache.Cache.set registers a finalizer calling cache_pop) --
+    the finalizer runs *inside* the link update, through the reentrant RLock.
+
+    CPython's functools keeps the evicted result alive across that update for this reason.
+    Without it, the finalizer's cache_pop finds the link whose KEY was just set to None
+    (the root sentinel), clears it,
+    and the NEXT insert dies with `IndexError: list assignment index out of range`.
+
+    Relies on CPython refcounting to run the finalizer at the moment the reference drops.
+    """
+    import weakref
+    from returnn.util.lru_cache import lru_cache
+
+    evicted = []
+    unraisable = []
+
+    class _Holder:
+        def __init__(self, x):
+            self.x = x
+
+    def _on_dead(x):
+        evicted.append(x)
+        f.cache_pop(x, fallback=None)  # re-entry: same shape as the RF cache finalizer
+
+    @lru_cache(maxsize=2)
+    def f(x):
+        h = _Holder(x)
+        weakref.finalize(h, _on_dead, x)
+        return h
+
+    # An exception inside a finalizer does not propagate:
+    # it becomes "unraisable" and is merely printed,
+    # so without this hook the cache_pop/cache_clear ordering bugs pass silently.
+    prev_hook = sys.unraisablehook
+    sys.unraisablehook = lambda args: unraisable.append(f"{args.exc_type.__name__}: {args.exc_value}")
+    try:
+        for x in range(6):  # more than maxsize, so evictions happen and finalizers fire
+            assert f(x).x == x
+        assert evicted, "no finalizer ran -- the test no longer exercises the eviction path"
+        # the cache must still be usable; before the fix this raised IndexError
+        assert f(100).x == 100
+        assert f.cache_len() <= 2
+        f.cache_clear()  # clears links too -> finalizers fire here as well
+    finally:
+        sys.unraisablehook = prev_hook
+    assert not unraisable, f"finalizer raised inside the cache: {unraisable}"
+
+
+def test_lru_cache_keys_survive_module_teardown():
+    """
+    A weakref finalizer registered by returnn.frontend._cache pops its entry when the key's tensor dies,
+    which at interpreter shutdown happens after the module globals were set to None. The key builder then
+    saw ``'NoneType' object is not callable`` on every training job's exit.
+    """
+    from returnn.util import lru_cache as lru_cache_mod
+    from returnn.util.lru_cache import lru_cache
+
+    cache = lru_cache(4)(lambda *args: None)
+    cache.cache_set("a", 1, result="one")
+    saved = lru_cache_mod._HashedSeq
+    lru_cache_mod._HashedSeq = None
+    try:
+        assert cache.cache_pop("a", 1) == "one"
+        assert cache.cache_peek("a", 1, fallback="gone") == "gone"
+    finally:
+        lru_cache_mod._HashedSeq = saved
 
 
 if __name__ == "__main__":

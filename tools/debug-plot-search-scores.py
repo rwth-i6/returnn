@@ -45,6 +45,10 @@ class Alignment:
 
         @property
         def num_frames(self):
+            """
+            :return: number of frames covered, both ends inclusive
+            :rtype: int
+            """
             return self.end_frame - self.start_frame + 1
 
         def copy(self):
@@ -226,6 +230,10 @@ def phone_alignment_to_word_alignment(lexicon, words, phone_alignment):
         __repr__ = util.simple_obj_repr
 
         def is_lemma_finished(self):
+            """
+            :return: whether all phones of the current lemma have been consumed
+            :rtype: bool
+            """
             if not self.lemma_phones:
                 return True
             if self.lemma_phone_i >= len(self.lemma_phones):
@@ -334,6 +342,10 @@ class AlignmentPlotter:
 
     @property
     def recent_plot(self):
+        """
+        :return: the plot for the most recently seen seq tag
+        :rtype: AlignmentPlotter.Plot
+        """
         return self.plot_by_seq_tag[self.recent_seq_tag]
 
     class Alignment:
@@ -384,6 +396,11 @@ class AlignmentPlotter:
             return "AlignmentPlotter.Alignment(human=%r, key=%r, seq_tag=%r)" % (self.human, self.key, self.seq_tag)
 
         def add_to_plot(self, overwrite=False):
+            """
+            Register this alignment on the current plot.
+
+            :param bool overwrite: allow replacing an alignment already stored under this key
+            """
             assert self.plot.recent_plot.seq_tag == self.seq_tag
             if not overwrite:
                 assert self.key not in self.plot.recent_plot.alignments

@@ -93,12 +93,12 @@ base_settings = {
 
 def make_config_dict(lstm_unit, use_gpu):
     """
-    :param str lstm_unit: "NativeLSTM", "LSTMBlock", "LSTMBlockFused", "CudnnLSTM", etc, one of LstmCellTypes
+    :param str lstm_unit: "NativeLSTM", "LSTMBlock", "LSTMBlockFused", "CudnnLSTM", etc., one of LstmCellTypes
     :param bool use_gpu:
     :return: config dict
     :rtype: dict[str]
     """
-    num_layers = base_settings["num_layers"]
+    num_layers = int(base_settings["num_layers"])  # the settings dict is heterogeneous (int|str)
     network = {}
     for i in range(num_layers):
         for direction in [-1, 1]:

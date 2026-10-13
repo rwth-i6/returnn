@@ -8,6 +8,8 @@ import logging
 import numpy
 from returnn.tensor import Tensor, Dim
 import returnn.frontend as rf
+from returnn.util.basic import BehaviorVersion
+from returnn.log import log
 from ._backend import Backend, global_backend, get_backend_by_raw_tensor_type
 from .types import RawTensorTypes
 from . import _utils
@@ -31,7 +33,9 @@ __all__ = [
     "concat_features",
     "pad",
     "cum_concat_step",
+    "slice_update",
     "stack",
+    "unstack",
     "masked_select",
     "masked_scatter",
     "sequence_mask",
@@ -43,6 +47,7 @@ __all__ = [
     "scatter_argmax",
     "scatter_logsumexp",
     "scatter_logmeanexp",
+    "scatter_count",
     "slice",
     "shift_right",
     "shift_left",
@@ -54,6 +59,12 @@ __all__ = [
     "one_hot",
     "top_k_mask",
     "top_p_mask",
+    "repeat",
+    "limit_repeats",
+    "expand_make_non_empty",
+    "real_as_complex",
+    "complex_as_real",
+    "make_complex",
 ]
 
 
@@ -84,6 +95,10 @@ def convert_to_tensor(
     :return: tensor
     """
     if isinstance(value, Tensor):  # fast path
+        if device and value.device != device:
+            value = rf.copy_to_device(value, device)
+        if dtype and value.dtype != dtype:
+            value = rf.cast(value, dtype=dtype)
         return value
     if isinstance(value, (tuple, list)):
         value = numpy.array(value, dtype=dtype)
@@ -155,6 +170,8 @@ def cast(tensor: Tensor, dtype: str) -> Tensor:
     :param dtype:
     :return: tensor with the same data, but with a different dtype
     """
+    if tensor.dtype == dtype:
+        return tensor
     # noinspection PyProtectedMember
     return tensor._raw_backend.cast(tensor, dtype=dtype)
 
@@ -188,22 +205,18 @@ def merge_dims(
             return source, dims[0]
         return rf.replace_dim(source, in_dim=dims[0], out_dim=out_dim)
     if out_dim is None:
-        out_dim = dims[0]
-        reset_dyn_size = False
-        for d in dims[1:]:
-            reset_dyn_size |= d.need_masking() and out_dim.capacity != 1
-            out_dim = out_dim * d
-        if reset_dyn_size:
+        from returnn.util.basic import prod
+
+        if any([d.need_masking() for d in dims[1:]]):
             # The dynamic sizes as calculated via dim math would not correctly describe how the tensor looks like.
             # This would then potentially discard some of the data in the tensor in subsequent operations,
             # when masking is applied.
             # Thus, discard the dynamic sizes, and just treat it as a flat dim with scalar dynamic size.
             # https://github.com/rwth-i6/returnn/issues/1694
-            out_dim_size = dims[0].get_dim_value_tensor()
-            for d in dims[1:]:
-                out_dim_size *= d.get_dim_value_tensor()
-            assert isinstance(out_dim_size, Tensor) and out_dim_size.dims == ()  # scalar
-            out_dim.dyn_size_ext = out_dim_size
+            # See also similar logic in :func:`concat`.
+            out_dim = Dim(prod(d.get_dim_value_tensor() for d in dims), name="merged")
+        else:
+            out_dim = prod(dims)
     # noinspection PyProtectedMember
     return source._raw_backend.merge_dims(source, dims=dims, out_dim=out_dim), out_dim
 
@@ -274,6 +287,7 @@ def split(source: Tensor, *, axis: Dim, out_dims: Sequence[Dim]) -> Tuple[Tensor
     """
     Split the input on the specified axis (by default feature).
     Basically a wrapper around tf.split.
+    Also see :func:`unstack`.
 
     :param source: {..., axis}
     :param axis: some static axis
@@ -325,7 +339,8 @@ def window(
     window_left: Optional[Union[Dim, int]] = None,
     padding: str = "same",
     pad_value: Optional[Union[int, float]] = None,
-    stride: int = 1,
+    stride: Union[int, Tensor] = 1,
+    out_spatial_dim: Optional[Dim] = None,
     use_mask: Optional[bool] = None,
 ) -> Tuple[Tensor, Dim]:
     """
@@ -339,18 +354,42 @@ def window(
     :param window_right:
     :param padding: "same" or "valid"
     :param pad_value:
-    :param stride:
+    :param stride: int, or a scalar Tensor for a stride that varies per step.
+        A Tensor keeps the shapes out of the host, which a static graph needs;
+        the out spatial dim then has device-side sizes.
+    :param out_spatial_dim: optional, only supported together with stride > 1.
+        With a Tensor stride the derived dim can only inherit the input capacity
+        (a stride of 1 must stay expressible),
+        so a caller that knows the smallest stride should pass a dim bounded by it --
+        the capacity-wide range is real compute.
     :param use_mask: whether we should mask to make sure the zero padding is correct
     :return: out, out_spatial_dim
     """
     if spatial_dim.need_masking():
         if use_mask is None:
-            use_mask = rf.use_mask_default(default=True, default_false_for_behavior_version_up_to=22)
+            use_mask = rf.use_mask_default(
+                default=True, default_false_for_behavior_version_up_to=22, func_name="window"
+            )
         if use_mask:
             source = source.copy_masked(0, dims=[spatial_dim])
-    assert window_dim.dimension is not None
+    pad_window_dim = window_dim
+    if window_dim.dimension is None:
+        # The strided path below only does dim math on the window and one range over it,
+        # and that range takes the capacity, so a dynamic window keeps the shapes static.
+        # The reshape path cannot express one.
+        assert isinstance(stride, Tensor) or stride > 1, f"window: dynamic {window_dim} needs the strided path"
+        assert window_dim.capacity is not None, f"window: dynamic {window_dim} needs a declared capacity"
+        # The padding has to stay a static amount:
+        # a device-valued one is not a layout that packed storage can express,
+        # and a captured graph cannot resize its buffers per step.
+        # Padding by the capacity pads too much on the right, which the window then masks away,
+        # so only window_left may still shift the alignment and it has to be static.
+        assert window_left is not None and (isinstance(window_left, int) or window_left.dimension is not None), (
+            f"window: dynamic {window_dim} needs a static window_left, got {window_left}"
+        )
+        pad_window_dim = Dim(window_dim.capacity, name=f"{window_dim.name}:capacity")
     if padding == "same":
-        out_spatial_dim = spatial_dim
+        unstrided_out_spatial_dim = spatial_dim
         if window_right is not None:
             if isinstance(window_right, int):
                 window_right = Dim(window_right, name="window_right")
@@ -361,12 +400,12 @@ def window(
             assert isinstance(window_left, Dim)
         if window_right is None:
             if window_left is None:
-                window_right = window_dim // 2
-                window_left = window_dim.ceildiv_right(2) - 1
+                window_right = pad_window_dim // 2
+                window_left = pad_window_dim.ceildiv_right(2) - 1
             else:
-                window_right = window_dim - window_left - 1
+                window_right = pad_window_dim - window_left - 1
         if window_left is None:
-            window_left = window_dim - window_right - 1
+            window_left = pad_window_dim - window_right - 1
         source, (in_spatial_dim,) = rf.pad(
             source,
             axes=[spatial_dim],
@@ -376,16 +415,21 @@ def window(
         # shape[0] == n_time + window - 1
     elif padding == "valid":
         in_spatial_dim = spatial_dim
-        out_spatial_dim = spatial_dim - window_dim + 1
+        unstrided_out_spatial_dim = spatial_dim - window_dim + 1
     else:
         raise ValueError(f"invalid padding {padding!r}")
 
-    if stride > 1:
-        start_times, out_spatial_dim = rf.range_over_dim_strided(out_spatial_dim, stride=stride)  # (n_out_time,)
+    if isinstance(stride, Tensor) or stride > 1:
+        start_times, out_spatial_dim = rf.range_over_dim_strided(
+            unstrided_out_spatial_dim, stride=stride, out_dim=out_spatial_dim
+        )  # (n_out_time,)
         win_range = rf.range_over_dim(window_dim)  # (window,)
         indices = rf.combine_bc(start_times, "+", win_range)  # (n_out_time,window)
-        final = rf.gather(source, indices=indices, axis=in_spatial_dim)  # (n_out_time,window,...)
+        clip = isinstance(stride, Tensor) or window_dim.dimension is None
+        final = rf.gather(source, indices=indices, axis=in_spatial_dim, clip_to_valid=clip)
         return final, out_spatial_dim
+    assert out_spatial_dim is None  # only supported for the strided path
+    out_spatial_dim = unstrided_out_spatial_dim
 
     tiled_dimshuffle = rf.expand_dim(source, dim=window_dim)  # (window,n_time+window-1,...)
     # We want to shift every dim*time block by one to the left.
@@ -427,13 +471,27 @@ def concat(
         dims = sources[0][0].dims_set - {sources[0][1]}
         for src, dim in sources:
             assert src.dims_set - {dim} == dims, f"concat {sources}, need allow_broadcast=True"
+    need_handle_dynamic_dims = False
+    for src, dim in sources[:-1]:
+        if dim.need_masking():
+            need_handle_dynamic_dims = True
+    if handle_dynamic_dims is None:
+        handle_dynamic_dims = need_handle_dynamic_dims
     if not out_dim:
-        out_dim = sum(d for _, d in sources)
-    if handle_dynamic_dims is None or handle_dynamic_dims:
-        for src, dim in sources[:-1]:
-            assert dim.is_static(), f"concat {sources}, dim {dim} is not static, not yet implemented..."
-    # noinspection PyProtectedMember
-    return sources[0][0]._raw_backend.concat(*sources, allow_broadcast=allow_broadcast, out_dim=out_dim), out_dim
+        if handle_dynamic_dims or not need_handle_dynamic_dims:
+            out_dim = sum(d for _, d in sources)
+        else:  # not handle_dynamic_dims but need_handle_dynamic_dims
+            # There are dynamic dims, but we don't want to handle them.
+            # So, summing the dims would be incorrect.
+            # Just add the dim values.
+            out_dim = Dim(sum(d.get_dim_value_tensor() for _, d in sources), name="concat")
+    if handle_dynamic_dims:
+        # noinspection PyProtectedMember
+        out = sources[0][0]._raw_backend.concat_seq_wise(*sources, allow_broadcast=allow_broadcast, out_dim=out_dim)
+    else:
+        # noinspection PyProtectedMember
+        out = sources[0][0]._raw_backend.concat(*sources, allow_broadcast=allow_broadcast, out_dim=out_dim)
+    return out, out_dim
 
 
 def concat_features(*sources: Tensor, allow_broadcast=False) -> Tensor:
@@ -478,7 +536,12 @@ def pad(
     if handle_dynamic_dims is None:
         handle_dynamic_dims = _pad_handle_dynamic_dims_default(axes, padding, mode=mode)
     if not out_dims:
-        out_dims = [left + middle + right for middle, (left, right) in zip(axes, padding)]
+        out_dims = [
+            (left + middle + right)
+            if handle_dynamic_dims or not _pad_need_dyn_dim_handling(middle, left, right, mode=mode)
+            else _pad_sum_dims_no_dyn_dim_handling(middle, left, right)
+            for middle, (left, right) in zip(axes, padding)
+        ]
     # noinspection PyProtectedMember
     return (
         source._raw_backend.pad(
@@ -506,8 +569,6 @@ def _pad_handle_dynamic_dims_default(
     :param mode: 'constant', 'reflect', 'replicate' or 'circular'
     :return: True if dynamic dims should be handled as specified in the default behavior
     """
-    from returnn.util.basic import BehaviorVersion
-
     if BehaviorVersion.get() >= 21:
         return True
 
@@ -544,6 +605,32 @@ def _pad_need_dyn_dim_handling(
     return True
 
 
+def _pad_sum_dims_no_dyn_dim_handling(
+    middle: Dim, left: Union[Dim, int, Tensor], right: Union[Dim, int, Tensor]
+) -> Dim:
+    """
+    This gets called when we need to handle dyn dims, but handle_dynamic_dims=False.
+    See also the same logic in :func:`concat`.
+    """
+    if isinstance(left, Dim):
+        left = left.get_dim_value_tensor()
+    elif isinstance(left, int):
+        pass
+    elif isinstance(left, Tensor):
+        assert left.dims == ()  # scalar
+    else:
+        raise TypeError(f"invalid left pad {left}")
+    if isinstance(right, Dim):
+        right = right.get_dim_value_tensor()
+    elif isinstance(right, int):
+        pass
+    elif isinstance(right, Tensor):
+        assert right.dims == ()  # scalar
+    else:
+        raise TypeError(f"invalid right pad {right}")
+    return Dim(left + middle.get_dim_value_tensor() + right, name="pad")
+
+
 def cum_concat_step(
     source: Tensor, *, prev_accum: Tensor, axis: Dim, out_spatial_dim: Optional[Dim] = None
 ) -> Tuple[Tensor, Dim]:
@@ -572,6 +659,22 @@ def cum_concat_step(
     return out, out_spatial_dim
 
 
+def slice_update(target: Tensor, value: Tensor, *, axis: Dim, start: Tensor) -> Tensor:
+    """
+    Write ``value`` into ``target`` at ``start`` along ``axis``.
+
+    :param target: with ``axis``
+    :param value: the frame to write, without ``axis``
+    :param axis: the axis to write into
+    :param start: index in ``axis``, scalar
+    :return: ``target`` with ``value`` written at ``start``
+
+    Backends that can update in place do; the fallback selects over the whole axis.
+    """
+    # noinspection PyProtectedMember
+    return target._raw_backend.slice_update(target, value, axis=axis, start=start)
+
+
 def stack(sources: Sequence[Tensor], *, out_dim: Optional[Dim] = None) -> Tuple[Tensor, Dim]:
     """
     Stack the sources in a new dimension.
@@ -587,6 +690,24 @@ def stack(sources: Sequence[Tensor], *, out_dim: Optional[Dim] = None) -> Tuple[
         out_dim = Dim(len(sources), name="stack")
     # noinspection PyProtectedMember
     return sources[0]._raw_backend.stack(sources, out_dim=out_dim), out_dim
+
+
+def unstack(source: Tensor, *, axis: Dim) -> Tuple[Tensor, ...]:
+    """
+    Unstack (unbind) the source along the given axis.
+    Inverse of :func:`stack`.
+
+    The *axis* is removed from every output tensor.
+    Similar to :func:`split` but the axis disappears instead of being replaced by smaller dims.
+
+    :param source: tensor containing *axis*
+    :param axis: static axis to unstack; ``axis.dimension`` must be known
+    :return: tuple of ``axis.dimension`` tensors, each with the same shape as *source* minus *axis*
+    """
+    if axis.dimension is None:
+        raise ValueError(f"unstack: axis {axis} must be static (known dimension)")
+    # noinspection PyProtectedMember
+    return source._raw_backend.unstack(source, axis=axis)
 
 
 def masked_select(
@@ -618,8 +739,8 @@ def masked_select(
     if dims_set == mask_dims_set:
         # noinspection PyProtectedMember
         return tensor._raw_backend.masked_select(tensor, mask=mask, dims=dims, out_dim=out_dim)
-    # Separate implementation for the case where we have a subset of the mask dims, specifically one single dim.
-    # See https://github.com/rwth-i6/returnn/issues/1605 for discussion.
+    # A strict subset of the mask dims: the other dims stay, the result is ragged over them.
+    # Same backend entry; implementations delegate to :func:`_masked_select_subset` by default.
     mask = mask.copy_masked(mask_value=False)
     if len(dims) > 1:
         # Flatten it, in the specified order.
@@ -628,18 +749,51 @@ def masked_select(
     else:
         (in_dim,) = dims
     in_dim: Dim
-    idxs = rf.cumsum(rf.cast(mask, "int32"), spatial_dim=in_dim)  # [T,B] -> idx in T' + 1
-    new_size = rf.gather(idxs, indices=in_dim.get_dim_value_tensor() - 1, axis=in_dim)  # [B]
+    # noinspection PyProtectedMember
+    return tensor._raw_backend.masked_select(tensor, mask=mask, dims=[in_dim], out_dim=out_dim)
+
+
+def _masked_select_subset(
+    tensor: Tensor, *, mask: Tensor, dim: Dim, out_dim: Optional[Dim] = None
+) -> Tuple[Tensor, Dim]:
+    """
+    masked_select over a single dim which is a strict subset of the mask dims
+    (see https://github.com/rwth-i6/returnn/issues/1605).
+
+    :param tensor: with ``dim``
+    :param mask: bool, dims incl. ``dim``
+    :param dim: the dim to select along
+    :param out_dim: replaces ``dim`` in the result; created if not given
+    :return: tensor with ``dim`` replaced by ``out_dim``, and ``out_dim``
+    """
+    mask, in_dim_ext = rf.expand_make_non_empty(mask, axis=dim)
+    tensor, _ = rf.expand_make_non_empty(tensor, axis=dim, out_dim=in_dim_ext)
+    idxs = rf.cumsum(rf.cast(mask, "int32"), spatial_dim=in_dim_ext)  # [T,B] -> idx in T' + 1
+    lens = in_dim_ext.get_size_tensor(device=idxs.device)
+    new_size = rf.gather(idxs, indices=rf.maximum(lens - 1, 0), axis=in_dim_ext)  # [B]
+    new_size = rf.where(lens > 0, new_size, 0)
+    if rf.is_static_traceable():
+        new_size_ = new_size
+    else:
+        new_size_ = rf.copy_to_device(new_size, rf.get_default_dim_size_device())
     if out_dim is None:
-        out_dim = Dim(new_size, name="masked_select")
+        out_dim = Dim(new_size_, name="masked_select")
     elif out_dim.dyn_size_ext is None:
-        out_dim.dyn_size_ext = new_size
+        out_dim.dyn_size_ext = new_size_
     elif out_dim.dyn_size_ext is not None and out_dim.dyn_size_ext.raw_tensor is None:
-        out_dim.dyn_size_ext.raw_tensor = new_size.raw_tensor
+        out_dim.dyn_size_ext.raw_tensor = new_size_.raw_tensor
     new_time = rf.reduce_max(new_size, axis=new_size.dims)  # T'
     idxs = rf.where(mask, idxs - 1, new_time)  # new_time is the padding idx
+    if out_dim.capacity is None and rf.is_static_traceable():
+        # the packed count never exceeds the input extent, and the bound regime needs that bound:
+        # ext_out_dim below is dim math on out_dim, and the scatter asks for its value.
+        # Only in that regime: a capacity replaces the true size wherever it is read.
+        # noinspection PyProtectedMember
+        capacity = in_dim_ext._derived_capacity()
+        if capacity is not None:
+            out_dim.capacity = capacity
     ext_out_dim = out_dim + 1  # one more for the padded data
-    ext_res = rf.scatter(tensor, indices=idxs, indices_dim=in_dim, out_dim=ext_out_dim)
+    ext_res = rf.scatter(tensor, indices=idxs, indices_dim=in_dim_ext, out_dim=ext_out_dim)
     res, _ = rf.slice(ext_res, axis=ext_out_dim, size=out_dim)
     return res, out_dim
 
@@ -713,6 +867,7 @@ def pack_padded(
     This uses :func:`masked_select` internally based on the mask of non-masked frames.
 
     See :func:`pad_packed` for the inverse operation.
+    See :func:`pack` (packed storage backend) to pack while keeping the original (virtual) dims.
 
     :param source:
     :param dims: dims in source to pack. the order defines the format. first dim is major, etc.
@@ -722,6 +877,9 @@ def pack_padded(
     :return: packed tensor, new packed dim
     """
     assert not enforce_sorted  # not implemented yet...
+    if rf.is_packed(source) and list(dims) == list(source.raw_tensor.orig_dims):
+        # already packed over exactly these dims: the flat content IS the result (a re-layout at most, no select)
+        return rf.packed_flat_content(source, out_dim=out_dim)
     mask = rf.sequence_mask(dims, device=source.device)
     # Note: We could already calculate out_dim here, as follows:
     #   out_dim = Dim(rf.num_elements_of_shape(dims), name="packed")
@@ -743,7 +901,6 @@ def pad_packed(source: Tensor, *, in_dim: Dim, dims: Sequence[Dim]) -> Tensor:
     return rf.masked_scatter(source, mask=mask, in_dim=in_dim, dims=dims)
 
 
-# noinspection PyUnusedLocal
 def gather(
     source: Tensor,
     *,
@@ -780,8 +937,8 @@ def gather(
     if not axis:
         assert isinstance(indices, Tensor) and indices.sparse_dim
         axis = indices.sparse_dim
-    # noinspection PyProtectedMember
-    return source._raw_backend.gather(source, indices=indices, axis=axis, clip_to_valid=clip_to_valid)
+    backend = _utils.get_backend_from_tensors(source, indices)
+    return backend.gather(source, indices=indices, axis=axis, clip_to_valid=clip_to_valid)
 
 
 def scatter(
@@ -810,7 +967,8 @@ def scatter(
     :param indices_dim:
     :param mode: "sum", "max", "min", "mean", "logsumexp", "logmeanexp", "argmax".
         (Note: If you ever need another mode, please open an issue/PR.)
-    :param fill_value:
+    :param fill_value: value of the output entries no index writes to.
+        With mode="argmax", this is ``invalid_idx`` of :func:`scatter_argmax`.
     :param out_dim: The indices target dim.
         If not given, will be automatically determined as the sparse_dim from indices.
         If multiple out dims, use indices into the merged out dims,
@@ -833,37 +991,99 @@ def scatter(
     if not out_dim:
         assert isinstance(indices, Tensor) and indices.sparse_dim
         out_dim = indices.sparse_dim
-    if fill_value is None:
-        if mode == "sum":
-            fill_value = 0
-        elif mode == "max":
-            if "int" in source.dtype:
-                fill_value = numpy.iinfo(source.raw_tensor.dtype).min
-            else:
-                fill_value = float("-inf")
-        elif mode == "min":
-            if "int" in source.dtype:
-                fill_value = numpy.iinfo(source.raw_tensor.dtype).max
-            else:
-                fill_value = float("inf")
-        else:
-            raise ValueError(f"scatter: invalid mode {mode!r}")
     indices_dim = indices_dim if isinstance(indices_dim, (list, tuple)) else [indices_dim]
-    if any(dim.need_masking() for dim in indices_dim):
+    post_fix_fill_value = False
+    if any([dim.need_masking() for dim in source.dims + indices.dims]):
         if use_mask is None:
-            use_mask = rf.use_mask_default(default=True, default_false_for_behavior_version_up_to=22)
+            use_mask = rf.use_mask_default(
+                default=True, default_false_for_behavior_version_up_to=22, func_name="scatter"
+            )
         if use_mask:
-            source = source.copy_masked(fill_value, dims=indices_dim)
+            mask_value = _scatter_mask_value(mode, source.dtype)
+            correct_masking_with_fill = _should_use_scatter_fixed_fill_value()
+            if fill_value is None or fill_value == mask_value or correct_masking_with_fill:
+                pass  # keep mask_value as is
+            else:
+                log.print_warning(
+                    f"scatter {mode=} with explicit {fill_value=} uses wrong masking"
+                    f" with behavior version {BehaviorVersion.get()} < 25",
+                    prefix_text="DEPRECATION WARNING:",
+                )
+                mask_value = fill_value
+            source = source.copy_masked(mask_value, dims=indices_dim)
+            if correct_masking_with_fill:
+                # Also mask invalid indices.
+                # Note that we did not print a separate warning for this,
+                # as if this failed, likely the user would have gotten an exception before.
+                indices = indices.copy_masked(0, dims=indices_dim)
+            if correct_masking_with_fill and fill_value is not None and fill_value != mask_value:
+                post_fix_fill_value = True
     else:
         use_mask = False
-    # noinspection PyProtectedMember
-    out = source._raw_backend.scatter(
-        source, indices=indices, indices_dim=indices_dim, mode=mode, fill_value=fill_value, out_dim=out_dim
+    out = _utils.get_backend_from_tensors(source, indices).scatter(
+        source,
+        indices=indices,
+        indices_dim=indices_dim,
+        mode=mode,
+        # The fill_value only works correct if no masking is needed.
+        fill_value=fill_value
+        if fill_value is not None and not post_fix_fill_value
+        else _scatter_mask_value(mode, source.dtype),
+        out_dim=out_dim,
     )
+    if post_fix_fill_value:
+        ones = rf.ones(dims=indices.dims, dtype="int32", device=source.device)
+        counts = rf.scatter(ones, indices=indices, indices_dim=indices_dim, out_dim=out_dim)
+        out = rf.where(counts > 0, out, fill_value)
     if use_mask and mode != "sum":
         # Make sure we don't leave any infinities in the output.
         out = out.copy_masked(0, dims=[out_dim])
     return out
+
+
+def _scatter_mask_value(mode: str, dtype: str) -> Union[int, float]:
+    if mode == "sum":
+        return 0
+    elif mode == "max":
+        if "int" in dtype:
+            return numpy.iinfo(dtype).min
+        else:
+            return float("-inf")
+    elif mode == "min":
+        if "int" in dtype:
+            return numpy.iinfo(dtype).max
+        else:
+            return float("inf")
+    else:
+        raise ValueError(f"scatter: invalid mode {mode!r}")
+
+
+def scatter_count(
+    *,
+    indices: Tensor,
+    indices_dim: Union[Dim, Sequence[Dim]],
+    out_dim: Optional[Union[Dim, Sequence[Dim]]] = None,
+    fill_value: Optional[int] = None,
+) -> Tensor:
+    """
+    Count the number of occurrences of each index in indices.
+
+    :param indices:
+    :param indices_dim:
+    :param fill_value:
+    :param out_dim:
+    :return: counts
+    """
+    if fill_value is None:
+        fill_value = 0
+    ones = rf.ones(dims=indices.dims, dtype="int32", device=indices.device)
+    if fill_value == 0 or _should_use_scatter_fixed_fill_value():
+        counts = rf.scatter(ones, indices=indices, indices_dim=indices_dim, out_dim=out_dim)
+        if fill_value is not None:
+            counts = rf.where(counts > 0, counts, fill_value)
+    else:
+        counts = rf.scatter(ones, indices=indices, indices_dim=indices_dim, fill_value=fill_value, out_dim=out_dim)
+    return counts
 
 
 def scatter_mean(
@@ -889,8 +1109,7 @@ def scatter_mean(
         and then we use :func:`rf.split_dims` afterwards.
     :return: [batch_dims..., out_dim(s)..., feature_dims...]
     """
-    ones = rf.ones(dims=indices.dims, dtype=source.dtype, device=source.device)
-    counts = rf.scatter(ones, indices=indices, indices_dim=indices_dim, fill_value=1, out_dim=out_dim)
+    counts = scatter_count(indices=indices, indices_dim=indices_dim, fill_value=1, out_dim=out_dim)
     y = scatter(source, indices=indices, indices_dim=indices_dim, fill_value=fill_value, out_dim=out_dim)
     return y / counts
 
@@ -899,32 +1118,40 @@ def scatter_argmax(
     source: Tensor,
     *,
     indices: Tensor,
-    indices_dim: Union[Dim, Sequence[Dim]],
-    invalid_idx: int = -1,
-    out_dim: Optional[Union[Dim, Sequence[Dim]]] = None,
+    indices_dim: Dim,
+    invalid_idx: Optional[int] = -1,
+    out_dim: Optional[Dim] = None,
 ) -> Tensor:
     """
     Get the index in src which has the max value for each index in index.
 
     This is like :func:`scatter` with ``mode="argmax"``.
 
-    :param source: [batch_dims..., indices_dim(s)..., feature_dims...]
-    :param indices: [batch_dims..., indices_dim(s)...] -> out_dim
+    :param source: [batch_dims..., indices_dim..., feature_dims...]
+    :param indices: [batch_dims..., indices_dim...] -> out_dim
     :param indices_dim:
     :param invalid_idx: in case some of the output entries are never set (via ``indices``),
-        this will be used as the value.
+        this will be used as the value. None means -1.
     :param out_dim: The indices target dim.
-    :return: [batch_dims..., out_dim(s)..., feature_dims...]
+    :return: [batch_dims..., out_dim..., feature_dims...] -> indices_dim
     """
     import numpy
 
+    if invalid_idx is None:
+        invalid_idx = -1
     if not out_dim:
         assert isinstance(indices, Tensor) and indices.sparse_dim
         out_dim = indices.sparse_dim
 
+    source = source.copy_masked(_scatter_mask_value("max", source.dtype))
+    if _should_use_scatter_fixed_fill_value():
+        indices = indices.copy_masked(0)
+
     # For the shape comments, use [B,I,F] for shorter source, [B,O,F] for shorter output.
     # use scatter to get the max value for each index
-    out_max = rf.scatter(source, indices=indices, indices_dim=indices_dim, mode="max", out_dim=out_dim)  # [B,O,F]
+    out_max = rf.scatter(
+        source, indices=indices, indices_dim=indices_dim, mode="max", out_dim=out_dim, use_mask=False
+    )  # [B,O,F]
     src_max = rf.gather(out_max, indices=indices, axis=out_dim)  # [B,I,F] -> max value or invalid_value
 
     max_invalid_idx = numpy.iinfo(indices.dtype).max
@@ -936,10 +1163,17 @@ def scatter_argmax(
     src_indices = rf.where(
         src_max_mask, rf.range_over_dim(indices_dim, dtype=indices.dtype, device=source.device), max_invalid_idx
     )  # [B,I,F] -> I
+    src_indices = src_indices.copy_masked(_scatter_mask_value("min", indices.dtype))
 
     # now scatter the min of src_indices into tensor
     out = rf.scatter(
-        src_indices, indices=indices, indices_dim=indices_dim, mode="min", fill_value=invalid_idx, out_dim=out_dim
+        src_indices,
+        indices=indices,
+        indices_dim=indices_dim,
+        mode="min",
+        fill_value=invalid_idx,
+        out_dim=out_dim,
+        use_mask=False,
     )  # [B,O,F] -> I or invalid_idx or max_invalid_idx
 
     if max_invalid_idx != invalid_idx:
@@ -970,18 +1204,23 @@ def scatter_logsumexp(
         and then we use :func:`rf.split_dims` afterwards.
     :return: [batch_dims..., out_dim(s)..., feature_dims...]
     """
+    if fill_value is not None:
+        raise NotImplementedError(f"scatter_logsumexp: {fill_value=} not implemented")
     if not out_dim:
         assert isinstance(indices, Tensor) and indices.sparse_dim
         out_dim = indices.sparse_dim
+    indices_dim = indices_dim if isinstance(indices_dim, (list, tuple)) else [indices_dim]
+    if any([dim.need_masking() for dim in source.dims + indices.dims]):
+        source = source.copy_masked(float("-inf"))
+        if _should_use_scatter_fixed_fill_value():
+            indices = indices.copy_masked(0)
     with rf.stop_gradient_scope():
-        max_x = rf.scatter(source, indices=indices, indices_dim=indices_dim, mode="max", out_dim=out_dim)  # [D_out,...]
+        max_x = rf.scatter(
+            source, indices=indices, indices_dim=indices_dim, mode="max", out_dim=out_dim, use_mask=False
+        )  # [D_out,...]
         max_x_ = rf.gather(max_x, indices=indices, axis=out_dim)  # [D_src,...]
     src_ = rf.exp(source - max_x_)
-    if fill_value is not None:
-        fill_value = rf.exp(fill_value - max_x_)
-    tensor = rf.scatter(
-        src_, indices=indices, indices_dim=indices_dim, mode="sum", fill_value=fill_value, out_dim=out_dim
-    )
+    tensor = rf.scatter(src_, indices=indices, indices_dim=indices_dim, mode="sum", out_dim=out_dim, use_mask=False)
     tensor = rf.log(tensor)
     tensor = rf.where(rf.is_neg_infinite(max_x), rf.zeros((), dtype=source.dtype, device=source.device), tensor)
     tensor += max_x
@@ -1011,10 +1250,38 @@ def scatter_logmeanexp(
         and then we use :func:`rf.split_dims` afterwards.
     :return: [batch_dims..., out_dim(s)..., feature_dims...]
     """
-    ones = rf.ones(dims=indices.dims, dtype=source.dtype, device=source.device)
-    counts = rf.scatter(ones, indices=indices, indices_dim=indices_dim, fill_value=1, out_dim=out_dim)
+    counts = scatter_count(indices=indices, indices_dim=indices_dim, fill_value=1, out_dim=out_dim)
     y = scatter_logsumexp(source, indices=indices, indices_dim=indices_dim, fill_value=fill_value, out_dim=out_dim)
     return y - rf.log(counts)
+
+
+def _should_use_scatter_fixed_fill_value() -> bool:
+    """
+    :return: whether to use the new fixed masking for :func:`scatter` with custom fill values.
+
+    Check the global RETURNN config for the ``rf_use_consistent_same_padding``
+    on how we should handle the ``padding="same"`` case for convolution/pooling when there is striding.
+    If that is not specified, with behavior version >=24, we will use the new consistent same padding,
+    with behavior version <=23, we will not use it.
+
+    See issue `#1815 <https://github.com/rwth-i6/returnn/issues/1815>`__.
+    """
+    from returnn.config import get_global_config
+
+    config = get_global_config(raise_exception=False)
+    config_value = None
+    if config:
+        if "rf_scatter_use_fixed_masking" in config.typed_dict:
+            config_value = config.typed_dict["rf_scatter_use_fixed_masking"]
+            assert config_value is None or isinstance(config_value, bool)
+        elif "rf_scatter_use_fixed_masking" in config.dict:
+            config_value = config.bool("rf_scatter_use_fixed_masking", None)
+    if config_value is not None:
+        return config_value
+
+    from returnn.util.basic import BehaviorVersion
+
+    return BehaviorVersion.get() >= 25
 
 
 # noinspection PyShadowingBuiltins
@@ -1047,6 +1314,10 @@ def slice(
     """
     if isinstance(step, int) and step <= 0:
         raise ValueError(f"rf.slice with non-positive step {step} not supported")
+    if ((isinstance(start, int) and start == 0) or start is None) and end is None and step is None and size is None:
+        if out_dim:
+            return rf.replace_dim(source, in_dim=axis, out_dim=out_dim)
+        return source, axis
     if not out_dim:
         # Note: We cover not really all possible cases here but just those we really support.
         # (Actually, it might still be a superset of cases we really support,
@@ -1056,6 +1327,17 @@ def slice(
                 out_dim = size
             elif isinstance(size, (int, Tensor)):
                 out_dim = Dim(size, name="slice")
+                # noinspection PyProtectedMember
+                if (
+                    isinstance(size, Tensor)
+                    and rf.is_static_traceable()
+                    and out_dim.capacity is None
+                    and out_dim._derived_capacity() is None
+                ):
+                    raise ValueError(
+                        f"rf.slice: static traceable needs a capacity for the out dim of a Tensor size;"
+                        f" pass out_dim with an explicit capacity (slicing {axis})"
+                    )
             else:
                 raise TypeError(f"invalid type {type(size)} for size {size}")
             assert step is None or (isinstance(step, int) and step == 1)
@@ -1084,9 +1366,7 @@ def slice(
                 else:
                     raise TypeError(f"invalid type {type(end)} for end {end}")
             elif isinstance(start, Tensor):
-                out_dim = Dim(
-                    ((axis.get_size_tensor() if end is None else end) - start) % axis.get_size_tensor(), name="slice"
-                )
+                out_dim = Dim((axis.get_size_tensor() if end is None else end) - start, name="slice")
             else:
                 raise TypeError(f"invalid type {type(start)} for start {start}")
 
@@ -1099,6 +1379,12 @@ def slice(
                 out_dim = out_dim.ceildiv_right(step_dim)
             else:
                 raise TypeError(f"invalid type {type(step)} for step {step}")
+    if isinstance(start, Tensor) and start.batch_ndim > 0:
+        # Use advanced indexing via gather.
+        indices = rf.combine_bc(
+            start, "+", rf.range_over_dim(out_dim, device=start.device) * (step if step is not None else 1)
+        )
+        return rf.gather(source, axis=axis, indices=indices, clip_to_valid=True), out_dim
     # noinspection PyProtectedMember
     return (
         source._raw_backend.slice(source, axis=axis, start=start, end=end, step=step, size=size, out_dim=out_dim),
@@ -1137,7 +1423,10 @@ def reverse_sequence(tensor: Tensor, *, axis: Dim, handle_dynamic_dims: bool = T
     if not handle_dynamic_dims or not axis.need_masking():
         # noinspection PyProtectedMember
         return tensor._raw_backend.flip_no_mask(tensor, axis=axis)
-    indices = rf.combine_bc(axis.get_size_tensor(), "-", rf.range_over_dim(axis)) - 1
+    indices = (
+        rf.combine_bc(axis.get_size_tensor(device=tensor.device), "-", rf.range_over_dim(axis, device=tensor.device))
+        - 1
+    )
     return rf.gather(tensor, indices=indices, axis=axis, clip_to_valid=True)
 
 
@@ -1153,11 +1442,10 @@ def where(
 
     :return: true_ if cond else false_, elemwise.
     """
+    backend = _utils.get_backend_from_tensors(cond, true_, false_)
     if not isinstance(cond, Tensor):
-        backend = _utils.get_backend_from_tensors(true_, false_)
         cond = rf.convert_to_tensor(cond, _backend=backend)
-    # noinspection PyProtectedMember
-    return cond._raw_backend.where(cond, true_, false_, allow_broadcast_all_sources=allow_broadcast_all_sources)
+    return backend.where(cond, true_, false_, allow_broadcast_all_sources=allow_broadcast_all_sources)
 
 
 def sort(source: Tensor, *, axis: Dim, descending: bool = False, stable: bool = True) -> Tuple[Tensor, Tensor, Dim]:
@@ -1251,6 +1539,7 @@ def top_p_mask(
     axis: Dim,
     p: Union[float, Tensor],
     one_more: bool = True,
+    min_tokens_to_keep: int = 1,
 ) -> Tensor:
     """
     Top-p filtering, e.g. as used in Nucleus sampling (https://arxiv.org/abs/1904.09751).
@@ -1260,6 +1549,8 @@ def top_p_mask(
     :param p: the probability mass to keep
     :param one_more: if True (default), keep also the first token above the threshold.
         (It's enabled by default to follow the behavior of the original implementation.)
+    :param min_tokens_to_keep: ensure to keep at least these many tokens (default 1)
+        With one_more=True, min_tokens_to_keep=1 is anyway guaranteed.
     :return: mask {probs_dims..., axis} of the top-p tokens.
         ``sum(probs[mask]) <= p``, or slightly more if ``one_more`` is True.
     """
@@ -1273,5 +1564,185 @@ def top_p_mask(
     if one_more:
         # keep also the first token above the threshold
         mask = rf.shift_right(mask, axis=sorted_dim, pad_value=True)
+    if min_tokens_to_keep > (1 if one_more else 0):
+        mask = mask | (rf.range_over_dim(sorted_dim, device=mask.device) < min_tokens_to_keep)
     mask = rf.scatter(mask, indices=sorted_indices, indices_dim=sorted_dim)
     return mask
+
+
+def repeat(
+    values: Tensor,
+    *,
+    in_spatial_dim: Dim,
+    repeats: Tensor,
+    out_spatial_dim: Optional[Dim] = None,
+    max_len_factor: Optional[int] = None,
+) -> Tuple[Tensor, Dim]:
+    """
+    Repeats certain elements in a tensor along a given spatial dimension.
+    0 repeats means to remove that element.
+
+    This can be used to implement duration-based expansion, e.g. in text-to-speech.
+
+    :param values: [common..., values..., in_spatial_dim]
+    :param in_spatial_dim:
+    :param repeats: [common..., repeats..., in_spatial_dim] -> int32 durations / number of repetitions for each element
+    :param out_spatial_dim:
+    :param max_len_factor: bound the expansion,
+        so the output stays within ``max_len_factor * in_spatial_dim``,
+        which out_spatial_dim then declares as its capacity.
+        A sequence over the bound has all its repeats scaled by one factor,
+        keeping their ratios; rounding is down, so elements can drop out.
+    :return: expanded_values: [common..., values..., repeats..., out_spatial_dim], out_spatial_dim
+    """
+    # Similar to masked_select
+    repeats = repeats.copy_masked(0, dims=[in_spatial_dim])
+    if max_len_factor is not None:
+        # Idempotent, so a caller that pre-scaled (to derive e.g. segment starts) can pass both.
+        repeats = limit_repeats(repeats, in_spatial_dim=in_spatial_dim, max_len_factor=max_len_factor)
+    if out_spatial_dim is None:
+        new_size = rf.cast(rf.reduce_sum(repeats, axis=in_spatial_dim), repeats.dtype)
+        if not rf.is_static_traceable():
+            # dim sizes live on the host by convention,
+            # but under tracing that copy is a sync, which capture does not allow
+            new_size = rf.copy_to_device(new_size, rf.get_default_dim_size_device())
+        out_spatial_dim = Dim(
+            new_size,
+            name="repeat",
+            **({"bounded_by": in_spatial_dim * max_len_factor} if max_len_factor is not None else {}),
+        )
+    # noinspection PyProtectedMember
+    return values._raw_backend.repeat(
+        values, in_spatial_dim=in_spatial_dim, repeats=repeats, out_spatial_dim=out_spatial_dim
+    )
+
+
+def limit_repeats(repeats: Tensor, *, in_spatial_dim: Dim, max_len_factor: float) -> Tensor:
+    """
+    Scales repeats (durations) down
+    where a sequence would expand by more than max_len_factor,
+    so that :func:`repeat` on them yields at most ``max_len_factor * in_spatial_dim`` frames.
+
+    Every non-empty element keeps one frame, so scaling can never drop one:
+    for durations the element is a unit of the sequence,
+    and losing it is a different sequence, not a shorter one.
+    Only the surplus above that reserved frame is scaled,
+    by one factor per sequence, which keeps the relative durations.
+    Sequences within the factor pass through unchanged,
+    which also makes this idempotent.
+
+    :param repeats: [batch..., in_spatial_dim] -> int32 number of repetitions per element
+    :param in_spatial_dim:
+    :param max_len_factor: bounds the total expansion per sequence, not the individual repeats.
+        Must be at least 1, else the reserved frames alone would not fit.
+    :return: repeats, scaled where needed
+    """
+    assert max_len_factor >= 1, f"limit_repeats: max_len_factor {max_len_factor} < 1"
+    repeats = repeats.copy_masked(0, dims=[in_spatial_dim])
+    in_len = in_spatial_dim.get_size_tensor(device=repeats.device)
+    target_len = rf.cast(in_len, "float32") * float(max_len_factor)
+    total_len = rf.cast(rf.reduce_sum(repeats, axis=in_spatial_dim), "float32")
+    keep = rf.cast(repeats > 0, "int32")  # the reserved frame
+    surplus = repeats - keep
+    n_keep = rf.cast(rf.reduce_sum(keep, axis=in_spatial_dim), "float32")
+    surplus_total = rf.cast(rf.reduce_sum(surplus, axis=in_spatial_dim), "float32")
+    # n_keep <= in_len <= target_len, so the budget for the surplus is never negative
+    budget = rf.maximum(target_len - n_keep, 0.0)
+    scale = rf.where(total_len > target_len, budget / rf.maximum(surplus_total, 1.0), 1.0)
+    # sum(keep) + sum(floor(surplus * scale)) <= n_keep + budget = target_len, bound holds
+    repeats = keep + rf.cast(rf.cast(surplus, "float32") * scale, "int32")
+    return repeats.copy_masked(0, dims=[in_spatial_dim])
+
+
+def expand_make_non_empty(source: Tensor, *, axis: Dim, out_dim: Optional[Dim] = None) -> Tuple[Tensor, Dim]:
+    """
+    Expands the given axis to be at least size 1.
+    If the axis is already non-empty, this is a no-op.
+    If the axis is empty (size 0), this will expand it to size 1,
+    and fill the data with zeros.
+
+    This can be useful to avoid issues with empty tensors in some backends.
+
+    :param source:
+    :param axis:
+    :param out_dim:
+    :return: tensor, new axis
+    """
+    # noinspection PyProtectedMember
+    backend = source._raw_backend
+    shape_raw = backend.get_known_shape_raw(source.raw_tensor)
+    axis_int = source.get_axis_from_description(axis, allow_int=False)
+    size = shape_raw[axis_int]
+    if size is not None and size > 0:
+        # no-op
+        return source, axis
+    source, (new_axis,) = rf.pad(source, axes=[axis], padding=[(0, 1)], mode="constant", value=0)
+    size_dev = source.device if rf.is_static_traceable() else None
+    size_t = rf.maximum(axis.get_size_tensor(device=size_dev), 1)
+    if out_dim is None:
+        out_dim = Dim(size_t, name="non_empty", bounded_by=axis)
+    source, new_axis = rf.slice(source, axis=new_axis, size=size_t, out_dim=out_dim)
+    return source, new_axis
+
+
+def real_as_complex(x: Tensor, *, pair_dim: Dim) -> Tensor:
+    """
+    Interpret a real tensor with a size-2 *pair_dim* as a complex tensor.
+
+    *pair_dim* must have static size 2 (index 0 = real part, index 1 = imaginary part).
+    The dimension is removed from the output and the dtype changes:
+    ``float32`` -> ``complex64``, ``float64`` -> ``complex128``.
+
+    The result may or may not be a view of the input memory depending on the backend
+    and memory layout (e.g. the PyTorch backend calls ``torch.view_as_complex``
+    but may copy first to ensure the required memory layout).
+
+    The inverse is :func:`complex_as_real`.
+
+    Example::
+
+        d2 = Dim(2, name="complex")
+        x_pairs = rf.split_dims(x, axis=feat_dim, dims=(feat_half_dim, d2))  # [..., feat_half, 2]
+        x_c = rf.real_as_complex(x_pairs, pair_dim=d2)  # [..., feat_half], dtype complex64
+
+    :param x: real tensor (dtype float32 or float64) with *pair_dim* as one of its axes
+    :param pair_dim: size-2 dimension holding (real, imag) pairs
+    :return: complex tensor with the same dims as *x* minus *pair_dim*
+    """
+    # noinspection PyProtectedMember
+    return x._raw_backend.real_as_complex(x, pair_dim=pair_dim)
+
+
+def complex_as_real(x: Tensor, *, out_dim: Optional[Dim] = None) -> Tuple[Tensor, Dim]:
+    """
+    Interpret a complex tensor as a real tensor with a new size-2 pair dimension.
+
+    The pair dimension is appended as the last axis of the result.
+    Inverse of :func:`real_as_complex`.
+
+    Example::
+
+        result_pairs, d2 = rf.complex_as_real(x_c)  # x_c complex64 → result_pairs float32, d2 size 2
+
+    :param x: complex tensor (dtype complex64 or complex128)
+    :param out_dim: optional Dim for the new size-2 dimension; a fresh one is created if not given
+    :return: (real_tensor, pair_dim). real tensor with *pair_dim* appended as the last axis
+    """
+    # noinspection PyProtectedMember
+    return x._raw_backend.complex_as_real(x, out_dim=out_dim)
+
+
+def make_complex(real: Tensor, imag: Tensor) -> Tensor:
+    """
+    Construct a complex tensor from separate real and imaginary part tensors.
+
+    Example::
+
+        pe_c = rf.make_complex(pe_cos, pe_sin)  # → complex64, same dims as pe_cos/pe_sin
+
+    :param real: real part; dtype float32 or float64
+    :param imag: imaginary part; compatible dtype with *real*
+    :return: complex tensor with merged dims; dtype complex64 (float32) or complex128 (float64)
+    """
+    # noinspection PyProtectedMember
+    return real._raw_backend.make_complex(real, imag)

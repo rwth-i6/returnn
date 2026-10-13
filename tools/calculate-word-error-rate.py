@@ -11,11 +11,13 @@ import sys
 import time
 import tensorflow as tf
 import numpy
-import typing
+from typing import Optional
 
 import _setup_returnn_env  # noqa
+
 import returnn.__main__ as rnn
 from returnn.log import log
+from returnn.config import Config
 import argparse
 from returnn.util.basic import Stats, hms
 from returnn.datasets.basic import Dataset, init_dataset
@@ -149,7 +151,7 @@ def calc_wer_on_dataset(dataset, refs, options, hyps):
     return wer
 
 
-config = None  # type: typing.Optional["returnn.config.Config"]
+config: Optional[Config] = None
 
 
 def init(config_filename, log_verbosity):
@@ -206,8 +208,8 @@ def load_hyps_refs(filename):
     return content
 
 
-wer_compute = None  # type: typing.Optional[WerComputeGraph]
-session = None  # type: typing.Optional[tf.compat.v1.Session]
+wer_compute: Optional[WerComputeGraph] = None
+session: Optional[tf.compat.v1.Session] = None
 
 
 def main(argv):

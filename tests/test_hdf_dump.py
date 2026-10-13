@@ -8,7 +8,6 @@ import _setup_test_env  # noqa
 sys.path += ["tools"]
 
 from hdf_dump import *
-import os
 from returnn.log import log
 import tempfile
 from returnn.datasets.generating import DummyDataset

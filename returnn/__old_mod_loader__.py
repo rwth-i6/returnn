@@ -17,7 +17,7 @@ This is supported as well.
 import sys
 import os
 import types
-import typing
+from typing import Any, Dict
 import importlib
 
 old_to_new_mod_mapping = {
@@ -122,7 +122,7 @@ class _LazyLoader(types.ModuleType):
             fn = "%s/%s/__init__.py" % (_base_dir, full_mod_name.replace(".", "/"))
             assert os.path.exists(fn), "_LazyLoader: mod %r not found in %r" % (full_mod_name, _base_dir)
         self.__file__ = fn
-        self._lazy_mod_config = dict(full_mod_name=full_mod_name, **kwargs)  # type: typing.Dict[str]
+        self._lazy_mod_config: Dict[str, Any] = dict(full_mod_name=full_mod_name, **kwargs)
 
     def _load(self):
         full_mod_name = self.__name__
@@ -172,6 +172,30 @@ class _LazyLoader(types.ModuleType):
         return super(_LazyLoader, self).__getattribute__(item)
 
     def __getattr__(self, item):
+        if item == "torch":
+            # torch.compile Dynamo hashing can trigger this, when it uses pickle to serialize some object state,
+            # which iterates through sys.modules and does getattr on each module.
+            # In this case, it searches for torch.
+            #   File ".../torch/_inductor/codecache.py", line 607 in dumps
+            #   File ".../torch/_inductor/codecache.py", line 622 in get_hash
+            #   File ".../torch/_inductor/codecache.py", line 961 in compiled_fx_graph_hash
+            #   ...
+            # Unfortunately, Pickler.dump is native code, so we cannot easily check whether that is the parent frame.
+            # The C stacktrace looks like:
+            # ...
+            # 7   Python                              0x0000000102e7d504 call_attribute + 80
+            # 8   Python                              0x0000000102e7d400 _Py_slot_tp_getattr_hook + 576
+            # 9   Python                              0x0000000102e507a0 PyObject_GetOptionalAttr + 248
+            # 10  _pickle.cpython-313-darwin.so       0x0000000102d24fb4 get_deep_attribute + 104
+            # 11  _pickle.cpython-313-darwin.so       0x0000000102d250b8 _checkmodule + 88
+            # 12  _pickle.cpython-313-darwin.so       0x0000000102d22588 save_global + 3024
+            # 13  _pickle.cpython-313-darwin.so       0x0000000102d1eddc save + 3424
+            # ...
+            # Right now, we just check for `item == "torch"` as a heuristic,
+            # which should never exist for any of the old-style wrapped modules here.
+            # We could maybe also check sys._getframe(1).f_code or so and add some other heuristics...
+            raise AttributeError(f"module {self.__name__} has no attribute {item} (lazy loading skipped)")
+
         module = self._load()
         return getattr(module, item)
 

@@ -254,10 +254,17 @@ def test_pickle_config():
     # noinspection PyUnresolvedReferences
     p = pickle._Pickler(sio)  # better for debugging
     with global_config_ctx(config):
+        # Note: pickling the config will use the special logic in Config.__getstate__,
+        # which should create a copy of the config, and thus also a copy of the function object.
         p.dump(config)
 
     config_ = pickle.loads(sio.getvalue())
     f_ = config_.typed_dict["my_custom_func"]
+    # Note, in comparison to test_config_pickle_function, here we pickle the config object itself,
+    # which should create a copy of the config, and thus also a copy of the function object.
+    # In test_config_pickle_function, we only pickle the function object,
+    # which is pickled by reference to the pseudo module of the global config,
+    # and thus the same object is used after unpickling.
     assert f is not f_  # it should really be a copy, via Config.__getstate__ logic
     assert f() == f_() == 42
     obj_ = config_.typed_dict["CustomClass"]()
@@ -291,6 +298,8 @@ def test_config_pickle_function():
     with global_config_ctx(config):
         f = config.typed_dict["my_custom_func"]
         f_ = pickle.loads(pickle.dumps(f))
+        # Note: This is the case here because we still have the same global config ctx.
+        # Also see the comment above in test_pickle_config.
         assert f_ is f
         assert f_() == 42
 

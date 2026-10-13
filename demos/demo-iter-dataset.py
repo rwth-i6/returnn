@@ -13,6 +13,7 @@ import _setup_returnn_env  # noqa
 from returnn import __main__ as rnn
 from returnn.log import log
 from returnn.engine.base import EngineBase
+from returnn.config import Config
 
 dev_num_batches = 1
 
@@ -54,7 +55,7 @@ def iterate_epochs():
     print("Finished all epochs.", file=log.v3)
 
 
-config = None  # type: typing.Optional["returnn.config.Config"]
+config: typing.Optional[Config] = None
 
 
 def init(config_filename, command_line_options):
