@@ -1861,6 +1861,67 @@ def test_Dataset_get_current_seq_order():
         raise AssertionError("expected OptionalNotImplementedError")
 
 
+def _sharded_seq_tags(opts: Dict[str, Any], *, num_shards: int, via_set_sharding: bool) -> List[List[str]]:
+    tags = []
+    for shard_index in range(num_shards):
+        if via_set_sharding:
+            dataset = init_dataset(opts)
+            dataset.set_sharding(num_shards=num_shards, shard_index=shard_index)
+        else:
+            dataset = init_dataset({**opts, "_num_shards": num_shards, "_shard_index": shard_index})
+        tags.append([seq.seq_tag for seq in dummy_iter_dataset(dataset)])
+    return tags
+
+
+def test_Dataset_sharding():
+    # The shards together cover every seq once, with the sharding given at construction or via set_sharding,
+    # also through PostprocessingDataset and MetaDataset, which shard via the wrapped dataset.
+    from test_HDFDataset import generate_hdf_from_other
+
+    hdf_fn = generate_hdf_from_other({"class": "Task12AXDataset", "num_seqs": 11})
+    hdf_opts = {"class": "HDFDataset", "files": [hdf_fn], "seq_ordering": "random"}
+    all_tags = sorted(seq.seq_tag for seq in dummy_iter_dataset(init_dataset(hdf_opts)))
+    assert len(all_tags) == 11
+    for opts in [
+        hdf_opts,
+        {"class": "PostprocessingDataset", "dataset": hdf_opts, "map_seq": _post_process_map_seq_no_op},
+        {
+            "class": "MetaDataset",
+            "datasets": {"hdf": hdf_opts},
+            "data_map": {"data": ("hdf", "data"), "classes": ("hdf", "classes")},
+            "seq_order_control_dataset": "hdf",
+        },
+    ]:
+        for via_set_sharding in [False, True]:
+            tags = _sharded_seq_tags(opts, num_shards=2, via_set_sharding=via_set_sharding)
+            assert [len(t) for t in tags] == [6, 5], (opts["class"], via_set_sharding, tags)
+            assert sorted(tags[0] + tags[1]) == all_tags, (opts["class"], via_set_sharding, tags)
+
+
+def test_DistributeFilesDataset_sharding_with_distrib_shard_files():
+    # distrib_shard_files shards the files by the rank, so the same sharding via _num_shards/_shard_index
+    # (e.g. from dataset_distribution "shard") is fine, another one is an error.
+    from returnn.config import global_config_ctx, Config
+
+    files = _dfd_make_hdf_files(num_hdf_files=4)
+    opts = {
+        "class": "DistributeFilesDataset",
+        "files": files,
+        "get_sub_epoch_dataset": _dfd_get_sub_epoch_dataset,
+        "partition_epoch": 2,
+        "distrib_shard_files": True,
+    }
+    with global_config_ctx(Config({"__debug_dummy_distributed_rank_and_size": (1, 2)})):
+        dataset = init_dataset({**opts, "_num_shards": 2, "_shard_index": 1})
+        assert dataset._num_shards == 2 and dataset._shard_index == 1
+        try:
+            init_dataset({**opts, "_num_shards": 3, "_shard_index": 1})
+        except ValueError as exc:
+            assert "clashes" in str(exc)
+        else:
+            raise AssertionError("expected ValueError")
+
+
 def test_MultiEpochDataset():
     from returnn.datasets.meta import MultiEpochDataset
     from returnn.datasets.cached2 import CachedDataset2
@@ -2548,6 +2609,15 @@ def test_NemoSpeechDataset_nemo_sharding():
             assert seen == expected
             seen_all.extend(seen)
     assert len(seen_all) == len(set(seen_all)), "shards not disjoint"
+
+    # The same sharding via the properties (dataset_distribution "shard") is fine, another one is an error.
+    NemoSpeechDataset(nemo_config=config, draws_per_epoch=400, _rank_and_size=(1, 2), _num_shards=2, _shard_index=1)
+    try:
+        NemoSpeechDataset(nemo_config=config, draws_per_epoch=400, _rank_and_size=(1, 2), _num_shards=3, _shard_index=1)
+    except ValueError as exc:
+        assert "clashes" in str(exc)
+    else:
+        raise AssertionError("expected ValueError")
 
     # NeMo map-style mode shards by sampler batches, not by records: not supported.
     dataset = NemoSpeechDataset(

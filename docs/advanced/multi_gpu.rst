@@ -26,14 +26,29 @@ Ranks the launcher already bound to different CPUs (``srun`` per-task binding, `
 Measured on 4-GPU nodes: a few percent of the step time, and a tighter step-time distribution.
 ``torchrun --numa-binding`` (torch >= 2.9, needs ``numactl``) does the same at the launcher level.
 
-For the dataset, by default, we do not use sharding,
-but instead, every dataset uses a different random seed
-(see ``random_seed_offset`` in the code).
+For the dataset, by default (``torch_distributed = {"dataset_distribution": "random_seed_offset"}``),
+we do not use sharding,
+but instead, every rank uses a different random seed
+(see ``random_seed_offset`` in the code),
+so every rank goes through all the data in every epoch.
+
+With ``torch_distributed = {"dataset_distribution": "shard"}``,
+the train dataset is sharded over the ranks:
+every rank gets a different part of the data,
+and all ranks together go through the data once per epoch.
+This needs a train dataset which supports sharding
+(e.g. :class:`HDFDataset`, :class:`OggZipDataset`, :class:`LmDataset`, :class:`HuggingFaceDataset`,
+:class:`MultiProcDataset` and :class:`PostprocessingDataset` over such a dataset,
+and :class:`DistributeFilesDataset`, which shards the files).
+
+Independent of that, with ``torch_dataloader_opts = {"num_workers": N}`` and ``N > 1``,
+the dataset is sharded over the DataLoader workers of a rank in the same way,
+so the workers together yield every seq once
+(``torch_dataloader_shard_workers``, default since behavior version 37;
+before, every worker yielded all the data).
 
 As an efficient dataset for large scale training,
 see :class:`DistributeFilesDataset`.
-This dataset is one of the exceptions
-which also supports sharding.
 
 Also see `our wiki on distributed PyTorch <https://github.com/rwth-i6/returnn/wiki/Distributed-PyTorch>`__.
 

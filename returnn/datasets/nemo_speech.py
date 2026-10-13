@@ -155,11 +155,6 @@ class NemoSpeechDataset(CachedDataset2):
             raise ValueError(f"{self}: partition_epoch/repeat_epoch not supported, use draws_per_epoch")
         if self.seq_ordering != "default":
             raise ValueError(f"{self}: seq_ordering {self.seq_ordering!r} not supported, use shuffle_window")
-        if self._num_shards != 1:
-            raise ValueError(
-                f"{self}: RETURNN dataset sharding not supported,"
-                f" this dataset follows the NeMo sharding (distributed rank x NeMo num_workers)"
-            )
         if targets is not None and tokenizer is not None:
             raise ValueError(f"{self}: specify either targets or tokenizer, not both")
         self.nemo_config = nemo_config
@@ -170,10 +165,18 @@ class NemoSpeechDataset(CachedDataset2):
         self.use_worker_procs = use_worker_procs
         if _rank_and_size is None:
             # noinspection PyProtectedMember
-            from .distrib_files import _get_rank_and_size
+            from .basic import _get_distributed_rank_and_size
 
-            _rank_and_size = _get_rank_and_size()
+            _rank_and_size = _get_distributed_rank_and_size()
         self._rank_and_size = tuple(_rank_and_size)
+        rank, size = self._rank_and_size
+        # The same sharding via _num_shards/_shard_index (torch_distributed dataset_distribution "shard") is fine.
+        if (self._num_shards, self._shard_index) not in [(1, 0), (size, rank)]:
+            raise ValueError(
+                f"{self}: this dataset follows the NeMo sharding (distributed rank {rank} / size {size}"
+                f" x NeMo num_workers), which clashes with"
+                f" _num_shards {self._num_shards} / _shard_index {self._shard_index}"
+            )
 
         if isinstance(targets, dict):
             targets = Vocabulary.create_vocab(**targets)

@@ -21,7 +21,13 @@ from returnn.util import multi_proc_manager_with_watchdog
 
 
 def get_loader_from_returnn_dataset(
-    dataset: Dataset, mp_manager: SyncManager, *, batch_size: int = 5, max_seqs: int = 2
+    dataset: Dataset,
+    mp_manager: SyncManager,
+    *,
+    batch_size: int = 5,
+    max_seqs: int = 2,
+    num_workers: int = 1,
+    shard_workers: Optional[bool] = None,
 ) -> DataLoader:
     # Follow mostly similar logic as in the PT engine.
 
@@ -31,7 +37,9 @@ def get_loader_from_returnn_dataset(
         dataset=dataset, epoch_mp_shared=epoch_mp_shared
     )
 
-    wrapped_dataset = returnn_dataset_wrapper.ReturnnDatasetIterDataPipe(dataset, reset_callback=reset_callback)
+    wrapped_dataset = returnn_dataset_wrapper.ReturnnDatasetIterDataPipe(
+        dataset, reset_callback=reset_callback, shard_workers=shard_workers
+    )
 
     batches_dataset = data_pipeline.BatchingIterDataPipe(wrapped_dataset, batch_size=batch_size, max_seqs=max_seqs)
 
@@ -49,7 +57,7 @@ def get_loader_from_returnn_dataset(
 
     pickle.loads(pickle.dumps(batches_dataset))
 
-    return data_pipeline.create_data_loader_from_batches(batches_dataset, {"num_workers": 1})
+    return data_pipeline.create_data_loader_from_batches(batches_dataset, {"num_workers": num_workers})
 
 
 def test_pipeline_serialization():
@@ -316,6 +324,107 @@ def test_MultiProcDataset_HDFDataset():
                 break
 
         assert c == n
+
+
+def test_get_default_kwargs_train_dataset_distribution():
+    # torch_distributed dataset_distribution "shard" shards the train dataset over the ranks (via returnn.__main__).
+    from returnn.__main__ import load_data
+    from test_HDFDataset import generate_hdf_from_other
+    from test_Dataset import dummy_iter_dataset
+
+    assert Dataset.get_default_kwargs_train(Config({})) == {}
+    assert Dataset.get_default_kwargs_train(Config({"torch_distributed": {}})) == {}
+    assert (
+        Dataset.get_default_kwargs_train(Config({"torch_distributed": {"dataset_distribution": "random_seed_offset"}}))
+        == {}
+    )
+    try:
+        Dataset.get_default_kwargs_train(Config({"torch_distributed": {"dataset_distribution": "foo"}}))
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("expected ValueError")
+
+    hdf_fn = generate_hdf_from_other({"class": "Task12AXDataset", "num_seqs": 11})
+    all_tags = sorted(
+        seq.seq_tag for seq in dummy_iter_dataset(init_dataset({"class": "HDFDataset", "files": [hdf_fn]}))
+    )
+    tags = []
+    for rank in range(2):
+        config = Config(
+            {
+                "train": {"class": "HDFDataset", "files": [hdf_fn], "seq_ordering": "random"},
+                "torch_distributed": {"dataset_distribution": "shard"},
+                "__debug_dummy_distributed_rank_and_size": (rank, 2),
+            }
+        )
+        kwargs = Dataset.get_default_kwargs_train(config)
+        assert kwargs == {"_num_shards": 2, "_shard_index": rank}
+        dataset, _ = load_data(config, 0, "train", **kwargs)
+        tags.append([seq.seq_tag for seq in dummy_iter_dataset(dataset)])
+    assert [len(t) for t in tags] == [6, 5]
+    assert sorted(tags[0] + tags[1]) == all_tags
+
+
+class _NoShardingDataset(Task12AXDataset):
+    def supports_sharding(self) -> bool:
+        return False
+
+
+def test_data_loader_num_workers_sharding():
+    # Every DataLoader worker iterates its own copy of the dataset, so every worker yields its own shard,
+    # and the workers together yield every seq once (and not every seq once per worker, as before behavior version 37).
+    import pytest
+    from test_HDFDataset import generate_hdf_from_other
+    from test_Dataset import dummy_iter_dataset
+    from returnn.datasets.hdf import HDFDataset
+
+    hdf_fn = generate_hdf_from_other({"class": "Task12AXDataset", "num_seqs": 11})
+    all_tags = sorted(seq.seq_tag for seq in dummy_iter_dataset(HDFDataset(files=[hdf_fn], cache_byte_size=0)))
+    assert len(all_tags) == 11
+    mp_manager = multi_proc_manager_with_watchdog.create_manager()
+
+    behavior_version_orig_state = BehaviorVersion._get_state()
+    try:
+        for version, shard_workers in [(36, False), (37, True)]:
+            BehaviorVersion._reset()
+            BehaviorVersion.set(version)
+            pipe = returnn_dataset_wrapper.ReturnnDatasetIterDataPipe(HDFDataset(files=[hdf_fn], cache_byte_size=0))
+            assert pipe._shard_workers == shard_workers
+    finally:
+        BehaviorVersion._reset(behavior_version_orig_state)
+
+    loader = get_loader_from_returnn_dataset(
+        HDFDataset(files=[hdf_fn], cache_byte_size=0), mp_manager, max_seqs=1, num_workers=2, shard_workers=True
+    )
+    for _ in range(2):  # the second epoch reuses the persistent workers
+        tags = [str(batch["seq_tag"][0]) for batch in loader]
+        assert sorted(tags) == all_tags, tags
+
+    loader = get_loader_from_returnn_dataset(
+        HDFDataset(files=[hdf_fn], cache_byte_size=0), mp_manager, max_seqs=1, num_workers=2, shard_workers=False
+    )
+    tags = [str(batch["seq_tag"][0]) for batch in loader]
+    assert sorted(tags) == sorted(all_tags * 2), tags
+
+    # The dataset is sharded already (e.g. per distributed rank): the workers yield sub shards of that shard.
+    dataset = HDFDataset(files=[hdf_fn], cache_byte_size=0, _num_shards=2, _shard_index=1)
+    loader = get_loader_from_returnn_dataset(dataset, mp_manager, max_seqs=1, num_workers=2, shard_workers=True)
+    tags = [str(batch["seq_tag"][0]) for batch in loader]
+    ref = [
+        seq.seq_tag
+        for shard_index in (2, 3)
+        for seq in dummy_iter_dataset(
+            HDFDataset(files=[hdf_fn], cache_byte_size=0, _num_shards=4, _shard_index=shard_index)
+        )
+    ]
+    assert len(tags) == 5 and sorted(tags) == sorted(ref), (tags, ref)
+
+    loader = get_loader_from_returnn_dataset(
+        _NoShardingDataset(num_seqs=11), mp_manager, max_seqs=1, num_workers=2, shard_workers=True
+    )
+    with pytest.raises(ValueError, match="does not support sharding"):
+        list(loader)
 
 
 class _BigTagBatches(torch.utils.data.IterableDataset):
