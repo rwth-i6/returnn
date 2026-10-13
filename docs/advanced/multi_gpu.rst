@@ -38,6 +38,8 @@ and the periods multiples of the inner period. Of the param levels firing after 
 The levels control the large transfers. Independent of them, all ranks agree in a small control all-reduce
 whether every rank still has data and on the epoch progress: in every step with a ``"grad"`` level,
 otherwise only in the steps where a level fires. So with a ``"grad"`` level, the ranks still meet once per step.
+The same holds for a callable ``accum_grad_multiple_step``: its value for a step is only known after the step,
+so the ranks meet in every step, which also keeps ``epoch_continuous`` and thus the callable's result the same on every rank.
 
 With ``"sync_complete_frac": True`` (default since behavior version 33),
 the epoch progress ``complete_frac`` is the mean over the ranks,

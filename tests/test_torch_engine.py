@@ -12,6 +12,7 @@ import io
 import json
 import os
 import sys
+import time
 import unittest
 import unittest.mock
 import tempfile
@@ -2034,6 +2035,71 @@ def test_torch_engine_distributed_param_sync_accum_cpu():
         s.bind(("127.0.0.1", 0))
         port = s.getsockname()[1]
     torch.multiprocessing.spawn(_torch_distributed_param_sync_accum_worker, args=(world_size, port), nprocs=world_size)
+
+
+def _torch_distributed_param_sync_accum_dyn_worker(rank: int, world_size: int, port: int):
+    os.environ.update(
+        MASTER_ADDR="127.0.0.1",
+        MASTER_PORT=str(port),
+        RANK=str(rank),
+        WORLD_SIZE=str(world_size),
+        LOCAL_RANK=str(rank),
+        LOCAL_WORLD_SIZE=str(world_size),
+    )
+
+    def _accum(*, global_train_step: int, **_kwargs) -> int:
+        # Rank 0 runs out of data in step 4 (one seq per batch, 4 seqs),
+        # while rank 1 finishes an accumulation there under the new target 2, which the old target 3 did not predict.
+        return 2 if global_train_step == 4 else 3
+
+    config = Config(
+        dict(
+            task="train",
+            device="cpu",
+            extern_data={"data": {"dim": 9}, "classes": {"dim": 2, "sparse": True}},
+            get_model=TrainTestModel,
+            train_step=TrainTestModel.train_step,
+            batch_size=10**9,
+            max_seqs=1,
+            optimizer={"class": "adam"},
+            learning_rate=0.01,
+            accum_grad_multiple_step=_accum,
+            num_epochs=1,
+            torch_dataloader_opts={"num_workers": 0},
+            torch_distributed={"backend": "gloo", "reduce_type": "param", "param_sync_step": 1},
+        )
+    )
+    with global_config_ctx(config):
+        dataset = init_dataset({"class": "Task12AXDataset", "num_seqs": 4 if rank == 0 else 10})
+        dataset.init_seq_order(epoch=1)
+        engine = Engine(config=config)
+        engine.init_train_from_config(train_data=dataset)
+        engine.train()
+    assert engine.global_train_step == 4, engine.global_train_step  # both stop when rank 0 runs out
+    torch.distributed.destroy_process_group()
+
+
+def test_torch_engine_distributed_param_sync_accum_dyn_cpu():
+    """
+    Param sync with a callable accum_grad_multiple_step and uneven data:
+    the has-data check must not be skipped in the step where the callable makes an update due, else the ranks hang.
+    """
+    import socket
+    import torch.multiprocessing
+
+    world_size = 2
+    with socket.socket() as s:
+        s.bind(("127.0.0.1", 0))
+        port = s.getsockname()[1]
+    ctx = torch.multiprocessing.spawn(
+        _torch_distributed_param_sync_accum_dyn_worker, args=(world_size, port), nprocs=world_size, join=False
+    )
+    deadline = time.monotonic() + 120
+    while not ctx.join(timeout=max(0.0, deadline - time.monotonic())):  # returns once any process finished
+        if time.monotonic() > deadline:
+            for proc in ctx.processes:
+                proc.kill()
+            raise Exception("timeout, the ranks hang")
 
 
 def test_dynamic_learning_rate():

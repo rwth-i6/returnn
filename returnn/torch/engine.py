@@ -586,6 +586,7 @@ class Engine(EngineBase):
                 # Sync only on first train step, when we have run out of data and every time we synchronize
                 # the model between workers.
                 # This allows the different workers to progress independently between synchronizations.
+                # A callable accum_grad_multiple_step is only known after the step, so sync in every step then.
                 if self._torch_distributed_ctx and (
                     self._torch_distributed_ctx.should_sync_now(
                         epoch_update_step_idx=epoch_update_step_idx,
@@ -593,6 +594,7 @@ class Engine(EngineBase):
                         update_step=(0 if zero_grad_next_step else cur_count_grad_accum) + 1
                         >= accum_grad_multiple_step,
                     )
+                    or accum_grad_multiple_step_dyn is not None
                     or step_idx == 0
                     or extern_data_raw is None
                 ):
