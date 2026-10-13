@@ -357,6 +357,9 @@ def _parse_sync_levels(spec: Sequence[Dict[str, Any]], *, size: int) -> List[_Sy
     levels = []
     for idx, level_spec in enumerate(spec):
         assert isinstance(level_spec, dict), f"torch_distributed sync level {idx}: expected a dict, got {level_spec!r}"
+        assert "group" in level_spec and "type" in level_spec, (
+            f"torch_distributed sync level {idx}: group and type are required, got {level_spec!r}"
+        )
         opts = CollectionReadCheckCovered(level_spec)
         group_spec = opts["group"]
         sync_type = opts["type"]
