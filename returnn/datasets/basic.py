@@ -759,6 +759,9 @@ class Dataset:
         assert num_shards == 1 or self.supports_sharding(), (
             f"{self}: does not support sharding, but got num_shards == {num_shards}"
         )
+        # The default random seed offset depends on the sharding (see _get_default_random_seed_offset),
+        # but the sharding set here must not change it: a split across ranks sets the offset explicitly.
+        self._random_seed_offset = self.random_seed_offset
         self._num_shards = num_shards
         self._shard_index = shard_index
 

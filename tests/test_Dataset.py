@@ -1898,6 +1898,21 @@ def test_Dataset_sharding():
             assert sorted(tags[0] + tags[1]) == all_tags, (opts["class"], via_set_sharding, tags)
 
 
+class _SeedBySharding(Task12AXDataset):
+    """default random seed offset depends on the sharding, like DistributeFilesDataset under torch_distributed"""
+
+    def _get_default_random_seed_offset(self):
+        return 100 + self._num_shards
+
+
+def test_Dataset_set_sharding_keeps_random_seed_offset():
+    # set_sharding (e.g. per DataLoader worker) must not change the random seed offset,
+    # also when it was not used yet (no initialize / init_seq_order before).
+    dataset = _SeedBySharding(num_seqs=5)
+    dataset.set_sharding(num_shards=2, shard_index=1)
+    assert dataset.random_seed_offset == 101
+
+
 def test_Dataset_get_default_kwargs_train_dataset_distribution():
     # dataset_distribution "shard" shards the train dataset over the distributed ranks (via returnn.__main__).
     from returnn.config import Config
