@@ -174,7 +174,8 @@ class NemoSpeechDataset(CachedDataset2):
         if (self._num_shards, self._shard_index) not in [(1, 0), (size, rank)]:
             raise ValueError(
                 f"{self}: this dataset follows the NeMo sharding (distributed rank {rank} / size {size}"
-                f" x NeMo num_workers), which clashes with _num_shards {self._num_shards} / _shard_index {self._shard_index}"
+                f" x NeMo num_workers), which clashes with"
+                f" _num_shards {self._num_shards} / _shard_index {self._shard_index}"
             )
 
         if isinstance(targets, dict):
