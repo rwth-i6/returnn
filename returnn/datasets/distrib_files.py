@@ -23,7 +23,7 @@ from .basic import (
     extend_dataset_dict_from_parent_dataset,
     DatasetSeq,
     RANDOM_SEED_OFFSET_ENV_VAR,
-    _get_rank_and_size,
+    _get_distributed_rank_and_size,
 )
 from .cached2 import CachedDataset2
 
@@ -221,7 +221,7 @@ class DistributeFilesDataset(CachedDataset2):
         if distrib_shard_files:
             if _distrib_info:
                 # We're in a child process.
-                # `_get_rank_and_size()` no longer works,
+                # `_get_distributed_rank_and_size()` no longer works,
                 # so we pass the info about the shards via a pickled property.
                 # See also Dataset.__reduce__.
                 # _num_shards and _shard_index are already set, so just check.
@@ -230,8 +230,8 @@ class DistributeFilesDataset(CachedDataset2):
                     and self._num_shards == _distrib_info["_num_shards"]
                 )
             else:
-                rank, size = _get_rank_and_size()
-                # The same sharding via _num_shards/_shard_index (e.g. dataset_distribution "shard") is fine.
+                rank, size = _get_distributed_rank_and_size()
+                # The same sharding via _num_shards/_shard_index (torch_distributed dataset_distribution shard) is fine.
                 if (self._num_shards, self._shard_index) not in [(1, 0), (size, rank)]:
                     raise ValueError(
                         f"{self}: distrib_shard_files shards the files by the distributed rank {rank} / size {size},"

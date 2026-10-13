@@ -120,7 +120,7 @@ def test_MultiProcDataset_sharded():
 def test_MultiProcDataset_sharded_random_seed_offset():
     # The shards (e.g. per distributed rank) are cut from the seq order, so with seq_ordering "random"
     # they are disjoint only when every rank uses the same random seed offset
-    # (dataset_distribution "shard" passes it explicitly, the default differs per rank).
+    # (the default differs per rank, except with torch_distributed dataset_distribution "shard").
     hdf_fn = generate_hdf_from_other({"class": "Task12AXDataset", "num_seqs": 23})
     hdf_dataset_dict = {"class": "HDFDataset", "files": [hdf_fn], "seq_ordering": "random"}
     all_tags = sorted(seq.seq_tag for seq in dummy_iter_dataset(init_dataset(hdf_dataset_dict)))

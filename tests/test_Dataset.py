@@ -1899,15 +1899,19 @@ def test_Dataset_sharding():
 
 
 def test_Dataset_get_default_kwargs_train_dataset_distribution():
-    # dataset_distribution "shard" shards the train dataset over the distributed ranks (via returnn.__main__).
+    # torch_distributed dataset_distribution "shard" shards the train dataset over the ranks (via returnn.__main__).
     from returnn.config import Config
     from returnn.__main__ import load_data
     from test_HDFDataset import generate_hdf_from_other
 
     assert Dataset.get_default_kwargs_train(Config({})) == {}
-    assert Dataset.get_default_kwargs_train(Config({"dataset_distribution": "random_seed_offset"})) == {}
+    assert Dataset.get_default_kwargs_train(Config({"torch_distributed": {}})) == {}
+    assert (
+        Dataset.get_default_kwargs_train(Config({"torch_distributed": {"dataset_distribution": "random_seed_offset"}}))
+        == {}
+    )
     try:
-        Dataset.get_default_kwargs_train(Config({"dataset_distribution": "foo"}))
+        Dataset.get_default_kwargs_train(Config({"torch_distributed": {"dataset_distribution": "foo"}}))
     except ValueError:
         pass
     else:
@@ -1922,12 +1926,12 @@ def test_Dataset_get_default_kwargs_train_dataset_distribution():
         config = Config(
             {
                 "train": {"class": "HDFDataset", "files": [hdf_fn], "seq_ordering": "random"},
-                "dataset_distribution": "shard",
+                "torch_distributed": {"dataset_distribution": "shard"},
                 "__debug_dummy_distributed_rank_and_size": (rank, 2),
             }
         )
         kwargs = Dataset.get_default_kwargs_train(config)
-        assert kwargs == {"_num_shards": 2, "_shard_index": rank, "random_seed_offset": 0}
+        assert kwargs == {"_num_shards": 2, "_shard_index": rank}
         dataset, _ = load_data(config, 0, "train", **kwargs)
         tags.append([seq.seq_tag for seq in dummy_iter_dataset(dataset)])
     assert [len(t) for t in tags] == [6, 5]

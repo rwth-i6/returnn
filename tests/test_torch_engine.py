@@ -1610,7 +1610,6 @@ def _torch_distributed_shard_worker(rank: int, world_size: int, port: int, tmp_d
             task="train",
             device="cpu",
             train={"class": "HDFDataset", "files": [hdf_fn], "seq_ordering": "random"},
-            dataset_distribution="shard",
             extern_data={"data": {"dim": 9}, "classes": {"dim": 2, "sparse": True}},
             get_model=TrainTestModel,
             train_step=_train_step,
@@ -1620,7 +1619,7 @@ def _torch_distributed_shard_worker(rank: int, world_size: int, port: int, tmp_d
             learning_rate=0.01,
             num_epochs=1,
             torch_dataloader_opts={"num_workers": 1},
-            torch_distributed={"backend": "gloo"},
+            torch_distributed={"backend": "gloo", "dataset_distribution": "shard"},
         )
     )
     with global_config_ctx(config):

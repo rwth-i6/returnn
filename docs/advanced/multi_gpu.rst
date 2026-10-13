@@ -26,13 +26,13 @@ Ranks the launcher already bound to different CPUs (``srun`` per-task binding, `
 Measured on 4-GPU nodes: a few percent of the step time, and a tighter step-time distribution.
 ``torchrun --numa-binding`` (torch >= 2.9, needs ``numactl``) does the same at the launcher level.
 
-For the dataset, by default (``dataset_distribution = "random_seed_offset"``),
+For the dataset, by default (``torch_distributed = {"dataset_distribution": "random_seed_offset"}``),
 we do not use sharding,
 but instead, every rank uses a different random seed
 (see ``random_seed_offset`` in the code),
 so every rank goes through all the data in every epoch.
 
-With ``dataset_distribution = "shard"``,
+With ``torch_distributed = {"dataset_distribution": "shard"}``,
 the train dataset is sharded over the ranks:
 every rank gets a different part of the data,
 and all ranks together go through the data once per epoch.

@@ -165,12 +165,12 @@ class NemoSpeechDataset(CachedDataset2):
         self.use_worker_procs = use_worker_procs
         if _rank_and_size is None:
             # noinspection PyProtectedMember
-            from .basic import _get_rank_and_size
+            from .basic import _get_distributed_rank_and_size
 
-            _rank_and_size = _get_rank_and_size()
+            _rank_and_size = _get_distributed_rank_and_size()
         self._rank_and_size = tuple(_rank_and_size)
         rank, size = self._rank_and_size
-        # The same sharding via _num_shards/_shard_index (e.g. dataset_distribution "shard") is fine.
+        # The same sharding via _num_shards/_shard_index (torch_distributed dataset_distribution "shard") is fine.
         if (self._num_shards, self._shard_index) not in [(1, 0), (size, rank)]:
             raise ValueError(
                 f"{self}: this dataset follows the NeMo sharding (distributed rank {rank} / size {size}"
