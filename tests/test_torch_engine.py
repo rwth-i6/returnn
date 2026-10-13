@@ -1798,7 +1798,7 @@ def test_torch_distributed_sync_levels_spec():
         ("param", 10, [[0, 1, 2, 3], [4, 5, 6, 7]]),
         ("param", 20, [[0, 1, 2, 3, 4, 5, 6, 7]]),
     ]
-    assert [level.fires(epoch_step_idx=step) for level in levels for step in [0, 9, 10, 19]] == [
+    assert [level.fires(epoch_update_step_idx=step) for level in levels for step in [0, 9, 10, 19]] == [
         True, True, True, True,  # grad
         False, True, False, True,  # param every 10
         False, False, False, True,  # param every 20
@@ -1857,12 +1857,12 @@ def _torch_distributed_sync_levels_worker(rank: int, world_size: int, port: int,
             {"backend": "gloo", "sync": [{"group": 2, "type": "grad"}, {"group": "world", "type": "param", "every": 2}]}
         )
         assert ctx.has_grad_sync() and ctx.maybe_make_distributed_module(torch.nn.Linear(1, 1)) is None
-        assert ctx.should_sync_now(epoch_step_idx=0)
+        assert ctx.should_sync_now(epoch_update_step_idx=0, update_step=False)  # the grad level: every step
         ctx.maybe_reduce_grads(module=module)
         results["step0_grads"] = _values()
-        ctx.step_after_param_update(module=module, epoch_step_idx=0)
+        ctx.step_after_param_update(module=module, epoch_update_step_idx=0)
         results["step0"] = _values()
-        ctx.step_after_param_update(module=module, epoch_step_idx=1)
+        ctx.step_after_param_update(module=module, epoch_update_step_idx=1)
         results["step1"] = _values()
     elif variant == "hier":
         # params in pairs every 2 steps, params over the node (= all ranks here) every 4 steps;
@@ -1877,13 +1877,16 @@ def _torch_distributed_sync_levels_worker(rank: int, world_size: int, port: int,
             }
         )
         assert not ctx.has_grad_sync()
-        assert [ctx.should_sync_now(epoch_step_idx=step) for step in range(4)] == [False, True, False, True]
+        assert [ctx.should_sync_now(epoch_update_step_idx=step, update_step=True) for step in range(4)] == [
+            False, True, False, True,
+        ]  # fmt: skip
+        assert not ctx.should_sync_now(epoch_update_step_idx=1, update_step=False)  # mid grad accumulation
         ctx.maybe_reduce_grads(module=module)  # no-op
-        ctx.step_after_param_update(module=module, epoch_step_idx=0)
+        ctx.step_after_param_update(module=module, epoch_update_step_idx=0)
         results["step0"] = _values()
-        ctx.step_after_param_update(module=module, epoch_step_idx=1)
+        ctx.step_after_param_update(module=module, epoch_update_step_idx=1)
         results["step1"] = _values()
-        ctx.step_after_param_update(module=module, epoch_step_idx=3)
+        ctx.step_after_param_update(module=module, epoch_update_step_idx=3)
         results["step3"] = _values()
     else:
         raise ValueError(f"invalid variant {variant!r}")
@@ -1946,6 +1949,91 @@ def test_torch_distributed_sync_levels_cpu_hier():
             ],
         },
     )
+
+
+def _torch_distributed_param_sync_accum_worker(rank: int, world_size: int, port: int):
+    import returnn.torch.distributed as torch_distributed
+    from returnn.torch.updater import Updater
+
+    os.environ.update(
+        MASTER_ADDR="127.0.0.1",
+        MASTER_PORT=str(port),
+        RANK=str(rank),
+        WORLD_SIZE=str(world_size),
+        LOCAL_RANK=str(rank),
+        LOCAL_WORLD_SIZE=str(world_size),
+    )
+    # The param sync must come right after an optimizer update, never between accumulated grads,
+    # and its period counts updates per epoch.
+    state = {"last": None, "updates": 0, "updates_at_epoch_start": 0, "syncs": []}
+    orig_run_step = Engine._run_step
+    orig_train_epoch = Engine.train_epoch
+    orig_updater_step = Updater.step
+    orig_sync_params_avg = torch_distributed._sync_params_avg
+
+    def _run_step(self, *args, train_flag: bool = False, **kwargs):
+        if train_flag:
+            state["last"] = "step"
+        return orig_run_step(self, *args, train_flag=train_flag, **kwargs)
+
+    def _train_epoch(self):
+        state["updates_at_epoch_start"] = state["updates"]
+        return orig_train_epoch(self)
+
+    def _updater_step(self, **kwargs):
+        state["last"] = "update"
+        state["updates"] += 1
+        return orig_updater_step(self, **kwargs)
+
+    def _sync_params_avg(**kwargs):
+        assert state["last"] == "update", state
+        updates_in_epoch = state["updates"] - state["updates_at_epoch_start"]
+        assert updates_in_epoch > 0 and updates_in_epoch % 3 == 0, state
+        state["syncs"].append(updates_in_epoch)
+        state["last"] = "sync"
+        return orig_sync_params_avg(**kwargs)
+
+    Engine._run_step = _run_step
+    Engine.train_epoch = _train_epoch
+    Updater.step = _updater_step
+    torch_distributed._sync_params_avg = _sync_params_avg
+
+    config = Config(
+        dict(
+            task="train",
+            device="cpu",
+            extern_data={"data": {"dim": 9}, "classes": {"dim": 2, "sparse": True}},
+            get_model=TrainTestModel,
+            train_step=TrainTestModel.train_step,
+            batch_size=100,
+            optimizer={"class": "adam"},
+            learning_rate=0.01,
+            accum_grad_multiple_step=2,
+            num_epochs=2,
+            torch_dataloader_opts={"num_workers": 0},
+            torch_distributed={"backend": "gloo", "reduce_type": "param", "param_sync_step": 3},
+        )
+    )
+    with global_config_ctx(config):
+        dataset = init_dataset({"class": "Task12AXDataset", "num_seqs": 50})
+        dataset.init_seq_order(epoch=1)
+        engine = Engine(config=config)
+        engine.init_train_from_config(train_data=dataset)
+        engine.train()
+    assert engine.epoch == 2
+    assert len(state["syncs"]) >= 2, state  # at least one sync per epoch, so the epoch boundary reset is covered
+    torch.distributed.destroy_process_group()
+
+
+def test_torch_engine_distributed_param_sync_accum_cpu():
+    import socket
+    import torch.multiprocessing
+
+    world_size = 2
+    with socket.socket() as s:
+        s.bind(("127.0.0.1", 0))
+        port = s.getsockname()[1]
+    torch.multiprocessing.spawn(_torch_distributed_param_sync_accum_worker, args=(world_size, port), nprocs=world_size)
 
 
 def test_dynamic_learning_rate():

@@ -34,7 +34,8 @@ class DistributedContext:
         ]
 
     Each level has a ``group`` ("world", "node" (the ranks on one host), an int (contiguous blocks of that many ranks),
-    or an explicit list of rank lists), a ``type`` ("grad" or "param"), and ``every`` (period in steps, default 1).
+    or an explicit list of rank lists), a ``type`` ("grad" or "param"),
+    and ``every`` (period in optimizer update steps, counted per epoch, default 1).
     Every group of a level is a union of groups of the inner level, and every period a multiple of the inner one.
     A "grad" level runs in every step, so it has to be the innermost. Of the "param" levels firing in a step,
     only the outermost runs, which subsumes the inner averages.
@@ -244,24 +245,29 @@ class DistributedContext:
         """
         return self._sync_complete_frac
 
-    def should_sync_now(self, *, epoch_step_idx: int) -> bool:
+    def should_sync_now(self, *, epoch_update_step_idx: int, update_step: bool) -> bool:
         """
-        :param epoch_step_idx: current step index
+        :param epoch_update_step_idx: optimizer updates so far in this epoch
+        :param update_step: whether the current step ends with an optimizer update (grad accumulation complete)
         :return: whether to sync the training processes in this step
         """
         if self._reduce_type == "grad":
             return True
-        return any(level.fires(epoch_step_idx=epoch_step_idx) for level in self._sync_levels)
+        return any(
+            level.sync_type == "grad" or (update_step and level.fires(epoch_update_step_idx=epoch_update_step_idx))
+            for level in self._sync_levels
+        )
 
-    def step_after_param_update(self, *, module: torch.nn.Module, epoch_step_idx: int):
+    def step_after_param_update(self, *, module: torch.nn.Module, epoch_update_step_idx: int):
         """
-        Average the params over the outermost "param" sync level firing in this step, if any.
+        Average the params over the outermost "param" sync level firing after this optimizer update, if any.
+        Call this right after an optimizer update.
 
         :param module: to take the params from
-        :param epoch_step_idx: current step index
+        :param epoch_update_step_idx: optimizer updates before this one in this epoch
         """
         for level in reversed(self._sync_levels):
-            if level.sync_type == "param" and level.fires(epoch_step_idx=epoch_step_idx):
+            if level.sync_type == "param" and level.fires(epoch_update_step_idx=epoch_update_step_idx):
                 _sync_params_avg(module=module, level=level)
                 return
 
@@ -333,12 +339,12 @@ class _SyncLevel:
     def __repr__(self):
         return f"<{self.__class__.__name__} group={self.group_spec!r} type={self.sync_type!r} every={self.every}>"
 
-    def fires(self, *, epoch_step_idx: int) -> bool:
+    def fires(self, *, epoch_update_step_idx: int) -> bool:
         """
-        :param epoch_step_idx: current step index
-        :return: whether this level syncs in this step
+        :param epoch_update_step_idx: optimizer updates before the current one in this epoch
+        :return: whether this level syncs after the current optimizer update
         """
-        return (epoch_step_idx % self.every) == (self.every - 1)
+        return (epoch_update_step_idx % self.every) == (self.every - 1)
 
     def group_size(self) -> int:
         """

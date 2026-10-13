@@ -556,6 +556,7 @@ class Engine(EngineBase):
 
         zero_grad_next_step = True
         cur_count_grad_accum = 0
+        epoch_update_step_idx = 0  # optimizer updates so far in this epoch, the unit of the param sync period
         extern_data = None
 
         total_data_size_packed = NumbersDict()
@@ -586,7 +587,12 @@ class Engine(EngineBase):
                 # the model between workers.
                 # This allows the different workers to progress independently between synchronizations.
                 if self._torch_distributed_ctx and (
-                    self._torch_distributed_ctx.should_sync_now(epoch_step_idx=step_idx)
+                    self._torch_distributed_ctx.should_sync_now(
+                        epoch_update_step_idx=epoch_update_step_idx,
+                        # whether this step completes the grad accumulation, i.e. ends with an optimizer update
+                        update_step=(0 if zero_grad_next_step else cur_count_grad_accum) + 1
+                        >= accum_grad_multiple_step,
+                    )
                     or step_idx == 0
                     or extern_data_raw is None
                 ):
@@ -707,8 +713,12 @@ class Engine(EngineBase):
                     assert grad_norm is not None
                     losses_dict[key] = float(grad_norm)  # device sync, as before
 
-                if self._torch_distributed_ctx:
-                    self._torch_distributed_ctx.step_after_param_update(module=self._pt_model, epoch_step_idx=step_idx)
+                if perform_update_step:
+                    if self._torch_distributed_ctx:
+                        self._torch_distributed_ctx.step_after_param_update(
+                            module=self._pt_model, epoch_update_step_idx=epoch_update_step_idx
+                        )
+                    epoch_update_step_idx += 1
 
                 step_end_time = time.monotonic()
                 step_duration = step_end_time - step_begin_time

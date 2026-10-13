@@ -30,8 +30,14 @@ params averaged across all nodes every 100 steps::
 
 ``group`` is ``"world"``, ``"node"`` (the ranks on one host), an int (contiguous blocks of that many ranks),
 or a list of rank lists. ``type`` is ``"grad"`` (every step, must be the first level) or ``"param"``,
-``every`` is the period in steps. The groups of a level must be unions of the groups of the inner level,
-and the periods multiples of the inner period. Of the param levels firing in a step, only the outermost runs.
+``every`` is the period in optimizer update steps (counted per epoch; with ``accum_grad_multiple_step``,
+one update step spans several steps, and the params are only averaged right after an update).
+The groups of a level must be unions of the groups of the inner level,
+and the periods multiples of the inner period. Of the param levels firing after an update, only the outermost runs.
+
+The levels control the large transfers. Independent of them, all ranks agree in a small control all-reduce
+whether every rank still has data and on the epoch progress: in every step with a ``"grad"`` level,
+otherwise only in the steps where a level fires. So with a ``"grad"`` level, the ranks still meet once per step.
 
 With ``"sync_complete_frac": True`` (default since behavior version 33),
 the epoch progress ``complete_frac`` is the mean over the ranks,
