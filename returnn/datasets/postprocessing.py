@@ -367,6 +367,11 @@ class PostprocessingDataset(CachedDataset2):
         assert self._dataset is not None
         return self._dataset.supports_sharding()
 
+    def set_sharding(self, *, num_shards: int, shard_index: int):
+        """set sharding, on the wrapped dataset"""
+        super().set_sharding(num_shards=num_shards, shard_index=shard_index)
+        self._dataset.set_sharding(num_shards=num_shards, shard_index=shard_index)
+
     def finish_epoch(self, *, free_resources=False):
         """finish_epoch"""
         super().finish_epoch(free_resources=free_resources)

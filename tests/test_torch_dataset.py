@@ -21,7 +21,7 @@ from returnn.util import multi_proc_manager_with_watchdog
 
 
 def get_loader_from_returnn_dataset(
-    dataset: Dataset, mp_manager: SyncManager, *, batch_size: int = 5, max_seqs: int = 2
+    dataset: Dataset, mp_manager: SyncManager, *, batch_size: int = 5, max_seqs: int = 2, num_workers: int = 1
 ) -> DataLoader:
     # Follow mostly similar logic as in the PT engine.
 
@@ -49,7 +49,7 @@ def get_loader_from_returnn_dataset(
 
     pickle.loads(pickle.dumps(batches_dataset))
 
-    return data_pipeline.create_data_loader_from_batches(batches_dataset, {"num_workers": 1})
+    return data_pipeline.create_data_loader_from_batches(batches_dataset, {"num_workers": num_workers})
 
 
 def test_pipeline_serialization():
@@ -316,6 +316,49 @@ def test_MultiProcDataset_HDFDataset():
                 break
 
         assert c == n
+
+
+class _NoShardingDataset(Task12AXDataset):
+    def supports_sharding(self) -> bool:
+        return False
+
+
+def test_data_loader_num_workers_sharding():
+    # Every DataLoader worker iterates its own copy of the dataset, so every worker yields its own shard,
+    # and the workers together yield every seq once (and not every seq once per worker).
+    import pytest
+    from test_HDFDataset import generate_hdf_from_other
+    from test_Dataset import dummy_iter_dataset
+    from returnn.datasets.hdf import HDFDataset
+
+    hdf_fn = generate_hdf_from_other({"class": "Task12AXDataset", "num_seqs": 11})
+    all_tags = sorted(seq.seq_tag for seq in dummy_iter_dataset(HDFDataset(files=[hdf_fn], cache_byte_size=0)))
+    assert len(all_tags) == 11
+    mp_manager = multi_proc_manager_with_watchdog.create_manager()
+
+    loader = get_loader_from_returnn_dataset(
+        HDFDataset(files=[hdf_fn], cache_byte_size=0), mp_manager, max_seqs=1, num_workers=2
+    )
+    for _ in range(2):  # the second epoch reuses the persistent workers
+        tags = [str(batch["seq_tag"][0]) for batch in loader]
+        assert sorted(tags) == all_tags, tags
+
+    # The dataset is sharded already (e.g. per distributed rank): the workers yield sub shards of that shard.
+    dataset = HDFDataset(files=[hdf_fn], cache_byte_size=0, _num_shards=2, _shard_index=1)
+    loader = get_loader_from_returnn_dataset(dataset, mp_manager, max_seqs=1, num_workers=2)
+    tags = [str(batch["seq_tag"][0]) for batch in loader]
+    ref = [
+        seq.seq_tag
+        for shard_index in (2, 3)
+        for seq in dummy_iter_dataset(
+            HDFDataset(files=[hdf_fn], cache_byte_size=0, _num_shards=4, _shard_index=shard_index)
+        )
+    ]
+    assert len(tags) == 5 and sorted(tags) == sorted(ref), (tags, ref)
+
+    loader = get_loader_from_returnn_dataset(_NoShardingDataset(num_seqs=11), mp_manager, max_seqs=1, num_workers=2)
+    with pytest.raises(ValueError, match="does not support sharding"):
+        list(loader)
 
 
 class _BigTagBatches(torch.utils.data.IterableDataset):

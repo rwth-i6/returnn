@@ -84,6 +84,32 @@ class Dataset:
             chunking = config.value("chunking", "0")
         return dict(chunking=chunking, seq_ordering="sorted", shuffle_frames_of_nseqs=0)
 
+    @staticmethod
+    def get_default_kwargs_train(config: Config) -> Dict[str, Any]:
+        """
+        :param config:
+        :return: default kwargs for the train dataset based on the config
+        """
+        dataset_distribution = config.value("dataset_distribution", "random_seed_offset")
+        if dataset_distribution == "random_seed_offset":
+            return {}
+        elif dataset_distribution == "shard":
+            if config.is_true("use_horovod"):
+                raise ValueError(
+                    "dataset_distribution 'shard' is not supported with Horovod, use horovod_dataset_distribution"
+                )
+            rank, size = _get_rank_and_size(config)
+            # The shards are taken from the same seq order on every rank, so no rank-specific random seed.
+            return {
+                "_num_shards": size,
+                "_shard_index": rank,
+                "random_seed_offset": config.int("dataset_random_seed_offset", 0),
+            }
+        else:
+            raise ValueError(
+                f"invalid dataset_distribution {dataset_distribution!r}, expected 'random_seed_offset' or 'shard'"
+            )
+
     @classmethod
     def from_config(cls, config: Config, **kwargs) -> Dataset:
         """
@@ -719,6 +745,22 @@ class Dataset:
     def supports_sharding(self) -> bool:
         """:return: whether the dataset supports sharding based on the seq_order"""
         return False
+
+    def set_sharding(self, *, num_shards: int, shard_index: int):
+        """
+        Sets which shard of the data this dataset instance yields,
+        e.g. in a PyTorch DataLoader worker, when there are multiple workers.
+        Call this before :func:`init_seq_order`.
+
+        :param num_shards: number of shards the data is split into
+        :param shard_index: index of the shard of this dataset instance
+        """
+        assert 0 <= shard_index < num_shards
+        assert num_shards == 1 or self.supports_sharding(), (
+            f"{self}: does not support sharding, but got num_shards == {num_shards}"
+        )
+        self._num_shards = num_shards
+        self._shard_index = shard_index
 
     def _get_random_seed_for_epoch(self, epoch, num_epochs_fixed=1):
         """
@@ -1637,14 +1679,16 @@ def extend_dataset_dict_from_parent_dataset(
     return _dataset_extend_default_kwargs_from_parent_dataset(dataset_dict, parent_dataset)
 
 
-def _get_rank_and_size() -> Tuple[int, int]:
+def _get_rank_and_size(config: Optional[Config] = None) -> Tuple[int, int]:
     """
+    :param config: default: the global config
     :return: tuple (rank, size): the global rank and size for distributed trainings
     """
 
-    from returnn.config import get_global_config
+    if config is None:
+        from returnn.config import get_global_config
 
-    config = get_global_config(raise_exception=False)
+        config = get_global_config(raise_exception=False)
     if not config:
         return 0, 1
     if config.typed_value("torch_distributed") is not None:

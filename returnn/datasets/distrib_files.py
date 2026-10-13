@@ -230,11 +230,14 @@ class DistributeFilesDataset(CachedDataset2):
                     and self._num_shards == _distrib_info["_num_shards"]
                 )
             else:
-                assert self._num_shards == 1 and self._shard_index == 0, (  # ensure defaults are set
-                    f"{self}: Cannot use both dataset-sharding via properties _num_shards and _shard index "
-                    f"and {self.__class__.__name__}'s own sharding implementation based on the trainings rank and size."
-                )
-                self._shard_index, self._num_shards = _get_rank_and_size()
+                rank, size = _get_rank_and_size()
+                # The same sharding via _num_shards/_shard_index (e.g. dataset_distribution "shard") is fine.
+                if (self._num_shards, self._shard_index) not in [(1, 0), (size, rank)]:
+                    raise ValueError(
+                        f"{self}: distrib_shard_files shards the files by the distributed rank {rank} / size {size},"
+                        f" which clashes with _num_shards {self._num_shards} / _shard_index {self._shard_index}"
+                    )
+                self._shard_index, self._num_shards = rank, size
         assert 0 <= self._shard_index < self._num_shards
 
         if _meta_info_cache:

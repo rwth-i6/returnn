@@ -86,6 +86,7 @@ class ReturnnDatasetIterDataPipe(torch.utils.data.IterDataPipe):
             reset_callback = ReturnnDatasetResetDefaultEpochCounterCallback(returnn_dataset)
         self._reset_callback = reset_callback
         self._worker_exit_hook_registered = False
+        self._worker_sharding_set = False
 
     def reset(self):
         """
@@ -98,6 +99,21 @@ class ReturnnDatasetIterDataPipe(torch.utils.data.IterDataPipe):
         Deep inside the complex logic of this hook, it calls ``_set_datapipe_valid_iterator_id``
         which then calls ``reset()``.)
         """
+        if not self._worker_sharding_set:
+            worker_info = torch.utils.data.get_worker_info()
+            if worker_info is not None and worker_info.num_workers > 1:
+                # Every worker has its own copy of the dataset, so every worker yields its own shard of the data.
+                if not self._dataset.supports_sharding():
+                    raise ValueError(
+                        f"{self._dataset} does not support sharding,"
+                        f" needed for DataLoader num_workers {worker_info.num_workers} > 1"
+                    )
+                # noinspection PyProtectedMember
+                self._dataset.set_sharding(
+                    num_shards=self._dataset._num_shards * worker_info.num_workers,
+                    shard_index=self._dataset._shard_index * worker_info.num_workers + worker_info.id,
+                )
+            self._worker_sharding_set = True
         self._reset_callback()
 
     def __iter__(self) -> Iterator[Dict[str, numpy.ndarray]]:

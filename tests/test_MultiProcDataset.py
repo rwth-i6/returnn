@@ -82,6 +82,41 @@ def test_MultiProcDataset_n3_b5_shuffle_sharding():
         assert set(seq.seq_tag for seq in hdf_dataset_seqs) == set(seq.seq_tag for seq in mp_dataset_seqs)
 
 
+def test_MultiProcDataset_sharded():
+    # The MultiProcDataset itself is sharded (e.g. per distributed rank, or per DataLoader worker),
+    # given at construction, or via set_sharding, with the workers running,
+    # or on an unpickled copy (as in a DataLoader worker), where the workers start later.
+    # With both sharding methods, the shards together cover every seq once.
+    import pickle
+
+    hdf_fn = generate_hdf_from_other({"class": "Task12AXDataset", "num_seqs": 23})
+    hdf_dataset_dict = {"class": "HDFDataset", "files": [hdf_fn], "seq_ordering": "random"}
+    all_tags = sorted(seq.seq_tag for seq in dummy_iter_dataset(init_dataset(hdf_dataset_dict)))
+
+    with timeout(60):
+        for sharding_method in ["seq_order", "dedicated"]:
+            for set_sharding_when in [None, "after_init", "after_pickle"]:
+                tags = []
+                for shard_index in range(2):
+                    shard_opts = {"_num_shards": 2, "_shard_index": shard_index}
+                    mp_dataset = MultiProcDataset(
+                        dataset=hdf_dataset_dict,
+                        num_workers=2,
+                        buffer_size=5,
+                        sharding_method=sharding_method,
+                        **(shard_opts if set_sharding_when is None else {}),
+                    )
+                    mp_dataset.initialize()
+                    if set_sharding_when == "after_pickle":
+                        mp_dataset = pickle.loads(pickle.dumps(mp_dataset))
+                    if set_sharding_when is not None:
+                        mp_dataset.set_sharding(num_shards=2, shard_index=shard_index)
+                    assert mp_dataset.supports_sharding()
+                    tags.append([seq.seq_tag for seq in dummy_iter_dataset(mp_dataset)])
+                assert [len(t) for t in tags] == [12, 11], (sharding_method, set_sharding_when, tags)
+                assert sorted(tags[0] + tags[1]) == all_tags, (sharding_method, set_sharding_when, tags)
+
+
 def test_MultiProcDataset_meta():
     hdf_fn = generate_hdf_from_other({"class": "Task12AXDataset", "num_seqs": 23})
     meta_dataset_dict = {
