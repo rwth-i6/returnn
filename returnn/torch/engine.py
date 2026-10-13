@@ -270,7 +270,10 @@ class Engine(EngineBase):
             ):
                 supports_sharding = [None] * self._torch_distributed_ctx.size()
                 torch.distributed.all_gather_object(supports_sharding, dataset.supports_sharding())
-                if all(supports_sharding):
+                assert len(set(supports_sharding)) == 1, (
+                    f"{dataset}: supports_sharding differs across the ranks: {supports_sharding}"
+                )
+                if supports_sharding[0]:
                     dataset.set_sharding(
                         num_shards=self._torch_distributed_ctx.size(), shard_index=self._torch_distributed_ctx.rank()
                     )
