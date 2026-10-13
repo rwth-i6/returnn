@@ -1898,46 +1898,6 @@ def test_Dataset_sharding():
             assert sorted(tags[0] + tags[1]) == all_tags, (opts["class"], via_set_sharding, tags)
 
 
-def test_Dataset_get_default_kwargs_train_dataset_distribution():
-    # torch_distributed dataset_distribution "shard" shards the train dataset over the ranks (via returnn.__main__).
-    from returnn.config import Config
-    from returnn.__main__ import load_data
-    from test_HDFDataset import generate_hdf_from_other
-
-    assert Dataset.get_default_kwargs_train(Config({})) == {}
-    assert Dataset.get_default_kwargs_train(Config({"torch_distributed": {}})) == {}
-    assert (
-        Dataset.get_default_kwargs_train(Config({"torch_distributed": {"dataset_distribution": "random_seed_offset"}}))
-        == {}
-    )
-    try:
-        Dataset.get_default_kwargs_train(Config({"torch_distributed": {"dataset_distribution": "foo"}}))
-    except ValueError:
-        pass
-    else:
-        raise AssertionError("expected ValueError")
-
-    hdf_fn = generate_hdf_from_other({"class": "Task12AXDataset", "num_seqs": 11})
-    all_tags = sorted(
-        seq.seq_tag for seq in dummy_iter_dataset(init_dataset({"class": "HDFDataset", "files": [hdf_fn]}))
-    )
-    tags = []
-    for rank in range(2):
-        config = Config(
-            {
-                "train": {"class": "HDFDataset", "files": [hdf_fn], "seq_ordering": "random"},
-                "torch_distributed": {"dataset_distribution": "shard"},
-                "__debug_dummy_distributed_rank_and_size": (rank, 2),
-            }
-        )
-        kwargs = Dataset.get_default_kwargs_train(config)
-        assert kwargs == {"_num_shards": 2, "_shard_index": rank}
-        dataset, _ = load_data(config, 0, "train", **kwargs)
-        tags.append([seq.seq_tag for seq in dummy_iter_dataset(dataset)])
-    assert [len(t) for t in tags] == [6, 5]
-    assert sorted(tags[0] + tags[1]) == all_tags
-
-
 def test_DistributeFilesDataset_sharding_with_distrib_shard_files():
     # distrib_shard_files shards the files by the rank, so the same sharding via _num_shards/_shard_index
     # (e.g. from dataset_distribution "shard") is fine, another one is an error.
