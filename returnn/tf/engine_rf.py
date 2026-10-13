@@ -1076,6 +1076,7 @@ _TorchOnlyConfigOpts = {
     "torch_distributed": "tf_distributed",
     "torch_log_memory_usage": "tf_log_memory_usage",
     "torch_profile": "tf_profile",
+    "torch_wandb_config": None,
 }
 
 

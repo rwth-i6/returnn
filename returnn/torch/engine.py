@@ -166,6 +166,17 @@ class Engine(EngineBase):
         else:
             self._tensorboard_writer = None
 
+        wandb_config = config.typed_value("torch_wandb_config", None)
+        if wandb_config is not None:
+            # noinspection PyUnresolvedReferences,PyPackageRequirements
+            import wandb  # optional
+
+            self._wandb_log_every_n_train_steps: Optional[int] = wandb_config.pop("log_every_n_train_steps", 100)
+            self._wandb_run = wandb.init(**wandb_config)
+        else:
+            self._wandb_log_every_n_train_steps = None
+            self._wandb_run = None
+
         default_float_dtype = config.value("default_float_dtype", None)
         if default_float_dtype is not None:
             assert isinstance(default_float_dtype, str)
@@ -334,7 +345,9 @@ class Engine(EngineBase):
 
         :param error_occurred:
         """
-        del error_occurred  # all is released either way
+        if self._wandb_run is not None:
+            self._wandb_run.finish(exit_code=1 if error_occurred else 0)
+            self._wandb_run = None
         if self._graph_capture is not None:
             self._graph_capture.release()
             self._graph_capture = None
@@ -747,6 +760,16 @@ class Engine(EngineBase):
                         self._updater.get_effective_learning_rate(),
                         global_step=self.global_train_step,
                     )
+                if (
+                    self._wandb_log_every_n_train_steps is not None
+                    and self.global_train_step % self._wandb_log_every_n_train_steps == 0
+                ):
+                    self._wandb_log(
+                        {
+                            **{f"train_step/{key}": val for key, val in eval_info.items()},
+                            "train_step/learning_rate": self._updater.get_effective_learning_rate(),
+                        }
+                    )
 
                 if self._stop_on_nonfinite_train_score:
                     if any(np.isinf(v) or np.isnan(v) for v in accumulated_losses_dict.values()):
@@ -869,6 +892,7 @@ class Engine(EngineBase):
             self.learning_rate_control.save()
 
         print(f"Epoch {self.epoch}: Total train loss:", _format_score(dict(accumulated_losses_dict)), file=log.v3)
+        self._wandb_log({f"train/{k}": v for k, v in accumulated_losses_dict.items()})
 
         self._maybe_report_dev_memory_stats()
 
@@ -994,6 +1018,7 @@ class Engine(EngineBase):
                     self._tensorboard_writer.add_scalar(
                         f"{dataset_name}/{key}", val, global_step=self.global_train_step
                     )
+            self._wandb_log({f"{dataset_name}/{k}": v for k, v in accumulated_losses_dict.items()})
 
             self.learning_rate_control.set_epoch_error(
                 self.epoch, {f"{dataset_name}_loss_{k}": v for k, v in accumulated_losses_dict.items()}
@@ -1026,6 +1051,15 @@ class Engine(EngineBase):
             torch.distributed.broadcast_object_list(ls, src=0, device=torch.device("cpu"))
             assert isinstance(ls[0], self.learning_rate_control.EpochData)
             self.learning_rate_control.epoch_data[self.epoch] = ls[0]
+
+    def _wandb_log(self, metrics: Dict[str, float]):
+        """
+        Log to Weights & Biases, if enabled via torch_wandb_config.
+
+        :param metrics: additional metrics to log.
+        """
+        if self._wandb_run is not None:
+            self._wandb_run.log({**metrics, "epoch": self.epoch}, step=self.global_train_step)
 
     def _maybe_extend_losses_info(self, losses: NumbersDict) -> NumbersDict:
         """

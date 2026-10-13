@@ -1587,6 +1587,7 @@ _TorchOnlyConfigOpts = {
     "torch_distributed": "jax_distributed",
     "torch_log_memory_usage": "jax_log_memory_usage",
     "torch_profile": "jax_profile",
+    "torch_wandb_config": None,
 }
 
 
