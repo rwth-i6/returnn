@@ -2646,6 +2646,15 @@ def test_NemoSpeechDataset_nemo_sharding():
             seen_all.extend(seen)
     assert len(seen_all) == len(set(seen_all)), "shards not disjoint"
 
+    # The same sharding via the properties (dataset_distribution "shard") is fine, another one is an error.
+    NemoSpeechDataset(nemo_config=config, draws_per_epoch=400, _rank_and_size=(1, 2), _num_shards=2, _shard_index=1)
+    try:
+        NemoSpeechDataset(nemo_config=config, draws_per_epoch=400, _rank_and_size=(1, 2), _num_shards=3, _shard_index=1)
+    except ValueError as exc:
+        assert "clashes" in str(exc)
+    else:
+        raise AssertionError("expected ValueError")
+
     # NeMo map-style mode shards by sampler batches, not by records: not supported.
     dataset = NemoSpeechDataset(
         nemo_config={**config, "force_map_dataset": True}, draws_per_epoch=400, use_worker_procs=False
