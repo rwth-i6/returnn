@@ -22,7 +22,7 @@ and not listing legacy/deprecated parameters.
 Version History
 ---------------
 
-Behavior version 37 (2026-10-12)
+Behavior version 38 (2026-10-13)
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 With PyTorch distributed training (``torch_distributed``),
@@ -34,6 +34,18 @@ There is also the option ``eval_on_all_ranks: bool`` in ``torch_distributed``
 to override in both directions.
 
 See PR `#1855 <https://github.com/rwth-i6/returnn/pull/1855>`__.
+
+Behavior version 37 (2026-10-13)
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+PyTorch DataLoader with ``torch_dataloader_opts`` ``num_workers > 1``:
+every worker yields its own shard of the dataset,
+so the workers together yield every seq once per epoch.
+Before, every worker iterated over the whole dataset,
+so every seq came ``num_workers`` times per epoch.
+A dataset which does not support sharding raises an error now.
+
+There is also the global config option ``torch_dataloader_shard_workers: bool`` to override in both directions.
 
 Behavior version 36 (2026-10-10)
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~

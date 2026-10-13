@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 from typing import Any, Iterator, TYPE_CHECKING, List, Tuple, Dict, Optional
+import functools
 import multiprocessing
 import os
 import sys
+import threading
 import _setup_test_env  # noqa
 import unittest
 import numpy
@@ -1959,6 +1961,67 @@ def test_Dataset_supports_predefined_seq_order():
             assert not dataset.supports_predefined_seq_order(), dataset
 
 
+def _sharded_seq_tags(opts: Dict[str, Any], *, num_shards: int, via_set_sharding: bool) -> List[List[str]]:
+    tags = []
+    for shard_index in range(num_shards):
+        if via_set_sharding:
+            dataset = init_dataset(opts)
+            dataset.set_sharding(num_shards=num_shards, shard_index=shard_index)
+        else:
+            dataset = init_dataset({**opts, "_num_shards": num_shards, "_shard_index": shard_index})
+        tags.append([seq.seq_tag for seq in dummy_iter_dataset(dataset)])
+    return tags
+
+
+def test_Dataset_sharding():
+    # The shards together cover every seq once, with the sharding given at construction or via set_sharding,
+    # also through PostprocessingDataset and MetaDataset, which shard via the wrapped dataset.
+    from test_HDFDataset import generate_hdf_from_other
+
+    hdf_fn = generate_hdf_from_other({"class": "Task12AXDataset", "num_seqs": 11})
+    hdf_opts = {"class": "HDFDataset", "files": [hdf_fn], "seq_ordering": "random"}
+    all_tags = sorted(seq.seq_tag for seq in dummy_iter_dataset(init_dataset(hdf_opts)))
+    assert len(all_tags) == 11
+    for opts in [
+        hdf_opts,
+        {"class": "PostprocessingDataset", "dataset": hdf_opts, "map_seq": _post_process_map_seq_no_op},
+        {
+            "class": "MetaDataset",
+            "datasets": {"hdf": hdf_opts},
+            "data_map": {"data": ("hdf", "data"), "classes": ("hdf", "classes")},
+            "seq_order_control_dataset": "hdf",
+        },
+    ]:
+        for via_set_sharding in [False, True]:
+            tags = _sharded_seq_tags(opts, num_shards=2, via_set_sharding=via_set_sharding)
+            assert [len(t) for t in tags] == [6, 5], (opts["class"], via_set_sharding, tags)
+            assert sorted(tags[0] + tags[1]) == all_tags, (opts["class"], via_set_sharding, tags)
+
+
+def test_DistributeFilesDataset_sharding_with_distrib_shard_files():
+    # distrib_shard_files shards the files by the rank, so the same sharding via _num_shards/_shard_index
+    # (e.g. from dataset_distribution "shard") is fine, another one is an error.
+    from returnn.config import global_config_ctx, Config
+
+    files = _dfd_make_hdf_files(num_hdf_files=4)
+    opts = {
+        "class": "DistributeFilesDataset",
+        "files": files,
+        "get_sub_epoch_dataset": _dfd_get_sub_epoch_dataset,
+        "partition_epoch": 2,
+        "distrib_shard_files": True,
+    }
+    with global_config_ctx(Config({"__debug_dummy_distributed_rank_and_size": (1, 2)})):
+        dataset = init_dataset({**opts, "_num_shards": 2, "_shard_index": 1})
+        assert dataset._num_shards == 2 and dataset._shard_index == 1
+        try:
+            init_dataset({**opts, "_num_shards": 3, "_shard_index": 1})
+        except ValueError as exc:
+            assert "clashes" in str(exc)
+        else:
+            raise AssertionError("expected ValueError")
+
+
 def test_MultiEpochDataset():
     from returnn.datasets.meta import MultiEpochDataset
     from returnn.datasets.cached2 import CachedDataset2
@@ -2414,6 +2477,71 @@ def test_NemoSpeechDataset_metadata_no_audio():
         MonoCut.load_audio = orig_load_audio
 
 
+def _nemo_speech_blocking_worker_loop(shard_opts, conn, *, started, release, block_at: int, fail_at: int):
+    # The worker proc loop, where audio load number block_at waits for release, and load number fail_at raises.
+    # noinspection PyUnresolvedReferences,PyPackageRequirements
+    from lhotse.cut import MonoCut
+    from returnn.datasets import nemo_speech
+
+    orig_load_audio = MonoCut.load_audio
+    num_loads = 0
+
+    def _load_audio(*args, **kwargs):
+        nonlocal num_loads
+        num_loads += 1
+        if num_loads == block_at:
+            started.set()
+            assert release.wait(timeout=60)
+        if num_loads == fail_at:
+            raise ValueError("test: audio load failed")
+        return orig_load_audio(*args, **kwargs)
+
+    MonoCut.load_audio = _load_audio
+    nemo_speech._shard_worker_proc_loop(shard_opts, conn)
+
+
+def test_NemoSpeechDataset_worker_serves_buffered():
+    # The worker proc serves a buffered seq while it loads the audio of a later seq,
+    # and an error in that load reaches the parent.
+    _get_nemo_speech_data()  # first, skips if NeMo Speech is not available
+    from returnn.datasets import nemo_speech
+    from returnn.datasets.nemo_speech import NemoSpeechDataset
+
+    config = _get_nemo_speech_config(weights=[1.0, 2.0, 0.5])
+    opts = dict(nemo_config=config, draws_per_epoch=20)
+    ref = dummy_iter_dataset(NemoSpeechDataset(**opts, use_worker_procs=False), epoch=1)
+    started, release = nemo_speech._mp.Event(), nemo_speech._mp.Event()
+    orig_loop = nemo_speech._shard_worker_proc_loop
+    # Audio loads in the worker: seq 0 (requested), seq 1 (prefetch), seq 2 (prefetch, blocked), seq 3 (fails).
+    nemo_speech._shard_worker_proc_loop = functools.partial(
+        _nemo_speech_blocking_worker_loop, started=started, release=release, block_at=3, fail_at=4
+    )
+    dataset = None
+    try:
+        dataset = NemoSpeechDataset(**opts)
+        dataset.init_seq_order(epoch=1)
+        dataset.load_seqs(0, 1)
+        _nemo_speech_assert_same_seqs(dataset.added_data, ref[:1])
+        assert started.wait(timeout=60)
+        thread = threading.Thread(target=dataset.load_seqs, args=(1, 2))
+        thread.start()
+        thread.join(timeout=30)
+        assert not thread.is_alive(), "seq 1 not served while the worker loads seq 2"
+        _nemo_speech_assert_same_seqs(dataset.added_data, ref[1:2])
+        release.set()
+        try:
+            dataset.load_seqs(2, 4)
+        except EOFError:
+            pass  # worker proc died
+        else:
+            raise AssertionError("worker error not propagated")
+    finally:
+        nemo_speech._shard_worker_proc_loop = orig_loop
+        release.set()
+        if dataset is not None:
+            dataset.finish_epoch(free_resources=True)
+
+
 def _nemo_speech_high_quality(cut, **_kwargs) -> bool:
     return cut.custom.get("high_quality", True)  # missing: kept
 
@@ -2581,6 +2709,15 @@ def test_NemoSpeechDataset_nemo_sharding():
             assert seen == expected
             seen_all.extend(seen)
     assert len(seen_all) == len(set(seen_all)), "shards not disjoint"
+
+    # The same sharding via the properties (dataset_distribution "shard") is fine, another one is an error.
+    NemoSpeechDataset(nemo_config=config, draws_per_epoch=400, _rank_and_size=(1, 2), _num_shards=2, _shard_index=1)
+    try:
+        NemoSpeechDataset(nemo_config=config, draws_per_epoch=400, _rank_and_size=(1, 2), _num_shards=3, _shard_index=1)
+    except ValueError as exc:
+        assert "clashes" in str(exc)
+    else:
+        raise AssertionError("expected ValueError")
 
     # NeMo map-style mode shards by sampler batches, not by records: not supported.
     dataset = NemoSpeechDataset(

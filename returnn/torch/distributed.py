@@ -8,7 +8,7 @@ import logging
 import os
 import socket
 from datetime import timedelta
-from typing import Optional, Any, Dict
+from typing import Optional, Union, Any, Dict
 
 import torch
 from torch.nn.parallel import DistributedDataParallel
@@ -78,6 +78,8 @@ class DistributedContext:
         if self._sync_complete_frac is None:
             self._sync_complete_frac = BehaviorVersion.get() >= 33
 
+        self._dataset_distribution = get_dataset_distribution(self._opts)
+
         self._eval_on_all_ranks: Optional[bool] = self._opts.get("eval_on_all_ranks", None)
         assert self._eval_on_all_ranks is None or isinstance(self._eval_on_all_ranks, bool)
 
@@ -121,16 +123,20 @@ class DistributedContext:
         """param sync step"""
         return self._param_sync_step
 
+    def dataset_distribution(self) -> str:
+        """:return: "random_seed_offset" or "shard", see :func:`get_dataset_distribution`"""
+        return self._dataset_distribution
+
     def eval_on_all_ranks(self) -> bool:
         """
         :return: whether an eval dataset is split over all ranks, each rank evaluating its share,
             instead of being evaluated on rank 0 alone while the other ranks wait.
             Only datasets which can report their seq order are split, see the torch engine.
-            Option ``eval_on_all_ranks: bool``, else behavior_version >= 37.
+            Option ``eval_on_all_ranks: bool``, else behavior_version >= 38.
         """
         if self._eval_on_all_ranks is not None:
             return self._eval_on_all_ranks
-        return BehaviorVersion.get() >= 37
+        return BehaviorVersion.get() >= 38
 
     def maybe_make_distributed_module(self, module: torch.nn.Module) -> Optional[DistributedDataParallel]:
         """
@@ -238,6 +244,23 @@ def get_ctx(config: Optional[Config] = None) -> Optional[DistributedContext]:
     assert isinstance(opts, dict)
     _ctx = DistributedContext(opts)
     return _ctx
+
+
+def get_dataset_distribution(opts: Union[Dict[str, Any], CollectionReadCheckCovered]) -> str:
+    """
+    :param opts: the ``torch_distributed`` config options
+    :return: ``dataset_distribution`` option: how the train dataset is distributed over the ranks.
+        "random_seed_offset" (default): every rank goes through all the data, with its own random seed.
+        "shard": every rank gets its own shard of the data (``Dataset.get_default_kwargs_train``),
+        with the same random seed on every rank.
+    """
+    dataset_distribution = opts.get("dataset_distribution", "random_seed_offset")
+    if dataset_distribution not in ("random_seed_offset", "shard"):
+        raise ValueError(
+            f"torch_distributed dataset_distribution: expected 'random_seed_offset' or 'shard',"
+            f" got {dataset_distribution!r}"
+        )
+    return dataset_distribution
 
 
 @torch.no_grad()

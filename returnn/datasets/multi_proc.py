@@ -4,7 +4,7 @@ Multi-processing dataset
 
 from __future__ import annotations
 from collections import deque
-from typing import Optional, Any, Dict, List
+from typing import Optional, Any, Dict, List, Tuple
 import sys
 import gc
 import multiprocessing as mp
@@ -68,6 +68,7 @@ class MultiProcDataset(CachedDataset2):
         self._sharding_method = sharding_method
         self._data_keys = None
         self._data_dtypes: Optional[Dict[str, str]] = None
+        self._supports_sharding: Optional[bool] = None
         self._num_seqs = None
         self._total_num_seqs = None
         self._all_tags = None
@@ -88,12 +89,44 @@ class MultiProcDataset(CachedDataset2):
             self.labels = _meta_info_cache["labels"]
             self._data_keys = _meta_info_cache["data_keys"]
             self._data_dtypes = _meta_info_cache["data_dtypes"]
+            self._supports_sharding = _meta_info_cache["supports_sharding"]
 
     def initialize(self):
         """init"""
         if not self.num_outputs:
             self._lazy_init()
         super().initialize()
+
+    def supports_sharding(self) -> bool:
+        """:return: whether the wrapped dataset supports sharding"""
+        if self._supports_sharding is None:
+            self._lazy_init()
+            assert self._supports_sharding is not None
+        return self._supports_sharding
+
+    def set_sharding(self, *, num_shards: int, shard_index: int):
+        """set sharding, also for the wrapped dataset in the workers"""
+        super().set_sharding(num_shards=num_shards, shard_index=shard_index)
+        self.dataset = {**self.dataset, "_num_shards": num_shards, "_shard_index": shard_index}
+        if self._worker_procs:
+            for i, worker_conn in enumerate(self._worker_parent_conns):
+                num_shards_, shard_index_ = self._get_worker_sharding(i)
+                worker_conn.send(("set_sharding", {"num_shards": num_shards_, "shard_index": shard_index_}))
+            for worker_conn in self._worker_parent_conns:
+                msg, _ = worker_conn.recv()
+                assert msg == "set_sharding"
+
+    def _get_worker_sharding(self, worker_index: int) -> Tuple[int, int]:
+        """
+        :return: (num_shards, shard_index) of the wrapped dataset in the worker.
+            With sharding_method "dedicated", every worker yields its own shard of our shard.
+        """
+        if self._sharding_method == "dedicated":
+            return self._num_shards * self.num_workers, self._shard_index * self.num_workers + worker_index
+        elif self._sharding_method == "seq_order":
+            return self._num_shards, self._shard_index
+        else:
+            raise ValueError(f"{self}: unknown sharding_method: {self._sharding_method}")
 
     @property
     def _meta_info_cache(self):
@@ -107,6 +140,7 @@ class MultiProcDataset(CachedDataset2):
             "all_tags": self._all_tags,
             "data_keys": self._data_keys,
             "data_dtypes": self._data_dtypes,
+            "supports_sharding": self._supports_sharding,
         }
 
     def _lazy_init(self):
@@ -145,7 +179,8 @@ class MultiProcDataset(CachedDataset2):
                     self._sharding_method,
                 )
             elif self._sharding_method == "dedicated":
-                sub_dataset = {**self.dataset, "_num_shards": self.num_workers, "_shard_index": i}
+                num_shards, shard_index = self._get_worker_sharding(i)
+                sub_dataset = {**self.dataset, "_num_shards": num_shards, "_shard_index": shard_index}
                 args = (
                     i,
                     sub_dataset,
@@ -183,6 +218,8 @@ class MultiProcDataset(CachedDataset2):
         assert msg == "num_outputs"
         msg, self.labels = self._seq_order_proc_parent_conn.recv()
         assert msg == "labels"
+        msg, self._supports_sharding = self._seq_order_proc_parent_conn.recv()
+        assert msg == "supports_sharding"
 
     def _lazy_init_data_keys(self):
         if self._data_keys is not None:
@@ -310,6 +347,16 @@ class MultiProcDataset(CachedDataset2):
                     parent_conn.send(("num_inputs", dataset.num_inputs))
                     parent_conn.send(("num_outputs", dataset.num_outputs))
                     parent_conn.send(("labels", dataset.labels))
+                    parent_conn.send(("supports_sharding", dataset.supports_sharding()))
+                elif msg == "set_sharding":
+                    dataset_dict = {
+                        **dataset_dict,
+                        "_num_shards": kwargs["num_shards"],
+                        "_shard_index": kwargs["shard_index"],
+                    }
+                    if dataset is not None:
+                        dataset.set_sharding(**kwargs)
+                    parent_conn.send(("set_sharding", None))
                 elif msg == "get_total_num_seqs":
                     assert dataset
                     try:
