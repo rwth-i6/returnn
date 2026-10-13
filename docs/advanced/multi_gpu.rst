@@ -43,7 +43,9 @@ and :class:`DistributeFilesDataset`, which shards the files).
 
 Independent of that, with ``torch_dataloader_opts = {"num_workers": N}`` and ``N > 1``,
 the dataset is sharded over the DataLoader workers of a rank in the same way,
-so the workers together yield every seq once.
+so the workers together yield every seq once
+(``torch_dataloader_shard_workers``, default since behavior version 37;
+before, every worker yielded all the data).
 
 As an efficient dataset for large scale training,
 see :class:`DistributeFilesDataset`.
