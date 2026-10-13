@@ -298,8 +298,8 @@ class Engine(EngineBase):
                 float_dtype=self._default_float_dtype,
                 params=list(self._pt_model.parameters()),
                 run_step=(
-                    lambda extern_data_, *, step: self._run_step(
-                        extern_data_, train_flag=True, train_func=True, step=step
+                    lambda extern_data_, *, train_flag, step: self._run_step(
+                        extern_data_, train_flag=train_flag, train_func=True, step=step
                     )
                 ),
                 post_step=lambda: self._updater.step(grad_scaler=None),
@@ -896,7 +896,8 @@ class Engine(EngineBase):
         """
         Runs model on all eval datasets and calculates the loss.
         """
-        if self._graph_capture is not None:
+        eval_captured = self._graph_capture is not None and self._graph_capture.captures_eval
+        if self._graph_capture is not None and not eval_captured:
             # eval runs the plain dynamic-shape path; train_epoch re-enables
             self._graph_capture.set_bound_shapes_enabled(False)
         self._pt_model.eval()
@@ -942,18 +943,22 @@ class Engine(EngineBase):
                     complete_frac = float(extern_data_raw["complete_frac"])
                     num_seqs = int(extern_data_raw["num_seqs"])
 
-                    extern_data = extern_data_util.raw_dict_to_extern_data(
-                        extern_data_raw,
-                        extern_data_template=self.extern_data,
-                        device=self._device,
-                        float_dtype=self._default_float_dtype,
-                        with_eval_targets=True,
-                    )
-
-                    self._run_step(extern_data, train_func=True)
+                    if eval_captured:
+                        # compiled / captured eval step, see returnn.torch.util.graph_capture
+                        train_ctx = self._graph_capture.run_eval_step(
+                            extern_data_raw, global_train_step=self.global_train_step
+                        )
+                    else:
+                        extern_data = extern_data_util.raw_dict_to_extern_data(
+                            extern_data_raw,
+                            extern_data_template=self.extern_data,
+                            device=self._device,
+                            float_dtype=self._default_float_dtype,
+                            with_eval_targets=True,
+                        )
+                        self._run_step(extern_data, train_func=True)
+                        train_ctx = rf.get_run_ctx()
                     step_end_time = time.monotonic()
-
-                    train_ctx = rf.get_run_ctx()
 
                     losses_dict = NumbersDict(
                         {
