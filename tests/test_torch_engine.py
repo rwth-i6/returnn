@@ -4,7 +4,7 @@ Tests for PyTorch engine.
 
 from __future__ import annotations
 import _setup_test_env  # noqa
-from typing import Optional, Any, Dict, Tuple, List
+from typing import Optional, Any, Dict, Tuple, List, Iterator
 import contextlib
 import copy
 import functools
@@ -26,7 +26,7 @@ from returnn.torch.updater import Updater
 import returnn.frontend as rf
 from returnn.forward_iface import ForwardCallbackIface
 from returnn.datasets import init_dataset
-from returnn.datasets.generating import StaticDataset, Task12AXDataset
+from returnn.datasets.generating import Task12AXDataset
 
 
 # must be in the global scope due to pickling
@@ -3717,10 +3717,10 @@ def _eval_on_all_ranks_train_step(*, model: TrainTestModel, extern_data: TensorD
     TrainTestModel.train_step(model=model, extern_data=extern_data, **kwargs)
 
 
-class _StaticDatasetWithoutPredefinedSeqOrder(StaticDataset):
-    def supports_predefined_seq_order(self) -> bool:
-        """:return: False, so that it cannot be split over the ranks"""
-        return False
+def _eval_on_all_ranks_drop_even_lens(input_iter: Iterator[TensorDict], **_kwargs: Any) -> Iterator[TensorDict]:
+    for seq in input_iter:
+        if seq["data"].raw_tensor.shape[0] % 2 == 1:
+            yield seq
 
 
 def _eval_on_all_ranks_run(
@@ -3731,19 +3731,35 @@ def _eval_on_all_ranks_run(
     train_seq_ordering: str = "default",
     num_dev_seqs: int = len(_EVAL_ON_ALL_RANKS_DEV_SEQ_LENS),
     dev_seq_ordering: str = "default",
-    dev_meta: bool = False,
-    dev_predefined_seq_order: bool = True,
+    dev_sharding: bool = True,
+    dev_drop_even_lens: bool = False,
+    dev_via_eval_datasets: bool = False,
     calculate_exp_loss: bool = False,
     eval_before_train: bool = False,
-    eval_again: bool = False,
     behavior_version: Optional[int] = None,
 ) -> Dict[str, Any]:
+    from returnn.__main__ import load_data
+    from returnn.datasets import Dataset
+    from test_HDFDataset import generate_hdf_from_other
+
     rnd = numpy.random.RandomState(42)
     # Every seq has its own length, so the lengths a rank saw tell which dev seqs it evaluated.
     seqs = [
         {"data": rnd.normal(size=(n, 9)).astype("float32"), "classes": rnd.randint(0, 2, size=(n,)).astype("int32")}
         for n in _EVAL_ON_ALL_RANKS_DEV_SEQ_LENS
     ]
+    static_opts = {"class": "StaticDataset", "input_dim": 9, "output_dim": 2}
+    dev_opts = {**static_opts, "data": seqs[:num_dev_seqs]}
+    if dev_sharding:
+        # HDFDataset supports sharding, StaticDataset does not.
+        dev_opts = {"class": "HDFDataset", "files": [generate_hdf_from_other(dev_opts, use_cache=False)]}
+    dev_opts["seq_ordering"] = dev_seq_ordering
+    if dev_drop_even_lens:
+        dev_opts = {
+            "class": "PostprocessingDataset",
+            "dataset": dev_opts,
+            "map_seq_stream": _eval_on_all_ranks_drop_even_lens,
+        }
     config = Config(
         dict(
             task="train",
@@ -3759,50 +3775,20 @@ def _eval_on_all_ranks_run(
             num_epochs=num_epochs,
             calculate_exp_loss=calculate_exp_loss,
             torch_dataloader_opts={"num_workers": 0},
+            **({"eval_datasets": {"dev": dev_opts}} if dev_via_eval_datasets else {"dev": dev_opts}),
             **({"torch_distributed": torch_distributed} if torch_distributed is not None else {}),
             **({"behavior_version": behavior_version} if behavior_version is not None else {}),
         )
     )
-    dev_opts = {
-        "class": "StaticDataset" if dev_predefined_seq_order else _StaticDatasetWithoutPredefinedSeqOrder,
-        "data": seqs[:num_dev_seqs],
-        "input_dim": 9,
-        "output_dim": 2,
-        "seq_ordering": dev_seq_ordering,
-    }
-    if dev_meta:
-        dev_opts = {
-            "class": "MetaDataset",
-            "datasets": {"static": dev_opts},
-            "data_map": {"data": ("static", "data"), "classes": ("static", "classes")},
-            "seq_order_control_dataset": "static",
-        }
-    # The datasets are created under the config, as in a real run,
-    # where each rank's datasets get their own random seed offset.
     with global_config_ctx(config):
-        train_dataset = init_dataset(
-            {
-                "class": "StaticDataset",
-                "data": seqs[:12],
-                "input_dim": 9,
-                "output_dim": 2,
-                "seq_ordering": train_seq_ordering,
-            }
-        )
-        train_dataset.init_seq_order(epoch=1)
-        dev_dataset = init_dataset(dev_opts)
-        dev_dataset.init_seq_order(epoch=1)
+        # The engine sets the behavior version of the config.
         engine = Engine(config=config)
-        # init_seq_order calls on the dev dataset while the engine sets up
-        dev_init_seq_order, dev_inits_at_startup = dev_dataset.init_seq_order, []
-
-        def _dev_init_seq_order(*args, **kwargs):
-            dev_inits_at_startup.append(kwargs)
-            return dev_init_seq_order(*args, **kwargs)
-
-        dev_dataset.init_seq_order = _dev_init_seq_order
+        # The datasets are created under the config (as in returnn.__main__.init_data),
+        # which defines their random seed offset on this rank.
+        train_dataset = init_dataset({**static_opts, "data": seqs[:12], "seq_ordering": train_seq_ordering})
+        train_dataset.init_seq_order(epoch=1)
+        dev_dataset, _ = load_data(config, 0, "dev", **Dataset.get_default_kwargs_eval(config=config))
         engine.init_train_from_config(train_data=train_dataset, dev_data=dev_dataset)
-        del dev_dataset.init_seq_order
         # number of values this rank keeps aside for each split eval, see Engine._take_rank0_model_state
         own_model_state_sizes = []
         take_rank0_model_state = engine._take_rank0_model_state
@@ -3820,17 +3806,11 @@ def _eval_on_all_ranks_run(
             engine.eval_model()
         else:
             engine.train()
-        evals = [list(_eval_on_all_ranks_seq_lens)]
-        if eval_again:
-            del _eval_on_all_ranks_seq_lens[:]
-            engine.eval_model()
-            evals.append(list(_eval_on_all_ranks_seq_lens))
         return {
-            "evals": evals,
+            "seq_lens": list(_eval_on_all_ranks_seq_lens),
             "errors": {epoch: dict(data.error) for epoch, data in engine.learning_rate_control.epoch_data.items()},
             "param_sum": float(sum(param.detach().double().sum() for param in engine._pt_model.parameters())),
             "own_model_state_sizes": own_model_state_sizes,
-            "dev_inits_at_startup": len(dev_inits_at_startup),
         }
 
 
@@ -3890,10 +3870,8 @@ def _eval_on_ranks(*, world_size: int = 2, **run_kwargs) -> List[Dict[str, Any]]
     return results
 
 
-def _eval_on_all_ranks_seq_lens_per_rank(
-    results: List[Dict[str, Any]], *, epoch: int, eval_idx: int = 0
-) -> List[List[int]]:
-    return [sorted(seq_len for e, seq_len in result["evals"][eval_idx] if e == epoch) for result in results]
+def _eval_on_all_ranks_seq_lens_per_rank(results: List[Dict[str, Any]], *, epoch: int) -> List[List[int]]:
+    return [sorted(seq_len for e, seq_len in result["seq_lens"] if e == epoch) for result in results]
 
 
 def _assert_eval_split(rank_seq_lens: List[List[int]], all_seq_lens: List[int]):
@@ -3914,29 +3892,32 @@ def _assert_eval_scores(results: List[Dict[str, Any]], reference: Dict[str, Any]
 
 
 def test_torch_engine_eval_on_all_ranks():
-    # With eval_on_all_ranks, the dev seqs are split over the ranks in every epoch,
-    # also with a random seq order, which is seeded per rank (rank 0's order is split then),
-    # also with DistributedDataParallel on CPU,
+    # With eval_on_all_ranks, every rank evaluates its shard of the dev seqs in every epoch,
+    # also with a random seq order, for an entry of eval_datasets, with DistributedDataParallel on CPU,
+    # and with a stream which drops seqs,
     # and every rank gets the score of one process over the whole dev set.
-    # With it off, or for a dataset without a predefined seq order, rank 0 evaluates them alone.
-    reference = _eval_on_all_ranks_run()
+    # With it off, or for a dataset without sharding support, rank 0 evaluates them alone.
     for opts, run_kwargs, split in [
         ({"eval_on_all_ranks": True}, {}, True),
         ({"eval_on_all_ranks": False}, {}, False),
         ({"eval_on_all_ranks": True}, {"dev_seq_ordering": "random"}, True),
+        ({"eval_on_all_ranks": True}, {"dev_seq_ordering": "random", "dev_via_eval_datasets": True}, True),
         ({"eval_on_all_ranks": True, "reduce_type": "grad"}, {}, True),
-        ({"eval_on_all_ranks": True}, {"dev_predefined_seq_order": False}, False),
+        ({"eval_on_all_ranks": True}, {"dev_sharding": False}, False),
+        ({"eval_on_all_ranks": True}, {"dev_drop_even_lens": True, "dev_via_eval_datasets": True}, True),
     ]:
+        seq_lens = _EVAL_ON_ALL_RANKS_DEV_SEQ_LENS
+        if run_kwargs.get("dev_drop_even_lens"):
+            seq_lens = [seq_len for seq_len in seq_lens if seq_len % 2 == 1]
+        reference = _eval_on_all_ranks_run(**run_kwargs)
         results = _eval_on_ranks(torch_distributed={**_EVAL_ON_ALL_RANKS_DIST_OPTS, **opts}, **run_kwargs)
-        # The engine asks the dataset whether it can be split, without initializing it.
-        assert [result["dev_inits_at_startup"] for result in results] == [0, 0]
         for epoch in (1, 2):
             rank_seq_lens = _eval_on_all_ranks_seq_lens_per_rank(results, epoch=epoch)
             print(f"{opts} {run_kwargs} epoch {epoch}: dev seq lens per rank:", rank_seq_lens)
             if split:
-                _assert_eval_split(rank_seq_lens, _EVAL_ON_ALL_RANKS_DEV_SEQ_LENS)
+                _assert_eval_split(rank_seq_lens, seq_lens)
             else:
-                assert rank_seq_lens == [_EVAL_ON_ALL_RANKS_DEV_SEQ_LENS, []]
+                assert rank_seq_lens == [seq_lens, []]
         _assert_eval_scores(results, reference, epochs=(1, 2), keys=("dev_loss_ce", "dev_loss_fer"))
         # Averaged grads keep the params identical, so rank 1 keeps none aside (and this model has no buffers).
         assert results[1]["own_model_state_sizes"] == ([0, 0] if split else [])
@@ -3981,22 +3962,6 @@ def test_torch_engine_eval_on_all_ranks_empty_share():
     )
     assert _eval_on_all_ranks_seq_lens_per_rank(results, epoch=1) == [[3], []]
     _assert_eval_scores(results, reference, epochs=(1,), keys=("dev_loss_ce", "dev_loss_ce:exp", "dev_loss_fer"))
-
-
-def test_torch_engine_eval_on_all_ranks_repeated_eval():
-    # A second eval in the same epoch must split the same full seq order again.
-    # MetaDataset keeps its current seq order when the epoch does not change
-    # and it did not load beyond its first seq, as with one dev seq per rank here.
-    results = _eval_on_ranks(
-        torch_distributed={**_EVAL_ON_ALL_RANKS_DIST_OPTS, "eval_on_all_ranks": True},
-        dev_meta=True,
-        num_dev_seqs=2,
-        eval_again=True,
-    )
-    for eval_idx in (0, 1):
-        rank_seq_lens = _eval_on_all_ranks_seq_lens_per_rank(results, epoch=2, eval_idx=eval_idx)
-        print(f"eval {eval_idx}: dev seq lens per rank:", rank_seq_lens)
-        _assert_eval_split(rank_seq_lens, _EVAL_ON_ALL_RANKS_DEV_SEQ_LENS[:2])
 
 
 def _build_cuda_graph_train_config_and_dataset(

@@ -53,9 +53,9 @@ see :class:`DistributeFilesDataset`.
 With ``"eval_on_all_ranks": True`` (default since behavior version 39),
 the evaluation is split over the ranks.
 Otherwise, every eval dataset is evaluated on rank 0 alone, while the other ranks wait.
-Every eval dataset which supports a predefined seq order (:func:`Dataset.supports_predefined_seq_order`)
-is then evaluated in shares.
-Rank 0 takes the dataset's seq order of the epoch and every rank evaluates every n-th seq of it.
+Every eval dataset which supports sharding (:func:`Dataset.supports_sharding`)
+is then sharded over the ranks, and every rank evaluates its own shard.
+The eval datasets get the same random seed on every rank for this.
 The loss sums are gathered at the end, so every rank gets the same scores.
 All ranks evaluate rank 0's parameters and buffers for this,
 so the scores belong to the model which rank 0 saves.
