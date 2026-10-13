@@ -142,6 +142,12 @@ optimizer
     A dictionary with a ``class`` entry for the optimizer.
     Other keys are passed as parameters to the constructor of the optimizer class.
 
+    With ``weight_decay`` set (PyTorch backend), biases and the params of the module types
+    in ``weight_decay_modules_blacklist`` get no weight decay,
+    since behavior version 37 also all params with at most one dim.
+    The default blacklist is ``["torch.nn.LayerNorm", "torch.nn.Embedding"]``,
+    since behavior version 37 ``["torch.nn.Embedding", "rf.Embedding"]``.
+
 relative_error_div_by_old
     If true the relative error is computed by dividing the error difference by the old error value instead of the
     current error value.
