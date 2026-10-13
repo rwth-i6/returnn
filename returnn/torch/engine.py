@@ -79,11 +79,8 @@ class Engine(EngineBase):
         self.extern_data: Optional[TensorDict] = None
         self._train_dataloader: Optional[Union[DataLoader, PinMemoryDataLoader]] = None
         self._eval_dataloaders: Dict[str, Union[DataLoader, PinMemoryDataLoader]] = {}
-        # Eval datasets which are split over all ranks, see eval_model:
-        # the shared list with this rank's share of the seq order, which its data loader reads,
-        # and the full seq order (from rank 0) of the last evaluated epoch.
-        self._eval_seq_order_shares: Dict[str, Any] = {}
-        self._eval_seq_orders: Dict[str, Tuple[int, List[int]]] = {}
+        # Names of the eval datasets which are split over all ranks, every rank evaluating its shard, see eval_model.
+        self._eval_datasets_on_all_ranks: Set[str] = set()
         self._hot_reloader = ConfigHotReloader(config.typed_dict) if should_use_hot_reloading(config=config) else None
 
         self._start_epoch: Optional[int] = None
@@ -240,38 +237,36 @@ class Engine(EngineBase):
             self.eval_datasets["eval"] = eval_data
         if config.has("eval_datasets"):
             for dataset_name, dataset_opts in config.typed_value("eval_datasets", {}).items():
-                self.eval_datasets[dataset_name] = init_dataset(dataset_opts, default_kwargs={"name": dataset_name})
+                self.eval_datasets[dataset_name] = init_dataset(
+                    dataset_opts,
+                    default_kwargs={"name": dataset_name, **Dataset.get_default_kwargs_eval_on_all_ranks(config)},
+                )
 
         self._train_dataloader = self._create_data_loader(train_data, train=True) if train_data else None
-        self._eval_seq_order_shares.clear()
-        self._eval_seq_orders.clear()
+        self._eval_datasets_on_all_ranks.clear()
         for dataset_name, dataset in self.eval_datasets.items():
-            eval_seq_order_share = None
             if (
                 self._torch_distributed_ctx
                 and self._torch_distributed_ctx.size() > 1
                 and self._torch_distributed_ctx.eval_on_all_ranks()
             ):
-                supports_predefined_seq_order = [None] * self._torch_distributed_ctx.size()
-                torch.distributed.all_gather_object(
-                    supports_predefined_seq_order, dataset.supports_predefined_seq_order()
-                )
-                if all(supports_predefined_seq_order):
-                    eval_seq_order_share = self._mp_manager.list()
-                    self._eval_seq_order_shares[dataset_name] = eval_seq_order_share
+                supports_sharding = [None] * self._torch_distributed_ctx.size()
+                torch.distributed.all_gather_object(supports_sharding, dataset.supports_sharding())
+                if all(supports_sharding):
+                    dataset.set_sharding(
+                        num_shards=self._torch_distributed_ctx.size(), shard_index=self._torch_distributed_ctx.rank()
+                    )
+                    self._eval_datasets_on_all_ranks.add(dataset_name)
                     print(
                         f"Eval dataset {dataset_name!r} is split over {self._torch_distributed_ctx.size()} ranks.",
                         file=log.v3,
                     )
                 else:
                     print(
-                        f"Eval dataset {dataset_name!r} does not support a predefined seq order,"
-                        " it is evaluated on rank 0 only.",
+                        f"Eval dataset {dataset_name!r} does not support sharding, it is evaluated on rank 0 only.",
                         file=log.v3,
                     )
-            self._eval_dataloaders[dataset_name] = self._create_data_loader(
-                dataset, train=False, eval_seq_order_share=eval_seq_order_share
-            )
+            self._eval_dataloaders[dataset_name] = self._create_data_loader(dataset, train=False)
 
         self._start_epoch = self.get_train_start_epoch(self.config)
         self._final_epoch = self.config_get_final_epoch(self.config)
@@ -944,18 +939,15 @@ class Engine(EngineBase):
         # A dataset which is split over the ranks must score the model which rank 0 saves.
         # Every rank keeps its own training state aside meanwhile.
         own_model_state = None
-        if any(name in self._eval_seq_order_shares for name in dataset_names):
+        if any(name in self._eval_datasets_on_all_ranks for name in dataset_names):
             own_model_state = self._take_rank0_model_state()
 
         for dataset_name in dataset_names:
-            dataset = self.eval_datasets[dataset_name]
             data_loader = self._eval_dataloaders[dataset_name]
-            # Split over all ranks: every rank evaluates its share of the seqs (see _put_eval_seq_order_share),
+            # Split over all ranks: every rank evaluates its shard of the dataset (see init_train_from_config),
             # and the sums are gathered at the end.
             # Otherwise, only rank 0 evaluates the dataset.
-            on_all_ranks = dataset_name in self._eval_seq_order_shares
-            if on_all_ranks:
-                self._put_eval_seq_order_share(dataset_name, dataset)
+            on_all_ranks = dataset_name in self._eval_datasets_on_all_ranks
 
             if not on_all_ranks and self._torch_distributed_ctx and self._torch_distributed_ctx.rank() != 0:
                 # We need to make sure the data loader iterator was created for proper synchronization.
@@ -1035,7 +1027,7 @@ class Engine(EngineBase):
 
             score_keys = None
             if on_all_ranks:
-                # A rank with an empty share ran no step here, so the score keys come along with the sums.
+                # A rank with an empty shard ran no step here, so the score keys come along with the sums.
                 score_keys = set()
                 if step_idx > 0:
                     score_keys = {name for name, loss in rf.get_run_ctx().losses.items() if not loss.as_error}
@@ -1092,8 +1084,8 @@ class Engine(EngineBase):
         self, losses: NumbersDict, inv_norm_factors: NumbersDict, num_steps: int, score_keys: Set[str]
     ) -> Tuple[NumbersDict, NumbersDict, int, Set[str]]:
         """
-        :param losses: summed losses of the local share of an eval dataset
-        :param inv_norm_factors: summed inverse norm factors of the local share
+        :param losses: summed losses of the local shard of an eval dataset
+        :param inv_norm_factors: summed inverse norm factors of the local shard
         :param num_steps: number of local steps
         :param score_keys: names of the losses which are scores, not errors (empty without a local step)
         :return: the sums over all ranks, and the union of the score keys.
@@ -1108,36 +1100,6 @@ class Engine(EngineBase):
             num_steps += part_num_steps
             score_keys |= part_score_keys
         return losses, inv_norm_factors, num_steps, score_keys
-
-    def _put_eval_seq_order_share(self, dataset_name: str, dataset: Dataset):
-        """
-        Puts every n-th seq of rank 0's seq order of this epoch into the shared list which this rank's data loader
-        reads (see :class:`returnn_dataset_wrapper.ReturnnDatasetResetMpSharedSeqOrderCallback`).
-        The interleaving keeps the shares balanced when the seq order is sorted by length.
-        The ranks do not need to agree on their own seq orders (e.g. a random seq ordering is seeded per rank).
-        Rank 0 takes the order once per epoch, so a repeated eval in the same epoch gets the same shares,
-        also from a dataset which keeps its current (e.g. already split) order when the epoch does not change.
-
-        :param dataset_name:
-        :param dataset:
-        """
-        epoch_and_seq_order = self._eval_seq_orders.get(dataset_name)
-        if epoch_and_seq_order is None or epoch_and_seq_order[0] != self.epoch:
-            seq_order = None
-            if self._torch_distributed_ctx.rank() == 0:
-                dataset.init_seq_order(epoch=self.epoch)
-                seq_order = [int(idx) for idx in dataset.get_current_seq_order()]
-                data_loader = self._eval_dataloaders[dataset_name]
-                if isinstance(data_loader, PinMemoryDataLoader):
-                    data_loader = data_loader.data_loader
-                if data_loader.num_workers > 0:
-                    dataset.finish_epoch(free_resources=True)
-            ls = [seq_order]
-            torch.distributed.broadcast_object_list(ls, src=0, device=torch.device("cpu"))
-            epoch_and_seq_order = self._eval_seq_orders[dataset_name] = (self.epoch, ls[0])
-        _, seq_order = epoch_and_seq_order
-        rank, size = self._torch_distributed_ctx.rank(), self._torch_distributed_ctx.size()
-        self._eval_seq_order_shares[dataset_name][:] = seq_order[rank::size]
 
     def _model_state_tensors(self) -> List[torch.Tensor]:
         """
@@ -1200,35 +1162,23 @@ class Engine(EngineBase):
         return losses
 
     def _create_data_loader(
-        self,
-        dataset: Dataset,
-        *,
-        train: bool = False,
-        dataset_init_epoch: bool = True,
-        eval_seq_order_share: Optional[Any] = None,
+        self, dataset: Dataset, *, train: bool = False, dataset_init_epoch: bool = True
     ) -> Union[DataLoader, PinMemoryDataLoader]:
         """
         :param dataset: RETURNN dataset
         :param train: Train might use a separate batch size in the config (batch_size_train vs batch_size_dev).
             Also online_shuffle_batches is only used in training.
         :param dataset_init_epoch: Whether to call dataset.init_seq_order(epoch=self.epoch) or not.
-        :param eval_seq_order_share: shared list (multiprocessing manager) with this rank's share of the seq order,
-            for an eval dataset which is split over the ranks, see :func:`_put_eval_seq_order_share`
         :return: PyTorch data loader created from given RETURNN dataset,
             maybe wrapped for the background pinning, see :class:`PinMemoryDataLoader`
         """
         # Make sure that _dataset_reset does not keep a ref to `self`,
         # otherwise it would trigger to pickle `self` and all its members.
-        if dataset_init_epoch and eval_seq_order_share is not None:
-            dataset_reset = returnn_dataset_wrapper.ReturnnDatasetResetMpSharedSeqOrderCallback(
-                dataset=dataset, epoch_mp_shared=self._epoch_mp_shared, seq_order_mp_shared=eval_seq_order_share
-            )
-        elif dataset_init_epoch:
+        if dataset_init_epoch:
             dataset_reset = returnn_dataset_wrapper.ReturnnDatasetResetMpSharedEpochCallback(
                 dataset=dataset, epoch_mp_shared=self._epoch_mp_shared
             )
         else:
-            assert eval_seq_order_share is None, "eval_seq_order_share needs dataset_init_epoch"
             dataset_reset = returnn_dataset_wrapper.ReturnnDatasetResetNoOpCallback()
 
         shard_workers = self.config.typed_value("torch_dataloader_shard_workers", None)

@@ -80,9 +80,6 @@ class DistributedContext:
 
         self._dataset_distribution = get_dataset_distribution(self._opts)
 
-        self._eval_on_all_ranks: Optional[bool] = self._opts.get("eval_on_all_ranks", None)
-        assert self._eval_on_all_ranks is None or isinstance(self._eval_on_all_ranks, bool)
-
         self._check_no_unknown_opts()
 
     def __repr__(self):
@@ -95,6 +92,7 @@ class DistributedContext:
         # such that the check in the end works.
         self._opts.get("backend")
         self._opts.get("timeout_sec")
+        self._opts.get("eval_on_all_ranks")
         if self._reduce_type == "grad":
             self._opts.get("class")
             self._opts.get("options")
@@ -128,15 +126,8 @@ class DistributedContext:
         return self._dataset_distribution
 
     def eval_on_all_ranks(self) -> bool:
-        """
-        :return: whether an eval dataset is split over all ranks, each rank evaluating its share,
-            instead of being evaluated on rank 0 alone while the other ranks wait.
-            Only datasets which can report their seq order are split, see the torch engine.
-            Option ``eval_on_all_ranks: bool``, else behavior_version >= 38.
-        """
-        if self._eval_on_all_ranks is not None:
-            return self._eval_on_all_ranks
-        return BehaviorVersion.get() >= 38
+        """:return: whether an eval dataset is split over all ranks, see :func:`get_eval_on_all_ranks`"""
+        return get_eval_on_all_ranks(self._opts)
 
     def maybe_make_distributed_module(self, module: torch.nn.Module) -> Optional[DistributedDataParallel]:
         """
@@ -261,6 +252,21 @@ def get_dataset_distribution(opts: Union[Dict[str, Any], CollectionReadCheckCove
             f" got {dataset_distribution!r}"
         )
     return dataset_distribution
+
+
+def get_eval_on_all_ranks(opts: Union[Dict[str, Any], CollectionReadCheckCovered]) -> bool:
+    """
+    :param opts: the ``torch_distributed`` config options
+    :return: ``eval_on_all_ranks`` option: whether an eval dataset is split over all ranks,
+        every rank evaluating its shard, instead of being evaluated on rank 0 alone while the other ranks wait.
+        Only datasets which support sharding are split, see the torch engine.
+        Default: since behavior version 38.
+    """
+    eval_on_all_ranks = opts.get("eval_on_all_ranks", None)
+    assert eval_on_all_ranks is None or isinstance(eval_on_all_ranks, bool)
+    if eval_on_all_ranks is not None:
+        return eval_on_all_ranks
+    return BehaviorVersion.get() >= 38
 
 
 @torch.no_grad()

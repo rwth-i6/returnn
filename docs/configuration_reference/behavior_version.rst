@@ -26,8 +26,9 @@ Behavior version 38 (2026-10-13)
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 With PyTorch distributed training (``torch_distributed``),
-every eval dataset which supports a predefined seq order (:func:`Dataset.supports_predefined_seq_order`)
-is evaluated in shares over all ranks, instead of on rank 0 alone while the other ranks wait.
+every eval dataset which supports sharding (:func:`Dataset.supports_sharding`)
+is evaluated in shards over all ranks, instead of on rank 0 alone while the other ranks wait.
+The eval datasets get the same random seed on every rank for this.
 Every rank gets the same scores, see :ref:`multi_gpu`.
 
 There is also the option ``eval_on_all_ranks: bool`` in ``torch_distributed``
