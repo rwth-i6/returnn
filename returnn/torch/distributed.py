@@ -53,6 +53,7 @@ class DistributedContext:
             self.prev_init_info = ast.literal_eval(prev_init_info)
             self._rank = self.prev_init_info["rank"]
             self._size = self.prev_init_info["size"]
+            hostnames = self.prev_init_info["hostnames"]
         else:
             import torch.distributed as dist
 
@@ -65,7 +66,7 @@ class DistributedContext:
             )
             self._rank = dist.get_rank()
             self._size = dist.get_world_size()
-            os.environ[env_var_name] = repr({"rank": self._rank, "size": self._size})
+            hostnames = None  # gathered below only when a sync level needs them
 
         self._local_rank = int(os.environ["LOCAL_RANK"])
         self._local_size = int(os.environ["LOCAL_WORLD_SIZE"])
@@ -109,7 +110,13 @@ class DistributedContext:
             pass
         else:
             raise ValueError(f"invalid reduce_type {self._reduce_type!r}")
-        self._sync_levels = _parse_sync_levels(sync_spec, size=self._size)
+        if not prev_init_info:
+            if any(isinstance(level_spec, dict) and level_spec.get("group") == "node" for level_spec in sync_spec):
+                hostnames = _all_gather_hostnames(size=self._size)
+            os.environ[env_var_name] = repr({"rank": self._rank, "size": self._size, "hostnames": hostnames})
+        self._sync_levels = _parse_sync_levels(
+            sync_spec, size=self._size, local_size=self._local_size, hostnames=hostnames
+        )
         if self._reduce_type == "sync":
             assert self._sync_levels, "torch_distributed: sync must have at least one level"
             _logger.info(f"sync levels: {self._sync_levels}")
@@ -144,19 +151,7 @@ class DistributedContext:
     def _init_sync_groups(self):
         import torch.distributed as dist
 
-        hostnames = None
         for level in self._sync_levels:
-            if level.group_spec == "node":
-                if hostnames is None:
-                    hostnames = _all_gather_hostnames(size=self._size)
-                level.group_ranks = _make_group_ranks("node", size=self._size, hostnames=hostnames)
-                for ranks in level.group_ranks:
-                    assert len(ranks) == self._local_size, (
-                        f"{self}: {level}: ranks {ranks} share a host, but local size is {self._local_size}"
-                    )
-        _check_sync_levels_nested(self._sync_levels)
-        for level in self._sync_levels:
-            assert level.group_ranks is not None
             if level.group_spec == "world":
                 continue  # the default group
             for ranks in level.group_ranks:
@@ -323,13 +318,13 @@ class _SyncLevel:
         self,
         *,
         group_spec: Union[str, int, Sequence[Sequence[int]]],
-        group_ranks: Optional[List[List[int]]],
+        group_ranks: List[List[int]],
         sync_type: str,
         every: int,
         sync_on_cpu: bool,
     ):
         self.group_spec = group_spec
-        self.group_ranks = group_ranks  # None for "node" until the hostnames are gathered
+        self.group_ranks = group_ranks
         self.sync_type = sync_type
         self.every = every
         self.sync_on_cpu = sync_on_cpu
@@ -352,7 +347,16 @@ class _SyncLevel:
         return torch.distributed.get_world_size(group=self.group)
 
 
-def _parse_sync_levels(spec: Sequence[Dict[str, Any]], *, size: int) -> List[_SyncLevel]:
+def _parse_sync_levels(
+    spec: Sequence[Dict[str, Any]], *, size: int, local_size: int, hostnames: Optional[Sequence[str]]
+) -> List[_SyncLevel]:
+    """
+    :param spec: the ``sync`` option, see :class:`DistributedContext`
+    :param size: world size
+    :param local_size: ranks per host
+    :param hostnames: per rank, needed for group "node"
+    :return: the levels, inner to outer, groups and periods checked
+    """
     assert isinstance(spec, (list, tuple)), f"torch_distributed sync: expected a list of levels, got {spec!r}"
     levels = []
     for idx, level_spec in enumerate(spec):
@@ -379,7 +383,18 @@ def _parse_sync_levels(spec: Sequence[Dict[str, Any]], *, size: int) -> List[_Sy
             assert every % levels[-1].every == 0, (
                 f"torch_distributed sync level {idx}: every {every} is not a multiple of the inner {levels[-1].every}"
             )
-        group_ranks = None if group_spec == "node" else _make_group_ranks(group_spec, size=size, hostnames=None)
+        group_ranks = _make_group_ranks(group_spec, size=size, hostnames=hostnames)
+        if group_spec == "node":
+            for ranks in group_ranks:
+                assert len(ranks) == local_size, (
+                    f"torch_distributed sync level {idx}: ranks {ranks} share a host, but local size is {local_size}"
+                )
+        if levels:
+            for ranks in levels[-1].group_ranks:
+                assert any(set(ranks).issubset(outer_ranks) for outer_ranks in group_ranks), (
+                    f"torch_distributed sync level {idx}: group {ranks} of the inner level {levels[-1]}"
+                    f" is not inside one group {group_ranks}"
+                )
         levels.append(
             _SyncLevel(
                 group_spec=group_spec,
@@ -424,14 +439,6 @@ def _make_group_ranks(
         raise TypeError(f"torch_distributed sync: invalid group {group_spec!r}")
 
 
-def _check_sync_levels_nested(levels: Sequence[_SyncLevel]):
-    for inner, outer in zip(levels[:-1], levels[1:]):
-        for ranks in inner.group_ranks:
-            assert any(set(ranks).issubset(outer_ranks) for outer_ranks in outer.group_ranks), (
-                f"torch_distributed sync: group {ranks} of {inner} is not inside one group of {outer}"
-            )
-
-
 def _all_gather_hostnames(*, size: int) -> List[str]:
     # A fixed-size CPU tensor keeps this on the CPU backend (gloo),
     # so no CUDA context is created before the device is selected.
@@ -452,6 +459,7 @@ def _all_reduce_avg_flat(tensors: List[torch.Tensor], *, level: _SyncLevel):
     # One flat buffer: thousands of small allreduces would be latency-bound.
     # noinspection protected-member
     flat = torch._utils._flatten_dense_tensors(tensors)
+    # SUM then divide, not AVG: NCCL AVG pre-scales by 1/N rounded to the dtype, a bias for non-power-of-two N.
     torch.distributed.all_reduce(flat, op=torch.distributed.ReduceOp.SUM, group=level.group)
     flat /= level.group_size()
     # noinspection protected-member

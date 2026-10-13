@@ -1769,7 +1769,7 @@ def test_torch_engine_distributed_sync_complete_frac_optimizer_step():
 
 
 def test_torch_distributed_sync_levels_spec():
-    from returnn.torch.distributed import _make_group_ranks, _parse_sync_levels, _check_sync_levels_nested
+    from returnn.torch.distributed import _make_group_ranks, _parse_sync_levels
 
     assert _make_group_ranks("world", size=4, hostnames=None) == [[0, 1, 2, 3]]
     assert _make_group_ranks(2, size=4, hostnames=None) == [[0, 1], [2, 3]]
@@ -1790,6 +1790,8 @@ def test_torch_distributed_sync_levels_spec():
             {"group": "world", "type": "param", "every": 20},
         ],
         size=8,
+        local_size=4,
+        hostnames=None,
     )
     assert [(level.sync_type, level.every, level.group_ranks) for level in levels] == [
         ("grad", 1, [[0, 1], [2, 3], [4, 5], [6, 7]]),
@@ -1801,33 +1803,31 @@ def test_torch_distributed_sync_levels_spec():
         False, True, False, True,  # param every 10
         False, False, False, True,  # param every 20
     ]  # fmt: skip
-    _check_sync_levels_nested(levels)
-    for bad in [
-        [{"group": "world", "type": "param", "every": 10}, {"group": "world", "type": "grad"}],  # grad not first
-        [{"group": "world", "type": "grad", "every": 2}],
-        [{"group": "world", "type": "param", "every": 3}, {"group": "world", "type": "param", "every": 4}],
-        [{"group": "world", "type": "param", "every": 0}],
-        [{"group": "world", "type": "foo"}],
-        [{"group": "world", "type": "param", "foo": 1}],
-        [{"group": "world"}],
-        {"group": "world", "type": "param"},
+    hostnames = ["a", "a", "b", "b"]
+    (level,) = _parse_sync_levels([{"group": "node", "type": "param"}], size=4, local_size=2, hostnames=hostnames)
+    assert level.group_ranks == [[0, 1], [2, 3]]
+    for bad, kwargs in [
+        ([{"group": "world", "type": "param", "every": 10}, {"group": "world", "type": "grad"}], {}),  # grad not first
+        ([{"group": "world", "type": "grad", "every": 2}], {}),
+        ([{"group": "world", "type": "param", "every": 3}, {"group": "world", "type": "param", "every": 4}], {}),
+        ([{"group": "world", "type": "param", "every": 0}], {}),
+        ([{"group": "world", "type": "foo"}], {}),
+        ([{"group": "world", "type": "param", "foo": 1}], {}),
+        ([{"group": "world"}], {}),
+        ({"group": "world", "type": "param"}, {}),
+        (
+            [{"group": [[0, 1], [2, 3]], "type": "param"}, {"group": [[0, 2], [1, 3]], "type": "param"}],
+            {},
+        ),  # not nested
+        ([{"group": "node", "type": "param"}], {"local_size": 1, "hostnames": hostnames}),  # local size vs hosts
+        ([{"group": "node", "type": "param"}], {"local_size": 2, "hostnames": None}),  # hostnames not gathered
     ]:
         try:
-            _parse_sync_levels(bad, size=8)
-        except (AssertionError, KeyError) as exc:
+            _parse_sync_levels(bad, **{"size": 4, "local_size": 2, "hostnames": None, **kwargs})
+        except AssertionError as exc:
             print("got expected exception:", exc)
         else:
             raise Exception(f"did not get expected exception for sync {bad!r}")
-    try:
-        _check_sync_levels_nested(
-            _parse_sync_levels(
-                [{"group": [[0, 1], [2, 3]], "type": "param"}, {"group": [[0, 2], [1, 3]], "type": "param"}], size=4
-            )
-        )
-    except AssertionError as exc:
-        print("got expected exception:", exc)
-    else:
-        raise Exception("did not get expected exception for non-nested groups")
 
 
 def _torch_distributed_sync_levels_worker(rank: int, world_size: int, port: int, tmp_dir: str, variant: str):
