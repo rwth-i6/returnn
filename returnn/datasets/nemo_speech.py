@@ -170,7 +170,7 @@ class NemoSpeechDataset(CachedDataset2):
         self.use_worker_procs = use_worker_procs
         if _rank_and_size is None:
             # noinspection PyProtectedMember
-            from .distrib_files import _get_rank_and_size
+            from .basic import _get_rank_and_size
 
             _rank_and_size = _get_rank_and_size()
         self._rank_and_size = tuple(_rank_and_size)

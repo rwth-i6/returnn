@@ -23,6 +23,7 @@ from .basic import (
     extend_dataset_dict_from_parent_dataset,
     DatasetSeq,
     RANDOM_SEED_OFFSET_ENV_VAR,
+    _get_rank_and_size,
 )
 from .cached2 import CachedDataset2
 
@@ -611,34 +612,6 @@ def _get_key_for_file_tree(t: FileTree) -> str:
     import tree
 
     return ":".join(tree.flatten(t))
-
-
-def _get_rank_and_size() -> Tuple[int, int]:
-    """
-    :return: tuple (rank, size): the global rank and size for distributed trainings
-    """
-
-    from returnn.config import get_global_config
-
-    config = get_global_config(raise_exception=False)
-    if not config:
-        return 0, 1
-    if config.typed_value("torch_distributed") is not None:
-        import returnn.torch.distributed
-
-        ctx = returnn.torch.distributed.get_ctx(config=config)
-        return ctx.rank(), ctx.size()
-    elif config.is_true("use_horovod"):
-        assert config.bool("use_tensorflow", False) or config.value("backend", "").startswith("tensorflow")
-
-        import returnn.tf.horovod
-
-        ctx = returnn.tf.horovod.get_ctx(config=config)
-        return ctx.rank(), ctx.size()
-    elif config.typed_value("__debug_dummy_distributed_rank_and_size") is not None:
-        return config.typed_value("__debug_dummy_distributed_rank_and_size")
-    else:
-        return 0, 1
 
 
 class _WorkerProcParent:
