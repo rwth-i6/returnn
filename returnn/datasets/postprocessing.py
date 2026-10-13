@@ -367,16 +367,6 @@ class PostprocessingDataset(CachedDataset2):
         assert self._dataset is not None
         return self._dataset.supports_sharding()
 
-    def supports_predefined_seq_order(self) -> bool:
-        """
-        :return: whether the wrapped dataset supports a predefined seq order.
-            Not with map_seq_stream, which can merge or drop seqs.
-        """
-        if self._map_seq_stream is not None:
-            return False
-        assert self._dataset is not None
-        return self._dataset.supports_predefined_seq_order()
-
     def set_sharding(self, *, num_shards: int, shard_index: int):
         """set sharding, on the wrapped dataset"""
         super().set_sharding(num_shards=num_shards, shard_index=shard_index)

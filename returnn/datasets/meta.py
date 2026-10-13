@@ -481,16 +481,6 @@ class MetaDataset(CachedDataset2):
             else True
         )
 
-    def supports_predefined_seq_order(self) -> bool:
-        """
-        :return: whether this dataset supports a predefined seq order, which it applies itself.
-            Its own seq order comes from the seq order control dataset if there is one,
-            so that one must report its seq order reliably.
-        """
-        if self.seq_order_control_dataset is not None:
-            return self.datasets[self.seq_order_control_dataset].supports_predefined_seq_order()
-        return True
-
     def set_sharding(self, *, num_shards: int, shard_index: int):
         """set sharding, also on the seq order control dataset, which shards the seq order then"""
         super().set_sharding(num_shards=num_shards, shard_index=shard_index)
