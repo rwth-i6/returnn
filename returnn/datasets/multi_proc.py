@@ -299,25 +299,25 @@ class MultiProcDataset(CachedDataset2):
             nonlocal num_unhandled_msgs
             try:
                 while True:
-                    msg_, kwargs_ = parent_conn.recv()
-                    if msg_ == "exit":
+                    parent_msg, parent_kwargs = parent_conn.recv()
+                    if parent_msg == "exit":
                         break
-                    res_ = None
+                    cached_seq = None
                     with cond:
-                        if msg_ == "get_data_seq" and num_unhandled_msgs == 0:
-                            seq_idx_ = kwargs_["seq_idx"]
-                            if cache and cache[0].seq_idx <= seq_idx_:
-                                res_ = _get_from_cache(seq_idx_)
-                            if res_:
-                                while cache[0].seq_idx < seq_idx_:
+                        if parent_msg == "get_data_seq" and num_unhandled_msgs == 0:
+                            requested_seq_idx = parent_kwargs["seq_idx"]
+                            if cache and cache[0].seq_idx <= requested_seq_idx:
+                                cached_seq = _get_from_cache(requested_seq_idx)
+                            if cached_seq:
+                                while cache[0].seq_idx < requested_seq_idx:
                                     cache.popleft()
                                 cond.notify()
-                        if not res_:
-                            msg_queue.append((msg_, kwargs_))
+                        if not cached_seq:
+                            msg_queue.append((parent_msg, parent_kwargs))
                             num_unhandled_msgs += 1
                             cond.notify()
-                    if res_:
-                        parent_conn.send(("data_seq", res_))
+                    if cached_seq:
+                        parent_conn.send(("data_seq", cached_seq))
             except EOFError:  # when parent dies
                 pass
             finally:
