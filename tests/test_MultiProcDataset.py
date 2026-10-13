@@ -117,6 +117,34 @@ def test_MultiProcDataset_sharded():
                 assert sorted(tags[0] + tags[1]) == all_tags, (sharding_method, set_sharding_when, tags)
 
 
+def test_MultiProcDataset_sharded_random_seed_offset():
+    # The shards (e.g. per distributed rank) are cut from the seq order, so with seq_ordering "random"
+    # they are disjoint only when every rank uses the same random seed offset
+    # (dataset_distribution "shard" passes it explicitly, the default differs per rank).
+    hdf_fn = generate_hdf_from_other({"class": "Task12AXDataset", "num_seqs": 23})
+    hdf_dataset_dict = {"class": "HDFDataset", "files": [hdf_fn], "seq_ordering": "random"}
+    all_tags = sorted(seq.seq_tag for seq in dummy_iter_dataset(init_dataset(hdf_dataset_dict)))
+
+    with timeout(60):
+        for same_seed in [True, False]:
+            tags = []
+            for rank in range(2):
+                mp_dataset = MultiProcDataset(
+                    dataset=hdf_dataset_dict,
+                    num_workers=2,
+                    buffer_size=5,
+                    random_seed_offset=0 if same_seed else rank * 16127,
+                )
+                mp_dataset.initialize()
+                mp_dataset.set_sharding(num_shards=2, shard_index=rank)
+                tags.append([seq.seq_tag for seq in dummy_iter_dataset(mp_dataset)])
+            assert [len(t) for t in tags] == [12, 11], (same_seed, tags)
+            if same_seed:
+                assert sorted(tags[0] + tags[1]) == all_tags, tags
+            else:
+                assert set(tags[0]) & set(tags[1]), tags
+
+
 def test_MultiProcDataset_meta():
     hdf_fn = generate_hdf_from_other({"class": "Task12AXDataset", "num_seqs": 23})
     meta_dataset_dict = {
