@@ -1571,6 +1571,7 @@ _UnsupportedConfigOpts = {
     "reset_dev_memory_caches": False,
     "tensorboard_opts": None,
     "use_tensorboard": False,
+    "wandb_opts": None,
     # backend-specific options are named after the backend, as `torch_...` is on PyTorch
     "jax_distributed": None,
     "jax_log_memory_usage": False,
@@ -1587,7 +1588,6 @@ _TorchOnlyConfigOpts = {
     "torch_distributed": "jax_distributed",
     "torch_log_memory_usage": "jax_log_memory_usage",
     "torch_profile": "jax_profile",
-    "torch_wandb_config": None,
 }
 
 

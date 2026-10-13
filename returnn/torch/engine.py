@@ -166,13 +166,15 @@ class Engine(EngineBase):
         else:
             self._tensorboard_writer = None
 
-        wandb_config = config.typed_value("torch_wandb_config", None)
-        if wandb_config is not None:
+        wandb_opts = config.typed_value("wandb_opts", None)
+        if wandb_opts is not None and (not self._torch_distributed_ctx or self._torch_distributed_ctx.rank() == 0):
             # noinspection PyUnresolvedReferences,PyPackageRequirements
-            import wandb  # optional
+            import wandb
 
-            self._wandb_log_every_n_train_steps: Optional[int] = wandb_config.pop("log_every_n_train_steps", 100)
-            self._wandb_run = wandb.init(**wandb_config)
+            wandb_opts = wandb_opts.copy()
+            self._wandb_log_every_n_train_steps: Optional[int] = wandb_opts.pop("log_every_n_train_steps", 100)
+            wandb_opts.setdefault("job_type", config.value("task", "train"))
+            self._wandb_run = wandb.init(**wandb_opts)
         else:
             self._wandb_log_every_n_train_steps = None
             self._wandb_run = None
@@ -1054,9 +1056,9 @@ class Engine(EngineBase):
 
     def _wandb_log(self, metrics: Dict[str, float]):
         """
-        Log to Weights & Biases, if enabled via torch_wandb_config.
+        Log to Weights & Biases, if enabled via wandb_opts.
 
-        :param metrics: additional metrics to log.
+        :param metrics: metrics to log.
         """
         if self._wandb_run is not None:
             self._wandb_run.log({**metrics, "epoch": self.epoch}, step=self.global_train_step)
