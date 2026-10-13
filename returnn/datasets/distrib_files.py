@@ -289,9 +289,6 @@ class DistributeFilesDataset(CachedDataset2):
             "files": self._files,
         }
 
-    def _uses_custom_distributed_sharding(self) -> bool:
-        return self._num_shards > 1
-
     def _lazy_init_file_list(self):
         """
         The list of data files can either be provided as python list, or, if that grows

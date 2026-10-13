@@ -99,12 +99,7 @@ class Dataset:
                     "dataset_distribution 'shard' is not supported with Horovod, use horovod_dataset_distribution"
                 )
             rank, size = _get_rank_and_size(config)
-            # The shards are taken from the same seq order on every rank, so no rank-specific random seed.
-            return {
-                "_num_shards": size,
-                "_shard_index": rank,
-                "random_seed_offset": config.int("dataset_random_seed_offset", 0),
-            }
+            return {"_num_shards": size, "_shard_index": rank}
         else:
             raise ValueError(
                 f"invalid dataset_distribution {dataset_distribution!r}, expected 'random_seed_offset' or 'shard'"
@@ -285,10 +280,12 @@ class Dataset:
 
     def _uses_custom_distributed_sharding(self) -> bool:
         """
-        :return: if dataset has its own data sharding logic independent of TF/PT.
-            Leads to a fixed random_seed_offset independent of the workers local rank.
+        :return: whether this dataset is sharded (over the distributed ranks)
+            or has its own data sharding logic independent of TF/PT.
+            Leads to a fixed random_seed_offset independent of the distributed rank,
+            so that the shards are cut from the same seq order on every rank.
         """
-        return False
+        return self._num_shards > 1
 
     def _get_default_random_seed_offset(self):
         """
@@ -759,8 +756,8 @@ class Dataset:
         assert num_shards == 1 or self.supports_sharding(), (
             f"{self}: does not support sharding, but got num_shards == {num_shards}"
         )
-        # The default random seed offset depends on the sharding (see _get_default_random_seed_offset),
-        # but the sharding set here must not change it: a split across ranks sets the offset explicitly.
+        # The default random seed offset depends on the sharding at construction (over the distributed ranks),
+        # see _uses_custom_distributed_sharding. A further split set here (e.g. per DataLoader worker) keeps it.
         self._random_seed_offset = self.random_seed_offset
         self._num_shards = num_shards
         self._shard_index = shard_index

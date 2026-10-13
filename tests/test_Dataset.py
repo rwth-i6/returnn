@@ -1942,7 +1942,7 @@ def test_Dataset_get_default_kwargs_train_dataset_distribution():
             }
         )
         kwargs = Dataset.get_default_kwargs_train(config)
-        assert kwargs == {"_num_shards": 2, "_shard_index": rank, "random_seed_offset": 0}
+        assert kwargs == {"_num_shards": 2, "_shard_index": rank}
         dataset, _ = load_data(config, 0, "train", **kwargs)
         tags.append([seq.seq_tag for seq in dummy_iter_dataset(dataset)])
     assert [len(t) for t in tags] == [6, 5]
