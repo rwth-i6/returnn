@@ -99,7 +99,13 @@ class Dataset:
                     "dataset_distribution 'shard' is not supported with Horovod, use horovod_dataset_distribution"
                 )
             rank, size = _get_rank_and_size(config)
-            return {"_num_shards": size, "_shard_index": rank}
+            # The shards are cut from the same seq order on every rank, so the same random seed offset on every rank
+            # (the default is rank-specific, see _get_default_random_seed_offset).
+            return {
+                "_num_shards": size,
+                "_shard_index": rank,
+                "random_seed_offset": config.int("dataset_random_seed_offset", 0),
+            }
         else:
             raise ValueError(
                 f"invalid dataset_distribution {dataset_distribution!r}, expected 'random_seed_offset' or 'shard'"
@@ -158,7 +164,9 @@ class Dataset:
         :param str|None seq_order_seq_lens_file: for seq order, use the seq length given by this file
         :param int shuffle_frames_of_nseqs: shuffles the frames. not always supported
         :param None|int estimated_num_seqs: for progress reporting in case the real num_seqs is unknown
-        :param int _num_shards: number of shards the data is split into
+        :param int _num_shards: number of shards the data is split into.
+            The shards are cut from the seq order, so with a random seq order,
+            all shards must use the same random_seed_offset (the default differs per distributed rank).
         :param int _shard_index: local shard index, when sharding is enabled
         """
         self.name = name or ("dataset_id%s" % id(self))
@@ -280,12 +288,12 @@ class Dataset:
 
     def _uses_custom_distributed_sharding(self) -> bool:
         """
-        :return: whether this dataset is sharded (over the distributed ranks)
-            or has its own data sharding logic independent of TF/PT.
-            Leads to a fixed random_seed_offset independent of the distributed rank,
-            so that the shards are cut from the same seq order on every rank.
+        :return: if dataset has its own data sharding logic over the distributed ranks, independent of TF/PT.
+            Leads to a fixed random_seed_offset independent of the workers local rank.
+            (Sharding via ``_num_shards``/``_shard_index`` instead comes with an explicit ``random_seed_offset``,
+            see :func:`get_default_kwargs_train`.)
         """
-        return self._num_shards > 1
+        return False
 
     def _get_default_random_seed_offset(self):
         """
@@ -748,6 +756,8 @@ class Dataset:
         Sets which shard of the data this dataset instance yields,
         e.g. in a PyTorch DataLoader worker, when there are multiple workers.
         Call this before :func:`init_seq_order`.
+        The shards are cut from the seq order, so with a random seq order,
+        all shards must use the same ``random_seed_offset`` (the default differs per distributed rank).
 
         :param num_shards: number of shards the data is split into
         :param shard_index: index of the shard of this dataset instance
@@ -756,9 +766,6 @@ class Dataset:
         assert num_shards == 1 or self.supports_sharding(), (
             f"{self}: does not support sharding, but got num_shards == {num_shards}"
         )
-        # The default random seed offset depends on the sharding at construction (over the distributed ranks),
-        # see _uses_custom_distributed_sharding. A further split set here (e.g. per DataLoader worker) keeps it.
-        self._random_seed_offset = self.random_seed_offset
         self._num_shards = num_shards
         self._shard_index = shard_index
 
