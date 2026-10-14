@@ -431,6 +431,9 @@ class Engine(EngineBase):
         # So in that case signal the parent PG (torchrun's, which is also the Sisyphus worker's).
         import torch.distributed
 
+        if self._wandb_run is not None:
+            self._wandb_run.finish(exit_code=0)
+            self._wandb_run = None
         if torch.distributed.is_torchelastic_launched():
             pgid = os.getpgid(os.getppid())
         else:
