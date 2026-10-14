@@ -1882,6 +1882,51 @@ def test_torch_engine_distributed_param_no_sync_at_epoch_end_cpu():
     _check_torch_distributed_sync_at_epoch_end(sync_at_epoch_end=False)
 
 
+def _torch_distributed_all_reduce_avg_flat_worker(rank: int, world_size: int, port: int, tmp_dir: str):
+    from returnn.torch.distributed import _all_reduce_avg_flat
+
+    os.environ.update(MASTER_ADDR="127.0.0.1", MASTER_PORT=str(port), RANK=str(rank), WORLD_SIZE=str(world_size))
+    torch.distributed.init_process_group(backend="gloo")
+    # 5 float32 tensors of 3, 7, 2, 11 and 5 elements; 8 bytes per bucket: a tensor of 2 fills one,
+    # every other tensor is larger than a bucket and gets its own
+    tensors = [torch.full((n,), float(100 * rank + i)) for i, n in enumerate([3, 7, 2, 11, 5])]
+    _all_reduce_avg_flat(tensors, bucket_bytes=8)
+    results = [[float(tensor[0]), float(tensor[-1])] for tensor in tensors]
+    tensors = [torch.full((n,), float(100 * rank + i)) for i, n in enumerate([3, 7, 2, 11, 5])]
+    _all_reduce_avg_flat(tensors, sync_on_cpu=True, bucket_bytes=8)  # on CPU tensors: the same path, no copy
+    assert [[float(tensor[0]), float(tensor[-1])] for tensor in tensors] == results
+    # mixed dtypes: one bucket per dtype, no promotion
+    tensors = [
+        torch.full((n,), float(100 * rank + i), dtype=[torch.float32, torch.float64][i % 2])
+        for i, n in enumerate([3, 7, 2, 11, 5])
+    ]
+    _all_reduce_avg_flat(tensors, bucket_bytes=8)
+    assert [[float(tensor[0]), float(tensor[-1])] for tensor in tensors] == results
+    assert [tensor.dtype for tensor in tensors] == [[torch.float32, torch.float64][i % 2] for i in range(5)]
+    with open(f"{tmp_dir}/rank{rank}.txt", "w") as f:
+        f.write(repr(results))
+    torch.distributed.destroy_process_group()
+
+
+def test_torch_distributed_all_reduce_avg_flat_buckets():
+    import socket
+    import torch.multiprocessing
+
+    world_size = 3
+    with socket.socket() as s:
+        s.bind(("127.0.0.1", 0))
+        port = s.getsockname()[1]
+    with tempfile.TemporaryDirectory(prefix="returnn_test_torch_distributed_all_reduce_avg_flat") as tmp_dir:
+        torch.multiprocessing.spawn(
+            _torch_distributed_all_reduce_avg_flat_worker, args=(world_size, port, tmp_dir), nprocs=world_size
+        )
+        for rank in range(world_size):
+            with open(f"{tmp_dir}/rank{rank}.txt") as f:
+                results = eval(f.read())
+            # the mean over the ranks of 100 * rank + i
+            assert results == [[100.0 + i, 100.0 + i] for i in range(5)], (rank, results)
+
+
 def test_dynamic_learning_rate():
     num_epochs = 3
     last_global_train_step: Optional[float] = None
