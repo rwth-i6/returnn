@@ -207,24 +207,40 @@ class DistributedContext:
         """
         return self._sync_at_epoch_end
 
-    def step_after_epoch(self, *, module: torch.nn.Module, optimizer: torch.optim.Optimizer):
+    def step_after_epoch(
+        self, *, module: torch.nn.Module, optimizer: torch.optim.Optimizer, global_train_step: int
+    ) -> int:
         """
         Average the params and the floating point optimizer state over all ranks, see :func:`sync_at_epoch_end`.
         Call this at the end of the train epoch, before the checkpoint is written.
 
+        The ranks can differ in their numbers of steps and updates after an epoch in which they got different
+        numbers of batches (a rank out of data stops at its step, the others at their next sync).
+        The train step counter and the update counts in the optimizer state (the torch optimizers keep them as
+        ``step`` tensors) take the max over the ranks then, so that every rank counts on as the checkpoint does.
+
         :param module: to take the params from
         :param optimizer: to take the state from
+        :param global_train_step: of this rank
+        :return: the global train step to continue with, the same on every rank
         """
+        import torch.distributed as dist
+
         if self._reduce_type != "param" or not self._sync_at_epoch_end:
-            return
+            return global_train_step
         tensors = [param.data for param in module.parameters()]
+        counters = [torch.tensor([global_train_step], dtype=torch.int64)]
         for param in module.parameters():
             state = optimizer.state.get(param, {})
-            # The optimizer counts steps in a tensor too, equal on every rank; other state is optimizer-specific.
             for key in sorted(state):
                 if isinstance(state[key], torch.Tensor) and state[key].is_floating_point():
-                    tensors.append(state[key])
+                    (counters if key == "step" else tensors).append(state[key])
         _all_reduce_avg_flat(tensors, sync_on_cpu=self._opts.get("sync_on_cpu", False))
+        for counter in counters:
+            counter_cpu = counter.to(torch.device("cpu"))
+            dist.all_reduce(counter_cpu, op=dist.ReduceOp.MAX)
+            counter.copy_(counter_cpu)
+        return int(counters[0])
 
 
 _is_set_up = False

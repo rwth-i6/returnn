@@ -1787,7 +1787,7 @@ def _torch_distributed_sync_at_epoch_end_worker(
             get_model=TrainTestModel,
             train_step=TrainTestModel.train_step,
             batch_size=10**9,
-            max_seqs=1,  # one seq per step: 7 steps per epoch, the param sync every 3 steps leaves the last step local
+            max_seqs=1,  # one seq per step: 7 / 9 steps per epoch, the param sync every 3 steps leaves local steps
             optimizer={"class": "adam"},
             learning_rate=0.01,
             num_epochs=2,
@@ -1802,19 +1802,21 @@ def _torch_distributed_sync_at_epoch_end_worker(
         )
     )
     with global_config_ctx(config):
-        # no fixed seed: each rank its own seq order, thus its own params and optimizer state between the syncs
-        dataset = init_dataset({"class": "Task12AXDataset", "num_seqs": 7})
+        # no fixed seed: each rank its own seq order, thus its own params and optimizer state between the syncs.
+        # Rank 0 runs out after 7 steps, rank 1 then stops at its next sync, after 8 steps: different step counts.
+        dataset = init_dataset({"class": "Task12AXDataset", "num_seqs": 7 if rank == 0 else 9})
         dataset.init_seq_order(epoch=1)
         engine = Engine(config=config)
         engine.init_train_from_config(train_data=dataset)
         engine.train()
-        assert engine.global_train_step == 14, engine.global_train_step
         params = [param.detach().clone() for param in engine._pt_model.parameters()]
         state = [
             {key: value.clone() for key, value in engine._updater.get_optimizer().state[param].items()}
             for param in engine._pt_model.parameters()
         ]
-    torch.save({"params": params, "state": state}, f"{tmp_dir}/rank{rank}.pt")
+    torch.save(
+        {"params": params, "state": state, "global_train_step": engine.global_train_step}, f"{tmp_dir}/rank{rank}.pt"
+    )
     torch.distributed.destroy_process_group()
 
 
@@ -1840,8 +1842,19 @@ def _check_torch_distributed_sync_at_epoch_end(sync_at_epoch_end: bool):
     state_equal = all(
         torch.equal(s0[key], s1[key]) for s0, s1 in zip(res[0]["state"], res[1]["state"]) for key in state_keys
     )
-    print(f"sync_at_epoch_end {sync_at_epoch_end}: params equal {params_equal}, optimizer state equal {state_equal}")
+    steps = [res[rank]["global_train_step"] for rank in range(world_size)]
+    print(
+        f"sync_at_epoch_end {sync_at_epoch_end}: params equal {params_equal}, optimizer state equal {state_equal},"
+        f" global train steps {steps}"
+    )
     assert params_equal == sync_at_epoch_end and state_equal == sync_at_epoch_end
+    # the max over the ranks after each of the 2 epochs: 8 + 8; without the sync, 7 + 7 and 8 + 8
+    assert steps == ([16, 16] if sync_at_epoch_end else [14, 16]), steps
+    assert all(
+        float(s["step"]) == (16 if sync_at_epoch_end else steps[rank])
+        for rank in range(world_size)
+        for s in res[rank]["state"]
+    )
     # The checkpoint is rank 0's state. With the sync it is thus also what rank 1 continues with.
     saved_state = saved_opt["state"] if "state" in saved_opt else saved_opt["optimizer"]["state"]
     for i, s0 in enumerate(res[0]["state"]):
