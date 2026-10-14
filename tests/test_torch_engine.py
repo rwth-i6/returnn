@@ -3727,11 +3727,16 @@ def _eval_on_all_ranks_state_sum(model: torch.nn.Module) -> float:
     return float(sum(tensor.detach().double().sum() for tensor in [*model.parameters(), *model.buffers()]))
 
 
+def _eval_on_all_ranks_lr(*, learning_rate: float, epoch_continuous: float, **_kwargs: Any) -> float:
+    return learning_rate * (1.0 + epoch_continuous)
+
+
 def _eval_on_all_ranks_run(
     *,
     torch_distributed: Optional[dict] = None,
     num_epochs: int = 2,
     learning_rate: float = 0.0,
+    lr_on_epoch_continuous: bool = False,
     train_seq_ordering: str = "default",
     num_dev_seqs: int = len(_EVAL_ON_ALL_RANKS_DEV_SEQ_LENS),
     dev_seq_ordering: str = "default",
@@ -3781,6 +3786,7 @@ def _eval_on_all_ranks_run(
             optimizer={"class": "adam"},
             # 0 (the default here) keeps the initial model, so every run evaluates the same model
             learning_rate=learning_rate,
+            **({"dynamic_learning_rate": _eval_on_all_ranks_lr} if lr_on_epoch_continuous else {}),
             num_epochs=num_epochs,
             calculate_exp_loss=calculate_exp_loss,
             torch_dataloader_opts={"num_workers": 0},
@@ -3804,15 +3810,13 @@ def _eval_on_all_ranks_run(
             # a buffer which is a strided view, with values of its own on every rank
             rank = engine._torch_distributed_ctx.rank() if engine._torch_distributed_ctx else 0
             model.register_buffer("strided", (torch.arange(8.0) + 100 * rank)[::2])
-        # number of values this rank keeps aside for each split eval, see Engine._take_rank0_model_state,
-        # and the sum of the params and buffers which it evaluates
-        own_model_state_sizes = []
+        # the sum of the params and buffers which this rank evaluates in each split eval,
+        # see Engine._take_rank0_model_state
         eval_state_sums = []
         take_rank0_model_state = engine._take_rank0_model_state
 
         def _take_rank0_model_state():
             own = take_rank0_model_state()
-            own_model_state_sizes.append(sum(value.numel() for value in own or []))
             eval_state_sums.append(_eval_on_all_ranks_state_sum(model))
             return own
 
@@ -3828,7 +3832,6 @@ def _eval_on_all_ranks_run(
             "seq_lens": list(_eval_on_all_ranks_seq_lens),
             "errors": {epoch: dict(data.error) for epoch, data in engine.learning_rate_control.epoch_data.items()},
             "state_sum": _eval_on_all_ranks_state_sum(model),
-            "own_model_state_sizes": own_model_state_sizes,
             "eval_state_sums": eval_state_sums,
         }
 
@@ -3944,8 +3947,8 @@ def test_torch_engine_eval_on_all_ranks():
             else:
                 assert rank_seq_lens == [seq_lens, []]
         _assert_eval_scores(results, reference, epochs=(1, 2), keys=("dev_loss_ce", "dev_loss_fer"))
-        # Averaged grads keep the params identical, so rank 1 keeps none aside (and this model has no buffers).
-        assert results[1]["own_model_state_sizes"] == ([0, 0] if split else [])
+        # Rank 1 takes rank 0's params and buffers for every split eval, and only then.
+        assert len(results[1]["eval_state_sums"]) == (2 if split else 0)
 
 
 def test_torch_engine_eval_on_all_ranks_by_behavior_version():
@@ -3964,11 +3967,16 @@ def test_torch_engine_eval_on_all_ranks_by_behavior_version():
 
 def test_torch_engine_eval_on_all_ranks_rank0_model():
     # With parameter averaging, the ranks train apart between the syncs,
+    # also with averaged grads when every rank takes the learning rate from its own progress,
     # and a strided buffer holds values of its own on every rank.
     # A split eval must still score rank 0's model, like an eval on rank 0 alone,
     # and leave every rank's own training state as it was.
     for opts, run_kwargs in [
         ({"reduce_type": "param", "param_sync_step": 1000}, dict(learning_rate=0.01, train_seq_ordering="random")),
+        (
+            {"sync_complete_frac": False},
+            dict(learning_rate=0.01, train_seq_ordering="random", lr_on_epoch_continuous=True),
+        ),
         ({}, dict(strided_buffer=True)),
     ]:
         dist_opts = {**_EVAL_ON_ALL_RANKS_DIST_OPTS, **opts}
