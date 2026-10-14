@@ -270,11 +270,9 @@ class DistributedContext:
         if world or self._reduce_type == "grad":
             return [self._world_level]
         if no_data:
-            next_update_step_idx = epoch_update_step_idx
-            while not any(level.fires(epoch_update_step_idx=next_update_step_idx) for level in self._sync_levels):
-                next_update_step_idx += 1
-            epoch_update_step_idx = next_update_step_idx
             update_step = True
+            while not any(level.fires(epoch_update_step_idx=epoch_update_step_idx) for level in self._sync_levels):
+                epoch_update_step_idx += 1
         firing = [
             idx
             for idx, level in enumerate(self._sync_levels)
@@ -282,7 +280,7 @@ class DistributedContext:
         ]
         if not firing:
             return []
-        return self._sync_levels[max(firing) :]
+        return _control_sync_chain(self._sync_levels, max(firing), epoch_update_step_idx)
 
     def step_after_param_update(self, *, module: torch.nn.Module, epoch_update_step_idx: int):
         """
@@ -437,6 +435,26 @@ def _parse_sync_levels(
             )
         )
     return levels
+
+
+def _control_sync_chain(levels: Sequence[_SyncLevel], idx: int, epoch_update_step_idx: int) -> List[_SyncLevel]:
+    """
+    :param levels: the sync levels, inner to outer
+    :param idx: the level of the control sync in this step
+    :param epoch_update_step_idx: the pending optimizer update in this step
+    :return: that level, then the levels of the control syncs the ranks outside its group do next, one after the other:
+        after every stop, the next optimizer update after which a level further out fires, and the outermost of those.
+        A group which ran out of data joins exactly these.
+    """
+    chain = [levels[idx]]
+    while idx < len(levels) - 1:
+        while not any(level.fires(epoch_update_step_idx=epoch_update_step_idx) for level in levels[idx + 1 :]):
+            epoch_update_step_idx += 1
+        idx = max(
+            i for i in range(idx + 1, len(levels)) if levels[i].fires(epoch_update_step_idx=epoch_update_step_idx)
+        )
+        chain.append(levels[idx])
+    return chain
 
 
 def _make_group_ranks(

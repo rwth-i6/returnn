@@ -1804,6 +1804,19 @@ def test_torch_distributed_sync_levels_spec():
         False, True, False, True,  # param every 10
         False, False, False, True,  # param every 20
     ]  # fmt: skip
+    from returnn.torch.distributed import _control_sync_chain
+
+    # the control syncs a stopped group joins: the outermost level firing at each next outer firing.
+    # A stop at the pair after update 3 (pending): quad and world both fire after 3, so only the world check follows.
+    assert [level.group_spec for level in _control_sync_chain(levels, 0, 3)] == [2, "world"]
+    assert [level.group_spec for level in _control_sync_chain(levels, 0, 0)] == [
+        2,
+        4,
+        "world",
+    ]  # quad after 9, world 19
+    assert [level.group_spec for level in _control_sync_chain(levels, 1, 9)] == [4, "world"]
+    assert [level.group_spec for level in _control_sync_chain(levels, 2, 19)] == ["world"]
+
     hostnames = ["a", "a", "b", "b"]
     (level,) = _parse_sync_levels([{"group": "node", "type": "param"}], size=4, local_size=2, hostnames=hostnames)
     assert level.group_ranks == [[0, 1], [2, 3]]
