@@ -61,12 +61,17 @@ class DistributedContext:
 
         self._reduce_type = self._opts.get("reduce_type", "grad")
         self._param_sync_step: Optional[int] = self._opts.get("param_sync_step", None)
+        self._sync_optimizer_state = False
         if self._reduce_type == "param":
             assert isinstance(self._param_sync_step, int) and self._param_sync_step > 0, (
                 f"reduce_type param: param_sync_step must be a positive int,"
                 f" got {self._param_sync_step!r} ({type(self._param_sync_step).__name__})"
             )
-            _logger.info(f"reduce_type param: param_sync_step {self._param_sync_step}")
+            self._sync_optimizer_state = self._opts.get("sync_optimizer_state", False)
+            _logger.info(
+                f"reduce_type param: param_sync_step {self._param_sync_step},"
+                f" sync_optimizer_state {self._sync_optimizer_state}"
+            )
         elif self._reduce_type == "grad":
             _logger.info("reduce_type grad")
         elif self._reduce_type == "grad_explicit":
@@ -196,10 +201,25 @@ class DistributedContext:
         else:
             raise ValueError(f"invalid reduce_type {self._reduce_type}")
 
-    def step_after_param_update(self, *, module: torch.nn.Module, epoch_step_idx: int):
-        """one train step"""
+    def step_after_param_update(
+        self, *, module: torch.nn.Module, optimizer: torch.optim.Optimizer, epoch_step_idx: int
+    ):
+        """
+        Average the params over all ranks, for reduce_type "param" in the steps where it syncs.
+        With the option ``sync_optimizer_state`` (default off), also the floating point optimizer state
+        (e.g. the Adam moments); otherwise each rank keeps its own.
+
+        :param module: to take the params from
+        :param optimizer: to take the state from
+        :param epoch_step_idx: current step index
+        """
         if self._reduce_type == "param" and self.should_sync_now(epoch_step_idx=epoch_step_idx):
-            _sync_params_avg(module=module, sync_on_cpu=self._opts.get("sync_on_cpu", False))
+            _sync_params_avg(
+                module=module,
+                optimizer=optimizer,
+                sync_on_cpu=self._opts.get("sync_on_cpu", False),
+                sync_optimizer_state=self._sync_optimizer_state,
+            )
 
 
 _is_set_up = False
@@ -250,17 +270,31 @@ def get_dataset_distribution(opts: Union[Dict[str, Any], CollectionReadCheckCove
 
 
 @torch.no_grad()
-def _sync_params_avg(*, module: torch.nn.Module, sync_on_cpu: bool = False):
+def _sync_params_avg(
+    *,
+    module: torch.nn.Module,
+    optimizer: torch.optim.Optimizer,
+    sync_on_cpu: bool = False,
+    sync_optimizer_state: bool = False,
+):
     import torch.distributed as dist
 
-    if sync_on_cpu:
+    tensors = [param.data for param in module.parameters()]
+    if sync_optimizer_state:
         for param in module.parameters():
-            # Separately move each param to CPU (instead of the whole module), to safe CPU memory.
-            param_cpu = param.to(torch.device("cpu"))
+            # The optimizer counts steps in a tensor too, equal on every rank; other state is optimizer-specific.
+            for _, value in sorted(optimizer.state.get(param, {}).items()):
+                if isinstance(value, torch.Tensor) and value.is_floating_point():
+                    tensors.append(value)
+
+    if sync_on_cpu:
+        for tensor in tensors:
+            # Separately move each tensor to CPU (instead of all at once), to safe CPU memory.
+            tensor_cpu = tensor.to(torch.device("cpu"))
             # On CPU, we are likely using Gloo, and Gloo does not support AVG
-            dist.all_reduce(param_cpu.data, op=dist.ReduceOp.SUM)
-            param_cpu.data /= dist.get_world_size()
-            param.data = param_cpu.to(param.device)
+            dist.all_reduce(tensor_cpu, op=dist.ReduceOp.SUM)
+            tensor_cpu /= dist.get_world_size()
+            tensor.copy_(tensor_cpu)
         return
 
     if dist.get_backend() == "gloo":
@@ -273,7 +307,7 @@ def _sync_params_avg(*, module: torch.nn.Module, sync_on_cpu: bool = False):
             # Older PyTorch versions do not have ReduceOp.AVG.
             reduce_op = dist.ReduceOp.SUM
 
-    for param in module.parameters():
-        dist.all_reduce(param.data, op=reduce_op)
+    for tensor in tensors:
+        dist.all_reduce(tensor, op=reduce_op)
         if reduce_op == dist.ReduceOp.SUM:
-            param.data /= dist.get_world_size()
+            tensor /= dist.get_world_size()

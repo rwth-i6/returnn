@@ -14,6 +14,8 @@ This will by default use PyTorch ``DistributedDataParallel``.
 
 Or maybe use ``torch_distributed = {"reduce_type": "param", "param_sync_step": 100}``.
 This uses parameter averaging after every 100 steps.
+With ``"sync_optimizer_state": True``, the optimizer state (e.g. the Adam moments) is averaged as well;
+by default each rank keeps its own.
 
 With ``"sync_complete_frac": True`` (default since behavior version 33),
 the epoch progress ``complete_frac`` is the mean over the ranks,

@@ -1768,6 +1768,87 @@ def test_torch_engine_distributed_sync_complete_frac_optimizer_step():
     _check_torch_distributed_lr(device="cuda", reduce_type="grad_explicit", accum_grad_multiple_step=1)
 
 
+def _torch_distributed_param_sync_optimizer_state_worker(
+    rank: int, world_size: int, port: int, tmp_dir: str, sync_optimizer_state: bool
+):
+    from returnn.torch.distributed import DistributedContext
+
+    os.environ.update(
+        MASTER_ADDR="127.0.0.1",
+        MASTER_PORT=str(port),
+        RANK=str(rank),
+        WORLD_SIZE=str(world_size),
+        LOCAL_RANK=str(rank),
+        LOCAL_WORLD_SIZE=str(world_size),
+    )
+    module = torch.nn.Linear(3, 2)
+    with torch.no_grad():
+        for i, param in enumerate(module.parameters()):
+            param.fill_(float(rank + 10 * i))  # rank-specific, so every average is distinguishable
+            param.grad = torch.full_like(param, float(100 * rank + i))
+    optimizer = torch.optim.Adam(module.parameters(), lr=0.01)
+    optimizer.step()  # exp_avg = 0.1 * grad, exp_avg_sq = 0.001 * grad^2
+    ctx = DistributedContext(
+        {
+            "backend": "gloo",
+            "reduce_type": "param",
+            "param_sync_step": 1,
+            "sync_optimizer_state": sync_optimizer_state,
+        }
+    )
+    assert ctx.should_sync_now(epoch_step_idx=0)
+    ctx.step_after_param_update(module=module, optimizer=optimizer, epoch_step_idx=0)
+    results = {
+        "params": [float(param.detach().flatten()[0]) for param in module.parameters()],
+        "state": [
+            [float(optimizer.state[param][key].flatten()[0]) for key in ["exp_avg", "exp_avg_sq"]]
+            for param in module.parameters()
+        ],
+    }
+    torch.save(results, f"{tmp_dir}/rank{rank}.pt")
+    torch.distributed.destroy_process_group()
+
+
+def _check_torch_distributed_param_sync_optimizer_state(sync_optimizer_state: bool):
+    import socket
+    import torch.multiprocessing
+
+    world_size = 4
+    with socket.socket() as s:
+        s.bind(("127.0.0.1", 0))
+        port = s.getsockname()[1]
+    with tempfile.TemporaryDirectory(prefix="returnn_test_torch_distributed_param_sync_optimizer_state") as tmp_dir:
+        torch.multiprocessing.spawn(
+            _torch_distributed_param_sync_optimizer_state_worker,
+            args=(world_size, port, tmp_dir, sync_optimizer_state),
+            nprocs=world_size,
+        )
+        res = [torch.load(f"{tmp_dir}/rank{rank}.pt") for rank in range(world_size)]
+    for rank, res_rank in enumerate(res):
+        assert res_rank["params"] == res[0]["params"], (rank, res_rank["params"], res[0]["params"])  # params synced
+        print(f"sync_optimizer_state {sync_optimizer_state}, rank {rank}: optimizer state {res_rank['state']}")
+    if sync_optimizer_state:
+        # grads 100 * rank + i: the mean over the 4 ranks of 0.1 * g and of 0.001 * g^2
+        for rank, res_rank in enumerate(res):
+            assert res_rank["state"] == res[0]["state"], (rank, res_rank["state"])
+            numpy.testing.assert_allclose(res_rank["state"], [[15.0, 35.0], [15.1, 35.301]], rtol=1e-5)
+    else:  # each rank keeps its own
+        for rank, res_rank in enumerate(res):
+            numpy.testing.assert_allclose(
+                res_rank["state"],
+                [[0.1 * (100 * rank + i), 0.001 * (100 * rank + i) ** 2] for i in range(2)],
+                rtol=1e-5,
+            )
+
+
+def test_torch_distributed_param_sync_optimizer_state_cpu():
+    _check_torch_distributed_param_sync_optimizer_state(sync_optimizer_state=True)
+
+
+def test_torch_distributed_param_sync_no_optimizer_state_cpu():
+    _check_torch_distributed_param_sync_optimizer_state(sync_optimizer_state=False)
+
+
 def test_dynamic_learning_rate():
     num_epochs = 3
     last_global_train_step: Optional[float] = None
