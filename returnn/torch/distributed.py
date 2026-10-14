@@ -8,7 +8,7 @@ import logging
 import os
 import socket
 from datetime import timedelta
-from typing import Optional, Union, Any, Dict
+from typing import Optional, Union, Any, Tuple, List, Dict
 
 import torch
 from torch.nn.parallel import DistributedDataParallel
@@ -164,17 +164,7 @@ class DistributedContext:
         """
         if self._reduce_type != "grad_explicit":
             return
-        grads = [p.grad for p in module.parameters() if p.grad is not None]
-        if not grads:
-            return
-        # One flat buffer: thousands of small allreduces would be latency-bound.
-        # noinspection protected-member
-        flat = torch._utils._flatten_dense_tensors(grads)
-        torch.distributed.all_reduce(flat, op=torch.distributed.ReduceOp.SUM)
-        flat /= self._size
-        # noinspection protected-member
-        for grad, reduced in zip(grads, torch._utils._unflatten_dense_tensors(flat, grads)):
-            grad.copy_(reduced)
+        _all_reduce_avg_flat([p.grad for p in module.parameters() if p.grad is not None])
 
     def sync_complete_frac(self) -> bool:
         """
@@ -249,31 +239,55 @@ def get_dataset_distribution(opts: Union[Dict[str, Any], CollectionReadCheckCove
     return dataset_distribution
 
 
+_FLAT_REDUCE_BUCKET_BYTES = 256 * 1024**2
+
+
 @torch.no_grad()
-def _sync_params_avg(*, module: torch.nn.Module, sync_on_cpu: bool = False):
+def _all_reduce_avg_flat(
+    tensors: List[torch.Tensor], *, sync_on_cpu: bool = False, bucket_bytes: int = _FLAT_REDUCE_BUCKET_BYTES
+):
+    """
+    Averages the tensors in place over all ranks.
+
+    Flat buffers instead of one allreduce per tensor: thousands of small allreduces would be latency-bound.
+    A flat buffer is a copy, so buckets of at most ``bucket_bytes`` bound the extra memory.
+    One bucket holds one dtype on one device: the flat buffer is a ``cat``, which would promote mixed dtypes.
+
+    :param tensors: any dtypes and devices
+    :param sync_on_cpu: allreduce a CPU copy of each bucket (e.g. with Gloo for a CUDA module)
+    :param bucket_bytes: of one flat buffer; a tensor larger than that gets a bucket of its own
+    """
+    buckets: Dict[Tuple[torch.device, torch.dtype], List[List[torch.Tensor]]] = {}
+    for tensor in tensors:
+        key_buckets = buckets.setdefault((tensor.device, tensor.dtype), [[]])
+        if (
+            key_buckets[-1]
+            and sum(t.numel() for t in key_buckets[-1]) + tensor.numel() > bucket_bytes // tensor.element_size()
+        ):
+            key_buckets.append([])
+        key_buckets[-1].append(tensor)
+    for key_buckets in buckets.values():
+        for bucket in key_buckets:
+            # One flat buffer at a time: the function scope frees it before the next one is allocated.
+            _all_reduce_avg_bucket(bucket, sync_on_cpu=sync_on_cpu)
+
+
+def _all_reduce_avg_bucket(bucket: List[torch.Tensor], *, sync_on_cpu: bool):
     import torch.distributed as dist
 
-    if sync_on_cpu:
-        for param in module.parameters():
-            # Separately move each param to CPU (instead of the whole module), to safe CPU memory.
-            param_cpu = param.to(torch.device("cpu"))
-            # On CPU, we are likely using Gloo, and Gloo does not support AVG
-            dist.all_reduce(param_cpu.data, op=dist.ReduceOp.SUM)
-            param_cpu.data /= dist.get_world_size()
-            param.data = param_cpu.to(param.device)
-        return
+    # noinspection protected-member
+    flat = torch._utils._flatten_dense_tensors(bucket)
+    flat_reduce = flat.cpu() if sync_on_cpu else flat
+    # SUM then divide, not AVG: NCCL AVG pre-scales by 1/N rounded to the dtype, a bias for non-power-of-two N.
+    dist.all_reduce(flat_reduce, op=dist.ReduceOp.SUM)
+    flat_reduce /= dist.get_world_size()
+    if flat_reduce is not flat:
+        flat.copy_(flat_reduce)
+    # noinspection protected-member
+    for tensor, reduced in zip(bucket, torch._utils._unflatten_dense_tensors(flat, bucket)):
+        tensor.copy_(reduced)
 
-    if dist.get_backend() == "gloo":
-        # Gloo does not support AVG
-        reduce_op = dist.ReduceOp.SUM
-    else:
-        if hasattr(dist.ReduceOp, "AVG"):
-            reduce_op = dist.ReduceOp.AVG
-        else:
-            # Older PyTorch versions do not have ReduceOp.AVG.
-            reduce_op = dist.ReduceOp.SUM
 
-    for param in module.parameters():
-        dist.all_reduce(param.data, op=reduce_op)
-        if reduce_op == dist.ReduceOp.SUM:
-            param.data /= dist.get_world_size()
+@torch.no_grad()
+def _sync_params_avg(*, module: torch.nn.Module, sync_on_cpu: bool = False):
+    _all_reduce_avg_flat([param.data for param in module.parameters()], sync_on_cpu=sync_on_cpu)
