@@ -174,6 +174,7 @@ class Engine(EngineBase):
             wandb_opts = wandb_opts.copy()
             self._wandb_log_every_n_train_steps: Optional[int] = wandb_opts.pop("log_every_n_train_steps", 100)
             wandb_opts.setdefault("job_type", config.value("task", "train"))
+            wandb_opts.setdefault("resume", "allow")
             self._wandb_run = wandb.init(**wandb_opts)
         else:
             self._wandb_log_every_n_train_steps = None
