@@ -1788,6 +1788,8 @@ def _torch_distributed_param_sync_optimizer_state_worker(
             param.grad = torch.full_like(param, float(100 * rank + i))
     optimizer = torch.optim.Adam(module.parameters(), lr=0.01)
     optimizer.step()  # exp_avg = 0.1 * grad, exp_avg_sq = 0.001 * grad^2
+    if rank == 1:
+        optimizer.step()  # an extra update on one rank, as after an epoch with more batches on it
     ctx = DistributedContext(
         {
             "backend": "gloo",
@@ -1804,6 +1806,7 @@ def _torch_distributed_param_sync_optimizer_state_worker(
             [float(optimizer.state[param][key].flatten()[0]) for key in ["exp_avg", "exp_avg_sq"]]
             for param in module.parameters()
         ],
+        "steps": [float(optimizer.state[param]["step"]) for param in module.parameters()],
     }
     torch.save(results, f"{tmp_dir}/rank{rank}.pt")
     torch.distributed.destroy_process_group()
@@ -1824,21 +1827,25 @@ def _check_torch_distributed_param_sync_optimizer_state(sync_optimizer_state: bo
             nprocs=world_size,
         )
         res = [torch.load(f"{tmp_dir}/rank{rank}.pt") for rank in range(world_size)]
+    # Adam with a constant grad g, after n steps: exp_avg = g * (1 - 0.9^n), exp_avg_sq = g^2 * (1 - 0.999^n).
+    # Grads 100 * rank + i, n = 2 on rank 1, 1 elsewhere.
+    own_state = [
+        [[g * (1 - 0.9**n), g**2 * (1 - 0.999**n)] for g in [100.0 * rank + i for i in range(2)]]
+        for rank, n in enumerate([1, 2, 1, 1])
+    ]
     for rank, res_rank in enumerate(res):
         assert res_rank["params"] == res[0]["params"], (rank, res_rank["params"], res[0]["params"])  # params synced
         print(f"sync_optimizer_state {sync_optimizer_state}, rank {rank}: optimizer state {res_rank['state']}")
     if sync_optimizer_state:
-        # grads 100 * rank + i: the mean over the 4 ranks of 0.1 * g and of 0.001 * g^2
+        mean_state = numpy.mean(own_state, axis=0)
         for rank, res_rank in enumerate(res):
             assert res_rank["state"] == res[0]["state"], (rank, res_rank["state"])
-            numpy.testing.assert_allclose(res_rank["state"], [[15.0, 35.0], [15.1, 35.301]], rtol=1e-5)
+            numpy.testing.assert_allclose(res_rank["state"], mean_state, rtol=1e-5)
+            assert res_rank["steps"] == [2.0, 2.0], (rank, res_rank["steps"])  # the max, not the mean 1.25
     else:  # each rank keeps its own
         for rank, res_rank in enumerate(res):
-            numpy.testing.assert_allclose(
-                res_rank["state"],
-                [[0.1 * (100 * rank + i), 0.001 * (100 * rank + i) ** 2] for i in range(2)],
-                rtol=1e-5,
-            )
+            numpy.testing.assert_allclose(res_rank["state"], own_state[rank], rtol=1e-5)
+            assert res_rank["steps"] == [float(n) for n in [[1, 2, 1, 1][rank]] * 2], (rank, res_rank["steps"])
 
 
 def test_torch_distributed_param_sync_optimizer_state_cpu():
