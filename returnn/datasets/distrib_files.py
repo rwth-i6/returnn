@@ -23,6 +23,7 @@ from .basic import (
     extend_dataset_dict_from_parent_dataset,
     DatasetSeq,
     RANDOM_SEED_OFFSET_ENV_VAR,
+    _get_distributed_rank_and_size,
 )
 from .cached2 import CachedDataset2
 
@@ -220,7 +221,7 @@ class DistributeFilesDataset(CachedDataset2):
         if distrib_shard_files:
             if _distrib_info:
                 # We're in a child process.
-                # `_get_rank_and_size()` no longer works,
+                # `_get_distributed_rank_and_size()` no longer works,
                 # so we pass the info about the shards via a pickled property.
                 # See also Dataset.__reduce__.
                 # _num_shards and _shard_index are already set, so just check.
@@ -229,11 +230,14 @@ class DistributeFilesDataset(CachedDataset2):
                     and self._num_shards == _distrib_info["_num_shards"]
                 )
             else:
-                assert self._num_shards == 1 and self._shard_index == 0, (  # ensure defaults are set
-                    f"{self}: Cannot use both dataset-sharding via properties _num_shards and _shard index "
-                    f"and {self.__class__.__name__}'s own sharding implementation based on the trainings rank and size."
-                )
-                self._shard_index, self._num_shards = _get_rank_and_size()
+                rank, size = _get_distributed_rank_and_size()
+                # The same sharding via _num_shards/_shard_index (torch_distributed dataset_distribution shard) is fine.
+                if (self._num_shards, self._shard_index) not in [(1, 0), (size, rank)]:
+                    raise ValueError(
+                        f"{self}: distrib_shard_files shards the files by the distributed rank {rank} / size {size},"
+                        f" which clashes with _num_shards {self._num_shards} / _shard_index {self._shard_index}"
+                    )
+                self._shard_index, self._num_shards = rank, size
         assert 0 <= self._shard_index < self._num_shards
 
         if _meta_info_cache:
@@ -286,7 +290,7 @@ class DistributeFilesDataset(CachedDataset2):
         }
 
     def _uses_custom_distributed_sharding(self) -> bool:
-        return self._num_shards > 1
+        return self.distrib_shard_files
 
     def _lazy_init_file_list(self):
         """
@@ -611,34 +615,6 @@ def _get_key_for_file_tree(t: FileTree) -> str:
     import tree
 
     return ":".join(tree.flatten(t))
-
-
-def _get_rank_and_size() -> Tuple[int, int]:
-    """
-    :return: tuple (rank, size): the global rank and size for distributed trainings
-    """
-
-    from returnn.config import get_global_config
-
-    config = get_global_config(raise_exception=False)
-    if not config:
-        return 0, 1
-    if config.typed_value("torch_distributed") is not None:
-        import returnn.torch.distributed
-
-        ctx = returnn.torch.distributed.get_ctx(config=config)
-        return ctx.rank(), ctx.size()
-    elif config.is_true("use_horovod"):
-        assert config.bool("use_tensorflow", False) or config.value("backend", "").startswith("tensorflow")
-
-        import returnn.tf.horovod
-
-        ctx = returnn.tf.horovod.get_ctx(config=config)
-        return ctx.rank(), ctx.size()
-    elif config.typed_value("__debug_dummy_distributed_rank_and_size") is not None:
-        return config.typed_value("__debug_dummy_distributed_rank_and_size")
-    else:
-        return 0, 1
 
 
 class _WorkerProcParent:

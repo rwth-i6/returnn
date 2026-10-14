@@ -4816,9 +4816,7 @@ class PackedBackend(Backend[PackedRawTensor]):
         kwargs = dict(indices=indices, indices_dim=indices_dim, mode=mode, fill_value=fill_value, out_dim=out_dim)
         if not is_packed(source) and is_packed(indices):
             # e.g. the ones which count the writes per position: a plain source follows the packing of the indices
-            idx_raw = _raw(indices)
-            if any(d in source.dims for d in idx_raw.orig_dims):
-                source = idx_raw.rewrap(_pack_like(source, idx_raw), name=source.name)
+            source = _pack_plain_like(source, _raw(indices))
         out = _scatter_relayout(source, **kwargs) if is_packed(source) else None
         if out is not None:
             return out
@@ -4844,14 +4842,7 @@ class PackedBackend(Backend[PackedRawTensor]):
         """scaled_gradient: identity forward, gradient scaled; elementwise, runs on the inner buffer"""
         raw = _raw(tensor)
         if isinstance(scale, Tensor) and is_packed(scale):
-            scale_raw = _raw(_conform_packing(scale, raw))
-            # a per-frame scale over other dims has no meaning for the gradient of this tensor,
-            # and its rows would silently scale other frames
-            assert raw.same_packing(scale_raw), (
-                f"scaled_gradient: the scale is packed over {list(scale_raw.orig_dims)},"
-                f" the tensor over {list(raw.orig_dims)}"
-            )
-            scale = scale_raw.inner
+            scale = _raw(_conform_packing(scale, raw)).inner
         return raw.rewrap(raw.inner_backend.scaled_gradient(raw.inner, scale), name="scaled_gradient")
 
     @staticmethod
@@ -5802,8 +5793,7 @@ def _packed_total_bound(dim: Dim, in_raw: PackedRawTensor, n_seqs: int) -> Optio
     have = _total_bounds.get(dim)
     if have is not None:
         bounds.append(have)
-    # noinspection PyProtectedMember
-    op = dim._extra.derived_from_op if dim._extra else None
+    op = dim.derived_from_op
     if op is not None and op.kind == "add" and op.inputs:
         parts = [_packed_total_bound(part, in_raw, n_seqs) for part in op.inputs]
         if all(part is not None for part in parts):
@@ -6103,12 +6093,9 @@ def _clip_into_seqs(raw: PackedRawTensor, idx: Tensor, *, seq: Tensor) -> Tensor
     :param seq: the sequence of every position
     :return: idx clipped into its sequence
     """
-    # in the traced regime the lens already live on the data's device, where copying them would be a sync
-    lens = _device_lens(raw)
-    if lens is None:
-        lens = rf.copy_to_device(raw.seq_lens, raw.inner.device)
+    lens = raw.orig_dims[-1].get_size_tensor(device=raw.inner.device)
     last = rf.cast(rf.gather(lens, indices=seq, axis=raw.orig_dims[0]), idx.dtype) - 1
-    return rf.clip_by_value(idx, rf.zeros_like(last), last)
+    return rf.clip_by_value(idx, 0, last)
 
 
 def _gather_into_packing(source: Tensor, raw: PackedRawTensor, target: PackedRawTensor, *, start: int) -> Tensor:

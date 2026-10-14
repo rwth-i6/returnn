@@ -686,17 +686,13 @@ def get_ctc_fsa_fast_bw(
     return edges, weights, start_end_states
 
 
-def _get_ctc_fsa_fast_bw_num_states(targets: torch.Tensor, *, edges_bound: Optional[int] = None) -> int:
+def _get_ctc_fsa_fast_bw_num_states(targets: torch.Tensor) -> int:
     """
     :param targets: shape (batch,target_time)
-    :param edges_bound: as in :func:`get_ctc_fsa_fast_bw`
-    :return: upper bound of the state count of the FSA from :func:`get_ctc_fsa_fast_bw`, from the shapes only
+    :return: upper bound of the state count of the rectangular FSA from :func:`get_ctc_fsa_fast_bw`,
+        from the shapes only, (2 * n_time + 3) states per seq
     """
     n_batch, n_time = targets.shape
-    if edges_bound is not None:
-        # packed layout: 2 * targets_total + 3 * n_batch, where edges_bound == 5 * targets_total + 5 * n_batch
-        return 2 * (edges_bound // 5) + n_batch
-    # rectangular layout: (2 * n_time + 3) states per seq
     return n_batch * (2 * n_time + 3)
 
 

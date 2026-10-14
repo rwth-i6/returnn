@@ -732,6 +732,41 @@ def test_ctc_best_path_packed_fake_tensor_mode():
     assert isinstance(fake, FakeTensor) and fake.shape == real.shape and fake.dtype == real.dtype
 
 
+def test_ctc_loss_packed_states_in_global_memory_cuda():
+    """
+    The per-seq recursion keeps the states of a seq in shared memory, 3 * (2 * n_tgt_time + 3) floats,
+    which fits into the 48 KB of a block up to a targets buffer width of about 2000.
+    A wider buffer, with the same targets in it, must give the same loss and grads (states in global memory).
+    """
+    if not torch.cuda.is_available():
+        raise SkipTest("CUDA not available")
+    torch.manual_seed(7)
+    lens = [50, 30, 0]
+    tgt_lens = [12, 7, 0]
+    n_batch, dim, blank = len(lens), 10, 9
+    logits = torch.randn(sum(lens), dim, device="cuda")
+    targets_content = torch.randint(0, blank, (n_batch, max(tgt_lens)), dtype=torch.int32, device="cuda")
+    res = []
+    for tgt_width in (max(tgt_lens), 2100):
+        targets = torch.zeros((n_batch, tgt_width), dtype=torch.int32, device="cuda")
+        targets[:, : max(tgt_lens)] = targets_content
+        leaf = logits.clone().requires_grad_(True)
+        loss = ctc_loss_packed(
+            logits=leaf,
+            seq_starts=torch.tensor(numpy.cumsum([0] + lens[:-1]), dtype=torch.int32, device="cuda"),
+            logits_seq_lens=torch.tensor(lens, dtype=torch.int32, device="cuda"),
+            max_seq_len=max(lens),
+            targets=targets,
+            targets_seq_lens=torch.tensor(tgt_lens, dtype=torch.int32, device="cuda"),
+            blank_index=blank,
+            edges_bound=5 * sum(tgt_lens) + 5 * n_batch,
+        )
+        loss.sum().backward()
+        res.append((loss.detach(), leaf.grad))
+    torch.testing.assert_close(res[1][0], res[0][0], rtol=1e-4, atol=1e-4)
+    torch.testing.assert_close(res[1][1], res[0][1], rtol=1e-4, atol=1e-4)
+
+
 def test_ctc_fsa_batch3_len6_c8():
     """
     This (:func:`Fsa.get_ctc_fsa_fast_bw`) is used by :func:`ctc_loss`.

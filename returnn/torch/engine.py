@@ -1435,7 +1435,13 @@ class Engine(EngineBase):
             assert eval_seq_order_share is None, "eval_seq_order_share needs dataset_init_epoch"
             dataset_reset = returnn_dataset_wrapper.ReturnnDatasetResetNoOpCallback()
 
-        wrapped_dataset = returnn_dataset_wrapper.ReturnnDatasetIterDataPipe(dataset, reset_callback=dataset_reset)
+        shard_workers = self.config.typed_value("torch_dataloader_shard_workers", None)
+        assert shard_workers is None or isinstance(shard_workers, bool), (
+            f"config torch_dataloader_shard_workers, expected bool or None, got {shard_workers!r}"
+        )
+        wrapped_dataset = returnn_dataset_wrapper.ReturnnDatasetIterDataPipe(
+            dataset, reset_callback=dataset_reset, shard_workers=shard_workers
+        )
         if (self._min_seq_length is not None) or (self._max_seq_length is not None):
             wrapped_dataset = data_pipeline.LenFilterDataPipe(
                 wrapped_dataset, min_seq_length=self._min_seq_length, max_seq_length=self._max_seq_length

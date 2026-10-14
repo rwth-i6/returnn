@@ -1245,7 +1245,7 @@ def test_updater_weight_decay_param_dims():
     behavior_version_orig_state = BehaviorVersion._get_state()
     try:
         BehaviorVersion._reset()
-        BehaviorVersion.set(36)
+        BehaviorVersion.set(37)
         assert _params_with_wd(rf_module_to_pt_module(_Model())) == {
             "embed.weight",
             "layer_norm.scale",
@@ -1256,7 +1256,7 @@ def test_updater_weight_decay_param_dims():
         }
         assert _params_with_wd(_torch_model()) == {"0.weight", "1.weight", "2.weight", "3.weight"}
         BehaviorVersion._reset()
-        BehaviorVersion.set(37)
+        BehaviorVersion.set(38)
         assert _params_with_wd(rf_module_to_pt_module(_Model())) == {"linear.weight"}
         assert _params_with_wd(_torch_model()) == {"0.weight"}
     finally:
@@ -3128,6 +3128,80 @@ def test_torch_engine_distributed_cpu():
     assert param_sums[0] == param_sums[1], param_sums
 
 
+def _torch_distributed_shard_worker(rank: int, world_size: int, port: int, tmp_dir: str, hdf_fn: str):
+    from returnn.__main__ import load_data
+    from returnn.datasets import Dataset
+
+    os.environ.update(
+        MASTER_ADDR="127.0.0.1",
+        MASTER_PORT=str(port),
+        RANK=str(rank),
+        WORLD_SIZE=str(world_size),
+        LOCAL_RANK=str(rank),
+        LOCAL_WORLD_SIZE=str(world_size),
+    )
+    seq_tags = []
+
+    def _train_step(*, model: TrainTestModel, extern_data: TensorDict, **kwargs):
+        seq_tags.extend(extern_data["seq_tag"].raw_tensor.tolist())
+        TrainTestModel.train_step(model=model, extern_data=extern_data, **kwargs)
+
+    config = Config(
+        dict(
+            task="train",
+            device="cpu",
+            train={"class": "HDFDataset", "files": [hdf_fn], "seq_ordering": "random"},
+            extern_data={"data": {"dim": 9}, "classes": {"dim": 2, "sparse": True}},
+            get_model=TrainTestModel,
+            train_step=_train_step,
+            batch_size=1000,
+            max_seqs=1,
+            optimizer={"class": "adam"},
+            learning_rate=0.01,
+            num_epochs=1,
+            torch_dataloader_opts={"num_workers": 1},
+            torch_distributed={"backend": "gloo", "dataset_distribution": "shard"},
+        )
+    )
+    with global_config_ctx(config):
+        # as returnn.__main__.init_data
+        dataset, _ = load_data(config, 0, "train", **Dataset.get_default_kwargs_train(config=config))
+        engine = Engine(config=config)
+        engine.init_train_from_config(train_data=dataset)
+        engine.train()
+    with open(f"{tmp_dir}/rank{rank}.txt", "w") as f:
+        f.write(repr(seq_tags))
+    torch.distributed.destroy_process_group()
+
+
+def test_torch_engine_distributed_cpu_dataset_distribution_shard():
+    # dataset_distribution "shard": the ranks together train on every seq once per epoch, with disjoint shards,
+    # also with the DataLoader worker (the dataset is sharded in the main proc, then pickled into the worker).
+    import socket
+    import torch.multiprocessing
+    from test_HDFDataset import generate_hdf_from_other
+    from test_Dataset import dummy_iter_dataset
+
+    world_size = 2
+    hdf_fn = generate_hdf_from_other({"class": "Task12AXDataset", "num_seqs": 22})
+    all_tags = sorted(
+        seq.seq_tag for seq in dummy_iter_dataset(init_dataset({"class": "HDFDataset", "files": [hdf_fn]}))
+    )
+    with socket.socket() as s:
+        s.bind(("127.0.0.1", 0))
+        port = s.getsockname()[1]
+    with tempfile.TemporaryDirectory(prefix="returnn_test_torch_distributed_shard") as tmp_dir:
+        torch.multiprocessing.spawn(
+            _torch_distributed_shard_worker, args=(world_size, port, tmp_dir, hdf_fn), nprocs=world_size
+        )
+        seq_tags = []
+        for rank in range(world_size):
+            with open(f"{tmp_dir}/rank{rank}.txt") as f:
+                seq_tags.append(eval(f.read()))
+    assert [len(tags) for tags in seq_tags] == [11, 11], seq_tags
+    assert sorted(seq_tags[0] + seq_tags[1]) == all_tags, seq_tags
+
+
 def _torch_distributed_lr_worker(rank: int, world_size: int, port: int, tmp_dir: str, opts: Dict[str, Any]):
     device = opts.get("device", "cpu")
     os.environ.update(
@@ -3869,8 +3943,8 @@ def test_torch_engine_eval_on_all_ranks():
 
 
 def test_torch_engine_eval_on_all_ranks_by_behavior_version():
-    # Behavior version 38 splits the eval over the ranks, the option overrides that.
-    for version, opts, split in [(37, {}, False), (38, {}, True), (38, {"eval_on_all_ranks": False}, False)]:
+    # Behavior version 39 splits the eval over the ranks, the option overrides that.
+    for version, opts, split in [(38, {}, False), (39, {}, True), (39, {"eval_on_all_ranks": False}, False)]:
         results = _eval_on_ranks(
             torch_distributed={**_EVAL_ON_ALL_RANKS_DIST_OPTS, **opts}, behavior_version=version, num_epochs=1
         )

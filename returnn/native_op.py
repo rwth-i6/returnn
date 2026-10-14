@@ -3766,8 +3766,8 @@ class FastBaumWelchPackedOp(NativeOpGenBase):
     with per-sequence start offsets, like the flash-attention varlen layout.
 
     Two kernels. In the first, one CUDA block runs the forward and backward recursion of one sequence,
-    over its own frames only: its states sit in shared memory, its edges are strided over the threads,
-    and it keeps the score of every edge per frame.
+    over its own frames only: its states sit in shared memory (in global memory when they do not fit,
+    above about 2000 labels), its edges are strided over the threads, and it keeps the score of every edge per frame.
     The second has one block per frame and sequence, sums the edge scores of that frame
     and writes the normalized scores to the output, all frames in parallel.
     So the op is a few launches, whatever the frame bound,
@@ -3863,21 +3863,23 @@ class FastBaumWelchPackedOp(NativeOpGenBase):
       }
     """,
             "101_fwd_bwd_packed_seq": """
+      template<bool states_in_shared>
       DEF_KERNEL
       void fwd_bwd_packed_seq(unsigned max_seq_states, unsigned num_edges, unsigned num_emissions,
                               unsigned num_frames, float* index, unsigned index_stride,
                               unsigned* seq_starts, unsigned* edge_offsets,
                               unsigned* start_states, unsigned* end_states,
                               unsigned* from_buffer, unsigned* to_buffer, unsigned* emission_idxs,
-                              float* weight_buffer, float* am_scores, float* edge_buffer) {
+                              float* weight_buffer, float* am_scores, float* edge_buffer, float* state_scratch) {
         // Block seq runs the recursion of sequence seq over its own frames:
-        // its states in shared memory, its edges strided over the threads.
+        // its states in shared memory (in state_scratch if they do not fit), its edges strided over the threads.
         // The forward pass keeps the score of every edge per frame, the backward pass adds the score from the end,
         // normalize_packed_seq then sums and writes them out, all frames in parallel.
         // Three state buffers rotate, so one sync per frame suffices: a frame reads one, adds into the next,
         // and resets the third for the frame after, which no thread touches in this frame.
         DEF_SHARED(float, shared);
         unsigned seq = blockIdx.x;
+        float* states = states_in_shared ? &shared[0] : state_scratch + (size_t) seq * 3 * max_seq_states;
         unsigned tid = threadIdx.x;
         unsigned n_threads = blockDim.x;
         unsigned state_lo = start_states[seq];
@@ -3899,15 +3901,15 @@ class FastBaumWelchPackedOp(NativeOpGenBase):
           bool fwd = pass == 0;
           unsigned init_state = fwd ? 0 : end_states[seq] - state_lo;
           for (unsigned s = tid; s < n_seq_states; s += n_threads) {
-            shared[s] = s == init_state ? 0.0 : INF_F;
-            shared[max_seq_states + s] = INF_F;
+            states[s] = s == init_state ? 0.0 : INF_F;
+            states[max_seq_states + s] = INF_F;
           }
           packed_seq_sync();
           for (unsigned i = 0; i < seq_len; i++) {
             unsigned frame = fwd ? i : seq_len - 1 - i;
-            float* prev = &shared[(i % 3) * max_seq_states];
-            float* next = &shared[((i + 1) % 3) * max_seq_states];
-            float* reset = &shared[((i + 2) % 3) * max_seq_states];
+            float* prev = &states[(i % 3) * max_seq_states];
+            float* next = &states[((i + 1) % 3) * max_seq_states];
+            float* reset = &states[((i + 2) % 3) * max_seq_states];
             for (unsigned s = tid; s < n_seq_states; s += n_threads) {
               reset[s] = INF_F;
             }
@@ -4081,18 +4083,43 @@ class FastBaumWelchPackedOp(NativeOpGenBase):
     #ifndef RETURNN_CUDA
     #define RETURNN_CUDA CUDA
     #endif
+    // The states of a seq in shared memory: 48 KB per block is the limit on every GPU
+    // (the opt-in above it exists only from Volta on), about 2000 labels of CTC.
+    // Above it, the recursion runs on global memory, slower but with no limit.
     #if RETURNN_CUDA
     const unsigned seq_block_dim = 1024;
     const unsigned frame_block_dim = 256;
+    const size_t max_shared_bytes = 48u * 1024u;
     #else
     const unsigned seq_block_dim = 1;
     const unsigned frame_block_dim = 1;
+    const size_t max_shared_bytes = std::numeric_limits<size_t>::max();  // a std::vector, no limit
     #endif
-    start_dev_kernel2(
-      fwd_bwd_packed_seq, n_seqs, seq_block_dim, 3 * max_seq_states * sizeof(float),
-      (max_seq_states, n_edges, n_emissions, n_frames, d_index, index_stride,
-       d_seq_starts, d_edge_offsets, d_start_states, d_end_states, d_from, d_to, d_emission_idxs,
-       d_weights, d_am_scores, d_edge_buffer));
+    size_t states_bytes = 3 * (size_t) max_seq_states * sizeof(float);
+    float* d_state_scratch = NULL;
+    if (states_bytes <= max_shared_bytes) {
+      start_dev_kernel2(
+        fwd_bwd_packed_seq<true>, n_seqs, seq_block_dim, states_bytes,
+        (max_seq_states, n_edges, n_emissions, n_frames, d_index, index_stride,
+         d_seq_starts, d_edge_offsets, d_start_states, d_end_states, d_from, d_to, d_emission_idxs,
+         d_weights, d_am_scores, d_edge_buffer, d_state_scratch));
+    } else {
+      static bool warned = false;
+      if (!warned) {
+        warned = true;
+        fprintf(stderr,
+          "FastBaumWelchPackedOp: %%u states per seq take %%zu bytes, above the %%zu bytes of shared memory per block,"
+          " so the recursion runs on global memory (slower).\\n",
+          max_seq_states, states_bytes, max_shared_bytes);
+      }
+      d_state_scratch = reinterpret_cast<float*>(device_malloc(n_seqs * states_bytes));
+      if(!d_state_scratch) { HANDLE_LAST_ERROR(); abort(); }  // error should have been set in device_malloc
+      start_dev_kernel2(
+        fwd_bwd_packed_seq<false>, n_seqs, seq_block_dim, 0,
+        (max_seq_states, n_edges, n_emissions, n_frames, d_index, index_stride,
+         d_seq_starts, d_edge_offsets, d_start_states, d_end_states, d_from, d_to, d_emission_idxs,
+         d_weights, d_am_scores, d_edge_buffer, d_state_scratch));
+    }
     HANDLE_LAST_ERROR();
     start_dev_kernel2(
       normalize_packed_seq, (unsigned) n_sums, frame_block_dim, frame_block_dim * sizeof(float),
@@ -4109,6 +4136,9 @@ class FastBaumWelchPackedOp(NativeOpGenBase):
     #endif
 
     device_free(d_edge_buffer);
+    if (d_state_scratch) {
+      device_free(d_state_scratch);
+    }
   """
 
     c_bw_code = None
