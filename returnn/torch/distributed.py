@@ -8,7 +8,7 @@ import logging
 import os
 import socket
 from datetime import timedelta
-from typing import Optional, Union, Any, Dict
+from typing import Optional, Union, Any, List, Dict
 
 import torch
 from torch.nn.parallel import DistributedDataParallel
@@ -164,17 +164,7 @@ class DistributedContext:
         """
         if self._reduce_type != "grad_explicit":
             return
-        grads = [p.grad for p in module.parameters() if p.grad is not None]
-        if not grads:
-            return
-        # One flat buffer: thousands of small allreduces would be latency-bound.
-        # noinspection protected-member
-        flat = torch._utils._flatten_dense_tensors(grads)
-        torch.distributed.all_reduce(flat, op=torch.distributed.ReduceOp.SUM)
-        flat /= self._size
-        # noinspection protected-member
-        for grad, reduced in zip(grads, torch._utils._unflatten_dense_tensors(flat, grads)):
-            grad.copy_(reduced)
+        _all_reduce_avg_flat([p.grad for p in module.parameters() if p.grad is not None])
 
     def sync_complete_frac(self) -> bool:
         """
@@ -247,6 +237,40 @@ def get_dataset_distribution(opts: Union[Dict[str, Any], CollectionReadCheckCove
             f" got {dataset_distribution!r}"
         )
     return dataset_distribution
+
+
+_FLAT_REDUCE_BUCKET_BYTES = 256 * 1024**2
+
+
+@torch.no_grad()
+def _all_reduce_avg_flat(tensors: List[torch.Tensor], *, bucket_bytes: int = _FLAT_REDUCE_BUCKET_BYTES):
+    """
+    Averages the tensors in place over all ranks.
+
+    Flat buffers instead of one allreduce per tensor: thousands of small allreduces would be latency-bound.
+    A flat buffer is a copy, so buckets of at most ``bucket_bytes`` bound the extra memory.
+
+    :param tensors: all on one device
+    :param bucket_bytes: of one flat buffer; a tensor larger than that gets a bucket of its own
+    """
+    import torch.distributed as dist
+
+    bucket: List[torch.Tensor] = []
+    bucket_size = 0
+    for tensor in tensors + [None]:
+        if bucket and (tensor is None or bucket_size + tensor.numel() * tensor.element_size() > bucket_bytes):
+            # noinspection protected-member
+            flat = torch._utils._flatten_dense_tensors(bucket)
+            dist.all_reduce(flat, op=dist.ReduceOp.SUM)
+            flat /= dist.get_world_size()
+            # noinspection protected-member
+            for bucket_tensor, reduced in zip(bucket, torch._utils._unflatten_dense_tensors(flat, bucket)):
+                bucket_tensor.copy_(reduced)
+            bucket = []
+            bucket_size = 0
+        if tensor is not None:
+            bucket.append(tensor)
+            bucket_size += tensor.numel() * tensor.element_size()
 
 
 @torch.no_grad()
