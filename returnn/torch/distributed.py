@@ -8,7 +8,7 @@ import logging
 import os
 import socket
 from datetime import timedelta
-from typing import Optional, Union, Any, List, Dict
+from typing import Optional, Union, Any, Tuple, List, Dict
 
 import torch
 from torch.nn.parallel import DistributedDataParallel
@@ -251,33 +251,41 @@ def _all_reduce_avg_flat(
 
     Flat buffers instead of one allreduce per tensor: thousands of small allreduces would be latency-bound.
     A flat buffer is a copy, so buckets of at most ``bucket_bytes`` bound the extra memory.
+    One bucket holds one dtype on one device: the flat buffer is a ``cat``, which would promote mixed dtypes.
 
-    :param tensors: all on one device
+    :param tensors: any dtypes and devices
     :param sync_on_cpu: allreduce a CPU copy of each bucket (e.g. with Gloo for a CUDA module)
     :param bucket_bytes: of one flat buffer; a tensor larger than that gets a bucket of its own
     """
+    buckets: Dict[Tuple[torch.device, torch.dtype], List[List[torch.Tensor]]] = {}
+    for tensor in tensors:
+        key_buckets = buckets.setdefault((tensor.device, tensor.dtype), [[]])
+        if (
+            key_buckets[-1]
+            and sum(t.numel() for t in key_buckets[-1]) + tensor.numel() > bucket_bytes // tensor.element_size()
+        ):
+            key_buckets.append([])
+        key_buckets[-1].append(tensor)
+    for key_buckets in buckets.values():
+        for bucket in key_buckets:
+            # One flat buffer at a time: the function scope frees it before the next one is allocated.
+            _all_reduce_avg_bucket(bucket, sync_on_cpu=sync_on_cpu)
+
+
+def _all_reduce_avg_bucket(bucket: List[torch.Tensor], *, sync_on_cpu: bool):
     import torch.distributed as dist
 
-    bucket: List[torch.Tensor] = []
-    bucket_size = 0
-    for tensor in tensors + [None]:
-        if bucket and (tensor is None or bucket_size + tensor.numel() * tensor.element_size() > bucket_bytes):
-            # noinspection protected-member
-            flat = torch._utils._flatten_dense_tensors(bucket)
-            flat_reduce = flat.cpu() if sync_on_cpu else flat
-            # SUM then divide, not AVG: NCCL AVG pre-scales by 1/N rounded to the dtype, a bias for non-power-of-two N.
-            dist.all_reduce(flat_reduce, op=dist.ReduceOp.SUM)
-            flat_reduce /= dist.get_world_size()
-            if flat_reduce is not flat:
-                flat.copy_(flat_reduce)
-            # noinspection protected-member
-            for bucket_tensor, reduced in zip(bucket, torch._utils._unflatten_dense_tensors(flat, bucket)):
-                bucket_tensor.copy_(reduced)
-            bucket = []
-            bucket_size = 0
-        if tensor is not None:
-            bucket.append(tensor)
-            bucket_size += tensor.numel() * tensor.element_size()
+    # noinspection protected-member
+    flat = torch._utils._flatten_dense_tensors(bucket)
+    flat_reduce = flat.cpu() if sync_on_cpu else flat
+    # SUM then divide, not AVG: NCCL AVG pre-scales by 1/N rounded to the dtype, a bias for non-power-of-two N.
+    dist.all_reduce(flat_reduce, op=dist.ReduceOp.SUM)
+    flat_reduce /= dist.get_world_size()
+    if flat_reduce is not flat:
+        flat.copy_(flat_reduce)
+    # noinspection protected-member
+    for tensor, reduced in zip(bucket, torch._utils._unflatten_dense_tensors(flat, bucket)):
+        tensor.copy_(reduced)
 
 
 @torch.no_grad()
