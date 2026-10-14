@@ -8,7 +8,7 @@ import logging
 import os
 import socket
 from datetime import timedelta
-from typing import Optional, Union, Any, Dict
+from typing import Optional, Union, Any, List, Dict
 
 import torch
 from torch.nn.parallel import DistributedDataParallel
@@ -77,6 +77,10 @@ class DistributedContext:
         self._sync_complete_frac: Optional[bool] = self._opts.get("sync_complete_frac", None)
         if self._sync_complete_frac is None:
             self._sync_complete_frac = BehaviorVersion.get() >= 33
+
+        self._sync_at_epoch_end: Optional[bool] = self._opts.get("sync_at_epoch_end", None)
+        if self._sync_at_epoch_end is None:
+            self._sync_at_epoch_end = BehaviorVersion.get() >= 38
 
         self._dataset_distribution = get_dataset_distribution(self._opts)
 
@@ -201,6 +205,34 @@ class DistributedContext:
         if self._reduce_type == "param" and self.should_sync_now(epoch_step_idx=epoch_step_idx):
             _sync_params_avg(module=module, sync_on_cpu=self._opts.get("sync_on_cpu", False))
 
+    def sync_at_epoch_end(self) -> bool:
+        """
+        :return: whether :func:`step_after_epoch` averages the params and the optimizer state over all ranks
+            at the end of every train epoch (option ``sync_at_epoch_end``, default on since behavior version 38).
+            Only matters for reduce_type "param", where the ranks hold different params and optimizer states
+            between the syncs. Then the checkpoint (written by rank 0) and the eval are the average,
+            and every rank starts the next epoch identical, so resuming from the checkpoint continues the same training.
+        """
+        return self._sync_at_epoch_end
+
+    def step_after_epoch(self, *, module: torch.nn.Module, optimizer: torch.optim.Optimizer):
+        """
+        Average the params and the floating point optimizer state over all ranks, see :func:`sync_at_epoch_end`.
+        Call this at the end of the train epoch, before the checkpoint is written.
+
+        :param module: to take the params from
+        :param optimizer: to take the state from
+        """
+        if self._reduce_type != "param" or not self._sync_at_epoch_end:
+            return
+        tensors = [param.data for param in module.parameters()]
+        for param in module.parameters():
+            # The optimizer counts steps in a tensor too, equal on every rank; other state is optimizer-specific.
+            for _, value in sorted(optimizer.state.get(param, {}).items()):
+                if isinstance(value, torch.Tensor) and value.is_floating_point():
+                    tensors.append(value)
+        _all_reduce_avg_flat(tensors, sync_on_cpu=self._opts.get("sync_on_cpu", False))
+
 
 _is_set_up = False
 _ctx = None  # type: Optional[DistributedContext]
@@ -247,6 +279,27 @@ def get_dataset_distribution(opts: Union[Dict[str, Any], CollectionReadCheckCove
             f" got {dataset_distribution!r}"
         )
     return dataset_distribution
+
+
+@torch.no_grad()
+def _all_reduce_avg_flat(tensors: List[torch.Tensor], *, sync_on_cpu: bool):
+    import torch.distributed as dist
+
+    # One flat buffer per device: thousands of small allreduces would be latency-bound.
+    tensors_by_device: Dict[torch.device, List[torch.Tensor]] = {}
+    for tensor in tensors:
+        tensors_by_device.setdefault(tensor.device, []).append(tensor)
+    for device_tensors in tensors_by_device.values():
+        # noinspection protected-member
+        flat = torch._utils._flatten_dense_tensors(device_tensors)
+        flat_reduce = flat.cpu() if sync_on_cpu else flat  # Gloo on the CPU, and Gloo has no AVG
+        dist.all_reduce(flat_reduce, op=dist.ReduceOp.SUM)
+        flat_reduce /= dist.get_world_size()
+        if flat_reduce is not flat:
+            flat.copy_(flat_reduce)
+        # noinspection protected-member
+        for tensor, reduced in zip(device_tensors, torch._utils._unflatten_dense_tensors(flat, device_tensors)):
+            tensor.copy_(reduced)
 
 
 @torch.no_grad()

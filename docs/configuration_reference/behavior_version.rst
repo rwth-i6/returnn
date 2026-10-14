@@ -22,6 +22,20 @@ and not listing legacy/deprecated parameters.
 Version History
 ---------------
 
+Behavior version 38 (2026-10-14)
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+PyTorch distributed training (``torch_distributed``) with ``reduce_type`` ``"param"``:
+at the end of every train epoch, the params and the optimizer state are averaged over all ranks,
+before the checkpoint is written.
+So the checkpoint and the eval are the average, every rank starts the next epoch identical,
+and resuming from the checkpoint continues the same training as without the interruption.
+
+Before, rank 0 wrote its own params and optimizer state, up to ``param_sync_step - 1`` local steps away from the average,
+and the ranks continued with their own diverged params and optimizer states.
+
+There is also the option ``sync_at_epoch_end: bool`` in ``torch_distributed`` to override in both directions.
+
 Behavior version 37 (2026-10-13)
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 

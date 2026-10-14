@@ -1768,6 +1768,95 @@ def test_torch_engine_distributed_sync_complete_frac_optimizer_step():
     _check_torch_distributed_lr(device="cuda", reduce_type="grad_explicit", accum_grad_multiple_step=1)
 
 
+def _torch_distributed_sync_at_epoch_end_worker(
+    rank: int, world_size: int, port: int, tmp_dir: str, sync_at_epoch_end: bool
+):
+    os.environ.update(
+        MASTER_ADDR="127.0.0.1",
+        MASTER_PORT=str(port),
+        RANK=str(rank),
+        WORLD_SIZE=str(world_size),
+        LOCAL_RANK=str(rank),
+        LOCAL_WORLD_SIZE=str(world_size),
+    )
+    config = Config(
+        dict(
+            task="train",
+            device="cpu",
+            extern_data={"data": {"dim": 9}, "classes": {"dim": 2, "sparse": True}},
+            get_model=TrainTestModel,
+            train_step=TrainTestModel.train_step,
+            batch_size=10**9,
+            max_seqs=1,  # one seq per step: 7 steps per epoch, the param sync every 3 steps leaves the last step local
+            optimizer={"class": "adam"},
+            learning_rate=0.01,
+            num_epochs=2,
+            model=f"{tmp_dir}/model",
+            torch_dataloader_opts={"num_workers": 0},
+            torch_distributed={
+                "backend": "gloo",
+                "reduce_type": "param",
+                "param_sync_step": 3,
+                "sync_at_epoch_end": sync_at_epoch_end,
+            },
+        )
+    )
+    with global_config_ctx(config):
+        # no fixed seed: each rank its own seq order, thus its own params and optimizer state between the syncs
+        dataset = init_dataset({"class": "Task12AXDataset", "num_seqs": 7})
+        dataset.init_seq_order(epoch=1)
+        engine = Engine(config=config)
+        engine.init_train_from_config(train_data=dataset)
+        engine.train()
+        assert engine.global_train_step == 14, engine.global_train_step
+        params = [param.detach().clone() for param in engine._pt_model.parameters()]
+        state = [
+            {key: value.clone() for key, value in engine._updater.get_optimizer().state[param].items()}
+            for param in engine._pt_model.parameters()
+        ]
+    torch.save({"params": params, "state": state}, f"{tmp_dir}/rank{rank}.pt")
+    torch.distributed.destroy_process_group()
+
+
+def _check_torch_distributed_sync_at_epoch_end(sync_at_epoch_end: bool):
+    import socket
+    import torch.multiprocessing
+
+    world_size = 2
+    with socket.socket() as s:
+        s.bind(("127.0.0.1", 0))
+        port = s.getsockname()[1]
+    with tempfile.TemporaryDirectory(prefix="returnn_test_torch_distributed_sync_at_epoch_end") as tmp_dir:
+        torch.multiprocessing.spawn(
+            _torch_distributed_sync_at_epoch_end_worker,
+            args=(world_size, port, tmp_dir, sync_at_epoch_end),
+            nprocs=world_size,
+        )
+        res = [torch.load(f"{tmp_dir}/rank{rank}.pt") for rank in range(world_size)]
+        saved_opt = torch.load(f"{tmp_dir}/model.002.opt.pt")  # written by rank 0
+    params_equal = all(torch.equal(p0, p1) for p0, p1 in zip(res[0]["params"], res[1]["params"]))
+    state_keys = sorted(res[0]["state"][0].keys())
+    assert "exp_avg" in state_keys and "exp_avg_sq" in state_keys, state_keys
+    state_equal = all(
+        torch.equal(s0[key], s1[key]) for s0, s1 in zip(res[0]["state"], res[1]["state"]) for key in state_keys
+    )
+    print(f"sync_at_epoch_end {sync_at_epoch_end}: params equal {params_equal}, optimizer state equal {state_equal}")
+    assert params_equal == sync_at_epoch_end and state_equal == sync_at_epoch_end
+    # The checkpoint is rank 0's state. With the sync it is thus also what rank 1 continues with.
+    saved_state = saved_opt["state"] if "state" in saved_opt else saved_opt["optimizer"]["state"]
+    for i, s0 in enumerate(res[0]["state"]):
+        for key in state_keys:
+            assert torch.equal(saved_state[i][key], s0[key]), (i, key)
+
+
+def test_torch_engine_distributed_param_sync_at_epoch_end_cpu():
+    _check_torch_distributed_sync_at_epoch_end(sync_at_epoch_end=True)
+
+
+def test_torch_engine_distributed_param_no_sync_at_epoch_end_cpu():
+    _check_torch_distributed_sync_at_epoch_end(sync_at_epoch_end=False)
+
+
 def test_dynamic_learning_rate():
     num_epochs = 3
     last_global_train_step: Optional[float] = None

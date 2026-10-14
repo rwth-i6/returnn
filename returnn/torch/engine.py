@@ -874,6 +874,10 @@ class Engine(EngineBase):
 
         self._on_epoch_end(dataset_name="train")
 
+        if self._torch_distributed_ctx:
+            # all ranks left the train loop together, so this collective matches
+            self._torch_distributed_ctx.step_after_epoch(module=self._pt_model, optimizer=self._updater.get_optimizer())
+
         if self.epoch % self._save_model_epoch_interval == 0 or self.epoch == self._final_epoch:
             if self.model_filename:
                 self._save_model()
