@@ -268,18 +268,29 @@ class Engine(EngineBase):
                 and self._torch_distributed_ctx.size() > 1
                 and self._torch_distributed_ctx.eval_on_all_ranks()
             ):
-                supports_sharding = [None] * self._torch_distributed_ctx.size()
-                torch.distributed.all_gather_object(supports_sharding, dataset.supports_sharding())
+                # split only if every rank supports sharding and orders the dataset with the same seed
+                rank_infos: List[Tuple[bool, int]] = [(False, 0)] * self._torch_distributed_ctx.size()
+                torch.distributed.all_gather_object(
+                    rank_infos, (dataset.supports_sharding(), dataset.random_seed_offset)
+                )
+                supports_sharding = [supported for supported, _ in rank_infos]
                 assert len(set(supports_sharding)) == 1, (
                     f"{dataset}: supports_sharding differs across the ranks: {supports_sharding}"
                 )
-                if supports_sharding[0]:
+                random_seed_offsets = [offset for _, offset in rank_infos]
+                if supports_sharding[0] and len(set(random_seed_offsets)) == 1:
                     dataset.set_sharding(
                         num_shards=self._torch_distributed_ctx.size(), shard_index=self._torch_distributed_ctx.rank()
                     )
                     self._eval_datasets_on_all_ranks.add(dataset_name)
                     print(
                         f"Eval dataset {dataset_name!r} is split over {self._torch_distributed_ctx.size()} ranks.",
+                        file=log.v3,
+                    )
+                elif supports_sharding[0]:
+                    print(
+                        f"Eval dataset {dataset_name!r} has a different random_seed_offset on each rank"
+                        f" {random_seed_offsets}, it is evaluated on rank 0 only.",
                         file=log.v3,
                     )
                 else:

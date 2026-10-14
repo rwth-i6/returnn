@@ -3734,6 +3734,7 @@ def _eval_on_all_ranks_run(
     dev_sharding: bool = True,
     dev_drop_even_lens: bool = False,
     dev_via_eval_datasets: bool = False,
+    dev_object: bool = False,
     calculate_exp_loss: bool = False,
     eval_before_train: bool = False,
     behavior_version: Optional[int] = None,
@@ -3760,6 +3761,9 @@ def _eval_on_all_ranks_run(
             "dataset": dev_opts,
             "map_seq_stream": _eval_on_all_ranks_drop_even_lens,
         }
+    if dev_object:
+        # a function which returns the dataset object, which gets no kwargs from the engine
+        dev_opts = functools.partial(init_dataset, dev_opts)
     config = Config(
         dict(
             task="train",
@@ -3896,12 +3900,18 @@ def test_torch_engine_eval_on_all_ranks():
     # also with a random seq order, for an entry of eval_datasets, with DistributedDataParallel on CPU,
     # and with a stream which drops seqs,
     # and every rank gets the score of one process over the whole dev set.
-    # With it off, or for a dataset without sharding support, rank 0 evaluates them alone.
+    # With it off, for a dataset without sharding support
+    # or for a dataset object with a random seed per rank, rank 0 evaluates them alone.
     for opts, run_kwargs, split in [
         ({"eval_on_all_ranks": True}, {}, True),
         ({"eval_on_all_ranks": False}, {}, False),
         ({"eval_on_all_ranks": True}, {"dev_seq_ordering": "random"}, True),
         ({"eval_on_all_ranks": True}, {"dev_seq_ordering": "random", "dev_via_eval_datasets": True}, True),
+        (
+            {"eval_on_all_ranks": True},
+            {"dev_seq_ordering": "random", "dev_via_eval_datasets": True, "dev_object": True},
+            False,
+        ),
         ({"eval_on_all_ranks": True, "reduce_type": "grad"}, {}, True),
         ({"eval_on_all_ranks": True}, {"dev_sharding": False}, False),
         ({"eval_on_all_ranks": True}, {"dev_drop_even_lens": True, "dev_via_eval_datasets": True}, True),
