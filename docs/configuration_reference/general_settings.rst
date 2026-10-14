@@ -108,3 +108,16 @@ train
 
 use_tensorflow
     If you set this to ``True``, TensorFlow will be used.
+
+wandb_opts
+    PyTorch backend only. If set, logs training and eval metrics to `Weights & Biases <https://wandb.ai>`_.
+    Requires the ``wandb`` package. Only rank 0 logs in distributed training.
+    A dict that is given to ``wandb.init``, plus these RETURNN-specific keys and defaults:
+
+    - ``log_every_n_train_steps``: log the train step losses every N steps. Default 100. ``None`` disables it.
+      Epoch-level train and eval losses are always logged.
+    - ``job_type``: default is the ``task`` (e.g. ``train``, ``eval``, ``forward``).
+    - ``resume``: default ``"allow"``.
+
+    To continue one W&B run over several jobs (e.g. with ``stop_for_resubmission_when_low_time_left``),
+    give a fixed ``id``, e.g. the Sisyphus job hash. Without an ``id``, each job creates a new run.
