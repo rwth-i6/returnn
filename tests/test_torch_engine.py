@@ -1778,6 +1778,9 @@ def _torch_distributed_all_reduce_avg_flat_worker(rank: int, world_size: int, po
     tensors = [torch.full((n,), float(100 * rank + i)) for i, n in enumerate([3, 7, 2, 11, 5])]
     _all_reduce_avg_flat(tensors, bucket_bytes=8)
     results = [[float(tensor[0]), float(tensor[-1])] for tensor in tensors]
+    tensors = [torch.full((n,), float(100 * rank + i)) for i, n in enumerate([3, 7, 2, 11, 5])]
+    _all_reduce_avg_flat(tensors, sync_on_cpu=True, bucket_bytes=8)  # on CPU tensors: the same path, no copy
+    assert [[float(tensor[0]), float(tensor[-1])] for tensor in tensors] == results
     with open(f"{tmp_dir}/rank{rank}.txt", "w") as f:
         f.write(repr(results))
     torch.distributed.destroy_process_group()
