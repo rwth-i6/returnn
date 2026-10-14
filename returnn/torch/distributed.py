@@ -11,6 +11,7 @@ from datetime import timedelta
 from typing import Optional, Union, Any, Tuple, List, Dict
 
 import torch
+import tree
 from torch.nn.parallel import DistributedDataParallel
 
 from returnn.config import Config
@@ -233,15 +234,15 @@ class DistributedContext:
             return global_train_step
         tensors = []  # mean
         counters = [torch.tensor([global_train_step], dtype=torch.int64)]  # max
-        objects = []  # from rank 0
+        objects = []  # (param, leaf index) from rank 0
         for tensor in list(module.parameters()) + list(module.buffers()):
             (tensors if tensor.is_floating_point() else counters).append(tensor.data)
-        for state in optimizer.state.values():
-            for key in sorted(state):
-                value = state[key]
+        for param, state in optimizer.state.items():
+            # The state of a param is a flat dict of tensors for the torch optimizers, any nesting is fine.
+            for idx, (path, value) in enumerate(tree.flatten_with_path(state)):
                 if not isinstance(value, torch.Tensor):
-                    objects.append((state, key))
-                elif key == "step" or not value.is_floating_point():
+                    objects.append((param, idx))
+                elif path[-1] == "step" or not value.is_floating_point():
                     counters.append(value)
                 else:
                     tensors.append(value)
@@ -251,10 +252,12 @@ class DistributedContext:
             dist.all_reduce(counter_cpu, op=dist.ReduceOp.MAX)
             counter.copy_(counter_cpu)
         if objects:
-            values = [state[key] for state, key in objects]
+            values = [tree.flatten(optimizer.state[param])[idx] for param, idx in objects]
             dist.broadcast_object_list(values, src=0, device=torch.device("cpu"))
-            for (state, key), value in zip(objects, values):
-                state[key] = value
+            for (param, idx), value in zip(objects, values):
+                flat = tree.flatten(optimizer.state[param])
+                flat[idx] = value
+                optimizer.state[param] = tree.unflatten_as(optimizer.state[param], flat)
         return int(counters[0])
 
 

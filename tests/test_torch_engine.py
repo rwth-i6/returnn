@@ -1811,15 +1811,27 @@ def _torch_distributed_sync_at_epoch_end_worker(
         # buffers as a batch norm has them: running stats (float, the mean) and a count (int, the max)
         engine._pt_model.register_buffer("stat", torch.full((2,), float(rank)))
         engine._pt_model.register_buffer("count", torch.tensor(rank, dtype=torch.int64))
+        # nested optimizer state as a custom optimizer might keep it: a tensor (mean) and a Python value (from rank 0)
+        optimizer = engine._updater.get_optimizer()
+        optimizer.state[next(engine._pt_model.parameters())]["extra"] = {
+            "nested": [torch.full((3,), float(rank)), {"note": f"rank {rank}"}]
+        }
         engine.train()
         params = [param.detach().clone() for param in engine._pt_model.parameters()]
         state = [
-            {key: value.clone() for key, value in engine._updater.get_optimizer().state[param].items()}
+            {key: value.clone() for key, value in optimizer.state[param].items() if isinstance(value, torch.Tensor)}
             for param in engine._pt_model.parameters()
         ]
+        extra = optimizer.state[next(engine._pt_model.parameters())]["extra"]
         buffers = {name: buf.clone() for name, buf in engine._pt_model.named_buffers()}
     torch.save(
-        {"params": params, "state": state, "buffers": buffers, "global_train_step": engine.global_train_step},
+        {
+            "params": params,
+            "state": state,
+            "extra": extra,
+            "buffers": buffers,
+            "global_train_step": engine.global_train_step,
+        },
         f"{tmp_dir}/rank{rank}.pt",
     )
     torch.distributed.destroy_process_group()
@@ -1862,6 +1874,9 @@ def _check_torch_distributed_sync_at_epoch_end(sync_at_epoch_end: bool):
             buffers,
         )
         assert int(buffers["count"]) == (1 if sync_at_epoch_end else rank), (rank, buffers)
+        extra = res[rank]["extra"]["nested"]
+        assert torch.equal(extra[0], torch.full((3,), 0.5 if sync_at_epoch_end else float(rank))), (rank, extra)
+        assert extra[1] == {"note": "rank 0" if sync_at_epoch_end else f"rank {rank}"}, (rank, extra)
     assert all(
         float(s["step"]) == (16 if sync_at_epoch_end else steps[rank])
         for rank in range(world_size)
