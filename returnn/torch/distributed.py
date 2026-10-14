@@ -168,17 +168,7 @@ class DistributedContext:
         """
         if self._reduce_type != "grad_explicit":
             return
-        grads = [p.grad for p in module.parameters() if p.grad is not None]
-        if not grads:
-            return
-        # One flat buffer: thousands of small allreduces would be latency-bound.
-        # noinspection protected-member
-        flat = torch._utils._flatten_dense_tensors(grads)
-        torch.distributed.all_reduce(flat, op=torch.distributed.ReduceOp.SUM)
-        flat /= self._size
-        # noinspection protected-member
-        for grad, reduced in zip(grads, torch._utils._unflatten_dense_tensors(flat, grads)):
-            grad.copy_(reduced)
+        _all_reduce_avg_flat([p.grad for p in module.parameters() if p.grad is not None], sync_on_cpu=False)
 
     def sync_complete_frac(self) -> bool:
         """
@@ -203,7 +193,9 @@ class DistributedContext:
     def step_after_param_update(self, *, module: torch.nn.Module, epoch_step_idx: int):
         """one train step"""
         if self._reduce_type == "param" and self.should_sync_now(epoch_step_idx=epoch_step_idx):
-            _sync_params_avg(module=module, sync_on_cpu=self._opts.get("sync_on_cpu", False))
+            _all_reduce_avg_flat(
+                [param.data for param in module.parameters()], sync_on_cpu=self._opts.get("sync_on_cpu", False)
+            )
 
     def sync_at_epoch_end(self) -> bool:
         """
@@ -227,10 +219,11 @@ class DistributedContext:
             return
         tensors = [param.data for param in module.parameters()]
         for param in module.parameters():
+            state = optimizer.state.get(param, {})
             # The optimizer counts steps in a tensor too, equal on every rank; other state is optimizer-specific.
-            for _, value in sorted(optimizer.state.get(param, {}).items()):
-                if isinstance(value, torch.Tensor) and value.is_floating_point():
-                    tensors.append(value)
+            for key in sorted(state):
+                if isinstance(state[key], torch.Tensor) and state[key].is_floating_point():
+                    tensors.append(state[key])
         _all_reduce_avg_flat(tensors, sync_on_cpu=self._opts.get("sync_on_cpu", False))
 
 
@@ -283,8 +276,16 @@ def get_dataset_distribution(opts: Union[Dict[str, Any], CollectionReadCheckCove
 
 @torch.no_grad()
 def _all_reduce_avg_flat(tensors: List[torch.Tensor], *, sync_on_cpu: bool):
+    """
+    Averages the tensors in place over all ranks.
+
+    :param tensors: on any devices
+    :param sync_on_cpu: all-reduce a CPU copy (e.g. with Gloo for a CUDA module)
+    """
     import torch.distributed as dist
 
+    if not tensors:
+        return
     # One flat buffer per device: thousands of small allreduces would be latency-bound.
     tensors_by_device: Dict[torch.device, List[torch.Tensor]] = {}
     for tensor in tensors:
@@ -292,7 +293,8 @@ def _all_reduce_avg_flat(tensors: List[torch.Tensor], *, sync_on_cpu: bool):
     for device_tensors in tensors_by_device.values():
         # noinspection protected-member
         flat = torch._utils._flatten_dense_tensors(device_tensors)
-        flat_reduce = flat.cpu() if sync_on_cpu else flat  # Gloo on the CPU, and Gloo has no AVG
+        flat_reduce = flat.cpu() if sync_on_cpu else flat
+        # SUM then divide, not AVG: NCCL AVG pre-scales by 1/N rounded to the dtype, a bias for non-power-of-two N.
         dist.all_reduce(flat_reduce, op=dist.ReduceOp.SUM)
         flat_reduce /= dist.get_world_size()
         if flat_reduce is not flat:
@@ -300,33 +302,3 @@ def _all_reduce_avg_flat(tensors: List[torch.Tensor], *, sync_on_cpu: bool):
         # noinspection protected-member
         for tensor, reduced in zip(device_tensors, torch._utils._unflatten_dense_tensors(flat, device_tensors)):
             tensor.copy_(reduced)
-
-
-@torch.no_grad()
-def _sync_params_avg(*, module: torch.nn.Module, sync_on_cpu: bool = False):
-    import torch.distributed as dist
-
-    if sync_on_cpu:
-        for param in module.parameters():
-            # Separately move each param to CPU (instead of the whole module), to safe CPU memory.
-            param_cpu = param.to(torch.device("cpu"))
-            # On CPU, we are likely using Gloo, and Gloo does not support AVG
-            dist.all_reduce(param_cpu.data, op=dist.ReduceOp.SUM)
-            param_cpu.data /= dist.get_world_size()
-            param.data = param_cpu.to(param.device)
-        return
-
-    if dist.get_backend() == "gloo":
-        # Gloo does not support AVG
-        reduce_op = dist.ReduceOp.SUM
-    else:
-        if hasattr(dist.ReduceOp, "AVG"):
-            reduce_op = dist.ReduceOp.AVG
-        else:
-            # Older PyTorch versions do not have ReduceOp.AVG.
-            reduce_op = dist.ReduceOp.SUM
-
-    for param in module.parameters():
-        dist.all_reduce(param.data, op=reduce_op)
-        if reduce_op == dist.ReduceOp.SUM:
-            param.data /= dist.get_world_size()
