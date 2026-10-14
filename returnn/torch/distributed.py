@@ -282,10 +282,11 @@ def _sync_params_avg(
     tensors = [param.data for param in module.parameters()]
     if sync_optimizer_state:
         for param in module.parameters():
+            state = optimizer.state.get(param, {})
             # The optimizer counts steps in a tensor too, equal on every rank; other state is optimizer-specific.
-            for _, value in sorted(optimizer.state.get(param, {}).items()):
-                if isinstance(value, torch.Tensor) and value.is_floating_point():
-                    tensors.append(value)
+            for key in sorted(state):
+                if isinstance(state[key], torch.Tensor) and state[key].is_floating_point():
+                    tensors.append(state[key])
 
     if sync_on_cpu:
         for tensor in tensors:
