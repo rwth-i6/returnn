@@ -1790,6 +1790,8 @@ def _torch_distributed_param_sync_optimizer_state_worker(
     optimizer.step()  # exp_avg = 0.1 * grad, exp_avg_sq = 0.001 * grad^2
     if rank == 1:
         optimizer.step()  # an extra update on one rank, as after an epoch with more batches on it
+    # nested state with a Python value, as a custom optimizer might keep it: taken from rank 0
+    optimizer.state[next(module.parameters())]["extra"] = {"nested": [f"rank {rank}"]}
     ctx = DistributedContext(
         {
             "backend": "gloo",
@@ -1807,6 +1809,7 @@ def _torch_distributed_param_sync_optimizer_state_worker(
             for param in module.parameters()
         ],
         "steps": [float(optimizer.state[param]["step"]) for param in module.parameters()],
+        "extra": optimizer.state[next(module.parameters())]["extra"],
     }
     torch.save(results, f"{tmp_dir}/rank{rank}.pt")
     torch.distributed.destroy_process_group()
@@ -1842,10 +1845,12 @@ def _check_torch_distributed_param_sync_optimizer_state(sync_optimizer_state: bo
             assert res_rank["state"] == res[0]["state"], (rank, res_rank["state"])
             numpy.testing.assert_allclose(res_rank["state"], mean_state, rtol=1e-5)
             assert res_rank["steps"] == [2.0, 2.0], (rank, res_rank["steps"])  # the max, not the mean 1.25
+            assert res_rank["extra"] == {"nested": ["rank 0"]}, (rank, res_rank["extra"])
     else:  # each rank keeps its own
         for rank, res_rank in enumerate(res):
             numpy.testing.assert_allclose(res_rank["state"], own_state[rank], rtol=1e-5)
             assert res_rank["steps"] == [float(n) for n in [[1, 2, 1, 1][rank]] * 2], (rank, res_rank["steps"])
+            assert res_rank["extra"] == {"nested": [f"rank {rank}"]}, (rank, res_rank["extra"])
 
 
 def test_torch_distributed_param_sync_optimizer_state_cpu():

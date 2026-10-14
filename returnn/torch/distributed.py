@@ -8,9 +8,10 @@ import logging
 import os
 import socket
 from datetime import timedelta
-from typing import Optional, Union, Any, Iterator, Tuple, List, Dict
+from typing import Optional, Union, Any, Tuple, List, Dict
 
 import torch
+import tree
 from torch.nn.parallel import DistributedDataParallel
 
 from returnn.config import Config
@@ -196,8 +197,10 @@ class DistributedContext:
     ):
         """
         Average the params over all ranks, for reduce_type "param" in the steps where it syncs.
-        With the option ``sync_optimizer_state`` (default off), also the floating point optimizer state
-        (e.g. the Adam moments); otherwise each rank keeps its own.
+        With the option ``sync_optimizer_state`` (default off), also the optimizer state:
+        floating point tensors (e.g. the Adam moments) take the mean, counts the max
+        (the ``step`` tensors and integer tensors), other values come from rank 0.
+        Otherwise each rank keeps its own.
 
         :param module: to take the params from
         :param optimizer: to take the state from
@@ -318,32 +321,30 @@ def _sync_params_avg(
 ):
     import torch.distributed as dist
 
-    tensors = [param.data for param in module.parameters()]
+    tensors = [param.data for param in module.parameters()]  # mean
+    counters = []  # max
+    objects = []  # (param, leaf index) from rank 0
     if sync_optimizer_state:
-        for state in optimizer.state.values():
-            for _, key, value in _state_leaves(state):
-                if not isinstance(value, torch.Tensor) or not value.is_floating_point():
-                    continue
-                if key == "step":
-                    # The update count (the torch optimizers keep it as a tensor). The ranks can differ in it
-                    # when they got different numbers of batches in an epoch; its mean would be no count.
-                    step_cpu = value.to(torch.device("cpu"))
-                    dist.all_reduce(step_cpu, op=dist.ReduceOp.MAX)
-                    value.copy_(step_cpu)
+        for param, state in optimizer.state.items():
+            # The state of a param is a flat dict of tensors for the torch optimizers, any nesting is fine.
+            for idx, (path, value) in enumerate(tree.flatten_with_path(state)):
+                if not isinstance(value, torch.Tensor):
+                    objects.append((param, idx))
+                elif path[-1] == "step" or not value.is_floating_point():
+                    # Counts, e.g. the update count (the torch optimizers keep it as a tensor). The ranks can differ
+                    # in it when they got different numbers of batches in an epoch; its mean would be no count.
+                    counters.append(value)
                 else:
                     tensors.append(value)
     _all_reduce_avg_flat(tensors, sync_on_cpu=sync_on_cpu)
-
-
-def _state_leaves(state: Union[Dict[str, Any], List[Any]]) -> Iterator[Tuple[Union[Dict, List], Any, Any]]:
-    """
-    :param state: the optimizer state of one param, usually a flat dict of tensors, but any nesting of dicts and lists
-    :return: (container, key, leaf) for every leaf, in a deterministic order (dict keys sorted)
-    """
-    keys = sorted(state) if isinstance(state, dict) else range(len(state))
-    for key in keys:
-        value = state[key]
-        if isinstance(value, (dict, list)):
-            yield from _state_leaves(value)
-        else:
-            yield state, key, value
+    for counter in counters:
+        counter_cpu = counter.to(torch.device("cpu"))
+        dist.all_reduce(counter_cpu, op=dist.ReduceOp.MAX)
+        counter.copy_(counter_cpu)
+    if objects:
+        values = [tree.flatten(optimizer.state[param])[idx] for param, idx in objects]
+        dist.broadcast_object_list(values, src=0, device=torch.device("cpu"))
+        for (param, idx), value in zip(objects, values):
+            flat = tree.flatten(optimizer.state[param])
+            flat[idx] = value
+            optimizer.state[param] = tree.unflatten_as(optimizer.state[param], flat)
