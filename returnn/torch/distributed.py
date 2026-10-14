@@ -320,8 +320,7 @@ def _sync_params_avg(
 
     tensors = [param.data for param in module.parameters()]
     if sync_optimizer_state:
-        for param in module.parameters():
-            state = optimizer.state.get(param, {})
+        for state in optimizer.state.values():
             for key in sorted(state):
                 if not isinstance(state[key], torch.Tensor) or not state[key].is_floating_point():
                     continue
