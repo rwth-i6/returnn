@@ -2102,6 +2102,51 @@ def test_torch_engine_distributed_param_sync_accum_dyn_cpu():
             raise Exception("timeout, the ranks hang")
 
 
+def _torch_distributed_all_reduce_avg_flat_worker(rank: int, world_size: int, port: int, tmp_dir: str):
+    from returnn.torch.distributed import _all_reduce_avg_flat
+
+    os.environ.update(MASTER_ADDR="127.0.0.1", MASTER_PORT=str(port), RANK=str(rank), WORLD_SIZE=str(world_size))
+    torch.distributed.init_process_group(backend="gloo")
+    # 5 float32 tensors of 3, 7, 2, 11 and 5 elements; 8 bytes per bucket: a tensor of 2 fills one,
+    # every other tensor is larger than a bucket and gets its own
+    tensors = [torch.full((n,), float(100 * rank + i)) for i, n in enumerate([3, 7, 2, 11, 5])]
+    _all_reduce_avg_flat(tensors, bucket_bytes=8)
+    results = [[float(tensor[0]), float(tensor[-1])] for tensor in tensors]
+    tensors = [torch.full((n,), float(100 * rank + i)) for i, n in enumerate([3, 7, 2, 11, 5])]
+    _all_reduce_avg_flat(tensors, sync_on_cpu=True, bucket_bytes=8)  # on CPU tensors: the same path, no copy
+    assert [[float(tensor[0]), float(tensor[-1])] for tensor in tensors] == results
+    # mixed dtypes: one bucket per dtype, no promotion
+    tensors = [
+        torch.full((n,), float(100 * rank + i), dtype=[torch.float32, torch.float64][i % 2])
+        for i, n in enumerate([3, 7, 2, 11, 5])
+    ]
+    _all_reduce_avg_flat(tensors, bucket_bytes=8)
+    assert [[float(tensor[0]), float(tensor[-1])] for tensor in tensors] == results
+    assert [tensor.dtype for tensor in tensors] == [[torch.float32, torch.float64][i % 2] for i in range(5)]
+    with open(f"{tmp_dir}/rank{rank}.txt", "w") as f:
+        f.write(repr(results))
+    torch.distributed.destroy_process_group()
+
+
+def test_torch_distributed_all_reduce_avg_flat_buckets():
+    import socket
+    import torch.multiprocessing
+
+    world_size = 3
+    with socket.socket() as s:
+        s.bind(("127.0.0.1", 0))
+        port = s.getsockname()[1]
+    with tempfile.TemporaryDirectory(prefix="returnn_test_torch_distributed_all_reduce_avg_flat") as tmp_dir:
+        torch.multiprocessing.spawn(
+            _torch_distributed_all_reduce_avg_flat_worker, args=(world_size, port, tmp_dir), nprocs=world_size
+        )
+        for rank in range(world_size):
+            with open(f"{tmp_dir}/rank{rank}.txt") as f:
+                results = eval(f.read())
+            # the mean over the ranks of 100 * rank + i
+            assert results == [[100.0 + i, 100.0 + i] for i in range(5)], (rank, results)
+
+
 def test_dynamic_learning_rate():
     num_epochs = 3
     last_global_train_step: Optional[float] = None
@@ -2774,6 +2819,50 @@ def test_torch_engine_cuda_graph_packed_decoder_parity():
         (ctc_a, ce_a), (ctc_b, ce_b) = losses["packed_eager"][s], losses["packed_graphc"][s]
         assert abs(ctc_a - ctc_b) / max(abs(ctc_a), 1e-6) < 2e-2, f"step {s} ctc: {ctc_a} vs {ctc_b}"
         assert abs(ce_a - ce_b) / max(abs(ce_a), 1e-6) < 2e-2, f"step {s} ce: {ce_a} vs {ce_b}"
+
+
+def test_torch_engine_cuda_graph_finalize_then_eager():
+    """
+    A graphc training which stops in the middle of an epoch (an exception), with the bound shapes still enabled,
+    then an eager packed engine in the same process with the same dims, incl. the global batch dim:
+    after finalize, the dims are as before the graphc engine.
+    """
+
+    class _StopTraining(Exception):
+        pass
+
+    if not torch.cuda.is_available():
+        raise unittest.SkipTest("CUDA not available")
+    config, dataset = _build_cuda_graph_train_config_and_dataset(compile_=False)
+    time_dim = config.typed_dict["extern_data"]["data"]["dims"][1]
+    dyn_lr = config.typed_dict["dynamic_learning_rate"]
+
+    def _dyn_lr_stop(*, global_train_step: int, **kwargs) -> float:
+        if global_train_step == 5:  # after the capture
+            raise _StopTraining()
+        return dyn_lr(global_train_step=global_train_step, **kwargs)
+
+    config.typed_dict["dynamic_learning_rate"] = _dyn_lr_stop
+    with global_config_ctx(config):
+        engine = Engine(config=config)
+        engine.init_train_from_config(train_data=dataset)
+        try:
+            engine.train()
+        except _StopTraining:
+            pass
+        else:
+            raise Exception("did not get expected exception")
+        assert engine._graph_capture._graph is not None, "graph never captured"
+        engine.finalize()
+    config.typed_dict["dynamic_learning_rate"] = dyn_lr
+    del config.typed_dict["torch_cuda_graph"]
+    config.typed_dict["packed_tensors"] = True
+    with global_config_ctx(config):
+        engine = Engine(config=config)
+        engine.init_train_from_config(train_data=dataset)
+        engine.train()
+        engine.finalize()
+    assert time_dim.capacity is None
 
 
 def test_torch_engine_cuda_graph_packed_total_bound():
