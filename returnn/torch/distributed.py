@@ -236,8 +236,7 @@ class DistributedContext:
         objects = []  # from rank 0
         for tensor in list(module.parameters()) + list(module.buffers()):
             (tensors if tensor.is_floating_point() else counters).append(tensor.data)
-        for param in module.parameters():
-            state = optimizer.state.get(param, {})
+        for state in optimizer.state.values():
             for key in sorted(state):
                 value = state[key]
                 if not isinstance(value, torch.Tensor):
