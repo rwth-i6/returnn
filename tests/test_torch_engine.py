@@ -2473,7 +2473,7 @@ def test_torch_engine_cuda_graph_finalize_then_eager():
             pass
         else:
             raise Exception("did not get expected exception")
-        assert engine._graph_capture._graph is not None, "graph never captured"
+        assert engine._graph_capture._train_prog.graph is not None, "graph never captured"
         engine.finalize()
     config.typed_dict["dynamic_learning_rate"] = dyn_lr
     del config.typed_dict["torch_cuda_graph"]
@@ -2678,7 +2678,6 @@ def test_torch_engine_cuda_graph_eval():
     if not torch.cuda.is_available():
         raise unittest.SkipTest("CUDA not available")
     names = ["ce", "seq_ce", "grad_norm:p2"]
-    # the eager runs first: the graphc engine leaves the bound shapes on for the process-wide batch dim
     eager = {
         storage: _cuda_graph_run_step_losses(
             *_cuda_graph_lm_eos_setup(storage, graphc=False, eval_only_loss=True), mode=storage, loss_names=names
@@ -2706,7 +2705,6 @@ def test_torch_engine_cuda_graph_eval():
             for key in ["dev_loss_ce", "dev_loss_seq_ce", "dev_loss_seq_ce_sq"]:
                 a, b = (engine.learning_rate_control.epoch_data[epoch].error[key] for engine in (engine_a, engine_b))
                 assert abs(a - b) / max(abs(a), 1e-6) < 2e-2, f"{storage} {compile_} ep {epoch} {key}: {a} vs {b}"
-        graph_capture.set_bound_shapes_enabled(False)  # for the eager tests which follow in this process
         engine_b.finalize()
 
 
