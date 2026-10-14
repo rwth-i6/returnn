@@ -1808,14 +1808,19 @@ def _torch_distributed_sync_at_epoch_end_worker(
         dataset.init_seq_order(epoch=1)
         engine = Engine(config=config)
         engine.init_train_from_config(train_data=dataset)
+        # buffers as a batch norm has them: running stats (float, the mean) and a count (int, the max)
+        engine._pt_model.register_buffer("stat", torch.full((2,), float(rank)))
+        engine._pt_model.register_buffer("count", torch.tensor(rank, dtype=torch.int64))
         engine.train()
         params = [param.detach().clone() for param in engine._pt_model.parameters()]
         state = [
             {key: value.clone() for key, value in engine._updater.get_optimizer().state[param].items()}
             for param in engine._pt_model.parameters()
         ]
+        buffers = {name: buf.clone() for name, buf in engine._pt_model.named_buffers()}
     torch.save(
-        {"params": params, "state": state, "global_train_step": engine.global_train_step}, f"{tmp_dir}/rank{rank}.pt"
+        {"params": params, "state": state, "buffers": buffers, "global_train_step": engine.global_train_step},
+        f"{tmp_dir}/rank{rank}.pt",
     )
     torch.distributed.destroy_process_group()
 
@@ -1850,6 +1855,13 @@ def _check_torch_distributed_sync_at_epoch_end(sync_at_epoch_end: bool):
     assert params_equal == sync_at_epoch_end and state_equal == sync_at_epoch_end
     # the max over the ranks after each of the 2 epochs: 8 + 8; without the sync, 7 + 7 and 8 + 8
     assert steps == ([16, 16] if sync_at_epoch_end else [14, 16]), steps
+    for rank in range(world_size):
+        buffers = res[rank]["buffers"]
+        assert torch.equal(buffers["stat"], torch.full((2,), 0.5 if sync_at_epoch_end else float(rank))), (
+            rank,
+            buffers,
+        )
+        assert int(buffers["count"]) == (1 if sync_at_epoch_end else rank), (rank, buffers)
     assert all(
         float(s["step"]) == (16 if sync_at_epoch_end else steps[rank])
         for rank in range(world_size)

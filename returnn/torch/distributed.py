@@ -199,11 +199,14 @@ class DistributedContext:
 
     def sync_at_epoch_end(self) -> bool:
         """
-        :return: whether :func:`step_after_epoch` averages the params and the optimizer state over all ranks
-            at the end of every train epoch (option ``sync_at_epoch_end``, default on since behavior version 38).
+        :return: whether :func:`step_after_epoch` syncs the params, the buffers, the optimizer state and the step
+            counts over all ranks at the end of every train epoch
+            (option ``sync_at_epoch_end``, default on since behavior version 38).
             Only matters for reduce_type "param", where the ranks hold different params and optimizer states
             between the syncs. Then the checkpoint (written by rank 0) and the eval are the average,
-            and every rank starts the next epoch identical, so resuming from the checkpoint continues the same training.
+            and every rank starts the next epoch with the state of the checkpoint,
+            so resuming from the checkpoint continues with the same model and optimizer state as the uninterrupted
+            training (the per-rank random states and data positions are not part of the checkpoint either way).
         """
         return self._sync_at_epoch_end
 
@@ -211,15 +214,17 @@ class DistributedContext:
         self, *, module: torch.nn.Module, optimizer: torch.optim.Optimizer, global_train_step: int
     ) -> int:
         """
-        Average the params and the floating point optimizer state over all ranks, see :func:`sync_at_epoch_end`.
+        Make the state which goes into the checkpoint the same on every rank, see :func:`sync_at_epoch_end`.
         Call this at the end of the train epoch, before the checkpoint is written.
 
-        The ranks can differ in their numbers of steps and updates after an epoch in which they got different
-        numbers of batches (a rank out of data stops at its step, the others at their next sync).
-        The train step counter and the update counts in the optimizer state (the torch optimizers keep them as
-        ``step`` tensors) take the max over the ranks then, so that every rank counts on as the checkpoint does.
+        Floating point tensors (params, buffers, optimizer state) take the mean over the ranks.
+        Counts take the max: the train step, the ``step`` tensors of the optimizer state and integer tensors
+        (e.g. ``num_batches_tracked`` of a batch norm). The ranks can differ in them after an epoch in which
+        they got different numbers of batches (a rank out of data stops at its step, the others at their next sync),
+        and every rank must count on as the checkpoint does.
+        Other optimizer state values (no tensors) are taken from rank 0, which writes the checkpoint.
 
-        :param module: to take the params from
+        :param module: to take the params and buffers from
         :param optimizer: to take the state from
         :param global_train_step: of this rank
         :return: the global train step to continue with, the same on every rank
@@ -228,18 +233,31 @@ class DistributedContext:
 
         if self._reduce_type != "param" or not self._sync_at_epoch_end:
             return global_train_step
-        tensors = [param.data for param in module.parameters()]
-        counters = [torch.tensor([global_train_step], dtype=torch.int64)]
+        tensors = []  # mean
+        counters = [torch.tensor([global_train_step], dtype=torch.int64)]  # max
+        objects = []  # from rank 0
+        for tensor in list(module.parameters()) + list(module.buffers()):
+            (tensors if tensor.is_floating_point() else counters).append(tensor.data)
         for param in module.parameters():
             state = optimizer.state.get(param, {})
             for key in sorted(state):
-                if isinstance(state[key], torch.Tensor) and state[key].is_floating_point():
-                    (counters if key == "step" else tensors).append(state[key])
+                value = state[key]
+                if not isinstance(value, torch.Tensor):
+                    objects.append((state, key))
+                elif key == "step" or not value.is_floating_point():
+                    counters.append(value)
+                else:
+                    tensors.append(value)
         _all_reduce_avg_flat(tensors, sync_on_cpu=self._opts.get("sync_on_cpu", False))
         for counter in counters:
             counter_cpu = counter.to(torch.device("cpu"))
             dist.all_reduce(counter_cpu, op=dist.ReduceOp.MAX)
             counter.copy_(counter_cpu)
+        if objects:
+            values = [state[key] for state, key in objects]
+            dist.broadcast_object_list(values, src=0, device=torch.device("cpu"))
+            for (state, key), value in zip(objects, values):
+                state[key] = value
         return int(counters[0])
 
 
