@@ -3,7 +3,7 @@ Some utility functions on nested structures.
 """
 
 from __future__ import annotations
-from typing import TypeVar, Optional, Union, Sequence, Tuple, Dict
+from typing import TypeVar, Optional, Union, Any, Sequence, Tuple, Dict
 import functools
 import re
 import tree
@@ -218,6 +218,7 @@ def masked_select_nested(
         out_dim = Dim(None, name="packed_new_label")  # Flat_Batch_InBeam
     if dim_map is None:
         dim_map = {}
+    selection_cache = {}  # only for this call: the masks do not change within it
     tree.map_structure(
         functools.partial(
             _masked_select_prepare_dims,
@@ -225,6 +226,7 @@ def masked_select_nested(
             dims=dims,
             out_dim=out_dim,
             dim_map=dim_map,
+            selection_cache=selection_cache,
         ),
         s,
     )
@@ -236,13 +238,22 @@ def masked_select_nested(
             dims=dims,
             out_dim=out_dim,
             dim_map=dim_map,
+            selection_cache=selection_cache,
         ),
         s,
     )
     return s, out_dim, dim_map
 
 
-def _masked_select_prepare_dims(s, *, mask: Tensor, dims: Sequence[Dim], out_dim: Dim, dim_map: Dict[Dim, Dim]):
+def _masked_select_prepare_dims(
+    s,
+    *,
+    mask: Tensor,
+    dims: Sequence[Dim],
+    out_dim: Dim,
+    dim_map: Dict[Dim, Dim],
+    selection_cache: Dict[Any, Any],
+):
     if isinstance(s, Dim):
         if s.dimension is not None:  # static
             return s
@@ -250,7 +261,9 @@ def _masked_select_prepare_dims(s, *, mask: Tensor, dims: Sequence[Dim], out_dim
             return s
         if s in dim_map:
             return dim_map[s]
-        new_dyn_size = _masked_select(s.dyn_size_ext, mask=mask, dims=dims, out_dim=out_dim, dim_map=dim_map)
+        new_dyn_size = _masked_select(
+            s.dyn_size_ext, mask=mask, dims=dims, out_dim=out_dim, dim_map=dim_map, selection_cache=selection_cache
+        )
         new_dim = Dim(new_dyn_size, name=_extend_dim_name(s.name), bounded_by=s)
         dim_map[s] = new_dim
         return new_dim
@@ -259,7 +272,14 @@ def _masked_select_prepare_dims(s, *, mask: Tensor, dims: Sequence[Dim], out_dim
 
 
 def _masked_select(
-    s: T, *, mask: Tensor, mask_cpu: Optional[Tensor] = None, dims: Sequence[Dim], out_dim: Dim, dim_map: Dict[Dim, Dim]
+    s: T,
+    *,
+    mask: Tensor,
+    mask_cpu: Optional[Tensor] = None,
+    dims: Sequence[Dim],
+    out_dim: Dim,
+    dim_map: Dict[Dim, Dim],
+    selection_cache: Dict[Any, Any],
 ) -> T:
     if isinstance(s, Tensor):
         if not any(d in s.dims for d in dims):
@@ -271,7 +291,7 @@ def _masked_select(
         if any(d not in s.dims for d in dims):
             s = rf.expand_dims(s, dims=[d for d in dims if d not in s.dims])
         # The packing itself (masked_select).
-        s, _ = rf.masked_select(s, mask=mask, dims=dims, out_dim=out_dim)
+        s, _ = rf.masked_select(s, mask=mask, dims=dims, out_dim=out_dim, selection_cache=selection_cache)
         # In the resulting tensor, potentially replace dims.
         # In addition to the dim replacement, we also might need to slice, as the size might be smaller.
         if any(d in dim_map for d in s.dims):

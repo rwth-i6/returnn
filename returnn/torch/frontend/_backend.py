@@ -2157,18 +2157,24 @@ class TorchBackend(Backend[torch.Tensor]):
 
     @staticmethod
     def masked_select(
-        tensor: Tensor, *, mask: Tensor, dims: Sequence[Dim], out_dim: Optional[Dim] = None
+        tensor: Tensor,
+        *,
+        mask: Tensor,
+        dims: Sequence[Dim],
+        out_dim: Optional[Dim] = None,
+        selection_cache: Optional[Dict[Any, Any]] = None,
     ) -> Tuple[Tensor, Dim]:
         """
         :param tensor:
         :param mask:
         :param dims: the order of the dims defines the format. those dims should be exactly the dims of the mask.
         :param out_dim:
+        :param selection_cache: see :func:`rf.masked_select`
         :return: tensor where all dims in mask/dims are removed and replaced by a new dim.
             the new dim is also returned.
             if mask==True for all elements, the returned tensor would be simply the flattened input tensor.
         """
-        from returnn.torch.util.array_ import masked_select
+        from returnn.torch.util.array_ import masked_select, masked_select_indices
 
         assert mask.dtype == "bool"
         if set(dims) != set(mask.dims):
@@ -2214,7 +2220,14 @@ class TorchBackend(Backend[torch.Tensor]):
                 if out_dim and out_dim.dyn_size_ext is not None and out_dim.dyn_size_ext.raw_tensor is not None
                 else None
             )
-            out_raw = masked_select(in_raw, mask_raw, mask_len=known_mask_len)
+            mask_indices = None
+            if selection_cache is not None:
+                cache_key = (id(mask.raw_tensor), mask.dims, tuple(dims))
+                if cache_key not in selection_cache:
+                    # holding the raw mask keeps its id unique while the cache lives
+                    selection_cache[cache_key] = (mask.raw_tensor, masked_select_indices(mask_raw))
+                _, mask_indices = selection_cache[cache_key]
+            out_raw = masked_select(in_raw, mask_raw, mask_len=known_mask_len, mask_indices=mask_indices)
         if not out_dim:
             out_dim = Dim(None, name="masked_select")
         if out_dim.dyn_size_ext is None:

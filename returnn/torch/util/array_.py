@@ -124,7 +124,13 @@ class _GatherSelectBound(torch.autograd.Function):
 
 
 # noinspection PyShadowingBuiltins
-def masked_select(input: torch.Tensor, mask: torch.Tensor, *, mask_len: Optional[Union[int, torch.Tensor]] = None):
+def masked_select(
+    input: torch.Tensor,
+    mask: torch.Tensor,
+    *,
+    mask_len: Optional[Union[int, torch.Tensor]] = None,
+    mask_indices: Optional[torch.Tensor] = None,
+):
     """
     Like :func:`torch.masked_select` but much more efficient,
     both in terms of memory and computation time,
@@ -139,21 +145,33 @@ def masked_select(input: torch.Tensor, mask: torch.Tensor, *, mask_len: Optional
     :param mask: [mask_dims...], binary mask to index with. if it has less dims than ``input``,
         the remaining dims are broadcasted.
     :param mask_len: if given, the length of the mask. this avoids a CUDA synchronization.
+    :param mask_indices: indices of the True entries of the flattened mask, if already computed
+        (e.g. for another input with the same mask), see :func:`masked_select_indices`.
+        This avoids the CUDA synchronization of :func:`torch.nonzero`.
     :return: selected elements, shape [mask_len, remaining_dims...]
     """
     assert input.ndim >= mask.ndim
     assert all(input.shape[i] == mask.shape[i] for i in range(mask.ndim))
+    if mask_indices is None:
+        mask_indices = masked_select_indices(mask)
+    if mask_len is not None:
+        assert mask_indices.shape[0] == mask_len
+    input_flat = input.flatten(end_dim=mask.ndim - 1)
+    return input_flat[mask_indices]
+
+
+def masked_select_indices(mask: torch.Tensor) -> torch.Tensor:
+    """
+    :param mask: [mask_dims...], bool
+    :return: indices of the True entries of the flattened mask, shape [mask_len], for :func:`masked_select`
+    """
     mask_flat = mask.flatten()
     # Note: So far it seems that our custom nonzero is always slower than torch.nonzero,
     # thus we always use torch.nonzero here for now.
     # https://github.com/rwth-i6/returnn/pull/1593
     # We might change this in the future. See also:
     # https://github.com/pytorch/pytorch/issues/131256
-    indices = torch.nonzero(mask_flat).squeeze(1)  # [out_len]
-    if mask_len is not None:
-        assert indices.shape[0] == mask_len
-    input_flat = input.flatten(end_dim=mask.ndim - 1)
-    return input_flat[indices]
+    return torch.nonzero(mask_flat).squeeze(1)  # [out_len]
 
 
 def nonzero(mask: torch.Tensor, *, out_len: Union[int, torch.Tensor]) -> torch.Tensor:

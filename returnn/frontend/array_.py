@@ -3,7 +3,7 @@ Array (Tensor) functions
 """
 
 from __future__ import annotations
-from typing import Optional, Union, Type, TypeVar, Sequence, Tuple
+from typing import Optional, Union, Any, Type, TypeVar, Sequence, Tuple, Dict
 import logging
 import numpy
 from returnn.tensor import Tensor, Dim
@@ -711,7 +711,12 @@ def unstack(source: Tensor, *, axis: Dim) -> Tuple[Tensor, ...]:
 
 
 def masked_select(
-    tensor: Tensor, *, mask: Tensor, dims: Sequence[Dim], out_dim: Optional[Dim] = None
+    tensor: Tensor,
+    *,
+    mask: Tensor,
+    dims: Sequence[Dim],
+    out_dim: Optional[Dim] = None,
+    selection_cache: Optional[Dict[Any, Any]] = None,
 ) -> Tuple[Tensor, Dim]:
     """
     This will pack the tensor based on the mask.
@@ -726,6 +731,10 @@ def masked_select(
         The order of the dims defines the packed format (in ``out_dim``).
         If only a single dim is given, only this dim is packed, while all other dims are kept as is.
     :param out_dim: packed ``dims`` into this dim. Automatically created if not given, and then returned.
+    :param selection_cache: an empty dict, to select several tensors with the same ``mask`` and ``dims``.
+        The backend can store the selected indices in it and reuse them in the following calls.
+        Pass the same dict only while the content of ``mask`` does not change.
+        See :func:`masked_select_nested`.
     :return: Tensor where all ``dims`` are removed and replaced by a new dim (``out_dim``).
         The new dim (``out_dim``) is also returned.
         If mask==True for all elements, the returned tensor would be simply the flattened input tensor.
@@ -738,7 +747,9 @@ def masked_select(
         raise ValueError(f"masked_select: dims {dims} empty")
     if dims_set == mask_dims_set:
         # noinspection PyProtectedMember
-        return tensor._raw_backend.masked_select(tensor, mask=mask, dims=dims, out_dim=out_dim)
+        return tensor._raw_backend.masked_select(
+            tensor, mask=mask, dims=dims, out_dim=out_dim, selection_cache=selection_cache
+        )
     # A strict subset of the mask dims: the other dims stay, the result is ragged over them.
     # Same backend entry; implementations delegate to :func:`_masked_select_subset` by default.
     mask = mask.copy_masked(mask_value=False)

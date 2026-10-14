@@ -4380,9 +4380,15 @@ class PackedBackend(Backend[PackedRawTensor]):
 
     @staticmethod
     def masked_select(
-        tensor: Tensor, *, mask: Tensor, dims: Sequence[Dim], out_dim: Optional[Dim] = None
+        tensor: Tensor,
+        *,
+        mask: Tensor,
+        dims: Sequence[Dim],
+        out_dim: Optional[Dim] = None,
+        selection_cache: Optional[Dict[Any, Any]] = None,
     ) -> Tuple[Tensor, Dim]:
         """masked select"""
+        del selection_cache  # packed selection does not reuse it
         if not is_packed(tensor) or set(dims) == set(mask.dims):
             return _dim_aware_call("masked_select", (tensor,), dict(mask=mask, dims=dims, out_dim=out_dim))
         (dim,) = dims  # the frontend pre-merges multiple dims

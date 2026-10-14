@@ -450,6 +450,72 @@ def test_pack_padded_wrong_grad():
         prev_bias_grad = bias_grad
 
 
+def test_masked_select_nested_reuses_selection():
+    from unittest import mock
+
+    batch_dim = Dim(3, name="batch")
+    beam_dim = Dim(4, name="beam")
+    in_dim = Dim(5, name="in")
+    gen = torch.Generator().manual_seed(42)
+    hist_lens_raw = torch.randint(1, 7, (3, 4), generator=gen, dtype=torch.int32)
+    hist_dim = Dim(Tensor("hist", dims=[batch_dim, beam_dim], dtype="int32", raw_tensor=hist_lens_raw))
+    a_raw = torch.randn(3, 4, 5, generator=gen, requires_grad=True)
+    b_raw = torch.randn(3, 4, 5, generator=gen, requires_grad=True)
+    c_raw = torch.randn(3, 5, generator=gen, requires_grad=True)
+    hist_raw = torch.randn(3, 4, 6, generator=gen, requires_grad=True)
+    state = {
+        "a": Tensor("a", dims=[batch_dim, beam_dim, in_dim], dtype="float32", raw_tensor=a_raw),
+        # non-contiguous, other dim order
+        "b": Tensor("b", dims=[in_dim, beam_dim, batch_dim], dtype="float32", raw_tensor=b_raw.permute(2, 1, 0)),
+        # without beam_dim, expanded by masked_select_nested
+        "c": Tensor("c", dims=[batch_dim, in_dim], dtype="float32", raw_tensor=c_raw),
+        "hist": Tensor("hist", dims=[batch_dim, beam_dim, hist_dim], dtype="float32", raw_tensor=hist_raw),
+        "hist_dim": hist_dim,
+    }
+    partial = torch.rand(3, 4, generator=gen) > 0.5
+    partial[0, 0], partial[0, 1] = True, False
+    masks = [partial, ~partial, torch.ones(3, 4, dtype=torch.bool), torch.zeros(3, 4, dtype=torch.bool)]
+
+    for mask_raw in masks:
+        num = int(mask_raw.sum())
+        # slicing a dyn dim to an empty selection fails (max over no sizes), thus without hist then
+        sel_state = state if num else {key: state[key] for key in "abc"}
+        mask = Tensor("mask", dims=[batch_dim, beam_dim], dtype="bool", raw_tensor=mask_raw)
+        with mock.patch.object(torch, "nonzero", wraps=torch.nonzero) as nonzero:
+            out, out_dim, dim_map = rf.nested.masked_select_nested(
+                sel_state, mask=mask, mask_cpu=mask.copy(), dims=[batch_dim, beam_dim]
+            )
+        # all tensors are on CPU, thus all use mask_cpu, and its coords are computed only once
+        assert nonzero.call_count == 1
+        assert out_dim.get_dim_value() == num
+        refs = {
+            "a": a_raw[mask_raw],
+            "b": b_raw[mask_raw],
+            "c": c_raw[:, None, :].expand(3, 4, 5)[mask_raw],
+        }
+        outs = {key: out[key].copy_compatible_to_dims_raw([out_dim, in_dim]) for key in "abc"}
+        if num:
+            new_hist_dim = out["hist_dim"]
+            assert dim_map[hist_dim] is new_hist_dim and new_hist_dim != hist_dim
+            assert new_hist_dim.dyn_size_ext.dims == (out_dim,) and new_hist_dim.dyn_size_ext.device == "cpu"
+            new_hist_lens = hist_lens_raw[mask_raw]
+            assert new_hist_dim.dyn_size_ext.raw_tensor.tolist() == new_hist_lens.tolist()
+            refs["hist"] = hist_raw[mask_raw][:, : int(new_hist_lens.max())]
+            outs["hist"] = out["hist"].copy_compatible_to_dims_raw([out_dim, new_hist_dim])
+        for key, ref in refs.items():
+            torch.testing.assert_close(outs[key], ref, msg=key)
+        if num:
+            weights = [torch.randn(ref.shape, generator=gen) for ref in refs.values()]
+            grads = torch.autograd.grad(
+                sum((o * w).sum() for o, w in zip(outs.values(), weights)), [a_raw, b_raw, c_raw, hist_raw]
+            )
+            grads_ref = torch.autograd.grad(
+                sum((r * w).sum() for r, w in zip(refs.values(), weights)), [a_raw, b_raw, c_raw, hist_raw]
+            )
+            for grad, grad_ref in zip(grads, grads_ref):
+                torch.testing.assert_close(grad, grad_ref)
+
+
 @unittest.skipIf(torch.__version__ < (2,), "report_profile needs PyTorch >= 2.0")
 def test_pack_padded_memory():
     import numpy as np

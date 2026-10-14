@@ -1429,13 +1429,19 @@ class JaxBackend(Backend[jax.Array]):
 
     @staticmethod
     def masked_select(
-        tensor: Tensor, *, mask: Tensor, dims: Sequence[Dim], out_dim: Optional[Dim] = None
+        tensor: Tensor,
+        *,
+        mask: Tensor,
+        dims: Sequence[Dim],
+        out_dim: Optional[Dim] = None,
+        selection_cache: Optional[Dict[Any, Any]] = None,
     ) -> Tuple[Tensor, Dim]:
         """
         :param tensor:
         :param mask: over ``dims``
         :param dims: the order of these defines the packing order
         :param out_dim:
+        :param selection_cache: see :func:`rf.masked_select`
         :return: the selected elements, with ``dims`` replaced by one new dim, and that dim
 
         JAX shapes cannot depend on values, so under tracing the output gets a static size:
@@ -1443,6 +1449,7 @@ class JaxBackend(Backend[jax.Array]):
         Selected elements are packed at the front, zeros after,
         the same contract as ``masked_select_bound`` of the PyTorch graph-capture path.
         """
+        del selection_cache  # not used by this backend
         assert mask.dtype == "bool"
         if set(dims) != set(mask.dims):
             assert len(dims) == 1  # the frontend pre-merges multiple dims

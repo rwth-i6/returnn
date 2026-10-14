@@ -2036,15 +2036,22 @@ class TFBackend(Backend[tf.Tensor]):
 
     @staticmethod
     def masked_select(
-        tensor: Tensor, *, mask: Tensor, dims: Sequence[Dim], out_dim: Optional[Dim] = None
+        tensor: Tensor,
+        *,
+        mask: Tensor,
+        dims: Sequence[Dim],
+        out_dim: Optional[Dim] = None,
+        selection_cache: Optional[Dict[Any, Any]] = None,
     ) -> Tuple[Tensor, Dim]:
         """
         :param tensor:
         :param mask:
         :param dims: the dims of the mask, their order defines the format
         :param out_dim:
+        :param selection_cache: see :func:`rf.masked_select`
         :return: tensor with the mask dims replaced by a single new dim, and that dim
         """
+        del selection_cache  # not used by this backend
         assert mask.dtype == "bool"
         if set(dims) != set(mask.dims):
             assert len(dims) == 1  # the frontend pre-merges multiple dims

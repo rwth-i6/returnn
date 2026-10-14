@@ -1446,13 +1446,19 @@ class Backend(Generic[T]):
 
     @staticmethod
     def masked_select(
-        tensor: Tensor, *, mask: Tensor, dims: Sequence[Dim], out_dim: Optional[Dim] = None
+        tensor: Tensor,
+        *,
+        mask: Tensor,
+        dims: Sequence[Dim],
+        out_dim: Optional[Dim] = None,
+        selection_cache: Optional[Dict[Any, Any]] = None,
     ) -> Tuple[Tensor, Dim]:
         """
         :param tensor:
         :param mask:
         :param dims: the order of the dims defines the format. those dims should be exactly the dims of the mask.
         :param out_dim:
+        :param selection_cache: see :func:`rf.masked_select`
         :return: tensor where all dims in mask/dims are removed and replaced by a new dim.
             the new dim is also returned.
             if mask==True for all elements, the returned tensor would be simply the flattened input tensor.
