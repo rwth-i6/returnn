@@ -175,6 +175,12 @@ class Engine(EngineBase):
             self._wandb_log_every_n_train_steps: Optional[int] = wandb_opts.pop("log_every_n_train_steps", 100)
             wandb_opts.setdefault("job_type", config.value("task", "train"))
             wandb_opts.setdefault("resume", "allow")
+            if "id" not in wandb_opts and not os.environ.get("WANDB_RUN_ID"):
+                print(
+                    "wandb_opts: no run 'id' given, a restarted job will create a new W&B run."
+                    " Set a fixed 'id' (e.g. sisyphus job hash) to continue the same run.",
+                    file=log.v2,
+                )
             self._wandb_run = wandb.init(**wandb_opts)
         else:
             self._wandb_log_every_n_train_steps = None
