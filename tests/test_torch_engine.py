@@ -2005,6 +2005,34 @@ def test_torch_engine_preload_next_train_epoch():
         assert torch.equal(state, ref_state), f"RNG state differs at epoch {ep} {name} start"
 
 
+def test_torch_engine_preload_next_train_epoch_iter_error_rng():
+    """a failing iter() of the preload leaves the CPU random state as it was"""
+    import types
+
+    class _IterError(Exception):
+        pass
+
+    class _Loader:
+        def __iter__(self):
+            torch.empty((), dtype=torch.int64).random_()  # as the DataLoader seed draw
+            raise _IterError()
+
+    engine = types.SimpleNamespace(
+        _get_train_epoch_random_seed=lambda epoch: 1234,
+        _train_epoch_mp_shared=types.SimpleNamespace(value=1),
+        _train_dataloader=_Loader(),
+    )
+    torch.manual_seed(77)
+    rng_state = torch.default_generator.get_state()
+    try:
+        Engine._preload_train_epoch(engine, 2)
+    except _IterError:
+        pass
+    else:
+        raise AssertionError("expected _IterError")
+    assert torch.equal(torch.default_generator.get_state(), rng_state)
+
+
 def test_torch_engine_preload_next_train_epoch_no_workers():
     config = Config(
         dict(

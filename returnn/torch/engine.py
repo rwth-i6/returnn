@@ -938,10 +938,12 @@ class Engine(EngineBase):
         # init_train_epoch seeds it like this for the epoch.
         torch.default_generator.manual_seed(random_seed)
         self._train_epoch_mp_shared.value = epoch  # read by the dataset reset in the workers
-        self._preloaded_train_data_iter = iter(self._train_dataloader)
-        self._preloaded_train_random_seed = random_seed
-        self._preloaded_train_rng_state = torch.default_generator.get_state()
-        torch.default_generator.set_state(rng_state)  # the eval gets the same random state as without preloading
+        try:
+            self._preloaded_train_data_iter = iter(self._train_dataloader)
+            self._preloaded_train_random_seed = random_seed
+            self._preloaded_train_rng_state = torch.default_generator.get_state()
+        finally:
+            torch.default_generator.set_state(rng_state)  # the eval gets the same random state as without preloading
 
     def _drop_preloaded_train_data(self):
         self._preloaded_train_data_iter = None
