@@ -1345,7 +1345,13 @@ class Engine(EngineBase):
             own = [tensor.detach().to("cpu", copy=True) for tensor in tensors]
         with torch.no_grad():
             for tensor in tensors:
-                torch.distributed.broadcast(tensor.data, src=0)
+                if tensor.is_contiguous():
+                    torch.distributed.broadcast(tensor.data, src=0)
+                    continue
+                # broadcast needs contiguous memory, a strided tensor gets the values through a contiguous copy
+                value = tensor.data.contiguous()
+                torch.distributed.broadcast(value, src=0)
+                tensor.data.copy_(value)
         return own
 
     def _restore_model_state(self, own: List[torch.Tensor]):

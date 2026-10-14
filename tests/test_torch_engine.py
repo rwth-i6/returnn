@@ -3723,6 +3723,10 @@ def _eval_on_all_ranks_drop_even_lens(input_iter: Iterator[TensorDict], **_kwarg
             yield seq
 
 
+def _eval_on_all_ranks_state_sum(model: torch.nn.Module) -> float:
+    return float(sum(tensor.detach().double().sum() for tensor in [*model.parameters(), *model.buffers()]))
+
+
 def _eval_on_all_ranks_run(
     *,
     torch_distributed: Optional[dict] = None,
@@ -3737,6 +3741,7 @@ def _eval_on_all_ranks_run(
     dev_object: bool = False,
     calculate_exp_loss: bool = False,
     eval_before_train: bool = False,
+    strided_buffer: bool = False,
     behavior_version: Optional[int] = None,
 ) -> Dict[str, Any]:
     from returnn.__main__ import load_data
@@ -3793,13 +3798,22 @@ def _eval_on_all_ranks_run(
         train_dataset.init_seq_order(epoch=1)
         dev_dataset, _ = load_data(config, 0, "dev", **Dataset.get_default_kwargs_eval(config=config))
         engine.init_train_from_config(train_data=train_dataset, dev_data=dev_dataset)
-        # number of values this rank keeps aside for each split eval, see Engine._take_rank0_model_state
+        model = engine._pt_model
+        assert model is not None
+        if strided_buffer:
+            # a buffer which is a strided view, with values of its own on every rank
+            rank = engine._torch_distributed_ctx.rank() if engine._torch_distributed_ctx else 0
+            model.register_buffer("strided", (torch.arange(8.0) + 100 * rank)[::2])
+        # number of values this rank keeps aside for each split eval, see Engine._take_rank0_model_state,
+        # and the sum of the params and buffers which it evaluates
         own_model_state_sizes = []
+        eval_state_sums = []
         take_rank0_model_state = engine._take_rank0_model_state
 
         def _take_rank0_model_state():
             own = take_rank0_model_state()
             own_model_state_sizes.append(sum(value.numel() for value in own or []))
+            eval_state_sums.append(_eval_on_all_ranks_state_sum(model))
             return own
 
         engine._take_rank0_model_state = _take_rank0_model_state
@@ -3813,8 +3827,9 @@ def _eval_on_all_ranks_run(
         return {
             "seq_lens": list(_eval_on_all_ranks_seq_lens),
             "errors": {epoch: dict(data.error) for epoch, data in engine.learning_rate_control.epoch_data.items()},
-            "param_sum": float(sum(param.detach().double().sum() for param in engine._pt_model.parameters())),
+            "state_sum": _eval_on_all_ranks_state_sum(model),
             "own_model_state_sizes": own_model_state_sizes,
+            "eval_state_sums": eval_state_sums,
         }
 
 
@@ -3948,17 +3963,22 @@ def test_torch_engine_eval_on_all_ranks_by_behavior_version():
 
 
 def test_torch_engine_eval_on_all_ranks_rank0_model():
-    # With parameter averaging, the ranks train apart between the syncs.
+    # With parameter averaging, the ranks train apart between the syncs,
+    # and a strided buffer holds values of its own on every rank.
     # A split eval must still score rank 0's model, like an eval on rank 0 alone,
     # and leave every rank's own training state as it was.
-    opts = {**_EVAL_ON_ALL_RANKS_DIST_OPTS, "reduce_type": "param", "param_sync_step": 1000}
-    run_kwargs = dict(learning_rate=0.01, train_seq_ordering="random")
-    on_rank0 = _eval_on_ranks(torch_distributed={**opts, "eval_on_all_ranks": False}, **run_kwargs)
-    split = _eval_on_ranks(torch_distributed={**opts, "eval_on_all_ranks": True}, **run_kwargs)
-    assert split[0]["param_sum"] != split[1]["param_sum"], "the ranks must train apart for this test"
-    _assert_eval_split(_eval_on_all_ranks_seq_lens_per_rank(split, epoch=1), _EVAL_ON_ALL_RANKS_DEV_SEQ_LENS)
-    _assert_eval_scores(split, on_rank0[0], epochs=(1, 2), keys=("dev_loss_ce", "dev_loss_fer"))
-    assert [result["param_sum"] for result in split] == [result["param_sum"] for result in on_rank0]
+    for opts, run_kwargs in [
+        ({"reduce_type": "param", "param_sync_step": 1000}, dict(learning_rate=0.01, train_seq_ordering="random")),
+        ({}, dict(strided_buffer=True)),
+    ]:
+        dist_opts = {**_EVAL_ON_ALL_RANKS_DIST_OPTS, **opts}
+        on_rank0 = _eval_on_ranks(torch_distributed={**dist_opts, "eval_on_all_ranks": False}, **run_kwargs)
+        split = _eval_on_ranks(torch_distributed={**dist_opts, "eval_on_all_ranks": True}, **run_kwargs)
+        assert split[0]["state_sum"] != split[1]["state_sum"], "the ranks must hold different states for this test"
+        _assert_eval_split(_eval_on_all_ranks_seq_lens_per_rank(split, epoch=1), _EVAL_ON_ALL_RANKS_DEV_SEQ_LENS)
+        assert split[1]["eval_state_sums"] == split[0]["eval_state_sums"], f"{opts} {run_kwargs}"
+        _assert_eval_scores(split, on_rank0[0], epochs=(1, 2), keys=("dev_loss_ce", "dev_loss_fer"))
+        assert [result["state_sum"] for result in split] == [result["state_sum"] for result in on_rank0]
 
 
 def test_torch_engine_eval_on_all_ranks_empty_share():
