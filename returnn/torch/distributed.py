@@ -118,6 +118,10 @@ class DistributedContext:
         self._sync_levels = _parse_sync_levels(
             sync_spec, size=self._size, local_size=self._local_size, hostnames=hostnames
         )
+        # for the control sync over all ranks (DistributedDataParallel, first step, callable grad accumulation)
+        self._world_level = _parse_sync_levels(
+            [{"group": "world", "type": "grad"}], size=self._size, local_size=self._local_size, hostnames=None
+        )[0]
         if self._reduce_type == "sync":
             assert self._sync_levels, "torch_distributed: sync must have at least one level"
             _logger.info(f"sync levels: {self._sync_levels}")
@@ -240,23 +244,45 @@ class DistributedContext:
     def sync_complete_frac(self) -> bool:
         """
         :return: whether the train loop replaces the rank-local ``complete_frac`` by its mean over the ranks
-            in each step where it syncs (:func:`should_sync_now`),
-            so that ``epoch_continuous`` (e.g. for ``dynamic_learning_rate``) is the same on every rank
+            of the control sync group in each step where it syncs (:func:`control_sync_levels`),
+            so that ``epoch_continuous`` (e.g. for ``dynamic_learning_rate``) is the same on every rank of the group
         """
         return self._sync_complete_frac
 
-    def should_sync_now(self, *, epoch_update_step_idx: int, update_step: bool) -> bool:
+    def control_sync_levels(
+        self, *, epoch_update_step_idx: int, update_step: bool, world: bool, no_data: bool
+    ) -> List[_SyncLevel]:
         """
+        The control sync (all ranks of a group agree whether every one of them still has data, and on the progress)
+        follows the sync levels: it runs on the group of the outermost level firing in this step.
+        A group which ran out of data joins the next control sync of every outer level in turn,
+        so the stop reaches all ranks, and every collective stays matched.
+
         :param epoch_update_step_idx: optimizer updates so far in this epoch
         :param update_step: whether the current step ends with an optimizer update (grad accumulation complete)
-        :return: whether to sync the training processes in this step
+        :param world: sync over all ranks in this step in any case (first step of the epoch,
+            or a callable ``accum_grad_multiple_step``, whose value for the step is only known after the step)
+        :param no_data: this rank has no more data. Then it joins the control sync the other ranks of its group
+            do next, which is in the step of the next firing level.
+        :return: the levels to sync on in this step, inner to outer: the first is the control sync of this step,
+            the rest are the ones to join when there is no data. Empty: no control sync in this step.
         """
-        if self._reduce_type == "grad":
-            return True
-        return any(
-            level.sync_type == "grad" or (update_step and level.fires(epoch_update_step_idx=epoch_update_step_idx))
-            for level in self._sync_levels
-        )
+        if world or self._reduce_type == "grad":
+            return [self._world_level]
+        if no_data:
+            next_update_step_idx = epoch_update_step_idx
+            while not any(level.fires(epoch_update_step_idx=next_update_step_idx) for level in self._sync_levels):
+                next_update_step_idx += 1
+            epoch_update_step_idx = next_update_step_idx
+            update_step = True
+        firing = [
+            idx
+            for idx, level in enumerate(self._sync_levels)
+            if level.sync_type == "grad" or (update_step and level.fires(epoch_update_step_idx=epoch_update_step_idx))
+        ]
+        if not firing:
+            return []
+        return self._sync_levels[max(firing) :]
 
     def step_after_param_update(self, *, module: torch.nn.Module, epoch_update_step_idx: int):
         """

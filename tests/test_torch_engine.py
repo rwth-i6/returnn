@@ -1858,7 +1858,9 @@ def _torch_distributed_sync_levels_worker(rank: int, world_size: int, port: int,
             {"backend": "gloo", "sync": [{"group": 2, "type": "grad"}, {"group": "world", "type": "param", "every": 2}]}
         )
         assert ctx.has_grad_sync() and ctx.maybe_make_distributed_module(torch.nn.Linear(1, 1)) is None
-        assert ctx.should_sync_now(epoch_update_step_idx=0, update_step=False)  # the grad level: every step
+        # the grad level: control sync on its group every step, then the world level to join when out of data
+        levels = ctx.control_sync_levels(epoch_update_step_idx=0, update_step=False, world=False, no_data=False)
+        assert [level.group_spec for level in levels] == [2, "world"], levels
         ctx.maybe_reduce_grads(module=module)
         results["step0_grads"] = _values()
         ctx.step_after_param_update(module=module, epoch_update_step_idx=0)
@@ -1878,10 +1880,23 @@ def _torch_distributed_sync_levels_worker(rank: int, world_size: int, port: int,
             }
         )
         assert not ctx.has_grad_sync()
-        assert [ctx.should_sync_now(epoch_update_step_idx=step, update_step=True) for step in range(4)] == [
-            False, True, False, True,
-        ]  # fmt: skip
-        assert not ctx.should_sync_now(epoch_update_step_idx=1, update_step=False)  # mid grad accumulation
+        # pairs every 2 updates, node (= world here) every 4: the control sync on the outermost firing level
+        assert [
+            [level.group_spec for level in ctx.control_sync_levels(
+                epoch_update_step_idx=step, update_step=True, world=False, no_data=False
+            )]
+            for step in range(4)
+        ] == [[], [[[2, 0], [1, 3]], "node"], [], ["node"]]  # fmt: skip
+        # mid grad accumulation: nothing; out of data: the next control sync of the pair, then the node to join
+        assert not ctx.control_sync_levels(epoch_update_step_idx=1, update_step=False, world=False, no_data=False)
+        assert [
+            level.group_spec
+            for level in ctx.control_sync_levels(epoch_update_step_idx=0, update_step=False, world=False, no_data=True)
+        ] == [[[2, 0], [1, 3]], "node"]
+        assert [
+            level.group_spec
+            for level in ctx.control_sync_levels(epoch_update_step_idx=0, update_step=False, world=True, no_data=False)
+        ] == ["world"]
         ctx.maybe_reduce_grads(module=module)  # no-op
         ctx.step_after_param_update(module=module, epoch_update_step_idx=0)
         results["step0"] = _values()
@@ -2077,6 +2092,77 @@ def _torch_distributed_param_sync_accum_dyn_worker(rank: int, world_size: int, p
         engine.train()
     assert engine.global_train_step == 4, engine.global_train_step  # both stop when rank 0 runs out
     torch.distributed.destroy_process_group()
+
+
+def _torch_distributed_hier_control_sync_worker(rank: int, world_size: int, port: int, tmp_dir: str):
+    os.environ.update(
+        MASTER_ADDR="127.0.0.1",
+        MASTER_PORT=str(port),
+        RANK=str(rank),
+        WORLD_SIZE=str(world_size),
+        LOCAL_RANK=str(rank),
+        LOCAL_WORLD_SIZE=str(world_size),
+    )
+    config = Config(
+        dict(
+            task="train",
+            device="cpu",
+            extern_data={"data": {"dim": 9}, "classes": {"dim": 2, "sparse": True}},
+            get_model=TrainTestModel,
+            train_step=TrainTestModel.train_step,
+            batch_size=10**9,
+            max_seqs=1,  # one seq per step
+            optimizer={"class": "adam"},
+            learning_rate=0.01,
+            num_epochs=1,
+            torch_dataloader_opts={"num_workers": 0},
+            torch_distributed={
+                "backend": "gloo",
+                # grads within the pair every step, params across the pairs every 4 updates
+                "sync": [{"group": 2, "type": "grad"}, {"group": "world", "type": "param", "every": 4}],
+            },
+        )
+    )
+    with global_config_ctx(config):
+        # Rank 0 runs out in step 2, so its pair stops there and joins the next world control sync,
+        # which the other pair reaches in step 3 (the world level fires after update 3, i.e. in step 3).
+        dataset = init_dataset({"class": "Task12AXDataset", "num_seqs": 2 if rank == 0 else 10})
+        dataset.init_seq_order(epoch=1)
+        engine = Engine(config=config)
+        engine.init_train_from_config(train_data=dataset)
+        engine.train()
+    with open(f"{tmp_dir}/rank{rank}.txt", "w") as f:
+        f.write(str(engine.global_train_step))
+    torch.distributed.destroy_process_group()
+
+
+def test_torch_engine_distributed_hier_control_sync_cpu():
+    """
+    The control sync follows the levels: the pair of rank 0 stops when rank 0 runs out,
+    the other pair only at its next world sync.
+    """
+    import socket
+    import torch.multiprocessing
+
+    world_size = 4
+    with socket.socket() as s:
+        s.bind(("127.0.0.1", 0))
+        port = s.getsockname()[1]
+    with tempfile.TemporaryDirectory(prefix="returnn_test_torch_distributed_hier_control_sync") as tmp_dir:
+        ctx = torch.multiprocessing.spawn(
+            _torch_distributed_hier_control_sync_worker, args=(world_size, port, tmp_dir), nprocs=world_size, join=False
+        )
+        deadline = time.monotonic() + 120
+        while not ctx.join(timeout=max(0.0, deadline - time.monotonic())):  # returns once any process finished
+            if time.monotonic() > deadline:
+                for proc in ctx.processes:
+                    proc.kill()
+                raise Exception("timeout, the ranks hang")
+        steps = []
+        for rank in range(world_size):
+            with open(f"{tmp_dir}/rank{rank}.txt") as f:
+                steps.append(int(f.read()))
+    assert steps == [2, 2, 3, 3], steps
 
 
 def test_torch_engine_distributed_param_sync_accum_dyn_cpu():

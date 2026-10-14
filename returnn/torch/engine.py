@@ -584,35 +584,47 @@ class Engine(EngineBase):
                 complete_frac = float(extern_data_raw["complete_frac"]) if extern_data_raw is not None else -1.0
                 _has_data = torch.tensor([extern_data_raw is not None], dtype=torch.int8)
                 # Sync only on first train step, when we have run out of data and every time we synchronize
-                # the model between workers.
+                # the model between workers, on the group of that sync.
                 # This allows the different workers to progress independently between synchronizations.
                 # A callable accum_grad_multiple_step is only known after the step, so sync in every step then.
-                if self._torch_distributed_ctx and (
-                    self._torch_distributed_ctx.should_sync_now(
+                control_levels = []
+                if self._torch_distributed_ctx:
+                    control_levels = self._torch_distributed_ctx.control_sync_levels(
                         epoch_update_step_idx=epoch_update_step_idx,
                         # whether this step completes the grad accumulation, i.e. ends with an optimizer update
                         update_step=(0 if zero_grad_next_step else cur_count_grad_accum) + 1
                         >= accum_grad_multiple_step,
+                        world=accum_grad_multiple_step_dyn is not None or step_idx == 0,
+                        no_data=extern_data_raw is None,
                     )
-                    or accum_grad_multiple_step_dyn is not None
-                    or step_idx == 0
-                    or extern_data_raw is None
-                ):
+                if control_levels:
                     # use all reduce to check if all workers have data, if at least one worker does not have data,
                     # all workers finish this epoch
+                    level = control_levels[0]
                     if self._torch_distributed_ctx.sync_complete_frac():
                         # mean over the ranks: a schedule on epoch_continuous must give the same LR on every rank
                         _data_info = torch.tensor(
                             [extern_data_raw is not None, complete_frac >= 0.0, max(complete_frac, 0.0)],
                             dtype=torch.float64,
                         )
-                        torch.distributed.all_reduce(_data_info, op=torch.distributed.ReduceOp.SUM)
-                        size = self._torch_distributed_ctx.size()
+                        torch.distributed.all_reduce(_data_info, op=torch.distributed.ReduceOp.SUM, group=level.group)
+                        size = level.group_size()
                         _has_data[0] = _data_info[0] == size
                         complete_frac = float(_data_info[2]) / size if _data_info[1] == size else -1.0
                     else:
-                        torch.distributed.all_reduce(_has_data, op=torch.distributed.ReduceOp.MIN)
+                        torch.distributed.all_reduce(_has_data, op=torch.distributed.ReduceOp.MIN, group=level.group)
                 if not _has_data[0]:
+                    # The outer groups learn it at their next control sync. Join it now, they reach it later.
+                    for level in control_levels[1:]:
+                        if self._torch_distributed_ctx.sync_complete_frac():
+                            _data_info = torch.zeros((3,), dtype=torch.float64)
+                            torch.distributed.all_reduce(
+                                _data_info, op=torch.distributed.ReduceOp.SUM, group=level.group
+                            )
+                        else:
+                            torch.distributed.all_reduce(
+                                _has_data, op=torch.distributed.ReduceOp.MIN, group=level.group
+                            )
                     break
 
                 if self._stall_heartbeat is not None:
