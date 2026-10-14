@@ -4607,6 +4607,50 @@ def test_torch_engine_cuda_graph_segmented_parity():
                 assert abs(a - b) <= 2e-3 * max(1.0, abs(a)), f"compile {compile_} step {s} {name}: {a} vs {b}"
 
 
+def test_torch_engine_cuda_graph_finalize_then_eager():
+    """
+    A graphc training which stops in the middle of an epoch (an exception), with the bound shapes still enabled,
+    then an eager packed engine in the same process with the same dims, incl. the global batch dim:
+    after finalize, the dims are as before the graphc engine.
+    """
+
+    class _StopTraining(Exception):
+        pass
+
+    if not torch.cuda.is_available():
+        raise unittest.SkipTest("CUDA not available")
+    config, dataset = _build_cuda_graph_train_config_and_dataset(compile_=False)
+    time_dim = config.typed_dict["extern_data"]["data"]["dims"][1]
+    dyn_lr = config.typed_dict["dynamic_learning_rate"]
+
+    def _dyn_lr_stop(*, global_train_step: int, **kwargs) -> float:
+        if global_train_step == 5:  # after the capture
+            raise _StopTraining()
+        return dyn_lr(global_train_step=global_train_step, **kwargs)
+
+    config.typed_dict["dynamic_learning_rate"] = _dyn_lr_stop
+    with global_config_ctx(config):
+        engine = Engine(config=config)
+        engine.init_train_from_config(train_data=dataset)
+        try:
+            engine.train()
+        except _StopTraining:
+            pass
+        else:
+            raise Exception("did not get expected exception")
+        assert engine._graph_capture._graph is not None, "graph never captured"
+        engine.finalize()
+    config.typed_dict["dynamic_learning_rate"] = dyn_lr
+    del config.typed_dict["torch_cuda_graph"]
+    config.typed_dict["packed_tensors"] = True
+    with global_config_ctx(config):
+        engine = Engine(config=config)
+        engine.init_train_from_config(train_data=dataset)
+        engine.train()
+        engine.finalize()
+    assert time_dim.capacity is None
+
+
 def test_torch_engine_cuda_graph_packed_total_bound():
     """
     The gapped packed tensor which the captured step sees has the extent of the input buffer:
