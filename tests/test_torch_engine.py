@@ -1807,13 +1807,9 @@ def test_torch_distributed_sync_levels_spec():
     from returnn.torch.distributed import _control_sync_chain
 
     # the control syncs a stopped group joins: the outermost level firing at each next outer firing.
-    # A stop at the pair after update 3 (pending): quad and world both fire after 3, so only the world check follows.
-    assert [level.group_spec for level in _control_sync_chain(levels, 0, 3)] == [2, "world"]
-    assert [level.group_spec for level in _control_sync_chain(levels, 0, 0)] == [
-        2,
-        4,
-        "world",
-    ]  # quad after 9, world 19
+    # A stop at the pair with update 19 pending: quad and world both fire after 19, so only the world check follows.
+    assert [level.group_spec for level in _control_sync_chain(levels, 0, 19)] == [2, "world"]
+    assert [level.group_spec for level in _control_sync_chain(levels, 0, 3)] == [2, 4, "world"]  # quad 9, world 19
     assert [level.group_spec for level in _control_sync_chain(levels, 1, 9)] == [4, "world"]
     assert [level.group_spec for level in _control_sync_chain(levels, 2, 19)] == ["world"]
 
@@ -1874,6 +1870,10 @@ def _torch_distributed_sync_levels_worker(rank: int, world_size: int, port: int,
         # the grad level: control sync on its group every step, then the world level to join when out of data
         levels = ctx.control_sync_levels(epoch_update_step_idx=0, update_step=False, world=False, no_data=False)
         assert [level.group_spec for level in levels] == [2, "world"], levels
+        # out of data mid accumulation while the world fires after the pending update: the pair check comes first,
+        # as the partner does it in this step, the world check after
+        levels = ctx.control_sync_levels(epoch_update_step_idx=1, update_step=False, world=False, no_data=True)
+        assert [level.group_spec for level in levels] == [2, "world"], levels
         ctx.maybe_reduce_grads(module=module)
         results["step0_grads"] = _values()
         ctx.step_after_param_update(module=module, epoch_update_step_idx=0)
@@ -1906,6 +1906,11 @@ def _torch_distributed_sync_levels_worker(rank: int, world_size: int, port: int,
             level.group_spec
             for level in ctx.control_sync_levels(epoch_update_step_idx=0, update_step=False, world=False, no_data=True)
         ] == [[[2, 0], [1, 3]], "node"]
+        # out of data in the step completing update 2, which fires nothing: the next is the node after update 3
+        assert [
+            level.group_spec
+            for level in ctx.control_sync_levels(epoch_update_step_idx=2, update_step=True, world=False, no_data=True)
+        ] == ["node"]
         assert [
             level.group_spec
             for level in ctx.control_sync_levels(epoch_update_step_idx=0, update_step=False, world=True, no_data=False)
@@ -2107,7 +2112,9 @@ def _torch_distributed_param_sync_accum_dyn_worker(rank: int, world_size: int, p
     torch.distributed.destroy_process_group()
 
 
-def _torch_distributed_hier_control_sync_worker(rank: int, world_size: int, port: int, tmp_dir: str):
+def _torch_distributed_hier_control_sync_worker(
+    rank: int, world_size: int, port: int, tmp_dir: str, accum_grad_multiple_step: int, param_sync_every: int
+):
     os.environ.update(
         MASTER_ADDR="127.0.0.1",
         MASTER_PORT=str(port),
@@ -2127,18 +2134,23 @@ def _torch_distributed_hier_control_sync_worker(rank: int, world_size: int, port
             max_seqs=1,  # one seq per step
             optimizer={"class": "adam"},
             learning_rate=0.01,
+            accum_grad_multiple_step=accum_grad_multiple_step,
             num_epochs=1,
             torch_dataloader_opts={"num_workers": 0},
             torch_distributed={
                 "backend": "gloo",
-                # grads within the pair every step, params across the pairs every 4 updates
-                "sync": [{"group": 2, "type": "grad"}, {"group": "world", "type": "param", "every": 4}],
+                # grads within the pair every step, params across the pairs every param_sync_every updates
+                "sync": [
+                    {"group": 2, "type": "grad"},
+                    {"group": "world", "type": "param", "every": param_sync_every},
+                ],
             },
         )
     )
     with global_config_ctx(config):
         # Rank 0 runs out in step 2, so its pair stops there and joins the next world control sync,
-        # which the other pair reaches in step 3 (the world level fires after update 3, i.e. in step 3).
+        # which the other pair reaches in step 3: without accumulation, the world level fires after update 3;
+        # with accumulation 2, step 2 is mid accumulation and the world level fires after update 1, in step 3.
         dataset = init_dataset({"class": "Task12AXDataset", "num_seqs": 2 if rank == 0 else 10})
         dataset.init_seq_order(epoch=1)
         engine = Engine(config=config)
@@ -2149,11 +2161,7 @@ def _torch_distributed_hier_control_sync_worker(rank: int, world_size: int, port
     torch.distributed.destroy_process_group()
 
 
-def test_torch_engine_distributed_hier_control_sync_cpu():
-    """
-    The control sync follows the levels: the pair of rank 0 stops when rank 0 runs out,
-    the other pair only at its next world sync.
-    """
+def _check_torch_distributed_hier_control_sync(*, accum_grad_multiple_step: int, param_sync_every: int):
     import socket
     import torch.multiprocessing
 
@@ -2163,7 +2171,10 @@ def test_torch_engine_distributed_hier_control_sync_cpu():
         port = s.getsockname()[1]
     with tempfile.TemporaryDirectory(prefix="returnn_test_torch_distributed_hier_control_sync") as tmp_dir:
         ctx = torch.multiprocessing.spawn(
-            _torch_distributed_hier_control_sync_worker, args=(world_size, port, tmp_dir), nprocs=world_size, join=False
+            _torch_distributed_hier_control_sync_worker,
+            args=(world_size, port, tmp_dir, accum_grad_multiple_step, param_sync_every),
+            nprocs=world_size,
+            join=False,
         )
         deadline = time.monotonic() + 120
         while not ctx.join(timeout=max(0.0, deadline - time.monotonic())):  # returns once any process finished
@@ -2176,6 +2187,22 @@ def test_torch_engine_distributed_hier_control_sync_cpu():
             with open(f"{tmp_dir}/rank{rank}.txt") as f:
                 steps.append(int(f.read()))
     assert steps == [2, 2, 3, 3], steps
+
+
+def test_torch_engine_distributed_hier_control_sync_cpu():
+    """
+    The control sync follows the levels: the pair of rank 0 stops when rank 0 runs out,
+    the other pair only at its next world sync.
+    """
+    _check_torch_distributed_hier_control_sync(accum_grad_multiple_step=1, param_sync_every=4)
+
+
+def test_torch_engine_distributed_hier_control_sync_accum_cpu():
+    """
+    Rank 0 runs out mid accumulation while the world level fires once the pending update completes:
+    it must still do the pair check its partner does in this step, not the world check.
+    """
+    _check_torch_distributed_hier_control_sync(accum_grad_multiple_step=2, param_sync_every=1)
 
 
 def test_torch_engine_distributed_param_sync_accum_dyn_cpu():

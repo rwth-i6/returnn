@@ -263,23 +263,33 @@ class DistributedContext:
         :param world: sync over all ranks in this step in any case (first step of the epoch,
             or a callable ``accum_grad_multiple_step``, whose value for the step is only known after the step)
         :param no_data: this rank has no more data. Then it joins the control sync the other ranks of its group
-            do next, which is in the step of the next firing level.
+            do next: the one of this step if there is one, else the one of the next firing level.
         :return: the levels to sync on in this step, inner to outer: the first is the control sync of this step,
             the rest are the ones to join when there is no data. Empty: no control sync in this step.
         """
         if world or self._reduce_type == "grad":
             return [self._world_level]
-        if no_data:
-            update_step = True
-            while not any(level.fires(epoch_update_step_idx=epoch_update_step_idx) for level in self._sync_levels):
-                epoch_update_step_idx += 1
+        # The choice depends only on the state the ranks of a group share (the pending update, whether this step
+        # completes it), never on this rank's data, so that all of them enter the same collective.
         firing = [
             idx
             for idx, level in enumerate(self._sync_levels)
             if level.sync_type == "grad" or (update_step and level.fires(epoch_update_step_idx=epoch_update_step_idx))
         ]
-        if not firing:
+        if firing:
+            return _control_sync_chain(self._sync_levels, max(firing), epoch_update_step_idx)
+        if not no_data:
             return []
+        # No control sync in this step. The next one of this rank's group: after the next update which fires a level.
+        if update_step:
+            epoch_update_step_idx += 1  # this update completes now and fires nothing
+        while not any(level.fires(epoch_update_step_idx=epoch_update_step_idx) for level in self._sync_levels):
+            epoch_update_step_idx += 1
+        firing = [
+            idx
+            for idx, level in enumerate(self._sync_levels)
+            if level.fires(epoch_update_step_idx=epoch_update_step_idx)
+        ]
         return _control_sync_chain(self._sync_levels, max(firing), epoch_update_step_idx)
 
     def step_after_param_update(self, *, module: torch.nn.Module, epoch_update_step_idx: int):
