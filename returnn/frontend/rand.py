@@ -203,7 +203,8 @@ def random(
     :param bool|None auto_update_state: only used when you pass an explicit state
     :param bool|None static: if no state at all should be used. it just relies on the seed then.
     :param out: if given, will directly write into it, if possible by backend
-    :param like: the result uses the backend and storage layout of this tensor, for the dims it shares with it,
+    :param like: the result uses the backend, the device (unless ``device`` is given)
+        and the storage layout of this tensor, for the dims it shares with it,
         e.g. a dropout mask packed like its packed input. See :func:`returnn.frontend.full`.
     :return: random values
     """
@@ -223,6 +224,8 @@ def random(
     if like is not None and like.raw_tensor is not None:
         # noinspection PyProtectedMember
         backend = like._raw_backend
+        if device is None:
+            device = like.device
     return backend.random(
         dims=dims,
         dtype=dtype,

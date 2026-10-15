@@ -3262,6 +3262,10 @@ def test_creation_like_packed():
             rf.zeros_like(x),
         ):
             assert not packed.is_packed(out), (layout, out)
+        # the device follows like, not the default device
+        with rf.set_default_device_ctx("meta"):
+            for name, create in creators.items():
+                assert create(xp).device == "cpu" and create(x).device == "cpu", (layout, name)
 
 
 def test_is_finite_infinite_neg_infinite():

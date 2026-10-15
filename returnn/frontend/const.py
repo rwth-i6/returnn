@@ -37,7 +37,8 @@ def full(
     :param device:
     :param sparse_dim:
     :param feature_dim:
-    :param like: the result uses the backend and storage layout of this tensor, for the dims it shares with it.
+    :param like: the result uses the backend, the device (unless ``device`` is given)
+        and the storage layout of this tensor, for the dims it shares with it.
         E.g. with a packed ``like`` (:func:`returnn.frontend.pack`) and ``dims`` covering its packed dims,
         the result is packed alike, without the padded intermediate.
         Use it when the result is combined with ``like`` anyway.
@@ -66,6 +67,8 @@ def full(
     if like is not None and like.raw_tensor is not None:
         # noinspection PyProtectedMember
         backend = like._raw_backend
+        if device is None:
+            device = like.device
     return backend.full(
         dims, fill_value, dtype=dtype, device=device, sparse_dim=sparse_dim, feature_dim=feature_dim, like=like
     )
