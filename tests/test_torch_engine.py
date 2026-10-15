@@ -2147,6 +2147,7 @@ def _torch_distributed_hier_control_sync_worker(
                     {"group": 2, "type": "grad"},
                     {"group": "world", "type": "param", "every": param_sync_every},
                 ],
+                "sync_at_epoch_end": False,  # keeps the per-rank step counts, which the test reads
             },
         )
     )
@@ -2263,7 +2264,10 @@ def _torch_distributed_param_sync_optimizer_state_worker(
             "sync_optimizer_state": sync_optimizer_state,
         }
     )
-    assert ctx.should_sync_now(epoch_update_step_idx=0, update_step=True)
+    assert [
+        level.group_spec
+        for level in ctx.control_sync_levels(epoch_update_step_idx=0, update_step=True, world=False, no_data=False)
+    ] == ["world"]
     ctx.step_after_param_update(module=module, optimizer=optimizer, epoch_update_step_idx=0)
     results = {
         "params": [float(param.detach().flatten()[0]) for param in module.parameters()],

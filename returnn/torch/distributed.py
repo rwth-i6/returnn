@@ -443,6 +443,12 @@ class _SyncLevel:
         """
         return (epoch_update_step_idx % self.every) == (self.every - 1)
 
+    def group_size(self) -> int:
+        """
+        :return: number of ranks in the group of this rank
+        """
+        return torch.distributed.get_world_size(group=self.group)
+
 
 def _parse_sync_levels(
     spec: Sequence[Dict[str, Any]], *, size: int, local_size: int, hostnames: Optional[Sequence[str]]
