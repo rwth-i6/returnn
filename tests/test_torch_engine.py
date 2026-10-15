@@ -823,6 +823,11 @@ def test_stop_for_resubmission_enough_time_left():
     assert _run_maybe_stop_for_resubmission(epoch=37, final_epoch=38, time_left=1000) == (1, [])
 
 
+def _env_without_wandb_defaults() -> Dict[str, str]:
+    """the default id / name must not come from the env the test runs in (e.g. a Slurm job)"""
+    return {k: v for k, v in os.environ.items() if k not in {"SLURM_JOB_NAME", "WANDB_RUN_ID"}}
+
+
 def _train_with_wandb_stub(
     *,
     num_epochs: int,
@@ -875,10 +880,8 @@ def _train_with_wandb_stub(
 
     # stub module, as CI has no wandb. Not mock.patch.dict(sys.modules): it also drops all modules imported meanwhile
     sys.modules["wandb"] = types.SimpleNamespace(init=_wandb_init)
-    # the default id / name must not come from the env the test runs in (e.g. a Slurm job)
-    env = {k: v for k, v in os.environ.items() if k not in {"SLURM_JOB_NAME", "WANDB_RUN_ID"}}
     try:
-        with unittest.mock.patch.dict(os.environ, env, clear=True):
+        with unittest.mock.patch.dict(os.environ, _env_without_wandb_defaults(), clear=True):
             with unittest.mock.patch("returnn.util.basic.slurm_time_left_sec", return_value=0):
                 with unittest.mock.patch.object(os, "kill", side_effect=lambda pid, sig: events.append(("kill", sig))):
                     with global_config_ctx(config):
@@ -912,7 +915,7 @@ def test_torch_engine_wandb_continue_from_checkpoint():
 
     with tempfile.TemporaryDirectory() as tmp_dir:
         config_file = f"{tmp_dir}/returnn.config"
-        run_id = hashlib.sha256(config_file.encode("utf8")).hexdigest()
+        run_id = hashlib.sha256(repr(("train", [config_file])).encode("utf8")).hexdigest()
         kwargs = dict(model=f"{tmp_dir}/model", config_file=config_file)
         _, init_kwargs, _, step_after_ep1 = _train_with_wandb_stub(num_epochs=1, **kwargs)
         assert init_kwargs == [{"project": "test", "job_type": "train", "id": run_id, "resume": "allow"}]
@@ -920,6 +923,24 @@ def test_torch_engine_wandb_continue_from_checkpoint():
         _, init_kwargs, events, _ = _train_with_wandb_stub(num_epochs=2, **kwargs)
         assert init_kwargs == [{"project": "test", "job_type": "train", "id": run_id, "resume": "allow"}]
         assert min(event[1] for event in events if event[0] == "log") == step_after_ep1
+
+
+def test_torch_engine_wandb_default_id_per_task():
+    import types
+
+    init_kwargs = []
+    sys.modules["wandb"] = types.SimpleNamespace(init=lambda **kwargs: init_kwargs.append(kwargs))
+    try:
+        with unittest.mock.patch.dict(os.environ, _env_without_wandb_defaults(), clear=True):
+            for task in ["train", "eval"]:
+                config = Config(dict(task=task, wandb_opts={"project": "test"}))
+                config.files.append("/tmp/returnn.config")  # as if loaded from this file
+                Engine(config=config)._wandb_init()
+    finally:
+        del sys.modules["wandb"]
+    assert [kwargs["job_type"] for kwargs in init_kwargs] == ["train", "eval"]
+    # the same config file with another task (e.g. ++task eval) does not continue the training run
+    assert init_kwargs[0]["id"] != init_kwargs[1]["id"]
 
 
 def test_torch_engine_wandb_stop_for_resubmission():

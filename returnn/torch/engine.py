@@ -1070,10 +1070,8 @@ class Engine(EngineBase):
         task = self.config.value("task", "train")
         opts.setdefault("job_type", task)
         if self.config.files and not os.environ.get("WANDB_RUN_ID"):
-            config_files_hash = hashlib.sha256()
-            for filename in self.config.files:
-                config_files_hash.update(str(os.path.abspath(filename)).encode("utf-8"))
-            opts.setdefault("id", config_files_hash.hexdigest())
+            run_key = (task, [os.path.abspath(filename) for filename in self.config.files])
+            opts.setdefault("id", hashlib.sha256(repr(run_key).encode("utf-8")).hexdigest())
         if os.environ.get("SLURM_JOB_NAME"):
             opts.setdefault("name", os.environ["SLURM_JOB_NAME"])
         if not any(k in opts for k in ("resume", "resume_from", "fork_from")):  # mutually exclusive
