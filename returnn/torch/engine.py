@@ -718,7 +718,9 @@ class Engine(EngineBase):
                 if perform_update_step:
                     if self._torch_distributed_ctx:
                         self._torch_distributed_ctx.step_after_param_update(
-                            module=self._pt_model, epoch_update_step_idx=epoch_update_step_idx
+                            module=self._pt_model,
+                            optimizer=self._updater.get_optimizer(),
+                            epoch_update_step_idx=epoch_update_step_idx,
                         )
                     epoch_update_step_idx += 1
 

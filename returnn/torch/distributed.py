@@ -37,6 +37,7 @@ class DistributedContext:
     Each level has a ``group`` ("world", "node" (the ranks on one host), an int (contiguous blocks of that many ranks),
     or an explicit list of rank lists), a ``type`` ("grad" or "param"),
     and ``every`` (period in optimizer update steps, counted per epoch, default 1).
+    A "param" level also syncs the optimizer state with ``sync_optimizer_state`` (default off).
     Every group of a level is a union of groups of the inner level, and every period a multiple of the inner one.
     A "grad" level runs in every step, so it has to be the innermost. Of the "param" levels firing in a step,
     only the outermost runs, which subsumes the inner averages.
@@ -93,15 +94,16 @@ class DistributedContext:
                 f"reduce_type param: param_sync_step must be a positive int,"
                 f" got {self._param_sync_step!r} ({type(self._param_sync_step).__name__})"
             )
-            _logger.info(f"reduce_type param: param_sync_step {self._param_sync_step}")
             sync_spec = [
                 {
                     "group": "world",
                     "type": "param",
                     "every": self._param_sync_step,
                     "sync_on_cpu": self._opts.get("sync_on_cpu", False),
+                    "sync_optimizer_state": self._opts.get("sync_optimizer_state", False),
                 }
             ]
+            _logger.info(f"reduce_type param: {sync_spec[0]}")
         elif self._reduce_type == "grad":
             _logger.info("reduce_type grad")
             sync_spec = []
@@ -262,17 +264,27 @@ class DistributedContext:
             for level in self._sync_levels
         )
 
-    def step_after_param_update(self, *, module: torch.nn.Module, epoch_update_step_idx: int):
+    def step_after_param_update(
+        self, *, module: torch.nn.Module, optimizer: torch.optim.Optimizer, epoch_update_step_idx: int
+    ):
         """
         Average the params over the outermost "param" sync level firing after this optimizer update, if any.
+        With ``sync_optimizer_state`` of that level (default off), also the optimizer state, see :func:`_sync_state`;
+        otherwise each rank keeps its own.
         Call this right after an optimizer update.
 
         :param module: to take the params from
+        :param optimizer: to take the state from
         :param epoch_update_step_idx: optimizer updates before this one in this epoch
         """
         for level in reversed(self._sync_levels):
             if level.sync_type == "param" and level.fires(epoch_update_step_idx=epoch_update_step_idx):
-                _sync_state(module=module, sync_on_cpu=level.sync_on_cpu, group=level.group)
+                _sync_state(
+                    module=module,
+                    optimizer=optimizer if level.sync_optimizer_state else None,
+                    sync_on_cpu=level.sync_on_cpu,
+                    group=level.group,
+                )
                 return
 
     def sync_at_epoch_end(self) -> bool:
@@ -377,12 +389,14 @@ class _SyncLevel:
         sync_type: str,
         every: int,
         sync_on_cpu: bool,
+        sync_optimizer_state: bool,
     ):
         self.group_spec = group_spec
         self.group_ranks = group_ranks
         self.sync_type = sync_type
         self.every = every
         self.sync_on_cpu = sync_on_cpu
+        self.sync_optimizer_state = sync_optimizer_state
         self.group: Optional[torch.distributed.ProcessGroup] = None  # None: the default group ("world")
 
     def __repr__(self):
@@ -418,6 +432,7 @@ def _parse_sync_levels(
         sync_type = opts["type"]
         every = opts.get("every", 1)
         sync_on_cpu = opts.get("sync_on_cpu", False) if sync_type == "param" else False
+        sync_optimizer_state = opts.get("sync_optimizer_state", False) if sync_type == "param" else False
         opts.assert_all_read()
         assert sync_type in ("grad", "param"), f"torch_distributed sync level {idx}: invalid type {sync_type!r}"
         assert isinstance(every, int) and every > 0, (
@@ -451,6 +466,7 @@ def _parse_sync_levels(
                 sync_type=sync_type,
                 every=every,
                 sync_on_cpu=sync_on_cpu,
+                sync_optimizer_state=sync_optimizer_state,
             )
         )
     return levels

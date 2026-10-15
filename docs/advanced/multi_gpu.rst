@@ -14,6 +14,8 @@ This will by default use PyTorch ``DistributedDataParallel``.
 
 Or maybe use ``torch_distributed = {"reduce_type": "param", "param_sync_step": 100}``.
 This uses parameter averaging after every 100 steps.
+With ``"sync_optimizer_state": True``, the optimizer state (e.g. the Adam moments) is averaged as well;
+by default each rank keeps its own.
 
 ``"reduce_type": "grad_explicit"`` averages the grads once per step before the optimizer step,
 without ``DistributedDataParallel``, which is what ``torch_cuda_graph`` needs.
@@ -32,6 +34,7 @@ params averaged across all nodes every 100 steps::
 or a list of rank lists. ``type`` is ``"grad"`` (every step, must be the first level) or ``"param"``,
 ``every`` is the period in optimizer update steps (counted per epoch; with ``accum_grad_multiple_step``,
 one update step spans several steps, and the params are only averaged right after an update).
+A ``"param"`` level also takes ``"sync_on_cpu"`` and ``"sync_optimizer_state"``.
 The groups of a level must be unions of the groups of the inner level,
 and the periods multiples of the inner period. Of the param levels firing after an update, only the outermost runs.
 
