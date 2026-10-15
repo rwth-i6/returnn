@@ -840,9 +840,10 @@ def _finalize_at_exit(*, exc: Optional[BaseException], error_occurred: bool):
     """
     if exc is not None and not (isinstance(exc, SystemExit) and exc.code in (None, 0)):
         error_occurred = True
+    # noinspection PyBroadException
     try:
         finalize(error_occurred=error_occurred)
-    except Exception:
+    except Exception:  # anything the cleanup raises: reported, never in place of the original
         if exc is None:
             raise
         print(f"Exception in finalize, while exiting on {type(exc).__name__}:", file=getattr(log, "v1", sys.stderr))
