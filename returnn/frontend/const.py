@@ -64,6 +64,7 @@ def full(
         )
     backend = global_backend
     if like is not None and like.raw_tensor is not None:
+        # noinspection PyProtectedMember
         backend = like._raw_backend
     return backend.full(
         dims, fill_value, dtype=dtype, device=device, sparse_dim=sparse_dim, feature_dim=feature_dim, like=like

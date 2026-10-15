@@ -221,6 +221,7 @@ def random(
             dtype = rf.get_default_float_dtype()
     backend = _global_backend
     if like is not None and like.raw_tensor is not None:
+        # noinspection PyProtectedMember
         backend = like._raw_backend
     return backend.random(
         dims=dims,
