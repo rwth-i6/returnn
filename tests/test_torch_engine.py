@@ -1856,6 +1856,7 @@ def _torch_distributed_sync_levels_worker(rank: int, world_size: int, port: int,
         for i, param in enumerate(module.parameters()):
             param.fill_(float(rank + 10 * i))  # rank-specific, so every average is distinguishable
             param.grad = torch.full_like(param, float(100 * rank + i))
+    optimizer = torch.optim.Adam(module.parameters(), lr=0.01)  # unused state, no level syncs it
 
     def _values() -> List[List[float]]:
         return [[float(param.detach().flatten()[0]), float(param.grad.flatten()[0])] for param in module.parameters()]
@@ -1876,9 +1877,9 @@ def _torch_distributed_sync_levels_worker(rank: int, world_size: int, port: int,
         assert [level.group_spec for level in levels] == [2, "world"], levels
         ctx.maybe_reduce_grads(module=module)
         results["step0_grads"] = _values()
-        ctx.step_after_param_update(module=module, epoch_update_step_idx=0)
+        ctx.step_after_param_update(module=module, optimizer=optimizer, epoch_update_step_idx=0)
         results["step0"] = _values()
-        ctx.step_after_param_update(module=module, epoch_update_step_idx=1)
+        ctx.step_after_param_update(module=module, optimizer=optimizer, epoch_update_step_idx=1)
         results["step1"] = _values()
     elif variant == "hier":
         # params in pairs every 2 steps, params over the node (= all ranks here) every 4 steps;
@@ -1916,11 +1917,11 @@ def _torch_distributed_sync_levels_worker(rank: int, world_size: int, port: int,
             for level in ctx.control_sync_levels(epoch_update_step_idx=0, update_step=False, world=True, no_data=False)
         ] == ["world"]
         ctx.maybe_reduce_grads(module=module)  # no-op
-        ctx.step_after_param_update(module=module, epoch_update_step_idx=0)
+        ctx.step_after_param_update(module=module, optimizer=optimizer, epoch_update_step_idx=0)
         results["step0"] = _values()
-        ctx.step_after_param_update(module=module, epoch_update_step_idx=1)
+        ctx.step_after_param_update(module=module, optimizer=optimizer, epoch_update_step_idx=1)
         results["step1"] = _values()
-        ctx.step_after_param_update(module=module, epoch_update_step_idx=3)
+        ctx.step_after_param_update(module=module, optimizer=optimizer, epoch_update_step_idx=3)
         results["step3"] = _values()
     else:
         raise ValueError(f"invalid variant {variant!r}")
@@ -2003,7 +2004,7 @@ def _torch_distributed_param_sync_accum_worker(rank: int, world_size: int, port:
     orig_run_step = Engine._run_step
     orig_train_epoch = Engine.train_epoch
     orig_updater_step = Updater.step
-    orig_sync_params_avg = torch_distributed._sync_params_avg
+    orig_sync_state = torch_distributed._sync_state
 
     def _run_step(self, *args, train_flag: bool = False, **kwargs):
         if train_flag:
@@ -2019,18 +2020,20 @@ def _torch_distributed_param_sync_accum_worker(rank: int, world_size: int, port:
         state["updates"] += 1
         return orig_updater_step(self, **kwargs)
 
-    def _sync_params_avg(**kwargs):
+    def _sync_state(**kwargs):
+        if kwargs.get("counters"):  # the epoch-end sync (sync_at_epoch_end), not a param sync
+            return orig_sync_state(**kwargs)
         assert state["last"] == "update", state
         updates_in_epoch = state["updates"] - state["updates_at_epoch_start"]
         assert updates_in_epoch > 0 and updates_in_epoch % 3 == 0, state
         state["syncs"].append(updates_in_epoch)
         state["last"] = "sync"
-        return orig_sync_params_avg(**kwargs)
+        return orig_sync_state(**kwargs)
 
     Engine._run_step = _run_step
     Engine.train_epoch = _train_epoch
     Updater.step = _updater_step
-    torch_distributed._sync_params_avg = _sync_params_avg
+    torch_distributed._sync_state = _sync_state
 
     config = Config(
         dict(
@@ -2226,6 +2229,281 @@ def test_torch_engine_distributed_param_sync_accum_dyn_cpu():
             for proc in ctx.processes:
                 proc.kill()
             raise Exception("timeout, the ranks hang")
+
+
+def _torch_distributed_param_sync_optimizer_state_worker(
+    rank: int, world_size: int, port: int, tmp_dir: str, sync_optimizer_state: bool
+):
+    from returnn.torch.distributed import DistributedContext
+
+    os.environ.update(
+        MASTER_ADDR="127.0.0.1",
+        MASTER_PORT=str(port),
+        RANK=str(rank),
+        WORLD_SIZE=str(world_size),
+        LOCAL_RANK=str(rank),
+        LOCAL_WORLD_SIZE=str(world_size),
+    )
+    module = torch.nn.Linear(3, 2)
+    with torch.no_grad():
+        for i, param in enumerate(module.parameters()):
+            param.fill_(float(rank + 10 * i))  # rank-specific, so every average is distinguishable
+            param.grad = torch.full_like(param, float(100 * rank + i))
+    optimizer = torch.optim.Adam(module.parameters(), lr=0.01)
+    optimizer.step()  # exp_avg = 0.1 * grad, exp_avg_sq = 0.001 * grad^2
+    if rank == 1:
+        optimizer.step()  # an extra update on one rank, as after an epoch with more batches on it
+    # nested state with a Python value, as a custom optimizer might keep it: taken from rank 0
+    optimizer.state[next(module.parameters())]["extra"] = {"nested": [f"rank {rank}"]}
+    ctx = DistributedContext(
+        {
+            "backend": "gloo",
+            "reduce_type": "param",
+            "param_sync_step": 1,
+            "sync_optimizer_state": sync_optimizer_state,
+        }
+    )
+    assert ctx.should_sync_now(epoch_update_step_idx=0, update_step=True)
+    ctx.step_after_param_update(module=module, optimizer=optimizer, epoch_update_step_idx=0)
+    results = {
+        "params": [float(param.detach().flatten()[0]) for param in module.parameters()],
+        "state": [
+            [float(optimizer.state[param][key].flatten()[0]) for key in ["exp_avg", "exp_avg_sq"]]
+            for param in module.parameters()
+        ],
+        "steps": [float(optimizer.state[param]["step"]) for param in module.parameters()],
+        "extra": optimizer.state[next(module.parameters())]["extra"],
+    }
+    torch.save(results, f"{tmp_dir}/rank{rank}.pt")
+    torch.distributed.destroy_process_group()
+
+
+def _check_torch_distributed_param_sync_optimizer_state(sync_optimizer_state: bool):
+    import socket
+    import torch.multiprocessing
+
+    world_size = 4
+    with socket.socket() as s:
+        s.bind(("127.0.0.1", 0))
+        port = s.getsockname()[1]
+    with tempfile.TemporaryDirectory(prefix="returnn_test_torch_distributed_param_sync_optimizer_state") as tmp_dir:
+        torch.multiprocessing.spawn(
+            _torch_distributed_param_sync_optimizer_state_worker,
+            args=(world_size, port, tmp_dir, sync_optimizer_state),
+            nprocs=world_size,
+        )
+        res = [torch.load(f"{tmp_dir}/rank{rank}.pt") for rank in range(world_size)]
+    # Adam with a constant grad g, after n steps: exp_avg = g * (1 - 0.9^n), exp_avg_sq = g^2 * (1 - 0.999^n).
+    # Grads 100 * rank + i, n = 2 on rank 1, 1 elsewhere.
+    own_state = [
+        [[g * (1 - 0.9**n), g**2 * (1 - 0.999**n)] for g in [100.0 * rank + i for i in range(2)]]
+        for rank, n in enumerate([1, 2, 1, 1])
+    ]
+    for rank, res_rank in enumerate(res):
+        assert res_rank["params"] == res[0]["params"], (rank, res_rank["params"], res[0]["params"])  # params synced
+        print(f"sync_optimizer_state {sync_optimizer_state}, rank {rank}: optimizer state {res_rank['state']}")
+    if sync_optimizer_state:
+        mean_state = numpy.mean(own_state, axis=0)
+        for rank, res_rank in enumerate(res):
+            assert res_rank["state"] == res[0]["state"], (rank, res_rank["state"])
+            numpy.testing.assert_allclose(res_rank["state"], mean_state, rtol=1e-5)
+            assert res_rank["steps"] == [2.0, 2.0], (rank, res_rank["steps"])  # the max, not the mean 1.25
+            assert res_rank["extra"] == {"nested": ["rank 0"]}, (rank, res_rank["extra"])
+    else:  # each rank keeps its own
+        for rank, res_rank in enumerate(res):
+            numpy.testing.assert_allclose(res_rank["state"], own_state[rank], rtol=1e-5)
+            assert res_rank["steps"] == [float(n) for n in [[1, 2, 1, 1][rank]] * 2], (rank, res_rank["steps"])
+            assert res_rank["extra"] == {"nested": [f"rank {rank}"]}, (rank, res_rank["extra"])
+
+
+def test_torch_distributed_param_sync_optimizer_state_cpu():
+    _check_torch_distributed_param_sync_optimizer_state(sync_optimizer_state=True)
+
+
+def test_torch_distributed_param_sync_no_optimizer_state_cpu():
+    _check_torch_distributed_param_sync_optimizer_state(sync_optimizer_state=False)
+
+
+def _torch_distributed_sync_at_epoch_end_worker(
+    rank: int, world_size: int, port: int, tmp_dir: str, sync_at_epoch_end: bool
+):
+    os.environ.update(
+        MASTER_ADDR="127.0.0.1",
+        MASTER_PORT=str(port),
+        RANK=str(rank),
+        WORLD_SIZE=str(world_size),
+        LOCAL_RANK=str(rank),
+        LOCAL_WORLD_SIZE=str(world_size),
+    )
+    config = Config(
+        dict(
+            task="train",
+            device="cpu",
+            extern_data={"data": {"dim": 9}, "classes": {"dim": 2, "sparse": True}},
+            get_model=TrainTestModel,
+            train_step=TrainTestModel.train_step,
+            batch_size=10**9,
+            max_seqs=1,  # one seq per step: 7 / 9 steps per epoch, the param sync every 3 steps leaves local steps
+            optimizer={"class": "adam"},
+            learning_rate=0.01,
+            num_epochs=2,
+            model=f"{tmp_dir}/model",
+            torch_dataloader_opts={"num_workers": 0},
+            torch_distributed={
+                "backend": "gloo",
+                "reduce_type": "param",
+                "param_sync_step": 3,
+                "sync_at_epoch_end": sync_at_epoch_end,
+            },
+        )
+    )
+    with global_config_ctx(config):
+        # no fixed seed: each rank its own seq order, thus its own params and optimizer state between the syncs.
+        # Rank 0 runs out after 7 steps, rank 1 then stops at its next sync, after 8 steps: different step counts.
+        dataset = init_dataset({"class": "Task12AXDataset", "num_seqs": 7 if rank == 0 else 9})
+        dataset.init_seq_order(epoch=1)
+        engine = Engine(config=config)
+        engine.init_train_from_config(train_data=dataset)
+        # buffers as a batch norm has them: running stats (float, the mean) and a count (int, the max)
+        engine._pt_model.register_buffer("stat", torch.full((2,), float(rank)))
+        engine._pt_model.register_buffer("count", torch.tensor(rank, dtype=torch.int64))
+        # nested optimizer state as a custom optimizer might keep it: a tensor (mean) and a Python value (from rank 0),
+        # added before epoch 2, when the lazy Adam state exists (Adam creates it only when the state is empty)
+        optimizer = engine._updater.get_optimizer()
+        orig_train_epoch = Engine.train_epoch
+
+        def _train_epoch(self):
+            if self.epoch == 2:
+                optimizer.state[next(self._pt_model.parameters())]["extra"] = {
+                    "nested": [torch.full((3,), float(rank)), {"note": f"rank {rank}"}]
+                }
+            return orig_train_epoch(self)
+
+        Engine.train_epoch = _train_epoch
+        engine.train()
+        params = [param.detach().clone() for param in engine._pt_model.parameters()]
+        state = [
+            {key: value.clone() for key, value in optimizer.state[param].items() if isinstance(value, torch.Tensor)}
+            for param in engine._pt_model.parameters()
+        ]
+        extra = optimizer.state[next(engine._pt_model.parameters())]["extra"]
+        buffers = {name: buf.clone() for name, buf in engine._pt_model.named_buffers()}
+    torch.save(
+        {
+            "params": params,
+            "state": state,
+            "extra": extra,
+            "buffers": buffers,
+            "global_train_step": engine.global_train_step,
+        },
+        f"{tmp_dir}/rank{rank}.pt",
+    )
+    torch.distributed.destroy_process_group()
+
+
+def _check_torch_distributed_sync_at_epoch_end(sync_at_epoch_end: bool):
+    import socket
+    import torch.multiprocessing
+
+    world_size = 2
+    with socket.socket() as s:
+        s.bind(("127.0.0.1", 0))
+        port = s.getsockname()[1]
+    with tempfile.TemporaryDirectory(prefix="returnn_test_torch_distributed_sync_at_epoch_end") as tmp_dir:
+        torch.multiprocessing.spawn(
+            _torch_distributed_sync_at_epoch_end_worker,
+            args=(world_size, port, tmp_dir, sync_at_epoch_end),
+            nprocs=world_size,
+        )
+        res = [torch.load(f"{tmp_dir}/rank{rank}.pt") for rank in range(world_size)]
+        saved_opt = torch.load(f"{tmp_dir}/model.002.opt.pt")  # written by rank 0
+    params_equal = all(torch.equal(p0, p1) for p0, p1 in zip(res[0]["params"], res[1]["params"]))
+    state_keys = sorted(res[0]["state"][0].keys())
+    assert "exp_avg" in state_keys and "exp_avg_sq" in state_keys, state_keys
+    state_equal = all(
+        torch.equal(s0[key], s1[key]) for s0, s1 in zip(res[0]["state"], res[1]["state"]) for key in state_keys
+    )
+    steps = [res[rank]["global_train_step"] for rank in range(world_size)]
+    print(
+        f"sync_at_epoch_end {sync_at_epoch_end}: params equal {params_equal}, optimizer state equal {state_equal},"
+        f" global train steps {steps}"
+    )
+    assert params_equal == sync_at_epoch_end and state_equal == sync_at_epoch_end
+    # the max over the ranks after each of the 2 epochs: 8 + 8; without the sync, 7 + 7 and 8 + 8
+    assert steps == ([16, 16] if sync_at_epoch_end else [14, 16]), steps
+    for rank in range(world_size):
+        buffers = res[rank]["buffers"]
+        assert torch.equal(buffers["stat"], torch.full((2,), 0.5 if sync_at_epoch_end else float(rank))), (
+            rank,
+            buffers,
+        )
+        assert int(buffers["count"]) == (1 if sync_at_epoch_end else rank), (rank, buffers)
+        extra = res[rank]["extra"]["nested"]
+        assert torch.equal(extra[0], torch.full((3,), 0.5 if sync_at_epoch_end else float(rank))), (rank, extra)
+        assert extra[1] == {"note": "rank 0" if sync_at_epoch_end else f"rank {rank}"}, (rank, extra)
+    assert all(
+        float(s["step"]) == (16 if sync_at_epoch_end else steps[rank])
+        for rank in range(world_size)
+        for s in res[rank]["state"]
+    )
+    # The checkpoint is rank 0's state. With the sync it is thus also what rank 1 continues with.
+    saved_state = saved_opt["state"] if "state" in saved_opt else saved_opt["optimizer"]["state"]
+    for i, s0 in enumerate(res[0]["state"]):
+        for key in state_keys:
+            assert torch.equal(saved_state[i][key], s0[key]), (i, key)
+
+
+def test_torch_engine_distributed_param_sync_at_epoch_end_cpu():
+    _check_torch_distributed_sync_at_epoch_end(sync_at_epoch_end=True)
+
+
+def test_torch_engine_distributed_param_no_sync_at_epoch_end_cpu():
+    _check_torch_distributed_sync_at_epoch_end(sync_at_epoch_end=False)
+
+
+def _torch_distributed_all_reduce_avg_flat_worker(rank: int, world_size: int, port: int, tmp_dir: str):
+    from returnn.torch.distributed import _all_reduce_avg_flat
+
+    os.environ.update(MASTER_ADDR="127.0.0.1", MASTER_PORT=str(port), RANK=str(rank), WORLD_SIZE=str(world_size))
+    torch.distributed.init_process_group(backend="gloo")
+    # 5 float32 tensors of 3, 7, 2, 11 and 5 elements; 8 bytes per bucket: a tensor of 2 fills one,
+    # every other tensor is larger than a bucket and gets its own
+    tensors = [torch.full((n,), float(100 * rank + i)) for i, n in enumerate([3, 7, 2, 11, 5])]
+    _all_reduce_avg_flat(tensors, bucket_bytes=8)
+    results = [[float(tensor[0]), float(tensor[-1])] for tensor in tensors]
+    tensors = [torch.full((n,), float(100 * rank + i)) for i, n in enumerate([3, 7, 2, 11, 5])]
+    _all_reduce_avg_flat(tensors, sync_on_cpu=True, bucket_bytes=8)  # on CPU tensors: the same path, no copy
+    assert [[float(tensor[0]), float(tensor[-1])] for tensor in tensors] == results
+    # mixed dtypes: one bucket per dtype, no promotion
+    tensors = [
+        torch.full((n,), float(100 * rank + i), dtype=[torch.float32, torch.float64][i % 2])
+        for i, n in enumerate([3, 7, 2, 11, 5])
+    ]
+    _all_reduce_avg_flat(tensors, bucket_bytes=8)
+    assert [[float(tensor[0]), float(tensor[-1])] for tensor in tensors] == results
+    assert [tensor.dtype for tensor in tensors] == [[torch.float32, torch.float64][i % 2] for i in range(5)]
+    with open(f"{tmp_dir}/rank{rank}.txt", "w") as f:
+        f.write(repr(results))
+    torch.distributed.destroy_process_group()
+
+
+def test_torch_distributed_all_reduce_avg_flat_buckets():
+    import socket
+    import torch.multiprocessing
+
+    world_size = 3
+    with socket.socket() as s:
+        s.bind(("127.0.0.1", 0))
+        port = s.getsockname()[1]
+    with tempfile.TemporaryDirectory(prefix="returnn_test_torch_distributed_all_reduce_avg_flat") as tmp_dir:
+        torch.multiprocessing.spawn(
+            _torch_distributed_all_reduce_avg_flat_worker, args=(world_size, port, tmp_dir), nprocs=world_size
+        )
+        for rank in range(world_size):
+            with open(f"{tmp_dir}/rank{rank}.txt") as f:
+                results = eval(f.read())
+            # the mean over the ranks of 100 * rank + i
+            assert results == [[100.0 + i, 100.0 + i] for i in range(5)], (rank, results)
 
 
 def test_dynamic_learning_rate():
@@ -2900,6 +3178,50 @@ def test_torch_engine_cuda_graph_packed_decoder_parity():
         (ctc_a, ce_a), (ctc_b, ce_b) = losses["packed_eager"][s], losses["packed_graphc"][s]
         assert abs(ctc_a - ctc_b) / max(abs(ctc_a), 1e-6) < 2e-2, f"step {s} ctc: {ctc_a} vs {ctc_b}"
         assert abs(ce_a - ce_b) / max(abs(ce_a), 1e-6) < 2e-2, f"step {s} ce: {ce_a} vs {ce_b}"
+
+
+def test_torch_engine_cuda_graph_finalize_then_eager():
+    """
+    A graphc training which stops in the middle of an epoch (an exception), with the bound shapes still enabled,
+    then an eager packed engine in the same process with the same dims, incl. the global batch dim:
+    after finalize, the dims are as before the graphc engine.
+    """
+
+    class _StopTraining(Exception):
+        pass
+
+    if not torch.cuda.is_available():
+        raise unittest.SkipTest("CUDA not available")
+    config, dataset = _build_cuda_graph_train_config_and_dataset(compile_=False)
+    time_dim = config.typed_dict["extern_data"]["data"]["dims"][1]
+    dyn_lr = config.typed_dict["dynamic_learning_rate"]
+
+    def _dyn_lr_stop(*, global_train_step: int, **kwargs) -> float:
+        if global_train_step == 5:  # after the capture
+            raise _StopTraining()
+        return dyn_lr(global_train_step=global_train_step, **kwargs)
+
+    config.typed_dict["dynamic_learning_rate"] = _dyn_lr_stop
+    with global_config_ctx(config):
+        engine = Engine(config=config)
+        engine.init_train_from_config(train_data=dataset)
+        try:
+            engine.train()
+        except _StopTraining:
+            pass
+        else:
+            raise Exception("did not get expected exception")
+        assert engine._graph_capture._graph is not None, "graph never captured"
+        engine.finalize()
+    config.typed_dict["dynamic_learning_rate"] = dyn_lr
+    del config.typed_dict["torch_cuda_graph"]
+    config.typed_dict["packed_tensors"] = True
+    with global_config_ctx(config):
+        engine = Engine(config=config)
+        engine.init_train_from_config(train_data=dataset)
+        engine.train()
+        engine.finalize()
+    assert time_dim.capacity is None
 
 
 def test_torch_engine_cuda_graph_packed_total_bound():

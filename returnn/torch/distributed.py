@@ -8,9 +8,10 @@ import logging
 import os
 import socket
 from datetime import timedelta
-from typing import Optional, Union, Any, Sequence, List, Dict
+from typing import Optional, Union, Any, Sequence, Tuple, List, Dict
 
 import torch
+import tree
 from torch.nn.parallel import DistributedDataParallel
 
 from returnn.config import Config
@@ -36,6 +37,7 @@ class DistributedContext:
     Each level has a ``group`` ("world", "node" (the ranks on one host), an int (contiguous blocks of that many ranks),
     or an explicit list of rank lists), a ``type`` ("grad" or "param"),
     and ``every`` (period in optimizer update steps, counted per epoch, default 1).
+    A "param" level also syncs the optimizer state with ``sync_optimizer_state`` (default off).
     Every group of a level is a union of groups of the inner level, and every period a multiple of the inner one.
     A "grad" level runs in every step, so it has to be the innermost. Of the "param" levels firing in a step,
     only the outermost runs, which subsumes the inner averages.
@@ -92,15 +94,16 @@ class DistributedContext:
                 f"reduce_type param: param_sync_step must be a positive int,"
                 f" got {self._param_sync_step!r} ({type(self._param_sync_step).__name__})"
             )
-            _logger.info(f"reduce_type param: param_sync_step {self._param_sync_step}")
             sync_spec = [
                 {
                     "group": "world",
                     "type": "param",
                     "every": self._param_sync_step,
                     "sync_on_cpu": self._opts.get("sync_on_cpu", False),
+                    "sync_optimizer_state": self._opts.get("sync_optimizer_state", False),
                 }
             ]
+            _logger.info(f"reduce_type param: {sync_spec[0]}")
         elif self._reduce_type == "grad":
             _logger.info("reduce_type grad")
             sync_spec = []
@@ -132,6 +135,10 @@ class DistributedContext:
         self._sync_complete_frac: Optional[bool] = self._opts.get("sync_complete_frac", None)
         if self._sync_complete_frac is None:
             self._sync_complete_frac = BehaviorVersion.get() >= 33
+
+        self._sync_at_epoch_end: Optional[bool] = self._opts.get("sync_at_epoch_end", None)
+        if self._sync_at_epoch_end is None:
+            self._sync_at_epoch_end = BehaviorVersion.get() >= 38
 
         self._dataset_distribution = get_dataset_distribution(self._opts)
 
@@ -238,8 +245,7 @@ class DistributedContext:
             return
         level = self._sync_levels[0]
         assert level.sync_type == "grad"
-        grads = [p.grad for p in module.parameters() if p.grad is not None]
-        _all_reduce_avg_flat(grads, level=level)
+        _all_reduce_avg_flat([p.grad for p in module.parameters() if p.grad is not None], group=level.group)
 
     def sync_complete_frac(self) -> bool:
         """
@@ -292,18 +298,73 @@ class DistributedContext:
         ]
         return _control_sync_chain(self._sync_levels, max(firing), epoch_update_step_idx)
 
-    def step_after_param_update(self, *, module: torch.nn.Module, epoch_update_step_idx: int):
+    def step_after_param_update(
+        self, *, module: torch.nn.Module, optimizer: torch.optim.Optimizer, epoch_update_step_idx: int
+    ):
         """
         Average the params over the outermost "param" sync level firing after this optimizer update, if any.
+        With ``sync_optimizer_state`` of that level (default off), also the optimizer state, see :func:`_sync_state`;
+        otherwise each rank keeps its own.
         Call this right after an optimizer update.
 
         :param module: to take the params from
+        :param optimizer: to take the state from
         :param epoch_update_step_idx: optimizer updates before this one in this epoch
         """
         for level in reversed(self._sync_levels):
             if level.sync_type == "param" and level.fires(epoch_update_step_idx=epoch_update_step_idx):
-                _sync_params_avg(module=module, level=level)
+                _sync_state(
+                    module=module,
+                    optimizer=optimizer if level.sync_optimizer_state else None,
+                    sync_on_cpu=level.sync_on_cpu,
+                    group=level.group,
+                )
                 return
+
+    def sync_at_epoch_end(self) -> bool:
+        """
+        :return: whether :func:`step_after_epoch` syncs the params, the buffers, the optimizer state and the step
+            counts over all ranks at the end of every train epoch
+            (option ``sync_at_epoch_end``, default on since behavior version 38).
+            Only matters with a "param" sync level (reduce_type "param", or ``sync`` with one), where the ranks hold
+            different params and optimizer states between the syncs.
+            Then the checkpoint (written by rank 0) and the eval are the average,
+            and every rank starts the next epoch with the state of the checkpoint,
+            so resuming from the checkpoint continues with the same model and optimizer state as the uninterrupted
+            training (the per-rank random states and data positions are not part of the checkpoint either way).
+        """
+        return self._sync_at_epoch_end
+
+    def step_after_epoch(
+        self, *, module: torch.nn.Module, optimizer: torch.optim.Optimizer, global_train_step: int
+    ) -> int:
+        """
+        Make the state which goes into the checkpoint the same on every rank, see :func:`sync_at_epoch_end`.
+        Call this at the end of the train epoch, before the checkpoint is written.
+
+        Floating point tensors (params, buffers, optimizer state) take the mean over the ranks.
+        Counts take the max: the train step, the ``step`` tensors of the optimizer state and integer tensors
+        (e.g. ``num_batches_tracked`` of a batch norm). The ranks can differ in them after an epoch in which
+        they got different numbers of batches (a rank out of data stops at its step, the others at their next sync),
+        and every rank must count on as the checkpoint does.
+        Other optimizer state values (no tensors) are taken from rank 0, which writes the checkpoint.
+
+        :param module: to take the params and buffers from
+        :param optimizer: to take the state from
+        :param global_train_step: of this rank
+        :return: the global train step to continue with, the same on every rank
+        """
+        if not self._sync_at_epoch_end or not any(level.sync_type == "param" for level in self._sync_levels):
+            return global_train_step
+        global_train_step_t = torch.tensor([global_train_step], dtype=torch.int64)
+        _sync_state(
+            module=module,
+            optimizer=optimizer,
+            buffers=True,
+            counters=[global_train_step_t],
+            sync_on_cpu=any(level.sync_on_cpu for level in self._sync_levels),
+        )
+        return int(global_train_step_t)
 
 
 _is_set_up = False
@@ -362,12 +423,14 @@ class _SyncLevel:
         sync_type: str,
         every: int,
         sync_on_cpu: bool,
+        sync_optimizer_state: bool,
     ):
         self.group_spec = group_spec
         self.group_ranks = group_ranks
         self.sync_type = sync_type
         self.every = every
         self.sync_on_cpu = sync_on_cpu
+        self.sync_optimizer_state = sync_optimizer_state
         self.group: Optional[torch.distributed.ProcessGroup] = None  # None: the default group ("world")
 
     def __repr__(self):
@@ -379,12 +442,6 @@ class _SyncLevel:
         :return: whether this level syncs after the current optimizer update
         """
         return (epoch_update_step_idx % self.every) == (self.every - 1)
-
-    def group_size(self) -> int:
-        """
-        :return: number of ranks in the group of this rank
-        """
-        return torch.distributed.get_world_size(group=self.group)
 
 
 def _parse_sync_levels(
@@ -409,6 +466,7 @@ def _parse_sync_levels(
         sync_type = opts["type"]
         every = opts.get("every", 1)
         sync_on_cpu = opts.get("sync_on_cpu", False) if sync_type == "param" else False
+        sync_optimizer_state = opts.get("sync_optimizer_state", False) if sync_type == "param" else False
         opts.assert_all_read()
         assert sync_type in ("grad", "param"), f"torch_distributed sync level {idx}: invalid type {sync_type!r}"
         assert isinstance(every, int) and every > 0, (
@@ -442,6 +500,7 @@ def _parse_sync_levels(
                 sync_type=sync_type,
                 every=every,
                 sync_on_cpu=sync_on_cpu,
+                sync_optimizer_state=sync_optimizer_state,
             )
         )
     return levels
@@ -512,33 +571,114 @@ def _all_gather_hostnames(*, size: int) -> List[str]:
     return [bytes(b[1 : 1 + int(b[0])].tolist()).decode("utf8") for b in bufs]
 
 
+_FLAT_REDUCE_BUCKET_BYTES = 256 * 1024**2
+
+
 @torch.no_grad()
-def _all_reduce_avg_flat(tensors: List[torch.Tensor], *, level: _SyncLevel):
-    if not tensors:
-        return
-    # One flat buffer: thousands of small allreduces would be latency-bound.
+def _all_reduce_avg_flat(
+    tensors: List[torch.Tensor],
+    *,
+    sync_on_cpu: bool = False,
+    bucket_bytes: int = _FLAT_REDUCE_BUCKET_BYTES,
+    group: Optional[torch.distributed.ProcessGroup] = None,
+):
+    """
+    Averages the tensors in place over the ranks of the group.
+
+    Flat buffers instead of one allreduce per tensor: thousands of small allreduces would be latency-bound.
+    A flat buffer is a copy, so buckets of at most ``bucket_bytes`` bound the extra memory.
+    One bucket holds one dtype on one device: the flat buffer is a ``cat``, which would promote mixed dtypes.
+
+    :param tensors: any dtypes and devices
+    :param sync_on_cpu: allreduce a CPU copy of each bucket (e.g. with Gloo for a CUDA module)
+    :param bucket_bytes: of one flat buffer; a tensor larger than that gets a bucket of its own
+    :param group: the ranks to average over, None: all
+    """
+    buckets: Dict[Tuple[torch.device, torch.dtype], List[List[torch.Tensor]]] = {}
+    for tensor in tensors:
+        key_buckets = buckets.setdefault((tensor.device, tensor.dtype), [[]])
+        if (
+            key_buckets[-1]
+            and sum(t.numel() for t in key_buckets[-1]) + tensor.numel() > bucket_bytes // tensor.element_size()
+        ):
+            key_buckets.append([])
+        key_buckets[-1].append(tensor)
+    for key_buckets in buckets.values():
+        for bucket in key_buckets:
+            # One flat buffer at a time: the function scope frees it before the next one is allocated.
+            _all_reduce_avg_bucket(bucket, sync_on_cpu=sync_on_cpu, group=group)
+
+
+def _all_reduce_avg_bucket(
+    bucket: List[torch.Tensor], *, sync_on_cpu: bool, group: Optional[torch.distributed.ProcessGroup]
+):
+    import torch.distributed as dist
+
     # noinspection protected-member
-    flat = torch._utils._flatten_dense_tensors(tensors)
+    flat = torch._utils._flatten_dense_tensors(bucket)
+    flat_reduce = flat.cpu() if sync_on_cpu else flat
     # SUM then divide, not AVG: NCCL AVG pre-scales by 1/N rounded to the dtype, a bias for non-power-of-two N.
-    torch.distributed.all_reduce(flat, op=torch.distributed.ReduceOp.SUM, group=level.group)
-    flat /= level.group_size()
+    dist.all_reduce(flat_reduce, op=dist.ReduceOp.SUM, group=group)
+    flat_reduce /= dist.get_world_size(group=group)
+    if flat_reduce is not flat:
+        flat.copy_(flat_reduce)
     # noinspection protected-member
-    for tensor, reduced in zip(tensors, torch._utils._unflatten_dense_tensors(flat, tensors)):
+    for tensor, reduced in zip(bucket, torch._utils._unflatten_dense_tensors(flat, bucket)):
         tensor.copy_(reduced)
 
 
 @torch.no_grad()
-def _sync_params_avg(*, module: torch.nn.Module, level: _SyncLevel):
+def _sync_state(
+    *,
+    module: torch.nn.Module,
+    optimizer: Optional[torch.optim.Optimizer] = None,
+    buffers: bool = False,
+    counters: Sequence[torch.Tensor] = (),
+    sync_on_cpu: bool = False,
+    group: Optional[torch.distributed.ProcessGroup] = None,
+):
+    """
+    Makes the state the same on all ranks of the group, one rule per kind:
+    floating point tensors take the mean (the params, the buffers, the optimizer state such as the Adam moments),
+    counts the max (``counters``, the ``step`` tensors of the optimizer state, integer tensors),
+    other optimizer state values come from the first rank of the group.
+    The ranks can differ in the counts after an epoch in which they got different numbers of batches
+    (a rank out of data stops at its step, the others at their next sync); the mean of a count would be no count.
+
+    :param module: its params, and its buffers with ``buffers``
+    :param optimizer: its state, if given: a flat dict of tensors per param for the torch optimizers,
+        any nesting a custom optimizer keeps is fine (dm-tree)
+    :param buffers: also the buffers of the module (e.g. the batch norm running stats)
+    :param counters: further counts, e.g. the train step, in place
+    :param sync_on_cpu: allreduce CPU copies (e.g. with Gloo for a CUDA module)
+    :param group: the ranks to sync over, None: all
+    """
     import torch.distributed as dist
 
-    if level.sync_on_cpu:
-        for param in module.parameters():
-            # Separately move each param to CPU (instead of the whole module), to safe CPU memory.
-            param_cpu = param.to(torch.device("cpu"))
-            # On CPU, we are likely using Gloo, and Gloo does not support AVG
-            dist.all_reduce(param_cpu.data, op=dist.ReduceOp.SUM, group=level.group)
-            param_cpu.data /= level.group_size()
-            param.data = param_cpu.to(param.device)
-        return
-
-    _all_reduce_avg_flat([param.data for param in module.parameters()], level=level)
+    tensors = []  # mean
+    counters = list(counters)  # max
+    objects = []  # (param, leaf index) from the first rank
+    for tensor in list(module.parameters()) + (list(module.buffers()) if buffers else []):
+        (tensors if tensor.is_floating_point() else counters).append(tensor.data)
+    if optimizer is not None:
+        for param, state in optimizer.state.items():
+            for idx, (path, value) in enumerate(tree.flatten_with_path(state)):
+                if not isinstance(value, torch.Tensor):
+                    objects.append((param, idx))
+                elif path[-1] == "step" or not value.is_floating_point():
+                    counters.append(value)
+                else:
+                    tensors.append(value)
+    _all_reduce_avg_flat(tensors, sync_on_cpu=sync_on_cpu, group=group)
+    for counter in counters:
+        counter_cpu = counter.to(torch.device("cpu"))
+        dist.all_reduce(counter_cpu, op=dist.ReduceOp.MAX, group=group)
+        counter.copy_(counter_cpu)
+    if objects:
+        values = [tree.flatten(optimizer.state[param])[idx] for param, idx in objects]
+        src = 0 if group is None else dist.get_global_rank(group, 0)
+        dist.broadcast_object_list(values, src=src, group=group, device=torch.device("cpu"))
+        for (param, idx), value in zip(objects, values):
+            flat = tree.flatten(optimizer.state[param])
+            flat[idx] = value
+            optimizer.state[param] = tree.unflatten_as(optimizer.state[param], flat)

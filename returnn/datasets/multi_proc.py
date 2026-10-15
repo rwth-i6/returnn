@@ -7,6 +7,7 @@ from collections import deque
 from typing import Optional, Any, Dict, List, Tuple
 import sys
 import gc
+import threading
 import multiprocessing as mp
 from returnn.util import better_exchook
 from returnn.util.basic import try_run
@@ -272,8 +273,12 @@ class MultiProcDataset(CachedDataset2):
         dataset: Optional[Dataset] = None
 
         got_init_seq_order = False
+        got_seq_end = False
         cache: deque[DatasetSeq] = deque()
         next_seq_idx = 0
+        cond = threading.Condition()  # guards cache, msg_queue, num_unhandled_msgs
+        msg_queue: deque[Tuple[str, Dict[str, Any]]] = deque()
+        num_unhandled_msgs = 0  # in msg_queue or being handled by the main thread
 
         # noinspection PyShadowingNames
         def _add_to_cache():
@@ -287,7 +292,8 @@ class MultiProcDataset(CachedDataset2):
             features = {data_key: dataset.get_data(next_seq_idx, data_key) for data_key in dataset.get_data_keys()}
             complete_frac = dataset.get_complete_frac(next_seq_idx, allow_only_lr_suitable=True)
             res = DatasetSeq(seq_idx=next_seq_idx, seq_tag=seq_tag, features=features, complete_frac=complete_frac)
-            cache.append(res)
+            with cond:
+                cache.append(res)
             next_seq_idx += 1
             return True
 
@@ -325,13 +331,49 @@ class MultiProcDataset(CachedDataset2):
                 if cache[-1].seq_idx == seq_idx:
                     return cache[-1]
 
+        # Serves cached seqs while the main thread (which owns the dataset) loads, and passes on all other msgs.
+        def _serve_parent():
+            nonlocal num_unhandled_msgs
+            try:
+                while True:
+                    parent_msg, parent_kwargs = parent_conn.recv()
+                    if parent_msg == "exit":
+                        break
+                    cached_seq = None
+                    with cond:
+                        if parent_msg == "get_data_seq" and num_unhandled_msgs == 0:
+                            requested_seq_idx = parent_kwargs["seq_idx"]
+                            if cache and cache[0].seq_idx <= requested_seq_idx:
+                                cached_seq = _get_from_cache(requested_seq_idx)
+                            if cached_seq:
+                                while cache[0].seq_idx < requested_seq_idx:
+                                    cache.popleft()
+                                cond.notify()
+                        if not cached_seq:
+                            msg_queue.append((parent_msg, parent_kwargs))
+                            num_unhandled_msgs += 1
+                            cond.notify()
+                    if cached_seq:
+                        parent_conn.send(("data_seq", cached_seq))
+            except EOFError:  # when parent dies
+                pass
+            finally:
+                with cond:
+                    msg_queue.append(("exit", {}))
+                    cond.notify()
+
+        threading.Thread(target=_serve_parent, name=f"MPD worker {worker_index} serve parent", daemon=True).start()
+
         try:
             while True:
-                if got_init_seq_order:
-                    while not parent_conn.poll():
-                        if not _add_to_cache():
-                            break
-                msg, kwargs = parent_conn.recv()
+                with cond:
+                    while not msg_queue and not (got_init_seq_order and not got_seq_end and len(cache) < buffer_size):
+                        cond.wait()
+                    msg, kwargs = msg_queue.popleft() if msg_queue else (None, None)
+                if msg is None:
+                    if not _add_to_cache():
+                        got_seq_end = True
+                    continue
                 if msg == "exit":
                     break
                 elif msg == "get_data_seq":
@@ -419,6 +461,7 @@ class MultiProcDataset(CachedDataset2):
                     else:
                         raise ValueError(f"{MultiProcDataset.__name__}: unknown sharding_method: {sharding_method}")
                     got_init_seq_order = True
+                    got_seq_end = False
                     next_seq_idx = 0
                     cache.clear()
                 elif msg == "finish_epoch":
@@ -432,6 +475,8 @@ class MultiProcDataset(CachedDataset2):
                         gc.collect()
                 else:
                     raise Exception(f"unknown msg {msg!r}")
+                with cond:
+                    num_unhandled_msgs -= 1
         except KeyboardInterrupt:  # when parent dies
             pass
         except EOFError:  # when parent dies
