@@ -1071,13 +1071,15 @@ class Engine(EngineBase):
         opts = self._wandb_opts.copy()
         task = self.config.value("task", "train")
         opts.setdefault("job_type", task)
-        if os.environ.get("SLURM_JOB_NAME"):
-            opts.setdefault("name", os.environ["SLURM_JOB_NAME"])
         if self.config.files and not os.environ.get("WANDB_RUN_ID"):
             hash = hashlib.sha256()
             for filename in self.config.files:
                 hash.update(str(os.path.abspath(filename)).encode("utf-8"))
             opts.setdefault("id", hash.hexdigest())
+        if os.environ.get("SLURM_JOB_NAME"):
+            opts.setdefault("name", os.environ["SLURM_JOB_NAME"])
+        if not any(k in opts for k in ("resume", "resume_from", "fork_from")):  # mutually exclusive
+            opts.setdefault("resume", "allow")
         run_id = opts.get("id") or os.environ.get("WANDB_RUN_ID")
         if task == "train" and not run_id:
             print(
@@ -1085,8 +1087,6 @@ class Engine(EngineBase):
                 " Set a fixed 'id' (e.g. the job hash) to continue the same run.",
                 file=log.v2,
             )
-        if run_id and not any(k in opts for k in ("resume", "resume_from", "fork_from")):  # mutually exclusive
-            opts["resume_from"] = f"{run_id}?_step={self.global_train_step}"
         self._wandb_run = wandb.init(**opts)
 
     def _wandb_log(self, metrics: Dict[str, float]):
