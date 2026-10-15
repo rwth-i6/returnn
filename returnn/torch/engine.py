@@ -1054,11 +1054,9 @@ class Engine(EngineBase):
             assert isinstance(ls[0], self.learning_rate_control.EpochData)
             self.learning_rate_control.epoch_data[self.epoch] = ls[0]
 
-    def _wandb_init(self, *, is_resuming: bool):
+    def _wandb_init(self):
         """
         Create the W&B run, if enabled via wandb_opts.
-
-        :param is_resuming: training continues from its own checkpoint at self.global_train_step
         """
 
         if self._wandb_opts is None or self._wandb_run is not None:
@@ -1072,10 +1070,10 @@ class Engine(EngineBase):
         task = self.config.value("task", "train")
         opts.setdefault("job_type", task)
         if self.config.files and not os.environ.get("WANDB_RUN_ID"):
-            hash = hashlib.sha256()
+            config_files_hash = hashlib.sha256()
             for filename in self.config.files:
-                hash.update(str(os.path.abspath(filename)).encode("utf-8"))
-            opts.setdefault("id", hash.hexdigest())
+                config_files_hash.update(str(os.path.abspath(filename)).encode("utf-8"))
+            opts.setdefault("id", config_files_hash.hexdigest())
         if os.environ.get("SLURM_JOB_NAME"):
             opts.setdefault("name", os.environ["SLURM_JOB_NAME"])
         if not any(k in opts for k in ("resume", "resume_from", "fork_from")):  # mutually exclusive
@@ -1544,7 +1542,7 @@ class Engine(EngineBase):
             step += 1
         self.set_epoch(epoch)  # in training, this will be reset to start_epoch
         self.global_train_step = step
-        self._wandb_init(is_resuming=is_training and self._start_epoch is not None and self._start_epoch > 1)
+        self._wandb_init()
 
         load_model_post_hooks = self.config.typed_value("load_model_post_hooks")
         if load_model_post_hooks:
