@@ -1923,6 +1923,34 @@ def _torch_distributed_sync_levels_worker(rank: int, world_size: int, port: int,
         results["step1"] = _values()
         ctx.step_after_param_update(module=module, optimizer=optimizer, epoch_update_step_idx=3)
         results["step3"] = _values()
+    elif variant == "hier_opt":
+        # params and optimizer state in pairs every 2 steps, params only over all ranks every 4 steps:
+        # in step 3 the pair still averages the optimizer state
+        ctx = DistributedContext(
+            {
+                "backend": "gloo",
+                "sync": [
+                    {"group": 2, "type": "param", "every": 2, "sync_optimizer_state": True},
+                    {"group": "world", "type": "param", "every": 4},
+                ],
+            }
+        )
+
+        def _set_opt_state(value: float):
+            for param in module.parameters():
+                optimizer.state[param] = {"exp_avg": torch.full_like(param, value)}
+
+        def _opt_values() -> List[float]:
+            return [float(optimizer.state[param]["exp_avg"].flatten()[0]) for param in module.parameters()]
+
+        _set_opt_state(float(rank))
+        ctx.step_after_param_update(module=module, optimizer=optimizer, epoch_update_step_idx=1)
+        results["step1"] = _values()
+        results["step1_opt"] = _opt_values()
+        _set_opt_state(float(10 * rank))
+        ctx.step_after_param_update(module=module, optimizer=optimizer, epoch_update_step_idx=3)
+        results["step3"] = _values()
+        results["step3_opt"] = _opt_values()
     else:
         raise ValueError(f"invalid variant {variant!r}")
 
@@ -1945,7 +1973,7 @@ def _run_torch_distributed_sync_levels(variant: str) -> List[Dict[str, List[List
         return [torch.load(f"{tmp_dir}/rank{rank}.pt") for rank in range(world_size)]
 
 
-def _check_torch_distributed_sync_levels(variant: str, expected: Dict[str, List[List[List[float]]]]):
+def _check_torch_distributed_sync_levels(variant: str, expected: Dict[str, List[Any]]):
     res = _run_torch_distributed_sync_levels(variant)
     for key, expected_values in expected.items():
         got = [res[rank][key] for rank in range(len(res))]
@@ -1982,6 +2010,28 @@ def test_torch_distributed_sync_levels_cpu_hier():
                 [[1.5, 200], [11.5, 201]],
                 [[1.5, 300], [11.5, 301]],
             ],
+        },
+    )
+
+
+def test_torch_distributed_sync_levels_cpu_hier_opt():
+    _check_torch_distributed_sync_levels(
+        "hier_opt",
+        {
+            "step1": [
+                [[0.5, 0], [10.5, 1]],
+                [[0.5, 100], [10.5, 101]],
+                [[2.5, 200], [12.5, 201]],
+                [[2.5, 300], [12.5, 301]],
+            ],
+            "step1_opt": [[0.5, 0.5], [0.5, 0.5], [2.5, 2.5], [2.5, 2.5]],
+            "step3": [
+                [[1.5, 0], [11.5, 1]],
+                [[1.5, 100], [11.5, 101]],
+                [[1.5, 200], [11.5, 201]],
+                [[1.5, 300], [11.5, 301]],
+            ],
+            "step3_opt": [[5, 5], [5, 5], [25, 25], [25, 25]],  # pair means, not the per-rank 10 * rank
         },
     )
 
