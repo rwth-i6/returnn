@@ -281,7 +281,8 @@ class DistributedContext:
             counts over all ranks at the end of every train epoch
             (option ``sync_at_epoch_end``, default on since behavior version 38).
             Only matters with a "param" sync level (reduce_type "param", or ``sync`` with one), where the ranks hold
-            different params and optimizer states between the syncs. Then the checkpoint (written by rank 0) and the eval are the average,
+            different params and optimizer states between the syncs.
+            Then the checkpoint (written by rank 0) and the eval are the average,
             and every rank starts the next epoch with the state of the checkpoint,
             so resuming from the checkpoint continues with the same model and optimizer state as the uninterrupted
             training (the per-rank random states and data positions are not part of the checkpoint either way).
