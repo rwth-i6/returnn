@@ -875,15 +875,18 @@ def _train_with_wandb_stub(
 
     # stub module, as CI has no wandb. Not mock.patch.dict(sys.modules): it also drops all modules imported meanwhile
     sys.modules["wandb"] = types.SimpleNamespace(init=_wandb_init)
+    # the default id / name must not come from the env the test runs in (e.g. a Slurm job)
+    env = {k: v for k, v in os.environ.items() if k not in {"SLURM_JOB_NAME", "WANDB_RUN_ID"}}
     try:
-        with unittest.mock.patch("returnn.util.basic.slurm_time_left_sec", return_value=0):
-            with unittest.mock.patch.object(os, "kill", side_effect=lambda pid, sig: events.append(("kill", sig))):
-                with global_config_ctx(config):
-                    engine = Engine(config=config)
-                    engine.init_train_from_config(train_data=train_dataset, dev_data=dev_dataset)
-                    engine.train()
-                    # like returnn.__main__: the stop for resubmission ends in a KeyboardInterrupt
-                    engine.finalize(error_occurred=stop_for_resubmission)
+        with unittest.mock.patch.dict(os.environ, env, clear=True):
+            with unittest.mock.patch("returnn.util.basic.slurm_time_left_sec", return_value=0):
+                with unittest.mock.patch.object(os, "kill", side_effect=lambda pid, sig: events.append(("kill", sig))):
+                    with global_config_ctx(config):
+                        engine = Engine(config=config)
+                        engine.init_train_from_config(train_data=train_dataset, dev_data=dev_dataset)
+                        engine.train()
+                        # like returnn.__main__: the stop for resubmission ends in a KeyboardInterrupt
+                        engine.finalize(error_occurred=stop_for_resubmission)
     finally:
         del sys.modules["wandb"]
     return wandb_opts, init_kwargs, events, engine.global_train_step
@@ -892,7 +895,7 @@ def _train_with_wandb_stub(
 def test_torch_engine_wandb():
     wandb_opts, init_kwargs, events, num_steps = _train_with_wandb_stub(num_epochs=1)
     assert wandb_opts == {"project": "test", "log_every_n_train_steps": 2}  # the config is not modified
-    assert init_kwargs == [{"project": "test", "job_type": "train"}]  # no config file, so no default id
+    assert init_kwargs == [{"project": "test", "job_type": "train", "resume": "allow"}]  # no config file, so no id
     assert num_steps >= 4
     logs = [event[1:] for event in events if event[0] == "log"]
     step_keys = ["epoch", "train_step/ce", "train_step/fer", "train_step/learning_rate"]
@@ -909,15 +912,13 @@ def test_torch_engine_wandb_continue_from_checkpoint():
 
     with tempfile.TemporaryDirectory() as tmp_dir:
         config_file = f"{tmp_dir}/returnn.config"
-        run_id = hashlib.sha256(config_file.encode("utf8")).hexdigest()[:32]
+        run_id = hashlib.sha256(config_file.encode("utf8")).hexdigest()
         kwargs = dict(model=f"{tmp_dir}/model", config_file=config_file)
         _, init_kwargs, _, step_after_ep1 = _train_with_wandb_stub(num_epochs=1, **kwargs)
         assert init_kwargs == [{"project": "test", "job_type": "train", "id": run_id, "resume": "allow"}]
-        # e.g. a resubmission: continues from the epoch 1 checkpoint, and truncates the W&B history there
+        # e.g. a resubmission: continues from the epoch 1 checkpoint, in the same W&B run
         _, init_kwargs, events, _ = _train_with_wandb_stub(num_epochs=2, **kwargs)
-        assert init_kwargs == [
-            {"project": "test", "job_type": "train", "id": run_id, "resume_from": f"{run_id}?_step={step_after_ep1}"}
-        ]
+        assert init_kwargs == [{"project": "test", "job_type": "train", "id": run_id, "resume": "allow"}]
         assert min(event[1] for event in events if event[0] == "log") == step_after_ep1
 
 
