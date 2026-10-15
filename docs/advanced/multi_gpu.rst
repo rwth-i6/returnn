@@ -17,12 +17,41 @@ This uses parameter averaging after every 100 steps.
 With ``"sync_optimizer_state": True``, the optimizer state (e.g. the Adam moments) is averaged as well;
 by default each rank keeps its own.
 
+``"reduce_type": "grad_explicit"`` averages the grads once per step before the optimizer step,
+without ``DistributedDataParallel``, which is what ``torch_cuda_graph`` needs.
+
+``"sync"`` generalizes these to nested levels, inner to outer, e.g. grads averaged within each node every step,
+params averaged across all nodes every 100 steps::
+
+    torch_distributed = {
+        "sync": [
+            {"group": "node", "type": "grad"},
+            {"group": "world", "type": "param", "every": 100},
+        ]
+    }
+
+``group`` is ``"world"``, ``"node"`` (the ranks on one host), an int (contiguous blocks of that many ranks),
+or a list of rank lists. ``type`` is ``"grad"`` (every step, must be the first level) or ``"param"``,
+``every`` is the period in optimizer update steps (counted per epoch; with ``accum_grad_multiple_step``,
+one update step spans several steps, and the params are only averaged right after an update).
+A ``"param"`` level also takes ``"sync_on_cpu"`` and ``"sync_optimizer_state"``.
+The groups of a level must be unions of the groups of the inner level,
+and the periods multiples of the inner period. Of the param levels firing after an update, only the outermost
+averages the params; the optimizer state is averaged over the outermost firing level with ``"sync_optimizer_state"``.
+
+The levels control the large transfers. Independent of them, all ranks agree in a small control all-reduce
+whether every rank still has data and on the epoch progress: in every step with a ``"grad"`` level,
+otherwise only in the steps where a level fires. So with a ``"grad"`` level, the ranks still meet once per step.
+The same holds for a callable ``accum_grad_multiple_step``: its value for a step is only known after the step,
+so the ranks meet in every step, which also keeps ``epoch_continuous`` and thus the callable's result the same on every rank.
+
 With ``"sync_at_epoch_end": True`` (default since behavior version 38), the state which goes into the checkpoint
 is made the same on every rank at the end of every train epoch, before the checkpoint is written:
 the params, the buffers and the optimizer state take the mean over the ranks, the step counts the max.
 So the checkpoint and the eval are the average, every rank starts the next epoch with the state of the checkpoint,
 and resuming from the checkpoint continues with the same model and optimizer state as the uninterrupted training.
 (The per-rank random states and data positions are not part of the checkpoint either way.)
+With ``"sync"`` levels, this applies when there is a ``"param"`` level, and syncs over all ranks.
 
 With ``"sync_complete_frac": True`` (default since behavior version 33),
 the epoch progress ``complete_frac`` is the mean over the ranks,

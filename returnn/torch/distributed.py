@@ -22,7 +22,26 @@ _logger = logging.getLogger("returnn.torch.distributed")
 
 class DistributedContext:
     """
-    This class setups some helper functions for torch distributed training
+    This class setups some helper functions for torch distributed training.
+
+    How the ranks are synchronized is either the legacy ``reduce_type``
+    ("grad": :class:`DistributedDataParallel`, "grad_explicit": grads averaged before the optimizer step,
+    "param": params averaged every ``param_sync_step`` steps),
+    or a list ``sync`` of nested levels, inner to outer, e.g.::
+
+        "sync": [
+            {"group": "node", "type": "grad"},                  # every step, among the ranks of a node
+            {"group": "world", "type": "param", "every": 100},  # across the nodes
+        ]
+
+    Each level has a ``group`` ("world", "node" (the ranks on one host), an int (contiguous blocks of that many ranks),
+    or an explicit list of rank lists), a ``type`` ("grad" or "param"),
+    and ``every`` (period in optimizer update steps, counted per epoch, default 1).
+    A "param" level also syncs the optimizer state with ``sync_optimizer_state`` (default off).
+    Every group of a level is a union of groups of the inner level, and every period a multiple of the inner one.
+    A "grad" level runs in every step, so it has to be the innermost. Of the "param" levels firing in a step,
+    only the outermost averages the params, which subsumes the inner averages; the optimizer state is averaged
+    over the outermost firing level with ``sync_optimizer_state``.
     """
 
     def __init__(self, options: Dict[str, Any]):
@@ -38,6 +57,7 @@ class DistributedContext:
             self.prev_init_info = ast.literal_eval(prev_init_info)
             self._rank = self.prev_init_info["rank"]
             self._size = self.prev_init_info["size"]
+            hostnames = self.prev_init_info["hostnames"]
         else:
             import torch.distributed as dist
 
@@ -50,7 +70,7 @@ class DistributedContext:
             )
             self._rank = dist.get_rank()
             self._size = dist.get_world_size()
-            os.environ[env_var_name] = repr({"rank": self._rank, "size": self._size})
+            hostnames = None  # gathered below only when a sync level needs them
 
         self._local_rank = int(os.environ["LOCAL_RANK"])
         self._local_size = int(os.environ["LOCAL_WORLD_SIZE"])
@@ -60,25 +80,54 @@ class DistributedContext:
             % (socket.gethostname(), os.getpid(), self._rank, self._size, self._local_rank, self._local_size)
         )
 
-        self._reduce_type = self._opts.get("reduce_type", "grad")
+        self._reduce_type: Optional[str] = self._opts.get("reduce_type", None)
         self._param_sync_step: Optional[int] = self._opts.get("param_sync_step", None)
-        self._sync_optimizer_state = False
+        sync_spec = self._opts.get("sync", None)
+        if sync_spec is not None:
+            assert self._reduce_type is None, (
+                f"torch_distributed: sync and reduce_type are exclusive, got reduce_type {self._reduce_type!r}"
+            )
+            self._reduce_type = "sync"
+        elif self._reduce_type is None:
+            self._reduce_type = "grad"
         if self._reduce_type == "param":
             assert isinstance(self._param_sync_step, int) and self._param_sync_step > 0, (
                 f"reduce_type param: param_sync_step must be a positive int,"
                 f" got {self._param_sync_step!r} ({type(self._param_sync_step).__name__})"
             )
-            self._sync_optimizer_state = self._opts.get("sync_optimizer_state", False)
-            _logger.info(
-                f"reduce_type param: param_sync_step {self._param_sync_step},"
-                f" sync_optimizer_state {self._sync_optimizer_state}"
-            )
+            sync_spec = [
+                {
+                    "group": "world",
+                    "type": "param",
+                    "every": self._param_sync_step,
+                    "sync_on_cpu": self._opts.get("sync_on_cpu", False),
+                    "sync_optimizer_state": self._opts.get("sync_optimizer_state", False),
+                }
+            ]
+            _logger.info(f"reduce_type param: {sync_spec[0]}")
         elif self._reduce_type == "grad":
             _logger.info("reduce_type grad")
+            sync_spec = []
         elif self._reduce_type == "grad_explicit":
             _logger.info("reduce_type grad_explicit")
+            sync_spec = [{"group": "world", "type": "grad"}]
+        elif self._reduce_type == "sync":
+            pass
         else:
             raise ValueError(f"invalid reduce_type {self._reduce_type!r}")
+        if not prev_init_info:
+            if any(isinstance(level_spec, dict) and level_spec.get("group") == "node" for level_spec in sync_spec):
+                hostnames = _all_gather_hostnames(size=self._size)
+            os.environ[env_var_name] = repr({"rank": self._rank, "size": self._size, "hostnames": hostnames})
+        self._sync_levels = _parse_sync_levels(
+            sync_spec, size=self._size, local_size=self._local_size, hostnames=hostnames
+        )
+        if self._reduce_type == "sync":
+            assert self._sync_levels, "torch_distributed: sync must have at least one level"
+            _logger.info(f"sync levels: {self._sync_levels}")
+        if not prev_init_info:
+            # The subprocesses never sync; the process groups exist only in the main process.
+            self._init_sync_groups()
 
         self._sync_complete_frac: Optional[bool] = self._opts.get("sync_complete_frac", None)
         if self._sync_complete_frac is None:
@@ -105,10 +154,20 @@ class DistributedContext:
         if self._reduce_type == "grad":
             self._opts.get("class")
             self._opts.get("options")
-        if self._reduce_type == "param":
-            self._opts.get("sync_on_cpu")
 
         self._opts.assert_all_read()
+
+    def _init_sync_groups(self):
+        import torch.distributed as dist
+
+        for level in self._sync_levels:
+            if level.group_spec == "world":
+                continue  # the default group
+            for ranks in level.group_ranks:
+                # Every rank creates every group (a collective), and keeps the one it belongs to.
+                group = dist.new_group(ranks)
+                if self._rank in ranks:
+                    level.group = group
 
     def local_rank(self) -> int:
         """local rank"""
@@ -141,9 +200,8 @@ class DistributedContext:
         :param module: original module
         :return: potentially wrapped module
         """
-        if self._reduce_type in ("param", "grad_explicit"):
+        if self._reduce_type != "grad":
             return None
-        assert self._reduce_type == "grad"
         cls = self._opts.get("class", DistributedDataParallel)
         if cls is not DistributedDataParallel:
             _logger.warning(f"Using custom class {cls} instead of DistributedDataParallel, might be unsupported.")
@@ -159,12 +217,20 @@ class DistributedContext:
         )
 
     def reduce_type(self) -> str:
-        """reduce type"""
+        """reduce type ("grad", "grad_explicit", "param", or "sync" when configured via ``sync``)"""
         return self._reduce_type
+
+    def has_grad_sync(self) -> bool:
+        """
+        :return: whether :func:`maybe_reduce_grads` averages the grads
+            (reduce_type "grad_explicit", or a "grad" sync level)
+        """
+        return any(level.sync_type == "grad" for level in self._sync_levels)
 
     def maybe_reduce_grads(self, *, module: torch.nn.Module):
         """
-        Average the grads over all ranks, for reduce_type "grad_explicit". No-op otherwise.
+        Average the grads over the ranks of the "grad" sync level (reduce_type "grad_explicit": all ranks).
+        No-op without such a level.
 
         DistributedDataParallel does this via autograd hooks during backward.
         A compiled or captured step returns the grads instead, so those hooks never fire.
@@ -172,9 +238,11 @@ class DistributedContext:
 
         :param module: to take the params (and their grads) from
         """
-        if self._reduce_type != "grad_explicit":
+        if not self.has_grad_sync():
             return
-        _all_reduce_avg_flat([p.grad for p in module.parameters() if p.grad is not None])
+        level = self._sync_levels[0]
+        assert level.sync_type == "grad"
+        _all_reduce_avg_flat([p.grad for p in module.parameters() if p.grad is not None], group=level.group)
 
     def sync_complete_frac(self) -> bool:
         """
@@ -184,37 +252,55 @@ class DistributedContext:
         """
         return self._sync_complete_frac
 
-    def should_sync_now(self, *, epoch_step_idx: int) -> bool:
+    def should_sync_now(self, *, epoch_update_step_idx: int, update_step: bool) -> bool:
         """
-        :param epoch_step_idx: current step index
+        :param epoch_update_step_idx: optimizer updates so far in this epoch
+        :param update_step: whether the current step ends with an optimizer update (grad accumulation complete)
         :return: whether to sync the training processes in this step
         """
-        if self._reduce_type in ("grad", "grad_explicit"):
+        if self._reduce_type == "grad":
             return True
-        elif self._reduce_type == "param":
-            return (epoch_step_idx % self._param_sync_step) == (self._param_sync_step - 1)
-        else:
-            raise ValueError(f"invalid reduce_type {self._reduce_type}")
+        return any(
+            level.sync_type == "grad" or (update_step and level.fires(epoch_update_step_idx=epoch_update_step_idx))
+            for level in self._sync_levels
+        )
 
     def step_after_param_update(
-        self, *, module: torch.nn.Module, optimizer: torch.optim.Optimizer, epoch_step_idx: int
+        self, *, module: torch.nn.Module, optimizer: torch.optim.Optimizer, epoch_update_step_idx: int
     ):
         """
-        Average the params over all ranks, for reduce_type "param" in the steps where it syncs.
-        With the option ``sync_optimizer_state`` (default off), also the optimizer state:
-        floating point tensors (e.g. the Adam moments) take the mean, counts the max
-        (the ``step`` tensors and integer tensors), other values come from rank 0.
-        Otherwise each rank keeps its own.
+        Average the params over the outermost "param" sync level firing after this optimizer update, if any,
+        and the optimizer state over the outermost firing level with ``sync_optimizer_state`` (default off),
+        see :func:`_sync_state`; without such a level each rank keeps its own.
+        Call this right after an optimizer update.
 
         :param module: to take the params from
         :param optimizer: to take the state from
-        :param epoch_step_idx: current step index
+        :param epoch_update_step_idx: optimizer updates before this one in this epoch
         """
-        if self._reduce_type == "param" and self.should_sync_now(epoch_step_idx=epoch_step_idx):
+        firing = [
+            level
+            for level in self._sync_levels
+            if level.sync_type == "param" and level.fires(epoch_update_step_idx=epoch_update_step_idx)
+        ]
+        if not firing:
+            return
+        params_level = firing[-1]
+        opt_levels = [level for level in firing if level.sync_optimizer_state]
+        opt_level = opt_levels[-1] if opt_levels else None
+        _sync_state(
+            module=module,
+            optimizer=optimizer if opt_level is params_level else None,
+            sync_on_cpu=params_level.sync_on_cpu,
+            group=params_level.group,
+        )
+        if opt_level is not None and opt_level is not params_level:
             _sync_state(
                 module=module,
-                optimizer=optimizer if self._sync_optimizer_state else None,
-                sync_on_cpu=self._opts.get("sync_on_cpu", False),
+                optimizer=optimizer,
+                params=False,
+                sync_on_cpu=opt_level.sync_on_cpu,
+                group=opt_level.group,
             )
 
     def sync_at_epoch_end(self) -> bool:
@@ -222,8 +308,9 @@ class DistributedContext:
         :return: whether :func:`step_after_epoch` syncs the params, the buffers, the optimizer state and the step
             counts over all ranks at the end of every train epoch
             (option ``sync_at_epoch_end``, default on since behavior version 38).
-            Only matters for reduce_type "param", where the ranks hold different params and optimizer states
-            between the syncs. Then the checkpoint (written by rank 0) and the eval are the average,
+            Only matters with a "param" sync level (reduce_type "param", or ``sync`` with one), where the ranks hold
+            different params and optimizer states between the syncs.
+            Then the checkpoint (written by rank 0) and the eval are the average,
             and every rank starts the next epoch with the state of the checkpoint,
             so resuming from the checkpoint continues with the same model and optimizer state as the uninterrupted
             training (the per-rank random states and data positions are not part of the checkpoint either way).
@@ -249,7 +336,7 @@ class DistributedContext:
         :param global_train_step: of this rank
         :return: the global train step to continue with, the same on every rank
         """
-        if self._reduce_type != "param" or not self._sync_at_epoch_end:
+        if not self._sync_at_epoch_end or not any(level.sync_type == "param" for level in self._sync_levels):
             return global_train_step
         global_train_step_t = torch.tensor([global_train_step], dtype=torch.int64)
         _sync_state(
@@ -257,7 +344,7 @@ class DistributedContext:
             optimizer=optimizer,
             buffers=True,
             counters=[global_train_step_t],
-            sync_on_cpu=self._opts.get("sync_on_cpu", False),
+            sync_on_cpu=any(level.sync_on_cpu for level in self._sync_levels),
         )
         return int(global_train_step_t)
 
@@ -309,15 +396,161 @@ def get_dataset_distribution(opts: Union[Dict[str, Any], CollectionReadCheckCove
     return dataset_distribution
 
 
+class _SyncLevel:
+    def __init__(
+        self,
+        *,
+        group_spec: Union[str, int, Sequence[Sequence[int]]],
+        group_ranks: List[List[int]],
+        sync_type: str,
+        every: int,
+        sync_on_cpu: bool,
+        sync_optimizer_state: bool,
+    ):
+        self.group_spec = group_spec
+        self.group_ranks = group_ranks
+        self.sync_type = sync_type
+        self.every = every
+        self.sync_on_cpu = sync_on_cpu
+        self.sync_optimizer_state = sync_optimizer_state
+        self.group: Optional[torch.distributed.ProcessGroup] = None  # None: the default group ("world")
+
+    def __repr__(self):
+        flags = ""
+        if self.sync_type == "param":
+            flags = f" sync_on_cpu={self.sync_on_cpu} sync_optimizer_state={self.sync_optimizer_state}"
+        return (
+            f"<{self.__class__.__name__} group={self.group_spec!r} type={self.sync_type!r} every={self.every}{flags}>"
+        )
+
+    def fires(self, *, epoch_update_step_idx: int) -> bool:
+        """
+        :param epoch_update_step_idx: optimizer updates before the current one in this epoch
+        :return: whether this level syncs after the current optimizer update
+        """
+        return (epoch_update_step_idx % self.every) == (self.every - 1)
+
+
+def _parse_sync_levels(
+    spec: Sequence[Dict[str, Any]], *, size: int, local_size: int, hostnames: Optional[Sequence[str]]
+) -> List[_SyncLevel]:
+    """
+    :param spec: the ``sync`` option, see :class:`DistributedContext`
+    :param size: world size
+    :param local_size: ranks per host
+    :param hostnames: per rank, needed for group "node"
+    :return: the levels, inner to outer, groups and periods checked
+    """
+    assert isinstance(spec, (list, tuple)), f"torch_distributed sync: expected a list of levels, got {spec!r}"
+    levels = []
+    for idx, level_spec in enumerate(spec):
+        assert isinstance(level_spec, dict), f"torch_distributed sync level {idx}: expected a dict, got {level_spec!r}"
+        assert "group" in level_spec and "type" in level_spec, (
+            f"torch_distributed sync level {idx}: group and type are required, got {level_spec!r}"
+        )
+        opts = CollectionReadCheckCovered(level_spec)
+        group_spec = opts["group"]
+        sync_type = opts["type"]
+        every = opts.get("every", 1)
+        sync_on_cpu = opts.get("sync_on_cpu", False) if sync_type == "param" else False
+        sync_optimizer_state = opts.get("sync_optimizer_state", False) if sync_type == "param" else False
+        opts.assert_all_read()
+        assert sync_type in ("grad", "param"), f"torch_distributed sync level {idx}: invalid type {sync_type!r}"
+        assert isinstance(every, int) and every > 0, (
+            f"torch_distributed sync level {idx}: every must be a positive int, got {every!r}"
+        )
+        if sync_type == "grad":
+            assert idx == 0, (
+                f"torch_distributed sync level {idx}: a grad level runs every step, so it must be the first"
+            )
+            assert every == 1, f"torch_distributed sync level {idx}: a grad level runs every step, got every {every}"
+        elif levels and levels[-1].sync_type == "param":
+            assert every % levels[-1].every == 0, (
+                f"torch_distributed sync level {idx}: every {every} is not a multiple of the inner {levels[-1].every}"
+            )
+        group_ranks = _make_group_ranks(group_spec, size=size, hostnames=hostnames)
+        if group_spec == "node":
+            for ranks in group_ranks:
+                assert len(ranks) == local_size, (
+                    f"torch_distributed sync level {idx}: ranks {ranks} share a host, but local size is {local_size}"
+                )
+        if levels:
+            for ranks in levels[-1].group_ranks:
+                assert any(set(ranks).issubset(outer_ranks) for outer_ranks in group_ranks), (
+                    f"torch_distributed sync level {idx}: group {ranks} of the inner level {levels[-1]}"
+                    f" is not inside one group {group_ranks}"
+                )
+        levels.append(
+            _SyncLevel(
+                group_spec=group_spec,
+                group_ranks=group_ranks,
+                sync_type=sync_type,
+                every=every,
+                sync_on_cpu=sync_on_cpu,
+                sync_optimizer_state=sync_optimizer_state,
+            )
+        )
+    return levels
+
+
+def _make_group_ranks(
+    group_spec: Union[str, int, Sequence[Sequence[int]]], *, size: int, hostnames: Optional[Sequence[str]]
+) -> List[List[int]]:
+    """
+    :param group_spec: "world", "node", an int (contiguous blocks of that many ranks), or a partition of the ranks
+    :param size: world size
+    :param hostnames: per rank, needed for "node"
+    :return: the groups, each a sorted list of ranks, together a partition of all ranks
+    """
+    if group_spec == "world":
+        return [list(range(size))]
+    elif group_spec == "node":
+        assert hostnames is not None and len(hostnames) == size
+        groups_by_host = {}
+        for rank, hostname in enumerate(hostnames):
+            groups_by_host.setdefault(hostname, []).append(rank)
+        return sorted(groups_by_host.values())
+    elif isinstance(group_spec, int):
+        assert group_spec > 0 and size % group_spec == 0, (
+            f"torch_distributed sync: group size {group_spec} does not divide the world size {size}"
+        )
+        return [list(range(start, start + group_spec)) for start in range(0, size, group_spec)]
+    elif isinstance(group_spec, (list, tuple)):
+        groups = [sorted(ranks) for ranks in group_spec]
+        assert sorted(sum(groups, [])) == list(range(size)), (
+            f"torch_distributed sync: groups {group_spec!r} are not a partition of the ranks 0..{size - 1}"
+        )
+        return groups
+    else:
+        raise TypeError(f"torch_distributed sync: invalid group {group_spec!r}")
+
+
+def _all_gather_hostnames(*, size: int) -> List[str]:
+    # A fixed-size CPU tensor keeps this on the CPU backend (gloo),
+    # so no CUDA context is created before the device is selected.
+    hostname = socket.gethostname().encode("utf8")
+    assert len(hostname) <= 255
+    buf = torch.zeros((256,), dtype=torch.uint8)
+    buf[0] = len(hostname)
+    buf[1 : 1 + len(hostname)] = torch.tensor(list(hostname), dtype=torch.uint8)
+    bufs = [torch.empty_like(buf) for _ in range(size)]
+    torch.distributed.all_gather(bufs, buf)
+    return [bytes(b[1 : 1 + int(b[0])].tolist()).decode("utf8") for b in bufs]
+
+
 _FLAT_REDUCE_BUCKET_BYTES = 256 * 1024**2
 
 
 @torch.no_grad()
 def _all_reduce_avg_flat(
-    tensors: List[torch.Tensor], *, sync_on_cpu: bool = False, bucket_bytes: int = _FLAT_REDUCE_BUCKET_BYTES
+    tensors: List[torch.Tensor],
+    *,
+    sync_on_cpu: bool = False,
+    bucket_bytes: int = _FLAT_REDUCE_BUCKET_BYTES,
+    group: Optional[torch.distributed.ProcessGroup] = None,
 ):
     """
-    Averages the tensors in place over all ranks.
+    Averages the tensors in place over the ranks of the group.
 
     Flat buffers instead of one allreduce per tensor: thousands of small allreduces would be latency-bound.
     A flat buffer is a copy, so buckets of at most ``bucket_bytes`` bound the extra memory.
@@ -326,6 +559,7 @@ def _all_reduce_avg_flat(
     :param tensors: any dtypes and devices
     :param sync_on_cpu: allreduce a CPU copy of each bucket (e.g. with Gloo for a CUDA module)
     :param bucket_bytes: of one flat buffer; a tensor larger than that gets a bucket of its own
+    :param group: the ranks to average over, None: all
     """
     buckets: Dict[Tuple[torch.device, torch.dtype], List[List[torch.Tensor]]] = {}
     for tensor in tensors:
@@ -339,18 +573,20 @@ def _all_reduce_avg_flat(
     for key_buckets in buckets.values():
         for bucket in key_buckets:
             # One flat buffer at a time: the function scope frees it before the next one is allocated.
-            _all_reduce_avg_bucket(bucket, sync_on_cpu=sync_on_cpu)
+            _all_reduce_avg_bucket(bucket, sync_on_cpu=sync_on_cpu, group=group)
 
 
-def _all_reduce_avg_bucket(bucket: List[torch.Tensor], *, sync_on_cpu: bool):
+def _all_reduce_avg_bucket(
+    bucket: List[torch.Tensor], *, sync_on_cpu: bool, group: Optional[torch.distributed.ProcessGroup]
+):
     import torch.distributed as dist
 
     # noinspection protected-member
     flat = torch._utils._flatten_dense_tensors(bucket)
     flat_reduce = flat.cpu() if sync_on_cpu else flat
     # SUM then divide, not AVG: NCCL AVG pre-scales by 1/N rounded to the dtype, a bias for non-power-of-two N.
-    dist.all_reduce(flat_reduce, op=dist.ReduceOp.SUM)
-    flat_reduce /= dist.get_world_size()
+    dist.all_reduce(flat_reduce, op=dist.ReduceOp.SUM, group=group)
+    flat_reduce /= dist.get_world_size(group=group)
     if flat_reduce is not flat:
         flat.copy_(flat_reduce)
     # noinspection protected-member
@@ -363,31 +599,35 @@ def _sync_state(
     *,
     module: torch.nn.Module,
     optimizer: Optional[torch.optim.Optimizer] = None,
+    params: bool = True,
     buffers: bool = False,
     counters: Sequence[torch.Tensor] = (),
     sync_on_cpu: bool = False,
+    group: Optional[torch.distributed.ProcessGroup] = None,
 ):
     """
-    Makes the state the same on all ranks, one rule per kind:
+    Makes the state the same on all ranks of the group, one rule per kind:
     floating point tensors take the mean (the params, the buffers, the optimizer state such as the Adam moments),
     counts the max (``counters``, the ``step`` tensors of the optimizer state, integer tensors),
-    other optimizer state values come from rank 0.
+    other optimizer state values come from the first rank of the group.
     The ranks can differ in the counts after an epoch in which they got different numbers of batches
     (a rank out of data stops at its step, the others at their next sync); the mean of a count would be no count.
 
-    :param module: its params, and its buffers with ``buffers``
+    :param module: its params with ``params``, and its buffers with ``buffers``
     :param optimizer: its state, if given: a flat dict of tensors per param for the torch optimizers,
         any nesting a custom optimizer keeps is fine (dm-tree)
+    :param params: the params of the module
     :param buffers: also the buffers of the module (e.g. the batch norm running stats)
     :param counters: further counts, e.g. the train step, in place
     :param sync_on_cpu: allreduce CPU copies (e.g. with Gloo for a CUDA module)
+    :param group: the ranks to sync over, None: all
     """
     import torch.distributed as dist
 
     tensors = []  # mean
     counters = list(counters)  # max
-    objects = []  # (param, leaf index) from rank 0
-    for tensor in list(module.parameters()) + (list(module.buffers()) if buffers else []):
+    objects = []  # (param, leaf index) from the first rank
+    for tensor in (list(module.parameters()) if params else []) + (list(module.buffers()) if buffers else []):
         (tensors if tensor.is_floating_point() else counters).append(tensor.data)
     if optimizer is not None:
         for param, state in optimizer.state.items():
@@ -398,14 +638,15 @@ def _sync_state(
                     counters.append(value)
                 else:
                     tensors.append(value)
-    _all_reduce_avg_flat(tensors, sync_on_cpu=sync_on_cpu)
+    _all_reduce_avg_flat(tensors, sync_on_cpu=sync_on_cpu, group=group)
     for counter in counters:
         counter_cpu = counter.to(torch.device("cpu"))
-        dist.all_reduce(counter_cpu, op=dist.ReduceOp.MAX)
+        dist.all_reduce(counter_cpu, op=dist.ReduceOp.MAX, group=group)
         counter.copy_(counter_cpu)
     if objects:
         values = [tree.flatten(optimizer.state[param])[idx] for param, idx in objects]
-        dist.broadcast_object_list(values, src=0, device=torch.device("cpu"))
+        src = 0 if group is None else dist.get_global_rank(group, 0)
+        dist.broadcast_object_list(values, src=src, group=group, device=torch.device("cpu"))
         for (param, idx), value in zip(objects, values):
             flat = tree.flatten(optimizer.state[param])
             flat[idx] = value
