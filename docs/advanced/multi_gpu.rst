@@ -39,11 +39,12 @@ The groups of a level must be unions of the groups of the inner level,
 and the periods multiples of the inner period. Of the param levels firing after an update, only the outermost
 averages the params; the optimizer state is averaged over the outermost firing level with ``"sync_optimizer_state"``.
 
-The levels control the large transfers. Independent of them, all ranks agree in a small control all-reduce
-whether every rank still has data and on the epoch progress: in every step with a ``"grad"`` level,
-otherwise only in the steps where a level fires. So with a ``"grad"`` level, the ranks still meet once per step.
-The same holds for a callable ``accum_grad_multiple_step``: its value for a step is only known after the step,
-so the ranks meet in every step, which also keeps ``epoch_continuous`` and thus the callable's result the same on every rank.
+The small control all-reduce (the ranks agree whether every one of them still has data, and on the epoch progress)
+follows the levels: in a step it runs on the group of the outermost level firing in that step.
+So with grads within the node and params across the nodes every 100 steps, the nodes meet only every 100 steps.
+A group which ran out of data joins the next control sync of every outer level in turn, so the stop reaches all ranks.
+With a callable ``accum_grad_multiple_step``, all ranks meet in every step instead: its value for a step
+is only known after the step, and it must be the same on every rank, which the sync of ``epoch_continuous`` gives.
 
 With ``"sync_at_epoch_end": True`` (default since behavior version 38), the state which goes into the checkpoint
 is made the same on every rank at the end of every train epoch, before the checkpoint is written:

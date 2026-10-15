@@ -122,6 +122,10 @@ class DistributedContext:
         self._sync_levels = _parse_sync_levels(
             sync_spec, size=self._size, local_size=self._local_size, hostnames=hostnames
         )
+        # for the control sync over all ranks (DistributedDataParallel, first step, callable grad accumulation)
+        self._world_level = _parse_sync_levels(
+            [{"group": "world", "type": "grad"}], size=self._size, local_size=self._local_size, hostnames=None
+        )[0]
         if self._reduce_type == "sync":
             assert self._sync_levels, "torch_distributed: sync must have at least one level"
             _logger.info(f"sync levels: {self._sync_levels}")
@@ -247,23 +251,53 @@ class DistributedContext:
     def sync_complete_frac(self) -> bool:
         """
         :return: whether the train loop replaces the rank-local ``complete_frac`` by its mean over the ranks
-            in each step where it syncs (:func:`should_sync_now`),
-            so that ``epoch_continuous`` (e.g. for ``dynamic_learning_rate``) is the same on every rank
+            of the control sync group in each step where it syncs (:func:`control_sync_levels`),
+            so that ``epoch_continuous`` (e.g. for ``dynamic_learning_rate``) is the same on every rank of the group
         """
         return self._sync_complete_frac
 
-    def should_sync_now(self, *, epoch_update_step_idx: int, update_step: bool) -> bool:
+    def control_sync_levels(
+        self, *, epoch_update_step_idx: int, update_step: bool, world: bool, no_data: bool
+    ) -> List[_SyncLevel]:
         """
+        The control sync (all ranks of a group agree whether every one of them still has data, and on the progress)
+        follows the sync levels: it runs on the group of the outermost level firing in this step.
+        A group which ran out of data joins the next control sync of every outer level in turn,
+        so the stop reaches all ranks, and every collective stays matched.
+
         :param epoch_update_step_idx: optimizer updates so far in this epoch
         :param update_step: whether the current step ends with an optimizer update (grad accumulation complete)
-        :return: whether to sync the training processes in this step
+        :param world: sync over all ranks in this step in any case (first step of the epoch,
+            or a callable ``accum_grad_multiple_step``, whose value for the step is only known after the step)
+        :param no_data: this rank has no more data. Then it joins the control sync the other ranks of its group
+            do next: the one of this step if there is one, else the one of the next firing level.
+        :return: the levels to sync on in this step, inner to outer: the first is the control sync of this step,
+            the rest are the ones to join when there is no data. Empty: no control sync in this step.
         """
-        if self._reduce_type == "grad":
-            return True
-        return any(
-            level.sync_type == "grad" or (update_step and level.fires(epoch_update_step_idx=epoch_update_step_idx))
-            for level in self._sync_levels
-        )
+        if world or self._reduce_type == "grad":
+            return [self._world_level]
+        # The choice depends only on the state the ranks of a group share (the pending update, whether this step
+        # completes it), never on this rank's data, so that all of them enter the same collective.
+        firing = [
+            idx
+            for idx, level in enumerate(self._sync_levels)
+            if level.sync_type == "grad" or (update_step and level.fires(epoch_update_step_idx=epoch_update_step_idx))
+        ]
+        if firing:
+            return _control_sync_chain(self._sync_levels, max(firing), epoch_update_step_idx)
+        if not no_data:
+            return []
+        # No control sync in this step. The next one of this rank's group: after the next update which fires a level.
+        if update_step:
+            epoch_update_step_idx += 1  # this update completes now and fires nothing
+        while not any(level.fires(epoch_update_step_idx=epoch_update_step_idx) for level in self._sync_levels):
+            epoch_update_step_idx += 1
+        firing = [
+            idx
+            for idx, level in enumerate(self._sync_levels)
+            if level.fires(epoch_update_step_idx=epoch_update_step_idx)
+        ]
+        return _control_sync_chain(self._sync_levels, max(firing), epoch_update_step_idx)
 
     def step_after_param_update(
         self, *, module: torch.nn.Module, optimizer: torch.optim.Optimizer, epoch_update_step_idx: int
@@ -430,6 +464,12 @@ class _SyncLevel:
         """
         return (epoch_update_step_idx % self.every) == (self.every - 1)
 
+    def group_size(self) -> int:
+        """
+        :return: number of ranks in the group of this rank
+        """
+        return torch.distributed.get_world_size(group=self.group)
+
 
 def _parse_sync_levels(
     spec: Sequence[Dict[str, Any]], *, size: int, local_size: int, hostnames: Optional[Sequence[str]]
@@ -491,6 +531,26 @@ def _parse_sync_levels(
             )
         )
     return levels
+
+
+def _control_sync_chain(levels: Sequence[_SyncLevel], idx: int, epoch_update_step_idx: int) -> List[_SyncLevel]:
+    """
+    :param levels: the sync levels, inner to outer
+    :param idx: the level of the control sync in this step
+    :param epoch_update_step_idx: the pending optimizer update in this step
+    :return: that level, then the levels of the control syncs the ranks outside its group do next, one after the other:
+        after every stop, the next optimizer update after which a level further out fires, and the outermost of those.
+        A group which ran out of data joins exactly these.
+    """
+    chain = [levels[idx]]
+    while idx < len(levels) - 1:
+        while not any(level.fires(epoch_update_step_idx=epoch_update_step_idx) for level in levels[idx + 1 :]):
+            epoch_update_step_idx += 1
+        idx = max(
+            i for i in range(idx + 1, len(levels)) if levels[i].fires(epoch_update_step_idx=epoch_update_step_idx)
+        )
+        chain.append(levels[idx])
+    return chain
 
 
 def _make_group_ranks(
