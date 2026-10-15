@@ -117,7 +117,16 @@ wandb_opts
     - ``log_every_n_train_steps``: log the train step losses every N steps. Default 100. ``None`` disables it.
       Epoch-level train and eval losses are always logged.
     - ``job_type``: default is the ``task`` (e.g. ``train``, ``eval``, ``forward``).
-    - ``resume``: default ``"allow"``.
+    - ``name``: default is the ``SLURM_JOB_NAME`` env var, if set (with Sisyphus: the task name with the job hash).
+    - ``id``: for ``task="train"``, default is a hash of the absolute config filename.
+      With Sisyphus, each job has its own config file, and a resubmission reuses it,
+      so all jobs of one training continue the same run.
+      No default without a config file, or when the ``WANDB_RUN_ID`` env var is set.
+    - ``resume_from``: when there is a run id and the training continues from its own checkpoint,
+      default is ``"{id}?_step={step}"`` with the global train step of the checkpoint.
+      This truncates the W&B history after the checkpoint.
+    - ``resume``: default ``"allow"`` in the other cases with a run id.
+      W&B does not accept ``resume``, ``resume_from`` and ``fork_from`` together,
+      so if you set one of them, RETURNN does not set a default for the others.
 
-    To continue one W&B run over several jobs (e.g. with ``stop_for_resubmission_when_low_time_left``),
-    give a fixed ``id``, e.g. the Sisyphus job hash. Without an ``id``, each job creates a new run.
+    A stop for resubmission marks the run as finished, not as failed.

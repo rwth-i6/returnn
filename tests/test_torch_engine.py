@@ -823,7 +823,13 @@ def test_stop_for_resubmission_enough_time_left():
     assert _run_maybe_stop_for_resubmission(epoch=37, final_epoch=38, time_left=1000) == (1, [])
 
 
-def _train_with_wandb_stub(*, num_epochs: int, stop_for_resubmission: bool = False):
+def _train_with_wandb_stub(
+    *,
+    num_epochs: int,
+    stop_for_resubmission: bool = False,
+    model: Optional[str] = None,
+    config_file: Optional[str] = None,
+):
     """
     :return: (wandb_opts of the config, wandb.init kwargs, events, global train step at the end),
         events: ("log", step, data), ("finish", exit_code), ("kill", sig)
@@ -859,6 +865,10 @@ def _train_with_wandb_stub(*, num_epochs: int, stop_for_resubmission: bool = Fal
             stop_for_resubmission_when_low_time_left=stop_for_resubmission,
         )
     )
+    if model:
+        config.set("model", model)
+    if config_file:
+        config.files.append(config_file)  # as if loaded from this file
     train_dataset = init_dataset({"class": "Task12AXDataset", "num_seqs": 30, "name": "train"})
     train_dataset.init_seq_order(epoch=1)
     dev_dataset = init_dataset({"class": "Task12AXDataset", "num_seqs": 10, "name": "dev", "fixed_random_seed": 1})
@@ -882,7 +892,7 @@ def _train_with_wandb_stub(*, num_epochs: int, stop_for_resubmission: bool = Fal
 def test_torch_engine_wandb():
     wandb_opts, init_kwargs, events, num_steps = _train_with_wandb_stub(num_epochs=1)
     assert wandb_opts == {"project": "test", "log_every_n_train_steps": 2}  # the config is not modified
-    assert init_kwargs == [{"project": "test", "job_type": "train", "resume": "allow"}]
+    assert init_kwargs == [{"project": "test", "job_type": "train"}]  # no config file, so no default id
     assert num_steps >= 4
     logs = [event[1:] for event in events if event[0] == "log"]
     step_keys = ["epoch", "train_step/ce", "train_step/fer", "train_step/learning_rate"]
@@ -892,6 +902,23 @@ def test_torch_engine_wandb():
     ]
     assert all(data["epoch"] == 1 for _, data in logs)
     assert events[-1] == ("finish", 0)
+
+
+def test_torch_engine_wandb_continue_from_checkpoint():
+    import hashlib
+
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        config_file = f"{tmp_dir}/returnn.config"
+        run_id = hashlib.sha256(config_file.encode("utf8")).hexdigest()[:32]
+        kwargs = dict(model=f"{tmp_dir}/model", config_file=config_file)
+        _, init_kwargs, _, step_after_ep1 = _train_with_wandb_stub(num_epochs=1, **kwargs)
+        assert init_kwargs == [{"project": "test", "job_type": "train", "id": run_id, "resume": "allow"}]
+        # e.g. a resubmission: continues from the epoch 1 checkpoint, and truncates the W&B history there
+        _, init_kwargs, events, _ = _train_with_wandb_stub(num_epochs=2, **kwargs)
+        assert init_kwargs == [
+            {"project": "test", "job_type": "train", "id": run_id, "resume_from": f"{run_id}?_step={step_after_ep1}"}
+        ]
+        assert min(event[1] for event in events if event[0] == "log") == step_after_ep1
 
 
 def test_torch_engine_wandb_stop_for_resubmission():

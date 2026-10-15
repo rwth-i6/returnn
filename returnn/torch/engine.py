@@ -168,23 +168,13 @@ class Engine(EngineBase):
 
         wandb_opts = config.typed_value("wandb_opts", None)
         if wandb_opts is not None and (not self._torch_distributed_ctx or self._torch_distributed_ctx.rank() == 0):
-            # noinspection PyUnresolvedReferences,PyPackageRequirements
-            import wandb
-
             wandb_opts = wandb_opts.copy()
             self._wandb_log_every_n_train_steps: Optional[int] = wandb_opts.pop("log_every_n_train_steps", 100)
-            wandb_opts.setdefault("job_type", config.value("task", "train"))
-            wandb_opts.setdefault("resume", "allow")
-            if "id" not in wandb_opts and not os.environ.get("WANDB_RUN_ID"):
-                print(
-                    "wandb_opts: no run 'id' given, a restarted job will create a new W&B run."
-                    " Set a fixed 'id' (e.g. sisyphus job hash) to continue the same run.",
-                    file=log.v2,
-                )
-            self._wandb_run = wandb.init(**wandb_opts)
+            self._wandb_opts: Optional[Dict[str, Any]] = wandb_opts
         else:
             self._wandb_log_every_n_train_steps = None
-            self._wandb_run = None
+            self._wandb_opts = None
+        self._wandb_run = None
 
         default_float_dtype = config.value("default_float_dtype", None)
         if default_float_dtype is not None:
@@ -430,6 +420,9 @@ class Engine(EngineBase):
             f" needed (x{safety})={needed:.1f}s -- stopping early so sisyphus can resubmit.",
             file=log.v1,
         )
+        if self._wandb_run is not None:
+            self._wandb_run.finish(exit_code=0)
+            self._wandb_run = None
         # Send SIGINT to the process group that contains the Sisyphus task worker.
         # Under torchelastic, each rank is its own session (Popen start_new_session=True),
         # separate from torchrun and the Sisyphus worker, which share one PG.
@@ -438,9 +431,6 @@ class Engine(EngineBase):
         # So in that case signal the parent PG (torchrun's, which is also the Sisyphus worker's).
         import torch.distributed
 
-        if self._wandb_run is not None:
-            self._wandb_run.finish(exit_code=0)
-            self._wandb_run = None
         if torch.distributed.is_torchelastic_launched():
             pgid = os.getpgid(os.getppid())
         else:
@@ -1064,6 +1054,41 @@ class Engine(EngineBase):
             assert isinstance(ls[0], self.learning_rate_control.EpochData)
             self.learning_rate_control.epoch_data[self.epoch] = ls[0]
 
+    def _wandb_init(self, *, is_resuming: bool):
+        """
+        Create the W&B run, if enabled via wandb_opts.
+
+        :param is_resuming: training continues from its own checkpoint at self.global_train_step
+        """
+
+        if self._wandb_opts is None or self._wandb_run is not None:
+            return
+
+        # noinspection PyUnresolvedReferences,PyPackageRequirements
+        import wandb
+        import hashlib
+
+        opts = self._wandb_opts.copy()
+        task = self.config.value("task", "train")
+        opts.setdefault("job_type", task)
+        if os.environ.get("SLURM_JOB_NAME"):
+            opts.setdefault("name", os.environ["SLURM_JOB_NAME"])
+        if self.config.files and not os.environ.get("WANDB_RUN_ID"):
+            hash = hashlib.sha256()
+            for filename in self.config.files:
+                hash.update(str(os.path.abspath(filename)).encode("utf-8"))
+            opts.setdefault("id", hash.hexdigest())
+        run_id = opts.get("id") or os.environ.get("WANDB_RUN_ID")
+        if task == "train" and not run_id:
+            print(
+                "wandb_opts: no run 'id' given, a restarted job will create a new W&B run."
+                " Set a fixed 'id' (e.g. the job hash) to continue the same run.",
+                file=log.v2,
+            )
+        if run_id and not any(k in opts for k in ("resume", "resume_from", "fork_from")):  # mutually exclusive
+            opts["resume_from"] = f"{run_id}?_step={self.global_train_step}"
+        self._wandb_run = wandb.init(**opts)
+
     def _wandb_log(self, metrics: Dict[str, float]):
         """
         Log to Weights & Biases, if enabled via wandb_opts.
@@ -1519,6 +1544,7 @@ class Engine(EngineBase):
             step += 1
         self.set_epoch(epoch)  # in training, this will be reset to start_epoch
         self.global_train_step = step
+        self._wandb_init(is_resuming=is_training and self._start_epoch is not None and self._start_epoch > 1)
 
         load_model_post_hooks = self.config.typed_value("load_model_post_hooks")
         if load_model_post_hooks:
