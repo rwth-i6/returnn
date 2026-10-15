@@ -8,7 +8,7 @@ import logging
 import os
 import socket
 from datetime import timedelta
-from typing import Optional, Union, Any, Tuple, List, Dict
+from typing import Optional, Union, Any, Sequence, Tuple, List, Dict
 
 import torch
 import tree
@@ -194,7 +194,7 @@ class DistributedContext:
     def step_after_param_update(self, *, module: torch.nn.Module, epoch_step_idx: int):
         """one train step"""
         if self._reduce_type == "param" and self.should_sync_now(epoch_step_idx=epoch_step_idx):
-            _sync_params_avg(module=module, sync_on_cpu=self._opts.get("sync_on_cpu", False))
+            _sync_state(module=module, sync_on_cpu=self._opts.get("sync_on_cpu", False))
 
     def sync_at_epoch_end(self) -> bool:
         """
@@ -228,37 +228,17 @@ class DistributedContext:
         :param global_train_step: of this rank
         :return: the global train step to continue with, the same on every rank
         """
-        import torch.distributed as dist
-
         if self._reduce_type != "param" or not self._sync_at_epoch_end:
             return global_train_step
-        tensors = []  # mean
-        counters = [torch.tensor([global_train_step], dtype=torch.int64)]  # max
-        objects = []  # (param, leaf index) from rank 0
-        for tensor in list(module.parameters()) + list(module.buffers()):
-            (tensors if tensor.is_floating_point() else counters).append(tensor.data)
-        for param, state in optimizer.state.items():
-            # The state of a param is a flat dict of tensors for the torch optimizers, any nesting is fine.
-            for idx, (path, value) in enumerate(tree.flatten_with_path(state)):
-                if not isinstance(value, torch.Tensor):
-                    objects.append((param, idx))
-                elif path[-1] == "step" or not value.is_floating_point():
-                    counters.append(value)
-                else:
-                    tensors.append(value)
-        _all_reduce_avg_flat(tensors, sync_on_cpu=self._opts.get("sync_on_cpu", False))
-        for counter in counters:
-            counter_cpu = counter.to(torch.device("cpu"))
-            dist.all_reduce(counter_cpu, op=dist.ReduceOp.MAX)
-            counter.copy_(counter_cpu)
-        if objects:
-            values = [tree.flatten(optimizer.state[param])[idx] for param, idx in objects]
-            dist.broadcast_object_list(values, src=0, device=torch.device("cpu"))
-            for (param, idx), value in zip(objects, values):
-                flat = tree.flatten(optimizer.state[param])
-                flat[idx] = value
-                optimizer.state[param] = tree.unflatten_as(optimizer.state[param], flat)
-        return int(counters[0])
+        global_train_step_t = torch.tensor([global_train_step], dtype=torch.int64)
+        _sync_state(
+            module=module,
+            optimizer=optimizer,
+            buffers=True,
+            counters=[global_train_step_t],
+            sync_on_cpu=self._opts.get("sync_on_cpu", False),
+        )
+        return int(global_train_step_t)
 
 
 _is_set_up = False
@@ -358,5 +338,54 @@ def _all_reduce_avg_bucket(bucket: List[torch.Tensor], *, sync_on_cpu: bool):
 
 
 @torch.no_grad()
-def _sync_params_avg(*, module: torch.nn.Module, sync_on_cpu: bool = False):
-    _all_reduce_avg_flat([param.data for param in module.parameters()], sync_on_cpu=sync_on_cpu)
+def _sync_state(
+    *,
+    module: torch.nn.Module,
+    optimizer: Optional[torch.optim.Optimizer] = None,
+    buffers: bool = False,
+    counters: Sequence[torch.Tensor] = (),
+    sync_on_cpu: bool = False,
+):
+    """
+    Makes the state the same on all ranks, one rule per kind:
+    floating point tensors take the mean (the params, the buffers, the optimizer state such as the Adam moments),
+    counts the max (``counters``, the ``step`` tensors of the optimizer state, integer tensors),
+    other optimizer state values come from rank 0.
+    The ranks can differ in the counts after an epoch in which they got different numbers of batches
+    (a rank out of data stops at its step, the others at their next sync); the mean of a count would be no count.
+
+    :param module: its params, and its buffers with ``buffers``
+    :param optimizer: its state, if given: a flat dict of tensors per param for the torch optimizers,
+        any nesting a custom optimizer keeps is fine (dm-tree)
+    :param buffers: also the buffers of the module (e.g. the batch norm running stats)
+    :param counters: further counts, e.g. the train step, in place
+    :param sync_on_cpu: allreduce CPU copies (e.g. with Gloo for a CUDA module)
+    """
+    import torch.distributed as dist
+
+    tensors = []  # mean
+    counters = list(counters)  # max
+    objects = []  # (param, leaf index) from rank 0
+    for tensor in list(module.parameters()) + (list(module.buffers()) if buffers else []):
+        (tensors if tensor.is_floating_point() else counters).append(tensor.data)
+    if optimizer is not None:
+        for param, state in optimizer.state.items():
+            for idx, (path, value) in enumerate(tree.flatten_with_path(state)):
+                if not isinstance(value, torch.Tensor):
+                    objects.append((param, idx))
+                elif path[-1] == "step" or not value.is_floating_point():
+                    counters.append(value)
+                else:
+                    tensors.append(value)
+    _all_reduce_avg_flat(tensors, sync_on_cpu=sync_on_cpu)
+    for counter in counters:
+        counter_cpu = counter.to(torch.device("cpu"))
+        dist.all_reduce(counter_cpu, op=dist.ReduceOp.MAX)
+        counter.copy_(counter_cpu)
+    if objects:
+        values = [tree.flatten(optimizer.state[param])[idx] for param, idx in objects]
+        dist.broadcast_object_list(values, src=0, device=torch.device("cpu"))
+        for (param, idx), value in zip(objects, values):
+            flat = tree.flatten(optimizer.state[param])
+            flat[idx] = value
+            optimizer.state[param] = tree.unflatten_as(optimizer.state[param], flat)
