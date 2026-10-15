@@ -813,6 +813,12 @@ class Engine(EngineBase):
             if prof.exported:
                 self._torch_profile_exported = True
 
+        if self._torch_distributed_ctx:
+            # all ranks left the train loop together, so this collective matches
+            self.global_train_step = self._torch_distributed_ctx.step_after_epoch(
+                module=self._pt_model, optimizer=self._updater.get_optimizer(), global_train_step=self.global_train_step
+            )
+
         elapsed = time.monotonic() - epoch_start_time
         elapsed_computation_percentage = elapsed_computation_time / elapsed
         # Frames the computation ran over but which carry no content.

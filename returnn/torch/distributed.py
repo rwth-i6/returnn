@@ -84,6 +84,10 @@ class DistributedContext:
         if self._sync_complete_frac is None:
             self._sync_complete_frac = BehaviorVersion.get() >= 33
 
+        self._sync_at_epoch_end: Optional[bool] = self._opts.get("sync_at_epoch_end", None)
+        if self._sync_at_epoch_end is None:
+            self._sync_at_epoch_end = BehaviorVersion.get() >= 38
+
         self._dataset_distribution = get_dataset_distribution(self._opts)
 
         self._check_no_unknown_opts()
@@ -212,6 +216,50 @@ class DistributedContext:
                 optimizer=optimizer if self._sync_optimizer_state else None,
                 sync_on_cpu=self._opts.get("sync_on_cpu", False),
             )
+
+    def sync_at_epoch_end(self) -> bool:
+        """
+        :return: whether :func:`step_after_epoch` syncs the params, the buffers, the optimizer state and the step
+            counts over all ranks at the end of every train epoch
+            (option ``sync_at_epoch_end``, default on since behavior version 38).
+            Only matters for reduce_type "param", where the ranks hold different params and optimizer states
+            between the syncs. Then the checkpoint (written by rank 0) and the eval are the average,
+            and every rank starts the next epoch with the state of the checkpoint,
+            so resuming from the checkpoint continues with the same model and optimizer state as the uninterrupted
+            training (the per-rank random states and data positions are not part of the checkpoint either way).
+        """
+        return self._sync_at_epoch_end
+
+    def step_after_epoch(
+        self, *, module: torch.nn.Module, optimizer: torch.optim.Optimizer, global_train_step: int
+    ) -> int:
+        """
+        Make the state which goes into the checkpoint the same on every rank, see :func:`sync_at_epoch_end`.
+        Call this at the end of the train epoch, before the checkpoint is written.
+
+        Floating point tensors (params, buffers, optimizer state) take the mean over the ranks.
+        Counts take the max: the train step, the ``step`` tensors of the optimizer state and integer tensors
+        (e.g. ``num_batches_tracked`` of a batch norm). The ranks can differ in them after an epoch in which
+        they got different numbers of batches (a rank out of data stops at its step, the others at their next sync),
+        and every rank must count on as the checkpoint does.
+        Other optimizer state values (no tensors) are taken from rank 0, which writes the checkpoint.
+
+        :param module: to take the params and buffers from
+        :param optimizer: to take the state from
+        :param global_train_step: of this rank
+        :return: the global train step to continue with, the same on every rank
+        """
+        if self._reduce_type != "param" or not self._sync_at_epoch_end:
+            return global_train_step
+        global_train_step_t = torch.tensor([global_train_step], dtype=torch.int64)
+        _sync_state(
+            module=module,
+            optimizer=optimizer,
+            buffers=True,
+            counters=[global_train_step_t],
+            sync_on_cpu=self._opts.get("sync_on_cpu", False),
+        )
+        return int(global_train_step_t)
 
 
 _is_set_up = False
