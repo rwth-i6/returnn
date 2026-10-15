@@ -2927,6 +2927,59 @@ def _extract_strided(raw: PackedRawTensor, out_inner: Tensor, out_packed_dim: Di
     return helper.rewrap(new_inner, name="conv")
 
 
+def _lstm_over_padded_buffer(
+    source: Tensor,
+    *,
+    state_h: Tensor,
+    state_c: Tensor,
+    ff_weight: Tensor,
+    rec_weight: Tensor,
+    bias: Optional[Tensor],
+    spatial_dim: Dim,
+    in_dim: Dim,
+    out_dim: Dim,
+) -> Tuple[Tensor, Tuple[Tensor, Tensor]]:
+    """
+    Runs one LSTM layer over every frame of a padded buffer, the padded frames included, without a host read.
+    Torch only, see :func:`PackedBackend.lstm`.
+
+    :return: output [spatial_dim, batch dims..., out_dim] and the state after the last frame of the buffer
+    """
+    import torch
+
+    batch_dims = [d for d in source.dims if d not in (spatial_dim, in_dim)]
+    source = source.copy_transpose([spatial_dim] + batch_dims + [in_dim])
+    state_h = state_h.copy_transpose(batch_dims + [out_dim])
+    state_c = state_c.copy_transpose(batch_dims + [out_dim])
+    # noinspection PyProtectedMember
+    backend = source._raw_backend
+    frames, *batch_shape, in_size = backend.get_shape_tuple_raw(source.raw_tensor)
+    out_size = out_dim.dimension
+    batch_size = math.prod(batch_shape)
+    source_raw = torch.reshape(source.raw_tensor, [frames, batch_size, in_size])
+    h_raw = torch.reshape(state_h.raw_tensor, [1, batch_size, out_size])
+    c_raw = torch.reshape(state_c.raw_tensor, [1, batch_size, out_size])
+    if bias is None:
+        params, has_biases = (ff_weight.raw_tensor, rec_weight.raw_tensor), False
+    else:
+        # torch takes two bias terms, half of the one bias each, like the padded torch lstm
+        half_bias = bias.raw_tensor * 0.5
+        params, has_biases = (ff_weight.raw_tensor, rec_weight.raw_tensor, half_bias, half_bias), True
+    train = rf.get_run_ctx().is_train_flag_enabled(func=rf.LSTM.__call__)
+    out_raw, h_raw, c_raw = torch.lstm(source_raw, (h_raw, c_raw), params, has_biases, 1, 0.0, train, False, False)
+
+    out = source.copy_template_replace_dim_tag(axis=-1, new_dim_tag=out_dim, name="lstm")
+    out.feature_dim = out_dim
+    out.dtype = backend.get_dtype_name_raw(out_raw)
+    out.raw_tensor = torch.reshape(out_raw, [frames] + batch_shape + [out_size])
+    new_h, new_c = state_h.copy_template(), state_c.copy_template()
+    new_h.dtype = backend.get_dtype_name_raw(h_raw)
+    new_h.raw_tensor = torch.reshape(h_raw, batch_shape + [out_size])
+    new_c.dtype = backend.get_dtype_name_raw(c_raw)
+    new_c.raw_tensor = torch.reshape(c_raw, batch_shape + [out_size])
+    return out, (new_h, new_c)
+
+
 # We do not expect to ever implement all methods of the Backend interface here --
 # only what is profitable on packed data; the rest goes through the generic dim-aware wrapper below.
 # noinspection PyAbstractClass
@@ -4793,6 +4846,49 @@ class PackedBackend(Backend[PackedRawTensor]):
                 label_loop=label_loop,
             ),
         )
+
+    @staticmethod
+    def lstm(
+        source: Tensor,
+        *,
+        state_h: Tensor,
+        state_c: Tensor,
+        ff_weight: Tensor,
+        rec_weight: Tensor,
+        bias: Optional[Tensor],
+        spatial_dim: Dim,
+        in_dim: Dim,
+        out_dim: Dim,
+    ) -> Tuple[Tensor, Tuple[Tensor, Tensor]]:
+        """
+        LSTM over the packed frames. The recurrence runs per sequence and needs one row per sequence,
+        so the source is unpacked, the inner backend runs the LSTM and the output is packed like the source.
+
+        Under static tracing the recurrence runs over the whole padded buffer, since the inner backend reads
+        the sequence lengths on the host to stop at the end of every sequence. The outputs of the real frames
+        are the same, the recurrence is causal and the padding sits behind them, but the returned state is
+        the one after the padded frames, not the one after the last frame of every sequence.
+        """
+        raw = source.raw_tensor
+        assert isinstance(raw, PackedRawTensor)
+        assert spatial_dim in raw.orig_dims, f"PackedBackend.lstm: spatial dim {spatial_dim} is not packed in {source}"
+        _warn_fallback_once("lstm", "the recurrence runs per sequence on the padded layout", hard=False)
+        kwargs = dict(
+            state_h=state_h,
+            state_c=state_c,
+            ff_weight=ff_weight,
+            rec_weight=rec_weight,
+            bias=bias,
+            spatial_dim=spatial_dim,
+            in_dim=in_dim,
+            out_dim=out_dim,
+        )
+        padded = unpack(source)
+        if rf.is_static_traceable():
+            out = _lstm_over_padded_buffer(padded, **kwargs)
+        else:
+            out = raw.inner_backend.lstm(padded, **kwargs)
+        return _repack_result(out, raw)
 
 
 # All other structural ops go through the generic dim-aware wrapper:
