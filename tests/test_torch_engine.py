@@ -1811,17 +1811,19 @@ def _torch_distributed_sync_at_epoch_end_worker(
         # buffers as a batch norm has them: running stats (float, the mean) and a count (int, the max)
         engine._pt_model.register_buffer("stat", torch.full((2,), float(rank)))
         engine._pt_model.register_buffer("count", torch.tensor(rank, dtype=torch.int64))
-        # nested optimizer state as a custom optimizer might keep it: a tensor (mean) and a Python value (from rank 0).
-        # The lazy Adam state first (it is only created when the state is empty), then the extra entry.
-        from returnn.torch.updater import init_optimizer_state
-
+        # nested optimizer state as a custom optimizer might keep it: a tensor (mean) and a Python value (from rank 0),
+        # added before epoch 2, when the lazy Adam state exists (Adam creates it only when the state is empty)
         optimizer = engine._updater.get_optimizer()
-        for param in engine._pt_model.parameters():
-            param.grad = torch.zeros_like(param)
-        init_optimizer_state(optimizer)
-        optimizer.state[next(engine._pt_model.parameters())]["extra"] = {
-            "nested": [torch.full((3,), float(rank)), {"note": f"rank {rank}"}]
-        }
+        orig_train_epoch = Engine.train_epoch
+
+        def _train_epoch(self):
+            if self.epoch == 2:
+                optimizer.state[next(self._pt_model.parameters())]["extra"] = {
+                    "nested": [torch.full((3,), float(rank)), {"note": f"rank {rank}"}]
+                }
+            return orig_train_epoch(self)
+
+        Engine.train_epoch = _train_epoch
         engine.train()
         params = [param.detach().clone() for param in engine._pt_model.parameters()]
         state = [
