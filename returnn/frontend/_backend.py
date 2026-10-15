@@ -1029,6 +1029,7 @@ class Backend(Generic[T]):
         device: Optional[str] = None,
         sparse_dim: Optional[Dim] = None,
         feature_dim: Optional[Dim] = None,
+        like: Optional[Tensor] = None,
     ) -> Tensor:
         """
         https://data-apis.org/array-api/latest/API_specification/generated/array_api.full.html
@@ -1039,6 +1040,7 @@ class Backend(Generic[T]):
         :param device:
         :param sparse_dim:
         :param feature_dim:
+        :param like: the result follows its storage layout, see :func:`returnn.frontend.full`
         :return: tensor
         """
         raise NotImplementedError
@@ -1431,6 +1433,7 @@ class Backend(Generic[T]):
         auto_update_state: Optional[bool] = None,
         static: Optional[bool] = None,
         out: Optional[Tensor] = None,
+        like: Optional[Tensor] = None,
     ) -> Tensor:
         """
         random. See `rf.random` for details.

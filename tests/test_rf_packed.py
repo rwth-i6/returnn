@@ -3222,6 +3222,48 @@ def test_pack_like_with_all_sequences_empty():
             assert grad.shape == raw.shape, (layout, dims, grad)
 
 
+def test_creation_like_packed():
+    # full / random with like=packed: packed alike, created directly in the packed storage
+    rf.select_backend_torch()
+    seq_lens = (5, 3, 0, 2)
+    x, batch_dim, time_dim, feat_dim = _make_input(batch_size=4, seq_lens=seq_lens, feat=3)
+    extra_dim = Dim(2, name="extra")
+    creators = {
+        "zeros_like": lambda x_: rf.zeros_like(x_),
+        "ones_like": lambda x_: rf.ones_like(x_),
+        "full": lambda x_: rf.full(dims=x_.dims, fill_value=2.5, like=x_),
+        "full_extra": lambda x_: rf.full(dims=[extra_dim, *x_.dims], fill_value=2.5, like=x_),
+        "random_uniform": lambda x_: rf.random_uniform(x_.dims, minval=1.0, maxval=2.0, like=x_),
+        "random_normal": lambda x_: rf.random_normal(x_.dims, like=x_),
+        "random_truncated_normal": lambda x_: rf.random_truncated_normal(x_.dims, like=x_),
+    }
+    expected = {"zeros_like": 0.0, "ones_like": 1.0, "full": 2.5, "full_extra": 2.5}
+    for layout in (dict(), dict(gap=2, align=4), dict(total_bound=24)):
+        xp = packed.pack(x, **layout)
+        num_rows = xp.raw_tensor.inner.raw_tensor.shape[0]
+        for name, create in creators.items():
+            out = create(xp)
+            assert packed.is_packed(out) and out.raw_tensor.same_packing(xp.raw_tensor), (layout, name, out)
+            assert out.dims_set == create(x).dims_set, (layout, name, out)
+            inner = out.raw_tensor.inner
+            assert inner.raw_tensor.shape[0] == num_rows and inner.dims[0] == xp.raw_tensor.packed_dim, (layout, name)
+            out_ = packed.unpack(out).copy_compatible_to_dims_raw([batch_dim, time_dim, *out.dims[2:]])
+            for b, n in enumerate(seq_lens):
+                if name in expected:
+                    assert (out_[b, :n] == expected[name]).all(), (layout, name, b, out_[b])
+                elif name == "random_uniform":
+                    assert ((out_[b, :n] >= 1.0) & (out_[b, :n] < 2.0)).all(), (layout, name, b, out_[b])
+            if name.startswith("random"):
+                assert len(set(out_[0, :5].flatten().tolist())) == 5 * 3, (layout, name, out_[0])
+        # not over all packed dims, or plain like: plain, as without like
+        for out in (
+            rf.full(dims=[time_dim, feat_dim], fill_value=1.0, like=xp),
+            rf.random_uniform([time_dim, feat_dim], like=xp),
+            rf.zeros_like(x),
+        ):
+            assert not packed.is_packed(out), (layout, out)
+
+
 def test_is_finite_infinite_neg_infinite():
     rf.select_backend_torch()
     x, batch_dim, time_dim, feat_dim = _make_input(batch_size=2, seq_lens=(4, 3), feat=3)

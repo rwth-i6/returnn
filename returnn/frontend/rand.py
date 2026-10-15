@@ -153,6 +153,7 @@ def random(
     auto_update_state: Optional[bool] = None,
     static: Optional[bool] = None,
     out: Optional[Tensor] = None,
+    like: Optional[Tensor] = None,
 ) -> Tensor:
     """
     Generates random numbers from uniform or normal or truncated normal distribution.
@@ -202,6 +203,8 @@ def random(
     :param bool|None auto_update_state: only used when you pass an explicit state
     :param bool|None static: if no state at all should be used. it just relies on the seed then.
     :param out: if given, will directly write into it, if possible by backend
+    :param like: the result uses the backend and storage layout of this tensor, for the dims it shares with it,
+        e.g. a dropout mask packed like its packed input. See :func:`returnn.frontend.full`.
     :return: random values
     """
     if explicit_state is None:
@@ -216,7 +219,10 @@ def random(
             dtype = rf.get_default_array_index_dtype()
         else:
             dtype = rf.get_default_float_dtype()
-    return _global_backend.random(
+    backend = _global_backend
+    if like is not None and like.raw_tensor is not None:
+        backend = like._raw_backend
+    return backend.random(
         dims=dims,
         dtype=dtype,
         device=device,
@@ -234,6 +240,7 @@ def random(
         auto_update_state=auto_update_state,
         static=static,
         out=out,
+        like=like,
     )
 
 
@@ -252,6 +259,7 @@ def random_uniform(
     auto_update_state: Optional[bool] = None,
     static: Optional[bool] = None,
     out: Optional[Tensor] = None,
+    like: Optional[Tensor] = None,
 ):
     """
     See :func:`random`. :func:`random` with ``distribution="uniform"``.
@@ -284,6 +292,7 @@ def random_uniform(
         auto_update_state=auto_update_state,
         static=static,
         out=out,
+        like=like,
     )
 
 
@@ -302,6 +311,7 @@ def random_normal(
     auto_update_state: Optional[bool] = None,
     static: Optional[bool] = None,
     out: Optional[Tensor] = None,
+    like: Optional[Tensor] = None,
 ):
     """
     See :func:`random`. :func:`random` with ``distribution="normal"``.
@@ -321,6 +331,7 @@ def random_normal(
         auto_update_state=auto_update_state,
         static=static,
         out=out,
+        like=like,
     )
 
 
@@ -341,6 +352,7 @@ def random_truncated_normal(
     auto_update_state: Optional[bool] = None,
     static: Optional[bool] = None,
     out: Optional[Tensor] = None,
+    like: Optional[Tensor] = None,
 ):
     """
     See :func:`random`. :func:`random` with ``distribution="truncated_normal"``.
@@ -362,6 +374,7 @@ def random_truncated_normal(
         auto_update_state=auto_update_state,
         static=static,
         out=out,
+        like=like,
     )
 
 
