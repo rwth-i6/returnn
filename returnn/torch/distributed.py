@@ -416,7 +416,12 @@ class _SyncLevel:
         self.group: Optional[torch.distributed.ProcessGroup] = None  # None: the default group ("world")
 
     def __repr__(self):
-        return f"<{self.__class__.__name__} group={self.group_spec!r} type={self.sync_type!r} every={self.every}>"
+        flags = ""
+        if self.sync_type == "param":
+            flags = f" sync_on_cpu={self.sync_on_cpu} sync_optimizer_state={self.sync_optimizer_state}"
+        return (
+            f"<{self.__class__.__name__} group={self.group_spec!r} type={self.sync_type!r} every={self.every}{flags}>"
+        )
 
     def fires(self, *, epoch_update_step_idx: int) -> bool:
         """
