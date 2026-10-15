@@ -1856,7 +1856,7 @@ def _torch_distributed_sync_levels_worker(rank: int, world_size: int, port: int,
         for i, param in enumerate(module.parameters()):
             param.fill_(float(rank + 10 * i))  # rank-specific, so every average is distinguishable
             param.grad = torch.full_like(param, float(100 * rank + i))
-    optimizer = torch.optim.Adam(module.parameters(), lr=0.01)  # unused state, no level syncs it
+    optimizer = torch.optim.Adam(module.parameters(), lr=0.01)
 
     def _values() -> List[List[float]]:
         return [[float(param.detach().flatten()[0]), float(param.grad.flatten()[0])] for param in module.parameters()]
@@ -1958,7 +1958,7 @@ def _torch_distributed_sync_levels_worker(rank: int, world_size: int, port: int,
     torch.distributed.destroy_process_group()
 
 
-def _run_torch_distributed_sync_levels(variant: str) -> List[Dict[str, List[List[float]]]]:
+def _run_torch_distributed_sync_levels(variant: str) -> List[Dict[str, List[Any]]]:
     import socket
     import torch.multiprocessing
 
