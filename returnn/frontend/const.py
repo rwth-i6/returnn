@@ -22,6 +22,7 @@ def full(
     device: Optional[str] = None,
     sparse_dim: Optional[Dim] = None,
     feature_dim: Optional[Dim] = None,
+    like: Optional[Tensor] = None,
 ) -> Tensor:
     """
     full, fill, constant.
@@ -36,9 +37,16 @@ def full(
     :param device:
     :param sparse_dim:
     :param feature_dim:
+    :param like: the result uses the backend, the dtype and device (unless given)
+        and the storage layout of this tensor, for the dims it shares with it.
+        E.g. with a packed ``like`` (:func:`returnn.frontend.pack`) and ``dims`` covering its packed dims,
+        the result is packed alike, without the padded intermediate.
+        Use it when the result is combined with ``like`` anyway.
     """
     if dtype is None:
-        if isinstance(fill_value, bool):
+        if like is not None:
+            dtype = like.dtype
+        elif isinstance(fill_value, bool):
             dtype = "bool"
         elif isinstance(fill_value, int):
             dtype = rf.get_default_int_dtype()
@@ -57,8 +65,14 @@ def full(
         assert fill_value.dims == (), (
             f"full/fill/constant: expect scalar fill_value, got tensor with shape {fill_value.dims}."
         )
-    return global_backend.full(
-        dims, fill_value, dtype=dtype, device=device, sparse_dim=sparse_dim, feature_dim=feature_dim
+    backend = global_backend
+    if like is not None and like.raw_tensor is not None:
+        # noinspection PyProtectedMember
+        backend = like._raw_backend
+        if device is None:
+            device = like.device
+    return backend.full(
+        dims, fill_value, dtype=dtype, device=device, sparse_dim=sparse_dim, feature_dim=feature_dim, like=like
     )
 
 
@@ -73,10 +87,17 @@ def constant(
     device: Optional[str] = None,
     sparse_dim: Optional[Dim] = None,
     feature_dim: Optional[Dim] = None,
+    like: Optional[Tensor] = None,
 ) -> Tensor:
     """alias to :func:`full`, mapping `value` to `fill_value`. also see :func:`convert_to_tensor`"""
     return full(
-        dims=dims, fill_value=fill_value, dtype=dtype, device=device, sparse_dim=sparse_dim, feature_dim=feature_dim
+        dims=dims,
+        fill_value=fill_value,
+        dtype=dtype,
+        device=device,
+        sparse_dim=sparse_dim,
+        feature_dim=feature_dim,
+        like=like,
     )
 
 
@@ -87,17 +108,19 @@ def zeros(
     device: Optional[str] = None,
     sparse_dim: Optional[Dim] = None,
     feature_dim: Optional[Dim] = None,
+    like: Optional[Tensor] = None,
 ) -> Tensor:
     """
-    zeros. float by default.
+    zeros. float by default (or the dtype of ``like``). See :func:`full`.
     """
     return full(
         dims=dims,
         fill_value=0,
-        dtype=dtype or rf.get_default_float_dtype(),
+        dtype=dtype or (like.dtype if like is not None else rf.get_default_float_dtype()),
         device=device,
         sparse_dim=sparse_dim,
         feature_dim=feature_dim,
+        like=like,
     )
 
 
@@ -108,37 +131,27 @@ def ones(
     device: Optional[str] = None,
     sparse_dim: Optional[Dim] = None,
     feature_dim: Optional[Dim] = None,
+    like: Optional[Tensor] = None,
 ) -> Tensor:
     """
-    ones. float by default.
+    ones. float by default (or the dtype of ``like``). See :func:`full`.
     """
     return full(
         dims=dims,
         fill_value=1,
-        dtype=dtype or rf.get_default_float_dtype(),
+        dtype=dtype or (like.dtype if like is not None else rf.get_default_float_dtype()),
         device=device,
         sparse_dim=sparse_dim,
         feature_dim=feature_dim,
+        like=like,
     )
 
 
 def zeros_like(other: Tensor) -> Tensor:
     """zeros like other"""
-    return zeros(
-        dims=other.dims,
-        dtype=other.dtype,
-        device=other.device,
-        sparse_dim=other.sparse_dim,
-        feature_dim=other.feature_dim,
-    )
+    return zeros(dims=other.dims, sparse_dim=other.sparse_dim, feature_dim=other.feature_dim, like=other)
 
 
 def ones_like(other: Tensor) -> Tensor:
     """ones like other"""
-    return ones(
-        dims=other.dims,
-        dtype=other.dtype,
-        device=other.device,
-        sparse_dim=other.sparse_dim,
-        feature_dim=other.feature_dim,
-    )
+    return ones(dims=other.dims, sparse_dim=other.sparse_dim, feature_dim=other.feature_dim, like=other)
