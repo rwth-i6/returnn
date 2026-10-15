@@ -62,12 +62,17 @@ class DistributedContext:
 
         self._reduce_type = self._opts.get("reduce_type", "grad")
         self._param_sync_step: Optional[int] = self._opts.get("param_sync_step", None)
+        self._sync_optimizer_state = False
         if self._reduce_type == "param":
             assert isinstance(self._param_sync_step, int) and self._param_sync_step > 0, (
                 f"reduce_type param: param_sync_step must be a positive int,"
                 f" got {self._param_sync_step!r} ({type(self._param_sync_step).__name__})"
             )
-            _logger.info(f"reduce_type param: param_sync_step {self._param_sync_step}")
+            self._sync_optimizer_state = self._opts.get("sync_optimizer_state", False)
+            _logger.info(
+                f"reduce_type param: param_sync_step {self._param_sync_step},"
+                f" sync_optimizer_state {self._sync_optimizer_state}"
+            )
         elif self._reduce_type == "grad":
             _logger.info("reduce_type grad")
         elif self._reduce_type == "grad_explicit":
@@ -191,10 +196,26 @@ class DistributedContext:
         else:
             raise ValueError(f"invalid reduce_type {self._reduce_type}")
 
-    def step_after_param_update(self, *, module: torch.nn.Module, epoch_step_idx: int):
-        """one train step"""
+    def step_after_param_update(
+        self, *, module: torch.nn.Module, optimizer: torch.optim.Optimizer, epoch_step_idx: int
+    ):
+        """
+        Average the params over all ranks, for reduce_type "param" in the steps where it syncs.
+        With the option ``sync_optimizer_state`` (default off), also the optimizer state:
+        floating point tensors (e.g. the Adam moments) take the mean, counts the max
+        (the ``step`` tensors and integer tensors), other values come from rank 0.
+        Otherwise each rank keeps its own.
+
+        :param module: to take the params from
+        :param optimizer: to take the state from
+        :param epoch_step_idx: current step index
+        """
         if self._reduce_type == "param" and self.should_sync_now(epoch_step_idx=epoch_step_idx):
-            _sync_state(module=module, sync_on_cpu=self._opts.get("sync_on_cpu", False))
+            _sync_state(
+                module=module,
+                optimizer=optimizer if self._sync_optimizer_state else None,
+                sync_on_cpu=self._opts.get("sync_on_cpu", False),
+            )
 
     def sync_at_epoch_end(self) -> bool:
         """

@@ -1768,6 +1768,99 @@ def test_torch_engine_distributed_sync_complete_frac_optimizer_step():
     _check_torch_distributed_lr(device="cuda", reduce_type="grad_explicit", accum_grad_multiple_step=1)
 
 
+def _torch_distributed_param_sync_optimizer_state_worker(
+    rank: int, world_size: int, port: int, tmp_dir: str, sync_optimizer_state: bool
+):
+    from returnn.torch.distributed import DistributedContext
+
+    os.environ.update(
+        MASTER_ADDR="127.0.0.1",
+        MASTER_PORT=str(port),
+        RANK=str(rank),
+        WORLD_SIZE=str(world_size),
+        LOCAL_RANK=str(rank),
+        LOCAL_WORLD_SIZE=str(world_size),
+    )
+    module = torch.nn.Linear(3, 2)
+    with torch.no_grad():
+        for i, param in enumerate(module.parameters()):
+            param.fill_(float(rank + 10 * i))  # rank-specific, so every average is distinguishable
+            param.grad = torch.full_like(param, float(100 * rank + i))
+    optimizer = torch.optim.Adam(module.parameters(), lr=0.01)
+    optimizer.step()  # exp_avg = 0.1 * grad, exp_avg_sq = 0.001 * grad^2
+    if rank == 1:
+        optimizer.step()  # an extra update on one rank, as after an epoch with more batches on it
+    # nested state with a Python value, as a custom optimizer might keep it: taken from rank 0
+    optimizer.state[next(module.parameters())]["extra"] = {"nested": [f"rank {rank}"]}
+    ctx = DistributedContext(
+        {
+            "backend": "gloo",
+            "reduce_type": "param",
+            "param_sync_step": 1,
+            "sync_optimizer_state": sync_optimizer_state,
+        }
+    )
+    assert ctx.should_sync_now(epoch_step_idx=0)
+    ctx.step_after_param_update(module=module, optimizer=optimizer, epoch_step_idx=0)
+    results = {
+        "params": [float(param.detach().flatten()[0]) for param in module.parameters()],
+        "state": [
+            [float(optimizer.state[param][key].flatten()[0]) for key in ["exp_avg", "exp_avg_sq"]]
+            for param in module.parameters()
+        ],
+        "steps": [float(optimizer.state[param]["step"]) for param in module.parameters()],
+        "extra": optimizer.state[next(module.parameters())]["extra"],
+    }
+    torch.save(results, f"{tmp_dir}/rank{rank}.pt")
+    torch.distributed.destroy_process_group()
+
+
+def _check_torch_distributed_param_sync_optimizer_state(sync_optimizer_state: bool):
+    import socket
+    import torch.multiprocessing
+
+    world_size = 4
+    with socket.socket() as s:
+        s.bind(("127.0.0.1", 0))
+        port = s.getsockname()[1]
+    with tempfile.TemporaryDirectory(prefix="returnn_test_torch_distributed_param_sync_optimizer_state") as tmp_dir:
+        torch.multiprocessing.spawn(
+            _torch_distributed_param_sync_optimizer_state_worker,
+            args=(world_size, port, tmp_dir, sync_optimizer_state),
+            nprocs=world_size,
+        )
+        res = [torch.load(f"{tmp_dir}/rank{rank}.pt") for rank in range(world_size)]
+    # Adam with a constant grad g, after n steps: exp_avg = g * (1 - 0.9^n), exp_avg_sq = g^2 * (1 - 0.999^n).
+    # Grads 100 * rank + i, n = 2 on rank 1, 1 elsewhere.
+    own_state = [
+        [[g * (1 - 0.9**n), g**2 * (1 - 0.999**n)] for g in [100.0 * rank + i for i in range(2)]]
+        for rank, n in enumerate([1, 2, 1, 1])
+    ]
+    for rank, res_rank in enumerate(res):
+        assert res_rank["params"] == res[0]["params"], (rank, res_rank["params"], res[0]["params"])  # params synced
+        print(f"sync_optimizer_state {sync_optimizer_state}, rank {rank}: optimizer state {res_rank['state']}")
+    if sync_optimizer_state:
+        mean_state = numpy.mean(own_state, axis=0)
+        for rank, res_rank in enumerate(res):
+            assert res_rank["state"] == res[0]["state"], (rank, res_rank["state"])
+            numpy.testing.assert_allclose(res_rank["state"], mean_state, rtol=1e-5)
+            assert res_rank["steps"] == [2.0, 2.0], (rank, res_rank["steps"])  # the max, not the mean 1.25
+            assert res_rank["extra"] == {"nested": ["rank 0"]}, (rank, res_rank["extra"])
+    else:  # each rank keeps its own
+        for rank, res_rank in enumerate(res):
+            numpy.testing.assert_allclose(res_rank["state"], own_state[rank], rtol=1e-5)
+            assert res_rank["steps"] == [float(n) for n in [[1, 2, 1, 1][rank]] * 2], (rank, res_rank["steps"])
+            assert res_rank["extra"] == {"nested": [f"rank {rank}"]}, (rank, res_rank["extra"])
+
+
+def test_torch_distributed_param_sync_optimizer_state_cpu():
+    _check_torch_distributed_param_sync_optimizer_state(sync_optimizer_state=True)
+
+
+def test_torch_distributed_param_sync_no_optimizer_state_cpu():
+    _check_torch_distributed_param_sync_optimizer_state(sync_optimizer_state=False)
+
+
 def _torch_distributed_sync_at_epoch_end_worker(
     rank: int, world_size: int, port: int, tmp_dir: str, sync_at_epoch_end: bool
 ):

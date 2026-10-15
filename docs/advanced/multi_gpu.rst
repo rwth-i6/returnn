@@ -14,6 +14,8 @@ This will by default use PyTorch ``DistributedDataParallel``.
 
 Or maybe use ``torch_distributed = {"reduce_type": "param", "param_sync_step": 100}``.
 This uses parameter averaging after every 100 steps.
+With ``"sync_optimizer_state": True``, the optimizer state (e.g. the Adam moments) is averaged as well;
+by default each rank keeps its own.
 
 With ``"sync_at_epoch_end": True`` (default since behavior version 38), the state which goes into the checkpoint
 is made the same on every rank at the end of every train epoch, before the checkpoint is written:

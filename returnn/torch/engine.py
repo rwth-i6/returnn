@@ -706,7 +706,9 @@ class Engine(EngineBase):
                     losses_dict[key] = float(grad_norm)  # device sync, as before
 
                 if self._torch_distributed_ctx:
-                    self._torch_distributed_ctx.step_after_param_update(module=self._pt_model, epoch_step_idx=step_idx)
+                    self._torch_distributed_ctx.step_after_param_update(
+                        module=self._pt_model, optimizer=self._updater.get_optimizer(), epoch_step_idx=step_idx
+                    )
 
                 step_end_time = time.monotonic()
                 step_duration = step_end_time - step_begin_time
