@@ -87,9 +87,7 @@ def _dropout(
     :param bool apply_correction_factor:
     """
     # uniform [keep_prob, 1.0 + keep_prob)
-    random_tensor = keep_prob + rf.random_uniform(
-        dims=noise_dims, seed=seed, dtype=x.dtype, device=x.device, minval=0.0, maxval=1.0, like=x
-    )
+    random_tensor = keep_prob + rf.random_uniform(dims=noise_dims, seed=seed, minval=0.0, maxval=1.0, like=x)
     # 0. if [keep_prob, 1.0) and 1. if [1.0, 1.0 + keep_prob)
     binary_tensor = rf.floor(random_tensor)
     if apply_correction_factor:
