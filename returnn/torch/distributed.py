@@ -40,7 +40,8 @@ class DistributedContext:
     A "param" level also syncs the optimizer state with ``sync_optimizer_state`` (default off).
     Every group of a level is a union of groups of the inner level, and every period a multiple of the inner one.
     A "grad" level runs in every step, so it has to be the innermost. Of the "param" levels firing in a step,
-    only the outermost runs, which subsumes the inner averages.
+    only the outermost averages the params, which subsumes the inner averages; the optimizer state is averaged
+    over the outermost firing level with ``sync_optimizer_state``.
     """
 
     def __init__(self, options: Dict[str, Any]):
@@ -268,24 +269,39 @@ class DistributedContext:
         self, *, module: torch.nn.Module, optimizer: torch.optim.Optimizer, epoch_update_step_idx: int
     ):
         """
-        Average the params over the outermost "param" sync level firing after this optimizer update, if any.
-        With ``sync_optimizer_state`` of that level (default off), also the optimizer state, see :func:`_sync_state`;
-        otherwise each rank keeps its own.
+        Average the params over the outermost "param" sync level firing after this optimizer update, if any,
+        and the optimizer state over the outermost firing level with ``sync_optimizer_state`` (default off),
+        see :func:`_sync_state`; without such a level each rank keeps its own.
         Call this right after an optimizer update.
 
         :param module: to take the params from
         :param optimizer: to take the state from
         :param epoch_update_step_idx: optimizer updates before this one in this epoch
         """
-        for level in reversed(self._sync_levels):
-            if level.sync_type == "param" and level.fires(epoch_update_step_idx=epoch_update_step_idx):
-                _sync_state(
-                    module=module,
-                    optimizer=optimizer if level.sync_optimizer_state else None,
-                    sync_on_cpu=level.sync_on_cpu,
-                    group=level.group,
-                )
-                return
+        firing = [
+            level
+            for level in self._sync_levels
+            if level.sync_type == "param" and level.fires(epoch_update_step_idx=epoch_update_step_idx)
+        ]
+        if not firing:
+            return
+        params_level = firing[-1]
+        opt_levels = [level for level in firing if level.sync_optimizer_state]
+        opt_level = opt_levels[-1] if opt_levels else None
+        _sync_state(
+            module=module,
+            optimizer=optimizer if opt_level is params_level else None,
+            sync_on_cpu=params_level.sync_on_cpu,
+            group=params_level.group,
+        )
+        if opt_level is not None and opt_level is not params_level:
+            _sync_state(
+                module=module,
+                optimizer=optimizer,
+                params=False,
+                sync_on_cpu=opt_level.sync_on_cpu,
+                group=opt_level.group,
+            )
 
     def sync_at_epoch_end(self) -> bool:
         """
@@ -578,6 +594,7 @@ def _sync_state(
     *,
     module: torch.nn.Module,
     optimizer: Optional[torch.optim.Optimizer] = None,
+    params: bool = True,
     buffers: bool = False,
     counters: Sequence[torch.Tensor] = (),
     sync_on_cpu: bool = False,
@@ -591,9 +608,10 @@ def _sync_state(
     The ranks can differ in the counts after an epoch in which they got different numbers of batches
     (a rank out of data stops at its step, the others at their next sync); the mean of a count would be no count.
 
-    :param module: its params, and its buffers with ``buffers``
+    :param module: its params with ``params``, and its buffers with ``buffers``
     :param optimizer: its state, if given: a flat dict of tensors per param for the torch optimizers,
         any nesting a custom optimizer keeps is fine (dm-tree)
+    :param params: the params of the module
     :param buffers: also the buffers of the module (e.g. the batch norm running stats)
     :param counters: further counts, e.g. the train step, in place
     :param sync_on_cpu: allreduce CPU copies (e.g. with Gloo for a CUDA module)
@@ -604,7 +622,7 @@ def _sync_state(
     tensors = []  # mean
     counters = list(counters)  # max
     objects = []  # (param, leaf index) from the first rank
-    for tensor in list(module.parameters()) + (list(module.buffers()) if buffers else []):
+    for tensor in (list(module.parameters()) if params else []) + (list(module.buffers()) if buffers else []):
         (tensors if tensor.is_floating_point() else counters).append(tensor.data)
     if optimizer is not None:
         for param, state in optimizer.state.items():

@@ -36,7 +36,8 @@ or a list of rank lists. ``type`` is ``"grad"`` (every step, must be the first l
 one update step spans several steps, and the params are only averaged right after an update).
 A ``"param"`` level also takes ``"sync_on_cpu"`` and ``"sync_optimizer_state"``.
 The groups of a level must be unions of the groups of the inner level,
-and the periods multiples of the inner period. Of the param levels firing after an update, only the outermost runs.
+and the periods multiples of the inner period. Of the param levels firing after an update, only the outermost
+averages the params; the optimizer state is averaged over the outermost firing level with ``"sync_optimizer_state"``.
 
 The levels control the large transfers. Independent of them, all ranks agree in a small control all-reduce
 whether every rank still has data and on the epoch progress: in every step with a ``"grad"`` level,
