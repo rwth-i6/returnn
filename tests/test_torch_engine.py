@@ -2735,6 +2735,12 @@ def test_torch_engine_cuda_graph_compile_train_default_warmup():
     _run_cuda_graph_train(compile_=True, warmup_steps=None)
 
 
+def test_torch_engine_cuda_graph_compile_partitioned_train():
+    """as :func:`test_torch_engine_cuda_graph_compile_train_default_warmup` with "partitioned":
+    separate fw and bwd graphs, the autograd backward runs in the capture"""
+    _run_cuda_graph_train(compile_=True, warmup_steps=None, graph_opts={"partitioned": True})
+
+
 def test_torch_engine_optimizer_step_train():
     """
     torch_optimizer_step: eager model step, the optimizer step compiled + captured separately,
