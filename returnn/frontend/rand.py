@@ -203,7 +203,7 @@ def random(
     :param bool|None auto_update_state: only used when you pass an explicit state
     :param bool|None static: if no state at all should be used. it just relies on the seed then.
     :param out: if given, will directly write into it, if possible by backend
-    :param like: the result uses the backend, the device (unless ``device`` is given)
+    :param like: the result uses the backend, the dtype (unless given, or ``sparse_dim``) and device (unless given)
         and the storage layout of this tensor, for the dims it shares with it,
         e.g. a dropout mask packed like its packed input. See :func:`returnn.frontend.full`.
     :return: random values
@@ -218,6 +218,8 @@ def random(
     if dtype is None:
         if sparse_dim:
             dtype = rf.get_default_array_index_dtype()
+        elif like is not None:
+            dtype = like.dtype
         else:
             dtype = rf.get_default_float_dtype()
     backend = _global_backend
@@ -273,7 +275,12 @@ def random_uniform(
     (i.e. uniformly over all indices of ``sparse_dim``), otherwise 1.
     """
     if dtype is None:
-        dtype = rf.get_default_array_index_dtype() if sparse_dim else rf.get_default_float_dtype()
+        if sparse_dim:
+            dtype = rf.get_default_array_index_dtype()
+        elif like is not None:
+            dtype = like.dtype
+        else:
+            dtype = rf.get_default_float_dtype()
     if minval is None:
         minval = 0
     if maxval is None:

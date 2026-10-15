@@ -3266,6 +3266,16 @@ def test_creation_like_packed():
         with rf.set_default_device_ctx("meta"):
             for name, create in creators.items():
                 assert create(xp).device == "cpu" and create(x).device == "cpu", (layout, name)
+        # the dtype follows like, unless given
+        xp64 = rf.cast(xp, "float64")
+        for out in (
+            rf.zeros(xp.dims, like=xp64),
+            rf.full(dims=xp.dims, fill_value=1, like=xp64),
+            rf.random_uniform(xp.dims, like=xp64),
+            rf.random_normal(xp.dims, like=xp64),
+        ):
+            assert out.dtype == "float64" and out.raw_tensor.inner.raw_tensor.dtype == torch.float64, (layout, out)
+        assert rf.zeros(xp.dims, dtype="int32", like=xp64).dtype == "int32", layout
 
 
 def test_is_finite_infinite_neg_infinite():

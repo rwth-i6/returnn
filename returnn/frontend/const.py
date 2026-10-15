@@ -37,14 +37,16 @@ def full(
     :param device:
     :param sparse_dim:
     :param feature_dim:
-    :param like: the result uses the backend, the device (unless ``device`` is given)
+    :param like: the result uses the backend, the dtype and device (unless given)
         and the storage layout of this tensor, for the dims it shares with it.
         E.g. with a packed ``like`` (:func:`returnn.frontend.pack`) and ``dims`` covering its packed dims,
         the result is packed alike, without the padded intermediate.
         Use it when the result is combined with ``like`` anyway.
     """
     if dtype is None:
-        if isinstance(fill_value, bool):
+        if like is not None:
+            dtype = like.dtype
+        elif isinstance(fill_value, bool):
             dtype = "bool"
         elif isinstance(fill_value, int):
             dtype = rf.get_default_int_dtype()
@@ -109,12 +111,12 @@ def zeros(
     like: Optional[Tensor] = None,
 ) -> Tensor:
     """
-    zeros. float by default. See :func:`full`.
+    zeros. float by default (or the dtype of ``like``). See :func:`full`.
     """
     return full(
         dims=dims,
         fill_value=0,
-        dtype=dtype or rf.get_default_float_dtype(),
+        dtype=dtype or (like.dtype if like is not None else rf.get_default_float_dtype()),
         device=device,
         sparse_dim=sparse_dim,
         feature_dim=feature_dim,
@@ -132,12 +134,12 @@ def ones(
     like: Optional[Tensor] = None,
 ) -> Tensor:
     """
-    ones. float by default. See :func:`full`.
+    ones. float by default (or the dtype of ``like``). See :func:`full`.
     """
     return full(
         dims=dims,
         fill_value=1,
-        dtype=dtype or rf.get_default_float_dtype(),
+        dtype=dtype or (like.dtype if like is not None else rf.get_default_float_dtype()),
         device=device,
         sparse_dim=sparse_dim,
         feature_dim=feature_dim,
@@ -147,23 +149,9 @@ def ones(
 
 def zeros_like(other: Tensor) -> Tensor:
     """zeros like other"""
-    return zeros(
-        dims=other.dims,
-        dtype=other.dtype,
-        device=other.device,
-        sparse_dim=other.sparse_dim,
-        feature_dim=other.feature_dim,
-        like=other,
-    )
+    return zeros(dims=other.dims, sparse_dim=other.sparse_dim, feature_dim=other.feature_dim, like=other)
 
 
 def ones_like(other: Tensor) -> Tensor:
     """ones like other"""
-    return ones(
-        dims=other.dims,
-        dtype=other.dtype,
-        device=other.device,
-        sparse_dim=other.sparse_dim,
-        feature_dim=other.feature_dim,
-        like=other,
-    )
+    return ones(dims=other.dims, sparse_dim=other.sparse_dim, feature_dim=other.feature_dim, like=other)
