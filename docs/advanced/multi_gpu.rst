@@ -15,6 +15,13 @@ This will by default use PyTorch ``DistributedDataParallel``.
 Or maybe use ``torch_distributed = {"reduce_type": "param", "param_sync_step": 100}``.
 This uses parameter averaging after every 100 steps.
 
+With ``"sync_at_epoch_end": True`` (default since behavior version 38), the state which goes into the checkpoint
+is made the same on every rank at the end of every train epoch, before the checkpoint is written:
+the params, the buffers and the optimizer state take the mean over the ranks, the step counts the max.
+So the checkpoint and the eval are the average, every rank starts the next epoch with the state of the checkpoint,
+and resuming from the checkpoint continues with the same model and optimizer state as the uninterrupted training.
+(The per-rank random states and data positions are not part of the checkpoint either way.)
+
 With ``"sync_complete_frac": True`` (default since behavior version 33),
 the epoch progress ``complete_frac`` is the mean over the ranks,
 so a ``dynamic_learning_rate`` on ``epoch_continuous`` gives the same learning rate on every rank.
