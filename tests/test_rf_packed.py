@@ -10,7 +10,7 @@ from __future__ import annotations
 import _setup_test_env  # noqa
 import sys
 import unittest
-from typing import Tuple
+from typing import Sequence, Tuple
 
 import numpy
 import pytest
@@ -4555,6 +4555,74 @@ def test_is_finite_infinite_neg_infinite():
             out = fn(packed.pack(x, **layout))
             assert packed.is_packed(out) and out.dtype == "bool", (fn.__name__, layout, out)
             _assert_equal_non_padded(rf.cast(out, "float32"), rf.cast(fn(x), "float32"), batch_dim, time_dim)
+
+
+def _assert_states_equal(
+    got: rf.LstmState, want: rf.LstmState, got_dims: Sequence[Dim], want_dims: Sequence[Dim], **kwargs
+):
+    """compare both parts of an LSTM state, each laid out over its own dims"""
+    for got_t, want_t in ((got.h, want.h), (got.c, want.c)):
+        numpy.testing.assert_allclose(
+            got_t.copy_compatible_to_dims_raw(got_dims).detach().numpy(),
+            want_t.copy_compatible_to_dims_raw(want_dims).detach().numpy(),
+            rtol=1e-5,
+            atol=1e-6,
+            **kwargs,
+        )
+
+
+def test_lstm_packed_matches_padded():
+    """the packed LSTM runs per sequence like the padded one, dense and gapped: outputs, final state and gradient"""
+    rf.select_backend_torch()
+    x, batch_dim, time_dim, feat_dim = _make_input(seq_lens=(5, 3), feat=4, seed=11)
+    out_dim = Dim(6, name="out")
+    with rf.set_default_device_ctx("cpu"):
+        rf.set_random_seed(5)
+        lstm = rf.LSTM(feat_dim, out_dim)
+        lstm.bias.initial = rf.init.Glorot()
+        out_ref, state_ref = lstm(x, state=lstm.default_initial_state(batch_dims=[batch_dim]), spatial_dim=time_dim)
+        (grad_ref,) = torch.autograd.grad(
+            rf.reduce_sum(out_ref, axis=out_ref.dims).raw_tensor, lstm.ff_weight.raw_tensor
+        )
+        for layout in (dict(), dict(gap=2)):
+            xp = packed.pack(x, **layout)
+            out_p, state_p = lstm(xp, state=lstm.default_initial_state(batch_dims=[batch_dim]), spatial_dim=time_dim)
+            assert packed.is_packed(out_p), layout
+            assert out_p.raw_tensor.packed_dim == xp.raw_tensor.packed_dim, layout
+            _assert_equal_non_padded(out_p, out_ref, batch_dim, time_dim)
+            _assert_states_equal(state_p, state_ref, [batch_dim, out_dim], [batch_dim, out_dim], err_msg=str(layout))
+            (grad_p,) = torch.autograd.grad(rf.reduce_sum(out_p, axis=out_p.dims).raw_tensor, lstm.ff_weight.raw_tensor)
+            numpy.testing.assert_allclose(grad_p.numpy(), grad_ref.numpy(), rtol=1e-5, atol=1e-6, err_msg=str(layout))
+
+
+def test_lstm_packed_static_traceable():
+    """under static tracing the packed LSTM runs over the padded buffer, real frames exact, state after the buffer"""
+    rf.select_backend_torch()
+    feat_dim, out_dim = Dim(4, name="feat"), Dim(6, name="out")
+    batch_dim, time_dim = _bounded_batch([5, 3], capacity=3)
+    raw = torch.randn(3, 5, 4, generator=torch.Generator().manual_seed(13))
+    raw[1, 3:] = 0.0
+    raw[2] = 0.0
+    x = Tensor("x", dims=[batch_dim, time_dim, feat_dim], dtype="float32", raw_tensor=raw)
+    # the same frames as one static buffer, the padding is zero like the padded buffer under tracing
+    ref_batch_dim, buffer_time_dim = Dim(3, name="ref_batch"), Dim(5, name="buffer_time")
+    x_buffer = Tensor("x_buffer", dims=[ref_batch_dim, buffer_time_dim, feat_dim], dtype="float32", raw_tensor=raw)
+    with rf.set_default_device_ctx("cpu"):
+        rf.set_random_seed(5)
+        lstm = rf.LSTM(feat_dim, out_dim)
+        lstm.bias.initial = rf.init.Glorot()
+        out_ref, state_ref = lstm(
+            x_buffer, state=lstm.default_initial_state(batch_dims=[ref_batch_dim]), spatial_dim=buffer_time_dim
+        )
+        with rf.set_static_traceable_ctx():
+            xp = packed.pack(x, dims=[batch_dim, time_dim], gap=1, total_bound=16)
+            out_p, state_p = lstm(xp, state=lstm.default_initial_state(batch_dims=[batch_dim]), spatial_dim=time_dim)
+            assert packed.is_packed(out_p)
+            got = packed.unpack(out_p).copy_transpose([batch_dim, time_dim, out_dim]).raw_tensor.detach().numpy()
+    want = out_ref.copy_transpose([ref_batch_dim, buffer_time_dim, out_dim]).raw_tensor.detach().numpy()
+    for b, n in enumerate([5, 3, 0]):
+        numpy.testing.assert_allclose(got[b, :n], want[b, :n], rtol=1e-5, atol=1e-6, err_msg=f"seq {b}")
+    _assert_states_equal(state_p, state_ref, [batch_dim, out_dim], [ref_batch_dim, out_dim])
 
 
 if __name__ == "__main__":
