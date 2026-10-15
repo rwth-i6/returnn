@@ -8,7 +8,7 @@ import logging
 import os
 import socket
 from datetime import timedelta
-from typing import Optional, Union, Any, Tuple, List, Dict
+from typing import Optional, Union, Any, Sequence, Tuple, List, Dict
 
 import torch
 import tree
@@ -207,11 +207,10 @@ class DistributedContext:
         :param epoch_step_idx: current step index
         """
         if self._reduce_type == "param" and self.should_sync_now(epoch_step_idx=epoch_step_idx):
-            _sync_params_avg(
+            _sync_state(
                 module=module,
-                optimizer=optimizer,
+                optimizer=optimizer if self._sync_optimizer_state else None,
                 sync_on_cpu=self._opts.get("sync_on_cpu", False),
-                sync_optimizer_state=self._sync_optimizer_state,
             )
 
 
@@ -312,27 +311,42 @@ def _all_reduce_avg_bucket(bucket: List[torch.Tensor], *, sync_on_cpu: bool):
 
 
 @torch.no_grad()
-def _sync_params_avg(
+def _sync_state(
     *,
     module: torch.nn.Module,
-    optimizer: torch.optim.Optimizer,
+    optimizer: Optional[torch.optim.Optimizer] = None,
+    buffers: bool = False,
+    counters: Sequence[torch.Tensor] = (),
     sync_on_cpu: bool = False,
-    sync_optimizer_state: bool = False,
 ):
+    """
+    Makes the state the same on all ranks, one rule per kind:
+    floating point tensors take the mean (the params, the buffers, the optimizer state such as the Adam moments),
+    counts the max (``counters``, the ``step`` tensors of the optimizer state, integer tensors),
+    other optimizer state values come from rank 0.
+    The ranks can differ in the counts after an epoch in which they got different numbers of batches
+    (a rank out of data stops at its step, the others at their next sync); the mean of a count would be no count.
+
+    :param module: its params, and its buffers with ``buffers``
+    :param optimizer: its state, if given: a flat dict of tensors per param for the torch optimizers,
+        any nesting a custom optimizer keeps is fine (dm-tree)
+    :param buffers: also the buffers of the module (e.g. the batch norm running stats)
+    :param counters: further counts, e.g. the train step, in place
+    :param sync_on_cpu: allreduce CPU copies (e.g. with Gloo for a CUDA module)
+    """
     import torch.distributed as dist
 
-    tensors = [param.data for param in module.parameters()]  # mean
-    counters = []  # max
+    tensors = []  # mean
+    counters = list(counters)  # max
     objects = []  # (param, leaf index) from rank 0
-    if sync_optimizer_state:
+    for tensor in list(module.parameters()) + (list(module.buffers()) if buffers else []):
+        (tensors if tensor.is_floating_point() else counters).append(tensor.data)
+    if optimizer is not None:
         for param, state in optimizer.state.items():
-            # The state of a param is a flat dict of tensors for the torch optimizers, any nesting is fine.
             for idx, (path, value) in enumerate(tree.flatten_with_path(state)):
                 if not isinstance(value, torch.Tensor):
                     objects.append((param, idx))
                 elif path[-1] == "step" or not value.is_floating_point():
-                    # Counts, e.g. the update count (the torch optimizers keep it as a tensor). The ranks can differ
-                    # in it when they got different numbers of batches in an epoch; its mean would be no count.
                     counters.append(value)
                 else:
                     tensors.append(value)
