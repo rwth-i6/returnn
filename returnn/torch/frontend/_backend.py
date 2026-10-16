@@ -1191,8 +1191,10 @@ class TorchBackend(Backend[torch.Tensor]):
         device: Optional[str] = None,
         sparse_dim: Optional[Dim] = None,
         feature_dim: Optional[Dim] = None,
+        like: Optional[Tensor] = None,
     ) -> Tensor:
         """full"""
+        del like  # plain storage, no layout to follow
         shape = [dim.get_dim_value() for dim in dims]
         if isinstance(fill_value, Tensor):
             fill_value = fill_value.raw_tensor
@@ -2003,10 +2005,12 @@ class TorchBackend(Backend[torch.Tensor]):
         auto_update_state: Optional[bool] = None,
         static: Optional[bool] = None,
         out: Optional[Tensor[torch.Tensor]] = None,
+        like: Optional[Tensor] = None,
     ) -> Tensor:
         """
         random. See `rf.random` for details.
         """
+        del like  # plain storage, no layout to follow
         shape = [d.get_dim_value() for d in dims]
         dtype_ = TorchBackend.as_dtype_raw(dtype)
         if out is None:

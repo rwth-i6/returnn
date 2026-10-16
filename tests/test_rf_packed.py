@@ -16,6 +16,9 @@ import numpy
 import pytest
 import torch
 
+# noinspection PyProtectedMember
+from torch.utils._python_dispatch import TorchDispatchMode
+
 from returnn.util import better_exchook
 from returnn.tensor import Tensor, Dim
 import returnn.frontend as rf
@@ -3222,6 +3225,62 @@ def test_pack_like_with_all_sequences_empty():
             assert grad.shape == raw.shape, (layout, dims, grad)
 
 
+def test_creation_like_packed():
+    # full / random with like=packed: packed alike, created directly in the packed storage
+    rf.select_backend_torch()
+    seq_lens = (5, 3, 0, 2)
+    x, batch_dim, time_dim, feat_dim = _make_input(batch_size=4, seq_lens=seq_lens, feat=3)
+    extra_dim = Dim(2, name="extra")
+    creators = {
+        "zeros_like": lambda x_: rf.zeros_like(x_),
+        "ones_like": lambda x_: rf.ones_like(x_),
+        "full": lambda x_: rf.full(dims=x_.dims, fill_value=2.5, like=x_),
+        "full_extra": lambda x_: rf.full(dims=[extra_dim, *x_.dims], fill_value=2.5, like=x_),
+        "random_uniform": lambda x_: rf.random_uniform(x_.dims, minval=1.0, maxval=2.0, like=x_),
+        "random_normal": lambda x_: rf.random_normal(x_.dims, like=x_),
+        "random_truncated_normal": lambda x_: rf.random_truncated_normal(x_.dims, like=x_),
+    }
+    expected = {"zeros_like": 0.0, "ones_like": 1.0, "full": 2.5, "full_extra": 2.5}
+    for layout in (dict(), dict(gap=2, align=4), dict(total_bound=24)):
+        xp = packed.pack(x, **layout)
+        num_rows = xp.raw_tensor.inner.raw_tensor.shape[0]
+        for name, create in creators.items():
+            out = create(xp)
+            assert packed.is_packed(out) and out.raw_tensor.same_packing(xp.raw_tensor), (layout, name, out)
+            assert out.dims_set == create(x).dims_set, (layout, name, out)
+            inner = out.raw_tensor.inner
+            assert inner.raw_tensor.shape[0] == num_rows and inner.dims[0] == xp.raw_tensor.packed_dim, (layout, name)
+            out_ = packed.unpack(out).copy_compatible_to_dims_raw([batch_dim, time_dim, *out.dims[2:]])
+            for b, n in enumerate(seq_lens):
+                if name in expected:
+                    assert (out_[b, :n] == expected[name]).all(), (layout, name, b, out_[b])
+                elif name == "random_uniform":
+                    assert ((out_[b, :n] >= 1.0) & (out_[b, :n] < 2.0)).all(), (layout, name, b, out_[b])
+            if name.startswith("random"):
+                assert len(set(out_[0, :5].flatten().tolist())) == 5 * 3, (layout, name, out_[0])
+        # not over all packed dims, or plain like: plain, as without like
+        for out in (
+            rf.full(dims=[time_dim, feat_dim], fill_value=1.0, like=xp),
+            rf.random_uniform([time_dim, feat_dim], like=xp),
+            rf.zeros_like(x),
+        ):
+            assert not packed.is_packed(out), (layout, out)
+        # the device follows like, not the default device
+        with rf.set_default_device_ctx("meta"):
+            for name, create in creators.items():
+                assert create(xp).device == "cpu" and create(x).device == "cpu", (layout, name)
+        # the dtype follows like, unless given
+        xp64 = rf.cast(xp, "float64")
+        for out in (
+            rf.zeros(xp.dims, like=xp64),
+            rf.full(dims=xp.dims, fill_value=1, like=xp64),
+            rf.random_uniform(xp.dims, like=xp64),
+            rf.random_normal(xp.dims, like=xp64),
+        ):
+            assert out.dtype == "float64" and out.raw_tensor.inner.raw_tensor.dtype == torch.float64, (layout, out)
+        assert rf.zeros(xp.dims, dtype="int32", like=xp64).dtype == "int32", layout
+
+
 def test_is_finite_infinite_neg_infinite():
     rf.select_backend_torch()
     x, batch_dim, time_dim, feat_dim = _make_input(batch_size=2, seq_lens=(4, 3), feat=3)
@@ -3297,6 +3356,118 @@ def test_operand_of_the_same_sequences_in_another_layout():
         assert "scaled_gradient: scale is packed over" in str(exc), exc
     else:
         raise Exception("scaled_gradient should refuse a scale of other sequences")
+
+
+class _RandomShapes(TorchDispatchMode):
+    """records the shapes of the random ops"""
+
+    def __init__(self):
+        super().__init__()
+        self.shapes = []
+
+    def __torch_dispatch__(self, func, types, args=(), kwargs=None):
+        if func.overloadpacket in (torch.ops.aten.uniform_, torch.ops.aten.rand):
+            self.shapes.append(tuple(args[0]) if func.overloadpacket is torch.ops.aten.rand else tuple(args[0].shape))
+        return func(*args, **(kwargs or {}))
+
+
+def test_dropout_packed_mask_drawn_in_packed_storage():
+    rf.select_backend_torch()
+    x, batch_dim, time_dim, feat_dim = _make_input(batch_size=4, seq_lens=(5, 3, 0, 2), feat=7)
+    x.raw_tensor.requires_grad_()
+    keep = 0.5
+    for layout in (dict(), dict(gap=2), dict(gap=2, align=4), dict(total_bound=24)):
+        xp = packed.pack(x, **layout)
+        assert rf.dropout(xp, 1 - keep, axis=False) is xp, layout  # not training
+        rf.set_random_seed(1)
+        with _RandomShapes() as rnd:
+            y = rf.dropout(xp, 1 - keep, axis=False, on_forward=True)
+        assert rnd.shapes == [tuple(xp.raw_tensor.inner.raw_tensor.shape)], (layout, rnd.shapes)
+        assert packed.is_packed(y) and y.raw_tensor.same_packing(xp.raw_tensor), (layout, y)
+        (grad,) = torch.autograd.grad(y.raw_tensor.inner.raw_tensor.sum(), x.raw_tensor)
+        y_ = packed.unpack(y).copy_compatible_to_dims_raw([batch_dim, time_dim, feat_dim]).detach()
+        for b, n in enumerate((5, 3, 0, 2)):
+            torch.testing.assert_close(y_[b, :n], x.raw_tensor[b, :n].detach() * grad[b, :n], msg=f"{layout} seq {b}")
+            assert set(grad[b, :n].flatten().tolist()) <= {0.0, 1 / keep}, (layout, b, grad[b])
+            assert not grad[b, n:].any(), (layout, b, grad[b])
+        num_dropped = int((grad == 0.0).sum()) - (4 * 5 - 10) * 7  # minus the padded frames
+        assert 0 < num_dropped < 10 * 7, (layout, grad)
+        rf.set_random_seed(1)
+        y2 = rf.dropout(xp, 1 - keep, axis=False, on_forward=True)
+        _assert_equal_non_padded(y2, packed.unpack(y), batch_dim, time_dim)
+
+
+def test_dropout_packed_broadcast():
+    rf.select_backend_torch()
+    x, batch_dim, time_dim, feat_dim = _make_input(batch_size=3, seq_lens=(5, 0, 3), feat=11)
+    x.raw_tensor = x.raw_tensor.abs() + 1.0
+    for layout in (dict(), dict(gap=2, align=4)):
+        xp = packed.pack(x, **layout)
+        for axis in (feat_dim, [batch_dim, feat_dim]):
+            y = rf.dropout(xp, 0.5, axis=axis, on_forward=True)
+            assert packed.is_packed(y), (layout, axis, y)
+            y_ = packed.unpack(y).copy_compatible_to_dims_raw([batch_dim, time_dim, feat_dim])
+            mask = y_ != 0.0
+            for b, n in enumerate((5, 0, 3)):
+                ref = mask[0, 0] if axis is feat_dim else mask[b, 0]
+                assert (mask[b, :n] == ref).all(), (layout, axis, b, mask[b])
+
+
+def test_dropout_packed_mask_independent_of_batch_bound():
+    # the elementwise mask covers the packed buffer, whatever the batch capacity
+    rf.select_backend_torch()
+    feat_dim = Dim(3, name="feat")
+    for capacity in (4, 40):
+        batch_dim, time_dim = _bounded_batch([2, 0, 3], capacity=capacity)
+        x = Tensor("x", dims=[batch_dim, time_dim, feat_dim], dtype="float32", raw_tensor=torch.ones(capacity, 3, 3))
+        with rf.set_static_traceable_ctx(), _RandomShapes() as rnd:
+            xp = packed.pack(x, dims=[batch_dim, time_dim], gap=1, total_bound=48)
+            rf.dropout(xp, 0.1, axis=False, on_forward=True)
+        assert rnd.shapes == [(48, 3)], (capacity, rnd.shapes)
+
+
+def test_dropout_packed_cuda_graph_replay_compiled():
+    # Inductor-compiled and CUDA graph captured as in the torch_cuda_graph train step:
+    # each replay draws a new mask, and the gradient is the mask of the forward.
+    if not torch.cuda.is_available():
+        raise unittest.SkipTest("needs CUDA")
+    from functorch.compile import aot_function
+    from returnn.torch.util import graph_capture
+
+    rf.select_backend_torch()
+    # noinspection PyProtectedMember
+    graph_capture._apply_inductor_workarounds()
+    n_batch, t_cap, keep = 3, 8, 0.5
+    feat_dim = Dim(16, name="feat")
+
+    def step(x_raw_, lens_raw_):
+        batch_dim = Dim(n_batch, name="batch")
+        time_dim = Dim(Tensor("time", dims=[batch_dim], dtype="int32", raw_tensor=lens_raw_), capacity=t_cap)
+        x = Tensor("x", dims=[batch_dim, time_dim, feat_dim], dtype="float32", raw_tensor=x_raw_)
+        with rf.set_static_traceable_ctx():
+            xp = packed.pack(x, gap=1, total_bound=n_batch * (t_cap + 1))
+            y = rf.dropout(xp, 1 - keep, axis=False, on_forward=True)
+            loss = rf.reduce_sum(y, axis=list(y.dims))
+        (grad,) = torch.autograd.grad(loss.raw_tensor, [x_raw_])
+        return loss.raw_tensor.detach(), grad.detach()
+
+    x_raw = torch.randn(n_batch, t_cap, feat_dim.dimension, device="cuda").requires_grad_()
+    lens_raw = torch.tensor([8, 5, 0], dtype=torch.int32, device="cuda")
+    compiled = aot_function(step, fw_compiler=graph_capture.inductor_fw_compiler())
+    compiled(x_raw, lens_raw)  # warmup
+    graph = torch.cuda.CUDAGraph()
+    with torch.cuda.graph(graph):
+        loss, grad = compiled(x_raw, lens_raw)
+    masks = []
+    for seq_lens in [[8, 5, 0], [8, 5, 0], [2, 8, 6]]:
+        lens_raw.copy_(torch.tensor(seq_lens, dtype=torch.int32))
+        graph.replay()
+        valid = torch.arange(t_cap, device="cuda")[None, :] < lens_raw[:, None]
+        assert set(grad[valid].flatten().tolist()) <= {0.0, 1 / keep}, (seq_lens, grad)
+        assert not grad[~valid].any(), (seq_lens, grad)
+        torch.testing.assert_close(loss, (x_raw.detach() * grad).sum(), msg=f"lens {seq_lens}")
+        masks.append(grad.clone())
+    assert not torch.equal(masks[0], masks[1]), "same mask in two replays"
 
 
 if __name__ == "__main__":

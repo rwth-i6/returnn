@@ -281,13 +281,15 @@ class Engine(EngineBase):
             # The compiled step returns the grads instead, so those hooks never fire.
             # The reduce types without a DDP wrap are fine.
             assert self._ddp_pt_model is None, (
-                "torch_cuda_graph: DistributedDataParallel not supported, use reduce_type 'grad_explicit' or 'param'"
+                "torch_cuda_graph: DistributedDataParallel not supported,"
+                " use reduce_type 'grad_explicit' or 'param', or sync levels"
             )
             # "param" syncs after the optimizer step, outside the compiled region, so it needs nothing.
-            # "grad_explicit" reduces between step and optimizer, so the optimizer cannot be in-graph.
-            if self._torch_distributed_ctx and self._torch_distributed_ctx.reduce_type() == "grad_explicit":
+            # "grad" reduces between step and optimizer, so the optimizer cannot be in-graph.
+            if self._torch_distributed_ctx and self._torch_distributed_ctx.has_grad_sync():
                 assert not self._graph_capture_opts.get("capture_optimizer", False), (
-                    "torch_cuda_graph: capture_optimizer with reduce_type 'grad_explicit' is not supported,"
+                    "torch_cuda_graph: capture_optimizer with grad sync"
+                    " (reduce_type 'grad_explicit' or a 'grad' sync level) is not supported,"
                     " the grad reduce must run between the step and the optimizer"
                     " (torch_optimizer_step captures the optimizer step separately)"
                 )
@@ -554,6 +556,7 @@ class Engine(EngineBase):
 
         zero_grad_next_step = True
         cur_count_grad_accum = 0
+        epoch_update_step_idx = 0  # optimizer updates so far in this epoch, the unit of the param sync period
         extern_data = None
 
         total_data_size_packed = NumbersDict()
@@ -581,28 +584,47 @@ class Engine(EngineBase):
                 complete_frac = float(extern_data_raw["complete_frac"]) if extern_data_raw is not None else -1.0
                 _has_data = torch.tensor([extern_data_raw is not None], dtype=torch.int8)
                 # Sync only on first train step, when we have run out of data and every time we synchronize
-                # the model between workers.
+                # the model between workers, on the group of that sync.
                 # This allows the different workers to progress independently between synchronizations.
-                if self._torch_distributed_ctx and (
-                    self._torch_distributed_ctx.should_sync_now(epoch_step_idx=step_idx)
-                    or step_idx == 0
-                    or extern_data_raw is None
-                ):
+                # A callable accum_grad_multiple_step is only known after the step, so sync in every step then.
+                control_levels = []
+                if self._torch_distributed_ctx:
+                    control_levels = self._torch_distributed_ctx.control_sync_levels(
+                        epoch_update_step_idx=epoch_update_step_idx,
+                        # whether this step completes the grad accumulation, i.e. ends with an optimizer update
+                        update_step=(0 if zero_grad_next_step else cur_count_grad_accum) + 1
+                        >= accum_grad_multiple_step,
+                        world=accum_grad_multiple_step_dyn is not None or step_idx == 0,
+                        no_data=extern_data_raw is None,
+                    )
+                if control_levels:
                     # use all reduce to check if all workers have data, if at least one worker does not have data,
                     # all workers finish this epoch
+                    level = control_levels[0]
                     if self._torch_distributed_ctx.sync_complete_frac():
                         # mean over the ranks: a schedule on epoch_continuous must give the same LR on every rank
                         _data_info = torch.tensor(
                             [extern_data_raw is not None, complete_frac >= 0.0, max(complete_frac, 0.0)],
                             dtype=torch.float64,
                         )
-                        torch.distributed.all_reduce(_data_info, op=torch.distributed.ReduceOp.SUM)
-                        size = self._torch_distributed_ctx.size()
+                        torch.distributed.all_reduce(_data_info, op=torch.distributed.ReduceOp.SUM, group=level.group)
+                        size = level.group_size()
                         _has_data[0] = _data_info[0] == size
                         complete_frac = float(_data_info[2]) / size if _data_info[1] == size else -1.0
                     else:
-                        torch.distributed.all_reduce(_has_data, op=torch.distributed.ReduceOp.MIN)
+                        torch.distributed.all_reduce(_has_data, op=torch.distributed.ReduceOp.MIN, group=level.group)
                 if not _has_data[0]:
+                    # The outer groups learn it at their next control sync. Join it now, they reach it later.
+                    for level in control_levels[1:]:
+                        if self._torch_distributed_ctx.sync_complete_frac():
+                            _data_info = torch.zeros((3,), dtype=torch.float64)
+                            torch.distributed.all_reduce(
+                                _data_info, op=torch.distributed.ReduceOp.SUM, group=level.group
+                            )
+                        else:
+                            torch.distributed.all_reduce(
+                                _has_data, op=torch.distributed.ReduceOp.MIN, group=level.group
+                            )
                     break
 
                 if self._stall_heartbeat is not None:
@@ -705,8 +727,14 @@ class Engine(EngineBase):
                     assert grad_norm is not None
                     losses_dict[key] = float(grad_norm)  # device sync, as before
 
-                if self._torch_distributed_ctx:
-                    self._torch_distributed_ctx.step_after_param_update(module=self._pt_model, epoch_step_idx=step_idx)
+                if perform_update_step:
+                    if self._torch_distributed_ctx:
+                        self._torch_distributed_ctx.step_after_param_update(
+                            module=self._pt_model,
+                            optimizer=self._updater.get_optimizer(),
+                            epoch_update_step_idx=epoch_update_step_idx,
+                        )
+                    epoch_update_step_idx += 1
 
                 step_end_time = time.monotonic()
                 step_duration = step_end_time - step_begin_time
@@ -810,6 +838,12 @@ class Engine(EngineBase):
             prof.__exit__(None, None, None)
             if prof.exported:
                 self._torch_profile_exported = True
+
+        if self._torch_distributed_ctx:
+            # all ranks left the train loop together, so this collective matches
+            self.global_train_step = self._torch_distributed_ctx.step_after_epoch(
+                module=self._pt_model, optimizer=self._updater.get_optimizer(), global_train_step=self.global_train_step
+            )
 
         elapsed = time.monotonic() - epoch_start_time
         elapsed_computation_percentage = elapsed_computation_time / elapsed
@@ -1067,7 +1101,13 @@ class Engine(EngineBase):
         else:
             dataset_reset = returnn_dataset_wrapper.ReturnnDatasetResetNoOpCallback()
 
-        wrapped_dataset = returnn_dataset_wrapper.ReturnnDatasetIterDataPipe(dataset, reset_callback=dataset_reset)
+        shard_workers = self.config.typed_value("torch_dataloader_shard_workers", None)
+        assert shard_workers is None or isinstance(shard_workers, bool), (
+            f"config torch_dataloader_shard_workers, expected bool or None, got {shard_workers!r}"
+        )
+        wrapped_dataset = returnn_dataset_wrapper.ReturnnDatasetIterDataPipe(
+            dataset, reset_callback=dataset_reset, shard_workers=shard_workers
+        )
         if (self._min_seq_length is not None) or (self._max_seq_length is not None):
             wrapped_dataset = data_pipeline.LenFilterDataPipe(
                 wrapped_dataset, min_seq_length=self._min_seq_length, max_seq_length=self._max_seq_length

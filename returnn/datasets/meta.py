@@ -481,6 +481,12 @@ class MetaDataset(CachedDataset2):
             else True
         )
 
+    def set_sharding(self, *, num_shards: int, shard_index: int):
+        """set sharding, also on the seq order control dataset, which shards the seq order then"""
+        super().set_sharding(num_shards=num_shards, shard_index=shard_index)
+        if self.seq_order_control_dataset is not None:
+            self.datasets[self.seq_order_control_dataset].set_sharding(num_shards=num_shards, shard_index=shard_index)
+
     def get_current_seq_order(self):
         """
         :return: current seq order for the current epoch, after self.init_seq_order was called.

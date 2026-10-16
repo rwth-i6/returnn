@@ -22,6 +22,33 @@ and not listing legacy/deprecated parameters.
 Version History
 ---------------
 
+Behavior version 38 (2026-10-14)
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+PyTorch distributed training (``torch_distributed``) with ``reduce_type`` ``"param"``:
+at the end of every train epoch, before the checkpoint is written, the state which goes into the checkpoint
+is made the same on every rank: the params, the buffers and the optimizer state take the mean over the ranks,
+the step counts the max.
+So the checkpoint and the eval are the average, every rank starts the next epoch with the state of the checkpoint,
+and resuming from the checkpoint continues with the same model and optimizer state as the uninterrupted training.
+
+Before, rank 0 wrote its own params, buffers and optimizer state, up to ``param_sync_step - 1`` local steps away
+from the average, and the ranks continued with their own diverged state and step counts.
+
+There is also the option ``sync_at_epoch_end: bool`` in ``torch_distributed`` to override in both directions.
+
+Behavior version 37 (2026-10-13)
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+PyTorch DataLoader with ``torch_dataloader_opts`` ``num_workers > 1``:
+every worker yields its own shard of the dataset,
+so the workers together yield every seq once per epoch.
+Before, every worker iterated over the whole dataset,
+so every seq came ``num_workers`` times per epoch.
+A dataset which does not support sharding raises an error now.
+
+There is also the global config option ``torch_dataloader_shard_workers: bool`` to override in both directions.
+
 Behavior version 36 (2026-10-10)
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 

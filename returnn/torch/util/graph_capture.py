@@ -1441,7 +1441,11 @@ class GraphCapturedTrainStep:
         (distributed batch norm, see ``rf_batch_norm_distributed``),
         ``destroy_process_group`` blocks forever when the graph outlives it.
         See https://github.com/pytorch/pytorch/issues/115388.
+
+        Also switches the bound-shape dim state off (see :func:`set_bound_shapes_enabled`),
+        so that later engines in the same process see the dims as before.
         """
+        self.set_bound_shapes_enabled(False)
         global _graph_pools_reserved
         if self._graph is None:
             return

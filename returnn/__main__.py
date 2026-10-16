@@ -215,7 +215,9 @@ def init_data():
     if train_cache_bytes >= 0:
         # Maybe we have left over cache from dev/eval if dev/eval have cached everything.
         train_cache_bytes += extra_cache_bytes_dev + extra_cache_bytes_eval
-    train_data, extra_train = load_data(config, train_cache_bytes, "train")
+    train_data, extra_train = load_data(
+        config, train_cache_bytes, "train", **Dataset.get_default_kwargs_train(config=config)
+    )
 
 
 def setup_dummy_datasets():

@@ -17,6 +17,7 @@ from returnn.torch.util.native_op import (
     get_ctc_fsa_fast_bw,
     ctc_loss,
     ctc_loss_packed,
+    ctc_best_path,
     edit_distance,
     optimal_completion_edit_distance,
     optimal_completion_edit_distance_per_successor,
@@ -588,6 +589,117 @@ def test_ctc_loss_packed_leading_gap_grad():
         assert (rows == 0).all(), leaf.grad
 
 
+def test_ctc_loss_packed_kernels_independent_of_frame_bound():
+    """
+    Under CUDA-graph capture the frame bound is the capacity, far above most sequences,
+    and every kernel launch costs time in every replay.
+    The packed CTC runs each sequence over its own frames, so its launches must not grow with the bound.
+    """
+    if not torch.cuda.is_available():
+        raise SkipTest("CUDA not available")
+    from torch.profiler import profile, ProfilerActivity
+
+    torch.manual_seed(3)
+    lens = torch.tensor([9, 7, 4], dtype=torch.int32, device="cuda")
+    logits = torch.randn(int(lens.sum()), 6, device="cuda")
+    opts = dict(
+        logits=logits,
+        seq_starts=torch.tensor([0, 9, 16], dtype=torch.int32, device="cuda"),
+        logits_seq_lens=lens,
+        targets=torch.tensor([[1, 2, 3, 1], [2, 0, 1, 0], [3, 3, 0, 0]], dtype=torch.int32, device="cuda"),
+        targets_seq_lens=torch.tensor([4, 3, 2], dtype=torch.int32, device="cuda"),
+        blank_index=5,
+        edges_bound=5 * 9 + 5 * 3,
+    )
+    counts = []
+    for frame_bound in (9, 90):
+        ctc_loss_packed(max_seq_len=frame_bound, **opts)
+        torch.cuda.synchronize()
+        with profile(activities=[ProfilerActivity.CUDA]) as prof:
+            ctc_loss_packed(max_seq_len=frame_bound, **opts)
+            torch.cuda.synchronize()
+        counts.append(sum(1 for event in prof.events() if event.device_type == torch.autograd.DeviceType.CUDA))
+    assert counts[0] == counts[1], counts
+
+
+def test_ctc_loss_packed_matches_padded_cuda():
+    """
+    Packed against padded CTC on the GPU, where a whole block runs each sequence: label sequences with more
+    states and edges than the block has threads, a zero-length filler sequence, and a frame bound and an
+    edge list over-allocated as under CUDA-graph capture. Same losses and gradients, up to the float32 noise
+    of the atomic log-space adds, which makes two runs of the same op differ by up to 3e-4 in the gradients here.
+    """
+    if not torch.cuda.is_available():
+        raise SkipTest("CUDA not available")
+    torch.manual_seed(5)
+    lens = [400, 260, 90, 0]
+    tgt_lens = [130, 60, 20, 0]
+    n_batch, dim, blank = len(lens), 20, 19
+    logits_padded = torch.randn(n_batch, max(lens), dim, device="cuda")
+    targets = torch.randint(0, blank, (n_batch, 140), dtype=torch.int32, device="cuda")
+    lens_t = torch.tensor(lens, dtype=torch.int32, device="cuda")
+    tgt_lens_t = torch.tensor(tgt_lens, dtype=torch.int32, device="cuda")
+
+    leaf_pad = logits_padded.clone().requires_grad_(True)
+    loss_pad = ctc_loss(
+        logits=leaf_pad, logits_seq_lens=lens_t, targets=targets, targets_seq_lens=tgt_lens_t, blank_index=blank
+    )
+    loss_pad.sum().backward()
+
+    leaf_packed = logits_padded.clone().requires_grad_(True)
+    flat = torch.cat([leaf_packed[b, : lens[b]] for b in range(n_batch)], dim=0)
+    loss_packed = ctc_loss_packed(
+        logits=flat,
+        seq_starts=torch.tensor(numpy.cumsum([0] + lens[:-1]), dtype=torch.int32, device="cuda"),
+        logits_seq_lens=lens_t,
+        max_seq_len=max(lens) + 100,
+        targets=targets,
+        targets_seq_lens=tgt_lens_t,
+        blank_index=blank,
+        edges_bound=5 * (sum(tgt_lens) + 50) + 5 * n_batch,
+    )
+    loss_packed.sum().backward()
+
+    torch.testing.assert_close(loss_packed, loss_pad, rtol=1e-4, atol=1e-4)
+    mask = torch.arange(max(lens), device="cuda")[None, :] < lens_t[:, None]
+    torch.testing.assert_close(leaf_packed.grad[mask], leaf_pad.grad[mask], rtol=1e-3, atol=1e-3)
+
+
+def test_ctc_loss_packed_states_in_global_memory_cuda():
+    """
+    The per-seq recursion keeps the states of a seq in shared memory, 3 * (2 * n_tgt_time + 3) floats,
+    which fits into the 48 KB of a block up to a targets buffer width of about 2000.
+    A wider buffer, with the same targets in it, must give the same loss and grads (states in global memory).
+    """
+    if not torch.cuda.is_available():
+        raise SkipTest("CUDA not available")
+    torch.manual_seed(7)
+    lens = [50, 30, 0]
+    tgt_lens = [12, 7, 0]
+    n_batch, dim, blank = len(lens), 10, 9
+    logits = torch.randn(sum(lens), dim, device="cuda")
+    targets_content = torch.randint(0, blank, (n_batch, max(tgt_lens)), dtype=torch.int32, device="cuda")
+    res = []
+    for tgt_width in (max(tgt_lens), 2100):
+        targets = torch.zeros((n_batch, tgt_width), dtype=torch.int32, device="cuda")
+        targets[:, : max(tgt_lens)] = targets_content
+        leaf = logits.clone().requires_grad_(True)
+        loss = ctc_loss_packed(
+            logits=leaf,
+            seq_starts=torch.tensor(numpy.cumsum([0] + lens[:-1]), dtype=torch.int32, device="cuda"),
+            logits_seq_lens=torch.tensor(lens, dtype=torch.int32, device="cuda"),
+            max_seq_len=max(lens),
+            targets=targets,
+            targets_seq_lens=torch.tensor(tgt_lens, dtype=torch.int32, device="cuda"),
+            blank_index=blank,
+            edges_bound=5 * sum(tgt_lens) + 5 * n_batch,
+        )
+        loss.sum().backward()
+        res.append((loss.detach(), leaf.grad))
+    torch.testing.assert_close(res[1][0], res[0][0], rtol=1e-4, atol=1e-4)
+    torch.testing.assert_close(res[1][1], res[0][1], rtol=1e-4, atol=1e-4)
+
+
 def test_ctc_fsa_batch3_len6_c8():
     """
     This (:func:`Fsa.get_ctc_fsa_fast_bw`) is used by :func:`ctc_loss`.
@@ -854,6 +966,36 @@ def test_fast_viterbi_cuda():
     if not torch.cuda.is_available():
         raise SkipTest("CUDA not available")
     test_fast_viterbi(device=torch.device("cuda"))
+
+
+def test_ctc_best_path_cuda_gives_the_cpu_path():
+    """
+    Every CUDA call of :func:`ctc_best_path` gives the path of the CPU op.
+    The kernel keeps the best edge of a state in one cell which it swaps atomically,
+    so the read of that cell has to be atomic too, else a reader sees a torn score and drops the better edge.
+    Only batches of a realistic size show it.
+    """
+    if not torch.cuda.is_available():
+        raise SkipTest("CUDA not available")
+    n_batch, seq_len, n_tgt, n_classes = 8, 507, 110, 10241
+    gen = torch.Generator().manual_seed(5)
+    for _ in range(2):
+        seq_lens = torch.randint(1, seq_len + 1, (n_batch,), generator=gen, dtype=torch.int32)
+        tgt_lens = torch.randint(0, n_tgt + 1, (n_batch,), generator=gen, dtype=torch.int32)
+        tgt_lens = torch.minimum(tgt_lens, seq_lens // 2)
+        args = dict(
+            logits=torch.log_softmax(torch.randn(seq_len, n_batch, n_classes, generator=gen), dim=-1),
+            logits_seq_lens=seq_lens,
+            targets=torch.randint(0, n_classes - 1, (n_batch, n_tgt), generator=gen, dtype=torch.int32),
+            targets_seq_lens=tgt_lens,
+        )
+        opts = dict(logits_time_major=True, logits_normalize=False, blank_index=n_classes - 1)
+        ref = ctc_best_path(**args, **opts)
+        valid = torch.arange(seq_len)[:, None] < seq_lens[None, :]
+        cuda_args = {k: v.cuda() for k, v in args.items()}
+        for call in range(30):
+            out = ctc_best_path(**cuda_args, **opts).cpu()
+            assert torch.equal(out[valid], ref[valid]), f"call {call} differs from the cpu path"
 
 
 def test_fast_viterbi_rnd():
@@ -1653,5 +1795,32 @@ def test_fast_baum_welch_fake_tensor_mode():
     with mode:
         fwdbwd_fake, obs_scores_fake = op(*fake_args, n_states)
     for fake, real in [(fwdbwd_fake, fwdbwd_real), (obs_scores_fake, obs_scores_real)]:
+        assert isinstance(fake, FakeTensor)
+        assert fake.shape == real.shape and fake.dtype == real.dtype
+
+
+def test_ctc_loss_and_best_path_fake_tensor_mode():
+    """
+    Runs :func:`ctc_loss` (full-sum and max approximation) and :func:`ctc_best_path` under FakeTensor tracing,
+    see :func:`test_fast_baum_welch_fake_tensor_mode`.
+    """
+    if not hasattr(torch.library, "register_fake"):
+        raise SkipTest("torch.library.register_fake not available (torch < 2.4)")
+    from torch._subclasses.fake_tensor import FakeTensor, FakeTensorMode
+
+    n_batch, seq_len, n_tgt, n_classes = 3, 8, 3, 6
+    torch.manual_seed(1)
+    args = dict(
+        logits=torch.randn(seq_len, n_batch, n_classes),
+        logits_seq_lens=torch.tensor([8, 6, 5], dtype=torch.int32),
+        targets=torch.randint(0, n_classes - 1, (n_batch, n_tgt), dtype=torch.int32),
+        targets_seq_lens=torch.tensor([3, 2, 0], dtype=torch.int32),
+    )
+    opts = dict(logits_time_major=True, blank_index=n_classes - 1)
+    for func, func_opts in [(ctc_loss, {}), (ctc_loss, dict(max_approx=True)), (ctc_best_path, {})]:
+        real = func(**args, **opts, **func_opts)
+        mode = FakeTensorMode()
+        with mode:
+            fake = func(**{k: mode.from_tensor(v) for k, v in args.items()}, **opts, **func_opts)
         assert isinstance(fake, FakeTensor)
         assert fake.shape == real.shape and fake.dtype == real.dtype
