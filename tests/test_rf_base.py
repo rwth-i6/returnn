@@ -594,6 +594,9 @@ def test_weight_noise():
     assert set(params.keys()) == {"weight", "bias"}
     assert params["weight"] is orig_weight
     assert params["bias"] is orig_bias
+    # the noise is drawn on the device of the param, not the default device
+    with rf.set_default_device_ctx("meta"):
+        assert mod.weight.device == orig_weight.device, mod.weight.device
 
     class _Model(rf.Module):
         def __init__(self):

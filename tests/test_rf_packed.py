@@ -2724,6 +2724,63 @@ def test_scatter_modes_which_the_frontend_composes_from_several_scatters():
             _assert_equal_non_padded(out, ref, batch_dim, out_dim)
 
 
+def test_scatter_and_top_k_mask_fill_like_packed_indices():
+    """the ones / trues which follow packed indices are filled directly in their packed storage"""
+    # noinspection PyProtectedMember
+    from torch.utils._python_dispatch import TorchDispatchMode
+
+    class _FullShapes(TorchDispatchMode):
+        """records the shapes of the filled tensors"""
+
+        def __init__(self):
+            super().__init__()
+            self.shapes = []
+
+        def __torch_dispatch__(self, func, types, args=(), kwargs=None):
+            if func.overloadpacket is torch.ops.aten.full:
+                self.shapes.append(tuple(args[0]))
+            return func(*args, **(kwargs or {}))
+
+    rf.select_backend_torch()
+    batch_dim = Dim(2, name="batch")
+    x, time_dim = _seqs("x", batch_dim, [3, 2], [[1.0, 2.0, 4.0], [8.0, 16.0]])
+    idx, _ = _seqs("idx", batch_dim, [3, 2], [[0, 0, 2], [1, 1]])
+    idx, _ = rf.replace_dim(idx, in_dim=idx.dims[1], out_dim=time_dim)
+    out_dim = Dim(
+        Tensor("out_lens", dims=[batch_dim], dtype="int32", raw_tensor=torch.tensor([3, 2], dtype=torch.int32)),
+        name="out",
+    )
+    padded = (2, 3)
+    idx_p = packed.pack(idx)
+    for name, create, create_ref in [
+        (
+            "scatter_count",
+            lambda: rf.scatter_count(indices=idx_p, indices_dim=time_dim, out_dim=out_dim),
+            lambda: rf.scatter_count(indices=idx, indices_dim=time_dim, out_dim=out_dim),
+        ),
+        (
+            "scatter_fill_value",
+            lambda: rf.scatter(
+                packed.pack(x), indices=idx_p, indices_dim=time_dim, out_dim=out_dim, mode="sum", fill_value=7
+            ),
+            lambda: rf.scatter(x, indices=idx, indices_dim=time_dim, out_dim=out_dim, mode="sum", fill_value=7),
+        ),
+    ]:
+        with _FullShapes() as full_shapes:
+            out = create()
+        assert padded not in full_shapes.shapes and (5,) in full_shapes.shapes, (name, full_shapes.shapes)
+        _assert_equal_non_padded(out, create_ref(), batch_dim, out_dim)
+
+    values, batch_dim, time_dim, vocab_dim = _make_input(batch_size=2, seq_lens=(4, 1), feat=5)
+    values_p = packed.pack(values)
+    with _FullShapes() as full_shapes:
+        mask = rf.top_k_mask(values_p, axis=vocab_dim, k=2)
+    assert packed.is_packed(mask) and (2, 4, 2) not in full_shapes.shapes, full_shapes.shapes
+    _assert_equal_non_padded(
+        rf.cast(mask, "float32"), rf.cast(rf.top_k_mask(values, axis=vocab_dim, k=2), "float32"), batch_dim, time_dim
+    )
+
+
 def test_scatter_relayout_rows_which_write_nothing_get_a_zero_gradient():
     """
     whatever a row outside the sequences holds must not come back through the discarded row:
