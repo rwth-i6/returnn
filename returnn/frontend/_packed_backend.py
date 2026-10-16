@@ -5462,7 +5462,6 @@ class PackedBackend(Backend[PackedRawTensor]):
         raw = source.raw_tensor
         assert isinstance(raw, PackedRawTensor)
         assert spatial_dim in raw.orig_dims, f"PackedBackend.lstm: spatial dim {spatial_dim} is not packed in {source}"
-        _warn_fallback_once("lstm", "the recurrence runs per sequence on the padded layout", hard=False)
         kwargs = dict(
             state_h=state_h,
             state_c=state_c,
