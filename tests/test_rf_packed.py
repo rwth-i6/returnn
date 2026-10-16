@@ -3338,6 +3338,33 @@ def test_creation_like_packed():
         assert rf.zeros(xp.dims, dtype="int32", like=xp64).dtype == "int32", layout
 
 
+def test_cache_tensor_layout_key():
+    """rf.Cache with a packed layout key: equal packings share the entry, the output is mapped into the queried packing"""
+    from returnn.frontend._cache import Cache
+
+    rf.select_backend_torch()
+    x, batch_dim, time_dim, feat_dim = _make_input(batch_size=3, seq_lens=(5, 0, 3), feat=4)
+    time2_dim = Dim(
+        Tensor("time2", dims=[batch_dim], dtype="int32", raw_tensor=time_dim.dyn_size_ext.raw_tensor.clone())
+    )
+    cache = Cache(max_size=4)
+    for layout_opts in (dict(), dict(gap=2, align=4), dict(total_bound=24)):
+        key_name = f"test_cache_tensor_layout_key {layout_opts}"
+        xp1, xp2 = packed.pack(x, **layout_opts), packed.pack(x, **layout_opts)
+        assert xp1.raw_tensor.packed_dim != xp2.raw_tensor.packed_dim, layout_opts  # other packing, equal sizes
+        value = xp1 * 2.0
+        cache.set((key_name, rf.get_tensor_layout(xp1)), value)
+        assert cache.get((key_name, rf.get_tensor_layout(xp1 + 1.0))) is value, layout_opts
+        xp3, _ = rf.replace_dim(xp2, in_dim=time_dim, out_dim=time2_dim)  # e.g. the kv dim of attention
+        for xp, t_dim in ((xp2, time_dim), (xp3, time2_dim)):
+            out = cache.get((key_name, rf.get_tensor_layout(xp)))
+            assert out is not None and out.raw_tensor.same_packing(xp.raw_tensor), (layout_opts, out)
+            assert set(out.dims) == set(xp.dims), (layout_opts, out)
+            # packed op with xp: raises for operands over different packings
+            _assert_equal_non_padded(out - xp * 2.0, rf.zeros([batch_dim, t_dim, feat_dim]), batch_dim, t_dim)
+        assert cache.get((key_name, rf.get_tensor_layout(packed.pack(x, gap=3)))) is None, layout_opts
+
+
 def test_tensor_layout():
     """get_tensor_layout: equal for tensors stored alike, and full / random like a layout as like the tensor"""
     import gc
