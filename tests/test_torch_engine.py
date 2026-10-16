@@ -3069,7 +3069,10 @@ def test_torch_engine_eval_on_all_ranks_rank0_model():
     # A split eval must still score rank 0's model, like an eval on rank 0 alone,
     # and leave every rank's own training state as it was.
     for opts, run_kwargs in [
-        ({"reduce_type": "param", "param_sync_step": 1000}, dict(learning_rate=0.01, train_seq_ordering="random")),
+        (
+            {"reduce_type": "param", "param_sync_step": 1000, "sync_at_epoch_end": False},
+            dict(learning_rate=0.01, train_seq_ordering="random"),
+        ),
         (
             {"sync_complete_frac": False},
             dict(learning_rate=0.01, train_seq_ordering="random", lr_on_epoch_continuous=True),
