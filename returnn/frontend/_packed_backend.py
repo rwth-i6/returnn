@@ -453,6 +453,7 @@ class _PackedStorage:
     def rewrap(self, inner_out: Tensor, *, name: str) -> Tensor:
         """
         :param inner_out: over the packed dim
+        :param name: of the result
         :return: tensor with this packing over ``inner_out``
         """
         helper = PackedRawTensor(
