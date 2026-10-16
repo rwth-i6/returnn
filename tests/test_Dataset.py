@@ -2687,21 +2687,45 @@ def test_MegatronDataset():
 
     # With an empty document and an empty seq. 65535 needs uint16 (or wider).
     docs = [[[5, 65535, 2], [3]], [], [[0], []], [[7, 6, 5, 4]]]
+    tags = ["doc-0/seq-0", "doc-0/seq-1", "doc-2/seq-0", "doc-2/seq-1", "doc-3/seq-0"]
     with tempfile.TemporaryDirectory() as tmp_dir:
         for dtype in ["uint16", "int32"]:
             files = _megatron_write(f"{tmp_dir}/{dtype}", docs, dtype=dtype)
             dataset = init_dataset({"class": "MegatronDataset", **files, "vocab_size": 2**16})
             dataset = pickle.loads(pickle.dumps(dataset))
             seqs = dummy_iter_dataset(dataset)
-            assert [seq.seq_tag for seq in seqs] == [f"seq-{i}" for i in range(5)]
+            assert [seq.seq_tag for seq in seqs] == tags == dataset.get_all_tags()
             assert [seq.features["data"].tolist() for seq in seqs] == [seq for doc in docs for seq in doc]
             assert all(seq.features["data"].dtype == numpy.int32 for seq in seqs)
-            assert [seq.features["document_idx"].tolist() for seq in seqs] == [0, 0, 2, 2, 3]
+            assert dataset.get_data_keys() == ["data"]
             assert dataset.get_data_dim("data") == 2**16 and dataset.is_data_sparse("data")
             # Pickled after the files were mapped.
             compare_dataset_seqs(dummy_iter_dataset(pickle.loads(pickle.dumps(dataset))), seqs)
-            dataset.init_seq_order(seq_list=["seq-4", "seq-0"])
-            assert dataset.get_current_seq_order() == [4, 0]
+            dataset.init_seq_order(seq_list=["doc-3/seq-0", "doc-0/seq-0", "doc-2/seq-1"])
+            assert dataset.get_current_seq_order() == [4, 0, 3]
+            for tag in ["doc-1/seq-0", "doc-0/seq-2", "doc-4/seq-0", "doc-00/seq-0", "seq-0"]:
+                try:
+                    dataset.init_seq_order(seq_list=[tag])
+                except ValueError as exc:
+                    assert "not in dataset" in str(exc)
+                else:
+                    raise AssertionError(f"expected ValueError for tag {tag!r}")
+
+        # Both files together, documents counted over the files.
+        dataset = init_dataset(
+            {
+                "class": "MegatronDataset",
+                "data_file": [f"{tmp_dir}/uint16.bin", f"{tmp_dir}/int32.bin"],
+                "index_file": [f"{tmp_dir}/uint16.idx", f"{tmp_dir}/int32.idx"],
+                "vocab_size": 2**16,
+            }
+        )
+        seqs = dummy_iter_dataset(dataset)
+        tags2 = tags + [tag.replace(f"doc-{d}/", f"doc-{d + 4}/") for d, tag in zip([0, 0, 2, 2, 3], tags)]
+        assert [seq.seq_tag for seq in seqs] == tags2 == dataset.get_all_tags()
+        assert [seq.features["data"].tolist() for seq in seqs] == [seq for doc in docs + docs for seq in doc]
+        dataset.init_seq_order(seq_list=["doc-6/seq-1", "doc-2/seq-1"])
+        assert dataset.get_current_seq_order() == [8, 3]
 
         # A separately written index which splits every seq, over the unchanged data file.
         orig_lens = [len(seq) for doc in docs for seq in doc]
@@ -2736,8 +2760,8 @@ def test_MegatronDataset():
         assert len(seqs) == 10
         assert [len(seq.features["data"]) for seq in seqs] == sorted(split_lens)
         doc_tokens = [[] for _ in docs]
-        for seq in sorted(seqs, key=lambda seq_: int(seq_.seq_tag[len("seq-") :])):
-            doc_tokens[int(seq.features["document_idx"])] += seq.features["data"].tolist()
+        for seq in sorted(seqs, key=lambda seq_: dataset.get_all_tags().index(seq_.seq_tag)):
+            doc_tokens[int(seq.seq_tag.split("/")[0][len("doc-") :])] += seq.features["data"].tolist()
         assert doc_tokens == [[t for seq in doc for t in seq] for doc in docs]
 
 
@@ -2760,6 +2784,12 @@ def test_MegatronDataset_invalid():
         init_dataset({"class": "MegatronDataset", "data_file": "", "index_file": "", "vocab_size": 8, "vocab": vocab})
     except ValueError as exc:
         assert "vocab has 3 labels" in str(exc)
+    else:
+        raise AssertionError("expected ValueError")
+    try:
+        init_dataset({"class": "MegatronDataset", "data_file": ["a", "b"], "index_file": ["a"], "vocab_size": 8})
+    except ValueError as exc:
+        assert "2 data files but 1 index files" in str(exc)
     else:
         raise AssertionError("expected ValueError")
 
@@ -2803,19 +2833,24 @@ def test_MegatronDataset_partition_epoch_sharding():
             return res
 
         tags = _get_tags(full_epoch=1)
-        assert sorted(sum(tags, [])) == sorted(f"seq-{i}" for i in range(num_seqs))
+        assert sorted(sum(tags, [])) == sorted(f"doc-{i}/seq-0" for i in range(num_seqs))
         assert all(3 <= len(t) <= 4 for t in tags), tags
         assert _get_tags(full_epoch=1) == tags  # deterministic
         assert _get_tags(full_epoch=2) != tags  # new random order
 
 
 def _megatron_dfd_get_sub_epoch_dataset(files_subepoch: List[Dict[str, str]]) -> Dict[str, Any]:
-    (files,) = files_subepoch
-    return {"class": "MegatronDataset", **files, "vocab_size": 100, "seq_ordering": "random"}
+    return {
+        "class": "MegatronDataset",
+        "data_file": [files["data_file"] for files in files_subepoch],
+        "index_file": [files["index_file"] for files in files_subepoch],
+        "vocab_size": 100,
+        "seq_ordering": "random",
+    }
 
 
 def test_MegatronDataset_DistributeFilesDataset():
-    num_files, num_seqs = 3, 5
+    num_files, num_seqs, partition_epoch = 6, 5, 3
     with tempfile.TemporaryDirectory() as tmp_dir:
         files = [
             _megatron_write(f"{tmp_dir}/data-{i}", [[[i * 10 + j]] for j in range(num_seqs)], dtype="uint16")
@@ -2826,14 +2861,14 @@ def test_MegatronDataset_DistributeFilesDataset():
                 "class": "DistributeFilesDataset",
                 "files": files,
                 "get_sub_epoch_dataset": _megatron_dfd_get_sub_epoch_dataset,
-                "partition_epoch": num_files,
+                "partition_epoch": partition_epoch,
                 "use_worker_proc": False,
             }
         )
         tokens = []
-        for sub_epoch in range(1, num_files + 1):
+        for sub_epoch in range(1, partition_epoch + 1):
             seqs = dummy_iter_dataset(dataset, epoch=sub_epoch)
-            assert len(seqs) == num_seqs
+            assert len(seqs) == num_seqs * num_files // partition_epoch
             tokens += [seq.features["data"].tolist() for seq in seqs]
         assert sorted(tokens) == [[i * 10 + j] for i in range(num_files) for j in range(num_seqs)]
 
