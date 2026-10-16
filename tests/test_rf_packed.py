@@ -3377,7 +3377,9 @@ def test_sequence_mask_like_packed():
     """the mask over the packed dims of a packed like is laid out like it, without the padded [batch, time] rectangle"""
     # noinspection PyProtectedMember
     from torch.utils._python_dispatch import TorchDispatchMode
-    from torch.utils._pytree import tree_leaves
+
+    # noinspection PyProtectedMember
+    from torch.utils._pytree import tree_flatten
 
     class _OutShapes(TorchDispatchMode):
         """records the shapes of all op outputs"""
@@ -3388,7 +3390,7 @@ def test_sequence_mask_like_packed():
 
         def __torch_dispatch__(self, func, types, args=(), kwargs=None):
             out = func(*args, **(kwargs or {}))
-            self.shapes.update(tuple(t.shape) for t in tree_leaves(out) if isinstance(t, torch.Tensor))
+            self.shapes.update(tuple(t.shape) for t in tree_flatten(out)[0] if isinstance(t, torch.Tensor))
             return out
 
     rf.select_backend_torch()
