@@ -2911,6 +2911,7 @@ class TorchBackend(Backend[torch.Tensor]):
         if not rf.is_static_traceable():
             return _while_loop_eager(cond, body, initial)
         # Not torch.while_loop: that goes through Dynamo.
+        # noinspection PyProtectedMember
         from torch._higher_order_ops.while_loop import while_loop_op
 
         def _run_loop(cond_raw: Callable, body_raw: Callable, init: Tuple[torch.Tensor, ...]) -> Sequence[torch.Tensor]:

@@ -13,6 +13,8 @@ from typing import Optional, Union, Any, TypeVar, Callable, Sequence, Tuple, Lis
 import tree
 from returnn.tensor import Tensor, Dim
 import returnn.frontend as rf
+
+# noinspection PyProtectedMember
 from .tensor_array import TensorArray, _BufferTensorArray
 from ._backend import Backend, global_backend
 

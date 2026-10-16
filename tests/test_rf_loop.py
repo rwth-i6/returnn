@@ -467,6 +467,11 @@ def _check_beam_search_same(res, ref, *, num_frames: int):
 def test_while_loop_torch_graph_loop_beam_search():
     # Under static tracing, the PT backend runs rf.while_loop as the torch while_loop op over a fixed-shape carry.
     # Same results as the eager Python loop, for several trip counts including zero.
+    import torch
+    import unittest
+
+    if torch.__version__ < (2, 3):  # torch while_loop op since torch 2.3
+        raise unittest.SkipTest("needs torch >= 2.3")
     rf.select_backend_torch()
     log_probs, dims = _beam_search_inputs(device="cpu")
     for n in [0, 1, 4, 6]:
@@ -483,6 +488,11 @@ def test_while_loop_torch_graph_loop_beam_search():
 
 
 def test_while_loop_torch_graph_loop_tensor_array_overflow():
+    import torch
+    import unittest
+
+    if torch.__version__ < (2, 3):  # torch while_loop op since torch 2.3
+        raise unittest.SkipTest("needs torch >= 2.3")
     rf.select_backend_torch()
     template = Tensor("x", dims=(), dtype="int32")
     with rf.set_static_traceable_ctx():
