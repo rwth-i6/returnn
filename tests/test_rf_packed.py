@@ -3365,6 +3365,28 @@ def test_cache_tensor_layout_key():
         assert cache.get((key_name, rf.get_tensor_layout(packed.pack(x, gap=3)))) is None, layout_opts
 
 
+def test_dim_mask_like_cache_packed():
+    """get_mask with a packed like: shared over packings with equal sizes, laid out like the queried one"""
+    rf.select_backend_torch()
+    x, batch_dim, time_dim, feat_dim = _make_input(batch_size=3, seq_lens=(5, 0, 3), feat=4)
+    time2_dim = Dim(
+        Tensor("time2", dims=[batch_dim], dtype="int32", raw_tensor=time_dim.dyn_size_ext.raw_tensor.clone())
+    )
+    ref = rf.cast(rf.sequence_mask([batch_dim, time_dim]), "float32")
+    for layout_opts in (dict(), dict(gap=2, align=4), dict(total_bound=24)):
+        xp1, xp2 = packed.pack(x, **layout_opts), packed.pack(x, **layout_opts)
+        mask1 = time_dim.get_mask(like=xp1)
+        xp3, _ = rf.replace_dim(xp2, in_dim=time_dim, out_dim=time2_dim)
+        for xp, t_dim in ((xp2, time_dim), (xp3, time2_dim)):
+            mask = t_dim.get_mask(like=xp)
+            assert mask.raw_tensor.inner.raw_tensor is mask1.raw_tensor.inner.raw_tensor, layout_opts  # shared
+            assert packed.is_packed(mask) and mask.raw_tensor.same_packing(xp.raw_tensor), (layout_opts, mask)
+            ref_t, _ = rf.replace_dim(ref, in_dim=time_dim, out_dim=t_dim)
+            x_t, _ = rf.replace_dim(x, in_dim=time_dim, out_dim=t_dim)
+            _assert_equal_non_padded(rf.cast(mask, "float32"), ref_t, batch_dim, t_dim)
+            _assert_equal_non_padded(rf.where(mask, xp, -1.0), x_t, batch_dim, t_dim)
+
+
 def test_tensor_layout():
     """get_tensor_layout: equal for tensors stored alike, and full / random like a layout as like the tensor"""
     import gc
