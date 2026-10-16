@@ -379,3 +379,159 @@ def test_while_loop_beam_search_growing_hist():
         tf_low_level=True,
         test_single_batch_entry=False,
     )
+
+
+def _beam_search_fixed_shape(log_probs: Tensor, *, time_dim: Dim, vocab_dim: Dim, beam_dim: Dim, num_frames: Tensor):
+    """
+    Frame-synchronous beam search as in the graph-loop recog defs:
+    fixed beam, top_k over (beam, vocab), labels and backrefs in TensorArrays with a capacity,
+    then backtracking in a second loop, reading the arrays in reverse.
+
+    :param log_probs: [batch, time, vocab]
+    :param num_frames: scalar int32, number of frames to search (at most time_dim)
+    :return: scores [batch, beam], labels TensorArray (one entry per frame, reversed),
+        final labels and backrefs TensorArrays of the search loop
+    """
+    batch_dims = log_probs.remaining_dims((time_dim, vocab_dim))
+    step_beam_dim = Dim(beam_dim.dimension, name="beam-step")  # top_k out dim, mapped back onto beam_dim
+    log_probs_ta = TensorArray.unstack(log_probs, axis=time_dim)
+    capacity = time_dim.dimension
+    label_template = Tensor("label", dims=batch_dims + [beam_dim], dtype="int32", sparse_dim=vocab_dim)
+    backref_template = Tensor("backref", dims=batch_dims + [beam_dim], dtype="int32", sparse_dim=beam_dim)
+
+    def _body(state):
+        t, seq_log_prob_, labels_ta_, backrefs_ta_ = state
+        seq_log_prob_ = rf.combine(seq_log_prob_, "+", log_probs_ta[t], allow_broadcast_all_sources=True)
+        seq_log_prob_, (backrefs, labels), _ = rf.top_k(seq_log_prob_, k_dim=step_beam_dim, axis=[beam_dim, vocab_dim])
+        seq_log_prob_, _ = rf.replace_dim(seq_log_prob_, in_dim=step_beam_dim, out_dim=beam_dim)
+        backrefs, _ = rf.replace_dim(rf.cast(backrefs, "int32"), in_dim=step_beam_dim, out_dim=beam_dim)
+        backrefs.sparse_dim = beam_dim
+        labels, _ = rf.replace_dim(rf.cast(labels, "int32"), in_dim=step_beam_dim, out_dim=beam_dim)
+        labels.sparse_dim = vocab_dim
+        return t + 1, seq_log_prob_, labels_ta_.push_back(labels), backrefs_ta_.push_back(backrefs)
+
+    seq_log_prob = rf.where(
+        rf.range_over_dim(beam_dim) == 0, rf.constant(0.0, dims=batch_dims + [beam_dim]), float("-inf")
+    )
+    _, seq_log_prob, labels_ta, backrefs_ta = rf.while_loop(
+        cond=lambda s: s[0] < num_frames,
+        body=_body,
+        initial=(
+            rf.zeros((), dtype="int32", device=num_frames.device),
+            seq_log_prob,
+            TensorArray(label_template, capacity=capacity),
+            TensorArray(backref_template, capacity=capacity),
+        ),
+    )
+
+    def _backtrack_body(state):
+        t, indices, out_ta_ = state
+        out_ta_ = out_ta_.push_back(rf.gather(labels_ta[t], indices=indices))
+        indices = rf.gather(backrefs_ta[t], indices=indices)
+        return t - 1, indices, out_ta_
+
+    indices0 = rf.range_over_dim(beam_dim)
+    for dim in batch_dims:
+        indices0 = rf.expand_dim(indices0, dim=dim)
+    indices0.sparse_dim = beam_dim
+    _, _, out_ta = rf.while_loop(
+        cond=lambda s: s[0] >= 0,
+        body=_backtrack_body,
+        initial=(num_frames - 1, indices0, TensorArray(label_template, capacity=capacity)),
+    )
+    return seq_log_prob, out_ta, labels_ta, backrefs_ta
+
+
+def _beam_search_inputs(*, device: str, num_seqs: int = 2, num_frames: int = 6):
+    import torch
+
+    batch = Dim(num_seqs, name="batch")
+    time_dim = Dim(num_frames, name="time")
+    vocab_dim = Dim(5, name="vocab")
+    log_probs = Tensor("log_probs", [batch, time_dim, vocab_dim], dtype="float32")
+    raw = torch.randn(num_seqs, num_frames, 5, generator=torch.Generator().manual_seed(42))
+    log_probs.raw_tensor = raw.log_softmax(-1).to(device)
+    return log_probs, dict(time_dim=time_dim, vocab_dim=vocab_dim, beam_dim=Dim(3, name="beam"))
+
+
+def _check_beam_search_same(res, ref, *, num_frames: int):
+    import torch
+
+    torch.testing.assert_close(res[0].copy_transpose(ref[0].dims).raw_tensor.cpu(), ref[0].raw_tensor.cpu())
+    for res_ta, ref_ta in zip(res[1:], ref[1:]):
+        for i in range(num_frames):
+            a, b = res_ta[i], ref_ta[i]
+            assert torch.equal(a.copy_transpose(b.dims).raw_tensor.cpu(), b.raw_tensor.cpu()), f"entry {i}"
+
+
+def test_while_loop_torch_graph_loop_beam_search():
+    # Under static tracing, the PT backend runs rf.while_loop as the torch while_loop op over a fixed-shape carry.
+    # Same results as the eager Python loop, for several trip counts including zero.
+    rf.select_backend_torch()
+    log_probs, dims = _beam_search_inputs(device="cpu")
+    for n in [0, 1, 4, 6]:
+        num_frames = rf.constant(n, dims=(), dtype="int32", device="cpu")
+        ref = _beam_search_fixed_shape(log_probs, num_frames=num_frames, **dims)
+        # noinspection PyProtectedMember
+        assert isinstance(ref[1]._backend_tensor_array, list)
+        with rf.set_static_traceable_ctx():
+            res = _beam_search_fixed_shape(log_probs, num_frames=num_frames, **dims)
+        # noinspection PyProtectedMember
+        assert not isinstance(res[1]._backend_tensor_array, list), "graph loop not taken"
+        assert res[1].stack(axis=dims["time_dim"]).raw_tensor.shape[0] == dims["time_dim"].dimension
+        _check_beam_search_same(res, ref, num_frames=n)
+
+
+def test_while_loop_torch_graph_loop_tensor_array_overflow():
+    rf.select_backend_torch()
+    template = Tensor("x", dims=(), dtype="int32")
+    with rf.set_static_traceable_ctx():
+        try:
+            rf.while_loop(
+                cond=lambda s: s[0] < 4,
+                body=lambda s: (s[0] + 1, s[1].push_back(s[0])),
+                initial=(rf.zeros((), dtype="int32"), TensorArray(template, capacity=3)),
+            )
+        except (IndexError, RuntimeError) as exc:
+            print("expected error:", exc)
+        else:
+            raise AssertionError("capacity overflow not detected")
+
+
+def test_while_loop_torch_cuda_graph_while_node():
+    # torch >= 2.14: the loop captured once as a CUDA graph while node, replayed for different trip counts.
+    import torch
+    import unittest
+
+    if not torch.cuda.is_available():
+        raise unittest.SkipTest("cuda only: real graph capture")
+    if torch.__version__ < (2, 14):  # CUDA graph while nodes since torch 2.14
+        raise unittest.SkipTest("needs torch >= 2.14")
+    from torch._higher_order_ops.cudagraph_conditional_nodes import (
+        CUDAGraphCaptureControlFlowOpDispatchMode,
+        ControlFlowOpWarmupDispatchMode,
+    )
+
+    rf.select_backend_torch()
+    log_probs_cpu, dims = _beam_search_inputs(device="cpu")
+    log_probs = log_probs_cpu.copy()
+    log_probs.raw_tensor = log_probs_cpu.raw_tensor.cuda()
+    num_frames = rf.constant(6, dims=(), dtype="int32", device="cuda")
+
+    def _search():
+        with rf.set_default_device_ctx("cuda"), rf.set_static_traceable_ctx():
+            return _beam_search_fixed_shape(log_probs, num_frames=num_frames, **dims)
+
+    with ControlFlowOpWarmupDispatchMode():
+        _search()
+    torch.cuda.synchronize()
+    graph = torch.cuda.CUDAGraph()
+    with torch.cuda.graph(graph), CUDAGraphCaptureControlFlowOpDispatchMode():
+        res = _search()
+    for n in [0, 1, 4, 6]:
+        num_frames.raw_tensor.fill_(n)
+        graph.replay()
+        torch.cuda.synchronize()
+        num_frames_cpu = rf.constant(n, dims=(), dtype="int32", device="cpu")
+        ref = _beam_search_fixed_shape(log_probs_cpu, num_frames=num_frames_cpu, **dims)
+        _check_beam_search_same(res, ref, num_frames=n)
