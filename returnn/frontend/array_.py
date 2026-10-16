@@ -841,12 +841,15 @@ def masked_scatter(
 
 
 def sequence_mask(
-    dims: Union[Dim, Sequence[Dim]], *, device: Optional[str] = None, like: Optional[Tensor] = None
+    dims: Union[Dim, Sequence[Dim]],
+    *,
+    device: Optional[str] = None,
+    like: Optional[Union[Tensor, rf.TensorLayout]] = None,
 ) -> Tensor:
     """
     :param dims:
     :param device:
-    :param like: the mask follows the device and storage layout of this tensor, see :func:`Dim.get_mask`
+    :param like: the mask follows the device and storage layout of this tensor or layout, see :func:`Dim.get_mask`
     :return: mask based on the sequence lengths
     """
     if isinstance(dims, Dim):

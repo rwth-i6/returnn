@@ -3400,7 +3400,8 @@ def test_sequence_mask_like_packed():
     for layout in (dict(), dict(gap=2, align=4), dict(total_bound=24)):
         xp = packed.pack(x, **layout)
         # eager, the frame coords of a packing come from a padded int grid, once per packing (layout cache)
-        time_dim.get_mask(like=xp)
+        for d in (batch_dim, time_dim):
+            xp + rf.range_over_dim(d, dtype="float32")
         with _OutShapes() as out_shapes:
             masks = [rf.sequence_mask([batch_dim, time_dim, feat_dim], like=xp), time_dim.get_mask(like=xp)]
         assert (4, 5) not in out_shapes.shapes, (layout, out_shapes.shapes)
@@ -3409,6 +3410,10 @@ def test_sequence_mask_like_packed():
             assert mask.dtype == "bool", (layout, mask)
             _assert_equal_non_padded(rf.cast(mask, "float32"), ref, batch_dim, time_dim)
             _assert_equal_non_padded(rf.where(mask, xp, -1.0), x, batch_dim, time_dim)
+        # cached by the layout: the same mask for a tensor of the same layout, or the layout itself
+        assert time_dim.get_mask(like=xp * 2.0) is masks[1], layout
+        assert time_dim.get_mask(like=rf.get_tensor_layout(xp)) is masks[1], layout
+        assert time_dim.get_mask(like=packed.pack(x, gap=3)) is not masks[1], layout
     # plain like: the same mask as without
     assert time_dim.get_mask(like=x).raw_tensor.tolist() == time_dim.get_mask().raw_tensor.tolist()
     # the device follows like
