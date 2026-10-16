@@ -120,7 +120,7 @@ def _register_ops() -> Optional[Tuple[Callable[..., _LstmOutputs], Callable[...,
         d_hy: Optional[torch.Tensor],
         d_cy: Optional[torch.Tensor],
     ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
-        """the gradients of the inputs of the forward, the recurrence run once more under autograd"""
+        """gradients of the forward's inputs, the recurrence run once more under autograd, each in its own storage"""
         leaves: List[torch.Tensor] = [t.detach() for t in (source, h0, c0, ff_weight, rec_weight)]
         if bias is not None:
             leaves.append(bias.detach())
@@ -144,7 +144,7 @@ def _register_ops() -> Optional[Tuple[Callable[..., _LstmOutputs], Callable[...,
                         [outs[index] for index, _ in given], leaves, [grad for _, grad in given], allow_unused=True
                     )
                 )
-        result = [torch.zeros_like(leaf) if grad is None else grad for grad, leaf in zip(grads, leaves)]
+        result = [torch.zeros_like(leaf) if grad is None else grad.clone() for grad, leaf in zip(grads, leaves)]
         if bias is None:
             result.append(source.new_empty(0))
         return result[0], result[1], result[2], result[3], result[4], result[5]
