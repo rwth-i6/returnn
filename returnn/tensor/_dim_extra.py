@@ -19,6 +19,7 @@ if TYPE_CHECKING:
     from .dim import Dim
 
     from returnn.datasets.util.vocabulary import Vocabulary
+
     # noinspection PyProtectedMember
     from returnn.frontend._cache import Cache
     from returnn.frontend.tensor_layout import TensorLayout
