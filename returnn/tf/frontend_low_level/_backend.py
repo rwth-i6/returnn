@@ -1687,6 +1687,7 @@ class TFBackend(Backend[tf.Tensor]):
         device: Optional[str] = None,
         sparse_dim: Optional[Dim] = None,
         feature_dim: Optional[Dim] = None,
+        like: Optional[Tensor] = None,
     ) -> Tensor:
         """
         :param dims:
@@ -1695,8 +1696,10 @@ class TFBackend(Backend[tf.Tensor]):
         :param device:
         :param sparse_dim:
         :param feature_dim:
+        :param like:
         :return: tensor filled with fill_value
         """
+        del like  # plain storage, no layout to follow
         if isinstance(fill_value, Tensor):
             fill_value = fill_value.raw_tensor
         with tf_util.same_control_flow_ctx([d.get_dim_value() for d in dims]):
@@ -2732,10 +2735,12 @@ class TFBackend(Backend[tf.Tensor]):
         auto_update_state: Optional[bool] = None,
         static: Optional[bool] = None,
         out: Optional[Tensor] = None,
+        like: Optional[Tensor] = None,
     ) -> Tensor:
         """
         random. See `rf.random` for details.
         """
+        del like  # plain storage, no layout to follow
         assert out is None, "TF random: out not supported"
         assert explicit_state is None and auto_update_state is None, "TF random: explicit state not implemented"
         assert algorithm is None, f"TF random: algorithm {algorithm!r} not implemented"
