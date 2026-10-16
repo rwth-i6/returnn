@@ -824,6 +824,138 @@ def test_stop_for_resubmission_enough_time_left():
     assert _run_maybe_stop_for_resubmission(epoch=37, final_epoch=38, time_left=1000) == (1, [])
 
 
+def _env_without_wandb_defaults() -> Dict[str, str]:
+    """the default id / name must not come from the env the test runs in (e.g. a Slurm job)"""
+    return {k: v for k, v in os.environ.items() if k not in {"SLURM_JOB_NAME", "WANDB_RUN_ID"}}
+
+
+def _train_with_wandb_stub(
+    *,
+    num_epochs: int,
+    stop_for_resubmission: bool = False,
+    model: Optional[str] = None,
+    config_file: Optional[str] = None,
+):
+    """
+    :return: (wandb_opts of the config, wandb.init kwargs, events, global train step at the end),
+        events: ("log", step, data), ("finish", exit_code), ("kill", sig)
+    """
+    import types
+
+    init_kwargs = []
+    events: List[Tuple[Any, ...]] = []
+
+    class _WandbRun:
+        def log(self, data: Dict[str, Any], *, step: int):
+            events.append(("log", step, data))
+
+        def finish(self, *, exit_code: int):
+            events.append(("finish", exit_code))
+
+    def _wandb_init(**kwargs):
+        init_kwargs.append(kwargs)
+        return _WandbRun()
+
+    wandb_opts = {"project": "test", "log_every_n_train_steps": 2}
+    config = Config(
+        dict(
+            task="train",
+            device="cpu",
+            extern_data={"data": {"dim": 9}, "classes": {"dim": 2, "sparse": True}},
+            get_model=TrainTestModel,
+            train_step=TrainTestModel.train_step,
+            batch_size=500,
+            optimizer={"class": "adam"},
+            num_epochs=num_epochs,
+            wandb_opts=wandb_opts,
+            stop_for_resubmission_when_low_time_left=stop_for_resubmission,
+        )
+    )
+    if model:
+        config.set("model", model)
+    if config_file:
+        config.files.append(config_file)  # as if loaded from this file
+    train_dataset = init_dataset({"class": "Task12AXDataset", "num_seqs": 30, "name": "train"})
+    train_dataset.init_seq_order(epoch=1)
+    dev_dataset = init_dataset({"class": "Task12AXDataset", "num_seqs": 10, "name": "dev", "fixed_random_seed": 1})
+
+    # stub module, as CI has no wandb. Not mock.patch.dict(sys.modules): it also drops all modules imported meanwhile
+    sys.modules["wandb"] = types.SimpleNamespace(init=_wandb_init)
+    try:
+        with unittest.mock.patch.dict(os.environ, _env_without_wandb_defaults(), clear=True):
+            with unittest.mock.patch("returnn.util.basic.slurm_time_left_sec", return_value=0):
+                with unittest.mock.patch.object(os, "kill", side_effect=lambda pid, sig: events.append(("kill", sig))):
+                    with global_config_ctx(config):
+                        engine = Engine(config=config)
+                        engine.init_train_from_config(train_data=train_dataset, dev_data=dev_dataset)
+                        engine.train()
+                        # like returnn.__main__: the stop for resubmission ends in a KeyboardInterrupt
+                        engine.finalize(error_occurred=stop_for_resubmission)
+    finally:
+        del sys.modules["wandb"]
+    return wandb_opts, init_kwargs, events, engine.global_train_step
+
+
+def test_torch_engine_wandb():
+    wandb_opts, init_kwargs, events, num_steps = _train_with_wandb_stub(num_epochs=1)
+    assert wandb_opts == {"project": "test", "log_every_n_train_steps": 2}  # the config is not modified
+    assert init_kwargs == [{"project": "test", "job_type": "train", "resume": "allow"}]  # no config file, so no id
+    assert num_steps >= 4
+    logs = [event[1:] for event in events if event[0] == "log"]
+    step_keys = ["epoch", "train_step/ce", "train_step/fer", "train_step/learning_rate"]
+    assert [(step, sorted(data)) for step, data in logs] == [(step, step_keys) for step in range(0, num_steps, 2)] + [
+        (num_steps, ["epoch", "train/ce", "train/fer"]),
+        (num_steps, ["dev/ce", "dev/fer", "epoch"]),
+    ]
+    assert all(data["epoch"] == 1 for _, data in logs)
+    assert events[-1] == ("finish", 0)
+
+
+def test_torch_engine_wandb_continue_from_checkpoint():
+    import hashlib
+
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        config_file = f"{tmp_dir}/returnn.config"
+        run_id = hashlib.sha256(repr(("train", [config_file])).encode("utf8")).hexdigest()
+        kwargs = dict(model=f"{tmp_dir}/model", config_file=config_file)
+        _, init_kwargs, _, step_after_ep1 = _train_with_wandb_stub(num_epochs=1, **kwargs)
+        assert init_kwargs == [{"project": "test", "job_type": "train", "id": run_id, "resume": "allow"}]
+        # e.g. a resubmission: continues from the epoch 1 checkpoint, in the same W&B run
+        _, init_kwargs, events, _ = _train_with_wandb_stub(num_epochs=2, **kwargs)
+        assert init_kwargs == [{"project": "test", "job_type": "train", "id": run_id, "resume": "allow"}]
+        assert min(event[1] for event in events if event[0] == "log") == step_after_ep1
+
+
+def test_torch_engine_wandb_default_id_per_task():
+    import types
+
+    init_kwargs = []
+    sys.modules["wandb"] = types.SimpleNamespace(init=lambda **kwargs: init_kwargs.append(kwargs))
+    try:
+        with unittest.mock.patch.dict(os.environ, _env_without_wandb_defaults(), clear=True):
+            for task in ["train", "eval"]:
+                config = Config(dict(task=task, wandb_opts={"project": "test"}))
+                config.files.append("/tmp/returnn.config")  # as if loaded from this file
+                Engine(config=config)._wandb_init()
+    finally:
+        del sys.modules["wandb"]
+    assert [kwargs["job_type"] for kwargs in init_kwargs] == ["train", "eval"]
+    # the same config file with another task (e.g. ++task eval) does not continue the training run
+    assert init_kwargs[0]["id"] != init_kwargs[1]["id"]
+
+
+def test_torch_engine_wandb_stop_for_resubmission():
+    import signal
+
+    _, _, events, _ = _train_with_wandb_stub(num_epochs=2, stop_for_resubmission=True)
+    # the planned stop after epoch 1 finishes the run as successful, before the SIGINT
+    assert events[-2:] == [("finish", 0), ("kill", signal.SIGINT)]
+    assert [event[0] for event in events].count("finish") == 1
+    logs = [event[2] for event in events if event[0] == "log"]
+    assert any("dev/ce" in data for data in logs)
+    assert all(data["epoch"] == 1 for data in logs)
+
+
 def test_data_loader_oggzip():
     from test_Dataset import create_ogg_zip_txt_only_dataset_mult_seqs
 
