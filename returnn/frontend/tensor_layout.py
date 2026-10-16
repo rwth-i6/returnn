@@ -20,6 +20,7 @@ class TensorLayout:
     the backend, the device, and a backend-specific storage layout
     (e.g. the packing of a packed tensor, see :func:`returnn.frontend.pack`).
     Not the dtype and not the dims.
+    Also not the dim order (the axis order of the raw tensor): a new tensor gets its dims in the given order.
 
     Get it via :func:`get_tensor_layout`.
     Equal layouts mean that new tensors are created the same way,
