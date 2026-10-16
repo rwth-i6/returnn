@@ -1032,7 +1032,7 @@ def scatter(
         out_dim=out_dim,
     )
     if post_fix_fill_value:
-        ones = rf.ones(dims=indices.dims, dtype="int32", device=source.device)
+        ones = rf.ones(dims=indices.dims, dtype="int32", like=indices)
         counts = rf.scatter(ones, indices=indices, indices_dim=indices_dim, out_dim=out_dim)
         out = rf.where(counts > 0, out, fill_value)
     if use_mask and mode != "sum":
@@ -1076,7 +1076,7 @@ def scatter_count(
     """
     if fill_value is None:
         fill_value = 0
-    ones = rf.ones(dims=indices.dims, dtype="int32", device=indices.device)
+    ones = rf.ones(dims=indices.dims, dtype="int32", like=indices)
     if fill_value == 0 or _should_use_scatter_fixed_fill_value():
         counts = rf.scatter(ones, indices=indices, indices_dim=indices_dim, out_dim=out_dim)
         if fill_value is not None:
@@ -1529,7 +1529,12 @@ def top_k_mask(values: Tensor, *, axis: Dim, k: Union[int, Tensor]) -> Tensor:
     :return: mask {other_dims..., axis} of the top-k values
     """
     _, indices, k_dim = rf.top_k(values, axis=axis, k=k)
-    mask = rf.scatter(rf.full(dims=indices.dims, fill_value=True), indices=indices, indices_dim=k_dim, fill_value=False)
+    mask = rf.scatter(
+        rf.full(dims=indices.dims, fill_value=True, dtype="bool", like=indices),
+        indices=indices,
+        indices_dim=k_dim,
+        fill_value=False,
+    )
     return mask
 
 

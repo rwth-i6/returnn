@@ -70,9 +70,11 @@ Import this module explicitly to activate the dispatch registration.
 from __future__ import annotations
 from typing import Any, Optional, Union, Sequence, Set, Tuple, Dict, List
 import math
+import numpy
 
 from returnn.tensor import Tensor, Dim
 import returnn.frontend as rf
+from .types import RawTensorTypes
 from ._backend import Backend, register_backend_by_tensor_type, global_backend
 from ._cache import Cache
 
@@ -407,6 +409,16 @@ def _unpack_if_packed(x):
     if isinstance(x, Tensor) and isinstance(x.raw_tensor, PackedRawTensor):
         return unpack(x)
     return x
+
+
+def _creation_storage_dims(raw: PackedRawTensor, dims: Sequence[Dim]) -> Optional[List[Dim]]:
+    """
+    :return: storage dims of a new tensor over ``dims`` packed like ``raw``,
+        or None if ``dims`` do not cover the packed dims (then it is plain)
+    """
+    if not set(raw.orig_dims).issubset(dims):
+        return None
+    return [raw.packed_dim] + [d for d in dims if d not in raw.orig_dims]
 
 
 _warned_fallback_ops: Set[str] = set()
@@ -3047,6 +3059,78 @@ class PackedBackend(Backend[PackedRawTensor]):
     def get_device(x: Tensor) -> Optional[str]:
         """:return: device of the packed data"""
         return _raw(x).inner.device
+
+    @staticmethod
+    def full(
+        dims: Sequence[Dim],
+        fill_value: Union[RawTensorTypes, Tensor],
+        *,
+        dtype: str,
+        device: Optional[str] = None,
+        sparse_dim: Optional[Dim] = None,
+        feature_dim: Optional[Dim] = None,
+        like: Optional[Tensor] = None,
+    ) -> Tensor:
+        """full -- packed like ``like`` if ``dims`` cover its packed dims, otherwise plain"""
+        raw = _raw(like)
+        storage_dims = _creation_storage_dims(raw, dims)
+        out = rf.full(
+            dims=dims if storage_dims is None else storage_dims,
+            fill_value=fill_value,
+            dtype=dtype,
+            device=device,
+            sparse_dim=sparse_dim,
+            feature_dim=feature_dim,
+            like=raw.inner,
+        )
+        return out if storage_dims is None else raw.rewrap(out, name="full")
+
+    @staticmethod
+    def random(
+        *,
+        dims: Sequence[Dim],
+        dtype: str,
+        device: Optional[str] = None,
+        sparse_dim: Optional[Dim] = None,
+        feature_dim: Optional[Dim] = None,
+        distribution: str,
+        mean: Optional[Union[int, float, Tensor]] = None,
+        stddev: Optional[Union[int, float, Tensor]] = None,
+        bound: Optional[Union[int, float, Tensor]] = None,
+        minval: Optional[Union[int, float, Tensor]] = None,
+        maxval: Optional[Union[int, float, Tensor]] = None,
+        seed: Optional[Union[int, Sequence[int], numpy.ndarray]] = None,
+        algorithm: Optional[str] = None,
+        explicit_state: Optional[Tensor] = None,
+        auto_update_state: Optional[bool] = None,
+        static: Optional[bool] = None,
+        out: Optional[Tensor] = None,
+        like: Optional[Tensor] = None,
+    ) -> Tensor:
+        """random -- drawn in the packed storage of ``like`` if ``dims`` cover its packed dims, otherwise plain"""
+        assert out is None, "packed random: out not supported"
+        raw = _raw(like)
+        storage_dims = _creation_storage_dims(raw, dims)
+        res = rf.random(
+            dims=dims if storage_dims is None else storage_dims,
+            dtype=dtype,
+            device=device,
+            sparse_dim=sparse_dim,
+            feature_dim=feature_dim,
+            distribution=distribution,
+            mean=mean,
+            stddev=stddev,
+            bound=bound,
+            minval=minval,
+            maxval=maxval,
+            seed=seed,
+            algorithm=algorithm,
+            explicit_state=explicit_state,
+            auto_update_state=auto_update_state,
+            static=static,
+            like=raw.inner,
+        )
+        return res if storage_dims is None else raw.rewrap(res, name=f"random_{distribution}")
 
     @staticmethod
     def replace_dim(source: Tensor, *, in_dim: Dim, out_dim: Dim) -> Tensor:
