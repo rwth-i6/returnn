@@ -9,11 +9,11 @@ https://github.com/rwth-i6/returnn/issues/1324
 """
 
 from __future__ import annotations
-from typing import Optional, Union, TypeVar, Callable, Sequence, Tuple, List, Dict
+from typing import Optional, Union, Any, TypeVar, Callable, Sequence, Tuple, List, Dict, Type
 import tree
 from returnn.tensor import Tensor, Dim
 import returnn.frontend as rf
-from .tensor_array import TensorArray
+from .tensor_array import TensorArray, _BufferTensorArray
 from ._backend import Backend, global_backend
 
 
@@ -59,16 +59,21 @@ def while_loop(
     if backend.while_loop is not Backend.while_loop:
         return backend.while_loop(cond, body, initial)
     if backend.executing_eagerly():
-        loop_vars = initial
-        loop_var_templates = _templates_for_loop_vars(loop_vars)
-        dim_updates = _DimUpdatesEager(initial_state=loop_vars)
-        while _get_bool_value_eager(cond(loop_vars)):
-            loop_vars = body(loop_vars)
-            tree.assert_same_structure(loop_var_templates, loop_vars)
-            loop_var_templates = dim_updates.update_template_from_new(loop_var_templates, loop_vars)
-            _check_matching_loop_var_templates(loop_var_templates, loop_vars)
-        return loop_vars
+        return _while_loop_eager(cond, body, initial)
     return backend.while_loop(cond, body, initial)
+
+
+def _while_loop_eager(cond: Callable[[S], Union[bool, Tensor]], body: Callable[[S], S], initial: S) -> S:
+    """the Python loop, for eager backends"""
+    loop_vars = initial
+    loop_var_templates = _templates_for_loop_vars(loop_vars)
+    dim_updates = _DimUpdatesEager(initial_state=loop_vars)
+    while _get_bool_value_eager(cond(loop_vars)):
+        loop_vars = body(loop_vars)
+        tree.assert_same_structure(loop_var_templates, loop_vars)
+        loop_var_templates = dim_updates.update_template_from_new(loop_var_templates, loop_vars)
+        _check_matching_loop_var_templates(loop_var_templates, loop_vars)
+    return loop_vars
 
 
 def _get_bool_value_eager(v: Union[Tensor, bool]) -> bool:
@@ -80,6 +85,157 @@ def _get_bool_value_eager(v: Union[Tensor, bool]) -> bool:
         return v
     else:
         raise TypeError(f"while_loop: cond: unexpected return type {type(v)}")
+
+
+def _graph_while_loop(
+    cond: Callable[[S], Union[bool, Tensor]],
+    body: Callable[[S], S],
+    initial: S,
+    *,
+    backend: Type[Backend],
+    run_loop: Callable[
+        [Callable[[Tuple[Any, ...]], Any], Callable[[Tuple[Any, ...]], Tuple[Any, ...]], Tuple[Any, ...]],
+        Sequence[Any],
+    ],
+) -> S:
+    """
+    The backend-neutral part of a graph loop over a fixed-shape carry
+    (JAX ``lax.while_loop``, PT ``while_loop`` op).
+
+    Loop vars are the :class:`Tensor` and :class:`TensorArray` entries of the structure;
+    everything else is loop-invariant and must come back unchanged from ``body``.
+    A Tensor may not change its dims per iteration,
+    and a TensorArray needs a capacity (``TensorArray(capacity=...)``), so it is a buffer, not a list.
+    A dim in the state may be replaced per iteration, e.g. a growing history dim:
+    it is carried by its dyn size and needs a capacity.
+
+    :param cond: gets the loop vars, returns a scalar bool Tensor
+    :param body: gets the loop vars, returns the next loop vars, same structure
+    :param initial: initial loop vars
+    :param backend: the backend of the loop vars
+    :param run_loop: ``(cond_raw, body_raw, init) -> final``, the loop over a flat tuple of raw tensors:
+        each Tensor, then buffer and write index of each TensorArray, then the dyn size of each dim.
+        It also moves the carry to one device if the backend requires that.
+    :return: final loop vars
+    """
+    flat_initial = list(tree.flatten(initial))
+    var_idxs = [i for i, v in enumerate(flat_initial) if isinstance(v, (Tensor, TensorArray))]
+    assert var_idxs, f"while_loop: no Tensor/TensorArray among the loop vars {initial}"
+    dim_idxs = [i for i, v in enumerate(flat_initial) if isinstance(v, Dim) and v.dyn_size_ext is not None]
+    for i in dim_idxs:
+        assert flat_initial[i].capacity is not None, (
+            f"while_loop: dim {flat_initial[i]} in the state has no capacity."
+            f" The graph loop needs a static bound on what it carries."
+        )
+
+    def _tensor_array_raws(v: TensorArray) -> Tuple[Any, Any]:
+        """:return: buffer, index"""
+        # noinspection PyProtectedMember
+        raw = v._backend_tensor_array
+        if isinstance(raw, _BufferTensorArray) and raw.buffer is not None:
+            return raw.buffer, raw.index
+        assert v.capacity is not None and (isinstance(raw, _BufferTensorArray) or raw == []), (
+            f"while_loop: TensorArray {v.tensor_template} must be created with a capacity"
+            f" to cross the graph loop, as the carry cannot grow"
+        )
+        tmpl = v.tensor_template
+        buffer = rf.zeros([Dim(v.capacity, name="tensor_array")] + list(tmpl.dims), dtype=tmpl.dtype).raw_tensor
+        if isinstance(raw, _BufferTensorArray):
+            return buffer, raw.index
+        return buffer, rf.constant(0, dims=(), dtype=rf.get_default_array_index_dtype()).raw_tensor
+
+    def _carry(flat: List[Any]) -> Tuple[Any, ...]:
+        """:return: flat raw carry, each Tensor in the dim order of its initial value"""
+        out = []
+        for i in var_idxs:
+            v = flat[i]
+            if isinstance(v, Tensor):
+                # An RF Tensor is dim-order agnostic, but the raw carry is not:
+                # the body may return the same tensor transposed.
+                out.append(v.copy_compatible_to_dims_raw(flat_initial[i].dims))
+            else:
+                out.extend(_tensor_array_raws(v))
+        out.extend(flat[i].dyn_size_ext.raw_tensor for i in dim_idxs)
+        return tuple(out)
+
+    def _rebuild(carry: Sequence[Any]) -> S:
+        """:return: the loop vars as body/cond expect them"""
+        out = list(flat_initial)
+        carry = list(carry)
+        dim_map = {}
+        for i, raw in zip(dim_idxs, carry[len(carry) - len(dim_idxs) :]):
+            d = flat_initial[i]
+            size = d.dyn_size_ext.copy_template()
+            size.raw_tensor = raw
+            d_new = Dim(size, name=d.name, capacity=d.capacity)
+            dim_map[d] = d_new
+            out[i] = d_new
+        pos = 0
+        for i in var_idxs:
+            value = flat_initial[i]
+            if isinstance(value, Tensor):
+                tensor = value.copy_template()
+                if dim_map:
+                    tensor = tensor.copy_template_new_dim_tags([dim_map.get(d, d) for d in tensor.dims])
+                tensor.raw_tensor = carry[pos]
+                out[i] = tensor
+                pos += 1
+            else:
+                # noinspection PyProtectedMember
+                prev = value._backend_tensor_array
+                template = prev.template if isinstance(prev, _BufferTensorArray) else None
+                out[i] = TensorArray(
+                    tensor_template=value.tensor_template,
+                    capacity=value.capacity,
+                    _backend_tensor_array=_BufferTensorArray(
+                        capacity=value.capacity,
+                        buffer=carry[pos],
+                        index=carry[pos + 1],
+                        template=template if template is not None else value.tensor_template,
+                    ),
+                    _backend=backend,
+                )
+                pos += 2
+        return tree.unflatten_as(initial, out)
+
+    def _cond(carry: Tuple[Any, ...]) -> Any:
+        res = cond(_rebuild(carry))
+        assert isinstance(res, Tensor) and res.dims == () and res.dtype == "bool", (
+            f"while_loop: cond must return a scalar bool Tensor, got {res}"
+        )
+        return res.raw_tensor
+
+    def _body(carry: Tuple[Any, ...]) -> Tuple[Any, ...]:
+        new = body(_rebuild(carry))
+        tree.assert_same_structure(initial, new)
+        flat_new = list(tree.flatten(new))
+        # the body may hand back replaced dims; map them onto the initial ones so the carry
+        # is compared and laid out against a single set of tags
+        back_map = {}
+        for i in dim_idxs:
+            d_new = flat_new[i]
+            assert isinstance(d_new, Dim), f"while_loop: loop var {i} was a Dim, got {d_new!r}"
+            back_map[d_new] = flat_initial[i]
+        for i in var_idxs:
+            v = flat_new[i]
+            if back_map and isinstance(v, Tensor) and any(d in back_map for d in v.dims):
+                flat_new[i] = v.copy_template_new_dim_tags([back_map.get(d, d) for d in v.dims], keep_special_axes=True)
+                flat_new[i].raw_tensor = v.raw_tensor
+            before, after = flat_initial[i], flat_new[i]
+            if isinstance(before, Tensor):
+                assert isinstance(after, Tensor) and before.dims_set == after.dims_set, (
+                    f"while_loop: loop var {i} changed its dims, {before} -> {after}."
+                    f" The graph loop needs one fixed shape across iterations;"
+                    f" give the dim a capacity instead of growing it."
+                )
+        return _carry(flat_new)
+
+    init = _carry(flat_initial)
+    # Inside the graph loop every shape is static,
+    # so we must take a dim's capacity, not its dyn size.
+    with rf.set_static_traceable_ctx(True):
+        final = run_loop(_cond, _body, init)
+    return _rebuild(final)
 
 
 def scan(
