@@ -20,6 +20,7 @@ if TYPE_CHECKING:
 
     from returnn.datasets.util.vocabulary import Vocabulary
     from returnn.frontend._cache import Cache
+    from returnn.frontend.tensor_layout import TensorLayout
 
 from . import dim as _d
 from . import tensor as _t
@@ -31,7 +32,7 @@ from . import marked_dim as _m
 # (e.g. around eval), see returnn.torch.util.graph_capture.
 derived_capacity_memoized_dims = weakref.WeakSet()
 
-_seq_mask_cache: Optional[Cache] = None  # (dim, device, dim_order) -> seq mask, see Dim.get_mask
+_seq_mask_cache: Optional[Cache] = None  # (dim, device, dim_order, like layout) -> seq mask, see Dim.get_mask
 
 
 def _get_seq_mask_cache() -> Cache:
@@ -904,11 +905,21 @@ class _DimMixin:
         self._extra.cache_dyn_size_ext_dev[device] = rf.copy_to_device(self.dyn_size_ext, device=device)
         return self._extra.cache_dyn_size_ext_dev[device]
 
-    def get_mask(self: Dim, *, dim_order: Optional[Sequence[Dim]] = None, device: Optional[str] = None) -> _t.Tensor:
+    def get_mask(
+        self: Dim,
+        *,
+        dim_order: Optional[Sequence[Dim]] = None,
+        device: Optional[str] = None,
+        like: Optional[Union[_t.Tensor, TensorLayout]] = None,
+    ) -> _t.Tensor:
         """
         :param dim_order: if given, the dims of the mask will be in this order.
             This can be useful if the mask is broadcasted against some other tensor.
         :param str|None device: if given, will move the mask to this device
+        :param like: the mask uses the device (unless ``device`` is given)
+            and the storage layout of this tensor or layout (:func:`returnn.frontend.get_tensor_layout`),
+            e.g. packed like a packed ``like`` (:func:`returnn.frontend.pack`) when the mask dims cover its packed dims.
+            Use it when the mask is combined with ``like`` anyway. See :func:`returnn.frontend.full`.
         :return: if need_masking(), the corresponding mask.
             If this is e.g. the time-dim T of shape [B], then the mask will be of shape [B,T].
             The mask could be used with :func:`masked_select` (``boolean_mask``) or ``where``.
@@ -919,8 +930,10 @@ class _DimMixin:
         # noinspection PyProtectedMember
         backend = self.dyn_size_ext._raw_backend
 
+        if isinstance(like, _t.Tensor):
+            like = rf.get_tensor_layout(like)
         if not device:
-            device = rf.get_default_device()
+            device = (like.device if like is not None else None) or rf.get_default_device()
 
         dim_order_default = self.dyn_size_ext.dims + (self,)
         if dim_order is not None:
@@ -928,7 +941,7 @@ class _DimMixin:
         else:
             dim_order = dim_order_default
         cache = _get_seq_mask_cache()
-        cache_key = (self, device, dim_order)
+        cache_key = (self, device, dim_order, like)
         seq_mask = cache.get(cache_key)
         if seq_mask is not None:
             return seq_mask
@@ -937,6 +950,9 @@ class _DimMixin:
         # padded entries of the sizes (e.g. padding seqs of a batch filled up to a bound) are empty seqs
         size_ext = size_ext.copy_masked(0)
         idx_range = backend.range_over_dim(self, device=device)
+        if like is not None:
+            # the positions in the layout of like, so the mask follows it
+            idx_range = rf.zeros(dim_order_default, dtype=idx_range.dtype, device=device, like=like) + idx_range
         seq_mask = rf.compare(idx_range, "<", size_ext, allow_broadcast_all_sources=True, dim_order=dim_order)
         cache.set(cache_key, seq_mask)
         return seq_mask
