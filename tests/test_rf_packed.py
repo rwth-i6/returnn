@@ -3303,6 +3303,26 @@ def test_lstm_packed_static_traceable():
     _assert_states_equal(state_p, state_ref, [batch_dim, out_dim], [ref_batch_dim, out_dim])
 
 
+def test_lstm_packed_keeps_the_layout_of_its_input():
+    """the output of the LSTM shares the packing of its input, also a strided layout with slots longer than the content"""
+    rf.select_backend_torch()
+    x, batch_dim, time_dim, feat_dim = _make_input(seq_lens=(5, 3), feat=4, seed=17)
+    conv_dim, out_dim = Dim(6, name="conv"), Dim(6, name="out")
+    with rf.set_default_device_ctx("cpu"):
+        rf.set_random_seed(3)
+        conv = rf.Conv1d(feat_dim, conv_dim, filter_size=3, padding="same", strides=2)
+        lstm = rf.LSTM(conv_dim, out_dim)
+        lstm.bias.initial = rf.init.Glorot()
+        conv_ref, conv_time = conv(x, in_spatial_dim=time_dim)
+        out_ref, _ = lstm(conv_ref, state=lstm.default_initial_state(batch_dims=[batch_dim]), spatial_dim=conv_time)
+        conv_p, _ = conv(packed.pack(x, gap=2, align=2), in_spatial_dim=time_dim)
+        out_p, _ = lstm(conv_p, state=lstm.default_initial_state(batch_dims=[batch_dim]), spatial_dim=conv_time)
+    assert conv_p.raw_tensor.layout_lens is not None
+    assert out_p.raw_tensor.same_packing(conv_p.raw_tensor), (out_p.raw_tensor, conv_p.raw_tensor)
+    _assert_equal_non_padded(out_p, out_ref, batch_dim, conv_time)
+    _assert_equal_non_padded(out_p + conv_p, out_ref + conv_ref, batch_dim, conv_time)
+
+
 if __name__ == "__main__":
     better_exchook.install()
     if len(sys.argv) <= 1:

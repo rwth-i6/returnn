@@ -4862,7 +4862,8 @@ class PackedBackend(Backend[PackedRawTensor]):
     ) -> Tuple[Tensor, Tuple[Tensor, Tensor]]:
         """
         LSTM over the packed frames. The recurrence runs per sequence and needs one row per sequence,
-        so the source is unpacked, the inner backend runs the LSTM and the output is packed like the source.
+        so the source is unpacked, the inner backend runs the LSTM and the output takes the packing of the
+        source again, its layout included.
 
         Under static tracing the recurrence runs over the whole padded buffer, since the inner backend reads
         the sequence lengths on the host to stop at the end of every sequence. The outputs of the real frames
@@ -4884,10 +4885,10 @@ class PackedBackend(Backend[PackedRawTensor]):
         )
         padded = unpack(source)
         if rf.is_static_traceable():
-            out = _lstm_over_padded_buffer(padded, **kwargs)
+            out, state = _lstm_over_padded_buffer(padded, **kwargs)
         else:
-            out = raw.inner_backend.lstm(padded, **kwargs)
-        return _repack_result(out, raw)
+            out, state = raw.inner_backend.lstm(padded, **kwargs)
+        return _pack_plain_like(out, raw, all_dims=True), state
 
 
 # All other structural ops go through the generic dim-aware wrapper:
