@@ -6,7 +6,7 @@ Some are potentially already installed (e.g. via cache).
 """
 
 from __future__ import annotations
-from typing import Optional, List, Dict, Set
+from typing import Optional, List, Tuple, Dict, Set
 import os
 import sys
 import time
@@ -44,13 +44,10 @@ def main():
 
     py = sys.executable
     pip = [py, "-m", "pip"]
-    installed_reqs: List[str] = []
-    installed_reqs_no_deps: List[str] = []
+    pip_installs: List[Tuple[str, ...]] = []
 
     def pip_install(*install_args: str):
-        _run(*pip, "install", "--user", "--progress-bar=off", *install_args)
-        reqs = [arg for arg in install_args if not arg.startswith("-")]
-        (installed_reqs_no_deps if "--no-deps" in install_args else installed_reqs).extend(reqs)
+        pip_installs.append(install_args)  # installed below, after uninstalling what is not required
 
     with StdoutTextFold("install dependencies"):
         # Any previous cache should not really be needed, in case we install something new below.
@@ -85,35 +82,12 @@ def main():
                 # Similar like: https://github.com/tensorflow/tensorflow/issues/47802
                 pip_install("gast<=0.4.0")
 
-            # Retry several times in case download breaks. https://github.com/pypa/pip/issues/4796
-            for try_nr in range(3):
-                try:
-                    pip_install(f"tensorflow=={args.tf}")
-                    break
-                except subprocess.CalledProcessError:
-                    if try_nr >= 2:
-                        raise
+            pip_install(f"tensorflow=={args.tf}")
         else:
             tf_version = ()
 
         if args.torch:
             print("Installing PyTorch version:", args.torch)
-
-            ex_torch_version = _get_torch_version()
-            if ex_torch_version:
-                if ex_torch_version != args.torch:
-                    # Free disk space first. Can run out of disk space otherwise.
-                    # Also, remove any nvidia packages to avoid conflicts (https://github.com/rwth-i6/returnn/issues/1802).
-                    for pkg in subprocess.check_output([*pip, "freeze"]).splitlines():
-                        if pkg.startswith(b"nvidia-"):
-                            pkg_s = pkg.decode("utf-8").strip()
-                            _run(*pip, "uninstall", "-y", pkg_s)
-                    _run(*pip, "uninstall", "-y", "torch")
-                else:
-                    # Already installed, matching Torch version.
-                    # nvidia packages of another Torch version are removed with the other unneeded packages below.
-                    print(f"PyTorch {ex_torch_version} already installed.")
-
             pip_install(f"torch=={args.torch}")
             # numpy pin in the SAME resolve: recent onnxruntime requires numpy>=2, and a bare
             # install silently upgraded numpy, breaking the ABI of torch built against 1.x
@@ -206,8 +180,19 @@ def main():
             # https://github.com/rwth-i6/returnn/issues/1209
             pip_install("protobuf<=3.20.1")
 
-        # The cache can come from another job (restore-keys): remove the packages this job does not install.
-        _uninstall_user_packages_not_required(installed_reqs, no_deps_reqs=installed_reqs_no_deps)
+        # The cache can come from another job (restore-keys).
+        # Uninstall what is not required before installing (disk space, nvidia conflicts #1802), and again after.
+        _uninstall_user_packages_not_required(pip_installs, before_install=True)
+        for install_args in pip_installs:
+            # Retry several times in case download breaks. https://github.com/pypa/pip/issues/4796
+            for try_nr in range(3):
+                try:
+                    _run(*pip, "install", "--user", "--progress-bar=off", *install_args)
+                    break
+                except subprocess.CalledProcessError:
+                    if try_nr >= 2:
+                        raise
+        _uninstall_user_packages_not_required(pip_installs, before_install=False)
 
         # Any cached files should not be needed anymore.
         _run(*pip, "cache", "purge")
@@ -260,65 +245,62 @@ def _run(*args):
     subprocess.run(args, check=True)
 
 
-def _get_torch_version() -> Optional[str]:
+def _uninstall_user_packages_not_required(pip_installs: List[Tuple[str, ...]], *, before_install: bool):
     """
-    pip show torch | grep "^Version:" | cut -d' ' -f2
-    """
-    py = sys.executable
-    pip = [py, "-m", "pip"]
-    try:
-        out = subprocess.check_output(pip + ["show", "torch"])
-    except subprocess.CalledProcessError:
-        return None
-    for line in out.splitlines():
-        if line.startswith(b"Version:"):
-            line_s = line.decode("utf-8")
-            return line_s.split(" ")[1].strip()
-    raise RuntimeError("Cannot determine torch version: output:\n%s" % out.decode("utf-8"))
+    Uninstall all packages in the user site which are not in the dependency closure of the given pip installs.
 
-
-def _uninstall_user_packages_not_required(reqs: List[str], *, no_deps_reqs: List[str]):
-    """
-    Uninstall all packages in the user site which are not in the dependency closure of the given requirements.
-
-    :param reqs: requirements (as for pip install), together with their dependencies (recursively, with extras)
-    :param no_deps_reqs: requirements to keep, without their dependencies
+    :param pip_installs: args of each pip install.
+        Their requirements are kept with their dependencies (recursively, with extras), except with --no-deps.
+    :param before_install: installed versions which do not match a requirement are going to be replaced,
+        so uninstall them as well, with their dependencies
     """
     import site
     import importlib.metadata
 
     user_site = site.getusersitepackages()
-    site.addsitedir(user_site)  # it might not have existed at startup
+    if not os.path.exists(user_site):
+        return  # nothing installed yet
+    site.addsitedir(user_site)  # it might have been created only after startup
     from packaging.requirements import Requirement
     from packaging.utils import canonicalize_name
 
+    all_dists = list(importlib.metadata.distributions())
     dists: Dict[str, List[importlib.metadata.Distribution]] = {}
-    for dist in importlib.metadata.distributions():
+    for dist in all_dists:
         dists.setdefault(canonicalize_name(dist.metadata["Name"]), []).append(dist)
 
-    visited_extras: Dict[str, Set[str]] = {}  # name -> extras
-    queue = [(Requirement(req), True) for req in reqs] + [(Requirement(req), False) for req in no_deps_reqs]
+    queue = []  # (requirement, with deps)
+    for install_args in pip_installs:
+        with_deps = "--no-deps" not in install_args
+        queue += [(Requirement(arg), with_deps) for arg in install_args if not arg.startswith("-")]
+    if before_install:
+        for req, _ in queue:
+            name = canonicalize_name(req.name)
+            dists[name] = [d for d in dists.get(name, []) if req.specifier.contains(d.version, prereleases=True)]
+
+    visited_extras: Dict[str, Set[str]] = {}  # name -> extras, deps followed
+    visited_no_deps: Set[str] = set()
     while queue:
         req, with_deps = queue.pop()
         name = canonicalize_name(req.name)
+        if not with_deps:
+            visited_no_deps.add(name)
+            continue
         extras = {""} | req.extras
         if extras <= visited_extras.get(name, set()):
             continue
         visited_extras.setdefault(name, set()).update(extras)
-        if not with_deps:
-            continue
         for dist in dists.get(name, []):
             for dep_s in dist.requires or []:
                 dep = Requirement(dep_s)
                 if dep.marker is None or any(dep.marker.evaluate({"extra": extra}) for extra in extras):
                     queue.append((dep, True))
 
+    kept = {id(dist) for name in set(visited_extras) | visited_no_deps for dist in dists.get(name, [])}
     unneeded = sorted(
         dist.metadata["Name"]
-        for name, dists_ in dists.items()
-        if name not in visited_extras
-        for dist in dists_
-        if os.path.realpath(dist.locate_file("")) == os.path.realpath(user_site)
+        for dist in all_dists
+        if id(dist) not in kept and os.path.realpath(dist.locate_file("")) == os.path.realpath(user_site)
     )
     print("Packages in the user site not required by this job:", unneeded)
     if unneeded:
