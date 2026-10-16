@@ -4645,6 +4645,51 @@ def test_lstm_packed_keeps_the_layout_of_its_input():
     _assert_equal_non_padded(out_p + conv_p, out_ref + conv_ref, batch_dim, conv_time)
 
 
+def test_lstm_packed_traces_as_one_op():
+    """under static tracing the recurrence of the packed LSTM is one node of the traced graph, not one cell per frame"""
+    if not hasattr(torch.library, "custom_op"):
+        raise unittest.SkipTest("torch without torch.library.custom_op")
+    from functorch.compile import aot_function, nop
+
+    rf.select_backend_torch()
+    feat_dim, out_dim = Dim(4, name="feat"), Dim(6, name="out")
+    with rf.set_default_device_ctx("cpu"):
+        rf.set_random_seed(5)
+        lstm = rf.LSTM(feat_dim, out_dim)
+        lstm.bias.initial = rf.init.Glorot()
+    params = [lstm.ff_weight, lstm.rec_weight, lstm.bias]
+    orig_raws = [p.raw_tensor for p in params]
+    ops = []
+
+    def _record(gm, _inputs):
+        ops.extend(str(node.target) for node in gm.graph.nodes if node.op == "call_function")
+        return gm
+
+    def _total(x_raw, lens_raw, *param_raws):
+        for param, raw in zip(params, param_raws):
+            param.raw_tensor = raw
+        try:
+            batch_dim = Dim(3, name="batch")
+            time_dim = Dim(Tensor("lens", dims=[batch_dim], dtype="int32", raw_tensor=lens_raw), capacity=5)
+            x = Tensor("x", dims=[batch_dim, time_dim, feat_dim], dtype="float32", raw_tensor=x_raw)
+            with rf.set_static_traceable_ctx():
+                xp = packed.pack(x, dims=[batch_dim, time_dim], gap=1, total_bound=16)
+                out, _ = lstm(xp, state=lstm.default_initial_state(batch_dims=[batch_dim]), spatial_dim=time_dim)
+                return rf.reduce_sum(out, axis=out.dims).raw_tensor
+        finally:
+            for param, raw in zip(params, orig_raws):
+                param.raw_tensor = raw
+
+    x_raw = torch.randn(3, 5, 4, generator=torch.Generator().manual_seed(23))
+    lens_raw = torch.tensor([5, 3, 0], dtype=torch.int32)
+    inputs = [x_raw, lens_raw] + orig_raws
+    eager = _total(*inputs)
+    traced = aot_function(_total, fw_compiler=_record, bw_compiler=nop)(*inputs)
+    assert ops.count("returnn.padded_lstm.default") == 1, ops
+    assert not any("lstm_cell" in op for op in ops), ops
+    torch.testing.assert_close(traced, eager)
+
+
 if __name__ == "__main__":
     better_exchook.install()
     if len(sys.argv) <= 1:
