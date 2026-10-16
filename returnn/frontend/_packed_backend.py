@@ -2940,12 +2940,14 @@ def _lstm_over_padded_buffer(
     out_dim: Dim,
 ) -> Tuple[Tensor, Tuple[Tensor, Tensor]]:
     """
-    Runs one LSTM layer over every frame of a padded buffer, the padded frames included, without a host read.
-    Torch only, see :func:`PackedBackend.lstm`.
+    Runs one LSTM layer over every frame of a padded buffer, the padded frames included, without a host read and
+    as one op under tracing (:func:`returnn.torch.util.padded_lstm.padded_lstm`). Torch only, see
+    :func:`PackedBackend.lstm`.
 
     :return: output [spatial_dim, batch dims..., out_dim] and the state after the last frame of the buffer
     """
     import torch
+    from returnn.torch.util.padded_lstm import padded_lstm
 
     batch_dims = [d for d in source.dims if d not in (spatial_dim, in_dim)]
     source = source.copy_transpose([spatial_dim] + batch_dims + [in_dim])
@@ -2959,14 +2961,8 @@ def _lstm_over_padded_buffer(
     source_raw = torch.reshape(source.raw_tensor, [frames, batch_size, in_size])
     h_raw = torch.reshape(state_h.raw_tensor, [1, batch_size, out_size])
     c_raw = torch.reshape(state_c.raw_tensor, [1, batch_size, out_size])
-    if bias is None:
-        params, has_biases = (ff_weight.raw_tensor, rec_weight.raw_tensor), False
-    else:
-        # torch takes two bias terms, half of the one bias each, like the padded torch lstm
-        half_bias = bias.raw_tensor * 0.5
-        params, has_biases = (ff_weight.raw_tensor, rec_weight.raw_tensor, half_bias, half_bias), True
-    train = rf.get_run_ctx().is_train_flag_enabled(func=rf.LSTM.__call__)
-    out_raw, h_raw, c_raw = torch.lstm(source_raw, (h_raw, c_raw), params, has_biases, 1, 0.0, train, False, False)
+    bias_raw = None if bias is None else bias.raw_tensor
+    out_raw, h_raw, c_raw = padded_lstm(source_raw, h_raw, c_raw, ff_weight.raw_tensor, rec_weight.raw_tensor, bias_raw)
 
     out = source.copy_template_replace_dim_tag(axis=-1, new_dim_tag=out_dim, name="lstm")
     out.feature_dim = out_dim
