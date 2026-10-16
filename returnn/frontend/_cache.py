@@ -69,7 +69,8 @@ class Cache:
                     continue
                 dim = key_item.dim_ref()
                 assert isinstance(dim_orig, Dim) and isinstance(dim, Dim)
-                dim_map[dim_orig] = dim
+                if dim is not dim_orig:
+                    dim_map[dim_orig] = dim
 
         # noinspection PyShadowingNames
         def _map_output(output):
@@ -165,6 +166,8 @@ def _flat_dim_wrappers(key_transformed: Tuple[Any, ...]) -> List[Any]:
 def _get_backend(*args) -> Type[Backend]:
     args_flat = tree.flatten(args)
     for arg in args_flat:
+        if isinstance(arg, Dim) and arg.dyn_size_ext is not None:
+            arg = arg.dyn_size_ext
         if isinstance(arg, Tensor) and arg.raw_tensor is not None:
             return get_backend_by_raw_tensor_type(type(arg.raw_tensor))
     return global_backend.__class__

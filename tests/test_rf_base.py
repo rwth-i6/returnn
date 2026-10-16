@@ -1263,6 +1263,26 @@ def test_cache_tensor_key_by_raw_tensor():
     assert cache.get(("test_cache_tensor_key_by_raw_tensor", x)) is None
 
 
+def test_cache_dim_key_backend():
+    """
+    A Dim key is of the backend of its sizes:
+    dims with equal sizes in another backend do not share the entry.
+    A hit with the same dims returns the cached value itself.
+    """
+    import torch
+    from returnn.frontend._cache import Cache
+
+    rf.select_backend_torch()
+    b_dim = Dim(2, name="b")
+    t_dim = Dim(Tensor("t_lens", [b_dim], dtype="int32", raw_tensor=torch.tensor([3, 2], dtype=torch.int32)))
+    t_np_dim = Dim(Tensor("t_np_lens", [b_dim], dtype="int32", raw_tensor=numpy.array([3, 2], dtype="int32")))
+    cache = Cache(max_size=4)
+    value = rf.zeros([b_dim, t_dim])
+    cache.set(("test_cache_dim_key_backend", t_dim), value)
+    assert cache.get(("test_cache_dim_key_backend", t_np_dim)) is None
+    assert cache.get(("test_cache_dim_key_backend", t_dim)) is value
+
+
 def test_dim_bounded_by_capacity():
     from returnn.tensor import Dim, Tensor, batch_dim
 
