@@ -517,6 +517,19 @@ class RotaryPosCausalSelfAttention(CausalSelfAttention):
             if self.proj:
                 output = self.proj(output)
             return output, new_state
+        if axis == single_step_dim and state.accum_axis.dimension is None and state.accum_axis.capacity is not None:
+            # Bounded cache: it holds the keys after RoPE, so a step only rotates its own query and key,
+            # at the position it writes to (see _causal_self_att_step).
+            pos_enc = rf.sinusoidal_encoding(
+                rf.copy_to_device(state.accum_axis.dyn_size_ext, k.device),
+                feat_dim=self.key_dim_per_head,
+                base=10_000 ** (1 - 2 / self.key_dim_per_head.dimension),
+            )  # [...,D]
+            q = _apply_rope(q, pos_enc, self.key_dim_per_head)
+            k = _apply_rope(k, pos_enc, self.key_dim_per_head)
+            k, v, hist_dim, new_state = _causal_self_att_step(k, v, axis=axis, state=state, self=self)
+            output = self.attention(q, k, v, kv_axis=hist_dim)
+            return output, new_state
         k, v, hist_dim, new_state = _causal_self_att_step(k, v, axis=axis, state=state, self=self)
 
         # Apply RoPE using sinusoidal positional encoding.
