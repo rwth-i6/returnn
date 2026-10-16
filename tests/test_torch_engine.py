@@ -885,8 +885,9 @@ def _train_with_wandb_stub(
 ):
     """
     :return: (wandb_opts of the config, wandb.init kwargs, events, global train step at the end),
-        events: ("log", step, data), ("finish", exit_code), ("kill", sig)
+        events: ("log", step, data), ("finish", exit_code), ("interrupt",)
     """
+    import signal
     import types
 
     init_kwargs = []
@@ -902,6 +903,12 @@ def _train_with_wandb_stub(
     def _wandb_init(**kwargs):
         init_kwargs.append(kwargs)
         return _WandbRun()
+
+    def _interrupt_job():
+        # the interruption of the job comes back to us as SIGINT (see Engine._stop_for_resubmission)
+        events.append(("interrupt",))
+        os.kill(os.getpid(), signal.SIGINT)
+        return True
 
     wandb_opts = {"project": "test", "log_every_n_train_steps": 2}
     config = Config(
@@ -931,13 +938,12 @@ def _train_with_wandb_stub(
     try:
         with unittest.mock.patch.dict(os.environ, _env_without_wandb_defaults(), clear=True):
             with unittest.mock.patch("returnn.util.basic.slurm_time_left_sec", return_value=0):
-                with unittest.mock.patch.object(os, "kill", side_effect=lambda pid, sig: events.append(("kill", sig))):
-                    with global_config_ctx(config):
+                with unittest.mock.patch("returnn.util.basic.slurm_interrupt_job", side_effect=_interrupt_job):
+                    with _restore_signal_handlers(), global_config_ctx(config):
                         engine = Engine(config=config)
                         engine.init_train_from_config(train_data=train_dataset, dev_data=dev_dataset)
                         engine.train()
-                        # like returnn.__main__: the stop for resubmission ends in a KeyboardInterrupt
-                        engine.finalize(error_occurred=stop_for_resubmission)
+                        engine.finalize()  # like returnn.__main__
     finally:
         del sys.modules["wandb"]
     return wandb_opts, init_kwargs, events, engine.global_train_step
@@ -992,11 +998,9 @@ def test_torch_engine_wandb_default_id_per_task():
 
 
 def test_torch_engine_wandb_stop_for_resubmission():
-    import signal
-
     _, _, events, _ = _train_with_wandb_stub(num_epochs=2, stop_for_resubmission=True)
-    # the planned stop after epoch 1 finishes the run as successful, before the SIGINT
-    assert events[-2:] == [("finish", 0), ("kill", signal.SIGINT)]
+    # the planned stop after epoch 1 finishes the run as successful, before the interruption of the job
+    assert events[-2:] == [("finish", 0), ("interrupt",)]
     assert [event[0] for event in events].count("finish") == 1
     logs = [event[2] for event in events if event[0] == "log"]
     assert any("dev/ce" in data for data in logs)
