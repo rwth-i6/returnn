@@ -3338,6 +3338,41 @@ def test_creation_like_packed():
         assert rf.zeros(xp.dims, dtype="int32", like=xp64).dtype == "int32", layout
 
 
+def test_tensor_layout():
+    """get_tensor_layout: equal for tensors stored alike, and full / random like a layout as like the tensor"""
+    import gc
+    import weakref
+
+    rf.select_backend_torch()
+    x, batch_dim, time_dim, feat_dim = _make_input(batch_size=3, seq_lens=(5, 0, 3), feat=4)
+    plain = rf.get_tensor_layout(x)
+    assert plain == rf.get_tensor_layout(x * 2.0) and hash(plain) == hash(rf.get_tensor_layout(x * 2.0))
+    # noinspection PyProtectedMember
+    assert plain.backend is x._raw_backend and plain.device == "cpu" and plain.storage is None, plain
+    xp = packed.pack(x, gap=2)
+    layout = rf.get_tensor_layout(xp)
+    assert layout == rf.get_tensor_layout(xp * 2.0) and hash(layout) == hash(rf.get_tensor_layout(xp * 2.0))
+    assert layout != plain and layout != rf.get_tensor_layout(packed.pack(x, gap=1)), layout
+    assert layout.device == "cpu", layout
+    for out in (
+        rf.zeros(xp.dims, like=layout),
+        rf.full(dims=xp.dims, fill_value=1.0, like=layout),
+        rf.random_uniform(xp.dims, like=layout),
+    ):
+        assert packed.is_packed(out) and out.raw_tensor.same_packing(xp.raw_tensor), out
+        assert rf.get_tensor_layout(out) == layout, (out, layout)
+    assert not packed.is_packed(rf.zeros([time_dim, feat_dim], like=layout))
+    # the dtype comes from a like tensor only, a layout has none
+    xp64 = rf.cast(xp, "float64")
+    assert rf.zeros(xp.dims, like=xp64).dtype == "float64"
+    assert rf.zeros(xp.dims, like=rf.get_tensor_layout(xp64)).dtype == rf.get_default_float_dtype()
+    # a layout keeps no reference to the data
+    data_ref = weakref.ref(xp.raw_tensor.inner.raw_tensor)
+    del xp, xp64, out
+    gc.collect()
+    assert data_ref() is None and layout.storage.packed_dim is not None
+
+
 def test_is_finite_infinite_neg_infinite():
     rf.select_backend_torch()
     x, batch_dim, time_dim, feat_dim = _make_input(batch_size=2, seq_lens=(4, 3), feat=3)

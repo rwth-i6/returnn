@@ -411,14 +411,61 @@ def _unpack_if_packed(x):
     return x
 
 
-def _creation_storage_dims(raw: PackedRawTensor, dims: Sequence[Dim]) -> Optional[List[Dim]]:
+class _PackedStorage:
     """
-    :return: storage dims of a new tensor over ``dims`` packed like ``raw``,
-        or None if ``dims`` do not cover the packed dims (then it is plain)
+    The backend-specific part of the :class:`TensorLayout` of a packed tensor:
+    its packing, and the layout of the packed data
     """
-    if not set(raw.orig_dims).issubset(dims):
-        return None
-    return [raw.packed_dim] + [d for d in dims if d not in raw.orig_dims]
+
+    def __init__(self, raw: PackedRawTensor):
+        self.packed_dim = raw.packed_dim
+        self.orig_dims = raw.orig_dims
+        self.gap = raw.gap
+        self.align = raw.align
+        self.layout_lens = raw.layout_lens
+        self.content_bound = raw.content_bound
+        self.inner = rf.get_tensor_layout(raw.inner)
+
+    def __repr__(self):
+        return f"_PackedStorage({self.orig_dims} -> {self.packed_dim}, gap={self.gap}, align={self.align})"
+
+    def _key(self) -> Tuple[Any, ...]:
+        # the packing as in PackedRawTensor.same_packing (layout lens by identity), and the layout of the packed data
+        return self.packed_dim, self.orig_dims, self.gap, self.align, id(self.layout_lens), self.inner
+
+    def __eq__(self, other):
+        if isinstance(other, _PackedStorage):
+            return self._key() == other._key()
+        return False
+
+    def __hash__(self):
+        return hash(self._key())
+
+    def storage_dims(self, dims: Sequence[Dim]) -> Optional[List[Dim]]:
+        """
+        :return: storage dims of a new tensor over ``dims`` with this packing,
+            or None if ``dims`` do not cover the packed dims (then it is plain)
+        """
+        if not set(self.orig_dims).issubset(dims):
+            return None
+        return [self.packed_dim] + [d for d in dims if d not in self.orig_dims]
+
+    def rewrap(self, inner_out: Tensor, *, name: str) -> Tensor:
+        """
+        :param inner_out: over the packed dim
+        :param name: of the result
+        :return: tensor with this packing over ``inner_out``
+        """
+        helper = PackedRawTensor(
+            inner=inner_out,
+            packed_dim=self.packed_dim,
+            orig_dims=self.orig_dims,
+            gap=self.gap,
+            align=self.align,
+            layout_lens=self.layout_lens,
+            content_bound=self.content_bound,
+        )
+        return helper.rewrap(inner_out, name=name)
 
 
 _warned_fallback_ops: Set[str] = set()
@@ -3011,6 +3058,12 @@ class PackedBackend(Backend[PackedRawTensor]):
         """:return: device of the packed data"""
         return _raw(x).inner.device
 
+    @classmethod
+    def get_tensor_layout(cls, x: Tensor) -> rf.TensorLayout:
+        """:return: layout of ``x``: its packing, and the layout of its packed data"""
+        storage = _PackedStorage(_raw(x))
+        return rf.TensorLayout(backend=cls, device=storage.inner.device, storage=storage)
+
     @staticmethod
     def full(
         dims: Sequence[Dim],
@@ -3020,11 +3073,12 @@ class PackedBackend(Backend[PackedRawTensor]):
         device: Optional[str] = None,
         sparse_dim: Optional[Dim] = None,
         feature_dim: Optional[Dim] = None,
-        like: Optional[Tensor] = None,
+        like: Optional[rf.TensorLayout] = None,
     ) -> Tensor:
         """full -- packed like ``like`` if ``dims`` cover its packed dims, otherwise plain"""
-        raw = _raw(like)
-        storage_dims = _creation_storage_dims(raw, dims)
+        storage = like.storage
+        assert isinstance(storage, _PackedStorage), f"packed full: {like} is not a packed layout"
+        storage_dims = storage.storage_dims(dims)
         out = rf.full(
             dims=dims if storage_dims is None else storage_dims,
             fill_value=fill_value,
@@ -3032,9 +3086,9 @@ class PackedBackend(Backend[PackedRawTensor]):
             device=device,
             sparse_dim=sparse_dim,
             feature_dim=feature_dim,
-            like=raw.inner,
+            like=storage.inner,
         )
-        return out if storage_dims is None else raw.rewrap(out, name="full")
+        return out if storage_dims is None else storage.rewrap(out, name="full")
 
     @staticmethod
     def random(
@@ -3056,12 +3110,13 @@ class PackedBackend(Backend[PackedRawTensor]):
         auto_update_state: Optional[bool] = None,
         static: Optional[bool] = None,
         out: Optional[Tensor] = None,
-        like: Optional[Tensor] = None,
+        like: Optional[rf.TensorLayout] = None,
     ) -> Tensor:
         """random -- drawn in the packed storage of ``like`` if ``dims`` cover its packed dims, otherwise plain"""
         assert out is None, "packed random: out not supported"
-        raw = _raw(like)
-        storage_dims = _creation_storage_dims(raw, dims)
+        storage = like.storage
+        assert isinstance(storage, _PackedStorage), f"packed random: {like} is not a packed layout"
+        storage_dims = storage.storage_dims(dims)
         res = rf.random(
             dims=dims if storage_dims is None else storage_dims,
             dtype=dtype,
@@ -3079,9 +3134,9 @@ class PackedBackend(Backend[PackedRawTensor]):
             explicit_state=explicit_state,
             auto_update_state=auto_update_state,
             static=static,
-            like=raw.inner,
+            like=storage.inner,
         )
-        return res if storage_dims is None else raw.rewrap(res, name=f"random_{distribution}")
+        return res if storage_dims is None else storage.rewrap(res, name=f"random_{distribution}")
 
     @staticmethod
     def replace_dim(source: Tensor, *, in_dim: Dim, out_dim: Dim) -> Tensor:

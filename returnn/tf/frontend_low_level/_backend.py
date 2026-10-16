@@ -1687,7 +1687,7 @@ class TFBackend(Backend[tf.Tensor]):
         device: Optional[str] = None,
         sparse_dim: Optional[Dim] = None,
         feature_dim: Optional[Dim] = None,
-        like: Optional[Tensor] = None,
+        like: Optional[rf.TensorLayout] = None,
     ) -> Tensor:
         """
         :param dims:
@@ -2735,7 +2735,7 @@ class TFBackend(Backend[tf.Tensor]):
         auto_update_state: Optional[bool] = None,
         static: Optional[bool] = None,
         out: Optional[Tensor] = None,
-        like: Optional[Tensor] = None,
+        like: Optional[rf.TensorLayout] = None,
     ) -> Tensor:
         """
         random. See `rf.random` for details.

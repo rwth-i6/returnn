@@ -54,6 +54,7 @@ from .run_ctx import *
 from .signal import *
 from .static_traceable import *
 from .stepwise_scheduler import *
+from .tensor_layout import *
 from .types import *
 
 # Modules not in the main namespace but in sub namespaces.
