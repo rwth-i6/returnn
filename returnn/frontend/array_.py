@@ -840,10 +840,13 @@ def masked_scatter(
     return res
 
 
-def sequence_mask(dims: Union[Dim, Sequence[Dim]], *, device: Optional[str] = None) -> Tensor:
+def sequence_mask(
+    dims: Union[Dim, Sequence[Dim]], *, device: Optional[str] = None, like: Optional[Tensor] = None
+) -> Tensor:
     """
     :param dims:
     :param device:
+    :param like: the mask follows the device and storage layout of this tensor, see :func:`Dim.get_mask`
     :return: mask based on the sequence lengths
     """
     if isinstance(dims, Dim):
@@ -854,7 +857,7 @@ def sequence_mask(dims: Union[Dim, Sequence[Dim]], *, device: Optional[str] = No
         return rf.constant(True, dims=())
     mask = True
     for dim in dyn_dims:
-        mask = rf.opt_logical_and(mask, dim.get_mask(dim_order=dims, device=device))
+        mask = rf.opt_logical_and(mask, dim.get_mask(dim_order=dims, device=device, like=like))
     return mask
 
 

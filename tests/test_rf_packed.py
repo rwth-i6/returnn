@@ -3373,6 +3373,58 @@ def test_tensor_layout():
     assert data_ref() is None and layout.storage.packed_dim is not None
 
 
+def test_sequence_mask_like_packed():
+    """the mask over the packed dims of a packed like is laid out like it, without the padded [batch, time] rectangle"""
+    # noinspection PyProtectedMember
+    from torch.utils._python_dispatch import TorchDispatchMode
+    from torch.utils._pytree import tree_leaves
+
+    class _OutShapes(TorchDispatchMode):
+        """records the shapes of all op outputs"""
+
+        def __init__(self):
+            super().__init__()
+            self.shapes = set()
+
+        def __torch_dispatch__(self, func, types, args=(), kwargs=None):
+            out = func(*args, **(kwargs or {}))
+            self.shapes.update(tuple(t.shape) for t in tree_leaves(out) if isinstance(t, torch.Tensor))
+            return out
+
+    rf.select_backend_torch()
+    seq_lens = (5, 3, 0, 2)
+    x, batch_dim, time_dim, feat_dim = _make_input(batch_size=4, seq_lens=seq_lens, feat=3)
+    ref = rf.cast(rf.sequence_mask([batch_dim, time_dim]), "float32")
+    for layout in (dict(), dict(gap=2, align=4), dict(total_bound=24)):
+        xp = packed.pack(x, **layout)
+        # eager, the frame coords of a packing come from a padded int grid, once per packing (layout cache)
+        time_dim.get_mask(like=xp)
+        with _OutShapes() as out_shapes:
+            masks = [rf.sequence_mask([batch_dim, time_dim, feat_dim], like=xp), time_dim.get_mask(like=xp)]
+        assert (4, 5) not in out_shapes.shapes, (layout, out_shapes.shapes)
+        for mask in masks:
+            assert packed.is_packed(mask) and mask.raw_tensor.same_packing(xp.raw_tensor), (layout, mask)
+            assert mask.dtype == "bool", (layout, mask)
+            _assert_equal_non_padded(rf.cast(mask, "float32"), ref, batch_dim, time_dim)
+            _assert_equal_non_padded(rf.where(mask, xp, -1.0), x, batch_dim, time_dim)
+    # plain like: the same mask as without
+    assert time_dim.get_mask(like=x).raw_tensor.tolist() == time_dim.get_mask().raw_tensor.tolist()
+    # the device follows like
+    with rf.set_default_device_ctx("meta"):
+        assert time_dim.get_mask(like=xp).device == "cpu" and time_dim.get_mask(like=x).device == "cpu"
+
+    # static traceable, bounded batch: the mask covers the packed buffer, whatever the batch capacity
+    for capacity in (4, 40):
+        batch_dim, time_dim = _bounded_batch([2, 0, 3], capacity=capacity)
+        x = Tensor("x", dims=[batch_dim, time_dim, feat_dim], dtype="float32", raw_tensor=torch.ones(capacity, 3, 3))
+        with rf.set_static_traceable_ctx():
+            xp = packed.pack(x, dims=[batch_dim, time_dim], gap=1, total_bound=48)
+            with _OutShapes() as out_shapes:
+                mask = time_dim.get_mask(like=xp)
+        assert packed.is_packed(mask) and tuple(mask.raw_tensor.inner.raw_tensor.shape) == (48,), (capacity, mask)
+        assert (capacity, 3) not in out_shapes.shapes, (capacity, out_shapes.shapes)
+
+
 def test_is_finite_infinite_neg_infinite():
     rf.select_backend_torch()
     x, batch_dim, time_dim, feat_dim = _make_input(batch_size=2, seq_lens=(4, 3), feat=3)

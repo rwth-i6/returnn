@@ -896,11 +896,20 @@ class _DimMixin:
         self._extra.cache_dyn_size_ext_dev[device] = rf.copy_to_device(self.dyn_size_ext, device=device)
         return self._extra.cache_dyn_size_ext_dev[device]
 
-    def get_mask(self: Dim, *, dim_order: Optional[Sequence[Dim]] = None, device: Optional[str] = None) -> _t.Tensor:
+    def get_mask(
+        self: Dim,
+        *,
+        dim_order: Optional[Sequence[Dim]] = None,
+        device: Optional[str] = None,
+        like: Optional[_t.Tensor] = None,
+    ) -> _t.Tensor:
         """
         :param dim_order: if given, the dims of the mask will be in this order.
             This can be useful if the mask is broadcasted against some other tensor.
         :param str|None device: if given, will move the mask to this device
+        :param like: the mask uses the device (unless ``device`` is given) and the storage layout of this tensor,
+            e.g. packed like a packed ``like`` (:func:`returnn.frontend.pack`) when the mask dims cover its packed dims.
+            Use it when the mask is combined with ``like`` anyway. See :func:`returnn.frontend.full`.
         :return: if need_masking(), the corresponding mask.
             If this is e.g. the time-dim T of shape [B], then the mask will be of shape [B,T].
             The mask could be used with :func:`masked_select` (``boolean_mask``) or ``where``.
@@ -912,7 +921,7 @@ class _DimMixin:
         backend = self.dyn_size_ext._raw_backend
 
         if not device:
-            device = rf.get_default_device()
+            device = (like.device if like is not None else None) or rf.get_default_device()
 
         self._make_extra()
         dim_order_default = self.dyn_size_ext.dims + (self,)
@@ -921,22 +930,27 @@ class _DimMixin:
         else:
             dim_order = dim_order_default
         cache_key = (device, dim_order)
-        if cache_key in self._extra.cache_seq_mask:
-            return self._extra.cache_seq_mask[cache_key]
+        if like is None:  # with like, the mask depends on the layout of like
+            if cache_key in self._extra.cache_seq_mask:
+                return self._extra.cache_seq_mask[cache_key]
 
-        if self._extra.copy_same_as:
-            if dim_order:
-                dim_order = tuple(self._extra.copy_same_as if d == self else d for d in dim_order)
-            mask = self._extra.copy_same_as.get_mask(dim_order=dim_order, device=device)
-            mask, _ = rf.replace_dim(mask, in_dim=self._extra.copy_same_as, out_dim=self)
-            return mask
+            if self._extra.copy_same_as:
+                if dim_order:
+                    dim_order = tuple(self._extra.copy_same_as if d == self else d for d in dim_order)
+                mask = self._extra.copy_same_as.get_mask(dim_order=dim_order, device=device)
+                mask, _ = rf.replace_dim(mask, in_dim=self._extra.copy_same_as, out_dim=self)
+                return mask
 
         size_ext = self.get_dyn_size_ext_for_device(device)
         # padded entries of the sizes (e.g. padding seqs of a batch filled up to a bound) are empty seqs
         size_ext = size_ext.copy_masked(0)
         idx_range = backend.range_over_dim(self, device=device)
+        if like is not None:
+            # the positions in the layout of like, so the mask follows it
+            idx_range = rf.zeros(dim_order_default, dtype=idx_range.dtype, device=device, like=like) + idx_range
         seq_mask = rf.compare(idx_range, "<", size_ext, allow_broadcast_all_sources=True, dim_order=dim_order)
-        self._extra.cache_seq_mask[cache_key] = seq_mask
+        if like is None:
+            self._extra.cache_seq_mask[cache_key] = seq_mask
         return seq_mask
 
     def is_batch_dim(self):
