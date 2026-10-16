@@ -1326,6 +1326,24 @@ def test_cache_dim_key_backend():
     assert cache.get(("test_cache_dim_key_backend", t_dim)) is value
 
 
+def test_cache_scalar_dim_key_with_capacity():
+    """a scalar dyn dim key with a capacity is keyed by its size, not by the capacity"""
+    import torch
+    from returnn.frontend._cache import Cache
+
+    rf.select_backend_torch()
+
+    def _hist_dim(size: int) -> Dim:
+        return Dim(Tensor("hist_size", [], dtype="int32", raw_tensor=torch.tensor(size, dtype=torch.int32)), capacity=5)
+
+    hist2_dim, hist3_dim, hist3b_dim = _hist_dim(2), _hist_dim(3), _hist_dim(3)
+    cache = Cache(max_size=4)
+    cache.set(("test_cache_scalar_dim_key_with_capacity", hist2_dim), 2)
+    assert cache.get(("test_cache_scalar_dim_key_with_capacity", hist3_dim)) is None
+    cache.set(("test_cache_scalar_dim_key_with_capacity", hist3_dim), 3)
+    assert cache.get(("test_cache_scalar_dim_key_with_capacity", hist3b_dim)) == 3
+
+
 def test_dim_bounded_by_capacity():
     from returnn.tensor import Dim, Tensor, batch_dim
 
