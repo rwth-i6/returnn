@@ -93,7 +93,8 @@ def _register_ops() -> Optional[Tuple[Callable[..., _LstmOutputs], Callable[...,
         rec_weight: torch.Tensor,
         bias: Optional[torch.Tensor],
     ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-        return _lstm(source, h0, c0, ff_weight, rec_weight, bias, train=False)
+        out, hy, cy = _lstm(source, h0, c0, ff_weight, rec_weight, bias, train=False)
+        return out.contiguous(), hy.contiguous(), cy.contiguous()
 
     @fwd.register_fake
     def _fwd_fake(
@@ -106,7 +107,7 @@ def _register_ops() -> Optional[Tuple[Callable[..., _LstmOutputs], Callable[...,
     ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         del ff_weight, rec_weight, bias
         out = source.new_empty((source.shape[0], source.shape[1], h0.shape[-1]))
-        return out, torch.empty_like(h0), torch.empty_like(c0)
+        return out, h0.new_empty(h0.shape), c0.new_empty(c0.shape)
 
     @custom_op("returnn::padded_lstm_bwd", mutates_args=())
     def bwd(
@@ -144,7 +145,10 @@ def _register_ops() -> Optional[Tuple[Callable[..., _LstmOutputs], Callable[...,
                         [outs[index] for index, _ in given], leaves, [grad for _, grad in given], allow_unused=True
                     )
                 )
-        result = [torch.zeros_like(leaf) if grad is None else grad.clone() for grad, leaf in zip(grads, leaves)]
+        result = [
+            leaf.new_zeros(leaf.shape) if grad is None else grad.clone(memory_format=torch.contiguous_format)
+            for grad, leaf in zip(grads, leaves)
+        ]
         if bias is None:
             result.append(source.new_empty(0))
         return result[0], result[1], result[2], result[3], result[4], result[5]
@@ -162,13 +166,13 @@ def _register_ops() -> Optional[Tuple[Callable[..., _LstmOutputs], Callable[...,
         d_cy: Optional[torch.Tensor],
     ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
         del d_out, d_hy, d_cy
-        bias_grad = source.new_empty(0) if bias is None else torch.empty_like(bias)
+        bias_grad = source.new_empty(0) if bias is None else bias.new_empty(bias.shape)
         return (
-            torch.empty_like(source),
-            torch.empty_like(h0),
-            torch.empty_like(c0),
-            torch.empty_like(ff_weight),
-            torch.empty_like(rec_weight),
+            source.new_empty(source.shape),
+            h0.new_empty(h0.shape),
+            c0.new_empty(c0.shape),
+            ff_weight.new_empty(ff_weight.shape),
+            rec_weight.new_empty(rec_weight.shape),
             bias_grad,
         )
 
