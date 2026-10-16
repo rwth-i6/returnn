@@ -1542,6 +1542,28 @@ def test_mask_nested_dim_value_is_true_size():
         assert merged_size[b] == expected, f"batch {b}: merged {merged_size[b]}, expected {expected}"
 
 
+def test_mask_nested_dims_static_traceable_on_device():
+    # Under static tracing, merging two dims keeps their sizes on the device of the mask:
+    # a read at the default dim-size device (CPU) is a host sync, illegal under CUDA graph capture.
+    import torch
+    import unittest
+
+    if not torch.cuda.is_available():
+        raise unittest.SkipTest("cuda only: needs a device other than the default dim-size device")
+    rf.select_backend_torch()
+    batch = Dim(3, name="batch")
+    sizes_a = Tensor("a", [batch], dtype="int32", raw_tensor=torch.tensor([2, 3, 1], dtype=torch.int32, device="cuda"))
+    sizes_b = Tensor("b", [batch], dtype="int32", raw_tensor=torch.tensor([3, 4, 2], dtype=torch.int32, device="cuda"))
+    dim_a = Dim(sizes_a, name="a", capacity=4)
+    dim_b = Dim(sizes_b, name="b", capacity=4)
+    mask = Tensor("mask", [batch], dtype="bool", raw_tensor=torch.tensor([True, False, True], device="cuda"))
+    with rf.set_default_device_ctx("cuda"), rf.set_static_traceable_ctx():
+        merged = rf.nested.mask_nested(dim_a, mask=mask, mask_value=dim_b)
+    assert merged.capacity == 4
+    assert merged.dyn_size_ext.raw_tensor.device.type == "cuda"
+    assert merged.dyn_size_ext.raw_tensor.tolist() == [2, 4, 1]
+
+
 def test_masked_select_out_dim_value_is_true_count():
     # The packed dim of masked_select must report the true count, not the input extent.
     # A static select axis is the case that bites: static dims always carry a capacity,
