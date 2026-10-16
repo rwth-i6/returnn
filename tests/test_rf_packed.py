@@ -3315,7 +3315,7 @@ def test_lstm_packed_keeps_the_layout_of_its_input():
         lstm.bias.initial = rf.init.Glorot()
         conv_ref, conv_time = conv(x, in_spatial_dim=time_dim)
         out_ref, _ = lstm(conv_ref, state=lstm.default_initial_state(batch_dims=[batch_dim]), spatial_dim=conv_time)
-        conv_p, _ = conv(packed.pack(x, gap=2, align=2), in_spatial_dim=time_dim)
+        conv_p, _ = conv(packed.pack(x, gap=2, align=2, total_bound=16), in_spatial_dim=time_dim)
         out_p, _ = lstm(conv_p, state=lstm.default_initial_state(batch_dims=[batch_dim]), spatial_dim=conv_time)
     assert conv_p.raw_tensor.layout_lens is not None
     assert out_p.raw_tensor.same_packing(conv_p.raw_tensor), (out_p.raw_tensor, conv_p.raw_tensor)
