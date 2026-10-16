@@ -19,6 +19,7 @@ if TYPE_CHECKING:
     from .dim import Dim
 
     from returnn.datasets.util.vocabulary import Vocabulary
+    # noinspection PyProtectedMember
     from returnn.frontend._cache import Cache
     from returnn.frontend.tensor_layout import TensorLayout
 
@@ -38,6 +39,7 @@ _seq_mask_cache: Optional[Cache] = None  # (dim, device, dim_order, like layout)
 def _get_seq_mask_cache() -> Cache:
     global _seq_mask_cache
     if _seq_mask_cache is None:
+        # noinspection PyProtectedMember
         from returnn.frontend import _cache  # not at module level: returnn.frontend imports returnn.tensor
 
         _seq_mask_cache = _cache.Cache(32)  # about 10 masks per step in a Conformer AED
