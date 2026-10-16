@@ -19,6 +19,7 @@ if TYPE_CHECKING:
     from .dim import Dim
 
     from returnn.datasets.util.vocabulary import Vocabulary
+    from returnn.frontend._cache import Cache
 
 from . import dim as _d
 from . import tensor as _t
@@ -29,6 +30,17 @@ from . import marked_dim as _m
 # The bound-shape regime clears them when it disables its declared capacities
 # (e.g. around eval), see returnn.torch.util.graph_capture.
 derived_capacity_memoized_dims = weakref.WeakSet()
+
+_seq_mask_cache: Optional[Cache] = None  # (dim, device, dim_order) -> seq mask, see Dim.get_mask
+
+
+def _get_seq_mask_cache() -> Cache:
+    global _seq_mask_cache
+    if _seq_mask_cache is None:
+        from returnn.frontend import _cache  # not at module level: returnn.frontend imports returnn.tensor
+
+        _seq_mask_cache = _cache.Cache(32)  # about 10 masks per step in a Conformer AED
+    return _seq_mask_cache
 
 
 class DimTypes:
@@ -141,7 +153,6 @@ class _DimExtra:
         # They each have same_as = self. The same_base should have the base (global) batch info.
         self.same_for_batch_ctx: Dict[Tuple[BatchInfo, Optional[ControlFlowContext]], Dim] = {}
         self.cache_dyn_size_ext_dev: Dict[str, _t.Tensor] = {}  # device -> dyn_size_ext
-        self.cache_seq_mask: Dict[Tuple[str, Optional[Tuple[Dim, ...]]], _t.Tensor] = {}  # (dev,dim_order) -> seq_mask
         self.cache_dim_math = _CacheDimMath()  # op (add,sub,...), operand -> Dim
 
     @property
@@ -161,7 +172,6 @@ class _DimExtra:
         d["batch"] = None
         d["same_for_batch_ctx"] = {}
         d["cache_dyn_size_ext_dev"] = {}
-        d["cache_seq_mask"] = {}
         d["cache_dim_math"] = {}
         d["kind"] = self.kind.name if self.kind else None
         d.pop("_dim_ref", None)
@@ -455,7 +465,6 @@ class _DimMixin:
             dim_extra = dim._extra
             if dim_extra:
                 dim_extra.cache_dyn_size_ext_dev.clear()
-                dim_extra.cache_seq_mask.clear()
                 if dim.dyn_size_ext is not None or dim.dimension is None:
                     dim_extra.cache_dim_math.clear()
                 else:
@@ -768,7 +777,6 @@ class _DimMixin:
         """
         if self._extra:
             self._extra.same_for_batch_ctx.pop((self.batch, self.control_flow_ctx), None)
-            self._extra.cache_seq_mask.clear()
             self._extra.cache_dyn_size_ext_dev.clear()
         self.batch = None
         self.control_flow_ctx = None
@@ -914,29 +922,23 @@ class _DimMixin:
         if not device:
             device = rf.get_default_device()
 
-        self._make_extra()
         dim_order_default = self.dyn_size_ext.dims + (self,)
         if dim_order is not None:
             dim_order = tuple([d for d in dim_order if d in dim_order_default])  # filter
         else:
             dim_order = dim_order_default
-        cache_key = (device, dim_order)
-        if cache_key in self._extra.cache_seq_mask:
-            return self._extra.cache_seq_mask[cache_key]
-
-        if self._extra.copy_same_as:
-            if dim_order:
-                dim_order = tuple(self._extra.copy_same_as if d == self else d for d in dim_order)
-            mask = self._extra.copy_same_as.get_mask(dim_order=dim_order, device=device)
-            mask, _ = rf.replace_dim(mask, in_dim=self._extra.copy_same_as, out_dim=self)
-            return mask
+        cache = _get_seq_mask_cache()
+        cache_key = (self, device, dim_order)
+        seq_mask = cache.get(cache_key)
+        if seq_mask is not None:
+            return seq_mask
 
         size_ext = self.get_dyn_size_ext_for_device(device)
         # padded entries of the sizes (e.g. padding seqs of a batch filled up to a bound) are empty seqs
         size_ext = size_ext.copy_masked(0)
         idx_range = backend.range_over_dim(self, device=device)
         seq_mask = rf.compare(idx_range, "<", size_ext, allow_broadcast_all_sources=True, dim_order=dim_order)
-        self._extra.cache_seq_mask[cache_key] = seq_mask
+        cache.set(cache_key, seq_mask)
         return seq_mask
 
     def is_batch_dim(self):
