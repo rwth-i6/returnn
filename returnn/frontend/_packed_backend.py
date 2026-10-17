@@ -1360,13 +1360,20 @@ def _conform_packing(x, target_raw: PackedRawTensor):
     return x
 
 
-def _conformed_inner(x: Tensor, target_raw: PackedRawTensor) -> Optional[Tensor]:
+def _conformed_inner(x: Any, target_raw: PackedRawTensor, *, all_dims: bool = False) -> Optional[Any]:
     """
-    :param x: packed
+    :param x: an operand of an op on target_raw's inner buffer: packed, plain, or a scalar
     :param target_raw: the packing to read x in
-    :return: the inner buffer of x in target_raw's packing (see :func:`_conform_packing`),
+    :param all_dims: see :func:`_pack_plain_like`
+    :return: what the op runs on next to target_raw's inner buffer:
+        the inner buffer of x in target_raw's packing, a plain x over the packed dims packed alike first
+        (see :func:`_pack_plain_like`) and a packed x over the same sequences regapped (see :func:`_conform_packing`);
+        a plain x not over the packed dims, or a scalar, as it is (it broadcasts over the frames);
         or None if x is packed over other sequences, whose rows are not the rows of target_raw
     """
+    x = _pack_plain_like(x, target_raw, all_dims=all_dims)
+    if not (isinstance(x, Tensor) and is_packed(x)):
+        return x
     x_raw = _raw(_conform_packing(x, target_raw))
     return x_raw.inner if target_raw.same_packing(x_raw) else None
 
@@ -1407,11 +1414,9 @@ def _elementwise_inner_operands(operands: Sequence[Any]) -> Tuple[PackedRawTenso
     raw0 = next(x.raw_tensor for x in operands if isinstance(x, Tensor) and is_packed(x))
     inner_operands = []
     for x in operands:
-        x = _pack_plain_like(x, raw0)
-        if isinstance(x, Tensor) and is_packed(x):
-            x = _conformed_inner(x, raw0)
-            if x is None:
-                return raw0, None
+        x = _conformed_inner(x, raw0)
+        if x is None:
+            return raw0, None
         inner_operands.append(x)
     return raw0, inner_operands
 
@@ -4265,11 +4270,9 @@ class PackedBackend(Backend[PackedRawTensor]):
             return _dim_aware_call("concat", sources, kwargs)
         inner_sources = []
         for src, dim in sources:
-            src = _pack_plain_like(src, raw0)
-            if is_packed(src):
-                src = _conformed_inner(src, raw0)
-                if src is None:
-                    return _dim_aware_call("concat", sources, kwargs)
+            src = _conformed_inner(src, raw0)
+            if src is None:
+                return _dim_aware_call("concat", sources, kwargs)
             inner_sources.append((src, dim))
         out, _ = rf.concat(*inner_sources, allow_broadcast=allow_broadcast, out_dim=out_dim, handle_dynamic_dims=False)
         res = raw0.rewrap(out, name="concat")
@@ -4354,12 +4357,7 @@ class PackedBackend(Backend[PackedRawTensor]):
             if axis not in raw.orig_dims and axis != raw.packed_dim and axis in source.dims:
                 # gather along a plain axis with per-frame indices (e.g. a position drawn per frame):
                 # elementwise on the inner buffer, the packing is untouched
-                if is_packed(indices):
-                    idx = _conformed_inner(indices, raw)
-                elif set(indices.dims) & set(raw.orig_dims):
-                    idx = _pack_like(indices, raw)
-                else:
-                    idx = indices  # no packed dims involved at all
+                idx = _conformed_inner(indices, raw)
                 if idx is not None:
                     out = raw.rewrap(
                         rf.gather(raw.inner, indices=idx, axis=axis, clip_to_valid=clip_to_valid), name="gather"
@@ -4374,12 +4372,10 @@ class PackedBackend(Backend[PackedRawTensor]):
             if out is not None:
                 return out
             return _dim_aware_call("gather", (source,), kwargs)
-        if is_packed(indices):
+        if is_packed(indices) or set(indices.dims).issubset(set(raw.orig_dims)):
             idx = _conformed_inner(indices, raw)
             if idx is None:
                 return _dim_aware_call("gather", (source,), kwargs)
-        elif set(indices.dims).issubset(set(raw.orig_dims)):
-            idx = _pack_like(indices, raw)
         else:
             out_spatial_dim = _gather_relayout_out_dim(indices, raw)
             if out_spatial_dim is None:
@@ -4636,7 +4632,7 @@ class PackedBackend(Backend[PackedRawTensor]):
         dev = in_raw.inner.device
 
         # durations, in this buffer's layout, with gap and junk frames contributing nothing
-        r_inner = _conformed_inner(_pack_plain_like(repeats, in_raw), in_raw)
+        r_inner = _conformed_inner(repeats, in_raw)
         assert r_inner is not None, f"packed repeat: repeats {repeats} not over {in_raw.orig_dims}"  # rf.repeat checks
         r_mask = _frame_mask(in_raw)
         if r_mask is not None:
@@ -5083,13 +5079,10 @@ def _scatter_relayout(
     out_size = out_spatial_dim.dyn_size_ext
     if out_size is None or out_size.dims != (batch,) or out_spatial_dim in raw.inner.dims:
         return None  # no packing over (batch, out dim) describes the result
-    if is_packed(indices):
-        idx = _conformed_inner(indices, raw)
-        if idx is None:
-            return None
-    elif set(indices.dims) <= set(raw.orig_dims):
-        idx = _pack_like(indices, raw)
-    else:
+    if not (is_packed(indices) or set(indices.dims) <= set(raw.orig_dims)):
+        return None
+    idx = _conformed_inner(indices, raw)
+    if idx is None:
         return None
 
     dev = raw.inner.device
