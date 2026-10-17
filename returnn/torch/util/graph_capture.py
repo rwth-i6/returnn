@@ -1622,10 +1622,8 @@ class GraphCapturedForwardStep:
         assert torch.__version__ >= (2, 14), f"torch_cuda_graph forward needs torch >= 2.14, got {torch.__version__}"
         opts = CollectionReadCheckCovered(opts)
         assert opts["forward"] is True, f"torch_cuda_graph: forward must be True here, got {opts['forward']!r}"
-        mask_padding_seqs: Optional[bool] = opts.get("mask_padding_seqs", None)
-        if mask_padding_seqs is None:
-            mask_padding_seqs = BehaviorVersion.get() >= 36
-        assert mask_padding_seqs, "torch_cuda_graph forward needs mask_padding_seqs (padding seqs are no outputs)"
+        # the padding seqs must not become outputs, so the batch dim always keeps the real batch size here
+        assert opts.get("mask_padding_seqs", True), "torch_cuda_graph forward: mask_padding_seqs False not supported"
         self._batch_size_bound = int(opts["batch_size_bound"])
         self._capacity_buckets: Dict[str, List[int]] = {
             k: sorted([v] if isinstance(v, int) else list(v)) for k, v in dict(opts["dim_capacity"]).items()
@@ -1768,7 +1766,6 @@ class _ForwardProgram:
     def __init__(self, inputs: _StaticBatchInputs):
         self.inputs = inputs
         self.graph: Optional[torch.cuda.CUDAGraph] = None
-        self._batch_dim: Optional[Dim] = None
         # per output: name, template, raw (a stable graph output, refreshed in place by each replay)
         self._outputs: List[Tuple[str, Tensor, torch.Tensor]] = []
         # per dyn dim of the outputs (except the batch dim): its dyn size template and raw
@@ -1779,7 +1776,6 @@ class _ForwardProgram:
         Keep the outputs of the capture, with the dyn sizes of their dims,
         as they are now: the template dims get reset by later steps and captures.
         """
-        self._batch_dim = batch_dim
         for name, v in outputs.data.items():
             self._outputs.append((name, v.copy_template(), v.raw_tensor))
             for d in v.dims:
