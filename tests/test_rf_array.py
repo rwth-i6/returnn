@@ -1542,26 +1542,48 @@ def test_mask_nested_dim_value_is_true_size():
         assert merged_size[b] == expected, f"batch {b}: merged {merged_size[b]}, expected {expected}"
 
 
-def test_mask_nested_dims_static_traceable_on_device():
-    # Under static tracing, merging two dims keeps their sizes on the device of the mask:
-    # a read at the default dim-size device (CPU) is a host sync, illegal under CUDA graph capture.
+def _check_mask_nested_kv_states(*, device: str, static: bool):
+    # Two nested states, each a bounded per-hypothesis history dim and a KV tensor over it, as in beam search.
+    import contextlib
+    import torch
+
+    rf.select_backend_torch()
+    batch = Dim(3, name="batch")
+    feat = Dim(2, name="feat")
+    states = []
+    for name, lens in [("a", [2, 3, 1]), ("b", [3, 4, 2])]:
+        sizes = Tensor(name, [batch], dtype="int32", raw_tensor=torch.tensor(lens, dtype=torch.int32, device=device))
+        hist_dim = Dim(sizes, name=f"hist_{name}", capacity=4)
+        kv = Tensor(f"kv_{name}", [batch, hist_dim, feat], dtype="float32")
+        kv.raw_tensor = torch.full((3, 4, 2), float(len(states) + 1), device=device)
+        states.append((kv, hist_dim))
+    mask = Tensor("mask", [batch], dtype="bool", raw_tensor=torch.tensor([True, False, True], device=device))
+    with rf.set_default_device_ctx(device), rf.set_static_traceable_ctx() if static else contextlib.nullcontext():
+        kv, hist_dim = rf.nested.mask_nested(states[0], mask=mask, mask_value=states[1])
+    assert hist_dim not in (states[0][1], states[1][1])
+    assert kv.dims_set == {batch, hist_dim, feat}  # the masked KV refers to the merged dim
+    assert hist_dim.dyn_size_ext.raw_tensor.tolist() == [2, 4, 1]
+    if static:
+        # no host read: the lengths stay on the device; and the bound is kept
+        assert hist_dim.dyn_size_ext.raw_tensor.device.type == device
+        assert hist_dim.capacity == 4
+    kv_raw = kv.copy_transpose([batch, hist_dim, feat]).raw_tensor.cpu()
+    assert kv_raw[:, :, 0].tolist() == [[1.0] * 4, [2.0] * 4, [1.0] * 4]
+
+
+def test_mask_nested_kv_states_static_traceable_cuda():
+    # Under static tracing with lengths on the GPU, merging the dims must not read them at the
+    # default dim-size device (CPU): a host sync, illegal under CUDA graph capture.
     import torch
     import unittest
 
     if not torch.cuda.is_available():
         raise unittest.SkipTest("cuda only: needs a device other than the default dim-size device")
-    rf.select_backend_torch()
-    batch = Dim(3, name="batch")
-    sizes_a = Tensor("a", [batch], dtype="int32", raw_tensor=torch.tensor([2, 3, 1], dtype=torch.int32, device="cuda"))
-    sizes_b = Tensor("b", [batch], dtype="int32", raw_tensor=torch.tensor([3, 4, 2], dtype=torch.int32, device="cuda"))
-    dim_a = Dim(sizes_a, name="a", capacity=4)
-    dim_b = Dim(sizes_b, name="b", capacity=4)
-    mask = Tensor("mask", [batch], dtype="bool", raw_tensor=torch.tensor([True, False, True], device="cuda"))
-    with rf.set_default_device_ctx("cuda"), rf.set_static_traceable_ctx():
-        merged = rf.nested.mask_nested(dim_a, mask=mask, mask_value=dim_b)
-    assert merged.capacity == 4
-    assert merged.dyn_size_ext.raw_tensor.device.type == "cuda"
-    assert merged.dyn_size_ext.raw_tensor.tolist() == [2, 4, 1]
+    _check_mask_nested_kv_states(device="cuda", static=True)
+
+
+def test_mask_nested_kv_states_eager_cpu():
+    _check_mask_nested_kv_states(device="cpu", static=False)
 
 
 def test_masked_select_out_dim_value_is_true_count():
