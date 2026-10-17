@@ -3,7 +3,7 @@ Backend for exposing PyTorch-specific functionality.
 """
 
 from __future__ import annotations
-from typing import Optional, Union, Any, Sequence, Tuple, List, Dict, Generator
+from typing import Optional, Union, Any, Callable, Sequence, Tuple, List, Dict, Generator
 import contextlib
 import torch
 import numpy
@@ -14,6 +14,9 @@ from returnn.util.basic import prod, get_global_inf_value
 # noinspection PyProtectedMember
 from returnn.frontend._backend import Backend
 from returnn.frontend import RawTensorTypes
+
+# noinspection PyProtectedMember
+from returnn.frontend.tensor_array import _BufferTensorArray
 import returnn.frontend as rf
 
 # noinspection PyProtectedMember
@@ -2884,11 +2887,99 @@ class TorchBackend(Backend[torch.Tensor]):
 
         return out, (new_state_h, new_state_c)
 
-    TensorArrayType = List[Tensor]
+    @staticmethod
+    def while_loop(
+        cond: Callable[[Any], Union[bool, Tensor]],
+        body: Callable[[Any], Any],
+        initial: Any,
+    ) -> Any:
+        """
+        Under :func:`rf.is_static_traceable`, the torch ``while_loop`` op over a fixed-shape carry
+        (see :func:`rf.loop._graph_while_loop`).
+        Captured into a CUDA graph under ``CUDAGraphCaptureControlFlowOpDispatchMode`` (torch >= 2.14),
+        the loop becomes a device-side while node: one graph for any trip count, no host sync per iteration.
+        Otherwise, the eager Python loop.
+
+        :param cond: gets the loop vars, returns a scalar bool Tensor
+        :param body: gets the loop vars, returns the next loop vars, same structure
+        :param initial: initial loop vars
+        :return: final loop vars
+        """
+        # noinspection PyProtectedMember
+        from returnn.frontend.loop import _while_loop_eager, _graph_while_loop
+
+        if not rf.is_static_traceable():
+            return _while_loop_eager(cond, body, initial)
+        # Not torch.while_loop: that goes through Dynamo.
+        # noinspection PyProtectedMember
+        from torch._higher_order_ops.while_loop import while_loop_op
+
+        def _run_loop(cond_raw: Callable, body_raw: Callable, init: Tuple[torch.Tensor, ...]) -> Sequence[torch.Tensor]:
+            # The loop counter is on CPU by design, for the host-driven eager loop;
+            # in the graph loop the control flow lives on the device with everything else.
+            device = next((raw.device for raw in init if raw.device.type != "cpu"), None)
+            if device is not None:
+                init = tuple(raw.to(device) for raw in init)
+            return while_loop_op(lambda *carry: cond_raw(carry), lambda *carry: body_raw(carry), init, ())
+
+        return _graph_while_loop(cond, body, initial, backend=TorchBackend, run_loop=_run_loop)
+
+    # a Python list while eager; a _BufferTensorArray when it crossed the graph loop
+    TensorArrayType = Union[List[Tensor], _BufferTensorArray]
+
+    @classmethod
+    def tensor_array_push_back(cls, tensor_array: TensorArrayType, value: Tensor) -> TensorArrayType:
+        """push_back"""
+        if isinstance(tensor_array, list):
+            tensor_array.append(value)
+            return tensor_array
+        # the buffer has the template's dim order, the pushed tensor need not
+        template = tensor_array.template if tensor_array.template is not None else value.copy_template()
+        raw = value.copy_compatible_to_dims_raw(template.dims)
+        buffer = tensor_array.buffer
+        if buffer is None:
+            buffer = torch.zeros((tensor_array.capacity,) + raw.shape, dtype=raw.dtype, device=raw.device)
+        # out-of-place, as the loop carry is functional; an index beyond the capacity fails in index_copy
+        buffer = buffer.index_copy(0, tensor_array.index.view(1).long(), raw.unsqueeze(0))
+        return _BufferTensorArray(
+            capacity=tensor_array.capacity, buffer=buffer, index=tensor_array.index + 1, template=template
+        )
+
+    @classmethod
+    def tensor_array_get_item(cls, tensor_array: TensorArrayType, index: Union[int, Tensor]) -> Tensor:
+        """get_item"""
+        if isinstance(tensor_array, list):
+            if isinstance(index, int) or not rf.is_static_traceable():
+                return super().tensor_array_get_item(tensor_array, index)
+            # No host read of the index under tracing or capture, e.g. the graph loop counter.
+            # The list has to become one tensor to be indexed on the device.
+            assert tensor_array, "TensorArray: get_item on an empty array"
+            template = tensor_array[0].copy_template()
+            buffer = torch.stack([t.copy_compatible_to_dims_raw(template.dims) for t in tensor_array], dim=0)
+        else:
+            assert tensor_array.buffer is not None, "TensorArray: get_item before any push_back"
+            template = tensor_array.template
+            buffer = tensor_array.buffer
+        out = template.copy_template()
+        if isinstance(index, int):
+            out.raw_tensor = buffer[index]
+        else:
+            assert index.dims == (), f"TensorArray: get_item: index {index} must be scalar"
+            out.raw_tensor = buffer.index_select(0, index.raw_tensor.view(1).to(buffer.device).long()).squeeze(0)
+        return out
 
     @staticmethod
     def tensor_array_unstack(tensor: Tensor, *, axis: Dim) -> TensorArrayType:
         """unstack"""
+        if rf.is_static_traceable():
+            # the buffer form, read on the device by index: no host read, no per-read stack
+            template = tensor.copy_template().copy_template_excluding_axis(tensor.get_axis_from_description(axis))
+            return _BufferTensorArray(
+                capacity=axis.get_dim_value(),
+                buffer=tensor.copy_compatible_to_dims_raw((axis,) + template.dims),
+                index=torch.full((), axis.get_dim_value(), dtype=torch.int32, device=tensor.raw_tensor.device),
+                template=template,
+            )
         axis_int = tensor.get_axis_from_description(axis)
         out_tensors_raw = torch.unbind(tensor.raw_tensor, dim=axis_int)
         out_tensor_template = tensor.copy_template().copy_template_excluding_axis(axis_int)
@@ -2902,6 +2993,13 @@ class TorchBackend(Backend[torch.Tensor]):
     @staticmethod
     def tensor_array_stack(tensor_array: TensorArrayType, *, axis: Dim, tensor_template: Tensor) -> Tensor:
         """stack"""
+        if isinstance(tensor_array, _BufferTensorArray):
+            # all capacity entries, as allocated for axis
+            assert tensor_array.buffer is not None, "TensorArray: stack before any push_back"
+            template = tensor_array.template if tensor_array.template is not None else tensor_template
+            out = template.copy_template().copy_add_dim_by_tag(axis, unbroadcast=True, axis=0)
+            out.raw_tensor = tensor_array.buffer
+            return out
         if tensor_array:
             # In the actual array, the tensors might be a better template (different dim order).
             # We already checked in TensorArray that they are compatible.
