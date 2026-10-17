@@ -7,12 +7,16 @@ We make use of torch.utils.data.IterDataPipe.
 from __future__ import annotations
 
 from typing import TYPE_CHECKING, Callable, Optional, Iterator, Dict
+import functools
+import multiprocessing
 import sys
 import numpy
 import torch.utils.data
 from returnn.datasets.basic import Dataset as ReturnnDataset
 from returnn.datasets.util.strings import str_to_numpy_array
+from returnn.util.basic import BehaviorVersion
 from returnn.util.better_exchook import better_exchook
+from returnn.util.multi_proc_non_daemonic_spawn import NonDaemonicSpawnProcess, register_exit_hook
 
 if TYPE_CHECKING:
     import multiprocessing.sharedctypes
@@ -72,16 +76,31 @@ class ReturnnDatasetIterDataPipe(torch.utils.data.IterDataPipe):
     Converts a RETURNN dataset into a PyTorch IterableDataset.
     """
 
-    def __init__(self, returnn_dataset: ReturnnDataset, *, reset_callback: Optional[ResetCallbackT] = None):
+    def __init__(
+        self,
+        returnn_dataset: ReturnnDataset,
+        *,
+        reset_callback: Optional[ResetCallbackT] = None,
+        shard_workers: Optional[bool] = None,
+    ):
         """
         :param returnn_dataset: dataset to be wrapped
         :param reset_callback: callback function to be called when the dataset is reset, e.g. to init the epoch.
             ReturnnDatasetResetDefaultEpochCounterCallback(returnn_dataset) is the default.
+        :param shard_workers: with DataLoader ``num_workers > 1``,
+            whether every worker yields its own shard of the data, so the workers together yield every seq once.
+            Otherwise every worker yields all the data, so every seq comes ``num_workers`` times.
+            None (default): since behavior version 37.
         """
         self._dataset = returnn_dataset
         if not reset_callback:
             reset_callback = ReturnnDatasetResetDefaultEpochCounterCallback(returnn_dataset)
         self._reset_callback = reset_callback
+        if shard_workers is None:
+            shard_workers = BehaviorVersion.get() >= 37
+        self._shard_workers = shard_workers
+        self._worker_exit_hook_registered = False
+        self._worker_sharding_set = False
 
     def reset(self):
         """
@@ -94,12 +113,35 @@ class ReturnnDatasetIterDataPipe(torch.utils.data.IterDataPipe):
         Deep inside the complex logic of this hook, it calls ``_set_datapipe_valid_iterator_id``
         which then calls ``reset()``.)
         """
+        if self._shard_workers and not self._worker_sharding_set:
+            worker_info = torch.utils.data.get_worker_info()
+            if worker_info is not None and worker_info.num_workers > 1:
+                # Every worker has its own copy of the dataset, so every worker yields its own shard of the data.
+                if not self._dataset.supports_sharding():
+                    raise ValueError(
+                        f"{self._dataset} does not support sharding,"
+                        f" needed for DataLoader num_workers {worker_info.num_workers} > 1"
+                    )
+                # noinspection PyProtectedMember
+                self._dataset.set_sharding(
+                    num_shards=self._dataset._num_shards * worker_info.num_workers,
+                    shard_index=self._dataset._shard_index * worker_info.num_workers + worker_info.id,
+                )
+            self._worker_sharding_set = True
         self._reset_callback()
 
     def __iter__(self) -> Iterator[Dict[str, numpy.ndarray]]:
         """
         :return: generator providing data samples in the form of a dict data_key -> data
         """
+        if (
+            not self._worker_exit_hook_registered
+            and torch.utils.data.get_worker_info() is not None
+            and isinstance(multiprocessing.current_process(), NonDaemonicSpawnProcess)
+        ):
+            # the worker owns this copy (e.g. reader procs): free it before the exit cleanup signals them
+            register_exit_hook(functools.partial(self._dataset.finish_epoch, free_resources=True))
+            self._worker_exit_hook_registered = True
         # noinspection PyBroadException
         try:
             num_seqs = self._dataset.num_seqs

@@ -271,6 +271,13 @@ def test_collect_class_init_kwargs():
     print(kwargs)
     assert sorted(kwargs) == ["a", "b", "c"]
 
+    class D(C):
+        def __init__(self, d=1, *, e, f=2, **kwargs):
+            super(D, self).__init__(**kwargs)
+
+    assert sorted(collect_class_init_kwargs(D)) == ["a", "b", "c", "d", "e", "f"]
+    assert dict(collect_class_init_kwargs(D, only_with_default=True)) == {"d": 1, "f": 2}
+
 
 def test_terminal_size():
     terminal_size()
