@@ -408,169 +408,101 @@ def _allow_non_fake_inputs():
         fake_tensor_mod.FakeTensorMode.__init__ = orig_init
 
 
-class GraphCapturedTrainStep:
+class _StaticBatchInputs:
     """
-    Orchestrates eager warmup steps, the one-time capture, and per-step replay.
-    See the module docstring.
+    The static graph inputs of one bound:
+    per data key a bound-shaped data buffer and a device seq-lens buffer, plus the device batch size,
+    with the host-side copy-in of a batch and the extern data built around the buffers.
     """
 
     def __init__(
         self,
         *,
-        opts: Dict[str, Any],
         extern_data_template: TensorDict,
-        device: Union[str, torch.device],
+        device: torch.device,
         float_dtype: Optional[torch.dtype],
-        params: List[torch.nn.Parameter],
-        run_step: Callable[..., None],
-        post_step: Optional[Callable[[], None]] = None,
-        get_optimizer: Optional[Callable[[], torch.optim.Optimizer]] = None,
-        get_buffers: Optional[Callable[[], List[torch.Tensor]]] = None,
-        rf_params: Optional[List[rf.Parameter]] = None,
-        packed_batch_size: Optional[Dict[str, int]] = None,
+        batch_size_bound: int,
+        mask_padding_seqs: bool,
+        dim_capacity: Dict[str, int],
+        packed_total_bound: Dict[str, int],
+        packed_batch_size: Dict[str, int],
     ):
         """
-        :param opts: the ``torch_cuda_graph`` config dict, see the module docstring
         :param extern_data_template:
         :param device:
         :param float_dtype:
-        :param params: all model parameters; .grad becomes static buffers, zeroed in-graph
-        :param run_step: ``run_step(extern_data, step=step_tensor)``,
-            runs the user train step function under a train run ctx
-        :param post_step: grad clip + optimizer step, captured in-graph
-            with opts "capture_optimizer"; must be capture-safe
-        :param get_buffers: the model's buffers (running statistics etc.),
-            put back after the warm runs, see :func:`_training_state_preserved`
-        :param rf_params: RF-level model params, required for opts "compile"
-        :param packed_batch_size: the config option, when statically known;
-            only to infer a missing "packed_total_bound", see :func:`_get_data_buf`
+        :param batch_size_bound: max seqs per batch, the batch is filled up with zero-length seqs
+        :param mask_padding_seqs: the batch dim keeps the real batch size as dyn size
+        :param dim_capacity: per data key, the bound of its dynamic (time) dim
+        :param packed_total_bound: per packed-collate data key, the bound of the packed total
+        :param packed_batch_size: the config option, only to infer a missing packed_total_bound
         """
-        assert str(device).startswith("cuda"), f"torch_cuda_graph requires a cuda device, got {device!r}"
-        opts = CollectionReadCheckCovered(opts)  # catch unknown (e.g. typo'd) option keys, see below
-        self.batch_size_bound = int(opts["batch_size_bound"])
-        self._mask_padding_seqs: Optional[bool] = opts.get("mask_padding_seqs", None)
-        if self._mask_padding_seqs is None:
-            self._mask_padding_seqs = BehaviorVersion.get() >= 36
-        self.dim_capacity: Dict[str, int] = dict(opts["dim_capacity"])
-        # optional tighter bound of the packed (gapped) total per packed-collate key
-        # (e.g. batch size + per-seq gap slack); the default -- every seq at full capacity --
-        # can be far larger and the activations scale with it
-        self.packed_total_bound: Dict[str, int] = dict(opts.get("packed_total_bound", {}))
-        # only for inferring a missing packed_total_bound entry, see _get_data_buf
-        self._packed_batch_size: Dict[str, int] = dict(packed_batch_size) if isinstance(packed_batch_size, dict) else {}
-        self.warmup_steps = int(opts.get("warmup_steps", 0))
-        self._get_optimizer = get_optimizer
-        self._get_buffers = get_buffers
-        self._device = torch.device(device)
+        self.batch_size_bound = batch_size_bound
+        self.mask_padding_seqs = mask_padding_seqs
+        self.dim_capacity = dim_capacity
+        self.packed_total_bound = packed_total_bound
+        self._packed_batch_size = packed_batch_size
+        self._device = device
         self._float_dtype = float_dtype
         self._extern_data_template = extern_data_template
-        self._run_step = run_step
-        self._post_step = post_step if opts.get("capture_optimizer", False) else None
-        self._params = params
-        self._grad_params = [p for p in params if p.requires_grad]
-        self._compile = bool(opts.get("compile", False))
-        self._capture_graph = bool(opts.get("capture", True))
-        # partitioned: joint AOT path instead of one inference-style whole-step graph,
-        # fw/bwd split by min-cut remat, grads via .backward() (still captured in-graph);
-        # enables activation_memory_budget as the save-vs-recompute knob
-        self._partitioned = bool(opts.get("partitioned", False))
-        # 0..1 fraction of the save-everything activation memory (torch._functorch.config);
-        # only meaningful with "partitioned"
-        self._activation_memory_budget: Optional[float] = opts.get("activation_memory_budget")
-        # with "partitioned" + budget: lift the min-cut recompute allowlist bans
-        # (matmul-and-friends outputs are otherwise never recomputed, the budget saturates)
-        self._aggressive_recomputation = bool(opts.get("aggressive_recomputation", False))
-        # partitioned mode: sorted (data-buf keys, lens-buf keys) lifted to trace inputs; see _compiled_call_args
-        self._partitioned_buf_keys: Optional[Tuple[List[str], List[str]]] = None
-        if self._partitioned:
-            assert self._compile, 'torch_cuda_graph: "partitioned" requires "compile"'
-        # debug: Inductor generates a nan-assert after every kernel,
-        # pinpointing the first kernel producing nan/inf inside the compiled program
-        self._inductor_nan_asserts = bool(opts.get("inductor_nan_asserts", False))
-        # debug: dump the AOT-traced FX graph (pre-Inductor) into this dir,
-        # to inspect for wrongly baked constants (e.g. a capacity used as a length)
-        self._dump_fx_dir: Optional[str] = opts.get("dump_fx_dir")
-        # debug: record the CUDA allocator history and dump a snapshot
-        # (cuda-memory-snapshot.pickle in cwd, for torch.cuda.memory viz)
-        # on OOM during compile/capture -- shows what actually fills the memory at the peak
-        self._dump_memory_snapshot = bool(opts.get("dump_memory_snapshot", False))
-        # debug (compiled-eager, i.e. "capture": False): check the loss outputs every step,
-        # on the first non-finite value dump that step's raw extern-data batch to cwd and raise
-        # -- hands over the exact failing batch for offline eager-vs-compiled diffing
-        self._debug_nan_dump_inputs = bool(opts.get("debug_nan_dump_inputs", False))
-        # debug: zero-fill every buffer the generated code allocates (see the patch func)
-        self._debug_zero_init_buffers = bool(opts.get("debug_zero_init_buffers", False))
-        # debug: with inductor_nan_asserts, print per-buffer NaN counts instead of asserting
-        self._debug_nan_report = bool(opts.get("debug_nan_report", False))
-        # debug: conservative Inductor codegen (no epilogue fusion, no pattern matcher) --
-        # if the sporadic NaN vanishes, a miscompiled fusion is confirmed
-        self._inductor_conservative = bool(opts.get("inductor_conservative", False))
-        # debug: run the traced AOT graph with eager kernels (no Inductor at all)
-        self._debug_aot_eager = bool(opts.get("debug_aot_eager", False))
-        # debug: run step_core untraced, plain eager, on the same bound buffers
-        # (isolates bound-regime semantics from the AOT trace)
-        self._debug_eager_bound = bool(opts.get("debug_eager_bound", False))
-        # debug: with debug_nan_report, torch.save these generated-code buffers each call
-        # (buffer names from a previous run's generated module; numbering is stable per graph)
-        self._debug_dump_buffer_names = tuple(opts.get("debug_dump_buffer_names", ()))
-        self._last_extern_data_raw: Optional[Dict[str, Union[torch.Tensor, numpy.ndarray]]] = None
-        if self._dump_memory_snapshot:
-            # noinspection PyProtectedMember
-            torch.cuda.memory._record_memory_history(max_entries=200_000)
-        assert self._capture_graph or self._compile, 'torch_cuda_graph: "capture": False requires "compile": True'
-        self._compiled_fn: Optional[Callable[[List[torch.Tensor]], tuple]] = None
-        self._compiled_n_calls = 0
-        self._rf_params = rf_params
-        if self._compile:
-            assert rf_params is not None, "torch_cuda_graph compile: rf_params required (RF model)"
-        # per loss: (name, traced Loss (for the flags), inv norm is a tensor output, else its static value)
-        self._compiled_loss_meta: List[Tuple[str, Loss, bool, Optional[int]]] = []
-        self._compiled_n_loss_outs = 0
-        opts.assert_all_read()
-        for p in self._grad_params:
-            p.grad = torch.zeros_like(p)  # static, never freed (the captured graph writes into these)
-
         self._batch_dim = get_batch_dim_from_extern_data(extern_data_template)
         self._batch_dim_bounded = self._batch_dim.dimension is None  # standard case: True
-        if self._batch_dim_bounded:
-            # process-wide template-dim mutation,
-            # toggled off around the dynamic-shape paths (see set_bound_shapes_enabled)
-            self._set_batch_dim_bound()
-        else:
-            assert self._batch_dim.dimension == self.batch_size_bound
         self._batch_size_buf: Optional[torch.Tensor] = None
         self._batch_size_pin: Optional[torch.Tensor] = None
-        if self._mask_padding_seqs:
-            self._batch_size_buf = torch.zeros((), dtype=torch.int32, device=self._device)
+        if mask_padding_seqs:
+            self._batch_size_buf = torch.zeros((), dtype=torch.int32, device=device)
             self._batch_size_pin = torch.zeros((), dtype=torch.int32, pin_memory=True)
-        self._data_bufs: Dict[str, torch.Tensor] = {}
-        self._pinned_bufs: Dict[str, torch.Tensor] = {}  # host staging, see _copy_in
+        self.data_bufs: Dict[str, torch.Tensor] = {}
+        self._pinned_bufs: Dict[str, torch.Tensor] = {}  # host staging, see copy_in
         # guards the pinned staging: the next host write must wait for the previous async H2D
         self._copy_in_event: Optional[torch.cuda.Event] = None
         self._prev_copy_shapes: Dict[str, Tuple[int, ...]] = {}
-        self._lens_bufs: Dict[str, torch.Tensor] = {}
+        self.lens_bufs: Dict[str, torch.Tensor] = {}
         self._host_raws: Dict[str, Any] = {}  # non-capturable (string) keys, passed through host-side
         self._packed_opts: Dict[str, Dict[str, int]] = {}  # for packed-collate keys
-        self._step_buf = torch.zeros((), dtype=torch.int64, device=self._device)
-        self._step_t = Tensor("global_train_step", dims=(), dtype="int64")
-        self._step_t.raw_tensor = self._step_buf
 
-        self._eager_stream = torch.cuda.Stream()
-        self._graph: Optional[torch.cuda.CUDAGraph] = None
-        self._ctx: Optional[RunCtx] = None
-        self._n_eager = 0
+    def set_template_bounds(self, enabled: bool):
+        """
+        Set or clear the process-wide bound-shape dim state of the template dims for this bound:
+        the batch dim bound and the capacities of the dynamic dims
+        (they persist across reset_eager; capacity propagates through dim math, so derived dims are bounded too).
 
-        # declared capacities go on the template dims (persist across reset_eager;
-        # capacity propagates through dim math, so derived dims are bounded too)
-        self._cap_dims: List[Tuple[Dim, int]] = []
-        for k, data in extern_data_template.data.items():
+        :param enabled: if False, back to dynamic shapes, also for the derived dims which memoized a capacity
+        """
+        # noinspection PyProtectedMember
+        from returnn.tensor import _dim_extra
+
+        cap_dims: List[Tuple[Dim, int]] = []
+        for k, data in self._extern_data_template.data.items():
             for i, dim in enumerate(data.dims):
                 if i >= 1 and dim.dimension is None and dim is not self._batch_dim:
                     assert k in self.dim_capacity, (
                         f"torch_cuda_graph: dim_capacity for data key {k!r} required (dyn dim {dim})"
                     )
-                    dim.capacity = self.dim_capacity[k]
-                    self._cap_dims.append((dim, self.dim_capacity[k]))
+                    cap_dims.append((dim, self.dim_capacity[k]))
+        if enabled:
+            if self._batch_dim_bounded:
+                # the copy-in fills the batch up to the bound with zero-length padding seqs
+                self._batch_dim.capacity = self.batch_size_bound
+                if self.mask_padding_seqs:
+                    self._batch_dim.size = None  # dyn size = the real batch size, set per step in build_extern_data
+                else:
+                    self._batch_dim.size = self.batch_size_bound
+                    self._batch_dim.dyn_size_ext = None
+            for dim, cap in cap_dims:
+                dim.capacity = cap
+        else:
+            if self._batch_dim_bounded:
+                self._batch_dim.size = None
+                self._batch_dim.capacity = None
+                self._batch_dim.dyn_size_ext = None
+            for dim, _ in cap_dims:
+                dim.capacity = None
+            # derived dims memoized their capacity lazily; clear them too (they re-derive)
+            # noinspection PyProtectedMember
+            for dim in list(_dim_extra.derived_capacity_memoized_dims):
+                dim.capacity = None
+            _dim_extra.derived_capacity_memoized_dims.clear()
 
     def data_bound_sizes(self) -> Dict[str, int]:
         """
@@ -579,51 +511,15 @@ class GraphCapturedTrainStep:
             the engine reports the unused part as bound slack
         """
         res = {}
-        for k, buf in self._data_bufs.items():
+        for k, buf in self.data_bufs.items():
             if k in self._packed_opts:
                 res[k] = int(buf.shape[0])
             elif buf.ndim >= 2:
                 res[k] = int(buf.shape[0]) * int(buf.shape[1])
         return res
 
-    def set_bound_shapes_enabled(self, enabled: bool):
-        """
-        Toggle the process-wide bound-shape dim state (static batch dim, capacities).
-        Dynamic-shape paths (e.g. :func:`Engine.eval_model`) need it off,
-        else they build capacity-sized grids; the engine re-enables it per train epoch.
-        """
-        # noinspection PyProtectedMember
-        from returnn.tensor import _dim_extra
-
-        if enabled:
-            if self._batch_dim_bounded:
-                self._set_batch_dim_bound()
-            for dim, cap in self._cap_dims:
-                dim.capacity = cap
-        else:
-            if self._batch_dim_bounded:
-                self._batch_dim.size = None
-                self._batch_dim.capacity = None
-                self._batch_dim.dyn_size_ext = None
-            for dim, _ in self._cap_dims:
-                dim.capacity = None
-            # derived dims memoized their capacity lazily; clear them too (they re-derive)
-            # noinspection PyProtectedMember
-            for dim in list(_dim_extra.derived_capacity_memoized_dims):
-                dim.capacity = None
-            _dim_extra.derived_capacity_memoized_dims.clear()
-
-    def _set_batch_dim_bound(self):
-        # the copy-in fills the batch up to the bound with zero-length padding seqs
-        self._batch_dim.capacity = self.batch_size_bound
-        if self._mask_padding_seqs:
-            self._batch_dim.size = None  # dyn size = the real batch size, set per step in _build_extern_data
-        else:
-            self._batch_dim.size = self.batch_size_bound
-            self._batch_dim.dyn_size_ext = None
-
     def _get_data_buf(self, k: str, raw: torch.Tensor, packed: Optional[Dict[str, int]]) -> torch.Tensor:
-        buf = self._data_bufs.get(k)
+        buf = self.data_bufs.get(k)
         if buf is not None:
             return buf
         data = self._extern_data_template.data[k]
@@ -669,10 +565,10 @@ class GraphCapturedTrainStep:
                 shape.append(self.dim_capacity[k])
             shape += [d.dimension for d in data.dims[2 if has_dyn_spatial else 1 :]]
         buf = torch.zeros(shape, dtype=dtype, device=self._device)
-        self._data_bufs[k] = buf
+        self.data_bufs[k] = buf
         return buf
 
-    def _copy_in(self, extern_data_raw: Dict[str, Union[torch.Tensor, numpy.ndarray]]):
+    def copy_in(self, extern_data_raw: Dict[str, Union[torch.Tensor, numpy.ndarray]]):
         if self._copy_in_event is not None:
             # the pinned staging buffers are reused every step:
             # do not overwrite them while the previous step's async H2D is still in flight
@@ -743,11 +639,11 @@ class GraphCapturedTrainStep:
                 pin_slice.copy_(raw)
                 buf[tuple(slice(0, s) for s in raw.shape)].copy_(pin_slice, non_blocking=True)
             if size is not None:
-                lens_buf = self._lens_bufs.get(k)
+                lens_buf = self.lens_bufs.get(k)
                 lens_pin = self._pinned_bufs.get(k + ":seq_len")
                 if lens_buf is None:
                     lens_buf = torch.zeros(self.batch_size_bound, dtype=torch.int32, device=self._device)
-                    self._lens_bufs[k] = lens_buf
+                    self.lens_bufs[k] = lens_buf
                     lens_pin = torch.zeros(self.batch_size_bound, dtype=torch.int32, pin_memory=True)
                     self._pinned_bufs[k + ":seq_len"] = lens_pin
                 n = size.shape[0]
@@ -766,14 +662,14 @@ class GraphCapturedTrainStep:
                 lens_pin[:n].copy_(size.to(dtype=torch.int32))
                 lens_pin[n:].zero_()  # zero-length padding seqs
                 lens_buf.copy_(lens_pin, non_blocking=True)
-        if self._mask_padding_seqs:
+        if self.mask_padding_seqs:
             self._batch_size_pin.fill_(batch_size)
             self._batch_size_buf.copy_(self._batch_size_pin, non_blocking=True)
         if self._copy_in_event is None:
             self._copy_in_event = torch.cuda.Event()
         self._copy_in_event.record()
 
-    def _build_extern_data(self) -> TensorDict:
+    def build_extern_data(self) -> TensorDict:
         """
         Like :func:`returnn.torch.data.extern_data.raw_dict_to_extern_data`,
         but around the static buffers, with the template dims reset
@@ -782,7 +678,7 @@ class GraphCapturedTrainStep:
         batch_dim = self._batch_dim
         for dim in _get_dyn_dims_from_extern_data(self._extern_data_template):
             dim.reset_eager()
-        if self._batch_dim_bounded and self._mask_padding_seqs:
+        if self._batch_dim_bounded and self.mask_padding_seqs:
             if batch_dim.dyn_size_ext is None:
                 batch_dim.dyn_size_ext = Tensor(batch_dim.name or "batch", dims=[], dtype="int32")
             batch_dim.dyn_size_ext.raw_tensor = self._batch_size_buf  # device-resident
@@ -793,8 +689,8 @@ class GraphCapturedTrainStep:
                 data.raw_tensor = self._host_raws[k]
                 extern_data.data[k] = data
                 continue
-            buf = self._data_bufs[k]
-            lens_buf = self._lens_bufs.get(k)
+            buf = self.data_bufs[k]
+            lens_buf = self.lens_bufs.get(k)
             if len(data.dims) >= 2 and data.dims[1].dimension is None:
                 spatial = data.dims[1]
                 assert lens_buf is not None, f"torch_cuda_graph: missing seq lens for {k}"
@@ -822,6 +718,163 @@ class GraphCapturedTrainStep:
                 data.raw_tensor = buf
             extern_data.data[k] = data
         return extern_data
+
+
+class GraphCapturedTrainStep:
+    """
+    Orchestrates eager warmup steps, the one-time capture, and per-step replay.
+    See the module docstring.
+    """
+
+    def __init__(
+        self,
+        *,
+        opts: Dict[str, Any],
+        extern_data_template: TensorDict,
+        device: Union[str, torch.device],
+        float_dtype: Optional[torch.dtype],
+        params: List[torch.nn.Parameter],
+        run_step: Callable[..., None],
+        post_step: Optional[Callable[[], None]] = None,
+        get_optimizer: Optional[Callable[[], torch.optim.Optimizer]] = None,
+        get_buffers: Optional[Callable[[], List[torch.Tensor]]] = None,
+        rf_params: Optional[List[rf.Parameter]] = None,
+        packed_batch_size: Optional[Dict[str, int]] = None,
+    ):
+        """
+        :param opts: the ``torch_cuda_graph`` config dict, see the module docstring
+        :param extern_data_template:
+        :param device:
+        :param float_dtype:
+        :param params: all model parameters; .grad becomes static buffers, zeroed in-graph
+        :param run_step: ``run_step(extern_data, step=step_tensor)``,
+            runs the user train step function under a train run ctx
+        :param post_step: grad clip + optimizer step, captured in-graph
+            with opts "capture_optimizer"; must be capture-safe
+        :param get_buffers: the model's buffers (running statistics etc.),
+            put back after the warm runs, see :func:`_training_state_preserved`
+        :param rf_params: RF-level model params, required for opts "compile"
+        :param packed_batch_size: the config option, when statically known;
+            only to infer a missing "packed_total_bound", see :func:`_get_data_buf`
+        """
+        assert str(device).startswith("cuda"), f"torch_cuda_graph requires a cuda device, got {device!r}"
+        opts = CollectionReadCheckCovered(opts)  # catch unknown (e.g. typo'd) option keys, see below
+        mask_padding_seqs: Optional[bool] = opts.get("mask_padding_seqs", None)
+        if mask_padding_seqs is None:
+            mask_padding_seqs = BehaviorVersion.get() >= 36
+        self._device = torch.device(device)
+        self._inputs = _StaticBatchInputs(
+            extern_data_template=extern_data_template,
+            device=self._device,
+            float_dtype=float_dtype,
+            batch_size_bound=int(opts["batch_size_bound"]),
+            mask_padding_seqs=mask_padding_seqs,
+            dim_capacity=dict(opts["dim_capacity"]),
+            # optional tighter bound of the packed (gapped) total per packed-collate key
+            # (e.g. batch size + per-seq gap slack); the default -- every seq at full capacity --
+            # can be far larger and the activations scale with it
+            packed_total_bound=dict(opts.get("packed_total_bound", {})),
+            # only for inferring a missing packed_total_bound entry, see _get_data_buf
+            packed_batch_size=dict(packed_batch_size) if isinstance(packed_batch_size, dict) else {},
+        )
+        self.warmup_steps = int(opts.get("warmup_steps", 0))
+        self._get_optimizer = get_optimizer
+        self._get_buffers = get_buffers
+        self._float_dtype = float_dtype
+        self._extern_data_template = extern_data_template
+        self._run_step = run_step
+        self._post_step = post_step if opts.get("capture_optimizer", False) else None
+        self._params = params
+        self._grad_params = [p for p in params if p.requires_grad]
+        self._compile = bool(opts.get("compile", False))
+        self._capture_graph = bool(opts.get("capture", True))
+        # partitioned: joint AOT path instead of one inference-style whole-step graph,
+        # fw/bwd split by min-cut remat, grads via .backward() (still captured in-graph);
+        # enables activation_memory_budget as the save-vs-recompute knob
+        self._partitioned = bool(opts.get("partitioned", False))
+        # 0..1 fraction of the save-everything activation memory (torch._functorch.config);
+        # only meaningful with "partitioned"
+        self._activation_memory_budget: Optional[float] = opts.get("activation_memory_budget")
+        # with "partitioned" + budget: lift the min-cut recompute allowlist bans
+        # (matmul-and-friends outputs are otherwise never recomputed, the budget saturates)
+        self._aggressive_recomputation = bool(opts.get("aggressive_recomputation", False))
+        # partitioned mode: sorted (data-buf keys, lens-buf keys) lifted to trace inputs; see _compiled_call_args
+        self._partitioned_buf_keys: Optional[Tuple[List[str], List[str]]] = None
+        if self._partitioned:
+            assert self._compile, 'torch_cuda_graph: "partitioned" requires "compile"'
+        # debug: Inductor generates a nan-assert after every kernel,
+        # pinpointing the first kernel producing nan/inf inside the compiled program
+        self._inductor_nan_asserts = bool(opts.get("inductor_nan_asserts", False))
+        # debug: dump the AOT-traced FX graph (pre-Inductor) into this dir,
+        # to inspect for wrongly baked constants (e.g. a capacity used as a length)
+        self._dump_fx_dir: Optional[str] = opts.get("dump_fx_dir")
+        # debug: record the CUDA allocator history and dump a snapshot
+        # (cuda-memory-snapshot.pickle in cwd, for torch.cuda.memory viz)
+        # on OOM during compile/capture -- shows what actually fills the memory at the peak
+        self._dump_memory_snapshot = bool(opts.get("dump_memory_snapshot", False))
+        # debug (compiled-eager, i.e. "capture": False): check the loss outputs every step,
+        # on the first non-finite value dump that step's raw extern-data batch to cwd and raise
+        # -- hands over the exact failing batch for offline eager-vs-compiled diffing
+        self._debug_nan_dump_inputs = bool(opts.get("debug_nan_dump_inputs", False))
+        # debug: zero-fill every buffer the generated code allocates (see the patch func)
+        self._debug_zero_init_buffers = bool(opts.get("debug_zero_init_buffers", False))
+        # debug: with inductor_nan_asserts, print per-buffer NaN counts instead of asserting
+        self._debug_nan_report = bool(opts.get("debug_nan_report", False))
+        # debug: conservative Inductor codegen (no epilogue fusion, no pattern matcher) --
+        # if the sporadic NaN vanishes, a miscompiled fusion is confirmed
+        self._inductor_conservative = bool(opts.get("inductor_conservative", False))
+        # debug: run the traced AOT graph with eager kernels (no Inductor at all)
+        self._debug_aot_eager = bool(opts.get("debug_aot_eager", False))
+        # debug: run step_core untraced, plain eager, on the same bound buffers
+        # (isolates bound-regime semantics from the AOT trace)
+        self._debug_eager_bound = bool(opts.get("debug_eager_bound", False))
+        # debug: with debug_nan_report, torch.save these generated-code buffers each call
+        # (buffer names from a previous run's generated module; numbering is stable per graph)
+        self._debug_dump_buffer_names = tuple(opts.get("debug_dump_buffer_names", ()))
+        self._last_extern_data_raw: Optional[Dict[str, Union[torch.Tensor, numpy.ndarray]]] = None
+        if self._dump_memory_snapshot:
+            # noinspection PyProtectedMember
+            torch.cuda.memory._record_memory_history(max_entries=200_000)
+        assert self._capture_graph or self._compile, 'torch_cuda_graph: "capture": False requires "compile": True'
+        self._compiled_fn: Optional[Callable[[List[torch.Tensor]], tuple]] = None
+        self._compiled_n_calls = 0
+        self._rf_params = rf_params
+        if self._compile:
+            assert rf_params is not None, "torch_cuda_graph compile: rf_params required (RF model)"
+        # per loss: (name, traced Loss (for the flags), inv norm is a tensor output, else its static value)
+        self._compiled_loss_meta: List[Tuple[str, Loss, bool, Optional[int]]] = []
+        self._compiled_n_loss_outs = 0
+        opts.assert_all_read()
+        for p in self._grad_params:
+            p.grad = torch.zeros_like(p)  # static, never freed (the captured graph writes into these)
+
+        self._batch_dim = get_batch_dim_from_extern_data(extern_data_template)
+        if self._batch_dim.dimension is not None:
+            assert self._batch_dim.dimension == self._inputs.batch_size_bound
+        self._step_buf = torch.zeros((), dtype=torch.int64, device=self._device)
+        self._step_t = Tensor("global_train_step", dims=(), dtype="int64")
+        self._step_t.raw_tensor = self._step_buf
+
+        self._eager_stream = torch.cuda.Stream()
+        self._graph: Optional[torch.cuda.CUDAGraph] = None
+        self._ctx: Optional[RunCtx] = None
+        self._n_eager = 0
+
+        # process-wide template-dim mutation,
+        # toggled off around the dynamic-shape paths (see set_bound_shapes_enabled)
+        self.set_bound_shapes_enabled(True)
+
+    def data_bound_sizes(self) -> Dict[str, int]:
+        """see :func:`_StaticBatchInputs.data_bound_sizes`"""
+        return self._inputs.data_bound_sizes()
+
+    def set_bound_shapes_enabled(self, enabled: bool):
+        """
+        Toggle the process-wide bound-shape dim state (static batch dim, capacities).
+        Dynamic-shape paths (e.g. :func:`Engine.eval_model`) need it off,
+        else they build capacity-sized grids; the engine re-enables it per train epoch.
+        """
+        self._inputs.set_template_bounds(enabled)
 
     @property
     def captures_optimizer(self) -> bool:
@@ -864,7 +917,7 @@ class GraphCapturedTrainStep:
         for p in self._grad_params:
             p.grad.zero_()  # in-graph
         with rf.set_static_traceable_ctx():
-            extern_data = self._build_extern_data()
+            extern_data = self._inputs.build_extern_data()
             self._run_step(extern_data, step=self._step_t)
             ctx = rf.get_run_ctx()
             total_loss = ctx.total_loss()
@@ -980,7 +1033,7 @@ class GraphCapturedTrainStep:
                 p_.raw_tensor = t
             try:
                 with rf.set_static_traceable_ctx():
-                    extern_data = self._build_extern_data()
+                    extern_data = self._inputs.build_extern_data()
                     self._run_step(extern_data, step=self._step_t)
                     ctx = rf.get_run_ctx()
                     total = ctx.total_loss()
@@ -1145,8 +1198,8 @@ class GraphCapturedTrainStep:
             from torch._inductor.decomposition import select_decomp_table
 
             # data/lens buffers + step tensor as explicit trace inputs (see _compiled_call_args)
-            data_keys = sorted(self._data_bufs)
-            lens_keys = sorted(self._lens_bufs)
+            data_keys = sorted(self._inputs.data_bufs)
+            lens_keys = sorted(self._inputs.lens_bufs)
             self._partitioned_buf_keys = (data_keys, lens_keys)
             n_params = len(orig_raws)
 
@@ -1155,17 +1208,17 @@ class GraphCapturedTrainStep:
                 bufs = all_raws[n_params:]
                 data_ph = bufs[: len(data_keys)]
                 lens_ph = bufs[len(data_keys) : len(data_keys) + len(lens_keys)]
-                saved = (dict(self._data_bufs), dict(self._lens_bufs), self._step_t.raw_tensor)
+                saved = (dict(self._inputs.data_bufs), dict(self._inputs.lens_bufs), self._step_t.raw_tensor)
                 try:
                     for k, t in zip(data_keys, data_ph):
-                        self._data_bufs[k] = t
+                        self._inputs.data_bufs[k] = t
                     for k, t in zip(lens_keys, lens_ph):
-                        self._lens_bufs[k] = t
+                        self._inputs.lens_bufs[k] = t
                     self._step_t.raw_tensor = bufs[-1]
                     return step_core(all_raws[:n_params])
                 finally:
-                    self._data_bufs.update(saved[0])
-                    self._lens_bufs.update(saved[1])
+                    self._inputs.data_bufs.update(saved[0])
+                    self._inputs.lens_bufs.update(saved[1])
                     self._step_t.raw_tensor = saved[2]
 
             return aot_function(
@@ -1183,8 +1236,8 @@ class GraphCapturedTrainStep:
             # torch >= 2.12 also lifts closed-over tensors into runtime args of the generated code
             # instead of baking them as graph constants, and raw aot_function does not supply them;
             # pass the buffers as explicit trace inputs, like the partitioned mode above.
-            data_keys = sorted(self._data_bufs)
-            lens_keys = sorted(self._lens_bufs)
+            data_keys = sorted(self._inputs.data_bufs)
+            lens_keys = sorted(self._inputs.lens_bufs)
             self._partitioned_buf_keys = (data_keys, lens_keys)
             n_params = len(orig_raws)
 
@@ -1193,17 +1246,17 @@ class GraphCapturedTrainStep:
                 bufs = all_raws[n_params:]
                 data_ph = bufs[: len(data_keys)]
                 lens_ph = bufs[len(data_keys) : len(data_keys) + len(lens_keys)]
-                saved = (dict(self._data_bufs), dict(self._lens_bufs), self._step_t.raw_tensor)
+                saved = (dict(self._inputs.data_bufs), dict(self._inputs.lens_bufs), self._step_t.raw_tensor)
                 try:
                     for k, t in zip(data_keys, data_ph):
-                        self._data_bufs[k] = t
+                        self._inputs.data_bufs[k] = t
                     for k, t in zip(lens_keys, lens_ph):
-                        self._lens_bufs[k] = t
+                        self._inputs.lens_bufs[k] = t
                     self._step_t.raw_tensor = bufs[-1]
                     return step_core(all_raws[:n_params])
                 finally:
-                    self._data_bufs.update(saved[0])
-                    self._lens_bufs.update(saved[1])
+                    self._inputs.data_bufs.update(saved[0])
+                    self._inputs.lens_bufs.update(saved[1])
                     self._step_t.raw_tensor = saved[2]
 
             return aot_function(step_core_buf_inputs_v212, fw_compiler=backend)
@@ -1222,8 +1275,8 @@ class GraphCapturedTrainStep:
         data_keys, lens_keys = self._partitioned_buf_keys
         return (
             list(raws)
-            + [self._data_bufs[k] for k in data_keys]
-            + [self._lens_bufs[k] for k in lens_keys]
+            + [self._inputs.data_bufs[k] for k in data_keys]
+            + [self._inputs.lens_bufs[k] for k in lens_keys]
             + [self._step_buf]
         )
 
@@ -1374,7 +1427,7 @@ class GraphCapturedTrainStep:
         """
         if self._debug_nan_dump_inputs:
             self._last_extern_data_raw = extern_data_raw
-        self._copy_in(extern_data_raw)
+        self._inputs.copy_in(extern_data_raw)
         self._step_buf.fill_(global_train_step)
         if self._graph is not None:
             self._graph.replay()
