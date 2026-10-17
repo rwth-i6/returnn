@@ -280,7 +280,7 @@ class OggZipDataset(CachedDataset2):
 
     def finish_epoch(self, *, free_resources: bool = False):
         """finish epoch"""
-        super().finish_epoch()
+        super().finish_epoch(free_resources=free_resources)
         self._seq_order = None
         self._num_seqs = 0
         if free_resources:

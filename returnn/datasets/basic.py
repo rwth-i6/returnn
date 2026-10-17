@@ -176,6 +176,7 @@ class Dataset:
         self.unique_seq_tags = unique_seq_tags
         self._seq_order_seq_lens_file = seq_order_seq_lens_file
         self._seq_order_seq_lens_by_idx: Optional[Sequence[Union[int, float]]] = None
+        self._seq_order_full_epoch_cache: Optional[Tuple[Tuple[Any, ...], numpy.ndarray]] = None
         # There is probably no use case for combining the two, so avoid potential misconfiguration.
         assert self.partition_epoch == 1 or self.repeat_epoch == 1, (
             "Combining partition_epoch and repeat_epoch is prohibited."
@@ -576,7 +577,17 @@ class Dataset:
                 f"seq_ordering {seq_ordering_method!r} unexpected type {type(seq_ordering_method).__name__}"
             )
 
-        if seq_ordering_method == "default":
+        full_epoch_cache_key = (
+            seq_ordering_method,
+            partition_epoch,
+            (epoch - 1) // partition_epoch,
+            num_seqs,
+            self.fixed_random_seed,
+            self.random_seed_offset,
+        )
+        if self._seq_order_full_epoch_cache is not None and self._seq_order_full_epoch_cache[0] == full_epoch_cache_key:
+            seq_index = self._seq_order_full_epoch_cache[1]
+        elif seq_ordering_method == "default":
             seq_index = range(num_seqs)
         elif seq_ordering_method.startswith("default_every_n:"):
             # This order is useful if you have "initial_state": "keep_over_epoch",
@@ -674,6 +685,9 @@ class Dataset:
             seq_index = numpy.concatenate(out_index)
         else:
             raise ValueError(f"invalid seq_ordering {seq_ordering_method!r}")
+        if partition_epoch > 1 and not isinstance(seq_index, range):
+            seq_index = numpy.asarray(seq_index, dtype=numpy.int32 if num_seqs <= 2**31 else numpy.int64)
+            self._seq_order_full_epoch_cache = (full_epoch_cache_key, seq_index)
 
         if self.unique_seq_tags:
             # Note: This is as generic as possible, but requires that get_all_tags is implemented.
@@ -686,6 +700,8 @@ class Dataset:
             seq_index = self._apply_partition_epoch_and_sharding(
                 seq_index, partition_epoch, epoch, self._num_shards, self._shard_index
             )
+        if partition_epoch > 1 and isinstance(seq_index, numpy.ndarray):
+            seq_index = seq_index.astype(numpy.int64)  # copy, not a view of the cache
         if repeat_epoch > 1:
             seq_index = list(seq_index) * repeat_epoch
         if self.seq_tags_filter is not None:
@@ -808,6 +824,8 @@ class Dataset:
         until a new call to :func:`init_seq_order` follows.
         """
         self.epoch = None
+        if free_resources:
+            self._seq_order_full_epoch_cache = None
 
     def get_current_seq_order(self) -> Sequence[int]:
         """

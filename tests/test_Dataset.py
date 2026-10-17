@@ -529,6 +529,61 @@ def test_get_seq_order_laplace_reference():
     assert seq_index == list(seq_index_)
 
 
+def test_get_seq_order_full_epoch_cache():
+    num_seqs = 1013
+    seq_lens = numpy.random.RandomState(42).randint(1, 50, size=[num_seqs])
+    num_get_seq_len_calls = 0
+
+    def _get_seq_len(i: int) -> int:
+        nonlocal num_get_seq_len_calls
+        num_get_seq_len_calls += 1
+        return int(seq_lens[i])
+
+    def _seq_ordering_by_epoch(*, epoch: int, **_kwargs) -> str:
+        return "laplace:.17" if epoch % 2 else "sorted"
+
+    for seq_ordering in [
+        "sorted",
+        "laplace:.17",
+        "sort_bin_shuffle:.17",
+        "random",
+        "random:2",
+        "default_every_n:5",
+        _seq_ordering_by_epoch,
+    ]:
+        for shard_index in range(2):
+            opts = dict(
+                seq_ordering=seq_ordering,
+                random_seed_offset=0,
+                partition_epoch=3,
+                _num_shards=2,
+                _shard_index=shard_index,
+            )
+            dataset = Dataset(**opts)
+            prev_key = None
+            for epoch in [1, 2, 3, 4, 5, 6, 2, 3, 7]:
+                ref_seq_order = Dataset(**opts).get_seq_order_for_epoch(epoch, num_seqs, seq_lens.__getitem__)
+                num_get_seq_len_calls = 0
+                seq_order = dataset.get_seq_order_for_epoch(epoch, num_seqs, _get_seq_len)
+                method = seq_ordering(epoch=epoch) if callable(seq_ordering) else seq_ordering
+                key = (method, (epoch - 1) // 3)
+                if not method.startswith(("random", "default")):
+                    assert (num_get_seq_len_calls == 0) == (key == prev_key), (seq_ordering, shard_index, epoch)
+                assert isinstance(seq_order, numpy.ndarray) and seq_order.dtype == numpy.int64
+                assert list(seq_order) == list(ref_seq_order)
+                seq_order[:] = 0  # must not change the cached order
+                prev_key = key
+                if epoch == 5:
+                    dataset.finish_epoch(free_resources=True)
+                    prev_key = None
+
+    dataset = Dataset(seq_ordering="sorted")
+    for _ in range(2):
+        num_get_seq_len_calls = 0
+        dataset.get_seq_order_for_epoch(1, num_seqs, _get_seq_len)
+        assert num_get_seq_len_calls == num_seqs  # no cache without partition_epoch
+
+
 def test_get_seq_len_as_array():
     with tempfile.NamedTemporaryFile(mode="wt", suffix=".npy", encoding="utf8") as tmp_seq_lens_file:
         num_seqs = 3023
@@ -913,10 +968,17 @@ def test_LmDataset_seq_order_seq_lens():
                     }
                 )
                 assert isinstance(dataset, LmDataset)
+                ref_dataset = Dataset(
+                    seq_ordering=seq_ordering,
+                    random_seed_offset=dataset.random_seed_offset,
+                    partition_epoch=3,
+                    _num_shards=2,
+                    _shard_index=shard_index,
+                )
                 for epoch in [1, 2, 4, 1]:
                     dataset.init_seq_order(epoch=epoch)
-                    ref_seq_order = Dataset.get_seq_order_for_epoch(
-                        dataset, epoch=epoch, num_seqs=num_seqs, get_seq_len=lambda i: len(lines[i])
+                    ref_seq_order = ref_dataset.get_seq_order_for_epoch(
+                        epoch=epoch, num_seqs=num_seqs, get_seq_len=lambda i: len(lines[i])
                     )
                     assert list(dataset.get_current_seq_order()) == list(ref_seq_order)
                     if epoch == 2:
