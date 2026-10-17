@@ -178,7 +178,7 @@ def replace_dim_v2(
         )
         idx = rf.range_over_dim(out_dim, device=source.device)
         return rf.gather(padded, axis=padded_dim, indices=rf.minimum(idx, old_ext), clip_to_valid=False)
-    # Eager from here, so the sizes are concrete.
+    # Eager or static traceable from here, so the sizes are concrete.
     old_size = int(old_size)
     new_size = int(new_size)
     if new_size == old_size:
@@ -194,7 +194,7 @@ def replace_dim_v2(
             axes=[in_dim],
             padding=[(0, out_dim.get_dim_value_tensor() - in_dim.get_dim_value_tensor())],
             out_dims=[out_dim],
-            value=rf.zeros((), dtype=source.dtype, device=source.device),
+            value=0,
         )
     else:
         if not allow_shrink:
