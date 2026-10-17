@@ -1061,6 +1061,7 @@ _UnsupportedConfigOpts = {
     "sort_dataset": None,
     "tensorboard_opts": None,
     "use_tensorboard": False,
+    "wandb_opts": None,
     # backend-specific options are named after the backend, as `torch_...` is on PyTorch
     "tf_distributed": None,
     "tf_profile": None,

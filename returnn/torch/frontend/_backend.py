@@ -1191,7 +1191,7 @@ class TorchBackend(Backend[torch.Tensor]):
         device: Optional[str] = None,
         sparse_dim: Optional[Dim] = None,
         feature_dim: Optional[Dim] = None,
-        like: Optional[Tensor] = None,
+        like: Optional[rf.TensorLayout] = None,
     ) -> Tensor:
         """full"""
         del like  # plain storage, no layout to follow
@@ -2005,7 +2005,7 @@ class TorchBackend(Backend[torch.Tensor]):
         auto_update_state: Optional[bool] = None,
         static: Optional[bool] = None,
         out: Optional[Tensor[torch.Tensor]] = None,
-        like: Optional[Tensor] = None,
+        like: Optional[rf.TensorLayout] = None,
     ) -> Tensor:
         """
         random. See `rf.random` for details.

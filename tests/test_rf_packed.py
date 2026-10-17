@@ -2724,6 +2724,63 @@ def test_scatter_modes_which_the_frontend_composes_from_several_scatters():
             _assert_equal_non_padded(out, ref, batch_dim, out_dim)
 
 
+def test_scatter_and_top_k_mask_fill_like_packed_indices():
+    """the ones / trues which follow packed indices are filled directly in their packed storage"""
+    # noinspection PyProtectedMember
+    from torch.utils._python_dispatch import TorchDispatchMode
+
+    class _FullShapes(TorchDispatchMode):
+        """records the shapes of the filled tensors"""
+
+        def __init__(self):
+            super().__init__()
+            self.shapes = []
+
+        def __torch_dispatch__(self, func, types, args=(), kwargs=None):
+            if func.overloadpacket is torch.ops.aten.full:
+                self.shapes.append(tuple(args[0]))
+            return func(*args, **(kwargs or {}))
+
+    rf.select_backend_torch()
+    batch_dim = Dim(2, name="batch")
+    x, time_dim = _seqs("x", batch_dim, [3, 2], [[1.0, 2.0, 4.0], [8.0, 16.0]])
+    idx, _ = _seqs("idx", batch_dim, [3, 2], [[0, 0, 2], [1, 1]])
+    idx, _ = rf.replace_dim(idx, in_dim=idx.dims[1], out_dim=time_dim)
+    out_dim = Dim(
+        Tensor("out_lens", dims=[batch_dim], dtype="int32", raw_tensor=torch.tensor([3, 2], dtype=torch.int32)),
+        name="out",
+    )
+    padded = (2, 3)
+    idx_p = packed.pack(idx)
+    for name, create, create_ref in [
+        (
+            "scatter_count",
+            lambda: rf.scatter_count(indices=idx_p, indices_dim=time_dim, out_dim=out_dim),
+            lambda: rf.scatter_count(indices=idx, indices_dim=time_dim, out_dim=out_dim),
+        ),
+        (
+            "scatter_fill_value",
+            lambda: rf.scatter(
+                packed.pack(x), indices=idx_p, indices_dim=time_dim, out_dim=out_dim, mode="sum", fill_value=7
+            ),
+            lambda: rf.scatter(x, indices=idx, indices_dim=time_dim, out_dim=out_dim, mode="sum", fill_value=7),
+        ),
+    ]:
+        with _FullShapes() as full_shapes:
+            out = create()
+        assert padded not in full_shapes.shapes and (5,) in full_shapes.shapes, (name, full_shapes.shapes)
+        _assert_equal_non_padded(out, create_ref(), batch_dim, out_dim)
+
+    values, batch_dim, time_dim, vocab_dim = _make_input(batch_size=2, seq_lens=(4, 1), feat=5)
+    values_p = packed.pack(values)
+    with _FullShapes() as full_shapes:
+        mask = rf.top_k_mask(values_p, axis=vocab_dim, k=2)
+    assert packed.is_packed(mask) and (2, 4, 2) not in full_shapes.shapes, full_shapes.shapes
+    _assert_equal_non_padded(
+        rf.cast(mask, "float32"), rf.cast(rf.top_k_mask(values, axis=vocab_dim, k=2), "float32"), batch_dim, time_dim
+    )
+
+
 def test_scatter_relayout_rows_which_write_nothing_get_a_zero_gradient():
     """
     whatever a row outside the sequences holds must not come back through the discarded row:
@@ -3279,6 +3336,100 @@ def test_creation_like_packed():
         ):
             assert out.dtype == "float64" and out.raw_tensor.inner.raw_tensor.dtype == torch.float64, (layout, out)
         assert rf.zeros(xp.dims, dtype="int32", like=xp64).dtype == "int32", layout
+
+
+def test_tensor_layout():
+    """get_tensor_layout: equal for tensors stored alike, and full / random like a layout as like the tensor"""
+    import gc
+    import weakref
+
+    rf.select_backend_torch()
+    x, batch_dim, time_dim, feat_dim = _make_input(batch_size=3, seq_lens=(5, 0, 3), feat=4)
+    plain = rf.get_tensor_layout(x)
+    assert plain == rf.get_tensor_layout(x * 2.0) and hash(plain) == hash(rf.get_tensor_layout(x * 2.0))
+    # noinspection PyProtectedMember
+    assert plain.backend is x._raw_backend and plain.device == "cpu" and plain.storage is None, plain
+    xp = packed.pack(x, gap=2)
+    layout = rf.get_tensor_layout(xp)
+    assert layout == rf.get_tensor_layout(xp * 2.0) and hash(layout) == hash(rf.get_tensor_layout(xp * 2.0))
+    assert layout != plain and layout != rf.get_tensor_layout(packed.pack(x, gap=1)), layout
+    assert layout.device == "cpu", layout
+    for out in (
+        rf.zeros(xp.dims, like=layout),
+        rf.full(dims=xp.dims, fill_value=1.0, like=layout),
+        rf.random_uniform(xp.dims, like=layout),
+    ):
+        assert packed.is_packed(out) and out.raw_tensor.same_packing(xp.raw_tensor), out
+        assert rf.get_tensor_layout(out) == layout, (out, layout)
+    assert not packed.is_packed(rf.zeros([time_dim, feat_dim], like=layout))
+    # the dtype comes from a like tensor only, a layout has none
+    xp64 = rf.cast(xp, "float64")
+    assert rf.zeros(xp.dims, like=xp64).dtype == "float64"
+    assert rf.zeros(xp.dims, like=rf.get_tensor_layout(xp64)).dtype == rf.get_default_float_dtype()
+    # a layout keeps no reference to the data
+    data_ref = weakref.ref(xp.raw_tensor.inner.raw_tensor)
+    del xp, xp64, out
+    gc.collect()
+    assert data_ref() is None and layout.storage.packed_dim is not None
+
+
+def test_sequence_mask_like_packed():
+    """the mask over the packed dims of a packed like is laid out like it, without the padded [batch, time] rectangle"""
+    # noinspection PyProtectedMember
+    from torch.utils._python_dispatch import TorchDispatchMode
+
+    # noinspection PyProtectedMember
+    from torch.utils._pytree import tree_flatten
+
+    class _OutShapes(TorchDispatchMode):
+        """records the shapes of all op outputs"""
+
+        def __init__(self):
+            super().__init__()
+            self.shapes = set()
+
+        def __torch_dispatch__(self, func, types, args=(), kwargs=None):
+            out = func(*args, **(kwargs or {}))
+            self.shapes.update(tuple(t.shape) for t in tree_flatten(out)[0] if isinstance(t, torch.Tensor))
+            return out
+
+    rf.select_backend_torch()
+    seq_lens = (5, 3, 0, 2)
+    x, batch_dim, time_dim, feat_dim = _make_input(batch_size=4, seq_lens=seq_lens, feat=3)
+    ref = rf.cast(rf.sequence_mask([batch_dim, time_dim]), "float32")
+    for layout in (dict(), dict(gap=2, align=4), dict(total_bound=24)):
+        xp = packed.pack(x, **layout)
+        # eager, the frame coords of a packing come from a padded int grid, once per packing (layout cache)
+        for d in (batch_dim, time_dim):
+            xp + rf.range_over_dim(d, dtype="float32")
+        with _OutShapes() as out_shapes:
+            masks = [rf.sequence_mask([batch_dim, time_dim, feat_dim], like=xp), time_dim.get_mask(like=xp)]
+        assert (4, 5) not in out_shapes.shapes, (layout, out_shapes.shapes)
+        for mask in masks:
+            assert packed.is_packed(mask) and mask.raw_tensor.same_packing(xp.raw_tensor), (layout, mask)
+            assert mask.dtype == "bool", (layout, mask)
+            _assert_equal_non_padded(rf.cast(mask, "float32"), ref, batch_dim, time_dim)
+            _assert_equal_non_padded(rf.where(mask, xp, -1.0), x, batch_dim, time_dim)
+        # cached by the layout: the same mask for a tensor of the same layout, or the layout itself
+        assert time_dim.get_mask(like=xp * 2.0) is masks[1], layout
+        assert time_dim.get_mask(like=rf.get_tensor_layout(xp)) is masks[1], layout
+        assert time_dim.get_mask(like=packed.pack(x, gap=3)) is not masks[1], layout
+    # plain like: the same mask as without
+    assert time_dim.get_mask(like=x).raw_tensor.tolist() == time_dim.get_mask().raw_tensor.tolist()
+    # the device follows like
+    with rf.set_default_device_ctx("meta"):
+        assert time_dim.get_mask(like=xp).device == "cpu" and time_dim.get_mask(like=x).device == "cpu"
+
+    # static traceable, bounded batch: the mask covers the packed buffer, whatever the batch capacity
+    for capacity in (4, 40):
+        batch_dim, time_dim = _bounded_batch([2, 0, 3], capacity=capacity)
+        x = Tensor("x", dims=[batch_dim, time_dim, feat_dim], dtype="float32", raw_tensor=torch.ones(capacity, 3, 3))
+        with rf.set_static_traceable_ctx():
+            xp = packed.pack(x, dims=[batch_dim, time_dim], gap=1, total_bound=48)
+            with _OutShapes() as out_shapes:
+                mask = time_dim.get_mask(like=xp)
+        assert packed.is_packed(mask) and tuple(mask.raw_tensor.inner.raw_tensor.shape) == (48,), (capacity, mask)
+        assert (capacity, 3) not in out_shapes.shapes, (capacity, out_shapes.shapes)
 
 
 def test_is_finite_infinite_neg_infinite():
