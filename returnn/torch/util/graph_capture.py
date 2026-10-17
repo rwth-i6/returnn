@@ -578,6 +578,11 @@ class _StaticBatchInputs:
         return buf
 
     def copy_in(self, extern_data_raw: Dict[str, Union[torch.Tensor, numpy.ndarray]]):
+        """
+        Copy the batch into the static buffers (async, via pinned staging), padding seqs with length zero.
+
+        :param extern_data_raw: the batch, as from the data loader
+        """
         if self._copy_in_event is not None:
             # the pinned staging buffers are reused every step:
             # do not overwrite them while the previous step's async H2D is still in flight
@@ -1618,7 +1623,7 @@ class GraphCapturedForwardStep:
         :param run_step: ``run_step(extern_data)``, runs the user forward step function under a forward run ctx
         """
         assert str(device).startswith("cuda"), f"torch_cuda_graph forward requires a cuda device, got {device!r}"
-        # CUDA graph while nodes for the torch while_loop op (CUDAGraphCaptureControlFlowOpDispatchMode) since torch 2.14
+        # the while_loop op as CUDA graph while node (CUDAGraphCaptureControlFlowOpDispatchMode) since torch 2.14
         assert torch.__version__ >= (2, 14), f"torch_cuda_graph forward needs torch >= 2.14, got {torch.__version__}"
         opts = CollectionReadCheckCovered(opts)
         assert opts["forward"] is True, f"torch_cuda_graph: forward must be True here, got {opts['forward']!r}"
@@ -1649,7 +1654,8 @@ class GraphCapturedForwardStep:
             cap = next((c for c in buckets if c >= max_len), None)
             if cap is None:
                 raise ValueError(
-                    f"torch_cuda_graph forward: seq len {max_len} of {k!r} exceeds the largest dim_capacity {buckets[-1]}"
+                    f"torch_cuda_graph forward: seq len {max_len} of {k!r}"
+                    f" exceeds the largest dim_capacity {buckets[-1]}"
                 )
             caps.append((k, cap))
         return tuple(caps)
@@ -1703,7 +1709,8 @@ class GraphCapturedForwardStep:
         return prog.make_outputs()
 
     def _capture(self, prog: _ForwardProgram, extern_data_raw: Dict[str, Union[torch.Tensor, numpy.ndarray]]):
-        # noinspection PyProtectedMember
+        # torch >= 2.14 (asserted in __init__), the inspection runs an older torch
+        # noinspection PyProtectedMember,PyUnresolvedReferences
         from torch._higher_order_ops.cudagraph_conditional_nodes import (
             CUDAGraphCaptureControlFlowOpDispatchMode,
             ControlFlowOpWarmupDispatchMode,
