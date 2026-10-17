@@ -28,8 +28,10 @@ class MegatronDataset(CachedDataset2):
     Every entry of an index file is one seq, in the order of the index files.
     The data key ``data`` has the token IDs of the seq as stored (including EOD or other special IDs),
     sparse with ``vocab_size``.
-    Seq tags are ``doc-<d>/seq-<j>``, the ``j``-th entry of document ``d``,
-    with documents counted over all files.
+    Seq tags are ``<name>/doc-<d>/seq-<j>``, the ``j``-th entry of document ``d`` of the index file,
+    with ``<name>`` the base name of the index file without ``.idx``.
+    So the tag of a seq does not depend on the other files or their order,
+    e.g. with :class:`DistributeFilesDataset`.
 
     The index files are given on their own, so a different segmentation (other index files)
     can refer to unchanged data files.
@@ -60,7 +62,8 @@ class MegatronDataset(CachedDataset2):
     ):
         """
         :param data_file: the ``.bin`` file with the token IDs, or a list of them
-        :param index_file: the ``.idx`` file for ``data_file``, or a list of them, one per data file
+        :param index_file: the ``.idx`` file for ``data_file``, or a list of them, one per data file.
+            Their base names must be unique, as they are part of the seq tags.
         :param vocab_size: dim of ``data``. All token IDs must be below it.
             The index file does not store it, and it is not inferred from the data.
         :param vocab: labels of ``data``, see :func:`Vocabulary.create_vocab`. Must have ``vocab_size`` labels.
@@ -86,10 +89,14 @@ class MegatronDataset(CachedDataset2):
             self.labels["data"] = vocab.labels
 
         self._file_names = [(os.fspath(d), os.fspath(i)) for d, i in zip(data_files, index_files)]
+        tag_names = [os.path.basename(i) for _, i in self._file_names]
+        self._tag_names = [name[: -len(".idx")] if name.endswith(".idx") else name for name in tag_names]
+        self._file_idx_by_tag_name = {name: file_idx for file_idx, name in enumerate(self._tag_names)}
+        if len(self._file_idx_by_tag_name) != len(self._tag_names):
+            raise ValueError(f"{self}: index file base names {self._tag_names} not unique")
         # All lazy, see _lazy_init.
         self._files: Optional[List[_MegatronFile]] = None
         self._seq_offsets: Optional[numpy.ndarray] = None  # [num files + 1], first seq of every file
-        self._document_offsets: Optional[numpy.ndarray] = None  # [num files + 1], first document of every file
         self._seq_order: Optional[Sequence[int]] = None  # init_seq_order
 
     def _lazy_init(self):
@@ -97,7 +104,6 @@ class MegatronDataset(CachedDataset2):
             return
         files = [_MegatronFile(d, i, error_prefix=f"{self}: ") for d, i in self._file_names]
         self._seq_offsets = numpy.cumsum([0] + [len(f.seq_lens) for f in files])
-        self._document_offsets = numpy.cumsum([0] + [len(f.document_indices) - 1 for f in files])
         self._files = files
 
     def _get_file_and_local_seq_idx(self, corpus_seq_idx: int) -> Tuple[int, int]:
@@ -137,15 +143,19 @@ class MegatronDataset(CachedDataset2):
 
     def _get_corpus_seq_idx_from_tag(self, tag: str) -> int:
         self._lazy_init()
-        doc_str, _, seq_str = tag.partition("/seq-")
-        doc_str = doc_str[len("doc-") :]
-        if doc_str.isdigit() and seq_str.isdigit() and tag == f"doc-{int(doc_str)}/seq-{int(seq_str)}":
+        name, _, doc_and_seq = tag.rpartition("/doc-")
+        doc_str, _, seq_str = doc_and_seq.partition("/seq-")
+        if (
+            name in self._file_idx_by_tag_name
+            and doc_str.isdigit()
+            and seq_str.isdigit()
+            and tag == f"{name}/doc-{int(doc_str)}/seq-{int(seq_str)}"
+        ):
+            file_idx = self._file_idx_by_tag_name[name]
             document_idx, seq_in_doc = int(doc_str), int(seq_str)
-            if document_idx < self._document_offsets[-1]:
-                file_idx = int(numpy.searchsorted(self._document_offsets, document_idx, side="right")) - 1
-                document_indices = self._files[file_idx].document_indices
-                local_document_idx = document_idx - int(self._document_offsets[file_idx])
-                start, end = document_indices[local_document_idx : local_document_idx + 2].tolist()
+            document_indices = self._files[file_idx].document_indices
+            if document_idx < len(document_indices) - 1:
+                start, end = document_indices[document_idx : document_idx + 2].tolist()
                 if seq_in_doc < end - start:
                     return int(self._seq_offsets[file_idx]) + start + seq_in_doc
         raise ValueError(f"{self}: seq_list tag {tag!r} not in dataset")
@@ -185,24 +195,23 @@ class MegatronDataset(CachedDataset2):
         return int(self._seq_order[seq_idx])
 
     def get_tag(self, sorted_seq_idx: int) -> str:
-        """:return: tag of the sequence, ``doc-<d>/seq-<j>``"""
+        """:return: tag of the sequence, ``<name>/doc-<d>/seq-<j>``"""
         self._lazy_init()
         file_idx, local_seq_idx = self._get_file_and_local_seq_idx(self.get_corpus_seq_idx(sorted_seq_idx))
         document_indices = self._files[file_idx].document_indices
-        local_document_idx = int(numpy.searchsorted(document_indices, local_seq_idx, side="right")) - 1
-        document_idx = int(self._document_offsets[file_idx]) + local_document_idx
-        return f"doc-{document_idx}/seq-{local_seq_idx - int(document_indices[local_document_idx])}"
+        document_idx = int(numpy.searchsorted(document_indices, local_seq_idx, side="right")) - 1
+        seq_in_doc = local_seq_idx - int(document_indices[document_idx])
+        return f"{self._tag_names[file_idx]}/doc-{document_idx}/seq-{seq_in_doc}"
 
     def get_all_tags(self) -> List[str]:
         """:return: all tags"""
         self._lazy_init()
         tags = []
-        for file, document_offset in zip(self._files, self._document_offsets):
+        for file, name in zip(self._files, self._tag_names):
             doc_lens = numpy.diff(file.document_indices)
-            local_document_idx = numpy.repeat(numpy.arange(len(doc_lens)), doc_lens)
-            seq_in_doc = numpy.arange(len(file.seq_lens)) - file.document_indices[local_document_idx]
-            document_idx = local_document_idx + document_offset
-            tags += [f"doc-{d}/seq-{j}" for d, j in zip(document_idx.tolist(), seq_in_doc.tolist())]
+            document_idx = numpy.repeat(numpy.arange(len(doc_lens)), doc_lens)
+            seq_in_doc = numpy.arange(len(file.seq_lens)) - file.document_indices[document_idx]
+            tags += [f"{name}/doc-{d}/seq-{j}" for d, j in zip(document_idx.tolist(), seq_in_doc.tolist())]
         return tags
 
     def get_total_num_seqs(self, *, fast: bool = False) -> int:
