@@ -1504,6 +1504,37 @@ def test_masked_select_scatter_nested_roundtrip():
     assert np.allclose(outputs["output"].raw_tensor, outputs["data_ref"].raw_tensor)
 
 
+def test_slice_update():
+    # one position per batch entry or a scalar one, the last position of the axis included;
+    # a position beyond the axis must fail, not write nothing
+    import torch
+
+    rf.select_backend_torch()
+    batch = Dim(3, name="batch")
+    time_dim = Dim(4, name="time")
+    feat = Dim(2, name="feat")
+    target = rf.zeros([batch, time_dim, feat], device="cpu")
+    value = Tensor("value", [batch, feat], dtype="float32", raw_tensor=torch.arange(1.0, 7.0).view(3, 2))
+    for starts in ([0, 3, 1], 3):
+        if isinstance(starts, int):
+            start = rf.constant(starts, dims=(), dtype="int32", device="cpu")
+            starts = [starts] * 3
+        else:
+            start = Tensor("start", [batch], dtype="int32", raw_tensor=torch.tensor(starts, dtype=torch.int32))
+        out = rf.slice_update(target, value, axis=time_dim, start=start)
+        expected = torch.zeros(3, 4, 2)
+        for b, s in enumerate(starts):
+            expected[b, s] = value.raw_tensor[b]
+        torch.testing.assert_close(out.copy_transpose([batch, time_dim, feat]).raw_tensor, expected)
+    start = Tensor("start", [batch], dtype="int32", raw_tensor=torch.tensor([0, 4, 1], dtype=torch.int32))
+    try:
+        rf.slice_update(target, value, axis=time_dim, start=start)
+    except (IndexError, RuntimeError) as exc:
+        print("expected error:", exc)
+    else:
+        raise AssertionError("slice_update beyond the axis did not fail")
+
+
 def test_mask_nested_dim_value_is_true_size():
     # The merged dim of mask_nested must report the true per-entry sizes, not an upper bound:
     # anything that pads or slices by it (rf.pad, rf.slice) sizes its buffer from get_dim_value.

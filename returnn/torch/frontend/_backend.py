@@ -587,6 +587,30 @@ class TorchBackend(Backend[torch.Tensor]):
         return out
 
     @staticmethod
+    def slice_update(target: Tensor, value: Tensor, *, axis: Dim, start: Tensor) -> Tensor:
+        """
+        :param target: with ``axis``
+        :param value: without ``axis``
+        :param axis:
+        :param start: index in ``axis``, scalar or with other dims of ``target``
+        :return: ``target`` with ``value`` at ``start`` along ``axis``
+
+        ``scatter``: a ``start`` outside ``axis`` fails
+        (CPU: error, CUDA: device-side assert, also under graph capture, without host sync),
+        where the generic select would silently write nothing.
+        """
+        axis_int = target.dims.index(axis)
+        other_dims = target.dims[:axis_int] + target.dims[axis_int + 1 :]
+        shape = list(target.raw_tensor.shape)
+        shape[axis_int] = 1
+        index = start.copy_compatible_to_dims_raw(other_dims).unsqueeze(axis_int)
+        index = index.to(device=target.raw_tensor.device, dtype=torch.int64).expand(shape)
+        src = value.copy_compatible_to_dims_raw(other_dims).unsqueeze(axis_int).to(target.raw_tensor.dtype)
+        out = target.copy_template()
+        out.raw_tensor = target.raw_tensor.scatter(axis_int, index, src.expand(shape))
+        return out
+
+    @staticmethod
     def stack(sources: Sequence[Tensor], *, out_dim: Dim) -> Tensor:
         """stack"""
         out_dims = (out_dim,) + sources[0].dims
