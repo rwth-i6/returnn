@@ -10,13 +10,14 @@ from collections import deque
 import functools
 import os
 import sys
+import threading
 import time
 import types
 import numpy
 
 from returnn.log import log
 from returnn.util import better_exchook
-from returnn.util.basic import try_run, NumbersDict
+from returnn.util.basic import get_fwd_compat_kwargs, try_run, NumbersDict
 from returnn.util.multi_proc_non_daemonic_spawn import NonDaemonicSpawnContext
 from returnn.config import SubProcCopyGlobalConfigPreInitFunc
 from .basic import DatasetSeq
@@ -63,7 +64,7 @@ class NemoSpeechDataset(CachedDataset2):
     One epoch is ``draws_per_epoch`` draws (sum over all shards).
     A draw is one record from one source (leaf of the ``input_cfg`` tree), like one step of NeMo's multiplexer:
     records which NeMo's source skips (e.g. ``_skipme``) are not drawn,
-    records rejected by the filters are.
+    records rejected by the filters (NeMo's and ``cut_filter``) are.
     Draws are distributed over the sources by their weights,
     within one draw of the exact weight at every epoch boundary.
     Every source continues where the previous epoch stopped, in complete passes over its records.
@@ -115,6 +116,7 @@ class NemoSpeechDataset(CachedDataset2):
         targets: Union[Vocabulary, Dict[str, Any], None] = None,
         tokenizer: Optional[Any] = None,
         audio: Optional[Dict[str, Any]] = None,
+        cut_filter: Optional[Callable[..., bool]] = None,
         shuffle_window: Optional[int] = None,
         buffer_size: int = 32,
         preload_next_epoch: bool = True,
@@ -135,6 +137,11 @@ class NemoSpeechDataset(CachedDataset2):
             As in NeMo, it also enables the token-per-second filters (with ``pretokenize``).
         :param audio: options for :class:`ExtractAudioFeatures`.
             None (default): the raw samples as loaded by NeMo, shape (time, 1).
+        :param cut_filter: ``cut_filter(cut, **kwargs) -> bool``, whether to keep the record,
+            e.g. by a field of the manifest (in ``cut.custom``).
+            Applied after the NeMo filters, to the cut without audio.
+            Like the NeMo filters, a rejected record counts as draw.
+            Must be deterministic and picklable (e.g. a module-level function), as it runs in the worker procs.
         :param shuffle_window: number of draws which are shuffled together.
             None: NeMo ``shuffle_buffer_size`` if NeMo ``shuffle`` is set, else 1.
         :param buffer_size: number of seqs each worker prefetches
@@ -148,11 +155,6 @@ class NemoSpeechDataset(CachedDataset2):
             raise ValueError(f"{self}: partition_epoch/repeat_epoch not supported, use draws_per_epoch")
         if self.seq_ordering != "default":
             raise ValueError(f"{self}: seq_ordering {self.seq_ordering!r} not supported, use shuffle_window")
-        if self._num_shards != 1:
-            raise ValueError(
-                f"{self}: RETURNN dataset sharding not supported,"
-                f" this dataset follows the NeMo sharding (distributed rank x NeMo num_workers)"
-            )
         if targets is not None and tokenizer is not None:
             raise ValueError(f"{self}: specify either targets or tokenizer, not both")
         self.nemo_config = nemo_config
@@ -163,16 +165,25 @@ class NemoSpeechDataset(CachedDataset2):
         self.use_worker_procs = use_worker_procs
         if _rank_and_size is None:
             # noinspection PyProtectedMember
-            from .distrib_files import _get_rank_and_size
+            from .basic import _get_distributed_rank_and_size
 
-            _rank_and_size = _get_rank_and_size()
+            _rank_and_size = _get_distributed_rank_and_size()
         self._rank_and_size = tuple(_rank_and_size)
+        rank, size = self._rank_and_size
+        # The same sharding via _num_shards/_shard_index (torch_distributed dataset_distribution "shard") is fine.
+        if (self._num_shards, self._shard_index) not in [(1, 0), (size, rank)]:
+            raise ValueError(
+                f"{self}: this dataset follows the NeMo sharding (distributed rank {rank} / size {size}"
+                f" x NeMo num_workers), which clashes with"
+                f" _num_shards {self._num_shards} / _shard_index {self._shard_index}"
+            )
 
         if isinstance(targets, dict):
             targets = Vocabulary.create_vocab(**targets)
         self.targets: Optional[Vocabulary] = targets
         self.tokenizer = tokenizer
         self.audio = audio
+        self.cut_filter = cut_filter
         self._audio_feature_dim = 1
         if audio is not None:
             from .util.feature_extraction import ExtractAudioFeatures
@@ -240,6 +251,7 @@ class NemoSpeechDataset(CachedDataset2):
             targets=self.targets,
             tokenizer=self.tokenizer,
             audio=self.audio,
+            cut_filter=self.cut_filter,
             shuffle_window=self.shuffle_window,
             buffer_size=self.buffer_size,
             preload_next_epoch=self.preload_next_epoch,
@@ -513,6 +525,7 @@ class _ShardStream:
         targets: Optional[Vocabulary],
         tokenizer: Optional[Any],
         audio: Optional[Dict[str, Any]],
+        cut_filter: Optional[Callable[..., bool]],
         shuffle_window: Optional[int],
         buffer_size: int,
         preload_next_epoch: bool,
@@ -548,7 +561,7 @@ class _ShardStream:
 
             self.feature_extractor = ExtractAudioFeatures(random_state=numpy.random.RandomState(1), **audio)
 
-        self.sources = _NemoSources(config, tokenizer=self.nemo_tokenizer)
+        self.sources = _NemoSources(config, tokenizer=self.nemo_tokenizer, cut_filter=cut_filter)
         self.partitions = [
             _get_partition(
                 source.node, shard_id=self.shard_id, num_shards=self.num_shards, process_seed=self.process_seed
@@ -576,6 +589,7 @@ class _ShardStream:
 
         self._requested_epoch: Optional[int] = None
         self._buffer: deque[_ShardItem] = deque()
+        self.cond = threading.Condition()  # guards the buffer and requested epoch, see _ShardProducer
         self._plans: Dict[int, _EpochPlan] = {}  # epoch -> plan, for the requested and production epoch
         self._load_plan: Optional[_EpochPlan] = None  # see load
         # Production state.
@@ -634,13 +648,14 @@ class _ShardStream:
         Start the given epoch (1-based).
         Keeps the seqs of this epoch which were already prefetched.
         """
-        self._requested_epoch = epoch
-        while self._buffer and self._buffer[0].epoch != epoch:
-            self._buffer.popleft()
-        preloaded = self._buffer[0].local_idx == 0 if self._buffer else self._prod_local == 0
-        if self._prod_epoch != epoch or not preloaded:
-            self._buffer.clear()
-            self._reset_production(epoch)
+        with self.cond:
+            self._requested_epoch = epoch
+            while self._buffer and self._buffer[0].epoch != epoch:
+                self._buffer.popleft()
+            preloaded = self._buffer[0].local_idx == 0 if self._buffer else self._prod_local == 0
+            if self._prod_epoch != epoch or not preloaded:
+                self._buffer.clear()
+                self._reset_production(epoch)
 
     def _produce(self, *, load: bool) -> _ShardItem:
         """produce the next item (next accepted seq, or end of epoch) of the production epoch"""
@@ -721,6 +736,35 @@ class _ShardStream:
             )
         return features
 
+    def get_buffered(self, epoch: int, local_idx: int) -> Optional[_ShardItem]:
+        """
+        :func:`get` from the buffer only. Does not touch the production state,
+        so the worker proc serves it while the producer thread loads another seq.
+
+        :param epoch: must be the current epoch
+        :param local_idx: accepted seq index within this shard, must not decrease
+        :return: the seq item, or the end of the epoch (``seq_tag is None``), or None if not buffered
+        """
+        with self.cond:
+            assert epoch == self._requested_epoch
+            while (
+                self._buffer
+                and self._buffer[0].seq_tag is not None
+                and (self._buffer[0].epoch, self._buffer[0].local_idx) < (epoch, local_idx)
+            ):
+                self._buffer.popleft()
+                self.cond.notify_all()
+            if not self._buffer or self._buffer[0].epoch != epoch:
+                return None
+            item = self._buffer[0]
+            if item.local_idx == local_idx:
+                self._buffer.popleft()
+                self.cond.notify_all()
+                return item
+            if item.seq_tag is None:
+                return item  # end of epoch before local_idx
+            raise Exception(f"shard {self.shard_id}: seq {local_idx} of epoch {epoch} was already dropped")
+
     def get(self, epoch: int, local_idx: int, *, load: bool = True) -> _ShardItem:
         """
         :param epoch: must be the current epoch
@@ -728,21 +772,9 @@ class _ShardStream:
         :param load: whether the audio is needed. Only relevant if the seq is not buffered already.
         :return: the seq item, or the end of the epoch (``seq_tag is None``)
         """
-        assert epoch == self._requested_epoch
-        while (
-            self._buffer
-            and self._buffer[0].seq_tag is not None
-            and (self._buffer[0].epoch, self._buffer[0].local_idx) < (epoch, local_idx)
-        ):
-            self._buffer.popleft()
-        if self._buffer and self._buffer[0].epoch == epoch:
-            item = self._buffer[0]
-            if item.local_idx == local_idx:
-                self._buffer.popleft()
-                return item
-            if item.seq_tag is None:
-                return item  # end of epoch before local_idx
-            raise Exception(f"shard {self.shard_id}: seq {local_idx} of epoch {epoch} was already dropped")
+        item = self.get_buffered(epoch, local_idx)
+        if item is not None:
+            return item
         assert self._prod_epoch == epoch and not self._buffer
         while True:
             if self._prod_done:
@@ -751,20 +783,25 @@ class _ShardStream:
             if item.seq_tag is None or item.local_idx == local_idx:
                 return item
 
-    def prefetch_step(self) -> bool:
+    def prefetch_possible(self) -> bool:
         """
-        Prefetch one seq into the buffer.
-
-        :return: whether something was done
+        :return: whether :func:`prefetch_step` has something to do. Call with ``cond`` held.
         """
         if self._requested_epoch is None or len(self._buffer) >= self.buffer_size:
             return False
-        if self._prod_done:
-            if not self.preload_next_epoch or self._prod_epoch > self._requested_epoch:
-                return False
-            self._reset_production(self._prod_epoch + 1)
-        self._buffer.append(self._produce(load=True))
+        if self._prod_done and (not self.preload_next_epoch or self._prod_epoch > self._requested_epoch):
+            return False
         return True
+
+    def prefetch_step(self):
+        """
+        Prefetch one seq into the buffer, if :func:`prefetch_possible`.
+        """
+        if self._prod_done:
+            self._reset_production(self._prod_epoch + 1)
+        item = self._produce(load=True)
+        with self.cond:
+            self._buffer.append(item)
 
 
 class _ShardWorkerProc:
@@ -826,24 +863,97 @@ def _shard_worker_proc_loop(shard_opts: Dict[str, Any], conn: mpConnection):
     from lhotse.utils import fix_random_seed
 
     fix_random_seed(stream.process_seed)
+    producer = _ShardProducer(stream)
+    producer.start()
     try:
         while True:
-            while not conn.poll():
-                if not stream.prefetch_step():
-                    break
             msg, kwargs = conn.recv()
+            producer.check()
             if msg == "exit":
                 break
             elif msg == "init_epoch":
-                stream.init_epoch(**kwargs)
+                producer.call(stream.init_epoch, **kwargs)
             elif msg == "get":
-                conn.send(("item", stream.get(**kwargs)))
+                item = stream.get_buffered(kwargs["epoch"], kwargs["local_idx"])
+                if item is None:
+                    item = producer.call(stream.get, **kwargs)
+                conn.send(("item", item))
             elif msg == "load":
-                conn.send(("data", stream.load(**kwargs)))
+                conn.send(("data", producer.call(stream.load, **kwargs)))
             else:
                 raise Exception(f"unknown msg {msg!r}")
     except (KeyboardInterrupt, EOFError):  # when parent dies
         pass
+    finally:
+        producer.stop()
+
+
+class _ShardProducer(threading.Thread):
+    """
+    Prefetches into the buffer of a :class:`_ShardStream` in the worker proc,
+    and runs the calls which need the production state or the NeMo sources
+    (:func:`_ShardStream.get` on a cache miss, ``load``, ``init_epoch``) in between.
+    The main thread of the worker proc serves buffered seqs (:func:`_ShardStream.get_buffered`)
+    while this thread loads another seq.
+    Daemon thread: the proc exits also while a load is blocked.
+    """
+
+    def __init__(self, stream: _ShardStream):
+        super().__init__(name="NeMo shard producer", daemon=True)
+        self.stream = stream
+        self._call: Optional[Tuple[Callable, Dict[str, Any]]] = None
+        self._result: Any = None
+        self._exc: Optional[BaseException] = None
+        self._stop_requested = False
+
+    def run(self):
+        """thread main"""
+        stream = self.stream
+        try:
+            while True:
+                with stream.cond:
+                    while not self._stop_requested and self._call is None and not stream.prefetch_possible():
+                        stream.cond.wait()
+                    if self._stop_requested:
+                        return
+                    call = self._call
+                if call is None:
+                    stream.prefetch_step()
+                    continue
+                func, kwargs = call
+                result = func(**kwargs)
+                with stream.cond:
+                    self._call, self._result = None, result
+                    stream.cond.notify_all()
+        except BaseException as exc:  # any error of the producer goes to the main thread, see check
+            with stream.cond:
+                self._exc = exc
+                stream.cond.notify_all()
+
+    def call(self, func: Callable, **kwargs) -> Any:
+        """
+        :return: ``func(**kwargs)``, run in this thread between the prefetch steps
+        """
+        with self.stream.cond:
+            assert self._call is None
+            self._call = (func, kwargs)
+            self.stream.cond.notify_all()
+            while self._call is not None and self._exc is None:
+                self.stream.cond.wait()
+            self.check()
+            result, self._result = self._result, None
+            return result
+
+    def check(self):
+        """raise the error of this thread, if it failed"""
+        if self._exc is not None:
+            raise self._exc
+
+    def stop(self):
+        """stop after the current prefetch step"""
+        with self.stream.cond:
+            self._stop_requested = True
+            self.stream.cond.notify_all()
 
 
 class _NemoSource:
@@ -867,8 +977,10 @@ class _NemoSources:
     The NeMo data pipeline (sources, maps, filters) as a list of sources with random access.
     """
 
-    def __init__(self, config: DictConfig, *, tokenizer: Optional[Any]):
+    def __init__(self, config: DictConfig, *, tokenizer: Optional[Any], cut_filter: Optional[Callable[..., bool]]):
         cuts = _make_nemo_cutset(config, tokenizer=tokenizer)
+        if cut_filter is not None:
+            cuts = cuts.filter(functools.partial(_apply_cut_filter, cut_filter))
         self.sources: List[_NemoSource] = []
         _collect_sources(cuts, weight=1.0, ops=[], out=self.sources)
 
@@ -1042,6 +1154,10 @@ def _make_nemo_cutset(config: DictConfig, *, tokenizer: Optional[Any]):
         cuts, nemo_dl.determine_bucket_duration_bins(config), config, audio_token_estimator=audio_token_estimator
     )
     return cuts
+
+
+def _apply_cut_filter(cut_filter: Callable[..., bool], cut: Cut) -> bool:
+    return cut_filter(cut, **get_fwd_compat_kwargs())
 
 
 def _create_nemo_tokenizer(tokenizer: Any):

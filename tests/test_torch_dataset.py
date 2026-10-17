@@ -21,7 +21,13 @@ from returnn.util import multi_proc_manager_with_watchdog
 
 
 def get_loader_from_returnn_dataset(
-    dataset: Dataset, mp_manager: SyncManager, *, batch_size: int = 5, max_seqs: int = 2
+    dataset: Dataset,
+    mp_manager: SyncManager,
+    *,
+    batch_size: int = 5,
+    max_seqs: int = 2,
+    num_workers: int = 1,
+    shard_workers: Optional[bool] = None,
 ) -> DataLoader:
     # Follow mostly similar logic as in the PT engine.
 
@@ -31,7 +37,9 @@ def get_loader_from_returnn_dataset(
         dataset=dataset, epoch_mp_shared=epoch_mp_shared
     )
 
-    wrapped_dataset = returnn_dataset_wrapper.ReturnnDatasetIterDataPipe(dataset, reset_callback=reset_callback)
+    wrapped_dataset = returnn_dataset_wrapper.ReturnnDatasetIterDataPipe(
+        dataset, reset_callback=reset_callback, shard_workers=shard_workers
+    )
 
     batches_dataset = data_pipeline.BatchingIterDataPipe(wrapped_dataset, batch_size=batch_size, max_seqs=max_seqs)
 
@@ -49,7 +57,7 @@ def get_loader_from_returnn_dataset(
 
     pickle.loads(pickle.dumps(batches_dataset))
 
-    return data_pipeline.create_data_loader_from_batches(batches_dataset, {"num_workers": 1})
+    return data_pipeline.create_data_loader_from_batches(batches_dataset, {"num_workers": num_workers})
 
 
 def test_pipeline_serialization():
@@ -187,6 +195,44 @@ def test_DistributeFilesDataset_no_worker_proc():
     assert res == ref
 
 
+def test_LmDataset_SentencePieces_add_eos():
+    # The dataset with its vocab is pickled into the spawned worker proc.
+    import tempfile
+    from test_GeneratingDataset import generate_sentencepiece_model
+
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        with open(f"{tmp_dir}/corpus.txt", "w") as f:
+            f.write("HELLO WORLD\nGOOD MORNING\nHELLO\n")
+        opts = {
+            "class": "LmDataset",
+            "corpus_file": f"{tmp_dir}/corpus.txt",
+            "orth_vocab": {
+                "class": "SentencePieces",
+                "model_file": generate_sentencepiece_model(tmp_dir),
+                "add_eos": True,
+            },
+        }
+
+        ref_dataset = init_dataset(opts)
+        ref_dataset.init_seq_order(epoch=1)
+        ref = []
+        seq_idx = 0
+        while ref_dataset.is_less_than_num_seqs(seq_idx):
+            ref_dataset.load_seqs(seq_idx, seq_idx + 1)
+            ref.append(ref_dataset.get_data(seq_idx, "data").tolist())
+            seq_idx += 1
+        assert len(ref) == 3 and all(seq[-1] == ref_dataset.orth_vocab.eos_label_id for seq in ref)
+
+        dataset = init_dataset(opts)
+        mp_manager = multi_proc_manager_with_watchdog.create_manager()
+        loader = get_loader_from_returnn_dataset(dataset, mp_manager, batch_size=100, max_seqs=3)
+        res = []
+        for batch in loader:
+            for b in range(batch["data"].shape[0]):
+                res.append(batch["data"][b, : batch["data:seq_len"][b]].tolist())
+        assert res == ref
+
+
 def test_func_in_global_config():
     # Very similar to test_MultiProcDataset_via_config.
     # https://github.com/rwth-i6/returnn/issues/1495
@@ -280,6 +326,107 @@ def test_MultiProcDataset_HDFDataset():
         assert c == n
 
 
+def test_get_default_kwargs_train_dataset_distribution():
+    # torch_distributed dataset_distribution "shard" shards the train dataset over the ranks (via returnn.__main__).
+    from returnn.__main__ import load_data
+    from test_HDFDataset import generate_hdf_from_other
+    from test_Dataset import dummy_iter_dataset
+
+    assert Dataset.get_default_kwargs_train(Config({})) == {}
+    assert Dataset.get_default_kwargs_train(Config({"torch_distributed": {}})) == {}
+    assert (
+        Dataset.get_default_kwargs_train(Config({"torch_distributed": {"dataset_distribution": "random_seed_offset"}}))
+        == {}
+    )
+    try:
+        Dataset.get_default_kwargs_train(Config({"torch_distributed": {"dataset_distribution": "foo"}}))
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("expected ValueError")
+
+    hdf_fn = generate_hdf_from_other({"class": "Task12AXDataset", "num_seqs": 11})
+    all_tags = sorted(
+        seq.seq_tag for seq in dummy_iter_dataset(init_dataset({"class": "HDFDataset", "files": [hdf_fn]}))
+    )
+    tags = []
+    for rank in range(2):
+        config = Config(
+            {
+                "train": {"class": "HDFDataset", "files": [hdf_fn], "seq_ordering": "random"},
+                "torch_distributed": {"dataset_distribution": "shard"},
+                "__debug_dummy_distributed_rank_and_size": (rank, 2),
+            }
+        )
+        kwargs = Dataset.get_default_kwargs_train(config)
+        assert kwargs == {"_num_shards": 2, "_shard_index": rank}
+        dataset, _ = load_data(config, 0, "train", **kwargs)
+        tags.append([seq.seq_tag for seq in dummy_iter_dataset(dataset)])
+    assert [len(t) for t in tags] == [6, 5]
+    assert sorted(tags[0] + tags[1]) == all_tags
+
+
+class _NoShardingDataset(Task12AXDataset):
+    def supports_sharding(self) -> bool:
+        return False
+
+
+def test_data_loader_num_workers_sharding():
+    # Every DataLoader worker iterates its own copy of the dataset, so every worker yields its own shard,
+    # and the workers together yield every seq once (and not every seq once per worker, as before behavior version 37).
+    import pytest
+    from test_HDFDataset import generate_hdf_from_other
+    from test_Dataset import dummy_iter_dataset
+    from returnn.datasets.hdf import HDFDataset
+
+    hdf_fn = generate_hdf_from_other({"class": "Task12AXDataset", "num_seqs": 11})
+    all_tags = sorted(seq.seq_tag for seq in dummy_iter_dataset(HDFDataset(files=[hdf_fn], cache_byte_size=0)))
+    assert len(all_tags) == 11
+    mp_manager = multi_proc_manager_with_watchdog.create_manager()
+
+    behavior_version_orig_state = BehaviorVersion._get_state()
+    try:
+        for version, shard_workers in [(36, False), (37, True)]:
+            BehaviorVersion._reset()
+            BehaviorVersion.set(version)
+            pipe = returnn_dataset_wrapper.ReturnnDatasetIterDataPipe(HDFDataset(files=[hdf_fn], cache_byte_size=0))
+            assert pipe._shard_workers == shard_workers
+    finally:
+        BehaviorVersion._reset(behavior_version_orig_state)
+
+    loader = get_loader_from_returnn_dataset(
+        HDFDataset(files=[hdf_fn], cache_byte_size=0), mp_manager, max_seqs=1, num_workers=2, shard_workers=True
+    )
+    for _ in range(2):  # the second epoch reuses the persistent workers
+        tags = [str(batch["seq_tag"][0]) for batch in loader]
+        assert sorted(tags) == all_tags, tags
+
+    loader = get_loader_from_returnn_dataset(
+        HDFDataset(files=[hdf_fn], cache_byte_size=0), mp_manager, max_seqs=1, num_workers=2, shard_workers=False
+    )
+    tags = [str(batch["seq_tag"][0]) for batch in loader]
+    assert sorted(tags) == sorted(all_tags * 2), tags
+
+    # The dataset is sharded already (e.g. per distributed rank): the workers yield sub shards of that shard.
+    dataset = HDFDataset(files=[hdf_fn], cache_byte_size=0, _num_shards=2, _shard_index=1)
+    loader = get_loader_from_returnn_dataset(dataset, mp_manager, max_seqs=1, num_workers=2, shard_workers=True)
+    tags = [str(batch["seq_tag"][0]) for batch in loader]
+    ref = [
+        seq.seq_tag
+        for shard_index in (2, 3)
+        for seq in dummy_iter_dataset(
+            HDFDataset(files=[hdf_fn], cache_byte_size=0, _num_shards=4, _shard_index=shard_index)
+        )
+    ]
+    assert len(tags) == 5 and sorted(tags) == sorted(ref), (tags, ref)
+
+    loader = get_loader_from_returnn_dataset(
+        _NoShardingDataset(num_seqs=11), mp_manager, max_seqs=1, num_workers=2, shard_workers=True
+    )
+    with pytest.raises(ValueError, match="does not support sharding"):
+        list(loader)
+
+
 class _BigTagBatches(torch.utils.data.IterableDataset):
     """the tag of each batch goes through the pipe of the worker (unlike tensors), and is larger than its buffer"""
 
@@ -339,6 +486,104 @@ def test_shutdown_data_loader_torch_pin_memory():
     if not torch.cuda.is_available():
         raise unittest.SkipTest("CUDA not available")
     _check_shutdown_data_loader(pin_memory=True)
+
+
+def test_shutdown_data_loader_drain_conn():
+    """the drain of the worker results stops on request also within a partial message, and at the end of the pipe"""
+    import multiprocessing
+    import struct
+    import threading
+    from test_MultiProcDataset import timeout
+
+    reader, writer = multiprocessing.Pipe(duplex=False)
+    writer.send_bytes(b"x" * 10)
+    os.write(writer.fileno(), struct.pack("!i", 8) + b"1234")  # e.g. a killed worker: 4 of 8 bytes sent
+    stop_event = threading.Event()
+    timer = threading.Timer(0.1, stop_event.set)
+    with timeout(10):
+        timer.start()
+        data_pipeline._drain_conn(reader, stop_event)
+        writer.close()
+        data_pipeline._drain_conn(reader, threading.Event())
+    timer.join()
+    reader.close()
+
+
+def test_shutdown_data_loader_pin_memory_wrapped_iterable():
+    """:class:`PinMemoryDataLoader` can wrap any iterable, not only a DataLoader"""
+    from returnn.torch.data.pin_memory import PinMemoryDataLoader
+
+    data_pipeline.shutdown_data_loader(PinMemoryDataLoader([], device="cuda:0"))  # no CUDA needed before iter()
+
+
+class _ReaderProcDataset(Task12AXDataset):
+    """owns a reader proc, like :class:`NemoSpeechDataset`, and logs its start and how it is freed"""
+
+    def __init__(self, *, log_file: str, **kwargs):
+        super().__init__(**kwargs)
+        self.log_file = log_file
+        self._reader_proc = None
+        self._reader_conn = None
+
+    def _log(self, line: str):
+        with open(self.log_file, "a") as f:
+            f.write(line + "\n")
+
+    def init_seq_order(self, epoch=None, seq_list=None, seq_order=None):
+        """init seq order, start the reader proc"""
+        if epoch is not None and self._reader_proc is None:
+            from returnn.util.multi_proc_non_daemonic_spawn import NonDaemonicSpawnContext
+
+            ctx = NonDaemonicSpawnContext()
+            self._reader_conn, child_conn = ctx.Pipe()
+            self._reader_proc = ctx.Process(target=_reader_proc_loop, args=(child_conn,))
+            self._reader_proc.start()
+            child_conn.close()
+            self._log(f"start {self._reader_proc.pid}")
+        return super().init_seq_order(epoch=epoch, seq_list=seq_list, seq_order=seq_order)
+
+    def finish_epoch(self, *, free_resources: bool = False):
+        """finish epoch, stop the reader proc"""
+        import multiprocessing.util
+
+        super().finish_epoch(free_resources=free_resources)
+        if free_resources and self._reader_proc is not None:
+            is_exiting = multiprocessing.util.is_exiting()
+            self._reader_conn.send("exit")
+            self._reader_proc.join()
+            self._log(f"free {is_exiting} {self._reader_proc.exitcode}")
+            self._reader_proc = None
+
+    def __del__(self):
+        if self._reader_proc is not None:
+            self._reader_conn.send("exit")  # without join, like NemoSpeechDataset
+
+
+def _reader_proc_loop(conn):
+    conn.recv()
+
+
+def test_data_loader_worker_exit_frees_dataset():
+    """
+    The DataLoader worker frees its dataset copy (e.g. reader procs) when it ends,
+    before the multiprocessing exit cleanup (which would signal the reader), and not between epochs
+    """
+    import tempfile
+
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        log_file = f"{tmp_dir}/log.txt"
+        dataset = _ReaderProcDataset(log_file=log_file, num_seqs=10)
+        wrapped_dataset = returnn_dataset_wrapper.ReturnnDatasetIterDataPipe(dataset)
+        batches_dataset = data_pipeline.BatchingIterDataPipe(wrapped_dataset, batch_size=5, max_seqs=2)
+        loader = data_pipeline.create_data_loader_from_batches(batches_dataset, {"num_workers": 1})
+        for _ in range(2):  # the persistent worker reuses the dataset copy
+            next(iter(loader))  # leaves unread batches
+        worker = loader._iterator._workers[0]
+        data_pipeline.shutdown_data_loader(loader)
+        assert worker.exitcode == 0
+        with open(log_file) as f:
+            lines = f.read().splitlines()
+    assert len(lines) == 2 and lines[0].startswith("start ") and lines[1] == "free False 0", lines
 
 
 def test_batching_packed_batch_cost_bounds_a_product_of_lengths():
@@ -406,6 +651,47 @@ def test_batching_packed_batch_cost_meets_only_its_own_limit():
                 seqs, batch_size=None, max_seqs=100, packed_batch_size=700, packed_batch_cost={"lattice": cells}
             )
         )
+
+
+def test_bucket_ordering_monotonic_data_keys():
+    """
+    A partially filled bucket is emitted at the end, after batches of later seqs.
+    With monotonic_data_keys (default since behavior version 35), complete_frac and seq_idx keep the input order,
+    while the payload and seq_tag stay with their seq.
+    """
+    import pickle
+    import numpy
+
+    lens = [8, 1, 20, 1, 1, 1]  # the seq of len 20 is too long for all buckets and dropped
+    seqs = [
+        {
+            "data": numpy.full((n,), i, dtype="int32"),
+            "seq_tag": numpy.array(f"seq-{i}"),
+            "seq_idx": numpy.array(i),
+            "complete_frac": numpy.array((i + 1) / len(lens)),
+        }
+        for i, n in enumerate(lens)
+    ]
+    seqs_orig = [dict(seq) for seq in seqs]
+
+    batches = list(
+        data_pipeline.BucketOrderingIterDataPipe(
+            seqs, buckets=[(2, 2), (8, 2)], length_key="data", monotonic_data_keys=()
+        )
+    )
+    assert [[int(s["seq_idx"]) for s in b] for b in batches] == [[1, 3], [4, 5], [0]]  # original values
+    assert [max(float(s["complete_frac"]) for s in b) for b in batches] == [4 / 6, 1.0, 1 / 6]
+
+    pipe = data_pipeline.BucketOrderingIterDataPipe(
+        seqs, buckets=[(2, 2), (8, 2)], length_key="data", monotonic_data_keys=("complete_frac", "seq_idx")
+    )
+    for pipe_ in [pipe, pipe, pickle.loads(pickle.dumps(pipe))]:  # repeated iteration, pickling
+        batches = list(pipe_)
+        assert [[str(s["seq_tag"]) for s in b] for b in batches] == [["seq-1", "seq-3"], ["seq-4", "seq-5"], ["seq-0"]]
+        assert [[int(s["data"][0]) for s in b] for b in batches] == [[1, 3], [4, 5], [0]]
+        assert [[int(s["seq_idx"]) for s in b] for b in batches] == [[0, 1], [3, 4], [5]]
+        assert [max(float(s["complete_frac"]) for s in b) for b in batches] == [2 / 6, 5 / 6, 1.0]
+    assert all(seq == seq_orig for seq, seq_orig in zip(seqs, seqs_orig)), "input dicts must not be modified"
 
 
 if __name__ == "__main__":

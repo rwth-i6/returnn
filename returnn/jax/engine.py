@@ -962,11 +962,13 @@ class Engine(EngineBase):
             if batch_dim.dyn_size_ext is None:
                 batch_name: str = batch_dim.name or "batch"
                 batch_dim.dyn_size_ext = Tensor(batch_name, dims=[], dtype="int32")
-            # The batch is full at the bound, with zero-length filler seqs,
-            # the regime the torch bound path uses (its CTC returns loss 0 for them).
-            # Carrying the true count instead would make the batch dim need masking,
-            # which ops like search_sorted refuse.
-            batch_dim.dyn_size_ext.raw_tensor = jnp.asarray(batch_bound, dtype=jnp.int32)
+            # The batch is filled up to the bound with zero-length padding seqs.
+            # With mask_padding_seqs, the batch dim keeps the real batch size, so these are masked
+            # (as in the padded path, see fill_extern_data); else they count as real empty seqs.
+            if self._static_shapes_opts["mask_padding_seqs"]:
+                batch_dim.dyn_size_ext.raw_tensor = jnp.asarray(batch_raws["batch_dim"], dtype=jnp.int32)
+            else:
+                batch_dim.dyn_size_ext.raw_tensor = jnp.asarray(batch_bound, dtype=jnp.int32)
             batch_dim.capacity = batch_bound
             if spatial.dyn_size_ext is None:
                 spatial.dyn_size_ext = Tensor(spatial.name or "time", dims=[batch_dim], dtype="int32")
@@ -1501,7 +1503,8 @@ def _static_shapes_opts_from_config(config: Config) -> Optional[Dict[str, Any]]:
     """
     :param config:
     :return: ``jax_static_shapes``: ``batch_size_bound`` (int),
-        and optionally ``dim_capacity`` and ``packed_total_bound``, both per data key.
+        and optionally ``dim_capacity`` and ``packed_total_bound``, both per data key,
+        and ``mask_padding_seqs`` (bool, resolved here: default from behavior version 36 on).
 
     Same option names as the TF engine's ``tf_static_shapes``
     and the PyTorch engine's ``torch_cuda_graph``,
@@ -1511,11 +1514,14 @@ def _static_shapes_opts_from_config(config: Config) -> Optional[Dict[str, Any]]:
     if not opts:
         return None
     assert isinstance(opts, dict), f"jax_static_shapes: expected a dict, got {opts!r}"
-    allowed = {"batch_size_bound", "dim_capacity", "packed_total_bound"}
+    allowed = {"batch_size_bound", "dim_capacity", "packed_total_bound", "mask_padding_seqs"}
     unknown = set(opts) - allowed
     assert not unknown, f"jax_static_shapes: unknown options {sorted(unknown)}, allowed {sorted(allowed)}"
     assert isinstance(opts.get("batch_size_bound"), int), f"jax_static_shapes: batch_size_bound required, got {opts!r}"
-    return opts
+    mask_padding_seqs = opts.get("mask_padding_seqs", None)
+    if mask_padding_seqs is None:
+        mask_padding_seqs = util.BehaviorVersion.get() >= 36
+    return dict(opts, mask_padding_seqs=bool(mask_padding_seqs))
 
 
 def _batch_opts_from_config(config: Config) -> Dict[str, Any]:
@@ -1565,6 +1571,7 @@ _UnsupportedConfigOpts = {
     "reset_dev_memory_caches": False,
     "tensorboard_opts": None,
     "use_tensorboard": False,
+    "wandb_opts": None,
     # backend-specific options are named after the backend, as `torch_...` is on PyTorch
     "jax_distributed": None,
     "jax_log_memory_usage": False,

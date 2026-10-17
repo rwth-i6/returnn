@@ -12,6 +12,16 @@ device
     Although RETURNN will automatically detect and use a GPU if available,
     a specific device can be enforced by setting this parameter.
 
+gpu_local_cpu_affinity
+    Default ``True`` (PyTorch backend, Linux). The process (and the dataset worker processes it starts)
+    is restricted to the CPUs local to its GPU, i.e. the NUMA node or CPU socket the GPU is attached to,
+    within the CPUs the job may use. Otherwise the host side of a step
+    (batch handoff, copies to the device) also runs on the far socket.
+    In distributed training, ranks whose GPUs share a NUMA node or socket get disjoint slices of its CPUs.
+    Skipped (logged) when it would leave the process with less than its share of the allowed CPUs,
+    e.g. a cpuset not aligned to the GPU, when the topology cannot be read,
+    or when the launcher already bound the ranks to different CPUs (``srun`` per-task binding, ``mpirun``).
+
 extern_data (former num_outputs)
     Defines the source/target dimensions of the data as a dictionary of dictionaries describing data streams.
     The standard source data is called ``data`` by default,
@@ -98,3 +108,24 @@ train
 
 use_tensorflow
     If you set this to ``True``, TensorFlow will be used.
+
+wandb_opts
+    PyTorch backend only. If set, logs training and eval metrics to `Weights & Biases <https://wandb.ai>`_.
+    Requires the ``wandb`` package. Only rank 0 logs in distributed training.
+    A dict that is given to ``wandb.init``, plus these RETURNN-specific keys and defaults:
+
+    - ``log_every_n_train_steps``: log the train step losses every N steps. Default 100. ``None`` disables it.
+      Epoch-level train and eval losses are always logged.
+    - ``job_type``: default is the ``task`` (e.g. ``train``, ``eval``, ``forward``).
+    - ``name``: default is the ``SLURM_JOB_NAME`` env var, if set (with Sisyphus: the task name with the job hash).
+    - ``id``: default is a hash of the ``task`` and the absolute config filename.
+      With Sisyphus, each job has its own config file, and a resubmission reuses it,
+      so all jobs of one training (or of one eval, forward, ...) continue the same run.
+      Another task with the same config file (e.g. ``++task eval``) gets its own run.
+      No default without a config file, or when the ``WANDB_RUN_ID`` env var is set.
+    - ``resume``: default ``"allow"``, i.e. an existing run with this ``id`` is continued at its last step.
+      After a restart from an earlier checkpoint (e.g. after a crash),
+      W&B keeps the old values of the repeated steps and drops the new ones.
+      No default if ``resume_from`` or ``fork_from`` is given, as W&B does not accept them together.
+
+    A stop for resubmission marks the run as finished, not as failed.

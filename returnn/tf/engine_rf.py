@@ -105,6 +105,7 @@ class Engine(EngineBase):
         self._epoch_assign: Optional[Any] = None  # (assign op, placeholder), see init_train_epoch
         self._data_keys: List[str] = []
         self._fed_dims: List[Tuple[str, Dim]] = []  # (data key, dim) per fed dyn-size placeholder
+        self._batch_size_placeholder: Optional[tf.Tensor] = None  # tf_static_shapes mask_padding_seqs
 
     def init_train_from_config(
         self,
@@ -465,14 +466,22 @@ class Engine(EngineBase):
                 dim.reset_raw()
         if self._static_shapes_opts:
             # Static shapes: the feed pads every array to these bounds (see _staticize_feed),
-            # so the raw shapes are constant per step. The batch dim becomes STATIC (= the bound;
-            # smaller batches are padded with length-0 seqs), exactly as the torch cuda-graph
-            # staticization does, and the capacities let static-traceable code paths
+            # so the raw shapes are constant per step; smaller batches are padded with length-0 seqs.
+            # The bound is the capacity of the batch dim, and the capacities let static-traceable code paths
             # (rf.is_static_traceable) size derived buffers statically.
+            # With mask_padding_seqs, the batch dim keeps the real batch size (fed per step),
+            # so the padding seqs are masked, as in the torch cuda-graph staticization;
+            # else the batch dim is static (= the bound).
             batch_bound = self._static_shapes_opts["batch_size_bound"]
-            batch_dim.size = batch_bound
             batch_dim.capacity = batch_bound
-            batch_dim.dyn_size_ext = None
+            if self._static_shapes_opts["mask_padding_seqs"]:
+                batch_dim.size = None
+                batch_dim.dyn_size_ext = Tensor("batch", dims=(), dtype="int32")
+                self._batch_size_placeholder = TFBackend.create_placeholder_raw(batch_dim.dyn_size_ext)
+                batch_dim.dyn_size_ext.raw_tensor = self._batch_size_placeholder
+            else:
+                batch_dim.size = batch_bound
+                batch_dim.dyn_size_ext = None
             for key, cap in (self._static_shapes_opts.get("dim_capacity") or {}).items():
                 value = self.extern_data.data[key]
                 assert len(value.dims) >= 2 and value.dims[1].is_dynamic(), (
@@ -486,6 +495,11 @@ class Engine(EngineBase):
         for key in self._data_keys:
             value = self.extern_data.data[key]
             value.raw_tensor = TFBackend.create_placeholder_raw(value)
+            if self._static_shapes_opts:
+                # the feed pads the batch axis to the bound: a known static extent, which e.g. the packed layout needs
+                value.raw_tensor.set_shape(
+                    [self._static_shapes_opts["batch_size_bound"]] + [None] * (len(value.dims) - 1)
+                )
             for dim in value.dims:
                 if dim == batch_dim or not dim.is_dynamic():
                     continue
@@ -499,11 +513,13 @@ class Engine(EngineBase):
                     dim.dyn_size_ext = Tensor(dim.name or "size", dims=[batch_dim], dtype="int32")
                 if dim.dyn_size_ext.raw_tensor is None:
                     dim.dyn_size_ext.raw_tensor = TFBackend.create_placeholder_raw(dim.dyn_size_ext)
+                    if self._static_shapes_opts:
+                        dim.dyn_size_ext.raw_tensor.set_shape([self._static_shapes_opts["batch_size_bound"]])
                     self._fed_dims.append((key, dim))
         if not self._static_shapes_opts:
             # The batch dim gets its size from the data itself. The net-dict path derives this from
             # its BatchInfo, which the RF path does not build, but masked reduces need it.
-            # (Static shapes: the batch dim is a static dim instead, see above.)
+            # (Static shapes: see above.)
             data = self.extern_data.data[self._data_keys[0]]
             batch_dim.dyn_size_ext = Tensor("batch", dims=(), dtype="int32")
             batch_dim.dyn_size_ext.raw_tensor = tf.shape(data.raw_tensor)[0]
@@ -597,6 +613,9 @@ class Engine(EngineBase):
         batch_bound = opts["batch_size_bound"]
         dim_capacity = opts.get("dim_capacity") or {}
         d = dict(feed_dict)
+        if self._batch_size_placeholder is not None:
+            num_seqs = feed_dict[self._feed_extern_data.data[self._data_keys[0]].raw_tensor].shape[0]
+            d[self._batch_size_placeholder] = numpy.array(num_seqs, dtype="int32")
         # the true per-seq lens per key, before the batch padding below (for the packed flattening)
         true_lens = {}
         for key in self._data_keys:
@@ -1042,6 +1061,7 @@ _UnsupportedConfigOpts = {
     "sort_dataset": None,
     "tensorboard_opts": None,
     "use_tensorboard": False,
+    "wandb_opts": None,
     # backend-specific options are named after the backend, as `torch_...` is on PyTorch
     "tf_distributed": None,
     "tf_profile": None,
@@ -1380,7 +1400,8 @@ def _static_shapes_opts_from_config(config: Config) -> Optional[Dict[str, Any]]:
     """
     :param config:
     :return: the ``tf_static_shapes`` options, or None:
-        ``{"batch_size_bound": int, "dim_capacity": {data key: int}, "packed_total_bound": {data key: int}}``.
+        ``{"batch_size_bound": int, "dim_capacity": {data key: int}, "packed_total_bound": {data key: int},
+        "mask_padding_seqs": bool}`` (the latter resolved here: default from behavior version 36 on).
         The TF analogue of the shape-staticization half of the PyTorch engine's ``torch_cuda_graph``:
         every fed array is padded to fixed bounds (see :func:`Engine._staticize_feed`),
         so every step has ONE shape signature -- paired with ``tf_jit``, XLA compiles exactly once.
@@ -1391,10 +1412,13 @@ def _static_shapes_opts_from_config(config: Config) -> Optional[Dict[str, Any]]:
     if opts is None:
         return None
     assert isinstance(opts, dict), f"tf_static_shapes: expected a dict, got {opts!r}"
-    allowed = {"batch_size_bound", "dim_capacity", "packed_total_bound"}
+    allowed = {"batch_size_bound", "dim_capacity", "packed_total_bound", "mask_padding_seqs"}
     assert set(opts).issubset(allowed), f"tf_static_shapes: unexpected keys {set(opts) - allowed}, allowed {allowed}"
     assert isinstance(opts.get("batch_size_bound"), int), f"tf_static_shapes: batch_size_bound required, got {opts!r}"
-    return opts
+    mask_padding_seqs = opts.get("mask_padding_seqs", None)
+    if mask_padding_seqs is None:
+        mask_padding_seqs = util.BehaviorVersion.get() >= 36
+    return dict(opts, mask_padding_seqs=bool(mask_padding_seqs))
 
 
 def _batch_opts_from_config(config: Config) -> Dict[str, Any]:
