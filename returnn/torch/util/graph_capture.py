@@ -69,7 +69,7 @@ from .capture_lock import cuda_graph_capture
 # noinspection PyProtectedMember
 from ..data.extern_data import get_batch_dim_from_extern_data, _get_dyn_dims_from_extern_data
 
-__all__ = ["GraphCapturedTrainStep", "graph_pools_reserved", "inductor_fw_compiler"]
+__all__ = ["GraphCapturedTrainStep", "GraphCapturedForwardStep", "graph_pools_reserved", "inductor_fw_compiler"]
 
 # bytes reserved by the current CUDA-graph private pool, set after capture,
 # for the engine memory log (single active graph per engine; a recapture overwrites)
@@ -461,6 +461,14 @@ class _StaticBatchInputs:
         self._host_raws: Dict[str, Any] = {}  # non-capturable (string) keys, passed through host-side
         self._packed_opts: Dict[str, Dict[str, int]] = {}  # for packed-collate keys
 
+    def bind_batch_size(self):
+        """with mask_padding_seqs: the template batch dim gets the device batch size of this bound as dyn size"""
+        if self._batch_dim_bounded and self.mask_padding_seqs:
+            batch_dim = self._batch_dim
+            if batch_dim.dyn_size_ext is None:
+                batch_dim.dyn_size_ext = Tensor(batch_dim.name or "batch", dims=[], dtype="int32")
+            batch_dim.dyn_size_ext.raw_tensor = self._batch_size_buf  # device-resident
+
     def set_template_bounds(self, enabled: bool):
         """
         Set or clear the process-wide bound-shape dim state of the template dims for this bound:
@@ -678,10 +686,7 @@ class _StaticBatchInputs:
         batch_dim = self._batch_dim
         for dim in _get_dyn_dims_from_extern_data(self._extern_data_template):
             dim.reset_eager()
-        if self._batch_dim_bounded and self.mask_padding_seqs:
-            if batch_dim.dyn_size_ext is None:
-                batch_dim.dyn_size_ext = Tensor(batch_dim.name or "batch", dims=[], dtype="int32")
-            batch_dim.dyn_size_ext.raw_tensor = self._batch_size_buf  # device-resident
+        self.bind_batch_size()
         extern_data = TensorDict()
         for k, data in self._extern_data_template.data.items():
             data = data.copy_template()
@@ -1571,3 +1576,229 @@ class GraphCapturedTrainStep:
         # noinspection PyProtectedMember
         torch.cuda.memory._dump_snapshot(fn)
         logging.getLogger("returnn").warning("torch_cuda_graph: CUDA memory snapshot dumped to %s", fn)
+
+
+class GraphCapturedForwardStep:
+    """
+    The forward step (the config ``forward_step``, e.g. a recognition incl. search and backtracking),
+    captured into a CUDA graph per capacity bucket and replayed per batch, with opts ``"forward": True``.
+
+    ``rf.while_loop`` runs as the torch ``while_loop`` op under static tracing,
+    which the capture turns into a device-side CUDA graph while node:
+    each replay runs the whole step without host sync, whatever the loop trip counts.
+
+    Config, e.g.::
+
+        torch_cuda_graph = {
+            "forward": True,
+            "batch_size_bound": 16,
+            "dim_capacity": {"audio": [96_000, 192_000, 384_000]},  # capacity buckets per data key
+        }
+
+    Each batch takes the smallest capacity per key which holds its longest seq;
+    a seq beyond the largest one fails.
+    One graph per bucket combination, all in one memory pool (they never run concurrently).
+    """
+
+    def __init__(
+        self,
+        *,
+        opts: Dict[str, Any],
+        extern_data_template: TensorDict,
+        device: Union[str, torch.device],
+        float_dtype: Optional[torch.dtype],
+        run_step: Callable[[TensorDict], None],
+    ):
+        """
+        :param opts: the ``torch_cuda_graph`` config dict, see above
+        :param extern_data_template:
+        :param device:
+        :param float_dtype:
+        :param run_step: ``run_step(extern_data)``, runs the user forward step function under a forward run ctx
+        """
+        assert str(device).startswith("cuda"), f"torch_cuda_graph forward requires a cuda device, got {device!r}"
+        # CUDA graph while nodes for the torch while_loop op (CUDAGraphCaptureControlFlowOpDispatchMode) since torch 2.14
+        assert torch.__version__ >= (2, 14), f"torch_cuda_graph forward needs torch >= 2.14, got {torch.__version__}"
+        opts = CollectionReadCheckCovered(opts)
+        assert opts["forward"] is True, f"torch_cuda_graph: forward must be True here, got {opts['forward']!r}"
+        mask_padding_seqs: Optional[bool] = opts.get("mask_padding_seqs", None)
+        if mask_padding_seqs is None:
+            mask_padding_seqs = BehaviorVersion.get() >= 36
+        assert mask_padding_seqs, "torch_cuda_graph forward needs mask_padding_seqs (padding seqs are no outputs)"
+        self._batch_size_bound = int(opts["batch_size_bound"])
+        self._capacity_buckets: Dict[str, List[int]] = {
+            k: sorted([v] if isinstance(v, int) else list(v)) for k, v in dict(opts["dim_capacity"]).items()
+        }
+        opts.assert_all_read()
+        self._device = torch.device(device)
+        self._float_dtype = float_dtype
+        self._extern_data_template = extern_data_template
+        self._run_step = run_step
+        self._programs: Dict[Tuple[Tuple[str, int], ...], _ForwardProgram] = {}
+        self._active: Optional[_ForwardProgram] = None  # whose bounds are on the template dims
+        self._pool: Optional[Tuple[int, int]] = None
+
+    def _bucket_capacities(self, extern_data_raw: Dict[str, Any]) -> Tuple[Tuple[str, int], ...]:
+        """:return: per data key with buckets, the smallest capacity holding the longest seq of this batch"""
+        caps = []
+        for k, buckets in sorted(self._capacity_buckets.items()):
+            lens = extern_data_raw[k + ":seq_len"]
+            max_len = int(lens.max()) if lens.shape[0] > 0 else 0
+            cap = next((c for c in buckets if c >= max_len), None)
+            if cap is None:
+                raise ValueError(
+                    f"torch_cuda_graph forward: seq len {max_len} of {k!r} exceeds the largest dim_capacity {buckets[-1]}"
+                )
+            caps.append((k, cap))
+        return tuple(caps)
+
+    def _activate(self, prog: Optional[_ForwardProgram]):
+        """put the bounds of ``prog`` on the template dims (None: dynamic shapes)"""
+        if self._active is prog:
+            return
+        if self._active is not None:
+            self._active.inputs.set_template_bounds(False)
+        if prog is not None:
+            prog.inputs.set_template_bounds(True)
+        self._active = prog
+
+    def run_forward_step(self, extern_data_raw: Dict[str, Union[torch.Tensor, numpy.ndarray]]) -> TensorDict:
+        """
+        Copy the batch into the static buffers of its capacity bucket and replay that bucket's graph,
+        captured first if the bucket is new.
+
+        :return: the model outputs of the step, with fresh dims around the graph's output buffers,
+            valid until the next step
+        """
+        caps = self._bucket_capacities(extern_data_raw)
+        prog = self._programs.get(caps)
+        if prog is None:
+            prog = _ForwardProgram(
+                _StaticBatchInputs(
+                    extern_data_template=self._extern_data_template,
+                    device=self._device,
+                    float_dtype=self._float_dtype,
+                    batch_size_bound=self._batch_size_bound,
+                    mask_padding_seqs=True,
+                    dim_capacity=dict(caps),
+                    packed_total_bound={},
+                    packed_batch_size={},
+                )
+            )
+            self._programs[caps] = prog
+        prog.inputs.copy_in(extern_data_raw)
+        if prog.graph is None:
+            # the template dims carry the bounds only while capturing:
+            # outside, the engine reads them as usual (e.g. the batch size, which the bound would hide)
+            try:
+                self._capture(prog, extern_data_raw)
+            finally:
+                self._activate(None)
+        prog.graph.replay()
+        # the engine reads the real batch size from the template batch dim (its cached max value would be stale)
+        get_batch_dim_from_extern_data(self._extern_data_template).reset_eager()
+        prog.inputs.bind_batch_size()
+        return prog.make_outputs()
+
+    def _capture(self, prog: _ForwardProgram, extern_data_raw: Dict[str, Union[torch.Tensor, numpy.ndarray]]):
+        # noinspection PyProtectedMember
+        from torch._higher_order_ops.cudagraph_conditional_nodes import (
+            CUDAGraphCaptureControlFlowOpDispatchMode,
+            ControlFlowOpWarmupDispatchMode,
+        )
+        from returnn.torch.data import extern_data as extern_data_util
+
+        # One eager step at the batch's own shapes:
+        # it fills the value caches which static tracing leaves empty (e.g. the mel filterbank matrix),
+        # which the capture would otherwise create from host memory (illegal).
+        for dim in _get_dyn_dims_from_extern_data(self._extern_data_template):
+            dim.reset_eager()
+        self._run_step(
+            extern_data_util.raw_dict_to_extern_data(
+                extern_data_raw,
+                extern_data_template=self._extern_data_template,
+                device=self._device,
+                float_dtype=self._float_dtype,
+            )
+        )
+        self._activate(prog)
+        # the capture needs the while_loop bodies warmed, see ControlFlowOpWarmupDispatchMode
+        with rf.set_static_traceable_ctx(), ControlFlowOpWarmupDispatchMode():
+            self._run_step(prog.inputs.build_extern_data())
+        torch.cuda.synchronize()
+        torch.cuda.empty_cache()
+        graph = torch.cuda.CUDAGraph()
+        with rf.set_static_traceable_ctx():
+            # resets the template dims: everything derived from them is computed in-graph
+            extern_data = prog.inputs.build_extern_data()
+            with cuda_graph_capture(graph, pool=self._pool), CUDAGraphCaptureControlFlowOpDispatchMode():
+                self._run_step(extern_data)
+            ctx = rf.get_run_ctx()
+        ctx.check_outputs_complete()
+        prog.set_outputs(ctx.outputs, batch_dim=get_batch_dim_from_extern_data(self._extern_data_template))
+        prog.graph = graph
+        if self._pool is None:
+            self._pool = graph.pool()
+
+    def release(self):
+        """
+        Destroy the captured graphs and give their pool back,
+        and switch the bound-shape dim state off, so that later steps see the dims as before.
+        """
+        self._activate(None)
+        for prog in self._programs.values():
+            prog.release()
+        self._programs.clear()
+        self._pool = None
+
+
+class _ForwardProgram:
+    """One capacity bucket of :class:`GraphCapturedForwardStep`: its static inputs, graph and outputs."""
+
+    def __init__(self, inputs: _StaticBatchInputs):
+        self.inputs = inputs
+        self.graph: Optional[torch.cuda.CUDAGraph] = None
+        self._batch_dim: Optional[Dim] = None
+        # per output: name, template, raw (a stable graph output, refreshed in place by each replay)
+        self._outputs: List[Tuple[str, Tensor, torch.Tensor]] = []
+        # per dyn dim of the outputs (except the batch dim): its dyn size template and raw
+        self._dyn_dims: Dict[Dim, Tuple[Tensor, torch.Tensor]] = {}
+
+    def set_outputs(self, outputs: TensorDict, *, batch_dim: Dim):
+        """
+        Keep the outputs of the capture, with the dyn sizes of their dims,
+        as they are now: the template dims get reset by later steps and captures.
+        """
+        self._batch_dim = batch_dim
+        for name, v in outputs.data.items():
+            self._outputs.append((name, v.copy_template(), v.raw_tensor))
+            for d in v.dims:
+                if d is batch_dim or d.dyn_size_ext is None or d in self._dyn_dims:
+                    continue
+                size = d.dyn_size_ext
+                assert all(d_ is batch_dim or d_.dimension is not None for d_ in size.dims), (
+                    f"torch_cuda_graph forward: dyn size of output dim {d} depends on other dyn dims: {size}"
+                )
+                self._dyn_dims[d] = (size.copy_template(), size.raw_tensor)
+
+    def make_outputs(self) -> TensorDict:
+        """:return: the outputs, with fresh dyn dims around the stable buffers"""
+        dim_map = {}
+        for d, (size_template, size_raw) in self._dyn_dims.items():
+            size = size_template.copy_template()
+            size.raw_tensor = size_raw
+            dim_map[d] = Dim(size, name=d.name)
+        res = TensorDict()
+        for name, template, raw in self._outputs:
+            v = template.copy_template_new_dim_tags([dim_map.get(d, d) for d in template.dims], keep_special_axes=True)
+            v.raw_tensor = raw
+            res.data[name] = v
+        return res
+
+    def release(self):
+        """destroy the graph; the outputs live in its pool, which is only freed once they are gone"""
+        self._outputs.clear()
+        self._dyn_dims.clear()
+        if self.graph is not None:
+            self.graph.reset()
+            self.graph = None
