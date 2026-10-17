@@ -1631,7 +1631,10 @@ class GraphCapturedForwardStep:
         opts.assert_all_read()
         self._device = torch.device(device)
         self._float_dtype = float_dtype
-        self._extern_data_template = extern_data_template
+        # forward batches only contain the data available for inference (e.g. no targets)
+        self._extern_data_template = TensorDict(
+            {k: v for k, v in extern_data_template.data.items() if v.available_for_inference}
+        )
         self._run_step = run_step
         self._programs: Dict[Tuple[Tuple[str, int], ...], _ForwardProgram] = {}
         self._active: Optional[_ForwardProgram] = None  # whose bounds are on the template dims

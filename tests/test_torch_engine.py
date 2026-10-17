@@ -3771,7 +3771,11 @@ def test_torch_engine_cuda_graph_forward_beam_search():
                 device="cuda",
                 batch_size=1000,
                 max_seqs=4,
-                extern_data={"data": {"dim": 9}},
+                # the targets are not in forward batches
+                extern_data={
+                    "data": {"dim": 9},
+                    "classes": {"dim": 2, "sparse": True, "available_for_inference": False},
+                },
                 get_model=lambda **_kwargs: _ForwardSearchModel(),
                 forward_step=_forward_search_step,
                 random_seed=42,
