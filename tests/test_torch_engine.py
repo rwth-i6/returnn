@@ -3170,11 +3170,11 @@ def _run_cuda_graph_train(
         assert abs(seq_one - 1.0) < 1e-6, seq_one
         if cuda_graph:
             assert engine._graph_capture is not None
-            assert engine._graph_capture._graph is not None, "graph never captured"
+            assert engine._graph_capture._train_prog.graph is not None, "graph never captured"
             assert engine._graph_capture.captures_optimizer == (not optimizer_step)
             # the cached reduction of the error measure must be a graph output, refreshed by every replay,
             # not an eager reduction from the first readout, which every later replay would repeat
-            fer = engine._graph_capture._ctx.losses["fer"]
+            fer = engine._graph_capture._train_prog.ctx.losses["fer"]
             fresh = rf.reduce_sum(fer.loss, axis=fer.loss.dims) if fer.loss.dims else fer.loss
             torch.testing.assert_close(fer.get_summed_loss().raw_tensor, fresh.raw_tensor)
         if optimizer_step:
@@ -3440,7 +3440,7 @@ def test_torch_engine_cuda_graph_finalize_then_eager():
             pass
         else:
             raise Exception("did not get expected exception")
-        assert engine._graph_capture._graph is not None, "graph never captured"
+        assert engine._graph_capture._train_prog.graph is not None, "graph never captured"
         engine.finalize()
     config.typed_dict["dynamic_learning_rate"] = dyn_lr
     del config.typed_dict["torch_cuda_graph"]
@@ -3522,14 +3522,20 @@ def test_torch_engine_cuda_graph_packed_total_bound():
             engine = Engine(config=config)
             engine.init_train_from_config(train_data=dataset)
             engine.train()
-            assert engine._graph_capture._graph is not None, "graph never captured"
+            assert engine._graph_capture._train_prog.graph is not None, "graph never captured"
             assert engine._graph_capture.data_bound_sizes() == {"data": expected}
             assert seen and set(seen) == {expected}, (gap, align, budget, declared, seen)
             engine.finalize()
 
 
-def _cuda_graph_lm_eos_setup(storage: str, *, graphc: bool):
-    """config+dataset for the padding seqs test, see below"""
+def _cuda_graph_lm_eos_setup(
+    storage: str, *, graphc: bool, graph_opts: Optional[Dict[str, Any]] = None, eval_only_loss: bool = False
+):
+    """
+    config+dataset for the padding seqs test, see below.
+    graph_opts: further torch_cuda_graph entries.
+    eval_only_loss: the step marks one more loss with the train flag off.
+    """
     from returnn.datasets import init_dataset
     from returnn.tensor import Dim, batch_dim
     from returnn.frontend.decoder.transformer import TransformerDecoder
@@ -3556,6 +3562,8 @@ def _cuda_graph_lm_eos_setup(storage: str, *, graphc: bool):
         ce = rf.cross_entropy(estimated=logits, target=targets_w_eos, axis=vocab_dim, estimated_type="logits")
         ce.mark_as_loss("ce")
         rf.reduce_sum(ce, axis=targets_w_eos_dim).mark_as_loss("seq_ce", as_error=True)
+        if eval_only_loss and not rf.get_run_ctx().train_flag:
+            rf.reduce_sum(ce * ce, axis=targets_w_eos_dim).mark_as_loss("seq_ce_sq", as_error=True)
 
     rnd = numpy.random.RandomState(7)
     seqs = []
@@ -3596,6 +3604,7 @@ def _cuda_graph_lm_eos_setup(storage: str, *, graphc: bool):
             compile=True,
             mask_padding_seqs=True,
         )
+        cfg["torch_cuda_graph"].update(graph_opts or {})
     dataset = init_dataset({"class": "StaticDataset", "data": seqs, "input_dim": 8, "output_dim": 11})
     dataset.init_seq_order(epoch=1)
     return Config(cfg), dataset
@@ -3625,6 +3634,45 @@ def test_torch_engine_cuda_graph_mask_padding_seqs():
         for key in ["dev_loss_ce", "dev_loss_seq_ce"]:
             a, b = (engine.learning_rate_control.epoch_data[1].error[key] for engine in (engine_a, engine_b))
             assert abs(a - b) / max(abs(a), 1e-6) < 2e-2, f"{storage} {key}: {a} vs {b}"
+
+
+def test_torch_engine_cuda_graph_eval():
+    """
+    torch_cuda_graph "eval": the dev evals after both epochs run compiled / captured, in the pool of the train graph.
+    Dev scores match the eager run, padded and packed, incl the loss which only the eval step marks,
+    and so do the train steps of epoch 2, which replay after the eval graph.
+    """
+    if not torch.cuda.is_available():
+        raise unittest.SkipTest("CUDA not available")
+    names = ["ce", "seq_ce", "grad_norm:p2"]
+    eager = {
+        storage: _cuda_graph_run_step_losses(
+            *_cuda_graph_lm_eos_setup(storage, graphc=False, eval_only_loss=True), mode=storage, loss_names=names
+        )
+        for storage in ["padded", "packed"]
+    }
+    for storage, compile_ in [("padded", True), ("packed", True), ("padded", False)]:
+        losses_a, engine_a = eager[storage]
+        losses_b, engine_b = _cuda_graph_run_step_losses(
+            *_cuda_graph_lm_eos_setup(
+                storage, graphc=True, graph_opts={"eval": True, "compile": compile_}, eval_only_loss=True
+            ),
+            mode=storage,
+            loss_names=names,
+        )
+        graph_capture = engine_b._graph_capture
+        assert graph_capture._eval_prog.graph is not None, "eval graph never captured"
+        assert graph_capture._eval_prog.graph.pool() == graph_capture._train_prog.graph.pool()
+        common = sorted(s for s in set(losses_a) & set(losses_b) if s[0] == 2)
+        assert common, (sorted(losses_a), sorted(losses_b))
+        for s in common:
+            for name, a, b in zip(names, losses_a[s], losses_b[s]):
+                assert abs(a - b) / max(abs(a), 1e-6) < 2e-2, f"{storage} {compile_} step {s} {name}: {a} vs {b}"
+        for epoch in [1, 2]:
+            for key in ["dev_loss_ce", "dev_loss_seq_ce", "dev_loss_seq_ce_sq"]:
+                a, b = (engine.learning_rate_control.epoch_data[epoch].error[key] for engine in (engine_a, engine_b))
+                assert abs(a - b) / max(abs(a), 1e-6) < 2e-2, f"{storage} {compile_} ep {epoch} {key}: {a} vs {b}"
+        engine_b.finalize()
 
 
 def test_torch_engine_cuda_graph_train():
@@ -4332,7 +4380,7 @@ def _run_pin_memory_capture_overlap(
             assert capture["pin_attempted"], f"capture {i}: no pin attempt during the capture, overlap not forced"
             assert not capture["pin_finished_during"], f"capture {i}: pinned during the capture"
         if cuda_graph:
-            assert engine._graph_capture._graph is not None, "graph never captured"
+            assert engine._graph_capture._train_prog.graph is not None, "graph never captured"
         if optimizer_step:
             assert engine._updater._optimizer_step._graph is not None, "optimizer step never captured"
 
