@@ -56,6 +56,7 @@ from typing import Optional, Union, Any, Callable, Dict, List, Tuple
 from contextlib import contextmanager
 import gc
 import os
+import time
 import numpy
 import torch
 
@@ -1708,6 +1709,7 @@ class GraphCapturedForwardStep:
         )
         from returnn.torch.data import extern_data as extern_data_util
 
+        start_time = time.monotonic()
         # One eager step at the batch's own shapes:
         # it fills the value caches which static tracing leaves empty (e.g. the mel filterbank matrix),
         # which the capture would otherwise create from host memory (illegal).
@@ -1739,6 +1741,14 @@ class GraphCapturedForwardStep:
         prog.graph = graph
         if self._pool is None:
             self._pool = graph.pool()
+        pool_size = sum(
+            s.get("total_size", 0) for s in torch.cuda.memory_snapshot() if s.get("segment_pool_id") == self._pool
+        )
+        print(
+            f"torch_cuda_graph forward: captured capacities {prog.inputs.dim_capacity} ({len(self._programs)} graphs),"
+            f" {time.monotonic() - start_time:.1f} sec, shared pool {pool_size / 2**30:.2f} GiB",
+            flush=True,
+        )
 
     def release(self):
         """
