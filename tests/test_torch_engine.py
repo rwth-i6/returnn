@@ -3668,6 +3668,148 @@ def _muon_like_float64(params):
     return _MuonLike(params, ns_dtype=torch.float64)
 
 
+class _ForwardSearchModel(rf.Module):
+    def __init__(self, **_kwargs):
+        super().__init__()
+        self.vocab_dim = Dim(5, name="vocab")
+        self.lin = rf.Linear(Dim(9, name="in"), self.vocab_dim)
+
+
+def _forward_search_step(*, model: _ForwardSearchModel, extern_data: TensorDict, **_kwargs):
+    # frame-synchronous beam search with rf.while_loop: top_k over (beam, vocab),
+    # labels and backrefs in TensorArrays with a capacity, backtracking in reverse
+    from returnn.frontend.tensor_array import TensorArray
+
+    data = extern_data["data"]
+    batch_dim, time_dim, in_dim = data.dims
+    vocab_dim = model.vocab_dim
+    data, _ = rf.replace_dim(data, in_dim=in_dim, out_dim=model.lin.in_dim)
+    log_probs = rf.log_softmax(model.lin(data), axis=vocab_dim)
+    beam_dim = Dim(3, name="beam")
+    step_beam_dim = Dim(3, name="beam-step")
+    capacity = int(time_dim.get_dim_value())
+    if rf.is_static_traceable():
+        # bound shapes: the loop runs over the frames of this batch, on the device
+        lens = time_dim.get_size_tensor(device=data.device)
+        num_frames = rf.reduce_max(lens, axis=lens.dims)
+        counter_device = data.device
+    else:
+        num_frames = rf.copy_to_device(time_dim.get_dim_value_tensor(), "cpu")
+        counter_device = "cpu"
+    log_probs_ta = TensorArray.unstack(log_probs, axis=time_dim)
+    label_template = Tensor("label", dims=[batch_dim, beam_dim], dtype="int32", sparse_dim=vocab_dim)
+    backref_template = Tensor("backref", dims=[batch_dim, beam_dim], dtype="int32", sparse_dim=beam_dim)
+
+    def _body(state):
+        t, seq_log_prob_, labels_ta_, backrefs_ta_ = state
+        seq_log_prob_ = rf.combine(seq_log_prob_, "+", log_probs_ta[t], allow_broadcast_all_sources=True)
+        seq_log_prob_, (backrefs, labels), _ = rf.top_k(seq_log_prob_, k_dim=step_beam_dim, axis=[beam_dim, vocab_dim])
+        seq_log_prob_, _ = rf.replace_dim(seq_log_prob_, in_dim=step_beam_dim, out_dim=beam_dim)
+        backrefs, _ = rf.replace_dim(rf.cast(backrefs, "int32"), in_dim=step_beam_dim, out_dim=beam_dim)
+        backrefs.sparse_dim = beam_dim
+        labels, _ = rf.replace_dim(rf.cast(labels, "int32"), in_dim=step_beam_dim, out_dim=beam_dim)
+        labels.sparse_dim = vocab_dim
+        return t + 1, seq_log_prob_, labels_ta_.push_back(labels), backrefs_ta_.push_back(backrefs)
+
+    seq_log_prob = rf.where(rf.range_over_dim(beam_dim) == 0, rf.constant(0.0, dims=[batch_dim, beam_dim]), -1e30)
+    _, seq_log_prob, labels_ta, backrefs_ta = rf.while_loop(
+        cond=lambda s: s[0] < num_frames,
+        body=_body,
+        initial=(
+            rf.zeros((), dtype="int32", device=counter_device),
+            seq_log_prob,
+            TensorArray(label_template, capacity=capacity),
+            TensorArray(backref_template, capacity=capacity),
+        ),
+    )
+
+    def _backtrack_body(state):
+        t, indices, out_ta_ = state
+        out_ta_ = out_ta_.push_back(rf.gather(labels_ta[t], indices=indices))
+        indices = rf.gather(backrefs_ta[t], indices=indices)
+        return t - 1, indices, out_ta_
+
+    indices0 = rf.expand_dim(rf.range_over_dim(beam_dim), dim=batch_dim)
+    indices0.sparse_dim = beam_dim
+    _, _, out_ta = rf.while_loop(
+        cond=lambda s: s[0] >= 0,
+        body=_backtrack_body,
+        initial=(num_frames - 1, indices0, TensorArray(label_template, capacity=capacity)),
+    )
+    # reversed: entry i is frame num_frames - 1 - i
+    hyps_rev = out_ta.stack(axis=time_dim) if rf.is_static_traceable() else None
+    if hyps_rev is None:
+        hyps_rev = out_ta.stack(axis=Dim(num_frames, name="frames"))
+        hyps_rev, _ = rf.replace_dim(hyps_rev, in_dim=hyps_rev.dims[0], out_dim=time_dim)
+    rev_indices = rf.maximum(num_frames - 1 - rf.range_over_dim(time_dim, device=counter_device), 0)
+    hyps = rf.gather(hyps_rev, indices=rf.copy_to_device(rev_indices, data.device), axis=time_dim)
+    rf.get_run_ctx().mark_as_output(hyps, "hyps", dims=(batch_dim, beam_dim, time_dim))
+    rf.get_run_ctx().mark_as_output(seq_log_prob, "scores", dims=(batch_dim, beam_dim))
+
+
+def test_torch_engine_cuda_graph_forward_beam_search():
+    # torch_cuda_graph "forward": the forward step with a beam search (two rf.while_loop's),
+    # captured once per capacity bucket (loops as CUDA graph while nodes) and replayed per batch:
+    # same outputs as the eager forward step
+    from returnn.torch.util import graph_capture
+
+    if not torch.cuda.is_available():
+        raise unittest.SkipTest("cuda only: real graph capture")
+    if torch.__version__ < (2, 14):  # CUDA graph while nodes since torch 2.14
+        raise unittest.SkipTest("needs torch >= 2.14")
+
+    def _run(cuda_graph_opts: Optional[Dict[str, Any]]) -> Dict[str, Dict[str, numpy.ndarray]]:
+        results = {}
+
+        class _Callback(ForwardCallbackIface):
+            def process_seq(self, *, seq_tag: str, outputs: TensorDict):
+                results[seq_tag] = {k: v.raw_tensor for k, v in outputs.data.items()}
+
+        config = Config(
+            dict(
+                task="forward",
+                device="cuda",
+                batch_size=1000,
+                max_seqs=4,
+                # the targets are not in forward batches
+                extern_data={
+                    "data": {"dim": 9},
+                    "classes": {"dim": 2, "sparse": True, "available_for_inference": False},
+                },
+                get_model=lambda **_kwargs: _ForwardSearchModel(),
+                forward_step=_forward_search_step,
+                random_seed=42,
+                **({"torch_cuda_graph": cuda_graph_opts} if cuda_graph_opts else {}),
+            )
+        )
+        dataset = init_dataset({"class": "Task12AXDataset", "num_seqs": 23, "name": "dev", "fixed_random_seed": 1})
+        with global_config_ctx(config):
+            dataset.init_seq_order(epoch=1)
+            engine = Engine(config=config)
+            engine.init_network_from_config()
+            engine.forward_with_callback(callback=_Callback(), dataset=dataset)
+        return results
+
+    ref = _run(None)
+    captures = []
+    orig_capture = graph_capture.GraphCapturedForwardStep._capture
+
+    def _capture_counted(self, prog, extern_data_raw):
+        captures.append(dict(prog.inputs.dim_capacity))
+        return orig_capture(self, prog, extern_data_raw)
+
+    with unittest.mock.patch.object(graph_capture.GraphCapturedForwardStep, "_capture", _capture_counted):
+        res = _run({"forward": True, "batch_size_bound": 4, "dim_capacity": {"data": [16, 32, 64, 128]}})
+    print("captured buckets:", captures)
+    assert len(captures) > 1, f"expected several capacity buckets, got {captures}"
+    assert len(captures) == len({c["data"] for c in captures}), f"a bucket was captured twice: {captures}"
+    assert set(res) == set(ref)
+    for seq_tag, out_ref in ref.items():
+        out = res[seq_tag]
+        numpy.testing.assert_array_equal(out["hyps"], out_ref["hyps"], err_msg=seq_tag)
+        numpy.testing.assert_allclose(out["scores"], out_ref["scores"], rtol=1e-5, atol=1e-5, err_msg=seq_tag)
+
+
 def test_torch_optimizer_step_eager():
     opt_step = _check_optimizer_step(_adamw, {"compile": False, "capture": False}, reload_at=5)
     assert opt_step._graph is None
