@@ -1223,6 +1223,38 @@ def test_slice_update_torch_autograd():
     assert target.raw_tensor.grad[:, 2].eq(0).all() and target.raw_tensor.grad[:, [0, 1, 3]].eq(1).all()
 
 
+def test_slice_update_torch_start_per_entry():
+    # one position per batch entry or a scalar one, the last position of the axis included;
+    # a position beyond the axis must fail, not write nothing
+    import torch
+
+    rf.select_backend_torch()
+    batch = Dim(3, name="batch")
+    time_dim = Dim(4, name="time")
+    feat = Dim(2, name="feat")
+    value = Tensor("value", [batch, feat], dtype="float32", raw_tensor=torch.arange(1.0, 7.0).view(3, 2))
+    for starts in ([0, 3, 1], 3):
+        if isinstance(starts, int):
+            start = rf.constant(starts, dims=(), dtype="int32", device="cpu")
+            starts = [starts] * 3
+        else:
+            start = Tensor("start", [batch], dtype="int32", raw_tensor=torch.tensor(starts, dtype=torch.int32))
+        target = rf.zeros([batch, time_dim, feat], device="cpu")
+        out = rf.slice_update(target, value, axis=time_dim, start=start)
+        expected = torch.zeros(3, 4, 2)
+        for b, s in enumerate(starts):
+            expected[b, s] = value.raw_tensor[b]
+        torch.testing.assert_close(out.copy_transpose([batch, time_dim, feat]).raw_tensor, expected)
+    target = rf.zeros([batch, time_dim, feat], device="cpu")
+    start = Tensor("start", [batch], dtype="int32", raw_tensor=torch.tensor([0, 4, 1], dtype=torch.int32))
+    try:
+        rf.slice_update(target, value, axis=time_dim, start=start)
+    except (IndexError, RuntimeError) as exc:
+        print("expected error:", exc)
+    else:
+        raise AssertionError("slice_update beyond the axis did not fail")
+
+
 def test_shift_right():
     time_dim = Dim(Tensor("time", [batch_dim], dtype="int32"))
     in_dim = Dim(7, name="in")

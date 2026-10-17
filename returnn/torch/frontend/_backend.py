@@ -592,22 +592,27 @@ class TorchBackend(Backend[torch.Tensor]):
         :param target: with ``axis``
         :param value: without ``axis``
         :param axis:
-        :param start: index in ``axis``, scalar
+        :param start: index in ``axis``, scalar or with other dims of ``target``
         :return: ``target`` with ``value`` at ``start`` along ``axis``
 
-        ``index_copy_`` into the target's buffer, so the target itself is updated.
-        Where autograd records the write, ``index_copy`` writes into a copy instead.
+        ``scatter_`` into the target's buffer, so the target itself is updated.
+        Where autograd records the write, ``scatter`` writes into a copy instead.
+        A ``start`` outside ``axis`` fails
+        (CPU: error, CUDA: device-side assert, also under graph capture, without host sync),
+        where the generic select would silently write nothing.
         """
         axis_int = target.dims.index(axis)
-        value_raw = value.copy_compatible_to_dims_raw(target.dims[:axis_int] + (axis,) + target.dims[axis_int + 1 :])
+        other_dims = target.dims[:axis_int] + target.dims[axis_int + 1 :]
         shape = list(target.raw_tensor.shape)
         shape[axis_int] = 1
-        value_raw = value_raw.expand(shape)
-        index = start.raw_tensor.to(device=target.raw_tensor.device, dtype=torch.int64).reshape(1)
-        if torch.is_grad_enabled() and (target.raw_tensor.requires_grad or value_raw.requires_grad):
-            out_raw = torch.index_copy(target.raw_tensor, axis_int, index, value_raw)
+        index = start.copy_compatible_to_dims_raw(other_dims).unsqueeze(axis_int)
+        index = index.to(device=target.raw_tensor.device, dtype=torch.int64).expand(shape)
+        src = value.copy_compatible_to_dims_raw(other_dims).unsqueeze(axis_int).to(target.raw_tensor.dtype)
+        src = src.expand(shape)
+        if torch.is_grad_enabled() and (target.raw_tensor.requires_grad or src.requires_grad):
+            out_raw = target.raw_tensor.scatter(axis_int, index, src)
         else:
-            out_raw = target.raw_tensor.index_copy_(axis_int, index, value_raw)
+            out_raw = target.raw_tensor.scatter_(axis_int, index, src)
         out = target.copy_template()
         out.raw_tensor = out_raw
         return out

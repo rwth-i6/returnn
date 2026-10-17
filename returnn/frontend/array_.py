@@ -666,7 +666,7 @@ def slice_update(target: Tensor, value: Tensor, *, axis: Dim, start: Tensor) -> 
     :param target: with ``axis``
     :param value: the frame to write, without ``axis``
     :param axis: the axis to write into
-    :param start: index in ``axis``, scalar
+    :param start: index in ``axis``, scalar or with other dims of ``target``
     :return: ``target`` with ``value`` written at ``start``
 
     Backends that can update in place do; the fallback selects over the whole axis.
