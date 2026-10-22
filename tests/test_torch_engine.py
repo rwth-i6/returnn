@@ -8,6 +8,7 @@ from typing import Optional, Any, Dict, Tuple, List
 import contextlib
 import copy
 import functools
+import glob
 import io
 import json
 import os
@@ -17,6 +18,7 @@ import unittest
 import unittest.mock
 import tempfile
 import numpy
+import pytest
 import torch
 
 from returnn.util import better_exchook
@@ -788,40 +790,85 @@ def test_max_seq_len():
     assert False, "Should have contained sequences"
 
 
-def _run_maybe_stop_for_resubmission(*, epoch: int, final_epoch: int, time_left: int):
+def _should_stop_for_resubmission(*, epoch: int, final_epoch: int, time_left: int) -> Tuple[int, bool]:
     """
-    :return: (number of SLURM time-left queries, signals sent via os.kill)
+    :return: (number of SLURM time-left queries, whether to stop)
     """
-    import os
     from unittest import mock
 
-    config = Config({"stop_for_resubmission_when_low_time_left": True})
+    config = Config({"num_epochs": final_epoch, "stop_for_resubmission_when_low_time_left": True})
     engine = Engine(config=config)
-    engine._final_epoch = final_epoch  # normally set by init_train_from_config
     engine.set_epoch(epoch)
     with mock.patch("returnn.util.basic.slurm_time_left_sec", return_value=time_left) as time_left_mock:
-        with mock.patch.object(os, "kill") as kill_mock:
-            engine._maybe_stop_for_resubmission(last_epoch_wall_sec=100.0)
-    return time_left_mock.call_count, [call.args[1] for call in kill_mock.call_args_list]
+        stop = engine._should_stop_for_resubmission(last_epoch_wall_sec=100.0)
+    return time_left_mock.call_count, stop
 
 
 def test_stop_for_resubmission_final_epoch():
-    # low wall-time left, but the training is complete: no scheduler query, no signal
-    assert _run_maybe_stop_for_resubmission(epoch=38, final_epoch=38, time_left=10) == (0, [])
+    # low wall-time left, but the training is complete: no scheduler query, no stop
+    assert _should_stop_for_resubmission(epoch=38, final_epoch=38, time_left=10) == (0, False)
 
 
 def test_stop_for_resubmission_beyond_final_epoch():
-    assert _run_maybe_stop_for_resubmission(epoch=39, final_epoch=38, time_left=10) == (0, [])
+    assert _should_stop_for_resubmission(epoch=39, final_epoch=38, time_left=10) == (0, False)
 
 
 def test_stop_for_resubmission_low_time_left():
-    import signal
-
-    assert _run_maybe_stop_for_resubmission(epoch=37, final_epoch=38, time_left=10) == (1, [signal.SIGINT])
+    assert _should_stop_for_resubmission(epoch=37, final_epoch=38, time_left=10) == (1, True)
 
 
 def test_stop_for_resubmission_enough_time_left():
-    assert _run_maybe_stop_for_resubmission(epoch=37, final_epoch=38, time_left=1000) == (1, [])
+    assert _should_stop_for_resubmission(epoch=37, final_epoch=38, time_left=1000) == (1, False)
+
+
+@contextlib.contextmanager
+def _restore_signal_handlers():
+    import signal
+
+    handlers = {signum: signal.getsignal(signum) for signum in (signal.SIGINT, signal.SIGTERM)}
+    try:
+        yield
+    finally:
+        for signum, handler in handlers.items():
+            signal.signal(signum, handler)
+
+
+def test_stop_for_resubmission_interrupt():
+    # The interruption of the job comes back to us as SIGINT: expected, no KeyboardInterrupt, we return.
+    import signal
+    from unittest import mock
+
+    def _interrupt_job():
+        os.kill(os.getpid(), signal.SIGINT)
+        return True
+
+    engine = Engine(config=Config({}))
+    with _restore_signal_handlers():
+        with mock.patch("returnn.util.basic.slurm_interrupt_job", side_effect=_interrupt_job) as interrupt_mock:
+            engine._stop_for_resubmission()
+    assert interrupt_mock.call_count == 1
+
+
+def test_stop_for_resubmission_interrupt_failed():
+    from unittest import mock
+
+    engine = Engine(config=Config({}))
+    with _restore_signal_handlers():
+        with mock.patch("returnn.util.basic.slurm_interrupt_job", return_value=False):
+            with pytest.raises(Exception, match="could not interrupt"):
+                engine._stop_for_resubmission()
+
+
+def test_stop_for_resubmission_no_signal():
+    # no signal after the interruption: an error, the exit must not count as a completed training
+    from unittest import mock
+
+    engine = Engine(config=Config({}))
+    with _restore_signal_handlers():
+        with mock.patch("returnn.util.basic.slurm_interrupt_job", return_value=True):
+            with mock.patch.object(Engine, "_stop_for_resubmission_signal_timeout", 0.2):
+                with pytest.raises(Exception, match="no termination signal"):
+                    engine._stop_for_resubmission()
 
 
 def _env_without_wandb_defaults() -> Dict[str, str]:
@@ -838,8 +885,9 @@ def _train_with_wandb_stub(
 ):
     """
     :return: (wandb_opts of the config, wandb.init kwargs, events, global train step at the end),
-        events: ("log", step, data), ("finish", exit_code), ("kill", sig)
+        events: ("log", step, data), ("finish", exit_code), ("interrupt",)
     """
+    import signal
     import types
 
     init_kwargs = []
@@ -855,6 +903,12 @@ def _train_with_wandb_stub(
     def _wandb_init(**kwargs):
         init_kwargs.append(kwargs)
         return _WandbRun()
+
+    def _interrupt_job():
+        # the interruption of the job comes back to us as SIGINT (see Engine._stop_for_resubmission)
+        events.append(("interrupt",))
+        os.kill(os.getpid(), signal.SIGINT)
+        return True
 
     wandb_opts = {"project": "test", "log_every_n_train_steps": 2}
     config = Config(
@@ -884,13 +938,12 @@ def _train_with_wandb_stub(
     try:
         with unittest.mock.patch.dict(os.environ, _env_without_wandb_defaults(), clear=True):
             with unittest.mock.patch("returnn.util.basic.slurm_time_left_sec", return_value=0):
-                with unittest.mock.patch.object(os, "kill", side_effect=lambda pid, sig: events.append(("kill", sig))):
-                    with global_config_ctx(config):
+                with unittest.mock.patch("returnn.util.basic.slurm_interrupt_job", side_effect=_interrupt_job):
+                    with _restore_signal_handlers(), global_config_ctx(config):
                         engine = Engine(config=config)
                         engine.init_train_from_config(train_data=train_dataset, dev_data=dev_dataset)
                         engine.train()
-                        # like returnn.__main__: the stop for resubmission ends in a KeyboardInterrupt
-                        engine.finalize(error_occurred=stop_for_resubmission)
+                        engine.finalize()  # like returnn.__main__
     finally:
         del sys.modules["wandb"]
     return wandb_opts, init_kwargs, events, engine.global_train_step
@@ -945,11 +998,9 @@ def test_torch_engine_wandb_default_id_per_task():
 
 
 def test_torch_engine_wandb_stop_for_resubmission():
-    import signal
-
     _, _, events, _ = _train_with_wandb_stub(num_epochs=2, stop_for_resubmission=True)
-    # the planned stop after epoch 1 finishes the run as successful, before the SIGINT
-    assert events[-2:] == [("finish", 0), ("kill", signal.SIGINT)]
+    # the planned stop after epoch 1 finishes the run as successful, before the interruption of the job
+    assert events[-2:] == [("finish", 0), ("interrupt",)]
     assert [event[0] for event in events].count("finish") == 1
     logs = [event[2] for event in events if event[0] == "log"]
     assert any("dev/ce" in data for data in logs)
@@ -2733,6 +2784,169 @@ def test_torch_distributed_all_reduce_avg_flat_buckets():
                 results = eval(f.read())
             # the mean over the ranks of 100 * rank + i
             assert results == [[100.0 + i, 100.0 + i] for i in range(5)], (rank, results)
+
+
+_TORCHRUN_CONFIG = """
+import os
+import time
+import torch
+import returnn.frontend as rf
+
+task = "train"
+device = "cpu"
+backend = "torch"
+extern_data = {"data": {"dim": 9}, "classes": {"dim": 2, "sparse": True}}
+train = {"class": "Task12AXDataset", "num_seqs": 100, "name": "train"}
+dev = {"class": "Task12AXDataset", "num_seqs": 10, "name": "dev"}
+batch_size = 300
+optimizer = {"class": "adam"}
+learning_rate = 0.01
+num_epochs = 3
+model = os.environ["RETURNN_TEST_DIR"] + "/model"
+learning_rate_file = os.environ["RETURNN_TEST_DIR"] + "/learning_rates"
+torch_dataloader_opts = {"num_workers": 1}
+torch_distributed = {"backend": "gloo", "reduce_type": "grad_explicit"}
+stop_for_resubmission_when_low_time_left = True
+log_verbosity = 4
+
+
+class Model(torch.nn.Module):
+    def __init__(self, **_kwargs):
+        super().__init__()
+        self.lin = torch.nn.Linear(9, 2)
+
+    def __call__(self, x):
+        return torch.nn.functional.log_softmax(self.lin(x), dim=-1)
+
+
+def get_model(**_kwargs):
+    return Model()
+
+
+_cur_epoch = [0]
+
+
+def epoch_start(*, epoch, **_kwargs):
+    _cur_epoch[0] = epoch
+
+
+def epoch_end(*, epoch, **_kwargs):
+    if os.environ["RANK"] == "1":
+        time.sleep(1.0)  # a slightly delayed rank at the end of its epoch work
+
+
+def train_step(*, model, extern_data, **_kwargs):
+    if _cur_epoch[0] == int(os.environ.get("RETURNN_TEST_RAISE_EPOCH", "0")) and os.environ["RANK"] == "1":
+        raise Exception("test: rank 1 fails")
+    data = extern_data["data"]
+    logits = model(data.raw_tensor)
+    lens = data.dims[1].dyn_size_ext.raw_tensor
+    logits_packed = torch.nn.utils.rnn.pack_padded_sequence(logits, lens, batch_first=True, enforce_sorted=False)
+    targets_packed = torch.nn.utils.rnn.pack_padded_sequence(
+        extern_data["classes"].raw_tensor, lens, batch_first=True, enforce_sorted=False
+    )
+    loss = torch.nn.CrossEntropyLoss(reduction="none")(logits_packed.data, targets_packed.data.long())
+    rf.get_run_ctx().mark_as_loss(name="ce", loss=loss)
+
+
+if "RETURNN_TEST_TIME_LEFT" in os.environ:
+    import returnn.util.basic as _basic
+
+    _time_left = int(os.environ["RETURNN_TEST_TIME_LEFT"])
+    _basic.slurm_time_left_sec = lambda: _time_left
+
+    def _interrupt_job():
+        # what scancel --full --signal=INT does to the batch step:
+        # SIGINT to the process group of the launcher, i.e. torchrun and the stand-in worker here
+        os.kill(-os.getpgid(os.getppid()), 2)
+        return True
+
+    _basic.slurm_interrupt_job = _interrupt_job
+"""
+
+# like sisyphus.task.Task.run / i6_core ReturnnTrainingJob.run: subprocess.check_call,
+# KeyboardInterrupt (not caught there) = interrupted and resumable, CalledProcessError = error
+_TORCHRUN_WORKER = """
+import subprocess, sys
+try:
+    subprocess.check_call(sys.argv[2:])
+    res = "finished"
+except subprocess.CalledProcessError as exc:
+    res = f"error {exc.returncode}"
+except KeyboardInterrupt:
+    res = "interrupted"
+with open(sys.argv[1], "w") as f:
+    f.write(res)
+"""
+
+
+def _run_torchrun_training(tmp_dir: str, *, tag: str, env: Dict[str, str]) -> Tuple[str, Dict[str, str]]:
+    """
+    Training with torchrun, 2 CPU ranks (gloo), under a stand-in of the Sisyphus task worker,
+    in its own session like under Sisyphus.
+
+    :return: the outcome seen by the worker ("finished", "interrupted", "error <rc>"), and the stdout per local rank
+    """
+    import subprocess
+
+    returnn_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    config_fn = f"{tmp_dir}/config.py"
+    with open(config_fn, "w") as f:
+        f.write(_TORCHRUN_CONFIG)
+    worker_fn = f"{tmp_dir}/worker.py"
+    with open(worker_fn, "w") as f:
+        f.write(_TORCHRUN_WORKER)
+    result_fn = f"{tmp_dir}/result-{tag}.txt"
+    log_dir = f"{tmp_dir}/logs-{tag}"
+    cmd = [sys.executable, worker_fn, result_fn, sys.executable, "-m", "torch.distributed.run"]
+    cmd += ["--standalone", "--nnodes=1", "--nproc_per_node=2", "--log_dir", log_dir, "--redirects", "3"]
+    cmd += [f"{returnn_root}/rnn.py", config_fn]
+    env = {**os.environ, "RETURNN_TEST_DIR": tmp_dir, **env}
+    subprocess.run(cmd, env=env, cwd=tmp_dir, start_new_session=True, timeout=300, check=True)
+    with open(result_fn) as f:
+        result = f.read()
+    logs = {}
+    for fn in glob.glob(f"{log_dir}/*/attempt_*/*/stdout.log"):
+        with open(fn, errors="replace") as f:
+            logs[fn.split("/")[-2]] = f.read()
+    assert sorted(logs) == ["0", "1"], logs.keys()
+    print(f"--- {tag}: worker {result}, rank 0 log tail:")
+    print("\n".join(logs["0"].splitlines()[-20:]))
+    return result, logs
+
+
+def test_torch_engine_torchrun_stop_for_resubmission():
+    """
+    stop_for_resubmission_when_low_time_left under torchrun: the ranks agree, release everything in order,
+    one interruption reaches the worker as an interruption (not finished, not an error),
+    without the signal cutting into any rank, and the training resumes from the checkpoint.
+    """
+    with tempfile.TemporaryDirectory(prefix="returnn_test_torchrun_stop") as tmp_dir:
+        result, logs = _run_torchrun_training(tmp_dir, tag="stop", env={"RETURNN_TEST_TIME_LEFT": "0"})
+        assert result == "interrupted", result
+        for rank, log_ in logs.items():
+            assert log_.count("stop_for_resubmission_when_low_time_left:") == 1, (rank, log_)
+            assert "got signal 2 (SIGINT), expected" in log_, (rank, log_)
+            assert "Stopped for resubmission." in log_, (rank, log_)
+            for bad in ["Traceback", "KeyboardInterrupt", "Connection closed by peer", "DataLoader worker"]:
+                assert bad not in log_, (rank, bad, log_)
+            assert "Finished training" not in log_, (rank, log_)
+        assert os.path.exists(f"{tmp_dir}/model.001.pt") and os.path.exists(f"{tmp_dir}/model.001.opt.pt")
+        with open(f"{tmp_dir}/learning_rates") as f:
+            assert f.read().count("global_train_step_end") == 1
+        result, logs = _run_torchrun_training(tmp_dir, tag="resume", env={})
+        assert result == "finished", result
+        assert "Starting training at epoch 2" in logs["0"] and "Finished training at epoch 3" in logs["0"]
+        with open(f"{tmp_dir}/learning_rates") as f:
+            assert f.read().count("global_train_step_end") == 3
+
+
+def test_torch_engine_torchrun_train_error():
+    """a real failure of a rank still reaches the worker as an error"""
+    with tempfile.TemporaryDirectory(prefix="returnn_test_torchrun_error") as tmp_dir:
+        result, logs = _run_torchrun_training(tmp_dir, tag="error", env={"RETURNN_TEST_RAISE_EPOCH": "2"})
+        assert result == "error 1", result
+        assert "test: rank 1 fails" in logs["1"] and "Finished training" not in logs["0"]
 
 
 def test_dynamic_learning_rate():

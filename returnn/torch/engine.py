@@ -37,7 +37,7 @@ from returnn.util import NumbersDict
 from returnn.util.basic import hms, NotSpecified
 from returnn.util import multi_proc_manager_with_watchdog
 from returnn.util.result_with_reason import ResultWithReason
-from returnn.util.debug import debug_shell
+from returnn.util.debug import debug_shell, TerminationSignalWatcher
 from returnn.util.math import simplify_and_format_number, merge_random_seeds
 from returnn.util.hot_reload import should_use_hot_reloading, ConfigHotReloader
 from returnn.forward_iface import ForwardCallbackIface
@@ -373,71 +373,54 @@ class Engine(EngineBase):
             f"Starting training at epoch {self._start_epoch}, global train step {self.global_train_step}", file=log.v3
         )
         self.set_epoch(self._start_epoch - 1)
+        stop_for_resubmission = False
         while self.epoch + 1 <= self._final_epoch:
             self.set_epoch(self.epoch + 1)
             self.init_train_epoch()
             epoch_start_time = time.monotonic()
             self.train_epoch()
-            self._maybe_stop_for_resubmission(time.monotonic() - epoch_start_time)
+            stop_for_resubmission = self._should_stop_for_resubmission(time.monotonic() - epoch_start_time)
+            if stop_for_resubmission:
+                break
 
         if self._tensorboard_writer:
             self._tensorboard_writer.close()
 
+        if stop_for_resubmission:
+            self._stop_for_resubmission()
+            return
         print(f"Finished training at epoch {self.epoch}, global train step {self.global_train_step}", file=log.v3)
 
-    def _maybe_stop_for_resubmission(self, last_epoch_wall_sec: float):
+    def _should_stop_for_resubmission(self, last_epoch_wall_sec: float) -> bool:
         """
-        If the remaining SLURM wall-time is less than the (safety-scaled) last epoch's wall-time,
-        stop the training now by sending SIGINT to the Sisyphus task worker's process group.
-        Sisyphus then re-submits the job, and we avoid wasting time on a half-finished epoch.
-
-        Why SIGINT:
-            This is like pressing Ctrl+C in a shell, i.e. sending SIGINT to the foreground PG.
-            The Sisyphus task worker gets it as ``KeyboardInterrupt``.
-            That is a ``BaseException``, not caught by ``sisyphus.task.Task.run()``'s ``except`` clauses,
-            so it propagates without setting ``self.error()``, ``self.finished()``, or ``out_of_memory``.
-            Sisyphus thus sees the job as cleanly interrupted and resubmits.
-            See the SIGINT block below for the torchelastic (torchrun) subtlety.
-
-        See https://github.com/rwth-i6/returnn/issues/1818.
+        :func:`EngineBase._should_stop_for_resubmission`, agreed across the ranks:
+        all stop as soon as one would (they share the SLURM job, but their epoch times differ a bit),
+        so no rank goes on into collectives the others have left.
         """
-        from returnn.util.basic import slurm_time_left_sec
-        import os
-        import signal
+        stop = super()._should_stop_for_resubmission(last_epoch_wall_sec)
+        if self._torch_distributed_ctx and self.config.bool("stop_for_resubmission_when_low_time_left", False):
+            stop_ = torch.tensor([stop], dtype=torch.int8)
+            torch.distributed.all_reduce(stop_, op=torch.distributed.ReduceOp.MAX)
+            stop = bool(stop_[0])
+        return stop
 
-        if not self.config.bool("stop_for_resubmission_when_low_time_left", False):
-            return
-        if self._final_epoch is not None and self.epoch >= self._final_epoch:
-            return  # training is complete, a resubmission would only finalize the job
-        time_left = slurm_time_left_sec()
-        if time_left is None:
-            return  # not in SLURM, or squeue query failed -- no-op.
-        safety = self.config.float("stop_for_resubmission_safety_factor", 1.2)
-        needed = last_epoch_wall_sec * safety
-        if time_left >= needed:
-            return
-        print(
-            f"stop_for_resubmission_when_low_time_left:"
-            f" SLURM time_left={time_left}s, last epoch wall={last_epoch_wall_sec:.1f}s,"
-            f" needed (x{safety})={needed:.1f}s -- stopping early so sisyphus can resubmit.",
-            file=log.v1,
+    def _stop_for_resubmission(self):
+        """
+        :func:`EngineBase._stop_for_resubmission`, coordinated across the ranks:
+        release the captured graph and the data loader workers, then the process group,
+        and only then interrupt the job, from rank 0.
+        The signal watcher is in place on every rank before any rank can send,
+        so the signal cannot cut into another rank's release.
+        """
+        self.finalize()
+        watcher = TerminationSignalWatcher()
+        if self._torch_distributed_ctx:
+            torch.distributed.all_reduce(torch.zeros(1, dtype=torch.int8))  # all released
+            self._torch_distributed_ctx.destroy_process_groups()
+        super()._stop_for_resubmission(
+            watcher=watcher,
+            interrupt_job=self._torch_distributed_ctx is None or self._torch_distributed_ctx.rank() == 0,
         )
-        if self._wandb_run is not None:
-            self._wandb_run.finish(exit_code=0)
-            self._wandb_run = None
-        # Send SIGINT to the process group that contains the Sisyphus task worker.
-        # Under torchelastic, each rank is its own session (Popen start_new_session=True),
-        # separate from torchrun and the Sisyphus worker, which share one PG.
-        # Signalling our own PG would hit only the ranks,
-        # which exit nonzero -> torchrun ChildFailedError -> Sisyphus error, not a clean resubmit.
-        # So in that case signal the parent PG (torchrun's, which is also the Sisyphus worker's).
-        import torch.distributed
-
-        if torch.distributed.is_torchelastic_launched():
-            pgid = os.getpgid(os.getppid())
-        else:
-            pgid = os.getpgrp()
-        os.kill(-pgid, signal.SIGINT)
 
     def init_train_epoch(self):
         """

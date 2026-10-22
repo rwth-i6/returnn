@@ -13,6 +13,7 @@ from returnn.learning_rate_control import load_learning_rate_control_from_config
 from returnn.log import log
 from returnn.pretrain import Pretrain
 from returnn.util import basic as util
+from returnn.util import debug
 from returnn.forward_iface import ForwardCallbackIface
 from returnn.datasets import Dataset
 
@@ -70,6 +71,65 @@ class EngineBase:
         if config.has("load_epoch"):
             num_epochs = max(num_epochs, config.int("load_epoch", 0))
         return num_epochs
+
+    def _should_stop_for_resubmission(self, last_epoch_wall_sec: float) -> bool:
+        """
+        Config ``stop_for_resubmission_when_low_time_left``: whether the SLURM wall time left
+        is less than the (safety-scaled) time of the last epoch, so the next epoch would not finish.
+        Then the training stops now (:func:`_stop_for_resubmission`) and Sisyphus resubmits it,
+        instead of the time limit killing a half-finished epoch.
+        After the final epoch never: the training is complete.
+        See https://github.com/rwth-i6/returnn/issues/1818.
+
+        :param last_epoch_wall_sec: how long the epoch just finished took, with its checkpoint and evaluation
+        """
+        if not self.config.bool("stop_for_resubmission_when_low_time_left", False):
+            return False
+        if self.epoch >= self.config_get_final_epoch(self.config):
+            return False  # training is complete, a resubmission would only finalize the job
+        time_left = util.slurm_time_left_sec()
+        if time_left is None:
+            return False  # not in SLURM, or the squeue query failed
+        safety = self.config.float("stop_for_resubmission_safety_factor", 1.2)
+        needed = last_epoch_wall_sec * safety
+        if time_left >= needed:
+            return False
+        print(
+            f"stop_for_resubmission_when_low_time_left:"
+            f" SLURM time_left={time_left}s, last epoch wall={last_epoch_wall_sec:.1f}s,"
+            f" needed (x{safety})={needed:.1f}s -- stopping early so sisyphus can resubmit.",
+            file=log.v1,
+        )
+        return True
+
+    # Seconds to wait for the signal of the interruption before giving up (exit with an error).
+    _stop_for_resubmission_signal_timeout = 120.0
+
+    def _stop_for_resubmission(
+        self, *, watcher: Optional[debug.TerminationSignalWatcher] = None, interrupt_job: bool = True
+    ):
+        """
+        Interrupt the SLURM job (:func:`returnn.util.basic.slurm_interrupt_job`), like Ctrl+C,
+        once everything which a termination would otherwise cut into is released:
+        this is for the end of :func:`train`, after :func:`_should_stop_for_resubmission`.
+        The Sisyphus task worker gets the SIGINT as ``KeyboardInterrupt``,
+        which ``sisyphus.task.Task.run()`` does not catch,
+        so neither the error nor the finished marker is set, and the job counts as interrupted, to be resubmitted.
+        The launcher (e.g. ``torchrun``) forwards the signal to us, that is expected:
+        it is only recorded, and we return, to exit on our own.
+        Without the signal, we raise: the exit must not look like a completed training.
+
+        :param watcher: already installed, when the signal could arrive before this is called
+        :param interrupt_job: whether to send the signal (one process per job), or only wait for it
+        """
+        if watcher is None:
+            watcher = debug.TerminationSignalWatcher()
+        if interrupt_job and not util.slurm_interrupt_job():
+            raise Exception(f"{self}: stop for resubmission: could not interrupt the SLURM job")
+        timeout = self._stop_for_resubmission_signal_timeout
+        if watcher.wait(timeout=timeout) is None:
+            raise Exception(f"{self}: stop for resubmission: no termination signal within {timeout} s")
+        print("Stopped for resubmission.", file=log.v3)
 
     @classmethod
     def get_existing_models(cls, config: Config, *, for_training: Optional[bool] = None):
