@@ -745,8 +745,7 @@ class TorchBackend(Backend[torch.Tensor]):
             logits_dim_order = targets.dims
 
         # We need same order of axes as in target.
-        logits_axes_permutation = [logits_dim_order.index(dim) for dim in logits.dims]
-        logits = logits.copy_transpose(logits_axes_permutation)
+        logits = logits.copy_transpose(logits_dim_order)
 
         raw_cross_entropy = torch.nn.functional.cross_entropy(
             input=logits.raw_tensor, target=targets.raw_tensor, reduction="none"
