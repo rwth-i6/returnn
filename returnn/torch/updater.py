@@ -535,14 +535,13 @@ class Updater:
         print("Save optimizer under %s" % filename, file=log.v4)
         # First write to a temp-file, to be sure that writing happens without errors,
         # and only afterward rename to the target file.
-        tmp_filename = filename + ".tmp_write"
-        if os.path.exists(tmp_filename):
-            os.unlink(tmp_filename)
+        from returnn.torch.util.serialization import save_checkpoint
+
         optimizer_state_dict = self.optimizer.state_dict()
         if self._optimizer_step is not None:
             # keep the ordinary Python scalars (lr, counters) in the checkpoint
             optimizer_state_dict = self._optimizer_step.state_dict_to_host_scalars(optimizer_state_dict)
-        torch.save(
+        save_checkpoint(
             {
                 "optimizer": optimizer_state_dict,
                 "optimizer_class_name": self.optimizer.__class__.__name__,
@@ -553,9 +552,8 @@ class Updater:
                 "effective_learning_rate": self.get_effective_learning_rate(),
                 "returnn_version": returnn.__long_version__,
             },
-            tmp_filename,
+            filename,
         )
-        os.rename(tmp_filename, filename)
 
     def get_optimizer(self):
         """
