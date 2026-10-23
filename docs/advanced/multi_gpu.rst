@@ -14,6 +14,45 @@ This will by default use PyTorch ``DistributedDataParallel``.
 
 Or maybe use ``torch_distributed = {"reduce_type": "param", "param_sync_step": 100}``.
 This uses parameter averaging after every 100 steps.
+With ``"sync_optimizer_state": True``, the optimizer state (e.g. the Adam moments) is averaged as well;
+by default each rank keeps its own.
+
+``"reduce_type": "grad_explicit"`` averages the grads once per step before the optimizer step,
+without ``DistributedDataParallel``, which is what ``torch_cuda_graph`` needs.
+
+``"sync"`` generalizes these to nested levels, inner to outer, e.g. grads averaged within each node every step,
+params averaged across all nodes every 100 steps::
+
+    torch_distributed = {
+        "sync": [
+            {"group": "node", "type": "grad"},
+            {"group": "world", "type": "param", "every": 100},
+        ]
+    }
+
+``group`` is ``"world"``, ``"node"`` (the ranks on one host), an int (contiguous blocks of that many ranks),
+or a list of rank lists. ``type`` is ``"grad"`` (every step, must be the first level) or ``"param"``,
+``every`` is the period in optimizer update steps (counted per epoch; with ``accum_grad_multiple_step``,
+one update step spans several steps, and the params are only averaged right after an update).
+A ``"param"`` level also takes ``"sync_on_cpu"`` and ``"sync_optimizer_state"``.
+The groups of a level must be unions of the groups of the inner level,
+and the periods multiples of the inner period. Of the param levels firing after an update, only the outermost
+averages the params; the optimizer state is averaged over the outermost firing level with ``"sync_optimizer_state"``.
+
+The small control all-reduce (the ranks agree whether every one of them still has data, and on the epoch progress)
+follows the levels: in a step it runs on the group of the outermost level firing in that step.
+So with grads within the node and params across the nodes every 100 steps, the nodes meet only every 100 steps.
+A group which ran out of data joins the next control sync of every outer level in turn, so the stop reaches all ranks.
+With a callable ``accum_grad_multiple_step``, all ranks meet in every step instead: its value for a step
+is only known after the step, and it must be the same on every rank, which the sync of ``epoch_continuous`` gives.
+
+With ``"sync_at_epoch_end": True`` (default since behavior version 38), the state which goes into the checkpoint
+is made the same on every rank at the end of every train epoch, before the checkpoint is written:
+the params, the buffers and the optimizer state take the mean over the ranks, the step counts the max.
+So the checkpoint and the eval are the average, every rank starts the next epoch with the state of the checkpoint,
+and resuming from the checkpoint continues with the same model and optimizer state as the uninterrupted training.
+(The per-rank random states and data positions are not part of the checkpoint either way.)
+With ``"sync"`` levels, this applies when there is a ``"param"`` level, and syncs over all ranks.
 
 With ``"sync_complete_frac": True`` (default since behavior version 33),
 the epoch progress ``complete_frac`` is the mean over the ranks,
@@ -50,7 +89,7 @@ before, every worker yielded all the data).
 As an efficient dataset for large scale training,
 see :class:`DistributeFilesDataset`.
 
-With ``"eval_on_all_ranks": True`` (default since behavior version 39),
+With ``"eval_on_all_ranks": True`` (default since behavior version 40),
 the evaluation is split over the ranks.
 Otherwise, every eval dataset is evaluated on rank 0 alone, while the other ranks wait.
 Every eval dataset which supports sharding (:func:`Dataset.supports_sharding`)

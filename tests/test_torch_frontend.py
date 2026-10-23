@@ -1050,10 +1050,10 @@ def test_causal_dot_attention_fused_by_behavior_version():
         return matmul(*args, **kwargs)
 
     # the fused kernel never materializes the energies, so a matmul means the generic path ran.
-    # Behavior version 40 turns it on, the flag overrides that in both directions.
+    # Behavior version 41 turns it on, the flag overrides that in both directions.
     behavior_version_orig_state = BehaviorVersion._get_state()
     try:
-        for version, flag, want_generic in ((39, None, True), (40, None, False), (40, False, True), (39, True, False)):
+        for version, flag, want_generic in ((40, None, True), (41, None, False), (41, False, True), (40, True, False)):
             BehaviorVersion._reset()
             BehaviorVersion.set(version)
             calls.clear()

@@ -108,3 +108,24 @@ train
 
 use_tensorflow
     If you set this to ``True``, TensorFlow will be used.
+
+wandb_opts
+    PyTorch backend only. If set, logs training and eval metrics to `Weights & Biases <https://wandb.ai>`_.
+    Requires the ``wandb`` package. Only rank 0 logs in distributed training.
+    A dict that is given to ``wandb.init``, plus these RETURNN-specific keys and defaults:
+
+    - ``log_every_n_train_steps``: log the train step losses every N steps. Default 100. ``None`` disables it.
+      Epoch-level train and eval losses are always logged.
+    - ``job_type``: default is the ``task`` (e.g. ``train``, ``eval``, ``forward``).
+    - ``name``: default is the ``SLURM_JOB_NAME`` env var, if set (with Sisyphus: the task name with the job hash).
+    - ``id``: default is a hash of the ``task`` and the absolute config filename.
+      With Sisyphus, each job has its own config file, and a resubmission reuses it,
+      so all jobs of one training (or of one eval, forward, ...) continue the same run.
+      Another task with the same config file (e.g. ``++task eval``) gets its own run.
+      No default without a config file, or when the ``WANDB_RUN_ID`` env var is set.
+    - ``resume``: default ``"allow"``, i.e. an existing run with this ``id`` is continued at its last step.
+      After a restart from an earlier checkpoint (e.g. after a crash),
+      W&B keeps the old values of the repeated steps and drops the new ones.
+      No default if ``resume_from`` or ``fork_from`` is given, as W&B does not accept them together.
+
+    A stop for resubmission marks the run as finished, not as failed.

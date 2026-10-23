@@ -10,6 +10,7 @@ import returnn.frontend as rf
 from returnn.tensor import Tensor, Dim
 from returnn.util.basic import BehaviorVersion
 from .types import RawTensorTypes, ItemKeyType
+from .tensor_layout import TensorLayout
 
 T = TypeVar("T")  # tf.Tensor, torch.Tensor or so
 T2 = TypeVar("T2")
@@ -209,6 +210,14 @@ class Backend(Generic[T]):
         """
         # default implementation: ignore device
         return None
+
+    @classmethod
+    def get_tensor_layout(cls, x: Tensor) -> TensorLayout:
+        """
+        :param x: tensor of this backend
+        :return: layout of ``x``, see :func:`returnn.frontend.get_tensor_layout`. Default: plain storage
+        """
+        return TensorLayout(backend=cls, device=cls.get_device(x))
 
     @staticmethod
     def copy_to_device(x: Tensor, device: Optional[str]) -> Tensor:
@@ -1052,6 +1061,7 @@ class Backend(Generic[T]):
         device: Optional[str] = None,
         sparse_dim: Optional[Dim] = None,
         feature_dim: Optional[Dim] = None,
+        like: Optional[TensorLayout] = None,
     ) -> Tensor:
         """
         https://data-apis.org/array-api/latest/API_specification/generated/array_api.full.html
@@ -1062,6 +1072,7 @@ class Backend(Generic[T]):
         :param device:
         :param sparse_dim:
         :param feature_dim:
+        :param like: layout of this backend, the result follows its storage layout, see :func:`returnn.frontend.full`
         :return: tensor
         """
         raise NotImplementedError
@@ -1454,6 +1465,7 @@ class Backend(Generic[T]):
         auto_update_state: Optional[bool] = None,
         static: Optional[bool] = None,
         out: Optional[Tensor] = None,
+        like: Optional[TensorLayout] = None,
     ) -> Tensor:
         """
         random. See `rf.random` for details.

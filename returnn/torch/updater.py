@@ -901,7 +901,7 @@ class Updater:
         The weight_decay parameter from AdamW affects the weights of layers such as LayerNorm and Embedding.
         This function creates a blacklist of network modules and splits the optimizer groups in two:
         those who will receive weight decay, and those who won't receive it.
-        By default, biases get no weight decay, since behavior version 38 also all params with at most one dim.
+        By default, biases get no weight decay, since behavior version 39 also all params with at most one dim.
         The weight_decay parameter of the rest of the optimizers is L2 regularization.
 
         For further reading, see https://github.com/karpathy/minGPT/pull/24#issuecomment-679316025 and
@@ -922,7 +922,7 @@ class Updater:
           Those can be RF modules or pure PyTorch modules.
           The types can be specified as string (e.g. ``"torch.nn.LayerNorm"``) or as the type itself.
           Default: ``(torch.nn.LayerNorm, torch.nn.Embedding)``,
-          since behavior version 38 ``(torch.nn.Embedding, rf.Embedding)``.
+          since behavior version 39 ``(torch.nn.Embedding, rf.Embedding)``.
 
         :param optim_class: Optimizer class.
         :param optimizer_opts: Optimizer configuration specified by the user. Might be modified inplace here.
@@ -978,7 +978,7 @@ class Updater:
         blacklist_wd_modules = wrap_user_blacklist_wd_modules(
             optimizer_opts.pop("weight_decay_modules_blacklist", None)
         )
-        no_wd_up_to_1d = BehaviorVersion.get() >= 38
+        no_wd_up_to_1d = BehaviorVersion.get() >= 39
         custom_include_check = optimizer_opts.pop("weight_decay_custom_include_check", None)
         if custom_include_check:
             assert callable(custom_include_check), f"invalid weight_decay_custom_include_check {custom_include_check!r}"
@@ -993,7 +993,7 @@ class Updater:
             named_params = self._named_params_with_modules()
 
         # Distinguish between parameters with and without weight_decay/L2 regularization.
-        # No weight decay for biases, blacklisted modules and since behavior version 38 all params with ndim <= 1.
+        # No weight decay for biases, blacklisted modules and since behavior version 39 all params with ndim <= 1.
         wd_named = []
         no_wd_named = []
         for full_param_name, param, module, rf_module in named_params:
@@ -1041,10 +1041,10 @@ def wrap_user_blacklist_wd_modules(
     This supports both pure PyTorch modules (e.g. "torch.nn.LayerNorm")
     and RF modules (e.g. "rf.LayerNorm"), which can be specified as strings or types.
     Default: ``(torch.nn.LayerNorm, torch.nn.Embedding)``,
-    since behavior version 38 ``(torch.nn.Embedding, rf.Embedding)``.
+    since behavior version 39 ``(torch.nn.Embedding, rf.Embedding)``.
     """
     if mods is None:
-        if BehaviorVersion.get() >= 38:
+        if BehaviorVersion.get() >= 39:
             return torch.nn.Embedding, rf.Embedding
         return torch.nn.LayerNorm, torch.nn.Embedding
     assert isinstance(mods, (list, tuple)), f"invalid blacklist_weight_decay_modules {mods!r}"

@@ -120,7 +120,7 @@ jobs:
       - name: Run test
         run: |
           export ${{ matrix.action }}
-          python -m pytest tests/test_$TEST.py
+          python -m pytest -v -o faulthandler_timeout=300 tests/test_$TEST.py
 
   # Datasets with optional extra dependencies (HF datasets, NeMo Speech), only installed here. Needs newer Python.
   extra-datasets-test:
@@ -166,7 +166,7 @@ jobs:
       - name: Run test
         run: |
           export ${{ matrix.action }}
-          python -m pytest tests/test_$TEST.py $PYTEST_ARGS
+          python -m pytest -v -o faulthandler_timeout=300 tests/test_$TEST.py $PYTEST_ARGS
 
   tf-tests:
     runs-on: ubuntu-latest
@@ -226,7 +226,7 @@ jobs:
       - name: Run test
         run: |
           export ${{ matrix.action }}
-          python -m pytest tests/test_$TEST.py
+          python -m pytest -v -o faulthandler_timeout=300 tests/test_$TEST.py
 
   torch-tests:
     runs-on: ubuntu-latest
@@ -287,7 +287,7 @@ jobs:
       - name: Run test
         run: |
           export ${{ matrix.action }}
-          python -m pytest tests/test_$TEST.py
+          python -m pytest -v -o faulthandler_timeout=300 tests/test_$TEST.py
 
   # Own job, not part of rf-tests: JAX needs Python >=3.12 and NumPy >=2.1,
   # while rf-tests runs Python 3.10 and pins NumPy <2 (1.23.5 with ESPnet).
@@ -336,7 +336,7 @@ jobs:
       - name: Run test
         run: |
           export ${{ matrix.action }}
-          python -m pytest tests/test_$TEST.py
+          python -m pytest -v -o faulthandler_timeout=300 tests/test_$TEST.py
 
   rf-tests:
     runs-on: ubuntu-latest
@@ -413,4 +413,4 @@ jobs:
       - name: Run test
         run: |
           export ${{ matrix.action }}
-          python -m pytest tests/test_$TEST.py
+          python -m pytest -v -o faulthandler_timeout=300 tests/test_$TEST.py

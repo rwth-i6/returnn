@@ -176,6 +176,16 @@ class Engine(EngineBase):
         else:
             self._tensorboard_writer = None
 
+        wandb_opts = config.typed_value("wandb_opts", None)
+        if wandb_opts is not None and (not self._torch_distributed_ctx or self._torch_distributed_ctx.rank() == 0):
+            wandb_opts = wandb_opts.copy()
+            self._wandb_log_every_n_train_steps: Optional[int] = wandb_opts.pop("log_every_n_train_steps", 100)
+            self._wandb_opts: Optional[Dict[str, Any]] = wandb_opts
+        else:
+            self._wandb_log_every_n_train_steps = None
+            self._wandb_opts = None
+        self._wandb_run = None
+
         default_float_dtype = config.value("default_float_dtype", None)
         if default_float_dtype is not None:
             assert isinstance(default_float_dtype, str)
@@ -340,13 +350,15 @@ class Engine(EngineBase):
             # The compiled step returns the grads instead, so those hooks never fire.
             # The reduce types without a DDP wrap are fine.
             assert self._ddp_pt_model is None, (
-                "torch_cuda_graph: DistributedDataParallel not supported, use reduce_type 'grad_explicit' or 'param'"
+                "torch_cuda_graph: DistributedDataParallel not supported,"
+                " use reduce_type 'grad_explicit' or 'param', or sync levels"
             )
             # "param" syncs after the optimizer step, outside the compiled region, so it needs nothing.
-            # "grad_explicit" reduces between step and optimizer, so the optimizer cannot be in-graph.
-            if self._torch_distributed_ctx and self._torch_distributed_ctx.reduce_type() == "grad_explicit":
+            # "grad" reduces between step and optimizer, so the optimizer cannot be in-graph.
+            if self._torch_distributed_ctx and self._torch_distributed_ctx.has_grad_sync():
                 assert not self._graph_capture_opts.get("capture_optimizer", False), (
-                    "torch_cuda_graph: capture_optimizer with reduce_type 'grad_explicit' is not supported,"
+                    "torch_cuda_graph: capture_optimizer with grad sync"
+                    " (reduce_type 'grad_explicit' or a 'grad' sync level) is not supported,"
                     " the grad reduce must run between the step and the optimizer"
                     " (torch_optimizer_step captures the optimizer step separately)"
                 )
@@ -400,7 +412,9 @@ class Engine(EngineBase):
 
         :param error_occurred:
         """
-        del error_occurred  # all is released either way
+        if self._wandb_run is not None:
+            self._wandb_run.finish(exit_code=1 if error_occurred else 0)
+            self._wandb_run = None
         if self._graph_capture is not None:
             self._graph_capture.release()
             self._graph_capture = None
@@ -476,6 +490,9 @@ class Engine(EngineBase):
             f" needed (x{safety})={needed:.1f}s -- stopping early so sisyphus can resubmit.",
             file=log.v1,
         )
+        if self._wandb_run is not None:
+            self._wandb_run.finish(exit_code=0)
+            self._wandb_run = None
         # Send SIGINT to the process group that contains the Sisyphus task worker.
         # Under torchelastic, each rank is its own session (Popen start_new_session=True),
         # separate from torchrun and the Sisyphus worker, which share one PG.
@@ -730,6 +747,7 @@ class Engine(EngineBase):
 
         zero_grad_next_step = True
         cur_count_grad_accum = 0
+        epoch_update_step_idx = 0  # optimizer updates so far in this epoch, the unit of the param sync period
         extern_data = None
 
         total_data_size_packed = NumbersDict()
@@ -788,6 +806,17 @@ class Engine(EngineBase):
                     self._tensorboard_writer.add_scalar(f"train/{key}", val, global_step=info["global_train_step"])
                 self._tensorboard_writer.add_scalar(
                     "train/learning_rate", info["learning_rate"], global_step=info["global_train_step"]
+                )
+            if (
+                self._wandb_log_every_n_train_steps is not None
+                and info["global_train_step"] % self._wandb_log_every_n_train_steps == 0
+            ):
+                self._wandb_log(
+                    {
+                        **{f"train_step/{key}": val for key, val in eval_info.items()},
+                        "train_step/learning_rate": info["learning_rate"],
+                    },
+                    step=info["global_train_step"],
                 )
 
             if self._stop_on_nonfinite_train_score:
@@ -848,28 +877,47 @@ class Engine(EngineBase):
                 complete_frac = float(extern_data_raw["complete_frac"]) if extern_data_raw is not None else -1.0
                 _has_data = torch.tensor([extern_data_raw is not None], dtype=torch.int8)
                 # Sync only on first train step, when we have run out of data and every time we synchronize
-                # the model between workers.
+                # the model between workers, on the group of that sync.
                 # This allows the different workers to progress independently between synchronizations.
-                if self._torch_distributed_ctx and (
-                    self._torch_distributed_ctx.should_sync_now(epoch_step_idx=step_idx)
-                    or step_idx == 0
-                    or extern_data_raw is None
-                ):
+                # A callable accum_grad_multiple_step is only known after the step, so sync in every step then.
+                control_levels = []
+                if self._torch_distributed_ctx:
+                    control_levels = self._torch_distributed_ctx.control_sync_levels(
+                        epoch_update_step_idx=epoch_update_step_idx,
+                        # whether this step completes the grad accumulation, i.e. ends with an optimizer update
+                        update_step=(0 if zero_grad_next_step else cur_count_grad_accum) + 1
+                        >= accum_grad_multiple_step,
+                        world=accum_grad_multiple_step_dyn is not None or step_idx == 0,
+                        no_data=extern_data_raw is None,
+                    )
+                if control_levels:
                     # use all reduce to check if all workers have data, if at least one worker does not have data,
                     # all workers finish this epoch
+                    level = control_levels[0]
                     if self._torch_distributed_ctx.sync_complete_frac():
                         # mean over the ranks: a schedule on epoch_continuous must give the same LR on every rank
                         _data_info = torch.tensor(
                             [extern_data_raw is not None, complete_frac >= 0.0, max(complete_frac, 0.0)],
                             dtype=torch.float64,
                         )
-                        torch.distributed.all_reduce(_data_info, op=torch.distributed.ReduceOp.SUM)
-                        size = self._torch_distributed_ctx.size()
+                        torch.distributed.all_reduce(_data_info, op=torch.distributed.ReduceOp.SUM, group=level.group)
+                        size = level.group_size()
                         _has_data[0] = _data_info[0] == size
                         complete_frac = float(_data_info[2]) / size if _data_info[1] == size else -1.0
                     else:
-                        torch.distributed.all_reduce(_has_data, op=torch.distributed.ReduceOp.MIN)
+                        torch.distributed.all_reduce(_has_data, op=torch.distributed.ReduceOp.MIN, group=level.group)
                 if not _has_data[0]:
+                    # The outer groups learn it at their next control sync. Join it now, they reach it later.
+                    for level in control_levels[1:]:
+                        if self._torch_distributed_ctx.sync_complete_frac():
+                            _data_info = torch.zeros((3,), dtype=torch.float64)
+                            torch.distributed.all_reduce(
+                                _data_info, op=torch.distributed.ReduceOp.SUM, group=level.group
+                            )
+                        else:
+                            torch.distributed.all_reduce(
+                                _has_data, op=torch.distributed.ReduceOp.MIN, group=level.group
+                            )
                     break
 
                 if self._stall_heartbeat is not None:
@@ -982,8 +1030,14 @@ class Engine(EngineBase):
                     ),
                 }
 
-                if self._torch_distributed_ctx:
-                    self._torch_distributed_ctx.step_after_param_update(module=self._pt_model, epoch_step_idx=step_idx)
+                if perform_update_step:
+                    if self._torch_distributed_ctx:
+                        self._torch_distributed_ctx.step_after_param_update(
+                            module=self._pt_model,
+                            optimizer=self._updater.get_optimizer(),
+                            epoch_update_step_idx=epoch_update_step_idx,
+                        )
+                    epoch_update_step_idx += 1
 
                 if report_one_step_later:
                     # this step is launched, so the previous one is reported while the GPU runs this one
@@ -1021,6 +1075,12 @@ class Engine(EngineBase):
             prof.__exit__(None, None, None)
             if prof.exported:
                 self._torch_profile_exported = True
+
+        if self._torch_distributed_ctx:
+            # all ranks left the train loop together, so this collective matches
+            self.global_train_step = self._torch_distributed_ctx.step_after_epoch(
+                module=self._pt_model, optimizer=self._updater.get_optimizer(), global_train_step=self.global_train_step
+            )
 
         elapsed = time.monotonic() - epoch_start_time
         elapsed_computation_percentage = elapsed_computation_time / elapsed
@@ -1080,6 +1140,7 @@ class Engine(EngineBase):
             self.learning_rate_control.save()
 
         print(f"Epoch {self.epoch}: Total train loss:", _format_score(dict(accumulated_losses_dict)), file=log.v3)
+        self._wandb_log({f"train/{k}": v for k, v in accumulated_losses_dict.items()})
 
         self._maybe_report_dev_memory_stats()
 
@@ -1262,6 +1323,7 @@ class Engine(EngineBase):
                     self._tensorboard_writer.add_scalar(
                         f"{dataset_name}/{key}", val, global_step=self.global_train_step
                     )
+            self._wandb_log({f"{dataset_name}/{k}": v for k, v in accumulated_losses_dict.items()})
 
             self.learning_rate_control.set_epoch_error(
                 self.epoch, {f"{dataset_name}_loss_{k}": v for k, v in accumulated_losses_dict.items()}
@@ -1358,6 +1420,48 @@ class Engine(EngineBase):
         with torch.no_grad():
             for tensor, value in zip(self._model_state_tensors(), own):
                 tensor.data.copy_(value)
+
+    def _wandb_init(self):
+        """
+        Create the W&B run, if enabled via wandb_opts.
+        """
+
+        if self._wandb_opts is None or self._wandb_run is not None:
+            return
+
+        # noinspection PyUnresolvedReferences,PyPackageRequirements
+        import wandb
+        import hashlib
+
+        opts = self._wandb_opts.copy()
+        task = self.config.value("task", "train")
+        opts.setdefault("job_type", task)
+        if self.config.files and not os.environ.get("WANDB_RUN_ID"):
+            run_key = (task, [os.path.abspath(filename) for filename in self.config.files])
+            opts.setdefault("id", hashlib.sha256(repr(run_key).encode("utf-8")).hexdigest())
+        if os.environ.get("SLURM_JOB_NAME"):
+            opts.setdefault("name", os.environ["SLURM_JOB_NAME"])
+        if not any(k in opts for k in ("resume", "resume_from", "fork_from")):  # mutually exclusive
+            opts.setdefault("resume", "allow")
+        run_id = opts.get("id") or os.environ.get("WANDB_RUN_ID")
+        if task == "train" and not run_id:
+            print(
+                "wandb_opts: no run 'id' given, a restarted job will create a new W&B run."
+                " Set a fixed 'id' (e.g. the job hash) to continue the same run.",
+                file=log.v2,
+            )
+        self._wandb_run = wandb.init(**opts)
+
+    def _wandb_log(self, metrics: Dict[str, float], *, step: Optional[int] = None):
+        """
+        Log to Weights & Biases, if enabled via wandb_opts.
+
+        :param metrics: metrics to log.
+        :param step: the global train step of the metrics, default the current one
+        """
+        if self._wandb_run is not None:
+            step = self.global_train_step if step is None else step
+            self._wandb_run.log({**metrics, "epoch": self.epoch}, step=step)
 
     def _maybe_extend_losses_info(self, losses: NumbersDict, *, score_keys: Optional[Set[str]] = None) -> NumbersDict:
         """
@@ -1818,6 +1922,7 @@ class Engine(EngineBase):
             step += 1
         self.set_epoch(epoch)  # in training, this will be reset to start_epoch
         self.global_train_step = step
+        self._wandb_init()
 
         load_model_post_hooks = self.config.typed_value("load_model_post_hooks")
         if load_model_post_hooks:

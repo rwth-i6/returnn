@@ -767,8 +767,7 @@ class TorchBackend(Backend[torch.Tensor]):
             logits_dim_order = targets.dims
 
         # We need same order of axes as in target.
-        logits_axes_permutation = [logits_dim_order.index(dim) for dim in logits.dims]
-        logits = logits.copy_transpose(logits_axes_permutation)
+        logits = logits.copy_transpose(logits_dim_order)
 
         raw_cross_entropy = torch.nn.functional.cross_entropy(
             input=logits.raw_tensor, target=targets.raw_tensor, reduction="none"
@@ -1224,8 +1223,10 @@ class TorchBackend(Backend[torch.Tensor]):
         device: Optional[str] = None,
         sparse_dim: Optional[Dim] = None,
         feature_dim: Optional[Dim] = None,
+        like: Optional[rf.TensorLayout] = None,
     ) -> Tensor:
         """full"""
+        del like  # plain storage, no layout to follow
         shape = [dim.get_dim_value() for dim in dims]
         if isinstance(fill_value, Tensor):
             fill_value = fill_value.raw_tensor
@@ -2046,10 +2047,12 @@ class TorchBackend(Backend[torch.Tensor]):
         auto_update_state: Optional[bool] = None,
         static: Optional[bool] = None,
         out: Optional[Tensor[torch.Tensor]] = None,
+        like: Optional[rf.TensorLayout] = None,
     ) -> Tensor:
         """
         random. See `rf.random` for details.
         """
+        del like  # plain storage, no layout to follow
         shape = [d.get_dim_value() for d in dims]
         dtype_ = TorchBackend.as_dtype_raw(dtype)
         if out is None:
