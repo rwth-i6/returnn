@@ -10,6 +10,7 @@ from collections import deque
 from typing import Union, Optional, Any, Callable, Sequence, Tuple, List, Dict
 import os
 import sys
+import threading
 import numpy
 from returnn.log import log
 from returnn.util import better_exchook
@@ -807,8 +808,12 @@ def _worker_proc_loop(
     dataset = init_dataset(dataset_dict)
 
     got_init_seq_order = False
+    got_seq_end = False
     cache: deque[DatasetSeq] = deque()
     next_seq_idx = 0
+    cond = threading.Condition()  # guards cache, msg_queue, num_unhandled_msgs
+    msg_queue: deque[Tuple[str, Dict[str, Any]]] = deque()
+    num_unhandled_msgs = 0  # in msg_queue or being handled by the main thread
 
     # noinspection PyShadowingNames
     def _add_to_cache():
@@ -817,7 +822,9 @@ def _worker_proc_loop(
             return False
         if not dataset.is_less_than_num_seqs(next_seq_idx):
             return False
-        cache.append(_get_data_seq(dataset, next_seq_idx))
+        res = _get_data_seq(dataset, next_seq_idx)
+        with cond:
+            cache.append(res)
         next_seq_idx += 1
         return True
 
@@ -855,13 +862,49 @@ def _worker_proc_loop(
             if cache[-1].seq_idx == seq_idx:
                 return cache[-1]
 
+    # Serves cached seqs while the main thread (which owns the dataset) loads, and passes on all other msgs.
+    def _serve_parent():
+        nonlocal num_unhandled_msgs
+        try:
+            while True:
+                parent_msg, parent_kwargs = parent_conn.recv()
+                if parent_msg == "exit":
+                    break
+                cached_seq = None
+                with cond:
+                    if parent_msg == "get_data_seq" and num_unhandled_msgs == 0:
+                        requested_seq_idx = parent_kwargs["seq_idx"]
+                        if cache and cache[0].seq_idx <= requested_seq_idx:
+                            cached_seq = _get_from_cache(requested_seq_idx)
+                        if cached_seq:
+                            while cache[0].seq_idx < requested_seq_idx:
+                                cache.popleft()
+                            cond.notify()
+                    if not cached_seq:
+                        msg_queue.append((parent_msg, parent_kwargs))
+                        num_unhandled_msgs += 1
+                        cond.notify()
+                if cached_seq:
+                    parent_conn.send(("data_seq", cached_seq))
+        except EOFError:  # when parent dies
+            pass
+        finally:
+            with cond:
+                msg_queue.append(("exit", {}))
+                cond.notify()
+
+    threading.Thread(target=_serve_parent, name=f"DFD worker {epoch} serve parent", daemon=True).start()
+
     try:
         while True:
-            if got_init_seq_order:
-                while not parent_conn.poll():
-                    if not _add_to_cache():
-                        break
-            msg, kwargs = parent_conn.recv()
+            with cond:
+                while not msg_queue and not (got_init_seq_order and not got_seq_end and len(cache) < buffer_size):
+                    cond.wait()
+                msg, kwargs = msg_queue.popleft() if msg_queue else (None, None)
+            if msg is None:
+                if not _add_to_cache():
+                    got_seq_end = True
+                continue
             if msg == "exit":
                 break
             elif msg == "get_data_seq":
@@ -879,6 +922,7 @@ def _worker_proc_loop(
                     num_seqs = None
                 parent_conn.send(("num_seqs", num_seqs))
                 got_init_seq_order = True
+                got_seq_end = False
                 next_seq_idx = 0
                 cache.clear()
             elif msg == "get_all_tags":
@@ -897,6 +941,8 @@ def _worker_proc_loop(
                     parent_conn.send(("total_num_seqs", total_num_seqs))
             else:
                 raise Exception(f"unknown msg {msg!r}")
+            with cond:
+                num_unhandled_msgs -= 1
     except KeyboardInterrupt:  # when parent dies
         pass
     except EOFError:  # when parent dies

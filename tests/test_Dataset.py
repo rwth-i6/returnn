@@ -1659,6 +1659,59 @@ def test_DistributeFilesDataset_no_worker_proc_meta_data():
     assert res[0][4] == 3 * 5
 
 
+def _dfd_get_sub_epoch_blocking_map_dataset(
+    _files_subepoch: List[str], *, started_fn: str, release_fn: str
+) -> Dict[str, Any]:
+    from test_MultiProcDataset import _MyCustomBlockingMapDataset
+
+    map_dataset = functools.partial(
+        _MyCustomBlockingMapDataset, started_fn=started_fn, release_fn=release_fn, block_at=2
+    )
+    return {"class": "MapDatasetWrapper", "map_dataset": map_dataset, "seq_ordering": "default"}
+
+
+def test_DistributeFilesDataset_serves_cached_while_loading():
+    # The worker serves a cached seq while it loads a later seq.
+    from test_MultiProcDataset import timeout, _wait_for_file
+
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        started_fn, release_fn = f"{tmp_dir}/started", f"{tmp_dir}/release"
+        files = [f"{tmp_dir}/part-{i}" for i in range(2)]
+        for filename in files:
+            with open(filename, "wb") as f:
+                f.write(b"x")
+        dataset = init_dataset(
+            {
+                "class": "DistributeFilesDataset",
+                "files": files,
+                "get_sub_epoch_dataset": functools.partial(
+                    _dfd_get_sub_epoch_blocking_map_dataset, started_fn=started_fn, release_fn=release_fn
+                ),
+                "buffer_size": 3,
+                "preload_next_n_sub_epochs": 0,
+            }
+        )
+        try:
+            with timeout(30):
+                dataset.init_seq_order(epoch=1)
+                dataset.load_seqs(0, 1)
+                _wait_for_file(started_fn)  # item 1 is cached, item 2 is loading
+                thread = threading.Thread(target=dataset.load_seqs, args=(1, 2))
+                thread.start()
+                thread.join(timeout=10)
+                assert not thread.is_alive(), "seq 1 not served while the worker loads seq 2"
+                open(release_fn, "w").close()
+                for seq_idx in range(1, 5):
+                    dataset.load_seqs(seq_idx, seq_idx + 1)
+                    numpy.testing.assert_array_equal(
+                        dataset.get_data(seq_idx, "data"), numpy.full((seq_idx * 2 + 5, 3), seq_idx)
+                    )
+                assert not dataset.is_less_than_num_seqs(5)
+        finally:
+            open(release_fn, "w").close()
+            dataset.finish_epoch(free_resources=True)
+
+
 def test_PostprocessingDataset():
     _demo_txt = "some utterance text that has a few words"
 
