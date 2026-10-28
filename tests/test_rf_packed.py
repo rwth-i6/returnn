@@ -3524,7 +3524,7 @@ def test_cache_tensor_layout_key():
     time2_dim = Dim(
         Tensor("time2", dims=[batch_dim], dtype="int32", raw_tensor=time_dim.dyn_size_ext.raw_tensor.clone())
     )
-    cache = Cache(max_size=4)
+    cache = Cache(max_size=8)
     for layout_opts in (dict(), dict(gap=2, align=4), dict(total_bound=24)):
         key_name = f"test_cache_tensor_layout_key {layout_opts}"
         xp1, xp2 = packed.pack(x, **layout_opts), packed.pack(x, **layout_opts)
@@ -3540,6 +3540,22 @@ def test_cache_tensor_layout_key():
             # packed op with xp: raises for operands over different packings
             _assert_equal_non_padded(out - xp * 2.0, rf.zeros([batch_dim, t_dim, feat_dim]), batch_dim, t_dim)
         assert cache.get((key_name, rf.get_tensor_layout(packed.pack(x, gap=3)))) is None, layout_opts
+    # equal sizes over another batch dim: a miss, as the packing cannot be mapped one dim at a time
+    x2, *_ = _make_input(batch_size=3, seq_lens=(5, 0, 3), feat=4)
+    assert cache.get((f"test_cache_tensor_layout_key {dict()}", rf.get_tensor_layout(packed.pack(x2)))) is None
+
+    # static traceable, bound layout: shared within the step, never across steps
+    batch_dim, time_dim = _bounded_batch([2, 0, 3], capacity=4)
+    x = Tensor("x", dims=[batch_dim, time_dim, feat_dim], dtype="float32", raw_tensor=torch.ones(4, 3, 4))
+    for step in range(2):
+        with rf.set_static_traceable_ctx():
+            xp1 = packed.pack(x, dims=[batch_dim, time_dim], gap=1, total_bound=24)
+            xp2 = packed.pack(x, dims=[batch_dim, time_dim], gap=1, total_bound=24)
+            assert cache.get(("test_cache_tensor_layout_key traced", rf.get_tensor_layout(xp1))) is None, step
+            cache.set(("test_cache_tensor_layout_key traced", rf.get_tensor_layout(xp1)), xp1 * 2.0)
+            out = cache.get(("test_cache_tensor_layout_key traced", rf.get_tensor_layout(xp2)))
+            assert out is not None and out.raw_tensor.same_packing(xp2.raw_tensor), (step, out)
+            assert (out - xp2).raw_tensor.same_packing(xp2.raw_tensor), step
 
 
 def test_tensor_layout():
