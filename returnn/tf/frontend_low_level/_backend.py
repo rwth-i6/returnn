@@ -1219,7 +1219,7 @@ class TFBackend(Backend[tf.Tensor]):
         out_spatial_dims: Optional[Sequence[Dim]] = None,
         filter: Tensor,
         filter_size: Sequence[Dim],
-        padding: Union[str, int, Sequence[int]],
+        padding: Union[str, int, Sequence[Union[int, Tuple[int, int]]]],
         strides: Optional[Union[int, Sequence[int]]] = None,
         dilation_rate: Optional[Union[int, Sequence[int]]] = None,
         groups: Optional[int] = None,

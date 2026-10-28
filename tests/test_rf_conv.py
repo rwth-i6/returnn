@@ -320,6 +320,7 @@ def test_conv1d_padding_left_right():
     """
     import torch
     from unittest import mock
+    from contextlib import nullcontext
 
     rf.select_backend_torch()
     batch, time, feat = Dim(3, name="batch"), Dim(24, name="time"), Dim(6, name="feat")
@@ -337,7 +338,7 @@ def test_conv1d_padding_left_right():
         fallback = (
             mock.patch.object(torch.nn.functional, "conv1d", side_effect=AssertionError("torch conv1d fallback"))
             if device == "cuda"
-            else mock.MagicMock()
+            else nullcontext()
         )
         with fallback:
             out, (out_time,) = rf.conv(
@@ -356,6 +357,22 @@ def test_conv1d_padding_left_right():
         torch.testing.assert_close(out.copy_transpose([batch, kept, feat]).raw_tensor, ref, rtol=1e-5, atol=1e-5)
         (derived_time,) = rf.make_conv_out_spatial_dims([time], filter_size=32, padding=[(0, 16)])
         assert derived_time.dimension == 9, derived_time
+    for padding in (["same"], [(0, 16), (0, 16)], [(0, 16, 0)]):  # per-dim entries: ints or pairs, one per dim
+        try:
+            rf.conv(
+                x,
+                in_dim=feat,
+                out_dim=feat,
+                in_spatial_dims=[time],
+                filter=conv.filter,
+                filter_size=conv.filter_size,
+                padding=padding,
+                groups=feat.dimension,
+            )
+        except ValueError as exc:
+            print("expected:", exc)
+        else:
+            raise AssertionError(f"padding {padding!r} must be rejected")
 
 
 def test_conv1d_depthwise_cuda_triton_path_traced():
