@@ -857,6 +857,45 @@ def test_causal_self_att_after_concat_state():
     np.testing.assert_allclose(out_whole, out_concat_two, atol=1e-5, rtol=1e-5)
 
 
+def test_causal_self_att_bounded_cache_overflow_fails():
+    # Bounded KV cache at its capacity: the last free slot is written,
+    # and a step beyond must fail instead of advancing the length over a lost entry.
+    import torch
+
+    rf.select_backend_torch()
+    batch = Dim(2, name="batch")
+    model_dim = Dim(8, name="model")
+    capacity = 2
+    with rf.set_default_device_ctx("cpu"):
+        rf.set_random_seed(42)
+        att = rf.CausalSelfAttention(
+            model_dim, proj_dim=model_dim, key_dim_total=model_dim, value_dim_total=model_dim, num_heads=2
+        )
+        x = Tensor("x", [batch, model_dim], dtype="float32", raw_tensor=torch.randn(2, 8))
+
+        def _state(length: int):
+            state = att.default_initial_state(batch_dims=[batch], capacity=capacity)
+            lens = Tensor("hist_len", [batch], dtype="int32", raw_tensor=torch.full((2,), length, dtype=torch.int32))
+            hist_dim = Dim(lens, name="self_att_hist", capacity=capacity)
+            state.k_accum, _ = rf.replace_dim(state.k_accum, in_dim=state.accum_axis, out_dim=hist_dim)
+            state.v_accum, _ = rf.replace_dim(state.v_accum, in_dim=state.accum_axis, out_dim=hist_dim)
+            state.accum_axis = hist_dim
+            return state
+
+        _, new_state = att(x, axis=single_step_dim, state=_state(capacity - 1))
+        assert new_state.accum_axis.dyn_size_ext.raw_tensor.tolist() == [capacity, capacity]
+        k_raw = new_state.k_accum.copy_transpose(
+            [batch, new_state.accum_axis, att.num_heads, att.key_dim_per_head]
+        ).raw_tensor
+        assert (k_raw[:, capacity - 1] != 0).any() and (k_raw[:, : capacity - 1] == 0).all()
+        try:
+            att(x, axis=single_step_dim, state=_state(capacity))
+        except (IndexError, RuntimeError) as exc:
+            print("expected error:", exc)
+        else:
+            raise AssertionError("write beyond the KV cache capacity did not fail")
+
+
 def test_causal_self_attention_static_traceable_bound():
     """
     Bound-shape regime (static traceable): the causal hist kv dim gets its capacity
@@ -940,3 +979,44 @@ def test_dot_attention_self_att_axis_in_query():
         att.copy_transpose((batch, time, feat)).raw_tensor,
         att_ref.copy_transpose((batch, time, feat)).raw_tensor,
     )
+
+
+def test_causal_dot_attention_under_cuda_graph_capture():
+    import torch
+    import unittest
+
+    if not torch.cuda.is_available():
+        raise unittest.SkipTest("cuda only: real graph capture")
+    rf.select_backend_torch()
+    batch = Dim(3, name="batch")
+    lens = Tensor("time", [batch], dtype="int32", raw_tensor=torch.tensor([5, 4, 2], dtype=torch.int32, device="cuda"))
+    time_dim = Dim(lens, name="time", capacity=5)
+    feat = Dim(8, name="feat")
+    gen = torch.Generator().manual_seed(44)
+    x = {}
+    for name in ("q", "k", "v"):
+        t = Tensor(name, dims=(batch, time_dim, feat), dtype="float32")
+        t.raw_tensor = torch.randn(3, 5, 8, generator=gen).cuda()
+        x[name] = t
+
+    def _att():
+        return rf.dot_attention(x["q"], x["k"], x["v"], key_dim=feat, axis=time_dim, causal_query_spatial_dim=time_dim)
+
+    with rf.set_default_device_ctx("cuda"):
+        ref = _att().copy_transpose((batch, time_dim, feat)).raw_tensor.clone()
+        side = torch.cuda.Stream()
+        side.wait_stream(torch.cuda.current_stream())
+        with torch.cuda.stream(side), rf.set_static_traceable_ctx():
+            _att()
+        torch.cuda.current_stream().wait_stream(side)
+        graph = torch.cuda.CUDAGraph()
+        with torch.cuda.graph(graph), rf.set_static_traceable_ctx():
+            out = _att()
+        graph.replay()
+        torch.cuda.synchronize()
+        mask = rf.sequence_mask([batch, time_dim], device="cuda").copy_transpose((batch, time_dim)).raw_tensor
+        got = out.copy_transpose((batch, time_dim, feat)).raw_tensor
+        torch.testing.assert_close(
+            torch.where(mask.unsqueeze(-1), got, torch.zeros_like(got)),
+            torch.where(mask.unsqueeze(-1), ref, torch.zeros_like(ref)),
+        )

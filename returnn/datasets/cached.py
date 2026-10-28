@@ -3,7 +3,7 @@ CachedDataset: dataset base class that preloads sequences into a fixed-size memo
 """
 
 from __future__ import annotations
-from typing import List
+from typing import List, Sequence
 import gc
 import sys
 import time
@@ -143,9 +143,10 @@ class CachedDataset(Dataset):
         """supports sharding"""
         return True
 
-    def get_current_seq_order(self):
-        assert self.cache_byte_size_limit_at_start == 0  # not implemented otherwise, we ignore _index_map
-        return self._seq_index
+    def get_current_seq_order(self) -> Sequence[int]:
+        """:return: list of corpus seq idx of the current epoch"""
+        # A reorder of a fully cached epoch changes only _index_map, not _seq_index.
+        return [self._seq_index[i] for i in self._index_map]
 
     def _get_tag_by_real_idx(self, real_idx):
         raise NotImplementedError

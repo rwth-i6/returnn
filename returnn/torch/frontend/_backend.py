@@ -240,11 +240,7 @@ class TorchBackend(Backend[torch.Tensor]):
     @staticmethod
     def scaled_gradient(tensor: Tensor, scale: Union[float, Tensor]) -> Tensor:
         """scaled gradient"""
-        from returnn.torch.util.scaled_gradient import scaled_gradient
-
-        out = tensor.copy()
-        out.raw_tensor = scaled_gradient(out.raw_tensor, scale=scale)
-        return out
+        return TorchBackend.scaled_gradient_ext(tensor, scale=scale)
 
     @staticmethod
     def scaled_gradient_ext(
@@ -260,8 +256,8 @@ class TorchBackend(Backend[torch.Tensor]):
         out = x.copy()
         out.raw_tensor = scaled_gradient_ext(
             out.raw_tensor,
-            scale=scale.raw_tensor if isinstance(scale, Tensor) else scale,
-            shift=shift.raw_tensor if isinstance(shift, Tensor) else shift,
+            scale=scale.copy_compatible_to_dims_raw(x.dims) if isinstance(scale, Tensor) else scale,
+            shift=shift.copy_compatible_to_dims_raw(x.dims) if isinstance(shift, Tensor) else shift,
             scale_shift_by_sum_over_axis=(
                 x.get_axis_from_description(scale_shift_by_sum_over_axis, allow_int=False)
                 if scale_shift_by_sum_over_axis is not None
@@ -588,6 +584,37 @@ class TorchBackend(Backend[torch.Tensor]):
                             out.raw_tensor = torch.where(
                                 mask.copy_compatible_to_dims_raw(out.dims), out.raw_tensor, other
                             )
+        return out
+
+    @staticmethod
+    def slice_update(target: Tensor, value: Tensor, *, axis: Dim, start: Tensor) -> Tensor:
+        """
+        :param target: with ``axis``
+        :param value: without ``axis``
+        :param axis:
+        :param start: index in ``axis``, scalar or with other dims of ``target``
+        :return: ``target`` with ``value`` at ``start`` along ``axis``
+
+        ``scatter_`` into the target's buffer, so the target itself is updated.
+        Where autograd records the write, ``scatter`` writes into a copy instead.
+        A ``start`` outside ``axis`` fails
+        (CPU: error, CUDA: device-side assert, also under graph capture, without host sync),
+        where the generic select would silently write nothing.
+        """
+        axis_int = target.dims.index(axis)
+        other_dims = target.dims[:axis_int] + target.dims[axis_int + 1 :]
+        shape = list(target.raw_tensor.shape)
+        shape[axis_int] = 1
+        index = start.copy_compatible_to_dims_raw(other_dims).unsqueeze(axis_int)
+        index = index.to(device=target.raw_tensor.device, dtype=torch.int64).expand(shape)
+        src = value.copy_compatible_to_dims_raw(other_dims).unsqueeze(axis_int).to(target.raw_tensor.dtype)
+        src = src.expand(shape)
+        if torch.is_grad_enabled() and (target.raw_tensor.requires_grad or src.requires_grad):
+            out_raw = target.raw_tensor.scatter(axis_int, index, src)
+        else:
+            out_raw = target.raw_tensor.scatter_(axis_int, index, src)
+        out = target.copy_template()
+        out.raw_tensor = out_raw
         return out
 
     @staticmethod
@@ -1194,8 +1221,10 @@ class TorchBackend(Backend[torch.Tensor]):
         device: Optional[str] = None,
         sparse_dim: Optional[Dim] = None,
         feature_dim: Optional[Dim] = None,
+        like: Optional[rf.TensorLayout] = None,
     ) -> Tensor:
         """full"""
+        del like  # plain storage, no layout to follow
         shape = [dim.get_dim_value() for dim in dims]
         if isinstance(fill_value, Tensor):
             fill_value = fill_value.raw_tensor
@@ -2006,10 +2035,12 @@ class TorchBackend(Backend[torch.Tensor]):
         auto_update_state: Optional[bool] = None,
         static: Optional[bool] = None,
         out: Optional[Tensor[torch.Tensor]] = None,
+        like: Optional[rf.TensorLayout] = None,
     ) -> Tensor:
         """
         random. See `rf.random` for details.
         """
+        del like  # plain storage, no layout to follow
         shape = [d.get_dim_value() for d in dims]
         dtype_ = TorchBackend.as_dtype_raw(dtype)
         if out is None:
@@ -2366,6 +2397,34 @@ class TorchBackend(Backend[torch.Tensor]):
         filter_in_dim = in_dim if not groups or groups == 1 else in_dim // groups
         filter_dims = (out_dim, filter_in_dim) + tuple(filter_size)
         filter = filter.copy_transpose(filter_dims)
+        if (
+            len(filter_size) == 1
+            and groups
+            and groups == in_dim.dimension == out_dim.dimension
+            and _is_unit_conv_arg(strides)
+            and _is_unit_conv_arg(dilation_rate)
+            and (padding in ("same", "valid") or isinstance(padding, int))
+            and source.raw_tensor.is_cuda
+            and all(
+                operand.raw_tensor.dtype in (torch.float16, torch.bfloat16, torch.float32)
+                for operand in [source, filter] + ([bias] if bias is not None else [])
+            )
+            # torch 2.4: the autocast queries by device type, and the custom ops that a traced step needs
+            and torch.__version__ >= (2, 4)
+            and not torch.onnx.is_in_onnx_export()
+        ):
+            out = _conv_depthwise_1d_triton(
+                source,
+                in_dim=in_dim,
+                out_dim=out_dim,
+                in_spatial_dim=in_spatial_dims[0],
+                out_spatial_dim=out_spatial_dims[0],
+                filter=filter,
+                padding=padding,
+                bias=bias,
+            )
+            if out is not None:
+                return out, out_spatial_dims
         batch_dims = [d for d in source.dims if d not in (in_dim,) + tuple(in_spatial_dims)]
         # Torch conv expects (N,C,<spatial dims>) as shape.
         source = source.copy_transpose(batch_dims + [in_dim] + list(in_spatial_dims))
@@ -2938,3 +2997,78 @@ class TorchBackend(Backend[torch.Tensor]):
         out_tensor_raw = torch.stack(tensor_array_raw, dim=0)
         out_tensor.raw_tensor = out_tensor_raw
         return out_tensor
+
+
+def _is_unit_conv_arg(value: Optional[Union[int, Sequence[int]]]) -> bool:
+    """
+    :param value: strides or dilation rate as given to conv, None or int or per-spatial-dim sequence
+    :return: whether it means 1 on every spatial dim
+    """
+    if value is None or value == 1:
+        return True
+    return isinstance(value, (list, tuple)) and all(v == 1 for v in value)
+
+
+# noinspection PyShadowingBuiltins
+def _conv_depthwise_1d_triton(
+    source: Tensor,
+    *,
+    in_dim: Dim,
+    out_dim: Dim,
+    in_spatial_dim: Dim,
+    out_spatial_dim: Dim,
+    filter: Tensor,
+    padding: Union[str, int],
+    bias: Optional[Tensor],
+) -> Optional[Tensor]:
+    """
+    Depthwise 1-D conv (one filter per channel, stride 1, no dilation) on CUDA
+    through :mod:`returnn.torch.util.depthwise_conv_triton`,
+    computed in the (batch..., time, channel) layout, so nothing is transposed around the conv.
+    Under CUDA autocast the operands are cast to the autocast dtype first, as torch's conv would cast them.
+
+    :param source: with in_dim and in_spatial_dim
+    :param in_dim: channel dim, equal to out_dim and to the group count
+    :param out_dim:
+    :param in_spatial_dim:
+    :param out_spatial_dim: as made by :func:`rf.make_conv_out_spatial_dims`
+    :param filter: transposed to (out_dim, in_dim // groups, filter_size)
+    :param padding: "same", "valid" or the frames of zero padding on each side
+    :param bias: over out_dim, or None
+    :return: the output with dims batch dims + (out_spatial_dim, out_dim),
+        or None when Triton is unavailable or torch would reject the mixed dtypes
+    """
+    try:
+        from returnn.torch.util import depthwise_conv_triton
+    except ImportError:
+        return None
+    if not depthwise_conv_triton.is_available():
+        return None
+    if not torch.is_autocast_enabled("cuda") and any(
+        param.raw_tensor.dtype != source.raw_tensor.dtype for param in [filter] + ([bias] if bias is not None else [])
+    ):
+        return None
+    width = filter.dims[-1].dimension
+    if padding == "same":
+        pad_l, pad_r = (width - 1) // 2, width // 2
+    elif padding == "valid":
+        pad_l = pad_r = 0
+    else:
+        pad_l = pad_r = int(padding)
+    batch_dims = [d for d in source.dims if d not in (in_dim, in_spatial_dim)]
+    source = source.copy_transpose(batch_dims + [in_spatial_dim, in_dim])
+    src_shape = list(source.raw_tensor.shape)
+    n_time_in = src_shape[-2]
+    n_time_out = n_time_in + pad_l + pad_r - width + 1
+    x_raw = source.raw_tensor.reshape(-1, n_time_in, in_dim.dimension)
+    w_raw = filter.raw_tensor.reshape(out_dim.dimension, width)
+    bias_raw = bias.raw_tensor if bias is not None else None
+    if torch.is_autocast_enabled("cuda"):
+        amp_dtype = torch.get_autocast_dtype("cuda")
+        x_raw, w_raw = x_raw.to(amp_dtype), w_raw.to(amp_dtype)
+        bias_raw = bias_raw.to(amp_dtype) if bias_raw is not None else None
+    out_raw = depthwise_conv_triton.depthwise_conv1d(x_raw, w_raw, bias_raw, pad_l=pad_l, n_time_out=n_time_out)
+    out = Tensor("conv", dims=batch_dims + [out_spatial_dim, out_dim], dtype=TorchBackend.get_dtype_name_raw(out_raw))
+    out.raw_tensor = out_raw.reshape(src_shape[:-2] + [n_time_out, out_dim.dimension])
+    out.feature_dim = out_dim
+    return out

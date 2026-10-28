@@ -29,15 +29,18 @@ def moments(
     use_mask: bool = True,
     correction: Union[int, float, Tensor] = 0,
     distributed: bool = False,
+    compute_dtype: Optional[str] = None,
 ) -> Tuple[Tensor, Tensor]:
     """
     :param x: input
     :param axis: the axis (or axes) to be reduced, to calculate statistics over
-    :param use_mask: whether to use a mask for dynamic spatial dims in the reduction
+    :param use_mask: whether to use a mask for dynamic spatial dims in the reduction.
+        The local mean follows it only with the global config option ``rf_moments_use_fixed_masking``
+        (default from behavior version 34 on), otherwise the local mean is always masked.
     :param correction:
         The variance will be estimated by ``sum((x - mean)**2) / (n-correction)``
-        where ``n`` is the number of elements in the axis (or the axes)
-        (with ``use_mask=True``, taking masking into account, using :func:`num_elements_of_shape`).
+        where ``n`` is the number of elements in the axis (or the axes) which the reduction covers
+        (:func:`num_elements_of_shape` with ``source=x``, e.g. with ``use_mask=True`` taking masking into account).
         The default ``correction=0`` will return the biased variance estimation.
         ``correction=1`` is the `Bessel correction <https://en.wikipedia.org/wiki/Bessel%27s_correction>`__
         and will return the unbiased variance estimation.
@@ -51,19 +54,29 @@ def moments(
         If True and a Torch DDP process group exists (world size > 1),
         compute the statistics over the global batch across all workers,
         by all-reducing the per-worker sums and the count (differentiable),
-        in two passes so that the variance cannot cancel, as in torch.nn.SyncBatchNorm.
+        in two passes so that the variance cannot cancel.
         Default False keeps the per-worker (local) statistics.
+    :param compute_dtype: dtype the input is cast to before the reduction, and thus the dtype of the statistics.
+        None (default): float32 for float input of lower precision (float16, bfloat16, float8, ...)
+        if the global config option ``rf_moments_float32`` is set (default from behavior version 32 on),
+        as e.g. a variance above 65504 does not fit into float16,
+        else the input dtype.
     :return: tuple (mean, variance). it has the same shape as the input with the axis removed
     """
+    if compute_dtype is None:
+        if rf.is_float_dtype(x.dtype) and x.dtype not in ("float32", "float64") and _moments_float32():
+            compute_dtype = "float32"
+        else:
+            compute_dtype = x.dtype
+    x = rf.cast(x, compute_dtype)
     if distributed:
         # Two-pass statistics over the global batch, accumulated in float32.
         # The one-pass variance E[x^2] - E[x]^2 catastrophically cancels whenever the mean dominates
         # the variance, in float32 just as in bf16: the difference is then noise and can go negative,
         # which gives NaNs via rsqrt(variance + eps).
         # torch.nn.SyncBatchNorm instead combines per-worker Welford statistics, which does not cancel.
-        compute_dtype = x.dtype
         x = rf.cast(x, "float32")
-        count = _global_num_elements(axis, use_mask=use_mask, device=x.device)
+        count = rf.cast(rf.num_elements_of_shape(axis, use_mask=use_mask, source=x, distributed=True), "float32")
         mean = rf.reduce_sum(x, axis=axis, use_mask=use_mask, distributed=True) / count
         # stop_gradient does not change the gradient here: the deviations sum to zero over the global batch
         sq_dev = rf.squared_difference(x, rf.stop_gradient(mean))
@@ -71,37 +84,37 @@ def moments(
         if isinstance(correction, Tensor) or correction != 0:
             variance *= count / (count - correction)
         return rf.cast(mean, compute_dtype), rf.cast(variance, compute_dtype)
-    # Accumulated in float32 like the distributed branch, and rounded once at the end.
-    # A low-precision reduction drifts by several ulps over a few thousand frames, and it drifts
-    # differently per storage: a padded or exact packed buffer takes a direct mean, a bounded one
-    # divides a masked sum by its count, and under Torch CUDA autocast the sum promotes where the
-    # mean does not. The statistics then depend on the layout, and a running mean keeps that error.
-    compute_dtype = x.dtype
-    x = rf.cast(x, "float32")
-    mean = rf.reduce_mean(x, axis=axis, use_mask=use_mask)
+    mean = rf.reduce_mean(x, axis=axis, use_mask=use_mask if _moments_use_fixed_masking() else True)
     # stop_gradient does not change the gradient here
     variance = rf.reduce_mean(rf.squared_difference(x, rf.stop_gradient(mean)), axis=axis, use_mask=use_mask)
     if isinstance(correction, Tensor) or correction != 0:
-        n = rf.num_elements_of_shape(axis, use_mask=use_mask)
+        n = rf.num_elements_of_shape(axis, use_mask=use_mask, source=x)
         variance *= n / (n - correction)
-    return rf.cast(mean, compute_dtype), rf.cast(variance, compute_dtype)
+    return mean, variance
 
 
-def _global_num_elements(axis: Union[Dim, Sequence[Dim]], *, use_mask: bool, device: Optional[str]) -> Tensor:
+def _moments_float32() -> bool:
     """
-    :param axis: the dim or dims which are reduced
-    :param use_mask: whether padded frames are excluded, as in the reduction itself
-    :param device: where the count is needed, so it does not force a host sync under graph capture
-    :return: number of reduced elements, summed over the Torch DDP workers, as a float32 tensor
+    :return: whether :func:`moments` by default reduces float input of lower precision in float32
+        and returns float32 statistics.
+        Config option ``rf_moments_float32: bool``, else behavior_version >= 32.
     """
-    count = rf.num_elements_of_shape(axis, use_mask=use_mask, device=device)
-    if isinstance(count, Tensor):
-        count = rf.cast(rf.copy_to_device(count, device), "float32")
-    else:
-        # static dims (or use_mask=False) give a plain int, which is the same on every worker
-        count = rf.constant(count, dims=(), dtype="float32", device=device)
-    # noinspection PyProtectedMember
-    return count._raw_backend.reduce_distributed(count, mode="sum")
+    from returnn.config import get_global_config
+
+    config = get_global_config(raise_exception=False)
+    config_value = None
+    if config:
+        if "rf_moments_float32" in config.typed_dict:
+            config_value = config.typed_dict["rf_moments_float32"]
+            assert config_value is None or isinstance(config_value, bool)
+        elif "rf_moments_float32" in config.dict:
+            config_value = config.bool("rf_moments_float32", None)
+    if config_value is not None:
+        return config_value
+
+    from returnn.util.basic import BehaviorVersion
+
+    return BehaviorVersion.get() >= 32
 
 
 class LayerNorm(rf.Module):
@@ -249,6 +262,30 @@ def batch_norm_distributed_default() -> bool:
     return config.bool("rf_batch_norm_distributed", False)
 
 
+def _moments_use_fixed_masking() -> bool:
+    """
+    :return: whether :func:`moments` applies ``use_mask`` to its local mean too
+        and :class:`BatchNorm` passes its ``use_mask`` on to :func:`moments`.
+        Config option ``rf_moments_use_fixed_masking: bool``, else behavior_version >= 34.
+    """
+    from returnn.config import get_global_config
+
+    config = get_global_config(raise_exception=False)
+    config_value = None
+    if config:
+        if "rf_moments_use_fixed_masking" in config.typed_dict:
+            config_value = config.typed_dict["rf_moments_use_fixed_masking"]
+            assert config_value is None or isinstance(config_value, bool)
+        elif "rf_moments_use_fixed_masking" in config.dict:
+            config_value = config.bool("rf_moments_use_fixed_masking", None)
+    if config_value is not None:
+        return config_value
+
+    from returnn.util.basic import BehaviorVersion
+
+    return BehaviorVersion.get() >= 34
+
+
 class BatchNorm(rf.Module):
     """
     Batch normalization. https://arxiv.org/abs/1502.03167
@@ -309,6 +346,8 @@ class BatchNorm(rf.Module):
             which ignore the masking, and also slower, and the fused op would not be used.
           False would be consistent to all other frameworks,
             and potentially allows for the use of an efficient fused op internally.
+          The distributed statistics follow it only with the global config option
+            ``rf_moments_use_fixed_masking`` (default from behavior version 34 on), otherwise they are always masked.
         :param distributed: compute batch statistics over the global batch across all DDP workers
           (SyncBatchNorm-style) instead of per-worker.
           None (default) reads the global config option ``rf_batch_norm_distributed`` (default False).
@@ -361,7 +400,7 @@ class BatchNorm(rf.Module):
                 lambda: rf.moments(
                     source,
                     axis=[d for d in source.dims if d != self.in_dim],
-                    use_mask=use_mask,
+                    use_mask=use_mask if _moments_use_fixed_masking() else True,
                     distributed=self.distributed,
                 ),
                 lambda: (self.running_mean, self.running_variance),

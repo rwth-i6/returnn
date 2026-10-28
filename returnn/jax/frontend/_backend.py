@@ -1170,8 +1170,10 @@ class JaxBackend(Backend[jax.Array]):
         device: Optional[str] = None,
         sparse_dim: Optional[Dim] = None,
         feature_dim: Optional[Dim] = None,
+        like: Optional[rf.TensorLayout] = None,
     ) -> Tensor:
         """full"""
+        del like  # plain storage, no layout to follow
         shape = tuple(dim.get_dim_value() for dim in dims)
         if isinstance(fill_value, Tensor):
             fill_value = fill_value.raw_tensor
@@ -2145,6 +2147,7 @@ class JaxBackend(Backend[jax.Array]):
         auto_update_state: Optional[bool] = None,
         static: Optional[bool] = None,
         out: Optional[Tensor[jax.Array]] = None,
+        like: Optional[rf.TensorLayout] = None,
     ) -> Tensor:
         """
         random. See :func:`rf.random` for details.
@@ -2152,6 +2155,7 @@ class JaxBackend(Backend[jax.Array]):
         The drawn values do not match any other backend's for the same seed (different PRNG).
         Cross-backend comparisons therefore copy parameters over, they do not replay RNG streams.
         """
+        del like  # plain storage, no layout to follow
         assert explicit_state is None and auto_update_state is None, "RF JaxBackend: random state args not implemented"
         assert algorithm is None, f"RF JaxBackend: random algorithm {algorithm!r} not implemented"
         if out is None:

@@ -11,8 +11,11 @@ or in-graph with "capture_optimizer".
 Config, e.g.::
 
     torch_cuda_graph = {
-        "batch_size_bound": 200,        # max seqs per batch; smaller batches get zero-length padding seqs.
-                                        # the batch dim is made static (= this bound): always filled up to it
+        "batch_size_bound": 200,        # max seqs per batch; smaller batches get zero-length padding seqs:
+                                        # always filled up to it
+        "mask_padding_seqs": True,      # the batch dim keeps the real batch size as dyn size (capacity = the bound),
+                                        # so the padding seqs stay masked, also after e.g. appending EOS to targets
+                                        # (default from behavior version 36 on)
         "dim_capacity": {"data": 3000, "classes": 300},  # bound of the dynamic (time) dim per data key
         "packed_total_bound": {"data": 500_000},  # optional: tighter bound of the packed (gapped) total per key
         "partitioned": True,  # optional: fw/bwd-partitioned compile (min-cut remat) instead of one whole-step graph
@@ -26,7 +29,11 @@ Config, e.g.::
 Requirements (asserted):
 
 - ``accum_grad_multiple_step == 1``, no grad scaler, no DDP, no hot reloading.
-- The batch dim is static (= ``batch_size_bound``), filled with zero-length padding seqs;
+- The batch is filled up to ``batch_size_bound`` with zero-length padding seqs.
+  With ``mask_padding_seqs``, the batch dim has the bound as capacity and the real batch size as dyn size,
+  so the padding seqs are masked.
+  Without, the batch dim is static (= ``batch_size_bound``),
+  and the padding seqs are not distinguishable from real empty seqs:
   normalize by lengths, not by the batch-axis size (which counts the padding).
 - No eval epochs in the same process yet
   (the declared capacities live on the global template dims).
@@ -52,7 +59,7 @@ import os
 import numpy
 import torch
 
-from returnn.util.basic import CollectionReadCheckCovered
+from returnn.util.basic import CollectionReadCheckCovered, BehaviorVersion
 from returnn.tensor import Tensor, TensorDict, Dim
 import returnn.frontend as rf
 from returnn.frontend.run_ctx import RunCtx, Loss
@@ -302,13 +309,14 @@ def inductor_fw_compiler(backend: Optional[Callable] = None) -> Callable:
     torch >= 2.12: compile_fx's compat wrapper declares _boxed_call=True
     but re-wraps an already-boxed args list, so the generated runner sees [[args]];
     call it star-unpacked instead, while the shim stays boxed towards aot_function.
+    Any other backend (e.g. the boxed ``nop`` of opts "debug_aot_eager") is returned as is.
     """
-    if backend is None:
-        # noinspection PyProtectedMember
-        from torch._inductor.compile_fx import compile_fx
+    # noinspection PyProtectedMember
+    from torch._inductor.compile_fx import compile_fx
 
+    if backend is None:
         backend = compile_fx
-    if torch.__version__ < (2, 12):
+    if torch.__version__ < (2, 12) or backend is not compile_fx:
         return backend
 
     def _compile_fx_call_unboxed(gm, example_inputs):
@@ -482,6 +490,7 @@ class GraphCapturedTrainStep:
         run_step: Callable[..., None],
         post_step: Optional[Callable[[], None]] = None,
         get_optimizer: Optional[Callable[[], torch.optim.Optimizer]] = None,
+        get_buffers: Optional[Callable[[], List[torch.Tensor]]] = None,
         rf_params: Optional[List[rf.Parameter]] = None,
         packed_batch_size: Optional[Dict[str, int]] = None,
     ):
@@ -495,6 +504,8 @@ class GraphCapturedTrainStep:
             runs the user train step function under a train run ctx
         :param post_step: grad clip + optimizer step, captured in-graph
             with opts "capture_optimizer"; must be capture-safe
+        :param get_buffers: the model's buffers (running statistics etc.),
+            put back after the warm runs, see :func:`_training_state_preserved`
         :param rf_params: RF-level model params, required for opts "compile"
         :param packed_batch_size: the config option, when statically known;
             only to infer a missing "packed_total_bound", see :func:`_get_data_buf`
@@ -502,6 +513,9 @@ class GraphCapturedTrainStep:
         assert str(device).startswith("cuda"), f"torch_cuda_graph requires a cuda device, got {device!r}"
         opts = CollectionReadCheckCovered(opts)  # catch unknown (e.g. typo'd) option keys, see below
         self.batch_size_bound = int(opts["batch_size_bound"])
+        self._mask_padding_seqs: Optional[bool] = opts.get("mask_padding_seqs", None)
+        if self._mask_padding_seqs is None:
+            self._mask_padding_seqs = BehaviorVersion.get() >= 36
         self.dim_capacity: Dict[str, int] = dict(opts["dim_capacity"])
         # optional tighter bound of the packed (gapped) total per packed-collate key
         # (e.g. batch size + per-seq gap slack); the default -- every seq at full capacity --
@@ -511,6 +525,7 @@ class GraphCapturedTrainStep:
         self._packed_batch_size: Dict[str, int] = dict(packed_batch_size) if isinstance(packed_batch_size, dict) else {}
         self.warmup_steps = int(opts.get("warmup_steps", 0))
         self._get_optimizer = get_optimizer
+        self._get_buffers = get_buffers
         self._device = torch.device(device)
         self._float_dtype = float_dtype
         self._extern_data_template = extern_data_template
@@ -581,15 +596,18 @@ class GraphCapturedTrainStep:
             p.grad = torch.zeros_like(p)  # static, never freed (the captured graph writes into these)
 
         self._batch_dim = get_batch_dim_from_extern_data(extern_data_template)
-        self._batch_dim_staticized = self._batch_dim.dimension is None  # standard case: True
-        if self._batch_dim_staticized:
-            # the copy-in always fills the batch up to the bound (zero-length padding seqs),
-            # so the batch dim is static here; process-wide template-dim mutation,
+        self._batch_dim_bounded = self._batch_dim.dimension is None  # standard case: True
+        if self._batch_dim_bounded:
+            # process-wide template-dim mutation,
             # toggled off around the dynamic-shape paths (see set_bound_shapes_enabled)
-            self._batch_dim.size = self.batch_size_bound
-            self._batch_dim.capacity = self.batch_size_bound
-            self._batch_dim.dyn_size_ext = None
-        assert self._batch_dim.dimension == self.batch_size_bound
+            self._set_batch_dim_bound()
+        else:
+            assert self._batch_dim.dimension == self.batch_size_bound
+        self._batch_size_buf: Optional[torch.Tensor] = None
+        self._batch_size_pin: Optional[torch.Tensor] = None
+        if self._mask_padding_seqs:
+            self._batch_size_buf = torch.zeros((), dtype=torch.int32, device=self._device)
+            self._batch_size_pin = torch.zeros((), dtype=torch.int32, pin_memory=True)
         self._data_bufs: Dict[str, torch.Tensor] = {}
         self._pinned_bufs: Dict[str, torch.Tensor] = {}  # host staging, see _copy_in
         # guards the pinned staging: the next host write must wait for the previous async H2D
@@ -643,14 +661,12 @@ class GraphCapturedTrainStep:
         from returnn.tensor import _dim_extra
 
         if enabled:
-            if self._batch_dim_staticized:
-                self._batch_dim.size = self.batch_size_bound
-                self._batch_dim.capacity = self.batch_size_bound
-                self._batch_dim.dyn_size_ext = None
+            if self._batch_dim_bounded:
+                self._set_batch_dim_bound()
             for dim, cap in self._cap_dims:
                 dim.capacity = cap
         else:
-            if self._batch_dim_staticized:
+            if self._batch_dim_bounded:
                 self._batch_dim.size = None
                 self._batch_dim.capacity = None
                 self._batch_dim.dyn_size_ext = None
@@ -662,6 +678,15 @@ class GraphCapturedTrainStep:
                 dim.capacity = None
             _dim_extra.derived_capacity_memoized_dims.clear()
 
+    def _set_batch_dim_bound(self):
+        # the copy-in fills the batch up to the bound with zero-length padding seqs
+        self._batch_dim.capacity = self.batch_size_bound
+        if self._mask_padding_seqs:
+            self._batch_dim.size = None  # dyn size = the real batch size, set per step in _build_extern_data
+        else:
+            self._batch_dim.size = self.batch_size_bound
+            self._batch_dim.dyn_size_ext = None
+
     def _get_data_buf(self, k: str, raw: torch.Tensor, packed: Optional[Dict[str, int]]) -> torch.Tensor:
         buf = self._data_bufs.get(k)
         if buf is not None:
@@ -672,29 +697,32 @@ class GraphCapturedTrainStep:
             dtype = self._float_dtype
         if packed is not None:
             # packed collate: flat contiguous [total, ...feature];
-            # bound = declared packed_total_bound, else batch bound * capacity
+            # total = the bound of the gapped layout, also used by _build_extern_data:
+            # declared packed_total_bound, else inferred from packed_batch_size,
+            # capped by every seq at full capacity
             self._packed_opts[k] = dict(packed)
             gap = int(packed.get("gap", 0))
             align = int(packed.get("align", 1))
+            one_seq = -(-(self.dim_capacity[k] + gap) // align) * align
             total = self.packed_total_bound.get(k)
             if total is None and k in self._packed_batch_size:
                 # packed_batch_size budgets content; the layout additionally needs the per-seq
                 # gap/align rounding (each seq occupies at most len + gap + align - 1 frames,
                 # as in _regap_total_bound); at gap 0 / align 1 this equals packed_batch_size
                 total = self._packed_batch_size[k] + self.batch_size_bound * (gap + align - 1)
-            if total is None:
-                # no content budget known (no packed_batch_size, or a callable one):
-                # fall back to every seq at full capacity, which is correct but far larger
-                total = self.batch_size_bound * self.dim_capacity[k]
-            # startup sanity check of the declared bound:
-            # one seq at full dim_capacity with the configured gap/align must fit
-            # (the per-batch content check happens in pack())
-            one_seq = -(-(self.dim_capacity[k] + gap) // align) * align
-            assert total >= one_seq, (
-                f"torch_cuda_graph: packed_total_bound[{k!r}] = {total} cannot hold one seq at"
-                f" dim_capacity {self.dim_capacity[k]} with gap {gap} align {align}"
-                f" (needs >= {one_seq}); raise packed_total_bound or lower dim_capacity"
-            )
+            if total is not None:
+                # startup sanity check of the declared bound:
+                # one seq at full dim_capacity with the configured gap/align must fit
+                # (the per-batch content check happens in pack())
+                assert total >= one_seq, (
+                    f"torch_cuda_graph: packed_total_bound[{k!r}] = {total} cannot hold one seq at"
+                    f" dim_capacity {self.dim_capacity[k]} with gap {gap} align {align}"
+                    f" (needs >= {one_seq}); raise packed_total_bound / packed_batch_size or lower dim_capacity"
+                )
+            # every seq at full capacity always fits (_copy_in checks the seq lens against the capacity),
+            # with the same per-seq slack as the inference above and the _copy_in content check
+            worst_case = self.batch_size_bound * (self.dim_capacity[k] + gap + align - 1)
+            total = worst_case if total is None else min(total, worst_case)
             shape = [total] + list(raw.shape[1:])
         else:
             assert all(d.dimension is not None for d in data.dims[2:]), (
@@ -715,8 +743,11 @@ class GraphCapturedTrainStep:
             # do not overwrite them while the previous step's async H2D is still in flight
             # (normally hidden by the per-step loss host-read, but not guaranteed)
             self._copy_in_event.synchronize()
+        batch_size: Optional[int] = None
         for k, data in self._extern_data_template.data.items():
             raw = extern_data_raw[k]
+            size = extern_data_raw.get(k + ":seq_len")
+            batch_size = int(size.shape[0]) if size is not None else int(raw.shape[0])
             if data.dtype == "string" or (isinstance(raw, numpy.ndarray) and raw.dtype.kind in "USO"):
                 # strings (e.g. seq_tag) cannot be graph inputs; passed through host-side.
                 # Under replay the captured step never re-reads them:
@@ -776,7 +807,6 @@ class GraphCapturedTrainStep:
                 pin_slice = pin[tuple(slice(0, s) for s in raw.shape)]
                 pin_slice.copy_(raw)
                 buf[tuple(slice(0, s) for s in raw.shape)].copy_(pin_slice, non_blocking=True)
-            size = extern_data_raw.get(k + ":seq_len")
             if size is not None:
                 lens_buf = self._lens_bufs.get(k)
                 lens_pin = self._pinned_bufs.get(k + ":seq_len")
@@ -801,6 +831,9 @@ class GraphCapturedTrainStep:
                 lens_pin[:n].copy_(size.to(dtype=torch.int32))
                 lens_pin[n:].zero_()  # zero-length padding seqs
                 lens_buf.copy_(lens_pin, non_blocking=True)
+        if self._mask_padding_seqs:
+            self._batch_size_pin.fill_(batch_size)
+            self._batch_size_buf.copy_(self._batch_size_pin, non_blocking=True)
         if self._copy_in_event is None:
             self._copy_in_event = torch.cuda.Event()
         self._copy_in_event.record()
@@ -814,6 +847,10 @@ class GraphCapturedTrainStep:
         batch_dim = self._batch_dim
         for dim in _get_dyn_dims_from_extern_data(self._extern_data_template):
             dim.reset_eager()
+        if self._batch_dim_bounded and self._mask_padding_seqs:
+            if batch_dim.dyn_size_ext is None:
+                batch_dim.dyn_size_ext = Tensor(batch_dim.name or "batch", dims=[], dtype="int32")
+            batch_dim.dyn_size_ext.raw_tensor = self._batch_size_buf  # device-resident
         extern_data = TensorDict()
         for k, data in self._extern_data_template.data.items():
             data = data.copy_template()
@@ -842,12 +879,8 @@ class GraphCapturedTrainStep:
                     inner, batch_dim=batch_dim, spatial_dim=spatial, packed_dim=packed_dim, feature_dim=data.feature_dim
                 )
                 if gap or align > 1:
-                    # a declared packed_total_bound is usually much tighter than the
-                    # worst case (every seq at full capacity), and activations scale with it
-                    regap_bound = self.packed_total_bound.get(k)
-                    if regap_bound is None:
-                        regap_bound = self.batch_size_bound * (-(-(self.dim_capacity[k] + gap) // align) * align)
-                    packed_t = rf.packed_regap(packed_t, gap, align=align, total_bound=regap_bound)
+                    # the buffer size is the bound of the gapped layout, see _get_data_buf
+                    packed_t = rf.packed_regap(packed_t, gap, align=align, total_bound=buf.shape[0])
                 data.raw_tensor = packed_t.raw_tensor
             else:
                 data.dtype = str(buf.dtype).split(".")[-1]
@@ -860,7 +893,39 @@ class GraphCapturedTrainStep:
         """whether the optimizer step (incl grad clip) is captured in-graph (opts "capture_optimizer")"""
         return self._post_step is not None
 
-    def _step(self) -> RunCtx:
+    @staticmethod
+    def _reduce_all_losses(ctx: RunCtx) -> None:
+        """
+        Reduce every loss inside the step, incl. the error measures and zero-scaled losses
+        which the total loss leaves out. The engine reads the summed losses after the step,
+        and Loss caches its reduction on first use: computed there, it would be an eager op
+        outside the graph, stale on every replay, and after a dynamic warmup step it would run
+        after the dims went back to their bound sizes.
+        """
+        for loss in ctx.losses.values():
+            loss.get_summed_loss()
+            loss.get_inv_norm_factor()
+
+    @contextmanager
+    def _training_state_preserved(self):
+        """
+        Puts the training state back after the enclosed runs, which only warm the kernels:
+        the module buffers and the parameters without gradient (running statistics, counters),
+        and the CUDA RNG state. The copies live on the CPU, so they add nothing to the GPU memory.
+        """
+        tensors = list(self._get_buffers()) if self._get_buffers is not None else []
+        tensors += [p for p in self._params if not p.requires_grad]
+        saved = [t.detach().to("cpu", copy=True) for t in tensors]
+        rng_state = torch.cuda.get_rng_state(self._device)
+        try:
+            yield
+        finally:
+            with torch.no_grad():
+                for t, t0 in zip(tensors, saved):
+                    t.copy_(t0)
+            torch.cuda.set_rng_state(rng_state, self._device)
+
+    def _step(self, *, post_step: bool = True) -> RunCtx:
         for p in self._grad_params:
             p.grad.zero_()  # in-graph
         with rf.set_static_traceable_ctx():
@@ -868,48 +933,28 @@ class GraphCapturedTrainStep:
             self._run_step(extern_data, step=self._step_t)
             ctx = rf.get_run_ctx()
             total_loss = ctx.total_loss()
+            self._reduce_all_losses(ctx)
         total_loss.raw_tensor.backward()
-        if self._post_step is not None:
+        if post_step and self._post_step is not None:
             self._post_step()  # in-graph: grad clip + optimizer step
         return ctx
 
     def _materialize_optimizer_state(self) -> None:
         """
-        Create the optimizer's lazy state and the param grads without any model step
-        (they are graph inputs, so they must exist before trace/capture);
-        enables ``warmup_steps: 0``.
-        One ``step()`` with zero grads at lr 0 is doubly neutral;
-        written values are zeroed afterwards, only the existence kept.
-        No-op when state exists.
+        With the in-graph optimizer step ("capture_optimizer"):
+        create the optimizer's lazy state without any step, as its first step would
+        (the state tensors are graph inputs, so they must exist before trace/capture);
+        enables ``warmup_steps: 0``. See :func:`returnn.torch.updater.init_optimizer_state`.
+        The static param grads (created in ``__init__``) select the params which get state.
+        No-op when state exists (e.g. after warmup steps, or loaded from a checkpoint).
+        Without the in-graph optimizer step, the optimizer creates its state itself, in its first step.
         """
+        from returnn.torch.updater import init_optimizer_state
+
         opt = self._get_optimizer() if self._get_optimizer is not None else None
-        if opt is None or opt.state:
+        if opt is None or self._post_step is None or opt.state:
             return
-        with torch.no_grad():
-            for p in self._grad_params:
-                if p.grad is None:
-                    # also needed pre-capture: the partitioned capture zeroes + accumulates
-                    # into pre-existing grads
-                    p.grad = torch.zeros_like(p)
-            saved_lrs = []
-            for g in opt.param_groups:
-                lr = g["lr"]
-                if isinstance(lr, torch.Tensor):  # capturable: device-tensor lr
-                    saved_lrs.append(lr.clone())
-                    lr.fill_(0)
-                else:
-                    saved_lrs.append(lr)
-                    g["lr"] = 0.0
-            opt.step()
-            for g, lr in zip(opt.param_groups, saved_lrs):
-                if isinstance(g["lr"], torch.Tensor):
-                    g["lr"].copy_(lr)
-                else:
-                    g["lr"] = lr
-            for state in opt.state.values():
-                for v in state.values():
-                    if isinstance(v, torch.Tensor):
-                        v.zero_()
+        init_optimizer_state(opt)
 
     def _warmup_step_dynamic(
         self, extern_data_raw: Dict[str, Union[torch.Tensor, numpy.ndarray]], *, global_train_step: int
@@ -931,7 +976,13 @@ class GraphCapturedTrainStep:
             for dim in _get_dyn_dims_from_extern_data(self._extern_data_template):
                 dim.reset_eager()
             extern_data = extern_data_util.raw_dict_to_extern_data(
-                extern_data_raw, extern_data_template=self._extern_data_template, device=self._device
+                extern_data_raw,
+                extern_data_template=self._extern_data_template,
+                device=self._device,
+                float_dtype=self._float_dtype,
+                # like the engine's eager train path: the targets are usually
+                # declared available_for_inference=False, the train step needs them
+                with_eval_targets=True,
             )
             for p in self._grad_params:
                 p.grad.zero_()
@@ -940,6 +991,7 @@ class GraphCapturedTrainStep:
             self._run_step(extern_data, step=global_train_step)
             ctx = rf.get_run_ctx()
             total_loss = ctx.total_loss()
+            self._reduce_all_losses(ctx)
             total_loss.raw_tensor.backward()
             if self._post_step is not None:
                 self._post_step()
@@ -1252,7 +1304,8 @@ class GraphCapturedTrainStep:
             gc.collect()
             torch.cuda.empty_cache()
             raws = [p.raw_tensor for p in self._rf_params]
-            with _allow_non_fake_inputs():
+            # the first call traces and compiles, its execution is thrown away and leaves no trace on the state
+            with self._training_state_preserved(), _allow_non_fake_inputs():
                 outs = self._compiled_fn(self._compiled_call_args(raws))
                 if self._partitioned:
                     # the bwd graph compiles on the first backward
@@ -1278,12 +1331,14 @@ class GraphCapturedTrainStep:
         compiled = self._ensure_compiled()
         raws = [p.raw_tensor for p in self._rf_params]
         self._log_misaligned_inputs(raws)
-        # plain warm run (in partitioned mode incl. backward: autotune + workspaces)
-        outs = compiled(self._compiled_call_args(raws))
-        if self._partitioned:
-            for p in self._grad_params:
-                p.grad.zero_()
-            outs[0].backward()
+        # plain warm run (in partitioned mode incl. backward: autotune + workspaces);
+        # the replay after the capture is this batch's step, so this run leaves no trace on the state either
+        with self._training_state_preserved():
+            outs = compiled(self._compiled_call_args(raws))
+            if self._partitioned:
+                for p in self._grad_params:
+                    p.grad.zero_()
+                outs[0].backward()
         torch.cuda.synchronize()
         # release the warm runs' cached blocks: capture allocates from its own pool,
         # cannot reuse them, and cannot cudaFree during capture either;
@@ -1402,15 +1457,17 @@ class GraphCapturedTrainStep:
             torch.cuda.current_stream().wait_stream(self._eager_stream)
             return self._ctx
         if not self._compile:
-            # side-stream warmup (kernel/cudnn warmup; each _step call is cold w.r.t. dim/layout caches)
+            # side-stream warmup (kernel/cudnn warmup; each _step call is cold w.r.t. dim/layout caches);
+            # without the optimizer step, these runs are thrown away, the replay below is this batch's step,
+            # so they leave no trace on the training state either
             s = torch.cuda.Stream()
             s.wait_stream(torch.cuda.current_stream())
-            with torch.cuda.stream(s):
+            with torch.cuda.stream(s), self._training_state_preserved():
                 for _ in range(3):
-                    self._step()
+                    self._step(post_step=False)
             torch.cuda.current_stream().wait_stream(s)
         # with warmup_steps 0 there was no real optimizer step yet: create the lazy state
-        # (and the param grads) explicitly -- no-op if a warmup step already did
+        # explicitly -- no-op if a warmup step already did
         self._materialize_optimizer_state()
         torch.cuda.synchronize()
         # release the warmup's cached blocks before the compiled program / capture
@@ -1440,6 +1497,30 @@ class GraphCapturedTrainStep:
         # capture only records the kernels; replay now to actually compute this batch
         graph.replay()
         return self._ctx
+
+    def release(self) -> None:
+        """
+        Destroy the captured graph and give its private pool back.
+
+        Must happen before the NCCL process group is destroyed (see :func:`returnn.__main__.finalize`):
+        the communicator destruction waits until every CUDA graph referencing the communicator is gone,
+        so with an in-graph collective
+        (distributed batch norm, see ``rf_batch_norm_distributed``),
+        ``destroy_process_group`` blocks forever when the graph outlives it.
+        See https://github.com/pytorch/pytorch/issues/115388.
+
+        Also switches the bound-shape dim state off (see :func:`set_bound_shapes_enabled`),
+        so that later engines in the same process see the dims as before.
+        """
+        self.set_bound_shapes_enabled(False)
+        global _graph_pools_reserved
+        if self._graph is None:
+            return
+        # the ctx losses live in the pool, which is only freed once they are gone
+        self._ctx = None
+        self._graph.reset()
+        self._graph = None
+        _graph_pools_reserved = 0
 
     @staticmethod
     def _log_graph_pool_size(graph: torch.cuda.CUDAGraph) -> None:

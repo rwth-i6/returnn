@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 from typing import Any, Iterator, TYPE_CHECKING, List, Tuple, Dict, Optional
+import functools
 import multiprocessing
 import os
 import sys
+import threading
 import _setup_test_env  # noqa
 import unittest
 import numpy
@@ -885,6 +887,41 @@ def test_LmDataset_sorted():
         orth = dataset.get_data(3, "data")
         assert (orth == numpy.array(list("Longer than all the others".encode("utf8")))).all()
         assert not dataset.is_less_than_num_seqs(4)
+
+
+def test_LmDataset_seq_order_seq_lens():
+    from returnn.datasets.lm import LmDataset
+
+    num_seqs = 1013
+    rnd = numpy.random.RandomState(42)
+    lines = ["x" * rnd.randint(1, 50) for _ in range(num_seqs)]
+    with tempfile.NamedTemporaryFile("wt", suffix=".txt") as txt_file:
+        txt_file.write("".join(line + "\n" for line in lines))
+        txt_file.flush()
+
+        for seq_ordering in ["sorted", "sorted_reverse", "laplace:.17", "sort_bin_shuffle:.17", "random"]:
+            for shard_index in range(2):
+                dataset = init_dataset(
+                    {
+                        "class": "LmDataset",
+                        "corpus_file": txt_file.name,
+                        "orth_vocab": {"class": "Utf8ByteTargets"},
+                        "seq_ordering": seq_ordering,
+                        "partition_epoch": 3,
+                        "_num_shards": 2,
+                        "_shard_index": shard_index,
+                    }
+                )
+                assert isinstance(dataset, LmDataset)
+                for epoch in [1, 2, 4, 1]:
+                    dataset.init_seq_order(epoch=epoch)
+                    ref_seq_order = Dataset.get_seq_order_for_epoch(
+                        dataset, epoch=epoch, num_seqs=num_seqs, get_seq_len=lambda i: len(lines[i])
+                    )
+                    assert list(dataset.get_current_seq_order()) == list(ref_seq_order)
+                    if epoch == 2:
+                        dataset.finish_epoch(free_resources=True)
+                        assert dataset._orths_lens is None
 
 
 def test_MetaDataset():
@@ -1799,6 +1836,92 @@ def test_PostprocessingDataset_pickle():
     compare_dataset_seqs(ds0_seqs, ds2_seqs)
 
 
+def test_Dataset_get_current_seq_order():
+    # Where the current seq order is known, get_current_seq_order reports it.
+    # Where it is not, it reads as OptionalNotImplementedError, so that callers can fall back.
+    from returnn.util.basic import OptionalNotImplementedError
+
+    static_opts = {
+        "class": "StaticDataset",
+        "data": [{"data": numpy.zeros((n, 3), dtype="float32")} for n in range(2, 7)],
+        "output_dim": {"data": (3, 2)},
+        "seq_ordering": "sorted_reverse",
+    }
+    static = init_dataset(static_opts)
+    static.init_seq_order(epoch=1)
+    assert list(static.get_current_seq_order()) == [4, 3, 2, 1, 0]
+
+    post = init_dataset({"class": "PostprocessingDataset", "dataset": static_opts, "map_seq_stream": _repeat2})
+    post.init_seq_order(epoch=1)
+    try:
+        post.get_current_seq_order()
+    except OptionalNotImplementedError:
+        pass
+    else:
+        raise AssertionError("expected OptionalNotImplementedError")
+
+
+def _sharded_seq_tags(opts: Dict[str, Any], *, num_shards: int, via_set_sharding: bool) -> List[List[str]]:
+    tags = []
+    for shard_index in range(num_shards):
+        if via_set_sharding:
+            dataset = init_dataset(opts)
+            dataset.set_sharding(num_shards=num_shards, shard_index=shard_index)
+        else:
+            dataset = init_dataset({**opts, "_num_shards": num_shards, "_shard_index": shard_index})
+        tags.append([seq.seq_tag for seq in dummy_iter_dataset(dataset)])
+    return tags
+
+
+def test_Dataset_sharding():
+    # The shards together cover every seq once, with the sharding given at construction or via set_sharding,
+    # also through PostprocessingDataset and MetaDataset, which shard via the wrapped dataset.
+    from test_HDFDataset import generate_hdf_from_other
+
+    hdf_fn = generate_hdf_from_other({"class": "Task12AXDataset", "num_seqs": 11})
+    hdf_opts = {"class": "HDFDataset", "files": [hdf_fn], "seq_ordering": "random"}
+    all_tags = sorted(seq.seq_tag for seq in dummy_iter_dataset(init_dataset(hdf_opts)))
+    assert len(all_tags) == 11
+    for opts in [
+        hdf_opts,
+        {"class": "PostprocessingDataset", "dataset": hdf_opts, "map_seq": _post_process_map_seq_no_op},
+        {
+            "class": "MetaDataset",
+            "datasets": {"hdf": hdf_opts},
+            "data_map": {"data": ("hdf", "data"), "classes": ("hdf", "classes")},
+            "seq_order_control_dataset": "hdf",
+        },
+    ]:
+        for via_set_sharding in [False, True]:
+            tags = _sharded_seq_tags(opts, num_shards=2, via_set_sharding=via_set_sharding)
+            assert [len(t) for t in tags] == [6, 5], (opts["class"], via_set_sharding, tags)
+            assert sorted(tags[0] + tags[1]) == all_tags, (opts["class"], via_set_sharding, tags)
+
+
+def test_DistributeFilesDataset_sharding_with_distrib_shard_files():
+    # distrib_shard_files shards the files by the rank, so the same sharding via _num_shards/_shard_index
+    # (e.g. from dataset_distribution "shard") is fine, another one is an error.
+    from returnn.config import global_config_ctx, Config
+
+    files = _dfd_make_hdf_files(num_hdf_files=4)
+    opts = {
+        "class": "DistributeFilesDataset",
+        "files": files,
+        "get_sub_epoch_dataset": _dfd_get_sub_epoch_dataset,
+        "partition_epoch": 2,
+        "distrib_shard_files": True,
+    }
+    with global_config_ctx(Config({"__debug_dummy_distributed_rank_and_size": (1, 2)})):
+        dataset = init_dataset({**opts, "_num_shards": 2, "_shard_index": 1})
+        assert dataset._num_shards == 2 and dataset._shard_index == 1
+        try:
+            init_dataset({**opts, "_num_shards": 3, "_shard_index": 1})
+        except ValueError as exc:
+            assert "clashes" in str(exc)
+        else:
+            raise AssertionError("expected ValueError")
+
+
 def test_MultiEpochDataset():
     from returnn.datasets.meta import MultiEpochDataset
     from returnn.datasets.cached2 import CachedDataset2
@@ -1975,6 +2098,8 @@ def _get_nemo_speech_data() -> Dict[str, Any]:
                     }
                     if utt_idx in skip:
                         row["_skipme"] = True
+                    if name == "srcE" and utt_idx % 3 < 2:  # quality flag: true, false, missing
+                        row["high_quality"] = utt_idx % 3 == 0
                     rows.append(row)
                     utt_idx += 1
             with open(f"{root}/{name}/manifest_{shard}.jsonl", "w") as f:
@@ -2252,6 +2377,132 @@ def test_NemoSpeechDataset_metadata_no_audio():
         MonoCut.load_audio = orig_load_audio
 
 
+def _nemo_speech_blocking_worker_loop(shard_opts, conn, *, started, release, block_at: int, fail_at: int):
+    # The worker proc loop, where audio load number block_at waits for release, and load number fail_at raises.
+    # noinspection PyUnresolvedReferences,PyPackageRequirements
+    from lhotse.cut import MonoCut
+    from returnn.datasets import nemo_speech
+
+    orig_load_audio = MonoCut.load_audio
+    num_loads = 0
+
+    def _load_audio(*args, **kwargs):
+        nonlocal num_loads
+        num_loads += 1
+        if num_loads == block_at:
+            started.set()
+            assert release.wait(timeout=60)
+        if num_loads == fail_at:
+            raise ValueError("test: audio load failed")
+        return orig_load_audio(*args, **kwargs)
+
+    MonoCut.load_audio = _load_audio
+    nemo_speech._shard_worker_proc_loop(shard_opts, conn)
+
+
+def test_NemoSpeechDataset_worker_serves_buffered():
+    # The worker proc serves a buffered seq while it loads the audio of a later seq,
+    # and an error in that load reaches the parent.
+    _get_nemo_speech_data()  # first, skips if NeMo Speech is not available
+    from returnn.datasets import nemo_speech
+    from returnn.datasets.nemo_speech import NemoSpeechDataset
+
+    config = _get_nemo_speech_config(weights=[1.0, 2.0, 0.5])
+    opts = dict(nemo_config=config, draws_per_epoch=20)
+    ref = dummy_iter_dataset(NemoSpeechDataset(**opts, use_worker_procs=False), epoch=1)
+    started, release = nemo_speech._mp.Event(), nemo_speech._mp.Event()
+    orig_loop = nemo_speech._shard_worker_proc_loop
+    # Audio loads in the worker: seq 0 (requested), seq 1 (prefetch), seq 2 (prefetch, blocked), seq 3 (fails).
+    nemo_speech._shard_worker_proc_loop = functools.partial(
+        _nemo_speech_blocking_worker_loop, started=started, release=release, block_at=3, fail_at=4
+    )
+    dataset = None
+    try:
+        dataset = NemoSpeechDataset(**opts)
+        dataset.init_seq_order(epoch=1)
+        dataset.load_seqs(0, 1)
+        _nemo_speech_assert_same_seqs(dataset.added_data, ref[:1])
+        assert started.wait(timeout=60)
+        thread = threading.Thread(target=dataset.load_seqs, args=(1, 2))
+        thread.start()
+        thread.join(timeout=30)
+        assert not thread.is_alive(), "seq 1 not served while the worker loads seq 2"
+        _nemo_speech_assert_same_seqs(dataset.added_data, ref[1:2])
+        release.set()
+        try:
+            dataset.load_seqs(2, 4)
+        except EOFError:
+            pass  # worker proc died
+        else:
+            raise AssertionError("worker error not propagated")
+    finally:
+        nemo_speech._shard_worker_proc_loop = orig_loop
+        release.set()
+        if dataset is not None:
+            dataset.finish_epoch(free_resources=True)
+
+
+def _nemo_speech_high_quality(cut, **_kwargs) -> bool:
+    return cut.custom.get("high_quality", True)  # missing: kept
+
+
+def test_NemoSpeechDataset_cut_filter():
+    # Rejected records count as draws, like the NeMo filters: the accepted seqs are the same as without the filter.
+    data = _get_nemo_speech_data()  # first, skips if NeMo Speech is not available
+    from returnn.datasets.nemo_speech import NemoSpeechDataset
+
+    # noinspection PyUnresolvedReferences,PyPackageRequirements
+    from lhotse.cut import MonoCut
+
+    # One shard: with several, the round-robin merge over the shards depends on the accepted counts.
+    config = _get_nemo_speech_config(weights=[], max_duration=None, shuffle=True, shuffle_buffer_size=4)
+    config["input_cfg"] = [{**data["srcE"], "weight": 1.0}, {**data["srcC"], "weight": 1.0}]
+    opts = dict(
+        nemo_config=config,
+        draws_per_epoch=30,
+        targets={
+            "class": "SamplingBytePairEncoding",
+            "vocab_file": data["bpe_vocab"],
+            "breadth_prob": 0.5,
+            "unknown_label": None,
+        },
+    )
+    unfiltered = dummy_iter_dataset(NemoSpeechDataset(**opts, use_worker_procs=False), epoch=3)
+    assert {s.seq_tag for s in unfiltered if s.seq_tag.startswith("srcE-")} == {f"srcE-{i}.wav" for i in range(10)}
+    rejected = {f"srcE-{i}.wav" for i in range(1, 10, 3)}  # high_quality false
+    expected = [s for s in unfiltered if s.seq_tag not in rejected]
+    assert len(expected) < len(unfiltered)
+
+    opts["cut_filter"] = _nemo_speech_high_quality
+    num_loads = 0
+    orig_load_audio = MonoCut.load_audio
+
+    def _load_audio(*args, **kwargs):
+        nonlocal num_loads
+        num_loads += 1
+        return orig_load_audio(*args, **kwargs)
+
+    MonoCut.load_audio = _load_audio
+    try:
+        direct = dummy_iter_dataset(NemoSpeechDataset(**opts, use_worker_procs=False), epoch=3)
+    finally:
+        MonoCut.load_audio = orig_load_audio
+    assert num_loads == len(direct)  # no audio for the rejected records
+    _nemo_speech_assert_same_seqs(direct, expected)
+
+    dataset = NemoSpeechDataset(**opts, use_worker_procs=False)
+    uninterrupted = [dummy_iter_dataset(dataset, epoch=epoch) for epoch in [1, 2, 3]][-1]
+    _nemo_speech_assert_same_seqs(uninterrupted, direct)
+
+    # Several shards: the same seqs, only the merge order differs.
+    opts["nemo_config"] = {**config, "num_workers": 2}
+    filtered = dummy_iter_dataset(NemoSpeechDataset(**opts, use_worker_procs=False), epoch=3)
+    opts["cut_filter"] = None
+    unfiltered = dummy_iter_dataset(NemoSpeechDataset(**opts, use_worker_procs=False), epoch=3)
+    assert any(s.seq_tag in rejected for s in unfiltered)
+    assert sorted(s.seq_tag for s in filtered) == sorted(s.seq_tag for s in unfiltered if s.seq_tag not in rejected)
+
+
 def test_NemoSpeechDataset_index_pack():
     data = _get_nemo_speech_data()  # first, skips if NeMo Speech is not available
     import json
@@ -2359,6 +2610,15 @@ def test_NemoSpeechDataset_nemo_sharding():
             seen_all.extend(seen)
     assert len(seen_all) == len(set(seen_all)), "shards not disjoint"
 
+    # The same sharding via the properties (dataset_distribution "shard") is fine, another one is an error.
+    NemoSpeechDataset(nemo_config=config, draws_per_epoch=400, _rank_and_size=(1, 2), _num_shards=2, _shard_index=1)
+    try:
+        NemoSpeechDataset(nemo_config=config, draws_per_epoch=400, _rank_and_size=(1, 2), _num_shards=3, _shard_index=1)
+    except ValueError as exc:
+        assert "clashes" in str(exc)
+    else:
+        raise AssertionError("expected ValueError")
+
     # NeMo map-style mode shards by sampler batches, not by records: not supported.
     dataset = NemoSpeechDataset(
         nemo_config={**config, "force_map_dataset": True}, draws_per_epoch=400, use_worker_procs=False
@@ -2370,6 +2630,280 @@ def test_NemoSpeechDataset_nemo_sharding():
         print("Expected exception:", exc)
     else:
         raise AssertionError("map-style mode should not be supported")
+
+
+def _megatron_index_bytes(
+    *,
+    seq_lens: List[int],
+    seq_pointers: List[int],
+    document_indices: List[int],
+    dtype_code: int,
+    magic: bytes = b"MMIDIDX\x00\x00",
+    version: int = 1,
+) -> bytes:
+    """:return: index file content, as written by Megatron's ``_IndexWriter``"""
+    import struct
+
+    return b"".join(
+        [
+            magic,
+            struct.pack("<QBQQ", version, dtype_code, len(seq_lens), len(document_indices)),
+            numpy.array(seq_lens, dtype="<i4").tobytes(),
+            numpy.array(seq_pointers, dtype="<i8").tobytes(),
+            numpy.array(document_indices, dtype="<i8").tobytes(),
+        ]
+    )
+
+
+_megatron_dtype_codes = {"uint8": 1, "int8": 2, "int16": 3, "int32": 4, "int64": 5, "uint16": 8}
+
+
+def _megatron_write(out_prefix: str, docs: List[List[List[int]]], *, dtype: str) -> Dict[str, str]:
+    """
+    Like Megatron's ``IndexedDatasetBuilder.add_document`` per doc, then ``finalize``.
+
+    :return: data_file and index_file
+    """
+    seq_lens = [len(seq) for doc in docs for seq in doc]
+    document_indices = numpy.cumsum([0] + [len(doc) for doc in docs]).tolist()
+    seq_pointers = (numpy.cumsum([0] + seq_lens[:-1]) * numpy.dtype(dtype).itemsize).tolist()[: len(seq_lens)]
+    data_file, index_file = f"{out_prefix}.bin", f"{out_prefix}.idx"
+    with open(data_file, "wb") as f:
+        f.write(numpy.array([t for doc in docs for seq in doc for t in seq], dtype=dtype).tobytes())
+    with open(index_file, "wb") as f:
+        f.write(
+            _megatron_index_bytes(
+                seq_lens=seq_lens,
+                seq_pointers=seq_pointers,
+                document_indices=document_indices,
+                dtype_code=_megatron_dtype_codes[dtype],
+            )
+        )
+    return {"data_file": data_file, "index_file": index_file}
+
+
+def test_MegatronDataset():
+    import pickle
+
+    # With an empty document and an empty seq. 65535 needs uint16 (or wider).
+    docs = [[[5, 65535, 2], [3]], [], [[0], []], [[7, 6, 5, 4]]]
+    doc_tags = ["doc-0/seq-0", "doc-0/seq-1", "doc-2/seq-0", "doc-2/seq-1", "doc-3/seq-0"]
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        for dtype in ["uint16", "int32"]:
+            files = _megatron_write(f"{tmp_dir}/{dtype}", docs, dtype=dtype)
+            dataset = init_dataset({"class": "MegatronDataset", **files, "vocab_size": 2**16})
+            dataset = pickle.loads(pickle.dumps(dataset))
+            seqs = dummy_iter_dataset(dataset)
+            tags = [f"{dtype}/{tag}" for tag in doc_tags]
+            assert [seq.seq_tag for seq in seqs] == tags == dataset.get_all_tags()
+            assert [seq.features["data"].tolist() for seq in seqs] == [seq for doc in docs for seq in doc]
+            assert all(seq.features["data"].dtype == numpy.int32 for seq in seqs)
+            assert dataset.get_data_keys() == ["data"]
+            assert dataset.get_data_dim("data") == 2**16 and dataset.is_data_sparse("data")
+            # Pickled after the files were mapped.
+            compare_dataset_seqs(dummy_iter_dataset(pickle.loads(pickle.dumps(dataset))), seqs)
+            dataset.init_seq_order(seq_list=[tags[4], tags[0], tags[3]])
+            assert dataset.get_current_seq_order() == [4, 0, 3]
+            for tag in ["doc-1/seq-0", "doc-0/seq-2", "doc-4/seq-0", "doc-00/seq-0"]:
+                for tag_ in [f"{dtype}/{tag}", f"other/{tag}", tag]:
+                    try:
+                        dataset.init_seq_order(seq_list=[tag_])
+                    except ValueError as exc:
+                        assert "not in dataset" in str(exc)
+                    else:
+                        raise AssertionError(f"expected ValueError for tag {tag_!r}")
+
+        # Several files: a seq has the same tag with any other files and in any order, e.g. via DistributeFilesDataset.
+        files = {"a": _megatron_write(f"{tmp_dir}/a", [[[1], [2]], [[3]]], dtype="uint16")}
+        files["b"] = {"data_file": f"{tmp_dir}/int32.bin", "index_file": f"{tmp_dir}/int32.idx"}
+        files["c"] = {"data_file": f"{tmp_dir}/uint16.bin", "index_file": f"{tmp_dir}/uint16.idx"}
+        tag_to_data = {}
+        for names in ["abc", "cb", "ca", "b"]:
+            dataset = init_dataset(
+                {
+                    "class": "MegatronDataset",
+                    "data_file": [files[name]["data_file"] for name in names],
+                    "index_file": [files[name]["index_file"] for name in names],
+                    "vocab_size": 2**16,
+                }
+            )
+            seqs = dummy_iter_dataset(dataset)
+            assert [seq.seq_tag for seq in seqs] == dataset.get_all_tags()
+            for seq in seqs:
+                assert (
+                    tag_to_data.setdefault(seq.seq_tag, seq.features["data"].tolist()) == seq.features["data"].tolist()
+                )
+            dataset.init_seq_order(seq_list=[seqs[-1].seq_tag, seqs[0].seq_tag])
+            dataset.load_seqs(0, 2)
+            assert [dataset.get_tag(i) for i in range(2)] == [seqs[-1].seq_tag, seqs[0].seq_tag]
+            assert [dataset.get_data(i, "data").tolist() for i in range(2)] == [
+                tag_to_data[seqs[-1].seq_tag],
+                tag_to_data[seqs[0].seq_tag],
+            ]
+        assert len(tag_to_data) == 3 + 5 + 5
+        assert tag_to_data["a/doc-1/seq-0"] == [3] and tag_to_data["uint16/doc-3/seq-0"] == [7, 6, 5, 4]
+
+        # Same base name in different dirs.
+        os.mkdir(f"{tmp_dir}/sub")
+        same_name = _megatron_write(f"{tmp_dir}/sub/a", [[[1]]], dtype="uint16")
+        try:
+            init_dataset(
+                {
+                    "class": "MegatronDataset",
+                    "data_file": [files["a"]["data_file"], same_name["data_file"]],
+                    "index_file": [files["a"]["index_file"], same_name["index_file"]],
+                    "vocab_size": 8,
+                }
+            )
+        except ValueError as exc:
+            assert "not unique" in str(exc)
+        else:
+            raise AssertionError("expected ValueError")
+
+        # A separately written index which splits every seq, over the unchanged data file.
+        orig_lens = [len(seq) for doc in docs for seq in doc]
+        offsets = numpy.cumsum([0] + orig_lens).tolist()
+        split_lens, split_pointers, split_doc_indices = [], [], [0]
+        for doc_idx, doc in enumerate(docs):
+            for seq_idx in range(sum(len(d) for d in docs[:doc_idx]), sum(len(d) for d in docs[: doc_idx + 1])):
+                half = orig_lens[seq_idx] // 2
+                split_lens += [half, orig_lens[seq_idx] - half]
+                split_pointers += [offsets[seq_idx] * 4, (offsets[seq_idx] + half) * 4]
+            split_doc_indices.append(len(split_lens))
+        split_index_file = f"{tmp_dir}/int32-split.idx"
+        with open(split_index_file, "wb") as f:
+            f.write(
+                _megatron_index_bytes(
+                    seq_lens=split_lens,
+                    seq_pointers=split_pointers,
+                    document_indices=split_doc_indices,
+                    dtype_code=_megatron_dtype_codes["int32"],
+                )
+            )
+        dataset = init_dataset(
+            {
+                "class": "MegatronDataset",
+                "data_file": f"{tmp_dir}/int32.bin",
+                "index_file": split_index_file,
+                "vocab_size": 2**16,
+                "seq_ordering": "sorted",
+            }
+        )
+        seqs = dummy_iter_dataset(dataset)
+        assert len(seqs) == 10
+        assert [len(seq.features["data"]) for seq in seqs] == sorted(split_lens)
+        doc_tokens = [[] for _ in docs]
+        for seq in sorted(seqs, key=lambda seq_: dataset.get_all_tags().index(seq_.seq_tag)):
+            doc_tokens[int(seq.seq_tag.split("/")[1][len("doc-") :])] += seq.features["data"].tolist()
+        assert doc_tokens == [[t for seq in doc for t in seq] for doc in docs]
+
+
+def test_MegatronDataset_invalid():
+    def _check(index: Optional[bytes] = None, *, error: str, vocab_size: int = 8, **opts):
+        if index is not None:
+            with open(files["index_file"], "wb") as f_:
+                f_.write(index)
+        dataset = init_dataset({"class": "MegatronDataset", **files, "vocab_size": vocab_size, **opts})
+        try:
+            dummy_iter_dataset(dataset)
+        except ValueError as exc:
+            print("Expected exception:", exc)
+            assert error in str(exc), f"expected {error!r} in {exc}"
+        else:
+            raise AssertionError(f"expected ValueError with {error!r}")
+
+    vocab = {"vocab_file": None, "labels": ["a", "b", "c"], "unknown_label": None}
+    try:
+        init_dataset({"class": "MegatronDataset", "data_file": "", "index_file": "", "vocab_size": 8, "vocab": vocab})
+    except ValueError as exc:
+        assert "vocab has 3 labels" in str(exc)
+    else:
+        raise AssertionError("expected ValueError")
+    try:
+        init_dataset({"class": "MegatronDataset", "data_file": ["a", "b"], "index_file": ["a"], "vocab_size": 8})
+    except ValueError as exc:
+        assert "2 data files but 1 index files" in str(exc)
+    else:
+        raise AssertionError("expected ValueError")
+
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        files = _megatron_write(f"{tmp_dir}/data", [[[1, 2], [3]], [[4, 5, 6]]], dtype="int32")
+        with open(files["index_file"], "rb") as f:
+            valid = f.read()
+        valid_opts = dict(seq_lens=[2, 1, 3], seq_pointers=[0, 8, 12], document_indices=[0, 2, 3], dtype_code=4)
+        assert _megatron_index_bytes(**valid_opts) == valid
+        _check(error="not within vocab_size 5", vocab_size=5)
+        _check(_megatron_index_bytes(**{**valid_opts, "magic": b"MMIDIDX\x00\x01"}), error="not in the Megatron")
+        _check(_megatron_index_bytes(**{**valid_opts, "version": 2}), error="not in the Megatron")
+        _check(_megatron_index_bytes(**{**valid_opts, "dtype_code": 7}), error="dtype code 7 not supported")
+        _check(_megatron_index_bytes(**{**valid_opts, "dtype_code": 9}), error="dtype code 9 not supported")
+        _check(valid[:20], error="truncated")
+        _check(valid[:-1], error="has size")
+        _check(valid + bytes(3), error="multimodal")  # with seq modes, one byte per seq
+        _check(_megatron_index_bytes(**{**valid_opts, "seq_pointers": [0, 8, 16]}), error="seq 2 with length 3")
+        _check(_megatron_index_bytes(**{**valid_opts, "seq_pointers": [0, -4, 12]}), error="seq 1 with length 1")
+        _check(_megatron_index_bytes(**{**valid_opts, "seq_lens": [2, -1, 3]}), error="seq 1 with length -1")
+        _check(_megatron_index_bytes(**{**valid_opts, "document_indices": [0, 2]}), error="from 0 to num seqs")
+        _check(_megatron_index_bytes(**{**valid_opts, "document_indices": [1, 2, 3]}), error="from 0 to num seqs")
+        _check(_megatron_index_bytes(**{**valid_opts, "document_indices": [0, 2, 1, 3]}), error="not monotonic")
+
+
+def test_MegatronDataset_partition_epoch_sharding():
+    # Over the sub epochs of one full epoch, the shards together cover every seq exactly once.
+    num_seqs, partition_epoch, num_shards = 23, 3, 2
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        files = _megatron_write(f"{tmp_dir}/data", [[[i]] for i in range(num_seqs)], dtype="uint16")
+        opts = {"class": "MegatronDataset", **files, "vocab_size": num_seqs}
+        opts.update({"seq_ordering": "random", "partition_epoch": partition_epoch})
+
+        def _get_tags(*, full_epoch: int) -> List[List[str]]:
+            res = []
+            for sub_epoch in range(1, partition_epoch + 1):
+                for shard_index in range(num_shards):
+                    dataset = init_dataset({**opts, "_num_shards": num_shards, "_shard_index": shard_index})
+                    seqs = dummy_iter_dataset(dataset, epoch=(full_epoch - 1) * partition_epoch + sub_epoch)
+                    res.append([seq.seq_tag for seq in seqs])
+            return res
+
+        tags = _get_tags(full_epoch=1)
+        assert sorted(sum(tags, [])) == sorted(f"data/doc-{i}/seq-0" for i in range(num_seqs))
+        assert all(3 <= len(t) <= 4 for t in tags), tags
+        assert _get_tags(full_epoch=1) == tags  # deterministic
+        assert _get_tags(full_epoch=2) != tags  # new random order
+
+
+def _megatron_dfd_get_sub_epoch_dataset(files_subepoch: List[Dict[str, str]]) -> Dict[str, Any]:
+    return {
+        "class": "MegatronDataset",
+        "data_file": [files["data_file"] for files in files_subepoch],
+        "index_file": [files["index_file"] for files in files_subepoch],
+        "vocab_size": 100,
+        "seq_ordering": "random",
+    }
+
+
+def test_MegatronDataset_DistributeFilesDataset():
+    num_files, num_seqs, partition_epoch = 6, 5, 3
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        files = [
+            _megatron_write(f"{tmp_dir}/data-{i}", [[[i * 10 + j]] for j in range(num_seqs)], dtype="uint16")
+            for i in range(num_files)
+        ]
+        dataset = init_dataset(
+            {
+                "class": "DistributeFilesDataset",
+                "files": files,
+                "get_sub_epoch_dataset": _megatron_dfd_get_sub_epoch_dataset,
+                "partition_epoch": partition_epoch,
+                "use_worker_proc": False,
+            }
+        )
+        tokens = []
+        for sub_epoch in range(1, partition_epoch + 1):
+            seqs = dummy_iter_dataset(dataset, epoch=sub_epoch)
+            assert len(seqs) == num_seqs * num_files // partition_epoch
+            tokens += [seq.features["data"].tolist() for seq in seqs]
+        assert sorted(tokens) == [[i * 10 + j] for i in range(num_files) for j in range(num_seqs)]
 
 
 if __name__ == "__main__":

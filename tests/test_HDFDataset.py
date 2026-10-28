@@ -265,6 +265,32 @@ def test_SimpleHDFWriter():
     assert isinstance(reader.seq_tags[0], str)
 
 
+def test_HDFDataset_cached_get_current_seq_order():
+    from returnn.datasets.basic import init_dataset
+
+    fn = get_test_tmp_file(suffix=".hdf")
+    os.remove(fn)  # SimpleHDFWriter expects that the file does not exist
+    writer = SimpleHDFWriter(filename=fn, dim=3, labels=None)
+    seq_lens = [3, 5, 2, 7, 4, 6, 1]
+    writer.insert_batch(
+        inputs=np.zeros((len(seq_lens), max(seq_lens), 3), dtype="float32"),
+        seq_len=seq_lens,
+        seq_tag=[f"seq-{i}" for i in range(len(seq_lens))],
+    )
+    writer.close()
+
+    # No cache, partly cached, fully cached.
+    # Fully cached, a new random order in a later epoch only remaps the cached seqs.
+    for cache_byte_size in [0, 64, 10**6]:
+        dataset = init_dataset(
+            {"class": "HDFDataset", "files": [fn], "cache_byte_size": cache_byte_size, "seq_ordering": "random"}
+        )
+        for epoch in [1, 2, 3]:
+            dataset.init_seq_order(epoch=epoch)
+            tags = [dataset.get_tag(i) for i in range(dataset.num_seqs)]
+            assert [f"seq-{i}" for i in dataset.get_current_seq_order()] == tags
+
+
 def test_SimpleHDFWriter_small():
     fn = get_test_tmp_file(suffix=".hdf")
     os.remove(fn)  # SimpleHDFWriter expects that the file does not exist

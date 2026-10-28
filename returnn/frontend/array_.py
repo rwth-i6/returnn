@@ -666,7 +666,7 @@ def slice_update(target: Tensor, value: Tensor, *, axis: Dim, start: Tensor) -> 
     :param target: with ``axis``
     :param value: the frame to write, without ``axis``
     :param axis: the axis to write into
-    :param start: index in ``axis``, scalar
+    :param start: index in ``axis``, scalar or with other dims of ``target``
     :return: ``target`` with ``value`` written at ``start``
 
     Backends that can update in place do; the fallback selects over the whole axis.
@@ -840,10 +840,16 @@ def masked_scatter(
     return res
 
 
-def sequence_mask(dims: Union[Dim, Sequence[Dim]], *, device: Optional[str] = None) -> Tensor:
+def sequence_mask(
+    dims: Union[Dim, Sequence[Dim]],
+    *,
+    device: Optional[str] = None,
+    like: Optional[Union[Tensor, rf.TensorLayout]] = None,
+) -> Tensor:
     """
     :param dims:
     :param device:
+    :param like: the mask follows the device and storage layout of this tensor or layout, see :func:`Dim.get_mask`
     :return: mask based on the sequence lengths
     """
     if isinstance(dims, Dim):
@@ -854,7 +860,7 @@ def sequence_mask(dims: Union[Dim, Sequence[Dim]], *, device: Optional[str] = No
         return rf.constant(True, dims=())
     mask = True
     for dim in dyn_dims:
-        mask = rf.opt_logical_and(mask, dim.get_mask(dim_order=dims, device=device))
+        mask = rf.opt_logical_and(mask, dim.get_mask(dim_order=dims, device=device, like=like))
     return mask
 
 
@@ -967,7 +973,8 @@ def scatter(
     :param indices_dim:
     :param mode: "sum", "max", "min", "mean", "logsumexp", "logmeanexp", "argmax".
         (Note: If you ever need another mode, please open an issue/PR.)
-    :param fill_value:
+    :param fill_value: value of the output entries no index writes to.
+        With mode="argmax", this is ``invalid_idx`` of :func:`scatter_argmax`.
     :param out_dim: The indices target dim.
         If not given, will be automatically determined as the sparse_dim from indices.
         If multiple out dims, use indices into the merged out dims,
@@ -1032,7 +1039,7 @@ def scatter(
         out_dim=out_dim,
     )
     if post_fix_fill_value:
-        ones = rf.ones(dims=indices.dims, dtype="int32", device=source.device)
+        ones = rf.ones(dims=indices.dims, dtype="int32", like=indices)
         counts = rf.scatter(ones, indices=indices, indices_dim=indices_dim, out_dim=out_dim)
         out = rf.where(counts > 0, out, fill_value)
     if use_mask and mode != "sum":
@@ -1076,7 +1083,7 @@ def scatter_count(
     """
     if fill_value is None:
         fill_value = 0
-    ones = rf.ones(dims=indices.dims, dtype="int32", device=indices.device)
+    ones = rf.ones(dims=indices.dims, dtype="int32", like=indices)
     if fill_value == 0 or _should_use_scatter_fixed_fill_value():
         counts = rf.scatter(ones, indices=indices, indices_dim=indices_dim, out_dim=out_dim)
         if fill_value is not None:
@@ -1119,7 +1126,7 @@ def scatter_argmax(
     *,
     indices: Tensor,
     indices_dim: Dim,
-    invalid_idx: int = -1,
+    invalid_idx: Optional[int] = -1,
     out_dim: Optional[Dim] = None,
 ) -> Tensor:
     """
@@ -1131,12 +1138,14 @@ def scatter_argmax(
     :param indices: [batch_dims..., indices_dim...] -> out_dim
     :param indices_dim:
     :param invalid_idx: in case some of the output entries are never set (via ``indices``),
-        this will be used as the value.
+        this will be used as the value. None means -1.
     :param out_dim: The indices target dim.
     :return: [batch_dims..., out_dim..., feature_dims...] -> indices_dim
     """
     import numpy
 
+    if invalid_idx is None:
+        invalid_idx = -1
     if not out_dim:
         assert isinstance(indices, Tensor) and indices.sparse_dim
         out_dim = indices.sparse_dim
@@ -1527,7 +1536,12 @@ def top_k_mask(values: Tensor, *, axis: Dim, k: Union[int, Tensor]) -> Tensor:
     :return: mask {other_dims..., axis} of the top-k values
     """
     _, indices, k_dim = rf.top_k(values, axis=axis, k=k)
-    mask = rf.scatter(rf.full(dims=indices.dims, fill_value=True), indices=indices, indices_dim=k_dim, fill_value=False)
+    mask = rf.scatter(
+        rf.full(dims=indices.dims, fill_value=True, dtype="bool", like=indices),
+        indices=indices,
+        indices_dim=k_dim,
+        fill_value=False,
+    )
     return mask
 
 

@@ -10,6 +10,7 @@ import returnn.frontend as rf
 from returnn.tensor import Tensor, Dim
 from returnn.util.basic import BehaviorVersion
 from .types import RawTensorTypes, ItemKeyType
+from .tensor_layout import TensorLayout
 
 T = TypeVar("T")  # tf.Tensor, torch.Tensor or so
 T2 = TypeVar("T2")
@@ -209,6 +210,14 @@ class Backend(Generic[T]):
         """
         # default implementation: ignore device
         return None
+
+    @classmethod
+    def get_tensor_layout(cls, x: Tensor) -> TensorLayout:
+        """
+        :param x: tensor of this backend
+        :return: layout of ``x``, see :func:`returnn.frontend.get_tensor_layout`. Default: plain storage
+        """
+        return TensorLayout(backend=cls, device=cls.get_device(x))
 
     @staticmethod
     def copy_to_device(x: Tensor, device: Optional[str]) -> Tensor:
@@ -1029,6 +1038,7 @@ class Backend(Generic[T]):
         device: Optional[str] = None,
         sparse_dim: Optional[Dim] = None,
         feature_dim: Optional[Dim] = None,
+        like: Optional[TensorLayout] = None,
     ) -> Tensor:
         """
         https://data-apis.org/array-api/latest/API_specification/generated/array_api.full.html
@@ -1039,6 +1049,7 @@ class Backend(Generic[T]):
         :param device:
         :param sparse_dim:
         :param feature_dim:
+        :param like: layout of this backend, the result follows its storage layout, see :func:`returnn.frontend.full`
         :return: tensor
         """
         raise NotImplementedError
@@ -1382,6 +1393,22 @@ class Backend(Generic[T]):
         """
         raise NotImplementedError
 
+    @staticmethod
+    def num_elements_of_shape(
+        source: Tensor, dims: Sequence[Dim], *, use_mask: bool, device: Optional[str]
+    ) -> Union[int, Tensor]:
+        """
+        See :func:`returnn.frontend.num_elements_of_shape` with ``source``.
+
+        :param source: the tensor which is reduced over dims
+        :param dims: the reduced dims, all in source
+        :param use_mask: as for the reduction
+        :param device: where the count is needed
+        :return: number of elements which a reduction of source over dims covers
+        """
+        del source  # the storage holds the padded layout
+        return rf.num_elements_of_shape(dims, use_mask=use_mask, device=device)
+
     # noinspection PyShadowingBuiltins
     @staticmethod
     def top_k(
@@ -1415,6 +1442,7 @@ class Backend(Generic[T]):
         auto_update_state: Optional[bool] = None,
         static: Optional[bool] = None,
         out: Optional[Tensor] = None,
+        like: Optional[TensorLayout] = None,
     ) -> Tensor:
         """
         random. See `rf.random` for details.
@@ -1734,9 +1762,11 @@ class Backend(Generic[T]):
             # query_spatial_dim can be kv_spatial_dim itself (full-sequence self-attention, both roles):
             # rewriting the kv side to the separate masked hist dim resolves the double use.
             # bounded_by: the hist lens are 1..axis-size, so the axis bounds them
-            # (under the bound-shape regime the axis capacity then bounds hist_dim too)
+            # (under the bound-shape regime the axis capacity then bounds hist_dim too).
+            # dim sizes live on the host by convention, but the softmax mask needs them on the
+            # data device, and under tracing that copy is a sync, which capture does not allow
             hist_dim = Dim(
-                rf.range_over_dim(query_spatial_dim, device="cpu") + 1,
+                rf.range_over_dim(query_spatial_dim, device=query.device if rf.is_static_traceable() else "cpu") + 1,
                 name=f"{kv_spatial_dim.description}:kv",
                 bounded_by=kv_spatial_dim,
             )

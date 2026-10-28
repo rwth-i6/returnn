@@ -21,10 +21,13 @@ other PyTorch datasets more directly, including also HuggingFace datasets.
 
 from __future__ import annotations
 import bisect
+import collections
 import functools
 import itertools
-from typing import Optional, Any, Sequence, Tuple, Union, List, Dict, Callable
+from typing import Optional, Any, Sequence, Tuple, Union, List, Dict, Deque, Callable
+import os
 import sys
+import threading
 from copy import deepcopy
 
 import numpy
@@ -33,9 +36,10 @@ import torch.utils.data
 
 from returnn.config import Config
 from returnn.log import log
-from returnn.util.basic import NumbersDict, get_fwd_compat_kwargs
+from returnn.util.basic import BehaviorVersion, NumbersDict, get_fwd_compat_kwargs
 from returnn.util.debug import install_subproc_faulthandler
 from returnn.datasets.packing import packed_batch_config, packed_batch_key_opts
+from .pin_memory import PinMemoryDataLoader
 
 
 def create_tensor(array: numpy.ndarray) -> Union[torch.Tensor, numpy.ndarray]:
@@ -230,7 +234,14 @@ class BatchingIterDataPipe(torch.utils.data.IterDataPipe):
     Note, that batches are not yet merged into a single (padded) data array here, this happens in 'collate_batch()'.
     """
 
-    def __init__(self, dataset: torch.utils.data.IterableDataset, batch_size=1, max_seqs=None, packed_batch_size=None):
+    def __init__(
+        self,
+        dataset: torch.utils.data.IterableDataset,
+        batch_size=1,
+        max_seqs=None,
+        packed_batch_size=None,
+        packed_batch_cost=None,
+    ):
         """
         :param dataset: dataset to apply batching to
         :param int|dict[str,int]|None|function batch_size: Maximum number of time steps (e.g. audio frames / words)
@@ -248,12 +259,21 @@ class BatchingIterDataPipe(torch.utils.data.IterDataPipe):
             but a limit on sum(seq_len) (no padding),
             the natural budget for packed batches (see ``packed_tensors``).
             Both limits apply if both are set.
+        :param dict[str,(NumbersDict)->int|float]|None packed_batch_cost: per-sequence costs derived from
+            the sequence lengths, keyed by a name that is not a data key. Each function gets the
+            lengths of one sequence and returns its cost, whose sum over the batch is bounded by the
+            ``packed_batch_size`` entry of that name, which must exist. The costs stay out of the
+            padded ``batch_size`` check. This bounds quantities no single length can,
+            such as the frames times prefixes cells of a transducer lattice.
         """
         super().__init__()
         self._dataset = dataset
         self._max_batch_size = self._parse_batch_size(batch_size)
         self._max_seqs = self._parse_max_seqs(max_seqs)
         self._max_packed_batch_size = self._parse_packed_batch_size(packed_batch_size)
+        self._packed_batch_cost: Dict[str, Callable] = dict(packed_batch_cost or {})
+        for key, cost in self._packed_batch_cost.items():
+            assert callable(cost), f"packed_batch_cost[{key!r}] must be callable, got {cost!r}"
 
         if not callable(self._max_batch_size):
             assert isinstance(self._max_batch_size, NumbersDict) and self._max_batch_size.min_value() > 0
@@ -292,6 +312,19 @@ class BatchingIterDataPipe(torch.utils.data.IterDataPipe):
         if packed_batch_size is None:
             return None
         return BatchingIterDataPipe._parse_batch_size(packed_batch_size, data_dict=data_dict)
+
+    def _cost_limits(self, max_packed_batch_size: Optional[NumbersDict]) -> NumbersDict:
+        """
+        :param max_packed_batch_size: the packed limit in effect for the current sequence
+        :return: the explicit ``packed_batch_size`` entry of every cost key, the only limit a cost meets
+        """
+        limits = {}
+        for cost_key in self._packed_batch_cost:
+            assert max_packed_batch_size is not None and cost_key in max_packed_batch_size.keys(), (
+                f"packed_batch_cost[{cost_key!r}] needs an explicit packed_batch_size[{cost_key!r}] entry"
+            )
+            limits[cost_key] = max_packed_batch_size[cost_key]
+        return NumbersDict(limits)
 
     @staticmethod
     def _parse_max_seqs(
@@ -332,6 +365,7 @@ class BatchingIterDataPipe(torch.utils.data.IterDataPipe):
         current_batch = []
         current_max_sequence_lengths = NumbersDict(0)  # data_key -> length of longest sequence in current batch
         current_sum_sequence_lengths = NumbersDict(0)  # data_key -> summed sequence lengths in current batch
+        current_sum_sequence_costs = NumbersDict(0)  # cost_key -> summed sequence costs in current batch
 
         for data_dict in self._dataset:
             max_seqs = self._parse_max_seqs(self._max_seqs, data_dict=data_dict)
@@ -345,30 +379,41 @@ class BatchingIterDataPipe(torch.utils.data.IterDataPipe):
                 current_batch = []
                 current_max_sequence_lengths = NumbersDict(0)
                 current_sum_sequence_lengths = NumbersDict(0)
+                current_sum_sequence_costs = NumbersDict(0)
 
             # TODO: This assumes all data has time as first dimension. Currently we can't know better..
             sequence_lengths = NumbersDict(
                 {data_key: data.shape[0] for data_key, data in data_dict.items() if data.shape}
             )
+            sequence_costs = NumbersDict(
+                {cost_key: cost(sequence_lengths) for cost_key, cost in self._packed_batch_cost.items()}
+            )
 
             max_sequence_lengths_if_included = NumbersDict.max([current_max_sequence_lengths, sequence_lengths])
             batch_size_if_included = max_sequence_lengths_if_included * (len(current_batch) + 1)  # including padding
             sum_sequence_lengths_if_included = current_sum_sequence_lengths + sequence_lengths  # no padding
+            sum_sequence_costs_if_included = current_sum_sequence_costs + sequence_costs
 
             over_limit = batch_size_if_included.any_compare(max_batch_size, (lambda a, b: a > b))
             if max_packed_batch_size is not None:
                 over_limit = over_limit or sum_sequence_lengths_if_included.any_compare(
                     max_packed_batch_size, (lambda a, b: a > b)
                 )
+            if self._packed_batch_cost:
+                over_limit = over_limit or sum_sequence_costs_if_included.any_compare(
+                    self._cost_limits(max_packed_batch_size), (lambda a, b: a > b)
+                )
             if current_batch and over_limit:
                 yield current_batch
                 current_batch = [data_dict]
                 current_max_sequence_lengths = sequence_lengths
                 current_sum_sequence_lengths = sequence_lengths
+                current_sum_sequence_costs = sequence_costs
             else:
                 current_batch.append(data_dict)
                 current_max_sequence_lengths = max_sequence_lengths_if_included
                 current_sum_sequence_lengths = sum_sequence_lengths_if_included
+                current_sum_sequence_costs = sum_sequence_costs_if_included
 
         if current_batch:
             yield current_batch
@@ -395,6 +440,7 @@ class BucketOrderingIterDataPipe(torch.utils.data.IterDataPipe):
         length_key: str,
         random_bucket_prob: float = 0.0,
         seed: Optional[int] = None,
+        monotonic_data_keys: Optional[Sequence[str]] = None,
     ):
         """
         :param dataset: dataset to apply bucket batching to
@@ -406,9 +452,17 @@ class BucketOrderingIterDataPipe(torch.utils.data.IterDataPipe):
             a randomly chosen still-fitting bucket.
             This increases seq length variation within the buckets at the cost of slighly more padding.
         :param seed: random seed
+        :param monotonic_data_keys: data keys whose values keep the input order across the emitted batches,
+            like in :class:`ShufflingDataPipe`.
+            With ``("complete_frac", "seq_idx")``, the ``epoch_continuous`` progress
+            (e.g. for a learning rate schedule) does not go backwards when a bucket is emitted late.
+            None (default): ``("complete_frac", "seq_idx")`` since behavior version 35, else ``()``.
         """
         self._dataset = dataset
         self._length_key = length_key
+        if monotonic_data_keys is None:
+            monotonic_data_keys = ("complete_frac", "seq_idx") if BehaviorVersion.get() >= 35 else ()
+        self._monotonic_data_keys = tuple(monotonic_data_keys)
         assert random_bucket_prob >= 0.0
         self._random_bucket_prob = random_bucket_prob
         self._rng = numpy.random.RandomState()
@@ -424,6 +478,7 @@ class BucketOrderingIterDataPipe(torch.utils.data.IterDataPipe):
         """:return: generator applying bucket ordering on the data"""
         buckets: List[List[Dict[str, numpy.ndarray]]] = [[] for _ in range(len(self._max_seq_lens))]
         buckets_full_counter = [0 for _ in range(len(buckets))]
+        monotonic_values: Deque[Dict[str, Any]] = collections.deque()  # in input order, of not yet emitted seqs
 
         for data_dict in self._dataset:
             data_dict: Dict[str, numpy.ndarray]
@@ -438,18 +493,30 @@ class BucketOrderingIterDataPipe(torch.utils.data.IterDataPipe):
                 and self._rng.rand() < self._random_bucket_prob
             ):
                 bucket_idx = self._rng.randint(bucket_idx, len(self._max_bucket_sizes))
+            if self._monotonic_data_keys:
+                monotonic_values.append({key: data_dict[key] for key in self._monotonic_data_keys})
             buckets[bucket_idx].append(data_dict)
             if len(buckets[bucket_idx]) >= self._max_bucket_sizes[bucket_idx]:
-                yield buckets[bucket_idx]
+                yield self._with_monotonic_values(buckets[bucket_idx], monotonic_values)
                 buckets[bucket_idx] = []
                 buckets_full_counter[bucket_idx] += 1
 
         non_empty_buckets = [b for b in buckets if b]
-        yield from non_empty_buckets
+        for bucket in non_empty_buckets:
+            yield self._with_monotonic_values(bucket, monotonic_values)
+        assert not monotonic_values
 
         # we do not count the buckets w/ leftover data as they were not completely filled
         description_str = ", ".join(f"{limit}: {cnt}" for limit, cnt in zip(self._max_seq_lens, buckets_full_counter))
         print(f"Batching buckets full: {description_str}", file=log.v4)
+
+    def _with_monotonic_values(
+        self, batch: List[Dict[str, numpy.ndarray]], monotonic_values: Deque[Dict[str, Any]]
+    ) -> List[Dict[str, numpy.ndarray]]:
+        if not self._monotonic_data_keys:
+            return batch
+        # new dicts, as the input dicts might be shared with the dataset
+        return [{**data_dict, **monotonic_values.popleft()} for data_dict in batch]
 
     def __getitem__(self, index):
         raise Exception(f"{self.__class__.__name__}.__getitem__ is not supported")
@@ -488,8 +555,14 @@ def get_batching_iterable_dataset_from_config(
         max_seqs = config.typed_value("max_seqs", -1)
         packed_batch_size = config.typed_value("packed_batch_size", None)
         packed_batch_size = config.typed_value(f"packed_batch_size_{'train' if train else 'dev'}", packed_batch_size)
+        packed_batch_cost = config.typed_value("packed_batch_cost", None)
+        packed_batch_cost = config.typed_value(f"packed_batch_cost_{'train' if train else 'dev'}", packed_batch_cost)
         batches_dataset = BatchingIterDataPipe(
-            dataset, batch_size=batch_size, max_seqs=max_seqs, packed_batch_size=packed_batch_size
+            dataset,
+            batch_size=batch_size,
+            max_seqs=max_seqs,
+            packed_batch_size=packed_batch_size,
+            packed_batch_cost=packed_batch_cost,
         )
         return batches_dataset
 
@@ -732,6 +805,62 @@ def create_data_loader_from_batches(
         # User-defined
         **loader_opts,
     )
+
+
+def shutdown_data_loader(data_loader: Union[torch.utils.data.DataLoader, PinMemoryDataLoader]):
+    """
+    Stops the persistent workers of the DataLoader, which it otherwise keeps until it is freed,
+    and the pinning thread of a :class:`returnn.torch.data.pin_memory.PinMemoryDataLoader`.
+    Batches which the workers prefetched but which were not consumed are dropped.
+    Can be called multiple times. A later ``iter()`` starts new workers.
+
+    Without this, a DataLoader which is still alive at interpreter exit leaves its workers to the atexit cleanup
+    of :class:`returnn.util.multi_proc_non_daemonic_spawn.NonDaemonicSpawnProcess` (SIGINT):
+    the workers then do not cancel their result queue, and hang on the unread batches until the next signal.
+
+    :param data_loader: e.g. via :func:`create_data_loader_from_batches`.
+        Must not be iterated concurrently (e.g. by another thread).
+    """
+    if isinstance(data_loader, PinMemoryDataLoader):
+        data_loader.close()  # first: its thread uses the DataLoader iterator
+        data_loader = data_loader.data_loader
+        if not isinstance(data_loader, torch.utils.data.DataLoader):
+            return  # any other iterable, no workers
+    assert isinstance(data_loader, torch.utils.data.DataLoader), f"shutdown_data_loader: got {data_loader!r}"
+    # No public DataLoader API for this: it only keeps the iterator with persistent workers (else this is None).
+    # noinspection PyProtectedMember
+    data_iter = data_loader._iterator
+    if data_iter is None:
+        return
+    data_loader._iterator = None
+    # A worker which already left its loop (e.g. it got the SIGINT of Ctrl+C) ignores the shutdown signal,
+    # and at exit waits until its unread batches are written to the pipe. So drop them while it stops.
+    # Not with the Torch pin thread: it reads the pipe itself, and a second reader can leave it hanging.
+    stop_drain = threading.Event()
+    drain_thread = None
+    # noinspection PyProtectedMember
+    if not data_iter._pin_memory:
+        # noinspection PyProtectedMember,PyUnresolvedReferences
+        drain_thread = threading.Thread(
+            target=_drain_conn, args=(data_iter._worker_result_queue._reader, stop_drain), daemon=True
+        )
+        drain_thread.start()
+    try:
+        # noinspection PyProtectedMember,PyUnresolvedReferences
+        data_iter._shutdown_workers()  # only the multiprocessing iterator has it, the one with persistent workers
+    finally:
+        if drain_thread is not None:
+            stop_drain.set()
+            drain_thread.join()
+
+
+def _drain_conn(conn, stop_event: threading.Event):
+    # Raw bytes, not unpickled: no shared memory tensors rebuilt from the stopping workers.
+    # Not per message (recv_bytes): that blocks on the partial message of a killed worker.
+    fd = conn.fileno()
+    while not stop_event.is_set():
+        if conn.poll(0.01) and not os.read(fd, 65536):
+            return  # end of the pipe, no writer left
 
 
 class _DataLoaderWorkerInitFunc:

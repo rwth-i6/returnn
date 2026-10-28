@@ -1031,6 +1031,35 @@ def test_scatter_argmax():
         np.testing.assert_array_equal(out_ref, out_comp)
 
 
+def test_scatter_argmax_via_scatter_mode_without_fill_value():
+    time_dim = Dim(Tensor("time", [batch_dim], dtype="int32"))
+    extern_data = TensorDict(
+        {
+            "data": Tensor("data", [batch_dim, time_dim], dtype="float32"),
+            "mask": Tensor("mask", [batch_dim, time_dim], dtype="bool"),
+        }
+    )
+
+    def _forward_step(*, extern_data: TensorDict, **_kwargs):
+        data = extern_data["data"]
+        mask = extern_data["mask"]
+        indices = rf.cumsum(rf.cast(mask, "int32"), spatial_dim=time_dim)
+        out_seq_lens = rf.reduce_max(indices, axis=time_dim) + 1
+        out_spatial_dim = Dim(out_seq_lens)
+        direct = rf.scatter_argmax(data, indices=indices, indices_dim=time_dim, out_dim=out_spatial_dim)
+        direct.mark_as_output("direct", shape=(batch_dim, out_spatial_dim))
+        direct_none = rf.scatter_argmax(
+            data, indices=indices, indices_dim=time_dim, invalid_idx=None, out_dim=out_spatial_dim
+        )
+        direct_none.mark_as_output("direct_none", shape=(batch_dim, out_spatial_dim))
+        out = rf.scatter(data, indices=indices, indices_dim=time_dim, mode="argmax", out_dim=out_spatial_dim)
+        out.mark_as_default_output(shape=(batch_dim, out_spatial_dim))
+
+    res = run_model(extern_data, lambda **_: rf.Module(), _forward_step, test_tensorflow=False)
+    np.testing.assert_array_equal(res["direct"].raw_tensor, res["output"].raw_tensor)
+    np.testing.assert_array_equal(res["direct"].raw_tensor, res["direct_none"].raw_tensor)
+
+
 def test_slice():
     time_dim = Dim(Tensor("time", [batch_dim], dtype="int32"))
     in_dim = Dim(7, name="in")
@@ -1158,6 +1187,72 @@ def test_slice_start_zero_tensor():
     data_: Tensor = res["data"]
     out_: Tensor = res["output"]
     np.testing.assert_array_equal(data_.raw_tensor, out_.raw_tensor)
+
+
+def _slice_update_case(*, requires_grad: bool):
+    import torch
+
+    rf.select_backend_torch()
+    batch_dim_ = Dim(2, name="batch")
+    time_dim = Dim(4, name="time")
+    feat_dim = Dim(3, name="feat")
+    target = Tensor("target", dims=[batch_dim_, time_dim, feat_dim], dtype="float32")
+    target.raw_tensor = torch.zeros(2, 4, 3, requires_grad=requires_grad)
+    # the value in another dim order than the target
+    value = Tensor("value", dims=[feat_dim, batch_dim_], dtype="float32")
+    value.raw_tensor = torch.arange(6, dtype=torch.float32).reshape(3, 2)
+    start = Tensor("start", dims=(), dtype="int32", raw_tensor=torch.tensor(2, dtype=torch.int32))
+    out = rf.slice_update(target, value, axis=time_dim, start=start)
+    expected = torch.zeros(2, 4, 3)
+    expected[:, 2] = value.raw_tensor.T
+    torch.testing.assert_close(out.copy_compatible_to_dims_raw([batch_dim_, time_dim, feat_dim]), expected)
+    return target, out
+
+
+def test_slice_update_torch_in_place():
+    # a decoder writes one frame per step into its cache buffer, without copying the buffer
+    target, out = _slice_update_case(requires_grad=False)
+    assert out.raw_tensor.data_ptr() == target.raw_tensor.data_ptr()
+
+
+def test_slice_update_torch_autograd():
+    # where autograd records the write, the target keeps its values and the gradient reaches it
+    target, out = _slice_update_case(requires_grad=True)
+    assert not target.raw_tensor.any()
+    out.raw_tensor.sum().backward()
+    assert target.raw_tensor.grad[:, 2].eq(0).all() and target.raw_tensor.grad[:, [0, 1, 3]].eq(1).all()
+
+
+def test_slice_update_torch_start_per_entry():
+    # one position per batch entry or a scalar one, the last position of the axis included;
+    # a position beyond the axis must fail, not write nothing
+    import torch
+
+    rf.select_backend_torch()
+    batch = Dim(3, name="batch")
+    time_dim = Dim(4, name="time")
+    feat = Dim(2, name="feat")
+    value = Tensor("value", [batch, feat], dtype="float32", raw_tensor=torch.arange(1.0, 7.0).view(3, 2))
+    for starts in ([0, 3, 1], 3):
+        if isinstance(starts, int):
+            start = rf.constant(starts, dims=(), dtype="int32", device="cpu")
+            starts = [starts] * 3
+        else:
+            start = Tensor("start", [batch], dtype="int32", raw_tensor=torch.tensor(starts, dtype=torch.int32))
+        target = rf.zeros([batch, time_dim, feat], device="cpu")
+        out = rf.slice_update(target, value, axis=time_dim, start=start)
+        expected = torch.zeros(3, 4, 2)
+        for b, s in enumerate(starts):
+            expected[b, s] = value.raw_tensor[b]
+        torch.testing.assert_close(out.copy_transpose([batch, time_dim, feat]).raw_tensor, expected)
+    target = rf.zeros([batch, time_dim, feat], device="cpu")
+    start = Tensor("start", [batch], dtype="int32", raw_tensor=torch.tensor([0, 4, 1], dtype=torch.int32))
+    try:
+        rf.slice_update(target, value, axis=time_dim, start=start)
+    except (IndexError, RuntimeError) as exc:
+        print("expected error:", exc)
+    else:
+        raise AssertionError("slice_update beyond the axis did not fail")
 
 
 def test_shift_right():

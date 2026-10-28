@@ -427,6 +427,17 @@ def test_loss_normalized():
     run_model_torch_train(extern_data, lambda *, epoch, step: rf.Module(), _train_step)
 
 
+def test_loss_inv_norm_factor_cached():
+    from returnn.frontend.run_ctx import Loss
+
+    batch = Dim(2, name="batch")
+    loss = Loss(loss=rf.ones([batch]), name="loss")
+    assert loss.get_inv_norm_factor() == 2
+    # like the bound sizes put back after a dynamic warmup step under graph capture
+    batch.size = 8
+    assert loss.get_inv_norm_factor() == 2
+
+
 def test_loss_normalization():
     time_dim = Dim(Tensor("time", [batch_dim], dtype="int32"))
     in_dim = Dim(7, name="in")
@@ -583,6 +594,9 @@ def test_weight_noise():
     assert set(params.keys()) == {"weight", "bias"}
     assert params["weight"] is orig_weight
     assert params["bias"] is orig_bias
+    # the noise is drawn on the device of the param, not the default device
+    with rf.set_default_device_ctx("meta"):
+        assert mod.weight.device == orig_weight.device, mod.weight.device
 
     class _Model(rf.Module):
         def __init__(self):
@@ -1191,6 +1205,62 @@ def test_cache_dim_remap_identity():
     got_derived, got_batch = hit
     assert got_derived is derived_dim
     assert got_batch is batch_dim
+
+
+def test_cache_tensor_key_by_raw_tensor():
+    """
+    A Tensor key matches by its raw tensor plus its dims (like Dim keys), sparse dim and feature axis,
+    so a new Tensor wrapping the same raw tensor hits,
+    and the entry lives as long as the raw tensor, not as long as the Tensor.
+    """
+    import gc
+    import weakref
+    import torch
+    from returnn.frontend._cache import Cache
+
+    b_dim = Dim(2, name="b")
+    t_dim = Dim(Tensor("t_lens", [b_dim], dtype="int32", raw_tensor=torch.tensor([3, 2], dtype=torch.int32)), name="t")
+    raw = torch.zeros(2, 3)
+    cache = Cache(max_size=4)
+
+    def _key(raw_: torch.Tensor, dims) -> tuple:
+        return "test_cache_tensor_key_by_raw_tensor", Tensor("x", dims=dims, dtype="float32", raw_tensor=raw_)
+
+    cache.set(_key(raw, [b_dim, t_dim]), t_dim)
+    gc.collect()  # the Tensor of the key is gone, the entry stays
+    assert cache.get(_key(raw, [b_dim, t_dim])) is t_dim
+    # other dim with the same sizes: hit, the output is mapped to the queried dim
+    t2_dim = Dim(Tensor("t2_lens", [b_dim], dtype="int32", raw_tensor=torch.tensor([3, 2], dtype=torch.int32)))
+    assert cache.get(_key(raw, [b_dim, t2_dim])) is t2_dim
+    # other dim with other sizes: miss
+    t3_dim = Dim(Tensor("t3_lens", [b_dim], dtype="int32", raw_tensor=torch.tensor([3, 1], dtype=torch.int32)))
+    assert cache.get(_key(raw, [b_dim, t3_dim])) is None
+    # other raw tensor, same values: miss
+    assert cache.get(_key(raw.clone(), [b_dim, t_dim])) is None
+    # the cache does not keep the raw tensor alive, and its entry goes with it
+    raw_ref = weakref.ref(raw)
+    del raw
+    gc.collect()
+    assert raw_ref() is None
+    # noinspection PyProtectedMember
+    assert cache._lru_cache.cache_info().currsize == 0
+
+    # sparse dim and feature axis are part of the key as well
+    labels_raw = torch.zeros(2, 3, dtype=torch.int32)
+
+    def _labels_key(sparse_dim: Dim) -> tuple:
+        labels = Tensor("labels", dims=[b_dim, t_dim], dtype="int32", sparse_dim=sparse_dim, raw_tensor=labels_raw)
+        return "test_cache_tensor_key_by_raw_tensor", labels
+
+    cache.set(_labels_key(Dim(5, name="vocab")), 1)
+    assert cache.get(_labels_key(Dim(5, name="vocab2"))) == 1
+    assert cache.get(_labels_key(Dim(7, name="vocab3"))) is None
+    feat_raw = torch.zeros(2, 3)
+    feat_dim = Dim(3, name="feat")
+    x = Tensor("x", [b_dim, feat_dim], "float32", raw_tensor=feat_raw)
+    cache.set(("test_cache_tensor_key_by_raw_tensor", x), 2)
+    x = Tensor("x", [b_dim, feat_dim], "float32", feature_dim=b_dim, raw_tensor=feat_raw)
+    assert cache.get(("test_cache_tensor_key_by_raw_tensor", x)) is None
 
 
 def test_dim_bounded_by_capacity():

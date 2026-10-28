@@ -321,7 +321,9 @@ class PostprocessingDataset(CachedDataset2):
     def get_current_seq_order(self):
         """:return: current seq order of wrapped dataset, if map_seq_stream is not used"""
         if self._map_seq_stream is not None:
-            raise Exception(f"{self}: get_current_seq_order is not allowed when map_seq_stream is set.")
+            raise util.OptionalNotImplementedError(
+                f"{self}: get_current_seq_order is not allowed when map_seq_stream is set."
+            )
         assert self._dataset is not None
         return self._dataset.get_current_seq_order()
 
@@ -364,6 +366,11 @@ class PostprocessingDataset(CachedDataset2):
         """:return: whether this dataset supports sharding"""
         assert self._dataset is not None
         return self._dataset.supports_sharding()
+
+    def set_sharding(self, *, num_shards: int, shard_index: int):
+        """set sharding, on the wrapped dataset"""
+        super().set_sharding(num_shards=num_shards, shard_index=shard_index)
+        self._dataset.set_sharding(num_shards=num_shards, shard_index=shard_index)
 
     def finish_epoch(self, *, free_resources=False):
         """finish_epoch"""

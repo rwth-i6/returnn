@@ -28,9 +28,10 @@ References:
 from __future__ import annotations
 
 import io
+import multiprocessing
 import pickle
 import time
-from typing import Optional, Callable
+from typing import Optional, Callable, List
 import os
 import signal
 import atexit
@@ -90,6 +91,14 @@ class NonDaemonicSpawnProcess(SpawnProcess):
         """kill"""
         super().kill()
         self._close_cleanup()
+
+    def run(self):
+        """run the target, then the hooks of :func:`register_exit_hook`"""
+        try:
+            super().run()
+        finally:
+            while _exit_hooks:
+                _exit_hooks.pop()()
 
     def join(self, timeout=None):
         """join"""
@@ -207,6 +216,24 @@ class NonDaemonicSpawnContext(BaseContext):
         if self.process_pre_init_func:
             proc.pre_init_func = self.process_pre_init_func
         return proc
+
+
+def register_exit_hook(func: Callable[[], None]):
+    """
+    Registers a function to be called when the target of the current :class:`NonDaemonicSpawnProcess` has finished
+    (returned or raised), before the multiprocessing exit cleanup,
+    which signals all child procs still alive (see :func:`NonDaemonicSpawnProcess.join`).
+    So this is the place to stop and join own child procs in an orderly way.
+    The hooks are called in reverse order of registration.
+
+    :param func: called without arguments
+    """
+    proc = multiprocessing.current_process()
+    assert isinstance(proc, NonDaemonicSpawnProcess), f"register_exit_hook: not in a NonDaemonicSpawnProcess: {proc}"
+    _exit_hooks.append(func)
+
+
+_exit_hooks: List[Callable[[], None]] = []
 
 
 class _AtExitCleanupProcess:

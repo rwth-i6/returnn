@@ -68,11 +68,13 @@ Import this module explicitly to activate the dispatch registration.
 """
 
 from __future__ import annotations
-from typing import Any, Optional, Union, Sequence, Set, Tuple, Dict
+from typing import Any, Optional, Union, Sequence, Set, Tuple, Dict, List
 import math
+import numpy
 
 from returnn.tensor import Tensor, Dim
 import returnn.frontend as rf
+from .types import RawTensorTypes
 from ._backend import Backend, register_backend_by_tensor_type, global_backend
 from ._cache import Cache
 
@@ -158,6 +160,17 @@ def _device_lens(raw: PackedRawTensor) -> Optional[Tensor]:
     return lens
 
 
+def _seqs_over_raw_width(starts: Tensor, seqs_dim: Dim) -> Tuple[Tensor, Dim]:
+    """
+    :param starts: [seqs_dim], per-seq values of the buffer
+    :param seqs_dim: the seqs dim, maybe dynamic, e.g. a batch dim with padding seqs up to its capacity
+    :return: starts over a static dim of the raw width, i.e. one entry for every seq slot of the buffer
+    """
+    seqs_static = Dim(int(starts.raw_tensor.shape[0]), name="seqs_static")
+    starts, _ = rf.replace_dim(starts, in_dim=seqs_dim, out_dim=seqs_static)
+    return starts, seqs_static
+
+
 def _dev_seq_local(template: PackedRawTensor) -> Tuple[Tensor, Tensor]:
     """
     Device-lens regime (see :func:`_device_lens`): for every buffer frame,
@@ -183,9 +196,8 @@ def _dev_seq_local(template: PackedRawTensor) -> Tuple[Tensor, Tensor]:
         seq.sparse_dim = seqs_dim
         return seq, rows
     # search_sorted refuses a dynamic axis; here the buffer is sorted over its full raw width
-    # (junk slots repeat the cumsum total), so re-tag it as a static dim of that width
-    seqs_static = Dim(int(starts_rf.raw_tensor.shape[0]), name="seqs_static")
-    starts_static, _ = rf.replace_dim(starts_rf, in_dim=seqs_dim, out_dim=seqs_static)
+    # (junk slots repeat the cumsum total)
+    starts_static, seqs_static = _seqs_over_raw_width(starts_rf, seqs_dim)
     seq = rf.search_sorted(starts_static, rows, axis=seqs_static, side="right") - 1
     seq.sparse_dim = seqs_dim
     local = rows - rf.gather(starts_rf, indices=seq, axis=seqs_dim)
@@ -311,7 +323,7 @@ class PackedRawTensor:
         hit = _layout_cache.get(key)
         if hit is not None:
             return hit
-        starts, seqs_dim = self.seq_starts()
+        starts, seqs_dim = self.seq_starts(device=device)
         if _device_lens(self) is not None:
             # the REAL content total (device scalar), NOT the bound.
             lens = self.orig_dims[-1].get_dyn_size_ext_for_device(self.inner.device)
@@ -319,15 +331,17 @@ class PackedRawTensor:
         else:
             total = self.packed_dim.get_dim_value_tensor()
         if isinstance(total, Tensor):
-            total = rf.cast(total, starts.dtype)
+            # the starts follow the seq lens (host side under the engine), the total follows the buffer
+            # (a re-laid-out packing sizes its dim on the data device): bring both to one device
+            total = rf.copy_to_device(rf.cast(total, starts.dtype), starts.device)
         else:
             # a static packed dim (e.g. built by the data pipeline) yields a python int, not a tensor
             total = rf.convert_to_tensor(total, dims=(), dtype=starts.dtype, device=starts.device)
+        # one offset per seq slot of the buffer: a concat along a dynamic seqs dim would put the total after its size
+        starts, seqs_dim = _seqs_over_raw_width(starts, seqs_dim)
         end_dim = Dim(1, name="cu_seqlens_end")
         cu, cu_dim = rf.concat((starts, seqs_dim), (rf.expand_dim(total, dim=end_dim), end_dim))
         cu = rf.cast(cu, "int32")
-        if device:
-            cu = rf.copy_to_device(cu, device)
         _layout_cache.set(key, (cu, cu_dim))
         return cu, cu_dim
 
@@ -402,6 +416,63 @@ def _unpack_if_packed(x):
     if isinstance(x, Tensor) and isinstance(x.raw_tensor, PackedRawTensor):
         return unpack(x)
     return x
+
+
+class _PackedStorage:
+    """
+    The backend-specific part of the :class:`TensorLayout` of a packed tensor:
+    its packing, and the layout of the packed data
+    """
+
+    def __init__(self, raw: PackedRawTensor):
+        self.packed_dim = raw.packed_dim
+        self.orig_dims = raw.orig_dims
+        self.gap = raw.gap
+        self.align = raw.align
+        self.layout_lens = raw.layout_lens
+        self.content_bound = raw.content_bound
+        self.inner = rf.get_tensor_layout(raw.inner)
+
+    def __repr__(self):
+        return f"_PackedStorage({self.orig_dims} -> {self.packed_dim}, gap={self.gap}, align={self.align})"
+
+    def _key(self) -> Tuple[Any, ...]:
+        # the packing as in PackedRawTensor.same_packing (layout lens by identity), and the layout of the packed data
+        return self.packed_dim, self.orig_dims, self.gap, self.align, id(self.layout_lens), self.inner
+
+    def __eq__(self, other):
+        if isinstance(other, _PackedStorage):
+            return self._key() == other._key()
+        return False
+
+    def __hash__(self):
+        return hash(self._key())
+
+    def storage_dims(self, dims: Sequence[Dim]) -> Optional[List[Dim]]:
+        """
+        :return: storage dims of a new tensor over ``dims`` with this packing,
+            or None if ``dims`` do not cover the packed dims (then it is plain)
+        """
+        if not set(self.orig_dims).issubset(dims):
+            return None
+        return [self.packed_dim] + [d for d in dims if d not in self.orig_dims]
+
+    def rewrap(self, inner_out: Tensor, *, name: str) -> Tensor:
+        """
+        :param inner_out: over the packed dim
+        :param name: of the result
+        :return: tensor with this packing over ``inner_out``
+        """
+        helper = PackedRawTensor(
+            inner=inner_out,
+            packed_dim=self.packed_dim,
+            orig_dims=self.orig_dims,
+            gap=self.gap,
+            align=self.align,
+            layout_lens=self.layout_lens,
+            content_bound=self.content_bound,
+        )
+        return helper.rewrap(inner_out, name=name)
 
 
 _warned_fallback_ops: Set[str] = set()
@@ -540,8 +611,11 @@ def _add_dim_with_size_deps(dims: Set[Dim], d: Dim):
         dims.update(d.dyn_size_ext.dims)
 
 
-def _collect_referenced_dims(*values) -> Set[Dim]:
+def _collect_referenced_dims(*values, tensors: bool = True) -> Set[Dim]:
     """
+    :param values: the call args
+    :param tensors: whether the dims of the non-packed Tensor args count as well.
+        False gives only the dims the call names itself, i.e. the dims the op acts along.
     :return: all Dims referenced by the given call args:
         explicit Dim args, and the dims of all non-packed Tensor args
         (packed Tensor args are excluded -- their packed dims are only storage, not a reference).
@@ -554,13 +628,13 @@ def _collect_referenced_dims(*values) -> Set[Dim]:
         if isinstance(v, Dim):
             _add_dim_with_size_deps(dims, v)
         elif isinstance(v, Tensor):
-            if not isinstance(v.raw_tensor, PackedRawTensor):
+            if tensors and not isinstance(v.raw_tensor, PackedRawTensor):
                 for d in v.dims:
                     _add_dim_with_size_deps(dims, d)
         elif isinstance(v, (list, tuple)):
-            dims.update(_collect_referenced_dims(*v))
+            dims.update(_collect_referenced_dims(*v, tensors=tensors))
         elif isinstance(v, dict):
-            dims.update(_collect_referenced_dims(*v.values()))
+            dims.update(_collect_referenced_dims(*v.values(), tensors=tensors))
     return dims
 
 
@@ -969,6 +1043,15 @@ def _frame_coords(template: PackedRawTensor, d: Dim) -> Tensor:
     return out
 
 
+def _has_junk_rows(template: PackedRawTensor) -> bool:
+    """
+    :param template: a packing
+    :return: whether the buffer can hold rows which belong to no sequence,
+        gap frames or the unused tail of a bound-sized buffer, exactly when :func:`_frame_mask` is not None
+    """
+    return template.has_gap_frames or template.packed_dim.dimension is not None or template.packed_dim.need_masking()
+
+
 def _frame_mask(template: PackedRawTensor) -> Optional[Tensor]:
     """
     :return: [packed_dim] (bool): True on sequence frames, False on gap frames.
@@ -982,7 +1065,7 @@ def _frame_mask(template: PackedRawTensor) -> Optional[Tensor]:
         so has_gap_frames cannot be folded into the dim either.
     """
     # static packed dim = upper-bound buffer with junk tail, which need_masking on the dim cannot see
-    if not template.has_gap_frames and template.packed_dim.dimension is None and not template.packed_dim.need_masking():
+    if not _has_junk_rows(template):
         return None
     dev_lens = _device_lens(template)
     if dev_lens is not None:
@@ -1011,6 +1094,12 @@ def _frame_mask(template: PackedRawTensor) -> Optional[Tensor]:
     hit = _layout_cache.get(key)
     if hit is not None:
         return hit
+    if len(template.orig_dims) == 1:
+        rows = rf.range_over_dim(template.packed_dim, device=template.inner.device)
+        n_content = template.orig_dims[0].get_size_tensor(device=template.inner.device)
+        out = rf.compare_bc(rows, "<", rf.cast(n_content, rows.dtype))
+        _layout_cache.set(key, out)
+        return out
     ones = rf.cast(rf.sequence_mask(list(template.orig_dims), device=template.inner.device), "int32")
     pos = _clamped_padded_positions(
         template.orig_dims,
@@ -1028,23 +1117,26 @@ def _frame_mask(template: PackedRawTensor) -> Optional[Tensor]:
     return out
 
 
-def _pack_like(x: Tensor, template: PackedRawTensor) -> Optional[Tensor]:
+def _pack_like(x: Tensor, template: PackedRawTensor) -> Tensor:
     """
     :param x: plain (non-packed) tensor over (some of) the packed dims
         (e.g. a seq mask over (batch, time), or a positional encoding over (time,) only)
     :param template: packing to follow
-    :return: inner (packed-storage) tensor for x with the template's packing, or None if not possible
+    :return: inner (packed-storage) tensor for x with the template's packing
     """
     in_dims = [d for d in template.orig_dims if d in x.dims]
     assert in_dims
     # noinspection PyProtectedMember
     raw_shape = x._raw_backend.get_shape_tuple_raw(x.raw_tensor)
     if any(isinstance(raw_shape[x.dims.index(d)], int) and raw_shape[x.dims.index(d)] == 0 for d in in_dims):
-        # Nothing to read, so no row of the packing is a sequence frame,
-        # but it can still have rows (gap frames, the tail of a bound-sized buffer), which a gather could not serve.
+        # no sequence frames, but the template can still have junk rows, which a gather from nothing cannot serve
         out_dims = [template.packed_dim if d == in_dims[0] else d for d in x.dims if d not in in_dims[1:]]
         feature_dim = x.feature_dim if x.feature_dim in out_dims else None
-        return rf.zeros(out_dims, dtype=x.dtype, sparse_dim=x.sparse_dim, feature_dim=feature_dim, device=x.device)
+        out = rf.zeros(out_dims, dtype=x.dtype, sparse_dim=x.sparse_dim, feature_dim=feature_dim, device=x.device)
+        if rf.is_float_dtype(x.dtype):
+            out = out + rf.reduce_sum(x, axis=in_dims, use_mask=False)  # zero, keeps the gradient path to x
+            out.feature_dim = feature_dim
+        return out
     # Gather via per-frame coordinates instead of broadcast + pack:
     # avoids materializing the full broadcast tensor
     # (e.g. a pos enc [time, feat] would blow up to [batch, time, feat] first).
@@ -1115,9 +1207,10 @@ def _segment_softmax(tensor: Tensor, *, axis: Dim, log: bool) -> Optional[Tensor
     inner = raw.inner
     other_packed = [d for d in raw.orig_dims if d != axis]
     if not other_packed:
-        if raw.has_gap_frames:
-            return None  # single segment incl. gap/pad frames; rare, fallback
-        lse = rf.reduce_logsumexp(inner, axis=raw.packed_dim, use_mask=False)
+        content = inner
+        if _has_junk_rows(raw):
+            content = rf.where(_frame_mask(raw), inner, float("-inf"))
+        lse = rf.reduce_logsumexp(content, axis=raw.packed_dim, use_mask=False)
         out_inner = inner - lse
     else:
         # gap frames (if any) go to the dump segment and only affect other gap frames
@@ -1172,7 +1265,7 @@ def _segment_index(template: PackedRawTensor, seg_dims: Sequence[Dim]) -> Tuple[
         coords = _frame_coords(template, d)
         seg = coords if seg is None else seg * d.get_dim_value_tensor() + coords
         merged = d if merged is None else merged * d
-    if template.has_gap_frames:
+    if _has_junk_rows(template):
         mask = _frame_mask(template)
         dump = merged.get_dim_value_tensor()
         if isinstance(dump, Tensor):
@@ -1205,7 +1298,15 @@ def _batch_norm_gapped(source: Tensor, kwargs) -> Optional[Tensor]:
     gamma, beta = kwargs.get("gamma"), kwargs.get("beta")
     epsilon, momentum, affine = kwargs.get("epsilon"), kwargs.get("momentum"), kwargs.get("affine")
     inner = raw.inner
-    if not isinstance(in_dim, Dim) or set(inner.dims) != {raw.packed_dim, in_dim}:
+    extra = [d for d in inner.dims if d not in (raw.packed_dim, in_dim)]
+    if (
+        not isinstance(in_dim, Dim)
+        or in_dim not in inner.dims
+        or raw.packed_dim not in inner.dims
+        or any(d.dimension is None for d in extra)
+        # an unpacked dim the seq lens depend on: the valid-frame count below would be per entry, not a scalar
+        or any(d in raw.orig_dims[-1].dyn_size_ext.dims for d in extra)
+    ):
         return None  # unusual layout, keep the generic path
     if raw.inner_backend.name != "torch":
         return None  # the in-place running-stat update below is raw torch
@@ -1222,11 +1323,17 @@ def _batch_norm_gapped(source: Tensor, kwargs) -> Optional[Tensor]:
         if n_dev is None:
             n_dev = rf.copy_to_device(n_t, inner.device)
             _layout_cache.set(n_key, n_dev)
-    n = rf.cast(n_dev, inner.dtype)
-    x0 = rf.where(mask, inner, 0.0)
-    mean = rf.reduce_sum(x0, axis=raw.packed_dim, use_mask=False) / n
+    if inner.dtype not in ("float32", "float64"):
+        # the statistics sum in float32, a half dtype overflows the count and the squared sums
+        inner = rf.cast(inner, "float32")
+    # the statistics run over the valid frames and every static axis next to the packed one
+    n_extra = math.prod(d.dimension for d in extra)
+    stat_axes = [raw.packed_dim] + extra
+    n = rf.cast(n_dev, inner.dtype) * n_extra
+    inner = rf.where(mask, inner, 0.0)
+    mean = rf.reduce_sum(inner, axis=stat_axes, use_mask=False) / n
     diff = rf.where(mask, inner - mean, 0.0)
-    var = rf.reduce_sum(diff * diff, axis=raw.packed_dim, use_mask=False) / n
+    var = rf.reduce_sum(diff * diff, axis=stat_axes, use_mask=False) / n
     if running_mean is not None:
         import torch
 
@@ -1234,18 +1341,19 @@ def _batch_norm_gapped(source: Tensor, kwargs) -> Optional[Tensor]:
             rm, rv = running_mean.raw_tensor, running_variance.raw_tensor
             if dev_lens is not None:
                 # fully on device (no float(n) host read -> no sync, capture-safe)
-                n_f_t = n_dev.raw_tensor.float()
+                n_f_t = n_dev.raw_tensor.float() * n_extra
                 unbiased_t = n_f_t / (n_f_t - 1.0).clamp(min=1.0)
                 rm.mul_(1.0 - momentum).add_(mean.raw_tensor.detach().to(rm.dtype) * momentum)
                 rv.mul_(1.0 - momentum).add_(var.raw_tensor.detach().to(rv.dtype) * unbiased_t.to(rv.dtype) * momentum)
             else:
-                n_f = float(n_t.raw_tensor)
+                n_f = float(n_t.raw_tensor) * n_extra
                 unbiased = n_f / max(n_f - 1.0, 1.0)
                 rm.mul_(1.0 - momentum).add_(mean.raw_tensor.detach().to(rm.dtype), alpha=momentum)
                 rv.mul_(1.0 - momentum).add_(var.raw_tensor.detach().to(rv.dtype) * unbiased, alpha=momentum)
     out_inner = (inner - mean) / rf.sqrt(var + epsilon)
     if affine:
         out_inner = out_inner * gamma + beta
+    out_inner = rf.cast(out_inner, raw.inner.dtype)
     out_inner.feature_dim = in_dim
     return raw.rewrap(out_inner, name="batch_norm")
 
@@ -1254,10 +1362,10 @@ def _make_dim_aware_op(name: str):
     """
     Generic wrapper for backend ops without a dedicated packed implementation.
 
-    If the call does not reference any of the packed dims
-    (checked over explicit Dim args and the dims of all other Tensor args),
+    If the call does not name any of the packed dims (checked over the explicit Dim args),
     the op cannot see the packed structure,
-    so it runs directly on the packed data (packed args replaced by their inner tensors)
+    so it runs directly on the packed data (packed args replaced by their inner tensors,
+    plain Tensor args over all the packed dims packed alike)
     and the results are rewrapped.
     Otherwise: unpack fallback (with a one-time warning).
     """
@@ -1306,6 +1414,51 @@ def _conform_packing(x, target_raw: PackedRawTensor):
     return x
 
 
+def _pack_plain_like(x, target_raw: PackedRawTensor, *, all_dims: bool = False):
+    """
+    Counterpart of :func:`_conform_packing` for a plain arg:
+    a plain tensor over the packed dims is put into target_raw's packing (see :func:`_pack_like`).
+    Anything else (packed, a plain tensor not over the packed dims, a scalar) is returned unchanged.
+    Only values at sequence frames are read, so for any op which treats the packed dims as batch dims,
+    this gives the same result at sequence frames as the padded op.
+
+    :param x: call arg. Lists and tuples are handled elementwise.
+    :param target_raw: packing to follow
+    :param all_dims: only pack a tensor over all the packed dims.
+        One over some of them (e.g. per seq) gets expanded to every frame,
+        which only an op whose result has that size anyway should do (elementwise ops, concat).
+    """
+    if isinstance(x, (list, tuple)):
+        return type(x)(_pack_plain_like(e, target_raw, all_dims=all_dims) for e in x)
+    if isinstance(x, Tensor) and not is_packed(x):
+        common = set(x.dims) & set(target_raw.orig_dims)
+        if common and (not all_dims or len(common) == len(target_raw.orig_dims)):
+            return target_raw.rewrap(_pack_like(x, target_raw), name=x.name)
+    return x
+
+
+def _elementwise_inner_operands(operands: Sequence[Any]) -> Tuple[PackedRawTensor, Optional[List[Any]]]:
+    """
+    For an elementwise op (combine, compare, where) with at least one packed operand:
+    packed operands are conformed to the first one's packing,
+    plain operands over the packed dims are packed alike,
+    all others (scalars, plain tensors broadcasting over the frames) are kept.
+
+    :return: packing of the first packed operand, and the operands to run the op on its packed data,
+        or None for those if the packed operands are over different sequences
+    """
+    raw0 = next(x.raw_tensor for x in operands if isinstance(x, Tensor) and is_packed(x))
+    inner_operands = []
+    for x in operands:
+        x = _pack_plain_like(_conform_packing(x, raw0), raw0)
+        if isinstance(x, Tensor) and is_packed(x):
+            if not raw0.same_packing(x.raw_tensor):
+                return raw0, None
+            x = x.raw_tensor.inner
+        inner_operands.append(x)
+    return raw0, inner_operands
+
+
 def _dim_aware_call(name: str, args, kwargs):
     """see :func:`_make_dim_aware_op`"""
     all_values = list(args) + list(kwargs.values())
@@ -1322,14 +1475,20 @@ def _dim_aware_call(name: str, args, kwargs):
     # so multi-arg ops (combine, compare, where, concat, ...) stay packed instead of unpacking.
     args = [_conform_packing(x, raw0) for x in args]
     kwargs = {k: _conform_packing(v, raw0) for k, v in kwargs.items()}
+    packed_dims = set(raw0.orig_dims) | {raw0.packed_dim}
+    if not _collect_referenced_dims(*args, *kwargs.values(), tensors=False) & packed_dims:
+        # no packed dim named (an axis, an out dim), so the op takes the packed dims as batch dims:
+        # a plain tensor arg over them is then just data over frames, and can be packed alike.
+        args = [_pack_plain_like(x, raw0, all_dims=True) for x in args]
+        kwargs = {k: _pack_plain_like(v, raw0, all_dims=True) for k, v in kwargs.items()}
     all_values = list(args) + list(kwargs.values())
     packed_args = [x for x in _flatten(all_values) if isinstance(x, Tensor) and is_packed(x)]
     referenced = _collect_referenced_dims(*all_values)
     if all(raw0.same_packing(x.raw_tensor) for x in packed_args[1:]):
-        overlap = referenced & (set(raw0.orig_dims) | {raw0.packed_dim})
+        overlap = referenced & packed_dims
         if overlap:
             _warn_fallback_once(name, f"references packed dims {sorted(overlap, key=lambda d: d.name or '')}")
-        elif name in _DENSE_ONLY_INNER_OPS and raw0.has_gap_frames and _stats_active(name, kwargs):
+        elif name in _DENSE_ONLY_INNER_OPS and _has_junk_rows(raw0) and _stats_active(name, kwargs):
             # e.g. batch_norm: its statistics implicitly reduce over the packed dim,
             # and gap frames would pollute them.
             # Re-layout to dense, run there, restore the layout:
@@ -1341,7 +1500,11 @@ def _dim_aware_call(name: str, args, kwargs):
                 out = _batch_norm_gapped(src, kwargs)
                 if out is not None:
                     return out
-            if src is not None and (any(x is src for x in args) or any(v is src for v in kwargs.values())):
+            if (
+                src is not None
+                and raw0.has_gap_frames
+                and (any(x is src for x in args) or any(v is src for v in kwargs.values()))
+            ):
                 _warn_fallback_once(
                     name,
                     "implicitly reduces over the packed dim, gapped layout",
@@ -2902,6 +3065,86 @@ class PackedBackend(Backend[PackedRawTensor]):
         """:return: device of the packed data"""
         return _raw(x).inner.device
 
+    @classmethod
+    def get_tensor_layout(cls, x: Tensor) -> rf.TensorLayout:
+        """:return: layout of ``x``: its packing, and the layout of its packed data"""
+        storage = _PackedStorage(_raw(x))
+        return rf.TensorLayout(backend=cls, device=storage.inner.device, storage=storage)
+
+    @staticmethod
+    def full(
+        dims: Sequence[Dim],
+        fill_value: Union[RawTensorTypes, Tensor],
+        *,
+        dtype: str,
+        device: Optional[str] = None,
+        sparse_dim: Optional[Dim] = None,
+        feature_dim: Optional[Dim] = None,
+        like: Optional[rf.TensorLayout] = None,
+    ) -> Tensor:
+        """full -- packed like ``like`` if ``dims`` cover its packed dims, otherwise plain"""
+        storage = like.storage
+        assert isinstance(storage, _PackedStorage), f"packed full: {like} is not a packed layout"
+        storage_dims = storage.storage_dims(dims)
+        out = rf.full(
+            dims=dims if storage_dims is None else storage_dims,
+            fill_value=fill_value,
+            dtype=dtype,
+            device=device,
+            sparse_dim=sparse_dim,
+            feature_dim=feature_dim,
+            like=storage.inner,
+        )
+        return out if storage_dims is None else storage.rewrap(out, name="full")
+
+    @staticmethod
+    def random(
+        *,
+        dims: Sequence[Dim],
+        dtype: str,
+        device: Optional[str] = None,
+        sparse_dim: Optional[Dim] = None,
+        feature_dim: Optional[Dim] = None,
+        distribution: str,
+        mean: Optional[Union[int, float, Tensor]] = None,
+        stddev: Optional[Union[int, float, Tensor]] = None,
+        bound: Optional[Union[int, float, Tensor]] = None,
+        minval: Optional[Union[int, float, Tensor]] = None,
+        maxval: Optional[Union[int, float, Tensor]] = None,
+        seed: Optional[Union[int, Sequence[int], numpy.ndarray]] = None,
+        algorithm: Optional[str] = None,
+        explicit_state: Optional[Tensor] = None,
+        auto_update_state: Optional[bool] = None,
+        static: Optional[bool] = None,
+        out: Optional[Tensor] = None,
+        like: Optional[rf.TensorLayout] = None,
+    ) -> Tensor:
+        """random -- drawn in the packed storage of ``like`` if ``dims`` cover its packed dims, otherwise plain"""
+        assert out is None, "packed random: out not supported"
+        storage = like.storage
+        assert isinstance(storage, _PackedStorage), f"packed random: {like} is not a packed layout"
+        storage_dims = storage.storage_dims(dims)
+        res = rf.random(
+            dims=dims if storage_dims is None else storage_dims,
+            dtype=dtype,
+            device=device,
+            sparse_dim=sparse_dim,
+            feature_dim=feature_dim,
+            distribution=distribution,
+            mean=mean,
+            stddev=stddev,
+            bound=bound,
+            minval=minval,
+            maxval=maxval,
+            seed=seed,
+            algorithm=algorithm,
+            explicit_state=explicit_state,
+            auto_update_state=auto_update_state,
+            static=static,
+            like=storage.inner,
+        )
+        return res if storage_dims is None else storage.rewrap(res, name=f"random_{distribution}")
+
     @staticmethod
     def replace_dim(source: Tensor, *, in_dim: Dim, out_dim: Dim) -> Tensor:
         """
@@ -3090,38 +3333,17 @@ class PackedBackend(Backend[PackedRawTensor]):
         dim_order: Optional[Sequence[Dim]] = None,
     ) -> Tensor:
         """
-        binary op. fast paths:
-        both packed with the same packing -> on packed data;
-        packed vs plain operand not touching the packed dims (e.g. bias, scale) -> broadcast on packed data.
-        Otherwise: unpack fallback.
+        binary op, on the packed data (see :func:`_elementwise_inner_operands`),
+        e.g. packed with packed, with a bias or scale, or with an additive mask over (batch, time).
+        Packed operands over different sequences: unpack fallback.
         """
-        a_packed = isinstance(a, Tensor) and isinstance(a.raw_tensor, PackedRawTensor)
-        b_packed = isinstance(b, Tensor) and isinstance(b.raw_tensor, PackedRawTensor)
-        if a_packed and b_packed:
-            a_raw = a.raw_tensor
-            b = _conform_packing(b, a_raw)  # same seqs, different layout -> conform to a's packing
-            b_raw = b.raw_tensor
-            if a_raw.same_packing(b_raw):
-                out = a_raw.rewrap(
-                    rf.combine(a_raw.inner, kind, b_raw.inner, allow_broadcast_all_sources=True), name=kind
-                )
-                _set_feature_dim_like_binop(out, a, b)
-                return out
-            _warn_fallback_once("combine", "packed operands over different sequences")
-        elif a_packed or b_packed:
-            packed_t, other = (a, b) if a_packed else (b, a)
-            packed_raw = packed_t.raw_tensor
-            if isinstance(other, Tensor) and set(other.dims) & set(packed_raw.orig_dims):
-                # operand over the packed dims (e.g. an additive mask over (batch, time)):
-                # pack it alike, then combine on packed data.
-                other = _pack_like(other, packed_raw)
-            if other is not None and not (isinstance(other, Tensor) and set(other.dims) & set(packed_raw.orig_dims)):
-                args = (packed_raw.inner, kind, other) if a_packed else (other, kind, packed_raw.inner)
-                out = packed_raw.rewrap(rf.combine(*args, allow_broadcast_all_sources=True), name=kind)
-                _set_feature_dim_like_binop(out, a, b)
-                return out
-            _warn_fallback_once("combine", "operand references packed dims and is not packable alike")
-        template = a.raw_tensor if a_packed else b.raw_tensor
+        template, inner_operands = _elementwise_inner_operands([a, b])
+        if inner_operands is not None:
+            a_, b_ = inner_operands
+            out = template.rewrap(rf.combine(a_, kind, b_, allow_broadcast_all_sources=True), name=kind)
+            _set_feature_dim_like_binop(out, a, b)
+            return out
+        _warn_fallback_once("combine", "packed operands over different sequences")
         opts = {}
         # note: the native tensor_combine does not accept None for these
         if allow_broadcast_all_sources is not None:
@@ -3129,6 +3351,40 @@ class PackedBackend(Backend[PackedRawTensor]):
         if dim_order is not None:
             opts["dim_order"] = dim_order
         out = rf.combine(_unpack_if_packed(a), kind, _unpack_if_packed(b), **opts)
+        return _repack_result(out, template)
+
+    @classmethod
+    def compare(
+        cls,
+        a: Union[Tensor, Any],
+        kind: str,
+        b: Union[Tensor, Any],
+        *,
+        allow_broadcast_all_sources: Optional[bool] = None,
+        dim_order: Optional[Sequence[Dim]] = None,
+    ) -> Tensor:
+        """compare, like :func:`combine`"""
+        if not any(isinstance(x, Tensor) and is_packed(x) for x in (a, b)):
+            # plain helper tensors while the packed backend is the globally selected one
+            return _dim_aware_call(
+                "compare",
+                (a, kind, b),
+                dict(allow_broadcast_all_sources=allow_broadcast_all_sources, dim_order=dim_order),
+            )
+        template, inner_operands = _elementwise_inner_operands([a, b])
+        if inner_operands is not None:
+            a_, b_ = inner_operands
+            out = template.rewrap(rf.compare(a_, kind, b_, allow_broadcast_all_sources=True), name=kind)
+            _set_feature_dim_like_binop(out, a, b)
+            return out
+        _warn_fallback_once("compare", "packed operands over different sequences")
+        opts = {}
+        # note: the native tensor_compare does not accept None for these
+        if allow_broadcast_all_sources is not None:
+            opts["allow_broadcast_all_sources"] = allow_broadcast_all_sources
+        if dim_order is not None:
+            opts["dim_order"] = dim_order
+        out = rf.compare(_unpack_if_packed(a), kind, _unpack_if_packed(b), **opts)
         return _repack_result(out, template)
 
     @staticmethod
@@ -3919,36 +4175,19 @@ class PackedBackend(Backend[PackedRawTensor]):
         allow_broadcast_all_sources: bool = False,
     ) -> Tensor:
         """
-        where -- on packed data if all Tensor operands can share the packing:
-        packed alike, plain operands not touching the packed dims,
-        or plain operands packable to the same packing
-        (e.g. a seq mask over (batch, time), as used for masking before conv).
+        where, on the packed data (see :func:`_elementwise_inner_operands`),
+        e.g. with a seq mask over (batch, time), as used for masking before conv.
+        Packed operands over different sequences: unpack fallback.
         """
-        operands = [cond, true_, false_]
-        packed_ops = [x for x in operands if isinstance(x, Tensor) and is_packed(x)]
-        assert packed_ops, "PackedBackend.where: no packed operand"
-        raw0 = packed_ops[0].raw_tensor
-        # conform other packed operands (same seqs, possibly a different layout) to raw0's packing.
-        operands = [_conform_packing(x, raw0) for x in operands]
-        cond, true_, false_ = operands
-        packed_ops = [x for x in operands if isinstance(x, Tensor) and is_packed(x)]
-        if all(raw0.same_packing(x.raw_tensor) for x in packed_ops[1:]):
-            inner_ops = []
-            for x in operands:
-                if isinstance(x, Tensor) and is_packed(x):
-                    inner_ops.append(x.raw_tensor.inner)
-                elif isinstance(x, Tensor) and set(x.dims) & set(raw0.orig_dims):
-                    x_ = _pack_like(x, raw0)
-                    if x_ is None:
-                        break
-                    inner_ops.append(x_)
-                else:
-                    inner_ops.append(x)
-            else:
-                out = raw0.rewrap(rf.where(*inner_ops, allow_broadcast_all_sources=True), name="where")
-                _set_feature_dim_like_binop(out, true_, false_)
-                return out
-        _warn_fallback_once("where", "operands not packable to a common packing")
+        assert any(isinstance(x, Tensor) and is_packed(x) for x in (cond, true_, false_)), (
+            "PackedBackend.where: no packed operand"
+        )
+        raw0, inner_operands = _elementwise_inner_operands([cond, true_, false_])
+        if inner_operands is not None:
+            out = raw0.rewrap(rf.where(*inner_operands, allow_broadcast_all_sources=True), name="where")
+            _set_feature_dim_like_binop(out, true_, false_)
+            return out
+        _warn_fallback_once("where", "packed operands over different sequences")
         out = rf.where(
             _unpack_if_packed(cond),
             _unpack_if_packed(true_),
@@ -4040,9 +4279,12 @@ class PackedBackend(Backend[PackedRawTensor]):
         The capacity must be matched too, not just the layout:
         under graph capture the logits buffer is bound-sized while the targets buffer can be exact,
         and the rewrap only relabels the dim -- it cannot resize the raw tensor.
-        Falls back if the axis is packed or the targets are not packed over the same sequences.
+        Plain targets over the packed dims are packed alike first.
+        Falls back if the axis is packed or the targets are over other sequences.
         """
         logits_raw = _raw(logits)
+        if not _dim_refs_packed(axis, logits_raw):
+            targets = _pack_plain_like(targets, logits_raw)
         targets_raw = targets.raw_tensor
         if (
             not _dim_refs_packed(axis, logits_raw)
@@ -4092,8 +4334,7 @@ class PackedBackend(Backend[PackedRawTensor]):
             return _dim_aware_call("concat", sources, kwargs)
         inner_sources = []
         for src, dim in sources:
-            if not is_packed(src) and set(src.dims) & (set(raw0.orig_dims) | {raw0.packed_dim}):
-                src = pack(src, dims=raw0.orig_dims, out_dim=raw0.packed_dim, gap=raw0.gap, align=raw0.align)
+            src = _pack_plain_like(src, raw0)
             if is_packed(src):
                 src = _conform_packing(src, raw0)
                 if not raw0.same_packing(src.raw_tensor):
@@ -4184,9 +4425,16 @@ class PackedBackend(Backend[PackedRawTensor]):
         Along the innermost packed dim the index is a position inside a sequence,
         so it only needs its sequence's start added to become a row in the flat buffer
         (this is what shifts like a successor or predecessor lookup do).
+        Packed indices either share the packing of the source, and the result keeps it,
+        or they are packed over another spatial dim of the same sequences, and the result takes theirs
+        (see :func:`_gather_into_indices_packing`).
         Anything else takes the generic dim-aware route.
         """
         kwargs = dict(indices=indices, axis=axis, clip_to_valid=clip_to_valid)
+        if not is_packed(source) and isinstance(indices, Tensor) and is_packed(indices):
+            out = _gather_plain_by_packed_indices(source, indices=indices, axis=axis, clip_to_valid=clip_to_valid)
+            if out is not None:
+                return out
         if not is_packed(source) or not isinstance(indices, Tensor):
             return _dim_aware_call("gather", (source,), kwargs)
         raw = _raw(source)
@@ -4195,7 +4443,9 @@ class PackedBackend(Backend[PackedRawTensor]):
                 # gather along a plain axis with per-frame indices (e.g. a position drawn per frame):
                 # elementwise on the inner buffer, the packing is untouched
                 if is_packed(indices):
-                    idx = _raw(_conform_packing(indices, raw)).inner
+                    idx_raw = _raw(_conform_packing(indices, raw))
+                    # indices packed over other dims have other rows
+                    idx = idx_raw.inner if raw.same_packing(idx_raw) else None
                 elif set(indices.dims) & set(raw.orig_dims):
                     idx = _pack_like(indices, raw)
                 else:
@@ -4215,12 +4465,19 @@ class PackedBackend(Backend[PackedRawTensor]):
             and _raw(indices).orig_dims[-1] != axis
         ):
             return _gather_into_index_packing(source, raw, indices=indices, clip_to_valid=clip_to_valid)
+        if is_packed(indices) and _raw(indices).orig_dims != raw.orig_dims:
+            # indices over another spatial dim have their own rows, which must not be read as rows of the source
+            out = _gather_into_indices_packing(source, raw, indices=indices, clip_to_valid=clip_to_valid)
+            if out is not None:
+                return out
+            return _dim_aware_call("gather", (source,), kwargs)
         if is_packed(indices):
-            idx = _raw(_conform_packing(indices, raw)).inner
+            idx_raw = _raw(_conform_packing(indices, raw))
+            if not raw.same_packing(idx_raw):
+                return _dim_aware_call("gather", (source,), kwargs)
+            idx = idx_raw.inner
         elif set(indices.dims).issubset(set(raw.orig_dims)):
             idx = _pack_like(indices, raw)
-            if idx is None:
-                return _dim_aware_call("gather", (source,), kwargs)
         else:
             out_spatial_dim = _gather_relayout_out_dim(indices, raw)
             if out_spatial_dim is None:
@@ -4234,14 +4491,7 @@ class PackedBackend(Backend[PackedRawTensor]):
         local = _frame_coords(raw, axis)
         idx = rf.cast(idx, local.dtype)
         if clip_to_valid:
-            seq = _frame_coords(raw, raw.orig_dims[0])
-            # in the traced regime the lens already live on the data's device,
-            # where copying them would be a sync
-            lens = _device_lens(raw)
-            if lens is None:
-                lens = rf.copy_to_device(raw.seq_lens, dev)
-            last = rf.cast(rf.gather(lens, indices=seq, axis=raw.orig_dims[0]), idx.dtype) - 1
-            idx = rf.clip_by_value(idx, rf.zeros_like(last), last)
+            idx = _clip_into_seqs(raw, idx, seq=_frame_coords(raw, raw.orig_dims[0]))
         # the sequence starts at this frame's own row minus its position within the sequence
         src = rows - local + idx
         src = rf.clip_by_value(src, 0, _last_row(raw.packed_dim, src.dtype))
@@ -4272,9 +4522,7 @@ class PackedBackend(Backend[PackedRawTensor]):
         kwargs = dict(indices=indices, indices_dim=indices_dim, mode=mode, fill_value=fill_value, out_dim=out_dim)
         if not is_packed(source) and is_packed(indices):
             # e.g. the ones which count the writes per position: a plain source follows the packing of the indices
-            idx_raw = _raw(indices)
-            if any(d in source.dims for d in idx_raw.orig_dims):
-                source = idx_raw.rewrap(_pack_like(source, idx_raw), name=source.name)
+            source = _pack_plain_like(source, _raw(indices))
         out = _scatter_relayout(source, **kwargs) if is_packed(source) else None
         if out is not None:
             return out
@@ -4490,9 +4738,7 @@ class PackedBackend(Backend[PackedRawTensor]):
         dev = in_raw.inner.device
 
         # durations, in this buffer's layout, with gap and junk frames contributing nothing
-        if not is_packed(repeats) and set(repeats.dims) & set(in_raw.orig_dims):
-            repeats = in_raw.rewrap(_pack_like(repeats, in_raw), name=repeats.name)
-        r_raw = _raw(_conform_packing(repeats, in_raw))
+        r_raw = _raw(_conform_packing(_pack_plain_like(repeats, in_raw), in_raw))
         r_inner = r_raw.inner
         r_mask = _frame_mask(r_raw)
         if r_mask is not None:
@@ -4685,6 +4931,27 @@ class PackedBackend(Backend[PackedRawTensor]):
         return _repack_result(rf.reduce(unpack(source), mode=mode, axis=axes, use_mask=use_mask), raw)
 
     @staticmethod
+    def num_elements_of_shape(
+        source: Tensor, dims: Sequence[Dim], *, use_mask: bool, device: Optional[str]
+    ) -> Union[int, Tensor]:
+        """
+        As :func:`reduce` covers it: no padding on the packed dims, whatever use_mask,
+        and no gap or unused bound frames.
+        """
+        if use_mask:
+            return rf.num_elements_of_shape(dims, use_mask=True, device=device)
+        raw = _raw(source)
+        # the unmasked count of the other dims is their full size, independent of the packed dims
+        n = rf.num_elements_of_shape([d for d in dims if d in raw.orig_dims], use_mask=True, device=device)
+        m = rf.num_elements_of_shape([d for d in dims if d not in raw.orig_dims], use_mask=False)
+        if isinstance(m, Tensor) and isinstance(n, Tensor):
+            # use_mask=False ignores the device, so bring it to n, which is on the requested device
+            m = rf.cast(rf.copy_to_device(m, n.device), n.dtype)
+        elif isinstance(m, Tensor) and device is not None:
+            m = rf.copy_to_device(m, device)
+        return n * m
+
+    @staticmethod
     def ctc_loss(
         *,
         logits: Tensor,
@@ -4784,7 +5051,6 @@ class PackedBackend(Backend[PackedRawTensor]):
 # packed data directly if the call does not reference the packed dims, otherwise unpack fallback.
 for _name in [
     "batch_norm",
-    "compare",
     "expand_dim",
     "flip_no_mask",
     "masked_scatter",
@@ -4925,6 +5191,38 @@ def _repeat_out_packed_dim(
     return Dim(in_raw.content_bound * factor, name="repeat_packed")
 
 
+def _gather_plain_by_packed_indices(
+    source: Tensor, *, indices: Tensor, axis: Dim, clip_to_valid: bool
+) -> Optional[Tensor]:
+    """
+    Gather along a plain axis from a plain source over (some of) the packed dims of the indices,
+    e.g. from a per-seq table [batch, vocab].
+    The coords of every frame are folded into its index,
+    so the source is never expanded to the frames.
+
+    :return: packed like the indices, or None if not applicable (then the generic route)
+    """
+    raw = _raw(indices)
+    in_dims = [d for d in raw.orig_dims if d in source.dims]
+    if not in_dims or axis not in source.dims or _dim_refs_packed(axis, raw):
+        return None
+    if axis.dyn_size_ext is not None and axis.dyn_size_ext.dims:
+        return None
+    # the raw shape, not the dim values, as in _pack_like
+    # noinspection PyProtectedMember
+    shape = source._raw_backend.get_shape_tuple_raw(source.raw_tensor)
+    pos = rf.cast(raw.inner, "int64")
+    if clip_to_valid:
+        pos = rf.clip_by_value(pos, 0, shape[source.dims.index(axis)] - 1)
+    idx = None
+    for d in in_dims:
+        coords = rf.cast(_frame_coords(raw, d), "int64")
+        idx = coords if idx is None else idx * shape[source.dims.index(d)] + coords
+    idx = idx * shape[source.dims.index(axis)] + pos
+    source_flat, flat_dim = rf.merge_dims(source, dims=in_dims + [axis])
+    return raw.rewrap(rf.gather(source_flat, indices=idx, axis=flat_dim), name="gather")
+
+
 def _gather_relayout_out_dim(indices: Tensor, raw: PackedRawTensor) -> Optional[Dim]:
     """
     :param indices: the gather indices
@@ -4949,6 +5247,9 @@ def _gather_relayout_out_dim(indices: Tensor, raw: PackedRawTensor) -> Optional[
         if out_spatial_dim is not None:
             return None  # two new spatial dims: same
         out_spatial_dim = dim
+    if out_spatial_dim is not None and out_spatial_dim in raw.inner.dims:
+        if _plain_extents(raw, out_spatial_dim) is None:
+            return None  # the source carries it as a plain dim, see _read_rows_at_frames
     return out_spatial_dim
 
 
@@ -5027,8 +5328,7 @@ def _scatter_relayout(
     dump_dim = out_packed_dim + 1
     values = raw.inner
     if mode != "sum":
-        # The backward of a max or min divides by the number of sources equal to the result.
-        # A nan in a row which writes nothing equals nothing, so its gradient would be nan instead of zero.
+        # a nan in a row which writes nothing would get a nan gradient from the backward of a max or min
         values = rf.where(writes, values, 0)
     out_inner = raw.inner_backend.scatter(
         values, indices=dest, indices_dim=[raw.packed_dim], mode=mode, fill_value=fill_value, out_dim=dump_dim
@@ -5128,6 +5428,53 @@ def _min_bound(a: Optional[int], b: Optional[int]) -> Optional[int]:
     return a if b is None else min(a, b)
 
 
+def _plain_extents(raw: PackedRawTensor, dim: Dim) -> Optional[Tuple[int, int]]:
+    """
+    :param raw: a packing
+    :param dim: a plain dim of its inner buffer
+    :return: (rows, width), the raw extents of the packed dim and of dim (no host read on torch),
+        or None if the backend does not know them as python ints
+    """
+    inner = raw.inner
+    # noinspection PyProtectedMember
+    shape = inner._raw_backend.get_shape_tuple_raw(inner.raw_tensor)
+    rows, width = shape[inner.dims.index(raw.packed_dim)], shape[inner.dims.index(dim)]
+    if not isinstance(rows, int) or not isinstance(width, int):
+        return None
+    return rows, width
+
+
+def _read_rows_at_frames(raw: PackedRawTensor, *, rows: Tensor, frame: Tensor, frame_dim: Dim) -> Tensor:
+    """
+    Reads one row of the packed source buffer per output frame of a re-laid-out gather.
+
+    A dim which the source shares with the indices is a batch dim of the gather.
+    The spatial dim of the indices (frame_dim) is folded into the packed dim of the result,
+    so when the source carries it as a plain dim (e.g. a label by frame lattice read along an alignment),
+    frame t must read column t of its row, not the whole row.
+    The buffer is then read through one flat index, row * width + frame, and never expanded per frame.
+
+    :param raw: packing of the source
+    :param rows: [result packed dim, ...], the row of the source buffer for every output frame
+    :param frame: [result packed dim], the position of every output frame within its sequence
+    :param frame_dim: the spatial dim of the indices
+    :return: [result packed dim, ...] + the remaining dims of the source buffer
+    """
+    inner = raw.inner
+    if frame_dim not in inner.dims:
+        return rf.gather(inner, indices=rows, axis=raw.packed_dim)
+    n_rows, width = _plain_extents(raw, frame_dim)
+    # static dims of the raw extents: merging the dynamic ones would derive sizes and masks for the flat dim
+    rows_dim = Dim(n_rows, name="packed_rows")
+    cols_dim = Dim(width, name=f"{frame_dim.name or 'frame'}_cols")
+    inner, _ = rf.replace_dim(inner, in_dim=raw.packed_dim, out_dim=rows_dim)
+    inner, _ = rf.replace_dim(inner, in_dim=frame_dim, out_dim=cols_dim)
+    flat, flat_dim = rf.merge_dims(inner, dims=[rows_dim, cols_dim])
+    flat_idx = rf.cast(rows, "int64") * width + rf.cast(frame, "int64")  # int64: exceeds int32 for a big lattice
+    flat_idx.sparse_dim = flat_dim
+    return rf.gather(flat, indices=flat_idx, axis=flat_dim)
+
+
 def _gather_relayout(
     source: Tensor, raw: PackedRawTensor, *, indices: Tensor, clip_to_valid: bool, out_spatial_dim: Dim
 ) -> Tensor:
@@ -5166,18 +5513,88 @@ def _gather_relayout(
     if batch in idx.dims:
         idx = rf.gather(idx, indices=seq, axis=batch)
     idx = rf.cast(idx, local.dtype)
+    return _gather_at_positions(source, raw, helper, seq=seq, idx=idx, frame=local, clip_to_valid=clip_to_valid)
+
+
+def _gather_into_indices_packing(
+    source: Tensor, raw: PackedRawTensor, *, indices: Tensor, clip_to_valid: bool
+) -> Optional[Tensor]:
+    """
+    Gather along the innermost packed dim with indices which are packed over another spatial dim
+    of the same sequences, e.g. label states read at the label position every frame of an alignment holds.
+
+    Every frame of the indices reads the start of its own sequence in the source plus the position it holds,
+    so neither side is unpacked.
+    The result takes the packing of the indices as it is (gap, align, layout lens and bound),
+    thus no new buffer bound is needed under static tracing.
+
+    :param source: packed over (seqs, source spatial)
+    :param raw: its packing
+    :param indices: packed over (seqs, another spatial), positions within the source sequence
+    :param clip_to_valid: clip the positions into each sequence
+    :return: packed like the indices, or None if the two packings do not share the seqs dim
+    """
+    idx_raw = _raw(indices)
+    seqs_dim = raw.orig_dims[0]
+    if len(idx_raw.orig_dims) != 2 or idx_raw.orig_dims[0] != seqs_dim:
+        return None
+    frame_dim = idx_raw.orig_dims[-1]
+    if frame_dim in raw.inner.dims and _plain_extents(raw, frame_dim) is None:
+        # the source carries the spatial dim of the indices as a plain dim, see _read_rows_at_frames
+        return None
+    inner, dev = raw.inner, raw.inner.device
+    read_dims = [d for d in (raw.packed_dim, frame_dim) if d in inner.dims]
+    raw_shape = raw.inner_backend.get_shape_tuple_raw(inner.raw_tensor)
+    extents = [raw_shape[inner.dims.index(d)] for d in read_dims]
+    empty = any(isinstance(n, int) and n == 0 for n in extents)
+    lens = idx_raw.seq_lens
+    # the lens are read from the host only once the source is empty
+    if empty and not rf.is_static_traceable() and int(rf.reduce_sum(lens, axis=list(lens.dims)).raw_tensor) == 0:
+        # no frame reads, but the indices can still have junk rows, which a gather from nothing cannot serve
+        rest = [d for d in inner.dims if d not in read_dims and d not in idx_raw.inner.dims]
+        dims = list(idx_raw.inner.dims) + rest
+        feature_dim = inner.feature_dim if inner.feature_dim in dims else None
+        out = rf.zeros(dims, dtype=source.dtype, sparse_dim=source.sparse_dim, feature_dim=feature_dim, device=dev)
+        if rf.is_float_dtype(source.dtype):
+            out = out + rf.reduce_sum(inner, axis=read_dims, use_mask=False)  # zero, keeps the gradient path
+            out.feature_dim = feature_dim
+        return idx_raw.rewrap(out, name="gather")
+    # the sequence of every frame of the indices; gap frames get an in-bounds one, their result is junk
+    seq = rf.copy_to_device(_frame_coords(idx_raw, seqs_dim), dev)
+    idx = rf.cast(rf.copy_to_device(idx_raw.inner, dev), seq.dtype)
+    frame = rf.copy_to_device(_frame_coords(idx_raw, frame_dim), dev)
+    return _gather_at_positions(source, raw, idx_raw, seq=seq, idx=idx, frame=frame, clip_to_valid=clip_to_valid)
+
+
+def _gather_at_positions(
+    source: Tensor,
+    raw: PackedRawTensor,
+    out_raw: PackedRawTensor,
+    *,
+    seq: Tensor,
+    idx: Tensor,
+    frame: Tensor,
+    clip_to_valid: bool,
+) -> Tensor:
+    """
+    Every frame of the result reads the start of its own sequence in the source plus the position it holds.
+
+    :param source: packed
+    :param raw: its packing
+    :param out_raw: packing of the result
+    :param seq: [result packed dim], the sequence of every frame of the result
+    :param idx: [result packed dim, ...], the position within the source sequence which it reads
+    :param frame: [result packed dim], the position of every frame of the result within its sequence
+    :param clip_to_valid: clip the positions into each sequence
+    :return: packed like out_raw
+    """
     if clip_to_valid:
-        # in the traced regime the lens already live on the data's device,
-        # where copying them would be a sync
-        lens = _device_lens(raw)
-        if lens is None:
-            lens = rf.copy_to_device(raw.seq_lens, dev)
-        last = rf.cast(rf.gather(lens, indices=seq, axis=batch), idx.dtype) - 1
-        idx = rf.clip_by_value(idx, rf.zeros_like(last), last)
-    starts, seqs_dim = raw.seq_starts(device=dev)
+        idx = _clip_into_seqs(raw, idx, seq=seq)
+    starts, seqs_dim = raw.seq_starts(device=raw.inner.device)
     src = rf.cast(rf.gather(starts, indices=seq, axis=seqs_dim), idx.dtype) + idx
     src = rf.clip_by_value(src, 0, _last_row(raw.packed_dim, src.dtype))
-    out = helper.rewrap(rf.gather(raw.inner, indices=src, axis=raw.packed_dim), name="gather")
+    frame_dim = out_raw.orig_dims[-1]
+    out = out_raw.rewrap(_read_rows_at_frames(raw, rows=src, frame=frame, frame_dim=frame_dim), name="gather")
     # a sparse dim assigned on the virtual tensor never reached the inner buffer
     if source.sparse_dim is not None:
         out.sparse_dim = source.sparse_dim
@@ -5215,6 +5632,16 @@ def _gather_into_index_packing(source: Tensor, raw: PackedRawTensor, *, indices:
     if source.sparse_dim is not None:
         out.sparse_dim = source.sparse_dim
     return out
+def _clip_into_seqs(raw: PackedRawTensor, idx: Tensor, *, seq: Tensor) -> Tensor:
+    """
+    :param raw: a packing
+    :param idx: positions within its sequences
+    :param seq: the sequence of every position
+    :return: idx clipped into its sequence
+    """
+    lens = raw.orig_dims[-1].get_size_tensor(device=raw.inner.device)
+    last = rf.cast(rf.gather(lens, indices=seq, axis=raw.orig_dims[0]), idx.dtype) - 1
+    return rf.clip_by_value(idx, 0, last)
 
 
 def _gather_out_packed_dim(
@@ -5273,7 +5700,8 @@ def flat_content(source: Tensor, *, out_dim: Optional[Dim] = None) -> Tuple[Tens
 
     :param source: packed tensor
     :param out_dim: the flat dim; created if not given
-        (dyn size = total content, capacity bounded by the physical packed dim)
+        (dyn size = total content, capacity bounded by the physical packed dim).
+        The flat tensor is sized to it (to its capacity under static tracing).
     :return: (flat tensor, out_dim)
     """
     raw = source.raw_tensor
@@ -5291,7 +5719,8 @@ def flat_content(source: Tensor, *, out_dim: Optional[Dim] = None) -> Tuple[Tens
         out_dim = Dim(total, name="packed", bounded_by=raw.packed_dim)
     elif out_dim.dyn_size_ext is None or out_dim.dyn_size_ext.raw_tensor is None:
         out_dim.dyn_size_ext = total
-    out, _ = rf.replace_dim(inner, in_dim=raw.packed_dim, out_dim=out_dim)
+    # a bound buffer (pack total_bound) differs from out_dim in general; the content is a prefix of it
+    out = rf.replace_dim_v2(inner, in_dim=raw.packed_dim, out_dim=out_dim)
     # the tail beyond the content is junk (stale buffer values) under bound shapes;
     # zero it: e.g. sparse (index) tensors would otherwise index out of bounds downstream,
     # independent of any masked reduction later
@@ -5648,22 +6077,26 @@ def _torch_relayout_frames(inner: Tensor, pos: Tensor, *, packed_dim: Dim, out_d
         n_out = int(n_out)
     assert isinstance(n_out, int)
     n_in = values.shape[0]
-    # Loud, capture-safe bound check. Without it a too-small target buffer writes OUT OF BOUNDS
-    # here (index_put with pos > n_out), which corrupts the CUDA context and then surfaces far
-    # away as an unrelated "illegal memory access". The usual cause is a declared
-    # packed_total_bound / regap total_bound that does not cover the per-seq gap+align slack
-    # of the TARGET layout.
-    assert_(
-        pos_raw.max() <= n_out,
-        f"packed relayout: target position beyond the buffer ({out_dim}, {n_out} frames + dump slot)."
-        f" The target total is too small for this layout (per-seq gap/align slack not covered?).",
-    )
-    # small int scatters only (1-D, no feature dims involved)
-    inv = torch.zeros((n_out + 1,), dtype=torch.int64, device=values.device)
-    slot_valid = torch.zeros((n_out + 1,), dtype=torch.bool, device=values.device)
-    inv[pos_raw] = torch.arange(n_in, dtype=torch.int64, device=values.device)
-    slot_valid[pos_raw] = True
-    out_raw = gather_relayout(values, inv=inv[:n_out], pos=pos_raw, slot_valid=slot_valid[:n_out])
+    if n_in == 0:
+        out_raw = values.new_zeros((n_out,) + tuple(values.shape[1:]))
+    else:
+        # Loud, capture-safe bound check. Without it a too-small target buffer writes OUT OF BOUNDS
+        # here (index_put with pos > n_out), which corrupts the CUDA context and then surfaces far
+        # away as an unrelated "illegal memory access". The usual cause is a declared
+        # packed_total_bound / regap total_bound that does not cover the per-seq gap+align slack
+        # of the TARGET layout.
+        assert_(
+            pos_raw.max() <= n_out,
+            f"packed relayout: target position beyond the buffer ({out_dim}, {n_out} frames + dump slot)."
+            f" The target total is too small for this layout (per-seq gap/align slack not covered?).",
+        )
+        # small int scatters only (1-D, no feature dims involved)
+        inv = torch.zeros((n_out + 1,), dtype=torch.int64, device=values.device)
+        slot_valid = torch.zeros((n_out + 1,), dtype=torch.bool, device=values.device)
+        inv[pos_raw] = torch.arange(n_in, dtype=torch.int64, device=values.device)
+        # not slot_valid[pos_raw] = True: the CPU scalar value fails under CUDA graph capture
+        slot_valid.index_fill_(0, pos_raw, True)
+        out_raw = gather_relayout(values, inv=inv[:n_out], pos=pos_raw, slot_valid=slot_valid[:n_out])
     out = Tensor("regap", dims=(out_dim,) + inner.dims[1:], dtype=inner.dtype, raw_tensor=out_raw)
     if inner.sparse_dim is not None:
         out.sparse_dim = inner.sparse_dim

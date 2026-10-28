@@ -3,15 +3,20 @@ Native ops for Torch, similar to :mod:`returnn.tf.native_op`.
 """
 
 from __future__ import annotations
-from typing import Optional, Any, Tuple, Dict
+from typing import Optional, Any, Callable, Tuple, Dict
 import os
 import sys
+import warnings
 from textwrap import dedent
 from threading import RLock
 
 import torch
 
 from returnn import native_op
+from returnn.tensor import Tensor, Dim
+
+# noinspection PyProtectedMember
+from returnn.frontend._cache import Cache
 from .native_op_code_compiler import OpCodeCompiler
 
 
@@ -521,8 +526,9 @@ def ctc_loss(
     edges, weights, start_end_states = get_ctc_fsa_fast_bw(
         targets=targets, seq_lens=targets_seq_lens, blank_idx=blank_index, label_loop=label_loop
     )
+    n_states = _get_ctc_fsa_fast_bw_num_states(targets)
 
-    seq_mask = sequence_mask_time_major(logits_seq_lens)  # (time,batch), bool
+    seq_mask = sequence_mask_time_major(logits_seq_lens, maxlen=logits.shape[0])  # (time,batch), bool
 
     if max_approx:
         log_probs = torch.log_softmax(logits, dim=-1) if logits_normalize else logits  # (time,batch,dim)
@@ -533,15 +539,18 @@ def ctc_loss(
             weights=weights,
             start_end_states=start_end_states,
             mask_idx=blank_index,
+            n_states=n_states,
         )
         # alignment is (time,batch)
-        log_probs_ = torch.gather(log_probs, 2, alignment.unsqueeze(-1))  # (time,batch,1)
+        log_probs_ = torch.gather(log_probs, 2, alignment.unsqueeze(-1).long())  # (time,batch,1)
         log_probs_ = log_probs_.squeeze(-1)  # (time,batch)
         log_probs_ = torch.where(seq_mask, log_probs_, 0.0)
         loss = -torch.sum(log_probs_, dim=0)  # (batch,)
         return loss
 
-    loss = _FastBaumWelchScoresAutogradFunc.apply(logits, logits_normalize, seq_mask, edges, weights, start_end_states)
+    loss = _FastBaumWelchScoresAutogradFunc.apply(
+        logits, logits_normalize, seq_mask, edges, weights, start_end_states, n_states
+    )
     return loss
 
 
@@ -639,13 +648,11 @@ def get_ctc_fsa_fast_bw(
         start_end_states is (2,batch), int32, (start,end) state idx in FSA.
     """
     assert targets.ndim == 2
-    cached = _ctc_fsa_cache_get(targets, seq_lens, blank_idx, label_loop, edges_bound)
-    if cached is not None and not _is_tracing_tensor(targets):
-        return cached
-    # Under tracing the cache is bypassed on purpose: a cached FSA would be baked into the
-    # graph as a constant, so every replay would score against the FIRST step's targets.
-    # (Within one traced step the aux heads then rebuild it; the construction op is cheap.)
-    targets_arg, seq_lens_arg = targets, seq_lens
+    cache_key = (_wrap_raw_tensor(targets), _wrap_raw_tensor(seq_lens), blank_idx, label_loop, edges_bound)
+    cached = _ctc_fsa_cache.get(cache_key)
+    if cached is not None:
+        edges, weights, start_end_states = cached
+        return edges.raw_tensor, weights.raw_tensor, start_end_states.raw_tensor
     targets = targets.to(torch.int32)
     n_batch, n_time = targets.shape
 
@@ -661,9 +668,7 @@ def get_ctc_fsa_fast_bw(
 
     if edges_bound is not None:
         seq_lens_i32 = seq_lens.to(torch.int32)
-        n_e_per_seq = seq_lens_i32 * 5 + 5  # exact valid count per seq (len 0 uses 2 of its 5 slots)
-        edge_offsets = torch.zeros((n_batch + 1,), dtype=torch.int32, device=targets.device)
-        edge_offsets[1:] = torch.cumsum(n_e_per_seq, dim=0)
+        edge_offsets = _ctc_fsa_edge_offsets(seq_lens_i32, n_time=n_time, edges_bound=edges_bound)
         # a too-small bound would silently DROP edges of the tail seqs -> must trip loudly
         assert_(edge_offsets[-1] <= edges_bound, "get_ctc_fsa_fast_bw edges_bound too small")
         weights = torch.zeros((edges_bound,), device=targets.device)
@@ -677,85 +682,54 @@ def get_ctc_fsa_fast_bw(
         op = maker.make_op()
         edges, start_end_states, weights = op(targets, seq_lens, blank_idx, weights, label_loop)
 
-    res = (edges, weights, start_end_states)
-    _ctc_fsa_cache_set(targets_arg, seq_lens_arg, blank_idx, label_loop, edges_bound, res)
-    return res
+    _ctc_fsa_cache.set(cache_key, tuple(_wrap_raw_tensor(x) for x in (edges, weights, start_end_states)))
+    return edges, weights, start_end_states
+
+
+def _get_ctc_fsa_fast_bw_num_states(targets: torch.Tensor) -> int:
+    """
+    :param targets: shape (batch,target_time)
+    :return: upper bound of the state count of the rectangular FSA from :func:`get_ctc_fsa_fast_bw`,
+        from the shapes only, (2 * n_time + 3) states per seq
+    """
+    n_batch, n_time = targets.shape
+    return n_batch * (2 * n_time + 3)
+
+
+def _ctc_fsa_edge_offsets(seq_lens: torch.Tensor, *, n_time: int, edges_bound: Optional[int]) -> torch.Tensor:
+    """
+    :param seq_lens: (batch,), the target lengths
+    :param n_time: the width of the targets buffer
+    :param edges_bound: see :func:`get_ctc_fsa_fast_bw`, None for the rectangular edge layout
+    :return: (batch+1,), int32, ascending: seq b owns the edges [offsets[b], offsets[b+1]) of the CTC automaton
+        of :func:`get_ctc_fsa_fast_bw`, 5*len+5 of them in the packed layout (len 0 uses 2 of its 5),
+        5*(n_time-1)+10 in the rectangular one
+    """
+    n_batch = seq_lens.shape[0]
+    if edges_bound is None:
+        return torch.arange(n_batch + 1, dtype=torch.int32, device=seq_lens.device) * (5 * (n_time - 1) + 10)
+    edge_offsets = torch.zeros((n_batch + 1,), dtype=torch.int32, device=seq_lens.device)
+    edge_offsets[1:] = torch.cumsum(seq_lens.to(torch.int32) * 5 + 5, dim=0)
+    return edge_offsets
 
 
 # The aux CTC heads (e.g. aux_loss_layers [4, 10, 16]) all score the SAME targets,
 # so they build the same FSA; only the logits differ.
 # This is the chokepoint for every caller, packed and padded alike,
 # which is why the cache sits here and not in a backend.
-# It cannot use returnn.frontend._cache.Cache:
-# that keys on RF Tensors and Dims (_transform_key_item rejects anything else),
-# while these are raw torch tensors.
-# So the step scoping the Cache would give for free is done by hand,
-# keyed by tensor IDENTITY plus _version:
-# under CUDA-graph capture the targets live in a static buffer refilled in place every step,
-# so a data_ptr-only key would return a stale FSA.
+# Under static traceable, the Cache scopes the entries to the step (see rf.static_traceable_generation),
+# so no FSA crosses a trace or a CUDA graph capture (where the targets buffer is refilled in place every step).
 # One slot is enough: the heads are evaluated back to back.
-_CtcFsa = Tuple[torch.Tensor, torch.Tensor, torch.Tensor]  # edges, weights, start_end_states
-# targets, seq_lens, blank_idx, label_loop, edges_bound, targets._version, seq_lens._version, fsa
-_CtcFsaCacheEntry = Tuple[torch.Tensor, torch.Tensor, int, bool, Optional[int], int, int, _CtcFsa]
-_ctc_fsa_cache: Optional[_CtcFsaCacheEntry] = None
+_ctc_fsa_cache = Cache(1)
 
 
-def _is_tracing_tensor(x: torch.Tensor) -> bool:
+def _wrap_raw_tensor(x: torch.Tensor) -> Tensor:
     """
-    :param x:
-    :return: whether this is a trace-time tensor (fake/meta), i.e. one WITHOUT storage
+    :param x: raw tensor
+    :return: x wrapped into a :class:`Tensor` with static dims, e.g. for :class:`Cache` keys and values
     """
-    if x.device.type == "meta":
-        return True
-    try:
-        # noinspection PyProtectedMember
-        from torch._subclasses.fake_tensor import FakeTensor
-    except ImportError:  # older torch: no fake tensors, thus nothing to detect
-        return False
-    if isinstance(x, FakeTensor):
-        return True
-    # an ACTIVE fake mode also fakes plain tensors on use (older torch lacks this API)
-    # noinspection PyProtectedMember
-    get_dispatch_mode = getattr(torch._C, "_get_dispatch_mode", None)
-    # noinspection PyProtectedMember
-    mode_key = getattr(getattr(torch._C, "_TorchDispatchModeKey", None), "FAKE", None)
-    if get_dispatch_mode is not None and mode_key is not None:
-        return get_dispatch_mode(mode_key) is not None
-    return False
-
-
-def _ctc_fsa_cache_get(
-    targets: torch.Tensor, seq_lens: torch.Tensor, blank_idx: int, label_loop: bool, edges_bound: Optional[int]
-) -> Optional[_CtcFsa]:
-    """the cached FSA if it was built for exactly these arguments, else None"""
-    if _ctc_fsa_cache is None:
-        return None
-    t, sl, bi, ll, eb, t_ver, sl_ver, res = _ctc_fsa_cache
-    # NEVER hand an FSA across the trace/runtime boundary:
-    # a trace-time (fake) FSA reaching the compiled program makes the fast-BW op dispatch to its
-    # Meta kernel -> storage-less outputs -> illegal memory access in the next kernel;
-    # a real FSA captured into a trace would bake the FIRST step's targets into every replay.
-    if _is_tracing_tensor(res[0]) != _is_tracing_tensor(targets):
-        return None
-    if t is targets and sl is seq_lens and bi == blank_idx and ll == label_loop and eb == edges_bound:
-        # noinspection PyProtectedMember
-        if t_ver == targets._version and sl_ver == seq_lens._version:
-            return res
-    return None
-
-
-# noinspection PyProtectedMember
-def _ctc_fsa_cache_set(
-    targets: torch.Tensor,
-    seq_lens: torch.Tensor,
-    blank_idx: int,
-    label_loop: bool,
-    edges_bound: Optional[int],
-    res: _CtcFsa,
-) -> None:
-    """remember the FSA, so the other heads on the same targets reuse it"""
-    global _ctc_fsa_cache
-    _ctc_fsa_cache = (targets, seq_lens, blank_idx, label_loop, edges_bound, targets._version, seq_lens._version, res)
+    dims = [Dim(d, name=f"dim{i}") for i, d in enumerate(x.shape)]
+    return Tensor("raw", dims=dims, dtype=str(x.dtype).replace("torch.", ""), raw_tensor=x)
 
 
 def fast_baum_welch(
@@ -854,20 +828,21 @@ def ctc_loss_packed(
         edges_bound=edges_bound,
     )
     seq_mask = sequence_mask_time_major(logits_seq_lens, maxlen=max_seq_len)  # (time,batch), bool
-    # static state count, see the construct_kernel state numbering: (2*n_time+3) states per seq.
-    # (the default in fast_baum_welch_packed sizes by start_end_states.max(),
-    # a data-dependent device read -- a sync, and illegal under CUDA-graph capture)
-    n_batch, n_tgt_time = targets.shape
-    if edges_bound is not None:
-        # packed FSA: the states are numbered by content too (see construct_kernel),
-        # so the count follows the targets TOTAL bound implied by edges_bound
-        # (edges_bound == 5 * targets_total_bound + 5 * batch),
-        # not batch * buffer capacity. Floor division stays an upper bound.
-        n_states = 2 * (edges_bound // 5) + n_batch
-    else:
-        n_states = n_batch * (2 * n_tgt_time + 3)
+    # every seq owns a contiguous slice of the automaton (see construct_kernel), the op runs one seq per block.
+    # Its state count is static, (2*len+3) at most (2*n_tgt_time+3), as a data-dependent max over the lens
+    # would be a device read, a sync, and illegal under CUDA-graph capture.
+    n_tgt_time = targets.shape[1]
+    edge_offsets = _ctc_fsa_edge_offsets(targets_seq_lens, n_time=n_tgt_time, edges_bound=edges_bound)
     loss = _FastBaumWelchScoresPackedAutogradFunc.apply(
-        logits, logits_normalize, seq_starts, seq_mask, edges, weights, start_end_states, n_states
+        logits,
+        logits_normalize,
+        seq_starts,
+        seq_mask,
+        edges,
+        weights,
+        start_end_states,
+        edge_offsets,
+        2 * n_tgt_time + 3,
     )
     return loss
 
@@ -888,7 +863,8 @@ class _FastBaumWelchScoresPackedAutogradFunc(torch.autograd.Function):
         edges: torch.Tensor,
         weights: torch.Tensor,
         start_end_states: torch.Tensor,
-        n_states: Optional[int] = None,
+        edge_offsets: torch.Tensor,
+        max_seq_states: int,
     ) -> torch.Tensor:
         """
         :return: full-sum loss per seq (batch,)
@@ -904,7 +880,8 @@ class _FastBaumWelchScoresPackedAutogradFunc(torch.autograd.Function):
             edges=edges,
             weights=weights,
             start_end_states=start_end_states,
-            n_states=n_states,
+            edge_offsets=edge_offsets,
+            max_seq_states=max_seq_states,
         )
         loss = obs_scores[0]  # (batch,)
         # map every frame of the (possibly gapped) packed buffer to its seq, to scale grads by the
@@ -918,7 +895,8 @@ class _FastBaumWelchScoresPackedAutogradFunc(torch.autograd.Function):
         rows = torch.arange(total_time, device=logits.device)
         starts64 = seq_starts.to(torch.int64).contiguous()
         frame_seq_idx = (torch.searchsorted(starts64, rows, right=True) - 1).clamp(min=0)
-        valid_mask = (rows - starts64[frame_seq_idx]) < seq_lens[frame_seq_idx]
+        offsets = rows - starts64[frame_seq_idx]
+        valid_mask = (offsets >= 0) & (offsets < seq_lens[frame_seq_idx])
         ctx.grad_wrt_softmax_in = logits_normalize
         if logits_normalize:
             ctx.save_for_backward(log_sm, frame_seq_idx, valid_mask, fwdbwd)
@@ -944,7 +922,11 @@ class _FastBaumWelchScoresPackedAutogradFunc(torch.autograd.Function):
         # gap frames have no valid fwdbwd -> select 0 (not multiply, to avoid nan*0 on uninit frames)
         grad_x = torch.where(valid_mask[:, None], grad_x, 0.0)
         grad_x *= grad_output[frame_seq_idx][:, None]
-        return grad_x, None, None, None, None, None, None, None
+        return grad_x, None, None, None, None, None, None, None, None
+
+
+# fast_baum_welch_packed warns once its edge scratch (one float32 score per edge and frame) passes this size
+_FAST_BW_PACKED_SCRATCH_WARN_BYTES = 4 * 2**30
 
 
 def fast_baum_welch_packed(
@@ -955,10 +937,13 @@ def fast_baum_welch_packed(
     edges: torch.Tensor,
     weights: torch.Tensor,
     start_end_states: torch.Tensor,
-    n_states: Optional[int] = None,
+    edge_offsets: torch.Tensor,
+    max_seq_states: int,
 ) -> Tuple[torch.Tensor, torch.Tensor]:
     """
     Packed variant of :func:`fast_baum_welch`, see :class:`NativeOp.FastBaumWelchPackedOp`.
+    Every seq owns a contiguous slice of the automaton, its states from its start to its end state
+    and its edges from ``edge_offsets``, as the CTC automata of :func:`get_ctc_fsa_fast_bw` do.
 
     :param am_scores: (total_time, dim), in -log space. the seqs concatenated along time
     :param seq_starts: (batch,), int32. start offset of each seq in the total_time axis
@@ -967,26 +952,38 @@ def fast_baum_welch_packed(
     :param weights: (num_edges,), weights of the edges
     :param start_end_states: (2, batch), (start,end) state idx in automaton.
         there is only one single automaton.
-    :param n_states: state count of the automaton. derived from start_end_states by default
-        (a data-dependent device read, i.e. a sync, and illegal under CUDA-graph capture --
-        pass it if you know it statically, as :func:`ctc_loss_packed` does).
+    :param edge_offsets: (batch+1,), ascending, seq b owns the edges [edge_offsets[b], edge_offsets[b+1])
+    :param max_seq_states: the maximum state count of one seq, static (a max over the device data would be a sync)
     :return: (fwdbwd, obs_scores), fwdbwd is (total_time, dim), obs_scores is (max_time, batch), in -log space
     """
+    # static shapes only, so no device read: the scratch is sized by the bounds, not by the data
+    n_frames, n_edges = seq_mask.shape[0], edges.shape[1]
+    scratch_bytes = n_frames * n_edges * 4
+    if scratch_bytes > _FAST_BW_PACKED_SCRATCH_WARN_BYTES:
+        warnings.warn(
+            f"fast_baum_welch_packed: the edge scratch takes {scratch_bytes / 2**30:.1f} GiB"
+            f" ({n_edges} edges x {n_frames} frames, one float32 score each)."
+            f" This usually means a loose edges_bound, see ctc_loss_packed.",
+            stacklevel=2,
+        )
     op = make_fast_baum_welch_packed_op()
     float_idx = seq_mask.float()
-    if n_states is None:
-        last_state_idx = int(start_end_states[1].max())  # see get_automata_for_batch
-        assert last_state_idx >= 0, f"fast_baum_welch_packed last_state_idx must be >= 0, got {last_state_idx}"
-        n_states = last_state_idx + 1
     seq_starts = seq_starts.to(torch.int32)
-    fwdbwd, obs_scores = op(am_scores, edges, weights, start_end_states, float_idx, seq_starts, n_states)  # noqa
+    edge_offsets = edge_offsets.to(torch.int32)
+    fwdbwd, obs_scores = op(
+        am_scores, edges, weights, start_end_states, float_idx, seq_starts, edge_offsets, max_seq_states
+    )
     return fwdbwd, obs_scores
 
 
-def make_fast_baum_welch_packed_op(**kwargs):
+def make_fast_baum_welch_packed_op(
+    **kwargs,
+) -> Callable[
+    [torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, int],
+    Tuple[torch.Tensor, torch.Tensor],
+]:
     """
     :return: op
-    :rtype: (torch.Tensor) -> tuple[torch.Tensor]
     """
     maker = OpMaker(OpDescription.from_gen_base(native_op.FastBaumWelchPackedOp), **kwargs)
     return maker.make_op()
@@ -1000,6 +997,7 @@ def fast_viterbi(
     weights: torch.Tensor,
     start_end_states: torch.Tensor,
     mask_idx: int = 0,
+    n_states: Optional[int] = None,
 ) -> Tuple[torch.Tensor, torch.Tensor]:
     """
     :param am_scores: (time, batch, dim), in +log space, already normalized / just used as-is
@@ -1009,12 +1007,14 @@ def fast_viterbi(
     :param start_end_states: (2, batch), (start,end) state idx in automaton.
         there is only one single automaton.
     :param mask_idx: vocab index used for masking (e.g. padding, or if not path was found)
+    :param n_states: state count of the automaton. derived from start_end_states by default
     :return: (alignment, scores), alignment is (time, batch), scores is (batch,), in +log space.
         note: scores are not differentiable here.
         do gather+sum on the am_scores by the alignment to get it differentiable.
     """
-    last_state_idx = start_end_states[1].max()
-    n_states = last_state_idx + 1
+    if n_states is None:
+        last_state_idx = start_end_states[1].max()
+        n_states = last_state_idx + 1
     maker = OpMaker(OpDescription.from_gen_base(native_op.FastViterbiOp))
     op = maker.make_op()
     alignment, scores = op(am_scores, am_seq_len, edges, weights, start_end_states, n_states, mask_idx)
@@ -1067,6 +1067,7 @@ def ctc_best_path(
         weights=weights,
         start_end_states=start_end_states,
         mask_idx=blank_index,
+        n_states=_get_ctc_fsa_fast_bw_num_states(targets),
     )
     return alignment
 

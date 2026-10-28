@@ -19,6 +19,7 @@ if TYPE_CHECKING:
     from .dim import Dim
 
     from returnn.datasets.util.vocabulary import Vocabulary
+    from returnn.frontend.tensor_layout import TensorLayout
 
 from . import dim as _d
 from . import tensor as _t
@@ -146,7 +147,8 @@ class _DimExtra:
         # They each have same_as = self. The same_base should have the base (global) batch info.
         self.same_for_batch_ctx: Dict[Tuple[BatchInfo, Optional[ControlFlowContext]], Dim] = {}
         self.cache_dyn_size_ext_dev: Dict[str, _t.Tensor] = {}  # device -> dyn_size_ext
-        self.cache_seq_mask: Dict[Tuple[str, Optional[Tuple[Dim, ...]]], _t.Tensor] = {}  # (dev,dim_order) -> seq_mask
+        # (dev,dim_order,like layout) -> seq_mask
+        self.cache_seq_mask: Dict[Tuple[str, Optional[Tuple[Dim, ...]], Optional[TensorLayout]], _t.Tensor] = {}
         self.cache_dim_math = _CacheDimMath()  # op (add,sub,...), operand -> Dim
 
     @property
@@ -914,11 +916,21 @@ class _DimMixin:
         self._extra.cache_dyn_size_ext_dev[device] = rf.copy_to_device(self.dyn_size_ext, device=device)
         return self._extra.cache_dyn_size_ext_dev[device]
 
-    def get_mask(self: Dim, *, dim_order: Optional[Sequence[Dim]] = None, device: Optional[str] = None) -> _t.Tensor:
+    def get_mask(
+        self: Dim,
+        *,
+        dim_order: Optional[Sequence[Dim]] = None,
+        device: Optional[str] = None,
+        like: Optional[Union[_t.Tensor, TensorLayout]] = None,
+    ) -> _t.Tensor:
         """
         :param dim_order: if given, the dims of the mask will be in this order.
             This can be useful if the mask is broadcasted against some other tensor.
         :param str|None device: if given, will move the mask to this device
+        :param like: the mask uses the device (unless ``device`` is given)
+            and the storage layout of this tensor or layout (:func:`returnn.frontend.get_tensor_layout`),
+            e.g. packed like a packed ``like`` (:func:`returnn.frontend.pack`) when the mask dims cover its packed dims.
+            Use it when the mask is combined with ``like`` anyway. See :func:`returnn.frontend.full`.
         :return: if need_masking(), the corresponding mask.
             If this is e.g. the time-dim T of shape [B], then the mask will be of shape [B,T].
             The mask could be used with :func:`masked_select` (``boolean_mask``) or ``where``.
@@ -929,8 +941,10 @@ class _DimMixin:
         # noinspection PyProtectedMember
         backend = self.dyn_size_ext._raw_backend
 
+        if isinstance(like, _t.Tensor):
+            like = rf.get_tensor_layout(like)
         if not device:
-            device = rf.get_default_device()
+            device = (like.device if like is not None else None) or rf.get_default_device()
 
         self._make_extra()
         dim_order_default = self.dyn_size_ext.dims + (self,)
@@ -938,11 +952,11 @@ class _DimMixin:
             dim_order = tuple([d for d in dim_order if d in dim_order_default])  # filter
         else:
             dim_order = dim_order_default
-        cache_key = (device, dim_order)
+        cache_key = (device, dim_order, like)
         if cache_key in self._extra.cache_seq_mask:
             return self._extra.cache_seq_mask[cache_key]
 
-        if self._extra.copy_same_as:
+        if self._extra.copy_same_as and like is None:  # a layout refers to the dims of self, not copy_same_as
             if dim_order:
                 dim_order = tuple(self._extra.copy_same_as if d == self else d for d in dim_order)
             mask = self._extra.copy_same_as.get_mask(dim_order=dim_order, device=device)
@@ -950,25 +964,12 @@ class _DimMixin:
             return mask
 
         size_ext = self.get_dyn_size_ext_for_device(device)
-
-        max_idx = rf.reduce(
-            size_ext,
-            axis=size_ext.dims,
-            mode="max",
-            # Masking here is not always possible, e.g. if we have
-            # tag = Dim{'self-att-keys'['time:var:extern_data:classes'[B]]}
-            use_mask=False,
-        )
-        # We use the assumption that self.placeholder.shape[axis] == max_idx.
-        # size_ext might have invalid (zero) sizes
-        # when it itself has some padding, e.g. when its own shape is dynamic.
-        # A zero size can lead to problems in some cases, e.g. in SoftmaxOverSpatialLayer,
-        # when everything is masked to -inf, it results in nan,
-        # and this likely produces nan in backprop or elsewhere.
-        # Thus, mask size_ext itself, and set the padded values to max_idx.
-        # This assumes that max_idx >= 1.
-        size_ext = size_ext.copy_masked(max_idx)
+        # padded entries of the sizes (e.g. padding seqs of a batch filled up to a bound) are empty seqs
+        size_ext = size_ext.copy_masked(0)
         idx_range = backend.range_over_dim(self, device=device)
+        if like is not None:
+            # the positions in the layout of like, so the mask follows it
+            idx_range = rf.zeros(dim_order_default, dtype=idx_range.dtype, device=device, like=like) + idx_range
         seq_mask = rf.compare(idx_range, "<", size_ext, allow_broadcast_all_sources=True, dim_order=dim_order)
         self._extra.cache_seq_mask[cache_key] = seq_mask
         return seq_mask
@@ -1410,6 +1411,9 @@ class _DimMixin:
                 return
             y = _bin_op(y, x_size)
         assert y is not None, f"op {op}?"
+        if not template_only and y.raw_tensor is not None and any(d.need_masking() for d in y.dims):
+            with _ctx_for_inputs(y):
+                y = y.copy_masked(0)  # padded entries of its own dims (e.g. padding seqs of the batch) stay empty
         if self.dyn_size_ext is not None:
             assert self.dyn_size_ext.dim_tags == y.dim_tags
         if y.batch:

@@ -8,6 +8,8 @@ this module holds low-level autograd-aware collective ops.
 from __future__ import annotations
 import torch
 
+from returnn.torch.util.custom_op import custom_op
+
 
 # noinspection PyMethodOverriding,PyAbstractClass
 class _AllReduceSum(torch.autograd.Function):
@@ -49,7 +51,7 @@ if hasattr(torch.library, "custom_op"):  # torch >= 2.4
     # Also used outside of tracing, so traced and normal steps run the same op.
     # Only for the default group, a process group is no op argument.
 
-    @torch.library.custom_op("returnn::all_reduce_sum", mutates_args=())
+    @custom_op("returnn::all_reduce_sum", mutates_args=())
     def _lib_all_reduce_sum(x: torch.Tensor) -> torch.Tensor:
         import torch.distributed as dist
 

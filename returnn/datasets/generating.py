@@ -1160,6 +1160,11 @@ class StaticDataset(CachedDataset2):
         self._num_seqs = len(self._seq_order)
         return True
 
+    def get_current_seq_order(self) -> Sequence[int]:
+        """:return: list of corpus seq idx of the current epoch"""
+        assert self._seq_order is not None
+        return self._seq_order
+
     def supports_seq_order_sorting(self) -> bool:
         """supports sorting"""
         return True
@@ -2572,8 +2577,7 @@ class Enwik8Corpus(CachedDataset2):
     def _download_zip(self):
         url = "https://mattmahoney.net/dc/enwik8.zip"
         print("%s: download %s" % (self, url), file=log.v2)
-        # noinspection PyPackageRequirements
-        from six.moves.urllib.request import urlretrieve
+        from urllib.request import urlretrieve
 
         urlretrieve(url, self._zip_filename)
 
