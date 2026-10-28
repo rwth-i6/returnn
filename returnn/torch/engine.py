@@ -572,6 +572,7 @@ class Engine(EngineBase):
         zero_grad_next_step = True
         cur_count_grad_accum = 0
         epoch_update_step_idx = 0  # optimizer updates so far in this epoch, the unit of the param sync period
+        epoch_continuous = self.epoch - 1  # as in init_train_epoch, for an epoch without steps
         extern_data = None
 
         total_data_size_packed = NumbersDict()
@@ -868,6 +869,9 @@ class Engine(EngineBase):
             # all ranks left the train loop together, so this collective matches
             self.global_train_step = self._torch_distributed_ctx.step_after_epoch(
                 module=self._pt_model, optimizer=self._updater.get_optimizer(), global_train_step=self.global_train_step
+            )
+            self._updater.set_current_train_step(
+                global_train_step=self.global_train_step, epoch=self.epoch, epoch_continuous=epoch_continuous
             )
 
         elapsed = time.monotonic() - epoch_start_time
