@@ -137,6 +137,12 @@ class DistributeFilesDataset(CachedDataset2):
     In this case the file sizes for sub epoch distribution are summed up per list entry
     by iterating over the structure leaves.
 
+    When the sizes are already known, e.g. from a corpus manifest,
+    ``get_file_sizes`` provides them instead, so no file is accessed for that::
+
+        def get_file_sizes(files: List[Tuple[str, str]], **_kwargs) -> List[int]:
+          return [manifest_sizes[align_fn] + manifest_sizes[feat_fn] for align_fn, feat_fn in files]
+
     By default, each sub epoch dataset runs in its own worker process.
     When the sub epoch dataset already loads in parallel (e.g. via :class:`MultiProcDataset`),
     and this dataset runs in a PyTorch DataLoader worker anyway,
@@ -152,6 +158,7 @@ class DistributeFilesDataset(CachedDataset2):
         *,
         files: Union[List[FileTree], os.PathLike, Callable[[], List[FileTree]]],
         get_sub_epoch_dataset: Callable[[List[FileTree]], Dict[str, Any]],
+        get_file_sizes: Optional[Callable[..., Sequence[int]]] = None,
         use_worker_proc: bool = True,
         preload_next_n_sub_epochs: Optional[int] = None,
         buffer_size: int = 1,
@@ -170,6 +177,13 @@ class DistributeFilesDataset(CachedDataset2):
             or a JSON file containing a list of arbitarily nested (JSON) objects.
             It can also be a callable which returns such a list.
         :param get_sub_epoch_dataset: callable which returns a dataset dict for a given subset of files
+        :param get_file_sizes: callable ``(files, **kwargs) -> sizes``,
+            getting the resolved list of files (entries as in ``files``)
+            and returning one size in bytes per entry, in the same order,
+            the sum over all files of the entry.
+            The sizes are used to distribute the files evenly over the sub epochs (and shards).
+            Called once, when the sizes are first needed.
+            Default (None): the sizes of the files on disk (``os.path.getsize``).
         :param use_worker_proc: whether to run each sub epoch dataset in its own worker process (default).
             If False, the sub epoch dataset runs in the current process,
             which avoids the extra transfer of every sequence between processes.
@@ -199,6 +213,7 @@ class DistributeFilesDataset(CachedDataset2):
         super().__init__(**kwargs)
         self.files = files
         self.get_sub_epoch_dataset = get_sub_epoch_dataset
+        self.get_file_sizes = get_file_sizes
         assert isinstance(use_worker_proc, bool), f"invalid use_worker_proc {use_worker_proc!r}"
         self.use_worker_proc = use_worker_proc
         if preload_next_n_sub_epochs is None:
@@ -346,13 +361,27 @@ class DistributeFilesDataset(CachedDataset2):
 
     def _lazy_init_file_sizes(self):
         import tree
+        from returnn.util.basic import get_fwd_compat_kwargs
 
         if self._file_sizes:
             return
         self._lazy_init_file_list()
-        self._file_sizes = {
-            _get_key_for_file_tree(t): sum((os.path.getsize(fn) for fn in tree.flatten(t)), 0) for t in self._files
-        }
+        if self.get_file_sizes is None:
+            self._file_sizes = {
+                _get_key_for_file_tree(t): sum((os.path.getsize(fn) for fn in tree.flatten(t)), 0) for t in self._files
+            }
+            return
+        sizes = list(self.get_file_sizes(self._files, **get_fwd_compat_kwargs()))
+        if len(sizes) != len(self._files):
+            raise ValueError(
+                f"{self}: get_file_sizes returned {len(sizes)} sizes, expected one per files entry, {len(self._files)}"
+            )
+        file_sizes = {}
+        for t, size in zip(self._files, sizes):
+            if not isinstance(size, (int, numpy.integer)) or size < 0:
+                raise ValueError(f"{self}: get_file_sizes returned invalid size {size!r} for files entry {t!r}")
+            file_sizes[_get_key_for_file_tree(t)] = int(size)
+        self._file_sizes = file_sizes
 
     def __del__(self):
         if hasattr(self, "_workers"):  # might not be set after an early exception in __init__
