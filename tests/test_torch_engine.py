@@ -2858,7 +2858,9 @@ if "RETURNN_TEST_TIME_LEFT" in os.environ:
     def _interrupt_job():
         # what scancel --full --signal=INT does to the batch step:
         # SIGINT to the process group of the launcher, i.e. torchrun and the stand-in worker here
-        os.kill(-os.getpgid(os.getppid()), 2)
+        import signal
+
+        os.kill(-os.getpgid(os.getppid()), signal.SIGINT)
         return True
 
     _basic.slurm_interrupt_job = _interrupt_job
