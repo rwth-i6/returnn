@@ -3658,8 +3658,8 @@ def test_torch_engine_cuda_graph_compile_train_default_warmup():
 
 
 def test_torch_engine_cuda_graph_compile_dump_fx_dir():
-    """torch_cuda_graph "dump_fx_dir" writes the traced step graph and trains as without it,
-    with Inductor and with the eager kernels of "debug_aot_eager" """
+    """torch_cuda_graph "dump_fx_dir" writes the traced step graph, and the compiled step trains,
+    with "debug_aot_eager" and with Inductor"""
     import os
 
     for graph_opts in ({}, {"debug_aot_eager": True}):
