@@ -243,12 +243,16 @@ class DimWrapper:
     Wraps :class:`Dim`.
     Using weakref for the dim.
     If the size is known (static, or eager scalar, or eager seq lens),
-    equality is given when the size values are equal (and the dim tag is ignored);
+    equality is given when the size values are equal and the sizes are over the same dims (and the dim tag is ignored);
     :func:`Cache.get` then maps the cached output back to the queried dim.
     """
 
     def __init__(self, dim: Dim, *, finalize_callback):
         self.dim_value = _dim_value_for_key(dim, finalize_callback=finalize_callback)
+        if self.dim_value is not None and dim.dyn_size_ext is not None:
+            # by identity: an output over sizes of other dims (e.g. a packing) cannot be mapped one dim at a time
+            size_dims = tuple(_WeakIdRef(d, finalize_callback) for d in dim.dyn_size_ext.dims)
+            self.dim_value += (size_dims,)
         # dim_value covers every dim with a dyn size (value key or size_ref identity key),
         # incl. finalization via the raw size tensor.
         # The dim ref fallback remains only for dims without any size info
