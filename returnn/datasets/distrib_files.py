@@ -181,7 +181,8 @@ class DistributeFilesDataset(CachedDataset2):
             getting the resolved list of files (entries as in ``files``)
             and returning one size in bytes per entry, in the same order,
             the sum over all files of the entry.
-            The sizes are used to distribute the files evenly over the sub epochs (and shards).
+            The sizes are used to distribute the files evenly over the sub epochs (and shards),
+            so they must be the same on every rank.
             Called once, when the sizes are first needed.
             Default (None): the sizes of the files on disk (``os.path.getsize``).
         :param use_worker_proc: whether to run each sub epoch dataset in its own worker process (default).
