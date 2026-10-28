@@ -6,11 +6,9 @@ https://github.com/rwth-i6/returnn/issues/1519
 
 from __future__ import annotations
 
-from collections import deque
 from typing import Union, Optional, Any, Callable, Sequence, Tuple, List, Dict
 import os
 import sys
-import threading
 import numpy
 from returnn.log import log
 from returnn.util import better_exchook
@@ -27,6 +25,7 @@ from .basic import (
     _get_distributed_rank_and_size,
 )
 from .cached2 import CachedDataset2
+from .util.worker_proc import WorkerProcLoop, get_data_seq
 
 # noinspection PyProtectedMember
 from multiprocessing.connection import Connection as mpConnection
@@ -755,7 +754,7 @@ class _WorkerInProc:
         with self._env():
             if not self.dataset.is_less_than_num_seqs(seq_idx):
                 return None
-            return _get_data_seq(self.dataset, seq_idx)
+            return get_data_seq(self.dataset, seq_idx)
 
     def get_all_tags(self) -> List[str]:
         """get all tags"""
@@ -782,14 +781,6 @@ class _WorkerInProc:
         self.dataset = None
 
 
-def _get_data_seq(dataset: Dataset, seq_idx: int) -> DatasetSeq:
-    dataset.load_seqs(seq_idx, seq_idx + 1)
-    seq_tag = dataset.get_tag(seq_idx)
-    features = {data_key: dataset.get_data(seq_idx, data_key) for data_key in dataset.get_data_keys()}
-    complete_frac = dataset.get_complete_frac(seq_idx, allow_only_lr_suitable=True)
-    return DatasetSeq(seq_idx=seq_idx, seq_tag=seq_tag, features=features, complete_frac=complete_frac)
-
-
 def _worker_proc_loop(
     epoch: int,
     buffer_size: int,
@@ -806,147 +797,36 @@ def _worker_proc_loop(
     assert isinstance(parent_conn, mpConnection)
 
     dataset = init_dataset(dataset_dict)
+    loop = WorkerProcLoop(name=f"DFD worker {epoch}", parent_conn=parent_conn, buffer_size=buffer_size, dataset=dataset)
 
-    got_init_seq_order = False
-    got_seq_end = False
-    cache: deque[DatasetSeq] = deque()
-    next_seq_idx = 0
-    cond = threading.Condition()  # guards cache, msg_queue, num_unhandled_msgs
-    msg_queue: deque[Tuple[str, Dict[str, Any]]] = deque()
-    num_unhandled_msgs = 0  # in msg_queue or being handled by the main thread
-
-    # noinspection PyShadowingNames
-    def _add_to_cache():
-        nonlocal next_seq_idx
-        if len(cache) >= buffer_size:
-            return False
-        if not dataset.is_less_than_num_seqs(next_seq_idx):
-            return False
-        res = _get_data_seq(dataset, next_seq_idx)
-        with cond:
-            cache.append(res)
-        next_seq_idx += 1
-        return True
-
-    # noinspection PyShadowingNames
-    def _get_from_cache(seq_idx: int) -> Optional[DatasetSeq]:
-        if not cache:
-            return None
-        if seq_idx > cache[-1].seq_idx:
-            return None
-        for seq in cache:
-            assert seq.seq_idx <= seq_idx
-            if seq.seq_idx == seq_idx:
-                return seq
-        assert False
-
-    # noinspection PyShadowingNames
-    def _get(seq_idx: int) -> Optional[DatasetSeq]:
-        if cache and seq_idx < cache[0].seq_idx:
-            raise Exception(
-                f"requested seq idx {seq_idx} is smaller than cache start {cache[0].seq_idx}, cannot go backwards"
-            )
-        res = _get_from_cache(seq_idx)
-        if res:
-            return res
-        if not dataset.is_less_than_num_seqs(seq_idx):
-            return None
-        assert next_seq_idx <= seq_idx
-        while True:
-            if not _add_to_cache():
-                raise Exception(
-                    f"buffer too small, requested seq idx {seq_idx},"
-                    f" cache starts at {cache[0].seq_idx if cache else None}"
-                )
-            assert cache[-1].seq_idx <= seq_idx
-            if cache[-1].seq_idx == seq_idx:
-                return cache[-1]
-
-    # Serves cached seqs while the main thread (which owns the dataset) loads, and passes on all other msgs.
-    def _serve_parent():
-        nonlocal num_unhandled_msgs
-        try:
-            while True:
-                parent_msg, parent_kwargs = parent_conn.recv()
-                if parent_msg == "exit":
-                    break
-                cached_seq = None
-                with cond:
-                    if parent_msg == "get_data_seq" and num_unhandled_msgs == 0:
-                        requested_seq_idx = parent_kwargs["seq_idx"]
-                        if cache and cache[0].seq_idx <= requested_seq_idx:
-                            cached_seq = _get_from_cache(requested_seq_idx)
-                        if cached_seq:
-                            while cache[0].seq_idx < requested_seq_idx:
-                                cache.popleft()
-                            cond.notify()
-                    if not cached_seq:
-                        msg_queue.append((parent_msg, parent_kwargs))
-                        num_unhandled_msgs += 1
-                        cond.notify()
-                if cached_seq:
-                    parent_conn.send(("data_seq", cached_seq))
-        except EOFError:  # when parent dies
-            pass
-        finally:
-            with cond:
-                msg_queue.append(("exit", {}))
-                cond.notify()
-
-    threading.Thread(target=_serve_parent, name=f"DFD worker {epoch} serve parent", daemon=True).start()
-
-    try:
-        while True:
-            with cond:
-                while not msg_queue and not (got_init_seq_order and not got_seq_end and len(cache) < buffer_size):
-                    cond.wait()
-                msg, kwargs = msg_queue.popleft() if msg_queue else (None, None)
-            if msg is None:
-                if not _add_to_cache():
-                    got_seq_end = True
-                continue
-            if msg == "exit":
-                break
-            elif msg == "get_data_seq":
-                seq_idx = kwargs["seq_idx"]
-                while cache and cache[0].seq_idx < seq_idx:
-                    cache.popleft()
-                res = _get(seq_idx)
-                parent_conn.send(("data_seq", res))
-            elif msg == "init_seq_order":
-                # We are responsible to get the seq order and distrib it to all the other workers.
-                dataset.init_seq_order(**kwargs)
-                try:
-                    num_seqs = dataset.num_seqs
-                except NotImplementedError:
-                    num_seqs = None
-                parent_conn.send(("num_seqs", num_seqs))
-                got_init_seq_order = True
-                got_seq_end = False
-                next_seq_idx = 0
-                cache.clear()
-            elif msg == "get_all_tags":
-                try:
-                    tags = dataset.get_all_tags()
-                except Exception as exc:
-                    parent_conn.send(("all_tags", exc))
-                else:
-                    parent_conn.send(("all_tags", tags))
-            elif msg == "get_total_num_seqs":
-                try:
-                    total_num_seqs = dataset.get_total_num_seqs(**kwargs)
-                except Exception as exc:
-                    parent_conn.send(("total_num_seqs", exc))
-                else:
-                    parent_conn.send(("total_num_seqs", total_num_seqs))
+    def _handle_msg(msg: str, kwargs: Dict[str, Any]):
+        if msg == "init_seq_order":
+            # We are responsible to get the seq order and distrib it to all the other workers.
+            dataset.init_seq_order(**kwargs)
+            try:
+                num_seqs = dataset.num_seqs
+            except NotImplementedError:
+                num_seqs = None
+            parent_conn.send(("num_seqs", num_seqs))
+            loop.on_init_seq_order()
+        elif msg == "get_all_tags":
+            try:
+                tags = dataset.get_all_tags()
+            except Exception as exc:
+                parent_conn.send(("all_tags", exc))
             else:
-                raise Exception(f"unknown msg {msg!r}")
-            with cond:
-                num_unhandled_msgs -= 1
-    except KeyboardInterrupt:  # when parent dies
-        pass
-    except EOFError:  # when parent dies
-        pass
+                parent_conn.send(("all_tags", tags))
+        elif msg == "get_total_num_seqs":
+            try:
+                total_num_seqs = dataset.get_total_num_seqs(**kwargs)
+            except Exception as exc:
+                parent_conn.send(("total_num_seqs", exc))
+            else:
+                parent_conn.send(("total_num_seqs", total_num_seqs))
+        else:
+            raise Exception(f"unknown msg {msg!r}")
+
+    loop.run(_handle_msg)
 
     # Potentially release sub-procs / threads the wrapped dataset owns.
     dataset.finish_epoch(free_resources=True)

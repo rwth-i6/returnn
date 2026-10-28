@@ -3,18 +3,17 @@ Multi-processing dataset
 """
 
 from __future__ import annotations
-from collections import deque
 from typing import Optional, Any, Dict, List, Tuple
 import sys
 import gc
-import threading
 import multiprocessing as mp
 from returnn.util import better_exchook
 from returnn.util.basic import try_run
 from returnn.config import SubProcCopyGlobalConfigPreInitFunc
 from returnn.util.multi_proc_non_daemonic_spawn import NonDaemonicSpawnContext
-from .basic import init_dataset, extend_dataset_dict_from_parent_dataset, Dataset, DatasetSeq
+from .basic import init_dataset, extend_dataset_dict_from_parent_dataset, DatasetSeq
 from .cached2 import CachedDataset2
+from .util.worker_proc import WorkerProcLoop
 
 # noinspection PyProtectedMember
 from multiprocessing.connection import Connection as mpConnection
@@ -270,217 +269,102 @@ class MultiProcDataset(CachedDataset2):
                 f.write(f"MPD worker {worker_index}")
         better_exchook.setup_all()
 
-        dataset: Optional[Dataset] = None
+        loop = WorkerProcLoop(
+            name=f"MPD worker {worker_index}", parent_conn=parent_conn, buffer_size=buffer_size, dataset=None
+        )
 
-        got_init_seq_order = False
-        got_seq_end = False
-        cache: deque[DatasetSeq] = deque()
-        next_seq_idx = 0
-        cond = threading.Condition()  # guards cache, msg_queue, num_unhandled_msgs
-        msg_queue: deque[Tuple[str, Dict[str, Any]]] = deque()
-        num_unhandled_msgs = 0  # in msg_queue or being handled by the main thread
-
-        # noinspection PyShadowingNames
-        def _add_to_cache():
-            nonlocal next_seq_idx
-            if len(cache) >= buffer_size:
-                return False
-            if not dataset.is_less_than_num_seqs(next_seq_idx):
-                return False
-            dataset.load_seqs(next_seq_idx, next_seq_idx + 1)
-            seq_tag = dataset.get_tag(next_seq_idx)
-            features = {data_key: dataset.get_data(next_seq_idx, data_key) for data_key in dataset.get_data_keys()}
-            complete_frac = dataset.get_complete_frac(next_seq_idx, allow_only_lr_suitable=True)
-            res = DatasetSeq(seq_idx=next_seq_idx, seq_tag=seq_tag, features=features, complete_frac=complete_frac)
-            with cond:
-                cache.append(res)
-            next_seq_idx += 1
-            return True
-
-        # noinspection PyShadowingNames
-        def _get_from_cache(seq_idx: int) -> Optional[DatasetSeq]:
-            if not cache:
-                return None
-            if seq_idx > cache[-1].seq_idx:
-                return None
-            for seq in cache:
-                assert seq.seq_idx <= seq_idx
-                if seq.seq_idx == seq_idx:
-                    return seq
-            assert False
-
-        # noinspection PyShadowingNames
-        def _get(seq_idx: int) -> Optional[DatasetSeq]:
-            if cache and seq_idx < cache[0].seq_idx:
-                raise Exception(
-                    f"requested seq idx {seq_idx} is smaller than cache start {cache[0].seq_idx}, cannot go backwards"
-                )
-            res = _get_from_cache(seq_idx)
-            if res:
-                return res
-            if not dataset.is_less_than_num_seqs(seq_idx):
-                return None
-            assert next_seq_idx <= seq_idx
-            while True:
-                if not _add_to_cache():
-                    raise Exception(
-                        f"buffer too small, requested seq idx {seq_idx},"
-                        f" cache starts at {cache[0].seq_idx if cache else None}"
-                    )
-                assert cache[-1].seq_idx <= seq_idx
-                if cache[-1].seq_idx == seq_idx:
-                    return cache[-1]
-
-        # Serves cached seqs while the main thread (which owns the dataset) loads, and passes on all other msgs.
-        def _serve_parent():
-            nonlocal num_unhandled_msgs
-            try:
-                while True:
-                    parent_msg, parent_kwargs = parent_conn.recv()
-                    if parent_msg == "exit":
-                        break
-                    cached_seq = None
-                    with cond:
-                        if parent_msg == "get_data_seq" and num_unhandled_msgs == 0:
-                            requested_seq_idx = parent_kwargs["seq_idx"]
-                            if cache and cache[0].seq_idx <= requested_seq_idx:
-                                cached_seq = _get_from_cache(requested_seq_idx)
-                            if cached_seq:
-                                while cache[0].seq_idx < requested_seq_idx:
-                                    cache.popleft()
-                                cond.notify()
-                        if not cached_seq:
-                            msg_queue.append((parent_msg, parent_kwargs))
-                            num_unhandled_msgs += 1
-                            cond.notify()
-                    if cached_seq:
-                        parent_conn.send(("data_seq", cached_seq))
-            except EOFError:  # when parent dies
-                pass
-            finally:
-                with cond:
-                    msg_queue.append(("exit", {}))
-                    cond.notify()
-
-        threading.Thread(target=_serve_parent, name=f"MPD worker {worker_index} serve parent", daemon=True).start()
-
-        try:
-            while True:
-                with cond:
-                    while not msg_queue and not (got_init_seq_order and not got_seq_end and len(cache) < buffer_size):
-                        cond.wait()
-                    msg, kwargs = msg_queue.popleft() if msg_queue else (None, None)
-                if msg is None:
-                    if not _add_to_cache():
-                        got_seq_end = True
-                    continue
-                if msg == "exit":
-                    break
-                elif msg == "get_data_seq":
-                    seq_idx = kwargs["seq_idx"]
-                    while cache and cache[0].seq_idx < seq_idx:
-                        cache.popleft()
-                    res = _get(seq_idx)
-                    parent_conn.send(("data_seq", res))
-                elif msg == "init":
-                    assert worker_index == 0
-                    if dataset is None:
-                        dataset = init_dataset(dataset_dict)
-                    parent_conn.send(("num_inputs", dataset.num_inputs))
-                    parent_conn.send(("num_outputs", dataset.num_outputs))
-                    parent_conn.send(("labels", dataset.labels))
-                    parent_conn.send(("supports_sharding", dataset.supports_sharding()))
-                elif msg == "set_sharding":
-                    dataset_dict = {
-                        **dataset_dict,
-                        "_num_shards": kwargs["num_shards"],
-                        "_shard_index": kwargs["shard_index"],
-                    }
-                    if dataset is not None:
-                        dataset.set_sharding(**kwargs)
-                    parent_conn.send(("set_sharding", None))
-                elif msg == "get_total_num_seqs":
-                    assert dataset
+        def _handle_msg(msg: str, kwargs: Dict[str, Any]):
+            nonlocal dataset_dict
+            if msg == "init":
+                assert worker_index == 0
+                if loop.dataset is None:
+                    loop.dataset = init_dataset(dataset_dict)
+                parent_conn.send(("num_inputs", loop.dataset.num_inputs))
+                parent_conn.send(("num_outputs", loop.dataset.num_outputs))
+                parent_conn.send(("labels", loop.dataset.labels))
+                parent_conn.send(("supports_sharding", loop.dataset.supports_sharding()))
+            elif msg == "set_sharding":
+                dataset_dict = {
+                    **dataset_dict,
+                    "_num_shards": kwargs["num_shards"],
+                    "_shard_index": kwargs["shard_index"],
+                }
+                if loop.dataset is not None:
+                    loop.dataset.set_sharding(**kwargs)
+                parent_conn.send(("set_sharding", None))
+            elif msg == "get_total_num_seqs":
+                assert loop.dataset
+                try:
+                    total_num_seqs = loop.dataset.get_total_num_seqs()
+                    assert isinstance(total_num_seqs, int)
+                except NotImplementedError as exc:
+                    total_num_seqs = NotImplementedError(f"{exc} in {loop.dataset}")
+                parent_conn.send(("total_num_seqs", total_num_seqs))
+            elif msg == "get_all_tags":
+                assert loop.dataset
+                try:
+                    all_tags = loop.dataset.get_all_tags()
+                    assert isinstance(all_tags, list)
+                except NotImplementedError as exc:
+                    all_tags = NotImplementedError(f"{exc} in {loop.dataset}")
+                parent_conn.send(("all_tags", all_tags))
+            elif msg == "get_data_keys":
+                assert loop.dataset
+                data_keys = loop.dataset.get_data_keys()
+                parent_conn.send(("data_keys", data_keys))
+            elif msg == "get_data_dtypes":
+                assert loop.dataset
+                data_keys = loop.dataset.get_data_keys()
+                parent_conn.send(("data_dtypes", {k: loop.dataset.get_data_dtype(k) for k in data_keys}))
+            elif msg == "init_seq_order":
+                if loop.dataset is None:
+                    loop.dataset = init_dataset(dataset_dict)
+                if sharding_method == "dedicated":
+                    loop.dataset.init_seq_order(**kwargs)
                     try:
-                        total_num_seqs = dataset.get_total_num_seqs()
-                        assert isinstance(total_num_seqs, int)
-                    except NotImplementedError as exc:
-                        total_num_seqs = NotImplementedError(f"{exc} in {dataset}")
-                    parent_conn.send(("total_num_seqs", total_num_seqs))
-                elif msg == "get_all_tags":
-                    assert dataset
-                    try:
-                        all_tags = dataset.get_all_tags()
-                        assert isinstance(all_tags, list)
-                    except NotImplementedError as exc:
-                        all_tags = NotImplementedError(f"{exc} in {dataset}")
-                    parent_conn.send(("all_tags", all_tags))
-                elif msg == "get_data_keys":
-                    assert dataset
-                    data_keys = dataset.get_data_keys()
-                    parent_conn.send(("data_keys", data_keys))
-                elif msg == "get_data_dtypes":
-                    assert dataset
-                    data_keys = dataset.get_data_keys()
-                    parent_conn.send(("data_dtypes", {k: dataset.get_data_dtype(k) for k in data_keys}))
-                elif msg == "init_seq_order":
-                    if dataset is None:
-                        dataset = init_dataset(dataset_dict)
-                    if sharding_method == "dedicated":
-                        dataset.init_seq_order(**kwargs)
+                        num_seqs = loop.dataset.num_seqs
+                    except NotImplementedError:
+                        num_seqs = None
+                    parent_conn.send(("num_seqs", num_seqs))
+                elif sharding_method == "seq_order":
+                    if worker_index == 0:
+                        # We are responsible to get the seq order and distrib it to all the other workers.
+                        assert other_worker_conns is not None
+                        loop.dataset.init_seq_order(**kwargs)
                         try:
-                            num_seqs = dataset.num_seqs
-                        except NotImplementedError:
-                            num_seqs = None
-                        parent_conn.send(("num_seqs", num_seqs))
-                    elif sharding_method == "seq_order":
-                        if worker_index == 0:
-                            # We are responsible to get the seq order and distrib it to all the other workers.
-                            assert other_worker_conns is not None
-                            dataset.init_seq_order(**kwargs)
-                            try:
-                                seq_order = dataset.get_current_seq_order()
-                            except Exception as exc:
-                                raise Exception(
-                                    f"{MultiProcDataset.__name__}: `get_current_seq_order()` failed on {dataset}. "
-                                    f'Consider trying {MultiProcDataset.__name__}\'s "sharding_method": "dedicated", '
-                                    "which uses a different method for distributing the segments across workers."
-                                ) from exc
-                            for i, worker_conn in enumerate(other_worker_conns):
-                                worker_conn.send(("seq_order_shard", seq_order[i + 1 :: len(other_worker_conns) + 1]))
-                            parent_conn.send(("num_seqs", len(seq_order)))
-                            # Now reset seq order for ourself (as the role of a normal worker).
-                            kwargs["seq_order"] = seq_order[0 :: len(other_worker_conns) + 1]
-                            kwargs.pop("seq_list", None)
-                            dataset.init_seq_order(**kwargs)
-                        else:
-                            assert seq_order_conn is not None
-                            msg_, seq_order = seq_order_conn.recv()
-                            assert msg_ == "seq_order_shard"
-                            dataset.init_seq_order(seq_order=seq_order, **kwargs)
+                            seq_order = loop.dataset.get_current_seq_order()
+                        except Exception as exc:
+                            raise Exception(
+                                f"{MultiProcDataset.__name__}: `get_current_seq_order()` failed on {loop.dataset}. "
+                                f'Consider trying {MultiProcDataset.__name__}\'s "sharding_method": "dedicated", '
+                                "which uses a different method for distributing the segments across workers."
+                            ) from exc
+                        for i, worker_conn in enumerate(other_worker_conns):
+                            worker_conn.send(("seq_order_shard", seq_order[i + 1 :: len(other_worker_conns) + 1]))
+                        parent_conn.send(("num_seqs", len(seq_order)))
+                        # Now reset seq order for ourself (as the role of a normal worker).
+                        kwargs["seq_order"] = seq_order[0 :: len(other_worker_conns) + 1]
+                        kwargs.pop("seq_list", None)
+                        loop.dataset.init_seq_order(**kwargs)
                     else:
-                        raise ValueError(f"{MultiProcDataset.__name__}: unknown sharding_method: {sharding_method}")
-                    got_init_seq_order = True
-                    got_seq_end = False
-                    next_seq_idx = 0
-                    cache.clear()
-                elif msg == "finish_epoch":
-                    got_init_seq_order = False
-                    next_seq_idx = 0
-                    cache.clear()
-                    if dataset:
-                        dataset.finish_epoch(**kwargs)
-                    if kwargs["free_resources"]:
-                        dataset = None
-                        gc.collect()
+                        assert seq_order_conn is not None
+                        msg_, seq_order = seq_order_conn.recv()
+                        assert msg_ == "seq_order_shard"
+                        loop.dataset.init_seq_order(seq_order=seq_order, **kwargs)
                 else:
-                    raise Exception(f"unknown msg {msg!r}")
-                with cond:
-                    num_unhandled_msgs -= 1
-        except KeyboardInterrupt:  # when parent dies
-            pass
-        except EOFError:  # when parent dies
-            pass
+                    raise ValueError(f"{MultiProcDataset.__name__}: unknown sharding_method: {sharding_method}")
+                loop.on_init_seq_order()
+            elif msg == "finish_epoch":
+                loop.on_finish_epoch()
+                if loop.dataset:
+                    loop.dataset.finish_epoch(**kwargs)
+                if kwargs["free_resources"]:
+                    loop.dataset = None
+                    gc.collect()
+            else:
+                raise Exception(f"unknown msg {msg!r}")
+
+        loop.run(_handle_msg)
 
     def init_seq_order(self, epoch=None, seq_list=None, seq_order=None):
         """
