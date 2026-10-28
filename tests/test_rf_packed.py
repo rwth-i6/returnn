@@ -3135,6 +3135,45 @@ def test_batch_norm_packed_gapped_unpacked_dim_of_the_seq_lens():
         assert packed._batch_norm_gapped(xp, {"in_dim": feat_dim}) is None, (gap, total_bound)
 
 
+def test_batch_norm_packed_dense_relayout_fallback_keeps_the_packing():
+    """the dense re-layout fallback restores the input packing, incl. layout lens and a bound buffer"""
+    rf.select_backend_torch()
+    batch_dim = Dim(2, name="batch")
+    time_dim = Dim(Tensor("time", dims=[batch_dim], dtype="int32", raw_tensor=torch.tensor([5, 3], dtype=torch.int32)))
+    extra_static_dim = Dim(3, name="extra_static")
+    # no static size: _batch_norm_gapped does not apply, the dense re-layout fallback runs
+    extra_dim = Dim(Tensor("extra", dims=[], dtype="int32", raw_tensor=torch.tensor(3, dtype=torch.int32)))
+    feat_dim = Dim(4, name="feat")
+    x = Tensor("x", dims=[batch_dim, time_dim, extra_static_dim, feat_dim], dtype="float32")
+    x.raw_tensor = torch.randn(2, 5, 3, 4, generator=torch.Generator().manual_seed(8))
+    layout_lens = Tensor("layout_lens", dims=[batch_dim], dtype="int32", raw_tensor=torch.tensor([6, 4]).int())
+
+    def _with_extra_dim(xp):
+        xp, _ = rf.replace_dim(xp, in_dim=extra_static_dim, out_dim=extra_dim)
+        return xp
+
+    packings = {
+        "gap": lambda: packed.pack(x, gap=1),
+        "gap, bound": lambda: packed.pack(x, gap=1, total_bound=16),
+        "layout lens, bound": lambda: packed.regap(
+            packed.pack(x, total_bound=16), 1, layout_lens=layout_lens, total_bound=16
+        ),
+        "layout lens": lambda: packed.regap(packed.pack(x), 1, layout_lens=layout_lens),
+    }
+    packed.set_allowed_fallbacks(["batch_norm"])
+    try:
+        with rf.set_default_device_ctx("cpu"), rf.get_run_ctx().train_flag_ctx(True):
+            ref = packed.unpack(rf.BatchNorm(feat_dim, use_mask=False)(_with_extra_dim(packed.pack(x))))
+            for name, make in packings.items():
+                xp = _with_extra_dim(make())
+                assert packed._batch_norm_gapped(xp, {"in_dim": feat_dim}) is None, name
+                out = rf.BatchNorm(feat_dim, use_mask=False)(xp)
+                assert out.raw_tensor.same_packing(xp.raw_tensor), name
+                _assert_equal_non_padded(out, ref, batch_dim, time_dim)
+    finally:
+        packed.set_allowed_fallbacks(None)
+
+
 def test_num_elements_of_shape_source():
     """
     with source, the count covers what a reduction of it covers:

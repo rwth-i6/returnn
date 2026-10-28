@@ -1509,15 +1509,7 @@ def _dim_aware_call(name: str, args, kwargs):
                     [dense if x is src else x for x in args],
                     {k: (dense if v is src else v) for k, v in kwargs.items()},
                 )
-                if isinstance(out, Tensor) and is_packed(out) and out.raw_tensor.same_packing(dense.raw_tensor):
-                    # match raw0's CAPACITY too, not just its layout:
-                    # the replace_dim below relabels the packed dim, it cannot resize the buffer
-                    back = regap(out, raw0.gap, align=raw0.align, total_bound=raw0.packed_dim.dimension)
-                    inner, _ = rf.replace_dim(
-                        back.raw_tensor.inner, in_dim=back.raw_tensor.packed_dim, out_dim=raw0.packed_dim
-                    )
-                    return raw0.rewrap(inner, name=name)
-                return out  # unusual result structure; correct, just re-layouted
+                return _conform_packing(out, raw0)
             _warn_fallback_once(name, "implicitly reduces over the packed dim, gapped layout")
         else:
             inner_args = [_map_packed_to_inner(x) for x in args]
