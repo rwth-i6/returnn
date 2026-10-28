@@ -27,7 +27,6 @@ from returnn.torch.updater import Updater
 import returnn.frontend as rf
 from returnn.forward_iface import ForwardCallbackIface
 from returnn.datasets import init_dataset
-from returnn.datasets.generating import StaticDataset
 
 
 # must be in the global scope due to pickling
@@ -1721,22 +1720,15 @@ def test_torch_engine_distributed_cpu():
     assert param_sums[0] == param_sums[1], param_sums
 
 
-# must be in the global scope due to pickling
-class _SlowStaticDataset(StaticDataset):
-    """sleeps for every seq, like a slow input pipeline"""
-
-    def __init__(self, *, sleep_secs: float, **kwargs):
-        super().__init__(**kwargs)
-        self._sleep_secs = sleep_secs
-
-    def _collect_single_seq(self, seq_idx: int):
-        time.sleep(self._sleep_secs)
-        return super()._collect_single_seq(seq_idx)
-
-
 def _train_slow_input_log(*, sleep_secs: float, log_fn: str, torch_distributed: Optional[Dict[str, Any]] = None):
     """train one epoch of 10 steps with 2 seqs each, the RETURNN log goes to ``log_fn``"""
     from returnn.log import log as returnn_log
+    from returnn.datasets.generating import StaticDataset
+
+    class _SlowStaticDataset(StaticDataset):
+        def _collect_single_seq(self, seq_idx: int):
+            time.sleep(sleep_secs)
+            return super()._collect_single_seq(seq_idx)
 
     rnd = numpy.random.RandomState(42)
     seqs = [
@@ -1761,7 +1753,7 @@ def _train_slow_input_log(*, sleep_secs: float, log_fn: str, torch_distributed: 
     returnn_log.initialize(logs=[log_fn], verbosity=[5])
     try:
         with global_config_ctx(config):
-            dataset = _SlowStaticDataset(sleep_secs=sleep_secs, data=seqs, input_dim=9, output_dim=2)
+            dataset = _SlowStaticDataset(data=seqs, input_dim=9, output_dim=2)
             dataset.init_seq_order(epoch=1)
             engine = Engine(config=config)
             engine.init_train_from_config(train_data=dataset)
