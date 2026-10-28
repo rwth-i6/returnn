@@ -429,13 +429,12 @@ class _PackedStorage:
     def __repr__(self):
         return f"_PackedStorage({self.orig_dims} -> {self.packed_dim}, gap={self.gap}, align={self.align})"
 
-    def cache_key_parts(self) -> Tuple[Any, ...]:
-        """:return: key parts, see :func:`rf.TensorLayout.cache_key_parts`"""
+    def _cache_key_parts(self) -> Tuple[Any, ...]:
         # the packing as in PackedRawTensor.same_packing, and the layout of the packed data
         return self.packed_dim, self.orig_dims, self.gap, self.align, self.layout_lens, self.inner
 
     def _key(self) -> Tuple[Any, ...]:
-        return tuple(id(part) if isinstance(part, Tensor) else part for part in self.cache_key_parts())
+        return tuple(id(part) if isinstance(part, Tensor) else part for part in self._cache_key_parts())
 
     def __eq__(self, other):
         if isinstance(other, _PackedStorage):

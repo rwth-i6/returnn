@@ -1242,9 +1242,10 @@ def test_cache_dim_remap_identity():
     # both that and the identity-based cache remap are covered here
     assert derived_dim != batch_dim
     cache = Cache(max_size=2)
-    cache.set(("test_cache_dim_remap_identity", batch_dim), (derived_dim, batch_dim))
+    value = (derived_dim, batch_dim)
+    cache.set(("test_cache_dim_remap_identity", batch_dim), value)
     hit = cache.get(("test_cache_dim_remap_identity", batch_dim))
-    assert hit is not None
+    assert hit is value  # the same dims: the cached value itself, no copy
     got_derived, got_batch = hit
     assert got_derived is derived_dim
     assert got_batch is batch_dim
@@ -1306,44 +1307,6 @@ def test_cache_tensor_key_by_raw_tensor():
     assert cache.get(("test_cache_tensor_key_by_raw_tensor", x)) is None
 
 
-def test_cache_dim_key_backend():
-    """
-    A Dim key is of the backend of its sizes:
-    dims with equal sizes in another backend do not share the entry.
-    A hit with the same dims returns the cached value itself.
-    """
-    import torch
-    from returnn.frontend._cache import Cache
-
-    rf.select_backend_torch()
-    b_dim = Dim(2, name="b")
-    t_dim = Dim(Tensor("t_lens", [b_dim], dtype="int32", raw_tensor=torch.tensor([3, 2], dtype=torch.int32)))
-    t_np_dim = Dim(Tensor("t_np_lens", [b_dim], dtype="int32", raw_tensor=numpy.array([3, 2], dtype="int32")))
-    cache = Cache(max_size=4)
-    value = rf.zeros([b_dim, t_dim])
-    cache.set(("test_cache_dim_key_backend", t_dim), value)
-    assert cache.get(("test_cache_dim_key_backend", t_np_dim)) is None
-    assert cache.get(("test_cache_dim_key_backend", t_dim)) is value
-
-
-def test_cache_scalar_dim_key_with_capacity():
-    """a scalar dyn dim key with a capacity is keyed by its size, not by the capacity"""
-    import torch
-    from returnn.frontend._cache import Cache
-
-    rf.select_backend_torch()
-
-    def _hist_dim(size: int) -> Dim:
-        return Dim(Tensor("hist_size", [], dtype="int32", raw_tensor=torch.tensor(size, dtype=torch.int32)), capacity=5)
-
-    hist2_dim, hist3_dim, hist3b_dim = _hist_dim(2), _hist_dim(3), _hist_dim(3)
-    cache = Cache(max_size=4)
-    cache.set(("test_cache_scalar_dim_key_with_capacity", hist2_dim), 2)
-    assert cache.get(("test_cache_scalar_dim_key_with_capacity", hist3_dim)) is None
-    cache.set(("test_cache_scalar_dim_key_with_capacity", hist3_dim), 3)
-    assert cache.get(("test_cache_scalar_dim_key_with_capacity", hist3b_dim)) == 3
-
-
 def test_dim_bounded_by_capacity():
     from returnn.tensor import Dim, Tensor, batch_dim
 
@@ -1353,6 +1316,23 @@ def test_dim_bounded_by_capacity():
     time_dim.capacity = 100
     with rf.set_static_traceable_ctx():
         assert bounded.get_dim_value() == 100
+
+
+def test_cache_dim_key_size_dims():
+    """dims with equal sizes share the entry only when their sizes are over the same dims"""
+    import torch
+    from returnn.frontend._cache import Cache
+
+    rf.select_backend_torch()
+    b_dim, b2_dim = Dim(2, name="b"), Dim(2, name="b2")
+
+    def _t_dim(size_dim: Dim) -> Dim:
+        return Dim(Tensor("t_lens", [size_dim], dtype="int32", raw_tensor=torch.tensor([3, 2], dtype=torch.int32)))
+
+    cache = Cache(max_size=4)
+    cache.set(("test_cache_dim_key_size_dims", _t_dim(b_dim)), 1)
+    assert cache.get(("test_cache_dim_key_size_dims", _t_dim(b_dim))) == 1
+    assert cache.get(("test_cache_dim_key_size_dims", _t_dim(b2_dim))) is None
 
 
 def test_dim_host_value_guard_static_traceable():

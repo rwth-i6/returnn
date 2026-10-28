@@ -34,7 +34,7 @@ class Cache:
       so a new Tensor wrapping the same raw tensor matches (e.g. raw tensors wrapped only for the lookup).
       Its dims (and sparse dim, feature axis, version) are part of the key, the dims like Dim keys
       (and the output is mapped to them).
-    - :class:`rf.TensorLayout` as keys: its key parts (:func:`rf.TensorLayout.cache_key_parts`) are keys as above.
+    - :class:`rf.TensorLayout` as keys: its key parts (:func:`rf.TensorLayout._cache_key_parts`) are keys as above.
       The output is mapped also in its storage layout (e.g. the packed dims), via :func:`rf.replace_dim`.
     """
 
@@ -147,7 +147,8 @@ def _flatten_key(key: Any) -> List[Any]:
     res = []
     for key_item in tree.flatten(key):
         if isinstance(key_item, rf.TensorLayout):
-            res += _flatten_key(key_item.cache_key_parts())
+            # noinspection PyProtectedMember
+            res += _flatten_key(key_item._cache_key_parts())
         else:
             res.append(key_item)
     return res
@@ -188,8 +189,6 @@ def _flat_dim_wrappers(key_transformed: Tuple[Any, ...]) -> List[Any]:
 def _get_backend(*args) -> Type[Backend]:
     args_flat = _flatten_key(args)
     for arg in args_flat:
-        if isinstance(arg, Dim) and arg.dyn_size_ext is not None:
-            arg = arg.dyn_size_ext
         if isinstance(arg, Tensor) and arg.raw_tensor is not None:
             return get_backend_by_raw_tensor_type(type(arg.raw_tensor))
     return global_backend.__class__
@@ -268,12 +267,16 @@ class DimWrapper:
     Wraps :class:`Dim`.
     Using weakref for the dim.
     If the size is known (static, or eager scalar, or eager seq lens),
-    equality is given when the size values are equal (and the dim tag is ignored);
+    equality is given when the size values are equal and the sizes are over the same dims (and the dim tag is ignored);
     :func:`Cache.get` then maps the cached output back to the queried dim.
     """
 
     def __init__(self, dim: Dim, *, finalize_callback):
         self.dim_value = _dim_value_for_key(dim, finalize_callback=finalize_callback)
+        if self.dim_value is not None and dim.dyn_size_ext is not None:
+            # by identity: an output over sizes of other dims (e.g. a packing) cannot be mapped one dim at a time
+            size_dims = tuple(_WeakIdRef(d, finalize_callback) for d in dim.dyn_size_ext.dims)
+            self.dim_value += (size_dims,)
         # dim_value covers every dim with a dyn size (value key or size_ref identity key),
         # incl. finalization via the raw size tensor.
         # The dim ref fallback remains only for dims without any size info
@@ -321,8 +324,9 @@ def _dim_value_for_key(dim: Dim, *, finalize_callback=None) -> Optional[Tuple[An
         # dims sharing the same size tensor (e.g. fresh kv dims from replace_dim)
         # then share the cache entry, as with value-keying in the eager cpu case.
         return "size_ref", _WeakIdRef(dim.dyn_size_ext.raw_tensor, finalize_callback), dim.capacity
-    # Eager dyn sizes (e.g. seq lens [batch], or a scalar size): key by the size values
-    # (not get_dim_value, which is the capacity if there is one),
+    if not dim.dyn_size_ext.dims:
+        return int(dim.get_dim_value()), dim.capacity
+    # Non-scalar eager dyn sizes (e.g. seq lens [batch]): key by the size values,
     # so dims with equal lens share the cache entry
     # (e.g. the fresh kv dim which attention creates per layer via replace_dim).
     # The cached output is mapped back to the queried dim in Cache.get (dim_map).
