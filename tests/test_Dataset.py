@@ -2901,6 +2901,22 @@ def test_MegatronDataset_invalid():
         _check(_megatron_index_bytes(**{**valid_opts, "document_indices": [0, 2, 1, 3]}), error="not monotonic")
 
 
+def test_MegatronDataset_load_seqs_end():
+    # CachedDataset2.load_seqs allows an end beyond num_seqs.
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        files = _megatron_write(f"{tmp_dir}/data", [[[1, 2], [3]], [[4, 5, 6]]], dtype="int32")
+        dataset = init_dataset({"class": "MegatronDataset", **files, "vocab_size": 8})
+        dataset.init_seq_order(epoch=1)
+        dataset.load_seqs(0, 5)
+        assert [dataset.get_data(i, "data").tolist() for i in range(3)] == [[1, 2], [3], [4, 5, 6]]
+        assert [dataset.get_seq_length(i)["data"] for i in range(3)] == [2, 1, 3]
+        assert [dataset.get_tag(i) for i in range(3)] == ["data/doc-0/seq-0", "data/doc-0/seq-1", "data/doc-1/seq-0"]
+        assert not dataset.is_less_than_num_seqs(3)
+        dataset.init_seq_order(seq_order=[])
+        dataset.load_seqs(0, 1)
+        assert not dataset.is_less_than_num_seqs(0)
+
+
 def test_MegatronDataset_partition_epoch_sharding():
     # Over the sub epochs of one full epoch, the shards together cover every seq exactly once.
     num_seqs, partition_epoch, num_shards = 23, 3, 2

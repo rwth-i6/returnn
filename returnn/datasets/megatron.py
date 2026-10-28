@@ -160,7 +160,9 @@ class MegatronDataset(CachedDataset2):
                     return int(self._seq_offsets[file_idx]) + start + seq_in_doc
         raise ValueError(f"{self}: seq_list tag {tag!r} not in dataset")
 
-    def _collect_single_seq(self, seq_idx: int) -> DatasetSeq:
+    def _collect_single_seq(self, seq_idx: int) -> Optional[DatasetSeq]:
+        if seq_idx >= self.num_seqs:
+            return None
         corpus_seq_idx = self.get_corpus_seq_idx(seq_idx)
         self._lazy_init()
         file_idx, local_seq_idx = self._get_file_and_local_seq_idx(corpus_seq_idx)
