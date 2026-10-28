@@ -249,7 +249,7 @@ class DimWrapper:
 
     def __init__(self, dim: Dim, *, finalize_callback):
         self.dim_value = _dim_value_for_key(dim, finalize_callback=finalize_callback)
-        if self.dim_value is not None and dim.dyn_size_ext is not None:
+        if self.dim_value is not None and dim.dyn_size_ext is not None and dim.dyn_size_ext.dims:
             # by identity: an output over sizes of other dims (e.g. a packing) cannot be mapped one dim at a time
             size_dims = tuple(_WeakIdRef(d, finalize_callback) for d in dim.dyn_size_ext.dims)
             self.dim_value += (size_dims,)
