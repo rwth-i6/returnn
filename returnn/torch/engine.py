@@ -1689,7 +1689,7 @@ class Engine(EngineBase):
         if not self._do_save():
             return
         filename = self.get_epoch_model_filename() + ".opt" + util.get_model_filename_postfix()
-        self._updater.save_optimizer(filename)
+        self._updater.save_optimizer(filename, step=self.global_train_step)
 
         # keep only the last two optimizer states (two in case one file gets corrupted)
         clean_epoch = self.epoch - 2

@@ -516,11 +516,13 @@ class Updater:
                 param_names.append(param_id_to_name[id(p)])
         return param_names, param_id_to_name
 
-    def save_optimizer(self, filename):
+    def save_optimizer(self, filename, *, step: Optional[int] = None):
         """
         Saves the state of self.optimizer to a file.
 
         :param str filename: File in which to save the optimizer state.
+        :param step: global train step to store. By default the one of the last :func:`set_current_train_step`.
+            The engine passes its own, which the distributed epoch-end sync can have changed after that.
         """
         directory = os.path.dirname(filename)
         if directory and not os.path.exists(directory):
@@ -549,7 +551,7 @@ class Updater:
                 "optimizer_opts": _optimizer_opts_for_checkpoint(self._optimizer_opts),
                 "param_names": param_names,
                 "epoch": self._current_epoch,
-                "step": self._current_train_step,
+                "step": self._current_train_step if step is None else step,
                 "effective_learning_rate": self.get_effective_learning_rate(),
                 "returnn_version": returnn.__long_version__,
             },

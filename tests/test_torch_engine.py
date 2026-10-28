@@ -2645,6 +2645,7 @@ def _check_torch_distributed_sync_at_epoch_end(sync_at_epoch_end: bool):
             nprocs=world_size,
         )
         res = [torch.load(f"{tmp_dir}/rank{rank}.pt") for rank in range(world_size)]
+        saved_model = torch.load(f"{tmp_dir}/model.002.pt")  # written by rank 0
         saved_opt = torch.load(f"{tmp_dir}/model.002.opt.pt")  # written by rank 0
     params_equal = all(torch.equal(p0, p1) for p0, p1 in zip(res[0]["params"], res[1]["params"]))
     state_keys = sorted(res[0]["state"][0].keys())
@@ -2660,6 +2661,7 @@ def _check_torch_distributed_sync_at_epoch_end(sync_at_epoch_end: bool):
     assert params_equal == sync_at_epoch_end and state_equal == sync_at_epoch_end
     # the max over the ranks after each of the 2 epochs: 8 + 8; without the sync, 7 + 7 and 8 + 8
     assert steps == ([16, 16] if sync_at_epoch_end else [14, 16]), steps
+    assert saved_model["step"] == saved_opt["step"] == steps[0], (saved_model["step"], saved_opt["step"], steps)
     for rank in range(world_size):
         buffers = res[rank]["buffers"]
         assert torch.equal(buffers["stat"], torch.full((2,), 0.5 if sync_at_epoch_end else float(rank))), (
