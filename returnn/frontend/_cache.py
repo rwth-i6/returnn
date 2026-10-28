@@ -324,9 +324,8 @@ def _dim_value_for_key(dim: Dim, *, finalize_callback=None) -> Optional[Tuple[An
         # dims sharing the same size tensor (e.g. fresh kv dims from replace_dim)
         # then share the cache entry, as with value-keying in the eager cpu case.
         return "size_ref", _WeakIdRef(dim.dyn_size_ext.raw_tensor, finalize_callback), dim.capacity
-    if not dim.dyn_size_ext.dims:
-        return int(dim.get_dim_value()), dim.capacity
-    # Non-scalar eager dyn sizes (e.g. seq lens [batch]): key by the size values,
+    # Eager dyn sizes (e.g. seq lens [batch], or a scalar size): key by the size values
+    # (not get_dim_value, which is the capacity if there is one),
     # so dims with equal lens share the cache entry
     # (e.g. the fresh kv dim which attention creates per layer via replace_dim).
     # The cached output is mapped back to the queried dim in Cache.get (dim_map).
