@@ -157,6 +157,50 @@ def test_depthwise_conv_grad_runs():
     run_model(extern_data, lambda *, epoch, step: _Net(), _forward_step, tf_low_level=True)
 
 
+def test_conv1d_padding_left_right_dynamic_time():
+    # a (left, right) padding pair on a dynamic time dim: the out seq lens follow the pair,
+    # the values and the input gradient match between torch and TF
+    time_dim = Dim(Tensor("time", [batch_dim], dtype="int32"))
+    in_dim = Dim(4, name="in")
+    extern_data = TensorDict({"data": Tensor("data", [batch_dim, time_dim, in_dim], dtype="float32")})
+
+    class _Net(rf.Module):
+        def __init__(self):
+            super().__init__()
+            self.conv = rf.Conv1d(in_dim, in_dim, filter_size=3, groups=in_dim.dimension, padding=[(2, 0)])
+
+    # noinspection PyShadowingNames
+    def _forward_step(*, model: _Net, extern_data: TensorDict):
+        out, out_time_dim = model.conv(extern_data["data"], in_spatial_dim=time_dim)
+        out.mark_as_default_output(shape=(batch_dim, out_time_dim, in_dim))
+        rf.reduce_sum(out, axis=out.dims).mark_as_output("loss", shape=())
+
+    run_model(extern_data, lambda *, epoch, step: _Net(), _forward_step, tf_low_level=True)
+
+
+def test_conv2d_padding_left_right():
+    # two different pairs, so a swapped order of the spatial dims in the padding would show
+    height_dim = Dim(5, name="height")
+    width_dim = Dim(7, name="width")
+    in_dim = Dim(3, name="in")
+    out_dim = Dim(2, name="out")
+    extern_data = TensorDict({"data": Tensor("data", [batch_dim, height_dim, width_dim, in_dim], dtype="float32")})
+
+    class _Net(rf.Module):
+        def __init__(self):
+            super().__init__()
+            self.conv = rf.Conv2d(in_dim, out_dim, filter_size=[3, 4], padding=[(1, 0), (0, 2)])
+
+    # noinspection PyShadowingNames
+    def _forward_step(*, model: _Net, extern_data: TensorDict):
+        out, (out_height_dim, out_width_dim) = model.conv(extern_data["data"], in_spatial_dims=[height_dim, width_dim])
+        assert out_height_dim.dimension == 4 and out_width_dim.dimension == 6, (out_height_dim, out_width_dim)
+        out.mark_as_default_output(shape=(batch_dim, out_height_dim, out_width_dim, out_dim))
+        rf.reduce_sum(out, axis=out.dims).mark_as_output("loss", shape=())
+
+    run_model(extern_data, lambda *, epoch, step: _Net(), _forward_step, tf_low_level=True)
+
+
 def test_scatter_logsumexp_stop_gradient_scope():
     # rf.scatter_logsumexp is the RF-internal user of rf.stop_gradient_scope,
     # which this backend cannot implement faithfully (see TFBackend.stop_gradient_scope).
