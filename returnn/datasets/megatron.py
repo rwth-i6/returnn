@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 from typing import Optional, Union, Any, Sequence, Dict, List, Tuple
+import bisect
 import os
 import struct
 import numpy
@@ -199,7 +200,8 @@ class MegatronDataset(CachedDataset2):
         self._lazy_init()
         file_idx, local_seq_idx = self._get_file_and_local_seq_idx(self.get_corpus_seq_idx(sorted_seq_idx))
         document_indices = self._files[file_idx].document_indices
-        document_idx = int(numpy.searchsorted(document_indices, local_seq_idx, side="right")) - 1
+        # Not numpy.searchsorted: it copies the whole (unaligned) mapped table on every call.
+        document_idx = bisect.bisect_right(document_indices, local_seq_idx) - 1
         seq_in_doc = local_seq_idx - int(document_indices[document_idx])
         return f"{self._tag_names[file_idx]}/doc-{document_idx}/seq-{seq_in_doc}"
 
