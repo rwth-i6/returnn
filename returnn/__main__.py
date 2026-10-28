@@ -579,9 +579,9 @@ def finalize(error_occurred=False):
             # NCCL polls for live graphs in the communicator destruction (see Engine.finalize)
             engine.finalize(error_occurred=error_occurred)
             if config.typed_value("torch_distributed") is not None:
-                from torch.distributed import destroy_process_group
+                from returnn.torch.distributed import get_ctx
 
-                destroy_process_group()
+                get_ctx().destroy_process_groups()
 
 
 def need_data() -> bool:
