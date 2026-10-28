@@ -37,16 +37,6 @@ derived_capacity_memoized_dims = weakref.WeakSet()
 _seq_mask_cache: Optional[Cache] = None  # (dim, device, dim_order, like layout) -> seq mask, see Dim.get_mask
 
 
-def _get_seq_mask_cache() -> Cache:
-    global _seq_mask_cache
-    if _seq_mask_cache is None:
-        # noinspection PyProtectedMember
-        from returnn.frontend import _cache  # not at module level: returnn.frontend imports returnn.tensor
-
-        _seq_mask_cache = _cache.Cache(32)  # about 10 masks per step in a Conformer AED
-    return _seq_mask_cache
-
-
 class DimTypes:
     """
     Defines possible values for ``kind``.
@@ -943,7 +933,13 @@ class _DimMixin:
             dim_order = tuple([d for d in dim_order if d in dim_order_default])  # filter
         else:
             dim_order = dim_order_default
-        cache = _get_seq_mask_cache()
+        global _seq_mask_cache
+        if _seq_mask_cache is None:
+            # noinspection PyProtectedMember
+            from returnn.frontend import _cache  # not at module level: returnn.frontend imports returnn.tensor
+
+            _seq_mask_cache = _cache.Cache(32)  # about 10 masks per step in a Conformer AED
+        cache = _seq_mask_cache
         cache_key = (self, device, dim_order, like)
         seq_mask = cache.get(cache_key)
         if seq_mask is not None:
