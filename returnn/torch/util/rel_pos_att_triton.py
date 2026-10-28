@@ -741,8 +741,7 @@ if hasattr(torch.library, "custom_op"):  # torch >= 2.4
     torch.library.register_autograd("returnn::rel_pos_att_fwd", _lib_backward, setup_context=_lib_setup_context)
 
     def _pad_pos_emb(pos_emb: torch.Tensor, dtype: torch.dtype) -> torch.Tensor:
-        # (R,H,D) -> (R_pad,H,D), zero rows up to a multiple of 8:
-        # an odd R as GEMM row length gets an unaligned cuBLAS kernel, ~10x slower
+        # zero rows up to a multiple of 8: an odd R gets an unaligned cuBLAS kernel, ~10x slower
         r = pos_emb.shape[0]
         pos_pad = pos_emb.new_zeros((-(-r // 8) * 8, *pos_emb.shape[1:]), dtype=dtype)
         pos_pad[:r] = pos_emb
@@ -838,8 +837,7 @@ if hasattr(torch.library, "custom_op"):  # torch >= 2.4
             dbd=dbd.permute(1, 0, 2)[..., :r],
         )
         # chain rule through the fused position term,
-        # GEMMs in the io dtype (matches the out-of-op matmul autograd of the non-fused path),
-        # on the padded buffers (the zero padding contributes nothing)
+        # GEMMs in the io dtype (matches the out-of-op matmul autograd of the non-fused path)
         dbd = dbd.to(q.dtype)
         d_qv = dbd.new_empty((n_heads, total, d))
         torch.baddbmm(d_qv, dbd, pos_pad.transpose(0, 1), beta=0.0, alpha=bd_scale, out=d_qv)
