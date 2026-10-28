@@ -6,7 +6,7 @@ https://github.com/rwth-i6/returnn/issues/1287
 """
 
 from __future__ import annotations
-from typing import Optional
+from typing import Optional, Dict
 import torch
 import returnn.frontend as rf
 from returnn.tensor import Dim
@@ -77,14 +77,10 @@ class PTModuleAsRFModule(rf.Module):
             rf_param.raw_tensor = pt_param
             setattr(self, name, rf_param)
 
-        for name, pt_param in pt_module.named_buffers(recurse=False):
-            rf_param = rf.Parameter(
-                raw_tensor=pt_param,
-                dims=[Dim(d) for d in pt_param.shape],
-                dtype=str(pt_param.dtype).split(".")[-1],
-                auxiliary=True,
-            )
-            setattr(self, name, rf_param)
+        # PT buffers become RF aux params.
+        # The PT module keeps owning the buffers, see _sync_buffers.
+        self._pt_buffers = {}
+        self._sync_buffers(recurse=False)
 
         for name, pt_mod in pt_module.named_children():
             rf_mod = pt_module_to_rf_module(pt_mod)
@@ -97,7 +93,50 @@ class PTModuleAsRFModule(rf.Module):
 
     def __call__(self, *args, **kwargs):
         """forward"""
+        self._sync_buffers()
         return self._pt_module(*args, **kwargs)
+
+    def _sync_buffers(self, *, recurse: bool = True):
+        """
+        Make the RF aux params mirror the current PT buffers.
+        PT replaces buffer tensors e.g. in ``.to()``,
+        unlike params, which stay the same objects.
+        Buffers can also be registered, removed or resized after wrapping.
+        The backend needs a ``torch.nn.Parameter`` as raw tensor,
+        so a plain buffer is wrapped in one which shares its storage.
+
+        :param recurse: also for wrapped PT submodules
+        """
+        pt_buffers: Dict[str, torch.Tensor] = dict(self._pt_module.named_buffers(recurse=False))
+        for name in list(self._pt_buffers):
+            if name not in pt_buffers:  # removed or set to None
+                delattr(self, name)
+                del self._pt_buffers[name]
+        for name, pt_buf in pt_buffers.items():
+            if self._pt_buffers.get(name) is pt_buf:
+                continue
+            rf_param = getattr(self, name) if name in self._pt_buffers else None
+            if rf_param is None or [d.dimension for d in rf_param.dims] != list(pt_buf.shape):
+                # The rf.Parameter constructor initializes its raw tensor (zeros by default).
+                # Let it do that on a meta placeholder.
+                rf_param = rf.Parameter(
+                    dims=[Dim(d) for d in pt_buf.shape],
+                    dtype=str(pt_buf.dtype).split(".")[-1],
+                    auxiliary=True,
+                    non_critical_for_restore=name in self._pt_module._non_persistent_buffers_set,
+                    device="meta",
+                )
+                setattr(self, name, rf_param)
+            rf_param.dtype = str(pt_buf.dtype).split(".")[-1]
+            if isinstance(pt_buf, torch.nn.Parameter):
+                rf_param.raw_tensor = pt_buf
+            else:
+                rf_param.raw_tensor = torch.nn.Parameter(pt_buf, requires_grad=False)
+            self._pt_buffers[name] = pt_buf
+        if recurse:
+            for value in vars(self).values():
+                if isinstance(value, PTModuleAsRFModule):
+                    value._sync_buffers()
 
 
 class RFModuleAsPTModule(torch.nn.Module):
@@ -183,6 +222,12 @@ class RFModuleAsPTModule(torch.nn.Module):
             # noinspection PyProtectedMember
             rf_param.dtype = rf_param._raw_backend.get_dtype_name_raw(pt_param)  # dtype might have changed
             rf_param.raw_tensor = pt_param
+
+        # Buffers of wrapped PT submodules might have been replaced as well.
+        for value in vars(self._rf_module).values():
+            if isinstance(value, PTModuleAsRFModule):
+                # noinspection PyProtectedMember
+                value._sync_buffers()
 
         return self
 
