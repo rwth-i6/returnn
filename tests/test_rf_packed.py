@@ -1547,6 +1547,8 @@ def test_sdpa_varlen_restores_layout_lens_static_traceable():
     # The real NJT SDPA runs; on CPU, only the MATH kernel takes nested tensors, and it refuses causal,
     # so allow MATH in addition to the fused kernels and attend non-causally.
     # MATH also needs the dense buffer without bound slack, so pack with the tight bound (5 + 3 frames).
+    if not hasattr(torch.nested, "nested_tensor_from_jagged"):
+        raise unittest.SkipTest("needs torch.nested.nested_tensor_from_jagged (torch too old)")
     import functools
     from unittest import mock
     from torch.nn.attention import sdpa_kernel, SDPBackend
