@@ -857,6 +857,45 @@ def test_causal_self_att_after_concat_state():
     np.testing.assert_allclose(out_whole, out_concat_two, atol=1e-5, rtol=1e-5)
 
 
+def test_causal_self_att_bounded_cache_overflow_fails():
+    # Bounded KV cache at its capacity: the last free slot is written,
+    # and a step beyond must fail instead of advancing the length over a lost entry.
+    import torch
+
+    rf.select_backend_torch()
+    batch = Dim(2, name="batch")
+    model_dim = Dim(8, name="model")
+    capacity = 2
+    with rf.set_default_device_ctx("cpu"):
+        rf.set_random_seed(42)
+        att = rf.CausalSelfAttention(
+            model_dim, proj_dim=model_dim, key_dim_total=model_dim, value_dim_total=model_dim, num_heads=2
+        )
+        x = Tensor("x", [batch, model_dim], dtype="float32", raw_tensor=torch.randn(2, 8))
+
+        def _state(length: int):
+            state = att.default_initial_state(batch_dims=[batch], capacity=capacity)
+            lens = Tensor("hist_len", [batch], dtype="int32", raw_tensor=torch.full((2,), length, dtype=torch.int32))
+            hist_dim = Dim(lens, name="self_att_hist", capacity=capacity)
+            state.k_accum, _ = rf.replace_dim(state.k_accum, in_dim=state.accum_axis, out_dim=hist_dim)
+            state.v_accum, _ = rf.replace_dim(state.v_accum, in_dim=state.accum_axis, out_dim=hist_dim)
+            state.accum_axis = hist_dim
+            return state
+
+        _, new_state = att(x, axis=single_step_dim, state=_state(capacity - 1))
+        assert new_state.accum_axis.dyn_size_ext.raw_tensor.tolist() == [capacity, capacity]
+        k_raw = new_state.k_accum.copy_transpose(
+            [batch, new_state.accum_axis, att.num_heads, att.key_dim_per_head]
+        ).raw_tensor
+        assert (k_raw[:, capacity - 1] != 0).any() and (k_raw[:, : capacity - 1] == 0).all()
+        try:
+            att(x, axis=single_step_dim, state=_state(capacity))
+        except (IndexError, RuntimeError) as exc:
+            print("expected error:", exc)
+        else:
+            raise AssertionError("write beyond the KV cache capacity did not fail")
+
+
 def test_causal_self_attention_static_traceable_bound():
     """
     Bound-shape regime (static traceable): the causal hist kv dim gets its capacity

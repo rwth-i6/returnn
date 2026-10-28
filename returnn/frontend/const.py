@@ -7,6 +7,7 @@ from typing import Optional, Union, Sequence
 import numpy
 from returnn.tensor import Tensor, Dim
 from .types import RawTensorTypes
+from .tensor_layout import TensorLayout, get_tensor_layout
 from ._backend import global_backend
 import returnn.frontend as rf
 
@@ -22,7 +23,7 @@ def full(
     device: Optional[str] = None,
     sparse_dim: Optional[Dim] = None,
     feature_dim: Optional[Dim] = None,
-    like: Optional[Tensor] = None,
+    like: Optional[Union[Tensor, TensorLayout]] = None,
 ) -> Tensor:
     """
     full, fill, constant.
@@ -37,14 +38,15 @@ def full(
     :param device:
     :param sparse_dim:
     :param feature_dim:
-    :param like: the result uses the backend, the dtype and device (unless given)
-        and the storage layout of this tensor, for the dims it shares with it.
+    :param like: the result uses the backend, the device (unless given)
+        and the storage layout of this tensor or layout (:func:`get_tensor_layout`), for the dims it shares with it,
+        and the dtype of this tensor (unless given).
         E.g. with a packed ``like`` (:func:`returnn.frontend.pack`) and ``dims`` covering its packed dims,
         the result is packed alike, without the padded intermediate.
         Use it when the result is combined with ``like`` anyway.
     """
     if dtype is None:
-        if like is not None:
+        if isinstance(like, Tensor):
             dtype = like.dtype
         elif isinstance(fill_value, bool):
             dtype = "bool"
@@ -66,9 +68,10 @@ def full(
             f"full/fill/constant: expect scalar fill_value, got tensor with shape {fill_value.dims}."
         )
     backend = global_backend
-    if like is not None and like.raw_tensor is not None:
-        # noinspection PyProtectedMember
-        backend = like._raw_backend
+    if like is not None:
+        if isinstance(like, Tensor):
+            like = get_tensor_layout(like)
+        backend = like.backend
         if device is None:
             device = like.device
     return backend.full(
@@ -87,7 +90,7 @@ def constant(
     device: Optional[str] = None,
     sparse_dim: Optional[Dim] = None,
     feature_dim: Optional[Dim] = None,
-    like: Optional[Tensor] = None,
+    like: Optional[Union[Tensor, TensorLayout]] = None,
 ) -> Tensor:
     """alias to :func:`full`, mapping `value` to `fill_value`. also see :func:`convert_to_tensor`"""
     return full(
@@ -108,15 +111,15 @@ def zeros(
     device: Optional[str] = None,
     sparse_dim: Optional[Dim] = None,
     feature_dim: Optional[Dim] = None,
-    like: Optional[Tensor] = None,
+    like: Optional[Union[Tensor, TensorLayout]] = None,
 ) -> Tensor:
     """
-    zeros. float by default (or the dtype of ``like``). See :func:`full`.
+    zeros. float by default (or the dtype of a ``like`` tensor). See :func:`full`.
     """
     return full(
         dims=dims,
         fill_value=0,
-        dtype=dtype or (like.dtype if like is not None else rf.get_default_float_dtype()),
+        dtype=dtype or (like.dtype if isinstance(like, Tensor) else rf.get_default_float_dtype()),
         device=device,
         sparse_dim=sparse_dim,
         feature_dim=feature_dim,
@@ -131,15 +134,15 @@ def ones(
     device: Optional[str] = None,
     sparse_dim: Optional[Dim] = None,
     feature_dim: Optional[Dim] = None,
-    like: Optional[Tensor] = None,
+    like: Optional[Union[Tensor, TensorLayout]] = None,
 ) -> Tensor:
     """
-    ones. float by default (or the dtype of ``like``). See :func:`full`.
+    ones. float by default (or the dtype of a ``like`` tensor). See :func:`full`.
     """
     return full(
         dims=dims,
         fill_value=1,
-        dtype=dtype or (like.dtype if like is not None else rf.get_default_float_dtype()),
+        dtype=dtype or (like.dtype if isinstance(like, Tensor) else rf.get_default_float_dtype()),
         device=device,
         sparse_dim=sparse_dim,
         feature_dim=feature_dim,
