@@ -593,7 +593,7 @@ class ReturnnLayersBackend(Backend[Layer]):
         device: Optional[str] = None,
         sparse_dim: Optional[Dim] = None,
         feature_dim: Optional[Dim] = None,
-        like: Optional[Tensor] = None,
+        like: Optional[rf.TensorLayout] = None,
     ) -> Tensor:
         """full"""
         del like  # plain storage, no layout to follow
@@ -880,7 +880,7 @@ class ReturnnLayersBackend(Backend[Layer]):
         auto_update_state: Optional[bool] = None,
         static: Optional[bool] = None,
         out: Optional[Tensor] = None,
-        like: Optional[Tensor] = None,
+        like: Optional[rf.TensorLayout] = None,
     ) -> Tensor:
         """random"""
         del like  # plain storage, no layout to follow

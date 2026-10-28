@@ -166,6 +166,16 @@ class Engine(EngineBase):
         else:
             self._tensorboard_writer = None
 
+        wandb_opts = config.typed_value("wandb_opts", None)
+        if wandb_opts is not None and (not self._torch_distributed_ctx or self._torch_distributed_ctx.rank() == 0):
+            wandb_opts = wandb_opts.copy()
+            self._wandb_log_every_n_train_steps: Optional[int] = wandb_opts.pop("log_every_n_train_steps", 100)
+            self._wandb_opts: Optional[Dict[str, Any]] = wandb_opts
+        else:
+            self._wandb_log_every_n_train_steps = None
+            self._wandb_opts = None
+        self._wandb_run = None
+
         default_float_dtype = config.value("default_float_dtype", None)
         if default_float_dtype is not None:
             assert isinstance(default_float_dtype, str)
@@ -336,7 +346,9 @@ class Engine(EngineBase):
 
         :param error_occurred:
         """
-        del error_occurred  # all is released either way
+        if self._wandb_run is not None:
+            self._wandb_run.finish(exit_code=1 if error_occurred else 0)
+            self._wandb_run = None
         if self._graph_capture is not None:
             self._graph_capture.release()
             self._graph_capture = None
@@ -410,6 +422,9 @@ class Engine(EngineBase):
             f" needed (x{safety})={needed:.1f}s -- stopping early so sisyphus can resubmit.",
             file=log.v1,
         )
+        if self._wandb_run is not None:
+            self._wandb_run.finish(exit_code=0)
+            self._wandb_run = None
         # Send SIGINT to the process group that contains the Sisyphus task worker.
         # Under torchelastic, each rank is its own session (Popen start_new_session=True),
         # separate from torchrun and the Sisyphus worker, which share one PG.
@@ -775,6 +790,16 @@ class Engine(EngineBase):
                         self._updater.get_effective_learning_rate(),
                         global_step=self.global_train_step,
                     )
+                if (
+                    self._wandb_log_every_n_train_steps is not None
+                    and self.global_train_step % self._wandb_log_every_n_train_steps == 0
+                ):
+                    self._wandb_log(
+                        {
+                            **{f"train_step/{key}": val for key, val in eval_info.items()},
+                            "train_step/learning_rate": self._updater.get_effective_learning_rate(),
+                        }
+                    )
 
                 if self._stop_on_nonfinite_train_score:
                     if any(np.isinf(v) or np.isnan(v) for v in accumulated_losses_dict.values()):
@@ -903,6 +928,7 @@ class Engine(EngineBase):
             self.learning_rate_control.save()
 
         print(f"Epoch {self.epoch}: Total train loss:", _format_score(dict(accumulated_losses_dict)), file=log.v3)
+        self._wandb_log({f"train/{k}": v for k, v in accumulated_losses_dict.items()})
 
         self._maybe_report_dev_memory_stats()
 
@@ -1028,6 +1054,7 @@ class Engine(EngineBase):
                     self._tensorboard_writer.add_scalar(
                         f"{dataset_name}/{key}", val, global_step=self.global_train_step
                     )
+            self._wandb_log({f"{dataset_name}/{k}": v for k, v in accumulated_losses_dict.items()})
 
             self.learning_rate_control.set_epoch_error(
                 self.epoch, {f"{dataset_name}_loss_{k}": v for k, v in accumulated_losses_dict.items()}
@@ -1060,6 +1087,46 @@ class Engine(EngineBase):
             torch.distributed.broadcast_object_list(ls, src=0, device=torch.device("cpu"))
             assert isinstance(ls[0], self.learning_rate_control.EpochData)
             self.learning_rate_control.epoch_data[self.epoch] = ls[0]
+
+    def _wandb_init(self):
+        """
+        Create the W&B run, if enabled via wandb_opts.
+        """
+
+        if self._wandb_opts is None or self._wandb_run is not None:
+            return
+
+        # noinspection PyUnresolvedReferences,PyPackageRequirements
+        import wandb
+        import hashlib
+
+        opts = self._wandb_opts.copy()
+        task = self.config.value("task", "train")
+        opts.setdefault("job_type", task)
+        if self.config.files and not os.environ.get("WANDB_RUN_ID"):
+            run_key = (task, [os.path.abspath(filename) for filename in self.config.files])
+            opts.setdefault("id", hashlib.sha256(repr(run_key).encode("utf-8")).hexdigest())
+        if os.environ.get("SLURM_JOB_NAME"):
+            opts.setdefault("name", os.environ["SLURM_JOB_NAME"])
+        if not any(k in opts for k in ("resume", "resume_from", "fork_from")):  # mutually exclusive
+            opts.setdefault("resume", "allow")
+        run_id = opts.get("id") or os.environ.get("WANDB_RUN_ID")
+        if task == "train" and not run_id:
+            print(
+                "wandb_opts: no run 'id' given, a restarted job will create a new W&B run."
+                " Set a fixed 'id' (e.g. the job hash) to continue the same run.",
+                file=log.v2,
+            )
+        self._wandb_run = wandb.init(**opts)
+
+    def _wandb_log(self, metrics: Dict[str, float]):
+        """
+        Log to Weights & Biases, if enabled via wandb_opts.
+
+        :param metrics: metrics to log.
+        """
+        if self._wandb_run is not None:
+            self._wandb_run.log({**metrics, "epoch": self.epoch}, step=self.global_train_step)
 
     def _maybe_extend_losses_info(self, losses: NumbersDict) -> NumbersDict:
         """
@@ -1507,6 +1574,7 @@ class Engine(EngineBase):
             step += 1
         self.set_epoch(epoch)  # in training, this will be reset to start_epoch
         self.global_train_step = step
+        self._wandb_init()
 
         load_model_post_hooks = self.config.typed_value("load_model_post_hooks")
         if load_model_post_hooks:
