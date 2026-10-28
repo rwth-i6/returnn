@@ -1136,6 +1136,24 @@ def test_DistributeFilesDataset_distribute_evenly_by_size():
     _test_stddev(rng.uniform(low=97, high=103, size=(100,)), 20, 0.03)
 
 
+def test_DistributeFilesDataset_file_sizes():
+    from returnn.datasets.distrib_files import DistributeFilesDataset, _get_key_for_file_tree
+
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        files = []
+        for i in range(19):  # more entries than threads, not divisible by the thread count
+            pair = []
+            for j, size in enumerate([i * 3 + 1, i * 5 + 2]):
+                fn = f"{tmp_dir}/file-{i}-{j}.bin"
+                with open(fn, "wb") as f:
+                    f.write(b"x" * size)
+                pair.append(fn)
+            files.append(tuple(pair))
+        dataset = DistributeFilesDataset(files=files, get_sub_epoch_dataset=_dfd_get_sub_epoch_dataset)
+        dataset._lazy_init_file_sizes()
+        assert dataset._file_sizes == {_get_key_for_file_tree(f): i * 8 + 3 for i, f in enumerate(files)}
+
+
 def iter_identity(x, **kwargs):
     yield from x
 
