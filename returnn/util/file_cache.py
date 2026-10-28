@@ -13,6 +13,7 @@ from __future__ import annotations
 from typing import Any, Collection, Dict, Iterable, List, Optional, Tuple, Union
 import errno
 import os
+import sys
 import pathlib
 import time
 import shutil
@@ -509,6 +510,37 @@ def get_instance(config: Optional[Config] = None) -> FileCache:
     return FileCache(**kwargs)
 
 
+_FICLONE = 0x40049409  # Linux ioctl FICLONE: copy-on-write clone (reflink); XFS with reflink=1, Btrfs
+
+
+def _try_reflink(src: str, dst: str) -> bool:
+    """
+    Try to create ``dst`` as a copy-on-write clone of ``src`` via the Linux FICLONE ioctl.
+    On a reflink-capable filesystem (XFS reflink=1, Btrfs) with ``src`` and ``dst`` on the same
+    filesystem this is instant and uses no additional disk space; the clone still behaves like an
+    independent file. Returns False when cloning is not possible (other OS, other filesystem,
+    cross-device), leaving nothing behind, so the caller falls back to a regular copy.
+    """
+    if sys.platform != "linux":
+        return False
+    try:
+        import fcntl
+    except ImportError:
+        return False
+    try:
+        with open(src, "rb") as src_file, open(dst, "wb") as dst_file:
+            fcntl.ioctl(dst_file.fileno(), _FICLONE, src_file.fileno())
+        if os.stat(dst).st_size != os.stat(src).st_size:
+            raise OSError("reflink produced a size mismatch")
+        return True
+    except OSError:
+        try:
+            os.unlink(dst)
+        except OSError:
+            pass
+        return False
+
+
 def _copy_with_prealloc(src: str, dst: str):
     """
     Copies the file at `src` to `dst` preallocating the space at `dst` before the
@@ -522,6 +554,8 @@ def _copy_with_prealloc(src: str, dst: str):
     +1-size trick is technically not necessary -- but it also does not hurt leaving
     it in.
     """
+    if _try_reflink(src, dst):
+        return
     file_size = os.stat(src).st_size
     with open(dst, "wb") as dst_file:
         if file_size > 0:
