@@ -4,7 +4,7 @@ Main engine for PyTorch
 
 from __future__ import annotations
 
-from typing import Optional, Any, Union, Callable, Dict, Set
+from typing import Optional, Any, Union, Callable, Dict, Set, Generator
 from contextlib import nullcontext, ExitStack, contextmanager
 
 import sys
@@ -1699,6 +1699,29 @@ class Engine(EngineBase):
             if os.path.isfile(filename):
                 os.unlink(filename)
 
+    @contextmanager
+    def _forward_graph_capture(self) -> Generator[Optional[graph_capture.GraphCapturedForwardStep], None, None]:
+        """
+        With ``torch_cuda_graph`` ``"forward": True``, the captured forward steps of one forward pass
+        (see :class:`returnn.torch.util.graph_capture.GraphCapturedForwardStep`), released at its end.
+
+        :return: the captured forward step, or None
+        """
+        if not (self._graph_capture_opts or {}).get("forward", False):
+            yield None
+            return
+        forward_capture = graph_capture.GraphCapturedForwardStep(
+            opts=self._graph_capture_opts,
+            extern_data_template=self.extern_data,
+            device=self._device,
+            float_dtype=self._default_float_dtype,
+            run_step=lambda extern_data: self._run_step(extern_data, train_func=False),
+        )
+        try:
+            yield forward_capture
+        finally:
+            forward_capture.release()
+
     def forward_with_callback(
         self,
         *,
@@ -1803,7 +1826,7 @@ class Engine(EngineBase):
             return new_dim
 
         report_prefix = f"ep {self.epoch} {dataset.name} forward"
-        with torch.no_grad():
+        with torch.no_grad(), self._forward_graph_capture() as forward_capture:
             callback.init(model=self._orig_model)
 
             step_idx = 0
@@ -1822,32 +1845,35 @@ class Engine(EngineBase):
                     device=self._device,
                     float_dtype=self._default_float_dtype,
                 )
-                try:
-                    self._run_step(extern_data, train_func=False)
-                except Exception as exc:
-                    if (
-                        isinstance(exc, torch.cuda.OutOfMemoryError)
-                        and self._forward_auto_split_batch_on_oom
-                        and extern_data_util.raw_dict_can_split_batch(extern_data_raw)
-                    ):
-                        help_on_torch_exception(
-                            exc,
-                            step_idx=step_idx,
-                            model=self._orig_model,
-                            extern_data=extern_data,
-                            always_direct_print=True,
-                        )
-                        util.traceback_clear_frames(exc.__traceback__)
-                        diagnose_gpu.garbage_collect()
-                        print(f"{report_prefix}, split step {step_idx} batch and try again...", file=log.v3)
-                        data_loader.extend(extern_data_util.raw_dict_split_batch(extern_data_raw, splits=2))
-                        continue
-                    help_on_torch_exception(exc, step_idx=step_idx, model=self._orig_model, extern_data=extern_data)
-                    raise
-                ctx = rf.get_run_ctx()
-                ctx.check_outputs_complete()
+                if forward_capture is not None:
+                    model_outputs = forward_capture.run_forward_step(extern_data_raw)
+                else:
+                    try:
+                        self._run_step(extern_data, train_func=False)
+                    except Exception as exc:
+                        if (
+                            isinstance(exc, torch.cuda.OutOfMemoryError)
+                            and self._forward_auto_split_batch_on_oom
+                            and extern_data_util.raw_dict_can_split_batch(extern_data_raw)
+                        ):
+                            help_on_torch_exception(
+                                exc,
+                                step_idx=step_idx,
+                                model=self._orig_model,
+                                extern_data=extern_data,
+                                always_direct_print=True,
+                            )
+                            util.traceback_clear_frames(exc.__traceback__)
+                            diagnose_gpu.garbage_collect()
+                            print(f"{report_prefix}, split step {step_idx} batch and try again...", file=log.v3)
+                            data_loader.extend(extern_data_util.raw_dict_split_batch(extern_data_raw, splits=2))
+                            continue
+                        help_on_torch_exception(exc, step_idx=step_idx, model=self._orig_model, extern_data=extern_data)
+                        raise
+                    ctx = rf.get_run_ctx()
+                    ctx.check_outputs_complete()
+                    model_outputs = ctx.outputs
 
-                model_outputs = ctx.outputs
                 for batch_idx in range(batch_dim.get_dim_value()):
                     seq_tag = extern_data["seq_tag"].raw_tensor[batch_idx].item()
                     model_outputs_per_batch = TensorDict()
