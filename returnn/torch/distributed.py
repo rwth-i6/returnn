@@ -143,6 +143,19 @@ class DistributedContext:
 
         self._dataset_distribution = get_dataset_distribution(self._opts)
 
+        # What happens at the epoch end when the ranks have different numbers of batches.
+        # "stop": a rank out of data ends the epoch for its group (and its next outer control syncs),
+        # the other ranks drop their remaining batches.
+        # "join": a rank out of data takes part in all collectives with zero contribution until all are out.
+        self._epoch_end = self._opts.get("epoch_end", "stop")
+        assert self._epoch_end in ("stop", "join"), f"torch_distributed: invalid epoch_end {self._epoch_end!r}"
+        if self._epoch_end == "join" and not self._sync_complete_frac:
+            # a rank out of data would keep its epoch_continuous while the others advance: another learning rate,
+            # so the params of the ranks drift apart
+            raise ValueError("torch_distributed: epoch_end 'join' needs sync_complete_frac=True")
+        # epoch_end "join": per sync level, whether this rank did an optimizer update since the last sync there
+        self._updated_since_sync = [False] * len(self._sync_levels)
+
         self._check_no_unknown_opts()
 
     def __repr__(self):
@@ -265,6 +278,58 @@ class DistributedContext:
         assert level.sync_type == "grad"
         _all_reduce_avg_flat([p.grad for p in module.parameters() if p.grad is not None], group=level.group)
 
+    def epoch_end_join(self) -> bool:
+        """
+        :return: whether a rank out of data takes part with zero contribution until all ranks are out
+            (option ``epoch_end``: "join"; default "stop")
+        """
+        return self._epoch_end == "join"
+
+    def is_outermost_control_level(self, level: _SyncLevel) -> bool:
+        """
+        :param level: of a control sync, see :func:`control_sync_levels`
+        :return: whether no rank outside of its group can still have data, i.e. its result ends the epoch
+            for epoch_end "join"
+        """
+        return level is self._world_level or (bool(self._sync_levels) and level is self._sync_levels[-1])
+
+    def reduce_grads_join(self, *, module: torch.nn.Module, num_batches: int, accum_grad_multiple_step: int) -> float:
+        """
+        epoch_end "join": for an update step while some rank of the grad sync group is out of data,
+        instead of :func:`maybe_reduce_grads` or the DistributedDataParallel reduce (all ranks then).
+        Sums the grads over the group (zeros from a rank without batches in this grad accumulation),
+        divided by the number of batches over ``accum_grad_multiple_step``,
+        i.e. the mean over the contributing ranks, not over the group size.
+        Afterwards, all ranks of the group hold the same grads (None where no rank has one),
+        so the optimizer step (clipping, grad scaler, weight decay, moments) is the same on all of them.
+
+        :param module: to take the params (and their grads) from
+        :param num_batches: batches of this rank in the current grad accumulation (0 when out of data)
+        :param accum_grad_multiple_step:
+        :return: number of batches in the group in the current grad accumulation. 0: no update.
+        """
+        group = self._sync_levels[0].group if self.has_grad_sync() else None  # DistributedDataParallel: all ranks
+        params = [p for p in module.parameters() if p.requires_grad]
+        if not params:
+            return 0.0
+        counts = [num_batches > 0 and p.grad is not None for p in params] + [num_batches]
+        counts = torch.tensor(counts, dtype=torch.float32, device=params[0].device)
+        torch.distributed.all_reduce(counts, op=torch.distributed.ReduceOp.SUM, group=group)
+        counts = counts.tolist()
+        grads = []
+        for param, count in zip(params, counts[:-1]):
+            if not count:  # no rank of the group has a grad for it
+                param.grad = None
+                continue
+            if param.grad is None:
+                param.grad = torch.zeros_like(param)
+            elif not num_batches:  # e.g. the static grad buffers under graph capture
+                param.grad.zero_()
+            grads.append(param.grad)
+        if counts[-1]:
+            _all_reduce_avg_flat(grads, group=group, div=counts[-1] / accum_grad_multiple_step)
+        return counts[-1]
+
     def sync_complete_frac(self) -> bool:
         """
         :return: whether the train loop replaces the rank-local ``complete_frac`` by its mean over the ranks
@@ -317,7 +382,12 @@ class DistributedContext:
         return _control_sync_chain(self._sync_levels, max(firing), epoch_update_step_idx)
 
     def step_after_param_update(
-        self, *, module: torch.nn.Module, optimizer: torch.optim.Optimizer, epoch_update_step_idx: int
+        self,
+        *,
+        module: torch.nn.Module,
+        optimizer: torch.optim.Optimizer,
+        epoch_update_step_idx: int,
+        updated: bool = True,
     ):
         """
         Average the params over the outermost "param" sync level firing after this optimizer update, if any,
@@ -328,7 +398,11 @@ class DistributedContext:
         :param module: to take the params from
         :param optimizer: to take the state from
         :param epoch_update_step_idx: optimizer updates before this one in this epoch
+        :param updated: whether this rank did the update (epoch_end "join": a rank out of data counts the updates
+            of the others without one). The averages then skip the ranks without an update since the last sync there.
         """
+        if updated:
+            self._updated_since_sync = [True] * len(self._sync_levels)
         firing = [
             level
             for level in self._sync_levels
@@ -344,6 +418,7 @@ class DistributedContext:
             optimizer=optimizer if opt_level is params_level else None,
             sync_on_cpu=params_level.sync_on_cpu,
             group=params_level.group,
+            weight=self._join_weight(params_level),
         )
         if opt_level is not None and opt_level is not params_level:
             _sync_state(
@@ -352,7 +427,19 @@ class DistributedContext:
                 params=False,
                 sync_on_cpu=opt_level.sync_on_cpu,
                 group=opt_level.group,
+                weight=self._join_weight(opt_level),
             )
+        idx = self._sync_levels.index(params_level)
+        self._updated_since_sync[: idx + 1] = [False] * (idx + 1)
+
+    def _join_weight(self, level: _SyncLevel) -> Optional[float]:
+        """
+        :return: epoch_end "join": weight of this rank in the average over the group of the level,
+            0 without an own update since the last sync there; else None (plain mean)
+        """
+        if not self.epoch_end_join():
+            return None
+        return float(self._updated_since_sync[self._sync_levels.index(level)])
 
     def sync_at_epoch_end(self) -> bool:
         """
@@ -390,13 +477,16 @@ class DistributedContext:
         if not self._sync_at_epoch_end or not any(level.sync_type == "param" for level in self._sync_levels):
             return global_train_step
         global_train_step_t = torch.tensor([global_train_step], dtype=torch.int64)
+        param_levels = [level for level in self._sync_levels if level.sync_type == "param"]
         _sync_state(
             module=module,
             optimizer=optimizer,
             buffers=True,
             counters=[global_train_step_t],
             sync_on_cpu=any(level.sync_on_cpu for level in self._sync_levels),
+            weight=self._join_weight(param_levels[-1]),
         )
+        self._updated_since_sync = [False] * len(self._sync_levels)
         return int(global_train_step_t)
 
 
@@ -653,6 +743,7 @@ def _all_reduce_avg_flat(
     sync_on_cpu: bool = False,
     bucket_bytes: int = _FLAT_REDUCE_BUCKET_BYTES,
     group: Optional[torch.distributed.ProcessGroup] = None,
+    div: Optional[float] = None,
 ):
     """
     Averages the tensors in place over the ranks of the group.
@@ -665,6 +756,7 @@ def _all_reduce_avg_flat(
     :param sync_on_cpu: allreduce a CPU copy of each bucket (e.g. with Gloo for a CUDA module)
     :param bucket_bytes: of one flat buffer; a tensor larger than that gets a bucket of its own
     :param group: the ranks to average over, None: all
+    :param div: divide the sum by this instead of the group size
     """
     buckets: Dict[Tuple[torch.device, torch.dtype], List[List[torch.Tensor]]] = {}
     for tensor in tensors:
@@ -678,11 +770,15 @@ def _all_reduce_avg_flat(
     for key_buckets in buckets.values():
         for bucket in key_buckets:
             # One flat buffer at a time: the function scope frees it before the next one is allocated.
-            _all_reduce_avg_bucket(bucket, sync_on_cpu=sync_on_cpu, group=group)
+            _all_reduce_avg_bucket(bucket, sync_on_cpu=sync_on_cpu, group=group, div=div)
 
 
 def _all_reduce_avg_bucket(
-    bucket: List[torch.Tensor], *, sync_on_cpu: bool, group: Optional[torch.distributed.ProcessGroup]
+    bucket: List[torch.Tensor],
+    *,
+    sync_on_cpu: bool,
+    group: Optional[torch.distributed.ProcessGroup],
+    div: Optional[float] = None,
 ):
     import torch.distributed as dist
 
@@ -691,7 +787,7 @@ def _all_reduce_avg_bucket(
     flat_reduce = flat.cpu() if sync_on_cpu else flat
     # SUM then divide, not AVG: NCCL AVG pre-scales by 1/N rounded to the dtype, a bias for non-power-of-two N.
     dist.all_reduce(flat_reduce, op=dist.ReduceOp.SUM, group=group)
-    flat_reduce /= dist.get_world_size(group=group)
+    flat_reduce /= dist.get_world_size(group=group) if div is None else div
     if flat_reduce is not flat:
         flat.copy_(flat_reduce)
     # noinspection protected-member
@@ -709,6 +805,7 @@ def _sync_state(
     counters: Sequence[torch.Tensor] = (),
     sync_on_cpu: bool = False,
     group: Optional[torch.distributed.ProcessGroup] = None,
+    weight: Optional[float] = None,
 ):
     """
     Makes the state the same on all ranks of the group, one rule per kind:
@@ -726,6 +823,8 @@ def _sync_state(
     :param counters: further counts, e.g. the train step, in place
     :param sync_on_cpu: allreduce CPU copies (e.g. with Gloo for a CUDA module)
     :param group: the ranks to sync over, None: all
+    :param weight: of this rank in the mean (epoch_end "join": 0 for a rank without an update since the last sync).
+        If the weights sum to 0 over the group, or None: plain mean.
     """
     import torch.distributed as dist
 
@@ -743,7 +842,15 @@ def _sync_state(
                     counters.append(value)
                 else:
                     tensors.append(value)
-    _all_reduce_avg_flat(tensors, sync_on_cpu=sync_on_cpu, group=group)
+    div = None
+    if weight is not None:
+        total = torch.tensor([weight], dtype=torch.float64)
+        dist.all_reduce(total, op=dist.ReduceOp.SUM, group=group)
+        if total.item() > 0:
+            div = total.item()
+            if weight != 1.0 and tensors:
+                torch._foreach_mul_(tensors, weight)
+    _all_reduce_avg_flat(tensors, sync_on_cpu=sync_on_cpu, group=group, div=div)
     for counter in counters:
         counter_cpu = counter.to(torch.device("cpu"))
         dist.all_reduce(counter_cpu, op=dist.ReduceOp.MAX, group=group)

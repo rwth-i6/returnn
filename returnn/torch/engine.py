@@ -4,7 +4,7 @@ Main engine for PyTorch
 
 from __future__ import annotations
 
-from typing import Optional, Any, Union, Callable, Dict, Set
+from typing import Optional, Any, Union, Callable, Dict, Set, List, Tuple
 from contextlib import nullcontext, ExitStack, contextmanager
 
 import sys
@@ -571,8 +571,15 @@ class Engine(EngineBase):
 
         zero_grad_next_step = True
         cur_count_grad_accum = 0
+        num_batches_accum = 0  # batches of this rank in the current grad accumulation (fewer only when out of data)
         epoch_update_step_idx = 0  # optimizer updates so far in this epoch, the unit of the param sync period
         extern_data = None
+        epoch_continuous = None
+        # epoch_end "join": a rank out of data takes part with zero contribution until all ranks are out.
+        epoch_end_join = bool(self._torch_distributed_ctx and self._torch_distributed_ctx.epoch_end_join())
+        num_idle_steps = 0  # epoch_end "join": steps of this rank without data
+        ddp_bypassed = False  # epoch_end "join": steps that ran backward past the DistributedDataParallel wrapper
+        idle_start_time = None
 
         total_data_size_packed = NumbersDict()
         total_data_size_padded = NumbersDict()
@@ -597,7 +604,10 @@ class Engine(EngineBase):
                     print("Time to get first batch data:", hms(step_begin_time - epoch_start_time), file=log.v5)
 
                 complete_frac = float(extern_data_raw["complete_frac"]) if extern_data_raw is not None else -1.0
+                if extern_data_raw is None and epoch_end_join:
+                    complete_frac = 1.0  # all its data is done, which keeps the mean over the ranks valid
                 _has_data = torch.tensor([extern_data_raw is not None], dtype=torch.int8)
+                num_ranks_with_data = None  # in the group of the control sync of this step
                 # Sync only on first train step, when we have run out of data and every time we synchronize
                 # the model between workers, on the group of that sync.
                 # This allows the different workers to progress independently between synchronizations.
@@ -610,13 +620,14 @@ class Engine(EngineBase):
                         update_step=(0 if zero_grad_next_step else cur_count_grad_accum) + 1
                         >= accum_grad_multiple_step,
                         world=accum_grad_multiple_step_dyn is not None or step_idx == 0,
-                        no_data=extern_data_raw is None,
+                        # epoch_end "join": a rank out of data keeps the steps of its group, with their control syncs
+                        no_data=extern_data_raw is None and not epoch_end_join,
                     )
                 if control_levels:
                     # use all reduce to check if all workers have data, if at least one worker does not have data,
                     # all workers finish this epoch
                     level = control_levels[0]
-                    if self._torch_distributed_ctx.sync_complete_frac():
+                    if self._torch_distributed_ctx.sync_complete_frac() or epoch_end_join:
                         # mean over the ranks: a schedule on epoch_continuous must give the same LR on every rank
                         _data_info = torch.tensor(
                             [extern_data_raw is not None, complete_frac >= 0.0, max(complete_frac, 0.0)],
@@ -625,10 +636,19 @@ class Engine(EngineBase):
                         torch.distributed.all_reduce(_data_info, op=torch.distributed.ReduceOp.SUM, group=level.group)
                         size = level.group_size()
                         _has_data[0] = _data_info[0] == size
-                        complete_frac = float(_data_info[2]) / size if _data_info[1] == size else -1.0
+                        num_ranks_with_data = int(_data_info[0])
+                        if self._torch_distributed_ctx.sync_complete_frac():
+                            complete_frac = float(_data_info[2]) / size if _data_info[1] == size else -1.0
                     else:
                         torch.distributed.all_reduce(_has_data, op=torch.distributed.ReduceOp.MIN, group=level.group)
-                if not _has_data[0]:
+                if epoch_end_join:
+                    # The epoch ends when no rank has data. An inner group out of data goes on idle until a control
+                    # sync over all ranks which can still have data.
+                    if num_ranks_with_data == 0 and self._torch_distributed_ctx.is_outermost_control_level(
+                        control_levels[0]
+                    ):
+                        break
+                elif not _has_data[0]:
                     # The outer groups learn it at their next control sync. Join it now, they reach it later.
                     for level in control_levels[1:]:
                         if self._torch_distributed_ctx.sync_complete_frac():
@@ -642,8 +662,70 @@ class Engine(EngineBase):
                             )
                     break
 
+                # epoch_end "join": some rank of the group is out of data,
+                # so reduce the grads over the ranks with batches, without DistributedDataParallel
+                grad_join = (
+                    epoch_end_join
+                    and num_ranks_with_data is not None
+                    and num_ranks_with_data < control_levels[0].group_size()
+                    and (self._ddp_pt_model is not None or self._torch_distributed_ctx.has_grad_sync())
+                )
+                if grad_join and self._ddp_pt_model is not None:
+                    ddp_bypassed = True
+
                 if self._stall_heartbeat is not None:
                     self._stall_heartbeat.value = time.time()
+
+                if extern_data_raw is None:
+                    # epoch_end "join": this rank is out of data, but another one is not.
+                    # No model run, but the same collectives, grad accumulation and optimizer updates as the others.
+                    if idle_start_time is None:
+                        idle_start_time = step_begin_time
+                        data_iter = iter(())  # do not touch the exhausted data loader again
+                    num_idle_steps += 1
+                    if control_levels and self._torch_distributed_ctx.sync_complete_frac():
+                        epoch_continuous = self.epoch - 1 + complete_frac if complete_frac >= 0.0 else None
+                    if zero_grad_next_step:
+                        if self._graph_capture_opts is None:
+                            self._updater.zero_grad()
+                        cur_count_grad_accum = num_batches_accum = 0
+                    if accum_grad_multiple_step_dyn:
+                        accum_grad_multiple_step = accum_grad_multiple_step_dyn(
+                            epoch=self.epoch,
+                            epoch_continuous=epoch_continuous,
+                            global_train_step=self.global_train_step,
+                            **util.get_fwd_compat_kwargs(),
+                        )
+                    cur_count_grad_accum += 1
+                    perform_update_step = cur_count_grad_accum >= accum_grad_multiple_step
+                    if perform_update_step:
+                        if grad_join:  # update with the grads of the group, as the others do, if there are any
+                            updated = (
+                                self._torch_distributed_ctx.reduce_grads_join(
+                                    module=self._pt_model,
+                                    num_batches=num_batches_accum,
+                                    accum_grad_multiple_step=accum_grad_multiple_step,
+                                )
+                                > 0
+                            )
+                        else:  # param sync only: update only with own grads, else keep params and optimizer state
+                            updated = num_batches_accum > 0
+                        if updated and (self._graph_capture is None or not self._graph_capture.captures_optimizer):
+                            self._updater.step(grad_scaler=self._grad_scaler)
+                        self._torch_distributed_ctx.step_after_param_update(
+                            module=self._pt_model,
+                            optimizer=self._updater.get_optimizer(),
+                            epoch_update_step_idx=epoch_update_step_idx,
+                            updated=updated,
+                        )
+                        epoch_update_step_idx += 1
+                    zero_grad_next_step = perform_update_step
+                    step_idx += 1
+                    self.global_train_step += 1
+                    self._updater.set_current_train_step(
+                        global_train_step=self.global_train_step, epoch=self.epoch, epoch_continuous=epoch_continuous
+                    )
+                    continue
 
                 # convert values to Python ints to prevent overflow.
                 # The native reduction promotes int32 to int64 and is one op instead of one per seq.
@@ -663,7 +745,7 @@ class Engine(EngineBase):
                     if self._graph_capture_opts is None:
                         # under graph capture, the grads are static buffers zeroed in-graph
                         self._updater.zero_grad()
-                    cur_count_grad_accum = 0
+                    cur_count_grad_accum = num_batches_accum = 0
 
                 if self._graph_capture is not None:
                     # whole-train-step CUDA-graph capture/replay, incl backward
@@ -681,7 +763,8 @@ class Engine(EngineBase):
                         float_dtype=self._default_float_dtype,
                         with_eval_targets=True,
                     )
-                    self._run_step(extern_data, train_flag=True, train_func=True)
+                    # grad_join: without the DistributedDataParallel wrapper, so that it does not reduce the grads
+                    self._run_step(extern_data, train_flag=True, train_func=True, _inside_wrapped=grad_join)
                     train_ctx = rf.get_run_ctx()
                     total_loss = train_ctx.total_loss()
 
@@ -707,6 +790,7 @@ class Engine(EngineBase):
                         **util.get_fwd_compat_kwargs(),
                     )
                 cur_count_grad_accum += 1
+                num_batches_accum += 1
                 perform_update_step = cur_count_grad_accum >= accum_grad_multiple_step
                 if self._graph_capture is None:  # under graph capture, backward is inside the graph
                     no_sync_ctx = (
@@ -724,7 +808,14 @@ class Engine(EngineBase):
                 # so this is where they get averaged over the ranks.
                 if perform_update_step and self._torch_distributed_ctx:
                     with record_function("reduce_grads"):
-                        self._torch_distributed_ctx.maybe_reduce_grads(module=self._pt_model)
+                        if grad_join:
+                            self._torch_distributed_ctx.reduce_grads_join(
+                                module=self._pt_model,
+                                num_batches=num_batches_accum,
+                                accum_grad_multiple_step=accum_grad_multiple_step,
+                            )
+                        else:
+                            self._torch_distributed_ctx.maybe_reduce_grads(module=self._pt_model)
 
                 # only update the weights when every gradient accumulation loop ends
                 # (under graph capture with capture_optimizer, the update is inside the graph)
@@ -863,6 +954,7 @@ class Engine(EngineBase):
             prof.__exit__(None, None, None)
             if prof.exported:
                 self._torch_profile_exported = True
+        idle_time = time.monotonic() - idle_start_time if idle_start_time is not None else 0.0
 
         if self._torch_distributed_ctx:
             # all ranks left the train loop together, so this collective matches
@@ -908,6 +1000,21 @@ class Engine(EngineBase):
                 "global_train_step_end": self.global_train_step,
             }
         )
+        if ddp_bypassed:
+            # The backward passes of the grad_join steps ran past the DistributedDataParallel wrapper, but its
+            # autograd hooks still fired and (find_unused_parameters) marked those params as used. Nothing clears
+            # that until its next reduce, which then fails if a param is unused there ("Encountered gradient which
+            # is undefined"), e.g. the audio encoder in a first batch without audio. A new wrapper starts clean.
+            # All ranks get here: grad_join comes from the control sync over all ranks.
+            self._ddp_pt_model = None
+            gc.collect()
+            self._ddp_pt_model = self._torch_distributed_ctx.maybe_make_distributed_module(
+                module=_WrappedModuleRunStep(module=self._pt_model, engine=self)
+            )
+        if epoch_end_join:
+            self._report_distributed_epoch_end(
+                num_steps=step_idx, num_idle_steps=num_idle_steps, idle_time=idle_time, elapsed=elapsed
+            )
         if self._device == "cuda" and torch.cuda.is_initialized():
             # peak over the epoch, since the counters are reset below.
             # A later OOM is then attributable to growth versus a single spike.
@@ -944,6 +1051,59 @@ class Engine(EngineBase):
         self.eval_model()
         if self.config.bool_or_other("cleanup_old_models", None):
             self.cleanup_old_models()
+
+    def _report_distributed_epoch_end(self, *, num_steps: int, num_idle_steps: int, idle_time: float, elapsed: float):
+        """
+        epoch_end "join": log the steps and the time each rank was idle in the train epoch
+        (out of data, waiting for the others). All ranks call this (one small all_gather).
+        Each rank logs its own numbers (log.v4), rank 0 also the min/mean/max over the ranks (log.v3),
+        in the epoch meta data of the learning rate file, and to TensorBoard and W&B, if enabled.
+
+        :param num_steps: train steps of this rank in this epoch (including idle ones)
+        :param num_idle_steps: steps of this rank without data
+        :param idle_time: seconds from its first step without data to the end of the train loop
+        :param elapsed: seconds of the epoch
+        """
+        ctx = self._torch_distributed_ctx
+        info = torch.tensor([num_steps, num_idle_steps, idle_time, elapsed], dtype=torch.float64)
+        infos = [torch.zeros_like(info) for _ in range(ctx.size())]
+        torch.distributed.all_gather(infos, info)
+        steps, idle_steps, idle_times, elapsed_ = torch.stack(infos).T.tolist()
+        prefix = f"Epoch {self.epoch}: epoch_end join"
+        print(
+            f"{prefix}: rank {ctx.rank()}/{ctx.size()}: {num_idle_steps} of {num_steps} steps idle"
+            f" ({num_idle_steps / max(num_steps, 1):.1%}), idle {hms(idle_time)} of {hms(elapsed)}"
+            f" ({idle_time / max(elapsed, 1e-9):.1%})",
+            file=log.v4,
+        )
+        if ctx.rank() != 0:
+            return
+
+        def _stats(values: List[float]) -> Tuple[float, float, float]:
+            return min(values), sum(values) / len(values), max(values)
+
+        stats = {
+            "idle_steps_frac": _stats([i / max(n, 1) for i, n in zip(idle_steps, steps)]),
+            "idle_time_frac": _stats([t / max(e, 1e-9) for t, e in zip(idle_times, elapsed_)]),
+        }
+        idle_steps_min, idle_steps_mean, idle_steps_max = _stats(idle_steps)
+        print(
+            f"{prefix}: idle steps per rank min/mean/max {idle_steps_min:.0f}/{idle_steps_mean:.1f}"
+            f"/{idle_steps_max:.0f} of {max(steps):.0f}, idle fraction of the steps"
+            f" {'/'.join(f'{v:.1%}' for v in stats['idle_steps_frac'])}, of the time"
+            f" {'/'.join(f'{v:.1%}' for v in stats['idle_time_frac'])}",
+            file=log.v3,
+        )
+        scalars = {
+            f"epoch_end_{key}_{name}": value
+            for key, values in stats.items()
+            for name, value in zip(("min", "mean", "max"), values)
+        }
+        self.learning_rate_control.epoch_data[self.epoch].meta.update({k: round(v, 5) for k, v in scalars.items()})
+        if self._tensorboard_writer:
+            for key, value in scalars.items():
+                self._tensorboard_writer.add_scalar(f"train/{key}", value, global_step=self.global_train_step)
+        self._wandb_log({f"train/{key}": value for key, value in scalars.items()})
 
     def _do_save(self):
         if self._device == "meta":

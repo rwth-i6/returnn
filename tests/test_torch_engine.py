@@ -2716,6 +2716,147 @@ def _torch_distributed_all_reduce_avg_flat_worker(rank: int, world_size: int, po
     _destroy_process_groups([None])
 
 
+class _PartlyUsedTestModel(TrainTestModel):
+    """with a param only some steps use, like an audio encoder in a batch without audio"""
+
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        self.extra = torch.nn.Linear(9, 9)
+
+
+def _torch_distributed_epoch_end_worker(rank: int, world_size: int, port: int, tmp_dir: str, opts: Dict[str, Any]):
+    from returnn.log import log
+
+    os.environ.update(
+        MASTER_ADDR="127.0.0.1",
+        MASTER_PORT=str(port),
+        RANK=str(rank),
+        WORLD_SIZE=str(world_size),
+        LOCAL_RANK=str(rank),
+        LOCAL_WORLD_SIZE=str(world_size),
+    )
+    log.initialize(logs=[f"{tmp_dir}/log.rank{rank}.txt"], verbosity=[4])
+    num_seqs = [9, 41, 23, 30][rank]  # max_seqs 3: 3, 14, 8, 10 batches
+    num_seen_seqs = 0
+    opts = dict(opts)
+    partly_used = opts.pop("partly_used", False)  # model.extra unused in the first step of each epoch
+    steps_in_epoch = {}
+
+    def _train_step(*, model: TrainTestModel, extern_data: TensorDict, **kwargs):
+        nonlocal num_seen_seqs
+        num_seen_seqs += extern_data["data"].raw_tensor.shape[0]
+        if partly_used:
+            epoch = rf.get_run_ctx().epoch
+            steps_in_epoch[epoch] = steps_in_epoch.get(epoch, -1) + 1
+            if steps_in_epoch[epoch] > 0:
+                data = extern_data["data"]
+                data.raw_tensor = data.raw_tensor + 0.01 * model.extra(data.raw_tensor)
+        TrainTestModel.train_step(model=model, extern_data=extern_data, **kwargs)
+
+    config = Config(
+        dict(
+            task="train",
+            device="cpu",
+            extern_data={"data": {"dim": 9}, "classes": {"dim": 2, "sparse": True}},
+            get_model=_PartlyUsedTestModel if partly_used else TrainTestModel,
+            train_step=_train_step,
+            batch_size=10**9,
+            max_seqs=3,
+            optimizer={"class": "adamw", "weight_decay": 0.1},
+            learning_rate=0.01,
+            # depends on epoch_continuous: the same on all ranks only with sync_complete_frac
+            dynamic_learning_rate=lambda *, learning_rate, epoch_continuous=None, **_kw: (
+                learning_rate * (1.0 + (epoch_continuous or 0.0))
+            ),
+            num_epochs=2,
+            accum_grad_multiple_step=opts.pop("accum", 1),
+            torch_dataloader_opts={"num_workers": 0},
+            torch_distributed={"backend": "gloo", "sync_complete_frac": True, "sync_at_epoch_end": True, **opts},
+        )
+    )
+    with global_config_ctx(config):
+        dataset = init_dataset({"class": "Task12AXDataset", "num_seqs": num_seqs})
+        dataset.init_seq_order(epoch=1)
+        engine = Engine(config=config)
+        engine.init_train_from_config(train_data=dataset)
+        engine.train()
+        param_sum = float(sum(param.detach().double().sum() for param in engine._pt_model.parameters()))
+        meta_keys = sorted(k for k in engine.learning_rate_control.epoch_data[1].meta if k.startswith("epoch_end_"))
+    with open(f"{tmp_dir}/rank{rank}.txt", "w") as f:
+        f.write(repr((num_seen_seqs, num_seqs, param_sum, meta_keys)))
+    engine._torch_distributed_ctx.destroy_process_groups()
+
+
+def _check_torch_distributed_epoch_end(
+    opts: Dict[str, Any],
+) -> Tuple[List[Tuple[int, int, float, List[str]]], List[str]]:
+    import socket
+
+    world_size = 4
+    with socket.socket() as s:
+        s.bind(("127.0.0.1", 0))
+        port = s.getsockname()[1]
+    with tempfile.TemporaryDirectory(prefix="returnn_test_torch_distributed_epoch_end") as tmp_dir:
+        _torch_spawn_with_timeout(
+            _torch_distributed_epoch_end_worker, args=(world_size, port, tmp_dir, opts), nprocs=world_size, timeout=120
+        )
+        results, logs = [], []
+        for rank in range(world_size):
+            with open(f"{tmp_dir}/rank{rank}.txt") as f:
+                results.append(eval(f.read()))
+            with open(f"{tmp_dir}/log.rank{rank}.txt") as f:
+                logs.append(f.read())
+    return results, logs
+
+
+def test_torch_distributed_epoch_end_join_cpu():
+    """
+    epoch_end "join", uneven batches per rank: every rank consumes all its batches, the params end up the same,
+    and the idle steps get logged.
+    """
+    import re
+
+    for opts in [
+        {"reduce_type": "grad"},
+        {"reduce_type": "grad", "accum": 2},
+        {"reduce_type": "grad_explicit", "accum": 3},
+        {"reduce_type": "param", "param_sync_step": 4},
+        {"sync": [{"group": 2, "type": "grad"}, {"group": "world", "type": "param", "every": 2}]},
+    ]:
+        results, logs = _check_torch_distributed_epoch_end({**opts, "epoch_end": "join"})
+        for num_seen_seqs, num_seqs, _, _ in results:
+            assert num_seen_seqs == 2 * num_seqs, (opts, results)  # nothing dropped
+        assert len({param_sum for _, _, param_sum, _ in results}) == 1, (opts, results)
+        assert "epoch_end_idle_time_frac_mean" in results[0][3], (opts, results[0])
+        for rank, (_, num_seqs, _, _) in enumerate(results):
+            idle = re.findall(rf"Epoch \d+: epoch_end join: rank {rank}/4: (\d+) of (\d+) steps idle", logs[rank])
+            assert len(idle) == 2 and all(int(n) - int(i) == -(-num_seqs // 3) for i, n in idle), (opts, rank, idle)
+        assert len(re.findall(r"epoch_end join: idle steps per rank min/mean/max", logs[0])) == 2, (opts, logs[0])
+
+
+def test_torch_distributed_epoch_end_join_partly_used_params_cpu():
+    """
+    epoch_end "join" with DistributedDataParallel and find_unused_parameters, and a param that the first step of
+    each epoch leaves unused: the grad_join steps (past the wrapper) at the end of epoch 1 must not make the first
+    reduce of epoch 2 expect it ("Encountered gradient which is undefined").
+    """
+    opts = {"reduce_type": "grad", "options": {"find_unused_parameters": True}, "partly_used": True}
+    results, _ = _check_torch_distributed_epoch_end({**opts, "epoch_end": "join"})
+    for num_seen_seqs, num_seqs, _, _ in results:
+        assert num_seen_seqs == 2 * num_seqs, results  # nothing dropped, epoch 2 ran
+    assert len({param_sum for _, _, param_sum, _ in results}) == 1, results
+
+
+def test_torch_distributed_epoch_end_stop_cpu():
+    """
+    epoch_end "stop" (default): the first rank out of data ends the epoch, without epoch end log.
+    """
+    results, logs = _check_torch_distributed_epoch_end({"reduce_type": "grad"})
+    for rank, (num_seen_seqs, _, _, meta_keys) in enumerate(results):
+        assert num_seen_seqs == 2 * 9  # 3 steps per epoch, as rank 0
+        assert "epoch_end" not in logs[rank] and not meta_keys, (rank, meta_keys)
+
+
 def test_torch_distributed_all_reduce_avg_flat_buckets():
     import socket
     import torch.multiprocessing

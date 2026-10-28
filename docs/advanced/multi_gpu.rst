@@ -58,6 +58,20 @@ With ``"sync_complete_frac": True`` (default since behavior version 33),
 the epoch progress ``complete_frac`` is the mean over the ranks,
 so a ``dynamic_learning_rate`` on ``epoch_continuous`` gives the same learning rate on every rank.
 
+When the ranks get different numbers of batches in an epoch,
+by default (``"epoch_end": "stop"``) a rank out of data ends the epoch for its group (and, via the outer levels,
+for all ranks), and the other ranks drop their remaining batches.
+With ``"epoch_end": "join"``, a rank out of data keeps taking part in the steps and collectives of its group
+with zero contribution, until no rank has data, so every rank consumes all its batches.
+The grads are then averaged over the ranks with batches (not divided by the group size),
+a rank out of data does the same optimizer update as the others of its grad sync group,
+and a ``"param"`` average skips the ranks without an update since the last sync.
+It requires ``"sync_complete_frac": True`` (a rank out of data counts as complete, 1.0),
+otherwise such a rank would keep its learning rate while the others advance.
+With "join", at the end of each train epoch, every rank logs how many steps and how much time it was idle.
+Rank 0 also logs the min/mean/max over the ranks, and puts them into the epoch meta data
+(and TensorBoard / W&B, if enabled).
+
 Every rank restricts itself (and the dataset workers it starts) to the CPUs local to its GPU
 (the general option ``gpu_local_cpu_affinity``, on by default).
 Ranks whose GPUs share a NUMA node or socket get disjoint slices of its CPUs, so they do not compete for cores.
