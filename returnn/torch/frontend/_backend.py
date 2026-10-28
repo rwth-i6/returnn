@@ -2379,7 +2379,7 @@ class TorchBackend(Backend[torch.Tensor]):
         out_spatial_dims: Optional[Sequence[Dim]] = None,
         filter: Tensor,
         filter_size: Sequence[Dim],  # to have the order well-defined
-        padding: Union[str, int, Sequence[int]],
+        padding: Union[str, int, Sequence[Union[int, Tuple[int, int]]]],
         strides: Optional[Union[int, Sequence[int]]] = None,
         dilation_rate: Optional[Union[int, Sequence[int]]] = None,
         groups: Optional[int] = None,
@@ -2441,12 +2441,7 @@ class TorchBackend(Backend[torch.Tensor]):
             # torch pads both sides of a dim alike, so a (left, right) pair is padded here
             pads = []
             for p in reversed(padding):
-                if isinstance(p, (list, tuple)):
-                    pads.extend([int(p[0]), int(p[1])])
-                elif isinstance(p, int):
-                    pads.extend([p, p])
-                else:
-                    raise NotImplementedError(f"conv: padding {padding!r} mixes a (left, right) pair with {p!r}")
+                pads.extend(p if isinstance(p, (list, tuple)) else (p, p))
             src_raw = torch.nn.functional.pad(src_raw, pads)
             padding = 0
         if padding == "same" and not use_striding and all(d.dimension % 2 == 1 for d in filter_size):
@@ -3028,7 +3023,7 @@ def _conv_padding_pair_1d(padding) -> Optional[Tuple[int, int]]:
     """
     if isinstance(padding, (list, tuple)) and len(padding) == 1 and isinstance(padding[0], (list, tuple)):
         pad_l, pad_r = padding[0]
-        return int(pad_l), int(pad_r)
+        return pad_l, pad_r
     return None
 
 
@@ -3041,7 +3036,7 @@ def _conv_depthwise_1d_triton(
     in_spatial_dim: Dim,
     out_spatial_dim: Dim,
     filter: Tensor,
-    padding: Union[str, int],
+    padding: Union[str, int, Sequence[Union[int, Tuple[int, int]]]],
     bias: Optional[Tensor],
 ) -> Optional[Tensor]:
     """
