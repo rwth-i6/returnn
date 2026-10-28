@@ -228,6 +228,8 @@ def startup_callback(**_kwargs):
         raise RuntimeError("test: task died")
     if _die == "exit":
         sys.exit(143)  # like the fatal signal handler
+    if _die == "interrupt":
+        raise KeyboardInterrupt
 
 
 if {cleanup_fails}:
@@ -268,6 +270,8 @@ def test_main_finalize_at_exit():
         assert rc == 1 and "Quitting" in out and "test: task died" in out, (rc, out)
         rc, out = _run_main_finalize(tmp_dir, die="exit")
         assert rc == 143 and "Quitting" in out, (rc, out)
+        rc, out = _run_main_finalize(tmp_dir, die="interrupt")  # as before: handled, rc 1
+        assert rc == 1 and "Quitting" in out and "KeyboardInterrupt" in out, (rc, out)
         rc, out = _run_main_finalize(tmp_dir, die="error", cleanup_fails=True)
         assert rc == 1 and "test: task died" in out and "test: cleanup failed" in out, (rc, out)
         assert out.index("test: cleanup failed") < out.rindex("test: task died"), out  # the original goes last
