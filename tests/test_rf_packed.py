@@ -793,6 +793,46 @@ def test_flat_content_shared_out_dim_other_bound():
         torch.testing.assert_close(b_raw.grad, torch.where(mask, a_raw.sum(dim=-1), 0.0))
 
 
+def test_flat_content_shared_out_dim_other_bound_traced():
+    # As above, but under fake-tensor tracing, where replace_dim_v2 resizes the bound buffer of b to the flat dim.
+    from functorch.compile import aot_function, nop
+
+    rf.select_backend_torch()
+
+    def _make_func(opts_a, opts_b):
+        def _func(a_raw: torch.Tensor, b_raw: torch.Tensor, seq_lens: torch.Tensor):
+            batch_dim = Dim(3, name="batch")
+            time_dim = Dim(Tensor("time", dims=[batch_dim], dtype="int32", raw_tensor=seq_lens), capacity=8)
+            feat_dim = Dim(5, name="feat")
+            a = Tensor("a", dims=[batch_dim, time_dim, feat_dim], dtype="float32", raw_tensor=a_raw)
+            b = Tensor("b", dims=[batch_dim, time_dim], dtype="float32", raw_tensor=b_raw)
+            with rf.set_default_device_ctx("cpu"), rf.set_static_traceable_ctx():
+                a_flat, flat_dim = rf.pack_padded(packed.pack(a, **opts_a), dims=[batch_dim, time_dim])
+                b_flat, _ = rf.pack_padded(packed.pack(b, **opts_b), dims=[batch_dim, time_dim], out_dim=flat_dim)
+            a_flat_raw = a_flat.copy_compatible_to_dims_raw([flat_dim, feat_dim])
+            return a_flat_raw, b_flat.copy_compatible_to_dims_raw([flat_dim])
+
+        return _func
+
+    seq_lens = torch.tensor([3, 1, 0], dtype=torch.int32)
+    gen = torch.Generator().manual_seed(7)
+    for opts_a, opts_b in [
+        (dict(total_bound=16), dict(total_bound=24)),
+        (dict(total_bound=24), dict(total_bound=16)),
+        (dict(gap=2, align=4, total_bound=40), dict(total_bound=16)),
+    ]:
+        a_raw, b_raw = torch.randn(3, 8, 5, generator=gen), torch.randn(3, 8, generator=gen)
+        func = _make_func(opts_a, opts_b)
+        results = []
+        for call in [func, aot_function(func, fw_compiler=nop, bw_compiler=nop)]:
+            a, b = a_raw.clone().requires_grad_(), b_raw.clone().requires_grad_()
+            a_flat, b_flat = call(a, b, seq_lens)
+            (a_flat * b_flat[:, None]).sum().backward()
+            results.append((a_flat.detach(), b_flat.detach(), a.grad, b.grad))
+        for untraced, traced in zip(*results):
+            torch.testing.assert_close(traced, untraced)
+
+
 def test_flat_content_bound_eager():
     # Eager: the flat dim has the content total as its size, so a bound buffer (pack total_bound) is cut to it,
     # also when the flat dim is shared with another packing or with pack_padded of a padded tensor.
