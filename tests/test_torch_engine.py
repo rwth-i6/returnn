@@ -27,6 +27,7 @@ from returnn.torch.updater import Updater
 import returnn.frontend as rf
 from returnn.forward_iface import ForwardCallbackIface
 from returnn.datasets import init_dataset
+from returnn.datasets.generating import StaticDataset
 
 
 # must be in the global scope due to pickling
@@ -1718,6 +1719,122 @@ def test_torch_engine_distributed_cpu():
             with open(f"{tmp_dir}/rank{rank}.txt") as f:
                 param_sums.append(float(f.read()))
     assert param_sums[0] == param_sums[1], param_sums
+
+
+# must be in the global scope due to pickling
+class _SlowStaticDataset(StaticDataset):
+    """sleeps for every seq, like a slow input pipeline"""
+
+    def __init__(self, *, sleep_secs: float, **kwargs):
+        super().__init__(**kwargs)
+        self._sleep_secs = sleep_secs
+
+    def _collect_single_seq(self, seq_idx: int):
+        time.sleep(self._sleep_secs)
+        return super()._collect_single_seq(seq_idx)
+
+
+def _train_slow_input_log(*, sleep_secs: float, log_fn: str, torch_distributed: Optional[Dict[str, Any]] = None):
+    """train one epoch of 10 steps with 2 seqs each, the RETURNN log goes to ``log_fn``"""
+    from returnn.log import log as returnn_log
+
+    rnd = numpy.random.RandomState(42)
+    seqs = [
+        {"data": rnd.normal(size=(5, 9)).astype("float32"), "classes": rnd.randint(2, size=(5,)).astype("int32")}
+        for _ in range(20)
+    ]
+    config = Config(
+        dict(
+            task="train",
+            device="cpu",
+            extern_data={"data": {"dim": 9}, "classes": {"dim": 2, "sparse": True}},
+            get_model=TrainTestModel,
+            train_step=TrainTestModel.train_step,
+            batch_size=500,
+            max_seqs=2,
+            optimizer={"class": "adam"},
+            num_epochs=1,
+            torch_dataloader_opts={"num_workers": 0},
+            torch_distributed=torch_distributed,
+        )
+    )
+    returnn_log.initialize(logs=[log_fn], verbosity=[5])
+    try:
+        with global_config_ctx(config):
+            dataset = _SlowStaticDataset(sleep_secs=sleep_secs, data=seqs, input_dim=9, output_dim=2)
+            dataset.init_seq_order(epoch=1)
+            engine = Engine(config=config)
+            engine.init_train_from_config(train_data=dataset)
+            engine.train()
+    finally:
+        returnn_log.initialize()  # back to the default (stdout only)
+    if torch_distributed is not None:
+        engine._torch_distributed_ctx.destroy_process_groups()
+
+
+def _epoch_time_shares(log_fn: str) -> Dict[str, float]:
+    """:return: the time shares of the epoch summary in the log, e.g. {"computing time": 0.7, "input wait": 0.3}"""
+    import re
+
+    with open(log_fn, "rt", encoding="utf-8") as f:
+        txt = f.read()
+    m = re.search(r"Epoch 1: Trained 10 steps, \S+ elapsed \((.*)\)", txt)
+    assert m, txt
+    return {name: float(v) / 100 for v, name in re.findall(r"([0-9.]+)% (computing time|input wait|sync wait)", m[1])}
+
+
+def test_torch_engine_train_input_wait():
+    # The wait for the batch is input wait, not computing time, in the epoch summary and in each step.
+    import re
+
+    with tempfile.TemporaryDirectory(prefix="returnn_test_torch_input_wait") as tmp_dir:
+        _train_slow_input_log(sleep_secs=0.05, log_fn=f"{tmp_dir}/log.txt")
+        shares = _epoch_time_shares(f"{tmp_dir}/log.txt")
+        with open(f"{tmp_dir}/log.txt", "rt", encoding="utf-8") as f:
+            step_input_waits = [float(v) for v in re.findall(r"sec/step, ([0-9.]+) sec input wait", f.read())]
+    print(shares, step_input_waits)
+    assert set(shares) == {"computing time", "input wait"}
+    assert shares["input wait"] > 0.7 and shares["computing time"] < 0.25, shares
+    assert 0.9 < shares["computing time"] + shares["input wait"] <= 1.002, shares  # 0.1% rounding per share
+    assert len(step_input_waits) == 10 and sum(step_input_waits) > 0.9, step_input_waits
+
+
+def _torch_distributed_input_wait_worker(rank: int, world_size: int, port: int, tmp_dir: str):
+    os.environ.update(
+        MASTER_ADDR="127.0.0.1",
+        MASTER_PORT=str(port),
+        RANK=str(rank),
+        WORLD_SIZE=str(world_size),
+        LOCAL_RANK=str(rank),
+        LOCAL_WORLD_SIZE=str(world_size),
+    )
+    _train_slow_input_log(
+        sleep_secs=0.05 if rank == 1 else 0.0,
+        log_fn=f"{tmp_dir}/log.rank{rank}.txt",
+        torch_distributed={"backend": "gloo"},
+    )
+
+
+def test_torch_engine_distributed_cpu_input_wait():
+    # Only rank 1 has a slow input pipeline. Rank 0 waits for it in the control sync, which is not computing time.
+    import socket
+    import torch.multiprocessing
+
+    world_size = 2
+    with socket.socket() as s:
+        s.bind(("127.0.0.1", 0))
+        port = s.getsockname()[1]
+    with tempfile.TemporaryDirectory(prefix="returnn_test_torch_distributed_input_wait") as tmp_dir:
+        torch.multiprocessing.spawn(
+            _torch_distributed_input_wait_worker, args=(world_size, port, tmp_dir), nprocs=world_size
+        )
+        shares = [_epoch_time_shares(f"{tmp_dir}/log.rank{rank}.txt") for rank in range(world_size)]
+    print(shares)
+    assert shares[0]["sync wait"] > 0.6 and shares[0]["computing time"] < 0.3, shares
+    assert shares[1]["input wait"] > 0.6 and shares[1]["computing time"] < 0.3, shares
+    for rank_shares in shares:
+        assert set(rank_shares) == {"computing time", "input wait", "sync wait"}, shares
+        assert 0.9 < sum(rank_shares.values()) <= 1.002, shares
 
 
 def _torch_distributed_shard_worker(rank: int, world_size: int, port: int, tmp_dir: str, hdf_fn: str):
