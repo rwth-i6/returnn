@@ -587,6 +587,37 @@ class TorchBackend(Backend[torch.Tensor]):
         return out
 
     @staticmethod
+    def slice_update(target: Tensor, value: Tensor, *, axis: Dim, start: Tensor) -> Tensor:
+        """
+        :param target: with ``axis``
+        :param value: without ``axis``
+        :param axis:
+        :param start: index in ``axis``, scalar or with other dims of ``target``
+        :return: ``target`` with ``value`` at ``start`` along ``axis``
+
+        ``scatter_`` into the target's buffer, so the target itself is updated.
+        Where autograd records the write, ``scatter`` writes into a copy instead.
+        A ``start`` outside ``axis`` fails
+        (CPU: error, CUDA: device-side assert, also under graph capture, without host sync),
+        where the generic select would silently write nothing.
+        """
+        axis_int = target.dims.index(axis)
+        other_dims = target.dims[:axis_int] + target.dims[axis_int + 1 :]
+        shape = list(target.raw_tensor.shape)
+        shape[axis_int] = 1
+        index = start.copy_compatible_to_dims_raw(other_dims).unsqueeze(axis_int)
+        index = index.to(device=target.raw_tensor.device, dtype=torch.int64).expand(shape)
+        src = value.copy_compatible_to_dims_raw(other_dims).unsqueeze(axis_int).to(target.raw_tensor.dtype)
+        src = src.expand(shape)
+        if torch.is_grad_enabled() and (target.raw_tensor.requires_grad or src.requires_grad):
+            out_raw = target.raw_tensor.scatter(axis_int, index, src)
+        else:
+            out_raw = target.raw_tensor.scatter_(axis_int, index, src)
+        out = target.copy_template()
+        out.raw_tensor = out_raw
+        return out
+
+    @staticmethod
     def stack(sources: Sequence[Tensor], *, out_dim: Dim) -> Tensor:
         """stack"""
         out_dims = (out_dim,) + sources[0].dims
@@ -741,8 +772,7 @@ class TorchBackend(Backend[torch.Tensor]):
             logits_dim_order = targets.dims
 
         # We need same order of axes as in target.
-        logits_axes_permutation = [logits_dim_order.index(dim) for dim in logits.dims]
-        logits = logits.copy_transpose(logits_axes_permutation)
+        logits = logits.copy_transpose(logits_dim_order)
 
         raw_cross_entropy = torch.nn.functional.cross_entropy(
             input=logits.raw_tensor, target=targets.raw_tensor, reduction="none"
