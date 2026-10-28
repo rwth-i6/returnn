@@ -243,6 +243,36 @@ def test_batch_norm_distributed_like_local_packed():
             torch.testing.assert_close(outs[1], outs[0], rtol=1e-5, atol=1e-5, msg=f"use_mask={use_mask}")
 
 
+def test_batch_norm_batch_without_elements():
+    """
+    A batch without any unmasked frame (e.g. only empty sequences, as a text-only batch of a speech LM)
+    has no statistics: BatchNorm then gives finite outputs and gradients and keeps its running stats,
+    on packed storage (gaps only, as the bounded buffers under CUDA-graph capture), local and distributed.
+    Before, the masked mean was 0/0 = NaN, which reached the gradients through the masked frames.
+    """
+    import torch
+
+    rf.select_backend_torch()
+    batch = Dim(2, name="batch")
+    feat = Dim(3, name="feat")
+    time_sizes = Tensor("time_size", dims=[batch], dtype="int32", raw_tensor=torch.tensor([0, 0], dtype=torch.int32))
+    time_dim = Dim(time_sizes, name="time")
+    x = Tensor("x", dims=[batch, time_dim, feat], dtype="float32", raw_tensor=torch.zeros(2, 0, 3))
+    packed = rf.pack(x, dims=[batch, time_dim], gap=2)
+    for distributed in (False, True):
+        rf.init_train_step_run_ctx(train_flag=True, step=0, epoch=1)
+        bn = rf.BatchNorm(feat, use_mask=True, distributed=distributed)
+        out = bn(packed)
+        loss = rf.reduce_sum(out, axis=out.dims, use_mask=True)
+        loss.raw_tensor.backward()
+        assert torch.isfinite(out.raw_tensor.inner.raw_tensor).all(), distributed  # the packed buffer
+        assert float(loss.raw_tensor) == 0.0, distributed
+        for param in (bn.gamma, bn.beta):
+            assert torch.isfinite(param.raw_tensor.grad).all(), (distributed, param, param.raw_tensor.grad)
+        torch.testing.assert_close(bn.running_mean.raw_tensor, torch.zeros(3), msg=f"distributed={distributed}")
+        torch.testing.assert_close(bn.running_variance.raw_tensor, torch.ones(3), msg=f"distributed={distributed}")
+
+
 def test_moments_use_fixed_masking_by_behavior_version():
     """
     Behavior version 34 turns ``rf_moments_use_fixed_masking`` on, the config option overrides that in both directions.

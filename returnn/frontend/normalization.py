@@ -77,6 +77,7 @@ def moments(
         # torch.nn.SyncBatchNorm instead combines per-worker Welford statistics, which does not cancel.
         x = rf.cast(x, "float32")
         count = rf.cast(rf.num_elements_of_shape(axis, use_mask=use_mask, source=x, distributed=True), "float32")
+        count = rf.maximum(count, 1.0)  # no element on any worker: mean and variance 0 instead of 0/0, see below
         mean = rf.reduce_sum(x, axis=axis, use_mask=use_mask, distributed=True) / count
         # stop_gradient does not change the gradient here: the deviations sum to zero over the global batch
         sq_dev = rf.squared_difference(x, rf.stop_gradient(mean))
@@ -84,13 +85,26 @@ def moments(
         if isinstance(correction, Tensor) or correction != 0:
             variance *= count / (count - correction)
         return rf.cast(mean, compute_dtype), rf.cast(variance, compute_dtype)
-    mean = rf.reduce_mean(x, axis=axis, use_mask=use_mask if _moments_use_fixed_masking() else True)
+    mean = _masked_mean(x, axis=axis, use_mask=use_mask if _moments_use_fixed_masking() else True)
     # stop_gradient does not change the gradient here
-    variance = rf.reduce_mean(rf.squared_difference(x, rf.stop_gradient(mean)), axis=axis, use_mask=use_mask)
+    variance = _masked_mean(rf.squared_difference(x, rf.stop_gradient(mean)), axis=axis, use_mask=use_mask)
     if isinstance(correction, Tensor) or correction != 0:
         n = rf.num_elements_of_shape(axis, use_mask=use_mask, source=x)
         variance *= n / (n - correction)
     return mean, variance
+
+
+def _masked_mean(x: Tensor, *, axis: Union[Dim, Sequence[Dim]], use_mask: bool) -> Tensor:
+    """
+    :func:`rf.reduce_mean`, except that a reduction without any unmasked element
+    (e.g. a batch of only empty sequences, as the text-only batches of a speech LM) gives 0,
+    with zero gradient, where the masked mean gives 0/0 = NaN, in the gradient too.
+    """
+    count = rf.num_elements_of_shape(axis, use_mask=use_mask, source=x)
+    if not isinstance(count, Tensor):  # static: no masking involved, cannot be 0
+        return rf.reduce_mean(x, axis=axis, use_mask=use_mask)
+    count = rf.maximum(rf.cast(count, x.dtype), rf.convert_to_tensor(1, dtype=x.dtype, device=count.device))
+    return rf.reduce_sum(x, axis=axis, use_mask=use_mask) / count
 
 
 def _moments_float32() -> bool:
@@ -407,9 +421,18 @@ class BatchNorm(rf.Module):
             )
 
             def _update_running_stats():
-                # A batch without any (unmasked) element has undefined stats (0/0 = NaN).
-                # Skip the update then, otherwise the running stats would stay NaN for good.
+                # A batch without any (unmasked) element has no stats (moments gives 0 there, not 0/0),
+                # and non-finite input gives non-finite stats: skip the update then,
+                # otherwise the running stats would drift to 0 or stay NaN for good.
+                num_elements = rf.num_elements_of_shape(
+                    [d for d in source.dims if d != self.in_dim],
+                    use_mask=use_mask if _moments_use_fixed_masking() else True,
+                    source=source,
+                    distributed=self.distributed,
+                )
                 ok = rf.is_finite(mean_cur_batch)
+                if isinstance(num_elements, Tensor):
+                    ok = rf.logical_and(ok, rf.copy_to_device(num_elements, ok.device) > 0)
                 delta_mean = (mean_cur_batch - self.running_mean) * self.momentum
                 delta_variance = (variance_cur_batch - self.running_variance) * self.momentum
                 self.running_mean.assign_add(rf.where(ok, delta_mean, 0.0))
