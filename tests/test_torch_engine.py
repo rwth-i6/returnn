@@ -1634,7 +1634,7 @@ def _torch_profile_distributed_worker(rank: int, world_size: int, port: int, tmp
     assert engine.epoch == 2
     with global_config_ctx(config):
         assert should_write_to_disk(config) == (rank == 0)  # only rank 0 writes checkpoints
-    torch.distributed.destroy_process_group()
+    engine._torch_distributed_ctx.destroy_process_groups()
 
 
 def _run_torch_profile_distributed(tmp_dir: str, torch_profile: Dict[str, Any], *, world_size: int = 2):
@@ -1699,7 +1699,7 @@ def _torch_distributed_cpu_worker(rank: int, world_size: int, port: int, tmp_dir
         param_sum = float(sum(param.detach().double().sum() for param in engine._pt_model.parameters()))
     with open(f"{tmp_dir}/rank{rank}.txt", "w") as f:
         f.write(repr(param_sum))
-    torch.distributed.destroy_process_group()
+    engine._torch_distributed_ctx.destroy_process_groups()
 
 
 def test_torch_engine_distributed_cpu():
@@ -1763,7 +1763,7 @@ def _torch_distributed_shard_worker(rank: int, world_size: int, port: int, tmp_d
         engine.train()
     with open(f"{tmp_dir}/rank{rank}.txt", "w") as f:
         f.write(repr(seq_tags))
-    torch.distributed.destroy_process_group()
+    engine._torch_distributed_ctx.destroy_process_groups()
 
 
 def test_torch_engine_distributed_cpu_dataset_distribution_shard():
@@ -1853,7 +1853,7 @@ def _torch_distributed_lr_worker(rank: int, world_size: int, port: int, tmp_dir:
     assert engine.epoch == 3
     params = [param.detach().cpu() for param in engine._pt_model.parameters()]
     torch.save({"lrs": applied_lrs, "params": params}, f"{tmp_dir}/rank{rank}.pt")
-    torch.distributed.destroy_process_group()
+    engine._torch_distributed_ctx.destroy_process_groups()
 
 
 def _run_torch_distributed_lr(**opts) -> List[Dict[str, Any]]:
@@ -2087,7 +2087,7 @@ def _torch_distributed_sync_levels_worker(rank: int, world_size: int, port: int,
         raise ValueError(f"invalid variant {variant!r}")
 
     torch.save(results, f"{tmp_dir}/rank{rank}.pt")
-    torch.distributed.destroy_process_group()
+    ctx.destroy_process_groups()
 
 
 def _run_torch_distributed_sync_levels(variant: str) -> List[Dict[str, List[Any]]]:
@@ -2168,6 +2168,56 @@ def test_torch_distributed_sync_levels_cpu_hier_opt():
     )
 
 
+def _torch_spawn_with_timeout(fn, *, args: Tuple[Any, ...], nprocs: int, timeout: float):
+    import torch.multiprocessing
+
+    ctx = torch.multiprocessing.spawn(fn, args=args, nprocs=nprocs, join=False)
+    deadline = time.monotonic() + timeout
+    while not ctx.join(timeout=max(0.0, deadline - time.monotonic())):  # returns once any process finished
+        if time.monotonic() > deadline:
+            for proc in ctx.processes:
+                proc.kill()
+            raise Exception("timeout, the ranks hang")
+
+
+def _torch_distributed_destroy_process_groups_worker(rank: int, world_size: int, port: int):
+    from returnn.torch.distributed import DistributedContext
+
+    os.environ.update(
+        MASTER_ADDR="127.0.0.1",
+        MASTER_PORT=str(port),
+        RANK=str(rank),
+        WORLD_SIZE=str(world_size),
+        LOCAL_RANK=str(rank),
+        LOCAL_WORLD_SIZE=str(world_size),
+    )
+    # One core per rank: the gloo worker thread only runs while the main thread waits, as on a loaded machine.
+    os.sched_setaffinity(0, {sorted(os.sched_getaffinity(0))[rank]})
+    # explicit ranks: a group of its own (new_group), not the default group
+    ctx = DistributedContext({"backend": "gloo", "sync": [{"group": [[0, 1]], "type": "param"}]})
+    module = torch.nn.Linear(3, 2)
+    optimizer = torch.optim.Adam(module.parameters())
+    ctx.step_after_param_update(module=module, optimizer=optimizer, epoch_update_step_idx=0)
+    ctx.destroy_process_groups()  # right after the collective
+
+
+@unittest.skipIf(not hasattr(os, "sched_setaffinity"), "Linux only")
+def test_torch_distributed_destroy_process_groups_after_sync_cpu():
+    """
+    Freeing a gloo process group right after a collective on it deadlocked with torch 2.0 to 2.7,
+    see :func:`returnn.torch.distributed._destroy_process_groups`.
+    """
+    import socket
+
+    world_size = 2
+    with socket.socket() as s:
+        s.bind(("127.0.0.1", 0))
+        port = s.getsockname()[1]
+    _torch_spawn_with_timeout(
+        _torch_distributed_destroy_process_groups_worker, args=(world_size, port), nprocs=world_size, timeout=60
+    )
+
+
 def _torch_distributed_param_sync_accum_worker(rank: int, world_size: int, port: int):
     import returnn.torch.distributed as torch_distributed
     from returnn.torch.updater import Updater
@@ -2241,7 +2291,7 @@ def _torch_distributed_param_sync_accum_worker(rank: int, world_size: int, port:
         engine.train()
     assert engine.epoch == 2
     assert len(state["syncs"]) >= 2, state  # at least one sync per epoch, so the epoch boundary reset is covered
-    torch.distributed.destroy_process_group()
+    engine._torch_distributed_ctx.destroy_process_groups()
 
 
 def test_torch_engine_distributed_param_sync_accum_cpu():
@@ -2294,7 +2344,7 @@ def _torch_distributed_param_sync_accum_dyn_worker(rank: int, world_size: int, p
         engine.init_train_from_config(train_data=dataset)
         engine.train()
     assert engine.global_train_step == 4, engine.global_train_step  # both stop when rank 0 runs out
-    torch.distributed.destroy_process_group()
+    engine._torch_distributed_ctx.destroy_process_groups()
 
 
 def _torch_distributed_hier_control_sync_worker(
@@ -2344,30 +2394,23 @@ def _torch_distributed_hier_control_sync_worker(
         engine.train()
     with open(f"{tmp_dir}/rank{rank}.txt", "w") as f:
         f.write(str(engine.global_train_step))
-    torch.distributed.destroy_process_group()
+    engine._torch_distributed_ctx.destroy_process_groups()
 
 
 def _check_torch_distributed_hier_control_sync(*, accum_grad_multiple_step: int, param_sync_every: int):
     import socket
-    import torch.multiprocessing
 
     world_size = 4
     with socket.socket() as s:
         s.bind(("127.0.0.1", 0))
         port = s.getsockname()[1]
     with tempfile.TemporaryDirectory(prefix="returnn_test_torch_distributed_hier_control_sync") as tmp_dir:
-        ctx = torch.multiprocessing.spawn(
+        _torch_spawn_with_timeout(
             _torch_distributed_hier_control_sync_worker,
             args=(world_size, port, tmp_dir, accum_grad_multiple_step, param_sync_every),
             nprocs=world_size,
-            join=False,
+            timeout=120,
         )
-        deadline = time.monotonic() + 120
-        while not ctx.join(timeout=max(0.0, deadline - time.monotonic())):  # returns once any process finished
-            if time.monotonic() > deadline:
-                for proc in ctx.processes:
-                    proc.kill()
-                raise Exception("timeout, the ranks hang")
         steps = []
         for rank in range(world_size):
             with open(f"{tmp_dir}/rank{rank}.txt") as f:
@@ -2461,7 +2504,7 @@ def _torch_distributed_param_sync_optimizer_state_worker(
         "extra": optimizer.state[next(module.parameters())]["extra"],
     }
     torch.save(results, f"{tmp_dir}/rank{rank}.pt")
-    torch.distributed.destroy_process_group()
+    ctx.destroy_process_groups()
 
 
 def _check_torch_distributed_param_sync_optimizer_state(sync_optimizer_state: bool):
@@ -2584,7 +2627,7 @@ def _torch_distributed_sync_at_epoch_end_worker(
         },
         f"{tmp_dir}/rank{rank}.pt",
     )
-    torch.distributed.destroy_process_group()
+    engine._torch_distributed_ctx.destroy_process_groups()
 
 
 def _check_torch_distributed_sync_at_epoch_end(sync_at_epoch_end: bool):
@@ -2648,7 +2691,7 @@ def test_torch_engine_distributed_param_no_sync_at_epoch_end_cpu():
 
 
 def _torch_distributed_all_reduce_avg_flat_worker(rank: int, world_size: int, port: int, tmp_dir: str):
-    from returnn.torch.distributed import _all_reduce_avg_flat
+    from returnn.torch.distributed import _all_reduce_avg_flat, _destroy_process_groups
 
     os.environ.update(MASTER_ADDR="127.0.0.1", MASTER_PORT=str(port), RANK=str(rank), WORLD_SIZE=str(world_size))
     torch.distributed.init_process_group(backend="gloo")
@@ -2670,7 +2713,7 @@ def _torch_distributed_all_reduce_avg_flat_worker(rank: int, world_size: int, po
     assert [tensor.dtype for tensor in tensors] == [[torch.float32, torch.float64][i % 2] for i in range(5)]
     with open(f"{tmp_dir}/rank{rank}.txt", "w") as f:
         f.write(repr(results))
-    torch.distributed.destroy_process_group()
+    _destroy_process_groups([None])
 
 
 def test_torch_distributed_all_reduce_avg_flat_buckets():

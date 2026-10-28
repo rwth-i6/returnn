@@ -1509,15 +1509,7 @@ def _dim_aware_call(name: str, args, kwargs):
                     [dense if x is src else x for x in args],
                     {k: (dense if v is src else v) for k, v in kwargs.items()},
                 )
-                if isinstance(out, Tensor) and is_packed(out) and out.raw_tensor.same_packing(dense.raw_tensor):
-                    # match raw0's CAPACITY too, not just its layout:
-                    # the replace_dim below relabels the packed dim, it cannot resize the buffer
-                    back = regap(out, raw0.gap, align=raw0.align, total_bound=raw0.packed_dim.dimension)
-                    inner, _ = rf.replace_dim(
-                        back.raw_tensor.inner, in_dim=back.raw_tensor.packed_dim, out_dim=raw0.packed_dim
-                    )
-                    return raw0.rewrap(inner, name=name)
-                return out  # unusual result structure; correct, just re-layouted
+                return _conform_packing(out, raw0)
             _warn_fallback_once(name, "implicitly reduces over the packed dim, gapped layout")
         else:
             inner_args = [_map_packed_to_inner(x) for x in args]
@@ -1770,8 +1762,7 @@ def _torch_sdpa_varlen_attention(
     if not hasattr(torch.nested, "nested_tensor_from_jagged"):
         return _sdpa_no("torch.nested.nested_tensor_from_jagged not available (torch too old)")
     # nested jagged needs the dense layout for the offsets; regap is cheap
-    orig_layout = (q_raw.gap, q_raw.align)
-    orig_layout_lens = q_raw.layout_lens
+    orig_q_raw = q_raw
     if q_raw.has_gap_frames:
         query = regap(query, 0, align=1)
         q_raw = query.raw_tensor
@@ -1919,9 +1910,8 @@ def _torch_sdpa_varlen_attention(
     )
     out_inner.raw_tensor = out_t
     out = q_raw.rewrap(out_inner, name="sdpa_varlen")
-    if orig_layout != (0, 1) or orig_layout_lens is not None:
-        out = regap(out, orig_layout[0], align=orig_layout[1], layout_lens=orig_layout_lens)
-    return out
+    # back to the layout and the buffer of the query as it came in
+    return _conform_packing(out, orig_q_raw)
 
 
 _flex_env_broken = False
@@ -2777,8 +2767,7 @@ def _rel_pos_attention_per_seq(
     lens_t = query_spatial_dim.dyn_size_ext
     if lens_t is None or lens_t.dims != (q_raw.orig_dims[0],):
         return None
-    orig_layout = (q_raw.gap, q_raw.align)
-    orig_layout_lens = q_raw.layout_lens
+    orig_q_raw = q_raw
     if q_raw.has_gap_frames:
         query, key, value = regap(query, 0, align=1), regap(key, 0, align=1), regap(value, 0, align=1)
         q_raw = query.raw_tensor
@@ -2826,9 +2815,8 @@ def _rel_pos_attention_per_seq(
     )
     out = helper.rewrap(inner_new, name="rel_pos_att_per_seq")
     _count_attention_path("rel_pos_per_seq")
-    if orig_layout != (0, 1) or orig_layout_lens is not None:
-        out = regap(out, orig_layout[0], align=orig_layout[1], layout_lens=orig_layout_lens)
-    return out
+    # back to the layout and the buffer of the query as it came in
+    return _conform_packing(out, orig_q_raw)
 
 
 def _strided_out_wrapper(
