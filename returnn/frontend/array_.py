@@ -666,7 +666,7 @@ def slice_update(target: Tensor, value: Tensor, *, axis: Dim, start: Tensor) -> 
     :param target: with ``axis``
     :param value: the frame to write, without ``axis``
     :param axis: the axis to write into
-    :param start: index in ``axis``, scalar
+    :param start: index in ``axis``, scalar or with other dims of ``target``
     :return: ``target`` with ``value`` written at ``start``
 
     Backends that can update in place do; the fallback selects over the whole axis.
@@ -840,10 +840,16 @@ def masked_scatter(
     return res
 
 
-def sequence_mask(dims: Union[Dim, Sequence[Dim]], *, device: Optional[str] = None) -> Tensor:
+def sequence_mask(
+    dims: Union[Dim, Sequence[Dim]],
+    *,
+    device: Optional[str] = None,
+    like: Optional[Union[Tensor, rf.TensorLayout]] = None,
+) -> Tensor:
     """
     :param dims:
     :param device:
+    :param like: the mask follows the device and storage layout of this tensor or layout, see :func:`Dim.get_mask`
     :return: mask based on the sequence lengths
     """
     if isinstance(dims, Dim):
@@ -854,7 +860,7 @@ def sequence_mask(dims: Union[Dim, Sequence[Dim]], *, device: Optional[str] = No
         return rf.constant(True, dims=())
     mask = True
     for dim in dyn_dims:
-        mask = rf.opt_logical_and(mask, dim.get_mask(dim_order=dims, device=device))
+        mask = rf.opt_logical_and(mask, dim.get_mask(dim_order=dims, device=device, like=like))
     return mask
 
 
