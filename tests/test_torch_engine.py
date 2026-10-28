@@ -3657,6 +3657,17 @@ def test_torch_engine_cuda_graph_compile_train_default_warmup():
     _run_cuda_graph_train(compile_=True, warmup_steps=None)
 
 
+def test_torch_engine_cuda_graph_compile_dump_fx_dir():
+    """torch_cuda_graph "dump_fx_dir" writes the traced step graph and trains as without it,
+    with Inductor and with the eager kernels of "debug_aot_eager" """
+    import os
+
+    for graph_opts in ({}, {"debug_aot_eager": True}):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            _run_cuda_graph_train(compile_=True, graph_opts={"dump_fx_dir": tmp_dir, **graph_opts})
+            assert os.path.getsize(os.path.join(tmp_dir, "aot_fw_graph.py")) > 0
+
+
 def test_torch_engine_optimizer_step_train():
     """
     torch_optimizer_step: eager model step, the optimizer step compiled + captured separately,
