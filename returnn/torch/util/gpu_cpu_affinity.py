@@ -80,13 +80,16 @@ def _gather_allowed_cpus_of_local_ranks() -> List[Set[int]]:
     import socket
     import torch.distributed as dist
 
-    group = dist.new_group(backend="gloo")
+    # noinspection PyProtectedMember
+    from returnn.torch.distributed import _destroy_process_groups
+
+    groups = [dist.new_group(backend="gloo")]  # only reference, see _destroy_process_groups
     try:
         hostname = socket.gethostname()
         gathered: List[Optional[Tuple[str, List[int]]]] = [None] * dist.get_world_size()
-        dist.all_gather_object(gathered, (hostname, sorted(os.sched_getaffinity(0))), group=group)
+        dist.all_gather_object(gathered, (hostname, sorted(os.sched_getaffinity(0))), group=groups[0])
     finally:
-        dist.destroy_process_group(group)
+        _destroy_process_groups(groups)
     return [set(allowed) for host, allowed in gathered if host == hostname]
 
 

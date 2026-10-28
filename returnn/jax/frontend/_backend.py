@@ -1012,7 +1012,7 @@ class JaxBackend(Backend[jax.Array]):
         device: Optional[str] = None,
         sparse_dim: Optional[Dim] = None,
         feature_dim: Optional[Dim] = None,
-        like: Optional[Tensor] = None,
+        like: Optional[rf.TensorLayout] = None,
     ) -> Tensor:
         """full"""
         del like  # plain storage, no layout to follow
@@ -1989,7 +1989,7 @@ class JaxBackend(Backend[jax.Array]):
         auto_update_state: Optional[bool] = None,
         static: Optional[bool] = None,
         out: Optional[Tensor[jax.Array]] = None,
-        like: Optional[Tensor] = None,
+        like: Optional[rf.TensorLayout] = None,
     ) -> Tensor:
         """
         random. See :func:`rf.random` for details.
