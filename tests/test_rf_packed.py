@@ -1760,66 +1760,6 @@ def test_rel_pos_self_attention_dropout_train_packed():
         assert bool(numpy.isfinite(packed.unpack(out).raw_tensor.detach().numpy()).all())
 
 
-def test_rel_pos_att_triton_kernel_grad():
-    # The Triton varlen rel-pos kernel (CUDA; the train-mode dropout fast path):
-    # fwd + ALL grads (q, k, v, bd) vs autograd through an eager per-seq reference,
-    # at dropout 0 (exact) and dropout > 0 with the kernel's own extracted mask (exact).
-    rf.select_backend_torch()
-    import torch as _torch
-
-    if not _torch.cuda.is_available():
-        raise unittest.SkipTest("needs CUDA")
-    try:
-        from returnn.torch.util import rel_pos_att_triton as m
-    except ImportError as exc:
-        raise unittest.SkipTest(f"triton not available ({exc})")
-
-    dev = "cuda"
-    lens = [33, 21, 9]
-    max_len = max(lens)
-    total, n_heads, d = sum(lens), 2, 32
-    r = 2 * max_len - 1
-    starts = torch.tensor([0, 33, 54], dtype=torch.int32, device=dev)
-    lens_t = torch.tensor(lens, dtype=torch.int32, device=dev)
-    scale = 1.0 / (d**0.5)
-    gen = torch.Generator(device="cpu").manual_seed(13)
-
-    def _reference(q, k, v, bd, keep_mask, dropout_p):
-        outs = []
-        center = max_len - 1
-        for b, ln in enumerate(lens):
-            s0 = int(starts[b])
-            qb, kb, vb, bdb = q[s0 : s0 + ln], k[s0 : s0 + ln], v[s0 : s0 + ln], bd[s0 : s0 + ln]
-            s = torch.einsum("ihd,jhd->hij", qb, kb) * scale
-            idx = center + torch.arange(ln, device=dev)[None, :] - torch.arange(ln, device=dev)[:, None]
-            s = s + bdb.permute(1, 0, 2).gather(2, idx.unsqueeze(0).expand(s.shape[0], -1, -1))
-            w = torch.softmax(s, dim=-1)
-            if keep_mask is not None:
-                w = w * keep_mask[s0 : s0 + ln, :, :ln].permute(1, 0, 2).float() / (1.0 - dropout_p)
-            outs.append(torch.einsum("hij,jhd->ihd", w, vb))
-        return torch.cat(outs, 0)
-
-    for dropout_p, seed in [(0.0, 0), (0.3, 999)]:
-        leaves = [torch.randn(total, n_heads, d, generator=gen).to(dev).requires_grad_(True) for _ in range(3)]
-        bd_leaf = (torch.randn(total, n_heads, r, generator=gen) * 0.5).to(dev).requires_grad_(True)
-        out = m.rel_pos_att_varlen(
-            *leaves, bd_leaf, starts, lens_t, max_len, dropout_p=dropout_p, seed=seed, scale=scale
-        )
-        d_out = torch.randn(total, n_heads, d, generator=gen).to(dev)
-        out.backward(d_out)
-        grads_kernel = [t.grad.clone() for t in leaves] + [bd_leaf.grad.clone()]
-        for t in leaves + [bd_leaf]:
-            t.grad = None
-        keep = None
-        if dropout_p:
-            keep = m.dump_mask(total, n_heads, max_len, r, dropout_p=dropout_p, seed=seed, device=dev)
-        ref = _reference(*leaves, bd_leaf, keep, dropout_p)
-        numpy.testing.assert_allclose(out.detach().cpu().numpy(), ref.detach().cpu().numpy(), rtol=1e-4, atol=1e-5)
-        ref.backward(d_out)
-        for g_kernel, t in zip(grads_kernel, leaves + [bd_leaf]):
-            numpy.testing.assert_allclose(g_kernel.cpu().numpy(), t.grad.cpu().numpy(), rtol=1e-4, atol=1e-4)
-
-
 def test_rel_pos_att_triton_fused_bd_grad():
     # rel_pos_att_varlen_fused_bd (CUDA): fwd + grads of q, k, v, qv, pos_emb
     # vs a float64 per-seq reference on the same rounded inputs,
@@ -1890,6 +1830,66 @@ def test_rel_pos_att_triton_fused_bd_grad():
             assert _rel_diff(t.grad, t64.grad) < tol
         for t in leaves[:4]:
             assert not t.grad[~valid.to(dev)].any()
+
+
+def test_rel_pos_att_triton_kernel_grad():
+    # The Triton varlen rel-pos kernel (CUDA; the train-mode dropout fast path):
+    # fwd + ALL grads (q, k, v, bd) vs autograd through an eager per-seq reference,
+    # at dropout 0 (exact) and dropout > 0 with the kernel's own extracted mask (exact).
+    rf.select_backend_torch()
+    import torch as _torch
+
+    if not _torch.cuda.is_available():
+        raise unittest.SkipTest("needs CUDA")
+    try:
+        from returnn.torch.util import rel_pos_att_triton as m
+    except ImportError as exc:
+        raise unittest.SkipTest(f"triton not available ({exc})")
+
+    dev = "cuda"
+    lens = [33, 21, 9]
+    max_len = max(lens)
+    total, n_heads, d = sum(lens), 2, 32
+    r = 2 * max_len - 1
+    starts = torch.tensor([0, 33, 54], dtype=torch.int32, device=dev)
+    lens_t = torch.tensor(lens, dtype=torch.int32, device=dev)
+    scale = 1.0 / (d**0.5)
+    gen = torch.Generator(device="cpu").manual_seed(13)
+
+    def _reference(q, k, v, bd, keep_mask, dropout_p):
+        outs = []
+        center = max_len - 1
+        for b, ln in enumerate(lens):
+            s0 = int(starts[b])
+            qb, kb, vb, bdb = q[s0 : s0 + ln], k[s0 : s0 + ln], v[s0 : s0 + ln], bd[s0 : s0 + ln]
+            s = torch.einsum("ihd,jhd->hij", qb, kb) * scale
+            idx = center + torch.arange(ln, device=dev)[None, :] - torch.arange(ln, device=dev)[:, None]
+            s = s + bdb.permute(1, 0, 2).gather(2, idx.unsqueeze(0).expand(s.shape[0], -1, -1))
+            w = torch.softmax(s, dim=-1)
+            if keep_mask is not None:
+                w = w * keep_mask[s0 : s0 + ln, :, :ln].permute(1, 0, 2).float() / (1.0 - dropout_p)
+            outs.append(torch.einsum("hij,jhd->ihd", w, vb))
+        return torch.cat(outs, 0)
+
+    for dropout_p, seed in [(0.0, 0), (0.3, 999)]:
+        leaves = [torch.randn(total, n_heads, d, generator=gen).to(dev).requires_grad_(True) for _ in range(3)]
+        bd_leaf = (torch.randn(total, n_heads, r, generator=gen) * 0.5).to(dev).requires_grad_(True)
+        out = m.rel_pos_att_varlen(
+            *leaves, bd_leaf, starts, lens_t, max_len, dropout_p=dropout_p, seed=seed, scale=scale
+        )
+        d_out = torch.randn(total, n_heads, d, generator=gen).to(dev)
+        out.backward(d_out)
+        grads_kernel = [t.grad.clone() for t in leaves] + [bd_leaf.grad.clone()]
+        for t in leaves + [bd_leaf]:
+            t.grad = None
+        keep = None
+        if dropout_p:
+            keep = m.dump_mask(total, n_heads, max_len, r, dropout_p=dropout_p, seed=seed, device=dev)
+        ref = _reference(*leaves, bd_leaf, keep, dropout_p)
+        numpy.testing.assert_allclose(out.detach().cpu().numpy(), ref.detach().cpu().numpy(), rtol=1e-4, atol=1e-5)
+        ref.backward(d_out)
+        for g_kernel, t in zip(grads_kernel, leaves + [bd_leaf]):
+            numpy.testing.assert_allclose(g_kernel.cpu().numpy(), t.grad.cpu().numpy(), rtol=1e-4, atol=1e-4)
 
 
 def test_cast_packed():
