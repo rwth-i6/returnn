@@ -2606,7 +2606,7 @@ def test_NemoSpeechDataset_index_pack():
     for epoch in [1, 2]:
         seqs = dummy_iter_dataset(dataset, epoch=epoch)
         # noinspection PyProtectedMember
-        assert dataset._shards[0].sources.sources[0].node._packed_indexed
+        assert dataset._shards[0].streams[0].sources.sources[0].node._packed_indexed
         ref = dummy_iter_dataset(
             NemoSpeechDataset(nemo_config=config, draws_per_epoch=20, use_worker_procs=False), epoch=epoch
         )
@@ -2683,6 +2683,72 @@ def test_NemoSpeechDataset_nemo_sharding():
         print("Expected exception:", exc)
     else:
         raise AssertionError("map-style mode should not be supported")
+
+
+def test_NemoSpeechDataset_procs_per_shard():
+    # The data does not depend on procs_per_shard, in-process and with worker procs,
+    # also for the same epoch twice, and when the workers prefetched into the next epoch.
+    # Worker procs only for one setting: every spawn imports NeMo (about 15 s).
+    data = _get_nemo_speech_data()  # first, skips if NeMo Speech is not available
+    from returnn.datasets.nemo_speech import NemoSpeechDataset
+
+    config = _get_nemo_speech_config(weights=[1.0, 2.0, 0.5], num_workers=2, shuffle=True, shuffle_buffer_size=4)
+    opts = dict(
+        nemo_config=config,
+        draws_per_epoch=16,
+        targets={
+            "class": "SamplingBytePairEncoding",
+            "vocab_file": data["bpe_vocab"],
+            "breadth_prob": 0.5,
+            "unknown_label": None,
+        },
+        audio={"features": "raw", "peak_normalization": False, "pre_process": _nemo_speech_random_gain},
+        buffer_size=3,
+    )
+    dataset = NemoSpeechDataset(**opts, use_worker_procs=False)
+    ref = {epoch: dummy_iter_dataset(dataset, epoch=epoch) for epoch in [1, 2]}
+    for procs_per_shard, use_worker_procs in [(1, False), (2, False), (3, False), (2, True)]:
+        dataset = NemoSpeechDataset(**opts, procs_per_shard=procs_per_shard, use_worker_procs=use_worker_procs)
+        for epoch in [1, 1, 2]:
+            _nemo_speech_assert_same_seqs(dummy_iter_dataset(dataset, epoch=epoch), ref[epoch])
+        dataset.finish_epoch(free_resources=True)
+
+
+def test_NemoSpeechDataset_set_sharding():
+    # Sharding over the NeMo workers of the rank (e.g. DataLoader workers), also on top of the rank sharding:
+    # together the same seqs, the seqs of each NeMo worker in the same order.
+    _get_nemo_speech_data()  # first, skips if NeMo Speech is not available
+    from returnn.datasets.nemo_speech import NemoSpeechDataset
+
+    # No rejected records: every NeMo worker has the same number of seqs.
+    config = _get_nemo_speech_config(weights=[1.0, 1.0, 1.0], num_workers=4, max_duration=None)
+    for num_rank_shards, rank_shard_index in [(1, 0), (2, 1)]:
+        opts = dict(
+            nemo_config=config,
+            draws_per_epoch=48,
+            use_worker_procs=False,
+            _rank_and_size=(rank_shard_index, num_rank_shards),
+            _num_shards=num_rank_shards,
+            _shard_index=rank_shard_index,
+        )
+        unsharded = dummy_iter_dataset(NemoSpeechDataset(**opts), epoch=2)
+        assert len(unsharded) == 48 // num_rank_shards
+        for k in range(2):
+            dataset = NemoSpeechDataset(**opts)
+            # As ReturnnDatasetIterDataPipe in DataLoader worker k of 2.
+            dataset.set_sharding(num_shards=num_rank_shards * 2, shard_index=rank_shard_index * 2 + k)
+            # NeMo workers k and k + 2. The merge is round-robin over the NeMo workers.
+            expected = [seq for i, seq in enumerate(unsharded) if i % 2 == k]
+            _nemo_speech_assert_same_seqs(dummy_iter_dataset(dataset, epoch=2), expected)
+
+    dataset = NemoSpeechDataset(nemo_config=config, draws_per_epoch=48, use_worker_procs=False)
+    dataset.set_sharding(num_shards=3, shard_index=1)
+    try:
+        dataset.init_seq_order(epoch=1)
+    except ValueError as exc:
+        assert "multiple" in str(exc)
+    else:
+        raise AssertionError("expected ValueError")
 
 
 def _megatron_index_bytes(
