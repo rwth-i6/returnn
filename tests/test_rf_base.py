@@ -1366,6 +1366,10 @@ def test_cache_dim_key_size_dims():
     cache.set(("test_cache_dim_key_size_dims", _t_dim(b_dim)), 1)
     assert cache.get(("test_cache_dim_key_size_dims", _t_dim(b_dim))) == 1
     assert cache.get(("test_cache_dim_key_size_dims", _t_dim(b2_dim))) is None
+    # a scalar dyn dim has no size dims: still keyed like a static dim
+    scalar_dim = Dim(Tensor("size", [], dtype="int32", raw_tensor=torch.tensor(5, dtype=torch.int32)), capacity=5)
+    cache.set(("test_cache_dim_key_size_dims", Dim(5, name="static")), 2)
+    assert cache.get(("test_cache_dim_key_size_dims", scalar_dim)) == 2
 
 
 def test_dim_host_value_guard_static_traceable():
