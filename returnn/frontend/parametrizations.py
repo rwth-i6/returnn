@@ -81,7 +81,7 @@ class WeightNoise:
     def __call__(self, param: Tensor) -> Tensor:
         def _on_train() -> Tensor:
             with rf.gradient_checkpoint_scope():
-                noise = rf.random_normal(param.dims, dtype=param.dtype, stddev=self.std)
+                noise = rf.random_normal(param.dims, stddev=self.std, like=param)
                 return param + noise
 
         return rf.cond(rf.get_run_ctx().is_train_flag_enabled(func=WeightNoise.__call__), _on_train, lambda: param)

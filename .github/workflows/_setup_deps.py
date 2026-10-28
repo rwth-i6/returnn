@@ -6,7 +6,7 @@ Some are potentially already installed (e.g. via cache).
 """
 
 from __future__ import annotations
-from typing import Optional, List
+from typing import Optional, List, Tuple, Dict, Set
 import os
 import sys
 import time
@@ -44,30 +44,33 @@ def main():
 
     py = sys.executable
     pip = [py, "-m", "pip"]
-    pip_install = [*pip, "install", "--user", "--progress-bar=off"]
+    pip_installs: List[Tuple[str, ...]] = []
+
+    def pip_install(*install_args: str):
+        pip_installs.append(install_args)  # installed below, after uninstalling what is not required
 
     with StdoutTextFold("install dependencies"):
         # Any previous cache should not really be needed, in case we install something new below.
         _run(*pip, "cache", "purge")
 
-        _run(*pip_install, "--upgrade", "pip", "setuptools", "wheel")
-        _run(*pip_install, "--upgrade", "pytest")
-        _run(*pip_install, "--upgrade", "psutil")  # for some tests
+        pip_install("--upgrade", "pip", "setuptools", "wheel")
+        pip_install("--upgrade", "pytest")
+        pip_install("--upgrade", "psutil")  # for some tests
         _run("sudo", "apt-get", "install", "-y", "libsndfile1")  # soundfile, librosa, ESPnet
-        _run(*pip_install, "--upgrade", "dm-tree", "h5py")
+        pip_install("--upgrade", "dm-tree", "h5py")
         if args.espnet and not args.espnet_no_deps:
             numpy_req = "numpy==1.23.5"  # for ESPnet, ctc-segmentation, etc
         elif args.jax:
             numpy_req = "numpy>=2.1"  # JAX requires it
         else:
             numpy_req = "numpy<2"
-        _run(*pip_install, numpy_req)
-        _run(*pip_install, "--upgrade", "scipy")  # for some tests
-        _run(*pip_install, "--upgrade", "sentencepiece")  # for some tests
+        pip_install(numpy_req)
+        pip_install("--upgrade", "scipy")  # for some tests
+        pip_install("--upgrade", "sentencepiece")  # for some tests
 
         if sys.version_info[:2] == (3, 10):
             # https://github.com/rwth-i6/returnn/issues/1803, https://github.com/AnswerDotAI/fastcore/issues/751
-            _run(*pip_install, "fastcore==1.12.1")
+            pip_install("fastcore==1.12.1")
 
         if args.tf:
             print("Installing TensorFlow version:", args.tf)
@@ -77,53 +80,23 @@ def main():
                 # TF 2.10 requires gast<=0.4.0,>=0.2.1. But for example, with gast 0.2.2, we get some AutoGraph error:
                 # Cause: module 'gast' has no attribute 'Constant'
                 # Similar like: https://github.com/tensorflow/tensorflow/issues/47802
-                _run(*pip_install, "gast<=0.4.0")
+                pip_install("gast<=0.4.0")
 
-            # Retry several times in case download breaks. https://github.com/pypa/pip/issues/4796
-            for try_nr in range(3):
-                try:
-                    _run(*pip_install, f"tensorflow=={args.tf}")
-                    break
-                except subprocess.CalledProcessError:
-                    if try_nr >= 2:
-                        raise
+            pip_install(f"tensorflow=={args.tf}")
         else:
             tf_version = ()
 
         if args.torch:
             print("Installing PyTorch version:", args.torch)
-
-            ex_torch_version = _get_torch_version()
-            if ex_torch_version:
-                if ex_torch_version != args.torch:
-                    # Free disk space first. Can run out of disk space otherwise.
-                    # Also, remove any nvidia packages to avoid conflicts (https://github.com/rwth-i6/returnn/issues/1802).
-                    for pkg in subprocess.check_output([*pip, "freeze"]).splitlines():
-                        if pkg.startswith(b"nvidia-"):
-                            pkg_s = pkg.decode("utf-8").strip()
-                            _run(*pip, "uninstall", "-y", pkg_s)
-                    _run(*pip, "uninstall", "-y", "torch")
-                else:
-                    # Already installed, matching Torch version
-                    print(f"PyTorch {ex_torch_version} already installed.")
-                    # Check bad nvidia packages
-                    ex_torch_deps = set(_get_torch_deps())
-                    for pkg in subprocess.check_output([*pip, "freeze"]).splitlines():
-                        if pkg.startswith(b"nvidia-"):
-                            pkg_s = pkg.decode("utf-8").strip()
-                            pkg_name, _ = pkg_s.split("==", 1)
-                            if pkg_name not in ex_torch_deps:
-                                _run(*pip, "uninstall", "-y", pkg_s)
-
-            _run(*pip_install, f"torch=={args.torch}")
+            pip_install(f"torch=={args.torch}")
             # numpy pin in the SAME resolve: recent onnxruntime requires numpy>=2, and a bare
             # install silently upgraded numpy, breaking the ABI of torch built against 1.x
             # (CI 2026-08-17: "_ARRAY_API not found" on the torch 1.13 jobs).
-            _run(*pip_install, "onnx", "onnxruntime", numpy_req)
+            pip_install("onnx", "onnxruntime", numpy_req)
             # lovely-numpy==0.2.20, lovely-tensors==0.1.22 cause some issues:
             # https://github.com/rwth-i6/returnn/issues/1819
             # Maybe specifically with numpy==1.23.5?
-            _run(*pip_install, "lovely-numpy==0.2.18", "lovely-tensors==0.1.21")
+            pip_install("lovely-numpy==0.2.18", "lovely-tensors==0.1.21")
 
             # Needed for some tests.
             # transformers 4.50 requires PyTorch >2.0, so stick to transformers 4.49 for now.
@@ -132,9 +105,9 @@ def main():
             # (https://github.com/rwth-i6/returnn/issues/1747)
             if sys.version_info[:2] <= (3, 8):
                 # Need older version for Python 3.8. Install whatever is available.
-                _run(*pip_install, "transformers")
+                pip_install("transformers")
             else:
-                _run(*pip_install, "safetensors==0.5.3", "transformers==4.49.0")
+                pip_install("safetensors==0.5.3", "transformers==4.49.0")
 
         if args.jax:
             print("Installing JAX version:", args.jax)
@@ -144,7 +117,7 @@ def main():
             # jaxlib is pinned to the same version by jax itself.
             # optax and orbax-checkpoint are separate packages (not part of jax/jaxlib) but hard
             # dependencies of the RF JAX backend: JAX ships neither losses/optimizers nor checkpoints.
-            _run(*pip_install, f"jax=={args.jax}", "optax", "orbax-checkpoint")
+            pip_install(f"jax=={args.jax}", "optax", "orbax-checkpoint")
 
         if args.hf_datasets:
             assert args.torch, "Need to specify --torch when specifying --hf-datasets"
@@ -153,8 +126,8 @@ def main():
             )
             _run("sudo", "apt-get", "update")
             _run("sudo", "apt-get", "install", "-y", "ffmpeg")  # for torchcodec
-            _run(*pip_install, "torchcodec==0.7")  # for HF datasets
-            _run(*pip_install, "datasets")
+            pip_install("torchcodec==0.7")  # for HF datasets
+            pip_install("datasets")
 
         if args.nemo_speech:
             assert args.torch, "Need to specify --torch when specifying --nemo-speech"
@@ -162,15 +135,11 @@ def main():
                 f"Invalid value for --nemo-speech: {args.nemo_speech}"
             )
             # Git main: needs Lhotse indexed data access (index packs etc), not in a NeMo release yet.
-            _run(
-                *pip_install,
-                "nemo-toolkit[asr] @ git+https://github.com/NVIDIA-NeMo/Speech.git",
-                f"torch=={args.torch}",
-            )
+            pip_install("nemo-toolkit[asr] @ git+https://github.com/NVIDIA-NeMo/Speech.git", f"torch=={args.torch}")
 
         if args.espnet and not args.espnet_no_deps and sys.version_info[:2] <= (3, 8):
             # https://github.com/rwth-i6/returnn/issues/1729
-            _run(*pip_install, "ctc-segmentation==1.6.6", "pyworld==0.3.4")
+            pip_install("ctc-segmentation==1.6.6", "pyworld==0.3.4")
 
         if args.espnet:
             if args.espnet.lower() in ["yes", "1", "true"]:
@@ -183,33 +152,47 @@ def main():
                 # and nothing else in that job does either.
                 # With its dependencies, ESPnet would pin numpy<1.24,
                 # which modern TF (numpy>=1.26) and modern JAX cannot live with.
-                _run(*pip_install, "--no-deps", f"espnet=={espnet}")
+                pip_install("--no-deps", f"espnet=={espnet}")
             else:
                 assert args.torch, "Need to specify --torch when specifying --espnet"
                 # Install ESPnet.
                 # Fix Torch version (https://github.com/rwth-i6/returnn/issues/1770#issuecomment-3536630432).
-                _run(*pip_install, f"espnet=={espnet}", f"torch=={args.torch}")
+                pip_install(f"espnet=={espnet}", f"torch=={args.torch}")
 
                 # TorchAudio needed by ESPnet.
                 # https://pytorch.org/audio/stable/installation.html#compatibility-matrix
                 if args.torch == "2.0.0":
-                    _run(*pip_install, "torchaudio==2.0.1")
+                    pip_install("torchaudio==2.0.1")
                 elif args.torch == "1.13.1":
-                    _run(*pip_install, "torchaudio==0.13.1")
+                    pip_install("torchaudio==0.13.1")
                 else:
-                    _run(*pip_install, f"torchaudio=={args.torch}")
+                    pip_install(f"torchaudio=={args.torch}")
 
         if args.tf and tf_version[:2] <= (2, 3):
             # Do this after installing other packages, as those other packages might install newer numpy.
             # Older TF needs older NumPy version.
             # https://github.com/rwth-i6/returnn/pull/1160#issuecomment-1284537803
-            _run(*pip_install, "numpy==1.19.5")
+            pip_install("numpy==1.19.5")
 
         if args.tf and tf_version[:2] <= (2, 10):
             # Do this after installing other packages, as those other packages might install newer protobuf.
             # Older TF needs also older protobuf version.
             # https://github.com/rwth-i6/returnn/issues/1209
-            _run(*pip_install, "protobuf<=3.20.1")
+            pip_install("protobuf<=3.20.1")
+
+        # The cache can come from another job (restore-keys).
+        # Uninstall what is not required before installing (disk space, nvidia conflicts #1802), and again after.
+        _uninstall_user_packages_not_required(pip_installs, before_install=True)
+        for install_args in pip_installs:
+            # Retry several times in case download breaks. https://github.com/pypa/pip/issues/4796
+            for try_nr in range(3):
+                try:
+                    _run(*pip, "install", "--user", "--progress-bar=off", *install_args)
+                    break
+                except subprocess.CalledProcessError:
+                    if try_nr >= 2:
+                        raise
+        _uninstall_user_packages_not_required(pip_installs, before_install=False)
 
         # Any cached files should not be needed anymore.
         _run(*pip, "cache", "purge")
@@ -262,37 +245,66 @@ def _run(*args):
     subprocess.run(args, check=True)
 
 
-def _get_torch_version() -> Optional[str]:
+def _uninstall_user_packages_not_required(pip_installs: List[Tuple[str, ...]], *, before_install: bool):
     """
-    pip show torch | grep "^Version:" | cut -d' ' -f2
-    """
-    py = sys.executable
-    pip = [py, "-m", "pip"]
-    try:
-        out = subprocess.check_output(pip + ["show", "torch"])
-    except subprocess.CalledProcessError:
-        return None
-    for line in out.splitlines():
-        if line.startswith(b"Version:"):
-            line_s = line.decode("utf-8")
-            return line_s.split(" ")[1].strip()
-    raise RuntimeError("Cannot determine torch version: output:\n%s" % out.decode("utf-8"))
+    Uninstall all packages in the user site which are not in the dependency closure of the given pip installs.
 
+    :param pip_installs: args of each pip install.
+        Their requirements are kept with their dependencies (recursively, with extras), except with --no-deps.
+    :param before_install: installed versions which do not match a requirement are going to be replaced,
+        so uninstall them as well, with their dependencies
+    """
+    import site
+    import importlib.metadata
 
-def _get_torch_deps() -> List[str]:
-    """
-    pip show torch | grep "^Requires:" ...
-    """
-    py = sys.executable
-    pip = [py, "-m", "pip"]
-    out = subprocess.check_output(pip + ["show", "torch"])
-    for line in out.splitlines():
-        if line.startswith(b"Requires:"):
-            line_s = line.decode("utf-8")[len("Requires:") :]
-            deps = line_s.split(",")
-            deps = [d.strip() for d in deps]
-            return deps
-    raise RuntimeError("Cannot determine torch deps: output:\n%s" % out.decode("utf-8"))
+    user_site = site.getusersitepackages()
+    if not os.path.exists(user_site):
+        return  # nothing installed yet
+    site.addsitedir(user_site)  # it might have been created only after startup
+    from packaging.requirements import Requirement
+    from packaging.utils import canonicalize_name
+
+    all_dists = list(importlib.metadata.distributions())
+    dists: Dict[str, List[importlib.metadata.Distribution]] = {}
+    for dist in all_dists:
+        dists.setdefault(canonicalize_name(dist.metadata["Name"]), []).append(dist)
+
+    queue = []  # (requirement, with deps)
+    for install_args in pip_installs:
+        with_deps = "--no-deps" not in install_args
+        queue += [(Requirement(arg), with_deps) for arg in install_args if not arg.startswith("-")]
+    if before_install:
+        for req, _ in queue:
+            name = canonicalize_name(req.name)
+            dists[name] = [d for d in dists.get(name, []) if req.specifier.contains(d.version, prereleases=True)]
+
+    visited_extras: Dict[str, Set[str]] = {}  # name -> extras, deps followed
+    visited_no_deps: Set[str] = set()
+    while queue:
+        req, with_deps = queue.pop()
+        name = canonicalize_name(req.name)
+        if not with_deps:
+            visited_no_deps.add(name)
+            continue
+        extras = {""} | req.extras
+        if extras <= visited_extras.get(name, set()):
+            continue
+        visited_extras.setdefault(name, set()).update(extras)
+        for dist in dists.get(name, []):
+            for dep_s in dist.requires or []:
+                dep = Requirement(dep_s)
+                if dep.marker is None or any(dep.marker.evaluate({"extra": extra}) for extra in extras):
+                    queue.append((dep, True))
+
+    kept = {id(dist) for name in set(visited_extras) | visited_no_deps for dist in dists.get(name, [])}
+    unneeded = sorted(
+        dist.metadata["Name"]
+        for dist in all_dists
+        if id(dist) not in kept and os.path.realpath(dist.locate_file("")) == os.path.realpath(user_site)
+    )
+    print("Packages in the user site not required by this job:", unneeded)
+    if unneeded:
+        _run(sys.executable, "-m", "pip", "uninstall", "-y", *unneeded)
 
 
 IsTravisEnv = os.environ.get("TRAVIS") == "true"
