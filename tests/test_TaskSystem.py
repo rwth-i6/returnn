@@ -107,6 +107,18 @@ def test_pickle_unicode_str():
     assert pickle_loads(pickle_dumps("â")) == "â"
 
 
+def test_pickle_numpy_array():
+    import numpy
+
+    table = numpy.arange(6, dtype="float32").reshape(2, 3)
+    d = pickle_loads(pickle_dumps({"table": table}))
+    table2 = d["table"]
+    assert isinstance(table2, numpy.ndarray)
+    assert table2.dtype == table.dtype and table2.shape == table.shape
+    numpy.testing.assert_array_equal(table2, table)
+    assert table2.flags.writeable
+
+
 if __name__ == "__main__":
     better_exchook.install()
     if len(sys.argv) <= 1:
