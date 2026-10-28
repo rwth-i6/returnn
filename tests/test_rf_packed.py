@@ -1820,6 +1820,78 @@ def test_rel_pos_att_triton_kernel_grad():
             numpy.testing.assert_allclose(g_kernel.cpu().numpy(), t.grad.cpu().numpy(), rtol=1e-4, atol=1e-4)
 
 
+def test_rel_pos_att_triton_fused_bd_grad():
+    # rel_pos_att_varlen_fused_bd (CUDA): fwd + grads of q, k, v, qv, pos_emb
+    # vs a float64 per-seq reference on the same rounded inputs,
+    # gapped layout with an empty seq, odd R, production head dim.
+    rf.select_backend_torch()
+    import torch as _torch
+
+    if not _torch.cuda.is_available():
+        raise unittest.SkipTest("needs CUDA")
+    try:
+        from returnn.torch.util import rel_pos_att_triton as m
+    except ImportError as exc:
+        raise unittest.SkipTest(f"triton not available ({exc})")
+
+    dev = "cuda"
+    lens = [37, 0, 11, 24]
+    starts = [0, 40, 48, 64]
+    total, max_len, n_heads, d = 96, 40, 2, 128
+    r = 2 * max_len - 1
+    valid = torch.zeros(total, dtype=torch.bool)
+    for s0, ln in zip(starts, lens):
+        valid[s0 : s0 + ln] = True
+    starts_t = torch.tensor(starts, dtype=torch.int32, device=dev)
+    lens_t = torch.tensor(lens, dtype=torch.int32, device=dev)
+    scale = 1.0 / (d**0.5)
+    gen = torch.Generator(device="cpu").manual_seed(17)
+
+    def _reference(q, k, v, qv, pos_emb, keep_mask, dropout_p):
+        bd = torch.einsum("thd,rhd->thr", qv, pos_emb) * scale
+        out = torch.zeros_like(q)
+        center = max_len - 1
+        for s0, ln in zip(starts, lens):
+            if not ln:
+                continue
+            sl = slice(s0, s0 + ln)
+            s = torch.einsum("ihd,jhd->hij", q[sl], k[sl]) * scale
+            idx = center + torch.arange(ln, device=dev)[None, :] - torch.arange(ln, device=dev)[:, None]
+            s = s + bd[sl].permute(1, 0, 2).gather(2, idx.unsqueeze(0).expand(n_heads, -1, -1))
+            w = torch.softmax(s, dim=-1)
+            if keep_mask is not None:
+                w = w * keep_mask[sl, :, :ln].permute(1, 0, 2).double() / (1.0 - dropout_p)
+            out[sl] = torch.einsum("hij,jhd->ihd", w, v[sl])
+        return out
+
+    def _rel_diff(a, b):
+        return float((a.detach().double() - b.detach()).norm() / b.detach().norm())
+
+    for dtype, dropout_p, tol in [(torch.float32, 0.3, 1e-5), (torch.bfloat16, 0.0, 1e-2)]:
+        leaves = [torch.randn(total, n_heads, d, generator=gen).to(dev, dtype) for _ in range(4)]
+        leaves.append((torch.randn(r, n_heads, d, generator=gen) * 0.5).to(dev, dtype))
+        for t in leaves:
+            t.requires_grad_(True)
+        q, k, v, qv, pos_emb = leaves
+        out = m.rel_pos_att_varlen_fused_bd(
+            q, k, v, qv, pos_emb, starts_t, lens_t, max_len, dropout_p=dropout_p, seed=999, scale=scale
+        )
+        d_out = torch.randn(total, n_heads, d, generator=gen).to(dev, dtype)
+        out.backward(d_out)
+        keep = None
+        if dropout_p:
+            keep = m.dump_mask(total, n_heads, max_len, r, dropout_p=dropout_p, seed=999, device=dev)
+        leaves64 = [t.detach().double().requires_grad_(True) for t in leaves]
+        ref = _reference(*leaves64, keep, dropout_p)
+        ref.backward(d_out.double())
+        assert _rel_diff(out, ref) < tol
+        assert not out[~valid.to(dev)].any()
+        for t, t64 in zip(leaves, leaves64):
+            assert _rel_diff(t.grad, t64.grad) < tol
+        for t in leaves[:4]:
+            assert not t.grad[~valid.to(dev)].any()
+
+
 def test_cast_packed():
     # rf.cast on packed data runs elementwise on the packed buffer (PackedBackend.cast_raw),
     # e.g. from the behavior_version>=27 keep-dtype path of LayerNorm/RMSNorm.

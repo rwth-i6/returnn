@@ -427,6 +427,8 @@ def _rel_pos_bwd_kernel_dq(
     stride_qh,
     stride_bt,
     stride_bh,
+    stride_dbt,
+    stride_dbh,
     H: tl.constexpr,
     D: tl.constexpr,
     R,
@@ -484,12 +486,17 @@ def _rel_pos_bwd_kernel_dq(
         else:
             dq += tl.dot(ds.to(k.dtype), k) * scale
         # bias grad: row-owned, d_bd[i, h, rel] += ds[i, j]; rel bins unique per (i, j) within the row
-        tl.store(DBD + q_rows[:, None] * stride_bt + h * stride_bh + rel, ds, mask=valid)
+        tl.store(DBD + q_rows[:, None] * stride_dbt + h * stride_dbh + rel, ds, mask=valid)
     tl.store(DQ + q_rows[:, None] * stride_qt + h * stride_qh + offs_d[None, :], dq, mask=m_mask[:, None])
 
 
-def rel_pos_att_bwd(q, k, v, bd, seq_starts, seq_lens, max_len, out, lse, d_out, *, dropout_p=0.0, seed=0, scale=None):
-    """backward, see :func:`rel_pos_att_varlen`. Returns (dq, dk, dv, dbd)."""
+def rel_pos_att_bwd(
+    q, k, v, bd, seq_starts, seq_lens, max_len, out, lse, d_out, *, dropout_p=0.0, seed=0, scale=None, dbd=None
+):
+    """
+    backward, see :func:`rel_pos_att_varlen`. Returns (dq, dk, dv, dbd).
+    dbd: zero-initialized f32 output of the shape of bd, any strides (default: a new contiguous one).
+    """
     _, n_heads, d = q.shape
     r = bd.shape[-1]
     if scale is None:
@@ -500,7 +507,8 @@ def rel_pos_att_bwd(q, k, v, bd, seq_starts, seq_lens, max_len, out, lse, d_out,
     dq = torch.zeros_like(q, dtype=torch.float32)
     dk = torch.zeros_like(k, dtype=torch.float32)
     dv = torch.zeros_like(v, dtype=torch.float32)
-    dbd = torch.zeros_like(bd, dtype=torch.float32)
+    if dbd is None:
+        dbd = torch.zeros_like(bd, dtype=torch.float32)
     n_batch = seq_starts.numel()
     # smaller tiles for large head dims (shared-memory limit)
     block_m, block_n = (64, 64) if d <= 64 else (32, 32)
@@ -573,6 +581,8 @@ def rel_pos_att_bwd(q, k, v, bd, seq_starts, seq_lens, max_len, out, lse, d_out,
         q.stride(1),
         bd.stride(0),
         bd.stride(1),
+        dbd.stride(0),
+        dbd.stride(1),
         **args,
     )
     return dq, dk, dv, dbd
@@ -730,10 +740,23 @@ if hasattr(torch.library, "custom_op"):  # torch >= 2.4
 
     torch.library.register_autograd("returnn::rel_pos_att_fwd", _lib_backward, setup_context=_lib_setup_context)
 
-    def _fused_bd(qv: torch.Tensor, pos_emb: torch.Tensor, bd_scale: float, dtype: torch.dtype) -> torch.Tensor:
-        # position term (total,H,R) from qv (total,H,D) and pos_emb (R,H,D),
-        # pre-scaled per the kernel contract (the kernel scales only q k^T)
-        return (torch.einsum("thd,rhd->thr", qv, pos_emb) * bd_scale).to(dtype)
+    def _pad_pos_emb(pos_emb: torch.Tensor, dtype: torch.dtype) -> torch.Tensor:
+        # (R,H,D) -> (R_pad,H,D), zero rows up to a multiple of 8:
+        # an odd R as GEMM row length gets an unaligned cuBLAS kernel, ~10x slower
+        r = pos_emb.shape[0]
+        pos_pad = pos_emb.new_zeros((-(-r // 8) * 8, *pos_emb.shape[1:]), dtype=dtype)
+        pos_pad[:r] = pos_emb
+        return pos_pad
+
+    def _fused_bd(qv: torch.Tensor, pos_pad: torch.Tensor, r: int, bd_scale: float) -> torch.Tensor:
+        # position term (total,H,R) from qv (total,H,D) and pos_pad (R_pad,H,D),
+        # pre-scaled per the kernel contract (the kernel scales only q k^T),
+        # as a strided view into an (H,total,R_pad) buffer
+        total, n_heads, _ = qv.shape
+        bd = pos_pad.new_empty((n_heads, total, pos_pad.shape[0]))
+        qv = qv.to(pos_pad.dtype).transpose(0, 1)
+        torch.baddbmm(bd, qv, pos_pad.permute(1, 2, 0), beta=0.0, alpha=bd_scale, out=bd)
+        return bd.permute(1, 0, 2)[..., :r]
 
     @custom_op("returnn::rel_pos_att_fused_bd_fwd", mutates_args=())
     def _lib_fused_fwd(
@@ -757,7 +780,7 @@ if hasattr(torch.library, "custom_op"):  # torch >= 2.4
         # (no stride constraint registered for these op names),
         # and the fake promises a contiguous output -- normalize here, both ops
         q, k, v = q.contiguous(), k.contiguous(), v.contiguous()
-        bd = _fused_bd(qv.contiguous(), pos_emb.contiguous(), bd_scale, q.dtype)
+        bd = _fused_bd(qv.contiguous(), _pad_pos_emb(pos_emb, q.dtype), pos_emb.shape[0], bd_scale)
         out, lse = rel_pos_att_fwd(
             q, k, v, bd, seq_starts, seq_lens, max_seq_len, dropout_p=dropout_p, seed=seed, scale=scale
         )
@@ -791,9 +814,14 @@ if hasattr(torch.library, "custom_op"):  # torch >= 2.4
         scale: float,
     ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
         q, k, v = q.contiguous(), k.contiguous(), v.contiguous()
-        qv, pos_emb = qv.contiguous(), pos_emb.contiguous()
-        bd = _fused_bd(qv, pos_emb, bd_scale, q.dtype)
-        dq, dk, dv, dbd = rel_pos_att_bwd(
+        qv = qv.contiguous()
+        total, n_heads, d = qv.shape
+        r = pos_emb.shape[0]
+        pos_pad = _pad_pos_emb(pos_emb, q.dtype)
+        bd = _fused_bd(qv, pos_pad, r, bd_scale)
+        # zeroed as a whole: the dq kernel writes only the valid (row, rel) entries
+        dbd = torch.zeros((n_heads, total, pos_pad.shape[0]), device=q.device, dtype=torch.float32)
+        dq, dk, dv, _ = rel_pos_att_bwd(
             q,
             k,
             v,
@@ -807,18 +835,22 @@ if hasattr(torch.library, "custom_op"):  # torch >= 2.4
             dropout_p=dropout_p,
             seed=seed,
             scale=scale,
+            dbd=dbd.permute(1, 0, 2)[..., :r],
         )
         # chain rule through the fused position term,
-        # einsums in the io dtype (matches the out-of-op matmul autograd of the non-fused path)
-        dbd = (dbd * bd_scale).to(qv.dtype)
-        d_qv = torch.einsum("thr,rhd->thd", dbd, pos_emb)
-        d_pos = torch.einsum("thr,thd->rhd", dbd, qv)
+        # GEMMs in the io dtype (matches the out-of-op matmul autograd of the non-fused path),
+        # on the padded buffers (the zero padding contributes nothing)
+        dbd = dbd.to(q.dtype)
+        d_qv = dbd.new_empty((n_heads, total, d))
+        torch.baddbmm(d_qv, dbd, pos_pad.transpose(0, 1), beta=0.0, alpha=bd_scale, out=d_qv)
+        d_pos = dbd.new_empty((n_heads, pos_pad.shape[0], d))
+        torch.baddbmm(d_pos, dbd.transpose(1, 2), qv.to(q.dtype).transpose(0, 1), beta=0.0, alpha=bd_scale, out=d_pos)
         return (
             dq.to(q.dtype).contiguous(),
             dk.to(k.dtype).contiguous(),
             dv.to(v.dtype).contiguous(),
-            d_qv.contiguous(),
-            d_pos.to(pos_emb.dtype).contiguous(),
+            d_qv.transpose(0, 1).to(qv.dtype).contiguous(),
+            d_pos[:, :r].transpose(0, 1).to(pos_emb.dtype).contiguous(),
         )
 
     @_lib_fused_bwd.register_fake
@@ -938,7 +970,7 @@ def rel_pos_att_varlen_fused_bd(
     and computes ``bd`` inside the op boundary -- in the forward AND again in the backward.
     Memory: ``bd`` (total, H, R) is the largest per-layer attention activation;
     keeping it out of the autograd/AOT graph means nothing retains one per layer for the backward
-    (recompute-from-qv, one extra einsum in the backward).
+    (recompute-from-qv, one extra GEMM in the backward).
     Requires torch >= 2.4 (:func:`torch.library.custom_op`); callers check ``have_lib_ops``.
 
     :param q: (total, H, D), content query (query + pos_bias_u, projected)
