@@ -490,12 +490,8 @@ class RotaryPosCausalSelfAttention(CausalSelfAttention):
             # Full sequence from scratch: use the explicit is_causal flag,
             # so that backends can use fused implementations --
             # see the same branch in CausalSelfAttention.__call__ for the full reasoning.
-            # The state keeps the original axis and the pre-RoPE k/v,
+            # The state keeps the original axis and the k after RoPE,
             # see _causal_self_att_step (no-state case).
-            new_state = CausalSelfAttentionState()
-            new_state.k_accum = k
-            new_state.v_accum = v
-            new_state.accum_axis = axis
             pos_enc = rf.sinusoidal_positional_encoding(
                 spatial_dim=axis,
                 feat_dim=self.key_dim_per_head,
@@ -503,6 +499,10 @@ class RotaryPosCausalSelfAttention(CausalSelfAttention):
             )  # [T,D]
             q = _apply_rope(q, pos_enc, self.key_dim_per_head)
             k = _apply_rope(k, pos_enc, self.key_dim_per_head)
+            new_state = CausalSelfAttentionState()
+            new_state.k_accum = k
+            new_state.v_accum = v
+            new_state.accum_axis = axis
             att = dot_attention(
                 q,
                 k,
@@ -517,48 +517,24 @@ class RotaryPosCausalSelfAttention(CausalSelfAttention):
             if self.proj:
                 output = self.proj(output)
             return output, new_state
-        if axis == single_step_dim and state.accum_axis.dimension is None and state.accum_axis.capacity is not None:
-            # Bounded cache: it holds the keys after RoPE, so a step only rotates its own query and key,
-            # at the position it writes to (see _causal_self_att_step).
-            pos_enc = rf.sinusoidal_encoding(
-                rf.copy_to_device(state.accum_axis.dyn_size_ext, k.device),
-                feat_dim=self.key_dim_per_head,
-                base=10_000 ** (1 - 2 / self.key_dim_per_head.dimension),
-            )  # [...,D]
-            q = _apply_rope(q, pos_enc, self.key_dim_per_head)
-            k = _apply_rope(k, pos_enc, self.key_dim_per_head)
-            k, v, hist_dim, new_state = _causal_self_att_step(k, v, axis=axis, state=state, self=self)
-            output = self.attention(q, k, v, kv_axis=hist_dim)
-            return output, new_state
-        k, v, hist_dim, new_state = _causal_self_att_step(k, v, axis=axis, state=state, self=self)
-
-        # Apply RoPE using sinusoidal positional encoding.
+        # The state holds the keys after RoPE, so this call rotates only its own queries and keys,
+        # at their positions after what the state already holds.
         # Note: base is a bit different in rf.sinusoidal_positional_encoding (like the original)
         # vs how it's commonly used for RoPE.
         # log(base) / (dim / 2 - 1) = log(10_000) * 2 / dim
         # <=> log(base) = log(10_000) * (dim / 2 - 1) * 2 / dim = log(10_000) * (1 - 2 / dim)
         # <=> base = 10_000 ** (1 - 2 / dim)
-        pos_enc = rf.sinusoidal_positional_encoding(
-            spatial_dim=hist_dim,
-            feat_dim=self.key_dim_per_head,
-            base=10_000 ** (1 - 2 / self.key_dim_per_head.dimension),
-        )  # [T,D]
-        q = _apply_rope(
-            q,
-            (
-                rf.gather(pos_enc, axis=hist_dim, indices=rf.last_frame_position_of_dim(hist_dim))
-                if axis == single_step_dim
-                else rf.slice(
-                    pos_enc,
-                    axis=hist_dim,
-                    start=state.accum_axis.get_size_tensor_or_int(device=pos_enc.device) if state else 0,
-                    out_dim=axis,
-                )[0]
-            ),
-            self.key_dim_per_head,
-        )
+        prev_len = state.accum_axis.get_size_tensor_or_int(device=k.device)
+        if axis == single_step_dim:
+            pos = rf.convert_to_tensor(prev_len, device=k.device) if isinstance(prev_len, int) else prev_len
+        else:
+            pos = rf.combine_bc(rf.range_over_dim(axis, device=k.device), "+", prev_len)
+        pos_enc = rf.sinusoidal_encoding(
+            pos, feat_dim=self.key_dim_per_head, base=10_000 ** (1 - 2 / self.key_dim_per_head.dimension)
+        )  # [...,D]
+        q = _apply_rope(q, pos_enc, self.key_dim_per_head)
         k = _apply_rope(k, pos_enc, self.key_dim_per_head)
-
+        k, v, hist_dim, new_state = _causal_self_att_step(k, v, axis=axis, state=state, self=self)
         output = self.attention(q, k, v, kv_axis=hist_dim)
         return output, new_state
 
