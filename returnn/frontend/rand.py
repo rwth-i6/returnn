@@ -51,6 +51,7 @@ from typing import Optional, Union, Sequence, Dict
 import numpy
 from returnn.tensor import Tensor, Dim
 import returnn.frontend as rf
+from .tensor_layout import TensorLayout, get_tensor_layout
 from ._backend import global_backend as _global_backend
 
 
@@ -153,7 +154,7 @@ def random(
     auto_update_state: Optional[bool] = None,
     static: Optional[bool] = None,
     out: Optional[Tensor] = None,
-    like: Optional[Tensor] = None,
+    like: Optional[Union[Tensor, TensorLayout]] = None,
 ) -> Tensor:
     """
     Generates random numbers from uniform or normal or truncated normal distribution.
@@ -203,8 +204,9 @@ def random(
     :param bool|None auto_update_state: only used when you pass an explicit state
     :param bool|None static: if no state at all should be used. it just relies on the seed then.
     :param out: if given, will directly write into it, if possible by backend
-    :param like: the result uses the backend, the dtype (unless given, or ``sparse_dim``) and device (unless given)
-        and the storage layout of this tensor, for the dims it shares with it,
+    :param like: the result uses the backend, the device (unless given)
+        and the storage layout of this tensor or layout (:func:`get_tensor_layout`), for the dims it shares with it,
+        and the dtype of this tensor (unless given, or ``sparse_dim``),
         e.g. a dropout mask packed like its packed input. See :func:`returnn.frontend.full`.
     :return: random values
     """
@@ -218,14 +220,15 @@ def random(
     if dtype is None:
         if sparse_dim:
             dtype = rf.get_default_array_index_dtype()
-        elif like is not None:
+        elif isinstance(like, Tensor):
             dtype = like.dtype
         else:
             dtype = rf.get_default_float_dtype()
     backend = _global_backend
-    if like is not None and like.raw_tensor is not None:
-        # noinspection PyProtectedMember
-        backend = like._raw_backend
+    if like is not None:
+        if isinstance(like, Tensor):
+            like = get_tensor_layout(like)
+        backend = like.backend
         if device is None:
             device = like.device
     return backend.random(
@@ -265,7 +268,7 @@ def random_uniform(
     auto_update_state: Optional[bool] = None,
     static: Optional[bool] = None,
     out: Optional[Tensor] = None,
-    like: Optional[Tensor] = None,
+    like: Optional[Union[Tensor, TensorLayout]] = None,
 ):
     """
     See :func:`random`. :func:`random` with ``distribution="uniform"``.
@@ -277,7 +280,7 @@ def random_uniform(
     if dtype is None:
         if sparse_dim:
             dtype = rf.get_default_array_index_dtype()
-        elif like is not None:
+        elif isinstance(like, Tensor):
             dtype = like.dtype
         else:
             dtype = rf.get_default_float_dtype()
@@ -322,7 +325,7 @@ def random_normal(
     auto_update_state: Optional[bool] = None,
     static: Optional[bool] = None,
     out: Optional[Tensor] = None,
-    like: Optional[Tensor] = None,
+    like: Optional[Union[Tensor, TensorLayout]] = None,
 ):
     """
     See :func:`random`. :func:`random` with ``distribution="normal"``.
@@ -363,7 +366,7 @@ def random_truncated_normal(
     auto_update_state: Optional[bool] = None,
     static: Optional[bool] = None,
     out: Optional[Tensor] = None,
-    like: Optional[Tensor] = None,
+    like: Optional[Union[Tensor, TensorLayout]] = None,
 ):
     """
     See :func:`random`. :func:`random` with ``distribution="truncated_normal"``.

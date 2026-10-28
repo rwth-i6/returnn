@@ -174,6 +174,23 @@ class DistributedContext:
                 if self._rank in ranks:
                     level.group = group
 
+    def destroy_process_groups(self):
+        """
+        Destroy and free the process groups: the ones of the sync levels and the default group.
+        Call this once at the end, instead of :func:`torch.distributed.destroy_process_group`.
+        """
+        import torch.distributed as dist
+
+        if not dist.is_initialized():
+            return  # a subprocess, which shares the init info but has no process groups
+        groups: List[Optional[dist.ProcessGroup]] = []
+        for level in self._sync_levels:
+            if level.group is not None:
+                groups.append(level.group)
+                level.group = None
+        groups.append(None)  # the default group, last
+        _destroy_process_groups(groups)
+
     def local_rank(self) -> int:
         """local rank"""
         return self._local_rank
@@ -386,6 +403,34 @@ class DistributedContext:
             sync_on_cpu=any(level.sync_on_cpu for level in self._sync_levels),
         )
         return int(global_train_step_t)
+
+
+def _destroy_process_groups(groups: List[Optional[torch.distributed.ProcessGroup]]):
+    """
+    :func:`torch.distributed.destroy_process_group` on each group, and free them.
+
+    Torch 2.0 to 2.7 free a process group with the GIL held, and join its gloo worker threads,
+    while a worker thread can still need the GIL to release the last collective (its tensors): a deadlock.
+    The gloo backend object is freed without the GIL, so it is held while the groups are freed, and freed last.
+
+    :param groups: None is the default group, which must come last.
+        Takes over the references: the list is cleared.
+        A group referenced elsewhere (e.g. the default group by :class:`DistributedDataParallel`)
+        is freed later by its holder, as without this function.
+    """
+    import torch.distributed as dist
+
+    backends = []
+    if (2, 0) <= torch.__version__ < (2, 8):  # torch 2.8 binds ProcessGroup with a destructor without the GIL
+        backends = [
+            (dist.group.WORLD if group is None else group)._get_backend(torch.device("cpu"))
+            for group in groups
+            if "gloo" in str(dist.get_backend(group))
+        ]
+    for i in range(len(groups)):  # no loop variable left, which would hold the last group
+        dist.destroy_process_group(groups[i])
+    groups.clear()
+    backends.clear()
 
 
 _is_set_up = False

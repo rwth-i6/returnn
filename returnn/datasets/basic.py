@@ -1592,6 +1592,7 @@ def get_dataset_class(name: Union[str, Type[Dataset]]) -> Optional[Type[Dataset]
         "text_dict",
         "huggingface",
         "nemo_speech",
+        "megatron",
     ]
     for mod_name in mod_names:
         mod = import_module("returnn.datasets.%s" % mod_name)

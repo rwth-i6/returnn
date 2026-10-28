@@ -824,6 +824,138 @@ def test_stop_for_resubmission_enough_time_left():
     assert _run_maybe_stop_for_resubmission(epoch=37, final_epoch=38, time_left=1000) == (1, [])
 
 
+def _env_without_wandb_defaults() -> Dict[str, str]:
+    """the default id / name must not come from the env the test runs in (e.g. a Slurm job)"""
+    return {k: v for k, v in os.environ.items() if k not in {"SLURM_JOB_NAME", "WANDB_RUN_ID"}}
+
+
+def _train_with_wandb_stub(
+    *,
+    num_epochs: int,
+    stop_for_resubmission: bool = False,
+    model: Optional[str] = None,
+    config_file: Optional[str] = None,
+):
+    """
+    :return: (wandb_opts of the config, wandb.init kwargs, events, global train step at the end),
+        events: ("log", step, data), ("finish", exit_code), ("kill", sig)
+    """
+    import types
+
+    init_kwargs = []
+    events: List[Tuple[Any, ...]] = []
+
+    class _WandbRun:
+        def log(self, data: Dict[str, Any], *, step: int):
+            events.append(("log", step, data))
+
+        def finish(self, *, exit_code: int):
+            events.append(("finish", exit_code))
+
+    def _wandb_init(**kwargs):
+        init_kwargs.append(kwargs)
+        return _WandbRun()
+
+    wandb_opts = {"project": "test", "log_every_n_train_steps": 2}
+    config = Config(
+        dict(
+            task="train",
+            device="cpu",
+            extern_data={"data": {"dim": 9}, "classes": {"dim": 2, "sparse": True}},
+            get_model=TrainTestModel,
+            train_step=TrainTestModel.train_step,
+            batch_size=500,
+            optimizer={"class": "adam"},
+            num_epochs=num_epochs,
+            wandb_opts=wandb_opts,
+            stop_for_resubmission_when_low_time_left=stop_for_resubmission,
+        )
+    )
+    if model:
+        config.set("model", model)
+    if config_file:
+        config.files.append(config_file)  # as if loaded from this file
+    train_dataset = init_dataset({"class": "Task12AXDataset", "num_seqs": 30, "name": "train"})
+    train_dataset.init_seq_order(epoch=1)
+    dev_dataset = init_dataset({"class": "Task12AXDataset", "num_seqs": 10, "name": "dev", "fixed_random_seed": 1})
+
+    # stub module, as CI has no wandb. Not mock.patch.dict(sys.modules): it also drops all modules imported meanwhile
+    sys.modules["wandb"] = types.SimpleNamespace(init=_wandb_init)
+    try:
+        with unittest.mock.patch.dict(os.environ, _env_without_wandb_defaults(), clear=True):
+            with unittest.mock.patch("returnn.util.basic.slurm_time_left_sec", return_value=0):
+                with unittest.mock.patch.object(os, "kill", side_effect=lambda pid, sig: events.append(("kill", sig))):
+                    with global_config_ctx(config):
+                        engine = Engine(config=config)
+                        engine.init_train_from_config(train_data=train_dataset, dev_data=dev_dataset)
+                        engine.train()
+                        # like returnn.__main__: the stop for resubmission ends in a KeyboardInterrupt
+                        engine.finalize(error_occurred=stop_for_resubmission)
+    finally:
+        del sys.modules["wandb"]
+    return wandb_opts, init_kwargs, events, engine.global_train_step
+
+
+def test_torch_engine_wandb():
+    wandb_opts, init_kwargs, events, num_steps = _train_with_wandb_stub(num_epochs=1)
+    assert wandb_opts == {"project": "test", "log_every_n_train_steps": 2}  # the config is not modified
+    assert init_kwargs == [{"project": "test", "job_type": "train", "resume": "allow"}]  # no config file, so no id
+    assert num_steps >= 4
+    logs = [event[1:] for event in events if event[0] == "log"]
+    step_keys = ["epoch", "train_step/ce", "train_step/fer", "train_step/learning_rate"]
+    assert [(step, sorted(data)) for step, data in logs] == [(step, step_keys) for step in range(0, num_steps, 2)] + [
+        (num_steps, ["epoch", "train/ce", "train/fer"]),
+        (num_steps, ["dev/ce", "dev/fer", "epoch"]),
+    ]
+    assert all(data["epoch"] == 1 for _, data in logs)
+    assert events[-1] == ("finish", 0)
+
+
+def test_torch_engine_wandb_continue_from_checkpoint():
+    import hashlib
+
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        config_file = f"{tmp_dir}/returnn.config"
+        run_id = hashlib.sha256(repr(("train", [config_file])).encode("utf8")).hexdigest()
+        kwargs = dict(model=f"{tmp_dir}/model", config_file=config_file)
+        _, init_kwargs, _, step_after_ep1 = _train_with_wandb_stub(num_epochs=1, **kwargs)
+        assert init_kwargs == [{"project": "test", "job_type": "train", "id": run_id, "resume": "allow"}]
+        # e.g. a resubmission: continues from the epoch 1 checkpoint, in the same W&B run
+        _, init_kwargs, events, _ = _train_with_wandb_stub(num_epochs=2, **kwargs)
+        assert init_kwargs == [{"project": "test", "job_type": "train", "id": run_id, "resume": "allow"}]
+        assert min(event[1] for event in events if event[0] == "log") == step_after_ep1
+
+
+def test_torch_engine_wandb_default_id_per_task():
+    import types
+
+    init_kwargs = []
+    sys.modules["wandb"] = types.SimpleNamespace(init=lambda **kwargs: init_kwargs.append(kwargs))
+    try:
+        with unittest.mock.patch.dict(os.environ, _env_without_wandb_defaults(), clear=True):
+            for task in ["train", "eval"]:
+                config = Config(dict(task=task, wandb_opts={"project": "test"}))
+                config.files.append("/tmp/returnn.config")  # as if loaded from this file
+                Engine(config=config)._wandb_init()
+    finally:
+        del sys.modules["wandb"]
+    assert [kwargs["job_type"] for kwargs in init_kwargs] == ["train", "eval"]
+    # the same config file with another task (e.g. ++task eval) does not continue the training run
+    assert init_kwargs[0]["id"] != init_kwargs[1]["id"]
+
+
+def test_torch_engine_wandb_stop_for_resubmission():
+    import signal
+
+    _, _, events, _ = _train_with_wandb_stub(num_epochs=2, stop_for_resubmission=True)
+    # the planned stop after epoch 1 finishes the run as successful, before the SIGINT
+    assert events[-2:] == [("finish", 0), ("kill", signal.SIGINT)]
+    assert [event[0] for event in events].count("finish") == 1
+    logs = [event[2] for event in events if event[0] == "log"]
+    assert any("dev/ce" in data for data in logs)
+    assert all(data["epoch"] == 1 for data in logs)
+
+
 def test_data_loader_oggzip():
     from test_Dataset import create_ogg_zip_txt_only_dataset_mult_seqs
 
@@ -1502,7 +1634,7 @@ def _torch_profile_distributed_worker(rank: int, world_size: int, port: int, tmp
     assert engine.epoch == 2
     with global_config_ctx(config):
         assert should_write_to_disk(config) == (rank == 0)  # only rank 0 writes checkpoints
-    torch.distributed.destroy_process_group()
+    engine._torch_distributed_ctx.destroy_process_groups()
 
 
 def _run_torch_profile_distributed(tmp_dir: str, torch_profile: Dict[str, Any], *, world_size: int = 2):
@@ -1567,7 +1699,7 @@ def _torch_distributed_cpu_worker(rank: int, world_size: int, port: int, tmp_dir
         param_sum = float(sum(param.detach().double().sum() for param in engine._pt_model.parameters()))
     with open(f"{tmp_dir}/rank{rank}.txt", "w") as f:
         f.write(repr(param_sum))
-    torch.distributed.destroy_process_group()
+    engine._torch_distributed_ctx.destroy_process_groups()
 
 
 def test_torch_engine_distributed_cpu():
@@ -1631,7 +1763,7 @@ def _torch_distributed_shard_worker(rank: int, world_size: int, port: int, tmp_d
         engine.train()
     with open(f"{tmp_dir}/rank{rank}.txt", "w") as f:
         f.write(repr(seq_tags))
-    torch.distributed.destroy_process_group()
+    engine._torch_distributed_ctx.destroy_process_groups()
 
 
 def test_torch_engine_distributed_cpu_dataset_distribution_shard():
@@ -1721,7 +1853,7 @@ def _torch_distributed_lr_worker(rank: int, world_size: int, port: int, tmp_dir:
     assert engine.epoch == 3
     params = [param.detach().cpu() for param in engine._pt_model.parameters()]
     torch.save({"lrs": applied_lrs, "params": params}, f"{tmp_dir}/rank{rank}.pt")
-    torch.distributed.destroy_process_group()
+    engine._torch_distributed_ctx.destroy_process_groups()
 
 
 def _run_torch_distributed_lr(**opts) -> List[Dict[str, Any]]:
@@ -1955,7 +2087,7 @@ def _torch_distributed_sync_levels_worker(rank: int, world_size: int, port: int,
         raise ValueError(f"invalid variant {variant!r}")
 
     torch.save(results, f"{tmp_dir}/rank{rank}.pt")
-    torch.distributed.destroy_process_group()
+    ctx.destroy_process_groups()
 
 
 def _run_torch_distributed_sync_levels(variant: str) -> List[Dict[str, List[Any]]]:
@@ -2036,6 +2168,56 @@ def test_torch_distributed_sync_levels_cpu_hier_opt():
     )
 
 
+def _torch_spawn_with_timeout(fn, *, args: Tuple[Any, ...], nprocs: int, timeout: float):
+    import torch.multiprocessing
+
+    ctx = torch.multiprocessing.spawn(fn, args=args, nprocs=nprocs, join=False)
+    deadline = time.monotonic() + timeout
+    while not ctx.join(timeout=max(0.0, deadline - time.monotonic())):  # returns once any process finished
+        if time.monotonic() > deadline:
+            for proc in ctx.processes:
+                proc.kill()
+            raise Exception("timeout, the ranks hang")
+
+
+def _torch_distributed_destroy_process_groups_worker(rank: int, world_size: int, port: int):
+    from returnn.torch.distributed import DistributedContext
+
+    os.environ.update(
+        MASTER_ADDR="127.0.0.1",
+        MASTER_PORT=str(port),
+        RANK=str(rank),
+        WORLD_SIZE=str(world_size),
+        LOCAL_RANK=str(rank),
+        LOCAL_WORLD_SIZE=str(world_size),
+    )
+    # One core per rank: the gloo worker thread only runs while the main thread waits, as on a loaded machine.
+    os.sched_setaffinity(0, {sorted(os.sched_getaffinity(0))[rank]})
+    # explicit ranks: a group of its own (new_group), not the default group
+    ctx = DistributedContext({"backend": "gloo", "sync": [{"group": [[0, 1]], "type": "param"}]})
+    module = torch.nn.Linear(3, 2)
+    optimizer = torch.optim.Adam(module.parameters())
+    ctx.step_after_param_update(module=module, optimizer=optimizer, epoch_update_step_idx=0)
+    ctx.destroy_process_groups()  # right after the collective
+
+
+@unittest.skipIf(not hasattr(os, "sched_setaffinity"), "Linux only")
+def test_torch_distributed_destroy_process_groups_after_sync_cpu():
+    """
+    Freeing a gloo process group right after a collective on it deadlocked with torch 2.0 to 2.7,
+    see :func:`returnn.torch.distributed._destroy_process_groups`.
+    """
+    import socket
+
+    world_size = 2
+    with socket.socket() as s:
+        s.bind(("127.0.0.1", 0))
+        port = s.getsockname()[1]
+    _torch_spawn_with_timeout(
+        _torch_distributed_destroy_process_groups_worker, args=(world_size, port), nprocs=world_size, timeout=60
+    )
+
+
 def _torch_distributed_param_sync_accum_worker(rank: int, world_size: int, port: int):
     import returnn.torch.distributed as torch_distributed
     from returnn.torch.updater import Updater
@@ -2109,7 +2291,7 @@ def _torch_distributed_param_sync_accum_worker(rank: int, world_size: int, port:
         engine.train()
     assert engine.epoch == 2
     assert len(state["syncs"]) >= 2, state  # at least one sync per epoch, so the epoch boundary reset is covered
-    torch.distributed.destroy_process_group()
+    engine._torch_distributed_ctx.destroy_process_groups()
 
 
 def test_torch_engine_distributed_param_sync_accum_cpu():
@@ -2162,7 +2344,7 @@ def _torch_distributed_param_sync_accum_dyn_worker(rank: int, world_size: int, p
         engine.init_train_from_config(train_data=dataset)
         engine.train()
     assert engine.global_train_step == 4, engine.global_train_step  # both stop when rank 0 runs out
-    torch.distributed.destroy_process_group()
+    engine._torch_distributed_ctx.destroy_process_groups()
 
 
 def _torch_distributed_hier_control_sync_worker(
@@ -2212,30 +2394,23 @@ def _torch_distributed_hier_control_sync_worker(
         engine.train()
     with open(f"{tmp_dir}/rank{rank}.txt", "w") as f:
         f.write(str(engine.global_train_step))
-    torch.distributed.destroy_process_group()
+    engine._torch_distributed_ctx.destroy_process_groups()
 
 
 def _check_torch_distributed_hier_control_sync(*, accum_grad_multiple_step: int, param_sync_every: int):
     import socket
-    import torch.multiprocessing
 
     world_size = 4
     with socket.socket() as s:
         s.bind(("127.0.0.1", 0))
         port = s.getsockname()[1]
     with tempfile.TemporaryDirectory(prefix="returnn_test_torch_distributed_hier_control_sync") as tmp_dir:
-        ctx = torch.multiprocessing.spawn(
+        _torch_spawn_with_timeout(
             _torch_distributed_hier_control_sync_worker,
             args=(world_size, port, tmp_dir, accum_grad_multiple_step, param_sync_every),
             nprocs=world_size,
-            join=False,
+            timeout=120,
         )
-        deadline = time.monotonic() + 120
-        while not ctx.join(timeout=max(0.0, deadline - time.monotonic())):  # returns once any process finished
-            if time.monotonic() > deadline:
-                for proc in ctx.processes:
-                    proc.kill()
-                raise Exception("timeout, the ranks hang")
         steps = []
         for rank in range(world_size):
             with open(f"{tmp_dir}/rank{rank}.txt") as f:
@@ -2329,7 +2504,7 @@ def _torch_distributed_param_sync_optimizer_state_worker(
         "extra": optimizer.state[next(module.parameters())]["extra"],
     }
     torch.save(results, f"{tmp_dir}/rank{rank}.pt")
-    torch.distributed.destroy_process_group()
+    ctx.destroy_process_groups()
 
 
 def _check_torch_distributed_param_sync_optimizer_state(sync_optimizer_state: bool):
@@ -2452,7 +2627,7 @@ def _torch_distributed_sync_at_epoch_end_worker(
         },
         f"{tmp_dir}/rank{rank}.pt",
     )
-    torch.distributed.destroy_process_group()
+    engine._torch_distributed_ctx.destroy_process_groups()
 
 
 def _check_torch_distributed_sync_at_epoch_end(sync_at_epoch_end: bool):
@@ -2516,7 +2691,7 @@ def test_torch_engine_distributed_param_no_sync_at_epoch_end_cpu():
 
 
 def _torch_distributed_all_reduce_avg_flat_worker(rank: int, world_size: int, port: int, tmp_dir: str):
-    from returnn.torch.distributed import _all_reduce_avg_flat
+    from returnn.torch.distributed import _all_reduce_avg_flat, _destroy_process_groups
 
     os.environ.update(MASTER_ADDR="127.0.0.1", MASTER_PORT=str(port), RANK=str(rank), WORLD_SIZE=str(world_size))
     torch.distributed.init_process_group(backend="gloo")
@@ -2538,7 +2713,7 @@ def _torch_distributed_all_reduce_avg_flat_worker(rank: int, world_size: int, po
     assert [tensor.dtype for tensor in tensors] == [[torch.float32, torch.float64][i % 2] for i in range(5)]
     with open(f"{tmp_dir}/rank{rank}.txt", "w") as f:
         f.write(repr(results))
-    torch.distributed.destroy_process_group()
+    _destroy_process_groups([None])
 
 
 def test_torch_distributed_all_reduce_avg_flat_buckets():
