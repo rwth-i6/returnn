@@ -1599,7 +1599,6 @@ class JaxBackend(Backend[jax.Array]):
         """
         batch_dims = [d for d in x.dims if d != in_spatial_dim]
         x = x.copy_transpose(batch_dims + [in_spatial_dim])
-        # explicit batch size: -1 is ambiguous when the time dim is 0
         x_raw = jnp.reshape(x.raw_tensor, (prod(x.raw_tensor.shape[:-1]), x.raw_tensor.shape[-1]))
 
         if frame_length < fft_length and window_use_frame_length:
