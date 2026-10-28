@@ -593,8 +593,10 @@ class ReturnnLayersBackend(Backend[Layer]):
         device: Optional[str] = None,
         sparse_dim: Optional[Dim] = None,
         feature_dim: Optional[Dim] = None,
+        like: Optional[rf.TensorLayout] = None,
     ) -> Tensor:
         """full"""
+        del like  # plain storage, no layout to follow
         if isinstance(fill_value, Tensor):
             return fill_value + rf.zeros_like(fill_value)
         kwargs = {}
@@ -878,8 +880,10 @@ class ReturnnLayersBackend(Backend[Layer]):
         auto_update_state: Optional[bool] = None,
         static: Optional[bool] = None,
         out: Optional[Tensor] = None,
+        like: Optional[rf.TensorLayout] = None,
     ) -> Tensor:
         """random"""
+        del like  # plain storage, no layout to follow
         if ReturnnLayersBackend._random_journal:
             recent = ReturnnLayersBackend._random_journal.get_recent_graph_reader_node_in_accessible_ctx()
             out = rfl.make_layer(
