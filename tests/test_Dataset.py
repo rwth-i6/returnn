@@ -405,6 +405,31 @@ def test_batches_context_window():
     assert b2.seqs[0].batch_frame_offset == 0
 
 
+def test_batch_get_total_num_frames():
+    def _check(batch: Batch):
+        total = batch.get_total_num_frames()
+        expected = sum([s.frame_length for s in batch.seqs])
+        assert (total.dict, total.value) == (expected.dict, expected.value)
+        total["data"] = -1
+        assert batch.get_total_num_frames()["data"] == expected["data"]
+
+    batch = Batch()
+    batch.add_sequence_as_slice(seq_idx=0, seq_start_frame=0, length=NumbersDict({"data": 7, "classes": 3}))
+    _check(batch)
+    batch.add_sequence_as_slice(seq_idx=1, seq_start_frame=NumbersDict(2), length=NumbersDict({"data": 11}))
+    _check(batch)
+    batch.add_sequence_as_slice(seq_idx=2, seq_start_frame=0, length=NumbersDict(5))
+    _check(batch)
+
+    batch = Batch()
+    batch.add_frames(seq_idx=0, seq_start_frame=0, length=NumbersDict({"data": 13, "classes": 4}))
+    _check(batch)
+    batch.add_frames(seq_idx=1, seq_start_frame=3, length=NumbersDict({"data": 2, "classes": 1}))
+    _check(batch)
+    batch.add_frames(seq_idx=1, seq_start_frame=5, length=NumbersDict(3), frame_dim_corresponds=False)
+    _check(batch)
+
+
 def test_task12ax_window():
     from returnn.datasets.generating import Task12AXDataset
 
