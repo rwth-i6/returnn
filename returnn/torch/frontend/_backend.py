@@ -2712,7 +2712,9 @@ class TorchBackend(Backend[torch.Tensor]):
         """stft"""
         batch_dims = [d for d in x.dims if d != in_spatial_dim]
         x = x.copy_transpose(batch_dims + [in_spatial_dim])
-        x_raw = torch.reshape(x.raw_tensor, [-1, in_spatial_dim.get_dim_value()])
+        x_raw = x.raw_tensor
+        # explicit batch size: -1 is ambiguous when the time dim is 0
+        x_raw = torch.reshape(x_raw, [x_raw.shape[:-1].numel(), in_spatial_dim.get_dim_value()])
 
         # TF code: y = tf.signal.stft(x, frame_length=frame_size, frame_step=frame_shift, fft_length=fft_size)
         # This is similar to what SciPy will also return.
@@ -2742,7 +2744,7 @@ class TorchBackend(Backend[torch.Tensor]):
                 f" the traced graph would have no stft op and replay only zeros"
             )
             y = Tensor("stft", dims=batch_dims + [out_dim, out_spatial_dim], feature_dim=out_dim, dtype="complex64")
-            y.raw_tensor = torch.zeros([d.get_dim_value() for d in y.dims], dtype=torch.complex64)
+            y.raw_tensor = torch.zeros([d.get_dim_value() for d in y.dims], dtype=torch.complex64, device=x_raw.device)
             return y
 
         if window_enforce_even:
