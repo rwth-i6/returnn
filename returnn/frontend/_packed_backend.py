@@ -1772,6 +1772,8 @@ def _torch_sdpa_varlen_attention(
     # nested jagged needs the dense layout for the offsets; regap is cheap
     orig_layout = (q_raw.gap, q_raw.align)
     orig_layout_lens = q_raw.layout_lens
+    # the restored layout fits the original buffer; reuse its size, if static, to keep the regap static
+    orig_total_bound = q_raw.packed_dim.dimension
     if q_raw.has_gap_frames:
         query = regap(query, 0, align=1)
         q_raw = query.raw_tensor
@@ -1920,7 +1922,9 @@ def _torch_sdpa_varlen_attention(
     out_inner.raw_tensor = out_t
     out = q_raw.rewrap(out_inner, name="sdpa_varlen")
     if orig_layout != (0, 1) or orig_layout_lens is not None:
-        out = regap(out, orig_layout[0], align=orig_layout[1], layout_lens=orig_layout_lens)
+        out = regap(
+            out, orig_layout[0], align=orig_layout[1], layout_lens=orig_layout_lens, total_bound=orig_total_bound
+        )
     return out
 
 
@@ -2779,6 +2783,8 @@ def _rel_pos_attention_per_seq(
         return None
     orig_layout = (q_raw.gap, q_raw.align)
     orig_layout_lens = q_raw.layout_lens
+    # the restored layout fits the original buffer; reuse its size, if static, to keep the regap static
+    orig_total_bound = q_raw.packed_dim.dimension
     if q_raw.has_gap_frames:
         query, key, value = regap(query, 0, align=1), regap(key, 0, align=1), regap(value, 0, align=1)
         q_raw = query.raw_tensor
@@ -2827,7 +2833,9 @@ def _rel_pos_attention_per_seq(
     out = helper.rewrap(inner_new, name="rel_pos_att_per_seq")
     _count_attention_path("rel_pos_per_seq")
     if orig_layout != (0, 1) or orig_layout_lens is not None:
-        out = regap(out, orig_layout[0], align=orig_layout[1], layout_lens=orig_layout_lens)
+        out = regap(
+            out, orig_layout[0], align=orig_layout[1], layout_lens=orig_layout_lens, total_bound=orig_total_bound
+        )
     return out
 
 

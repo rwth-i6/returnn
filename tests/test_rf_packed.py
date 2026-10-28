@@ -761,6 +761,62 @@ def test_regap_gap_roundtrip_keeps_bound():
         _assert_equal_non_padded(back, x, batch_dim, time_dim)
 
 
+def test_sdpa_varlen_restores_layout_lens_static_traceable():
+    # The varlen attention densifies to gap 0 for the jagged offsets and restores the original layout afterwards,
+    # incl. per-seq layout lens (e.g. after a strided conv). Under static tracing, a regap to layout lens
+    # has no derivable size, so the restore must use the original buffer size.
+    # The real NJT SDPA runs; on CPU, only the MATH kernel takes nested tensors, and it refuses causal,
+    # so allow MATH in addition to the fused kernels and attend non-causally.
+    # MATH also needs the dense buffer without bound slack, so pack with the tight bound (5 + 3 frames).
+    import functools
+    from unittest import mock
+    from torch.nn.attention import sdpa_kernel, SDPBackend
+
+    @functools.wraps(sdpa_kernel)  # torch._dynamo, imported lazily by NJT, reads sdpa_kernel.__wrapped__
+    def _sdpa_kernel_with_math(backends, *args, **kwargs):
+        return sdpa_kernel([*backends, SDPBackend.MATH], *args, **kwargs)
+
+    rf.select_backend_torch()
+    batch_dim = Dim(2, name="batch")
+    time_dim = Dim(
+        Tensor("time", dims=[batch_dim], dtype="int32", raw_tensor=torch.tensor([5, 3], dtype=torch.int32)),
+        capacity=8,
+    )
+    heads_dim = Dim(2, name="heads")
+    feat_dim = Dim(4, name="feat")
+    x = Tensor("x", dims=[batch_dim, time_dim, heads_dim, feat_dim], dtype="float32")
+    x.raw_tensor = torch.randn(2, 8, 2, 4, generator=torch.Generator().manual_seed(3))
+    layout_lens = Tensor("layout_lens", dims=[batch_dim], dtype="int32", raw_tensor=torch.tensor([6, 4]).int())
+    x_raw = x.raw_tensor.transpose(1, 2)  # [B, H, T, F]
+    key_mask = (torch.arange(8)[None, :] < time_dim.dyn_size_ext.raw_tensor[:, None])[:, None, None, :]
+    ref = Tensor("ref", dims=x.dims, dtype="float32")
+    ref.raw_tensor = torch.nn.functional.scaled_dot_product_attention(
+        x_raw, x_raw, x_raw, attn_mask=key_mask
+    ).transpose(1, 2)
+
+    packed.attention_path_counts.clear()
+    with mock.patch.object(packed, "_njt_sdpa_env_broken", False), mock.patch(
+        "torch.nn.attention.sdpa_kernel", _sdpa_kernel_with_math
+    ), rf.set_default_device_ctx("cpu"), rf.set_static_traceable_ctx():
+        xp = packed.regap(packed.pack(x, total_bound=8), 1, layout_lens=layout_lens, total_bound=12)
+        out = packed._torch_sdpa_varlen_attention(
+            xp,
+            xp,
+            xp,
+            qk_feat_dim=feat_dim,
+            v_feat_dim=feat_dim,
+            kv_spatial_dim=time_dim,
+            is_causal=False,
+            scale=None,
+        )
+    assert out is not None, "varlen attention not applicable"
+    assert packed.attention_path_counts.get("njt_eager") == 1
+    raw = out.raw_tensor
+    assert raw.layout_lens is layout_lens and (raw.gap, raw.align) == (1, 1)
+    assert raw.packed_dim.dimension == 12  # the original buffer
+    _assert_equal_non_padded(out, ref, batch_dim, time_dim)
+
+
 def test_flat_content_shared_out_dim_other_bound():
     # E.g. pack_padded of the logits, then of the targets with out_dim = the flat dim of the logits:
     # the same content, but packed with another bound, so the buffer sizes differ under static tracing.
