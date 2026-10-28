@@ -1058,8 +1058,8 @@ class CombinedDataset(CachedDataset2):
         # This will only initialize datasets needed for features occurring in data_map
         self.datasets = {key: init_dataset(datasets[key], parent_dataset=self) for key in self.dataset_keys}
 
-        self._estimated_num_seqs = sum([self.datasets[k].estimated_num_seqs for k in sorted(self.datasets.keys())])
-        self.estimated_num_seq_per_subset = [self.datasets[k].estimated_num_seqs for k in sorted(self.datasets.keys())]
+        self.estimated_num_seq_per_subset: List[int] = []
+        self._update_estimated_num_seqs()
 
         if data_dims:
             data_dims = convert_data_dims(data_dims)
@@ -1181,7 +1181,15 @@ class CombinedDataset(CachedDataset2):
             # All of these should just be done in the sub-datasets directly.
             assert self.partition_epoch == 1 and self.repeat_epoch == 1 and self._num_shards == 1
 
+        # Sub-datasets often only know their (epoch- and shard-local) num seqs after their init_seq_order.
+        self._update_estimated_num_seqs()
         return True
+
+    def _update_estimated_num_seqs(self):
+        self.estimated_num_seq_per_subset = [
+            self.datasets[k].estimated_num_seqs or 0 for k in sorted(self.datasets.keys())
+        ]
+        self._estimated_num_seqs = sum(self.estimated_num_seq_per_subset)
 
     def _create_dataset_seq_idx_boundaries(self):
         """
