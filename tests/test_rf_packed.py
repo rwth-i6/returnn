@@ -795,6 +795,43 @@ def test_concat_packed_static_traceable():
     assert lens[: len(live_a)].tolist() == [x + y for x, y in zip(live_a, live_b)], lens[:3].tolist()
 
 
+
+def test_concat_packed_static_traceable_empty_plain_source():
+    # captured regime with zero-length static sources, e.g. an empty chat-template suffix in the prompt-LM layout
+    # [prefix | audio | suffix | text]: they add nothing to the buffer and no frames
+    rf.select_backend_torch()
+    n_seq_cap, feat = 6, 4
+    b_dim, f_dim = Dim(n_seq_cap, name="batch"), Dim(feat, name="feat")
+
+    def mk(lens, buf, name):
+        d = Dim(
+            Tensor(
+                f"{name}_len",
+                dims=[b_dim],
+                dtype="int32",
+                raw_tensor=torch.tensor(lens + [0] * (n_seq_cap - len(lens)), dtype=torch.int32),
+            ),
+            name=name,
+        )
+        d.capacity = buf
+        pd = Dim(buf, name=f"packed_{name}")
+        flat = Tensor("flat", dims=[pd, f_dim], dtype="float32", raw_tensor=torch.randn(buf, feat))
+        return packed.pack_import(flat, batch_dim=b_dim, spatial_dim=d, packed_dim=pd, feature_dim=f_dim), d
+
+    ap, a_dim = mk([4, 2, 5], 40, "a")
+    bp, b_sp = mk([3, 1, 0], 20, "b")
+    prefix_dim, suffix_dim = Dim(0, name="prefix"), Dim(0, name="suffix")
+    prefix = Tensor("prefix", dims=[prefix_dim, f_dim], dtype="float32", raw_tensor=torch.zeros(0, feat))
+    suffix = Tensor("suffix", dims=[b_dim, suffix_dim, f_dim], dtype="float32", raw_tensor=torch.zeros(6, 0, feat))
+    with rf.set_static_traceable_ctx():
+        ref, ref_dim = rf.concat((ap, a_dim), (bp, b_sp), handle_dynamic_dims=True)
+        parts = [(prefix, prefix_dim), (ap, a_dim), (suffix, suffix_dim), (bp, b_sp)]
+        out, out_dim = rf.concat(*parts, allow_broadcast=True, handle_dynamic_dims=True)
+    assert packed.is_packed(out)
+    assert out.raw_tensor.packed_dim.dimension == 40 + 20, out.raw_tensor.packed_dim
+    assert out_dim.dyn_size_ext.raw_tensor.tolist() == ref_dim.dyn_size_ext.raw_tensor.tolist()
+    torch.testing.assert_close(out.raw_tensor.inner.raw_tensor, ref.raw_tensor.inner.raw_tensor, rtol=0, atol=0)
+
 def test_conformer():
     """
     The goal test: a full Conformer forward pass on packed input matches the padded path.

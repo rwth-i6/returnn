@@ -5366,9 +5366,10 @@ def _concat_out_packed_dim(
         if raw is not None:
             bounds.append(raw.content_bound)
         else:
+            # a static dim of size 0 (e.g. an empty constant prefix) is a bound of 0, not a missing one
             # noinspection PyProtectedMember
-            cap = d.dimension or d.capacity or d._derived_capacity()
-            bounds.append(n_seqs * cap if isinstance(n_seqs, int) and cap else None)
+            cap = d.dimension if d.dimension is not None else (d.capacity or d._derived_capacity())
+            bounds.append(n_seqs * cap if isinstance(n_seqs, int) and cap is not None else None)
     assert all(b is not None for b in bounds), (
         f"packed concat: static traceable needs a content bound on every source, got {bounds}."
         f" It comes from the packed buffer size (pack total_bound / packed_batch_size),"
