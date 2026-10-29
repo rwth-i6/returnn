@@ -648,12 +648,25 @@ def _dim_refs_packed(d: Dim, template: PackedRawTensor) -> bool:
     return False
 
 
-def _rewrap_result(out, template: PackedRawTensor):
-    """rewrap Tensor results which kept the packed dim; pass through everything else (Dims, tuples, ...)"""
+def _rewrap_result(out, template: PackedRawTensor, *, feature_dim: Optional[Dim] = None):
+    """
+    rewrap Tensor results which kept the packed dim; pass through everything else (Dims, tuples, ...)
+
+    :param out: result of the op on the inner tensors
+    :param template: the packing
+    :param feature_dim: the (outer) feature dim of the source, which a result without a feature dim of its own keeps
+        where it still has that dim, as the padded op does (e.g. a slice along another axis).
+        The op on the inner tensors does not see it: the inner tensor of a packed one often has no feature dim.
+    """
     if isinstance(out, Tensor):
-        return template.rewrap(out) if template.packed_dim in out.dims else out
+        if template.packed_dim not in out.dims:
+            return out
+        res = template.rewrap(out)
+        if out.feature_dim is None and feature_dim is not None and feature_dim in res.dims:
+            res.feature_dim = feature_dim
+        return res
     if isinstance(out, tuple):
-        return tuple(_rewrap_result(x, template) for x in out)
+        return tuple(_rewrap_result(x, template, feature_dim=feature_dim) for x in out)
     return out
 
 
@@ -1531,7 +1544,7 @@ def _dim_aware_call(name: str, args, kwargs):
             inner_args = [_map_packed_to_inner(x) for x in args]
             inner_kwargs = {k: _map_packed_to_inner(v) for k, v in kwargs.items()}
             out = getattr(raw0.inner_backend, name)(*inner_args, **inner_kwargs)
-            return _rewrap_result(out, raw0)
+            return _rewrap_result(out, raw0, feature_dim=packed_args[0].feature_dim)
     else:
         _warn_fallback_once(name, "packed args over different sequences")
     in_spatial = kwargs.get("in_spatial_dims", kwargs.get("in_spatial_dim"))
@@ -4520,9 +4533,15 @@ class PackedBackend(Backend[PackedRawTensor]):
                     return _dim_aware_call("concat", sources, kwargs)
                 src = src.raw_tensor.inner
             inner_sources.append((src, dim))
-        out, _ = rf.concat(*inner_sources, allow_broadcast=allow_broadcast, out_dim=out_dim, handle_dynamic_dims=False)
+        out, out_dim = rf.concat(
+            *inner_sources, allow_broadcast=allow_broadcast, out_dim=out_dim, handle_dynamic_dims=False
+        )
         res = raw0.rewrap(out, name="concat")
-        if out_dim is not None and out_dim in res.dims:
+        # as the padded op: the first source's feature dim stays, a concat along it gives the concatenated one
+        src_feature_dim = sources[0][0].feature_dim
+        if src_feature_dim is not None and src_feature_dim != sources[0][1] and src_feature_dim in res.dims:
+            res.feature_dim = src_feature_dim
+        elif out_dim in res.dims:
             res.feature_dim = out_dim
         return res
 
@@ -4630,9 +4649,8 @@ class PackedBackend(Backend[PackedRawTensor]):
                 else:
                     idx = indices  # no packed dims involved at all
                 if idx is not None:
-                    out = raw.rewrap(
-                        rf.gather(raw.inner, indices=idx, axis=axis, clip_to_valid=clip_to_valid), name="gather"
-                    )
+                    out_inner = rf.gather(raw.inner, indices=idx, axis=axis, clip_to_valid=clip_to_valid)
+                    out = _rewrap_result(out_inner, raw, feature_dim=source.feature_dim)
                     if source.sparse_dim is not None and source.sparse_dim in out.dims:
                         out.sparse_dim = source.sparse_dim
                     return out
@@ -4667,7 +4685,8 @@ class PackedBackend(Backend[PackedRawTensor]):
         # the sequence starts at this frame's own row minus its position within the sequence
         src = rows - local + idx
         src = rf.clip_by_value(src, 0, _last_row(raw.packed_dim, src.dtype))
-        out = raw.rewrap(rf.gather(raw.inner, indices=src, axis=raw.packed_dim), name="gather")
+        out_inner = rf.gather(raw.inner, indices=src, axis=raw.packed_dim)
+        out = _rewrap_result(out_inner, raw, feature_dim=source.feature_dim)
         # a sparse dim assigned on the virtual tensor never reached the inner buffer
         if source.sparse_dim is not None:
             out.sparse_dim = source.sparse_dim

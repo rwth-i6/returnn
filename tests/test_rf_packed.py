@@ -2242,6 +2242,51 @@ def test_chunked_rel_pos_self_attention_matches_an_explicit_reference():
                 torch.testing.assert_close(got[b, :n_chunks], want[b, :n_chunks], rtol=1e-4, atol=1e-5, msg=case)
 
 
+def test_packed_ops_keep_outer_feature_dim():
+    # A packed tensor whose feature dim lives only on the outer tensor (the inner buffer of a packed result often has
+    # none, e.g. after a re-layout gather): ops along a plain (non-packed) axis keep it as the padded ops do.
+    # It got lost in the unchunking slice of the chunked Conformer.
+    # Concat along a plain axis keeps the source's feature dim (it used to set the concatenated dim),
+    # concat along the feature dim gives the concatenated one.
+    rf.select_backend_torch()
+    batch_dim = Dim(3, name="batch")
+    time_dim = Dim(
+        Tensor("time", dims=[batch_dim], dtype="int32", raw_tensor=torch.tensor([4, 2, 3], dtype=torch.int32)),
+        name="time",
+    )
+    chunk_dim, feat_dim = Dim(6, name="chunk"), Dim(5, name="feat")
+    raw = torch.randn(3, 4, 6, 5, generator=torch.Generator().manual_seed(3))
+    x = Tensor("x", dims=[batch_dim, time_dim, chunk_dim, feat_dim], dtype="float32", feature_dim=feat_dim)
+    x.raw_tensor = raw
+    xp = packed.pack(x)
+    xp.raw_tensor.inner.feature_dim = None
+    assert xp.feature_dim == feat_dim
+    indices = rf.convert_to_tensor(torch.tensor([0, 2]), dims=[Dim(2, name="picked")], sparse_dim=chunk_dim)
+    # one out dim for the padded and the packed run, so both results are comparable
+    sliced_dim, padded_dim, chunk2_dim, feat2_dim = (
+        Dim(3, name="sliced"),
+        Dim(7, name="padded"),
+        Dim(12, name="chunk2"),
+        Dim(10, name="feat2"),
+    )
+    ops = {
+        "slice": lambda v: rf.slice(v, axis=chunk_dim, size=sliced_dim)[0],
+        "pad": lambda v: rf.pad(v, axes=[chunk_dim], padding=[(1, 0)], out_dims=[padded_dim])[0],
+        "gather": lambda v: rf.gather(v, indices=indices, axis=chunk_dim),
+        "concat": lambda v: rf.concat((v, chunk_dim), (v, chunk_dim), out_dim=chunk2_dim)[0],
+        "concat_features": lambda v: rf.concat((v, feat_dim), (v, feat_dim), out_dim=feat2_dim)[0],
+    }
+    for name, op in ops.items():
+        out, out_p = op(x), op(xp)
+        assert packed.is_packed(out_p), name
+        if name == "concat_features":
+            # padded, the feature dim of a concat along it is left to the default heuristic (none here)
+            assert out_p.feature_dim == feat2_dim, (name, out_p.feature_dim)
+        else:
+            assert out_p.feature_dim == out.feature_dim == feat_dim, (name, out_p.feature_dim, out.feature_dim)
+        _assert_equal_per_seq(out_p, out, batch_dim, time_dim, time_dim, *out.remaining_dims((batch_dim, time_dim)))
+
+
 def test_cast_packed():
     # rf.cast on packed data runs elementwise on the packed buffer (PackedBackend.cast_raw),
     # e.g. from the behavior_version>=27 keep-dtype path of LayerNorm/RMSNorm.
