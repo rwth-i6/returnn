@@ -5875,6 +5875,21 @@ def is_packed(source: Tensor) -> bool:
     return isinstance(source.raw_tensor, PackedRawTensor)
 
 
+def conform(source: Tensor, like: Tensor) -> Optional[Tensor]:
+    """
+    For a custom op on the packed data of several operands (e.g. a position-wise kernel on the inner buffers):
+    source in the packing of like, as the elementwise ops conform their operands.
+
+    :param source: packed tensor
+    :param like: packed tensor
+    :return: source re-laid-out to the packing of like (its gap / alignment / layout, its packed dim),
+        source itself if it has that packing already, None if it is over other sequences
+    """
+    assert is_packed(source) and is_packed(like), (source, like)
+    out = _conform_packing(source, like.raw_tensor)
+    return out if like.raw_tensor.same_packing(out.raw_tensor) else None
+
+
 def flat_content(source: Tensor, *, out_dim: Optional[Dim] = None) -> Tuple[Tensor, Dim]:
     """
     The packed content as a PLAIN tensor over one flat dim (dense gap-0 layout),

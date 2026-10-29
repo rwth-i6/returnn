@@ -1060,6 +1060,29 @@ def test_regap_gap_roundtrip_keeps_bound():
         _assert_equal_non_padded(back, x, batch_dim, time_dim)
 
 
+def test_packed_conform():
+    # a custom op on the inner buffers of several packed operands needs them in one packing:
+    # rf.packed_conform re-lays out an operand over the same seqs (here gap 0 -> gap 2), as elementwise ops do
+    rf.select_backend_torch()
+    x, batch_dim, time_dim, feat_dim = _make_input(seq_lens=(5, 3))
+    y, _, _, _ = _make_input(seq_lens=(5, 3), seed=7)
+    y = Tensor("y", dims=[batch_dim, time_dim, feat_dim], dtype="float32", raw_tensor=y.raw_tensor)
+    with rf.set_default_device_ctx("cpu"):
+        xp, yp = packed.pack(x, gap=2), packed.pack(y)
+        assert not xp.raw_tensor.same_packing(yp.raw_tensor)
+        out = rf.packed_conform(yp, xp)
+        assert out.raw_tensor.same_packing(xp.raw_tensor)
+        assert out.raw_tensor.inner.dims[0] == xp.raw_tensor.packed_dim
+        _assert_equal_non_padded(out, y, batch_dim, time_dim)
+        assert rf.packed_conform(xp, xp) is xp
+        other_time_dim = Dim(
+            Tensor("time", dims=[batch_dim], dtype="int32", raw_tensor=torch.tensor([2, 4], dtype=torch.int32))
+        )
+        z = Tensor("z", dims=[batch_dim, other_time_dim, feat_dim], dtype="float32")
+        z.raw_tensor = torch.zeros(2, 4, 4)
+        assert rf.packed_conform(packed.pack(z), xp) is None
+
+
 def test_flat_content_shared_out_dim_other_bound():
     # E.g. pack_padded of the logits, then of the targets with out_dim = the flat dim of the logits:
     # the same content, but packed with another bound, so the buffer sizes differ under static tracing.
