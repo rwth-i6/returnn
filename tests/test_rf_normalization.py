@@ -273,6 +273,22 @@ def test_batch_norm_batch_without_elements():
         torch.testing.assert_close(bn.running_variance.raw_tensor, torch.ones(3), msg=f"distributed={distributed}")
 
 
+def test_moments_correction_without_elements():
+    """
+    moments with a correction (e.g. the unbiased variance) over no unmasked element:
+    variance 0 as the mean, local and distributed (count clamped for the division, not for the correction)
+    """
+    import torch
+
+    rf.select_backend_torch()
+    batch = Dim(2, name="batch")
+    time_dim = Dim(Tensor("time_size", dims=[batch], dtype="int32", raw_tensor=torch.tensor([0, 0], dtype=torch.int32)))
+    x = Tensor("x", dims=[batch, time_dim], dtype="float32", raw_tensor=torch.zeros(2, 0))
+    for distributed in (False, True):
+        mean, variance = rf.moments(x, axis=[batch, time_dim], use_mask=True, correction=1, distributed=distributed)
+        assert float(mean.raw_tensor) == 0.0 and float(variance.raw_tensor) == 0.0, (distributed, mean, variance)
+
+
 def test_moments_masked_mean_low_precision():
     """
     The masked mean of moments in a low precision compute dtype (without ``rf_moments_float32``) accumulates in
