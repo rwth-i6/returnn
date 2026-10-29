@@ -3711,6 +3711,70 @@ def test_is_finite_infinite_neg_infinite():
             _assert_equal_non_padded(rf.cast(out, "float32"), rf.cast(fn(x), "float32"), batch_dim, time_dim)
 
 
+def test_operand_of_the_same_sequences_in_another_layout():
+    """
+    a packed operand over the same sequences in another layout is conformed and read inline,
+    one over other sequences takes the generic route, or is refused where there is none
+    """
+    rf.select_backend_torch()
+    x, batch_dim, time_dim, feat_dim = _make_input(batch_size=2, seq_lens=(4, 3), feat=5)
+    idx = Tensor("idx", dims=[batch_dim, time_dim], dtype="int32", sparse_dim=feat_dim)
+    idx.raw_tensor = torch.tensor([[1, 2, 3, 4], [0, 4, 2, 0]], dtype=torch.int32)
+    scale = Tensor("scale", dims=[batch_dim, time_dim, feat_dim], dtype="float32")
+    scale.raw_tensor = torch.rand(2, 4, 5, generator=torch.Generator().manual_seed(3))
+    for gap_x, gap_other in ((0, 2), (2, 1), (1, 3)):
+        xp = packed.pack(x, gap=gap_x)
+        packed._warned_fallback_ops.clear()
+        _assert_equal_non_padded(
+            rf.gather(xp, indices=packed.pack(idx, gap=gap_other), axis=feat_dim),
+            rf.gather(x, indices=idx, axis=feat_dim),
+            batch_dim,
+            time_dim,
+        )
+        _assert_equal_non_padded(
+            rf.where(packed.pack(scale, gap=gap_other) > 0.5, xp, 0.0),
+            rf.where(scale > 0.5, x, 0.0),
+            batch_dim,
+            time_dim,
+        )
+        assert not packed._warned_fallback_ops, (gap_x, gap_other, packed._warned_fallback_ops)
+
+        raw = x.raw_tensor.detach().clone().requires_grad_(True)
+        x_ = Tensor("x", dims=x.dims, dtype="float32", raw_tensor=raw)
+        out = rf.scaled_gradient(packed.pack(x_, gap=gap_x), packed.pack(scale, gap=gap_other))
+        (grad,) = torch.autograd.grad(packed.unpack(out).copy_compatible_to_dims_raw(x.dims).sum(), raw)
+        valid = (torch.arange(4)[None, :] < torch.tensor([4, 3])[:, None])[:, :, None]
+        torch.testing.assert_close(grad, torch.where(valid, scale.raw_tensor, 0.0))
+
+    # as traced: bound-sized buffers in different layouts on both sides, the operand is regapped into the other's
+    # (the source's for gather, the first packed operand's, the condition, for where)
+    time_dim.capacity = 4
+    with rf.set_static_traceable_ctx():
+        xp = packed.pack(x, gap=1, total_bound=12)
+        cond = packed.pack(scale, total_bound=10) > 0.5
+        packed._warned_fallback_ops.clear()
+        out_gather = rf.gather(xp, indices=packed.pack(idx, gap=3, align=2, total_bound=20), axis=feat_dim)
+        out_where = rf.where(cond, xp, 0.0)
+        assert not packed._warned_fallback_ops, packed._warned_fallback_ops
+    assert out_gather.raw_tensor.same_packing(xp.raw_tensor), out_gather.raw_tensor
+    assert out_where.raw_tensor.same_packing(cond.raw_tensor), out_where.raw_tensor
+    _assert_equal_non_padded(out_gather, rf.gather(x, indices=idx, axis=feat_dim), batch_dim, time_dim)
+    _assert_equal_non_padded(out_where, rf.where(scale > 0.5, x, 0.0), batch_dim, time_dim)
+
+    # other sequences: the scale of a per-frame gradient has no meaning there
+    label_dim = Dim(
+        Tensor("labels", dims=[batch_dim], dtype="int32", raw_tensor=torch.tensor([3, 2], dtype=torch.int32)),
+        name="labels",
+    )
+    other = Tensor("other", dims=[batch_dim, label_dim], dtype="float32", raw_tensor=torch.ones(2, 3))
+    try:
+        rf.scaled_gradient(packed.pack(rf.reduce_sum(x, axis=feat_dim)), packed.pack(other))
+    except ValueError as exc:
+        assert "scaled_gradient: scale is packed over" in str(exc), exc
+    else:
+        raise Exception("scaled_gradient should refuse a scale of other sequences")
+
+
 class _RandomShapes(TorchDispatchMode):
     """records the shapes of the random ops"""
 
