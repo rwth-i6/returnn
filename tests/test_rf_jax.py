@@ -2907,3 +2907,59 @@ def test_depthwise_conv1d_triton_matches_xla():
             numpy.testing.assert_allclose(
                 numpy.asarray(grad, dtype=numpy.float32), numpy.asarray(ref_grad, dtype=numpy.float32), **tol
             )
+
+
+def test_sdpa_varlen_triton_large_offset():
+    """
+    the varlen attention kernels with the last seq at element offset >= 2^31 (row * H * D),
+    first in the q packing, then in the kv packing, fwd and all three bwd kernels,
+    against a float32 reference on the valid rows.
+    Needs a GPU with about 20 GiB free and jax_triton, run with JAX_PLATFORMS=cuda
+    """
+    pytest.importorskip("jax_triton")
+    if jax.default_backend() != "gpu":
+        pytest.skip("needs a GPU")
+    if jax.devices()[0].memory_stats()["bytes_limit"] < 24 * 2**30:
+        pytest.skip("needs a GPU with 24 GiB memory")
+    from returnn.jax.util import sdpa_varlen_triton
+
+    n_heads, d = 2, 64
+    scale = d**-0.5
+    big_start = 2**31 // (n_heads * d)
+    key = jax.random.PRNGKey(7)
+
+    def _packed(starts, lens):
+        nonlocal key
+        x = jnp.zeros((starts[-1] + lens[-1], n_heads, d), dtype=jnp.bfloat16)
+        for s0, ln in zip(starts, lens):
+            key, sub = jax.random.split(key)
+            x = x.at[s0 : s0 + ln].set(jax.random.normal(sub, (ln, n_heads, d)).astype(jnp.bfloat16))
+        return x
+
+    def _ref(q_, k_, v_):
+        s = jnp.einsum("ihd,jhd->hij", q_, k_, precision=jax.lax.Precision.HIGHEST) * scale
+        out_ = jnp.einsum("hij,jhd->ihd", jax.nn.softmax(s, axis=-1), v_, precision=jax.lax.Precision.HIGHEST)
+        return out_, jax.nn.logsumexp(s, axis=-1).T
+
+    q_lens, k_lens = [3, 5], [4, 6]
+    for q_starts, k_starts in [([0, big_start], [1, 5]), ([0, 3], [1, big_start])]:
+        q, d_out = _packed(q_starts, q_lens), _packed(q_starts, q_lens)
+        k, v = _packed(k_starts, k_lens), _packed(k_starts, k_lens)
+        cu_q, len_q, cu_k, len_k = [jnp.array(x, dtype=jnp.int32) for x in (q_starts, q_lens, k_starts, k_lens)]
+        idx = (cu_q, len_q, cu_k, len_k, max(q_lens), max(k_lens))
+        out, lse = sdpa_varlen_triton.sdpa_varlen_fwd(q, k, v, *idx)
+        dq, dk, dv = sdpa_varlen_triton.sdpa_varlen_bwd(
+            d_out, q, k, v, out, lse, *idx, is_causal=False, dropout_p=0.0, seed=0, scale=scale
+        )
+        for q0, q_len, k0, k_len in zip(q_starts, q_lens, k_starts, k_lens):
+            q_rows, k_rows = slice(q0, q0 + q_len), slice(k0, k0 + k_len)
+            ref, ref_vjp = jax.vjp(
+                _ref, *[x[rows].astype(jnp.float32) for x, rows in ((q, q_rows), (k, k_rows), (v, k_rows))]
+            )
+            ref_grads = ref_vjp((d_out[q_rows].astype(jnp.float32), jnp.zeros_like(ref[1])))
+            results = [(out, q_rows), (lse, q_rows), (dq, q_rows), (dk, k_rows), (dv, k_rows)]
+            for (res, rows), ref_ in zip(results, [*ref, *ref_grads]):
+                numpy.testing.assert_allclose(
+                    numpy.asarray(res[rows], dtype=numpy.float32), numpy.asarray(ref_), rtol=2e-2, atol=2e-2
+                )
+        del q, d_out, k, v, out, lse, dq, dk, dv
