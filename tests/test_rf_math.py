@@ -220,7 +220,6 @@ def test_softmax_fully_masked_zero_len_seq():
     assert (raw_log[1] == -torch.inf).all()  # log space: fully-masked rows -> -inf (log 0)
 
 
-
 def test_softmax_fully_masked_zero_len_seq_eager():
     """
     As :func:`test_softmax_fully_masked_zero_len_seq`, eager (not static traceable): a zero-length seq
@@ -248,6 +247,7 @@ def test_softmax_fully_masked_zero_len_seq_eager():
     loss = rf.reduce_sum(out * x, axis=out.dims, use_mask=True)
     loss.raw_tensor.backward()
     assert torch.isfinite(raw_x.grad).all()
+
 
 if __name__ == "__main__":
     better_exchook.install()
