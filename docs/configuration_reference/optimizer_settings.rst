@@ -142,6 +142,11 @@ optimizer
     A dictionary with a ``class`` entry for the optimizer.
     Other keys are passed as parameters to the constructor of the optimizer class.
 
+    Do not change the weight-decay split (e.g. ``weight_decay_modules_blacklist``) on a running training,
+    as it moves parameters between optimizer param groups.
+    If you do, loading the optimizer checkpoint warns about the moved parameters and keeps their per-parameter state.
+    The param group options (e.g. ``weight_decay``) are loaded from the checkpoint group at the same position.
+
 relative_error_div_by_old
     If true the relative error is computed by dividing the error difference by the old error value instead of the
     current error value.
