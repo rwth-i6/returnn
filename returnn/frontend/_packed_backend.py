@@ -2939,6 +2939,8 @@ def _rel_pos_attention_per_seq(
     outs = []
     off = 0
     for seq_len in lens:
+        if seq_len == 0:
+            continue  # no frames, and no pos_emb window (the slice below would have a negative size)
         q_b, q_time = rf.slice(q_raw.inner, axis=q_raw.packed_dim, start=off, end=off + seq_len)
         kv_packed = key.raw_tensor.packed_dim  # kv has its own packed dim (copied spatial dim)
         k_b, kv_time = rf.slice(key.raw_tensor.inner, axis=kv_packed, start=off, end=off + seq_len)

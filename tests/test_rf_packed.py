@@ -2112,6 +2112,31 @@ def test_rel_pos_self_attention_dropout_train_packed():
         assert bool(numpy.isfinite(packed.unpack(out).raw_tensor.detach().numpy()).all())
 
 
+def test_rel_pos_self_attention_packed_zero_length_seq():
+    # a seq of length 0 (e.g. a batch entry without audio) in the per-seq path (CPU): no frames from it,
+    # the others as padded
+    rf.select_backend_torch()
+    x, batch_dim, time_dim, feat_dim = _make_input(batch_size=3, seq_lens=(9, 0, 4), feat=8, seed=23)
+    with rf.set_default_device_ctx("cpu"):
+        rf.set_random_seed(31)
+        att = rf.RelPosSelfAttention(
+            feat_dim,
+            proj_dim=feat_dim,
+            key_dim_total=Dim(8, name="key_tot"),
+            value_dim_total=Dim(8, name="val_tot"),
+            num_heads=2,
+            att_dropout=0.0,
+        )
+        out_ref = att(x, axis=time_dim)
+        packed.attention_path_counts.clear()
+        with rf.get_run_ctx().train_flag_ctx(True):
+            out = att(packed.pack(x), axis=time_dim)
+    assert packed.is_packed(out)
+    if not _flex_attention_usable():
+        assert packed.attention_path_counts.get("rel_pos_per_seq") == 1, packed.attention_path_counts
+    _assert_equal_non_padded(out, out_ref, batch_dim, time_dim, rtol=1e-4, atol=1e-5)
+
+
 def test_rel_pos_att_triton_kernel_grad():
     # The Triton varlen rel-pos kernel (CUDA; the train-mode dropout fast path):
     # fwd + ALL grads (q, k, v, bd) vs autograd through an eager per-seq reference,
