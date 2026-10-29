@@ -3055,7 +3055,8 @@ def _torch_distributed_grad_reduce_in_graph_worker(
     grad reduce and of the idle steps, or the error.
 
     :param opts: torch_distributed entries, and "num_seqs" (per rank), "num_epochs", "model" (checkpoint prefix),
-        "warmup_steps", "batch_norm", "dropout" (see _build_cuda_graph_train_config_and_dataset), "exit_at_step" (rank "exit_rank", default 1, exits in this step, as by a crash),
+        "warmup_steps", "batch_norm", "dropout", "hidden_dim" (see _build_cuda_graph_train_config_and_dataset),
+        "exit_at_step" (rank "exit_rank", default 1, exits in this step, as by a crash),
         "replay_timeout_sec" (for the replay of graphs with collectives, instead of the process group timeout)
     """
     from returnn.datasets import init_dataset
@@ -3083,6 +3084,7 @@ def _torch_distributed_grad_reduce_in_graph_worker(
         count_steps=True,
         batch_norm=opts.pop("batch_norm", False),
         dropout=opts.pop("dropout", 0.0),
+        hidden_dim=opts.pop("hidden_dim", 64),
     )
     config.typed_dict["num_epochs"] = opts.pop("num_epochs", 2)
     if "model" in opts:
@@ -3150,6 +3152,9 @@ def _torch_distributed_grad_reduce_in_graph_worker(
                 if isinstance(value, torch.Tensor)
             ],
             "rng": torch.cuda.get_rng_state(),
+            "misaligned_grads": [
+                name for name, param in model.named_parameters() if param.grad is not None and param.grad.data_ptr() % 16
+            ],
             "calls": calls,
         },
         f"{tmp_dir}/rank{rank}.pt",
@@ -3182,6 +3187,7 @@ def test_torch_distributed_cuda_graph_grad_reduce_in_graph_nccl():
     (there after eager warmup steps, which reduce explicitly). With epoch_end join: rank 1 runs out of data first
     in each epoch, and then joins the allreduce of the other rank with its idle steps, which leave no other trace:
     the whole state of each rank (batch norm, a counter, dropout RNG, optimizer) is the same as without the option.
+    In-graph grads of sizes which are no multiple of 4 are 16-byte aligned.
     Also resumed from the checkpoint of epoch 1 (in a new process): the same params as resumed without the option.
     """
     results = {}
@@ -3210,6 +3216,18 @@ def test_torch_distributed_cuda_graph_grad_reduce_in_graph_nccl():
         assert [res["calls"] for res in explicit] == [{"explicit": 46, "idle": 0}] * 2, name
     for p, p_bf16 in zip(results[("float32", "in_graph")][0]["params"], results[("bfloat16", "in_graph")][0]["params"]):
         assert not torch.equal(p, p_bf16)  # really reduced in bfloat16
+
+    # hidden 63: grad sizes which are no multiple of 4, in one bucket. The in-graph grads (views into the reduced
+    # buffer, e.g. inputs of the compiled optimizer step) are 16-byte aligned. Not bitwise: the two compiles differ.
+    res = {
+        mode: _run_torch_distributed_grad_reduce_in_graph(
+            {"hidden_dim": 63, "num_epochs": 1, "grad_reduce_bucket_mb": 64, "grad_reduce_in_graph": mode == "in_graph"}
+        )
+        for mode in ["explicit", "in_graph"]
+    }
+    assert res["explicit"][0]["misaligned_grads"] == [] and res["in_graph"][0]["misaligned_grads"] == []
+    for p, q in zip(res["explicit"][0]["params"], res["in_graph"][0]["params"]):
+        assert (p - q).abs().max() < 1e-5, (p - q).abs().max()
 
     resumed = {}
     for mode in ["explicit", "in_graph"]:
@@ -3640,6 +3658,7 @@ def _build_cuda_graph_train_config_and_dataset(
     graph_opts: Optional[Dict[str, Any]] = None,
     batch_norm: bool = False,
     dropout: float = 0.0,
+    hidden_dim: int = 64,
 ):
     """
     small RF model + Task12AXDataset config with torch_cuda_graph, see the tests below.
@@ -3648,6 +3667,7 @@ def _build_cuda_graph_train_config_and_dataset(
     count_steps: the model counts its train step calls in an auxiliary parameter.
     graph_opts: further torch_cuda_graph entries.
     batch_norm, dropout: after the first layer (running statistics in auxiliary parameters, RNG).
+    hidden_dim: of the hidden layer.
     """
     from returnn.datasets import init_dataset
     from returnn.tensor import Dim, batch_dim
@@ -3661,7 +3681,7 @@ def _build_cuda_graph_train_config_and_dataset(
         def __init__(self):
             super().__init__()
             self.out_dim = classes_dim
-            hidden = Dim(64, name="hidden")
+            hidden = Dim(hidden_dim, name="hidden")
             # no bias before the batch norm: its grad would be only rounding noise, which Adam scales up
             self.layer = rf.Linear(feat_dim, hidden, with_bias=not batch_norm)
             self.out = rf.Linear(hidden, classes_dim)

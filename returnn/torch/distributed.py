@@ -1013,12 +1013,23 @@ class InGraphGradReducer:
         # the bucket with the last params first, as the backward completes them
         for (_, dtype), indices, _ in sorted(buckets, key=lambda bucket: bucket[1][0], reverse=True):
             bucket = [grads[i] for i in indices]
-            flat = torch.cat([grad.reshape(-1).to(dtype) for grad in bucket])
+            # Each grad at a 16-byte aligned offset: in the grad dtype, the grads are views into the reduced buffer,
+            # the inputs of e.g. the compiled optimizer step, which would copy misaligned ones in every call.
+            align = 16 // torch.tensor([], dtype=dtype).element_size()
+            sizes = [-(-grad.numel() // align) * align for grad in bucket]
+            flat = torch.cat(
+                [
+                    torch.nn.functional.pad(grad.reshape(-1).to(dtype), (0, size - grad.numel()))
+                    if size > grad.numel()
+                    else grad.reshape(-1).to(dtype)
+                    for grad, size in zip(bucket, sizes)
+                ]
+            )
             flat = torch.where(scale[0] > 0, flat, 0)  # no contribution (but NaN-safe)
             flat = torch.ops._c10d_functional.all_reduce(flat, "sum", self.group_name)
             flat = torch.ops._c10d_functional.wait_tensor(flat) * scale[1]
-            for i, view in zip(indices, torch.split(flat, [grad.numel() for grad in bucket])):
-                res[i] = view.view(grads[i].shape).to(grads[i].dtype)
+            for i, view, grad in zip(indices, torch.split(flat, sizes), bucket):
+                res[i] = view[: grad.numel()].view(grad.shape).to(grad.dtype)
         return res
 
 
