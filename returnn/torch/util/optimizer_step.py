@@ -31,6 +31,8 @@ so the same update differs in the last bits, and the params of the ranks drift a
 ``inductor_config`` applies only while the step compiles (e.g. not to the model step).
 E.g. ``{"deterministic": False, "max_autotune_gemm": True}`` benchmarks Triton GEMM templates per matmul shape
 and takes the fastest (Muon's Newton-Schulz on an RTX 5090: 1.3x faster than cuBLAS); safe only for a single rank.
+A compile which is not deterministic (that, or a torch version without the option) with a grad sync over
+more than one rank (``torch_distributed``) logs a warning.
 
 The trace runs the unchanged ``optimizer.step()`` on explicit inputs:
 per param group the lr, per param (with grad) the param, its grad and its tensor state entries.
@@ -100,6 +102,11 @@ class OptimizerStep:
         self._dynamic_state_keys = tuple(opts.get("dynamic_state_keys", ()))
         self._inductor_config: Dict[str, Any] = dict(opts.get("inductor_config", {}))
         opts.assert_all_read()
+        if self._compile and not self._compile_inductor_config().get("deterministic", False):
+            _warn_if_grad_sync(
+                "the compiled step is not deterministic"
+                + (" (inductor_config)" if "deterministic" in self._inductor_config else " (torch without the option)")
+            )
         assert all(isinstance(k, str) for k in self._dynamic_state_keys), (
             f"torch_optimizer_step: dynamic_state_keys must be str, got {self._dynamic_state_keys!r}"
         )
@@ -160,9 +167,7 @@ class OptimizerStep:
             # all outside of any capture
             import torch._inductor.config as inductor_config
 
-            # deterministic by default, see the module docstring
-            config = {"deterministic": True} if hasattr(inductor_config, "deterministic") else {}
-            with inductor_config.patch({**config, **self._inductor_config}):
+            with inductor_config.patch(self._compile_inductor_config()):
                 self._compiled_fn(inputs)
             self._compiled_warm = True
             return
@@ -171,6 +176,13 @@ class OptimizerStep:
             return
         self._capture_graph(inputs)
         self._graph.replay()  # the capture only records, this is the update
+
+    def _compile_inductor_config(self) -> Dict[str, Any]:
+        """:return: torch._inductor.config entries while the step compiles, deterministic by default (module docstring)"""
+        import torch._inductor.config as inductor_config
+
+        config = {"deterministic": True} if hasattr(inductor_config, "deterministic") else {}
+        return {**config, **self._inductor_config}
 
     def invalidate(self):
         """
@@ -379,3 +391,20 @@ class _TensorScalarArgsMode(TorchFunctionMode):
             update = tensor1 * tensor2 if name.startswith("addcmul") else tensor1 / tensor2
             func, args = self._Value[name], (self_, update * value)
         return func(*args, **kwargs)
+
+
+def _warn_if_grad_sync(reason: str):
+    """
+    Warns if the ranks of a grad sync (torch_distributed) apply the averaged grads, each with its own compile:
+    with the given reason the same update can differ in the last bits, so their params drift apart.
+    """
+    from returnn.torch.distributed import get_ctx
+
+    ctx = get_ctx()
+    if ctx is None or ctx.size() <= 1 or not (ctx.reduce_type() == "grad" or ctx.has_grad_sync()):
+        return
+    print(
+        f"WARNING: torch_optimizer_step: {reason}, but the ranks of the grad sync (torch_distributed)"
+        f" apply the same averaged grads each with its own compile, so their params can drift apart",
+        file=log.v1,
+    )

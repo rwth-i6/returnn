@@ -4310,6 +4310,48 @@ def test_torch_optimizer_step_compile_deterministic():
     assert all(torch.equal(results[0], res) for res in results[1:])
 
 
+def test_torch_optimizer_step_not_deterministic_with_grad_sync_warns():
+    """
+    A compile which is not deterministic with a grad sync over several ranks: their params can drift apart, warn.
+    Not with a deterministic compile, a single rank, or a param sync only.
+    """
+    import io
+    import torch._inductor.config as inductor_config
+    from returnn.torch.util import optimizer_step
+    from returnn.torch import distributed
+
+    class _Ctx:
+        def __init__(self, size: int, reduce_type: str):
+            self._size, self._reduce_type = size, reduce_type
+
+        def size(self):
+            return self._size
+
+        def reduce_type(self):
+            return self._reduce_type
+
+        def has_grad_sync(self):
+            return self._reduce_type == "grad_explicit"
+
+    params = [torch.nn.Parameter(torch.zeros(3))]
+    for ctx, inductor_config, expect_warning in [
+        (_Ctx(2, "grad_explicit"), {"deterministic": False}, True),
+        (_Ctx(2, "grad"), {"deterministic": False}, True),
+        (_Ctx(2, "grad_explicit"), {}, not hasattr(inductor_config, "deterministic")),
+        (_Ctx(1, "grad_explicit"), {"deterministic": False}, False),
+        (_Ctx(2, "param"), {"deterministic": False}, False),
+        (None, {"deterministic": False}, False),
+    ]:
+        out = io.StringIO()
+        with unittest.mock.patch.object(distributed, "_is_set_up", True), unittest.mock.patch.object(
+            distributed, "_ctx", ctx
+        ), unittest.mock.patch.object(optimizer_step.log, "v1", out):
+            optimizer_step.OptimizerStep(
+                optimizer=torch.optim.SGD(params, lr=0.1), opts={"capture": False, "inductor_config": inductor_config}
+            )
+        assert ("params can drift apart" in out.getvalue()) == expect_warning, (ctx and vars(ctx), inductor_config)
+
+
 def test_torch_optimizer_step_replaced_grads():
     """new grad buffers: recapture on the new addresses, no retrace"""
     if not torch.cuda.is_available():
