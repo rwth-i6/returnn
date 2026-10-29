@@ -2000,6 +2000,8 @@ def _torch_distributed_sync_levels_worker(rank: int, world_size: int, port: int,
             {"backend": "gloo", "sync": [{"group": 2, "type": "grad"}, {"group": "world", "type": "param", "every": 2}]}
         )
         assert ctx.has_grad_sync() and ctx.maybe_make_distributed_module(torch.nn.Linear(1, 1)) is None
+        pair = [rank - rank % 2, rank - rank % 2 + 1]
+        assert torch.distributed.get_process_group_ranks(ctx.grad_sync_group()) == pair
         # the grad level: control sync on its group every step, then the world level to join when out of data
         levels = ctx.control_sync_levels(epoch_update_step_idx=0, update_step=False, world=False, no_data=False)
         assert [level.group_spec for level in levels] == [2, "world"], levels
@@ -2026,6 +2028,12 @@ def _torch_distributed_sync_levels_worker(rank: int, world_size: int, port: int,
             }
         )
         assert not ctx.has_grad_sync()
+        try:
+            ctx.grad_sync_group()
+        except ValueError:
+            pass
+        else:
+            raise AssertionError("no grad sync, expected ValueError")
         # pairs every 2 updates, node (= world here) every 4: the control sync on the outermost firing level
         assert [
             [level.group_spec for level in ctx.control_sync_levels(
@@ -2691,7 +2699,7 @@ def test_torch_engine_distributed_param_no_sync_at_epoch_end_cpu():
 
 
 def _torch_distributed_all_reduce_avg_flat_worker(rank: int, world_size: int, port: int, tmp_dir: str):
-    from returnn.torch.distributed import _all_reduce_avg_flat, _destroy_process_groups
+    from returnn.torch.distributed import _all_reduce_avg_flat, _destroy_process_groups, _FlatReducer
 
     os.environ.update(MASTER_ADDR="127.0.0.1", MASTER_PORT=str(port), RANK=str(rank), WORLD_SIZE=str(world_size))
     torch.distributed.init_process_group(backend="gloo")
@@ -2711,6 +2719,19 @@ def _torch_distributed_all_reduce_avg_flat_worker(rank: int, world_size: int, po
     _all_reduce_avg_flat(tensors, bucket_bytes=8)
     assert [[float(tensor[0]), float(tensor[-1])] for tensor in tensors] == results
     assert [tensor.dtype for tensor in tensors] == [[torch.float32, torch.float64][i % 2] for i in range(5)]
+    # a kept reducer (the grad sync): the same buffer for new tensors of the same shapes, bucket layout as above
+    reducer = _FlatReducer(bucket_bytes=8)
+    for _ in range(2):
+        tensors = [torch.full((n,), float(100 * rank + i)) for i, n in enumerate([3, 7, 2, 11, 5])]
+        reducer.reduce(tensors)
+        assert [[float(tensor[0]), float(tensor[-1])] for tensor in tensors] == results
+        buffers = {flat.untyped_storage().data_ptr() for _, _, flat, _ in reducer._buckets}
+        assert len(reducer._buckets) == 5 and len(buffers) == 1
+    # in bfloat16: rounded to it (the small integers rank + i and their sums are exact there), the dtype kept
+    tensors = [torch.full((n,), float(rank + i) + 1e-3) for i, n in enumerate([3, 7, 2, 11, 5])]
+    _FlatReducer(dtype=torch.bfloat16).reduce(tensors)
+    assert [[float(tensor[0]), float(tensor[-1])] for tensor in tensors] == [[1.0 + i, 1.0 + i] for i in range(5)]
+    assert all(tensor.dtype == torch.float32 for tensor in tensors)
     with open(f"{tmp_dir}/rank{rank}.txt", "w") as f:
         f.write(repr(results))
     _destroy_process_groups([None])
@@ -2779,6 +2800,8 @@ def _torch_distributed_epoch_end_worker(rank: int, world_size: int, port: int, t
         dataset.init_seq_order(epoch=1)
         engine = Engine(config=config)
         engine.init_train_from_config(train_data=dataset)
+        if engine._torch_distributed_ctx.reduce_type() in ("grad", "grad_explicit"):
+            assert engine._torch_distributed_ctx.grad_sync_group() is None  # all ranks
         engine.train()
         param_sum = float(sum(param.detach().double().sum() for param in engine._pt_model.parameters()))
         meta_keys = sorted(k for k in engine.learning_rate_control.epoch_data[1].meta if k.startswith("epoch_end_"))
@@ -2820,6 +2843,7 @@ def test_torch_distributed_epoch_end_join_cpu():
         {"reduce_type": "grad"},
         {"reduce_type": "grad", "accum": 2},
         {"reduce_type": "grad_explicit", "accum": 3},
+        {"reduce_type": "grad_explicit", "grad_reduce_dtype": "bfloat16"},
         {"reduce_type": "param", "param_sync_step": 4},
         {"sync": [{"group": 2, "type": "grad"}, {"group": "world", "type": "param", "every": 2}]},
     ]:
@@ -2874,6 +2898,98 @@ def test_torch_distributed_all_reduce_avg_flat_buckets():
                 results = eval(f.read())
             # the mean over the ranks of 100 * rank + i
             assert results == [[100.0 + i, 100.0 + i] for i in range(5)], (rank, results)
+
+
+class _AllGatherSGD(torch.optim.Optimizer):
+    """SGD with a collective in its step: the grads all-gathered over the ranks (all equal), their mean applied"""
+
+    def __init__(self, params, lr: float = 0.1):
+        super().__init__(params, {"lr": lr})
+
+    @torch.no_grad()
+    def step(self, closure=None):
+        """update"""
+        group = self.param_groups[0]
+        params = [param for param in group["params"] if param.grad is not None]
+        size = torch.distributed.get_world_size()
+        flat = torch.cat([param.grad.flatten() for param in params])
+        # the functional collective: traceable for the compiled step
+        gathered = torch.ops._c10d_functional.all_gather_into_tensor(
+            flat, size, torch.distributed.group.WORLD.group_name
+        )
+        gathered = torch.ops._c10d_functional.wait_tensor(gathered).view(size, -1).mean(dim=0)
+        offset = 0
+        for param in params:
+            param.add_(gathered[offset : offset + param.numel()].view_as(param), alpha=-group["lr"])
+            offset += param.numel()
+
+
+def _torch_distributed_cuda_graph_nccl_worker(
+    rank: int, world_size: int, port: int, tmp_dir: str, opts: Dict[str, Any]
+):
+    from returnn.datasets import init_dataset
+
+    os.environ.update(
+        MASTER_ADDR="127.0.0.1",
+        MASTER_PORT=str(port),
+        RANK=str(rank),
+        WORLD_SIZE=str(world_size),
+        LOCAL_RANK=str(rank),
+        LOCAL_WORLD_SIZE=str(world_size),
+    )
+    opts = dict(opts)
+    optimizer = opts.pop("optimizer", None)
+    config, _ = _build_cuda_graph_train_config_and_dataset(compile_=False, optimizer_step=True, optimizer=optimizer)
+    config.typed_dict["torch_distributed"] = {
+        "reduce_type": "grad_explicit",
+        "sync_complete_frac": True,
+        "epoch_end": "join",
+        **opts,
+    }
+    # fewer seqs on rank 1: it joins the last steps of each epoch idle
+    num_seqs = [100, 60][rank]
+    dataset = init_dataset({"class": "Task12AXDataset", "num_seqs": num_seqs, "name": "train", "fixed_random_seed": 1})
+    dataset.init_seq_order(epoch=1)
+    with global_config_ctx(config):
+        engine = Engine(config=config)
+        engine.init_train_from_config(train_data=dataset)
+        engine.train()
+        engine.finalize()
+    torch.save([param.detach().cpu() for param in engine._pt_model.parameters()], f"{tmp_dir}/rank{rank}.pt")
+    engine._torch_distributed_ctx.destroy_process_groups()
+
+
+def test_torch_distributed_cuda_graph_grad_explicit_nccl():
+    """
+    2 GPUs, NCCL: captured model step, captured optimizer step, grad_explicit with the kept flat reduce buffer,
+    epoch_end join; also with the grad allreduce in bfloat16,
+    and with a collective in the captured optimizer step (its graph released before the process group is destroyed,
+    else that blocks). The ranks end with the same params.
+    """
+    import socket
+
+    if torch.cuda.device_count() < 2:
+        raise unittest.SkipTest("needs 2 GPUs")
+    results = {}
+    for name, opts in {
+        "float32": {},
+        "bfloat16": {"grad_reduce_dtype": "bfloat16"},
+        "optimizer_collective": {"optimizer": {"class": _AllGatherSGD}},
+    }.items():
+        with socket.socket() as s:
+            s.bind(("127.0.0.1", 0))
+            port = s.getsockname()[1]
+        with tempfile.TemporaryDirectory(prefix="returnn_test_torch_distributed_cuda_graph_nccl") as tmp_dir:
+            _torch_spawn_with_timeout(
+                _torch_distributed_cuda_graph_nccl_worker, args=(2, port, tmp_dir, opts), nprocs=2, timeout=300
+            )
+            params = [torch.load(f"{tmp_dir}/rank{rank}.pt") for rank in range(2)]
+        assert all(torch.equal(p0, p1) for p0, p1 in zip(*params)), name
+        assert all(p.isfinite().all() for p in params[0]), name
+        results[name] = params[0]
+    for p, p_bf16 in zip(results["float32"], results["bfloat16"]):
+        assert not torch.equal(p, p_bf16)  # really reduced in bfloat16
+        assert (p - p_bf16).norm() < 0.05 * p.norm(), ((p - p_bf16).norm(), p.norm())
 
 
 def test_dynamic_learning_rate():
@@ -4066,12 +4182,123 @@ def test_torch_optimizer_step_compile_capture_muon_like():
     assert (opt_step._num_traces, opt_step._num_captures) == (1, 1)
 
 
+def test_torch_optimizer_step_compile_capture_inductor_config():
+    """inductor_config applies while the step compiles, by default deterministic, not after"""
+    if not torch.cuda.is_available():
+        raise unittest.SkipTest("CUDA not available")
+    import torch._inductor.config as inductor_config
+    from torch._inductor.custom_graph_pass import CustomGraphPass
+
+    class _Recorder(CustomGraphPass):
+        def __init__(self):
+            self.seen = []
+
+        def __call__(self, graph: torch.fx.Graph):
+            self.seen.append((inductor_config.deterministic, inductor_config.max_autotune_gemm))
+
+        def uuid(self):
+            return None  # not cacheable: compiles every time
+
+    for user_config, expected in [
+        ({}, (True, False)),
+        ({"deterministic": False, "max_autotune_gemm": True}, (False, True)),
+    ]:
+        recorder = _Recorder()
+        opts = {
+            "dynamic_state_keys": ["step"],
+            "inductor_config": {**user_config, "post_grad_custom_post_pass": recorder},
+        }
+        opt_step = _check_optimizer_step(_MuonLike, opts, ref_opt_factory=_muon_like_float64)
+        assert (opt_step._num_traces, opt_step._num_captures) == (1, 1)
+        assert recorder.seen == [expected]
+    assert inductor_config.post_grad_custom_post_pass is None and not inductor_config.max_autotune_gemm
+
+
+def test_torch_optimizer_step_compile_deterministic():
+    """
+    Compiles of the same step (fresh Inductor caches, as on several ranks) give bitwise the same update
+    with the default inductor_config, i.e. the ranks of a distributed training keep the same params.
+    The step normalizes stacked matrices (as Muon over experts): without "deterministic", the reduction kernel config
+    is picked by timing, and about every second compile differed (torch 2.14, RTX 5090).
+    """
+    if not torch.cuda.is_available():
+        raise unittest.SkipTest("CUDA not available")
+    from torch._inductor.utils import fresh_cache
+    from returnn.torch.util.optimizer_step import OptimizerStep
+
+    class _NormalizedSgd(torch.optim.Optimizer):
+        @torch.no_grad()
+        def step(self, closure=None):
+            """update: -lr * the grad of each matrix normalized, in bfloat16"""
+            for group in self.param_groups:
+                for p in group["params"]:
+                    x = p.grad.bfloat16()
+                    p.add_((x / (x.norm(dim=(-2, -1), keepdim=True) + 1e-7)).float(), alpha=-group["lr"])
+
+    def _run() -> torch.Tensor:
+        gen = torch.Generator(device="cuda").manual_seed(0)
+        param = torch.nn.Parameter(torch.randn((16, 1024, 1024), device="cuda", generator=gen))
+        param.grad = torch.zeros_like(param)
+        opt_step = OptimizerStep(optimizer=_NormalizedSgd([param], {"lr": 1e-2}), opts={})
+        for _ in range(3):
+            param.grad.copy_(torch.randn(param.shape, device="cuda", generator=gen))
+            opt_step.step()
+        assert (opt_step._num_traces, opt_step._num_captures) == (1, 1)
+        return param.detach().clone()
+
+    results = []
+    for _ in range(3):
+        with fresh_cache():
+            results.append(_run())
+    assert all(torch.equal(results[0], res) for res in results[1:])
+
+
 def test_torch_optimizer_step_replaced_grads():
     """new grad buffers: recapture on the new addresses, no retrace"""
     if not torch.cuda.is_available():
         raise unittest.SkipTest("CUDA not available")
     opt_step = _check_optimizer_step(_adamw, {}, replace_grads_at=5)
     assert (opt_step._num_traces, opt_step._num_captures) == (1, 2)
+
+
+class _TunedSgd(torch.optim.Optimizer):
+    """SGD which "autotunes" (host sync, not allowed in a capture) for each new set of shapes with grads, as Triton"""
+
+    def __init__(self, params):
+        super().__init__(params, {"lr": 0.1})
+        self.tuned = set()
+
+    @torch.no_grad()
+    def step(self, closure=None):
+        """update"""
+        group = self.param_groups[0]
+        params = [p for p in group["params"] if p.grad is not None]
+        key = tuple(tuple(p.shape) for p in params)
+        if key not in self.tuned:
+            torch.cuda.synchronize()
+            self.tuned.add(key)
+        for p in params:
+            p.add_(p.grad, alpha=-group["lr"])
+
+
+def test_torch_optimizer_step_recapture_after_warm_step():
+    """
+    another set of params with grads (other shapes) under capture without compile:
+    one uncaptured step before the recapture, so the optimizer's lazy work (here a host sync) is outside of it
+    """
+    from returnn.torch.util.optimizer_step import OptimizerStep
+
+    if not torch.cuda.is_available():
+        raise unittest.SkipTest("CUDA not available")
+    params = [torch.nn.Parameter(torch.zeros(s, device="cuda")) for s in [(4, 3), (5,)]]
+    opt_step = OptimizerStep(optimizer=_TunedSgd(params), opts={"compile": False})
+    for i in range(6):
+        for j, p in enumerate(params):
+            p.grad = None if (i >= 3 and j == 1) else torch.ones_like(p)
+        opt_step.step()
+    assert opt_step._num_captures == 2
+    torch.testing.assert_close(params[0], torch.full_like(params[0], -0.6))
+    torch.testing.assert_close(params[1], torch.full_like(params[1], -0.3))
 
 
 def test_torch_optimizer_step_reload():

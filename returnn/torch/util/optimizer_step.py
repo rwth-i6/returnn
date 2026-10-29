@@ -20,7 +20,17 @@ Config, e.g.::
         "compile": True,  # trace + Inductor-compile the optimizer step (default True)
         "capture": True,  # CUDA-graph capture + replay the (compiled) step (default True)
         "dynamic_state_keys": ["step"],  # Python scalars in the optimizer state to keep as device tensors
+        "inductor_config": {},  # torch._inductor.config entries while the step compiles, see below
     }
+
+The compile is deterministic by default (``inductor_config`` ``"deterministic": True``, if the torch version has it):
+Inductor then does not pick kernel variants which round differently (e.g. the block size of a reduction, like a norm)
+by timing them. Otherwise two compiles (e.g. two ranks of a distributed training) can pick differently,
+so the same update differs in the last bits, and the params of the ranks drift apart
+(measured: a Muon step, two processes compiling with their own cache dirs).
+``inductor_config`` applies only while the step compiles (e.g. not to the model step).
+E.g. ``{"deterministic": False, "max_autotune_gemm": True}`` benchmarks Triton GEMM templates per matmul shape
+and takes the fastest (Muon's Newton-Schulz on an RTX 5090: 1.3x faster than cuBLAS); safe only for a single rank.
 
 The trace runs the unchanged ``optimizer.step()`` on explicit inputs:
 per param group the lr, per param (with grad) the param, its grad and its tensor state entries.
@@ -47,8 +57,9 @@ The checkpoint keeps the ordinary Python scalars for both (see :func:`OptimizerS
 
 The graph records the addresses of all params, grads, state tensors and lrs.
 When any of them is replaced (e.g. the grads were set to None, or the optimizer state was loaded),
-the graph is recaptured (checked on every step). The compiled step takes all of them as inputs,
-so it is only retraced when their shapes, dtypes or the state layout change.
+the graph is recaptured (checked on every step), after one uncaptured step (see :func:`OptimizerStep.invalidate`).
+The compiled step takes all of them as inputs, so it is only retraced when their shapes, dtypes or the state layout
+change.
 
 Requirements (asserted): one CUDA device for all params, no closure, no grad scaler.
 The set of params with grads must stay fixed.
@@ -87,6 +98,7 @@ class OptimizerStep:
         self._compile = bool(opts.get("compile", True))
         self._capture = bool(opts.get("capture", True))
         self._dynamic_state_keys = tuple(opts.get("dynamic_state_keys", ()))
+        self._inductor_config: Dict[str, Any] = dict(opts.get("inductor_config", {}))
         opts.assert_all_read()
         assert all(isinstance(k, str) for k in self._dynamic_state_keys), (
             f"torch_optimizer_step: dynamic_state_keys must be str, got {self._dynamic_state_keys!r}"
@@ -146,7 +158,12 @@ class OptimizerStep:
         if not self._compiled_warm:
             # the first call traces (fake tensors, no update), compiles and autotunes, then updates;
             # all outside of any capture
-            self._compiled_fn(inputs)
+            import torch._inductor.config as inductor_config
+
+            # deterministic by default, see the module docstring
+            config = {"deterministic": True} if hasattr(inductor_config, "deterministic") else {}
+            with inductor_config.patch({**config, **self._inductor_config}):
+                self._compiled_fn(inputs)
             self._compiled_warm = True
             return
         if not self._capture:
@@ -157,9 +174,14 @@ class OptimizerStep:
 
     def invalidate(self):
         """
-        Drop the captured graph, e.g. after the optimizer state was loaded.
-        The next step recaptures (and retraces, if the layout changed).
+        Drop the captured graph, e.g. after the optimizer state was loaded,
+        or before the process group is destroyed when the step has collectives
+        (see :func:`returnn.torch.engine.Engine.finalize`).
+        The next step runs once uncaptured (retraced, if the layout changed), and the one after recaptures:
+        the optimizer may do lazy work for the new inputs which a capture does not allow
+        (e.g. Triton autotuning for new shapes, also with "compile": False).
         """
+        self._compiled_warm = False
         self._graph = None
         self._graph_inputs = None
         self._graph_signature = None
