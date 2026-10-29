@@ -3195,6 +3195,30 @@ class PackedBackend(Backend[PackedRawTensor]):
         return out
 
     @staticmethod
+    def set_sparse_dim(source: Tensor, sparse_dim: Dim) -> Tensor:
+        """
+        set sparse dim, on the virtual tensor and on the inner buffer:
+        ops on the packed data rewrap their result from the inner tensor (:func:`PackedRawTensor.rewrap`),
+        so a sparse dim set on the virtual tensor alone would be lost by the next op (e.g. pad, where).
+        """
+        raw = _raw(source)
+        inner = raw.inner.copy()
+        inner.sparse_dim = sparse_dim
+        out = source.copy_template()
+        out.sparse_dim = sparse_dim
+        out.raw_tensor = PackedRawTensor(
+            inner=inner,
+            packed_dim=raw.packed_dim,
+            orig_dims=raw.orig_dims,
+            dims=out.dims,
+            gap=raw.gap,
+            align=raw.align,
+            layout_lens=raw.layout_lens,
+            content_bound=raw.content_bound,
+        )
+        return out
+
+    @staticmethod
     def stop_gradient(tensor: Tensor) -> Tensor:
         """stop gradient -- on the packed data"""
         raw = _raw(tensor)
