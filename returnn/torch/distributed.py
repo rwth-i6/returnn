@@ -769,6 +769,34 @@ def _all_gather_hostnames(*, size: int) -> List[str]:
 _FLAT_REDUCE_BUCKET_BYTES = 256 * 1024**2
 
 
+def _init_missing_optimizer_state(optimizer: torch.optim.Optimizer, *, group: Optional[torch.distributed.ProcessGroup]):
+    """
+    Before a sync of the optimizer state: a rank without an update yet (epoch_end "join": no batch at all)
+    has none of the state the optimizer creates in its first step. It creates the state now which another rank
+    of the group has (as for zero grads, without a step), so that all of them sync the same tensors.
+    (Its weight in the mean is 0 then, see :func:`_sync_state`.)
+    """
+    import torch.distributed as dist
+    from returnn.torch.updater import init_optimizer_state
+
+    params = [param for param_group in optimizer.param_groups for param in param_group["params"]]
+    has_state = torch.tensor([bool(optimizer.state.get(param)) for param in params], dtype=torch.int32)
+    dist.all_reduce(has_state, op=dist.ReduceOp.MAX, group=group)
+    missing = [param for param, other in zip(params, has_state.tolist()) if other and not optimizer.state.get(param)]
+    if not missing:
+        return
+    grads = [param.grad for param in params]
+    try:
+        for param in params:
+            param.grad = None
+        for param in missing:
+            param.grad = torch.zeros_like(param)  # selects the params which get state
+        init_optimizer_state(optimizer)
+    finally:
+        for param, grad in zip(params, grads):
+            param.grad = grad
+
+
 @torch.no_grad()
 def _all_reduce_avg_flat(
     tensors: List[torch.Tensor],
@@ -907,6 +935,8 @@ def _sync_state(
     """
     import torch.distributed as dist
 
+    if optimizer is not None:
+        _init_missing_optimizer_state(optimizer, group=group)
     tensors = []  # mean
     counters = list(counters)  # max
     objects = []  # (param, leaf index) from the first rank

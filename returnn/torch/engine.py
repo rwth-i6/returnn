@@ -1004,7 +1004,8 @@ class Engine(EngineBase):
         total_slack_ratio = NumbersDict.constant_like(1.0, total_data_size_packed) - (
             total_data_size_packed / total_data_size_computed
         )
-        assert 0.0 <= total_slack_ratio.min_value() <= total_slack_ratio.max_value() <= 1.0
+        # no values: no batch in this epoch (epoch_end "join": a rank without any data)
+        assert all(0.0 <= v <= 1.0 for v in total_slack_ratio.values()), total_slack_ratio
         slack_str = ", ".join(f"{k}: {v:.1%}" for k, v in total_slack_ratio.items())
         print(
             f"Epoch {self.epoch}: Trained {step_idx} steps, {hms(elapsed)} elapsed "

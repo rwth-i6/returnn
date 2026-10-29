@@ -2914,6 +2914,78 @@ def test_torch_distributed_epoch_end_join_partly_used_params_cpu():
     assert len({param_sum for _, _, param_sum, _ in results}) == 1, results
 
 
+def _torch_distributed_epoch_end_join_rank_without_data_worker(
+    rank: int, world_size: int, port: int, tmp_dir: str, opts: Dict[str, Any]
+):
+    from returnn.log import log
+
+    os.environ.update(
+        MASTER_ADDR="127.0.0.1",
+        MASTER_PORT=str(port),
+        RANK=str(rank),
+        WORLD_SIZE=str(world_size),
+        LOCAL_RANK=str(rank),
+        LOCAL_WORLD_SIZE=str(world_size),
+    )
+    log.initialize(logs=[f"{tmp_dir}/log.rank{rank}.txt"], verbosity=[4])
+    config = Config(
+        dict(
+            task="train",
+            device="cpu",
+            extern_data={"data": {"dim": 9}, "classes": {"dim": 2, "sparse": True}},
+            get_model=TrainTestModel,
+            train_step=TrainTestModel.train_step,
+            batch_size=10**9,
+            max_seqs=3,
+            max_seq_length=10**9 if rank == 0 else 1,  # rank 1: every seq is longer, no batch at all
+            optimizer={"class": "adamw"},
+            learning_rate=0.01,
+            num_epochs=2,
+            torch_dataloader_opts={"num_workers": 0},
+            torch_distributed={"backend": "gloo", "sync_complete_frac": True, "epoch_end": "join", **opts},
+        )
+    )
+    with global_config_ctx(config):
+        dataset = init_dataset({"class": "Task12AXDataset", "num_seqs": 12})
+        dataset.init_seq_order(epoch=1)
+        engine = Engine(config=config)
+        engine.init_train_from_config(train_data=dataset)
+        engine.train()
+        param_sum = float(sum(param.detach().double().sum() for param in engine._pt_model.parameters()))
+    with open(f"{tmp_dir}/rank{rank}.txt", "w") as f:
+        f.write(repr(param_sum))
+    engine._torch_distributed_ctx.destroy_process_groups()
+
+
+def test_torch_distributed_epoch_end_join_rank_without_data_cpu():
+    """
+    epoch_end "join", a rank without any batch in the epochs (e.g. an empty shard): it takes part in the updates
+    (grad sync) or the syncs (param sync, also of the optimizer state it never created), the epochs end normally,
+    and the params end up the same.
+    """
+    import socket
+
+    for opts in [
+        {"reduce_type": "grad_explicit"},
+        {"reduce_type": "param", "param_sync_step": 2, "sync_at_epoch_end": True},
+    ]:
+        with socket.socket() as s:
+            s.bind(("127.0.0.1", 0))
+            port = s.getsockname()[1]
+        with tempfile.TemporaryDirectory(prefix="returnn_test_torch_distributed_join_without_data") as tmp_dir:
+            _torch_spawn_with_timeout(
+                _torch_distributed_epoch_end_join_rank_without_data_worker,
+                args=(2, port, tmp_dir, opts),
+                nprocs=2,
+                timeout=120,
+            )
+            results = []
+            for rank in range(2):
+                with open(f"{tmp_dir}/rank{rank}.txt") as f:
+                    results.append(eval(f.read()))
+        assert results[0] == results[1], (opts, results)
+
+
 def test_torch_distributed_epoch_end_stop_cpu():
     """
     epoch_end "stop" (default): the first rank out of data ends the epoch, without epoch end log.
