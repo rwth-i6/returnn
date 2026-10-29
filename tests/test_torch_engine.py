@@ -3040,6 +3040,7 @@ def _build_cuda_graph_train_config_and_dataset(
     optimizer: Optional[Dict[str, Any]] = None,
     count_steps: bool = False,
     graph_opts: Optional[Dict[str, Any]] = None,
+    accum_grad: Optional[int] = None,
 ):
     """
     small RF model + Task12AXDataset config with torch_cuda_graph, see the tests below.
@@ -3047,6 +3048,7 @@ def _build_cuda_graph_train_config_and_dataset(
     optimizer: the config entry, capturable AdamW by default.
     count_steps: the model counts its train step calls in an auxiliary parameter.
     graph_opts: further torch_cuda_graph entries.
+    accum_grad: accum_grad_multiple_step.
     """
     from returnn.datasets import init_dataset
     from returnn.tensor import Dim, batch_dim
@@ -3130,6 +3132,8 @@ def _build_cuda_graph_train_config_and_dataset(
         )
     if optimizer_step:
         config.typed_dict["torch_optimizer_step"] = {}
+    if accum_grad is not None:
+        config.typed_dict["accum_grad_multiple_step"] = accum_grad
     dataset = init_dataset({"class": "Task12AXDataset", "num_seqs": 100, "name": "train", "fixed_random_seed": 1})
     dataset.init_seq_order(epoch=1)
     return config, dataset
@@ -3144,6 +3148,7 @@ def _run_cuda_graph_train(
     optimizer: Optional[Dict[str, Any]] = None,
     count_steps: bool = False,
     graph_opts: Optional[Dict[str, Any]] = None,
+    accum_grad: Optional[int] = None,
 ) -> Engine:
     if not torch.cuda.is_available():
         raise unittest.SkipTest("CUDA not available")
@@ -3155,6 +3160,7 @@ def _run_cuda_graph_train(
         optimizer=optimizer,
         count_steps=count_steps,
         graph_opts=graph_opts,
+        accum_grad=accum_grad,
     )
     with global_config_ctx(config):
         engine = Engine(config=config)
@@ -3699,6 +3705,38 @@ def test_torch_engine_cuda_graph_optimizer_state_in_advance():
                 torch.testing.assert_close(
                     q, p, rtol=1e-4, atol=1e-5, msg=lambda m: f"{optimizer}, compile {compile_}, {name}: {m}"
                 )
+
+
+def test_torch_engine_cuda_graph_grad_accum():
+    """
+    Grad accumulation under graph capture: the static grads accumulate over the replays,
+    the optimizer step (separately captured, torch_optimizer_step) runs once per accumulation cycle.
+    The params after training match the eager engine with the same accumulation,
+    for the plain capture and the compiled step.
+    """
+    eager = _run_cuda_graph_train(compile_=False, cuda_graph=False, optimizer_step=True, accum_grad=2)
+    for compile_, graph_opts in [(False, None), (True, None)]:
+        captured = _run_cuda_graph_train(compile_=compile_, optimizer_step=True, accum_grad=2, graph_opts=graph_opts)
+        assert captured._graph_capture is None  # finalized
+        for (name, p), (_, q) in zip(eager._pt_model.named_parameters(), captured._pt_model.named_parameters()):
+            torch.testing.assert_close(
+                q, p, rtol=1e-4, atol=1e-5, msg=lambda m: f"compile {compile_} {graph_opts}, {name}: {m}"
+            )
+
+
+def test_torch_engine_cuda_graph_grad_accum_capture_optimizer_refused():
+    """the in-graph optimizer step would run every step, not once per accumulation cycle"""
+    if not torch.cuda.is_available():
+        raise unittest.SkipTest("CUDA not available")
+    config, dataset = _build_cuda_graph_train_config_and_dataset(compile_=False, accum_grad=2)
+    with global_config_ctx(config):
+        engine = Engine(config=config)
+        try:
+            engine.init_train_from_config(train_data=dataset)
+        except AssertionError as exc:
+            assert "torch_optimizer_step" in str(exc), exc
+        else:
+            raise Exception("capture_optimizer with grad accumulation not refused")
 
 
 class _MuonLike(torch.optim.Optimizer):
