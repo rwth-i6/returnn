@@ -834,7 +834,7 @@ class Engine(EngineBase):
                             debug_inf_nan(_debug_func, with_grad=True)
                         else:
                             print("(debug_inf_nan not supported under torch_cuda_graph.)", file=log.v1)
-                        if count_nan_inf_params > 0 and self.global_train_step == 1:
+                        if extern_data is not None and count_nan_inf_params > 0 and self.global_train_step == 1:
                             print(
                                 "This was the second step, so likely the first step grad was broken."
                                 " Try again with reset model...",
