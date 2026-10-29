@@ -2948,6 +2948,9 @@ def _torch_distributed_reduce_grads_worker(rank: int, world_size: int, port: int
     in_graph = ctx.make_in_graph_grad_reducer(device=torch.device("cpu"))
     for name, contribute, num_ranks in [("in_graph", True, None), ("in_graph_join", rank < world_size - 1, 2)]:
         _set_grads()
+        if not contribute:  # the idle step runs on some batch, which can give NaN: no contribution all the same
+            for param in module.parameters():
+                param.grad.fill_(float("nan"))
         in_graph.set_contributing(contribute, num_ranks=num_ranks)
         grads = in_graph.reduce([param.grad for param in module.parameters()], in_graph.scale)
         results[name] = sorted({float(v) for grad in grads for v in grad.flatten()})
@@ -2959,7 +2962,8 @@ def _torch_distributed_reduce_grads_worker(rank: int, world_size: int, port: int
 def test_torch_distributed_reduce_grads_cpu():
     """
     The grad allreduce of grad_explicit (gloo, 3 ranks): the mean over all ranks, with epoch_end join the mean over
-    the ranks with data only; with grad_reduce_dtype in that dtype. The same with grad_reduce_in_graph (eager here).
+    the ranks with data only; with grad_reduce_dtype in that dtype. The same with grad_reduce_in_graph (eager here),
+    also when the rank without contribution has NaN grads.
     """
     import socket
     import torch.multiprocessing
@@ -3091,6 +3095,26 @@ def test_torch_distributed_grad_reduce_options_cpu():
     assert results["buckets {'grad_reduce_bucket_mb': 6.103515625e-05}"] == (4, 64), results
 
 
+def test_torch_distributed_grad_reduce_in_graph_deterministic_warning():
+    """
+    Inductor's deterministic mode skips the reordering for the overlap (torch 2.14): the in-graph reduce warns.
+    """
+    import io
+    import torch._inductor.config as inductor_config
+    from returnn.log import log
+    from returnn.torch.distributed import InGraphGradReducer
+
+    for deterministic in [False, True]:
+        orig_stream, log.v1 = log.v1, io.StringIO()
+        try:
+            with inductor_config.patch(deterministic=deterministic):
+                InGraphGradReducer.compile_config()
+            out = log.v1.getvalue()
+        finally:
+            log.v1 = orig_stream
+        assert ("deterministic mode" in out) == deterministic, out
+
+
 def _torch_distributed_cuda_graph_nccl_worker(
     rank: int, world_size: int, port: int, tmp_dir: str, opts: Dict[str, Any]
 ):
@@ -3149,6 +3173,33 @@ def test_torch_distributed_cuda_graph_grad_explicit_nccl():
     for p, p_bf16 in zip(results["float32"], results["bfloat16"]):
         assert not torch.equal(p, p_bf16)  # really reduced in bfloat16
         assert (p - p_bf16).norm() < 0.05 * p.norm(), ((p - p_bf16).norm(), p.norm())
+
+
+def _compiled_kernel_order() -> Optional[str]:
+    """
+    :return: of the compiled step with the in-graph allreduce (Inductor's generated code in this process),
+        the order of the calls: "C" an allreduce, "W" its wait, "k" another kernel; None if there is none
+    """
+    # noinspection PyProtectedMember
+    from torch._inductor.codecache import PyCodeCache
+
+    for module in PyCodeCache.modules:
+        source = open(module.__file__).read()
+        if "_c10d_functional.all_reduce_.default(" not in source:
+            continue
+        order = ""
+        for line in source[source.index("def call(") :].splitlines():
+            line = line.strip()
+            if line.startswith("#"):
+                continue
+            if "_c10d_functional.all_reduce_.default(" in line:
+                order += "C"
+            elif "_c10d_functional.wait_tensor.default(" in line:
+                order += "W"
+            elif ".run(" in line or "extern_kernels." in line:
+                order += "k"
+        return order
+    return None
 
 
 def _torch_distributed_grad_reduce_in_graph_worker(
@@ -3258,6 +3309,7 @@ def _torch_distributed_grad_reduce_in_graph_worker(
             ],
             "rng": torch.cuda.get_rng_state(),
             "explicit_reduce_buffer": bool(engine._torch_distributed_ctx._grad_reducer._buckets),
+            "kernel_order": _compiled_kernel_order(),
             "misaligned_grads": [
                 name for name, param in model.named_parameters() if param.grad is not None and param.grad.data_ptr() % 16
             ],
@@ -3321,6 +3373,13 @@ def test_torch_distributed_cuda_graph_grad_reduce_in_graph_nccl():
         assert [res["calls"] for res in in_graph] == [{"explicit": warmup, "idle": i} for i in [0, 18]], name
         # the kept buffer of the explicit reduce: freed once the step reduces in-graph
         assert [res["explicit_reduce_buffer"] for res in explicit + in_graph] == [True, True, False, False], name
+        # The overlap: every allreduce but the last (the bucket of the first params, complete at the end of the
+        # backward) is issued before some compute of the step, before its wait (here, 1 to 4 kernels).
+        # Without the reordering for it, the first two have none (and on the speech LM, all are at the end).
+        order = in_graph[0]["kernel_order"]
+        assert order and order.count("C") >= 4, (name, order)  # 5 buckets in float32, 4 in bfloat16
+        overlapped = [part.split("W")[0].count("k") for part in order.split("C")[1:]]
+        assert all(n >= 1 for n in overlapped[:-1]), (name, order, overlapped)
         assert [res["calls"] for res in explicit] == [{"explicit": 46, "idle": 0}] * 2, name
     for p, p_bf16 in zip(results[("float32", "in_graph")][0]["params"], results[("bfloat16", "in_graph")][0]["params"]):
         assert not torch.equal(p, p_bf16)  # really reduced in bfloat16

@@ -965,14 +965,20 @@ class InGraphGradReducer:
     see :func:`returnn.torch.util.capture_lock.replay`.
     Tested with torch 2.14.1 and NCCL 2.30.7.
 
-    Same numerics as :class:`_FlatReducer`: the sum, multiplied by the float32 reciprocal of the divisor
-    (as the eager division does), i.e. bitwise the same averaged grads from the same local grads.
-    One exception: with a ``dtype`` below the grad dtype (e.g. bfloat16), Inductor fuses the multiplication with
-    the conversion to the grad dtype and does not round the product to ``dtype`` in between,
-    so with a divisor which is not a power of two (e.g. 3 ranks) the result is more precise than the one of
-    :class:`_FlatReducer`, i.e. differs in the last bit of ``dtype``.
-    (The local grads of two compiles of a step can differ in the last bits anyway, also without this option:
-    Inductor picks some reduction kernel configs by timing.)
+    Numerics: the sum, multiplied by the float32 reciprocal of the divisor, as :class:`_FlatReducer` does.
+    Bitwise the same params as with :class:`_FlatReducer` hold only in simple cases (tested: 2 ranks, a small
+    model with batch norm and dropout, with epoch_end join), as the local grads differ in the last bits:
+
+    - The compiled step is another graph than without the option. Inductor may fuse the bucket copy and mask
+      into the kernels which compute the grads (e.g. reductions such as bias grads) and then compute them in
+      another order (seen with a hidden size of 63, and on the speech LM).
+      Also two compiles of the same step can differ in the last bits: Inductor picks some reduction kernel
+      configs by timing.
+    - At >= 3 ranks, the summation order of the ring allreduce depends on the position in the buffer, i.e. on the
+      bucket layout: the bucket size, and here the 16-byte alignment of each grad (zero padding).
+    - With a ``dtype`` below the grad dtype (e.g. bfloat16), Inductor fuses the multiplication with the conversion
+      to the grad dtype and does not round the product to ``dtype`` in between, so with a divisor which is not
+      a power of two (e.g. 3 ranks) the result is more precise than the one of :class:`_FlatReducer`.
     """
 
     def __init__(
@@ -1017,11 +1023,26 @@ class InGraphGradReducer:
     @staticmethod
     def compile_config() -> Dict[str, Any]:
         """
+        Warns when Inductor would skip it: in its deterministic mode (``torch._inductor.config.deterministic``,
+        env TORCHINDUCTOR_DETERMINISTIC=1), it does not run the reordering passes (torch 2.14),
+        so the allreduces would be at the end of the backward, not overlapped (still correct).
+
         :return: torch._inductor.config entries while the train step compiles:
             each bucket allreduce together with the compute it needs (its grads) goes as early as possible,
             in their order (raise_comms), after Inductor's reordering for peak memory, which would otherwise
             delay the grads of a bucket (e.g. the weight grad matmuls) up to the end of the backward
         """
+        import torch._inductor.config as inductor_config
+
+        if getattr(inductor_config, "deterministic", False):
+            from returnn.log import log
+
+            print(
+                "WARNING: torch_distributed grad_reduce_in_graph: Inductor is in deterministic mode"
+                " (torch._inductor.config.deterministic, e.g. env TORCHINDUCTOR_DETERMINISTIC=1), which skips"
+                " the reordering for the overlap: the grad allreduces are not overlapped with the backward.",
+                file=log.v1,
+            )
         return {"reorder_for_compute_comm_overlap": True, "reorder_for_compute_comm_overlap_passes": ["raise_comms"]}
 
     def reduce(self, grads: List[torch.Tensor], scale: torch.Tensor) -> List[torch.Tensor]:
