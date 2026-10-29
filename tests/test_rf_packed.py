@@ -612,6 +612,34 @@ def test_gather_packed_keeps_sparse_dim():
     assert out.sparse_dim == wider, f"sparse dim lost: {out.sparse_dim}"
 
 
+def test_set_sparse_dim_packed_survives_ops():
+    # rf.set_sparse_dim on a packed tensor reaches the inner buffer,
+    # so ops rewrapping from it (pad with and without re-layout, where, gather) keep the new sparse dim
+    rf.select_backend_torch()
+    x, batch_dim, time_dim, feat_dim = _make_input(batch_size=2, seq_lens=(4, 2))
+    vocab = Dim(7, name="vocab")
+    labels = Tensor(
+        "labels",
+        dims=[batch_dim, time_dim],
+        dtype="int32",
+        raw_tensor=torch.randint(0, 7, (2, 4), dtype=torch.int32),
+        sparse_dim=vocab,
+    )
+    other_vocab = Dim(7, name="other-vocab")
+    for gap in (0, 2):
+        lp = rf.set_sparse_dim(packed.pack(labels, dims=(batch_dim, time_dim), gap=gap), other_vocab)
+        assert packed.is_packed(lp) and lp.sparse_dim == other_vocab
+        assert lp.raw_tensor.inner.sparse_dim == other_vocab
+        padded, (pad_dim,) = rf.pad(lp, axes=[time_dim], padding=[(1, 0)], value=0)
+        assert packed.is_packed(padded) and padded.sparse_dim == other_vocab, (gap, padded.sparse_dim)
+        assert rf.where(lp >= 1, lp, 0).sparse_dim == other_vocab
+        out = rf.gather(lp, indices=rf.range_over_dim(time_dim) + 1, axis=time_dim, clip_to_valid=True)
+        assert out.sparse_dim == other_vocab
+        unpacked = packed.unpack(padded).copy_transpose([batch_dim, pad_dim]).raw_tensor
+        assert unpacked[0, 1:5].tolist() == labels.raw_tensor[0].tolist()
+        assert unpacked[1, 1:3].tolist() == labels.raw_tensor[1, :2].tolist()
+
+
 def test_repeat_packed_static_traceable():
     # the captured regime: batch_size_bound makes the batch dim static, so the repeat buffer
     # must be a static size derived from the declared expansion factor
