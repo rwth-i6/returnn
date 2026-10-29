@@ -2944,6 +2944,13 @@ def _torch_distributed_reduce_grads_worker(rank: int, world_size: int, port: int
     _set_grads()
     num = ctx.reduce_grads_join(module=module, num_batches=int(rank < world_size - 1), accum_grad_multiple_step=1)
     results["join"] = (num, _grad_values())
+    # grad_reduce_in_graph: the reduce of the captured step, here eager
+    in_graph = ctx.make_in_graph_grad_reducer(device=torch.device("cpu"))
+    for name, contribute, num_ranks in [("in_graph", True, None), ("in_graph_join", rank < world_size - 1, 2)]:
+        _set_grads()
+        in_graph.set_contributing(contribute, num_ranks=num_ranks)
+        grads = in_graph.reduce([param.grad for param in module.parameters()], in_graph.scale)
+        results[name] = sorted({float(v) for grad in grads for v in grad.flatten()})
     with open(f"{tmp_dir}/rank{rank}.txt", "w") as f:
         f.write(repr(results))
     ctx.destroy_process_groups()
@@ -2952,7 +2959,7 @@ def _torch_distributed_reduce_grads_worker(rank: int, world_size: int, port: int
 def test_torch_distributed_reduce_grads_cpu():
     """
     The grad allreduce of grad_explicit (gloo, 3 ranks): the mean over all ranks, with epoch_end join the mean over
-    the ranks with data only; with grad_reduce_dtype in that dtype.
+    the ranks with data only; with grad_reduce_dtype in that dtype. The same with grad_reduce_in_graph (eager here).
     """
     import socket
     import torch.multiprocessing
@@ -2962,6 +2969,7 @@ def test_torch_distributed_reduce_grads_cpu():
         ({}, {"all": [2.0 + 2**-10], "join": (2.0, [1.5 + 2**-10])}),
         ({"grad_reduce_dtype": "bfloat16"}, {"all": [2.0], "join": (2.0, [1.5])}),  # the grads rounded to r + 1
     ]:
+        opts["grad_reduce_in_graph"] = True
         with socket.socket() as s:
             s.bind(("127.0.0.1", 0))
             port = s.getsockname()[1]
@@ -2973,7 +2981,9 @@ def test_torch_distributed_reduce_grads_cpu():
                 with open(f"{tmp_dir}/rank{rank}.txt") as f:
                     results = eval(f.read())
                 assert results["join"] == expected["join"], (opts, rank, results)
-                assert len(results["all"]) == 1 and abs(results["all"][0] - expected["all"][0]) < 1e-6, (opts, results)
+                assert results["in_graph_join"] == expected["join"][1], (opts, rank, results)
+                for key in ["all", "in_graph"]:
+                    assert len(results[key]) == 1 and abs(results[key][0] - expected["all"][0]) < 1e-6, (opts, results)
 
 
 def _torch_distributed_cuda_graph_nccl_worker(
@@ -3034,6 +3044,172 @@ def test_torch_distributed_cuda_graph_grad_explicit_nccl():
     for p, p_bf16 in zip(results["float32"], results["bfloat16"]):
         assert not torch.equal(p, p_bf16)  # really reduced in bfloat16
         assert (p - p_bf16).norm() < 0.05 * p.norm(), ((p - p_bf16).norm(), p.norm())
+
+
+def _torch_distributed_grad_reduce_in_graph_worker(
+    rank: int, world_size: int, port: int, tmp_dir: str, opts: Dict[str, Any]
+):
+    """
+    2 GPUs, NCCL: the small model of :func:`_build_cuda_graph_train_config_and_dataset`, compiled and captured,
+    grad_explicit with epoch_end join, rank 1 with fewer seqs. Writes the params, the calls of the explicit
+    grad reduce and of the idle steps, or the error.
+
+    :param opts: torch_distributed entries, and "num_seqs" (per rank), "num_epochs", "model" (checkpoint prefix),
+        "warmup_steps", "exit_at_step" (rank 1 exits in this step, as by a crash),
+        "reduce_timeout_sec" (in-graph allreduce timeout, instead of the one of the process group)
+    """
+    from returnn.datasets import init_dataset
+    from returnn.torch.distributed import DistributedContext
+    from returnn.torch.util.graph_capture import GraphCapturedTrainStep
+
+    os.environ.update(
+        MASTER_ADDR="127.0.0.1",
+        MASTER_PORT=str(port),
+        RANK=str(rank),
+        WORLD_SIZE=str(world_size),
+        LOCAL_RANK=str(rank),
+        LOCAL_WORLD_SIZE=str(world_size),
+    )
+    opts = dict(opts)
+    num_seqs = opts.pop("num_seqs", [100, 60])[rank]
+    exit_at_step = opts.pop("exit_at_step", None)
+    reduce_timeout_sec = opts.pop("reduce_timeout_sec", None)
+    config, _ = _build_cuda_graph_train_config_and_dataset(
+        compile_=True, warmup_steps=opts.pop("warmup_steps", 0), optimizer_step=True
+    )
+    config.typed_dict["num_epochs"] = opts.pop("num_epochs", 2)
+    if "model" in opts:
+        config.typed_dict["model"] = opts.pop("model")
+    config.typed_dict["torch_distributed"] = {
+        "reduce_type": "grad_explicit",
+        "sync_complete_frac": True,
+        "epoch_end": "join",
+        "grad_reduce_bucket_mb": 256 / 1024**2,  # several allreduces per step, as for a large model
+        **opts,
+    }
+    calls = {"explicit": 0, "idle": 0}
+
+    def _count(cls, name: str, key: str):
+        orig = getattr(cls, name)
+
+        def _wrapped(*args, **kwargs):
+            calls[key] += 1
+            return orig(*args, **kwargs)
+
+        setattr(cls, name, _wrapped)
+
+    _count(DistributedContext, "maybe_reduce_grads", "explicit")
+    _count(DistributedContext, "reduce_grads_join", "explicit")
+    _count(GraphCapturedTrainStep, "run_idle_step", "idle")
+    if rank == 1 and exit_at_step is not None:
+        orig_run_train_step = GraphCapturedTrainStep.run_train_step
+
+        def _run_train_step(self, extern_data_raw, *, global_train_step):
+            if global_train_step == exit_at_step:
+                os._exit(0)  # after the control sync of the step, before its allreduce
+            return orig_run_train_step(self, extern_data_raw, global_train_step=global_train_step)
+
+        GraphCapturedTrainStep.run_train_step = _run_train_step
+
+    # Inductor picks some reduction kernel configs by timing, which changes the rounding of the local grads, so
+    # that two compiles of the same step differ in the last bits; only configs where the choice does not matter
+    import torch._inductor.config as inductor_config
+
+    inductor_config.test_configs.force_filter_reduction_configs = True
+    dataset = init_dataset({"class": "Task12AXDataset", "num_seqs": num_seqs, "name": "train", "fixed_random_seed": 1})
+    dataset.init_seq_order(epoch=1)
+    with global_config_ctx(config):
+        engine = Engine(config=config)
+        engine.init_train_from_config(train_data=dataset)
+        if reduce_timeout_sec is not None:
+            engine._in_graph_grad_reducer.timeout_sec = reduce_timeout_sec
+        try:
+            engine.train()
+        except Exception as exc:
+            torch.save({"error": f"{type(exc).__name__}: {exc}"}, f"{tmp_dir}/rank{rank}.pt")
+            os._exit(0)  # no teardown: after a timeout, the communicator is aborted
+        engine.finalize()
+    params = [param.detach().cpu() for param in engine._pt_model.parameters()]
+    torch.save({"params": params, "calls": calls}, f"{tmp_dir}/rank{rank}.pt")
+    engine._torch_distributed_ctx.destroy_process_groups()
+
+
+def _run_torch_distributed_grad_reduce_in_graph(opts: Dict[str, Any]) -> List[Dict[str, Any]]:
+    import socket
+
+    if torch.cuda.device_count() < 2:
+        raise unittest.SkipTest("needs 2 GPUs")
+    with socket.socket() as s:
+        s.bind(("127.0.0.1", 0))
+        port = s.getsockname()[1]
+    with tempfile.TemporaryDirectory(prefix="returnn_test_torch_distributed_grad_reduce_in_graph") as tmp_dir:
+        _torch_spawn_with_timeout(
+            _torch_distributed_grad_reduce_in_graph_worker, args=(2, port, tmp_dir, opts), nprocs=2, timeout=300
+        )
+        return [
+            torch.load(f"{tmp_dir}/rank{rank}.pt") if os.path.exists(f"{tmp_dir}/rank{rank}.pt") else None
+            for rank in range(2)
+        ]
+
+
+def test_torch_distributed_cuda_graph_grad_reduce_in_graph_nccl():
+    """
+    2 GPUs, NCCL, grad_reduce_in_graph: the grad allreduce inside the captured step gives bitwise the params of the
+    explicit allreduce after the step (with a deterministic compile, see the worker), in float32 and bfloat16
+    (there after eager warmup steps, which reduce explicitly). With epoch_end join: rank 1 runs out of data first
+    in each epoch, and then joins the allreduce of the other rank with its idle steps.
+    Also resumed from the checkpoint of epoch 1 (in a new process): the same params as resumed without the option.
+    """
+    results = {}
+    # bfloat16 also with eager warmup steps before the compile, which reduce explicitly
+    for name, opts in {"float32": {}, "bfloat16": {"grad_reduce_dtype": "bfloat16", "warmup_steps": 2}}.items():
+        for mode in ["explicit", "in_graph"]:
+            res = _run_torch_distributed_grad_reduce_in_graph({**opts, "grad_reduce_in_graph": mode == "in_graph"})
+            assert all(torch.equal(p0, p1) for p0, p1 in zip(res[0]["params"], res[1]["params"])), (name, mode)
+            assert all(p.isfinite().all() for p in res[0]["params"]), (name, mode)
+            results[(name, mode)] = res
+        explicit, in_graph = results[(name, "explicit")], results[(name, "in_graph")]
+        assert all(torch.equal(p, q) for p, q in zip(explicit[0]["params"], in_graph[0]["params"])), name
+        # 23 steps per epoch, rank 1 without data in the last 9
+        warmup = opts.get("warmup_steps", 0)
+        assert [res["calls"] for res in in_graph] == [{"explicit": warmup, "idle": i} for i in [0, 18]], name
+        assert [res["calls"] for res in explicit] == [{"explicit": 46, "idle": 0}] * 2, name
+    for p, p_bf16 in zip(results[("float32", "in_graph")][0]["params"], results[("bfloat16", "in_graph")][0]["params"]):
+        assert not torch.equal(p, p_bf16)  # really reduced in bfloat16
+
+    resumed = {}
+    for mode in ["explicit", "in_graph"]:
+        with tempfile.TemporaryDirectory(prefix="returnn_test_torch_distributed_grad_reduce_in_graph_model") as tmp_dir:
+            opts = {"grad_reduce_in_graph": mode == "in_graph", "model": f"{tmp_dir}/model"}
+            _run_torch_distributed_grad_reduce_in_graph({**opts, "num_epochs": 1})
+            resumed[mode] = _run_torch_distributed_grad_reduce_in_graph({**opts, "num_epochs": 2})
+        assert all(torch.equal(p0, p1) for p0, p1 in zip(resumed[mode][0]["params"], resumed[mode][1]["params"]))
+    assert all(torch.equal(p, q) for p, q in zip(resumed["explicit"][0]["params"], resumed["in_graph"][0]["params"]))
+
+
+def test_torch_distributed_cuda_graph_grad_reduce_in_graph_errors_nccl():
+    """
+    grad_reduce_in_graph, no hang where the allreduce cannot be joined:
+    a rank out of data before the step is compiled (here: in the eager warmup steps) ends all ranks with an error,
+    and a rank which is gone in the middle of a step (crashed) ends the other one after the timeout.
+    """
+    res = _run_torch_distributed_grad_reduce_in_graph(
+        {"grad_reduce_in_graph": True, "num_seqs": [100, 10], "warmup_steps": 50}
+    )
+    assert all("ran out of data before the train step was compiled" in r["error"] for r in res), res
+
+    # rank 0 waits for the allreduce of the captured step (not watched by the NCCL watchdog) at most the timeout,
+    # then ends its process, as the NCCL watchdog does
+    start = time.monotonic()
+    try:
+        _run_torch_distributed_grad_reduce_in_graph(
+            {"grad_reduce_in_graph": True, "exit_at_step": 5, "reduce_timeout_sec": 10}
+        )
+    except torch.multiprocessing.ProcessExitedException as exc:
+        assert (exc.error_index, exc.exit_code) == (0, 1), exc
+    else:
+        raise AssertionError("rank 0 did not end")
+    assert time.monotonic() - start < 200
 
 
 def test_dynamic_learning_rate():

@@ -10,6 +10,7 @@ import socket
 from datetime import timedelta
 from typing import Optional, Union, Any, Sequence, Tuple, List, Dict
 
+import numpy
 import torch
 import tree
 from torch.nn.parallel import DistributedDataParallel
@@ -48,6 +49,17 @@ class DistributedContext:
     (the division by a non-power-of-two rank count too).
     Measured for bfloat16 against the float32 allreduce (random normal grads): relative RMS error of the averaged
     grads 0.24 % at 2 ranks, 0.33 % at 3 ranks.
+
+    ``grad_reduce_bucket_mb`` (default 256, with ``grad_reduce_in_graph`` 64): the grad sync allreduces the grads
+    in buckets of at most this size, one allreduce per bucket, see :class:`_FlatReducer`.
+    In the graph, the bucket of the first params is only complete at the end of the backward, i.e. not overlapped,
+    and every bucket waits for the previous one: measured best with 64 (vs 16 and 256) for 109M and 656M params
+    on 2 GPUs over PCIe.
+
+    ``grad_reduce_in_graph`` (default False): the grad allreduce runs inside the compiled and captured train step
+    (``torch_cuda_graph`` with ``compile``), overlapped with the rest of the backward,
+    instead of after the step, see :class:`InGraphGradReducer` (also for the requirements and the numerics).
+    Needs a grad sync over all ranks (e.g. reduce_type "grad_explicit").
     """
 
     def __init__(self, options: Dict[str, Any]):
@@ -168,7 +180,16 @@ class DistributedContext:
             assert self.has_grad_sync(), "torch_distributed: grad_reduce_dtype needs a grad sync level"
             grad_reduce_dtype = getattr(torch, grad_reduce_dtype)
             assert isinstance(grad_reduce_dtype, torch.dtype), "torch_distributed: invalid grad_reduce_dtype"
-        self._grad_reducer = _FlatReducer(dtype=grad_reduce_dtype)
+        self._grad_reduce_in_graph = bool(self._opts.get("grad_reduce_in_graph", False))
+        if self._grad_reduce_in_graph:
+            # The step of a rank out of data (epoch_end "join") must run the same in-graph allreduce
+            # with the same divisor: one group, the one of the control sync, which counts the ranks with data.
+            assert self.has_grad_sync() and self._sync_levels[0].group_spec == "world", (
+                "torch_distributed: grad_reduce_in_graph needs a grad sync over all ranks,"
+                " e.g. reduce_type 'grad_explicit'"
+            )
+        bucket_mb = self._opts.get("grad_reduce_bucket_mb", 64 if self._grad_reduce_in_graph else 256)
+        self._grad_reducer = _FlatReducer(dtype=grad_reduce_dtype, bucket_bytes=int(bucket_mb * 1024**2))
 
         self._check_no_unknown_opts()
 
@@ -291,6 +312,28 @@ class DistributedContext:
         level = self._sync_levels[0]
         assert level.sync_type == "grad"
         self._grad_reducer.reduce([p.grad for p in module.parameters() if p.grad is not None], group=level.group)
+
+    def grad_reduce_in_graph(self) -> bool:
+        """
+        :return: whether the grads are averaged inside the captured train step (option ``grad_reduce_in_graph``),
+            see :func:`make_in_graph_grad_reducer`
+        """
+        return self._grad_reduce_in_graph
+
+    def make_in_graph_grad_reducer(self, *, device: torch.device) -> Optional[InGraphGradReducer]:
+        """
+        :param device: of the grads
+        :return: for the captured train step with ``grad_reduce_in_graph``, else None
+        """
+        if not self._grad_reduce_in_graph:
+            return None
+        return InGraphGradReducer(
+            dtype=self._grad_reducer.dtype,
+            group=self._sync_levels[0].group,
+            device=device,
+            timeout_sec=self._opts.get("timeout_sec", 1800),
+            bucket_bytes=self._grad_reducer.bucket_bytes,
+        )
 
     def epoch_end_join(self) -> bool:
         """
@@ -795,9 +838,9 @@ class _FlatReducer:
         :param sync_on_cpu: allreduce in a CPU buffer (e.g. with Gloo for a CUDA module)
         :param bucket_bytes: of one flat buffer; a tensor larger than that gets a bucket of its own
         """
-        self._dtype = dtype
+        self.dtype = dtype
         self._sync_on_cpu = sync_on_cpu
-        self._bucket_bytes = bucket_bytes
+        self.bucket_bytes = bucket_bytes
         self._key: Optional[List[Tuple[torch.dtype, torch.Size, torch.device]]] = None
         self._buckets: List[Tuple[List[int], torch.Tensor, List[torch.Tensor]]] = []  # tensor indices, flat, views
 
@@ -832,7 +875,7 @@ class _FlatReducer:
 
     def _build(self, tensors: List[torch.Tensor]):
         buckets = _bucket_layout(
-            tensors, dtype=self._dtype, sync_on_cpu=self._sync_on_cpu, bucket_bytes=self._bucket_bytes
+            tensors, dtype=self.dtype, sync_on_cpu=self._sync_on_cpu, bucket_bytes=self.bucket_bytes
         )
         sizes: Dict[Tuple[torch.device, torch.dtype], int] = {}  # key -> max bucket numel
         for key, _, numel in buckets:
@@ -870,6 +913,115 @@ def _bucket_layout(
         key_buckets[-1][0].append(i)
         key_buckets[-1][1] += tensor.numel()
     return [(key, indices, numel) for key, key_buckets in buckets.items() for indices, numel in key_buckets]
+
+
+class InGraphGradReducer:
+    """
+    The grad allreduce (reduce_type "grad_explicit", option ``grad_reduce_in_graph``)
+    inside the traced, compiled and captured train step, see :mod:`returnn.torch.util.graph_capture`,
+    instead of :func:`DistributedContext.maybe_reduce_grads` after it.
+
+    The grads go into the same buckets as with :class:`_FlatReducer`, one functional allreduce
+    (``torch.ops._c10d_functional``) per bucket, the bucket of the last params first: the backward completes the grads
+    of the last params first. Inductor then issues each allreduce as soon as its bucket is complete
+    (the "raise_comms" reordering, see :func:`compile_config`). It keeps the collectives of a group in their order,
+    each one waits for the previous one, and the waits are as late as that allows (simple_overlap, torch 2.14).
+    NCCL runs the allreduces on its own stream, which the CUDA graph captures as a branch of the step,
+    so the communication overlaps with the rest of the backward; only the bucket of the first params,
+    which is complete at the end of the backward, cannot (hence smaller buckets, ``grad_reduce_bucket_mb``).
+
+    The divisor and whether this rank contributes are a device input of the step (:func:`set_contributing`),
+    as a rank out of data (epoch_end "join") runs the same step, with the same collectives,
+    on its last batch with a zero contribution (see :func:`GraphCapturedTrainStep.run_idle_step`).
+    Every rank runs the same compiled graph, so the collectives match without further assumptions.
+    A rank must not run out of data before the step is compiled (all ranks raise then).
+    The NCCL communicator is created by the eager runs of the compile, before the capture.
+    The NCCL watchdog does not watch collectives inside a CUDA graph, so the step waits for its end itself,
+    see :func:`GraphCapturedTrainStep._wait_collectives`.
+    Tested with torch 2.14.1 and NCCL 2.30.7.
+
+    Same numerics as :class:`_FlatReducer`: the sum, multiplied by the float32 reciprocal of the divisor
+    (as the eager division does), i.e. bitwise the same averaged grads from the same local grads.
+    One exception: with a ``dtype`` below the grad dtype (e.g. bfloat16), Inductor fuses the multiplication with
+    the conversion to the grad dtype and does not round the product to ``dtype`` in between,
+    so with a divisor which is not a power of two (e.g. 3 ranks) the result is more precise than the one of
+    :class:`_FlatReducer`, i.e. differs in the last bit of ``dtype``.
+    (The local grads of two compiles of a step can differ in the last bits anyway, also without this option:
+    Inductor picks some reduction kernel configs by timing.)
+    """
+
+    def __init__(
+        self,
+        *,
+        dtype: Optional[torch.dtype],
+        group: Optional[torch.distributed.ProcessGroup],
+        device: torch.device,
+        timeout_sec: float,
+        bucket_bytes: int = _FLAT_REDUCE_BUCKET_BYTES,
+    ):
+        """
+        :param dtype: allreduce in this dtype, None: the grad dtype
+        :param group: None: all ranks
+        :param device: of the grads
+        :param timeout_sec: see :func:`GraphCapturedTrainStep._wait_collectives`
+        :param bucket_bytes: see :class:`_FlatReducer`
+        """
+        import torch.distributed as dist
+
+        self.dtype = dtype
+        self.bucket_bytes = bucket_bytes
+        self.group_name = (group or dist.group.WORLD).group_name
+        self.group_size = dist.get_world_size(group=group)
+        self.timeout_sec = timeout_sec
+        # whether this rank contributes (1. or 0.), the reciprocal of the number of contributing ranks
+        self.scale = torch.zeros((2,), dtype=torch.float32, device=device)
+        self._scale_host: Optional[Tuple[bool, int]] = None
+        self.set_contributing(True)
+
+    def set_contributing(self, contribute: bool, *, num_ranks: Optional[int] = None):
+        """
+        Set the device input of the next step.
+
+        :param contribute: whether this rank has a batch, else (epoch_end "join") it only takes part in the allreduce
+        :param num_ranks: with a batch, of the group, default all
+        """
+        value = (contribute, num_ranks or self.group_size)
+        if value != self._scale_host:
+            # as the eager division by a Python number: the float32 reciprocal, see _FlatReducer.reduce
+            inv = numpy.float32(1.0) / numpy.float32(value[1])
+            self.scale.copy_(torch.tensor([float(contribute), inv], dtype=torch.float32))
+            self._scale_host = value
+
+    @staticmethod
+    def compile_config() -> Dict[str, Any]:
+        """
+        :return: torch._inductor.config entries while the train step compiles:
+            each bucket allreduce together with the compute it needs (its grads) goes as early as possible,
+            in their order (raise_comms), after Inductor's reordering for peak memory, which would otherwise
+            delay the grads of a bucket (e.g. the weight grad matmuls) up to the end of the backward
+        """
+        return {"reorder_for_compute_comm_overlap": True, "reorder_for_compute_comm_overlap_passes": ["raise_comms"]}
+
+    def reduce(self, grads: List[torch.Tensor], scale: torch.Tensor) -> List[torch.Tensor]:
+        """
+        Traced inside the train step.
+
+        :param grads: of this rank
+        :param scale: :attr:`scale`, as a trace input
+        :return: grads averaged over the contributing ranks
+        """
+        res = list(grads)
+        buckets = _bucket_layout(grads, dtype=self.dtype, bucket_bytes=self.bucket_bytes)
+        # the bucket with the last params first, as the backward completes them
+        for (_, dtype), indices, _ in sorted(buckets, key=lambda bucket: bucket[1][0], reverse=True):
+            bucket = [grads[i] for i in indices]
+            flat = torch.cat([grad.reshape(-1).to(dtype) for grad in bucket])
+            flat = torch.where(scale[0] > 0, flat, 0)  # no contribution (but NaN-safe)
+            flat = torch.ops._c10d_functional.all_reduce(flat, "sum", self.group_name)
+            flat = torch.ops._c10d_functional.wait_tensor(flat) * scale[1]
+            for i, view in zip(indices, torch.split(flat, [grad.numel() for grad in bucket])):
+                res[i] = view.view(grads[i].shape).to(grads[i].dtype)
+        return res
 
 
 @torch.no_grad()
