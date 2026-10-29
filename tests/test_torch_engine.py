@@ -4110,6 +4110,77 @@ def test_torch_optimizer_step_compile_capture_muon_like():
     assert (opt_step._num_traces, opt_step._num_captures) == (1, 1)
 
 
+def test_torch_optimizer_step_compile_capture_inductor_config():
+    """inductor_config applies while the step compiles, by default deterministic, not after"""
+    if not torch.cuda.is_available():
+        raise unittest.SkipTest("CUDA not available")
+    import torch._inductor.config as inductor_config
+    from torch._inductor.custom_graph_pass import CustomGraphPass
+
+    class _Recorder(CustomGraphPass):
+        def __init__(self):
+            self.seen = []
+
+        def __call__(self, graph: torch.fx.Graph):
+            self.seen.append((inductor_config.deterministic, inductor_config.max_autotune_gemm))
+
+        def uuid(self):
+            return None  # not cacheable: compiles every time
+
+    for user_config, expected in [
+        ({}, (True, False)),
+        ({"deterministic": False, "max_autotune_gemm": True}, (False, True)),
+    ]:
+        recorder = _Recorder()
+        opts = {
+            "dynamic_state_keys": ["step"],
+            "inductor_config": {**user_config, "post_grad_custom_post_pass": recorder},
+        }
+        opt_step = _check_optimizer_step(_MuonLike, opts, ref_opt_factory=_muon_like_float64)
+        assert (opt_step._num_traces, opt_step._num_captures) == (1, 1)
+        assert recorder.seen == [expected]
+    assert inductor_config.post_grad_custom_post_pass is None and not inductor_config.max_autotune_gemm
+
+
+def test_torch_optimizer_step_compile_deterministic():
+    """
+    Compiles of the same step (fresh Inductor caches, as on several ranks) give bitwise the same update
+    with the default inductor_config, i.e. the ranks of a distributed training keep the same params.
+    The step normalizes stacked matrices (as Muon over experts): without "deterministic", the reduction kernel config
+    is picked by timing, and about every second compile differed (torch 2.14, RTX 5090).
+    """
+    if not torch.cuda.is_available():
+        raise unittest.SkipTest("CUDA not available")
+    from torch._inductor.utils import fresh_cache
+    from returnn.torch.util.optimizer_step import OptimizerStep
+
+    class _NormalizedSgd(torch.optim.Optimizer):
+        @torch.no_grad()
+        def step(self, closure=None):
+            """update: -lr * the grad of each matrix normalized, in bfloat16"""
+            for group in self.param_groups:
+                for p in group["params"]:
+                    x = p.grad.bfloat16()
+                    p.add_((x / (x.norm(dim=(-2, -1), keepdim=True) + 1e-7)).float(), alpha=-group["lr"])
+
+    def _run() -> torch.Tensor:
+        gen = torch.Generator(device="cuda").manual_seed(0)
+        param = torch.nn.Parameter(torch.randn((16, 1024, 1024), device="cuda", generator=gen))
+        param.grad = torch.zeros_like(param)
+        opt_step = OptimizerStep(optimizer=_NormalizedSgd([param], {"lr": 1e-2}), opts={})
+        for _ in range(3):
+            param.grad.copy_(torch.randn(param.shape, device="cuda", generator=gen))
+            opt_step.step()
+        assert (opt_step._num_traces, opt_step._num_captures) == (1, 1)
+        return param.detach().clone()
+
+    results = []
+    for _ in range(3):
+        with fresh_cache():
+            results.append(_run())
+    assert all(torch.equal(results[0], res) for res in results[1:])
+
+
 def test_torch_optimizer_step_replaced_grads():
     """new grad buffers: recapture on the new addresses, no retrace"""
     if not torch.cuda.is_available():
