@@ -28,7 +28,11 @@ Config, e.g.::
 
 Requirements (asserted):
 
-- ``accum_grad_multiple_step == 1``, no grad scaler, no DDP, no hot reloading.
+- No grad scaler, no DDP, no hot reloading.
+- Grad accumulation (``accum_grad_multiple_step``) only without "capture_optimizer":
+  the static grads accumulate across the replays, the engine zeroes them per accumulation cycle,
+  and the optimizer step runs once per cycle, outside the graph
+  (eager, or separately captured via ``torch_optimizer_step``).
 - The batch is filled up to ``batch_size_bound`` with zero-length padding seqs.
   With ``mask_padding_seqs``, the batch dim has the bound as capacity and the real batch size as dyn size,
   so the padding seqs are masked.
@@ -428,6 +432,7 @@ class GraphCapturedTrainStep:
         get_buffers: Optional[Callable[[], List[torch.Tensor]]] = None,
         rf_params: Optional[List[rf.Parameter]] = None,
         packed_batch_size: Optional[Dict[str, int]] = None,
+        accumulate_grads: bool = False,
     ):
         """
         :param opts: the ``torch_cuda_graph`` config dict, see the module docstring
@@ -444,6 +449,9 @@ class GraphCapturedTrainStep:
         :param rf_params: RF-level model params, required for opts "compile"
         :param packed_batch_size: the config option, when statically known;
             only to infer a missing "packed_total_bound", see :func:`_get_data_buf`
+        :param accumulate_grads: grad accumulation over several steps:
+            the steps add into the static grads instead of overwriting them,
+            the caller zeroes them per accumulation cycle (:func:`zero_grads`)
         """
         assert str(device).startswith("cuda"), f"torch_cuda_graph requires a cuda device, got {device!r}"
         opts = CollectionReadCheckCovered(opts)  # catch unknown (e.g. typo'd) option keys, see below
@@ -466,6 +474,12 @@ class GraphCapturedTrainStep:
         self._extern_data_template = extern_data_template
         self._run_step = run_step
         self._post_step = post_step if opts.get("capture_optimizer", False) else None
+        self._accumulate_grads = accumulate_grads
+        assert not (accumulate_grads and self._post_step is not None), (
+            "torch_cuda_graph: capture_optimizer with grad accumulation is not supported,"
+            " the optimizer step must only run once per accumulation cycle"
+            " (torch_optimizer_step captures the optimizer step separately)"
+        )
         self._params = params
         self._grad_params = [p for p in params if p.requires_grad]
         self._compile = bool(opts.get("compile", False))
@@ -828,6 +842,19 @@ class GraphCapturedTrainStep:
         """whether the optimizer step (incl grad clip) is captured in-graph (opts "capture_optimizer")"""
         return self._post_step is not None
 
+    @property
+    def accumulates_grads(self) -> bool:
+        """whether the steps add into the static grads (grad accumulation), see :func:`zero_grads`"""
+        return self._accumulate_grads
+
+    def zero_grads(self) -> None:
+        """
+        With grad accumulation: zero the static grads in place, at the start of each accumulation cycle
+        (the graph keeps their addresses, so they must not be replaced or set to None).
+        """
+        for p in self._grad_params:
+            p.grad.zero_()
+
     @staticmethod
     def _reduce_all_losses(ctx: RunCtx) -> None:
         """
@@ -850,6 +877,9 @@ class GraphCapturedTrainStep:
         """
         tensors = list(self._get_buffers()) if self._get_buffers is not None else []
         tensors += [p for p in self._params if not p.requires_grad]
+        if self._accumulate_grads:
+            # the grads accumulated so far in this cycle
+            tensors += [p.grad for p in self._grad_params]
         saved = [t.detach().to("cpu", copy=True) for t in tensors]
         rng_state = torch.cuda.get_rng_state(self._device)
         try:
@@ -861,8 +891,9 @@ class GraphCapturedTrainStep:
             torch.cuda.set_rng_state(rng_state, self._device)
 
     def _step(self, *, post_step: bool = True) -> RunCtx:
-        for p in self._grad_params:
-            p.grad.zero_()  # in-graph
+        if not self._accumulate_grads:
+            for p in self._grad_params:
+                p.grad.zero_()  # in-graph
         with rf.set_static_traceable_ctx():
             extern_data = self._build_extern_data()
             self._run_step(extern_data, step=self._step_t)
@@ -919,8 +950,9 @@ class GraphCapturedTrainStep:
                 # declared available_for_inference=False, the train step needs them
                 with_eval_targets=True,
             )
-            for p in self._grad_params:
-                p.grad.zero_()
+            if not self._accumulate_grads:
+                for p in self._grad_params:
+                    p.grad.zero_()
             # plain int step, like the normal eager engine path
             # (the device step tensor would mix devices with the cpu-resident dyn sizes here)
             self._run_step(extern_data, step=global_train_step)
@@ -1255,6 +1287,14 @@ class GraphCapturedTrainStep:
         for r, g in zip(train_raws, grad_outs):
             r.grad = g
 
+    def _add_grads(self, raws: List[torch.Tensor], outs: tuple):
+        """with grad accumulation: add the compiled grad outputs into the static grads (in-graph under capture)"""
+        grad_outs = outs[self._compiled_n_loss_outs :]
+        train_raws = [r for r in raws if r.requires_grad]
+        assert len(train_raws) == len(grad_outs)
+        for r, g in zip(train_raws, grad_outs):
+            r.grad.add_(g)
+
     def _capture_compiled(self, graph: torch.cuda.CUDAGraph):
         """
         Trace + compile + autotune on real inputs (outside capture), then capture.
@@ -1279,13 +1319,15 @@ class GraphCapturedTrainStep:
         del outs
         torch.cuda.empty_cache()
         with cuda_graph_capture(graph):
-            if self._partitioned:
+            if self._partitioned and not self._accumulate_grads:
                 # in-graph: backward accumulates into the static grads -> zero first
                 for p in self._grad_params:
                     p.grad.zero_()
             outs = compiled(self._compiled_call_args(raws))
             if self._partitioned:
                 outs[0].backward()
+            elif self._accumulate_grads:
+                self._add_grads(raws, outs)  # in-graph
             else:
                 # host-side during capture: the grads are stable graph outputs
                 self._bind_grads(raws, outs)
@@ -1346,7 +1388,7 @@ class GraphCapturedTrainStep:
         if self._compiled_n_calls == 0:
             self._log_misaligned_inputs(raws)
         self._compiled_n_calls += 1
-        if self._partitioned:
+        if self._partitioned and not self._accumulate_grads:
             for p in self._grad_params:
                 p.grad.zero_()
         outs = self._compiled_fn(self._compiled_call_args(raws))
@@ -1354,6 +1396,8 @@ class GraphCapturedTrainStep:
             self._check_finite_dump_inputs(outs)
         if self._partitioned:
             outs[0].backward()
+        elif self._accumulate_grads:
+            self._add_grads(raws, outs)
         else:
             self._bind_grads(raws, outs)
         if self._post_step is not None:

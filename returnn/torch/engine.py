@@ -283,9 +283,8 @@ class Engine(EngineBase):
             # whole-train-step CUDA-graph capture/replay, incl backward
             # (see returnn.torch.util.graph_capture)
             accum = self.config.typed_dict.get("accum_grad_multiple_step")
-            assert (accum is None or accum == 1) and self.config.int("accum_grad_multiple_step", 1) == 1, (
-                "torch_cuda_graph: grad accumulation not supported"
-            )
+            # grad accumulation: the static grads accumulate across the replays, see GraphCapturedTrainStep
+            accumulate_grads = accum != 1 if accum is not None else self.config.int("accum_grad_multiple_step", 1) != 1
             assert self._grad_scaler is None, "torch_cuda_graph: grad scaler not supported"
             # DDP reduces grads via autograd hooks during backward.
             # The compiled step returns the grads instead, so those hooks never fire.
@@ -322,6 +321,7 @@ class Engine(EngineBase):
                 rf_params=(list(self._orig_model.parameters()) if isinstance(self._orig_model, rf.Module) else None),
                 # lets the capture infer a missing packed_total_bound from the content budget
                 packed_batch_size=self.config.typed_value("packed_batch_size", None),
+                accumulate_grads=accumulate_grads,
             )
             if self._graph_capture.captures_optimizer:
                 # LR as a device tensor = a graph input: the per-step LR schedule
@@ -661,8 +661,11 @@ class Engine(EngineBase):
                 # clear the gradients when every gradient accumulation loop starts
                 if zero_grad_next_step:
                     if self._graph_capture_opts is None:
-                        # under graph capture, the grads are static buffers zeroed in-graph
                         self._updater.zero_grad()
+                    elif self._graph_capture is not None and self._graph_capture.accumulates_grads:
+                        # static grad buffers, accumulated across the replays: zeroed in place here
+                        self._graph_capture.zero_grads()
+                    # otherwise under graph capture, the grads are static buffers zeroed in-graph
                     cur_count_grad_accum = 0
 
                 if self._graph_capture is not None:
