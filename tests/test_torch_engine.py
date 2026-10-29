@@ -1067,6 +1067,49 @@ def test_load_optimizer_old_format():
         updater.load_optimizer(tmp_dir + "/model.opt.new_format.pt")
 
 
+def test_load_optimizer_hyperparameters_from_config():
+    """
+    The checkpoint gives the optimizer state, the config the hyperparameters and flags of the param groups,
+    e.g. a decay phase with other betas and weight decay, or another kernel choice (foreach)
+    """
+    model = torch.nn.Linear(7, 5)
+    model.weight.grad, model.bias.grad = torch.ones_like(model.weight), torch.ones_like(model.bias)
+    opts = {"class": "adamw", "betas": (0.9, 0.95), "weight_decay": 0.1, "foreach": True}
+    updater = Updater(config=Config(dict(optimizer=opts)), network=model, device=torch.device("cpu"))
+    updater.create_optimizer()
+    updater.get_optimizer().step()
+    exp_avg = updater.get_optimizer().state[model.weight]["exp_avg"].clone()
+
+    opts = {"class": "adamw", "betas": (0.8, 0.9), "weight_decay": 0.01, "foreach": False}
+    updater2 = Updater(config=Config(dict(optimizer=opts)), network=model, device=torch.device("cpu"))
+    updater2.create_optimizer()
+    with tempfile.TemporaryDirectory(prefix="returnn_test_load_optimizer_hyperparameters") as tmp_dir:
+        updater.save_optimizer(tmp_dir + "/model.opt.pt")
+        updater2.load_optimizer(tmp_dir + "/model.opt.pt")
+    optimizer = updater2.get_optimizer()
+    groups = [(g["betas"], g["weight_decay"], g["foreach"]) for g in optimizer.param_groups]
+    assert groups == [((0.8, 0.9), 0.01, False), ((0.8, 0.9), 0.0, False)], groups
+    torch.testing.assert_close(optimizer.state[model.weight]["exp_avg"], exp_avg)
+    assert int(optimizer.state[model.weight]["step"]) == 1
+
+    if torch.cuda.is_available():  # capturable: the step counts go to the device, as the config's flag says
+        model.cuda()
+        model.weight.grad, model.bias.grad = torch.ones_like(model.weight), torch.ones_like(model.bias)
+        updaters = []
+        for capturable in (False, True):
+            config = Config(dict(optimizer={"class": "adamw", "capturable": capturable}))
+            updaters.append(Updater(config=config, network=model, device=torch.device("cuda")))
+            updaters[-1].create_optimizer()
+        updaters[0].get_optimizer().step()
+        with tempfile.TemporaryDirectory(prefix="returnn_test_load_optimizer_hyperparameters") as tmp_dir:
+            updaters[0].save_optimizer(tmp_dir + "/model.opt.pt")
+            updaters[1].load_optimizer(tmp_dir + "/model.opt.pt")
+        optimizer = updaters[1].get_optimizer()
+        assert all(g["capturable"] for g in optimizer.param_groups)
+        assert optimizer.state[model.weight]["step"].device.type == "cuda"
+        optimizer.step()
+
+
 def test_updater_weight_decay_blacklist():
     from returnn.util.basic import DictRefKeys
 

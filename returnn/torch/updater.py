@@ -423,6 +423,9 @@ class Updater:
     def load_optimizer(self, filename):
         """
         Loads a torch.optim.Optimizer from disk and stores it in self.optimizer.
+        The state (e.g. the moments and the step counts) comes from the checkpoint,
+        the hyperparameters and flags of the param groups (e.g. betas, weight decay, fused, capturable)
+        from the config, as the optimizer was created, e.g. for a decay phase with other betas.
 
         :param str filename: File from which to load the optimizer state.
         """
@@ -507,6 +510,10 @@ class Updater:
                     for (i, s) in optimizer_state["optimizer"]["state"].items()
                     if i in map_ckpt_param_idx_to_self_param_idx
                 }
+        # Torch takes the param groups from the state dict. Those of the config instead,
+        # also before the load, as the flags (fused, capturable) decide where the step counts go.
+        for ckpt_group, self_group in zip(optimizer_state["optimizer"]["param_groups"], self.optimizer.param_groups):
+            ckpt_group.update({key: value for key, value in self_group.items() if key != "params"})
         self.optimizer.load_state_dict(optimizer_state["optimizer"])
         if self._optimizer_step is not None:
             # new state tensors (and Python-scalar lr and counters again)
