@@ -1733,6 +1733,29 @@ def test_sdpa_varlen_restores_layout_lens_static_traceable():
     _assert_equal_non_padded(out, ref, batch_dim, time_dim)
 
 
+def test_sdpa_fallback_keeps_the_query_packing():
+    """the unpack fallback returns its result in the packing of the query, here with per-seq layout lens"""
+    from returnn.config import Config, global_config_ctx
+
+    rf.select_backend_torch()
+    x, batch_dim, time_dim, feat_dim = _make_input()
+    # per-seq layout lens, as a strided conv leaves them
+    layout_lens = Tensor("layout_lens", dims=[batch_dim], dtype="int32", raw_tensor=torch.tensor([5, 4]).int())
+    kwargs = dict(key_dim=feat_dim, axis=time_dim, causal_query_spatial_dim=time_dim)
+    ref = rf.dot_attention(x, x, x, **kwargs) + x
+    packed.set_allowed_fallbacks(["scaled_dot_product_attention"])
+    try:
+        # without the fast paths the attention takes the unpack fallback
+        with global_config_ctx(Config({"rf_packed_att_fast_paths": False})):
+            xp = packed.regap(packed.pack(x, gap=1), 1, layout_lens=layout_lens)
+            out = rf.dot_attention(xp, xp, xp, **kwargs)
+    finally:
+        packed.set_allowed_fallbacks(None)
+    assert out.raw_tensor.same_packing(xp.raw_tensor)
+    # the residual sum as the layers write it, the attention output first
+    _assert_equal_non_padded(out + xp, ref, batch_dim, time_dim)
+
+
 def test_rel_pos_self_attention_dropout_train_packed():
     # att_dropout > 0 under the train flag: on CPU the per-seq path must be taken
     # (real weight dropout, no unpack); output packed, finite, and (per dropout)
