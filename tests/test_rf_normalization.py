@@ -273,6 +273,26 @@ def test_batch_norm_batch_without_elements():
         torch.testing.assert_close(bn.running_variance.raw_tensor, torch.ones(3), msg=f"distributed={distributed}")
 
 
+def test_moments_masked_mean_low_precision():
+    """
+    The masked mean of moments in a low precision compute dtype (without ``rf_moments_float32``) accumulates in
+    float32 like reduce_mean: a float16 sum over many frames does not overflow, and the statistics keep the dtype.
+    """
+    import torch
+
+    rf.select_backend_torch()
+    batch, feat = Dim(2, name="batch"), Dim(2, name="feat")
+    lens = torch.tensor([40000, 30000], dtype=torch.int32)
+    time_dim = Dim(Tensor("time_size", dims=[batch], dtype="int32", raw_tensor=lens), name="time")
+    raw = torch.randn(2, 40000, 2, generator=torch.Generator().manual_seed(3)) * 0.1 + 2.0
+    x = Tensor("x", dims=[batch, time_dim, feat], dtype="float16", raw_tensor=raw.half())
+    mean, variance = rf.moments(x, axis=[batch, time_dim], use_mask=True, compute_dtype="float16")
+    assert mean.dtype == variance.dtype == "float16"
+    rows = torch.cat([raw[0], raw[1, :30000]]).double()
+    torch.testing.assert_close(mean.raw_tensor.double(), rows.mean(dim=0), rtol=1e-3, atol=0)
+    torch.testing.assert_close(variance.raw_tensor.double(), rows.var(dim=0, correction=0), rtol=1e-2, atol=1e-4)
+
+
 def test_moments_use_fixed_masking_by_behavior_version():
     """
     Behavior version 34 turns ``rf_moments_use_fixed_masking`` on, the config option overrides that in both directions.
