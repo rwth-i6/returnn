@@ -2975,6 +2975,24 @@ def test_MegatronDataset_DistributeFilesDataset():
         assert sorted(tokens) == [[i * 10 + j] for i in range(num_files) for j in range(num_seqs)]
 
 
+def test_MegatronDataset_get_tag():
+    # Empty documents at the start, in the middle and at the end of each file, i.e. repeated document indices.
+    docs = [[], [], [[1]], [], [[2], [3]], []]
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        files = [_megatron_write(f"{tmp_dir}/{name}", docs, dtype="uint16") for name in "ab"]
+        dataset = init_dataset(
+            {
+                "class": "MegatronDataset",
+                "data_file": [f["data_file"] for f in files],
+                "index_file": [f["index_file"] for f in files],
+                "vocab_size": 8,
+            }
+        )
+        dataset.init_seq_order(epoch=1)
+        tags = [f"{name}/{tag}" for name in "ab" for tag in ["doc-2/seq-0", "doc-4/seq-0", "doc-4/seq-1"]]
+        assert [dataset.get_tag(i) for i in range(6)] == tags == dataset.get_all_tags()
+
+
 if __name__ == "__main__":
     better_exchook.install()
     if len(sys.argv) <= 1:
