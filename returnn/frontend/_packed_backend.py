@@ -700,6 +700,9 @@ def _repack_result(out, template: PackedRawTensor, *, replacements: Optional[dic
         return out
     missing = [d for d in template.orig_dims if d not in out.dims]
     if not missing:
+        if template.layout_lens is not None:
+            # into the packing of the template with its per-seq layout lens
+            return _pack_plain_like(out, template)
         return pack(out, dims=template.orig_dims, out_dim=template.packed_dim, gap=template.gap, align=template.align)
     resolved = {}
     for m in missing:
@@ -3722,7 +3725,7 @@ class PackedBackend(Backend[PackedRawTensor]):
             )
             if q_raw is not None:
                 # the output follows the query packing
-                out = pack(out, dims=list(q_raw.orig_dims), out_dim=q_raw.packed_dim, gap=q_raw.gap, align=q_raw.align)
+                out = _repack_result(out, q_raw)
             return out
         return Backend.scaled_dot_product_attention(
             query,
