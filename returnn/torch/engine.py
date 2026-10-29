@@ -262,6 +262,12 @@ class Engine(EngineBase):
             self._ddp_pt_model = self._torch_distributed_ctx.maybe_make_distributed_module(
                 module=_WrappedModuleRunStep(module=self._pt_model, engine=self)
             )
+        if self._torch_distributed_ctx and self._torch_distributed_ctx.epoch_end_join() and self._has_sync_batch_norm():
+            raise ValueError(
+                "torch_distributed epoch_end 'join': distributed batch norm (rf_batch_norm_distributed,"
+                " rf.BatchNorm distributed, torch.nn.SyncBatchNorm) is not supported:"
+                " a rank out of data does not run the model, so its collectives would not match"
+            )
         self._updater = Updater(
             config=self.config, network=self._pt_model, device=self._device, initial_learning_rate=self.learning_rate
         )
@@ -327,6 +333,17 @@ class Engine(EngineBase):
                 # LR as a device tensor = a graph input: the per-step LR schedule
                 # stays functional under the captured optimizer
                 self._updater.use_device_lr_tensors(self._device)
+
+    def _has_sync_batch_norm(self) -> bool:
+        """
+        :return: whether the model has a batch norm with statistics over all ranks, i.e. a collective in the step
+        """
+        if self.config.bool("rf_batch_norm_distributed", False):
+            return True
+        if isinstance(self._orig_model, rf.Module):
+            if any(isinstance(mod, rf.BatchNorm) and mod.distributed for mod in self._orig_model.modules()):
+                return True
+        return any(isinstance(mod, torch.nn.SyncBatchNorm) for mod in self._pt_model.modules())
 
     def set_epoch(self, epoch: int):
         """set epoch"""

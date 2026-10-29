@@ -2938,6 +2938,90 @@ def test_torch_distributed_join_idle_group_keeps_static_grads():
     assert results[2] == results[3] == (2.0, [(True, 3.5), (True, 3.5)]), results
 
 
+class _SyncBatchNormTestModel(TrainTestModel):
+    """with a torch.nn.SyncBatchNorm"""
+
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        self.bn = torch.nn.SyncBatchNorm(9)
+
+
+class _RFDistributedBatchNormTestModel(rf.Module):
+    """with a distributed rf.BatchNorm"""
+
+    def __init__(self, **_kwargs):
+        super().__init__()
+        self.bn = rf.BatchNorm(Dim(9, name="feat"), use_mask=False, distributed=True)
+
+
+def _torch_distributed_join_sync_batch_norm_worker(rank: int, world_size: int, port: int, tmp_dir: str):
+    os.environ.update(
+        MASTER_ADDR="127.0.0.1",
+        MASTER_PORT=str(port),
+        RANK=str(rank),
+        WORLD_SIZE=str(world_size),
+        LOCAL_RANK=str(rank),
+        LOCAL_WORLD_SIZE=str(world_size),
+    )
+    results = []
+    for opts in [
+        {},
+        {"rf_batch_norm_distributed": True},
+        {"get_model": _SyncBatchNormTestModel},
+        {"get_model": _RFDistributedBatchNormTestModel},
+    ]:
+        config = Config(
+            {
+                "task": "train",
+                "device": "cpu",
+                "extern_data": {"data": {"dim": 9}, "classes": {"dim": 2, "sparse": True}},
+                "get_model": TrainTestModel,
+                "train_step": TrainTestModel.train_step,
+                "batch_size": 10**9,
+                "max_seqs": 3,
+                "optimizer": {"class": "adamw"},
+                "learning_rate": 0.01,
+                "num_epochs": 1,
+                "torch_dataloader_opts": {"num_workers": 0},
+                "torch_distributed": {"backend": "gloo", "reduce_type": "grad_explicit", "epoch_end": "join"},
+                **opts,
+            }
+        )
+        with global_config_ctx(config):
+            dataset = init_dataset({"class": "Task12AXDataset", "num_seqs": 3})
+            dataset.init_seq_order(epoch=1)
+            engine = Engine(config=config)
+            try:
+                engine.init_train_from_config(train_data=dataset)
+                results.append(None)
+            except ValueError as exc:
+                results.append(str(exc))
+    with open(f"{tmp_dir}/rank{rank}.txt", "w") as f:
+        f.write(repr(results))
+    engine._torch_distributed_ctx.destroy_process_groups()
+
+
+def test_torch_distributed_epoch_end_join_sync_batch_norm_refused():
+    """
+    epoch_end "join" with a batch norm over all ranks (a collective in the step) would deadlock,
+    as a rank out of data does not run the model: refused, for each way to get one
+    """
+    import socket
+
+    with socket.socket() as s:
+        s.bind(("127.0.0.1", 0))
+        port = s.getsockname()[1]
+    with tempfile.TemporaryDirectory(prefix="returnn_test_torch_distributed_join_sync_bn") as tmp_dir:
+        _torch_spawn_with_timeout(
+            _torch_distributed_join_sync_batch_norm_worker, args=(1, port, tmp_dir), nprocs=1, timeout=60
+        )
+        with open(f"{tmp_dir}/rank0.txt") as f:
+            results = eval(f.read())
+    assert results[0] is None, results
+    for res in results[1:]:
+        assert res is not None and "distributed batch norm" in res, results
+
+
 def test_torch_distributed_all_reduce_avg_flat_buckets():
     import socket
     import torch.multiprocessing
