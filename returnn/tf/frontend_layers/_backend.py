@@ -1014,13 +1014,15 @@ class ReturnnLayersBackend(Backend[Layer]):
         out_spatial_dims: Optional[Sequence[Dim]] = None,
         filter: Tensor,
         filter_size: Sequence[Dim],  # to have the order well-defined
-        padding: Union[str, int, Sequence[int]],
+        padding: Union[str, int, Sequence[Union[int, Tuple[int, int]]]],
         strides: Optional[Union[int, Sequence[int]]] = None,
         dilation_rate: Optional[Union[int, Sequence[int]]] = None,
         groups: Optional[int] = None,
         bias: Optional[Tensor] = None,
     ) -> Tuple[Tensor, Sequence[Dim]]:
         """conv"""
+        if isinstance(padding, (list, tuple)) and any(isinstance(p, (list, tuple)) for p in padding):
+            raise NotImplementedError(f"conv: the ConvLayer takes no (left, right) padding pair, got {padding!r}")
         if not out_spatial_dims:
             out_spatial_dims = rf.make_conv_out_spatial_dims(
                 description_prefix="conv",

@@ -50,7 +50,7 @@ class _ConvOrTransposedConv(rf.Module):
         out_dim: Dim,
         filter_size: Union[Sequence[Union[int, Dim]], int, Dim],
         *,
-        padding: str,
+        padding: Union[str, int, Sequence[Union[int, Tuple[int, int]]]],
         with_bias: bool,
     ):
         """
@@ -59,7 +59,7 @@ class _ConvOrTransposedConv(rf.Module):
         :param filter_size: (width,), (height,width) or (depth,height,width) for 1D/2D/3D conv.
           the input data ndim must match, or you can add dimensions via input_expand_dims or input_add_feature_dim.
           it will automatically swap the batch-dim to the first axis of the input data.
-        :param padding: "same" or "valid"
+        :param padding: "same" or "valid", for conv also as in :func:`conv`
         :param with_bias:
         """
         super().__init__()
@@ -129,7 +129,7 @@ class _Conv(_ConvOrTransposedConv):
         out_dim: Dim,
         filter_size: Union[Sequence[Union[int, Dim]], int, Dim],
         *,
-        padding: str,
+        padding: Union[str, int, Sequence[Union[int, Tuple[int, int]]]],
         strides: Optional[Union[int, Sequence[int]]] = None,
         dilation_rate: Optional[Union[int, Sequence[int]]] = None,
         groups: Optional[int] = None,
@@ -141,7 +141,7 @@ class _Conv(_ConvOrTransposedConv):
         :param filter_size: (width,), (height,width) or (depth,height,width) for 1D/2D/3D conv.
           the input data ndim must match, or you can add dimensions via input_expand_dims or input_add_feature_dim.
           it will automatically swap the batch-dim to the first axis of the input data.
-        :param str padding: "same" or "valid"
+        :param padding: "same" or "valid" or int or per spatial dim, see :func:`conv`
         :param int|Sequence[int] strides: strides for the spatial dims,
           i.e. length of this tuple should be the same as filter_size, or a single int.
         :param int|Sequence[int] dilation_rate: dilation for the spatial dims
@@ -188,7 +188,7 @@ def conv(
     out_spatial_dims: Optional[Sequence[Dim]] = None,
     filter: Tensor,
     filter_size: Sequence[Dim],
-    padding: Union[str, int, Sequence[int]],
+    padding: Union[str, int, Sequence[Union[int, Tuple[int, int]]]],
     strides: Optional[Union[int, Sequence[int]]] = None,
     dilation_rate: Optional[Union[int, Sequence[int]]] = None,
     groups: Optional[int] = None,
@@ -215,6 +215,8 @@ def conv(
         (or global config option ``rf_use_consistent_same_padding``)
         and is now consistent independent of dimension size.
         See :func:`_consistent_same_padding` for more details.
+        Or a sequence with one entry per spatial dim, each an int or a (left, right) pair of ints,
+        which pads the two sides by their own amount, e.g. ``[(0, 16)]``.
     :param strides: the default (if it is None) is 1
     :param dilation_rate:
     :param groups:
@@ -235,6 +237,17 @@ def conv(
     for in_spatial_dim in in_spatial_dims:
         if in_spatial_dim not in source.dims:
             raise ValueError(f"conv: source {source} does not have spatial dim {in_spatial_dim}")
+    if isinstance(padding, (list, tuple)):
+        if len(padding) != len(in_spatial_dims):
+            raise ValueError(f"conv: padding {padding!r} needs one entry per spatial dim {in_spatial_dims}")
+        for p in padding:
+            if not (
+                isinstance(p, int)
+                or (isinstance(p, (list, tuple)) and len(p) == 2 and all(isinstance(v, int) for v in p))
+            ):
+                raise ValueError(
+                    f"conv: padding {padding!r}: entry {p!r} is not an int or a (left, right) pair of ints"
+                )
     if padding == "same" and _any_is_non_default(strides, default=1) and _should_use_consistent_same_padding():
         source, in_spatial_dims, padding = _consistent_same_padding(
             source, in_spatial_dims=in_spatial_dims, filter_size=filter_size, dilation_rate=dilation_rate, pad_value=0
@@ -270,7 +283,7 @@ class Conv1d(_Conv):
         out_dim: Dim,
         filter_size: Union[int, Dim],
         *,
-        padding: str,
+        padding: Union[str, int, Sequence[Union[int, Tuple[int, int]]]],
         strides: Optional[int] = None,
         dilation_rate: Optional[int] = None,
         groups: Optional[int] = None,
@@ -280,7 +293,7 @@ class Conv1d(_Conv):
         :param Dim in_dim:
         :param Dim out_dim:
         :param int|Dim filter_size:
-        :param str padding: "same" or "valid"
+        :param padding: "same" or "valid" or int or ``[(left, right)]``, see :func:`conv`
         :param int|None strides: strides for the spatial dims,
           i.e. length of this tuple should be the same as filter_size, or a single int.
         :param int|None dilation_rate: dilation for the spatial dims
@@ -743,12 +756,12 @@ def make_conv_out_spatial_dims(
     in_spatial_dims: Sequence[Dim],
     *,
     filter_size: Union[Sequence[Union[int, Dim]], int, Dim],
-    padding: Union[str, int, Sequence[int]],
+    padding: Union[str, int, Sequence[Union[int, Tuple[int, int]]]],
     strides: Union[Sequence[int], int] = 1,
     dilation_rate: Union[Sequence[int], int] = 1,
     description_prefix: Optional[str] = None,
 ) -> List[Dim]:
-    """create out spatial dims from in spatial dims"""
+    """create out spatial dims from in spatial dims, for the padding see :func:`conv`"""
     nd = len(in_spatial_dims)
     if isinstance(filter_size, (int, Dim)):
         filter_size = [filter_size] * nd
@@ -785,7 +798,7 @@ def calc_conv_out_length(
     *,
     filter_size: Union[T, int, Dim, Tensor],
     stride: int,
-    padding: Union[str, int],
+    padding: Union[str, int, Tuple[int, int]],
     dilation_rate: int = 1,
     name: Optional[str] = None,
 ) -> T:
@@ -796,7 +809,7 @@ def calc_conv_out_length(
     :param filter_size: e.g. 2, for the corresponding axis
     :param stride: e.g. 1, for the corresponding axis
     :param dilation_rate: e.g. 1
-    :param padding: "valid" or "same" or int
+    :param padding: "valid" or "same" or int, or a (left, right) pair of ints
     :param name:
     :return: the output dimension
     """
@@ -818,10 +831,14 @@ def calc_conv_out_length(
             out_length = in_length.ceildiv_right(stride)
         else:
             out_length = _ceildiv(in_length, stride)
-    elif padding == "valid" or isinstance(padding, int):
+    elif padding == "valid" or isinstance(padding, (int, tuple, list)):
         if isinstance(padding, int) and padding != 0:
             assert padding > 0
             in_length = padding + in_length + padding
+        elif isinstance(padding, (tuple, list)):
+            pad_left, pad_right = padding
+            assert pad_left >= 0 and pad_right >= 0, f"invalid padding {padding!r}"
+            in_length = pad_left + in_length + pad_right
 
         if filter_size_int == 1:
             valid_part = in_length
