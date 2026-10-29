@@ -1343,7 +1343,8 @@ def _batch_norm_gapped(source: Tensor, kwargs) -> Optional[Tensor]:
     # the statistics run over the valid frames and every static axis next to the packed one
     n_extra = math.prod(d.dimension for d in extra)
     stat_axes = [raw.packed_dim] + extra
-    n = rf.cast(n_dev, inner.dtype) * n_extra
+    # no valid frame (e.g. a batch of only empty seqs): mean and variance 0 instead of 0/0, as rf.moments
+    n = rf.maximum(rf.cast(n_dev, inner.dtype) * n_extra, 1.0)
     inner = rf.where(mask, inner, 0.0)
     mean = rf.reduce_sum(inner, axis=stat_axes, use_mask=False) / n
     diff = rf.where(mask, inner - mean, 0.0)
@@ -1351,19 +1352,24 @@ def _batch_norm_gapped(source: Tensor, kwargs) -> Optional[Tensor]:
     if running_mean is not None:
         import torch
 
+        # A batch without any valid frame has no stats: no update then, as BatchNorm with use_mask.
         with torch.no_grad():
             rm, rv = running_mean.raw_tensor, running_variance.raw_tensor
             if dev_lens is not None:
                 # fully on device (no float(n) host read -> no sync, capture-safe)
                 n_f_t = n_dev.raw_tensor.float() * n_extra
                 unbiased_t = n_f_t / (n_f_t - 1.0).clamp(min=1.0)
-                rm.mul_(1.0 - momentum).add_(mean.raw_tensor.detach().to(rm.dtype) * momentum)
-                rv.mul_(1.0 - momentum).add_(var.raw_tensor.detach().to(rv.dtype) * unbiased_t.to(rv.dtype) * momentum)
+                momentum_t = (n_f_t > 0).to(rm.dtype) * momentum
+                rm.mul_(1.0 - momentum_t).add_(mean.raw_tensor.detach().to(rm.dtype) * momentum_t)
+                rv.mul_(1.0 - momentum_t).add_(
+                    var.raw_tensor.detach().to(rv.dtype) * unbiased_t.to(rv.dtype) * momentum_t
+                )
             else:
                 n_f = float(n_t.raw_tensor) * n_extra
                 unbiased = n_f / max(n_f - 1.0, 1.0)
-                rm.mul_(1.0 - momentum).add_(mean.raw_tensor.detach().to(rm.dtype), alpha=momentum)
-                rv.mul_(1.0 - momentum).add_(var.raw_tensor.detach().to(rv.dtype) * unbiased, alpha=momentum)
+                if n_f > 0:
+                    rm.mul_(1.0 - momentum).add_(mean.raw_tensor.detach().to(rm.dtype), alpha=momentum)
+                    rv.mul_(1.0 - momentum).add_(var.raw_tensor.detach().to(rv.dtype) * unbiased, alpha=momentum)
     out_inner = (inner - mean) / rf.sqrt(var + epsilon)
     if affine:
         out_inner = out_inner * gamma + beta

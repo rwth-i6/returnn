@@ -3175,6 +3175,31 @@ def test_batch_norm_packed_non_finite_junk_rows():
                 )
 
 
+def test_batch_norm_packed_batch_without_frames():
+    """
+    a batch of only empty seqs (e.g. the audio of a text-only batch): finite outputs and grads,
+    and the running stats stay as they are, in the gapped layout (host count) and the bounded one (device count)
+    """
+    rf.select_backend_torch()
+    batch_dim, feat_dim = Dim(3, name="batch"), Dim(4, name="feat")
+    for layout in ("gapped", "bound"):
+        for dtype in ("float32", "bfloat16", "float16"):
+            time_dim = Dim(Tensor("time", dims=[batch_dim], dtype="int32", raw_tensor=torch.zeros(3, dtype=torch.int32)))
+            raw = torch.randn(3, 1, 4, generator=torch.Generator().manual_seed(1)).to(getattr(torch, dtype))
+            x = Tensor("x", dims=[batch_dim, time_dim, feat_dim], dtype=dtype, raw_tensor=raw)
+            with rf.set_default_device_ctx("cpu"):
+                bn = rf.BatchNorm(feat_dim, use_mask=False)
+                with rf.get_run_ctx().train_flag_ctx(True):
+                    xp = packed.pack(x, gap=2) if layout == "gapped" else packed.pack(x, total_bound=8)
+                    out = bn(xp)
+                    inner = out.raw_tensor.inner.raw_tensor
+                    inner.float().sum().backward()
+            assert bool(torch.isfinite(inner).all()), (layout, dtype, inner)
+            assert bool(torch.isfinite(bn.gamma.raw_tensor.grad).all()), (layout, dtype, bn.gamma.raw_tensor.grad)
+            assert bn.running_mean.raw_tensor.tolist() == [0.0] * 4, (layout, dtype, bn.running_mean.raw_tensor)
+            assert bn.running_variance.raw_tensor.tolist() == [1.0] * 4, (layout, dtype, bn.running_variance.raw_tensor)
+
+
 def test_gather_with_indices_packed_over_another_time_dim():
     """
     indices packed over their own time dim select frames of the source per sequence,
