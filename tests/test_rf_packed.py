@@ -1179,6 +1179,49 @@ def test_conformer_mixed_parity_lens():
     _assert_equal_non_padded(out_p, out_ref, batch_dim, out_spatial_dim)
 
 
+def test_conv_subsample_grads_max_pool_junk_frames():
+    """
+    The packed max pool fills the gap with -inf, and the windows entirely in the gap must not leave it
+    in the out junk frames: the Linear after the frontend would turn it into NaN grads (-inf * 0).
+    The fill happens without rf_use_consistent_same_padding (default up to behavior version 23).
+    """
+    rf.select_backend_torch()
+    from returnn.config import Config, global_config_ctx
+    from returnn.frontend.encoder.conformer import ConformerConvSubsample
+
+    x, batch_dim, time_dim, in_dim = _make_input(batch_size=3, seq_lens=(12, 10, 7), feat=7, seed=4)
+    for consistent_same_padding in [False, True]:
+        with global_config_ctx(Config({"rf_use_consistent_same_padding": consistent_same_padding})):
+            with rf.set_default_device_ctx("cpu"):
+                rf.set_random_seed(17)
+                frontend = ConformerConvSubsample(
+                    in_dim,
+                    out_dims=[Dim(8, name="conv1"), Dim(8, name="conv2")],
+                    filter_sizes=[(3, 3), (3, 3)],
+                    pool_sizes=[(2, 1), (2, 1)],
+                )
+                linear = rf.Linear(frontend.out_dim, Dim(5, name="out"))
+                params = {
+                    **dict(frontend.named_parameters()),
+                    **{f"linear.{k}": p for k, p in linear.named_parameters()},
+                }
+                grads = {}
+                for name, source in [("padded", x), ("packed", packed.pack(x))]:
+                    out, _ = frontend(source, in_spatial_dim=time_dim)
+                    out = linear(out)
+                    loss = rf.reduce_sum(packed.unpack(out) if packed.is_packed(out) else out, axis=out.dims)
+                    for p in params.values():
+                        p.raw_tensor.grad = None
+                    loss.raw_tensor.backward()
+                    grads[name] = {k: p.raw_tensor.grad for k, p in params.items()}
+        for k in params:
+            msg = f"consistent_same_padding {consistent_same_padding}, {k}"
+            assert torch.isfinite(grads["packed"][k]).all(), f"{msg}: non-finite grad"
+            numpy.testing.assert_allclose(
+                grads["packed"][k].numpy(), grads["padded"][k].numpy(), rtol=1e-4, atol=1e-5, err_msg=msg
+            )
+
+
 def test_mixed_operand_order():
     # plain-first mixed binary ops (plain * packed):
     # the base Backend.combine/compare re-dispatch to the higher-priority backend
