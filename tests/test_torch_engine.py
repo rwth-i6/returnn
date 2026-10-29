@@ -3420,7 +3420,7 @@ def test_torch_distributed_grad_reduce_options_cpu():
         "bucket_mb_ddp": "grad_reduce_bucket_mb needs a grad sync level",
         "bucket_mb_zero": "grad_reduce_bucket_mb must be > 0",
         "no_cuda_graph": "grad_reduce_in_graph: needs torch_cuda_graph",
-        "rf_batch_norm_distributed": "rf_batch_norm_distributed is not supported",
+        "rf_batch_norm_distributed": "distributed batch norm (rf_batch_norm_distributed",
     }.items():
         assert results[name] and expected in results[name], (name, results)
     assert results["buckets {}"] == (1, 64 * 1024**2), results
