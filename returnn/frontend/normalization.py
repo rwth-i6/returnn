@@ -103,8 +103,12 @@ def _masked_mean(x: Tensor, *, axis: Union[Dim, Sequence[Dim]], use_mask: bool) 
     count = rf.num_elements_of_shape(axis, use_mask=use_mask, source=x)
     if not isinstance(count, Tensor):  # static: no masking involved, cannot be 0
         return rf.reduce_mean(x, axis=axis, use_mask=use_mask)
-    count = rf.maximum(rf.cast(count, x.dtype), rf.convert_to_tensor(1, dtype=x.dtype, device=count.device))
-    return rf.reduce_sum(x, axis=axis, use_mask=use_mask) / count
+    # accumulated in float32 at least, as reduce_mean does (a float16 sum overflows, a bfloat16 count rounds),
+    # and rounded once to the dtype of x
+    acc_dtype = x.dtype if x.dtype in ("float32", "float64") else "float32"
+    total = rf.reduce_sum(rf.cast(x, acc_dtype), axis=axis, use_mask=use_mask)
+    count = rf.maximum(rf.cast(count, acc_dtype), rf.convert_to_tensor(1, dtype=acc_dtype, device=count.device))
+    return rf.cast(total / count, x.dtype)
 
 
 def _moments_float32() -> bool:

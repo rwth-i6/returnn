@@ -673,11 +673,12 @@ class TorchBackend(Backend[torch.Tensor]):
             tensor.raw_tensor = torch.where(mask, tensor.raw_tensor, -inf_value)
         axis_int = tensor.dims.index(axis)
         any_valid = None
-        if mask is not None and rf.is_static_traceable():
-            # Bound-shape regime (e.g. torch_cuda_graph):
-            # zero-length filler seqs have FULLY masked rows,
+        if mask is not None:
+            # Zero-length seqs (filler seqs of the bound-shape regime, e.g. torch_cuda_graph,
+            # or e.g. the text rows of a speech LM batch over the audio frames) have FULLY masked rows,
             # where the stable softmax would give NaN ((-inf)-(-inf)),
-            # poisoning anything that touches those rows. Define those rows as 0 instead.
+            # poisoning anything that touches those rows (0 * NaN in the weight grads).
+            # Define those rows as 0 instead.
             # The 0 energies are substituted BEFORE the softmax (finite uniform row),
             # so not even the softmax backward sees NaN
             # (its grads for those rows are select-masked to 0 by the wheres either way).
@@ -707,8 +708,8 @@ class TorchBackend(Backend[torch.Tensor]):
             tensor.raw_tensor = torch.where(mask, tensor.raw_tensor, -inf_value)
         axis_int = tensor.dims.index(axis)
         any_valid = None
-        if mask is not None and rf.is_static_traceable():
-            # see softmax above: fully-masked rows (zero-length filler seqs) -> -inf, not NaN
+        if mask is not None:
+            # see softmax above: fully-masked rows (zero-length seqs) -> -inf, not NaN
             any_valid = mask.any(dim=axis_int, keepdim=True)
             tensor.raw_tensor = torch.where(any_valid, tensor.raw_tensor, torch.zeros_like(tensor.raw_tensor))
         out_raw = torch.log_softmax(tensor.raw_tensor, dim=axis_int)
