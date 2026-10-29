@@ -35,7 +35,8 @@ class TensorLayout:
         :param backend: the backend of the tensor, which creates new tensors like it
         :param device:
         :param storage: backend-specific, None for the plain storage of the backend.
-            Hashable, equal for the same storage layout.
+            Hashable, equal for the same storage layout,
+            and with ``_cache_key_parts()`` as :func:`TensorLayout._cache_key_parts`.
         """
         self.backend = backend
         self.device = device
@@ -54,6 +55,14 @@ class TensorLayout:
 
     def __hash__(self):
         return hash(self._key())
+
+    def _cache_key_parts(self) -> Tuple[Any, ...]:
+        """
+        :return: the layout as key parts for :class:`returnn.frontend._cache.Cache`:
+            tensors (by identity of the raw tensor), dims, nested layouts, backend classes and plain values
+        """
+        # noinspection PyProtectedMember
+        return self.backend, self.device, self.storage._cache_key_parts() if self.storage is not None else None
 
 
 def get_tensor_layout(x: Tensor) -> TensorLayout:

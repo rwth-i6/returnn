@@ -1199,9 +1199,10 @@ def test_cache_dim_remap_identity():
     # both that and the identity-based cache remap are covered here
     assert derived_dim != batch_dim
     cache = Cache(max_size=2)
-    cache.set(("test_cache_dim_remap_identity", batch_dim), (derived_dim, batch_dim))
+    value = (derived_dim, batch_dim)
+    cache.set(("test_cache_dim_remap_identity", batch_dim), value)
     hit = cache.get(("test_cache_dim_remap_identity", batch_dim))
-    assert hit is not None
+    assert hit is value  # the same dims: the cached value itself, no copy
     got_derived, got_batch = hit
     assert got_derived is derived_dim
     assert got_batch is batch_dim
@@ -1272,6 +1273,27 @@ def test_dim_bounded_by_capacity():
     time_dim.capacity = 100
     with rf.set_static_traceable_ctx():
         assert bounded.get_dim_value() == 100
+
+
+def test_cache_dim_key_size_dims():
+    """dims with equal sizes share the entry only when their sizes are over the same dims"""
+    import torch
+    from returnn.frontend._cache import Cache
+
+    rf.select_backend_torch()
+    b_dim, b2_dim = Dim(2, name="b"), Dim(2, name="b2")
+
+    def _t_dim(size_dim: Dim) -> Dim:
+        return Dim(Tensor("t_lens", [size_dim], dtype="int32", raw_tensor=torch.tensor([3, 2], dtype=torch.int32)))
+
+    cache = Cache(max_size=4)
+    cache.set(("test_cache_dim_key_size_dims", _t_dim(b_dim)), 1)
+    assert cache.get(("test_cache_dim_key_size_dims", _t_dim(b_dim))) == 1
+    assert cache.get(("test_cache_dim_key_size_dims", _t_dim(b2_dim))) is None
+    # a scalar dyn dim has no size dims: still keyed like a static dim
+    scalar_dim = Dim(Tensor("size", [], dtype="int32", raw_tensor=torch.tensor(5, dtype=torch.int32)), capacity=5)
+    cache.set(("test_cache_dim_key_size_dims", Dim(5, name="static")), 2)
+    assert cache.get(("test_cache_dim_key_size_dims", scalar_dim)) == 2
 
 
 def test_dim_host_value_guard_static_traceable():
