@@ -2986,6 +2986,111 @@ def test_torch_distributed_reduce_grads_cpu():
                     assert len(results[key]) == 1 and abs(results[key][0] - expected["all"][0]) < 1e-6, (opts, results)
 
 
+def _torch_distributed_grad_reduce_options_worker(rank: int, world_size: int, port: int, tmp_dir: str):
+    import returnn.torch.distributed as distributed_module
+    from returnn.torch.distributed import DistributedContext
+
+    # noinspection PyProtectedMember
+    from torch.utils._python_dispatch import TorchDispatchMode
+
+    os.environ.update(
+        MASTER_ADDR="127.0.0.1",
+        MASTER_PORT=str(port),
+        RANK=str(rank),
+        WORLD_SIZE=str(world_size),
+        LOCAL_RANK=str(rank),
+        LOCAL_WORLD_SIZE=str(world_size),
+    )
+
+    def _fresh():
+        if torch.distributed.is_initialized():
+            torch.distributed.destroy_process_group()
+        os.environ.pop("_RETURNN_TORCH_DISTRIBUTED_INIT_INFO", None)
+        distributed_module._is_set_up, distributed_module._ctx = False, None
+
+    results = {}
+    for name, opts in {
+        "in_graph_param_sync": {"reduce_type": "param", "param_sync_step": 2, "grad_reduce_in_graph": True},
+        "in_graph_group": {"sync": [{"group": 1, "type": "grad"}], "grad_reduce_in_graph": True},
+        "bucket_mb_ddp": {"reduce_type": "grad", "grad_reduce_bucket_mb": 1},
+        "bucket_mb_zero": {"reduce_type": "grad_explicit", "grad_reduce_bucket_mb": 0},
+    }.items():
+        _fresh()
+        try:
+            DistributedContext({"backend": "gloo", **opts})
+            results[name] = None
+        except ValueError as exc:
+            results[name] = str(exc)
+
+    class _CountAllReduce(TorchDispatchMode):
+        count = 0
+
+        def __torch_dispatch__(self, func, types, args=(), kwargs=None):
+            if func is torch.ops._c10d_functional.all_reduce.default:
+                self.count += 1
+            return func(*args, **(kwargs or {}))
+
+    # the in-graph reduce (here eager) of 4 tensors of 64 bytes: in 1 bucket by default, in 4 with 64 bytes
+    for bucket_opts in [{}, {"grad_reduce_bucket_mb": 64 / 1024**2}]:
+        _fresh()
+        opts = {"backend": "gloo", "reduce_type": "grad_explicit", "grad_reduce_in_graph": True, **bucket_opts}
+        ctx = DistributedContext(opts)
+        reducer = ctx.make_in_graph_grad_reducer(device=torch.device("cpu"))
+        with _CountAllReduce() as mode:
+            reducer.reduce([torch.ones(16) for _ in range(4)], reducer.scale)
+        results[f"buckets {bucket_opts}"] = (mode.count, reducer.bucket_bytes)
+
+    for name in ["no_cuda_graph", "rf_batch_norm_distributed"]:
+        _fresh()
+        config, dataset = _build_cuda_graph_train_config_and_dataset(compile_=True, cuda_graph=name != "no_cuda_graph")
+        config.typed_dict["device"] = "cpu"  # the checks come before anything needs a GPU
+        config.typed_dict.get("torch_cuda_graph", {})["capture_optimizer"] = False
+        config.typed_dict["torch_distributed"] = {
+            "backend": "gloo",
+            "reduce_type": "grad_explicit",
+            "sync_complete_frac": True,
+            "epoch_end": "join",
+            "grad_reduce_in_graph": True,
+        }
+        config.typed_dict["rf_batch_norm_distributed"] = name == "rf_batch_norm_distributed"
+        with global_config_ctx(config):
+            try:
+                Engine(config=config).init_train_from_config(train_data=dataset)
+                results[name] = None
+            except Exception as exc:  # without the check: some later error, e.g. no GPU
+                results[name] = str(exc) if isinstance(exc, ValueError) else f"{type(exc).__name__}: {exc}"
+    _fresh()
+    with open(f"{tmp_dir}/rank{rank}.txt", "w") as f:
+        f.write(repr(results))
+
+
+def test_torch_distributed_grad_reduce_options_cpu():
+    """
+    The checks of the grad reduce options (gloo), and that the in-graph reduce follows grad_reduce_bucket_mb.
+    """
+    import socket
+    import torch.multiprocessing
+
+    with socket.socket() as s:
+        s.bind(("127.0.0.1", 0))
+        port = s.getsockname()[1]
+    with tempfile.TemporaryDirectory(prefix="returnn_test_torch_distributed_grad_reduce_options") as tmp_dir:
+        torch.multiprocessing.spawn(_torch_distributed_grad_reduce_options_worker, args=(1, port, tmp_dir), nprocs=1)
+        with open(f"{tmp_dir}/rank0.txt") as f:
+            results = eval(f.read())
+    for name, expected in {
+        "in_graph_param_sync": "grad_reduce_in_graph needs a grad sync level",
+        "in_graph_group": "grad_reduce_in_graph needs the grad sync over all ranks",
+        "bucket_mb_ddp": "grad_reduce_bucket_mb needs a grad sync level",
+        "bucket_mb_zero": "grad_reduce_bucket_mb must be > 0",
+        "no_cuda_graph": "grad_reduce_in_graph: needs torch_cuda_graph",
+        "rf_batch_norm_distributed": "rf_batch_norm_distributed is not supported",
+    }.items():
+        assert results[name] and expected in results[name], (name, results)
+    assert results["buckets {}"] == (1, 64 * 1024**2), results
+    assert results["buckets {'grad_reduce_bucket_mb': 6.103515625e-05}"] == (4, 64), results
+
+
 def _torch_distributed_cuda_graph_nccl_worker(
     rank: int, world_size: int, port: int, tmp_dir: str, opts: Dict[str, Any]
 ):
@@ -3152,6 +3257,7 @@ def _torch_distributed_grad_reduce_in_graph_worker(
                 if isinstance(value, torch.Tensor)
             ],
             "rng": torch.cuda.get_rng_state(),
+            "explicit_reduce_buffer": bool(engine._torch_distributed_ctx._grad_reducer._buckets),
             "misaligned_grads": [
                 name for name, param in model.named_parameters() if param.grad is not None and param.grad.data_ptr() % 16
             ],
@@ -3213,6 +3319,8 @@ def test_torch_distributed_cuda_graph_grad_reduce_in_graph_nccl():
         # 23 steps per epoch, rank 1 without data in the last 9
         warmup = opts.get("warmup_steps", 0)
         assert [res["calls"] for res in in_graph] == [{"explicit": warmup, "idle": i} for i in [0, 18]], name
+        # the kept buffer of the explicit reduce: freed once the step reduces in-graph
+        assert [res["explicit_reduce_buffer"] for res in explicit + in_graph] == [True, True, False, False], name
         assert [res["calls"] for res in explicit] == [{"explicit": 46, "idle": 0}] * 2, name
     for p, p_bf16 in zip(results[("float32", "in_graph")][0]["params"], results[("bfloat16", "in_graph")][0]["params"]):
         assert not torch.equal(p, p_bf16)  # really reduced in bfloat16

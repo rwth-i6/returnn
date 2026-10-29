@@ -177,21 +177,31 @@ class DistributedContext:
         self._updated_since_sync = [False] * len(self._sync_levels)
 
         # the grad allreduce, see maybe_reduce_grads; its flat buffer is kept across the steps
+        # These options are only about it; without a grad sync level (e.g. DistributedDataParallel) they would be
+        # ignored. (DistributedDataParallel has its own bucket_cap_mb, see its "options".)
+        for opt_name in ["grad_reduce_dtype", "grad_reduce_bucket_mb", "grad_reduce_in_graph"]:
+            if self._opts.get(opt_name, None) not in (None, False) and not self.has_grad_sync():
+                raise ValueError(
+                    f"torch_distributed: {opt_name} needs a grad sync level"
+                    f" (reduce_type 'grad_explicit' or a 'grad' sync level), got reduce_type {self._reduce_type!r}"
+                )
         grad_reduce_dtype = self._opts.get("grad_reduce_dtype", None)
         if grad_reduce_dtype is not None:
-            assert self.has_grad_sync(), "torch_distributed: grad_reduce_dtype needs a grad sync level"
-            grad_reduce_dtype = getattr(torch, grad_reduce_dtype)
-            assert isinstance(grad_reduce_dtype, torch.dtype), "torch_distributed: invalid grad_reduce_dtype"
+            grad_reduce_dtype = getattr(torch, grad_reduce_dtype, None)
+            if not isinstance(grad_reduce_dtype, torch.dtype):
+                raise ValueError(f"torch_distributed: invalid grad_reduce_dtype {self._opts['grad_reduce_dtype']!r}")
         self._grad_reduce_in_graph = bool(self._opts.get("grad_reduce_in_graph", False))
-        if self._grad_reduce_in_graph:
+        if self._grad_reduce_in_graph and self._sync_levels[0].group_spec != "world":
             # The step of a rank out of data (epoch_end "join") must run the same in-graph allreduce
             # with the same divisor: one group, the one of the control sync, which counts the ranks with data.
-            assert self.has_grad_sync() and self._sync_levels[0].group_spec == "world", (
-                "torch_distributed: grad_reduce_in_graph needs a grad sync over all ranks,"
-                " e.g. reduce_type 'grad_explicit'"
+            raise ValueError(
+                f"torch_distributed: grad_reduce_in_graph needs the grad sync over all ranks,"
+                f" got the group {self._sync_levels[0].group_spec!r}"
             )
         bucket_mb = self._opts.get("grad_reduce_bucket_mb", 64 if self._grad_reduce_in_graph else 256)
-        self._grad_reducer = _FlatReducer(dtype=grad_reduce_dtype, bucket_bytes=int(bucket_mb * 1024**2))
+        if not isinstance(bucket_mb, (int, float)) or bucket_mb <= 0:
+            raise ValueError(f"torch_distributed: grad_reduce_bucket_mb must be > 0, got {bucket_mb!r}")
+        self._grad_reducer = _FlatReducer(dtype=grad_reduce_dtype, bucket_bytes=max(1, int(bucket_mb * 1024**2)))
 
         self._check_no_unknown_opts()
 
@@ -314,6 +324,13 @@ class DistributedContext:
         level = self._sync_levels[0]
         assert level.sync_type == "grad"
         self._grad_reducer.reduce([p.grad for p in module.parameters() if p.grad is not None], group=level.group)
+
+    def release_grad_reduce_buffers(self):
+        """
+        Free the kept flat buffer of :func:`maybe_reduce_grads`, e.g. once the grads are averaged in the step
+        (``grad_reduce_in_graph``, after the eager warmup steps). The next reduce builds it again.
+        """
+        self._grad_reducer.release()
 
     def grad_reduce_in_graph(self) -> bool:
         """
@@ -873,6 +890,13 @@ class _FlatReducer:
             dist.all_reduce(flat, op=dist.ReduceOp.SUM, group=group)
             flat /= div
             torch._foreach_copy_(bucket, views)
+
+    def release(self):
+        """
+        Free the kept buffer. The next :func:`reduce` builds it again.
+        """
+        self._key = None
+        self._buckets = []
 
     def _build(self, tensors: List[torch.Tensor]):
         buckets = _bucket_layout(

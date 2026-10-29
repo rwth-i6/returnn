@@ -594,9 +594,9 @@ class GraphCapturedTrainStep:
         assert self._capture_graph or self._compile, 'torch_cuda_graph: "capture": False requires "compile": True'
         self._grad_reducer = grad_reducer
         self._grad_reduce_scale: Optional[torch.Tensor] = None  # the trace input while tracing, see step_core
-        if grad_reducer is not None:
+        if grad_reducer is not None and (not self._compile or self._partitioned):
             # the allreduce is traced into the step after the grads, so the grads must be outputs of one traced step
-            assert self._compile and not self._partitioned, (
+            raise ValueError(
                 "torch_distributed grad_reduce_in_graph: needs torch_cuda_graph compile, without partitioned"
             )
         self._compiled_fn: Optional[Callable[[List[torch.Tensor]], tuple]] = None

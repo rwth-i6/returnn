@@ -312,10 +312,11 @@ class Engine(EngineBase):
             if self._in_graph_grad_reducer is not None and self._torch_distributed_ctx.epoch_end_join():
                 # a rank out of data runs the step on its last batch (see run_idle_step), which would count it
                 # in the batch statistics of the other ranks
-                assert not self.config.bool("rf_batch_norm_distributed", False), (
-                    "torch_distributed grad_reduce_in_graph with epoch_end 'join':"
-                    " rf_batch_norm_distributed is not supported"
-                )
+                if self.config.bool("rf_batch_norm_distributed", False):
+                    raise ValueError(
+                        "torch_distributed grad_reduce_in_graph with epoch_end 'join':"
+                        " rf_batch_norm_distributed is not supported"
+                    )
             self._graph_capture = graph_capture.GraphCapturedTrainStep(
                 opts=self._graph_capture_opts,
                 extern_data_template=self.extern_data,
@@ -786,6 +787,9 @@ class Engine(EngineBase):
                     train_ctx = self._graph_capture.run_train_step(
                         extern_data_raw, global_train_step=self.global_train_step
                     )
+                    if self._graph_capture.reduces_grads and not in_graph_reduce:
+                        # compiled now, from now on the step averages the grads: no buffer for the explicit reduce
+                        self._torch_distributed_ctx.release_grad_reduce_buffers()
                     total_loss = None
                 else:
                     extern_data = extern_data_util.raw_dict_to_extern_data(
