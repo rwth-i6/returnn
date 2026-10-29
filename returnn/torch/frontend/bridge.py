@@ -66,11 +66,15 @@ class PTModuleAsRFModule(rf.Module):
 
         # recurse=False because param names cannot contain "."
         for name, pt_param in pt_module.named_parameters(recurse=False):
+            # rf.Parameter() always initializes its raw tensor (zeros by default) and sets requires_grad.
+            # Let it do that on a meta placeholder, then take the PT param as is.
             rf_param = rf.Parameter(
-                raw_tensor=pt_param,
                 dims=[Dim(d) for d in pt_param.shape],
                 dtype=str(pt_param.dtype).split(".")[-1],
+                trainable=pt_param.requires_grad,
+                device="meta",
             )
+            rf_param.raw_tensor = pt_param
             setattr(self, name, rf_param)
 
         for name, pt_param in pt_module.named_buffers(recurse=False):
