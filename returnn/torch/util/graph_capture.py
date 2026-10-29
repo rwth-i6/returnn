@@ -923,15 +923,24 @@ class GraphCapturedTrainStep:
             loss.get_inv_norm_factor()
 
     @contextmanager
-    def _training_state_preserved(self):
+    def _training_state_preserved(self, *, on_device: bool = False):
         """
-        Puts the training state back after the enclosed runs, which only warm the kernels:
-        the module buffers and the parameters without gradient (running statistics, counters),
-        and the CUDA RNG state. The copies live on the CPU, so they add nothing to the GPU memory.
+        Puts the training state back after the enclosed runs, which only warm the kernels
+        (or only take part in the collectives, see :func:`run_idle_step`): what the step can change besides
+        the grads, i.e. the module buffers and the RF auxiliary parameters (running statistics, counters),
+        but not the other parameters without gradient (frozen, which the step cannot change;
+        for a model without RF parameters all of them),
+        and the CUDA RNG state (host-side seed and offset, negligible).
+
+        :param on_device: keep the copies on the device (fast, e.g. for every idle step),
+            else on the CPU, so they add nothing to the GPU memory (e.g. for the warm runs before the capture)
         """
         tensors = list(self._get_buffers()) if self._get_buffers is not None else []
-        tensors += [p for p in self._params if not p.requires_grad]
-        saved = [t.detach().to("cpu", copy=True) for t in tensors]
+        if self._rf_params is not None:
+            tensors += [p.raw_tensor for p in self._rf_params if p.auxiliary]
+        else:
+            tensors += [p for p in self._params if not p.requires_grad]
+        saved = [t.detach().clone() if on_device else t.detach().to("cpu", copy=True) for t in tensors]
         rng_state = torch.cuda.get_rng_state(self._device)
         try:
             yield
@@ -1539,13 +1548,16 @@ class GraphCapturedTrainStep:
         It takes part in the allreduce of their step by running the step as well,
         on its last batch (still in the buffers), with zero contribution:
         the same collectives in the same order as the other ranks, and afterwards the grads averaged over them.
-        The run leaves no other trace (module buffers, RNG state), as :func:`_training_state_preserved`.
+        The run leaves no other trace, see :func:`_training_state_preserved` (copies on the device):
+        the module buffers and RF auxiliary params (e.g. batch norm statistics, counters) as without the option,
+        and the CUDA RNG state (the run draws e.g. dropout masks), so that until the next reseed (next train epoch)
+        e.g. an eval with random sampling on this rank sees the same RNG as without the option.
 
         :param num_ranks: with data, which contribute
         """
         assert self.reduces_grads
         self._grad_reducer.set_contributing(False, num_ranks=num_ranks)
-        with self._training_state_preserved():
+        with self._training_state_preserved(on_device=True):
             if self._graph is not None:
                 replay(self._graph)
             else:

@@ -3055,7 +3055,7 @@ def _torch_distributed_grad_reduce_in_graph_worker(
     grad reduce and of the idle steps, or the error.
 
     :param opts: torch_distributed entries, and "num_seqs" (per rank), "num_epochs", "model" (checkpoint prefix),
-        "warmup_steps", "exit_at_step" (rank "exit_rank", default 1, exits in this step, as by a crash),
+        "warmup_steps", "batch_norm", "dropout" (see _build_cuda_graph_train_config_and_dataset), "exit_at_step" (rank "exit_rank", default 1, exits in this step, as by a crash),
         "replay_timeout_sec" (for the replay of graphs with collectives, instead of the process group timeout)
     """
     from returnn.datasets import init_dataset
@@ -3075,8 +3075,14 @@ def _torch_distributed_grad_reduce_in_graph_worker(
     exit_at_step = opts.pop("exit_at_step", None)
     exit_rank = opts.pop("exit_rank", 1)
     replay_timeout_sec = opts.pop("replay_timeout_sec", None)
+    # a counter in an auxiliary param, which the idle steps must leave as it is
     config, _ = _build_cuda_graph_train_config_and_dataset(
-        compile_=True, warmup_steps=opts.pop("warmup_steps", 0), optimizer_step=True
+        compile_=True,
+        warmup_steps=opts.pop("warmup_steps", 0),
+        optimizer_step=True,
+        count_steps=True,
+        batch_norm=opts.pop("batch_norm", False),
+        dropout=opts.pop("dropout", 0.0),
     )
     config.typed_dict["num_epochs"] = opts.pop("num_epochs", 2)
     if "model" in opts:
@@ -3130,8 +3136,24 @@ def _torch_distributed_grad_reduce_in_graph_worker(
             torch.save({"error": f"{type(exc).__name__}: {exc}"}, f"{tmp_dir}/rank{rank}.pt")
             os._exit(0)  # no teardown: after a timeout, the communicator is aborted
         engine.finalize()
-    params = [param.detach().cpu() for param in engine._pt_model.parameters()]
-    torch.save({"params": params, "calls": calls}, f"{tmp_dir}/rank{rank}.pt")
+    model = engine._pt_model
+    optimizer = engine._updater.get_optimizer()
+    torch.save(
+        {
+            "params": [param.detach().cpu() for param in model.parameters() if param.requires_grad],
+            # all params (also the auxiliary ones, e.g. the batch norm statistics and the counter) and buffers
+            "state": {name: value.detach().cpu() for name, value in model.state_dict().items()},
+            "opt": [
+                value.detach().cpu()
+                for param in model.parameters()
+                for _, value in sorted(optimizer.state.get(param, {}).items())
+                if isinstance(value, torch.Tensor)
+            ],
+            "rng": torch.cuda.get_rng_state(),
+            "calls": calls,
+        },
+        f"{tmp_dir}/rank{rank}.pt",
+    )
     engine._torch_distributed_ctx.destroy_process_groups()
 
 
@@ -3158,19 +3180,30 @@ def test_torch_distributed_cuda_graph_grad_reduce_in_graph_nccl():
     2 GPUs, NCCL, grad_reduce_in_graph: the grad allreduce inside the captured step gives bitwise the params of the
     explicit allreduce after the step (with a deterministic compile, see the worker), in float32 and bfloat16
     (there after eager warmup steps, which reduce explicitly). With epoch_end join: rank 1 runs out of data first
-    in each epoch, and then joins the allreduce of the other rank with its idle steps.
+    in each epoch, and then joins the allreduce of the other rank with its idle steps, which leave no other trace:
+    the whole state of each rank (batch norm, a counter, dropout RNG, optimizer) is the same as without the option.
     Also resumed from the checkpoint of epoch 1 (in a new process): the same params as resumed without the option.
     """
     results = {}
+    model_opts = {"batch_norm": True, "dropout": 0.1}
     # bfloat16 also with eager warmup steps before the compile, which reduce explicitly
     for name, opts in {"float32": {}, "bfloat16": {"grad_reduce_dtype": "bfloat16", "warmup_steps": 2}}.items():
+        opts = {**model_opts, **opts}
         for mode in ["explicit", "in_graph"]:
             res = _run_torch_distributed_grad_reduce_in_graph({**opts, "grad_reduce_in_graph": mode == "in_graph"})
             assert all(torch.equal(p0, p1) for p0, p1 in zip(res[0]["params"], res[1]["params"])), (name, mode)
             assert all(p.isfinite().all() for p in res[0]["params"]), (name, mode)
             results[(name, mode)] = res
         explicit, in_graph = results[(name, "explicit")], results[(name, "in_graph")]
-        assert all(torch.equal(p, q) for p, q in zip(explicit[0]["params"], in_graph[0]["params"])), name
+        for rank in range(2):
+            # everything of the rank: the idle steps of rank 1 leave no trace (as there is no model run without the
+            # option), e.g. on the batch norm statistics, the step counter (auxiliary params) or the RNG (dropout)
+            res_e, res_i = explicit[rank], in_graph[rank]
+            assert res_e["state"].keys() == res_i["state"].keys() and "steps_seen" in res_e["state"], name
+            assert all(torch.equal(v, res_i["state"][k]) for k, v in res_e["state"].items()), (name, rank)
+            assert len(res_e["opt"]) == len(res_i["opt"]) > 0, name
+            assert all(torch.equal(a, b) for a, b in zip(res_e["opt"], res_i["opt"])), (name, rank)
+            assert torch.equal(res_e["rng"], res_i["rng"]), (name, rank)
         # 23 steps per epoch, rank 1 without data in the last 9
         warmup = opts.get("warmup_steps", 0)
         assert [res["calls"] for res in in_graph] == [{"explicit": warmup, "idle": i} for i in [0, 18]], name
@@ -3181,11 +3214,13 @@ def test_torch_distributed_cuda_graph_grad_reduce_in_graph_nccl():
     resumed = {}
     for mode in ["explicit", "in_graph"]:
         with tempfile.TemporaryDirectory(prefix="returnn_test_torch_distributed_grad_reduce_in_graph_model") as tmp_dir:
-            opts = {"grad_reduce_in_graph": mode == "in_graph", "model": f"{tmp_dir}/model"}
+            opts = {**model_opts, "grad_reduce_in_graph": mode == "in_graph", "model": f"{tmp_dir}/model"}
             _run_torch_distributed_grad_reduce_in_graph({**opts, "num_epochs": 1})
             resumed[mode] = _run_torch_distributed_grad_reduce_in_graph({**opts, "num_epochs": 2})
         assert all(torch.equal(p0, p1) for p0, p1 in zip(resumed[mode][0]["params"], resumed[mode][1]["params"]))
-    assert all(torch.equal(p, q) for p, q in zip(resumed["explicit"][0]["params"], resumed["in_graph"][0]["params"]))
+    for rank in range(2):
+        state_e, state_i = resumed["explicit"][rank]["state"], resumed["in_graph"][rank]["state"]
+        assert all(torch.equal(v, state_i[k]) for k, v in state_e.items()), rank
 
 
 def test_torch_distributed_cuda_graph_grad_reduce_in_graph_errors_nccl():
@@ -3603,6 +3638,8 @@ def _build_cuda_graph_train_config_and_dataset(
     optimizer: Optional[Dict[str, Any]] = None,
     count_steps: bool = False,
     graph_opts: Optional[Dict[str, Any]] = None,
+    batch_norm: bool = False,
+    dropout: float = 0.0,
 ):
     """
     small RF model + Task12AXDataset config with torch_cuda_graph, see the tests below.
@@ -3610,6 +3647,7 @@ def _build_cuda_graph_train_config_and_dataset(
     optimizer: the config entry, capturable AdamW by default.
     count_steps: the model counts its train step calls in an auxiliary parameter.
     graph_opts: further torch_cuda_graph entries.
+    batch_norm, dropout: after the first layer (running statistics in auxiliary parameters, RNG).
     """
     from returnn.datasets import init_dataset
     from returnn.tensor import Dim, batch_dim
@@ -3624,8 +3662,11 @@ def _build_cuda_graph_train_config_and_dataset(
             super().__init__()
             self.out_dim = classes_dim
             hidden = Dim(64, name="hidden")
-            self.layer = rf.Linear(feat_dim, hidden)
+            # no bias before the batch norm: its grad would be only rounding noise, which Adam scales up
+            self.layer = rf.Linear(feat_dim, hidden, with_bias=not batch_norm)
             self.out = rf.Linear(hidden, classes_dim)
+            if batch_norm:
+                self.norm = rf.BatchNorm(hidden, use_mask=False)
             if count_steps:
                 self.steps_seen = rf.Parameter([], dtype="int64", auxiliary=True)
                 self.steps_seen.initial = 0
@@ -3638,7 +3679,12 @@ def _build_cuda_graph_train_config_and_dataset(
         classes = extern_data["classes"]
         if count_steps:
             model.steps_seen.assign_add(1)
-        x = rf.relu(model.layer(data))
+        x = model.layer(data)
+        if batch_norm:
+            x = model.norm(x)
+        x = rf.relu(x)
+        if dropout:
+            x = rf.dropout(x, dropout, axis=model.layer.out_dim)
         logits = model.out(x)
         loss = rf.cross_entropy(target=classes, estimated=logits, estimated_type="logits", axis=model.out_dim)
         loss.mark_as_loss("ce")
