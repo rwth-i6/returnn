@@ -220,6 +220,35 @@ def test_softmax_fully_masked_zero_len_seq():
     assert (raw_log[1] == -torch.inf).all()  # log space: fully-masked rows -> -inf (log 0)
 
 
+
+def test_softmax_fully_masked_zero_len_seq_eager():
+    """
+    As :func:`test_softmax_fully_masked_zero_len_seq`, eager (not static traceable): a zero-length seq
+    (e.g. a text row of a speech LM batch over the audio frames) has fully masked rows, which give 0 (log: -inf),
+    not NaN, so no NaN reaches the gradients through the masked frames (0 * NaN).
+    """
+
+    import torch
+    from returnn.tensor import Tensor, Dim
+
+    batch_dim = Dim(2, name="batch")
+    time_dim = Dim(
+        Tensor("time", dims=[batch_dim], dtype="int32", raw_tensor=torch.tensor([5, 0], dtype=torch.int32))
+    )
+    feat_dim = Dim(4, name="feat")
+    raw_x = torch.randn(2, 5, 4, generator=torch.Generator().manual_seed(42), requires_grad=True)
+    x = Tensor("x", dims=[batch_dim, time_dim, feat_dim], dtype="float32", raw_tensor=raw_x)
+    out = rf.softmax(x * 2.0, axis=time_dim)
+    out_log = rf.log_softmax(x, axis=time_dim)
+    raw = out.copy_transpose((batch_dim, time_dim, feat_dim)).raw_tensor
+    assert torch.isfinite(raw).all()
+    assert (raw[1] == 0).all()
+    raw_log = out_log.copy_transpose((batch_dim, time_dim, feat_dim)).raw_tensor
+    assert (raw_log[1] == -torch.inf).all()
+    loss = rf.reduce_sum(out * x, axis=out.dims, use_mask=True)
+    loss.raw_tensor.backward()
+    assert torch.isfinite(raw_x.grad).all()
+
 if __name__ == "__main__":
     better_exchook.install()
     if len(sys.argv) <= 1:
