@@ -2881,6 +2881,63 @@ def test_torch_distributed_epoch_end_stop_cpu():
         assert "epoch_end" not in logs[rank] and not meta_keys, (rank, meta_keys)
 
 
+def _torch_distributed_join_idle_group_static_grads_worker(rank: int, world_size: int, port: int, tmp_dir: str):
+    from returnn.torch.distributed import DistributedContext
+
+    os.environ.update(
+        MASTER_ADDR="127.0.0.1",
+        MASTER_PORT=str(port),
+        RANK=str(rank),
+        WORLD_SIZE=str(world_size),
+        LOCAL_RANK=str(rank),
+        LOCAL_WORLD_SIZE=str(world_size),
+    )
+    ctx = DistributedContext(
+        {
+            "backend": "gloo",
+            "epoch_end": "join",
+            "sync": [{"group": 2, "type": "grad"}, {"group": "world", "type": "param", "every": 4}],
+        }
+    )
+    module = torch.nn.Linear(3, 2)
+    static_grads = [torch.full_like(p, float(rank + 1)) for p in module.parameters()]  # as the captured step's
+    for param, grad in zip(module.parameters(), static_grads):
+        param.grad = grad
+    has_data = rank >= 2  # the group of ranks 0 and 1 is out of data
+    num = ctx.reduce_grads_join(module=module, num_batches=int(has_data), accum_grad_multiple_step=1)
+    grads = [(p.grad is g, float(p.grad.flatten()[0])) for p, g in zip(module.parameters(), static_grads)]
+    with open(f"{tmp_dir}/rank{rank}.txt", "w") as f:
+        f.write(repr((num, grads)))
+    ctx.destroy_process_groups()
+
+
+def test_torch_distributed_join_idle_group_keeps_static_grads():
+    """
+    epoch_end "join" with hierarchical sync levels: a whole grad sync group out of data does no update,
+    and keeps the grad tensors (under graph capture the static buffers the replays write into), not None.
+    """
+    import socket
+
+    world_size = 4
+    with socket.socket() as s:
+        s.bind(("127.0.0.1", 0))
+        port = s.getsockname()[1]
+    with tempfile.TemporaryDirectory(prefix="returnn_test_torch_distributed_join_idle_group") as tmp_dir:
+        _torch_spawn_with_timeout(
+            _torch_distributed_join_idle_group_static_grads_worker,
+            args=(world_size, port, tmp_dir),
+            nprocs=world_size,
+            timeout=60,
+        )
+        results = []
+        for rank in range(world_size):
+            with open(f"{tmp_dir}/rank{rank}.txt") as f:
+                results.append(eval(f.read()))
+    assert results[0] == (0.0, [(True, 1.0), (True, 1.0)]), results
+    assert results[1] == (0.0, [(True, 2.0), (True, 2.0)]), results
+    assert results[2] == results[3] == (2.0, [(True, 3.5), (True, 3.5)]), results
+
+
 def test_torch_distributed_all_reduce_avg_flat_buckets():
     import socket
     import torch.multiprocessing

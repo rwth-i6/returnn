@@ -329,6 +329,9 @@ class DistributedContext:
         i.e. the mean over the contributing ranks, not over the group size.
         Afterwards, all ranks of the group hold the same grads (None where no rank has one),
         so the optimizer step (clipping, grad scaler, weight decay, moments) is the same on all of them.
+        A grad tensor is never replaced by None but zeroed: it can be the static buffer of a captured step,
+        which the replays write into. A group without any batch (e.g. a whole group out of data with hierarchical
+        sync levels) does no update and leaves its grads as they are.
 
         :param module: to take the params (and their grads) from
         :param num_batches: batches of this rank in the current grad accumulation (0 when out of data)
@@ -343,10 +346,13 @@ class DistributedContext:
         counts = torch.tensor(counts, dtype=torch.float32, device=params[0].device)
         torch.distributed.all_reduce(counts, op=torch.distributed.ReduceOp.SUM, group=group)
         counts = counts.tolist()
+        if not counts[-1]:
+            return 0.0
         grads = []
         for param, count in zip(params, counts[:-1]):
             if not count:  # no rank of the group has a grad for it
-                param.grad = None
+                if param.grad is not None:
+                    param.grad.zero_()
                 continue
             if param.grad is None:
                 param.grad = torch.zeros_like(param)
