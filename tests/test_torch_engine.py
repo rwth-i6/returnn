@@ -4231,6 +4231,46 @@ def test_torch_optimizer_step_replaced_grads():
     assert (opt_step._num_traces, opt_step._num_captures) == (1, 2)
 
 
+class _TunedSgd(torch.optim.Optimizer):
+    """SGD which "autotunes" (host sync, not allowed in a capture) for each new set of shapes with grads, as Triton"""
+
+    def __init__(self, params):
+        super().__init__(params, {"lr": 0.1})
+        self.tuned = set()
+
+    @torch.no_grad()
+    def step(self, closure=None):
+        """update"""
+        group = self.param_groups[0]
+        params = [p for p in group["params"] if p.grad is not None]
+        key = tuple(tuple(p.shape) for p in params)
+        if key not in self.tuned:
+            torch.cuda.synchronize()
+            self.tuned.add(key)
+        for p in params:
+            p.add_(p.grad, alpha=-group["lr"])
+
+
+def test_torch_optimizer_step_recapture_after_warm_step():
+    """
+    another set of params with grads (other shapes) under capture without compile:
+    one uncaptured step before the recapture, so the optimizer's lazy work (here a host sync) is outside of it
+    """
+    from returnn.torch.util.optimizer_step import OptimizerStep
+
+    if not torch.cuda.is_available():
+        raise unittest.SkipTest("CUDA not available")
+    params = [torch.nn.Parameter(torch.zeros(s, device="cuda")) for s in [(4, 3), (5,)]]
+    opt_step = OptimizerStep(optimizer=_TunedSgd(params), opts={"compile": False})
+    for i in range(6):
+        for j, p in enumerate(params):
+            p.grad = None if (i >= 3 and j == 1) else torch.ones_like(p)
+        opt_step.step()
+    assert opt_step._num_captures == 2
+    torch.testing.assert_close(params[0], torch.full_like(params[0], -0.6))
+    torch.testing.assert_close(params[1], torch.full_like(params[1], -0.3))
+
+
 def test_torch_optimizer_step_reload():
     """checkpoint round trip: new state tensors and lr, recapture, no retrace"""
     if not torch.cuda.is_available():

@@ -57,8 +57,9 @@ The checkpoint keeps the ordinary Python scalars for both (see :func:`OptimizerS
 
 The graph records the addresses of all params, grads, state tensors and lrs.
 When any of them is replaced (e.g. the grads were set to None, or the optimizer state was loaded),
-the graph is recaptured (checked on every step). The compiled step takes all of them as inputs,
-so it is only retraced when their shapes, dtypes or the state layout change.
+the graph is recaptured (checked on every step), after one uncaptured step (see :func:`OptimizerStep.invalidate`).
+The compiled step takes all of them as inputs, so it is only retraced when their shapes, dtypes or the state layout
+change.
 
 Requirements (asserted): one CUDA device for all params, no closure, no grad scaler.
 The set of params with grads must stay fixed.
@@ -176,8 +177,11 @@ class OptimizerStep:
         Drop the captured graph, e.g. after the optimizer state was loaded,
         or before the process group is destroyed when the step has collectives
         (see :func:`returnn.torch.engine.Engine.finalize`).
-        The next step recaptures (and retraces, if the layout changed).
+        The next step runs once uncaptured (retraced, if the layout changed), and the one after recaptures:
+        the optimizer may do lazy work for the new inputs which a capture does not allow
+        (e.g. Triton autotuning for new shapes, also with "compile": False).
         """
+        self._compiled_warm = False
         self._graph = None
         self._graph_inputs = None
         self._graph_signature = None
