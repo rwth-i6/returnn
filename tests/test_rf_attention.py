@@ -932,6 +932,89 @@ def test_causal_self_attention_static_traceable_bound():
         torch.testing.assert_close(a, b)
 
 
+def test_rope_causal_self_att_bounded_cache_vs_growing():
+    # Bounded cache with RoPE, with a history length per hypothesis
+    # (only some hypotheses advance per step, as in the beam search):
+    # same outputs as the growing cache run on each hypothesis alone.
+    import torch
+
+    rf.select_backend_torch()
+    batch = Dim(3, name="batch")
+    model_dim = Dim(8, name="model")
+    advance = [[1, 1, 1], [1, 0, 1], [0, 1, 1], [1, 1, 0], [1, 1, 1]]  # step -> batch entry
+    capacity = len(advance)
+    with rf.set_default_device_ctx("cpu"):
+        rf.set_random_seed(42)
+        att = rf.RotaryPosCausalSelfAttention(
+            model_dim, proj_dim=model_dim, key_dim_total=model_dim, value_dim_total=model_dim, num_heads=2
+        )
+        gen = torch.Generator().manual_seed(1)
+        steps = [torch.randn(3, 8, generator=gen) for _ in advance]
+
+        state = att.default_initial_state(batch_dims=[batch], capacity=capacity)
+        hist_dim = Dim(rf.zeros([batch], dtype="int32"), name="self_att_hist", capacity=capacity)
+        state.k_accum, _ = rf.replace_dim(state.k_accum, in_dim=state.accum_axis, out_dim=hist_dim)
+        state.v_accum, _ = rf.replace_dim(state.v_accum, in_dim=state.accum_axis, out_dim=hist_dim)
+        state.accum_axis = hist_dim
+        bounded_outs = []
+        for x_raw, adv in zip(steps, advance):
+            x = Tensor("x", [batch, model_dim], dtype="float32", raw_tensor=x_raw)
+            out, new_state = att(x, axis=single_step_dim, state=state)
+            mask = Tensor("advance", [batch], dtype="bool", raw_tensor=torch.tensor(adv, dtype=torch.bool))
+            state = rf.nested.mask_nested(new_state, mask=mask, mask_value=state)
+            bounded_outs.append(out.copy_transpose([batch, model_dim]).raw_tensor)
+
+        for b in range(batch.dimension):
+            state_b = att.default_initial_state(batch_dims=[])
+            for t, (x_raw, adv) in enumerate(zip(steps, advance)):
+                if not adv[b]:
+                    continue
+                x = Tensor("x", [model_dim], dtype="float32", raw_tensor=x_raw[b])
+                out, state_b = att(x, axis=single_step_dim, state=state_b)
+                torch.testing.assert_close(bounded_outs[t][b], out.raw_tensor, msg=f"step {t}, hyp {b}")
+
+
+def test_rope_causal_self_att_prefix_then_steps_static_traceable():
+    # A full-sequence prefix, then single steps.
+    # Under static tracing, the prefix axis has a capacity, so the steps continue in its bounded buffer:
+    # same outputs as eager, where the steps grow the cache.
+    import torch
+
+    rf.select_backend_torch()
+    batch = Dim(2, name="batch")
+    model_dim = Dim(8, name="model")
+    capacity = 6
+    lens = torch.tensor([3, 2], dtype=torch.int32)
+    with rf.set_default_device_ctx("cpu"):
+        rf.set_random_seed(42)
+        att = rf.RotaryPosCausalSelfAttention(
+            model_dim, proj_dim=model_dim, key_dim_total=model_dim, value_dim_total=model_dim, num_heads=2
+        )
+        gen = torch.Generator().manual_seed(1)
+        prefix_raw = torch.randn(2, capacity, 8, generator=gen)
+        steps_raw = [torch.randn(2, 8, generator=gen) for _ in range(2)]
+
+        def _run(*, static: bool):
+            time_dim = Dim(
+                Tensor("time", [batch], dtype="int32", raw_tensor=lens.clone()),
+                name="time",
+                capacity=capacity if static else None,
+            )
+            prefix = Tensor("prefix", [batch, time_dim, model_dim], dtype="float32")
+            prefix.raw_tensor = prefix_raw if static else prefix_raw[:, : int(lens.max())]
+            outs = []
+            with rf.set_static_traceable_ctx(static):
+                _, state = att(prefix, axis=time_dim, state=att.default_initial_state(batch_dims=[batch]))
+                for x_raw in steps_raw:
+                    x = Tensor("x", [batch, model_dim], dtype="float32", raw_tensor=x_raw)
+                    out, state = att(x, axis=single_step_dim, state=state)
+                    outs.append(out.copy_transpose([batch, model_dim]).raw_tensor)
+            return outs
+
+        for t, (got, ref) in enumerate(zip(_run(static=True), _run(static=False))):
+            torch.testing.assert_close(got, ref, msg=f"step {t}")
+
+
 def test_dot_attention_keys_dims_not_in_query():
     # Keys have a dim (here: batch) which the query does not have,
     # e.g. a flat query (implicit batch) attending to batched keys.
