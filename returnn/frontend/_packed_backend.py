@@ -4458,18 +4458,17 @@ class PackedBackend(Backend[PackedRawTensor]):
                         out.sparse_dim = source.sparse_dim
                     return out
             return _dim_aware_call("gather", (source,), kwargs)
-        if (
-            is_packed(indices)
-            and len(_raw(indices).orig_dims) == 2
-            and _raw(indices).orig_dims[0] == raw.orig_dims[0]
-            and _raw(indices).orig_dims[-1] != axis
-        ):
-            return _gather_into_index_packing(source, raw, indices=indices, clip_to_valid=clip_to_valid)
         if is_packed(indices) and _raw(indices).orig_dims != raw.orig_dims:
             # indices over another spatial dim have their own rows, which must not be read as rows of the source
             out = _gather_into_indices_packing(source, raw, indices=indices, clip_to_valid=clip_to_valid)
             if out is not None:
                 return out
+            if (
+                len(_raw(indices).orig_dims) == 2
+                and _raw(indices).orig_dims[0] == raw.orig_dims[0]
+                and _raw(indices).orig_dims[-1] != axis
+            ):
+                return _gather_into_index_packing(source, raw, indices=indices, clip_to_valid=clip_to_valid)
             return _dim_aware_call("gather", (source,), kwargs)
         if is_packed(indices):
             idx_raw = _raw(_conform_packing(indices, raw))
