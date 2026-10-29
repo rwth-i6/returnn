@@ -3181,6 +3181,7 @@ def _build_cuda_graph_train_config_and_dataset(
     optimizer: Optional[Dict[str, Any]] = None,
     count_steps: bool = False,
     graph_opts: Optional[Dict[str, Any]] = None,
+    conv_in: bool = False,
 ):
     """
     small RF model + Task12AXDataset config with torch_cuda_graph, see the tests below.
@@ -3188,6 +3189,7 @@ def _build_cuda_graph_train_config_and_dataset(
     optimizer: the config entry, capturable AdamW by default.
     count_steps: the model counts its train step calls in an auxiliary parameter.
     graph_opts: further torch_cuda_graph entries.
+    conv_in: two Conv2d over (time, feat) before the input layer (cuDNN gives their filter grads in another layout).
     """
     from returnn.datasets import init_dataset
     from returnn.tensor import Dim, batch_dim
@@ -3197,12 +3199,25 @@ def _build_cuda_graph_train_config_and_dataset(
     feat_dim = Dim(9, name="feat")
     classes_dim = Dim(2, name="classes")
 
+    class _ConvIn(rf.Module):
+        def __init__(self, out_dim: Dim):
+            super().__init__()
+            self.channel_dim = Dim(1, name="channel")
+            self.conv1 = rf.Conv2d(self.channel_dim, Dim(4, name="conv1"), filter_size=(3, 3), padding="same")
+            self.conv2 = rf.Conv2d(self.conv1.out_dim, Dim(4, name="conv2"), filter_size=(3, 3), padding="same")
+            self.linear = rf.Linear(feat_dim, out_dim)
+
+        def __call__(self, x: Tensor) -> Tensor:
+            x, _ = self.conv1(rf.expand_dim(x, self.channel_dim), in_spatial_dims=[time_dim, feat_dim])
+            x, _ = self.conv2(x, in_spatial_dims=[time_dim, feat_dim])
+            return self.linear(rf.reduce_mean(x, axis=self.conv2.out_dim))
+
     class _Model(rf.Module):
         def __init__(self):
             super().__init__()
             self.out_dim = classes_dim
             hidden = Dim(64, name="hidden")
-            self.layer = rf.Linear(feat_dim, hidden)
+            self.layer = _ConvIn(hidden) if conv_in else rf.Linear(feat_dim, hidden)
             self.out = rf.Linear(hidden, classes_dim)
             if count_steps:
                 self.steps_seen = rf.Parameter([], dtype="int64", auxiliary=True)
@@ -3285,6 +3300,7 @@ def _run_cuda_graph_train(
     optimizer: Optional[Dict[str, Any]] = None,
     count_steps: bool = False,
     graph_opts: Optional[Dict[str, Any]] = None,
+    conv_in: bool = False,
 ) -> Engine:
     if not torch.cuda.is_available():
         raise unittest.SkipTest("CUDA not available")
@@ -3296,6 +3312,7 @@ def _run_cuda_graph_train(
         optimizer=optimizer,
         count_steps=count_steps,
         graph_opts=graph_opts,
+        conv_in=conv_in,
     )
     with global_config_ctx(config):
         engine = Engine(config=config)
@@ -3796,6 +3813,19 @@ def test_torch_engine_cuda_graph_compile_train_default_warmup():
     """as :func:`test_torch_engine_cuda_graph_compile_train` with the default warmup_steps (0):
     no eager step, the lazy optimizer state is created directly before the capture"""
     _run_cuda_graph_train(compile_=True, warmup_steps=None)
+
+
+def test_torch_engine_cuda_graph_compile_grad_layout_fused_adamw():
+    """
+    The compiled step gives each grad in the strides of its param, as eager autograd does,
+    also for a conv filter (whose grad cuDNN gives in another layout):
+    fused AdamW (here the in-graph optimizer step) requires that
+    """
+    engine = _run_cuda_graph_train(
+        compile_=True, optimizer={"class": "adamw", "fused": True, "capturable": True}, conv_in=True
+    )
+    for name, p in engine._pt_model.named_parameters():
+        assert p.grad.stride() == p.stride(), f"{name}: grad strides {p.grad.stride()} vs param {p.stride()}"
 
 
 def test_torch_engine_optimizer_step_train():

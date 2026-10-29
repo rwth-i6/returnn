@@ -1067,7 +1067,15 @@ class GraphCapturedTrainStep:
                         return (total.raw_tensor,) + tuple(t.detach() for t in outs)
                     train_raws = [t for t, tr in zip(raws, trainable) if tr]
                     grads = torch.autograd.grad(total.raw_tensor, train_raws, allow_unused=True)
-                    grads = [g if g is not None else torch.zeros_like(t) for g, t in zip(grads, train_raws)]
+                    # each grad in the strides of its param, as eager autograd stores it (gradient layout contract):
+                    # the fused and the fast foreach optimizer kernels require it,
+                    # and e.g. cuDNN gives the conv filter grad channels-last for a channels-last input
+                    grads = [
+                        torch.zeros_like(t)
+                        if g is None
+                        else (g if g.stride() == t.stride() else torch.empty_like(t).copy_(g))
+                        for g, t in zip(grads, train_raws)
+                    ]
                 return tuple(t.detach() for t in outs + grads)
             finally:
                 for p_, r0 in zip(rf_params, orig_raws):
