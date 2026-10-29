@@ -3055,8 +3055,8 @@ def _torch_distributed_grad_reduce_in_graph_worker(
     grad reduce and of the idle steps, or the error.
 
     :param opts: torch_distributed entries, and "num_seqs" (per rank), "num_epochs", "model" (checkpoint prefix),
-        "warmup_steps", "exit_at_step" (rank 1 exits in this step, as by a crash),
-        "reduce_timeout_sec" (in-graph allreduce timeout, instead of the one of the process group)
+        "warmup_steps", "exit_at_step" (rank "exit_rank", default 1, exits in this step, as by a crash),
+        "replay_timeout_sec" (for the replay of graphs with collectives, instead of the process group timeout)
     """
     from returnn.datasets import init_dataset
     from returnn.torch.distributed import DistributedContext
@@ -3073,7 +3073,8 @@ def _torch_distributed_grad_reduce_in_graph_worker(
     opts = dict(opts)
     num_seqs = opts.pop("num_seqs", [100, 60])[rank]
     exit_at_step = opts.pop("exit_at_step", None)
-    reduce_timeout_sec = opts.pop("reduce_timeout_sec", None)
+    exit_rank = opts.pop("exit_rank", 1)
+    replay_timeout_sec = opts.pop("replay_timeout_sec", None)
     config, _ = _build_cuda_graph_train_config_and_dataset(
         compile_=True, warmup_steps=opts.pop("warmup_steps", 0), optimizer_step=True
     )
@@ -3101,7 +3102,7 @@ def _torch_distributed_grad_reduce_in_graph_worker(
     _count(DistributedContext, "maybe_reduce_grads", "explicit")
     _count(DistributedContext, "reduce_grads_join", "explicit")
     _count(GraphCapturedTrainStep, "run_idle_step", "idle")
-    if rank == 1 and exit_at_step is not None:
+    if rank == exit_rank and exit_at_step is not None:
         orig_run_train_step = GraphCapturedTrainStep.run_train_step
 
         def _run_train_step(self, extern_data_raw, *, global_train_step):
@@ -3121,8 +3122,8 @@ def _torch_distributed_grad_reduce_in_graph_worker(
     with global_config_ctx(config):
         engine = Engine(config=config)
         engine.init_train_from_config(train_data=dataset)
-        if reduce_timeout_sec is not None:
-            engine._in_graph_grad_reducer.timeout_sec = reduce_timeout_sec
+        if replay_timeout_sec is not None:
+            engine._torch_distributed_ctx.timeout_sec = replay_timeout_sec
         try:
             engine.train()
         except Exception as exc:
@@ -3191,25 +3192,110 @@ def test_torch_distributed_cuda_graph_grad_reduce_in_graph_errors_nccl():
     """
     grad_reduce_in_graph, no hang where the allreduce cannot be joined:
     a rank out of data before the step is compiled (here: in the eager warmup steps) ends all ranks with an error,
-    and a rank which is gone in the middle of a step (crashed) ends the other one after the timeout.
+    and a rank which is gone in the middle of a step (crashed) ends the other one after the timeout,
+    also when the other one is out of data (in its idle step).
     """
     res = _run_torch_distributed_grad_reduce_in_graph(
         {"grad_reduce_in_graph": True, "num_seqs": [100, 10], "warmup_steps": 50}
     )
     assert all("ran out of data before the train step was compiled" in r["error"] for r in res), res
 
-    # rank 0 waits for the allreduce of the captured step (not watched by the NCCL watchdog) at most the timeout,
-    # then ends its process, as the NCCL watchdog does
+    # The other rank waits for the allreduce of the captured step (not watched by the NCCL watchdog) at most the
+    # timeout, then ends its process, as the NCCL watchdog does. Rank 1 with 40 seqs is idle from step 9 on.
+    for exit_rank, exit_at_step, num_seqs in [(1, 5, [100, 60]), (0, 18, [100, 40])]:
+        start = time.monotonic()
+        try:
+            _run_torch_distributed_grad_reduce_in_graph(
+                {
+                    "grad_reduce_in_graph": True,
+                    "exit_rank": exit_rank,
+                    "exit_at_step": exit_at_step,
+                    "num_seqs": num_seqs,
+                    "replay_timeout_sec": 10,
+                }
+            )
+        except torch.multiprocessing.ProcessExitedException as exc:
+            assert (exc.error_index, exc.exit_code) == (1 - exit_rank, 1), exc
+        else:
+            raise AssertionError(f"rank {1 - exit_rank} did not end")
+        assert time.monotonic() - start < 200
+
+
+class _AllReduceSgd(torch.optim.Optimizer):
+    """SGD on the grads summed over the ranks, i.e. with a collective in its step"""
+
+    @torch.no_grad()
+    def step(self, closure=None):
+        """update"""
+        for group in self.param_groups:
+            for param in group["params"]:
+                torch.distributed.all_reduce(param.grad)
+                param.add_(param.grad, alpha=-group["lr"])
+
+
+def _torch_cuda_graph_replay_collectives_worker(rank: int, world_size: int, port: int):
+    from returnn.config import Config
+    from returnn.torch.distributed import get_ctx
+    from returnn.torch.util.capture_lock import cuda_graph_capture, replay
+    from returnn.torch.util.optimizer_step import OptimizerStep
+
+    os.environ.update(
+        MASTER_ADDR="127.0.0.1",
+        MASTER_PORT=str(port),
+        RANK=str(rank),
+        WORLD_SIZE=str(world_size),
+        LOCAL_RANK=str(rank),
+        LOCAL_WORLD_SIZE=str(world_size),
+    )
+    torch.cuda.set_device(rank)
+    get_ctx(Config({"torch_distributed": {"reduce_type": "grad_explicit", "timeout_sec": 10}}))
+    x = torch.ones(16, device="cuda")
+    torch.distributed.all_reduce(x)  # creates the communicator, before any capture
+    graphs = [torch.cuda.CUDAGraph() for _ in range(2)]
+    with cuda_graph_capture(graphs[0]):
+        x.mul_(2)
+    with cuda_graph_capture(graphs[1]):
+        torch.distributed.all_reduce(x)
+    assert [graph.returnn_has_collectives for graph in graphs] == [False, True]
+    replay(graphs[1])
+    assert torch.equal(x, torch.full((16,), 4.0, device="cuda"))
+    # a captured optimizer step with a collective: eager, eager warm run, capture + replay
+    param = torch.nn.Parameter(torch.zeros(8, device="cuda"))
+    param.grad = torch.ones(8, device="cuda")
+    opt_step = OptimizerStep(optimizer=_AllReduceSgd([param], {"lr": 0.5}), opts={"compile": False})
+    for _ in range(3):
+        param.grad.fill_(1.0)
+        opt_step.step()
+    assert opt_step._graph.returnn_has_collectives
+    assert torch.equal(param.detach(), torch.full((8,), -3.0, device="cuda"))
+    if rank == 1:
+        os._exit(0)
+    replay(graphs[0])
+    opt_step.step()  # rank 1 is gone: ends the process with exit code 1 after the timeout
+    os._exit(0)
+
+
+def test_torch_cuda_graph_replay_collectives_timeout_nccl():
+    """
+    A graph captured with collectives (e.g. the in-graph grad allreduce, the distributed batch norm, collectives of
+    a captured optimizer step, as here) is replayed with a wait, at most the process group timeout,
+    as the NCCL watchdog does not watch them: no hang when a rank is gone.
+    """
+    import socket
+
+    if torch.cuda.device_count() < 2:
+        raise unittest.SkipTest("needs 2 GPUs")
+    with socket.socket() as s:
+        s.bind(("127.0.0.1", 0))
+        port = s.getsockname()[1]
     start = time.monotonic()
     try:
-        _run_torch_distributed_grad_reduce_in_graph(
-            {"grad_reduce_in_graph": True, "exit_at_step": 5, "reduce_timeout_sec": 10}
-        )
+        _torch_spawn_with_timeout(_torch_cuda_graph_replay_collectives_worker, args=(2, port), nprocs=2, timeout=120)
     except torch.multiprocessing.ProcessExitedException as exc:
         assert (exc.error_index, exc.exit_code) == (0, 1), exc
     else:
         raise AssertionError("rank 0 did not end")
-    assert time.monotonic() - start < 200
+    assert 10 < time.monotonic() - start < 100
 
 
 def test_dynamic_learning_rate():

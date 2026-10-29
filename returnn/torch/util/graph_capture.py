@@ -60,8 +60,6 @@ from typing import TYPE_CHECKING, Optional, Union, Any, Callable, Dict, List, Tu
 from contextlib import contextmanager
 import gc
 import os
-import sys
-import time
 import numpy
 import torch
 
@@ -70,7 +68,7 @@ from returnn.tensor import Tensor, TensorDict, Dim
 import returnn.frontend as rf
 from returnn.frontend.run_ctx import RunCtx, Loss
 
-from .capture_lock import cuda_graph_capture
+from .capture_lock import cuda_graph_capture, replay
 
 # noinspection PyProtectedMember
 from ..data.extern_data import get_batch_dim_from_extern_data, _get_dyn_dims_from_extern_data
@@ -596,7 +594,6 @@ class GraphCapturedTrainStep:
         assert self._capture_graph or self._compile, 'torch_cuda_graph: "capture": False requires "compile": True'
         self._grad_reducer = grad_reducer
         self._grad_reduce_scale: Optional[torch.Tensor] = None  # the trace input while tracing, see step_core
-        self._replay_done: Optional[torch.cuda.Event] = None  # see _wait_collectives
         if grad_reducer is not None:
             # the allreduce is traced into the step after the grads, so the grads must be outputs of one traced step
             assert self._compile and not self._partitioned, (
@@ -1474,8 +1471,7 @@ class GraphCapturedTrainStep:
         self._copy_in(extern_data_raw)
         self._step_buf.fill_(global_train_step)
         if self._graph is not None:
-            self._graph.replay()
-            self._wait_collectives()
+            replay(self._graph)
             return self._ctx
         if self._compiled_fn is not None:  # "capture": False mode, post-warmup
             return self._run_compiled_eager()
@@ -1526,8 +1522,7 @@ class GraphCapturedTrainStep:
         # (allocated + pool, see the engine) counts the pool exactly once
         torch.cuda.reset_peak_memory_stats()
         # capture only records the kernels; replay now to actually compute this batch
-        graph.replay()
-        self._wait_collectives()
+        replay(graph)
         return self._ctx
 
     @property
@@ -1552,40 +1547,9 @@ class GraphCapturedTrainStep:
         self._grad_reducer.set_contributing(False, num_ranks=num_ranks)
         with self._training_state_preserved():
             if self._graph is not None:
-                self._graph.replay()
-                self._wait_collectives()
+                replay(self._graph)
             else:
                 self._run_compiled_eager()
-
-    def _wait_collectives(self) -> None:
-        """
-        With the in-graph grad allreduce: wait until the replay is done, at most the process group timeout.
-        The watchdog of the NCCL process group does not watch collectives inside a CUDA graph,
-        so a rank which never joins them (e.g. it crashed) would otherwise block the next host sync forever
-        (the engine reads the losses right after the step anyway).
-        On the timeout, the process ends, as with the watchdog: the NCCL kernels in the graph never return,
-        aborting the communicator then blocks as well (torch 2.14), and so would an exception (in the cleanup).
-        """
-        if self._grad_reducer is None:
-            return
-        if self._replay_done is None:
-            self._replay_done = torch.cuda.Event()
-        self._replay_done.record()
-        deadline = time.monotonic() + self._grad_reducer.timeout_sec
-        while not self._replay_done.query():
-            if time.monotonic() > deadline:
-                from returnn.log import log
-
-                msg = (
-                    f"torch_distributed grad_reduce_in_graph: the train step did not finish within"
-                    f" {self._grad_reducer.timeout_sec} s (timeout_sec), a rank is missing in its allreduce."
-                    f" Ending the process."
-                )
-                print(msg, file=log.v1)
-                print(msg, file=sys.stderr, flush=True)
-                log.flush()
-                os._exit(1)
-            time.sleep(1e-4)
 
     def release(self) -> None:
         """

@@ -77,7 +77,7 @@ from torch.overrides import TorchFunctionMode
 
 from returnn.log import log
 from returnn.util.basic import CollectionReadCheckCovered
-from .capture_lock import cuda_graph_capture
+from .capture_lock import cuda_graph_capture, replay
 
 __all__ = ["OptimizerStep"]
 
@@ -126,7 +126,7 @@ class OptimizerStep:
         """one optimizer update, like ``optimizer.step()``"""
         if self._graph is not None:
             if self._signature(self._inputs()) == self._graph_signature:
-                self._graph.replay()
+                replay(self._graph)
                 return
             print("torch_optimizer_step: params, grads or optimizer state replaced, recapture", file=log.v3)
             self.invalidate()
@@ -146,7 +146,7 @@ class OptimizerStep:
                 self._compiled_warm = True
                 return
             self._capture_graph(self._inputs())
-            self._graph.replay()  # the capture only records, this is the update
+            replay(self._graph)  # the capture only records, this is the update
             return
         inputs = self._inputs()
         layout = self._layout()
@@ -169,7 +169,7 @@ class OptimizerStep:
             self._compiled_fn(inputs)
             return
         self._capture_graph(inputs)
-        self._graph.replay()  # the capture only records, this is the update
+        replay(self._graph)  # the capture only records, this is the update
 
     def invalidate(self):
         """

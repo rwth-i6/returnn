@@ -64,6 +64,8 @@ class DistributedContext:
 
     def __init__(self, options: Dict[str, Any]):
         self._opts = CollectionReadCheckCovered(options)
+        # of the process groups, also of the collectives in a CUDA graph (see returnn.torch.util.capture_lock.replay)
+        self.timeout_sec = float(self._opts.get("timeout_sec", 1800))
 
         # Subprocesses have issues initializing torch.distributed process groups.
         #
@@ -84,7 +86,7 @@ class DistributedContext:
             # See https://github.com/rwth-i6/returnn/issues/1724 for discussion.
             dist.init_process_group(
                 backend=self._opts.get("backend", "cpu:gloo,cuda:nccl"),
-                timeout=timedelta(seconds=self._opts.get("timeout_sec", 1800)),
+                timeout=timedelta(seconds=self.timeout_sec),
             )
             self._rank = dist.get_rank()
             self._size = dist.get_world_size()
@@ -331,7 +333,6 @@ class DistributedContext:
             dtype=self._grad_reducer.dtype,
             group=self._sync_levels[0].group,
             device=device,
-            timeout_sec=self._opts.get("timeout_sec", 1800),
             bucket_bytes=self._grad_reducer.bucket_bytes,
         )
 
@@ -937,7 +938,7 @@ class InGraphGradReducer:
     A rank must not run out of data before the step is compiled (all ranks raise then).
     The NCCL communicator is created by the eager runs of the compile, before the capture.
     The NCCL watchdog does not watch collectives inside a CUDA graph, so the step waits for its end itself,
-    see :func:`GraphCapturedTrainStep._wait_collectives`.
+    see :func:`returnn.torch.util.capture_lock.replay`.
     Tested with torch 2.14.1 and NCCL 2.30.7.
 
     Same numerics as :class:`_FlatReducer`: the sum, multiplied by the float32 reciprocal of the divisor
@@ -956,14 +957,12 @@ class InGraphGradReducer:
         dtype: Optional[torch.dtype],
         group: Optional[torch.distributed.ProcessGroup],
         device: torch.device,
-        timeout_sec: float,
         bucket_bytes: int = _FLAT_REDUCE_BUCKET_BYTES,
     ):
         """
         :param dtype: allreduce in this dtype, None: the grad dtype
         :param group: None: all ranks
         :param device: of the grads
-        :param timeout_sec: see :func:`GraphCapturedTrainStep._wait_collectives`
         :param bucket_bytes: see :class:`_FlatReducer`
         """
         import torch.distributed as dist
@@ -972,7 +971,6 @@ class InGraphGradReducer:
         self.bucket_bytes = bucket_bytes
         self.group_name = (group or dist.group.WORLD).group_name
         self.group_size = dist.get_world_size(group=group)
-        self.timeout_sec = timeout_sec
         # whether this rank contributes (1. or 0.), the reciprocal of the number of contributing ranks
         self.scale = torch.zeros((2,), dtype=torch.float32, device=device)
         self._scale_host: Optional[Tuple[bool, int]] = None
