@@ -2010,6 +2010,50 @@ def test_chunked_rel_pos_att_triton_kernel_grad():
     # The chunked variant (chunk of S rows over its own rows and the first C rows of MEM previous
     # chunks, zero keys before the first chunk): fwd + all grads vs an explicit per-row reference,
     # at dropout 0 and at dropout > 0 with the kernel's own extracted mask.
+    m = _chunked_rel_pos_att_kernel_vs_reference(head_dim=32)
+
+    # The op traces under AOT autograd (fake tensors), as the compiled step of torch_cuda_graph does it.
+    from functorch.compile import aot_function, nop
+
+    dev = "cuda"
+    s_rows, c_rows, mem = 4, 2, 2
+    lens = [20, 12, 16]
+    total, n_heads, d = 48, 2, 32
+    r = mem * c_rows + 2 * s_rows - 1
+    starts_t = torch.tensor([0, 20, 32], dtype=torch.int32, device=dev)
+    lens_t = torch.tensor(lens, dtype=torch.int32, device=dev)
+    scale = 1.0 / (d**0.5)
+    gen = torch.Generator(device="cpu").manual_seed(19)
+
+    def _loss(q_, k_, v_, bd_, starts_, lens_):
+        out_ = m.chunked_rel_pos_att(
+            q_, k_, v_, bd_, starts_, lens_, max(lens), chunk_size=s_rows, kept_rows=c_rows, history=mem, scale=scale
+        )
+        return out_.square().sum()
+
+    leaves = [torch.randn(total, n_heads, d, generator=gen).to(dev).requires_grad_(True) for _ in range(3)]
+    leaves.append((torch.randn(total, n_heads, r, generator=gen) * 0.5).to(dev).requires_grad_(True))
+    traced = aot_function(_loss, fw_compiler=nop, bw_compiler=nop)
+    grads = torch.autograd.grad(traced(*leaves, starts_t, lens_t), leaves)
+    for g, g_ref in zip(grads, torch.autograd.grad(_loss(*leaves, starts_t, lens_t), leaves)):
+        torch.testing.assert_close(g, g_ref)
+
+
+def test_chunked_rel_pos_att_triton_kernel_float32_head_dim_64_128():
+    # float32 at head dim 64 (the spec's) and 128: the kernel's largest blocks need more shared memory than e.g. an
+    # RTX 5090 gives a block (128 KiB for (64, 64) at head dim 64, the limit is 99 KiB), so the launches take smaller
+    # blocks that fit; fwd + all grads stay exact vs the explicit reference.
+    for head_dim in (64, 128):
+        _chunked_rel_pos_att_kernel_vs_reference(head_dim=head_dim)
+
+
+def _chunked_rel_pos_att_kernel_vs_reference(*, head_dim: int):
+    """
+    fwd + all grads of the chunked rel-pos kernel (float32) vs an explicit per-row reference,
+    at dropout 0 and at dropout > 0 with the kernel's own extracted mask
+
+    :return: the kernel module
+    """
     rf.select_backend_torch()
     import torch as _torch
 
@@ -2025,7 +2069,7 @@ def test_chunked_rel_pos_att_triton_kernel_grad():
     chunks = [5, 3, 4]
     lens = [n * s_rows for n in chunks]
     starts = [0, 20, 32]
-    total, n_heads, d = 48, 2, 32
+    total, n_heads, d = 48, 2, head_dim
     r = mem * c_rows + 2 * s_rows - 1
     center = mem * c_rows + s_rows - 1
     starts_t = torch.tensor(starts, dtype=torch.int32, device=dev)
@@ -2085,23 +2129,10 @@ def test_chunked_rel_pos_att_triton_kernel_grad():
         numpy.testing.assert_allclose(out.detach().cpu().numpy(), ref.detach().cpu().numpy(), rtol=1e-4, atol=1e-5)
         ref.backward(d_out)
         for g_kernel, t in zip(grads_kernel, leaves + [bd_leaf]):
-            numpy.testing.assert_allclose(g_kernel.cpu().numpy(), t.grad.cpu().numpy(), rtol=1e-4, atol=1e-4)
-
-    # The op traces under AOT autograd (fake tensors), as the compiled step of torch_cuda_graph does it.
-    from functorch.compile import aot_function, nop
-
-    def _loss(q_, k_, v_, bd_, starts_, lens_):
-        out_ = m.chunked_rel_pos_att(
-            q_, k_, v_, bd_, starts_, lens_, max(lens), chunk_size=s_rows, kept_rows=c_rows, history=mem, scale=scale
-        )
-        return out_.square().sum()
-
-    leaves = [torch.randn(total, n_heads, d, generator=gen).to(dev).requires_grad_(True) for _ in range(3)]
-    leaves.append((torch.randn(total, n_heads, r, generator=gen) * 0.5).to(dev).requires_grad_(True))
-    traced = aot_function(_loss, fw_compiler=nop, bw_compiler=nop)
-    grads = torch.autograd.grad(traced(*leaves, starts_t, lens_t), leaves)
-    for g, g_ref in zip(grads, torch.autograd.grad(_loss(*leaves, starts_t, lens_t), leaves)):
-        torch.testing.assert_close(g, g_ref)
+            numpy.testing.assert_allclose(
+                g_kernel.cpu().numpy(), t.grad.cpu().numpy(), rtol=1e-4, atol=1e-4, err_msg=f"head dim {head_dim}"
+            )
+    return m
 
 
 def test_chunked_rel_pos_self_attention_matches_an_explicit_reference():
