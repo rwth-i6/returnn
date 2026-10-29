@@ -2691,7 +2691,7 @@ def test_torch_engine_distributed_param_no_sync_at_epoch_end_cpu():
 
 
 def _torch_distributed_all_reduce_avg_flat_worker(rank: int, world_size: int, port: int, tmp_dir: str):
-    from returnn.torch.distributed import _all_reduce_avg_flat, _destroy_process_groups
+    from returnn.torch.distributed import _all_reduce_avg_flat, _destroy_process_groups, _FlatReducer
 
     os.environ.update(MASTER_ADDR="127.0.0.1", MASTER_PORT=str(port), RANK=str(rank), WORLD_SIZE=str(world_size))
     torch.distributed.init_process_group(backend="gloo")
@@ -2711,6 +2711,19 @@ def _torch_distributed_all_reduce_avg_flat_worker(rank: int, world_size: int, po
     _all_reduce_avg_flat(tensors, bucket_bytes=8)
     assert [[float(tensor[0]), float(tensor[-1])] for tensor in tensors] == results
     assert [tensor.dtype for tensor in tensors] == [[torch.float32, torch.float64][i % 2] for i in range(5)]
+    # a kept reducer (the grad sync): the same buffer for new tensors of the same shapes, bucket layout as above
+    reducer = _FlatReducer(bucket_bytes=8)
+    for _ in range(2):
+        tensors = [torch.full((n,), float(100 * rank + i)) for i, n in enumerate([3, 7, 2, 11, 5])]
+        reducer.reduce(tensors)
+        assert [[float(tensor[0]), float(tensor[-1])] for tensor in tensors] == results
+        buffers = {flat.untyped_storage().data_ptr() for _, _, flat, _ in reducer._buckets}
+        assert len(reducer._buckets) == 5 and len(buffers) == 1
+    # in bfloat16: rounded to it (the small integers rank + i and their sums are exact there), the dtype kept
+    tensors = [torch.full((n,), float(rank + i) + 1e-3) for i, n in enumerate([3, 7, 2, 11, 5])]
+    _FlatReducer(dtype=torch.bfloat16).reduce(tensors)
+    assert [[float(tensor[0]), float(tensor[-1])] for tensor in tensors] == [[1.0 + i, 1.0 + i] for i in range(5)]
+    assert all(tensor.dtype == torch.float32 for tensor in tensors)
     with open(f"{tmp_dir}/rank{rank}.txt", "w") as f:
         f.write(repr(results))
     _destroy_process_groups([None])
@@ -2820,6 +2833,7 @@ def test_torch_distributed_epoch_end_join_cpu():
         {"reduce_type": "grad"},
         {"reduce_type": "grad", "accum": 2},
         {"reduce_type": "grad_explicit", "accum": 3},
+        {"reduce_type": "grad_explicit", "grad_reduce_dtype": "bfloat16"},
         {"reduce_type": "param", "param_sync_step": 4},
         {"sync": [{"group": 2, "type": "grad"}, {"group": "world", "type": "param", "every": 2}]},
     ]:
@@ -2874,6 +2888,66 @@ def test_torch_distributed_all_reduce_avg_flat_buckets():
                 results = eval(f.read())
             # the mean over the ranks of 100 * rank + i
             assert results == [[100.0 + i, 100.0 + i] for i in range(5)], (rank, results)
+
+
+def _torch_distributed_cuda_graph_nccl_worker(
+    rank: int, world_size: int, port: int, tmp_dir: str, opts: Dict[str, Any]
+):
+    from returnn.datasets import init_dataset
+
+    os.environ.update(
+        MASTER_ADDR="127.0.0.1",
+        MASTER_PORT=str(port),
+        RANK=str(rank),
+        WORLD_SIZE=str(world_size),
+        LOCAL_RANK=str(rank),
+        LOCAL_WORLD_SIZE=str(world_size),
+    )
+    config, _ = _build_cuda_graph_train_config_and_dataset(compile_=False, optimizer_step=True)
+    config.typed_dict["torch_distributed"] = {
+        "reduce_type": "grad_explicit",
+        "sync_complete_frac": True,
+        "epoch_end": "join",
+        **opts,
+    }
+    # fewer seqs on rank 1: it joins the last steps of each epoch idle
+    num_seqs = [100, 60][rank]
+    dataset = init_dataset({"class": "Task12AXDataset", "num_seqs": num_seqs, "name": "train", "fixed_random_seed": 1})
+    dataset.init_seq_order(epoch=1)
+    with global_config_ctx(config):
+        engine = Engine(config=config)
+        engine.init_train_from_config(train_data=dataset)
+        engine.train()
+        engine.finalize()
+    torch.save([param.detach().cpu() for param in engine._pt_model.parameters()], f"{tmp_dir}/rank{rank}.pt")
+    engine._torch_distributed_ctx.destroy_process_groups()
+
+
+def test_torch_distributed_cuda_graph_grad_explicit_nccl():
+    """
+    2 GPUs, NCCL: captured model step, captured optimizer step, grad_explicit with the kept flat reduce buffer,
+    epoch_end join; also with the grad allreduce in bfloat16. The ranks end with the same params.
+    """
+    import socket
+
+    if torch.cuda.device_count() < 2:
+        raise unittest.SkipTest("needs 2 GPUs")
+    results = {}
+    for name, opts in {"float32": {}, "bfloat16": {"grad_reduce_dtype": "bfloat16"}}.items():
+        with socket.socket() as s:
+            s.bind(("127.0.0.1", 0))
+            port = s.getsockname()[1]
+        with tempfile.TemporaryDirectory(prefix="returnn_test_torch_distributed_cuda_graph_nccl") as tmp_dir:
+            _torch_spawn_with_timeout(
+                _torch_distributed_cuda_graph_nccl_worker, args=(2, port, tmp_dir, opts), nprocs=2, timeout=300
+            )
+            params = [torch.load(f"{tmp_dir}/rank{rank}.pt") for rank in range(2)]
+        assert all(torch.equal(p0, p1) for p0, p1 in zip(*params)), name
+        assert all(p.isfinite().all() for p in params[0]), name
+        results[name] = params[0]
+    for p, p_bf16 in zip(results["float32"], results["bfloat16"]):
+        assert not torch.equal(p, p_bf16)  # really reduced in bfloat16
+        assert (p - p_bf16).norm() < 0.05 * p.norm(), ((p - p_bf16).norm(), p.norm())
 
 
 def test_dynamic_learning_rate():
