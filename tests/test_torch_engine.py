@@ -1067,6 +1067,49 @@ def test_load_optimizer_old_format():
         updater.load_optimizer(tmp_dir + "/model.opt.new_format.pt")
 
 
+def test_load_optimizer_hyperparameters_from_config():
+    """
+    The checkpoint gives the optimizer state, the config the hyperparameters and flags of the param groups,
+    e.g. a decay phase with other betas and weight decay, or another kernel choice (foreach)
+    """
+    model = torch.nn.Linear(7, 5)
+    model.weight.grad, model.bias.grad = torch.ones_like(model.weight), torch.ones_like(model.bias)
+    opts = {"class": "adamw", "betas": (0.9, 0.95), "weight_decay": 0.1, "foreach": True}
+    updater = Updater(config=Config(dict(optimizer=opts)), network=model, device=torch.device("cpu"))
+    updater.create_optimizer()
+    updater.get_optimizer().step()
+    exp_avg = updater.get_optimizer().state[model.weight]["exp_avg"].clone()
+
+    opts = {"class": "adamw", "betas": (0.8, 0.9), "weight_decay": 0.01, "foreach": False}
+    updater2 = Updater(config=Config(dict(optimizer=opts)), network=model, device=torch.device("cpu"))
+    updater2.create_optimizer()
+    with tempfile.TemporaryDirectory(prefix="returnn_test_load_optimizer_hyperparameters") as tmp_dir:
+        updater.save_optimizer(tmp_dir + "/model.opt.pt")
+        updater2.load_optimizer(tmp_dir + "/model.opt.pt")
+    optimizer = updater2.get_optimizer()
+    groups = [(g["betas"], g["weight_decay"], g["foreach"]) for g in optimizer.param_groups]
+    assert groups == [((0.8, 0.9), 0.01, False), ((0.8, 0.9), 0.0, False)], groups
+    torch.testing.assert_close(optimizer.state[model.weight]["exp_avg"], exp_avg)
+    assert int(optimizer.state[model.weight]["step"]) == 1
+
+    if torch.cuda.is_available():  # capturable: the step counts go to the device, as the config's flag says
+        model.cuda()
+        model.weight.grad, model.bias.grad = torch.ones_like(model.weight), torch.ones_like(model.bias)
+        updaters = []
+        for capturable in (False, True):
+            config = Config(dict(optimizer={"class": "adamw", "capturable": capturable}))
+            updaters.append(Updater(config=config, network=model, device=torch.device("cuda")))
+            updaters[-1].create_optimizer()
+        updaters[0].get_optimizer().step()
+        with tempfile.TemporaryDirectory(prefix="returnn_test_load_optimizer_hyperparameters") as tmp_dir:
+            updaters[0].save_optimizer(tmp_dir + "/model.opt.pt")
+            updaters[1].load_optimizer(tmp_dir + "/model.opt.pt")
+        optimizer = updaters[1].get_optimizer()
+        assert all(g["capturable"] for g in optimizer.param_groups)
+        assert optimizer.state[model.weight]["step"].device.type == "cuda"
+        optimizer.step()
+
+
 def test_updater_weight_decay_blacklist():
     from returnn.util.basic import DictRefKeys
 
@@ -2871,6 +2914,78 @@ def test_torch_distributed_epoch_end_join_partly_used_params_cpu():
     assert len({param_sum for _, _, param_sum, _ in results}) == 1, results
 
 
+def _torch_distributed_epoch_end_join_rank_without_data_worker(
+    rank: int, world_size: int, port: int, tmp_dir: str, opts: Dict[str, Any]
+):
+    from returnn.log import log
+
+    os.environ.update(
+        MASTER_ADDR="127.0.0.1",
+        MASTER_PORT=str(port),
+        RANK=str(rank),
+        WORLD_SIZE=str(world_size),
+        LOCAL_RANK=str(rank),
+        LOCAL_WORLD_SIZE=str(world_size),
+    )
+    log.initialize(logs=[f"{tmp_dir}/log.rank{rank}.txt"], verbosity=[4])
+    config = Config(
+        dict(
+            task="train",
+            device="cpu",
+            extern_data={"data": {"dim": 9}, "classes": {"dim": 2, "sparse": True}},
+            get_model=TrainTestModel,
+            train_step=TrainTestModel.train_step,
+            batch_size=10**9,
+            max_seqs=3,
+            max_seq_length=10**9 if rank == 0 else 1,  # rank 1: every seq is longer, no batch at all
+            optimizer={"class": "adamw"},
+            learning_rate=0.01,
+            num_epochs=2,
+            torch_dataloader_opts={"num_workers": 0},
+            torch_distributed={"backend": "gloo", "sync_complete_frac": True, "epoch_end": "join", **opts},
+        )
+    )
+    with global_config_ctx(config):
+        dataset = init_dataset({"class": "Task12AXDataset", "num_seqs": 12})
+        dataset.init_seq_order(epoch=1)
+        engine = Engine(config=config)
+        engine.init_train_from_config(train_data=dataset)
+        engine.train()
+        param_sum = float(sum(param.detach().double().sum() for param in engine._pt_model.parameters()))
+    with open(f"{tmp_dir}/rank{rank}.txt", "w") as f:
+        f.write(repr(param_sum))
+    engine._torch_distributed_ctx.destroy_process_groups()
+
+
+def test_torch_distributed_epoch_end_join_rank_without_data_cpu():
+    """
+    epoch_end "join", a rank without any batch in the epochs (e.g. an empty shard): it takes part in the updates
+    (grad sync) or the syncs (param sync, also of the optimizer state it never created), the epochs end normally,
+    and the params end up the same.
+    """
+    import socket
+
+    for opts in [
+        {"reduce_type": "grad_explicit"},
+        {"reduce_type": "param", "param_sync_step": 2, "sync_at_epoch_end": True},
+    ]:
+        with socket.socket() as s:
+            s.bind(("127.0.0.1", 0))
+            port = s.getsockname()[1]
+        with tempfile.TemporaryDirectory(prefix="returnn_test_torch_distributed_join_without_data") as tmp_dir:
+            _torch_spawn_with_timeout(
+                _torch_distributed_epoch_end_join_rank_without_data_worker,
+                args=(2, port, tmp_dir, opts),
+                nprocs=2,
+                timeout=120,
+            )
+            results = []
+            for rank in range(2):
+                with open(f"{tmp_dir}/rank{rank}.txt") as f:
+                    results.append(eval(f.read()))
+        assert results[0] == results[1], (opts, results)
+
+
 def test_torch_distributed_epoch_end_stop_cpu():
     """
     epoch_end "stop" (default): the first rank out of data ends the epoch, without epoch end log.
@@ -2879,6 +2994,189 @@ def test_torch_distributed_epoch_end_stop_cpu():
     for rank, (num_seen_seqs, _, _, meta_keys) in enumerate(results):
         assert num_seen_seqs == 2 * 9  # 3 steps per epoch, as rank 0
         assert "epoch_end" not in logs[rank] and not meta_keys, (rank, meta_keys)
+
+
+def _torch_distributed_join_idle_group_static_grads_worker(rank: int, world_size: int, port: int, tmp_dir: str):
+    from returnn.torch.distributed import DistributedContext
+
+    os.environ.update(
+        MASTER_ADDR="127.0.0.1",
+        MASTER_PORT=str(port),
+        RANK=str(rank),
+        WORLD_SIZE=str(world_size),
+        LOCAL_RANK=str(rank),
+        LOCAL_WORLD_SIZE=str(world_size),
+    )
+    ctx = DistributedContext(
+        {
+            "backend": "gloo",
+            "epoch_end": "join",
+            "sync": [{"group": 2, "type": "grad"}, {"group": "world", "type": "param", "every": 4}],
+        }
+    )
+    module = torch.nn.Linear(3, 2)
+    static_grads = [torch.full_like(p, float(rank + 1)) for p in module.parameters()]  # as the captured step's
+    for param, grad in zip(module.parameters(), static_grads):
+        param.grad = grad
+    has_data = rank >= 2  # the group of ranks 0 and 1 is out of data
+    num = ctx.reduce_grads_join(module=module, num_batches=int(has_data), accum_grad_multiple_step=1)
+    grads = [(p.grad is g, float(p.grad.flatten()[0])) for p, g in zip(module.parameters(), static_grads)]
+    with open(f"{tmp_dir}/rank{rank}.txt", "w") as f:
+        f.write(repr((num, grads)))
+    ctx.destroy_process_groups()
+
+
+def test_torch_distributed_join_idle_group_keeps_static_grads():
+    """
+    epoch_end "join" with hierarchical sync levels: a whole grad sync group out of data does no update,
+    and keeps the grad tensors (under graph capture the static buffers the replays write into), not None.
+    """
+    import socket
+
+    world_size = 4
+    with socket.socket() as s:
+        s.bind(("127.0.0.1", 0))
+        port = s.getsockname()[1]
+    with tempfile.TemporaryDirectory(prefix="returnn_test_torch_distributed_join_idle_group") as tmp_dir:
+        _torch_spawn_with_timeout(
+            _torch_distributed_join_idle_group_static_grads_worker,
+            args=(world_size, port, tmp_dir),
+            nprocs=world_size,
+            timeout=60,
+        )
+        results = []
+        for rank in range(world_size):
+            with open(f"{tmp_dir}/rank{rank}.txt") as f:
+                results.append(eval(f.read()))
+    assert results[0] == (0.0, [(True, 1.0), (True, 1.0)]), results
+    assert results[1] == (0.0, [(True, 2.0), (True, 2.0)]), results
+    assert results[2] == results[3] == (2.0, [(True, 3.5), (True, 3.5)]), results
+
+
+class _SyncBatchNormTestModel(TrainTestModel):
+    """with a torch.nn.SyncBatchNorm"""
+
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        self.bn = torch.nn.SyncBatchNorm(9)
+
+
+class _RFDistributedBatchNormTestModel(rf.Module):
+    """with a distributed rf.BatchNorm"""
+
+    def __init__(self, **_kwargs):
+        super().__init__()
+        self.bn = rf.BatchNorm(Dim(9, name="feat"), use_mask=False, distributed=True)
+
+
+def _torch_distributed_join_sync_batch_norm_worker(rank: int, world_size: int, port: int, tmp_dir: str):
+    os.environ.update(
+        MASTER_ADDR="127.0.0.1",
+        MASTER_PORT=str(port),
+        RANK=str(rank),
+        WORLD_SIZE=str(world_size),
+        LOCAL_RANK=str(rank),
+        LOCAL_WORLD_SIZE=str(world_size),
+    )
+    results = []
+    for opts in [
+        {},
+        {"rf_batch_norm_distributed": True},
+        {"get_model": _SyncBatchNormTestModel},
+        {"get_model": _RFDistributedBatchNormTestModel},
+    ]:
+        config = Config(
+            {
+                "task": "train",
+                "device": "cpu",
+                "extern_data": {"data": {"dim": 9}, "classes": {"dim": 2, "sparse": True}},
+                "get_model": TrainTestModel,
+                "train_step": TrainTestModel.train_step,
+                "batch_size": 10**9,
+                "max_seqs": 3,
+                "optimizer": {"class": "adamw"},
+                "learning_rate": 0.01,
+                "num_epochs": 1,
+                "torch_dataloader_opts": {"num_workers": 0},
+                "torch_distributed": {"backend": "gloo", "reduce_type": "grad_explicit", "epoch_end": "join"},
+                **opts,
+            }
+        )
+        with global_config_ctx(config):
+            dataset = init_dataset({"class": "Task12AXDataset", "num_seqs": 3})
+            dataset.init_seq_order(epoch=1)
+            engine = Engine(config=config)
+            try:
+                engine.init_train_from_config(train_data=dataset)
+                results.append(None)
+            except ValueError as exc:
+                results.append(str(exc))
+    with open(f"{tmp_dir}/rank{rank}.txt", "w") as f:
+        f.write(repr(results))
+    engine._torch_distributed_ctx.destroy_process_groups()
+
+
+def test_torch_distributed_epoch_end_join_sync_batch_norm_refused():
+    """
+    epoch_end "join" with a batch norm over all ranks (a collective in the step) would deadlock,
+    as a rank out of data does not run the model: refused, for each way to get one
+    """
+    import socket
+
+    with socket.socket() as s:
+        s.bind(("127.0.0.1", 0))
+        port = s.getsockname()[1]
+    with tempfile.TemporaryDirectory(prefix="returnn_test_torch_distributed_join_sync_bn") as tmp_dir:
+        _torch_spawn_with_timeout(
+            _torch_distributed_join_sync_batch_norm_worker, args=(1, port, tmp_dir), nprocs=1, timeout=60
+        )
+        with open(f"{tmp_dir}/rank0.txt") as f:
+            results = eval(f.read())
+    assert results[0] is None, results
+    for res in results[1:]:
+        assert res is not None and "distributed batch norm" in res, results
+
+
+def _torch_distributed_sync_state_objects_from_weighted_rank_worker(
+    rank: int, world_size: int, port: int, tmp_dir: str
+):
+    from returnn.torch.distributed import _sync_state, _destroy_process_groups
+
+    os.environ.update(MASTER_ADDR="127.0.0.1", MASTER_PORT=str(port), RANK=str(rank), WORLD_SIZE=str(world_size))
+    torch.distributed.init_process_group(backend="gloo")
+    module = torch.nn.Linear(3, 2)
+    optimizer = torch.optim.SGD(module.parameters(), lr=0.1)
+    for param in module.parameters():
+        # a Python-int step count, as a custom optimizer keeps it; rank 0 without an update since the last sync
+        optimizer.state[param] = {"step": 1 if rank == 0 else 5, "buf": torch.full_like(param, float(rank))}
+    _sync_state(module=module, optimizer=optimizer, weight=float(rank > 0))
+    results = [(state["step"], float(state["buf"].flatten()[0])) for state in optimizer.state.values()]
+    with open(f"{tmp_dir}/rank{rank}.txt", "w") as f:
+        f.write(repr(results))
+    _destroy_process_groups([None])
+
+
+def test_torch_distributed_sync_state_objects_from_weighted_rank():
+    """
+    epoch_end "join": the optimizer state which is no tensor comes from a rank with an update since the last sync,
+    not from the first rank of the group if that one has none (a stale Python step count)
+    """
+    import socket
+
+    world_size = 2
+    with socket.socket() as s:
+        s.bind(("127.0.0.1", 0))
+        port = s.getsockname()[1]
+    with tempfile.TemporaryDirectory(prefix="returnn_test_torch_distributed_sync_state_objects") as tmp_dir:
+        _torch_spawn_with_timeout(
+            _torch_distributed_sync_state_objects_from_weighted_rank_worker,
+            args=(world_size, port, tmp_dir),
+            nprocs=world_size,
+            timeout=60,
+        )
+        for rank in range(world_size):
+            with open(f"{tmp_dir}/rank{rank}.txt") as f:
+                assert eval(f.read()) == [(5, 1.0), (5, 1.0)], rank
 
 
 def test_torch_distributed_all_reduce_avg_flat_buckets():
@@ -4251,6 +4549,48 @@ def test_torch_optimizer_step_compile_deterministic():
         with fresh_cache():
             results.append(_run())
     assert all(torch.equal(results[0], res) for res in results[1:])
+
+
+def test_torch_optimizer_step_not_deterministic_with_grad_sync_warns():
+    """
+    A compile which is not deterministic with a grad sync over several ranks: their params can drift apart, warn.
+    Not with a deterministic compile, a single rank, or a param sync only.
+    """
+    import io
+    import torch._inductor.config as inductor_config
+    from returnn.torch.util import optimizer_step
+    from returnn.torch import distributed
+
+    class _Ctx:
+        def __init__(self, size: int, reduce_type: str):
+            self._size, self._reduce_type = size, reduce_type
+
+        def size(self):
+            return self._size
+
+        def reduce_type(self):
+            return self._reduce_type
+
+        def has_grad_sync(self):
+            return self._reduce_type == "grad_explicit"
+
+    params = [torch.nn.Parameter(torch.zeros(3))]
+    for ctx, inductor_config, expect_warning in [
+        (_Ctx(2, "grad_explicit"), {"deterministic": False}, True),
+        (_Ctx(2, "grad"), {"deterministic": False}, True),
+        (_Ctx(2, "grad_explicit"), {}, not hasattr(inductor_config, "deterministic")),
+        (_Ctx(1, "grad_explicit"), {"deterministic": False}, False),
+        (_Ctx(2, "param"), {"deterministic": False}, False),
+        (None, {"deterministic": False}, False),
+    ]:
+        out = io.StringIO()
+        with unittest.mock.patch.object(distributed, "_is_set_up", True), unittest.mock.patch.object(
+            distributed, "_ctx", ctx
+        ), unittest.mock.patch.object(optimizer_step.log, "v1", out):
+            optimizer_step.OptimizerStep(
+                optimizer=torch.optim.SGD(params, lr=0.1), opts={"capture": False, "inductor_config": inductor_config}
+            )
+        assert ("params can drift apart" in out.getvalue()) == expect_warning, (ctx and vars(ctx), inductor_config)
 
 
 def test_torch_optimizer_step_replaced_grads():

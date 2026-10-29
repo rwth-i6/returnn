@@ -869,6 +869,47 @@ def test_concat_packed_static_traceable_declared_bound():
         out.raw_tensor.inner.raw_tensor[:15], ref.raw_tensor.inner.raw_tensor[:15], rtol=0, atol=0
     )
 
+
+def test_concat_packed_static_traceable_declared_bound_checked():
+    # a declared bound on the concat dim below the content would cut off the last frames silently:
+    # a host check in eager mode, a device assert in the traced step (as captured, every replay checks it)
+    from functorch.compile import aot_function, nop
+
+    rf.select_backend_torch()
+    n_seq_cap, feat = 6, 4
+    b_dim, f_dim = Dim(n_seq_cap, name="batch"), Dim(feat, name="feat")
+    a_flat, b_flat = torch.randn(40, feat), torch.randn(20, feat)
+
+    def mk(lens_raw, flat_raw, name):
+        d = Dim(Tensor(f"{name}_len", dims=[b_dim], dtype="int32", raw_tensor=lens_raw), name=name)
+        d.capacity = flat_raw.shape[0]
+        pd = Dim(flat_raw.shape[0], name=f"packed_{name}")
+        flat = Tensor("flat", dims=[pd, f_dim], dtype="float32", raw_tensor=flat_raw)
+        return packed.pack_import(flat, batch_dim=b_dim, spatial_dim=d, packed_dim=pd, feature_dim=f_dim), d
+
+    def step(a_lens, a_flat_, b_lens, b_flat_):
+        ap, a_dim = mk(a_lens, a_flat_, "a")
+        bp, b_sp = mk(b_lens, b_flat_, "b")
+        with rf.set_static_traceable_ctx():
+            out_dim = a_dim + b_sp
+            out_dim.packed_total_bound = 12
+            out, _ = rf.concat((ap, a_dim), (bp, b_sp), handle_dynamic_dims=True, out_dim=out_dim)
+        return (out.raw_tensor.inner.raw_tensor * 2.0,)
+
+    def lens(x):
+        return torch.tensor(x + [0] * (n_seq_cap - len(x)), dtype=torch.int32)
+
+    fits = (lens([4, 2, 3]), a_flat, lens([1, 1, 0]), b_flat)  # 11 frames
+    over = (lens([4, 2, 5]), a_flat, lens([3, 1, 0]), b_flat)  # 15 frames
+    step(*fits)
+    with pytest.raises(ValueError, match="packed_total_bound 12"):
+        step(*over)
+    traced = aot_function(step, fw_compiler=nop)
+    traced(*fits)
+    with pytest.raises(RuntimeError, match="packed_total_bound 12"):
+        traced(*over)
+
+
 def test_conformer():
     """
     The goal test: a full Conformer forward pass on packed input matches the padded path.
@@ -2071,6 +2112,31 @@ def test_rel_pos_self_attention_dropout_train_packed():
         assert bool(numpy.isfinite(packed.unpack(out).raw_tensor.detach().numpy()).all())
 
 
+def test_rel_pos_self_attention_packed_zero_length_seq():
+    # a seq of length 0 (e.g. a batch entry without audio) in the per-seq path (CPU): no frames from it,
+    # the others as padded
+    rf.select_backend_torch()
+    x, batch_dim, time_dim, feat_dim = _make_input(batch_size=3, seq_lens=(9, 0, 4), feat=8, seed=23)
+    with rf.set_default_device_ctx("cpu"):
+        rf.set_random_seed(31)
+        att = rf.RelPosSelfAttention(
+            feat_dim,
+            proj_dim=feat_dim,
+            key_dim_total=Dim(8, name="key_tot"),
+            value_dim_total=Dim(8, name="val_tot"),
+            num_heads=2,
+            att_dropout=0.0,
+        )
+        out_ref = att(x, axis=time_dim)
+        packed.attention_path_counts.clear()
+        with rf.get_run_ctx().train_flag_ctx(True):
+            out = att(packed.pack(x), axis=time_dim)
+    assert packed.is_packed(out)
+    if not _flex_attention_usable():
+        assert packed.attention_path_counts.get("rel_pos_per_seq") == 1, packed.attention_path_counts
+    _assert_equal_non_padded(out, out_ref, batch_dim, time_dim, rtol=1e-4, atol=1e-5)
+
+
 def test_rel_pos_att_triton_kernel_grad():
     # The Triton varlen rel-pos kernel (CUDA; the train-mode dropout fast path):
     # fwd + ALL grads (q, k, v, bd) vs autograd through an eager per-seq reference,
@@ -2170,6 +2236,40 @@ def test_chunked_rel_pos_att_triton_kernel_float32_head_dim_64_128():
     # blocks that fit; fwd + all grads stay exact vs the explicit reference.
     for head_dim in (64, 128):
         _chunked_rel_pos_att_kernel_vs_reference(head_dim=head_dim)
+
+
+def test_chunked_rel_pos_att_triton_block_choice_per_dtypes():
+    # the kept block choice of a launch holds for the dtypes of all tensor args, not only the query's:
+    # e.g. a float32 position term next to a bfloat16 query needs more shared memory than a bfloat16 one
+    try:
+        from returnn.torch.util import chunked_rel_pos_att_triton as m
+    except ImportError as exc:
+        raise unittest.SkipTest(f"triton not available ({exc})")
+
+    class _Kernel:
+        """fits blocks of at most 2 * 64 * 64 bytes per tensor"""
+
+        def __init__(self):
+            self.launches = []
+
+        def __getitem__(self, grid):
+            def _run(*args, BLOCK_M: int, BLOCK_N: int):
+                size = max(arg.element_size() for arg in args if isinstance(arg, torch.Tensor)) * BLOCK_M * BLOCK_N
+                if size > 2 * 64 * 64:
+                    raise m.OutOfResources(size, 2 * 64 * 64, "shared memory")
+                self.launches.append((BLOCK_M, BLOCK_N))
+
+            return _run
+
+    kernel = _Kernel()
+    q = torch.zeros(4, 2, 64, dtype=torch.bfloat16)
+    try:
+        for bd_dtype, expected in [(torch.bfloat16, (64, 64)), (torch.float32, (32, 32)), (torch.bfloat16, (64, 64))]:
+            m._launch(kernel, lambda block_m, block_n: (1,), (q, torch.zeros(4, 2, 7, dtype=bd_dtype)), {}, q=q)
+            assert kernel.launches[-1] == expected, (bd_dtype, kernel.launches)
+    finally:
+        for key in [key for key in m._block_choice if key[0] is kernel]:
+            del m._block_choice[key]
 
 
 def _chunked_rel_pos_att_kernel_vs_reference(*, head_dim: int):
@@ -2421,6 +2521,20 @@ def test_cast_packed():
     out_p = rf.cast(xp, "float64")
     assert packed.is_packed(out_p) and out_p.dtype == "float64"
     _assert_equal_non_padded(out_p, rf.cast(x, "float64"), batch_dim, time_dim)
+
+
+def test_cast_packed_sparse_to_float():
+    # a float cast drops the sparse dim, as for padded data, also after an op rewrapping the packed buffer
+    rf.select_backend_torch()
+    batch_dim, vocab_dim = Dim(2, name="batch"), Dim(10, name="vocab")
+    time_dim = Dim(Tensor("time", dims=[batch_dim], dtype="int32", raw_tensor=torch.tensor([3, 2], dtype=torch.int32)))
+    raw = torch.randint(0, 10, (2, 3), dtype=torch.int32, generator=torch.Generator().manual_seed(1))
+    x = Tensor("x", dims=[batch_dim, time_dim], dtype="int32", sparse_dim=vocab_dim, raw_tensor=raw)
+    xp = packed.pack(x)
+    assert rf.cast(xp, "int64").sparse_dim == vocab_dim
+    out_p = rf.cast(xp, "float32") * 2.0
+    assert packed.is_packed(out_p) and out_p.sparse_dim is None, out_p
+    _assert_equal_non_padded(out_p, rf.cast(x, "float32") * 2.0, batch_dim, time_dim)
 
 
 def test_stft_packed():
@@ -3132,6 +3246,31 @@ def test_batch_norm_packed_non_finite_junk_rows():
                 numpy.testing.assert_allclose(
                     res[key].numpy(), ref[key].numpy(), rtol=1e-6, atol=1e-6, err_msg=f"{layout}, {junk}, {key}"
                 )
+
+
+def test_batch_norm_packed_batch_without_frames():
+    """
+    a batch of only empty seqs (e.g. the audio of a text-only batch): finite outputs and grads,
+    and the running stats stay as they are, in the gapped layout (host count) and the bounded one (device count)
+    """
+    rf.select_backend_torch()
+    batch_dim, feat_dim = Dim(3, name="batch"), Dim(4, name="feat")
+    for layout in ("gapped", "bound"):
+        for dtype in ("float32", "bfloat16", "float16"):
+            time_dim = Dim(Tensor("time", dims=[batch_dim], dtype="int32", raw_tensor=torch.zeros(3, dtype=torch.int32)))
+            raw = torch.randn(3, 1, 4, generator=torch.Generator().manual_seed(1)).to(getattr(torch, dtype))
+            x = Tensor("x", dims=[batch_dim, time_dim, feat_dim], dtype=dtype, raw_tensor=raw)
+            with rf.set_default_device_ctx("cpu"):
+                bn = rf.BatchNorm(feat_dim, use_mask=False)
+                with rf.get_run_ctx().train_flag_ctx(True):
+                    xp = packed.pack(x, gap=2) if layout == "gapped" else packed.pack(x, total_bound=8)
+                    out = bn(xp)
+                    inner = out.raw_tensor.inner.raw_tensor
+                    inner.float().sum().backward()
+            assert bool(torch.isfinite(inner).all()), (layout, dtype, inner)
+            assert bool(torch.isfinite(bn.gamma.raw_tensor.grad).all()), (layout, dtype, bn.gamma.raw_tensor.grad)
+            assert bn.running_mean.raw_tensor.tolist() == [0.0] * 4, (layout, dtype, bn.running_mean.raw_tensor)
+            assert bn.running_variance.raw_tensor.tolist() == [1.0] * 4, (layout, dtype, bn.running_variance.raw_tensor)
 
 
 def test_gather_with_indices_packed_over_another_time_dim():

@@ -329,6 +329,9 @@ class DistributedContext:
         i.e. the mean over the contributing ranks, not over the group size.
         Afterwards, all ranks of the group hold the same grads (None where no rank has one),
         so the optimizer step (clipping, grad scaler, weight decay, moments) is the same on all of them.
+        A grad tensor is never replaced by None but zeroed: it can be the static buffer of a captured step,
+        which the replays write into. A group without any batch (e.g. a whole group out of data with hierarchical
+        sync levels) does no update and leaves its grads as they are.
 
         :param module: to take the params (and their grads) from
         :param num_batches: batches of this rank in the current grad accumulation (0 when out of data)
@@ -343,10 +346,13 @@ class DistributedContext:
         counts = torch.tensor(counts, dtype=torch.float32, device=params[0].device)
         torch.distributed.all_reduce(counts, op=torch.distributed.ReduceOp.SUM, group=group)
         counts = counts.tolist()
+        if not counts[-1]:
+            return 0.0
         grads = []
         for param, count in zip(params, counts[:-1]):
             if not count:  # no rank of the group has a grad for it
-                param.grad = None
+                if param.grad is not None:
+                    param.grad.zero_()
                 continue
             if param.grad is None:
                 param.grad = torch.zeros_like(param)
@@ -763,6 +769,34 @@ def _all_gather_hostnames(*, size: int) -> List[str]:
 _FLAT_REDUCE_BUCKET_BYTES = 256 * 1024**2
 
 
+def _init_missing_optimizer_state(optimizer: torch.optim.Optimizer, *, group: Optional[torch.distributed.ProcessGroup]):
+    """
+    Before a sync of the optimizer state: a rank without an update yet (epoch_end "join": no batch at all)
+    has none of the state the optimizer creates in its first step. It creates the state now which another rank
+    of the group has (as for zero grads, without a step), so that all of them sync the same tensors.
+    (Its weight in the mean is 0 then, see :func:`_sync_state`.)
+    """
+    import torch.distributed as dist
+    from returnn.torch.updater import init_optimizer_state
+
+    params = [param for param_group in optimizer.param_groups for param in param_group["params"]]
+    has_state = torch.tensor([bool(optimizer.state.get(param)) for param in params], dtype=torch.int32)
+    dist.all_reduce(has_state, op=dist.ReduceOp.MAX, group=group)
+    missing = [param for param, other in zip(params, has_state.tolist()) if other and not optimizer.state.get(param)]
+    if not missing:
+        return
+    grads = [param.grad for param in params]
+    try:
+        for param in params:
+            param.grad = None
+        for param in missing:
+            param.grad = torch.zeros_like(param)  # selects the params which get state
+        init_optimizer_state(optimizer)
+    finally:
+        for param, grad in zip(params, grads):
+            param.grad = grad
+
+
 @torch.no_grad()
 def _all_reduce_avg_flat(
     tensors: List[torch.Tensor],
@@ -884,7 +918,7 @@ def _sync_state(
     Makes the state the same on all ranks of the group, one rule per kind:
     floating point tensors take the mean (the params, the buffers, the optimizer state such as the Adam moments),
     counts the max (``counters``, the ``step`` tensors of the optimizer state, integer tensors),
-    other optimizer state values come from the first rank of the group.
+    other optimizer state values come from the first rank of the group (with ``weight``: the first one with a weight).
     The ranks can differ in the counts after an epoch in which they got different numbers of batches
     (a rank out of data stops at its step, the others at their next sync); the mean of a count would be no count.
 
@@ -901,6 +935,8 @@ def _sync_state(
     """
     import torch.distributed as dist
 
+    if optimizer is not None:
+        _init_missing_optimizer_state(optimizer, group=group)
     tensors = []  # mean
     counters = list(counters)  # max
     objects = []  # (param, leaf index) from the first rank
@@ -931,6 +967,11 @@ def _sync_state(
     if objects:
         values = [tree.flatten(optimizer.state[param])[idx] for param, idx in objects]
         src = 0 if group is None else dist.get_global_rank(group, 0)
+        if weight is not None:  # from the first rank with a weight, i.e. an update since the last sync, if any
+            first = torch.tensor([dist.get_rank() if weight > 0 else dist.get_world_size()], dtype=torch.int64)
+            dist.all_reduce(first, op=dist.ReduceOp.MIN, group=group)
+            if int(first) < dist.get_world_size():
+                src = int(first)
         dist.broadcast_object_list(values, src=src, group=group, device=torch.device("cpu"))
         for (param, idx), value in zip(objects, values):
             flat = tree.flatten(optimizer.state[param])

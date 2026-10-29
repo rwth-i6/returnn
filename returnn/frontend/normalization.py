@@ -77,13 +77,14 @@ def moments(
         # torch.nn.SyncBatchNorm instead combines per-worker Welford statistics, which does not cancel.
         x = rf.cast(x, "float32")
         count = rf.cast(rf.num_elements_of_shape(axis, use_mask=use_mask, source=x, distributed=True), "float32")
-        count = rf.maximum(count, 1.0)  # no element on any worker: mean and variance 0 instead of 0/0, see below
-        mean = rf.reduce_sum(x, axis=axis, use_mask=use_mask, distributed=True) / count
+        # no element on any worker: mean and variance 0 instead of 0/0, see below
+        count_ = rf.maximum(count, 1.0)
+        mean = rf.reduce_sum(x, axis=axis, use_mask=use_mask, distributed=True) / count_
         # stop_gradient does not change the gradient here: the deviations sum to zero over the global batch
         sq_dev = rf.squared_difference(x, rf.stop_gradient(mean))
-        variance = rf.reduce_sum(sq_dev, axis=axis, use_mask=use_mask, distributed=True) / count
+        variance = rf.reduce_sum(sq_dev, axis=axis, use_mask=use_mask, distributed=True) / count_
         if isinstance(correction, Tensor) or correction != 0:
-            variance *= count / (count - correction)
+            variance *= count / (count - correction)  # the actual count, as the local one: 0 for no element
         return rf.cast(mean, compute_dtype), rf.cast(variance, compute_dtype)
     mean = _masked_mean(x, axis=axis, use_mask=use_mask if _moments_use_fixed_masking() else True)
     # stop_gradient does not change the gradient here

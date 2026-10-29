@@ -1343,7 +1343,8 @@ def _batch_norm_gapped(source: Tensor, kwargs) -> Optional[Tensor]:
     # the statistics run over the valid frames and every static axis next to the packed one
     n_extra = math.prod(d.dimension for d in extra)
     stat_axes = [raw.packed_dim] + extra
-    n = rf.cast(n_dev, inner.dtype) * n_extra
+    # no valid frame (e.g. a batch of only empty seqs): mean and variance 0 instead of 0/0, as rf.moments
+    n = rf.maximum(rf.cast(n_dev, inner.dtype) * n_extra, 1.0)
     inner = rf.where(mask, inner, 0.0)
     mean = rf.reduce_sum(inner, axis=stat_axes, use_mask=False) / n
     diff = rf.where(mask, inner - mean, 0.0)
@@ -1351,19 +1352,24 @@ def _batch_norm_gapped(source: Tensor, kwargs) -> Optional[Tensor]:
     if running_mean is not None:
         import torch
 
+        # A batch without any valid frame has no stats: no update then, as BatchNorm with use_mask.
         with torch.no_grad():
             rm, rv = running_mean.raw_tensor, running_variance.raw_tensor
             if dev_lens is not None:
                 # fully on device (no float(n) host read -> no sync, capture-safe)
                 n_f_t = n_dev.raw_tensor.float() * n_extra
                 unbiased_t = n_f_t / (n_f_t - 1.0).clamp(min=1.0)
-                rm.mul_(1.0 - momentum).add_(mean.raw_tensor.detach().to(rm.dtype) * momentum)
-                rv.mul_(1.0 - momentum).add_(var.raw_tensor.detach().to(rv.dtype) * unbiased_t.to(rv.dtype) * momentum)
+                momentum_t = (n_f_t > 0).to(rm.dtype) * momentum
+                rm.mul_(1.0 - momentum_t).add_(mean.raw_tensor.detach().to(rm.dtype) * momentum_t)
+                rv.mul_(1.0 - momentum_t).add_(
+                    var.raw_tensor.detach().to(rv.dtype) * unbiased_t.to(rv.dtype) * momentum_t
+                )
             else:
                 n_f = float(n_t.raw_tensor) * n_extra
                 unbiased = n_f / max(n_f - 1.0, 1.0)
-                rm.mul_(1.0 - momentum).add_(mean.raw_tensor.detach().to(rm.dtype), alpha=momentum)
-                rv.mul_(1.0 - momentum).add_(var.raw_tensor.detach().to(rv.dtype) * unbiased, alpha=momentum)
+                if n_f > 0:
+                    rm.mul_(1.0 - momentum).add_(mean.raw_tensor.detach().to(rm.dtype), alpha=momentum)
+                    rv.mul_(1.0 - momentum).add_(var.raw_tensor.detach().to(rv.dtype) * unbiased, alpha=momentum)
     out_inner = (inner - mean) / rf.sqrt(var + epsilon)
     if affine:
         out_inner = out_inner * gamma + beta
@@ -2933,6 +2939,8 @@ def _rel_pos_attention_per_seq(
     outs = []
     off = 0
     for seq_len in lens:
+        if seq_len == 0:
+            continue  # no frames, and no pos_emb window (the slice below would have a negative size)
         q_b, q_time = rf.slice(q_raw.inner, axis=q_raw.packed_dim, start=off, end=off + seq_len)
         kv_packed = key.raw_tensor.packed_dim  # kv has its own packed dim (copied spatial dim)
         k_b, kv_time = rf.slice(key.raw_tensor.inner, axis=kv_packed, start=off, end=off + seq_len)
@@ -3469,9 +3477,8 @@ class PackedBackend(Backend[PackedRawTensor]):
     @staticmethod
     def cast_raw(raw_tensor: PackedRawTensor, dtype: str) -> PackedRawTensor:
         """cast -- on the packed data (elementwise)"""
-        inner_out = raw_tensor.inner.copy_template(name="cast")
-        inner_out.dtype = dtype
-        inner_out.raw_tensor = raw_tensor.inner_backend.cast_raw(raw_tensor.inner.raw_tensor, dtype)
+        # as the outer cast, e.g. a float cast drops the sparse dim, also on the inner tensor (kept by a rewrap)
+        inner_out = raw_tensor.inner_backend.cast(raw_tensor.inner, dtype)
         return PackedRawTensor(
             inner=inner_out,
             packed_dim=raw_tensor.packed_dim,
@@ -5352,15 +5359,7 @@ def _concat_out_packed_dim(
         or the declared :attr:`Dim.packed_total_bound` of ``out_dim`` where that is tighter.
     """
     if not rf.is_static_traceable():
-        total = None
-        for (_, d), raw in zip(sources, raws):
-            if raw is None and d.dyn_size_ext is None:
-                n = batch.get_dim_value_tensor() * d.dimension
-            else:
-                lens = d.get_size_tensor(device=dev) if raw is None else raw.orig_dims[-1].get_size_tensor(device=dev)
-                n = rf.copy_to_device(rf.reduce_sum(lens, axis=batch), dev)
-            total = n if total is None else total + n
-        return Dim(total, name="packed_concat")
+        return Dim(_concat_content_total(sources, raws, batch, dev), name="packed_concat")
     n_seqs = batch.get_dim_value_tensor()
     bounds = []
     for (_, d), raw in zip(sources, raws):
@@ -5379,9 +5378,58 @@ def _concat_out_packed_dim(
     total = sum(bounds)
     # A declared bound on the concat dim (e.g. the batcher bounds the sum of the parts per batch, packed_batch_cost)
     # is a promise about the content, as the bound of any packed buffer.
-    if out_dim.packed_total_bound is not None:
-        total = min(total, out_dim.packed_total_bound)
+    # Content beyond it would be cut off silently, so where it is tighter, check it per batch.
+    if out_dim.packed_total_bound is not None and out_dim.packed_total_bound < total:
+        total = out_dim.packed_total_bound
+        _assert_within_bound(
+            _concat_content_total(sources, raws, batch, dev),
+            total,
+            f"packed concat: the content exceeds the declared Dim.packed_total_bound {total} of {out_dim}"
+            f" (e.g. bound the sum of the parts per batch with packed_batch_cost)",
+        )
     return Dim(total, name="packed_concat")
+
+
+def _concat_content_total(
+    sources: Sequence[Tuple[Tensor, Dim]], raws: Sequence[Optional[PackedRawTensor]], batch: Dim, dev: str
+) -> Union[Tensor, int]:
+    """
+    :return: the frames of a concat result, summed over the sources and the sequences
+    """
+    total = None
+    for (_, d), raw in zip(sources, raws):
+        if raw is None and d.dyn_size_ext is None:
+            n = batch.get_dim_value_tensor() * d.dimension
+        else:
+            lens = d.get_size_tensor(device=dev) if raw is None else raw.orig_dims[-1].get_size_tensor(device=dev)
+            n = rf.copy_to_device(rf.reduce_sum(lens, axis=batch), dev)
+        total = n if total is None else total + n
+    return total
+
+
+def _assert_within_bound(value: Union[Tensor, int], bound: int, message: str):
+    """
+    Checks a promised bound of a static buffer (e.g. a declared Dim.packed_total_bound) against the actual value:
+    traced (compile, CUDA graph capture) a device assert, which every replay of the captured step runs
+    (unlike :func:`rf.assert_`, a no-op there), otherwise a host check.
+
+    :param value: scalar, e.g. the content total of a packed buffer
+    :param bound: e.g. the size of that buffer
+    :param message: of the error
+    """
+    import torch
+
+    raw = value.raw_tensor if isinstance(value, Tensor) else value
+    # noinspection PyProtectedMember
+    if isinstance(raw, torch.Tensor) and (
+        type(raw) is not torch.Tensor  # fake/functional (e.g. AOT tracing)
+        or torch._is_functional_tensor(raw)
+        or torch.compiler.is_compiling()
+        or (raw.is_cuda and torch.cuda.is_current_stream_capturing())
+    ):
+        torch._assert_async(raw <= bound, message)
+    elif int(raw) > bound:
+        raise ValueError(f"{message}: {int(raw)} > {bound}")
 
 
 def _repeat_out_packed_dim(

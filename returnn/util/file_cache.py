@@ -273,6 +273,8 @@ class FileCache:
                         break
 
                 if delete_reason:
+                    if _shares_data(fn):
+                        size = 0  # another hard link or copy-on-write clone (reflink) keeps the data
                     cur_expected_free += size
                     print(
                         f"FileCache: Delete file {fn}, size {human_bytes_size(size)}. {delete_reason}."
@@ -413,9 +415,6 @@ class FileCache:
 
             print(f"FileCache: Copy file {src_filename} to cache")
 
-            # Make sure we have enough disk space, st_size +1 due to _copy_with_prealloc
-            self.cleanup(need_at_least_free_space_size=os.stat(src_filename).st_size + 1)
-
             dst_tmp_filename = dst_filename + ".copy"
             if os.path.exists(dst_tmp_filename):
                 # The minimum age should be at least the lock_timeout.
@@ -433,7 +432,13 @@ class FileCache:
                 FileInfo(mtime_ns=orig_mtime_ns).save(info_file_name)
 
                 try:
-                    _copy_with_prealloc(src_filename, dst_tmp_filename)
+                    # A copy-on-write clone needs no space (while the source is unchanged), so try it first.
+                    if _try_reflink(src_filename, dst_tmp_filename):
+                        self.cleanup(need_at_least_free_space_size=0)  # as for an existing file
+                    else:
+                        # Make sure we have enough disk space, st_size +1 due to _copy_with_prealloc
+                        self.cleanup(need_at_least_free_space_size=os.stat(src_filename).st_size + 1)
+                        _copy_with_prealloc(src_filename, dst_tmp_filename)
                 except Exception:
                     # Cleanup if it was created already.
                     # That avoids some of the ambiguity of the existence of the .copy file.
@@ -541,6 +546,36 @@ def _try_reflink(src: str, dst: str) -> bool:
         return False
 
 
+_FS_IOC_FIEMAP = 0xC020660B  # Linux ioctl FIEMAP: the extents of a file
+_FIEMAP_EXTENT_SHARED = 0x2000  # the extent is shared, e.g. with a copy-on-write clone (reflink)
+
+
+def _shares_data(filename: str) -> bool:
+    """
+    :return: whether deleting the file would free (almost) nothing, as another file keeps its data:
+        another hard link, or a copy-on-write clone (see :func:`_try_reflink`, its source or another clone),
+        judged by its first extent (Linux FIEMAP; False where not supported).
+        A clone whose source was rewritten since has data of its own again.
+    """
+    try:
+        if os.stat(filename).st_nlink > 1:
+            return True
+        if sys.platform != "linux":
+            return False
+        import fcntl
+        import struct
+
+        # struct fiemap (start, length, flags, mapped extents, extent count, reserved), one struct fiemap_extent
+        buf = bytearray(struct.pack("=QQIIII", 0, 2**64 - 1, 0, 0, 1, 0) + bytes(56))
+        with open(filename, "rb") as f:
+            fcntl.ioctl(f.fileno(), _FS_IOC_FIEMAP, buf)
+        (num_mapped,) = struct.unpack_from("=I", buf, 20)
+        (extent_flags,) = struct.unpack_from("=I", buf, 32 + 40)
+        return num_mapped > 0 and bool(extent_flags & _FIEMAP_EXTENT_SHARED)
+    except (OSError, ImportError):
+        return False
+
+
 def _copy_with_prealloc(src: str, dst: str):
     """
     Copies the file at `src` to `dst` preallocating the space at `dst` before the
@@ -554,8 +589,6 @@ def _copy_with_prealloc(src: str, dst: str):
     +1-size trick is technically not necessary -- but it also does not hurt leaving
     it in.
     """
-    if _try_reflink(src, dst):
-        return
     file_size = os.stat(src).st_size
     with open(dst, "wb") as dst_file:
         if file_size > 0:
