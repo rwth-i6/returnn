@@ -2000,6 +2000,8 @@ def _torch_distributed_sync_levels_worker(rank: int, world_size: int, port: int,
             {"backend": "gloo", "sync": [{"group": 2, "type": "grad"}, {"group": "world", "type": "param", "every": 2}]}
         )
         assert ctx.has_grad_sync() and ctx.maybe_make_distributed_module(torch.nn.Linear(1, 1)) is None
+        pair = [rank - rank % 2, rank - rank % 2 + 1]
+        assert torch.distributed.get_process_group_ranks(ctx.grad_sync_group()) == pair
         # the grad level: control sync on its group every step, then the world level to join when out of data
         levels = ctx.control_sync_levels(epoch_update_step_idx=0, update_step=False, world=False, no_data=False)
         assert [level.group_spec for level in levels] == [2, "world"], levels
@@ -2026,6 +2028,12 @@ def _torch_distributed_sync_levels_worker(rank: int, world_size: int, port: int,
             }
         )
         assert not ctx.has_grad_sync()
+        try:
+            ctx.grad_sync_group()
+        except ValueError:
+            pass
+        else:
+            raise AssertionError("no grad sync, expected ValueError")
         # pairs every 2 updates, node (= world here) every 4: the control sync on the outermost firing level
         assert [
             [level.group_spec for level in ctx.control_sync_levels(
@@ -2792,6 +2800,8 @@ def _torch_distributed_epoch_end_worker(rank: int, world_size: int, port: int, t
         dataset.init_seq_order(epoch=1)
         engine = Engine(config=config)
         engine.init_train_from_config(train_data=dataset)
+        if engine._torch_distributed_ctx.reduce_type() in ("grad", "grad_explicit"):
+            assert engine._torch_distributed_ctx.grad_sync_group() is None  # all ranks
         engine.train()
         param_sum = float(sum(param.detach().double().sum() for param in engine._pt_model.parameters()))
         meta_keys = sorted(k for k in engine.learning_rate_control.epoch_data[1].meta if k.startswith("epoch_end_"))

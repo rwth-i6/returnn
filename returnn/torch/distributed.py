@@ -273,6 +273,21 @@ class DistributedContext:
         """
         return any(level.sync_type == "grad" for level in self._sync_levels)
 
+    def grad_sync_group(self) -> Optional[torch.distributed.ProcessGroup]:
+        """
+        The ranks which average their grads before every optimizer step, so they all do the same update
+        (also with epoch_end "join": a rank out of data still takes part in every update of its group).
+        E.g. an optimizer can split work of its step over them.
+
+        :return: the group of the "grad" sync level of this rank; None: all ranks
+            (reduce_type "grad", i.e. DistributedDataParallel, or a "grad" level over the world)
+        """
+        if self._reduce_type == "grad":
+            return None
+        if not self.has_grad_sync():
+            raise ValueError(f"torch_distributed: no grad sync (reduce_type {self._reduce_type!r})")
+        return self._sync_levels[0].group
+
     def maybe_reduce_grads(self, *, module: torch.nn.Module):
         """
         Average the grads over the ranks of the "grad" sync level (reduce_type "grad_explicit": all ranks).
