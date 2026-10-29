@@ -5352,15 +5352,7 @@ def _concat_out_packed_dim(
         or the declared :attr:`Dim.packed_total_bound` of ``out_dim`` where that is tighter.
     """
     if not rf.is_static_traceable():
-        total = None
-        for (_, d), raw in zip(sources, raws):
-            if raw is None and d.dyn_size_ext is None:
-                n = batch.get_dim_value_tensor() * d.dimension
-            else:
-                lens = d.get_size_tensor(device=dev) if raw is None else raw.orig_dims[-1].get_size_tensor(device=dev)
-                n = rf.copy_to_device(rf.reduce_sum(lens, axis=batch), dev)
-            total = n if total is None else total + n
-        return Dim(total, name="packed_concat")
+        return Dim(_concat_content_total(sources, raws, batch, dev), name="packed_concat")
     n_seqs = batch.get_dim_value_tensor()
     bounds = []
     for (_, d), raw in zip(sources, raws):
@@ -5379,9 +5371,58 @@ def _concat_out_packed_dim(
     total = sum(bounds)
     # A declared bound on the concat dim (e.g. the batcher bounds the sum of the parts per batch, packed_batch_cost)
     # is a promise about the content, as the bound of any packed buffer.
-    if out_dim.packed_total_bound is not None:
-        total = min(total, out_dim.packed_total_bound)
+    # Content beyond it would be cut off silently, so where it is tighter, check it per batch.
+    if out_dim.packed_total_bound is not None and out_dim.packed_total_bound < total:
+        total = out_dim.packed_total_bound
+        _assert_within_bound(
+            _concat_content_total(sources, raws, batch, dev),
+            total,
+            f"packed concat: the content exceeds the declared Dim.packed_total_bound {total} of {out_dim}"
+            f" (e.g. bound the sum of the parts per batch with packed_batch_cost)",
+        )
     return Dim(total, name="packed_concat")
+
+
+def _concat_content_total(
+    sources: Sequence[Tuple[Tensor, Dim]], raws: Sequence[Optional[PackedRawTensor]], batch: Dim, dev: str
+) -> Union[Tensor, int]:
+    """
+    :return: the frames of a concat result, summed over the sources and the sequences
+    """
+    total = None
+    for (_, d), raw in zip(sources, raws):
+        if raw is None and d.dyn_size_ext is None:
+            n = batch.get_dim_value_tensor() * d.dimension
+        else:
+            lens = d.get_size_tensor(device=dev) if raw is None else raw.orig_dims[-1].get_size_tensor(device=dev)
+            n = rf.copy_to_device(rf.reduce_sum(lens, axis=batch), dev)
+        total = n if total is None else total + n
+    return total
+
+
+def _assert_within_bound(value: Union[Tensor, int], bound: int, message: str):
+    """
+    Checks a promised bound of a static buffer (e.g. a declared Dim.packed_total_bound) against the actual value:
+    traced (compile, CUDA graph capture) a device assert, which every replay of the captured step runs
+    (unlike :func:`rf.assert_`, a no-op there), otherwise a host check.
+
+    :param value: scalar, e.g. the content total of a packed buffer
+    :param bound: e.g. the size of that buffer
+    :param message: of the error
+    """
+    import torch
+
+    raw = value.raw_tensor if isinstance(value, Tensor) else value
+    # noinspection PyProtectedMember
+    if isinstance(raw, torch.Tensor) and (
+        type(raw) is not torch.Tensor  # fake/functional (e.g. AOT tracing)
+        or torch._is_functional_tensor(raw)
+        or torch.compiler.is_compiling()
+        or (raw.is_cuda and torch.cuda.is_current_stream_capturing())
+    ):
+        torch._assert_async(raw <= bound, message)
+    elif int(raw) > bound:
+        raise ValueError(f"{message}: {int(raw)} > {bound}")
 
 
 def _repeat_out_packed_dim(

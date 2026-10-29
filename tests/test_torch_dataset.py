@@ -653,6 +653,32 @@ def test_batching_packed_batch_cost_meets_only_its_own_limit():
         )
 
 
+def test_batching_packed_batch_cost_single_seq_over_limit_raises():
+    """
+    A length limit can be exceeded by a single sequence, which then forms a batch of its own.
+    A cost limit is hard (it backs e.g. the static buffer of a packed concat, Dim.packed_total_bound),
+    so a sequence whose cost alone exceeds it raises instead.
+    """
+    import numpy
+    import pytest
+
+    seqs = [{"data": numpy.zeros((n,), dtype="float32"), "text": numpy.zeros((5,), dtype="int32")} for n in (30, 150)]
+    cost = lambda lengths: lengths["data"] + lengths["text"] + 1  # noqa: E731
+
+    batches = list(data_pipeline.BatchingIterDataPipe(seqs, batch_size=None, max_seqs=10, packed_batch_size=100))
+    assert [len(b) for b in batches] == [1, 1], "a length limit stays soft"
+    with pytest.raises(ValueError, match="packed_batch_cost"):
+        list(
+            data_pipeline.BatchingIterDataPipe(
+                seqs,
+                batch_size=None,
+                max_seqs=10,
+                packed_batch_size={"decoder": 100},
+                packed_batch_cost={"decoder": cost},
+            )
+        )
+
+
 def test_bucket_ordering_monotonic_data_keys():
     """
     A partially filled bucket is emitted at the end, after batches of later seqs.

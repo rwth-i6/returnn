@@ -869,6 +869,47 @@ def test_concat_packed_static_traceable_declared_bound():
         out.raw_tensor.inner.raw_tensor[:15], ref.raw_tensor.inner.raw_tensor[:15], rtol=0, atol=0
     )
 
+
+def test_concat_packed_static_traceable_declared_bound_checked():
+    # a declared bound on the concat dim below the content would cut off the last frames silently:
+    # a host check in eager mode, a device assert in the traced step (as captured, every replay checks it)
+    from functorch.compile import aot_function, nop
+
+    rf.select_backend_torch()
+    n_seq_cap, feat = 6, 4
+    b_dim, f_dim = Dim(n_seq_cap, name="batch"), Dim(feat, name="feat")
+    a_flat, b_flat = torch.randn(40, feat), torch.randn(20, feat)
+
+    def mk(lens_raw, flat_raw, name):
+        d = Dim(Tensor(f"{name}_len", dims=[b_dim], dtype="int32", raw_tensor=lens_raw), name=name)
+        d.capacity = flat_raw.shape[0]
+        pd = Dim(flat_raw.shape[0], name=f"packed_{name}")
+        flat = Tensor("flat", dims=[pd, f_dim], dtype="float32", raw_tensor=flat_raw)
+        return packed.pack_import(flat, batch_dim=b_dim, spatial_dim=d, packed_dim=pd, feature_dim=f_dim), d
+
+    def step(a_lens, a_flat_, b_lens, b_flat_):
+        ap, a_dim = mk(a_lens, a_flat_, "a")
+        bp, b_sp = mk(b_lens, b_flat_, "b")
+        with rf.set_static_traceable_ctx():
+            out_dim = a_dim + b_sp
+            out_dim.packed_total_bound = 12
+            out, _ = rf.concat((ap, a_dim), (bp, b_sp), handle_dynamic_dims=True, out_dim=out_dim)
+        return (out.raw_tensor.inner.raw_tensor * 2.0,)
+
+    def lens(x):
+        return torch.tensor(x + [0] * (n_seq_cap - len(x)), dtype=torch.int32)
+
+    fits = (lens([4, 2, 3]), a_flat, lens([1, 1, 0]), b_flat)  # 11 frames
+    over = (lens([4, 2, 5]), a_flat, lens([3, 1, 0]), b_flat)  # 15 frames
+    step(*fits)
+    with pytest.raises(ValueError, match="packed_total_bound 12"):
+        step(*over)
+    traced = aot_function(step, fw_compiler=nop)
+    traced(*fits)
+    with pytest.raises(RuntimeError, match="packed_total_bound 12"):
+        traced(*over)
+
+
 def test_conformer():
     """
     The goal test: a full Conformer forward pass on packed input matches the padded path.

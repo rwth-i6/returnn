@@ -265,6 +265,7 @@ class BatchingIterDataPipe(torch.utils.data.IterDataPipe):
             ``packed_batch_size`` entry of that name, which must exist. The costs stay out of the
             padded ``batch_size`` check. This bounds quantities no single length can,
             such as the frames times prefixes cells of a transducer lattice.
+            Unlike the length limits, a cost limit is hard: a sequence whose cost alone exceeds it raises.
         """
         super().__init__()
         self._dataset = dataset
@@ -400,8 +401,16 @@ class BatchingIterDataPipe(torch.utils.data.IterDataPipe):
                     max_packed_batch_size, (lambda a, b: a > b)
                 )
             if self._packed_batch_cost:
+                cost_limits = self._cost_limits(max_packed_batch_size)
+                # Unlike a length, a cost is a hard bound (e.g. of a static buffer), also for a single sequence.
+                if sequence_costs.any_compare(cost_limits, (lambda a, b: a > b)):
+                    raise ValueError(
+                        f"packed_batch_cost: sequence {data_dict.get('seq_tag', data_dict.get('seq_idx'))}"
+                        f" with lengths {sequence_lengths.dict} has the costs {sequence_costs.dict},"
+                        f" above the packed_batch_size limits {cost_limits.dict}"
+                    )
                 over_limit = over_limit or sum_sequence_costs_if_included.any_compare(
-                    self._cost_limits(max_packed_batch_size), (lambda a, b: a > b)
+                    cost_limits, (lambda a, b: a > b)
                 )
             if current_batch and over_limit:
                 yield current_batch
