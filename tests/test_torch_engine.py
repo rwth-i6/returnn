@@ -2900,6 +2900,30 @@ def test_torch_distributed_all_reduce_avg_flat_buckets():
             assert results == [[100.0 + i, 100.0 + i] for i in range(5)], (rank, results)
 
 
+class _AllGatherSGD(torch.optim.Optimizer):
+    """SGD with a collective in its step: the grads all-gathered over the ranks (all equal), their mean applied"""
+
+    def __init__(self, params, lr: float = 0.1):
+        super().__init__(params, {"lr": lr})
+
+    @torch.no_grad()
+    def step(self, closure=None):
+        """update"""
+        group = self.param_groups[0]
+        params = [param for param in group["params"] if param.grad is not None]
+        size = torch.distributed.get_world_size()
+        flat = torch.cat([param.grad.flatten() for param in params])
+        # the functional collective: traceable for the compiled step
+        gathered = torch.ops._c10d_functional.all_gather_into_tensor(
+            flat, size, torch.distributed.group.WORLD.group_name
+        )
+        gathered = torch.ops._c10d_functional.wait_tensor(gathered).view(size, -1).mean(dim=0)
+        offset = 0
+        for param in params:
+            param.add_(gathered[offset : offset + param.numel()].view_as(param), alpha=-group["lr"])
+            offset += param.numel()
+
+
 def _torch_distributed_cuda_graph_nccl_worker(
     rank: int, world_size: int, port: int, tmp_dir: str, opts: Dict[str, Any]
 ):
@@ -2913,7 +2937,9 @@ def _torch_distributed_cuda_graph_nccl_worker(
         LOCAL_RANK=str(rank),
         LOCAL_WORLD_SIZE=str(world_size),
     )
-    config, _ = _build_cuda_graph_train_config_and_dataset(compile_=False, optimizer_step=True)
+    opts = dict(opts)
+    optimizer = opts.pop("optimizer", None)
+    config, _ = _build_cuda_graph_train_config_and_dataset(compile_=False, optimizer_step=True, optimizer=optimizer)
     config.typed_dict["torch_distributed"] = {
         "reduce_type": "grad_explicit",
         "sync_complete_frac": True,
@@ -2936,14 +2962,20 @@ def _torch_distributed_cuda_graph_nccl_worker(
 def test_torch_distributed_cuda_graph_grad_explicit_nccl():
     """
     2 GPUs, NCCL: captured model step, captured optimizer step, grad_explicit with the kept flat reduce buffer,
-    epoch_end join; also with the grad allreduce in bfloat16. The ranks end with the same params.
+    epoch_end join; also with the grad allreduce in bfloat16,
+    and with a collective in the captured optimizer step (its graph released before the process group is destroyed,
+    else that blocks). The ranks end with the same params.
     """
     import socket
 
     if torch.cuda.device_count() < 2:
         raise unittest.SkipTest("needs 2 GPUs")
     results = {}
-    for name, opts in {"float32": {}, "bfloat16": {"grad_reduce_dtype": "bfloat16"}}.items():
+    for name, opts in {
+        "float32": {},
+        "bfloat16": {"grad_reduce_dtype": "bfloat16"},
+        "optimizer_collective": {"optimizer": {"class": _AllGatherSGD}},
+    }.items():
         with socket.socket() as s:
             s.bind(("127.0.0.1", 0))
             port = s.getsockname()[1]

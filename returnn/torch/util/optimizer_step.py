@@ -173,7 +173,9 @@ class OptimizerStep:
 
     def invalidate(self):
         """
-        Drop the captured graph, e.g. after the optimizer state was loaded.
+        Drop the captured graph, e.g. after the optimizer state was loaded,
+        or before the process group is destroyed when the step has collectives
+        (see :func:`returnn.torch.engine.Engine.finalize`).
         The next step recaptures (and retraces, if the layout changed).
         """
         self._graph = None

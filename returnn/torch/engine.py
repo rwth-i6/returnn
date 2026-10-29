@@ -336,8 +336,9 @@ class Engine(EngineBase):
     def finalize(self, error_occurred: bool = False):
         """
         Called at the very end of a RETURNN run (:func:`returnn.__main__.finalize`),
-        before the process group is destroyed, which a live captured graph would block
-        (see :func:`returnn.torch.util.graph_capture.GraphCapturedTrainStep.release`).
+        before the process group is destroyed, which a live captured graph with collectives would block
+        (see :func:`returnn.torch.util.graph_capture.GraphCapturedTrainStep.release`):
+        the captured model step and the captured optimizer step (``torch_optimizer_step``) are released.
 
         Also stops the workers and pinning threads of the data loaders
         (see :func:`returnn.torch.data.pipeline.shutdown_data_loader`),
@@ -352,6 +353,8 @@ class Engine(EngineBase):
         if self._graph_capture is not None:
             self._graph_capture.release()
             self._graph_capture = None
+        if self._updater is not None:
+            self._updater.release()
         for data_loader in [self._train_dataloader, *self._eval_dataloaders.values()]:
             if data_loader is not None:
                 data_pipeline.shutdown_data_loader(data_loader)
