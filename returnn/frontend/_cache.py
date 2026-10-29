@@ -34,6 +34,8 @@ class Cache:
       so a new Tensor wrapping the same raw tensor matches (e.g. raw tensors wrapped only for the lookup).
       Its dims (and sparse dim, feature axis, version) are part of the key, the dims like Dim keys
       (and the output is mapped to them).
+    - :class:`rf.TensorLayout` as keys: its key parts (:func:`rf.TensorLayout._cache_key_parts`) are keys as above.
+      The output is mapped also in its storage layout (e.g. the packed dims), via :func:`rf.replace_dim`.
     """
 
     def __init__(self, max_size: int):
@@ -69,19 +71,23 @@ class Cache:
                     continue
                 dim = key_item.dim_ref()
                 assert isinstance(dim_orig, Dim) and isinstance(dim, Dim)
-                dim_map[dim_orig] = dim
+                if dim is not dim_orig:
+                    dim_map[dim_orig] = dim
+        if not dim_map:
+            return value
 
         # noinspection PyShadowingNames
         def _map_output(output):
             if isinstance(output, Dim):
                 return dim_map.get(output, output)
             if isinstance(output, Tensor):
-                if any(dim in dim_map for dim in output.dims):
-                    out_raw = output.raw_tensor
-                    for axis, dim in enumerate(output.dims):
-                        if dim in dim_map:
-                            output = output.copy_template_replace_dim_tag(axis=axis, new_dim_tag=dim_map[dim])
-                    output.raw_tensor = out_raw
+                # the dims of the tensor and of its storage layout (e.g. the packed dims), each once
+                dims = {}
+                for dim in list(output.dims) + _flatten_key(rf.get_tensor_layout(output)):
+                    if isinstance(dim, Dim) and dim in dim_map:
+                        dims[id(dim)] = dim
+                for dim in dims.values():
+                    output, _ = rf.replace_dim(output, in_dim=dim, out_dim=dim_map[dim])
             return output
 
         return tree.map_structure(_map_output, value)
@@ -97,8 +103,9 @@ class Cache:
 
         key_backend = _get_backend(key)
         value_backend = _get_backend(value)
-        if key_backend != value_backend:
-            raise ValueError(f"key and value have different backends: {key_backend} != {value_backend}")
+        if key_backend.executing_eagerly() and not value_backend.executing_eagerly():
+            # the value is only valid in the run ctx, but only a graph-based key backend scopes the key to it
+            raise ValueError(f"key backend {key_backend} is eager, value backend {value_backend} is graph-based")
         key_transformed = _transform_key(key, finalize_callback=_finalize_callback)
         self._lru_cache.cache_set(key_transformed, result=(key_transformed, value))
 
@@ -127,9 +134,24 @@ def _transform_key(
         collected_dim_map = {}
     keys_flat += [
         _transform_key_item(key, finalize_callback=finalize_callback, collected_dim_map=collected_dim_map)
-        for key in tree.flatten(key)
+        for key in _flatten_key(key)
     ]
     return tuple(keys_flat)
+
+
+def _flatten_key(key: Any) -> List[Any]:
+    """
+    :param key: nested structure, can contain :class:`rf.TensorLayout`
+    :return: flat list, each layout replaced by its flattened key parts
+    """
+    res = []
+    for key_item in tree.flatten(key):
+        if isinstance(key_item, rf.TensorLayout):
+            # noinspection PyProtectedMember
+            res += _flatten_key(key_item._cache_key_parts())
+        else:
+            res.append(key_item)
+    return res
 
 
 def _transform_key_item(
@@ -143,6 +165,8 @@ def _transform_key_item(
         dim_wrapper = DimWrapper(key, finalize_callback=finalize_callback)
         collected_dim_map[key] = dim_wrapper
         return dim_wrapper
+    if isinstance(key, type) and issubclass(key, Backend):  # e.g. of a layout
+        return key
     if not isinstance(key, _RawTypes):
         raise TypeError(f"unexpected type {type(key)}")
     return key
@@ -163,8 +187,10 @@ def _flat_dim_wrappers(key_transformed: Tuple[Any, ...]) -> List[Any]:
 
 
 def _get_backend(*args) -> Type[Backend]:
-    args_flat = tree.flatten(args)
+    args_flat = _flatten_key(args)
     for arg in args_flat:
+        if isinstance(arg, Dim) and arg.dyn_size_ext is not None:
+            arg = arg.dyn_size_ext
         if isinstance(arg, Tensor) and arg.raw_tensor is not None:
             return get_backend_by_raw_tensor_type(type(arg.raw_tensor))
     return global_backend.__class__
@@ -243,12 +269,16 @@ class DimWrapper:
     Wraps :class:`Dim`.
     Using weakref for the dim.
     If the size is known (static, or eager scalar, or eager seq lens),
-    equality is given when the size values are equal (and the dim tag is ignored);
+    equality is given when the size values are equal and the sizes are over the same dims (and the dim tag is ignored);
     :func:`Cache.get` then maps the cached output back to the queried dim.
     """
 
     def __init__(self, dim: Dim, *, finalize_callback):
         self.dim_value = _dim_value_for_key(dim, finalize_callback=finalize_callback)
+        if self.dim_value is not None and dim.dyn_size_ext is not None and dim.dyn_size_ext.dims:
+            # by identity: an output over sizes of other dims (e.g. a packing) cannot be mapped one dim at a time
+            size_dims = tuple(_WeakIdRef(d, finalize_callback) for d in dim.dyn_size_ext.dims)
+            self.dim_value += (size_dims,)
         # dim_value covers every dim with a dyn size (value key or size_ref identity key),
         # incl. finalization via the raw size tensor.
         # The dim ref fallback remains only for dims without any size info
@@ -296,9 +326,8 @@ def _dim_value_for_key(dim: Dim, *, finalize_callback=None) -> Optional[Tuple[An
         # dims sharing the same size tensor (e.g. fresh kv dims from replace_dim)
         # then share the cache entry, as with value-keying in the eager cpu case.
         return "size_ref", _WeakIdRef(dim.dyn_size_ext.raw_tensor, finalize_callback), dim.capacity
-    if not dim.dyn_size_ext.dims:
-        return int(dim.get_dim_value()), dim.capacity
-    # Non-scalar eager dyn sizes (e.g. seq lens [batch]): key by the size values,
+    # Eager dyn sizes (e.g. seq lens [batch], or a scalar size): key by the size values
+    # (not get_dim_value, which is the capacity if there is one),
     # so dims with equal lens share the cache entry
     # (e.g. the fresh kv dim which attention creates per layer via replace_dim).
     # The cached output is mapped back to the queried dim in Cache.get (dim_map).
@@ -314,5 +343,5 @@ def _dim_value_for_key(dim: Dim, *, finalize_callback=None) -> Optional[Tuple[An
 
 
 # For now... we might extend it by some more types.
-_KeyItemType = Union[None, str, bool, int, float, TensorWrapper, DimWrapper]
+_KeyItemType = Union[None, str, bool, int, float, TensorWrapper, DimWrapper, Type[Backend]]
 _RawTypes = (type(None), str, bool, int, float)
