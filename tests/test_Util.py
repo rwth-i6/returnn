@@ -1064,6 +1064,51 @@ def test_file_cache_cleanup_wanted_space_keeps_files_in_use():
     assert os.path.exists(used)
 
 
+def test_file_cache_clone_space():
+    """
+    A copy-on-write clone (reflink) needs no space and frees none while its source exists:
+    the copy into the cache does not make space for it, and the cleanup does not count it as freed.
+    Here a hard link stands in for the clone (its data is shared alike).
+    """
+    import collections
+    from unittest import mock
+    from returnn.util import file_cache
+
+    src_dir = _get_tmp_dir() + "/returnn/file_cache_clone_src"
+    os.makedirs(src_dir, exist_ok=True)
+    for name in ["clone.bin", "copy.bin"]:
+        with open(f"{src_dir}/{name}", "wb") as f:
+            f.write(b"x" * 100_000)
+    cache = file_cache.FileCache(
+        cache_directory=_get_tmp_dir() + "/returnn/file_cache_clone",
+        cleanup_disk_usage_wanted_free_ratio=0.0,
+        cleanup_disk_usage_wanted_multiplier=1.0,
+    )
+    disk_full = collections.namedtuple("DiskUsage", ["total", "used", "free"])(10**12, 10**12, 0)
+
+    def _try_reflink(src: str, dst: str) -> bool:
+        if not src.endswith("clone.bin"):
+            return False
+        if os.path.exists(dst):
+            os.remove(dst)
+        os.link(src, dst)
+        return True
+
+    with mock.patch.object(file_cache, "_try_reflink", _try_reflink):
+        with mock.patch.object(file_cache.shutil, "disk_usage", return_value=disk_full):
+            clone = cache.get_file(f"{src_dir}/clone.bin")  # needs no space
+        copy = cache.get_file(f"{src_dir}/copy.bin")
+    assert os.stat(clone).st_nlink == 2 and os.stat(copy).st_nlink == 1
+    cache.release_files([clone, copy])
+    stale = time.time() - 600
+    os.utime(clone, (stale - 1, stale - 1))  # the oldest, deleted first
+    os.utime(copy, (stale, stale))
+    with mock.patch.object(file_cache.shutil, "disk_usage", return_value=disk_full):
+        cache.cleanup(need_at_least_free_space_size=50_000)
+    # the clone freed nothing, so the copy had to go too
+    assert not os.path.exists(clone) and not os.path.exists(copy)
+
+
 def test_py_baum_welch():
     from fsa_utils import py_baum_welch
     from returnn.util.fsa import FastBwFsaShared
