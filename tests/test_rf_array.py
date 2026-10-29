@@ -1538,6 +1538,34 @@ def test_replace_dim_v2_bool():
     run_model(extern_data, lambda *, epoch, step: rf.Module(), _forward_step, test_tensorflow=False)
 
 
+def test_replace_dim_v2_static_traceable():
+    import torch
+    from functorch.compile import aot_function, nop
+
+    rf.select_backend_torch()
+
+    for in_capacity, out_capacity in ((16, 24), (24, 16), (16, 16)):
+        in_dyn = in_capacity > out_capacity
+
+        def _func(x_raw: torch.Tensor, len_raw: torch.Tensor) -> torch.Tensor:
+            with rf.set_static_traceable_ctx():
+                dyn_dim = Dim(Tensor("len", dims=[], dtype="int32", raw_tensor=len_raw), name="dyn")
+                dyn_dim.capacity = max(in_capacity, out_capacity)
+                static_dim = Dim(min(in_capacity, out_capacity), name="static")
+                in_dim, out_dim = (dyn_dim, static_dim) if in_dyn else (static_dim, dyn_dim)
+                x = Tensor("x", dims=[in_dim], dtype="float32", raw_tensor=x_raw)
+                return rf.replace_dim_v2(x, in_dim=in_dim, out_dim=out_dim).raw_tensor
+
+        x = torch.arange(1, in_capacity + 1, dtype=torch.float32, requires_grad=True)
+        y = aot_function(_func, fw_compiler=nop, bw_compiler=nop)(x, torch.tensor(4, dtype=torch.int32))
+        n = min(in_capacity, out_capacity)
+        assert y.shape == (out_capacity,)
+        assert y[:n].tolist() == x[:n].tolist() and (y[n:] == 0).all()
+        w = torch.arange(out_capacity, dtype=torch.float32) + 0.5
+        (grad,) = torch.autograd.grad((y * w).sum(), x)
+        assert grad[:n].tolist() == w[:n].tolist() and (grad[n:] == 0).all()
+
+
 def test_masked_select_scatter_nested_roundtrip():
     time_dim = Dim(Tensor("time", [batch_dim], dtype="int32"))
     in_dim = Dim(5, name="in")
