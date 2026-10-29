@@ -2717,13 +2717,36 @@ def _torch_distributed_all_reduce_avg_flat_worker(rank: int, world_size: int, po
         tensors = [torch.full((n,), float(100 * rank + i)) for i, n in enumerate([3, 7, 2, 11, 5])]
         reducer.reduce(tensors)
         assert [[float(tensor[0]), float(tensor[-1])] for tensor in tensors] == results
-        buffers = {flat.untyped_storage().data_ptr() for _, _, flat, _ in reducer._buckets}
+        buffers = {flat.untyped_storage().data_ptr() for _, flat, _ in reducer._buckets}
         assert len(reducer._buckets) == 5 and len(buffers) == 1
     # in bfloat16: rounded to it (the small integers rank + i and their sums are exact there), the dtype kept
     tensors = [torch.full((n,), float(rank + i) + 1e-3) for i, n in enumerate([3, 7, 2, 11, 5])]
     _FlatReducer(dtype=torch.bfloat16).reduce(tensors)
     assert [[float(tensor[0]), float(tensor[-1])] for tensor in tensors] == [[1.0 + i, 1.0 + i] for i in range(5)]
     assert all(tensor.dtype == torch.float32 for tensor in tensors)
+    # a kept reducer rebuilds for other tensors: another number of them, the same sizes in other shapes or order
+    reducer = _FlatReducer()
+    for shapes in [[(4, 3), (5,)], [(4, 3), (5,), (2,)], [(3, 4), (5,), (2,)], [(5,), (3, 4), (2,)]]:
+        tensors = [torch.full(shape, float(100 * rank + i)) for i, shape in enumerate(shapes)]
+        reducer.reduce(tensors)
+        assert all(torch.equal(t, torch.full(shape, 100.0 + i)) for i, (t, shape) in enumerate(zip(tensors, shapes)))
+    # interleaved dtypes: one bucket per dtype, as before the kept buffer, i.e. bitwise the reduce of the
+    # concatenation per dtype (at 3 ranks the rounding depends on the position in the buffer)
+    gen = torch.Generator().manual_seed(rank)
+    dtypes = [torch.float32, torch.float64, torch.float32, torch.float32, torch.float64]
+    tensors = [torch.randn((n,), generator=gen).to(dtype) for n, dtype in zip([3, 7, 2, 11, 5], dtypes)]
+    expected = [tensor.clone() for tensor in tensors]
+    for dtype in (torch.float32, torch.float64):
+        parts = [tensor for tensor in expected if tensor.dtype == dtype]
+        flat = torch.cat(parts)
+        torch.distributed.all_reduce(flat)
+        flat /= world_size
+        torch._foreach_copy_(parts, list(flat.split([part.numel() for part in parts])))
+    reducer = _FlatReducer()
+    reducer.reduce(tensors)
+    assert len(reducer._buckets) == 2
+    assert all(tensor.dtype == dtype for tensor, dtype in zip(tensors, dtypes))
+    assert all(torch.equal(tensor, exp) for tensor, exp in zip(tensors, expected))
     with open(f"{tmp_dir}/rank{rank}.txt", "w") as f:
         f.write(repr(results))
     _destroy_process_groups([None])
@@ -2888,6 +2911,69 @@ def test_torch_distributed_all_reduce_avg_flat_buckets():
                 results = eval(f.read())
             # the mean over the ranks of 100 * rank + i
             assert results == [[100.0 + i, 100.0 + i] for i in range(5)], (rank, results)
+
+
+def _torch_distributed_reduce_grads_worker(rank: int, world_size: int, port: int, tmp_dir: str, opts: Dict[str, Any]):
+    from returnn.torch.distributed import DistributedContext
+
+    os.environ.update(
+        MASTER_ADDR="127.0.0.1",
+        MASTER_PORT=str(port),
+        RANK=str(rank),
+        WORLD_SIZE=str(world_size),
+        LOCAL_RANK=str(rank),
+        LOCAL_WORLD_SIZE=str(world_size),
+    )
+    ctx = DistributedContext(
+        {"backend": "gloo", "reduce_type": "grad_explicit", "epoch_end": "join", "sync_complete_frac": True, **opts}
+    )
+    module = torch.nn.Linear(3, 2)
+
+    def _set_grads():
+        for param in module.parameters():  # rank r: r + 1 + 2**-10, in bfloat16 rounded to r + 1
+            param.grad = torch.full_like(param, rank + 1 + 2**-10)
+
+    def _grad_values() -> List[float]:
+        return sorted({float(v) for param in module.parameters() for v in param.grad.flatten()})
+
+    results = {}
+    _set_grads()
+    ctx.maybe_reduce_grads(module=module)
+    results["all"] = _grad_values()
+    # epoch_end join, the last rank out of data: the mean over the others
+    _set_grads()
+    num = ctx.reduce_grads_join(module=module, num_batches=int(rank < world_size - 1), accum_grad_multiple_step=1)
+    results["join"] = (num, _grad_values())
+    with open(f"{tmp_dir}/rank{rank}.txt", "w") as f:
+        f.write(repr(results))
+    ctx.destroy_process_groups()
+
+
+def test_torch_distributed_reduce_grads_cpu():
+    """
+    The grad allreduce of grad_explicit (gloo, 3 ranks): the mean over all ranks, with epoch_end join the mean over
+    the ranks with data only; with grad_reduce_dtype in that dtype.
+    """
+    import socket
+    import torch.multiprocessing
+
+    world_size = 3
+    for opts, expected in [
+        ({}, {"all": [2.0 + 2**-10], "join": (2.0, [1.5 + 2**-10])}),
+        ({"grad_reduce_dtype": "bfloat16"}, {"all": [2.0], "join": (2.0, [1.5])}),  # the grads rounded to r + 1
+    ]:
+        with socket.socket() as s:
+            s.bind(("127.0.0.1", 0))
+            port = s.getsockname()[1]
+        with tempfile.TemporaryDirectory(prefix="returnn_test_torch_distributed_reduce_grads") as tmp_dir:
+            torch.multiprocessing.spawn(
+                _torch_distributed_reduce_grads_worker, args=(world_size, port, tmp_dir, opts), nprocs=world_size
+            )
+            for rank in range(world_size):
+                with open(f"{tmp_dir}/rank{rank}.txt") as f:
+                    results = eval(f.read())
+                assert results["join"] == expected["join"], (opts, rank, results)
+                assert len(results["all"]) == 1 and abs(results["all"][0] - expected["all"][0]) < 1e-6, (opts, results)
 
 
 def _torch_distributed_cuda_graph_nccl_worker(
@@ -4148,6 +4234,8 @@ def test_torch_optimizer_step_compile_deterministic():
     with the default inductor_config, i.e. the ranks of a distributed training keep the same params.
     The step normalizes stacked matrices (as Muon over experts): without "deterministic", the reduction kernel config
     is picked by timing, and about every second compile differed (torch 2.14, RTX 5090).
+    Probabilistic, it can pass without "deterministic";
+    the deterministic check that the config is applied is test_torch_optimizer_step_compile_capture_inductor_config.
     """
     if not torch.cuda.is_available():
         raise unittest.SkipTest("CUDA not available")

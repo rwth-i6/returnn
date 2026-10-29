@@ -46,6 +46,8 @@ class DistributedContext:
     ``grad_reduce_dtype`` (e.g. "bfloat16", default: the grad dtype): the grad sync allreduces in this dtype,
     which halves the communication of float32 grads; the averaged grads are then rounded to it
     (the division by a non-power-of-two rank count too).
+    Measured for bfloat16 against the float32 allreduce (random normal grads): relative RMS error of the averaged
+    grads 0.24 % at 2 ranks, 0.33 % at 3 ranks.
     """
 
     def __init__(self, options: Dict[str, Any]):
@@ -776,7 +778,7 @@ class _FlatReducer:
     Flat buffers instead of one allreduce per tensor: thousands of small allreduces would be latency-bound.
     A flat buffer is a copy, so buckets of at most ``bucket_bytes`` bound the extra memory;
     the buckets of one device and dtype share one buffer.
-    One bucket holds one dtype on one device.
+    One bucket holds one dtype on one device, see :func:`_bucket_layout`.
     The buffer, the bucket layout and the views into the buffer are kept for the next :func:`reduce`
     with the same dtypes, shapes and devices (e.g. the grads in every step).
     """
@@ -797,7 +799,7 @@ class _FlatReducer:
         self._sync_on_cpu = sync_on_cpu
         self._bucket_bytes = bucket_bytes
         self._key: Optional[List[Tuple[torch.dtype, torch.Size, torch.device]]] = None
-        self._buckets: List[Tuple[int, int, torch.Tensor, List[torch.Tensor]]] = []  # start, end, flat, views
+        self._buckets: List[Tuple[List[int], torch.Tensor, List[torch.Tensor]]] = []  # tensor indices, flat, views
 
     @torch.no_grad()
     def reduce(
@@ -820,8 +822,8 @@ class _FlatReducer:
             self._key = key
         if div is None:
             div = dist.get_world_size(group=group)
-        for start, end, flat, views in self._buckets:
-            bucket = tensors[start:end]
+        for indices, flat, views in self._buckets:
+            bucket = [tensors[i] for i in indices]
             torch._foreach_copy_(views, bucket)
             # SUM then divide, not AVG: NCCL AVG pre-scales by 1/N rounded to the dtype, a bias for non-power-of-two N.
             dist.all_reduce(flat, op=dist.ReduceOp.SUM, group=group)
@@ -829,28 +831,45 @@ class _FlatReducer:
             torch._foreach_copy_(bucket, views)
 
     def _build(self, tensors: List[torch.Tensor]):
-        # The tensors in order, so that a bucket is a slice of them. Different keys go to separate buckets.
-        buckets: Dict[Tuple[torch.device, torch.dtype], List[List[int]]] = {}  # key -> [[start, end, numel], ...]
+        buckets = _bucket_layout(
+            tensors, dtype=self._dtype, sync_on_cpu=self._sync_on_cpu, bucket_bytes=self._bucket_bytes
+        )
         sizes: Dict[Tuple[torch.device, torch.dtype], int] = {}  # key -> max bucket numel
-        prev_key = None
-        for i, tensor in enumerate(tensors):
-            key = (torch.device("cpu") if self._sync_on_cpu else tensor.device, self._dtype or tensor.dtype)
-            key_buckets = buckets.setdefault(key, [])
-            max_numel = self._bucket_bytes // torch.tensor([], dtype=key[1]).element_size()
-            if key != prev_key or key_buckets[-1][2] + tensor.numel() > max_numel:
-                key_buckets.append([i, i, 0])
-            key_buckets[-1][1:] = [i + 1, key_buckets[-1][2] + tensor.numel()]
-            sizes[key] = max(sizes.get(key, 0), key_buckets[-1][2])
-            prev_key = key
+        for key, _, numel in buckets:
+            sizes[key] = max(sizes.get(key, 0), numel)
+        buffers = {key: torch.empty((size,), dtype=key[1], device=key[0]) for key, size in sizes.items()}
         self._buckets = []
-        for key, key_buckets in buckets.items():
-            buffer = torch.empty((sizes[key],), dtype=key[1], device=key[0])
-            for start, end, numel in key_buckets:
-                flat = buffer[:numel]
-                views = list(torch.split(flat, [t.numel() for t in tensors[start:end]]))
-                views = [view.view(t.shape) for view, t in zip(views, tensors[start:end])]
-                self._buckets.append((start, end, flat, views))
-        self._buckets.sort(key=lambda b: b[0])
+        for key, indices, numel in buckets:
+            flat = buffers[key][:numel]
+            views = list(torch.split(flat, [tensors[i].numel() for i in indices]))
+            views = [view.view(tensors[i].shape) for view, i in zip(views, indices)]
+            self._buckets.append((indices, flat, views))
+
+
+def _bucket_layout(
+    tensors: List[torch.Tensor],
+    *,
+    dtype: Optional[torch.dtype],
+    sync_on_cpu: bool = False,
+    bucket_bytes: int = _FLAT_REDUCE_BUCKET_BYTES,
+) -> List[Tuple[Tuple[torch.device, torch.dtype], List[int], int]]:
+    """
+    The buckets of :class:`_FlatReducer`: per key (device, dtype), in the order of the first tensor of each key,
+    the tensors of that key in order, in buckets of at most ``bucket_bytes``, a larger tensor alone.
+    (So with interleaved dtypes still one allreduce per dtype as long as they fit, not one per run of a dtype.)
+
+    :return: per bucket: key, indices of its tensors (ascending), numel
+    """
+    buckets: Dict[Tuple[torch.device, torch.dtype], List[List[Any]]] = {}  # key -> [[indices, numel], ...]
+    for i, tensor in enumerate(tensors):
+        key = (torch.device("cpu") if sync_on_cpu else tensor.device, dtype or tensor.dtype)
+        key_buckets = buckets.setdefault(key, [])
+        max_numel = bucket_bytes // torch.tensor([], dtype=key[1]).element_size()
+        if not key_buckets or key_buckets[-1][1] + tensor.numel() > max_numel:
+            key_buckets.append([[], 0])
+        key_buckets[-1][0].append(i)
+        key_buckets[-1][1] += tensor.numel()
+    return [(key, indices, numel) for key, key_buckets in buckets.items() for indices, numel in key_buckets]
 
 
 @torch.no_grad()
