@@ -2564,6 +2564,15 @@ def _torch_distributed_sync_at_epoch_end_worker(
         LOCAL_RANK=str(rank),
         LOCAL_WORLD_SIZE=str(world_size),
     )
+    lr_calls = []  # (global_train_step, epoch, epoch_continuous, lr)
+
+    def _dyn_lr(
+        *, global_train_step: int, epoch: int, epoch_continuous: float, learning_rate: float, **_kwargs
+    ) -> float:
+        lr = learning_rate * (1.0 + epoch_continuous) / (1.0 + global_train_step)
+        lr_calls.append((global_train_step, epoch, epoch_continuous, lr))
+        return lr
+
     config = Config(
         dict(
             task="train",
@@ -2575,6 +2584,7 @@ def _torch_distributed_sync_at_epoch_end_worker(
             max_seqs=1,  # one seq per step: 7 / 9 steps per epoch, the param sync every 3 steps leaves local steps
             optimizer={"class": "adam"},
             learning_rate=0.01,
+            dynamic_learning_rate=_dyn_lr,
             num_epochs=2,
             model=f"{tmp_dir}/model",
             torch_dataloader_opts={"num_workers": 0},
@@ -2624,6 +2634,7 @@ def _torch_distributed_sync_at_epoch_end_worker(
             "extra": extra,
             "buffers": buffers,
             "global_train_step": engine.global_train_step,
+            "lr_calls": lr_calls,
         },
         f"{tmp_dir}/rank{rank}.pt",
     )
@@ -2645,7 +2656,10 @@ def _check_torch_distributed_sync_at_epoch_end(sync_at_epoch_end: bool):
             nprocs=world_size,
         )
         res = [torch.load(f"{tmp_dir}/rank{rank}.pt") for rank in range(world_size)]
-        saved_opt = torch.load(f"{tmp_dir}/model.002.opt.pt")  # written by rank 0
+        # written by rank 0
+        saved_models = [torch.load(f"{tmp_dir}/model.{epoch:03d}.pt") for epoch in (1, 2)]
+        saved_opts = [torch.load(f"{tmp_dir}/model.{epoch:03d}.opt.pt") for epoch in (1, 2)]
+        saved_opt = saved_opts[-1]
     params_equal = all(torch.equal(p0, p1) for p0, p1 in zip(res[0]["params"], res[1]["params"]))
     state_keys = sorted(res[0]["state"][0].keys())
     assert "exp_avg" in state_keys and "exp_avg_sq" in state_keys, state_keys
@@ -2680,6 +2694,16 @@ def _check_torch_distributed_sync_at_epoch_end(sync_at_epoch_end: bool):
     for i, s0 in enumerate(res[0]["state"]):
         for key in state_keys:
             assert torch.equal(saved_state[i][key], s0[key]), (i, key)
+    # model and optimizer checkpoint metadata and the optimizer counters agree, after each epoch
+    ckpt_steps = [8, 16] if sync_at_epoch_end else [7, 14]
+    for saved_model, opt, step in zip(saved_models, saved_opts, ckpt_steps):
+        assert saved_model["step"] == opt["step"] == step, (saved_model["step"], opt["step"], step)
+        assert all(float(s["step"]) == step for s in opt["optimizer"]["state"].values()), opt["optimizer"]["state"]
+    # the LR in the checkpoint is at the checkpoint step, at the epoch_continuous of the end of the epoch
+    lr_calls = res[0]["lr_calls"]
+    epoch_continuous = max(ec for _, epoch, ec, _ in lr_calls if epoch == 2)
+    assert 1.0 < epoch_continuous <= 2.0 and lr_calls[-1][:3] == (ckpt_steps[-1], 2, epoch_continuous), lr_calls
+    assert saved_opt["effective_learning_rate"] == lr_calls[-1][3], (saved_opt["effective_learning_rate"], lr_calls)
 
 
 def test_torch_engine_distributed_param_sync_at_epoch_end_cpu():
