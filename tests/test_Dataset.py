@@ -1072,6 +1072,92 @@ def test_CombinedDataset():
     assert ds_indices == [0, 0, 1] * 5
 
 
+def _make_streaming_dataset_class(estimated_num_seqs_per_epoch: Dict[int, int], num_seqs: Optional[int] = None):
+    from returnn.datasets.cached2 import CachedDataset2
+
+    class _StreamingDataset(CachedDataset2):
+        """num_seqs 0 for epoch None (like CachedDataset2), estimate only after init_seq_order, num_seqs if given"""
+
+        def __init__(self, **kwargs):
+            super().__init__(**kwargs)
+            self.num_inputs = 3
+            self.num_outputs = {"data": (3, 2)}
+
+        def init_seq_order(self, epoch=None, seq_list=None, seq_order=None):
+            """init seq order"""
+            super().init_seq_order(epoch=epoch, seq_list=seq_list, seq_order=seq_order)
+            self._estimated_num_seqs = estimated_num_seqs_per_epoch.get(epoch)
+            if epoch is not None:
+                self._num_seqs = num_seqs
+            return True
+
+        def get_data_keys(self):
+            """data keys"""
+            return ["data"]
+
+        def get_data_dtype(self, key):
+            """dtype"""
+            return "float32"
+
+        def _collect_single_seq(self, seq_idx: int) -> Optional[DatasetSeq]:
+            if self._num_seqs is not None and seq_idx >= self._num_seqs:
+                return None
+            return DatasetSeq(
+                seq_idx=seq_idx,
+                complete_frac=(seq_idx + 1) / self._estimated_num_seqs,
+                features={"data": numpy.zeros((5, 3), dtype="float32")},
+            )
+
+    return _StreamingDataset
+
+
+def test_CombinedDataset_interleave_gumbel_streaming_estimate():
+    stream_dataset = {"class": _make_streaming_dataset_class({1: 125_000, 2: 96_000})}
+    finite_dataset = {"class": "DummyDataset", "input_dim": 3, "output_dim": 4, "num_seqs": 64_000, "seq_len": 5}
+
+    def _make(stream: Dict[str, Any], finite: Dict[str, Any], **extra_datasets):
+        datasets = {"finite": finite, "stream": stream, **extra_datasets}
+        return init_dataset(
+            {
+                "class": "CombinedDataset",
+                "datasets": datasets,
+                "data_map": {(k, "data"): f"data_{k}" for k in datasets},
+                "seq_ordering": "interleave",
+                "interleave_gumbel_scale": 1.0,
+            }
+        )
+
+    def _count_stream_seqs(dataset: Dataset, num_seqs: int) -> int:
+        dataset.load_seqs(0, num_seqs)
+        return sum(dataset.get_data(seq_idx, "data_stream").shape[0] > 0 for seq_idx in range(num_seqs))
+
+    for stream in [
+        stream_dataset,
+        {"class": "PostprocessingDataset", "dataset": stream_dataset, "map_seq": map_identity},
+    ]:
+        dataset = _make(stream, finite_dataset)
+        dataset.init_seq_order(epoch=1)
+        assert dataset.estimated_num_seq_per_subset == [64_000, 125_000]
+        assert dataset.estimated_num_seqs == 189_000
+        # expected about 100 * 125 / 189 = 66
+        assert 40 <= _count_stream_seqs(dataset, 100) <= 90
+        dataset.init_seq_order(epoch=2)
+        assert dataset.estimated_num_seq_per_subset == [64_000, 96_000]
+        assert dataset.estimated_num_seqs == 160_000
+        assert 40 <= _count_stream_seqs(dataset, 100) <= 80
+
+    # shard-local count of the finite dataset, not the global one, and an empty dataset stays empty
+    dataset = _make(
+        stream_dataset,
+        {**finite_dataset, "_num_shards": 2, "_shard_index": 1},
+        empty={"class": _make_streaming_dataset_class({1: 1_000}, num_seqs=0)},
+    )
+    dataset.init_seq_order(epoch=1)
+    assert dataset.estimated_num_seq_per_subset == [0, 32_000, 125_000]
+    dataset.load_seqs(0, 100)
+    assert all(dataset.get_data(seq_idx, "data_empty").shape[0] == 0 for seq_idx in range(100))
+
+
 def test_MapDatasetWrapper():
     from returnn.datasets.map import MapDatasetBase
 
