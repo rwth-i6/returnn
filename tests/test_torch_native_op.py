@@ -349,6 +349,72 @@ def test_ctc_loss_grad_padded_vs_packed():
     assert leaf_packed.grad[~mask].abs().max().item() == 0.0
 
 
+def test_ctc_loss_nan_logits(device: torch.device = torch.device("cpu")):
+    """
+    A NaN logit inside a seq makes the loss and the grads of that seq NaN (not 0),
+    the other seqs are unaffected, as is NaN junk outside of the seqs (padded frames, packed gap frames).
+    """
+    torch.manual_seed(3)
+    lens = [9, 7, 4]
+    tgt_lens = [4, 3, 2]
+    n_batch, n_time, dim = len(lens), max(lens), 6
+    blank = 5
+    logits = torch.randn(n_batch, n_time, dim, device=device)
+    targets = torch.randint(0, blank, (n_batch, max(tgt_lens)), dtype=torch.int32, device=device)
+    lens_t = torch.tensor(lens, dtype=torch.int32, device=device)
+    tgt_lens_t = torch.tensor(tgt_lens, dtype=torch.int32, device=device)
+    gap = 2  # packed: gap frames after each seq
+    starts = torch.tensor([sum(lens[:b]) + b * gap for b in range(n_batch)], dtype=torch.int32, device=device)
+
+    def _run(x: torch.Tensor, *, packed: bool):
+        leaf = x.clone().requires_grad_(True)
+        if packed:
+            # NaN in all gap frames
+            flat = torch.full((sum(lens) + n_batch * gap, dim), float("nan"), device=device)
+            for b in range(n_batch):
+                flat[starts[b] : starts[b] + lens[b]] = leaf[b, : lens[b]]
+            loss = ctc_loss_packed(
+                logits=flat,
+                seq_starts=starts,
+                logits_seq_lens=lens_t,
+                max_seq_len=n_time,
+                targets=targets,
+                targets_seq_lens=tgt_lens_t,
+                blank_index=blank,
+            )
+        else:
+            loss = ctc_loss(
+                logits=leaf, logits_seq_lens=lens_t, targets=targets, targets_seq_lens=tgt_lens_t, blank_index=blank
+            )
+        loss.sum().backward()
+        return loss.detach().cpu(), leaf.grad.cpu()
+
+    mask = torch.arange(n_time, device=device)[None, :] < lens_t[:, None]
+    logits_junk = torch.where(mask[:, :, None], logits, float("nan"))  # NaN in all padded frames
+    logits_nan = logits_junk.clone()
+    logits_nan[1, 3, 2] = float("nan")  # inside seq 1
+    for packed in [False, True]:
+        print("packed:", packed)
+        ref_loss, ref_grad = _run(logits, packed=packed)
+        assert torch.isfinite(ref_loss).all() and torch.isfinite(ref_grad).all()
+        loss, grad = _run(logits_junk, packed=packed)
+        assert_allclose(loss.numpy(), ref_loss.numpy(), rtol=1e-5, atol=1e-6)
+        assert_allclose(grad.numpy(), ref_grad.numpy(), rtol=1e-5, atol=1e-6)
+        loss, grad = _run(logits_nan, packed=packed)
+        print("loss:", loss)
+        assert torch.isnan(loss[1]), f"seq with a NaN logit: loss {loss[1]}, expected NaN"
+        assert torch.isnan(grad[1][mask[1].cpu()]).any(dim=-1).all()  # every frame of the seq
+        for b in [0, 2]:
+            assert_allclose(loss[b].numpy(), ref_loss[b].numpy(), rtol=1e-5, atol=1e-6)
+            assert_allclose(grad[b].numpy(), ref_grad[b].numpy(), rtol=1e-5, atol=1e-6)
+
+
+def test_ctc_loss_nan_logits_cuda():
+    if not torch.cuda.is_available():
+        raise SkipTest("CUDA not available")
+    test_ctc_loss_nan_logits(device=torch.device("cuda"))
+
+
 def test_ctc_loss_over_allocated_time():
     """
     Compares loss and grads of :func:`ctc_loss` on logits with more frames than the longest sequence
