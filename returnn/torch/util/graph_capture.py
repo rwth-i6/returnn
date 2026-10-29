@@ -1261,24 +1261,27 @@ class GraphCapturedTrainStep:
         The compiled outputs are capture-pool allocations with stable addresses,
         refreshed in place by each replay.
         """
-        compiled = self._ensure_compiled()
-        raws = [p.raw_tensor for p in self._rf_params]
-        self._log_misaligned_inputs(raws)
-        # plain warm run (in partitioned mode incl. backward: autotune + workspaces);
-        # the replay after the capture is this batch's step, so this run leaves no trace on the state either
-        with self._training_state_preserved():
-            outs = compiled(self._compiled_call_args(raws))
-            if self._partitioned:
-                for p in self._grad_params:
-                    p.grad.zero_()
-                outs[0].backward()
+        # warm runs and capture on one non-default stream: a kept-alive AccumulateGrad runs on its creation stream
+        self._eager_stream.wait_stream(torch.cuda.current_stream())
+        with torch.cuda.stream(self._eager_stream):
+            compiled = self._ensure_compiled()
+            raws = [p.raw_tensor for p in self._rf_params]
+            self._log_misaligned_inputs(raws)
+            # plain warm run (in partitioned mode incl. backward: autotune + workspaces);
+            # the replay after the capture is this batch's step, so this run leaves no trace on the state either
+            with self._training_state_preserved():
+                outs = compiled(self._compiled_call_args(raws))
+                if self._partitioned:
+                    for p in self._grad_params:
+                        p.grad.zero_()
+                    outs[0].backward()
         torch.cuda.synchronize()
         # release the warm runs' cached blocks: capture allocates from its own pool,
         # cannot reuse them, and cannot cudaFree during capture either;
         # without this release, capture needs the step footprint twice
         del outs
         torch.cuda.empty_cache()
-        with cuda_graph_capture(graph):
+        with cuda_graph_capture(graph, stream=self._eager_stream):
             if self._partitioned:
                 # in-graph: backward accumulates into the static grads -> zero first
                 for p in self._grad_params:
