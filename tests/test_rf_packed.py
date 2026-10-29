@@ -832,6 +832,43 @@ def test_concat_packed_static_traceable_empty_plain_source():
     assert out_dim.dyn_size_ext.raw_tensor.tolist() == ref_dim.dyn_size_ext.raw_tensor.tolist()
     torch.testing.assert_close(out.raw_tensor.inner.raw_tensor, ref.raw_tensor.inner.raw_tensor, rtol=0, atol=0)
 
+
+def test_concat_packed_static_traceable_declared_bound():
+    # captured regime with a declared bound on the concat dim (e.g. the batcher bounds the sum of the parts per batch):
+    # the buffer takes that bound instead of the sum of the parts' bounds, same content
+    rf.select_backend_torch()
+    n_seq_cap, feat = 6, 4
+    b_dim, f_dim = Dim(n_seq_cap, name="batch"), Dim(feat, name="feat")
+
+    def mk(lens, buf, name):
+        d = Dim(
+            Tensor(
+                f"{name}_len",
+                dims=[b_dim],
+                dtype="int32",
+                raw_tensor=torch.tensor(lens + [0] * (n_seq_cap - len(lens)), dtype=torch.int32),
+            ),
+            name=name,
+        )
+        d.capacity = buf
+        pd = Dim(buf, name=f"packed_{name}")
+        flat = Tensor("flat", dims=[pd, f_dim], dtype="float32", raw_tensor=torch.randn(buf, feat))
+        return packed.pack_import(flat, batch_dim=b_dim, spatial_dim=d, packed_dim=pd, feature_dim=f_dim), d
+
+    ap, a_dim = mk([4, 2, 5], 40, "a")
+    bp, b_sp = mk([3, 1, 0], 20, "b")
+    with rf.set_static_traceable_ctx():
+        ref, ref_dim = rf.concat((ap, a_dim), (bp, b_sp), handle_dynamic_dims=True)
+        out_dim = a_dim + b_sp
+        out_dim.packed_total_bound = 16  # >= 4+3 + 2+1 + 5+0 = 15
+        out, _ = rf.concat((ap, a_dim), (bp, b_sp), handle_dynamic_dims=True, out_dim=out_dim)
+    assert packed.is_packed(out)
+    assert ref.raw_tensor.packed_dim.dimension == 40 + 20 and out.raw_tensor.packed_dim.dimension == 16
+    assert out_dim.dyn_size_ext.raw_tensor.tolist() == ref_dim.dyn_size_ext.raw_tensor.tolist()
+    torch.testing.assert_close(
+        out.raw_tensor.inner.raw_tensor[:15], ref.raw_tensor.inner.raw_tensor[:15], rtol=0, atol=0
+    )
+
 def test_conformer():
     """
     The goal test: a full Conformer forward pass on packed input matches the padded path.

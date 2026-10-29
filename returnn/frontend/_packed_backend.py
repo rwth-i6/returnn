@@ -5347,8 +5347,9 @@ def _concat_out_packed_dim(
 ) -> Dim:
     """
     :return: the packed dim for a concat result: every source's content, end to end.
-        Static when tracing, since a captured buffer size must not vary per batch.
-        A plain source adds its (max) length per sequence.
+        Static when tracing, since a captured buffer size must not vary per batch:
+        the sum of the sources' bounds (a plain source adds its (max) length per sequence),
+        or the declared :attr:`Dim.packed_total_bound` of ``out_dim`` where that is tighter.
     """
     if not rf.is_static_traceable():
         total = None
@@ -5375,8 +5376,12 @@ def _concat_out_packed_dim(
         f" It comes from the packed buffer size (pack total_bound / packed_batch_size),"
         f" or for a plain source from the bounded batch dim times its spatial capacity."
     )
-    del out_dim  # the bound is the sum of the sources', not derived from the concat dim
-    return Dim(sum(bounds), name="packed_concat")
+    total = sum(bounds)
+    # A declared bound on the concat dim (e.g. the batcher bounds the sum of the parts per batch, packed_batch_cost)
+    # is a promise about the content, as the bound of any packed buffer.
+    if out_dim.packed_total_bound is not None:
+        total = min(total, out_dim.packed_total_bound)
+    return Dim(total, name="packed_concat")
 
 
 def _repeat_out_packed_dim(
