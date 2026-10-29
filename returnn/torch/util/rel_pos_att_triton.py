@@ -153,6 +153,14 @@ def _rel_pos_fwd_kernel(
     tl.store(Lse + q_rows * H + h, lse, mask=q_mask)
 
 
+def _fwd_launch_config(d: int) -> Tuple[int, int, int, int]:
+    """:return: BLOCK_M, BLOCK_N, num_warps, num_stages of :func:`_rel_pos_fwd_kernel` for head dim d"""
+    # H100: 128x64 is ~1.6x faster at d=128 with the shared memory of 64x64, slower at d=64
+    if d > 64:
+        return 128, 64, 8, 2
+    return 64, 64, 4, 3
+
+
 def rel_pos_att_fwd(q, k, v, bd, seq_starts, seq_lens, max_len, *, dropout_p=0.0, seed=0, scale=None):
     """forward, see :func:`rel_pos_att_varlen`. Returns (out, lse)."""
     total, n_heads, d = q.shape
@@ -167,7 +175,7 @@ def rel_pos_att_fwd(q, k, v, bd, seq_starts, seq_lens, max_len, *, dropout_p=0.0
     out = torch.zeros_like(q)  # input dtype; the accumulation is f32 internally
     lse = torch.empty(total, n_heads, device=q.device, dtype=torch.float32)
     n_batch = seq_starts.numel()
-    block_m, block_n = 64, 64
+    block_m, block_n, num_warps, num_stages = _fwd_launch_config(d)
     grid = (triton.cdiv(max_len, block_m), n_batch * n_heads)
     _rel_pos_fwd_kernel[grid](
         q,
@@ -195,6 +203,8 @@ def rel_pos_att_fwd(q, k, v, bd, seq_starts, seq_lens, max_len, *, dropout_p=0.0
         BLOCK_N=block_n,
         ENABLE_DROPOUT=dropout_p > 0.0,
         IEEE=q.dtype == torch.float32,
+        num_warps=num_warps,
+        num_stages=num_stages,
     )
     return out, lse
 
