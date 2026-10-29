@@ -4698,3 +4698,32 @@ def _parse_slurm_time_str(s: str) -> Optional[int]:
     except ValueError:
         return None
     return days * 86400 + h * 3600 + m * 60 + sec
+
+
+def slurm_interrupt_job() -> bool:
+    """
+    Send SIGINT to the current SLURM job, like Ctrl+C in a shell:
+    to the batch step, i.e. the batch script and the process group of its children
+    (e.g. the Sisyphus task worker and ``torchrun``), via ``scancel --full``,
+    and, when called from inside another job step (e.g. a task of ``srun``),
+    also to the tasks of that step on every node, via ``scancel`` on the step.
+    ``scancel --full`` reaches only the batch step, not the other steps
+    and not a process which started its own session (measured on Slurm 26.05).
+
+    :return: whether the signals were sent, so False if not running under SLURM
+        (``SLURM_JOB_ID`` env var missing) or if ``scancel`` failed
+    """
+    job_id = os.environ.get("SLURM_JOB_ID")
+    if not job_id:
+        return False
+    cmds = [["scancel", "--signal=INT", "--full", job_id]]
+    step_id = os.environ.get("SLURM_STEP_ID")
+    if step_id and step_id.isdigit():  # the batch step has a negative id
+        cmds.append(["scancel", "--signal=INT", f"{job_id}.{step_id}"])
+    for cmd in cmds:
+        try:
+            subprocess.run(cmd, check=True, capture_output=True, text=True, timeout=30)
+        except (subprocess.SubprocessError, FileNotFoundError, OSError) as exc:
+            print(f"{' '.join(cmd)} failed: {exc}", file=log.v1)
+            return False
+    return True
