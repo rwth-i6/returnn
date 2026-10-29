@@ -428,7 +428,7 @@ def _chunked_bwd_kernel_dq(
 # and the element size, e.g. (64, 64) at head dim 64 in float32 needs 128 KiB, more than the 99 KiB an RTX 5090
 # (sm_120) gives a block, so every launch takes the largest blocks that fit, see :func:`_launch`.
 _BLOCK_SIZES = ((64, 64), (32, 32), (16, 16))
-# (kernel, head dim, dtype, device, constexprs) -> the blocks that fit
+# (kernel, head dim, dtypes, device, constexprs) -> the blocks that fit
 _block_choice: Dict[Tuple[Any, ...], Tuple[int, int]] = {}
 
 
@@ -444,10 +444,12 @@ def _launch(kernel, grid: Callable[[int, int], Tuple[int, ...]], args: Tuple[Any
     :param grid: (block_m, block_n) -> launch grid
     :param args: positional kernel args
     :param kwargs: keyword kernel args (constexprs) without BLOCK_M, BLOCK_N
-    :param q: the query (head dim, dtype, device)
+    :param q: the query (head dim, device)
     """
     head_dim = q.shape[-1]
-    key = (kernel, head_dim, q.dtype, q.device) + tuple(sorted(kwargs.items()))
+    # the dtypes of all tensor args, as each one's element size goes into the shared memory of the blocks
+    dtypes = tuple(arg.dtype for arg in args if isinstance(arg, torch.Tensor))
+    key = (kernel, head_dim, dtypes, q.device) + tuple(sorted(kwargs.items()))
     choice = _block_choice.get(key)
     largest = (64, 64) if head_dim <= 64 else (32, 32)
     candidates = [choice] if choice else [blocks for blocks in _BLOCK_SIZES if blocks <= largest]

@@ -2238,6 +2238,40 @@ def test_chunked_rel_pos_att_triton_kernel_float32_head_dim_64_128():
         _chunked_rel_pos_att_kernel_vs_reference(head_dim=head_dim)
 
 
+def test_chunked_rel_pos_att_triton_block_choice_per_dtypes():
+    # the kept block choice of a launch holds for the dtypes of all tensor args, not only the query's:
+    # e.g. a float32 position term next to a bfloat16 query needs more shared memory than a bfloat16 one
+    try:
+        from returnn.torch.util import chunked_rel_pos_att_triton as m
+    except ImportError as exc:
+        raise unittest.SkipTest(f"triton not available ({exc})")
+
+    class _Kernel:
+        """fits blocks of at most 2 * 64 * 64 bytes per tensor"""
+
+        def __init__(self):
+            self.launches = []
+
+        def __getitem__(self, grid):
+            def _run(*args, BLOCK_M: int, BLOCK_N: int):
+                size = max(arg.element_size() for arg in args if isinstance(arg, torch.Tensor)) * BLOCK_M * BLOCK_N
+                if size > 2 * 64 * 64:
+                    raise m.OutOfResources(size, 2 * 64 * 64, "shared memory")
+                self.launches.append((BLOCK_M, BLOCK_N))
+
+            return _run
+
+    kernel = _Kernel()
+    q = torch.zeros(4, 2, 64, dtype=torch.bfloat16)
+    try:
+        for bd_dtype, expected in [(torch.bfloat16, (64, 64)), (torch.float32, (32, 32)), (torch.bfloat16, (64, 64))]:
+            m._launch(kernel, lambda block_m, block_n: (1,), (q, torch.zeros(4, 2, 7, dtype=bd_dtype)), {}, q=q)
+            assert kernel.launches[-1] == expected, (bd_dtype, kernel.launches)
+    finally:
+        for key in [key for key in m._block_choice if key[0] is kernel]:
+            del m._block_choice[key]
+
+
 def _chunked_rel_pos_att_kernel_vs_reference(*, head_dim: int):
     """
     fwd + all grads of the chunked rel-pos kernel (float32) vs an explicit per-row reference,
