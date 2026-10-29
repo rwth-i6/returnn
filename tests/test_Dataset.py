@@ -1659,6 +1659,94 @@ def test_DistributeFilesDataset_no_worker_proc_meta_data():
     assert res[0][4] == 3 * 5
 
 
+def _dfd_get_sub_epoch_dummy_dataset(_files_subepoch: List[Tuple[str, str]]) -> Dict[str, Any]:
+    return {
+        "class": "DummyDataset",
+        "input_dim": 2,
+        "output_dim": 3,
+        "num_seqs": 1,
+        "seq_len": 2,
+        "seq_ordering": "default",
+    }
+
+
+_dfd_test_file_sizes: Dict[str, int] = {}
+_dfd_test_get_file_sizes_calls = []
+
+
+def _dfd_test_get_file_sizes(files: List[Tuple[str, str]], **_kwargs) -> List[int]:
+    _dfd_test_get_file_sizes_calls.append(files)
+    return [sum(_dfd_test_file_sizes[fn] for fn in t) for t in files]
+
+
+def test_DistributeFilesDataset_get_file_sizes():
+    import pickle
+    from unittest import mock
+    from returnn.config import global_config_ctx, Config
+
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        files = []
+        for i in range(8):
+            t = (f"{tmp_dir}/align-{i}", f"{tmp_dir}/feat-{i}")
+            for j, fn in enumerate(t):
+                with open(fn, "wb") as f:
+                    f.write(b"x" * (((i * 7) % 5 + 1) * 10 + j))
+                _dfd_test_file_sizes[fn] = os.path.getsize(fn)
+            files.append(t)
+        partition_epoch, distrib_size = 2, 2
+
+        def _files_order(dataset) -> List[List[Tuple[str, str]]]:
+            res = []
+            for epoch in range(1, 2 * partition_epoch + 1):  # 2 full epochs
+                dataset.init_seq_order(epoch=epoch)
+                res.append(dataset._files_order_cache[(epoch - 1) // partition_epoch][(epoch - 1) % partition_epoch])
+            return res
+
+        def _make_dataset(**kwargs):
+            return init_dataset(
+                {
+                    "class": "DistributeFilesDataset",
+                    "files": files,
+                    "get_sub_epoch_dataset": _dfd_get_sub_epoch_dummy_dataset,
+                    "distrib_shard_files": True,
+                    "partition_epoch": partition_epoch,
+                    "seq_ordering": "random",
+                    "use_worker_proc": False,
+                    **kwargs,
+                }
+            )
+
+        files_per_rank = []
+        for rank in range(distrib_size):
+            with global_config_ctx(Config({"__debug_dummy_distributed_rank_and_size": (rank, distrib_size)})):
+                ref = _files_order(_make_dataset())
+                _dfd_test_get_file_sizes_calls.clear()
+                with mock.patch("os.path.getsize", side_effect=AssertionError("getsize called")):
+                    dataset = _make_dataset(get_file_sizes=_dfd_test_get_file_sizes)
+                    assert _files_order(dataset) == ref
+                    dataset = pickle.loads(pickle.dumps(dataset))
+                    assert _files_order(dataset) == ref
+                assert _dfd_test_get_file_sizes_calls == [files]
+            files_per_rank.append(ref)
+        for full_epoch in range(2):
+            sub_epochs = slice(full_epoch * partition_epoch, (full_epoch + 1) * partition_epoch)
+            assert sorted(t for rank_files in files_per_rank for ts in rank_files[sub_epochs] for t in ts) == files
+
+        for get_file_sizes, err in [
+            (lambda fs, **_: [1] * (len(fs) - 1), "returned 7 sizes"),
+            (lambda fs, **_: [1] * (len(fs) + 1), "returned 9 sizes"),
+            (lambda fs, **_: [1] * (len(fs) - 1) + [-1], "invalid size -1"),
+            (lambda fs, **_: [1] * (len(fs) - 1) + [1.5], "invalid size 1.5"),
+        ]:
+            dataset = _make_dataset(get_file_sizes=get_file_sizes)
+            try:
+                dataset.init_seq_order(epoch=1)
+            except ValueError as exc:
+                assert err in str(exc)
+            else:
+                raise AssertionError("expected ValueError")
+
+
 def _dfd_get_sub_epoch_blocking_map_dataset(
     _files_subepoch: List[str], *, started_fn: str, release_fn: str
 ) -> Dict[str, Any]:
