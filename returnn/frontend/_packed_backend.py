@@ -3475,9 +3475,8 @@ class PackedBackend(Backend[PackedRawTensor]):
     @staticmethod
     def cast_raw(raw_tensor: PackedRawTensor, dtype: str) -> PackedRawTensor:
         """cast -- on the packed data (elementwise)"""
-        inner_out = raw_tensor.inner.copy_template(name="cast")
-        inner_out.dtype = dtype
-        inner_out.raw_tensor = raw_tensor.inner_backend.cast_raw(raw_tensor.inner.raw_tensor, dtype)
+        # as the outer cast, e.g. a float cast drops the sparse dim, also on the inner tensor (kept by a rewrap)
+        inner_out = raw_tensor.inner_backend.cast(raw_tensor.inner, dtype)
         return PackedRawTensor(
             inner=inner_out,
             packed_dim=raw_tensor.packed_dim,

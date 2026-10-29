@@ -2464,6 +2464,20 @@ def test_cast_packed():
     _assert_equal_non_padded(out_p, rf.cast(x, "float64"), batch_dim, time_dim)
 
 
+def test_cast_packed_sparse_to_float():
+    # a float cast drops the sparse dim, as for padded data, also after an op rewrapping the packed buffer
+    rf.select_backend_torch()
+    batch_dim, vocab_dim = Dim(2, name="batch"), Dim(10, name="vocab")
+    time_dim = Dim(Tensor("time", dims=[batch_dim], dtype="int32", raw_tensor=torch.tensor([3, 2], dtype=torch.int32)))
+    raw = torch.randint(0, 10, (2, 3), dtype=torch.int32, generator=torch.Generator().manual_seed(1))
+    x = Tensor("x", dims=[batch_dim, time_dim], dtype="int32", sparse_dim=vocab_dim, raw_tensor=raw)
+    xp = packed.pack(x)
+    assert rf.cast(xp, "int64").sparse_dim == vocab_dim
+    out_p = rf.cast(xp, "float32") * 2.0
+    assert packed.is_packed(out_p) and out_p.sparse_dim is None, out_p
+    _assert_equal_non_padded(out_p, rf.cast(x, "float32") * 2.0, batch_dim, time_dim)
+
+
 def test_stft_packed():
     # stft on packed audio runs per-seq on the packed buffer (no unpack, no window crosses a seq),
     # bit-identical to the padded stft on the valid output frames.
