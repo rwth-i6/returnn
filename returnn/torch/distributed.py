@@ -918,7 +918,7 @@ def _sync_state(
     Makes the state the same on all ranks of the group, one rule per kind:
     floating point tensors take the mean (the params, the buffers, the optimizer state such as the Adam moments),
     counts the max (``counters``, the ``step`` tensors of the optimizer state, integer tensors),
-    other optimizer state values come from the first rank of the group.
+    other optimizer state values come from the first rank of the group (with ``weight``: the first one with a weight).
     The ranks can differ in the counts after an epoch in which they got different numbers of batches
     (a rank out of data stops at its step, the others at their next sync); the mean of a count would be no count.
 
@@ -967,6 +967,11 @@ def _sync_state(
     if objects:
         values = [tree.flatten(optimizer.state[param])[idx] for param, idx in objects]
         src = 0 if group is None else dist.get_global_rank(group, 0)
+        if weight is not None:  # from the first rank with a weight, i.e. an update since the last sync, if any
+            first = torch.tensor([dist.get_rank() if weight > 0 else dist.get_world_size()], dtype=torch.int64)
+            dist.all_reduce(first, op=dist.ReduceOp.MIN, group=group)
+            if int(first) < dist.get_world_size():
+                src = int(first)
         dist.broadcast_object_list(values, src=src, group=group, device=torch.device("cpu"))
         for (param, idx), value in zip(objects, values):
             flat = tree.flatten(optimizer.state[param])

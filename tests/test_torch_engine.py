@@ -3137,6 +3137,48 @@ def test_torch_distributed_epoch_end_join_sync_batch_norm_refused():
         assert res is not None and "distributed batch norm" in res, results
 
 
+def _torch_distributed_sync_state_objects_from_weighted_rank_worker(
+    rank: int, world_size: int, port: int, tmp_dir: str
+):
+    from returnn.torch.distributed import _sync_state, _destroy_process_groups
+
+    os.environ.update(MASTER_ADDR="127.0.0.1", MASTER_PORT=str(port), RANK=str(rank), WORLD_SIZE=str(world_size))
+    torch.distributed.init_process_group(backend="gloo")
+    module = torch.nn.Linear(3, 2)
+    optimizer = torch.optim.SGD(module.parameters(), lr=0.1)
+    for param in module.parameters():
+        # a Python-int step count, as a custom optimizer keeps it; rank 0 without an update since the last sync
+        optimizer.state[param] = {"step": 1 if rank == 0 else 5, "buf": torch.full_like(param, float(rank))}
+    _sync_state(module=module, optimizer=optimizer, weight=float(rank > 0))
+    results = [(state["step"], float(state["buf"].flatten()[0])) for state in optimizer.state.values()]
+    with open(f"{tmp_dir}/rank{rank}.txt", "w") as f:
+        f.write(repr(results))
+    _destroy_process_groups([None])
+
+
+def test_torch_distributed_sync_state_objects_from_weighted_rank():
+    """
+    epoch_end "join": the optimizer state which is no tensor comes from a rank with an update since the last sync,
+    not from the first rank of the group if that one has none (a stale Python step count)
+    """
+    import socket
+
+    world_size = 2
+    with socket.socket() as s:
+        s.bind(("127.0.0.1", 0))
+        port = s.getsockname()[1]
+    with tempfile.TemporaryDirectory(prefix="returnn_test_torch_distributed_sync_state_objects") as tmp_dir:
+        _torch_spawn_with_timeout(
+            _torch_distributed_sync_state_objects_from_weighted_rank_worker,
+            args=(world_size, port, tmp_dir),
+            nprocs=world_size,
+            timeout=60,
+        )
+        for rank in range(world_size):
+            with open(f"{tmp_dir}/rank{rank}.txt") as f:
+                assert eval(f.read()) == [(5, 1.0), (5, 1.0)], rank
+
+
 def test_torch_distributed_all_reduce_avg_flat_buckets():
     import socket
     import torch.multiprocessing
