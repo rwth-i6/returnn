@@ -26,6 +26,10 @@ Config, e.g.::
         "capture": True,                # False (with compile): run the compiled step eagerly, no graph
     }
 
+With ``torch_distributed`` ``grad_reduce_in_graph`` (and "compile", not "partitioned"),
+the grad allreduce over the ranks is part of the compiled step, overlapped with the backward,
+see :class:`returnn.torch.distributed.InGraphGradReducer`.
+
 Requirements (asserted):
 
 - ``accum_grad_multiple_step == 1``, no grad scaler, no DDP, no hot reloading.
@@ -52,7 +56,7 @@ stream discipline and grad buffers (:func:`run_train_step`).
 """
 
 from __future__ import annotations
-from typing import Optional, Union, Any, Callable, Dict, List, Tuple
+from typing import TYPE_CHECKING, Optional, Union, Any, Callable, Dict, List, Tuple
 from contextlib import contextmanager
 import gc
 import os
@@ -64,10 +68,13 @@ from returnn.tensor import Tensor, TensorDict, Dim
 import returnn.frontend as rf
 from returnn.frontend.run_ctx import RunCtx, Loss
 
-from .capture_lock import cuda_graph_capture
+from .capture_lock import cuda_graph_capture, replay
 
 # noinspection PyProtectedMember
 from ..data.extern_data import get_batch_dim_from_extern_data, _get_dyn_dims_from_extern_data
+
+if TYPE_CHECKING:
+    from returnn.torch.distributed import InGraphGradReducer
 
 __all__ = ["GraphCapturedTrainStep", "graph_pools_reserved", "inductor_fw_compiler"]
 
@@ -493,6 +500,7 @@ class GraphCapturedTrainStep:
         get_buffers: Optional[Callable[[], List[torch.Tensor]]] = None,
         rf_params: Optional[List[rf.Parameter]] = None,
         packed_batch_size: Optional[Dict[str, int]] = None,
+        grad_reducer: Optional[InGraphGradReducer] = None,
     ):
         """
         :param opts: the ``torch_cuda_graph`` config dict, see the module docstring
@@ -509,6 +517,7 @@ class GraphCapturedTrainStep:
         :param rf_params: RF-level model params, required for opts "compile"
         :param packed_batch_size: the config option, when statically known;
             only to infer a missing "packed_total_bound", see :func:`_get_data_buf`
+        :param grad_reducer: allreduce the grads over the ranks inside the compiled step
         """
         assert str(device).startswith("cuda"), f"torch_cuda_graph requires a cuda device, got {device!r}"
         opts = CollectionReadCheckCovered(opts)  # catch unknown (e.g. typo'd) option keys, see below
@@ -583,6 +592,13 @@ class GraphCapturedTrainStep:
             # noinspection PyProtectedMember
             torch.cuda.memory._record_memory_history(max_entries=200_000)
         assert self._capture_graph or self._compile, 'torch_cuda_graph: "capture": False requires "compile": True'
+        self._grad_reducer = grad_reducer
+        self._grad_reduce_scale: Optional[torch.Tensor] = None  # the trace input while tracing, see step_core
+        if grad_reducer is not None and (not self._compile or self._partitioned):
+            # the allreduce is traced into the step after the grads, so the grads must be outputs of one traced step
+            raise ValueError(
+                "torch_distributed grad_reduce_in_graph: needs torch_cuda_graph compile, without partitioned"
+            )
         self._compiled_fn: Optional[Callable[[List[torch.Tensor]], tuple]] = None
         self._compiled_n_calls = 0
         self._rf_params = rf_params
@@ -907,15 +923,24 @@ class GraphCapturedTrainStep:
             loss.get_inv_norm_factor()
 
     @contextmanager
-    def _training_state_preserved(self):
+    def _training_state_preserved(self, *, on_device: bool = False):
         """
-        Puts the training state back after the enclosed runs, which only warm the kernels:
-        the module buffers and the parameters without gradient (running statistics, counters),
-        and the CUDA RNG state. The copies live on the CPU, so they add nothing to the GPU memory.
+        Puts the training state back after the enclosed runs, which only warm the kernels
+        (or only take part in the collectives, see :func:`run_idle_step`): what the step can change besides
+        the grads, i.e. the module buffers and the RF auxiliary parameters (running statistics, counters),
+        but not the other parameters without gradient (frozen, which the step cannot change;
+        for a model without RF parameters all of them),
+        and the CUDA RNG state (host-side seed and offset, negligible).
+
+        :param on_device: keep the copies on the device (fast, e.g. for every idle step),
+            else on the CPU, so they add nothing to the GPU memory (e.g. for the warm runs before the capture)
         """
         tensors = list(self._get_buffers()) if self._get_buffers is not None else []
-        tensors += [p for p in self._params if not p.requires_grad]
-        saved = [t.detach().to("cpu", copy=True) for t in tensors]
+        if self._rf_params is not None:
+            tensors += [p.raw_tensor for p in self._rf_params if p.auxiliary]
+        else:
+            tensors += [p for p in self._params if not p.requires_grad]
+        saved = [t.detach().clone() if on_device else t.detach().to("cpu", copy=True) for t in tensors]
         rng_state = torch.cuda.get_rng_state(self._device)
         try:
             yield
@@ -1067,13 +1092,16 @@ class GraphCapturedTrainStep:
                         return (total.raw_tensor,) + tuple(t.detach() for t in outs)
                     train_raws = [t for t, tr in zip(raws, trainable) if tr]
                     grads = torch.autograd.grad(total.raw_tensor, train_raws, allow_unused=True)
+                    grads = [g if g is not None else torch.zeros_like(t) for g, t in zip(grads, train_raws)]
+                    if self._grad_reducer is not None:
+                        scale = self._grad_reduce_scale  # the trace input, else (untraced debug run) the buffer
+                        grads = self._grad_reducer.reduce(grads, self._grad_reducer.scale if scale is None else scale)
                     # each grad in the strides of its param, as eager autograd stores it (gradient layout contract):
                     # the fused and the fast foreach optimizer kernels require it,
-                    # and e.g. cuDNN gives the conv filter grad channels-last for a channels-last input
+                    # and e.g. cuDNN gives the conv filter grad channels-last for a channels-last input.
+                    # After the reduce: its grads are contiguous views into the reduced buffer.
                     grads = [
-                        torch.zeros_like(t)
-                        if g is None
-                        else (g if g.stride() == t.stride() else torch.empty_like(t).copy_(g))
+                        g if g.stride() == t.stride() else torch.empty_like(t).copy_(g)
                         for g, t in zip(grads, train_raws)
                     ]
                 return tuple(t.detach() for t in outs + grads)
@@ -1253,11 +1281,12 @@ class GraphCapturedTrainStep:
         # default mode: step_core computes the grads itself, one inference-style graph,
         # never fw/bwd-partitioned (partition_fn / activation_memory_budget do not apply;
         # for that see opts "partitioned")
-        if torch.__version__ >= (2, 12):
+        if torch.__version__ >= (2, 12) or self._grad_reducer is not None:
             backend = inductor_fw_compiler(backend)
             # torch >= 2.12 also lifts closed-over tensors into runtime args of the generated code
             # instead of baking them as graph constants, and raw aot_function does not supply them;
             # pass the buffers as explicit trace inputs, like the partitioned mode above.
+            # Also the device input of the in-graph grad allreduce, see _compiled_call_args.
             data_keys = sorted(self._data_bufs)
             lens_keys = sorted(self._lens_bufs)
             self._partitioned_buf_keys = (data_keys, lens_keys)
@@ -1274,12 +1303,15 @@ class GraphCapturedTrainStep:
                         self._data_bufs[k] = t
                     for k, t in zip(lens_keys, lens_ph):
                         self._lens_bufs[k] = t
-                    self._step_t.raw_tensor = bufs[-1]
+                    self._step_t.raw_tensor = bufs[len(data_keys) + len(lens_keys)]
+                    if self._grad_reducer is not None:
+                        self._grad_reduce_scale = bufs[-1]
                     return step_core(all_raws[:n_params])
                 finally:
                     self._data_bufs.update(saved[0])
                     self._lens_bufs.update(saved[1])
                     self._step_t.raw_tensor = saved[2]
+                    self._grad_reduce_scale = None
 
             return aot_function(step_core_buf_inputs_v212, fw_compiler=backend)
         return aot_function(step_core, fw_compiler=backend)
@@ -1300,6 +1332,7 @@ class GraphCapturedTrainStep:
             + [self._data_bufs[k] for k in data_keys]
             + [self._lens_bufs[k] for k in lens_keys]
             + [self._step_buf]
+            + ([self._grad_reducer.scale] if self._grad_reducer is not None else [])
         )
 
     def _ensure_compiled(self) -> Callable[[List[torch.Tensor]], tuple]:
@@ -1312,8 +1345,11 @@ class GraphCapturedTrainStep:
             gc.collect()
             torch.cuda.empty_cache()
             raws = [p.raw_tensor for p in self._rf_params]
+            import torch._inductor.config as inductor_config
+
+            compile_config = self._grad_reducer.compile_config() if self._grad_reducer is not None else {}
             # the first call traces and compiles, its execution is thrown away and leaves no trace on the state
-            with self._training_state_preserved(), _allow_non_fake_inputs():
+            with self._training_state_preserved(), _allow_non_fake_inputs(), inductor_config.patch(compile_config):
                 outs = self._compiled_fn(self._compiled_call_args(raws))
                 if self._partitioned:
                     # the bwd graph compiles on the first backward
@@ -1452,7 +1488,7 @@ class GraphCapturedTrainStep:
         self._copy_in(extern_data_raw)
         self._step_buf.fill_(global_train_step)
         if self._graph is not None:
-            self._graph.replay()
+            replay(self._graph)
             return self._ctx
         if self._compiled_fn is not None:  # "capture": False mode, post-warmup
             return self._run_compiled_eager()
@@ -1503,8 +1539,37 @@ class GraphCapturedTrainStep:
         # (allocated + pool, see the engine) counts the pool exactly once
         torch.cuda.reset_peak_memory_stats()
         # capture only records the kernels; replay now to actually compute this batch
-        graph.replay()
+        replay(graph)
         return self._ctx
+
+    @property
+    def reduces_grads(self) -> bool:
+        """
+        :return: whether the step (from now on) averages the grads over the ranks itself,
+            see ``grad_reduce_in_graph``; not the eager warmup steps before the compile
+        """
+        return self._grad_reducer is not None and self._compiled_fn is not None
+
+    def run_idle_step(self, *, num_ranks: int) -> None:
+        """
+        epoch_end "join" with :attr:`reduces_grads`: this rank is out of data, other ranks are not.
+        It takes part in the allreduce of their step by running the step as well,
+        on its last batch (still in the buffers), with zero contribution:
+        the same collectives in the same order as the other ranks, and afterwards the grads averaged over them.
+        The run leaves no other trace, see :func:`_training_state_preserved` (copies on the device):
+        the module buffers and RF auxiliary params (e.g. batch norm statistics, counters) as without the option,
+        and the CUDA RNG state (the run draws e.g. dropout masks), so that until the next reseed (next train epoch)
+        e.g. an eval with random sampling on this rank sees the same RNG as without the option.
+
+        :param num_ranks: with data, which contribute
+        """
+        assert self.reduces_grads
+        self._grad_reducer.set_contributing(False, num_ranks=num_ranks)
+        with self._training_state_preserved(on_device=True):
+            if self._graph is not None:
+                replay(self._graph)
+            else:
+                self._run_compiled_eager()
 
     def release(self) -> None:
         """

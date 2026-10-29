@@ -55,7 +55,7 @@ from .util import module as util_module
 from .util.exception_helper import help_on_torch_exception
 from .util.debug_inf_nan import debug_inf_nan
 from .util.graph_capture import graph_pools_reserved
-from .distributed import DistributedContext, get_ctx as dist_get_ctx
+from .distributed import DistributedContext, InGraphGradReducer, get_ctx as dist_get_ctx
 
 
 class Engine(EngineBase):
@@ -143,6 +143,8 @@ class Engine(EngineBase):
         # opts parsed here, the instance is created lazily at the first train step.
         self._graph_capture_opts = config.typed_value("torch_cuda_graph", None)
         self._graph_capture: Optional[graph_capture.GraphCapturedTrainStep] = None
+        # the grad allreduce inside the captured step, see torch_distributed grad_reduce_in_graph
+        self._in_graph_grad_reducer: Optional[InGraphGradReducer] = None
         # for torch_profile once=True
         self._torch_profile_exported = False
 
@@ -309,6 +311,18 @@ class Engine(EngineBase):
                     " the grad reduce must run between the step and the optimizer"
                     " (torch_optimizer_step captures the optimizer step separately)"
                 )
+            if self._torch_distributed_ctx:
+                self._in_graph_grad_reducer = self._torch_distributed_ctx.make_in_graph_grad_reducer(
+                    device=torch.device(self._device)
+                )
+            if self._in_graph_grad_reducer is not None and self._torch_distributed_ctx.epoch_end_join():
+                # a rank out of data runs the step on its last batch (see run_idle_step), which would count it
+                # in the batch statistics of the other ranks
+                if self.config.bool("rf_batch_norm_distributed", False):
+                    raise ValueError(
+                        "torch_distributed grad_reduce_in_graph with epoch_end 'join':"
+                        " rf_batch_norm_distributed is not supported"
+                    )
             self._graph_capture = graph_capture.GraphCapturedTrainStep(
                 opts=self._graph_capture_opts,
                 extern_data_template=self.extern_data,
@@ -328,11 +342,14 @@ class Engine(EngineBase):
                 rf_params=(list(self._orig_model.parameters()) if isinstance(self._orig_model, rf.Module) else None),
                 # lets the capture infer a missing packed_total_bound from the content budget
                 packed_batch_size=self.config.typed_value("packed_batch_size", None),
+                grad_reducer=self._in_graph_grad_reducer,
             )
             if self._graph_capture.captures_optimizer:
                 # LR as a device tensor = a graph input: the per-step LR schedule
                 # stays functional under the captured optimizer
                 self._updater.use_device_lr_tensors(self._device)
+        elif self._torch_distributed_ctx and self._torch_distributed_ctx.grad_reduce_in_graph():
+            raise ValueError("torch_distributed grad_reduce_in_graph: needs torch_cuda_graph (with compile)")
 
     def _has_sync_batch_norm(self) -> bool:
         """
@@ -692,6 +709,15 @@ class Engine(EngineBase):
                 )
                 if grad_join and self._ddp_pt_model is not None:
                     ddp_bypassed = True
+                # grad_reduce_in_graph: the grads are averaged inside the step, also the ones of a join (run_idle_step)
+                in_graph_reduce = self._graph_capture is not None and self._graph_capture.reduces_grads
+                if grad_join and self._in_graph_grad_reducer is not None and not in_graph_reduce:
+                    # The ranks with data would compile the step now (or run eager warmup steps),
+                    # which the rank without data cannot join. Every rank sees this (control sync over all).
+                    raise Exception(
+                        "torch_distributed grad_reduce_in_graph with epoch_end 'join':"
+                        " a rank ran out of data before the train step was compiled, not supported"
+                    )
 
                 if self._stall_heartbeat is not None:
                     self._stall_heartbeat.value = time.time()
@@ -719,7 +745,10 @@ class Engine(EngineBase):
                     cur_count_grad_accum += 1
                     perform_update_step = cur_count_grad_accum >= accum_grad_multiple_step
                     if perform_update_step:
-                        if grad_join:  # update with the grads of the group, as the others do, if there are any
+                        if grad_join and in_graph_reduce:  # the same step as the others, without contribution
+                            self._graph_capture.run_idle_step(num_ranks=num_ranks_with_data)
+                            updated = True
+                        elif grad_join:  # update with the grads of the group, as the others do, if there are any
                             updated = (
                                 self._torch_distributed_ctx.reduce_grads_join(
                                     module=self._pt_model,
@@ -771,9 +800,16 @@ class Engine(EngineBase):
                     # whole-train-step CUDA-graph capture/replay, incl backward
                     # (see returnn.torch.util.graph_capture; created in init_train_from_config)
                     extern_data = None
+                    if self._in_graph_grad_reducer is not None:
+                        self._in_graph_grad_reducer.set_contributing(
+                            True, num_ranks=num_ranks_with_data if grad_join else None
+                        )
                     train_ctx = self._graph_capture.run_train_step(
                         extern_data_raw, global_train_step=self.global_train_step
                     )
+                    if self._graph_capture.reduces_grads and not in_graph_reduce:
+                        # compiled now, from now on the step averages the grads: no buffer for the explicit reduce
+                        self._torch_distributed_ctx.release_grad_reduce_buffers()
                     total_loss = None
                 else:
                     extern_data = extern_data_util.raw_dict_to_extern_data(
@@ -828,7 +864,9 @@ class Engine(EngineBase):
                 # so this is where they get averaged over the ranks.
                 if perform_update_step and self._torch_distributed_ctx:
                     with record_function("reduce_grads"):
-                        if grad_join:
+                        if self._graph_capture is not None and self._graph_capture.reduces_grads:
+                            pass  # in the step, see grad_reduce_in_graph
+                        elif grad_join:
                             self._torch_distributed_ctx.reduce_grads_join(
                                 module=self._pt_model,
                                 num_batches=num_batches_accum,
