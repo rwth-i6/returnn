@@ -60,6 +60,8 @@ class HDFDataset(CachedDataset):
                 self.add_file(fn)
 
     def __del__(self):
+        if not hasattr(self, "h5_files"):
+            return  # early exception in __init__
         for f in self.h5_files:
             # noinspection PyBroadException
             try:
@@ -1173,7 +1175,8 @@ class SimpleHDFWriter:
         return f"<{self.__class__.__name__} {self.filename!r} dim={self.dim} ndim={self.ndim}>"
 
     def __del__(self):
-        if self._file:
+        # Might not be set after an early exception in __init__.
+        if getattr(self, "_file", None):
             self._file.close()
             self._file = None
 

@@ -1201,6 +1201,21 @@ def test_siamese_collect_single_seq():
     print("Done.")
 
 
+def test_HDFDataset_del_after_init_error():
+    from test_Dataset import check_del_after_init_error
+
+    check_del_after_init_error(lambda: HDFDataset(files=[], no_such_option=1), TypeError)
+
+
+def test_SimpleHDFWriter_del_after_init_error():
+    from test_Dataset import check_del_after_init_error
+
+    # labels do not match dim: fails before any file is created
+    check_del_after_init_error(
+        lambda: SimpleHDFWriter(filename="/nonexistent/out.hdf", dim=2, labels=["a"]), AssertionError
+    )
+
+
 if __name__ == "__main__":
     better_exchook.install()
     if len(sys.argv) <= 1:

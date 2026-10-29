@@ -242,7 +242,8 @@ class MultiProcDataset(CachedDataset2):
         assert msg == "data_dtypes"
 
     def __del__(self):
-        if self._worker_procs:
+        # Might not be set after an early exception in __init__.
+        if getattr(self, "_worker_procs", None):
             got_exception = False
             for worker_parent_conn in self._worker_parent_conns:
                 # noinspection PyBroadException

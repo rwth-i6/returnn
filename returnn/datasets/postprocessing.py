@@ -302,10 +302,11 @@ class PostprocessingDataset(CachedDataset2):
         return True
 
     def __del__(self):
-        if self._multi_proc_data_iter is not None:
+        # Fields might not be set after an early exception in __init__.
+        if getattr(self, "_multi_proc_data_iter", None) is not None:
             self._multi_proc_data_iter.stop(join=True)
             self._multi_proc_data_iter = None
-        if not self._worker_procs:
+        if not getattr(self, "_worker_procs", None):
             return
         got_exception = False
         for parent in self._worker_procs:
