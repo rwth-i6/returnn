@@ -896,6 +896,29 @@ def test_causal_self_att_bounded_cache_overflow_fails():
             raise AssertionError("write beyond the KV cache capacity did not fail")
 
 
+def test_rel_pos_causal_self_att_bounded_cache_vs_growing():
+    """the bounded KV cache gives the same outputs as the growing one, step by step (rel pos encoding cached per hist dim)"""
+    rf.select_backend_torch()
+    batch = Dim(2, name="batch")
+    model_dim = Dim(8, name="model")
+    rf.set_random_seed(7)
+    att = rf.RelPosCausalSelfAttention(
+        model_dim, proj_dim=model_dim, key_dim_total=model_dim, value_dim_total=model_dim, num_heads=2
+    )
+    steps = [rf.random_uniform([batch, model_dim], dtype="float32") for _ in range(4)]
+
+    def _run(**kwargs):
+        state = att.default_initial_state(batch_dims=[batch], **kwargs)
+        outs = []
+        for x in steps:
+            out, state = att(x, axis=single_step_dim, state=state)
+            outs.append(out.copy_compatible_to_dims_raw([batch, model_dim]).detach().numpy())
+        return outs
+
+    for t, (ref, got) in enumerate(zip(_run(), _run(capacity=4))):
+        np.testing.assert_allclose(got, ref, rtol=1e-5, atol=1e-5, err_msg=f"step {t}")
+
+
 def test_causal_self_attention_static_traceable_bound():
     """
     Bound-shape regime (static traceable): the causal hist kv dim gets its capacity
