@@ -89,6 +89,23 @@ before, every worker yielded all the data).
 As an efficient dataset for large scale training,
 see :class:`DistributeFilesDataset`.
 
+With ``"eval_on_all_ranks": True`` (default since behavior version 39),
+the evaluation is split over the ranks.
+Otherwise, every eval dataset is evaluated on rank 0 alone, while the other ranks wait.
+Every eval dataset which supports sharding (:func:`Dataset.supports_sharding`)
+and has the same random seed on every rank
+is then sharded over the ranks, and every rank evaluates its own shard.
+The eval datasets get the same random seed on every rank for this,
+except a dataset object which the config creates itself.
+The loss sums are gathered at the end, so every rank gets the same scores.
+All ranks evaluate rank 0's parameters and buffers for this,
+so the scores belong to the model which rank 0 saves.
+Every rank gets its own values back afterwards.
+Other eval datasets are still evaluated on rank 0 alone.
+The eval steps must not communicate between the ranks,
+as the ranks run different numbers of steps.
+(E.g. a distributed :class:`BatchNorm` is fine, as it uses its running statistics in eval.)
+
 Also see `our wiki on distributed PyTorch <https://github.com/rwth-i6/returnn/wiki/Distributed-PyTorch>`__.
 
 
