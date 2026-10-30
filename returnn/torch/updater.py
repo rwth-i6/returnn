@@ -686,8 +686,7 @@ class Updater:
             "decouple_constraints=False was explicitly specified in the config."
         )
 
-        # The weight decay options are not optimizer arguments: pop them before the early returns below,
-        # else, without weight decay, they reach the optimizer constructor as unknown kwargs.
+        # The weight decay options are not optimizer arguments: pop them before the early returns below.
         blacklist_wd_modules_opt = optimizer_opts.pop("weight_decay_modules_blacklist", None)
         custom_include_check = optimizer_opts.pop("weight_decay_custom_include_check", None)
 
