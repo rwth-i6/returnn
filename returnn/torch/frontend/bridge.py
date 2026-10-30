@@ -119,6 +119,7 @@ class PTModuleAsRFModule(rf.Module):
             if rf_param is None or [d.dimension for d in rf_param.dims] != list(pt_buf.shape):
                 # The rf.Parameter constructor initializes its raw tensor (zeros by default).
                 # Let it do that on a meta placeholder.
+                # noinspection PyProtectedMember
                 rf_param = rf.Parameter(
                     dims=[Dim(d) for d in pt_buf.shape],
                     dtype=str(pt_buf.dtype).split(".")[-1],
