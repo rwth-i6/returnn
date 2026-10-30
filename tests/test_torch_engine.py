@@ -1096,6 +1096,21 @@ def test_updater_weight_decay_blacklist():
     assert params_by_wd[1e-3] == {"2.weight"}
 
 
+def test_updater_weight_decay_opts_without_weight_decay():
+    # The weight decay options are not optimizer arguments:
+    # without weight decay (unset or 0), they must not reach the optimizer constructor either.
+    for wd_opts in [{}, {"weight_decay": 0.0}]:
+        optimizer = {
+            "class": "adamw",
+            **wd_opts,
+            "weight_decay_modules_blacklist": ["rf.Embedding"],
+            "weight_decay_custom_include_check": lambda **_kwargs: None,
+        }
+        updater = Updater(config=Config(dict(optimizer=optimizer)), network=torch.nn.Linear(7, 5), device="cpu")
+        updater.create_optimizer()
+        assert isinstance(updater.get_optimizer(), torch.optim.AdamW)
+
+
 class _AnchoredSGD(torch.optim.Optimizer):
     """
     SGD from an anchor, the state starting as a copy of the param (like the z of a schedule-free optimizer):

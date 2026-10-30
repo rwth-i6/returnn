@@ -686,6 +686,11 @@ class Updater:
             "decouple_constraints=False was explicitly specified in the config."
         )
 
+        # The weight decay options are not optimizer arguments: pop them before the early returns below,
+        # else, without weight decay, they reach the optimizer constructor as unknown kwargs.
+        blacklist_wd_modules_opt = optimizer_opts.pop("weight_decay_modules_blacklist", None)
+        custom_include_check = optimizer_opts.pop("weight_decay_custom_include_check", None)
+
         # Split in parameter groups only if decouple_constraints is set and the optimizer accepts weight_decay.
         cls_init_kwargs = _get_class_init_kwargs(optim_class)
         if "weight_decay" not in cls_init_kwargs:
@@ -703,10 +708,7 @@ class Updater:
         # Parameters without weight decay: biases + LayerNorm/Embedding layers.
         wd_params = set()
         no_wd_params = set()
-        blacklist_wd_modules = wrap_user_blacklist_wd_modules(
-            optimizer_opts.pop("weight_decay_modules_blacklist", None)
-        )
-        custom_include_check = optimizer_opts.pop("weight_decay_custom_include_check", None)
+        blacklist_wd_modules = wrap_user_blacklist_wd_modules(blacklist_wd_modules_opt)
         if custom_include_check:
             assert callable(custom_include_check), f"invalid weight_decay_custom_include_check {custom_include_check!r}"
         # Tracker of visited parameters to only add each parameter once, in case two modules share common parameters.
