@@ -4711,12 +4711,15 @@ class PackedBackend(Backend[PackedRawTensor]):
     def cumsum(source: Tensor, *, spatial_dim: Dim) -> Tensor:
         """
         cumsum.
-        Over a packed dim this is a segment scan:
-        one global scan over the flat buffer,
-        then subtract each sequence's own starting offset,
-        which makes the sequences independent.
-        Gap and junk frames are zeroed first,
-        so they add nothing and do not shift the sums.
+        Over a packed dim this is a segmented scan (Hillis-Steele) on the flat buffer:
+        in step k, every frame adds the partial sum k frames before it, if that frame is in its sequence,
+        so a sum only ever sees frames of its own sequence.
+        Not a global scan minus the sum before each sequence:
+        that loses a small sequence after a large one to cancellation (float32 1e8, then 1, gave 0).
+        Gap and junk frames are cleared with where, not by a multiplication, as they can be non-finite.
+        ceil(log2(n)) steps, n the longest seq:
+        its capacity under static tracing (else the static buffer size), so there is no host read there,
+        else the batch max.
         """
         raw = _raw(source)
         if not _dim_refs_packed(spatial_dim, raw):
@@ -4727,15 +4730,23 @@ class PackedBackend(Backend[PackedRawTensor]):
         inner = raw.inner
         mask = _frame_mask(raw)
         if mask is not None:
-            inner = inner * rf.cast(mask, inner.dtype)
-        total = rf.cumsum(inner, spatial_dim=raw.packed_dim)
-        # the frame a sequence starts at: its own row minus its coordinate within the sequence
+            inner = rf.where(mask, inner, 0)
+        # a frame of a sequence at coord c has the c frames before it in its sequence
+        coords = _frame_coords(raw, spatial_dim)
         rows = rf.range_over_dim(raw.packed_dim, device=inner.device)
-        starts = rows - _frame_coords(raw, spatial_dim)
-        prev = rf.gather(total, indices=rf.maximum(starts - 1, 0), axis=raw.packed_dim)
-        # the first sequence has nothing before it, and its scan is already correct
-        out = total - prev * rf.cast(starts > 0, prev.dtype)
-        return raw.rewrap(out, name="cumsum")
+        if rf.is_static_traceable():
+            # noinspection PyProtectedMember
+            n = spatial_dim.capacity or spatial_dim._derived_capacity() or raw.packed_dim.dimension
+        else:
+            n = int(spatial_dim.get_dim_value())
+        k = 1
+        while k < n:
+            prev = rf.gather(inner, indices=rf.maximum(rows - k, 0), axis=raw.packed_dim)
+            inner = inner + rf.where(coords >= k, prev, 0)
+            k *= 2
+        if mask is not None:
+            inner = rf.where(mask, inner, 0)
+        return raw.rewrap(inner, name="cumsum")
 
     @staticmethod
     def reduce(source: Tensor, *, mode: str, axis: Union[Dim, Sequence[Dim]], use_mask: bool = True) -> Tensor:
