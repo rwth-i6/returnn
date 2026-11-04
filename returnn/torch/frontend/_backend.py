@@ -301,11 +301,15 @@ class TorchBackend(Backend[torch.Tensor]):
             dtype=source.dtype,
             sparse_dim=source.sparse_dim,
         )
-        # Build the reshape target from the source's (backed) raw shape plus -1 for the merged block.
-        # This avoids a get_dim_value() host sync on any dynamic dim
-        # (such a sync breaks CUDA-graph capture and forces a torch.compile graph break).
+        # Build the reshape target from the source's (backed) raw shape, the merged block as the product
+        # of its entries. This avoids a get_dim_value() host sync on any dynamic dim
+        # (such a sync breaks CUDA-graph capture and forces a torch.compile graph break),
+        # and unlike -1 it is unambiguous when another dim is empty.
         src_shape = source.raw_tensor.shape
-        out_shape = list(src_shape[: len(pre_dims)]) + [-1] + list(src_shape[len(pre_dims) + len(dims) :])
+        merged = 1
+        for n in src_shape[len(pre_dims) : len(pre_dims) + len(dims)]:
+            merged = merged * n
+        out_shape = list(src_shape[: len(pre_dims)]) + [merged] + list(src_shape[len(pre_dims) + len(dims) :])
         out.raw_tensor = torch.reshape(source.raw_tensor, out_shape)
         if source.feature_dim is not None:
             if source.feature_dim in dims:
@@ -1878,7 +1882,16 @@ class TorchBackend(Backend[torch.Tensor]):
                     mask = source.get_sequence_mask_broadcast(dim)
                     source.raw_tensor = torch.where(mask, source.raw_tensor, mask_value)
         func = getattr(torch, mode)
-        if not res_dims and mode != "logsumexp":  # logsumexp requires dim arg
+        if mode in ("max", "min") and any(source.raw_tensor.shape[d] == 0 for d in raw_dims):
+            # Torch rejects max/min over an empty axis; the result is that of fully masked positions.
+            dtype = source.raw_tensor.dtype
+            if dtype.is_floating_point:
+                fill = torch.finfo(dtype).min if mode == "max" else torch.finfo(dtype).max
+            else:
+                fill = torch.iinfo(dtype).min if mode == "max" else torch.iinfo(dtype).max
+            res_shape = [n for i, n in enumerate(source.raw_tensor.shape) if i not in raw_dims]
+            raw_result = torch.full(res_shape, fill, dtype=dtype, device=source.raw_tensor.device)
+        elif not res_dims and mode != "logsumexp":  # logsumexp requires dim arg
             raw_result = func(source.raw_tensor)
         elif len(raw_dims) == 1:
             raw_result = func(source.raw_tensor, dim=raw_dims[0])
@@ -2486,7 +2499,31 @@ class TorchBackend(Backend[torch.Tensor]):
         if padding == "valid":
             # padding as string is not supported e.g. in ONNX.
             padding = 0
-        if len(filter_size) == 1:
+        n_sp = len(filter_size)
+        if padding == "same":
+            in_sizes = [src_raw.shape[2 + i] for i in range(n_sp)]
+            out_sizes = in_sizes
+            kernel_extents = [1] * n_sp
+        else:
+            pads_ = [padding[i] if isinstance(padding, (list, tuple)) else padding for i in range(n_sp)]
+            strides_ = [strides[i] if isinstance(strides, (list, tuple)) else strides or 1 for i in range(n_sp)]
+            dilations_ = [
+                dilation_rate[i] if isinstance(dilation_rate, (list, tuple)) else dilation_rate or 1
+                for i in range(n_sp)
+            ]
+            in_sizes = [src_raw.shape[2 + i] + 2 * pads_[i] for i in range(n_sp)]
+            kernel_extents = [dilations_[i] * (filter_size[i].dimension - 1) + 1 for i in range(n_sp)]
+            out_sizes = [max(0, (in_sizes[i] - kernel_extents[i]) // strides_[i] + 1) for i in range(n_sp)]
+        if any(n < k for n, k in zip(in_sizes, kernel_extents)):
+            # Torch rejects an input smaller than the kernel ("Kernel size can't be greater than actual input size"),
+            # which empty sequences produce; the output is empty.
+            dtype = src_raw.dtype
+            if src_raw.is_cuda and torch.is_autocast_enabled():
+                dtype = torch.get_autocast_dtype("cuda")
+            out_raw = torch.zeros(
+                (src_raw.shape[0], filter.raw_tensor.shape[0]) + tuple(out_sizes), dtype=dtype, device=src_raw.device
+            )
+        elif len(filter_size) == 1:
             # There is also conv_tbc, but it's a bit limited (no dilation)
             # and also unclear when exactly it is faster.
             out_raw = torch.nn.functional.conv1d(
