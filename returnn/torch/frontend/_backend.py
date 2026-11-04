@@ -2515,7 +2515,10 @@ class TorchBackend(Backend[torch.Tensor]):
             # torch rejects an input smaller than the kernel, as empty seqs give; the output is empty
             dtype = src_raw.dtype
             if src_raw.is_cuda and torch.is_autocast_enabled():
-                dtype = torch.get_autocast_dtype("cuda")
+                # torch 2.4: the autocast dtype query takes the device type
+                dtype = (
+                    torch.get_autocast_dtype("cuda") if torch.__version__ >= (2, 4) else torch.get_autocast_gpu_dtype()
+                )
             out_raw = torch.zeros(
                 (src_raw.shape[0], filter.raw_tensor.shape[0]) + tuple(out_sizes), dtype=dtype, device=src_raw.device
             )
