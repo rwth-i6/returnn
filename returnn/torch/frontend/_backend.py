@@ -2441,10 +2441,10 @@ class TorchBackend(Backend[torch.Tensor]):
         if len(batch_dims) == 1:
             src_raw = source.raw_tensor
         else:
+            # merge the batch dims; sizes from the raw shape: no host sync, unambiguous next to an empty dim
+            src_shape = source.raw_tensor.shape
             src_raw = torch.reshape(
-                source.raw_tensor,
-                # potentially merge batch dims all together
-                [-1, in_dim.get_dim_value()] + [d.get_dim_value() for d in in_spatial_dims],
+                source.raw_tensor, [prod(src_shape[: len(batch_dims)])] + list(src_shape[len(batch_dims) :])
             )
         use_striding = strides and (strides > 1 if isinstance(strides, int) else any(s > 1 for s in strides))
         if padding == "same" and not use_striding and all(d.dimension % 2 == 1 for d in filter_size):
@@ -2600,10 +2600,10 @@ class TorchBackend(Backend[torch.Tensor]):
         if len(batch_dims) == 1:
             src_raw = source.raw_tensor
         else:
+            # merge the batch dims; sizes from the raw shape: no host sync, unambiguous next to an empty dim
+            src_shape = source.raw_tensor.shape
             src_raw = torch.reshape(
-                source.raw_tensor,
-                # potentially merge batch dims all together
-                [-1, in_dim.get_dim_value()] + [d.get_dim_value() for d in in_spatial_dims],
+                source.raw_tensor, [prod(src_shape[: len(batch_dims)])] + list(src_shape[len(batch_dims) :])
             )
         if padding == "same":
             raise NotImplementedError("transposed_conv with padding='same' not implemented")
@@ -2687,11 +2687,13 @@ class TorchBackend(Backend[torch.Tensor]):
         # batch_dims would actually cover the channel-dim (C) as well,
         # as it does not really matter to differentiate it from other batch dims.
         source = source.copy_transpose(batch_dims + list(in_spatial_dims))
+        # merge the batch dims, the last kept as the channel dim; sizes from the raw shape, not -1 (empty spatial dim)
+        src_shape = source.raw_tensor.shape
+        n_batch = len(batch_dims)
         src_raw = torch.reshape(
             source.raw_tensor,
-            # Potentially merge batch dims all together.
-            # Keep the last as the channel-dim, but not sure if this is really relevant.
-            [-1, batch_dims[-1].get_dim_value() if batch_dims else 1] + [d.get_dim_value() for d in in_spatial_dims],
+            [prod(src_shape[: max(n_batch - 1, 0)]), src_shape[n_batch - 1] if batch_dims else 1]
+            + list(src_shape[n_batch:]),
         )
         assert isinstance(strides, (list, tuple)) and len(strides) == len(in_spatial_dims) == len(pool_size)
         if isinstance(padding, str) and padding.lower() == "same":
@@ -2721,7 +2723,15 @@ class TorchBackend(Backend[torch.Tensor]):
             kwargs["dilation"] = dilation_rate
         if mode == "avg":
             kwargs["count_include_pad"] = False
-        out_raw = func(src_raw, kernel_size=pool_size, stride=strides, ceil_mode=ceil_mode, padding=padding, **kwargs)
+        if any(n == 0 for n in src_raw.shape[2:]):
+            # torch rejects an empty spatial dim, as empty seqs give; the output is empty
+            out_raw = torch.zeros(
+                tuple(src_raw.shape[:2]) + (0,) * len(in_spatial_dims), dtype=src_raw.dtype, device=src_raw.device
+            )
+        else:
+            out_raw = func(
+                src_raw, kernel_size=pool_size, stride=strides, ceil_mode=ceil_mode, padding=padding, **kwargs
+            )
         out = Tensor("pool", dims=batch_dims + list(out_spatial_dims), dtype=source.dtype)
         out.raw_tensor = torch.reshape(out_raw, [d.get_dim_value() for d in out.dims])
         if source.feature_dim and source.feature_dim in out.dims:
@@ -2745,7 +2755,7 @@ class TorchBackend(Backend[torch.Tensor]):
         """stft"""
         batch_dims = [d for d in x.dims if d != in_spatial_dim]
         x = x.copy_transpose(batch_dims + [in_spatial_dim])
-        x_raw = torch.reshape(x.raw_tensor, [-1, in_spatial_dim.get_dim_value()])
+        x_raw = torch.reshape(x.raw_tensor, (prod(x.raw_tensor.shape[:-1]), x.raw_tensor.shape[-1]))
 
         # TF code: y = tf.signal.stft(x, frame_length=frame_size, frame_step=frame_shift, fft_length=fft_size)
         # This is similar to what SciPy will also return.

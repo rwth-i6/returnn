@@ -201,3 +201,18 @@ def test_audio_specaugment_num_masks_per_seq():
         test_single_batch_entry=False,
         test_tensorflow=False,
     )
+
+
+def test_stft_empty_time():
+    # an empty time axis: the batch-merge reshape must not use -1
+    rf.select_backend_torch()
+    batch_dim_ = Dim(2, name="batch")
+    time_dim = Dim(rf.convert_to_tensor([0, 0], dims=[batch_dim_], dtype="int32"), name="time")
+    x = rf.zeros([batch_dim_, time_dim])
+    assert tuple(x.raw_tensor.shape) == (2, 0)
+    out, out_spatial_dim, out_dim = rf.stft(
+        x, in_spatial_dim=time_dim, frame_step=160, frame_length=400, fft_length=512
+    )
+    assert out_spatial_dim.dyn_size_ext.raw_tensor.tolist() == [0, 0]
+    out = out.copy_transpose([batch_dim_, out_spatial_dim, out_dim])
+    assert tuple(out.raw_tensor.shape) == (2, 0, 257)
