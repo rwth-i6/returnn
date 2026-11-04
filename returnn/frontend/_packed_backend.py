@@ -4468,6 +4468,11 @@ class PackedBackend(Backend[PackedRawTensor]):
             )
             targets_raw = targets.raw_tensor
             target_inner = targets_raw.inner
+            if targets.sparse_dim is not None and target_inner.sparse_dim != targets.sparse_dim:
+                # the wrapper carries the sparse dim, the inner buffer not necessarily
+                target_inner = target_inner.copy()
+                target_inner.feature_dim = None
+                target_inner.sparse_dim = targets.sparse_dim
             if targets_raw.packed_dim != logits_raw.packed_dim:
                 target_inner, _ = rf.replace_dim(
                     target_inner, in_dim=targets_raw.packed_dim, out_dim=logits_raw.packed_dim
