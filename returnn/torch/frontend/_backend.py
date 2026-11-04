@@ -301,10 +301,7 @@ class TorchBackend(Backend[torch.Tensor]):
             dtype=source.dtype,
             sparse_dim=source.sparse_dim,
         )
-        # Build the reshape target from the source's (backed) raw shape, the merged block as the product
-        # of its entries. This avoids a get_dim_value() host sync on any dynamic dim
-        # (such a sync breaks CUDA-graph capture and forces a torch.compile graph break),
-        # and unlike -1 it is unambiguous when another dim is empty.
+        # raw shape only (no get_dim_value() host sync); the product, not -1, which is ambiguous with an empty dim
         src_shape = source.raw_tensor.shape
         merged = 1
         for n in src_shape[len(pre_dims) : len(pre_dims) + len(dims)]:
@@ -1883,7 +1880,7 @@ class TorchBackend(Backend[torch.Tensor]):
                     source.raw_tensor = torch.where(mask, source.raw_tensor, mask_value)
         func = getattr(torch, mode)
         if mode in ("max", "min") and any(source.raw_tensor.shape[d] == 0 for d in raw_dims):
-            # Torch rejects max/min over an empty axis; the result is that of fully masked positions.
+            # torch rejects max/min over an empty axis; the result is that of fully masked positions
             dtype = source.raw_tensor.dtype
             if dtype.is_floating_point:
                 fill = torch.finfo(dtype).min if mode == "max" else torch.finfo(dtype).max
@@ -2515,8 +2512,7 @@ class TorchBackend(Backend[torch.Tensor]):
             kernel_extents = [dilations_[i] * (filter_size[i].dimension - 1) + 1 for i in range(n_sp)]
             out_sizes = [max(0, (in_sizes[i] - kernel_extents[i]) // strides_[i] + 1) for i in range(n_sp)]
         if any(n < k for n, k in zip(in_sizes, kernel_extents)):
-            # Torch rejects an input smaller than the kernel ("Kernel size can't be greater than actual input size"),
-            # which empty sequences produce; the output is empty.
+            # torch rejects an input smaller than the kernel, as empty seqs give; the output is empty
             dtype = src_raw.dtype
             if src_raw.is_cuda and torch.is_autocast_enabled():
                 dtype = torch.get_autocast_dtype("cuda")
