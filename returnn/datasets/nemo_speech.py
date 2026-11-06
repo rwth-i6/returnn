@@ -56,9 +56,13 @@ class NemoSpeechDataset(CachedDataset2):
     one shard per (rank, NeMo dataloader worker), ``shard_id = rank * num_workers + worker_id``,
     with ``num_workers`` from the NeMo config,
     reading exactly the records which NeMo assigns to it.
-    Every shard runs in its own worker process, like a NeMo dataloader worker.
+    Every shard runs in its own worker process, like a NeMo dataloader worker,
+    or in ``procs_per_shard`` processes, which load the accepted seqs of the shard round-robin.
     Seeds as in NeMo: ``shard_seed`` int or ``"randomized"`` (``"trng"`` is not reproducible, not supported).
-    RETURNN dataset sharding must not be used on top.
+    RETURNN dataset sharding over the ranks must not be used on top.
+    Sharding via :func:`set_sharding` (e.g. PyTorch DataLoader ``num_workers``) splits the NeMo workers of the rank:
+    shard k of K gets the NeMo workers with ``worker_id % K == k``.
+    So the data of an epoch is the same, only the batches are composed differently.
 
     Epochs:
     One epoch is ``draws_per_epoch`` draws (sum over all shards).
@@ -121,6 +125,7 @@ class NemoSpeechDataset(CachedDataset2):
         buffer_size: int = 32,
         preload_next_epoch: bool = True,
         use_worker_procs: bool = True,
+        procs_per_shard: int = 1,
         _rank_and_size: Optional[Tuple[int, int]] = None,
         **kwargs,
     ):
@@ -144,10 +149,15 @@ class NemoSpeechDataset(CachedDataset2):
             Must be deterministic and picklable (e.g. a module-level function), as it runs in the worker procs.
         :param shuffle_window: number of draws which are shuffled together.
             None: NeMo ``shuffle_buffer_size`` if NeMo ``shuffle`` is set, else 1.
-        :param buffer_size: number of seqs each worker prefetches
+        :param buffer_size: number of seqs each worker prefetches.
+            The buffered seqs go to the dataset in runs of up to this many per request.
         :param preload_next_epoch: whether workers continue into the next epoch when the current is done
         :param use_worker_procs: run every shard in its own process.
             If False, all shards of this rank run in the current process (same data, e.g. for debugging).
+        :param procs_per_shard: number of processes per shard, which split the accepted seqs of the shard.
+            Each decodes the metadata of all draws of the shard, but loads only the audio of its seqs.
+            Use it when loading the audio is the bottleneck, e.g. the read latency of a network filesystem.
+            The data does not depend on it (unlike NeMo ``num_workers``).
         :param _rank_and_size: internal, set when pickled
         """
         super().__init__(**kwargs)
@@ -163,6 +173,9 @@ class NemoSpeechDataset(CachedDataset2):
         self.buffer_size = buffer_size
         self.preload_next_epoch = preload_next_epoch
         self.use_worker_procs = use_worker_procs
+        if procs_per_shard < 1:
+            raise ValueError(f"{self}: procs_per_shard must be >= 1, got {procs_per_shard}")
+        self.procs_per_shard = procs_per_shard
         if _rank_and_size is None:
             # noinspection PyProtectedMember
             from .basic import _get_distributed_rank_and_size
@@ -177,6 +190,8 @@ class NemoSpeechDataset(CachedDataset2):
                 f" x NeMo num_workers), which clashes with"
                 f" _num_shards {self._num_shards} / _shard_index {self._shard_index}"
             )
+        # Further sharding via set_sharding is multiplied onto this, see _get_worker_ids.
+        self._num_rank_shards = self._num_shards
 
         if isinstance(targets, dict):
             targets = Vocabulary.create_vocab(**targets)
@@ -204,8 +219,9 @@ class NemoSpeechDataset(CachedDataset2):
             self.num_outputs["classes"] = [_create_nemo_tokenizer(self.tokenizer).vocab_size, 1]
 
         self._num_nemo_workers: Optional[int] = None  # lazy, _get_num_nemo_workers
-        self._shard_draws: Optional[List[int]] = None  # per shard of this rank, set in init_seq_order
-        self._shards: Optional[List[Union[_ShardStream, _ShardWorkerProc]]] = None  # lazy, _lazy_init_shards
+        self._worker_ids: Optional[List[int]] = None  # NeMo workers (shards) of this instance, set in init_seq_order
+        self._shard_draws: Optional[List[int]] = None  # per shard of this instance, set in init_seq_order
+        self._shards: Optional[List[_ShardGroup]] = None  # lazy, _lazy_init_shards
         self._shards_epoch: Optional[int] = None  # the epoch the shards are initialized for
         # Merge state for the current epoch, see _merge_next.
         self._merge_rr = 0
@@ -223,11 +239,27 @@ class NemoSpeechDataset(CachedDataset2):
     def _uses_custom_distributed_sharding(self) -> bool:
         return True
 
+    def supports_sharding(self) -> bool:
+        """:return: whether the dataset supports sharding, here over the NeMo workers of the rank"""
+        return True
+
     def _get_num_nemo_workers(self) -> int:
         if self._num_nemo_workers is None:
             config = _load_nemo_config(self.nemo_config, structured=False)
             self._num_nemo_workers = max(int(config.get("num_workers", 0) or 0), 1)
         return self._num_nemo_workers
+
+    def _get_worker_ids(self) -> List[int]:
+        """:return: the NeMo workers of this rank which this instance serves, see :func:`set_sharding`"""
+        num_workers = self._get_num_nemo_workers()
+        num_sub_shards = self._num_shards // self._num_rank_shards
+        assert self._num_shards == self._num_rank_shards * num_sub_shards
+        if num_workers % num_sub_shards != 0:
+            raise ValueError(
+                f"{self}: NeMo num_workers {num_workers} must be a multiple of the number of shards"
+                f" (e.g. DataLoader num_workers) {num_sub_shards}"
+            )
+        return list(range(self._shard_index % num_sub_shards, num_workers, num_sub_shards))
 
     def _get_shard_draws(self) -> List[int]:
         rank, world_size = self._rank_and_size
@@ -237,7 +269,7 @@ class NemoSpeechDataset(CachedDataset2):
             raise ValueError(f"{self}: draws_per_epoch {self.draws_per_epoch} < num shards {num_shards}")
         return [
             self.draws_per_epoch // num_shards + int(rank * num_workers + worker_id < self.draws_per_epoch % num_shards)
-            for worker_id in range(num_workers)
+            for worker_id in self._worker_ids
         ]
 
     def _lazy_init_shards(self):
@@ -257,20 +289,30 @@ class NemoSpeechDataset(CachedDataset2):
             preload_next_epoch=self.preload_next_epoch,
         )
         self._shards = []
-        for worker_id, draws in enumerate(self._get_shard_draws()):
+        for worker_id, draws in zip(self._worker_ids, self._shard_draws):
             shard_id = rank * num_workers + worker_id
-            shard_opts = dict(
-                opts, rank=rank, worker_id=worker_id, num_workers=num_workers, world_size=world_size, draws=draws
-            )
-            if self.use_worker_procs:
-                shard = _ShardWorkerProc(name=f"{self.__class__.__name__} {self.name} shard {shard_id}", **shard_opts)
-            else:
-                shard = _ShardStream(**shard_opts)
-            self._shards.append(shard)
+            streams = []
+            for proc_idx in range(self.procs_per_shard):
+                shard_opts = dict(
+                    opts,
+                    rank=rank,
+                    worker_id=worker_id,
+                    num_workers=num_workers,
+                    world_size=world_size,
+                    draws=draws,
+                    proc_idx=proc_idx,
+                    num_procs=self.procs_per_shard,
+                )
+                if self.use_worker_procs:
+                    name = f"{self.__class__.__name__} {self.name} shard {shard_id} proc {proc_idx}"
+                    streams.append(_ShardWorkerProc(name=name, **shard_opts))
+                else:
+                    streams.append(_ShardStream(**shard_opts))
+            self._shards.append(_ShardGroup(streams))
         print(
             f"{self}: rank {rank}/{world_size}, {num_workers} NeMo workers,"
-            f" shards {rank * num_workers}..{(rank + 1) * num_workers - 1} of {num_shards},"
-            f" draws per epoch {self._shard_draws}",
+            f" shards {[rank * num_workers + worker_id for worker_id in self._worker_ids]} of {num_shards},"
+            f" {self.procs_per_shard} procs per shard, draws per epoch {self._shard_draws}",
             file=log.v4,
         )
 
@@ -290,6 +332,7 @@ class NemoSpeechDataset(CachedDataset2):
         # The shards (maybe worker procs) are only started on the first data access,
         # as the main proc of the PyTorch engine does not need the data.
         self._shards_epoch = None
+        self._worker_ids = self._get_worker_ids()
         self._shard_draws = self._get_shard_draws()
         num_shards = len(self._shard_draws)
         self._merge_rr = 0
@@ -367,7 +410,7 @@ class NemoSpeechDataset(CachedDataset2):
             if item is None or "data" in item.features:
                 return item
             # Was merged for metadata access only.
-            data = self._shards[item.shard_idx].load(item.epoch, item.draw_idx)
+            data = self._shards[item.shard_idx].load(item.epoch, item.local_idx, item.draw_idx)
             if data is not None:
                 item.features["data"] = data
                 return item
@@ -516,6 +559,7 @@ class _ShardStream:
     """
     One NeMo data shard (rank x NeMo worker):
     plans the epochs, decodes and filters the drawn records, loads the audio, and buffers the seqs.
+    With several procs per shard, it produces only the accepted seqs with ``local_idx % num_procs == proc_idx``.
     """
 
     def __init__(
@@ -534,6 +578,8 @@ class _ShardStream:
         num_workers: int,
         world_size: int,
         draws: int,
+        proc_idx: int,
+        num_procs: int,
     ):
         config = _load_nemo_config(nemo_config)
         _check_nemo_config(config)
@@ -584,6 +630,8 @@ class _ShardStream:
             shuffle_window=shuffle_window,
         )
         self.draws = draws
+        self.proc_idx = proc_idx
+        self.num_procs = num_procs
         self.buffer_size = buffer_size
         self.preload_next_epoch = preload_next_epoch
 
@@ -652,13 +700,13 @@ class _ShardStream:
             self._requested_epoch = epoch
             while self._buffer and self._buffer[0].epoch != epoch:
                 self._buffer.popleft()
-            preloaded = self._buffer[0].local_idx == 0 if self._buffer else self._prod_local == 0
+            preloaded = self._buffer[0].local_idx <= self.proc_idx if self._buffer else self._prod_local == 0
             if self._prod_epoch != epoch or not preloaded:
                 self._buffer.clear()
                 self._reset_production(epoch)
 
     def _produce(self, *, load: bool) -> _ShardItem:
-        """produce the next item (next accepted seq, or end of epoch) of the production epoch"""
+        """produce the next item (next accepted seq of this proc, or end of epoch) of the production epoch"""
         assert not self._prod_done
         plan = self._prod_plan
         while self._prod_draw < self.draws:
@@ -667,16 +715,19 @@ class _ShardStream:
             cut = self._decode_draw(plan, draw_idx)
             if cut is None:
                 continue  # skipped or rejected by a filter
+            local_idx = self._prod_local
+            self._prod_local += 1
+            if local_idx % self.num_procs != self.proc_idx:
+                continue  # another proc of the shard
             seed = self._get_seed(self._prod_epoch, draw_idx)
             item = _ShardItem(
                 epoch=self._prod_epoch,
-                local_idx=self._prod_local,
+                local_idx=local_idx,
                 draw_idx=draw_idx,
                 seq_tag=cut.id,
                 features=self._get_text_features(cut, seed=seed),
                 data_len=cut.num_samples if self.feature_extractor is None else None,
             )
-            self._prod_local += 1
             if load:
                 data = self._load_audio_data(cut, seed=seed)
                 if data is None:
@@ -779,7 +830,8 @@ class _ShardStream:
         while True:
             if self._prod_done:
                 return _ShardItem(epoch=epoch, local_idx=self._prod_local, draw_idx=self.draws, seq_tag=None)
-            item = self._produce(load=load and self._prod_local == local_idx)
+            # Load if the next item of this proc is local_idx.
+            item = self._produce(load=load and self._prod_local > local_idx - self.num_procs)
             if item.seq_tag is None or item.local_idx == local_idx:
                 return item
 
@@ -804,6 +856,34 @@ class _ShardStream:
             self._buffer.append(item)
 
 
+class _ShardGroup:
+    """
+    One NeMo data shard, run by ``procs_per_shard`` :class:`_ShardStream` (maybe in worker procs),
+    which split the accepted seqs of the shard round-robin.
+    """
+
+    def __init__(self, streams: Sequence[Union[_ShardStream, _ShardWorkerProc]]):
+        self.streams = streams
+
+    def init_epoch(self, epoch: int):
+        """start epoch"""
+        for stream in self.streams:
+            stream.init_epoch(epoch)
+
+    def get(self, epoch: int, local_idx: int, *, load: bool = True) -> _ShardItem:
+        """see :func:`_ShardStream.get`"""
+        return self.streams[local_idx % len(self.streams)].get(epoch, local_idx, load=load)
+
+    def load(self, epoch: int, local_idx: int, draw_idx: int) -> Optional[numpy.ndarray]:
+        """see :func:`_ShardStream.load`"""
+        return self.streams[local_idx % len(self.streams)].load(epoch, draw_idx)
+
+    def exit(self, *, join: bool = True):
+        """exit"""
+        for stream in self.streams:
+            stream.exit(join=join)
+
+
 class _ShardWorkerProc:
     """
     Runs a :class:`_ShardStream` in a subprocess, like a NeMo dataloader worker.
@@ -817,17 +897,26 @@ class _ShardWorkerProc:
         self.proc.start()
         # Closed here, stays open in the child. Reads fail when the child dies, instead of hanging.
         child_conn.close()
+        self._items: deque[_ShardItem] = deque()  # received with an earlier get, of the current epoch
 
     def init_epoch(self, epoch: int):
         """start epoch"""
+        self._items.clear()
         self.conn.send(("init_epoch", {"epoch": epoch}))
 
     def get(self, epoch: int, local_idx: int, *, load: bool = True) -> _ShardItem:
         """get seq"""
-        self.conn.send(("get", {"epoch": epoch, "local_idx": local_idx, "load": load}))
-        msg, item = self.conn.recv()
-        assert msg == "item"
-        return item
+        if not self._items:
+            self.conn.send(("get", {"epoch": epoch, "local_idx": local_idx, "load": load}))
+            msg, items = self.conn.recv()
+            assert msg == "items" and items
+            self._items.extend(items)
+        item = self._items[0]
+        assert item.epoch == epoch
+        if item.seq_tag is None:  # end of epoch, stays
+            return item
+        assert item.local_idx == local_idx, f"expected seq {local_idx}, got {item.local_idx}"
+        return self._items.popleft()
 
     def load(self, epoch: int, draw_idx: int) -> Optional[numpy.ndarray]:
         """load data by draw"""
@@ -855,7 +944,7 @@ class _ShardWorkerProc:
 def _shard_worker_proc_loop(shard_opts: Dict[str, Any], conn: mpConnection):
     if sys.platform == "linux":
         with open("/proc/self/comm", "w") as f:
-            f.write(f"NeMo shard {shard_opts['worker_id']}")
+            f.write(f"NeMo shard {shard_opts['worker_id']}.{shard_opts['proc_idx']}")
     better_exchook.setup_all()
     stream = _ShardStream(**shard_opts)
     # Like the lhotse worker_init_fn in NeMo dataloader workers. Not done in-process, to keep the global RNG.
@@ -874,10 +963,19 @@ def _shard_worker_proc_loop(shard_opts: Dict[str, Any], conn: mpConnection):
             elif msg == "init_epoch":
                 producer.call(stream.init_epoch, **kwargs)
             elif msg == "get":
-                item = stream.get_buffered(kwargs["epoch"], kwargs["local_idx"])
-                if item is None:
-                    item = producer.call(stream.get, **kwargs)
-                conn.send(("item", item))
+                # The buffered seqs from local_idx on, in one reply.
+                items, local_idx = [], kwargs["local_idx"]
+                while len(items) < stream.buffer_size:
+                    item = stream.get_buffered(kwargs["epoch"], local_idx)
+                    if item is None:
+                        break
+                    items.append(item)
+                    if item.seq_tag is None:
+                        break
+                    local_idx += stream.num_procs
+                if not items:
+                    items.append(producer.call(stream.get, **kwargs))
+                conn.send(("items", items))
             elif msg == "load":
                 conn.send(("data", producer.call(stream.load, **kwargs)))
             else:
