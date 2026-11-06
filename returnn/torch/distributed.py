@@ -155,6 +155,7 @@ class DistributedContext:
         # such that the check in the end works.
         self._opts.get("backend")
         self._opts.get("timeout_sec")
+        self._opts.get("eval_on_all_ranks")
         if self._reduce_type == "grad":
             self._opts.get("class")
             self._opts.get("options")
@@ -213,6 +214,10 @@ class DistributedContext:
     def dataset_distribution(self) -> str:
         """:return: "random_seed_offset" or "shard", see :func:`get_dataset_distribution`"""
         return self._dataset_distribution
+
+    def eval_on_all_ranks(self) -> bool:
+        """:return: whether an eval dataset is split over all ranks, see :func:`get_eval_on_all_ranks`"""
+        return get_eval_on_all_ranks(self._opts)
 
     def maybe_make_distributed_module(self, module: torch.nn.Module) -> Optional[DistributedDataParallel]:
         """
@@ -473,6 +478,21 @@ def get_dataset_distribution(opts: Union[Dict[str, Any], CollectionReadCheckCove
             f" got {dataset_distribution!r}"
         )
     return dataset_distribution
+
+
+def get_eval_on_all_ranks(opts: Union[Dict[str, Any], CollectionReadCheckCovered]) -> bool:
+    """
+    :param opts: the ``torch_distributed`` config options
+    :return: ``eval_on_all_ranks`` option: whether an eval dataset is split over all ranks,
+        every rank evaluating its shard, instead of being evaluated on rank 0 alone while the other ranks wait.
+        Only datasets which support sharding are split, see the torch engine.
+        Default: since behavior version 39.
+    """
+    eval_on_all_ranks = opts.get("eval_on_all_ranks", None)
+    assert eval_on_all_ranks is None or isinstance(eval_on_all_ranks, bool)
+    if eval_on_all_ranks is not None:
+        return eval_on_all_ranks
+    return BehaviorVersion.get() >= 39
 
 
 class _SyncLevel:

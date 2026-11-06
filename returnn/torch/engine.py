@@ -4,7 +4,7 @@ Main engine for PyTorch
 
 from __future__ import annotations
 
-from typing import Optional, Any, Union, Callable, Dict, Set
+from typing import Optional, Any, Union, Callable, Dict, Set, List, Tuple
 from contextlib import nullcontext, ExitStack, contextmanager
 
 import sys
@@ -79,6 +79,8 @@ class Engine(EngineBase):
         self.extern_data: Optional[TensorDict] = None
         self._train_dataloader: Optional[Union[DataLoader, PinMemoryDataLoader]] = None
         self._eval_dataloaders: Dict[str, Union[DataLoader, PinMemoryDataLoader]] = {}
+        # Names of the eval datasets which are split over all ranks, every rank evaluating its shard, see eval_model.
+        self._eval_datasets_on_all_ranks: Set[str] = set()
         self._hot_reloader = ConfigHotReloader(config.typed_dict) if should_use_hot_reloading(config=config) else None
 
         self._start_epoch: Optional[int] = None
@@ -245,10 +247,49 @@ class Engine(EngineBase):
             self.eval_datasets["eval"] = eval_data
         if config.has("eval_datasets"):
             for dataset_name, dataset_opts in config.typed_value("eval_datasets", {}).items():
-                self.eval_datasets[dataset_name] = init_dataset(dataset_opts, default_kwargs={"name": dataset_name})
+                self.eval_datasets[dataset_name] = init_dataset(
+                    dataset_opts,
+                    default_kwargs={"name": dataset_name, **Dataset.get_default_kwargs_eval_on_all_ranks(config)},
+                )
 
         self._train_dataloader = self._create_data_loader(train_data, train=True) if train_data else None
+        self._eval_datasets_on_all_ranks.clear()
         for dataset_name, dataset in self.eval_datasets.items():
+            if (
+                self._torch_distributed_ctx
+                and self._torch_distributed_ctx.size() > 1
+                and self._torch_distributed_ctx.eval_on_all_ranks()
+            ):
+                # split only if every rank supports sharding and orders the dataset with the same seed
+                rank_infos: List[Tuple[bool, int]] = [(False, 0)] * self._torch_distributed_ctx.size()
+                torch.distributed.all_gather_object(
+                    rank_infos, (dataset.supports_sharding(), dataset.random_seed_offset)
+                )
+                supports_sharding = [supported for supported, _ in rank_infos]
+                assert len(set(supports_sharding)) == 1, (
+                    f"{dataset}: supports_sharding differs across the ranks: {supports_sharding}"
+                )
+                random_seed_offsets = [offset for _, offset in rank_infos]
+                if supports_sharding[0] and len(set(random_seed_offsets)) == 1:
+                    dataset.set_sharding(
+                        num_shards=self._torch_distributed_ctx.size(), shard_index=self._torch_distributed_ctx.rank()
+                    )
+                    self._eval_datasets_on_all_ranks.add(dataset_name)
+                    print(
+                        f"Eval dataset {dataset_name!r} is split over {self._torch_distributed_ctx.size()} ranks.",
+                        file=log.v3,
+                    )
+                elif supports_sharding[0]:
+                    print(
+                        f"Eval dataset {dataset_name!r} has a different random_seed_offset on each rank"
+                        f" {random_seed_offsets}, it is evaluated on rank 0 only.",
+                        file=log.v3,
+                    )
+                else:
+                    print(
+                        f"Eval dataset {dataset_name!r} does not support sharding, it is evaluated on rank 0 only.",
+                        file=log.v3,
+                    )
             self._eval_dataloaders[dataset_name] = self._create_data_loader(dataset, train=False)
 
         self._start_epoch = self.get_train_start_epoch(self.config)
@@ -964,16 +1005,27 @@ class Engine(EngineBase):
         self._reset_dev_memory_stats()
 
         eval_dump_str = []
+        dataset_names = [
+            name
+            for name in self.eval_datasets
+            if not (skip_already_evaluated and self._is_dataset_evaluated(name=name))
+        ]
+        # A dataset which is split over the ranks must score the model which rank 0 saves.
+        # Every rank keeps its own training state aside meanwhile.
+        own_model_state = None
+        if any(name in self._eval_datasets_on_all_ranks for name in dataset_names):
+            own_model_state = self._take_rank0_model_state()
 
-        for dataset_name, dataset in self.eval_datasets.items():
-            if skip_already_evaluated and self._is_dataset_evaluated(name=dataset_name):
-                continue
-
+        for dataset_name in dataset_names:
             data_loader = self._eval_dataloaders[dataset_name]
+            # Split over all ranks: every rank evaluates its shard of the dataset (see init_train_from_config),
+            # and the sums are gathered at the end.
+            # Otherwise, only rank 0 evaluates the dataset.
+            on_all_ranks = dataset_name in self._eval_datasets_on_all_ranks
 
-            if self._torch_distributed_ctx and self._torch_distributed_ctx.rank() != 0:
+            if not on_all_ranks and self._torch_distributed_ctx and self._torch_distributed_ctx.rank() != 0:
                 # We need to make sure the data loader iterator was created for proper synchronization.
-                # However, we only want to do evaluation on rank 0 for simplicity.
+                # However, this dataset is evaluated on rank 0 only.
                 iter(data_loader)
                 # We wait here until rank 0 is done w/ the eval.
                 # Regularly synchronizing should fix potential timeout issues, like
@@ -995,7 +1047,7 @@ class Engine(EngineBase):
             report_prefix = f"ep {self.epoch} {dataset_name} eval"
             with torch.no_grad():
                 for extern_data_raw in data_loader:
-                    if self._torch_distributed_ctx and step_idx % 100 == 0:
+                    if not on_all_ranks and self._torch_distributed_ctx and step_idx % 100 == 0:
                         _has_data = torch.tensor([True], device="cpu", dtype=torch.int8)
                         torch.distributed.broadcast(_has_data, src=0)
 
@@ -1010,7 +1062,10 @@ class Engine(EngineBase):
                         with_eval_targets=True,
                     )
 
-                    self._run_step(extern_data, train_func=True)
+                    # Not through the DDP wrapper when split over the ranks:
+                    # eval needs no gradient sync, and any collective in a step would hang,
+                    # as the ranks run different numbers of steps.
+                    self._run_step(extern_data, train_func=True, _inside_wrapped=on_all_ranks)
                     step_end_time = time.monotonic()
 
                     train_ctx = rf.get_run_ctx()
@@ -1044,11 +1099,20 @@ class Engine(EngineBase):
 
                     step_idx += 1
 
+            score_keys = None
+            if on_all_ranks:
+                # A rank with an empty shard ran no step here, so the score keys come along with the sums.
+                score_keys = set()
+                if step_idx > 0:
+                    score_keys = {name for name, loss in rf.get_run_ctx().losses.items() if not loss.as_error}
+                accumulated_losses_dict, accumulated_inv_norm_factors_dict, step_idx, score_keys = self._sum_over_ranks(
+                    accumulated_losses_dict, accumulated_inv_norm_factors_dict, step_idx, score_keys
+                )
             assert step_idx > 0, f"No data in dataset {dataset_name!r}."
             accumulated_losses_dict = accumulated_losses_dict / accumulated_inv_norm_factors_dict
-            accumulated_losses_dict = self._maybe_extend_losses_info(accumulated_losses_dict)
+            accumulated_losses_dict = self._maybe_extend_losses_info(accumulated_losses_dict, score_keys=score_keys)
 
-            if self._tensorboard_writer:
+            if self._tensorboard_writer and (not on_all_ranks or self._torch_distributed_ctx.rank() == 0):
                 # write losses/errors to tensorboard
                 for key, val in accumulated_losses_dict.items():
                     self._tensorboard_writer.add_scalar(
@@ -1065,12 +1129,15 @@ class Engine(EngineBase):
             # Same format as the TF engine.
             eval_dump_str += ["%s: %s" % (dataset_name, _format_score(dict(accumulated_losses_dict)))]
 
-            if self._torch_distributed_ctx:
+            if self._torch_distributed_ctx and not on_all_ranks:
                 assert self._torch_distributed_ctx.rank() == 0
                 _has_data = torch.tensor([False], device="cpu", dtype=torch.int8)
                 torch.distributed.broadcast(_has_data, src=0)
 
             self._on_epoch_end(dataset_name=dataset_name)
+
+        if own_model_state is not None:
+            self._restore_model_state(own_model_state)
 
         if not self._torch_distributed_ctx or self._torch_distributed_ctx.rank() == 0:
             print(
@@ -1087,6 +1154,67 @@ class Engine(EngineBase):
             torch.distributed.broadcast_object_list(ls, src=0, device=torch.device("cpu"))
             assert isinstance(ls[0], self.learning_rate_control.EpochData)
             self.learning_rate_control.epoch_data[self.epoch] = ls[0]
+
+    def _sum_over_ranks(
+        self, losses: NumbersDict, inv_norm_factors: NumbersDict, num_steps: int, score_keys: Set[str]
+    ) -> Tuple[NumbersDict, NumbersDict, int, Set[str]]:
+        """
+        :param losses: summed losses of the local shard of an eval dataset
+        :param inv_norm_factors: summed inverse norm factors of the local shard
+        :param num_steps: number of local steps
+        :param score_keys: names of the losses which are scores, not errors (empty without a local step)
+        :return: the sums over all ranks, and the union of the score keys.
+            Every rank adds the parts in rank order, so every rank gets the same numbers.
+        """
+        parts = [None] * self._torch_distributed_ctx.size()
+        torch.distributed.all_gather_object(parts, (losses, inv_norm_factors, num_steps, score_keys))
+        losses, inv_norm_factors, num_steps, score_keys = NumbersDict(), NumbersDict(), 0, set()
+        for part_losses, part_inv_norm_factors, part_num_steps, part_score_keys in parts:
+            losses += part_losses
+            inv_norm_factors += part_inv_norm_factors
+            num_steps += part_num_steps
+            score_keys |= part_score_keys
+        return losses, inv_norm_factors, num_steps, score_keys
+
+    def _model_state_tensors(self) -> List[torch.Tensor]:
+        """
+        :return: the params and buffers of the model
+        """
+        assert self._pt_model is not None
+        return list(self._pt_model.parameters()) + list(self._pt_model.buffers())
+
+    def _take_rank0_model_state(self) -> Optional[List[torch.Tensor]]:
+        """
+        Every rank overwrites the params and buffers of :func:`_model_state_tensors` with rank 0's, in place (so
+        captured CUDA graphs keep their addresses), so that an eval which is split over the ranks scores the model
+        which rank 0 saves.
+        E.g. BatchNorm running statistics without distributed statistics,
+        parameter averaging between its syncs or a learning rate per rank leave the ranks with different values.
+
+        :return: this rank's own values, to put back via :func:`_restore_model_state`, None on rank 0
+        """
+        tensors = self._model_state_tensors()
+        own = None
+        if self._torch_distributed_ctx.rank() != 0:
+            own = [tensor.detach().to("cpu", copy=True) for tensor in tensors]
+        with torch.no_grad():
+            for tensor in tensors:
+                if tensor.is_contiguous():
+                    torch.distributed.broadcast(tensor.data, src=0)
+                    continue
+                # broadcast needs contiguous memory, a strided tensor gets the values through a contiguous copy
+                value = tensor.data.contiguous()
+                torch.distributed.broadcast(value, src=0)
+                tensor.data.copy_(value)
+        return own
+
+    def _restore_model_state(self, own: List[torch.Tensor]):
+        """
+        :param own: this rank's own values of the params and buffers, from :func:`_take_rank0_model_state`
+        """
+        with torch.no_grad():
+            for tensor, value in zip(self._model_state_tensors(), own):
+                tensor.data.copy_(value)
 
     def _wandb_init(self):
         """
@@ -1128,15 +1256,18 @@ class Engine(EngineBase):
         if self._wandb_run is not None:
             self._wandb_run.log({**metrics, "epoch": self.epoch}, step=self.global_train_step)
 
-    def _maybe_extend_losses_info(self, losses: NumbersDict) -> NumbersDict:
+    def _maybe_extend_losses_info(self, losses: NumbersDict, *, score_keys: Optional[Set[str]] = None) -> NumbersDict:
         """
         :param losses:
+        :param score_keys: names of the losses which are scores, not errors.
+            By default, taken from the losses of the last step in the current run ctx.
         :return: maybe extended losses
         """
         if self._calculate_exp_loss and losses.has_values():
-            # Assume the current run ctx still has info about the losses from the last step.
-            assert rf.get_run_ctx().losses
-            score_keys = set(k for k, v in rf.get_run_ctx().losses.items() if not v.as_error)
+            if score_keys is None:
+                # Assume the current run ctx still has info about the losses from the last step.
+                assert rf.get_run_ctx().losses
+                score_keys = set(k for k, v in rf.get_run_ctx().losses.items() if not v.as_error)
             losses_ = {}
             for key, value in losses.items():
                 losses_[key] = value
