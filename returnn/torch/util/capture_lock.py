@@ -11,6 +11,7 @@ Graph replays do not take the lock, so the background work still overlaps with t
 """
 
 from __future__ import annotations
+from typing import Optional
 import threading
 from contextlib import contextmanager
 import torch
@@ -23,12 +24,13 @@ capture_lock = threading.RLock()
 
 
 @contextmanager
-def cuda_graph_capture(graph: torch.cuda.CUDAGraph):
+def cuda_graph_capture(graph: torch.cuda.CUDAGraph, *, stream: Optional[torch.cuda.Stream] = None):
     """
-    Like ``torch.cuda.graph(graph)``, while holding :data:`capture_lock`.
+    Like ``torch.cuda.graph(graph, stream=stream)``, while holding :data:`capture_lock`.
     Every capture in RETURNN goes through this.
 
     :param graph:
+    :param stream: capture stream. None: the default capture stream of ``torch.cuda.graph``
     """
-    with capture_lock, torch.cuda.graph(graph):
+    with capture_lock, torch.cuda.graph(graph, stream=stream):
         yield
