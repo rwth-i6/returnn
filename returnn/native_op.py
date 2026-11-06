@@ -3186,7 +3186,8 @@ common_fast_bw_kernels = {
     float prob_add(float a, float b) {
       float diff = a - b;
       if (isnan(diff)) {
-        return INF_F;
+        // inf - inf: both zero probability. A NaN input stays NaN, it must not vanish from the sum
+        return (isnan(a) || isnan(b)) ? a + b : INF_F;
       }
       else {
         return -log1pf(expf(-fabsf(diff))) + fminf(a, b);
@@ -3396,13 +3397,7 @@ class FastBaumWelchOp(NativeOpGenBase):
             // Skipping them saves the contended log-space CAS.
             continue;
           }
-          if (isnan(v)) {
-            // junk edges (e.g. masked frames): no contribution.
-            // (prob_add(x, NaN) returns INF, i.e. RESETS the accumulator
-            // -- the old serial fold was thus order-dependent on NaNs;
-            // skipping is the order-independent semantics.)
-            continue;
-          }
+          // a NaN edge (NaN am score) makes the sum NaN; frames past the seq end hold none, bwd sets them to INF
           unsigned s = sequence_idxs[e];
           atomic_prob_add(&sum[s], v);
         }
@@ -3970,8 +3965,8 @@ class FastBaumWelchPackedOp(NativeOpGenBase):
         float frame_sum = INF_F;
         for (unsigned e = edge_lo + tid; e < edge_hi; e += n_threads) {
           float v = edge_scores[e];
-          if (!isinf(v) && !isnan(v)) {
-            frame_sum = prob_add(frame_sum, v);
+          if (!isinf(v)) {
+            frame_sum = prob_add(frame_sum, v);  // NaN stays NaN, a non-finite loss must not turn into 0
           }
         }
         // a tree over the threads, a power of two
@@ -3994,7 +3989,7 @@ class FastBaumWelchPackedOp(NativeOpGenBase):
         float* out_row = out + ((size_t) seq_starts[seq] + frame) * num_emissions;
         for (unsigned e = edge_lo + tid; e < edge_hi; e += n_threads) {
           float v = edge_scores[e];
-          if (isinf(v) || isnan(v)) {
+          if (isinf(v)) {
             continue;
           }
           atomic_prob_add(&out_row[emission_idxs[e]], v - sum);
