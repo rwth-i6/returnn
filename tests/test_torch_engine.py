@@ -3528,7 +3528,7 @@ def test_torch_engine_cuda_graph_packed_total_bound():
             engine.finalize()
 
 
-def _cuda_graph_lm_eos_setup(storage: str, *, graphc: bool):
+def _cuda_graph_lm_eos_setup(storage: str, *, graphc: bool, partitioned: bool = False):
     """config+dataset for the padding seqs test, see below"""
     from returnn.datasets import init_dataset
     from returnn.tensor import Dim, batch_dim
@@ -3594,6 +3594,9 @@ def _cuda_graph_lm_eos_setup(storage: str, *, graphc: bool):
             **({"packed_total_bound": {"data": 400 + 16 * 9, "classes": 16 * 18}} if storage == "packed" else {}),
             capture_optimizer=True,
             compile=True,
+            partitioned=partitioned,
+            # no capture: same compiled inputs; partitioned capture fails in the test env (better_exchook keeps frames)
+            capture=not partitioned,
             mask_padding_seqs=True,
         )
     dataset = init_dataset({"class": "StaticDataset", "data": seqs, "input_dim": 8, "output_dim": 11})
@@ -3605,26 +3608,32 @@ def test_torch_engine_cuda_graph_mask_padding_seqs():
     """
     With mask_padding_seqs, the padding seqs which fill each batch up to batch_size_bound get no EOS target:
     the per-step losses of an LM step (default normalization, also per seq) and the gradient norm
-    match the eager run, padded and packed, also after the dev eval, which matches as well
+    match the eager run, padded and packed, also after the dev eval, which matches as well,
+    with the whole-step and the partitioned compiled step, while the real batch size changes per step
     """
     if not torch.cuda.is_available():
         raise unittest.SkipTest("CUDA not available")
     names = ["ce", "seq_ce", "grad_norm:p2"]
     for storage in ["padded", "packed"]:
-        (losses_a, engine_a), (losses_b, engine_b) = [
-            _cuda_graph_run_step_losses(
-                *_cuda_graph_lm_eos_setup(storage, graphc=graphc), mode=storage, loss_names=names
+        losses_a, engine_a = _cuda_graph_run_step_losses(
+            *_cuda_graph_lm_eos_setup(storage, graphc=False), mode=storage, loss_names=names
+        )
+        for partitioned in [False, True]:
+            losses_b, engine_b = _cuda_graph_run_step_losses(
+                *_cuda_graph_lm_eos_setup(storage, graphc=True, partitioned=partitioned),
+                mode=storage,
+                loss_names=names,
             )
-            for graphc in [False, True]
-        ]
-        common = sorted(set(losses_a) & set(losses_b))
-        assert {ep for ep, _ in common} == {1, 2}, common
-        for s in common:
-            for name, a, b in zip(names, losses_a[s], losses_b[s]):
-                assert abs(a - b) / max(abs(a), 1e-6) < 2e-2, f"{storage} step {s} {name}: {a} vs {b}"
-        for key in ["dev_loss_ce", "dev_loss_seq_ce"]:
-            a, b = (engine.learning_rate_control.epoch_data[1].error[key] for engine in (engine_a, engine_b))
-            assert abs(a - b) / max(abs(a), 1e-6) < 2e-2, f"{storage} {key}: {a} vs {b}"
+            common = sorted(set(losses_a) & set(losses_b))
+            assert {ep for ep, _ in common} == {1, 2}, common
+            for s in common:
+                for name, a, b in zip(names, losses_a[s], losses_b[s]):
+                    assert abs(a - b) / max(abs(a), 1e-6) < 2e-2, (
+                        f"{storage} partitioned {partitioned} step {s} {name}: {a} vs {b}"
+                    )
+            for key in ["dev_loss_ce", "dev_loss_seq_ce"]:
+                a, b = (engine.learning_rate_control.epoch_data[1].error[key] for engine in (engine_a, engine_b))
+                assert abs(a - b) / max(abs(a), 1e-6) < 2e-2, f"{storage} partitioned {partitioned} {key}: {a} vs {b}"
 
 
 def test_torch_engine_cuda_graph_train():
