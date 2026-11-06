@@ -3453,6 +3453,35 @@ def test_torch_engine_cuda_graph_finalize_then_eager():
     assert time_dim.capacity is None
 
 
+def test_torch_engine_cuda_graph_stop_on_nonfinite_train_score():
+    """
+    A finite loss with a NaN grad in the first step: the second step has a NaN score and NaN params,
+    which stops the training with the inf/nan score error (debug_inf_nan needs the extern data, not there under graphc).
+    """
+    if not torch.cuda.is_available():
+        raise unittest.SkipTest("CUDA not available")
+    config, dataset = _build_cuda_graph_train_config_and_dataset(compile_=False)
+    train_step = config.typed_dict["train_step"]
+
+    def _train_step_nan_grad(*, model, extern_data: TensorDict, **kwargs):
+        train_step(model=model, extern_data=extern_data, **kwargs)
+        w = model.layer.weight
+        rf.sqrt(rf.reduce_sum(w * 0.0, axis=w.dims)).mark_as_loss("nan_grad")  # value 0, grad inf * 0
+
+    config.typed_dict["train_step"] = _train_step_nan_grad
+    config.typed_dict["log_grad_norm"] = False  # else the NaN grad norm already stops in the first step
+    with global_config_ctx(config):
+        engine = Engine(config=config)
+        engine.init_train_from_config(train_data=dataset)
+        try:
+            engine.train()
+        except Exception as exc:
+            assert "Inf/nan score in step 1." in str(exc), f"unexpected exception: {exc!r}"
+        else:
+            raise Exception("did not get expected exception")
+        engine.finalize()
+
+
 def test_torch_engine_cuda_graph_packed_total_bound():
     """
     The gapped packed tensor which the captured step sees has the extent of the input buffer:
