@@ -25,39 +25,12 @@ from returnn.util.basic import get_global_inf_value, prod
 # noinspection PyProtectedMember
 from returnn.frontend._backend import Backend
 from returnn.frontend import RawTensorTypes
+
+# noinspection PyProtectedMember
+from returnn.frontend.tensor_array import _BufferTensorArray
 import returnn.frontend as rf
 
 _TT = Tensor[jax.Array]
-
-
-class _BufferTensorArray:
-    """
-    A TensorArray as a preallocated buffer plus a write index.
-
-    The eager path keeps a Python list, which cannot be a ``lax.while_loop`` carry:
-    the carry must have one fixed shape across iterations.
-    So a TensorArray that travels through the graph loop takes this form,
-    which needs the entry count up front (``TensorArray(capacity=...)``).
-    """
-
-    def __init__(
-        self,
-        *,
-        capacity: int,
-        buffer: Optional[jax.Array] = None,
-        index: Optional[jax.Array] = None,
-        template: Optional[Tensor] = None,
-    ):
-        """
-        :param capacity: max number of entries
-        :param buffer: [capacity, ...], allocated on the first push
-        :param index: next write position
-        :param template: dims and dtype of one entry, taken from the first push
-        """
-        self.capacity = capacity
-        self.buffer = buffer
-        self.index = jnp.asarray(0, dtype=jnp.int32) if index is None else index
-        self.template = template
 
 
 # Ignore this warning until we really expect that we implemented everything.
@@ -906,12 +879,7 @@ class JaxBackend(Backend[jax.Array]):
         """
         ``jax.lax.while_loop`` over the RF loop-var structure: the loop stays in the graph
         instead of being unrolled, so the body is traced once whatever the trip count.
-
-        Loop vars are the :class:`Tensor` and :class:`TensorArray` entries of the structure;
-        everything else is loop-invariant and must come back unchanged from ``body``.
-        The carry is fixed-shape, as ``lax`` requires:
-        a Tensor may not change its dims per iteration,
-        and a TensorArray needs ``TensorArray(capacity=...)`` so it is a buffer, not a list.
+        The carry is fixed-shape, as ``lax`` requires, see :func:`rf.loop._graph_while_loop`.
 
         One device for the whole loop, also as ``lax`` requires.
         The carry is unified below, but anything ``cond`` or ``body`` only closes over
@@ -926,152 +894,26 @@ class JaxBackend(Backend[jax.Array]):
         :param initial: initial loop vars
         :return: final loop vars
         """
-        import tree
-        from returnn.frontend.tensor_array import TensorArray
+        # noinspection PyProtectedMember
+        from returnn.frontend.loop import _graph_while_loop
 
-        flat_initial = list(tree.flatten(initial))
-        var_idxs = [i for i, v in enumerate(flat_initial) if isinstance(v, (Tensor, TensorArray))]
-        assert var_idxs, f"while_loop: no Tensor/TensorArray among the loop vars {initial}"
-        # Dims explicitly in the state may be replaced per iteration, e.g. a growing history dim.
-        # A dim is not a value, so what actually crosses the loop is its dyn size: carry that and
-        # rebuild the dim from it each iteration. Same idea as _DimUpdatesEager for the eager path.
-        dim_idxs = [i for i, v in enumerate(flat_initial) if isinstance(v, Dim) and v.dyn_size_ext is not None]
-        for _i in dim_idxs:
-            _d = flat_initial[_i]
-            assert _d.capacity is not None, (
-                f"while_loop: dim {_d} in the state has no capacity."
-                f" The graph loop needs a static bound on what it carries."
-            )
+        def _run_loop(cond_raw: Callable, body_raw: Callable, init: Tuple[jax.Array, ...]) -> Tuple[jax.Array, ...]:
+            # The loop counter is on CPU by design, for the host-driven eager loop;
+            # in the graph loop the control flow lives on the device with everything else.
+            dev = None
+            for raw in init:
+                if isinstance(raw, jax.core.Tracer):
+                    dev = None
+                    break
+                d = next(iter(raw.devices()), None)
+                if d is not None and d.platform != "cpu":
+                    dev = d
+                    break
+            if dev is not None:
+                init = tuple(_to_device(raw, dev=dev) for raw in init)
+            return jax.lax.while_loop(cond_raw, body_raw, init)
 
-        # noinspection shadowing-names
-        def _init_carry(v: Union[Tensor, TensorArray]) -> Any:
-            """:param v: one loop var :return: its raw carry"""
-            if isinstance(v, Tensor):
-                return v.raw_tensor
-            # noinspection PyProtectedMember
-            raw = v._backend_tensor_array
-            assert isinstance(raw, _BufferTensorArray), (
-                f"while_loop: TensorArray {v.tensor_template} must be created with a capacity"
-                f" to cross the graph loop, as lax.while_loop cannot grow the carry"
-            )
-            buffer = raw.buffer
-            if buffer is None:  # nothing pushed yet, so allocate from the template
-                tmpl = v.tensor_template
-                shape = tuple(d.get_dim_value() for d in tmpl.dims)
-                buffer = jnp.zeros((raw.capacity,) + shape, dtype=JaxBackend.as_dtype_raw(tmpl.dtype))
-            return buffer, raw.index
-
-        def _carry_like(v: Union[Tensor, TensorArray], ref: Union[Tensor, TensorArray]) -> Any:
-            """
-            :param v: the loop var after one body call
-            :param ref: the same slot before it
-            :return: its raw carry, in ``ref``'s dim order
-
-            An RF Tensor is dim-order agnostic, but the lax carry is not:
-            the body may return the same tensor transposed, which lax rejects as a type change.
-            """
-            if isinstance(v, Tensor):
-                return v.copy_compatible_to_dims_raw(ref.dims)
-            return _init_carry(v)
-
-        # noinspection shadowing-names
-        def _rebuild(carry: Sequence[Any]) -> Any:
-            """:param carry: raw values :return: the loop vars as body/cond expect them"""
-            out = list(flat_initial)
-            dim_map = {}
-            for i, raw in zip(dim_idxs, carry[len(var_idxs) :]):
-                d = flat_initial[i]
-                size = d.dyn_size_ext.copy_template()
-                size.raw_tensor = raw
-                d_new = Dim(size, name=d.name, capacity=d.capacity)
-                dim_map[d] = d_new
-                out[i] = d_new
-            for i, raw in zip(var_idxs, carry):
-                value = flat_initial[i]
-                if isinstance(value, Tensor):
-                    tensor = value.copy_template()
-                    if dim_map:
-                        tensor = tensor.copy_template_new_dim_tags([dim_map.get(d, d) for d in tensor.dims])
-                    tensor.raw_tensor = raw
-                    out[i] = tensor
-                else:
-                    buffer, index = raw
-                    # noinspection PyProtectedMember
-                    prev = value._backend_tensor_array
-                    out[i] = TensorArray(
-                        tensor_template=value.tensor_template,
-                        capacity=prev.capacity,
-                        _backend_tensor_array=_BufferTensorArray(
-                            capacity=prev.capacity,
-                            buffer=buffer,
-                            index=index,
-                            template=prev.template if prev.template is not None else value.tensor_template,
-                        ),
-                        _backend=JaxBackend,
-                    )
-            return tree.unflatten_as(initial, out)
-
-        def _cond(carry: Sequence[Any]):
-            res = cond(_rebuild(carry))
-            assert isinstance(res, Tensor) and res.dims == () and res.dtype == "bool", (
-                f"while_loop: cond must return a scalar bool Tensor, got {res}"
-            )
-            return res.raw_tensor
-
-        # noinspection shadowing-names
-        def _body(carry: Sequence[Any]):
-            new = body(_rebuild(carry))
-            tree.assert_same_structure(initial, new)
-            flat_new = list(tree.flatten(new))
-            # the body may hand back replaced dims; map them onto the initial ones so the carry
-            # is compared and laid out against a single set of tags
-            back_map = {}
-            for i in dim_idxs:
-                d_new = flat_new[i]
-                assert isinstance(d_new, Dim), f"while_loop: loop var {i} was a Dim, got {d_new!r}"
-                back_map[d_new] = flat_initial[i]
-            if back_map:
-                for i in var_idxs:
-                    v = flat_new[i]
-                    if isinstance(v, Tensor) and any(d in back_map for d in v.dims):
-                        flat_new[i] = v.copy_template_new_dim_tags(
-                            [back_map.get(d, d) for d in v.dims], keep_special_axes=True
-                        )
-                        flat_new[i].raw_tensor = v.raw_tensor
-            for i in var_idxs:
-                before, after = flat_initial[i], flat_new[i]
-                if isinstance(before, Tensor):
-                    assert isinstance(after, Tensor) and before.dims_set == after.dims_set, (
-                        f"while_loop: loop var {i} changed its dims, {before} -> {after}."
-                        f" The graph loop needs one fixed shape across iterations;"
-                        f" give the dim a capacity instead of growing it."
-                    )
-            out_vars = tuple(_carry_like(flat_new[i], flat_initial[i]) for i in var_idxs)
-            out_dims = tuple(flat_new[i].dyn_size_ext.raw_tensor for i in dim_idxs)
-            return out_vars + out_dims
-
-        init = tuple(_init_carry(flat_initial[i]) for i in var_idxs) + tuple(
-            flat_initial[i].dyn_size_ext.raw_tensor for i in dim_idxs
-        )
-        # One device for the whole carry, as lax requires.
-        # The loop counter is on CPU by design, for the host-driven eager loop;
-        # in the graph loop the control flow lives on the device with everything else.
-        dev = None
-        for raw in tree.flatten(init):
-            if isinstance(raw, jax.core.Tracer):
-                dev = None
-                break
-            d = next(iter(raw.devices()), None)
-            if d is not None and d.platform != "cpu":
-                dev = d
-                break
-        if dev is not None:
-            init = tree.map_structure(partial(_to_device, dev=dev), init)
-        # Inside lax.while_loop every shape is static and every value is a tracer,
-        # so we must take a dim's capacity, not its dyn size.
-        with rf.set_static_traceable_ctx(True):
-            final = jax.lax.while_loop(_cond, _body, init)
-        return _rebuild(final)
+        return _graph_while_loop(cond, body, initial, backend=JaxBackend, run_loop=_run_loop)
 
     @classmethod
     def tensor_array_create(cls, *, capacity: Optional[int] = None) -> TensorArrayType:
@@ -1081,7 +923,7 @@ class JaxBackend(Backend[jax.Array]):
         """
         if capacity is None:
             return []  # eager: a Python list, grows on demand
-        return _BufferTensorArray(capacity=capacity)
+        return _BufferTensorArray(capacity=capacity, index=jnp.asarray(0, dtype=jnp.int32))
 
     @staticmethod
     def tensor_array_push_back(tensor_array: TensorArrayType, tensor: Tensor) -> TensorArrayType:
