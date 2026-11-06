@@ -1051,7 +1051,7 @@ class GraphCapturedTrainStep:
         if self._dump_fx_dir:
             assert not self._partitioned, "torch_cuda_graph: dump_fx_dir with partitioned not supported"
             dump_dir = self._dump_fx_dir
-            inner_backend = backend
+            inner_backend = inductor_fw_compiler(backend)
 
             def fw_compiler(gm: torch.fx.GraphModule, example_inputs: List[torch.Tensor]) -> Callable:
                 """dump the AOT fw graph (grads are traced inside it, so this is the whole step), then compile"""
@@ -1060,7 +1060,7 @@ class GraphCapturedTrainStep:
                     f.write(gm.print_readable(print_output=False))
                 return inner_backend(gm, example_inputs)
 
-            return aot_function(step_core, fw_compiler=fw_compiler)
+            backend = fw_compiler
         if self._partitioned:
             # loss-only joint graph: min-cut partitions fw/bwd,
             # activation_memory_budget decides save-vs-recompute globally
