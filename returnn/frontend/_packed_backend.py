@@ -429,9 +429,12 @@ class _PackedStorage:
     def __repr__(self):
         return f"_PackedStorage({self.orig_dims} -> {self.packed_dim}, gap={self.gap}, align={self.align})"
 
+    def _cache_key_parts(self) -> Tuple[Any, ...]:
+        # the packing as in PackedRawTensor.same_packing, and the layout of the packed data
+        return self.packed_dim, self.orig_dims, self.gap, self.align, self.layout_lens, self.inner
+
     def _key(self) -> Tuple[Any, ...]:
-        # the packing as in PackedRawTensor.same_packing (layout lens by identity), and the layout of the packed data
-        return self.packed_dim, self.orig_dims, self.gap, self.align, id(self.layout_lens), self.inner
+        return tuple(id(part) if isinstance(part, Tensor) else part for part in self._cache_key_parts())
 
     def __eq__(self, other):
         if isinstance(other, _PackedStorage):
@@ -3133,6 +3136,7 @@ class PackedBackend(Backend[PackedRawTensor]):
         the packing relation in the wrapper must be updated as well:
         e.g. attention replaces the kv time dim (a packed dim),
         and with a stale packing relation, a later unpack would silently misalign the data.
+        ``in_dim`` can also be the packed dim (of the storage, not in ``source.dims``).
         """
         raw = _raw(source)
         if not out_dim.is_dim_known():
@@ -3144,13 +3148,16 @@ class PackedBackend(Backend[PackedRawTensor]):
             x = unpack(source)
             # noinspection PyProtectedMember
             return x._raw_backend.replace_dim(x, in_dim=in_dim, out_dim=out_dim)
-        out = source.copy_template_replace_dim_tag(
-            axis=source.get_axis_from_description(in_dim), new_dim_tag=out_dim, name="replace_dim"
-        )
+        if in_dim == raw.packed_dim:  # only in the storage, not in the dims of the tensor
+            out = source.copy_template(name="replace_dim")
+        else:
+            out = source.copy_template_replace_dim_tag(
+                axis=source.get_axis_from_description(in_dim), new_dim_tag=out_dim, name="replace_dim"
+            )
         layout_lens = raw.layout_lens
         if layout_lens is not None and in_dim in layout_lens.dims:
             layout_lens, _ = rf.replace_dim(layout_lens, in_dim=in_dim, out_dim=out_dim)
-        if in_dim in raw.orig_dims or in_dim == raw.packed_dim:
+        if in_dim in raw.orig_dims:
             out.raw_tensor = PackedRawTensor(
                 inner=raw.inner,
                 packed_dim=raw.packed_dim,
@@ -3165,7 +3172,7 @@ class PackedBackend(Backend[PackedRawTensor]):
             inner_out, _ = rf.replace_dim(raw.inner, in_dim=in_dim, out_dim=out_dim)
             out.raw_tensor = PackedRawTensor(
                 inner=inner_out,
-                packed_dim=raw.packed_dim,
+                packed_dim=out_dim if in_dim == raw.packed_dim else raw.packed_dim,
                 orig_dims=raw.orig_dims,
                 dims=tuple(out_dim if d == in_dim else d for d in raw.dims),
                 gap=raw.gap,
