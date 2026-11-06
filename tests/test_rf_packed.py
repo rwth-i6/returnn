@@ -1945,6 +1945,37 @@ def test_stft_packed():
     _assert_equal_non_padded(out_p, out_ref, batch_dim, out_sp, rtol=1e-4, atol=1e-4)
 
 
+def test_stft_empty_seqs():
+    # all-empty batches have a zero-length buffer (padded and packed), also between nonempty batches
+    rf.select_backend_torch()
+    devices = ["cpu"] + (["cuda"] if torch.cuda.is_available() else [])
+    opts = dict(frame_step=160, frame_length=400, fft_length=512)
+    for dev in devices:
+        for seq_lens in [[0, 0], [0, 900], [300, 100], [0, 0]]:
+            batch_dim = Dim(2, name="batch")
+            time_dim = Dim(
+                Tensor("time", dims=[batch_dim], dtype="int32", raw_tensor=torch.tensor(seq_lens, dtype=torch.int32))
+            )
+            audio = Tensor("audio", dims=[batch_dim, time_dim], dtype="float32")
+            audio.raw_tensor = torch.randn(2, max(seq_lens), generator=torch.Generator().manual_seed(1)).to(dev)
+            out_ref, out_sp, out_feat = rf.stft(audio, in_spatial_dim=time_dim, **opts)
+            out_p, out_sp_p, _ = rf.stft(packed.pack(audio), in_spatial_dim=time_dim, out_dim=out_feat, **opts)
+            assert out_sp.dyn_size_ext.raw_tensor.tolist() == [max(0, (n - 400) // 160 + 1) for n in seq_lens]
+            assert packed.is_packed(out_p) and out_sp_p == out_sp
+            for out in [out_ref, out_p.raw_tensor.inner]:
+                assert out.dtype == "complex64" and out.raw_tensor.device.type == dev
+            _assert_equal_non_padded(out_p, out_ref, batch_dim, out_sp, rtol=1e-4, atol=1e-4)
+
+            mel_dim = Dim(10, name="mel")
+            mel_ref, mel_sp = rf.audio.log_mel_filterbank_from_raw(audio, in_spatial_dim=time_dim, out_dim=mel_dim)
+            mel_p, mel_sp_p = rf.audio.log_mel_filterbank_from_raw(
+                packed.pack(audio), in_spatial_dim=time_dim, out_dim=mel_dim
+            )
+            assert packed.is_packed(mel_p) and mel_sp_p == mel_sp
+            assert mel_p.raw_tensor.inner.raw_tensor.device.type == dev
+            _assert_equal_non_padded(mel_p, mel_ref, batch_dim, mel_sp, rtol=1e-4, atol=1e-4)
+
+
 def _full_model_packed_vs_padded(
     dev: str, *, rtol: float, expected_att_paths: dict, amp: bool = False, atol: float = 1e-4
 ):
