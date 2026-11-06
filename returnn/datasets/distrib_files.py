@@ -346,13 +346,22 @@ class DistributeFilesDataset(CachedDataset2):
 
     def _lazy_init_file_sizes(self):
         import tree
+        from concurrent.futures import ThreadPoolExecutor
 
         if self._file_sizes:
             return
         self._lazy_init_file_list()
-        self._file_sizes = {
-            _get_key_for_file_tree(t): sum((os.path.getsize(fn) for fn in tree.flatten(t)), 0) for t in self._files
-        }
+
+        def _get_sizes(files: List[FileTree]) -> List[int]:
+            return [sum((os.path.getsize(fn) for fn in tree.flatten(t)), 0) for t in files]
+
+        # stat on network file systems (e.g. Lustre) is latency-bound, and getsize releases the GIL
+        num_threads = 8
+        chunk_size = -(-len(self._files) // num_threads)
+        chunks = [self._files[i : i + chunk_size] for i in range(0, len(self._files), chunk_size)]
+        with ThreadPoolExecutor(len(chunks)) as executor:
+            sizes = [size for chunk_sizes in executor.map(_get_sizes, chunks) for size in chunk_sizes]
+        self._file_sizes = {_get_key_for_file_tree(t): size for t, size in zip(self._files, sizes)}
 
     def __del__(self):
         if hasattr(self, "_workers"):  # might not be set after an early exception in __init__
