@@ -1866,6 +1866,30 @@ def test_rel_pos_att_triton_kernel_large_head_offset():
         _check_rel_pos_att_triton_vs_ref(m, (q, k, v, bd), (out, lse), starts, lens, max_len, dropout_p, seed)
 
 
+def test_rel_pos_att_triton_fused_bd_large_head_size():
+    # fused bd entry with one head of bd beyond 2^31 elements (total * R), H = 2, bf16 (fwd).
+    m = _import_rel_pos_att_triton(min_free_bytes=28 * 2**30)
+    dev = "cuda"
+    n_heads, d, max_len = 2, 64, 2**14
+    r = 2 * max_len - 1
+    total = -(-(2**31) // r) + 4
+    starts = torch.tensor([0, total - 3], dtype=torch.int32, device=dev)
+    lens = torch.tensor([3, 2], dtype=torch.int32, device=dev)
+    gen = torch.Generator(device=dev).manual_seed(23)
+    q, k, v, qv = [torch.randn(total, n_heads, d, generator=gen, device=dev, dtype=torch.bfloat16) for _ in range(4)]
+    pos_emb = torch.randn(r, n_heads, d, generator=gen, device=dev, dtype=torch.bfloat16)
+    bd_scale = 1.0 / d**0.5
+    bd = torch.empty(total, n_heads, r, device=dev, dtype=torch.bfloat16)
+    for s0, ln in zip(starts.tolist(), lens.tolist()):
+        rows = slice(s0, s0 + ln)
+        bd[rows] = (torch.einsum("thd,rhd->thr", qv[rows].float(), pos_emb.float()) * bd_scale).bfloat16()
+    for dropout_p, seed in [(0.0, 0), (0.1, 999)]:
+        out, lse = torch.ops.returnn.rel_pos_att_fused_bd_fwd(
+            q, k, v, qv, pos_emb, starts, lens, max_len, dropout_p, m._seed_tensor(seed, dev), bd_scale, bd_scale
+        )
+        _check_rel_pos_att_triton_vs_ref(m, (q, k, v, bd), (out, lse), starts, lens, max_len, dropout_p, seed)
+
+
 def _import_rel_pos_att_triton(*, min_free_bytes: int):
     rf.select_backend_torch()
     if not torch.cuda.is_available():
