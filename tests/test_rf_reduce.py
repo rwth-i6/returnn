@@ -120,6 +120,26 @@ def test_reduce_bounded_batch_padding_seqs():
     assert rf.reduce_max(per_seq - 10.0, axis=bounded_batch_dim).raw_tensor.tolist() == -3.0
 
 
+def test_reduce_max_min_empty_axis():
+    # max/min over an empty axis (a batch of empty seqs) gives the fully-masked result, as a masked empty row does
+    rf.select_backend_torch()
+    batch_dim_ = Dim(2, name="batch")
+    feat_dim = Dim(3, name="feat")
+    time_dim = Dim(rf.convert_to_tensor([2, 0], dims=[batch_dim_], dtype="int32"), name="time")
+    empty_time_dim = Dim(rf.convert_to_tensor([0, 0], dims=[batch_dim_], dtype="int32"), name="time")
+    for dtype in ("float32", "int32"):
+        x = rf.zeros([batch_dim_, time_dim], dtype=dtype) + rf.cast(rf.range_over_dim(feat_dim), dtype)
+        x_empty = rf.zeros([batch_dim_, empty_time_dim, feat_dim], dtype=dtype)
+        assert tuple(x_empty.raw_tensor.shape) == (2, 0, 3)
+        for func in (rf.reduce_max, rf.reduce_min):
+            ref = func(x, axis=time_dim)  # seq 1 is fully masked
+            out = func(x_empty, axis=empty_time_dim)
+            assert out.dims == ref.dims == (batch_dim_, feat_dim)
+            assert out.dtype == ref.dtype == dtype
+            assert out.raw_tensor.tolist() == [ref.raw_tensor[1].tolist()] * 2
+            assert ref.raw_tensor[0].tolist() == [0, 1, 2]
+
+
 def test_top_k():
     time_dim = Dim(Tensor("time", [batch_dim], dtype="int32"))
     in_dim = Dim(7, name="in")

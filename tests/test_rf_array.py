@@ -398,6 +398,21 @@ def test_reshape():
     run_model(extern_data, lambda *, epoch, step: _Net(), _forward_step, test_single_batch_entry=False)
 
 
+def test_merge_dims_empty_dyn_dim():
+    # an empty dyn dim next to the merged dims: a -1 in the reshape target is ambiguous for 0 elements
+    rf.select_backend_torch()
+    batch_dim_ = Dim(2, name="batch")
+    time_dim = Dim(rf.convert_to_tensor([0, 0], dims=[batch_dim_], dtype="int32"), name="time")
+    a_dim = Dim(3, name="a")
+    b_dim = Dim(4, name="b")
+    x = rf.zeros([batch_dim_, time_dim, a_dim, b_dim])
+    assert tuple(x.raw_tensor.shape) == (2, 0, 3, 4)
+    y, ab_dim = rf.merge_dims(x, dims=(a_dim, b_dim))
+    assert y.dims == (batch_dim_, time_dim, ab_dim)
+    assert ab_dim.dimension == 12
+    assert tuple(y.raw_tensor.shape) == (2, 0, 12)
+
+
 def test_expand_dim():
     time_dim = Dim(Tensor("time", [batch_dim], dtype="int32"))
     in_dim = Dim(7, name="in")

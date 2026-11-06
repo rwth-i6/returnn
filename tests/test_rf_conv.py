@@ -605,3 +605,62 @@ def test_transposed_conv1d():
             run_model(
                 extern_data, lambda *, epoch, step: _Net(fs, s, p), _forward_step, dyn_dim_max_sizes={time_dim: t}
             )
+
+
+def _conv1d_empty_time(conv: rf.Conv1d) -> Tuple[Tensor, Dim]:
+    # a batch of empty sequences (max length 0), as an audio-only batch gives for a text input
+    batch_dim_ = Dim(2, name="batch")
+    time_dim = Dim(rf.convert_to_tensor([0, 0], dims=[batch_dim_], dtype="int32"), name="time")
+    x = rf.zeros([batch_dim_, time_dim, conv.in_dim])
+    assert tuple(x.raw_tensor.shape) == (2, 0, conv.in_dim.dimension)
+    y, out_spatial_dim = conv(x, in_spatial_dim=time_dim)
+    assert set(y.dims) == {batch_dim_, out_spatial_dim, conv.out_dim}
+    assert out_spatial_dim.dyn_size_ext.raw_tensor.tolist() == [0, 0]
+    y = y.copy_transpose([batch_dim_, out_spatial_dim, conv.out_dim])
+    assert tuple(y.raw_tensor.shape) == (2, 0, conv.out_dim.dimension)
+    return y, out_spatial_dim
+
+
+def test_conv1d_same_padding_empty_time():
+    rf.select_backend_torch()
+    in_dim = Dim(7, name="in")
+    out_dim = Dim(13, name="out")
+    _conv1d_empty_time(rf.Conv1d(in_dim, out_dim, 5, padding="same"))
+
+
+def test_conv1d_stride_valid_empty_time():
+    rf.select_backend_torch()
+    in_dim = Dim(7, name="in")
+    out_dim = Dim(13, name="out")
+    _conv1d_empty_time(rf.Conv1d(in_dim, out_dim, 4, strides=3, padding="valid"))
+
+
+def _two_batch_dims_empty_time() -> Tuple[Tensor, Dim, Dim, Dim, Dim]:
+    # two batch dims (as a packed tensor has): the backend merges them by a reshape, which must not use -1
+    batch_dim_ = Dim(2, name="batch")
+    beam_dim = Dim(3, name="beam")
+    time_dim = Dim(rf.convert_to_tensor([0, 0], dims=[batch_dim_], dtype="int32"), name="time")
+    in_dim = Dim(7, name="in")
+    x = rf.zeros([batch_dim_, beam_dim, time_dim, in_dim])
+    assert tuple(x.raw_tensor.shape) == (2, 3, 0, 7)
+    return x, batch_dim_, beam_dim, time_dim, in_dim
+
+
+def test_conv1d_two_batch_dims_empty_time():
+    rf.select_backend_torch()
+    x, batch_dim_, beam_dim, time_dim, in_dim = _two_batch_dims_empty_time()
+    out_dim = Dim(13, name="out")
+    conv = rf.Conv1d(in_dim, out_dim, 5, padding="same")
+    y, out_spatial_dim = conv(x, in_spatial_dim=time_dim)
+    assert out_spatial_dim.dyn_size_ext.raw_tensor.tolist() == [0, 0]
+    y = y.copy_transpose([batch_dim_, beam_dim, out_spatial_dim, out_dim])
+    assert tuple(y.raw_tensor.shape) == (2, 3, 0, 13)
+
+
+def test_max_pool1d_two_batch_dims_empty_time():
+    rf.select_backend_torch()
+    x, batch_dim_, beam_dim, time_dim, in_dim = _two_batch_dims_empty_time()
+    y, out_spatial_dim = rf.max_pool1d(x, pool_size=3, strides=2, padding="same", in_spatial_dim=time_dim)
+    assert out_spatial_dim.dyn_size_ext.raw_tensor.tolist() == [0, 0]
+    y = y.copy_transpose([batch_dim_, beam_dim, out_spatial_dim, in_dim])
+    assert tuple(y.raw_tensor.shape) == (2, 3, 0, 7)
