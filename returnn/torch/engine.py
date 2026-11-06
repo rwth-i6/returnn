@@ -546,6 +546,8 @@ class Engine(EngineBase):
 
         data_iter = iter(self._train_dataloader)
         elapsed_computation_time = 0
+        elapsed_input_wait_time = 0
+        elapsed_sync_wait_time = 0
 
         self._pt_model.train()
         self._maybe_reset_dev_memory_caches()
@@ -588,10 +590,13 @@ class Engine(EngineBase):
         report_prefix = f"ep {self.epoch} train"
         try:
             while True:
+                input_wait_begin_time = time.monotonic()
                 with torch.no_grad(), record_function("data_loading"):
                     extern_data_raw = next(data_iter, None)
 
                 step_begin_time = time.monotonic()
+                input_wait = step_begin_time - input_wait_begin_time
+                elapsed_input_wait_time += input_wait
 
                 if step_idx == 0 and log.verbose[5]:
                     print("Time to get first batch data:", hms(step_begin_time - epoch_start_time), file=log.v5)
@@ -640,7 +645,11 @@ class Engine(EngineBase):
                             torch.distributed.all_reduce(
                                 _has_data, op=torch.distributed.ReduceOp.MIN, group=level.group
                             )
+                    elapsed_sync_wait_time += time.monotonic() - step_begin_time
                     break
+                # the control sync is where this rank waits for the input of the other ranks
+                sync_end_time = time.monotonic()
+                elapsed_sync_wait_time += sync_end_time - step_begin_time
 
                 if self._stall_heartbeat is not None:
                     self._stall_heartbeat.value = time.time()
@@ -753,7 +762,7 @@ class Engine(EngineBase):
 
                 step_end_time = time.monotonic()
                 step_duration = step_end_time - step_begin_time
-                elapsed_computation_time += step_duration
+                elapsed_computation_time += step_end_time - sync_end_time
 
                 accumulated_losses_dict += losses_dict
                 accumulated_inv_norm_factors_dict += inv_norm_factors_dict
@@ -763,6 +772,7 @@ class Engine(EngineBase):
                     step=step_idx,
                     eval_info=dict(eval_info),
                     step_duration=step_duration,
+                    input_wait=input_wait,
                     start_elapsed=step_end_time - epoch_start_time,
                     complete_frac=complete_frac,
                     num_seqs=num_seqs,
@@ -872,6 +882,9 @@ class Engine(EngineBase):
 
         elapsed = time.monotonic() - epoch_start_time
         elapsed_computation_percentage = elapsed_computation_time / elapsed
+        wait_str = f"{elapsed_input_wait_time / elapsed:.1%} input wait, "
+        if self._torch_distributed_ctx:
+            wait_str += f"{elapsed_sync_wait_time / elapsed:.1%} sync wait, "
         # Frames the computation ran over but which carry no content.
         # Padded: the padding of each batch. Packed: zero by construction -- EXCEPT under
         # bound shapes (graph capture), where every step computes over the full static buffer,
@@ -896,7 +909,7 @@ class Engine(EngineBase):
         slack_str = ", ".join(f"{k}: {v:.1%}" for k, v in total_slack_ratio.items())
         print(
             f"Epoch {self.epoch}: Trained {step_idx} steps, {hms(elapsed)} elapsed "
-            f"({elapsed_computation_percentage:.1%} computing time, "
+            f"({elapsed_computation_percentage:.1%} computing time, {wait_str}"
             f"{slack_str} {'bound slack' if bound_shapes else 'padding'})",
             file=log.v3,
         )
@@ -1952,6 +1965,7 @@ def _print_process(
     eval_info: Optional[Dict[str, Any]] = None,
     batch_size_info: Optional[Dict[str, Any]] = None,
     step_duration: Optional[float] = None,
+    input_wait: Optional[float] = None,
     start_elapsed: Optional[float] = None,
     complete_frac: Optional[float] = None,
     num_seqs: Optional[int] = None,
@@ -1965,6 +1979,7 @@ def _print_process(
     :param eval_info:
     :param batch_size_info:
     :param step_duration: time elapsed for this step (secs)
+    :param input_wait: time waited for the data of this step before it (secs)
     :param start_elapsed: time elapsed since epoch start (secs)
     :param complete_frac: how much of the current epoch is already consumed
     :param num_seqs: total number of seqs this epoch
@@ -1997,6 +2012,8 @@ def _print_process(
                     info += [f"mem_graph_pool:{log_memory_usage_device} {util.human_bytes_size(pool)}"]
         if step_duration is not None:
             info += ["%.3f sec/step" % step_duration]
+        if input_wait is not None:
+            info += [f"{input_wait:.3f} sec input wait"]
         if start_elapsed is not None:
             info += ["elapsed %s" % hms(start_elapsed)]
         if complete_frac not in (-1, None):
