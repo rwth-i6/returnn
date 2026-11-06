@@ -361,3 +361,51 @@ def test_HuggingFaceDataset_seq_list_via_MetaDataset():
     for seq_idx in range(num_seqs):
         assert ds.get_tag(seq_idx) == tags[num_seqs - 1 - seq_idx]
         assert int(ds.get_data(seq_idx, "data")) == int(ds.get_data(seq_idx, "other")) == num_seqs - 1 - seq_idx
+
+
+def test_HuggingFaceDataset_get_tag_no_row_access():
+    import datasets
+    from unittest import mock
+
+    class _AudioDecoded(Exception):
+        pass
+
+    class _RowAccess(Exception):
+        pass
+
+    seq_order = [3, 0, 3, 1]
+    for ids, seq_tag_column, corpus_tags in [
+        (["a", "b", "c", "b"], "id", ["a", "b", "c", "b"]),
+        ([10, 11, 12, 13], "id", ["10", "11", "12", "13"]),
+        (["a", "b", "c", "d"], None, ["seq-0", "seq-1", "seq-2", "seq-3"]),
+    ]:
+        print("ids:", ids, "seq_tag_column:", seq_tag_column)
+        ds = HuggingFaceDataset(
+            lambda: datasets.Dataset.from_dict(
+                {"id": ids, "audio": [{"bytes": b"not an audio file", "path": f"{i}.wav"} for i in range(len(ids))]}
+            ),
+            cast_columns={"audio": {"_type": "Audio", "sampling_rate": 16_000}},
+            data_format={"audio": {"dtype": "float32", "shape": [None]}},
+            seq_tag_column=seq_tag_column,
+        )
+        ds.initialize()
+        ds.init_seq_order(epoch=1, seq_order=seq_order)
+        expected_tags = [corpus_tags[i] for i in seq_order]
+
+        with mock.patch.object(datasets.Audio, "decode_example", side_effect=_AudioDecoded):
+            assert [ds.get_tag(seq_idx) for seq_idx in range(ds.num_seqs)] == expected_tags
+
+        decoded = {"array": numpy.zeros((5,), dtype="float32"), "sampling_rate": 16_000}
+        with mock.patch.object(datasets.Audio, "decode_example", return_value=decoded):
+            ds.load_seqs(0, ds.num_seqs)
+
+        with mock.patch.object(datasets.Dataset, "__getitem__", side_effect=_RowAccess):
+            assert [ds.get_tag(seq_idx) for seq_idx in range(ds.num_seqs)] == expected_tags
+
+            # Check that the mock is effective.
+            try:
+                ds.hf_dataset[0]
+            except _RowAccess:
+                pass
+            else:
+                raise Exception("expected that row access fails")
