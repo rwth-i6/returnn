@@ -1199,9 +1199,10 @@ def test_cache_dim_remap_identity():
     # both that and the identity-based cache remap are covered here
     assert derived_dim != batch_dim
     cache = Cache(max_size=2)
-    cache.set(("test_cache_dim_remap_identity", batch_dim), (derived_dim, batch_dim))
+    value = (derived_dim, batch_dim)
+    cache.set(("test_cache_dim_remap_identity", batch_dim), value)
     hit = cache.get(("test_cache_dim_remap_identity", batch_dim))
-    assert hit is not None
+    assert hit is value  # the same dims: the cached value itself, no copy
     got_derived, got_batch = hit
     assert got_derived is derived_dim
     assert got_batch is batch_dim
