@@ -44,6 +44,42 @@ def _brute_force(logits: torch.Tensor, labels, blank: int) -> float:
     return -float(torch.logsumexp(torch.tensor(totals, dtype=torch.float64), dim=0))
 
 
+def _brute_force_weighted(logits: torch.Tensor, labels, blank: int, blank_scale: float, label_smoothing: float):
+    """
+    The cross entropy of every alignment, its blanks scaled and its targets smoothed over the vocabulary,
+    averaged over the alignments by their posterior, the posterior held constant.
+
+    :param logits: [T, U + 1, V] of one sequence
+    :param labels: the U labels
+    :param blank: blank index
+    :param blank_scale: weight of the cross entropy of the blanks
+    :param label_smoothing: weight of the uniform target over the vocabulary
+    :return: the averaged cross entropy, its gradient the one of the weighted loss
+    """
+    num_frames, num_prefix, _ = logits.shape
+    num_labels = num_prefix - 1
+    log_probs = torch.log_softmax(logits, dim=-1)
+
+    def smoothed(row: torch.Tensor, target: int) -> torch.Tensor:
+        return -(1.0 - label_smoothing) * row[target] - label_smoothing * row.mean()
+
+    scores, ces = [], []
+    for emits in itertools.combinations_with_replacement(range(num_frames), num_labels):
+        u = 0
+        score, ce = 0.0, 0.0
+        for t in range(num_frames):
+            while u < num_labels and emits[u] == t:
+                score = score + log_probs[t, u, labels[u]]
+                ce = ce + smoothed(log_probs[t, u], labels[u])
+                u += 1
+            score = score + log_probs[t, u, blank]
+            ce = ce + blank_scale * smoothed(log_probs[t, u], blank)
+        scores.append(score)
+        ces.append(ce)
+    posterior = torch.softmax(torch.stack(scores).detach(), dim=0)
+    return (posterior * torch.stack(ces)).sum()
+
+
 def _pack(per_seq_logits):
     """
     :param per_seq_logits: one [T, U + 1, V] tensor per sequence
@@ -315,6 +351,75 @@ def test_rnnt_gradient_of_a_long_sequence():
     want = torch.full_like(x, 1 / vocab)
     want[:, 0] -= 1
     torch.testing.assert_close(x.grad, want, rtol=1e-4, atol=1e-5)
+
+
+def test_rnnt_weighted_gradient_matches_the_sum_over_alignments():
+    """
+    With the blank part scaled and the targets smoothed, the gradient is the one of the cross entropy of every
+    alignment with those weights, averaged over the alignments by their posterior, and the loss stays the negative
+    log likelihood. The third sequence has more labels than frames.
+    """
+    torch.manual_seed(5)
+    vocab, blank, blank_scale, smoothing = 5, 0, 0.3, 0.1
+    cases = [(4, 2), (3, 0), (2, 3), (5, 2)]
+    per_seq = [torch.randn(t, u + 1, vocab, dtype=torch.float64, requires_grad=True) for t, u in cases]
+    labels = [torch.randint(1, vocab, (u,)) for _t, u in cases]
+    grad_out = torch.randn(len(cases), dtype=torch.float64)
+
+    want_loss = [_brute_force(x.detach(), lab.tolist(), blank) for x, lab in zip(per_seq, labels)]
+    weighted = [
+        _brute_force_weighted(x, lab.tolist(), blank, blank_scale, smoothing) for x, lab in zip(per_seq, labels)
+    ]
+    torch.stack(weighted).dot(grad_out).backward()
+
+    labels_padded = torch.zeros(len(cases), 3, dtype=torch.int32)
+    for i, seq_labels in enumerate(labels):
+        labels_padded[i, : len(seq_labels)] = seq_labels
+    packed = _pack([x.detach() for x in per_seq]).requires_grad_()
+    loss = rnnt_loss(
+        packed,
+        labels_padded,
+        torch.tensor([t for t, _u in cases], dtype=torch.int32),
+        torch.tensor([u for _t, u in cases], dtype=torch.int32),
+        blank=blank,
+        max_frames=5,
+        blank_scale=torch.tensor(blank_scale, dtype=torch.float64),
+        label_smoothing=smoothing,
+    )
+    loss.backward(grad_out)
+    torch.testing.assert_close(loss, torch.tensor(want_loss, dtype=torch.float64), rtol=0, atol=1e-9)
+    torch.testing.assert_close(packed.grad, _pack([x.grad for x in per_seq]), rtol=1e-7, atol=1e-9)
+
+
+def test_rnnt_weighted_gradient_on_cuda_matches_the_reference():
+    if not torch.cuda.is_available():
+        raise unittest.SkipTest("no cuda")
+    torch.manual_seed(8)
+    vocab, blank = 37, 0
+    cases = [(9, 4), (12, 0), (3, 7), (5, 2)]
+    packed = _pack([torch.randn(t, u + 1, vocab) for t, u in cases])
+    labels = torch.randint(1, vocab, (len(cases), 7), dtype=torch.int32)
+    frame_lens = torch.tensor([t for t, _u in cases], dtype=torch.int32)
+    label_lens = torch.tensor([u for _t, u in cases], dtype=torch.int32)
+    grad_out = torch.randn(len(cases))
+
+    results = []
+    for device in ("cpu", "cuda"):
+        logits = packed.to(device).clone().requires_grad_()
+        loss = rnnt_loss(
+            logits,
+            labels.to(device),
+            frame_lens.to(device),
+            label_lens.to(device),
+            blank=blank,
+            max_frames=12,
+            blank_scale=torch.tensor(0.23, device=device),
+            label_smoothing=0.1,
+        )
+        loss.backward(grad_out.to(device))
+        results.append((loss.detach().cpu(), logits.grad.detach().cpu()))
+    torch.testing.assert_close(results[1][0], results[0][0], rtol=1e-5, atol=1e-5)
+    torch.testing.assert_close(results[1][1], results[0][1], rtol=1e-4, atol=1e-5)
 
 
 def test_rf_rnnt_loss_scores_the_lattice_the_joint_builds():

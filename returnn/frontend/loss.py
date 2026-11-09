@@ -210,6 +210,8 @@ def rnnt_loss(
     blank_index: int,
     cells_bound: Optional[int] = None,
     max_frames: Optional[int] = None,
+    blank_scale: Optional[Tensor] = None,
+    label_smoothing: float = 0.0,
 ) -> Tensor:
     """
     Full-sum negative log likelihood of the transducer (RNN-T) over the packed lattice.
@@ -236,6 +238,9 @@ def rnnt_loss(
         under CUDA graph capture
     :param max_frames: rows the recursion runs over, the longest sequence of the batch by default,
         the declared capacity under capture, since reading the batch's own maximum is a host read
+    :param blank_scale: scalar, weight of the gradient of the blank edges, None for one,
+        see :func:`returnn.torch.util.rnnt.rnnt_loss`
+    :param label_smoothing: weight of the uniform target over the vocabulary in the gradient of both edges
     :return: [batch] the negative log likelihood, zero where a sequence has no frame
     """
     from returnn.frontend._packed_backend import PackedRawTensor, monotonic_rnnt_lattice, unpack
@@ -260,6 +265,8 @@ def rnnt_loss(
         labels_spatial_dim.get_dyn_size_ext_for_device(device).raw_tensor,
         blank=blank_index,
         max_frames=max_frames,
+        blank_scale=blank_scale.raw_tensor if blank_scale is not None else None,
+        label_smoothing=label_smoothing,
     )
     return Tensor("rnnt", dims=[labels.dims[0]], dtype="float32", raw_tensor=losses)
 
