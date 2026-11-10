@@ -33,7 +33,7 @@ With ``"variants": {"values": [1, 2, 3, 4], "select": select}``,
 every value gets its own compiled program and its own CUDA graph.
 ``select(*, global_train_step: int, **_kwargs)`` returns the value of the given step,
 and must only depend on the step, so that all ranks of a distributed training select the same.
-The model reads the value via :func:`current_step_variant`, e.g.::
+The model reads the value via :func:`current_step_variant` (set while a program is traced), e.g.::
 
     passes = current_step_variant()
     if passes is None:  # no variants, e.g. eval
@@ -94,7 +94,7 @@ _current_step_variant = None
 def current_step_variant() -> Any:
     """
     :return: with opts "variants" of ``torch_cuda_graph`` (see the module docstring),
-        while the program of a variant is traced, captured or replayed: the value of that variant.
+        while the program of a variant is traced: the value of that variant.
         Otherwise None (no variants, eager training, eval).
     """
     return _current_step_variant
@@ -1426,7 +1426,7 @@ class GraphCapturedTrainStep:
         self._log_misaligned_inputs(raws)
         train_raws = [r for r in raws if r.requires_grad]
         compiled = []
-        steps: List[Optional[Tuple[torch.cuda.CUDAGraph, RunCtx]]] = [None] * len(self._variant_values)
+        steps = []
         pool = torch.cuda.graph_pool_handle()
         try:
             for variant in self._variant_values:
@@ -1438,23 +1438,24 @@ class GraphCapturedTrainStep:
                 del outs
                 torch.cuda.empty_cache()
                 compiled.append((compiled_fn, self._compiled_loss_meta, self._compiled_n_loss_outs))
-            for i in reversed(range(len(self._variant_values))):
-                _current_step_variant = self._variant_values[i]
-                compiled_fn, self._compiled_loss_meta, self._compiled_n_loss_outs = compiled[i]
+            _current_step_variant = None
+            for compiled_fn, loss_meta, n_loss_outs in reversed(compiled):
+                self._compiled_loss_meta, self._compiled_n_loss_outs = loss_meta, n_loss_outs
                 graph = torch.cuda.CUDAGraph()
                 with cuda_graph_capture(graph, pool=pool):
                     outs = compiled_fn(self._compiled_call_args(raws))
-                    grad_outs = outs[self._compiled_n_loss_outs :]
+                    grad_outs = outs[n_loss_outs:]
                     assert len(train_raws) == len(grad_outs)
                     for r, g in zip(train_raws, grad_outs):
                         r.grad.copy_(g)
-                steps[i] = (graph, self._build_result_ctx(outs))
+                steps.append((graph, self._build_result_ctx(outs)))
                 del outs, grad_outs
         except torch.OutOfMemoryError:
             self._write_memory_snapshot()
             raise
         finally:
             _current_step_variant = None
+        steps.reverse()
         self._variant_steps = steps
         self._log_graph_pool_size(steps[0][0])
         # as in run_train_step: count the pool once in the reported usage
@@ -1465,7 +1466,6 @@ class GraphCapturedTrainStep:
         opts "variants": replay the graph of the variant selected for this step.
         The loss tensors of the other variants' ctx are not valid meanwhile (shared pool).
         """
-        global _current_step_variant
         variant = self._variant_select(global_train_step=global_train_step, **get_fwd_compat_kwargs())
         assert variant in self._variant_values, (
             f"torch_cuda_graph: variants select returned {variant!r} for step {global_train_step},"
@@ -1474,11 +1474,7 @@ class GraphCapturedTrainStep:
         if self._variant_steps is None:
             self._capture_variants()
         graph, ctx = self._variant_steps[self._variant_values.index(variant)]
-        _current_step_variant = variant
-        try:
-            graph.replay()
-        finally:
-            _current_step_variant = None
+        graph.replay()
         return ctx
 
     def run_train_step(
