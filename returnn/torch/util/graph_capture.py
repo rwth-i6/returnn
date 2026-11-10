@@ -24,7 +24,24 @@ Config, e.g.::
         "capture_optimizer": True,      # grad clip + optimizer step in-graph (needs capturable optimizer)
         "compile": True,                # Inductor-codegen the whole step first, then capture that
         "capture": True,                # False (with compile): run the compiled step eagerly, no graph
+        "variants": {...},              # optional: several step programs, one selected per step, see below
     }
+
+Step variants: a train step whose op sequence is chosen per step from a small set,
+e.g. the number of passes through a shared block (mixed-depth training), cannot be one captured program.
+With ``"variants": {"values": [1, 2, 3, 4], "select": select}``,
+every value gets its own compiled program and its own CUDA graph.
+``select(*, global_train_step: int, **_kwargs)`` returns the value of the given step,
+and must only depend on the step, so that all ranks of a distributed training select the same.
+The model reads the value via :func:`current_step_variant`, e.g.::
+
+    passes = current_step_variant()
+    if passes is None:  # no variants, e.g. eval
+        passes = self.num_passes
+
+The graphs share one memory pool, sized by the first captured one,
+so the values must be in increasing order of the memory they need.
+Requires "compile" and "capture", and excludes "partitioned", "capture_optimizer" and "warmup_steps" > 0.
 
 Requirements (asserted):
 
@@ -59,7 +76,7 @@ import os
 import numpy
 import torch
 
-from returnn.util.basic import CollectionReadCheckCovered, BehaviorVersion
+from returnn.util.basic import CollectionReadCheckCovered, BehaviorVersion, get_fwd_compat_kwargs
 from returnn.tensor import Tensor, TensorDict, Dim
 import returnn.frontend as rf
 from returnn.frontend.run_ctx import RunCtx, Loss
@@ -69,7 +86,19 @@ from .capture_lock import cuda_graph_capture
 # noinspection PyProtectedMember
 from ..data.extern_data import get_batch_dim_from_extern_data, _get_dyn_dims_from_extern_data
 
-__all__ = ["GraphCapturedTrainStep", "graph_pools_reserved", "inductor_fw_compiler"]
+__all__ = ["GraphCapturedTrainStep", "current_step_variant", "graph_pools_reserved", "inductor_fw_compiler"]
+
+_current_step_variant = None
+
+
+def current_step_variant() -> Any:
+    """
+    :return: with opts "variants" of ``torch_cuda_graph`` (see the module docstring),
+        while the program of a variant is traced, captured or replayed: the value of that variant.
+        Otherwise None (no variants, eager training, eval).
+    """
+    return _current_step_variant
+
 
 # bytes reserved by the current CUDA-graph private pool, set after capture,
 # for the engine memory log (single active graph per engine; a recapture overwrites)
@@ -526,6 +555,25 @@ class GraphCapturedTrainStep:
         # per loss: (name, traced Loss (for the flags), inv norm is a tensor output, else its static value)
         self._compiled_loss_meta: List[Tuple[str, Loss, bool, Optional[int]]] = []
         self._compiled_n_loss_outs = 0
+        self._variant_values: Optional[List[Any]] = None
+        self._variant_select: Optional[Callable[..., Any]] = None
+        # per variant value, once captured: graph, result ctx
+        self._variant_steps: Optional[List[Tuple[torch.cuda.CUDAGraph, RunCtx]]] = None
+        variants = opts.get("variants", None)
+        if variants is not None:
+            variants = CollectionReadCheckCovered(variants)
+            self._variant_values = list(variants["values"])
+            self._variant_select = variants["select"]
+            variants.assert_all_read()
+            assert self._variant_values and None not in self._variant_values, (
+                f"torch_cuda_graph: variants values {self._variant_values!r} must be non-empty, without None"
+            )
+            assert self._compile and self._capture_graph, (
+                'torch_cuda_graph: "variants" requires "compile" and "capture"'
+            )
+            assert not self._partitioned and self._post_step is None and self.warmup_steps == 0, (
+                'torch_cuda_graph: "variants" not supported with "partitioned", "capture_optimizer" or "warmup_steps"'
+            )
         opts.assert_all_read()
         for p in self._grad_params:
             p.grad = torch.zeros_like(p)  # static, never freed (the captured graph writes into these)
@@ -1361,6 +1409,78 @@ class GraphCapturedTrainStep:
         self._ctx = self._build_result_ctx(outs)
         return self._ctx
 
+    def _capture_variants(self) -> None:
+        """
+        opts "variants": first trace and compile the program of every variant,
+        then capture all of them into one shared pool, the last value (the largest) first.
+        A capture directly after each compile would hold the pool of the earlier graphs
+        during the later compile runs, so the activations would be needed twice.
+        The graphs never replay at the same time, so the smaller ones reuse the blocks of the largest.
+
+        Each graph copies its grads into the static ``.grad`` buffers,
+        so their addresses stay the same for all variants
+        (an optimizer step captured on them would recapture at every change, see :mod:`.optimizer_step`).
+        """
+        global _current_step_variant
+        raws = [p.raw_tensor for p in self._rf_params]
+        self._log_misaligned_inputs(raws)
+        train_raws = [r for r in raws if r.requires_grad]
+        compiled = []
+        steps: List[Optional[Tuple[torch.cuda.CUDAGraph, RunCtx]]] = [None] * len(self._variant_values)
+        pool = torch.cuda.graph_pool_handle()
+        try:
+            for variant in self._variant_values:
+                _current_step_variant = variant
+                compiled_fn = self._make_compiled_step()
+                # the first call traces and compiles, its execution is thrown away and leaves no trace on the state
+                with self._training_state_preserved(), _allow_non_fake_inputs():
+                    outs = compiled_fn(self._compiled_call_args(raws))
+                del outs
+                torch.cuda.empty_cache()
+                compiled.append((compiled_fn, self._compiled_loss_meta, self._compiled_n_loss_outs))
+            for i in reversed(range(len(self._variant_values))):
+                _current_step_variant = self._variant_values[i]
+                compiled_fn, self._compiled_loss_meta, self._compiled_n_loss_outs = compiled[i]
+                graph = torch.cuda.CUDAGraph()
+                with cuda_graph_capture(graph, pool=pool):
+                    outs = compiled_fn(self._compiled_call_args(raws))
+                    grad_outs = outs[self._compiled_n_loss_outs :]
+                    assert len(train_raws) == len(grad_outs)
+                    for r, g in zip(train_raws, grad_outs):
+                        r.grad.copy_(g)
+                steps[i] = (graph, self._build_result_ctx(outs))
+                del outs, grad_outs
+        except torch.OutOfMemoryError:
+            self._write_memory_snapshot()
+            raise
+        finally:
+            _current_step_variant = None
+        self._variant_steps = steps
+        self._log_graph_pool_size(steps[0][0])
+        # as in run_train_step: count the pool once in the reported usage
+        torch.cuda.reset_peak_memory_stats()
+
+    def _run_variant_step(self, *, global_train_step: int) -> RunCtx:
+        """
+        opts "variants": replay the graph of the variant selected for this step.
+        The loss tensors of the other variants' ctx are not valid meanwhile (shared pool).
+        """
+        global _current_step_variant
+        variant = self._variant_select(global_train_step=global_train_step, **get_fwd_compat_kwargs())
+        assert variant in self._variant_values, (
+            f"torch_cuda_graph: variants select returned {variant!r} for step {global_train_step},"
+            f" not one of the values {self._variant_values!r}"
+        )
+        if self._variant_steps is None:
+            self._capture_variants()
+        graph, ctx = self._variant_steps[self._variant_values.index(variant)]
+        _current_step_variant = variant
+        try:
+            graph.replay()
+        finally:
+            _current_step_variant = None
+        return ctx
+
     def run_train_step(
         self, extern_data_raw: Dict[str, Union[torch.Tensor, numpy.ndarray]], *, global_train_step: int
     ) -> RunCtx:
@@ -1376,6 +1496,8 @@ class GraphCapturedTrainStep:
             self._last_extern_data_raw = extern_data_raw
         self._copy_in(extern_data_raw)
         self._step_buf.fill_(global_train_step)
+        if self._variant_values is not None:
+            return self._run_variant_step(global_train_step=global_train_step)
         if self._graph is not None:
             self._graph.replay()
             return self._ctx
@@ -1447,6 +1569,12 @@ class GraphCapturedTrainStep:
         """
         self.set_bound_shapes_enabled(False)
         global _graph_pools_reserved
+        if self._variant_steps is not None:
+            graphs = [graph for graph, _ in self._variant_steps]
+            self._variant_steps = None  # the ctx losses live in the pool as well
+            for graph in graphs:
+                graph.reset()
+            _graph_pools_reserved = 0
         if self._graph is None:
             return
         # the ctx losses live in the pool, which is only freed once they are gone
