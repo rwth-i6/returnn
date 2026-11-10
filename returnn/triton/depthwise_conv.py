@@ -457,7 +457,7 @@ if triton is not None:
                 mask=(hi > lo)[:, None] & c_mask[None, :],
                 other=0.0,
             ).to(tl.float32)
-            valid =(d_lo[None, :] >= -shift[:, None]) & (d_hi[None, :] > shift[:, None]) & tap_mask[:, None]
+            valid = (d_lo[None, :] >= -shift[:, None]) & (d_hi[None, :] > shift[:, None]) & tap_mask[:, None]
             row_in = offs_r[None, :] + shift[:, None]
             x = tl.load(
                 X + row_in.to(tl.int64)[:, :, None] * n_chan + offs_c[None, None, :],
