@@ -694,6 +694,58 @@ def test_conv_packed_gap_junk_robust():
         _assert_equal_non_padded(out_p, out_ref, batch_dim, time_dim)
 
 
+def test_conv_packed_depthwise_same_no_gap():
+    """on CUDA a depthwise "same" conv masks its taps by the sequence of every frame: no gap, every layout kept"""
+    if not torch.cuda.is_available():
+        raise unittest.SkipTest("needs CUDA")
+    if torch.__version__ < (2, 4):
+        raise unittest.SkipTest("the Triton path needs torch >= 2.4")
+    try:
+        import triton  # noqa
+    except ImportError as exc:
+        raise unittest.SkipTest(f"triton not available ({exc})")
+    from unittest import mock
+
+    rf.select_backend_torch()
+    lens, cap = [29, 0, 3, 17], 32
+    batch_dim, feat_dim = Dim(4, name="batch"), Dim(6, name="feat")
+    seq_mask = (torch.arange(cap)[None, :] < torch.tensor(lens)[:, None]).cuda()
+    with rf.set_default_device_ctx("cuda"):
+        rf.set_random_seed(3)
+        conv = rf.Conv1d(feat_dim, feat_dim, filter_size=8, groups=feat_dim.dimension, padding="same")
+    for static, opts in [
+        (True, dict(total_bound=96)),  # the layout of the trainings: dense, bound buffer, lens on the device
+        (True, dict(gap=2, align=4, total_bound=128)),
+        (False, dict()),
+        (False, dict(gap=5)),
+    ]:
+        sizes = Tensor("time", dims=[batch_dim], dtype="int32", raw_tensor=torch.tensor(lens, dtype=torch.int32).cuda())
+        time_dim = Dim(sizes, capacity=cap)
+        x_raw = torch.randn(4, cap, 6, generator=torch.Generator().manual_seed(17)).cuda().requires_grad_(True)
+        x = Tensor("x", dims=[batch_dim, time_dim, feat_dim], dtype="float32", raw_tensor=x_raw)
+        leaves = [x_raw, conv.filter.raw_tensor, conv.bias.raw_tensor]
+        with rf.set_default_device_ctx("cuda"):
+            ref, _ = conv(x + 1.0, in_spatial_dim=time_dim)
+        ref_raw = ref.copy_transpose([batch_dim, time_dim, feat_dim]).raw_tensor
+        ref_grads = torch.autograd.grad(ref_raw[seq_mask].square().sum(), leaves)
+        with rf.set_default_device_ctx("cuda"), rf.set_static_traceable_ctx(static):
+            xp = packed.pack(x, **opts) + 1.0  # also puts junk into the frames outside the sequences
+            with mock.patch.object(packed, "regap", side_effect=AssertionError("re-layout")), mock.patch.object(
+                torch.nn.functional, "conv1d", side_effect=AssertionError("torch conv1d fallback")
+            ):
+                out_p, out_time = conv(xp, in_spatial_dim=time_dim)
+        out_raw = out_p.raw_tensor
+        assert out_time == time_dim and out_raw.same_packing(xp.raw_tensor), (static, opts)
+        _assert_equal_non_padded(out_p, ref, batch_dim, time_dim)
+        out_inner = out_raw.inner.copy_transpose([out_raw.packed_dim, feat_dim]).raw_tensor
+        frame_mask = packed._frame_mask(out_raw)
+        if frame_mask is not None:
+            assert not out_inner[~frame_mask.raw_tensor].any(), (static, opts)
+        grads = torch.autograd.grad(out_inner.square().sum(), leaves)
+        for g, g_ref in zip(grads, ref_grads):
+            torch.testing.assert_close(g, g_ref, rtol=1e-4, atol=1e-5)
+
+
 def test_regap_bound_from_declared_total():
     # A static-traceable regap (the packed conv widening a too-small gap) derives its bound from the
     # total bound DECLARED at pack() time, plus the gap it adds.
