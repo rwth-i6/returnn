@@ -597,7 +597,7 @@ class Engine(EngineBase):
                     print("Time to get first batch data:", hms(step_begin_time - epoch_start_time), file=log.v5)
 
                 complete_frac = float(extern_data_raw["complete_frac"]) if extern_data_raw is not None else -1.0
-                _has_data = torch.tensor([extern_data_raw is not None], dtype=torch.int8)
+                has_data = extern_data_raw is not None
                 # Sync only on first train step, when we have run out of data and every time we synchronize
                 # the model between workers, on the group of that sync.
                 # This allows the different workers to progress independently between synchronizations.
@@ -615,28 +615,34 @@ class Engine(EngineBase):
                 if control_levels:
                     # use all reduce to check if all workers have data, if at least one worker does not have data,
                     # all workers finish this epoch
+                    # The tensors are on the train device, for the same backend as the grad / param sync (e.g. NCCL).
                     level = control_levels[0]
                     if self._torch_distributed_ctx.sync_complete_frac():
                         # mean over the ranks: a schedule on epoch_continuous must give the same LR on every rank
                         _data_info = torch.tensor(
-                            [extern_data_raw is not None, complete_frac >= 0.0, max(complete_frac, 0.0)],
+                            [has_data, complete_frac >= 0.0, max(complete_frac, 0.0)],
                             dtype=torch.float64,
+                            device=self._device,
                         )
                         torch.distributed.all_reduce(_data_info, op=torch.distributed.ReduceOp.SUM, group=level.group)
                         size = level.group_size()
-                        _has_data[0] = _data_info[0] == size
-                        complete_frac = float(_data_info[2]) / size if _data_info[1] == size else -1.0
+                        num_has_data, num_has_complete_frac, complete_frac_sum = _data_info.tolist()
+                        has_data = num_has_data == size
+                        complete_frac = complete_frac_sum / size if num_has_complete_frac == size else -1.0
                     else:
+                        _has_data = torch.tensor([has_data], dtype=torch.int8, device=self._device)
                         torch.distributed.all_reduce(_has_data, op=torch.distributed.ReduceOp.MIN, group=level.group)
-                if not _has_data[0]:
+                        has_data = bool(_has_data[0])
+                if not has_data:
                     # The outer groups learn it at their next control sync. Join it now, they reach it later.
                     for level in control_levels[1:]:
                         if self._torch_distributed_ctx.sync_complete_frac():
-                            _data_info = torch.zeros((3,), dtype=torch.float64)
+                            _data_info = torch.zeros((3,), dtype=torch.float64, device=self._device)
                             torch.distributed.all_reduce(
                                 _data_info, op=torch.distributed.ReduceOp.SUM, group=level.group
                             )
                         else:
+                            _has_data = torch.zeros((1,), dtype=torch.int8, device=self._device)
                             torch.distributed.all_reduce(
                                 _has_data, op=torch.distributed.ReduceOp.MIN, group=level.group
                             )
